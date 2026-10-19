@@ -106,6 +106,22 @@ turn the deliberate panic test into an automatic startup hook.
 
 ## Open limits
 
+### New blocker: Codex sign-in reset
+
+After this PR was opened, the owner reported a full phone restart while
+using the built-in AI Agent shortcut, selecting Codex, and pressing `2` in
+its sign-in screen. A fresh trusted USB connection confirmed a new boot;
+protected-data checks still matched. The preceding journal ended abruptly
+after the agent launch, without a saved panic, orderly shutdown, OOM record
+or retained crash dump. Software-rendering variables were already present
+in the compositor and shell. These observations do not identify the cause.
+Live kernel/resource capture and an independent RAM recovery connection
+were prepared for a controlled owner reproduction.
+
+The earlier agent check covered opening its window and running a separate
+terminal command. Agent sign-in and sustained use remain a blocking hardware
+test, and this PR must stay a draft while the reset is investigated.
+
 The original spontaneous runtime-reset cause is **not conclusively identified**.
 The bounded tests did not reproduce an unplanned reset. Hardware GPU
 acceleration remains disabled, Bluetooth firmware download/pairing has not
