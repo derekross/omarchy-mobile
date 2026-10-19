@@ -23,7 +23,7 @@ firmware are retained off-repository. No such input or binary is published.
 | Full-duty stress attempt | Stopped at the first 10 s temperature check, processor sensor 71.7°C | Conservative test cutoff was 70°C, below the kernel's existing CPU thermal-control trips; workers stopped, temperature recovered and no reboot occurred; cooling settings unchanged |
 | Protected data | Seven current calibration/modem hashes matched; complete 12-partition backup set verified off-device | Counts/results only; no real hashes, partition contents or device identifiers are published |
 | Chrome license / scrolling | Native Wayland, disabled GPU and scale factor 0.6 fit the license dialog; owner accepted it and confirmed finger scrolling on a webpage | Chrome was owner-installed; no license was accepted automatically; profile retained; Chrome is not added as a project dependency |
-| App launchers | Real mobile terminal launch executed a marker command and exited; the upstream AI Agent desktop entry opened a persistent agent window | Foot/xdg-terminal-exec/udiskie installed; no separate Codex desktop launcher; agent sign-in and remote-host use remain owner tests |
+| App launchers | Real mobile terminal launch executed a marker command and exited; the upstream AI Agent desktop entry opened a persistent agent window | Foot/xdg-terminal-exec/udiskie installed; no separate Codex desktop launcher; later sign-in/prompt results are recorded below; remote-host use remains an owner test |
 | Old app failures | Four terminal-helper and four disk-helper errors were dated before their respective helper installations | Exact resolved records backed up and archived; no new failure recorded after real launch tests; owner confirmed no visible errors after unlock |
 | Final state | Both GPT CRCs valid, B success set, other metadata/reserved bytes preserved outside B attributes/required CRCs; fresh SSH, Wi-Fi/HTTPS and protected hashes passed | No failed system units or active test/recovery timers; temporary IPv6 recovery listener removed; Docker builders stopped after work |
 
@@ -106,7 +106,7 @@ turn the deliberate panic test into an automatic startup hook.
 
 ## Open limits
 
-### New blocker: Codex sign-in reset
+### Open blocker: intermittent Codex sign-in reset
 
 After this PR was opened, the owner reported a full phone restart while
 using the built-in AI Agent shortcut, selecting Codex, and pressing `2` in
@@ -116,11 +116,22 @@ after the agent launch, without a saved panic, orderly shutdown, OOM record
 or retained crash dump. Software-rendering variables were already present
 in the compositor and shell. These observations do not identify the cause.
 Live kernel/resource capture and an independent RAM recovery connection
-were prepared for a controlled owner reproduction.
+were prepared for a controlled owner reproduction. On that repeat the owner
+confirmed that pressing `2` stayed open, and the screen reached device-code
+sign-in. A later read-only status check confirmed ChatGPT sign-in. Codex
+remained present across approximately 32 minutes of captured samples,
+without a new kernel-fault pattern; memory remained available. A separate
+capture covered the owner's short prompt test, which replied and stayed open.
+Fresh checks after that response confirmed the same boot, active guard,
+Wi-Fi/display services, HTTPS 200 and unchanged protected hashes. Temporary
+collectors and the additional IPv6 RAM recovery listener were then stopped;
+the owner's signed-in agent window was left open.
 
 The earlier agent check covered opening its window and running a separate
-terminal command. Agent sign-in and sustained use remain a blocking hardware
-test, and this PR must stay a draft while the reset is investigated.
+terminal command. The controlled sign-in and single-prompt retry passed
+without an implementation change. The reported intermittent reset was not
+reproduced or explained; sustained agent use and the reset investigation
+remain open, so this PR stays a draft.
 
 The original spontaneous runtime-reset cause is **not conclusively identified**.
 The bounded tests did not reproduce an unplanned reset. Hardware GPU
