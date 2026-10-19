@@ -71,6 +71,7 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `VENDOR_CMDLINE` | `console=tty0 earlycon=exynos4210,0x10A00000 …` | `vendor_boot` command line (kernel arguments really go in `/chosen/bootargs`) |
 | `VENDOR_PAGESIZE` | `0x800` | Page size of `vendor_boot` (and `vendor_kernel_boot`, where the device has one) |
 | `OS_VERSION`, `OS_PATCH_LEVEL` | `17.0.0`, `2026-07` | The `init_boot` header values (the `boot` header's, on a device without `init_boot`) |
+| `BOOT_METHOD` | `android-v4` (default when omitted) | Generic images, flash, push and installer accept only `android-v4`; other methods are refused before phone access. `ram-only` marks a probe with no persistent install support |
 | `BOOT_IMAGES` | `boot init_boot vendor_boot vendor_kernel_boot dtbo` | The images written to slot B (the `_b` suffix is added by the tools and is not configurable). `boot`, `vendor_boot` and `dtbo` are always there. Without `init_boot`, `boot` carries the empty generic ramdisk and the OS version; without `vendor_kernel_boot`, `vendor_boot` carries the DTB and the initramfs (the Pixel 6: `boot vendor_boot dtbo`) |
 | `UFS_RW` | `boot_b … dtbo_b userdata` | The storage guard's allowlist, packed into the initramfs as `/etc/omamobile-ufs-rw`. Only slot B's boot images (`boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`) and `userdata` are accepted, `userdata` and every `BOOT_IMAGES` entry must be on it, and each name only once. The init fails closed: a missing, empty or malformed file, or any other name in it, leaves every partition read-only |
 | `INITRAMFS_INIT` | `/initramfs/init` | The init script. A leading `/` is relative to the repo root, so devices share one script. Any other value is relative to the descriptor |
@@ -79,6 +80,11 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `PANEL_SIZE` | `1440x3120` | Portrait panel size for the early splash |
 
 A descriptor directory may also hold `kernel.config`, a config fragment that `omamobile kernel` merges after `kernel/configs/omamobile.config`, for options that would break another device (gs101's AoC interface, which excludes gs201's). It is for bring-up only: the release kernel (§4) is one build for every device, so an option stays there until its driver handles both SoCs and the line moves to the shared fragment.
+
+The Pixel 4 (`flame`, SM8150) is a separate RAM-only first-light probe.
+Its `ram-only` descriptor has empty `BOOT_IMAGES` and `UFS_RW`; build it with
+`tools/build-flame-probe`, following [its runbook](../device/flame/BRINGUP-M1.md).
+It does not use the generic Tensor image builder or installer.
 
 ### 3.2 Keys to add later
 

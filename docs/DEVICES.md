@@ -20,6 +20,7 @@ The status of each phone, as verified on real hardware. What's still missing and
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Pixel 7 Pro | cheetah | gs201 (Tensor G2) | works | works | works (120 Hz) | works (DVFS) | works | works | works | works | works (audio) | works | testing | works | works | works | works | partial (quiet, thin) | works | WIP (boots; needs a SIM) | works | WIP (ultrawide works by hand) | WIP | works (opt-in) |
 | Pixel Fold | felix | gs201 (Tensor G2) | WIP ([#3](https://github.com/derekross/omarchy-mobile/issues/3)) | no | WIP (cover: simplefb console only) | no | no | no | works | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no |
+| Pixel 4 | flame | SM8150 (Snapdragon 855) | testing (temporary RAM boot; [notes](../device/flame/BRINGUP-M1.md)) | testing (RAM probe; all UFS read-only) | testing (1080x2280 console; software desktop in separate Arch payload) | testing (separate Arch payload; FD640 contexts, llvmpipe desktop) | testing (separate Arch payload; events and PIN unlock verified) | no | testing (NCM + ACM + SSH; sustained transfers can disconnect) | testing (guarded RAM scan; association untested) | no | no | no | no | no | no | - | no | no | no | no | no | no | - |
 | *Template* | *codename* | *SoC* | | | | | | | | | | | | | | | | | | | | | | |
 
 ## cheetah (Pixel 7 Pro) in detail

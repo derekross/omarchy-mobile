@@ -176,6 +176,11 @@ sed -i 's/^kernel modules: .*/kernel modules: 7.3.0-test-1 (tarball sha256 0)/' 
 install --dry-run || { cat "$t/out"; fail "matching kernel and modules pass"; }
 pass "refuses partitions outside the allowlist, a non-data descriptor, a bad or foreign root image, mismatched modules"
 
+# Explicit android-v4 is equivalent to the legacy descriptor (omitted method).
+printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"
+install --dry-run || { cat "$t/out"; fail "explicit android-v4 installs"; }
+pass "explicit android-v4 and legacy omitted BOOT_METHOD both work"
+
 # A release bundle: install beside device.conf and images/, the root image next to it
 BD=$t/bundle/omamobile-testdev-2026.10.13
 mkdir -p "$BD/images"

@@ -62,6 +62,7 @@ UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b use
 load_device() {
   local file="$ROOT/device/$DEVICE/device.conf" line n=0 key p
   local quoted='^([A-Z][A-Z0-9_]*)="([^"$`\\]*)"$' bare='^([A-Z][A-Z0-9_]*)=([^"$`\\'"'"'[:space:]]*)$'
+  DEV_BOOT_METHOD=android-v4  # legacy descriptors omit it
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
   [[ -f $file ]] || die "no device descriptor $file (see docs/RELEASES.md)"
   while IFS= read -r line || [[ -n $line ]]; do
@@ -73,6 +74,8 @@ load_device() {
       die "$file:$n: not a KEY=value line"
     fi
   done < "$file"
+  [[ $DEV_BOOT_METHOD == android-v4 ]] \
+    || die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports only android-v4"
   for key in CODENAME SOC PACKAGE DTB SOC_IDS DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
       VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
     p="DEV_$key"

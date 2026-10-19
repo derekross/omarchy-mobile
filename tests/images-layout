@@ -135,6 +135,7 @@ cat > "$t/bin/fastboot" <<'EOF'
 #!/bin/bash
 echo "$*" >> "$T/fastboot.log"
 [[ $1 == devices ]] && printf 'FAKE123\tfastboot\n'
+[[ $1 == flash && ${FAIL_FLASH:-} == "$2" ]] && { echo FAILED; exit 17; }
 [[ $1 == flash ]] && echo OKAY
 exit 0
 EOF
@@ -155,6 +156,21 @@ om six images
 om six flash || { cat "$t/log"; fail "flash runs for the gs101-style device"; }
 [[ $(flashed) == "boot_b vendor_boot_b dtbo_b " ]] || fail "gs101 flash writes boot_b, vendor_boot_b and dtbo_b (got $(flashed))"
 pass "flash writes exactly the gs101-style BOOT_IMAGES"
+
+# A failed write must never activate or reboot the incomplete slot.
+: > "$t/fastboot.log"
+if FAIL_FLASH=vendor_boot_b om six flash; then fail "flash propagates a fastboot failure"; fi
+[[ $(flashed) == "boot_b vendor_boot_b " ]] || fail "flash stops at the failed image"
+! grep -Eq '^--set-active|^reboot' "$t/fastboot.log" || fail "a failed flash never activates or reboots"
+grep -q 'flashing vendor_boot_b failed (exit 17)' "$t/log" || fail "flash reports the failed image and status"
+pass "a failed fastboot flash stops before later images, activation and reboot"
+
+mv "$K/images/dtbo.img" "$t/dtbo.img"
+: > "$t/fastboot.log"
+if om six flash; then fail "flash refuses an incomplete image set"; fi
+[[ -z $(flashed) ]] || fail "flash preflights every image before writing"
+mv "$t/dtbo.img" "$K/images/dtbo.img"
+pass "a missing later image is refused before the first flash"
 
 # Bad descriptors are refused before anything is built or written
 bad() { # what, sed expression on six's descriptor, expected message

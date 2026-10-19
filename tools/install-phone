@@ -72,10 +72,6 @@ while (($#)); do
   shift
 done
 
-for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum; do
-  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"
-done
-
 # --- Where things are: a release bundle, or this repository ------------------
 if [[ -f $here/device.conf && -d $here/images ]]; then
   mode=bundle
@@ -96,7 +92,6 @@ else
   fi
 fi
 [[ -f $conf ]] || die "no device descriptor $conf"
-[[ -n $rootfs && -f $rootfs ]] || die "no root image (tools/build-rootfs makes one; or --rootfs FILE)"
 
 # The descriptor is data (docs/RELEASES.md §3): parsed line by line, never sourced
 declare -A D=()
@@ -113,6 +108,14 @@ done < "$conf"
 CODENAME=${D[CODENAME]:-}
 [[ $CODENAME =~ ^[a-z0-9]+$ ]] || die "$conf: no CODENAME"
 [[ $mode == bundle || $CODENAME == "$device" ]] || die "$conf: CODENAME=$CODENAME, expected $device"
+# Legacy descriptors omit BOOT_METHOD; only their Android v4 path is installable.
+# Refuse before image preparation or any fastboot query/write.
+BOOT_METHOD=${D[BOOT_METHOD]-android-v4}
+[[ $BOOT_METHOD == android-v4 ]] || die "$conf: unsupported BOOT_METHOD=$BOOT_METHOD; install-phone supports only android-v4"
+[[ -n $rootfs && -f $rootfs ]] || die "no root image (tools/build-rootfs makes one; or --rootfs FILE)"
+for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum; do
+  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"
+done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
 for p in $UFS_RW; do

@@ -1,0 +1,42 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Unsupported boot methods must fail before touching a phone or preparing images.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/repo/bin" "$t/repo/tools" "$t/repo/device/probe" "$t/bin" "$t/bundle/images"
+cp bin/omamobile "$t/repo/bin/"
+cp tools/install-phone "$t/repo/tools/"
+cp tools/install-phone "$t/bundle/install"
+# shellcheck disable=SC2016 # fixture evaluated by the child, not this test
+printf 'DEVICE=${DEVICE:-probe}\nSRC_DIR=/no-sources-needed\n' > "$t/repo/omamobile.conf"
+# Any phone or container command is a failure, including read-only queries.
+for cmd in fastboot ssh docker; do
+  # shellcheck disable=SC2016 # fake command reads the exported fixture path
+  printf '#!/bin/sh\necho called >> "$CALLS"\nexit 97\n' > "$t/bin/$cmd"
+  chmod +x "$t/bin/$cmd"
+done
+export PATH="$t/bin:$PATH" CALLS="$t/calls"
+fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
+for method in ram-only uboot-ext4 unknown ''; do
+  printf 'CODENAME=probe\nBOOT_METHOD="%s"\nBOOT_IMAGES=""\nUFS_RW=""\n' "$method" > "$t/repo/device/probe/device.conf"
+  cp "$t/repo/device/probe/device.conf" "$t/bundle/device.conf"
+  for cmd in images flash push; do
+    if DEVICE=probe "$t/repo/bin/omamobile" "$cmd" > "$t/log" 2>&1; then fail "$cmd accepts $method"; fi
+    grep -q "unsupported BOOT_METHOD=$method;" "$t/log" || fail "$cmd fails for the wrong reason"
+  done
+  for installer in "$t/repo/tools/install-phone" "$t/bundle/install"; do
+    for dry in '' --dry-run; do
+      if "$installer" --device probe $dry --work "$t/work" > "$t/log" 2>&1; then fail "installer accepts $method"; fi
+      grep -q "unsupported BOOT_METHOD=$method;" "$t/log" || fail "installer fails for the wrong reason"
+    done
+  done
+  [[ ! -e $t/calls && ! -e $t/work ]] || fail "unsupported method accessed phone or prepared image"
+  echo "ok - BOOT_METHOD='${method}' refused by images/flash/push and both installer modes before phone access"
+done
+# The shipped flame descriptor must remain outside all persistent paths too.
+mkdir -p "$t/repo/device/flame"
+cp device/flame/device.conf "$t/repo/device/flame/"
+if "$t/repo/tools/install-phone" --device flame > "$t/log" 2>&1; then fail "flame installs"; fi
+grep -q 'unsupported BOOT_METHOD=ram-only;' "$t/log" || fail "flame fails for the wrong reason"
+echo 'ok - the shipped flame descriptor has no persistent installer path'

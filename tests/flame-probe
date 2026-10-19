@@ -1,0 +1,88 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Exercise the RAM-only storage boundary without a phone or block device.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+bash -n tools/build-flame-probe
+sh -n device/flame/initramfs/init
+sh -n device/flame/initramfs/build
+python3 - <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+init = Path('device/flame/initramfs/init').read_text()
+guard = init.split('storage_guard() {', 1)[1].split('\nstorage_guard ||', 1)[0]
+guard = 'storage_guard() {' + guard
+# Exercise the real first-call failure path, before the background watcher,
+# watchdog or USB starts. Sleeping here would leave no recovery service.
+first_pass = init.split(guard, 1)[1].split('\n(', 1)[0]
+
+with tempfile.TemporaryDirectory() as work:
+    root = Path(work)
+    sys = root / 'sys'
+    dev = root / 'dev'
+    bin = root / 'bin'
+    for p in (sys, dev, bin):
+        p.mkdir()
+    # Preserve the real guard's logic; redirect only its absolute sysfs/dev
+    # paths and the block-device type check to inert temporary fixtures.
+    body = guard.replace('/sys/class/block/', str(sys) + '/')
+    body = body.replace('/dev/', str(dev) + '/').replace('[ -b ', '[ -f ')
+    (root / 'guard.sh').write_text('say() { echo "$*" >&2; }\n' + body + '\nstorage_guard\n')
+    (root / 'startup.sh').write_text(
+        'say() { echo "$*" >&2; }\nsleep() { exit 94; }\n' + body + first_pass
+        + '\nexit 93\n')
+    blockdev = bin / 'blockdev'
+    blockdev.write_text('''#!/bin/sh
+set -eu
+[ "$1" = --setro ] || exit 92
+name=${2##*/}
+echo "$name" >> "$CALLS"
+[ "${MODE:-ok}" != fail ] || exit 1
+[ "${MODE:-ok}" != lie ] || exit 0
+echo 1 > "$SYS/$name/ro"
+''')
+    blockdev.chmod(0o755)
+    env = dict(os.environ, PATH=str(bin) + ':' + os.environ['PATH'],
+               SYS=str(sys), CALLS=str(root / 'calls'))
+
+    def device(name, ro='0'):
+        (sys / name).mkdir()
+        (sys / name / 'ro').write_text(ro + '\n')
+        (dev / name).touch()
+
+    def run(mode='ok'):
+        return subprocess.run(['sh', str(root / 'guard.sh')],
+                              env=dict(env, MODE=mode), capture_output=True, text=True)
+
+    # There is deliberately no writable exception for boot_b or userdata.
+    for name in ('sda', 'sda7', 'sda15', 'sdb', 'sdf2'):
+        device(name)
+    assert run().returncode == 0
+    assert all(p.read_text().strip() == '1' for p in sys.glob('*/ro'))
+    print('ok - flame guard protects whole disks, boot, userdata and calibration partitions')
+
+    previous = (root / 'calls').read_text()
+    assert run('fail').returncode == 0
+    assert (root / 'calls').read_text() == previous
+    print('ok - already read-only devices need no ioctl')
+
+    device('sdc')
+    assert run().returncode == 0
+    assert (sys / 'sdc/ro').read_text().strip() == '1'
+    print('ok - a later pass protects newly enumerated storage')
+
+    (sys / 'sdc/ro').write_text('0\n')
+    assert run('fail').returncode != 0
+    assert run('lie').returncode != 0
+    print('ok - both ioctl failure and a missing read-only flag fail the guard')
+
+    for mode in ('fail', 'lie'):
+        result = subprocess.run(['sh', str(root / 'startup.sh')],
+                                env=dict(env, MODE=mode), capture_output=True,
+                                text=True, timeout=2)
+        assert result.returncode == 1, result
+    print('ok - initial guard failure exits PID 1 before services, without sleeping')
+PY
