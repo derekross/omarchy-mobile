@@ -1,0 +1,95 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Runs inside tools/build-flame-probe's disposable aarch64 Alpine container.
+set -eu
+apk add --no-cache gcc musl-dev cpio dtc python3 gzip kmod zstd
+
+[ "$(fdtget /input/flame.dtb / model)" = 'Google Pixel 4' ] || {
+    echo 'Not a Google Pixel 4 device tree' >&2; exit 1;
+}
+case " $(fdtget /input/flame.dtb / compatible) " in
+    *' qcom,sm8150 '*) ;;
+    *) echo 'Not an SM8150 device tree' >&2; exit 1 ;;
+esac
+gzip -t /input/kernel || { echo 'Expected a gzip-compressed ARM64 Image' >&2; exit 1; }
+gzip -dc /input/kernel > /tmp/Image
+python3 - <<'PY'
+from pathlib import Path
+import sys
+with Path('/tmp/Image').open('rb') as stream:
+    stream.seek(56)
+    if stream.read(4) != b'ARM\x64':
+        sys.exit('Kernel has no ARM64 Image header')
+PY
+release=$(strings /tmp/Image | sed -n 's/^Linux version \([^ ]*\) .*/\1/p' | head -1)
+rm /tmp/Image
+
+stage=/tmp/rootfs
+mkdir -p "$stage"
+apk --root "$stage" --initdb --no-cache \
+    --repositories-file /etc/apk/repositories --keys-dir /etc/apk/keys add \
+    alpine-baselayout busybox dropbear iproute2 util-linux busybox-extras e2fsprogs
+install -m755 /system-init "$stage/init"
+mkdir -p "$stage/root/.ssh" "$stage/proc" "$stage/sys" "$stage/dev" "$stage/run"
+cp /input/key.pub "$stage/root/.ssh/authorized_keys"
+chmod 700 "$stage/root/.ssh"
+chmod 600 "$stage/root/.ssh/authorized_keys"
+gcc -Os -static -o "$stage/sbin/reboot-to" \
+    /src/packages/omamobile-device-cheetah/src/reboot-to.c
+mkdir -p "$stage/lib/modules"
+module=$stage/lib/modules/qcom-wdt.ko
+if zstd -t /input/watchdog 2>/dev/null; then
+    zstd -dc /input/watchdog > "$module"
+else
+    cp /input/watchdog "$module"
+fi
+[ "$(modinfo -F name "$module")" = qcom_wdt ] || { echo 'Expected qcom-wdt module' >&2; exit 1; }
+if [ -z "$release" ] || [ "$(modinfo -F vermagic "$module" | cut -d ' ' -f1)" != "$release" ]; then
+    echo 'Watchdog module does not match the kernel release' >&2
+    exit 1
+fi
+[ -z "$(modinfo -F depends "$module")" ] || { echo 'Watchdog needs additional modules' >&2; exit 1; }
+
+# A separate RAM rescue root survives the desktop handoff.
+rescue=/tmp/rescue-base
+mkdir -p "$rescue"
+apk --root "$rescue" --initdb --no-cache \
+    --repositories-file /etc/apk/repositories --keys-dir /etc/apk/keys add \
+    alpine-baselayout busybox dropbear iproute2 util-linux
+mkdir -p "$rescue/root/.ssh" "$rescue/proc" "$rescue/sys" "$rescue/dev" "$rescue/run" "$rescue/realroot"
+cp /input/key.pub "$rescue/root/.ssh/authorized_keys"
+chmod 700 "$rescue/root/.ssh"
+chmod 600 "$rescue/root/.ssh/authorized_keys"
+cp "$stage/sbin/reboot-to" "$rescue/sbin/reboot-to"
+mv "$rescue" "$stage/rescue-base"
+
+# No vendor firmware enters the probe. Only the watchdog module is included;
+# remote processors stay disabled unless the explicit Wi-Fi profile below is used.
+cp /input/flame.dtb /out/flame.dtb
+usb=/soc@0/usb@a6f8800/usb@a600000
+fdtput -t s /out/flame.dtb "$usb" dr_mode peripheral
+fdtput -d /out/flame.dtb "$usb" usb-role-switch
+for node in remoteproc@2400000 remoteproc@4080000 remoteproc@8300000 remoteproc@17300000; do
+    fdtput -t s /out/flame.dtb "/soc@0/$node" status disabled
+done
+if [ "${FLAME_WIFI:-0}" = 1 ]; then
+    [ "$(fdtget /out/flame.dtb /soc@0/remoteproc@4080000 compatible)" = qcom,sm8150-mpss-pas ] || exit 1
+    fdtput -t s /out/flame.dtb /soc@0/remoteproc@4080000 status okay
+fi
+(cd "$stage" && find . -print0 | cpio --null --quiet -o -H newc --owner=0:0) \
+    | gzip -n -9 > /out/initramfs.cpio.gz
+# U-Boot recognizes these standard Android addresses as sentinels: decompress
+# to its kernel_addr_r and leave the ramdisk in its download buffer. Using
+# Android ABL's base=0 instead asks U-Boot to write to physical 0x8000.
+# Keep /dev/console off USB for standalone operation. USB networking and an
+# explicitly started serial login remain available without being boot consoles.
+python3 /mkbootimg/mkbootimg.py --header_version 2 \
+    --base 0x10000000 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
+    --dtb_offset 0x1f00000 --pagesize 4096 \
+    --kernel /input/kernel --ramdisk /out/initramfs.cpio.gz --dtb /out/flame.dtb \
+    --os_version 13.0.0 --os_patch_level 2022-10 \
+    --cmdline 'console=tty0 rdinit=/init clk_ignore_unused pd_ignore_unused fw_devlink=permissive panic=10 printk.devkmsg=on' \
+    -o /out/boot.img
+size=$(stat -c %s /out/boot.img)
+[ "$size" -le 67108864 ] || { rm /out/boot.img; echo 'Probe exceeds the 64 MiB boot partition' >&2; exit 1; }
+(cd /out && sha256sum boot.img flame.dtb initramfs.cpio.gz > SHA256SUMS)

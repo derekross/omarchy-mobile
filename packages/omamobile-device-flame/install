@@ -1,0 +1,16 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: install ABSOLUTE_STAGING_DIRECTORY}
+[[ $destination == /* && $destination != / ]] || exit 1
+for file in bin/*; do install -Dm755 "$file" "$destination/usr/bin/${file##*/}"; done
+for file in vendor/bin/*; do install -Dm755 "$file" "$destination/usr/bin/${file##*/}"; done
+while IFS= read -r -d '' file; do
+  install -Dm644 "$file" "$destination/usr/lib/${file#vendor/lib/}"
+done < <(find vendor/lib -type f -print0)
+install -d "$destination/usr/lib/systemd/system/sysinit.target.wants"
+ln -sfn ../flame-storage-guard.service "$destination/usr/lib/systemd/system/sysinit.target.wants/flame-storage-guard.service"
+install -Dm644 version "$destination/usr/share/omamobile/device-flame/version"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-flame/LICENSE"
+install -Dm644 /dev/null "$destination/usr/share/omamobile/flame-root"

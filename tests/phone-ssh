@@ -1,0 +1,31 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Validate host configuration without opening a connection.
+# shellcheck disable=SC2016
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+cat >"$scratch/ssh" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@"
+SH
+chmod +x "$scratch/ssh"
+export PATH="$scratch:$PATH"
+unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS
+tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
+grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
+grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
+export OMAMOBILE_SSH_HOST='root@fe80::1234%usb-test'
+export OMAMOBILE_SSH_KEY="$scratch/key with spaces"
+export OMAMOBILE_SSH_KNOWN_HOSTS="$scratch/known hosts"
+tools/phone-ssh 'uname -r' >"$scratch/configured"
+grep -Fx -- "$OMAMOBILE_SSH_HOST" "$scratch/configured" >/dev/null
+grep -Fx -- "$OMAMOBILE_SSH_KEY" "$scratch/configured" >/dev/null
+grep -Fx -- "UserKnownHostsFile=$OMAMOBILE_SSH_KNOWN_HOSTS" "$scratch/configured" >/dev/null
+grep -Fx StrictHostKeyChecking=yes "$scratch/configured" >/dev/null
+if OMAMOBILE_SSH_HOST=-V tools/phone-ssh true >"$scratch/bad" 2>/dev/null; then
+  echo 'not ok - option-like SSH host accepted' >&2; exit 1
+fi
+[[ ! -s $scratch/bad ]]
+echo 'ok - phone SSH defaults, scoped IPv6, identity paths and host validation'

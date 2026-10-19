@@ -2,5 +2,19 @@
 # SPDX-License-Identifier: MIT
 # phone-ssh: run a command on the phone over USB networking.
 # The host side needs 172.16.42.2/24 on the gadget link (NetworkManager profile "omamobile-phone").
-exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-  -o ConnectTimeout=6 root@172.16.42.1 "$@"
+set -euo pipefail
+target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
+[[ $target != -* && $target != *[[:space:]]* ]] || {
+  echo 'phone-ssh: invalid OMAMOBILE_SSH_HOST' >&2; exit 1;
+}
+options=(-o LogLevel=ERROR -o ConnectTimeout=6)
+if [[ -n ${OMAMOBILE_SSH_KNOWN_HOSTS:-} ]]; then
+  options+=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$OMAMOBILE_SSH_KNOWN_HOSTS")
+else
+  # RAM probes generate ephemeral host keys; preserve the existing default.
+  options+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+fi
+if [[ -n ${OMAMOBILE_SSH_KEY:-} ]]; then
+  options+=(-o IdentitiesOnly=yes -i "$OMAMOBILE_SSH_KEY")
+fi
+exec ssh "${options[@]}" "$target" "$@"

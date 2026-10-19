@@ -66,3 +66,8 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | Pixel 8, 8 Pro, 8a | shiba, husky, akita | zuma (Tensor G3) | **8a (akita): hardware and help offered, [#1](https://github.com/derekross/omarchy-mobile/issues/1)**; a new SoC for us, a longer road than gs101 |
 | Pixel 9 family | tokay, caiman, komodo, comet, tegu | zumapro (Tensor G4) | not started |
 | Pixel 10 family | | laguna (Tensor G5) | not started |
+
+Pixel 4 also has an opt-in [native-root development profile](../device/flame/native/README.md).
+Its [bounded results and remaining limits](../device/flame/native/RESULTS.md)
+are separate from the RAM-only first-light row; permanent installation remains
+experimental and stock A on the tested handset is unbootable.
