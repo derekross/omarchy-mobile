@@ -273,6 +273,10 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
   || fail "install stages the setup script and the profile"
+[[ -f $tmp/root/usr/share/applications/omamobile-agent.desktop ]] || fail "install stages the AI Agent shortcut"
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$tmp/root/usr/share/applications/omamobile-agent.desktop" || fail "AI Agent desktop entry validates"
+fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
 [[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
    && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \

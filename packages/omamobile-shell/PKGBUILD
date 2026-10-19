@@ -10,6 +10,8 @@ license=(MIT GPL-3.0-or-later)  # GPL: the squeekboard layout
 depends=(omarchy omamobile-apps omamobile-omarchy omamobile-owl-widgets bash squeekboard bluez wf-recorder python python-dbus python-gobject
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative
+         # Both are in Omarchy's base package list, which root images install.
+         foot xdg-terminal-exec  # guard for hand-built/partial installations
          xdg-desktop-portal-gnome)  # the file chooser (portal/hyprland-portals.conf)
 optdepends=('fprintd: fingerprint setup and unlock (with omamobile-fingerprint)')
 backup=(etc/xdg/xdg-desktop-portal/hyprland-portals.conf)

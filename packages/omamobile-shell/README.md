@@ -26,6 +26,21 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `widgets/WIDGETS.md` | The contract for user widgets, for people and coding agents (installed to `/usr/share/omamobile/shell/`) |
 | `widgets/template`, `widgets/examples` | The starter **Create a widget with AI** copies, and examples to copy (`widget-template/`, `widget-examples/`) |
 
+## AI Agent shortcut
+
+**AI Agent** in the app drawer opens Omarchy's default agent with
+`omarchy-agent --pick`. If no agent is chosen, it opens the existing
+**Setup > Default Agent** chooser, which installs the user's selection.
+The shortcut does not choose or preinstall an agent. Existing choices are
+preserved, and it can be added to a home screen like any other app.
+Tapping it focuses the most recently used open agent window, including a
+widget-building session, instead of starting another session. To start a
+separate task, use Omarchy's normal agent command.
+Foot and `xdg-terminal-exec` already ship in Omarchy's base package list,
+which normal root images install. The explicit dependencies are a guard
+for hand-built or partial installations: both agent launch and installing
+a selection need Omarchy's terminal launcher.
+
 ## File dialogs
 
 Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron and Flatpak apps alike) get Nautilus's libadwaita file chooser from xdg-desktop-portal-gnome, not xdg-desktop-portal-gtk's GTK 3 desktop chooser, whose Places sidebar took half of the 480 px width. Nautilus's chooser folds its sidebar away at phone width and has touch-sized rows; `hypr/phone.lua` tiles it, even when it has a parent window, so it fills the screen between the bar and the on-screen keyboard. Only FileChooser goes to the gnome backend: its other interfaces need gnome-shell. It runs without gnome-shell (its Mutter service channel is missing, so it falls back to a plain Wayland connection). xdg-desktop-portal-gtk stays as the fallback and for its other interfaces.

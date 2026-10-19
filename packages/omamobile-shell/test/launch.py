@@ -249,6 +249,25 @@ def an_open_app_is_focused_not_started_again():
 
 
 @test
+def agent_shortcut_matches_and_focuses_the_most_recent_agent_session():
+    # Use the shipped entry so its StartupWMClass and Terminal setting are
+    # part of this contract. A widget-building session uses the same class.
+    windows = [client("0xa1", "org.omarchy.agent", workspace=2, history=3),
+               client("0xa2", "org.omarchy.agent", workspace=4, history=0, title="Widget builder"),
+               client("0xb", "foot", workspace=1, history=1)]
+    with Sandbox(windows, active_windows=1) as s:
+        shutil.copyfile(os.path.join(os.path.dirname(HERE), "applications/omamobile-agent.desktop"),
+                        os.path.join(s.apps, "omamobile-agent.desktop"))
+        out = s.run("match", "omamobile-agent")
+        assert out.returncode == 0 and out.stdout.strip() == "0xa2 org.omarchy.agent", (out.stdout, out.stderr)
+        assert s.actions() == [] and s.spawned() == []
+        out = s.run("app", "omamobile-agent")
+        assert out.returncode == 0, out.stderr
+        assert s.actions() == [("dispatch", 'hl.dsp.focus({ window = "address:0xa2" })')], s.actions()
+        assert s.spawned() == []
+
+
+@test
 def a_new_app_gets_an_empty_workspace_through_an_exec_rule():
     with Sandbox([client("0xb", "chromium")], active_windows=1) as s:
         s.desktop("org.gnome.Nautilus", Exec="nautilus")

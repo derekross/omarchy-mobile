@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Desktop Entry]
+Type=Application
+Name=AI Agent
+Comment=Open your default agent or choose one in Omarchy
+Exec=omarchy-agent --pick
+TryExec=omarchy-agent
+Icon=utilities-terminal
+Terminal=false
+StartupWMClass=org.omarchy.agent
+Categories=Development;
+Keywords=AI;agent;coding;assistant;
