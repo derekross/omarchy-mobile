@@ -1,0 +1,57 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Validate host configuration without opening a connection.
+# shellcheck disable=SC2016
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+cat >"$scratch/ssh" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@"
+SH
+chmod +x "$scratch/ssh"
+export PATH="$scratch:$PATH"
+unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_SHARE
+tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
+grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
+grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
+export OMAMOBILE_SSH_HOST='root@fe80::1234%usb-test'
+export OMAMOBILE_SSH_KEY="$scratch/key with spaces"
+export OMAMOBILE_SSH_KNOWN_HOSTS="$scratch/known hosts"
+printf 'fake known host\n' >"$OMAMOBILE_SSH_KNOWN_HOSTS"
+tools/phone-ssh 'uname -r' >"$scratch/configured"
+grep -Fx -- "$OMAMOBILE_SSH_HOST" "$scratch/configured" >/dev/null
+grep -Fx -- "$OMAMOBILE_SSH_KEY" "$scratch/configured" >/dev/null
+grep -Fx -- "UserKnownHostsFile=$OMAMOBILE_SSH_KNOWN_HOSTS" "$scratch/configured" >/dev/null
+grep -Fx StrictHostKeyChecking=yes "$scratch/configured" >/dev/null
+if OMAMOBILE_SSH_HOST=-V tools/phone-ssh true >"$scratch/bad" 2>/dev/null; then
+  echo 'not ok - option-like SSH host accepted' >&2; exit 1
+fi
+[[ ! -s $scratch/bad ]]
+export OMAMOBILE_SSH_SHARE=1
+tools/phone-ssh 'uname -r' >"$scratch/shared"
+grep -Fx ControlMaster=auto "$scratch/shared" >/dev/null
+grep -Fx -- "$OMAMOBILE_SSH_HOST" "$scratch/shared" >/dev/null
+shared=$(sed -n '/^ControlPath=/p' "$scratch/shared")
+[[ $shared == *-%C && $shared != 'ControlPath=/tmp/omamobile-ssh-%C' ]]
+tools/phone-ssh --fresh 'uname -r' >"$scratch/fresh"
+grep -Fx ControlPath=none "$scratch/fresh" >/dev/null
+grep -Fx ControlMaster=no "$scratch/fresh" >/dev/null
+if grep -Fx ControlMaster=auto "$scratch/fresh"; then exit 1; fi
+tools/phone-ssh --stop >"$scratch/stop"
+grep -Fx -- "$OMAMOBILE_SSH_HOST" "$scratch/stop" >/dev/null
+grep -Fx -- "$shared" "$scratch/stop" >/dev/null
+grep -Fx -- -O "$scratch/stop" >/dev/null
+OMAMOBILE_SSH_KEY="$scratch/other identity" tools/phone-ssh true >"$scratch/other"
+[[ $(sed -n '/^ControlPath=/p' "$scratch/other") != "$shared" ]]
+printf 'changed host key\n' >"$OMAMOBILE_SSH_KNOWN_HOSTS"
+tools/phone-ssh true >"$scratch/changed"
+[[ $(sed -n '/^ControlPath=/p' "$scratch/changed") != "$shared" ]]
+# Default connections retain upstream's socket and --stop target.
+unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS
+tools/phone-ssh true >"$scratch/default-shared"
+grep -Fx 'ControlPath='"${XDG_RUNTIME_DIR:-/tmp}"'/omamobile-ssh-%C' "$scratch/default-shared" >/dev/null
+tools/phone-ssh --fresh true >"$scratch/default-fresh"
+grep -Fx ControlPath=none "$scratch/default-fresh" >/dev/null
+echo 'ok - phone SSH options preserve sharing/fresh/stop and isolate identity/host-key policy'

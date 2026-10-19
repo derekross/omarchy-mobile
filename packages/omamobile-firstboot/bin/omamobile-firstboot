@@ -336,6 +336,12 @@ s_services() {
   ufw allow 53317/udp
   ufw allow 53317/tcp
   ufw allow in on usb0 to any port 22 proto tcp
+  if [[ -f $ROOT/usr/share/omamobile/flame-root ]]; then
+    # Native flame keeps an independent RAM rescue listener and a USB DHCP
+    # server. These rules apply only to the physical gadget, never Wi-Fi.
+    ufw allow in on usb0 to any port 2222 proto tcp
+    ufw allow in on usb0 to any port 67 proto udp
+  fi
   # Active from the next boot, as Omarchy's installer leaves it
   sed -i 's/^ENABLED=.*/ENABLED=yes/' "$ROOT/etc/ufw/ufw.conf"
 }

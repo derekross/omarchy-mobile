@@ -12,15 +12,49 @@
 # a check that a step left SSH working (a USB or firewall change, AGENTS.md
 # section 1) must use --fresh, which never shares. --stop closes the shared
 # connection.
-opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=6)
+set -euo pipefail
+target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
+[[ $target != -* && $target != *[[:space:]]* ]] || {
+  echo 'phone-ssh: invalid OMAMOBILE_SSH_HOST' >&2; exit 1;
+}
+key=${OMAMOBILE_SSH_KEY:-}
+known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
+opts=(-o LogLevel=ERROR -o ConnectTimeout=6)
+if [[ -n $known ]]; then
+  opts+=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known")
+else
+  opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+fi
+[[ -z $key ]] || opts+=(-o IdentitiesOnly=yes -i "$key")
 path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
+if [[ $target != root@172.16.42.1 || -n $key$known ]]; then
+  # %C separates endpoints, but not identities or host-key policies. Never
+  # reuse an unchecked master for a later strict connection. Python 3 is
+  # needed only for sharing/stopping a connection with explicit options.
+  if [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 && ${1:-} != --fresh || ${1:-} == --stop ]]; then
+    context=$(python3 - "$target" "$key" "$known" <<'PY'
+import hashlib, sys
+from pathlib import Path
+h = hashlib.sha256()
+for value in sys.argv[1:]:
+    h.update(value.encode()); h.update(b'\0')
+if sys.argv[3]:
+    h.update(Path(sys.argv[3]).read_bytes())
+print(h.hexdigest()[:24])
+PY
+    )
+    path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
+  fi
+fi
 case ${1:-} in
   --fresh) shift; opts+=(-o ControlMaster=no -o ControlPath=none) ;;
-  --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit root@172.16.42.1 2>/dev/null ;;
+  --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit "$target" 2>/dev/null ;;
   *)
     # Keepalives end a master whose phone rebooted within about 6 s, so
     # calls after a reboot don't wait on a dead connection.
-    [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 ]] && opts+=(-o ControlMaster=auto -o ControlPath="$path"
-      -o ControlPersist=60 -o ServerAliveInterval=2 -o ServerAliveCountMax=3) ;;
+    if [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 ]]; then
+      opts+=(-o ControlMaster=auto -o ControlPath="$path"
+        -o ControlPersist=60 -o ServerAliveInterval=2 -o ServerAliveCountMax=3)
+    fi ;;
 esac
-exec ssh "${opts[@]}" root@172.16.42.1 "$@"
+exec ssh "${opts[@]}" "$target" "$@"

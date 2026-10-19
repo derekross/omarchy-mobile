@@ -186,6 +186,18 @@ grep -q '^usermod -aG wheel,audio,video,input' "$CALLS" || fail "a second run up
 [[ $(grep -cxF "$KEY" "$R/home/alice/.ssh/authorized_keys") == 1 ]] || fail "a second run doesn't duplicate the key"
 pass "running again is safe"
 
+# Only the explicit native-root marker opens RAM rescue and DHCP, on USB.
+if grep -Eq '^ufw allow .*port (2222|67) ' "$CALLS"; then fail "normal roots get no flame recovery/DHCP rules"; fi
+mkdir -p "$R/usr/share/omamobile"
+touch "$R/usr/share/omamobile/flame-root"
+: > "$CALLS"
+good > "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "flame services run"; }
+grep -qx 'ufw allow in on usb0 to any port 2222 proto tcp' "$CALLS" || fail "flame recovery is USB-only"
+grep -qx 'ufw allow in on usb0 to any port 67 proto udp' "$CALLS" || fail "flame DHCP is USB-only"
+rm "$R/usr/share/omamobile/flame-root"
+pass "native flame recovery and DHCP rules are marker-gated and USB-only"
+
 # An essential step failing keeps the conf (minus the Wi-Fi secret) for the next boot
 rm -f "$R/var/lib/omamobile/firstboot/user"
 sed -i '/^alice:/d' "$R/etc/passwd"

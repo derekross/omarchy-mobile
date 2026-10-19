@@ -71,3 +71,7 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | Pixel 10 family | mustang (10 Pro XL) | laguna (Tensor G5) | 10 Pro XL (mustang): stock facts, contributors welcome ([#18](https://github.com/derekross/omarchy-mobile/issues/18)) |
 | Pixel 11 Pro, 11 Pro Fold | grizzly, yogi | malibu (Tensor G6) | stock facts, contributors welcome: 11 Pro ([#26](https://github.com/derekross/omarchy-mobile/issues/26)), 11 Pro Fold ([#40](https://github.com/derekross/omarchy-mobile/issues/40)) |
 | POCO F3 | alioth | SM8250 (Snapdragon 870) | the first non-Pixel port: a guarded installer and root image in review ([#25](https://github.com/derekross/omarchy-mobile/pull/25)) |
+
+Pixel 4 native-root bring-up is experimental ([results](../device/flame/native/RESULTS.md)).
+Stock A on the tested handset is unbootable: recovery is the buttons alone
+to reach Android Fastboot, with verified private stock B backups retained.

@@ -1,0 +1,20 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# UFS LUN discovery order can change across boots. Never persist /dev/sdX paths.
+set -euo pipefail
+test -f /usr/share/omamobile/flame-root
+test ! -e /dev/sda
+directory=/run/omamobile/flame-partitions
+install -d -m 700 "$directory"
+for part in persist modemst1 modemst2 fsg fsc modem_a modem_b devinfo; do
+  target=''
+  for candidate in /sys/class/block/sd*/uevent; do
+    if grep -Fx "PARTNAME=$part" "$candidate" >/dev/null; then
+      [[ -z $target ]] || { echo 'Ambiguous protected partition' >&2; exit 1; }
+      target=/dev/$(basename "$(dirname "$candidate")")
+    fi
+  done
+  [[ -n $target && -b $target ]] || { echo 'Protected partition absent' >&2; exit 1; }
+  [[ $(blockdev --getro "$target") == 1 ]] || { echo 'Protected partition is writable' >&2; exit 1; }
+  ln -sfn "$target" "$directory/$part"
+done

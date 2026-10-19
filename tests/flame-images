@@ -1,0 +1,121 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# No phone: verify the separate U-Boot layout and its pre-flash checks.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/repo/bin" "$t/repo/device/flame/native" "$t/repo/tools" "$t/bin"
+cp bin/omamobile "$t/repo/bin/"
+cp device/flame/native/device.conf "$t/repo/device/flame/native/"
+printf 'DEVICE=flame\nSRC_DIR=/nonexistent\n' >"$t/repo/omamobile.conf"
+printf '#!/bin/sh\nexit 0\n' >"$t/repo/tools/phone-ssh"
+chmod +x "$t/repo/tools/phone-ssh"
+python3 - "$t/loader.img" <<'PY'
+from pathlib import Path
+import sys, struct
+data=bytearray(8192);data[:8]=b'ANDROID!'
+struct.pack_into('<3I',data,8,64,0x8000,0)
+struct.pack_into('<I',data,36,4096)
+data[4096:4099]=b'\x1f\x8b\x08'
+Path(sys.argv[1]).write_bytes(data)
+PY
+cat >"$t/bin/fastboot" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$TEST_TMP/calls"
+if [ "$1" = devices ]; then
+  printf 'FAKEPHONE\tfastboot\n'
+  [ "${TEST_TWO_PHONES:-0}" != 1 ] || printf 'FAKEOTHER\tfastboot\n'
+  exit 0
+fi
+[ "$1" = -s ] && [ "$2" = FAKEPHONE ] || exit 91
+shift 2
+case "$1 $2" in
+  'getvar slot-successful:b')
+    if [ -e "$TEST_TMP/flashed" ] && [ "${TEST_POST_FLASH_SUCCESSFUL:-yes}" = no ]; then
+      echo '(bootloader) slot-successful:b:no'
+    else grep 'slot-successful:b:' "$TEST_TMP/facts"; fi ;;
+  'getvar version-bootloader') echo '(bootloader) version-bootloader:FAKE-ABL' ;;
+  getvar*) grep -E "(^| )$2:" "$TEST_TMP/facts" ;;
+  'erase boot_b') [ "${TEST_ERASE_FAIL:-0}" = 0 ] || exit 1; echo OKAY ;;
+  'flash boot_b') [ "${TEST_FLASH_FAIL:-0}" = 0 ] || exit 1; touch "$TEST_TMP/flashed"; echo OKAY ;;
+  'reboot ') echo OKAY ;;
+  *) exit 92 ;;
+esac
+EOF
+chmod +x "$t/bin/fastboot"
+export TEST_TMP=$t
+facts() { rm -f "$t/flashed"; printf '(bootloader) product:%s\n(bootloader) unlocked:%s\n(bootloader) current-slot:%s\n(bootloader) slot-successful:b:%s\n' "$1" "$2" "$3" "$4" >"$t/facts"; }
+om() { FLAME_NATIVE=1 PATH="$t/bin:$PATH" KERNEL_OUT="$t/out" UBOOT_IMAGE="$t/loader.img" UBOOT_SHA256="$sum" "$t/repo/bin/omamobile" "$@" >"$t/log" 2>&1; }
+sum=$(sha256sum <"$t/loader.img" | cut -d' ' -f1)
+om images || { cat "$t/log"; exit 1; }
+cmp "$t/loader.img" "$t/out/images/boot.img"
+[[ $(cat "$t/out/images/DEVICE") == flame && $(cat "$t/out/images/BOOT_METHOD") == uboot-ext4 ]]
+facts flame yes b yes
+om flash || { cat "$t/log"; exit 1; }
+[[ $(grep -c '^-s FAKEPHONE flash ' "$t/calls") -eq 1 ]]
+grep -q '^-s FAKEPHONE flash boot_b ' "$t/calls"
+if grep -q -- '--set-active' "$t/calls"; then exit 1; fi
+printf 'product: flame\nunlocked: yes\ncurrent-slot: b\nslot-successful:b: yes\n' >"$t/facts"
+om flash || { cat "$t/log"; exit 1; }
+for bad in 'other yes b yes' 'flame no b yes' 'flame yes a yes' 'flame yes b no'; do
+  # Split only these fixed test tokens.
+  # shellcheck disable=SC2086
+  facts $bad
+  : >"$t/calls"
+  if om flash; then echo "not ok - accepted $bad"; exit 1; fi
+  if grep -q '^-s FAKEPHONE flash ' "$t/calls"; then exit 1; fi
+done
+facts flame yes b yes
+export TEST_POST_FLASH_SUCCESSFUL=no
+: >"$t/calls"
+if om flash; then echo 'not ok - rebooted with unsuccessful B'; exit 1; fi
+grep -q '^-s FAKEPHONE erase boot_b$' "$t/calls"
+grep -q '^-s FAKEPHONE flash boot_b ' "$t/calls"
+if grep -q '^-s FAKEPHONE reboot' "$t/calls"; then exit 1; fi
+unset TEST_POST_FLASH_SUCCESSFUL
+facts flame yes b yes
+export TEST_ERASE_FAIL=1
+: >"$t/calls"
+if om flash; then echo 'not ok - ignored erase failure'; exit 1; fi
+if grep -q '^-s FAKEPHONE flash ' "$t/calls"; then exit 1; fi
+unset TEST_ERASE_FAIL
+export TEST_TWO_PHONES=1
+: >"$t/calls"
+if om flash; then echo 'not ok - ambiguous phone selection'; exit 1; fi
+if grep -Eq ' erase | flash ' "$t/calls"; then exit 1; fi
+FASTBOOT_SERIAL=FAKEPHONE om flash || { cat "$t/log"; exit 1; }
+unset TEST_TWO_PHONES
+export FLAME_BOOT_ROLE=userdata
+: >"$t/calls"
+if om images; then echo 'not ok - staged pending-policy userdata role'; exit 1; fi
+if grep -Eq ' erase | flash ' "$t/calls"; then exit 1; fi
+unset FLAME_BOOT_ROLE
+facts flame yes b yes
+printf changed >>"$t/out/images/boot.img"
+: >"$t/calls"
+if om flash; then echo 'not ok - accepted modified image'; exit 1; fi
+if grep -q '^-s FAKEPHONE flash ' "$t/calls"; then exit 1; fi
+sum=$(printf '%064d' 0)
+if om images; then echo 'not ok - accepted incorrect source checksum'; exit 1; fi
+if om push; then echo 'not ok - accepted unimplemented direct write'; exit 1; fi
+python3 - "$t/loader.img" <<'PY'
+from pathlib import Path
+import struct, sys
+p=Path(sys.argv[1])
+with p.open('wb') as f:
+    header=bytearray(48)
+    header[:8]=b'ANDROID!'
+    struct.pack_into('<I',header,40,2)
+    f.write(header)
+    f.truncate(67108864)
+PY
+sum=$(sha256sum <"$t/loader.img" | cut -d' ' -f1)
+export FLAME_BOOT_ROLE=stock-recovery
+facts flame yes b no
+om images || { cat "$t/log"; exit 1; }
+: >"$t/calls"
+om flash || { cat "$t/log"; exit 1; }
+grep -q '^-s FAKEPHONE flash boot_b ' "$t/calls"
+if grep -q '^-s FAKEPHONE reboot' "$t/calls"; then echo 'not ok - stock recovery rebooted before data reset'; exit 1; fi
+echo 'ok - flame stages only checked U-Boot; flash verifies product, unlock and existing successful B'

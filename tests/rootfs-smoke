@@ -67,6 +67,18 @@ release=$(sed -n 's/^kernel modules: \([^ ]*\) .*/\1/p' <<<"$manifest")
 grep -q '^omamobile-device-[a-z0-9]* .* omamobile$' <<<"$manifest" || fail "a device package from [omamobile] in the MANIFEST"
 pass "MANIFEST, device package, modules for $release"
 
+if grep -q '^device: flame (omamobile-device-flame)$' <<<"$manifest"; then
+  for path in /usr/share/omamobile/flame-root /usr/bin/flame-storage-guard \
+      /usr/lib/systemd/system/sysinit.target.wants/flame-storage-guard.service \
+      /usr/lib/udev/rules.d/10-flame-storage.rules /usr/bin/xdg-terminal-exec /usr/bin/foot /usr/bin/udiskie; do
+    exists "$path" || fail "flame runtime dependency: $path"
+  done
+  grep -q '^ForwardToConsole=no$' <<<"$(cat_ /usr/lib/systemd/journald.conf.d/90-flame-standalone.conf)" || fail "flame journal must stay off USB"
+  exists /usr/lib/firmware/ftm5_fw.ftb && fail "flame touch firmware-update gate"
+  exists /usr/lib/systemd/system/multi-user.target.wants/flame-wifi.service && fail "Wi-Fi must remain owner-gated"
+  pass "flame guard and desktop dependencies; Wi-Fi/touch firmware gates"
+fi
+
 # Images from before omamobile-omarchy patched Omarchy in build-inside
 if exists /usr/bin/omamobile-omarchy-patches; then
   exists /usr/share/libalpm/hooks/95-omamobile-omarchy-patches.hook || fail "the Omarchy re-patch hook is installed"

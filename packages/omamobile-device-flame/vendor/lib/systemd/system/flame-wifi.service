@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Experimental Pixel 4 Wi-Fi with protected NV shadows
+Requires=flame-storage-guard.service
+After=flame-storage-guard.service systemd-udev-settle.service
+Before=NetworkManager.service
+ConditionPathExists=/etc/omamobile/flame-firmware.sha256
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flame-wifi-start
+RemainAfterExit=yes
+TimeoutStartSec=75
+# Keep the filesystem servers for the lifetime of this boot. Do not restart a
+# failed processor or stop/unload drivers during bring-up.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

@@ -13,16 +13,21 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/lib/alarm.sh tools/lib/alarm-setup rootfs/build-inside tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
+  if [[ $f == *.py ]]; then
+    python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$f"
+    continue
+  fi
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
 done
 sh -n initramfs/init
 sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
-bash -n tools/build-flame-probe
+bash -n tools/build-flame-probe tools/build-flame-system tools/build-flame-loader
+sh -n device/flame/native/init device/flame/native/build
 echo "ok - scripts parse"
-for t in tests/pr-check tests/kernel-pr-check tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all; do
+for t in tests/pr-check tests/kernel-pr-check tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe tests/flame-images tests/flame-root-guard.py tests/flame-boot-success.py tests/phone-ssh packages/omamobile-device-flame/test/all packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all; do
   echo "# $t"
-  "$t"
+  if [[ $t == *.py ]]; then python3 -B "$t"; else "$t"; fi
 done
 shopt -s nullglob
 latest=""
