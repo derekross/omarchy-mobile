@@ -54,14 +54,20 @@ XFER = struct.Struct("<QQIIHBBBBBB")
 AMPS = {0: "top (earpiece)", 1: "bottom (loudspeaker)"}
 
 
+AMP_BUSES = ("spi@10960000", "spi@10d60000")
+
+
 def find_spidev(cs):
-    """/dev/spidevB.C for amplifier@<cs> under spi@10960000, or None."""
+    """/dev/spidevB.C for amplifier@<cs> under the amplifiers' SPI bus, or None.
+
+    cheetah: spi@10960000 (USI7); raven: spi@10d60000 (USI13).
+    """
     for dev in glob.glob("/sys/bus/spi/devices/spi*.%d" % cs):
         try:
             node = os.path.realpath(os.path.join(dev, "of_node"))
         except OSError:
             continue
-        if node.endswith("spi@10960000/amplifier@%d" % cs):
+        if any(node.endswith("%s/amplifier@%d" % (bus, cs)) for bus in AMP_BUSES):
             name = os.path.basename(dev)          # spiB.C
             path = "/dev/spidev" + name[3:]
             return path if os.path.exists(path) else None
