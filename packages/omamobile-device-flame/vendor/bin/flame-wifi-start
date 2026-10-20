@@ -1,0 +1,103 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Experimental flame radio startup. Owner firmware and NV stay off-repository.
+set -euo pipefail
+
+fail() { echo "flame Wi-Fi: $*" >&2; exit 1; }
+test -f /usr/share/omamobile/flame-root || fail 'wrong root'
+[[ $(tr -d '\0' </proc/device-tree/model) == 'Google Pixel 4' ]] || fail 'wrong model'
+tr '\0' '\n' </proc/device-tree/compatible | \
+    grep -Ex 'google,(flame|floral-sm8150)' >/dev/null || fail 'wrong device'
+systemctl is-active --quiet flame-storage-guard.service
+test ! -e /dev/sda || fail 'whole-disk node exists'
+blockdev --setro /dev/sda7
+for node in /sys/class/block/sd*; do
+    case ${node##*/} in sda|sda15) continue;; esac
+    [[ $(cat "$node/ro") == 1 ]] || fail 'protected storage is writable'
+done
+
+/usr/bin/flame-partition-links
+sha256sum --check --status /etc/omamobile/flame-calibration.sha256
+sha256sum --check --status /etc/omamobile/flame-firmware.sha256
+# Firmware API 2 wins over the factory API 1 board file, including compressed
+# copies and files restored by a linux-firmware upgrade. Fail before MPSS starts.
+[[ -z $(cat /sys/module/firmware_class/parameters/path) ]] || fail 'custom firmware search path'
+for root in /usr/lib/firmware/updates/"$(uname -r)" /usr/lib/firmware/updates \
+            /usr/lib/firmware/"$(uname -r)" /usr/lib/firmware; do
+    for file in "$root"/ath10k/WCN3990/hw1.0/board-2.bin{,.xz,.zst}; do
+        [[ ! -e $file ]] || fail 'generic API 2 board data overrides factory board.bin'
+    done
+done
+
+# Verify each shadow against the currently protected partition, not merely an
+# older shadow manifest. rmtfs receives RAM files and never the real NV nodes.
+for pair in modemst1:modem_fs1 modemst2:modem_fs2 fsg:modem_fsg fsc:modem_fsc; do
+    part=${pair%%:*}; file=${pair#*:}; source_node=''
+    for candidate in /sys/class/block/sd*/uevent; do
+        if grep -Fx "PARTNAME=$part" "$candidate" >/dev/null; then
+            [[ -z $source_node ]] || fail 'ambiguous NV partition'
+            source_node=/dev/$(basename "$(dirname "$candidate")")
+        fi
+    done
+    [[ -n $source_node ]] || fail 'NV partition is absent'
+    [[ $(sha256sum "$source_node" | cut -d' ' -f1) == \
+       $(sha256sum "/var/lib/omamobile/flame/nv/$file" | cut -d' ' -f1) ]] || fail 'stale NV shadow'
+done
+
+wifi_ready() {
+    # systemd may rename wlan0 (wld0 on the tested native root).
+    for iface in /sys/class/net/*; do
+        [[ ! -d $iface/wireless ]] || return 0
+    done
+    return 1
+}
+wifi_ready && exit 0
+state=/var/lib/omamobile/flame/wifi-starting
+[[ ! -e $state ]] || fail 'previous startup did not complete; inspect logs before clearing marker'
+install -d -m 700 /var/lib/omamobile/flame
+touch "$state"
+sync -f "$state"
+
+for program in rmtfs tqftpserv; do test -x "/usr/local/sbin/$program"; done
+install -d -m 700 /run/rmtfs
+for file in modem_fs1 modem_fs2 modem_fsg modem_fsc; do
+    install -m 600 "/var/lib/omamobile/flame/nv/$file" "/run/rmtfs/$file"
+done
+modprobe qrtr_smd
+modprobe qcom_q6v5_pas
+test -c /dev/qcom_rmtfs_mem1
+rm -f /dev/mem
+# Refuse existing filesystem servers: their options and backing data are unknown.
+! pgrep -x rmtfs >/dev/null || fail 'rmtfs already running'
+! pgrep -x tqftpserv >/dev/null || fail 'tqftpserv already running'
+install -d -m 700 /var/log/omamobile
+/usr/local/sbin/tqftpserv >>/var/log/omamobile/flame-tqftp.log 2>&1 &
+/usr/local/sbin/rmtfs -r -v -o /run/rmtfs >>/var/log/omamobile/flame-rmtfs.log 2>&1 &
+sleep 1
+pgrep -x tqftpserv >/dev/null
+pgrep -x rmtfs >/dev/null
+mpss=''
+for candidate in /sys/class/remoteproc/remoteproc*; do
+    [[ -f $candidate/name ]] || continue
+    [[ $(cat "$candidate/name") == modem ]] || continue
+    [[ -z $mpss ]] || fail 'ambiguous modem processor'
+    mpss=$candidate
+done
+[[ -n $mpss ]] || fail 'MPSS is absent'
+# Repeated resets after a WLAN firmware fault previously stalled UFS.
+echo disabled >"$mpss/recovery"
+[[ $(cat "$mpss/state") == offline ]] || fail 'MPSS is already started'
+echo start >"$mpss/state"
+[[ $(cat "$mpss/state") == running ]]
+modprobe ath10k_snoc
+modprobe qcom_pd_mapper
+for _ in {1..45}; do
+    if wifi_ready; then
+        rm "$state"
+        sync -f /var/lib/omamobile/flame
+        echo 'WLAN ready; modem filesystem uses verified read-only RAM shadows'
+        exit 0
+    fi
+    sleep 1
+done
+fail 'no WLAN interface after firmware startup'

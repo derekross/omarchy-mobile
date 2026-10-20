@@ -1,0 +1,38 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Development storage guard; never clear an existing read-only flag.
+export PATH=/usr/bin:/bin
+say() { echo "omamobile-flame-guard: $*" >/dev/kmsg; }
+UFS_RW="boot_b userdata"
+part_name() { sed -n 's/^PARTNAME=//p' "$1/uevent"; }
+storage_guard() {
+    for s in /sys/class/block/sd*; do
+        [ -r "$s/ro" ] || continue
+        name=${s##*/}
+        if [ "$name" = sda ]; then
+            rm -f /dev/sda
+            continue
+        fi
+        [ -b "/dev/$name" ] || continue
+        part=$(part_name "$s")
+        case "$name" in
+            sda[0-9]*)
+                # A previously read-only device stays so; never use --setrw.
+                case " $UFS_RW " in *" $part "*) continue ;; esac ;;
+        esac
+        [ "$(cat "$s/ro")" = 1 ] && continue
+        if ! blockdev --setro "/dev/$name" || [ "$(cat "$s/ro")" != 1 ]; then
+            say "FAILED to protect /dev/$name"
+            return 1
+        fi
+    done
+    [ ! -e /dev/sda ]
+}
+while :; do
+    if ! storage_guard; then
+        say 'Storage protection failed; forcing recovery'
+        echo c >/proc/sysrq-trigger
+        exit 1
+    fi
+    sleep 0.2
+done
