@@ -24,6 +24,9 @@
 #               Nothing runs while frozen, so both phases are measured
 #               from the gauge's charge counter (1 mAh steps: use phases of
 #               10 minutes or more); A is also sampled as usual
+#   units       A = the --units system units and --user-units of --user
+#               stopped, B = started (units not active at the start are
+#               left alone)
 #
 # Options:
 #   --unplug SECS   wait before the first phase, to pull the cable (default 60)
@@ -31,6 +34,9 @@
 #   --settle SECS   seconds at the start of each phase not counted (default 20)
 #   --rounds N      A/B rounds (default 4)
 #   --delay-ms MS   B value for ufs-delay (default 4)
+#   --units "U..."  system units for the units test
+#   --user-units "U..."  user units for the units test
+#   --user NAME     whose user units (default: the first logged-in user)
 #   --detach        re-run itself with setsid/nohup and return at once
 #
 # Output: /var/lib/omamobile/power/<time>-<test>.csv (one sample a second:
@@ -45,6 +51,7 @@
 set -uo pipefail
 
 unplug=60 phase=120 settle=20 rounds=4 delay_ms=4 detach=0 test=
+units= user_units= uname=
 
 usage() { sed -n '/^# Usage/,/^# See /p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -55,9 +62,12 @@ while (($#)); do
     --settle) settle="${2:?}"; shift ;;
     --rounds) rounds="${2:?}"; shift ;;
     --delay-ms) delay_ms="${2:?}"; shift ;;
+    --units) units="${2?}"; shift ;;
+    --user-units) user_units="${2?}"; shift ;;
+    --user) uname="${2?}"; shift ;;
     --detach) detach=1 ;;
     -h|--help) usage ;;
-    baseline|c2|ufs-gate|ufs-delay|s2idle) test="$1" ;;
+    baseline|c2|ufs-gate|ufs-delay|s2idle|units) test="$1" ;;
     *) usage 1 ;;
   esac
   shift
@@ -66,7 +76,8 @@ done
 [[ $EUID -eq 0 ]] || { echo "power-ab: run as root" >&2; exit 1; }
 
 if ((detach)); then
-  args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms" "$test")
+  args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms"
+        --units "$units" --user-units "$user_units" --user "$uname" "$test")
   setsid nohup "$0" "${args[@]}" > /dev/null 2>&1 < /dev/null &
   echo "power-ab: started (pid $!); unplug within ${unplug} s"
   exit 0
@@ -91,7 +102,27 @@ case "$test" in
     command -v rtcwake >/dev/null && grep -qw s2idle /sys/power/mem_sleep \
       || { echo "power-ab: needs rtcwake and s2idle" >&2; exit 1; }
     [[ -r "$bat/charge_counter" ]] || { echo "power-ab: the gauge has no charge_counter" >&2; exit 1; } ;;
+  units)
+    [[ -n "$units$user_units" ]] || { echo "power-ab: units needs --units or --user-units" >&2; exit 1; } ;;
 esac
+
+# The units test touches only units that are active now
+[[ -z "$uname" ]] && uname=$(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" {print $2; exit}')
+usys=() uusr=()
+for u in $units; do systemctl -q is-active "$u" && usys+=("$u"); done
+if [[ -n "$user_units" && -n "$uname" ]]; then
+  for u in $user_units; do
+    systemctl --user -M "$uname@.host" -q is-active "$u" 2>/dev/null && uusr+=("$u")
+  done
+fi
+units_start() {
+  ((${#usys[@]})) && systemctl start "${usys[@]}"
+  ((${#uusr[@]})) && systemctl --user -M "$uname@.host" start "${uusr[@]}"
+}
+units_stop() {
+  ((${#uusr[@]})) && systemctl --user -M "$uname@.host" stop "${uusr[@]}"
+  ((${#usys[@]})) && systemctl stop "${usys[@]}"
+}
 
 # Save what we may change, restore it on exit
 declare -A saved
@@ -101,6 +132,7 @@ for f in "${idle_states[@]}"; do [[ -e "$f" ]] && save "$f"; done
 restore() {
   local f
   for f in "${!saved[@]}"; do echo "${saved[$f]}" > "$f" 2>/dev/null; done
+  [[ $test == units ]] && units_start > /dev/null 2>&1
 }
 trap 'restore; exit 1' TERM INT HUP
 trap restore EXIT
@@ -119,6 +151,8 @@ set_cfg() { # A|B
       [[ $1 == A ]] && v=150 || v=$delay_ms
       echo 1 > "$ufs/clkgate_enable"
       echo "$v" > "$ufs/clkgate_delay_ms" ;;
+    units)
+      if [[ $1 == A ]]; then units_stop; else units_start; fi > /dev/null 2>&1 ;;
   esac
 }
 
@@ -130,6 +164,7 @@ csv="$out/$stamp-$test.csv" txt="$out/$stamp-$test.txt"
 {
   echo "# power-ab $test: phase ${phase}s settle ${settle}s rounds $rounds unplug ${unplug}s delay_ms $delay_ms"
   echo "# kernel $(uname -r); battery $bat; ufs ${ufs:-none}"
+  [[ $test == units ]] && echo "# units: ${usys[*]}; user units ($uname): ${uusr[*]}"
   echo "time,phase,voltage_uv,current_ua,current_avg_ua,charge_counter_uah,charge_now_uah"
 } > "$csv"
 

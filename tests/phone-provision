@@ -74,6 +74,19 @@ grep -q 'first storageproxyd start' <<<"$out" || fail "warns that the first stor
 [[ -z $(ls -A "$t/work") ]] || fail "the staging (per-phone data) is removed"
 pass "dry run: old paths mapped to new names and the user's home, phone untouched, fingerprint warning"
 
+# Raven's run does none of cheetah's backup or fingerprint steps: each of
+# their options is refused before anything runs, not ignored
+: > "$t/factory.zip"
+for o in --fingerprint --import-home --restore-config --restore-wifi --with-waves --force "--backup $t"; do
+  # shellcheck disable=SC2086 # the --backup case is two words on purpose
+  if out=$(PHONE_SSH=$t/phone-ssh tools/phone-provision -d raven --dry-run --work "$t/work" $o "$t/factory.zip" 2>&1); then
+    fail "-d raven refuses $o"
+  fi
+  grep -qF -- "-d raven doesn't support ${o%% *}" <<<"$out" || { echo "$out"; fail "says it refuses $o"; }
+done
+[[ ! -e $t/ssh.calls ]] || fail "a refused raven run never contacts the phone"
+pass "-d raven refuses cheetah's backup and fingerprint options"
+
 out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --user alice 2>&1)
 grep -q 'speaker.conf\|nmconnection\|home.json\|omamobile-fp' <<<"$out" && fail "config, Wi-Fi, home and fingerprint stay opt-in"
 cp "$B/phone-config.tar.sha256" "$t/sum"

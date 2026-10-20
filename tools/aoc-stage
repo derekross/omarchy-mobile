@@ -9,6 +9,9 @@
 # to do into the kernel log first ("aoc-stage: ...").
 #
 # Needs a kernel with omamobile-aoc and a DTB with the aoc-boot-test overlay.
+# The device is read from the phone's DT: cheetah (gs201) or raven (gs101,
+# device/raven/AUDIO-PLAN.md). Raven has no c3 or rails stage: its AoC rails
+# are regulators in the DT, which the AoC driver enables itself.
 # The modules (gsa, gs201_aoc_sysmmu, gs201_aoc_boot, gs201_aoc_rails) must be
 # blacklisted from autoload (/etc/modprobe.d/omamobile-aoc-bringup.conf).
 #
@@ -40,7 +43,32 @@
 #   trusty   load Trusty (trusty_core, trusty_log, trusty_ipc, then
 #        trusty_virtio) and check /dev/trusty-ipc-dev0; needs the /trusty node
 #        (overlay fingerprint-trusty). Before c2 --trusty.
+#   gsa      load gsa alone (probe masks the GSA mailbox interrupts, nothing
+#        else), then read sjtag_status and, through Trusty, aoc_state_tz.
+#        After trusty. Needs no AoC node (raven R1, device/raven/AUDIO-PLAN.md)
 #   mbox     read-only: the three AoC mailboxes (AP side), in the kernel log
+#   cycle    raven: toggle aoc_req (0, then 1). Its acknowledge comes back,
+#        but it doesn't power BLK_AOC (PMU custom words unchanged, R2.1e;
+#        BLK_AOC stays off, R2.1f): use pd for that. After c2; the AoC must
+#        be inactive.
+#   tzpc     withdrawn: the D_TZPC_AOC SMC hung the SoC both as a restore
+#        (R2.1c) and as a save (R2.1d), most likely EL3 touching the
+#        powered-off block. pd is what makes BLK_AOC reachable (R2.1g); the
+#        stage refuses to run.
+#   pmu      read-only: the AoC's PMU handshake words (custom out/in), through
+#        the kernel's PMU regmap. After c2.
+#   bus0     read-only: CMU_BUS0's Q-channels for the AP's ports into the GSA
+#        (reference) and BLK_AOC, each logged before it is read. After c2.
+#   pd       raven: switch BLK_AOC's power domain (PMU AOC_CONFIGURATION, through
+#        the kernel regmap) on, or off with PD=0, and wait for AOC_STATUS.
+#   core     raven R3: the AoC through aoc_core, as cheetah's omamobile-aoc-start
+#        does it without its rails step (raven's sensor rails are DT
+#        regulators): Trusty, gsa, the AoC drivers in cheetah's order, then
+#        aoc.bin through aoc_core's firmware file; waits for the services.
+#        Fresh boot only, never with gs201_aoc_boot loaded.
+#   s2mpu    read-only: the AoC S2MPU's CTRL0 alone. On raven it reads the
+#        PMU first and refuses unless AOC_STATUS says BLK_AOC is on (run pd
+#        first): a read of the powered-off block aborts the SoC (R2.1f/g)
 #   rails    turn the five AoC LDOs on (gs201_aoc_rails enable=1; stock
 #        voltages, never changed). Before c4a, for C4b-3.
 #
@@ -49,7 +77,8 @@
 #                phone; a hang then resets the phone by itself
 #   --trusty     c2: AoC state commands through Trusty's hwmgr.aoc (gsa
 #                without aoc_cmd_mbox); run the trusty stage first
-#   --fw FILE    aoc.bin to copy for c4a (default: the extracted stock vendor one)
+#   --fw FILE    aoc.bin to copy for c4a (default: the extracted stock vendor one;
+#                raven: ~/android/vendor-firmware-raven, from extract-vendor-firmware -d raven -o)
 #   --pstore     after a watchdog reset: save /sys/fs/pstore
 #
 # Never use tools/devmem (/usr/local/bin/devmem on the phone) for any of this:
@@ -60,7 +89,7 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SSH="$ROOT/tools/phone-ssh"
 LOGDIR="$ROOT/logs"
-FW="$HOME/android/omamobile/vendor/google/cheetah/proprietary/vendor/firmware/aoc.bin"
+FW=
 DBG=/sys/kernel/debug/aoc
 GSADBG=/sys/kernel/debug/17c90000.gsa
 MARKER=/var/lib/omamobile/aoc-bringup-started
@@ -79,11 +108,13 @@ while (($#)); do
     --trusty) trusty=1 ;;
     --pstore) pstore=1 ;;
     -h|--help) usage ;;
-    c2|c2p|c3|c4a|c4b|stop|diag|ramdump|release|rails|trusty|mbox) stage="$1" ;;
+    c2|c2p|c3|c4a|c4b|stop|diag|ramdump|release|rails|trusty|gsa|mbox|cycle|tzpc|s2mpu|pmu|bus0|pd|core) stage="$1" ;;
     *) usage 1 ;;
   esac
   shift
 done
+# Before anything reaches the phone
+[[ $stage == tzpc ]] && die "tzpc is withdrawn: the D_TZPC_AOC SMC hung the SoC as a restore and as a save (device/raven/AUDIO-PLAN.md R2.1c/d); run pd to make BLK_AOC reachable (R2.1g)"
 
 mkdir -p "$LOGDIR"
 stamp=$(date +%Y%m%d-%H%M%S)
@@ -108,7 +139,23 @@ log="$LOGDIR/aoc-$stamp-$stage.log"
 
 say "phone check"
 phone 'uname -r' || die "phone not reachable over $SSH"
-phone 'grep -q okay /sys/firmware/devicetree/base/soc@0/aoc@181d0000/status 2>/dev/null' ||
+if phone 'grep -q gs101-raven /sys/firmware/devicetree/base/compatible'; then
+  device=raven AOCNODE=aoc@175d0000
+  : "${FW:=$HOME/android/vendor-firmware-raven/usr/lib/firmware/updates/aoc.bin}"
+  [[ $stage == c3 || $stage == rails ]] && die "raven has no $stage stage: its AoC rails are DT regulators"
+else
+  device=cheetah AOCNODE=aoc@181d0000
+  : "${FW:=$HOME/android/omamobile/vendor/google/cheetah/proprietary/vendor/firmware/aoc.bin}"
+fi
+say "device: $device"
+# These switch power domains and call EL3 on raven's AoC; cheetah's AoC
+# has its own path, and cycle would power its BLK_AOC down
+case $stage in
+  cycle|tzpc|pd|s2mpu) [[ $device == raven ]] || die "$stage is a raven stage (device/raven/AUDIO-PLAN.md R2), not for $device" ;;
+esac
+# trusty and gsa need no AoC node: they are the first steps on a new SoC
+[[ $stage == trusty || $stage == gsa ]] ||
+phone "grep -q okay /sys/firmware/devicetree/base/soc@0/$AOCNODE/status 2>/dev/null" ||
   die "the running DTB has no enabled AoC node: push the aoc-boot-test overlay first (AOC-PLAN.md 7)"
 
 say "streaming the phone's kernel log to $log"
@@ -119,7 +166,10 @@ say "streaming the phone's kernel log to $log"
   echo "# $(date +%T.%3N) log stream ended (connection closed or phone gone)"
 } >> "$log" &
 logger=$!
-trap 'kill $logger 2>/dev/null' EXIT
+# The stream's ssh is a child of the subshell: kill it too, or it keeps
+# the tool's stdout open and a caller's pipe never ends
+stop_logger() { pkill -P "$logger" 2>/dev/null; kill "$logger" 2>/dev/null; }
+trap stop_logger EXIT
 sleep 2
 mark "start $stage" || die "phone stopped answering before the test"
 
@@ -151,15 +201,20 @@ result=ok
 case "$stage" in
   c2|c2p)
     mark "about to load gsa, gs201_aoc_sysmmu, gs201_aoc_boot (no AoC register is touched)"
-    phone "$load_modules" | tee -a "$log" | grep -q modules-ok || result=fail
+    phone "$load_modules" | tee -a "$log" | grep -c modules-ok >/dev/null || result=fail
     if [[ $stage == c2p ]]; then
       mark "about to request BLK_AOC power (aoc_req = 1)"
       phone "echo 1 > $DBG/power; echo power-exit=\$?" | tee -a "$log" || result=fail
     fi
     mark "about to read aoc_req, the GSA AoC state, chip id, GSA S2MPU CTRL0 (wakelock)"
     phone "$readout" | tee -a "$log" || result=fail
-    mark "about to read the AoC System MMU and AoC S2MPU, only if BLK_AOC is on"
-    phone "cat $DBG/blk" | tee -a "$log" || result=fail
+    if [[ $device == raven ]]; then
+      # R2.1 (AUDIO-PLAN.md): the AoC S2MPU's CTRL0 aborted with BLK_AOC on
+      warn "raven: not reading blk (the AoC S2MPU read aborts the SoC)"
+    else
+      mark "about to read the AoC System MMU and AoC S2MPU, only if BLK_AOC is on"
+      phone "cat $DBG/blk" | tee -a "$log" || result=fail
+    fi
     ;;
   c3)
     mark "about to load gs201_aoc_rails (reads only)"
@@ -196,6 +251,64 @@ case "$stage" in
     mark "about to load trusty_log, trusty_ipc, trusty_virtio"
     phone 'modprobe trusty_log; modprobe trusty_ipc && modprobe trusty_virtio; sleep 1;
       ls -l /dev/trusty-ipc-dev0; dmesg | grep -iE "trusty|virtio" | tail -6' | tee -a "$log" || result=fail
+    ;;
+  gsa)
+    phone 'test -e /dev/trusty-ipc-dev0' || die "run the trusty stage first"
+    mark "about to load gsa (probe masks the GSA mailbox interrupts)"
+    phone "modprobe gsa; echo modprobe-exit=\$?; dmesg | grep -i gsa | tail -3;
+      cat $GSADBG/sjtag_status; cat $GSADBG/aoc_state_tz" | tee -a "$log" || result=fail
+    ;;
+  cycle)
+    phone "test -d $DBG" || die "run c2 first"
+    phone "grep -q 'state 0' $GSADBG/aoc_state_tz" || die "the AoC is not inactive: not cycling BLK_AOC"
+    mark "about to power BLK_AOC down (aoc_req = 0)"
+    phone "echo 0 > $DBG/power; echo power0-exit=\$?; cat $DBG/info" | tee -a "$log" || result=fail
+    mark "about to power BLK_AOC up (aoc_req = 1)"
+    out=$(phone "echo 1 > $DBG/power; echo power1-exit=\$?; cat $DBG/info" | tee -a "$log") || result=fail
+    echo "$out"
+    [[ $out == *power1-exit=0* ]] || result=fail
+    ;;
+  core)
+    [[ $device == raven ]] || die "core is raven's R3 (cheetah: omamobile-aoc-start)"
+    phone 'lsmod | grep -q "^gs201_aoc_boot "' && die "gs201_aoc_boot is loaded: reboot first (it owns the AoC node)"
+    phone 'test -e /usr/lib/firmware/updates/aoc.bin' || die "no aoc.bin on the phone (run c4a once, or copy it)"
+    node=/sys/bus/platform/devices/175d0000.aoc
+    mark "about to load Trusty, gsa and the AoC drivers (aoc_core path)"
+    phone "for m in trusty_core trusty_log trusty_ipc trusty_virtio gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev; do
+        modprobe \$m || echo modprobe-fail=\$m; done; ls $node/firmware && echo core-bound" | tee -a "$log" | grep -c core-bound >/dev/null || result=fail
+    if [[ $result == ok ]]; then
+      mark "about to load aoc.bin through aoc_core"
+      phone "echo aoc.bin > $node/firmware; echo fw-exit=\$?;
+        for i in \$(seq 75); do grep -q '^Services : [1-9]' $node/services 2>/dev/null && break; sleep 0.2; done;
+        head -1 $node/services; cat $node/revision 2>/dev/null | head -1; ls /dev/acd-* 2>/dev/null | wc -l;
+        cat /proc/asound/cards" | tee -a "$log" || result=fail
+    fi
+    ;;
+  pd)
+    phone "test -e $DBG/pd" || die "run c2 first (and a kernel with the pd file)"
+    mark "about to switch BLK_AOC's power domain to ${PD:-1}"
+    phone "echo ${PD:-1} > $DBG/pd; echo pd-exit=\$?; cat $DBG/pmu; dmesg | grep blkpwr_aoc | tail -1" | tee -a "$log" || result=fail
+    ;;
+  bus0)
+    phone "test -e $DBG/bus0" || die "run c2 first (and a kernel with the bus0 file)"
+    mark "about to read CMU_BUS0's AoC and GSA Q-channels"
+    phone "cat $DBG/bus0" | tee -a "$log" || result=fail
+    ;;
+  pmu)
+    phone "test -e $DBG/pmu" || die "run c2 first (and a kernel with the pmu file)"
+    mark "about to read the AoC's PMU words (kernel regmap)"
+    phone "cat $DBG/pmu; cat $DBG/info" | tee -a "$log" || result=fail
+    ;;
+  s2mpu)
+    phone "test -e $DBG/s2mpu" || die "run c2 first (and a kernel with the s2mpu file)"
+    phone "test -e $DBG/pmu" || die "no pmu file: needs a kernel with it (the s2mpu read needs AOC_STATUS first)"
+    # Read just before the S2MPU, so the answer can't be stale
+    pmu=$(phone "cat $DBG/pmu" | tee -a "$log")
+    st=$(sed -n 's/^pmu aoc configuration [0-9a-fx]* status \(0x[0-9a-f]*\|0\)$/\1/p' <<<"$pmu")
+    [[ -n $st ]] || die "can't read AOC_STATUS from $DBG/pmu"
+    (( st & 1 )) || die "BLK_AOC is off (AOC_STATUS $st): run pd first; the AoC S2MPU read of a powered-off block aborts the SoC (AUDIO-PLAN.md R2.1f/g)"
+    mark "about to read the AoC S2MPU CTRL0 (one register)"
+    phone "cat $DBG/s2mpu" | tee -a "$log" || result=fail
     ;;
   mbox)
     phone "test -d $DBG" || die "run c2 first"
@@ -250,7 +363,7 @@ else
 fi
 
 sleep 1
-kill "$logger" 2>/dev/null
+stop_logger
 trap - EXIT
 
 echo
