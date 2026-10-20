@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: give the BCM4389 Bluetooth controller its real address
+# (omamobile-bt-addr@.service).
+ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci[0-9]*", DRIVERS=="hci_uart_bcm", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-bt-addr@%k.service"

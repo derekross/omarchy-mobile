@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (AUDIO-PLAN.md, R4 gates A2-A3): USI13 as SPI and raven's two
+ * CS35L41 speaker amplifiers (chip select 0 = top speaker / earpiece, 1 =
+ * bottom loudspeaker). Needs the omamobile-gs101-audio kernel branch.
+ *
+ * A2: keep snd-soc-cs35l41-spi from loading (blacklisted on the phone) and
+ *     bind spidev by driver_override, then read the chip IDs with
+ *     tools/cs35l41-id. Nothing is written to the amplifiers.
+ * A3: load snd-soc-cs35l41-spi: the driver resets each amplifier, reads its
+ *     ID and OTP and writes its boost configuration. Without the TDM 0 link
+ *     in the sound card the output stage is never enabled.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@10d600c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10d600c0/spi@10d60000} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10d600c0/spi@10d60000/amplifier@0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@10d600c0/spi@10d60000/amplifier@1} {
+	status = "okay";
+};

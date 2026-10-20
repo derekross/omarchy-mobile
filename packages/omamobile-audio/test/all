@@ -22,7 +22,7 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   u=$tmp/ucm2
   mkdir -p "$u/conf.virt.d" "$u/Google"
   cp -r /usr/share/alsa/ucm2/ucm.conf /usr/share/alsa/ucm2/lib "$u/"
-  cp -r ucm2/Google/cheetah "$u/Google/"
+  cp -r ucm2/Google/cheetah ucm2/Google/raven "$u/Google/"
   cp ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf "$u/conf.virt.d/aoctest.conf"
   # No card here: stand in for the card substitutions, keep the rest as is
   sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \

@@ -89,8 +89,9 @@ else
 fi
 
 # The DT's cirrus,subsystem-id; with the "Top"/"Bottom" name prefixes it makes
-# the firmware names mainline wm_adsp requests.
-SYSTEM=cheetah
+# the firmware names mainline wm_adsp requests. Read from the top amplifier's
+# node (cheetah, raven); cheetah when there is none (the tests).
+SYSTEM=${OMAMOBILE_SPK_SYSTEM:-}
 AMPS=(Top Bottom)
 SUFFIX=(top bottom)
 NODES=(amplifier@0 amplifier@1)
@@ -114,6 +115,16 @@ RUN=${OMAMOBILE_RUN:-/run/omamobile}
 LIB=${OMAMOBILE_AUDIO_LIB:-/usr/lib/omamobile-audio}
 CARD_WAIT=${OMAMOBILE_CARD_WAIT:-20}
 CTL_WAIT=${OMAMOBILE_CTL_WAIT:-10}
+
+if [[ -z $SYSTEM ]]; then
+  for d in "$SPIDEVS"/*; do
+    [[ $(readlink -f "$d/of_node" 2>/dev/null) == */amplifier@0 ]] || continue
+    [[ -r $d/of_node/cirrus,subsystem-id ]] || continue
+    SYSTEM=$(tr -d '\0' < "$d/of_node/cirrus,subsystem-id")
+    break
+  done
+  [[ $SYSTEM =~ ^[a-z0-9]+$ ]] || SYSTEM=cheetah
+fi
 
 marker=$STATE/speaker-protection-started
 stamp=$STATE/speaker-protection-verified

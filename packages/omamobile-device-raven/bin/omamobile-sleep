@@ -1,0 +1,124 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# systemd-sleep hook (device/raven/SUSPEND-PLAN.md), linked from
+# /usr/lib/systemd/system-sleep/omamobile. systemd-sleep runs it as
+#   omamobile-sleep pre|post suspend|hibernate|hybrid-sleep|suspend-then-hibernate
+# Only "systemctl suspend" (through logind) gets here; tests that write
+# /sys/power/state directly bypass it.
+#
+# Wi-Fi stays loaded and connected across sleep (brcmfmac's D3 handshake by
+# control message; S5 passed on raven), so it is back at once on a wake.
+# Unloading it instead saves about 115 mA asleep but costs some 7-10 s to
+# reconnect; choose that with /etc/omamobile/wifi-unload-for-sleep.
+#
+# pre:  note the suspend failure count; in unload mode, unload Wi-Fi and the
+#       PCIe host (brcmfmac alone leaves the BCM4389 powered with its link
+#       up and no power save; pcie_gs201's remove drops PERST# and the
+#       wlan-reg-on rail).
+# post: log the wake IRQ. In unload mode, bring Wi-Fi back at once after a
+#       power-key wake, otherwise only once the panel is lit (the RTC and
+#       the fuel gauge wake the phone in the dark every few minutes). If the
+#       suspend failed in the Wi-Fi device, fall back to unload mode for
+#       the rest of this boot and reload Wi-Fi now (a chip stuck in D3
+#       only comes back with a reload of the stack).
+#   omamobile-sleep wifi-when-lit   (run by post as a transient unit)
+#   omamobile-sleep wifi-on         reload now, if pre unloaded it
+set -uo pipefail
+
+unload_mode=/etc/omamobile/wifi-unload-for-sleep
+run=/run/omamobile
+unloaded=$run/wifi-unloaded-for-sleep
+fallback=$run/wifi-sleep-fallback
+failcount=$run/sleep-fail-count
+waiter=omamobile-wifi-wake
+wifi_pci=0000:01:00.0
+
+log() { echo "omamobile-sleep: $*"; }
+
+panel_lit() {
+  local p
+  for p in /sys/class/backlight/*/bl_power; do
+    [[ -r $p && $(<"$p") == 0 ]] && return 0
+  done
+  return 1
+}
+
+wifi_unload() {
+  [[ -d /sys/module/brcmfmac || -d /sys/module/pcie_gs201 ]] || return 0
+  # brcmfmac_wcc holds brcmfmac; removing it first unbinds the device cleanly.
+  if modprobe -r brcmfmac_wcc brcmfmac pcie_gs201; then
+    touch "$unloaded"
+    log "Wi-Fi and PCIe unloaded for sleep"
+  else
+    log "Wi-Fi unload failed; sleeping with it loaded"
+  fi
+}
+
+wifi_on() {
+  [[ -e $unloaded ]] || return 0
+  rm -f "$unloaded"
+  # The host first: brcmfmac binds when the endpoint enumerates.
+  modprobe pcie_gs201 && modprobe brcmfmac
+  log "Wi-Fi reloaded"
+}
+
+wake_name=
+wake_reason() {
+  local irq
+  irq=$(cat /sys/power/pm_wakeup_irq 2>/dev/null) || irq=
+  if [[ -n $irq ]]; then
+    wake_name=$(awk -v i="$irq:" '$1 == i { $1 = ""; print; exit }' /proc/interrupts | tr -s ' ')
+    log "woken by IRQ $irq:${wake_name:- (unknown)}"
+  else
+    log "no wake IRQ recorded"
+  fi
+}
+
+case "${1:-}/${2:-}" in
+  pre/suspend)
+    mkdir -p "$run"
+    cat /sys/power/suspend_stats/fail >"$failcount" 2>/dev/null || true
+    systemctl stop "$waiter" 2>/dev/null
+    if [[ -e $unload_mode || -e $fallback ]]; then
+      wifi_unload
+    fi
+    ;;
+  post/suspend)
+    wake_reason
+    before=$(cat "$failcount" 2>/dev/null || echo 0)
+    after=$(cat /sys/power/suspend_stats/fail 2>/dev/null || echo 0)
+    if ((after > before)); then
+      dev=$(cat /sys/power/suspend_stats/last_failed_dev 2>/dev/null)
+      log "suspend failed (last failed device: ${dev:-unknown})"
+      if [[ $dev == "$wifi_pci" && ! -e $fallback ]]; then
+        touch "$fallback"
+        log "Wi-Fi refused D3; unloading it for sleep until the next boot"
+        wifi_unload
+        wifi_on
+      fi
+    fi
+    if [[ -e $unloaded ]]; then
+      # The power key lights the panel, but only some 3 s later, once the
+      # session has thawed: reload at once rather than wait for it. Either
+      # way in a transient unit, so the session's thaw doesn't wait for us.
+      mode=wifi-when-lit
+      [[ $wake_name == *KEY_POWER* ]] && mode=wifi-on
+      systemd-run --no-block --collect --quiet --unit="$waiter" \
+        /usr/bin/omamobile-sleep "$mode"
+    fi
+    ;;
+  wifi-when-lit/)
+    until panel_lit; do sleep 1; done
+    wifi_on
+    ;;
+  wifi-on/)
+    wifi_on
+    ;;
+  pre/*|post/*)
+    ;;
+  *)
+    echo "Usage: omamobile-sleep pre|post suspend, or wifi-on" >&2
+    exit 1
+    ;;
+esac
+exit 0

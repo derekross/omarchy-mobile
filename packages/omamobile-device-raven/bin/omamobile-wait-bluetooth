@@ -1,0 +1,19 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Before the login session starts, wait (at most 15 s) for the BCM4389's
+# adapter: its firmware patch loads about 11 s into boot, and Omarchy's shell
+# doesn't pick up an adapter that appears after it started. Never fails.
+# The BCM4389 sometimes never answers after a warm reboot (it needs a cold
+# restart then; device/raven/BLUETOOTH-PLAN.md): stop waiting once this boot's
+# kernel log shows its setup failed.
+bt_setup_failed() {
+  dmesg 2>/dev/null | grep -cE 'hci0: (BCM: Reset failed|BCM: Patch failed|BCM: failed to write update baudrate)' >/dev/null
+}
+for _ in $(seq 75); do
+  [[ -e /sys/class/bluetooth/hci0 ]] &&
+    timeout 2 bluetoothctl show 2>/dev/null | grep -q "Powered: yes" && exit 0
+  bt_setup_failed && { echo "omamobile-wait-bluetooth: the controller's setup failed, going on" >&2; exit 0; }
+  sleep 0.2
+done
+echo "omamobile-wait-bluetooth: no powered adapter after 15 s, going on" >&2
+exit 0
