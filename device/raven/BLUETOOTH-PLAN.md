@@ -239,3 +239,31 @@ CMU_APM with the USI1 UART gates, and `uart16_bus`.
   shell restart fixed it. omamobile-device-raven 0.1.2: an sddm drop-in
   waits up to 15 s for a powered hci0 (`omamobile-wait-bluetooth`). On the
   next boot sddm waited about 7 s and the tile is right.
+
+## B3: silent after a forced restart (2026-10-21, `g472317126aea`)
+
+The human force-restarted the phone (Power held) at 08:22 while the
+touchscreen was down. That boot and the next one, a normal warm reboot
+from `bin/omamobile push`, both found the chip silent: the 0xfc18 baud
+rate change timed out, the HCI_Reset after it timed out (`BCM: Reset
+failed (-110)`), and a second probe at 59 s failed the same way, so no
+controller reached bluetoothd. The boot before the forced restart, on the
+same kernel, came up normally.
+
+So the reset pulse covers warm reboots (B2) but not a chip left in this
+state: a forced restart cuts the SoC mid-run, and the chip's supply comes
+straight from the battery (`vbat` and `vddio` are dummy regulators here),
+so nothing cycles its power. In B1 a forced restart recovered it; this
+time it caused it, so what a forced restart does depends on the chip's
+state at the moment it hits.
+
+Next: does a further warm reboot recover it (the next kernel push), and
+if not, does a full power-off and power-on? If only that does, the driver
+needs a deeper reset (a longer BT_REG_ON low, or the chip's own reset
+line if raven wires one), and PR #6's "every warm reboot" claim stands
+but recovery doesn't.
+
+Also on this boot: the controller sat soft-blocked by rfkill, restored by
+systemd-rfkill from a previous boot; the boot check reports that as
+"bluetooth" failing too, which mixes a switched-off adapter with a dead
+chip.
