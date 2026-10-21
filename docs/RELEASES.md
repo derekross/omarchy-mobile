@@ -67,6 +67,7 @@ Bring-up tools (`*-stage`, `display-hz`, `usbc-deadman`) stay per plan: they pok
 | `ROOTFS_PACKAGES` | `omamobile-audio omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-modem` | Optional. The board's own packages that `tools/build-rootfs` installs on top of the shared `rootfs/packages.omamobile`: ones tuned to this phone, which another device's image must not pull in |
 | `DTB` | `exynos/google/gs201-cheetah.dtb` | Under `arch/arm64/boot/dts` in the kernel build, and under `dtbs/` in the kernel package |
 | `SOC_IDS` | `b0:0x9855001 a0:0x9855000` | `label:soc_id`. The first is what the DTB is built with; each other entry is a copy with `/soc_id` rewritten. Order is the order in `dtb.img` |
+| `SOC_COMPATIBLE` | (zuma: `b0-foplp:0x9865:1:0:0 b1-foplp:0x9865:1:1:0`; zumapro: `a1-ipop:0x9875:0:1:1`) | For a bootloader that matches the base DTB on `/soc_compatible` instead of `/soc_id` (zuma, zumapro). `label:product_id:major:minor:pkg_mode`, one entry per child node: the label, upper-cased with `-` as `_`, is the node name, so each label appears once. The DTB ships once, unchanged; `images` checks that it has a `/soc_compatible` node holding exactly these children. A descriptor names exactly one of `SOC_IDS` and `SOC_COMPATIBLE`, and `tools/install-phone` checks the same |
 | `DTBO_SOURCE` | `cheetah-m1-overlay.dts` | The board dtbo source beside the descriptor (GPL-2.0) |
 | `DTBO_BOARD_ID`, `DTBO_BOARD_REV` | `0x30306`, `0x10000` | What ABL matches the dtbo entry on; checked against the source |
 | `VENDOR_CMDLINE` | `console=tty0 earlycon=exynos4210,0x10A00000 …` | `vendor_boot` command line (kernel arguments really go in `/chosen/bootargs`) |
@@ -114,6 +115,7 @@ What `bin/omamobile` checks, so a wrong descriptor fails the build rather than t
 - `BOOT_IMAGES` names only `boot`, `init_boot`, `vendor_boot`, `vendor_kernel_boot` and `dtbo`, each once, and includes `boot`, `vendor_boot` and `dtbo`;
 - `initramfs` packs the checked `UFS_RW` into the image (`/etc/omamobile-ufs-rw`), so the init's allowlist is the descriptor's;
 - the DTB really is built with the first `SOC_IDS` value, and each rewrite took;
+- with `SOC_COMPATIBLE` instead, the DTB has a `/soc_compatible` node holding exactly its entries (one child each, labelled or not), and a descriptor never names both keys;
 - the dtbo source carries `DTBO_BOARD_ID` and `DTBO_BOARD_REV`;
 - `push` and `flash` refuse any image whose `_b` partition is not on the allowlist.
 - `images` records the device in `images/DEVICE`, and `push`, `flash` and `tools/make-bundle` refuse images built for another device.

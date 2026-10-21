@@ -76,10 +76,24 @@ load_device() {
   done < "$file"
   [[ $DEV_BOOT_METHOD == android-v4 ]] \
     || die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports only android-v4"
-  for key in CODENAME SOC PACKAGE DTB SOC_IDS DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
+  for key in CODENAME SOC PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
       VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
     p="DEV_$key"
     [[ -n ${!p:-} ]] || die "$file: $key is missing"
+  done
+  # ABL picks the base DTB by /soc_id (gs101, gs201) or by /soc_compatible
+  # (zuma): a descriptor names exactly one of the two.
+  if [[ -n ${DEV_SOC_IDS:-} && -n ${DEV_SOC_COMPATIBLE:-} ]]; then
+    die "$file: SOC_IDS and SOC_COMPATIBLE are exclusive; name the one this bootloader matches on"
+  elif [[ -z ${DEV_SOC_IDS:-} && -z ${DEV_SOC_COMPATIBLE:-} ]]; then
+    die "$file: SOC_IDS is missing (or SOC_COMPATIBLE, for a bootloader that matches /soc_compatible)"
+  fi
+  local sc='^[a-z0-9]+(-[a-z0-9]+)*:0x[0-9a-f]+:[0-9]+:[0-9]+:[0-9]+$' labels=" "
+  for p in ${DEV_SOC_COMPATIBLE:-}; do
+    [[ $p =~ $sc ]] || die "$file: SOC_COMPATIBLE entries are label:product_id:major:minor:pkg_mode, not $p"
+    # One child node per entry: the label names it, so it must be unique
+    [[ $labels != *" ${p%%:*} "* ]] || die "$file: SOC_COMPATIBLE names ${p%%:*} twice"
+    labels+="${p%%:*} "
   done
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
   # Safety: the guard's allowlist may name slot B's boot images and userdata
@@ -431,12 +445,60 @@ cmd_images() {
   say "Kernel: Image.lz4"
   lz4 -l -9 -f -q "$boot/Image" "$img/Image.lz4"
 
+  local entry label id base="" out dtbs=()
+  if [[ -n ${DEV_SOC_COMPATIBLE:-} ]]; then
+    # ABL matches the base DTB on the children of /soc_compatible (product_id,
+    # major, minor, pkg_mode), and one DTB can carry several: ship the DTB
+    # once, after checking it holds exactly the descriptor's entries.
+    say "DTB: one copy, /soc_compatible $DEV_SOC_COMPATIBLE"
+    "$dtc" -q -I dtb -O dts "$dtb" | python3 -I -c '
+import re, sys
+want = {}
+for e in sys.argv[1].split():
+    label, pid, major, minor, pkg = e.split(":")
+    want[label.upper().replace("-", "_")] = (int(pid, 16), int(major), int(minor), int(pkg))
+# dtc -@ restores labels from __symbols__: "a: b: name {"
+lab = r"(?:[A-Za-z_][A-Za-z0-9_]*: )*"
+lines = sys.stdin.read().split("\n")
+start = [i for i, l in enumerate(lines) if re.fullmatch(r"\t" + lab + r"soc_compatible \{", l)]
+if not start:
+    sys.exit("no /soc_compatible node")
+# Every line at depth 2 must open or close a child, or be the phandle -@
+# gives a labelled node: anything else would let an unchecked entry by
+got, cur = {}, None
+for l in lines[start[0] + 1:]:
+    if l == "\t};":
+        break
+    if cur is None and re.fullmatch(r"\t\tphandle = <0x[0-9a-f]+>;", l):
+        continue
+    if not l or (cur is not None and l.startswith("\t\t\t")):
+        m = re.fullmatch(r"\t\t\t(product_id|major|minor|pkg_mode) = <(0x[0-9a-f]+)>;", l)
+        if m:
+            vals[m.group(1)] = int(m.group(2), 16)
+        continue
+    m = re.fullmatch(r"\t\t" + lab + r"([^\s:{};]+) \{", l)
+    if m and cur is None:
+        cur, vals = m.group(1), {}
+        if cur in got:
+            sys.exit("/soc_compatible has %s twice" % cur)
+    elif l == "\t\t};" and cur is not None:
+        got[cur] = tuple(vals.get(k, -1) for k in ("product_id", "major", "minor", "pkg_mode"))
+        cur = None
+    else:
+        sys.exit("/soc_compatible: cannot parse %r" % l.strip())
+else:
+    sys.exit("/soc_compatible is not closed")
+if got != want:
+    sys.exit("/soc_compatible holds %s, the descriptor wants %s" % (sorted(got.items()), sorted(want.items())))
+' "$DEV_SOC_COMPATIBLE" || die "$DEV_DTB does not match SOC_COMPATIBLE"
+    cp "$dtb" "$img/$DEV_CODENAME.dtb"
+    dtbs+=("$img/$DEV_CODENAME.dtb")
+  fi
   # ABL matches the base DTB on soc_id: ship one copy per SOC_IDS entry. The
   # first is the value the DTB was built with; the others are rewrites of it.
   # grep -c, not -q: with pipefail, grep -q exiting early SIGPIPEs dtc on larger trees
-  local entry label id base="" out dtbs=()
-  say "DTB: one copy per soc_id ($DEV_SOC_IDS)"
-  for entry in $DEV_SOC_IDS; do
+  [[ -n ${DEV_SOC_IDS:-} ]] && say "DTB: one copy per soc_id ($DEV_SOC_IDS)"
+  for entry in ${DEV_SOC_IDS:-}; do
     label=${entry%%:*} id=${entry#*:}
     out="$img/$DEV_CODENAME-$label.dtb"
     if [[ -z $base ]]; then

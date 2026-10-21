@@ -166,6 +166,10 @@ descriptor | sed 's/^NAME=.*/NAME="$(touch x)"/' > "$R/device/testdev/device.con
 refuse "a descriptor with shell in it"
 descriptor | sed '/^SOC_IDS=/d' > "$R/device/testdev/device.conf"
 refuse "a staged descriptor without SOC_IDS"; grep -q 'SOC_IDS is missing' "$t/out" || fail "names SOC_IDS"
+descriptor | sed 's/^SOC_IDS=.*/&\nSOC_COMPATIBLE="b0-foplp:0x9865:1:0:0"/' > "$R/device/testdev/device.conf"
+refuse "a descriptor with both SOC_IDS and SOC_COMPATIBLE"; grep -q 'are exclusive' "$t/out" || fail "says the two keys are exclusive"
+descriptor | sed 's/^SOC_IDS=.*/SOC_COMPATIBLE="b0-foplp:0x9865:1:0:0 b1-foplp:0x9865:1:1:0"/' > "$R/device/testdev/device.conf"
+install --dry-run || { cat "$t/out"; fail "a /soc_compatible (zuma) descriptor installs"; }
 descriptor > "$R/device/testdev/device.conf"
 echo cheetah > "$t/images/DEVICE"
 refuse "images built for another device"; grep -q "holds images for 'cheetah', not testdev" "$t/out" || fail "names both devices"
@@ -183,7 +187,7 @@ echo 'kernel modules: 7.3.0-test-2 (tarball sha256 0)' >> "$R/out/omamobile-root
 refuse "a root image whose modules don't match the boot images' kernel"; grep -q 'modules for 7.3.0-test-2' "$t/out" || fail "names both kernels"
 sed -i 's/^kernel modules: .*/kernel modules: 7.3.0-test-1 (tarball sha256 0)/' "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
 install --dry-run || { cat "$t/out"; fail "matching kernel and modules pass"; }
-pass "refuses partitions outside the allowlist, a non-data descriptor, a staged descriptor, another device's images, a bad or foreign root image, mismatched modules"
+pass "refuses partitions outside the allowlist, a non-data descriptor, a staged descriptor, both SOC_IDS and SOC_COMPATIBLE, another device's images, a bad or foreign root image, mismatched modules; accepts SOC_COMPATIBLE"
 
 # Explicit android-v4 is equivalent to the legacy descriptor (omitted method).
 printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"

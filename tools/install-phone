@@ -112,9 +112,14 @@ CODENAME=${D[CODENAME]:-}
 # Refuse before image preparation or any fastboot query/write.
 BOOT_METHOD=${D[BOOT_METHOD]-android-v4}
 [[ $BOOT_METHOD == android-v4 ]] || die "$conf: unsupported BOOT_METHOD=$BOOT_METHOD; install-phone supports only android-v4"
-# A staged descriptor leaves SOC_IDS out (zuma's ABL picks its DTB another
-# way): bin/omamobile refuses it, and so must the installer.
-[[ -n ${D[SOC_IDS]:-} ]] || die "$conf: SOC_IDS is missing; this device can't be installed yet"
+# The descriptor names how ABL picks the base DTB: SOC_IDS (/soc_id, gs101
+# and gs201) or SOC_COMPATIBLE (/soc_compatible, zuma), exactly one, as
+# bin/omamobile checks. A staged descriptor names neither and is refused.
+if [[ -n ${D[SOC_IDS]:-} && -n ${D[SOC_COMPATIBLE]:-} ]]; then
+  die "$conf: SOC_IDS and SOC_COMPATIBLE are exclusive"
+elif [[ -z ${D[SOC_IDS]:-} && -z ${D[SOC_COMPATIBLE]:-} ]]; then
+  die "$conf: SOC_IDS is missing (or SOC_COMPATIBLE); this device can't be installed yet"
+fi
 # Images record the device they were built for, as flash and push check:
 # out-int/images holds whichever device was built last.
 if [[ $mode == repository ]]; then
