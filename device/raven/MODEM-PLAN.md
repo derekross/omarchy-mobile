@@ -51,6 +51,7 @@ hand steps:**
 | 7 | A reproducible install: packages enable the modem, first setup writes the SIM settings; no hand-written `/etc` files | done: device-raven enables it, install-phone asks the APNs, `phone-provision -d raven` brings the modem chroot, board id and NV checksums (checked identical to the phone's) |
 | 8 | No bring-up overlays: the modem, CPIF and packet-processor nodes in raven's device tree | done (D3) |
 | 9 | 30 minutes of normal use with the modem on (data, a call, texts): no UFS errors, no USB stall | not measured |
+| 10 | A modem crash is noticed: CPIF leaves ONLINE, the user is told, the crash record keeps how it started | in progress (D4): the link died after 93 minutes on 2026-10-21 and nothing noticed |
 
 Follow-ups, not blockers: VoLTE (the network refuses the IMS bearer with
 2253, so calls use 2G CS, which ends if the network switches 2G off), the
@@ -733,3 +734,42 @@ binary: a single-module `make` had rebuilt nothing):
   cheetah.
 - **Rollback:** reboot into `images-ge23bb70c1189`; nothing persistent
   changes (NV only as RAM copies).
+
+## 10. D4: the link died after 93 minutes and nothing noticed (2026-10-21, `g08419862513c`)
+
+- **What happened:** about 93 minutes into a boot (uptime 5586 s) both
+  sitds exited together and never came back. CPIF still said ONLINE, so
+  the profile's watcher recorded nothing. Mobile data then failed with
+  "No internet bearer" every 70 s, and the kernel logged
+  `cpif: s51xx_pcie_send_doorbell_int: cmd reg = 0xffff` thousands of
+  times a second (`gs201-pcie-cp 11920000.pcie: LTSSM 0x11 ... faults
+  0x1`): journald used 70% of a CPU, the journal reached 3.3 GiB, and
+  rotation dropped the start, so the trigger is unknown. Wi-Fi was
+  unaffected; Chromium kept failing the sites it had tried over the dead
+  bearer until it was restarted.
+- **Why nothing recovered:** the doorbell that reads all ones calls
+  `exynos_pcie_rc_force_linkdown_work()`, which flags LINKDOWN and sends
+  CPIF its event. CPIF's answer is a PCIe power-on retry
+  (`cp2ap_wakeup_work`), and only the eleventh event forces a CP crash.
+  The power-on skips itself ("already powered on": the LTSSM still reads
+  L0; or the modem's wake line is low), the fault flag stays set, so no
+  second event ever comes, and each later doorbell prints 20 `cmd reg`
+  lines and a register dump and returns.
+- **Recovery by hand:** `systemctl restart omamobile-modem` left the CP in
+  BOOTING (the unit says never to restart it), which tripped the start
+  latch: the next boot skipped the modem until `omamobile-modem-start
+  --retry` (or removing `/var/lib/omamobile/modem-bringup-started`). A
+  reboot, then the latch cleared, brought both SIMs and data back.
+- **Fixes (built, not yet on the phone):**
+  - kernel (`omamobile-gs101-cpif`): when doorbells still fail 5 s after a
+    flagged link-down, declare the CP crash once
+    (`CRASH_REASON_PCIE_LINKDOWN_RECOVERY_FAILURE`), so CPIF leaves ONLINE
+    and the runtime sees it; the `cmd reg` lines and the register dumps
+    are rate-limited;
+  - omamobile-modem 0.1.7: a critical notification when the CP leaves
+    ONLINE; the crash record keeps the PCIe driver's lines and folds a
+    repeated line into a count;
+  - omamobile-device-raven 0.1.22: the journal capped at 1 GiB.
+- **Next:** what kills the link (the crash record should now keep it);
+  then recovery without a reboot (a CP power cycle that reaches ONLINE).
+
