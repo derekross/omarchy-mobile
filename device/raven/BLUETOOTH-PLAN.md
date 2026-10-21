@@ -276,13 +276,20 @@ controller up at 08:17, before the forced restart. So this is no longer a
 chip state that a reset clears, and B2's warm-reboot result (and PR #6's
 claim) is not what changed.
 
+**Under GrapheneOS (same day, after flashing it):** Bluetooth works. The
+chip is not damaged, and stock's start sequence brings it back where every
+reset above failed. What stock does differently is the lead: its HAL's
+"big hammer" (`BigHammerBtRegOnDelay = 100` in `bt_vendor.conf`), the
+order of BT_REG_ON, BT_DEV_WAKE and the UART lines, the firmware download
+path. Still open: does Bluetooth work on Omarchy again after this
+GrapheneOS boot (then stock's sequence clears the state and is worth
+copying), or does it fail again?
+
 Next (left for another day):
 
-1. Is the chip's Bluetooth side alive at all? Raven has no stock Android
-   left (GrapheneOS was wiped on 2026-10-20; slot A holds Omarchy images,
-   `g675676713161`), so booting slot A only tests an older kernel. Wi-Fi on
-   the same chip works.
-2. The bt-uart-test overlay (UART as a plain tty, no hci_bcm),
+1. Answered: the chip works under GrapheneOS (above).
+2. After the next Omarchy install, check Bluetooth at the first boot. If
+   it fails, the bt-uart-test overlay (UART as a plain tty, no hci_bcm),
    then `tools/bt-uart-test hci` at 115200 and 3000000, with the device
    wake line both ways; and compare the UART pin and BT GPIO states
    (`/sys/kernel/debug/pinctrl`, read only the gpp14/gpp16/gpa6 banks,
