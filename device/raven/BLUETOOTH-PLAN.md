@@ -1,7 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): Bluetooth
 
-Status (2026-10-20): **fixed: the BCM4389 starts cleanly at every warm
+Status (2026-10-21): **broken again since a forced restart (B3)**: the
+chip answers no command, and no reset tried so far brings it back.
+Before that (2026-10-20): **fixed: the BCM4389 starts cleanly at every warm
 reboot** (B2: 15 of 15, not one lost command) with hci_bcm pulsing BT_REG_ON
 low 30 ms before power-on, as Google's driver does (`omamobile-gs101-
 bluetooth` d9b209a81). What left it silent until a forced restart was
@@ -257,11 +259,32 @@ so nothing cycles its power. In B1 a forced restart recovered it; this
 time it caused it, so what a forced restart does depends on the chip's
 state at the moment it hits.
 
-Next: does a further warm reboot recover it (the next kernel push), and
-if not, does a full power-off and power-on? If only that does, the driver
-needs a deeper reset (a longer BT_REG_ON low, or the chip's own reset
-line if raven wires one), and PR #6's "every warm reboot" claim stands
-but recovery doesn't.
+What did not bring it back (same day, kernels `g472317126aea` and
+`g0422abf64c05`, each a fresh boot unless noted):
+
+| Reset | Result |
+| --- | --- |
+| warm reboot (`bin/omamobile push`) | silent |
+| `systemctl poweroff` with USB in (ABL started the phone again) | silent |
+| forced restart, twice | silent |
+| hci_uart_bcm unbound about 4 s (BT_REG_ON low), then bound | silent |
+| also brcmfmac and pcie_gs201 unloaded (WL_REG_ON low too: the whole BCM4389 off) for 3 s, then all back | silent; Wi-Fi came back and connected |
+
+The host side looks right: `dout_apm_usi1_uart` runs at 196608000 from
+`pll_alv_div2_apm`, as after the clock fix. The same kernel brought the
+controller up at 08:17, before the forced restart. So this is no longer a
+chip state that a reset clears, and B2's warm-reboot result (and PR #6's
+claim) is not what changed.
+
+Next (left for another day):
+
+1. Boot slot A's Android once and see whether Bluetooth works there: is
+   the chip itself still answering?
+2. If it is: the bt-uart-test overlay (UART as a plain tty, no hci_bcm),
+   then `tools/bt-uart-test hci` at 115200 and 3000000, with the device
+   wake line both ways; and compare the UART pin and BT GPIO states
+   (`/sys/kernel/debug/pinctrl`, read only the gpp14/gpp16/gpa6 banks,
+   never the whole `pins` file) with a working boot's.
 
 Also on this boot: the controller sat soft-blocked by rfkill, restored by
 systemd-rfkill from a previous boot; the boot check reports that as
