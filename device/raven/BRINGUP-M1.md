@@ -217,7 +217,7 @@ them. Never commit them.
   modules and the init loads them first. Everything comes up unattended:
   SSH at 8.8 s, the screen console, 72 regulators, reboot to fastboot and
   `fastboot reboot` back to SSH 4.8 s after boot. **M1 is done.**
-- **M2, Arch root (2026-10-14):** the human ran `tools/raven-install-alarm`
+- **M2, Arch root (2026-10-14):** the human ran `tools/raven-install-alarm` (since removed: `tools/install-phone` installs raven)
   with the official Arch Linux ARM aarch64 tarball (GPG-verified, Arch
   Linux ARM Build System key 68B3537F39A313B3E574D06777193F152BDBE6A6):
   `userdata` (sda27) formatted ext4 `omamobile-root`, the root unpacked,
