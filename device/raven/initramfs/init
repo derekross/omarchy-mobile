@@ -132,6 +132,13 @@ done
 # (D+/D- connected), as cheetah's omamobile-usb-rescue does on the same chip.
 # On raven the TCPC is at 0x25 on the USI I2C bus at 10d50000. Only ever
 # reads that one register and writes that one value.
+# Dead-man note: this runs before SSH, so nothing can confirm or undo it
+# (USB-C-PLAN.md section 4). It is safe without one because 0x09 is the
+# value the register holds whenever the link works (USB-C-PLAN.md, the
+# MAX77759 register table) and the write is skipped when it already reads
+# 0x09. If USB still doesn't come up, the write didn't help and changed no
+# other register: hold Volume Down + Power about 20 s for fastboot, then
+# fastboot --set-active=a reboot for stock Android.
 usb_switch() {
   local d bus="" sw i quiet=${1:-}
   for i in $(seq 1 10); do
