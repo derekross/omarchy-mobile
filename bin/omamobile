@@ -332,8 +332,13 @@ cmd_initramfs() {
   # Boot logo, drawn by init straight onto the framebuffer until Plymouth
   # takes over: Omarchy's Plymouth screen (logo centred on #1a1b26, at scale
   # 1), rendered from the theme installed on this Omarchy machine.
+  # SPLASH_BGRA_GZ: the same picture, rendered elsewhere (a build host
+  # without Omarchy's theme or ImageMagick), raw BGRA at PANEL_SIZE, gzipped.
   local logo=/usr/share/plymouth/themes/omarchy/logo.png
-  if [[ -f $logo ]] && command -v magick >/dev/null; then
+  if [[ -n ${SPLASH_BGRA_GZ:-} ]]; then
+    [[ -f $SPLASH_BGRA_GZ ]] || die "SPLASH_BGRA_GZ: no file $SPLASH_BGRA_GZ"
+    cp "$SPLASH_BGRA_GZ" "$stage/splash.bgra.gz"
+  elif [[ -f $logo ]] && command -v magick >/dev/null; then
     magick -size "$DEV_PANEL_SIZE" xc:'#1a1b26' "$logo" -gravity center -composite \
       -alpha off -alpha on -depth 8 BGRA:- | gzip -9 > "$stage/splash.bgra.gz"
   else
@@ -462,7 +467,11 @@ cmd_images() {
   python3 -I "$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py" create "$img/dtbo.img" \
     --page_size=4096 --id="$DEV_DTBO_BOARD_ID" --rev="$DEV_DTBO_BOARD_REV" "$dtbo"
 
-  say "Boot images (header v4)"
+  # Two layouts, picked by BOOT_IMAGES. With vendor_kernel_boot (cheetah), it
+  # carries the DTB and our initramfs, vendor_boot only the command line, and
+  # the OS version sits on init_boot. Without it (Pixel 6), vendor_boot
+  # carries all three and the OS version sits on boot.
+  say "Boot images (header v4): $DEV_BOOT_IMAGES"
   : | cpio -o -H newc --quiet > "$img/empty.cpio"
   local cmdline="$DEV_VENDOR_CMDLINE"
   # The generic ramdisk (empty) and the OS version go in init_boot where the
