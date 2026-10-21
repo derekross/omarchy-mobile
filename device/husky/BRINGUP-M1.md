@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # husky M1: first light on zuma
 
-**Status (2026-10-21):** stage 0 done ([NOTES.md](NOTES.md)). A minimal `zuma.dtsi` and `zuma-husky.dts` are written on branch `omamobile-zuma-husky-dts` (off `omamobile`, not yet pushed). They compile with no `dtc` warnings, and the board overlay plus Google's user-build DPM overlay apply onto them with `fdtoverlay`. Nothing has been built into images or booted.
+**Status (2026-10-21):** stage 0 done ([NOTES.md](NOTES.md)). Kernel branch `omamobile-zuma-husky-dts` (binding, then DTS; not yet pushed) builds with the distro LLVM 21 toolchain. `dt_binding_check` passes, and `dtbs_check` leaves only the two stock-style `description` labels in `/soc_compatible`. With `SOC_COMPATIBLE` support in `bin/omamobile` (proposed in #1), `DEVICE=husky bin/omamobile images` builds all five images (results below). Nothing has been flashed or booted.
 
 ## Goal
 
@@ -71,7 +71,12 @@ From the SSH shell, read DPP0's `RDMA_BASEADDR_P0` (0x19900040) and DECON0's `GL
 
 ## Results
 
-None yet.
+### 2026-10-21: images built, not flashed
+
+- Kernel `7.3.0-rc6` from `omamobile-zuma-husky-dts` (arm64 `defconfig` + `kernel/configs/omamobile.config`, `LLVM=1` with Ubuntu clang 21, natively, not in the container). `CONFIG_USB_DWC3_DUAL_ROLE`, `USB_CONFIGFS_NCM`/`ACM`, `BOOT_CONFIG`, `DRM_SIMPLEDRM`, `PSTORE_RAM` and `S3C2410_WATCHDOG` are built in [V].
+- The initramfs packs husky's `UFS_RW` and the USB product string "Pixel 8 Pro", and no `SIMPLEFB_TRIG_CON`, compatible or probe marker: it writes no display register [V].
+- Headers against stock CP3A.261005.005 [V] (`unpack_bootimg`): header v4 and page size 0x800 for both vendor images; `init_boot` carries 17.0.0 / 2026-10 with an empty ramdisk; `vendor_boot` has no DTB; `vendor_kernel_boot` carries the DTB (one copy, 5.3 KiB) and our initramfs. `boot.img` is 18 MiB (partition 64 MiB).
+- ramoops uses stock's layout (0xfd3ff000, 4 MiB, 2 MiB console + 2 MiB pmsg). So after a warm reset from a failed boot, stock Android on slot A may keep our console as its last kmsg (`adb shell dumpsys dropbox --print SYSTEM_LAST_KMSG`) [I]. That is the observation channel for a gate (a) with no USB.
 
 ## Open questions
 
