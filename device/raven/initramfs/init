@@ -138,7 +138,7 @@ done
 # MAX77759 register table) and the write is skipped when it already reads
 # 0x09. If USB still doesn't come up, the write didn't help and changed no
 # other register: hold Volume Down + Power about 20 s for fastboot, then
-# fastboot --set-active=a reboot for stock Android.
+# boot slot A's images (fastboot --set-active=a reboot).
 usb_switch() {
   local d bus="" sw i quiet=${1:-}
   for i in $(seq 1 10); do

@@ -278,9 +278,11 @@ claim) is not what changed.
 
 Next (left for another day):
 
-1. Boot slot A's Android once and see whether Bluetooth works there: is
-   the chip itself still answering?
-2. If it is: the bt-uart-test overlay (UART as a plain tty, no hci_bcm),
+1. Is the chip's Bluetooth side alive at all? Raven has no stock Android
+   left (GrapheneOS was wiped on 2026-10-20; slot A holds Omarchy images,
+   `g675676713161`), so booting slot A only tests an older kernel. Wi-Fi on
+   the same chip works.
+2. The bt-uart-test overlay (UART as a plain tty, no hci_bcm),
    then `tools/bt-uart-test hci` at 115200 and 3000000, with the device
    wake line both ways; and compare the UART pin and BT GPIO states
    (`/sys/kernel/debug/pinctrl`, read only the gpp14/gpp16/gpa6 banks,
