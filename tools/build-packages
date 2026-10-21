@@ -102,16 +102,25 @@ if ((list)); then
   exit 0
 fi
 
+# A package's .PKGINFO: bsdtar where installed (Arch), GNU tar otherwise
+# (Debian), which detects the compression itself but needs the zstd
+# program for .pkg.tar.zst.
+command -v bsdtar >/dev/null || command -v zstd >/dev/null ||
+  alarm_die "reading packages needs bsdtar, or GNU tar and zstd"
+pkginfo() {
+  if command -v bsdtar >/dev/null; then bsdtar -xOf "$1" .PKGINFO; else tar -xOf "$1" .PKGINFO; fi
+}
+
 # Put package files in the repository, replacing older files of the same name
 add_to_repo() {
   local file name base
   for file; do
     base=${file##*/}
-    name=$(bsdtar -xOf "$file" .PKGINFO | sed -n 's/^pkgname = //p')
+    name=$(pkginfo "$file" | sed -n 's/^pkgname = //p')
     [[ -n $name ]] || alarm_die "$base: no .PKGINFO"
     for old in "$repo/$name"-*.pkg.tar.*; do
       [[ -e $old && $old != *.sig ]] || continue
-      [[ $(bsdtar -xOf "$old" .PKGINFO | sed -n 's/^pkgname = //p') == "$name" ]] || continue
+      [[ $(pkginfo "$old" | sed -n 's/^pkgname = //p') == "$name" ]] || continue
       [[ ${old##*/} == "$base" ]] || rm -f "$old" "$old.sig"
     done
     cp -f "$file" "$repo/$base"
@@ -126,7 +135,7 @@ for dir in "${imports[@]}"; do
   for f in "$dir"/*.pkg.tar.*; do [[ $f == *.sig ]] || files+=("$f"); done
   ((${#files[@]})) || alarm_die "no packages in $dir"
   for f in "${files[@]}"; do
-    [[ $(bsdtar -xOf "$f" .PKGINFO | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
+    [[ $(pkginfo "$f" | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] || alarm_die "$f is not an aarch64 package"
   done
   add_to_repo "${files[@]}"
 done
@@ -140,8 +149,12 @@ for d in "${dirs[@]}"; do
   fi
 done
 
-if ((${#build[@]})); then
+# The tarball is also where repo-add comes from on a host without it, even
+# when the run only imports packages
+if ((${#build[@]})) || ! command -v repo-add >/dev/null; then
   alarm_fetch
+fi
+if ((${#build[@]})); then
   image=$(alarm_build_image "$ROOT")
 fi
 
@@ -152,7 +165,17 @@ sign_and_index() {
     [[ -f $package.sig ]] || gpg --batch --yes --local-user "$key" --detach-sign "$package"
   done
   rm -f "$repo"/omamobile.db* "$repo"/omamobile.files*
-  repo-add --quiet --sign --key "$key" "$repo/omamobile.db.tar.gz" $(ls "$repo"/*.pkg.tar.* | grep -v '\.sig$')
+  local packages=() f
+  for f in "$repo"/*.pkg.tar.*; do [[ $f == *.sig ]] || packages+=("${f##*/}"); done
+  if command -v repo-add >/dev/null; then
+    (cd "$repo" && repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}")
+  else
+    # Not an Arch machine: pacman's repo-add from the Arch Linux ARM image,
+    # as this user, with the same key.
+    docker run --rm --platform linux/arm64 -u "$(id -u):$(id -g)" \
+      -v "$ROOT/$repo:/repo" -v "$GNUPGHOME:/gnupg" -e GNUPGHOME=/gnupg -e HOME=/tmp -w /repo \
+      "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
+  fi
 }
 
 for dir in "${build[@]}"; do

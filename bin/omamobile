@@ -332,8 +332,20 @@ cmd_initramfs() {
   # Boot logo, drawn by init straight onto the framebuffer until Plymouth
   # takes over: Omarchy's Plymouth screen (logo centred on #1a1b26, at scale
   # 1), rendered from the theme installed on this Omarchy machine.
+  # SPLASH_BGRA_GZ: the same picture, rendered elsewhere (a build host
+  # without Omarchy's theme or ImageMagick), raw BGRA at PANEL_SIZE, gzipped.
   local logo=/usr/share/plymouth/themes/omarchy/logo.png
-  if [[ -f $logo ]] && command -v magick >/dev/null; then
+  if [[ -n ${SPLASH_BGRA_GZ:-} ]]; then
+    [[ -f $SPLASH_BGRA_GZ ]] || die "SPLASH_BGRA_GZ: no file $SPLASH_BGRA_GZ"
+    [[ ${DEV_PANEL_SIZE:-} =~ ^([0-9]+)x([0-9]+)$ ]] || die "SPLASH_BGRA_GZ needs the device's PANEL_SIZE"
+    # init writes it to /dev/fb0 unchecked, so it must be one exact frame
+    gzip -t "$SPLASH_BGRA_GZ" 2>/dev/null || die "SPLASH_BGRA_GZ: not a valid gzip file"
+    local want=$((BASH_REMATCH[1] * BASH_REMATCH[2] * 4)) got
+    got=$(gzip -dc "$SPLASH_BGRA_GZ" | wc -c)
+    ((got == want)) || die "SPLASH_BGRA_GZ: $got bytes, a ${DEV_PANEL_SIZE} BGRA frame is $want"
+    say "Splash: $SPLASH_BGRA_GZ (sha256 $(sha256sum < "$SPLASH_BGRA_GZ" | cut -d' ' -f1))"
+    cp "$SPLASH_BGRA_GZ" "$stage/splash.bgra.gz"
+  elif [[ -f $logo ]] && command -v magick >/dev/null; then
     magick -size "$DEV_PANEL_SIZE" xc:'#1a1b26' "$logo" -gravity center -composite \
       -alpha off -alpha on -depth 8 BGRA:- | gzip -9 > "$stage/splash.bgra.gz"
   else
