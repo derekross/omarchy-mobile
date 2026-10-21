@@ -419,5 +419,22 @@ printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist c
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
 
+# The crash record's kernel lines: the modem's lines only, without this
+# tool's own umts_boot0 opens, and a flood folded into one line and a count
+python3 - "$cp" <<'PY' || fail "crash record folds a repeated kernel line"
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader('cp', sys.argv[1])
+cp = importlib.util.module_from_spec(importlib.util.spec_from_loader('cp', loader))
+loader.exec_module(cp)
+log = ['[1.0] gs201-pcie-cp 11920000.pcie: link-down recovery requested',
+       '[1.1] wlan: unrelated']
+log += [f'[2.{i}] cpif: s51xx_pcie_send_doorbell_int: cmd reg = 0xffff' for i in range(5000)]
+log += ['[3.0] cpif: bootdump_open: umts_boot0 (opened 2) by python3',
+        '[3.1] cpif: link down for 5000 ms and recovery did not clear it: force crash']
+out = cp.kernel_lines(log)
+assert out == [log[0], log[2], '    (repeated 4999 more times)', log[-1]], out
+assert len(cp.kernel_lines(log[2:3] * 3 + [f'[4.{i}] cpif: x{i}' for i in range(300)])) == 150
+PY
+pass "crash record folds a repeated kernel line"
 # The NV overlay: its own tests (synthetic NV-like files only).
 test/nv-overlay
