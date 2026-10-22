@@ -3,6 +3,7 @@
 """Build an owner's private alioth images locally; never flash or query a phone."""
 import argparse
 import datetime
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -37,6 +38,11 @@ def main():
         subprocess.run(command, env=env, check=True)
 
     run("python3", "tools/alioth/init-keys.py")
+    # A package with the same name/version can already be cached under a
+    # different local signing key. Never import that key or relax signatures.
+    key_tag = hashlib.sha256((ROOT / "keys/build-keyring/omamobile.gpg").read_bytes()).hexdigest()[:16]
+    cache_base = Path(os.environ.get("ALARM_CACHE", ROOT / "out/alioth/build-cache")).expanduser().resolve()
+    env["ALARM_CACHE"] = str(cache_base / key_tag)
     download = ["python3", "tools/alioth/download-reference.py"]
     if reference_archive:
         download += ["--archive", str(reference_archive)]
@@ -52,6 +58,7 @@ def main():
         f"out/omamobile-rootfs-{args.version}-aarch64.img", "--username", args.username, "--timezone", args.timezone)
     run("python3", "tools/alioth/build-boot.py")
     run("python3", "tools/alioth/verify-image.py")
+    run("tools/alioth/smoke-userspace.sh", "out/alioth/images/rootfs.img")
     run("tools/alioth/test-initramfs-ssh.sh")
     print("Private images validated in out/alioth/images. No phone accessed.")
     print("Next: read device/alioth/FLASH-RUNBOOK.md. Building does not authorize flashing.")

@@ -28,8 +28,9 @@ The build host needs Docker access and an aarch64 binfmt handler
 OpenSSH, OpenSSL, curl, tar, zstd, cpio, e2fsprogs (`debugfs`, `e2fsck`,
 `dumpe2fs`), Android sparse-image tools (`simg2img`, `img2simg`), AOSP
 `mkbootimg` and `avbtool`, and `adb`/`fastboot`. The existing package builder
-also needs `repo-add` and `bsdtar`. For an x86 host, the rootfs build uses
-QEMU user emulation. Allow at least 60 GB of free disk space.
+also needs `repo-add`, `bsdtar` and a C compiler. For an x86 host, the rootfs
+build uses QEMU user emulation. Allow at least 80 GB of free disk space;
+package caches and image validation copies can require more.
 
 An Omarchy host supplies `/usr/share/pacman/keyrings/omarchy{.gpg,-trusted,-revoked}`.
 On another distribution, obtain and verify the official Omarchy keyring
@@ -47,6 +48,9 @@ checks its SHA-256, extracts its unmodified kernel/DTB and matching runtime,
 and builds the Omarchy root and private boot images. It uses stable Omarchy
 by default; distribution package versions are recorded in the root manifest.
 An already downloaded reference can be supplied with `--reference-archive`.
+The F3 builder uses a signing-key-specific cache below
+`out/alioth/build-cache/` (or below `ALARM_CACHE` when supplied), avoiding
+same-version packages left over from another local signing key.
 
 Expect: all build, image, filesystem, sparse round-trip and ARM Dropbear
 login checks pass. Stop on any failure. Rollback: discard the failed local
