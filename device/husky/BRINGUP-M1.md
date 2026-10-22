@@ -29,7 +29,7 @@
 | PMU | `exynos-pmu` 0x15460000; reboot command offset 0x810 (`google,pixel-reboot`) | R/live.dts [V] |
 | Console | `uart0` = 0x10870000, SPI 641, `samsung,exynos-uart`; stock runs `console=ttynull` | R/live.dts [V] |
 | Panel | `exynos_drm.panel_name=google-hk3.20800a`, native 1344×2992; DECON0 0x19470000 | R/cmdline, `dumpsys display`, R/live.dts [V] |
-| Framebuffer | **unknown**: no splash carve-out in the live tree or the stock log | R/live.dts, R/dmesg [V] |
+| Framebuffer | **0xfac00000** (DPP0 `RDMA_BASEADDR_P0` on a booted phone, test 20), as on gs201; no splash carve-out in the live tree or the stock log | R/live.dts, R/dmesg, test 20 [V] |
 | Where to read it | DPP0's DMA block is 0x19900000 (reg-name `dma`); `RDMA_BASEADDR_P0` is offset 0x40 (**0x19900040**), with its shadow at +0x400 | R/live.dts `drmdpp@19900000`; Google display `cal_9865/regs-dpp.h:33,175` [V] |
 | Panel mode | **DSI command mode**: no `hk3` mode sets `MIPI_DSI_MODE_VIDEO`. So, as on gs201, ABL may leave DECON0's trigger masked and the splash frozen. DECON0 `TRIG_CON` is **0x19470030**; `HW_TRIG_EN` is bit 0 and `HW_TRIG_MASK_DECON` bit 4, the bits behind cheetah's `0x3070` → `0x3061` | GS/`display/panel-gs-hk3.c`; Google display `cal_9865/regs-decon.h:95-112` [V]; whether ABL leaves it masked on zuma [I] |
 
@@ -123,10 +123,23 @@ Findings:
 - **ABL leaves the CPU-cluster watchdogs running.** About 80 s into test 18's boot, USB dropped and the phone reset; stock then reported `watchdog,apc,early`, as after test 12. Stock's log shows both cluster watchdogs counting from the 24.576 MHz oscillator with a 30 s timeout until `s3c2410_wdt` takes them over, and our kernel has no watchdog driver. Fix: a zuma variant of `s3c2410_wdt` (gs101's, with Google's zuma PMU offsets: cluster 0 `0x1244`/`0x1220`, cluster 1 `0x1544`/`0x1520`, count-enable bit 4) [V for the reset, I for the fix].
 - The screen going black (test 15) is the reset after the panic. Orange to black is the offset without the 17 s reset tail, a second reading of each run.
 
+### 2026-10-22: the watchdog and a screen console (M1.4)
+
+| # | Test | Seen | Meaning |
+| --- | --- | --- | --- |
+| 19 | kernel with a `google,zuma-wdt` variant of `s3c2410_wdt` (gs101's, cluster 1 at 0x1544/0x1520, count enable bit 4) and both cluster watchdogs in the DT on a 24.576 MHz stand-in clock | both report `watchdog inactive, reset disabled`; still up at 187 s, then 1083 s (no reset) | **the watchdog was the 80 s reset** [V] |
+| 20 | with the Google logo still on the panel, from the ssh shell, once each: DPP0 `RDMA_BASEADDR_P0` (0x19900040), DECON0 `GLOBAL_CON` (0x19470020), `TRIG_CON` (0x19470030) | `0xfac00000`, `0x00000133`, `0x00003070` | ABL's splash is at 0xfac00000, as on cheetah; the trigger is masked, as on cheetah (0x3070) |
+| 21 | `simple-framebuffer` at 0xfac00000, 1344×2992 `a8r8g8b8`, `no-map` carve-out; `SIMPLEFB_TRIG_CON="0x19470030 0x3061"` | simpledrm binds, fbcon 84×93 in TER16x32; the panel shows the init's lines (`first light`, `USB gadget up`, `ssh`, `ready`, `arch: no userdata partition`) | **gate b passed**: a kernel console on the panel [V] |
+
+Findings:
+
+- Holding Power or Volume Down + Power from our running kernel did not reset the phone (test 21's session), so getting back to fastboot meant crashing slot B through its retries. `reboot-to bootloader` needs the bootloader's reboot-mode cell (stock: PMU `reboot-cmd-offset` 0x810) in the DT.
+- ABL replaces any `console=` in `bootargs` with `console=null`; fbcon still takes the panel, and the init writes to `/dev/tty0`.
+
 ## Open questions
 
 - ~~Does a bare DWC3 enumerate on the PHY and repeater state ABL leaves behind?~~ No: the PHY is off (test 17); with the eUSB2 PHY driven, the repeater as ABL leaves it works (test 18).
 - Why did test 8's init (bare DWC3, no UDC) stall after the UDC wait instead of reaching `ready`?
-- Where is ABL's splash buffer, and does ABL leave DECON0's trigger masked (needing `SIMPLEFB_TRIG_CON="0x19470030 …"`, as on gs201)?
+- ~~Where is ABL's splash buffer, and does ABL leave DECON0's trigger masked?~~ 0xfac00000, and yes (tests 20-21).
 - Do the eUSB2 PHY's bit fields beyond the reset and common registers also match Exynos 2200 (PLL dividers for 19.2 MHz, TX tune)?
 - B0 or B1: what `CPU_REV[0x11]` means against `/soc_compatible`'s major/minor.
