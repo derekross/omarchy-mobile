@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 8 Pro (husky) bring-up notes
 
-Findings for the Pixel 8 Pro port, newest first. husky shares the zuma SoC (Tensor G3) with the Pixel 8 (shiba) and 8a (akita, [issue #1](https://github.com/derekross/omarchy-mobile/issues/1)), so the SoC work is shared with those ports. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Nothing has been flashed or booted yet.
+Findings for the Pixel 8 Pro port, newest first. husky shares the zuma SoC (Tensor G3) with the Pixel 8 (shiba) and 8a (akita, [issue #1](https://github.com/derekross/omarchy-mobile/issues/1)), so the SoC work is shared with those ports. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Stage 0 flashed and booted nothing of ours: its only write was a Magisk-patched stock `init_boot_b` for the root capture (part 4), since rolled back. Our own builds run on slot B from M1 on ([BRINGUP-M1.md](BRINGUP-M1.md)).
 
 Sources:
 
@@ -18,8 +18,8 @@ Root for the capture: the stock `init_boot` from the CP3A.261005.005 OTA, extrac
 - **Base DTB selection: not `/soc_id`** [V]. The four base DTBs in `vendor_kernel_boot` (none in `vendor_boot`; no `dt_table` header) have no `/soc_id` property, unlike gs201's. Instead each has a `/soc_compatible` node whose children carry `product_id = <0x9865>`, `major`, `minor` and `pkg_mode`: DTB 0 A0 FOPLP, DTB 1 A0 IPOP (`pkg_mode` 1), DTB 2 B0 + B1 FOPLP, DTB 3 B0 IPOP. ABL passes DTB 2 to this phone (live DT `/soc_compatible`: B0 and B1 FOPLP). So `bin/omamobile`'s `SOC_IDS` (one copy per `/soc_id` rewrite) doesn't fit zuma. It needs a `/soc_compatible`-based key (for example `SOC_COMPATIBLE="b0-foplp:0x9865:1:0:0 b1-foplp:0x9865:1:1:0"`). The phone's exact revision (B0 or B1) is [I].
 - **Board dtbo: entry 8 of 19, `board_id 0x40206`, `board_rev 0x10000`** [V] (factory `dtbo.img` parsed; `androidboot.dtbo_idx = "8"` on Android 17).
 - **Root `#address-cells = <2>`, `#size-cells = <1>`** [V], as on gs201 and gs101: 12-byte `reg` entries.
-- **RAM banks** [V]: `0x80000000`, `0x880000000`, `0x900000000`, `0x980000000`, `0xa00000000`, `0xa80000000`, 2 GiB each (12 GiB). 30 `no-map` reservations. Among them: `gsa@90200000`, `tpu_fw@93000000`, `aoc@94000000`, `xhci_dma_dram@97000000`, `abl@f8800000`, `ramoops_mem@fd3ff000`, `bldr_log_reserved@fd800000`. **These must be copied from the live DT into the board DTS.**
-- **`/ect`** [V]: `parameter_address = <0x90000000>`, `parameter_size = <0x14000>`, as on gs201.
+- **RAM banks** [V]: `0x80000000`, `0x880000000`, `0x900000000`, `0x980000000`, `0xa00000000`, `0xa80000000`, 2 GiB each (12 GiB). `reserved-memory` has 51 children: **30 fixed with `no-map`** (among them `gsa@90200000`, `tpu_fw@93000000`, `aoc@94000000`, `xhci_dma_dram@97000000`, `abl@f8800000`, `bldr_log_reserved@fd800000`), **7 fixed without `no-map`** (`ect_binary`, `ramoops_mem@fd3ff000`, the three `cp_rmem` regions, `cp_aoc_rmem`, `seclog_mem`) and **14 dynamic pools** placed by `size`/`alloc-ranges` (camera, faceauth, video codec, TUI). **The fixed DRAM ones must be copied from the live DT into the board DTS**; BRINGUP-M1 says which made it.
+- **`/ect`** [V]: `parameter_address = <0x90000000>`, `parameter_size = <0x14000>` in the live tree, as on gs201. Stock's four base DTBs carry `parameter_size = <0x53000>`, which ABL rewrites at boot; our base DTB carries the base value.
 - **Console** [V]: `uart0 = "/uart@10870000"`. Stock boots `console=ttynull`. The earlycon address for `VENDOR_CMDLINE` is `0x10870000` [I, from the alias; check the node's compatible].
 - **Stock command line** [V]: `clk_ignore_unused`, `kvm-arm.mode=protected`, `bootconfig`, `androidboot.hardware.cpu.pagesize = "4096"`.
 - `debugfs` summaries (clk, regulator, pinmux) are empty on the user build [V].

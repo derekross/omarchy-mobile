@@ -3,6 +3,8 @@
 
 **Status (2026-10-21):** stage 0 done ([NOTES.md](NOTES.md)). Kernel branch `omamobile-zuma-husky-dts` (binding, then DTS; not yet pushed) builds with the distro LLVM 21 toolchain. `dt_binding_check` passes, and `dtbs_check` leaves only the two stock-style `description` labels in `/soc_compatible`. With `SOC_COMPATIBLE` support in `bin/omamobile` (proposed in #1), `DEVICE=husky bin/omamobile images` builds all five images (results below). Nothing has been flashed or booted.
 
+**Status (2026-10-22):** slot B boots our kernel to the init with USB, ssh and a console on the panel (gates a and b passed; Results). The images were built with an unpublished `SOC_COMPATIBLE` patch to `bin/omamobile` and AVB hash footers added by hand, both to come in the tooling PR (#1), and the kernel natively with the distro LLVM 21, not in the container.
+
 ## Goal
 
 1. Our kernel starts from slot B and is **visible**: a USB gadget on the laptop, then `ssh root@172.16.42.1` (CONTRIBUTING §5.4 stage 1).
@@ -21,8 +23,8 @@
 | GIC | GICv3, GICD 0x10400000/0x10000, GICR 0x10440000/**0x200000**, maintenance PPI 9 | R/live.dts [V] |
 | Arch timer | PPIs 13/14/11/10 level-low, `clock-frequency` 24.576 MHz | R/live.dts [V] |
 | Base DTB match | `/soc_compatible` children (`product_id` 0x9865, major/minor/pkg_mode); this phone matches B0/B1 FOPLP. `dmesg`: `CPU[ZUMA]B0 CPU_REV[0x11]` | stock `vendor_kernel_boot`, R/live.dts, R/dmesg [V] |
-| ABL glue | empty `/ect`; `/chosen/bootargs`; the DPM overlay targets `&dpm`, `&itmon`, `&log_arrdumppanic`, `&log_bcm`, `&log_preslcdump`, `&log_slcdump` (both `dpm` partitions are empty on this phone) | GZ/`zuma-dpm-user.dtsi`; R/partitions [V] |
-| Reservations | 18 fixed DRAM carve-outs from the live tree (GSA, GXP, TPU, AoC, xHCI, pKVM, secure DRAM, seclog, debug-snapshot, CP, ABL, ramoops, bootloader log) | R/live.dts `reserved-memory` [V] |
+| ABL glue | `/ect` with stock's base-DTB ECT location (`0x90000000`, size `0x53000`; ABL rewrites the size to `0x14000`), a `/memory` node for the first bank; `/chosen/bootargs`; the DPM overlay targets `&dpm`, `&itmon`, `&log_arrdumppanic`, `&log_bcm`, `&log_preslcdump`, `&log_slcdump` (both `dpm` partitions are empty on this phone) | GZ/`zuma-dpm-user.dtsi`; R/partitions [V] |
+| Reservations | **15 regions** from the live tree's fixed DRAM reservations, contiguous ones merged (GSA, GXP and debug-snapshot): ECT, GSA, GXP, TPU, AoC, xHCI, seclog, debug-snapshot, the two CP regions and CP MSI, ABL, the debug log, ramoops, the bootloader log. Left out: the three ABL inserts itself (`pkvm_guest_firmware`, `sec_dram`, `sec_pt`), as stock's base DTB does; dropped in test 2, which showed this was not why ABL refused the images (the missing AVB footers were, test 8), and kept since, as in every image that booted, three outside DRAM (two xHCI SRAM buffers at 0x17bb5000/0x17bc0000, `cp_aoc_rmem` at 0x197fd000) and the 14 dynamic pools (NOTES.md) | R/live.dts `reserved-memory` [V] |
 | USB | DWC3 0x11210000, SPI 402, peripheral. The PHY node's six regions are: USB control (blkcon) 0x11100000; **eUSB2 PHY control 0x11110000**; eUSB2 PHY configuration (Synopsys CR) 0x11120000; USB3/DP combo PHY 0x11130000 and 0x11140000; the link. 19.2 MHz ref, PMU offsets 0x3eb0/0x3eb4, `phy_eusb_version` 0x700 | R/live.dts; GM/`phy-exynos-usbdrd-eusb.c` (`reg_eusb_ctrl` = region 1, `reg_eusb_phy` = region 2) [V] |
 | eUSB2 PHY vs upstream | GM/`eusb-con-reg.h` has the same layout as upstream's Exynos 2200 Synopsys eUSB2 driver (`L/drivers/phy/phy-snps-eusb2.c`, `samsung,exynos2200-eusb2-phy`): RST 0x0 (PHY reset bits 1:0, UTMI port reset bits 5:4), COMMON 0x4 (repeater mode bit 10), PLLCFG0/1 0x8/0xc, TX tune 0x14, TESTSE 0x20 | GM/, L/ [V]; the same IP, with only the register map compared [I] |
 | eUSB2 repeater | Samsung part on I2C at 0x3e (`samsung,eusb-repeater`, REV_ID register 0xb0, `vdd33` supply, tuning tables in DT). No upstream driver | GS/`zuma-shusky-usb.dtsi`, GM/`eusb_repeater.c` [V] |
@@ -62,12 +64,18 @@ Ask the human before every flash and reboot (AGENTS.md §1).
 `DEVICE=husky bin/omamobile flash`: the five `*_b` images, `--set-active=b`, reboot.
 - **Expect:** the bootloader's orange-state warning, then a USB gadget appearing on the laptop (`lsusb`, then a new `usb0`/`enx…` interface) within about 30 s.
 - **Pass:** `ping 172.16.42.1`, then `ssh root@172.16.42.1`. `dmesg` is saved to R/.
-- **Stop if:** nothing on USB after 2 minutes. Then hold Power about 30 s, Volume Down + Power for fastboot, `fastboot --set-active=a`, and reboot to stock. One change per boot from there: PHY driver, then repeater.
+- **Stop if:** nothing on USB after 2 minutes. The buttons do nothing under our kernel (test 21), so: wait for slot B's three retries to run out (a panic resets; the init's self-crash, or `omamobile.deadman`, makes one) and ABL boots stock slot A, then `adb reboot bootloader`. With ssh up, `reboot-to bootloader` reaches fastboot directly (test 22). One change per boot from there: PHY driver, then repeater.
+- **Watchdog:** until the kernel has a zuma watchdog driver, ABL's cluster watchdogs reset the phone about 80 s into each boot (test 18), so the ssh window is about a minute after USB comes up: enough for `dmesg` and single reads, not for long sessions. With the driver (test 19) the window is unlimited.
 - **Rollback:** `fastboot --set-active=a`. Slot A is untouched.
 - **Risk:** medium (unknown hangs), with writes only to `*_b`.
 
 ### M1.4 Framebuffer address (gate b)
-From the SSH shell, read DPP0's `RDMA_BASEADDR_P0` (0x19900040) and DECON0's `GLOBAL_CON` (0x19470020) and `TRIG_CON` (0x19470030) **once each, read only, one register per call** (AGENTS.md: read only blocks known to be powered and clocked). Add `simple-framebuffer` and its `no-map` carve-out to `zuma-husky.dts`. **Pass:** a kernel console on the panel.
+From the SSH shell, read DPP0's `RDMA_BASEADDR_P0` (0x19900040) and DECON0's `GLOBAL_CON` (0x19470020) and `TRIG_CON` (0x19470030) **once each, read only, one register per call** (AGENTS.md: read only blocks known to be powered and clocked), as `/usr/local/bin/devmem <address>`. `devmem` takes no width argument: a second argument is a value to **write**, so a read never has one (dropbear's PATH also omits `/usr/local/bin`). Add `simple-framebuffer` and its `no-map` carve-out to `zuma-husky.dts`, and `SIMPLEFB_TRIG_CON` to the descriptor if `TRIG_CON` shows the trigger masked.
+- **Expect:** the Google logo still on the panel while our kernel runs (the evidence that the display block is powered), and a framebuffer address in DRAM.
+- **Pass:** a kernel console on the panel.
+- **Stop if:** the logo is gone before the reads (the block may be powered down; skip them), or a read hangs or panics.
+- **Rollback:** reads change nothing. The framebuffer change is in the slot B DTB only; `fastboot --set-active=a` returns to stock.
+- **Risk:** low for the reads (a powered, clocked block, read once); low for the trigger write (one register, as on cheetah, undone by any reset).
 
 ## Results
 
