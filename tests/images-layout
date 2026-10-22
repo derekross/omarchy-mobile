@@ -6,10 +6,12 @@
 # one (no init_boot or vendor_kernel_boot) yields boot (ramdisk and OS
 # version), vendor_boot (DTB and initramfs) and dtbo; a zuma-style one
 # (SOC_COMPATIBLE) ships its DTB once, after checking /soc_compatible (labels
-# allowed, an extra child or an unparsed line refused), and without the zuma
-# keys the gs201 and gs101 images match the tool at $IMAGES_BASELINE
-# (default 1e7a998, the last tool before them) byte for byte; flash, against
-# a fake fastboot, writes exactly the descriptor's BOOT_IMAGES and refuses images
+# allowed, an extra child or an unparsed line refused), and with AVB_FOOTERS
+# gives boot and init_boot hash footers at their partition sizes (when
+# external/avb is under $SRC_DIR); without the zuma keys the gs201 and gs101
+# images match the tool at $IMAGES_BASELINE (default 1e7a998, the last tool
+# before them) byte for byte; flash, against a fake fastboot, writes exactly
+# the descriptor's BOOT_IMAGES and refuses images
 # built for another device; load_device refuses bad descriptors; push,
 # against a fake phone, writes and verifies the images and tells a reboot
 # that did not happen from a phone that never came back. Skips when
@@ -183,6 +185,38 @@ done
 cp "$t/zuma-eight.dtb" "$dts/zuma-eight.dtb"
 pass "images reads labels on /soc_compatible, and refuses an extra child (labelled, or with a unit address) or a line it cannot parse"
 
+# AVB_FOOTERS: zuma's vbmeta chains boot and init_boot, so those two get a
+# hash footer, padded to the descriptor's partition sizes. Needs AOSP's
+# avbtool and test key under SRC_DIR (platform/external/avb).
+avbtool=$SRC_DIR/external/avb/avbtool.py
+if [[ -f $avbtool && -f $SRC_DIR/external/avb/test/data/testkey_rsa4096.pem ]] && command -v openssl >/dev/null; then
+  printf 'AVB_FOOTERS="boot:0x4000000 init_boot:8388608"\nAVB_ROLLBACK_INDEX=1791158400\nAVB_SECURITY_PATCH=2026-10-05\n' >> "$R/device/eight/device.conf"
+  om eight images || { cat "$t/log"; fail "images adds AVB footers"; }
+  info() { python3 -I "$avbtool" info_image --image "$K/images/$1.img"; }
+  for p in "boot 67108864" "init_boot 8388608"; do
+    set -- $p
+    [[ $(stat -c %s "$K/images/$1.img") == "$2" ]] || fail "AVB: $1.img is padded to its partition size"
+    info $1 > "$t/avb.txt" || fail "AVB: $1.img has a footer"
+    grep -q "Partition Name: *$1\$" "$t/avb.txt" && grep -q 'Rollback Index: *1791158400$' "$t/avb.txt" \
+      && grep -q "com.android.build.$1.os_version -> '17'" "$t/avb.txt" \
+      && grep -q "com.android.build.$1.security_patch -> '2026-10-05'" "$t/avb.txt" \
+      || { cat "$t/avb.txt"; fail "AVB: $1's footer names the partition, stock's rollback index, the OS version and the patch"; }
+  done
+  for p in vendor_boot vendor_kernel_boot dtbo; do
+    if info $p >/dev/null 2>&1; then fail "AVB: $p.img has no footer"; fi
+  done
+  unpack boot
+  [[ -s $t/u/boot/kernel ]] || fail "AVB: boot.img still unpacks"
+  eight_sums=$(cd "$K/images" && sha256sum *.img)
+  om eight images && [[ $(cd "$K/images" && sha256sum *.img) == "$eight_sums" ]] || fail "AVB: the footers are deterministic"
+  if AVBTOOL=$t/no-avbtool om eight images; then fail "images refuses AVB_FOOTERS without avbtool"; fi
+  grep -c 'no avbtool at' "$t/log" >/dev/null || { cat "$t/log"; fail "a missing avbtool is reported"; }
+  cp "$t/eight.conf" "$R/device/eight/device.conf"
+  pass "AVB_FOOTERS: boot and init_boot get deterministic hash footers at their partition sizes, nothing else"
+else
+  printf 'ok - # skip: no avbtool and test key under %s/external/avb, or no openssl\n' "$SRC_DIR"
+fi
+
 # images is deterministic, so the gs201 layout can be compared run to run
 om twelve images && [[ $(cd "$K/images" && sha256sum *.img) == "$twelve_sums" ]] || fail "images is deterministic"
 pass "images gives the same bytes on a second run"
@@ -294,6 +328,16 @@ bad "neither SOC_IDS nor SOC_COMPATIBLE" '/^SOC_IDS=/d' "SOC_IDS is missing"
 bad "both SOC_IDS and SOC_COMPATIBLE" 's/^SOC_IDS=.*/&\nSOC_COMPATIBLE="b0-ipop:0x9845:1:0:1"/' "are exclusive"
 bad "a malformed SOC_COMPATIBLE entry" 's/^SOC_IDS=.*/SOC_COMPATIBLE="B0:0x9845:1"/' "SOC_COMPATIBLE entries are"
 bad "a SOC_COMPATIBLE label named twice" 's/^SOC_IDS=.*/SOC_COMPATIBLE="b0-ipop:0x9845:1:0:1 b0-ipop:0x9845:1:1:1"/' "names b0-ipop twice"
+avbkeys='AVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05'
+bad "an AVB footer for an image the device lacks" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"init_boot:8388608\"\n$avbkeys/" "init_boot, which is not in BOOT_IMAGES"
+bad "an AVB footer named twice" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot:8388608 boot:8388608\"\n$avbkeys/" "names boot twice"
+bad "an AVB partition size off the 4 KiB grid" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot:1000\"\n$avbkeys/" "positive multiple of 4096"
+# 0x10000000000001000 would wrap around to 4096 and pass the grid check
+bad "an AVB partition size too long to be one" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot:0x10000000000001000\"\n$avbkeys/" "AVB_FOOTERS entries are"
+bad "a malformed AVB_FOOTERS entry" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot\"\n$avbkeys/" "image:partition_size"
+bad "AVB_FOOTERS without a rollback index" 's/^SOC_IDS=.*/&\nAVB_FOOTERS="boot:8388608"\nAVB_SECURITY_PATCH=2026-10-05/' "needs AVB_ROLLBACK_INDEX"
+bad "AVB_FOOTERS without a security patch" 's/^SOC_IDS=.*/&\nAVB_FOOTERS="boot:8388608"\nAVB_ROLLBACK_INDEX=1/' "needs AVB_SECURITY_PATCH"
+bad "an AVB rollback index without AVB_FOOTERS" 's/^SOC_IDS=.*/&\nAVB_ROLLBACK_INDEX=1/' "belong with AVB_FOOTERS"
 
 # push against a fake phone: phone-ssh answers each command push sends and
 # keeps what dd writes, so the checksum check reads it back. The boot_id
