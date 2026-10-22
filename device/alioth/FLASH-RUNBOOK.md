@@ -52,10 +52,13 @@ The F3 builder uses a signing-key-specific cache below
 `out/alioth/build-cache/` (or below `ALARM_CACHE` when supplied), avoiding
 same-version packages left over from another local signing key.
 
-Expect: all build, image, filesystem, sparse round-trip and ARM Dropbear
-login checks pass. Stop on any failure. Rollback: discard the failed local
-outputs; no phone has been accessed. These are not bit-for-bit reproducible
-distribution package builds: repositories can advance between builds.
+Expect: all build, image, filesystem, sparse round-trip, ARM userspace and
+packed Dropbear login checks pass. Stop on any failure. Rollback: discard
+the failed local outputs; no phone has been accessed. A package-server
+download timeout during this local phase can be retried with the same build
+command, which reuses verified caches. Keep signature checks enabled.
+These are not bit-for-bit reproducible distribution package builds:
+repositories can advance between builds.
 
 Images are in `out/alioth/images/`. The random initial PIN is stored locally
 in `keys/alioth-credentials.json`. Keep **all `keys/` and `out/` private**:

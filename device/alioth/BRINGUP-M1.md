@@ -2,8 +2,8 @@
 # POCO F3 initial native port
 
 Status (2026-10-21): experimental installed native desktop verified on one
-POCO F3. The public source workflow is being checked in an independent
-checkout; it has not had a clean physical reflash. Use the
+POCO F3. The public source workflow has built and passed offline validation
+in an independent checkout; it has not had a clean physical reflash. Use the
 [installation runbook](FLASH-RUNBOOK.md), including its backup and rescue
 gates. This is a source-build port, not a ready-to-download public image.
 
@@ -96,7 +96,30 @@ dry-run isolation, root-label guard, mirror timeout, device package and
 overlay containment. `tools/alioth/build.py` additionally checks real ARM
 payloads, module vermagic, the root filesystem, sparse round-trip and an
 authenticated login to the packed ARM Dropbear in an isolated container.
-Those checks never query a phone.
+It also mounts the personalized root read-only, parses firstboot settings,
+runs ARM systemd/Hyprland/Quickshell version checks, resolves the desktop
+and mobile-app shared libraries, and validates OpenSSH configuration.
+QEMU user emulation cannot test OpenSSH's seccomp sandbox; verifying a login
+to this new root still requires a real ARM kernel. These offline checks
+never query a phone.
+
+Local validation (2026-10-22 UTC, code commit `29ec52a52873`):
+
+- [V] The documented build entrypoint completed on Linux/x86_64 with ARM
+  emulation, dedicated local keys and all ten locally signed packages.
+  The root contains stable Omarchy `4.0.6-1`, Hyprland `0.56.2-7`, the F3
+  package `0.1.0-1` and matching `6.15.1-sm8250` modules. All 12 mobile
+  Omarchy patches applied.
+- [V] Generic root-image smoke, personalized ext4 consistency, byte-identical
+  sparse round-trip, boot/rescue payload checks, ARM userspace/library
+  checks, OpenSSH configuration and packed Dropbear authentication passed.
+- [V] `tests/all` passed, including the 17 installer gates, provisioning
+  fixture, storage guard, client/mirroring checks and overlay containment.
+  The actual built-image installer dry run passed with a fastboot trap;
+  no fastboot process was executed.
+- [V] The pinned official TWRP image reduced to 96 MiB with identical boot
+  payload, AVB metadata and footer; its embedded hash verification passed.
+  No keys, images, firmware, backups or raw logs are included in the PR.
 
 Next high-risk hardware gate: a clean install from this branch on an
 unlocked alioth with verified original backups. Pass: fresh rescue SSH and
