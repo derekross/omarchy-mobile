@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # husky M1: first light on zuma
 
-**Status (2026-10-21):** stage 0 done ([NOTES.md](NOTES.md)). Kernel branch `omamobile-zuma-husky-dts` (binding, then DTS; not yet pushed) builds with the distro LLVM 21 toolchain. `dt_binding_check` passes, and `dtbs_check` leaves only the two stock-style `description` labels in `/soc_compatible`. With `SOC_COMPATIBLE` support in `bin/omamobile` (proposed in #1), `DEVICE=husky bin/omamobile images` builds all five images (results below). Nothing has been flashed or booted.
+**Status (2026-10-21):** stage 0 done ([NOTES.md](NOTES.md)). Kernel branch `omamobile-zuma-husky-dts` (binding, then DTS; not yet pushed) builds with the distro LLVM 21 toolchain. `dt_binding_check` passes, and `dtbs_check` leaves only the two stock-style `description` labels in `/soc_compatible`. With `SOC_COMPATIBLE` support in `bin/omamobile` (proposed in #1), `DEVICE=husky bin/omamobile images` builds all five images (results below). Nothing had been flashed or booted when this was written; the first boots came later that day (Results).
 
-**Status (2026-10-22):** slot B boots our kernel to the init with USB, ssh and a console on the panel (gates a and b passed; Results). The images were built with an unpublished `SOC_COMPATIBLE` patch to `bin/omamobile` and AVB hash footers added by hand, both to come in the tooling PR (#1), and the kernel natively with the distro LLVM 21, not in the container.
+**Status (2026-10-22):** slot B boots our kernel to the init with USB, ssh and a console on the panel (gates a and b passed; Results). The images were built with an unpublished `SOC_COMPATIBLE` patch to `bin/omamobile` and AVB hash footers added by hand; #27 brings both (`SOC_COMPATIBLE`, `AVB_FOOTERS`) and reproduces those images. The kernel was built natively with the distro LLVM 21, not in the container, from a slim config (defconfig with most other SoCs off) plus bring-up debugging; the shipped path is `kernel/configs/omamobile.config` plus [kernel.config](kernel.config).
 
 ## Goal
 
@@ -33,21 +33,21 @@
 | Panel | `exynos_drm.panel_name=google-hk3.20800a`, native 1344×2992; DECON0 0x19470000 | R/cmdline, `dumpsys display`, R/live.dts [V] |
 | Framebuffer | **0xfac00000** (DPP0 `RDMA_BASEADDR_P0` on a booted phone, test 20), as on gs201; no splash carve-out in the live tree or the stock log | R/live.dts, R/dmesg, test 20 [V] |
 | Where to read it | DPP0's DMA block is 0x19900000 (reg-name `dma`); `RDMA_BASEADDR_P0` is offset 0x40 (**0x19900040**), with its shadow at +0x400 | R/live.dts `drmdpp@19900000`; Google display `cal_9865/regs-dpp.h:33,175` [V] |
-| Panel mode | **DSI command mode**: no `hk3` mode sets `MIPI_DSI_MODE_VIDEO`. So, as on gs201, ABL may leave DECON0's trigger masked and the splash frozen. DECON0 `TRIG_CON` is **0x19470030**; `HW_TRIG_EN` is bit 0 and `HW_TRIG_MASK_DECON` bit 4, the bits behind cheetah's `0x3070` → `0x3061` | GS/`display/panel-gs-hk3.c`; Google display `cal_9865/regs-decon.h:95-112` [V]; whether ABL leaves it masked on zuma [I] |
+| Panel mode | **DSI command mode**: no `hk3` mode sets `MIPI_DSI_MODE_VIDEO`. So, as on gs201, ABL may leave DECON0's trigger masked and the splash frozen. DECON0 `TRIG_CON` is **0x19470030**; `HW_TRIG_EN` is bit 0 and `HW_TRIG_MASK_DECON` bit 4, the bits behind cheetah's `0x3070` → `0x3061`. ABL leaves it masked on zuma too: `TRIG_CON` reads 0x3070 at handover (test 20) | GS/`display/panel-gs-hk3.c`; Google display `cal_9865/regs-decon.h:95-112`; test 20 [V] |
 
 ## Design
 
 - **No CMU, pinctrl, power-domain or PMU providers in M1.** The bootloader leaves what first light needs running (`clk_ignore_unused pd_ignore_unused`, as stock does). Fixed or real providers come per subsystem, the way gs201 grew.
-- **USB without a PHY node first.** ABL runs USB fastboot, so the eUSB2 PHY and repeater are configured at handoff [I]. A bare `snps,dwc3` in peripheral mode at high speed may enumerate on that state. If it doesn't, the next step is upstream's Exynos 2200 split: a `google,zuma-eusb2-phy` node at 0x11110000 handled by `phy-snps-eusb2.c` (the register map matches), under a USB DRD PHY node for the control block at 0x11100000, as `phy-exynos5-usbdrd.c` does for Exynos 2200. Both need clocks and the HSI0 power domain, so CMU_HSI0 data comes first. The repeater stays in the state ABL left it in until it has a driver.
+- **USB without a PHY node first.** ABL runs USB fastboot, so the eUSB2 PHY and repeater are configured at handoff [I]. A bare `snps,dwc3` in peripheral mode at high speed may enumerate on that state. If it doesn't, the next step is upstream's Exynos 2200 split: a `google,zuma-eusb2-phy` node at 0x11110000 handled by `phy-snps-eusb2.c` (the register map matches), under a USB DRD PHY node for the control block at 0x11100000, as `phy-exynos5-usbdrd.c` does for Exynos 2200. Both need clocks and the HSI0 power domain, so CMU_HSI0 data comes first. The repeater stays in the state ABL left it in until it has a driver. (The bare DWC3 did not enumerate, test 17; the Exynos 2200 split did, with the repeater as ABL left it, test 18.)
 - **No guessed framebuffer.** As on the Fold: the address is read from DPP's RDMA base register on a booted phone. On zuma that needs DPU register addresses from GM/ display code [I].
 - **Image layout**: as cheetah (`BOOT_IMAGES` has all five). The DTB goes in `vendor_kernel_boot`'s dtb section, once `bin/omamobile images` can write `/soc_compatible` (the `SOC_COMPATIBLE` proposal in #1).
 
 ## Risks
 
 - **A black-screen boot with no USB tells us nothing.** Fallbacks, cheapest first:
-  1. `ramoops` at 0xfd3ff000 survives a warm reset, but reading it back needs a rooted kernel afterwards [I].
+  1. ~~`ramoops` at 0xfd3ff000 survives a warm reset~~: zuma's user-build ABL does not keep it (test 11).
   2. The bootloader's UART on the USB-C SBU pins (`fastboot oem uart enable` on Pixels [I]) with an SBU breakout and a 1.8 V USB-UART adapter.
-- **Cluster watchdogs**: on gs201, ABL leaves them running and they reset the phone after about 60 s [V for gs201; I for zuma]. A first boot that dies at about a minute is that, not our kernel.
+- **Cluster watchdogs**: ABL leaves them running, and they reset the phone after about 60 s on gs201 and 80 s on zuma (test 18) until the zuma watchdog driver takes them over (test 19). A first boot that dies at about a minute is that, not our kernel.
 - **Slot B fallback**: after the retries, an unmarked slot B falls back to stock A. Don't mark it successful during M1.
 
 ## Runbook
@@ -58,13 +58,13 @@ Ask the human before every flash and reboot (AGENTS.md §1).
 `bin/omamobile images` learns `SOC_COMPATIBLE` (separate PR, after derekross agrees in #1). Then the descriptor gains it in place of the missing `SOC_IDS`. **Pass:** `DEVICE=husky bin/omamobile images` builds all five images, and `tests/images-layout` covers zuma. **Risk:** none.
 
 ### M1.2 Kernel build (laptop only)
-`bin/omamobile kernel` on `omamobile-zuma-husky-dts`, with `CONFIG_USB_DWC3_GADGET`, `CONFIG_USB_CONFIGFS_NCM`, `CONFIG_BOOT_CONFIG`, `CONFIG_DRM_SIMPLEDRM` and `CONFIG_FRAMEBUFFER_CONSOLE` (all in `kernel/configs/omamobile.config` already [I]). **Pass:** `zuma-husky.dtb` is built, and `dtbs_check` reports nothing for the new files. **Risk:** none.
+`bin/omamobile kernel` on `omamobile-zuma-husky-dts`, with `CONFIG_USB_DWC3_GADGET`, `CONFIG_USB_CONFIGFS_NCM`, `CONFIG_BOOT_CONFIG`, `CONFIG_DRM_SIMPLEDRM` and `CONFIG_FRAMEBUFFER_CONSOLE` (all in `kernel/configs/omamobile.config` already), plus husky's [kernel.config](kernel.config): defconfig builds the eUSB2 PHY as a module, which the initramfs can't load before USB, and has no lockup detectors. **Pass:** `zuma-husky.dtb` is built, and `dtbs_check` reports nothing for the new files. **Risk:** none.
 
 ### M1.3 First boot, slot B (gate a: USB)
 `DEVICE=husky bin/omamobile flash`: the five `*_b` images, `--set-active=b`, reboot.
 - **Expect:** the bootloader's orange-state warning, then a USB gadget appearing on the laptop (`lsusb`, then a new `usb0`/`enx…` interface) within about 30 s.
 - **Pass:** `ping 172.16.42.1`, then `ssh root@172.16.42.1`. `dmesg` is saved to R/.
-- **Stop if:** nothing on USB after 2 minutes. The buttons do nothing under our kernel (test 21), so: wait for slot B's three retries to run out (a panic resets; the init's self-crash, or `omamobile.deadman`, makes one) and ABL boots stock slot A, then `adb reboot bootloader`. With ssh up, `reboot-to bootloader` reaches fastboot directly (test 22). One change per boot from there: PHY driver, then repeater.
+- **Stop if:** nothing on USB after 2 minutes. The buttons do nothing under our kernel (test 21) and the watchdog driver stops ABL's watchdogs (test 19), so the way out is a reset by the kernel. The shipped `bootargs` (`zuma-husky.dts`, derekross/linux-omarchy-mobile#13) carry `panic=10 reboot=warm` and turn soft and hard lockups and RCU stalls into panics (`softlockup_panic=1 nmi_watchdog=panic sysctl.kernel.panic_on_rcu_stall=1`, with the detectors from [kernel.config](kernel.config)); the init's own crash after the UDC wait makes one too. Wait for slot B's three retries to run out and ABL boots stock slot A, then `adb reboot bootloader`. A hang that stops every CPU at once would escape the detectors and last until the battery is flat; arming and feeding the watchdog instead would catch that too, and is a later step. With ssh up, `reboot-to bootloader` reaches fastboot directly (test 22). One change per boot from there: PHY driver, then repeater. (Tests 12-17 also used `omamobile.deadman`, an init hang marker that is not on main: it comes in a later PR, with the init changes from bring-up.)
 - **Watchdog:** until the kernel has a zuma watchdog driver, ABL's cluster watchdogs reset the phone about 80 s into each boot (test 18), so the ssh window is about a minute after USB comes up: enough for `dmesg` and single reads, not for long sessions. With the driver (test 19) the window is unlimited.
 - **Rollback:** `fastboot --set-active=a`. Slot A is untouched.
 - **Risk:** medium (unknown hangs), with writes only to `*_b`.
@@ -84,7 +84,7 @@ From the SSH shell, read DPP0's `RDMA_BASEADDR_P0` (0x19900040) and DECON0's `GL
 - Kernel `7.3.0-rc6` from `omamobile-zuma-husky-dts` (arm64 `defconfig` + `kernel/configs/omamobile.config`, `LLVM=1` with Ubuntu clang 21, natively, not in the container). `CONFIG_USB_DWC3_DUAL_ROLE`, `USB_CONFIGFS_NCM`/`ACM`, `BOOT_CONFIG`, `DRM_SIMPLEDRM`, `PSTORE_RAM` and `S3C2410_WATCHDOG` are built in [V].
 - The initramfs packs husky's `UFS_RW` and the USB product string "Pixel 8 Pro", and no `SIMPLEFB_TRIG_CON`, compatible or probe marker: it writes no display register [V].
 - Headers against stock CP3A.261005.005 [V] (`unpack_bootimg`): header v4 and page size 0x800 for both vendor images; `init_boot` carries 17.0.0 / 2026-10 with an empty ramdisk; `vendor_boot` has no DTB; `vendor_kernel_boot` carries the DTB (one copy, 5.3 KiB) and our initramfs. `boot.img` is 18 MiB (partition 64 MiB).
-- ramoops uses stock's layout (0xfd3ff000, 4 MiB, 2 MiB console + 2 MiB pmsg). So after a warm reset from a failed boot, stock Android on slot A may keep our console as its last kmsg (`adb shell dumpsys dropbox --print SYSTEM_LAST_KMSG`) [I]. That is the observation channel for a gate (a) with no USB.
+- ramoops uses stock's layout (0xfd3ff000, 4 MiB, 2 MiB console + 2 MiB pmsg). So after a warm reset from a failed boot, stock Android on slot A may keep our console as its last kmsg (`adb shell dumpsys dropbox --print SYSTEM_LAST_KMSG`) [I]. That is the observation channel for a gate (a) with no USB. (Test 11 closed it: ABL does not keep ramoops.)
 
 ### 2026-10-21: first boots on slot B (M1.3)
 
