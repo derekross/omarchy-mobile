@@ -7,9 +7,9 @@
 [Unit]
 Description=Omarchy Mobile first-boot setup
 ConditionPathExists=/etc/omamobile/firstboot.conf
-After=local-fs.target systemd-user-sessions.service systemd-networkd.service network.target
+After=local-fs.target systemd-user-sessions.service systemd-networkd.service network.target time-set.target
 Before=display-manager.service
-Wants=network.target
+Wants=network.target systemd-timesyncd.service time-set.target
 
 [Service]
 Type=oneshot

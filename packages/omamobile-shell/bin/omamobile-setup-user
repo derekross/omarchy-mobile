@@ -81,7 +81,12 @@ fi
 
 # Phone scale: 1440x3120 at 3 is 480x1040 logical, seeded once
 if omarchy-done ensure omamobile-monitor-scale; then
-  sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
+  scale=3
+  if [[ -f /etc/omamobile/monitor-scale ]]; then
+    read -r scale </etc/omamobile/monitor-scale
+    [[ $scale =~ ^[1-4](\.[0-9]{1,2})?$ ]] || scale=3
+  fi
+  sed -i "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $scale/" ~/.config/hypr/monitors.lua
 fi
 
 # Touch phone: no pointer on screen (it still hides on touch if a USB mouse is

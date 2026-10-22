@@ -7,7 +7,8 @@
 #   /modules  the kernel modules tarball (read-only)
 #   /target   an empty volume: the root file system is assembled here
 #   /out      where the raw image and the MANIFEST go
-# Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES and
+# Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES,
+# ROOTFS_DIST_PACKAGES (distribution additions, unlike our board packages) and
 # ALLOW_MISSING (both space-separated), KERNEL_RELEASE, MODULES_SHA256,
 # GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, OUT_UID, OUT_GID.
 set -euo pipefail
@@ -24,12 +25,20 @@ pacman -Sy >/dev/null
 available() { pacman -Sp --print-format %n "$1" >/dev/null 2>&1; }
 
 mapfile -t base < <(list /src/rootfs/packages.base)
-mapfile -t ours < <(list /src/rootfs/packages.omamobile)
+profile=/src/rootfs/packages.omamobile
+if [[ -n ${ROOTFS_PROFILE:-} ]]; then
+  [[ $ROOTFS_PROFILE =~ ^[a-z0-9-]+$ ]] || die "invalid rootfs profile"
+  profile=/src/rootfs/packages.omamobile-$ROOTFS_PROFILE
+  [[ -f $profile ]] || die "missing profile $profile"
+fi
+mapfile -t ours < <(list "$profile")
 ours+=("$DEVICE_PACKAGE")
 read -ra board <<<"${ROOTFS_PACKAGES:-}"
 ours+=("${board[@]}")
+read -ra dist <<<"${ROOTFS_DIST_PACKAGES:-}"
 missing=() skipped_ours=()
 for p in "${base[@]}"; do available "$p" || missing+=("$p"); done
+for p in "${dist[@]}"; do available "$p" || missing+=("$p"); done
 ((${#missing[@]} == 0)) || die "not in any repository: ${missing[*]}"
 # Every package of ours must come from [omamobile], not a same-named one
 # elsewhere (Mesa, Hyprland, libcamera are in Arch Linux ARM and [omarchy]
@@ -48,7 +57,7 @@ done
 ((${#missing[@]} == 0)) || die "not in out/repo: ${missing[*]} (build them: tools/build-packages; or allow: --allow-missing)"
 
 say "Base system and Omarchy (${#base[@]} packages)"
-pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
+pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" "${dist[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
 
 omarchy_list=$T/usr/share/omarchy/install/omarchy-base.packages
 [[ -f $omarchy_list ]] || die "no $omarchy_list in the omarchy package"
@@ -104,8 +113,13 @@ fi
 say "Services"
 systemctl --root="$T" enable NetworkManager.service systemd-networkd.service systemd-resolved.service \
   sshd.service sddm.service >/dev/null 2>&1
-systemctl --root="$T" mask systemd-networkd-wait-online.service NetworkManager-wait-online.service >/dev/null 2>&1
+# Our provisioning unit applies the saved locale/timezone/user settings.
+# systemd's earlier interactive firstboot would block SSH and that unit.
+systemctl --root="$T" mask systemd-firstboot.service systemd-networkd-wait-online.service NetworkManager-wait-online.service >/dev/null 2>&1
 ln -sfn /run/systemd/resolve/stub-resolv.conf "$T/etc/resolv.conf"
+for unit in systemd-coredumpd.service systemd-coredump-register.service; do
+  install -Dm644 /src/rootfs/coredump-kernel.conf "$T/etc/systemd/system/$unit.d/90-kernel-version.conf"
+done
 echo omamobile > "$T/etc/hostname"
 
 say "Removing per-machine state"
@@ -116,22 +130,31 @@ sed -i 's/^root:[^:]*:/root:!*:/' "$T/etc/shadow"
 rm -rf "$T/etc/pacman.d/gnupg"                 # firstboot makes the phone's own keyring
 rm -f "$T"/etc/ssh/ssh_host_*                  # sshd makes the phone's own host keys
 printf 'uninitialized\n' > "$T/etc/machine-id" # systemd makes the phone's own id
+# A freshly flashed phone's RTC may precede package signing dates. PID 1 uses
+# this build-time lower bound before firstboot initializes the package keys.
+touch "$T/usr/lib/clock-epoch"
 rm -f "$T/var/lib/systemd/random-seed" "$T/var/lib/dbus/machine-id"
 rm -rf "$T"/root/.ssh "$T"/root/.bash_history "$T"/root/.gnupg
 rm -rf "$T"/etc/NetworkManager/system-connections/* "$T"/var/lib/NetworkManager/*
 rm -rf "$T"/var/cache/pacman/pkg/* "$T"/var/log/journal/* "$T"/tmp/* "$T"/var/tmp/*
 find "$T/var/log" -type f -exec truncate -s 0 {} +
 
+if [[ -f /overlay.tar ]]; then
+  say "Device firmware and runtime overlay"
+  python3 /src/tools/lib/rootfs-overlay.py extract /overlay.tar "$T"
+fi
+
 say "MANIFEST"
 {
   echo "# Omarchy Mobile root image"
   echo "version: $VERSION"
-  echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES})"
+  echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES}${ROOTFS_DIST_PACKAGES:+ $ROOTFS_DIST_PACKAGES})"
   echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "repository commit: $GIT_COMMIT"
   echo "arch linux arm tarball sha256: $ALARM_SHA256"
   echo "omarchy channel: $OMARCHY_CHANNEL"
   echo "kernel modules: $KERNEL_RELEASE (tarball sha256 $MODULES_SHA256)"
+  [[ ! -f /overlay.tar ]] || echo "device overlay sha256: $(sha256sum /overlay.tar | cut -d' ' -f1)"
   echo "omarchy patches applied: ${applied[*]:-none}"
   echo "omarchy patches already in omarchy: ${upstream[*]:-none}"
   echo "omarchy packages not built for aarch64: ${unavailable[*]:-none}"

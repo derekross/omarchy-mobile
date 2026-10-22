@@ -101,7 +101,9 @@ alarm_build_image() {
   done
   ctx=$(mktemp -d)
   cp "$OMARCHY_KEYRING_DIR"/omarchy{.gpg,-trusted,-revoked} "$ctx/"
-  cp "$root"/packages/omamobile-keyring/omamobile{.gpg,-trusted,-revoked} "$ctx/"
+  # A local builder can sign its own repository without editing committed keys.
+  local mobile_keyring=${OMAMOBILE_KEYRING_DIR:-$root/packages/omamobile-keyring}
+  cp "$mobile_keyring"/omamobile{.gpg,-trusted,-revoked} "$ctx/"
   cp "$root/tools/lib/alarm-setup" "$ctx/setup"
   hash=$( (echo "$base $OMARCHY_CHANNEL $(id -u)"; cat "$ctx"/*) | sha256sum | cut -c1-16)
   tag=omamobile-alarm-build:$hash

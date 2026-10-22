@@ -1,0 +1,21 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+target=${1:?staging root required}
+[[ $target == /* && $target != / ]] || { echo 'Use an absolute staging directory' >&2; exit 1; }
+install -Dm755 "${2:?compiled reboot-to required}" "$target/usr/bin/reboot-to"
+install -Dm755 omamobile-setup-system "$target/usr/bin/omamobile-setup-system"
+install -Dm755 omamobile-device-firewall "$target/usr/bin/omamobile-device-firewall"
+install -Dm644 kernel-compat.py "$target/usr/lib/omamobile/alioth/kernel-compat.py"
+install -Dm644 20-usb-gadget.network "$target/usr/lib/systemd/network/20-usb-gadget.network"
+install -Dm644 10-usb-unmanaged.conf "$target/etc/NetworkManager/conf.d/10-omamobile-usb.conf"
+install -Dm644 10-wifi-powersave.conf "$target/etc/NetworkManager/conf.d/10-alioth-wifi-powersave.conf"
+install -Dm644 20-alioth-power.conf "$target/usr/lib/systemd/logind.conf.d/20-alioth-power.conf"
+install -Dm644 20-alioth-sleep.conf "$target/usr/lib/systemd/sleep.conf.d/20-alioth-sleep.conf"
+install -Dm644 20-alioth-watchdog.conf "$target/usr/lib/systemd/system.conf.d/20-alioth-watchdog.conf"
+install -Dm644 monitor-scale "$target/etc/omamobile/monitor-scale"
+install -Dm644 10-alioth-storage.rules "$target/usr/lib/udev/rules.d/10-alioth-storage.rules"
+install -Dm644 firewall.nft "$target/usr/share/omamobile/alioth/firewall.nft"
+install -Dm644 omamobile-firewall.service "$target/usr/lib/systemd/system/omamobile-firewall.service"
+install -Dm644 LICENSE "$target/usr/share/licenses/omamobile-device-alioth/LICENSE"

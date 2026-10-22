@@ -1,0 +1,8 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Called by firstboot instead of UFW on the alioth reference kernel.
+# During bring-up, arm a timed stop and confirm a fresh SSH login first.
+set -euo pipefail
+ufw disable
+systemctl disable ufw.service
+systemctl enable --now omamobile-firewall.service

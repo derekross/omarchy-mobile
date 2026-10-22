@@ -1,0 +1,15 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+sed -i 's/^#\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen >/dev/null
+echo 'LANG=en_US.UTF-8' > /etc/locale.conf
+if [[ -n ${1:-} ]]; then
+  [[ $1 != /* && $1 != *..* && -f /usr/share/zoneinfo/$1 ]] || exit 1
+  ln -sfn "/usr/share/zoneinfo/$1" /etc/localtime
+fi
+systemctl enable --now systemd-timesyncd.service
+python3 /usr/lib/omamobile/alioth/kernel-compat.py
+# The reference sensor stack spins while waiting for DSP registry data.
+# Keep it off until repeatable cold-boot initialization is implemented.
+systemctl mask iio-sensor-proxy.service

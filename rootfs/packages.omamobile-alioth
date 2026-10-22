@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Qualcomm first-boot profile. Generic Mesa/libcamera/Hyprland come from the
+# distribution repositories. Do not install Pixel-only GPU or hardware packages.
+omamobile-keyring
+omamobile-firstboot
+omamobile-omarchy
+omamobile-shell
+omamobile-owl-widgets
+omamobile-apps
+omamobile-mirror
+omacam
+neard

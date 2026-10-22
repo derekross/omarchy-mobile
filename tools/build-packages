@@ -163,6 +163,9 @@ for dir in "${build[@]}"; do
   # PKGBUILDs install), minus makepkg's work directories and old packages.
   tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude='*.pkg.tar.*' \
     -C "$(dirname "$dir")" "./$name" | tar xf - -C "$work"
+  if [[ $name == omamobile-keyring && -n ${OMAMOBILE_KEYRING_DIR:-} ]]; then
+    cp "$OMAMOBILE_KEYRING_DIR"/omamobile{.gpg,-trusted,-revoked} "$work/$name/"
+  fi
   out=$work/out && mkdir -p "$out"
   incheck=0
   if ((nocheck == 0)); then
