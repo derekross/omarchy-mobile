@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up probe, never default: point rdinit at a missing file so the
+ * kernel panics once it reaches userspace, and reboots 5 s later. A phone
+ * that cycles through the orange-state screen proves the kernel got that far.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/chosen} {
+	bootargs = "console=tty0 panic=5 clk_ignore_unused pd_ignore_unused rdinit=/omamobile-no-such-init";
+};

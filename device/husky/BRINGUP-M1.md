@@ -78,6 +78,29 @@ From the SSH shell, read DPP0's `RDMA_BASEADDR_P0` (0x19900040) and DECON0's `GL
 - Headers against stock CP3A.261005.005 [V] (`unpack_bootimg`): header v4 and page size 0x800 for both vendor images; `init_boot` carries 17.0.0 / 2026-10 with an empty ramdisk; `vendor_boot` has no DTB; `vendor_kernel_boot` carries the DTB (one copy, 5.3 KiB) and our initramfs. `boot.img` is 18 MiB (partition 64 MiB).
 - ramoops uses stock's layout (0xfd3ff000, 4 MiB, 2 MiB console + 2 MiB pmsg). So after a warm reset from a failed boot, stock Android on slot A may keep our console as its last kmsg (`adb shell dumpsys dropbox --print SYSTEM_LAST_KMSG`) [I]. That is the observation channel for a gate (a) with no USB.
 
+### 2026-10-21: first boots on slot B (M1.3)
+
+All writes went to `*_b` only. Each test was confirmed by eye (counting orange-state screens) and by the laptop's USB log. Slot A fell back to stock unaided every time, after slot B's three retries.
+
+| # | Slot B images | Seen | Meaning |
+| --- | --- | --- | --- |
+| 1 | all five ours | one orange screen, then stock | ABL rejects B **before** the orange-state screen (retries 3 → 0 in about 20 s) |
+| 2 | ours + `/memory`, ECT location, no ABL-inserted reservations | the same | not the DTB layout |
+| 3 | all five stock (control) | stock boots on `_b` | slot B and the flashing are fine |
+| 4 | stock + our `dtbo` | orange, then a frozen logo (stock kernel without its board overlay) | our `dtbo` is accepted |
+| 5 | stock + our `vendor_kernel_boot` + our `dtbo` | orange, logo, black, repeating | our DTB, `/soc_compatible` match and vendor_kernel_boot packing are accepted |
+| 6 | stock `init_boot`/`vendor_boot` + our `boot` + our `vendor_kernel_boot`/`dtbo` | one orange screen, then stock | **our `boot` is rejected** |
+| 7 | as 1 with a slim kernel (non-Exynos `ARCH_*` off; `image_size` 25.7 MiB, against 41.8 MiB and stock's 34.6 MiB) | one orange screen, then stock | not the kernel's size |
+| 8 | as 7, plus **AVB hash footers** on `boot` and `init_boot` | orange, then a **frozen logo**, no reboot for minutes, no USB | **accepted: ABL boots our kernel** |
+| 9 | as 8 without `earlycon` in `VENDOR_CMDLINE` | the same | (ABL ignores the vendor cmdline anyway; kernel arguments are DTB `bootargs`) |
+| 10 | as 8, DTB `bootargs` `rdinit=/omamobile-no-such-init panic=5` (`overlays/panic-probe.dtso`) | orange screen **every few seconds**, then stock | **our kernel reaches userspace**: it panics on the missing init and reboots |
+
+Findings:
+
+- **zuma's `vbmeta` chains `boot` and `init_boot`** (rollback locations 2 and 4, each with its own signed AVB footer). `vendor_boot`, `vendor_kernel_boot` and `dtbo` are plain hash descriptors. With the bootloader unlocked, ABL tolerates a wrong hash or key but **rejects a chained partition with no footer**, before the orange-state screen [V, tests 6-8]. The fix used: `avbtool add_hash_footer` on both images (AOSP test key, stock's rollback index 1791158400, `os_version` 17 and `security_patch` 2026-10-05 props, padded to 64 MiB and 8 MiB). `bin/omamobile images` needs to do this for zuma (an `AVB_FOOTERS="boot init_boot"` descriptor key, proposed).
+- **The kernel boots on the minimal zuma DTB** far enough to exec init from the initramfs [V, test 10]: CPUs, GIC, timer, memory and the reservations are good enough.
+- **With the real init, the phone hangs without rebooting** [V, tests 8-9]. The shared init's USB self-recovery (crash 45 s after `ready` if the gadget is never configured) never fires, so the init stops before `ready`, most likely at USB gadget setup (binding the DWC3 UDC on the state ABL left) [I]. Next: a readable log (the stock-layout ramoops plus a rooted boot of slot B, or a timed crash early in init) before changing USB.
+
 ## Open questions
 
 - Does a bare DWC3 enumerate on the PHY and repeater state ABL leaves behind?
