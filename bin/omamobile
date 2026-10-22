@@ -728,6 +728,11 @@ cmd_push() {
   rel=$(kernel_release)
   want=$(sha256sum < "$KERNEL_OUT/modules-$rel.tar.zst" | cut -d' ' -f1)
   [[ "$("$ssh" "cat /usr/lib/modules/$rel/.omamobile-tarball 2>/dev/null")" == "$want" ]] || cmd_modules_push
+  # Check every image before writing any. Each must fit its partition, and an
+  # AVB_FOOTERS image is padded to the descriptor's partition size, with its
+  # footer at the end, so that size must be the partition's exactly.
+  local -A devs=()
+  local sectors bytes avb e
   for p in $DEV_BOOT_IMAGES; do
     slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
     [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
@@ -735,6 +740,19 @@ cmd_push() {
     dev=$("$ssh" "for s in /sys/block/sda/sda*; do grep -qx 'PARTNAME=${p}_b' \$s/uevent && echo /dev/\${s##*/}; done; true")
     [[ -n "$dev" ]] || die "${p}_b not found on the phone"
     [[ "$("$ssh" "cat /sys/block/sda/${dev#/dev/}/ro")" == 0 ]] || die "$dev (${p}_b) is read-only; refusing"
+    # sysfs counts 512-byte sectors, whatever the device's block size
+    sectors=$("$ssh" "cat /sys/block/sda/${dev#/dev/}/size")
+    [[ $sectors =~ ^[0-9]{1,15}$ ]] || die "cannot read the size of $dev (${p}_b)"
+    bytes=$((sectors * 512))
+    (($(stat -c %s "$img/$p.img") <= bytes)) || die "$p.img is larger than ${p}_b ($dev, $bytes bytes); refusing"
+    avb=""
+    for e in ${DEV_AVB_FOOTERS:-}; do [[ ${e%%:*} != "$p" ]] || avb=$((${e#*:})); done
+    [[ -z $avb ]] || ((avb == bytes)) \
+      || die "AVB_FOOTERS pads $p to $avb bytes, but ${p}_b ($dev) is $bytes: its footer would not be at the end of the partition; refusing"
+    devs[$p]=$dev
+  done
+  for p in $DEV_BOOT_IMAGES; do
+    dev=${devs[$p]}
     "$ssh" "dd of=$dev bs=1M conv=fsync 2>/dev/null" < "$img/$p.img"
     want=$(sha256sum < "$img/$p.img" | cut -d' ' -f1)
     got=$("$ssh" "head -c $(stat -c %s "$img/$p.img") $dev | sha256sum" | cut -d' ' -f1)

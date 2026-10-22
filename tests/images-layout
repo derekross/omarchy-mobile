@@ -13,8 +13,9 @@
 # before them) byte for byte; flash, against a fake fastboot, writes exactly
 # the descriptor's BOOT_IMAGES and refuses images
 # built for another device; load_device refuses bad descriptors; push,
-# against a fake phone, writes and verifies the images and tells a reboot
-# that did not happen from a phone that never came back. Skips when
+# against a fake phone, refuses an image too big for its partition before
+# writing any, writes and verifies the images and tells a reboot that did
+# not happen from a phone that never came back. Skips when
 # AOSP's mkbootimg isn't under $SRC_DIR, or no dtc is found: $DTC, then dtc
 # on PATH, then a kernel build's scripts/dtc/dtc ($KERNEL_OUT, or
 # ~/android/mainline/out*).
@@ -363,6 +364,7 @@ case $cmd in
   *.omamobile-tarball*) cat "$P/modules-sum" ;;
   *PARTNAME=*) [[ $cmd =~ PARTNAME=([a-z_]+) ]] && echo "/dev/sda_${BASH_REMATCH[1]}" ;;
   cat\ /sys/block/sda/*/ro) echo 0 ;;
+  cat\ /sys/block/sda/*/size) echo "${SECTORS:-131072}" ;;
   dd\ of=*) dev=${cmd#dd of=/dev/}; cat > "$P/${dev%% *}" ;;
   head\ -c*) read -r _ _ n dev _ <<<"$cmd"; head -c "$n" "$P/${dev#/dev/}" | sha256sum ;;
   sync\;*) echo rebooted >> "$P/log" ;;
@@ -388,3 +390,17 @@ pass "push reports no SSH when the phone answered once with the old boot id, the
 if push old down; then fail "push fails when SSH never comes back"; fi
 grep -c 'no SSH after reboot' "$t/log" >/dev/null || { cat "$t/log"; fail "no answer at all is reported as no SSH"; }
 pass "push reports no SSH when the phone never answers after the reboot"
+# 16 KiB partitions: every image is too big, and nothing is written
+if SECTORS=32 push old new; then fail "push refuses an image larger than its partition"; fi
+grep -q 'larger than boot_b' "$t/log" || { cat "$t/log"; fail "push names the image too big for its partition"; }
+[[ $(find "$P" -name 'sda_*' | wc -l) == 0 && ! -s $P/log ]] || fail "push writes nothing, and does not reboot, when an image does not fit"
+pass "push checks every image against its partition's size before writing any"
+# An AVB_FOOTERS image's partition must be exactly the descriptor's size
+cp "$R/device/six/device.conf" "$t/six.conf"
+printf 'AVB_FOOTERS="boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05\n' >> "$R/device/six/device.conf"
+push old new || { cat "$t/log"; fail "push writes an AVB_FOOTERS image to a partition of its size"; }
+if SECTORS=262144 push old new; then fail "push refuses an AVB_FOOTERS size that is not the partition's"; fi
+grep -q 'AVB_FOOTERS pads boot to 67108864 bytes, but boot_b' "$t/log" || { cat "$t/log"; fail "push names the AVB size and the partition's"; }
+[[ $(find "$P" -name 'sda_*' | wc -l) == 0 ]] || fail "push writes nothing when an AVB size is wrong"
+cp "$t/six.conf" "$R/device/six/device.conf"
+pass "push refuses an AVB_FOOTERS image whose partition is not the descriptor's size"

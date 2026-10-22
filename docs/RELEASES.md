@@ -119,6 +119,7 @@ What `bin/omamobile` checks, so a wrong descriptor fails the build rather than t
 - the DTB really is built with the first `SOC_IDS` value, and each rewrite took;
 - with `SOC_COMPATIBLE` instead, the DTB has a `/soc_compatible` node holding exactly its entries (one child each, labelled or not), and a descriptor never names both keys;
 - `AVB_FOOTERS` names only the device's boot images, once each, with block-aligned partition sizes, and comes with its rollback index and security patch; the footers are deterministic (the salt is the image's own hash) for a given avbtool: the footer records avbtool's version, which `images` prints, so another `external/avb` checkout gives other bytes;
+- `install-phone` and `push` refuse an image larger than its `_b` partition (`fastboot getvar all`, or sysfs), and an `AVB_FOOTERS` size that is not that partition's exactly;
 - the dtbo source carries `DTBO_BOARD_ID` and `DTBO_BOARD_REV`;
 - `push` and `flash` refuse any image whose `_b` partition is not on the allowlist.
 - `images` records the device in `images/DEVICE`, and `push`, `flash` and `tools/make-bundle` refuse images built for another device.

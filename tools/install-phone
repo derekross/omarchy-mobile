@@ -15,8 +15,9 @@
 # persist, efs, modem, devinfo and vbmeta are never touched.
 #
 # Before anything it checks: the phone answers in fastboot, its product is the
-# descriptor's CODENAME, the bootloader is unlocked, and both bootloader slots
-# carry the same version. It asks for the user name, password, host name,
+# descriptor's CODENAME, the bootloader is unlocked, both bootloader slots
+# carry the same version, and each image fits its slot B partition (an
+# AVB_FOOTERS image exactly). It asks for the user name, password, host name,
 # time zone, optional Wi-Fi and the SSH public key, writes them as
 # /etc/omamobile/firstboot.conf (and root's authorized_keys) into a LOCAL
 # COPY of the root image with debugfs (no root needed), shows exactly what it
@@ -213,6 +214,25 @@ else
   die "the phone only reports slot ${current_slot:-?}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
 fi
 note "$CODENAME, unlocked, current slot ${current_slot:-?}"
+# Each image must fit its slot B partition. An AVB_FOOTERS image is padded to
+# the descriptor's partition size and ABL reads the footer from the end of the
+# partition, so that size must be the phone's exactly.
+declare -A avb_size=()
+for e in ${D[AVB_FOOTERS]:-}; do
+  [[ $e =~ ^([a-z_]+):(0x[0-9a-f]{1,10}|[1-9][0-9]{0,11})$ ]] || die "$conf: AVB_FOOTERS entries are image:partition_size, not $e"
+  avb_size[${BASH_REMATCH[1]}]=$((BASH_REMATCH[2]))
+done
+for p in $BOOT_IMAGES; do
+  psize=$(sed -nE "s/^partition-size:${p}_b:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
+  [[ -n $psize ]] || die "the phone reports no partition-size for ${p}_b"
+  psize=$((psize)) isize=$(stat -c %s "$images/$p.img")
+  ((isize <= psize)) || die "$p.img is $isize bytes, larger than ${p}_b ($psize bytes)"
+  [[ -z ${avb_size[$p]:-} ]] || ((avb_size[$p] == psize)) \
+    || die "$conf: AVB_FOOTERS pads $p to ${avb_size[$p]} bytes, but ${p}_b is $psize: its footer would not be at the end of the partition"
+done
+for p in "${!avb_size[@]}"; do
+  [[ " $BOOT_IMAGES " == *" $p "* ]] || die "$conf: AVB_FOOTERS names $p, which is not in BOOT_IMAGES"
+done
 
 # --- The owner's answers -----------------------------------------------------
 RESERVED='^(root|alarm|omamobile|omandroid|omarchy|bin|daemon|mail|ftp|http|nobody|dbus|systemd-.*|tss|uuidd|alpm|git|avahi|cups|cups-browsed|lp|_talkd|polkitd|rtkit|qemu|brltty|gluster|rpc|libvirt-qemu|pcscd|nvidia-persistenced|sddm|builder|admin)$'
