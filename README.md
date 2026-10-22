@@ -12,6 +12,11 @@ Native Omarchy on Google Pixel phones: Arch Linux ARM, Hyprland and Omarchy's ow
 
 ## Quick start
 
+**POCO F3 (`alioth`), experimental:** use the dedicated
+[build, backup and flashing guide](device/alioth/FLASH-RUNBOOK.md) and read
+its [hardware limits](device/alioth/BRINGUP-M1.md). Its Android-v0 boot layout
+uses a separate guarded installer; the Pixel commands below do not apply.
+
 The installer is new: expect rough edges. You need a Pixel 7 Pro with an unlocked bootloader, an Omarchy (Arch) laptop with Docker, `android-tools` and `e2fsprogs`, and Google's factory image for the phone. Stock Android stays on slot A as the way back; installing erases `userdata`.
 
 ```sh

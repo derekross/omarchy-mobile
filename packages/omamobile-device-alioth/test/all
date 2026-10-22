@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for file in install omamobile-setup-system omamobile-device-firewall; do bash -n "$file"; done
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+cc -O2 -Wall -Wextra -Werror -o "$t/reboot-to" reboot-to.c
+./install "$t/root" "$t/reboot-to"
+for path in usr/bin/reboot-to usr/bin/omamobile-setup-system usr/bin/omamobile-device-firewall \
+  usr/lib/udev/rules.d/10-alioth-storage.rules usr/lib/systemd/network/20-usb-gadget.network \
+  usr/lib/systemd/system/omamobile-firewall.service usr/lib/omamobile/alioth/kernel-compat.py; do
+  [[ -f $t/root/$path ]] || { echo "Missing staged file: $path" >&2; exit 1; }
+done
+if command -v udevadm >/dev/null && udevadm --help | grep -q 'verify'; then
+  udevadm verify 10-alioth-storage.rules
+else
+  echo 'ok - udev rule validation # SKIP this host lacks udevadm verify'
+fi
+python3 -I - "$t/root" <<'PY'
+from pathlib import Path
+import shlex
+import sys
+root = Path(sys.argv[1])
+for unit in (root / 'usr/lib/systemd/system').glob('*.service'):
+    for line in unit.read_text().splitlines():
+        if not line.startswith('Exec') or '=' not in line:
+            continue
+        command = shlex.split(line.split('=', 1)[1])[0]
+        if Path(command).name.startswith('omamobile-'):
+            assert (root / command.lstrip('/')).is_file(), 'Unit references an unstaged helper'
+print('ok - every device-specific service executable is staged')
+PY
+python3 -I - <<'PY'
+import importlib.util
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('compat', 'kernel-compat.py')
+compat = importlib.util.module_from_spec(spec); spec.loader.exec_module(compat)
+original = '[options]\nDownloadUser = alpm\n[core]\nServer = example\n'
+legacy = compat.configure(original, -1)
+assert 'DisableSandboxFilesystem\n' in legacy
+assert 'DownloadUser = alpm' in legacy and '\nDisableSandbox\n' not in legacy
+assert compat.configure(legacy, -1) == legacy
+assert compat.configure(legacy, 7) == original
+custom = original.replace('[options]\n', '[options]\nDisableSandboxFilesystem\n')
+assert compat.configure(custom, 7) == custom
+assert compat.configure(custom, -1) == custom
+try:
+    compat.configure('[core]\n', -1)
+except ValueError:
+    pass
+else:
+    raise AssertionError('Malformed pacman config accepted')
+print('ok - legacy kernel workaround is idempotent, limited, and removable')
+PY
+echo 'ok - device package stages without executing any reboot or hardware command'

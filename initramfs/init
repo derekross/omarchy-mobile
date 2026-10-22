@@ -362,6 +362,12 @@ boot_arch() {
   done
   [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
   [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
+  # A boot-only trial must never repair or mount the existing Android data.
+  # Require our image label before any operation that could change userdata.
+  [ "$(blkid -s LABEL -o value "$dev" 2>/dev/null)" = omamobile-root ] || {
+    say "arch: userdata is not labelled omamobile-root (staying in initramfs)"
+    return 1
+  }
   mkdir -p /newroot
   e2fsck -p "$dev" >/dev/null 2>&1
   grow_root "$dev"

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Omarchy Mobile native firewall for the alioth reference kernel
+After=ufw.service
+Before=sshd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nft -f /usr/share/omamobile/alioth/firewall.nft
+ExecReload=/usr/bin/nft -f /usr/share/omamobile/alioth/firewall.nft
+ExecStop=/usr/bin/nft delete table inet omamobile
+
+[Install]
+WantedBy=multi-user.target

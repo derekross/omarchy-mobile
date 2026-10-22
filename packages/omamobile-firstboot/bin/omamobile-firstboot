@@ -204,6 +204,18 @@ step() {
 }
 
 s_keyring() {
+  # A phone RTC may contain an Android-relative time. Restore a lower bound
+  # before checking key creation/expiry dates, even without working Wi-Fi.
+  # A fixture ROOT must never change the build host's clock.
+  if [[ -z $ROOT ]]; then
+    local epoch=0 stamp file
+    for file in /usr/lib/clock-epoch /var/lib/systemd/timesync/clock; do
+      [[ -f $file ]] || continue
+      stamp=$(stat -c %Y "$file")
+      if ((stamp > epoch)); then epoch=$stamp; fi
+    done
+    if ((epoch > $(date +%s))); then date -s "@$epoch" >/dev/null; fi
+  fi
   if [[ ! -f $ROOT/etc/pacman.d/gnupg/trustdb.gpg ]]; then
     pacman-key --init
   fi
@@ -289,7 +301,8 @@ s_omarchy_system() {
   for part in config hardware login post-install; do
     while read -r leaf; do
       rel=${leaf#"$install/"}
-      if [[ " ${SKIP[*]} " == *" $rel "* ]]; then
+      if [[ " ${SKIP[*]} " == *" $rel "* ]] ||
+          { [[ $rel == config/firewall.sh ]] && [[ -x $ROOT/usr/bin/omamobile-device-firewall ]]; }; then
         echo "    skip $rel (not for a phone)"
         continue
       fi
@@ -307,11 +320,16 @@ s_services() {
   local unit
   for unit in NetworkManager.service systemd-networkd.service systemd-resolved.service sshd.service \
               sddm.service bluetooth.service systemd-timesyncd.service ufw.service; do
+    [[ $unit == ufw.service && -x $ROOT/usr/bin/omamobile-device-firewall ]] && continue
     systemctl enable "$unit" || echo "    could not enable $unit"
   done
   systemctl mask systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
   if [[ ! -L $ROOT/etc/resolv.conf ]]; then
     ln -sfn /run/systemd/resolve/stub-resolv.conf "$ROOT/etc/resolv.conf"
+  fi
+  if [[ -x $ROOT/usr/bin/omamobile-device-firewall ]]; then
+    "$ROOT/usr/bin/omamobile-device-firewall"
+    return
   fi
   ufw default deny incoming
   ufw default allow outgoing
