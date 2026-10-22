@@ -10,5 +10,5 @@
 /plugin/;
 
 &{/chosen} {
-	bootargs = "console=tty0 fbcon=font:TER16x32 panic=5 clk_ignore_unused pd_ignore_unused rdinit=/init printk.devkmsg=on ignore_loglevel nmi_watchdog=panic softlockup_panic=1 hung_task_panic=0 hung_task_timeout_secs=20 sysctl.kernel.panic_on_rcu_stall=1 rcupdate.rcu_cpu_stall_timeout=10 dyndbg=\"file drivers/usb/dwc3/* +p; file drivers/usb/gadget/udc/* +p\" omamobile.deadman=20 omamobile.deadman_step=7 omamobile.deadman_why=11210000.usb";
+	bootargs = "console=tty0 fbcon=font:TER16x32 reboot=warm panic=5 clk_ignore_unused pd_ignore_unused rdinit=/init printk.devkmsg=on ignore_loglevel nmi_watchdog=panic softlockup_panic=1 hung_task_panic=0 hung_task_timeout_secs=20 sysctl.kernel.panic_on_rcu_stall=1 rcupdate.rcu_cpu_stall_timeout=10 dyndbg=\"file drivers/usb/dwc3/* +p; file drivers/usb/gadget/udc/* +p\" omamobile.deadman=20 omamobile.deadman_step=7 omamobile.deadman_why=11210000.usb";
 };

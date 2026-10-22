@@ -133,7 +133,11 @@ Findings:
 
 Findings:
 
-- Holding Power or Volume Down + Power from our running kernel did not reset the phone (test 21's session), so getting back to fastboot meant crashing slot B through its retries. `reboot-to bootloader` needs the bootloader's reboot-mode cell (stock: PMU `reboot-cmd-offset` 0x810) in the DT.
+- **The buttons do nothing under our kernel.** Holding Power for 30 s, or Volume Down + Power, did not reset the phone. Stock's device tree has the PMIC's cold reset disabled (`coldrst_en = "disabled"`), and its only long-press handler is the software `keydebug` (Power + Volume Up, 6 s). So the ways out of our kernel are software: ssh, a panic (every panic resets), and `reboot-to`. A hard hang with no panic would last until the battery runs out, which is why the bring-up kernel turns lockups and stalls into panics.
+
+| # | Test | Seen | Meaning |
+| --- | --- | --- | --- |
+| 22 | `syscon-reboot-mode` under the PMU (SYSIP_DAT0 0x810, bootloader 0xfc), then `reboot-to bootloader` | the driver binds; with the default cold reset the phone boots slot B again; after `echo warm > /sys/kernel/reboot/mode`, fastboot in about 20 s; with `reboot=warm` in `bootargs`, fastboot in 22 s from a fresh boot | **a cold PSCI reset clears SYSIP_DAT0 on zuma; `SYSTEM_RESET2` (warm) keeps it**. Stock's `pixel-zuma-reboot.c` writes the same register with the same values as gs201's [V] |
 - ABL replaces any `console=` in `bootargs` with `console=null`; fbcon still takes the panel, and the init writes to `/dev/tty0`.
 
 ## Open questions
