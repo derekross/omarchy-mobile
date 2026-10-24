@@ -4,11 +4,18 @@
 # a stub kernel output (a random Image, minimal DTBs, a random initramfs),
 # a gs201-style descriptor yields its five boot images and a gs101-style
 # one (no init_boot or vendor_kernel_boot) yields boot (ramdisk and OS
-# version), vendor_boot (DTB and initramfs) and dtbo; flash, against a fake
-# fastboot, writes exactly the descriptor's BOOT_IMAGES and refuses images
+# version), vendor_boot (DTB and initramfs) and dtbo; a zuma-style one
+# (SOC_COMPATIBLE) ships its DTB once, after checking /soc_compatible (labels
+# allowed, an extra child or an unparsed line refused), and with AVB_FOOTERS
+# gives boot and init_boot hash footers at their partition sizes (when
+# external/avb is under $SRC_DIR); without the zuma keys the gs201 and gs101
+# images match the tool at $IMAGES_BASELINE (default 1e7a998, the last tool
+# before them) byte for byte; flash, against a fake fastboot, writes exactly
+# the descriptor's BOOT_IMAGES and refuses images
 # built for another device; load_device refuses bad descriptors; push,
-# against a fake phone, writes and verifies the images and tells a reboot
-# that did not happen from a phone that never came back. Skips when
+# against a fake phone, refuses an image too big for its partition before
+# writing any, writes and verifies the images and tells a reboot that did
+# not happen from a phone that never came back. Skips when
 # AOSP's mkbootimg isn't under $SRC_DIR, or no dtc is found: $DTC, then dtc
 # on PATH, then a kernel build's scripts/dtc/dtc ($KERNEL_OUT, or
 # ~/android/mainline/out*).
@@ -74,8 +81,13 @@ descriptor twelve gs201 "b0:0x9855001 a0:0x9855000" 0x30306 "boot init_boot vend
   "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" > "$R/device/twelve/device.conf"
 descriptor six gs101 "b0:0x9845001 a0:0x9845000" 0x20304 "boot vendor_boot dtbo" \
   "boot_b vendor_boot_b dtbo_b userdata" > "$R/device/six/device.conf"
+mkdir -p "$R/device/eight"
+descriptor eight zuma "" 0x40206 "boot init_boot vendor_boot vendor_kernel_boot dtbo" \
+  "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" \
+  | sed 's/^SOC_IDS=.*/SOC_COMPATIBLE="b0-foplp:0x9865:1:0:0 b1-foplp:0x9865:1:1:0"/' > "$R/device/eight/device.conf"
 overlay 0x30306 > "$R/device/twelve/twelve-overlay.dts"
 overlay 0x20304 > "$R/device/six/six-overlay.dts"
+overlay 0x40206 > "$R/device/eight/eight-overlay.dts"
 
 # The stub kernel output
 dts=$K/arch/arm64/boot/dts/exynos/google
@@ -88,6 +100,18 @@ for d in "gs201-twelve 0x9855001" "gs101-six 0x9845001"; do
   printf '/dts-v1/;\n/ {\n\tsoc_id = <%s 0x00>;\n\tcompatible = "google,%s";\n\t#address-cells = <2>;\n\t#size-cells = <1>;\n\tect { };\n\tchosen { bootargs = ""; };\n};\n' "$2" "$1" \
     | "$dtc" -q -I dts -O dtb -o "$dts/$1.dtb" -
 done
+# zuma: no /soc_id; ABL matches /soc_compatible's children
+socc() { printf '\t\t%s {\n\t\t\tproduct_id = <0x9865>;\n\t\t\tmajor = <%s>;\n\t\t\tminor = <%s>;\n\t\t\tpkg_mode = <0>;\n\t\t};\n' "$@"; }
+# zuma_dtb FILE NODE CHILDREN...: a zuma DTB built with -@, as the kernel's
+# are, so labels come back when the tool decompiles it
+zuma_dtb() {
+  local out=$1 node=$2; shift 2
+  { printf '/dts-v1/;\n/ {\n\tcompatible = "google,zuma-eight";\n\t#address-cells = <2>;\n\t#size-cells = <1>;\n\tect { };\n\t%s {\n' "$node"
+    "$@"
+    printf '\t};\n\tchosen { bootargs = ""; };\n};\n'; } | "$dtc" -q -@ -I dts -O dtb -o "$out" -
+}
+two() { socc B0_FOPLP 1 0; socc B1_FOPLP 1 1; }
+zuma_dtb "$dts/zuma-eight.dtb" soc_compatible two
 
 om() { (cd "$R" && KERNEL_OUT=$K DEVICE=$1 PATH="$t/bin:$PATH" bin/omamobile "${@:2}") > "$t/log" 2>&1; }
 built() { (cd "$K/images" && ls *.img | tr '\n' ' '); }
@@ -126,9 +150,103 @@ cmp -s "$t/u/vendor_boot/vendor_ramdisk00" "$K/initramfs.cpio.lz4" || fail "gs10
 [[ $(cat "$K/images/DEVICE") == six ]] || fail "images records the device"
 pass "gs101-style descriptor: boot (ramdisk, OS version), vendor_boot (DTB, initramfs), dtbo"
 
+# zuma: /soc_compatible instead of /soc_id, so the DTB ships once, unchanged
+om eight images || { cat "$t/log"; fail "images builds the zuma-style layout"; }
+[[ $(built) == "boot.img dtb.img dtbo.img init_boot.img vendor_boot.img vendor_kernel_boot.img " ]] \
+  || fail "zuma layout: five boot images and dtb.img (got $(built))"
+cmp -s "$K/images/dtb.img" "$dts/zuma-eight.dtb" || fail "zuma layout: dtb.img is the DTB, once and unchanged"
+unpack vendor_kernel_boot
+cmp -s "$t/u/vendor_kernel_boot/dtb" "$dts/zuma-eight.dtb" || fail "zuma layout: vendor_kernel_boot carries the DTB"
+pass "zuma-style descriptor (SOC_COMPATIBLE): the DTB once, in vendor_kernel_boot"
+cp "$R/device/eight/device.conf" "$t/eight.conf"
+sed -i 's/b1-foplp:0x9865:1:1:0/b1-foplp:0x9865:1:2:0/' "$R/device/eight/device.conf"
+if om eight images; then fail "images refuses a DTB whose /soc_compatible differs from SOC_COMPATIBLE"; fi
+grep -c 'does not match SOC_COMPATIBLE' "$t/log" >/dev/null || { cat "$t/log"; fail "a /soc_compatible mismatch is reported"; }
+cp "$t/eight.conf" "$R/device/eight/device.conf"
+cp "$dts/zuma-eight.dtb" "$t/zuma-eight.dtb"
+printf '/dts-v1/;\n/ {\n\tcompatible = "google,zuma-eight";\n\tect { };\n\tchosen { bootargs = ""; };\n};\n' \
+  | "$dtc" -q -I dts -O dtb -o "$dts/zuma-eight.dtb" -
+if om eight images; then fail "images refuses a DTB with no /soc_compatible node"; fi
+grep -c 'no /soc_compatible node' "$t/log" >/dev/null || { cat "$t/log"; fail "a missing /soc_compatible node is reported"; }
+cp "$t/zuma-eight.dtb" "$dts/zuma-eight.dtb"
+pass "images refuses a DTB that does not carry exactly SOC_COMPATIBLE, or none at all"
+# Labels on the node and its children are not entries; an extra child is
+# one, labelled or not, whatever its name
+labelled() { socc "b0: B0_FOPLP" 1 0; socc "b1: x: B1_FOPLP" 1 1; }
+zuma_dtb "$dts/zuma-eight.dtb" "sc: soc_compatible" labelled
+om eight images || { cat "$t/log"; fail "images accepts labels on /soc_compatible and its children"; }
+extra_labelled() { two; socc "x: A0_IPOP" 1 0; }
+extra_unit() { two; socc "A0-IPOP@0" 1 0; }
+prop() { printf '\t\tstatus = "okay";\n'; two; }
+for c in "extra_labelled:does not match SOC_COMPATIBLE" "extra_unit:does not match SOC_COMPATIBLE" "prop:cannot parse"; do
+  zuma_dtb "$dts/zuma-eight.dtb" soc_compatible "${c%%:*}"
+  if om eight images; then fail "images refuses /soc_compatible with ${c%%:*}"; fi
+  grep -q "${c#*:}" "$t/log" || { cat "$t/log"; fail "${c%%:*}: images says '${c#*:}'"; }
+done
+cp "$t/zuma-eight.dtb" "$dts/zuma-eight.dtb"
+pass "images reads labels on /soc_compatible, and refuses an extra child (labelled, or with a unit address) or a line it cannot parse"
+
+# AVB_FOOTERS: zuma's vbmeta chains boot and init_boot, so those two get a
+# hash footer, padded to the descriptor's partition sizes. Needs AOSP's
+# avbtool and test key under SRC_DIR (platform/external/avb).
+avbtool=$SRC_DIR/external/avb/avbtool.py
+if [[ -f $avbtool && -f $SRC_DIR/external/avb/test/data/testkey_rsa4096.pem ]] && command -v openssl >/dev/null; then
+  printf 'AVB_FOOTERS="boot:0x4000000 init_boot:8388608"\nAVB_ROLLBACK_INDEX=1791158400\nAVB_SECURITY_PATCH=2026-10-05\n' >> "$R/device/eight/device.conf"
+  om eight images || { cat "$t/log"; fail "images adds AVB footers"; }
+  info() { python3 -I "$avbtool" info_image --image "$K/images/$1.img"; }
+  for p in "boot 67108864" "init_boot 8388608"; do
+    set -- $p
+    [[ $(stat -c %s "$K/images/$1.img") == "$2" ]] || fail "AVB: $1.img is padded to its partition size"
+    info $1 > "$t/avb.txt" || fail "AVB: $1.img has a footer"
+    grep -q "Partition Name: *$1\$" "$t/avb.txt" && grep -q 'Rollback Index: *1791158400$' "$t/avb.txt" \
+      && grep -q "com.android.build.$1.os_version -> '17'" "$t/avb.txt" \
+      && grep -q "com.android.build.$1.security_patch -> '2026-10-05'" "$t/avb.txt" \
+      || { cat "$t/avb.txt"; fail "AVB: $1's footer names the partition, stock's rollback index, the OS version and the patch"; }
+  done
+  for p in vendor_boot vendor_kernel_boot dtbo; do
+    if info $p >/dev/null 2>&1; then fail "AVB: $p.img has no footer"; fi
+  done
+  unpack boot
+  [[ -s $t/u/boot/kernel ]] || fail "AVB: boot.img still unpacks"
+  eight_sums=$(cd "$K/images" && sha256sum *.img)
+  om eight images && [[ $(cd "$K/images" && sha256sum *.img) == "$eight_sums" ]] || fail "AVB: the footers are deterministic"
+  if AVBTOOL=$t/no-avbtool om eight images; then fail "images refuses AVB_FOOTERS without avbtool"; fi
+  grep -c 'no avbtool at' "$t/log" >/dev/null || { cat "$t/log"; fail "a missing avbtool is reported"; }
+  cp "$t/eight.conf" "$R/device/eight/device.conf"
+  pass "AVB_FOOTERS: boot and init_boot get deterministic hash footers at their partition sizes, nothing else"
+else
+  printf 'ok - # skip: no avbtool and test key under %s/external/avb, or no openssl\n' "$SRC_DIR"
+fi
+
 # images is deterministic, so the gs201 layout can be compared run to run
 om twelve images && [[ $(cd "$K/images" && sha256sum *.img) == "$twelve_sums" ]] || fail "images is deterministic"
 pass "images gives the same bytes on a second run"
+
+# A descriptor that sets none of the zuma keys (SOC_COMPATIBLE, AVB_FOOTERS)
+# gets the same bytes as from the tool before them: cheetah's (gs201) and
+# oriole's (gs101) images must not change. The reference is bin/omamobile
+# at $IMAGES_BASELINE: by default 1e7a998, the last tool before the zuma
+# keys, pinned so the check still means something once they are on main.
+# Skipped where the checkout lacks it (a shallow clone).
+base=${IMAGES_BASELINE:-1e7a998}
+if git rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1; then
+  B=$t/base
+  mkdir -p "$B/bin"
+  cp -r "$R/tools" "$R/device" "$R/omamobile.conf" "$B/"
+  git show "$base:bin/omamobile" > "$B/bin/omamobile"
+  chmod +x "$B/bin/omamobile"
+  for dev in twelve six; do
+    om $dev images || { cat "$t/log"; fail "images builds $dev"; }
+    now=$(cd "$K/images" && sha256sum *.img)
+    (cd "$B" && KERNEL_OUT=$K DEVICE=$dev PATH="$t/bin:$PATH" bin/omamobile images) > "$t/log" 2>&1 \
+      || { cat "$t/log"; fail "the $base tool builds $dev"; }
+    [[ $(cd "$K/images" && sha256sum *.img) == "$now" ]] || fail "$dev's images match the $base tool's byte for byte"
+  done
+  om twelve images  # what the flash tests below expect
+  pass "without SOC_COMPATIBLE or AVB_FOOTERS, the gs201 and gs101 images match $base's byte for byte"
+else
+  printf 'ok - # skip: no %s to compare the gs201 and gs101 images with\n' "$base"
+fi
 
 # flash against a fake fastboot that logs every call
 cat > "$t/bin/fastboot" <<'EOF'
@@ -207,6 +325,20 @@ bad "a boot image named twice" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot 
 bad "BOOT_IMAGES without dtbo" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot"/' "must include dtbo"
 bad "a boot image missing from UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_b vendor_boot_b userdata"/' "dtbo_b is not in UFS_RW"
 bad "a partition other than slot B in UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_b vendor_boot_b dtbo_b efs userdata"/' "not efs"
+bad "neither SOC_IDS nor SOC_COMPATIBLE" '/^SOC_IDS=/d' "SOC_IDS is missing"
+bad "both SOC_IDS and SOC_COMPATIBLE" 's/^SOC_IDS=.*/&\nSOC_COMPATIBLE="b0-ipop:0x9845:1:0:1"/' "are exclusive"
+bad "a malformed SOC_COMPATIBLE entry" 's/^SOC_IDS=.*/SOC_COMPATIBLE="B0:0x9845:1"/' "SOC_COMPATIBLE entries are"
+bad "a SOC_COMPATIBLE label named twice" 's/^SOC_IDS=.*/SOC_COMPATIBLE="b0-ipop:0x9845:1:0:1 b0-ipop:0x9845:1:1:1"/' "names b0-ipop twice"
+avbkeys='AVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05'
+bad "an AVB footer for an image the device lacks" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"init_boot:8388608\"\n$avbkeys/" "init_boot, which is not in BOOT_IMAGES"
+bad "an AVB footer named twice" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot:8388608 boot:8388608\"\n$avbkeys/" "names boot twice"
+bad "an AVB partition size off the 4 KiB grid" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot:1000\"\n$avbkeys/" "positive multiple of 4096"
+# 0x10000000000001000 would wrap around to 4096 and pass the grid check
+bad "an AVB partition size too long to be one" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot:0x10000000000001000\"\n$avbkeys/" "AVB_FOOTERS entries are"
+bad "a malformed AVB_FOOTERS entry" "s/^SOC_IDS=.*/&\nAVB_FOOTERS=\"boot\"\n$avbkeys/" "image:partition_size"
+bad "AVB_FOOTERS without a rollback index" 's/^SOC_IDS=.*/&\nAVB_FOOTERS="boot:8388608"\nAVB_SECURITY_PATCH=2026-10-05/' "needs AVB_ROLLBACK_INDEX"
+bad "AVB_FOOTERS without a security patch" 's/^SOC_IDS=.*/&\nAVB_FOOTERS="boot:8388608"\nAVB_ROLLBACK_INDEX=1/' "needs AVB_SECURITY_PATCH"
+bad "an AVB rollback index without AVB_FOOTERS" 's/^SOC_IDS=.*/&\nAVB_ROLLBACK_INDEX=1/' "belong with AVB_FOOTERS"
 
 # push against a fake phone: phone-ssh answers each command push sends and
 # keeps what dd writes, so the checksum check reads it back. The boot_id
@@ -232,6 +364,7 @@ case $cmd in
   *.omamobile-tarball*) cat "$P/modules-sum" ;;
   *PARTNAME=*) [[ $cmd =~ PARTNAME=([a-z_]+) ]] && echo "/dev/sda_${BASH_REMATCH[1]}" ;;
   cat\ /sys/block/sda/*/ro) echo 0 ;;
+  cat\ /sys/block/sda/*/size) echo "${SECTORS:-131072}" ;;
   dd\ of=*) dev=${cmd#dd of=/dev/}; cat > "$P/${dev%% *}" ;;
   head\ -c*) read -r _ _ n dev _ <<<"$cmd"; head -c "$n" "$P/${dev#/dev/}" | sha256sum ;;
   sync\;*) echo rebooted >> "$P/log" ;;
@@ -257,3 +390,17 @@ pass "push reports no SSH when the phone answered once with the old boot id, the
 if push old down; then fail "push fails when SSH never comes back"; fi
 grep -c 'no SSH after reboot' "$t/log" >/dev/null || { cat "$t/log"; fail "no answer at all is reported as no SSH"; }
 pass "push reports no SSH when the phone never answers after the reboot"
+# 16 KiB partitions: every image is too big, and nothing is written
+if SECTORS=32 push old new; then fail "push refuses an image larger than its partition"; fi
+grep -q 'larger than boot_b' "$t/log" || { cat "$t/log"; fail "push names the image too big for its partition"; }
+[[ $(find "$P" -name 'sda_*' | wc -l) == 0 && ! -s $P/log ]] || fail "push writes nothing, and does not reboot, when an image does not fit"
+pass "push checks every image against its partition's size before writing any"
+# An AVB_FOOTERS image's partition must be exactly the descriptor's size
+cp "$R/device/six/device.conf" "$t/six.conf"
+printf 'AVB_FOOTERS="boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05\n' >> "$R/device/six/device.conf"
+push old new || { cat "$t/log"; fail "push writes an AVB_FOOTERS image to a partition of its size"; }
+if SECTORS=262144 push old new; then fail "push refuses an AVB_FOOTERS size that is not the partition's"; fi
+grep -q 'AVB_FOOTERS pads boot to 67108864 bytes, but boot_b' "$t/log" || { cat "$t/log"; fail "push names the AVB size and the partition's"; }
+[[ $(find "$P" -name 'sda_*' | wc -l) == 0 ]] || fail "push writes nothing when an AVB size is wrong"
+cp "$t/six.conf" "$R/device/six/device.conf"
+pass "push refuses an AVB_FOOTERS image whose partition is not the descriptor's size"
