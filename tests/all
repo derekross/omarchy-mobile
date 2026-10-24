@@ -7,7 +7,7 @@
 # allowlist and the USB product string, bin/omamobile's boot-image layouts
 # and flash against a fake fastboot, omamobile-firstboot's own tests, and the
 # smoke test of the newest root image in out/ if there is one, and the
-# felix device package's own test, and tools/alarm-wake-test's check.
+# felix and lynx device packages' own tests, and tools/alarm-wake-test's check.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
@@ -20,7 +20,7 @@ sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
-for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all; do
+for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all; do
   echo "# $t"
   "$t"
 done

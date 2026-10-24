@@ -3,6 +3,15 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-24: Arch root on userdata
+
+- **`tools/install-phone` works on lynx.** It flashed slot B's five boot images and a root image built with `DEVICE=lynx tools/build-rootfs`, set B active and rebooted. The phone booted into the Arch root on `sda31` (grown to 109 GiB), `omamobile-firstboot` created the user, and SDDM logged in to Hyprland on simpledrm. Slot A's Android does not boot after this (shared `userdata`).
+- **The bootloader reports only the current slot's version.** `install-phone` needs `--bootloader-slots-match`. Slot B's `lynx-17.0-15199429` comes from stock's `getprop` while it ran from slot B (`ro.boot.bootloader`), the same as slot A.
+- **`omamobile-device-lynx`** is felix's package without the lid drop-in: storage guard rule, USB address, power-key drop-in, mirrorlist, `reboot-to`. No boot-success marker yet, so slot B stays unmarked.
+- **No RTC.** The clock starts days behind (2026-10-18 on the first boot), and `pacman-key --populate` skips a signing key created "in the future", so the keyring step of `omamobile-firstboot` can fail. Setting the clock and repopulating fixes it.
+- **The lock screen blanks after about 10 seconds** and nothing wakes it without touch. `qs ipc call lock wake` lights it again, and the PIN can be typed with `wtype`. `loginctl unlock-sessions` does not unlock it.
+- **`systemd-firstboot.service` fails** (status 208/STDIN): no console with `console=null`. `omamobile-firstboot` already sets the host name, time zone and locale.
+
 ## 2026-10-24: on-screen console and UFS
 
 - **UFS works with cheetah's nodes.** The board file enables `ufs_0` and its PHY with an always-on fixed VCC (stock drives it from `gpp0-1`, boot-on, as on cheetah). The link comes up at `FAST series_B G_4 L_2`, as on stock. The part is an SK hynix `HN8T05DEHKX073` (fw G002): `sda` 128 GB (31 partitions, `userdata` is `sda31`, 109 GiB), `sdb` and `sdc` 32 MiB each (10 partitions), `sdd` 4 MiB (4). No UFS errors at boot.
