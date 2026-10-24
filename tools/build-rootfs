@@ -38,6 +38,8 @@
 #                       gst-plugin-libcamera vulkan-panfrost" for a test image
 #                       without the slow builds; the MANIFEST lists them)
 set -euo pipefail
+# debugfs and friends live in /sbin on Debian-like hosts
+export PATH=$PATH:/usr/sbin:/sbin
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh

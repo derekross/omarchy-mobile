@@ -8,6 +8,8 @@
 # unit, the kernel modules, the MANIFEST, and that no per-machine state,
 # per-phone data or Google file is in it.
 set -euo pipefail
+# debugfs and friends live in /sbin on Debian-like hosts
+export PATH=$PATH:/usr/sbin:/sbin
 img=${1:?usage: tests/rootfs-smoke IMAGE[.zst]}
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
