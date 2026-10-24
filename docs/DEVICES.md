@@ -20,6 +20,7 @@ The status of each device, as verified on real hardware. Rows in the matrix have
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Pixel 7 Pro | cheetah | gs201 (Tensor G2) | works | works | works (120 Hz) | works (DVFS) | works | works | works | works | works (audio) | works | works | works | works | works | works | partial (quiet, thin) | works | WIP (boots; needs a SIM) | works | partial (telephoto fixed-focus) | WIP | works (opt-in) |
 | Pixel Fold | felix | gs201 (Tensor G2) | WIP ([#3](https://github.com/derekross/omarchy-mobile/issues/3)) | WIP (UFS behind the read-only guard, checked on the phone) | WIP (cover: simplefb console only) | no | no | no | works | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no |
+| Pixel 7a ([notes](../device/lynx/NOTES.md)) | lynx | gs201 (Tensor G2) | WIP ([#36](https://github.com/derekross/omarchy-mobile/issues/36): first light on slot B, SSH) | no | no | no | no | no | works | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no |
 | Pixel 6 | oriole | gs101 (Tensor G1) | WIP ([#2](https://github.com/derekross/omarchy-mobile/issues/2): descriptor and boot images from the factory image and a retail phone; not booted yet) | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no |
 | Pixel 4 | flame | SM8150 (Snapdragon 855) | testing (temporary RAM boot; [notes](../device/flame/BRINGUP-M1.md)) | testing (RAM probe; all UFS read-only) | testing (1080x2280 console; software desktop in separate Arch payload) | testing (separate Arch payload; FD640 contexts, llvmpipe desktop) | testing (separate Arch payload; events and PIN unlock verified) | no | testing (NCM + ACM + SSH; sustained transfers can disconnect) | testing (guarded RAM scan; association untested) | no | no | no | no | no | no | - | no | no | no | no | no | no | - |
 | Pixel 9a ([notes](../device/tegu/NOTES.md)) | tegu | zumapro (Tensor G4) | WIP ([#28](https://github.com/derekross/omarchy-mobile/issues/28): private kernel) | WIP | WIP (simpledrm) | WIP (fixed clocks) | WIP | no | WIP | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no |
@@ -59,7 +60,7 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | Device | Codename | SoC | Starting point |
 | --- | --- | --- | --- |
 | Pixel 7 | panther | gs201 | cheetah's SoC support; needs its own board DTS (panel, touch, battery) |
-| Pixel 7a | lynx | gs201 | as panther |
+| Pixel 7a | lynx | gs201 | **WIP, community port: [#36](https://github.com/derekross/omarchy-mobile/issues/36)**; first light on slot B. IPOP package: ABL matches the DTB on `/soc_compatible`, and `boot`/`init_boot` need AVB footers |
 | Pixel Fold | felix | gs201 | **WIP, community port: [#3](https://github.com/derekross/omarchy-mobile/issues/3)**; as panther, with two panels (DECON1 drives the cover, DECON0 the inner panel) |
 | Pixel Tablet | tangorpro | gs201 | as panther; no modem |
 | Pixel 6 | oriole | gs101 | **WIP, community port: [#2](https://github.com/derekross/omarchy-mobile/issues/2)**; our preferred second device. Upstream mainline `gs101-oriole.dts` |

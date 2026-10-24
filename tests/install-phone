@@ -62,6 +62,11 @@ product:${1:-testdev}
 unlocked:${2:-yes}
 current-slot:b
 version-bootloader:cloudripper-17.0-15199429
+partition-size:boot_b: 0x4000000
+partition-size:init_boot_b: ${INIT_BOOT_SIZE-0x800000}
+partition-size:vendor_boot_b: 0x4000000
+partition-size:vendor_kernel_boot_b: 0x4000000
+partition-size:dtbo_b: 0x1000000
 ${3:-}
 EOF
 }
@@ -166,6 +171,10 @@ descriptor | sed 's/^NAME=.*/NAME="$(touch x)"/' > "$R/device/testdev/device.con
 refuse "a descriptor with shell in it"
 descriptor | sed '/^SOC_IDS=/d' > "$R/device/testdev/device.conf"
 refuse "a staged descriptor without SOC_IDS"; grep -q 'SOC_IDS is missing' "$t/out" || fail "names SOC_IDS"
+descriptor | sed 's/^SOC_IDS=.*/&\nSOC_COMPATIBLE="b0-foplp:0x9865:1:0:0"/' > "$R/device/testdev/device.conf"
+refuse "a descriptor with both SOC_IDS and SOC_COMPATIBLE"; grep -q 'are exclusive' "$t/out" || fail "says the two keys are exclusive"
+descriptor | sed 's/^SOC_IDS=.*/SOC_COMPATIBLE="b0-foplp:0x9865:1:0:0 b1-foplp:0x9865:1:1:0"/' > "$R/device/testdev/device.conf"
+install --dry-run || { cat "$t/out"; fail "a /soc_compatible (zuma) descriptor installs"; }
 descriptor > "$R/device/testdev/device.conf"
 echo cheetah > "$t/images/DEVICE"
 refuse "images built for another device"; grep -q "holds images for 'cheetah', not testdev" "$t/out" || fail "names both devices"
@@ -183,7 +192,28 @@ echo 'kernel modules: 7.3.0-test-2 (tarball sha256 0)' >> "$R/out/omamobile-root
 refuse "a root image whose modules don't match the boot images' kernel"; grep -q 'modules for 7.3.0-test-2' "$t/out" || fail "names both kernels"
 sed -i 's/^kernel modules: .*/kernel modules: 7.3.0-test-1 (tarball sha256 0)/' "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST"
 install --dry-run || { cat "$t/out"; fail "matching kernel and modules pass"; }
-pass "refuses partitions outside the allowlist, a non-data descriptor, a staged descriptor, another device's images, a bad or foreign root image, mismatched modules"
+pass "refuses partitions outside the allowlist, a non-data descriptor, a staged descriptor, both SOC_IDS and SOC_COMPATIBLE, another device's images, a bad or foreign root image, mismatched modules; accepts SOC_COMPATIBLE"
+
+# Partition sizes, from getvar all: every image must fit, and an AVB_FOOTERS
+# size must be the partition's exactly (husky's are boot 64 MiB, init_boot 8 MiB)
+descriptor > "$R/device/testdev/device.conf"
+vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+head -c $((0x1000000 + 1)) /dev/zero > "$t/images/dtbo.img"
+refuse "an image larger than its partition"; grep -q 'dtbo.img is 16777217 bytes, larger than dtbo_b (16777216 bytes)' "$t/out" || fail "names the image and both sizes"
+echo "dtbo image" > "$t/images/dtbo.img"
+INIT_BOOT_SIZE= vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+refuse "a partition the phone gives no size for"; grep -q 'no partition-size for init_boot_b' "$t/out" || fail "names the partition with no size"
+vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+printf 'AVB_FOOTERS="boot:0x4000000 init_boot:0x800000"\n' >> "$R/device/testdev/device.conf"
+install --dry-run || { cat "$t/out"; fail "AVB_FOOTERS sizes that match the phone's partitions pass"; }
+descriptor > "$R/device/testdev/device.conf"
+printf 'AVB_FOOTERS="boot:0x4000000 init_boot:0x1000000"\n' >> "$R/device/testdev/device.conf"
+refuse "an AVB_FOOTERS size that is not the partition's"; grep -q 'pads init_boot to 16777216 bytes, but init_boot_b is 8388608' "$t/out" || fail "names the AVB size and the partition's"
+descriptor > "$R/device/testdev/device.conf"
+printf 'AVB_FOOTERS="boot:0x10000000000000000"\n' >> "$R/device/testdev/device.conf"
+refuse "an AVB_FOOTERS size too long to be one"; grep -q 'AVB_FOOTERS entries are image:partition_size' "$t/out" || fail "refuses an overlong AVB size"
+descriptor > "$R/device/testdev/device.conf"
+pass "refuses an image larger than its partition, a partition with no size, an AVB_FOOTERS size that is not the partition's"
 
 # Explicit android-v4 is equivalent to the legacy descriptor (omitted method).
 printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"
