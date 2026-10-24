@@ -3,6 +3,13 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-24: on-screen console
+
+- **simpledrm drives the panel through ABL's pipeline.** The board file reserves `0xfac00000` (`splash@fac00000`, no-map, 1080 x 2400 x 4 bytes) and adds a 1080x2400 a8r8g8b8 simple-framebuffer on it. simpledrm binds it, fbcon switches to it at 67x75 (Terminus 16x32), and the boot log and a shell prompt show on the panel. No panel driver: the framebuffer node has no panel phandle.
+- **DECON0 TRIG_CON (`0x1c240030`) reads `0x3070` after ABL,** the same masked value as the Pixel 7 Pro. The initramfs writes cheetah's `0x3061` (`SIMPLEFB_TRIG_CON`), and it reads back `0x3061`. Without it the panel, a command-mode panel, keeps ABL's last frame. `BRINGUP_PROBE=1` logs `dpp0 cfg 0x40000004 base 0xfac00000`.
+- **ABL rewrites the console arguments.** It drops our `console=tty0` from `bootargs` and appends `console=null`. fbcon still takes the framebuffer and the init's messages reach it.
+- **Getting into fastboot without buttons works:** `omamobile fastboot` (reboot-to is ignored, so it crashes our Linux, ABL falls back to slot A, then `adb reboot bootloader`). Holding Volume Down during `reboot-to omamobile` was missed once: by the orange warning it is too late.
+
 ## 2026-10-23: first light
 
 - **Slot B boots and SSH comes up at `root@172.16.42.1`.** Kernel 7.3.0-rc6 from linux-omarchy-mobile. Both cluster watchdogs are stopped at probe. Slot B is not marked successful. Slot A is stock CP2A.260705.006 with Magisk on `init_boot_a`.
@@ -88,7 +95,7 @@ Findings from real hardware, newest first. Tracking issue: #36.
   `pkvm_guest_firmware`, `ramoops` and `splash` still reserved. That is not
   a boot of the exact two-commit first-light tree; the `g0661f78797ed`
   capture above predates the removal of `tui`.
-- **DPP0's RDMA base (`0x1c0b0040`) reads `0xfac00000`,** read once over SSH while the bootloader logo was on screen. That is the Pixel 7 Pro's address too. On stock it lies inside the `wifi_region` CMA pool (0xfa800000 to 0xfcffffff), so a simple-framebuffer here needs its own reservation. Not done yet: the screen keeps the bootloader logo.
+- **DPP0's RDMA base (`0x1c0b0040`) reads `0xfac00000`,** read once over SSH while the bootloader logo was on screen. That is the Pixel 7 Pro's address too. On stock it lies inside the `wifi_region` CMA pool (0xfa800000 to 0xfcffffff), so a simple-framebuffer here needs its own reservation (done on 2026-10-24, above).
 - **The phone's DHCP server did not answer** NetworkManager on this laptop. A manual `172.16.42.2/24` on the host link worked.
 
 ## 2026-10-23: stock facts

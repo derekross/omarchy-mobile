@@ -1,11 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7a (lynx) first light
 
-Status (2026-10-23): slot B boots and SSH comes up at `root@172.16.42.1`
-over the USB NCM gadget. Both cluster watchdogs are stopped at probe. The
-screen keeps the bootloader logo: there is no framebuffer node yet. Stock
-Android is still on slot A. Slot B has not been marked successful. Kernel
-7.3.0-rc6.
+Status (2026-10-24, this first-light/display branch): slot B boots and SSH
+comes up at `root@172.16.42.1` over the USB NCM gadget. Both cluster
+watchdogs are stopped at probe. With kernel #44's framebuffer reservation
+and this branch's DECON0 trigger unmask, simpledrm/fbcon shows the boot log
+and a shell prompt at 67x75. UFS remains disabled on this branch; the
+checks below describe the initramfs boot, before installing Arch on
+`userdata`. Kernel `7.3.0-rc6-omamobile-push1-g3081ac63fcc4`.
 
 ## Facts
 
@@ -81,3 +83,22 @@ its own. While stock is on slot A that is the fallback; just let it boot.
 
 Nothing here writes outside slot B's five boot images. Stock's `init_boot_a`
 stays as it was, so slot A can go back to plain stock with the factory image.
+
+## The on-screen console (2026-10-24)
+
+One register write, made by the shared init at boot and only when the
+board's compatible is `google,gs201-lynx`: `SIMPLEFB_TRIG_CON="0x1c240030
+0x3061"`, DECON0's `TRIG_CON`, the same unmask the Pixel 7 Pro uses. It
+needs the kernel's `simple-framebuffer` on ABL's scanout buffer at
+`0xfac00000`, reserved by the board file (linux-omarchy-mobile #44); never
+run the write on a kernel without that reservation.
+
+Expect: `TRIG_CON` reads `0x3070` before the write and `0x3061` after (the
+init logs both), fbcon comes up at 67x75 on the panel, and the boot log and
+a shell prompt follow the bootloader logo. ABL replaces `console=tty0` with
+`console=null`, so the init's own messages still arrive, but not a panic.
+
+Stop if the panel goes black and stays black, shows a torn or shifted
+picture, or if the phone resets right after the write. Roll back by
+building and flashing slot B from a descriptor without `SIMPLEFB_TRIG_CON`;
+the phone then boots as at first light, with the bootloader logo on screen.
