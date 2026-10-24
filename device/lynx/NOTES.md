@@ -3,8 +3,11 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
-## 2026-10-24: on-screen console
+## 2026-10-24: on-screen console and UFS
 
+- **UFS works with cheetah's nodes.** The board file enables `ufs_0` and its PHY with an always-on fixed VCC (stock drives it from `gpp0-1`, boot-on, as on cheetah). The link comes up at `FAST series_B G_4 L_2`, as on stock. The part is an SK hynix `HN8T05DEHKX073` (fw G002): `sda` 128 GB (31 partitions, `userdata` is `sda31`, 109 GiB), `sdb` and `sdc` 32 MiB each (10 partitions), `sdd` 4 MiB (4). No UFS errors at boot.
+- **`poweroff -f` does not fully power off.** PSCI system-off stops the SoC (USB and SSH go away), but the panel stays lit with its last frame and Power alone does nothing. Holding Power for about 30 seconds force-restarts the phone (back into slot B), so a real power-off goes through the bootloader menu. Probably the PMIC rails stay up with no S2MPG12 driver; not investigated.
+- **The storage guard holds on lynx.** It removes `/dev/sda`, sets `sdb`, `sdc` and `sdd` read-only, and leaves exactly six partitions writable: `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b` (`sda20` to `sda24`) and `userdata`. The first UFS boot ran with `omamobile.initramfs` on the vendor cmdline, so the init did not touch `userdata`.
 - **simpledrm drives the panel through ABL's pipeline.** The board file reserves `0xfac00000` (`splash@fac00000`, no-map, 1080 x 2400 x 4 bytes) and adds a 1080x2400 a8r8g8b8 simple-framebuffer on it. simpledrm binds it, fbcon switches to it at 67x75 (Terminus 16x32), and the boot log and a shell prompt show on the panel. No panel driver: the framebuffer node has no panel phandle.
 - **DECON0 TRIG_CON (`0x1c240030`) reads `0x3070` after ABL,** the same masked value as the Pixel 7 Pro. The initramfs writes cheetah's `0x3061` (`SIMPLEFB_TRIG_CON`), and it reads back `0x3061`. Without it the panel, a command-mode panel, keeps ABL's last frame. `BRINGUP_PROBE=1` logs `dpp0 cfg 0x40000004 base 0xfac00000`.
 - **ABL rewrites the console arguments.** It drops our `console=tty0` from `bootargs` and appends `console=null`. fbcon still takes the framebuffer and the init's messages reach it.
