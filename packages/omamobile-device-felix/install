@@ -19,6 +19,8 @@ install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+install -Dm644 vendor/modprobe.d/omamobile-cover-touch.conf \
+  "$destination/usr/lib/modprobe.d/omamobile-cover-touch.conf"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \

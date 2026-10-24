@@ -59,6 +59,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+         usr/lib/modprobe.d/omamobile-cover-touch.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-felix/version \
          usr/share/licenses/omamobile-device-felix/LICENSE \
@@ -87,6 +88,9 @@ grep -q '^HandlePowerKey=ignore$' "$power" \
   || fail "a short press must not power the phone off"
 grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
   || fail "the long press stays the PMIC reset"
+grep -q '^blacklist salixp$' \
+  "$tmp/root/usr/lib/modprobe.d/omamobile-cover-touch.conf" \
+  || fail "the cover touch reader must stay blacklisted from autoload"
 grep -q '^PACKAGE=omamobile-device-felix$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is felix"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \

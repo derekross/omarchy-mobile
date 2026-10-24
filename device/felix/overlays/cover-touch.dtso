@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (COVER-TOUCH-PLAN.md): enable the Pixel Fold cover touch
+ * path. The board file leaves USI6, SPI6, PERIC0, the controller, and the
+ * main PMIC disabled. This overlay turns those on. It does not set
+ * regulator-always-on: the salixp driver holds LDO25M and LDO26M. The
+ * inner panel and its touch controller stay off. salixp is blacklisted
+ * from autoload. Applied with fdtoverlay; the felix DTB is built with -@.
+ */
+/dts-v1/;
+/plugin/;
+
+&pinctrl_peric0 {
+	status = "okay";
+};
+
+&usi6 {
+	status = "okay";
+};
+
+&spi_6 {
+	status = "okay";
+};
+
+&s2mpg12 {
+	status = "okay";
+};
+
+&cover_touch {
+	status = "okay";
+};
