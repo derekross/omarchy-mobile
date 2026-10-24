@@ -1,8 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Tests for omamobile-device-lynx. reboot-to is compiled from
-# src/reboot-to.c in this directory, so a copied package still builds.
-# Do not execute reboot-to.
+# Tests for omamobile-device-lynx. The C tools are compiled from src/ in
+# this directory, so a copied package still builds. Do not execute reboot-to,
+# and run omamobile-bootctl only against a synthetic devinfo.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -11,6 +11,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 bash -n build || fail "build parses"
 bash -n install || fail "install parses"
+bash -n bin/omamobile-boot-success || fail "omamobile-boot-success parses"
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -20,6 +21,11 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   cmp -s src/reboot-to.c ../omamobile-device-cheetah/src/reboot-to.c \
     || fail "reboot-to.c drifted from the cheetah package"
   pass "reboot-to.c matches the cheetah source"
+  for f in src/omamobile-bootctl.c bin/omamobile-boot-success LICENSE.Apache-2.0 \
+           vendor/systemd/system/omamobile-boot-success.service; do
+    cmp -s "$f" "../omamobile-device-cheetah/$f" || fail "$f drifted from the cheetah package"
+  done
+  pass "the boot-success marker and bootctl match the cheetah package"
   cmp -s vendor/udev/rules.d/10-omamobile-storage.rules \
     ../omamobile-device-cheetah/vendor/udev/rules.d/10-omamobile-storage.rules \
     || fail "the storage rule drifted from the cheetah package"
@@ -48,12 +54,32 @@ if [[ -f ../../device/lynx/device.conf ]]; then
   pass "device.conf matches the descriptor"
 fi
 
-./build "$tmp/build" || fail "reboot-to compiles"
-[[ -x $tmp/build/reboot-to ]] || fail "reboot-to is not executable"
-pass "reboot-to compiles"
+./build "$tmp/build" || fail "C tools compile"
+[[ -x $tmp/build/reboot-to && -x $tmp/build/omamobile-bootctl ]] || fail "the C tools are not executable"
+pass "C tools compile"
+
+# omamobile-bootctl against a synthetic devinfo laid out like lynx's
+# (version 3.15): a dry run of mark-successful plans one byte, writes nothing
+python3 - "$tmp/devinfo" <<'PY2'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 15)
+buf[0x30:0x34] = bytes([2, 0x0a, 0, 0])   # slot a: successful, active-bit off
+buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
+open(sys.argv[1], "wb").write(buf)
+PY2
+cp "$tmp/devinfo" "$tmp/devinfo.orig"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -q 'version: 3.15' || fail "bootctl decodes devinfo"
+plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo" b 2>&1 || true)
+grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x35: 04 -> 06)"
+cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
+pass "bootctl dry run plans one byte and writes nothing"
 
 ./install "$tmp/root" "$tmp/build"
-for f in usr/bin/reboot-to \
+for f in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-boot-success \
+         usr/lib/systemd/system/omamobile-boot-success.service \
+         usr/share/licenses/omamobile-device-lynx/LICENSE.Apache-2.0 \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
@@ -79,10 +105,10 @@ grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
   || fail "the long press stays the PMIC reset"
 grep -q '^PACKAGE=omamobile-device-lynx$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is lynx"
-for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
-              usr/lib/systemd/system/omamobile-boot-success.service \
-              usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service") == ../omamobile-boot-success.service ]] \
+  || fail "the boot-success unit is enabled by a vendor wants link"
+for absent in usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rule, the USB link, and the mirrorlist, and nothing that marks a slot or starts hardware"
+pass "install stages the udev rule, the USB link, the mirrorlist, and the boot-success marker, and nothing that starts hardware"

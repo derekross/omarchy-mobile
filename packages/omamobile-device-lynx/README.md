@@ -1,6 +1,6 @@
 # omamobile-device-lynx
 
-Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It does not drive the radio, the charger, or a camera, and it does not mark a boot slot successful.
+Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It marks the booted slot successful after each boot. It does not drive the radio, the charger, or a camera.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
@@ -10,9 +10,13 @@ Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx,
 | `vendor/NetworkManager/conf.d/10-omamobile-usb.conf` | `/usr/lib/NetworkManager/conf.d` | Keeps NetworkManager off that link |
 | `etc/omamobile-mirrorlist` | `/etc/pacman.d/omamobile-mirrorlist` | Where pacman finds the `[omamobile]` repository. Same file as the Pixel 7 Pro package |
 | `omamobile-device-lynx.install` | pacman hook | Adds `[omamobile]` to `pacman.conf` before `[omarchy]`, once. Same script as the Pixel 7 Pro package |
+| `bin/omamobile-boot-success` + `vendor/systemd/system/omamobile-boot-success.service` | `/usr/bin`, `/usr/lib/systemd/system` (enabled by a vendor wants link) | Marks the booted A/B slot successful after each boot, as Android's boot-control service does. Without it, the bootloader burns one of slot B's three retries per boot and then falls back to slot A. Same files as the Pixel 7 Pro package |
+| `src/omamobile-bootctl.c` | `/usr/bin/omamobile-bootctl` | Reads and updates the slot flags in `devinfo` (`sdd1`, layout 3.15 on lynx as on the Pixel 7 Pro). Only ever changes bytes 0x30-0x37, verified. Same source as the Pixel 7 Pro package |
 | `src/reboot-to.c` | `/usr/bin/reboot-to` | Reboot with a reason the bootloader understands. Same bytes as the Pixel 7 Pro package; the test checks |
 | `device.conf` | `/usr/share/omamobile/device.conf` | The descriptor, the same bytes as `device/lynx/device.conf` |
 
-`./build [DIR]` compiles `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the two copies when it is run from the repository.
+`./build [DIR]` compiles `omamobile-bootctl` and `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the two copies when it is run from the repository.
 
-Not in this package: the boot-success marker, Wi-Fi, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook.
+Not in this package: Wi-Fi, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook.
+
+Licences: MIT, except `omamobile-bootctl`, which is Apache-2.0 and keeps Google's notice.

@@ -3,6 +3,16 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-24: touchscreen, RTC and slot retries
+
+- **The touchscreen is a Goodix GT9895 on SPI0 (USI0),** chip select `gpp20-3`, interrupt `gpa7-0` (falling edge), reset `gpp23-2`. Kernel branch `omamobile-gs201-lynx-touch` adds it to `goodix_berlin_spi` with the Berlin D register addresses. Touch works in the Hyprland session, with no checksum errors over about 1000 interrupts.
+- **The GT9895 sends 14-byte contact records,** not the 8 bytes the Berlin driver assumed. With 8 every report failed its checksum. The driver now takes the record size from the chip's match data.
+- **ABL leaves the touch supplies off.** The first probe read all zeros ("device confirm failed") and the interrupt line stayed low after reset. The supplies are S2MPG12 `LDO25M` (vddio, 1.6 to 1.95 V) and `LDO26M` (avdd, 3.0 V, not felix's 3.3 V), from the stock tree. The board file describes the PMIC on ACPM and hands both LDOs to the touch node. The AOC mux on `gph1-0` is not involved.
+- **The S2MPG12 RTC sets the clock at boot,** now that the PMIC is described. The "No RTC" entry below no longer applies.
+- **Slot B has three retries after `fastboot --set-active=b`, and each unmarked boot uses one.** The fourth push in a row booted slot A, where Android shows "Cannot load Android system" (shared `userdata`). It was not a bad DTB. `fastboot --set-active=b` from the bootloader menu (Power + Volume Down) brought slot B back. Never pick "Factory data reset" there: it wipes the Arch root.
+- **devinfo is `sdd1`, layout 3.15, the same as the Pixel 7 Pro.** Slot B's flags are byte 0x35. `omamobile-bootctl mark-successful` changed it from `04` to `06`, and the retry count stayed. `omamobile-device-lynx` 0.2.0 ships the Pixel 7 Pro's `omamobile-boot-success` unit, which does this after every boot.
+- **The on-screen keyboard (squeekboard) appears** for text fields in the session, as well as at the PIN prompt.
+
 ## 2026-10-24: Arch root on userdata
 
 - **`tools/install-phone` works on lynx.** It flashed slot B's five boot images and a root image built with `DEVICE=lynx tools/build-rootfs`, set B active and rebooted. The phone booted into the Arch root on `sda31` (grown to 109 GiB), `omamobile-firstboot` created the user, and SDDM logged in to Hyprland on simpledrm. Slot A's Android does not boot after this (shared `userdata`).
