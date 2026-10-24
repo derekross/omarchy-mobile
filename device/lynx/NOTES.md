@@ -3,6 +3,30 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-24: Wi-Fi bring-up (not working yet)
+
+- **The Wi-Fi chip is a Qualcomm QCA6490 (`17cb:1103`, subsystem `17cb:0108`) on PCIe channel 1,** not the Broadcom part in the Pixel 7 Pro. Linux drives it as WCN6855 hw2.1 through ath11k. Bluetooth is on the same chip.
+- **Power pins, from the stock tree:** `gph2-5` enables the 0.95 V buck (stock name `bt-0p95-en`), and `gph2-4` is WLAN_EN. Stock raises the buck, then WLAN_EN, then waits 1 ms and brings up the link. BT_EN is `gpp16-2` on the PERIC1 pin controller (`0x10840000`), which our tree does not describe yet. The PCIe wake line `gpa6-1` only lets the chip wake the host.
+- **Local, unsigned kernel branch `omamobile-gs201-lynx-wifi`** (on the touch branch). It imports the gs201 PCIe host, PHY and SysMMU drivers from `omamobile-int`. The board commit describes the two power pins as the root port's supply, with no restricted DMA pool: such a pool hands out at most 256 KiB in one piece, and MHI needs 512 KiB. A test-only `msi=1` adds MSI through iMSI-RX. A test-only `skip_soc_reset` stops ath11k from resetting the chip. Test-only `bhi_zero_from` and `bhi_flip_at` corrupt the image MHI hands over.
+- **Working:** link Gen2 x1, enumeration, 32 MSI vectors, and the chip reading host memory.
+- **Not working:** the chip's boot ROM stalls during the first firmware load (BHI), after about 20 s MHI times out with -110. `TCSR_PBL_LOGGING` reads `0xef0a0002`. `BHI_STATUS` stays 0, no MSI arrives, and neither end logs an AER error or completion timeout.
+- **Bisecting the image shows where it stalls:**
+
+  | Image handed to the chip | Boot ROM ends at |
+  | --- | --- |
+  | real image | `0xef0a0002` |
+  | all zeros | `0xef128100` |
+  | hash segment (offset 0x1000) zeroed | `0xef0a0125` |
+  | code from 0x2000 zeroed | `0xef0a0002` |
+  | one byte flipped in the header hash (0x1028) or the first segment hash (0x1068) | `0xef0a0002` |
+
+  So the boot ROM reads the ELF header and the hash table's header, then stalls before it checks a single hash. The hash segment holds plain SHA-256 hashes with no signature. The Pixel's own `amss20.bin` stalls at the same stage, so the image is not the cause.
+- **Ruled out:** firmware signing, cache coherency, power-up timing (also tried after several minutes powered off), the S2MPU, SysMMU bypass, Relaxed Ordering and No Snoop, read request size, ath11k's SOC global reset, the QFPROM shutdown bit (`0x1F8031C` reads `0x62`), and holding BT_EN high (stock raises it about 1 s before WLAN_EN).
+- **Stock (dmesg from 2026-10-23):** the BHI load finishes in 57 ms. Stock runs with the SysMMU translating (image buffers near `0xfa880000`, in `wifi_region`), a 36-bit DMA mask, PCIe I/A on, L1.2 on, and three MSI vectors for MHI. Here the SysMMU is bypassed (control register `0x24`), the device has no IOMMU group, and DMA uses physical addresses.
+- **Next:** run with the SysMMU translating as stock does, then with I/A on, then check the chip's supplies. The PCIe PHY rails are S2MPG13 `LDO3S` and `LDO18S`, both always-on in the stock tree.
+- **Firmware on the phone** lives in `/usr/lib/firmware/updates/ath11k/WCN6855/hw2.1`: linux-firmware `amss.bin` and `m3.bin`, plus the phone's own calibration as `board.bin`. Nothing from the vendor image goes into this repo.
+- **`devmem` here takes only `ADDRESS [VALUE]`.** A second argument is written as a value, not read as a width. Reading SysMMU offset `0x145c000c` crashed the phone.
+
 ## 2026-10-24: touchscreen, RTC and slot retries
 
 - **The touchscreen is a Goodix GT9895 on SPI0 (USI0),** chip select `gpp20-3`, interrupt `gpa7-0` (falling edge), reset `gpp23-2`. Kernel branch `omamobile-gs201-lynx-touch` adds it to `goodix_berlin_spi` with the Berlin D register addresses. Touch works in the Hyprland session, with no checksum errors over about 1000 interrupts.
