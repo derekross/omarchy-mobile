@@ -3,7 +3,7 @@
 
 Status, 2026-10-23. The chip-id gate is linux-omarchy-mobile#32 and omarchy-mobile#34. Neither has merged. `drivers/input/touchscreen/salixp.c` resets the cover controller and reads chip id `36 40`. It does not load firmware or report touches. Step 0 below is done against Google's felix driver at tag `android-14.0.0_r0.102`. This file still adds no driver, no overlay, and no boot.
 
-The power key is linux-omarchy-mobile#41. `docs/DEVICES.md` keeps the Fold touch and buttons cells at `no` until the matching notes have merged.
+The power key is linux-omarchy-mobile#41. Touch in `docs/DEVICES.md` is WIP (cover chip id) from omarchy-mobile#34. Buttons stays `no` until the power-key notes merge.
 
 ## Goal
 
@@ -32,6 +32,7 @@ In order:
 - [V] The controller answered with no AoC driver loaded. Touch offload stays out of this plan.
 - [V] Inner touch is `st,fst2` on `spi_0`. Its rails are S2MPG13 LDO22S and LDO6S. Its reset is `gpp23-2`. None of those are in this plan. `N/` 2026-10-20.
 - [V] `G/` tag `android-14.0.0_r0.102`. `fts_crc_check` (`touch/ftm5/fts_lib/ftsCore.c:952`) returns OK when it finds no CRC error, and a value greater than OK when it does. `fts_fw_update` (`touch/ftm5/fts.c:4222`) sets `reflash_fw` in that second case. `flash_burn` (`touch/ftm5/fts_lib/ftsFlash.c:1010`) skips the write when force is clear and the file matches the firmware already running.
+- [V] `G/` same tag. When `fts_crc_check` cannot read the CRC register it returns that negative error (`ftsCore.c:968`) and does not reset the controller. The status register is checked before any reset. `fts_system_reset` runs only after that register reads clear (`ftsCore.c:980`). `fts_fw_update` sets `reflash_fw` only when the return is greater than OK (`fts.c:4224`). A negative return takes the other branch, which logs "NO CRC Error or Impossible to read CRC register" and leaves `reflash_fw` clear (`fts.c:4227`).
 - [V] `G/` same tag. `flashProcedure` (`touch/ftm5/fts_lib/ftsFlash.c:178`) reads the firmware file and calls `flash_burn` (`touch/ftm5/fts_lib/ftsFlash.c:209` and `:1000`). The programming procedure starts at `touch/ftm5/fts_lib/ftsFlash.c:1045`. Those steps stay in `G/`.
 - [V] `G/` same tag. `fts_interrupt_install` (`touch/ftm5/fts.c:4492`) requests the IRQ level-low and then disables it (`touch/ftm5/fts.c:4526`). `fts_init_sensing` (`touch/ftm5/fts.c:4675`) runs that install, turns sensing on, and then calls `fts_enableInterrupt` with enable true (`touch/ftm5/fts.c:4682`). `fts_enableInterrupt` (`touch/ftm5/fts_lib/ftsCore.c:914`) is `enable_irq` or `disable_irq`. `fts_fw_update` reaches `fts_init_sensing` at `touch/ftm5/fts.c:4385`, after the flash path.
 - [V] `G/` same tag. `fts_init` (`touch/ftm5/fts.c:4555`) continues when reset fails for a reason other than a bus error. Probe calls `fts_fw_update` directly only when both `FW_UPDATE_ON_PROBE` and `FW_H_FILE` are set (`touch/ftm5/fts.c:5685`). Otherwise it queues `fts_fw_update_auto` (`touch/ftm5/fts.c:4400`).
@@ -44,6 +45,8 @@ Leave #32 and #34 as they are. Reports are a new series after those merge: bindi
 Do not request `gpa6-7` in the same change that only reads the chip id. Do not port `ftm5.c`. Do not add the inner panel, its reset, or S2MPG13.
 
 The firmware file named in the factory node is `F/` `firmware/ftm5_fw_f10_ext.ftb`. Do not vendor that blob. The terms above do not allow shipping it.
+
+The report path never writes or erases the controller's flash and never requests a reflash. The firmware and the CX calibration live in that flash. A burn holds the core, unlocks and erases it page by page, and whether the panel-init and CX area survives depends on `keep_cx`. A bad or interrupted burn can lose the cover panel's factory calibration, and this tree has no way to restore it. A flash write is a separate decision, taken together. This path only reads what is already running: system info, and the CRC status register. It does not call `fts_system_reset`. A read-only step stops after that register read.
 
 ## What was built
 
@@ -73,7 +76,7 @@ Passed, 2026-10-23, against `G/` tag `android-14.0.0_r0.102`. The decision is `f
 
 **Rollback:** none. Nothing was written to the phone.
 
-**Risk:** read-only.
+**Risk:** read-only. The read is the CRC status register. It does not call `fts_system_reset`.
 
 ### 1. Later, and not this commit
 
@@ -85,6 +88,6 @@ A new kernel branch, one subject, node left disabled. The first boot of that bra
 
 ## Open questions
 
-- Does the stock bootloader leave firmware running, or only leave the chip id readable? `G/` flashes when `fts_crc_check` fails and skips when `flash_burn` sees a match. The id read did not run either check.
+- Does the controller's flash already hold valid firmware and CX? System info and the CRC status register can answer that without writing. That read does not call `fts_system_reset`. The id read did not run either check.
 - What does a touch report look like once the interrupt is allowed to fire?
 - The inner panel stays on its own plan.
