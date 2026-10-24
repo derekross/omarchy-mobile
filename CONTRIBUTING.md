@@ -95,7 +95,7 @@ Bring-up steps hang phones. Plan for it before you start:
 - **When the phone hangs:**
   1. Wait about 2 minutes. A dead-man undo, a watchdog reset or `panic=10` may bring it back on its own.
   2. Unplug and replug the cable once.
-  3. Force a restart: hold Power for about 30 s until the phone is off, then press Power.
+  3. Force a restart: hold Power for about 30 s until the phone is off, then press Power. On the Pixel 8 Pro, hold Power + Volume Up for 15-30 s; Power alone does nothing under our kernel ([BRINGUP-M1](device/husky/BRINGUP-M1.md) test 23).
   4. Reach fastboot by hand: with the phone off, hold Volume Down, add Power, and keep both held about 20 s until "Fastboot Mode" appears. Letting go early lands on the unlocked-bootloader warning, which carries on booting slot B.
   5. From fastboot, flash known-good images to slot B, or `fastboot --set-active=a` to boot stock Android.
 - **Slot fallback:** a slot B that hasn't been marked successful falls back to stock slot A after the bootloader's retries run out. Once `omamobile-boot-success` has marked slot B, don't rely on that fallback: use fastboot. Keep a known-good image set (we keep one in `~/android/mainline/known-good`).

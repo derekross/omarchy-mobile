@@ -3,8 +3,10 @@
  * Bring-up probe, never default: the real init, with lockups and RCU stalls
  * turned into a panic and a reset, and the init's omamobile.deadman marker
  * crashing at a time that encodes how far it got (initramfs/init). zuma's
- * ABL clears ramoops, so the timing is the log. Needs a kernel with the
- * lockup and hung-task detectors (~/android/mainline/zuma-debug.config).
+ * ABL clears ramoops, so the timing is the log. Needs a kernel with, on
+ * top of husky's kernel.config: CONFIG_DETECT_HUNG_TASK=y (defconfig turns
+ * it off), CONFIG_WQ_WATCHDOG=y, CONFIG_PANIC_ON_OOPS=y and
+ * CONFIG_DYNAMIC_DEBUG=y for the dyndbg line below.
  */
 /dts-v1/;
 /plugin/;
