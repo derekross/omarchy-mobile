@@ -127,7 +127,7 @@ each session. Those backups are never in git.
 | Inactive-slot boot | Omarchy `boot_b` set active; stock OTA `boot.img` on `boot_a` only | pass |
 | `version-bootloader` | empty on this ABL | noted |
 | Boot-success | GPT bit 54 set by hand on `boot_b` after first clean boot | pass |
-| PR-tip chain smoke (2026-10-30 ~07:46 Europe/Copenhagen) | RAM-only `fastboot boot` of chain image from this branch (no flash, no set_active). Stage-2 kernel was the private `7.3.0-rc6-dodge-gpu2` build (not the #115 head); package still `omamobile-device-dodge 20261016-1`. `tools/phone-smoke` overall **unknown**: required storage-guard/root/kernel-health/USB ok; display/GPU/touch/buttons/battery/sensors ok; required `boot` skip (forced cmdline, no slot suffix); required `session` not ok (Hyprland not up at ~40 s); sound cards none; Wi-Fi link down at that moment. Shared init still marked untested for a #115-head boot — see the follow-up smoke after the kernel tip RAM boot. | partial |
+| PR-tip chain smoke (2026-10-30 ~07:46 Europe/Copenhagen) | RAM-only `fastboot boot` of chain image from this branch (no flash, no set_active). Stage-2 kernel was the private `7.3.0-rc6-dodge-gpu2` build (not the #115 head); package still `omamobile-device-dodge 20261016-1`. `tools/phone-smoke` overall **unknown**: required storage-guard/root/kernel-health/USB ok; display/GPU/touch/buttons/battery/sensors ok; required `boot` skip (forced cmdline, no slot suffix); required `session` not ok (Hyprland not up at ~40 s); sound cards none; Wi-Fi link down at that moment. A later #115-head RAM boot (~09:28) **hung** on the console (dual memory map; fixed in kernel DTS + stage2-dtb); re-smoke of the #115 tip pending slot-B recovery. | partial |
 
 ## 7. GPT bit-54 record (for §3.1)
 
