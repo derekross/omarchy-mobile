@@ -75,6 +75,22 @@ i, j = memory_span(ours)
 block = ours[i:j]
 ours = ours[:i] + block.replace(re.search(r"reg = <[^>]*>;", block).group(0), live_reg) + ours[j:]
 
+# One top-level memory node only. A second hardcoded map beside
+# memory@a0000000 (filled above) hung a 2026-10-30 tip RAM boot.
+extras = list(re.finditer(r"\n\tmemory@[0-9a-fA-F]+ \{", ours))
+# memory_span already picked one; drop any other memory@… at root depth.
+if len(extras) > 1:
+    keep = memory_span(ours)[0]
+    for m in reversed(extras):
+        if m.start() == keep:
+            continue
+        a, b = node_span(ours, m.group(0))
+        # include the trailing newline after the closing brace line
+        end = b + 1
+        if end < len(ours) and ours[end] == "\n":
+            end += 1
+        ours = ours[:a] + ours[end:]
+
 if "ramoops" in opts:
     ours = insert_in(ours, "reserved-memory {", """
 		ramoops@880000000 {
