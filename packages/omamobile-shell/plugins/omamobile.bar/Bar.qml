@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import QtQuick
+import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Bluetooth
 import Quickshell.Io
@@ -13,8 +14,8 @@ import "StatusModel.js" as StatusModel
 // Phone status bar, a full `bar` option that replaces omarchy.bar.
 //
 // The phone has no window list, tray or workspaces to show, so this bar only
-// reports state: the clock on the left and connectivity, do-not-disturb and
-// battery on the right. The middle stays empty for the camera cutout. The
+// reports state: the clock on the left and unread notifications,
+// connectivity, do-not-disturb and battery on the right. The middle stays empty for the camera cutout. The
 // whole strip is one touch target: a tap or a downward pull opens the quick
 // settings sheet.
 Item {
@@ -119,6 +120,68 @@ Item {
     onTriggered: root.nowMs = Date.now()
   }
 
+  // Unread notifications: the files in Omarchy's notification history newer
+  // than the newest one the quick-settings shade has shown. The history is
+  // a directory of <timestamp>-<id>.json files (the notification service
+  // has no count to read through the host's proxy), watched through
+  // FolderListModel's file system watcher rather than polled. The shade
+  // writes its mark to notifications-seen and tells this bar by IPC.
+  readonly property string notificationsHistory: Quickshell.env("HOME") + "/.local/state/omarchy/notifications/history"
+  property double seenStamp: 0
+  property int unread: 0
+
+  FolderListModel {
+    id: historyFiles
+    folder: "file://" + root.notificationsHistory
+    nameFilters: ["*.json"]
+    showDirs: false
+    showDotAndDotDot: false
+    showHidden: false
+    sortField: FolderListModel.Unsorted
+    onCountChanged: Qt.callLater(root.countUnread)
+    onStatusChanged: Qt.callLater(root.countUnread)
+  }
+
+  // A file replaced by another (history trimmed to ten) keeps the count.
+  Connections {
+    target: historyFiles
+    function onRowsInserted() { Qt.callLater(root.countUnread) }
+    function onRowsRemoved() { Qt.callLater(root.countUnread) }
+    function onModelReset() { Qt.callLater(root.countUnread) }
+    function onDataChanged() { Qt.callLater(root.countUnread) }
+  }
+
+  function countUnread() {
+    var names = []
+    for (var i = 0; i < historyFiles.count; i++) names.push(historyFiles.get(i, "fileName"))
+    unread = StatusModel.unreadCount(names, seenStamp)
+  }
+
+  // The notification service makes the directory when it starts; if the
+  // bar got there first, watch it again once it can exist.
+  function rewatchHistory() {
+    if (historyFiles.count > 0) return
+    historyFiles.folder = ""
+    historyFiles.folder = "file://" + root.notificationsHistory
+  }
+
+  Timer { interval: 15000; running: true; onTriggered: root.rewatchHistory() }
+
+  function markSeen(value) {
+    var stamp = StatusModel.parseStamp(value)
+    if (stamp > seenStamp) seenStamp = stamp
+    rewatchHistory()
+    countUnread()
+  }
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.local/state/omamobile/notifications-seen"
+    printErrors: false
+    watchChanges: true
+    onLoaded: root.markSeen(text())
+    onFileChanged: reload()
+  }
+
   readonly property var btAdapter: Bluetooth.defaultAdapter
   readonly property bool bluetoothConnected: {
     var devices = Bluetooth.devices ? Bluetooth.devices.values : []
@@ -167,6 +230,17 @@ Item {
     function toggleQuickSettings(): string {
       root.toggleQuickSettings()
       return "ok"
+    }
+
+    // Quick settings' shade calls this with the newest notification it has
+    // shown; returns how many are still unread.
+    function notificationsSeen(stamp: string): string {
+      root.markSeen(stamp)
+      return String(root.unread)
+    }
+
+    function unread(): string {
+      return String(root.unread)
     }
   }
 
@@ -248,6 +322,29 @@ Item {
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.spacing.xl
+
+          // Notifications not yet seen in the quick-settings shade: a
+          // count in an accent pill. The strip's tap opens the shade.
+          Rectangle {
+            objectName: "unreadNotifications"
+            visible: root.unread > 0
+            anchors.verticalCenter: parent.verticalCenter
+            height: Math.max(18, Math.round(root.barSize * 0.45))
+            width: Math.max(height, unreadText.implicitWidth + Style.spacing.md * 2)
+            radius: height / 2
+            color: Commons.Color.accent
+
+            Text {
+              id: unreadText
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: String(root.unread)
+              color: root.background
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+          }
 
           StatusGlyph {
             visible: root.doNotDisturb

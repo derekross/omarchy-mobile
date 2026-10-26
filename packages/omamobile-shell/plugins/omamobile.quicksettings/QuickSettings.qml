@@ -11,6 +11,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "TilesModel.js" as TilesModel
+import "NotificationsModel.js" as NotificationsModel
 import "Readable.js" as Readable
 
 // Pull-down quick settings for the phone. The sheet drops from the top edge
@@ -20,6 +21,10 @@ import "Readable.js" as Readable
 // sideways swipe between pages, and volume. Tap outside it, swipe it up, or
 // press Escape to put it away. The Wi-Fi and Bluetooth tiles' chevrons (or a
 // long-press) open the panels in WifiPanel.qml and BluetoothPanel.qml.
+//
+// Under the sheet, a second card is the notification shade: Omarchy's
+// notification history, newest first, with Clear all (NotificationsModel.js).
+// The gear in the header opens Omarchy's menu at its root (Settings).
 //
 // The pencil under the expanded grid enters edit mode: tap a tile to remove
 // it, hold and drag one to move it, tap one under "Add tiles" to add it.
@@ -69,12 +74,14 @@ Item {
     nfc.refresh()
     fingerprint.refresh()
     keyboard.refresh()
+    refreshNotifications()
     clockFormatRead.running = true
   }
 
   // Host-initiated close (`shell hide`).
   function close() {
     if (editing) finishEditing()
+    confirmClear = false
     opened = false
   }
 
@@ -98,8 +105,28 @@ Item {
       brightness: brightness.available ? brightness.percent : null,
       volume: audio.available ? Math.round(audio.volume * 100) : null,
       wifiPanel: wifiPicker.opened,
-      bluetoothPanel: bluetoothPanelItem.opened
+      bluetoothPanel: bluetoothPanelItem.opened,
+      notifications: notifications.length
     })
+  }
+
+  // `shell call omamobile.quicksettings notificationRows ''`: the shade's rows
+  // as JSON (as last read; the sheet re-reads them when it opens).
+  // `clearNotifications ''` is Clear all without its confirming second tap.
+  function notificationRows() {
+    return JSON.stringify(notifications)
+  }
+
+  function clearNotifications() {
+    clearAllNotifications()
+    return "ok"
+  }
+
+  // `shell call omamobile.quicksettings openSettings ''`: the header's gear.
+  function openSettings() {
+    root.dismiss()
+    Quickshell.execDetached(["omarchy-menu", "summon", "root"])
+    return "ok"
   }
 
   // `shell call omamobile.quicksettings openBluetooth ''`: the same as the
@@ -732,6 +759,119 @@ Item {
     }
   }
 
+  // ---------------------------------------------------------------- notifications
+
+  // Omarchy's notification service keeps its history as files, one per
+  // notification (NotificationsModel.js has the format); its IPC can replay
+  // them as toasts but returns none of them, so the shade reads the files:
+  // the toasts on screen in the directory itself, the rest in history/.
+  // Clear all goes through the service's own IPC, on this shell instance like
+  // the DND tile: dismissAll moves the toasts on screen into history, then
+  // clear empties history (both run in order on the service's file queue).
+  readonly property string notificationsDir: Quickshell.env("HOME") + "/.local/state/omarchy/notifications"
+  // Where the bar's unread count starts from: the newest notification the
+  // shade has shown (omamobile.bar reads it at start and hears it by IPC).
+  readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omamobile"
+  property var notifications: []
+  property double nowMs: Date.now()
+  property double seenStamp: 0
+  property double seenWritten: 0
+
+  function refreshNotifications() {
+    nowMs = Date.now()
+    if (!notificationsRead.running) notificationsRead.running = true
+  }
+
+  Process {
+    id: notificationsRead
+    command: ["sh", "-c", "for f in \"$1\"/*.json \"$1\"/history/*.json; do [ -f \"$f\" ] && awk 1 \"$f\"; done; exit 0",
+              "sh", root.notificationsDir]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.notifications = NotificationsModel.parse(text)
+        var newest = NotificationsModel.newest(root.notifications)
+        if (root.opened && newest > root.seenStamp) {
+          root.seenStamp = newest
+          root.writeSeen()
+        }
+      }
+    }
+  }
+
+  // Keep the shade current while it is on screen (and its "5 min" true).
+  Timer {
+    interval: 3000
+    repeat: true
+    running: root.opened
+    onTriggered: root.refreshNotifications()
+  }
+
+  function writeSeen() {
+    if (seenWrite.running || seenWritten === seenStamp) return
+    seenWritten = seenStamp
+    seenWrite.command = ["sh", "-c",
+      "mkdir -p \"$1\" && printf '%s\\n' \"$2\" >\"$1/notifications-seen.new\" && mv -f \"$1/notifications-seen.new\" \"$1/notifications-seen\"; "
+      + "qs ipc -p \"$3\" call omamobile.bar notificationsSeen \"$2\" >/dev/null 2>&1; exit 0",
+      "sh", root.stateDir, String(seenStamp), Quickshell.shellDir]
+    seenWrite.running = true
+  }
+
+  Process {
+    id: seenWrite
+    onExited: root.writeSeen()
+  }
+
+  // Clear all takes two taps, like the other destructive actions here: the
+  // first turns it into "Clear all?" for a few seconds.
+  property bool confirmClear: false
+
+  Timer {
+    id: disarmClear
+    interval: 4000
+    onTriggered: root.confirmClear = false
+  }
+
+  function requestClearNotifications() {
+    if (!confirmClear) {
+      confirmClear = true
+      disarmClear.restart()
+      return
+    }
+    confirmClear = false
+    clearAllNotifications()
+  }
+
+  function clearAllNotifications() {
+    notifications = []
+    if (clearProc.running) return
+    clearProc.command = ["sh", "-c",
+      "qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear",
+      "sh", Quickshell.shellDir]
+    clearProc.running = true
+  }
+
+  Process {
+    id: clearProc
+    // The service's file queue runs after the IPC answers; read once it has.
+    onExited: notificationsLater.restart()
+  }
+
+  Timer {
+    id: notificationsLater
+    interval: 600
+    onTriggered: root.refreshNotifications()
+  }
+
+  // A row's tap: the toast's own action, or Omarchy's focus helper for the
+  // app that sent it, with the sheet out of the way.
+  function openNotification(entry) {
+    var argv = NotificationsModel.tapArgv(entry)
+    if (!argv) return
+    root.dismiss()
+    Quickshell.execDetached(argv)
+  }
+
   // ---------------------------------------------------------------- stubs
 
   // Mobile data over omamobile-modem-sit: the tile is the cellular bearer
@@ -1237,7 +1377,7 @@ Item {
         Item {
           visible: !root.editing
           width: parent.width
-          implicitHeight: visible ? Math.max(headerClock.implicitHeight, headerBattery.implicitHeight) : 0
+          implicitHeight: visible ? Math.max(headerClock.implicitHeight, headerBattery.implicitHeight, settingsButton.height) : 0
 
           Column {
             id: headerClock
@@ -1266,7 +1406,8 @@ Item {
           Text {
             id: headerBattery
             visible: root.hasBattery
-            anchors.right: parent.right
+            anchors.right: settingsButton.left
+            anchors.rightMargin: Style.spacing.md
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
             text: root.hasBattery
@@ -1275,6 +1416,19 @@ Item {
             color: root.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.title
+          }
+
+          // Omarchy's menu at its root: Setup, Style, Install and the rest
+          // (TOUCH-PLAN 1.3). Summon, not toggle: it opens even if the menu
+          // was left open under the sheet.
+          GlyphButton {
+            id: settingsButton
+            objectName: "settingsButton"
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            glyph: "󰒓"
+            foreground: root.foreground
+            onTapped: root.openSettings()
           }
         }
 
@@ -1599,6 +1753,200 @@ Item {
           }
         }
       }
+    }
+
+    // ---------- The notification shade: a card under the sheet that slides
+    // with it and takes the room left below it, scrolling past that.
+    BorderSurface {
+      id: shade
+
+      readonly property real top: sheet.y + sheet.height + Style.spacing.lg
+      readonly property real room: window.height - top - Style.gapsOut
+      readonly property real insets: shade.contentTopInset + shade.contentBottomInset
+      readonly property real listHeight: root.notifications.length > 0 ? shadeList.contentHeight : shadeEmpty.implicitHeight
+      readonly property real natural: insets + shadeHeader.height + shadeColumn.spacing + listHeight
+
+      visible: !root.editing && root.reveal > 0 && room >= insets + shadeHeader.height
+      x: sheet.x
+      y: top
+      width: sheet.width
+      height: Math.min(natural, room)
+      opacity: root.reveal
+      color: Commons.Color.popups.background
+      borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
+      radius: Style.cornerRadius
+      padding: root.pad
+
+      // Taps on the card stay off the scrim, which would close the sheet.
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: shadeColumn
+        anchors.fill: parent
+        anchors.topMargin: shade.contentTopInset
+        anchors.rightMargin: shade.contentRightInset
+        anchors.bottomMargin: shade.contentBottomInset
+        anchors.leftMargin: shade.contentLeftInset
+        spacing: Style.spacing.md
+
+        Item {
+          id: shadeHeader
+          width: parent.width
+          height: clearButton.touchSize
+
+          Text {
+            anchors.left: parent.left
+            anchors.right: clearButton.left
+            anchors.rightMargin: Style.spacing.lg
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: NotificationsModel.title(root.notifications.length)
+            color: root.foreground
+            font.family: Style.font.family
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+            elide: Text.ElideRight
+          }
+
+          SheetButton {
+            id: clearButton
+            objectName: "clearNotifications"
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.max(104, Style.space(112))
+            label: root.confirmClear ? "Clear all?" : "Clear all"
+            danger: root.confirmClear
+            foreground: root.foreground
+            enabled: root.notifications.length > 0
+            onTapped: root.requestClearNotifications()
+          }
+        }
+
+        Text {
+          id: shadeEmpty
+          visible: root.notifications.length === 0
+          width: parent.width
+          textFormat: Text.PlainText
+          text: "No notifications"
+          color: Qt.darker(root.foreground, 1.4)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Flickable {
+          id: shadeList
+          visible: root.notifications.length > 0
+          width: parent.width
+          height: Math.max(0, shade.height - shade.insets - shadeHeader.height - shadeColumn.spacing)
+          contentWidth: width
+          contentHeight: shadeRows.implicitHeight
+          boundsBehavior: Flickable.StopAtBounds
+          clip: true
+
+          Column {
+            id: shadeRows
+            width: shadeList.width
+            spacing: Style.spacing.xs
+
+            Repeater {
+              model: root.notifications
+              delegate: NotificationRow {
+                host: root
+                entry: modelData
+                width: shadeRows.width
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // A row of the shade: the sender's glyph, app and age, summary, and two
+  // lines of the body. A tap runs what a tap on the toast would have.
+  component NotificationRow: Item {
+    id: row
+    property var host: null
+    property var entry: ({})
+    readonly property bool actionable: !!NotificationsModel.tapArgv(entry)
+    readonly property color foreground: host ? host.foreground : Commons.Color.popups.text
+
+    height: Math.max(44, rowText.implicitHeight + Style.spacing.md * 2)
+
+    Rectangle {
+      anchors.fill: parent
+      radius: Style.cornerRadius
+      color: rowTouch.pressed ? Style.pressedFillFor(row.foreground, Commons.Color.accent) : "transparent"
+    }
+
+    Text {
+      id: rowGlyph
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spacing.md
+      anchors.top: parent.top
+      anchors.topMargin: Style.spacing.md
+      width: Style.font.iconLarge
+      horizontalAlignment: Text.AlignHCenter
+      textFormat: Text.PlainText
+      text: row.entry.glyph || "󰂚"
+      color: row.entry.urgency === 2 ? Commons.Color.urgent : row.foreground
+      font.family: Style.font.family
+      font.pixelSize: Style.font.iconLarge
+    }
+
+    Column {
+      id: rowText
+      anchors.left: rowGlyph.right
+      anchors.leftMargin: Style.spacing.lg
+      anchors.right: parent.right
+      anchors.rightMargin: Style.spacing.md
+      anchors.top: parent.top
+      anchors.topMargin: Style.spacing.md
+      spacing: Style.spacing.xxs
+
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: [row.entry.app, NotificationsModel.ago(row.entry.timestamp, row.host ? row.host.nowMs : Date.now())]
+          .filter(function(part) { return !!part }).join(" · ")
+        color: Qt.darker(row.foreground, 1.4)
+        font.family: Style.font.family
+        font.pixelSize: Readable.px(Style.font.caption)
+        elide: Text.ElideRight
+      }
+
+      Text {
+        visible: text !== ""
+        width: parent.width
+        textFormat: Text.PlainText
+        text: row.entry.summary || ""
+        color: row.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+        font.bold: true
+        elide: Text.ElideRight
+      }
+
+      Text {
+        visible: text !== ""
+        width: parent.width
+        textFormat: Text.PlainText
+        text: row.entry.body || ""
+        color: row.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+        wrapMode: Text.Wrap
+        maximumLineCount: 2
+        elide: Text.ElideRight
+      }
+    }
+
+    MouseArea {
+      id: rowTouch
+      anchors.fill: parent
+      enabled: row.actionable
+      cursorShape: Qt.PointingHandCursor
+      onClicked: if (row.host) row.host.openNotification(row.entry)
     }
   }
 

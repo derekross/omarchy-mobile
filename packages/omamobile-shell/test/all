@@ -60,6 +60,7 @@ grep -c 'gesturePolicy: TapHandler.DragThreshold' plugins/omamobile.quicksetting
 grep -c 'onTapped: bottomButton.modelData.action === "home" ? root.goHome() : root.clearAll()' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "Clear all asks first"
 grep -c 'onTapped: root.requestReset()' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "quick-settings Reset asks first"
 grep -c 'if (!settingsFlick.confirmRemove) { settingsFlick.confirmRemove = true; return }' plugins/omamobile.home/HomeSheets.qml >/dev/null || fail "a widget's Remove asks first"
+grep -c 'onTapped: root.requestClearNotifications()' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the shade's Clear all asks first"
 pass "touch: tiles and two-tap destructive actions"
 
 # Touch navigation (TOUCH-PLAN 1.2, 1.7, 1.8, 1.10, 2.5).
@@ -95,6 +96,22 @@ grep -c 'anchors.bottom: settingsFooter.top' $h/HomeSheets.qml >/dev/null || fai
 grep -c 'anchors.bottom: createFooter.top' $h/HomeSheets.qml >/dev/null || fail "Create is pinned under its field"
 pass "touch navigation: back, home pill, drawer pull, undo, fields in view"
 
+# The notification shade, the Settings gear and the bar's unread count
+# (TOUCH-PLAN 1.1, 1.3): Clear all goes through the notification service's
+# IPC on this shell (dismissAll, then clear), the gear opens Omarchy's menu
+# at its root, the shade reads the directories Omarchy's service writes, and
+# the bar hears the shade's mark on the IPC target it serves.
+qs=plugins/omamobile.quicksettings/QuickSettings.qml
+grep -cF '"qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear"' "$qs" >/dev/null || fail "Clear all dismisses the toasts, then clears the history"
+grep -cF 'Quickshell.execDetached(["omarchy-menu", "summon", "root"])' "$qs" >/dev/null || fail "the gear opens Omarchy's root menu"
+grep -cF '"/.local/state/omarchy/notifications"' "$qs" >/dev/null || fail "the shade reads Omarchy's notification files"
+grep -cF '"/.local/state/omarchy/notifications/history"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy's notification history"
+grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the shade tells the bar what it has shown"
+grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
+grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
+grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/null || fail "the Clipboard tile opens Omarchy's clipboard history"
+pass "notification shade, Settings gear, unread count and Clipboard wiring"
+
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
 # without needing the shell's own imports to resolve.
 qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
@@ -116,6 +133,7 @@ if command -v node >/dev/null; then
   node test/bluetooth-model.js || fail "Bluetooth model"
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
+  node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
   node test/home-model.js || fail "home screen model"
   node test/back-model.js || fail "back gesture model"
   # Our OWL runtime's core: probes against the reference runtime's recorded

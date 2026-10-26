@@ -98,6 +98,28 @@ function elapsed(ms) {
   return h > 0 ? h + ":" + (m < 10 ? "0" : "") + m + ":" + ss : m + ":" + ss
 }
 
+// Unread notifications: Omarchy's history files are named
+// <timestamp>-<id>.json (milliseconds since the epoch), and quick settings
+// records the newest one its shade has shown. 0 for a name without one.
+function stampOf(name) {
+  var match = /^(\d+)-/.exec(String(name || ""))
+  return match ? Number(match[1]) : 0
+}
+
+function parseStamp(text) {
+  var value = Number(String(text === undefined || text === null ? "" : text).trim())
+  return isFinite(value) && value > 0 ? value : 0
+}
+
+function unreadCount(names, seen) {
+  var list = names || []
+  var since = parseStamp(seen)
+  var count = 0
+  for (var i = 0; i < list.length; i++)
+    if (/\.json$/.test(String(list[i])) && stampOf(list[i]) > since) count++
+  return count
+}
+
 function batteryIcon(percent, charging, full) {
   if (percent < 0) return ""
   if (full) return "󰂅"
@@ -111,6 +133,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     findDevice: findDevice, connectedNetwork: connectedNetwork, wifiIcon: wifiIcon, networkIcon: networkIcon,
     cellularIcon: cellularIcon, cellGlyph: cellGlyph, cellText: cellText, parseCell: parseCell,
-    callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon
+    callChip: callChip, elapsed: elapsed, batteryIcon: batteryIcon,
+    stampOf: stampOf, parseStamp: parseStamp, unreadCount: unreadCount
   }
 }

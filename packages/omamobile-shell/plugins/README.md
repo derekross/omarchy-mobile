@@ -48,9 +48,10 @@ The phone has no touch lock yet (below), so idle stays off for now.
 
 A full bar that replaces `omarchy.bar`. It is 44 px tall (or the theme's bar
 size if larger), anchored to the top, and reserves its height so windows tile
-below it. Left: the clock. Right: do-not-disturb (when on), Bluetooth (when
-on), cellular signal (when a modem exists), Wi-Fi or Ethernet, battery glyph
-and percentage. The centre is left empty for the camera cutout.
+below it. Left: the clock. Right: the unread notification count (when
+there is one), do-not-disturb (when on), Bluetooth (when on), cellular
+signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
+percentage. The centre is left empty for the camera cutout.
 
 The whole strip is one touch target: a tap toggles quick settings, a downward
 pull past ~14 px opens it.
@@ -68,6 +69,16 @@ Settings live on the `bar` object in `shell.json`:
 | `showBatteryPercent` | `true` | |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
 
+**Unread notifications:** an accent pill with the number of files in
+Omarchy's notification history (`~/.local/state/omarchy/notifications/history/`,
+one `<timestamp>-<id>.json` per notification, at most ten) newer than the
+newest notification the quick-settings shade has shown. The notification
+service has no count to read through the host's proxy, so the bar watches
+the directory (`Qt.labs.folderlistmodel`, a file system watcher, not a poll).
+The shade records its mark in `~/.local/state/omamobile/notifications-seen`
+and calls `notificationsSeen` below. A toast that was acted on also lands in
+history, so it counts until the shade has been opened.
+
 **Mobile network and calls:** the cellular icon and the call chip come from
 `omamobile-cell-watch` and `omamobile-call-watch --observe` (see
 omamobile.call below); without a modem or omatel's agent they don't show.
@@ -79,6 +90,8 @@ gesture or key binds it yet:
 | --- | --- |
 | `pullDown` | Open quick settings |
 | `toggleQuickSettings` | Open or close it |
+| `notificationsSeen <timestamp>` | Notifications up to this one (milliseconds) have been seen; returns the unread count |
+| `unread` | The unread count |
 
 ## omamobile.quicksettings
 
@@ -138,6 +151,32 @@ beside the QML and are tested against fake commands in
 `test/tile-scripts.sh`.
 
 The plugin is `keepLoaded` so the sheet can animate out before it unmaps.
+
+### Settings and the notification shade
+
+The gear at the right of the sheet's header (44 px) puts the sheet away and
+opens Omarchy's menu at its root (`omarchy-menu summon root`): Setup, Style,
+Install, Update and the rest, which the phone otherwise reaches only from
+Power's hold menu (TOUCH-PLAN 1.3).
+
+Under the sheet, a second card is the notification shade (TOUCH-PLAN 1.1).
+It lists Omarchy's notifications, newest first: the toasts on screen and the
+history (Omarchy keeps ten), each with its glyph, app, age, summary and two
+lines of body as plain text. Omarchy's notification IPC can replay the
+history as toasts (`showHistory`) but returns none of it, so the shade reads
+the files the service keeps, `~/.local/state/omarchy/notifications/*.json`
+and `history/*.json` (format and rules in `NotificationsModel.js`, tests in
+`test/notifications-model.js`), when the sheet opens and every 3 s while it
+is open. A tap on a row puts the sheet away and runs what a tap on the toast
+runs: Omarchy's own action for its toasts (the `omarchy-exec-argv` hint the
+file keeps), otherwise `omarchy-hyprland-focus-app <app>`. Other senders'
+live actions die with the toast, so they can't be run from history.
+
+**Clear all** (44 px, two taps: the first turns it into "Clear all?" for 4 s)
+calls the notification service on this shell instance, `dismissAll` (the
+toasts on screen move into history) and then `clear` (history is emptied).
+The card takes the room left under the sheet and scrolls past that; it hides
+in edit mode, or when the sheet leaves no room for it.
 
 ### Wi-Fi picker
 
@@ -234,6 +273,9 @@ IPC:
 | `omarchy-shell shell call omamobile.quicksettings showPage <n>` | Expand and show page n (from 0) |
 | `omarchy-shell shell call omamobile.quicksettings tiles ''` | JSON: every tile with shown, available, enabled and status |
 | `omarchy-shell shell call omamobile.quicksettings setTiles 'wifi torch dnd'` | Save a layout (space-separated ids: `qs ipc` splits arguments on commas); `resetTiles ''` saves the default |
+| `omarchy-shell shell call omamobile.quicksettings notificationRows ''` | JSON: the shade's rows as last read |
+| `omarchy-shell shell call omamobile.quicksettings clearNotifications ''` | Clear all, without the confirming tap |
+| `omarchy-shell shell call omamobile.quicksettings openSettings ''` | The gear: Omarchy's root menu |
 
 ## omamobile.launcher
 
