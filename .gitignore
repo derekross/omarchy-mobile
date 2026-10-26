@@ -4,6 +4,7 @@ out/
 *.img
 keys/
 logs/
+local/
 
 # Python bytecode from running package code in place
 __pycache__/
