@@ -287,3 +287,12 @@ and panic reset have not been exercised on the phone. The provisioning
 container integration and root-image smoke test were skipped because their
 test image and a completed Omarchy root image were not present. ShellCheck
 passed for the new scripts.
+
+## Separate native-root development path (2026-10-19)
+
+The default descriptor and first-light tool above remain RAM-only. The explicit
+`FLAME_NATIVE=1` profile, runtime package, source-pinned loader build and
+separate userdata/boot-B gates are documented in
+[native/README.md](native/README.md), with bounded handset results and
+host-only publication changes in [native/RESULTS.md](native/RESULTS.md).
+This does not establish a release installer or a healthy stock A fallback.
