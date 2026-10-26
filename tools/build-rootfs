@@ -44,15 +44,18 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
 
+# Owner builds can select a private package repository and image directory.
+# Defaults retain the maintainer's out/repo and out/ layout.
 DEVICE=${DEVICE:-cheetah}
 KERNEL_OUT=${KERNEL_OUT:-$HOME/android/mainline/out-int}
 VERSION=$(date +%Y.%m.%d)
-ALLOW_MISSING="" KEEP_RAW=0
+ALLOW_MISSING="" KEEP_RAW=0 OVERLAY=""
 while (($#)); do
   case $1 in
     --version) VERSION=${2:?}; shift ;;
     --allow-missing) ALLOW_MISSING=${2:?}; shift ;;
     --keep-raw) KEEP_RAW=1 ;;
+    --overlay) OVERLAY=$(readlink -f "${2:?}"); shift ;;
     -h|--help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) alarm_die "unknown argument $1" ;;
   esac
@@ -60,14 +63,40 @@ while (($#)); do
 done
 [[ $VERSION =~ ^[0-9A-Za-z._-]+$ ]] || alarm_die "bad version '$VERSION'"
 [[ $DEVICE =~ ^[a-z0-9]+$ ]] || alarm_die "DEVICE must be a codename"
+if [[ -n $OVERLAY ]]; then
+  [[ -f $OVERLAY ]] || alarm_die "overlay not found"
+  python3 - "$OVERLAY" <<'PY'
+import pathlib, sys, tarfile
+with tarfile.open(sys.argv[1]) as archive:
+    for entry in archive:
+        path = pathlib.PurePosixPath(entry.name)
+        if path.is_absolute() or '..' in path.parts:
+            sys.exit('unsafe overlay path')
+        if not (entry.isdir() or entry.isfile() or entry.issym()):
+            sys.exit('overlay permits only directories, regular files and symlinks')
+        if entry.issym():
+            target = pathlib.PurePosixPath(entry.linkname)
+            if target.is_absolute():
+                sys.exit('absolute overlay symlink is not allowed')
+            depth = len(path.parent.parts)
+            for part in target.parts:
+                depth += -1 if part == '..' else 0 if part == '.' else 1
+                if depth < 0:
+                    sys.exit('overlay symlink escapes the root')
+PY
+fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || alarm_die "no $conf"
 DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
 [[ -n $DEVICE_PACKAGE ]] || alarm_die "$conf has no PACKAGE"
 ROOTFS_PACKAGES=$(sed -n 's/^ROOTFS_PACKAGES="\(.*\)"$/\1/p' "$conf")
 [[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
+ROOTFS_DIST_PACKAGES=$(sed -n 's/^ROOTFS_DIST_PACKAGES="\(.*\)"$/\1/p' "$conf")
+[[ $ROOTFS_DIST_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_DIST_PACKAGES may hold only package names"
+ROOTFS_PROFILE=$(sed -n 's/^ROOTFS_PROFILE=\([a-z0-9-]*\)$/\1/p' "$conf")
+[[ -z $ROOTFS_PROFILE || -f rootfs/packages.omamobile-$ROOTFS_PROFILE ]] || alarm_die "$conf: unknown rootfs profile"
 
-repo=out/repo/aarch64
+repo=$(realpath -m "${OMAMOBILE_REPO_DIR:-$ROOT/out/repo}")/aarch64
 [[ -f $repo/omamobile.db ]] ||
   alarm_die "no [omamobile] repository in out/repo: build it first with tools/build-packages (or tools/repo-build)"
 [[ -f $KERNEL_OUT/include/config/kernel.release ]] || alarm_die "no kernel build in $KERNEL_OUT (KERNEL_OUT=...)"
@@ -76,7 +105,7 @@ modules=$KERNEL_OUT/modules-$release.tar.zst
 [[ -f $modules ]] || alarm_die "no $modules: run KERNEL_OUT=$KERNEL_OUT bin/omamobile modules"
 
 name=omamobile-rootfs-$VERSION-aarch64
-out=$ROOT/out
+out=$(realpath -m "${OMAMOBILE_ROOTFS_OUT:-$ROOT/out}")
 mkdir -p "$out"
 work=$out/.rootfs-$VERSION
 rm -rf "$work"; mkdir -p "$work"
@@ -84,6 +113,8 @@ rm -rf "$work"; mkdir -p "$work"
 alarm_fetch
 image=$(alarm_build_image "$ROOT")
 volume=omamobile-rootfs-target-$$
+overlay_args=()
+[[ -z $OVERLAY ]] || overlay_args=(-v "$OVERLAY:/overlay.tar:ro")
 docker volume create "$volume" >/dev/null
 cleanup() { docker volume rm -f "$volume" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -92,10 +123,13 @@ start=$(date +%s)
 alarm_say "Building $name for $DEVICE (kernel $release)"
 commit=$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD -- rootfs packages tools device 2>/dev/null || echo "-dirty")
 docker run --rm --privileged --platform linux/arm64 \
-  -v "$ROOT:/src:ro" -v "$ROOT/out/repo:/repo:ro" -v "$modules:/modules:ro" \
+  "${overlay_args[@]}" \
+  -v "$ROOT:/src:ro" -v "${repo%/aarch64}:/repo:ro" -v "$modules:/modules:ro" \
   -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
   -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
   -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" \
+  -e ROOTFS_DIST_PACKAGES="$ROOTFS_DIST_PACKAGES" \
+  -e ROOTFS_PROFILE="$ROOTFS_PROFILE" \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \

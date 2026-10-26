@@ -186,6 +186,24 @@ grep -q '^usermod -aG wheel,audio,video,input' "$CALLS" || fail "a second run up
 [[ $(grep -cxF "$KEY" "$R/home/alice/.ssh/authorized_keys") == 1 ]] || fail "a second run doesn't duplicate the key"
 pass "running again is safe"
 
+# A device may need native firewall rules its kernel actually supports.
+mkdir -p "$R/usr/bin"
+printf '#!/bin/bash\necho device-firewall >> "$CALLS"\n' > "$R/usr/bin/omamobile-device-firewall"
+chmod +x "$R/usr/bin/omamobile-device-firewall"
+: > "$CALLS"
+good | sed '/^WIFI_/d' > "$R/etc/omamobile/firstboot.conf"
+run || fail "the device firewall succeeds"
+grep -qx device-firewall "$CALLS" || fail "the device firewall is called"
+grep -q '^ufw ' "$CALLS" && fail "device firewall bypasses UFW rules"
+grep -qx 'systemctl enable ufw.service' "$CALLS" && fail "device firewall does not enable UFW"
+pass "a device firewall replaces UFW setup"
+printf '#!/bin/bash\nexit 7\n' > "$R/usr/bin/omamobile-device-firewall"
+good | sed '/^WIFI_/d' > "$R/etc/omamobile/firstboot.conf"
+run && fail "a failed device firewall fails provisioning"
+[[ -f $R/etc/omamobile/firstboot.conf ]] || fail "a failed device firewall retains provisioning"
+rm "$R/usr/bin/omamobile-device-firewall"
+pass "a device firewall failure keeps the conf"
+
 # An essential step failing keeps the conf (minus the Wi-Fi secret) for the next boot
 rm -f "$R/var/lib/omamobile/firstboot/user"
 sed -i '/^alice:/d' "$R/etc/passwd"

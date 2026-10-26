@@ -28,8 +28,11 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
 
+# Optional owner-build namespaces; defaults retain the release workflow.
+# OMAMOBILE_REPO_DIR: repository directory (contains aarch64/).
+# OMAMOBILE_SIGNING_DIR: directory containing fingerprint and gnupg/.
 SLOW=(mesa hyprland libcamera)
-repo=out/repo/aarch64
+repo=$(realpath -m "${OMAMOBILE_REPO_DIR:-$ROOT/out/repo}")/aarch64
 all=0 force=0 nocheck=0 container_check=0 list=0 imports=() dirs=()
 while (($#)); do
   case $1 in
@@ -66,9 +69,10 @@ fi
 for d in "${dirs[@]}"; do [[ -f $d/PKGBUILD ]] || alarm_die "no PKGBUILD in $d"; done
 
 mkdir -p "$repo"
-export GNUPGHOME=$ROOT/keys/gnupg
-[[ -f keys/fingerprint && -d $GNUPGHOME ]] || alarm_die "no signing key in keys/ (maintainer only; see docs/RELEASES.md §10)"
-key=$(cat keys/fingerprint)
+signing_dir=${OMAMOBILE_SIGNING_DIR:-$ROOT/keys}
+export GNUPGHOME=$signing_dir/gnupg
+[[ -f $signing_dir/fingerprint && -d $GNUPGHOME ]] || alarm_die "no signing key in keys/ (maintainer only; see docs/RELEASES.md §10)"
+key=$(cat "$signing_dir/fingerprint")
 
 # The version makepkg will produce, from the PKGBUILD's own fields. Our
 # PKGBUILDs read pkgver from a version file through $startdir.
@@ -173,7 +177,7 @@ sign_and_index() {
     # Not an Arch machine: pacman's repo-add from the Arch Linux ARM image,
     # as this user, with the same key.
     docker run --rm --platform linux/arm64 -u "$(id -u):$(id -g)" \
-      -v "$ROOT/$repo:/repo" -v "$GNUPGHOME:/gnupg" -e GNUPGHOME=/gnupg -e HOME=/tmp -w /repo \
+      -v "$repo:/repo" -v "$GNUPGHOME:/gnupg" -e GNUPGHOME=/gnupg -e HOME=/tmp -w /repo \
       "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
   fi
 }
@@ -186,6 +190,12 @@ for dir in "${build[@]}"; do
   # PKGBUILDs install), minus makepkg's work directories and old packages.
   tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude='*.pkg.tar.*' \
     -C "$(dirname "$dir")" "./$name" | tar xf - -C "$work"
+  if [[ $name == omamobile-keyring && -n ${OMAMOBILE_KEYRING_DIR:-} ]]; then
+    cp "$OMAMOBILE_KEYRING_DIR"/omamobile{.gpg,-trusted,-revoked} "$work/$name/"
+  fi
+  if [[ $name == omamobile-device-alioth ]]; then
+    cp --remove-destination "$dir/reboot-to.c" "$work/$name/reboot-to.c"
+  fi
   out=$work/out && mkdir -p "$out"
   incheck=0
   if ((nocheck == 0)); then
@@ -215,7 +225,7 @@ for dir in "${build[@]}"; do
   [[ -f $repo/omamobile.db ]] && have_repo=1
   start=$(date +%s)
   docker run --rm --platform linux/arm64 \
-    -v "$work:/work" -v "$ROOT/$repo:/repo/aarch64:ro" \
+    -v "$work:/work" -v "$repo:/repo/aarch64:ro" \
     -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" -v "$ALARM_CACHE/src:/srcdest" \
     -e NAME="$name" -e HAVE_REPO="$have_repo" -e INCHECK="$incheck" \
     "$image" bash -c '

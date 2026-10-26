@@ -211,6 +211,9 @@ step() {
 }
 
 s_keyring() {
+  if [[ -z $ROOT && -x /usr/bin/omamobile-device-clock ]]; then
+    /usr/bin/omamobile-device-clock
+  fi
   if [[ ! -f $ROOT/etc/pacman.d/gnupg/trustdb.gpg ]]; then
     pacman-key --init
   fi
@@ -296,7 +299,8 @@ s_omarchy_system() {
   for part in config hardware login post-install; do
     while read -r leaf; do
       rel=${leaf#"$install/"}
-      if [[ " ${SKIP[*]} " == *" $rel "* ]]; then
+      if [[ " ${SKIP[*]} " == *" $rel "* ]] ||
+          { [[ $rel == config/firewall.sh ]] && [[ -x $ROOT/usr/bin/omamobile-device-firewall ]]; }; then
         echo "    skip $rel (not for a phone)"
         continue
       fi
@@ -325,11 +329,16 @@ s_services() {
   local unit
   for unit in NetworkManager.service systemd-networkd.service systemd-resolved.service sshd.service \
               sddm.service bluetooth.service systemd-timesyncd.service ufw.service; do
+    [[ $unit == ufw.service && -x $ROOT/usr/bin/omamobile-device-firewall ]] && continue
     systemctl enable "$unit" || echo "    could not enable $unit"
   done
   systemctl mask systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
   if [[ ! -L $ROOT/etc/resolv.conf ]]; then
     ln -sfn /run/systemd/resolve/stub-resolv.conf "$ROOT/etc/resolv.conf"
+  fi
+  if [[ -x $ROOT/usr/bin/omamobile-device-firewall ]]; then
+    "$ROOT/usr/bin/omamobile-device-firewall"
+    return
   fi
   ufw default deny incoming
   ufw default allow outgoing
