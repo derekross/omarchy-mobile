@@ -238,7 +238,14 @@ diff <(grep " before " logs/raven-tmu-initcheck.log | sed "s/.*before //") \
   the hardware trip fires (not here: it powers the phone off hot).
 - Afterwards: R2's rollback, so the next boot is quiet.
 
-**R4b (review kernel only, read-only):** #6-#8 on the same boot.
+**R4b (review kernel only, read-only):** #6-#8 on the same boot. Built
+2026-10-26: `out-gs101-int-review/images`, release
+`7.3.0-rc6-omamobile-push1-g1de37d2bef30` (push it as in R3 with
+`KERNEL_DIR=~/android/mainline/wt-gs101-int-review
+KERNEL_OUT=~/android/mainline/out-gs101-int-review`). Its DT differs from
+the running one's in three places only: no `assigned-clock-parents` on
+`usi_apm1`, the Bluetooth node's pin states (and their three groups), and
+`gpu_crit` at 115 °C. No early boot logo, as in R3.
 
 ```sh
 tools/phone-ssh 'cat /sys/kernel/debug/clk/clk_summary | grep -E "mout_apm_func|usi1_uart"
