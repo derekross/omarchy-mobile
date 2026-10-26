@@ -9,9 +9,11 @@
 #   device/husky/build-u3-root KERNEL_OUT [OUT_DIR]
 #
 # KERNEL_OUT is the kernel build the slot B images come from, with its modules
-# tarball (KERNEL_OUT=... bin/omamobile modules). OUT_DIR (default out/u3-root)
-# gets omamobile-rootfs-u3-husky-aarch64.img.zst, its .sha256 and its MANIFEST,
-# for tools/install-phone --rootfs. Needs docker. The image is assembled in
+# tarball (KERNEL_OUT=... bin/omamobile modules). OUT_DIR (default
+# out/husky/u3-root) gets omamobile-rootfs-u3-husky-aarch64.img.zst, its
+# .sha256 and its MANIFEST, for tools/install-phone --rootfs. The MANIFEST
+# names the tarball, package and modules by version and sha256, as
+# tools/build-rootfs's does: the tarball is "latest", so a rebuild can differ. Needs docker. The image is assembled in
 # Debian's own x86 container, which cross-compiles reboot-to.
 set -euo pipefail
 
@@ -49,7 +51,7 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 source "$repo/tools/lib/alarm.sh"
 (($# >= 1 && $# <= 2)) || alarm_die "usage: device/husky/build-u3-root KERNEL_OUT [OUT_DIR]"
 kout=$(readlink -f "$1")
-out=${2:-$repo/out/u3-root}
+out=${2:-$repo/out/husky/u3-root}
 mkdir -p "$out" && out=$(readlink -f "$out")
 [[ -f $kout/include/config/kernel.release ]] || alarm_die "no kernel build in $kout"
 rel=$(<"$kout/include/config/kernel.release")
@@ -69,6 +71,14 @@ docker run --rm -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
   debian:trixie-slim bash /in/build-u3-root --inside
 zstd -q -19 -T0 -f --rm "$out/root.img" -o "$out/$name.img.zst"
 (cd "$out" && sha256sum "$name.img.zst" >"$name.img.zst.sha256")
-printf 'device: husky (U3 test image: Arch Linux ARM base + omamobile-device-husky)\nkernel modules: %s\n' \
-  "$rel" >"$out/$name.MANIFEST"
+commit=$(git -C "$repo" rev-parse --short=12 HEAD)$(git -C "$repo" diff --quiet HEAD -- device/husky packages/omamobile-device-husky tools/lib 2>/dev/null || echo "-dirty")
+{
+  echo "# husky's U3 test root image"
+  echo "device: husky (Arch Linux ARM base + omamobile-device-husky)"
+  echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "repository commit: $commit"
+  echo "arch linux arm tarball sha256: $(sha256sum <"$ALARM_TARBALL" | cut -d' ' -f1)"
+  echo "omamobile-device-husky: $(<"$repo/packages/omamobile-device-husky/version")"
+  echo "kernel modules: $rel (tarball sha256 $(sha256sum <"$modules" | cut -d' ' -f1))"
+} >"$out/$name.MANIFEST"
 alarm_say "$out/$name.img.zst"

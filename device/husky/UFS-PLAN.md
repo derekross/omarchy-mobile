@@ -71,7 +71,7 @@ Root and `alarm` are locked, and there is no machine id. Built from U2c's kernel
 KERNEL_OUT=~/android/mainline/out-zuma-ufs2 bin/omamobile modules
 device/husky/build-u3-root ~/android/mainline/out-zuma-ufs2
 KERNEL_OUT=~/android/mainline/out-zuma-ufs2 tools/install-phone --device husky \
-  --rootfs out/u3-root/omamobile-rootfs-u3-husky-aarch64.img.zst \
+  --rootfs out/husky/u3-root/omamobile-rootfs-u3-husky-aarch64.img.zst \
   --bootloader-slots-match ripcurrent-17.0-15681527 --dry-run
 ```
 Then run the same `install-phone` without `--dry-run`. It needs the human's go, because it erases `userdata`, which holds stock Android's data. `--bootloader-slots-match` names the bootloader that both slots carry, as checked in stage 0.
@@ -119,8 +119,8 @@ Let the UFS device runtime-suspend, with the link in hibern8. zuma's CAL has hib
   - `rpm_lvl` is 3 (`SLEEP`, `HIBERN8`), `spm_lvl` 5, and `auto_hibern8` is empty.
 
   ufshcd links the other six LUNs to the device W-LUN as runtime-PM consumers (`ufshcd_setup_links`; `/sys/class/devlink` lists all six) [V], so the device suspends only when all six have.
-- **Step 2:**
-  - Arm a detached fallback first (`sleep 120; echo c > /proc/sysrq-trigger`, cancelled by a fresh ssh login).
+- **Step 2,** for each cycle:
+  - Arm a detached fallback first (`sleep 120; echo c > /proc/sysrq-trigger`). Cancel it only after this cycle's fresh ssh login, and arm a new one for the next cycle. If it fires, the panic reboot uses one of slot B's retries (above).
   - `echo auto` into `power/control` of `sda`-`sdd` and of both W-LUNs.
   - Wait for the device W-LUN's `runtime_status` to read `suspended`: at `rpm_lvl` 3 that is the device asleep with the link in hibern8.
   - Read one block of `boot_b` with `dd iflag=direct`. Without it, the page cache answers every read after the first, and the device never wakes.
@@ -128,7 +128,11 @@ Let the UFS device runtime-suspend, with the link in hibern8. zuma's CAL has hib
   - the device W-LUN suspends and resumes, and the direct read succeeds;
   - the guard's flags hold after the cycle (only `UFS_RW` writable, `sdb`-`sdd` `ro`, no `/dev/sda`);
   - kmsg shows no UIC error, no `ufshcd_err_handler` run and no reset.
-- **Stop if:** an error handler run, a reset, a guard flag changed, or no answer. If ssh still answers, put `power/control` back to `on`; otherwise use the buttons. Then add the CAL's hibern8 sequences before trying again. For context: on the Pixel 7 Pro, the first hibern8 exit at `spm_lvl` 3 needed a host reset (AGENTS.md, [SUSPEND-PLAN](../cheetah/SUSPEND-PLAN.md) S1). There, gs101's vendor `suspend` hook asserts the device reset (`HCI_GPIO_OUT`). Tensor G4's host data has no such hook, so that cause doesn't carry over; its `drv_init` sets `spm_lvl` 5, and `UFSHCD_QUIRK_BROKEN_AUTO_HIBERN8` is why `auto_hibern8` is empty (L/`drivers/ufs/host/ufs-exynos.c`) [V].
+- **Stop if:**
+  - **a guard flag changed:** `reboot-to bootloader` at once (Power + Volume Up if it won't go down, then Power + Volume Down), and run no more cycles. The initramfs guard marks each disk once and never looks at that name again, and this boot never reaches the check before `switch_root`, so a LUN that a host reset dropped and re-added would come back writable. The per-cycle check is the only thing that would see it.
+  - **an error handler run, a reset, or no answer:** if ssh still answers, put `power/control` back to `on`; otherwise use the buttons.
+
+  Then add the CAL's hibern8 sequences before trying again. For context: on the Pixel 7 Pro, the first hibern8 exit at `spm_lvl` 3 needed a host reset (AGENTS.md, [SUSPEND-PLAN](../cheetah/SUSPEND-PLAN.md) S1). There, gs101's vendor `suspend` hook asserts the device reset (`HCI_GPIO_OUT`). Tensor G4's host data has no such hook, so that cause doesn't carry over; its `drv_init` sets `spm_lvl` 5, and `UFSHCD_QUIRK_BROKEN_AUTO_HIBERN8` is why `auto_hibern8` is empty (L/`drivers/ufs/host/ufs-exynos.c`) [V].
 - **Rollback:** `on` again, or a reboot: nothing persists.
 - **Risk:** medium. A failed hibern8 exit can leave the link down until the host resets it. From the initramfs, nothing writes to UFS.
 
