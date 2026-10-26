@@ -16,6 +16,7 @@ the counterpart of `omamobile-device-cheetah`. Bring-up and results:
 | Wi-Fi power save on | `NetworkManager/conf.d/omamobile-raven-wifi-powersave.conf` |
 | Sleep (s2idle) once locked with the panel off, behind `omarchy-toggle omamobile-sleep on`; Wi-Fi stays connected across sleep (unloaded instead after a D3 failure, or with `/etc/omamobile/wifi-unload-for-sleep`) | `omamobile-sleepd` (+ user `.service`, enabled), `omamobile-sleep` (`system-sleep/omamobile`), `sleep.conf.d/10-omamobile.conf` |
 | Modem bring-up only: its PCIe driver and CPIF never load at boot | `modprobe.d/omamobile-raven-modem.conf` |
+| The second SIM (the eSIM, modem stack 1) is opt-in: `systemctl enable --now omamobile-sitd-2` on a phone that uses both SIMs. Enabled by default, a phone with one SIM or the eSIM switched off fails it at every boot | `omamobile-sitd-2.service` (from `omamobile-modem-sit`) |
 | Bluetooth on at boot; the session waits (at most 15 s) for the adapter | `bluetooth.service` (enabled), `sddm.service.d/`, `omamobile-wait-bluetooth` |
 
 `reboot-to.c` and `omamobile-bootctl.c` are cheetah's, unchanged: both are

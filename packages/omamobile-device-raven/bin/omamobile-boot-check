@@ -61,7 +61,8 @@ fi
 # AoC: audio and sensors
 check aoc "" test -e /run/omamobile/aoc-firmware-loaded
 check audio-card "" grep -q aoc-snd-card /proc/asound/cards
-check speakers "" systemctl is-active -q omamobile-speaker-protection
+# No speakers check: speaker protection isn't enabled on raven yet
+# (AUDIO-PLAN.md), and without it the amplifiers stay unloaded.
 check accelerometer "" sensor HasAccelerometer "" ""
 check light "" sensor HasAmbientLight "" ""
 check proximity "" sensor HasProximity "" ""
