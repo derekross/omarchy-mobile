@@ -283,6 +283,10 @@ fi
 if omarchy-done ensure omamobile-call-plugin; then
   add_plugin omamobile.call
 fi
+# The back gesture (omamobile.back): swipe in from a side edge for Escape.
+if omarchy-done ensure omamobile-back-plugin; then
+  add_plugin omamobile.back
+fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"

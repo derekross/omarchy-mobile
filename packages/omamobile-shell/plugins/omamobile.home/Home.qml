@@ -74,6 +74,8 @@ Item {
   property string sheet: ""
   property string settingsId: ""
   property string notice: ""
+  // The item removed last, as findItem saw it, while its Undo chip shows.
+  property var undoRemoved: null
   readonly property bool wantsKeyboard: sheet === "apps" || sheet === "settings" || sheet === "create" || owlTyping
 
   // Bumped when desktop entries change, so app tiles look themselves up again.
@@ -866,9 +868,32 @@ Item {
     return next.placed.id
   }
 
+  // Removing takes one tap (or Remove's two in the settings sheet), so it
+  // can be undone for a few seconds (TOUCH-PLAN 1.10): the chip puts the
+  // item back with its settings (a weather place, a note), in its cell or
+  // the nearest free one, even after other edits.
   function removeItem(id) {
+    var found = HomeModel.findItem(layout, id)
+    if (!found) return
     commit(HomeModel.removeItem(layout, id))
     if (settingsId === id) { sheet = ""; settingsId = "" }
+    undoRemoved = found
+    notice = found.item.kind === "app" ? "App removed" : "Widget removed"
+    noticeTimer.interval = 5000
+    noticeTimer.restart()
+  }
+
+  function undoRemove() {
+    var removed = undoRemoved
+    undoRemoved = null
+    notice = ""
+    noticeTimer.stop()
+    if (!removed) return "none"
+    var next = HomeModel.restoreItem(layout, removed)
+    if (!next) { flash("No room to put it back"); return "full" }
+    commit(next)
+    goToPage(next.placed.page, true)
+    return removed.item.id
   }
 
   function moveItem(id, page, x, y) {
@@ -903,10 +928,12 @@ Item {
   }
 
   function flash(text) {
+    undoRemoved = null
     notice = text
+    noticeTimer.interval = 2200
     noticeTimer.restart()
   }
-  Timer { id: noticeTimer; interval: 2200; onTriggered: root.notice = "" }
+  Timer { id: noticeTimer; interval: 2200; onTriggered: { root.notice = ""; root.undoRemoved = null } }
 
   // ---------------------------------------------------------------- host lifecycle and IPC
 
@@ -980,6 +1007,7 @@ Item {
     })
   }
   function dump() { return HomeModel.serialize(layout) }
+  function undo() { return undoRemove() }
 
   // ---------------------------------------------------------------- the surface
 
@@ -1142,25 +1170,61 @@ Item {
         }
       }
 
-      // ---------- a short notice
+      // ---------- a short notice, with Undo after a remove
       Rectangle {
+        id: noticePill
         z: 60
         visible: root.notice !== ""
+        readonly property bool canUndo: root.undoRemoved !== null
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: dots.top
         anchors.bottomMargin: Style.spacing.lg
-        width: noticeText.implicitWidth + Style.spacing.xxl * 2
-        height: noticeText.implicitHeight + Style.spacing.lg * 2
+        width: noticeText.implicitWidth + Style.spacing.xxl * 2 + (canUndo ? undoChip.width + Style.spacing.md : 0)
+        height: canUndo ? root.touch : noticeText.implicitHeight + Style.spacing.lg * 2
         radius: height / 2
         color: Commons.Color.menu.background
         Text {
           id: noticeText
-          anchors.centerIn: parent
+          anchors.left: parent.left
+          anchors.leftMargin: Style.spacing.xxl
+          anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
           text: root.notice
           color: root.foreground
           font.family: Style.font.family
           font.pixelSize: Style.font.body
+        }
+        // A full touch target, though the chip looks smaller.
+        Item {
+          id: undoChip
+          visible: noticePill.canUndo
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: undoText.implicitWidth + Style.spacing.xxl * 2
+          height: root.touch
+          Rectangle {
+            anchors.fill: parent
+            anchors.margins: Style.spacing.xs
+            radius: height / 2
+            color: undoTap.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent"
+          }
+          Text {
+            id: undoText
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: "Undo"
+            color: Commons.Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+          // A MouseArea, as the remove cross: it keeps the tap from the
+          // page below, where a tap would leave edit mode.
+          MouseArea {
+            id: undoTap
+            anchors.fill: parent
+            onClicked: root.undoRemove()
+          }
         }
       }
 

@@ -21,6 +21,7 @@ logical at scale 3).
 | `omamobile.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
+| `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -237,10 +238,18 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
 * **Dock (always on screen).** A search pill, "Search apps or ask Claude…",
   in a bar-coloured strip that reserves its height so windows tile above it.
   Tapping it opens the drawer.
+* **Home pill (over an app, where the dock is hidden).** A light bar with a
+  dark outline, so it shows over dark and light apps, at the bottom middle.
+  Swipe up from it to go home; swipe up and hold, or further, for recent apps.
+  The swipe may start anywhere in a 240x44 px strip around it (an input mask:
+  the rest of the bottom edge stays the app's, but the app loses taps in that
+  strip).
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
-  sits by your thumb, highlighted.
+  sits by your thumb, highlighted. Pull the header down, or the grid when it
+  is scrolled to its top, past about 80 px to close it (the drawer follows the
+  finger); the chevron at the top right still closes it too.
 * **Ask the agent.** Any text also offers an "Ask Claude" row above the input.
   Text that reads as a prompt (3+ words, ends in `?`, `.` or `!`, or matches no
   app) makes that row the primary action: it is highlighted, the input glyph
@@ -335,7 +344,9 @@ wallpaper, swiped sideways, with page dots above the dock.
   drag an item to move it (dropped on an item of the same size, the two swap;
   on a bigger one, it takes the nearest free cell; dragged past the left or
   right edge, it moves to that page, making a new page on the right), drag
-  the round corner handle to resize a widget, tap the cross to remove, tap a
+  the round corner handle to resize a widget, tap the cross to remove (an
+  **Undo** chip stays for 5 seconds and puts the item back, with its
+  settings, where it was or in the nearest free cell), tap a
   widget for its settings. The toolbar: **Widgets** and **Apps** add to the
   page on screen (or the next one with room), **Wallpaper** opens Omarchy's
   Style menu (what the desktop's long-press opened before this surface
@@ -404,6 +415,7 @@ IPC (`omarchy-shell shell call omamobile.home <method> <arg>`):
 | `dump ''` | The layout as stored |
 | `goHome ''` / `page <n>` | Show the home page / page n (from 0) |
 | `edit on` / `edit off` | Enter (returns `busy` during a fingerprint operation) or leave edit mode |
+| `undo ''` | Put back the item removed last, while its Undo chip shows; `none` otherwise |
 | `addApp <desktop id>` / `addWidget <type>` | Add to the page on screen; returns the new item's id or `full` |
 | `showSheet widgets\|apps\|pages\|create` / `settings <item id>` | Open an edit sheet / a widget's settings |
 | `widgets ''` / `widgetStatus <id>` | JSON: the user's widgets (or one) with status, errors, warnings, capabilities, undeclared capabilities, hash, folder and how often it is placed |
@@ -599,6 +611,28 @@ keyboard on demand (showing closes the sheet).
 
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).
+
+## omamobile.back
+
+The back gesture, as on Android: swipe in from the left or right edge and let
+go once the arrow fills in (about 56 px in, more across than along the edge).
+Back is Escape, sent through Hyprland's own dispatcher
+(`hl.dsp.send_key_state`, a key down and a key up 50 ms later, as Omarchy's
+clipboard bindings send keys) to whatever has the keyboard focus: an app's
+dialog, menu or popover, a terminal app, or a shell sheet or the drawer. A
+sheet that doesn't take the keyboard (the home screen's Widgets and Pages
+sheets) closes with a tap outside it instead.
+
+Each edge is a 14 px strip on the overlay layer, masked like the home pill,
+in a window wide enough to draw the arrow that follows the finger. Normal
+exclusion keeps the strips between the status bar and the on-screen keyboard
+(or the dock), so they never take the keyboard's edge keys. They hide for a
+real fullscreen window, as the home pill does, and aren't shown over the
+lock. A page swipe on the home screen that starts in the outer 14 px goes
+back instead; start it further in.
+
+IPC: `omarchy-shell shell call omamobile.back back ''` (the same as the
+gesture) and `state ''`.
 
 ## omamobile.update
 

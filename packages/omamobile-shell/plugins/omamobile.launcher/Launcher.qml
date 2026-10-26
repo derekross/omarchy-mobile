@@ -234,6 +234,20 @@ Item {
   property real reveal: opened ? 1 : 0
   Behavior on reveal { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
+  // How far the drawer is pulled down by a finger (pull to close), the pull
+  // that closes it, and the first pixels a tap's jitter may move.
+  // pulling: a finger is pulling now; pullMoved: this touch moved the
+  // drawer, so it is not also a tap on an app.
+  property real pull: 0
+  property bool pulling: false
+  property bool pullMoved: false
+  readonly property int pullToClose: Math.max(80, Style.space(80))
+  readonly property int pullSlop: 8
+  Behavior on pull {
+    enabled: !root.pulling
+    NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+  }
+
   // ---------------------------------------------------------------- dock
 
   Variants {
@@ -296,7 +310,7 @@ Item {
   // below it: it gives way to the on-screen keyboard (squeekboard's bottom
   // row ends where the strip starts) and to fullscreen windows (video, the
   // screensaver), and its input mask leaves only the middle of the strip
-  // to the pill.
+  // to the pill. The back gesture (omamobile.back) has the side edges.
   property bool oskOpen: false
 
   Process {
@@ -383,7 +397,10 @@ Item {
 
       visible: root.appOnScreen && !root.opened && !root.oskOpen && !root.fullscreenOnScreen
       anchors { bottom: true; left: true; right: true }
-      implicitHeight: 18
+      // A full touch target tall (TOUCH-PLAN 2.5): the swipe may start
+      // anywhere in the 240x44 px strip around the pill, not only on its
+      // bottom 18 px. The app loses taps in that strip, as on iOS.
+      implicitHeight: root.touch
       exclusionMode: ExclusionMode.Ignore
       color: "transparent"
       WlrLayershell.namespace: "omamobile-home-indicator"
@@ -394,14 +411,28 @@ Item {
       Item {
         anchors.fill: parent
 
+        // A light pill in a dark outline with a soft halo, so it shows over
+        // a dark app and a white one (a browser page, a document) alike.
         Rectangle {
+          id: pillHalo
+          anchors.centerIn: pillBar
+          width: pillBar.width + 6
+          height: pillBar.height + 6
+          radius: height / 2
+          color: Qt.rgba(0, 0, 0, 0.22)
+        }
+
+        Rectangle {
+          id: pillBar
           anchors.horizontalCenter: parent.horizontalCenter
           anchors.bottom: parent.bottom
-          anchors.bottomMargin: 5
+          anchors.bottomMargin: 6
           width: 120
-          height: 5
+          height: 6
           radius: height / 2
-          color: Qt.rgba(1, 1, 1, 0.6)
+          color: Qt.rgba(1, 1, 1, 0.9)
+          border.width: 1
+          border.color: Qt.rgba(0, 0, 0, 0.55)
         }
 
         Item {
@@ -470,15 +501,50 @@ Item {
     // one holds exclusive focus, and that includes the on-screen keyboard.
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
-    onVisibleChanged: if (visible) Qt.callLater(function() { input.forceActiveFocus() })
+    onVisibleChanged: {
+      if (visible) Qt.callLater(function() { input.forceActiveFocus() })
+      else root.pull = 0
+    }
 
     Rectangle {
       id: sheet
       width: parent.width
       height: parent.height
-      y: Math.round((1 - root.reveal) * Style.space(80))
-      opacity: root.reveal
+      y: Math.round((1 - root.reveal) * Style.space(80) + root.pull)
+      opacity: root.reveal * Math.max(0.5, 1 - root.pull / Math.max(1, height))
       color: Commons.Color.menu.background
+
+      // Pull down to close (TOUCH-PLAN 1.8), as on Android: a drag down that
+      // starts on the header, or on the grid while it is scrolled to its
+      // top, moves the drawer with the finger, and letting go past
+      // pullToClose closes it (less springs back). A PointHandler only
+      // watches (a passive grab), so the grid still scrolls and the app
+      // cells still take taps; the grid can't scroll further up from its
+      // top (StopAtBounds), so it stays put while the drawer follows.
+      PointHandler {
+        id: pullPoint
+        readonly property real dy: active ? point.scenePosition.y - point.scenePressPosition.y : 0
+        onActiveChanged: {
+          if (active) {
+            var at = point.pressPosition
+            var onHeader = at.y < header.y + header.height
+            var onGridTop = !root.hasQuery && grid.atYBeginning
+              && at.y >= grid.y && at.y < grid.y + grid.height
+            root.pullMoved = false
+            root.pulling = root.opened && (onHeader || onGridTop)
+            return
+          }
+          var close = root.pulling && root.pull > root.pullToClose
+          root.pulling = false
+          if (close) root.dismiss()
+          else root.pull = 0
+        }
+        onDyChanged: {
+          if (!root.pulling || !active) return
+          root.pull = Math.max(0, dy - root.pullSlop)
+          if (root.pull > 0) root.pullMoved = true
+        }
+      }
 
       // ---------- Header: count and a collapse control
       Item {
@@ -794,8 +860,9 @@ Item {
     MouseArea {
       id: cellTouch
       anchors.fill: parent
-      onClicked: cell.tapped()
-      onPressAndHold: cell.held()
+      // Not when the touch pulled the drawer down instead.
+      onClicked: if (!root.pullMoved) cell.tapped()
+      onPressAndHold: if (!root.pullMoved) cell.held()
     }
   }
 }

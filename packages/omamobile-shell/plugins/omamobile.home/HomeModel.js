@@ -601,6 +601,29 @@ function removeItem(layout, id) {
   return out
 }
 
+// Put back an item removeItem took out (Undo), given what findItem said
+// about it before: on its old page, in its old cell when that is still free,
+// else the nearest free cell there, else wherever placeOn finds room. null
+// when it is still (or again) in the layout, or no longer fits the grid.
+function restoreItem(layout, removed) {
+  if (!removed || !removed.item || findItem(layout, removed.item.id)) return null
+  var out = copy(layout)
+  var it = copy(removed.item)
+  if (!fits(out.grid, { x: 0, y: 0, w: it.w, h: it.h })) return null
+  var page = clampInt(removed.page, 0, out.pages.length - 1, 0)
+  var items = out.pages[page].items
+  var spot = isFree(items, out.grid, it, null) ? { x: it.x, y: it.y }
+    : nearestFreeSpot(items, out.grid, it.x, it.y, it.w, it.h, null)
+  if (spot) {
+    it.x = spot.x; it.y = spot.y
+    items.splice(clampInt(removed.index, 0, items.length, items.length), 0, it)
+    out.placed = { page: page, x: it.x, y: it.y }
+    return out
+  }
+  out = placeOn(out, page, it)
+  return out.placed ? out : null
+}
+
 // Move to (x, y) on page `pageIndex` (the same page or another). A spot that
 // is taken or off the grid snaps to the nearest free one; with none free on
 // that page the layout comes back unchanged. result.moved says if it moved.
@@ -830,7 +853,7 @@ if (typeof module !== "undefined") {
     emptyLayout: emptyLayout, defaultLayout: defaultLayout, normalizeAppId: normalizeAppId,
     normalize: normalize, serialize: serialize, parse: parse, mergeConfig: mergeConfig,
     findItem: findItem, missingApps: missingApps,
-    placeOn: placeOn, addWidget: addWidget, addApp: addApp, removeItem: removeItem,
+    placeOn: placeOn, addWidget: addWidget, addApp: addApp, removeItem: removeItem, restoreItem: restoreItem,
     moveItem: moveItem, resizeItem: resizeItem, setConfig: setConfig,
     addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid,
     weatherText: weatherText, geocodeUrl: geocodeUrl, forecastUrl: forecastUrl,

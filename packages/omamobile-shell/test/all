@@ -62,6 +62,39 @@ grep -c 'onTapped: root.requestReset()' plugins/omamobile.quicksettings/QuickSet
 grep -c 'if (!settingsFlick.confirmRemove) { settingsFlick.confirmRemove = true; return }' plugins/omamobile.home/HomeSheets.qml >/dev/null || fail "a widget's Remove asks first"
 pass "touch: tiles and two-tap destructive actions"
 
+# Touch navigation (TOUCH-PLAN 1.2, 1.7, 1.8, 1.10, 2.5).
+# Back: edge strips that send Escape through Hyprland's own dispatcher, on
+# for new and existing users, kept between the bar and the keyboard, and
+# never over the lock.
+b=plugins/omamobile.back/Back.qml
+python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables the back gesture"
+grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
+grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
+grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
+grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
+grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back strips stay clear of the bar and the keyboard"
+grep -c 'visible: !root.fullscreenOnScreen' "$b" >/dev/null || fail "back strips hide for fullscreen windows"
+if grep -n 'omamobile-back' hypr/phone.lua | grep -c above_lock >/dev/null; then fail "back strips never work over the lock"; fi
+if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail "back uses Hyprland's dispatcher"; fi
+# Home pill: a 44 px hit strip and a pill with an outline.
+l=plugins/omamobile.launcher/Launcher.qml
+grep -c 'implicitHeight: root.touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
+grep -c 'border.color: Qt.rgba(0, 0, 0, 0.55)' "$l" >/dev/null || fail "the home pill has a dark outline"
+# Drawer: pull down to close, and a pull is not also a tap on an app.
+grep -c 'var close = root.pulling && root.pull > root.pullToClose' "$l" >/dev/null || fail "pulling the drawer down closes it"
+grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail "a pull doesn't launch the app under it"
+# Home: Undo after a remove; sheets keep the focused field in view, with
+# their buttons pinned outside the Flickable.
+h=plugins/omamobile.home
+grep -c 'var next = HomeModel.restoreItem(layout, removed)' $h/Home.qml >/dev/null || fail "Undo restores the removed item"
+grep -c 'onClicked: root.undoRemove()' $h/Home.qml >/dev/null || fail "the notice offers Undo"
+[[ $(grep -c 'sheets.keepInView(settingsFlick)' $h/HomeSheets.qml) -ge 3 && $(grep -c 'sheets.keepInView(createFlick)' $h/HomeSheets.qml) -ge 3 ]] \
+  || fail "the settings and create sheets scroll the focused field into view"
+grep -c 'anchors.bottom: settingsFooter.top' $h/HomeSheets.qml >/dev/null || fail "Save and Remove are pinned under the settings"
+grep -c 'anchors.bottom: createFooter.top' $h/HomeSheets.qml >/dev/null || fail "Create is pinned under its field"
+pass "touch navigation: back, home pill, drawer pull, undo, fields in view"
+
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
 # without needing the shell's own imports to resolve.
 qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
@@ -84,6 +117,7 @@ if command -v node >/dev/null; then
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/home-model.js || fail "home screen model"
+  node test/back-model.js || fail "back gesture model"
   # Our OWL runtime's core: probes against the reference runtime's recorded
   # outputs, the resource caps, sh() quoting, and the phone's rules.
   node test/owl-core.js >/dev/null || { node test/owl-core.js | grep -v '^ok'; fail "OWL runtime core"; }

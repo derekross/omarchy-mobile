@@ -187,6 +187,36 @@ test("remove and config", () => {
   assert.deepStrictEqual(l.pages[0].items, [])
 })
 
+test("undo puts a removed item back with its settings", () => {
+  let l = layoutOf([app("a1", 0, 0), widget("w1", "weather", 0, 1, 4, 1), app("a2", 1, 0)])
+  l = M.setConfig(l, "w1", { enabled: true, place: "Paris" })
+  const removed = M.findItem(l, "w1")
+  const before = M.serialize(l)
+  const gone = M.removeItem(l, "w1")
+  // In its old cell, at its old place in the page's list
+  const back = M.restoreItem(gone, removed)
+  assert.deepStrictEqual(back.placed, { page: 0, x: 0, y: 1 })
+  delete back.placed
+  assert.strictEqual(M.serialize(back), before)
+  // Something else took the cell meanwhile: the nearest free one
+  const occupied = layoutOf([app("a1", 0, 0), app("a2", 1, 0), app("b", 2, 1)])
+  const near = M.restoreItem(occupied, removed)
+  assert.deepStrictEqual(near.placed, { page: 0, x: 0, y: 2 })
+  assert.strictEqual(M.findItem(near, "w1").item.config.place, "Paris")
+  assert.ok(M.findItem(near, "b"))
+  // Its page is full: the next page with room
+  const full = layoutOf([widget("big", "notes", 0, 0, 4, 6)], [])
+  const onNext = M.restoreItem(full, { page: 0, index: 0, item: app("z", 0, 0) })
+  assert.deepStrictEqual(onNext.placed, { page: 1, x: 0, y: 0 })
+  // Its page was removed: the last page
+  const lastPage = M.restoreItem(layoutOf([]), { page: 3, index: 0, item: app("y", 1, 1) })
+  assert.deepStrictEqual(lastPage.placed, { page: 0, x: 1, y: 1 })
+  // Already back, or bigger than the grid now: nothing to do
+  assert.strictEqual(M.restoreItem(back, removed), null)
+  assert.strictEqual(M.restoreItem(layoutOf([]), { page: 0, index: 0, item: widget("w9", "notes", 0, 0, 6, 1) }), null)
+  assert.strictEqual(M.restoreItem(gone, null), null)
+})
+
 test("pages: add, remove, reorder, home follows", () => {
   let l = layoutOf([app("a", 0, 0)], [app("b", 0, 0)], [app("c", 0, 0)])
   l = M.setHome(l, 1)
