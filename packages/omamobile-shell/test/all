@@ -148,6 +148,9 @@ grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the sh
 grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
 grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
 grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/null || fail "the Clipboard tile opens Omarchy's clipboard history"
+# Qt 6.12 refuses to load a file that redeclares an Item's FINAL anchor
+# lines (0.2.25's shade had "property real top", and quick settings didn't load).
+if grep -nE 'property +[a-z]+ +(top|bottom|left|right|horizontalCenter|verticalCenter|baseline) *:' plugins/*/*.qml; then fail "no plugin redeclares an anchor line"; fi
 pass "notification shade, Settings gear, unread count and Clipboard wiring"
 
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error

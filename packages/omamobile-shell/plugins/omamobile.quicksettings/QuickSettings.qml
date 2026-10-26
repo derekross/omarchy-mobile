@@ -1760,15 +1760,17 @@ Item {
     BorderSurface {
       id: shade
 
-      readonly property real top: sheet.y + sheet.height + Style.spacing.lg
-      readonly property real room: window.height - top - Style.gapsOut
+      // Not "top": every Item already has a FINAL top anchor line, and
+      // Qt 6.12 refuses to load a file that redeclares it.
+      readonly property real shadeTop: sheet.y + sheet.height + Style.spacing.lg
+      readonly property real room: window.height - shadeTop - Style.gapsOut
       readonly property real insets: shade.contentTopInset + shade.contentBottomInset
       readonly property real listHeight: root.notifications.length > 0 ? shadeList.contentHeight : shadeEmpty.implicitHeight
       readonly property real natural: insets + shadeHeader.height + shadeColumn.spacing + listHeight
 
       visible: !root.editing && root.reveal > 0 && room >= insets + shadeHeader.height
       x: sheet.x
-      y: top
+      y: shadeTop
       width: sheet.width
       height: Math.min(natural, room)
       opacity: root.reveal
