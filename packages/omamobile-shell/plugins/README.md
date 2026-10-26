@@ -290,6 +290,33 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   The swipe may start anywhere in a 240x44 px strip around it (an input mask:
   the rest of the bottom edge stays the app's, but the app loses taps in that
   strip).
+* **Under the keyboard.** While squeekboard is up over an app, the masked
+  strip gives way (it would take the bottom row's keys) and the pill moves
+  into a 32 px bar-coloured strip of its own under the keyboard, as Android's
+  gesture bar does. The same swipes work from anywhere along it. Bottom to
+  top:
+
+  ```
+  +-----------------------------+
+  | app (resized above both)    |
+  | [hide-keyboard button]      |  omamobile-osk-hide, overlay, normal exclusion
+  +-----------------------------+
+  | squeekboard                 |  "osk", top layer, reserves its height
+  +-----------------------------+
+  |         ==========          |  omamobile-home-strip, bottom layer, 32 px,
+  +-----------------------------+  reserves its height
+  ```
+
+  The strip is on the bottom layer and reserves its height (an exclusive
+  zone). Hyprland lays out the surfaces that reserve space layer by layer
+  from the bottom, so the strip takes the screen's edge first and the
+  keyboard sits right above it, as it sits above the dock on the home
+  screen; the strip covers no key, and a swipe that starts in it stays its
+  own as the finger crosses the keyboard. It isn't shown for a fullscreen
+  window, with the drawer open, or under the lock screen's keyboard (asked
+  through `omarchy-shell lock isLocked` each time the keyboard comes up).
+  The log names where a swipe started:
+  `omamobile-home-indicator: swipe -142 recents (keyboard)`, or `(pill)`.
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
@@ -361,6 +388,17 @@ prompt, NFC links and the Create-a-widget agent.
   reverse-DNS part, Exec's program; web apps by their `chrome-<host>_` class).
   Terminals (and `omamobile-launch app --new`) always open a new window, each
   on its own screen. Links open in the running browser, shown first.
+* **Clear all** in recent apps takes two taps (the first turns it into
+  "Close N apps?" for 4 s), closes every window, then leaves recent apps.
+  Each window gets the foreign-toplevel close request; one still open 2 s
+  later gets Hyprland's (`hl.dsp.window.close({ window = "address:…" })`).
+  The log says `omamobile-switcher: clear all, closing N windows`, and
+  `… N still open, closing through Hyprland` when the second request was
+  needed. The bottom buttons take their taps with an exclusive TapHandler,
+  in a band that swallows touches: under touch (not a mouse), a passive
+  TapHandler let the tap reach the tap-to-dismiss area under them too, which
+  closed recent apps and disarmed Clear all before it could close anything.
+  `test/switcher-touch` taps them with a finger, offscreen.
 * **Together on request.** In recent apps, hold a card: **Show with…** lists
   the apps on other screens and moves this one onto the one you pick, where
   the two tile as Omarchy tiles them; **Move to its own screen** (shown when

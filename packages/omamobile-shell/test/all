@@ -82,6 +82,44 @@ if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail 
 l=plugins/omamobile.launcher/Launcher.qml
 grep -c 'implicitHeight: root.touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
 grep -c 'border.color: Qt.rgba(0, 0, 0, 0.55)' "$l" >/dev/null || fail "the home pill has a dark outline"
+# Under the keyboard, the pill has a strip of its own (Android's gesture
+# bar): on the Bottom layer, reserving its height, so Hyprland lifts
+# squeekboard (Top) above it and the strip covers no key. The masked strip
+# over an app and the keyboard's strip never show together, and both go
+# for a fullscreen window.
+grep -c 'WlrLayershell.namespace: "omamobile-home-strip"' "$l" >/dev/null || fail "the keyboard's gesture strip has its namespace"
+python3 - "$l" <<'PY' || fail "the keyboard's gesture strip sits under squeekboard"
+import re, sys
+src = open(sys.argv[1]).read()
+def window(namespace):
+    i = src.index('WlrLayershell.namespace: "%s"' % namespace)
+    start = src.rindex("PanelWindow {", 0, i)
+    depth, j = 0, src.index("{", start)
+    while True:
+        c = src[j]
+        depth += c == "{"
+        depth -= c == "}"
+        j += 1
+        if depth == 0:
+            return src[start:j]
+strip, pill = window("omamobile-home-strip"), window("omamobile-home-indicator")
+assert "WlrLayershell.layer: WlrLayer.Bottom" in strip, "strip on the Bottom layer"
+assert "exclusionMode: ExclusionMode.Auto" in strip, "strip reserves its height"
+assert "implicitHeight: root.oskStripHeight" in strip
+h = int(re.search(r"readonly property int oskStripHeight: (\d+)", src).group(1))
+assert 24 <= h <= 36, h
+vis = lambda w: re.search(r"^\s*visible: (.*)$", w, re.M).group(1)
+assert "root.oskOpen" in vis(strip) and "!root.oskOpen" not in vis(strip), vis(strip)
+assert "!root.oskOpen" in vis(pill), vis(pill)
+for w in (strip, pill):
+    assert "!root.fullscreenOnScreen" in vis(w) and "root.appOnScreen" in vis(w) and "!root.opened" in vis(w), vis(w)
+assert "!root.sessionLocked" in vis(strip), "no strip under the lock's keyboard"
+assert "mask: Region { item: hitArea }" in pill, "the pill over an app stays masked"
+assert pill.count("HomeSwipe {") == 1 and strip.count("HomeSwipe {") == 1, "one swipe logic for both"
+assert "HomePill" in strip and "HomePill" in pill
+PY
+grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
+grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
 grep -c 'var close = root.pulling && root.pull > root.pullToClose' "$l" >/dev/null || fail "pulling the drawer down closes it"
 grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail "a pull doesn't launch the app under it"
@@ -285,6 +323,21 @@ grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fa
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
 grep -c '"omamobile-launch", "show-with"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
 grep -c '"omamobile-launch", "own-screen"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
+# Recent apps' bottom actions take a touch tap alone: an exclusive
+# TapHandler in a band that swallows touches, so the tap-to-dismiss area
+# under them (which disarmed Clear all and closed recents before the second
+# tap could close anything) never sees it. test/switcher-touch taps them.
+sw=plugins/omamobile.switcher/Switcher.qml
+grep -c 'gesturePolicy: TapHandler.ReleaseWithinBounds' "$sw" >/dev/null || fail "the bottom actions grab their taps"
+grep -c 'console.log("omamobile-switcher: clear all, closing "' "$sw" >/dev/null || fail "Clear all says what it closes"
+rc=0; out=$(bash test/switcher-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "recent apps under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
+else
+  pass "recent apps under touch: Clear all, Home, a near miss, a card"
+fi
 if command -v node >/dev/null; then
   node -e '
 const L = require("./plugins/omamobile.launcher/LauncherModel.js")

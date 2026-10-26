@@ -307,10 +307,20 @@ Item {
   // Android. It claims no exclusive zone, so the app keeps the whole screen.
   //
   // It sits on the Overlay layer, so it would take touches from anything
-  // below it: it gives way to the on-screen keyboard (squeekboard's bottom
-  // row ends where the strip starts) and to fullscreen windows (video, the
-  // screensaver), and its input mask leaves only the middle of the strip
-  // to the pill. The back gesture (omamobile.back) has the side edges.
+  // below it: it gives way to the on-screen keyboard and to fullscreen
+  // windows (video, the screensaver), and its input mask leaves only the
+  // middle of the strip to the pill. The back gesture (omamobile.back) has
+  // the side edges.
+  //
+  // While the keyboard is up, the pill moves into a strip of its own under
+  // the keyboard instead, as Android's gesture bar does: a bar-coloured
+  // strip on the Bottom layer that reserves its height (an exclusive zone).
+  // Hyprland arranges the layers that reserve space from the Bottom layer
+  // up, so the strip takes the screen's bottom edge first and squeekboard
+  // (the Top layer, which reserves its own height) sits right above it, the
+  // way it sits above the dock on the home screen. The strip covers no key,
+  // and a swipe that starts in it stays its own as the finger crosses the
+  // keyboard.
   property bool oskOpen: false
 
   Process {
@@ -387,6 +397,26 @@ Item {
     Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.switcher", "{}"])
   }
 
+  // The keyboard's strip: tall enough to start a swipe in, short enough to
+  // keep the app's view of what is being typed.
+  readonly property int oskStripHeight: 32
+
+  // Not under the lock screen's keyboard: the strip isn't drawn over the
+  // lock, but its reserved height would still lift the keyboard and leave a
+  // gap. Asked each time the keyboard comes up (it folds and unfolds as the
+  // lock takes and gives back the focus); the lock service isn't one a
+  // third-party plugin can bind to.
+  property bool sessionLocked: false
+  onOskOpenChanged: if (oskOpen && !lockCheck.running) lockCheck.running = true
+
+  Process {
+    id: lockCheck
+    command: ["omarchy-shell", "lock", "isLocked"]
+    stdout: SplitParser {
+      onRead: function(line) { root.sessionLocked = String(line).trim() === "true" }
+    }
+  }
+
   Variants {
     model: Quickshell.screens
 
@@ -411,74 +441,54 @@ Item {
       Item {
         anchors.fill: parent
 
-        // A light pill in a dark outline with a soft halo, so it shows over
-        // a dark app and a white one (a browser page, a document) alike.
-        Rectangle {
-          id: pillHalo
-          anchors.centerIn: pillBar
-          width: pillBar.width + 6
-          height: pillBar.height + 6
-          radius: height / 2
-          color: Qt.rgba(0, 0, 0, 0.22)
-        }
-
-        Rectangle {
-          id: pillBar
+        HomePill {
           anchors.horizontalCenter: parent.horizontalCenter
           anchors.bottom: parent.bottom
-          anchors.bottomMargin: 6
-          width: 120
-          height: 6
-          radius: height / 2
-          color: Qt.rgba(1, 1, 1, 0.9)
-          border.width: 1
-          border.color: Qt.rgba(0, 0, 0, 0.55)
+          anchors.bottomMargin: 3
         }
 
-        Item {
+        HomeSwipe {
           id: hitArea
           anchors.horizontalCenter: parent.horizontalCenter
           anchors.top: parent.top
           anchors.bottom: parent.bottom
           width: 240
+          strip: "pill"
+        }
+      }
+    }
+  }
 
-          // Swipe up and let go: home. Swipe up and hold still for a
-          // moment (or swipe far up): recent apps, while the finger is
-          // still down, as Android's gesture navigation does.
-          DragHandler {
-            id: swipe
-            target: null
-            xAxis.enabled: false
-            property real swipeY: 0
-            property bool recents: false
-            onActiveTranslationChanged: {
-              swipeY = activeTranslation.y
-              if (recents) return
-              if (swipeY < -120) {
-                recents = true
-                hold.stop()
-                root.showRecents()
-              } else if (swipeY < -24) {
-                hold.restart()
-              }
-            }
-            onActiveChanged: {
-              if (active) { swipeY = 0; recents = false; return }
-              hold.stop()
-              console.log("omamobile-home-indicator: swipe", Math.round(swipeY), recents ? "recents" : "")
-              if (!recents && swipeY < -24) root.goHome()
-            }
-          }
+  Variants {
+    model: Quickshell.screens
 
-          Timer {
-            id: hold
-            interval: 350
-            onTriggered: {
-              if (!swipe.active || swipe.recents) return
-              swipe.recents = true
-              root.showRecents()
-            }
-          }
+    PanelWindow {
+      id: keyboardStrip
+      required property var modelData
+      screen: modelData
+
+      visible: root.appOnScreen && !root.opened && root.oskOpen && !root.sessionLocked && !root.fullscreenOnScreen
+      anchors { bottom: true; left: true; right: true }
+      implicitHeight: root.oskStripHeight
+      // Auto: it reserves its height, which lifts the keyboard (and the app
+      // above it) clear of the strip.
+      exclusionMode: ExclusionMode.Auto
+      color: Commons.Color.bar.background
+      WlrLayershell.namespace: "omamobile-home-strip"
+      // Bottom, under the keyboard's Top: see the comment above.
+      WlrLayershell.layer: WlrLayer.Bottom
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+      Item {
+        anchors.fill: parent
+
+        HomePill { anchors.centerIn: parent }
+
+        // The whole strip: it is below every key, and the side edges'
+        // back strips stop at the keyboard.
+        HomeSwipe {
+          anchors.fill: parent
+          strip: "keyboard"
         }
       }
     }
@@ -803,6 +813,74 @@ Item {
     TapHandler {
       id: pillTouch
       onTapped: pill.tapped()
+    }
+  }
+
+  // The home pill: a light bar in a dark outline with a soft halo, so it
+  // shows over a dark app and a white one (a browser page, a document) alike.
+  component HomePill: Item {
+    width: pillBar.width + 6
+    height: pillBar.height + 6
+
+    Rectangle {
+      anchors.fill: parent
+      radius: height / 2
+      color: Qt.rgba(0, 0, 0, 0.22)
+    }
+
+    Rectangle {
+      id: pillBar
+      anchors.centerIn: parent
+      width: 120
+      height: 6
+      radius: height / 2
+      color: Qt.rgba(1, 1, 1, 0.9)
+      border.width: 1
+      border.color: Qt.rgba(0, 0, 0, 0.55)
+    }
+  }
+
+  // Where a home swipe starts. Swipe up and let go: home. Swipe up and hold
+  // still for a moment (or swipe far up): recent apps, while the finger is
+  // still down, as Android's gesture navigation does. strip names the
+  // surface in the log: "pill" over an app, "keyboard" under the keyboard.
+  component HomeSwipe: Item {
+    id: swipeArea
+    property string strip: "pill"
+
+    DragHandler {
+      id: swipe
+      target: null
+      xAxis.enabled: false
+      property real swipeY: 0
+      property bool recents: false
+      onActiveTranslationChanged: {
+        swipeY = activeTranslation.y
+        if (recents) return
+        if (swipeY < -120) {
+          recents = true
+          hold.stop()
+          root.showRecents()
+        } else if (swipeY < -24) {
+          hold.restart()
+        }
+      }
+      onActiveChanged: {
+        if (active) { swipeY = 0; recents = false; return }
+        hold.stop()
+        console.log("omamobile-home-indicator: swipe", Math.round(swipeY), recents ? "recents" : "", "(" + swipeArea.strip + ")")
+        if (!recents && swipeY < -24) root.goHome()
+      }
+    }
+
+    Timer {
+      id: hold
+      interval: 350
+      onTriggered: {
+        if (!swipe.active || swipe.recents) return
+        swipe.recents = true
+        root.showRecents()
+      }
     }
   }
 

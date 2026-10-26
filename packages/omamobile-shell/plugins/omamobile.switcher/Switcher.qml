@@ -69,15 +69,45 @@ Item {
     dismiss()
   }
 
+  // Clear all: ask every window to close (the Wayland foreign-toplevel
+  // close, which Hyprland turns into the app's own close request), then go
+  // back to whatever is left, as Android does. A window still open a couple
+  // of seconds later gets the same request again through Hyprland, by its
+  // address; an app that asks about unsaved work keeps asking.
   function closeAll() {
     confirmClear = false
     var list = ToplevelManager.toplevels.values.slice()
-    for (var i = 0; i < list.length; i++) list[i].close()
+    var pending = []
+    for (var i = 0; i < list.length; i++) pending.push({ toplevel: list[i], address: addressOf(list[i]) })
+    console.log("omamobile-switcher: clear all, closing " + list.length + (list.length === 1 ? " window" : " windows"))
+    for (var j = 0; j < list.length; j++) list[j].close()
+    clearAllPending = pending
+    clearAllCheck.restart()
+    dismiss()
+  }
+
+  property var clearAllPending: []
+
+  Timer {
+    id: clearAllCheck
+    interval: 2000
+    onTriggered: {
+      var open = ToplevelManager.toplevels.values
+      var left = root.clearAllPending.filter(function(item) { return open.indexOf(item.toplevel) >= 0 })
+      root.clearAllPending = []
+      if (left.length === 0) return
+      console.log("omamobile-switcher: clear all, " + left.length + " still open, closing through Hyprland")
+      for (var i = 0; i < left.length; i++) {
+        if (left[i].address)
+          Quickshell.execDetached(["hyprctl", "dispatch", "hl.dsp.window.close({ window = \"address:" + left[i].address + "\" })"])
+      }
+    }
   }
 
   // Clear all closes every app, unsaved work included, so it takes two taps:
   // the first turns it into "Close N apps?", which disarms after a few
-  // seconds or when the switcher closes.
+  // seconds or when the switcher closes. Both taps must reach the button
+  // alone: see the bottom actions' TapHandler.
   property bool confirmClear: false
 
   function clearAll() {
@@ -328,16 +358,41 @@ Item {
 
     // Bottom actions: clear everything (urgent colour, two taps), or go
     // home. Set well apart, so a near miss on Home doesn't arm Clear all.
+    //
+    // The band they sit in is the switcher's own: it swallows touches, so a
+    // tap on or between the buttons never reaches the tap-to-dismiss area
+    // underneath. That area is a MouseArea filling the window, and a touch
+    // tap reached it as well as the button's TapHandler (a DragThreshold
+    // TapHandler only grabs passively, so the press went on down; with a
+    // mouse it doesn't). The MouseArea fired first: dismiss() closed the
+    // switcher and disarmed Clear all, and the TapHandler then armed it
+    // again instead of closing anything. Hyprland saw the switcher close and
+    // the app take the focus back, and no window close.
+    Item {
+      id: actionBand
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      height: actionRow.height + Style.space(28) * 2
+      z: 1
+
+      MouseArea { anchors.fill: parent }
+    }
+
     Row {
+      id: actionRow
+      z: 2
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: parent.bottom
       anchors.bottomMargin: Style.space(28)
       spacing: Style.space(40)
 
       Repeater {
+        // A fixed model: one that read root.windows rebuilt both buttons
+        // whenever a window opened or closed, under a finger too.
         model: [
-          { label: "Clear all", visible: root.windows.length > 0, action: "clear" },
-          { label: "Home", visible: true, action: "home" }
+          { label: "Clear all", action: "clear" },
+          { label: "Home", action: "home" }
         ]
 
         delegate: BorderSurface {
@@ -349,7 +404,7 @@ Item {
           readonly property color base: armed ? Commons.Color.urgent
             : danger ? Qt.tint(Commons.Color.background, Util.alpha(Commons.Color.urgent, 0.18))
             : Commons.Color.background
-          visible: modelData.visible
+          visible: !danger || root.windows.length > 0
           width: Math.max(root.touch * 2.6, label.implicitWidth + Style.space(32))
           height: root.touch
           radius: Style.cornerRadius
@@ -368,8 +423,11 @@ Item {
             font.bold: bottomButton.armed
           }
 
+          // Exclusive: the press stops here, so nothing under the button
+          // sees the tap (a release off the button is no tap).
           TapHandler {
             id: tap
+            gesturePolicy: TapHandler.ReleaseWithinBounds
             onTapped: bottomButton.modelData.action === "home" ? root.goHome() : root.clearAll()
           }
         }
@@ -381,6 +439,7 @@ Item {
       id: actionLayer
       anchors.fill: parent
       visible: root.actionsOpen
+      z: 3
 
       Rectangle {
         anchors.fill: parent

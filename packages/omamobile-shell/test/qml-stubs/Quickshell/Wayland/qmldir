@@ -1,0 +1,3 @@
+module Quickshell.Wayland
+singleton ToplevelManager 1.0 ToplevelManager.qml
+ScreencopyView 1.0 ScreencopyView.qml
