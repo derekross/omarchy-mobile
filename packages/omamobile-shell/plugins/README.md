@@ -71,8 +71,8 @@ Settings live on the `bar` object in `shell.json`:
 `omamobile-cell-watch` and `omamobile-call-watch --observe` (see
 omamobile.call below); without a modem or omatel's agent they don't show.
 
-IPC (`omarchy-shell omamobile.bar <method>`), for edge-swipe gestures or
-hardware keys:
+IPC (`omarchy-shell omamobile.bar <method>`), for scripts and tests; no
+gesture or key binds it yet:
 
 | Method | Effect |
 | --- | --- |
@@ -90,7 +90,7 @@ then brightness and volume. Tap the scrim, swipe the sheet up, or press Escape
 to close it.
 
 The pencil under the expanded grid opens edit mode: tap a tile to remove it,
-hold one and drag to move it, tap one under "Add tiles" to add it; Reset puts
+hold one and drag to move it, tap one under "Add tiles" to add it; Reset (two taps) puts
 the default back, Done (or Escape) leaves. The layout is per user, in
 `~/.config/omamobile/quicksettings.json` (`{"version": 1, "tiles": [ids]}`,
 rules and default in `TilesModel.js`, tests in `test/tiles-model.js`). Edits
@@ -125,7 +125,7 @@ Microphone, Screenshot and Screen record start under "Add tiles".
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
 | Volume slider | PipeWire default sink; tap the speaker glyph to mute |
 
-Tiles whose backend is missing render dimmed with the reason ("No modem",
+Tiles whose backend is missing render a dimmed glyph and name over a readable reason ("No modem",
 "No sensor", "No flash LED") and ignore taps. The tiles without a Quickshell
 service read their state in one pass of `tile-state.sh` each time the sheet
 opens and after each change, and switch through `tile-action.sh`; both sit
@@ -587,9 +587,11 @@ earlier in `PATH` stands in for fprintd.
 ## omamobile.keyboard
 
 While squeekboard is unfolded (`sm.puri.OSK0` `Visible`, through
-`bin/omamobile-osk-watch`), a small keyboard-close button sits right above the
-keyboard's top-right corner; a tap folds it (`SetVisible false`). The window
-is the button only (anchored bottom-right with normal exclusion, so the
+`bin/omamobile-osk-watch`), a 44 px keyboard-close button sits right above the
+keyboard's top-left corner; a tap folds it (`SetVisible false`). It is on the
+left because apps put Send and Next at the bottom right, where it used to
+cover them. The window
+is the button only (anchored bottom-left with normal exclusion, so the
 compositor puts it just above the keyboard's reserved area), on the overlay
 layer, without keyboard focus; `hypr/phone.lua` lets it work over the lock
 (`above_lock = 2`). Quick settings has a Keyboard tile that shows or folds the

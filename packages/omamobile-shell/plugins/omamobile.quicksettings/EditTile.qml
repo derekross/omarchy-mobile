@@ -3,6 +3,7 @@ import QtQuick
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "Readable.js" as Readable
 
 // A tile in the quick settings' edit mode: glyph and name, with a badge in
 // the corner that says what a tap does (− removes from the sheet, + adds
@@ -53,7 +54,7 @@ BorderSurface {
       text: root.label
       color: root.foreground
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       elide: Text.ElideRight
     }
   }

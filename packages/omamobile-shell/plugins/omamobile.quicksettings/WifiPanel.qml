@@ -8,6 +8,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "WifiModel.js" as WifiModel
+import "Readable.js" as Readable
 
 // The Wi-Fi picker behind the quick-settings tile, after Android's Internet
 // panel: a Wi-Fi switch, the connected network, the networks in range by
@@ -627,7 +628,7 @@ Item {
               text: list.contentY < list.originY - list.pullThreshold ? "Release to scan" : "Pull to scan"
               color: Qt.darker(root.foreground, 1.4)
               font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Readable.px(Style.font.caption)
             }
           }
 
@@ -656,7 +657,7 @@ Item {
               text: entryItem.row.text
               color: Commons.Color.accent
               font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Readable.px(Style.font.caption)
               font.bold: true
             }
 
@@ -722,7 +723,7 @@ Item {
                     : WifiModel.rowStatus(entryItem.row, entryItem.busy ? root.actionKind : "", entryItem.failure)
                   color: entryItem.failure ? Commons.Color.urgent : Qt.darker(root.foreground, 1.4)
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: Readable.px(Style.font.caption)
                   elide: Text.ElideRight
                 }
               }

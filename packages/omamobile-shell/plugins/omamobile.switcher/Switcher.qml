@@ -7,6 +7,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "Readable.js" as Readable
 
 // Recent apps, after Android: every open window as a card with a live
 // preview. Swipe sideways through them, tap one to switch to it, flick it up
@@ -41,9 +42,13 @@ Item {
   }
 
   // Host lifecycle (`shell summon` / `shell hide`).
-  function open(payloadJson) { opened = true }
+  function open(payloadJson) {
+    opened = true
+    confirmClear = false
+  }
   function close() {
     opened = false
+    confirmClear = false
     closeActions()
   }
 
@@ -65,8 +70,29 @@ Item {
   }
 
   function closeAll() {
+    confirmClear = false
     var list = ToplevelManager.toplevels.values.slice()
     for (var i = 0; i < list.length; i++) list[i].close()
+  }
+
+  // Clear all closes every app, unsaved work included, so it takes two taps:
+  // the first turns it into "Close N apps?", which disarms after a few
+  // seconds or when the switcher closes.
+  property bool confirmClear: false
+
+  function clearAll() {
+    if (!confirmClear) {
+      confirmClear = true
+      disarmClear.restart()
+      return
+    }
+    closeAll()
+  }
+
+  Timer {
+    id: disarmClear
+    interval: 4000
+    onTriggered: root.confirmClear = false
   }
 
   // ---------------------------------------------------------------- hold actions
@@ -300,12 +326,13 @@ Item {
       }
     }
 
-    // Bottom actions: clear everything, or go home.
+    // Bottom actions: clear everything (urgent colour, two taps), or go
+    // home. Set well apart, so a near miss on Home doesn't arm Clear all.
     Row {
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: parent.bottom
       anchors.bottomMargin: Style.space(28)
-      spacing: Style.space(16)
+      spacing: Style.space(40)
 
       Repeater {
         model: [
@@ -316,25 +343,34 @@ Item {
         delegate: BorderSurface {
           id: bottomButton
           required property var modelData
+          readonly property bool danger: modelData.action === "clear"
+          readonly property bool armed: danger && root.confirmClear
+          // Opaque over the cards, so the pressed fill is tinted onto it.
+          readonly property color base: armed ? Commons.Color.urgent
+            : danger ? Qt.tint(Commons.Color.background, Util.alpha(Commons.Color.urgent, 0.18))
+            : Commons.Color.background
           visible: modelData.visible
           width: Math.max(root.touch * 2.6, label.implicitWidth + Style.space(32))
           height: root.touch
           radius: Style.cornerRadius
-          color: tap.pressed ? Commons.Color.menu.selected || Commons.Color.background : Commons.Color.background
+          color: tap.pressed ? Qt.tint(base, Style.pressedFillFor(root.foreground, Commons.Color.accent)) : base
 
           Text {
             id: label
             anchors.centerIn: parent
             textFormat: Text.PlainText
-            text: bottomButton.modelData.label
-            color: root.foreground
+            text: !bottomButton.armed ? bottomButton.modelData.label
+              : root.windows.length === 1 ? "Close 1 app?" : "Close " + root.windows.length + " apps?"
+            color: bottomButton.armed ? Commons.Color.background
+              : bottomButton.danger ? Commons.Color.urgent : root.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.body
+            font.bold: bottomButton.armed
           }
 
           TapHandler {
             id: tap
-            onTapped: bottomButton.modelData.action === "home" ? root.goHome() : root.closeAll()
+            onTapped: bottomButton.modelData.action === "home" ? root.goHome() : root.clearAll()
           }
         }
       }
@@ -441,7 +477,7 @@ Item {
     width: parent ? parent.width : 0
     height: Math.max(root.touch, rowText.implicitHeight + (rowHint.visible ? rowHint.implicitHeight : 0) + Style.space(16))
     radius: Style.cornerRadius
-    color: rowTap.pressed ? (Commons.Color.menu.selected || Commons.Color.background) : "transparent"
+    color: rowTap.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent"
     opacity: enabled ? 1 : 0.45
 
     Column {
@@ -471,7 +507,7 @@ Item {
         elide: Text.ElideRight
         color: Qt.darker(root.foreground, 1.4)
         font.family: Style.font.family
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Readable.px(Style.font.caption)
       }
     }
 

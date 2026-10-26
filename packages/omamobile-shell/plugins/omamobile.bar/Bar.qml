@@ -154,8 +154,8 @@ Item {
       shell.toggle(quickSettingsId, JSON.stringify({ source: "bar" }))
   }
 
-  // Edge-swipe gestures and hardware keys reach the sheet through here, e.g.
-  // `omarchy-shell omamobile.bar pullDown` from a Hyprland gesture bind.
+  // IPC for scripts and tests: `omarchy-shell omamobile.bar pullDown`. No
+  // gesture or key binds it yet (docs/TOUCH-PLAN.md 1.2 and 3.7).
   IpcHandler {
     target: "omamobile.bar"
 
@@ -232,9 +232,13 @@ Item {
             Text { anchors.verticalCenter: parent.verticalCenter; textFormat: Text.PlainText; text: root.callChip; color: "white"; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.bold: true }
           }
 
+          // The bar's full height (44 px), not the 29 px pill, so a tap
+          // just above or below the chip opens the call, not quick settings.
           MouseArea {
             id: chipTap
-            anchors.fill: parent
+            anchors.centerIn: parent
+            width: parent.width
+            height: Math.max(parent.height, root.barSize)
             onClicked: Quickshell.execDetached(["omaphone", "--in-call"])
           }
         }

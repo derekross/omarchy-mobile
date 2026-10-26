@@ -5,6 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import "HomeModel.js" as HomeModel
+import "Readable.js" as Readable
 
 // Your own text, or the output of your own command. With a command set, it
 // runs through `sh -c` when the widget appears and every `interval` seconds
@@ -68,7 +69,7 @@ Item {
       text: widget.title
       color: widget.dim
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       font.bold: true
       elide: Text.ElideRight
     }
@@ -84,7 +85,7 @@ Item {
       wrapMode: Text.Wrap
       elide: Text.ElideRight
       fontSizeMode: Text.Fit
-      minimumPixelSize: Style.font.caption
+      minimumPixelSize: Readable.px(Style.font.caption)
       verticalAlignment: widget.command ? Text.AlignTop : Text.AlignVCenter
     }
   }

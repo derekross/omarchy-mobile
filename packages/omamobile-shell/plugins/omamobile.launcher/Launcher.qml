@@ -9,6 +9,7 @@ import qs.Commons as Commons
 import qs.Ui
 import qs.services as OmarchyServices
 import "LauncherModel.js" as LauncherModel
+import "Readable.js" as Readable
 
 // The phone's home surface, after Omalauncher: one bar at the bottom of the
 // screen that is app search, app grid and coding-agent prompt at once.
@@ -626,7 +627,7 @@ Item {
             text: root.query.trim()
             color: Qt.darker(root.foreground, 1.4)
             font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Readable.px(Style.font.caption)
             elide: Text.ElideRight
           }
         }
@@ -784,7 +785,7 @@ Item {
       text: root.appLibrary && cell.entry ? root.appLibrary.entryName(cell.entry) : ""
       color: cell.highlighted ? Commons.Color.menu.selectedText : root.foreground
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       wrapMode: Text.Wrap
       maximumLineCount: 2
       elide: Text.ElideRight

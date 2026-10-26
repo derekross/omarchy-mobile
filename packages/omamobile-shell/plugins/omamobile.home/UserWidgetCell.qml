@@ -4,6 +4,7 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import "UserWidgets.js" as UserWidgets
+import "Readable.js" as Readable
 
 // One placed user widget. Its code is loaded only when `omamobile-widget
 // scan` calls the folder ok (manifest valid, capabilities declared, qmllint
@@ -140,12 +141,12 @@ Item {
     Text {
       width: parent.width
       height: Math.max(0, parent.height - glyph.height - hint.height - parent.spacing * 2)
-      visible: height >= Style.font.caption
+      visible: height >= Readable.px(Style.font.caption)
       textFormat: Text.PlainText
       text: frame.card.message
       color: frame.home ? frame.home.dimForeground : Commons.Color.menu.text
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       wrapMode: Text.Wrap
       elide: Text.ElideRight
     }
@@ -157,7 +158,7 @@ Item {
       text: frame.card.state === "error" ? "Tap to fix with AI" : "Tap for settings"
       color: Commons.Color.accent
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       elide: Text.ElideRight
     }
   }

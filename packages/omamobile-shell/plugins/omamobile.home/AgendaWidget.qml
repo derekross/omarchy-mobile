@@ -5,6 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import "HomeModel.js" as HomeModel
+import "Readable.js" as Readable
 
 // Today and what's next. With khal (the local calendar that vdirsyncer
 // keeps in step with CalDAV) the next seven days' events are listed;
@@ -100,7 +101,8 @@ Item {
               text: (modelData.date === widget.todayIso ? "Today" : modelData.date) + (modelData.time ? "  " + modelData.time : "  all day")
               color: widget.dim
               font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Readable.px(Style.font.caption)
+              elide: Text.ElideRight
             }
           }
         }
@@ -126,7 +128,7 @@ Item {
           text: modelData
           color: widget.dim
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Readable.px(Style.font.caption)
           font.bold: true
         }
       }

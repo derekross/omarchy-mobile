@@ -21,6 +21,47 @@ if grep -rnE '(^|[^.[:alnum:]_])Color\.' plugins --include=*.qml; then
 fi
 pass "palette references are qualified"
 
+# Omarchy's palette has no Color.menu.selected (only selectedBackground,
+# selectedText, selectedBorder); an `|| fallback` after it hid the miss.
+if grep -rnE 'Color\.menu\.selected([^A-Za-z]|$)' plugins --include=*.qml; then
+  fail "no references to the missing Color.menu.selected"
+fi
+pass "palette tokens exist"
+
+# Readable text (TOUCH-PLAN 2.1): every plugin's Readable.js is the same
+# file, and no plugin text uses Omarchy's 10 px caption without its floor.
+first=
+for js in plugins/*/Readable.js; do
+  [[ -z $first ]] && first=$js
+  cmp -s "$first" "$js" || fail "$js matches $first"
+done
+[[ -n $first ]] || fail "plugins carry Readable.js"
+if command -v node >/dev/null; then
+  node -e '
+const R = require(require("path").resolve(process.argv[1]))
+if (R.MIN_PX !== 12 || R.px(10) !== 12 || R.px(9) !== 12 || R.px(14) !== 14) throw new Error("Readable.px")
+' "$first" || fail "Readable.px floors at 12 px"
+fi
+# AppTile.qml is left to PR #43, which sets its label to caption + 3.
+if grep -rnE 'Style\.font\.caption' plugins --include=*.qml | grep -v 'Readable\.px(Style\.font\.caption' | grep -v 'omamobile.home/AppTile.qml:'; then
+  fail "caption-sized text goes through Readable.px"
+fi
+for qml in $(grep -rl 'Readable\.px' plugins --include=*.qml); do
+  grep -c '^import "Readable.js" as Readable$' "$qml" >/dev/null || fail "$qml imports Readable.js"
+  [[ -f $(dirname "$qml")/Readable.js ]] || fail "$qml has Readable.js beside it"
+done
+pass "readable text sizes"
+
+# Touch: a swipe that starts on a quick-settings tile mustn't toggle it
+# (a passive TapHandler, not a MouseArea), and destructive actions take two
+# taps (Clear all, quick-settings Reset, a widget's Remove).
+grep -c 'gesturePolicy: TapHandler.DragThreshold' plugins/omamobile.quicksettings/Tile.qml >/dev/null || fail "tiles tap with a DragThreshold TapHandler"
+[[ $(grep -c '^\s*MouseArea {' plugins/omamobile.quicksettings/Tile.qml) == 1 ]] || fail "the only MouseArea on a tile is the chevron's"
+grep -c 'onTapped: bottomButton.modelData.action === "home" ? root.goHome() : root.clearAll()' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "Clear all asks first"
+grep -c 'onTapped: root.requestReset()' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "quick-settings Reset asks first"
+grep -c 'if (!settingsFlick.confirmRemove) { settingsFlick.confirmRemove = true; return }' plugins/omamobile.home/HomeSheets.qml >/dev/null || fail "a widget's Remove asks first"
+pass "touch: tiles and two-tap destructive actions"
+
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
 # without needing the shell's own imports to resolve.
 qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)

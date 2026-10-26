@@ -13,6 +13,7 @@ import "UserWidgets.js" as UserWidgets
 import "owl/catalog.js" as OwlCatalog
 import "owl/phone.js" as OwlPhone
 import "owl" as Owl
+import "Readable.js" as Readable
 
 // Home screens, after Android launchers (Omalauncher, Pixel Launcher): pages
 // of app shortcuts and widgets on the wallpaper, swiped sideways, with page
@@ -1055,7 +1056,13 @@ Item {
               border.width: index === root.layout.home && root.editing ? 1 : 0
               border.color: Commons.Color.accent
             }
-            MouseArea { anchors.fill: parent; onClicked: root.goToPage(index, true) }
+            // 44 px tall, reaching past the 28 px row so the layout stays.
+            MouseArea {
+              anchors.centerIn: parent
+              width: parent.width
+              height: Math.max(44, parent.height)
+              onClicked: root.goToPage(index, true)
+            }
           }
         }
       }
@@ -1103,7 +1110,7 @@ Item {
                 text: modelData.label
                 color: modelData.act === "done" ? Commons.Color.background : root.foreground
                 font.family: Style.font.family
-                font.pixelSize: Style.font.caption
+                font.pixelSize: Readable.px(Style.font.caption)
               }
             }
             MouseArea {

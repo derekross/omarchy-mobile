@@ -11,6 +11,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "TilesModel.js" as TilesModel
+import "Readable.js" as Readable
 
 // Pull-down quick settings for the phone. The sheet drops from the top edge
 // over the status bar, collapsed as on Android: a clock header, the first
@@ -253,6 +254,27 @@ Item {
     if (TilesModel.indexOf(editModelLayout(), id) >= 0) return
     editModel.append({ tileId: id })
     saveLayout(editModelLayout())
+  }
+
+  // Reset throws away the user's arrangement and sits beside Done, so it
+  // takes two taps: the first turns it into "Reset?" for a few seconds.
+  property bool confirmReset: false
+  onEditingChanged: confirmReset = false
+
+  Timer {
+    id: disarmReset
+    interval: 4000
+    onTriggered: root.confirmReset = false
+  }
+
+  function requestReset() {
+    if (!confirmReset) {
+      confirmReset = true
+      disarmReset.restart()
+      return
+    }
+    confirmReset = false
+    resetLayout()
   }
 
   function resetLayout() {
@@ -1099,7 +1121,10 @@ Item {
       Keys.onEscapePressed: root.editing ? root.finishEditing() : root.dismiss()
 
       // Swallow taps inside the sheet so they don't reach the scrim, and turn
-      // an upward swipe anywhere on it into a dismiss.
+      // an upward swipe anywhere on it into a dismiss. Tiles take their taps
+      // with a passive TapHandler (Tile.qml), so a swipe that starts on a
+      // tile lands here too. A DragHandler above the content would steal the
+      // edit list's scrolling and the sliders, so this stays underneath.
       MouseArea {
         id: drag
         anchors.fill: parent
@@ -1150,10 +1175,11 @@ Item {
 
             SheetButton {
               width: Math.max(80, Style.space(88))
-              label: "Reset"
+              label: root.confirmReset ? "Reset?" : "Reset"
+              danger: root.confirmReset
               foreground: root.foreground
               enabled: !TilesModel.sameLayout(root.layout, TilesModel.DEFAULT_LAYOUT)
-              onTapped: root.resetLayout()
+              onTapped: root.requestReset()
             }
 
             SheetButton {
@@ -1333,7 +1359,7 @@ Item {
               text: "Tap a tile to remove it. Hold and drag to move it."
               color: Qt.darker(root.foreground, 1.4)
               font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Readable.px(Style.font.caption)
               wrapMode: Text.WordWrap
             }
 
@@ -1440,7 +1466,7 @@ Item {
               text: "Every tile is on the sheet"
               color: Qt.darker(root.foreground, 1.4)
               font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Readable.px(Style.font.caption)
             }
 
             Grid {
@@ -1521,10 +1547,13 @@ Item {
             color: Util.alpha(root.foreground, 0.35)
           }
 
+          // A thumb-high target (44 px) over the 28 px row: it reaches into
+          // the padding above and below, so the layout doesn't move.
           MouseArea {
             anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: parent.verticalCenter
             width: Math.max(96, Style.space(120))
-            height: parent.height
+            height: Math.max(44, parent.height)
             cursorShape: Qt.PointingHandCursor
             onClicked: root.expanded = !root.expanded
           }

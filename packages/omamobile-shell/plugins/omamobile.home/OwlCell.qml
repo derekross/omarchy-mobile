@@ -6,6 +6,7 @@ import "UserWidgets.js" as UserWidgets
 import "HomeModel.js" as HomeModel
 import "owl/phone.js" as Phone
 import "owl" as Owl
+import "Readable.js" as Readable
 
 // One placed OWL widget (docs/WIDGET-INTEROP-PLAN.md §2.7, §3). It runs
 // only when its file compiles here and its exact list of commands, URLs and
@@ -196,12 +197,12 @@ Item {
     Text {
       width: parent.width
       height: Math.max(0, parent.height - glyph.height - hint.height - parent.spacing * 2)
-      visible: height >= Style.font.caption
+      visible: height >= Readable.px(Style.font.caption)
       textFormat: Text.PlainText
       text: owlCell.cardMessage
       color: owlCell.home ? owlCell.home.dimForeground : Commons.Color.menu.text
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       wrapMode: owlCell.cardState === "error" ? Text.WrapAnywhere : Text.Wrap
       elide: Text.ElideRight
     }
@@ -213,7 +214,7 @@ Item {
       text: owlCell.cardState === "approve" ? "Tap to review" : "Tap to fix with AI"
       color: Commons.Color.accent
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       elide: Text.ElideRight
     }
   }

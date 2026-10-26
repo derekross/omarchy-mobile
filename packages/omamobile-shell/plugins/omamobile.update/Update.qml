@@ -7,6 +7,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "UpdateModel.js" as UpdateModel
+import "Readable.js" as Readable
 
 // The phone's update sheet, in place of Omarchy's terminal update (gum and
 // the ASCII logo don't fit 480 px with the keyboard up). Opened from the
@@ -440,16 +441,14 @@ Item {
               }
             }
 
-            Text {
+            // The one thing to know before starting: body size, full
+            // strength and a warning glyph, like the rows above it.
+            InfoRow {
               width: parent.width
               visible: root.summary.canUpdate
-              textFormat: Text.PlainText
+              glyph: "󰀦"
               text: "The update can't be stopped once it starts. Keep the phone on; the shell restarts at the end."
-              color: root.foreground
-              opacity: 0.7
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.Wrap
+              foreground: root.foreground
             }
           }
         }
@@ -626,7 +625,7 @@ Item {
             color: root.foreground
             opacity: 0.75
             font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Readable.px(Style.font.caption)
             elide: Text.ElideRight
           }
 
@@ -637,7 +636,7 @@ Item {
             color: root.foreground
             opacity: 0.6
             font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Readable.px(Style.font.caption)
             wrapMode: Text.Wrap
           }
         }
@@ -722,7 +721,7 @@ Item {
               color: root.foreground
               opacity: 0.7
               font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Readable.px(Style.font.caption)
               wrapMode: TextEdit.WrapAnywhere
             }
           }
@@ -807,7 +806,7 @@ Item {
               text: root.detailLines.join("\n")
               color: root.foreground
               font.family: "monospace"
-              font.pixelSize: Math.max(10, Style.font.caption - 1)
+              font.pixelSize: Readable.px(Style.font.caption - 1)
               wrapMode: Text.WrapAnywhere
             }
           }

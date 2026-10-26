@@ -7,13 +7,18 @@ import qs.Commons
 import qs.Commons as Commons
 
 // A "hide keyboard" button, as on Android: while squeekboard is unfolded, a
-// small button sits just above the keyboard's top-right corner; a tap folds
+// small button sits just above the keyboard's top-left corner; a tap folds
 // it (sm.puri.OSK0 SetVisible false). Visibility comes from
 // bin/omamobile-osk-watch (squeekboard's Visible on the session bus).
 //
-// The button's window is anchored to the bottom-right corner with normal
+// The button's window is anchored to the bottom-left corner with normal
 // exclusion, so the compositor places it right above the area the keyboard
-// reserves; the window is the button, so it takes no other touches.
+// reserves; the window is the button, so it takes no other touches. Left,
+// not right: the bottom right just above the keyboard is where apps put
+// Send and Next, and the button covered them. It is a full 44 px tall.
+// (A hide key inside squeekboard's layouts would cover nothing, but the
+// text layouts are squeekboard's own, one per language; overriding them
+// means carrying and updating copies of all of them.)
 // hypr/phone.lua lets it work over the lock screen too (above_lock 2).
 Item {
   id: root
@@ -77,10 +82,10 @@ Item {
     id: button
 
     visible: root.oskOpen
-    anchors { bottom: true; right: true }
-    margins { right: Style.space(8); bottom: Style.space(6) }
+    anchors { bottom: true; left: true }
+    margins { left: Style.space(8); bottom: Style.space(6) }
     implicitWidth: root.size + Style.space(8)
-    implicitHeight: Math.round(root.size * 0.8)
+    implicitHeight: root.size
     exclusionMode: ExclusionMode.Normal
     color: "transparent"
     WlrLayershell.namespace: "omamobile-osk-hide"

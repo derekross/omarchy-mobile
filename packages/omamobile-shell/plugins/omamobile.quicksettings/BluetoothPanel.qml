@@ -8,6 +8,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "BluetoothModel.js" as BluetoothModel
+import "Readable.js" as Readable
 
 // The Bluetooth panel behind the quick-settings tile, after Android's: a
 // Bluetooth switch, the phone's own name with "Make visible to other
@@ -722,7 +723,7 @@ Item {
               text: entryItem.row.text
               color: Commons.Color.accent
               font.family: Style.font.family
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Readable.px(Style.font.caption)
               font.bold: true
             }
 
@@ -815,7 +816,7 @@ Item {
                   text: BluetoothModel.rowStatus(entryItem.row, entryItem.busy ? root.actionKind : "", entryItem.failure)
                   color: entryItem.failure ? Commons.Color.urgent : Qt.darker(root.foreground, 1.4)
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: Readable.px(Style.font.caption)
                   elide: Text.ElideRight
                 }
               }
@@ -1069,7 +1070,7 @@ Item {
         text: switchRow.detail
         color: Qt.darker(root.foreground, 1.4)
         font.family: Style.font.family
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Readable.px(Style.font.caption)
         elide: Text.ElideRight
       }
     }

@@ -11,6 +11,7 @@ import "UserWidgets.js" as UserWidgets
 import "owl/catalog.js" as OwlCatalog
 import "owl/phone.js" as OwlPhone
 import "owl" as Owl
+import "Readable.js" as Readable
 
 // Edit mode's sheets, sliding up from the bottom of the home screen: add a
 // widget, add an app, manage pages, and one widget's settings. `home` is
@@ -121,12 +122,15 @@ Item {
     property string label: ""
     property bool primary: false
     property bool danger: false
+    // A danger button waiting for its second tap: filled in the urgent colour.
+    property bool armed: false
     signal clicked()
     implicitWidth: Math.max(sheets.touch * 2, sbText.implicitWidth + Style.spacing.xxl * 2)
     implicitHeight: sheets.touch
     radius: Style.cornerRadius
     color: sbTap.pressed ? Style.pressedFillFor(sheets.fg, Commons.Color.accent)
-      : primary ? Commons.Color.accent : danger ? Util.alpha(Commons.Color.urgent, 0.18) : Style.normalFill
+      : primary ? Commons.Color.accent : armed ? Commons.Color.urgent
+      : danger ? Util.alpha(Commons.Color.urgent, 0.18) : Style.normalFill
     borderSpec: Border.controlSpec("normal", sheets.fg, Commons.Color.accent)
     opacity: enabled ? 1 : 0.4
     Text {
@@ -134,7 +138,7 @@ Item {
       anchors.centerIn: parent
       textFormat: Text.PlainText
       text: sb.label
-      color: sb.primary ? Commons.Color.background : sb.danger ? Commons.Color.urgent : sheets.fg
+      color: sb.primary || sb.armed ? Commons.Color.background : sb.danger ? Commons.Color.urgent : sheets.fg
       font.family: Style.font.family
       font.pixelSize: Style.font.subtitle
     }
@@ -202,7 +206,7 @@ Item {
         text: r2.subtitle
         color: sheets.dim
         font.family: Style.font.family
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Readable.px(Style.font.caption)
         elide: Text.ElideRight
       }
     }
@@ -217,7 +221,7 @@ Item {
     textFormat: Text.PlainText
     color: sheets.dim
     font.family: Style.font.family
-    font.pixelSize: Style.font.caption
+    font.pixelSize: Readable.px(Style.font.caption)
     font.bold: true
   }
 
@@ -276,7 +280,7 @@ Item {
         text: wr.subtitle
         color: wr.warn ? Commons.Color.urgent : sheets.dim
         font.family: Style.font.family
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Readable.px(Style.font.caption)
         elide: Text.ElideRight
       }
     }
@@ -607,7 +611,7 @@ Item {
       text: codeLine.code
       color: sheets.fg
       font.family: Style.font.family
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Readable.px(Style.font.caption)
       wrapMode: Text.WrapAnywhere
       maximumLineCount: 8
       elide: Text.ElideRight
@@ -936,7 +940,7 @@ Item {
                 text: layout.pages[index].items.length === 1 ? "1 item" : layout.pages[index].items.length + " items"
                 color: sheets.dim
                 font.family: Style.font.family
-                font.pixelSize: Style.font.caption
+                font.pixelSize: Readable.px(Style.font.caption)
               }
             }
 
@@ -1081,6 +1085,9 @@ Item {
       function value(key) { return patch[key] !== undefined ? patch[key] : config[key] }
       property string failure: ""
       property bool busy: false
+      // Remove's first tap; a different widget's settings start over.
+      property bool confirmRemove: false
+      onItemChanged: confirmRemove = false
 
       function save() {
         if (!item) return
@@ -1365,23 +1372,36 @@ Item {
           font.pixelSize: Style.font.body
         }
 
-        Row {
-          spacing: Style.spacing.lg
-          SheetButton {
-            label: settingsFlick.busy ? "Looking up…" : "Save"
-            primary: true
-            enabled: !settingsFlick.busy
-            onClicked: settingsFlick.save()
+        // Save on the left, Remove at the far right: removing deletes the
+        // widget with its settings, so it asks first, as the Widgets and
+        // Pages sheets do (the second tap removes).
+        Item {
+          width: parent.width
+          height: sheets.touch
+          Row {
+            spacing: Style.spacing.lg
+            SheetButton {
+              label: settingsFlick.busy ? "Looking up…" : "Save"
+              primary: true
+              enabled: !settingsFlick.busy
+              onClicked: settingsFlick.save()
+            }
+            SheetButton {
+              visible: !!sheets.settingsUserId
+              label: "Edit with AI"
+              onClicked: sheets.home.openCreate("edit", sheets.settingsUserId)
+            }
           }
           SheetButton {
-            visible: !!sheets.settingsUserId
-            label: "Edit with AI"
-            onClicked: sheets.home.openCreate("edit", sheets.settingsUserId)
-          }
-          SheetButton {
-            label: "Remove"
+            anchors.right: parent.right
+            label: settingsFlick.confirmRemove ? "Remove?" : "Remove"
             danger: true
-            onClicked: sheets.home.removeItem(settingsFlick.item.id)
+            armed: settingsFlick.confirmRemove
+            onClicked: {
+              if (!settingsFlick.confirmRemove) { settingsFlick.confirmRemove = true; return }
+              settingsFlick.confirmRemove = false
+              sheets.home.removeItem(settingsFlick.item.id)
+            }
           }
         }
       }
