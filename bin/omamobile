@@ -602,7 +602,11 @@ if got != want:
   python3 -I "$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py" create "$img/dtbo.img" \
     --page_size=4096 --id="$DEV_DTBO_BOARD_ID" --rev="$DEV_DTBO_BOARD_REV" "$dtbo"
 
-  say "Boot images (header v4)"
+  # Two layouts, picked by BOOT_IMAGES. With vendor_kernel_boot (cheetah), it
+  # carries the DTB and our initramfs, vendor_boot only the command line, and
+  # the OS version sits on init_boot. Without it (Pixel 6), vendor_boot
+  # carries all three and the OS version sits on boot.
+  say "Boot images (header v4): $DEV_BOOT_IMAGES"
   : | cpio -o -H newc --quiet > "$img/empty.cpio"
   local cmdline="$DEV_VENDOR_CMDLINE"
   # The generic ramdisk (empty) and the OS version go in init_boot where the
