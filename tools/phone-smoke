@@ -12,8 +12,8 @@
 # Read-only, and safe on a phone in use: it reads sysfs, procfs, systemd,
 # pacman and D-Bus properties only. No register reads, no writes, no sound,
 # no vibration, no torch, no display changes, no radio changes. The report
-# names no phone: no serial, MAC, IMEI, SSID, Bluetooth address, account or
-# kernel command line (only the slot suffix is taken from it).
+# names no phone: no serial, MAC, IMEI, SSID, Bluetooth address, account,
+# kernel command line or bootconfig (only the slot suffix is taken from them).
 #
 # Each check is ok, not ok, or skip (the hardware or its software isn't
 # there). The required checks (boot, storage guard, root, kernel health, USB,
@@ -59,11 +59,13 @@ as_user() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESS
 
 # ---------------------------------------------------------------- boot
 release=$(uname -r)
-slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' /proc/cmdline 2>/dev/null | cut -d= -f2)
+# The Pixel bootloaders pass androidboot.* in bootconfig, not on the command line.
+slot=$(sed -n 's/^androidboot\.slot_suffix = "\(_[ab]\)"$/\1/p' /proc/bootconfig 2>/dev/null)
+[[ -n $slot ]] || slot=$(grep -oE 'androidboot\.slot_suffix=_[ab]' /proc/cmdline 2>/dev/null | cut -d= -f2)
 up=$(cut -d. -f1 /proc/uptime)
 case $slot in
   _b) check ok 1 "boot" "kernel $release, slot b, up ${up}s" ;;
-  "") check skip 1 "boot" "kernel $release, no slot on the command line" ;;
+  "") check skip 1 "boot" "kernel $release, no slot in bootconfig or on the command line" ;;
   *) check "not ok" 1 "boot" "kernel $release on slot ${slot#_}: our builds boot from slot b" ;;
 esac
 
