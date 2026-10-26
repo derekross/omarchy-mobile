@@ -11,12 +11,48 @@ hl.window_rule({ match = { class = ".*" }, maximize = true })
 -- ...except the screensaver, which Omarchy shows fullscreen over the bars.
 hl.window_rule({ match = { class = "^org.omarchy.screensaver$" }, maximize = false })
 hl.window_rule({ match = { class = "^org.omarchy.screensaver$" }, fullscreen = true })
+
+-- Edge to edge (TOUCH-PLAN 2.2): Omarchy's gaps (5 and 10) and 2 px border
+-- cost about 24 px of a 480 px wide screen, so none on the phone.
+hl.config({ general = { gaps_in = 0, gaps_out = 0, border_size = 0 } })
+-- ...and every window fully opaque: at Omarchy's 0.985/0.96 the home
+-- screen's widgets (a layer below) showed through apps. Dropping the tag
+-- stops Omarchy's default-opacity rule; the explicit 1 1 also covers the
+-- browsers' own 1.0/0.985.
+hl.window_rule({ match = { class = ".*" }, tag = "-default-opacity", opacity = "1 1" })
+
+-- Maximize is a fullscreen state, and only one window per workspace holds it
+-- (TOUCH-PLAN 2.3). When the maximized window closed, the others stayed
+-- dwindle tiles (240 px wide with two); with this the next one takes the
+-- screen again. (The scrolling layout at column width 1.0 never splits at
+-- all and pairs with an edge-swipe gesture: a later option, not this one.)
+hl.config({ misc = { exit_window_retains_fullscreen = true } })
+-- Modal dialogs ("Save changes?", an app's preferences) keep their own size,
+-- centred over their app and never bigger than the screen, rather than being
+-- stretched to it by the maximize rule above.
+hl.window_rule({
+  match = { modal = true },
+  maximize = false,
+  float = true,
+  center = true,
+  max_size = { "(monitor_w)", "(monitor_h)" },
+})
 -- File dialogs (open, save, choose a folder) come from Nautilus through the
 -- portal (portal/hyprland-portals.conf). One with a parent window would float
--- at its desktop size; tiled, the rule above fills the screen between the
--- bar and the on-screen keyboard, like a phone sheet. Nautilus's own windows
--- tile anyway.
-hl.window_rule({ match = { class = "^org.gnome.Nautilus$" }, float = false })
+-- at its desktop size; tiled and maximized, it fills the screen between the
+-- bar and the on-screen keyboard, like a phone sheet. After the modal rule,
+-- so a modal chooser is a sheet too. Nautilus's own windows tile anyway.
+hl.window_rule({ match = { class = "^org.gnome.Nautilus$" }, float = false, maximize = true })
+
+-- Picture-in-picture (TOUCH-PLAN 3.5): Omarchy floats it, pinned, at 600x338,
+-- wider than the screen, and the maximize rule above made it fill the
+-- screen. A small window in the top-right corner, below the bar, instead.
+hl.window_rule({
+  match = { tag = "pip" },
+  maximize = false,
+  size = { 300, 169 },
+  move = { "(monitor_w-window_w-8)", "(monitor_h*0.08)" },
+})
 
 -- Lock after boot, like a phone: the session logs in automatically, then
 -- Omarchy's lock comes up with its PIN pad. Only once a PIN is set (the

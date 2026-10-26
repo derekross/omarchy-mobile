@@ -400,6 +400,24 @@ if [[ -n ${OMAMOBILE_ACCESS_RENDER:-} ]]; then
 fi
 pass "permission sheet"
 
+# The touch layout (TOUCH-PLAN 2.2, 2.3, 3.5): phone.lua loads under a stub
+# of Hyprland's Lua API and sets what the layout depends on.
+lua=$(command -v lua || command -v lua5.4 || command -v luajit || true)
+if [[ -n $lua ]]; then
+  out=$("$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
+  pass "phone.lua: edge to edge, opaque, dialogs, picture-in-picture"
+else
+  pass "phone.lua window rules # SKIP no lua"
+fi
+
+# The session environment: no empty values (environment.d skips such a line
+# silently), and GTK's file choosers go through the portal (TOUCH-PLAN 3.2).
+env_d=environment.d/20-omamobile-osk.conf
+if grep -nE '^[A-Za-z_][A-Za-z0-9_]*=$' "$env_d"; then fail "$env_d sets no empty values"; fi
+grep -cx 'GTK_USE_PORTAL=1' "$env_d" >/dev/null || fail "GTK 3 file choosers use the portal"
+grep -cx 'GDK_DEBUG=portals' "$env_d" >/dev/null || fail "GTK 4 file choosers use the portal"
+pass "session environment"
+
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
