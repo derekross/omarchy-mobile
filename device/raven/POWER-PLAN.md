@@ -293,3 +293,13 @@ first clean one since 2026-10-20.
   resets through a minute of use, a lock and an unlock; the user saw no
   problem with touch.
 - R5 (#9's power domains) not run yet.
+- R5 (#9 v2, 2026-10-26, `7.3.0-rc6-omamobile-push1-gb3d6253b0d61` = the
+  review kernel with `omamobile-gs101-power-v2`'s driver, bindings and DT):
+  the same 13 domains read off in `pm_genpd_summary` (g2d, mfc, csis, pdp,
+  dns, g3aa, ipp, itp, mcsc, gdc, tnr, bo, tpu; IPP under PDP and DNS
+  under ITP), now `google,gs101-pd` children of the PMU. The AoC's domain
+  is left to the AoC: it came online (69 services), the sound card and the
+  sensor proxy came up; its three ssmt/acpm-reset/invalid-resource lines
+  were there on the previous kernel too. No UFS errors. Boot check: only
+  `services` (omamobile-sitd-2, the eSIM, stopped by hand while debugging,
+  unrelated). Not measured: an idle-current A/B against the old driver.
