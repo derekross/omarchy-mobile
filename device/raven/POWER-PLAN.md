@@ -207,6 +207,11 @@ sg docker -c "env DEVICE=raven KERNEL_DIR=$HOME/android/mainline/wt-gs101-int-in
   `KERNEL_DIR=~/android/mainline/wt-gs101-int KERNEL_OUT=~/android/mainline/out-gs101-int`;
   without SSH, Volume Down + Power about 20 s for fastboot and
   `bin/omamobile flash` with the same variables.
+- **Built (2026-10-26):** `out-gs101-int-initcheck/images`, release
+  `7.3.0-rc6-omamobile-push1-g261ceb0345ea`; its DTBs are byte-for-byte
+  the running ones' once decompiled. No early boot logo (this branch's
+  `bin/omamobile` has no `SPLASH_BGRA_GZ` yet): the screen stays dark
+  until Plymouth.
 - **Risk:** low. The only new firmware request is TMU_IPC_REG_READ (0xfe),
   reads of TMU registers through ACPM, inside the range Google's own
   `tmu_reg_read` parameter allows.
