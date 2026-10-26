@@ -2,7 +2,9 @@
 # omamobile-device-flame
 
 Experimental Pixel 4 native-root policy. Install only into the opt-in flame
-root described in [the native runbook](../../device/flame/native/README.md).
+root described in [the native runbook (review snapshot)](https://github.com/wirelessjoe/omarchy-mobile/blob/c6ce0c41f58a387f18e4f06a6de1a283698c9500/device/flame/native/README.md).
+The runtime must be available before using the separate native boot/root
+plumbing. This split itself installs no boot image or GPT writer.
 The package enables the storage guard, hides protected partitions from desktop
 disk tools, keeps the journal off USB, and selects the tested software-rendering
 fallback for SDDM and user services. PID 1 feeds the 30-second watchdog; USB

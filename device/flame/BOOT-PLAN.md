@@ -58,7 +58,7 @@ general Qualcomm installer. Stock A on this handset is unbootable.
    row layout. The installed correction passed normal, deliberate-crash and
    unplugged restarts. This is not proof of the original spontaneous runtime
    reset cause. The separate GPL source and the new host-only configuration
-   are pinned by `tools/build-flame-loader`; see [native results](native/RESULTS.md).
+   are pinned by `tools/build-flame-loader`; see [native results](https://github.com/wirelessjoe/omarchy-mobile/blob/c6ce0c41f58a387f18e4f06a6de1a283698c9500/device/flame/native/RESULTS.md).
 
 [coral]: https://android.googlesource.com/device/google/coral/+/refs/heads/android13-release/bootctrl/Android.bp
 [bootctrl]: https://android.googlesource.com/platform/hardware/qcom/bootctrl/+/refs/heads/android13-release/boot_control.cpp
@@ -194,4 +194,4 @@ and no longer starts a USB getty automatically. These publication changes
 were host tested/rebuilt, not flashed as part of preparing this PR. Do not
 transfer the installed-image test results to these new image bytes without
 a new approved RAM boot. Full evidence and remaining limits are in
-[native/RESULTS.md](native/RESULTS.md).
+[native/RESULTS.md](https://github.com/wirelessjoe/omarchy-mobile/blob/c6ce0c41f58a387f18e4f06a6de1a283698c9500/device/flame/native/RESULTS.md).

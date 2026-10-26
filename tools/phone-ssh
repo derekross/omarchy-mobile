@@ -19,33 +19,51 @@ target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
 }
 key=${OMAMOBILE_SSH_KEY:-}
 known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
+custom=0
+path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
+if [[ $target != root@172.16.42.1 || -n $key$known ]]; then
+  custom=1
+  # OpenSSH's %C omits identity/trust policy. Normalize explicit paths and
+  # include contents so cwd changes and key rotations never reuse a master.
+  # Python 3 is required only for these explicit connection options.
+  normalized=$(python3 - "$target" "$key" "$known" <<'PYCONTEXT'
+import hashlib, sys
+from pathlib import Path
+h = hashlib.sha256(); h.update(sys.argv[1].encode() + b'\0')
+paths = []
+for label, value in zip(('identity', 'known-hosts'), sys.argv[2:]):
+    if any(token in value for token in ('\n', '\r', '%', '${')):
+        sys.exit('phone-ssh: file paths must be literal, without newlines or OpenSSH expansion tokens')
+    path = Path(value).expanduser().resolve() if value else None
+    paths.append(str(path) if path else '')
+    h.update((str(path) if path else '').encode() + b'\0')
+    if path:
+        try:
+            if not path.is_file():
+                raise OSError('not a regular file')
+            h.update(path.read_bytes())
+        except OSError:
+            sys.exit('phone-ssh: cannot read explicit ' + label + ' file')
+    h.update(b'\0')
+print(*paths, h.hexdigest()[:24], sep='\n')
+PYCONTEXT
+  )
+  key=${normalized%%$'\n'*}
+  normalized=${normalized#*$'\n'}
+  known=${normalized%%$'\n'*}
+  context=${normalized#*$'\n'}
+  path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
+fi
 opts=(-o LogLevel=ERROR -o ConnectTimeout=6)
 if [[ -n $known ]]; then
-  opts+=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known")
+  # This -o value is parsed again as ssh_config: protect spaces and quotes.
+  quoted=${known//\\/\\\\}
+  quoted=${quoted//\"/\\\"}
+  opts+=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$quoted\"")
 else
   opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 fi
 [[ -z $key ]] || opts+=(-o IdentitiesOnly=yes -i "$key")
-path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
-if [[ $target != root@172.16.42.1 || -n $key$known ]]; then
-  # %C separates endpoints, but not identities or host-key policies. Never
-  # reuse an unchecked master for a later strict connection. Python 3 is
-  # needed only for sharing/stopping a connection with explicit options.
-  if [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 && ${1:-} != --fresh || ${1:-} == --stop ]]; then
-    context=$(python3 - "$target" "$key" "$known" <<'PY'
-import hashlib, sys
-from pathlib import Path
-h = hashlib.sha256()
-for value in sys.argv[1:]:
-    h.update(value.encode()); h.update(b'\0')
-if sys.argv[3]:
-    h.update(Path(sys.argv[3]).read_bytes())
-print(h.hexdigest()[:24])
-PY
-    )
-    path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
-  fi
-fi
 case ${1:-} in
   --fresh) shift; opts+=(-o ControlMaster=no -o ControlPath=none) ;;
   --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit "$target" 2>/dev/null ;;
@@ -55,6 +73,10 @@ case ${1:-} in
     if [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 ]]; then
       opts+=(-o ControlMaster=auto -o ControlPath="$path"
         -o ControlPersist=60 -o ServerAliveInterval=2 -o ServerAliveCountMax=3)
+    elif ((custom)); then
+      # A user's ssh_config may enable sharing globally. Explicit identity
+      # and trust options must apply to a new connection unless requested.
+      opts+=(-o ControlMaster=no -o ControlPath=none)
     fi ;;
 esac
 exec ssh "${opts[@]}" "$target" "$@"

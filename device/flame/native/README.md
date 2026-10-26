@@ -8,15 +8,20 @@ contributor workflow, **not a release installer**. The published loader recipe
 has additional host-only changes and needs a fresh approved RAM test.
 
 The ordinary `device/flame/device.conf` remains RAM-only. Only
-`DEVICE=flame FLAME_NATIVE=1` selects [native/device.conf](device.conf).
+`DEVICE=flame FLAME_NATIVE=1` selects [native/device.conf (review snapshot)](https://github.com/wirelessjoe/omarchy-mobile/blob/c6ce0c41f58a387f18e4f06a6de1a283698c9500/device/flame/native/device.conf).
 The generic `tools/install-phone` still refuses flame. Native `push` and the
 Tensor initramfs/image layout are refused; native boot writes go through
 `bin/omamobile flash`. Nothing here automatically repairs GPT metadata,
 selects a slot, restores calibration, or installs a separate Codex desktop app.
 
+The runtime package must land before native root/build use. Boot plumbing
+and SSH options are separate review components. Links to companion files
+pin the original review snapshot while those components land; the basic
+recovery procedure below is independent of the held GPT proposal.
+
 ## Prerequisites and source
 
-Read [BOOT-PLAN](../BOOT-PLAN.md) and the repository safety rules first.
+Read [proposed BOOT-PLAN](https://github.com/wirelessjoe/omarchy-mobile/blob/c6ce0c41f58a387f18e4f06a6de1a283698c9500/device/flame/BOOT-PLAN.md) and the repository safety rules first.
 Obtain the owner's approval for every hardware reboot or write. Keep a current
 verified private backup set, matching factory image, physical Fastboot access,
 and the exact stock boot/DTBO backups. The tested handset's stock A is
