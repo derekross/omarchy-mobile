@@ -1,6 +1,8 @@
 # Touch and mobile usability plan
 
-Status: audit 2026-10-26, on `main` at 30052e8 and the Pixel 7 Pro (omamobile-shell 0.2.16, Omarchy 4.0.6, Hyprland 0.56.2). Nothing fixed yet. Open PR #43 (home pill, recents gesture, bigger home icons) is accounted for below.
+Status: audit 2026-10-26, on `main` at 30052e8 and the Pixel 7 Pro (omamobile-shell 0.2.16, Omarchy 4.0.6, Hyprland 0.56.2). Open PR #43 (home pill, recents gesture, bigger home icons) is accounted for below.
+
+Fixed in omamobile-shell 0.2.18 (built and tested offline, not yet checked on the phone): 1.4 (tiles tap through a TapHandler, so a swipe on a tile closes or expands the sheet); 1.5 (the hide-keyboard button is 44 px tall, at the keyboard's top left); 1.9 (press feedback and a two-tap, urgent-coloured Clear all, further from Home); 1.10's settings Remove (two taps, at the far right; the Undo chip is still open); 2.1 without theme overrides (a 12 px floor, `Readable.js`, for every caption-sized label but the home tiles' label, which #43 raises; the update warning at body size with a glyph); 2.6 (44 px hit areas for the quick-settings handle, the page dots and the call chip); 2.7's tiles (only the glyph and name of an unavailable tile are dimmed); 3.7's quick-settings Reset (two taps); and the stale gesture comment in `Bar.qml` from 1.2.
 
 The phone is 480x1040 logical px (scale 3). Targets used: touch targets at least 44 px (Material's 48 dp is about 51 px here), 8 px between targets, body text 14 px, nothing that has to be read under 12 px, contrast 4.5:1 for text.
 
