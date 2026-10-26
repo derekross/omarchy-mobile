@@ -330,3 +330,14 @@ On Omarchy, do what Android does: a boot-time retry that power-cycles the
 controller up to about 10 times, a few seconds apart, logging each attempt
 (first try or random; after a warm or a cold boot). If it works, move the
 retry into hci_bcm's setup for upstream.
+
+**B3 follow-up (2026-10-26, GrapheneOS 2026102100):** Bluetooth came up
+cleanly at the first GrapheneOS boot after reinstalling it, where that
+morning GrapheneOS's stack had crashed at boot and needed retries. The
+difference: the last Omarchy kernel before this GrapheneOS boot was the
+review kernel (`g1de37d2bef30`/`gb3d6253b0d61`), whose CMU_APM mux fix
+(PR #6 v2) never writes the reserved bit that the old
+`assigned-clock-parents` override set in the always-on CMU_APM; the
+morning's crash followed kernels with the override. That fits state
+carried over a warm reboot. One boot each way: not proven. Next GrapheneOS
+boots, and the cold-boot test above, would confirm it.
