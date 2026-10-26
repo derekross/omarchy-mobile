@@ -346,6 +346,35 @@ def real_package(t):
        and "sendInlineReply" in read(root, notif + "Service.qml")
        and "notificationReplyField" in read(root, notif + "components/NotificationCard.qml"),
        "real omarchy: notifications take an inline reply (0015)")
+    card = read(root, notif + "components/NotificationCard.qml")
+    service = read(root, notif + "Service.qml")
+    ok("DragHandler {\n    id: swipeHandler" in card and "yAxis.enabled: false" in card
+       and "dragThreshold:" in card and "root.width * 0.35" in card
+       and "root.closeRequested()" in card.split("function finishSwipe", 1)[1]
+       and "!root.replying" in card.split("id: swipeHandler", 1)[1].split("}", 1)[0],
+       "real omarchy: a toast swipes away past 35%, not while a reply is typed (0017)")
+    ok('objectName: "notificationCloseButton"' in card and "width: Style.space(44)" in card
+       and "height: Style.space(44)" in card and "visible: root.closeButtonShown" in card,
+       "real omarchy: a 44 px close button on toasts (0017)")
+    ok("acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus" in card
+       and "mouse.button === Qt.RightButton" in card,
+       "real omarchy: hover pauses for a mouse only; right-click still closes (0017)")
+    ok("!card.held" in service and "closeButtonShown: service.touchScreen" in service
+       and '["hyprctl", "-j", "devices"]' in service and "touchScreenProc.running = true" in service,
+       "real omarchy: the close button shows when Hyprland lists a touch screen (0017)")
+    menu = read(root, "usr/share/omarchy/shell/plugins/menu/Menu.qml")
+    back = menu.split("DragHandler {\n        id: backSwipe", 1)
+    ok(len(back) == 2 and "yAxis.enabled: false" in back[1].split("}", 1)[0]
+       and "!resultList.moving" in back[1].split("}", 1)[0] and "root.goBack()" in back[1].split("NumberAnimation", 1)[0],
+       "real omarchy: a swipe right on the menu goes back, not while the list scrolls (0018)")
+    ok('objectName: "menuBackButton"' in menu and "visible: card.canGoBack" in menu
+       and 'root.activeMenu !== "root" && !root.dmenuActive' in menu
+       and menu.split('objectName: "menuBackButton"', 1)[1].count("onClicked: root.goBack()") >= 1,
+       "real omarchy: the menu's header has a back button below the top level (0018)")
+    ok("(event.key === Qt.Key_Backspace || event.key === Qt.Key_Left) && !root.filterText) {\n            root.goBack()" in menu,
+       "real omarchy: Backspace and Left still go back (0018)")
+    ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
+    qml_parse(root)
     for name in ("omarchy-channel-set", "omarchy-refresh-pacman"):
         text = read(root, "usr/bin/" + name)
         guard = text.find("if [[ -x /usr/bin/omamobile-update ]]")
@@ -386,6 +415,23 @@ def real_package(t):
     ok(rc == 0 and status["upstream"] == [os.path.basename(patch0000)],
        "real omarchy with %s upstream: skipped and reported, the rest applied" % os.path.basename(patch0000))
     ok(len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
+
+
+def qml_parse(root):
+    """Every QML file the series touches still parses, when qmlformat is at
+    hand (it reports syntax errors without needing the shell's imports)."""
+    tool = shutil.which("qmlformat") or ("/usr/lib/qt6/bin/qmlformat" if os.path.isfile("/usr/lib/qt6/bin/qmlformat") else "")
+    if not tool:
+        print("ok - real omarchy: the patched QML parses # SKIP no qmlformat")
+        return
+    files = set()
+    for p in glob.glob(os.path.join(SERIES, "*.patch")):
+        for line in open(p):
+            if line.startswith("+++ w/") and line.rstrip().endswith(".qml"):
+                files.add(line[6:].rstrip())
+    bad = [f for f in sorted(files)
+           if subprocess.run([tool, os.path.join(root, "usr/share/omarchy", f)], capture_output=True).returncode != 0]
+    ok(files and not bad, "real omarchy: the %d patched QML files parse (qmlformat)%s" % (len(files), " " + str(bad) if bad else ""))
 
 
 def screensaver_launcher(t, launcher):
