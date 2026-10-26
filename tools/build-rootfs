@@ -61,6 +61,10 @@ done
 [[ $VERSION =~ ^[0-9A-Za-z._-]+$ ]] || alarm_die "bad version '$VERSION'"
 [[ $DEVICE =~ ^[a-z0-9]+$ ]] || alarm_die "DEVICE must be a codename"
 conf=device/$DEVICE/device.conf
+if [[ ${FLAME_NATIVE:-0} == 1 ]]; then
+  [[ $DEVICE == flame ]] || alarm_die "FLAME_NATIVE=1 requires DEVICE=flame"
+  conf=device/flame/native/device.conf
+fi
 [[ -f $conf ]] || alarm_die "no $conf"
 DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
 [[ -n $DEVICE_PACKAGE ]] || alarm_die "$conf has no PACKAGE"
@@ -95,7 +99,7 @@ docker run --rm --privileged --platform linux/arm64 \
   -v "$ROOT:/src:ro" -v "$ROOT/out/repo:/repo:ro" -v "$modules:/modules:ro" \
   -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
   -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
-  -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" \
+  -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" -e FLAME_NATIVE="${FLAME_NATIVE:-0}" \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \

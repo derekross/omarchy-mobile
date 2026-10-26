@@ -1,0 +1,80 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Build the experimental Pixel 4 native-root boot image, host only.
+# At boot, its init may write only userdata and boot_b; read the native runbook.
+#
+# Usage: tools/build-flame-system --kernel Image.gz --dtb flame.dtb \
+#          --watchdog-module qcom-wdt.ko.zst \
+#          --ssh-key ~/.ssh/id_ed25519.pub --mkbootimg /path/to/mkbootimg.py \
+#          --out /path/to/output
+#
+# The kernel must have UFS, USB DWC3/QCOM, configfs NCM/ACM and devtmpfs
+# built in (the supplied SM8150 kernel does). Only its matching watchdog
+# module is loaded. Remote processors stay disabled unless --wifi explicitly
+# enables the previously tested MPSS node; firmware/NV gates still apply.
+# Supply the original sm8150-google-flame.dtb, not a Tensor or coral DTB.
+# mkbootimg.py and its gki/ helpers come from AOSP system/tools/mkbootimg.
+# Docker runs an aarch64 Alpine builder; x86 hosts need a binfmt handler.
+# Boot this image from U-Boot's fastboot server, not Android's fastboot.
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+kernel="" dtb="" watchdog="" key="" mkbootimg="" out="" wifi=0
+die() { echo "error: $*" >&2; exit 1; }
+while (($#)); do
+  case $1 in
+    --kernel) kernel=${2:?}; shift ;;
+    --dtb) dtb=${2:?}; shift ;;
+    --watchdog-module) watchdog=${2:?}; shift ;;
+    --ssh-key) key=${2:?}; shift ;;
+    --mkbootimg) mkbootimg=${2:?}; shift ;;
+    --out) out=${2:?}; shift ;;
+    --wifi) wifi=1 ;;
+    -h|--help) sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+  shift
+done
+command -v docker >/dev/null || die 'Docker is required'
+command -v python3 >/dev/null || die 'Python 3 is required'
+for path in "$kernel" "$dtb" "$watchdog" "$key" "$mkbootimg"; do
+  [[ -n $path && -f $path ]] || die 'supply --kernel, --dtb, --watchdog-module, --ssh-key and --mkbootimg files'
+done
+[[ -n $out ]] || die 'supply --out DIR'
+
+# Normalize paths portably (macOS readlink lacks -f on older releases), so
+# relative paths and spaces survive Docker's bind mount parsing.
+absolute() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+kernel=$(absolute "$kernel") dtb=$(absolute "$dtb") key=$(absolute "$key")
+watchdog=$(absolute "$watchdog")
+mkbootimg=$(absolute "$mkbootimg") out=$(absolute "$out")
+for path in "$ROOT" "$kernel" "$dtb" "$watchdog" "$key" "$mkbootimg" "$out"; do
+  [[ $path != *,* ]] || die 'Docker bind paths cannot contain commas'
+done
+[[ $(basename "$mkbootimg") == mkbootimg.py ]] || die '--mkbootimg must name AOSP mkbootimg.py'
+[[ ! -e $out/boot.img ]] || die "$out/boot.img already exists; choose a fresh output directory"
+python3 - "$key" <<'PY'
+import base64, pathlib, struct, sys
+data = pathlib.Path(sys.argv[1]).read_text().split()
+if len(data) < 2 or data[0] not in ('ssh-ed25519', 'ssh-rsa', 'ecdsa-sha2-nistp256'):
+    sys.exit('--ssh-key must be an OpenSSH PUBLIC key, never a private key')
+try:
+    raw = base64.b64decode(data[1], validate=True)
+    n, = struct.unpack('>I', raw[:4])
+    assert raw[4:4+n].decode() == data[0]
+except (ValueError, struct.error, AssertionError, UnicodeError):
+    sys.exit('invalid SSH public key')
+PY
+
+mkdir -p "$out"
+docker run --rm --platform linux/arm64 \
+  --mount "type=bind,source=$ROOT,target=/src,readonly" \
+  --mount "type=bind,source=$kernel,target=/input/kernel,readonly" \
+  --mount "type=bind,source=$dtb,target=/input/flame.dtb,readonly" \
+  --mount "type=bind,source=$watchdog,target=/input/watchdog,readonly" \
+  --mount "type=bind,source=$key,target=/input/key.pub,readonly" \
+  --mount "type=bind,source=$(dirname "$mkbootimg"),target=/mkbootimg,readonly" \
+  --mount "type=bind,source=$out,target=/out" \
+  --mount "type=bind,source=$ROOT/device/flame/native/init,target=/system-init,readonly" \
+  --env FLAME_WIFI="$wifi" \
+  alpine:3.22 sh /src/device/flame/native/build
+echo "Built $out/boot.img (U-Boot native-root development image; no phone was accessed)"

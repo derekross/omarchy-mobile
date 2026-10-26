@@ -100,9 +100,15 @@ if omarchy-done ensure omamobile-credential-type; then
   fi
 fi
 
-# Phone scale: 1440x3120 at 3 is 480x1040 logical, seeded once
+# Phone scale, seeded once: 3 normally; flame uses the measured 2.5 scale.
 if omarchy-done ensure omamobile-monitor-scale; then
-  sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
+  scale=3
+  [[ ! -f /usr/share/omamobile/flame-root ]] || scale=2.5
+  sed -i "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $scale/" ~/.config/hypr/monitors.lua
+fi
+
+if [[ -f /usr/share/omamobile/flame-root ]] && omarchy-done ensure omamobile-flame-user-defaults; then
+  omamobile-flame-configure-user --chrome-if-installed
 fi
 
 # Touch phone: no pointer on screen (it still hides on touch if a USB mouse is

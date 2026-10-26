@@ -338,3 +338,12 @@ Per release, in order. Stop at any failed step.
 6. **Root image:** device packages in the cache and installed on first boot, or one root image per device. The first build (§6) installs them, so its image is per device; revisit with the second device.
 7. **Bundle hosting:** GitHub Releases on this repository, or next to the `[omamobile]` repository.
 8. **Second device:** which Pixel proves the model (a gs201 sibling such as panther needs mostly a DTS; a gs101 phone also tests the different boot image set).
+
+## Experimental Pixel 4 native profile
+
+`device/flame/device.conf` remains RAM-only. Contributor-only
+`DEVICE=flame FLAME_NATIVE=1` selects `device/flame/native/device.conf` for
+the explicitly staged userdata/boot-B workflow. The generic installer still
+refuses flame. Read the [native runbook](../device/flame/native/README.md)
+and its [test boundaries](../device/flame/native/RESULTS.md); this profile
+is not a release bundle, automated GPT writer or stock-A recovery guarantee.

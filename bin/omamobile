@@ -61,6 +61,10 @@ UFS_RW_ALLOWED="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b use
 # backslashes, so other tools can read it too. Nothing in it is executed.
 load_device() {
   local file="$ROOT/device/$DEVICE/device.conf" line n=0 key p
+  if [[ ${FLAME_NATIVE:-0} == 1 ]]; then
+    [[ $DEVICE == flame ]] || die "FLAME_NATIVE=1 requires DEVICE=flame"
+    file="$ROOT/device/flame/native/device.conf"
+  fi
   local quoted='^([A-Z][A-Z0-9_]*)="([^"$`\\]*)"$' bare='^([A-Z][A-Z0-9_]*)=([^"$`\\'"'"'[:space:]]*)$'
   DEV_BOOT_METHOD=android-v4  # legacy descriptors omit it
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
@@ -74,27 +78,37 @@ load_device() {
       die "$file:$n: not a KEY=value line"
     fi
   done < "$file"
-  [[ $DEV_BOOT_METHOD == android-v4 ]] \
-    || die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports only android-v4"
-  for key in CODENAME SOC PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
-      VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
+  local required="CODENAME SOC BOOT_IMAGES UFS_RW PANEL_SIZE"
+  case $DEV_BOOT_METHOD in
+    android-v4)
+      required+=" PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL INITRAMFS_INIT"
+      ;;
+    uboot-ext4)
+      [[ ${DEV_CODENAME:-} == flame && ${DEV_SOC:-} == sm8150 ]] || die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; uboot-ext4 is implemented only for flame"
+      [[ ${DEV_BOOT_IMAGES:-} == boot && ${DEV_UFS_RW:-} == 'boot_b userdata' ]] || die 'uboot-ext4 requires boot only and UFS_RW="boot_b userdata"'
+      ;;
+    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; use a supported device profile" ;;
+  esac
+  for key in $required; do
     p="DEV_$key"
     [[ -n ${!p:-} ]] || die "$file: $key is missing"
   done
-  # ABL picks the base DTB by /soc_id (gs101, gs201) or by /soc_compatible
-  # (zuma): a descriptor names exactly one of the two.
-  if [[ -n ${DEV_SOC_IDS:-} && -n ${DEV_SOC_COMPATIBLE:-} ]]; then
-    die "$file: SOC_IDS and SOC_COMPATIBLE are exclusive; name the one this bootloader matches on"
-  elif [[ -z ${DEV_SOC_IDS:-} && -z ${DEV_SOC_COMPATIBLE:-} ]]; then
-    die "$file: SOC_IDS is missing (or SOC_COMPATIBLE, for a bootloader that matches /soc_compatible)"
+  if [[ $DEV_BOOT_METHOD == android-v4 ]]; then
+    # ABL picks the base DTB by /soc_id (gs101, gs201) or by /soc_compatible
+    # (zuma): a descriptor names exactly one of the two.
+    if [[ -n ${DEV_SOC_IDS:-} && -n ${DEV_SOC_COMPATIBLE:-} ]]; then
+      die "$file: SOC_IDS and SOC_COMPATIBLE are exclusive; name the one this bootloader matches on"
+    elif [[ -z ${DEV_SOC_IDS:-} && -z ${DEV_SOC_COMPATIBLE:-} ]]; then
+      die "$file: SOC_IDS is missing (or SOC_COMPATIBLE, for a bootloader that matches /soc_compatible)"
+    fi
+    local sc='^[a-z0-9]+(-[a-z0-9]+)*:0x[0-9a-f]+:[0-9]+:[0-9]+:[0-9]+$' labels=" "
+    for p in ${DEV_SOC_COMPATIBLE:-}; do
+      [[ $p =~ $sc ]] || die "$file: SOC_COMPATIBLE entries are label:product_id:major:minor:pkg_mode, not $p"
+      # One child node per entry: the label names it, so it must be unique
+      [[ $labels != *" ${p%%:*} "* ]] || die "$file: SOC_COMPATIBLE names ${p%%:*} twice"
+      labels+="${p%%:*} "
+    done
   fi
-  local sc='^[a-z0-9]+(-[a-z0-9]+)*:0x[0-9a-f]+:[0-9]+:[0-9]+:[0-9]+$' labels=" "
-  for p in ${DEV_SOC_COMPATIBLE:-}; do
-    [[ $p =~ $sc ]] || die "$file: SOC_COMPATIBLE entries are label:product_id:major:minor:pkg_mode, not $p"
-    # One child node per entry: the label names it, so it must be unique
-    [[ $labels != *" ${p%%:*} "* ]] || die "$file: SOC_COMPATIBLE names ${p%%:*} twice"
-    labels+="${p%%:*} "
-  done
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
   # Safety: the guard's allowlist may name slot B's boot images and userdata
   # only, must hold userdata, and every boot image we write must be on it.
@@ -119,9 +133,11 @@ load_device() {
     [[ $seen != *" $p "* ]] || die "$file: BOOT_IMAGES names $p twice"
     seen+="$p "
   done
-  for p in boot vendor_boot dtbo; do
-    [[ $seen == *" $p "* ]] || die "$file: BOOT_IMAGES must include $p"
-  done
+  if [[ $DEV_BOOT_METHOD == android-v4 ]]; then
+    for p in boot vendor_boot dtbo; do
+      [[ $seen == *" $p "* ]] || die "$file: BOOT_IMAGES must include $p"
+    done
+  fi
   # AVB hash footers, for a bootloader whose vbmeta chains these partitions
   # (zuma): image:partition_size, each a boot image, named once, the size
   # a whole number of 4 KiB blocks. Their rollback index and security patch
@@ -329,6 +345,7 @@ cmd_initramfs_config() {
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
   load_device
+  [[ $DEV_BOOT_METHOD == android-v4 ]] || die "use tools/build-flame-system for the native flame payload"
   # A leading slash is repo-root relative, so devices share initramfs/init.
   # Anything else is relative to device/<codename>/.
   local init
@@ -452,6 +469,45 @@ cmd_initramfs() {
 
 cmd_images() {
   load_device
+  if [[ $DEV_BOOT_METHOD == uboot-ext4 ]]; then
+    local image=${UBOOT_IMAGE:-} expected=${UBOOT_SHA256:-} got role=${FLAME_BOOT_ROLE:-loader}
+    [[ $role == loader || $role == stock-recovery ]] || die 'FLAME_BOOT_ROLE must be loader or stock-recovery'
+    [[ -f $image && $expected =~ ^[a-f0-9]{64}$ ]] || die 'supply the reviewed UBOOT_IMAGE and UBOOT_SHA256'
+    got=$(sha256sum < "$image" | cut -d' ' -f1)
+    [[ $got == "$expected" ]] || die 'U-Boot image checksum mismatch'
+    python3 - "$image" "$role" <<'PY'
+import pathlib, struct, sys
+p = pathlib.Path(sys.argv[1])
+with p.open('rb') as stream:
+    header = stream.read(48)
+version = 0 if sys.argv[2] == 'loader' else 2
+if len(header) != 48 or header[:8] != b'ANDROID!' or struct.unpack_from('<I', header, 40)[0] != version:
+    sys.exit('Wrong Android header for the selected flame boot role')
+if not 4096 < p.stat().st_size <= 67108864:
+    sys.exit('U-Boot image exceeds the boot partition or is truncated')
+if sys.argv[2] == 'stock-recovery' and p.stat().st_size != 67108864:
+    sys.exit('Expected the verified 64 MiB flame stock boot backup')
+if sys.argv[2] == 'loader':
+    kernel, address, ramdisk = struct.unpack_from('<3I', header, 8)
+    page, = struct.unpack_from('<I', header, 36)
+    if page != 4096 or address != 0x8000 or ramdisk != 0 or not 0 < kernel <= 4*1024*1024:
+        sys.exit('Invalid flame loader page, address, ramdisk or kernel size')
+    if p.stat().st_size != 4096 + ((kernel+4095)//4096)*4096:
+        sys.exit('Truncated or extra loader image sections')
+    with p.open('rb') as stream:
+        stream.seek(4096)
+        if stream.read(3) != b'\x1f\x8b\x08':
+            sys.exit('Expected compressed U-Boot kernel payload')
+PY
+    mkdir -p "$KERNEL_OUT/images"
+    cp "$image" "$KERNEL_OUT/images/boot.img"
+    printf '%s\n' "$DEVICE" > "$KERNEL_OUT/images/DEVICE"
+    printf '%s\n' "$DEV_BOOT_METHOD" > "$KERNEL_OUT/images/BOOT_METHOD"
+    printf '%s\n' "$role" > "$KERNEL_OUT/images/BOOT_ROLE"
+    (cd "$KERNEL_OUT/images" && sha256sum boot.img > SHA256SUMS)
+    say 'Staged reviewed U-Boot image; Linux stays in /boot/omamobile/boot.img on userdata'
+    return
+  fi
   local img="$KERNEL_OUT/images" tools="$SRC_DIR/system/tools/mkbootimg"
   local dtc="$KERNEL_OUT/scripts/dtc/dtc" boot="$KERNEL_OUT/arch/arm64/boot"
   local dtb="$boot/dts/$DEV_DTB"
@@ -663,6 +719,18 @@ fastboot_serial() {
 }
 
 cmd_fastboot() {
+  if [[ ${FLAME_NATIVE:-0} == 1 ]]; then
+    load_device
+    in_fastboot && return 0
+    "$ROOT/tools/phone-ssh" 'systemctl --no-block --reboot-argument=bootloader reboot' \
+      || die 'native flame reboot request failed; use Power + Volume Down'
+    local attempt
+    for ((attempt=0; attempt<30; attempt++)); do
+      sleep 2
+      in_fastboot && return 0
+    done
+    die 'native flame did not enter Android fastboot; use the buttons. No slot-A fallback attempted.'
+  fi
   local ssh="$ROOT/tools/phone-ssh" i
   in_fastboot && { say "Already in fastboot"; return 0; }
   for i in $(seq 1 12); do
@@ -699,19 +767,54 @@ cmd_flash() {
   serial=$(fastboot_serial) || exit 1
   # Every image and allowlist entry first: never start writing slot B and
   # find out halfway that a later image is missing.
+  if [[ $DEV_BOOT_METHOD == uboot-ext4 ]]; then
+    [[ $(cat "$img/BOOT_METHOD" 2>/dev/null) == uboot-ext4 ]] || die 'image boot method mismatch'
+    (cd "$img" && sha256sum -c SHA256SUMS) || die 'staged boot checksum mismatch'
+    local facts role
+    role=$(cat "$img/BOOT_ROLE" 2>/dev/null)
+    [[ $role == loader || $role == stock-recovery ]] || die 'missing flame image role'
+    facts=''
+    local variable value
+    for variable in product unlocked current-slot version-bootloader slot-successful:b; do
+      value=$(timeout 10 fastboot -s "$serial" getvar "$variable" 2>&1) || die "cannot inspect Android fastboot: $variable"
+      facts+="$value"$'\n'
+    done
+    [[ $facts != *U-Boot* ]] || die 'return to Android fastboot before flashing'
+    printf '%s\n' "$facts" | grep -Eq '(^|[[:space:]])product:[[:space:]]*flame[[:space:]]*$' || die 'connected product is not flame'
+    printf '%s\n' "$facts" | grep -Eq '(^|[[:space:]])unlocked:[[:space:]]*yes[[:space:]]*$' || die 'bootloader is locked'
+    printf '%s\n' "$facts" | grep -Eq '(^|[[:space:]])current-slot:[[:space:]]*b[[:space:]]*$' || die 'flame requires the already-active, recovery-tested slot B'
+    if [[ $role == loader ]]; then
+      printf '%s\n' "$facts" | grep -Eq '(^|[[:space:]])slot-successful:b:[[:space:]]*yes[[:space:]]*$' || die 'slot B must already be marked successful'
+    fi
+  fi
+  # Check every file before starting any write, including shared Android paths.
   for p in $DEV_BOOT_IMAGES; do
     slot_b_allowed "$p" || die "${p}_b is not on device/$DEVICE's storage-guard allowlist; refusing"
     [[ -f "$img/$p.img" ]] || die "missing $img/$p.img (run: omamobile images)"
   done
   local out rc
   for p in $DEV_BOOT_IMAGES; do
+    if [[ $DEV_BOOT_METHOD == uboot-ext4 && $(cat "$img/BOOT_ROLE") == loader ]]; then
+      timeout 30 fastboot -s "$serial" erase "${p}_b" || die 'boot B erase failed; staying in fastboot'
+    fi
     rc=0
     out=$(timeout 60 fastboot -s "$serial" flash "${p}_b" "$img/$p.img" 2>&1) || rc=$?
     echo "$out" | grep -E 'OKAY|FAIL' | tail -1 | sed "s/^/$p: /" || true
-    # Stop before activating or rebooting into a half-written slot B
+    # Stop before activating or rebooting into a half-written slot B.
     ((rc == 0)) || die "flashing ${p}_b failed (exit $rc): slot B is incomplete, flash again before rebooting"
   done
-  timeout 20 fastboot -s "$serial" --set-active=b >/dev/null 2>&1
+  if [[ $DEV_BOOT_METHOD == uboot-ext4 && $(cat "$img/BOOT_ROLE") == stock-recovery ]]; then
+    say 'Verified stock boot B restored; staying in Android fastboot. Factory-reset Android data through recovery before starting Android.'
+    return
+  fi
+  # Keep flame's existing successful-slot metadata: set_active would reset it,
+  # and its protected devinfo is never written by the Linux development root.
+  if [[ $DEV_BOOT_METHOD == android-v4 ]]; then
+    timeout 20 fastboot -s "$serial" --set-active=b >/dev/null 2>&1
+  else
+    timeout 10 fastboot -s "$serial" getvar slot-successful:b 2>&1 | grep -Eq '(^|[[:space:]])slot-successful:b:[[:space:]]*yes[[:space:]]*$' \
+      || die 'slot B success is clear; staying in fastboot. The boot-success policy decision is pending; use physical Fastboot recovery before any further boots.'
+  fi
   timeout 20 fastboot -s "$serial" reboot >/dev/null 2>&1
   say "Booting slot B; waiting for SSH"
   local i
@@ -719,12 +822,16 @@ cmd_flash() {
     "$ROOT/tools/phone-ssh" 'uname -v; cut -d" " -f1 /proc/uptime' 2>/dev/null && return 0
     sleep 2
   done
+  if [[ $DEV_BOOT_METHOD == uboot-ext4 ]]; then
+    die 'no SSH after flame boot; use the buttons to return to Android fastboot and follow the native recovery runbook'
+  fi
   die "no SSH after boot (the safety net returns to fastboot within about a minute)"
 }
 
 cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
   load_device
+  [[ $DEV_BOOT_METHOD == android-v4 ]] || die "native flame writes require Android fastboot; use flash"
   images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # Refuse before any write. A phone whose initramfs has no reboot-to would

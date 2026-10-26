@@ -167,6 +167,11 @@ size=$(( (used * 12 / 10 + 768 + 63) / 64 * 64 ))
 rm -f /out/rootfs.img
 truncate -s "${size}M" /out/rootfs.img
 # -m 1: 1% reserved for root, not 5% of a ~100 GB userdata
-mkfs.ext4 -q -L omamobile-root -m 1 -d "$T" /out/rootfs.img
+features=()
+if [[ $DEVICE == flame && ${FLAME_NATIVE:-0} == 1 ]]; then
+  # The tested storage loader does not support these newer ext4 features.
+  features=(-O "^orphan_file,^metadata_csum_seed")
+fi
+mkfs.ext4 -q -L omamobile-root -m 1 "${features[@]}" -d "$T" /out/rootfs.img
 e2fsck -fn /out/rootfs.img >/dev/null
 echo "    ${used} MiB of files in a ${size} MiB file system"

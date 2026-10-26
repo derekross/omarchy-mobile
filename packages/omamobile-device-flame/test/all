@@ -1,0 +1,54 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+bash -n install
+python3 -B test/storage-guard.py
+sh -n vendor/bin/flame-storage-guard
+bash -n vendor/bin/flame-wifi-start vendor/bin/flame-partition-links
+./install "$scratch/root"
+test -f "$scratch/root/usr/share/omamobile/flame-root"
+test -L "$scratch/root/usr/lib/systemd/system/sysinit.target.wants/flame-storage-guard.service"
+test ! -e "$scratch/root/usr/lib/systemd/system/multi-user.target.wants/flame-wifi.service"
+test -f "$scratch/root/usr/lib/systemd/journald.conf.d/90-flame-standalone.conf"
+grep -q '^ForwardToConsole=no$' "$scratch/root/usr/lib/systemd/journald.conf.d/90-flame-standalone.conf"
+grep -qx 'RuntimeWatchdogSec=30s' "$scratch/root/usr/lib/systemd/system.conf.d/10-flame-watchdog.conf"
+grep -qx 'RebootWatchdogSec=1min' "$scratch/root/usr/lib/systemd/system.conf.d/10-flame-watchdog.conf"
+grep -qx 'Name=usb0' "$scratch/root/usr/lib/systemd/network/10-flame-usb.network"
+grep -qx 'EmitRouter=no' "$scratch/root/usr/lib/systemd/network/10-flame-usb.network"
+if grep -q '^Gateway=' "$scratch/root/usr/lib/systemd/network/10-flame-usb.network"; then
+  echo 'not ok - USB must not become the default gateway' >&2
+  exit 1
+fi
+python3 - <<'PY'
+from pathlib import Path
+import importlib.machinery,importlib.util,tempfile
+path=Path('bin/omamobile-flame-configure-user')
+loader=importlib.machinery.SourceFileLoader('flame_user',str(path))
+spec=importlib.util.spec_from_loader(loader.name,loader)
+module=importlib.util.module_from_spec(spec);loader.exec_module(module)
+with tempfile.TemporaryDirectory() as folder:
+ home=Path(folder);monitor=home/'.config/hypr/monitors.lua'
+ monitor.parent.mkdir(parents=True);monitor.write_text('local omarchy_monitor_scale = 3\n-- owner setting\n')
+ chrome=home/'.config/chrome-flags.conf'
+ chrome.write_text('--force-device-scale-factor=0.83\n--ozone-platform=x11\n--lang=fr\n# owner comment\n')
+ module.configure(home,chrome=True)
+ assert monitor.read_text()=='local omarchy_monitor_scale = 2.5\n-- owner setting\n'
+ assert chrome.read_text()=='--lang=fr\n# owner comment\n--disable-gpu\n--ozone-platform=wayland\n--force-device-scale-factor=0.6\n'
+ backup=home/'.local/state/omamobile/flame-config-backups/chrome-flags.conf'
+ assert '--force-device-scale-factor=0.83' in backup.read_text()
+ before=chrome.read_bytes();saved=backup.read_bytes()
+ module.configure(home,chrome=True)
+ assert chrome.read_bytes()==before and backup.read_bytes()==saved
+ assert chrome.stat().st_mode & 0o777==0o600
+ # A manually maintained monitor layout must not be overwritten by guesswork.
+ monitor.write_text('-- custom layout\n')
+ try:module.configure(home,chrome=True)
+ except RuntimeError:pass
+ else:raise AssertionError('unknown monitor configuration accepted')
+ assert monitor.read_text()=='-- custom layout\n'
+print('ok - flame package stages guard-only activation; user settings merge, backup and repeat safely')
+PY
