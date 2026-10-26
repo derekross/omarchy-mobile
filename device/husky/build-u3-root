@@ -1,0 +1,74 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# husky's U3 test root image (UFS-PLAN.md, U3), the one U4's rollback
+# reinstalls: Arch Linux ARM's base tarball, checked by tools/lib/alarm.sh,
+# with omamobile-device-husky staged by its own build and install, and the
+# kernel modules of the slot B images. It needs no signed repository and runs
+# no pacman, so it has no desktop and no omamobile-firstboot.
+#
+#   device/husky/build-u3-root KERNEL_OUT [OUT_DIR]
+#
+# KERNEL_OUT is the kernel build the slot B images come from, with its modules
+# tarball (KERNEL_OUT=... bin/omamobile modules). OUT_DIR (default out/u3-root)
+# gets omamobile-rootfs-u3-husky-aarch64.img.zst, its .sha256 and its MANIFEST,
+# for tools/install-phone --rootfs. Needs docker. The image is assembled in
+# Debian's own x86 container, which cross-compiles reboot-to.
+set -euo pipefail
+
+if [[ ${1:-} == --inside ]]; then
+  # In the container: /in/alarm.tar.gz, /in/pkg, /in/modules.tar.zst, /out.
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get -qq update >/dev/null
+  apt-get -qq install -y --no-install-recommends libarchive-tools e2fsprogs zstd \
+    gcc-aarch64-linux-gnu libc6-dev-arm64-cross >/dev/null
+  R=/work/root
+  mkdir -p $R
+  bsdtar -xpf /in/alarm.tar.gz -C $R
+  cp -r /in/pkg /work/pkg
+  CC=aarch64-linux-gnu-gcc LDFLAGS=-static /work/pkg/build /work/pkg-build
+  /work/pkg/install $R /work/pkg-build
+  mkdir -p $R/usr/lib/modules
+  zstd -dc /in/modules.tar.zst | tar -C $R/usr/lib/modules -xf -
+  # What install-phone writes into, and the phone's name
+  install -d -m 0755 $R/etc/omamobile
+  install -d -m 0700 $R/root/.ssh
+  echo husky >$R/etc/hostname
+  # No password logins: root and Arch Linux ARM's alarm account are locked,
+  # and install-phone puts the owner's key in root's authorized_keys
+  sed -i -E 's/^(root|alarm):[^:]*:/\1:!:/' $R/etc/shadow
+  # systemd makes the machine id at first boot
+  : >$R/etc/machine-id
+  size=$(($(du -sm $R | cut -f1) * 13 / 10 + 512))
+  mke2fs -q -t ext4 -L omamobile-root -d $R /out/root.img "${size}M"
+  fsck=$(e2fsck -fn /out/root.img 2>&1) || { echo "$fsck" >&2; exit 1; }
+  chown "$OUT_UID:$OUT_GID" /out/root.img
+  exit 0
+fi
+
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+source "$repo/tools/lib/alarm.sh"
+(($# >= 1 && $# <= 2)) || alarm_die "usage: device/husky/build-u3-root KERNEL_OUT [OUT_DIR]"
+kout=$(readlink -f "$1")
+out=${2:-$repo/out/u3-root}
+mkdir -p "$out" && out=$(readlink -f "$out")
+[[ -f $kout/include/config/kernel.release ]] || alarm_die "no kernel build in $kout"
+rel=$(<"$kout/include/config/kernel.release")
+modules=$kout/modules-$rel.tar.zst
+[[ -f $modules ]] || alarm_die "no $modules (run: KERNEL_OUT=$kout bin/omamobile modules)"
+alarm_fetch
+
+name=omamobile-rootfs-u3-husky-aarch64
+rm -f "$out/root.img"
+alarm_say "Assembling $name for $rel"
+docker run --rm -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
+  -v "$ALARM_TARBALL:/in/alarm.tar.gz:ro" \
+  -v "$repo/packages/omamobile-device-husky:/in/pkg:ro" \
+  -v "$modules:/in/modules.tar.zst:ro" \
+  -v "$(readlink -f "${BASH_SOURCE[0]}"):/in/build-u3-root:ro" \
+  -v "$out:/out" \
+  debian:trixie-slim bash /in/build-u3-root --inside
+zstd -q -19 -T0 -f --rm "$out/root.img" -o "$out/$name.img.zst"
+(cd "$out" && sha256sum "$name.img.zst" >"$name.img.zst.sha256")
+printf 'device: husky (U3 test image: Arch Linux ARM base + omamobile-device-husky)\nkernel modules: %s\n' \
+  "$rel" >"$out/$name.MANIFEST"
+alarm_say "$out/$name.img.zst"
