@@ -40,7 +40,7 @@ stub omarchy-powerprofiles-set 'echo "powerprofiles $*" >>'"$log"
 stub omamobile-sit 'echo "sit $*" >>'"$log"
 stub pgrep 'exit 1'
 
-run() { env -i HOME="$tmp/home" PATH="$fake:$basic" sh "$@"; }
+run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" sh "$@"; }
 
 printf 'wlan unblocked\nbluetooth blocked\nnfc unblocked\n' >"$tmp/state/rfkill"
 echo dark >"$tmp/state/mode"
@@ -49,7 +49,7 @@ echo '{"enabled":false,"temperature":6500}' >"$tmp/state/night"
 
 out=$(run "$dir/tile-state.sh")
 for line in airplane=off hotspot=off powerprofile=balanced theme_mode=dark theme_name=tokyo-night \
-            nightlight=off stayawake=off record=none data=none; do
+            nightlight=off stayawake=off record=none data=none dictation=none; do
   grep -cx "$line" <<<"$out" >/dev/null || fail "tile-state.sh prints $line (got: $(tr '\n' ' ' <<<"$out"))"
 done
 pass "tile-state.sh reads every probed tile"
@@ -95,3 +95,26 @@ pass "tile-action.sh drives battery saver, stay awake, mobile data and hotspot"
 if run "$dir/tile-action.sh" wifi on 2>/dev/null; then fail "unknown tiles are refused"; fi
 if run "$dir/tile-action.sh" airplane maybe 2>/dev/null; then fail "only on and off are accepted"; fi
 pass "tile-action.sh refuses unknown tiles and states"
+
+# Dictation: voxtype is an optional install, so no voxtype is "none", a
+# stopped user service "down" (whatever its stale state file says), and the
+# daemon's own state file otherwise.
+stub voxtype 'echo "voxtype $*" >>'"$log"
+stub systemctl '[ -e '"$tmp"'/state/voxtype-up ] || exit 3; echo "systemctl $*" >>'"$log"
+mkdir -p "$tmp/run/voxtype"; echo recording >"$tmp/run/voxtype/state"
+grep -cx "dictation=down" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is down while voxtype.service isn't active"
+touch "$tmp/state/voxtype-up"
+grep -cx "dictation=on" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is on while voxtype records"
+grep -cxF "systemctl --user is-active --quiet voxtype.service" "$log" >/dev/null || fail "the probe asks the user manager about voxtype.service"
+echo transcribing >"$tmp/run/voxtype/state"
+grep -cx "dictation=busy" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is busy while voxtype transcribes"
+echo idle >"$tmp/run/voxtype/state"
+grep -cx "dictation=off" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is off while voxtype idles"
+rm -f "$tmp/run/voxtype/state"
+grep -cx "dictation=off" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is off before voxtype writes its state"
+run "$dir/tile-action.sh" dictation on
+run "$dir/tile-action.sh" dictation off
+for line in "voxtype record start" "voxtype record stop"; do
+  grep -cxF "$line" "$log" >/dev/null || fail "tile-action.sh runs: $line"
+done
+pass "dictation follows voxtype's service and state, and starts and stops by direction"

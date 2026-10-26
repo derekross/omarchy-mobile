@@ -18,6 +18,9 @@
 #   data          on while omamobile-sit-data.service is active; none
 #                 without omamobile-sitd running
 #   data_status   the operator and technology, when registered
+#   dictation     voxtype: on while recording, busy while transcribing, off
+#                 when idle; down when its user service isn't running, none
+#                 without voxtype (it is an optional Omarchy install)
 
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -75,6 +78,25 @@ if have omamobile-screenrecord && have wf-recorder; then
   echo "record=$(t omamobile-screenrecord status || echo off)"
 else
   echo "record=none"
+fi
+
+# dictation: the daemon writes idle, recording or transcribing to its state
+# file (state_file = "auto" in Omarchy's voxtype config). A stale file
+# outlives a stopped daemon, so the user service has to be active too.
+if have voxtype; then
+  if t systemctl --user is-active --quiet voxtype.service; then
+    vstate=
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && vstate=$(head -n1 "$XDG_RUNTIME_DIR/voxtype/state" 2>/dev/null)
+    case $vstate in
+      recording) echo "dictation=on" ;;
+      transcribing) echo "dictation=busy" ;;
+      *) echo "dictation=off" ;;
+    esac
+  else
+    echo "dictation=down"
+  fi
+else
+  echo "dictation=none"
 fi
 
 # data: the daemon's public state is world-readable; the bearer service's

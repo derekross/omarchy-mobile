@@ -88,6 +88,12 @@ case $tile in
   mobile-data)
     exec omamobile-sit data "$want"
     ;;
+  dictation)
+    # voxtype types what it hears into the focused window. A direction, not
+    # `record toggle`, so a second tap while the probe catches up can't undo
+    # the first.
+    if [ "$want" = on ]; then exec voxtype record start; else exec voxtype record stop; fi
+    ;;
   *)
     echo "tile-action.sh: unknown tile $tile" >&2
     exit 2

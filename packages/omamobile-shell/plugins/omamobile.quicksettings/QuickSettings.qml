@@ -180,7 +180,8 @@ Item {
     "hotspot": hotspot, "dnd": dnd, "torch": torch, "rotation-lock": rotationLock,
     "location": location, "nfc": nfc, "battery-saver": batterySaver, "dark-theme": darkTheme,
     "night-light": nightLight, "stay-awake": stayAwake, "mic": mic, "screenshot": screenshot,
-    "screen-record": screenRecord, "fingerprint": fingerprint, "keyboard": keyboard
+    "screen-record": screenRecord, "fingerprint": fingerprint, "keyboard": keyboard,
+    "clipboard": clipboard, "dictation": dictation
   })
 
   // ---------------------------------------------------------------- layout
@@ -492,6 +493,45 @@ Item {
       root.dismiss()
       Quickshell.execDetached(["sh", root.scriptPath("tile-action.sh"), "screen-record", "on", audio])
       probeLater.restart()
+    }
+  }
+
+  // Clipboard history: Omarchy's own clipboard overlay (omarchy.clipboard),
+  // which the desktop opens with Super+Ctrl+V. The sheet goes away first so
+  // a pick pastes into the app underneath. Summon, not the binding's
+  // toggle: from here it is never already open.
+  QtObject {
+    id: clipboard
+    readonly property bool available: true
+    readonly property bool enabled: false
+    readonly property string icon: "󰅌"
+    readonly property string status: "History"
+    function toggle() {
+      root.dismiss()
+      Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omarchy.clipboard", "{}"])
+    }
+  }
+
+  // Dictation through voxtype (an optional Omarchy install; Super+Ctrl+X on
+  // the desktop). A tap starts recording and puts the sheet away, so what
+  // voxtype types lands in the app underneath; a tap while listening stops
+  // it and voxtype transcribes. Dimmed with the reason when voxtype isn't
+  // installed or its user service isn't running.
+  QtObject {
+    id: dictation
+    readonly property string probe: root.probed.dictation || "none"
+    readonly property bool available: probe === "on" || probe === "off" || probe === "busy"
+    readonly property bool busy: root.optimistic["dictation"] === undefined && probe === "busy"
+    readonly property bool enabled: available && (root.optimistic["dictation"] !== undefined
+      ? root.optimistic["dictation"] : probe !== "off")
+    readonly property string icon: enabled ? "󰍬" : "󰍭"
+    readonly property string status: root.optimistic["dictation"] !== undefined
+      ? (enabled ? "Listening" : "Off") : TilesModel.dictationStatus(probe)
+    function toggle() {
+      if (!available || busy) return
+      var start = !enabled
+      root.runTileAction("dictation", start)
+      if (start) root.dismiss()
     }
   }
 
