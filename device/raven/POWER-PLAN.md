@@ -140,3 +140,120 @@ CPU cooling (`4fd3f0dd1`); `CONFIG_GS101_ACPM_THERMAL=m`.
   First reading at idle: 61-63 C (CPUs), 50-51 C (others). Each CPU
   cluster throttles from 85 C; everything is critical at 110 C. Before it,
   Chromium on llvmpipe reset the phone about 90 s in, twice.
+
+## 4. Review checks for PRs #6-#9 (runbook, 2026-10-26)
+
+Derek's reviews of linux-omarchy-mobile #6-#9 asked for things only the
+phone can show. Every step below is gated: the human runs or approves it.
+The phone runs `7.3.0-rc6-omamobile-push1-g0422abf64c05`
+(`omamobile-gs101-int` 0422abf64, images in
+`~/android/mainline/out-gs101-int/images`): that is the rollback for every
+push here.
+
+Two kernels, so one boot changes one thing (AGENTS.md):
+
+| Kernel | Branch (worktree, output) | What it adds to the phone's kernel |
+| --- | --- | --- |
+| initcheck | `omamobile-gs101-int-initcheck` (`wt-gs101-int-initcheck`, `out-gs101-int-initcheck`) | the TMU driver's channel from match data, and a NOT FOR MERGE dump of the TMU trip registers around `ACPM_TMU_INIT` (`gs101_acpm_tmu.initcheck=1`) |
+| review | `omamobile-gs101-int-review` (`wt-gs101-int-review`, `out-gs101-int-review`) | initcheck, plus #7 v2's GPU critical trip at 115 °C, #8 v2's s6sy761 (CONFIG_SPI guard, reset work ordered against suspend and unbind), #6 v2's Bluetooth (CMU_APM mux fix without the DT override, BCM4389 delay as match data, BT pin states) |
+
+The power rework (#9 v2, André Draszik's pmdomain series) is not in either:
+it changes the power-domain driver and leaves the AoC's domain on, so it
+gets its own boot after these (R5).
+
+**R1 (read-only, no push):** what Derek asked that the running kernel can
+already answer.
+
+```sh
+tools/phone-ssh 'tr -d "\0" < /proc/device-tree/model; echo; uname -r
+grep -iE "mif|acpm" /sys/kernel/debug/clk/clk_summary | head
+dmesg | grep -ciE "underrun|underflow"'
+```
+
+Then a GPU-heavy minute (the shell's app switcher, Chromium scrolling a
+long page), and the `dmesg` count again.
+
+- **Pass:** the model reads Raven; the ACPM MIF clock reads 1014000000;
+  the underrun count doesn't grow. Quote the clk line in #9's message.
+- **Stop:** a different model, or MIF not at 1014 MHz: record, don't push.
+- **Risk:** none (reads).
+
+**R2 (write, reversible, low):** have the TMU driver dump its registers at
+the next boot.
+
+```sh
+tools/phone-ssh 'echo "options gs101_acpm_tmu initcheck=1" > /etc/modprobe.d/omamobile-thermal-initcheck-bringup.conf'
+```
+
+- **Rollback:** `rm /etc/modprobe.d/omamobile-thermal-initcheck-bringup.conf`.
+  The running kernel ignores the option (it has no such parameter).
+
+**R3 (push, reboot; the human approves):** the initcheck kernel (or the
+review kernel, to check #6-#8 on the same boot).
+
+```sh
+cd ~/projects/omarchy-mobile-topic
+sg docker -c "env DEVICE=raven KERNEL_DIR=$HOME/android/mainline/wt-gs101-int-initcheck \
+    KERNEL_OUT=$HOME/android/mainline/out-gs101-int-initcheck TMPDIR=$HOME/android/tmp-build \
+    bin/omamobile push"
+```
+
+- **Screen:** the phone reboots; the splash and the lock screen come back.
+- **Expect:** SSH back within about 60 s, `uname -r` reads the new
+  release, slot B marked good.
+- **Stop:** no SSH after 3 minutes: ask the human to hold Power about
+  30 s. If it doesn't come back, roll back.
+- **Rollback:** `bin/omamobile push` with
+  `KERNEL_DIR=~/android/mainline/wt-gs101-int KERNEL_OUT=~/android/mainline/out-gs101-int`;
+  without SSH, Volume Down + Power about 20 s for fastboot and
+  `bin/omamobile flash` with the same variables.
+- **Risk:** low. The only new firmware request is TMU_IPC_REG_READ (0xfe),
+  reads of TMU registers through ACPM, inside the range Google's own
+  `tmu_reg_read` parameter allows.
+
+**R4 (read-only):** compare the registers before and after INIT.
+
+```sh
+tools/phone-ssh 'dmesg | grep initcheck' > logs/raven-tmu-initcheck.log
+grep -c initcheck logs/raven-tmu-initcheck.log
+diff <(grep " before " logs/raven-tmu-initcheck.log | sed "s/.*before //") \
+     <(grep " after " logs/raven-tmu-initcheck.log | sed "s/.*after //")
+```
+
+- **Pass:** 340 lines (2 TMUs x (5 + 16 x 5) registers, before and after),
+  every one with return code 0, and the diff empty: INIT leaves CONTROL,
+  the probe enables and each probe's rise thresholds and interrupt enables
+  as the bootloader set them. Record CONTROL's value (the trip-enable bit)
+  for the reply.
+- **Not a pass:** any register differs. INIT changes the trip setup; the
+  driver then has to program the thresholds itself (Google's
+  `set_threshold`, `interrupt_enable`, `tz_control` after INIT).
+- **Stop:** return codes other than 0 on every read: the firmware doesn't
+  serve 0xfe; record it and fall back to Derek's other option, a test that
+  the hardware trip fires (not here: it powers the phone off hot).
+- Afterwards: R2's rollback, so the next boot is quiet.
+
+**R4b (review kernel only, read-only):** #6-#8 on the same boot.
+
+```sh
+tools/phone-ssh 'cat /sys/kernel/debug/clk/clk_summary | grep -E "mout_apm_func|usi1_uart"
+dmesg | grep -iE "hci_bcm|bluetooth|s6sy761|thermal" | tail -30
+bluetoothctl show | head -3; cat /sys/class/thermal/thermal_zone*/trip_point_1_temp'
+```
+
+- **Pass:** mout_apm_func reads mout_apm_funcsrc as its parent and the
+  UART clock about 197 MHz (as the DT override gave); Bluetooth comes up
+  (if B3's silent chip has recovered; otherwise note it, the clock lines
+  still count); touch works, then a lock and unlock and a display off/on
+  keep it working; the GPU zone's critical trip reads 115000.
+- **Stop:** the UART clock at about 12 MHz (the mux fix reads the wrong
+  field): roll back.
+
+**R5 (later, its own boot):** the power rework, #9 v2. Needs an
+integration kernel with `omamobile-gs101-power-v2` in place of
+`omamobile-gs101-power` (not built yet). Expect the same domains off
+(their PMU STATUS 0), about the same idle current, and the AoC still
+starting with its domain left on. Derek also asked for a warm reboot
+into stock on slot A: this raven has no bootable stock Android (it ran
+GrapheneOS until 2026-10-26, and slot A doesn't boot), so that check can't
+be done on this phone; say so in the reply.
