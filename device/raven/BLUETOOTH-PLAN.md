@@ -299,3 +299,34 @@ Also on this boot: the controller sat soft-blocked by rfkill, restored by
 systemd-rfkill from a previous boot; the boot check reports that as
 "bluetooth" failing too, which mixes a switched-off adapter with a dead
 chip.
+
+**B3, the user's GrapheneOS observation (2026-10-26):** under GrapheneOS
+the BT stack now reports a crash at boot, and comes up after a few presses
+of the Bluetooth tile (each one a full power cycle and firmware download);
+once up it stays up (an Oura ring stays connected). Before the Omarchy work
+GrapheneOS booted Bluetooth cleanly. So the chip's start-up has become
+flaky under Google's stack too: Android hides it by retrying.
+
+What Omarchy could have changed that GrapheneOS sees:
+
+- storage: no (the guard allows only slot B's boot images and userdata;
+  efs, persist, modem and devinfo were only read);
+- the chip: no known path (no flash; everything sent was HCI into RAM,
+  including `bt-uart-test patch`; no OTP vendor commands);
+- state across a warm reboot: possible. The chip shares power with Wi-Fi,
+  and our DT wrote a reserved bit in CMU_APM (always-on block; Derek's
+  finding on PR #6, fixed in v2);
+- unrelated: GrapheneOS was reinstalled fresh on 10-21 (new version, new
+  BT config), and the trouble began with the 10-21 forced restart.
+
+**Next time GrapheneOS is on the phone, before reinstalling Omarchy:** boot
+it, power it off (not restart) for 30 s, power on, watch Bluetooth.
+Clean the first time: the bad state was carried over a warm reboot from
+Omarchy (look at our shutdown path and the CMU_APM write). Still crashing:
+not carried state (GrapheneOS's own change, or hardware). Missed on
+2026-10-26: Omarchy was already reinstalled.
+
+On Omarchy, do what Android does: a boot-time retry that power-cycles the
+controller up to about 10 times, a few seconds apart, logging each attempt
+(first try or random; after a warm or a cold boot). If it works, move the
+retry into hci_bcm's setup for upstream.
