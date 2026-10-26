@@ -13,6 +13,10 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/lib/alarm.sh tools/lib/alarm-setup rootfs/build-inside tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
+  if [[ $f == *.py ]]; then
+    python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$f"
+    continue
+  fi
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
 done
 sh -n initramfs/init
@@ -25,6 +29,10 @@ for t in tests/pr-check tests/kernel-pr-check tests/install-phone tests/phone-pr
   "$t"
 done
 shopt -s nullglob
+for t in tests/flame-*.py; do
+  echo "# $t"
+  python3 -B "$t"
+done
 latest=""
 for f in out/omamobile-rootfs-*-aarch64.img.zst; do latest=$f; done
 if [[ -n $latest ]]; then
