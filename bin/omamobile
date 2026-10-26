@@ -691,6 +691,9 @@ cmd_fastboot() {
 }
 
 cmd_flash() {
+  if [[ $DEVICE == alioth ]]; then
+    exec python3 "$ROOT/tools/alioth/install.py" "$@"
+  fi
   local img="$KERNEL_OUT/images" p
   load_device
   images_for_device "$img"
@@ -810,7 +813,7 @@ case "${1:-}" in
   images) cmd_images ;;
   kexec) cmd_kexec ;;
   fastboot) cmd_fastboot ;;
-  flash) cmd_flash ;;
+  flash) shift; cmd_flash "$@" ;;
   push) cmd_push ;;
   kernel-shell) cmd_kernel_shell ;;
   *) usage ;;

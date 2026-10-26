@@ -24,7 +24,14 @@ The status of each device, as verified on real hardware. Rows in the matrix have
 | Pixel 4 | flame | SM8150 (Snapdragon 855) | testing (temporary RAM boot; [notes](../device/flame/BRINGUP-M1.md)) | testing (RAM probe; all UFS read-only) | testing (1080x2280 console; software desktop in separate Arch payload) | testing (separate Arch payload; FD640 contexts, llvmpipe desktop) | testing (separate Arch payload; events and PIN unlock verified) | no | testing (NCM + ACM + SSH; sustained transfers can disconnect) | testing (guarded RAM scan; association untested) | no | no | no | no | no | no | - | no | no | no | no | no | no | - |
 | Pixel 9a ([notes](../device/tegu/NOTES.md)) | tegu | zumapro (Tensor G4) | WIP ([#28](https://github.com/derekross/omarchy-mobile/issues/28): SoC patches merging into linux-omarchy-mobile; the board DTS isn't public yet) | WIP | WIP (DSI panel, 1080x2424; unpublished kernel) | WIP (Panthor, the desktop renders; unpublished kernel) | WIP | WIP (gpio-keys; unpublished kernel) | WIP | WIP (brcmfmac joins WPA2; driver in review, [kernel #56](https://github.com/derekross/linux-omarchy-mobile/pull/56)) | WIP (powered; unpublished kernel) | WIP (the gauge reads; unpublished kernel) | no | no | no | no | WIP (audio and sensors; unpublished kernel) | WIP (speakers capped, mics, A2DP; unpublished kernel) | WIP (accelerometer, light, proximity; unpublished kernel) | no | no | no | no | no |
 | Pixel 8 Pro ([notes](../device/husky/NOTES.md)) | husky | zuma (Tensor G3) | WIP ([#1](https://github.com/derekross/omarchy-mobile/issues/1): our kernel boots from slot B; the zuma device tree is in review, [kernel #13](https://github.com/derekross/linux-omarchy-mobile/pull/13)) | testing (UFS at HS-G4 behind the read-only guard; Arch on `userdata`; [UFS-PLAN](../device/husky/UFS-PLAN.md)) | WIP (simple-framebuffer console) | no | no | no | testing (USB and SSH) | no | no | no | no | no | no | no | no | no | no | no | no | no | no | no |
+| POCO F3 | alioth | SM8250 family (Snapdragon 870) | testing ([native port](../device/alioth/BRINGUP-M1.md)) | testing (guarded) | testing (1080x2400) | testing (Adreno 650) | testing | testing | testing | testing | no (initial profile) | testing | testing (USB indication) | no | testing (manual) | no | - | no | no (proxy masked) | no | WIP (enumerates) | no | no (disabled) | no |
 | *Template* | *codename* | *SoC* | | | | | | | | | | | | | | | | | | | | | | |
+
+The F3 uses a prebuilt `6.15.1-sm8250` kernel from
+[mainlining/linux, nikroks/alioth at 022f7f8](https://github.com/mainlining/linux/tree/022f7f866a9377c34301e60ba131121c624d2e56),
+extracted from a pinned reference release, with matching modules. No binary
+is redistributed here. [Provenance and path to building it here](../device/alioth/BRINGUP-M1.md#sources-and-layout).
+All F3 positive results remain **testing** until a clean install of this branch passes.
 
 ## cheetah (Pixel 7 Pro) in detail
 
@@ -70,4 +77,4 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | Pixel 9 family | tokay, caiman, komodo, comet, tegu | zumapro (Tensor G4) | 9a (tegu): WIP, in the matrix above; SoC patches are merging into linux-omarchy-mobile, the board DTS isn't public yet; tracking [#28](https://github.com/derekross/omarchy-mobile/issues/28) |
 | Pixel 10 family | mustang (10 Pro XL) | laguna (Tensor G5) | 10 Pro XL (mustang): stock facts, contributors welcome ([#18](https://github.com/derekross/omarchy-mobile/issues/18)) |
 | Pixel 11 Pro, 11 Pro Fold | grizzly, yogi | malibu (Tensor G6) | stock facts, contributors welcome: 11 Pro ([#26](https://github.com/derekross/omarchy-mobile/issues/26)), 11 Pro Fold ([#40](https://github.com/derekross/omarchy-mobile/issues/40)) |
-| POCO F3 | alioth | SM8250 (Snapdragon 870) | the first non-Pixel port: a guarded installer and root image in review ([#25](https://github.com/derekross/omarchy-mobile/pull/25)) |
+| POCO F3 | alioth | SM8250 (Snapdragon 870) | testing: a guarded installer and root image in review; clean install pending ([#25](https://github.com/derekross/omarchy-mobile/pull/25)) |

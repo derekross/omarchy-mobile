@@ -1,0 +1,11 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The reference RTC can precede signing-key creation dates. Never write the RTC.
+set -euo pipefail
+epoch=0
+for file in /usr/lib/clock-epoch /var/lib/systemd/timesync/clock; do
+  [[ -f $file ]] || continue
+  stamp=$(stat -c %Y "$file")
+  if ((stamp > epoch)); then epoch=$stamp; fi
+done
+if ((epoch > $(date +%s))); then date -s "@$epoch" >/dev/null; fi

@@ -33,6 +33,16 @@ tools/phone-provision FACTORY.zip    # after the first boot: firmware from your 
 
 The kernel and boot images come from `bin/omamobile kernel`, `modules`, `initramfs` and `images` (CONTRIBUTING.md §4). Step by step, with what to expect at each point: [device/cheetah/REINSTALL-RUNBOOK.md](device/cheetah/REINSTALL-RUNBOOK.md).
 
+## Experimental POCO F3 port
+
+POCO F3 (`alioth`) uses a prebuilt `6.15.1-sm8250` kernel from
+[mainlining/linux, nikroks/alioth at 022f7f8](https://github.com/mainlining/linux/tree/022f7f866a9377c34301e60ba131121c624d2e56),
+extracted from the pinned [2026-09-28 reference release](https://github.com/Sucharek233/pmos-alioth-builds/releases/tag/2026-09-28_935d1cb).
+A clean install of this branch is still pending. Use the dedicated
+[build, backup and flashing guide](device/alioth/FLASH-RUNBOOK.md) and read
+its [hardware limits and source-build path](device/alioth/BRINGUP-M1.md).
+Its Android-v0 boot layout uses a separate guarded installer.
+
 ## Layout
 
 | Path | What it is |

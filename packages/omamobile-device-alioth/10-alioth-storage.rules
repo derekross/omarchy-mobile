@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Continue the initramfs guard: all non-userdata partitions stay hidden.
+# udev must not recreate the main LUN's deleted whole-disk node.
+SUBSYSTEM=="block", KERNEL=="sda", MODE="0000", ENV{UDISKS_IGNORE}="1", RUN+="/usr/bin/rm -f /dev/sda"
+SUBSYSTEM=="block", KERNEL=="sd[a-z][0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"

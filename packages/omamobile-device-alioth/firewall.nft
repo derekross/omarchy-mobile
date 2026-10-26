@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Native expressions supported by the pinned alioth kernel. UFW's xtables
+# compatibility expressions are unavailable in that reference build.
+# Replacing only this table leaves other applications' tables untouched.
+add table inet omamobile
+flush table inet omamobile
+table inet omamobile {
+    chain input {
+        type filter hook input priority 10; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        ip protocol icmp accept
+        meta l4proto ipv6-icmp accept
+        udp sport 67 udp dport 68 accept
+        udp sport 547 udp dport 546 accept
+        iifname "usb0" udp sport 68 udp dport 67 accept
+        iifname "usb0" ip daddr 172.16.42.1 tcp dport { 22, 5900 } accept
+        ip daddr 224.0.0.251 udp dport 5353 accept
+        ip6 daddr ff02::fb udp dport 5353 accept
+        ip daddr 239.255.255.250 udp dport 1900 accept
+        udp dport 53317 accept
+        tcp dport 53317 accept
+    }
+    chain forward {
+        type filter hook forward priority 10; policy drop;
+    }
+    chain output {
+        type filter hook output priority 10; policy accept;
+    }
+}

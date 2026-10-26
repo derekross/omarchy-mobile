@@ -1,0 +1,54 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Local fixtures only: never query, reboot or flash a phone.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for test in test-install.py test-build-isolation.py test-storageguard.py test-client-guard.py test-rfb.py; do
+  python3 "tools/alioth/$test"
+done
+python3 tools/alioth/test-provision.py
+packages/omamobile-device-alioth/test/all
+python3 -I - <<'PY'
+from pathlib import Path
+import importlib.util
+import io
+import tarfile
+import tempfile
+spec = importlib.util.spec_from_file_location('overlay', 'tools/lib/rootfs-overlay.py')
+overlay = importlib.util.module_from_spec(spec); spec.loader.exec_module(overlay)
+with tempfile.TemporaryDirectory() as directory:
+    base = Path(directory); target = base / 'target'; target.mkdir()
+    good = base / 'good.tar'
+    with tarfile.open(good, 'w') as archive:
+        info = tarfile.TarInfo('usr/lib/firmware/example'); info.size = 2
+        archive.addfile(info, io.BytesIO(b'ok'))
+        link = tarfile.TarInfo('usr/lib/firmware/alias'); link.type = tarfile.SYMTYPE; link.linkname = 'example'
+        archive.addfile(link)
+    overlay.extract(good, target)
+    assert (target / 'usr/lib/firmware/alias').read_bytes() == b'ok'
+    for name, destination in [('absolute', '/outside'), ('parent', '../outside')]:
+        bad = base / (name + '.tar')
+        with tarfile.open(bad, 'w') as archive:
+            info = tarfile.TarInfo(destination); info.size = 3
+            archive.addfile(info, io.BytesIO(b'bad'))
+        try:
+            overlay.extract(bad, target)
+        except (ValueError, tarfile.FilterError):
+            pass
+        else:
+            raise AssertionError('Escaping member accepted')
+    # A lexically internal symlink can escape after an earlier alias changes
+    # its parent depth; data_filter must resolve the actual extraction path.
+    bad = base / 'links.tar'
+    with tarfile.open(bad, 'w') as archive:
+        link = tarfile.TarInfo('alias'); link.type = tarfile.SYMTYPE; link.linkname = '.'; archive.addfile(link)
+        link = tarfile.TarInfo('alias/deep/escape'); link.type = tarfile.SYMTYPE; link.linkname = '../../outside'; archive.addfile(link)
+    try:
+        overlay.extract(bad, target)
+    except tarfile.FilterError:
+        pass
+    else:
+        raise AssertionError('Escaping symlink chain accepted')
+    assert not (base / 'outside').exists()
+print('ok - runtime overlays preserve valid aliases and reject escapes')
+PY
