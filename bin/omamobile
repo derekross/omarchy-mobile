@@ -177,7 +177,7 @@ cmd_capture() {
   local name="${1:-$DEVICE-$(date +%Y%m%d-%H%M)}" dir
   dir="$REFERENCE_DIR/$name"
   mkdir -p "$dir"
-  if fastboot devices | grep -q .; then
+  if fastboot devices | grep -c . >/dev/null; then
     say "Capturing bootloader variables into $dir"
     fastboot -s "$(fastboot_serial)" getvar all > "$dir/fastboot-getvar-all.txt" 2>&1
   elif adb get-state >/dev/null 2>&1; then
@@ -643,7 +643,7 @@ cmd_kexec() {
   die "phone did not come back after kexec"
 }
 
-in_fastboot() { timeout 3 fastboot devices 2>/dev/null | grep -q .; }
+in_fastboot() { timeout 3 fastboot devices 2>/dev/null | grep -c . >/dev/null; }
 
 # The one phone in fastboot, by serial, so every check and write reaches
 # the same phone: with two in fastboot (a contributor's and the
