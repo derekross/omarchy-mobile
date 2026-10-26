@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-flame
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Experimental guarded native-root support for Google Pixel 4 (flame)"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash python systemd util-linux e2fsprogs 'omamobile-shell>=0.2.24' 'omamobile-firstboot>=0.1.3' foot xdg-terminal-exec udiskie)
+check() { "$startdir/test/all"; }
+package() { "$startdir/install" "$pkgdir"; }
