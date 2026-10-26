@@ -1,0 +1,34 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+bash -n build install omamobile-device-tegu.install
+cmp -s device.conf ../../device/tegu/device.conf
+./build "$tmp/build"
+./install "$tmp/root" "$tmp/build"
+
+for file in \
+  usr/bin/reboot-to \
+  usr/lib/udev/rules.d/10-omamobile-storage.rules \
+  usr/lib/systemd/network/20-usb-gadget.network \
+  usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+  usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
+  usr/share/omamobile/device.conf \
+  usr/share/omamobile/device-tegu/version \
+  etc/pacman.d/omamobile-mirrorlist; do
+  test -f "$tmp/root/$file"
+done
+grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules"
+grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network"
+for absent in \
+  usr/bin/omamobile-boot-success \
+  usr/bin/omamobile-bootctl \
+  usr/lib/systemd/system/omamobile-boot-success.service \
+  usr/bin/omamobile-wifi-start \
+  usr/bin/omamobile-camera-start; do
+  test ! -e "$tmp/root/$absent"
+done
+echo 'ok - tegu package stages first-light policy only'
