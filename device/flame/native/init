@@ -1,0 +1,184 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Pixel 4 development root boot. Only userdata and boot_b are writable.
+export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# PID 1 exiting on a mount failure deliberately panics (panic=10), rather
+# than exposing a root shell with an uninitialized storage guard.
+mount -t proc proc /proc || exit 1
+mount -t sysfs sysfs /sys || exit 1
+mount -t devtmpfs devtmpfs /dev || exit 1
+mkdir -p /dev/pts /run
+mount -t devpts devpts /dev/pts || exit 1
+mount -t tmpfs tmpfs /run || exit 1
+mount -t configfs configfs /sys/kernel/config || exit 1
+
+say() {
+    echo "omamobile-flame: $*" > /dev/kmsg
+    echo "omamobile-flame: $*" > /dev/tty0 2>/dev/null
+}
+
+# New install boot only: the owner authorized using userdata and boot_b.
+# This is a separate init, never a relaxation of a running RAM-only probe.
+UFS_RW="boot_b userdata"
+part_name() { sed -n 's/^PARTNAME=//p' "$1/uevent"; }
+storage_guard() {
+    for s in /sys/class/block/sd*; do
+        [ -r "$s/ro" ] || continue
+        name=${s##*/}
+        if [ "$name" = sda ]; then
+            rm -f /dev/sda
+            continue
+        fi
+        [ -b "/dev/$name" ] || continue
+        part=$(part_name "$s")
+        case "$name" in
+            sda[0-9]*)
+                # A previously read-only device stays so; never use --setrw.
+                case " $UFS_RW " in *" $part "*) continue ;; esac ;;
+        esac
+        [ "$(cat "$s/ro")" = 1 ] && continue
+        if ! blockdev --setro "/dev/$name" || [ "$(cat "$s/ro")" != 1 ]; then
+            say "FAILED to protect /dev/$name"
+            return 1
+        fi
+    done
+    [ ! -e /dev/sda ]
+}
+storage_guard || exit 1
+(
+    while :; do
+        if ! storage_guard; then
+            killall dropbear getty 2>/dev/null
+            echo c > /proc/sysrq-trigger
+            exit 1
+        fi
+        sleep 0.2
+    done
+) &
+
+hostname omamobile-flame
+say "Pixel 4 development root boot: $(uname -r)"
+
+# Take over the hardware watchdog before running probes. If the kernel
+# stalls, its keeper stalls too and recovery requires Android fastboot and the verified stock boot image.
+if ! insmod /lib/modules/qcom-wdt.ko; then
+    say 'Watchdog module failed; returning to bootloader'
+    reboot-to bootloader
+    while :; do sleep 60; done
+fi
+for _ in $(seq 1 5); do
+    [ -c /dev/watchdog0 ] && break
+    sleep 1
+done
+if [ -c /dev/watchdog0 ]; then
+    watchdog -F -t 5 -T 30 /dev/watchdog0 &
+else
+    say 'No watchdog device; returning to bootloader'
+    reboot-to bootloader
+    while :; do sleep 60; done
+fi
+
+# CDC NCM works with Linux and macOS without a proprietary host driver.
+g=/sys/kernel/config/usb_gadget/omamobile
+mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
+echo 0x1d6b > "$g/idVendor"
+echo 0x0104 > "$g/idProduct"
+echo 'Omarchy Mobile' > "$g/strings/0x409/manufacturer"
+echo 'Pixel 4 (Omarchy Mobile)' > "$g/strings/0x409/product"
+echo omamobile-flame > "$g/strings/0x409/serialnumber"
+echo 'NCM + ACM' > "$g/configs/c.1/strings/0x409/configuration"
+mkdir -p "$g/functions/ncm.usb0" "$g/functions/acm.GS0"
+ln -s "$g/functions/ncm.usb0" "$g/configs/c.1/"
+ln -s "$g/functions/acm.GS0" "$g/configs/c.1/"
+
+udc=""
+for _ in $(seq 1 30); do
+    for controller in /sys/class/udc/*; do
+        [ -e "$controller" ] && udc=${controller##*/} && break
+    done
+    [ -n "$udc" ] && break
+    sleep 1
+done
+if [ -n "$udc" ] && echo "$udc" > "$g/UDC"; then
+    say "USB gadget bound to $udc"
+else
+    say 'No USB controller; return to Android fastboot with the buttons'
+fi
+
+ip link set lo up
+ip addr add 172.16.42.1/24 dev usb0
+ip link set usb0 up
+cat > /run/udhcpd.conf <<'CONF'
+start 172.16.42.2
+end 172.16.42.2
+interface usb0
+option subnet 255.255.255.0
+lease_file /run/udhcpd.leases
+CONF
+touch /run/udhcpd.leases
+udhcpd /run/udhcpd.conf
+
+# Only the locally supplied public key grants SSH access. Host keys are
+# generated in the RAM filesystem; no identity or vendor firmware is shipped.
+mkdir -p /etc/dropbear
+dropbear -R -E -s -j -k -p 172.16.42.1:22
+say 'USB ready; protected storage; waiting for the Omarchy root'
+
+# ACM is for an explicitly started attached-only debug session. Never start
+# an automatic USB getty in the standalone boot path.
+
+# Recover both an initial failure and a later disconnection. The helper uses
+# RESTART2 to request Android fastboot; no filesystems need shutting down.
+(
+    missing=0
+    while :; do
+        if grep -qx configured /sys/class/udc/*/state 2>/dev/null; then
+            missing=0
+        else
+            missing=$((missing + 1))
+        fi
+        if [ "$missing" -ge 90 ]; then
+            say 'USB disconnected for 90 s; returning to bootloader'
+            reboot-to bootloader
+        fi
+        sleep 1
+    done
+) &
+
+# The root is located by its GPT name and label, never by a guessed number.
+rootdev=""
+for _ in $(seq 1 20); do
+    storage_guard || exit 1
+    for node in /sys/class/block/sda[0-9]*; do
+        [ -r "$node/uevent" ] || continue
+        [ "$(part_name "$node")" = userdata ] || continue
+        [ -z "$rootdev" ] || { say 'Duplicate userdata partition'; exit 1; }
+        rootdev=/dev/${node##*/}
+    done
+    [ -n "$rootdev" ] && break
+    sleep 1
+done
+[ -b "$rootdev" ] || { say 'No userdata partition'; exit 1; }
+[ "$(blockdev --getro "$rootdev")" = 0 ] || { say 'Root is read-only; refusing to weaken guard'; exit 1; }
+[ "$(blkid -s LABEL -o value "$rootdev")" = omamobile-root ] || { say 'Wrong root label'; exit 1; }
+fsck_status=0
+e2fsck -p "$rootdev" || fsck_status=$?
+[ "$fsck_status" -le 1 ] || { say 'Root filesystem check failed'; exit 1; }
+mkdir -p /newroot
+mount -t ext4 -o rw,relatime "$rootdev" /newroot || exit 1
+[ -x /newroot/usr/lib/systemd/systemd ] || { say 'Root has no systemd'; exit 1; }
+[ -f /newroot/usr/share/omamobile/flame-root ] || { say 'Root is not a flame development image'; exit 1; }
+cp -a /rescue-base /run/rescue || exit 1
+say 'Starting Arch and Omarchy on userdata'
+kill -9 -1 2>/dev/null
+for m in /dev /proc /sys /run; do
+    mkdir -p "/newroot$m"
+    mount --move "$m" "/newroot$m" || exit 1
+done
+for m in /dev /proc /sys; do
+    mount --bind "/newroot$m" "/newroot/run/rescue$m" || exit 1
+done
+mount --bind /newroot /newroot/run/rescue/realroot || exit 1
+chroot /newroot/run/rescue /usr/sbin/dropbear -R -E -s -j -k -p 172.16.42.1:2222 || exit 1
+exec switch_root /newroot /usr/lib/systemd/systemd
