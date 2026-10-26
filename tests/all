@@ -36,3 +36,6 @@ if [[ -n $latest ]]; then
 else
   echo "ok - # skip: no root image in out/ for tests/rootfs-smoke (tools/build-rootfs)"
 fi
+
+echo "# tests/phone-ssh"
+tests/phone-ssh
