@@ -169,6 +169,16 @@ Findings:
 
 - **Without #42, every DWC3 rebind froze the phone:** tests 23, 24 (twice), 26 and 27, and test 28 with the link reset kept.
 
+**2026-10-26, follow-ups on #13 and the PMU tables (linux-omarchy-mobile#49).** Each kernel is the merge the phone booted, tagged on greenbrettmichael/linux-omarchy-mobile; the shipped config, images by #27, main's init.
+
+| # | Test | Seen | Meaning |
+| --- | --- | --- | --- |
+| 30 | #13 (`953a356a1`) + #42 (`10a49efe3`'s tree) + #49 (its first head, `0c98c7b60`'s tree): tag `husky-test-20261026-p`, `…-g64ecc04a3ebf`. Boot, then one detached DWC3 unbind and bind (3 s apart) with the 150 s `sysrq` fallback, then `reboot-to bootloader` | no `SMC failed`, no regmap error; both watchdogs probe ("inactive, reset disabled"); the cycle re-enumerated 3 s after the unbind and a fresh ssh login cancelled the fallback, with no PHY or DWC3 lines after the unbind; fastboot in 18 s | **#49's tables serve every PMU user** (USB isolation set and cleared, watchdogs, reboot mode). **#42 stands without #33** [V] |
+| 31 | test 30 + `zuma: drop the timer's clock-frequency` (`8316600ac`'s tree): tag `husky-test-20261026-t`, `…-g86d443ac6529` | no `clock-frequency` under `/timer`; `arch_timer: cp15 timer running at 24.57MHz`; `CNTFRQ_EL0` 24576000; the uptime advanced 30.11 s while the laptop's clock advanced 30.11 s | the firmware programs CNTFRQ; the property can go [V] |
+| 32 | test 31 + `zuma-husky: drop the soc_compatible descriptions` (`850638fe4`'s tree): tag `husky-test-20261026-s`, `…-g4e88be3f7d9c` | ABL picks the DTB and boots it; `/soc_compatible`'s children hold only `product_id`, `major`, `minor`, `pkg_mode`; USB configured, no `SMC failed` | ABL matches without the labels [V] |
+
+The UFS boots that followed (U2-U3) are in husky's UFS plan.
+
 ## Open questions
 
 - ~~Does a bare DWC3 enumerate on the PHY and repeater state ABL leaves behind?~~ No: the PHY is off (test 17); with the eUSB2 PHY driven, the repeater as ABL leaves it works (test 18).
