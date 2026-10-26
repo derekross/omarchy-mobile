@@ -1,22 +1,25 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7a (lynx) first light
 
-Status (2026-10-24, this first-light/display branch): slot B boots and SSH
-comes up at `root@172.16.42.1` over the USB NCM gadget. Both cluster
-watchdogs are stopped at probe. With kernel #44's framebuffer reservation
-and this branch's DECON0 trigger unmask, simpledrm/fbcon shows the boot log
-and a shell prompt at 67x75. UFS remains disabled on this branch; the
-checks below describe the initramfs boot, before installing Arch on
-`userdata`. Kernel `7.3.0-rc6-omamobile-push1-g3081ac63fcc4`.
+Last verified state (2026-10-25, local integration): slot B is active and
+marked successful. Arch runs from `userdata`, USB SSH works at
+`root@172.16.42.1`, and the on-screen console works through simpledrm/fbcon.
+Kernel: `7.3.0-rc6-omamobile-push1-g38b5a04d67e0`. Wi-Fi firmware startup
+is still unresolved. Recheck the live state before further hardware work.
+
+**Stock Android on slot A is no longer a working recovery boot because
+Arch owns `userdata`. Use the physical bootloader buttons for recovery.**
+The first-light sections below describe earlier initramfs boots; their
+original automatic fallback assumptions no longer apply to this phone.
 
 ## Facts
 
 The stock capture and what each boot showed are in [NOTES.md](NOTES.md).
 Tracking issue: #36.
 
-## What booted
+## What booted at first light (historical)
 
-The board file (linux-omarchy-mobile, `gs201-lynx.dts`) enables the USB
+The original board file (linux-omarchy-mobile, `gs201-lynx.dts`) enabled the USB
 controller and relies on the SoC tree for the cluster watchdogs. UFS, the
 panel, touch, the GPU and the radios stay disabled. It carries
 `/soc_compatible/B0_IPOP` instead of `/soc_id`, because lynx's ABL matches
@@ -32,10 +35,11 @@ It differs from cheetah's in two ways the bootloader forces:
   lynx's unlocked ABL never shows the orange warning and never boots slot B
   (black screen, nothing on USB, three silent retries, then slot A).
 
-The shared init writes no display register (`SIMPLEFB_TRIG_CON` is unset)
-and reads no display DMA register (`BRINGUP_PROBE` is unset).
+At first light, `SIMPLEFB_TRIG_CON` and `BRINGUP_PROBE` were unset. The
+current descriptor enables the board-specific trigger write described in
+the console section below; `BRINGUP_PROBE` remains unset.
 
-## First boot
+## First boot (historical, before Arch owned userdata)
 
 Flash only slot B, from fastboot: `DEVICE=lynx bin/omamobile images`, then
 `DEVICE=lynx bin/omamobile flash`. Slot A stays stock Android. Confirm the
@@ -55,34 +59,34 @@ Expect, in this order:
    `dmesg | grep watchdog` shows both `10060000.watchdog` and
    `10070000.watchdog` as `watchdog inactive, reset disabled`.
 
-Stop if no USB device appears within a minute, if the phone resets by itself
-at about 60 s (a watchdog was left running), or if it does not come back to
-slot A by itself after three failed boots. Do not flash again until you know
-why.
+Stop if no USB device appears within a minute or the phone resets by itself
+at about 60 s (a watchdog was left running). Do not flash again until the
+cause is understood. On the current Arch installation, do not wait for a
+working Android fallback; follow the physical recovery procedure below.
 
 ## How to get back
 
-Slot B has three retries after `fastboot --set-active=b`, and every boot
-that is not marked successful uses one. After the third, ABL boots slot A on
-its own. While stock is on slot A that is the fallback; just let it boot.
+Slot B was marked successful after Arch installation. The old fallback via
+three unsuccessful boots relied on Android being able to boot slot A.
+With Arch on `userdata`, Android stops at recovery instead. Likewise,
+`bin/omamobile fastboot` cannot complete its crash-to-Android-to-adb path.
+Do not use either route as the recovery plan for this installation.
 
-- **Force restart:** hold Power for about 30 s. The phone restarts into the
-  active slot. Both watchdogs are stopped at probe, so a hang that does not
-  panic only ends this way.
 - **Fastboot by hand:** hold Volume Down and Power together, from off or
-  through a force restart, until the bootloader menu appears. Then
-  `fastboot --set-active=a` (or `b`). Never pick "Factory data reset" in
-  that menu or in Android recovery: it wipes `userdata`.
-- **Fastboot without buttons**, from our Linux: `DEVICE=lynx bin/omamobile
-  fastboot`. It crashes our kernel, ABL falls back to slot A, and the tool
-  runs `adb reboot bootloader` from Android. Holding Volume Down during a
-  `reboot-to` is too late by the orange warning.
-- **Power off:** `poweroff` from our Linux stops the SoC but leaves the
-  panel lit and the phone off USB (no PMIC driver). Use the bootloader
-  menu's "Power off" instead.
+  through a force restart, until the bootloader menu appears (about 20 s).
+  Never choose "Factory data reset" in that menu or Android recovery: it
+  erases the Arch root on `userdata`.
+- **Force restart:** hold Power for about 30 s if the phone is unresponsive.
+  Use the button recovery procedure with the human present; do not keep
+  sending commands to a phone that has stopped answering. An armed capture
+  watchdog may recover a test hang, but recovery must be confirmed.
+- **Power off:** the earlier `poweroff` test stopped the SoC but left the
+  panel lit and USB absent. Use the bootloader menu's "Power off".
 
-Nothing here writes outside slot B's five boot images. Stock's `init_boot_a`
-stays as it was, so slot A can go back to plain stock with the factory image.
+Only slot B's five boot images and `userdata` belong to this work. Keep the
+storage guard intact. Slot A's untouched boot images do not make Android
+bootable with the current userdata. Reboots and flashes still require the
+human's explicit approval and physical recovery readiness.
 
 ## The on-screen console (2026-10-24)
 
