@@ -269,3 +269,27 @@ starting with its domain left on. Derek also asked for a warm reboot
 into stock on slot A: this raven has no bootable stock Android (it ran
 GrapheneOS until 2026-10-26, and slot A doesn't boot), so that check can't
 be done on this phone; say so in the reply.
+
+**Results (2026-10-26, review kernel `7.3.0-rc6-omamobile-push1-g1de37d2bef30`,
+after a reinstall over GrapheneOS):** boot check `ok` on every line, the
+first clean one since 2026-10-20.
+
+- R1 (#9): MIF reads 1014000000 with the panel off (the assigned rate) and
+  1352000000 while lit (gs-decon's 120 Hz floor); 0 underruns or underflows
+  across boot, a minute of normal use, a lock and an unlock; no panfrost
+  faults.
+- R4 (#7): 340 lines, every read rc 0, and before == after: ACPM_TMU_INIT
+  changes none of CONTROL, CONTROL1, PROBE_EN_CON, SAMPLING_INTERVAL,
+  EMUL_CON or any probe's rise thresholds and INTEN, on either TMU. CONTROL
+  reads 0x00019003 on both (bit 12, the trip enable in the older Exynos
+  TMU layout, is set). Log: `logs/raven-tmu-initcheck.log`. R2's option
+  removed afterwards.
+- R4b (#6): mout_apm_func's parent reads mout_apm_funcsrc, whose parent is
+  pll_alv_div2_apm, and the UART clock 196608000 without the DT override;
+  BCM4389C1 patched (build 0203), its own address set, a 10 s scan lists
+  devices. Bluetooth works again (B3).
+- R4b (#7): big and GPU critical trips read 115000.
+- R4b (#8): the controller's boot-time power cycle, then no failed reads or
+  resets through a minute of use, a lock and an unlock; the user saw no
+  problem with touch.
+- R5 (#9's power domains) not run yet.
