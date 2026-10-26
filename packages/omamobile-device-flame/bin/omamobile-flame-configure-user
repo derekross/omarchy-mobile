@@ -1,0 +1,70 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Seed the measured flame scale; optionally fix an owner-installed Chrome."""
+import argparse
+from pathlib import Path
+import os
+import re
+import shutil
+import tempfile
+
+
+def replace(home, path, content):
+    if path.exists() and path.read_text() == content:
+        return
+    backup = home / '.local/state/omamobile/flame-config-backups'
+    if path.exists():
+        backup.mkdir(parents=True, exist_ok=True, mode=0o700)
+        saved = backup / path.name
+        if not saved.exists():
+            shutil.copy2(path, saved)
+            saved.chmod(0o600)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(content)
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def configure(home, chrome=False):
+    monitors = home / '.config/hypr/monitors.lua'
+    if not monitors.exists():
+        raise RuntimeError('Run normal Omarchy Mobile user setup first')
+    original = monitors.read_text()
+    content, count = re.subn(r'^local omarchy_monitor_scale = .*$',
+                            'local omarchy_monitor_scale = 2.5', original,
+                            flags=re.MULTILINE)
+    if count != 1:
+        raise RuntimeError('Expected one Omarchy monitor-scale declaration')
+    replace(home, monitors, content)
+    if chrome:
+        flags = home / '.config/chrome-flags.conf'
+        lines = flags.read_text().splitlines() if flags.exists() else []
+        keys = ('--disable-gpu', '--ozone-platform', '--force-device-scale-factor')
+        kept = [line for line in lines if not any(
+            line.strip() == key or line.strip().startswith(key + '=') for key in keys)]
+        kept += ['--disable-gpu', '--ozone-platform=wayland',
+                 '--force-device-scale-factor=0.6']
+        replace(home, flags, '\n'.join(kept) + '\n')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--chrome', action='store_true', help='merge the tested Chrome flags')
+    parser.add_argument('--chrome-if-installed', action='store_true')
+    args = parser.parse_args()
+    if os.getuid() == 0:
+        parser.error('run as the desktop owner, not root')
+    if not Path('/usr/share/omamobile/flame-root').is_file():
+        parser.error('not a flame native root')
+    chrome = args.chrome or (args.chrome_if_installed and bool(
+        shutil.which('google-chrome-stable') or shutil.which('google-chrome')))
+    configure(Path.home(), chrome)
+    print('Flame display defaults configured' + ('; Chrome flags merged' if chrome else ''))
+
+
+if __name__ == '__main__':
+    main()
