@@ -16,7 +16,7 @@ t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
 cheetah_rw="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 
 # --- Pack time: the real descriptors ---
-for d in cheetah:"$cheetah_rw" felix:"$cheetah_rw" oriole:"boot_b vendor_boot_b dtbo_b userdata"; do
+for d in cheetah:"$cheetah_rw" felix:"$cheetah_rw" lynx:"$cheetah_rw" oriole:"boot_b vendor_boot_b dtbo_b userdata"; do
   dev=${d%%:*} want=${d#*:}
   DEVICE=$dev bin/omamobile initramfs-config "$t/etc-$dev" > "$t/log" 2>&1 || { cat "$t/log"; fail "$dev: initramfs-config"; }
   [[ $(cat "$t/etc-$dev/omamobile-ufs-rw") == "$want" ]] || fail "$dev packs its UFS_RW (got $(cat "$t/etc-$dev/omamobile-ufs-rw"))"
