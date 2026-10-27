@@ -9,7 +9,14 @@ in the active graphical session through that user's systemd manager (which
 has the session's WAYLAND_DISPLAY), with omamobile-launch: on the browser's
 own screen, as every launch on the phone. A tag that stays on the phone is read
 once; neard reads it again only after it is lifted and tapped again.
+
+It also follows NFC's rfkill switch (the quick-settings tile). neard isn't
+told when the kernel blocks the radio, so on a block the adapter is powered
+off through neard (on a kernel that already did, neard's view stays stale),
+and on an unblock neard is restarted: it finds the adapter again, powers it
+(DefaultPowered), and a new poll loop starts.
 """
+import glob
 import subprocess
 import sys
 import time
@@ -101,12 +108,70 @@ def start_polling(bus):
     return True
 
 
+def nfc_blocked():
+    """True, False, or None when there is no NFC rfkill switch."""
+    for path in glob.glob("/sys/class/rfkill/rfkill*"):
+        try:
+            with open(f"{path}/type") as f:
+                if f.read().strip() != "nfc":
+                    continue
+            with open(f"{path}/soft") as f:
+                return f.read().strip() == "1"
+        except OSError:
+            continue
+    return None
+
+
+def set_powered(bus, powered):
+    try:
+        objects = bus.call_sync(NEARD, "/", "org.freedesktop.DBus.ObjectManager",
+                                "GetManagedObjects", None, None,
+                                Gio.DBusCallFlags.NONE, -1, None).unpack()[0]
+    except GLib.Error:
+        return
+    for path, interfaces in objects.items():
+        if ADAPTER not in interfaces:
+            continue
+        try:
+            bus.call_sync(NEARD, path, "org.freedesktop.DBus.Properties", "Set",
+                          GLib.Variant("(ssv)", (ADAPTER, "Powered", GLib.Variant("b", powered))),
+                          None, Gio.DBusCallFlags.NONE, -1, None)
+        except GLib.Error as error:
+            log(f"{path}: Powered={powered}: {error.message}")
+
+
+rfkill = {"blocked": None}
+
+
+def follow_rfkill(bus):
+    blocked = nfc_blocked()
+    if blocked is None or blocked == rfkill["blocked"]:
+        return True
+    previous, rfkill["blocked"] = rfkill["blocked"], blocked
+    if blocked:
+        log("NFC switched off")
+        set_powered(bus, False)
+    elif previous is not None:
+        log("NFC switched on: restarting neard")
+        restart_neard(bus)
+    return True
+
+
+def restart_neard(bus):
+    subprocess.run(["systemctl", "restart", "neard"], check=False)
+    GLib.timeout_add_seconds(2, start_polling, bus)
+
+
 def main():
     bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
     bus.signal_subscribe(NEARD, "org.freedesktop.DBus.ObjectManager", "InterfacesAdded",
                          None, None, Gio.DBusSignalFlags.NONE, on_interfaces_added, None)
-    if start_polling(bus):
-        GLib.timeout_add_seconds(2, start_polling, bus)
+    rfkill["blocked"] = nfc_blocked()
+    if not rfkill["blocked"]:
+        # neard's view may be stale (a block before this service ran, or an
+        # earlier run of it): start from a fresh neard.
+        restart_neard(bus)
+    GLib.timeout_add_seconds(2, follow_rfkill, bus)
     GLib.MainLoop().run()
 
 

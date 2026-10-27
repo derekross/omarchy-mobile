@@ -18,8 +18,10 @@ regime; with it off (the cs35l41 `boost_en` bring-up parameter, "ASoC:
 cs35l41: bring-up option to run without the boost converter") both
 speakers are 8-11 dB louder and clean. The routing was verified again on
 the way: the earpiece is the top speaker, and it plays the full left
-channel as on stock.
-**Next (2026-10-13):** the speakers sound thin; the ranked plan and three
+channel as on stock. omamobile-audio 0.5.4 then made the speaker filter flat
+with 6 dB of limiter drive, the owner's choice by ear, and the owner now finds
+the speakers good (2026-10-27).
+**Earlier plan (2026-10-13, before C9j):** the speakers sounded thin; the ranked plan and three
 runbooks follow C9d-6: C9g (omamobile-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
 and the firmware's own impedance reading, for the gain-17 runaway), and
