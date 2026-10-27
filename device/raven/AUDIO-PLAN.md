@@ -1,7 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): AoC, speakers and microphones
 
-Status (2026-10-15): **Sound works on raven: both speakers (heard), the microphones, at boot from packages** (omamobile-device-raven 0.1.4, omamobile-audio 0.4.4), protection at stage media. R5: the sensors work through the AoC (omamobile-sensors 0.2.0). Next: raven's own speaker tuning. Kernel branch `omamobile-gs101-aoc`
+Status (2026-10-27): **no sound with the packages in #41.** omamobile-device-raven
+0.1.23 and the PR's omamobile-audio keep speaker protection off on raven
+(its ceilings are cheetah's), so `cs35l41` never loads, and the sound card
+waits for the amplifier codecs: no speakers **and no microphones** ("Without
+the amplifiers" below). The AoC and the sensors still work. The working
+sound below came with speaker protection on, which the older local
+omamobile-audio 0.4.4 still started.
+
+Earlier status (2026-10-15): **Sound works on raven: both speakers (heard), the microphones, at boot from packages** (omamobile-device-raven 0.1.4, omamobile-audio 0.4.4), protection at stage media. R5: the sensors work through the AoC (omamobile-sensors 0.2.0). Next: raven's own speaker tuning. Kernel branch `omamobile-gs101-aoc`
 (the hashes below are from the stacked bring-up branch it was split from):
 - cheetah's Trusty, GSA and AoC stack imported (`ce7ae89a5`, `fa0873edc`);
 - it builds against gs101's firmware interface (`9f5ed4b1f`, raven's

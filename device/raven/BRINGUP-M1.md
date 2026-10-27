@@ -8,8 +8,9 @@ successful at every boot.** Kernel branches `omamobile-gs101-boot`,
 and `-aoc` on linux-omarchy-mobile, one subsystem each, all off
 `omamobile-gs101-boot` (which is off `omamobile`). They replace the stacked
 bring-up branches (`omamobile-raven-dts` ... `-aoc`) that the commit hashes
-in the results below come from. Slot A keeps an Android build (the fallback; on the
-reference phone GrapheneOS); slot B is ours. Later stages have their own
+in the results below come from. Slot A holds GrapheneOS (reinstalled 2026-10-27, NOTES); it is a
+bootloader-level way back only, since it shares `userdata` with Omarchy
+and can't boot without wiping it. Slot B is ours. Later stages have their own
 plans: [GPU](GPU-PLAN.md), [Wi-Fi](WIFI-PLAN.md),
 [display](DISPLAY-PLAN.md), [Bluetooth](BLUETOOTH-PLAN.md),
 [power and thermal](POWER-PLAN.md), [audio](AUDIO-PLAN.md); cross-cutting

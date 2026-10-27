@@ -8,8 +8,9 @@ results. Kernel: `omamobile-gs101-merge-test` (`gb4d96e9c3ab7` on the
 phone); the suspend changes will go on a new `omamobile-gs101-suspend`
 branch in `~/android/mainline/wt-raven-split`.
 
-No slot A on raven (GrapheneOS is gone): a hang is recovered by holding
-Power about 30 s, which boots slot B again. Suspend stays hidden in the
+Slot A holds GrapheneOS, which can't boot over Omarchy's `userdata`
+(NOTES, 2026-10-27): a hang is recovered by holding Power about 30 s,
+which boots slot B again while it has retries. Suspend stays hidden in the
 menu (`suspend-off`) until S8.
 
 ## 1. What cheetah needed, and raven's state

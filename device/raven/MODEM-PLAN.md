@@ -1,7 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem plan (raven / gs101): Exynos 5123 on PCIe channel 0
 
-Status (2026-10-20, `g675676713161`): **the modem works as a phone**:
+Status (2026-10-27, `gb3d6253b0d61`): **the modem works as a phone on SIM 1
+(tray)**. The eSIM (SIM 2) is switched off by the owner in Android, which
+disables its profile on the eUICC, so Linux sees no USIM there; since
+device-raven 0.1.23 its sitd (`omamobile-sitd-2`) is opt-in. Derek asked to
+take the modem units and `modem-sit.d/raven.conf` out of #41 and bring them
+with the `omamobile-modem-policy` change in their own PR (to do), so the
+modem won't start by default on a fresh install from #41 alone. NV baseline:
+`~/android/reference/raven-backup-2026-10-27b`.
+
+Earlier status (2026-10-20, `g675676713161`): **the modem works as a phone**:
 it boots to ONLINE at every boot (NV only as verified RAM copies), both
 SIMs (tray and eSIM, one sitd per modem stack) register, texts go both
 ways, an outgoing CS call has audio, and mobile data runs over the data

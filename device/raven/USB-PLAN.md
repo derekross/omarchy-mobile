@@ -58,8 +58,9 @@ only in `usb@0` (`dr_mode`, `maximum-speed`, `phys`, `phy-names`,
 - **Stop:** no USB device on the laptop after 3 minutes. Do not send
   more commands.
 - **Rollback (no USB):** Volume Down + Power about 20 s for fastboot,
-  then `bin/omamobile flash` with boot A's `KERNEL_OUT`. Raven has no
-  working slot A, so fastboot is the only way back; check before U1.1
+  then `bin/omamobile flash` with boot A's `KERNEL_OUT`. Slot A's
+  GrapheneOS can't boot over Omarchy's `userdata`, so fastboot is the only
+  way back; check before U1.1
   that `fastboot devices` sees the phone from the bootloader.
 - **Risk:** high: USB is the only link.
 

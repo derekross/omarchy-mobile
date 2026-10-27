@@ -1,7 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): Bluetooth
 
-Status (2026-10-21): **broken again since a forced restart (B3)**: the
+Status (2026-10-27): **Bluetooth works**, at every boot since kernel #6 v2's
+CMU_APM mux fix (POWER-PLAN R4b, `g1de37d2bef30` and later; linux #6, merged).
+The B3 outage below followed kernels whose `assigned-clock-parents` override
+set a reserved bit in the always-on CMU_APM; GrapheneOS's Bluetooth came up
+clean after warm and cold boots once that kernel had run (B3 follow-ups).
+
+Earlier status (2026-10-21): **broken again since a forced restart (B3)**: the
 chip answers no command, and no reset tried so far brings it back.
 Before that (2026-10-20): **fixed: the BCM4389 starts cleanly at every warm
 reboot** (B2: 15 of 15, not one lost command) with hci_bcm pulsing BT_REG_ON

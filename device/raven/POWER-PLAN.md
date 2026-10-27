@@ -265,10 +265,9 @@ bluetoothctl show | head -3; cat /sys/class/thermal/thermal_zone*/trip_point_1_t
 integration kernel with `omamobile-gs101-power-v2` in place of
 `omamobile-gs101-power` (not built yet). Expect the same domains off
 (their PMU STATUS 0), about the same idle current, and the AoC still
-starting with its domain left on. Derek also asked for a warm reboot
-into stock on slot A: this raven has no bootable stock Android (it ran
-GrapheneOS until 2026-10-26, and slot A doesn't boot), so that check can't
-be done on this phone; say so in the reply.
+starting with its domain left on. Derek also asked whether a warm reset
+brings the domains back: answered without stock, from the initramfs, in
+R5b below (2026-10-27).
 
 **Results (2026-10-26, review kernel `7.3.0-rc6-omamobile-push1-g1de37d2bef30`,
 after a reinstall over GrapheneOS):** boot check `ok` on every line, the
@@ -292,7 +291,6 @@ first clean one since 2026-10-20.
 - R4b (#8): the controller's boot-time power cycle, then no failed reads or
   resets through a minute of use, a lock and an unlock; the user saw no
   problem with touch.
-- R5 (#9's power domains) not run yet.
 - R5 (#9 v2, 2026-10-26, `7.3.0-rc6-omamobile-push1-gb3d6253b0d61` = the
   review kernel with `omamobile-gs101-power-v2`'s driver, bindings and DT):
   the same 13 domains read off in `pm_genpd_summary` (g2d, mfc, csis, pdp,

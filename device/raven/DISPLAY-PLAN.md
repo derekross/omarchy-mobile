@@ -65,7 +65,7 @@ sits inside DECON0's main block, which matches.
   come from Google's GPL `panel-samsung-s6e3hc3.c`, which still has to be
   fetched.
 - **Refresh rate:** keep raven at ABL's mode (60 Hz) until the panel
-  driver exists.
+  driver exists. (Done since: the S6E3HC3 driver runs 120 Hz, D6.)
 
 ## 4. Runbook (each step gated; read-only first)
 
