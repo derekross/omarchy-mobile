@@ -11,7 +11,10 @@ StopWhenUnneeded=yes
 ConditionPathExists=/usr/lib/omamobile-vendor/gnss/root
 
 [Service]
-ExecStart=/usr/lib/omamobile-vendor/omamobile-gnss-start
+# A location session keeps the phone awake: while the stack runs it holds a
+# logind sleep inhibitor (block mode), which logind and omamobile-sleepd
+# honour (device/cheetah/SUSPEND-PLAN.md 6.1). It ends with the stack.
+ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start
 # Before the stop signal: ask gpsd to end its request, so it saves its
 # state (gldata.sto) for the next start. Bounded at ~4 s.
 ExecStop=/usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss stop

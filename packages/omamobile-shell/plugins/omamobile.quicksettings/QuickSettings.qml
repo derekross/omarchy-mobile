@@ -465,7 +465,8 @@ Item {
     function toggle() { if (available) root.runTileAction("night-light", !enabled) }
   }
 
-  // Stay awake: Omarchy's idle indicator, which keeps the screen on.
+  // Stay awake: Omarchy's idle indicator, which keeps the screen on and
+  // the phone out of sleep (omamobile-sleepd refuses while it is on).
   QtObject {
     id: stayAwake
     readonly property bool available: root.probedHas("stayawake")

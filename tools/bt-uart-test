@@ -13,12 +13,28 @@
 #   loop [--tty T]          UART internal loopback (TIOCM_LOOP) at 115200 and
 #                           3000000: proves the UART IP, its pclk and its IRQ.
 #                           The chip stays off.
-#   hci [--tty T] [--baud B] [--on-ms MS]
+#   hci [--tty T] [--baud B] [--on-ms MS] [--wake BANK:LINE]
 #                           power the BCM4389 BT core (BT_DEV_WAKE high, then
 #                           BT_REG_ON high), send HCI_Reset, Read Local Version
 #                           and Broadcom Read Verbose Config, print the answers,
 #                           then BT_REG_ON low again. Proves the pins, the baud
 #                           clock (115200 is the chip's power-on rate) and RTS/CTS.
+#                           --wake: BT_DEV_WAKE's bank and line; by default
+#                           the board's own, from its compatible (cheetah
+#                           gpp16:3, raven gpp14:3). Another board needs
+#                           --wake: the tool refuses to guess a pin.
+#   patch FILE [--tty T] [--wake BANK:LINE] [--oper-baud B]
+#                           power the BT core as hci does, then download the
+#                           .hcd patch raw: Download Minidriver, every Write
+#                           RAM record streamed with RTS/CTS and no per-record
+#                           wait (the stock HAL's "fast download"), Launch RAM,
+#                           and Read Local Version again. Separates the chip's
+#                           download protocol from the kernel's btbcm path.
+#                           The file must be Write RAM records (0xfc4c) ending
+#                           in one Launch RAM (0xfc4e), or nothing is powered.
+#                           --oper-baud: switch host and chip to this rate
+#                           (BCM 0xfc18) before the download, as btbcm does;
+#                           default 115200, the power-on rate (no switch).
 #   gpio                    print which gpiochip carries gpp16 (no line changes)
 #
 # Every step prints before it touches anything. Nothing here reads or writes
@@ -37,6 +53,20 @@ DEF_TTY = "/dev/ttySAC0"
 BT_BANK = "gpp16"
 BT_REG_ON = 2      # gpp16-2, active high
 BT_DEV_WAKE = 3    # gpp16-3, active high
+# BT_DEV_WAKE per board (first compatible). BT_REG_ON is gpp16-2 on both.
+# On raven gpp16-3 is a USI8 pin: driving cheetah's line there is wrong.
+WAKE_BY_BOARD = {
+    "google,gs201-cheetah": f"{BT_BANK}:{BT_DEV_WAKE}",
+    "google,gs101-raven": "gpp14:3",
+}
+
+
+def board():
+    try:
+        with open("/proc/device-tree/compatible", "rb") as f:
+            return f.read().split(b"\0")[0].decode()
+    except OSError:
+        return ""
 
 
 def say(msg):
@@ -228,18 +258,41 @@ def hci_cmd(fd, opcode, params=b"", timeout=2.0):
     return body[3:]          # status + return parameters
 
 
-def cmd_hci(tty, baud, on_ms):
+class WakeLine:
+    """BT_DEV_WAKE, in BT_REG_ON's bank or in its own."""
+
+    def __init__(self, lines, wake_lines, offset):
+        self.lines, self.wake_lines, self.offset = lines, wake_lines, offset
+
+    def set(self, value):
+        (self.wake_lines or self.lines).set(self.offset, value)
+
+
+def cmd_hci(tty, baud, on_ms, wake):
+    wake_bank, wake_line = wake.split(":")
+    wake_line = int(wake_line)
     chip_fd, path, _ = find_chip(BT_BANK)
     if chip_fd is None:
         die(f"no gpiochip labelled {BT_BANK}: is the PERIC0 pin controller enabled?")
-    say(f"{BT_BANK} is {path}; request lines {BT_REG_ON} (BT_REG_ON) and "
-        f"{BT_DEV_WAKE} (BT_DEV_WAKE) as outputs, low")
-    lines = Lines(chip_fd, [BT_REG_ON, BT_DEV_WAKE], "bt-uart-test")
+    wake_fd = wake_lines = None
+    if wake_bank == BT_BANK:
+        say(f"{BT_BANK} is {path}; request lines {BT_REG_ON} (BT_REG_ON) and "
+            f"{wake_line} (BT_DEV_WAKE) as outputs, low")
+        lines = Lines(chip_fd, [BT_REG_ON, wake_line], "bt-uart-test")
+    else:
+        wake_fd, wake_path, _ = find_chip(wake_bank)
+        if wake_fd is None:
+            die(f"no gpiochip labelled {wake_bank}")
+        say(f"{BT_BANK} is {path} (line {BT_REG_ON}, BT_REG_ON), {wake_bank} is "
+            f"{wake_path} (line {wake_line}, BT_DEV_WAKE); outputs, low")
+        lines = Lines(chip_fd, [BT_REG_ON], "bt-uart-test")
+        wake_lines = Lines(wake_fd, [wake_line], "bt-uart-test")
+    dev_wake = WakeLine(lines, wake_lines, wake_line)
     fd = open_tty(tty, baud, rtscts=True)
     rc = 1
     try:
         say("BT_DEV_WAKE high (keep the controller awake)")
-        lines.set(BT_DEV_WAKE, 1)
+        dev_wake.set(1)
         say("BT_REG_ON high (power the BT core); Wi-Fi's WL_REG_ON is not touched")
         lines.set(BT_REG_ON, 1)
         time.sleep(on_ms / 1000)
@@ -268,11 +321,139 @@ def cmd_hci(tty, baud, on_ms):
     finally:
         say("BT_REG_ON low, BT_DEV_WAKE low")
         lines.set(BT_REG_ON, 0)
-        lines.set(BT_DEV_WAKE, 0)
+        dev_wake.set(0)
         lines.close()
         os.close(chip_fd)
+        if wake_lines:
+            wake_lines.close()
+            os.close(wake_fd)
         os.close(fd)
     say("hci " + ("PASS" if rc == 0 else "FAIL"))
+    return rc
+
+
+def set_baud(fd, baud):
+    attrs = termios.tcgetattr(fd)
+    speed = getattr(termios, f"B{baud}")
+    attrs[4] = attrs[5] = speed
+    termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+
+
+HCD_WRITE_RAM, HCD_LAUNCH_RAM = 0xfc4c, 0xfc4e
+
+
+def read_hcd(hcd):
+    """The .hcd's HCI command records, checked before the chip is touched."""
+    try:
+        data = open(hcd, "rb").read()
+    except OSError as e:
+        die(f"{hcd}: {e.strerror}")
+    records, i = [], 0
+    while i < len(data):
+        if i + 3 > len(data) or i + 3 + data[i + 2] > len(data):
+            die(f"{hcd}: truncated record at byte {i}: not an .hcd patch")
+        records.append(data[i:i + 3 + data[i + 2]])
+        i += 3 + data[i + 2]
+    if len(records) < 2:
+        die(f"{hcd}: {len(records)} records: not an .hcd patch")
+    ops = [r[0] | r[1] << 8 for r in records]
+    if ops[-1] != HCD_LAUNCH_RAM:
+        die(f"{hcd}: last record is 0x{ops[-1]:04x}, not Launch RAM (0x{HCD_LAUNCH_RAM:04x})")
+    bad = [n for n, op in enumerate(ops[:-1]) if op != HCD_WRITE_RAM]
+    if bad:
+        die(f"{hcd}: record {bad[0]} is 0x{ops[bad[0]]:04x}, not Write RAM (0x{HCD_WRITE_RAM:04x})")
+    return records
+
+
+def cmd_patch(tty, hcd, wake, oper):
+    records = read_hcd(hcd)
+    say(f"{hcd}: {len(records) - 1} Write RAM records and Launch RAM")
+    if not hasattr(termios, f"B{oper}"):
+        die(f"--oper-baud {oper}: not a rate this host's termios knows")
+    wake_bank, wake_line = wake.split(":")
+    wake_line = int(wake_line)
+    chip_fd, path, _ = find_chip(BT_BANK)
+    if chip_fd is None:
+        die(f"no gpiochip labelled {BT_BANK}: is the PERIC0 pin controller enabled?")
+    wake_fd, wake_path, _ = find_chip(wake_bank)
+    if wake_fd is None:
+        os.close(chip_fd)
+        die(f"no gpiochip labelled {wake_bank}")
+    say(f"{BT_BANK} is {path} (line {BT_REG_ON}, BT_REG_ON), {wake_bank} is "
+        f"{wake_path} (line {wake_line}, BT_DEV_WAKE); outputs, low")
+    lines = Lines(chip_fd, [BT_REG_ON], "bt-uart-test")
+    wake_lines = Lines(wake_fd, [wake_line], "bt-uart-test")
+    fd = open_tty(tty, 115200, rtscts=True)
+    rc = 1
+    try:
+        say("BT_DEV_WAKE high (keep the controller awake)")
+        wake_lines.set(wake_line, 1)
+        say("BT_REG_ON high (power the BT core); Wi-Fi's WL_REG_ON is not touched")
+        lines.set(BT_REG_ON, 1)
+        time.sleep(0.2)
+        termios.tcflush(fd, termios.TCIFLUSH)
+        if hci_cmd(fd, 0x0c03) is None:
+            say("HCI_Reset FAIL")
+            return 1
+        ver = hci_cmd(fd, 0x1001)
+        if ver and len(ver) >= 9:
+            say(f"before: HCI rev 0x{struct.unpack_from('<H', ver, 2)[0]:04x} LMP subversion 0x{struct.unpack_from('<H', ver, 7)[0]:04x}")
+        if oper != 115200:
+            # BCM Update UART Baud Rate: 2 bytes 0, then the rate (LE32)
+            if hci_cmd(fd, 0xfc18, b"\x00\x00" + struct.pack("<I", oper)) is None:
+                say("Update baud rate FAIL")
+                return 1
+            set_baud(fd, oper)
+            time.sleep(0.01)
+            say(f"host and chip at {oper}")
+            if hci_cmd(fd, 0x1001) is None:
+                say("Read Local Version at the new rate FAIL")
+                return 1
+        if hci_cmd(fd, 0xfc2e) is None:                # Download Minidriver
+            say("Download Minidriver FAIL")
+            return 1
+        time.sleep(0.05)
+        t0, answers = time.time(), 0
+        for rec in records[:-1]:
+            buf = b"\x01" + rec
+            while buf:
+                select.select([], [fd], [], 1.0)
+                try:
+                    buf = buf[os.write(fd, buf):]
+                except BlockingIOError:
+                    pass
+            answers += len(read_exact(fd, 256, 0))
+        termios.tcdrain(fd)
+        say(f"{len(records) - 1} Write RAM records sent in {time.time() - t0:.1f} s, {answers} bytes came back meanwhile")
+        time.sleep(0.1)
+        termios.tcflush(fd, termios.TCIFLUSH)
+        launch = records[-1]
+        # the patch's Launch RAM reboots the chip at 115200
+
+        os.write(fd, b"\x01" + launch)
+        ev = read_exact(fd, 7, 2.0)
+        say(f"Launch RAM answer: {hexs(ev) if ev else 'none'}")
+        time.sleep(0.25)
+        if oper != 115200:
+            set_baud(fd, 115200)
+        termios.tcflush(fd, termios.TCIFLUSH)
+        if hci_cmd(fd, 0x0c03) is None:
+            say("HCI_Reset after launch FAIL")
+            return 1
+        ver = hci_cmd(fd, 0x1001)
+        if ver and len(ver) >= 9:
+            say(f"after: HCI rev 0x{struct.unpack_from('<H', ver, 2)[0]:04x} LMP subversion 0x{struct.unpack_from('<H', ver, 7)[0]:04x}")
+            rc = 0
+    finally:
+        say("BT_REG_ON low, BT_DEV_WAKE low")
+        lines.set(BT_REG_ON, 0)
+        wake_lines.set(wake_line, 0)
+        lines.close()
+        wake_lines.close()
+        os.close(chip_fd)
+        os.close(wake_fd)
+        os.close(fd)
+    say("patch " + ("PASS" if rc == 0 else "FAIL"))
     return rc
 
 
@@ -287,20 +468,36 @@ def cmd_gpio():
 
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: bt-uart-test loop|hci|gpio [--tty T] [--baud B] [--on-ms MS]\n"
+        print("usage: bt-uart-test loop|hci|patch FILE|gpio [--tty T] [--baud B] [--on-ms MS]\n"
+              "       [--wake BANK:LINE] [--oper-baud B]\n"
               "(see the header of tools/bt-uart-test)")
         return 0
     cmd, args = argv[0], argv[1:]
-    opts = {"--tty": DEF_TTY, "--baud": "115200", "--on-ms": "200"}
+    args_file = None
+    if cmd == "patch":
+        if not args:
+            die("patch needs the .hcd file")
+        args_file = args.pop(0)
+    opts = {"--tty": DEF_TTY, "--baud": "115200", "--on-ms": "200",
+            "--wake": None, "--oper-baud": "115200"}
     while args:
         key = args.pop(0)
         if key not in opts or not args:
             die(f"bad option {key}")
         opts[key] = args.pop(0)
+    if cmd in ("hci", "patch") and opts["--wake"] is None:
+        b = board()
+        if b not in WAKE_BY_BOARD:
+            die(f"no BT_DEV_WAKE default for board {b or 'unknown'}: give --wake BANK:LINE")
+        opts["--wake"] = WAKE_BY_BOARD[b]
+        say(f"{b}: BT_DEV_WAKE {opts['--wake']}")
     if cmd == "loop":
         return cmd_loop(opts["--tty"])
+    if cmd == "patch":
+        return cmd_patch(opts["--tty"], args_file, opts["--wake"], int(opts["--oper-baud"]))
     if cmd == "hci":
-        return cmd_hci(opts["--tty"], int(opts["--baud"]), int(opts["--on-ms"]))
+        return cmd_hci(opts["--tty"], int(opts["--baud"]), int(opts["--on-ms"]),
+                       opts["--wake"])
     if cmd == "gpio":
         return cmd_gpio()
     die(f"unknown command {cmd}")

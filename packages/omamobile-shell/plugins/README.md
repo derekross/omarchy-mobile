@@ -127,7 +127,7 @@ existed finds them under "Add tiles" too.
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
 | Dark theme | Swaps between the user's last dark and last light Omarchy theme (`omarchy-theme-set`; defaults Tokyo Night and Catppuccin Latte, choices kept in `~/.local/state/omamobile/theme-{dark,light}`). Long-press opens Omarchy's theme picker |
 | Night light | `omarchy-toggle-nightlight` (hyprsunset); "No hyprsunset" without it |
-| Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator |
+| Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator. It also keeps the phone out of sleep: `omamobile-sleepd` refuses while it is on, even with the screen off (a download, a long task) |
 | Microphone | Mute of PipeWire's default source; "No microphone" without one |
 | Screenshot | Puts the sheet away, then `omarchy-capture-screenshot fullscreen` (file, clipboard and a notification) |
 | Screen record | `omarchy-capture-screenrecording --fullscreen`, a second tap `--stop-recording`; "No recorder" without gpu-screen-recorder |
@@ -839,7 +839,9 @@ and `omamobile-call-top` (the strip), on the overlay layer, with
   mute, route, the replies) as a JSON line per change, lights the screen
   when a call rings (`omarchy-shell lock wake`, as the power key), and owns
   `org.omamobile.CallCard` while it runs, so the agent can tell the shell
-  shows ringing calls itself. The plugin asks `omarchy-shell lock isLocked`
+  shows ringing calls itself. While a call rings or runs it holds a logind
+  sleep inhibitor (block mode), so the phone never sleeps under a call
+  (`omamobile-sleepd`, SUSPEND-PLAN 6.1). The plugin asks `omarchy-shell lock isLocked`
   once a second while a call exists.
 * **Requests:** `busctl --user call org.omamobile.Phone1 … Answer|Decline|
   Hangup|SetMute|SetRoute` and `org.omamobile.Messages1 … Send` for a reply,

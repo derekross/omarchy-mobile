@@ -2,6 +2,54 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-10-26: auto-sleep on the phone; the bottom speaker's protection broke after sleep
+
+Kernel `7.3.0-rc6-omamobile-push1-00588-gcd72ae58ee47` (the test-bt-wifi
+build), `omamobile-shell` 0.2.29 and `omamobile-device-cheetah` 0.1.34 from
+the `suspend-tier1` branch. SUSPEND-PLAN P0-P5 has the step-by-step record.
+
+- **Suspend itself held up.** 13 s2idle cycles in one boot: `systemctl
+  suspend` by hand, the RTC, a WakeSystem timer (on time to 1 s), Power and
+  Volume Down as wakes, and `omamobile-sleepd`'s own requests. There were
+  0 failures, no `ufshcd_err_handler`, and Wi-Fi stayed connected (the D3
+  ACK by control message in 13-20 ms).
+- **The press that wakes the phone never reaches Hyprland.** logind logs
+  it ("Power key pressed short"), but the user session is still frozen
+  while the kernel takes the key, so the Power binding never ran and the
+  phone woke to a dark screen. `omamobile-sleepd` now lights the PIN pad
+  itself when the wake IRQ is `KEY_POWER` (`omamobile-keys wake`), and
+  `omamobile-keys` ignores a late copy of that press within 1.5 s.
+- **A freeze in the middle of a fingerprint cancel wedged fprintd** ("the
+  device is still busy"): the lock retried about three times a second and
+  never showed the sensor. The sleep hook now try-restarts fprintd on
+  every resume, and the lock re-claims it within about 0.5 s.
+- **Locking with Power flashed the PIN pad.** This was an old
+  `omamobile-keys` bug, unrelated to suspend: the long-press timer (0.6 s)
+  fired while the lock was still being taken (0.9 s) and woke it. Fixed;
+  `power-up` now forgets the press first.
+- **After the sleeps, the bottom speaker's protection read a false coil
+  temperature.** The first sound after 13 sleeps tripped the watchdog:
+  "Bottom: coil temperature jumped 14.5 C (25.0 -> 39.5)" within 2 s.
+  - It read 35 °C while silent and peaked at 40.7 °C; the top amplifier
+    stayed at 25.0 °C.
+  - Neither a restart of `omamobile-speaker-protection` nor a warm reboot
+    cleared it. A full power-off did: both amplifiers read 25.00 °C, and
+    playback at stage media works again, with the bottom amplifier moving
+    more than the top.
+  - So sleep left the bottom CS35L41 (or its DSP state) wrong, and that
+    state survives a warm reboot, much like the LSM6DSV in AOC-PLAN C6.
+  - Every earlier sleep test (S6) ran with no sound playing. This was the
+    first playback after a sleep.
+  - **Auto-sleep stays off** until the amplifiers' suspend and resume are
+    understood: whether the driver's system-sleep ops run on gs201, and
+    whether the DSP, its calibration and the TDM back end come back.
+  - The speakers also hissed briefly when the amplifiers powered up during
+    the cold boot; whether that is new hasn't been checked.
+- **"Quiet and thin" is still the stage-media cap**, about 17 dB below
+  stock, and both amplifiers report `vmon low 1` at analog gain 10. The
+  owner hears it as the call speaker carrying the sound. The next speaker
+  session is AOC-PLAN C9i, on the `speakers-offline` branch.
+
 ## 2026-10-23: the S2MPG12 regulator driver binds read-only (kernel #27); UFS and touch PRs boot
 
 - **Kernel #19 + #22 (Tensor G4 UFS host and PHY, with error propagation

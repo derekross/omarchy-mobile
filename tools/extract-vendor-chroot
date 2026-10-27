@@ -37,6 +37,8 @@
 # Needs: unzip, debugfs (e2fsprogs), readelf (binutils) or llvm-readelf,
 # sha256sum; simg2img and lpunpack (android-tools) for sparse or super images.
 set -euo pipefail
+# debugfs and friends live in /sbin on Debian-like hosts
+export PATH=$PATH:/usr/sbin:/sbin
 
 DEVICE="cheetah"
 PROFILE=""
@@ -65,7 +67,9 @@ profile_lists() {
       ;;
     modem)
       VENDOR_BINS=(bin/cbd bin/rfsd)
-      VENDOR_FILES=(etc/init/cbd.rc etc/init/rfsd.rc etc/fstab.modem build.prop)
+      # gs201 keeps the modem image mount in fstab.modem, gs101 in its main fstab
+      if [[ $DEVICE == raven ]]; then MODEM_FSTAB=etc/fstab.gs101; else MODEM_FSTAB=etc/fstab.modem; fi
+      VENDOR_FILES=(etc/init/cbd.rc etc/init/rfsd.rc "$MODEM_FSTAB" build.prop)
       VENDOR_DIRS=()
       SYSTEM_BINS=(system/bin/sh system/bin/toybox)
       SYSTEM_FILES=(system/build.prop)
@@ -100,8 +104,8 @@ profile_check() {
         die "cbd does not look like Samsung's CP boot daemon"
       grep -aq '/dev/umts_rfs0' "$1/vendor/bin/rfsd" ||
         die "rfsd does not use /dev/umts_rfs0"
-      grep -q 'modem_img' "$1/vendor/etc/fstab.modem" ||
-        die "fstab.modem has no modem image mount"
+      grep -q 'modem_img' "$1/vendor/$MODEM_FSTAB" ||
+        die "${MODEM_FSTAB##*/} has no modem image mount"
       ;;
     waves)
       local f
@@ -130,6 +134,7 @@ Usage: extract-vendor-chroot -p PROFILE [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
   -o DIR   output directory (default: ./out/vendor-chroot-PROFILE)
   -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
            (default: a temp dir in \$TMPDIR)
+  -d DEV   cheetah (default) or raven (gnss and modem so far: device/raven)
   -f       skip the device checks
 
 Install on the phone (from the omamobile repo), e.g. for gnss:
@@ -143,9 +148,10 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
 
 OUT="" WORK="" FORCE=""
-while getopts "p:o:w:fh" opt; do
+while getopts "p:o:w:d:fh" opt; do
   case $opt in
     p) PROFILE=$OPTARG ;;
+    d) DEVICE=$OPTARG ;;
     o) OUT=$OPTARG ;;
     w) WORK=$OPTARG ;;
     f) FORCE=1 ;;
@@ -155,6 +161,11 @@ while getopts "p:o:w:fh" opt; do
 done
 shift $((OPTIND - 1))
 [[ $# -eq 1 && -n $PROFILE ]] || { usage >&2; exit 2; }
+case $DEVICE in
+  cheetah) ;;
+  raven) [[ $PROFILE == gnss || $PROFILE == modem ]] || die "raven: gnss and modem profiles only so far" ;;
+  *) die "unknown device $DEVICE (cheetah or raven)" ;;
+esac
 profile_lists "$PROFILE"
 [[ -n $OUT ]] || OUT="./out/vendor-chroot-$PROFILE"
 SRC=$(readlink -f "$1")

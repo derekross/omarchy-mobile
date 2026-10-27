@@ -200,7 +200,7 @@ The same SoC does **not** mean the same board. The panel, touch controller, PMIC
 
 - The board DTS lives in the **kernel repository** ([linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile)), not here. Start from the SoC `.dtsi` (`arch/arm64/boot/dts/exynos/google/gs201.dtsi` or `gs101.dtsi`) and from the live stock DT. Add `<soc>-<codename>.dts` with `compatible = "google,<soc>-<codename>", "google,<soc>"`, plus its entry in `Documentation/devicetree/bindings/arm/google.yaml`.
 - Read [BRINGUP-M1.md](device/cheetah/BRINGUP-M1.md) §1 (the boot chain) and §4 (the minimal DTS) first. The Pixel bootloader has rules of its own:
-  - It picks the base DTB by `/soc_id` (gs101, gs201; ship one copy per silicon revision) or, on zuma, by the children of `/soc_compatible` (one DTB carries them all; descriptor key `SOC_COMPATIBLE`).
+  - It picks the base DTB by `/soc_id` (gs101, gs201; ship one copy per silicon revision) or by the children of `/soc_compatible` (zuma, and gs201's IPOP package on the Pixel 7a; one DTB carries them all; descriptor key `SOC_COMPATIBLE`).
   - It requires `/chosen/bootargs` and an empty `/ect` node.
   - It applies a board `dtbo` keyed by `board_id`/`board_rev`. Ship a trivial one with your device's IDs (from `getprop ro.boot.dtbo_idx` and the stock `dtbo.img`).
   - It applies a debug-policy overlay from the `dpm` partition, so build with `-@` and add the label stubs it targets.

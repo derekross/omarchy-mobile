@@ -39,6 +39,18 @@
 #   --force        replace fingerprint state that differs from the backup
 #   --dry-run      stage locally and print every extraction and push; touch
 #                  nothing on the phone
+#   -d DEV         cheetah (default) or raven. Raven (device/raven): the
+#                  firmware (Wi-Fi, Bluetooth, the AoC, the speaker amplifiers),
+#                  the AoC sensor registry and the gnss and modem chroots from
+#                  the factory image; the modem's per-phone files, its board id
+#                  (props.conf, from --getprop) and NV checksums (from
+#                  --nv-backup); then the services cheetah's setup step
+#                  enables, but speaker protection. No fingerprint or camera
+#                  yet
+#   --getprop FILE raven: stock Android's getprop capture (default
+#                  ~/android/reference/raven-stock/getprop.txt)
+#   --nv-backup DIR  raven: the read-only NV backup with SHA256SUMS (default
+#                  the newest ~/android/reference/raven-backup-*)
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
@@ -49,8 +61,10 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
 backup=$HOME/android/reference/phone-backup-20261013
 work=${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-provision
-dry=0 skip_extract=0 fingerprint=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0
-user="" factory=""
+getprop=$HOME/android/reference/raven-stock/getprop.txt
+nv_backup=""
+dry=0 skip_extract=0 fingerprint=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0 backup_given=0
+user="" factory="" device=cheetah
 PHONE_SSH=${PHONE_SSH:-$ROOT/tools/phone-ssh}
 while (($#)); do
   case $1 in
@@ -63,10 +77,13 @@ while (($#)); do
     --with-waves) waves=1 ;;
     --keep) keep=1 ;;
     --force) force=1 ;;
-    --backup) backup=${2:?}; shift ;;
+    --backup) backup=${2:?} backup_given=1; shift ;;
     --work) work=${2:?}; shift ;;
     --user) user=${2:?}; shift ;;
-    -h|--help) sed -n '3,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -d) device=${2:?}; shift ;;
+    --getprop) getprop=${2:?}; shift ;;
+    --nv-backup) nv_backup=${2:?}; shift ;;
+    -h|--help) sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) [[ -z $factory ]] || die "one factory image only"; factory=$1 ;;
   esac
@@ -75,10 +92,26 @@ done
 ((skip_extract)) || [[ -n $factory ]] || die "give the factory image (FACTORY.zip), or --skip-extract"
 [[ -z $factory || -f $factory ]] || die "no $factory"
 [[ -n $factory ]] && factory=$(readlink -f "$factory")
+[[ $device == cheetah || $device == raven ]] || die "unknown device $device (cheetah or raven)"
+[[ $device == cheetah ]] || ((skip_extract == 0)) || die "-d $device needs the factory image"
+# Raven's run does none of cheetah's backup and fingerprint steps: refuse
+# their options rather than ignore them and report "Done"
+if [[ $device == raven ]]; then
+  unsupported=()
+  ((fingerprint)) && unsupported+=(--fingerprint)
+  ((import_home)) && unsupported+=(--import-home)
+  ((restore_config)) && unsupported+=(--restore-config)
+  ((restore_wifi)) && unsupported+=(--restore-wifi)
+  ((waves)) && unsupported+=(--with-waves)
+  ((force)) && unsupported+=(--force)
+  ((backup_given)) && unsupported+=(--backup)
+  ((${#unsupported[@]} == 0)) || die "-d raven doesn't support ${unsupported[*]} (cheetah only)"
+fi
 
 phone() { "$PHONE_SSH" "$@"; }
 
 # --- Inputs ------------------------------------------------------------------
+if [[ $device == cheetah ]]; then
 say "Checking the backup in $backup"
 config_tar=$backup/phone-config.tar fp_tar=$backup/var-lib-omandroid-fp.tar
 [[ -f $config_tar ]] || die "no $config_tar"
@@ -91,6 +124,7 @@ for f in "$config_tar" $( ((fingerprint)) && echo "$fp_tar"); do
     note "$(basename "$f"): no .sha256 to check against"
   fi
 done
+fi
 
 if ((dry)); then
   user=${user:-USER}
@@ -153,6 +187,78 @@ push_tree() {
   note "pushed $n files to $dest, verified"
   DID+=("pushed $n files to $dest")
 }
+
+# --- Raven: the firmware, the sensor registry and the services, nothing else --
+if [[ $device == raven ]]; then
+  say "Extracting from $(basename "$factory") (on this laptop)"
+  if ((dry)); then
+    note "would run: tools/extract-vendor-firmware -d raven -o $W/fw -w $W $factory"
+  else
+    tools/extract-vendor-firmware -d raven -o "$W/fw" -w "$W" "$factory" > "$W/extract.log" 2>&1 ||
+      { tail -20 "$W/extract.log"; die "extraction failed"; }
+    tools/extract-vendor-chroot -d raven -p gnss -o "$W/chroot-gnss" -w "$W" "$factory" > "$W/extract.log" 2>&1 ||
+      { tail -20 "$W/extract.log"; die "extraction failed (gnss chroot)"; }
+    tools/extract-vendor-chroot -d raven -p modem -o "$W/chroot-modem" -w "$W" "$factory" > "$W/extract.log" 2>&1 ||
+      { tail -20 "$W/extract.log"; die "extraction failed (modem chroot)"; }
+  fi
+  # The modem's per-phone files, staged (never printed: the board id and
+  # NV checksums identify this phone).
+  [[ -f $getprop ]] || die "no stock getprop capture $getprop (--getprop)"
+  if [[ -z $nv_backup ]]; then
+    # the newest backup; none is fine until here (cheetah never needs one)
+    backups=("$HOME"/android/reference/raven-backup-2*)
+    [[ -e ${backups[0]} ]] && nv_backup=$(printf '%s\n' "${backups[@]}" | sort | tail -1)
+  fi
+  [[ -f $nv_backup/SHA256SUMS ]] || die "no NV backup with SHA256SUMS in '${nv_backup}' (--nv-backup)"
+  mkdir -p "$W/modem-stage/var/lib/omamobile-vendor/modem" "$W/modem-stage/etc/omamobile"
+  props=$W/modem-stage/var/lib/omamobile-vendor/modem/props.conf
+  for k in ro.boot.cdt_hwid ro.hardware ro.boot.hardware.platform; do
+    v=$(sed -n "s/^\[$k\]: \[\(.*\)\]\$/\1/p" "$getprop" | head -1)
+    [[ -n $v ]] || die "$getprop has no $k"
+    printf '%s=%s\n' "$k" "$v" >> "$props"
+    [[ $k == ro.boot.cdt_hwid ]] && printf 'persist.vendor.modem.cdt_hwid=%s\n' "$v" >> "$props"
+  done
+  chmod 600 "$props"
+  # All six partitions the modem profile keeps read-only. It reads five
+  # of them into RAM today (all but modem_b, the other slot's modem image,
+  # which it never boots), but the file then matches the backup and
+  # AGENTS.md's check.
+  grep -E ' (modem_a|modem_b|efs|efs_backup|modem_userdata|persist)\.img$' "$nv_backup/SHA256SUMS" \
+    > "$W/modem-stage/etc/omamobile/modem-nv.sha256"
+  [[ $(wc -l < "$W/modem-stage/etc/omamobile/modem-nv.sha256") == 6 ]] || die "$nv_backup/SHA256SUMS lacks one of the six NV images"
+  chmod 644 "$W/modem-stage/etc/omamobile/modem-nv.sha256"
+  note "modem: board id from $(basename "$getprop"), NV checksums from $(basename "$nv_backup")"
+  say "Pushing Google's files"
+  if ((dry)); then
+    note "would push the firmware tree to /usr/lib/firmware/updates"
+    note "would replace the AoC sensor registry in /usr/share/omamobile/sensors/registry"
+    note "would replace /usr/lib/omamobile-vendor/gnss/{root,MANIFEST,SOURCE,...}"
+    note "would replace /usr/lib/omamobile-vendor/modem/{root,MANIFEST,SOURCE,...}"
+    note "would write /var/lib/omamobile-vendor/modem/props.conf and /etc/omamobile/modem-nv.sha256"
+  else
+    push_tree "$W/fw/usr/lib/firmware/updates" /usr/lib/firmware/updates merge
+    push_tree "$W/fw/usr/share/omamobile/sensors/registry" /usr/share/omamobile/sensors/registry replace
+    push_tree "$W/chroot-gnss" /usr/lib/omamobile-vendor/gnss replace
+    # the staging dir's private modes came along: the shell's location tile
+    # (run as the user) checks that the chroot exists
+    phone "chmod -R go+rX,go-w /usr/lib/omamobile-vendor/gnss"
+    push_tree "$W/chroot-modem" /usr/lib/omamobile-vendor/modem replace
+    push_tree "$W/modem-stage" / merge
+  fi
+  # Not omamobile-speaker-protection: its ceilings and calibration flow are
+  # validated on cheetah's amplifiers only.
+  say "Enabling the services cheetah's setup step enables, but speaker protection"
+  units="omamobile-sensor-proxy.service omamobile-gnss-nmea.socket omamobile-gnss-lto.timer"
+  if ((dry)); then
+    note "would enable $units"
+  else
+    phone "for u in $units; do systemctl cat \$u >/dev/null 2>&1 && systemctl enable \$u >/dev/null 2>&1 && echo enabled \$u; done; true" |
+      while read -r l; do note "$l"; done
+  fi
+  say "Done (raven)"
+  for d in "${DID[@]}"; do note "$d"; done
+  exit 0
+fi
 
 # --- From the factory image ----------------------------------------------------
 camera_done=0

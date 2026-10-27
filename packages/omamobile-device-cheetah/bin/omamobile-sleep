@@ -12,7 +12,10 @@
 # post: reload Wi-Fi if pre unloaded it (through the hang-safe service), log
 #       the wake reason, and if the suspend failed in the Wi-Fi device, fall
 #       back to unloading Wi-Fi for the rest of this boot and reload it now
-#       (a chip stuck in D3 only comes back with a reload of the stack).
+#       (a chip stuck in D3 only comes back with a reload of the stack),
+#       and restart fprintd if it runs: a fingerprint exchange cut by the
+#       freeze left it waiting for a reply that never came, and every unlock
+#       by fingerprint failed until a restart (SUSPEND-PLAN P2).
 #
 # Wi-Fi stays loaded across sleep only with /etc/omamobile/wifi-keep-across-sleep
 # present (create it once stage S5 passes on the running kernel).
@@ -72,6 +75,8 @@ case "${1:-}/${2:-}" in
   post/suspend)
     wifi_reload
     wake_reason
+    # --no-block, as above; try-restart leaves a stopped fprintd alone.
+    systemctl --no-block try-restart fprintd.service
     before=$(cat "$failcount" 2>/dev/null || echo 0)
     after=$(cat /sys/power/suspend_stats/fail 2>/dev/null || echo 0)
     if ((after > before)); then
