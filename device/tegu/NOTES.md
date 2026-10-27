@@ -583,3 +583,31 @@ userdata reset. This verifies recovery boot, not a full Android boot or
 factory reset. As in the repository installer, restoring Android requires
 resetting the userdata occupied by Arch; seamless dual boot is not claimed.
 No newer metadata has been added to the shared tegu descriptor.
+
+### Public base and oldest-header control on the second phone
+
+The public board/touch base at `9386dfaa1d5d1b537ac23e47b65106ee679cfc2a`
+built with the tegu fragment boots as
+`7.3.0-rc6-omamobile-push1-g9386dfaa1d5d`. Its first five-image B trial
+used Android 16 / September 2025 headers without AVB footers and returned
+to fastboot: the screen reported `bootfailure`, and `enter-reason` reported
+`boot failure`. No precise verification error or kernel crash log was
+available, so that attempt alone did not establish a metadata rejection.
+
+A controlled second trial kept every original image payload byte-identical
+and added hash footers using the image tool's AOSP test key, rollback index
+**0**, OS version **16**, and security patch **2025-09-05**. The same guarded
+B-only flash path then booted Arch on userdata and restored USB/SSH. ACPM
+reported 16 usable channels at 0.22 seconds; the guarded timer loaded the
+modular touchscreen at 36.1 seconds, registered S3908 input and cleared
+its marker. Smoke checks at 97 seconds passed boot, all 62 storage guards,
+root, kernel health, USB, touch and buttons.
+
+This base has no display driver: no framebuffer/DRM connector or graphical
+session appeared, Plymouth failed, and the camera retained the Google logo.
+Native-display qualification remains separate. Software `reboot-to bootloader`
+also returned to normal boot, requiring physical fastboot. These results
+show that this newer phone can boot the oldest shared header values with
+index-zero footers; they do not qualify footers on the other owner's phone.
+The shared descriptor remains unchanged, without an active selector or
+footer/trigger overrides. No stock-A image or protected partition was written.
