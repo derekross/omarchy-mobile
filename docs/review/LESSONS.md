@@ -662,6 +662,18 @@ never change, so reviews can cite them.
   `irq-mask-reg`) and the LWIS header; for a power sequence, the device's
   `*-camera.dtsi` `power-up-seqs`. Ask for the citation. Extends L-61 and
   L-152. *From:* kernel #63, round 20.
+- **L-193. A CMU table's parent list is checked for registration, not only
+  for order.** Kernel #73's three CMU_TOP G3D muxes name four
+  `zumapro_shared*_d2/_d3` parents in the CAL's order, but nothing in
+  `clk-zumapro.c` registers them, so a mux left on one of them is an orphan
+  at 0 Hz; the boot evidence didn't show it because the GPU rates come from
+  the local PLLs. *Check:* extract every registered name (second argument of
+  `MUX*`/`DIV*`/`GATE`/`FFACTOR`/`FRATE`, third of `PLL`) and every name in
+  `PNAME` lists and parent fields; the difference must be only board-level
+  inputs (`oscclk`, `*-alt`, `*-tcxo`) and deliberate omissions, each named
+  in the message. The CAL's `FIXEDRATE(PLL_SHAREDn_Dm, …)` lines are the
+  factors to add. *From:* kernel #73 with #78, round 21.
+
 
 ## The gates themselves
 
@@ -805,6 +817,28 @@ never change, so reviews can cite them.
   checkpatch, W=1, dtbs_check)" and `gh run view --log` prefixes every line
   with it, so a grep for `dtbs_check` matches everything and hides whether
   dt-validate ran. Extends L-103. *From:* round 20.
+- **L-194. A review's clone goes on disk, and a gate's worktree is sparse:
+  the scratch `/tmp` is a 16 GB tmpfs shared by every parallel review.** A
+  `--depth 60` clone of the SM8150 tree for #52 and three full checkouts of
+  omarchy-mobile (about 1 GB each, `phone/screenshots` and all) each filled
+  it, and a command of another review lost its output. *Check:* `df -h` the
+  scratch volume before any clone or build over a few hundred MB; trees go
+  under `~/android/mainline/wt-review-<topic>`; a gate's checkout is `git
+  worktree add --no-checkout --detach`, `git sparse-checkout set --cone bin
+  device initramfs tests packages/<the ones the tests compare>`, `reset
+  --hard` (3.5 MB, and `tests/storage-guard`, `tests/simplefb-trigger` and
+  the package tests all run from it). *From:* #52, round 21.
+- **L-195. A follow-up round re-gates the merge first, even when the new
+  commits only touch docs, because the base moves under the PR between
+  rounds.** #82's first review found "none of the moved commits touch
+  `bin/omamobile`"; four hours later the Pixel 6 Pro port had landed in
+  `initramfs_config`, the PR went `CONFLICTING`, and that means no CI at all
+  (L-165). *Check:* `gh pr view N --json mergeable` and `git merge-tree
+  --write-tree origin/main <head>` at the start of every round; on a
+  conflict, resolve it in a scratch worktree, run the suites and the cheetah
+  comparison on the result, and hand the contributor the resolution. Extends
+  L-34, L-73 and L-165. *From:* #82, round 20.
+
 
 ## Reviews and merging
 
@@ -928,6 +962,37 @@ never change, so reviews can cite them.
   log --since=<our last comment> -- AGENTS.md CONTRIBUTING.md` before judging
   a re-push, and say in the comment which rule is new. Extends L-31 and
   L-124. *From:* #25, round 20.
+- **L-196. A stack of N PRs is gated once at its top and read N times.**
+  Kernel #73-#79 are one linear chain on today's base; `kernel-pr-check
+  --build --merge` on each head rebuilt the same objects seven times, while
+  the per-commit builds (L-179) and the parent-name audit (L-193) on the top
+  head covered everything in one pass. *Check:* `git log base..headN` for
+  each PR to prove the chain, gate the top head, build the chain commit by
+  commit, and give one merge plan (merge the top PR, close the rest) next to
+  the one-by-one order. *From:* kernel #73-#79, round 21.
+- **L-197. A status word we ask for is checked against the legend and the
+  site's parser before we post it.** Our "the matrix row says 'in review'"
+  on #52 produced a row whose every cell the website renders as "no"
+  (`devices.ts` `parseCell`). *Check:* `grep` the legend in DEVICES.md and
+  `STATUS_WORDS` in `omamobile-website/src/lib/devices.ts` for any status
+  wording we prescribe. Extends L-31 and L-66. *From:* #52, round 21.
+- **L-198. When the contributor says the record doesn't exist, the file
+  records that it doesn't, and a baseline taken over an unexplained change
+  is downgraded, not adopted.** #35's reply gave a negative record (no date,
+  tool, partition list or boot list) and accepted the hold, while the plan
+  still said "the new baseline" and "a Linux slot A boot does not run the
+  modem stack". *Check:* the negative facts land in NOTES and Risks in the
+  contributor's words; the unexplained copy is "current contents, cause
+  unknown"; the baseline becomes the backup after the next stock boot.
+  Extends L-34, L-168 and L-186. *From:* #35, round 21.
+- **L-199. A read point we prescribe is named relative to the driver's last
+  write, not to a phase.** "Right after link-up, before MHI power-up" under
+  ath11k is after `ath11k_pci_soc_global_reset()`, and the read hung; the
+  same phase on stock (`linkup`, no reset) read fine six times. *Check:*
+  before asking for a register read, list the driver's writes to the block
+  up to that point in both trees, and name the read as "after write X,
+  before write Y". Extends L-135 and C-7. *From:* issue #36, round 21.
+
 
 ## Claims and evidence
 
@@ -1071,6 +1136,44 @@ never change, so reviews can cite them.
   right for §5.2's reason; the review says what the exposure is so the
   squash body doesn't overstate it. *Check:* `grep -n 'authorized\|getty'
   initramfs/init tools/install-phone`. *From:* #75, round 20.
+- **L-200. Check a cited commit range's member ids, not only its
+  endpoints.** #52's base `6963e3800a8e` and "three commits past the tag"
+  were right; the two intermediate ids it listed don't exist, and their
+  subjects belong to commits before the tag. *Check:* the GitLab or GitHub
+  compare API, `from=<tag>&to=<base>`, and compare each listed id. Extends
+  L-76. *From:* #52, round 21.
+- **L-201. "That's recorded in the other PR" is checked by grep on the other
+  PR's head, and both PRs get the finding.** Kernel #72's reply said the
+  DPP0 read and the `/proc/iomem` line were in #82's notes; #82's NOTES had
+  the kernel release only, and the PR that would carry them was already
+  "all done" in its own thread. *Check:* for every cross-PR "it's in #N",
+  `git show <N's head>:<file> | grep` the named items before closing the
+  request on either side. Extends L-106 and L-183. *From:* kernel #72 with
+  #82, round 21.
+- **L-202. A `-dirty` release's hash can be a PR commit that the base has
+  since taken under a new id.** #82's `g485f83c27e5c` resolved to nothing on
+  `github/omamobile`; a subject search found it as the kernel #48 series'
+  commit, rebase-merged as `095e451d8660`. *Check:* `git log --all --oneline
+  | grep <hash>` across the review refs, then `git log --grep=<subject>` on
+  the base, before calling the tested tree unpublished. Extends L-65 and
+  L-182. *From:* #82, round 20.
+- **L-203. A "before X" register read on stock also says whether the domain
+  was cold.** Issue #36's stock "pre-BHI" values came from a chip whose
+  always-on domain had completed a PBL run since the buck came up
+  (`TCSR_PBL_LOGGING` retained across the WLAN_EN cycle), and we had asked
+  for "before the first BHI" without saying "cold". *Check:* when asking for
+  a chip-state read, name the rail history (which supplies were dropped and
+  for how long) and ask for the retained-state marker alongside. *From:*
+  issue #36, round 21.
+- **L-204. A contributor's reading of a vendor log is re-derived from the
+  vendor driver's sequence before it becomes a premise.** "Stock's very
+  first cold cycle already passes auth" on issue #36 stood for a day; cnss2's
+  probe powers on, enumerates and powers off before the first BHI, and
+  `wlan_buck_enable` logs `Enter` on every power-on, so the timing was most
+  likely measured from the second cycle. *Check:* find the one-per-boot line
+  (`BUCK GPIO: [0]` and `drive it HIGH`) and count the power-on lines before
+  the event. Extends L-61 and L-190. *From:* issue #36, round 21 (C-8).
+
 
 ## Corrections (where a review was wrong)
 
@@ -1120,3 +1223,12 @@ never change, so reviews can cite them.
   through a kernel parameter, read what it does in the tree the PR targets
   before posting it, and say which observable answers the question. L-135
   corrected in place. Extends C-5. *From:* kernel #9, round 20.
+- **C-8 (2026-10-27). Our 2026-10-26 comments on issue #36 accepted a
+  contributor's reading of stock's log, "the very first cold cycle already
+  passes auth", and built a request on it; the vendor driver's sequence
+  contradicts it.** cnss2's probe powers the chip on, enumerates it and
+  powers it off before the first BHI, and `wlan_buck_enable` logs on every
+  power-on, so the first cycle in the log is the probe's and the auth most
+  likely came from the second. No existing lesson was wrong; the gap was
+  that no lesson asked for the re-derivation. *Lesson:* L-204 (with L-203
+  for the rail history the read needed). *From:* issue #36, round 21.
