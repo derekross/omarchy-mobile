@@ -149,10 +149,22 @@ What it says:
 - `WLAN_SECURE_BOOTN` reads 0 under the stock driver, six reads over three
   states, never `0x11111111`. So on this phone the register the ROM's
   authentication stage consults is zero when stock loads firmware, and the
-  `0x11111111` we read after the stall is either a power-up state stock's
-  sequence never leaves the chip in, or a window read that does not land
-  where we think [I]. The second is unlikely on its own: `WLAON_QFPROM_PWR_CTRL_REG`
-  reads `0x62` through the same path on both sides.
+  `0x11111111` we read after the stall is a state stock's sequence never
+  leaves the chip in, not a fuse. The window does land where we think:
+  FlorencioJP re-read the set after a stall on 2026-10-27 (cold reset with
+  the buck dropped and restored, then the usual `-110`) and the WLAON and
+  TLMM neighbours match the stock column exactly, `WLAON_SOC_POWER_CTRL`
+  `0x8020397`, `WLAON_WL_PWR_STATUS_REG` `0xd`, `WLAON_QFPROM_PWR_CTRL_REG`
+  `0x62`, `TLMM_OD_EN` `0x500`. The three that differ are exactly the three
+  the ROM consults: `WLAN_SECURE_BOOTN` `0x11111111` against `0x0`,
+  `PBL_WLAN_BOOT_CFG` `0x0` against `0x200`, `TLMM_PBL_BOOTSTRAP_STATUS`
+  `0x0` against `0x40`.
+- **The stock column is after a good run, not cold.** Stock's `cnss2` on
+  lynx only ever raises the buck (`wlan_buck_enable()`, GPIO 103, logged
+  `BUCK GPIO: [1]` on every later `on`); it has no path that drops it, and
+  `dev_boot off` de-asserts WLAN_EN only. So `0x0 / 0x200 / 0x40` may be
+  what a successful PBL leaves behind rather than what a cold chip shows,
+  and the two readings are not yet the same experiment (section 7).
 - `TCSR_PBL_LOGGING` keeps `0xef150600` across the WLAN_EN cycle (stage
   `0x15`, code `0x0600`, presumably the end of the last successful ROM run),
   so with the buck held the WLAON/TCSR domain retains state between cycles.
@@ -201,12 +213,24 @@ Ordered by what it costs. Nothing here is scheduled.
    every line to the chip (function, pull, drive, the `pdn` states) with
    ours, on paper first. Then confirm the two values on mainline at the
    stall, where windowed reads are safe, before changing a pin.
-2. **The sequence around WLAN_EN.** `WLAON_SOC_POWER_CTRL` is `0x8020397`
-   in stock's pre-BHI state; it has not been read on mainline. Read it at
-   the stall (safe) and compare. Stock's `cnss2` also suspends the link and
-   drops WLAN_EN once before the real load; our path does one cycle.
-3. **A true cold stock read**, before the first-ever BHI, on a stock phone
-   with the calibration load held back. Only worth it if 1 and 2 are flat.
+2. **The cold stock read.** The one that settles the caveat in section 5:
+   on stock, a cold chip (power-off, not a reboot: `cnss2` never drops the
+   buck) and the three registers read after `dev_boot on` and `linkup`,
+   before the first BHI write. On this build that means holding back the
+   calibration load, since `init.lynx.rc` writes `fs_ready` at 4.8 s: a
+   Magisk overlay of `/vendor/etc/init/hw/init.lynx.rc` without the two
+   `fs_ready` writes, removed afterwards. If stock reads `0x11111111 / 0x0 /
+   0x0` cold and `0x0 / 0x200 / 0x40` only after a good run, the PBL writes
+   these and our stop is upstream of them. If stock reads `0x0` cold too,
+   our power-up leaves bit 0 of `WLAN_SECURE_BOOTN` set, the bit
+   `pbl_auth.c` masks and compares. Costs a stock cycle on this phone
+   (`userdata` wiped and the Arch root restored from the backup).
+3. **The sequence around WLAN_EN.** Stock's `cnss2` suspends the link and
+   drops WLAN_EN once before the real load; our path does one cycle. Also
+   worth keeping in view: on stock none of the windowed reads before the
+   first BHI hang, on mainline the same read before `mhi_sync_power_up()`
+   froze HSI2. Whatever leaves `WLAN_SECURE_BOOTN` at `0x11111111` may be
+   what makes that page unreadable before power-up.
 4. **SysMMU translating as stock**, with its own plan (section 4).
 
 ## 8. State and how to resume
