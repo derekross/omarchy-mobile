@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a (tegu): first light
 
-2026-10-22: verified on one retail Pixel 9a, Tensor G4 (`zumapro`).
-This is an experimental integration, not a supported release or installer
-qualification. Kernel, image-tool and package changes need separate PRs.
-The descriptor here intentionally fails closed with current public tools.
+Verified on one retail Pixel 9a, Tensor G4 (`zumapro`). The tegu boot recipe
+and device package boot native Omarchy with working touch on slot B. This is
+still an experimental integration: a public matching kernel, signed root
+image, and clean installer test are required for an installable release.
 
 Tested kernel: `7.3.0-rc6-omamobile-tegu-tn3-g1cb4bd36f3be-dirty`, private
 branch `omamobile-tegu-touch-power`, worktree/output `wt-touch-power` /
