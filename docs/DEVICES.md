@@ -62,7 +62,7 @@ Devices we'd like to support, with the closest starting point. Open an issue to 
 | Device | Codename | SoC | Starting point |
 | --- | --- | --- | --- |
 | Pixel 7 | panther | gs201 | cheetah's SoC support; needs its own board DTS (panel, touch, battery) |
-| Pixel 7a | lynx | gs201 | **WIP, community port: [#36](https://github.com/derekross/omarchy-mobile/issues/36)**: first light on slot B with USB and SSH ([kernel #43](https://github.com/derekross/linux-omarchy-mobile/pull/43)); its descriptor and on-screen console are merged ([#38](https://github.com/derekross/omarchy-mobile/pull/38)) |
+| Pixel 7a | lynx | gs201 | **WIP, community port: [#36](https://github.com/derekross/omarchy-mobile/issues/36)**, in the matrix above: Arch on `userdata` from slot B with USB and SSH; UFS is in the published kernel ([kernel #91](https://github.com/derekross/linux-omarchy-mobile/pull/91)), touch is in review ([kernel #93](https://github.com/derekross/linux-omarchy-mobile/pull/93)), and Wi-Fi is parked at the chip's boot ROM ([plan](../device/lynx/WIFI-PLAN.md)) |
 | Pixel Fold | felix | gs201 | **WIP, community port: [#3](https://github.com/derekross/omarchy-mobile/issues/3)**; as panther, with two panels (DECON1 drives the cover, DECON0 the inner panel) |
 | Pixel Tablet | tangorpro | gs201 | as panther; no modem |
 | Pixel 6 | oriole | gs101 | **WIP, community port: [#2](https://github.com/derekross/omarchy-mobile/issues/2)**; our preferred second device. Upstream mainline `gs101-oriole.dts` |

@@ -1,11 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7a (lynx) first light
 
-Last verified state (2026-10-25, local integration): slot B is active and
-marked successful. Arch runs from `userdata`, USB SSH works at
+Last verified state (2026-10-27, after Arch was reinstalled from the stock
+afternoon): slot B is active and marked successful by
+`omamobile-device-lynx` 0.2.0. Arch runs from `userdata`, USB SSH works at
 `root@172.16.42.1`, and the on-screen console works through simpledrm/fbcon.
-Kernel: `7.3.0-rc6-omamobile-push1-g38b5a04d67e0`. Wi-Fi firmware startup
-is still unresolved. Recheck the live state before further hardware work.
+Kernel: `7.3.0-rc6-omamobile-push1-g38b5a04d67e0`. `/sys/power/mem_sleep`
+reads `s2idle [deep]`; the package's sleep drop-in keeps suspend on s2idle.
+Wi-Fi is parked ([WIFI-PLAN.md](WIFI-PLAN.md)). Recheck the live state
+before further hardware work.
 
 **Stock Android on slot A is no longer a working recovery boot because
 Arch owns `userdata`. Use the physical bootloader buttons for recovery.**
