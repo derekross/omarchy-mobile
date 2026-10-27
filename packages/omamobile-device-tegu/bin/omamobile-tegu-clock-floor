@@ -1,0 +1,14 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The tegu first-light kernel has no usable wall clock before network time.
+# Pacman rejects keyring keys created after that clock. The keyring file is
+# already part of the installed, verified root image and gives a safe floor.
+set -euo pipefail
+
+keyring=/usr/share/pacman/keyrings/omamobile.gpg
+floor=$(stat -c %Y "$keyring")
+now=$(date -u +%s)
+[[ $floor =~ ^[0-9]+$ && $now =~ ^[0-9]+$ ]]
+if ((now < floor)); then
+  date -u -s "@$floor" >/dev/null
+fi
