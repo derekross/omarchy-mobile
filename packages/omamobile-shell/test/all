@@ -466,6 +466,12 @@ for line in bad:
     print("  " + line)
 sys.exit(1 if bad else 0)
 PY
+# On its side (TOUCH-PLAN 2.4) the sheet fits as it is: the card fills the
+# screen, the overview and the result scroll, the PIN sits above the
+# keyboard. test/update-render draws every page in the OWL container.
+if [[ -n ${OMAMOBILE_UPDATE_RENDER:-} ]]; then
+  bash test/update-render "$OMAMOBILE_UPDATE_RENDER" >/dev/null || fail "update sheet render"
+fi
 pass "update sheet"
 
 # The permission sheet: the portal Access backend (its pure parts, then the
