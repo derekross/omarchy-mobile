@@ -94,8 +94,9 @@ KERNEL_OUT=~/android/mainline/out-raven DEVICE=raven bin/omamobile flash
 
 Expect: three `OKAY`s, the unlocked-bootloader warning, then the Google logo
 stays. Within about 30 s the laptop sees a USB device "Omarchy Mobile /
-Pixel 6 Pro (M1)": a network interface (DHCP gives the laptop 172.16.42.2)
-and `/dev/ttyACM0`.
+Pixel 6 Pro": a network interface (the laptop sets 172.16.42.2/24 itself,
+CONTRIBUTING.md section 2: the initramfs runs no DHCP server) and
+`/dev/ttyACM0`.
 
 Pass: `tools/phone-ssh 'uname -r; cat /proc/uptime'` answers.
 Fallback console: `screen /dev/ttyACM0 115200` (or `picocom`).
