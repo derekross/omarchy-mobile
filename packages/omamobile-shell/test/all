@@ -60,11 +60,133 @@ grep -c 'gesturePolicy: TapHandler.DragThreshold' plugins/omamobile.quicksetting
 grep -c 'onTapped: bottomButton.modelData.action === "home" ? root.goHome() : root.clearAll()' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "Clear all asks first"
 grep -c 'onTapped: root.requestReset()' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "quick-settings Reset asks first"
 grep -c 'if (!settingsFlick.confirmRemove) { settingsFlick.confirmRemove = true; return }' plugins/omamobile.home/HomeSheets.qml >/dev/null || fail "a widget's Remove asks first"
+grep -c 'onTapped: root.requestClearNotifications()' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the shade's Clear all asks first"
 pass "touch: tiles and two-tap destructive actions"
 
+# Touch navigation (TOUCH-PLAN 1.2, 1.7, 1.8, 1.10, 2.5).
+# Back: edge strips that send Escape through Hyprland's own dispatcher, on
+# for new and existing users, kept between the bar and the keyboard, and
+# never over the lock.
+b=plugins/omamobile.back/Back.qml
+python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables the back gesture"
+grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
+grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
+grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
+grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
+grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back strips stay clear of the bar and the keyboard"
+grep -c 'visible: !root.fullscreenOnScreen' "$b" >/dev/null || fail "back strips hide for fullscreen windows"
+if grep -n 'omamobile-back' hypr/phone.lua | grep -c above_lock >/dev/null; then fail "back strips never work over the lock"; fi
+if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail "back uses Hyprland's dispatcher"; fi
+# Home pill: a 44 px hit strip and a pill with an outline.
+l=plugins/omamobile.launcher/Launcher.qml
+grep -c 'implicitHeight: root.touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
+grep -c 'border.color: Qt.rgba(0, 0, 0, 0.55)' "$l" >/dev/null || fail "the home pill has a dark outline"
+# Under the keyboard, the pill has a strip of its own (Android's gesture
+# bar): on the Bottom layer, reserving its height, so Hyprland lifts
+# squeekboard (Top) above it and the strip covers no key. The masked strip
+# over an app and the keyboard's strip never show together, and both go
+# for a fullscreen window.
+grep -c 'WlrLayershell.namespace: "omamobile-home-strip"' "$l" >/dev/null || fail "the keyboard's gesture strip has its namespace"
+python3 - "$l" <<'PY' || fail "the keyboard's gesture strip sits under squeekboard"
+import re, sys
+src = open(sys.argv[1]).read()
+def window(namespace):
+    i = src.index('WlrLayershell.namespace: "%s"' % namespace)
+    start = src.rindex("PanelWindow {", 0, i)
+    depth, j = 0, src.index("{", start)
+    while True:
+        c = src[j]
+        depth += c == "{"
+        depth -= c == "}"
+        j += 1
+        if depth == 0:
+            return src[start:j]
+strip, pill = window("omamobile-home-strip"), window("omamobile-home-indicator")
+assert "WlrLayershell.layer: WlrLayer.Bottom" in strip, "strip on the Bottom layer"
+assert "exclusionMode: ExclusionMode.Auto" in strip, "strip reserves its height"
+assert "implicitHeight: root.oskStripHeight" in strip
+h = int(re.search(r"readonly property int oskStripHeight: (\d+)", src).group(1))
+assert 24 <= h <= 36, h
+vis = lambda w: re.search(r"^\s*visible: (.*)$", w, re.M).group(1)
+assert "root.oskOpen" in vis(strip) and "!root.oskOpen" not in vis(strip), vis(strip)
+assert "!root.oskOpen" in vis(pill), vis(pill)
+for w in (strip, pill):
+    assert "!root.fullscreenOnScreen" in vis(w) and "root.appOnScreen" in vis(w) and "!root.opened" in vis(w), vis(w)
+assert "!root.sessionLocked" in vis(strip), "no strip under the lock's keyboard"
+assert "mask: Region { item: hitArea }" in pill, "the pill over an app stays masked"
+assert pill.count("HomeSwipe {") == 1 and strip.count("HomeSwipe {") == 1, "one swipe logic for both"
+assert "HomePill" in strip and "HomePill" in pill
+PY
+grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
+grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
+# Drawer: pull down to close, and a pull is not also a tap on an app.
+grep -c 'var close = root.pulling && root.pull > root.pullToClose' "$l" >/dev/null || fail "pulling the drawer down closes it"
+grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail "a pull doesn't launch the app under it"
+# Home: Undo after a remove; sheets keep the focused field in view, with
+# their buttons pinned outside the Flickable.
+h=plugins/omamobile.home
+grep -c 'var next = HomeModel.restoreItem(layout, removed)' $h/Home.qml >/dev/null || fail "Undo restores the removed item"
+grep -c 'onClicked: root.undoRemove()' $h/Home.qml >/dev/null || fail "the notice offers Undo"
+[[ $(grep -c 'sheets.keepInView(settingsFlick)' $h/HomeSheets.qml) -ge 3 && $(grep -c 'sheets.keepInView(createFlick)' $h/HomeSheets.qml) -ge 3 ]] \
+  || fail "the settings and create sheets scroll the focused field into view"
+grep -c 'anchors.bottom: settingsFooter.top' $h/HomeSheets.qml >/dev/null || fail "Save and Remove are pinned under the settings"
+grep -c 'anchors.bottom: createFooter.top' $h/HomeSheets.qml >/dev/null || fail "Create is pinned under its field"
+pass "touch navigation: back, home pill, drawer pull, undo, fields in view"
+
+# The notification shade, the Settings gear and the bar's unread count
+# (TOUCH-PLAN 1.1, 1.3): Clear all goes through the notification service's
+# IPC on this shell (dismissAll, then clear), the gear opens Omarchy's menu
+# at its root, the shade reads the directories Omarchy's service writes, and
+# the bar hears the shade's mark on the IPC target it serves.
+qs=plugins/omamobile.quicksettings/QuickSettings.qml
+grep -cF '"qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear"' "$qs" >/dev/null || fail "Clear all dismisses the toasts, then clears the history"
+grep -cF 'Quickshell.execDetached(["omarchy-menu", "summon", "root"])' "$qs" >/dev/null || fail "the gear opens Omarchy's root menu"
+grep -cF '"/.local/state/omarchy/notifications"' "$qs" >/dev/null || fail "the shade reads Omarchy's notification files"
+grep -cF '"/.local/state/omarchy/notifications/history"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar counts Omarchy's notification history"
+grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the shade tells the bar what it has shown"
+grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
+grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
+grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/null || fail "the Clipboard tile opens Omarchy's clipboard history"
+# A swipe on a row forgets that one notification through the service's
+# forget call (omamobile-omarchy patch 0019), never by deleting its file
+# behind the service; the row's swipe is sideways only and off while the
+# list scrolls, and its tap is a DragThreshold TapHandler (no MouseArea,
+# which would take the press from the swipe). test/shade-touch drives it.
+row=plugins/omamobile.quicksettings/NotificationRow.qml
+grep -cF 'call notifications forget \"$name\"' "$qs" >/dev/null || fail "a swiped row is forgotten through the service"
+grep -cF 'delegate: NotificationRow {' "$qs" >/dev/null && grep -cF 'swipeEnabled: !shadeList.moving' "$qs" >/dev/null \
+  || fail "the shade's rows are NotificationRow, not swiping while the list scrolls"
+grep -cE 'rm +(-f +)?.*notifications' "$qs" "$row" >/dev/null && fail "the shade deletes no notification files itself"
+grep -cF 'yAxis.enabled: false' "$row" >/dev/null || fail "a row swipes sideways only"
+grep -cF 'gesturePolicy: TapHandler.DragThreshold' "$row" >/dev/null || fail "a row taps with a DragThreshold TapHandler"
+grep -cE '^\s*MouseArea \{' "$row" >/dev/null && fail "no MouseArea on a row"
+grep -cF 'NotificationsModel.swipeOutcome(' "$row" >/dev/null || fail "a row decides its swipe by swipeOutcome"
+grep -cF "omamobile-omarchy>=" PKGBUILD >/dev/null || fail "omamobile-shell needs an omamobile-omarchy with forget"
+# Qt 6.12 refuses to load a file that redeclares an Item's FINAL anchor
+# lines (0.2.25's shade had "property real top", and quick settings didn't load).
+if grep -nE 'property +[a-z]+ +(top|bottom|left|right|horizontalCenter|verticalCenter|baseline) *:' plugins/*/*.qml; then fail "no plugin redeclares an anchor line"; fi
+pass "notification shade, Settings gear, unread count and Clipboard wiring"
+
+# Quick settings on its side (TOUCH-PLAN 2.4): the sheet keeps to 58% of
+# the width with the shade beside it, the tile columns follow the sheet's
+# width, and a sheet taller than the screen scrolls above a pinned handle.
+# test/quicksettings-render draws it in the OWL container.
+grep -c 'readonly property bool wide: window.width > window.height' "$qs" >/dev/null || fail "quick settings knows a screen wider than tall"
+grep -c 'readonly property int tileColumns: Math.max(2, Math.min(4, Math.floor(content.width / 180)))' "$qs" >/dev/null || fail "tile columns follow the sheet's width"
+grep -c 'return Math.max(1, Math.ceil(most / tileColumns))' "$qs" >/dev/null || fail "the pager's rows follow the columns"
+grep -c 'readonly property real shadeTop: root.wide ? sheet.y : sheet.y + sheet.height + Style.spacing.lg' "$qs" >/dev/null || fail "the shade sits beside the sheet on its side"
+grep -c 'interactive: contentHeight > height + 1' "$qs" >/dev/null || fail "the sheet scrolls only when taller than the screen"
+grep -c 'anchors.bottomMargin: sheet.contentBottomInset + sheet.handleRoom' "$qs" >/dev/null || fail "the handle stays under the scrolling part"
+if [[ -n ${OMAMOBILE_QS_RENDER:-} ]]; then
+  bash test/quicksettings-render "$OMAMOBILE_QS_RENDER" >/dev/null || fail "quick settings render"
+fi
+pass "quick settings on its side"
+
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
-# without needing the shell's own imports to resolve.
-qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
+# without needing the shell's own imports to resolve. Qt 6's first: a Qt 5
+# qmlformat on PATH (Arch's qt5-declarative) rejects Qt 6 syntax.
+qmlformat=$(command -v /usr/lib/qt6/bin/qmlformat || command -v qmlformat6 || command -v qmlformat || true)
 if [[ -n $qmlformat ]]; then
   for qml in plugins/*/*.qml plugins/omamobile.home/owl/*.qml; do
     "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
@@ -83,7 +205,9 @@ if command -v node >/dev/null; then
   node test/bluetooth-model.js || fail "Bluetooth model"
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
+  node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
   node test/home-model.js || fail "home screen model"
+  node test/back-model.js || fail "back gesture model"
   # Our OWL runtime's core: probes against the reference runtime's recorded
   # outputs, the resource caps, sh() quoting, and the phone's rules.
   node test/owl-core.js >/dev/null || { node test/owl-core.js | grep -v '^ok'; fail "OWL runtime core"; }
@@ -162,6 +286,27 @@ if command -v node >/dev/null; then
 fi
 pass "home screen wiring"
 
+# Landscape (TOUCH-PLAN 2.4, #85): a page wider than tall shows the layout
+# turned on its side (HomeModel.transposeLayout, tested in test/home-model.js),
+# derived for the view and never saved; the OWL dp comes from the screen's
+# shorter side, the catalog keeps the portrait cell height, and edit mode
+# waits for portrait. test/home-render draws it in the OWL container.
+home=plugins/omamobile.home/Home.qml
+grep -c 'readonly property bool landscape: owlPageWidth > owlPagerHeight' "$home" >/dev/null || fail "the home knows a page wider than tall"
+grep -c 'HomeModel.transposeLayout(layout, userCatalog, { portrait: \[owlShortSide, owlPortraitPagerHeight\], landscape: \[owlPageWidth, owlPagerHeight\] })' "$home" >/dev/null \
+  || fail "the landscape view turns the layout with the pages' sizes"
+grep -c 'OwlPhone.dpFor(landscape ? owlShortSide : owlPageWidth)' "$home" >/dev/null || fail "the OWL dp comes from the shorter side"
+grep -c 'readonly property real owlCellHeight: owlPortraitPagerHeight / Math.max(1, layout.grid.rows)' "$home" >/dev/null || fail "the catalog keeps the portrait cell height"
+grep -c 'editing = !!on && !landscape' "$home" >/dev/null || fail "edit mode waits for portrait"
+if grep -nE 'commit\(.*viewLayout|setText\(.*viewLayout|serialize\(viewLayout' "$home"; then fail "the landscape view is never saved"; fi
+for use in 'model: root.viewLayout.pages.length' 'readonly property int columns: root.viewLayout.grid.columns' 'readonly property var items: root.viewLayout.pages\[index\]'; do
+  grep -c "$use" "$home" >/dev/null || fail "the pages draw the view layout ($use)"
+done
+if [[ -n ${OMAMOBILE_HOME_RENDER:-} ]]; then
+  bash test/home-render "$OMAMOBILE_HOME_RENDER" >/dev/null || fail "home screen render"
+fi
+pass "home screens in landscape"
+
 # The built-ins from omarchy-widgets are the OWL originals now (the
 # omamobile-owl-widgets package): no QML ports are left, each built-in names
 # its store widget, and the guide's MIT notice ships with the shell.
@@ -233,6 +378,46 @@ grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fa
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
 grep -c '"omamobile-launch", "show-with"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
 grep -c '"omamobile-launch", "own-screen"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
+# The drawer on its side (TOUCH-PLAN 2.4): columns of the portrait width.
+grep -c 'cellWidth: Math.floor(width / root.drawerColumns(width))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer's columns follow its width"
+if command -v node >/dev/null; then
+  node -e '
+const L = require("./plugins/omamobile.launcher/LauncherModel.js")
+const eq = (a, b, what) => { if (a !== b) throw new Error(what + ": " + a + " != " + b) }
+eq(L.drawerColumns(4, 456, 480, 12), 4, "upright")
+eq(L.drawerColumns(4, 1016, 480, 12), 8, "on its side")
+eq(L.drawerColumns(5, 1016, 480, 12), 11, "five across upright")
+eq(L.drawerColumns(4, 1016, 0, 12), 4, "no screen known")
+eq(L.drawerColumns(4, 300, 480, 12), 4, "narrower than the screen")
+' || fail "the drawer's columns on its side"
+fi
+if [[ -n ${OMAMOBILE_LAUNCHER_RENDER:-} ]]; then
+  bash test/launcher-render "$OMAMOBILE_LAUNCHER_RENDER" >/dev/null || fail "app drawer render"
+fi
+pass "the drawer on its side"
+# Recent apps' bottom actions take a touch tap alone: an exclusive
+# TapHandler in a band that swallows touches, so the tap-to-dismiss area
+# under them (which disarmed Clear all and closed recents before the second
+# tap could close anything) never sees it. test/switcher-touch taps them.
+sw=plugins/omamobile.switcher/Switcher.qml
+grep -c 'gesturePolicy: TapHandler.ReleaseWithinBounds' "$sw" >/dev/null || fail "the bottom actions grab their taps"
+grep -c 'console.log("omamobile-switcher: clear all, closing "' "$sw" >/dev/null || fail "Clear all says what it closes"
+rc=0; out=$(bash test/switcher-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "recent apps under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
+else
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, the cards on their side"
+fi
+rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the shade under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the shade under touch (test/shade-touch)"
+else
+  pass "the shade under touch: a swipe forgets one, a short one springs back, a tap taps, a drag scrolls"
+fi
 if command -v node >/dev/null; then
   node -e '
 const L = require("./plugins/omamobile.launcher/LauncherModel.js")
@@ -281,6 +466,12 @@ for line in bad:
     print("  " + line)
 sys.exit(1 if bad else 0)
 PY
+# On its side (TOUCH-PLAN 2.4) the sheet fits as it is: the card fills the
+# screen, the overview and the result scroll, the PIN sits above the
+# keyboard. test/update-render draws every page in the OWL container.
+if [[ -n ${OMAMOBILE_UPDATE_RENDER:-} ]]; then
+  bash test/update-render "$OMAMOBILE_UPDATE_RENDER" >/dev/null || fail "update sheet render"
+fi
 pass "update sheet"
 
 # The permission sheet: the portal Access backend (its pure parts, then the
@@ -348,10 +539,30 @@ if [[ -n ${OMAMOBILE_ACCESS_RENDER:-} ]]; then
 fi
 pass "permission sheet"
 
+# The touch layout (TOUCH-PLAN 2.2, 2.3, 3.5): phone.lua loads under a stub
+# of Hyprland's Lua API and sets what the layout depends on.
+lua=$(command -v lua || command -v lua5.4 || command -v luajit || true)
+if [[ -n $lua ]]; then
+  out=$("$lua" test/phone-rules.lua) || { grep -v '^ok' <<<"$out"; fail "phone.lua window rules"; }
+  pass "phone.lua: edge to edge, opaque, dialogs, picture-in-picture"
+else
+  pass "phone.lua window rules # SKIP no lua"
+fi
+
+# The session environment: no empty values (environment.d skips such a line
+# silently), and GTK's file choosers go through the portal (TOUCH-PLAN 3.2).
+env_d=environment.d/20-omamobile-osk.conf
+if grep -nE '^[A-Za-z_][A-Za-z0-9_]*=$' "$env_d"; then fail "$env_d sets no empty values"; fi
+grep -cx 'GTK_USE_PORTAL=1' "$env_d" >/dev/null || fail "GTK 3 file choosers use the portal"
+grep -cx 'GDK_DEBUG=portals' "$env_d" >/dev/null || fail "GTK 4 file choosers use the portal"
+pass "session environment"
+
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
+bash test/sleepd.sh || fail "omamobile-sleepd"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
@@ -372,6 +583,15 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
 [[ -x $tmp/root/usr/bin/omamobile-osk-guard && -f $u/omamobile-osk-guard.service &&
    $(readlink "$u/graphical-session.target.wants/omamobile-osk-guard.service") == ../omamobile-osk-guard.service ]] \
   || fail "the keyboard safety net is staged and enabled for every user's session"
+# Sleep on screen-off: staged and running for every session, but off until
+# the user's toggle (SUSPEND-PLAN 6.2): nothing in the package turns it on.
+[[ -x $tmp/root/usr/bin/omamobile-sleepd && -f $u/omamobile-sleepd.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
+  || fail "the sleep watcher is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
+if grep -rnE '^[^#]*(omarchy-toggle omamobile-sleep( on| toggle|$)|toggles/omamobile-sleep)' bin install systemd plugins; then
+  fail "nothing turns the omamobile-sleep toggle on by default"
+fi
 [[ -x $tmp/root/usr/bin/omamobile-setup-user ]] || fail "setup-user is installed where the unit runs it"
 [[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
    && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \

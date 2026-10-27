@@ -1,0 +1,111 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the app drawer (omamobile.launcher), upright and
+# on its side (TOUCH-PLAN 2.4), in a dark and a light Omarchy theme, with
+# checks that the grid's columns follow the width and every cell, the
+# header and the input stay on the sheet: the real Launcher.qml, its
+# layer-shell windows plain Items, with an application library of twenty
+# made-up apps in place of the desktop entries. Runs inside the OWL
+# conformance container (tests/owl/Dockerfile), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/launcher-render /src/logs/launcher-render
+#
+# test/all runs it when OMAMOBILE_LAUNCHER_RENDER names an output directory.
+# OMAMOBILE_LAUNCHER_PLUGIN draws another tree's plugin instead (a before picture).
+set -euo pipefail
+out=${1:?Usage: launcher-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=${OMAMOBILE_LAUNCHER_PLUGIN:-$here/../plugins/omamobile.launcher}
+[[ -d /omarchy-shell && -d /themes ]] || { echo "launcher-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "launcher-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 TZ=Europe/Berlin
+
+h=/tmp/launcher-harness
+rm -rf "$h"; mkdir -p "$h"
+# Omarchy's Commons, Ui and services, with its palette qualified as on the
+# phone (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/launcher"
+# The drawer is a layer-shell window on the phone, here a plain Item that
+# fills the plugin's root; the dock and the gesture strips (one per screen,
+# through Variants) become Items with no parent, so they are not drawn.
+sed -i -E \
+  -e '/^    (screen: modelData|anchors \{ (top|bottom): true|exclusionMode:|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
+  -e '/^      (screen: modelData|anchors \{ (top|bottom): true|exclusionMode:|WlrLayershell\.|color: "transparent"|color: Commons\.Color\.bar\.background|mask: Region)/d' \
+  -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+  -e 's/^    PanelWindow \{$/    Item {/' \
+  "$h/launcher/Launcher.qml"
+grep -c '^  Item { anchors.fill: parent$' "$h/launcher/Launcher.qml" >/dev/null || { echo "launcher-render: no drawer window to stand in for" >&2; exit 1; }
+cp "$here/launcher-render.qml" "$h/"
+# App icons: twenty plain tiles in the theme's hues, drawn here.
+i=0
+for c in '#3584e4' '#e5a50a' '#2ec27e' '#e01b24' '#9141ac' '#ff7800' '#62a0ea' '#f6d32d' '#57e389' '#ed333b' '#c061cb' '#ffa348' '#1c71d8' '#c64600' '#26a269' '#a51d2d' '#813d9c' '#e66100' '#1a5fb4' '#1c7a4f'; do
+  magick -size 112x112 xc:none -fill "$c" -draw 'roundrectangle 4,4 108,108 26,26' "$h/icon-$i.png"
+  i=$((i + 1))
+done
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/launcher-home-$theme
+  rm -rf "$home"; mkdir -p "$home/.local/state/omarchy/current" "$home/.config/omarchy"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  python3 - "$h" "$out" "$theme" > "$h/job-$theme.json" <<'PY'
+import json, sys
+h, out, theme = sys.argv[1:]
+names = ["Browser", "Files", "Terminal", "Messages", "Phone", "Camera", "Maps", "Music", "Photos", "Calendar",
+         "Contacts", "Notes", "Weather", "Clock", "Calculator", "Settings", "Mail", "Podcasts", "Reader", "Games"]
+apps = [{"id": "app%02d" % i, "name": n, "icon": "%s/icon-%d.png" % (h, i)} for i, n in enumerate(names)]
+def shot(name, w, hh, **extra):
+    s = {"name": name, "png": "%s/launcher-%s-%s.png" % (out, name, theme), "w": w, "h": hh, "query": ""}
+    s.update(extra)
+    return s
+print(json.dumps({"apps": apps, "shots": [
+    shot("portrait", 480, 1040), shot("landscape", 1040, 480), shot("landscape-search", 1040, 480, query="ma"),
+]}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 LAUNCHER_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/launcher-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/launcher-render.txt" || true
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import json, re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l) and "hyprctl" not in l and "delayed function evaluation" not in l]
+geo = {}
+for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
+    geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
+def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
+def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol or a["y"] + a["h"] <= b["y"] + tol or b["y"] + b["h"] <= a["y"] + tol
+ok = not bad and len(geo) == 3
+if len(geo) != 3: print("not ok - %s: %d of 3 shots taken" % (theme, len(geo)))
+for l in bad: print("  " + l[:200])
+def check(name, good, why=""):
+    global ok
+    print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
+    ok = ok and good
+for name, g in geo.items():
+    screen, parts = g["screen"], g["parts"]
+    landscape = screen["w"] > screen["h"]
+    check(name + ": the drawer fills the screen", "drawer" in parts and inside(parts["drawer"], screen, 1), json.dumps(parts.get("drawer")))
+    check(name + ": the header, its collapse button and the input are on screen",
+          all(k in parts and inside(parts[k], screen) and parts[k]["h"] >= 44 for k in ("drawerHeader", "collapse", "inputRow")), json.dumps([parts.get(k) for k in ("drawerHeader", "collapse", "inputRow")]))
+    grid = parts.get("drawerGrid")
+    # The cells wholly on the grid's first screenful (the rest scroll,
+    # clipped, a row cut at the edge among them).
+    cells = [v for k, v in parts.items() if k.startswith("app-") and grid and inside(v, grid, 1)]
+    check(name + ": cells %d" % g["columns"], g["columns"] == (8 if landscape else 4), "%d columns" % g["columns"])
+    check(name + ": the first row holds the columns", grid is not None and len([c for c in cells if c["y"] == min(x["y"] for x in cells)]) == min(g["columns"], g["apps"]) if cells else False, json.dumps(cells[:9]))
+    check(name + ": every shown cell is on the grid, at least 44 px", bool(cells) and all(inside(c, grid, 1) and min(c["w"], c["h"]) >= 44 for c in cells), json.dumps([c for c in cells if not inside(c, grid, 1)][:3]))
+    check(name + ": no two cells overlap", all(apart(a, b) for i, a in enumerate(cells) for b in cells[i + 1:]))
+    if g["query"]:
+        check(name + ": the Ask row sits above the input, on screen", "askRow" in parts and inside(parts["askRow"], screen) and parts["askRow"]["y"] + parts["askRow"]["h"] <= parts["inputRow"]["y"])
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status

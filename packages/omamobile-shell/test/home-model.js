@@ -187,6 +187,36 @@ test("remove and config", () => {
   assert.deepStrictEqual(l.pages[0].items, [])
 })
 
+test("undo puts a removed item back with its settings", () => {
+  let l = layoutOf([app("a1", 0, 0), widget("w1", "weather", 0, 1, 4, 1), app("a2", 1, 0)])
+  l = M.setConfig(l, "w1", { enabled: true, place: "Paris" })
+  const removed = M.findItem(l, "w1")
+  const before = M.serialize(l)
+  const gone = M.removeItem(l, "w1")
+  // In its old cell, at its old place in the page's list
+  const back = M.restoreItem(gone, removed)
+  assert.deepStrictEqual(back.placed, { page: 0, x: 0, y: 1 })
+  delete back.placed
+  assert.strictEqual(M.serialize(back), before)
+  // Something else took the cell meanwhile: the nearest free one
+  const occupied = layoutOf([app("a1", 0, 0), app("a2", 1, 0), app("b", 2, 1)])
+  const near = M.restoreItem(occupied, removed)
+  assert.deepStrictEqual(near.placed, { page: 0, x: 0, y: 2 })
+  assert.strictEqual(M.findItem(near, "w1").item.config.place, "Paris")
+  assert.ok(M.findItem(near, "b"))
+  // Its page is full: the next page with room
+  const full = layoutOf([widget("big", "notes", 0, 0, 4, 6)], [])
+  const onNext = M.restoreItem(full, { page: 0, index: 0, item: app("z", 0, 0) })
+  assert.deepStrictEqual(onNext.placed, { page: 1, x: 0, y: 0 })
+  // Its page was removed: the last page
+  const lastPage = M.restoreItem(layoutOf([]), { page: 3, index: 0, item: app("y", 1, 1) })
+  assert.deepStrictEqual(lastPage.placed, { page: 0, x: 1, y: 1 })
+  // Already back, or bigger than the grid now: nothing to do
+  assert.strictEqual(M.restoreItem(back, removed), null)
+  assert.strictEqual(M.restoreItem(layoutOf([]), { page: 0, index: 0, item: widget("w9", "notes", 0, 0, 6, 1) }), null)
+  assert.strictEqual(M.restoreItem(gone, null), null)
+})
+
 test("pages: add, remove, reorder, home follows", () => {
   let l = layoutOf([app("a", 0, 0)], [app("b", 0, 0)], [app("c", 0, 0)])
   l = M.setHome(l, 1)
@@ -550,6 +580,70 @@ test("what each port could do, for approving its original without asking", () =>
   assert.deepStrictEqual(M.portCapabilities("feeds"), { commands: true, network: true, hosts: null, files: false, notifications: false })
   assert.deepStrictEqual(M.portCapabilities("koiPond"), { commands: false, network: false, hosts: [], files: false, notifications: false })
   assert.strictEqual(M.portCapabilities("weather"), null)
+})
+
+// ---------------------------------------------------------------- landscape (TOUCH-PLAN 2.4, #85)
+
+// Every item once, on the grid, overlapping nothing.
+function tidy(layout, original) {
+  const seen = []
+  for (const page of layout.pages) {
+    for (let i = 0; i < page.items.length; i++) {
+      const a = page.items[i]
+      assert.ok(M.fits(layout.grid, a), a.id + " fits " + JSON.stringify(a))
+      for (let j = i + 1; j < page.items.length; j++) assert.ok(!M.overlaps(a, page.items[j]), a.id + " overlaps " + page.items[j].id)
+      seen.push(a.id)
+    }
+  }
+  const all = [].concat(...original.pages.map((p) => p.items.map((i) => i.id)))
+  assert.deepStrictEqual(seen.sort(), all.sort())
+}
+const pixelPages = { portrait: [480, 908], landscape: [1040, 348] }
+const byId = (layout) => { const o = {}; layout.pages.forEach((p, n) => p.items.forEach((i) => { o[i.id] = Object.assign({ page: n }, i) })); return o }
+
+test("landscape swaps the grid and turns every item with it", () => {
+  const l = layoutOf([widget("w1", "clock", 0, 0, 4, 2), app("a1", 1, 5), app("a2", 3, 5)])
+  const before = M.serialize(l)
+  const t = M.transposeLayout(l, {})
+  assert.deepStrictEqual(t.grid, { columns: 6, rows: 4 })
+  tidy(t, l)
+  const at = byId(t)
+  // 4x2 turned is 2x4; the clock's maximum (4x3) keeps it to 3 rows.
+  assert.deepStrictEqual([at.w1.x, at.w1.y, at.w1.w, at.w1.h], [0, 0, 2, 3])
+  assert.deepStrictEqual([at.a1.x, at.a1.y, at.a1.w, at.a1.h], [5, 1, 1, 1])
+  assert.deepStrictEqual([at.a2.x, at.a2.y], [5, 3])
+  assert.strictEqual(M.serialize(l), before, "the portrait layout is left alone")
+  assert.strictEqual(t.home, l.home)
+  assert.strictEqual(t.nextId, l.nextId)
+})
+
+test("landscape keeps a widget's size in pixels on the short, wide cells", () => {
+  // Portrait cells are 120x151 px, landscape ones 173x87: a 2x2 today (240x302)
+  // turned is 2 columns by 3 rows (346x261), not 2x2 (346x174), so its content
+  // still fits; the 1x1 apps stay 1x1.
+  const l = layoutOf([widget("w1", "clock", 0, 0, 4, 2), widget("w2", "owl:simonschubert.today", 0, 2, 2, 2),
+                      widget("w3", "battery", 2, 2, 2, 1), app("a1", 2, 3), app("a2", 3, 3), widget("w4", "owl:simonschubert.fetch", 0, 4, 4, 2)])
+  const t = M.transposeLayout(l, {}, pixelPages)
+  tidy(t, l)
+  const at = byId(t)
+  assert.deepStrictEqual([at.w2.w, at.w2.h], [2, 3])
+  assert.deepStrictEqual([at.w4.w, at.w4.h], [2, 4])
+  assert.deepStrictEqual([at.a1.w, at.a1.h, at.a2.w, at.a2.h], [1, 1, 1, 1])
+  assert.deepStrictEqual([at.w1.x, at.w1.y, at.w1.w, at.w1.h], [0, 0, 2, 3])
+  // The battery (2x1, turned and clamped to 1x2) found no room beside the
+  // others and moved to a page of its own; the apps stayed.
+  assert.ok(t.pages.length >= 2)
+  assert.strictEqual(at.w3.page, 1)
+  assert.deepStrictEqual([at.w3.w, at.w3.h], [1, 2])
+  assert.strictEqual(at.a2.page, 0)
+  // Settings travel with the item.
+  assert.deepStrictEqual(at.w2.config, l.pages[0].items[1].config)
+})
+
+test("landscape of an empty layout is an empty layout on the turned grid", () => {
+  const t = M.transposeLayout(M.emptyLayout(grid), {}, pixelPages)
+  assert.deepStrictEqual(t.grid, { columns: 6, rows: 4 })
+  assert.deepStrictEqual(t.pages, [{ items: [] }])
 })
 
 let failed = 0

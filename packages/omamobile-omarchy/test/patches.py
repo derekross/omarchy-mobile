@@ -346,6 +346,42 @@ def real_package(t):
        and "sendInlineReply" in read(root, notif + "Service.qml")
        and "notificationReplyField" in read(root, notif + "components/NotificationCard.qml"),
        "real omarchy: notifications take an inline reply (0015)")
+    card = read(root, notif + "components/NotificationCard.qml")
+    service = read(root, notif + "Service.qml")
+    ok("DragHandler {\n    id: swipeHandler" in card and "yAxis.enabled: false" in card
+       and "dragThreshold:" in card and "root.width * 0.35" in card
+       and "root.closeRequested()" in card.split("function finishSwipe", 1)[1]
+       and "!root.replying" in card.split("id: swipeHandler", 1)[1].split("}", 1)[0],
+       "real omarchy: a toast swipes away past 35%, not while a reply is typed (0017)")
+    ok('objectName: "notificationCloseButton"' in card and "width: Style.space(44)" in card
+       and "height: Style.space(44)" in card and "visible: root.closeButtonShown" in card,
+       "real omarchy: a 44 px close button on toasts (0017)")
+    ok("acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus" in card
+       and "mouse.button === Qt.RightButton" in card,
+       "real omarchy: hover pauses for a mouse only; right-click still closes (0017)")
+    ok("!card.held" in service and "closeButtonShown: service.touchScreen" in service
+       and '["hyprctl", "-j", "devices"]' in service and "touchScreenProc.running = true" in service,
+       "real omarchy: the close button shows when Hyprland lists a touch screen (0017)")
+    forget = service.split("function forgetNotification(name) {", 1)
+    ok(len(forget) == 2 and "function forget(name: string): string {\n      return service.forgetNotification(name)" in service
+       and "/^[0-9]+-[0-9]+\\.json$/.test(file)" in forget[1].split("\n  }\n", 1)[0]
+       and 'removePopup(i, "forget")' in forget[1].split("\n  }\n", 1)[0]
+       and "enqueuePopupFileJob(" in forget[1].split("\n  }\n", 1)[0]
+       and 'if (reason === "forget") deletePopupFileFor(entry)\n      else archivePopupFileFor(entry)' in service,
+       "real omarchy: forget takes one notification away, toast or history, on the file queue (0019)")
+    menu = read(root, "usr/share/omarchy/shell/plugins/menu/Menu.qml")
+    back = menu.split("DragHandler {\n        id: backSwipe", 1)
+    ok(len(back) == 2 and "yAxis.enabled: false" in back[1].split("}", 1)[0]
+       and "!resultList.moving" in back[1].split("}", 1)[0] and "root.goBack()" in back[1].split("NumberAnimation", 1)[0],
+       "real omarchy: a swipe right on the menu goes back, not while the list scrolls (0018)")
+    ok('objectName: "menuBackButton"' in menu and "visible: card.canGoBack" in menu
+       and 'root.activeMenu !== "root" && !root.dmenuActive' in menu
+       and menu.split('objectName: "menuBackButton"', 1)[1].count("onClicked: root.goBack()") >= 1,
+       "real omarchy: the menu's header has a back button below the top level (0018)")
+    ok("(event.key === Qt.Key_Backspace || event.key === Qt.Key_Left) && !root.filterText) {\n            root.goBack()" in menu,
+       "real omarchy: Backspace and Left still go back (0018)")
+    ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
+    qml_parse(root)
     for name in ("omarchy-channel-set", "omarchy-refresh-pacman"):
         text = read(root, "usr/bin/" + name)
         guard = text.find("if [[ -x /usr/bin/omamobile-update ]]")
@@ -353,6 +389,8 @@ def real_package(t):
            "real omarchy: %s refuses on a phone before it touches pacman (0016)" % name)
         ok("RELEASES.md section 5.4" in text, "real omarchy: %s points at RELEASES 5.4" % name)
     screensaver_launcher(t, os.path.join(root, "usr/bin/omarchy-launch-screensaver"))
+    notification_phrasing(t, os.path.join(root, "usr/bin/omarchy-notification-send"),
+                          os.path.join(ex, "usr/bin/omarchy-notification-send"))
     rc, out = run(root, "apply", series=SERIES)
     ok(rc == 0 and "already applied" in out, "real omarchy: already applied")
     rc, _ = run(root, "verify")
@@ -386,6 +424,23 @@ def real_package(t):
     ok(rc == 0 and status["upstream"] == [os.path.basename(patch0000)],
        "real omarchy with %s upstream: skipped and reported, the rest applied" % os.path.basename(patch0000))
     ok(len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
+
+
+def qml_parse(root):
+    """Every QML file the series touches still parses, when qmlformat is at
+    hand (it reports syntax errors without needing the shell's imports)."""
+    tool = shutil.which("qmlformat") or ("/usr/lib/qt6/bin/qmlformat" if os.path.isfile("/usr/lib/qt6/bin/qmlformat") else "")
+    if not tool:
+        print("ok - real omarchy: the patched QML parses # SKIP no qmlformat")
+        return
+    files = set()
+    for p in glob.glob(os.path.join(SERIES, "*.patch")):
+        for line in open(p):
+            if line.startswith("+++ w/") and line.rstrip().endswith(".qml"):
+                files.add(line[6:].rstrip())
+    bad = [f for f in sorted(files)
+           if subprocess.run([tool, os.path.join(root, "usr/share/omarchy", f)], capture_output=True).returncode != 0]
+    ok(files and not bad, "real omarchy: the %d patched QML files parse (qmlformat)%s" % (len(files), " " + str(bad) if bad else ""))
 
 
 def screensaver_launcher(t, launcher):
@@ -445,6 +500,69 @@ def screensaver_launcher(t, launcher):
     p.terminate()
     p.wait(timeout=20)
     ok(osk() == "true" and not os.path.exists(marker), "0006: a launcher stopped by a signal turns the keyboard back on")
+
+
+# Omarchy 4.0.6's notification texts (headline, body) and what a phone shows
+# for each (patch 0020); None leaves the text as it is.
+PHRASINGS = [
+    (("Screenshot saved to clipboard and file", "Edit with Super + Alt + , (or click this)"), "Tap to edit"),
+    (("Screen recording saved", "Open with Super + Alt + , (or click this)"), "Tap to open"),
+    (("Update System", "Click to update the system."), "Tap to update the system."),
+    (("Setup Wi-Fi", "Click to configure the wireless network."), "Tap to configure the wireless network."),
+    (("Install Dictation with Voxtype", "Click to install voice dictation for Omarchy."),
+     "Tap to install voice dictation for Omarchy."),
+    (("Voxtype Dictation Ready", "Hold F9 to dictate (or toggle with Super + Ctrl + X)."),
+     "Use the Dictation tile in quick settings."),
+    (("Run Migrations", "Click to run 1 pending migration."), "Tap to run 1 pending migration."),
+    (("Run Migrations", "Click to run 3 pending migrations."), "Tap to run 3 pending migrations."),
+    (("Process crashed: foot", "Click to diagnose with AI"), "Tap to diagnose with AI"),
+    (("Learn Keybindings", "Super + K for cheatsheet.\nSuper + Space for Omarchy Menu."), ""),
+    (("Pong installed", "Start it with Super + Space"), ""),
+    (("No saved width found for kitty on workspace 2", "Use Super + Alt + Home to save one for this workspace."), ""),
+    (("Saved width for kitty on workspace 2", "Restore using Super + Home on this workspace."), ""),
+    (("Copied", "Paste it anywhere (or press Super + Ctrl + V for history)."), "Paste it anywhere."),
+    (("Reminder", "5 minutes are up (click the bar to snooze)"), None),
+    (("Two lines", "Line one\nline two"), None),
+    (("Battery low", ""), None),
+]
+
+
+def notification_phrasing(t, patched, original):
+    """Patch 0020's phrasing, with a stub busctl that records the summary
+    and body: a phone rewords each Omarchy text above, and a desktop sends
+    exactly what the unpatched script sends."""
+    fakes = os.path.join(t, "notify-fakes")
+    os.makedirs(fakes)
+    with open(os.path.join(fakes, "busctl"), "w") as f:
+        # --user -- call DEST PATH IFACE Notify SIG app_name replaces_id app_icon summary body ...
+        f.write('#!/bin/bash\nprintf "%s\\0" "$@" > "$FAKE_OUT"\necho "u 7"\n')
+    os.chmod(os.path.join(fakes, "busctl"), 0o755)
+    out = os.path.join(t, "notify-out")
+
+    def send(script, args, phrasing):
+        env = {"PATH": fakes + ":/usr/bin:/bin", "HOME": t, "FAKE_OUT": out}
+        if phrasing:
+            env["OMARCHY_NOTIFICATION_PHRASING"] = phrasing
+        r = subprocess.run(["bash", script] + list(args), env=env, capture_output=True, text=True)
+        return r.returncode, open(out).read().split("\0")[:-1] if r.returncode == 0 else r.stderr
+
+    bad_phone, bad_desktop = [], []
+    for (head, body), want in PHRASINGS:
+        args = ["-u", "critical", "-g", "x", head, body, "--exec", "true"]
+        rc, argv = send(patched, args, "touch")
+        expect_head = head
+        expect_body = body if want is None else want
+        if rc != 0 or argv[11:13] != [expect_head, expect_body]:
+            bad_phone.append((body, argv[11:13] if rc == 0 else argv))
+        orig = send(original, args, None)
+        # Unforced too, unless this runs on a phone (a build on the phone does)
+        for mode in ("desktop",) + (() if os.path.exists("/usr/bin/omamobile-update") else (None,)):
+            if send(patched, args, mode) != orig:
+                bad_desktop.append((body, mode))
+    ok(not bad_phone, "0020: a phone gets tap wording and no Super hints (%d texts)%s"
+       % (len(PHRASINGS), " " + repr(bad_phone) if bad_phone else ""))
+    ok(not bad_desktop, "0020: a desktop sends exactly what unpatched Omarchy sends%s"
+       % (" " + repr(bad_desktop) if bad_desktop else ""))
 
 
 def mod_patch(root, path):

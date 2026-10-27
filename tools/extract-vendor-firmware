@@ -42,6 +42,8 @@
 # Needs: unzip, debugfs (e2fsprogs); simg2img if vendor.img is sparse;
 # lpunpack if the image only has super.img; fsck.erofs (erofs-utils) if vendor is EROFS.
 set -euo pipefail
+# debugfs and friends live in /sbin on Debian-like hosts
+export PATH=$PATH:/usr/sbin:/sbin
 
 BOARD="google,gs201-cheetah"
 DEVICE="cheetah"
@@ -75,6 +77,7 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
            inside it, or a raw/sparse vendor.img
   -o DIR   staging root to write into (default: ./out/vendor-firmware)
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
+  -d DEV   cheetah (default) or raven
   -f       skip the android-info.txt board=$DEVICE check
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
@@ -88,10 +91,11 @@ say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
 
-OUT="./out/vendor-firmware" WORK="" FORCE="" CAMERA_APEX=""
-while getopts "o:w:c:fh" opt; do
+OUT="./out/vendor-firmware" WORK="" FORCE="" CAMERA_APEX="" DEVICE_OPT=cheetah
+while getopts "o:w:c:d:fh" opt; do
   case $opt in
     o) OUT=$OPTARG ;;
+    d) DEVICE_OPT=$OPTARG ;;
     c) CAMERA_APEX=$(realpath -m -- "$OPTARG") ;;
     w) WORK=$OPTARG ;;
     f) FORCE=1 ;;
@@ -101,6 +105,30 @@ while getopts "o:w:c:fh" opt; do
 done
 shift $((OPTIND - 1))
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+case $DEVICE_OPT in
+  cheetah) ;;
+  raven)
+    # Pixel 6 Pro: Wi-Fi, Bluetooth, the AoC, the speaker amplifiers'
+    # protection firmware and the AoC's sensor registry (device/raven/WIFI-PLAN.md,
+    # AUDIO-PLAN.md). The _ROW
+    # NVRAM and CLM are the global model's (SKU GLU0G). Raven's vendor has no
+    # fast_switch tunings, and its haptics (cs40l25a_*) are not mapped yet.
+    BOARD="google,gs101-raven"
+    DEVICE="raven"
+    MAP=(
+      "firmware/fw_bcmdhd.bin|brcm/$FW_BASE.$BOARD.bin"
+      "firmware/bcmdhd.cal_ROW|brcm/$FW_BASE.$BOARD.txt"
+      "firmware/bcmdhd_clm.blob_ROW|brcm/$FW_BASE.$BOARD.clm_blob"
+      "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
+      "firmware/aoc.bin|aoc.bin"
+      "firmware/cs35l41-dsp1-spk-prot.wmfw|cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"
+      "firmware/cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin"
+      "firmware/R-cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin"
+    ) ;;
+  *) die "unknown device $DEVICE_OPT (cheetah or raven)" ;;
+esac
+# The camera data flow (tools/extract-camera-data) exists for cheetah only
+[[ $DEVICE == cheetah || -z $CAMERA_APEX ]] || die "-c is cheetah's (no camera support for $DEVICE yet)"
 SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
 # Absolute, because the checksum step runs from inside the staging dir
@@ -228,38 +256,47 @@ grep -aq 'BCM4389C1' "$brcm/BCM.$BOARD.hcd" ||
   die "BCM.hcd is not a BCM4389C1 Bluetooth patch"
 grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
   die "bcmdhd.cal does not look like a Broadcom text NVRAM"
-for f in cs40l26.wmfw cs40l26-calib.wmfw "cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"; do
-  # WMFW, Halo core (4): what cs_dsp accepts for this part
-  [[ "$(head -c4 "$dest/$f")" == WMFW && "$(od -An -tu1 -j10 -N1 "$dest/$f" | tr -d ' ')" == 4 ]] ||
-    die "$f is not a Halo Core WMFW firmware"
-done
-grep -aq 'FIRMWARE_CS40L26' "$dest/cs40l26.wmfw" ||
-  die "cs40l26.wmfw is not a CS40L26 firmware"
-grep -aq 'BUZZ_EFFECTS2_BUZZ_LEVEL' "$dest/cs40l26.wmfw" ||
-  die "cs40l26.wmfw has no buzz generator (cs40l26-vibra needs BUZZGEN)"
+# The speaker amplifiers' protection firmware, on both phones
+wmfw_halo() { # WMFW, Halo core (4): what cs_dsp accepts for this part
+  [[ "$(head -c4 "$dest/$1")" == WMFW && "$(od -An -tu1 -j10 -N1 "$dest/$1" | tr -d ' ')" == 4 ]] ||
+    die "$1 is not a Halo Core WMFW firmware"
+}
+wmfw_halo "cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"
 grep -aq 'FIRMWARE_HALO_CSPL' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
   die "cs35l41-dsp1-spk-prot.wmfw is not the CS35L41 speaker protection firmware"
 grep -aq 'CAL_CHECKSUM' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
   die "cs35l41-dsp1-spk-prot.wmfw has no calibration controls"
 cmp -s "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin" "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin" &&
   die "the top and bottom speaker tunings are the same file"
-# The media deltas: comma-separated integers, the first the word count
-# (vendor mixer_paths.xml "speaker-post"; Google's cs35l41 driver parses them)
 for f in top bottom; do
-  python3 -I -c 'import sys; w = [int(x) for x in open(sys.argv[1]).read().replace(" ", "").strip().split(",")]; sys.exit(w[0] != len(w))' \
-    "$dest/cirrus/cs35l41-$DEVICE-$f-media-delta.txt" || die "the $f media delta is not a word list"
+  [[ "$(head -c4 "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-$f.bin")" == WMDR ]] ||
+    die "the $f speaker tuning is not a WMDR coefficient file"
 done
-for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin \
-         "cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin" "cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin"; do
-  [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
-done
+# Cheetah's haptics and media deltas
+if [[ $DEVICE == cheetah ]]; then
+  for f in cs40l26.wmfw cs40l26-calib.wmfw; do wmfw_halo "$f"; done
+  grep -aq 'FIRMWARE_CS40L26' "$dest/cs40l26.wmfw" ||
+    die "cs40l26.wmfw is not a CS40L26 firmware"
+  grep -aq 'BUZZ_EFFECTS2_BUZZ_LEVEL' "$dest/cs40l26.wmfw" ||
+    die "cs40l26.wmfw has no buzz generator (cs40l26-vibra needs BUZZGEN)"
+  # The media deltas: comma-separated integers, the first the word count
+  # (vendor mixer_paths.xml "speaker-post"; Google's cs35l41 driver parses them)
+  for f in top bottom; do
+    python3 -I -c 'import sys; w = [int(x) for x in open(sys.argv[1]).read().replace(" ", "").strip().split(",")]; sys.exit(w[0] != len(w))' \
+      "$dest/cirrus/cs35l41-$DEVICE-$f-media-delta.txt" || die "the $f media delta is not a word list"
+  done
+  for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do
+    [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
+  done
+fi
 
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
 bt=$(grep -ao 'BCM4389C1 [^[]*' "$brcm/BCM.$BOARD.hcd" | head -1)
 (cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
 say "Wi-Fi firmware: ${ver:-unknown version}"
 say "Bluetooth patch: ${bt:-unknown version}"
-say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
+[[ $DEVICE == cheetah ]] &&
+  say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
 say "Speaker protection: cs35l41-dsp1-spk-prot-$DEVICE.wmfw and the top and bottom tunings"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"
 echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."

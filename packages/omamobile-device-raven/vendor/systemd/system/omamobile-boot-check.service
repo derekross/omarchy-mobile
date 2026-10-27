@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Check that every part of the phone came up at this boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-boot-check

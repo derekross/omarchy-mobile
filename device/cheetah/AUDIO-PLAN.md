@@ -198,7 +198,7 @@ Hard limits for all bring-up, until A7 has calibrated protection running:
 |---|---|---|
 | Boost peak current (`cirrus,boost-peak-milliamp`) | **2500 mA** (in our DT); never above 3500 mA | 2.5 A is stock's speaker-playback value, 3.5 A its voice/DT maximum. Lower is always safe (output clips earlier). |
 | Boost inductor / capacitor | exactly **1000 nH / 30 uF** | they select the boost loop coefficients (`cs35l41_boost_config()`: K1 `0x32`, K2 `0x49`, slope `0x75`); wrong values can make the boost unstable |
-| Boost voltage | chip default (class-H, ceiling 11 V, `0xAA`); never write `BSTCVRT_VCTRL1` | stock never changes it |
+| Boost voltage | chip default (class-H; `BSTCVRT_VCTRL1` reads 0 on both amplifiers, and neither Google's driver nor stock's DT sets it); never write `BSTCVRT_VCTRL1` except through the `bst_ctl` bring-up parameter (0 by default), with the owner's go and restored after, as C9j did at 5.7 and 8.0 V. The converter itself is off at analog 10 and below since omamobile-audio 0.5.3 (AOC-PLAN C9j) | stock never changes it; at the everyday level its light-load regime distorts |
 | `Analog PCM Volume` (stock `AMP PCM Gain`) | top used as earpiece: **≤ 6** (6.5 dB); either amp with the DSP bypassed: **≤ 10**; with calibrated protection: ≤ 17 (stock speaker) | stock values; mainline's default is 0 (0.5 dB) |
 | `Digital PCM Volume` | **≤ 817** (0 dB) always; first sound at **≤ 657** (-20 dB) | 817 = 0 dB in both stock and mainline (-102 dB + (n-1) x 0.125 dB) |
 | `PCM Source` | `ASP` (bypass) only for the earpiece or for first-sound tests at the limits above; `DSP` with calibration for the loudspeaker | stock `handset` vs `speaker` paths |

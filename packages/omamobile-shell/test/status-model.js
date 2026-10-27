@@ -35,3 +35,19 @@ assert.strictEqual(M.callChip(JSON.stringify({ agent: false, calls: [{ id: "a", 
 assert.strictEqual(M.callChip("bad", now), null, "a bad line keeps the chip as it was")
 assert.strictEqual(M.elapsed(3725000), "1:02:05")
 console.log("ok - status model: the call chip")
+
+assert.strictEqual(M.stampOf("1760000000123-4.json"), 1760000000123)
+assert.strictEqual(M.stampOf("notes.json"), 0)
+assert.strictEqual(M.parseStamp(" 1760000000000\n"), 1760000000000)
+assert.strictEqual(M.parseStamp("junk"), 0)
+assert.strictEqual(M.parseStamp(undefined), 0)
+const files = ["1000-1.json", "2000-2.json", "3000-3.json", "3000-3.json.tmp"]
+assert.strictEqual(M.unreadCount(files, 0), 3, "nothing seen yet: every history file")
+assert.strictEqual(M.unreadCount(files, "2000"), 1, "only what arrived after the newest one the shade showed")
+assert.strictEqual(M.unreadCount(files, 3000), 0)
+assert.strictEqual(M.unreadCount([], 0), 0)
+// A swipe in the shade forgets one history file: the count follows the
+// directory, one fewer if that one was unread, the same if it was seen.
+assert.strictEqual(M.unreadCount(files.filter((f) => f !== "3000-3.json"), "2000"), 0, "the unread one forgotten")
+assert.strictEqual(M.unreadCount(files.filter((f) => f !== "1000-1.json"), "2000"), 1, "a seen one forgotten")
+console.log("ok - status model: unread notifications")

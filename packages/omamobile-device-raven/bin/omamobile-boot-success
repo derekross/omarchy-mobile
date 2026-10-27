@@ -1,0 +1,34 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Mark the slot we booted from as successful, as Android's boot-control
+# service does after every good boot. Without this the bootloader burns a
+# retry each boot and eventually abandons the slot.
+#
+# Copied from omamobile-device-cheetah: raven has the same gs-common devinfo
+# (checked with omamobile-bootctl dump). devinfo sits on a bootloader LUN (sdd)
+# that the storage guard keeps read-only. Open exactly that disk and partition for the one write, then
+# close them again. omamobile-bootctl only ever changes the slot flag bytes
+# (0x30-0x37) and verifies the whole partition afterwards.
+set -euo pipefail
+
+slot=$(sed -n 's/^androidboot.slot_suffix = "_\([ab]\)"$/\1/p' /proc/bootconfig)
+[[ "$slot" == a || "$slot" == b ]] || { echo "unknown boot slot"; exit 1; }
+
+dev=""
+for s in /sys/block/sd*/sd*; do
+  grep -qx PARTNAME=devinfo "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
+done
+[[ -n "$dev" ]] || { echo "devinfo partition not found"; exit 1; }
+disk=/dev/$(basename "$(dirname "$(readlink -f "/sys/class/block/${dev#/dev/}")")")
+
+if omamobile-bootctl dump "$dev" | sed -n "/^slot $slot /,/retry-count/p" | grep -q 'successful:  yes'; then
+  echo "slot $slot already marked successful"
+  exit 0
+fi
+
+relock() { blockdev --setro "$dev"; blockdev --setro "$disk"; }
+trap relock EXIT
+blockdev --setrw "$disk"
+blockdev --setrw "$dev"
+omamobile-bootctl mark-successful "$dev" "$slot" --i-understand
+echo "slot $slot marked successful"

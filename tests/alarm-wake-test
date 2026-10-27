@@ -1,0 +1,31 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/alarm-wake-test's read-only check against a fake /sys: an RTC that
+# may wake and an alarmtimer that adopted it pass; a missing alarmtimer, a
+# missing RTC or an RTC without wakeup fail. "arm" refuses a short or bad
+# SECS before it touches anything.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+run() { ALARM_TEST_SYSFS=$t bash tools/alarm-wake-test "$@"; }
+
+mkdir -p "$t/devices/rtcdev/power" "$t/class/rtc/rtc0" "$t/bus/platform/devices"
+echo enabled >"$t/devices/rtcdev/power/wakeup"
+ln -s "$t/devices/rtcdev" "$t/class/rtc/rtc0/device"
+echo s5m-rtc >"$t/class/rtc/rtc0/name"
+
+out=$(run check) && fail "no alarmtimer: check fails"
+grep -c 'not ok - no alarmtimer device' <<<"$out" >/dev/null || fail "no alarmtimer: said so ($out)"
+mkdir "$t/bus/platform/devices/alarmtimer.0.auto"
+out=$(run check) || fail "an RTC that may wake, adopted by alarmtimer: check passes ($out)"
+echo disabled >"$t/devices/rtcdev/power/wakeup"
+out=$(run check) && fail "an RTC without wakeup: check fails"
+rm -rf "$t/class/rtc/rtc0"
+out=$(run check) && fail "no rtc0: check fails"
+grep -c 'not ok - no rtc0' <<<"$out" >/dev/null || fail "no rtc0: said so ($out)"
+for secs in 5 abc; do
+  out=$(SECS=$secs run arm) && fail "arm refuses SECS=$secs"
+  grep -c 'SECS must be' <<<"$out" >/dev/null || fail "arm explains SECS=$secs ($out)"
+done
+echo "ok - alarm-wake-test: check finds the RTC, its wakeup and alarmtimer; arm refuses bad SECS"

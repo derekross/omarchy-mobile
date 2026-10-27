@@ -300,8 +300,10 @@ def code_checks(sources):
 
 
 def qmllint_path():
-    for candidate in (os.environ.get("QMLLINT"), shutil.which("qmllint6"), shutil.which("qmllint"),
-                      "/usr/lib/qt6/bin/qmllint"):
+    # Qt 6's before a bare qmllint: on Arch that one can be Qt 5's, which
+    # rejects Qt 6 syntax.
+    for candidate in (os.environ.get("QMLLINT"), shutil.which("qmllint6"),
+                      "/usr/lib/qt6/bin/qmllint", shutil.which("qmllint")):
         if candidate and os.access(candidate, os.X_OK):
             return candidate
     return None

@@ -22,7 +22,11 @@ fake gsettings 'echo "gsettings $*" >>"$HOME/calls"'
 fake systemctl 'echo "systemctl $*" >>"$HOME/calls"'
 fake chromium 'echo "Chromium 153.0.0.0"'
 for f in monitors looknfeel autostart; do echo "-- $f" >"$H/.config/hypr/$f.lua"; done
-echo 'local omarchy_monitor_scale = 2' >"$H/.config/hypr/monitors.lua"
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = "auto"\n' >"$H/.config/hypr/monitors.lua"
+# Omarchy's shipped foot.ini, in the parts the phone changes
+mkdir -p "$H/.config/foot"
+printf '[main]\nfont=JetBrainsMono Nerd Font:size=9\npad=14x14\n\n[scrollback]\nlines=10000\nmultiplier=7.0\n\n[cursor]\nstyle=block\n' \
+  >"$H/.config/foot/foot.ini"
 # Omarchy's shipped extension file starts like this
 printf '{\n  // Extend the Quickshell Omarchy menu with JSONC.\n  // "personal": {"icon":"","label":"Personal"},\n}\n' \
   >"$H/.config/omarchy/extensions/omarchy-menu.jsonc"
@@ -105,3 +109,40 @@ RUN_HOME=$t/own run
 [[ $(idle "$t/plain") == '{"screensaver": 0, "lock": 60}' ]] && toggle "$t/plain" || fail "an earlier user without an idle block gets the phone's"
 [[ $(idle "$t/own") == '{"screensaver": 300, "lock": 0}' ]] && ! toggle "$t/own" || fail "a user's own idle block is kept, and their screensaver"
 pass "idle: lock after a minute, no screensaver, unless the user set their own"
+
+# GDK_SCALE follows the phone's monitor scale (TOUCH-PLAN 2.8)
+grep -cx 'local omarchy_monitor_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "the monitor scale is 3"
+grep -cx 'local omarchy_gdk_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE is 3 with it"
+# Foot for touch (TOUCH-PLAN 2.9), after two logins
+foot=$H/.config/foot/foot.ini
+grep -cx 'pad=6x6' "$foot" >/dev/null && ! grep -c '^pad=14x14' "$foot" >/dev/null || fail "foot's padding is 6x6"
+grep -cx 'multiplier=3.0' "$foot" >/dev/null || fail "foot's scrollback multiplier is 3"
+[[ $(grep -c '^\[touch\]$' "$foot") == 1 && $(grep -cx 'long-press-delay=300' "$foot") == 1 ]] || fail "foot's [touch] long press is 300 ms, once"
+grep -cx 'style=block' "$foot" >/dev/null || fail "the rest of foot.ini is kept"
+# Chromium's input method flags (TOUCH-PLAN 3.1), once each
+flags=$H/.config/chromium-flags.conf
+for flag in --enable-wayland-ime --wayland-text-input-version=3 --force-device-scale-factor=0.83; do
+  [[ $(grep -cx -- "$flag" "$flags") == 1 ]] || fail "chromium-flags.conf has $flag once"
+done
+grep -c '^"--user-agent=.*Mobile Safari/537.36"$' "$flags" >/dev/null || fail "the mobile user agent stays quoted on its line"
+
+# An earlier user with their own values: a monitor scale of 2, their own
+# foot padding, multiplier and long press, and one of the flags already;
+# their foot.ini appears only after the first login.
+h=$t/custom; mkdir -p "$h/.config/hypr" "$h/.config/omarchy" "$h/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$h/.config/hypr/"
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = 2\n' >"$h/.config/hypr/monitors.lua"
+touch "$h/.local/state/omarchy/done/omamobile-monitor-scale"
+printf -- '--enable-wayland-ime\n' >"$h/.config/chromium-flags.conf"
+RUN_HOME=$h run
+[[ ! -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step waits for a foot.ini"
+mkdir -p "$h/.config/foot"
+printf '[main]\npad=10x10\n\n[scrollback]\nmultiplier=5.0\n\n[touch]\nlong-press-delay=500\n' >"$h/.config/foot/foot.ini"
+cp "$h/.config/foot/foot.ini" "$t/custom-foot.ini"
+RUN_HOME=$h run
+grep -cx 'local omarchy_gdk_scale = 2' "$h/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE stays with a user's own monitor scale"
+cmp -s "$h/.config/foot/foot.ini" "$t/custom-foot.ini" || fail "a user's own foot values stay theirs"
+[[ -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step runs once foot.ini is there"
+[[ $(grep -cx -- --enable-wayland-ime "$h/.config/chromium-flags.conf") == 1 ]] || fail "a flag the user has isn't added twice"
+grep -cx -- --wayland-text-input-version=3 "$h/.config/chromium-flags.conf" >/dev/null || fail "the missing flag is added"
+pass "GDK scale, foot and Chromium's input method, once each, and a user's own values are kept"

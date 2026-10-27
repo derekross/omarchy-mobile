@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# The panel's backlight: the video group (the logged-in user) may switch the
+# panel off and on through bl_power, which Omarchy's display off/on uses
+# (patches/omarchy/0008-*). Brightness itself goes through logind.
+ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="1c2c0000.dsi.0", RUN+="/usr/bin/chgrp video /sys%p/bl_power", RUN+="/usr/bin/chmod g+w /sys%p/bl_power"
+# The touchscreen: the video group may inhibit it, so Omarchy's display off
+# (patch 0008) makes a dark screen ignore touch; inhibiting also stops the
+# controller sensing.
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="input*", ATTR{name}=="s6sy761", RUN+="/usr/bin/chgrp video /sys%p/inhibited", RUN+="/usr/bin/chmod g+w /sys%p/inhibited"

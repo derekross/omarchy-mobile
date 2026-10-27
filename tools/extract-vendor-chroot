@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 # extract-vendor-chroot: build the read-only Android tree for one of
 # Omarchy Mobile's vendor-chroot profiles (packages/omamobile-gnss/lib/omamobile-vendor-chroot)
-# out of a Google factory image for the Pixel 7 Pro (cheetah), on the user's
-# own machine.
+# out of a Google factory image for the Pixel 7 Pro (cheetah) or, with
+# -d tegu, the Pixel 9a, on the user's own machine.
 #
 # Grown from tools/extract-fingerprint-vendor (same closure walk, same
 # output layout); the fingerprint profile still uses that tool.
@@ -37,6 +37,8 @@
 # Needs: unzip, debugfs (e2fsprogs), readelf (binutils) or llvm-readelf,
 # sha256sum; simg2img and lpunpack (android-tools) for sparse or super images.
 set -euo pipefail
+# debugfs and friends live in /sbin on Debian-like hosts
+export PATH=$PATH:/usr/sbin:/sbin
 
 DEVICE="cheetah"
 PROFILE=""
@@ -65,11 +67,37 @@ profile_lists() {
       ;;
     modem)
       VENDOR_BINS=(bin/cbd bin/rfsd)
-      VENDOR_FILES=(etc/init/cbd.rc etc/init/rfsd.rc etc/fstab.modem build.prop)
+      # gs201 keeps the modem image mount in fstab.modem, gs101 in its main fstab
+      if [[ $DEVICE == raven ]]; then MODEM_FSTAB=etc/fstab.gs101; else MODEM_FSTAB=etc/fstab.modem; fi
+      VENDOR_FILES=(etc/init/cbd.rc etc/init/rfsd.rc "$MODEM_FSTAB" build.prop)
       VENDOR_DIRS=()
       SYSTEM_BINS=(system/bin/sh system/bin/toybox)
       SYSTEM_FILES=(system/build.prop)
       SYSTEM_DIRS=()
+      # The 9a's GNSS is the S5300's own Kepler core: Samsung's gnssd, its
+      # patch file and configuration run in the same chroot once the CP is
+      # ONLINE (device/tegu/MODEM-PLAN.md F5).
+      if [[ $DEVICE == tegu ]]; then
+        VENDOR_BINS+=(bin/hw/gnssd)
+        VENDOR_FILES+=(firmware/kepler.bin etc/gnss/gps.cfg etc/gnss/ca.pem
+                       etc/init/init.gnss.rc)
+        SYSTEM_DIRS+=(system/etc/security/cacerts)
+        # libandroid_net (gnssd) needs one symbol from the tethering APEX,
+        # as gpsd on cheetah: the shim build provides a stub.
+        STUB_LIBS=(libcom.android.tethering.connectivity_native.so)
+      fi
+      ;;
+    gnss-slsi)
+      # The 9a's GNSS HAL: Samsung's android.hardware.gnss-service, the
+      # client of the modem chroot's gnssd (abstract socket @GNSSND), with
+      # servicemanager and the VINTF manifests that declare IGnss/default.
+      # device/tegu/MODEM-PLAN.md G3.
+      VENDOR_BINS=(bin/hw/android.hardware.gnss-service bin/vndservicemanager)
+      VENDOR_FILES=(etc/gnss/gps.cfg etc/gnss/ca.pem build.prop)
+      VENDOR_DIRS=(etc/vintf)
+      SYSTEM_BINS=(system/bin/servicemanager)
+      SYSTEM_FILES=(system/build.prop)
+      SYSTEM_DIRS=(system/etc/vintf)
       ;;
     waves)
       VENDOR_BINS=()
@@ -80,7 +108,7 @@ profile_lists() {
       SYSTEM_FILES=(system/build.prop)
       SYSTEM_DIRS=()
       ;;
-    *) die "unknown profile '$1' (known: gnss, modem, waves)" ;;
+    *) die "unknown profile '$1' (known: gnss, gnss-slsi, modem, waves)" ;;
   esac
 }
 
@@ -100,8 +128,8 @@ profile_check() {
         die "cbd does not look like Samsung's CP boot daemon"
       grep -aq '/dev/umts_rfs0' "$1/vendor/bin/rfsd" ||
         die "rfsd does not use /dev/umts_rfs0"
-      grep -q 'modem_img' "$1/vendor/etc/fstab.modem" ||
-        die "fstab.modem has no modem image mount"
+      grep -q 'modem_img' "$1/vendor/$MODEM_FSTAB" ||
+        die "${MODEM_FSTAB##*/} has no modem image mount"
       ;;
     waves)
       local f
@@ -122,14 +150,16 @@ profile_check() {
 
 usage() {
   cat <<USAGE
-Usage: extract-vendor-chroot -p PROFILE [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
+Usage: extract-vendor-chroot -p PROFILE [-d DEVICE] [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
-  SOURCE   Google factory zip (cheetah-*-factory-*.zip) or the
-           image-cheetah-*.zip inside it
-  -p NAME  profile: gnss, modem, waves
+  SOURCE   Google factory zip (DEVICE-*-factory-*.zip) or the
+           image-DEVICE-*.zip inside it
+  -p NAME  profile: gnss, gnss-slsi (tegu), modem, waves
   -o DIR   output directory (default: ./out/vendor-chroot-PROFILE)
   -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
            (default: a temp dir in \$TMPDIR)
+  -d DEV   cheetah (default), raven (gnss and modem so far) or tegu
+           (gnss-slsi and modem so far)
   -f       skip the device checks
 
 Install on the phone (from the omamobile repo), e.g. for gnss:
@@ -143,9 +173,10 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
 
 OUT="" WORK="" FORCE=""
-while getopts "p:o:w:fh" opt; do
+while getopts "p:o:w:d:fh" opt; do
   case $opt in
     p) PROFILE=$OPTARG ;;
+    d) DEVICE=$OPTARG ;;
     o) OUT=$OPTARG ;;
     w) WORK=$OPTARG ;;
     f) FORCE=1 ;;
@@ -155,6 +186,12 @@ while getopts "p:o:w:fh" opt; do
 done
 shift $((OPTIND - 1))
 [[ $# -eq 1 && -n $PROFILE ]] || { usage >&2; exit 2; }
+case $DEVICE in
+  cheetah) ;;
+  raven) [[ $PROFILE == gnss || $PROFILE == modem ]] || die "raven: gnss and modem profiles only so far" ;;
+  tegu) [[ $PROFILE == gnss-slsi || $PROFILE == modem ]] || die "tegu: gnss-slsi and modem profiles only so far" ;;
+  *) die "unknown device $DEVICE (cheetah, raven or tegu)" ;;
+esac
 profile_lists "$PROFILE"
 [[ -n $OUT ]] || OUT="./out/vendor-chroot-$PROFILE"
 SRC=$(readlink -f "$1")

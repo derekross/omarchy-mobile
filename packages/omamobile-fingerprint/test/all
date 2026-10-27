@@ -6,6 +6,13 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "FAIL: $*" >&2; exit 1; }
 for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; done
+# Each phone: its trusted app, its KeyMint HAL and its bootloader properties.
+grep -c 'TA=g7.app' lib/omamobile-fp-chroot >/dev/null || fail "cheetah loads g7.app"
+grep -c 'TA=g7a.app' lib/omamobile-fp-chroot >/dev/null || fail "tegu loads g7a.app"
+grep -c 'keymint-service.rust.trusty' lib/omamobile-fp-chroot >/dev/null || fail "tegu runs the Rust KeyMint"
+grep -c '^ro.hardware=tegu$' lib/props-tegu.conf >/dev/null || fail "props-tegu.conf"
+grep -c '^ro.hardware=cheetah$' lib/props-cheetah.conf >/dev/null || fail "props-cheetah.conf"
+grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a phone's ro.hardware"
 for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
 done
@@ -27,6 +34,7 @@ stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile-tipc-probe \
          usr/lib/omamobile-fp/omamobile-fp-ctl \
          usr/lib/omamobile-fp/props.conf usr/lib/omamobile-fp/omamobile-fp-shim.so \
+         usr/lib/omamobile-fp/props-cheetah.conf usr/lib/omamobile-fp/props-tegu.conf \
          usr/lib/omamobile-fp/omamobile-fp-bridge usr/lib/systemd/system/omamobile-fp.service \
          usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf; do
   [[ -e $stage/$f ]] || fail "not staged: $f"

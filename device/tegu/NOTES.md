@@ -89,6 +89,94 @@ Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, tools at `7310
 
 Packages: hyprland 0.56.2-5.1, libcamera 0.7.2-4.16, mesa 1:26.2.4-1.4, omacam 0.1.9-1, omamobile-apps 0.2.0-1, omamobile-audio 0.4.1-1, omamobile-device-tegu 0.1.0-1, omamobile-fingerprint 0.1.8-1, omamobile-firstboot 0.1.0-1, omamobile-gnss 0.2.1-1, omamobile-keyring 20261013-1, omamobile-mirror 0.1.1-1, omamobile-modem 0.1.4-1, omamobile-omarchy 0.1.4-1, omamobile-owl-widgets 0.1.1-1, omamobile-sensors 0.2.0-1, omamobile-shell 0.2.17-1, omarchy 4.0.6-1, quickshell 0.3.2.r7.g2b4501a-1
 
+## 2026-10-24: local curated candidate
+
+[V] A later candidate, `7.3.0-rc6-omamobile-tegu-g7e457a96fc45`, reaches
+native Arch on internal userdata and starts Panthor, the G715 Omarchy
+session and the read-only fuel gauge locally. The laptop sends nothing
+during the boot (no go-ahead, no driver load, no confirmation): the palmtop
+finishes the recorded startup on its own.
+Matching modules, storage guard, watchdog and protected-partition/image
+checks pass. Physical gestures and unplugged cold boot were not requalified
+by this test. The staged startup policy remains; this is not an installable public
+kernel or device-package release.
+
+[V] The same Image with board source `79288b2a3574` also registers the
+ALIVE GPIO provider and native gpio-keys while preserving inherited pulls.
+Input keycodes, IRQ ownership and shell bindings pass metadata/state checks;
+physical presses, display wake and suspend remain unqualified. A later
+boot removes both temporary reboot helpers, the out-of-tree modules
+`tegu-reboot-probe` (writes the bootloader reason at PMU 0x810 through the
+kernel's SMC-backed PMU regmap) and `tegu-reboot-normal` (its normal-mode
+counterpart, a reboot notifier only), both in `device/tegu/probes/`.
+Ordinary `systemctl reboot` with no reason returns to the native desktop
+automatically; an explicit bootloader reboot reaches Fastboot, and flashing
+the same five slot B images back (`bin/omamobile flash`: `boot_b`,
+`init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`, each
+hash-checked against the candidate set) returns to the same native profile.
+Fresh root, protected-data and image checks pass after each. That kernel
+(`7e457a96fc45`) predates kernel #45's merge, and I did not record whether
+its reboot-mode code matches #45, so the plain `systemctl reboot` result is
+not evidence for #45. Unplugged cold boot and production packaging remain
+open; these results do not qualify those gates.
+
+The selected subsystem source and disabled board resources are being
+curated for separate kernel reviews in [tracking #28](https://github.com/derekross/omarchy-mobile/issues/28).
+Public main still lacks the complete board integration and install recipe.
+Do not enable the staged descriptor or infer Wi-Fi, charging/thermal,
+Bluetooth, haptics, sensors, audio, cameras or fingerprint support from this
+local desktop result. Earlier prototype observations below remain attributed
+to their original diagnostic kernel.
+
+## 2026-10-24: read-only gauge review, temperature deferred
+
+[V] Kernel PR38 driver blob `1e113081a07f0fc629842b31e3fb86b4f7c4fcdf`
+(`drivers/power/supply/max77779_battery.c`) excludes TEMP reporting.
+Google's GPL driver substitutes 22 C for firmware revision 1 with
+subrevision below 15; this gate does not establish the
+retail gauge firmware revision or a stock-temperature comparison.
+
+The exact signed C source is compiled as an ARM64 W=1 module against the
+running curated `7.3.0-rc6-omamobile-tegu-g7e457a96fc45` kernel. It uses
+that integration's qualified USI6/HSI2C6 bus, not an installable public
+kernel. The unchanged board node is:
+
+```dts
+fuel-gauge@36 {
+    compatible = "maxim,max77779-fg";
+    reg = <0x36>;
+    shunt-resistor-micro-ohms = <2000>;
+    status = "okay";
+};
+```
+
+[V] Load by hand, read twice 31.11 seconds apart, unload and restore the
+installed module all pass on one boot. Both snapshots report present,
+Li-ion, MAX77779, status Unknown, 93%, voltage/average 4.340390 V, charge
+4720 mAh, full 5045 mAh and design 5120 mAh. TEMP is absent. Relevant
+kernel lines, excluding the laptop log nonce:
+
+```text
+[  442.171460] max77779_battery: loading out-of-tree module taints kernel.
+[  442.174098] max77779-battery 0-0036: Read-only fuel gauge; firmware model retained
+[  473.361184] tegu-gauge-clean-review: two read-only snapshots complete; unloading test module
+[  473.419985] max77779-battery 0-0036: Read-only fuel gauge; firmware model retained
+[  473.432595] tegu-gauge-clean-review: installed gauge restored
+```
+
+[V] Laptop kmsg, PID1 hardware watchdog and independent recovery cover the
+test. Fresh root/guard, six protected checksums and five B payloads pass;
+both recovery timers are canceled and confirmed inactive on a fresh login.
+An earlier attempt also read and restored the module, but host cleanup
+failed on a collected timer, leaving the emergency reset armed. It fired
+(the controller's 150 s reset timer; it came back on slot B, the only
+slot with the native desktop, on the same five images);
+the owner confirmed the recovered desktop and full checks passed before
+this clean repeat. This was a test-controller failure, not a demonstrated
+gauge fault. No model, NVM, charging, current-direction, rail or voltage
+setting is written. The original driver remains installed; production
+package migration, thermal control and suspend remain separate.
+
 ## Sources and firmware gate
 
 - `R0/`: private retail capture `tegu-20261020-1349`, before unlocking:

@@ -104,6 +104,15 @@ fi
 if omarchy-done ensure omamobile-monitor-scale; then
   sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
 fi
+# ...and GDK_SCALE to match (TOUCH-PLAN 2.8): at Omarchy's 2, X11 GTK apps
+# (xwayland force_zero_scaling) drew at two thirds of the size of the rest.
+# Once, for new and existing users, and only while the monitor scale is the
+# phone's 3 and GDK_SCALE is still Omarchy's 2 (a user's own values stay).
+if omarchy-done ensure omamobile-gdk-scale; then
+  if grep -c '^local omarchy_monitor_scale = 3$' ~/.config/hypr/monitors.lua >/dev/null 2>&1; then
+    sed -i 's/^local omarchy_gdk_scale = 2$/local omarchy_gdk_scale = 3/' ~/.config/hypr/monitors.lua
+  fi
+fi
 
 # Touch phone: no pointer on screen (it still hides on touch if a USB mouse is
 # attached and the user turns it back on). Added once to the user's override
@@ -211,6 +220,17 @@ if omarchy-done ensure omamobile-chromium-scale-3; then
     echo --force-device-scale-factor=0.83 >>~/.config/chromium-flags.conf
 fi
 
+# Web text fields should raise the on-screen keyboard (TOUCH-PLAN 3.1): on
+# Wayland, Chromium talks to an input method only with --enable-wayland-ime,
+# and squeekboard gets text-input-v3 from Hyprland. Each flag once, unless the
+# user's file already has it.
+if omarchy-done ensure omamobile-chromium-wayland-ime; then
+  for flag in --enable-wayland-ime --wayland-text-input-version=3; do
+    grep -cx -- "$flag" ~/.config/chromium-flags.conf >/dev/null 2>&1 ||
+      echo "$flag" >>~/.config/chromium-flags.conf
+  done
+fi
+
 # Style > Unlock picks the look of the disk-encryption unlock screen. The phone
 # has no encrypted disk, and the early boot logo follows the default theme, so
 # hide it through Omarchy's menu extension file (reused id + failing "when").
@@ -240,6 +260,20 @@ fi
 if omarchy-done ensure omamobile-screensaver; then
   install -Dm644 "$share/branding/screensaver.txt" ~/.config/omarchy/branding/screensaver.txt
   install -Dm644 "$share/branding/foot-screensaver.ini" ~/.config/foot/screensaver.ini
+fi
+
+# The terminal on a touch screen (TOUCH-PLAN 2.9): Omarchy's 14 px padding
+# costs 28 of 480 px, its scrollback multiplier of 7 makes drag-scrolling
+# jump, and a shorter long press starts a selection sooner. Once, in the
+# user's own foot.ini (Omarchy seeds it), and only where a value is still
+# Omarchy's: a value or [touch] section the user changed stays theirs.
+foot=~/.config/foot/foot.ini
+if [[ -f $foot ]] && omarchy-done ensure omamobile-foot-touch; then
+  sed -i -e 's/^pad=14x14$/pad=6x6/' \
+    -e '/^\[scrollback\]$/,/^\[/s/^multiplier=7\.0$/multiplier=3.0/' "$foot"
+  if ! grep -c '^\[touch\]' "$foot" >/dev/null; then
+    printf '\n[touch]\nlong-press-delay=300\n' >>"$foot"
+  fi
 fi
 
 # Hermes is the one agent in Omarchy's Setup > Default Agent with no aarch64
@@ -282,6 +316,10 @@ fi
 # unlocked and the in-call controls, from omatel's agent when it runs.
 if omarchy-done ensure omamobile-call-plugin; then
   add_plugin omamobile.call
+fi
+# The back gesture (omamobile.back): swipe in from a side edge for Escape.
+if omarchy-done ensure omamobile-back-plugin; then
+  add_plugin omamobile.back
 fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc

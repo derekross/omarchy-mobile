@@ -41,6 +41,10 @@ ln -sfn ../omamobile-setup-user.service "$destination/usr/lib/systemd/user/graph
 install -Dm644 systemd/user/omamobile-osk-guard.service "$destination/usr/lib/systemd/user/omamobile-osk-guard.service"
 install -d "$destination/usr/lib/systemd/user/graphical-session.target.wants"
 ln -sfn ../omamobile-osk-guard.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-osk-guard.service"
+# Sleep on screen-off, for every user's graphical session; it does nothing
+# until the user turns the omamobile-sleep toggle on.
+install -Dm644 systemd/user/omamobile-sleepd.service "$destination/usr/lib/systemd/user/omamobile-sleepd.service"
+ln -sfn ../omamobile-sleepd.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-sleepd.service"
 # The file chooser: xdg-desktop-portal-gnome on plain Wayland (its drop-in).
 install -Dm644 systemd/user/xdg-desktop-portal-gnome-omamobile.conf \
   "$destination/usr/lib/systemd/user/xdg-desktop-portal-gnome.service.d/omamobile.conf"

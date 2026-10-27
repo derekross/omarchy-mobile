@@ -51,6 +51,21 @@ check("a state line carries the calls, mute, route and replies",
       line["calls"][0]["number"] == "+12025550123" and line["muted"] and line["route"] == "speaker" and line["replies"] == ["x"], line)
 check("no agent, no calls", json.loads(cw.state_line(False, [("a", "", "", "", "", 0, 0)], {}, []))["calls"] == [])
 
+# The sleep inhibitor: held once while wanted, released once, and a
+# failure to take it leaves the phone unheld and retries later.
+events = []
+hold = cw.SleepHold(take=lambda: events.append("take") or 7, close=lambda fd: events.append(("close", fd)))
+hold.update(True); hold.update(True); hold.update(False); hold.update(False)
+check("a sleep hold is taken once and released once", events == ["take", ("close", 7)], events)
+tries = []
+def refuse():
+    tries.append(1)
+    raise RuntimeError("polkit said no")
+hold = cw.SleepHold(take=refuse, close=lambda fd: None)
+check("a refused hold leaves the phone unheld", hold.update(True) is False and hold.fd is None)
+hold.update(True)
+check("and is tried again at the next update", len(tries) == 2, tries)
+
 # ---------------------------------------------------------------- on a bus
 
 
@@ -116,7 +131,15 @@ GLib.MainLoop().run()
         dbus.SessionBus().get_object("org.omamobile.Phone1", "/org/omamobile/Phone1").Do(what, dbus_interface="org.test.Control")
 
     with tempfile.TemporaryDirectory() as home:
-        env = dict(os.environ, XDG_CONFIG_HOME=home)
+        hold_log = os.path.join(home, "hold.log")
+        env = dict(os.environ, XDG_CONFIG_HOME=home, OMAMOBILE_CALL_WATCH_HOLD_LOG=hold_log)
+
+        def holds():
+            try:
+                with open(hold_log) as f:
+                    return f.read().split()
+            except FileNotFoundError:
+                return []
         os.makedirs(os.path.join(home, "omatel"))
         with open(os.path.join(home, "omatel", "settings.toml"), "w") as f:
             f.write('quick_replies = ["Driving"]\n')
@@ -153,6 +176,7 @@ GLib.MainLoop().run()
                 ringing = until(lambda v: v["calls"] and v["calls"][0]["state"] == "ringing-in")
                 check("a ringing call is reported with its caller",
                       ringing is not None and ringing["calls"][0]["name"] == "Ada Lovelace", ringing)
+                check("a ringing call holds sleep off", holds() == ["hold"], holds())
                 control("answer")
                 active = until(lambda v: v["calls"] and v["calls"][0]["state"] == "active")
                 check("the answered call is reported", active is not None and active["calls"][0]["answeredMs"] == 2000, active)
@@ -162,6 +186,7 @@ GLib.MainLoop().run()
                 control("end")
                 ended = until(lambda v: v["calls"] == [])
                 check("the ended call goes away", ended is not None)
+                check("the hold lasts the call and ends with it", holds() == ["hold", "release"], holds())
                 control("quiet")
                 quiet = until(lambda v: v["calls"] and v["calls"][0]["id"] == "/c/9")
                 check("a silenced call is marked silenced", quiet is not None and quiet["calls"][0]["silenced"] is True, quiet)
@@ -170,6 +195,7 @@ GLib.MainLoop().run()
                 agent.wait(timeout=5)
             gone = until(lambda v: not v["agent"])
             check("sees the agent go away", gone is not None)
+            check("an agent gone with a call ringing releases the hold", holds() == ["hold", "release", "hold", "release"], holds())
             agent = start_agent()
             back = until(lambda v: v["agent"])
             check("and come back", back is not None)
@@ -182,15 +208,21 @@ GLib.MainLoop().run()
 
 def observe_test():
     import dbus
-    w = subprocess.Popen([sys.executable, "-B", TOOL, "--observe"], stdout=subprocess.PIPE, text=True)
+    d = tempfile.mkdtemp()
+    hold_log = os.path.join(d, "hold.log")
+    w = subprocess.Popen([sys.executable, "-B", TOOL, "--observe"], stdout=subprocess.PIPE, text=True,
+                         env=dict(os.environ, OMAMOBILE_CALL_WATCH_HOLD_LOG=hold_log))
     try:
         r, _, _ = select.select([w.stdout], [], [], 5)
         first = json.loads(w.stdout.readline()) if r else None
         check("--observe still reports", first is not None and "calls" in first, first)
         check("--observe never takes the card's name", not dbus.SessionBus().name_has_owner("org.omamobile.CallCard"))
+        check("--observe never holds sleep off", not os.path.exists(hold_log))
     finally:
         w.terminate()
         w.wait(timeout=5)
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if os.environ.get("DBUS_SESSION_BUS_ADDRESS"):

@@ -9,14 +9,18 @@
 #   /out      where the raw image and the MANIFEST go
 # Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES and
 # ALLOW_MISSING (both space-separated), KERNEL_RELEASE, MODULES_SHA256,
-# GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, OUT_UID, OUT_GID.
+# GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL.
 set -euo pipefail
 
 T=/target
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 list() { sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'; }
-trap 'chown -R "$OUT_UID:$OUT_GID" /var/cache/pacman/pkg /out 2>/dev/null || true' EXIT
+# Hand the mounts back to the owners they arrived with: under rootless Docker
+# the host user is the container's root and a host uid passed in from outside
+# would map to a subordinate uid the host user can't read (issue #73).
+out_owner=$(stat -c %u:%g /out) cache_owner=$(stat -c %u:%g /var/cache/pacman/pkg)
+trap 'chown -R "$out_owner" /out 2>/dev/null; chown -R "$cache_owner" /var/cache/pacman/pkg 2>/dev/null || true' EXIT
 
 # [omamobile] first, from the repository being shipped
 sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf

@@ -31,16 +31,20 @@ var CATALOG = [
   { id: "screenshot", label: "Screenshot" },
   { id: "screen-record", label: "Screen record" },
   { id: "fingerprint", label: "Fingerprint" },
-  { id: "keyboard", label: "Keyboard" }
+  { id: "keyboard", label: "Keyboard" },
+  { id: "clipboard", label: "Clipboard" },
+  { id: "dictation", label: "Dictation" }
 ]
 
 // The first four are the collapsed sheet's row, as on Android: the toggles
-// reached for most.
+// reached for most. Clipboard and Dictation close the second page: Omarchy
+// reaches them only by keyboard shortcut, so a tile is their touch path
+// (TOUCH-PLAN 1.12), and appending them leaves the first page as it was.
 var DEFAULT_LAYOUT = [
   "wifi", "bluetooth", "dnd", "torch",
   "mobile-data", "rotation-lock", "airplane", "location",
   "battery-saver", "dark-theme", "night-light", "nfc",
-  "fingerprint", "keyboard"
+  "fingerprint", "keyboard", "clipboard", "dictation"
 ]
 
 var QUICK_COUNT = 4
@@ -191,6 +195,17 @@ function powerStatus(profile) {
   return "No power profiles"
 }
 
+// The Dictation tile's status from tile-state.sh's dictation key: voxtype
+// missing, installed but its daemon not running, idle, recording, or
+// transcribing what was recorded.
+function dictationStatus(state) {
+  if (state === "on") return "Listening"
+  if (state === "busy") return "Transcribing…"
+  if (state === "off") return "Off"
+  if (state === "down") return "Not running"
+  return "Not installed"
+}
+
 function themeName(name) {
   return String(name || "").split("-").filter(function(part) { return part.length > 0 })
     .map(function(part) { return part.charAt(0).toUpperCase() + part.slice(1) }).join(" ")
@@ -221,6 +236,7 @@ if (typeof module !== "undefined") {
     pages: pages,
     parseProbe: parseProbe,
     powerStatus: powerStatus,
+    dictationStatus: dictationStatus,
     themeName: themeName
   }
 }

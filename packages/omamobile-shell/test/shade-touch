@@ -1,0 +1,22 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The quick-settings shade's rows under touch, offscreen in qmltestrunner:
+# NotificationRow.qml itself, with Omarchy's modules stubbed
+# (test/qml-stubs), in a list built as the shade builds it. A swipe takes
+# one notification away, a short one springs back, a tap still runs the
+# row's action and a vertical drag still scrolls. No compositor, no
+# Quickshell. Exits 77 without qmltestrunner.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.quicksettings
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "shade-touch: no qmltestrunner" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/quicksettings"
+cp "$plugin/NotificationRow.qml" "$plugin/NotificationsModel.js" "$plugin/Readable.js" "$work/quicksettings/"
+cp "$here/shade-touch.qml" "$work/tst_shade_touch.qml"
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+exec "$runner" -import "$here/qml-stubs" -input "$work/tst_shade_touch.qml"

@@ -14,13 +14,14 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 19 tiles the user arranges, brightness and volume; Wi-Fi picker and Bluetooth panel |
+| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | `omamobile.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
+| `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -47,9 +48,10 @@ The phone has no touch lock yet (below), so idle stays off for now.
 
 A full bar that replaces `omarchy.bar`. It is 44 px tall (or the theme's bar
 size if larger), anchored to the top, and reserves its height so windows tile
-below it. Left: the clock. Right: do-not-disturb (when on), Bluetooth (when
-on), cellular signal (when a modem exists), Wi-Fi or Ethernet, battery glyph
-and percentage. The centre is left empty for the camera cutout.
+below it. Left: the clock. Right: the unread notification count (when
+there is one), do-not-disturb (when on), Bluetooth (when on), cellular
+signal (when a modem exists), Wi-Fi or Ethernet, battery glyph and
+percentage. The centre is left empty for the camera cutout.
 
 The whole strip is one touch target: a tap toggles quick settings, a downward
 pull past ~14 px opens it.
@@ -67,6 +69,16 @@ Settings live on the `bar` object in `shell.json`:
 | `showBatteryPercent` | `true` | |
 | `quickSettings` | `"omamobile.quicksettings"` | Plugin id the bar opens |
 
+**Unread notifications:** an accent pill with the number of files in
+Omarchy's notification history (`~/.local/state/omarchy/notifications/history/`,
+one `<timestamp>-<id>.json` per notification, at most ten) newer than the
+newest notification the quick-settings shade has shown. The notification
+service has no count to read through the host's proxy, so the bar watches
+the directory (`Qt.labs.folderlistmodel`, a file system watcher, not a poll).
+The shade records its mark in `~/.local/state/omamobile/notifications-seen`
+and calls `notificationsSeen` below. A toast that was acted on also lands in
+history, so it counts until the shade has been opened.
+
 **Mobile network and calls:** the cellular icon and the call chip come from
 `omamobile-cell-watch` and `omamobile-call-watch --observe` (see
 omamobile.call below); without a modem or omatel's agent they don't show.
@@ -78,6 +90,8 @@ gesture or key binds it yet:
 | --- | --- |
 | `pullDown` | Open quick settings |
 | `toggleQuickSettings` | Open or close it |
+| `notificationsSeen <timestamp>` | Notifications up to this one (milliseconds) have been seen; returns the unread count |
+| `unread` | The unread count |
 
 ## omamobile.quicksettings
 
@@ -98,8 +112,10 @@ to the file by hand show on the next refresh.
 
 Default order: Wi-Fi, Bluetooth, Do not disturb, Torch (the collapsed row),
 Mobile data, Rotation lock, Airplane mode, Location, Battery saver, Dark
-theme, Night light, NFC, Fingerprint, Keyboard. Hotspot, Stay awake,
-Microphone, Screenshot and Screen record start under "Add tiles".
+theme, Night light, NFC, Fingerprint, Keyboard, Clipboard, Dictation.
+Hotspot, Stay awake, Microphone, Screenshot and Screen record start under
+"Add tiles". A user who saved a layout before Clipboard and Dictation
+existed finds them under "Add tiles" too.
 
 | Tile | Backend |
 | --- | --- |
@@ -111,7 +127,7 @@ Microphone, Screenshot and Screen record start under "Add tiles".
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
 | Dark theme | Swaps between the user's last dark and last light Omarchy theme (`omarchy-theme-set`; defaults Tokyo Night and Catppuccin Latte, choices kept in `~/.local/state/omamobile/theme-{dark,light}`). Long-press opens Omarchy's theme picker |
 | Night light | `omarchy-toggle-nightlight` (hyprsunset); "No hyprsunset" without it |
-| Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator |
+| Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator. It also keeps the phone out of sleep: `omamobile-sleepd` refuses while it is on, even with the screen off (a download, a long task) |
 | Microphone | Mute of PipeWire's default source; "No microphone" without one |
 | Screenshot | Puts the sheet away, then `omarchy-capture-screenshot fullscreen` (file, clipboard and a notification) |
 | Screen record | `omarchy-capture-screenrecording --fullscreen`, a second tap `--stop-recording`; "No recorder" without gpu-screen-recorder |
@@ -120,6 +136,8 @@ Microphone, Screenshot and Screen record start under "Add tiles".
 | Rotation lock | `omamobile-autorotate` (omamobile-sensors): locked by `~/.local/state/omamobile/rotation-lock`; unlocking also enables the service. "No sensor" while the sensor proxy has no accelerometer |
 | Torch | The rear flash LED in torch mode (`brightnessctl --device=white:torch`); "No flash LED" without it |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
+| Clipboard | Puts the sheet away and opens Omarchy's clipboard history (`omarchy-shell shell summon omarchy.clipboard`, Super+Ctrl+V on the desktop); a pick pastes into the app underneath |
+| Dictation | voxtype (`voxtype record start`, a second tap `record stop`); a start puts the sheet away so the words land in the app underneath. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
 | Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omamobile.fingerprint`); the status counts this user's fingerprints through fprintd (`omamobile-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
@@ -133,6 +151,32 @@ beside the QML and are tested against fake commands in
 `test/tile-scripts.sh`.
 
 The plugin is `keepLoaded` so the sheet can animate out before it unmaps.
+
+### Settings and the notification shade
+
+The gear at the right of the sheet's header (44 px) puts the sheet away and
+opens Omarchy's menu at its root (`omarchy-menu summon root`): Setup, Style,
+Install, Update and the rest, which the phone otherwise reaches only from
+Power's hold menu (TOUCH-PLAN 1.3).
+
+Under the sheet, a second card is the notification shade (TOUCH-PLAN 1.1).
+It lists Omarchy's notifications, newest first: the toasts on screen and the
+history (Omarchy keeps ten), each with its glyph, app, age, summary and two
+lines of body as plain text. Omarchy's notification IPC can replay the
+history as toasts (`showHistory`) but returns none of it, so the shade reads
+the files the service keeps, `~/.local/state/omarchy/notifications/*.json`
+and `history/*.json` (format and rules in `NotificationsModel.js`, tests in
+`test/notifications-model.js`), when the sheet opens and every 3 s while it
+is open. A tap on a row puts the sheet away and runs what a tap on the toast
+runs: Omarchy's own action for its toasts (the `omarchy-exec-argv` hint the
+file keeps), otherwise `omarchy-hyprland-focus-app <app>`. Other senders'
+live actions die with the toast, so they can't be run from history.
+
+**Clear all** (44 px, two taps: the first turns it into "Clear all?" for 4 s)
+calls the notification service on this shell instance, `dismissAll` (the
+toasts on screen move into history) and then `clear` (history is emptied).
+The card takes the room left under the sheet and scrolls past that; it hides
+in edit mode, or when the sheet leaves no room for it.
 
 ### Wi-Fi picker
 
@@ -224,11 +268,14 @@ IPC:
 | `omarchy-shell shell summon omamobile.quicksettings '{"page":"bluetooth"}'` | Open the Bluetooth panel |
 | `omarchy-shell shell call omamobile.quicksettings openBluetooth ''` | The same; returns the panel's state, or `unavailable` |
 | `omarchy-shell shell call omamobile.quicksettings bluetoothPanel ''` | JSON: panel open, adapter name, power, discovering, visible, helper, paired, available (with RSSI and type), unnamed count, action, failure, sheet, pairing phase |
-| `omarchy-shell shell call omamobile.quicksettings toggleTile <name>` | Same as tapping a tile, shown or not. Names are the ids in `TilesModel.js`: `wifi`, `bluetooth`, `mobile-data`, `airplane`, `hotspot`, `dnd`, `torch`, `rotation-lock`, `location`, `nfc`, `battery-saver`, `dark-theme`, `night-light`, `stay-awake`, `mic`, `screenshot`, `screen-record`, `fingerprint`, `keyboard`. Returns the new state, `unavailable` or `unknown` |
+| `omarchy-shell shell call omamobile.quicksettings toggleTile <name>` | Same as tapping a tile, shown or not. Names are the ids in `TilesModel.js`: `wifi`, `bluetooth`, `mobile-data`, `airplane`, `hotspot`, `dnd`, `torch`, `rotation-lock`, `location`, `nfc`, `battery-saver`, `dark-theme`, `night-light`, `stay-awake`, `mic`, `screenshot`, `screen-record`, `fingerprint`, `keyboard`, `clipboard`, `dictation`. Returns the new state, `unavailable` or `unknown` |
 | `omarchy-shell shell summon omamobile.quicksettings '{"expanded":true}'` / `'{"page":"edit"}'` | Open expanded / in edit mode |
 | `omarchy-shell shell call omamobile.quicksettings showPage <n>` | Expand and show page n (from 0) |
 | `omarchy-shell shell call omamobile.quicksettings tiles ''` | JSON: every tile with shown, available, enabled and status |
 | `omarchy-shell shell call omamobile.quicksettings setTiles 'wifi torch dnd'` | Save a layout (space-separated ids: `qs ipc` splits arguments on commas); `resetTiles ''` saves the default |
+| `omarchy-shell shell call omamobile.quicksettings notificationRows ''` | JSON: the shade's rows as last read |
+| `omarchy-shell shell call omamobile.quicksettings clearNotifications ''` | Clear all, without the confirming tap |
+| `omarchy-shell shell call omamobile.quicksettings openSettings ''` | The gear: Omarchy's root menu |
 
 ## omamobile.launcher
 
@@ -237,10 +284,45 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
 * **Dock (always on screen).** A search pill, "Search apps or ask Claude…",
   in a bar-coloured strip that reserves its height so windows tile above it.
   Tapping it opens the drawer.
+* **Home pill (over an app, where the dock is hidden).** A light bar with a
+  dark outline, so it shows over dark and light apps, at the bottom middle.
+  Swipe up from it to go home; swipe up and hold, or further, for recent apps.
+  The swipe may start anywhere in a 240x44 px strip around it (an input mask:
+  the rest of the bottom edge stays the app's, but the app loses taps in that
+  strip).
+* **Under the keyboard.** While squeekboard is up over an app, the masked
+  strip gives way (it would take the bottom row's keys) and the pill moves
+  into a 32 px bar-coloured strip of its own under the keyboard, as Android's
+  gesture bar does. The same swipes work from anywhere along it. Bottom to
+  top:
+
+  ```
+  +-----------------------------+
+  | app (resized above both)    |
+  | [hide-keyboard button]      |  omamobile-osk-hide, overlay, normal exclusion
+  +-----------------------------+
+  | squeekboard                 |  "osk", top layer, reserves its height
+  +-----------------------------+
+  |         ==========          |  omamobile-home-strip, bottom layer, 32 px,
+  +-----------------------------+  reserves its height
+  ```
+
+  The strip is on the bottom layer and reserves its height (an exclusive
+  zone). Hyprland lays out the surfaces that reserve space layer by layer
+  from the bottom, so the strip takes the screen's edge first and the
+  keyboard sits right above it, as it sits above the dock on the home
+  screen; the strip covers no key, and a swipe that starts in it stays its
+  own as the finger crosses the keyboard. It isn't shown for a fullscreen
+  window, with the drawer open, or under the lock screen's keyboard (asked
+  through `omarchy-shell lock isLocked` each time the keyboard comes up).
+  The log names where a swipe started:
+  `omamobile-home-indicator: swipe -142 recents (keyboard)`, or `(pill)`.
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
-  sits by your thumb, highlighted.
+  sits by your thumb, highlighted. Pull the header down, or the grid when it
+  is scrolled to its top, past about 80 px to close it (the drawer follows the
+  finger); the chevron at the top right still closes it too.
 * **Ask the agent.** Any text also offers an "Ask Claude" row above the input.
   Text that reads as a prompt (3+ words, ends in `?`, `.` or `!`, or matches no
   app) makes that row the primary action: it is highlighted, the input glyph
@@ -306,6 +388,17 @@ prompt, NFC links and the Create-a-widget agent.
   reverse-DNS part, Exec's program; web apps by their `chrome-<host>_` class).
   Terminals (and `omamobile-launch app --new`) always open a new window, each
   on its own screen. Links open in the running browser, shown first.
+* **Clear all** in recent apps takes two taps (the first turns it into
+  "Close N apps?" for 4 s), closes every window, then leaves recent apps.
+  Each window gets the foreign-toplevel close request; one still open 2 s
+  later gets Hyprland's (`hl.dsp.window.close({ window = "address:…" })`).
+  The log says `omamobile-switcher: clear all, closing N windows`, and
+  `… N still open, closing through Hyprland` when the second request was
+  needed. The bottom buttons take their taps with an exclusive TapHandler,
+  in a band that swallows touches: under touch (not a mouse), a passive
+  TapHandler let the tap reach the tap-to-dismiss area under them too, which
+  closed recent apps and disarmed Clear all before it could close anything.
+  `test/switcher-touch` taps them with a finger, offscreen.
 * **Together on request.** In recent apps, hold a card: **Show with…** lists
   the apps on other screens and moves this one onto the one you pick, where
   the two tile as Omarchy tiles them; **Move to its own screen** (shown when
@@ -335,7 +428,9 @@ wallpaper, swiped sideways, with page dots above the dock.
   drag an item to move it (dropped on an item of the same size, the two swap;
   on a bigger one, it takes the nearest free cell; dragged past the left or
   right edge, it moves to that page, making a new page on the right), drag
-  the round corner handle to resize a widget, tap the cross to remove, tap a
+  the round corner handle to resize a widget, tap the cross to remove (an
+  **Undo** chip stays for 5 seconds and puts the item back, with its
+  settings, where it was or in the nearest free cell), tap a
   widget for its settings. The toolbar: **Widgets** and **Apps** add to the
   page on screen (or the next one with room), **Wallpaper** opens Omarchy's
   Style menu (what the desktop's long-press opened before this surface
@@ -404,6 +499,7 @@ IPC (`omarchy-shell shell call omamobile.home <method> <arg>`):
 | `dump ''` | The layout as stored |
 | `goHome ''` / `page <n>` | Show the home page / page n (from 0) |
 | `edit on` / `edit off` | Enter (returns `busy` during a fingerprint operation) or leave edit mode |
+| `undo ''` | Put back the item removed last, while its Undo chip shows; `none` otherwise |
 | `addApp <desktop id>` / `addWidget <type>` | Add to the page on screen; returns the new item's id or `full` |
 | `showSheet widgets\|apps\|pages\|create` / `settings <item id>` | Open an edit sheet / a widget's settings |
 | `widgets ''` / `widgetStatus <id>` | JSON: the user's widgets (or one) with status, errors, warnings, capabilities, undeclared capabilities, hash, folder and how often it is placed |
@@ -600,6 +696,28 @@ keyboard on demand (showing closes the sheet).
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).
 
+## omamobile.back
+
+The back gesture, as on Android: swipe in from the left or right edge and let
+go once the arrow fills in (about 56 px in, more across than along the edge).
+Back is Escape, sent through Hyprland's own dispatcher
+(`hl.dsp.send_key_state`, a key down and a key up 50 ms later, as Omarchy's
+clipboard bindings send keys) to whatever has the keyboard focus: an app's
+dialog, menu or popover, a terminal app, or a shell sheet or the drawer. A
+sheet that doesn't take the keyboard (the home screen's Widgets and Pages
+sheets) closes with a tap outside it instead.
+
+Each edge is a 14 px strip on the overlay layer, masked like the home pill,
+in a window wide enough to draw the arrow that follows the finger. Normal
+exclusion keeps the strips between the status bar and the on-screen keyboard
+(or the dock), so they never take the keyboard's edge keys. They hide for a
+real fullscreen window, as the home pill does, and aren't shown over the
+lock. A page swipe on the home screen that starts in the outer 14 px goes
+back instead; start it further in.
+
+IPC: `omarchy-shell shell call omamobile.back back ''` (the same as the
+gesture) and `state ''`.
+
 ## omamobile.update
 
 Omarchy's update in a sheet, since its terminal update (gum prompts and the
@@ -721,7 +839,9 @@ and `omamobile-call-top` (the strip), on the overlay layer, with
   mute, route, the replies) as a JSON line per change, lights the screen
   when a call rings (`omarchy-shell lock wake`, as the power key), and owns
   `org.omamobile.CallCard` while it runs, so the agent can tell the shell
-  shows ringing calls itself. The plugin asks `omarchy-shell lock isLocked`
+  shows ringing calls itself. While a call rings or runs it holds a logind
+  sleep inhibitor (block mode), so the phone never sleeps under a call
+  (`omamobile-sleepd`, SUSPEND-PLAN 6.1). The plugin asks `omarchy-shell lock isLocked`
   once a second while a call exists.
 * **Requests:** `busctl --user call org.omamobile.Phone1 … Answer|Decline|
   Hangup|SetMute|SetRoute` and `org.omamobile.Messages1 … Send` for a reply,

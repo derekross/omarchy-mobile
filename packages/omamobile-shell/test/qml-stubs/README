@@ -1,0 +1,4 @@
+Stand-ins for the Quickshell and Omarchy shell modules, just enough for a
+plugin's QML to load under qmltestrunner (offscreen, no compositor). Each
+test script copies the plugin, strips its layer-shell lines and points
+QML_IMPORT_PATH here. Calls the stubs receive are recorded for the test.

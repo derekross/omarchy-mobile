@@ -14,8 +14,10 @@ install -Dm755 bin/omamobile-gnss "$d/usr/bin/omamobile-gnss"
 for f in lib/*; do install -Dm755 "$f" "$v/${f#lib/}"; done
 chmod 644 "$v/omamobile-gnss-conf"	# sourced, not run
 install -Dm644 profiles/gnss.conf "$v/profiles/gnss.conf"
+install -Dm644 profiles/gnss-slsi.conf "$v/profiles/gnss-slsi.conf"
 install -Dm644 gnss/props.conf "$v/gnss/props.conf"
 install -Dm644 bionic/prebuilt/omamobile-fp-shim.so "$v/omamobile-fp-shim.so"
+install -Dm755 bionic/prebuilt/omamobile-gnss-client "$v/omamobile-gnss-client"
 for f in bionic/prebuilt/stubs/*.so; do install -Dm644 "$f" "$v/stubs/${f##*/}"; done
 for f in vendor/systemd/system/*; do install -Dm644 "$f" "$d/usr/lib/systemd/system/${f##*/}"; done
 install -Dm644 vendor/systemd/user/omamobile-geoclue-agent.service "$d/usr/lib/systemd/user/omamobile-geoclue-agent.service"

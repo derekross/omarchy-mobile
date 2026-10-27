@@ -1,0 +1,28 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile's system setup: what a platform's "setup-system" step does in
+# Omarchy's lifecycle contract. Runs as root; safe to rerun.
+#   omamobile-setup-system [timezone]
+set -euo pipefail
+
+# UTF-8 locale (Qt and Omarchy's tools expect one)
+sed -i 's/^#\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen >/dev/null
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+# Time: no battery-backed clock is used yet, so keep NTP on
+if [[ -n ${1:-} ]]; then
+  ln -sf "/usr/share/zoneinfo/$1" /etc/localtime
+fi
+systemctl enable --now systemd-timesyncd >/dev/null 2>&1 || true
+
+# The phone's services from the other Omarchy Mobile packages: enabled here,
+# once, because packages don't enable units themselves (the device package
+# ships its own boot units as .wants links). The fingerprint service stays
+# off: its first start writes Trusty's secure storage (FINGERPRINT-PLAN).
+# Speaker protection stays off too: its ceilings and calibration flow are
+# validated on cheetah's amplifiers only (AUDIO-PLAN.md).
+for unit in omamobile-sensor-proxy.service \
+    omamobile-nfc-open.service omamobile-gnss-nmea.socket omamobile-gnss-lto.timer; do
+  systemctl cat "$unit" >/dev/null 2>&1 && systemctl enable "$unit" >/dev/null 2>&1 || true
+done

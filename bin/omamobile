@@ -271,12 +271,29 @@ cmd_modules_push() {
 # initramfs's /etc). Without $1 it only checks the descriptor's values.
 initramfs_config() {
   local etc=${1:-} rw
-  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} || -n ${DEV_BRINGUP_PROBE:-} ]]; then
+  # Every board-specific step in the init checks the board against COMPATIBLE
+  local board_step=""
+  [[ -n ${DEV_SIMPLEFB_TRIG_CON:-}${DEV_BRINGUP_PROBE:-}${DEV_INITRAMFS_MODULES:-}${DEV_USB_SWITCH:-} ]] && board_step=1
+  if [[ -n $board_step ]]; then
     [[ -n ${DEV_COMPATIBLE:-} ]] || die "COMPATIBLE is missing"
   fi
+  if [[ -n ${DEV_USB_SWITCH:-} ]]; then
+    [[ $DEV_USB_SWITCH =~ ^[0-9a-f]+\.i2c[[:space:]]+0x[0-9a-fA-F]{2}$ ]] \
+      || die "USB_SWITCH must be \"<controller>.i2c 0xADDR\" (the MAX77759 TCPC)"
+    [[ ${DEV_INITRAMFS_I2C_TOOLS:-} == 1 ]] || die "USB_SWITCH needs INITRAMFS_I2C_TOOLS=1"
+  fi
+  if [[ -n ${DEV_INITRAMFS_FB_WAIT:-} ]]; then
+    [[ $DEV_INITRAMFS_FB_WAIT == 1 ]] || die "INITRAMFS_FB_WAIT must be 1 or absent"
+  fi
   if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
-    [[ $DEV_SIMPLEFB_TRIG_CON =~ ^0x[0-9a-fA-F]+[[:space:]]+0x[0-9a-fA-F]+$ ]] \
-      || die "SIMPLEFB_TRIG_CON must be \"0xADDR 0xVALUE\" (hex)"
+    local rest=$DEV_SIMPLEFB_TRIG_CON trig_pairs=()
+    while [[ -n $rest ]]; do
+      [[ $rest =~ ^(0x[0-9a-fA-F]+)[[:space:]]+(0x[0-9a-fA-F]+)[[:space:]]*(.*)$ ]] \
+        || die "SIMPLEFB_TRIG_CON must be \"0xADDR 0xVALUE\" pairs"
+      trig_pairs+=("${BASH_REMATCH[1]} ${BASH_REMATCH[2]}")
+      rest=${BASH_REMATCH[3]}
+    done
+    DEV_SIMPLEFB_TRIG_LINES=$(printf '%s\n' "${trig_pairs[@]}")
   fi
   if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
     [[ $DEV_BRINGUP_PROBE == 1 ]] || die "BRINGUP_PROBE must be 1 or absent"
@@ -296,15 +313,24 @@ initramfs_config() {
   [[ -n $etc ]] || return 0
   mkdir -p "$etc"
 
-  # This device's simplefb trigger, and nothing else's. The init writes
-  # exactly this pair, and only when the board matches COMPATIBLE.
-  # Absent or empty: it writes no display register. The bring-up probe
-  # uses the same COMPATIBLE file, so it is packed for either step.
-  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} || -n ${DEV_BRINGUP_PROBE:-} ]]; then
+  # This device's simplefb triggers, and nothing else's. The init writes
+  # each pair, and only when the board matches COMPATIBLE.
+  # Absent or empty: it writes no display register. The bring-up probe,
+  # the module loader and the USB switch use the same COMPATIBLE file, so it
+  # is packed for any of them.
+  if [[ -n $board_step ]]; then
     printf '%s\n' "$DEV_COMPATIBLE" > "$etc/omamobile-compatible"
   fi
+  # The MAX77759 USB switch's I2C controller and address, for usb_switch
+  if [[ -n ${DEV_USB_SWITCH:-} ]]; then
+    printf '%s\n' "$DEV_USB_SWITCH" > "$etc/omamobile-usb-switch"
+  fi
+  # Draw the splash once fb0 exists rather than at once
+  if [[ -n ${DEV_INITRAMFS_FB_WAIT:-} ]]; then
+    : > "$etc/omamobile-fb-wait"
+  fi
   if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
-    printf '%s\n' "$DEV_SIMPLEFB_TRIG_CON" > "$etc/omamobile-simplefb-trig"
+    printf '%s\n' "$DEV_SIMPLEFB_TRIG_LINES" > "$etc/omamobile-simplefb-trig"
   fi
   # DPP and watchdog reads. Off unless the descriptor asks, and the init
   # still refuses them when the board does not match COMPATIBLE.
@@ -358,12 +384,50 @@ cmd_initramfs() {
   for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra); do
     tar -xzf "$apk" -C "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
   done
+  # INITRAMFS_I2C_TOOLS=1: i2cget and i2cset (and their libi2c) for a device
+  # whose init talks to a chip before any driver runs; nothing else from
+  # i2c-tools (its perl scripts can't run here)
+  if [[ ${DEV_INITRAMFS_I2C_TOOLS:-} == 1 ]]; then
+    local i2c f
+    i2c=$(mktemp -d)
+    for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" i2c-tools); do
+      tar -xzf "$apk" -C "$i2c" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
+    done
+    for f in usr/sbin/i2cget usr/sbin/i2cset; do
+      [[ -f $i2c/$f ]] || { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: no $f in Alpine's i2c-tools"; }
+      install -Dm755 "$i2c/$f" "$stage/$f"
+    done
+    cp -a "$i2c"/usr/lib/libi2c.so.0* "$stage/usr/lib/"
+    rm -rf "$i2c"
+  elif [[ -n ${DEV_INITRAMFS_I2C_TOOLS:-} ]]; then
+    die "INITRAMFS_I2C_TOOLS must be 1 or absent"
+  fi
   for f in sbin/e2fsck usr/sbin/resize2fs usr/sbin/dumpe2fs; do
     [[ -x $stage/$f ]] || die "the initramfs has no /$f"
   done
   install -m 755 "$init" "$stage/init"
 
   initramfs_config "$stage/etc"
+  # Modules the init loads before anything else (INITRAMFS_MODULES, in load
+  # order), from this kernel build's modules_install: the directory of this
+  # build's release, never an older one left in modules-staging
+  local m ko mdir rel
+  if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
+    rel=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) ||
+      die "INITRAMFS_MODULES needs a kernel build: omamobile kernel"
+    mdir=$KERNEL_OUT/modules-staging/lib/modules/$rel
+    [[ -d $mdir ]] || die "INITRAMFS_MODULES needs this build's modules ($rel): omamobile modules"
+    mkdir -p "$stage/lib/modules/omamobile"
+    for m in $DEV_INITRAMFS_MODULES; do
+      [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
+      ko=$(find "$mdir" -name "$m.ko" | head -1)
+      [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $mdir"
+      cp "$ko" "$stage/lib/modules/omamobile/"
+      echo "$m" >> "$stage/lib/modules/omamobile/order"
+    done
+    echo "$rel" > "$KERNEL_OUT/initramfs.release"
+    say "Initramfs modules ($rel): $DEV_INITRAMFS_MODULES"
+  fi
 
   # Boot logo, drawn by init straight onto the framebuffer until Plymouth
   # takes over: Omarchy's Plymouth screen (logo centred on #1a1b26, at scale
@@ -457,6 +521,12 @@ cmd_images() {
   local dtb="$boot/dts/$DEV_DTB"
   [[ -f "$boot/Image" && -f "$dtb" ]] || die "build the kernel first: omamobile kernel"
   [[ -f "$KERNEL_OUT/initramfs.cpio.lz4" ]] || die "build the initramfs first: omamobile initramfs"
+  # The init insmods INITRAMFS_MODULES, which only load into the kernel they
+  # were built with: an initramfs from an older build loses them silently.
+  if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
+    [[ $(cat "$KERNEL_OUT/initramfs.release" 2>/dev/null) == "$(cat "$KERNEL_OUT/include/config/kernel.release")" ]] ||
+      die "the initramfs modules are not from this kernel build: omamobile modules && omamobile initramfs"
+  fi
   mkdir -p "$img" && rm -rf "$img"/*
 
   # The descriptor's bring-up overlays, compiled from device/<codename>/overlays
@@ -558,7 +628,11 @@ if got != want:
   python3 -I "$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py" create "$img/dtbo.img" \
     --page_size=4096 --id="$DEV_DTBO_BOARD_ID" --rev="$DEV_DTBO_BOARD_REV" "$dtbo"
 
-  say "Boot images (header v4)"
+  # Two layouts, picked by BOOT_IMAGES. With vendor_kernel_boot (cheetah), it
+  # carries the DTB and our initramfs, vendor_boot only the command line, and
+  # the OS version sits on init_boot. Without it (Pixel 6), vendor_boot
+  # carries all three and the OS version sits on boot.
+  say "Boot images (header v4): $DEV_BOOT_IMAGES"
   : | cpio -o -H newc --quiet > "$img/empty.cpio"
   local cmdline="$DEV_VENDOR_CMDLINE"
   # The generic ramdisk (empty) and the OS version go in init_boot where the

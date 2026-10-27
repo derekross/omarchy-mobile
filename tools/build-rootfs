@@ -99,7 +99,6 @@ docker run --rm --privileged --platform linux/arm64 \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \
-  -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
   "$image" bash /src/rootfs/build-inside
 
 alarm_say "Compressing"

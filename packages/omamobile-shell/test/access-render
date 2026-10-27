@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Offscreen review shots of the permission sheet (omamobile.access), in a dark
-# and a light Omarchy theme, with checks on the buttons' size and place.
+# Offscreen review shots of the permission sheet (omamobile.access), upright
+# and on its side (TOUCH-PLAN 2.4), in a dark and a light Omarchy theme,
+# with checks on the buttons' size and place.
 # Runs inside the OWL conformance container (tests/owl/Dockerfile: Qt,
 # Quickshell, the fonts), never on a desktop:
 #
@@ -10,10 +11,11 @@
 #     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/access-render /src/logs/access-render
 #
 # test/all runs it when OMAMOBILE_ACCESS_RENDER names an output directory.
+# OMAMOBILE_ACCESS_PLUGIN draws another tree's plugin instead (a before picture).
 set -euo pipefail
 out=${1:?Usage: access-render OUTDIR}
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-plugin=$here/../plugins/omamobile.access
+plugin=${OMAMOBILE_ACCESS_PLUGIN:-$here/../plugins/omamobile.access}
 [[ -d /omarchy-shell && -d /themes ]] || { echo "access-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
 command -v quickshell >/dev/null || { echo "access-render: no quickshell" >&2; exit 2; }
 mkdir -p "$out" /tmp/xdg
@@ -41,21 +43,24 @@ for theme in tokyo-night catppuccin-latte; do
   python3 - "$out" "$theme" "$h/app-icon.png" > "$h/job-$theme.json" <<'PY'
 import json, sys
 out, theme, icon = sys.argv[1:]
-def shot(name, **request):
+def shot(name, w=480, h=1040, **request):
     base = {"id": "ab12cd34ef56ab78", "appName": "Camera", "appIcon": icon, "glyph": "󰄀",
             "title": "Allow Camera to use the camera?",
             "body": "Camera wants to access the camera.\nYour choice is remembered for this app.",
             "denyLabel": "Don't allow", "grantLabel": "Allow"}
     base.update(request)
-    return {"name": name, "png": "%s/access-%s-%s.png" % (out, name, theme), "request": base}
+    return {"name": name, "png": "%s/access-%s-%s.png" % (out, name, theme), "request": base, "w": w, "h": h}
+long = dict(appName="A Very Long Application Name", appIcon="", glyph="󰒃",
+            title="Allow A Very Long Application Name to run in the background?",
+            body="A Very Long Application Name wants to be started automatically and run in the background.\nYour choice is remembered for this app.")
 print(json.dumps({"shots": [
     shot("camera"),
     shot("location", appName="Maps", appIcon="", glyph="󰍎", title="Allow Maps to access your location?",
          body="Maps wants to use your location.\nYour choice is remembered for this app.",
          denyLabel="Deny access", grantLabel="Grant access"),
-    shot("long", appName="A Very Long Application Name", appIcon="", glyph="󰒃",
-         title="Allow A Very Long Application Name to run in the background?",
-         body="A Very Long Application Name wants to be started automatically and run in the background.\nYour choice is remembered for this app."),
+    shot("long", **long),
+    shot("landscape-camera", 1040, 480),
+    shot("landscape-long", 1040, 480, **long),
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 ACCESS_JOB="$h/job-$theme.json" timeout 120 quickshell -p "$h/access-render.qml" > "$h/log-$theme" 2>&1 || true
@@ -65,14 +70,20 @@ import json, re, sys
 log, theme = sys.argv[1:]
 text = open(log).read()
 bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l)]
-shots = re.findall(r"geometry (\S+) (\[.*\])", text)
-ok = len(shots) == 3 and not bad
-for name, geo in shots:
+shots = re.findall(r"geometry (\S+) (\d+)x(\d+) (\[.*\])", text)
+ok = len(shots) == 5 and not bad
+if len(shots) != 5: print("not ok - %s: %d of 5 shots taken" % (theme, len(shots)))
+for name, w, h, geo in shots:
+    w, h = int(w), int(h)
     buttons = json.loads(geo)
-    fits = len(buttons) == 2 and all(b["h"] >= 56 and b["x"] >= 0 and b["x"] + b["w"] <= 480 and b["y"] + b["h"] <= 1040 for b in buttons)
-    stacked = len(buttons) == 2 and buttons[0]["y"] + buttons[0]["h"] <= buttons[1]["y"]
-    print("%s - %s %s: two buttons, at least 56 px, on screen, allow above deny" % ("ok" if fits and stacked else "not ok", theme, name))
-    ok = ok and fits and stacked
+    fits = len(buttons) == 2 and all(b["h"] >= 56 and b["x"] >= 0 and b["y"] >= 0 and b["x"] + b["w"] <= w and b["y"] + b["h"] <= h for b in buttons)
+    # Allow is the first button: above Deny upright, right of it on the side.
+    if w > h:
+        placed = len(buttons) == 2 and buttons[1]["x"] + buttons[1]["w"] <= buttons[0]["x"] and buttons[0]["y"] == buttons[1]["y"]
+    else:
+        placed = len(buttons) == 2 and buttons[0]["y"] + buttons[0]["h"] <= buttons[1]["y"]
+    print("%s - %s %s: two buttons, at least 56 px, on screen, allow %s deny" % ("ok" if fits and placed else "not ok", theme, name, "right of" if w > h else "above"))
+    ok = ok and fits and placed
 for l in bad:
     print("  " + l)
 sys.exit(0 if ok else 1)

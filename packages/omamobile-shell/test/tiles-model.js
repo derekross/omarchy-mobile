@@ -28,6 +28,15 @@ test("the default keeps the old ten tiles and leads with the most used", () => {
   assert.deepStrictEqual(M.quickRow(M.defaults()), ["wifi", "bluetooth", "dnd", "torch"])
 })
 
+test("Clipboard and Dictation close the default's second page, leaving the first as it was", () => {
+  assert.deepStrictEqual(M.pages(M.defaults())[0],
+    ["wifi", "bluetooth", "dnd", "torch", "mobile-data", "rotation-lock", "airplane", "location"])
+  assert.deepStrictEqual(M.DEFAULT_LAYOUT.slice(-2), ["clipboard", "dictation"])
+  assert.strictEqual(M.pages(M.defaults()).length, 2)
+  assert.strictEqual(M.label("clipboard"), "Clipboard")
+  assert.strictEqual(M.label("dictation"), "Dictation")
+})
+
 test("defaults() is a copy", () => {
   const list = M.defaults()
   list.push("hotspot")
@@ -125,6 +134,12 @@ test("status helpers", () => {
   assert.strictEqual(M.themeName("catppuccin-latte"), "Catppuccin Latte")
   assert.strictEqual(M.themeName(""), "")
   assert.strictEqual(M.label("dnd"), "Do not disturb")
+  assert.strictEqual(M.dictationStatus("on"), "Listening")
+  assert.strictEqual(M.dictationStatus("busy"), "Transcribing…")
+  assert.strictEqual(M.dictationStatus("off"), "Off")
+  assert.strictEqual(M.dictationStatus("down"), "Not running")
+  assert.strictEqual(M.dictationStatus("none"), "Not installed")
+  assert.strictEqual(M.dictationStatus(undefined), "Not installed")
 })
 
 let failed = 0

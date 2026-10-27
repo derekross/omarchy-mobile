@@ -18,8 +18,12 @@ phone isn't locked), unless --no-wake.
 While it runs it owns org.omamobile.CallCard, so the agent knows the shell
 shows ringing calls itself and needn't open the Phone app's answer page.
 
---observe only reports: no wake, no name. The status bar's call chip runs
-it that way beside the call card's own copy.
+While a call rings or runs it also holds a logind sleep inhibitor (block
+mode), so the phone doesn't sleep under the call: logind refuses suspend,
+and omamobile-sleepd doesn't ask (device/cheetah/SUSPEND-PLAN.md 6.1).
+
+--observe only reports: no wake, no name, no inhibitor. The status bar's
+call chip runs it that way beside the call card's own copy.
 
 Numbers and names travel to the plugin on stdout only; nothing is logged.
 It exits when stdout closes.
@@ -85,6 +89,48 @@ def state_line(agent, calls, props, replies):
     }, separators=(",", ":"))
 
 
+def logind_inhibit():
+    """A block-mode sleep inhibitor from logind: its file descriptor."""
+    import dbus
+    login1 = dbus.SystemBus().get_object("org.freedesktop.login1", "/org/freedesktop/login1")
+    fd = login1.Inhibit("sleep", "Omarchy Mobile calls", "A call is ringing or in progress", "block",
+                        dbus_interface="org.freedesktop.login1.Manager", timeout=5)
+    return fd.take()
+
+
+class SleepHold:
+    """Holds a sleep inhibitor while `update(True)`, releases it on
+    `update(False)`. `take` returns a file descriptor; closing it ends the
+    inhibitor. A failure (no logind, polkit said no) leaves the phone
+    unheld and is tried again at the next update."""
+
+    def __init__(self, take=logind_inhibit, close=os.close):
+        self.take, self.close, self.fd = take, close, None
+
+    def update(self, want):
+        if want and self.fd is None:
+            try:
+                self.fd = self.take()
+            except Exception:  # noqa: BLE001 (D-Bus, OSError: unheld, retried)
+                self.fd = None
+        elif not want and self.fd is not None:
+            try:
+                self.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        return self.fd is not None
+
+
+def test_hold(path):
+    """For tests: a SleepHold that writes "hold" and "release" to a file
+    instead of asking logind."""
+    def note(word):
+        with open(path, "a") as f:
+            f.write(word + "\n")
+    return SleepHold(take=lambda: note("hold") or 1, close=lambda fd: note("release"))
+
+
 def wake():
     """Light the display like the power key (omamobile-keys' wake_locked)."""
     try:
@@ -118,6 +164,10 @@ def main(argv):
         except dbus.DBusException:
             pass
     last = [None]
+    hold = None
+    if not observe:
+        test_log = os.environ.get("OMAMOBILE_CALL_WATCH_HOLD_LOG")
+        hold = test_hold(test_log) if test_log else SleepHold()
 
     def emit():
         """Report the agent's state; returns it, written or not."""
@@ -131,6 +181,8 @@ def main(argv):
             except dbus.DBusException:
                 agent, calls, props = False, [], {}
         line = state_line(agent, calls, props, quick_replies())
+        if hold is not None:
+            hold.update(bool(agent and calls))
         if line == last[0]:
             return line
         last[0] = line

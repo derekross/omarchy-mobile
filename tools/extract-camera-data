@@ -31,11 +31,24 @@ rate with a stand-in register writer that records what it writes; the
 writes that change with the rate become a rate table. The kernel's PHY
 driver needs this file for every camera.
 
+From the Pixel 9a's HAL (zumapro) the same pass writes zumapro-dcphy.bin
+in the same format, found automatically: there the HAL's CSIS PHY/link
+context is run once per rate and its PHY transaction recorded, with the
+receive equaliser at the HAL's defaults for a camera without a preset
+(see ZumaproPhy). For the PHY file alone, give --sensor none.
+
 Usage:
   tools/extract-camera-data --apex PATH/com.google.pixel.camera.hal.apex [-d DIR]
   tools/extract-camera-data --hal PATH/liblyric_hwl.so [-d DIR]
-  tools/extract-camera-data --hal ... --sensor imx386|s5kgn1|s5k3j1|s5kgm5 [-o OUT]
+  tools/extract-camera-data --hal ... --sensor imx386|s5kgn1|s5k3j1|s5kgm5|imx712|s5kgn8|none [-o OUT]
       [--phy-output OUT | --no-phy] [--with-pd] [--list]
+The Pixel 9a's ultrawide, a Sony IMX712 (imx712-uw.bin), is found the same
+way as the Samsung parts (its driver's virtual table) and written as data
+file version 1; give it with --sensor imx712 --no-phy. Its main camera, a
+Samsung S5KGN8 (s5kgn8-main.bin, data file version 2), is found as the
+S5K3J1 is, through the settings object its driver holds: --sensor s5kgn8
+--no-phy.
+
 Without --sensor it writes all four sensors' files and the PHY file into
 DIR; install them in /usr/lib/firmware/omamobile/camera/.
 
@@ -416,7 +429,7 @@ def build(hal, with_pd):
     return init, modes
 
 
-def write_fw(path, init, modes):
+def write_fw(path, init, modes, chip_id=CHIP_ID, bayer=0):
     hdr_size = 28
     mode_size = 28
     regs_blob = bytearray()
@@ -439,8 +452,8 @@ def write_fw(path, init, modes):
                                  info["link_freq"], 10, info["binning"], 0,
                                  base + off, n)
     # IMX386: RGGB as read out with no flip [I]; analogue gain code 0..480 [I]
-    hdr = struct.pack("<IHHHHHHHHII", FW_MAGIC, FW_VERSION, len(modes), CHIP_ID,
-                      0, 0, 480, 10, 0, base + init_off, init_n)
+    hdr = struct.pack("<IHHHHHHHHII", FW_MAGIC, FW_VERSION, len(modes), chip_id,
+                      bayer, 0, 480, 10, 0, base + init_off, init_n)
     assert len(hdr) == hdr_size and len(mode_recs) == mode_size * len(modes)
     with open(path, "wb") as f:
         f.write(hdr + mode_recs + regs_blob)
@@ -606,13 +619,23 @@ SAMSUNG_PARTS = {
                    reset=[(0xFCFC, 0x4000), (0x6010, 0x0001)]),
     "s5kgm5": dict(chip=0x08D5, bayer=1, again=(0x20, 0x200), margin=16,
                    out="s5kgm5-tele.bin", reset=[]),
+    # The Pixel 9a's main camera (stock sensor-barghest), model 0x08E8: its
+    # init list starts with the soft reset through the direct page (10 ms
+    # after it), its mode records have the IMX712's 1264-byte layout, and
+    # each record carries the link's raw10 throughput, which gives the C-PHY
+    # rate on its three trios (see samsung_mode_info).
+    # RGGB [V: the colour bars on the Pixel 9a read red at (0,0), blue at (1,1)]
+    "s5kgn8": dict(chip=0x08E8, bayer=0, again=(0x20, 0x200), margin=16,
+                   out="s5kgn8-main.bin",
+                   reset=[(0xFCFC, 0x4000), (0x6010, 0x0001)],
+                   rec=(1264, 0x148), link_rec=0x150, trios=3),
 }
 SAMSUNG_THIS_SIZE = 0x4000
 SAMSUNG_PAGE = 0xFCFC           # direct-access page; 0x4000 holds the CCS registers
 SAMSUNG_CCS_PAGE = 0x4000
 SAMSUNG_DELAY = 2**64 - 1       # a list record that is a delay in us, not a write
 # The HAL's mode records [HAL layout]: 1424 bytes, the pixel rate (pixels/s)
-# as a 32-bit word at 0x150.
+# as a 32-bit word at 0x150. A part's "rec" overrides both.
 SAMSUNG_REC_SIZE = 1424
 SAMSUNG_REC_PIXEL_RATE = 0x150
 
@@ -676,7 +699,70 @@ def samsung_providers(emu, near, holder_off):
             w, p = words[j], text + 4 * j
             page = (p & ~0xFFF) + ((((w >> 5) & 0x7FFFF) << 2 | (w >> 29) & 3) << 12)
             found.append(page + ((add[0] >> 10) & 0xFFF) + 0x10)
+    if not found:
+        found = _samsung_providers_built(emu, words, text, ctors)
     return sorted(set(found))
+
+
+def _adrp_vtable(words, text, j):
+    """The table address of 'adrp xN, page; add xN, xN, #lo; add xM, xN,
+    #0x10' starting at word j, or None."""
+    w = words[j]
+    if w & 0x9F000000 != 0x90000000:
+        return None
+    rn = w & 0x1F
+    p = text + 4 * j
+    page = (p & ~0xFFF) + ((((w >> 5) & 0x7FFFF) << 2 | (w >> 29) & 3) << 12)
+    for m in range(j + 1, min(j + 4, len(words))):
+        a = words[m]
+        if a & 0xFFC00000 == 0x91000000 and (a >> 5) & 0x1F == rn and a & 0x1F == rn:
+            lo = (a >> 10) & 0xFFF
+            for n in range(m + 1, min(m + 5, len(words))):
+                b = words[n]
+                if b & 0xFFC00000 == 0x91000000 and (b >> 5) & 0x1F == rn and \
+                        (b >> 10) & 0xFFF == 0x10:
+                    return page + lo + 0x10
+            return None
+    return None
+
+
+def _samsung_providers_built(emu, words, text, ctors):
+    """The settings object built away from 'operator new' (the Pixel 9a's
+    GN8): the caller allocates a small object (8 to 64 bytes), then either
+    stores a table it loads a few instructions later, or calls the object's
+    own constructor, which stores it."""
+    found = []
+    for i, w in enumerate(words):
+        if w & 0xFC000000 != 0x94000000 or \
+                branch_target(w, text + 4 * i) not in ctors:
+            continue
+        for k in range(max(i - 96, 3), i):
+            if words[k] & 0xFC000000 != 0x94000000 or \
+                    _bl_name(emu, text + 4 * k) != "_Znwm":
+                continue
+            sizes = [(x >> 5) & 0xFFFF for x in words[k - 3:k]
+                     if x & 0xFFE0001F == 0x52800000]
+            if not sizes or not 8 <= sizes[-1] <= 0x40:
+                continue
+            for j in range(k + 1, min(k + 40, i)):
+                vt = _adrp_vtable(words, text, j)
+                if vt is not None:
+                    found.append(vt)
+                    break
+                x = words[j]
+                if x & 0xFC000000 == 0x94000000 and _bl_name(emu, text + 4 * j) is None:
+                    ta = branch_target(x, text + 4 * j)
+                    t = (ta - text) // 4
+                    if ta in ctors or not 0 <= t < len(words):
+                        continue
+                    for m in range(t, min(t + 16, len(words))):
+                        vt = _adrp_vtable(words, text, m)
+                        if vt is not None:
+                            found.append(vt)
+                            break
+                    if vt is not None:
+                        break
+    return found
 
 
 def samsung_list(emu, ptr, count):
@@ -721,7 +807,7 @@ def samsung_ccs(regs, page=SAMSUNG_CCS_PAGE):
     return view, page
 
 
-def samsung_candidates(emu, chip):
+def samsung_candidates(emu, chip, rec_size=SAMSUNG_REC_SIZE):
     """(init, [(record address, mode list)]) per driver variant."""
     fn = samsung_model_fn(emu, chip)
     tables = gn1_vtables(emu, fn)
@@ -755,8 +841,8 @@ def samsung_candidates(emu, chip):
             if not recs:
                 continue
             offs = [off for off, _ in recs]
-            stride = offs[1] - offs[0] if len(offs) > 1 else SAMSUNG_REC_SIZE
-            if stride != SAMSUNG_REC_SIZE or any(b - a != stride for a, b in
+            stride = offs[1] - offs[0] if len(offs) > 1 else rec_size
+            if stride != rec_size or any(b - a != stride for a, b in
                                                  zip(offs, offs[1:])):
                 die(f"mode records of {stride} bytes: unknown HAL version")
             first = offs[0] % stride
@@ -765,10 +851,16 @@ def samsung_candidates(emu, chip):
     return out
 
 
-def samsung_mode_info(emu, init, rec, regs):
+def samsung_mode_info(emu, init, rec, regs, part=None):
     """Geometry from the CCS registers; the pixel rate from the HAL's mode
     record; the link rate (Mbps per lane, or Msps per trio) from the output
-    PLL: EXCK x multiplier (0x0310) / pre-divider (0x030e) / post (0x0312) [I]."""
+    PLL: EXCK x multiplier (0x0310) / pre-divider (0x030e) / post (0x0312) [I].
+    A part with link_rec has the link's raw10 throughput (pixels/s) in its
+    records [HAL layout, as the IMX712's]; on C-PHY trios that is
+    throughput x 10 x 7/16 / trios symbols/s per trio, which must be the
+    output PLL or twice it: the PLL value is taken."""
+    p = part or {}
+    pr_off = p.get("rec", (SAMSUNG_REC_SIZE, SAMSUNG_REC_PIXEL_RATE))[1]
     view, _ = samsung_ccs(init)
     mview, _ = samsung_ccs(regs)
     view.update(mview)
@@ -776,20 +868,38 @@ def samsung_mode_info(emu, init, rec, regs):
     pre, mult, post = view.get(0x030E), view.get(0x0310), view.get(0x0312) or 1
     if not all((w, h, fll, llp, pre, mult)):
         return None
-    pixel_rate = struct.unpack("<I", emu.read(rec + SAMSUNG_REC_PIXEL_RATE, 4))[0]
+    pixel_rate = struct.unpack("<I", emu.read(rec + pr_off, 4))[0]
     fps = pixel_rate / (fll * llp)
     if not 5 <= fps <= 480:
         die(f"mode {w}x{h}: pixel rate {pixel_rate} gives {fps:.1f} fps: "
             "unknown HAL version")
+    rate_hz = EXCK_HZ * mult // pre // post
+    if "rec" in p:
+        # the record's first words: its minimum and maximum frame rate
+        # (floats) and its output size [HAL layout]
+        _, max_fps, rw, rh = struct.unpack("<ffII", emu.read(rec, 16))
+        if (rw, rh) != (w, h) or abs(max_fps - fps) > fps / 200:
+            die(f"mode {w}x{h}: the record says {rw}x{rh} at {max_fps:.2f} fps, "
+                f"the registers {fps:.2f}: unknown HAL version")
+    if "link_rec" in p:
+        tput = struct.unpack("<I", emu.read(rec + p["link_rec"], 4))[0]
+        sym = tput * 10 * 7 / 16 / p["trios"]
+        for k in (1, 2):
+            if abs(k * rate_hz - sym) <= sym / 1000:
+                rate_hz *= k
+                break
+        else:
+            die(f"mode {w}x{h}: the record's link ({sym / 1e6:.1f} Msps a trio) "
+                f"doesn't match the output PLL ({rate_hz / 1e6:.1f} MHz): "
+                "unknown HAL version")
     return dict(width=w, height=h, fll=fll, llp=llp, binning=view.get(0x0900, 0) & 0xFF,
-                pixel_rate=pixel_rate, fps=fps,
-                rate_hz=EXCK_HZ * mult // pre // post)
+                pixel_rate=pixel_rate, fps=fps, rate_hz=rate_hz)
 
 
 def build_samsung(hal, part):
     p = SAMSUNG_PARTS[part]
     emu = Emu(hal)
-    cands = samsung_candidates(emu, p["chip"])
+    cands = samsung_candidates(emu, p["chip"], p.get("rec", (SAMSUNG_REC_SIZE,))[0])
     cands = [c for c in cands if len(c[0]) >= 100]
     if not cands:
         die(f"{part}: init and mode lists not found")
@@ -802,10 +912,12 @@ def build_samsung(hal, part):
     n = len(p["reset"])
     if [(r, v) for r, v, _ in init[:n]] != p["reset"]:
         die(f"{part}: the init list doesn't start with the expected soft reset")
+    if n and init[n - 1][2]:
+        print(f"{part.upper()} soft reset: the HAL waits {init[n - 1][2]} ms after it")
     init = init[n:]
     modes = []
     for addr, regs in recs:
-        info = samsung_mode_info(emu, init, addr, regs)
+        info = samsung_mode_info(emu, init, addr, regs, p)
         if not info:
             continue
         modes.append((info, regs, addr))
@@ -842,6 +954,77 @@ def write_fw_v2(path, chip_id, bayer, again, margin, init, modes, link_freq=None
         f.write(hdr + recs + regs_blob)
 
 
+# --- Sony IMX712 (Pixel 9a ultrawide; the front camera shares the part) -------
+
+IMX712_CHIP_ID = 0x0712
+IMX712_BAYER = 3                # BGGR, as the modes read out
+# The HAL's mode records [HAL layout]: 1264 bytes apart; the record's own
+# pixel rate (pixels/s) as a 32-bit word at 0x148 agrees with the CCS PLL.
+IMX712_REC_SIZE = 1264
+IMX712_REC_PIXEL_RATE = 0x148
+
+
+def build_imx712(hal):
+    """Init and mode lists of the IMX712 driver. Its virtual table has the
+    Samsung parts' layout (init selector at slot -1, mode selector at -4);
+    of the drivers that hold the model-ID function, the one whose selectors
+    don't delegate returns the lists directly. Values are 8-bit (Sony CCS),
+    the geometry and rates come from the standard registers as for the
+    IMX386, and the record's pixel rate cross-checks them."""
+    emu = Emu(hal)
+    fn = samsung_model_fn(emu, IMX712_CHIP_ID)
+    tables = gn1_vtables(emu, fn)
+    if not tables:
+        die("no virtual table holds the IMX712 model-ID function")
+    gn1_run_initialisers(emu, fn)
+    found = []
+    for vt in tables:
+        init_sel = emu.u64(vt + 8 * GN1_SLOT_INIT)
+        modes_sel = emu.u64(vt + 8 * GN1_SLOT_MODES)
+        if samsung_delegate(emu, init_sel) or samsung_delegate(emu, modes_sel):
+            continue
+        this = emu._alloc(SAMSUNG_THIS_SIZE)
+        emu.uc.mem_write(this, bytes(SAMSUNG_THIS_SIZE))
+        try:
+            ptr = emu.call(init_sel, this)
+            count = emu.uc.reg_read(A.UC_ARM64_REG_X1)
+            init = read_regs(emu, ptr, ptr + 16 * count) if 0 < count < 20000 else None
+            begin = emu.call(modes_sel, this)
+        except unicorn.UcError:
+            continue
+        if not init or 0x0136 not in regs_dict(init):
+            continue
+        recs = samsung_mode_vector(emu, begin)
+        if recs:
+            found.append((init, begin, recs))
+    if len(found) != 1:
+        die(f"IMX712: {len(found)} drivers with lists, expected one: unknown HAL version")
+    init, begin, recs = found[0]
+    offs = [off for off, _ in recs]
+    if any(b - a != IMX712_REC_SIZE for a, b in zip(offs, offs[1:])):
+        die("IMX712 mode records not 1264 bytes apart: unknown HAL version")
+    first = offs[0] % IMX712_REC_SIZE
+    modes = []
+    for off, regs in recs:
+        if any(v > 0xFF for _, v in regs):
+            die("IMX712 mode list with 16-bit values: unknown HAL version")
+        merged = regs_dict(init)
+        merged.update(regs_dict(regs))
+        info = mode_info(list(merged.items()))
+        if not info:
+            continue
+        rec = begin + off - first
+        hal_rate = struct.unpack("<I", emu.read(rec + IMX712_REC_PIXEL_RATE, 4))[0]
+        if abs(hal_rate - info["pixel_rate"]) > info["pixel_rate"] // 1000:
+            die(f"IMX712 mode {info['width']}x{info['height']}: pixel rate "
+                f"{info['pixel_rate']} vs the HAL's {hal_rate}: unknown HAL version")
+        info["lanes"] = merged.get(0x0114, 0) + 1
+        modes.append((info, regs))
+    if not modes:
+        die("IMX712 mode lists without standard geometry registers")
+    return init, samsung_dedupe(modes)
+
+
 # --- DC-PHY receive settings (every link, D-PHY and C-PHY) -------------------
 
 DCPHY_MAGIC = 0x4850444F    # "ODPH", read by phy-gs201-mipi-dcphy-rx
@@ -866,9 +1049,9 @@ PHY_MAX_LANES = {DCPHY_DPHY: 4, DCPHY_CPHY: 3}
 PHY_OBJ_SIZE = 0x1000
 
 
-def phy_locate(emu):
-    """The PHY setup function: the only one that writes a trio's register
-    0x64 (base + 0x100 + 0x64) to region 10."""
+def phy_candidates(emu):
+    """gs201: functions that write a trio's register 0x64 (base + 0x100 +
+    0x64) to region 10."""
     d = emu.data
     text, size = _section(emu, ".text")
     hits = set()
@@ -882,6 +1065,13 @@ def phy_locate(emu):
             fn = find_function_start(emu, a)
             if fn is not None:
                 hits.add(fn)
+    return hits
+
+
+def phy_locate(emu):
+    """The PHY setup function: the only one that writes a trio's register
+    0x64 (base + 0x100 + 0x64) to region 10."""
+    hits = phy_candidates(emu)
     if len(hits) != 1:
         die(f"DC-PHY setup function: {len(hits)} candidates, expected one: "
             "unknown HAL version")
@@ -1011,12 +1201,29 @@ def build_phy(hal, emu=None):
     return [build_phy_section(emu, fn, k) for k in (DCPHY_DPHY, DCPHY_CPHY)]
 
 
+def build_phy_auto(hal, ctle=None):
+    """(soc, sections): gs201's setup function if the HAL has it, else
+    zumapro's PHY/link context."""
+    emu = Emu(hal)
+    if len(phy_candidates(emu)) == 1:
+        if ctle:
+            die("--phy-camera is for the zumapro HAL")
+        return "gs201", build_phy(hal, emu)
+    if str_xrefs(emu, ZP_SETTLE_PROP):
+        return "zumapro", build_phy_zumapro(emu, ctle)
+    phy_locate(emu)         # the gs201 error
+
+
 def phy_settle(sect, rate):
     """The settle count (TIME_CON0 7:0) at a rate, for the summary."""
     row = [r for m, r in sect["table"] if m <= rate][-1]
     for b, op, o, v, m in sect["ops"]:
         if b == DCPHY_LANE and o == 0x30 and m == 0xFF:
             return row[v] if op == DCPHY_RATE else v
+    # zumapro: whole-register writes
+    for b, op, o, v, m in sect["ops"]:
+        if b == DCPHY_LANE and o == 0x30 and op != DCPHY_UPDATE:
+            return (row[v] if op == DCPHY_RATE else v) & 0xFF
     return None
 
 
@@ -1041,6 +1248,432 @@ def write_phy(path, sects):
             blob += struct.pack("<I", rate) + b"".join(struct.pack("<I", x) for x in row)
     with open(path, "wb") as f:
         f.write(blob)
+
+
+# --- zumapro (Tensor G4, Pixel 9a) DC-PHY receive settings -------------------
+#
+# The zumapro HAL doesn't write the PHY through a setup function with the
+# rate as an argument, as gs201's does. Its CSIS PHY/link context
+# (zuma_csis_phy_link_context.cc) builds one LWIS transaction of plain
+# register writes from fields of its own object: the link number, lane or
+# trio count, MIPI rate and C-PHY flag, the receive equaliser (CTLE)
+# settings, and the PHY's offset in the csis-link-phy window. The
+# per-link lane blocks come from a table the library's static initialisers
+# build. So the pass runs that function on a stand-in object, once per
+# rate, and records the transaction's entries.
+#
+# HAL layout of the context object (checked against the function's code):
+ZP_LINK = 0x480          # s32 link number, then s32 lanes or trios
+ZP_RATE = 0x488          # s64 MIPI rate, bits (or symbols) per second
+ZP_CPHY = 0x4A8          # u8 C-PHY
+ZP_CTLE_EN = 0x4C8       # u8 receive CTLE enable
+ZP_LINK_BASE = 0x4B8     # u64 the link's offset in csis-link-phy
+ZP_PHY_BASE = 0x4C0      # u64 the PHY's offset in csis-link-phy
+ZP_DEVICE = 0x538        # the LWIS device the transaction goes to
+ZP_ZUMAPRO = 0x680       # u8 ro.board.platform is "zumapro" (the Pixel 9a)
+ZP_OBJ_SIZE = 0x1000
+# the CTLE preset's optional<u32> fields, in the protobuf's order:
+# control_rout, nc_coef, cap_control, rsel_control, bias_control
+# (the HAL logs them as CntRout, NcCoef, CapCnt, RselCnt, BiasCon)
+ZP_CTLE_FIELDS = (0x4CC, 0x4D4, 0x4DC, 0x4E4, 0x4EC)
+# A transaction entry: {u32 type, u32 block, u64 offset, u64 value, 16 bytes
+# zero}; a plain write to block 1 (csis-link-phy) is type 2.
+ZP_ENTRY = struct.pack("<II", 2, 1)
+ZP_LINK_STAND_IN = 0x100000     # outside the PHY's offsets: link writes stand out
+ZP_SETTLE_PROP = "vendor.camera.debug.rx_settle"
+ZP_SETTLE_PROP2 = "vendor.camera.debug.use_settle_mode1"
+ZP_CTLE_OFF_LOG = " Disable Rx CTLE settings"
+ZP_RATES = {DCPHY_DPHY: (80, 4500), DCPHY_CPHY: (1, 3500)}
+# Reference links for the data file: link 0 drives slave 0 (clock lane and
+# four data lanes, or three trios); the others are cross-checked.
+ZP_REF_LINK = 0
+ZP_CHECK = {DCPHY_DPHY: ((1, 4), (2, 4), (4, 4), (6, 4), (5, 2), (7, 2), (10, 2)),
+            DCPHY_CPHY: ((1, 3), (2, 3), (4, 3), (6, 3), (3, 1), (8, 1), (11, 1))}
+
+
+def str_xrefs(emu, text_str):
+    """Addresses of 'adrp xN; add xN, xN, #lo' pairs that point at the
+    NUL-terminated string (any copy of it)."""
+    d = emu.data
+    key = text_str.encode() + b"\0"
+    targets, pos = [], d.find(key)
+    while pos >= 0:
+        if pos and d[pos - 1] == 0:
+            targets.append(pos)
+        pos = d.find(key, pos + 1)
+    text, size = _section(emu, ".text")
+    out = []
+    for t in targets:
+        for rd in range(31):
+            pat = struct.pack("<I", 0x91000000 | ((t & 0xFFF) << 10) | (rd << 5) | rd)
+            a = d.find(pat, text, text + size)
+            while a >= 0:
+                if a % 4 == 0:
+                    for back in range(1, 5):
+                        w = struct.unpack_from("<I", d, a - 4 * back)[0]
+                        if w & 0x9F00001F == 0x90000000 | rd:
+                            immlo, immhi = (w >> 29) & 3, (w >> 5) & 0x7FFFF
+                            imm = ((immhi << 2) | immlo) << 12
+                            if imm & (1 << 32):
+                                imm -= 1 << 33
+                            if ((a - 4 * back) & ~0xFFF) + imm == t & ~0xFFF:
+                                out.append(a - 4 * back)
+                            break
+                a = d.find(pat, a + 1, text + size)
+    return out
+
+
+def _function_end(emu, fn):
+    """The next function's start: a paciasp or bti c after a return."""
+    d = emu.data
+    for a in range(fn + 4, fn + 0x10000, 4):
+        if struct.unpack_from("<I", d, a)[0] in (0xD503233F, 0xD503245F):
+            prev = struct.unpack_from("<I", d, a - 4)[0]
+            if prev not in (0xD503233F, 0xD503245F):
+                return a
+    die("zumapro PHY function: no end found")
+
+
+def _ldst_imm(w):
+    """(kind, base, offset, rt) of an unsigned-offset load: ldrb, ldr w or
+    ldrsw, ldr x."""
+    for mask, op, kind, scale in ((0xFFC00000, 0x39400000, "ldrb", 1),
+                                  (0xFFC00000, 0xB9400000, "ldrw", 4),
+                                  (0xFFC00000, 0xB9800000, "ldrw", 4),     # ldrsw
+                                  (0xFFC00000, 0xF9400000, "ldrx", 8)):
+        if w & mask == op:
+            return kind, (w >> 5) & 31, ((w >> 10) & 0xFFF) * scale, w & 31
+    return None
+
+
+def _cbz_target(w, pc):
+    imm = (w >> 5) & 0x7FFFF
+    if imm & 0x40000:
+        imm -= 0x80000
+    return pc + 4 * imm
+
+
+def zp_locate(emu):
+    """The PHY/link setup function (it reads both settle debug properties)
+    and the CTLE defaults block of the caller (it ends where the caller
+    logs " Disable Rx CTLE settings"). Returns (fn, end, frag, frag_end,
+    frag_base_reg, cfg_delta)."""
+    fns = [{find_function_start(emu, a) for a in str_xrefs(emu, p)} - {None}
+           for p in (ZP_SETTLE_PROP, ZP_SETTLE_PROP2)]
+    both = fns[0] & fns[1]
+    if len(both) != 1:
+        die(f"zumapro PHY function: {len(both)} candidates, expected one: "
+            "unknown HAL version")
+    fn = both.pop()
+    end = _function_end(emu, fn)
+    loads = set()
+    for a in range(fn, end, 4):
+        ld = _ldst_imm(struct.unpack_from("<I", emu.data, a)[0])
+        if ld and ld[1] == 19:
+            loads.add(ld[:3])
+    need = {("ldrw", 19, ZP_LINK), ("ldrx", 19, ZP_RATE), ("ldrb", 19, ZP_CPHY),
+            ("ldrb", 19, ZP_CTLE_EN), ("ldrx", 19, ZP_PHY_BASE),
+            ("ldrx", 19, ZP_LINK_BASE), ("ldrx", 19, ZP_DEVICE),
+            ("ldrb", 19, ZP_ZUMAPRO)}
+    if not need <= loads:
+        die("zumapro PHY function: its object layout differs: unknown HAL version")
+    # The caller's defaults: ldrb wE, [xR, #en]; ldrb wC, [xR, #cphy];
+    # cbz wE, T; cbz wC, T; T clears the enable ("str wzr, [xR, #en]").
+    xr = str_xrefs(emu, ZP_CTLE_OFF_LOG)
+    found = []
+    for x in xr:
+        for a in range(x - 0x800, x, 4):
+            w = struct.unpack_from("<4I", emu.data, a)
+            l1, l2 = _ldst_imm(w[0]), _ldst_imm(w[1])
+            if not (l1 and l2 and l1[0] == l2[0] == "ldrb" and l1[1] == l2[1]):
+                continue
+            if w[2] & 0xFF00001F != 0x34000000 | l1[3] or \
+                    w[3] & 0xFF00001F != 0x34000000 | l2[3]:
+                continue
+            t2, t3 = _cbz_target(w[2], a + 8), _cbz_target(w[3], a + 12)
+            if t2 != t3 or not a < t2 < x:
+                continue
+            clear = 0xB9000000 | ((l1[2] // 4) << 10) | (l1[1] << 5) | 31
+            if clear not in struct.unpack_from("<8I", emu.data, t2):
+                continue
+            found.append((a, x, l1[1], l1[2], l2[2]))
+    if len(found) != 1:
+        die(f"zumapro CTLE defaults: {len(found)} candidates, expected one: "
+            "unknown HAL version")
+    frag, frag_end, reg, en, cphy = found[0]
+    if en - cphy != ZP_CTLE_EN - ZP_CPHY:
+        die("zumapro CTLE defaults: the caller's layout differs: unknown HAL version")
+    return fn, end, frag, frag_end, reg, cphy - ZP_CPHY
+
+
+class ZumaproPhy:
+    def __init__(self, emu):
+        self.emu = emu
+        (self.fn, self.end, self.frag, self.frag_end, self.frag_reg,
+         self.delta) = zp_locate(emu)
+        gn1_run_initialisers(emu, self.fn)      # the links' lane tables
+        self.cfg = emu._alloc(ZP_OBJ_SIZE + self.delta)
+        self.obj = self.cfg + self.delta
+        self.dev = emu._alloc(ZP_OBJ_SIZE)
+        self.entries = None
+
+        def no_property(uc):                     # every debug property unset
+            uc.mem_write(uc.reg_read(A.UC_ARM64_REG_X8), struct.pack("<QQ", 2, 0))
+            return 0
+        for name in set(emu.traps.values()):
+            if "SystemProperties" in name and "GetAs" in name:
+                emu.handlers[name] = no_property
+        d = emu.data
+        for a in range(self.fn, self.end, 4):
+            if struct.unpack_from("<I", d, a)[0] & 0xFC000000 == 0x94000000:
+                emu.uc.hook_add(unicorn.UC_HOOK_CODE, self._on_call, begin=a, end=a)
+
+    def _on_call(self, uc, addr, size, _):
+        if self.entries is None:
+            return
+        x0, x1 = uc.reg_read(A.UC_ARM64_REG_X0), uc.reg_read(A.UC_ARM64_REG_X1)
+        if x0 == self.dev and not self.started:
+            # the transaction builder: start with an empty one
+            uc.mem_write(uc.reg_read(A.UC_ARM64_REG_X8), bytes(0x70))
+            uc.reg_write(A.UC_ARM64_REG_PC, addr + 4)
+            self.started = True
+            return
+        if x1 == self.dev and self.started:
+            uc.emu_stop()                        # the PHY transaction is submitted
+            self.done = True
+            return
+        try:
+            e = bytes(uc.mem_read(x1, 40))
+        except unicorn.UcError:
+            return
+        if e[:8] == ZP_ENTRY:
+            off, val = struct.unpack_from("<QQ", e, 8)
+            if any(e[24:]) or val >> 32:
+                die("zumapro PHY: a transaction entry that isn't a plain write")
+            self.entries.append((off, val))
+
+    def run(self, kind, link, lanes, rate, ctle=None):
+        """One rate: the PHY transaction's writes as [(offset, value)],
+        offsets from the PHY block's base. ctle: a camera's preset (five
+        values, ZP_CTLE_FIELDS order); the HAL uses one only on C-PHY and
+        clears it on D-PHY."""
+        emu, uc = self.emu, self.emu.uc
+        uc.mem_write(self.cfg, bytes(ZP_OBJ_SIZE + self.delta))
+        uc.mem_write(self.obj + ZP_CPHY, bytes([kind == DCPHY_CPHY]))
+        if ctle and kind == DCPHY_CPHY:
+            uc.mem_write(self.obj + ZP_CTLE_EN, b"\1")
+            for off, v in zip(ZP_CTLE_FIELDS, ctle):
+                uc.mem_write(self.obj + off, struct.pack("<IB", v, 1))   # optional<u32>
+        else:
+            # the caller's defaults with no CTLE preset for the camera
+            uc.reg_write(A.UC_ARM64_REG_X0 + self.frag_reg, self.cfg)
+            uc.reg_write(A.UC_ARM64_REG_SP, STACK_BASE + STACK_SIZE - 0x1000)
+            uc.emu_start(self.frag, self.frag_end, count=10_000)
+        uc.mem_write(self.obj + ZP_LINK, struct.pack("<ii", link, lanes))
+        uc.mem_write(self.obj + ZP_RATE, struct.pack("<q", rate * 1_000_000))
+        uc.mem_write(self.obj + ZP_LINK_BASE, struct.pack("<QQ", ZP_LINK_STAND_IN, 0))
+        uc.mem_write(self.obj + ZP_DEVICE, struct.pack("<Q", self.dev))
+        uc.mem_write(self.obj + ZP_ZUMAPRO, b"\1")
+        uc.reg_write(A.UC_ARM64_REG_X8, emu._alloc(0x40))
+        self.entries, self.started, self.done = [], False, False
+        emu.call(self.fn, self.obj)
+        out, self.entries = self.entries, None
+        if not self.done or not out:
+            die(f"zumapro PHY: link {link} at {rate}: no transaction: unknown HAL version")
+        if any(off >= ZP_LINK_STAND_IN for off, _ in out):
+            die("zumapro PHY: link registers in the PHY transaction")
+        return out
+
+
+def zp_ops(writes, kind, lanes):
+    """Split the writes into the bias block, the clock lane, any partner
+    clock lane and the data lanes or trios, checked as phy_ops does.
+    Returns (one lane's ops as (block, op, offset, value, mask), the
+    blocks: dict(clock=, partner=, lanes=[...]))."""
+    started = False
+    seq = []
+    for off, val in writes:
+        blk, o = off & ~0xFF, off & 0xFF
+        if blk == PHY_BIAS:
+            started = True
+        elif not started:
+            if o != PHY_GNR_CON0 or val:
+                die("zumapro PHY: a write other than a lane disable before the bias block")
+            continue
+        seq.append((blk, o, val))
+    order = []
+    for blk, _, _ in seq:
+        if blk != PHY_BIAS and blk not in order:
+            order.append(blk)
+    per = {b: [(o, v) for bb, o, v in seq if bb == b] for b in order}
+    blocks = dict(clock=None, partner=None, lanes=[])
+    rest = order
+    if kind == DCPHY_DPHY:
+        blocks["clock"], rest = order[0], order[1:]
+        if rest and [o for o, _ in per[rest[0]]] == [PHY_GNR_CON0]:
+            blocks["partner"], rest = rest[0], rest[1:]
+            if per[blocks["partner"]][0][1] != per[blocks["clock"]][-1][1]:
+                die("zumapro PHY: the partner clock lane's enable differs from the clock lane's")
+    blocks["lanes"] = rest
+    if len(rest) != lanes:
+        die(f"zumapro PHY: {len(rest)} lane blocks for {lanes} lanes")
+    rank = {PHY_BIAS: 0}
+    if blocks["clock"] is not None:
+        rank[blocks["clock"]] = 1
+    if blocks["partner"] is not None:
+        rank[blocks["partner"]] = 1
+    for i, b in enumerate(rest):
+        rank[b] = 2 + i
+    ranks = [rank[b] for b, _, _ in seq]
+    if ranks != sorted(ranks):
+        die("zumapro PHY: writes not in bias, clock lane, data lane order")
+    if any(per[b] != per[rest[0]] for b in rest):
+        die("zumapro PHY: the lanes' writes differ")
+    ops = [(DCPHY_BIAS, DCPHY_WRITE, o, v, 0) for b, o, v in seq if b == PHY_BIAS]
+    if blocks["clock"] is not None:
+        ops += [(DCPHY_CLOCK, DCPHY_WRITE, o, v, 0) for o, v in per[blocks["clock"]]]
+    ops += [(DCPHY_LANE, DCPHY_WRITE, o, v, 0) for o, v in per[rest[0]]]
+    return ops, blocks
+
+
+def zp_section(zp, kind, ctle=None):
+    """One section: as build_phy_section, but the HAL writes whole
+    registers, so a register that changes with the rate becomes a rate
+    column with a full mask."""
+    lo, hi = ZP_RATES[kind]
+    n = PHY_MAX_LANES[kind]
+    runs = [(rate, zp_ops(zp.run(kind, ZP_REF_LINK, 1, rate, ctle), kind, 1)[0])
+            for rate in range(lo, hi + 1)]
+    ref = runs[0][1]
+    shape = [(b, o) for b, _, o, _, _ in ref]
+    varying = set()
+    for rate, ops in runs:
+        if [(b, o) for b, _, o, _, _ in ops] != shape:
+            die(f"zumapro PHY: a different sequence at {rate}")
+        varying |= {i for i, (r, x) in enumerate(zip(ref, ops)) if r[3] != x[3]}
+    by_rate = dict(runs)
+    for rate in (lo, 1000, hi):
+        if zp_ops(zp.run(kind, ZP_REF_LINK, n, rate, ctle), kind, n)[0] != by_rate[rate]:
+            die(f"zumapro PHY: {n} lanes differ from one at {rate}")
+        for link, lanes in ZP_CHECK[kind]:
+            ops, _ = zp_ops(zp.run(kind, link, lanes, rate, ctle), kind, lanes)
+            if ops != by_rate[rate]:
+                die(f"zumapro PHY: link {link} differs from link {ZP_REF_LINK} at {rate}")
+    cols = sorted(varying)
+    if len(cols) > 8:
+        die(f"zumapro PHY: {len(cols)} registers change with the rate, the data file holds 8")
+    ops = [(b, DCPHY_RATE, o, cols.index(i), 0xFFFFFFFF) if i in varying else (b, op, o, v, m)
+           for i, (b, op, o, v, m) in enumerate(ref)]
+    table = []
+    for rate, run in runs:
+        row = tuple(run[i][3] for i in cols)
+        if not table or table[-1][1] != row:
+            table.append((rate, row))
+    if len(table) > 256:
+        die(f"zumapro PHY: {len(table)} rate ranges, the data file holds 256")
+    return dict(kind=kind, ops=ops, table=table, cols=len(cols), min_rate=lo, max_rate=hi)
+
+
+def zp_layout(zp):
+    """The lane blocks each checked link uses at 1000 Mbps or Msps, as
+    [(kind, link, lanes, blocks)], offsets from the PHY block's base."""
+    out = []
+    for kind in (DCPHY_DPHY, DCPHY_CPHY):
+        for link, lanes in ((ZP_REF_LINK, PHY_MAX_LANES[kind]), *ZP_CHECK[kind]):
+            out.append((kind, link, lanes,
+                        zp_ops(zp.run(kind, link, lanes, 1000), kind, lanes)[1]))
+    return out
+
+
+def zp_layout_summary(layout):
+    for kind, link, lanes, b in layout:
+        name = "D-PHY" if kind == DCPHY_DPHY else "C-PHY"
+        parts = []
+        if b["clock"] is not None:
+            parts.append(f"clock {b['clock']:#x}")
+        if b["partner"] is not None:
+            parts.append(f"partner clock {b['partner']:#x}")
+        parts.append("lanes " + " ".join(f"{x:#x}" for x in b["lanes"]))
+        print(f"  link {link} {name} x{lanes}: " + ", ".join(parts))
+
+
+def _pb_fields(buf):
+    """A protobuf message's fields as [(number, value)]: varints as ints,
+    length-delimited as bytes."""
+    out, pos = [], 0
+
+    def varint():
+        nonlocal pos
+        r = shift = 0
+        while True:
+            b = buf[pos]
+            pos += 1
+            r |= (b & 0x7F) << shift
+            shift += 7
+            if not b & 0x80:
+                return r
+    while pos < len(buf):
+        key = varint()
+        num, wt = key >> 3, key & 7
+        if wt == 0:
+            out.append((num, varint()))
+        elif wt == 2:
+            n = varint()
+            out.append((num, buf[pos:pos + n]))
+            pos += n
+        else:
+            die("PHY settings file: an unexpected field type")
+    return out
+
+
+PB_POSITIONS = ("rear", "front", "front_inner", "front_outer")
+PB_LENSES = ("normal", "wide", "tele")
+
+
+def ctle_preset(path, camera):
+    """The CTLE preset for camera "POSITION/LENS" (e.g. rear/normal) from
+    the HAL's etc/camera/csis_phy_link_phy_settings.binarypb
+    (lyric.phy_settings.PhySettingsSet: 2 = PhySettings {1 position, 2 lens,
+    3 ctle {3 control_rout, 4 nc_coef, 5 cap_control, 6 rsel_control,
+    7 bias_control}, 4 alternative_ctle, 5 rx_eq, 6 rate map}), or None."""
+    pos, _, lens = camera.partition("/")
+    if pos not in PB_POSITIONS or lens not in PB_LENSES:
+        die(f"--phy-camera {camera}: give POSITION/LENS, e.g. rear/normal")
+    want = (PB_POSITIONS.index(pos), PB_LENSES.index(lens))
+    for num, msg in _pb_fields(open(path, "rb").read()):
+        if num != 2:
+            continue
+        f = dict(_pb_fields(msg))
+        if (f.get(1, 0), f.get(2, 0)) != want:
+            continue
+        if any(k in f for k in (4, 5, 6)):
+            die("PHY settings: an alternative CTLE or RX EQ preset, which this tool doesn't handle")
+        if 3 not in f:
+            return None
+        c = dict(_pb_fields(f[3]))
+        if any(k not in c for k in range(3, 8)):
+            die("PHY settings: a CTLE preset with missing fields, which this tool doesn't handle")
+        return tuple(c[k] for k in range(3, 8))
+    return None
+
+
+def build_phy_zumapro(emu, ctle=None):
+    zp = ZumaproPhy(emu)
+    sects = [zp_section(zp, k, ctle) for k in (DCPHY_DPHY, DCPHY_CPHY)]
+    print("zumapro PHY lane blocks (from the PHY block's base):")
+    zp_layout_summary(zp_layout(zp))
+    return sects
+
+
+def from_apex_settings(apex, tmp):
+    out = os.path.join(tmp, "csis_phy_link_phy_settings.binarypb")
+    subprocess.run(["debugfs", "-R",
+                    f"dump /etc/camera/csis_phy_link_phy_settings.binarypb {out}",
+                    os.path.join(tmp, "apex_payload.img")], check=True,
+                   stderr=subprocess.DEVNULL)
+    if not os.path.exists(out) or not os.path.getsize(out):
+        die("csis_phy_link_phy_settings.binarypb not found in the APEX payload")
+    return out
 
 
 def from_apex(apex, tmp):
@@ -1110,12 +1743,32 @@ def run_samsung(hal, args, out, part):
         print(f"wrote {out}: install as {FW_DIR}/{p['out']}")
 
 
+def run_imx712(hal, args, out):
+    init, modes = build_imx712(hal)
+    print(f"IMX712 init: {len(init)} register writes")
+    for info, regs in modes:
+        print(f"  mode {info['width']}x{info['height']}: {len(regs)} writes, "
+              f"FLL {info['fll']} LLP {info['llp']}, pixel rate {info['pixel_rate']}, "
+              f"link {info['link_freq']} Hz on {info['lanes']} lanes, "
+              f"{info['fps']:.1f} fps, binning {info['binning']}")
+    if not args.list:
+        # BGGR [V: the solid colour test pattern on the Pixel 9a's ultrawide
+        # reads blue/green on even rows, green/red on odd ones]
+        write_fw(out, init, modes, IMX712_CHIP_ID, bayer=IMX712_BAYER)
+        print(f"wrote {out}: install as {FW_DIR}/imx712-uw.bin")
+
+
 SENSORS = {
     "imx386": ("imx386-uw.bin", run_imx386),
     "s5kgn1": ("s5kgn1-main.bin", run_s5kgn1),
     "s5k3j1": ("s5k3j1-front.bin", lambda h, a, o: run_samsung(h, a, o, "s5k3j1")),
     "s5kgm5": ("s5kgm5-tele.bin", lambda h, a, o: run_samsung(h, a, o, "s5kgm5")),
+    "s5kgn8": ("s5kgn8-main.bin", lambda h, a, o: run_samsung(h, a, o, "s5kgn8")),
+
+    "imx712": ("imx712-uw.bin", run_imx712),
 }
+# The Pixel 7 Pro's four; the Pixel 9a's are named one at a time.
+ALL_SENSORS = ("imx386", "s5kgn1", "s5k3j1", "s5kgm5")
 FW_DIR = "/usr/lib/firmware/omamobile/camera"
 
 
@@ -1125,21 +1778,33 @@ def main():
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--hal", help="liblyric_hwl.so from your own phone's camera HAL APEX")
     src.add_argument("--apex", help="com.google.pixel.camera.hal.apex from your own image")
-    ap.add_argument("--sensor", choices=(*SENSORS, "all"), default="all",
+    ap.add_argument("--sensor", choices=(*SENSORS, "all", "none"), default="all",
                     help="imx386 (ultrawide), s5kgn1 (main), s5k3j1 (front), "
-                    "s5kgm5 (telephoto) or all (default)")
+                    "s5kgm5 (telephoto) or all (default: those four, the Pixel 7 "
+                    "Pro); imx712 and s5kgn8 are the Pixel 9a ultrawide and "
+                    "main cameras; none writes only "
+                    "the DC-PHY file")
     ap.add_argument("-o", "--output", help="the sensor's data file (one sensor only)")
     ap.add_argument("-d", "--dir", default=".",
                     help="where the files go (default: the current directory)")
     ap.add_argument("--phy-output",
-                    help="the DC-PHY settings file (default DIR/gs201-dcphy.bin)")
+                    help="the DC-PHY settings file (default DIR/gs201-dcphy.bin, "
+                    "or DIR/zumapro-dcphy.bin from a Pixel 9a HAL)")
     ap.add_argument("--no-phy", action="store_true", help="don't write the DC-PHY file")
+    ap.add_argument("--phy-camera", metavar="POSITION/LENS",
+                    help="zumapro: the DC-PHY file for one camera with its receive "
+                    "equaliser preset (e.g. rear/normal, the Pixel 9a main camera), "
+                    "written as zumapro-dcphy-POSITION-LENS.bin")
+    ap.add_argument("--phy-settings",
+                    help="the HAL's csis_phy_link_phy_settings.binarypb (read from "
+                    "the APEX with --apex)")
     ap.add_argument("--with-pd", action="store_true",
                     help="imx386: the init settings with phase detection on (default off)")
     ap.add_argument("--list", action="store_true", help="only print what was found")
     args = ap.parse_args()
     os.makedirs(args.dir, exist_ok=True)
-    names = list(SENSORS) if args.sensor == "all" else [args.sensor]
+    names = (list(ALL_SENSORS) if args.sensor == "all" else
+             [] if args.sensor == "none" else [args.sensor])
     if args.output and len(names) > 1:
         ap.error("-o needs one --sensor")
 
@@ -1150,12 +1815,23 @@ def main():
             out = args.output or os.path.join(args.dir, SENSORS[name][0])
             SENSORS[name][1](hal, args, out)
         if not args.no_phy:
-            sects = build_phy(hal)
+            ctle = None
+            if args.phy_camera:
+                settings = args.phy_settings or (args.apex and from_apex_settings(args.apex, tmp))
+                if not settings:
+                    ap.error("--phy-camera needs --phy-settings or --apex")
+                ctle = ctle_preset(settings, args.phy_camera)
+                print(f"{args.phy_camera}: " + ("a CTLE preset" if ctle else
+                                               "no CTLE preset, the defaults"))
+            soc, sects = build_phy_auto(hal, ctle)
             phy_summary(sects)
             if not args.list:
-                out = args.phy_output or os.path.join(args.dir, "gs201-dcphy.bin")
+                name = f"{soc}-dcphy.bin"
+                if args.phy_camera:
+                    name = f"{soc}-dcphy-{args.phy_camera.replace('/', '-')}.bin"
+                out = args.phy_output or os.path.join(args.dir, name)
                 write_phy(out, sects)
-                print(f"wrote {out}: install as {FW_DIR}/gs201-dcphy.bin")
+                print(f"wrote {out}: install as {FW_DIR}/{name}")
 
 
 if __name__ == "__main__":

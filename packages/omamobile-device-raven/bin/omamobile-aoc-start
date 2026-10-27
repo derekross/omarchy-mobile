@@ -1,0 +1,122 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Boot the AoC (audio and sensor DSP) on raven, hang-safe
+# (device/raven/AUDIO-PLAN.md; cheetah's script with raven's AoC node).
+#
+# Order, as stock and as tested in stages C4t/C5:
+#   1. Trusty (trusty_core, trusty_log, trusty_ipc, then trusty_virtio):
+#      the AoC is started by Trusty's hwmgr.aoc service.
+#   2. The GSA mailbox (gsa), which authenticates the image.
+#   3. (cheetah's rails step: none on raven. The sensor rails are DT
+#      regulators that aoc_core power-cycles and enables at probe, and the
+#      microphones' LDO20M is always on. aoc_core also switches BLK_AOC's
+#      power domain on, which raven's bootloader leaves off.)
+#   4. The AoC System MMU, mailboxes, core and service front ends
+#      (aoc_channel_dev and the sound card's aoc_alsa_dev before aoc_char_dev,
+#      so named services bind first: aoc_char_dev takes any service that is
+#      still free, the audio control channels too, and the card then never
+#      probes).
+#   5. The firmware load (aoc.bin, from the firmware search path), then wait
+#      for the services and the sensor channel.
+# A marker is written and synced before any of it, and removed at the end. If
+# a boot hangs here, the next one finds the marker and leaves the AoC off;
+# "omamobile-aoc-start --retry" tries again.
+#   omamobile-aoc-start [--retry]
+set -uo pipefail
+
+state=/var/lib/omamobile
+marker=$state/aoc-bringup-started
+# Set right before the firmware load, gone after a reboot (tmpfs)
+loaded=/run/omamobile/aoc-firmware-loaded
+node=/sys/bus/platform/devices/175d0000.aoc
+rails=0
+
+log() { echo "omamobile-aoc: $*"; }
+
+for arg; do
+  case $arg in
+    --retry) rm -f "$marker" ;;
+    --no-rails) rails=0 ;;
+    *) log "unknown argument $arg"; exit 2 ;;
+  esac
+done
+
+if [[ -e $marker ]]; then
+  log "the last bring-up ($(cat "$marker" 2>/dev/null)) never finished; the AoC stays off this boot."
+  log "after checking the previous boot's log, retry with: omamobile-aoc-start --retry"
+  exit 0
+fi
+if [[ ! -e $node ]]; then
+  log "the AoC is not enabled in this DTB; nothing to do"
+  exit 0
+fi
+# The AoC starts once per boot: a second firmware load would take the running
+# AoC down (the GSA refuses the image while it runs, and there is no AoC reset).
+if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
+  log "already online: $(head -1 "$node/services")"
+  exit 0
+fi
+# (aoc_core alone can be loaded without that: the sound card's driver pulls it
+# in as a dependency at boot, and it waits there unbound.)
+if [[ -e $loaded ]]; then
+  log "the AoC was already started this boot but is not online; reboot to start it again"
+  exit 1
+fi
+if ! grep -q okay /proc/device-tree/trusty/status 2>/dev/null; then
+  log "Trusty is not enabled in this DTB; the AoC cannot be started"
+  exit 1
+fi
+fw=
+for d in /usr/lib/firmware/updates /usr/lib/firmware; do
+  [[ -e $d/aoc.bin ]] && fw=$d/aoc.bin && break
+done
+if [[ -z $fw ]]; then
+  log "no aoc.bin (install it from the phone's vendor partition: tools/extract-vendor-firmware)"
+  exit 1
+fi
+
+mkdir -p "$state"
+date -Is > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
+fail() { log "$*"; finish; exit 1; }
+
+# 1. Trusty
+for m in trusty_core trusty_log trusty_ipc trusty_virtio; do
+  modprobe "$m" || fail "$m failed"
+done
+for _ in $(seq 50); do [[ -c /dev/trusty-ipc-dev0 ]] && break; sleep 0.2; done
+[[ -c /dev/trusty-ipc-dev0 ]] || fail "no /dev/trusty-ipc-dev0"
+
+# 2. GSA (AoC state commands through Trusty, the default)
+modprobe gsa || fail "gsa failed"
+
+# 3. Rails
+if ((rails)); then
+  # cycle=1: sensor rails left on by a warm reboot are turned off for 150 ms
+  # first, or the LSM6DSV (I3C) keeps the old AoC session's state and the new
+  # AoC never finds it (no accelerometer).
+  modprobe gs201_aoc_rails enable=1 cycle=1 || fail "gs201_aoc_rails failed"
+  rmmod gs201_aoc_rails 2>/dev/null
+fi
+
+# 4. AoC drivers
+for m in gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev; do
+  modprobe "$m" || fail "$m failed"
+done
+[[ -w $node/firmware ]] || fail "the AoC core did not bind ($node/firmware missing)"
+
+# 5. Firmware; the core loads, authenticates and starts it in the background
+mkdir -p "${loaded%/*}" && date -Is > "$loaded"
+echo aoc.bin > "$node/firmware" || fail "firmware load request failed"
+for _ in $(seq 75); do
+  if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
+    log "up: $(head -1 "$node/services"), firmware $(cat "$node/revision" 2>/dev/null | head -1)"
+    for _ in $(seq 25); do [[ -c /dev/acd-com.google.usf ]] && break; sleep 0.2; done
+    [[ -c /dev/acd-com.google.usf ]] || log "no /dev/acd-com.google.usf (sensors unavailable)"
+    finish; exit 0
+  fi
+  sleep 0.2
+done
+fail "no AoC services after 15 s (see dmesg)"

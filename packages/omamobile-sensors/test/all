@@ -108,10 +108,15 @@ if command -v dbus-run-session >/dev/null; then
     PYTHONPATH=lib python3 lib/sensor_proxy.py --backend test --session & p=$!
     sleep 1
     timeout 8 python3 lib/autorotate.py --session --dry-run 2> '"$tmp"'/rot.log || true
+    OMAMOBILE_TEST_LOCKED=1 timeout 8 python3 lib/autorotate.py --session --dry-run 2> '"$tmp"'/rot-locked.log || true
     kill $p' || true
   grep -q "transform 0" "$tmp/rot.log" || grep -q "transform = 0" "$tmp/rot.log" || fail "autorotate applies normal"
   grep -q "transform = 1" "$tmp/rot.log" || fail "autorotate applies left-up"
   pass "proxy and autorotate over D-Bus"
+  # the same run with the shell locked: the screen is held portrait, left-up waits
+  grep -q "portrait while locked" "$tmp/rot-locked.log" || fail "autorotate holds portrait while the shell is locked"
+  if grep -q "transform = 1" "$tmp/rot-locked.log"; then fail "autorotate rotated a locked screen"; fi
+  pass "the lock screen stays portrait"
 fi
 
 # gyroscope over D-Bus: an fd stream, the fastest claim sets the rate, and

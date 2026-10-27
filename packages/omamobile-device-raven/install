@@ -1,0 +1,23 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-device-raven into DESTDIR. Units are enabled by vendor
+# wants links, as in omamobile-device-cheetah.
+#   ./install DESTDIR [BUILDDIR]   (BUILDDIR holds the compiled C tools)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
+build=${2:-build}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+for file in bin/*; do install -Dm755 "$file" "$destination/usr/bin/${file##*/}"; done
+for tool in omamobile-bootctl reboot-to; do install -Dm755 "$build/$tool" "$destination/usr/bin/$tool"; done
+while IFS= read -r -d '' file; do
+  install -Dm644 "$file" "$destination/usr/lib/${file#vendor/}"
+done < <(find vendor -type f -print0)
+while IFS= read -r -d '' file; do
+  install -d "$destination/usr/lib/$(dirname "${file#vendor/}")"
+  ln -sfn "$(readlink "$file")" "$destination/usr/lib/${file#vendor/}"
+done < <(find vendor -type l -print0)
+install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-raven/LICENSE"
+install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-raven/LICENSE.Apache-2.0"
+install -Dm644 version "$destination/usr/share/omamobile/device-raven/version"

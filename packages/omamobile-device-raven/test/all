@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-device-raven, from a copy of this directory alone.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+for script in bin/*; do bash -n "$script" || fail "$script parses"; done
+pass "scripts parse"
+
+./build "$tmp/build" || fail "C tools compile"
+pass "C tools compile"
+
+# omamobile-bootctl against a synthetic devinfo (raven's layout is
+# cheetah's, DEVI 3.15): a dry run of mark-successful plans exactly one
+# flag byte and writes nothing
+python3 - "$tmp/devinfo" <<'PY'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 15)
+buf[0x30:0x34] = bytes([2, 0x0a, 0, 0])   # slot a: successful, active-bit off
+buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
+open(sys.argv[1], "wb").write(buf)
+PY
+cp "$tmp/devinfo" "$tmp/devinfo.orig"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -q 'version: 3.15' || fail "bootctl decodes devinfo"
+plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo" b 2>&1 || true)
+grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x35: 04 -> 06)"
+cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
+pass "bootctl dry run plans one byte and writes nothing"
+
+./install "$tmp/root" "$tmp/build"
+for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success \
+         usr/bin/omamobile-usb-rescue usr/bin/omamobile-wait-bluetooth \
+         usr/bin/omamobile-setup-system usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
+         usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
+         usr/lib/systemd/network/20-usb-gadget.network usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+         usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf etc/pacman.d/omamobile-mirrorlist \
+         usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf usr/bin/omamobile-boot-check \
+         usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/system/omamobile-usb-rescue.service \
+         usr/lib/systemd/system/sddm.service.d/omamobile-raven-bluetooth.conf \
+         usr/lib/modprobe.d/omamobile-raven.conf usr/lib/tmpfiles.d/omamobile-raven-cpufreq.conf \
+         usr/lib/udev/rules.d/20-omamobile-display.rules \
+         usr/lib/NetworkManager/conf.d/omamobile-raven-wifi-powersave.conf \
+         usr/bin/omamobile-sleep usr/bin/omamobile-sleepd usr/lib/systemd/user/omamobile-sleepd.service \
+         usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
+         usr/share/licenses/omamobile-device-raven/LICENSE.Apache-2.0 usr/share/omamobile/device-raven/version; do
+  [[ -e $tmp/root/$f ]] || fail "install stages $f"
+done
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service") == ../omamobile-boot-success.service ]] \
+  || fail "the boot-success unit is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/sysinit.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
+  || fail "the USB rescue unit is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system-sleep/omamobile") == /usr/bin/omamobile-sleep ]] \
+  || fail "the sleep hook is linked into system-sleep"
+[[ $(readlink "$tmp/root/usr/lib/systemd/user/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
+  || fail "the sleep watcher is enabled by a vendor wants link"
+pass "install stages the package"
+
+# omamobile-wlan-mac only ever sets a unicast, globally administered address
+for bad in "02:11:22:33:44:55" "not-a-mac" ""; do
+  mkdir -p "$tmp/dt" && printf '%s\0' "$bad" > "$tmp/dt/wlan_mac1"
+  out=$(sed "s|/proc/device-tree/chosen/config/wlan_mac1|$tmp/dt/wlan_mac1|; s|^ip |echo ip |" bin/omamobile-wlan-mac | bash -s wlp1s0 2>&1)
+  [[ -z $out ]] || fail "wlan-mac ignores '$bad'"
+done
+printf '%s\0' "00:00:5E:00:53:01" > "$tmp/dt/wlan_mac1"
+out=$(sed "s|/proc/device-tree/chosen/config/wlan_mac1|$tmp/dt/wlan_mac1|; s|^ip |echo ip |" bin/omamobile-wlan-mac | bash -s wlp1s0 2>&1)
+[[ $out == *"address 00:00:5e:00:53:01"* ]] || fail "wlan-mac sets the bootloader's address"
+pass "wlan-mac: only a real address from the bootloader"
+
+# Sleep: s2idle only (deep doesn't wake), the hook powers the Wi-Fi chip off
+# (pcie_gs201 too), and the watcher does nothing without its toggle
+# The modem doesn't start at boot from this package: as on main, the modem
+# packages are installed but not enabled (enabling it is its own change)
+for u in omamobile-modem omamobile-sitd omamobile-sitd-2 omamobile-sit-data-restore; do
+  [ ! -e vendor/systemd/system/multi-user.target.wants/$u.service ] || fail "$u is not enabled by the device package"
+done
+[ ! -e vendor/omamobile/modem-sit.d ] || fail "no modem-sit defaults here yet"
+grep -qx 'MemorySleepMode=s2idle' vendor/systemd/sleep.conf.d/10-omamobile.conf || fail "sleep is s2idle"
+grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep || fail "unload mode unloads the PCIe host"
+grep -q 'wifi_pci=0000:01:00.0' bin/omamobile-sleep || fail "a Wi-Fi D3 failure falls back to unload mode"
+grep -q 'omarchy-toggle-enabled omamobile-sleep ||' bin/omamobile-sleepd || fail "the watcher is gated by its toggle"
+pass "sleep policy"
+
+# Policy that keeps the phone safe at boot
+for m in max77759_charger tcpci_maxim gpio_max77759; do
+  grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven.conf || fail "$m stays blacklisted"
+done
+grep -qE '^(options|install) .*max77759_charger' vendor/modprobe.d/omamobile-raven.conf && fail "nothing loads the charger"
+# usb-rescue's only write: USBSW_CTRL (0x93) back to 0x09
+writes=$(grep -E 'i2cset .*"\$bus" \$tcpc 0x[0-9a-f]+ 0x' bin/omamobile-usb-rescue || true)
+[[ $writes == *'0x93 0x09' && $(wc -l <<<"$writes") == 1 ]] || fail "usb-rescue writes only USBSW_CTRL = 0x09"
+pass "the charger and the TCPC stay off; usb-rescue writes one register"
+for m in pcie_gs201_cp cpif shm_ipc boot_device_spi; do
+  grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven-modem.conf || fail "$m stays blacklisted (modem bring-up)"
+done
+pass "the modem's drivers never load at boot"

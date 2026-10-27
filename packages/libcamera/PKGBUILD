@@ -179,7 +179,10 @@
 #  - 0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch: defective
 #    pixel correction before the debayer, on the packed bytes (a hot pixel
 #    on the main camera showed as a magenta spot in every photo).
-#  - pkgrel 4.21, so it sorts above Arch Linux ARM's 0.7.2-4.
+#  - 0056-libcamera-Add-the-Samsung-S5KGN8-sensor.patch: the Pixel 9a's main
+#    camera: its black level (64 at 10 bits, measured), linear gain and an
+#    uncalibrated tuning file (it ran with no helper before).
+#  - pkgrel 4.22, so it sorts above Arch Linux ARM's 0.7.2-4.
 #
 # Maintainers of the original: David Runge, Carl Smedstad.
 
@@ -192,7 +195,7 @@ pkgname=(
   python-libcamera
 )
 pkgver=0.7.2
-pkgrel=4.21
+pkgrel=4.22
 pkgdesc="A complex camera support library for Linux, Android, and ChromeOS (Omarchy Mobile: gs201 CSIS)"
 arch=(aarch64)
 url="https://libcamera.org/"
@@ -280,6 +283,7 @@ source=(
   0053-software_isp-debayer_egl-Smooth-the-chroma.patch
   0054-pipeline-simple-Pass-the-start-controls-to-the-softw.patch
   0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch
+  0056-libcamera-Add-the-Samsung-S5KGN8-sensor.patch
 )
 sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd8847f7bec755c753c72f6b065df76de53c15f9af2e5901e83e7a144a2ddcd'
             '8b54cbdf6ed767ae8d52a14480a4653f4f3a1c2187c4ccf7ceb65eaa60c819cce514122591d6e0c2dfc39d7482739f8fdd4090dbaf63701445510eefc88fb19f'
@@ -337,7 +341,8 @@ sha512sums=('a5656356617a01a7e8feb535380869d38b7c58139c7f99385af355629d3e1927bbd
             '6ca74dcf19b1df3899ba73b1926bb0de3e5ca37c410233f88dea433b14f7dc1c2ced1bbb2245c3bf7ad34de3f2fab6855b0a0fe2fd7c832ccb3b136aaefd3260'
             '6717f9f27c9822d5b21fb132b363227d72929ed9e4aa4e0d5521dac1039c101de318672cb25918b963c4b7394bd8a58d85edf418afa61bda7ee3358d482371e4'
             '8a80d2c8aa85f15c2fde64cbcb1fb9a55f257bb4414007672583e3602dc3897cce82e829ede22de928245b2f142e4aad09deeb06b9d2b6990a45c840e948e898'
-            '4f618bd8f45eb5499dce75be70f62f7091fa61f3121a8067fcb38fcdb9eb778cc1d8f2c94daed0f5f9815bb8da1712f0515e2332544273595df18b1a422a0706')
+            '4f618bd8f45eb5499dce75be70f62f7091fa61f3121a8067fcb38fcdb9eb778cc1d8f2c94daed0f5f9815bb8da1712f0515e2332544273595df18b1a422a0706'
+            '9bdbac40cf508f2068e4570da62d736509f0ef0617e60723ddcfdfb7f42d04c0d9f856faae52756b74b4d5971e6ada5ac61109f7b411c45a40ccb830b4249ade')
 b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc58494400e69feeec99a77894252d582f0d8f183508e5d1b8220e70f3d5'
         '4a0e24feed22d32b83b0ec49c9a7616b77deb26cae82c17a38b54a81a0468e982852147bc2d5e3b611ba014ddbd7647acfe2e68591542420da73945ba1c0d6c2'
         'cba8b638543a16bf80c2ae7dc0737f3874476fd1ff694639b459184725848e193518778d0336eef3d55ba4329d9bc63981d0aa8d8d9b5507c9ade4f17f7f407d'
@@ -394,7 +399,8 @@ b2sums=('1dbd3f78f8d9a2484331798b18b871d7585b5928988e91d586366049d85e3f126e7cfc5
         '98b3ed491c6fe02c20bc5bcc8f0801a91ad8b257f93ccf1ca620552764f0c11006696d37d624b5f5679a1e69ad2c69f216c2454b6cc0082cce72ed15d6273a4f'
         'b27b0e12bd345b8590d26cc1401f9cff8fd0777ba40a2d186e3db5e98edae84c8eb54fdf9c9bccd5c301d170907272a77cfd66bc40387a5bf5aaf15c8faad69b'
         '63c4bc9556ee28ea34f246ebe2c87a59f5dd50e56218ed5a9e2bb95af16d06672561b0981e3e0475cd885a7b7b8c4112cf203710e7e126cbf9de62e28b6a567f'
-        'd58a82be4991c6b4d46be10d0c2c21e7c4a5898c0f997bf64bc2b21702c5071e8e04020faf1389e7091b2f9060a71f41f3f15d8d7b491a167fef650588ecf889')
+        'd58a82be4991c6b4d46be10d0c2c21e7c4a5898c0f997bf64bc2b21702c5071e8e04020faf1389e7091b2f9060a71f41f3f15d8d7b491a167fef650588ecf889'
+        '82d09fef3abf67f5c3c6905d056faba7ba6b20edc3d9f6aa887d50c4372a2af770517e8974a53c3fd460fd0eec045804a3cf64191cfe966ec7fc11d23a61426a')
 
 _pick() {
   local p="$1" f d; shift
@@ -464,6 +470,7 @@ prepare() {
   patch -Np1 < ../0053-software_isp-debayer_egl-Smooth-the-chroma.patch
   patch -Np1 < ../0054-pipeline-simple-Pass-the-start-controls-to-the-softw.patch
   patch -Np1 < ../0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch
+  patch -Np1 < ../0056-libcamera-Add-the-Samsung-S5KGN8-sensor.patch
 
   # add version, so that utils/gen-version.sh may rely on it
   printf "%s\n" "$pkgver" > .tarball-version
