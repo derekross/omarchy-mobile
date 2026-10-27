@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Offscreen review shots of the call card (omamobile.call) in a dark and a
-# light Omarchy theme, with checks on the controls' size and place. Runs
+# Offscreen review shots of the call card (omamobile.call), upright and on
+# its side (TOUCH-PLAN 2.4), in a dark and a light Omarchy theme, with
+# checks on the controls' size and place and on the landscape layout. Runs
 # inside the OWL conformance container (tests/owl/Dockerfile: Qt,
 # Quickshell, the fonts), never on a desktop:
 #
@@ -10,10 +11,11 @@
 #     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/call-render /src/logs/call-render
 #
 # test/all runs it when OMAMOBILE_CALL_RENDER names an output directory.
+# OMAMOBILE_CALL_PLUGIN draws another tree's plugin instead (a before picture).
 set -euo pipefail
 out=${1:?Usage: call-render OUTDIR}
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-plugin=$here/../plugins/omamobile.call
+plugin=${OMAMOBILE_CALL_PLUGIN:-$here/../plugins/omamobile.call}
 [[ -d /omarchy-shell && -d /themes ]] || { echo "call-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
 command -v quickshell >/dev/null || { echo "call-render: no quickshell" >&2; exit 2; }
 mkdir -p "$out" /tmp/xdg
@@ -46,9 +48,11 @@ live = dict(ada, state="active", answeredMs=now - 754000)
 waiting = dict(ada, id="/c/2", name="Grace Hopper", state="waiting")
 replies = ["Can't talk now. Call you later?", "I'll call you back.", "I'm on my way.", "Can you text me instead?"]
 def shot(name, mode, call, **extra):
-    s = {"name": name, "png": "%s/call-%s-%s.png" % (out, name, theme), "mode": mode, "call": call}
+    s = {"name": name, "png": "%s/call-%s-%s.png" % (out, name, theme), "mode": mode, "call": call, "w": 480, "h": 1040}
     s.update(extra)
     return s
+def wide(name, mode, call, **extra):
+    return shot("landscape-" + name, mode, call, w=1040, h=480, **extra)
 print(json.dumps({"shots": [
     shot("incoming", "incoming", ada, replies=replies),
     shot("incoming-number", "incoming", bare, replies=replies),
@@ -58,6 +62,11 @@ print(json.dumps({"shots": [
     shot("waiting", "heads-up", waiting, under="app"),
     shot("mini", "mini", live),
     shot("emergency", "emergency", None),
+    wide("incoming", "incoming", ada, replies=replies),
+    wide("replies", "incoming", ada, replies=replies, showReplies=True),
+    wide("in-call", "in-call", live, muted=True, route="speaker"),
+    wide("heads-up", "heads-up", ada, under="app"),
+    wide("emergency", "emergency", None),
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 CALL_JOB="$h/job-$theme.json" timeout 120 quickshell -p "$h/call-render.qml" > "$h/log-$theme" 2>&1 || true
@@ -67,21 +76,42 @@ import json, re, sys
 log, theme = sys.argv[1:]
 text = open(log).read()
 bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l)]
-geo = dict((n, json.loads(g)) for n, g in re.findall(r"geometry (\S+) (\{.*\})", text))
-def on_screen(r): return r["x"] >= 0 and r["y"] >= 0 and r["x"] + r["w"] <= 480 and r["y"] + r["h"] <= 1040
+geo, size = {}, {}
+for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
+    geo[n], size[n] = json.loads(g), (int(w), int(h))
+def on_screen(r, name):
+    w, h = size[name]
+    return r["x"] >= 0 and r["y"] >= 0 and r["x"] + r["w"] <= w and r["y"] + r["h"] <= h
+def apart(a, b): return a["x"] + a["w"] <= b["x"] or b["x"] + b["w"] <= a["x"] or a["y"] + a["h"] <= b["y"] or b["y"] + b["h"] <= a["y"]
 expect = {
     "incoming": ["answerHandle"], "incoming-number": ["answerHandle"], "replies": ["answerHandle"],
     "in-call": ["muteToggle", "speakerToggle", "endButton", "foldButton"],
     "heads-up": ["declineButton", "answerButton"], "waiting": ["declineButton", "answerButton"], "mini": ["endSmall"], "emergency": ["emergencyClose"],
 }
+for name in ["incoming", "replies", "in-call", "heads-up", "emergency"]: expect["landscape-" + name] = expect[name]
 ok = len(geo) == len(expect) and not bad
+if len(geo) != len(expect): print("not ok - %s: %d of %d shots taken" % (theme, len(geo), len(expect)))
 for name, controls in expect.items():
     g = geo.get(name, {})
-    good = all(c in g and on_screen(g[c]) and min(g[c]["w"], g[c]["h"]) >= 48 for c in controls)
-    if name == "heads-up" and good:
+    good = name in geo and all(c in g and on_screen(g[c], name) and min(g[c]["w"], g[c]["h"]) >= 48 for c in controls)
+    if name.endswith("heads-up") and good:
         good = g["declineButton"]["x"] < g["answerButton"]["x"]
     print("%s - %s %s: %s on screen, at least 48 px" % ("ok" if good else "not ok", theme, name, ", ".join(controls)))
     ok = ok and good
+    # The caller and the controls keep out of each other's way: the controls
+    # under the caller upright, beside it (to the right) on its side.
+    other = "ringTrack" if g.get("ringTrack") else "callToggles" if g.get("callToggles") else ""
+    if other and "caller" in g:
+        landscape = size[name][0] > size[name][1]
+        c, o = g["caller"], g[other]
+        placed = apart(c, o) and on_screen(c, name) and (c["x"] + c["w"] <= o["x"] if landscape else c["y"] + c["h"] <= o["y"])
+        print("%s - %s %s: the caller %s the controls" % ("ok" if placed else "not ok", theme, name, "left of" if landscape else "above"))
+        ok = ok and placed
+    elif name.startswith("landscape-") and name.split("-")[1] in ("incoming", "replies", "in-call"):
+        print("not ok - %s %s: the caller and the controls are named" % (theme, name)); ok = False
+    if "replySheet" in g:
+        sheet_ok = on_screen(g["replySheet"], name) and ("caller" in g and apart(g["caller"], g["replySheet"]))
+        print("%s - %s %s: the replies cover no caller" % ("ok" if sheet_ok else "not ok", theme, name)); ok = ok and sheet_ok
 for l in bad:
     print("  " + l)
 sys.exit(0 if ok else 1)

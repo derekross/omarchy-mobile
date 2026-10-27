@@ -19,6 +19,11 @@ import "CallModel.js" as CallModel
 // In a call: the elapsed time, mute and speaker toggles, and a wide red
 // end button; the chevron folds the card to a strip at the top so the
 // lock's own PIN pad is reachable.
+//
+// On its side (TOUCH-PLAN 2.4: 1040x480, where the 420 px column of ring
+// controls doesn't fit under the caller) the caller takes the left half
+// and the controls the right, each centred in the height; the swipe
+// threshold, the targets and the reply sheet are the same.
 Item {
   id: card
 
@@ -46,6 +51,7 @@ Item {
   readonly property color answerColor: "#1e9e53"
   readonly property color endColor: "#d9362b"
   property bool showReplies: false
+  readonly property bool wide: width > height
 
   // ---------------------------------------------------------------- backdrop
 
@@ -71,9 +77,11 @@ Item {
 
   Column {
     id: caller
-    anchors.horizontalCenter: parent.horizontalCenter
-    y: Math.round(parent.height * 0.13)
-    width: parent.width - 48
+    objectName: "caller"
+    readonly property real column: card.wide ? card.width / 2 : card.width
+    x: Math.round((column - width) / 2)
+    y: card.wide ? Math.round((card.height - height) / 2) : Math.round(card.height * 0.13)
+    width: column - 48
     spacing: 14
 
     Text {
@@ -178,16 +186,16 @@ Item {
   Item {
     id: ringControls
     visible: card.ringing
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-    height: 420
+    x: card.wide ? Math.round(card.width / 2) : 0
+    y: card.height - height
+    width: card.width - x
+    height: card.wide ? card.height : 420
 
     // "Reply": decline with a canned message.
     Pill {
       id: replyButton
       anchors.horizontalCenter: parent.horizontalCenter
-      y: 0
+      y: card.wide ? track.y - height - 16 : 0
       visible: card.replies.length > 0 && !!card.call && card.call.number !== ""
       glyph: String.fromCodePoint(0xF0368)
       label: "Reply"
@@ -199,8 +207,9 @@ Item {
     // The swipe track: answer at the top, decline at the bottom.
     Rectangle {
       id: track
+      objectName: "ringTrack"
       anchors.horizontalCenter: parent.horizontalCenter
-      y: 84
+      y: card.wide ? Math.round((ringControls.height - height) / 2) : 84
       width: 104
       height: 288
       radius: width / 2
@@ -282,15 +291,19 @@ Item {
   // ---------------------------------------------------------------- in a call
 
   Item {
+    id: inCall
     visible: card.mode === "in-call"
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-    height: 360
+    x: card.wide ? Math.round(card.width / 2) : 0
+    y: card.height - height
+    width: card.width - x
+    height: card.wide ? card.height : 360
+    readonly property real stack: toggles.height + 44 + endButton.height + 22 + unlockHint.height
 
     Row {
       id: toggles
+      objectName: "callToggles"
       anchors.horizontalCenter: parent.horizontalCenter
+      y: card.wide ? Math.round((inCall.height - inCall.stack) / 2) : 0
       spacing: 28
 
       Toggle {
@@ -324,6 +337,7 @@ Item {
     }
 
     Text {
+      id: unlockHint
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.top: endButton.bottom
       anchors.topMargin: 22
@@ -361,11 +375,12 @@ Item {
   }
 
   Rectangle {
+    objectName: "replySheet"
     visible: card.showReplies
-    anchors.left: parent.left
-    anchors.right: parent.right
+    x: (card.wide ? Math.round(card.width / 2) : 0) + 12
+    width: card.width - x - 12
     anchors.bottom: parent.bottom
-    anchors.margins: 12
+    anchors.bottomMargin: 12
     height: replyColumn.implicitHeight + 32
     radius: 28
     color: Commons.Color.popups.background
