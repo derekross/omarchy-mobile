@@ -2056,11 +2056,12 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      stay in every stage. With 0.5.2 installed: the stepped music, a
      volume step and 30 s of music at sink 1.0 played through (the
      bottom's estimate peaked at 43 C, no mute).
-   - **Phone left (evening):** kernel 00590 (= 00588 + the `wkfet_amp`
-     and `boost_en` bring-up parameters, branch `omamobile-test-wkfet`),
-     omamobile-audio 0.5.3, speaker.conf at the package defaults (boost
-     off, DRE on, jump rule off at media), sink at 1.0; `dsp_rx6_classh` N,
-     `wkfet_amp` Y.
+   - **Phone left (evening):** kernel 00591 (= 00588 + the `wkfet_amp`,
+     `boost_en` and `bst_ctl` bring-up parameters, branch
+     `omamobile-test-wkfet`; the same three commits on
+     `omamobile-audio-amp`), omamobile-audio 0.5.3, speaker.conf at the
+     package defaults (boost off, DRE on, jump rule off at media), sink at
+     1.0; `dsp_rx6_classh` N, `wkfet_amp` Y, `bst_ctl` 0.
    - **The afternoon: the "static" is the boost converter.** With the
      mutes gone the listener heard constant static under music, worse on
      the bottom. Measured through the phone's own microphone (EP1, the UCM's
@@ -2094,9 +2095,19 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      the chip default, VCTRL2 class-H) match Google's driver, which also
      never writes the boost target unless the DT gives one (stock's does
      not). The bottom's remaining 9-11 % from -10 dBFS up with the
-     converter off is the next question; a fixed boost target (kernel
-     00591, `bst_ctl`, AUDIO-PLAN section 4's reserved register: the
-     owner's call) is the comparison prepared for it.
+     converter off was the next question. **A fixed boost target (kernel
+     00591, `bst_ctl`, BST_CTL_SEL = register; AUDIO-PLAN section 4's
+     reserved register, written with the owner's go and restored after)
+     does not beat the converter off:** at 8.0 V the bottom reads 1.1 % at
+     -20 dBFS and 6 % at -10 (better), the top 4.4 % at -10 (worse than
+     1.1 %); at 5.7 V the top falls apart (76 % at -10 dBFS) and the bottom
+     reads 17 % at -20. The lighter load (the top, about 25 mA) suffers
+     most, as light-load switching behaviour would. Output levels with the
+     converter off equal those at 8 V, so nothing is lost. Decision: the
+     converter stays off at analog 10 and below (0.5.3); the bottom's
+     6-11 % from -10 dBFS up is a separate, smaller question. The
+     converter is needed at gain 17 (stage c9), where its load is 10-20 dB
+     higher and stock runs it; that is the C9i session's ground.
    - **omamobile-audio 0.5.3:** the boost converter off at analog 10 and
      below and on at 17, through `boost_en` (set before the amplifiers
      probe; a kernel without the parameter keeps it on and the status says
