@@ -12,6 +12,10 @@ cmp -s device.conf ../../device/tegu/device.conf
 
 for file in \
   usr/bin/reboot-to \
+  usr/lib/omamobile/tegu-touch-start \
+  usr/lib/modprobe.d/10-omamobile-tegu-touch.conf \
+  usr/lib/systemd/system/omamobile-tegu-touch-start.service \
+  usr/lib/systemd/system/omamobile-tegu-touch-start.timer \
   usr/lib/udev/rules.d/10-omamobile-storage.rules \
   usr/lib/systemd/network/20-usb-gadget.network \
   usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
@@ -23,6 +27,7 @@ for file in \
 done
 grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules"
 grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network"
+test "$(readlink "$tmp/root/usr/lib/systemd/system/timers.target.wants/omamobile-tegu-touch-start.timer")" = ../omamobile-tegu-touch-start.timer
 for absent in \
   usr/bin/omamobile-boot-success \
   usr/bin/omamobile-bootctl \
@@ -31,4 +36,4 @@ for absent in \
   usr/bin/omamobile-camera-start; do
   test ! -e "$tmp/root/$absent"
 done
-echo 'ok - tegu package stages first-light policy only'
+echo 'ok - tegu package stages boot policy and guarded touch startup'

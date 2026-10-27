@@ -10,12 +10,16 @@ build=${2:-build}
 
 install -Dm755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
 install -Dm755 bin/omamobile-tegu-clock-floor "$destination/usr/lib/omamobile/tegu-clock-floor"
+install -Dm755 bin/omamobile-tegu-touch-start "$destination/usr/lib/omamobile/tegu-touch-start"
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/lib/${file#vendor/}"
 done < <(find vendor -type f -print0)
 install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
 ln -sfn ../omamobile-tegu-clock-floor.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-clock-floor.service"
+install -d "$destination/usr/lib/systemd/system/timers.target.wants"
+ln -sfn ../omamobile-tegu-touch-start.timer \
+  "$destination/usr/lib/systemd/system/timers.target.wants/omamobile-tegu-touch-start.timer"
 install -Dm644 device.conf "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-tegu/LICENSE"

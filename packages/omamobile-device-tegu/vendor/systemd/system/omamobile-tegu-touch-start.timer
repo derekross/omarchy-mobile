@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Start Pixel 9a touchscreen after early boot
+
+[Timer]
+OnBootSec=35s
+AccuracySec=1s
+Unit=omamobile-tegu-touch-start.service
+
+[Install]
+WantedBy=timers.target
