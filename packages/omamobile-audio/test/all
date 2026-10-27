@@ -336,6 +336,20 @@ WATCH_N=20 watchrun; wait
 ((rc == 0)) && ! muted || fail "watchdog: an unacknowledged pause is logged only"
 pass "watchdog: mutes on DSP errors, bypass, levels, runtime PM, a stuck heartbeat (c9) and kernel log failures"
 
+# C9j: the coil-estimate jump rule is for analog above 10. At the everyday level the
+# firmware's estimate is open-loop and the bottom amplifier's jumps 10-15 C on any
+# level drop, so a jump there must not mute; OMAMOBILE_SPK_TEMP_JUMP brings it back.
+jump() {  # name [wprep...]: watchdog on a running stream; the bottom's estimate goes 25 -> 40 C a moment in
+  local n=$1; shift; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=("$@")
+  ( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
+  watchrun; wait
+}
+startok w-jump8; jump w-jump8
+((rc == 0)) && ! muted && grep -c 'jump rule off' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: at analog 10 or below a 15 C jump of the estimate does not mute (C9j)"; }
+startok w-jump8f; jump w-jump8f OMAMOBILE_SPK_TEMP_JUMP=5
+((rc == 1)) && muted && grep -c 'jumped 15.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: OMAMOBILE_SPK_TEMP_JUMP=5 brings the jump rule back at any level"; }
+pass "watchdog: the jump rule is off at analog 10 or below unless asked (C9j)"
+
 # stock's media delta at stream start (made-up words in the stock format)
 startok w-delta; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 echo '4,100,200,300' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"
@@ -422,6 +436,10 @@ c9prep=()
 c9 c9-ok
 ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 817 && $(val "Bottom Analog PCM Volume") == 17 &&
   $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels"; }
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
+wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); watchrun; wait
+((rc == 1)) && muted && grep -c 'jumped 15.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 15 C jump of the estimate mutes"; }
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
 mktree tmpfw; c9prep=(OMAMOBILE_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"

@@ -15,7 +15,15 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   top amplifier on the same content, slots swapped, rose 0.17 C). DRE off
   restores the 10-12 numbers (bottom +0.15 C on that burst, +0.25 C on
   30 s of music at full sink volume). Stock runs DRE only at gain 17.
-  omamobile-audio 0.5.2 turns DRE on at analog 17 only. AOC-PLAN C9j.
+  But DRE is only the first trigger: the bottom's estimate jumps 10-15 C
+  on **any level drop** (a volume step down during music, a 13 dB drop
+  cut into the music itself with the sink untouched, the end of a stream,
+  the shell's duck at unlock), while the firmware's own attenuation stays
+  at full scale and the top amplifier moves by 0.1 C. At analog 10 the
+  firmware does not sense the coil, so this is an open-loop estimate the
+  levels do not depend on (AUDIO-PLAN section 4). omamobile-audio 0.5.2:
+  DRE on at analog 17 only, and the watchdog's 5 C jump rule only above
+  analog 10; the 80 C backstop and every other rule stay. AOC-PLAN C9j.
 - **Media does not play through the wrong speaker.** The registers, the
   UCM and listening tests agree with stock: left in TDM slot 0 to the top
   amplifier, right in slot 1 to the bottom. The earpiece is the top

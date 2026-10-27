@@ -2023,9 +2023,46 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      (cover test, left/right balance, C9e) were not judged yet: the
      listener's call. (4) The 10-26 suspend note and SUSPEND-PLAN's stop
      condition (PR #66) blame sleep for this; they should point here.
-   - **Phone left:** `OMAMOBILE_SPK_DRE=0` in `/etc/omamobile/speaker.conf`
-     (0.4.1 still installed), the service restarted, sink at 1.0, media
-     plays at 737/10 on both speakers.
+   - **Continued the same morning: DRE off is not enough; the estimate
+     jumps on any level drop.** With DRE off, 60 s of music at sink 1.0
+     tripped the watchdog at the listener's unlock (25.1 -> 36.7 C within
+     a second, 09:58:16). Reproduced on demand: a sink volume step 1.0 ->
+     0.6 during music (25.1 -> 37.3 C), a 20-step ramp over 1 s (at its
+     first 0.02 step, 25.1 -> 38.0 C), and, with the sink untouched, a
+     13 dB drop cut into the music itself (25.1 -> 36.7 C at the drop, the
+     rise back 5 s later changed nothing). The top amplifier's estimate
+     moved by 0.1 C through the same steps. So the bottom's tune reacts
+     to level *drops*, which explains the whole list: DRE engaging at
+     stream start, a quiet passage, a volume step down, the end of a
+     stream (the first toggle's "36.4 at the last second"), the unlock
+     (the shell's lock duck or notification). The sink volume is software
+     only (the AoC's `PCM Playback Volume` stays 1000 across a `wpctl`
+     change; the default sink is the ALSA node, not a filter). The
+     firmware's own `ATTENUATION` stays at full scale (0x7fffff) through
+     an estimate of 39 C on both amplifiers: it acts on nothing. DSP RX6
+     from the class-H target (`dsp_rx6_classh=Y`, register 0x4c54 read
+     0x21 on both) made no difference to the drop; set back to N. Stock's
+     DT differs from ours in boost peak 3.5 A (ours 2.5 A, as stock's
+     speaker path) and hibernate; stock's only bottom tune is the one we
+     load (`R-cs35l41-dsp1-spk-prot.bin`, `cirrus,tuning-has-prefix`).
+   - **Policy (omamobile-audio 0.5.2):** at analog 10 or below the
+     firmware does not sense the coil (vmon low 1), its open-loop
+     estimate is unreliable, the firmware does not act on it, and the
+     levels are inside AUDIO-PLAN section 4's no-protection limits, so the
+     watchdog's 5 C jump rule now applies only above analog 10 (stage c9,
+     where the C9d-3..6 runaway it was written for happens);
+     `OMAMOBILE_SPK_TEMP_JUMP` sets it in any stage. The 80 C backstop,
+     the heartbeat, the level, bypass, runtime-PM and kernel-log rules
+     stay in every stage. With 0.5.2 installed: the stepped music, a
+     volume step and 30 s of music at sink 1.0 played through (the
+     bottom's estimate peaked at 43 C, no mute).
+   - **Phone left:** omamobile-audio 0.5.2 installed, speaker.conf at the
+     package defaults (DRE off at media, jump rule off at media), sink at
+     1.0, media plays at 737/10 on both speakers; `dsp_rx6_classh` N.
+   - **Still open:** why both tunes' open-loop estimates misbehave (the
+     bottom on level drops at gain 10, both at gain 17 from the first
+     sample, C9d-5/6); that is the C9i gain-17 session's question. The
+     cover test and the balance by ear are the listener's.
 
 ## 0. Top findings
 
