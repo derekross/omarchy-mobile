@@ -1,0 +1,38 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Make a contributor's local signing key for a device port's own packages
+# (docs/RELEASES.md §10, "Contributors' builds"; review lesson L-7). It is
+# not Omarchy Mobile's key: phones and the published repository never trust
+# it. Run once per port:
+#
+#   tools/local-key-init CODENAME
+#
+# keys/CODENAME/ gets a keyring (gnupg/) holding one ed25519 signing key
+# without a passphrase, its fingerprint and its public key (public.asc).
+# tools/build-packages --local CODENAME signs with it, and the build image of
+# build-packages and build-rootfs --local CODENAME trusts it. keys/ is
+# gitignored: never commit, paste or upload it.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+name=${1:-}
+[[ $name =~ ^[a-z0-9]+$ ]] || die "usage: tools/local-key-init CODENAME"
+[[ -f device/$name/device.conf ]] || die "no device/$name/device.conf"
+dir=keys/$name
+[[ ! -e $dir ]] || die "$dir exists; remove it first to make a new key"
+command -v gpg >/dev/null || die "gpg is needed"
+
+mkdir -p "$dir/gnupg"
+chmod 700 "$dir" "$dir/gnupg"
+export GNUPGHOME=$PWD/$dir/gnupg
+uid="Omarchy Mobile local build ($name) <local-$name@omamobile.invalid>"
+gpg --batch --quiet --passphrase '' --quick-generate-key "$uid" ed25519 sign never
+fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')
+[[ $fpr =~ ^[0-9A-F]{40}$ ]] || die "no fingerprint for the new key"
+echo "$fpr" > "$dir/fingerprint"
+gpg --batch --armor --export "$fpr" > "$dir/public.asc"
+gpgconf --kill gpg-agent 2>/dev/null || true
+echo "local key for $name: $fpr"
+echo "  keyring:    $dir/gnupg"
+echo "  public key: $dir/public.asc"

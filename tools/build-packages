@@ -19,6 +19,13 @@
 #     --import DIR   copy prebuilt *.pkg.tar.{zst,xz} from DIR into the repository
 #                    (for example Mesa from an earlier build), then sign it
 #     --list         print what would be built and what is up to date
+#     --local NAME   a contributor's build for device NAME (review lesson L-7):
+#                    the repository is out/NAME/repo/aarch64, the signing key
+#                    keys/NAME (tools/local-key-init), and the build image also
+#                    trusts that key. Imported packages keep their own .sig
+#                    (tools/fetch-published), so only what is built here
+#                    carries the local key. Never the maintainer's keys/ or
+#                    out/repo
 #
 # Mesa, Hyprland and libcamera are large C/C++ builds: under qemu-user on a
 # laptop they take hours (Mesa the longest). They're built only when named or
@@ -30,7 +37,7 @@ source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
 repo=out/repo/aarch64
-all=0 force=0 nocheck=0 container_check=0 list=0 imports=() dirs=()
+all=0 force=0 nocheck=0 container_check=0 list=0 imports=() dirs=() local_name=
 while (($#)); do
   case $1 in
     --all) all=1 ;;
@@ -39,7 +46,8 @@ while (($#)); do
     --check-in-container) container_check=1 ;;
     --list) list=1 ;;
     --import) imports+=("${2:?--import needs a directory}"); shift ;;
-    -h|--help) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --local) local_name=${2:?--local needs a device codename}; shift ;;
+    -h|--help) sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) alarm_die "unknown option $1" ;;
     *) dirs+=("${1%/}") ;;
   esac
@@ -48,7 +56,7 @@ done
 
 # Default order: dependencies of our own packages first (check() of a later
 # package can then install an earlier one from the repository being built).
-ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-lynx omamobile-device-raven omamobile-audio
+ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-lynx omamobile-device-raven omamobile-device-panther omamobile-audio
        omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-owl-widgets omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-mmd omamobile-speaker-tuning omamobile-waydroid
        omamobile-firstboot mesa hyprland libcamera)
@@ -65,10 +73,20 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)); then
 fi
 for d in "${dirs[@]}"; do [[ -f $d/PKGBUILD ]] || alarm_die "no PKGBUILD in $d"; done
 
+keydir=keys
+if [[ -n $local_name ]]; then
+  [[ $local_name =~ ^[a-z0-9]+$ && -f device/$local_name/device.conf ]] \
+    || alarm_die "--local needs a device codename with a device/<codename>/device.conf"
+  repo=out/$local_name/repo/aarch64
+  keydir=keys/$local_name
+  [[ -f $keydir/fingerprint && -d $keydir/gnupg && -f $keydir/public.asc ]] \
+    || alarm_die "no local key in $keydir (run: tools/local-key-init $local_name)"
+  export ALARM_LOCAL_KEY=$ROOT/$keydir/public.asc
+fi
 mkdir -p "$repo"
-export GNUPGHOME=$ROOT/keys/gnupg
-[[ -f keys/fingerprint && -d $GNUPGHOME ]] || alarm_die "no signing key in keys/ (maintainer only; see docs/RELEASES.md §10)"
-key=$(cat keys/fingerprint)
+export GNUPGHOME=$ROOT/$keydir/gnupg
+[[ -f $keydir/fingerprint && -d $GNUPGHOME ]] || alarm_die "no signing key in keys/ (maintainer only; see docs/RELEASES.md §10)"
+key=$(cat "$keydir/fingerprint")
 
 # The version makepkg will produce, from the PKGBUILD's own fields. Our
 # PKGBUILDs read pkgver from a version file through $startdir.
@@ -111,7 +129,9 @@ pkginfo() {
   if command -v bsdtar >/dev/null; then bsdtar -xOf "$1" .PKGINFO; else tar -xOf "$1" .PKGINFO; fi
 }
 
-# Put package files in the repository, replacing older files of the same name
+# Put package files in the repository, replacing older files of the same name.
+# A local build keeps an imported package's own signature (its .sig beside
+# it); everything else is signed by sign_and_index.
 add_to_repo() {
   local file name base
   for file; do
@@ -125,6 +145,7 @@ add_to_repo() {
     done
     cp -f "$file" "$repo/$base"
     rm -f "$repo/$base.sig"
+    if [[ -n $local_name && -f $file.sig ]]; then cp -f "$file.sig" "$repo/$base.sig"; fi
     echo "    $base"
   done
 }

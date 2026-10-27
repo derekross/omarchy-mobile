@@ -1,0 +1,76 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Download Omarchy Mobile's published packages (pkgs.omamobile.org,
+# docs/RELEASES.md §10) with their signatures, for a contributor's local
+# repository: tools/build-packages --local CODENAME --import DIR keeps those
+# signatures, so only the port's own packages carry the local key.
+#
+#   tools/fetch-published [--channel development|stable] DIR
+#
+# The index and every package must be signed by a key that
+# packages/omamobile-keyring trusts and has not revoked, and every package
+# must match the SHA-256 the signed index gives for it; anything else stops
+# the run. Files already in DIR that still verify are not downloaded again.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+channel=development dir=""
+while (($#)); do
+  case $1 in
+    --channel) channel=${2:?}; shift ;;
+    -h|--help) sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) [[ -z $dir ]] || die "one DIR only"; dir=$1 ;;
+  esac
+  shift
+done
+[[ $channel =~ ^(development|stable)$ ]] || die "--channel is development or stable"
+[[ -n $dir ]] || die "usage: tools/fetch-published [--channel development|stable] DIR"
+url=${OMAMOBILE_PKGS_URL:-https://pkgs.omamobile.org}/$channel/aarch64
+command -v gpgv >/dev/null && command -v curl >/dev/null || die "gpgv and curl are needed"
+
+keyring=packages/omamobile-keyring
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+mkdir -m 700 "$tmp/gnupg"
+GNUPGHOME=$tmp/gnupg gpg --batch --quiet --no-default-keyring --keyring "$tmp/omamobile.kbx" \
+  --import "$keyring/omamobile.gpg" 2>/dev/null || die "cannot read $keyring/omamobile.gpg"
+mapfile -t trusted < <(cut -d: -f1 "$keyring/omamobile-trusted" | grep -E '^[0-9A-F]{40}$')
+mapfile -t revoked < <(grep -oE '^[0-9A-F]{40}' "$keyring/omamobile-revoked" 2>/dev/null || true)
+((${#trusted[@]})) || die "no trusted keys in $keyring/omamobile-trusted"
+
+# verify SIG FILE: the primary key behind a good signature must be trusted
+# and not revoked (a subkey's VALIDSIG names its primary last)
+verify() {
+  local primary
+  primary=$(gpgv --keyring "$tmp/omamobile.kbx" --status-fd 1 "$1" "$2" 2>/dev/null \
+    | awk '$2 == "VALIDSIG" {print $NF}' | tail -1) || true
+  [[ -n $primary && " ${trusted[*]} " == *" $primary "* && " ${revoked[*]} " != *" $primary "* ]]
+}
+
+mkdir -p "$dir"
+echo "==> $url"
+curl -fsS --globoff -o "$tmp/omamobile.db" "$url/omamobile.db" || die "cannot fetch the index"
+curl -fsS --globoff -o "$tmp/omamobile.db.sig" "$url/omamobile.db.sig" || die "the index has no signature"
+verify "$tmp/omamobile.db.sig" "$tmp/omamobile.db" || die "the index is not signed by a trusted Omarchy Mobile key"
+
+mkdir -p "$tmp/db" && tar -xzf "$tmp/omamobile.db" -C "$tmp/db"
+n=0
+for desc in "$tmp"/db/*/desc; do
+  file=$(awk '/^%FILENAME%$/ {getline; print; exit}' "$desc")
+  sum=$(awk '/^%SHA256SUM%$/ {getline; print; exit}' "$desc")
+  [[ $file =~ ^[A-Za-z0-9@._+:-]+\.pkg\.tar\.(zst|xz)$ && $sum =~ ^[0-9a-f]{64}$ ]] \
+    || die "$(basename "$(dirname "$desc")"): unexpected index entry"
+  if [[ -f $dir/$file && -f $dir/$file.sig ]] \
+     && [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] && verify "$dir/$file.sig" "$dir/$file"; then
+    echo "    have $file"
+  else
+    curl -fsS --globoff -o "$dir/$file" "$url/$file" || die "cannot fetch $file"
+    curl -fsS --globoff -o "$dir/$file.sig" "$url/$file.sig" || die "$file has no signature"
+    [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] || die "$file does not match the index"
+    verify "$dir/$file.sig" "$dir/$file" || die "$file is not signed by a trusted Omarchy Mobile key"
+    echo "    got  $file"
+  fi
+  n=$((n + 1))
+done
+echo "==> $n packages in $dir, each signed by a trusted Omarchy Mobile key"

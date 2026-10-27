@@ -317,6 +317,16 @@ CI never holds the signing key and never sees a factory image. The maintainer do
 - Rotation and revocation go through `omamobile-keyring`'s `omamobile-trusted` and `omamobile-revoked`, as Arch's keyring does.
 - **Publishing** (`tools/repo-publish`): `pkgs.omamobile.org` has two channels, `development/aarch64` and `stable/aarch64`. `repo-publish development` builds what changed (`build-packages --all`), checks every package's checksum and signature against `omamobile-keyring`'s trusted keys, and uploads packages first, then the index, then the pruning; each channel keeps the current and the previous index's files. `repo-publish stable` promotes development's signed files unchanged, after asking. The maintainer's laptop runs it daily from a clean `origin/main` checkout (`--from-main`, `tools/systemd/omamobile-publish.timer`), and `--remind` opens a "Ready for stable" issue when development has differed from stable for three days. Experimental phones' device packages are published to development only. The server account needs the `deployers` group.
 - Never commit, paste or upload a key, a passphrase or `keys/`. CI gets no key.
+- **Contributors' builds** (review lesson L-7). A port's own packages are signed with a local key that only that contributor's machine trusts, and everything lands under `out/<codename>/` and `keys/<codename>/`, never in the maintainer's `keys/` or `out/repo`:
+
+  ```sh
+  tools/local-key-init panther                       # once: keys/panther/{gnupg,fingerprint,public.asc}
+  tools/fetch-published out/panther/published        # pkgs.omamobile.org/development, each signature checked
+  tools/build-packages --local panther --import out/panther/published packages/omamobile-device-panther
+  KERNEL_OUT=... tools/build-rootfs --local panther  # out/panther/omamobile-rootfs-*.img.zst
+  ```
+
+  `tools/fetch-published` accepts the index and each package only when a key in `omamobile-keyring`'s `omamobile-trusted`, and not in `omamobile-revoked`, signed it, and each package only when it matches the signed index's SHA-256. `build-packages --local` keeps those packages' own `.sig` files, so only what it builds and the repository index carry the local key. The build image of `build-packages` and `build-rootfs --local` trusts the local key too (`ALARM_LOCAL_KEY`, locally signed in that image only). **The phone does not:** after the first boot, `pacman` refuses that `[omamobile]` index until the owner adds the key by hand (`pacman-key --add public.asc`, then `pacman-key --lsign-key <fingerprint>`). No package carries a contributor's key.
 
 ## 11. Release checklist
 
