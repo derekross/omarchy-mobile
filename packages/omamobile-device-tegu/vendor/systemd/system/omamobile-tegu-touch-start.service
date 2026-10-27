@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 [Unit]
 Description=Start Pixel 9a touchscreen power and input
-ConditionPathExists=/sys/firmware/devicetree/base/soc@0/usi@111d00c0/spi@111d0000/touchscreen@0
+ConditionPathExistsGlob=/sys/firmware/devicetree/base/soc*/usi@111d00c0/spi@111d0000/touchscreen@0
 
 [Service]
 Type=oneshot

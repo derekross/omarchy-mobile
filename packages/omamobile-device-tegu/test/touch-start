@@ -1,0 +1,80 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Exercise the persistent hang marker without loading hardware drivers.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script=$PWD/bin/omamobile-tegu-touch-start
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+export OMAMOBILE_TEGU_ROOT=$tmp/root
+export TEST_LOG=$tmp/calls
+export TEST_MARKER=$OMAMOBILE_TEGU_ROOT/var/lib/omamobile/tegu-touch-started
+base=$OMAMOBILE_TEGU_ROOT/sys/firmware/devicetree/base
+input=$OMAMOBILE_TEGU_ROOT/proc/bus/input/devices
+mkdir -p "$base" "$tmp/bin" "${input%/*}"
+export PATH=$tmp/bin:$PATH
+cat > "$tmp/bin/modprobe" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+test -s "$TEST_MARKER"
+grep -qx synced "$TEST_LOG"
+echo "$1" >> "$TEST_LOG"
+[[ ${FAIL_MODULE:-} != "$1" ]]
+EOF
+cat > "$tmp/bin/sync" <<'EOF'
+#!/bin/bash
+echo synced >> "$TEST_LOG"
+EOF
+printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
+chmod +x "$tmp/bin/"*
+printf 'google,zumapro-tegu\0' > "$base/compatible"
+
+# Both the public /soc path (implicit status) and prototype /soc@0 path.
+for soc in soc soc@0; do
+  touch_node=$base/$soc/usi@111d00c0/spi@111d0000/touchscreen@0
+  mkdir -p "$touch_node"
+  [[ $soc != soc@0 ]] || printf 'okay\0' > "$touch_node/status"
+  printf 'N: Name="Synaptics TouchComm Touchscreen"\n' > "$input"
+  : > "$TEST_LOG"
+  "$script"
+  test ! -e "$TEST_MARKER"
+  actual=$(grep -v '^synced$' "$TEST_LOG")
+  test "$actual" = $'exynos_mailbox\nacpm_protocol\nsec_acpm'
+  rm -r "$base/$soc"
+done
+echo 'ok - both DT paths start mailbox before ACPM and remove a successful marker'
+
+mkdir -p "$touch_node"
+printf 'disabled\0' > "${touch_node%/*}/status"
+: > "$TEST_LOG"
+"$script"
+test ! -s "$TEST_LOG"
+rm "${touch_node%/*}/status"
+printf 'google,zuma-husky\0' > "$base/compatible"
+"$script"
+test ! -s "$TEST_LOG"
+printf 'google,zumapro-tegu\0' > "$base/compatible"
+echo 'ok - disabled ancestors and other boards do not load drivers'
+
+if FAIL_MODULE=acpm_protocol "$script"; then
+  echo 'not ok - driver failure was ignored' >&2; exit 1
+fi
+test -s "$TEST_MARKER"
+: > "$TEST_LOG"
+"$script" > "$tmp/skipped"
+test ! -s "$TEST_LOG"
+test -s "$TEST_MARKER"
+echo 'ok - failure retains the marker and the next start skips all drivers'
+
+"$script" --retry
+test ! -e "$TEST_MARKER"
+echo 'ok - explicit retry can recover and clear the marker'
+
+: > "$input"
+: > "$TEST_LOG"
+if "$script" 2> "$tmp/timeout"; then
+  echo 'not ok - missing input was accepted' >&2; exit 1
+fi
+test -s "$TEST_MARKER"
+grep -q 'did not bind' "$tmp/timeout"
+echo 'ok - input timeout also retains the marker'

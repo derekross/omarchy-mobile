@@ -1,9 +1,0 @@
-# SPDX-License-Identifier: MIT
-[Unit]
-Description=Seed the tegu clock before offline package key setup
-ConditionPathExists=/usr/share/pacman/keyrings/omamobile.gpg
-Before=omamobile-firstboot.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/lib/omamobile/tegu-clock-floor

@@ -5,7 +5,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-bash -n build install omamobile-device-tegu.install
+bash -n build install omamobile-device-tegu.install bin/omamobile-tegu-touch-start
 test "$(sha256sum device.conf | cut -d' ' -f1)" = \
   "$(sha256sum ../../device/tegu/device.conf | cut -d' ' -f1)"
 ./build "$tmp/build"
@@ -30,6 +30,8 @@ grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobil
 grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network"
 test "$(readlink "$tmp/root/usr/lib/systemd/system/timers.target.wants/omamobile-tegu-touch-start.timer")" = ../omamobile-tegu-touch-start.timer
 for absent in \
+  usr/lib/omamobile/tegu-clock-floor \
+  usr/lib/systemd/system/omamobile-tegu-clock-floor.service \
   usr/bin/omamobile-boot-success \
   usr/bin/omamobile-bootctl \
   usr/lib/systemd/system/omamobile-boot-success.service \
@@ -37,4 +39,5 @@ for absent in \
   usr/bin/omamobile-camera-start; do
   test ! -e "$tmp/root/$absent"
 done
+test/touch-start
 echo 'ok - tegu package stages boot policy and guarded touch startup'

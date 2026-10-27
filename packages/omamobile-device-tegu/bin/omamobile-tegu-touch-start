@@ -2,12 +2,53 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
-base=/sys/firmware/devicetree/base
-touch_node=$base/soc@0/usi@111d00c0/spi@111d0000/touchscreen@0
+# Tests use a scratch root with fake commands, as omamobile-firstboot does.
+root=${OMAMOBILE_TEGU_ROOT:-}
+if [[ -n $root ]]; then
+  [[ $root == /* && $root != / && -d $root ]] || exit 2
+fi
+base=$root/sys/firmware/devicetree/base
+state=$root/var/lib/omamobile
+marker=$state/tegu-touch-started
 
-[[ -f $touch_node/status ]] || exit 0
-[[ $(tr -d '\0' < "$touch_node/status") == okay ]] || exit 0
+case ${1:-} in
+  ''|--retry) ;;
+  *) echo 'usage: tegu-touch-start [--retry]' >&2; exit 2 ;;
+esac
+[[ -f $base/compatible ]] || exit 0
 [[ $(tr -d '\0' < "$base/compatible") == *google,zumapro-tegu* ]] || exit 0
+
+# Public kernel PR #81 uses /soc; the first-light prototype used /soc@0.
+touch_node=
+for node in "$base"/soc{,@0}/usi@111d00c0/spi@111d0000/touchscreen@0; do
+  [[ -d $node ]] && { touch_node=$node; break; }
+done
+[[ -n $touch_node ]] || exit 0
+# Missing status means enabled in DT. Respect disabled parents as well.
+node=$touch_node
+while [[ $node != "$base" ]]; do
+  if [[ -f $node/status ]]; then
+    case $(tr -d '\0' < "$node/status") in
+      okay|ok) ;;
+      *) exit 0 ;;
+    esac
+  fi
+  node=${node%/*}
+done
+
+[[ ${1:-} == --retry ]] && rm -f "$marker"
+if [[ -e $marker ]]; then
+  echo 'tegu touch: previous start did not finish; leaving touch power alone'
+  echo 'inspect the previous boot log, then run /usr/lib/omamobile/tegu-touch-start --retry'
+  exit 0
+fi
+
+# Persist before loading any driver. Keep the marker on failures and hangs
+# so the next boot cannot repeat the same hardware operation automatically.
+umask 077
+mkdir -p "$state"
+date -Is > "$marker"
+sync -f "$marker" 2>/dev/null || sync
 
 # On current mainline kernels the Exynos mailbox is modular. ACPM can probe
 # without it, but then all channels are skipped and the PMIC cannot power touch.
@@ -16,7 +57,9 @@ modprobe acpm_protocol
 modprobe sec_acpm
 
 for ((i = 0; i < 20; i++)); do
-  if grep -F 'Name="Synaptics TouchComm Touchscreen"' /proc/bus/input/devices >/dev/null; then
+  if grep -F 'Name="Synaptics TouchComm Touchscreen"' "$root/proc/bus/input/devices" >/dev/null; then
+    rm -f "$marker"
+    sync -f "$state" 2>/dev/null || sync
     exit 0
   fi
   sleep 0.5

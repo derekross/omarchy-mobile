@@ -9,14 +9,10 @@ build=${2:-build}
 [[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
 
 install -Dm755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
-install -Dm755 bin/omamobile-tegu-clock-floor "$destination/usr/lib/omamobile/tegu-clock-floor"
 install -Dm755 bin/omamobile-tegu-touch-start "$destination/usr/lib/omamobile/tegu-touch-start"
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/lib/${file#vendor/}"
 done < <(find vendor -type f -print0)
-install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
-ln -sfn ../omamobile-tegu-clock-floor.service \
-  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-clock-floor.service"
 install -d "$destination/usr/lib/systemd/system/timers.target.wants"
 ln -sfn ../omamobile-tegu-touch-start.timer \
   "$destination/usr/lib/systemd/system/timers.target.wants/omamobile-tegu-touch-start.timer"

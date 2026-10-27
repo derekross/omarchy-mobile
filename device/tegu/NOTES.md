@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a (tegu): first light
 
-Verified on one retail Pixel 9a, Tensor G4 (`zumapro`). The tegu boot recipe
-and device package boot native Omarchy with working touch on slot B. This is
-still an experimental integration: a public matching kernel, signed root
-image, and clean installer test are required for an installable release.
+2026-10-22: verified on one retail Pixel 9a, Tensor G4 (`zumapro`).
+This is an experimental integration, not a supported release or installer
+qualification. Kernel, image-tool and package changes need separate PRs.
+The descriptor here intentionally fails closed with current public tools.
 
 Tested kernel: `7.3.0-rc6-omamobile-tegu-tn3-g1cb4bd36f3be-dirty`, private
 branch `omamobile-tegu-touch-power`, worktree/output `wt-touch-power` /
@@ -512,3 +512,51 @@ condition and a known-good B rollback. Preserve stock A and the storage
 guard. This entry is not an installation or diagnostic-flashing runbook.
 
 The gated retest and required evidence are in [BRINGUP-M1](BRINGUP-M1.md).
+
+
+## 2026-10-28: second contributor's native boot and touch
+
+These results are from the PR #74 contributor's own Pixel 9a, a second
+phone; they do not replace the first owner's results above. The last
+verified Android build on this phone's slot A was `CP3A.261005.005`
+(Android 17, October 2026). Subsequent stock recovery attempts failed;
+slot A is not currently a qualified rollback on this phone. Recovery for
+these trials uses privately retained, checksum-verified B images. Arch now
+occupies userdata. No compatibility claim is made for the other owner's
+`BP3A.250905.014` build or for booting September headers on this phone.
+
+Kernel: `7.3.0-rc6-omamobile-push1-g9ea0e19f8dc2`, from the private
+`omamobile-tegu-release` branch, based on public `omamobile` commit
+`33267e524` plus the then-reviewed clock/binding changes and prototype tegu
+board, USB, UFS and touch changes. It is not the tree now proposed in
+[linux-omarchy-mobile #80](https://github.com/derekross/linux-omarchy-mobile/pull/80)
+and [#81](https://github.com/derekross/linux-omarchy-mobile/pull/81).
+Those public board and touch PRs are the integration target; the private
+prototype overlays have been removed from this package PR.
+
+The guarded `DEVICE=tegu bin/omamobile flash` path wrote only `boot_b`,
+`init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`, selected
+B and rebooted. A second trial used an initramfs without builder SSH keys.
+Both reached native Arch, Hyprland and the Omarchy shell on existing
+userdata. The second boot retained all 1,783 matching modules. With device
+package `0.1.1-2`, the 35-second timer loaded the Exynos mailbox before ACPM;
+ACPM reported 16 usable channels and the S3908 registered at 35.48 seconds.
+The owner had confirmed physical taps and swipes on the earlier prototype;
+this kernel's new-boot check confirmed automatic input registration. Camera
+inspection confirmed the password screen and keyboard after enabling DPMS.
+
+This prototype uses ABL's simple framebuffer, not the native DRM panel
+path in the other owner's integration. Its private image recipe used
+October 2026 headers/AVB metadata and a DECON trigger write. Those settings
+are not in the shared descriptor: it retains main's oldest-owner header
+values, no AVB footer override or display register write, and an inactive
+DTB selector pending public-kernel and cross-owner qualification.
+
+`tools/phone-smoke` on that boot passed the required boot, storage-guard,
+root, kernel-health, USB and session checks: 62 guarded partitions, ext4 on
+userdata, no oops/BUG/WARN, and no failed systemd units. It found the
+1080x2424 display and Synaptics touch input. GPU had no render node; buttons,
+Wi-Fi, Bluetooth, battery/charging, audio, sensors and cameras were absent
+or skipped. Clean installation, slot-success marking and those peripherals
+remain unqualified. The review's later persistent touch marker is covered
+by mocked failure/retry tests, not a new hardware cold-boot claim.
