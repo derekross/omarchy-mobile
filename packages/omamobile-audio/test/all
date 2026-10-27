@@ -22,7 +22,7 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   u=$tmp/ucm2
   mkdir -p "$u/conf.virt.d" "$u/Google"
   cp -r /usr/share/alsa/ucm2/ucm.conf /usr/share/alsa/ucm2/lib "$u/"
-  cp -r ucm2/Google/cheetah ucm2/Google/raven "$u/Google/"
+  cp -r ucm2/Google/cheetah "$u/Google/"
   cp ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf "$u/conf.virt.d/aoctest.conf"
   # No card here: stand in for the card substitutions, keep the rest as is
   sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
@@ -48,6 +48,18 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucmt get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM tegu: Speaker PCM"
   [[ $(ucmt get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM tegu: Mic PCM"
   pass "UCM profile parses: tegu HiFi with Speaker and Mic"
+  # raven: its own long-name file too
+  cp -r ucm2/Google/raven "$u/Google/"
+  cp "ucm2/conf.d/aoc-snd-card/google,raven-aoc-snd-card.conf" "$u/conf.virt.d/raventest.conf"
+  sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/raven/HiFi.conf"
+  ucmr() { ALSA_CONFIG_UCM2=$u alsaucm -c raventest "$@" 2>&1; }
+  [[ $(ucmr list _verbs) == *"0: HiFi"* ]] || fail "UCM raven: the HiFi verb"
+  out=$(ucmr list _devices/HiFi)
+  [[ $out == *"0: Speaker"* && $out == *"1: Mic"* ]] || fail "UCM raven: Speaker and Mic devices"
+  [[ $(ucmr get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM raven: Speaker PCM"
+  [[ $(ucmr get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM raven: Mic PCM"
+  pass "UCM profile parses: raven HiFi with Speaker and Mic"
 fi
 grep -c "find-device:type=pcm,stream=playback,field=id,regex='^EP6 playback'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
   fail "UCM: the Speaker PCM is found by its id"
@@ -60,7 +72,11 @@ tegu_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/52-
 [[ -f "ucm2/conf.d/aoc-snd-card/$tegu_card.conf" ]] || fail "tegu long-name UCM file is named exactly $tegu_card.conf"
 grep -c "channelmix.max-volume = 0.562" wireplumber/52-omamobile-tegu-aoc.conf >/dev/null || fail "the 9a's speaker sink is capped (channelmix.max-volume)"
 grep -c "CAPTURE LIST' 0,1,-1,-1" ucm2/Google/tegu/HiFi.conf >/dev/null || fail "tegu HiFi must set its own mic list (cheetah's 0,3,2 kills the AoC)"
-if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/tegu/HiFi.conf; then
+raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | head -1)
+[[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
+[[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"
+! grep -c "raven" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf >/dev/null || fail "cheetah's shared profile has no raven branch"
+if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/tegu/HiFi.conf ucm2/Google/raven/HiFi.conf; then
   fail "UCM touches no amplifier control"
 fi
 pass "UCM finds the PCMs by id and leaves the amplifiers alone"
@@ -648,6 +664,8 @@ for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-s
          usr/share/wireplumber/wireplumber.conf.d/51-omamobile-aoc.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/google,tegu-aoc-snd-card.conf usr/share/alsa/ucm2/Google/tegu/HiFi.conf \
          usr/share/wireplumber/wireplumber.conf.d/52-omamobile-tegu-aoc.conf \
+         usr/share/alsa/ucm2/conf.d/aoc-snd-card/google,raven-aoc-snd-card.conf usr/share/alsa/ucm2/Google/raven/HiFi.conf \
+         usr/share/wireplumber/wireplumber.conf.d/53-omamobile-raven-aoc.conf \
          usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf usr/bin/omamobile-speaker-eq \
          usr/lib/omamobile-audio/speaker_response.py usr/lib/systemd/user/omamobile-speaker-orient.service; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"

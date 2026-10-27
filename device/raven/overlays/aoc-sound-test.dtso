@@ -62,7 +62,7 @@
 
 		aoc_snd_card: sound-aoc {
 			compatible = "google-aoc-snd-card";
-			aoc-card-name = "google,aoc-snd-card";
+			aoc-card-name = "google,raven-aoc-snd-card";
 
 			dai_link {
 
