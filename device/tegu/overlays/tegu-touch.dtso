@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+/dts-v1/;
+/plugin/;
+
+/* The device package starts ACPM and S2MPG14 after early boot. */
+&ap2apm_mailbox { status = "okay"; };
+&apm_sram { status = "okay"; };
+&acpm_ipc { status = "okay"; };
+&{/firmware/power-management/pmic-1} { status = "okay"; };
+
+&pinctrl_custom { status = "okay"; };
+&sysreg_hsi0 { status = "okay"; };
+&usi20 { status = "okay"; };
+&spi20 { status = "okay"; };
+&{/soc@0/usi@111d00c0/spi@111d0000/touchscreen@0} { status = "okay"; };

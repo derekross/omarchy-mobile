@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: MIT
+/dts-v1/;
+/plugin/;
+
+/* The boot USB gadget is the recovery and rootfs link. */
+&usb_firmware_supply { status = "okay"; };
+&cmu_hsi0 { status = "okay"; };
+&usb_hsphy { status = "okay"; };
+&usb32drd { status = "okay"; };
+&usb { status = "okay"; };
+&usb_dwc3 { status = "okay"; };

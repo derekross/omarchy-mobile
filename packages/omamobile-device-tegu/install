@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Stage only the first-light policy; boot-success and peripheral services
+# Install tested boot and touch policy; boot-success and other peripherals
 # require separate device qualification.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"

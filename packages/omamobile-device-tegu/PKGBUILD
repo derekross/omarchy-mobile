@@ -2,7 +2,7 @@
 pkgname=omamobile-device-tegu
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile first-light support for the Google Pixel 9a (tegu)"
+pkgdesc="Omarchy Mobile boot and touch support for the Google Pixel 9a (tegu)"
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
