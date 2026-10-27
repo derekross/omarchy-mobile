@@ -37,6 +37,10 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     || fail "the power-key drop-in drifted from the cheetah package"
   pass "the power-key drop-in matches the cheetah package"
+  cmp -s vendor/systemd/sleep.conf.d/10-omamobile.conf \
+    ../omamobile-device-cheetah/vendor/systemd/sleep.conf.d/10-omamobile.conf \
+    || fail "the sleep drop-in drifted from the cheetah package"
+  pass "the sleep drop-in matches the cheetah package"
   cmp -s omamobile-device-lynx.install \
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
@@ -83,6 +87,7 @@ for f in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-boot-succ
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
+         usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-lynx/version \
@@ -103,6 +108,8 @@ grep -q '^HandlePowerKey=ignore$' "$power" \
   || fail "a short press must not power the phone off"
 grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
   || fail "the long press stays the PMIC reset"
+grep -qx 'MemorySleepMode=s2idle' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
+  || fail "sleep is s2idle: gs201's deep sleep never wakes"
 grep -q '^PACKAGE=omamobile-device-lynx$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is lynx"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service") == ../omamobile-boot-success.service ]] \
