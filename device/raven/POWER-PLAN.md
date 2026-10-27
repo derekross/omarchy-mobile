@@ -303,3 +303,34 @@ first clean one since 2026-10-20.
   were there on the previous kernel too. No UFS errors. Boot check: only
   `services` (omamobile-sitd-2, the eSIM, stopped by hand while debugging,
   unrelated). Not measured: an idle-current A/B against the old driver.
+
+**R5b, warm reset (Derek's #9 question, 2026-10-27,
+`7.3.0-rc6-omamobile-push1-gb3d6253b0d61` = #9 v2):** the boot chain powers
+the 13 domains back on after a warm reset. Run from the initramfs only
+(`omamobile.initramfs`, `userdata` dropped from the guard's allowlist so
+GrapheneOS's data stayed read-only), on slot B, with GrapheneOS on slot A.
+- **`pd_ignore_unused` can't answer this on 7.3.** It only skips
+  `genpd_power_off_unused()`; genpd's `sync_state` (`of_genpd_sync_state()`)
+  still turns off every domain with no consumer about 0.4 s into boot. So
+  `pm_genpd_summary` read all 13 `off` with the flag too, after a warm and
+  after a cold boot. What answers it is each domain's `active_time` in
+  `/sys/kernel/debug/pm_genpd/<name>/`: the driver reads the PMU STATUS at
+  probe (`pm_genpd_init(..., !on)`), so a domain found on accumulates
+  active time until `sync_state`, and one found off reads 0.
+- **Cold control** (fastboot menu Power off with the cable out, over 30 s
+  off, Power): all 13 about 375 ms active (dns 5 ms, registered later).
+  The bootloader leaves them on.
+- **Warm** (`reboot-to omamobile` from the same image once all 13 read
+  off): all 13 about 380 ms active (dns 7 ms). The bootloader powered them
+  on again, so a warm reboot into stock finds them as it does after a cold
+  boot.
+- **Open:** one unexplained reset on this kernel at about 06:58 UTC, during
+  a long `cat` of `modem_a` over SSH (domains off, 13 read off): no pstore
+  entry, both watchdogs inactive, and the initramfs's USB-fallback crash
+  doesn't apply (the gadget was configured). Not seen on 10-26's Arch boots
+  with the same kernel. Whether a button was pressed is being checked.
+- Fastboot's Power off with the cable in restarted the phone at once
+  instead of powering off: not a cold boot.
+- Each unmarked test boot spends one of slot B's retries; the fourth
+  (the cold boot) fell back to slot A. `fastboot --set-active=b` refills
+  them.

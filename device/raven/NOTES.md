@@ -4,6 +4,23 @@
 Findings from real hardware that matter beyond one subsystem, newest first.
 Details are in the linked plans.
 
+## 2026-10-27: slot A holds GrapheneOS again
+
+A GrapheneOS OTA had moved GrapheneOS 2026102100+ to slot B
+(`current-slot: b`, `slot-unbootable:a: yes`), so slot B was no longer
+free. The user reinstalled GrapheneOS 2026102100 with its official
+`flash-all.sh` (signature verified): it forces slot A, writes the
+bootloader to both slots (`slider-17.0-15681480`, unchanged), the radio
+to slot A only (`g5123b-145971-260721-B-15910359`, `modem_a` unchanged by
+checksum), and erases `userdata`. After one GrapheneOS boot:
+`current-slot: a`, `slot-successful:a: yes`, `slot-unbootable:a: no`.
+None of our tools wrote slot A; they only write `_b`. GrapheneOS and
+Omarchy share the one `userdata`, so slot A is a bootloader-level way
+back, not a dual boot. Before any slot B plan, read the slot variables
+first: OTAs move GrapheneOS to the other slot. NV baseline after the last
+GrapheneOS boot: `~/android/reference/raven-backup-2026-10-27b` (efs,
+efs_backup, modem_userdata and persist changed; modem_a/b unchanged).
+
 ## 2026-10-20: reinstalled after GrapheneOS
 
 Slot B and userdata reinstalled with `tools/install-phone` (kernel
