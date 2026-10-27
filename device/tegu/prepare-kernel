@@ -1,0 +1,44 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Prepare the pinned public tegu source in a new worktree. No build or flash.
+# Usage: device/tegu/prepare-kernel EXISTING_KERNEL_REPOSITORY NEW_WORKTREE
+set -euo pipefail
+[[ $# == 2 ]] || { echo "usage: $0 KERNEL_REPOSITORY NEW_WORKTREE" >&2; exit 2; }
+repo=$1
+destination=$2
+manifest=$(dirname -- "${BASH_SOURCE[0]}")/kernel.sources
+destination=$(cd -- "$(dirname -- "$destination")" && printf '%s/%s' "$PWD" "$(basename -- "$destination")")
+[[ ! -e $destination && ! -L $destination ]] || { echo 'destination already exists; use a new worktree' >&2; exit 1; }
+git -C "$repo" rev-parse --git-dir >/dev/null
+
+repository= base= tree=
+picks=()
+while read -r key value extra; do
+  case $key in ''|'#'*) continue ;; esac
+  [[ -z $extra ]] || { echo 'malformed kernel.sources entry' >&2; exit 1; }
+  case $key in
+    REPOSITORY)
+      [[ -z $repository && $value == https://github.com/*/*.git ]] || exit 1
+      repository=$value ;;
+    BASE|PICK|TREE)
+      [[ $value =~ ^[0-9a-f]{40}$ ]] || exit 1
+      case $key in
+        BASE) [[ -z $base ]] || exit 1; base=$value ;;
+        PICK) picks+=("$value") ;;
+        TREE) [[ -z $tree ]] || exit 1; tree=$value ;;
+      esac ;;
+    *) echo "unknown kernel.sources key: $key" >&2; exit 1 ;;
+  esac
+done < "$manifest"
+[[ -n $repository && -n $base && -n $tree ]] || exit 1
+
+# Keep the caller's branches intact and preserve the public commits' authors.
+git -C "$repo" fetch --no-tags "$repository" "$base" "${picks[@]}"
+git -C "$repo" worktree add --detach "$destination" "$base"
+for commit in "${picks[@]}"; do
+  git -C "$destination" cherry-pick "$commit"
+done
+actual=$(git -C "$destination" rev-parse 'HEAD^{tree}')
+[[ $actual == "$tree" ]] || { echo 'prepared kernel source tree does not match manifest' >&2; exit 1; }
+printf 'Prepared tegu source tree %s\n' "$actual"
+echo 'Build using the repository kernel workflow with this KERNEL_DIR and a separate KERNEL_OUT.'

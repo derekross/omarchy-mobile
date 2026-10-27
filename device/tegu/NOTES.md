@@ -560,3 +560,26 @@ Wi-Fi, Bluetooth, battery/charging, audio, sensors and cameras were absent
 or skipped. Clean installation, slot-success marking and those peripherals
 remain unqualified. The review's later persistent touch marker is covered
 by mocked failure/retry tests, not a new hardware cold-boot claim.
+
+### Follow-up: recovery and persistent-marker device tests
+
+On the same second phone and private `g9ea0e19f8dc2` kernel, native aarch64
+package builds ran with checks enabled. Device package `0.1.1-3` passed a
+normal reboot: the timer registered touch and removed its marker. A second
+reboot with a deliberately retained, synced marker left touch absent and
+logged that startup was skipped. With host kernel-log streaming and a
+hardware watchdog, explicit `--retry` restored touch and cleared the marker.
+A fresh SSH connection succeeded, the watchdog stopped cleanly, and the
+camera confirmed the Omarchy lock screen after DPMS enable. Package
+`0.1.1-4` then passed native build/check, installation integrity and retry
+checks; its modular-touch behavior on the public kernel remains untested.
+
+The stock-A recovery result above is superseded: all five live A boot-image
+hashes matched the retained official October stock images. Selecting A
+and requesting recovery reached Android's `No command` screen; recovery
+ADB and shell responded, reporting slot A and `CP3A.261005.005`. Recovery
+returned to fastboot and B returned to Omarchy without an image write or
+userdata reset. This verifies recovery boot, not a full Android boot or
+factory reset. As in the repository installer, restoring Android requires
+resetting the userdata occupied by Arch; seamless dual boot is not claimed.
+No newer metadata has been added to the shared tegu descriptor.

@@ -55,6 +55,8 @@ sync -f "$marker" 2>/dev/null || sync
 modprobe exynos_mailbox
 modprobe acpm_protocol
 modprobe sec_acpm
+# Public boards need ACPM for early USB power; gate the touch driver itself.
+modprobe synaptics_tcm
 
 for ((i = 0; i < 20; i++)); do
   if grep -F 'Name="Synaptics TouchComm Touchscreen"' "$root/proc/bus/input/devices" >/dev/null; then

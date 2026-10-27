@@ -39,7 +39,7 @@ for soc in soc soc@0; do
   "$script"
   test ! -e "$TEST_MARKER"
   actual=$(grep -v '^synced$' "$TEST_LOG")
-  test "$actual" = $'exynos_mailbox\nacpm_protocol\nsec_acpm'
+  test "$actual" = $'exynos_mailbox\nacpm_protocol\nsec_acpm\nsynaptics_tcm'
   rm -r "$base/$soc"
 done
 echo 'ok - both DT paths start mailbox before ACPM and remove a successful marker'

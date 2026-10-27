@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Public board/touch base: linux-omarchy-mobile PRs #80 and #81.
+REPOSITORY https://github.com/W4HO-ham/linux-omarchy-mobile.git
+BASE 9386dfaa1d5d1b537ac23e47b65106ee679cfc2a
+# Native TG4C display: #88 drivers, #89 panel, #90 display bindings/DTS.
+# GPU and CPU DVFS changes are separate qualification steps.
+PICK 8770c91fde131ae79d6c547936bdea197b1bec45
+PICK 0caf5f7d50c4eaca94e717b363309e122391bff0
+PICK 3d414e3162f42162477389033bdc9a508e72ee0b
+PICK 223b98abf9bef5a2d74688155678052b1464aa46
+PICK ee633720ec86339915ef30a08a78750a6b2e19b3
+PICK 0cfc47a0cb900269e0608bbccd33f33e50ed5c5a
+PICK de5d1aa13a4886785b3476ddc8a70887fffd6f70
+TREE 1175a53bf9b229319aa183b389071add6645eddc
