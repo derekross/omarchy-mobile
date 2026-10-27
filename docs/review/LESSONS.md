@@ -205,6 +205,16 @@ never change, so reviews can cite them.
   `omamobile-trusted`, `omamobile-revoked` or the keyring package's build
   directory; a contributor key may live in `keys/<codename>/` and the build
   image, nowhere else. Extends L-7. *From:* #25 with #79, round 20.
+- **L-205. A stock-restore step for slot A names everything a stock slot A
+  is, and takes its backup where it can be read.** #35's step wrote five boot
+  images, forbade `vbmeta` and left `super`'s `_a` logical partitions as they
+  were, and took the "after stock's first boot" backup before switching back,
+  though stock has no root to read `efs`. *Check:* every partition the factory
+  image writes for that slot (boot set, `vbmeta*_a`, `super` logical `_a`),
+  `-s` on every fastboot command, stock's expected behaviour with a Linux
+  `userdata` against its stop condition, and the backup taken from Linux
+  after `--set-active=b`. Extends L-2, L-158 and L-198. *From:* #35, round 22.
+
 
 ## Shared code and the reference device
 
@@ -332,6 +342,26 @@ never change, so reviews can cite them.
   for cheetah and felix (byte-identical `etc`), read each path's early
   return, and let the next routine cheetah push be the boot. Extends L-8 and
   L-134. *From:* #41, round 20.
+- **L-206. Shared drivers leave the Pixel 7 Pro unchanged by construction
+  (CONTRIBUTING §6.2).** New behaviour sits behind the contributor's own match
+  data; a deliberate cheetah change needs a reason that holds on cheetah and a
+  run on the maintainer's phone before merge. Where a flag is tested inside a
+  shared function (#57's `UNGATE_POST_CHANGE` in `exynos_ufs_setup_clocks()`),
+  the object can't be byte-identical: accept a per-function object diff plus a
+  flag table showing cheetah's path unchanged (L-111). Per-SoC data also
+  reaches every board that binds it through a fallback compatible (#83's
+  `zumapro_ufs_drvs` is zuma's too). *Check:* cheetah's objects before and
+  after, function by function where they differ; `git grep '"<compatible>"'
+  arch/` for every board listing the data's compatible, fallbacks included,
+  and those boards' plans for statements the change falsifies. Extends L-151.
+  *From:* kernel #57, #82, #83, #88, round 22.
+- **L-207. A gs101/gs201 device package carries the s2idle drop-in.** Cheetah
+  and raven ship `sleep.conf.d/10-omamobile.conf`; felix and lynx don't, so
+  Omarchy's Suspend enters `deep`, which never wakes on gs201. *Check:* `git
+  ls-tree -r origin/main packages/ | grep sleep.conf` for every such device
+  package, and `mem_sleep_default` in the board's bootargs. *From:* #88,
+  round 22.
+
 
 ## Shell and scripts
 
@@ -673,6 +703,40 @@ never change, so reviews can cite them.
   inputs (`oscclk`, `*-alt`, `*-tcxo`) and deliberate omissions, each named
   in the message. The CAL's `FIXEDRATE(PLL_SHAREDn_Dm, …)` lines are the
   factors to add. *From:* kernel #73 with #78, round 21.
+- **L-208. An OPP table is checked against the stock cpufreq domain's
+  limits, not only the firmware's rate list.** #87's little table ended at
+  1950-1954 MHz, above Google's `max-freq = <1950000>`, and `clk-acpm`
+  forwards any rate. *Check:* each cluster's top and bottom OPP against
+  `cpufreq_domainN` `min-freq`/`max-freq` in the SoC's `*-cpu.dtsi`; points a
+  few MHz apart are table entries, not frequencies. Extends L-52. *From:*
+  kernel #87, round 22.
+- **L-209. Google's ACPM DVFS ids come from the `acpm_dvfs_id` enum, not
+  `acpm_vclk_list`.** The zuma enum has 17 domains with AOC at 15; the list
+  leaves AOC out, and counting it would have called #84's ids wrong.
+  *Check:* count the enum from `MIF = ACPM_VCLK_TYPE`. *From:* kernel #84,
+  round 22 (a near miss).
+- **L-210. A register value that "follows the vendor's formula" is checked
+  by recomputing the formula for that panel.** `dsim_calc_underrun()`
+  reproduces cheetah's ABL pair but not tegu's, so #88's 120 Hz value left
+  0.98 ms of slack, not 2.46 ms. *Check:* the vendor function with the panel
+  driver's `underrun_param`, DSC and lane rate, at every rate. Extends L-61.
+  *From:* kernel #88, round 22.
+- **L-211. A board that names one panel for a model shipped with several
+  needs the identification path.** Tegu's connector lists three panels chosen
+  by ABL's `panel_name`, with different rate-switch sequences. *Check:* the
+  device's `*-connector.dtsi` and `BUILD.bazel` panel list; ask owners for the
+  panel name, and gate commands in userspace where the kernel can't read the
+  ID. Extends L-117 and L-169. *From:* kernel #90, round 22.
+- **L-212. A panel backlight's range matches the vendor's brightness
+  capability.** #89 exposed 0-4095 with a 4095 default; Google's normal range
+  ends at 3628, and 0x0FFF is HBM2, pushed on the first wake. *Check:*
+  `brightness_capability` and `default_brightness` in the vendor panel file
+  against the driver's `max` and default. *From:* kernel #89, round 22.
+- **L-213. A driver that changes PMIC or charger state on userspace request
+  restores it at `.shutdown` and reads it back at probe.** #92's inhibit
+  survived reboot, and probe's "auto" default made `auto` a no-op. *Check:*
+  for every write path, what the next boot finds and how userspace undoes it.
+  *From:* kernel #92, round 22.
 
 
 ## The gates themselves
@@ -838,6 +902,15 @@ never change, so reviews can cite them.
   conflict, resolve it in a scratch worktree, run the suites and the cheetah
   comparison on the result, and hand the contributor the resolution. Extends
   L-34, L-73 and L-165. *From:* #82, round 20.
+- **L-214. Stacked or un-rebased heads are gated on today's main and the
+  combined tree, not pairwise.** #87's CI failed on a compatible that its
+  sibling #86 documents (merged, zero messages); #72, left un-rebased while
+  #70 and #78 were, conflicted with main and got no CI, and `merge-tree`
+  between heads on different bases reported conflicts that weren't real.
+  *Check:* `git merge-base` and `git merge-tree origin/main <head>` per PR
+  first; `git grep` open PR heads for a compatible a failure names; give the
+  merge order and the resolved hunk. Extends L-73, L-104, L-165 and L-196.
+  *From:* kernel #87 with #86, #72, round 22.
 
 
 ## Reviews and merging
@@ -992,6 +1065,22 @@ never change, so reviews can cite them.
   before asking for a register read, list the driver's writes to the block
   up to that point in both trees, and name the read as "after write X,
   before write Y". Extends L-135 and C-7. *From:* issue #36, round 21.
+- **L-215. A vendor-kernel A/B outranks host-side hypotheses.** On issue
+  #36 the stock kernel stalled exactly like mainline, retiring every
+  host-driver difference at once, while we were still asking for host-side
+  changes. *Check:* before asking for one, ask whether the stock kernel ran in
+  the failing shape, and list what differs between the stock run that works
+  and the one that doesn't. Extends L-204. *From:* issue #36, round 22.
+- **L-216. A re-push that answers our requests is trailer-checked on every
+  commit.** #77's re-push appended our sentence below its `Link:`, turning
+  the trailer into body text. *Check:* `git interpret-trailers --parse` on
+  each commit of the new head against the old head's. Extends L-119 and
+  L-183. *From:* kernel #77, round 22.
+- **L-217. A version we ask a contributor to take can be taken by main
+  first.** We asked #78 for 0.2.30; #90 shipped it an hour after his push.
+  *Check:* list the maintainer's open and local branches' versions of the
+  package and ask for the first free one, or say "the next free version at
+  merge" and set it ourselves. Extends L-12. *From:* #78, round 22.
 
 
 ## Claims and evidence
@@ -1173,6 +1262,29 @@ never change, so reviews can cite them.
   likely measured from the second cycle. *Check:* find the one-per-boot line
   (`BUCK GPIO: [0]` and `drive it HIGH`) and count the power-on lines before
   the event. Extends L-61 and L-190. *From:* issue #36, round 21 (C-8).
+- **L-218. A filter that printed nothing doesn't show an address was
+  unreserved.** `grep fac00000 /proc/iomem` can't match a range that only
+  contains it. *Check:* the enclosing range (`awk` on the bounds), or another
+  read; don't hold a PR to a capture that no longer exists. *From:* #82,
+  round 22.
+- **L-219. A promise made in one thread is checked in the PR meant to keep
+  it.** On #59 the contributor promised `mem_sleep_default=s2idle` in the
+  board bootargs; #80's don't have it. *Check:* before a device's first board
+  PR, grep our earlier threads for that device ("when I post", "bootargs")
+  and list each promise. Extends L-34 and L-183. *From:* kernel #80, round 22.
+- **L-220. A table "from our capture of stock" is looked for in Google's
+  per-device DT repos first.** #84's GPU table is Google's public
+  `gpu_dvfs_table_v2` (tegu's `dts/zumapro` links to a dtsi that includes
+  zuma's), citable by commit. *Check:* follow `dts/<soc>` links in
+  `kernel/devices/google/<device>` and diff the capture against the public
+  dtsi. Extends L-61 and L-177. *From:* kernel #84, round 22.
+- **L-221. Cite the licence a vendor file states.** Google's panel drivers
+  under `google-modules/display/panels` are SPDX MIT, not GPL. *From:* kernel
+  #89, round 22.
+- **L-222. "Driver X has no suspend handling" as a cause is checked against
+  the reference phone's driver for the same role.** #72 blamed nxp-nci's
+  missing PM ops, but st-nci on cheetah has none and suspends. *Check:* `git
+  grep dev_pm_ops` across sibling drivers. *From:* #72, round 22.
 
 
 ## Corrections (where a review was wrong)
@@ -1232,3 +1344,17 @@ never change, so reviews can cite them.
   likely came from the second. No existing lesson was wrong; the gap was
   that no lesson asked for the re-derivation. *Lesson:* L-204 (with L-203
   for the rail history the read needed). *From:* issue #36, round 21.
+- **C-9 (2026-10-27). Our 2026-10-26 comment on issue #36 said lynx has no
+  BT_EN, XO-clock or bootstrap GPIO, after reading only the Wi-Fi node.**
+  Stock's Bluetooth node names the Wi-Fi buck pin as its `xo-clk-gpio`, reads
+  WLAN_EN and powers the chip's Bluetooth side before the first Wi-Fi load.
+  *Lesson:* a pin's role is read from every stock DT node that names it
+  (`grep -rn` the pin across the device's DTs, then each consumer's driver).
+  Extends L-94 and L-190. *From:* issue #36, round 22.
+- **C-10 (2026-10-27). Our 14:50Z comment on kernel #56 asked for a rebase
+  onto the BCM4389 series because its ID commit was on `omamobile`; nine
+  functions and fields the PR builds on exist only in `omamobile-int`.**
+  *Lesson:* before asking for a rebase onto published work, `git grep` the
+  base for each identifier the PR's hunks use as context, and compare `git
+  log github/omamobile -- <dir>` with `github/omamobile..omamobile-int`.
+  Extends L-121 and L-154. *From:* kernel #56, round 22.
