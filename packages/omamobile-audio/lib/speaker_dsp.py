@@ -1063,8 +1063,19 @@ def cmd_watch(args):
     # A real coil warms by tenths of a degree in a few seconds at these
     # levels (C9d step 2). A reading more than this many degrees above the
     # stream's first one is the false runaway of C9d-3..5 (25 -> 56 C within
-    # 1 s): mute on it at once, without waiting for temp_max.
-    temp_jump = float(os.environ.get('OMAMOBILE_SPK_TEMP_JUMP', '5'))
+    # 1 s): mute on it at once, without waiting for temp_max. Only above
+    # analog 10, though: at the everyday level the firmware does not sense
+    # the coil (vmon low 1) and the bottom amplifier's open-loop estimate
+    # jumps 10-15 C on any level drop (a quiet passage in music, a volume
+    # step down, the end of a stream, DRE engaging; AOC-PLAN C9j) while the
+    # firmware attenuates nothing and the output stays inside the
+    # no-protection limits (AUDIO-PLAN section 4). OMAMOBILE_SPK_TEMP_JUMP
+    # sets the rule in any stage; 0 turns it off. temp_max stays.
+    tj = os.environ.get('OMAMOBILE_SPK_TEMP_JUMP', '')
+    if tj != '':
+        temp_jump = float(tj) or None
+    else:
+        temp_jump = 5.0 if max(analog_ceil.values()) > 10 else None
     amps = Amps(args.card)
     devs = amp_devices()
     try:
@@ -1079,7 +1090,8 @@ def cmd_watch(args):
         mute('watchdog: no speaker PCM')
         return 1
     log(f'watchdog: watching {pcm}, ceilings digital {digital_ceil} analog {analog_ceil}, '
-        f'heartbeat {"enforced" if strict_hb else "logged"}')
+        f'heartbeat {"enforced" if strict_hb else "logged"}, coil temperature backstop {temp_max:g} C, '
+        f'jump rule {f"{temp_jump:g} C within a stream" if temp_jump else "off (analog 10 or below: the estimate is open-loop, C9j)"}')
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
     mode = os.environ.get('OMAMOBILE_SPK_MEDIA_DELTA', '')
@@ -1171,7 +1183,7 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                 t = q(v.get((amp, 'CSPL_TEMPERATURE')), 14)
                 if t is not None:
                     t0 = start_temp.setdefault(amp, t)
-                    if t - t0 > temp_jump:
+                    if temp_jump is not None and t - t0 > temp_jump:
                         problems.append(f'{amp}: coil temperature jumped {t - t0:.1f} C '
                                         f'({t0:.1f} -> {t:.1f}) in this stream, above {temp_jump} C')
             for amp in AMPS:

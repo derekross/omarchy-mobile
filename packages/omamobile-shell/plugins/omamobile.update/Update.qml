@@ -309,6 +309,7 @@ Item {
 
     BorderSurface {
       id: card
+      objectName: "updateCard"
 
       x: Style.gapsOut
       width: parent.width - Style.gapsOut * 2
@@ -336,6 +337,7 @@ Item {
         // ---------- Header: title and close
         Item {
           id: headerRow
+          objectName: "updateHeader"
           anchors.top: parent.top
           anchors.left: parent.left
           anchors.right: parent.right

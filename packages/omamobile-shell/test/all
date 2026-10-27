@@ -168,6 +168,21 @@ grep -cF "omamobile-omarchy>=" PKGBUILD >/dev/null || fail "omamobile-shell need
 if grep -nE 'property +[a-z]+ +(top|bottom|left|right|horizontalCenter|verticalCenter|baseline) *:' plugins/*/*.qml; then fail "no plugin redeclares an anchor line"; fi
 pass "notification shade, Settings gear, unread count and Clipboard wiring"
 
+# Quick settings on its side (TOUCH-PLAN 2.4): the sheet keeps to 58% of
+# the width with the shade beside it, the tile columns follow the sheet's
+# width, and a sheet taller than the screen scrolls above a pinned handle.
+# test/quicksettings-render draws it in the OWL container.
+grep -c 'readonly property bool wide: window.width > window.height' "$qs" >/dev/null || fail "quick settings knows a screen wider than tall"
+grep -c 'readonly property int tileColumns: Math.max(2, Math.min(4, Math.floor(content.width / 180)))' "$qs" >/dev/null || fail "tile columns follow the sheet's width"
+grep -c 'return Math.max(1, Math.ceil(most / tileColumns))' "$qs" >/dev/null || fail "the pager's rows follow the columns"
+grep -c 'readonly property real shadeTop: root.wide ? sheet.y : sheet.y + sheet.height + Style.spacing.lg' "$qs" >/dev/null || fail "the shade sits beside the sheet on its side"
+grep -c 'interactive: contentHeight > height + 1' "$qs" >/dev/null || fail "the sheet scrolls only when taller than the screen"
+grep -c 'anchors.bottomMargin: sheet.contentBottomInset + sheet.handleRoom' "$qs" >/dev/null || fail "the handle stays under the scrolling part"
+if [[ -n ${OMAMOBILE_QS_RENDER:-} ]]; then
+  bash test/quicksettings-render "$OMAMOBILE_QS_RENDER" >/dev/null || fail "quick settings render"
+fi
+pass "quick settings on its side"
+
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
 # without needing the shell's own imports to resolve. Qt 6's first: a Qt 5
 # qmlformat on PATH (Arch's qt5-declarative) rejects Qt 6 syntax.
@@ -271,6 +286,27 @@ if command -v node >/dev/null; then
 fi
 pass "home screen wiring"
 
+# Landscape (TOUCH-PLAN 2.4, #85): a page wider than tall shows the layout
+# turned on its side (HomeModel.transposeLayout, tested in test/home-model.js),
+# derived for the view and never saved; the OWL dp comes from the screen's
+# shorter side, the catalog keeps the portrait cell height, and edit mode
+# waits for portrait. test/home-render draws it in the OWL container.
+home=plugins/omamobile.home/Home.qml
+grep -c 'readonly property bool landscape: owlPageWidth > owlPagerHeight' "$home" >/dev/null || fail "the home knows a page wider than tall"
+grep -c 'HomeModel.transposeLayout(layout, userCatalog, { portrait: \[owlShortSide, owlPortraitPagerHeight\], landscape: \[owlPageWidth, owlPagerHeight\] })' "$home" >/dev/null \
+  || fail "the landscape view turns the layout with the pages' sizes"
+grep -c 'OwlPhone.dpFor(landscape ? owlShortSide : owlPageWidth)' "$home" >/dev/null || fail "the OWL dp comes from the shorter side"
+grep -c 'readonly property real owlCellHeight: owlPortraitPagerHeight / Math.max(1, layout.grid.rows)' "$home" >/dev/null || fail "the catalog keeps the portrait cell height"
+grep -c 'editing = !!on && !landscape' "$home" >/dev/null || fail "edit mode waits for portrait"
+if grep -nE 'commit\(.*viewLayout|setText\(.*viewLayout|serialize\(viewLayout' "$home"; then fail "the landscape view is never saved"; fi
+for use in 'model: root.viewLayout.pages.length' 'readonly property int columns: root.viewLayout.grid.columns' 'readonly property var items: root.viewLayout.pages\[index\]'; do
+  grep -c "$use" "$home" >/dev/null || fail "the pages draw the view layout ($use)"
+done
+if [[ -n ${OMAMOBILE_HOME_RENDER:-} ]]; then
+  bash test/home-render "$OMAMOBILE_HOME_RENDER" >/dev/null || fail "home screen render"
+fi
+pass "home screens in landscape"
+
 # The built-ins from omarchy-widgets are the OWL originals now (the
 # omamobile-owl-widgets package): no QML ports are left, each built-in names
 # its store widget, and the guide's MIT notice ships with the shell.
@@ -342,6 +378,23 @@ grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fa
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
 grep -c '"omamobile-launch", "show-with"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
 grep -c '"omamobile-launch", "own-screen"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
+# The drawer on its side (TOUCH-PLAN 2.4): columns of the portrait width.
+grep -c 'cellWidth: Math.floor(width / root.drawerColumns(width))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer's columns follow its width"
+if command -v node >/dev/null; then
+  node -e '
+const L = require("./plugins/omamobile.launcher/LauncherModel.js")
+const eq = (a, b, what) => { if (a !== b) throw new Error(what + ": " + a + " != " + b) }
+eq(L.drawerColumns(4, 456, 480, 12), 4, "upright")
+eq(L.drawerColumns(4, 1016, 480, 12), 8, "on its side")
+eq(L.drawerColumns(5, 1016, 480, 12), 11, "five across upright")
+eq(L.drawerColumns(4, 1016, 0, 12), 4, "no screen known")
+eq(L.drawerColumns(4, 300, 480, 12), 4, "narrower than the screen")
+' || fail "the drawer's columns on its side"
+fi
+if [[ -n ${OMAMOBILE_LAUNCHER_RENDER:-} ]]; then
+  bash test/launcher-render "$OMAMOBILE_LAUNCHER_RENDER" >/dev/null || fail "app drawer render"
+fi
+pass "the drawer on its side"
 # Recent apps' bottom actions take a touch tap alone: an exclusive
 # TapHandler in a band that swallows touches, so the tap-to-dismiss area
 # under them (which disarmed Clear all and closed recents before the second
@@ -355,7 +408,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
-  pass "recent apps under touch: Clear all, Home, a near miss, a card"
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, the cards on their side"
 fi
 rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -413,6 +466,12 @@ for line in bad:
     print("  " + line)
 sys.exit(1 if bad else 0)
 PY
+# On its side (TOUCH-PLAN 2.4) the sheet fits as it is: the card fills the
+# screen, the overview and the result scroll, the PIN sits above the
+# keyboard. test/update-render draws every page in the OWL container.
+if [[ -n ${OMAMOBILE_UPDATE_RENDER:-} ]]; then
+  bash test/update-render "$OMAMOBILE_UPDATE_RENDER" >/dev/null || fail "update sheet render"
+fi
 pass "update sheet"
 
 # The permission sheet: the portal Access backend (its pure parts, then the

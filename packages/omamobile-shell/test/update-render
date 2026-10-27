@@ -1,0 +1,97 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the update sheet (omamobile.update), upright and
+# on its side (TOUCH-PLAN 2.4), in a dark and a light Omarchy theme, with
+# checks that the card, its header and every button stay on screen: the
+# real Update.qml, its layer-shell window a plain Item, each page set from
+# made-up facts (nothing runs omamobile-update here). Runs inside the OWL
+# conformance container (tests/owl/Dockerfile), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/update-render /src/logs/update-render
+#
+# test/all runs it when OMAMOBILE_UPDATE_RENDER names an output directory.
+set -euo pipefail
+out=${1:?Usage: update-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=${OMAMOBILE_UPDATE_PLUGIN:-$here/../plugins/omamobile.update}
+[[ -d /omarchy-shell && -d /themes ]] || { echo "update-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "update-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 TZ=Europe/Berlin
+
+h=/tmp/update-harness
+rm -rf "$h"; mkdir -p "$h"
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/update"
+# The sheet is a layer-shell window on the phone; here a plain Item that
+# fills the plugin's root.
+sed -i -E \
+  -e '/^    (anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
+  -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+  "$h/update/Update.qml"
+grep -c '^  Item { anchors.fill: parent$' "$h/update/Update.qml" >/dev/null || { echo "update-render: no PanelWindow to stand in for" >&2; exit 1; }
+cp "$here/update-render.qml" "$h/"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/update-home-$theme
+  rm -rf "$home"; mkdir -p "$home/.local/state/omarchy/current"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
+import json, sys
+out, theme = sys.argv[1:]
+# Made-up facts for the overview and the result (omamobile-update's JSON shapes).
+info = {"omarchy": "4.0.6", "omarchy_update": "omarchy 4.0.6 -> 4.0.7", "update_count": 23, "battery": 80, "on_battery": True,
+        "patches": {"applied": 19, "upstream": 1, "failed": 0}, "credential": "pin", "blockers": []}
+result = {"result": "ok", "needs_reboot": True, "reasons": ["The kernel's modules changed"], "omarchy_before": "4.0.6", "omarchy_after": "4.0.7",
+          "log": "/var/log/omamobile/update.log"}
+def shot(name, w, h, page, **extra):
+    s = {"name": name, "png": "%s/update-%s-%s.png" % (out, name, theme), "w": w, "h": h, "page": page}
+    s.update(extra)
+    return s
+print(json.dumps({"info": info, "result": result, "shots": [
+    shot("portrait", 480, 1040, "overview"),
+    shot("landscape", 1040, 480, "overview"),
+    shot("landscape-auth", 1040, 480, "auth"),
+    shot("landscape-progress", 1040, 480, "progress"),
+    shot("landscape-result", 1040, 480, "result"),
+]}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 UPDATE_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/update-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/update-render.txt" || true
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import json, re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l) and "hyprctl" not in l and "delayed function evaluation" not in l]
+geo = {}
+for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
+    geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
+def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
+ok = not bad and len(geo) == 5
+if len(geo) != 5: print("not ok - %s: %d of 5 shots taken" % (theme, len(geo)))
+for l in bad: print("  " + l[:200])
+def check(name, good, why=""):
+    global ok
+    print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
+    ok = ok and good
+want = {"overview": ["Update", "Check again"], "auth": ["Update", "Cancel", "ABC"], "progress": [], "result": ["Done", "Restart now"]}
+for name, g in geo.items():
+    screen, parts, buttons = g["screen"], g["parts"], g["buttons"]
+    check(name + ": the card fills the screen", "updateCard" in parts and inside(parts["updateCard"], screen, 1), json.dumps(parts.get("updateCard")))
+    check(name + ": the header and its close button are on screen", "updateHeader" in parts and inside(parts["updateHeader"], screen) and "close" in parts and inside(parts["close"], screen) and parts["close"]["h"] >= 44)
+    labels = [b["label"] for b in buttons]
+    check(name + ": the page's buttons show (%s)" % ", ".join(want[g["page"]]), all(l in labels for l in want[g["page"]]), json.dumps(labels))
+    check(name + ": every button is on the card, at least 44 px", all(inside(b, parts["updateCard"], 1) and b["h"] >= 44 for b in buttons) if "updateCard" in parts else False, json.dumps([b for b in buttons if not (inside(b, parts.get("updateCard", screen), 1) and b["h"] >= 44)][:3]))
+    if g["page"] == "auth":
+        check(name + ": the PIN field is on screen, under the header", "pinField" in parts and inside(parts["pinField"], screen) and parts["pinField"]["y"] >= parts["updateHeader"]["y"] + parts["updateHeader"]["h"], json.dumps(parts.get("pinField")))
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status

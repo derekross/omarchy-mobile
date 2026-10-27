@@ -1,9 +1,9 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Shared first-light init. One script for every device.
-# The only display-register write is the pair in /etc/omamobile-simplefb-trig,
+# The only display-register writes are the pairs in /etc/omamobile-simplefb-trig,
 # which bin/omamobile initramfs installs from SIMPLEFB_TRIG_CON. The init
-# writes it only when the board's first compatible string matches
+# writes each pair only when the board's first compatible string matches
 # /etc/omamobile-compatible, the descriptor's COMPATIBLE packed beside it.
 # No trigger file, or a different board, means no write. The bring-up probe
 # uses that same check, so a cheetah image does not read every DPP elsewhere.
@@ -183,15 +183,17 @@ load_modules
 
 # Command-mode panels take a new frame only when their DECON sends one.
 # ABL masks that trigger after the logo. The descriptor's SIMPLEFB_TRIG_CON
-# is the address and value for this phone (TRIG_CON: clear
-# HW_TRIG_MASK_DECON, set HW_TRIG_EN). devmem's second argument is the
-# value, not a width. Stopgap until a real DECON/DSI driver.
+# is one pair per line for this phone (TRIG_CON: clear HW_TRIG_MASK_DECON,
+# set HW_TRIG_EN). devmem's second argument is the value, not a width.
+# Stopgap until a real DECON/DSI driver.
 simplefb_trigger() {
   local trig_addr trig_val
   [ -s /etc/omamobile-simplefb-trig ] || return 0
   board_matches "simplefb trigger" || return 0
-  read -r trig_addr trig_val < /etc/omamobile-simplefb-trig
-  devmem "$trig_addr" "$trig_val" >/dev/null || say "simplefb trigger failed"
+  while read -r trig_addr trig_val; do
+    [ -n "$trig_addr" ] || continue
+    devmem "$trig_addr" "$trig_val" >/dev/null || say "simplefb trigger failed"
+  done < /etc/omamobile-simplefb-trig
 }
 simplefb_trigger
 

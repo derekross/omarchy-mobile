@@ -3,6 +3,13 @@
 
 Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the first-light record.
 
+## 2026-10-27: both triggers unmasked
+
+- **Cover tear source.** On the earlier cover-rate boot, DECON1 `TRIG_CON` (`0x1c241030`) read `0x00003061` before the select, source DDI0. One store of `0x01003061` locked the host counter to the cover tear, DDI1, on `gpp0-4`. That is the finding from the issue #3 report. The inner pair is the DDI0 form at DECON0 `0x1c240030`.
+- **This boot.** `uname -r` was `7.3.0-rc6-omamobile-push1-g485f83c27e5c-dirty`, slot B. The init wrote both pairs before SSH. After the boot, cover `TRIG_CON` read `0x01003061` and inner `TRIG_CON` read `0x00003061`. The DTB reserved `fac00000-fbb7ffff`. That reservation is linux-omarchy-mobile#72, which had not merged. The booted kernel was not that pull request's head. Before that reservation, a filter of `/proc/iomem` for `fac00000` printed no line. The only reserved splash line was `fc000000-fc89efff : reserved`. `0xfac00000` sat in System RAM, not in a reserved range of its own. DPP0 `RDMA_BASEADDR` (`0x1c0b0040`) read `fac00000`, and `RDMA_IMG_SIZE` (`0x1c0b0018`) read `08a00730`, 1840×2208. That is why the inner node uses that address. After the reservation, `/proc/iomem` showed `fac00000-fbb7ffff : reserved`.
+- **What was on the panels.** Both simpledrm cards were connected. Hyprland listed the cover at 1080×2092 and the inner panel at 1840×2208, cover first, so the inner card was a second output rather than the splash. The session was running. This is not a brightness slider, a KMS mode, or DPMS.
+- **The refresh oneshot was still installed.** `omamobile-cover-rate.service` was enabled and ran after the init's pair. Its line was 124.0 Hz, underrun clear, DDI1 already selected. It is not the descriptor change.
+
 ## 2026-10-26: the power key and the GPU in the published kernel
 
 - **Power key.** linux-omarchy-mobile#41 (merged) describes `gpa10-0` on `gpio-keys`, so the 2026-10-22 entry's "not described" no longer holds. On `7.3.0-rc6-omamobile-push1-g9860657fffb1`, slot B, not marked successful: event0 advertised `KEY_VOLUMEDOWN`, `KEY_VOLUMEUP` and `KEY_POWER`, a short press read code 116 down then up, logind reported `HandlePowerKey` and `HandlePowerKeyLongPress` as ignore (`omamobile-device-felix` 0.1.2), and the phone stayed up. A long press was not tried.
@@ -37,7 +44,7 @@ The stock capture's build is `google/felix/felix:17/CP3A.261005.002.A1/202610060
 
 - **Slot B boots folded.** USB networking and SSH at `root@172.16.42.1`. Both cluster watchdogs are stopped. Slot B is not marked successful. Slot A stays GrapheneOS.
 - **The cover console is the cover controller only.** ABL leaves DECON1 `TRIG_CON` (`0x1c241030`) at `0x3070`, which masks the hardware trigger, so the cover keeps the bootloader logo. Writing `0x3061` clears `HW_TRIG_MASK_DECON` and sets `HW_TRIG_EN`. That pair is `SIMPLEFB_TRIG_CON` in `device.conf`. The shared init writes it only when the board's first compatible string is this descriptor's `COMPATIBLE`, and the cover shows the Linux console. Kernel 7.3.0-rc6.
-- **DECON0 `TRIG_CON` (`0x1c240030`) is the inner panel on this phone.** That is the address the Pixel 7 Pro init writes. It was not written. The inner frame count stayed frozen, and the inner panel kept the bootloader logo, including while folded. Do not reset it or program its DSI.
+- **DECON0 `TRIG_CON` (`0x1c240030`) is the inner panel on this phone.** On this date it was not written. The inner frame count stayed frozen, and the inner panel kept the bootloader logo, including while folded. The 2026-10-27 section is the later boot, which writes it on purpose. Do not reset the panel or program its DSI.
 - **The first-light board file** enables the USB controller and the cover framebuffer the bootloader is already scanning, and it leaves both panel nodes, both touch controllers, the GPU, and UFS disabled. That is kernel pull request #1.
 - **The read-only guard was checked on 2026-10-16** (`uname -r`: `7.3.0-rc6-omandroid-push1-g056bfe463354-dirty`). `efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`, `modem_b`, and `devinfo` were copied off the phone. The guard's `ufs-ro:` lines for those seven, and for the allowlist:
 
@@ -69,4 +76,4 @@ The stock capture's build is `google/felix/felix:17/CP3A.261005.002.A1/202610060
 | Inner panel | 2208×1840, 120 Hz, DSI port 0. Not described in the board file | [V] `dumpsys display`; Google `gs201-felix-display.dtsi` |
 | Slots after the GrapheneOS reinstall | A successful and current. B bootable, not yet successful, not unbootable | [V] `fastboot getvar` |
 
-The framebuffer address is not copied from the Pixel 7 Pro. On that phone ABL injects the splash carve-out, and the 7 Pro tree names `0xfac00000`. Using that address here would `no-map` the wrong RAM if the Fold's splash lives elsewhere.
+The cover framebuffer is not the Pixel 7 Pro's splash. The inner address is the later DPP0 read in the 2026-10-27 section, not a copy taken from the 7 Pro tree before that read.

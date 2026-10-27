@@ -1,6 +1,6 @@
 # Touch and mobile usability plan
 
-Status: audit 2026-10-26, on `main` at 30052e8 and the Pixel 7 Pro (omamobile-shell 0.2.16, Omarchy 4.0.6, Hyprland 0.56.2). Open PR #43 (home pill, recents gesture, bigger home icons) is accounted for below.
+Status: 2026-10-27. Batches 0-3 (#48, #61, #62) are merged and on the reference phone: omamobile-shell 0.2.29, omamobile-omarchy 0.1.12. Batch 4 (omamobile-shell 0.2.30, checked on the phone 2026-10-27) is 2.4, the landscape layouts, and fixes #85 (the home widgets collapsed in landscape); what it does and what remains are under [Batch 4](#batch-4-landscape) below. The audit was taken 2026-10-26 on `main` at 30052e8 (omamobile-shell 0.2.16, Omarchy 4.0.6, Hyprland 0.56.2).
 
 Fixed in omamobile-shell 0.2.18 (built and tested offline, not yet checked on the phone): 1.4 (tiles tap through a TapHandler, so a swipe on a tile closes or expands the sheet); 1.5 (the hide-keyboard button is 44 px tall, at the keyboard's top left); 1.9 (press feedback and a two-tap, urgent-coloured Clear all, further from Home); 1.10's settings Remove (two taps, at the far right; the Undo chip is still open); 2.1 without theme overrides (a 12 px floor, `Readable.js`, for every caption-sized label but the home tiles' label, which #43 raises; the update warning at body size with a glyph); 2.6 (44 px hit areas for the quick-settings handle, the page dots and the call chip); 2.7's tiles (only the glyph and name of an unavailable tile are dimmed); 3.7's quick-settings Reset (two taps); and the stale gesture comment in `Bar.qml` from 1.2.
 
@@ -45,7 +45,7 @@ Priorities: **P1** broken, unsafe, or a dead end on a phone; **P2** noticeably a
 | 2.1 | P2 | **Desktop-sized text**: 35 labels at 10 px, body at 12 px. The update sheet's "can't be stopped" warning is its smallest, dimmest text. | `Style.font.caption` across the plugins; `Update.qml:443-452` | Seed per-token font overrides (caption/body-small/body/subtitle → 12/13/14/15), after checking they survive a theme change; the warning in body at full opacity. |
 | 2.2 | P2 | **Gaps (5/10), a 2 px border and 0.96-0.985 window opacity** cost ~5% of the width and let home widgets show through apps. | Omarchy `looknfeel.lua`, `windows.lua` | phone.lua: gaps 0, border 0, opacity 1. |
 | 2.3 | P2 | **More than one window falls back to 240 px tiles**, and dialogs are stretched to full screen (inferred, strong). | phone.lua `maximize = true` on dwindle; `exit_window_retains_fullscreen = false` | `exit_window_retains_fullscreen = true`; no maximize for modal dialogs; consider the scrolling layout at column width 1.0. |
-| 2.4 | P2 | **No landscape layouts**: the call card (420 px of ring controls) doesn't fit 480 px of height; the home grid stays 4x6. | `CallCard.qml:95-96, 184`, `HomeModel.js:21` | Keep shell surfaces portrait (rotate only app workspaces), or landscape layouts, the call card first. |
+| 2.4 | P2 | **No landscape layouts**: the call card (420 px of ring controls) doesn't fit 480 px of height; the home grid stays 4x6 and its OWL widgets collapse (#85). | `CallCard.qml:95-96, 184`, `HomeModel.js:21` | Done in batch 4 (shell 0.2.30, offline): landscape layouts for the home, the call card, quick settings, the drawer, recents and the permission sheet; the update sheet already fit. See Batch 4. |
 | 2.5 | P2 | **Home pill (#43)**: swipes register only in an 18 px strip; the pale pill is nearly invisible over light apps. | PR #43 | A 44 px masked hit strip, a contrasting outline. |
 | 2.6 | P3 | Small hit areas: quick-settings handle 28 px, home page dots 28 px, the bar's call chip 29 px. | `QuickSettings.qml:1511-1530`, `Home.qml:1036-1061`, `Bar.qml:222` | 44 px hit areas; the visuals can stay. |
 | 2.7 | P3 | Contrast: placeholder and secondary text ~3:1; unavailable tiles dimmed twice ("No modem" barely legible). | `Launcher.qml:325, 380, 556`; `Tile.qml:35, 81-88` | 4.5:1 for anything read; dim only the glyph. |
@@ -72,11 +72,31 @@ Priorities: **P1** broken, unsafe, or a dead end on a phone; **P2** noticeably a
 6. Later: a gum shim that uses the shell's dmenu mode on touch (1.11).
 7. Notifications: platform phrasing. On a touch platform `omarchy-notification-send` says "Tap to" for "Click to", "Tap to edit/open" for the screenshot and recording toasts' "Super + Alt + , (or click this)", points Voxtype's "Hold F9" at the Dictation tile (1.12), and drops parenthesised or whole-line "Super + …" hints; a desktop sends what it did before. Patch 0020, omamobile-omarchy 0.1.12 (offline as above).
 
+## Batch 4: landscape
+
+Hyprland transform 1 or 3 gives a 1040x480 logical px output (portrait is 480x1040). omamobile-shell 0.2.30 (built and tested offline; the phone check is open):
+
+- **Home** (#85): a page wider than tall shows the layout turned on its side: the grid's columns and rows swap and each item's place and box turn with them, scaled by the cells' ratio to keep its size in pixels (the landscape cells are 173x87 against 120x151), then clamped to the widget's limits and re-placed where it overlaps (`HomeModel.transposeLayout`). The view derives this; `home.json` stays portrait and nothing is saved. The OWL dp comes from the screen's shorter side (from the landscape width it drew 2.2 times larger into cells 2.6 times shorter, which is what collapsed the widgets), the catalog keeps the portrait cell height, and edit mode (drag, resize, the toolbar) waits for portrait, which a long press says; the sheets still open.
+- **Call card:** the caller on the left half, the ring controls or the in-call controls on the right, each centred; the reply sheet over the controls' half. Same swipe threshold, same targets.
+- **Quick settings:** the sheet keeps to 58% of the width with the notification shade beside it; tile columns follow the sheet's width (two upright, three on the side, the collapsed row in whole rows); a sheet taller than the screen scrolls above a pinned handle.
+- **App drawer:** as many columns of the portrait cell width as fit (four upright, eight on the side), so the icons keep their size.
+- **Recents:** a card keeps the screen's shape instead of 72% of the width, so the preview isn't stretched.
+- **Permission sheet:** the card keeps to 600 px, centred, with Allow and Don't allow side by side.
+- **Update sheet:** fit already (the card fills the screen, its pages scroll, the PIN sits above the keyboard); now drawn in both orientations by its render.
+- **Tests:** offscreen renders in the OWL container of the real plugins, upright and on their side, with geometry checks (`test/home-render` with the today and fetch built-ins fed from fixtures, `call-render`, `quicksettings-render`, `launcher-render`, `access-render`, `update-render`; `test/all` runs each when `OMAMOBILE_*_RENDER` names an output directory), the home model's transposition under node, and recents' landscape case in `test/switcher-touch` (qmltestrunner). Against `origin/main`'s plugins the home render reproduces #85.
+- **Not touched:** the on-screen keyboard (squeekboard's own layouts), the lock screen (Omarchy's; held portrait by omamobile-sensors 0.2.1, #54), the Wi-Fi, Bluetooth and record panels (height-adaptive lists; not yet rendered on their side).
+
+**To check on the phone** (shell 0.2.30, rotated with the sensors or `hyprctl keyword monitor ...,transform,3`): the home page turns with the phone with every widget readable and nothing saved to `home.json` (`shell call omamobile.home state` says `landscape: true`, `viewGrid` 6x4); a long press in landscape says to turn the phone upright; quick settings opens with the shade beside it and the expanded page scrolls above the handle; the drawer shows eight columns; recents' cards keep their shape; an incoming call shows the caller left and the swipe track right (needs a SIM: TELEPHONY-APPS-PLAN).
+
+**Checked on the Pixel 7 Pro (2026-10-27, shell 0.2.30, `7.3.0-rc6-omamobile-push1-00588-gcd72ae58ee47`, rotated with `hyprctl`):** the home widgets lay out side by side with every row readable (#85 fixed), the saved layout file is unchanged, the drawer shows eight columns at the portrait icon size, and quick settings and recents behave as rendered. Two follow-ups seen there, for batch 5: a row of four app icons in portrait becomes a column at the right edge in landscape (the transposition should keep rows of icons as rows, placing them below the widgets), and the landscape view showed four page dots where the layout has three pages (items that no longer fit were pushed to a new page; prefer re-placing them on their own page).
+
+**What remains after batch 4:** 1.11 (gum prompts as sheets: onboarding, PIN setup), 1.12's Nightlight and Reminder tiles, 2.1's per-token font seeds (the 12 px floor is in; the overrides need a theme-change check), 2.7 contrast (4.5:1 for placeholder and secondary text), 3.1 per-site web-app flags, 3.3's upstreamable `menu.d` patch (the rows are hidden by `omamobile-setup-user` for now), 3.5 About, 3.6 haptics, 3.7 polish, and the Omarchy patches 3-6 below.
+
 ## Suggested order
 
 1. Phase 0 (one `omamobile-omarchy` and firstboot release, plus a `phone-smoke` lock check).
 2. Quick wins, each under an hour: 1.4, 1.9 (colour token and confirm), 1.10, 1.6, 2.1, 2.2, 2.6, 3.4, 2.8, 2.9.
 3. Notifications (1.1) and back (1.2): the two biggest gaps.
-4. The rest of Phase 1, then Phase 2's layout items, then Phase 3.
+4. The rest of Phase 1, then Phase 2's layout items, then Phase 3. Batches 0-3 covered Phase 0, 1.1-1.10, 1.12 (Clipboard and Dictation), 2.1 (the floor), 2.2, 2.3, 2.5, 2.6, 2.8, 2.9, 3.2, 3.4, 3.5's PiP and the patches 1, 2 and 7; batch 4 covered 2.4.
 
 Each change that alters how the phone looks or feels is announced before it reaches the reference phone, and checked with a screenshot.

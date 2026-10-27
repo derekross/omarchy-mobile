@@ -4,7 +4,8 @@
 # Switcher.qml itself with Quickshell and Omarchy's modules stubbed
 # (test/qml-stubs) and its layer-shell lines stripped, so its PanelWindow is
 # a plain Window. No compositor, no Quickshell. Exits 77 without
-# qmltestrunner.
+# qmltestrunner. With OMAMOBILE_SWITCHER_SHOTS=DIR it also saves a picture of
+# recent apps on its side (TOUCH-PLAN 2.4).
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 plugin=$here/../plugins/omamobile.switcher
@@ -20,7 +21,8 @@ sed -E \
   -e 's/^([[:space:]]*)PanelWindow \{$/\1Window { width: 412; height: 892/' \
   "$plugin/Switcher.qml" > "$work/switcher/Switcher.qml"
 grep -c 'Window { width: 412' "$work/switcher/Switcher.qml" >/dev/null || { echo "switcher-touch: no PanelWindow to stand in for" >&2; exit 1; }
-cp "$here/switcher-touch.qml" "$work/tst_switcher_touch.qml"
+# OMAMOBILE_SWITCHER_SHOTS: a directory to save the landscape picture in.
+sed -e "s|property string shotDir: \"\"|property string shotDir: \"${OMAMOBILE_SWITCHER_SHOTS:-}\"|" "$here/switcher-touch.qml" > "$work/tst_switcher_touch.qml"
 
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
 exec "$runner" -import "$here/qml-stubs" -input "$work/tst_switcher_touch.qml"

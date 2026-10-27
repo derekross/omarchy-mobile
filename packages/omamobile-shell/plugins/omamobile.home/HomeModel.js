@@ -387,6 +387,13 @@ function normalize(raw, catalog) {
     columns: clampInt(rawGrid.columns, LIMITS.minColumns, LIMITS.maxColumns, GRID.columns),
     rows: clampInt(rawGrid.rows, LIMITS.minRows, LIMITS.maxRows, GRID.rows)
   }
+  return fitPages(raw, grid, catalog)
+}
+
+// raw's pages laid onto grid: every item cleaned and clamped to its limits
+// (cleanItem), one that then overlaps another re-placed on the nearest page
+// with room (placeOn).
+function fitPages(raw, grid, catalog) {
   var layout = emptyLayout(grid)
   layout.pages = []
   layout.nextId = clampInt(raw.nextId, 1, 1e9, 1)
@@ -730,6 +737,45 @@ function setGrid(layout, columns, rows, catalog) {
   return normalize(raw, catalog)
 }
 
+// ---------------------------------------------------------------- landscape
+
+// The layout turned on its side, for a page wider than tall (TOUCH-PLAN
+// 2.4, #85): the grid's columns and rows swap, each item's x and y swap,
+// and its box is turned with them. `pages` gives the portrait and the
+// landscape page in logical px ({ portrait: [w, h], landscape: [w, h] }):
+// the landscape grid's cells are wide and short (173x87 against 120x151 on
+// the Pixel 7 Pro), so the turned box's spans are scaled by the cells'
+// ratio to keep about its size in pixels, which is what a widget's content
+// was laid out for; with the spans merely swapped a 2x2 widget lost half
+// its height and its rows landed on each other. Without `pages` the spans
+// just swap. The result goes through the same clamp and re-placement as a
+// loaded file (fitPages), so each widget keeps to its minimum and maximum
+// and nothing overlaps; an item with no room on its page moves on. Derived
+// for the view only: the file and the layout it came from stay portrait,
+// and nothing here is ever saved.
+function transposeLayout(layout, catalog, pages) {
+  var grid = { columns: layout.grid.rows, rows: layout.grid.columns }
+  var scaleW = 1, scaleH = 1
+  if (pages && pages.portrait && pages.landscape) {
+    var cellW = pages.portrait[0] / layout.grid.columns, cellH = pages.portrait[1] / layout.grid.rows
+    var sideW = pages.landscape[0] / grid.columns, sideH = pages.landscape[1] / grid.rows
+    if (cellW > 0 && cellH > 0 && sideW > 0 && sideH > 0) { scaleW = cellH / sideW; scaleH = cellW / sideH }
+  }
+  var raw = { version: VERSION, grid: grid, home: layout.home, nextId: layout.nextId, pages: [] }
+  for (var p = 0; p < layout.pages.length; p++) {
+    var items = []
+    for (var i = 0; i < layout.pages[p].items.length; i++) {
+      var item = layout.pages[p].items[i]
+      var t = copy(item)
+      t.x = item.y; t.y = item.x
+      t.w = Math.max(1, Math.round(item.h * scaleW)); t.h = Math.max(1, Math.round(item.w * scaleH))
+      items.push(t)
+    }
+    raw.pages.push({ items: items })
+  }
+  return fitPages(raw, grid, catalog)
+}
+
 // ---------------------------------------------------------------- widgets' pure parts
 
 // Open-Meteo's WMO weather codes -> a glyph and words.
@@ -855,7 +901,7 @@ if (typeof module !== "undefined") {
     findItem: findItem, missingApps: missingApps,
     placeOn: placeOn, addWidget: addWidget, addApp: addApp, removeItem: removeItem, restoreItem: restoreItem,
     moveItem: moveItem, resizeItem: resizeItem, setConfig: setConfig,
-    addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid,
+    addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid, transposeLayout: transposeLayout,
     weatherText: weatherText, geocodeUrl: geocodeUrl, forecastUrl: forecastUrl,
     parseGeocode: parseGeocode, parseForecast: parseForecast, parseAgenda: parseAgenda, AGENDA_ARGV: AGENDA_ARGV,
     monthGrid: monthGrid, commandText: commandText

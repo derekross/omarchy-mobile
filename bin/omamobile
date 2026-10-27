@@ -286,8 +286,14 @@ initramfs_config() {
     [[ $DEV_INITRAMFS_FB_WAIT == 1 ]] || die "INITRAMFS_FB_WAIT must be 1 or absent"
   fi
   if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
-    [[ $DEV_SIMPLEFB_TRIG_CON =~ ^0x[0-9a-fA-F]+[[:space:]]+0x[0-9a-fA-F]+$ ]] \
-      || die "SIMPLEFB_TRIG_CON must be \"0xADDR 0xVALUE\" (hex)"
+    local rest=$DEV_SIMPLEFB_TRIG_CON trig_pairs=()
+    while [[ -n $rest ]]; do
+      [[ $rest =~ ^(0x[0-9a-fA-F]+)[[:space:]]+(0x[0-9a-fA-F]+)[[:space:]]*(.*)$ ]] \
+        || die "SIMPLEFB_TRIG_CON must be \"0xADDR 0xVALUE\" pairs"
+      trig_pairs+=("${BASH_REMATCH[1]} ${BASH_REMATCH[2]}")
+      rest=${BASH_REMATCH[3]}
+    done
+    DEV_SIMPLEFB_TRIG_LINES=$(printf '%s\n' "${trig_pairs[@]}")
   fi
   if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
     [[ $DEV_BRINGUP_PROBE == 1 ]] || die "BRINGUP_PROBE must be 1 or absent"
@@ -307,8 +313,8 @@ initramfs_config() {
   [[ -n $etc ]] || return 0
   mkdir -p "$etc"
 
-  # This device's simplefb trigger, and nothing else's. The init writes
-  # exactly this pair, and only when the board matches COMPATIBLE.
+  # This device's simplefb triggers, and nothing else's. The init writes
+  # each pair, and only when the board matches COMPATIBLE.
   # Absent or empty: it writes no display register. The bring-up probe,
   # the module loader and the USB switch use the same COMPATIBLE file, so it
   # is packed for any of them.
@@ -324,7 +330,7 @@ initramfs_config() {
     : > "$etc/omamobile-fb-wait"
   fi
   if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
-    printf '%s\n' "$DEV_SIMPLEFB_TRIG_CON" > "$etc/omamobile-simplefb-trig"
+    printf '%s\n' "$DEV_SIMPLEFB_TRIG_LINES" > "$etc/omamobile-simplefb-trig"
   fi
   # DPP and watchdog reads. Off unless the descriptor asks, and the init
   # still refuses them when the board does not match COMPATIBLE.

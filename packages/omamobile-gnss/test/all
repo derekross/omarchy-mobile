@@ -19,7 +19,8 @@ if [[ ! -f bionic/prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
   exit 0
 fi
-for f in bionic/prebuilt/omamobile-fp-shim.so bionic/prebuilt/stubs/libomamobile-sitril-gps.so \
+for f in bionic/prebuilt/omamobile-fp-shim.so bionic/prebuilt/omamobile-gnss-client \
+         bionic/prebuilt/stubs/libomamobile-sitril-gps.so \
          bionic/prebuilt/stubs/libcom.android.tethering.connectivity_native.so; do
   [[ -f $f ]] || fail "$f missing: build it on the computer first (make -C bionic, see bionic/Makefile)"
   [[ $(head -c 20 "$f" | od -An -tx1 | tr -d ' \n') == 7f454c46020101* ]] || fail "$f is not a 64-bit ELF"

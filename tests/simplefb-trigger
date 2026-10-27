@@ -44,6 +44,11 @@ run
 [[ "$(cat "$t/devmem.log")" == "0x1c241030 0x3061" ]] || fail "a matching board writes its own pair"
 pass "matching board writes its own trigger"
 
+printf '0x1c241030 0x01003061\n0x1c240030 0x00003061\n' > "$t/etc/omamobile-simplefb-trig"
+run
+[[ "$(cat "$t/devmem.log")" == $'0x1c241030 0x01003061\n0x1c240030 0x00003061' ]] || fail "a matching board writes every pair"
+pass "matching board writes every trigger pair"
+
 printf 'google,gs201-cheetah\n' > "$t/etc/omamobile-compatible"
 run
 [[ ! -e $t/devmem.log ]] || fail "a cheetah image on felix wrote a register"
