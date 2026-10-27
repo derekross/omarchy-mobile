@@ -9,6 +9,9 @@ touch_node=$base/soc@0/usi@111d00c0/spi@111d0000/touchscreen@0
 [[ $(tr -d '\0' < "$touch_node/status") == okay ]] || exit 0
 [[ $(tr -d '\0' < "$base/compatible") == *google,zumapro-tegu* ]] || exit 0
 
+# On current mainline kernels the Exynos mailbox is modular. ACPM can probe
+# without it, but then all channels are skipped and the PMIC cannot power touch.
+modprobe exynos_mailbox
 modprobe acpm_protocol
 modprobe sec_acpm
 

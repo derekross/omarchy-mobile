@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 pkgname=omamobile-device-tegu
 pkgver=$(cat "${startdir:-.}/version")
-pkgrel=1
+pkgrel=2
 pkgdesc="Omarchy Mobile boot and touch support for the Google Pixel 9a (tegu)"
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"

@@ -6,7 +6,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 bash -n build install omamobile-device-tegu.install
-cmp -s device.conf ../../device/tegu/device.conf
+test "$(sha256sum device.conf | cut -d' ' -f1)" = \
+  "$(sha256sum ../../device/tegu/device.conf | cut -d' ' -f1)"
 ./build "$tmp/build"
 ./install "$tmp/root" "$tmp/build"
 
