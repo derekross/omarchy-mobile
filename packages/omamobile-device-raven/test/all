@@ -73,18 +73,12 @@ pass "wlan-mac: only a real address from the bootloader"
 
 # Sleep: s2idle only (deep doesn't wake), the hook powers the Wi-Fi chip off
 # (pcie_gs201 too), and the watcher does nothing without its toggle
-for k in 'stacks = 2' 'radio = sit' 'ims = no'; do
-  grep -qx "$k" vendor/omamobile/modem-sit.d/raven.conf || fail "raven's modem default: $k"
+# The modem doesn't start at boot from this package: as on main, the modem
+# packages are installed but not enabled (enabling it is its own change)
+for u in omamobile-modem omamobile-sitd omamobile-sitd-2 omamobile-sit-data-restore; do
+  [ ! -e vendor/systemd/system/multi-user.target.wants/$u.service ] || fail "$u is not enabled by the device package"
 done
-for u in omamobile-modem omamobile-sitd omamobile-sit-data-restore; do
-  [ "$(readlink vendor/systemd/system/multi-user.target.wants/$u.service)" = /usr/lib/systemd/system/$u.service ] \
-    || fail "$u starts at boot"
-done
-# The second SIM is the owner's choice: a phone with one SIM (or the eSIM
-# switched off) would fail its unit at every boot
-[ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-sitd-2.service ] \
-  || fail "omamobile-sitd-2 is not enabled by default"
-grep -qx 'slot_names = tray, eSIM' vendor/omamobile/modem-sit.d/raven.conf || fail "the SIMs are named by raven's slots"
+[ ! -e vendor/omamobile/modem-sit.d ] || fail "no modem-sit defaults here yet"
 grep -qx 'MemorySleepMode=s2idle' vendor/systemd/sleep.conf.d/10-omamobile.conf || fail "sleep is s2idle"
 grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep || fail "unload mode unloads the PCIe host"
 grep -q 'wifi_pci=0000:01:00.0' bin/omamobile-sleep || fail "a Wi-Fi D3 failure falls back to unload mode"

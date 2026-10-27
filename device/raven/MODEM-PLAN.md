@@ -4,10 +4,12 @@
 Status (2026-10-27, `gb3d6253b0d61`): **the modem works as a phone on SIM 1
 (tray)**. The eSIM (SIM 2) is switched off by the owner in Android, which
 disables its profile on the eUICC, so Linux sees no USIM there; since
-device-raven 0.1.23 its sitd (`omamobile-sitd-2`) is opt-in. Derek asked to
-take the modem units and `modem-sit.d/raven.conf` out of #41 and bring them
-with the `omamobile-modem-policy` change in their own PR (to do), so the
-modem won't start by default on a fresh install from #41 alone. NV baseline:
+device-raven 0.1.23 its sitd (`omamobile-sitd-2`) is opt-in. Since device-raven
+0.1.24 the package enables none of the modem's units and ships no
+`modem-sit.d/raven.conf` (Derek's review of #41): they come back with the
+`omamobile-modem-policy` change in their own PR. Until then a fresh install
+starts the modem only after `systemctl enable --now omamobile-modem
+omamobile-sitd`. NV baseline:
 `~/android/reference/raven-backup-2026-10-27b`.
 
 Earlier status (2026-10-20, `g675676713161`): **the modem works as a phone**:
@@ -57,7 +59,7 @@ hand steps:**
 | 4 | An outgoing call with audio | done (CS) |
 | 5 | An incoming call: rings, can be answered, audio both ways | done: 3 of 3 connected with audio both ways (2026-10-20, modem-sit 0.3.43); 0.3.44 starts the audio when the call is up (noise at the pick-up before) |
 | 6 | Mobile data through the data SIM | works, uncached; the bearer set up at boot sometimes carries nothing until SIM 2's sitd restarts (D3) |
-| 7 | A reproducible install: packages enable the modem, first setup writes the SIM settings; no hand-written `/etc` files | done: device-raven enables it, install-phone asks the APNs, `phone-provision -d raven` brings the modem chroot, board id and NV checksums (checked identical to the phone's) |
+| 7 | A reproducible install: packages enable the modem, first setup writes the SIM settings; no hand-written `/etc` files | done, then split: device-raven enabled it until 0.1.24 (now the modem PR's job), install-phone asks the APNs, `phone-provision -d raven` brings the modem chroot, board id and NV checksums (checked identical to the phone's) |
 | 8 | No bring-up overlays: the modem, CPIF and packet-processor nodes in raven's device tree | done (D3) |
 | 9 | 30 minutes of normal use with the modem on (data, a call, texts): no UFS errors, no USB stall | not measured |
 | 10 | A modem crash is noticed: CPIF leaves ONLINE, the user is told, the crash record keeps how it started | in progress (D4): the link died after 93 minutes on 2026-10-21 and nothing noticed |
