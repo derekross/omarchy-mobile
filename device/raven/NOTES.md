@@ -20,8 +20,12 @@ successful, no failed units, and the boot check missed only `audio-card`
 (speaker protection off, as on the boots before). `reboot-to bootloader`
 reached fastboot (`current-slot: b`, both slots successful), so the
 reboot-mode nvmem modules work from the initramfs, and `fastboot
-continue` came back the same way. Not checked: the early splash, since
-this laptop has no Omarchy logo or ImageMagick to build it.
+continue` came back the same way. The early splash, checked on a second
+boot the same day: the frame rendered on the phone with the build's own
+`magick` command and packed through `SPLASH_BGRA_GZ` (this laptop has
+neither the Omarchy theme nor ImageMagick), only the ramdisk changed
+again; `fb0` (simpledrm) appeared at 0.73 s, and the human saw the logo
+within about a second of the bootloader screen, before Plymouth.
 
 ## 2026-10-27: slot A holds GrapheneOS again
 
