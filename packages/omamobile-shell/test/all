@@ -408,7 +408,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
-  pass "recent apps under touch: Clear all, Home, a near miss, a card"
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, the cards on their side"
 fi
 rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then

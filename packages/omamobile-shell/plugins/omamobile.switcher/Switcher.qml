@@ -19,6 +19,9 @@ import "Readable.js" as Readable
 // app's screen, where the two tile as Omarchy tiles them, and "Move to its
 // own screen" gives it one back.
 //
+// On its side (TOUCH-PLAN 2.4: 1040x480) a card keeps the screen's shape,
+// so its preview isn't stretched, and the bottom actions keep their row.
+//
 // Windows come from the Wayland foreign-toplevel list, which gives each one
 // activate() and close(). Home and the hold actions need Hyprland: the
 // actions find a window's Hyprland address and workspace through
@@ -272,7 +275,12 @@ Item {
       boundsBehavior: Flickable.StopAtBounds
       model: root.windows
 
-      readonly property int cardWidth: Math.round(width * 0.72)
+      // 72% of the width upright; on its side, no wider than the screen's
+      // shape gives the card's height (the title sits above the card).
+      readonly property real previewAspect: overlay.height > 0 ? overlay.width / overlay.height : 1
+      readonly property int cardWidth: overlay.width > overlay.height
+        ? Math.round(Math.min(width * 0.72, (height - Style.font.body * 1.4 - Style.space(8)) * previewAspect))
+        : Math.round(width * 0.72)
 
       delegate: Item {
         id: slot
