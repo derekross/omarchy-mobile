@@ -177,8 +177,19 @@ What it says:
   `TLMM_PBL_BOOTSTRAP_STATUS` `0x40` (section 7).
 - The whole `wlaon_reg_access_seq[]` table (131 registers) was read in each
   state; between the two pre-BHI cycles only the stack canary and a running
-  counter differ. The table, the QFPROM row and the JTAG id stay off the
-  repository (they identify the phone).
+  counter differ. The table and the QFPROM row stay off the repository.
+  `WLAN_JTAG_ID` reads `0x1017b0e1` on both phones (a part id), so the two
+  windows land in the same place.
+- **FlorencioJP read the same rows at the stall** (2026-10-27): 147 of the
+  150 addresses, 132 identical to the warm pre-BHI column. Apart from the
+  stall's own trace (the PBL log words, the stage code, the `IMGSIZE` copy
+  in `BHI_ERRDBG3`) and the two registers that move on every run (the
+  global counter and the PBL stack canary), four differ: the three the ROM
+  consults, and `WLAON_MEM_SVS_CFG_REG` (`0x1f806d4`): `0x1` on the warm
+  pre-BHI chip, `0x0` in mission mode, `0x0` at the stall. Same shape as
+  the other three: a value a finished PBL run may leave behind and a cold
+  chip may not have. The rest of the WLAON block, the power sequencer
+  included, matches register for register.
 
 ## 6. Stop conditions
 
@@ -228,8 +239,9 @@ Ordered by what it costs. Nothing here is scheduled.
    (GPIO 103) low by hand for at least five seconds, then `on` (`cnss2`
    logs `drive it HIGH` and waits 100 ms), `linkup`, and read
    `WLAN_SECURE_BOOTN` twice, `TLMM_PBL_BOOTSTRAP_STATUS`,
-   `PBL_WLAN_BOOT_CFG`, `TCSR_PBL_LOGGING`, `WLAON_SOC_POWER_CTRL`,
-   `WLAON_WL_PWR_STATUS_REG` and the ten PBL log words; then `linkdown`,
+   `PBL_WLAN_BOOT_CFG`, `WLAON_MEM_SVS_CFG_REG`, `TCSR_PBL_LOGGING`,
+   `WLAON_SOC_POWER_CTRL`, `WLAON_WL_PWR_STATUS_REG` and the ten PBL log
+   words; then `linkdown`,
    `off`, `on`, `linkup`, read again; then `powerup` to confirm the
    firmware still comes up. Two outcomes: `0x11111111 / 0x0 / 0x0` cold and
    `0x0 / 0x40 / 0x200` after the cycle means the enumerate-and-power-off
