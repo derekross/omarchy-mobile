@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-raven
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile support for the Google Pixel 6 Pro (raven): boot-slot success, USB rescue, display, power and module policy"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT Apache-2.0)
+depends=(bash iproute2 jq systemd util-linux i2c-tools)
+# The modem's drivers stay blacklisted until its runtime loads them
+provides=(omamobile-modem-policy)
+# The [omamobile] entry in pacman.conf and its mirror list, as cheetah's
+# package does (rootfs/pacman.conf includes the mirror list).
+backup=(etc/pacman.d/omamobile-mirrorlist)
+install=omamobile-device-raven.install
+makedepends=(gcc)
+
+build() {
+  "$startdir/build" "$srcdir/build"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir/build"
+}

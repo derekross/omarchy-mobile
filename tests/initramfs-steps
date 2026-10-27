@@ -1,0 +1,118 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The shared init's optional per-board steps (no phone): the module loader
+# (INITRAMFS_MODULES), the fb0 wait (INITRAMFS_FB_WAIT) and the MAX77759 USB
+# switch (USB_SWITCH). bin/omamobile packs each only from its descriptor key,
+# and initramfs/init runs the board-specific ones only when the board's
+# first compatible is the image's COMPATIBLE, so a raven image can't touch
+# another phone's I2C, and cheetah's image packs nothing new.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+init=initramfs/init
+
+# --- Pack time ---
+for dev in cheetah felix; do
+  DEVICE=$dev bin/omamobile initramfs-config "$t/etc-$dev" > "$t/log" 2>&1 || { cat "$t/log"; fail "$dev: initramfs-config"; }
+  for f in omamobile-usb-switch omamobile-fb-wait; do
+    [[ ! -e $t/etc-$dev/$f ]] || fail "$dev packs no $f"
+  done
+done
+pass "cheetah and felix pack none of the new steps"
+
+DEVICE=raven bin/omamobile initramfs-config "$t/etc-raven" > "$t/log" 2>&1 || { cat "$t/log"; fail "raven: initramfs-config"; }
+[[ $(cat "$t/etc-raven/omamobile-compatible") == google,gs101-raven ]] || fail "raven packs its COMPATIBLE"
+[[ $(cat "$t/etc-raven/omamobile-usb-switch") == "10d50000.i2c 0x25" ]] || fail "raven packs its USB switch"
+[[ -e $t/etc-raven/omamobile-fb-wait ]] || fail "raven packs the fb0 wait"
+[[ $(cat "$t/etc-raven/omamobile-simplefb-trig") == "0x1c300030 0x3061" ]] || fail "raven packs its own trigger pair"
+[[ $(cat "$t/etc-raven/omamobile-ufs-rw") == "boot_b vendor_boot_b dtbo_b userdata" ]] || fail "raven packs its allowlist"
+pass "raven packs its board, USB switch, fb0 wait, trigger and allowlist"
+
+R=$t/repo
+mkdir -p "$R/bin" "$R/device/six"
+cp bin/omamobile "$R/bin/omamobile"
+printf 'DEVICE="${DEVICE:-six}"\nSRC_DIR=%s\n' "$t/nosrc" > "$R/omamobile.conf"
+sed -e 's/^CODENAME=.*/CODENAME=six/' device/raven/device.conf > "$t/good.conf"
+om() { (cd "$R" && DEVICE=six bin/omamobile "$@") > "$t/log" 2>&1; }
+refuses() {  # $1: what, $2: sed expression applied to the good descriptor, $3: the message
+  sed -e "$2" "$t/good.conf" > "$R/device/six/device.conf"
+  if om initramfs-config "$t/etc-bad"; then fail "refuses $1"; fi
+  grep -c -- "$3" "$t/log" >/dev/null || { cat "$t/log"; fail "says why it refuses $1"; }
+}
+cp "$t/good.conf" "$R/device/six/device.conf"
+om initramfs-config "$t/etc-good" || { cat "$t/log"; fail "raven's descriptor packs from a copy"; }
+refuses "a USB switch without an I2C controller" 's/^USB_SWITCH=.*/USB_SWITCH="0x25"/' 'USB_SWITCH must be'
+refuses "a USB switch with a register to write" 's/^USB_SWITCH=.*/USB_SWITCH="10d50000.i2c 0x25 0x93"/' 'USB_SWITCH must be'
+refuses "a USB switch without i2c-tools" '/^INITRAMFS_I2C_TOOLS=/d' 'USB_SWITCH needs INITRAMFS_I2C_TOOLS=1'
+refuses "an fb0 wait other than 1" 's/^INITRAMFS_FB_WAIT=.*/INITRAMFS_FB_WAIT=yes/' 'INITRAMFS_FB_WAIT must be 1'
+refuses "board steps without COMPATIBLE" '/^COMPATIBLE=/d' 'COMPATIBLE is missing'
+pass "refuses a malformed USB switch, one without i2c-tools, a bad fb0 wait, and no COMPATIBLE"
+
+# --- Boot time ---
+{
+  sed -n '/^board_matches() {$/,/^}$/p' "$init"
+  sed -n '/^load_modules() {$/,/^}$/p' "$init"
+  sed -n '/^usb_switch() {$/,/^}$/p' "$init"
+  sed -n '/^maybe_usb_switch() {$/,/^}$/p' "$init"
+} > "$t/fn.sh"
+for f in board_matches load_modules usb_switch maybe_usb_switch; do
+  grep -q "^$f() {\$" "$t/fn.sh" || fail "$f found in $init"
+done
+grep -q '^load_modules$' "$init" || fail "the init runs load_modules"
+grep -q '^maybe_usb_switch$' "$init" || fail "the init runs maybe_usb_switch"
+mkdir -p "$t/etc" "$t/bin" "$t/mod" "$t/i2c/platform/soc@0/10d50000.i2c/i2c-5" "$t/i2c/platform/soc@0/10d60000.i2c/i2c-6" "$t/devices"
+ln -s "$t/i2c/platform/soc@0/10d50000.i2c/i2c-5" "$t/devices/i2c-5"
+ln -s "$t/i2c/platform/soc@0/10d60000.i2c/i2c-6" "$t/devices/i2c-6"
+sed -e "s|/etc/omamobile-|$t/etc/omamobile-|g" \
+    -e "s|/proc/device-tree/compatible|$t/compatible|" \
+    -e "s|/lib/modules/omamobile|$t/mod|g" \
+    -e "s|/sys/bus/i2c/devices|$t/devices|" \
+    -e 's|( while sleep 2; do usb_switch quiet; done ) &|:|' \
+    "$t/fn.sh" > "$t/fn-test.sh"
+printf '#!/bin/sh\necho "insmod $*" >> "%s/hw.log"\n' "$t" > "$t/bin/insmod"
+printf '#!/bin/sh\necho "i2cget $*" >> "%s/hw.log"\ncat "%s/reg"\n' "$t" "$t" > "$t/bin/i2cget"
+printf '#!/bin/sh\necho "i2cset $*" >> "%s/hw.log"\necho 0x09 > "%s/reg"\n' "$t" "$t" > "$t/bin/i2cset"
+printf '#!/bin/sh\nexit 0\n' > "$t/bin/sleep"
+chmod +x "$t/bin/"*
+printf 'google,gs101-raven\0google,gs101\0' > "$t/compatible"
+run() {  # $1: the step
+  rm -f "$t/hw.log" "$t/said"
+  PATH="$t/bin:$PATH" sh -c ". '$t/fn-test.sh'; say() { echo \"\$*\" >> '$t/said'; }; $1"
+}
+
+printf 'sec-acpm\nmax77759\n' > "$t/mod/order"
+printf 'google,gs101-raven\n' > "$t/etc/omamobile-compatible"
+run load_modules
+[[ $(cat "$t/hw.log") == "insmod $t/mod/sec-acpm.ko"$'\n'"insmod $t/mod/max77759.ko" ]] || fail "a matching board loads its modules in order"
+printf 'google,gs201-cheetah\n' > "$t/etc/omamobile-compatible"
+run load_modules
+[[ ! -e $t/hw.log ]] || fail "another board's image loaded a module"
+grep -q 'initramfs modules skipped: board is google,gs101-raven, image is google,gs201-cheetah' "$t/said" || fail "the module skip is reported"
+rm "$t/mod/order"
+printf 'google,gs101-raven\n' > "$t/etc/omamobile-compatible"
+run load_modules
+[[ ! -e $t/hw.log ]] || fail "no module list loaded something"
+pass "modules load in order on their own board only"
+
+printf '10d50000.i2c 0x25\n' > "$t/etc/omamobile-usb-switch"
+echo 0x24 > "$t/reg"
+run maybe_usb_switch
+[[ $(cat "$t/hw.log") == "i2cget -f -y 5 0x25 0x93"$'\n'"i2cset -f -y 5 0x25 0x93 0x09"$'\n'"i2cget -f -y 5 0x25 0x93" ]] \
+  || { cat "$t/hw.log"; fail "an open switch on the named controller is closed with 0x09, and read back"; }
+echo 0x09 > "$t/reg"
+run maybe_usb_switch
+[[ $(cat "$t/hw.log") == "i2cget -f -y 5 0x25 0x93" ]] || fail "a closed switch is only read"
+printf 'google,gs201-cheetah\n' > "$t/etc/omamobile-compatible"
+echo 0x24 > "$t/reg"
+run maybe_usb_switch
+[[ ! -e $t/hw.log ]] || fail "another board's image touched I2C"
+printf 'google,gs101-raven\n' > "$t/etc/omamobile-compatible"
+rm "$t/etc/omamobile-usb-switch"
+run maybe_usb_switch
+[[ ! -e $t/hw.log ]] || fail "no USB switch file touched I2C"
+pass "the USB switch writes only 0x09, only when open, only on its own board"
+
+grep -q 'if \[ -f /etc/omamobile-fb-wait \]; then' "$init" || fail "the splash waits for fb0 only with the marker"
+pass "the fb0 wait follows its marker"

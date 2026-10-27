@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (AUDIO-PLAN.md, stage R2): enable the AoC System MMU, the
+ * AoC-to-AP mailbox and the AoC node on raven. The GSA and Trusty are
+ * already enabled in the base DTB (R1); the board id, revision and the
+ * sensor rails are set there too. The modules stay blacklisted from
+ * autoload and are loaded by hand (tools/aoc-stage). Paths, not labels, so
+ * the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/sysmmu@1a090000} {
+	status = "okay";
+};
+
+&{/soc@0/mailbox@176a0000} {
+	status = "okay";
+};
+
+&{/soc@0/aoc@175d0000} {
+	status = "okay";
+};

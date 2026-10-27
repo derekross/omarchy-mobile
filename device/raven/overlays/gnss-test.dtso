@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (GNSS-PLAN.md for raven): enable USI5 as SPI with the
+ * BCM4775x GNSS receiver (omamobile-gs101-gnss). Its supplies are the
+ * S2MPG11 LDOs mainline already describes. omamobile-gnss-start loads the
+ * driver; nothing autoloads it before that.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/soc@0/usi@109400c0} {
+	status = "okay";
+};
+
+&{/soc@0/usi@109400c0/spi@10940000} {
+	status = "okay";
+};

@@ -9,7 +9,7 @@ iio-sensor-proxy's D-Bus API, and rotates Hyprland with the phone.
 | File | What |
 |---|---|
 | `omamobile-sensor-proxy` (system service, enabled at boot after `omamobile-aoc.service`) | `net.hadess.SensorProxy` on the system bus: `HasAccelerometer`, `AccelerometerOrientation`, `AccelerometerTilt`, light (lux), proximity, compass; a sensor samples only while a client holds a claim. Loads the AoC's sensor registry once per AoC boot from `/usr/share/omamobile/sensors/registry` (Google's files from the phone's vendor partition, never shipped) and the factory calibration from `persist` (read-only, with debugfs) |
-| `omamobile-autorotate` (user service, turned on from the rotation lock tile) | claims the accelerometer and sets the monitor's and the touchscreen's transform through `hyprctl` (normal 0, left-up 1, bottom-up 2, right-up 3); `~/.local/state/omamobile/rotation-lock` locks it |
+| `omamobile-autorotate` (user service, turned on from the rotation lock tile) | claims the accelerometer and sets the monitor's and the touchscreen's transform through `hyprctl` (normal 0, left-up 1, bottom-up 2, right-up 3); `~/.local/state/omamobile/rotation-lock` locks it; while the screen is locked it holds portrait (the PIN pad), remembers the orientation and applies it on unlock |
 | `omamobile-gyro` | test client of the gyroscope stream: samples, `--stats` (rate, jitter, latency, drops), `--integrate` (angle turned per axis) |
 | `omamobile-usf` | the USF client, for bring-up: sensor list, registry load, sampling |
 

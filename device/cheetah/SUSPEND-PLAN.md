@@ -1,13 +1,31 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-10-19): **S0-S6 passed and S7 is measured.**
+Status (2026-10-26): **tier 1 userspace on the phone; P0-P3 passed, and
+P5 is stopped on a speaker finding.** Auto-sleep works: Power sleeps and
+wakes, there is no lock flash, the fingerprint works after a wake, Wi-Fi
+stays up, and alarms wake the phone; 13 cycles, 0 failures. But the first
+sound after the sleeps found the bottom CS35L41 with a false coil
+temperature, which only a power-off cleared (NOTES 2026-10-26). **The
+toggle stays off until the amplifiers resume cleanly.** The kernel side of s2idle is done (S0-S7 below; last tested on
+7.3.0-rc6-omamobile-push1-00558-gcbd727f42785, `omamobile-int` @
+`cbd727f42`). Branch `suspend-tier1` in this repository adds:
+- `omamobile-sleepd` (omamobile-shell 0.2.29): sleep once the screen has
+  been off behind a secure lock for 30 s, again 5 s after a dark resume,
+  and at once after the power key; **off until the user's
+  `omamobile-sleep` toggle** (6.2);
+- the power key's request (`omamobile-keys`), and sleep inhibitors for
+  calls (`omamobile-call-watch`) and GNSS (omamobile-gnss 0.2.2) (6.1);
+- the upower decision (6.6: no change until a power-off test passes) and
+  the alarm path (6.7, `tools/alarm-wake-test`).
+
+Next: the tier 1 runbook P0-P8 (section 8, after S8), attended. After that
+comes SYS_SLEEP, the real standby fix.
+
+Earlier status (2026-10-19): **S0-S6 passed and S7 is measured.**
 - Wi-Fi stays up across s2idle (S5c, 31 of 31 freezes).
 - The AoC and sensors work across sleep (S6).
 - Screen off, the phone draws 434 mA awake and 312 mA in s2idle (S7).
-
-Next: S8 (sleep on screen-off by default). After that comes SYS_SLEEP, the
-real standby fix.
 
 Earlier status (2026-10-12, evening): **S0, S1 and S2 passed on the phone** (section 8).
 S3 is next. Kernel branch `omamobile-suspend` in `~/android/mainline/wt-suspend`
@@ -21,9 +39,11 @@ The runbook is section 8: S3 (RTC and the UFS default), S4 (C2), S5 (Wi-Fi
 D3), S6 (AoC and sensors), S7 (battery), S8 (userspace on).
 
 **Lessons from S1/S2 that every later stage keeps:** UFS at `spm_lvl` 5
-(runtime `echo 5` until the kernel default is in, then just check it); Wi-Fi
-unloaded (`modprobe -r brcmfmac_wcc brcmfmac pcie_gs201`) unless the stage is
-testing D3; wake with Volume Up, not Power; log to UFS and run detached.
+(runtime `echo 5` until the kernel default is in, then just check it); wake
+with Volume Up, not Power, unless the step tests the power key; log to UFS
+and run detached. Wi-Fi no longer needs unloading: the D3 handshake passed
+(S5c) and `/etc/omamobile/wifi-keep-across-sleep` keeps it up; the sleep
+hook falls back to unloading after a D3 failure (6.2).
 
 **Goal.** Android-like standby. Screen off means sleep. The power key, USB,
 Bluetooth, Wi-Fi and (later) the modem wake the phone, and the drain is very
@@ -184,9 +204,9 @@ comparison.
 | Driver | What happens in s2idle | Risk / action |
 |---|---|---|
 | **UFS** (`ufs-exynos.c`, gs201 data) | Core default `spm_lvl` = 3: device SLEEP, link Hibern8. The gs101/gs201 vendor `suspend` (`gs101_ufs_suspend`, `L/drivers/ufs/host/ufs-exynos.c:1806-1810`) writes `HCI_GPIO_OUT = 0`, which **asserts the device reset**. Then `phy_power_off` if the link isn't active. Resume does `phy_power_on`, SMU and FMP; nothing deasserts reset, so the Hibern8 exit fails and the core's link recovery resets the host and device (`exynos_ufs_dev_hw_reset`). Stock uses `spm_lvl` 5 (device powered down, link off) for system suspend (`GS/drivers/ufs/ufs-exynos.c:702-705`), so its resume is always a full re-init, which matches the reset. | **Medium, root FS.** S1 at level 3: the first Hibern8 exit failed and a host reset recovered. S2 at level 5 (runtime `echo`): clean. **Kernel default on `omamobile-suspend` (`a7e5e1d95`)**, as Google's driver; stage S3 checks that `spm_lvl` reads 5 after boot. Until that kernel runs, `echo 5 > spm_lvl` before every freeze. `rpm_lvl` stays 3 (stock leaves it too). `sync` before every test |
-| **Display** (simpledrm on ABL's framebuffer; `gs_dsim_cmd` + `panel-samsung-s6e3hc4` for commands and `bl_power`) | simpledrm's suspend only disables its software CRTC. DECON0 → DSIM0 → panel keep running on ABL's setup plus our `TRIG_CON` write from init (`initramfs/init`, from `SIMPLEFB_TRIG_CON`), all powered (`pd_ignore_unused`). The panel driver has no PM ops. | Low for s2idle: the picture stays (a frozen picture is the visible sign of a freeze). Userspace blanks with `bl_power = 4` before sleeping and unblanks on a user wake. For SYS_SLEEP the DPU domain powers off: TRIG_CON is lost, the panel needs its full init (DISPLAY-PLAN D3b/D4c), and with stock's PWREN rails off a powered display domain stopped the wake in external tests |
+| **Display** (gs-decon, our flip-only KMS driver, with `gs_dsim_cmd` + `panel-samsung-s6e3hc4`; DISPLAY-PLAN D5d/D6, D3b) | Updated 2026-10-26: gs-decon replaced simpledrm, and omamobile-device-cheetah sets `gs_decon screen_off=2`, so DPMS off masks DECON's trigger and puts the panel to sleep. gs-decon, the DSIM and the panel driver have **no PM ops**: s2idle leaves DECON0, DSIM0 and the panel's rails as DPMS left them, all powered (`pd_ignore_unused`, no PD driver). The panel's rails stay on (no regulator consumer). | Low for s2idle: sleep only ever starts with the screen off (DPMS off, `screen_off=2`: nothing is scanned out, the panel sleeps), and the screen-on path does the panel's cold init as after any DPMS off. A sleep that started with the panel lit would keep it lit and frozen for the whole sleep, which is why `omamobile-sleepd` refuses unless the screen reads off. For SYS_SLEEP the DPU domain powers off: TRIG_CON is lost, DECON and the DSIM need their restore (DISPLAY-PLAN D4b/D4c), and with stock's PWREN rails off a powered display domain stopped the wake in external tests |
 | **GPU** (Panthor, `clk_acpm`) | System sleep uses `pm_runtime_force_suspend` even though our udev rule pins runtime PM on (`P/packages/omamobile-device-cheetah/vendor/udev/rules.d/20-omamobile-gpu-always-on.rules`). `panthor_device_suspend` stops the scheduler, firmware and MMU, then devfreq, then `clk_disable`. `clk_acpm` has no gate ops, and there is no G3D PD driver, so the GPU stays powered. Resume reboots the MCU firmware. | Medium: the first run of this path. S2 watches for "FW slow reset" or job timeouts after resume |
-| **Wi-Fi** (`pcie_gs201` + brcmfmac) | brcmfmac `.suspend` sends D3_INFORM and waits 2 s for D3_ACK; on timeout it returns **-EIO and aborts the suspend** (`pcie.c:3310-3335`). **It can't work today:** our BCM4389 firmware reports shared flags `0x70050107` (version 7, no `PCIE_SHARED_USE_MAILBOX` `0x2000000`, `bcmpcie.h:103` in Google's driver), so, as in Broadcom's driver, mailbox data (D3 inform/ack, deep sleep) travels as control-ring messages (types `0x23`/`0x24`); brcmfmac writes the TCM mailbox, which this firmware ignores, and logs the replies as "Unsupported msgtype 36". Fixed on branch `omamobile-wifi-d3` (section 7). `pcie-gs201` has **no PM ops**: no PME_Turn_Off, no L2, no PERST, no PHY isolation; the link stays up and the PCI core puts the endpoint in D3hot. Host wake gpa6-1 has no consumer. | **Unload Wi-Fi for stages S1-S4** (`modprobe -r brcmfmac_wcc brcmfmac pcie_gs201`: `brcmfmac_wcc` holds `brcmfmac`, and unloading it first unbinds the device). Wi-Fi across s2idle is stage S5 (sections 6.4, 6.5); the sleep hook unloads it until then (section 6.2). External reports with mainline brcmfmac on this chip: the D3 ack arrives as a control-ring message and was missed until D3 completion was published only after the IRQ thread finished RX; even then about 2 in 20 s2idle resumes hung the firmware ("Failed to reserve space in commonring", then -EIO on every later suspend) |
+| **Wi-Fi** (`pcie_gs201` + brcmfmac) | brcmfmac `.suspend` sends D3_INFORM and waits 2 s for D3_ACK; on timeout it returns **-EIO and aborts the suspend** (`pcie.c:3310-3335`). **It can't work today:** our BCM4389 firmware reports shared flags `0x70050107` (version 7, no `PCIE_SHARED_USE_MAILBOX` `0x2000000`, `bcmpcie.h:103` in Google's driver), so, as in Broadcom's driver, mailbox data (D3 inform/ack, deep sleep) travels as control-ring messages (types `0x23`/`0x24`); brcmfmac writes the TCM mailbox, which this firmware ignores, and logs the replies as "Unsupported msgtype 36". Fixed on branch `omamobile-wifi-d3` (section 7). `pcie-gs201` has **no PM ops**: no PME_Turn_Off, no L2, no PERST, no PHY isolation; the link stays up and the PCI core puts the endpoint in D3hot. Host wake gpa6-1 has no consumer. | **Updated 2026-10-26: done.** The D3 series is in `omamobile-int`, S5c passed 31 of 31 freezes with Wi-Fi connected, and the hook keeps it loaded (6.2). What follows is the history. **Unload Wi-Fi for stages S1-S4** (`modprobe -r brcmfmac_wcc brcmfmac pcie_gs201`: `brcmfmac_wcc` holds `brcmfmac`, and unloading it first unbinds the device). Wi-Fi across s2idle is stage S5 (sections 6.4, 6.5); the sleep hook unloads it until then (section 6.2). External reports with mainline brcmfmac on this chip: the D3 ack arrives as a control-ring message and was missed until D3 completion was published only after the IRQ thread finished RX; even then about 2 in 20 s2idle resumes hung the firmware ("Failed to reserve space in commonring", then -EIO on every later suspend) |
 | **Bluetooth** (`hci_bcm`, `samsung_tty`) | `bcm_suspend` drops BT_DEV_WAKE (gpp16-3) and arms host wake. The UART has suspend, resume and resume_noirq. | Low. For SYS_SLEEP BT_REG_ON (gpp16-2) needs stock's "previous" PDN state, or the chip loses power (BLUETOOTH-PLAN 367) |
 | **AoC** (`aoc_core`, `aoc_channel_dev`, `aoc_alsa_dev`, the `wc-mbox` mailbox; Google's driver) | The AoC is its own always-on processor and keeps running; the AP side only bookkeeps. `aoc_core_suspend/resume` count queued messages for wake-capable services. `aoc_channel_dev`'s `prepare`/`complete` send `SUSPEND_PREPARE`/`WAKEUP_COMPLETE` to `com.google.usf` (the sensor hub), so it can batch. **`wc_mbox_suspend` masks the non-waking services and calls `enable_irq_wake`**: any message on a waking service (sensor events among them) wakes the AP, and `aoc_channel_dev` then holds a 200 ms wakelock per waking message. The sensor proxy and autorotate are frozen with userspace, so a running accelerometer stream may keep waking the phone. | **Unknown; stage S6.** Keep the AoC loaded (never `rmmod`, AGENTS.md). Measure wakes by IRQ with the sensor proxy idle and with autorotate running; check that audio and all four sensors still work after resume. If sensor streams wake it, the sleep hook stops the sensor clients (not the AoC) |
 | **Haptics** (`cs40l26-vibra`, ours) | No PM ops. The DSP is kept out of hibernate; `play_work` on the system workqueue could hit the suspended I2C adapter (-ESHUTDOWN) if a buzz is in flight. | Low/medium. Add a suspend that stops playback and lets the DSP hibernate (Google's `cs40l26.c` PM ops) |
@@ -281,18 +301,27 @@ bring-up experience on this phone, every item matching Google's sources):
 | Dark resume (RTC, BT, gauge, AoC) | Panel stays off. Back to sleep after a **5 s grace**, or when the inhibitor that justified the wake is released (an alarm's own unit, a sync job), capped at 60 s |
 | Screen on, any state | Never suspend (the watcher only acts with the panel off) |
 
-**Inhibitors** (logind `--what=sleep`, honoured by `systemctl suspend`; the
-watcher checks `systemd-inhibit --list` too so it doesn't spam failed
-requests):
+**What keeps the phone awake** (as built on `suspend-tier1`, 2026-10-26).
+Logind `--what=sleep` inhibitors in block mode are honoured by `systemctl
+suspend`; the watcher also reads them (`ListInhibitors`), so it doesn't
+send requests logind would refuse. Delay-mode inhibitors (NetworkManager,
+the lock screen) only delay sleep and don't count.
 
-- audio playing: `omamobile-audio` takes a `block` sleep inhibitor while a
-  PipeWire sink is `RUNNING` (WirePlumber doesn't by default);
-- calls (later, modem), `omarchy update`/pacman (wrap the update command),
-  GNSS fixes in progress (`omamobile-gnss` holds one while a client has a
-  session), and user downloads they asked to keep running;
-- a toggle to disable sleep altogether (`omarchy-toggle-enabled omamobile-no-sleep`)
-  for development; SSH sessions over USB never sleep the phone under the
-  user's feet, so the watcher also refuses while an SSH session is open.
+| What | How | Where |
+| --- | --- | --- |
+| The toggle | sleep only with `omarchy-toggle omamobile-sleep on` (off by default; the first release ships it off) | `omamobile-sleepd` |
+| Screen on, or the lock not `secure` | never sleeps; only a positive "off" (bl_power != 0 or every monitor DPMS off) counts | `omamobile-sleepd` |
+| Stay awake | Omarchy's idle indicator (`omarchy-toggle-idle stay-awake`, the quick-settings tile) also keeps the phone out of sleep, screen off or not: the user's "Keep awake" for a download or a long task | `omamobile-sleepd` |
+| An SSH session | any established connection to port 22 (`ss`); if `ss` can't answer, it refuses. We work over USB SSH, and the link drops in sleep | `omamobile-sleepd` |
+| Media playing | a PipeWire sink in state `RUNNING` (`pactl list short sinks`; idle sinks read IDLE or SUSPENDED). Checked by the watcher itself rather than an inhibitor in `omamobile-audio` | `omamobile-sleepd` |
+| A call ringing or in progress | a block inhibitor ("Omarchy Mobile calls") while omatel's agent lists any call, held by the call card's watcher (not the bar's `--observe` copy) | `omamobile-call-watch` |
+| A GNSS session | the stack's unit runs under `systemd-inhibit --what=sleep --mode=block` ("Omarchy Mobile GNSS"); it ends with the stack, a minute after the last client | omamobile-gnss 0.2.2 |
+| `omarchy update` | Omarchy's own update inhibitor (`omamobile-update` keeps it) | omamobile-omarchy |
+| Anything else | `systemd-inhibit --what=sleep --mode=block CMD` | the user |
+
+Not yet: a modem call that arrives while the AP sleeps (MODEM-PLAN M6;
+the inhibitor above covers calls only once the AP is awake), and recording
+(a RUNNING source; add it if a recorder app needs it).
 
 ### 6.2 Pieces
 
@@ -301,7 +330,12 @@ requests):
   apply. Never write `/sys/power/state` from the session.
 - **Kernel**: `mem_sleep_default=s2idle` (in int), so even a plain `mem`
   is safe on our kernels.
-- **`omamobile-device-cheetah`, new files (written, not yet in a release)**:
+- **`omamobile-device-cheetah`: the drop-in and the hook. Updated
+  2026-10-26: these are no longer new.** They came in with `853489a`
+  (2026-10-13) and every release since has shipped them (0.1.33 is on the
+  phone). The stage tests (S2-S7) bypassed them, since they write
+  `/sys/power/state` or run `rtcwake -m freeze`; runbook P1 is their first
+  deliberate run through logind. What follows describes them:
   - `vendor/systemd/sleep.conf.d/10-omamobile.conf`: `MemorySleepMode=s2idle`,
     `AllowHibernation=no`, `AllowHybridSleep=no`, `AllowSuspendThenHibernate=no`
     (belt and braces with the bootarg; there is no swap to hibernate to).
@@ -316,19 +350,50 @@ requests):
       unloading Wi-Fi for the rest of the boot (`/run/omamobile/wifi-sleep-fallback`).
     - It doesn't touch the panel: the screen-off flows below have already
       blanked it, and lighting it is the key handler's job.
-  - These files are inert until something calls `systemctl suspend`, which
-    Omarchy hides while `suspend-off` is set. They ship in the release that
-    S8 installs, with its version bump.
-- **The watcher (`omamobile-sleepd`, a user service in `omamobile-shell`, to
-  write for S8)**: polls every 2 s while the panel is off (`bl_power` != 0,
-  or Hyprland DPMS off) and the session is locked; after
-  `OMAMOBILE_SLEEP_AFTER_OFF` s, or the 5 s grace after a dark resume, with
-  no inhibitor, SSH session or `omamobile-no-sleep` toggle, runs
-  `systemctl suspend`. It also takes the request from `omamobile-keys`
-  (`omamobile-sleepd now`, after `short_press` turned the panel off), so the
-  power key sleeps at once. Polling only runs with the panel off and costs
-  far less than the sleep it buys. Gate the whole service behind
-  `omarchy-toggle-enabled omamobile-sleep` for the first release.
+  - They act whenever something calls `systemctl suspend`: today upower's
+    critical action (NOTES 2026-10-18) or a root shell; Omarchy's menu hides
+    Suspend while `suspend-off` is set.
+- **The watcher, `omamobile-sleepd` (omamobile-shell 0.2.29, written
+  2026-10-26, not yet run on the phone).** A user unit
+  (`omamobile-sleepd.service`) for every graphical session, enabled by a
+  vendor wants link, which **does nothing unless the user turned the
+  `omamobile-sleep` toggle on** (`omarchy-toggle omamobile-sleep on`, a flag
+  in `~/.local/state/omarchy/toggles/`; nothing in the package sets it,
+  and `test/all` checks that).
+  - It polls every 5 s, and every 2 s once the screen is off behind a
+    secure lock. The screen counts as off only when bl_power != 0 or every
+    monitor reads DPMS off (as `omamobile-keys`); an unreadable state counts
+    as on. The lock counts only when `omarchy-shell lock status` says
+    `"secure":true`.
+  - After `OMAMOBILE_SLEEP_AFTER_OFF` seconds in that state (default 30,
+    never under 5), with nothing in 6.1's table holding it awake, it runs
+    `systemctl suspend` (logind, so inhibitors and the hook apply). A
+    refusal is logged once per reason (`omamobile-sleepd: not sleeping: an
+    SSH session is open`), not at every poll.
+  - Resume is seen in `suspend_stats/success`; it logs the wake IRQ by name
+    (`pm_wakeup_irq` and `/proc/interrupts`, as the hook). Any wake that
+    leaves the screen off and the lock secure is dark: it asks again after
+    `OMAMOBILE_SLEEP_GRACE` seconds (5). A power-key wake lights the PIN pad
+    through `omamobile-keys`, and a lit screen resets everything. No IRQ
+    classification is needed for that, so a lost key report only costs a
+    second press, not a wrong sleep.
+  - A request that didn't lead to a sleep (logind refused, or the suspend
+    failed, logged with `last_failed_dev`) is repeated no sooner than 30 s.
+  - `omamobile-sleepd now` (the power key): with the toggle off it does
+    nothing; with the watcher running it signals it (USR1), and the watcher
+    asks 2 s later (`OMAMOBILE_SLEEP_NOW_DELAY`), after the same checks, so a
+    quick second press that lights the screen again cancels it. With no
+    watcher it makes one checked attempt itself.
+  - `omamobile-sleepd check` prints the first reason sleep would be refused
+    (exit 1), or "nothing stops sleep".
+  - Known window: a press that lights the screen in the moment between the
+    watcher's last check and the kernel freezing would sleep with the panel
+    lit. The gpio-keys interrupt is a wake source, so a press during the
+    freeze aborts it or wakes the phone at once; P5 checks this.
+- **`omamobile-keys`** (W3): after a short press turned the screen off
+  (unlocked: lock, wait for `secure`, panel off; locked and lit: panel off),
+  it runs `omamobile-sleepd now` in the background if the lock reports
+  `secure`. Never after a press that lit the screen.
 - **Omarchy's `suspend-off` toggle**: Omarchy hides Suspend in its system menu
   while the toggle is set; we set it in the first-run setup until the kernel
   can suspend (NOTES, "power button menu"). **Clear it only in stage S8**, on
@@ -337,8 +402,9 @@ requests):
   sleeping (if it doesn't, waking with Power would hit `short_press`'s
   unlocked branch and lock instead of lighting the screen).
 - **Wake reasons for the shell**: the hook's journal line (`omamobile-sleep:
-  woken by IRQ ...`) is enough for S8; a dark-resume decision in the watcher
-  reads `/sys/power/pm_wakeup_irq` the same way.
+  woken by IRQ ...`) and the watcher's (`omamobile-sleepd: resumed, woken by
+  IRQ ...`) read `/sys/power/pm_wakeup_irq` (`CONFIG_PM_SLEEP_DEBUG`, on in
+  `omamobile.config`).
 
 ### 6.3 Wake sources (policy view)
 
@@ -382,6 +448,70 @@ requests):
   wake IRQ in brcmfmac's OOB path.
 - Until S5 passes, the sleep hook unloads Wi-Fi and reloads it through
   `omamobile-wifi.service` after each wake (6.2).
+
+### 6.6 upower's critical action: decision (2026-10-26)
+
+**Today.** No package configures upower, so its defaults apply:
+`PercentageAction=2` and `CriticalPowerAction` chosen by upower. On the
+phone that was a suspend: on 2026-10-18 upower suspended a charging phone
+whose battery read "Unknown" (NOTES), and the gauge's alert woke it 75 s
+later. The battery status fix (`de0aa4d4e`) removed that trigger.
+
+**The problem with sleep at 2 %.** 2 % of 4986 mAh is about 100 mAh, about
+20 minutes of s2idle at 312 mA (S7). The phone then runs flat while
+asleep: a brown-out with the root file system mounted, and a boot attempt
+on a flat battery. [I] A boot that fails on low battery may count
+against slot B's retries, and enough of them fall back to stock on slot A.
+
+**The alternatives.**
+
+| Action | For | Against |
+| --- | --- | --- |
+| Keep the default (suspend) | works today; with sleepd on it is no worse than a phone left asleep | ends in a brown-out about 20 min later |
+| `PowerOff` | a clean shutdown with the file system unmounted, which is what phones do | **never run from Linux on this phone** (MODEM-PLAN M4.2 notes): `reboot -f` hangs here and only `reboot-to` (RESTART2) is proven; we don't know whether PSCI SYSTEM_OFF powers the phone off, hangs it with the battery draining, or reboots it, nor what ABL does when a charger is then plugged in |
+| `Ignore` | none | upower needs `AllowRiskyCriticalPowerAction`, and it ends in a brown-out awake |
+| A higher `PercentageAction` | more time before the end | changes nothing about how it ends |
+
+**Decision: no drop-in yet.** Keep upower's default until a power-off test
+(runbook P7) passes. Then ship, in `omamobile-device-cheetah`, an upower
+drop-in (`/etc/UPower/UPower.conf.d/`, if the phone's upower reads drop-ins;
+P0 checks; otherwise the package documents the two keys) with
+`CriticalPowerAction=PowerOff` and `PercentageAction=3`, so the phone powers
+off with about 150 mAh left. It is not clearly safe before P7, so it isn't
+on the branch.
+
+### 6.7 Alarms: the path from a timer to the RTC (2026-10-26, on paper)
+
+How a `WakeSystem=yes` timer reaches the RTC, from the kernel sources
+(`kernel/time/alarmtimer.c`, `fs/timerfd.c`, `drivers/rtc/rtc-s5m.c` on
+`omamobile-int`):
+
+1. systemd arms a `CLOCK_REALTIME_ALARM` (or `CLOCK_BOOTTIME_ALARM`)
+   timerfd. `timerfd_create()` refuses alarm clocks without
+   `CAP_WAKE_ALARM` (EPERM). So only the **system** manager can do it: a
+   user's timer (`systemd-run --user … WakeSystem=yes`) can't, and an alarm
+   app needs a root helper or a system timer (TELEPHONY-APPS-PLAN, Clocks).
+   Note also that `systemd-run -p` sets properties on the service: the
+   timer's needs `--timer-property=WakeSystem=yes`.
+2. `timerfd_create()` doesn't check for an RTC. With none, an alarm timer
+   still fires while the phone is awake, but nothing programs a wake: **a
+   silent failure**.
+3. alarmtimer adopts an RTC through a class interface on the RTC class
+   (`alarmtimer_rtc_add_device`), so it sees RTCs that register late, from
+   a module. It takes the first one that has the alarm feature and whose
+   parent `device_may_wakeup()`, and registers an `alarmtimer.N.auto`
+   platform device when it does. `rtc-s5m` calls
+   `devm_device_init_wakeup()` before `devm_rtc_register_device()` when it
+   has the alarm IRQ, so the S2MPG12 RTC (`rtc0`, `rtc-alarm0` on the
+   `s2mpg12-pmic` IRQ) qualifies once `sec_acpm` and `rtc-s5m` load and the
+   `pmic-1` node is enabled (the `suspend-pmic-test` overlay).
+4. At suspend, `alarmtimer_suspend()` programs the RTC with the soonest
+   alarm-clock timer. The RTC wake itself works (S3b, S4, S5c, S7).
+
+What to verify on the phone: `rtc0` exists at every boot, without anything
+that loads `sec_acpm` late (GNSS, the camera's timer); `alarmtimer.*.auto`
+exists; and a system timer wakes the phone on time.
+`tools/alarm-wake-test` does each (`check`, `arm`, `report`; runbook P3).
 
 ## 7. Kernel work on this branch
 
@@ -1153,6 +1283,11 @@ from 99% down to the low 90s:
 
 ### S8: userspace on (package release)
 
+Updated 2026-10-26: step 1 is done (the files have shipped since
+`853489a`), and the tier 1 runbook below (P0-P8) replaces steps 2-4 with
+the watcher, the inhibitors and the tests that were missing. The original
+steps are kept for the record.
+
 1. New `omamobile-device-cheetah` release with the files already written
    (`sleep.conf.d/10-omamobile.conf`, `bin/omamobile-sleep` and its
    `system-sleep` link), version bumped. Install with
@@ -1170,8 +1305,256 @@ from 99% down to the low 90s:
    key, idle → sleep, an RTC alarm, a BT device connected.
 4. Clear `suspend-off` in the release after that day.
 
-- **Rollback:** `omarchy-toggle-disable omamobile-sleep`; set `suspend-off`
+- **Rollback:** `omarchy-toggle omamobile-sleep off`; set `suspend-off`
   again; previous package from the repository.
+
+### Tier 1 runbook: P0-P8 (written 2026-10-26, not yet run)
+
+Tier 1 is "sleeps like a phone, drains like a laptop": screen off and
+locked means s2idle by itself, Power wakes it to the PIN pad, Wi-Fi stays
+associated, alarms wake it on time, media, calls and GNSS keep it awake,
+no hangs over a day, about 16 h of standby (S7). SYS_SLEEP is tier 2.
+
+Ground rules for every step:
+
+- **Announce each step that sleeps the phone**: the screen goes dark and SSH
+  and USB drop until it wakes. The human attends every such step and does
+  the key presses it names.
+- No kernel change: every step runs on the kernel the phone runs (record
+  `uname -r`; S5c-S7 were on 00558). If the phone runs a newer kernel than
+  00558, P1 doubles as its first suspend check.
+- Steps that sleep run detached (`systemd-run`) and log to UFS; read back
+  after the wake with a fresh login (`tools/phone-ssh --fresh`).
+- **After every wake:**
+  `tools/phone-ssh 'dmesg | grep -E "ufshcd_err_handler|hibern8|I/O error"; cat /sys/power/suspend_stats/fail'`.
+  Any UFS line is a stop: reboot, `fsck` if the journal asks, report.
+- Recovery is section 8's: no wake after 60 s, hold Power about 30 s; USB
+  not back, `omamobile-usb-rescue` or a reboot from the power menu.
+- `omamobile-sleepd` refuses while an SSH session is open, **including the
+  shared connection `OMAMOBILE_SSH_SHARE=1` keeps for 60 s**. Steps that
+  test it end with `tools/phone-ssh --stop` and no SSH until the step is
+  over.
+
+#### P0: read-only state (risk: none; no announcement)
+
+```sh
+tools/phone-ssh 'uname -r; cat /usr/share/omamobile/device-cheetah/version /usr/share/omamobile/shell/version
+cat /sys/power/mem_sleep; cat /sys/bus/platform/devices/*.ufs/spm_lvl
+ls -l /usr/lib/systemd/system-sleep/omamobile; systemd-analyze cat-config systemd/sleep.conf | grep -v "^#" | grep .
+ls /etc/omamobile/wifi-keep-across-sleep /run/omamobile/wifi-sleep-fallback 2>&1
+cat /sys/power/suspend_stats/success /sys/power/suspend_stats/fail /sys/power/suspend_stats/last_failed_dev
+systemd-inhibit --list --no-pager; journalctl -b -o cat | grep -E "omamobile-sleep|suspend requested" | tail
+pacman -Q upower; ls -d /etc/UPower/UPower.conf.d 2>&1; grep -E "^(CriticalPowerAction|PercentageAction|AllowRisky)" /etc/UPower/UPower.conf
+upower -i "$(upower -e | grep battery)" | grep -E "state|percentage"
+lsmod | grep -cE "^(sec_acpm|rtc_s5m)"'
+tools/phone-ssh 'bash -s check' < tools/alarm-wake-test
+```
+
+- **Expect:** `s2idle [deep]`; `spm_lvl` 5; the hook link and
+  `MemorySleepMode=s2idle`; the keep flag present and no fallback flag; no
+  block-mode sleep inhibitor; `alarm-wake-test check` all ok (rtc0, its
+  wakeup, `alarmtimer.*.auto`).
+- **Pass:** all of the above. Note the upower version, whether
+  `UPower.conf.d` is read, and the critical action (6.6).
+- **Stop:** `deep` selected (the bootarg is missing: never suspend); no
+  rtc0 or no alarmtimer (fix the RTC's loading before P3); the fallback flag
+  present (Wi-Fi refused D3 in daily use: read the journal first).
+- **Rollback:** none (read-only).
+
+#### P1: the hook through logind, RTC wake (risk: low; announce: the phone sleeps about 40 s)
+
+```sh
+tools/phone-ssh 'systemd-run --collect --unit=p1-test sh -c "sync; rtcwake -m no -s 40; systemctl suspend"'
+# reconnect about 60 s later
+tools/phone-ssh --fresh 'journalctl -b -o cat | grep -E "omamobile-sleep|PM: suspend" | tail -6; nmcli -t -f STATE general'
+```
+
+- **Expect:** "omamobile-sleep: Wi-Fi stays up across sleep (…)", "woken by
+  IRQ …: … s2mpg12-pmic …", NetworkManager `connected`.
+- **Pass:** the hook's lines, a PMIC wake at about 40 s, Wi-Fi connected
+  without a reload, no UFS line.
+- **Stop:** a hook error, Wi-Fi not back (then `rm
+  /etc/omamobile/wifi-keep-across-sleep`, which puts the hook in unload
+  mode, and report), or any UFS line.
+- **Rollback:** none needed; the hook's unload mode is the fallback.
+
+#### P2: Power as the wake (risk: low; announce: the phone sleeps until the human presses Power)
+
+1. The human locks the phone with Power (screen off).
+2. `tools/phone-ssh 'systemd-run --collect --on-active=5 /usr/bin/systemctl suspend'`, then `tools/phone-ssh --stop`.
+3. About 20 s later the human presses Power once.
+4. Reconnect: `tools/phone-ssh --fresh 'journalctl -b -o cat | grep omamobile-sleep | tail -3'`.
+5. Repeat 1-3 with Volume Down as the wake.
+
+- **Expect:** after Power, the PIN pad lights within about 1 s and the wake
+  IRQ is gpio-keys; the next press darkens it again. After Volume Down, the
+  screen stays dark (the volume changes).
+- **Pass:** both as expected, the lock intact (no session shown without the
+  PIN).
+- **Stop:** a dark phone after Power: press again. If the second press
+  lights it, the first key report was lost across the resume; record it
+  (the watcher then puts the phone back to sleep after its 5 s grace,
+  which a user would feel as a missed press) and stop before P5. Stop at
+  once on a lock bypass.
+- **Rollback:** none.
+
+**Results so far (2026-10-26, `7.3.0-rc6-omamobile-push1-00588-gcd72ae58ee47`):**
+
+- **P0:** passed: `[s2idle] deep`, `spm_lvl` 5, hook and keep flag present, rtc0 with alarmtimer.
+- **P1:** passed. The phone slept 40 s and the RTC woke it (`s2mpg12-pmic`). The D3 ACK came by control message after 13.6 ms, Wi-Fi stayed connected, and there were no UFS lines.
+- **P3:** passed ("fired 1 s after it was due").
+- **Two bugs turned up before P2 ran:**
+  - **The lock's fingerprint broke after P3.** The freeze cut the lock's fingerprint cancel short: the bridge sent ERROR 5, but its READY never reached libfprint, and fprintd answered every later claim with "device still busy". The lock then retried about three times a second (AUTHINFO_UNAVAIL) and never showed the sensor. A restart of fprintd cleared it. **Fix:** the sleep hook now try-restarts fprintd on every resume (device-cheetah 0.1.34).
+  - **Locking with Power flashed the PIN pad, a bug in `omamobile-keys`, not in suspend.** `power-up` cleared the press marker only after `short_press` returned. Locking takes about 0.9 s, longer than the 0.6 s long-press timer, so the timer took the press for a hold and woke the lock it had just taken. A backlight trace showed it: brightness 0 → 819 for 0.3 s, then off. **Fix:** `power-up` forgets the press first; test/keys.sh has a slow-lock case (omamobile-shell 0.2.29).
+
+#### P3: an alarm wakes the phone (risk: low; announce: the phone sleeps about 2 minutes)
+
+```sh
+tools/phone-ssh 'SECS=120 SUSPEND=1 bash -s arm' < tools/alarm-wake-test
+tools/phone-ssh --stop
+# about 150 s later
+tools/phone-ssh --fresh 'bash -s report' < tools/alarm-wake-test
+```
+
+- **Expect:** "fired N s after it was due" with N at most 5, the wake IRQ
+  the PMIC's (`s2mpg12-pmic`, `rtc-alarm0`), the hook's wake line.
+- **Pass:** "ok - on time".
+- **Stop:** the timer fired only when something else woke the phone (late,
+  another IRQ): the alarm isn't reaching the RTC. Recheck `check`, then
+  read `/proc/driver/rtc` around a suspend before going on.
+- **Rollback:** `systemctl stop omamobile-alarm-test.timer` (transient; gone
+  at the next boot anyway).
+
+#### P4: sleep while charging (risk: low; announce: the phone sleeps about 60 s on the cable)
+
+USB-C-PLAN G6 as written (the guard is blind in s2idle; JEITA is the
+backstop). **Pass:** a fresh guard band line within 30 s of the wake and
+mode 5. **Stop:** a stuck mode 4 or an inhibited charger after the wake.
+**Rollback:** `omamobile-usb-rescue`; a replug.
+
+#### P5: install the tier 1 packages and test the watcher (risk: medium-low; announce: the phone sleeps by itself while the toggle is on)
+
+Install (the human approves each):
+
+```sh
+tools/phone-install-package packages/omamobile-shell     # 0.2.29
+tools/phone-install-package packages/omamobile-gnss      # 0.2.2
+tools/phone-ssh 'U=$(id -nu 1000); M="systemctl --user -M $U@"
+  $M daemon-reload; $M start omamobile-sleepd.service; $M is-active omamobile-sleepd.service
+  runuser -u "$U" -- omamobile-sleepd check; journalctl _SYSTEMD_USER_UNIT=omamobile-sleepd.service -o cat | tail -3'
+```
+
+- **Expect:** the unit active; `check` says "the omamobile-sleep toggle is
+  off"; the journal's "watching: …" line. The phone behaves exactly as
+  before (the toggle is off).
+- **Stop:** the unit fails, or the phone sleeps with the toggle off.
+- `check` from a root shell sees the toggle but not the session (the lock
+  and Hyprland need the session's environment); the watcher's own journal
+  lines are the record for everything else.
+
+Then, with the human's go, turn it on
+(`tools/phone-ssh 'runuser -u "$(id -nu 1000)" -- omarchy-toggle omamobile-sleep on'`)
+and run each test; between tests, read the watcher's journal
+(`tools/phone-ssh --fresh 'journalctl _SYSTEMD_USER_UNIT=omamobile-sleepd.service -o cat | tail'`):
+
+| # | Do | Pass |
+| --- | --- | --- |
+| a | Power, then `tools/phone-ssh --stop`, hands off | "sleeping (power key)" within about 2 s of the screen going off; Power wakes it to the PIN pad |
+| b | Let it idle-lock with the screen off, no SSH | "sleeping (screen off and locked for 30 s)" |
+| c | Music playing, Power | "not sleeping: audio is playing (…)"; the music goes on; stop it, and it sleeps on the next poll |
+| d | An SSH session open (`tools/phone-ssh sleep 120`), Power | "not sleeping: an SSH session is open"; after the session ends it sleeps |
+| e | `alarm-wake-test arm` with `SECS=90`, no `SUSPEND`, then Power and `--stop` | P3's report on time, and "resumed, woken by IRQ …", then "sleeping (dark resume, 5 s grace)" |
+| f | Location on and a client running (the GNSS-PLAN check), Power | "not sleeping: a sleep inhibitor is held (Omarchy Mobile GNSS)" |
+| g | The Stay awake tile on, Power | "not sleeping: Stay awake is on" |
+| h | Power, then press Power again within 1 s | the screen is lit and the phone awake; no "sleeping" line after the second press |
+| i | Fingerprint unlock after a sleep (the lock was mid-verify when it slept) | the fingerprint unlocks (libfprint 1.94.100-1.5's suspend hooks, NOTES 2026-10-18) |
+
+- **Stop:** any missed Power wake; a sleep with the screen lit (h); a sleep
+  while music plays (c) or during a call; a lock bypass; any UFS line.
+- **Rollback:** `runuser -u "$(id -nu 1000)" -- omarchy-toggle omamobile-sleep off` as root
+  (takes effect at the next poll, no restart); if the package is at fault,
+  the previous `omamobile-shell` from the pacman cache.
+
+**P5 results (2026-10-26, same kernel, shell 0.2.29 and device-cheetah 0.1.34):**
+
+- **The watcher:** started, refused with the toggle off, and slept with
+  it on: "sleeping (power key)" about 2 s after Power, and "sleeping
+  (screen off and locked for 30 s)".
+- **Test a failed at first.** The waking Power press never reached
+  Hyprland, so the phone woke with the screen dark. This is fixed in the
+  shell (`omamobile-sleepd` → `omamobile-keys wake` on a `KEY_POWER`
+  wake), and the retest passed: the PIN pad and the fingerprint came
+  straight back.
+- **Stopped before tests b-i.** The first sound after the sleeps tripped
+  the speaker watchdog: the bottom CS35L41 read a false coil temperature
+  (NOTES 2026-10-26). Only a full power-off cleared it.
+- **The toggle is off on the phone.** P5 resumes only when the
+  amplifiers have a resume path that keeps their protection state, and a
+  sleep with playback before and after it passes in a test with a
+  listener.
+- **New stop condition for P5 and later:** the speaker watchdog trips,
+  or `omamobile-speaker-protection status` shows a temperature away from
+  about 25 °C while silent after a resume.
+
+#### P6: a day of use with the toggle on (risk: medium, perception; human)
+
+The human uses the phone normally for a day, with the toggle on, and
+notes missed wakes, a dark phone, a late alarm, music that stopped, a
+fingerprint failure. At the end:
+
+```sh
+tools/phone-ssh --fresh 'cat /sys/power/suspend_stats/{success,fail,last_failed_dev}
+journalctl -b -o cat | grep -cE "omamobile-sleep: woken"; journalctl -b -o cat | grep -c ufshcd_err_handler
+journalctl _SYSTEMD_USER_UNIT=omamobile-sleepd.service -o cat | grep -E "not sleeping|failed" | sort | uniq -c | sort -rn | head'
+```
+
+- **Pass:** no failed suspend, no hang, no UFS line, no missed wake, the
+  fingerprint fine after sleeps.
+- **Then:** a release that clears `suspend-off` (S8 step 4) and, after a
+  week, the toggle on by default. Both are the human's call.
+- **Stop:** any hang or UFS line: toggle off, report.
+- **Rollback:** the toggle off.
+
+#### P7: power-off from Linux, for the upower decision (risk: medium; attended; announce: the phone powers off)
+
+The first `systemctl poweroff` on this phone (6.6). On the cable,
+battery above 50 %, the human holding the phone:
+
+```sh
+tools/phone-ssh 'sync; systemctl poweroff'
+```
+
+- **Expect:** the screen goes dark within about 15 s and the phone stays
+  off (no reboot), USB gone. Then unplug and plug the cable back in: note
+  what ABL shows (a charging screen, a boot, nothing). Then Power held to
+  boot: slot B boots normally (`omamobile-boot-success`).
+- **Pass:** a clean power-off (the journal of the next boot ends with
+  "systemd-shutdown … Powering off"), no reboot, slot B on the next boot.
+- **Stop:** a hang in shutdown (the reboot watchdog doesn't cover
+  poweroff: hold Power about 30 s), a reboot instead of power-off, or a
+  fallback to slot A. Then upower keeps its default and 6.6 records why.
+- **Rollback:** Power held to boot.
+- **Then:** the upower drop-in of 6.6, in its own `omamobile-device-cheetah`
+  release, tested by lowering `PercentageAction` above the current level
+  for one attended run.
+
+#### P8: standby numbers (risk: low; the human unplugs)
+
+`tools/power-ab` as S7, detached and cable out:
+
+1. S7 again on the current kernel, as a noise check (312 mA last time).
+2. A "standby day": overnight, sleepd on, from the charge counter at the
+   start to the end; count the dark wakes in the journal.
+
+- **Output:** the real tier 1 standby (expect about 16 h), and how often it
+  woke and why.
+- **Stop:** USB not back after the replug: `omamobile-usb-rescue` or a
+  reboot.
+- **Rollback:** none.
+
+Later, not tier 1: the PMIC early-wake status (a kernel log of the INT
+registers, then S4's loop), the modem online across s2idle (MODEM-PLAN M6,
+after M4.2 and a backup check), and SYS_SLEEP (section 5).
 
 ## 9. Risks and rollback
 
@@ -1185,6 +1568,8 @@ from 99% down to the low 90s:
 | Sleep hook and `sleep.conf` drop-in | Wi-Fi not coming back after sleep | inert until `systemctl suspend` is used | remove the files / previous package |
 | PM debug config | negligible | on in test kernels | n/a |
 | Clearing `suspend-off` | users suspend a kernel that can't | only in S8, on the shipping image | set the toggle again |
+| `omamobile-sleepd` and the power key's request | a phone that sleeps under the user (missed Power wake, a sleep during media or over SSH) | the `omamobile-sleep` toggle off | `omarchy-toggle omamobile-sleep off`; previous omamobile-shell |
+| Sleep inhibitors (calls, GNSS) | the phone never sleeps (a leaked inhibitor) | on with their packages | `systemd-inhibit --list` names the holder; stop its unit |
 
 ## 10. Open questions
 

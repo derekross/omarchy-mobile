@@ -9,6 +9,10 @@ import "AccessModel.js" as AccessModel
 // The permission sheet itself: the scrim, and the card at the bottom with the
 // app's icon, the question and two large buttons. Access.qml puts it in its
 // layer-shell window; test/access-render.qml draws it offscreen.
+//
+// On its side (TOUCH-PLAN 2.4: 1040x480) the card keeps to 600 px, centred,
+// and the two buttons sit side by side, Allow on the right, so the question
+// and both answers fit 480 px of height.
 Item {
   id: sheet
 
@@ -20,6 +24,7 @@ Item {
 
   readonly property int pad: Style.spacing.panelPadding
   readonly property color foreground: Commons.Color.popups.text
+  readonly property bool wide: width > height
 
   function iconSource(icon) {
     var value = String(icon || "")
@@ -42,8 +47,8 @@ Item {
 
     readonly property var r: sheet.request || ({})
 
-    x: Style.gapsOut
-    width: parent.width - Style.gapsOut * 2
+    width: sheet.wide ? Math.min(parent.width - Style.gapsOut * 2, 600) : parent.width - Style.gapsOut * 2
+    x: Math.round((parent.width - width) / 2)
     height: content.implicitHeight + card.contentTopInset + card.contentBottomInset
     y: parent.height - height - Style.gapsOut + Math.round((1 - sheet.reveal) * (height + Style.gapsOut))
     color: Commons.Color.popups.background
@@ -146,17 +151,29 @@ Item {
 
       Item { width: 1; height: Style.spacing.sm }
 
-      AnswerButton {
+      // Stacked, Allow above; side by side on a wide screen, Allow on the
+      // right (right to left puts the first child there).
+      Grid {
+        id: answers
         width: parent.width
-        label: card.r.grantLabel || "Allow"
-        primary: true
-        onTapped: sheet.answered(true)
-      }
+        columns: sheet.wide ? 2 : 1
+        columnSpacing: Style.spacing.lg
+        rowSpacing: Style.spacing.xxl
+        layoutDirection: sheet.wide ? Qt.RightToLeft : Qt.LeftToRight
+        readonly property real buttonWidth: sheet.wide ? (width - columnSpacing) / 2 : width
 
-      AnswerButton {
-        width: parent.width
-        label: card.r.denyLabel || "Don't allow"
-        onTapped: sheet.answered(false)
+        AnswerButton {
+          width: answers.buttonWidth
+          label: card.r.grantLabel || "Allow"
+          primary: true
+          onTapped: sheet.answered(true)
+        }
+
+        AnswerButton {
+          width: answers.buttonWidth
+          label: card.r.denyLabel || "Don't allow"
+          onTapped: sheet.answered(false)
+        }
       }
     }
   }

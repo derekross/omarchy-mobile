@@ -48,6 +48,18 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucmt get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM tegu: Speaker PCM"
   [[ $(ucmt get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM tegu: Mic PCM"
   pass "UCM profile parses: tegu HiFi with Speaker and Mic"
+  # raven: its own long-name file too
+  cp -r ucm2/Google/raven "$u/Google/"
+  cp "ucm2/conf.d/aoc-snd-card/google,raven-aoc-snd-card.conf" "$u/conf.virt.d/raventest.conf"
+  sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/raven/HiFi.conf"
+  ucmr() { ALSA_CONFIG_UCM2=$u alsaucm -c raventest "$@" 2>&1; }
+  [[ $(ucmr list _verbs) == *"0: HiFi"* ]] || fail "UCM raven: the HiFi verb"
+  out=$(ucmr list _devices/HiFi)
+  [[ $out == *"0: Speaker"* && $out == *"1: Mic"* ]] || fail "UCM raven: Speaker and Mic devices"
+  [[ $(ucmr get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM raven: Speaker PCM"
+  [[ $(ucmr get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM raven: Mic PCM"
+  pass "UCM profile parses: raven HiFi with Speaker and Mic"
 fi
 grep -c "find-device:type=pcm,stream=playback,field=id,regex='^EP6 playback'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
   fail "UCM: the Speaker PCM is found by its id"
@@ -60,7 +72,11 @@ tegu_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/52-
 [[ -f "ucm2/conf.d/aoc-snd-card/$tegu_card.conf" ]] || fail "tegu long-name UCM file is named exactly $tegu_card.conf"
 grep -c "channelmix.max-volume = 0.562" wireplumber/52-omamobile-tegu-aoc.conf >/dev/null || fail "the 9a's speaker sink is capped (channelmix.max-volume)"
 grep -c "CAPTURE LIST' 0,1,-1,-1" ucm2/Google/tegu/HiFi.conf >/dev/null || fail "tegu HiFi must set its own mic list (cheetah's 0,3,2 kills the AoC)"
-if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/tegu/HiFi.conf; then
+raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | head -1)
+[[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
+[[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"
+! grep -c "raven" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf >/dev/null || fail "cheetah's shared profile has no raven branch"
+if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/tegu/HiFi.conf ucm2/Google/raven/HiFi.conf; then
   fail "UCM touches no amplifier control"
 fi
 pass "UCM finds the PCMs by id and leaves the amplifiers alone"
@@ -102,7 +118,8 @@ PY
 mktree() {
   r=$tmp/run.$1
   rm -rf "$r"; mkdir -p "$r/asound/card0/pcm5p/sub0" "$r/block/sda9" "$r/fw/cirrus" "$r/state" "$r/run" \
-    "$r/spidrv" "$r/module/aoc_alsa_dev/parameters" "$r/dt/spi@10960000/amplifier@0" "$r/dt/spi@10960000/amplifier@1"
+    "$r/spidrv" "$r/module/aoc_alsa_dev/parameters" "$r/module/snd_soc_cs35l41/parameters" "$r/dt/spi@10960000/amplifier@0" "$r/dt/spi@10960000/amplifier@1"
+  echo Y > "$r/module/snd_soc_cs35l41/parameters/boost_en"
   printf ' 0 [googleaocsndcar]: aoc-snd-card - google,aoc-snd-card\n                      google,aoc-snd-card\n' > "$r/asound/cards"
   printf 'card: 0\ndevice: 5\nsubdevice: 0\nstream: PLAYBACK\nid: EP6 playback (*)\n' > "$r/asound/card0/pcm5p/info"
   echo closed > "$r/asound/card0/pcm5p/sub0/status"
@@ -197,10 +214,21 @@ prep=(OMAMOBILE_SPK_STAGE=); run media
 [[ $(cat "$r/run/speaker-protection") == "ok: stage media"* ]] || fail "stage media: status"
 pass "stage media (the default): 737 / 10 on both, without a stamp or speaker_protection=1"
 prep=(OMAMOBILE_SPK_DRE=0 OMAMOBILE_SPK_NOISE_GATE=0); run dre
-((rc == 0)) && [[ $(val "Top DRE Switch") == off && $(val "Bottom HW Noise Gate Enable") == 0 ]] || fail "DRE and the gate off when asked"
+((rc == 0)) && [[ $(val "Top DRE Switch") == off && $(val "Bottom DRE Switch") == off && $(val "Bottom HW Noise Gate Enable") == 0 ]] || fail "DRE and the gate off when asked"
 r0=$r; r=$tmp/run.ok; [[ $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on &&
   $(val "Top HW Noise Gate Enable") == 63 && $(val "Bottom HW Noise Gate Enable") == 63 ]] || fail "DRE and the gate on by default"; r=$r0
 pass "DRE and the hardware noise gate (stock's) on by default, off when asked"
+
+# C9j: the boost converter off at analog 10 and below (through the kernel's boost_en), on at 17; forced either way; a kernel without it
+r0=$r; r=$tmp/run.media; [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] || fail "stage media: boost_en N"
+[[ $(cat "$r/run/speaker-protection") == *"boost converter off"* ]] || fail "stage media: status says the boost is off"
+r=$tmp/run.ok; [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] || fail "stage c8 (analog 6/10): boost_en N"; r=$r0
+prep=(OMAMOBILE_SPK_BOOST=1); run boost-forced
+((rc == 0)) && [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y ]] || fail "OMAMOBILE_SPK_BOOST=1 keeps the boost on"
+prep=(OMAMOBILE_SPK_BOOST=yes); run boost-bad; ((rc != 0)) && grep -c 'OMAMOBILE_SPK_BOOST=yes' "$r/out" >/dev/null || fail "OMAMOBILE_SPK_BOOST=yes is refused"
+prep=(OMAMOBILE_SYSMODULE=$tmp/nomodule); run boost-noparam
+((rc == 0)) && grep -c '^snd_soc_cs35l41 boost_en=N$' "$r/modprobe.log" >/dev/null && [[ $(cat "$r/run/speaker-protection") == *"kernel without boost_en"* ]] || { cat "$r/out" >&2; fail "a kernel without boost_en: loaded with the parameter, status says so, start passes"; }
+pass "boost converter: off at analog 10 and below, on when forced, a kernel without the parameter passes (C9j)"
 
 check_refused() {  # name, then the scenario ran
   ((rc == 1)) || { cat "$r/out" >&2; fail "$1: start fails"; }
@@ -318,6 +346,20 @@ WATCH_N=20 watchrun; wait
 ((rc == 0)) && ! muted || fail "watchdog: an unacknowledged pause is logged only"
 pass "watchdog: mutes on DSP errors, bypass, levels, runtime PM, a stuck heartbeat (c9) and kernel log failures"
 
+# C9j: the coil-estimate jump rule is for analog above 10. At the everyday level the
+# firmware's estimate is open-loop and the bottom amplifier's jumps 10-15 C on any
+# level drop, so a jump there must not mute; OMAMOBILE_SPK_TEMP_JUMP brings it back.
+jump() {  # name [wprep...]: watchdog on a running stream; the bottom's estimate goes 25 -> 40 C a moment in
+  local n=$1; shift; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=("$@")
+  ( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
+  watchrun; wait
+}
+startok w-jump8; jump w-jump8
+((rc == 0)) && ! muted && grep -c 'jump rule off' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: at analog 10 or below a 15 C jump of the estimate does not mute (C9j)"; }
+startok w-jump8f; jump w-jump8f OMAMOBILE_SPK_TEMP_JUMP=5
+((rc == 1)) && muted && grep -c 'jumped 15.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: OMAMOBILE_SPK_TEMP_JUMP=5 brings the jump rule back at any level"; }
+pass "watchdog: the jump rule is off at analog 10 or below unless asked (C9j)"
+
 # stock's media delta at stream start (made-up words in the stock format)
 startok w-delta; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 echo '4,100,200,300' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"
@@ -402,7 +444,13 @@ c9() {  # name, then prep for the tree: param, stamp
 }
 c9prep=()
 c9 c9-ok
-((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 817 && $(val "Bottom Analog PCM Volume") == 17 ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels"; }
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 817 && $(val "Bottom Analog PCM Volume") == 17 &&
+  $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels, boost on"; }
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
+wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); watchrun; wait
+((rc == 1)) && muted && grep -c 'jumped 15.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 15 C jump of the estimate mutes"; }
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
 mktree tmpfw; c9prep=(OMAMOBILE_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"
@@ -466,7 +514,8 @@ grep -c 'condition = \[ { omamobile.speaker-eq = package } \]' "$conf" >/dev/nul
 grep -c 'flags = \[ nofail \]' "$conf" >/dev/null || fail "filter: PipeWire starts without it if it fails to load"
 grep -c 'node.name = "alsa_output.platform-sound-aoc.HiFi__Speaker__sink"' "$conf" >/dev/null || fail "filter: the speaker sink only"
 grep -c 'api.alsa.card.name = "google,aoc-snd-card"' "$conf" >/dev/null || fail "filter: the Pixel 7 Pro's card only"
-[[ $(grep -c '"Input gain (dB)" = 0.0 "Limit (dB)" = -3.0' "$conf") == 2 ]] || fail "filter: both limiters add no gain, ceiling -3 dBFS"
+[[ $(grep -c '"Input gain (dB)" = 6.0 "Limit (dB)" = -3.0' "$conf") == 2 ]] || fail "filter: both limiters at 6 dB of drive, ceiling -3 dBFS (0.5.4)"
+[[ $(grep -c '"Freq" = 20.0 "Q" = 0.5412' "$conf") == 2 && $(grep -c '"Gain" = 0.0 } }' "$conf") -ge 4 ]] || fail "filter: 20 Hz high-pass, no shelf, no dip by default (0.5.4)"
 python3 - "$conf" <<'PY' || fail "filter: graph links each speaker through its chain to its own limiter, options off by default"
 import re, sys
 s = open(sys.argv[1]).read()
@@ -501,8 +550,8 @@ json.dump(vals, open(sys.argv[2], 'w'))
 PY
 cp "$pwt/state.json" "$pwt/state0.json"
 out=$(eqrun show) || fail "eq: show"
-[[ $out == *"top (left)      hp 100 Hz | bass +4 dB at 400 Hz | dip -2 dB at 3500 Hz"*"trim +0.0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the filter's values"; }
-[[ $out == *"width 1 | swap 0 | bassmono 0 at 500 Hz | harm top 0 bottom 0 below 200 Hz | drive 0/0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the options"; }
+[[ $out == *"top (left)      hp 20 Hz | bass +0 dB at 400 Hz | dip +0 dB at 3500 Hz"*"trim +0.0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the filter's values"; }
+[[ $out == *"width 1 | swap 0 | bassmono 0 at 500 Hz | harm top 0 bottom 0 below 200 Hz | drive 6/6 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the options"; }
 [[ $out == *"NOT in the path"* ]] || fail "eq: show says when the filter is not linked"
 out=$(eqprep=(FAKE_PW_LINKED=1); eqrun show)
 [[ $out == *"in the path: plays into alsa_output.platform-sound-aoc.HiFi__Speaker__sink; 1 stream link(s)"* ]] || { echo "$out" >&2; fail "eq: show says where the filter plays"; }
@@ -520,12 +569,12 @@ if eqrun orient sideways >/dev/null 2>&1; then fail "eq: orient refuses an unkno
 eqrun preset flat >/dev/null
 [[ $(st hp_l:Freq hp2_r:Freq bass_r:Gain dip_l:Gain treble_r:Gain trim_l:Mult pre_b:Gain\ 3 pre_t:Gain\ 3 lim_t:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_l:Freq=20 hp2_r:Freq=20 bass_r:Gain=0 dip_l:Gain=0 treble_r:Gain=0 trim_l:Mult=1 pre_b:Gain 3=0 pre_t:Gain 3=0 lim_t:Input gain (dB)=0 mtx_b:Gain 1=1" ]] || fail "eq: preset flat (and it leaves the orientation alone)"
 eqrun preset default >/dev/null
-[[ $(st hp_r:Freq bass_l:Gain dip_r:Gain dip_r:Freq lim_b:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_r:Freq=100 bass_l:Gain=4 dip_r:Gain=-2 dip_r:Freq=3500 lim_b:Input gain (dB)=0 mtx_b:Gain 1=1" ]] || fail "eq: preset default is the package file (but the orientation)"
+[[ $(st hp_r:Freq bass_l:Gain dip_r:Gain dip_r:Freq lim_b:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_r:Freq=20 bass_l:Gain=0 dip_r:Gain=0 dip_r:Freq=3500 lim_b:Input gain (dB)=6 mtx_b:Gain 1=1" ]] || fail "eq: preset default is the package file (but the orientation)"
 grep -c '"sum:' "$pwt/log" >/dev/null && fail "eq: never touches the bass-management sum"
 for bad in bass=9 hp=10 trim_top=1 trim=-3 dip_freq=200 nope=1 limiter:Limit\ \(dB\)=0 drive=7 width=2 swap=0.5 harm=3 xover=100 sum:Gain\ 1=1; do
   if eqrun set "$bad" >/dev/null 2>&1; then fail "eq: refuses $bad"; fi
 done
-[[ $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: a refused change changes nothing"
+[[ $(st bass_l:Gain lim_t:Input\ gain\ \(dB\)) == "bass_l:Gain=0 lim_t:Input gain (dB)=6" ]] || fail "eq: a refused change changes nothing"
 rc=0; eqprep=(FAKE_PW_IGNORE=1); eqrun set bass=2 >/dev/null 2>&1 || rc=$?; eqprep=()
 ((rc == 1)) || fail "eq: says so when the filter does not take a value"
 eqrun set bass=3 trim_bottom=-2 drive=2 width=0.8 --save >/dev/null || fail "eq: --save"
@@ -535,7 +584,7 @@ grep -c 'name = bass_r   label = bq_lowshelf  control = { "Freq" = 400 "Q" = 0.7
   grep -c '"Mult" = 0.794328' "$u" >/dev/null && [[ $(grep -c '"Input gain (dB)" = 2 "Limit (dB)" = -3.0' "$u") == 2 ]] &&
   grep -c 'name = mtx_t    label = mixer        control = { "Gain 1" = 0.9 "Gain 2" = 0.1 }' "$u" >/dev/null &&
   grep -c 'flags = \[ nofail \]' "$u" >/dev/null || { cat "$u" >&2; fail "eq: the saved copy carries the values, the width but not the swap, and keeps the limiters' ceiling"; }
-eqrun reset >/dev/null; [[ ! -e $u && $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: reset removes the copy and goes back to the package values"
+eqrun reset >/dev/null; [[ ! -e $u && $(st bass_l:Gain lim_t:Input\ gain\ \(dB\)) == "bass_l:Gain=0 lim_t:Input gain (dB)=6" ]] || fail "eq: reset removes the copy and goes back to the package values"
 pass "speaker filter: input matrix, bass management, harmonics, hp, bass, dip, treble, trim, a limiter per speaker; omamobile-speaker-eq show/set/preset/orient/save/reset within limits"
 
 # the response measurement, on a simulated speaker (a 700 Hz roll-off, a 3.5 kHz peak)
@@ -648,6 +697,8 @@ for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-s
          usr/share/wireplumber/wireplumber.conf.d/51-omamobile-aoc.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/google,tegu-aoc-snd-card.conf usr/share/alsa/ucm2/Google/tegu/HiFi.conf \
          usr/share/wireplumber/wireplumber.conf.d/52-omamobile-tegu-aoc.conf \
+         usr/share/alsa/ucm2/conf.d/aoc-snd-card/google,raven-aoc-snd-card.conf usr/share/alsa/ucm2/Google/raven/HiFi.conf \
+         usr/share/wireplumber/wireplumber.conf.d/53-omamobile-raven-aoc.conf \
          usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf usr/bin/omamobile-speaker-eq \
          usr/lib/omamobile-audio/speaker_response.py usr/lib/systemd/user/omamobile-speaker-orient.service; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"

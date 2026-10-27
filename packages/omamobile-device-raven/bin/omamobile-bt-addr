@@ -1,0 +1,72 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Give the Bluetooth controller the phone's real address, as Android does.
+# The bootloader writes it into the device tree at every boot
+# (/chosen/config/bt_addr); the BCM4389 otherwise comes up with a
+# placeholder (43:89:00:00:..).
+#   omamobile-bt-addr hciN   (started by udev through omamobile-bt-addr@.service)
+set -euo pipefail
+# The BCM4389 sometimes misses the first command at boot (a cold boot as
+# well as a warm one) and its setup fails; rebinding hci_uart_bcm powers it
+# off and on through its shutdown line and it then comes up (2026-10-16).
+# Failures counted in this boot's kernel log; the count already handled is
+# kept in /run so a rebound controller isn't judged by the old lines.
+run=/run/omamobile
+seen_file=$run/bt-setup-failures
+tries_file=$run/bt-rebinds
+max_rebinds=3
+failures() {
+  dmesg 2>/dev/null | grep -cE 'hci0: (BCM: Reset failed|BCM: Patch failed|BCM: failed to write update baudrate)' || true
+}
+bt_setup_failed() {
+  (($(failures) > $(cat "$seen_file" 2>/dev/null || echo 0)))
+}
+# Rebind after this unit has exited: the new controller starts it again.
+rebind() {
+  local tries dev
+  tries=$(cat "$tries_file" 2>/dev/null || echo 0)
+  if ((tries >= max_rebinds)); then
+    echo "$hci: its setup failed $((tries + 1)) times; giving up until the next boot" >&2
+    return
+  fi
+  dev=$(basename "$(readlink -f "/sys/class/bluetooth/$hci/../..")")
+  [[ -e /sys/bus/serial/drivers/hci_uart_bcm/$dev ]] || { echo "$hci: no hci_uart_bcm device to rebind" >&2; return; }
+  mkdir -p "$run"
+  echo $((tries + 1)) > "$tries_file"
+  failures > "$seen_file"
+  echo "$hci: its setup failed; power-cycling it (rebind $((tries + 1)) of $max_rebinds)" >&2
+  systemd-run --quiet --collect --on-active=1 --unit="omamobile-bt-rebind-$((tries + 1))" \
+    /bin/sh -c "echo $dev > /sys/bus/serial/drivers/hci_uart_bcm/unbind; sleep 1; echo $dev > /sys/bus/serial/drivers/hci_uart_bcm/bind"
+}
+
+hci=${1:?Usage: omamobile-bt-addr hciN}
+index=${hci#hci}
+[[ $index =~ ^[0-9]+$ ]] || { echo "not a controller: $hci" >&2; exit 1; }
+source=/proc/device-tree/chosen/config/bt_addr
+[[ -s $source ]] || exit 0
+addr=$(tr -d '\0' < "$source" | tr 'a-f' 'A-F')
+
+# A unicast, globally administered address only, like the Wi-Fi one.
+[[ $addr =~ ^[0-9A-F]{2}(:[0-9A-F]{2}){5}$ ]] || exit 0
+(( (16#${addr:0:2} & 3) == 0 )) || exit 0
+
+# udev starts us when the controller appears, before hci_bcm has finished
+# downloading its firmware (about 7 s); it answers info only after that.
+for _ in {1..60}; do
+  info=$(btmgmt --index "$index" info 2> /dev/null || true)
+  [[ $info == *"current settings:"* ]] && break
+  bt_setup_failed && { rebind; exit 0; }
+  sleep 0.5
+done
+[[ $info == *"current settings:"* ]] || { echo "$hci never finished its setup" >&2; exit 1; }
+
+# Set Public Address needs the controller powered off. Set on a controller
+# that has never been powered, though, the kernel withdraws the index to
+# reconfigure it and it never comes back (seen at every boot). So power it
+# on once first, then cycle it around the change, and leave it on.
+powered=$(grep -c 'current settings:.*powered' <<< "$info" || true)
+((powered)) || btmgmt --index "$index" power on > /dev/null
+btmgmt --index "$index" power off > /dev/null
+btmgmt --index "$index" public-addr "$addr" > /dev/null
+btmgmt --index "$index" power on > /dev/null
+exit 0

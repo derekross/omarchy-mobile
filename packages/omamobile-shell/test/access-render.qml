@@ -7,9 +7,9 @@ import qs.Commons as Commons
 import "access" as Access
 
 // Offscreen review shots of the permission sheet (test/access-render), at
-// the phone's 480x1040 logical px: each request in $ACCESS_JOB over an app
-// stand-in, saved as a PNG, with the card's and the buttons' geometry
-// printed for the checks. Then it quits.
+// the phone's 480x1040 logical px and on its side at 1040x480: each request
+// in $ACCESS_JOB over an app stand-in, saved as a PNG, with the buttons'
+// geometry printed for the checks. Then it quits.
 ShellRoot {
   id: shell
 
@@ -20,13 +20,14 @@ ShellRoot {
 
   FloatingWindow {
     id: win
-    implicitWidth: 480
+    implicitWidth: 1040
     implicitHeight: 1040
-    color: Commons.Color.background
+    color: "black"
 
     Item {
       id: screen
-      anchors.fill: parent
+      width: shell.shot && shell.shot.w ? shell.shot.w : 480
+      height: shell.shot && shell.shot.h ? shell.shot.h : 1040
 
       // An app behind the sheet: a bar and a dark viewfinder.
       Rectangle { width: parent.width; height: 44; color: Commons.Color.bar.background
@@ -64,7 +65,7 @@ ShellRoot {
 
   function capture() {
     var s = shell.shot
-    console.log("geometry " + s.name + " " + JSON.stringify(shell.describe(sheet, 0, [])))
+    console.log("geometry " + s.name + " " + screen.width + "x" + screen.height + " " + JSON.stringify(shell.describe(sheet, 0, [])))
     screen.grabToImage(function(result) {
       result.saveToFile(s.png)
       console.log("shot " + s.png)

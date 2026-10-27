@@ -12,6 +12,8 @@ Item {
   id: top
   width: 10
   height: 10
+  // Where test/switcher-touch saves a picture of the landscape case, if asked.
+  property string shotDir: ""
 
   // A foreign-toplevel: close() takes it off the list, unless the app
   // ignores the request.
@@ -178,6 +180,49 @@ Item {
       tap(overlay.contentItem.width / 2, overlay.contentItem.height / 2)
       compare(foot.activations, 1)
       verify(!sw.opened)
+    }
+
+    // The window's first child with an id-like role: the cards list is the
+    // ListView, the action row the Row with the two buttons.
+    function findKind(item, kind) {
+      if (item.toString().indexOf(kind) === 0) return item
+      for (var i = 0; i < item.children.length; i++) {
+        var hit = findKind(item.children[i], kind)
+        if (hit) return hit
+      }
+      return null
+    }
+
+    function onScreen(item) {
+      var p = item.mapToItem(overlay.contentItem, 0, 0)
+      return p.x >= 0 && p.y >= 0 && p.x + item.width <= overlay.width + 0.5 && p.y + item.height <= overlay.height + 0.5
+    }
+
+    // On its side (TOUCH-PLAN 2.4): a card keeps the screen's shape instead
+    // of 72% of the width, so it fits above the bottom actions.
+    function test_cards_fit_on_their_side() {
+      overlay.width = 1040
+      overlay.height = 480
+      var a = fakeWindow.createObject(top), b = fakeWindow.createObject(top, { appId: "chromium" })
+      openWith([a, b])
+      var cards = findKind(overlay.contentItem, "QQuickListView")
+      verify(cards, "the cards list")
+      tryVerify(function() { return cards.count === 2 && cards.currentItem !== null })
+      var card = cards.currentItem
+      verify(card.width <= 1040 * 0.72 - 1, "narrower than 72% of the width: " + card.width)
+      verify(Math.abs(card.width / (card.height - 28) - 1040 / 480) < 0.15, "the screen's shape: " + card.width + "x" + card.height)
+      verify(onScreen(card), "the card is on screen")
+      var clear = findText(overlay.contentItem, "Clear all"), home = findText(overlay.contentItem, "Home")
+      verify(onScreen(clear.parent) && onScreen(home.parent), "the bottom actions are on screen")
+      verify(clear.parent.mapToItem(overlay.contentItem, 0, 0).y >= card.mapToItem(overlay.contentItem, 0, card.height).y, "under the card")
+      var dir = String(top.shotDir)
+      if (dir) {
+        waitForRendering(overlay.contentItem)
+        var image = grabImage(overlay.contentItem)
+        image.save(dir + "/switcher-landscape.png")
+      }
+      overlay.width = 412
+      overlay.height = 892
     }
   }
 }

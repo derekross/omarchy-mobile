@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Sleep (s2idle) when the screen is off behind a secure lock
+# (device/cheetah/SUSPEND-PLAN.md 6.2). Runs for every user's graphical
+# session but does nothing until "omarchy-toggle omamobile-sleep on".
+# OMAMOBILE_SLEEP_AFTER_OFF (seconds, default 30, at least 5) and
+# OMAMOBILE_SLEEP_GRACE (default 5) can be set in ~/.config/environment.d.
+[Unit]
+Description=Omarchy Mobile sleep on screen-off
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-sleepd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

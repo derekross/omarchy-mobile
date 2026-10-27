@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Add the [omamobile] repository to pacman.conf, before [omarchy] so its
+# builds (e.g. Mesa with the Mali-G78 entry) win. Added once; never removed
+# automatically, so a user's edits stay.
+add_repository() {
+  local conf=/etc/pacman.conf
+  grep -q '^\[omamobile\]' "$conf" && return
+  local entry='[omamobile]\nInclude = /etc/pacman.d/omamobile-mirrorlist\n'
+  if grep -q '^\[omarchy\]' "$conf"; then
+    sed -i "0,/^\[omarchy\]/s//${entry//\//\\/}\n[omarchy]/" "$conf"
+  elif grep -q '^\[core\]' "$conf"; then
+    sed -i "0,/^\[core\]/s//${entry//\//\\/}\n[core]/" "$conf"
+  else
+    printf '\n[omamobile]\nInclude = /etc/pacman.d/omamobile-mirrorlist\n' >>"$conf"
+  fi
+}
+
+post_install() {
+  add_repository
+}
+
+post_upgrade() {
+  add_repository
+}

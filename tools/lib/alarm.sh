@@ -111,7 +111,10 @@ alarm_build_image() {
     docker run --platform linux/arm64 --name "$name" -v "$ctx:/setup:ro" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
       -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e BUILDER_UID="$(id -u)" -e BUILDER_GID="$(id -g)" \
       "$base" bash /setup/setup >&2 || { docker rm -f "$name" >/dev/null 2>&1; rm -rf "$ctx"; alarm_die "build image setup failed"; }
-    docker commit "$name" "$tag" >/dev/null
+    # Not under set -e here (callers run this in a command substitution), so
+    # a failed commit must be caught by hand or the build runs on no image.
+    docker commit "$name" "$tag" >/dev/null ||
+      { docker rm -f "$name" >/dev/null 2>&1; rm -rf "$ctx"; alarm_die "build image commit failed"; }
     docker rm "$name" >/dev/null
   fi
   rm -rf "$ctx"

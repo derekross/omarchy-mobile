@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Mark this boot slot successful for the bootloader
+After=multi-user.target
+ConditionPathExists=/proc/bootconfig
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-boot-success
+
+[Install]
+WantedBy=multi-user.target

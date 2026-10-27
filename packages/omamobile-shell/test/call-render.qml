@@ -7,9 +7,10 @@ import qs.Commons as Commons
 import "call" as Call
 
 // Offscreen review shots of the call card (test/call-render), at the
-// phone's 480x1040 logical px: each state in $CALL_JOB over a stand-in for
-// what lies beneath (the lock, or an app), saved as a PNG, with the
-// geometry of the controls printed for the checks. Then it quits.
+// phone's 480x1040 logical px and on its side at 1040x480: each state in
+// $CALL_JOB over a stand-in for what lies beneath (the lock, or an app),
+// saved as a PNG, with the geometry of the controls and the named parts
+// printed for the checks. Then it quits.
 ShellRoot {
   id: shell
 
@@ -21,22 +22,25 @@ ShellRoot {
 
   FloatingWindow {
     id: win
-    implicitWidth: 480
+    implicitWidth: 1040
     implicitHeight: 1040
-    color: Commons.Color.background
+    color: "black"
 
     Item {
       id: screen
-      anchors.fill: parent
+      width: shell.shot && shell.shot.w ? shell.shot.w : 480
+      height: shell.shot && shell.shot.h ? shell.shot.h : 1040
+      readonly property bool wide: width > height
 
-      // Beneath: the lock (a clock and a PIN pad) or an app.
+      // Beneath: the lock (a clock and a PIN pad, side by side on a phone
+      // on its side) or an app.
       Rectangle {
         anchors.fill: parent
         color: shell.shot && shell.shot.under === "app" ? "#202020" : Commons.Color.background
         Text {
           visible: !!shell.shot && shell.shot.under !== "app"
-          anchors.horizontalCenter: parent.horizontalCenter
-          y: 240
+          x: screen.wide ? Math.round(screen.width / 4 - width / 2) : Math.round((screen.width - width) / 2)
+          y: screen.wide ? 180 : 240
           text: "13:27"
           color: Commons.Color.foreground
           font.family: Style.font.family
@@ -44,8 +48,8 @@ ShellRoot {
         }
         Grid {
           visible: !!shell.shot && shell.shot.under !== "app"
-          anchors.horizontalCenter: parent.horizontalCenter
-          y: 560
+          x: screen.wide ? Math.round(screen.width * 0.75 - width / 2) : Math.round((screen.width - width) / 2)
+          y: screen.wide ? 40 : 560
           columns: 3
           spacing: 18
           Repeater {
@@ -93,10 +97,10 @@ ShellRoot {
     }
   }
 
-  // The named controls, as {name: {x, y, w, h}} in screen px.
+  // The named controls and parts, as {name: {x, y, w, h}} in screen px.
   function describe(item, out) {
     if (!item) return out
-    if (item.objectName && item.visible) {
+    if (item.objectName && item.visible && item.opacity > 0) {
       var p = item.mapToItem(screen, 0, 0)
       out[item.objectName] = { x: Math.round(p.x), y: Math.round(p.y), w: Math.round(item.width), h: Math.round(item.height) }
     }
@@ -115,7 +119,7 @@ ShellRoot {
   function capture() {
     var s = shell.shot
     var target = s.mode === "emergency" ? emergencyInfo : (s.mode === "heads-up" || s.mode === "mini") ? top : full
-    console.log("geometry " + s.name + " " + JSON.stringify(shell.describe(target, {})))
+    console.log("geometry " + s.name + " " + screen.width + "x" + screen.height + " " + JSON.stringify(shell.describe(target, {})))
     screen.grabToImage(function(result) {
       result.saveToFile(s.png)
       console.log("shot " + s.png)

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# The AoC (audio and sensor DSP) at boot, enabled by the vendor
+# multi-user.target.wants link (device/raven/AUDIO-PLAN.md R3
+# passed). If a start hangs, the next boot leaves the AoC off (see the
+# script). The AoC modules are blacklisted for
+# autoload (modprobe.d/omamobile-aoc.conf), so this hang-safe script is the
+# only thing that starts the AoC.
+[Unit]
+Description=Boot the AoC audio and sensor DSP (hang-safe)
+After=local-fs.target systemd-modules-load.service
+ConditionPathExists=/sys/bus/platform/devices/175d0000.aoc
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-aoc-start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

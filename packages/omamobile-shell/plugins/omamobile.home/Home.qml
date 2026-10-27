@@ -149,7 +149,7 @@ Item {
     layout = parsed
     if (ports.length) saveTimer.restart()
     if (!loaded) { loaded = true; goToPage(layout.home, false) }
-    else if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
+    else if (currentPage >= viewLayout.pages.length) goToPage(viewLayout.pages.length - 1, false)
   }
 
   // A first start: a clock and a few installed apps. Waits for the desktop
@@ -201,7 +201,7 @@ Item {
   function commit(next) {
     if (!next) return false
     layout = next
-    if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
+    if (currentPage >= viewLayout.pages.length) goToPage(viewLayout.pages.length - 1, false)
     saveTimer.restart()
     return true
   }
@@ -404,13 +404,42 @@ Item {
   }
 
   readonly property string homeDir: Quickshell.env("HOME")
-  // Geometry: one OWL dp from the page width (Omalauncher's 6 columns of 69 dp).
+  // Geometry: the pager (one page) and the surface, in logical px.
   property real owlPageWidth: 480
   property real owlPagerHeight: 908
-  readonly property real owlCellHeight: owlPagerHeight / Math.max(1, layout.grid.rows)
   property real owlScreenWidth: 480
   property real owlScreenHeight: 924
-  readonly property real owlDp: OwlPhone.dpFor(owlPageWidth)
+  // The screen the surface is on (the offscreen renders put a stand-in
+  // here), and its shorter side: the portrait page width, whichever way the
+  // phone is held (the surface itself loses the bar and the dock).
+  property var screenInfo: surface.screen || null
+  readonly property real owlShortSide: screenInfo && screenInfo.width > 0 && screenInfo.height > 0
+    ? Math.min(screenInfo.width, screenInfo.height) : Math.min(owlPageWidth, owlScreenHeight)
+  // One OWL dp from that side (Omalauncher's 6 columns of 69 dp), so a
+  // widget draws at one size in both orientations. From the landscape width
+  // it drew 2.2 times larger into cells 2.6 times shorter, and its rows
+  // landed on each other (#85).
+  readonly property real owlDp: OwlPhone.dpFor(landscape ? owlShortSide : owlPageWidth)
+  // The portrait page's height, which the catalog sizes widgets in (the
+  // file's grid is portrait): in landscape, this pager's height plus the
+  // screen's long side less its short one, since the bar and the dock take
+  // the same room either way.
+  readonly property real owlPortraitPagerHeight: landscape ? owlPagerHeight + Math.max(0, Math.max(owlScreenWidth, owlScreenHeight) - owlShortSide) : owlPagerHeight
+  readonly property real owlCellHeight: owlPortraitPagerHeight / Math.max(1, layout.grid.rows)
+
+  // ---------------------------------------------------------------- landscape (TOUCH-PLAN 2.4)
+
+  // A page wider than tall (the phone on its side, Hyprland transform 1 or
+  // 3) shows the layout turned with it: columns and rows swap, and each
+  // item's place and box turn too, kept to its size in pixels and to its
+  // limits (HomeModel.transposeLayout). `layout` and the file stay portrait;
+  // the view derives this and never saves it. Edit mode moves and resizes on
+  // the portrait grid, so it waits for portrait; the sheets still open.
+  readonly property bool landscape: owlPageWidth > owlPagerHeight
+  readonly property var viewLayout: landscape
+    ? HomeModel.transposeLayout(layout, userCatalog, { portrait: [owlShortSide, owlPortraitPagerHeight], landscape: [owlPageWidth, owlPagerHeight] })
+    : layout
+  onLandscapeChanged: if (landscape && editing) setEditing(false)
 
   // What each OWL widget compiles to, its sizes and what it may do.
   readonly property var owlInfo: {
@@ -594,7 +623,9 @@ Item {
   }
 
   OwlPhoneHost { id: owlHostObject; home: root }
-  readonly property var owlHost: owlHostObject
+  // Not readonly: the offscreen renders (test/home-render.qml) put a host
+  // that answers from fixtures in its place, so no widget runs a command.
+  property var owlHost: owlHostObject
   Owl.OwlScheduler { id: owlSchedulerObject; paused: root.owlPaused }
   readonly property var owlScheduler: owlSchedulerObject
 
@@ -813,7 +844,7 @@ Item {
   // ---------------------------------------------------------------- actions
 
   function goToPage(index, animate) {
-    var i = Math.max(0, Math.min(layout.pages.length - 1, Number(index) || 0))
+    var i = Math.max(0, Math.min(viewLayout.pages.length - 1, Number(index) || 0))
     currentPage = i
     if (pager) {
       pager.highlightMoveDuration = animate === false ? 0 : 250
@@ -822,12 +853,13 @@ Item {
   }
 
   function setEditing(on) {
-    editing = !!on
+    editing = !!on && !landscape
     if (!editing) { sheet = ""; settingsId = "" }
   }
 
   function requestEdit() {
     if (!longPressAllowed()) return "busy"
+    if (landscape) { flash("Turn the phone upright to edit"); return "landscape" }
     setEditing(true)
     return "editing"
   }
@@ -1001,7 +1033,7 @@ Item {
   function state() {
     return JSON.stringify({
       loaded: loaded, path: layoutPath, page: currentPage, pages: layout.pages.length, home: layout.home,
-      grid: layout.grid, editing: editing, sheet: sheet, settings: settingsId, fpBusy: fpBusy,
+      grid: layout.grid, landscape: landscape, viewGrid: viewLayout.grid, editing: editing, sheet: sheet, settings: settingsId, fpBusy: fpBusy,
       items: layout.pages.map(function(p) { return p.items.length }),
       missing: HomeModel.missingApps(layout, availableAppIds())
     })
@@ -1053,7 +1085,7 @@ Item {
         interactive: !root.editing && root.sheet === ""
         flickDeceleration: 4000
         cacheBuffer: width * 2
-        model: root.layout.pages.length
+        model: root.viewLayout.pages.length
         onCurrentIndexChanged: root.currentPage = currentIndex
 
         delegate: Page { }
@@ -1064,13 +1096,14 @@ Item {
       // ---------- page dots
       Row {
         id: dots
+        objectName: "pageDots"
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: toolbar.visible ? toolbar.top : parent.bottom
-        height: root.layout.pages.length > 1 || root.editing ? 28 : Style.spacing.lg
+        height: root.viewLayout.pages.length > 1 || root.editing ? 28 : Style.spacing.lg
         spacing: 0
 
         Repeater {
-          model: root.layout.pages.length > 1 || root.editing ? root.layout.pages.length : 0
+          model: root.viewLayout.pages.length > 1 || root.editing ? root.viewLayout.pages.length : 0
           delegate: Item {
             required property int index
             width: 22; height: 28
@@ -1098,6 +1131,7 @@ Item {
       // ---------- edit toolbar
       Row {
         id: toolbar
+        objectName: "editToolbar"
         visible: root.editing
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
@@ -1173,6 +1207,7 @@ Item {
       // ---------- a short notice, with Undo after a remove
       Rectangle {
         id: noticePill
+        objectName: "notice"
         z: 60
         visible: root.notice !== ""
         readonly property bool canUndo: root.undoRemoved !== null
@@ -1246,9 +1281,9 @@ Item {
     width: pager.width
     height: pager.height
 
-    readonly property var items: root.layout.pages[index] ? root.layout.pages[index].items : []
-    readonly property int columns: root.layout.grid.columns
-    readonly property int rows: root.layout.grid.rows
+    readonly property var items: root.viewLayout.pages[index] ? root.viewLayout.pages[index].items : []
+    readonly property int columns: root.viewLayout.grid.columns
+    readonly property int rows: root.viewLayout.grid.rows
     readonly property real cellW: width / columns
     readonly property real cellH: height / rows
     // Where a dragged item would land, in cells (null: not dragging).
@@ -1325,7 +1360,7 @@ Item {
     property real growY: 0
     property bool resizing: false
 
-    readonly property var limits: HomeModel.sizeLimits(modelData, root.layout.grid, root.userCatalog)
+    readonly property var limits: HomeModel.sizeLimits(modelData, root.viewLayout.grid, root.userCatalog)
     readonly property bool isUser: isWidget && HomeModel.isUserType(modelData.type)
     x: modelData.x * owner.cellW + dragX
     y: modelData.y * owner.cellH + dragY
@@ -1406,7 +1441,7 @@ Item {
 
     // Where the dragged item lands: { page, x, y, w, h }.
     function target() {
-      var grid = root.layout.grid
+      var grid = root.viewLayout.grid
       var cx = (modelData.x * owner.cellW + dragX) / owner.cellW
       var shift = HomeModel.pageShift(cx, modelData.w, grid)
       var cellAt = HomeModel.cellForPoint(modelData.x * owner.cellW + dragX, modelData.y * owner.cellH + dragY,

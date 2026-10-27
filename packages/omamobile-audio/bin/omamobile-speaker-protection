@@ -89,8 +89,9 @@ else
 fi
 
 # The DT's cirrus,subsystem-id; with the "Top"/"Bottom" name prefixes it makes
-# the firmware names mainline wm_adsp requests.
-SYSTEM=cheetah
+# the firmware names mainline wm_adsp requests. Read from the top amplifier's
+# node (cheetah, raven); cheetah when there is none (the tests).
+SYSTEM=${OMAMOBILE_SPK_SYSTEM:-}
 AMPS=(Top Bottom)
 SUFFIX=(top bottom)
 NODES=(amplifier@0 amplifier@1)
@@ -114,6 +115,16 @@ RUN=${OMAMOBILE_RUN:-/run/omamobile}
 LIB=${OMAMOBILE_AUDIO_LIB:-/usr/lib/omamobile-audio}
 CARD_WAIT=${OMAMOBILE_CARD_WAIT:-20}
 CTL_WAIT=${OMAMOBILE_CTL_WAIT:-10}
+
+if [[ -z $SYSTEM ]]; then
+  for d in "$SPIDEVS"/*; do
+    [[ $(readlink -f "$d/of_node" 2>/dev/null) == */amplifier@0 ]] || continue
+    [[ -r $d/of_node/cirrus,subsystem-id ]] || continue
+    SYSTEM=$(tr -d '\0' < "$d/of_node/cirrus,subsystem-id")
+    break
+  done
+  [[ $SYSTEM =~ ^[a-z0-9]+$ ]] || SYSTEM=cheetah
+fi
 
 marker=$STATE/speaker-protection-started
 stamp=$STATE/speaker-protection-verified
@@ -347,7 +358,28 @@ start() {
   # the kernel log's clock (CLOCK_MONOTONIC; /proc/uptime also counts suspend)
   since=$(python3 -c 'import time; print(time.monotonic())')
 
-  # 1. The amplifiers, fresh, then the card
+  # 1. The amplifiers, fresh, then the card. First the boost converter
+  # (AOC-PLAN C9j, 2026-10-27): at analog 10 and below it runs in its
+  # light-load regime, where it droops and distorts both speakers (10-50 % on
+  # a 1 kHz tone) and takes 8-11 dB off the output; stock's 817/17 never runs
+  # it there. So it is off at analog 10 and below and on at 17 (stage c9),
+  # through the cs35l41 module's boost_en parameter (kernels from 00590);
+  # OMAMOBILE_SPK_BOOST=1|0 forces it. A kernel without the parameter keeps
+  # the converter on. The parameter is read when the amplifiers probe, so it
+  # is set before the load or the rebind below.
+  boost=${OMAMOBILE_SPK_BOOST:-}
+  [[ -z $boost || $boost == 0 || $boost == 1 ]] || fail "OMAMOBILE_SPK_BOOST=$boost: 1 (on), 0 (off) or unset"
+  if [[ -z $boost ]]; then
+    boost=0
+    for p in "${AMPS[@]}"; do (($(level "$p" ANALOG) > 10)) && boost=1; done
+  fi
+  [[ $boost == 1 ]] && boost_want=Y || boost_want=N
+  boost_param=$SYSMODULE/snd_soc_cs35l41/parameters/boost_en
+  if [[ -e $boost_param ]]; then
+    echo "$boost_want" > "$boost_param" || fail "writing the boost_en parameter failed"
+  elif ! compgen -G "$SPIDRV/spi*" >/dev/null; then
+    modprobe snd_soc_cs35l41 "boost_en=$boost_want" 2>/dev/null || true   # a kernel without it: the plain load below
+  fi
   mkdir -p "$RUN" && echo "$since" > "$RUN/speaker-protection-since"
   if compgen -G "$SPIDRV/spi*" >/dev/null; then
     find_card && mute
@@ -358,6 +390,13 @@ start() {
   for ((i = 0; i < CARD_WAIT * 5; i++)); do find_card && break; sleep 0.2; done
   find_card || fail "no AoC sound card after ${CARD_WAIT} s (both amplifiers probed? the AoC up?)"
   log "AoC sound card $card"
+  if [[ -e $boost_param ]]; then
+    [[ $(cat "$boost_param") == "$boost_want" ]] || fail "boost_en reads $(cat "$boost_param"), not $boost_want"
+    [[ $boost_want == Y ]] && boost_state="boost converter on" || boost_state="boost converter off (output from VP)"
+  else
+    boost_state="boost converter on (kernel without boost_en)"
+  fi
+  log "$boost_state"
 
   # 2. Mute before anything else
   mute || fail "muting failed"
@@ -407,12 +446,15 @@ start() {
     [[ $(ctl_enum "$p PCM Source") == DSP ]] || fail "$p PCM Source is not DSP"
     # DRE (dynamic range enhancement), on in stock's mixer_paths.xml init
     # ("DRE DRE Switch" 1): lowers the amplifier's noise floor on quiet
-    # signals. On by default since C9d-5 (cleaner by ear on the bottom
-    # speaker); OMAMOBILE_SPK_DRE=0 leaves it off.
-    if [[ ${OMAMOBILE_SPK_DRE:-1} == 1 ]]; then
-      ctl_set "$p DRE Switch" on || fail "$p DRE Switch failed"
-      [[ $(ctl_values "$p DRE Switch") == on ]] || fail "$p DRE Switch did not read back"
-    fi
+    # signals by moving gain between the digital and the analog stage. On
+    # by default (C9d-5 by ear; C9j measured: with the boost converter off
+    # it takes the bottom speaker from 12 % to 4 % distortion at 737/10).
+    # Its start-of-stream step used to trip the watchdog's coil jump rule
+    # at the everyday level; that rule now applies above analog 10 only.
+    # OMAMOBILE_SPK_DRE=0 leaves it off.
+    [[ ${OMAMOBILE_SPK_DRE:-1} == 1 ]] && dre_want=on || dre_want=off
+    ctl_set "$p DRE Switch" "$dre_want" || fail "$p DRE Switch failed"
+    [[ $(ctl_values "$p DRE Switch") == "$dre_want" ]] || fail "$p DRE Switch did not read back"
     # The amplifier's hardware noise gate, as stock's DT sets it
     # (cirrus,hw-noise-gate-select = 63: every gate source): mutes the
     # output stage while the signal is below the gate threshold. On by
@@ -435,7 +477,7 @@ start() {
   done
 
   v="Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(level Bottom DIGITAL)/$(level Bottom ANALOG)"
-  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $v"
+  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $v, $boost_state"
   log "speaker protection on (stage $STAGE): both amplifiers through the DSP, digital/analog $v"
   finish
 }
@@ -452,10 +494,10 @@ status() {
   for i in "${!AMPS[@]}"; do
     p=${AMPS[i]}
     d=$(amp_dev "$i")
-    printf '%s (%s, power/control %s, %s): PCM Source %s, Digital %s (max %s), Analog %s (max %s), DSP1 Firmware %s, Preload %s\n' \
+    printf '%s (%s, power/control %s, %s): PCM Source %s, Digital %s (max %s), Analog %s (max %s), DRE %s, DSP1 Firmware %s, Preload %s\n' \
       "$p" "$d" "$(cat "$SPIDEVS/$d/power/control" 2>/dev/null)" "$(cat "$SPIDEVS/$d/power/runtime_status" 2>/dev/null)" \
       "$(ctl_enum "$p PCM Source")" "$(ctl_values "$p Digital PCM Volume")" "$(ctl_max "$p Digital PCM Volume")" \
-      "$(ctl_values "$p Analog PCM Volume")" "$(ctl_max "$p Analog PCM Volume")" \
+      "$(ctl_values "$p Analog PCM Volume")" "$(ctl_max "$p Analog PCM Volume")" "$(ctl_values "$p DRE Switch")" \
       "$(ctl_enum "$p DSP1 Firmware")" "$(ctl_values "$p DSP1 Preload Switch")"
     if ((have_cal)) && c=$(dsp_ctl "$p" CAL_R); then
       v=match

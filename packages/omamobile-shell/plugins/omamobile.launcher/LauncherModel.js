@@ -9,6 +9,18 @@ function isPlainObject(value) {
 
 // Manifest defaults, overlaid with the plugin's entry in shell.json
 // (`plugins: [{ "id": "omamobile.launcher", "columns": 5, ... }]`).
+// The drawer's columns (TOUCH-PLAN 2.4): the configured count across the
+// screen's shorter side, and on a grid wider than that (the phone on its
+// side) as many columns of the same width as fit, so the icons keep their
+// size: 4 upright on the Pixel 7 Pro, 8 on its side. `margin` is the grid's
+// inset from each screen edge.
+function drawerColumns(columns, gridWidth, shortSide, margin) {
+  var base = Math.max(3, Math.min(6, Math.round(Number(columns) || 4)))
+  var portraitGrid = (Number(shortSide) || 0) - 2 * (Number(margin) || 0)
+  if (!(gridWidth > portraitGrid) || portraitGrid <= 0) return base
+  return Math.max(base, Math.floor(base * gridWidth / portraitGrid))
+}
+
 function mergedSettings(defaults, config, pluginId) {
   var out = {}
   var base = isPlainObject(defaults) ? defaults : {}
@@ -80,6 +92,7 @@ var PICK_AGENT_ARGV = ["omarchy", "menu", "summon", "setup.default.agent"]
 
 if (typeof module !== "undefined") {
   module.exports = {
+    drawerColumns: drawerColumns,
     mergedSettings: mergedSettings,
     argv: argv,
     wordCount: wordCount,

@@ -70,6 +70,7 @@ in the table. See `device/cheetah/CAMERA-PLAN.md`, section 5.2.
 | `0053-software_isp-debayer_egl-Smooth-the-chroma.patch` | Chroma noise reduction in the GPU's second pass: colour differences averaged over a 9x9 footprint, guided by luma and chroma; `chromaDenoise` in each camera's `Detail` tuning |
 | `0054-pipeline-simple-Pass-the-start-controls-to-the-softw.patch` | The simple pipeline hands `Camera::start()`'s controls to the software ISP's IPA with the first request; without it a restarted camera kept the previous session's manual exposure mode |
 | `0055-software_isp-debayer_egl-Correct-defective-pixels-be.patch` | Defective pixel correction in a pass before the debayer, on the packed bytes: a sample beyond its eight same-colour neighbours' range is clamped to it. `LIBCAMERA_SOFTISP_NO_DPC` turns it off |
+| `0056-libcamera-Add-the-Samsung-S5KGN8-sensor.patch` | The S5KGN8 (the Pixel 9a's main camera) sensor helper, with the black level measured on the phone (64 at 10 bits) and the code / 32 gain, its properties, and an uncalibrated tuning file without a colour matrix or autofocus |
 | `libcamera-fix-python3.14-macro-redefinition.patch` | Arch's patch, unchanged (sha512 `8b54cbdf…`) |
 | `.SRCINFO` | `makepkg --printsrcinfo` output |
 

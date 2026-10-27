@@ -17,6 +17,23 @@ if command -v shellcheck >/dev/null; then
 fi
 pass "scripts parse"
 
+# spawn_optional keeps its job alive whatever the daemon's exit: run the
+# function from modem.conf under the library's errexit and pipefail with a
+# stand-in daemon that exits 3, and check the job is still there.
+sp=$(sed -n '/^spawn_optional() {$/,/^}$/p' profiles/modem.conf)
+[[ -n $sp ]] || fail "spawn_optional found in modem.conf"
+out=$(bash -c '
+  set -euo pipefail
+  declare -A PIDS; ENV=(env); CHROOT_BIN=bash; ROOT=-c
+  say() { :; }; android_env() { :; }
+  '"$sp"'
+  spawn_optional fake vendor "exit 3"
+  sleep 0.5
+  if kill -0 "${PIDS[fake]}" 2>/dev/null; then echo alive; kill "${PIDS[fake]}"; else echo dead; fi
+' 2>&1)
+[[ $out == alive ]] || fail "a daemon exiting 3 leaves spawn_optional's job alive (got: $out)"
+pass "spawn_optional survives a failing daemon"
+
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 # A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each; the TOC
 # entry's last word is the last entry's index), the version 20 bytes into

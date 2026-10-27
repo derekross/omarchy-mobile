@@ -3,7 +3,7 @@
 pkgname=omamobile-audio
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile audio for the Pixel 7 Pro and Pixel 9a: UCM profiles and PipeWire rules for the AoC sound card, Pixel 7 Pro speaker protection with the factory calibration"
+pkgdesc="Omarchy Mobile audio for the Pixel 7 Pro, Pixel 6 Pro and Pixel 9a: UCM profiles and PipeWire rules for the AoC sound card, Pixel 7 Pro speaker protection with the factory calibration"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)

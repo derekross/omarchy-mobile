@@ -1,0 +1,226 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-sleepd: put the phone to sleep (s2idle) when the screen is off and
+# the phone is locked, as Android does (device/cheetah/SUSPEND-PLAN.md 6.1,
+# 6.2). Off until the user turns it on:
+#
+#   omarchy-toggle omamobile-sleep on      (off: omarchy-toggle omamobile-sleep off)
+#
+#   omamobile-sleepd          watch (omamobile-sleepd.service, the user's session)
+#   omamobile-sleepd now      sleep as soon as allowed: the power key, after it
+#                             turned the screen off behind a secure lock
+#                             (omamobile-keys). Does nothing with the toggle off.
+#   omamobile-sleepd check    print what would stop sleep now; exit 0 if nothing
+#
+# The watcher asks for sleep with "systemctl suspend" (logind: its inhibitors
+# and the sleep hook apply) once the screen has been off and the lock secure
+# for OMAMOBILE_SLEEP_AFTER_OFF seconds (30), and again OMAMOBILE_SLEEP_GRACE
+# seconds (5) after a dark resume: a wake that left the screen off (an alarm,
+# the RTC, Bluetooth, the fuel gauge, a volume key). A power-key wake lights
+# the PIN pad (omamobile-keys wake, from here), and a lit screen never sleeps.
+#
+# Never while:
+#   - the toggle is off, the screen is on, or the lock isn't secure;
+#   - Omarchy's "Stay awake" is on (the quick-settings tile);
+#   - an SSH session is open (the USB link drops while the phone sleeps);
+#   - something holds a logind sleep inhibitor in block mode (a call, GNSS,
+#     systemd-inhibit --what=sleep);
+#   - a PipeWire sink is RUNNING (media playing).
+set -u
+
+int() { [[ $1 =~ ^[0-9]+$ ]] && echo "$1" || echo "$2"; }
+after_off=$(int "${OMAMOBILE_SLEEP_AFTER_OFF:-30}" 30)
+# Never 0: the user may still be reaching for the key (6.1).
+((after_off >= 5)) || after_off=5
+grace=$(int "${OMAMOBILE_SLEEP_GRACE:-5}" 5)
+now_delay=$(int "${OMAMOBILE_SLEEP_NOW_DELAY:-2}" 2)
+# Polls: every 2 s with the screen off and locked, every 5 s otherwise.
+poll=2
+idle_poll=5
+# A request that didn't lead to a sleep (logind refused, or the suspend failed)
+# is repeated no sooner than this.
+retry=30
+# Test hooks: a fake /sys and /proc, a clock file, and when to stop watching.
+sys=${OMAMOBILE_SLEEP_SYSFS:-/sys}
+proc=${OMAMOBILE_SLEEP_PROCFS:-/proc}
+stay_awake=$HOME/.local/state/omarchy/indicators/stay-awake  # omarchy-toggle-idle
+unit=omamobile-sleepd.service
+
+log() { echo "omamobile-sleepd: $*"; }
+
+clock() {
+  if [[ -n ${OMAMOBILE_SLEEP_CLOCK:-} ]]; then cat "$OMAMOBILE_SLEEP_CLOCK"; else printf '%(%s)T\n' -1; fi
+}
+
+enabled() { omarchy-toggle-enabled omamobile-sleep; }
+
+# As omamobile-keys: off when the backlight's bl_power says so, or when
+# Hyprland has the display powered off. Only a positive "off" counts.
+screen_off() {
+  local device
+  device=$(omarchy-hw-display 2>/dev/null)
+  if [[ -n $device && -r $sys/class/backlight/$device/bl_power ]] &&
+     [[ $(<"$sys/class/backlight/$device/bl_power") != 0 ]]; then
+    return 0
+  fi
+  hyprctl monitors -j 2>/dev/null | jq -e 'length > 0 and all(.[]; .dpmsStatus == false)' >/dev/null 2>&1
+}
+
+secure() {
+  [[ $(omarchy-shell lock status 2>/dev/null) == *'"secure":true'* ]]
+}
+
+# Established connections to the SSH port. Fails (and so refuses sleep) when
+# ss can't answer: sleeping under an SSH user's feet is the costly mistake.
+ssh_open() {
+  local out
+  out=$(ss -Htn state established '( sport = :22 )' 2>/dev/null) || return 0
+  [[ -n $out ]]
+}
+
+# Who holds a logind sleep inhibitor in block mode (delay-mode ones, such as
+# NetworkManager's or the lock's, only delay sleep).
+blockers() {
+  busctl --system --json=short call org.freedesktop.login1 /org/freedesktop/login1 \
+      org.freedesktop.login1.Manager ListInhibitors 2>/dev/null |
+    jq -r '.data[0][] | select(.[3] == "block" and (.[0] | split(":") | index("sleep") != null)) | .[1]' 2>/dev/null
+}
+
+# A PipeWire sink that is RUNNING: something plays. Idle sinks read IDLE or
+# SUSPENDED.
+playing() {
+  pactl list short sinks 2>/dev/null | awk -F'\t' '$NF == "RUNNING" { print $2; exit }'
+}
+
+# Why sleep isn't allowed now; prints nothing and fails when it is.
+refusal() {
+  local who
+  enabled || { echo "the omamobile-sleep toggle is off"; return 0; }
+  screen_off || { echo "the screen is on"; return 0; }
+  secure || { echo "the lock isn't secure"; return 0; }
+  [[ -e $stay_awake ]] && { echo "Stay awake is on"; return 0; }
+  ssh_open && { echo "an SSH session is open"; return 0; }
+  who=$(blockers | head -n 1)
+  [[ -n $who ]] && { echo "a sleep inhibitor is held ($who)"; return 0; }
+  who=$(playing)
+  [[ -n $who ]] && { echo "audio is playing ($who)"; return 0; }
+  return 1
+}
+
+count() { local v; v=$(cat "$sys/power/suspend_stats/$1" 2>/dev/null); echo "${v:-0}"; }
+
+wake_reason() {
+  local irq name
+  irq=$(cat "$sys/power/pm_wakeup_irq" 2>/dev/null) || irq=
+  [[ -n $irq ]] || { echo "no wake IRQ recorded"; return; }
+  name=$(awk -v i="$irq:" '$1 == i { $1 = ""; print; exit }' "$proc/interrupts" 2>/dev/null | tr -s ' ')
+  echo "IRQ $irq:${name:- (unknown)}"
+}
+
+request() {
+  log "sleeping ($1)"
+  systemctl suspend 2>&1 | sed 's/^/omamobile-sleepd: systemctl: /'
+}
+
+# Waits, but a USR1 (omamobile-sleepd now) ends the wait early.
+pause() {
+  sleep "$1" &
+  local pid=$!
+  wait "$pid" 2>/dev/null
+  kill "$pid" 2>/dev/null
+  return 0
+}
+
+want_now=0
+watch() {
+  local t ok fail woke last_ok last_fail off_since= deadline=0 requested=-1 cause= said= reason now_at=
+  last_ok=$(count success)
+  last_fail=$(count fail)
+  trap 'want_now=1' USR1
+  log "watching: sleep ${after_off} s after the screen goes off behind a secure lock, ${grace} s after a dark resume (toggle omamobile-sleep)"
+  while :; do
+    t=$(clock)
+    [[ -n ${OMAMOBILE_SLEEPD_STOP_AT:-} ]] && ((t >= OMAMOBILE_SLEEPD_STOP_AT)) && return 0
+    ok=$(count success)
+    fail=$(count fail)
+    if [[ $ok != "$last_ok" ]]; then
+      last_ok=$ok
+      woke=$(wake_reason)
+      log "resumed, woken by $woke"
+      # The press that woke the phone never reaches Hyprland's binds: the
+      # session is frozen while the kernel takes it. Light the PIN pad here,
+      # as that press would have (omamobile-keys ignores the press itself if
+      # it does arrive, so the screen doesn't go straight back off).
+      if [[ $woke == *KEY_POWER* ]] && command -v omamobile-keys >/dev/null; then
+        log "a power-key wake: lighting the lock screen"
+        omamobile-keys wake >/dev/null 2>&1 &
+      fi
+      # Any wake that leaves the screen off and locked is dark: back to
+      # sleep after the grace. A power-key wake lights the screen and
+      # resets everything below.
+      off_since=$t deadline=$((t + grace)) cause="dark resume, ${grace} s grace" requested=-1 said=
+    fi
+    if [[ $fail != "$last_fail" ]]; then
+      last_fail=$fail
+      log "the suspend failed (last failed device: $(cat "$sys/power/suspend_stats/last_failed_dev" 2>/dev/null || echo unknown))"
+    fi
+    # A power-key request stays good for a few seconds: the panel may still
+    # be powering off when it comes.
+    if ((want_now)); then want_now=0 now_at=$t; fi
+    [[ -n $now_at ]] && ((t - now_at > 5)) && now_at=
+    if ! enabled || ! screen_off || ! secure; then
+      off_since= said= requested=-1
+      if [[ -n $now_at ]]; then pause "$poll"; else pause "$idle_poll"; fi
+      continue
+    fi
+    if [[ -z $off_since ]]; then
+      off_since=$t deadline=$((t + after_off)) cause="screen off and locked for ${after_off} s"
+    fi
+    if [[ -n $now_at ]]; then
+      if ((now_at + now_delay < deadline)); then deadline=$((now_at + now_delay)) cause="power key"; fi
+      now_at=
+    fi
+    if ((t >= deadline)); then
+      if reason=$(refusal); then
+        [[ $reason == "$said" ]] || log "not sleeping: $reason"
+        said=$reason
+      elif ((requested < 0 || t - requested >= retry)); then
+        said=
+        requested=$t
+        request "$cause"
+      fi
+    fi
+    pause "$poll"
+  done
+}
+
+case "${1:-}" in
+  "")
+    watch
+    ;;
+  now)
+    enabled || exit 0
+    if systemctl --user --quiet is-active "$unit" 2>/dev/null; then
+      systemctl --user kill --signal=USR1 --kill-whom=main "$unit"
+    else
+      # No watcher (not started yet): one attempt, after the same short wait.
+      sleep "$now_delay"
+      if reason=$(refusal); then
+        log "not sleeping: $reason"
+      else
+        request "power key, no watcher running"
+      fi
+    fi
+    ;;
+  check)
+    if reason=$(refusal); then
+      echo "not sleeping: $reason"
+      exit 1
+    fi
+    echo "nothing stops sleep"
+    ;;
+  *)
+    echo "Usage: omamobile-sleepd [now|check]" >&2
+    exit 2
+    ;;
+esac

@@ -10,6 +10,7 @@ license=(MIT GPL-3.0-or-later)  # GPL: the squeekboard layout
 depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' omamobile-owl-widgets bash squeekboard bluez wf-recorder python python-dbus python-gobject
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative
+         iproute2 jq  # omamobile-sleepd: ss for SSH sessions; jq also for omamobile-keys
          # Both are in Omarchy's base package list, which root images install.
          foot xdg-terminal-exec  # guard for hand-built/partial installations
          xdg-desktop-portal-gnome)  # the file chooser (portal/hyprland-portals.conf)

@@ -10,13 +10,17 @@ for f in bin/omamobile-gnss lib/omamobile-vendor-chroot lib/omamobile-gnss-start
   bash -n "$f" || fail "syntax: $f"
 done
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/omamobile-gnss-nmea || fail "python: omamobile-gnss-nmea"
+# A running stack keeps the phone awake (SUSPEND-PLAN 6.1).
+grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
+  vendor/systemd/system/omamobile-gnss.service || fail "the stack holds a sleep inhibitor while it runs"
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
 if [[ ! -f bionic/prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
   exit 0
 fi
-for f in bionic/prebuilt/omamobile-fp-shim.so bionic/prebuilt/stubs/libomamobile-sitril-gps.so \
+for f in bionic/prebuilt/omamobile-fp-shim.so bionic/prebuilt/omamobile-gnss-client \
+         bionic/prebuilt/stubs/libomamobile-sitril-gps.so \
          bionic/prebuilt/stubs/libcom.android.tethering.connectivity_native.so; do
   [[ -f $f ]] || fail "$f missing: build it on the computer first (make -C bionic, see bionic/Makefile)"
   [[ $(head -c 20 "$f" | od -An -tx1 | tr -d ' \n') == 7f454c46020101* ]] || fail "$f is not a 64-bit ELF"

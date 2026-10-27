@@ -1,0 +1,63 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Raven's counterpart of cheetah's omamobile-usb-rescue: keep the USB link
+# working across unplugs. The MAX77759's Type-C side opens its USB2 data
+# switch (TCPC vendor register USBSW_CTRL, 0x93) on unplug, and with no
+# Type-C driver nothing closes it again, so the phone stays off the bus
+# after a replug. While the TCPC reports VBUS present (TCPCI POWER_STATUS,
+# 0x1e, bit 2), put the switch back to 0x09 (D+/D- connected), as the
+# bootloader leaves it. Stands aside once a Type-C driver owns the chip.
+# Only ever reads those two registers and writes that one.
+#
+# It also keeps /run/omamobile/usb-host while VBUS is present with the data
+# switch connected: a laptop, not a wall charger. The USB controller can't
+# tell: with the switch simply opening on unplug it never sees a disconnect
+# and stays "configured". omamobile-sleepd won't sleep while it exists.
+set -uo pipefail
+
+tcpc=0x25
+log() { echo "omamobile-usb-rescue: $*"; }
+marker=/run/omamobile/usb-host
+mkdir -p "${marker%/*}"
+host() { if "$@"; then [[ -e $marker ]] || touch "$marker"; else rm -f "$marker"; fi; }
+
+bus=
+for d in /sys/bus/i2c/devices/i2c-*; do
+  readlink -f "$d" | grep -q 10d50000.i2c && { bus=${d##*-}; break; }
+done
+[[ -n $bus ]] || { log "no I2C bus for 10d50000.i2c"; exit 0; }
+
+rd() { i2cget -f -y "$bus" $tcpc "$1" 2>/dev/null; }
+vbus_present() { local v; v=$(rd 0x1e) || return 1; (( (v >> 2) & 1 )); }
+tcpm_owns() { [[ -e /sys/bus/i2c/devices/$bus-0025/driver ]]; }
+
+log "watching the USB data switch on I2C bus $bus"
+# On a wall charger the chip holds the switch elsewhere (0x24 was seen) and
+# undoes the write: log changes only, and back off while the write won't stick.
+last= delay=1
+while :; do
+  if tcpm_owns; then
+    log "a Type-C driver owns the chip; nothing to do"
+    rm -f "$marker"
+    exit 0
+  fi
+  delay=1
+  if vbus_present; then
+    sw=$(rd 0x93)
+    if [[ -n $sw && $sw != 0x09 ]]; then
+      i2cset -f -y "$bus" $tcpc 0x93 0x09
+      now=$(rd 0x93)
+      if [[ $now == 0x09 ]]; then
+        log "VBUS present, USBSW_CTRL $sw: closed the data switch"
+        last=
+      else
+        [[ $sw == "$last" ]] || log "VBUS present, USBSW_CTRL $sw: the chip keeps it (a charger, not a host?); retrying every 10 s"
+        last=$sw delay=10
+      fi
+    fi
+    host [ "$(rd 0x93)" = 0x09 ]
+  else
+    host false
+  fi
+  sleep $delay
+done

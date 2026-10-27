@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Started by 80-omamobile-bt-addr.rules for the BCM4389 Bluetooth controller.
+# A service rather than a udev RUN, because udev's sandbox has no Bluetooth
+# sockets.
+[Unit]
+Description=Set the Bluetooth address of %i from the bootloader
+Before=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-bt-addr %i

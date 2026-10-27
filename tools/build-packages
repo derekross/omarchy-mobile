@@ -48,7 +48,7 @@ done
 
 # Default order: dependencies of our own packages first (check() of a later
 # package can then install an earlier one from the repository being built).
-ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-audio
+ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-raven omamobile-audio
        omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-owl-widgets omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-mmd omamobile-speaker-tuning omamobile-waydroid
        omamobile-firstboot mesa hyprland libcamera)
@@ -220,7 +220,12 @@ for dir in "${build[@]}"; do
     -e NAME="$name" -e HAVE_REPO="$have_repo" -e INCHECK="$incheck" \
     "$image" bash -c '
       set -euo pipefail
-      trap "chown -R builder: /var/cache/pacman/pkg /srcdest" EXIT
+      # Hand every bind mount back to the owner it arrived with. Under
+      # rootless Docker the container uid 1000 (builder) is a subordinate uid on
+      # the host, so leaving /work owned by builder makes the package
+      # unreadable to the user running this script (issue #73).
+      owner=$(stat -c %u:%g /work) cache_owner=$(stat -c %u:%g /var/cache/pacman/pkg) src_owner=$(stat -c %u:%g /srcdest)
+      trap "chown -R $owner /work; chown -R $cache_owner /var/cache/pacman/pkg; chown -R $src_owner /srcdest" EXIT
       if [[ $HAVE_REPO == 1 ]]; then
         sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf
       fi

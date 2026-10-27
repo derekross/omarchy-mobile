@@ -7,9 +7,14 @@
 #                      panel was powered off by hand)
 #                      locked: screen off if it's on, on (PIN pad) if it's off
 #                      screensaver up: lock (it wakes to the PIN pad)
+#                      a press that turned the screen off behind a secure
+#                      lock also asks omamobile-sleepd to sleep now (it does
+#                      nothing while the omamobile-sleep toggle is off)
 #   power, held 0.6 s  unlocked: Omarchy's system menu, while still held
 #                      locked: screen on
 #   power + volume down together: screenshot (Omarchy's, full screen)
+#   wake                omamobile-sleepd, after Power woke the phone from
+#                       sleep: the PIN pad, as the lost press would have
 #   volume down alone   lowers the volume after a 0.15 s wait for power
 #   volume up           raises the volume
 #   either volume key while the Camera app (omacam) is in front and the phone
@@ -102,6 +107,15 @@ chord() {
   (sleep 0.4; omarchy-capture-screenshot fullscreen) >/dev/null 2>&1 &
 }
 
+# The screen just went off: sleep now if the lock is secure (SUSPEND-PLAN
+# 6.1). omamobile-sleepd checks the toggle, the screen and its inhibitors
+# itself; in the background, so the key handler returns at once.
+sleep_now() {
+  command -v omamobile-sleepd >/dev/null || return 0
+  omarchy-shell lock status 2>/dev/null | grep -c '"secure":true' >/dev/null || return 0
+  omamobile-sleepd now >/dev/null 2>&1 &
+}
+
 long_press() {
   touch "$state/long"
   if locked; then
@@ -120,6 +134,9 @@ short_press() {
   now=$(date +%s%3N); last=$(cat "$state/last-press" 2>/dev/null || echo 0)
   echo "$now" >"$state/last-press"
   (( now - last < 800 )) && return 0
+  # The press that woke the phone from sleep, if it gets here at all:
+  # omamobile-sleepd has lit the PIN pad for it already.
+  [[ -f $state/power-wake ]] && (( now - $(<"$state/power-wake") < 1500 )) && return 0
   if screensaver_up; then
     omarchy-system-lock
   elif locked; then
@@ -127,6 +144,7 @@ short_press() {
       wake_locked
     else
       omarchy-brightness-display off
+      sleep_now
     fi
   elif screen_off; then
     # Unlocked but dark (the lock didn't engage, or the panel was powered
@@ -162,6 +180,7 @@ short_press() {
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
     fi
+    sleep_now
   fi
 }
 
@@ -216,6 +235,10 @@ case "${1:-}" in
     fi
     ;;
   power-up)
+    # Released: forget the press before acting on it. Locking takes about a
+    # second, longer than the long-press timer, which then found power still
+    # "held" and woke the lock it had just taken (a flash of the PIN pad).
+    rm -f "$state/power"
     if [[ -f $state/chord ]]; then
       rm -f "$state/chord"
     elif [[ -f $state/long ]]; then
@@ -223,10 +246,15 @@ case "${1:-}" in
     else
       short_press
     fi
-    rm -f "$state/power"
+    ;;
+  wake)
+    # omamobile-sleepd after a power-key wake from sleep: Hyprland never sees
+    # the press that woke the phone, so light the PIN pad as that press would.
+    now >"$state/power-wake"
+    if locked && screen_off; then wake_locked; fi
     ;;
   *)
-    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up" >&2
+    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up|wake" >&2
     exit 1
     ;;
 esac

@@ -13,6 +13,13 @@ accelerometer is released and the screen stays as it is; removing the file
 applies the current orientation again (the quick-settings tile can toggle
 it).
 
+The lock screen stays portrait: while the shell is locked (omarchy-shell
+lock isLocked) the screen is held at transform 0 and the phone's orientation
+is remembered; it is applied when the shell unlocks. Locking in landscape
+turns the screen back to portrait for the same reason. The shell's lock
+state is polled once a second only while the screen is not in plain
+portrait or an orientation is waiting.
+
   omamobile-autorotate [--monitor NAME] [--dry-run]
 """
 import argparse
@@ -43,6 +50,17 @@ def lock_path():
 
 def hyprctl(*args):
     return subprocess.run(['hyprctl', *args], capture_output=True, text=True)
+
+
+def shell_locked(dry_run=False):
+    """True while Omarchy's lock screen is up (the test sets OMAMOBILE_TEST_LOCKED)."""
+    if dry_run:
+        return os.environ.get('OMAMOBILE_TEST_LOCKED') == '1'
+    try:
+        r = subprocess.run(['omarchy-shell', 'lock', 'isLocked'], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.stdout.strip() == 'true'
 
 
 def monitor(name=None):
@@ -83,6 +101,8 @@ class Rotator:
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION if args.session else Gio.BusType.SYSTEM, None)
         self.claimed = False
         self.current = None
+        self.wanted = None      # the phone's orientation, applied once the shell unlocks
+        self.lock_poll = 0      # GLib source id of the lock poll, 0 while idle
         self.bus.signal_subscribe(NAME, 'org.freedesktop.DBus.Properties', 'PropertiesChanged',
                                   PATH, None, Gio.DBusSignalFlags.NONE, self._changed)
         Gio.bus_watch_name_on_connection(self.bus, NAME, Gio.BusNameWatcherFlags.NONE,
@@ -135,10 +155,40 @@ class Rotator:
 
     def _rotate(self, orientation):
         t = TRANSFORMS.get(orientation)
-        if t is None or t == self.current:
+        if t is None:
+            return
+        self.wanted = t
+        if shell_locked(self.args.dry_run):
+            if self.current != 0:
+                log('portrait while locked')
+                self._apply(0)
+            self._poll_lock()
+            return
+        self._apply(t)
+        if t != 0:
+            self._poll_lock()
+
+    def _apply(self, t):
+        if t == self.current:
             return
         self.current = t
         apply(t, self.args.monitor, self.args.dry_run)
+
+    def _poll_lock(self):
+        if not self.lock_poll:
+            self.lock_poll = GLib.timeout_add_seconds(1, self._lock_tick)
+
+    def _lock_tick(self):
+        locked = shell_locked(self.args.dry_run)
+        if locked and self.current != 0:
+            log('portrait while locked')
+            self._apply(0)
+        elif not locked and self.wanted is not None and self.wanted != self.current:
+            self._apply(self.wanted)
+        if locked or (self.wanted or 0) != 0:
+            return True
+        self.lock_poll = 0
+        return False
 
 
 def main(argv=None):

@@ -9,7 +9,7 @@
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 plugin=$here/../plugins/omamobile.quicksettings
-runner=$(command -v qmltestrunner6 || command -v qmltestrunner || command -v /usr/lib/qt6/bin/qmltestrunner || true)
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
 [[ -n $runner ]] || { echo "shade-touch: no qmltestrunner" >&2; exit 77; }
 
 work=$(mktemp -d)
