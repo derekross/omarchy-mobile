@@ -77,6 +77,63 @@ test("newest, ago and the title", () => {
   assert.strictEqual(M.title(3), "Notifications · 3")
 })
 
+test("each row carries the service's file name, which forget takes", () => {
+  const [row] = M.parse(file({ timestamp: 1760000000123, id: 42 }))
+  assert.strictEqual(row.file, "1760000000123-42.json")
+  assert.match(row.file, /^[0-9]+-[0-9]+\.json$/, "the shape patch 0019 accepts")
+  const [noId] = M.parse(JSON.stringify({ summary: "x", timestamp: 7 }))
+  assert.strictEqual(noId.file, "7-0.json", "popupFileName's originalId || 0")
+})
+
+test("shown hides a swiped row until its file is gone, and only that row", () => {
+  const raw = [file({ timestamp: 1000, id: 1, summary: "a" }), file({ timestamp: 2000, id: 2, summary: "b" }),
+               file({ timestamp: 3000, id: 3, summary: "c" })].join("\n")
+  const now = 50000
+  let view = M.shown(raw, { "2000-2": now - 100 }, now)
+  assert.deepStrictEqual(view.entries.map((r) => r.summary), ["c", "a"])
+  assert.deepStrictEqual(view.hidden, { "2000-2": now - 100 }, "kept while the file is still read")
+  const after = [file({ timestamp: 1000, id: 1, summary: "a" }), file({ timestamp: 3000, id: 3, summary: "c" })].join("\n")
+  view = M.shown(after, view.hidden, now)
+  assert.deepStrictEqual(view.hidden, {}, "dropped once the service has deleted it")
+  assert.strictEqual(view.entries.length, 2)
+})
+
+test("a forget that never happened lapses and the row comes back", () => {
+  const raw = file({ timestamp: 1000, id: 1 })
+  const view = M.shown(raw, { "1000-1": 0 }, 16000, 15000)
+  assert.strictEqual(view.entries.length, 1)
+  assert.deepStrictEqual(view.hidden, {})
+  assert.strictEqual(M.shown(raw, { "1000-1": 0 }, 14000, 15000).entries.length, 0)
+})
+
+test("shown still shows ten after one is hidden", () => {
+  const raw = Array.from({ length: 11 }, (_, i) => file({ timestamp: 100 + i, id: i })).join("\n")
+  const view = M.shown(raw, { "110-10": 1 }, 2)
+  assert.strictEqual(view.entries.length, M.LIMIT)
+  assert.strictEqual(view.entries[0].timestamp, 109)
+  assert.strictEqual(M.shown("", undefined, 0).entries.length, 0)
+})
+
+test("without takes one row out", () => {
+  const rows = M.parse([file({ timestamp: 1, id: 1 }), file({ timestamp: 2, id: 2 })].join("\n"))
+  assert.deepStrictEqual(M.without(rows, "1-1").map((r) => r.key), ["2-2"])
+  assert.deepStrictEqual(M.without(null, "x"), [])
+})
+
+test("swipeOutcome: past 35% or a flick goes that way, else back", () => {
+  const w = 400, fling = 900
+  assert.strictEqual(M.swipeOutcome(140, 0, w, fling), 1)
+  assert.strictEqual(M.swipeOutcome(-140, 0, w, fling), -1)
+  assert.strictEqual(M.swipeOutcome(139, 0, w, fling), 0, "short of 35% springs back")
+  assert.strictEqual(M.swipeOutcome(50, 1200, w, fling), 1, "a flick")
+  assert.strictEqual(M.swipeOutcome(-50, -1200, w, fling), -1)
+  assert.strictEqual(M.swipeOutcome(30, 1200, w, fling), 0, "a flick needs a tenth of the width")
+  assert.strictEqual(M.swipeOutcome(50, -1200, w, fling), 0, "flicked back the other way")
+  assert.strictEqual(M.swipeOutcome(50, 800, w, fling), 0, "too slow")
+  assert.strictEqual(M.swipeOutcome(0, 2000, w, fling), 0)
+  assert.strictEqual(M.swipeOutcome(300, 0, 0, fling), 0, "no width yet")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try {

@@ -11,6 +11,8 @@
 // "This directory IS the history", as the service says; its IPC can replay
 // it as toasts (showHistory) but has no call that returns it. Each file is
 // named <timestamp>-<id>.json, the timestamp in milliseconds since the epoch.
+// One notification is taken away by that name through the service's forget
+// call (omamobile-omarchy patch 0019), never by deleting the file here.
 
 var LIMIT = 10
 
@@ -54,6 +56,9 @@ function entry(value) {
   var id = v.originalId || v.id || 0
   return {
     key: String(timestamp) + "-" + String(id),
+    // The service's own name for the file (popupFileName: <timestamp>-
+    // <originalId>.json), which its forget call takes.
+    file: String(timestamp) + "-" + String(Number(v.originalId) || 0) + ".json",
     app: str(v.app),
     summary: str(v.summary).trim(),
     body: plainBody(v.body),
@@ -87,6 +92,45 @@ function parse(raw, limit) {
   }
   out.sort(function(a, b) { return b.timestamp - a.timestamp })
   return out.slice(0, max)
+}
+
+// What the shade shows: parse(), less the notifications swiped away.
+// `hidden` maps an entry's key to when it was swiped (ms). The service
+// deletes its file a moment later, so until a read no longer finds the
+// file, the row stays out; a mark older than graceMs (a forget that never
+// happened, say on an Omarchy without the forget call) lapses, and the row
+// comes back rather than staying hidden for a notification that is still
+// there. Returns the rows and the marks still needed.
+function shown(raw, hidden, now, graceMs) {
+  var marks = hidden || {}
+  var grace = typeof graceMs === "number" ? graceMs : 15000
+  var all = parse(raw, Infinity)
+  var present = {}
+  for (var i = 0; i < all.length; i++) present[all[i].key] = true
+  var kept = {}
+  for (var key in marks) {
+    if (!marks.hasOwnProperty(key) || !present[key]) continue
+    if (Number(now) - Number(marks[key]) <= grace) kept[key] = marks[key]
+  }
+  var out = all.filter(function(e) { return !kept.hasOwnProperty(e.key) })
+  return { entries: out.slice(0, LIMIT), hidden: kept }
+}
+
+function without(entries, key) {
+  return (entries || []).filter(function(e) { return e && e.key !== key })
+}
+
+// How a sideways swipe on a row ends: -1 or 1 to fly off that side and
+// take the notification away, 0 to spring back. Past 35% of the row's
+// width, or a flick the same way at flingSpeed px/s or faster once it has
+// moved a tenth of the width (as Omarchy's toasts, patch 0017).
+function swipeOutcome(offset, velocity, width, flingSpeed) {
+  var w = Number(width), x = Number(offset), v = Number(velocity) || 0
+  if (!(w > 0) || !isFinite(x) || x === 0) return 0
+  var distance = Math.abs(x)
+  var flung = v * x > 0 && Math.abs(v) >= Number(flingSpeed) && distance >= w * 0.1
+  if (distance >= w * 0.35 || flung) return x < 0 ? -1 : 1
+  return 0
 }
 
 function newest(entries) {
@@ -131,6 +175,9 @@ if (typeof module !== "undefined") {
     execArgv: execArgv,
     entry: entry,
     parse: parse,
+    shown: shown,
+    without: without,
+    swipeOutcome: swipeOutcome,
     newest: newest,
     tapArgv: tapArgv,
     ago: ago,

@@ -46,4 +46,8 @@ assert.strictEqual(M.unreadCount(files, 0), 3, "nothing seen yet: every history 
 assert.strictEqual(M.unreadCount(files, "2000"), 1, "only what arrived after the newest one the shade showed")
 assert.strictEqual(M.unreadCount(files, 3000), 0)
 assert.strictEqual(M.unreadCount([], 0), 0)
+// A swipe in the shade forgets one history file: the count follows the
+// directory, one fewer if that one was unread, the same if it was seen.
+assert.strictEqual(M.unreadCount(files.filter((f) => f !== "3000-3.json"), "2000"), 0, "the unread one forgotten")
+assert.strictEqual(M.unreadCount(files.filter((f) => f !== "1000-1.json"), "2000"), 1, "a seen one forgotten")
 console.log("ok - status model: unread notifications")

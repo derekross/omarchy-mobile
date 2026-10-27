@@ -148,6 +148,21 @@ grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the sh
 grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
 grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
 grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/null || fail "the Clipboard tile opens Omarchy's clipboard history"
+# A swipe on a row forgets that one notification through the service's
+# forget call (omamobile-omarchy patch 0019), never by deleting its file
+# behind the service; the row's swipe is sideways only and off while the
+# list scrolls, and its tap is a DragThreshold TapHandler (no MouseArea,
+# which would take the press from the swipe). test/shade-touch drives it.
+row=plugins/omamobile.quicksettings/NotificationRow.qml
+grep -cF 'call notifications forget \"$name\"' "$qs" >/dev/null || fail "a swiped row is forgotten through the service"
+grep -cF 'delegate: NotificationRow {' "$qs" >/dev/null && grep -cF 'swipeEnabled: !shadeList.moving' "$qs" >/dev/null \
+  || fail "the shade's rows are NotificationRow, not swiping while the list scrolls"
+grep -cE 'rm +(-f +)?.*notifications' "$qs" "$row" >/dev/null && fail "the shade deletes no notification files itself"
+grep -cF 'yAxis.enabled: false' "$row" >/dev/null || fail "a row swipes sideways only"
+grep -cF 'gesturePolicy: TapHandler.DragThreshold' "$row" >/dev/null || fail "a row taps with a DragThreshold TapHandler"
+grep -cE '^\s*MouseArea \{' "$row" >/dev/null && fail "no MouseArea on a row"
+grep -cF 'NotificationsModel.swipeOutcome(' "$row" >/dev/null || fail "a row decides its swipe by swipeOutcome"
+grep -cF "omamobile-omarchy>=" PKGBUILD >/dev/null || fail "omamobile-shell needs an omamobile-omarchy with forget"
 # Qt 6.12 refuses to load a file that redeclares an Item's FINAL anchor
 # lines (0.2.25's shade had "property real top", and quick settings didn't load).
 if grep -nE 'property +[a-z]+ +(top|bottom|left|right|horizontalCenter|verticalCenter|baseline) *:' plugins/*/*.qml; then fail "no plugin redeclares an anchor line"; fi
@@ -340,6 +355,14 @@ elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
   pass "recent apps under touch: Clear all, Home, a near miss, a card"
+fi
+rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the shade under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the shade under touch (test/shade-touch)"
+else
+  pass "the shade under touch: a swipe forgets one, a short one springs back, a tap taps, a drag scrolls"
 fi
 if command -v node >/dev/null; then
   node -e '

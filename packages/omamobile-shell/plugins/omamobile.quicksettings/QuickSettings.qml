@@ -23,7 +23,8 @@ import "Readable.js" as Readable
 // long-press) open the panels in WifiPanel.qml and BluetoothPanel.qml.
 //
 // Under the sheet, a second card is the notification shade: Omarchy's
-// notification history, newest first, with Clear all (NotificationsModel.js).
+// notification history, newest first, with Clear all (NotificationsModel.js);
+// a row swipes sideways to take that one notification away (NotificationRow).
 // The gear in the header opens Omarchy's menu at its root (Settings).
 //
 // The pencil under the expanded grid enters edit mode: tap a tile to remove
@@ -120,6 +121,14 @@ Item {
   function clearNotifications() {
     clearAllNotifications()
     return "ok"
+  }
+
+  // `dismissNotification <key>`: a swipe away without the finger, for one
+  // row by its key (notificationRows lists them).
+  function dismissNotification(key) {
+    for (var i = 0; i < notifications.length; i++)
+      if (notifications[i].key === String(key)) return forgetNotification(notifications[i]) ? "ok" : "none"
+    return "none"
   }
 
   // `shell call omamobile.quicksettings openSettings ''`: the header's gear.
@@ -782,6 +791,49 @@ Item {
     if (!notificationsRead.running) notificationsRead.running = true
   }
 
+  // Swiping a row away forgets that one notification through the service's
+  // forget call (omamobile-omarchy patch 0019): a toast still on screen
+  // closes without moving into history, and the history entry is deleted,
+  // on the service's file queue. Deleting the file from here could race an
+  // archive the service still has queued and come back. The row leaves the
+  // list at once; its key stays in hiddenNotifications until a read no
+  // longer finds the file (NotificationsModel.shown). The bar's unread count
+  // follows on its own: it counts the history files newer than the mark,
+  // and a forget only takes one away.
+  property var hiddenNotifications: ({})
+  property var forgetQueue: []
+
+  function forgetNotification(entry) {
+    if (!entry || !entry.key || !entry.file) return false
+    var marks = Object.assign({}, hiddenNotifications)
+    marks[entry.key] = Date.now()
+    hiddenNotifications = marks
+    forgetQueue = forgetQueue.concat([entry.file])
+    // Later, not now: the row asking is a delegate of this list.
+    Qt.callLater(function() {
+      root.notifications = NotificationsModel.without(root.notifications, entry.key)
+      root.runForget()
+    })
+    return true
+  }
+
+  function runForget() {
+    if (forgetProc.running || forgetQueue.length === 0) return
+    forgetProc.command = ["sh", "-c",
+      "dir=$1; shift; for name; do qs ipc -p \"$dir\" call notifications forget \"$name\"; done; exit 0",
+      "sh", Quickshell.shellDir].concat(forgetQueue)
+    forgetQueue = []
+    forgetProc.running = true
+  }
+
+  Process {
+    id: forgetProc
+    onExited: {
+      root.runForget()
+      notificationsLater.restart()
+    }
+  }
+
   Process {
     id: notificationsRead
     command: ["sh", "-c", "for f in \"$1\"/*.json \"$1\"/history/*.json; do [ -f \"$f\" ] && awk 1 \"$f\"; done; exit 0",
@@ -789,7 +841,12 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        root.notifications = NotificationsModel.parse(text)
+        var view = NotificationsModel.shown(text, root.hiddenNotifications, Date.now())
+        root.hiddenNotifications = view.hidden
+        // Only a change replaces the rows: a new list rebuilds every row, and
+        // one being swiped would be dropped from under the finger.
+        if (JSON.stringify(view.entries) !== JSON.stringify(root.notifications))
+          root.notifications = view.entries
         var newest = NotificationsModel.newest(root.notifications)
         if (root.opened && newest > root.seenStamp) {
           root.seenStamp = newest
@@ -1856,99 +1913,12 @@ Item {
                 host: root
                 entry: modelData
                 width: shadeRows.width
+                swipeEnabled: !shadeList.moving
               }
             }
           }
         }
       }
-    }
-  }
-
-  // A row of the shade: the sender's glyph, app and age, summary, and two
-  // lines of the body. A tap runs what a tap on the toast would have.
-  component NotificationRow: Item {
-    id: row
-    property var host: null
-    property var entry: ({})
-    readonly property bool actionable: !!NotificationsModel.tapArgv(entry)
-    readonly property color foreground: host ? host.foreground : Commons.Color.popups.text
-
-    height: Math.max(44, rowText.implicitHeight + Style.spacing.md * 2)
-
-    Rectangle {
-      anchors.fill: parent
-      radius: Style.cornerRadius
-      color: rowTouch.pressed ? Style.pressedFillFor(row.foreground, Commons.Color.accent) : "transparent"
-    }
-
-    Text {
-      id: rowGlyph
-      anchors.left: parent.left
-      anchors.leftMargin: Style.spacing.md
-      anchors.top: parent.top
-      anchors.topMargin: Style.spacing.md
-      width: Style.font.iconLarge
-      horizontalAlignment: Text.AlignHCenter
-      textFormat: Text.PlainText
-      text: row.entry.glyph || "󰂚"
-      color: row.entry.urgency === 2 ? Commons.Color.urgent : row.foreground
-      font.family: Style.font.family
-      font.pixelSize: Style.font.iconLarge
-    }
-
-    Column {
-      id: rowText
-      anchors.left: rowGlyph.right
-      anchors.leftMargin: Style.spacing.lg
-      anchors.right: parent.right
-      anchors.rightMargin: Style.spacing.md
-      anchors.top: parent.top
-      anchors.topMargin: Style.spacing.md
-      spacing: Style.spacing.xxs
-
-      Text {
-        width: parent.width
-        textFormat: Text.PlainText
-        text: [row.entry.app, NotificationsModel.ago(row.entry.timestamp, row.host ? row.host.nowMs : Date.now())]
-          .filter(function(part) { return !!part }).join(" · ")
-        color: Qt.darker(row.foreground, 1.4)
-        font.family: Style.font.family
-        font.pixelSize: Readable.px(Style.font.caption)
-        elide: Text.ElideRight
-      }
-
-      Text {
-        visible: text !== ""
-        width: parent.width
-        textFormat: Text.PlainText
-        text: row.entry.summary || ""
-        color: row.foreground
-        font.family: Style.font.family
-        font.pixelSize: Style.font.body
-        font.bold: true
-        elide: Text.ElideRight
-      }
-
-      Text {
-        visible: text !== ""
-        width: parent.width
-        textFormat: Text.PlainText
-        text: row.entry.body || ""
-        color: row.foreground
-        font.family: Style.font.family
-        font.pixelSize: Style.font.body
-        wrapMode: Text.Wrap
-        maximumLineCount: 2
-        elide: Text.ElideRight
-      }
-    }
-
-    MouseArea {
-      id: rowTouch
-      anchors.fill: parent
-      enabled: row.actionable
-      cursorShape: Qt.PointingHandCursor
-      onClicked: if (row.host) row.host.openNotification(row.entry)
     }
   }
 

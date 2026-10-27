@@ -11,6 +11,10 @@ QtObject {
     property color background: "#16161e"
     property color text: "#c0caf5"
   }
+  property QtObject popups: QtObject {
+    property color background: "#16161e"
+    property color text: "#c0caf5"
+  }
   property QtObject bar: QtObject {
     property color background: "#16161e"
     property color text: "#c0caf5"

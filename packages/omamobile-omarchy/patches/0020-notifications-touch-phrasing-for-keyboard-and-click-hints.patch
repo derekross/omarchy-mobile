@@ -1,0 +1,68 @@
+# Notifications: platform phrasing. Omarchy's notifications say "click" and
+# give "Super + ..." shortcuts, which a phone can't follow: the screenshot
+# toast reads "Edit with Super + Alt + , (or click this)". On a touch platform
+# omarchy-notification-send rewords them as it sends: "Edit/Open with ...
+# (or click this)" becomes "Tap to edit/open", a leading "Click to" becomes
+# "Tap to", Voxtype's "Hold F9 ..." points at the Dictation tile, a
+# parenthesised Super hint is removed, and a body line that is only a Super
+# hint is dropped. Anything else passes through as written, and a desktop
+# sends exactly what it did before. The phone is detected by
+# /usr/bin/omamobile-update, as in 0016; OMARCHY_NOTIFICATION_PHRASING=
+# touch|desktop overrides it. The welcome toast's two Super lines would be
+# dropped too, but 0001 skips that toast on a phone.
+#
+# Against Omarchy 4.0.6 (stable 4.0.6-1).
+diff --git i/bin/omarchy-notification-send w/bin/omarchy-notification-send
+--- i/bin/omarchy-notification-send
++++ w/bin/omarchy-notification-send
+@@ -136,6 +136,50 @@
+   fi
+ done
+ 
++# Platform phrasing. On a touch platform a notification is tapped, not
++# clicked, and there is no keyboard to follow a "Super + ..." hint, so the
++# phrasings that assume either are reworded; any other text passes through as
++# written. A phone running Omarchy Mobile is detected by its omamobile-update;
++# OMARCHY_NOTIFICATION_PHRASING=touch|desktop overrides the detection.
++phrasing=${OMARCHY_NOTIFICATION_PHRASING:-}
++if [[ -z $phrasing ]]; then
++  phrasing=desktop
++  [[ -x /usr/bin/omamobile-update ]] && phrasing=touch
++fi
++
++touch_phrasing() {
++  local -n text=$1
++  local hint_re='^(.*) \([^)]*Super \+[^)]*\)(.*)$' line kept=() drop_lines=$2
++
++  case $text in
++  "Edit with "*" (or click this)") text="Tap to edit" ;;
++  "Open with "*" (or click this)") text="Tap to open" ;;
++  "Hold F9 to dictate (or toggle with Super + Ctrl + X).") text="Use the Dictation tile in quick settings." ;;
++  "Click to "*) text="Tap to ${text#Click to }" ;;
++  esac
++  text=${text//" (or click this)"/}
++
++  # "Do this (or press Super + X)." -> "Do this."
++  while [[ $text =~ $hint_re ]]; do
++    text=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
++  done
++
++  # A body line that is only a keyboard hint ("Start it with Super + Space")
++  # has nothing to offer on a touch screen: drop it.
++  if ((drop_lines)) && [[ $text == *"Super + "* ]]; then
++    while IFS= read -r line; do
++      [[ $line == *"Super + "* ]] || kept+=("$line")
++    done <<<"$text"
++    text=$(printf '%s\n' "${kept[@]}")
++    ((${#kept[@]})) || text=""
++  fi
++}
++
++if [[ $phrasing == touch ]]; then
++  touch_phrasing headline 0
++  touch_phrasing description 1
++fi
++
+ case $urgency in
+ low) urgency_byte=0 ;;
+ normal) urgency_byte=1 ;;
