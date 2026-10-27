@@ -1526,13 +1526,14 @@ Item {
             columns: root.tileColumns
             columnSpacing: root.gap
             rowSpacing: root.gap
+            readonly property real tileWidth: (width - columnSpacing * (columns - 1)) / columns
 
             Repeater {
               model: root.quickTiles
               delegate: BoundTile {
                 host: root
                 tileId: modelData
-                width: (quickGrid.width - quickGrid.columnSpacing * (quickGrid.columns - 1)) / quickGrid.columns
+                width: quickGrid.tileWidth
               }
             }
           }
@@ -1561,13 +1562,14 @@ Item {
                 columns: root.tileColumns
                 columnSpacing: root.gap
                 rowSpacing: root.gap
+                readonly property real tileWidth: (width - columnSpacing * (columns - 1)) / columns
 
                 Repeater {
                   model: modelData
                   delegate: BoundTile {
                     host: root
                     tileId: modelData
-                    width: (pageGrid.width - pageGrid.columnSpacing * (pageGrid.columns - 1)) / pageGrid.columns
+                    width: pageGrid.tileWidth
                   }
                 }
               }
