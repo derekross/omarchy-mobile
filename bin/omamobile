@@ -22,7 +22,9 @@ Usage: [DEVICE=<codename>] omamobile <command>
 
   capture [name]   Save what the connected phone exposes (Android over adb, or fastboot)
                    into $REFERENCE_DIR/<name>
-  initramfs        Build the M1 initramfs (Alpine + dropbear + our init) into $KERNEL_OUT
+  initramfs [--release]
+                   Build the M1 initramfs into $KERNEL_OUT. --release omits
+                   the builder's SSH keys from distributable boot images
   initramfs-config <dir>
                    Write only the device's files for the shared init (storage-guard
                    allowlist, trigger, ...) into <dir>, to check what initramfs packs
@@ -328,6 +330,13 @@ cmd_initramfs_config() {
 
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
+  local release=0
+  case ${1:-} in
+    '') ;;
+    --release) release=1 ;;
+    *) die "initramfs: expected --release or no argument" ;;
+  esac
+  (($# <= 1)) || die "initramfs: expected --release or no argument"
   load_device
   # A leading slash is repo-root relative, so devices share initramfs/init.
   # Anything else is relative to device/<codename>/.
@@ -442,9 +451,15 @@ cmd_initramfs() {
       || die "reboot-to failed to link"
     say "No $DEV_PACKAGE bootctl; built freestanding devmem and musl reboot-to"
   fi
-  mkdir -p "$stage/root/.ssh"
-  cat "$HOME"/.ssh/*.pub > "$stage/root/.ssh/authorized_keys"
-  chmod 700 "$stage/root/.ssh" && chmod 600 "$stage/root/.ssh/authorized_keys"
+  rm -rf "$stage/root/.ssh"
+  if ((release)); then
+    rm -f "$stage/etc/dropbear"/dropbear_*_host_key
+    say "Release initramfs: no builder SSH keys"
+  else
+    mkdir -p "$stage/root/.ssh"
+    cat "$HOME"/.ssh/*.pub > "$stage/root/.ssh/authorized_keys"
+    chmod 700 "$stage/root/.ssh" && chmod 600 "$stage/root/.ssh/authorized_keys"
+  fi
 
   (cd "$stage" && find . | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$KERNEL_OUT/initramfs.cpio.lz4"
   ls -lh "$KERNEL_OUT/initramfs.cpio.lz4"
@@ -802,7 +817,7 @@ cmd_kernel_shell() {
 
 case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
-  initramfs) cmd_initramfs ;;
+  initramfs) shift; cmd_initramfs "$@" ;;
   initramfs-config) shift; cmd_initramfs_config "$@" ;;
   kernel) cmd_kernel ;;
   modules) cmd_modules ;;

@@ -48,6 +48,14 @@ if [[ -z $rootfs ]]; then
 fi
 [[ -n $rootfs && -f $rootfs && -f $rootfs.sha256 ]] || die "no root image with a .sha256 (tools/build-rootfs)"
 release=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) || die "no kernel build in $KERNEL_OUT"
+if ((unsigned == 0)); then
+  initramfs=$KERNEL_OUT/initramfs.cpio.lz4
+  [[ -f $initramfs ]] || die "no $initramfs: build it with bin/omamobile initramfs --release"
+  entries=$(lz4 -dc "$initramfs" | cpio -t --quiet 2>/dev/null) || die "$initramfs is not a valid initramfs archive"
+  if grep -cE '^(\./)?root/\.ssh(/|$)|^(\./)?etc/dropbear/dropbear_.*_host_key$' <<<"$entries" >/dev/null; then
+    die "initramfs contains SSH credentials: rebuild with bin/omamobile initramfs --release, then bin/omamobile images"
+  fi
+fi
 
 name=omamobile-$DEVICE-$version
 out=out/bundle
