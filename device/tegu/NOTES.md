@@ -611,3 +611,36 @@ show that this newer phone can boot the oldest shared header values with
 index-zero footers; they do not qualify footers on the other owner's phone.
 The shared descriptor remains unchanged, without an active selector or
 footer/trigger overrides. No stock-A image or protected partition was written.
+
+### Native DRM and package persistence on the second phone
+
+The pinned display source tree `1175a53bf9b229319aa183b389071add6645eddc`
+booted as `7.3.0-rc6-omamobile-push1-gde2e0689c517`, using the same older
+headers and index-zero footer policy above, without an initramfs trigger
+write. The initial boot exposed a userspace blocker: Arch's
+`kernel-modules-hook` cleanup had removed the unowned, preinstalled modules
+for the next kernel during the preceding base-kernel boot. Restoring the
+matching archive and loading the drivers under log capture and a watchdog
+produced a native `card0-DSI-1` connector and Omarchy on camera. The owner
+confirmed physical touch response.
+
+Device package `0.1.1-6` skips that cleanup while installed, enables native
+DSI brightness commands following the other Tensor packages, and limits
+refresh to the tested 60 Hz. Native aarch64 package builds/checks and
+installation integrity checks passed. Backlight restoration passed after
+enabling DSI commands. Temporary bring-up blacklists were removed.
+
+A subsequent reboot retained all 1,782 modules and automatically initialized
+native DRM at 3.66 seconds, then touch through the guarded timer. The panel
+reported 1080x2424 at 60 Hz; DPMS wake restored the visible lock screen.
+At 223 seconds, all required smoke checks passed: boot, 62-partition storage
+guard, ext4 root, kernel health, USB and the Hyprland/Omarchy session. Touch
+and buttons also passed. The firewall and backlight service were active
+or completed successfully. The persistent marker was cleared.
+
+Remaining limitations: Plymouth's early splash daemon crashes in `strcmp`
+with no active console; no GPU render node is present; Wi-Fi, Bluetooth,
+battery/charging, audio, sensors and cameras are not qualified by this
+candidate. This tests an existing Arch installation, not a clean install.
+No boot-success writer was enabled, and shared footer activation still
+requires the other owner's boot result. Stock A was not written.

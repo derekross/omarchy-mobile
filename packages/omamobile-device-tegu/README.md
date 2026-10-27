@@ -4,6 +4,9 @@
 Boot and touch userspace policy for `tegu`: guarded storage visibility, the
 USB gadget network address, a bounded reboot watchdog, and delayed touch
 startup. The package also provides `reboot-to` and the device descriptor.
+It skips Arch's old-kernel module cleanup while installed: modules shipped
+as tarballs are not pacman-owned, and must survive until their B-slot kernel
+boots, as well as remain available for rollback.
 
 Installing the package does not mark slot B successful or start Wi-Fi,
 charging, audio, sensors, cameras, or other peripherals. When the tegu
@@ -29,7 +32,10 @@ against the public board DTS in kernel PRs
 Those trees differ from the private prototype that produced the recorded
 hardware results. In particular, the public board also uses ACPM for USB PHY
 supplies: its boot ordering must be qualified with this package's module
-policy. This is not yet an installable release.
+policy. Boot, native DRM at 60 Hz, touch and module retention have passed
+on the second contributor's phone; see `device/tegu/NOTES.md` for the exact
+source and image metadata. Cross-owner footer qualification and clean
+installation remain pending. This is not yet an installable release.
 
 ## Building the public kernel candidate
 
@@ -50,4 +56,6 @@ fetches only public source commits and checks the resulting tree; it does
 not build images or touch the phone. The pinned candidate excludes GPU and
 CPU-frequency changes, which need separate qualification. Its intended
 display path is native DRM, without a shared framebuffer register write.
-Hardware qualification and descriptor activation remain pending.
+The native path has passed on one phone. Shared descriptor activation
+awaits the other owner's footer qualification; no newer rollback metadata
+is introduced here.
