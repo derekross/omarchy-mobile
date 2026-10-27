@@ -31,6 +31,19 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   bottom one; stock adds 17 dB, Waves processing and a proximity mute.
   With the sink at 60 % on top of the stage cap, media was about 30 dB
   under stock's maximum, hence "sounds like the call speaker".
+- **The "static" under music is the amplifiers' boost converter at light
+  load.** Measured through the phone's own mic (validated with an external
+  tone): at 737/10 a 1 kHz tone distorts 44 % on the bottom speaker at
+  -20 dBFS and 10 % on the top at -10 dBFS, at a fixed output per speaker
+  (about 30 and 25 mA peak), at every frequency, with the DSPs bypassed,
+  out of the case. With the converter off (kernel 00590 `boost_en=N`: the
+  output stage from VP) the same inputs are 8-11 dB louder and clean (top
+  1 %, bottom 0.5-4 % with DRE on). Stock's 817/17 never runs the
+  converter in that regime. omamobile-audio 0.5.3 turns it off at analog
+  10 and below. AOC-PLAN C9j has the whole elimination.
+- **Routing TDM_0_TX into an EP capture crashes the AoC** (its watchdog
+  fires, the AoC goes offline, every service answers -517 until a reboot).
+  The amplifiers' V/I return has no host-readable copy on this card.
 - Kernel 00561's S2MPG12 LDOs: 28 registered, no users, none disabled at
   the 30 s cleanup (`regulator_summary`); only `vddio_cam` is, as before.
 

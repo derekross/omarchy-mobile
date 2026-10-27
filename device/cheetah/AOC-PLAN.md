@@ -2056,13 +2056,71 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      stay in every stage. With 0.5.2 installed: the stepped music, a
      volume step and 30 s of music at sink 1.0 played through (the
      bottom's estimate peaked at 43 C, no mute).
-   - **Phone left:** omamobile-audio 0.5.2 installed, speaker.conf at the
-     package defaults (DRE off at media, jump rule off at media), sink at
-     1.0, media plays at 737/10 on both speakers; `dsp_rx6_classh` N.
-   - **Still open:** why both tunes' open-loop estimates misbehave (the
-     bottom on level drops at gain 10, both at gain 17 from the first
-     sample, C9d-5/6); that is the C9i gain-17 session's question. The
-     cover test and the balance by ear are the listener's.
+   - **Phone left (evening):** kernel 00590 (= 00588 + the `wkfet_amp`
+     and `boost_en` bring-up parameters, branch `omamobile-test-wkfet`),
+     omamobile-audio 0.5.3, speaker.conf at the package defaults (boost
+     off, DRE on, jump rule off at media), sink at 1.0; `dsp_rx6_classh` N,
+     `wkfet_amp` Y.
+   - **The afternoon: the "static" is the boost converter.** With the
+     mutes gone the listener heard constant static under music, worse on
+     the bottom. Measured through the phone's own microphone (EP1, the UCM's
+     22 dB soft gain set to 0 for the loud tones; the path validated with
+     an external clean 1 kHz tone at 0.4-0.6 % THD; pure-Python FFT on the
+     laptop, logs in `logs/c9j-*`): at 737/10 a 1 kHz tone gives **44 % THD
+     on the bottom at -20 dBFS** (0.4 % at -26) and **10 % on the top at
+     -10 dBFS** (0.6 % at -20), odd harmonics, the fundamental compressed
+     in a band of 10-15 dB and recovering above it; the same at 700 Hz,
+     1.5 and 3 kHz, with the DSPs bypassed (PCM Source ASP, watchdog
+     paused), hand-held out of the case, and at analog 6 with the file
+     raised to the same output, so the threshold is a fixed *output* per
+     speaker: about 30 mA peak into the bottom, 25 mA into the top.
+     Ruled out one by one: DRE, the hardware noise gate, the DSP, PipeWire's
+     float format (S32 forced: no change; PipeWire's volumes all 1.0), bit
+     errors on the link (a 20 kHz tone on either slot raises the audible
+     floor by nothing), the weak-FET output mode (kernel 00589,
+     `wkfet_amp=N`: no change), brown-out prevention (VPBR/VBBR status 0),
+     the class-H input (`dsp_rx6_classh=Y`, verified 0x21 at 0x4c54), VP
+     (stock: VSYS directly), the serial port and PLL (6.144 MHz, dsp_a,
+     as Google's driver sets them). **Kernel 00590, `boost_en=N`
+     (PWR_CTRL2 BST_EN = 0, the output stage from VP): the same inputs
+     come out 8-11 dB louder and clean: top at -10 dBFS 1.0 %, bottom at
+     -26 dBFS 0.5 %, at -20 dBFS 12 %, with DRE on 4 %.** At hot content
+     (-4 dBFS) both compress cleanly (the firmware's limiter). The
+     listener: "so much better and much louder and much more clear
+     without static". Reading: at the everyday level the converter sits in
+     its light-load regime, where it droops and distorts; stock's 817/17
+     never runs it there. Its registers (peak 2.5 A as stock's speaker
+     path, coefficients, DCM, class-H 0x000b0405, WKFET 0x111, VCTRL1 0 as
+     the chip default, VCTRL2 class-H) match Google's driver, which also
+     never writes the boost target unless the DT gives one (stock's does
+     not). The bottom's remaining 9-11 % from -10 dBFS up with the
+     converter off is the next question; a fixed boost target (kernel
+     00591, `bst_ctl`, AUDIO-PLAN section 4's reserved register: the
+     owner's call) is the comparison prepared for it.
+   - **omamobile-audio 0.5.3:** the boost converter off at analog 10 and
+     below and on at 17, through `boost_en` (set before the amplifiers
+     probe; a kernel without the parameter keeps it on and the status says
+     so); DRE on by default again; `OMAMOBILE_SPK_BOOST=1|0` forces it.
+   - **Gotcha, written into AGENTS.md:** routing `TDM_0_TX` (the
+     amplifiers' VMON/IMON return) into an entry-point capture (`EP5 TX
+     Mixer TDM_0_TX` = on and a capture of PCM 12) fired the AoC's
+     watchdog and took the AoC offline ("aoc watchdog triggered",
+     "taking aoc offline"); every service answered -517 until a reboot,
+     and PipeWire lost the card. EP6's capture defers the same way, and the
+     hostless PCM 15 opens but delivers nothing to the host. There is no
+     host-readable copy of the amplifiers' V/I on this card.
+   - **Also seen:** the top DSP's resume command failed once at stream
+     start ("Failed to set mailbox cmd 2 (status 1)", POST_PMU) and its
+     heartbeat stuck once for 2 s, each time muted by the watchdog as
+     designed; both after the amplifiers had been rebound many times that
+     hour. PipeWire re-applies the UCM's 22 dB mic gain after a speaker
+     service restart (the card re-probes), which bit two measurements.
+   - **Still open:** the bottom's residual distortion with the converter
+     off; whether a fixed boost target keeps the converter usable at this
+     level (and what gain 17 needs: stage c9 keeps the converter on); why
+     both tunes' open-loop estimates misbehave (the bottom on level drops
+     at gain 10, both at gain 17 from the first sample, C9d-5/6). The
+     balance by ear and the cover test are the listener's.
 
 ## 0. Top findings
 

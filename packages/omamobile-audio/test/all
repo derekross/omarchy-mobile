@@ -118,7 +118,8 @@ PY
 mktree() {
   r=$tmp/run.$1
   rm -rf "$r"; mkdir -p "$r/asound/card0/pcm5p/sub0" "$r/block/sda9" "$r/fw/cirrus" "$r/state" "$r/run" \
-    "$r/spidrv" "$r/module/aoc_alsa_dev/parameters" "$r/dt/spi@10960000/amplifier@0" "$r/dt/spi@10960000/amplifier@1"
+    "$r/spidrv" "$r/module/aoc_alsa_dev/parameters" "$r/module/snd_soc_cs35l41/parameters" "$r/dt/spi@10960000/amplifier@0" "$r/dt/spi@10960000/amplifier@1"
+  echo Y > "$r/module/snd_soc_cs35l41/parameters/boost_en"
   printf ' 0 [googleaocsndcar]: aoc-snd-card - google,aoc-snd-card\n                      google,aoc-snd-card\n' > "$r/asound/cards"
   printf 'card: 0\ndevice: 5\nsubdevice: 0\nstream: PLAYBACK\nid: EP6 playback (*)\n' > "$r/asound/card0/pcm5p/info"
   echo closed > "$r/asound/card0/pcm5p/sub0/status"
@@ -212,13 +213,21 @@ prep=(OMAMOBILE_SPK_STAGE=); run media
   $(val "Bottom Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] || { cat "$r/out" >&2; fail "stage media: 737 / 10 by default"; }
 [[ $(cat "$r/run/speaker-protection") == "ok: stage media"* ]] || fail "stage media: status"
 pass "stage media (the default): 737 / 10 on both, without a stamp or speaker_protection=1"
-prep=(OMAMOBILE_SPK_DRE=1 OMAMOBILE_SPK_NOISE_GATE=0); run dre
-((rc == 0)) && [[ $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on && $(val "Bottom HW Noise Gate Enable") == 0 ]] || fail "DRE forced on and the gate off when asked"
-prep=(OMAMOBILE_SPK_DRE=0); run dre-off
-((rc == 0)) && [[ $(val "Top DRE Switch") == off && $(val "Bottom DRE Switch") == off ]] || fail "DRE off when asked"
-r0=$r; r=$tmp/run.ok; [[ $(val "Top DRE Switch") == off && $(val "Bottom DRE Switch") == off &&
-  $(val "Top HW Noise Gate Enable") == 63 && $(val "Bottom HW Noise Gate Enable") == 63 ]] || fail "below analog 17: DRE off and the gate on by default"; r=$r0
-pass "DRE off below analog 17 unless asked, the hardware noise gate (stock's) on by default, off when asked"
+prep=(OMAMOBILE_SPK_DRE=0 OMAMOBILE_SPK_NOISE_GATE=0); run dre
+((rc == 0)) && [[ $(val "Top DRE Switch") == off && $(val "Bottom DRE Switch") == off && $(val "Bottom HW Noise Gate Enable") == 0 ]] || fail "DRE and the gate off when asked"
+r0=$r; r=$tmp/run.ok; [[ $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on &&
+  $(val "Top HW Noise Gate Enable") == 63 && $(val "Bottom HW Noise Gate Enable") == 63 ]] || fail "DRE and the gate on by default"; r=$r0
+pass "DRE and the hardware noise gate (stock's) on by default, off when asked"
+
+# C9j: the boost converter off at analog 10 and below (through the kernel's boost_en), on at 17; forced either way; a kernel without it
+r0=$r; r=$tmp/run.media; [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] || fail "stage media: boost_en N"
+[[ $(cat "$r/run/speaker-protection") == *"boost converter off"* ]] || fail "stage media: status says the boost is off"
+r=$tmp/run.ok; [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] || fail "stage c8 (analog 6/10): boost_en N"; r=$r0
+prep=(OMAMOBILE_SPK_BOOST=1); run boost-forced
+((rc == 0)) && [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y ]] || fail "OMAMOBILE_SPK_BOOST=1 keeps the boost on"
+prep=(OMAMOBILE_SYSMODULE=$tmp/nomodule); run boost-noparam
+((rc == 0)) && grep -c '^snd_soc_cs35l41 boost_en=N$' "$r/modprobe.log" >/dev/null && [[ $(cat "$r/run/speaker-protection") == *"kernel without boost_en"* ]] || { cat "$r/out" >&2; fail "a kernel without boost_en: loaded with the parameter, status says so, start passes"; }
+pass "boost converter: off at analog 10 and below, on when forced, a kernel without the parameter passes (C9j)"
 
 check_refused() {  # name, then the scenario ran
   ((rc == 1)) || { cat "$r/out" >&2; fail "$1: start fails"; }
@@ -435,7 +444,8 @@ c9() {  # name, then prep for the tree: param, stamp
 c9prep=()
 c9 c9-ok
 ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 817 && $(val "Bottom Analog PCM Volume") == 17 &&
-  $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels"; }
+  $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels, boost on"; }
 echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 ( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
 wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); watchrun; wait
