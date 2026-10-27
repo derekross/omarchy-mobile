@@ -52,3 +52,24 @@ Captured on stock `CP3A.261005.002.A1` (Android 17, security patch 2026-10-05) o
 | Charger, TCPC, gauge | MAX77759, as on cheetah | [V] live DT |
 | Reserved memory | Every stock `reserved-memory` region that Google's tree describes matches gs201.dtsi. `sec_dram`, `sec_pt` and `pkvm_guest_firmware` are injected by the bootloader (not in Google's DTS); `cp_aoc_rmem` (0x197fd000) is AoC SRAM, not DRAM | [V] live DT against the built cheetah DTB; Google `gs201-rmem.dtsi` |
 | Framebuffer | Not described in Google's tree: ABL injects it. Not copied from cheetah's `0xfac00000`; to be read from DPP0 on the first boot | [I] |
+
+## 2026-10-27: devinfo slot bytes against ABL (L-36 evidence)
+
+devinfo is version **3.19** here (cheetah's bootctl is verified on 3.15
+only). Only the version and the slot bytes (0x30-0x37) were read, from
+Linux, read-only. Byte layout per slot: retry count, then flags (bit 0
+unbootable, bit 1 successful, bit 2 active, bit 3 fastboot_ok).
+
+| When | `fastboot getvar` | devinfo 0x30-0x37 |
+| --- | --- | --- |
+| stock capture, before any of our boots | A: retry 2, successful, bootable; B: retry 3, not successful, bootable | not read |
+| one boot after `--set-active=b` (boot 7) | not read | `02 0a 00 00 02 04 00 00` |
+| before the T2 flash (after boots 7 and 8) | B: retry 1, not successful, bootable | not read |
+| after the T2 flash (`--set-active=b`) and two boots (T2, T2b) | not read | `02 0a 00 00 01 04 00 00` |
+
+Every reading agrees with the layout: slot A `02 0a` is retry 2,
+successful, fastboot_ok, as getvar says; slot B counts down from 3 by one
+per boot, ABL's own change, and `--set-active` resets it. Still missing
+for L-36: a getvar and a byte read of the same state with no boot in
+between (the next time the phone is in fastboot, before anything is
+flashed).
