@@ -4,6 +4,25 @@
 Findings from real hardware that matter beyond one subsystem, newest first.
 Details are in the linked plans.
 
+## 2026-10-27: raven boots the shared init
+
+Raven's own `device/raven/initramfs/init` is gone; the image packs the
+shared `initramfs/init` with raven's steps switched on by its descriptor
+(`INITRAMFS_FB_WAIT`, `USB_SWITCH`, `SIMPLEFB_TRIG_CON`). Pushed to slot
+B on kernel `7.3.0-rc6-omamobile-push1-gb3d6253b0d61`, with the same
+overlays as before, so boot, dtbo and vendor_boot's DTB and command line
+were byte-identical to the previous slot B and only the ramdisk changed.
+The init logged the allowlist `boot_b vendor_boot_b dtbo_b userdata`
+(every other partition read-only), loaded all six `INITRAMFS_MODULES`,
+bound the gadget on `11110000.usb`, read `USBSW_CTRL` 0x09 (closed) and
+switched to Arch; SSH answered 5 s after the reboot. Slot B stayed
+successful, no failed units, and the boot check missed only `audio-card`
+(speaker protection off, as on the boots before). `reboot-to bootloader`
+reached fastboot (`current-slot: b`, both slots successful), so the
+reboot-mode nvmem modules work from the initramfs, and `fastboot
+continue` came back the same way. Not checked: the early splash, since
+this laptop has no Omarchy logo or ImageMagick to build it.
+
 ## 2026-10-27: slot A holds GrapheneOS again
 
 A GrapheneOS OTA had moved GrapheneOS 2026102100+ to slot B
