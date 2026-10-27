@@ -390,3 +390,23 @@ speaker calibration is never committed.
 5. **R4:** the speakers at cheetah's safe level (stage `media`), with
    speaker protection.
 6. **R5:** sensors (auto-rotate) through the same AoC.
+
+## Without the amplifiers (2026-10-27, `gb3d6253b0d61`, device-raven 0.1.23)
+
+Derek asked on #41 whether the sound card, and so the microphones, still
+comes up while `cs35l41` stays blacklisted. It doesn't. With speaker
+protection disabled (as 0.1.23 intends) and the amplifier driver never
+loaded, the AoC comes online and registers its ALSA services ("alsa-aoc
+communication is ready"), but `sound-aoc` stays in deferred probe: its
+DAI links name the two CS35L41s as codecs, so the card waits for them.
+`/proc/asound/cards` is empty, the boot check fails `audio-card`, and
+phone-smoke reports no sound card. So 0.1.23 leaves raven with no
+speakers **and no microphones**; the matrix row must say so.
+
+The earlier report from this boot set (speakers and microphones working)
+came from the 10-17 root image's older local `omamobile-audio` 0.4.4,
+whose service still started speaker protection on raven: the version
+clash Derek pointed out. Ways forward, not decided: give the card a
+speaker-less link set when the amplifiers are absent, or load the
+amplifier driver muted with no protection firmware, so the card and the
+microphones come up while the speakers stay off.
