@@ -95,6 +95,12 @@ grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep || fa
 grep -q 'wifi_pci=0000:01:00.0' bin/omamobile-sleep || fail "a Wi-Fi D3 failure falls back to unload mode"
 pass "sleep policy"
 
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-audio-mics.service") == ../omamobile-audio-mics.service ]] \
+  || fail "the microphones unit (omamobile-audio 0.5.14) is enabled by a vendor wants link"
+[ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service ] \
+  || fail "speaker protection is not enabled on raven (its limits are cheetah's)"
+pass "the microphones come up with the speakers muted; protection stays off"
+
 # Policy that keeps the phone safe at boot
 for m in tcpci_maxim gpio_max77759; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven.conf || fail "$m stays blacklisted"

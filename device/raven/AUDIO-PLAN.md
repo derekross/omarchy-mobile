@@ -423,3 +423,20 @@ clash Derek pointed out. Ways forward, not decided: give the card a
 speaker-less link set when the amplifiers are absent, or load the
 amplifier driver muted with no protection firmware, so the card and the
 microphones come up while the speakers stay off.
+
+**Microphones without protection (2026-10-27, `gb3d6253b0d61`,
+omamobile-audio 0.5.3, device-raven 0.1.25; branch
+`omamobile-raven-mics`):** the second way. `omamobile-speaker-protection
+mics` (run by `omamobile-audio-mics.service`, which device-raven enables)
+loads `snd_soc_cs35l41_spi` and mutes both amplifiers, as `start` does
+before anything else, and stops there: no DSP firmware, no unmute. The
+unit doesn't run once speaker protection is enabled, and uses the same
+hang marker. On raven, after a reboot: the unit finished at 12:01:45, the
+card came up, both amplifiers read `Digital PCM Volume` 0, speaker
+protection inactive, and PipeWire's default source was "Built-in Audio
+Microphone". A 4 s recording in a quiet room read -64.5 dBFS RMS (not
+digital silence); with the human counting out loud, -48 to -56 dBFS per
+half second, falling to about -71 dBFS between words. So the microphones
+work with the speakers muted. Not tested: a call (the modem doesn't start
+at boot with this package set), and the speaker sink, which PipeWire still
+lists but which plays into muted amplifiers.
