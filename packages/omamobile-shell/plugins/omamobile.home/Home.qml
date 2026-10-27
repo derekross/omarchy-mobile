@@ -149,7 +149,7 @@ Item {
     layout = parsed
     if (ports.length) saveTimer.restart()
     if (!loaded) { loaded = true; goToPage(layout.home, false) }
-    else if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
+    else if (currentPage >= viewLayout.pages.length) goToPage(viewLayout.pages.length - 1, false)
   }
 
   // A first start: a clock and a few installed apps. Waits for the desktop
@@ -201,7 +201,7 @@ Item {
   function commit(next) {
     if (!next) return false
     layout = next
-    if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
+    if (currentPage >= viewLayout.pages.length) goToPage(viewLayout.pages.length - 1, false)
     saveTimer.restart()
     return true
   }
