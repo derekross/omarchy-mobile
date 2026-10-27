@@ -1,0 +1,89 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-device-panther. reboot-to is compiled from
+# src/reboot-to.c in this directory, so a copied package still builds.
+# Do not execute reboot-to.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+bash -n build || fail "build parses"
+bash -n install || fail "install parses"
+pass "scripts parse"
+
+grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
+pass "build and install stay inside the package directory"
+
+if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
+  cmp -s src/reboot-to.c ../omamobile-device-cheetah/src/reboot-to.c \
+    || fail "reboot-to.c drifted from the cheetah package"
+  pass "reboot-to.c matches the cheetah source"
+  cmp -s vendor/udev/rules.d/10-omamobile-storage.rules \
+    ../omamobile-device-cheetah/vendor/udev/rules.d/10-omamobile-storage.rules \
+    || fail "the storage rule drifted from the cheetah package"
+  pass "the storage rule matches the cheetah package"
+  cmp -s etc/omamobile-mirrorlist ../omamobile-device-cheetah/etc/omamobile-mirrorlist \
+    || fail "the mirrorlist drifted from the cheetah package"
+  pass "the mirrorlist matches the cheetah package"
+  cmp -s vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+    ../omamobile-device-cheetah/vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+    || fail "the power-key drop-in drifted from the cheetah package"
+  pass "the power-key drop-in matches the cheetah package"
+  cmp -s omamobile-device-panther.install \
+    ../omamobile-device-cheetah/omamobile-device-cheetah.install \
+    || fail "the pacman install script drifted from the cheetah package"
+  pass "the pacman install script matches the cheetah package"
+fi
+grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
+grep -q '^install=omamobile-device-panther.install$' PKGBUILD \
+  || fail "the pacman install script is not named"
+[[ -f etc/omamobile-mirrorlist && -f omamobile-device-panther.install ]] \
+  || fail "the pacman mirrorlist or install script is missing"
+pass "pacman gets the keyring, the mirrorlist, and the install script"
+if [[ -f ../../device/panther/device.conf ]]; then
+  cmp -s device.conf ../../device/panther/device.conf \
+    || fail "device.conf drifted from the descriptor"
+  pass "device.conf matches the descriptor"
+fi
+
+./build "$tmp/build" || fail "reboot-to compiles"
+[[ -x $tmp/build/reboot-to ]] || fail "reboot-to is not executable"
+pass "reboot-to compiles"
+
+./install "$tmp/root" "$tmp/build"
+for f in usr/bin/reboot-to \
+         usr/lib/udev/rules.d/10-omamobile-storage.rules \
+         usr/lib/systemd/network/20-usb-gadget.network \
+         usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
+         usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+         usr/share/omamobile/device.conf \
+         usr/share/omamobile/device-panther/version \
+         usr/share/licenses/omamobile-device-panther/LICENSE \
+         etc/pacman.d/omamobile-mirrorlist; do
+  [[ -f $tmp/root/$f ]] || fail "install stages $f"
+done
+grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
+  || fail "the whole-disk node is made inaccessible"
+grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
+  || fail "userdata is the only partition desktop tools may see"
+grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network" \
+  || fail "usb0 keeps the initramfs address"
+power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
+grep -qx '\[Login\]' "$power" \
+  || fail "the power-key drop-in needs a [Login] header"
+grep -q '^HandlePowerKey=ignore$' "$power" \
+  || fail "a short press must not power the phone off"
+grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
+  || fail "the long press stays the PMIC reset"
+grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/device.conf" \
+  || fail "the installed descriptor is panther"
+for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
+              usr/lib/systemd/system/omamobile-boot-success.service \
+              usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
+              usr/bin/omamobile-camera-start \
+              usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf; do
+  [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
+done
+pass "install stages the udev rule, the USB link, and the mirrorlist, and nothing that marks a slot or starts hardware"

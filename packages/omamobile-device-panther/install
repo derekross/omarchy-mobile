@@ -1,0 +1,25 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-device-panther into DESTDIR. Nothing is enabled that would
+# mark a slot successful or start the radio, the charger, or a camera.
+#   ./install DESTDIR [BUILDDIR]
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
+build=${2:-build}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
+install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
+  "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
+install -Dm644 vendor/systemd/network/20-usb-gadget.network \
+  "$destination/usr/lib/systemd/network/20-usb-gadget.network"
+install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+  "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
+install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
+  "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+install -Dm644 device.conf \
+  "$destination/usr/share/omamobile/device.conf"
+install -Dm644 etc/omamobile-mirrorlist \
+  "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-panther/LICENSE"
+install -Dm644 version "$destination/usr/share/omamobile/device-panther/version"
