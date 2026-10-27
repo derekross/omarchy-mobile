@@ -341,3 +341,11 @@ review kernel (`g1de37d2bef30`/`gb3d6253b0d61`), whose CMU_APM mux fix
 morning's crash followed kernels with the override. That fits state
 carried over a warm reboot. One boot each way: not proven. Next GrapheneOS
 boots, and the cold-boot test above, would confirm it.
+
+**B3 cold boot (2026-10-27, GrapheneOS 2026102100):** GrapheneOS's own
+Power off from the menu, then Power: Bluetooth came up on its own, with no
+crash and no tile presses. The second clean GrapheneOS boot in a row since
+the last Omarchy kernel without the `assigned-clock-parents` override, and
+the first after a cold boot, so state left by the override over a warm
+reboot remains the best explanation for the 10-26 morning crash. (How long
+the phone stayed off wasn't timed.)
