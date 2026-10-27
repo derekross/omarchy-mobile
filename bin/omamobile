@@ -271,8 +271,19 @@ cmd_modules_push() {
 # initramfs's /etc). Without $1 it only checks the descriptor's values.
 initramfs_config() {
   local etc=${1:-} rw
-  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} || -n ${DEV_BRINGUP_PROBE:-} ]]; then
+  # Every board-specific step in the init checks the board against COMPATIBLE
+  local board_step=""
+  [[ -n ${DEV_SIMPLEFB_TRIG_CON:-}${DEV_BRINGUP_PROBE:-}${DEV_INITRAMFS_MODULES:-}${DEV_USB_SWITCH:-} ]] && board_step=1
+  if [[ -n $board_step ]]; then
     [[ -n ${DEV_COMPATIBLE:-} ]] || die "COMPATIBLE is missing"
+  fi
+  if [[ -n ${DEV_USB_SWITCH:-} ]]; then
+    [[ $DEV_USB_SWITCH =~ ^[0-9a-f]+\.i2c[[:space:]]+0x[0-9a-fA-F]{2}$ ]] \
+      || die "USB_SWITCH must be \"<controller>.i2c 0xADDR\" (the MAX77759 TCPC)"
+    [[ ${DEV_INITRAMFS_I2C_TOOLS:-} == 1 ]] || die "USB_SWITCH needs INITRAMFS_I2C_TOOLS=1"
+  fi
+  if [[ -n ${DEV_INITRAMFS_FB_WAIT:-} ]]; then
+    [[ $DEV_INITRAMFS_FB_WAIT == 1 ]] || die "INITRAMFS_FB_WAIT must be 1 or absent"
   fi
   if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
     [[ $DEV_SIMPLEFB_TRIG_CON =~ ^0x[0-9a-fA-F]+[[:space:]]+0x[0-9a-fA-F]+$ ]] \
@@ -298,10 +309,19 @@ initramfs_config() {
 
   # This device's simplefb trigger, and nothing else's. The init writes
   # exactly this pair, and only when the board matches COMPATIBLE.
-  # Absent or empty: it writes no display register. The bring-up probe
-  # uses the same COMPATIBLE file, so it is packed for either step.
-  if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} || -n ${DEV_BRINGUP_PROBE:-} ]]; then
+  # Absent or empty: it writes no display register. The bring-up probe,
+  # the module loader and the USB switch use the same COMPATIBLE file, so it
+  # is packed for any of them.
+  if [[ -n $board_step ]]; then
     printf '%s\n' "$DEV_COMPATIBLE" > "$etc/omamobile-compatible"
+  fi
+  # The MAX77759 USB switch's I2C controller and address, for usb_switch
+  if [[ -n ${DEV_USB_SWITCH:-} ]]; then
+    printf '%s\n' "$DEV_USB_SWITCH" > "$etc/omamobile-usb-switch"
+  fi
+  # Draw the splash once fb0 exists rather than at once
+  if [[ -n ${DEV_INITRAMFS_FB_WAIT:-} ]]; then
+    : > "$etc/omamobile-fb-wait"
   fi
   if [[ -n ${DEV_SIMPLEFB_TRIG_CON:-} ]]; then
     printf '%s\n' "$DEV_SIMPLEFB_TRIG_CON" > "$etc/omamobile-simplefb-trig"
