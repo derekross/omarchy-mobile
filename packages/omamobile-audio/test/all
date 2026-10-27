@@ -339,6 +339,33 @@ rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp start > "$r/out" 2>&1 || rc=$?; prep=(
 [[ -e $r/state/speaker-protection-started ]] || fail "marker: kept for the human"
 pass "a hang marker from the last boot keeps the amplifiers off"
 
+# --- microphones only: the driver for the card, both amplifiers muted, nothing else
+mktree mics; rc=0; sp mics > "$r/out" 2>&1 || rc=$?
+((rc == 0)) || { cat "$r/out" >&2; fail "mics succeeds"; }
+grep -c '^snd_soc_cs35l41_spi$' "$r/modprobe.log" >/dev/null || fail "mics: loads the amplifier driver"
+muted || fail "mics: both amplifiers muted"
+[[ -z $(grep -v 'Digital PCM Volume=0$' "$r/cset.log") ]] || fail "mics: sets nothing but the mute (no DSP, no source, no unmute)"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics: removes the hang marker"
+[[ $(cat "$r/run/speaker-protection") == "muted: microphones only"* ]] || fail "mics: status says microphones only"
+pass "mics: the amplifier driver loaded, both amplifiers muted, nothing else set"
+
+mktree mics-nocard; rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) || fail "mics without a card fails"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics without a card: marker removed after a clean failure"
+mktree mics-marker; echo 2026-01-01T00:00:00 > "$r/state/speaker-protection-started"
+rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/modprobe.log && -e $r/state/speaker-protection-started ]] || fail "mics: a hang marker keeps the driver unloaded"
+rc=0; sp mics --retry > "$r/out" 2>&1 || rc=$?
+((rc == 0)) && muted || fail "mics --retry clears the marker and comes up muted"
+pass "mics: fails cleanly without a card, honours the hang marker, --retry clears it"
+
+u=systemd/omamobile-audio-mics.service
+grep -qx 'Conflicts=omamobile-speaker-protection.service' $u || fail "the mics unit conflicts with protection"
+grep -qx 'ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once protection is enabled"
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $u && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $u || fail "the mics unit runs on gs101 and gs201 AoCs"
+grep -qx 'ExecStart=/usr/bin/omamobile-speaker-protection mics' $u || fail "the mics unit runs mics"
+pass "the mics unit: never with protection, on both AoCs"
+
 # --- the watchdog ----------------------------------------------------------------
 watchrun() {  # run the watchdog briefly on a healthy started tree, with the events of at()
   prep=(OMAMOBILE_WATCH_INTERVAL=0.05 OMAMOBILE_WATCH_GRACE=0.1 OMAMOBILE_WATCH_HB_TIMEOUT=0.3
@@ -1128,7 +1155,7 @@ pass "follow: the speakers' left and right from the sensor proxy's orientation"
 # --- install ---------------------------------------------------------------------
 ./install "$tmp/root"
 for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-speaker-protection.service \
-         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/omamobile-audio/speaker_dsp.py \
+         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/systemd/system/omamobile-audio-mics.service usr/lib/omamobile-audio/speaker_dsp.py \
          usr/lib/udev/rules.d/70-omamobile-cs35l41.rules \
          usr/lib/modprobe.d/omamobile-audio.conf etc/omamobile/speaker.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \

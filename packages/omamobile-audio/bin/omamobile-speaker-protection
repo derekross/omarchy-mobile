@@ -39,6 +39,10 @@
 # here, the next one finds it, leaves the amplifier driver alone and fails.
 #
 #   omamobile-speaker-protection start [--retry]    (the service)
+#   omamobile-speaker-protection mics [--retry]     (omamobile-audio-mics.service)
+#                           the microphones without protection: steps 1 and 2
+#                           only, so the card (which waits for both amplifiers)
+#                           comes up and both stay muted; the speakers are silent
 #   omamobile-speaker-protection watch              (omamobile-speaker-watch.service)
 #   omamobile-speaker-protection status | monitor [SECONDS] | health
 #   omamobile-speaker-protection verify             (during playback; C9a)
@@ -638,6 +642,35 @@ set_status_ok() {
 }
 
 # Read-only report. Prints the DSP state but never the calibration values.
+# The microphones without the speakers. The AoC sound card waits for both
+# amplifiers as codecs, so with their driver unloaded there are no microphones
+# either. Load the driver and mute both, as start does before anything else,
+# and stop there: no DSP firmware, no unmute. Hang-safe through the same marker.
+mics() {
+  local i
+  if [[ -e $marker ]]; then
+    log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the amplifiers stay off this boot."
+    log "after checking the previous boot's log, retry with: omamobile-speaker-protection mics --retry"
+    find_card && mute
+    set_status "off: the last start never finished"
+    exit 1
+  fi
+  mkdir -p "$STATE"
+  date -Is > "$marker"
+  sync -f "$marker" 2>/dev/null || sync
+  if compgen -G "$SPIDRV/spi*" >/dev/null; then
+    find_card && mute
+  else
+    modprobe snd_soc_cs35l41_spi || fail "snd_soc_cs35l41_spi failed to load"
+  fi
+  for ((i = 0; i < CARD_WAIT * 5; i++)); do find_card && break; sleep 0.2; done
+  find_card || fail "no AoC sound card after ${CARD_WAIT} s (both amplifiers probed? the AoC up?)"
+  mute || fail "muting failed"
+  finish
+  set_status "muted: microphones only, speakers off (no protection)"
+  log "AoC sound card $card: microphones only, both amplifiers muted (no speaker protection)"
+}
+
 status() {
   local p i c v name d
   cat "$status_file" 2>/dev/null || echo "no state ($status_file)"
@@ -924,6 +957,9 @@ case ${1:-} in
   start|restart|recover)
     [[ ${2:-} == --retry ]] && rm -f "$marker"
     start ;;
+  mics)
+    [[ ${2:-} == --retry ]] && rm -f "$marker"
+    mics ;;
   watch) find_card || { log "watchdog: no AoC sound card"; exit 1; }; dsp --card "$card" watch ;;
   status) status ;;
   earpiece) earpiece "${2:-}" ;;
@@ -950,7 +986,7 @@ case ${1:-} in
       exit 1
     fi ;;
   *)
-    echo "Usage: omamobile-speaker-protection start [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
+    echo "Usage: omamobile-speaker-protection start [--retry] | mics [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
     echo "       | earpiece on|off|status   (the top amplifier alone as the earpiece, AOC-PLAN C9k)" >&2
     echo "       | digest   (the installed firmware's digest, as a line of the verified list)" >&2
     echo "       | verify | signal tone|multitone FILE [--level DBFS --seconds S --channels both|left|right] | mute [--reason TEXT]" >&2
