@@ -378,6 +378,23 @@ grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fa
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
 grep -c '"omamobile-launch", "show-with"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
 grep -c '"omamobile-launch", "own-screen"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
+# The drawer on its side (TOUCH-PLAN 2.4): columns of the portrait width.
+grep -c 'cellWidth: Math.floor(width / root.drawerColumns(width))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer's columns follow its width"
+if command -v node >/dev/null; then
+  node -e '
+const L = require("./plugins/omamobile.launcher/LauncherModel.js")
+const eq = (a, b, what) => { if (a !== b) throw new Error(what + ": " + a + " != " + b) }
+eq(L.drawerColumns(4, 456, 480, 12), 4, "upright")
+eq(L.drawerColumns(4, 1016, 480, 12), 8, "on its side")
+eq(L.drawerColumns(5, 1016, 480, 12), 11, "five across upright")
+eq(L.drawerColumns(4, 1016, 0, 12), 4, "no screen known")
+eq(L.drawerColumns(4, 300, 480, 12), 4, "narrower than the screen")
+' || fail "the drawer's columns on its side"
+fi
+if [[ -n ${OMAMOBILE_LAUNCHER_RENDER:-} ]]; then
+  bash test/launcher-render "$OMAMOBILE_LAUNCHER_RENDER" >/dev/null || fail "app drawer render"
+fi
+pass "the drawer on its side"
 # Recent apps' bottom actions take a touch tap alone: an exclusive
 # TapHandler in a band that swallows touches, so the tap-to-dismiss area
 # under them (which disarmed Clear all and closed recents before the second

@@ -80,6 +80,15 @@ Item {
   }
 
   readonly property int columns: Math.max(3, Math.min(6, Number(settings.columns) || 4))
+  // The drawer's columns for a grid this wide: `columns` across the
+  // screen's shorter side, more of the same width on its side (TOUCH-PLAN
+  // 2.4), so the icons keep their size.
+  // The screen (the offscreen renders put a stand-in here).
+  property var screenInfo: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
+  function drawerColumns(gridWidth) {
+    var shortSide = screenInfo && screenInfo.width > 0 && screenInfo.height > 0 ? Math.min(screenInfo.width, screenInfo.height) : 0
+    return LauncherModel.drawerColumns(columns, gridWidth, shortSide, Style.spacing.lg)
+  }
   readonly property int sentenceWords: Math.max(2, Number(settings.sentenceWords) || 3)
 
   // Plugin entries in shell.json carry their settings inline, but the host
@@ -518,6 +527,7 @@ Item {
 
     Rectangle {
       id: sheet
+      objectName: "drawer"
       width: parent.width
       height: parent.height
       y: Math.round((1 - root.reveal) * Style.space(80) + root.pull)
@@ -559,6 +569,7 @@ Item {
       // ---------- Header: count and a collapse control
       Item {
         id: header
+        objectName: "drawerHeader"
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
@@ -582,6 +593,7 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           width: root.touch
           height: root.touch
+          objectName: "collapse"
           iconText: "󰅀"
           iconSize: Style.font.iconLarge
           foreground: root.foreground
@@ -592,6 +604,7 @@ Item {
       // ---------- App grid
       GridView {
         id: grid
+        objectName: "drawerGrid"
         anchors.top: header.bottom
         anchors.left: parent.left
         anchors.right: parent.right
@@ -604,7 +617,7 @@ Item {
         // While searching, results stack up from the input so the best match
         // sits nearest the thumb; the full list reads top-down.
         verticalLayoutDirection: root.hasQuery ? GridView.BottomToTop : GridView.TopToBottom
-        cellWidth: Math.floor(width / root.columns)
+        cellWidth: Math.floor(width / root.drawerColumns(width))
         cellHeight: Math.max(96, Style.space(100))
         model: root.apps
         opacity: root.promptMode ? 0.5 : 1
@@ -634,6 +647,7 @@ Item {
       // ---------- Ask the agent
       BorderSurface {
         id: askRow
+        objectName: "askRow"
         visible: root.hasQuery
         anchors.left: parent.left
         anchors.right: parent.right
@@ -731,6 +745,7 @@ Item {
       // ---------- The one input
       Item {
         id: inputRow
+        objectName: "inputRow"
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -889,6 +904,7 @@ Item {
     id: cell
 
     property var entry: null
+    objectName: "app-" + (entry ? entry.id : "")
     property bool highlighted: false
     signal tapped()
     signal held()

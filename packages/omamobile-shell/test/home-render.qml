@@ -12,34 +12,34 @@ import "home" as Home
 // saved as a PNG with the items' geometry printed for the checks. Its OWL
 // widgets get a host that answers from the job's fixtures. Then it quits.
 ShellRoot {
-  id: shell
+  id: harness
 
   FileView { id: jobFile; path: Quickshell.env("HOME_JOB"); blockLoading: true }
   readonly property var job: JSON.parse(jobFile.text())
   property int index: -1
-  readonly property var shot: shell.index >= 0 && shell.index < shell.job.shots.length ? shell.job.shots[shell.index] : null
+  readonly property var shot: harness.index >= 0 && harness.index < harness.job.shots.length ? harness.job.shots[harness.index] : null
 
   // The fixture for a widget, by the id its state key starts with.
   function fixtureFor(widget) {
     var key = String(widget && widget.stateKey ? widget.stateKey : "")
-    for (var id in shell.job.widgets) if (key.indexOf(id + "@") === 0) return shell.job.widgets[id]
+    for (var id in harness.job.widgets) if (key.indexOf(id + "@") === 0) return harness.job.widgets[id]
     return null
   }
 
   // What OwlPhoneHost does on the phone, answered from the fixtures: no
   // command, request, file or action runs.
   readonly property var fixtureHost: ({
-    now: function() { return shell.job.time },
+    now: function() { return harness.job.time },
     interval: function(spec) { return spec.every },
     runSource: function(widget, spec, arg, headers, done) {
-      var fx = shell.fixtureFor(widget)
+      var fx = harness.fixtureFor(widget)
       var e = fx && fx.sources ? fx.sources[spec.name] : null
       if (!e) { done({ error: "no fixture for " + spec.name }); return }
       if (e.value !== undefined) done({ value: e.value })
       else done({ code: 0, ok: true, out: String(e.text), err: "" })
     },
     android: function(widget, kind, done) {
-      var fx = shell.fixtureFor(widget)
+      var fx = harness.fixtureFor(widget)
       done({ value: fx && fx.android && fx.android[kind] !== undefined ? fx.android[kind] : null })
     },
     act: function() {},
@@ -55,7 +55,7 @@ ShellRoot {
   // The host's application library: names from the desktop entries, icons
   // from the job.
   readonly property var library: ({
-    iconSource: function(icon) { var p = shell.job.icons[String(icon)]; return p ? "file://" + p : "" },
+    iconSource: function(icon) { var p = harness.job.icons[String(icon)]; return p ? "file://" + p : "" },
     entryName: function(entry) { return entry ? String(entry.name || entry.id || "") : "" },
     beginLaunchFeedback: function() {}
   })
@@ -68,8 +68,8 @@ ShellRoot {
 
     Item {
       id: screen
-      width: shell.shot ? shell.shot.w : 480
-      height: shell.shot ? shell.shot.h : 1040
+      width: harness.shot ? harness.shot.w : 480
+      height: harness.shot ? harness.shot.h : 1040
 
       // Wallpaper stand-in: the theme's background with a little accent.
       Rectangle {
@@ -94,8 +94,8 @@ ShellRoot {
         y: 44
         width: screen.width
         height: screen.height - 44 - 72
-        shell: ({ appLibrary: shell.library })
-        Component.onCompleted: home.owlHost = shell.fixtureHost
+        shell: ({ appLibrary: harness.library })
+        Component.onCompleted: home.owlHost = harness.fixtureHost
       }
 
       // Dock stand-in: the launcher's search pill.
@@ -145,19 +145,19 @@ ShellRoot {
     if (!item || !item.visible) return
     if (item.modelData !== undefined && item.isWidget !== undefined && item.owner !== undefined && item.owner) {
       if (item.owner.index !== home.currentPage) return
-      cell = { id: item.modelData.id, kind: item.modelData.kind, type: item.modelData.type || item.modelData.app, rect: shell.rectOf(item), texts: [] }
+      cell = { id: item.modelData.id, kind: item.modelData.kind, type: item.modelData.type || item.modelData.app, rect: harness.rectOf(item), texts: [] }
       out.cells.push(cell)
     }
     if (cell && item.boxes !== undefined && typeof item.dump === "function" && item.boxes)
-      shell.owlTexts(item.boxes, 0, 0, item.dp, item.mapToItem(screen, 0, 0), cell.texts)
-    if (item.objectName) out.named[item.objectName] = shell.rectOf(item)
-    for (var i = 0; i < item.children.length; i++) shell.collect(item.children[i], out, cell)
+      harness.owlTexts(item.boxes, 0, 0, item.dp, item.mapToItem(screen, 0, 0), cell.texts)
+    if (item.objectName) out.named[item.objectName] = harness.rectOf(item)
+    for (var i = 0; i < item.children.length; i++) harness.collect(item.children[i], out, cell)
   }
 
   function next() {
-    shell.index++
-    if (shell.index >= shell.job.shots.length) { Qt.quit(); return }
-    var s = shell.shot
+    harness.index++
+    if (harness.index >= harness.job.shots.length) { Qt.quit(); return }
+    var s = harness.shot
     // The screen's size, as the surface's PanelWindow would report it.
     if (home.screenInfo !== undefined) home.screenInfo = { width: s.w, height: s.h }
     home.sheet = ""
@@ -170,25 +170,25 @@ ShellRoot {
     })
   }
 
-  Timer { id: settle; interval: 3000; onTriggered: shell.capture() }
+  Timer { id: settle; interval: 3000; onTriggered: harness.capture() }
   // A long press a second before the shot: its notice shows for about two.
   Timer { id: hold; interval: 2000; onTriggered: home.requestEdit() }
 
   function capture() {
-    var s = shell.shot
+    var s = harness.shot
     var out = { w: screen.width, h: screen.height, landscape: home.landscape === true, grid: home.viewLayout ? home.viewLayout.grid : home.layout.grid,
                 pages: home.viewLayout ? home.viewLayout.pages.length : home.layout.pages.length, page: home.currentPage,
                 sheet: s.sheet || "", hold: s.hold === true, cells: [], named: {} }
-    shell.collect(home, out, null)
+    harness.collect(home, out, null)
     console.log("geometry " + s.name + " " + JSON.stringify(out))
     screen.grabToImage(function(result) {
       result.saveToFile(s.png)
       console.log("shot " + s.png)
-      Qt.callLater(shell.next)
+      Qt.callLater(harness.next)
     })
   }
 
   // The layout file is read once the config directory exists (a process):
   // a moment for that, the widget scan and the widgets' first render.
-  Timer { interval: 2500; running: true; onTriggered: shell.next() }
+  Timer { interval: 2500; running: true; onTriggered: harness.next() }
 }
