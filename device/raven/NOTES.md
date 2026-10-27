@@ -89,11 +89,12 @@ included, reads cleanly ([MODEM-PLAN](MODEM-PLAN.md) section 3).
 - Moving the laptop dropped the USB link once (the phone stayed up); a
   replug brought it back.
 
-- **Never list `/sys/kernel/debug/pinctrl/*/pins` or `pinconf-pins` on
-  gs101.** It reads every bank's config, a bank without power aborts the
-  SoC, and the reader dies holding the pinctrl lock: reboot after one. Read
-  a single bank you know is powered instead (AGENTS.md).
-  [BLUETOOTH-PLAN](BLUETOOTH-PLAN.md)
+- **Never list `/sys/kernel/debug/pinctrl/*/pins` or `pinconf-pins` for
+  every controller at once on gs101.** GSA's pin controller (`17940000`)
+  belongs to the secure world and aborts the SoC on a read, and the reader
+  dies holding the bank's lock: reboot after one. Read the one controller
+  you need instead; every other one reads cleanly (AGENTS.md, 2026-10-16
+  below, [MODEM-PLAN](MODEM-PLAN.md) section 3).
 - **The panel rails belong to the simple-framebuffer node.** vci (ldo22m)
   and vddi (bucka) are held by `chosen:framebuffer-0`; removing simpledrm
   for gs-decon released them and the panel went dark. They are now
