@@ -31,8 +31,9 @@ FlorencioJP pulled from theirs.
 | --- | --- |
 | `gph2-5` enables the 0.95 V buck (stock `bt-0p95-en`), `gph2-4` is WLAN_EN; stock raises the buck, then WLAN_EN, then waits 1 ms and brings the link up. BT_EN is `gpp16-2` on PERIC1 (`0x10840000`), which our tree does not describe. `gpa6-1` is the chip's wake line to the host [V] | `S/` device tree |
 | The PCIe PHY rails are S2MPG13 `LDO3S` and `LDO18S`, always-on in the stock tree [V] | `S/` device tree |
-| Stock's first cold cycle already passes authentication: from the buck, WLAN_EN at +109 ms, first BHI at +167 ms, SBL at +270 ms, AMSS at +935 ms, then power-off and a second WLAN_EN cycle at +8.8 s (mission mode) [V] | `B/` (FlorencioJP) |
-| Stock's `cnss2` probe (2.37 s) raises the buck and WLAN_EN, enumerates, reads the device version, suspends the link and drops WLAN_EN without a BHI; `init.lynx.rc` then writes `fs_ready` at `vendor.all.modules.ready` (4.8 s) and the calibration load runs without `cnss-daemon` [V] | `B/`, `S/init.lynx.rc` |
+| **Stock never loads a cold chip.** `cnss2`'s probe raises the buck once (`BUCK GPIO: [0]`, `drive it HIGH`, 2.51 s), asserts WLAN_EN (2.62 s), enumerates, suspends the link (2.68 s) and de-asserts WLAN_EN (2.71 s) with no BHI. The first `Starting image download via BHI` (10.14 s) follows the second `Assert WLAN_EN` (10.07 s), with the buck still high; `init.lynx.rc` starts that calibration load by writing `fs_ready` at `vendor.all.modules.ready` (4.8 s), with no `cnss-daemon`. So every stock firmware load is one WLAN_EN cycle after a cold power-up, and every load on our kernel has been the cold one [V] | stock `dmesg` 2026-10-27, `S/init.lynx.rc`; the reading is the maintainer's (#36) |
+| FlorencioJP's full-Android log has the same shape: buck once at 2.46 s, assert 2.57 s, `cannot receive L23_READY`, de-assert 2.65 s, then nothing on the chip for 7.67 s; second assert 10.32 s, first BHI 10.40 s, SBL 10.47 s, AMSS 11.17 s. Their earlier "+109 ms / +167 ms" timing was measured from the second buck line [V] | `B/` (FlorencioJP, corrected on #36) |
+| **The stock kernel stalls too when the BHI follows the probe cycle by 13 ms.** Google's minimal diagnostic on the stock kernel and stock `cnss2`, factory firmware started through `powerup`: buck up 5.49 s, link, `cannot receive L23_READY` 5.69 s, probe done, `powerup` 13 ms later, BHI 5.85 s, and the same stall as mainline at 13.0 s (`BHI_EXECENV` 0, `BHI_STATUS` 0, `BHI_ERRDBG3` `0x80000`); the same with a warm chip (reboot, buck already high). So probe-enumerate-power-off followed at once by a BHI is not enough, and the 7.7 s full Android leaves between the de-assert and the second assert is the variable [V] | FlorencioJP, #36 2026-10-27 |
 | Stock runs with the HSI2 SysMMU translating (image buffers in `wifi_region`), a 36-bit DMA mask, PCIe I/A on, L1.2 on and three MSI vectors for MHI. The BHI load takes 57 ms [V] | `B/` |
 | The image `ath11k` requests (`ath11k/WCN6855/hw2.1/amss.bin`) is byte-identical to stock's `/vendor/firmware/amss20.bin`, the only `amss*` there; `m3.bin` matches too. It is an MBN version 5 hash segment with `sig_size` 0 and `cert_chain_size` 0; all 17 segment hashes verify [V] | FlorencioJP, sha256 on #36 |
 | On our kernel: link Gen2 x1, enumeration, 32 MSI vectors through iMSI-RX, `BHI_IMGADDR_HIGH` 0, the buffer below 4 GiB, and the chip reads host memory (section 3) [V] | NOTES 2026-10-24, this phone |
@@ -196,6 +197,11 @@ These are stop conditions, not warnings. Each one has reset a phone.
    module, after link-up, one register group per boot (AGENTS.md §1), and
    never from a shell.
 
+One difference worth keeping in view, not a licence: the stock reads before
+any BHI write did not hang, while the read that hung on mainline ran right
+after `ath11k_pci_sw_reset()`'s SoC global reset, which stock's `linkup`
+state never does.
+
 And the gate before any radio step, from CONTRIBUTING.md §3: the six
 protected partitions checksummed against the off-repo backup, `kmsg`
 streamed to the laptop, the watchdog armed, a fresh SSH login to confirm,
@@ -205,33 +211,54 @@ one change per boot, and the rollback written before the boot.
 
 Ordered by what it costs. Nothing here is scheduled.
 
-1. **Offline: the bootstrap straps.** `TLMM_PBL_BOOTSTRAP_STATUS` reads
-   `0x40` under stock and 0 here, and `PBL_WLAN_BOOT_CFG` `0x200` against 0.
-   If the bootstrap status is the chip's strap pins sampled at its reset
-   [I], a line the host drives or pulls differently while WLAN_EN rises
-   would show up there. Compare the stock tree's pin configuration for
-   every line to the chip (function, pull, drive, the `pdn` states) with
-   ours, on paper first. Then confirm the two values on mainline at the
-   stall, where windowed reads are safe, before changing a pin.
-2. **The cold stock read.** The one that settles the caveat in section 5:
-   on stock, a cold chip (power-off, not a reboot: `cnss2` never drops the
-   buck) and the three registers read after `dev_boot on` and `linkup`,
-   before the first BHI write. On this build that means holding back the
-   calibration load, since `init.lynx.rc` writes `fs_ready` at 4.8 s: a
-   Magisk overlay of `/vendor/etc/init/hw/init.lynx.rc` without the two
-   `fs_ready` writes, removed afterwards. If stock reads `0x11111111 / 0x0 /
-   0x0` cold and `0x0 / 0x200 / 0x40` only after a good run, the PBL writes
-   these and our stop is upstream of them. If stock reads `0x0` cold too,
-   our power-up leaves bit 0 of `WLAN_SECURE_BOOTN` set, the bit
-   `pbl_auth.c` masks and compares. Costs a stock cycle on this phone
-   (`userdata` wiped and the Arch root restored from the backup).
-3. **The sequence around WLAN_EN.** Stock's `cnss2` suspends the link and
-   drops WLAN_EN once before the real load; our path does one cycle. Also
-   worth keeping in view: on stock none of the windowed reads before the
-   first BHI hang, on mainline the same read before `mhi_sync_power_up()`
-   froze HSI2. Whatever leaves `WLAN_SECURE_BOOTN` at `0x11111111` may be
-   what makes that page unreadable before power-up.
-4. **SysMMU translating as stock**, with its own plan (section 4).
+1. **The stock-shaped sequence in the driver, with the wait** (the
+   maintainer's step 6; FlorencioJP's phone first), default-off and with
+   the watchdog armed: cold power-on, link up, config-space enumeration
+   only, then D3hot, link down with PERST low and the PHY off, WLAN_EN low
+   with the buck held, **at least five seconds** (full Android leaves 7.7 s;
+   13 ms stalls even on the stock kernel), WLAN_EN high, 1 ms, link up,
+   then `ath11k` and MHI. Pass: the PBL leaves stage `0x0a` (an SBL log
+   start in `BHI_ERRDBG2`, `BHI_STATUS` success). Fail: the same stall,
+   and `WLAN_SECURE_BOOTN` at the stall says whether the cycle changed
+   anything; the wait is the one variable to vary. No board data, stop at
+   the SBL. If it passes, the Linux-side fix is a power-up sequence in the
+   driver and nothing else.
+2. **The cold stock read** (the maintainer's step 2 on #36, one host GPIO
+   write). On stock, after `dev_boot shutdown` and `off`, drive `gph2-5`
+   (GPIO 103) low by hand for at least five seconds, then `on` (`cnss2`
+   logs `drive it HIGH` and waits 100 ms), `linkup`, and read
+   `WLAN_SECURE_BOOTN` twice, `TLMM_PBL_BOOTSTRAP_STATUS`,
+   `PBL_WLAN_BOOT_CFG`, `TCSR_PBL_LOGGING`, `WLAON_SOC_POWER_CTRL`,
+   `WLAON_WL_PWR_STATUS_REG` and the ten PBL log words; then `linkdown`,
+   `off`, `on`, `linkup`, read again; then `powerup` to confirm the
+   firmware still comes up. Two outcomes: `0x11111111 / 0x0 / 0x0` cold and
+   `0x0 / 0x40 / 0x200` after the cycle means the enumerate-and-power-off
+   cycle is the fix and the driver can do the same; `0x0 / 0x40 / 0x200`
+   already cold means our power-up differs in something the chip latches
+   (straps, pulls, the buck's rail) and the bootstrap register is the lead.
+   Stop if any `reg_read` hangs or `powerup` fails afterwards. Costs a
+   stock cycle on this phone (`userdata` wiped, the Arch root restored).
+3. **The pins at power-up** (step 5), from `debugfs/pinctrl/*/pins`
+   (`CON` 0 input, 1 output; `PUD` 0 none, 1 down, 3 up), both phones the
+   same where nothing of ours has claimed the pin:
+
+   | pin | role | as ABL leaves it | stock's config |
+   | --- | --- | --- | --- |
+   | `gph2-0` | PERST | input, low, pull-down; sleep input / down | output, no pull |
+   | `gph2-1` | CLKREQ | input, high, no pull; sleep input / down | function 2, pull-up |
+   | `gph2-4` | WLAN_EN | input, low, pull-down (FlorencioJP); here already output, low, no pull, claimed by `regulator-wlan-en` | output, pull-up active, pull-down asleep |
+   | `gph2-5` | buck | output, low, no pull | output, pull-down |
+   | `gpa6-1` | host-wake | input, high, pull-down | EINT, pull-down |
+
+   If a chip strap shares WLAN_EN or PERST, the pull-down is what the
+   chip sees at our power-up; stock's WLAN_EN carries a pull-up when
+   active.
+4. **The cold stock read** stays as written in item 2 but is not needed
+   first: FlorencioJP's view (#36, 2026-10-27), which the maintainer's own
+   ordering allows, is that item 1 answers the same question from the
+   Linux side if the wait changes the stall. The stock cycle is spent only
+   if item 1 fails.
+5. **SysMMU translating as stock**, with its own plan (section 4).
 
 ## 8. State and how to resume
 
