@@ -308,3 +308,37 @@ them. Never commit them.
   verified).
 
 GPU results: [GPU-PLAN](GPU-PLAN.md). Thermal: [POWER-PLAN](POWER-PLAN.md).
+
+## devinfo against fastboot (2026-10-27, `gb3d6253b0d61`, device-raven 0.1.23)
+
+For Derek's #41 question, whether `DEVI` 3.15's slot bytes mean on gs101
+what they mean on gs201. Raven's devinfo is `/dev/sdd1` (`PARTNAME`
+devinfo); version 3.15 in every reading. Only bytes 0x30-0x37 are shown
+(slot a 0x30-0x33, slot b 0x34-0x37), from `omamobile-bootctl dump`,
+next to `fastboot getvar slot-successful/unbootable/retry-count` for the
+same state:
+
+| State | a: bytes | a: fastboot | b: bytes | b: fastboot |
+| --- | --- | --- | --- | --- |
+| B marked by `omamobile-boot-success` | `02 0a 00 00` | successful yes, unbootable no, retry 2 | `02 06 00 00` | successful yes, unbootable no, retry 2 |
+| `fastboot --set-active=b`, before booting | (unchanged) | successful yes, unbootable no, retry 2 | (not readable in fastboot) | successful no, unbootable no, retry 3 |
+| after one unmarked boot (`omamobile-boot-success` masked) | `02 0a 00 00` | successful yes, unbootable no, retry 2 | `02 04 00 00` | successful no, unbootable no, retry 2 |
+
+The same unmarked state also appears in the first boot after today's
+install (`02 04`, retry 2, logged by `omamobile-boot-success` before it
+marked). So byte 0 is the retry count and byte 1 holds the flags:
+0x04 active, 0x02 successful, 0x08 what the tool calls fastboot-ok; no
+reading had unbootable set. The next boot, after a `reboot-to
+bootloader` and `fastboot reboot`, read `01 0c`: the bootloader had spent
+another retry and set 0x08 on slot b (slot a has it too); the mark then
+wrote 0x35 `0c -> 0e`. After the test the service was unmasked and slot b
+is marked again.
+
+**The first mark (2026-10-14)** was written by hand over SSH from the
+running Arch system, before `omamobile-boot-success` was enabled on raven:
+`/dev/sdd` and `/dev/sdd1` were set writable with `blockdev --setrw`, a
+trap set both back read-only on exit, and `omamobile-bootctl
+mark-successful /dev/sdd1 b --i-understand` changed byte 0x35 `04 -> 06`
+and verified the block; the dump afterwards showed `ro=1` again. That
+`--setrw` was outside the storage guard's rules; since then only
+`omamobile-boot-success` writes devinfo.
