@@ -355,3 +355,20 @@ the last Omarchy kernel without the `assigned-clock-parents` override, and
 the first after a cold boot, so state left by the override over a warm
 reboot remains the best explanation for the 10-26 morning crash. (How long
 the phone stayed off wasn't timed.)
+
+**B3 on the fixed kernel (2026-10-27, `gb3d6253b0d61`, Omarchy):** the
+override isn't the whole story. This kernel has the CMU_APM fix (#6 v2),
+and Bluetooth came up on three boots of it that day (09:59, 10:05, 10:54),
+but the warm reboot from `bin/omamobile push` at 11:32 found the chip
+silent again: `0xfc18` timed out, the HCI_Reset after it too (`BCM: Reset
+failed (-110)`), twice, as in B3. Then a real cold boot, the first on
+Omarchy in this state: `systemctl poweroff` with the cable out, about 30 s
+off, Power with no cable. The first `0xfc18` timed out, the driver's
+retry after a reset answered (`BCM4389C1`, chip id 170), the patch loaded,
+and the controller powered up. So a warm reset can carry the chip's silent
+state on any kernel, and only cutting its power clears it; a forced
+restart, the REG_ON lines and every warm path did not (table above). That
+points at the reset sequence rather than at one bad register: next, hold
+BT_REG_ON low longer before power-up (hci_bcm's `power_on_delay_ms` is
+30 ms for the BCM4389; stock's "big hammer" is 100 ms), and a boot-time
+retry that power-cycles the controller as Android does.
