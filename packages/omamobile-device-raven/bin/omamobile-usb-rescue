@@ -27,7 +27,7 @@ for d in /sys/bus/i2c/devices/i2c-*; do
 done
 [[ -n $bus ]] || { log "no I2C bus for 10d50000.i2c"; exit 0; }
 
-rd() { omamobile-i2c "$bus" $tcpc "$1" 2>/dev/null; }
+rd() { i2cget -f -y "$bus" $tcpc "$1" 2>/dev/null; }
 vbus_present() { local v; v=$(rd 0x1e) || return 1; (( (v >> 2) & 1 )); }
 tcpm_owns() { [[ -e /sys/bus/i2c/devices/$bus-0025/driver ]]; }
 
@@ -45,7 +45,7 @@ while :; do
   if vbus_present; then
     sw=$(rd 0x93)
     if [[ -n $sw && $sw != 0x09 ]]; then
-      omamobile-i2c "$bus" $tcpc 0x93 0x09
+      i2cset -f -y "$bus" $tcpc 0x93 0x09
       now=$(rd 0x93)
       if [[ $now == 0x09 ]]; then
         log "VBUS present, USBSW_CTRL $sw: closed the data switch"

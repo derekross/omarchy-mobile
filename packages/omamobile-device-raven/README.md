@@ -9,7 +9,7 @@ the counterpart of `omamobile-device-cheetah`. Bring-up and results:
 | --- | --- |
 | Slot B marked successful after every boot, so ABL stops falling back to slot A | `omamobile-boot-success` (+ `.service`, enabled), `omamobile-bootctl` |
 | `reboot-to <reason>` (ABL reads the reason from the MAX77759's nvmem) | `reboot-to` |
-| USB that survives a replug: closes the MAX77759 USB2 data switch while VBUS is present, until a Type-C driver owns the chip | `omamobile-usb-rescue` (+ `.service`, enabled), `omamobile-i2c` |
+| USB that survives a replug: closes the MAX77759 USB2 data switch while VBUS is present, until a Type-C driver owns the chip | `omamobile-usb-rescue` (+ `.service`, enabled), `i2cget`/`i2cset` (i2c-tools) |
 | Module policy: no MAX77759 charger, TCPC or GPIO driver; DSIM DCS allowed; btbcm streams the Bluetooth patch | `modprobe.d/omamobile-raven.conf` |
 | On-demand CPU frequency (safe once the thermal zones throttle) | `tmpfiles.d/omamobile-raven-cpufreq.conf` |
 | The user may switch the panel off (`bl_power`) and inhibit the touchscreen, for Omarchy's display off | `udev/rules.d/20-omamobile-display.rules` |

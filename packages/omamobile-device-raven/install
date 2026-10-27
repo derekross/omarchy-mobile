@@ -9,7 +9,7 @@ destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
 build=${2:-build}
 [[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
 for file in bin/*; do install -Dm755 "$file" "$destination/usr/bin/${file##*/}"; done
-for tool in omamobile-bootctl reboot-to omamobile-i2c; do install -Dm755 "$build/$tool" "$destination/usr/bin/$tool"; done
+for tool in omamobile-bootctl reboot-to; do install -Dm755 "$build/$tool" "$destination/usr/bin/$tool"; done
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/lib/${file#vendor/}"
 done < <(find vendor -type f -print0)

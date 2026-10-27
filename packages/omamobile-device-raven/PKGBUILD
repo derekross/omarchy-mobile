@@ -6,7 +6,7 @@ pkgdesc="Omarchy Mobile support for the Google Pixel 6 Pro (raven): boot-slot su
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT Apache-2.0)
-depends=(bash iproute2 jq systemd util-linux)
+depends=(bash iproute2 jq systemd util-linux i2c-tools)
 # The modem's drivers stay blacklisted until its runtime loads them
 provides=(omamobile-modem-policy)
 # The [omamobile] entry in pacman.conf and its mirror list, as cheetah's

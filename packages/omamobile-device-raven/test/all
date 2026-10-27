@@ -33,7 +33,7 @@ cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
 pass "bootctl dry run plans one byte and writes nothing"
 
 ./install "$tmp/root" "$tmp/build"
-for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-i2c usr/bin/omamobile-boot-success \
+for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success \
          usr/bin/omamobile-usb-rescue usr/bin/omamobile-wait-bluetooth \
          usr/bin/omamobile-setup-system usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
@@ -91,7 +91,7 @@ for m in max77759_charger tcpci_maxim gpio_max77759; do
 done
 grep -qE '^(options|install) .*max77759_charger' vendor/modprobe.d/omamobile-raven.conf && fail "nothing loads the charger"
 # usb-rescue's only write: USBSW_CTRL (0x93) back to 0x09
-writes=$(grep -E 'omamobile-i2c "\$bus" \$tcpc 0x[0-9a-f]+ 0x' bin/omamobile-usb-rescue || true)
+writes=$(grep -E 'i2cset .*"\$bus" \$tcpc 0x[0-9a-f]+ 0x' bin/omamobile-usb-rescue || true)
 [[ $writes == *'0x93 0x09' && $(wc -l <<<"$writes") == 1 ]] || fail "usb-rescue writes only USBSW_CTRL = 0x09"
 pass "the charger and the TCPC stay off; usb-rescue writes one register"
 for m in pcie_gs201_cp cpif shm_ipc boot_device_spi; do
