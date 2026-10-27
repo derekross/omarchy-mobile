@@ -3,6 +3,14 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-27: Wi-Fi parked
+
+- **The chip's boot ROM stops at its authentication stage,** `pbl_auth.c`, after reading only the ELF header and the hash segment of an image byte-identical to stock's. Every host-side difference two testers could act on was tried, one change per boot, and all were negative. The write-up, the ruled-out list, both stop conditions and what is left are in [WIFI-PLAN.md](WIFI-PLAN.md). The maintainer agreed on #36 that parking here is the right call.
+- **Stock-side read done.** `WLAN_SECURE_BOOTN` (`0x1E22B24`), the register that stage consults, reads `0x0` under stock's `cnss2` in the link-up pre-BHI state and in mission mode (six reads), not the `0x11111111` seen on mainline after the stall. Two more registers differ: `PBL_WLAN_BOOT_CFG` `0x200` and `TLMM_PBL_BOOTSTRAP_STATUS` `0x40` under stock, 0 on mainline. Read with stock Android restored to slot A for an afternoon (Magisk root, `userdata` backed up first and Arch put back the same evening). None of the windowed reads hung on stock.
+- **Two stop conditions.** No windowed chip register reads before `mhi_sync_power_up()` (that read hung HSI2 and rebooted the other tester's phone), and no userspace reads of the HSI2 SysMMU or iATU blocks (`devmem` of `0x145c000c` reset this one). WIFI-PLAN.md section 6.
+- **State:** the published kernel has no PCIe node for lynx and the Wi-Fi branch stays local; on the test phone `pcie_gs201` and `ath11k_pci` stay blacklisted. Bluetooth, on the same chip, waits on the same question.
+- **Reinstalling Arch after the stock afternoon** needed `install-phone --bootloader-slots-match lynx-17.0-15199429` again. The root image carried package 0.1.0, without the marker, so the slot was marked successful once by hand with 0.2.0's `omamobile-boot-success` and its unit enabled. The PMIC RTC came back with stock's date; `hwclock -w` after setting the clock fixed it.
+
 ## 2026-10-24: Wi-Fi bring-up (not working yet)
 
 - **The Wi-Fi chip is a Qualcomm QCA6490 (`17cb:1103`, subsystem `17cb:0108`) on PCIe channel 1,** not the Broadcom part in the Pixel 7 Pro. Linux drives it as WCN6855 hw2.1 through ath11k. Bluetooth is on the same chip.
@@ -23,7 +31,7 @@ Findings from real hardware, newest first. Tracking issue: #36.
   So the boot ROM reads the ELF header and the hash table's header, then stalls before it checks a single hash. The hash segment holds plain SHA-256 hashes with no signature. The Pixel's own `amss20.bin` stalls at the same stage, so the image is not the cause.
 - **Ruled out:** firmware signing, cache coherency, power-up timing (also tried after several minutes powered off), the S2MPU, SysMMU bypass, Relaxed Ordering and No Snoop, read request size, ath11k's SOC global reset, the QFPROM shutdown bit (`0x1F8031C` reads `0x62`), and holding BT_EN high (stock raises it about 1 s before WLAN_EN).
 - **Stock (dmesg from 2026-10-23):** the BHI load finishes in 57 ms. Stock runs with the SysMMU translating (image buffers near `0xfa880000`, in `wifi_region`), a 36-bit DMA mask, PCIe I/A on, L1.2 on, and three MSI vectors for MHI. Here the SysMMU is bypassed (control register `0x24`), the device has no IOMMU group, and DMA uses physical addresses.
-- **Next:** run with the SysMMU translating as stock does, then with I/A on, then check the chip's supplies. The PCIe PHY rails are S2MPG13 `LDO3S` and `LDO18S`, both always-on in the stock tree.
+- **Next, as of this entry:** run with the SysMMU translating as stock does, then with I/A on, then check the chip's supplies. The PCIe PHY rails are S2MPG13 `LDO3S` and `LDO18S`, both always-on in the stock tree. (Superseded: see the 2026-10-27 entry and [WIFI-PLAN.md](WIFI-PLAN.md).)
 - **Firmware on the phone** lives in `/usr/lib/firmware/updates/ath11k/WCN6855/hw2.1`: linux-firmware `amss.bin` and `m3.bin`, plus the phone's own calibration as `board.bin`. Nothing from the vendor image goes into this repo.
 - **`devmem` here takes only `ADDRESS [VALUE]`.** A second argument is written as a value, not read as a width. Reading SysMMU offset `0x145c000c` crashed the phone.
 
