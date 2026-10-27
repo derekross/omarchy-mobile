@@ -2,7 +2,7 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
-## 2026-10-27: the muted speakers were DRE at gain 10, not sleep; the earpiece is the top speaker
+## 2026-10-27: the muted speakers were the open-loop coil estimate, not sleep; the static was the boost converter; the earpiece is the top speaker
 
 - **The speaker watchdog had muted media at every boot since 10-26 22:28**
   ("Bottom: coil temperature jumped 14-27 C in this stream" at stage media
@@ -21,9 +21,10 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   the shell's duck at unlock), while the firmware's own attenuation stays
   at full scale and the top amplifier moves by 0.1 C. At analog 10 the
   firmware does not sense the coil, so this is an open-loop estimate the
-  levels do not depend on (AUDIO-PLAN section 4). omamobile-audio 0.5.2:
-  DRE on at analog 17 only, and the watchdog's 5 C jump rule only above
-  analog 10; the 80 C backstop and every other rule stay. AOC-PLAN C9j.
+  levels do not depend on (AUDIO-PLAN section 4). omamobile-audio 0.5.3:
+  the watchdog's 5 C jump rule only above the stage's analog ceiling of
+  10 (stage c9); the 80 C backstop and every other rule stay; DRE stays
+  on. AOC-PLAN C9j.
 - **Media does not play through the wrong speaker.** The registers, the
   UCM and listening tests agree with stock: left in TDM slot 0 to the top
   amplifier, right in slot 1 to the bottom. The earpiece is the top
@@ -90,6 +91,7 @@ the `suspend-tier1` branch. SUSPEND-PLAN P0-P5 has the step-by-step record.
     whether the DSP, its calibration and the TDM back end come back.
   - The speakers also hissed briefly when the amplifiers powered up during
     the cold boot; whether that is new hasn't been checked.
+  - **Correction (2026-10-27):** not sleep, and a power-off did not clear it; the trip repeated 2.5 min into a cold boot. It was the watchdog's jump rule on the bottom amplifier's open-loop coil estimate; see the 2026-10-27 entry and AOC-PLAN C9j.
 - **"Quiet and thin" is still the stage-media cap**, about 17 dB below
   stock, and both amplifiers report `vmon low 1` at analog gain 10. The
   owner hears it as the call speaker carrying the sound. The next speaker

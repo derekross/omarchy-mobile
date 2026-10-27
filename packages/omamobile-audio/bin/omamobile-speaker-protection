@@ -368,6 +368,7 @@ start() {
   # the converter on. The parameter is read when the amplifiers probe, so it
   # is set before the load or the rebind below.
   boost=${OMAMOBILE_SPK_BOOST:-}
+  [[ -z $boost || $boost == 0 || $boost == 1 ]] || fail "OMAMOBILE_SPK_BOOST=$boost: 1 (on), 0 (off) or unset"
   if [[ -z $boost ]]; then
     boost=0
     for p in "${AMPS[@]}"; do (($(level "$p" ANALOG) > 10)) && boost=1; done

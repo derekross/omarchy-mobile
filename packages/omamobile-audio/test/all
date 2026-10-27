@@ -225,6 +225,7 @@ r0=$r; r=$tmp/run.media; [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en
 r=$tmp/run.ok; [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] || fail "stage c8 (analog 6/10): boost_en N"; r=$r0
 prep=(OMAMOBILE_SPK_BOOST=1); run boost-forced
 ((rc == 0)) && [[ $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y ]] || fail "OMAMOBILE_SPK_BOOST=1 keeps the boost on"
+prep=(OMAMOBILE_SPK_BOOST=yes); run boost-bad; ((rc != 0)) && grep -c 'OMAMOBILE_SPK_BOOST=yes' "$r/out" >/dev/null || fail "OMAMOBILE_SPK_BOOST=yes is refused"
 prep=(OMAMOBILE_SYSMODULE=$tmp/nomodule); run boost-noparam
 ((rc == 0)) && grep -c '^snd_soc_cs35l41 boost_en=N$' "$r/modprobe.log" >/dev/null && [[ $(cat "$r/run/speaker-protection") == *"kernel without boost_en"* ]] || { cat "$r/out" >&2; fail "a kernel without boost_en: loaded with the parameter, status says so, start passes"; }
 pass "boost converter: off at analog 10 and below, on when forced, a kernel without the parameter passes (C9j)"

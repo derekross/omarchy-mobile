@@ -7,14 +7,18 @@ IPC and character devices), C6 (sensors at every boot, auto-rotate), C7 (the
 AoC sound card: both speakers with stock's channel map, the microphones), C8
 (speaker protection, UCM, PipeWire) and C8f (the amplifiers across idle)
 passed; C9a-C9d-6 ran. The everyday level is stage `media` (737/10 on both
-amplifiers, media delta and noise gate on, **DRE off below analog 17 since
-C9j**), about 17 dB below stock; stock's 817/17 still trips the coil
-temperature at once (C9d-3..6). **C9j (2026-10-27):** the watchdog had been
-muting media at 737/10 because the bottom amplifier's protection model
-over-estimates its output by about 20 dB with DRE on at that gain; DRE off
-restores the 10-12 numbers (omamobile-audio 0.5.2). The routing was
-verified again on the way: the earpiece is the top speaker, and it plays
-the full left channel as on stock.
+amplifiers, media delta, DRE and noise gate on, **the boost converter off
+since C9j**), about 17 dB below stock; stock's 817/17 still trips the coil
+temperature at once (C9d-3..6). **C9j (2026-10-27, omamobile-audio
+0.5.3):** the watchdog had been muting media at 737/10 on the bottom
+amplifier's open-loop coil estimate, which jumps on any level drop; the
+5 C jump rule now applies above the stage's analog ceiling of 10 only. The
+"static" under music was the amplifiers' boost converter in its light-load
+regime; with it off (the cs35l41 `boost_en` bring-up parameter, "ASoC:
+cs35l41: bring-up option to run without the boost converter") both
+speakers are 8-11 dB louder and clean. The routing was verified again on
+the way: the earpiece is the top speaker, and it plays the full left
+channel as on stock.
 **Next (2026-10-13):** the speakers sound thin; the ranked plan and three
 runbooks follow C9d-6: C9g (omamobile-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
@@ -2010,9 +2014,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      reference. Stock only runs DRE at analog gain 17 (`mixer_paths.xml`
      init: "DRE DRE Switch" 1 with "AMP PCM Gain" 17); the bottom's tune
      evidently assumes that gain when DRE moves gain between the stages,
-     the top's does not. **omamobile-audio 0.5.2: DRE on at analog 17
-     only, off below, `OMAMOBILE_SPK_DRE=1|0` forces it;** `status` shows
-     it. Why the 10-14..10-19 streams passed the 5 C rule: they ran at the
+     the top's does not. (An interim, unreleased 0.5.2 made DRE stage-dependent on this
+     reading; the afternoon showed DRE was only the first of many triggers
+     of the same estimate, and 0.5.3 keeps DRE on and moves the jump rule
+     to stage c9 instead; see below.) `status` shows DRE. Why the 10-14..10-19 streams passed the 5 C rule: they ran at the
      sink's 60 %, and at low levels the model stays calm (sink 0.10 above).
    - **Open:** (1) one DRE-off right-only run (the first toggle, 09:38:16)
      tripped at the stream's last second with "25.0 -> 36.4" while the
@@ -2045,20 +2050,22 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      DT differs from ours in boost peak 3.5 A (ours 2.5 A, as stock's
      speaker path) and hibernate; stock's only bottom tune is the one we
      load (`R-cs35l41-dsp1-spk-prot.bin`, `cirrus,tuning-has-prefix`).
-   - **Policy (omamobile-audio 0.5.2):** at analog 10 or below the
+   - **Policy (omamobile-audio 0.5.3):** at analog 10 or below the
      firmware does not sense the coil (vmon low 1), its open-loop
      estimate is unreliable, the firmware does not act on it, and the
      levels are inside AUDIO-PLAN section 4's no-protection limits, so the
-     watchdog's 5 C jump rule now applies only above analog 10 (stage c9,
-     where the C9d-3..6 runaway it was written for happens);
+     watchdog's 5 C jump rule now applies only when the stage's analog
+     ceiling is above 10 (stage c9, where the C9d-3..6 runaway it was
+     written for happens; the boost decision below follows the configured
+     levels instead);
      `OMAMOBILE_SPK_TEMP_JUMP` sets it in any stage. The 80 C backstop,
      the heartbeat, the level, bypass, runtime-PM and kernel-log rules
-     stay in every stage. With 0.5.2 installed: the stepped music, a
+     stay in every stage. With 0.5.3 installed: the stepped music, a
      volume step and 30 s of music at sink 1.0 played through (the
      bottom's estimate peaked at 43 C, no mute).
-   - **Phone left (evening):** kernel 00591 (= 00588 + the `wkfet_amp`,
-     `boost_en` and `bst_ctl` bring-up parameters, branch
-     `omamobile-test-wkfet`; the same three commits on
+   - **Phone left (evening):** `7.3.0-rc6-omamobile-push1-00591-gebc0cd6858ee`
+     (the 00588 integration line plus the three `ASoC: cs35l41: bring-up
+     option …` commits, branch `omamobile-test-wkfet`; the same three on
      `omamobile-audio-amp`), omamobile-audio 0.5.3, speaker.conf at the
      package defaults (boost off, DRE on, jump rule off at media), sink at
      1.0; `dsp_rx6_classh` N, `wkfet_amp` Y, `bst_ctl` 0.
@@ -2078,12 +2085,18 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      Ruled out one by one: DRE, the hardware noise gate, the DSP, PipeWire's
      float format (S32 forced: no change; PipeWire's volumes all 1.0), bit
      errors on the link (a 20 kHz tone on either slot raises the audible
-     floor by nothing), the weak-FET output mode (kernel 00589,
-     `wkfet_amp=N`: no change), brown-out prevention (VPBR/VBBR status 0),
+     floor by nothing), the weak-FET output mode ("ASoC: cs35l41:
+     bring-up option to switch the weak-FET output mode off",
+     `wkfet_amp=N`, PWR_CTRL3 read 0x00000010 during playback: no change), brown-out prevention (VPBR/VBBR status 0),
      the class-H input (`dsp_rx6_classh=Y`, verified 0x21 at 0x4c54), VP
      (stock: VSYS directly), the serial port and PLL (6.144 MHz, dsp_a,
-     as Google's driver sets them). **Kernel 00590, `boost_en=N`
-     (PWR_CTRL2 BST_EN = 0, the output stage from VP): the same inputs
+     as Google's driver sets them). **With "ASoC: cs35l41: bring-up option to
+     run without the boost converter" (`boost_en=N`: PWR_CTRL2 BST_EN = 0,
+     the output stage from VP; `7.3.0-rc6-omamobile-push1-00590-g317c80785330`,
+     PWR_CTRL2 read 0x3701 and PWR_CTRL3 0x01000010 on both amplifiers
+     during playback, against 0x3721 with the converter on; rollback: the
+     parameter back to Y and `systemctl restart
+     omamobile-speaker-protection`, which rebinds): the same inputs
      come out 8-11 dB louder and clean: top at -10 dBFS 1.0 %, bottom at
      -26 dBFS 0.5 %, at -20 dBFS 12 %, with DRE on 4 %.** At hot content
      (-4 dBFS) both compress cleanly (the firmware's limiter). The
@@ -2094,10 +2107,11 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      path, coefficients, DCM, class-H 0x000b0405, WKFET 0x111, VCTRL1 0 as
      the chip default, VCTRL2 class-H) match Google's driver, which also
      never writes the boost target unless the DT gives one (stock's does
-     not). The bottom's remaining 9-11 % from -10 dBFS up with the
-     converter off was the next question. **A fixed boost target (kernel
-     00591, `bst_ctl`, BST_CTL_SEL = register; AUDIO-PLAN section 4's
-     reserved register, written with the owner's go and restored after)
+     not). The bottom's remaining 6-11 % from -10 dBFS up with the
+     converter off was the next question. **A fixed boost target ("ASoC:
+     cs35l41: bring-up option for a fixed boost target", `bst_ctl`,
+     BST_CTL_SEL = register; AUDIO-PLAN section 4's reserved register,
+     written with the owner's go and restored after; its row now says so)
      does not beat the converter off:** at 8.0 V the bottom reads 1.1 % at
      -20 dBFS and 6 % at -10 (better), the top 4.4 % at -10 (worse than
      1.1 %); at 5.7 V the top falls apart (76 % at -10 dBFS) and the bottom
@@ -2126,10 +2140,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      designed; both after the amplifiers had been rebound many times that
      hour. PipeWire re-applies the UCM's 22 dB mic gain after a speaker
      service restart (the card re-probes), which bit two measurements.
-   - **Still open:** the bottom's residual distortion with the converter
-     off; whether a fixed boost target keeps the converter usable at this
-     level (and what gain 17 needs: stage c9 keeps the converter on); why
-     both tunes' open-loop estimates misbehave (the bottom on level drops
+   - **Still open:** the bottom's residual 6-11 % distortion from -10 dBFS
+     up with the converter off (a fixed target did not remove it, above);
+     what gain 17 needs (stage c9 keeps the converter on); why both tunes'
+     open-loop estimates misbehave (the bottom on level drops
      at gain 10, both at gain 17 from the first sample, C9d-5/6). The
      balance by ear and the cover test are the listener's.
 
