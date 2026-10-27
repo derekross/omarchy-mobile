@@ -7,8 +7,14 @@ IPC and character devices), C6 (sensors at every boot, auto-rotate), C7 (the
 AoC sound card: both speakers with stock's channel map, the microphones), C8
 (speaker protection, UCM, PipeWire) and C8f (the amplifiers across idle)
 passed; C9a-C9d-6 ran. The everyday level is stage `media` (737/10 on both
-amplifiers, media delta, DRE and noise gate on), about 17 dB below stock;
-stock's 817/17 still trips the coil temperature at once (C9d-3..6).
+amplifiers, media delta and noise gate on, **DRE off below analog 17 since
+C9j**), about 17 dB below stock; stock's 817/17 still trips the coil
+temperature at once (C9d-3..6). **C9j (2026-10-27):** the watchdog had been
+muting media at 737/10 because the bottom amplifier's protection model
+over-estimates its output by about 20 dB with DRE on at that gain; DRE off
+restores the 10-12 numbers (omamobile-audio 0.5.2). The routing was
+verified again on the way: the earpiece is the top speaker, and it plays
+the full left channel as on stock.
 **Next (2026-10-13):** the speakers sound thin; the ranked plan and three
 runbooks follow C9d-6: C9g (omamobile-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
@@ -1941,6 +1947,85 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    and "AoC Speaker Mixer ASP Mode". From our analysis of the stock HAL
    first (the message format and order), then read-only probes of the
    AoC's replies; nothing is sent to the AoC before that is understood.
+
+   **C9j: the muted speakers, the "wrong speaker" question and DRE
+   (2026-10-27, 7.3.0-rc6-omamobile-push1-00588-gcd72ae58ee47,
+   omamobile-audio 0.4.1 on the phone, stage media 737/10, PipeWire sink at
+   1.0 unless stated; logs `logs/c9j-*-20261027.txt` on the laptop).**
+   The listener found media very quiet, "like the call speaker", and asked
+   whether media plays through the wrong speaker. Since 2026-10-26 22:28
+   the watchdog had muted both amplifiers at the first stream of every boot
+   ("Bottom: coil temperature jumped 14-27 C in this stream"), and nothing
+   in the UI shows a mute; the 10-26 note that a power-off cleared it was
+   wrong (the trip repeated 2.5 min into the cold boot, with no suspend in
+   it).
+   - **Routing is right.** The idle register snapshot of both amplifiers
+     (bounded below 0x10100) differs only in the TDM slot registers, as
+     stock: top RX slot 0 / TX 0,2,4,6, bottom RX slot 1 / TX 1,3,5,7,
+     24-bit words, DSP RX1/RX2 from each amplifier's own ASPRX1. Left-only
+     and right-only multitones came from the top and the bottom speaker
+     respectively. The earpiece *is* the top speaker: it carries the full
+     left channel at the same gain as the bottom one, on stock too; stock
+     adds 17 dB of gain, Waves processing on the AoC and a proximity mute.
+     With the sink at 60 % (cubic, about -13 dB) on top of the stage cap,
+     media was about 30 dB under stock's maximum.
+   - **The trip reproduces on the reference burst and is the bottom
+     amplifier's protection model, not the signal.** `mt20` (stereo,
+     -20 dBFS, the C9d-2 step-2 signal): the bottom's CSPL_TEMPERATURE
+     went 25.00 -> 30.1 C within the first second (top 25.08), the
+     watchdog muted at 5.1 C; on 10-12 the same burst moved the bottom by
+     0.06 C. Left-only: the bottom stays at 25.00 (max excursion 0.027 mm),
+     the top rises 0.17 C. Right-only: the bottom jumps to 31 C and trips.
+     Both DSPs' RX sources swapped (top DSP <- ASPRX2 = slot 1, bottom DSP
+     <- ASPRX2 = slot 0) and right-only again: the **top's model on the
+     right channel's content rises 0.17 C, as on the left**, the bottom on
+     silence stays flat. The bottom's model on slot 0's content (left-only
+     with the swap) climbs the same way (36.7 C after 6 s). Right-only at
+     sink 0.10: the bottom stays at 25.01 C. So the bottom's model
+     over-estimates its output by roughly 20 dB on any content above a
+     low level, with the same character as the gain-17 runaway both
+     amplifiers show at 817/17 (C9d-5/6); the top's model is fine at
+     737/10. Its BDLOG_MAX_EXC sits at the log's ceiling (0x3fffe,
+     0.5000 mm) from the first second, DRE on or off; the top's reads
+     0.3171 mm on the same content.
+   - **What did not matter:** both amplifiers' DSP controls read the same
+     apart from CAL_R, TUNING_ID (top 0x180000, bottom 0x141000) and the
+     logs; the firmware files, the media delta files, speaker.conf and the
+     calibration (DSP = persist) are unchanged since 10-13; no audio
+     package changed since 10-13 (omamobile-audio 0.4.1 on the phone since
+     10-13 19:34); the kernel went 00558 -> 00588 between the last stream
+     that passed the 5 C rule (10-19 13:10) and the trips, with no commit
+     in sound/ or firmware; the S2MPG12 LDO driver (00561) registered 28
+     LDOs with no users and disabled none (`regulator_summary`,
+     "disabling" only for `vddio_cam`); the hardware noise gate, the media
+     delta (applied mid-stream in a clean run) and
+     `OMAMOBILE_SPK_CAL_ORDER=stock` changed nothing.
+   - **DRE is the difference.** `OMAMOBILE_SPK_DRE=0` (the C9d-2
+     configuration of 10-12; DRE has been on by default since 0.3.2 /
+     C9d-5): mt20 top +0.21 C / bottom +0.15 C, mt10 top +0.49 / bottom
+     +0.21, right-only +0.13, and 30 s of music at sink 1.0 top +0.47 /
+     bottom +0.25, no trip. With DRE on, the same right-only burst: bottom
+     +6.4, +5.4, +5.1 C within a second. On 10-12 (DRE off) mt20 read top
+     +0.12 / bottom +0.06 and mt10 +0.48 / +0.14, so DRE off restores the
+     reference. Stock only runs DRE at analog gain 17 (`mixer_paths.xml`
+     init: "DRE DRE Switch" 1 with "AMP PCM Gain" 17); the bottom's tune
+     evidently assumes that gain when DRE moves gain between the stages,
+     the top's does not. **omamobile-audio 0.5.2: DRE on at analog 17
+     only, off below, `OMAMOBILE_SPK_DRE=1|0` forces it;** `status` shows
+     it. Why the 10-14..10-19 streams passed the 5 C rule: they ran at the
+     sink's 60 %, and at low levels the model stays calm (sink 0.10 above).
+   - **Open:** (1) one DRE-off right-only run (the first toggle, 09:38:16)
+     tripped at the stream's last second with "25.0 -> 36.4" while the
+     monitor had read 25.12 C one second earlier; four later DRE-off
+     right-only runs and the music were clean; keep an eye on readings
+     taken as a stream ends. (2) Whether DRE at gain 17 (stage c9) behaves,
+     which is the C9i session's question anyway. (3) The by-ear items
+     (cover test, left/right balance, C9e) were not judged yet: the
+     listener's call. (4) The 10-26 suspend note and SUSPEND-PLAN's stop
+     condition (PR #66) blame sleep for this; they should point here.
+   - **Phone left:** `OMAMOBILE_SPK_DRE=0` in `/etc/omamobile/speaker.conf`
+     (0.4.1 still installed), the service restarted, sink at 1.0, media
+     plays at 737/10 on both speakers.
 
 ## 0. Top findings
 

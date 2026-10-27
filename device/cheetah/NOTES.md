@@ -2,6 +2,30 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-10-27: the muted speakers were DRE at gain 10, not sleep; the earpiece is the top speaker
+
+- **The speaker watchdog had muted media at every boot since 10-26 22:28**
+  ("Bottom: coil temperature jumped 14-27 C in this stream" at stage media
+  737/10), and nothing in the UI shows a mute. Not sleep: it repeated
+  2.5 min into a cold boot with no suspend, so the 10-26 note that a
+  power-off cleared it was wrong. The cause is the bottom CS35L41's
+  protection model with **DRE on at analog gain 10**: it over-estimates
+  its output by about 20 dB on any signal above a low level (a -20 dBFS
+  multitone took its coil estimate from 25 to 31 C within a second; the
+  top amplifier on the same content, slots swapped, rose 0.17 C). DRE off
+  restores the 10-12 numbers (bottom +0.15 C on that burst, +0.25 C on
+  30 s of music at full sink volume). Stock runs DRE only at gain 17.
+  omamobile-audio 0.5.2 turns DRE on at analog 17 only. AOC-PLAN C9j.
+- **Media does not play through the wrong speaker.** The registers, the
+  UCM and listening tests agree with stock: left in TDM slot 0 to the top
+  amplifier, right in slot 1 to the bottom. The earpiece is the top
+  speaker and carries the full left channel at the same gain as the
+  bottom one; stock adds 17 dB, Waves processing and a proximity mute.
+  With the sink at 60 % on top of the stage cap, media was about 30 dB
+  under stock's maximum, hence "sounds like the call speaker".
+- Kernel 00561's S2MPG12 LDOs: 28 registered, no users, none disabled at
+  the 30 s cleanup (`regulator_summary`); only `vddio_cam` is, as before.
+
 ## 2026-10-26: auto-sleep on the phone; the bottom speaker's protection broke after sleep
 
 Kernel `7.3.0-rc6-omamobile-push1-00588-gcd72ae58ee47` (the test-bt-wifi
