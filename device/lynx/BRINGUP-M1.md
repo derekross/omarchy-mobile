@@ -109,3 +109,43 @@ Stop if the panel goes black and stays black, shows a torn or shifted
 picture, or if the phone resets right after the write. Roll back by
 building and flashing slot B from a descriptor without `SIMPLEFB_TRIG_CON`;
 the phone then boots as at first light, with the bootloader logo on screen.
+
+## devinfo against fastboot (2026-10-27, `g38b5a04d67e0`, device-lynx 0.2.0)
+
+For Derek's #88 question: lynx's bootloader is a different build from the
+Pixel 7 Pro's (it needs AVB footers), so the slot bytes are checked against
+what the bootloader itself reports. devinfo is `/dev/sdd1`, version 3.15 in
+every reading. Only bytes 0x30-0x37 are shown (slot a 0x30-0x33, slot b
+0x34-0x37), from `omamobile-bootctl dump`, next to `fastboot getvar
+slot-successful`, `slot-unbootable` and `slot-retry-count` for the same
+state:
+
+| State | a: bytes | a: fastboot | b: bytes | b: fastboot |
+| --- | --- | --- | --- | --- |
+| B marked by `omamobile-boot-success` | `00 0a 00 00` | successful yes, unbootable no, retry 0 | `02 06 00 00` | successful yes, unbootable no, retry 2 |
+| `fastboot --set-active=b`, before booting | (unchanged) | successful yes, unbootable no, retry 0 | (not readable in fastboot) | successful no, unbootable no, retry 3 |
+| after one unmarked boot (`omamobile-boot-success` masked) | `00 0a 00 00` | successful yes, unbootable no, retry 0 | `02 04 00 00` | successful no, unbootable no, retry 2 |
+
+So byte 0 is the retry count and byte 1 holds the flags, as on the
+Pixel 7 Pro and Pixel 6 Pro: 0x04 active, 0x02 successful, 0x08 what the
+tool calls fastboot-ok (set on slot a only here); no reading had
+unbootable set. Afterwards the unit was unmasked, `fastboot
+--set-active=b` and one boot left slot b at `02 04` with the bootloader's
+retry spent, and the marker wrote 0x35 `04 -> 06`: `02 06 00 00` again.
+
+A forced restart (Volume Down + Power, released too early, so it booted
+slot B rather than stopping in the menu) did not spend a retry on the
+marked slot: `02 06 00 00` before and after, retry 2 in fastboot.
+
+**The first marks were made by hand, outside the storage guard's rules.**
+On 2026-10-24, over SSH from the running Arch system, before the package
+shipped the marker: `/dev/sdd` and `/dev/sdd1` were set writable with
+`blockdev --setrw`, a trap set both back read-only on exit, and the
+Pixel 7 Pro package's `omamobile-bootctl mark-successful /dev/sdd1 b
+--i-understand` (copied to `/tmp`) changed byte 0x35 `04 -> 06` and
+verified the block. On 2026-10-27, after the reinstall from the stock
+afternoon, the root image still carried 0.1.0: 0.2.0's
+`omamobile-boot-success` and `omamobile-bootctl` were copied in over SSH
+and the marker was run once by hand, 0x35 `04 -> 06`, verified (slot b
+`02 04 00 00` before, `02 06 00 00` after). Since then only the packaged
+`omamobile-boot-success` writes devinfo.
