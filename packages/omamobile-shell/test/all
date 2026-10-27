@@ -271,6 +271,27 @@ if command -v node >/dev/null; then
 fi
 pass "home screen wiring"
 
+# Landscape (TOUCH-PLAN 2.4, #85): a page wider than tall shows the layout
+# turned on its side (HomeModel.transposeLayout, tested in test/home-model.js),
+# derived for the view and never saved; the OWL dp comes from the screen's
+# shorter side, the catalog keeps the portrait cell height, and edit mode
+# waits for portrait. test/home-render draws it in the OWL container.
+home=plugins/omamobile.home/Home.qml
+grep -c 'readonly property bool landscape: owlPageWidth > owlPagerHeight' "$home" >/dev/null || fail "the home knows a page wider than tall"
+grep -c 'HomeModel.transposeLayout(layout, userCatalog, { portrait: \[owlShortSide, owlPortraitPagerHeight\], landscape: \[owlPageWidth, owlPagerHeight\] })' "$home" >/dev/null \
+  || fail "the landscape view turns the layout with the pages' sizes"
+grep -c 'OwlPhone.dpFor(landscape ? owlShortSide : owlPageWidth)' "$home" >/dev/null || fail "the OWL dp comes from the shorter side"
+grep -c 'readonly property real owlCellHeight: owlPortraitPagerHeight / Math.max(1, layout.grid.rows)' "$home" >/dev/null || fail "the catalog keeps the portrait cell height"
+grep -c 'editing = !!on && !landscape' "$home" >/dev/null || fail "edit mode waits for portrait"
+if grep -nE 'commit\(.*viewLayout|setText\(.*viewLayout|serialize\(viewLayout' "$home"; then fail "the landscape view is never saved"; fi
+for use in 'model: root.viewLayout.pages.length' 'readonly property int columns: root.viewLayout.grid.columns' 'readonly property var items: root.viewLayout.pages\[index\]'; do
+  grep -c "$use" "$home" >/dev/null || fail "the pages draw the view layout ($use)"
+done
+if [[ -n ${OMAMOBILE_HOME_RENDER:-} ]]; then
+  bash test/home-render "$OMAMOBILE_HOME_RENDER" >/dev/null || fail "home screen render"
+fi
+pass "home screens in landscape"
+
 # The built-ins from omarchy-widgets are the OWL originals now (the
 # omamobile-owl-widgets package): no QML ports are left, each built-in names
 # its store widget, and the guide's MIT notice ships with the shell.

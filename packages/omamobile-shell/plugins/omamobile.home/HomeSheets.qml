@@ -65,6 +65,7 @@ Item {
 
   Rectangle {
     id: panel
+    objectName: "sheetPanel"
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: parent.bottom

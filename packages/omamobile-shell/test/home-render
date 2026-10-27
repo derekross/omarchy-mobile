@@ -1,0 +1,189 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the home screen (omamobile.home) upright and on
+# its side (TOUCH-PLAN 2.4, #85), in a dark and a light Omarchy theme, with
+# checks on the cells' and the OWL widgets' geometry: the real Home.qml,
+# its layer-shell surface a plain Item, over a fixed layout in a throwaway
+# $HOME. The OWL built-ins (today, fetch) run from the store's files with
+# their sources answered from fixtures, so nothing runs a command or
+# reaches the network. Runs inside the OWL conformance container
+# (tests/owl/Dockerfile: Qt, Quickshell, the fonts, the store), never on a
+# desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/home-render /src/logs/home-render
+#
+# test/all runs it when OMAMOBILE_HOME_RENDER names an output directory.
+# OMAMOBILE_HOME_PLUGIN draws another tree's plugin instead (a before
+# picture); its checks then say what was wrong.
+set -euo pipefail
+out=${1:?Usage: home-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=${OMAMOBILE_HOME_PLUGIN:-$here/../plugins/omamobile.home}
+store=${OMAMOBILE_HOME_STORE:-/ref/omarchy-widgets/widgets}
+[[ -d /omarchy-shell && -d /themes ]] || { echo "home-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+[[ -f $store/simonschubert/today/widget.owl && -f $store/simonschubert/fetch/widget.owl ]] || { echo "home-render: needs the widget store at $store" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "home-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 TZ=Europe/Berlin
+
+h=/tmp/home-harness
+rm -rf "$h"; mkdir -p "$h"
+# Omarchy's Commons, Ui and services, with its palette qualified as on the
+# phone (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/home"
+# The surface is a layer-shell window on the phone; here a plain Item that
+# fills the plugin's root. The OWL host is swapped for one that answers
+# from fixtures (the plugin's own property since 0.2.30; a before tree's
+# is made writable the same way).
+sed -i -E \
+  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
+  -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+  -e 's/^  readonly property var owlHost: owlHostObject$/  property var owlHost: owlHostObject/' \
+  "$h/home/Home.qml"
+grep -c '^  Item { anchors.fill: parent$' "$h/home/Home.qml" >/dev/null || { echo "home-render: no PanelWindow to stand in for" >&2; exit 1; }
+cp "$here/home-render.qml" "$h/"
+# The two store widgets, laid out as the omamobile-owl-widgets package ships them.
+for w in today fetch; do install -Dm644 "$store/simonschubert/$w/widget.owl" "$h/store/widgets/simonschubert/$w/widget.owl"; done
+# App icons: three plain tiles, drawn here.
+magick -size 112x112 xc:none -fill '#3584e4' -draw 'roundrectangle 4,4 108,108 26,26' "$h/icon-browser.png"
+magick -size 112x112 xc:none -fill '#e5a50a' -draw 'roundrectangle 4,4 108,108 26,26' "$h/icon-files.png"
+magick -size 112x112 xc:none -fill '#2ec27e' -draw 'roundrectangle 4,4 108,108 26,26' "$h/icon-terminal.png"
+# The widget tool (omamobile-widget init, scan) on an empty widgets folder.
+export OMAMOBILE_SHELL_SHARE=$here/../widgets OMAMOBILE_WIDGET_EXAMPLES=$here/../widgets/examples OMAMOBILE_OWL_STORE=$h/store
+export PATH=$here/../bin:$PATH
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/home-home-$theme
+  rm -rf "$home"; mkdir -p "$home/.local/state/omarchy/current" "$home/.config/omamobile/widgets" "$home/.local/share/applications"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  export OMAMOBILE_WIDGETS_DIR=$home/.config/omamobile/widgets XDG_DATA_HOME=$home/.local/share
+  for a in "chromium|Chromium|browser" "org.gnome.Nautilus|Files|files" "foot|Terminal|terminal"; do
+    IFS='|' read -r id name icon <<<"$a"
+    printf '[Desktop Entry]\nType=Application\nName=%s\nIcon=%s\nExec=true\n' "$name" "$icon" > "$home/.local/share/applications/$id.desktop"
+  done
+  node - "$here" "$h" "$home" "$out" "$theme" > "$h/job-$theme.json" <<'JS'
+const fs = require("fs"), path = require("path")
+const [here, h, home, out, theme] = process.argv.slice(2)
+const C = require(path.join(here, "owl-load.js")).load("compiler.js")
+// 2026-10-13 13:27 in Europe/Berlin, as tests/owl/cases.json.
+const T = 1791890820
+const text = (w) => fs.readFileSync(path.join(h, "store/widgets/simonschubert", w, "widget.owl"), "utf8")
+const today = "owl:simonschubert.today", fetch = "owl:simonschubert.fetch"
+// A 4x6 page like the reference phone's: a clock, the today and fetch
+// built-ins, a battery, two apps; a second page with one app.
+const layout = { version: 1, grid: { columns: 4, rows: 6 }, home: 0, nextId: 20, pages: [
+  { items: [
+    { id: "w1", kind: "widget", type: "clock", x: 0, y: 0, w: 4, h: 2, config: { timeFormat: "", dateFormat: "dddd d MMMM" } },
+    { id: "w2", kind: "widget", type: today, x: 0, y: 2, w: 2, h: 2, config: { useLocation: false, locationText: "", owlState: { city: "Sample Town" } } },
+    { id: "w3", kind: "widget", type: "battery", x: 2, y: 2, w: 2, h: 1, config: {} },
+    { id: "a4", kind: "app", app: "chromium", x: 2, y: 3, w: 1, h: 1 },
+    { id: "a5", kind: "app", app: "org.gnome.Nautilus", x: 3, y: 3, w: 1, h: 1 },
+    { id: "w6", kind: "widget", type: fetch, x: 0, y: 4, w: 4, h: 2, config: { owlState: {} } }
+  ] },
+  { items: [{ id: "a7", kind: "app", app: "foot", x: 0, y: 0, w: 1, h: 1 }] }
+] }
+const approvals = {}
+for (const id of [today, fetch]) approvals[id] = { commands: C.compile(text(id.slice(4).split(".")[1])).commands, devices: [], network: true, at: "2026-10-13T11:27:00.000Z" }
+fs.mkdirSync(path.join(home, ".config/omamobile"), { recursive: true })
+fs.writeFileSync(path.join(home, ".config/omamobile/home.json"), JSON.stringify(layout, null, 1) + "\n")
+fs.writeFileSync(path.join(home, ".config/omamobile/features.json"), JSON.stringify({ owlWidgets: true }) + "\n")
+fs.writeFileSync(path.join(home, ".config/omamobile/widget-approvals.json"), JSON.stringify(approvals, null, 1) + "\n")
+// Made-up data, never a real feed: a wttr.in j1 answer and the phone's facts.
+const hours = (base) => [0, 300, 600, 900, 1200, 1500, 1800, 2100].map((t, i) => ({ time: String(t), tempC: String(base + [0, -1, -1, 2, 5, 6, 3, 1][i]), tempF: String(Math.round((base + [0, -1, -1, 2, 5, 6, 3, 1][i]) * 1.8 + 32)), weatherCode: "116", chanceofrain: "10", FeelsLikeC: String(base), windspeedKmph: "11", uvIndex: "2" }))
+const wttr = {
+  current_condition: [{ temp_C: "14", temp_F: "57", FeelsLikeC: "12", FeelsLikeF: "54", weatherCode: "116", weatherIconUrl: [{ value: "" }], weatherDesc: [{ value: "Partly cloudy" }], humidity: "70", windspeedKmph: "11", windspeedMiles: "7", winddir16Point: "W", uvIndex: "2", precipMM: "0.0", precipInches: "0.0", pressure: "1016", pressureInches: "30", visibility: "10", visibilityMiles: "6" }],
+  nearest_area: [{ areaName: [{ value: "Sample Town" }], country: [{ value: "Example" }], latitude: "52.52", longitude: "13.40" }],
+  weather: ["2026-10-13", "2026-10-14", "2026-10-15"].map((d, i) => ({ date: d, maxtempC: String(16 - i), mintempC: String(9 - i), maxtempF: String(61 - i * 2), mintempF: String(48 - i * 2), avgtempC: "12",
+    astronomy: [{ sunrise: "07:26 AM", sunset: "06:18 PM", moonrise: "03:02 AM", moonset: "05:10 PM", moon_phase: "Waning Crescent", moon_illumination: "40" }], hourly: hours(9 - i) }))
+}
+const widgets = {}
+widgets[today] = { sources: { now: { value: T }, wx: { text: JSON.stringify(wttr) } }, android: {} }
+widgets[fetch] = {
+  sources: { lxCmd: { text: JSON.stringify({ os: "Arch Linux ARM", pkgs: 1234, explicit: 210, shell: "bash 5.3", upgraded: "2026-10-12" }) } },
+  android: {
+    device: { model: "Pixel 7 Pro", maker: "Google", android: null, sdk: null, soc: "gs201" },
+    system: { kernel: "7.3.0-rc6-omamobile", uptime: 183600, memory: { total: 12884901888, used: 5368709120, available: 7516192768 },
+              storage: { total: 128849018880, used: 42949672960, available: 85899345920 }, cpu: { soc: "gs201", maker: "Google", hardware: null, cores: 8, abi: "arm64-v8a", maxMhz: null },
+              display: { width: 1440, height: 3120, hz: 120, dpi: 512 }, build: null, codename: "cheetah", patch: null, locale: null, timezone: null, launcher: "omamobile", theme: null, apps: 0, linux: null },
+    battery: { level: 80, charging: false, status: "discharging", temp: null, voltage: null, health: null, plugged: null, technology: null, cycles: null }
+  }
+}
+const icons = { browser: path.join(h, "icon-browser.png"), files: path.join(h, "icon-files.png"), terminal: path.join(h, "icon-terminal.png") }
+const shot = (name, w, hh, extra) => Object.assign({ name, png: path.join(out, "home-" + name + "-" + theme + ".png"), w, h: hh, page: 0 }, extra || {})
+console.log(JSON.stringify({ time: T, widgets, icons, shots: [
+  shot("portrait-page1", 480, 1040),
+  shot("landscape-page1", 1040, 480),
+  shot("landscape-page2", 1040, 480, { page: 1 }),
+  shot("landscape-hold", 1040, 480, { hold: true }),
+  shot("landscape-sheet", 1040, 480, { sheet: "widgets" }),
+  shot("portrait-sheet", 480, 1040, { sheet: "widgets" })
+] }))
+JS
+  HOME=$home QT_SCALE_FACTOR=3 HOME_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/home-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |owl report|Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |owl report|Error|TypeError|ReferenceError)/\1/' | tee -a "$out/home-render.txt" || true
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import json, re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+# A Qt.callLater on a delegate the pager has since dropped (a page relaid
+# out) is reported as a TypeError in a delayed evaluation: not an error of ours.
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l)
+       and "hyprctl" not in l and "delayed function evaluation" not in l]
+geo = dict((n, json.loads(g)) for n, g in re.findall(r"geometry (\S+) (\{.*\})", text))
+def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
+def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol or a["y"] + a["h"] <= b["y"] + tol or b["y"] + b["h"] <= a["y"] + tol
+ok = not bad and len(geo) == 6
+if len(geo) != 6: print("not ok - %s: %d of 6 shots taken" % (theme, len(geo)))
+for l in bad: print("  " + l[:200])
+def check(name, good, why=""):
+    global ok
+    print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
+    ok = ok and good
+for name, g in geo.items():
+    screen = {"x": 0, "y": 0, "w": g["w"], "h": g["h"]}
+    area = {"x": 0, "y": 44, "w": g["w"], "h": g["h"] - 116}
+    landscape = g["w"] > g["h"]
+    check(name + ": the view knows which way it is", g["landscape"] == landscape and g["grid"] == ({"columns": 6, "rows": 4} if landscape else {"columns": 4, "rows": 6}), json.dumps([g["landscape"], g["grid"]]))
+    cells = g["cells"]
+    # On its side the battery (2x1, turned to 1x2) finds no room on the
+    # first page and joins the app on the second.
+    want = (2 if landscape else 1) if g["page"] == 1 else 5 if landscape else 6
+    check(name + ": %d items on the page" % want, len(cells) == want, "%d: %s" % (len(cells), ", ".join(c["id"] for c in cells)))
+    check(name + ": every item inside the home area", all(inside(c["rect"], area, 1) for c in cells), json.dumps([c["rect"] for c in cells if not inside(c["rect"], area, 1)]))
+    touching = [(a["id"], b["id"]) for i, a in enumerate(cells) for b in cells[i + 1:] if not apart(a["rect"], b["rect"], 1)]
+    check(name + ": no two items overlap", not touching, json.dumps(touching))
+    for c in cells:
+        if not str(c["type"]).startswith("owl:"): continue
+        short = c["type"].split(".")[-1]
+        texts = c["texts"]
+        check(name + ": " + short + " shows its rows", len(texts) >= (4 if short == "today" else 8), "%d text rows" % len(texts))
+        squeezed = [t for t in texts if t["h"] < 8]
+        check(name + ": " + short + " rows have their height", not squeezed, json.dumps(squeezed[:3]))
+        out = [t for t in texts if not inside(t, c["rect"], 2)]
+        check(name + ": " + short + " rows stay on the card", not out, json.dumps(out[:3]))
+        over = [(a["text"], b["text"]) for i, a in enumerate(texts) for b in texts[i + 1:] if not apart(a, b, 1)]
+        check(name + ": " + short + " rows don't land on each other", not over, json.dumps(over[:3]))
+    named = g["named"]
+    if "pageDots" in named: check(name + ": the page dots are on screen", inside(named["pageDots"], screen))
+    if g.get("sheet"): check(name + ": the sheet is on screen", "sheetPanel" in named and inside(named["sheetPanel"], screen, 1), json.dumps(named.get("sheetPanel")))
+    if g.get("hold"): check(name + ": a long press says to turn the phone", "notice" in named and inside(named["notice"], screen), json.dumps(named.get("notice")))
+# One OWL dp whichever way the phone is held: the fetch header's row is the
+# same height upright and on its side.
+def header(name):
+    for c in geo.get(name, {}).get("cells", []):
+        if str(c["type"]).endswith("fetch") and c["texts"]: return c["texts"][0]["h"]
+    return None
+p, l = header("portrait-page1"), header("landscape-page1")
+check("fetch's text is one size in both orientations", p is not None and l is not None and abs(p - l) <= 1, "%s against %s px" % (p, l))
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status
