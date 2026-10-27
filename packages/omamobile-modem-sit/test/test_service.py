@@ -231,6 +231,22 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(self.service.release_unconfirmed)
         self.assertEqual(self.service.live(), [call])
         self.assertTrue(json.loads((self.root/'active.json').read_text()))
+    def run_main_with_channel_closed(self,online):
+        # raven, 2026-10-27: the CP crashed during start-up and sitd died with
+        # a traceback from the SIT read.
+        with patch('sys.argv',['omamobile-sitd']), \
+             patch.object(app_service.paths,'STATE',self.root), \
+             patch.object(app_service.cp,'online',side_effect=[True]+online), \
+             patch.object(app_service,'Sit'), \
+             patch.object(app_service,'database'), \
+             patch.object(app_service,'Service',side_effect=EOFError('SIT channel closed')), \
+             patch.object(app_service.signal,'signal'):
+            app_service.main()
+    def test_a_crashed_cp_ends_the_service_in_one_line(self):
+        with self.assertRaises(SystemExit) as raised: self.run_main_with_channel_closed([False])
+        self.assertIn('the modem went away (SIT channel closed)',str(raised.exception.code))
+    def test_a_closed_channel_with_the_cp_online_still_raises(self):
+        with self.assertRaises(EOFError): self.run_main_with_channel_closed([True])
 
 
 class RefusedAudioTests(unittest.TestCase):
