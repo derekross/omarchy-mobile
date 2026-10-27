@@ -35,6 +35,14 @@ orientation, charging contracts), as cheetah's [USB-C-PLAN](../cheetah/USB-C-PLA
 - [V] `tcpci_maxim` is blacklisted on raven (`omamobile-raven.conf`), so
   no TCPC driver runs; `omamobile-usb-rescue` closes the MAX77759 data
   switch after an unplug.
+- [V] On a wall charger the rescue doesn't change charging (2026-10-27,
+  `gb3d6253b0d61`, logged every 2 s with the cable out): `USBSW_CTRL` read
+  0x09 the whole time, so the rescue never wrote it, and the battery
+  charged at a median of 1.39 A with the rescue running, 1.45 A with it
+  stopped and 1.62 A with it running again (rising as the battery warmed,
+  40 to 45 %, screen on throughout). This charger never held the switch
+  at 0x24, the case the rescue backs off from; that one is untested on
+  raven.
 - [A] With `4d015fb82`, upstream's description should enumerate as a USB 2
   device: the role switch defaults to peripheral and the PHY keeps VBUS
   valid. SuperSpeed may still not train; device mode over USB 2 is enough.
