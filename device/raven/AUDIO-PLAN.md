@@ -1,13 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): AoC, speakers and microphones
 
-Status (2026-10-27): **no sound with the packages in #41.** omamobile-device-raven
-0.1.23 and the PR's omamobile-audio keep speaker protection off on raven
-(its ceilings are cheetah's), so `cs35l41` never loads, and the sound card
-waits for the amplifier codecs: no speakers **and no microphones** ("Without
-the amplifiers" below). The AoC and the sensors still work. The working
-sound below came with speaker protection on, which the older local
-omamobile-audio 0.4.4 still started.
+Status (2026-10-27): **sound works on raven with speaker protection on; the
+packages in #41 leave it off.** With protection on (omamobile-audio 0.4.4,
+stage media): both speakers and the microphones, through raven's own
+protection firmware and tuning files and the phone's factory calibration;
+the AoC and the sensors as well. Not done: raven's own ceilings. The stage
+limits and the loudness filter are cheetah's, and nothing on raven has
+measured the coil at each gain step or run `verify` (cheetah's C8/C9). So
+#41's packages keep protection off, `cs35l41` never loads, and the card
+waits for the amplifier codecs: no speakers **and no microphones** there
+("Without the amplifiers" below). Next, each its own branch: the card and
+microphones without the amplifiers, then raven's ceilings, then speakers on
+by default.
 
 Earlier status (2026-10-15): **Sound works on raven: both speakers (heard), the microphones, at boot from packages** (omamobile-device-raven 0.1.4, omamobile-audio 0.4.4), protection at stage media. R5: the sensors work through the AoC (omamobile-sensors 0.2.0). Next: raven's own speaker tuning. Kernel branch `omamobile-gs101-aoc`
 (the hashes below are from the stacked bring-up branch it was split from):
