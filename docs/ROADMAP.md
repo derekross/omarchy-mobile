@@ -60,7 +60,6 @@ In priority order: the first four make it a phone, the rest make it a good one.
 | **Accessibility** | none phone-specific | Font and display scaling from settings, the screen reader (Orca) with touch exploration, high contrast, larger touch targets in our plugins |
 | **System dialogs, first run** | desktop-shaped | Keyring, polkit and portal dialogs, the screensaver, Omarchy's first run ([NOTES](../device/cheetah/NOTES.md), "Phone UX to-dos") |
 | **Installer** | for developers | Downloadable images and a one-command install for people who don't build from source (§3.8, steps 5-7) |
-| **Data protected by the PIN** | screen lock only | The session logs in by itself and the lock covers it afterwards, so the user's data is already loaded behind the PIN; `userdata` isn't encrypted and the bootloader is unlocked, so anyone with the phone and a cable can read it. Encrypt `userdata` and unlock it with the PIN at boot (3.9) |
 
 ## 3. The plan
 
@@ -161,17 +160,6 @@ The kernel package, the update path for slot B and the installer are designed to
 9. **Second device bring-up as the proof**: a second Pixel (a gs201 sibling first, or a gs101 phone to test the smaller boot image set) built, packaged and installed by the same tools with nothing but its descriptor, DTS, firmware map and device package added. Under way, all community work: the Pixel Fold (felix) boots to its cover screen with its keys and GPU, the Pixel 6 Pro (raven) runs Omarchy on our kernel (its package in review), the Pixel 8 Pro (husky, zuma) boots with USB and SSH and its UFS plan in review, the Pixel 9a (tegu, zumapro) reached first light, the Pixel 7a (lynx) boots to its initramfs, the Pixel 6 (oriole) has its descriptor from a retail phone, and the Pixel 4 (flame, Snapdragon) boots from RAM; board packages now come from each descriptor's `ROOTFS_PACKAGES`, so a non-cheetah image no longer pulls cheetah's.
 
 Alongside every release, **keep linux-omarchy-mobile's branches honest**: publish `omamobile-int` as a tagged snapshot for builders, and run a curation pass that moves what has passed on the phone into the upstream-ready `omamobile` branch (the `omamobile-next` process) and publishes it, so the gap between the two shrinks release by release.
-
-### 3.9 Data at rest: the PIN that protects the data
-
-Today the PIN is a screen lock. SDDM logs the owner in, the session and its apps start, and Omarchy's lock comes up over them (`lock-on-start`), so the desktop can even show for a moment first. `userdata` holds the whole Arch root unencrypted, and the bootloader stays unlocked for our images, so someone with the phone and a USB cable can boot their own system and read it. Omarchy on a laptop avoids this with a disk-encryption password at boot before its autologin; the phone kept the autologin without the encryption. Found on raven, 2026-10-17; cheetah is the same.
-
-The direction (not started):
-
-1. **Encrypt the root on `userdata`** (LUKS2), unlocked in the initramfs before `switch_root`. The initramfs needs a touch PIN pad on the framebuffer (or the panel, before the shell), and the installer sets up the volume.
-2. **A short PIN must not be enough to decrypt offline.** Android rate-limits guesses in the security chip (Titan M2 through Trusty's Weaver). Using that from Linux is research; until then a longer passphrase, or a key that needs both the PIN and something on the phone, is the honest option.
-3. **Then drop the screen-lock-after-autologin step**: the unlock at boot is the PIN, as on Android's first unlock.
-4. **Later, relock the bootloader** with our own AVB key (Pixels allow a custom root of trust), so the phone only boots images we signed. That changes how every update is flashed.
 
 ## 4. How to help
 
