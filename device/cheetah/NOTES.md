@@ -42,6 +42,11 @@ Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map w
   1 %, bottom 0.5-4 % with DRE on). Stock's 817/17 never runs the
   converter in that regime. omamobile-audio 0.5.3 turns it off at analog
   10 and below. AOC-PLAN C9j has the whole elimination.
+- **Streamed music is 10-15 dB under a test tone by its normalisation;** the
+  package filter's limiter drive gives it back (0.5.4: flat, drive 6 dB, the
+  owner's choice). 817/10 without the boost converter is not usable: the
+  output stage runs out of supply near 2 V peak (bottom 82 % THD at
+  -10 dBFS). AOC-PLAN C9j.
 - **Routing TDM_0_TX into an EP capture crashes the AoC** (its watchdog
   fires, the AoC goes offline, every service answers -517 until a reboot).
   The amplifiers' V/I return has no host-readable copy on this card.

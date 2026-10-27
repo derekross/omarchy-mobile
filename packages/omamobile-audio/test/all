@@ -514,7 +514,8 @@ grep -c 'condition = \[ { omamobile.speaker-eq = package } \]' "$conf" >/dev/nul
 grep -c 'flags = \[ nofail \]' "$conf" >/dev/null || fail "filter: PipeWire starts without it if it fails to load"
 grep -c 'node.name = "alsa_output.platform-sound-aoc.HiFi__Speaker__sink"' "$conf" >/dev/null || fail "filter: the speaker sink only"
 grep -c 'api.alsa.card.name = "google,aoc-snd-card"' "$conf" >/dev/null || fail "filter: the Pixel 7 Pro's card only"
-[[ $(grep -c '"Input gain (dB)" = 0.0 "Limit (dB)" = -3.0' "$conf") == 2 ]] || fail "filter: both limiters add no gain, ceiling -3 dBFS"
+[[ $(grep -c '"Input gain (dB)" = 6.0 "Limit (dB)" = -3.0' "$conf") == 2 ]] || fail "filter: both limiters at 6 dB of drive, ceiling -3 dBFS (0.5.4)"
+[[ $(grep -c '"Freq" = 20.0 "Q" = 0.5412' "$conf") == 2 && $(grep -c '"Gain" = 0.0 } }' "$conf") -ge 4 ]] || fail "filter: 20 Hz high-pass, no shelf, no dip by default (0.5.4)"
 python3 - "$conf" <<'PY' || fail "filter: graph links each speaker through its chain to its own limiter, options off by default"
 import re, sys
 s = open(sys.argv[1]).read()
@@ -549,8 +550,8 @@ json.dump(vals, open(sys.argv[2], 'w'))
 PY
 cp "$pwt/state.json" "$pwt/state0.json"
 out=$(eqrun show) || fail "eq: show"
-[[ $out == *"top (left)      hp 100 Hz | bass +4 dB at 400 Hz | dip -2 dB at 3500 Hz"*"trim +0.0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the filter's values"; }
-[[ $out == *"width 1 | swap 0 | bassmono 0 at 500 Hz | harm top 0 bottom 0 below 200 Hz | drive 0/0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the options"; }
+[[ $out == *"top (left)      hp 20 Hz | bass +0 dB at 400 Hz | dip +0 dB at 3500 Hz"*"trim +0.0 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the filter's values"; }
+[[ $out == *"width 1 | swap 0 | bassmono 0 at 500 Hz | harm top 0 bottom 0 below 200 Hz | drive 6/6 dB"* ]] || { echo "$out" >&2; fail "eq: show reads the options"; }
 [[ $out == *"NOT in the path"* ]] || fail "eq: show says when the filter is not linked"
 out=$(eqprep=(FAKE_PW_LINKED=1); eqrun show)
 [[ $out == *"in the path: plays into alsa_output.platform-sound-aoc.HiFi__Speaker__sink; 1 stream link(s)"* ]] || { echo "$out" >&2; fail "eq: show says where the filter plays"; }
@@ -568,12 +569,12 @@ if eqrun orient sideways >/dev/null 2>&1; then fail "eq: orient refuses an unkno
 eqrun preset flat >/dev/null
 [[ $(st hp_l:Freq hp2_r:Freq bass_r:Gain dip_l:Gain treble_r:Gain trim_l:Mult pre_b:Gain\ 3 pre_t:Gain\ 3 lim_t:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_l:Freq=20 hp2_r:Freq=20 bass_r:Gain=0 dip_l:Gain=0 treble_r:Gain=0 trim_l:Mult=1 pre_b:Gain 3=0 pre_t:Gain 3=0 lim_t:Input gain (dB)=0 mtx_b:Gain 1=1" ]] || fail "eq: preset flat (and it leaves the orientation alone)"
 eqrun preset default >/dev/null
-[[ $(st hp_r:Freq bass_l:Gain dip_r:Gain dip_r:Freq lim_b:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_r:Freq=100 bass_l:Gain=4 dip_r:Gain=-2 dip_r:Freq=3500 lim_b:Input gain (dB)=0 mtx_b:Gain 1=1" ]] || fail "eq: preset default is the package file (but the orientation)"
+[[ $(st hp_r:Freq bass_l:Gain dip_r:Gain dip_r:Freq lim_b:Input\ gain\ \(dB\) mtx_b:Gain\ 1) == "hp_r:Freq=20 bass_l:Gain=0 dip_r:Gain=0 dip_r:Freq=3500 lim_b:Input gain (dB)=6 mtx_b:Gain 1=1" ]] || fail "eq: preset default is the package file (but the orientation)"
 grep -c '"sum:' "$pwt/log" >/dev/null && fail "eq: never touches the bass-management sum"
 for bad in bass=9 hp=10 trim_top=1 trim=-3 dip_freq=200 nope=1 limiter:Limit\ \(dB\)=0 drive=7 width=2 swap=0.5 harm=3 xover=100 sum:Gain\ 1=1; do
   if eqrun set "$bad" >/dev/null 2>&1; then fail "eq: refuses $bad"; fi
 done
-[[ $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: a refused change changes nothing"
+[[ $(st bass_l:Gain lim_t:Input\ gain\ \(dB\)) == "bass_l:Gain=0 lim_t:Input gain (dB)=6" ]] || fail "eq: a refused change changes nothing"
 rc=0; eqprep=(FAKE_PW_IGNORE=1); eqrun set bass=2 >/dev/null 2>&1 || rc=$?; eqprep=()
 ((rc == 1)) || fail "eq: says so when the filter does not take a value"
 eqrun set bass=3 trim_bottom=-2 drive=2 width=0.8 --save >/dev/null || fail "eq: --save"
@@ -583,7 +584,7 @@ grep -c 'name = bass_r   label = bq_lowshelf  control = { "Freq" = 400 "Q" = 0.7
   grep -c '"Mult" = 0.794328' "$u" >/dev/null && [[ $(grep -c '"Input gain (dB)" = 2 "Limit (dB)" = -3.0' "$u") == 2 ]] &&
   grep -c 'name = mtx_t    label = mixer        control = { "Gain 1" = 0.9 "Gain 2" = 0.1 }' "$u" >/dev/null &&
   grep -c 'flags = \[ nofail \]' "$u" >/dev/null || { cat "$u" >&2; fail "eq: the saved copy carries the values, the width but not the swap, and keeps the limiters' ceiling"; }
-eqrun reset >/dev/null; [[ ! -e $u && $(st bass_l:Gain) == "bass_l:Gain=4" ]] || fail "eq: reset removes the copy and goes back to the package values"
+eqrun reset >/dev/null; [[ ! -e $u && $(st bass_l:Gain lim_t:Input\ gain\ \(dB\)) == "bass_l:Gain=0 lim_t:Input gain (dB)=6" ]] || fail "eq: reset removes the copy and goes back to the package values"
 pass "speaker filter: input matrix, bass management, harmonics, hp, bass, dip, treble, trim, a limiter per speaker; omamobile-speaker-eq show/set/preset/orient/save/reset within limits"
 
 # the response measurement, on a simulated speaker (a 700 Hz roll-off, a 3.5 kHz peak)

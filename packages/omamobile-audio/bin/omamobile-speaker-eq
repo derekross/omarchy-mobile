@@ -32,13 +32,14 @@ Names (left = top speaker / earpiece, right = bottom loudspeaker):
   harm=G           bass harmonics, both speakers (0-2; 0 = off, the default);
                    harm_top=G, harm_bottom=G; harm_freq=HZ (40-400): the bass
                    below it is turned into harmonics
-  drive=DB         the limiters' input gain (0-6; 0 = only catches peaks):
-                   louder, by holding peaks at -3 dBFS
+  drive=DB         the limiters' input gain (0-6; the default is 6, 0 = only
+                   catches peaks): louder, by holding peaks at -3 dBFS
   NODE:CONTROL=VALUE            any control of the graph, e.g. dip_l:Freq=3000
 The limiters' ceiling (-3 dBFS) is not adjustable here.
 
-Presets: default (the package file's values), flat (everything off but a
-20 Hz high-pass and the limiters: for measuring, and for A/B listening), waves
+Presets: default (the package file's values: since 0.5.4 flat with 6 dB of
+drive), flat (everything off but a 20 Hz high-pass and the limiters at 0 dB:
+for measuring, and for A/B listening), waves
 (the same as flat: for when the AoC's own speaker processing is on, which does
 its own shaping; AOC-TUNING-RESEARCH.md T4). Presets leave width and the
 orientation swap alone.

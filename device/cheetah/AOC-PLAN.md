@@ -2140,6 +2140,26 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      designed; both after the amplifiers had been rebound many times that
      hour. PipeWire re-applies the UCM's 22 dB mic gain after a speaker
      service restart (the card re-probes), which bit two measurements.
+   - **Loudness, the same evening.** The owner heard the test tones as
+     much louder than streamed music: a -3 dBFS multitone is 10-15 dB
+     hotter than music normalised to about -14 LUFS, so the amplifiers
+     were not at fault. The filter is where application streams land
+     (WirePlumber remembers it as their target; plain players take the
+     sink), and its limiter drive is the right lever: flat preset plus
+     6 dB of drive on YouTube Music, "louder" and clean, chosen over the
+     default shelf and dip ("it's definitely louder", "amazing" for the
+     plain path). **omamobile-audio 0.5.4 makes that the default:** 20 Hz
+     high-pass, no shelf, no dip, drive 6 dB. **817/10 without the
+     converter is not usable** (watchdog paused, both amplifiers at 817):
+     bottom -20 dBFS 4.3 % (+9 dB), bottom -10 dBFS 82 % (a hard ceiling
+     near 2 V peak, the output stage out of supply), top -20 dBFS 4.5 %,
+     top -10 dBFS 7.7 % compressed; the open-loop estimates reached 85 C
+     (top) and 58 C (bottom) in four 6 s tones, above the paused
+     watchdog's backstop; restored at once. A second player (`cliamp`)
+     ran alongside YouTube during part of the comparison. Sink-monitor
+     captures (`pw-record --target <sink> -P stream.capture.sink=true`)
+     returned identical data whatever played and are no measurement on
+     this phone; the mic and the ear are.
    - **Still open:** the bottom's residual 6-11 % distortion from -10 dBFS
      up with the converter off (a fixed target did not remove it, above);
      what gain 17 needs (stage c9 keeps the converter on); why both tunes'
