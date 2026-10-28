@@ -66,10 +66,38 @@ unbootable, bit 1 successful, bit 2 active, bit 3 fastboot_ok).
 | one boot after `--set-active=b` (boot 7) | not read | `02 0a 00 00 02 04 00 00` |
 | before the T2 flash (after boots 7 and 8) | B: retry 1, not successful, bootable | not read |
 | after the T2 flash (`--set-active=b`) and two boots (T2, T2b) | not read | `02 0a 00 00 01 04 00 00` |
+| one more boot of slot B (an unplanned reboot), then fastboot | current slot **A**; A: retry 2, successful, bootable; B: retry 0, not successful, bootable | not read |
 
 Every reading agrees with the layout: slot A `02 0a` is retry 2,
 successful, fastboot_ok, as getvar says; slot B counts down from 3 by one
-per boot, ABL's own change, and `--set-active` resets it. Still missing
-for L-36: a getvar and a byte read of the same state with no boot in
-between (the next time the phone is in fastboot, before anything is
-flashed).
+per boot, ABL's own change, and `--set-active` resets it. The last row is
+the next step of the count (1 to 0), and shows ABL's choice once B has no
+retries left: A becomes current, B is not marked unbootable. Still
+missing for L-36: a getvar and a byte read of the same state with no boot
+in between; a byte read needs Linux, so it has to be taken right before a
+planned reboot to fastboot.
+
+## 2026-10-27: Omarchy's power off reboots the phone
+
+"Shut down" in the Omarchy menu, with the USB cable to the laptop
+plugged in, rebooted into slot B instead of powering off (and spent a
+slot B retry). Holding the power key forced it off. Not looked into yet:
+the bootloader may be powering the phone back on because the cable is in.
+Until then, reach fastboot from a forced power off.
+
+## 2026-10-27: modules-push and linux-modules-cleanup
+
+`kernel-modules-hook` (in the root image) enables
+`linux-modules-cleanup.service`, which on every boot moves each
+`/usr/lib/modules/<release>` that is not the running kernel and that no
+package owns into `/usr/lib/modules/.old`. A tree from
+`bin/omamobile modules-push` is owned by no package, so a boot of any
+other kernel before the new one (here, the unplanned reboot above) loses
+it, and the new kernel then boots with no modules. `.old` kept only the
+old release, so the pushed tree was not recoverable from it. Fix used:
+`modules-push` again from the new kernel. Loading the missing modules
+afterwards with `udevadm trigger` raced (ACPM probed before its mailbox,
+`15 channels, 0 usable`, so `sec-pmic-acpm` failed with -ENODEV before
+any PMIC write); a reboot loaded everything in order. To raise with the
+tooling: push right before the reboot, or have `modules-push` warn.
+
