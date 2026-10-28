@@ -3,6 +3,13 @@
 
 Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the first-light record.
 
+## 2026-10-27: boot 6's fallback was a stock boot, and a new backup
+
+When slot B ran out of retries (boot 6, [BRINGUP-M1.md](BRINGUP-M1.md)), ABL booted stock Android on slot A, which went to recovery because its `userdata` is now Arch. The data reset that recovery offers was **declined**: the phone was taken to fastboot with `adb reboot bootloader` and slot B flashed again.
+
+- **Stock recovery wrote to the protected partitions.** Read back over SSH from Linux (read-only, each checked `ro=1` and by `PARTNAME`) and compared against the 2026-10-26 baseline: `modem_a` and `modem_b` match; `efs`, `efs_backup` and `modem_userdata` differ only in their F2FS checkpoint areas, `persist` in its ext4 superblock and journal (it now reads "needs journal recovery"), and `devinfo` in slot B's retry byte and two flag bytes. That is what a mount by recovery leaves, with no sign of data rewritten.
+- **New backup.** All seven were read again and checksum-matched; that copy, kept off the repository with its `SHA256SUMS`, is the baseline from 2026-10-27. Any later stock boot, a fallback included, means another one.
+
 ## 2026-10-26: UFS behind the guard, and a fresh backup
 
 - **UFS enumerates** (4 LUNs, 55 partitions, the same names and numbers as stock) and the initramfs guard leaves only slot B's five boot images and `userdata` writable. Details: [BRINGUP-M1.md](BRINGUP-M1.md), boot 4.

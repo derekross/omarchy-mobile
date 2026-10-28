@@ -43,7 +43,11 @@ Each step: commands, Expect/Pass, Stop, Rollback, risk.
    Stop: no USB device after 3 minutes. Rollback: slot B is not marked
    successful, so after the bootloader's retries the phone falls back to
    slot A by itself; otherwise hold Volume Down + Power about 20 s for
-   fastboot and `fastboot --set-active=a`. Risk: low (slot B only).
+   fastboot and `fastboot --set-active=a`. Slot A is stock, and with Arch
+   on `userdata` it boots to recovery: decline the data reset, go back to
+   fastboot, and take a fresh read-only backup of `persist`, `efs`,
+   `efs_backup`, `modem_userdata`, the modems and `devinfo` from the next
+   Linux boot (NOTES.md, 2026-10-27). Risk: low (slot B only).
 
 3. **Read the scanout address and the trigger (read-only, over SSH).**
    One register per call; DECON0 and DPP0 are powered because the logo is
@@ -232,7 +236,8 @@ Same kernel image; SSH 5.5 s into the boot.
 Boot 6 (the FT3658 driver built in, SPI0 and the touch node) was pushed
 and never answered SSH; ABL fell back to slot A, whose stock Android went
 to recovery (`reboot,recovery`: its `userdata` is now Arch). pstore was
-empty there.
+empty there. The data reset was declined, and a fresh backup was taken
+afterwards (NOTES.md, 2026-10-27).
 
 - `devinfo` slot bytes (0x30-0x37 and the version only, read-only from
   boot 7): version **3.19** (cheetah's verified layout is 3.15); slot A
