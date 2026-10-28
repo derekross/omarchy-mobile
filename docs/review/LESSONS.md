@@ -18,6 +18,22 @@ never change, so reviews can cite them.
 
 ## Safety model (AGENTS.md section 1)
 
+- **L-267. A recovery report that says "marked again" is a `devinfo`
+  question.** On the 9a, marking slot B successful is a `devinfo` write,
+  agreed only through `omamobile-bootctl` with a fresh backup and a full
+  before/after compare. A thread or an AGENTS rule that cites another tool, or
+  one outside the repository (`logs/…py`), is a second writer. *Check:* `git
+  grep` the tool's name, then the device NOTES for the agreed operation and
+  its preconditions. Extends L-36 and L-186. *From:* issue #28 with #125,
+  round 25.
+- **L-261. A safety rule that prescribes a protected-partition write is held
+  to the exact approval on record.** #125 turned the one approved tegu
+  `devinfo` operation (`omamobile-bootctl mark-successful`, with a fresh
+  backup and before/after bytes) into a standing "after every flash" step, run
+  by an unreviewed script. *Check:* for any AGENTS or CONTRIBUTING text that
+  tells people to write `devinfo`, the GPT or `persist`, find the approving
+  review and diff the tool and conditions against it; ask whether writes
+  already made met it. Extends L-2 and L-224. *From:* #125, round 25.
 - **L-223. An installer step that writes the phone runs after the typed
   codename and is listed in the "only these commands" banner.** #111's
   `install-phone` RAM-booted a bootloader copy straight after `getvar`, before
@@ -251,6 +267,23 @@ never change, so reviews can cite them.
 
 ## Shared code and the reference device
 
+- **L-273. A before-merge Pixel 7 Pro run on `omamobile-int` compares the
+  touched file on int with the base first.** Where they differ, the run covers
+  the PR's hunk inside int's code, and the runbook and merge comment say
+  "tested on int + the commit"; where the cherry-pick conflicts, show that the
+  untestable commit is neutral on gs201. Kernel #82's `synaptics_tcm.c` and
+  #71's `net/nfc/core.c` differ between int and the base, and #88's gs-decon
+  commit doesn't apply to int. *Check:* `git rev-parse omamobile-int:<f>
+  github/omamobile:<f>`, then `git merge-tree --merge-base <c>^ omamobile-int
+  <c>`. Extends L-206 and L-45. *From:* kernel #82, #71, #88, round 25.
+- **L-268. A package that installs a hand-built prebuilt publishes a stale
+  binary when only its source changes.** fingerprint 0.1.9 changed the
+  bridge's C source, but the package installs `prebuilt/omamobile-fp-bridge`
+  as it finds it; gnss 0.2.4 builds without the 9a client and says so only in
+  the log. *Check:* for a package PR that touches a prebuilt's source, ask
+  whether the build machine rebuilt the prebuilt, and prefer a test that
+  compares the prebuilt's build ID or date with its source. Extends L-259.
+  *From:* issue #109, round 25.
 - **L-228. A board DT property that only the contributor's board sets counts
   as its match data under CONTRIBUTING §6.2.** It holds when no base DTS,
   cheetah overlay in `DTB_OVERLAYS` or open PR sets it, and the object diff
@@ -448,6 +481,12 @@ never change, so reviews can cite them.
 
 ## Shell and scripts
 
+- **L-264. A udev `SYSTEMD_WANTS` hook fires only when the device first
+  becomes active.** We nearly flagged #113's rule as restarting feedbackd on
+  every `udevadm trigger` change event; systemd.device(5) says change events
+  don't act on `Wants=`. *Check:* read systemd.device(5) before flagging
+  repeat starts; a replay with `--action=add` is the test. *From:* #113, round
+  25 (a near miss).
 - **L-235. An edge-triggered "stop when X" is undone by every other actor
   that restarts the thing.** #99 stops neard polling once on the lit-to-dark
   transition; the sleep hook, its own unblock path and a neard restart all
@@ -498,6 +537,13 @@ never change, so reviews can cite them.
 
 ## Kernel (linux-omarchy-mobile)
 
+- **L-269. A power sequencer keeps a shared supply up only while another of
+  its targets has a consumer.** `pwrseq-qcom-wcn` reference-counts its
+  regulators across the Bluetooth and Wi-Fi targets; with Bluetooth as the
+  only consumer (lynx has no PCIe Wi-Fi node), Bluetooth off still drops the
+  buck. *Check:* read the sequencer's unit dependencies and the core's
+  `enable_count`, then list which targets have a consumer in that board's DT.
+  Corrects L-241's advice; see C-16. *From:* kernel #98, round 25.
 - **L-236. A binding's numeric constraints are checked against the stock
   value of every phone that may use the property, the reference phone
   first.** #95's `multipleOf: 47000` rejects stock cheetah's
@@ -534,7 +580,8 @@ never change, so reviews can cite them.
   Google's driver never drops that pin. *Check:* read each consumer's
   power-off and runtime-PM paths, compare with the vendor driver, and prefer
   the upstream power sequencer (`qcom,wcn6855-pmu`). Extends C-9 and L-67.
-  *From:* kernel #98, round 24.
+  *From:* kernel #98, round 24. *Corrected 2026-10-28:* the sequencer keeps
+  the buck up only while Wi-Fi is also its consumer (L-269, C-16).
 - **L-242. A firmware-naming driver can pick different files for two
   revisions of one chip.** btqca adds a `g` NVM variant for some `soc_id`
   values, so lynx's two revisions load different files; one phone's
@@ -887,6 +934,16 @@ never change, so reviews can cite them.
 
 ## The gates themselves
 
+- **L-271. An AI author address on an early commit of a squash-merged PR lands
+  on main as `Co-authored-by:`,** even after later commits fix the identity,
+  and `tools/pr-check` checks only `Signed-off-by:`. *Check:* `git log
+  --format='%an <%ae>' base..head` on omarchy-mobile PRs; ask for a
+  self-squash or strip the trailer at merge. *From:* #98, round 25.
+- **L-262. An AGENTS or CONTRIBUTING line links only tracked files.** #125
+  linked `docs/HANDOFF.md`, which doesn't exist, and a script under the
+  gitignored `logs/`. *Check:* `git ls-files --error-unmatch <path>` for every
+  path the line names; `tools/pr-check` could do this for both files. *From:*
+  #125, round 25.
 - **L-246. A base build is asked only for targets the base has, with `make
   -k`, and a stopped base build is reported, never hidden.** On kernel #108
   the gate asked the base for a new board's DTB it had no source for; make
@@ -1075,6 +1132,49 @@ never change, so reviews can cite them.
 
 ## Reviews and merging
 
+- **L-278. A re-pushed stack with identical sources is proved once.** Where
+  every PR's tree id equals the old head's, the review is tree ids plus a
+  range-diff per PR, then one gate on a scratch rebase of the top; DTB hashes
+  of old head and rebased head carry the earlier content review over. *From:*
+  the tegu stack, round 25 (12 heads, one message change).
+- **L-277. A promised userspace guard is checked in every open package for
+  that device, other owners' included.** Kernel #90 was accepted on W4HO's
+  promise that `allow_tx` is set only for `google-tg4c`; h4rkl's #74 sets
+  `allow_tx=1` for every panel, and our #74 review missed it (C-18). *Check:*
+  `git grep -n '<option>'` across the open omarchy-mobile PR heads for
+  `packages/omamobile-device-<codename>`. Extends L-219. *From:* kernel #90
+  with #74, round 25.
+- **L-275. Squash-merged stacks always conflict on the package `version` file,
+  and a PR carrying a merged fix's commits can't simply be rebased.** #115
+  carried #107's three commits, which main has as one squash. *Check:*
+  simulate the chain with `git merge-tree --write-tree` and `commit-tree`, one
+  squash after another, then hand over a cherry-pick of only the PR's own
+  commits, verified to reproduce the head's package tree. Extends L-39, L-214
+  and L-255. *From:* #115 and #117, round 25.
+- **L-274. A PR we marked "nothing more needed" is checked push by push from
+  the head our comment named.** Kernel #82 was pushed at 21:43Z without a
+  comment and again at 01:04Z; comparing only the last two heads would skip
+  the one we reviewed. *Check:* list every force-push event since our comment
+  and range-diff each. Extends L-34 and L-166. *From:* kernel #82, round 25.
+- **L-270. An "or keep X and say so" we offer must pass the gates the same
+  review names.** Round 24 on kernel #98 asked for the eight required
+  supplies, which `dtbs_check` enforces, and also offered keeping the fixed
+  regulator, which can't pass CONTRIBUTING's no-new-warnings rule. *Check:*
+  run each alternative in a draft past every blocking point in the same draft
+  and §6's gates. Extends L-229; see C-16. *From:* kernel #98, round 25.
+- **L-265. A bare `#N` links to the repository the comment is in.** W4HO's
+  tables on issue #28 named kernel PRs as `#119` and `#122`, which link to an
+  omarchy-mobile PR and issue. *Check:* write
+  `derekross/linux-omarchy-mobile#N` when a comment names the other
+  repository's PRs, and read cross-repository tables in a thread with that in
+  mind. *From:* issue #28, round 25.
+- **L-263. A squash title that names a package version must agree with the
+  `version` file it lands.** #112 landed as "device-raven 0.1.26" with the
+  file still at 0.1.25, so a publish would reuse a version with new contents
+  (fixed by #126). *Check:* on each squash merge, and on the next PR for that
+  package, compare `git show origin/main:packages/<p>/version` with the last
+  squash subject that touched it. Extends L-12 and L-217. *From:* #112 with
+  #113, round 25.
 - **L-248. A reply that says "pushed" is checked against that PR's own head,
   not the stack's.** #87's reply described fixes that existed only below #90
   and #96; its own branch stayed put, with green CI. *Check:* `git ls-remote
@@ -1290,6 +1390,32 @@ never change, so reviews can cite them.
 
 ## Claims and evidence
 
+- **L-276. Evidence we ask for must exist in the tool we name.** Our #80
+  comment asked for `tools/phone-smoke`'s haptics section; phone-smoke never
+  vibrates or lights the torch and has none. *Check:* `grep -n -i
+  '<subsystem>' tools/phone-smoke`; where it has no section, name a read-only
+  check (probe lines, input or LED class entries). Extends L-31; see C-17.
+  *From:* kernel #80 and #96, round 25.
+- **L-272. A device's notes are checked against what our DT calls a block.**
+  lynx's NOTES and WIFI-PLAN called `0x10840000` "PERIC1, not described", but
+  `gs201.dtsi` has `pinctrl_peric0` there with `gpp16`. *Check:* `git grep
+  '@<addr>'` and the bank label in `<soc>-pinctrl.dtsi` for any controller a
+  plan names. *From:* #98, round 25.
+- **L-266. A plan PR merged mid-thread is checked afterwards for the results
+  that came later.** #88 merged with lynx's WIFI-PLAN as of the 27th, so the
+  `fs_ready` stall reported that night never reached it, and main still calls
+  that boot "next". *Check:* for every thread result after the PR's last push,
+  `git grep` its key strings on main's plan and ask for a follow-up PR for any
+  that are missing. Extends L-34 and L-201. *From:* issue #36 with #88, round
+  25.
+- **L-260. A gotcha that changes recovery behaviour is checked against the
+  author's other open PRs, not only main.** #125 said stock on slot A
+  "reformats" `userdata`; the same author's #100 records that stock stops in
+  recovery and only a chosen factory reset wipes it, which turns the rule from
+  "mark the slot" into "never choose the reset". *Check:* `git grep -i` the
+  claim's key words (recovery, reformat, wipe, fallback) over that author's
+  open PR heads for the device. Extends L-188 and L-191. *From:* #125, round
+  25.
 - **L-256. An "inactive slot" install mode is walked for what a reinstall
   does.** With `OMAMOBILE_SLOT=inactive`, rerunning #111's installer on a
   phone already in Omarchy flashes the stock slot unless `--reflash` is
@@ -1627,3 +1753,18 @@ never change, so reviews can cite them.
   tool's fault, and can't be assumed to be. *Lesson:* no merge advice past a
   red check until the failure is reproduced and its cause named. Extends
   L-30. *From:* kernel #108, 2026-10-28.
+- **C-16 (2026-10-28). Our round 24 review of kernel #98 made two wrong
+  offers.** It said a `qcom,wcn6855-pmu` node "avoids all of this", but the
+  sequencer reference-counts across targets, so with Bluetooth its only
+  consumer the buck still drops (L-269); and it offered "keep the fixed
+  regulator, say so in the message", which can't pass `dtbs_check` against the
+  binding's eight required supplies (L-270). Both withdrawn on the PR. L-241
+  corrected in place. *From:* kernel #98, round 25.
+- **C-17 (2026-10-28). Our 17:53 comment on kernel #80 asked for
+  `tools/phone-smoke`'s haptics section, which doesn't exist.** The #96
+  comment corrected it with read-only probe checks. *Lesson:* L-276. *From:*
+  kernel #80 and #96, round 25.
+- **C-18 (2026-10-28). Our 14:17 review of #74 missed that its
+  `omamobile-tegu-display.conf` sets `gs_dsim_cmd allow_tx=1` for every
+  panel,** against the `google-tg4c`-only guard that kernel #90's acceptance
+  leaned on. *Lesson:* L-277. *From:* kernel #90 with #74, round 25.
