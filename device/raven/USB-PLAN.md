@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): USB
 
-Status (2026-10-28): charging works at stock limits with the temperature guard (section 4, C0-C4 passed; C5 open). USB 2 device mode works (NCM and ACM, SSH at
+Status (2026-10-28): charging works at stock limits with the temperature guard (section 4, C0-C5 passed). USB 2 device mode works (NCM and ACM, SSH at
 172.16.42.1) with a raven-only DT change that makes dwc3 a USB 2
 peripheral and drops `orientation-switch` from the PHY. The PR review of
 the boot glue (derekross/linux-omarchy-mobile#2) asked to keep upstream's
@@ -178,3 +178,8 @@ guard on, 22 degC, `Charging (Fast, health Good)`, float 4450 mV, fast
 charge 1466 mA, input limit 500 mA, and 1345 mA into the battery on the
 wall charger; CNFG_00/04/02/09 0x05/0x2d/0x16/0x13. **Next: C5**, a full
 charge on the wall charger (expect CV, then done at 100 %, not 93 %).
+
+**C5 (2026-10-28, `gdd5e1655ef91`, on the wall charger): passed.** The
+battery reached 100 % (not the 93 % the bootloader's 4.35 V stopped at), at
+4411 mV and 22 degC, the charger then topping off in CV (`DETAILS_01` 0xb2,
+873 mA).
