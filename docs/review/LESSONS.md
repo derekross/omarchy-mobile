@@ -18,6 +18,39 @@ never change, so reviews can cite them.
 
 ## Safety model (AGENTS.md section 1)
 
+- **L-223. An installer step that writes the phone runs after the typed
+  codename and is listed in the "only these commands" banner.** #111's
+  `install-phone` RAM-booted a bootloader copy straight after `getvar`, before
+  the questions and the banner. *Check:* list every command that can write
+  (including ones a helper runs over SSH) and its line relative to the
+  codename prompt; a dry-run test that skips the helper proves nothing about
+  the order. Extends L-2 and L-5. *From:* #111, round 24.
+- **L-224. A policy exception written by the PR that needs it is a finding,
+  however well specified.** #111 added its own CONTRIBUTING §3.1 entry and
+  AGENTS line for a 33-partition firmware copy. *Check:* `git diff base head
+  -- CONTRIBUTING.md AGENTS.md` on every device PR; a new exception goes to the
+  maintainer and out of the PR. Extends L-2 and L-31. *From:* #111, round 24.
+- **L-225. A pinned AVB rollback index is held to the oldest stock any owner
+  runs.** #104 pinned a newer build's index for every cheetah, above the
+  maintainer's slot A; rollback locations are device-wide, and libavb stores
+  any higher non-zero index once a slot is marked successful, which
+  `omamobile-boot-success` does. *Check:* `avbtool info_image` on each
+  owner's stock `boot.img` (or ask for the build) against
+  `AVB_ROLLBACK_INDEX`, `AVB_SECURITY_PATCH` and `OS_PATCH_LEVEL`; prefer the
+  oldest, or 0 where a phone has shown it boots (#74). Extends L-169.
+  *From:* #104, round 24.
+- **L-226. `fastboot-info.txt` syntax isn't fastboot command-line
+  syntax.** Told to follow felix's file exactly, #35 copied `flash
+  --apply-vbmeta vbmeta` into a CLI line that fastboot rejects, mid-way
+  through a slot A write. *Check:* every hand-written `fastboot` line in a
+  runbook uses only options in `fastboot --help`. Extends L-205 and C-13.
+  *From:* #35, round 24.
+- **L-227. `ln -sf` or `mv -f` onto a state path is a delete; in Trusty or
+  calibration code it's a finding.** #101's `ln -sfn` over `persist-ss/0`
+  would remove cheetah's provisioned copy if one existed. *Check:* grep the
+  diff for `ln -sf`, `mv -f`, `rm` and `>` onto the package's state
+  directory, and find who creates those files (`tools/phone-provision`, the
+  plans). Extends L-2. *From:* #101, round 24.
 - **L-1. Shared boot code runs under busybox, not util-linux.** The Pixel
   initramfs has busybox only: `blkid -s LABEL -o value` prints the whole
   `LABEL=… UUID=…` line there, so a label check that works on a device whose
@@ -218,6 +251,56 @@ never change, so reviews can cite them.
 
 ## Shared code and the reference device
 
+- **L-228. A board DT property that only the contributor's board sets counts
+  as its match data under CONTRIBUTING §6.2.** It holds when no base DTS,
+  cheetah overlay in `DTB_OVERLAYS` or open PR sets it, and the object diff
+  shows every new instruction behind the field it fills; for board wiring
+  (#94's REG_ON flip-flop) it's stricter than the compatible. *Check:* `git
+  grep '<property>'` on the base's `arch/` and `device/*/overlays/`, then the
+  per-function object diff. Extends L-206 and L-49. *From:* kernel #94, #95,
+  round 23; confirmed by the maintainer.
+- **L-229. An alternative we offer in a draft is held to CONTRIBUTING like
+  the main request.** Round 22 offered kernel #88 "or keep the shared lookup
+  and I'll run it on my phone"; §6.2 lets a Pixel 7 Pro run stand in only for
+  a deliberate cheetah change with a cheetah reason, and the contributor took
+  the offer. *Check:* every "or, if you prefer, …" against §6.2 before
+  posting; if the rule doesn't cover the case, fix the rule first. Extends
+  L-31. *From:* kernel #88, round 23; confirmed by the maintainer.
+- **L-230. Inserting into the middle of a shared struct or enum changes
+  cheetah's objects outside the touched function.** #62's hook in `struct
+  exynos_pmu_data` shifted later fields by 8 bytes; #101's new
+  `sec_device_type` renumbered every later type. *Check:* read each flagged
+  function's changed instructions (offset-only loads; compares only against
+  values after the insertion), confirm the reference phone's values sit
+  before it, and compare data symbols' bytes and relocations base vs head.
+  Extends L-110, L-111 and L-153. *From:* kernel #62, round 23; kernel #101,
+  round 24.
+- **L-231. A registration that opts out is not a no-op when the core's
+  default is "needed unless everyone opts out".** gs-decon's
+  `pm_vt_switch_required(dev, false)` turns the suspend VT switch off on
+  cheetah, because the PM core switches only while its list is empty or one
+  entry requires it. *Check:* for a new opt-out registration in a shared
+  driver, read the core's aggregate rule and list what else registers on the
+  reference phone. Extends L-206. *From:* kernel #116, round 24.
+- **L-232. Before calling a forked guard's behaviour a defect, diff it
+  against the shared original.** dodge's watcher skips disks with a
+  `/run/ufs-ro` marker, which looked like a gap; `initramfs/init` does the
+  same by design. *Check:* `diff` the fork's function against
+  `initramfs/init` before naming a gap. Extends L-134 and C-1. *From:* #111,
+  round 24 (a near miss).
+- **L-233. A device package's workaround for an Omarchy service is checked
+  against Omarchy's package list before it stays device-local.** #74
+  disables `linux-modules-cleanup` for tegu, but the service comes from
+  `omarchy-base.packages` and is enabled by Omarchy's installer, so it likely
+  runs on every phone. *Check:* grep the unit's package in
+  `/usr/share/omarchy/install/omarchy-base.packages`, `enable-services.sh` and
+  `rootfs/packages.omarchy-skip`, then ask for one read on cheetah. Extends
+  L-11 and L-32. *From:* #74, round 24.
+- **L-234. A shared script that branches on `/proc/device-tree` makes its
+  package test host-dependent.** #117's test passes on CI and the laptop,
+  fails in `makepkg check` on the Pixel 9a it's for, and never runs that
+  branch. *Check:* every new DT read in a package script has an override the
+  test uses, and the test runs each branch. *From:* #117, round 24.
 - **L-8. "Nothing changes for cheetah" is checked by building it.** For any
   change to `bin/omamobile`, `initramfs/`, `rootfs/`, `tools/` or a shared
   package: build cheetah's images with main's tool and the PR's, in separate
@@ -365,6 +448,12 @@ never change, so reviews can cite them.
 
 ## Shell and scripts
 
+- **L-235. An edge-triggered "stop when X" is undone by every other actor
+  that restarts the thing.** #99 stops neard polling once on the lit-to-dark
+  transition; the sleep hook, its own unblock path and a neard restart all
+  start polling again while dark. *Check:* list every writer of the state
+  (AGENTS gotchas, device packages) and prefer a level check. *From:* #99,
+  round 24.
 - **L-14. `$(ls … | tail)` at the top level under `set -euo pipefail`
   exits the script** silently (status 2) when nothing matches, before any
   argument is parsed. *Check:* glob-and-pick at the top level of any script
@@ -409,6 +498,63 @@ never change, so reviews can cite them.
 
 ## Kernel (linux-omarchy-mobile)
 
+- **L-236. A binding's numeric constraints are checked against the stock
+  value of every phone that may use the property, the reference phone
+  first.** #95's `multipleOf: 47000` rejects stock cheetah's
+  `cirrus,vpbr-thld-uv = <3000000>`, which Google's driver rounds down.
+  *Check:* `grep -rn <property>` in the stock live DTs, then feed that value
+  through dt-validate. Extends L-52 and L-102. *From:* kernel #95, round 23.
+- **L-237. Before accepting a per-compatible constant for a firmware layout,
+  check whether the vendor driver reads it from the device.** #93's 14-byte
+  GT9895 record is right, but Google's driver takes it from
+  `point_struct_len` in the IC info goodix-berlin already parses. *Check:*
+  grep the vendor driver for where the value comes from before agreeing to
+  match data. Extends L-53 and L-72. *From:* kernel #93, round 23.
+- **L-238. A Kconfig `select` of a symbol that doesn't exist is silent, and a
+  sibling that selects the right one hides it.** #114 selects `CS_DSP` (the
+  symbol is `FW_CS_DSP`); it built because cs40l26-vibra and the CS35L41
+  codec select the real one. *Check:* `git grep -n '^config <SYM>$'` for
+  every selected symbol, then build with the siblings off. Extends L-20 and
+  L-143. *From:* kernel #114, round 24.
+- **L-239. A board DT is checked against the condition its binding text
+  states.** Raven's DSIM got `google,decon` ("when no KMS driver runs it") in
+  the commit that enabled gs-decon's KMS on that DECON, leaving two drivers
+  doing unlocked read-modify-writes of `TRIG_CON`. *Check:* for each optional
+  property a board sets, read its binding description and confirm the board
+  meets it. *From:* kernel #116, round 24.
+- **L-240. A board PR is built against the published branch's labels, not
+  the author's tree.** #98 references `&gph2`, which gs201 has only on the
+  integration branch. *Check:* for every `&label` a board PR adds, `git grep
+  '<label>:' github/omamobile -- arch/arm64/boot/dts/`; if missing, `git log
+  -S` on `omamobile-int` for the owner. Extends L-149 and C-10. *From:*
+  kernel #98, round 24.
+- **L-241. A supply shared by two radios is checked for what each driver does
+  at power-off.** hci_qca's WCN6855 path disables every supply when Bluetooth
+  goes down, so a fixed regulator on lynx's shared buck drops Wi-Fi with it;
+  Google's driver never drops that pin. *Check:* read each consumer's
+  power-off and runtime-PM paths, compare with the vendor driver, and prefer
+  the upstream power sequencer (`qcom,wcn6855-pmu`). Extends C-9 and L-67.
+  *From:* kernel #98, round 24.
+- **L-242. A firmware-naming driver can pick different files for two
+  revisions of one chip.** btqca adds a `g` NVM variant for some `soc_id`
+  values, so lynx's two revisions load different files; one phone's
+  "tested" covers one. *Check:* compute the file names from each owner's
+  reported version. *From:* kernel #98, round 24.
+- **L-243. "Clock gating with Hibern8 as gs101 does" needs the PHY's Hibern8
+  hooks too.** gs101's PHY carries Google's `post_h8_enter`/`pre_h8_exit`
+  tables, zumapro's doesn't. *Check:* `git grep cfgs_hibern8
+  drivers/phy/samsung/` for the PHY the board binds, against the vendor's
+  tables. Extends L-77 and L-113. *From:* kernel #99, round 24.
+- **L-244. A hunk inserted right after a block comment leaves the comment
+  describing the wrong code.** #104 and #119 did this; checkpatch doesn't
+  see it. *Check:* for each hunk, a closing `*/` on the line above its first
+  `+` line means it split a comment from its code. *From:* kernel #104,
+  #119, round 24.
+- **L-245. A ramoops node is checked against stock's sizes and the siblings',
+  not only its address.** `record-size` puts a dmesg zone first and moves the
+  console zone, while the bootloader writes its log at stock's offset.
+  *Check:* stock's reserved-memory DT and `git grep -A4 '"ramoops"'
+  arch/arm64/boot/dts/exynos/google`. *From:* kernel #106, round 24.
 - **L-18. Check every commit for a human `Signed-off-by:`.** Three PRs at
   once came without one, while their bodies said "checkpatch clean": it was
   run on a diff, where the sign-off check can't fire. `tools/kernel-pr-check`
@@ -741,6 +887,20 @@ never change, so reviews can cite them.
 
 ## The gates themselves
 
+- **L-246. A base build is asked only for targets the base has, with `make
+  -k`, and a stopped base build is reported, never hidden.** On kernel #108
+  the gate asked the base for a new board's DTB it had no source for; make
+  stopped and `|| true` hid it, so how far the base got depended on `-j`,
+  existing warnings on unbuilt boards (husky's eUSB2 supplies) read as new,
+  and a message the new board's siblings already carry (`soc_id`) counted as
+  new. *Check:* a new board's messages are compared with its siblings' at the
+  base. Fixed in `tools/kernel-pr-check` (#119) and at the cause (kernel
+  #121). Extends L-30. *From:* kernel #108, 2026-10-28.
+- **L-247. Normalise `adrp` symbol labels and trailing blanks before naming
+  changed functions.** `llvm-objdump -r` labels an `adrp` page with whichever
+  symbol starts it, so any layout shift renames it: #94's first diff named
+  five untouched functions. *Check:* `/adrp/ s/ <[^>]*>//; s/[[:space:]]+$//`
+  in the normaliser. Extends L-153. *From:* kernel #94, round 23.
 - **L-30. A gate failure can be the tool's own.** `tools/kernel-pr-check`
   compared device-tree warnings with their line numbers, so a PR that added
   two comment lines above an existing warning failed as if it were new
@@ -915,6 +1075,48 @@ never change, so reviews can cite them.
 
 ## Reviews and merging
 
+- **L-248. A reply that says "pushed" is checked against that PR's own head,
+  not the stack's.** #87's reply described fixes that existed only below #90
+  and #96; its own branch stayed put, with green CI. *Check:* `git ls-remote
+  <remote> refs/pull/N/head` and `git range-diff` per PR; when every commit
+  is `=`, grep the open heads above it for the fixed commits. Extends L-166
+  and L-183. *From:* kernel #87, round 23.
+- **L-249. A "tested blob" from an unpublished tree can be a blob from our
+  own earlier review ref.** #88's and #89's tested files were the previous
+  heads' blobs. *Check:* `git cat-file -t <blob>`, then `git diff <blob>
+  <new head>:<path>`. Extends L-131. *From:* kernel #88, #89, round 23.
+- **L-250. A merge plan carried over from an earlier round is re-read
+  against the rules that landed since.** Round 20 planned #71's Pixel 7 Pro
+  check after the merge; CONTRIBUTING §6.2 then made it a before-merge rule.
+  *Check:* `git log --since=<our last comment> -- CONTRIBUTING.md AGENTS.md`,
+  then every "merge, then check" in the plan. Extends L-31 and L-185.
+  *From:* kernel #71, round 23.
+- **L-251. When a stack is re-pushed onto one line, the landing PR moves to
+  the top, and the boot is asked of the top.** With #84, #89 and #95 merged,
+  #80-#96 became one chain; a boot of #80 alone would test a tree that never
+  lands. *Check:* `git log base..head` per PR; ask for evidence on the commit
+  that will be merged. Extends L-196. *From:* kernel #80-#96, round 24.
+- **L-252. A "sync to the phone's tree" commit is diffed against the base
+  for deletions the series never meant.** #115's last commit overwrote two
+  Kconfig files with a private tree's copies and dropped two other phones'
+  drivers. *Check:* `git diff --stat base head` against the PR's feature
+  list, and `git log -S'<symbol>'` for every removed `config` line. *From:*
+  kernel #115, round 24.
+- **L-253. One contributor's board PRs that all append to one DTS conflict
+  pairwise: build the combined resolution once and hand over an order.**
+  *Check:* `git merge-tree` per pair; cherry-pick all onto the base, build
+  and `dt-validate` that tree, and ask for a stack next time. Extends L-104
+  and L-196. *From:* kernel #111-#116, round 24.
+- **L-254. Scratch merges in the shared kernel clone run with rerere off.**
+  The clone has `rerere.enabled=true`, so a review's scratch cherry-picks
+  recorded resolutions (one wrong) that a later real merge could replay.
+  *Check:* `git -c rerere.enabled=false cherry-pick|merge …`, or `git
+  merge-tree` only. Extends L-43 and L-127. *From:* round 24.
+- **L-255. A fix copied onto several squash-merged PRs merges first.**
+  #107's audio 0.5.5 rode on #100, #101, #115 and #117; squashing any of
+  those first lands the bump under the wrong title. *Check:* `git rev-parse
+  <head>:packages/<p>` across the PRs, then merge the fix PR first. Extends
+  L-12 and L-217. *From:* #107, round 24.
 - **L-31. Our review requests must agree with CONTRIBUTING.** Round one of
   kernel #11 asked for a squash that §6.2's "disabled, then a separate
   enabling commit" rule contradicted. Since 2026-10-22 §6.2 allows a board
@@ -1071,6 +1273,9 @@ never change, so reviews can cite them.
   changes. *Check:* before asking for one, ask whether the stock kernel ran in
   the failing shape, and list what differs between the stock run that works
   and the one that doesn't. Extends L-204. *From:* issue #36, round 22.
+  (Corrected 2026-10-28, C-12: "a vendor-kernel A/B" means a one-variable
+  A/B; a stock run that differs in host and timing at once rules out
+  neither.)
 - **L-216. A re-push that answers our requests is trailer-checked on every
   commit.** #77's re-push appended our sentence below its `Link:`, turning
   the trailer into body text. *Check:* `git interpret-trailers --parse` on
@@ -1085,6 +1290,27 @@ never change, so reviews can cite them.
 
 ## Claims and evidence
 
+- **L-256. An "inactive slot" install mode is walked for what a reinstall
+  does.** With `OMAMOBILE_SLOT=inactive`, rerunning #111's installer on a
+  phone already in Omarchy flashes the stock slot unless `--reflash` is
+  remembered. *Check:* name the slot written from each starting state. Extends
+  L-205. *From:* #111, round 24.
+- **L-257. A fix that "covers every device package" is re-counted at review
+  time.** #102 changed four copies of a file; lynx's package landed a fifth
+  after it opened. *Check:* `git grep -l '<changed line>' origin/main --
+  packages/` against the PR's file list. Extends L-164 and L-195. *From:*
+  #102, issue #103, round 24.
+- **L-258. A first-owner path is tested without the maintainer's private
+  inputs.** `phone-provision` defaulted to the maintainer's backup, so the
+  README quick start failed for every new owner. *Check:* `grep -n
+  'android/reference' tools/<tool>` for every tool the README names; each
+  such default needs a first-install path or a clear refusal. *From:* issue
+  #106, round 24.
+- **L-259. "Not in the published repository" is checked against the last
+  publish before it's read as policy.** The husky package was missing
+  because publishes had failed since its merge. *Check:* the publish tree's
+  last commit, the index's date, and open "publish failed" issues. *From:*
+  issue #1, round 24.
 - **L-28. "Works" needs merged notes and the phone it ran on.** A matrix row
   claiming works/testing from a private kernel, or from an install of a
   different branch, should say WIP or testing and link the notes.
@@ -1155,6 +1381,9 @@ never change, so reviews can cite them.
   yet boots footerless images: lynx's AVB footers are its ABL's
   configuration. *Check:* `avbtool info_image` on the stock vbmeta in
   `~/android/reference` (read-only). *From:* #37.
+  (Corrected 2026-10-28, C-14: the comparison used the factory vbmeta, not
+  the phone's non-stock `vbmeta_b`; a stock `vbmeta_b` needs footers on
+  cheetah too.)
 - **L-131. Evidence cites the tested file's blob id, not a commit id.**
   `git rev-parse <commit>:<path>` survives the folds and rebases we ask for,
   and ties an out-of-tree module to its source. Extends L-45. *From:* kernel
@@ -1358,3 +1587,43 @@ never change, so reviews can cite them.
   base for each identifier the PR's hunks use as context, and compare `git
   log github/omamobile -- <dir>` with `github/omamobile..omamobile-int`.
   Extends L-121 and L-154. *From:* kernel #56, round 22.
+- **C-11 (2026-10-28). Round 20 asked kernel #63 for `google,wdma-input:
+  false` in the zumapro branch of `google,gs201-csis.yaml`; no such property
+  exists.** The slot is `google,ebuf`, and the branch already set it to
+  false; we named the property from its description. The contributor caught
+  it. *Lesson:* a property we ask about is quoted from `git grep` on the
+  head's binding and the driver's `device_property_read_*` calls, with its
+  rule in each `if/then` branch read. Extends C-4. *From:* kernel #63, rounds
+  20 and 24.
+- **C-12 (2026-10-28). Our issue #36 comment said the stock-kernel
+  diagnostic ruled out the host side; it couldn't on its own.** The
+  diagnostic and step 6 each differed from the passing Android boot in a
+  different variable (host, timing), so both stalls left "both missing" open,
+  and the same comment built a Bluetooth lead the thread's data had ruled
+  out. *Lesson:* a negative run excludes a variable only if it differs from
+  a passing run in that variable alone; tabulate each run against the passing
+  one first. L-215 corrected in place. Extends L-190 and L-204. *From:* issue
+  #36, round 23.
+- **C-13 (2026-10-28). Our restore ruling on #35 listed stock slot A's
+  partitions from memory and missed `pvmfw`.** The factory image's
+  `fastboot-info.txt` is the exact list `fastboot update` writes, and every
+  fastbootd logical flash first resizes the partition, rewriting `super`'s
+  metadata, which a "nothing unsuffixed" rule forbids word for word.
+  *Lesson:* take the list from `unzip -p image-*.zip fastboot-info.txt`, and
+  name the resize in any exception that allows logical writes. Extends L-205;
+  see L-226. *From:* #35, round 23.
+- **C-14 (2026-10-28). L-130 said cheetah boots footer-less images under a
+  stock vbmeta that chains boot and init_boot; it compared the factory vbmeta,
+  not the phone's `vbmeta_b`.** That `vbmeta_b` isn't stock (another key,
+  hash descriptors, no chains). In libavb a chained partition with no footer
+  is invalid metadata, which unlocked ABL doesn't override, so every cheetah
+  with a stock `vbmeta_b` needs footers (#104, issue #11). *Lesson:* compare
+  the vbmeta of the slot that boots, read from the phone or its backup, and
+  look for `Chain Partition descriptor` before blaming the bootloader. L-130
+  corrected in place. *From:* #104, round 24.
+- **C-15 (2026-10-28). We advised admin-merging kernel #108 past a red check
+  before reproducing the failure.** It happened to be right (the gate's
+  fault, L-246), but L-30 says reproduce first: a gate failure can be the
+  tool's fault, and can't be assumed to be. *Lesson:* no merge advice past a
+  red check until the failure is reproduced and its cause named. Extends
+  L-30. *From:* kernel #108, 2026-10-28.
