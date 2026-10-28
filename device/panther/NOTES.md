@@ -77,6 +77,22 @@ missing for L-36: a getvar and a byte read of the same state with no boot
 in between; a byte read needs Linux, so it has to be taken right before a
 planned reboot to fastboot.
 
+## 2026-10-27: a second stock fallback, and a new backup
+
+Getting to fastboot from Arch went the same way twice: the phone came back
+up in slot B instead of powering off, spent slot B's last retry, and the
+next boot fell to slot A, whose stock recovery started. The data reset was
+declined both times; `adb reboot bootloader` from recovery reached
+fastboot (getvar: current slot A, B retry 0, not unbootable), and
+`bin/omamobile flash` brought slot B back. A fresh read-only backup was
+taken from Linux right after (each partition `ro=1`, found by `PARTNAME`,
+checksum-matched against the phone): against the 2026-10-27 baseline,
+`modem_a` and `modem_b` match, `persist`, `efs`, `efs_backup` and
+`modem_userdata` differ in 100-750 bytes each, `devinfo` in 2. That copy is
+the baseline now. To reach fastboot without spending a retry, hold Power
+and Volume Down on the running phone until the bootloader shows, without
+shutting down first.
+
 ## 2026-10-27: Omarchy's power off reboots the phone
 
 "Shut down" in the Omarchy menu, with the USB cable to the laptop
