@@ -14,7 +14,9 @@
 #   - with --build OUT: each touched C file builds with W=1 (arm64, LLVM,
 #     defconfig plus kernel/configs/omamobile.config), every touched
 #     device tree builds with W=1 and passes dtbs_check with no warning the
-#     base didn't have, each touched overlay (.dtso) builds and applies to
+#     base didn't have (on a board the base lacks, none that a board in its
+#     directory doesn't have there, but for the board's name; those are
+#     listed), each touched overlay (.dtso) builds and applies to
 #     its board with no new dt-validate warning, and touched bindings pass
 #     dt_binding_check. Needs
 #     clang, ld.lld and, for the schema checks, dtschema (`pip install
@@ -44,7 +46,7 @@ while (($#)); do
     -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
     --build) out=${2:?--build needs an output directory}; shift 2 ;;
     --merge) merge=1; shift ;;
-    -h|--help) sed -n '3,36p' "$self"; exit 0 ;;
+    -h|--help) sed -n '3,35p' "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -232,19 +234,72 @@ $(tail -8 <<<"$log" | sed 's/^/    /')"
           kb=(make -s -C "$srcb" O="$out/build-base" ARCH=arm64 LLVM=1 -j"$(nproc)")
           cp "$out/build/.config" "$out/build-base/.config" 2>/dev/null || { mkdir -p "$out/build-base"; cp "$out/build/.config" "$out/build-base/.config"; }
           "${kb[@]}" olddefconfig >/dev/null 2>&1
-          blog=$("${kb[@]}" W=1 $check $targets 2>&1 || true)
+          # Only the boards the base has. A board the pull request adds has
+          # no rule there, and asking for it stopped the base build part-way,
+          # wherever -j had got to: on CI's four cores zuma-husky was never
+          # validated, so its known warnings read as new (kernel #108). -k
+          # keeps a base that is broken for another reason (one a pull
+          # request may be fixing) validating every board it can, and says
+          # so: a board it couldn't build compares with nothing.
+          btargets=$(for t in $targets; do [[ -e $srcb/arch/arm64/boot/dts/${t%.dtb}.dts ]] && echo "$t"; done)
+          newboards=$(comm -13 <(echo "$btargets") <(echo "$targets"))
+          blog="" bst=0
+          [[ -n $btargets ]] && { blog=$("${kb[@]}" -k W=1 $check $btargets 2>&1); bst=$?; }
           # Positions go too: a pull request that adds lines above an
           # existing warning moves it without making it new. dt-validate's
           # messages ("x.dtb: /node: ...") say neither warning nor error,
           # and a filter on those words alone dropped every one of them.
           norm() { grep -E 'warning|Warning|error|\.dtbo?: ' | sed -E -e 's,^[^ ]*/arch/arm64/boot/dts/,,' -e 's,/[^ ]*/(src|src-base)/,,g' \
             -e 's/:[0-9]+(\.[0-9]+)?(-[0-9]+(\.[0-9]+)?)?:/:/' | sort -u; }
+          # A message about one of the boards named in $1 (its own .dtb or
+          # .dts leads the line) with that board's name, wherever it
+          # appears, replaced by "<board>": felix's "gs201-felix.dtb: /
+          # (google,gs201-felix): soc_id: ..." and panther's read the same.
+          generic() {
+            awk -v boards="$1" '
+              function repl(str, from, to,   o, i) {
+                o = ""
+                while ((i = index(str, from)) > 0) { o = o substr(str, 1, i - 1) to; str = substr(str, i + length(from)) }
+                return o str
+              }
+              BEGIN { n = split(boards, b, " ")
+                for (i = 1; i <= n; i++) { s = b[i]; sub(/.*\//, "", s); sub(/\.dtb$/, "", s); isb[s] = 1 } }
+              { if (match($0, /[A-Za-z0-9_+-]+\.dt[bs]:/)) {
+                  s = substr($0, RSTART, RLENGTH - 5)
+                  if (s in isb) $0 = repl($0, s, "<board>") }
+                print }'
+          }
           new=$(comm -13 <(norm <<<"$blog") <(norm <<<"$log"))
+          # A new board has no base to compare with, so each of its messages
+          # read as new, though most are its dtsi's or its siblings' (L-120).
+          # One counts as known when a board in the same directory has the
+          # same message at the base, word for word but the board's name:
+          # same node, same property, same value. They are listed, not
+          # hidden. A board the base has stays compared with itself.
+          inherited=""
+          if [[ -n $new && -n $newboards ]]; then
+            bgen=$(norm <<<"$blog" | generic "$btargets" | sort -u)
+            keep=""
+            while IFS= read -r l; do
+              g=$(generic "$newboards" <<<"$l")
+              if [[ $g != "$l" ]] && grep -xF -- "$g" <<<"$bgen" >/dev/null; then inherited+="$l"$'\n'
+              else keep+="$l"$'\n'; fi
+            done <<<"$new"
+            new=${keep%$'\n'}
+          fi
           what="W=1${check:+ and dtbs_check}"
           [[ -z $check ]] && echo "# no dt-validate (pip install dtschema): dtbs_check skipped"
+          if ((bst)); then
+            echo "# the base's device trees don't all build ($(git rev-parse --short "$build_base")); compared with those that did:"
+            grep -F '***' <<<"$blog" | tail -8 | sed 's/^/#   /'
+          fi
           if [[ -z $new ]]; then pass "$(wc -w <<<"$targets") device trees build with $what, no new warnings"
           else fail "new device-tree warnings ($what):
 $(head -15 <<<"$new" | sed 's/^/    /')"; fi
+          if [[ -n $inherited ]]; then
+            echo "# messages on new boards that a sibling has at the base (not counted):"
+            sed 's/^/#   /' <<<"${inherited%$'\n'}"
+          fi
         fi
       else
         skip "device trees: none touched"
