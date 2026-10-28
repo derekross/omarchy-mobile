@@ -29,6 +29,15 @@ for f in prebuilt/omamobile-fp-shim.so prebuilt/omamobile-fp-bridge; do
 done
 grep -c /system/bin/linker64 prebuilt/omamobile-fp-bridge >/dev/null ||
   fail "the bridge is not a bionic executable"
+# The prebuilt is built by hand, so it can be older than its source: a
+# bridge from before --panel rejects it and exits, and fingerprint stops on
+# every phone. It must know every option the runner passes it.
+opts=$(sed -n '/spawn bridge /,/^ *fi$/p' lib/omamobile-fp-chroot | grep -o -- '--[a-z][a-z-]*' | sort -u)
+[[ -n $opts ]] || fail "no bridge options found in lib/omamobile-fp-chroot"
+for o in $opts; do
+  grep -a -c -- "$o" prebuilt/omamobile-fp-bridge >/dev/null ||
+    fail "prebuilt/omamobile-fp-bridge doesn't know $o, which the runner passes: rebuild it (fingerprint/Makefile)"
+done
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 ./install "$stage"
 for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile-tipc-probe \
