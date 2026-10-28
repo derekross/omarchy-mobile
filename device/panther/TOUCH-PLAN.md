@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) touch: the supplies, then the chip ID
 
-Status (2026-10-27): all gates passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on, reports touches with the axes right, and the lock screen PIN was entered by touch. Next: autoload (see After the gates).
+Status (2026-10-27): all gates passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on, reports touches with the axes right, and the lock screen PIN was entered by touch. Autoload passed too: the touch comes up on its own at boot.
 
 The touch controller is a FocalTech FT3658 (chip ID 0x56) on USI0 SPI,
 wired as the Pixel 7 Pro's S3908. A local driver
@@ -154,7 +154,7 @@ grep -A1 -E 'vdd-ts|avdd-ts' /sys/kernel/debug/regulator/regulator_summary
 ## After the gates
 
 If T3-T5 pass: autoload (drop the two blacklist entries, a boot of its
-own), the binding for `focaltech,ft3658`, and the kernel pull request
+own; done, see the results), the binding for `focaltech,ft3658`, and the kernel pull request
 against `omamobile` (board DTS split by subsystem, new nodes disabled,
 the PMIC node as felix's). If T2 shows the rails already **on**, the
 supplies were not the cause: stop and go back to the SPI side.
@@ -279,3 +279,14 @@ the screen and entered the PIN by touch in the Omarchy lock screen.
 `avdd-ts` disabled with no users, `gpp23-2` driven low (reset asserted),
 the input device gone, no other rail changed. **Passed.** The driver was
 loaded again afterwards, so the phone is left with touch powered.
+
+### 2026-10-27: autoload
+
+Kernel `7.3.0-rc6-omamobile-push1-gdca2c17c8c19`: the bootargs without
+`modprobe.blacklist`, nothing else changed. Flashed from fastboot. The
+first boot came up with no modules (`linux-modules-cleanup`, see
+NOTES.md); after `modules-push` again and a reboot over SSH: ACPM
+`15 channels, 14 usable` at 3.3 s, `FT3658, chip id 0x56, firmware 0x16`
+and the input device at 3.6 s, `vdd-ts` 1.8 V and `avdd-ts` 3.0 V
+enabled with one user each, unchanged at 63 s (after the unused-rail
+cleanup). The owner unlocked the lock screen by touch. **Passed.**
