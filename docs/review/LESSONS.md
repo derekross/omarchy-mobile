@@ -18,6 +18,20 @@ never change, so reviews can cite them.
 
 ## Safety model (AGENTS.md section 1)
 
+- **L-285. "The approved tool did the write" is checked for what made the
+  target writable.** `omamobile-bootctl` only opens `devinfo` for writing; the
+  guard bypass (`--setrw` on the partition and its parent for 30 s) was in the
+  owner's laptop script around it. An approval that names the tool leaves the
+  wrapper unreviewed. *Check:* for any write outside the allowlist, find who
+  lifts the read-only flag and whether that code was reviewed. Extends L-2 and
+  L-261. *From:* #125, round 26.
+- **L-284. A hold on a safety step is checked for what it forces next.**
+  Telling the 9a owner "don't mark B" without also saying "don't `flash`"
+  would have led straight to the next fallback, because `flash` unmarks B and
+  the marking is what keeps the root. *Check:* for any "don't do X until I
+  decide", walk the owner's next routine step with X missing, and give the
+  safe interim path (here, `push` only). Extends L-81 and L-158. *From:* #125,
+  round 26 (a near miss in drafting).
 - **L-267. A recovery report that says "marked again" is a `devinfo`
   question.** On the 9a, marking slot B successful is a `devinfo` write,
   agreed only through `omamobile-bootctl` with a fresh backup and a full
@@ -267,6 +281,20 @@ never change, so reviews can cite them.
 
 ## Shared code and the reference device
 
+- **L-282. An env-default variable in a shared build library is an input to
+  the maintainer's builds too.** #79's `ALARM_LOCAL_KEY=${ALARM_LOCAL_KEY:-}`
+  in `tools/lib/alarm.sh` lets a leftover export widen trust in a build
+  without `--local`. *Check:* for each new `VAR=${VAR:-}` in `tools/lib/`,
+  confirm the maintainer's path sets or clears it explicitly. Extends L-7 and
+  L-171. *From:* #79, round 26.
+- **L-280. A per-device flag that gates new behaviour in a shared runner is
+  checked by building the command line under both values.** #101's
+  `MAP_STORES` adds storageproxyd arguments through an array, and an empty
+  `"${maps[@]}"` must vanish under `set -u`; a grep test can't show that. Run
+  with both images present, cheetah got the same 9 arguments as main and tegu
+  15. *Check:* extract the argument-building block and run it under `set -euo
+  pipefail` with each flag value and the triggering files present. Extends L-8
+  and L-234. *From:* #101, round 26.
 - **L-273. A before-merge Pixel 7 Pro run on `omamobile-int` compares the
   touched file on int with the base first.** Where they differ, the run covers
   the PR's hunk inside int's code, and the runbook and merge comment say
@@ -481,6 +509,14 @@ never change, so reviews can cite them.
 
 ## Shell and scripts
 
+- **L-289. A "retried" claim in a GLib timeout path is checked once per
+  caller.** A helper's `True` return only reschedules when the helper is
+  itself the registered callback: #99's `start_polling` returns True to retry,
+  but `follow_screen` calls it once at screen-on and discards the result, so a
+  failed power-on there stays off until the next dark/lit cycle. *Check:* list
+  every caller of a function that returns "try again", confirm the value
+  reaches GLib or the next tick calls it again, and run a stub bus whose call
+  fails once. Extends L-14 and L-235. *From:* #99, round 26.
 - **L-264. A udev `SYSTEMD_WANTS` hook fires only when the device first
   becomes active.** We nearly flagged #113's rule as restarting feedbackd on
   every `udevadm trigger` change event; systemd.device(5) says change events
@@ -934,6 +970,22 @@ never change, so reviews can cite them.
 
 ## The gates themselves
 
+- **L-293. An empty diff is checked for empty inputs.** Comparing the gs201
+  DTBs before and after kernel #123 with the host's `dtc` printed no
+  difference, because the host has no `dtc` and both sides decompiled to
+  nothing. *Check:* confirm each side of a comparison is non-empty (or use the
+  build's own `scripts/dtc/dtc`) before reading "no change". Extends L-102.
+  *From:* kernel #123, 2026-10-28.
+- **L-288. A stack with several tops is gated once on a combined commit.**
+  Combine the heads with `git merge-tree --write-tree` and `commit-tree` into
+  one commit (the gate skips merge commits in its commit checks) and gate
+  that, which covers how the tops interact; gate the landing PR on its own
+  too, since its DTB differs. Extends L-196. *From:* the tegu stack, round 26.
+- **L-281. A re-push can leave CI at `action_required`, so "rebased, CI should
+  be green" means nothing until the run is approved.** #79's re-push sat with
+  no checks reported. *Check:* `gh run list --branch <head>` on every
+  follow-up round, and say in the draft that the maintainer will approve the
+  run. Extends L-59 and L-38. *From:* #79, round 26.
 - **L-271. An AI author address on an early commit of a squash-merged PR lands
   on main as `Co-authored-by:`,** even after later commits fix the identity,
   and `tools/pr-check` checks only `Signed-off-by:`. *Check:* `git log
@@ -1132,6 +1184,31 @@ never change, so reviews can cite them.
 
 ## Reviews and merging
 
+- **L-292. Merge only after every check has finished, not on the first
+  green.** #126 was merged with the policy job passed and the tests job still
+  pending; the tests passed afterwards, but the merge didn't know that.
+  *Check:* `gh pr checks N` shows no pending job (or `gh run watch
+  --exit-status`) before `gh pr merge`. Extends C-15. *From:* #126,
+  2026-10-28.
+- **L-291. When the bottom of a squash-merged stack moves after we've posted a
+  cherry-pick plan, re-simulate the plan.** #115 and #117 still carry #99's
+  old head, and #117's list grew from two commits to three. *Check:* squash
+  the new bottom onto main, cherry-pick the listed commits, and diff the
+  result against the top head, expecting only the bottom's new change. Extends
+  L-195 and L-214. *From:* #99, #115, #117, round 26.
+- **L-287. A silent re-push is diffed per PR before any reply.** The tegu
+  stack's 20:38Z push looked like an answer to everything but carried only the
+  Makefile resolution; #106's and #122's points were untouched. *Check:* `git
+  range-diff` against the last round's refs, then one status line per open
+  point rather than a re-post. Extends L-183 and L-248. *From:* kernel #80 to
+  #122, round 26.
+- **L-279. A PR that carries a merged fix PR's commits is diffed against main,
+  and its squash body written by hand.** #101 still carried #107's audio
+  commits; `git diff origin/main <head> -- packages/omamobile-audio` was
+  empty, but GitHub's default squash body would still list "omamobile-audio
+  0.5.5" under the fingerprint title. *Check:* after the fix PR merges, diff
+  each rider against main for the fix's package. Extends L-255. *From:* #101,
+  round 26.
 - **L-278. A re-pushed stack with identical sources is proved once.** Where
   every PR's tree id equals the old head's, the review is tree ids plus a
   range-diff per PR, then one gate on a scratch rebase of the top; DTB hashes
@@ -1390,6 +1467,26 @@ never change, so reviews can cite them.
 
 ## Claims and evidence
 
+- **L-290. A "stop the radio" change is verified at the controller, not only
+  through the daemon's property.** On the 9a, neard's `Polling` and the kernel
+  disagreed after a neard restart (EBUSY). *Check:* compare the controller's
+  `/proc/interrupts` total across main's code and the PR's with the screen
+  dark (a one-variable A/B), and record `nfctool -l`; where the chip doesn't
+  interrupt while idle, a tag tap is the functional proof. Extends L-85 and
+  C-12. *From:* #99, round 26.
+- **L-286. A cause attributed to stock is checked against what the failing
+  boot itself ran.** #125's 10-26 loss came after a "Google-kernel" boot on
+  slot B that no notes describe; stock's own ramdisk on B could explain the
+  overwrite as well as stock on A. *Check:* ask for the failing boot's kernel,
+  its ramdisk and whether the storage guard was present before accepting
+  "stock on slot A did it". Extends L-186 and C-12. *From:* #125, round 26.
+- **L-283. A board merged without the boot argument we suggested moves the
+  guard into the device package.** The merged `gs201-panther.dts` has no
+  `mem_sleep_default=s2idle`, so panther's `sleep.conf.d` drop-in, an
+  "optional, later" request on #79, is now its only guard against `deep`.
+  *Check:* after a board PR merges, re-read its bootargs against L-207 and
+  update the device PR's request. Extends L-219. *From:* #79 with kernel #108,
+  round 26.
 - **L-276. Evidence we ask for must exist in the tool we name.** Our #80
   comment asked for `tools/phone-smoke`'s haptics section; phone-smoke never
   vibrates or lights the torch and has none. *Check:* `grep -n -i
