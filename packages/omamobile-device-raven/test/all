@@ -42,7 +42,8 @@ for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-succ
          usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf usr/bin/omamobile-boot-check \
          usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/system/omamobile-usb-rescue.service \
          usr/lib/systemd/system/sddm.service.d/omamobile-raven-bluetooth.conf \
-         usr/lib/modprobe.d/omamobile-raven.conf usr/lib/tmpfiles.d/omamobile-raven-cpufreq.conf \
+         usr/lib/modprobe.d/omamobile-raven.conf usr/lib/modprobe.d/omamobile-charger.conf \
+         usr/lib/tmpfiles.d/omamobile-raven-cpufreq.conf usr/bin/omamobile-charge-guard \
          usr/lib/udev/rules.d/20-omamobile-display.rules \
          usr/lib/NetworkManager/conf.d/omamobile-raven-wifi-powersave.conf \
          usr/bin/omamobile-sleep usr/bin/omamobile-sleepd usr/lib/systemd/user/omamobile-sleepd.service \
@@ -86,14 +87,21 @@ grep -q 'omarchy-toggle-enabled omamobile-sleep ||' bin/omamobile-sleepd || fail
 pass "sleep policy"
 
 # Policy that keeps the phone safe at boot
-for m in max77759_charger tcpci_maxim gpio_max77759; do
+for m in tcpci_maxim gpio_max77759; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven.conf || fail "$m stays blacklisted"
 done
-grep -qE '^(options|install) .*max77759_charger' vendor/modprobe.d/omamobile-raven.conf && fail "nothing loads the charger"
+# The charger loads, but only with both options: without default_ilim_ua it
+# turns charging off at probe, without temp_guard nothing watches the
+# battery's temperature (USB-PLAN C2, C3).
+! grep -rqx 'blacklist max77759_charger' vendor/modprobe.d || fail "the charger is no longer blacklisted"
+grep -qx 'options max77759_charger default_ilim_ua=500000 temp_guard=1' vendor/modprobe.d/omamobile-charger.conf \
+  || fail "the charger loads with its input limit and the temperature guard"
+grep -qx 'softdep max77759_charger pre: max17042_battery' vendor/modprobe.d/omamobile-charger.conf \
+  || fail "the gauge loads before the charger"
 # usb-rescue's only write: USBSW_CTRL (0x93) back to 0x09
 writes=$(grep -E 'i2cset .*"\$bus" \$tcpc 0x[0-9a-f]+ 0x' bin/omamobile-usb-rescue || true)
 [[ $writes == *'0x93 0x09' && $(wc -l <<<"$writes") == 1 ]] || fail "usb-rescue writes only USBSW_CTRL = 0x09"
-pass "the charger and the TCPC stay off; usb-rescue writes one register"
+pass "the charger loads with its guard, the TCPC stays off; usb-rescue writes one register"
 for m in pcie_gs201_cp cpif shm_ipc boot_device_spi; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven-modem.conf || fail "$m stays blacklisted (modem bring-up)"
 done
