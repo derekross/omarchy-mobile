@@ -44,6 +44,7 @@ for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-succ
          usr/lib/systemd/system/sddm.service.d/omamobile-raven-bluetooth.conf \
          usr/lib/modprobe.d/omamobile-raven.conf usr/lib/modprobe.d/omamobile-charger.conf \
          usr/lib/tmpfiles.d/omamobile-raven-cpufreq.conf usr/bin/omamobile-charge-guard \
+         usr/lib/udev/rules.d/72-omamobile-feedbackd.rules usr/lib/systemd/system/omamobile-feedbackd-rescan.service \
          usr/lib/udev/rules.d/20-omamobile-display.rules \
          usr/lib/NetworkManager/conf.d/omamobile-raven-wifi-powersave.conf \
          usr/bin/omamobile-sleep usr/bin/omamobile-sleepd usr/lib/systemd/user/omamobile-sleepd.service \
@@ -106,3 +107,13 @@ for m in pcie_gs201_cp cpif shm_ipc boot_device_spi; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven-modem.conf || fail "$m stays blacklisted (modem bring-up)"
 done
 pass "the modem's drivers never load at boot"
+
+# Haptics: feedbackd only finds the motor when it starts, and the motor
+# appears ~5 s into the boot (its firmware): the rule restarts a feedbackd
+# that came first.
+rule=vendor/udev/rules.d/72-omamobile-feedbackd.rules
+grep -q 'ATTRS{name}=="cs40l25_vibra".*ENV{FEEDBACKD_TYPE}="vibra"' "$rule" || fail "the motor is a feedbackd vibra"
+grep -q 'ENV{SYSTEMD_WANTS}+="omamobile-feedbackd-rescan.service"' "$rule" || fail "the motor's arrival restarts feedbackd"
+grep -qx 'ExecStart=-/usr/bin/pkill -x feedbackd' vendor/systemd/system/omamobile-feedbackd-rescan.service \
+  || fail "the rescan stops only feedbackd, and no feedbackd is not an error"
+pass "feedbackd picks up the haptics motor"

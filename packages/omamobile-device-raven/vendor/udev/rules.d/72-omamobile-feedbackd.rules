@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: let feedbackd drive the Cirrus Logic CS40L25A haptics
+# (cs40l25-vibra), in the same form as feedbackd's own 72-feedbackd.rules.
+# The motor's input device appears only once its firmware has loaded, about
+# 5 s into the boot; a feedbackd that started before it never picks it up
+# (no haptics until feedbackd restarts). omamobile-feedbackd-rescan stops a
+# running feedbackd then, and D-Bus starts it again on the next request.
+ACTION=="remove", GOTO="omamobile_feedbackd_end"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT}=="1", SUBSYSTEMS=="input", ATTRS{name}=="cs40l25_vibra", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omamobile-feedbackd-rescan.service"
+LABEL="omamobile_feedbackd_end"

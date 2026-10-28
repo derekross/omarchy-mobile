@@ -112,7 +112,9 @@ case $DEVICE_OPT in
     # protection firmware and the AoC's sensor registry (device/raven/WIFI-PLAN.md,
     # AUDIO-PLAN.md). The _ROW
     # NVRAM and CLM are the global model's (SKU GLU0G). Raven's vendor has no
-    # fast_switch tunings, and its haptics (cs40l25a_*) are not mapped yet.
+    # fast_switch tunings. The haptics: cs40l25-vibra loads the CLAB RAM
+    # firmware and the default wavetable; the CLAB configuration (braking)
+    # isn't loaded yet (device/raven/HAPTICS-TORCH-PLAN.md).
     BOARD="google,gs101-raven"
     DEVICE="raven"
     MAP=(
@@ -124,6 +126,9 @@ case $DEVICE_OPT in
       "firmware/cs35l41-dsp1-spk-prot.wmfw|cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"
       "firmware/cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin"
       "firmware/R-cs35l41-dsp1-spk-prot.bin|cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin"
+      "firmware/cs40l25a_clab.wmfw|cs40l25a_clab.wmfw"
+      "firmware/cs40l20.bin|cs40l20.bin"
+      "firmware/cs40l25a_clab.bin|cs40l25a_clab.bin"
     ) ;;
   *) die "unknown device $DEVICE_OPT (cheetah or raven)" ;;
 esac
