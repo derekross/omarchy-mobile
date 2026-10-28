@@ -106,6 +106,10 @@ derekross/linux-omarchy-mobile#112. checkpatch clean, W=1 device trees with no
 new warning, dt-validate with no new finding (raven's one finding,
 `soc_id`, is the base's). The package side (C4) adds
 `omamobile-charge-guard` (cheetah's) and loads the charger at boot.
+The guard's bands are raven's own, not only cheetah's: raven's stock
+`google,chg-temp-limits`, `chg-cv-limits` and `chg-cc-limits` (`dtbo_idx` 6)
+are identical to the table in the charger's temperature guard (checked in
+review, derekross/linux-omarchy-mobile#112).
 
 **C0 (2026-10-28, `g97f09c8cfada`, read-only, on the wall charger at
 21 %): passed.** `i2cget -f -y 2` (bus `i2c-2`, `10d50000.i2c`):
