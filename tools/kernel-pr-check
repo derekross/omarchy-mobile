@@ -24,7 +24,8 @@
 #
 #   tools/kernel-pr-check [-C KERNEL] [--build OUT] [--merge] BASE [HEAD]
 #
-# KERNEL defaults to ~/android/mainline/linux, HEAD to HEAD. It reads git and
+# KERNEL defaults to $KERNEL_BASE/linux (~/omamobile-kernel/linux, or
+# ~/android/mainline/linux on older setups), HEAD to HEAD. It reads git and
 # builds in OUT (and OUT-base, for the base's device trees); it never
 # touches the tree's checkout or anything else.
 #
@@ -38,7 +39,13 @@ set -uo pipefail
 export LC_ALL=C
 self=$(readlink -f "${BASH_SOURCE[0]}")
 repo=$(cd -- "$(dirname -- "$self")/.." && pwd)
-kernel=$HOME/android/mainline/linux
+# The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
+# ~/omamobile-kernel, or ~/android/mainline on setups from before 2026-10-29.
+if [[ -z ${KERNEL_BASE:-} ]]; then
+  KERNEL_BASE=$HOME/omamobile-kernel
+  [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
+fi
+kernel=$KERNEL_BASE/linux
 out=""
 merge=0
 while (($#)); do

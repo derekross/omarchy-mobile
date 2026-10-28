@@ -14,7 +14,7 @@
 #   out/bundle/omamobile-rootfs-<version>-aarch64.img.zst (+ .sha256, .MANIFEST)
 #
 #   tools/make-bundle [--version V] [--rootfs FILE] [--unsigned]
-#     DEVICE (default cheetah), KERNEL_OUT (default ~/android/mainline/out-int,
+#     DEVICE (default cheetah), KERNEL_OUT (default $KERNEL_BASE/out-int,
 #     with images from bin/omamobile images)
 # Nothing in a bundle comes from a factory image: tools/phone-provision
 # extracts Google's files on the user's machine after the install.
@@ -25,7 +25,13 @@ say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
 DEVICE=${DEVICE:-cheetah}
-KERNEL_OUT=${KERNEL_OUT:-$HOME/android/mainline/out-int}
+# The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
+# ~/omamobile-kernel, or ~/android/mainline on setups from before 2026-10-29.
+if [[ -z ${KERNEL_BASE:-} ]]; then
+  KERNEL_BASE=$HOME/omamobile-kernel
+  [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
+fi
+KERNEL_OUT=${KERNEL_OUT:-$KERNEL_BASE/out-int}
 version=$(date +%Y.%m.%d) rootfs="" unsigned=0
 while (($#)); do
   case $1 in
@@ -75,7 +81,7 @@ rootname=$(basename "$rootfs")
 for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
   [[ -f $f ]] && ln -f "$f" "$out/" 2>/dev/null || cp -f "$f" "$out/"
 done
-kernel_commit=$(git -C "${KERNEL_DIR:-$HOME/android/mainline/wt-int}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 {
   echo "# Omarchy Mobile $version for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
   echo "version: $version"

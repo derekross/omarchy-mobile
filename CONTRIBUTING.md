@@ -42,7 +42,7 @@ Omarchy Mobile runs native Omarchy on mobile devices: Arch Linux ARM, Hyprland a
 - `docker`: kernel builds run in the [`docker/Dockerfile`](docker/Dockerfile) environment (Ubuntu 24.04).
 - `adb`, `fastboot` (`android-tools`), `lz4`, `zstd`, `cpio`, `python3`, `ssh`, plus `unzip`, `debugfs` (e2fsprogs), `simg2img`/`lpunpack` and `erofs-utils` for firmware extraction.
 - **Android's prebuilt clang and the AOSP boot-image tools.** `bin/omamobile` takes clang from `CLANG_DIR`, and `mkbootimg` and `mkdtboimg.py` from `SRC_DIR` (`system/tools/mkbootimg`, `system/libufdt`). Today these come from a LineageOS checkout (`bin/lineage-ref sync`, about 400 GB). A smaller setup also works: the AOSP `platform/prebuilts/clang/host/linux-x86`, `platform/system/tools/mkbootimg` and `platform/system/libufdt` projects under `~/android` (plus `platform/external/avb` for a device with `AVB_FOOTERS`), with `CLANG_DIR` and `SRC_DIR` set in `omamobile.local.conf`. The initramfs build links against that clang's Android compiler-rt builtins. A lighter toolchain setup would make a good PR.
-- **The kernel tree.** Clone [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) to `~/android/mainline/linux`, or set `KERNEL_DIR`. Branch `omamobile-int` is what the phone runs today (every subsystem merged, work in progress included, as one snapshot commit); branch `omamobile` holds the curated, upstream-ready commits and lags behind it. Build `omamobile-int` to match this repository's packages and overlays; base your own kernel work on `omamobile`.
+- **The kernel tree.** Clone [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) to `~/omamobile-kernel/linux`, or set `KERNEL_DIR`. Setups from before 2026-10-29 used `~/android/mainline` (the project began with Android-era names); the tools still find it, and moving is optional. Branch `omamobile-int` is what the phone runs today (every subsystem merged, work in progress included, as one snapshot commit); branch `omamobile` holds the curated, upstream-ready commits and lags behind it. Build `omamobile-int` to match this repository's packages and overlays; base your own kernel work on `omamobile`.
 - **Google's GPL kernel for your device**, as a reference for registers, clocks and power sequences (manifests at `android.googlesource.com/kernel/manifest`, branches named `android-gs-<family>-…`). The postmarketOS Tensor kernel is a useful second reference.
 - **The host side of USB networking:** give the laptop `172.16.42.2/24` on the phone's USB network interface. A NetworkManager profile with a manual address works (see "Host setup" in [NOTES.md](device/cheetah/NOTES.md)).
 
@@ -99,7 +99,7 @@ Bring-up steps hang phones. Plan for it before you start:
   3. Force a restart: hold Power for about 30 s until the phone is off, then press Power. On the Pixel 8 Pro, hold Power + Volume Up for 15-30 s; Power alone does nothing under our kernel ([BRINGUP-M1](device/husky/BRINGUP-M1.md) test 23).
   4. Reach fastboot by hand: with the phone off, hold Volume Down, add Power, and keep both held about 20 s until "Fastboot Mode" appears. Letting go early lands on the unlocked-bootloader warning, which carries on booting slot B.
   5. From fastboot, flash known-good images to slot B, or `fastboot --set-active=a` to boot stock Android.
-- **Slot fallback:** a slot B that hasn't been marked successful falls back to stock slot A after the bootloader's retries run out. Once `omamobile-boot-success` has marked slot B, don't rely on that fallback: use fastboot. Keep a known-good image set (we keep one in `~/android/mainline/known-good`).
+- **Slot fallback:** a slot B that hasn't been marked successful falls back to stock slot A after the bootloader's retries run out. Once `omamobile-boot-success` has marked slot B, don't rely on that fallback: use fastboot. Keep a known-good image set (we keep one in `~/omamobile-kernel/known-good`).
 
 ### 3.5 Never touch PMU registers from userspace; mind `devmem`
 
@@ -144,7 +144,7 @@ tools/phone-mirror             # the phone's screen in a window here, mouse and 
 
 - **An SSH key that needs a touch per connection** (a security key): set `OMAMOBILE_SSH_SHARE=1`, and `tools/phone-ssh` (so `push` too) shares one connection and asks once. Check that SSH still works after a USB or firewall step with `tools/phone-ssh --fresh`, which never shares.
 - **The device** comes from `DEVICE` (default `cheetah`, in [`omamobile.conf`](omamobile.conf)) and its descriptor `device/<codename>/device.conf`: `DEVICE=<codename> bin/omamobile images`. How builds and releases work for several devices: [docs/RELEASES.md](docs/RELEASES.md).
-- **One worktree per subsystem branch.** Each branch gets its own output directory (`KERNEL_DIR=~/android/mainline/wt-gnss KERNEL_OUT=~/android/mainline/out-gnss bin/omamobile kernel`), so builds don't step on each other.
+- **One worktree per subsystem branch.** Each branch gets its own output directory (`KERNEL_DIR=~/omamobile-kernel/wt-gnss KERNEL_OUT=~/omamobile-kernel/out-gnss bin/omamobile kernel`), so builds don't step on each other.
 - **The kernel command line goes in the DTB** (`/chosen/bootargs`), not in `vendor_boot`: the Pixel bootloader (ABL) ignores the vendor_boot cmdline.
 - **Building a DTB with a bring-up overlay** (the helper the runbooks use):
 

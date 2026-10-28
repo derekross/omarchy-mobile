@@ -32,7 +32,7 @@
 #   tools/build-rootfs [--version V] [--allow-missing "PKG..."] [--keep-raw]
 #     DEVICE       device/<codename>/device.conf (default cheetah)
 #     KERNEL_OUT   kernel build with modules-<release>.tar.zst
-#                  (default ~/android/mainline/out-int: bin/omamobile modules)
+#                  (default $KERNEL_BASE/out-int: bin/omamobile modules)
 #     --allow-missing   build even if these packages of ours aren't in out/repo
 #                       (say "mesa hyprland libcamera libcamera-ipa
 #                       gst-plugin-libcamera vulkan-panfrost" for a test image
@@ -45,7 +45,13 @@ ROOT=$PWD
 source tools/lib/alarm.sh
 
 DEVICE=${DEVICE:-cheetah}
-KERNEL_OUT=${KERNEL_OUT:-$HOME/android/mainline/out-int}
+# The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
+# ~/omamobile-kernel, or ~/android/mainline on setups from before 2026-10-29.
+if [[ -z ${KERNEL_BASE:-} ]]; then
+  KERNEL_BASE=$HOME/omamobile-kernel
+  [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
+fi
+KERNEL_OUT=${KERNEL_OUT:-$KERNEL_BASE/out-int}
 VERSION=$(date +%Y.%m.%d)
 ALLOW_MISSING="" KEEP_RAW=0
 while (($#)); do

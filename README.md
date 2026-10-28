@@ -51,13 +51,13 @@ The kernel and boot images come from `bin/omamobile kernel`, `modules`, `initram
 | `docs/ROADMAP.md` | Where things stand and the plan to a working phone |
 | `docs/RELEASES.md` | How builds and releases work for several devices: device descriptors, the kernel package, release bundles |
 
-Large trees live outside the repo, under `~/android/`:
+Large trees live outside the repo: the Android-side sources, images and captures under `~/android/`, and the kernel under `~/omamobile-kernel/` (`~/android/mainline` on setups from before 2026-10-29; the tools find either):
 
 | Path | Contents |
 | --- | --- |
 | `~/android/omamobile` | LineageOS 24.0 source. Includes Google's GPL Pixel 7 kernel at `out-kernel/google/gs-6.1` |
-| `~/android/mainline/linux` | Our kernel repo: branch `omamobile` on mainline v7.3-rc6 (remote `upstream` is Linus's tree), one commit per subsystem so patches can go upstream. Published to [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) by `tools/publish-kernel` (a squashed upstream base, our commits unchanged on top) |
-| `~/android/mainline/pmos-tensor` | postmarketOS Tensor kernel, for reference |
+| `~/omamobile-kernel/linux` | Our kernel repo: branch `omamobile` on mainline v7.3-rc6 (remote `upstream` is Linus's tree), one commit per subsystem so patches can go upstream. Published to [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile) by `tools/publish-kernel` (a squashed upstream base, our commits unchanged on top) |
+| `~/omamobile-kernel/pmos-tensor` | postmarketOS Tensor kernel, for reference |
 | `~/android/reference` | Captures from the phone. Contains serial numbers and partition backups: never commit |
 | `~/android/factory` | Verified stock factory images, used to restore the phone |
 
