@@ -7,9 +7,10 @@ framebuffer. SSH answers at `172.16.42.1`, and `bin/omamobile push`
 rewrites slot B and reboots into it with no fastboot. The power and
 volume keys work (the power key wakes the screen); there is no touch yet:
 the FocalTech FT3658 on SPI0 has no mainline driver. Kernel 7.3.0-rc6,
-local branch `panther-first-light` on `omamobile-int` (`gs201-panther.dts`,
-not yet proposed). Stock Android is
-on slot A, with its `userdata` erased.
+local branch `panther-first-light` on `omamobile-int`; the board file is in
+review against `omamobile` as
+[linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108). Stock Android is on slot A, with its
+`userdata` erased.
 
 ## What booted
 
