@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) touch: the supplies, then the chip ID
 
-Status (2026-10-27): T0-T3 and T5 passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on. T4 (touches) waits for the owner.
+Status (2026-10-27): all gates passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on, reports touches with the axes right, and the lock screen PIN was entered by touch. Next: autoload (see After the gates).
 
 The touch controller is a FocalTech FT3658 (chip ID 0x56) on USI0 SPI,
 wired as the Pixel 7 Pro's S3908. A local driver
@@ -253,6 +253,25 @@ at 1: the owner was away and nobody touched the screen. To repeat.
   default; continuous report (0xE7) 1; vendor ID (0xA8) 0x8d; the scan
   counter (0x91) climbed 0x2d, 0x40, 0x54 at 100 ms steps. The chip is
   awake and scanning; with no touch it raises no interrupt.
+
+### 2026-10-27: T4
+
+A 60 s capture of `event1` (`timeout 60 cat`, decoded on the phone) while
+the owner touched the four corners and swiped down the middle, three
+times: 1632 interrupts, 17 strokes, no `report read failed`.
+
+| Touch | First point (x, y) |
+| --- | --- |
+| Top left | (44, 19) |
+| Top right | (1071, 45) |
+| Bottom left | (34, 2389) |
+| Bottom right | (1033, 2333) |
+| Swipe down, centre | (576, 22) to (598, 1092) |
+
+x spans 29-1072 and y 5-2389 on the 1080x2400 panel: no swap or
+inversion, the DT needs no `touchscreen-*` flags. The owner then locked
+the screen and entered the PIN by touch in the Omarchy lock screen.
+**Passed.**
 
 ### 2026-10-27: T5
 
