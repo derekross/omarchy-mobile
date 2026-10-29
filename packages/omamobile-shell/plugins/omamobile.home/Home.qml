@@ -1220,18 +1220,14 @@ Item {
       }
 
       // ---------- long-press anywhere: edit mode
-      // On top of everything and passive (DragThreshold takes no grab), so
-      // apps and widgets still get their taps and the pager its swipes; a
-      // drag cancels it.
-      Item {
+      // On top of everything, watching without taking presses, so apps and
+      // widgets still get their taps and the pager its swipes; a drag
+      // cancels it. Touch and the mouse each have their own handler there.
+      LongPressEdit {
         anchors.fill: pager
         z: 50
-        TapHandler {
-          enabled: !root.editing && root.sheet === ""
-          gesturePolicy: TapHandler.DragThreshold
-          longPressThreshold: 0.5
-          onLongPressed: root.requestEdit()
-        }
+        home: root
+        active: !root.editing && root.sheet === ""
       }
 
       // ---------- a short notice, with Undo after a remove

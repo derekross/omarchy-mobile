@@ -514,6 +514,20 @@ elif [[ $rc != 0 ]]; then
 else
   pass "the shade under touch: a swipe forgets one, a short one springs back, a tap taps, a drag scrolls"
 fi
+# The home screen's long press (issue #147): a TapHandler over the pager
+# took mouse presses from the tiles, so it takes touch alone and a mouse
+# hold is timed from a PointHandler. test/home-mouse clicks, taps and holds.
+lp=plugins/omamobile.home/LongPressEdit.qml
+grep -c 'acceptedDevices: PointerDevice.TouchScreen' "$lp" >/dev/null || fail "the long-press TapHandler takes touch alone"
+grep -c 'LongPressEdit {' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen lays LongPressEdit over its pages"
+rc=0; out=$(bash test/home-mouse 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the home screen under a mouse and touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home screen under a mouse and touch (test/home-mouse)"
+else
+  pass "the home screen under a mouse and touch: a click and a tap launch, a hold edits once, a drag turns the page"
+fi
 if command -v node >/dev/null; then
   node -e '
 const L = require("./plugins/omamobile.launcher/LauncherModel.js")
