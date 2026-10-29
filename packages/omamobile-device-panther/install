@@ -11,10 +11,15 @@ build=${2:-build}
 install -Dm755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
 install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
   "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
+for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules; do
+  install -Dm644 "vendor/udev/rules.d/$rules" "$destination/usr/lib/udev/rules.d/$rules"
+done
 install -Dm644 vendor/systemd/network/20-usb-gadget.network \
   "$destination/usr/lib/systemd/network/20-usb-gadget.network"
 install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
+install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
+  "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 device.conf \

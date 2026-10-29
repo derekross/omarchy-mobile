@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # extract-vendor-firmware: copy the Wi-Fi, Bluetooth, haptics and speaker
 # amplifier firmware the Pixel 7 Pro (cheetah) needs out of a Google factory
-# image, on the user's own machine.
+# image, on the user's own machine. The Pixel 7 (panther) and the Pixel 6
+# Pro (raven) are options (-d).
 #
 # Google's firmware is not ours to redistribute, so Omarchy Mobile never ships it.
 # Like LineageOS's extract-files, this pulls it from an image the user already
@@ -77,7 +78,7 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
            inside it, or a raw/sparse vendor.img
   -o DIR   staging root to write into (default: ./out/vendor-firmware)
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
-  -d DEV   cheetah (default) or raven
+  -d DEV   cheetah (default), panther or raven
   -f       skip the android-info.txt board=$DEVICE check
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
@@ -107,6 +108,13 @@ shift $((OPTIND - 1))
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
 case $DEVICE_OPT in
   cheetah) ;;
+  panther)
+    # Pixel 7: the same gs201 vendor files as cheetah, under the same names
+    # (device/panther/NOTES.md); only the board and codename differ.
+    BOARD="google,gs201-panther"
+    DEVICE="panther"
+    MAP=("${MAP[@]//google,gs201-cheetah/$BOARD}")
+    MAP=("${MAP[@]//cheetah/$DEVICE}") ;;
   raven)
     # Pixel 6 Pro: Wi-Fi, Bluetooth, the AoC, the speaker amplifiers'
     # protection firmware and the AoC's sensor registry (device/raven/WIFI-PLAN.md,
@@ -130,7 +138,7 @@ case $DEVICE_OPT in
       "firmware/cs40l20.bin|cs40l20.bin"
       "firmware/cs40l25a_clab.bin|cs40l25a_clab.bin"
     ) ;;
-  *) die "unknown device $DEVICE_OPT (cheetah or raven)" ;;
+  *) die "unknown device $DEVICE_OPT (cheetah, panther or raven)" ;;
 esac
 # The camera data flow (tools/extract-camera-data) exists for cheetah only
 [[ $DEVICE == cheetah || -z $CAMERA_APEX ]] || die "-c is cheetah's (no camera support for $DEVICE yet)"
@@ -277,8 +285,8 @@ for f in top bottom; do
   [[ "$(head -c4 "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-$f.bin")" == WMDR ]] ||
     die "the $f speaker tuning is not a WMDR coefficient file"
 done
-# Cheetah's haptics and media deltas
-if [[ $DEVICE == cheetah ]]; then
+# The gs201 phones' haptics and media deltas
+if [[ $DEVICE == cheetah || $DEVICE == panther ]]; then
   for f in cs40l26.wmfw cs40l26-calib.wmfw; do wmfw_halo "$f"; done
   grep -aq 'FIRMWARE_CS40L26' "$dest/cs40l26.wmfw" ||
     die "cs40l26.wmfw is not a CS40L26 firmware"
@@ -300,7 +308,7 @@ bt=$(grep -ao 'BCM4389C1 [^[]*' "$brcm/BCM.$BOARD.hcd" | head -1)
 (cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
 say "Wi-Fi firmware: ${ver:-unknown version}"
 say "Bluetooth patch: ${bt:-unknown version}"
-[[ $DEVICE == cheetah ]] &&
+[[ $DEVICE == cheetah || $DEVICE == panther ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
 say "Speaker protection: cs35l41-dsp1-spk-prot-$DEVICE.wmfw and the top and bottom tunings"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"

@@ -31,6 +31,10 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     || fail "the power-key drop-in drifted from the cheetah package"
   pass "the power-key drop-in matches the cheetah package"
+  cmp -s vendor/systemd/sleep.conf.d/10-omamobile.conf \
+    ../omamobile-device-cheetah/vendor/systemd/sleep.conf.d/10-omamobile.conf \
+    || fail "the sleep drop-in drifted from the cheetah package"
+  pass "the sleep drop-in matches the cheetah package"
   cmp -s omamobile-device-panther.install \
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
@@ -55,8 +59,11 @@ pass "reboot-to compiles"
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
+         usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
+         usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
+         usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-panther/version \
@@ -68,6 +75,10 @@ grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobil
   || fail "the whole-disk node is made inaccessible"
 grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
   || fail "userdata is the only partition desktop tools may see"
+for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules; do
+  cmp -s "vendor/udev/rules.d/$rules" "../omamobile-device-cheetah/vendor/udev/rules.d/$rules" \
+    || fail "$rules matches the Pixel 7 Pro's (the same GPU and haptics)"
+done
 grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network" \
   || fail "usb0 keeps the initramfs address"
 power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
@@ -77,6 +88,8 @@ grep -q '^HandlePowerKey=ignore$' "$power" \
   || fail "a short press must not power the phone off"
 grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
   || fail "the long press stays the PMIC reset"
+grep -q '^MemorySleepMode=s2idle$' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
+  || fail "suspend must be s2idle: gs201 never wakes from deep"
 grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is panther"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
@@ -86,4 +99,4 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rule, the USB link, and the mirrorlist, and nothing that marks a slot or starts hardware"
+pass "install stages the udev rules, the USB link, and the mirrorlist, and nothing that marks a slot or starts hardware"
