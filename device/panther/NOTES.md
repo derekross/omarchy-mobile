@@ -3,7 +3,7 @@
 
 Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the first-light record.
 
-The board file (`gs201-panther.dts`) is in review as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108); this repository's images were built from the local branch it came from.
+The board file (`gs201-panther.dts`) is merged into the published kernel as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108) (2026-10-28); this repository's images were built from the local branch it came from.
 
 ## 2026-10-27: boot 6's fallback was a stock boot, and a new backup
 

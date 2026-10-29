@@ -6,10 +6,13 @@ Hyprland and the Omarchy lock screen, on simpledrm over the bootloader's
 framebuffer. SSH answers at `172.16.42.1`, and `bin/omamobile push`
 rewrites slot B and reboots into it with no fastboot. The power and
 volume keys work (the power key wakes the screen); there is no touch yet:
-the FocalTech FT3658 on SPI0 has no mainline driver. Kernel 7.3.0-rc6,
-local branch `panther-first-light` on `omamobile-int`; the board file is in
-review against `omamobile` as
-[linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108). Stock Android is on slot A, with its
+the FocalTech FT3658 on SPI0 never answered in boots 7 and 8 (supplies
+suspected). Kernel 7.3.0-rc6,
+local branch `panther-first-light` on `omamobile-int`; the board file is
+merged into `omamobile` as
+[linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108) (2026-10-28), and the FT3658 driver as
+[linux-omarchy-mobile#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the touches that #109's commit message
+reports aren't recorded in these notes yet. Stock Android is on slot A, with its
 `userdata` erased.
 
 ## What booted
