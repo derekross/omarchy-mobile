@@ -12,6 +12,7 @@ cat >"$scratch/ssh" <<'SH'
 printf '%s\n' "$@"
 SH
 chmod +x "$scratch/ssh"
+real_ssh=$(command -v ssh || true)
 export PATH="$scratch:$PATH"
 unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_SHARE
 tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
@@ -37,7 +38,48 @@ tools/phone-ssh 'uname -r' >"$scratch/shared"
 grep -Fx ControlMaster=auto "$scratch/shared" >/dev/null
 grep -Fx -- "$OMAMOBILE_SSH_HOST" "$scratch/shared" >/dev/null
 shared=$(sed -n '/^ControlPath=/p' "$scratch/shared")
-[[ $shared == *-%C && $shared != 'ControlPath=/tmp/omamobile-ssh-%C' ]]
+[[ $shared =~ /omamobile-ssh-[0-9a-f]{12}-%C$ ]]
+# OpenSSH appends a dot and 16 random characters while binding a master.
+# Cover a normal Linux runtime directory and the longest decimal UID path.
+for runtime in /run/user/1000 /run/user/4294967294; do
+  XDG_RUNTIME_DIR=$runtime tools/phone-ssh true >"$scratch/socket-length"
+  python3 - "$scratch/socket-length" <<'PY'
+import sys
+from pathlib import Path
+options = Path(sys.argv[1]).read_text().splitlines()
+path, = (option.removeprefix('ControlPath=') for option in options
+         if option.startswith('ControlPath='))
+expanded = path.replace('%C', 'a' * 40)
+temporary = expanded + '.' + 'a' * 16
+size = len(temporary.encode())
+assert size <= 107, f'master socket needs {size} bytes, Linux permits 107: {temporary}'
+print(f'ok - shared master socket with temporary suffix fits ({size}/107 bytes)')
+PY
+done
+# -G reads only this fixture config: no connection or user ssh_config.
+if [[ -n $real_ssh ]]; then
+  OMAMOBILE_SSH_HOST=root@fixture.invalid tools/phone-ssh true >"$scratch/alias-options"
+  python3 - "$real_ssh" "$scratch" <<'PY'
+import subprocess, sys
+from pathlib import Path
+scratch = Path(sys.argv[2])
+args = (scratch / 'alias-options').read_text().splitlines()
+config = scratch / 'ssh_config'
+def control_path(host, port):
+    config.write_text(f'Host *\n  HostName {host}\n  Port {port}\n')
+    result = subprocess.run([sys.argv[1], '-G', '-F', str(config), *args],
+                            check=True, capture_output=True, text=True)
+    path, = (line for line in result.stdout.splitlines()
+             if line.startswith('controlpath '))
+    return path
+paths = (control_path('one.invalid', 2201), control_path('one.invalid', 2202),
+         control_path('two.invalid', 2201))
+assert len(set(paths)) == 3, 'SSH alias host/port changes must select separate masters'
+print('ok - OpenSSH keeps alias host/port changes on separate masters')
+PY
+else
+  echo 'ok - # skip: no OpenSSH for alias host/port configuration check'
+fi
 tools/phone-ssh --fresh 'uname -r' >"$scratch/fresh"
 grep -Fx ControlPath=none "$scratch/fresh" >/dev/null
 grep -Fx ControlMaster=no "$scratch/fresh" >/dev/null
