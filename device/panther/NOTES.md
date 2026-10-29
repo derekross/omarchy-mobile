@@ -3,7 +3,17 @@
 
 Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the first-light record.
 
-The board file (`gs201-panther.dts`) is in review as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108); this repository's images were built from the local branch it came from.
+The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
+
+## 2026-10-28: the GPU and the haptics, power off, and USB after a replug
+
+Test kernels from local branches on slot B, each one change on top of the touch test kernel; one boot each.
+
+- **GPU (G1).** With `&gpu` enabled as on the Pixel 7 Pro and the package's always-on rule installed before the boot, panthor probes the Mali-G710 (id 0xa862, `shader_present` 0x1110055), boots the CSF firmware (interface v1.5.0) and registers `renderD128`. Hyprland renders on it through the project's Mesa ("Mali-G710 MC7 (Panfrost)"), with no MMU faults or GPU resets. Probe prints `_opp_set_regulators: no regulator (mali)`, as on the Pixel 7 Pro (harmless, [GPU-PLAN](../cheetah/GPU-PLAN.md)).
+- **Haptics (H1).** The CS40L26A is on USI8 I2C at 0x43 with the same pins and stock values as the Pixel 7 Pro (read from the live device tree). With `cs40l26.wmfw` and `cs40l26.bin` from this phone's own factory image (`tools/extract-vendor-firmware -d panther`) in `/usr/lib/firmware/updates`, `cs40l26-vibra` finds revision A1, runs firmware 7.2.91 with the wavetable, and registers `cs40l26_vibra`; `tools/ff-rumble` effects of 100-500 ms at 25-80 % were felt.
+- **Suspend must be s2idle.** `/sys/power/mem_sleep` reads `s2idle [deep]` on these kernels, and gs201 never wakes from `deep`, so the package now carries the Pixel 7 Pro's `sleep.conf.d` drop-in. Suspend itself is untested here.
+- **Power off reboots the phone.** Omarchy's "Power off" (or `systemctl poweroff`) restarts the phone within a second, which spends a slot B retry. With the reboot watchdog off, systemd-shutdown runs to the end. A shutdown hook that saved the kernel log to `userdata` ten times a second, then powered off itself (sysrq `o`, the same `kernel_power_off()`), saved nothing after the trigger: no `sysrq: Power Off`, no device `shutdown` lines, no `reboot: Power down`. So the reset comes in the first tenth of a second of the kernel's power off, or before UFS can write another frame. With `syscon-poweroff` disabled in the test DT that leaves PSCI SYSTEM_OFF, which the firmware seems to turn into a restart (the boot reason reads `watchdog/apc`). The Pixel 7 Pro has never powered off from Linux either ([SUSPEND-PLAN](../cheetah/SUSPEND-PLAN.md) P7). To get to fastboot, hold Power and Volume Down from a running phone instead; that costs no retry.
+- **USB doesn't come back after a replug.** A replug while Linux runs leaves the phone off the bus, as on the other Tensor phones (`AGENTS.md`): the MAX77759 opens its USB2 data switch, and nothing closes it. The Pixel 7 Pro's `omamobile-usb-rescue` needs the MAX77759's I2C bus (USI13, `10d60000`), which this board file doesn't enable yet, so for now a replug means Power and Volume Down, then a flash.
 
 ## 2026-10-27: boot 6's fallback was a stock boot, and a new backup
 
