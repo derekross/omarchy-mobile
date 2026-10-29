@@ -3,7 +3,7 @@
 pkgname=omamobile-device-panther
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the Google Pixel 7 (panther): storage guard and USB networking"
+pkgdesc="Omarchy Mobile support for the Google Pixel 7 (panther): storage guard, USB networking, GPU, haptics and suspend-to-idle"
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
