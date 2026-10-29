@@ -18,6 +18,39 @@ never change, so reviews can cite them.
 
 ## Safety model (AGENTS.md section 1)
 
+- **L-298. A retry path is exercised on the phone by holding its dependency
+  down, not by breaking hardware.** #99's screen-on retry can be forced by
+  keeping neard stopped across a screen-on. *Check:* first confirm the daemon
+  isn't D-Bus-activatable (`/usr/share/dbus-1/system-services`, `BusName=`),
+  hold it with `systemctl mask --runtime` (gone at reboot), and give the step
+  an unmask rollback. *From:* #99, round 27.
+- **L-297. A gotcha that adds an unproven alternative to a proven safety step
+  says which one to run.** #137's "the hook should power the adapter off" sat
+  next to a 0-of-1 wake record, while stopping the poll loop was 35 of 35.
+  *Check:* every "should" in a safety gotcha points at the variant with the
+  passing record, and the untested one is marked "under test, attended".
+  Extends L-188 and L-284. *From:* #137, round 28.
+- **L-296. A crash-survival measurement uses a reset that skips shutdown, and
+  guards the replug.** #124's `.shutdown` turns the boost off, so the
+  runbook's `systemctl reboot` couldn't answer what a crash leaves behind, and
+  a boost that does survive meets the laptop's VBUS on replug. *Check:* for
+  every "measure after a reboot" step, list the `.shutdown` hooks of the
+  drivers involved and reset with `echo b > /proc/sysrq-trigger`; if the state
+  under test can source VBUS, a meter check with a stop condition comes before
+  any replug. Extends L-88 and L-81. *From:* #136 with kernel #124, round 28.
+- **L-295. `tools/usbc-deadman` is cheetah's MAX77759 tool,** with that
+  phone's I2C bus and registers built in. For another phone's USB-C step, the
+  dead-man we name is the generic `systemd-run --on-active=… systemctl reboot`
+  plus a `tools/phone-ssh --fresh` login. *Check:* any draft that names a
+  device tool for a step on another phone reads the tool for hard-coded buses,
+  addresses and compatibles. Extends L-276 and L-81. *From:* #131, round 27.
+- **L-294. A regulator that sources VBUS is checked for every path that
+  enables it outside the Type-C state machine.** Those are DT
+  `regulator-boot-on` or `regulator-always-on` (the core enables it at
+  registration), fast role swap (no vSafe0V wait), and state left over from a
+  warm reset (a boost whose watchdog is off). *Check:* the binding forbids the
+  two properties, the TCPC sets `vbus_vsafe0v`, and we ask for a warm-reboot
+  read of the boost before any driver loads. *From:* kernel #124, round 27.
 - **L-285. "The approved tool did the write" is checked for what made the
   target writable.** `omamobile-bootctl` only opens `devinfo` for writing; the
   guard bypass (`--setrw` on the partition and its parent for 30 s) was in the
@@ -281,6 +314,26 @@ never change, so reviews can cite them.
 
 ## Shared code and the reference device
 
+- **L-301. A shared-driver branch gated on what callers send counts as match
+  data under CONTRIBUTING §6.2 only if no reference-phone consumer sends it,
+  on the base and on `omamobile-int`.** Kernel #125's DCS-read path runs only
+  when a panel asks for a read, but inlining still changes the hot function's
+  machine code. *Check:* `git grep` the consumer drivers for the new API's
+  callers on `github/omamobile` and `omamobile-int`, and prefer a boot when
+  one is already planned. Extends L-206 and L-228. *From:* kernel #125, round
+  28.
+- **L-300. A touch-scaling change is cheetah-neutral only when the axis
+  maximum plus one equals the panel size.** On #135 the synaptics probe line
+  (`…, 1440x3120, 10 objects`) and no `touchscreen-size-*` in the board DT
+  showed that `scale()` is the identity on cheetah. *Check:* grep `logs/` for
+  the probe's `app fw` line and `git grep touchscreen-size` in the DTS before
+  calling such a change neutral. *From:* #135, round 28.
+- **L-299. A per-device constant given "as before" in a shared runner is
+  checked against that device's notes, not the line it replaced.** #135's
+  "cheetah 60 Hz, as before" repeated the old `op_hz`, but NOTES 2026-10-12
+  and DEVICES.md say cheetah runs at 120 Hz by default. *Check:* `grep -n` the
+  value in `device/<codename>/NOTES.md`, the subsystem plan's status line and
+  DEVICES.md. Extends L-280. *From:* #135, round 28.
 - **L-282. An env-default variable in a shared build library is an input to
   the maintainer's builds too.** #79's `ALARM_LOCAL_KEY=${ALARM_LOCAL_KEY:-}`
   in `tools/lib/alarm.sh` lets a leftover export widen trust in a build
@@ -509,6 +562,20 @@ never change, so reviews can cite them.
 
 ## Shell and scripts
 
+- **L-303. Powering an NFC adapter off through neard needs the poll loop
+  stopped first.** neard 0.20's `Powered=false` is a bare `NFC_CMD_DEV_DOWN`,
+  which `nfc_dev_down()` refuses with EBUSY while the device polls, so a hook
+  that only powers off leaves the radio polling through the sleep. *Check:*
+  any "power the adapter off" in a gotcha, hook or script has a StopPollLoop
+  (or rfkill) step before it and a read-back of `Powered` after. Extends L-235
+  and L-290. *From:* #137 with issue #132, round 28.
+- **L-302. A retry-until-success we suggest is checked against a failure that
+  never clears.** Round 26 bounded #99's `StartPollLoop` retry because the
+  9a's EBUSY persisted, but the power-on retry it suggested had no bound: a
+  permanent refusal logs every 2 s while the screen is lit. *Check:* run the
+  stub bus with a failure that never clears and count the log lines per
+  minute, then bound the retry or accept it explicitly in the draft. Extends
+  L-289 and L-229. *From:* #99, round 27.
 - **L-289. A "retried" claim in a GLib timeout path is checked once per
   caller.** A helper's `True` return only reschedules when the helper is
   itself the registered callback: #99's `start_polling` returns True to retry,
@@ -573,6 +640,43 @@ never change, so reviews can cite them.
 
 ## Kernel (linux-omarchy-mobile)
 
+- **L-308. An out-of-tree module installed under `updates/` disappears with
+  every kernel push.** #136's runbook put a regulator module in
+  `/usr/lib/modules/$(uname -r)/updates`, and the charger and TCPC wait for
+  that regulator through DT supply links, so the next `push` boots without
+  them. *Check:* grep runbooks for `updates/`, trace the DT consumers of the
+  module's nodes, and require the runbook to say what boots without it and to
+  reinstall it after each `push`. *From:* #136, round 28.
+- **L-307. A per-function object diff ends each function at its symbol size
+  and normalises absolute branch targets.** With inline alternatives, arm64's
+  readl replacement pool sits after the last function in `.text`, so new
+  readls elsewhere "changed" `gs_dsim_wait_fifo`; unstripped `0x… <fn+off>`
+  targets flagged two more. *Check:* cut each function at its `llvm-nm -S`
+  size (or treat a trailing `dmb osh`/`ldar` block as the pool), and first
+  check the normaliser reproduces a known result (base to #88). Extends L-153
+  and L-247. *From:* kernel #125, round 28.
+- **L-306. A provider merged as `status = "disabled"` turns a board's `&label`
+  reference into a silent runtime defer.** `dtc` and `dt-validate` both pass
+  the lynx draft without `&pinctrl_hsi2 { status = "okay"; }`. *Check:* for
+  every `&bank` or `&provider` a board PR references, read the provider node's
+  status in the dtsi at the base, and require the board to enable it. Extends
+  L-240. *From:* kernel #98 with #123, round 27.
+- **L-305. When a driver swallows a provider's `-EPROBE_DEFER` and falls back,
+  follow the fallback's own lookups before calling the result unpowered.**
+  hci_qca drops `pwrseq_get()`'s defer, but its fallback asks for regulators
+  that point at the PMU's `ldo` nodes, which nothing registers, so
+  `of_regulator_dev_lookup()` defers anyway. *Check:* for each supply phandle
+  in the fallback path, find who registers that node; a node with no regulator
+  device defers, and only a missing property falls back to a dummy. *From:*
+  kernel #98, round 27.
+- **L-304. A devm action that uses a resource is registered after that
+  resource is acquired.** Devres unwinds in reverse, so #124's restore action,
+  registered before `devm_regulator_get_optional()`, ran after
+  `regulator_put()` had freed the boost: a use-after-free on unbind with host
+  mode on. *Check:* when a commit adds a resource that an earlier devm action
+  or `.remove` uses, list the devm registrations in order, confirm each action
+  comes after everything it touches, and read any "unwound in reverse" comment
+  against that order. *From:* kernel #124, round 27.
 - **L-269. A power sequencer keeps a shared supply up only while another of
   its targets has a consumer.** `pwrseq-qcom-wcn` reference-counts its
   regulators across the Bluetooth and Wi-Fi targets; with Bluetooth as the
@@ -970,6 +1074,29 @@ never change, so reviews can cite them.
 
 ## The gates themselves
 
+- **L-311. The same test failing across unrelated PRs within minutes points at
+  the CI runner's packages, not the diffs.** On 2026-10-29 Arch moved
+  `simdjson` to 5.0.8 before `nodejs` was rebuilt, so from about 01:55Z node
+  couldn't load `libsimdjson.so.34` and four docs-only PRs failed the Node
+  package tests (fixed by #139). *Check:* `gh run list --workflow checks.yml`
+  across branches for a shared start time, `gh run view --log-failed | grep
+  'error while loading shared libraries'`, and compare the install step's
+  package versions in a passing and a failing run. Extends L-42. *From:* #131,
+  #136, #137, #138, round 28.
+- **L-310. #129's prebuilt option check can't see a behaviour-only change.**
+  #135 changed the fingerprint bridge's scaling and call order with no new
+  option, so its test passed with main's stale prebuilt. *Check:* rebuild the
+  base source and confirm it matches the installed prebuilt byte for byte,
+  then build the head and confirm the hashes differ; better, have the Makefile
+  embed the source's sha256 and `test/all` compare it. Extends L-268. *From:*
+  #135, round 28.
+- **L-309. `dt-validate` runs on the host from a scratch venv when the
+  container has no dtschema.** `python3 -m venv $S/venv && $S/venv/bin/pip
+  install dtschema` gave working `dt-mk-schema` and `dt-validate`. *Check:*
+  build the DTB in the container, validate base and head on the host, and feed
+  a known failure to prove the validator bites; that turns "bindings unchecked
+  until CI" into a local check. Extends L-103 and L-156. *From:* kernel #98,
+  round 27.
 - **L-293. An empty diff is checked for empty inputs.** Comparing the gs201
   DTBs before and after kernel #123 with the host's `dtc` printed no
   difference, because the host has no `dtc` and both sides decompiled to
@@ -1184,6 +1311,13 @@ never change, so reviews can cite them.
 
 ## Reviews and merging
 
+- **L-312. With `squash_merge_commit_message: COMMIT_MESSAGES`, a squash
+  carries every commit's body, including wording the review rejected.** #125's
+  first commit says "mark B successful on the first good boot after a flash",
+  the standing permission round 25 turned down. *Check:* `gh api repos/<r>
+  --jq .squash_merge_commit_message`, then read each commit body on a safety
+  PR; any body the final text contradicts means writing the squash body by
+  hand. Extends L-279. *From:* #125, round 27.
 - **L-292. Merge only after every check has finished, not on the first
   green.** #126 was merged with the policy job passed and the tests job still
   pending; the tests passed afterwards, but the merge didn't know that.
@@ -1467,6 +1601,40 @@ never change, so reviews can cite them.
 
 ## Claims and evidence
 
+- **L-317. A host capability whose stated user is a sibling PR is checked
+  against that sibling's diff.** Kernel #125 says LHBM needs DCS reads; #126,
+  the LHBM PR, issues none. *Check:* grep the sibling's head for the new API's
+  callers (`mipi_dsi_dcs_read`, `_generic_read`, `rx_len`) before accepting
+  the motivation. Extends L-201 and L-219. *From:* kernel #125 with #126,
+  round 28.
+- **L-316. An `FF=` line in a haptics report is decoded before it's
+  accepted.** With memless force feedback, FF_RUMBLE alone shows as `107030000
+  0` on arm64, because the memless layer adds the periodic, waveform and gain
+  bits; any other value means the driver changed its capabilities. *From:*
+  kernel #96, round 28.
+- **L-315. A boot report is read against the DTB's bootargs for blacklists and
+  masks of the drivers under test.** #96's test overlay blacklisted `gs_decon`
+  and `panthor` and masked the display and GPU units, so those rows couldn't
+  pass the way they will for users. *Check:* diff the booted command line
+  against the head DTB's `/chosen/bootargs` (decompiled with the build's own
+  dtc) for `modprobe.blacklist`, `systemd.mask` and `systemd.unit`, and ask
+  for the default path. Extends L-276. *From:* kernel #96, round 28.
+- **L-314. "The driver isn't in this stack" is checked against the base the
+  stack sits on.** #96's boot report blamed missing #84 and #89, which had
+  merged before the rebase; a build that reuses another tree's config through
+  `olddefconfig` leaves a new symbol with no default off. *Check:* `git
+  merge-base --is-ancestor <driver commit> <head>`, the symbol's `default` in
+  Kconfig, and `/proc/config.gz` and `lsmod` from the boot. A gap in our own
+  build goes in `device/<codename>/kernel.config`, not the shared fragment
+  (tegu's arrives with #74). Extends L-182 and L-61. *From:* kernel #96, round
+  28.
+- **L-313. A rewrite that answers "what did that boot run?" is re-read for
+  every sentence that pointed back at the old text.** #125's answer replaced
+  the 10-26 kernel line, which left the 10-28 paragraph's "the same kernel"
+  pointing at Google's kernel on the day that carries the rule. *Check:* `git
+  diff <old head> <new head>` on the record, and for each removed noun (a
+  release, a tool, an image) grep the rest of the section for "the same",
+  "that kernel" and "it". *From:* #125, round 27.
 - **L-290. A "stop the radio" change is verified at the controller, not only
   through the daemon's property.** On the 9a, neard's `Polling` and the kernel
   disagreed after a neard restart (EBUSY). *Check:* compare the controller's
@@ -1865,3 +2033,11 @@ never change, so reviews can cite them.
   `omamobile-tegu-display.conf` sets `gs_dsim_cmd allow_tx=1` for every
   panel,** against the `google-tg4c`-only guard that kernel #90's acceptance
   leaned on. *Lesson:* L-277. *From:* kernel #90 with #74, round 25.
+- **C-19 (2026-10-29). Our round 27 comments on #131 and kernel #124 asked for
+  the RT9470 bring-up module and TCPC DT "on a branch or as a draft PR"
+  without naming the repository,** and #136 put a kernel module and a DT
+  fragment in omarchy-mobile, against CONTRIBUTING §6.1; the fragment also
+  references `&hsi2c10`, which no published tree defines. The round 28 draft
+  on #136 owned the mistake and asked for a branch on linux-omarchy-mobile.
+  *Lesson:* L-71 (and L-240 for the labels). *From:* #131, #136 and kernel
+  #124, rounds 27-28.
