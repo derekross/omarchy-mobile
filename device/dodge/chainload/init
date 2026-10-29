@@ -23,6 +23,14 @@ $B mount -t proc proc /proc
 CMDLINE=$($B cat /omamobile/cmdline)
 # sysfs is optional; nothing here reads block devices from it.
 $B mount -t sysfs sysfs /sys 2>/dev/null || true
+# Soft storage-guard note: stage 1 must never have a block device mounted.
+# If somehow one is, hold rather than kexec (never write; never proceed).
+if $B grep -E '^/dev/sd' /proc/mounts >/dev/null 2>&1; then
+  echo "omamobile-chain: refuse: block device mounted in stage 1" > /dev/kmsg 2>/dev/null || true
+  $B sleep 230
+  echo b > /proc/sysrq-trigger
+  while :; do $B sleep 60; done
+fi
 KEXEC="/omamobile/lib/ld-musl-aarch64.so.1 --library-path /omamobile/lib /omamobile/kexec"
 if $KEXEC -c -l /omamobile/Image --dtb=/omamobile/dodge.dtb \
     --initrd=/omamobile/initrd --command-line="$CMDLINE"; then
