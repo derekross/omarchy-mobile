@@ -546,7 +546,11 @@ cmd_initramfs() {
 
 cmd_images() {
   load_device
-  local img="$KERNEL_OUT/images" tools="$SRC_DIR/system/tools/mkbootimg"
+  # Prefer a tree-local mkbootimg (system/tools/mkbootimg) so qcom-abl images
+  # build without a full Android SRC_DIR; fall back to SRC_DIR like Pixels.
+  local img="$KERNEL_OUT/images"
+  local tools="$ROOT/system/tools/mkbootimg"
+  [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
   local dtc="$KERNEL_OUT/scripts/dtc/dtc" boot="$KERNEL_OUT/arch/arm64/boot"
   local dtb="$boot/dts/$DEV_DTB"
   [[ -f "$boot/Image" && -f "$dtb" ]] || die "build the kernel first: omamobile kernel"
@@ -581,23 +585,41 @@ cmd_images() {
 
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
     # Single header-v2 boot.img: kernel + our initramfs + board DTB. Offsets
-    # match Qualcomm ABL on SM8750 (same as tools/dodge-try).
+    # match Qualcomm ABL on SM8750.
     local cmdline=${DEV_CMDLINE:-clk_ignore_unused pd_ignore_unused panic=10 console=tty0}
     say "Boot image (qcom-abl header v2): boot"
-    command -v mkbootimg >/dev/null || die "mkbootimg is not installed (android-tools)"
-    mkbootimg \
-      --header_version 2 \
-      --kernel "$boot/Image" \
-      --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
-      --dtb "$dtb" \
-      --base 0 \
-      --pagesize 4096 \
-      --kernel_offset 0x8000 \
-      --ramdisk_offset 0x1000000 \
-      --tags_offset 0x100 \
-      --dtb_offset 0x01f00000 \
-      --cmdline "$cmdline" \
-      -o "$img/boot.img"
+    # Prefer the tree's mkbootimg.py; the build container has no android-tools.
+    local mkbootimg_py="$tools/mkbootimg.py"
+    if [[ -f $mkbootimg_py ]]; then
+      python3 "$mkbootimg_py" \
+        --header_version 2 \
+        --kernel "$boot/Image" \
+        --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
+        --dtb "$dtb" \
+        --base 0 \
+        --pagesize 4096 \
+        --kernel_offset 0x8000 \
+        --ramdisk_offset 0x1000000 \
+        --tags_offset 0x100 \
+        --dtb_offset 0x01f00000 \
+        --cmdline "$cmdline" \
+        -o "$img/boot.img"
+    else
+      command -v mkbootimg >/dev/null || die "no $mkbootimg_py and no mkbootimg on PATH (android-tools)"
+      mkbootimg \
+        --header_version 2 \
+        --kernel "$boot/Image" \
+        --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
+        --dtb "$dtb" \
+        --base 0 \
+        --pagesize 4096 \
+        --kernel_offset 0x8000 \
+        --ramdisk_offset 0x1000000 \
+        --tags_offset 0x100 \
+        --dtb_offset 0x01f00000 \
+        --cmdline "$cmdline" \
+        -o "$img/boot.img"
+    fi
     printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
     ls -lh "$img"/*.img
     return 0
