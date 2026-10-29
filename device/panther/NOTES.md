@@ -5,6 +5,15 @@ Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the
 
 The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
 
+## 2026-10-29: the touch node, suspend-to-idle and LDO25M (T6)
+
+One boot of the board branch in review ([linux-omarchy-mobile#134](https://github.com/derekross/linux-omarchy-mobile/pull/134): the GPU, the haptics, `mem_sleep_default=s2idle`, LDO25M fixed at 1.8 V and the final touch node), merged with the driver's review fixes ([#133](https://github.com/derekross/linux-omarchy-mobile/pull/133): DMA-safe SPI buffers, `fsleep()`), with `CONFIG_TOUCHSCREEN_FOCALTECH_FT3658=m` from this directory's `kernel.config`. The modules were pushed before the boot.
+
+- `/sys/power/mem_sleep` reads `[s2idle] deep`.
+- `vdd-ts` reads 1.8 V and `avdd-ts` 3.0 V, each with the touch controller as its only consumer.
+- `focaltech_ft3658` loads at boot by itself: chip ID 0x56, firmware 0x16. Touches across the panel, the four corners included, drive Hyprland and unlock the PIN screen, with no SPI or CRC errors.
+- The GPU and the haptics keep working (a 300 ms rumble was felt), and ACPM has 14 of its 15 channels usable.
+
 ## 2026-10-28: the GPU and the haptics, power off, and USB after a replug
 
 Test kernels from local branches on slot B, each one change on top of the touch test kernel; one boot each.
