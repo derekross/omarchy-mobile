@@ -35,6 +35,11 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/vendor/systemd/sleep.conf.d/10-omamobile.conf \
     || fail "the sleep drop-in drifted from the cheetah package"
   pass "the sleep drop-in matches the cheetah package"
+  for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules; do
+    cmp -s "vendor/udev/rules.d/$rules" "../omamobile-device-cheetah/vendor/udev/rules.d/$rules" \
+      || fail "$rules drifted from the cheetah package"
+  done
+  pass "the GPU and feedbackd rules match the cheetah package"
   cmp -s omamobile-device-panther.install \
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
@@ -75,10 +80,11 @@ grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobil
   || fail "the whole-disk node is made inaccessible"
 grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
   || fail "userdata is the only partition desktop tools may see"
-for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules; do
-  cmp -s "vendor/udev/rules.d/$rules" "../omamobile-device-cheetah/vendor/udev/rules.d/$rules" \
-    || fail "$rules matches the Pixel 7 Pro's (the same GPU and haptics)"
-done
+grep -q 'KERNEL=="28000000.gpu", ATTR{power/control}="on"' \
+  "$tmp/root/usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules" \
+  || fail "the GPU stays powered while Panthor drives it"
+grep -q 'ATTRS{name}=="cs40l26_vibra"' "$tmp/root/usr/lib/udev/rules.d/72-omamobile-feedbackd.rules" \
+  || fail "feedbackd gets the CS40L26 haptics"
 grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network" \
   || fail "usb0 keeps the initramfs address"
 power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
