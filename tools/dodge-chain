@@ -1,0 +1,137 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# dodge-chain: build the OnePlus 13 (dodge) kexec chain-loader boot.img.
+#
+#   tools/dodge-chain pack   stage 2 DTB, stage 1 kernel, boot-chain.img
+#
+# ABL does not start header v2 images under fastboot boot, and ignores a
+# ramdisk in an uploaded v4 boot.img. Stage 1 is therefore our kernel with
+# a built-in initramfs and a forced cmdline, packed as a kernel-only
+# header v4 image. ABL starts it on stock's DTB; device/dodge/chainload/init
+# (PID 1, no disk) kexecs stage 2: our kernel, our DTB, the shared
+# initramfs from bin/omamobile initramfs. Nothing is flashed.
+#
+# Stage 2 inputs come from $STAGE2_OUT (Image, DTB, .config) and
+# $STAGE2_INITRD (normally $KERNEL_OUT/initramfs.cpio.lz4). Run
+# `omamobile kernel` and `omamobile initramfs` first, or point the
+# variables at an existing build. LIVE_DTB is required and never committed.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+KERNEL_DIR="${KERNEL_DIR:-$HOME/android/mainline/linux}"
+STAGE2_OUT="${STAGE2_OUT:-${KERNEL_OUT:-$HOME/android/mainline/out}}"
+CHAIN_OUT="${CHAIN_OUT:-$STAGE2_OUT/chain}"
+JOBS="${JOBS:-$(nproc)}"
+LIVE_DTB="${LIVE_DTB:-}"
+# Known-good stage 2 DTB options (simpledrm on the splash buffer).
+DTB_OPTS="${DTB_OPTS:-splash fb}"
+STAGE2_IMAGE="${STAGE2_IMAGE:-$STAGE2_OUT/arch/arm64/boot/Image}"
+STAGE2_DTB_IN="${STAGE2_DTB_IN:-$STAGE2_OUT/arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dtb}"
+STAGE2_INITRD="${STAGE2_INITRD:-$STAGE2_OUT/initramfs.cpio.lz4}"
+STAGE2_CMDLINE="${STAGE2_CMDLINE:-rdinit=/init clk_ignore_unused pd_ignore_unused panic=10 console=tty0 omamobile.ufs-probe}"
+# Stage 1 must not enable LPIs: a GIC that already turned them on will not
+# give stage 2 a clean ITS.
+STAGE1_CMDLINE="rdinit=/omamobile/init panic=10 irqchip.gicv3_nolpi=1"
+ALPINE_VER=3.24.2
+ALPINE_SUM=9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<USAGE
+Usage: tools/dodge-chain pack
+
+  pack   Stage 2 DTB (live memory map, DTB_OPTS), stage 1 kernel with the
+         built-in chain-loader, and \$CHAIN_OUT/images/boot-chain.img.
+         No phone access.
+
+STAGE2_OUT=$STAGE2_OUT
+CHAIN_OUT=$CHAIN_OUT
+STAGE2_INITRD=$STAGE2_INITRD
+STAGE2_CMDLINE=$STAGE2_CMDLINE
+DTB_OPTS='$DTB_OPTS'
+LIVE_DTB=${LIVE_DTB:-(required)}
+USAGE
+}
+
+cmd_pack() {
+  local f
+  for f in "$STAGE2_IMAGE" "$STAGE2_DTB_IN" "$STAGE2_INITRD" "$STAGE2_OUT/.config"; do
+    [[ -f $f ]] || die "missing $f (run: omamobile kernel && omamobile initramfs)"
+  done
+  [[ -n $LIVE_DTB && -f $LIVE_DTB ]] || die "set LIVE_DTB to the rooted live FDT (never committed)"
+  [[ -d $KERNEL_DIR ]] || die "no kernel tree at KERNEL_DIR=$KERNEL_DIR"
+  [[ -x $KERNEL_DIR/scripts/config ]] || die "KERNEL_DIR=$KERNEL_DIR has no scripts/config"
+  command -v mkbootimg >/dev/null || die "mkbootimg is not installed (android-tools)"
+  local work="$CHAIN_OUT/chain" dl="${ALPINE_DL:-$HOME/android/downloads/alpine}" apk
+  mkdir -p "$work/x" "$CHAIN_OUT/images" "$dl"
+
+  say "Stage 2 DTB (options: ${DTB_OPTS:-none})"
+  # shellcheck disable=SC2086
+  python3 -I "$ROOT/device/dodge/chainload/stage2-dtb.py" \
+    "$STAGE2_DTB_IN" "$LIVE_DTB" "$work/dodge.dtb" $DTB_OPTS
+
+  say "Alpine busybox-static, kexec-tools and musl"
+  local tarball="alpine-minirootfs-$ALPINE_VER-aarch64.tar.gz"
+  if [[ ! -f $dl/$tarball ]]; then
+    curl -fsSL -o "$dl/$tarball" \
+      "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/releases/aarch64/$tarball"
+  fi
+  echo "$ALPINE_SUM  $dl/$tarball" | sha256sum -c --quiet \
+    || die "checksum mismatch for $tarball"
+  rm -rf "$work/x" && mkdir -p "$work/x"
+  tar -xzf "$dl/$tarball" -C "$work/x"
+  for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ALPINE_VER" "$dl/apks" \
+      busybox-static kexec-tools); do
+    tar -xzf "$apk" -C "$work/x" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' \
+      2>/dev/null || true
+  done
+  local x="$work/x" lzma zstd
+  lzma=$(find "$x/usr/lib" -name "liblzma.so.5.*" -type f | head -1)
+  zstd=$(find "$x/usr/lib" -name "libzstd.so.1.*" -type f | head -1)
+  [[ -x $x/bin/busybox.static && -x $x/usr/sbin/kexec && -f $lzma && -f $zstd ]] \
+    || die "Alpine packages incomplete under $x"
+  printf '%s\n' "$STAGE2_CMDLINE" > "$work/cmdline"
+
+  cat > "$work/list" <<LIST
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+dir /proc 0755 0 0
+dir /sys 0755 0 0
+dir /omamobile 0755 0 0
+dir /omamobile/lib 0755 0 0
+file /omamobile/busybox $x/bin/busybox.static 0755 0 0
+file /omamobile/init $ROOT/device/dodge/chainload/init 0755 0 0
+file /omamobile/kexec $x/usr/sbin/kexec 0755 0 0
+file /omamobile/lib/ld-musl-aarch64.so.1 $x/lib/ld-musl-aarch64.so.1 0755 0 0
+file /omamobile/lib/libc.musl-aarch64.so.1 $x/lib/ld-musl-aarch64.so.1 0755 0 0
+file /omamobile/lib/libz.so.1 $(readlink -f "$x/usr/lib/libz.so.1") 0644 0 0
+file /omamobile/lib/liblzma.so.5 $lzma 0644 0 0
+file /omamobile/lib/libzstd.so.1 $zstd 0644 0 0
+file /omamobile/Image $STAGE2_IMAGE 0644 0 0
+file /omamobile/dodge.dtb $work/dodge.dtb 0644 0 0
+file /omamobile/initrd $STAGE2_INITRD 0644 0 0
+file /omamobile/cmdline $work/cmdline 0644 0 0
+LIST
+
+  say "Stage 1 kernel in $CHAIN_OUT"
+  cp "$STAGE2_OUT/.config" "$CHAIN_OUT/.config"
+  "$KERNEL_DIR/scripts/config" --file "$CHAIN_OUT/.config" \
+    --set-str INITRAMFS_SOURCE "$work/list" \
+    --disable INITRAMFS_COMPRESSION_GZIP --enable INITRAMFS_COMPRESSION_ZSTD \
+    --set-str CMDLINE "$STAGE1_CMDLINE" --enable CMDLINE_FORCE
+  make -s -C "$KERNEL_DIR" O="$CHAIN_OUT" ARCH=arm64 LLVM=1 olddefconfig
+  make -s -C "$KERNEL_DIR" O="$CHAIN_OUT" ARCH=arm64 LLVM=1 -j"$JOBS" Image
+  local out="$CHAIN_OUT/images/boot-chain.img"
+  mkbootimg --header_version 4 --kernel "$CHAIN_OUT/arch/arm64/boot/Image" -o "$out"
+  say "Packed $out"
+  sha256sum "$out"
+  ls -l "$out"
+}
+
+case "${1:-}" in
+  pack) cmd_pack ;;
+  -h|--help|help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

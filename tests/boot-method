@@ -17,6 +17,7 @@ for cmd in fastboot ssh docker; do
   chmod +x "$t/bin/$cmd"
 done
 export PATH="$t/bin:$PATH" CALLS="$t/calls"
+unset KERNEL_OUT KERNEL_DIR KERNEL_BASE WORK || true
 fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
 for method in ram-only uboot-ext4 unknown ''; do
   printf 'CODENAME=probe\nBOOT_METHOD="%s"\nBOOT_IMAGES=""\nUFS_RW=""\n' "$method" > "$t/repo/device/probe/device.conf"
@@ -41,9 +42,10 @@ if "$t/repo/tools/install-phone" --device flame > "$t/log" 2>&1; then fail "flam
 grep -q 'unsupported BOOT_METHOD=ram-only;' "$t/log" || fail "flame fails for the wrong reason"
 echo 'ok - the shipped flame descriptor has no persistent installer path'
 
-# qcom-abl is a supported method for images/flash/push (installer still refuses
-# until a later PR). A complete dodge-shaped descriptor must get past the
-# BOOT_METHOD check; without a kernel build, images stops at "build the kernel first".
+# qcom-abl is accepted by images (installer still refuses until a later PR).
+# flash refuses qcom-abl in this PR (set_active vs GPT bit 54). A complete
+# dodge-shaped descriptor must get past the BOOT_METHOD check; without a
+# kernel build, images stops at "build the kernel first".
 mkdir -p "$t/repo/device/abldev"
 cat > "$t/repo/device/abldev/device.conf" <<'EOF'
 CODENAME=abldev
@@ -64,3 +66,7 @@ grep -q 'unsupported BOOT_METHOD=qcom-abl' "$t/log" && fail "images still refuse
 grep -q 'build the kernel first' "$t/log" || fail "images did not reach the kernel check for qcom-abl"
 [[ ! -e $t/calls ]] || fail "qcom-abl images accessed the phone"
 echo 'ok - BOOT_METHOD=qcom-abl accepted by images (stops before phone access)'
+if DEVICE=abldev "$t/repo/bin/omamobile" flash > "$t/log" 2>&1; then fail "flash unexpectedly accepted qcom-abl"; fi
+grep -q 'flash refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "flash did not refuse qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl flash accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by flash before phone access'

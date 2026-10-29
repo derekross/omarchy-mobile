@@ -546,8 +546,8 @@ cmd_initramfs() {
 
 cmd_images() {
   load_device
-  # Prefer a tree-local mkbootimg (system/tools/mkbootimg) so qcom-abl images
-  # build without a full Android SRC_DIR; fall back to SRC_DIR like Pixels.
+  # Pixel path: tree-local or SRC_DIR mkbootimg.py. qcom-abl uses host
+  # mkbootimg (android-tools) via tools/dodge-chain for a header-v4 image.
   local img="$KERNEL_OUT/images"
   local tools="$ROOT/system/tools/mkbootimg"
   [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
@@ -584,44 +584,31 @@ cmd_images() {
   lz4 -l -9 -f -q "$boot/Image" "$img/Image.lz4"
 
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
-    # Single header-v2 boot.img: kernel + our initramfs + board DTB. Offsets
-    # match Qualcomm ABL on SM8750.
-    local cmdline=${DEV_CMDLINE:-clk_ignore_unused pd_ignore_unused panic=10 console=tty0}
-    say "Boot image (qcom-abl header v2): boot"
-    # Prefer the tree's mkbootimg.py; the build container has no android-tools.
-    local mkbootimg_py="$tools/mkbootimg.py"
-    if [[ -f $mkbootimg_py ]]; then
-      python3 "$mkbootimg_py" \
-        --header_version 2 \
-        --kernel "$boot/Image" \
-        --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
-        --dtb "$dtb" \
-        --base 0 \
-        --pagesize 4096 \
-        --kernel_offset 0x8000 \
-        --ramdisk_offset 0x1000000 \
-        --tags_offset 0x100 \
-        --dtb_offset 0x01f00000 \
-        --cmdline "$cmdline" \
-        -o "$img/boot.img"
-    else
-      command -v mkbootimg >/dev/null || die "no $mkbootimg_py and no mkbootimg on PATH (android-tools)"
-      mkbootimg \
-        --header_version 2 \
-        --kernel "$boot/Image" \
-        --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
-        --dtb "$dtb" \
-        --base 0 \
-        --pagesize 4096 \
-        --kernel_offset 0x8000 \
-        --ramdisk_offset 0x1000000 \
-        --tags_offset 0x100 \
-        --dtb_offset 0x01f00000 \
-        --cmdline "$cmdline" \
-        -o "$img/boot.img"
-    fi
+    # Two-stage chain (device/dodge/chainload, tools/dodge-chain): ABL refuses
+    # header v2 under fastboot boot, and a v4 boot.img ramdisk is ignored
+    # (stock DTB from vendor_boot). Stage 1 is a kernel-only header v4 image
+    # with a built-in /omamobile init that kexecs stage 2 (this Image, the
+    # dodge DTB with the live memory map, and the shared initramfs). LIVE_DTB
+    # is required and never committed. Pixel paths below are unchanged.
+    [[ -n ${LIVE_DTB:-} && -f ${LIVE_DTB:-} ]] ||
+      die "qcom-abl images need LIVE_DTB= path to the rooted live FDT (never committed)"
+    command -v mkbootimg >/dev/null ||
+      die "qcom-abl images need mkbootimg on PATH (android-tools); the Pixel path still uses $tools"
+    local chain_out="${CHAIN_OUT:-$KERNEL_OUT/chain}"
+    say "Boot image (qcom-abl chain, header v4): boot via tools/dodge-chain"
+    STAGE2_OUT="$KERNEL_OUT" \
+    STAGE2_IMAGE="$boot/Image" \
+    STAGE2_DTB_IN="$dtb" \
+    STAGE2_INITRD="$KERNEL_OUT/initramfs.cpio.lz4" \
+    CHAIN_OUT="$chain_out" \
+    LIVE_DTB="$LIVE_DTB" \
+    DTB_OPTS="${DTB_OPTS:-splash fb}" \
+    STAGE2_CMDLINE="${STAGE2_CMDLINE:-rdinit=/init clk_ignore_unused pd_ignore_unused panic=10 console=tty0 omamobile.ufs-probe}" \
+      "$ROOT/tools/dodge-chain" pack
+    cp -- "$chain_out/images/boot-chain.img" "$img/boot.img"
     printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
     ls -lh "$img"/*.img
+    sha256sum "$img/boot.img"
     return 0
   fi
 
@@ -843,6 +830,12 @@ cmd_fastboot() {
 cmd_flash() {
   local img="$KERNEL_OUT/images" p
   load_device
+  # Qualcomm ABL keeps slot flags in the GPT. A fastboot set_active can clear
+  # successful and refill retries; the bit-54 mark has no §3.1 entry yet.
+  # Refuse here; day-2 updates use push once that path is viable, and the
+  # installer PR can reopen flash with the rest.
+  [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
+    die "flash refuses BOOT_METHOD=qcom-abl (use push for day-2, or wait for the installer PR); see device/$DEVICE/BRINGUP-M1.md"
   images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   local serial
