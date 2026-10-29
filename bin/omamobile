@@ -80,32 +80,17 @@ load_device() {
       die "$file:$n: not a KEY=value line"
     fi
   done < "$file"
-  [[ $DEV_BOOT_METHOD == android-v4 ]] \
-    || die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports only android-v4"
-  for key in CODENAME SOC PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
-      VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
-    p="DEV_$key"
-    [[ -n ${!p:-} ]] || die "$file: $key is missing"
-  done
-  # ABL picks the base DTB by /soc_id (gs101, gs201) or by /soc_compatible
-  # (zuma): a descriptor names exactly one of the two.
-  if [[ -n ${DEV_SOC_IDS:-} && -n ${DEV_SOC_COMPATIBLE:-} ]]; then
-    die "$file: SOC_IDS and SOC_COMPATIBLE are exclusive; name the one this bootloader matches on"
-  elif [[ -z ${DEV_SOC_IDS:-} && -z ${DEV_SOC_COMPATIBLE:-} ]]; then
-    die "$file: SOC_IDS is missing (or SOC_COMPATIBLE, for a bootloader that matches /soc_compatible)"
-  fi
-  local sc='^[a-z0-9]+(-[a-z0-9]+)*:0x[0-9a-f]+:[0-9]+:[0-9]+:[0-9]+$' labels=" "
-  for p in ${DEV_SOC_COMPATIBLE:-}; do
-    [[ $p =~ $sc ]] || die "$file: SOC_COMPATIBLE entries are label:product_id:major:minor:pkg_mode, not $p"
-    # One child node per entry: the label names it, so it must be unique
-    [[ $labels != *" ${p%%:*} "* ]] || die "$file: SOC_COMPATIBLE names ${p%%:*} twice"
-    labels+="${p%%:*} "
-  done
+  case $DEV_BOOT_METHOD in
+    android-v4|qcom-abl) ;;
+    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4 and qcom-abl" ;;
+  esac
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
   # Safety: the guard's allowlist may name slot B's boot images and userdata
   # only, must hold userdata, and every boot image we write must be on it.
   # initramfs packs this list into the image, and the init checks it again.
+  # Shared across boot methods: never *_a, never persist/efs/modem/vbmeta.
   local rw_chars='^[a-z0-9_ ]+$' seen_rw=" "
+  [[ -n ${DEV_UFS_RW:-} ]] || die "$file: UFS_RW is missing"
   [[ $DEV_UFS_RW =~ $rw_chars ]] || die "$file: UFS_RW may hold only partition names ([a-z0-9_]) separated by spaces"
   for p in $DEV_UFS_RW; do
     [[ $p == *_b || $p == userdata ]] || die "$file: UFS_RW may hold only *_b partitions and userdata, not $p"
@@ -115,19 +100,55 @@ load_device() {
     seen_rw+="$p "
   done
   [[ $seen_rw == *" userdata "* ]] || die "$file: UFS_RW must include userdata"
-  for p in $DEV_BOOT_IMAGES; do slot_b_allowed "$p" || die "$file: ${p}_b is not in UFS_RW"; done
-  # images builds one of two layouts from these names: a typo must not
-  # quietly pick the other one.
-  local seen=" "
-  for p in $DEV_BOOT_IMAGES; do
-    [[ " boot init_boot vendor_boot vendor_kernel_boot dtbo " == *" $p "* ]] \
-      || die "$file: BOOT_IMAGES may hold only boot, init_boot, vendor_boot, vendor_kernel_boot and dtbo, not $p"
-    [[ $seen != *" $p "* ]] || die "$file: BOOT_IMAGES names $p twice"
-    seen+="$p "
-  done
-  for p in boot vendor_boot dtbo; do
-    [[ $seen == *" $p "* ]] || die "$file: BOOT_IMAGES must include $p"
-  done
+
+  if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
+    for key in CODENAME SOC PACKAGE DTB BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
+      p="DEV_$key"
+      [[ -n ${!p:-} ]] || die "$file: $key is missing"
+    done
+    # Qualcomm ABL boots a single header-v2 boot.img (kernel + ramdisk + DTB).
+    local seen=" "
+    for p in $DEV_BOOT_IMAGES; do
+      [[ $p == boot ]] || die "$file: qcom-abl BOOT_IMAGES may hold only boot, not $p"
+      [[ $seen != *" $p "* ]] || die "$file: BOOT_IMAGES names $p twice"
+      seen+="$p "
+    done
+    [[ $seen == *" boot "* ]] || die "$file: BOOT_IMAGES must include boot"
+    slot_b_allowed boot || die "$file: boot_b is not in UFS_RW"
+  else
+    for key in CODENAME SOC PACKAGE DTB DTBO_SOURCE DTBO_BOARD_ID DTBO_BOARD_REV VENDOR_CMDLINE \
+        VENDOR_PAGESIZE OS_VERSION OS_PATCH_LEVEL BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
+      p="DEV_$key"
+      [[ -n ${!p:-} ]] || die "$file: $key is missing"
+    done
+    # ABL picks the base DTB by /soc_id (gs101, gs201) or by /soc_compatible
+    # (zuma): a descriptor names exactly one of the two.
+    if [[ -n ${DEV_SOC_IDS:-} && -n ${DEV_SOC_COMPATIBLE:-} ]]; then
+      die "$file: SOC_IDS and SOC_COMPATIBLE are exclusive; name the one this bootloader matches on"
+    elif [[ -z ${DEV_SOC_IDS:-} && -z ${DEV_SOC_COMPATIBLE:-} ]]; then
+      die "$file: SOC_IDS is missing (or SOC_COMPATIBLE, for a bootloader that matches /soc_compatible)"
+    fi
+    local sc='^[a-z0-9]+(-[a-z0-9]+)*:0x[0-9a-f]+:[0-9]+:[0-9]+:[0-9]+$' labels=" "
+    for p in ${DEV_SOC_COMPATIBLE:-}; do
+      [[ $p =~ $sc ]] || die "$file: SOC_COMPATIBLE entries are label:product_id:major:minor:pkg_mode, not $p"
+      # One child node per entry: the label names it, so it must be unique
+      [[ $labels != *" ${p%%:*} "* ]] || die "$file: SOC_COMPATIBLE names ${p%%:*} twice"
+      labels+="${p%%:*} "
+    done
+    for p in $DEV_BOOT_IMAGES; do slot_b_allowed "$p" || die "$file: ${p}_b is not in UFS_RW"; done
+    # images builds one of two layouts from these names: a typo must not
+    # quietly pick the other one.
+    local seen=" "
+    for p in $DEV_BOOT_IMAGES; do
+      [[ " boot init_boot vendor_boot vendor_kernel_boot dtbo " == *" $p "* ]] \
+        || die "$file: BOOT_IMAGES may hold only boot, init_boot, vendor_boot, vendor_kernel_boot and dtbo, not $p"
+      [[ $seen != *" $p "* ]] || die "$file: BOOT_IMAGES names $p twice"
+      seen+="$p "
+    done
+    for p in boot vendor_boot dtbo; do
+      [[ $seen == *" $p "* ]] || die "$file: BOOT_IMAGES must include $p"
+    done
+  fi
   # AVB hash footers, for a bootloader whose vbmeta chains these partitions
   # (zuma): image:partition_size, each a boot image, named once, the size
   # a whole number of 4 KiB blocks. Their rollback index and security patch
@@ -557,6 +578,30 @@ cmd_images() {
 
   say "Kernel: Image.lz4"
   lz4 -l -9 -f -q "$boot/Image" "$img/Image.lz4"
+
+  if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
+    # Single header-v2 boot.img: kernel + our initramfs + board DTB. Offsets
+    # match Qualcomm ABL on SM8750 (same as tools/dodge-try).
+    local cmdline=${DEV_CMDLINE:-clk_ignore_unused pd_ignore_unused panic=10 console=tty0}
+    say "Boot image (qcom-abl header v2): boot"
+    command -v mkbootimg >/dev/null || die "mkbootimg is not installed (android-tools)"
+    mkbootimg \
+      --header_version 2 \
+      --kernel "$boot/Image" \
+      --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
+      --dtb "$dtb" \
+      --base 0 \
+      --pagesize 4096 \
+      --kernel_offset 0x8000 \
+      --ramdisk_offset 0x1000000 \
+      --tags_offset 0x100 \
+      --dtb_offset 0x01f00000 \
+      --cmdline "$cmdline" \
+      -o "$img/boot.img"
+    printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
+    ls -lh "$img"/*.img
+    return 0
+  fi
 
   local entry label id base="" out dtbs=()
   if [[ -n ${DEV_SOC_COMPATIBLE:-} ]]; then

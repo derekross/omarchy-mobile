@@ -40,3 +40,27 @@ cp device/flame/device.conf "$t/repo/device/flame/"
 if "$t/repo/tools/install-phone" --device flame > "$t/log" 2>&1; then fail "flame installs"; fi
 grep -q 'unsupported BOOT_METHOD=ram-only;' "$t/log" || fail "flame fails for the wrong reason"
 echo 'ok - the shipped flame descriptor has no persistent installer path'
+
+# qcom-abl is a supported method for images/flash/push (installer still refuses
+# until a later PR). A complete dodge-shaped descriptor must get past the
+# BOOT_METHOD check; without a kernel build, images stops at "build the kernel first".
+mkdir -p "$t/repo/device/abldev"
+cat > "$t/repo/device/abldev/device.conf" <<'EOF'
+CODENAME=abldev
+NAME="ABL probe"
+SOC=sm8750
+COMPATIBLE="oneplus,abldev"
+PACKAGE=omamobile-device-abldev
+BOOT_METHOD=qcom-abl
+DTB=qcom/sm8750-oneplus-dodge.dtb
+INITRAMFS_INIT=initramfs/init
+PANEL_SIZE=1440x3168
+BOOT_IMAGES=boot
+UFS_RW="boot_b userdata"
+OMAMOBILE_SLOT=b
+EOF
+if DEVICE=abldev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images unexpectedly succeeded without a kernel"; fi
+grep -q 'unsupported BOOT_METHOD=qcom-abl' "$t/log" && fail "images still refuses qcom-abl"
+grep -q 'build the kernel first' "$t/log" || fail "images did not reach the kernel check for qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl images accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl accepted by images (stops before phone access)'
