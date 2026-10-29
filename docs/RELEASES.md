@@ -223,6 +223,8 @@ The kernel is not touched: it still reaches the phone through `bin/omamobile pus
 
 **The phone's update UI** is `omamobile-shell`'s `omamobile.update` sheet: a toast when Omarchy has a release (tap to open) and Update > Omarchy in the menu open it; it shows what's new, the battery and the phone patches, asks for the PIN, shows progress with the output under Details, and ends on the result. The run is a systemd user unit, so it survives the shell restart at its end.
 
+**Kernel module trees.** Omarchy enables `kernel-modules-hook`'s `linux-modules-cleanup.service`, which at every boot moves each `/usr/lib/modules/<release>` that isn't running and that no package owns into `.old`. A phone's kernels come from `bin/omamobile push`, so a boot between a push and the reboot into the new kernel took the next kernel's modules away (cheetah NOTES, 2026-10-27). `omamobile-omarchy` 0.1.14 holds that unit off with a drop-in and runs `omamobile-modules-cleanup.timer` ten minutes after boot instead: it keeps the running release, every tree pushed during this boot, every pacman-owned tree and the two newest others, and removes the rest (`/usr/lib/omamobile-omarchy/modules-cleanup --dry-run` shows what it would do). A removed tree comes back with the next `push`, which re-sends a tree whose `.omamobile-tarball` marker is missing. It never touches `.old`; trees moved there before 0.1.14 can be deleted by hand.
+
 ## 6. Release bundles and the installer
 
 For a first install, or to recover a phone that won't boot. One bundle per device per release.
