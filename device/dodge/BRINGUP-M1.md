@@ -52,7 +52,7 @@ This phone's ABL:
 unchanged.
 
 **Stage 1** (`device/dodge/chainload/init`) runs as **PID 1**. It mounts
-proc (and optionally sysfs) only, **touches no disk**, and never opens a
+proc (and optionally sysfs) only, **touches no disk (soft-check: if `/proc/mounts` lists a `/dev/sd*` mount, stage 1 holds and resets instead of kexec)**, and never opens a
 block device. Stage 2 is the PR kernel `Image`, the dodge DTB (live memory
 map from `$LIVE_DTB`, never committed), and the shared initramfs from
 `bin/omamobile initramfs`. Stage 2 carries the shared storage guard.
