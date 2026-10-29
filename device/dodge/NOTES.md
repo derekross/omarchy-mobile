@@ -42,10 +42,10 @@ bootable here; see [chainload/](chainload/) and the private bring-up notes.
 | GPU | testing | Adreno 830 (gpu2); glmark2 / Freedreno on the phone; Vulkan untested |
 | Touch | testing | Synaptics over SPI |
 | Buttons | testing | Power and volume |
-| USB net | partial | CDC NCM gadget + ACM console; SSH. Gap: gadget stuck after cable replug until reboot |
+| USB net | testing (kernel in review, #115) | CDC NCM gadget + ACM console; SSH. Gap: gadget stuck after cable replug until reboot |
 | Wi-Fi | testing | WCN7860 (peach) / ath12k; autoconnect and 5 GHz |
-| Bluetooth | partial | WCN7860; pairing verified; A2DP untested (no headset yet) |
-| Battery | partial | gauge reads; charging path not fully claimed |
+| Bluetooth | testing (kernel in review, #115) | WCN7860; pairing verified; A2DP untested (no headset yet) |
+| Battery | testing (kernel in review, #115) | gauge reads; charging path not fully claimed |
 | Speakers/mics | testing | AW882xx + UCM2 + PipeWire; speaker, earpiece and built-in mics; headset plug untested |
 | Sensors | testing | SSC via hexagonrpc / libssc; accel, proximity, compass; autorotate |
 | Modem | testing | MPSS + IPA + MM + NM; LTE registration and data; EFS restore every boot; opt-in flag; calls/SMS untested |
@@ -69,10 +69,10 @@ Full narrative for the slot-B move is in [BRINGUP-M1.md](BRINGUP-M1.md) §5.
 | Display | msm/dpu panel up; brightness and DPMS; warm-boot drop closed (QTB read on MDSS enable; Martin verified cold start and idle/wake 2026-10-24) | testing |
 | GPU | Adreno 830 via Freedreno on gpu2; Hyprland and glmark2 on the phone; Vulkan (turnip) not run | testing |
 | Touch / buttons | `touchpanel` input; power and volume keys | testing |
-| USB net | CDC NCM + ACM + SSH. Known gap: after a cable replug the UDC can stay stuck until a reboot | partial |
+| USB net | CDC NCM + ACM + SSH. Known gap: after a cable replug the UDC can stay stuck until a reboot | testing (kernel in review, #115) |
 | Wi-Fi | WCN7860 / ath12k; autoconnect, DHCP, 5 GHz | testing |
-| Bluetooth | hci0 up; pairing with another phone verified; A2DP / headset audio not tested | partial |
-| Battery | fuel-gauge capacity reads; charging path not claimed | partial |
+| Bluetooth | hci0 up; pairing with another phone verified; A2DP / headset audio not tested | testing (kernel in review, #115) |
+| Battery | fuel-gauge capacity reads; charging path not claimed | testing (kernel in review, #115) |
 | Speakers/mics | Speaker and earpiece heard; built-in mic record+playback hands-on; USB-C headset plug untested | testing |
 | Sensors | Accelerometer, proximity, compass through SSC; autorotate on by default after install | testing |
 | Modem | With `/etc/omamobile/modem-probe.enable` and IPA (gpu2): LTE registration and data; EFS restore every boot; calls and SMS untested. Flag is opt-in in the package | testing |
@@ -94,3 +94,11 @@ EFS snapshots, modem firmware blobs, and AGENTS/PLAN files stay on the private
 bring-up branch. The modem units document how to take **read-only** `dd`
 copies of the phone's own EFS partitions onto the device; those copies are
 never committed.
+
+
+## Desktop setup (owners)
+
+`device/dodge/desktop/setup-stock` takes a required `USER` argument (no
+default account name). It deliberately skips Omarchy's ufw step so root SSH
+over Wi-Fi keeps working on this phone; that is an owner choice, not stock
+Omarchy Mobile policy. USB-net SSH is unaffected either way.

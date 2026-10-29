@@ -45,7 +45,9 @@ known-good set into `/var/lib/omamobile/efs-good/<name>`):
 A set the modem has written to for a few minutes can crash the next boot
 (rtsar), so the good set is restored on every boot. Firmware for the MPSS
 belongs under `/lib/firmware/qcom/sm8750/OnePlus/` from the owner's own
-factory image (`tools/phone-provision` / extract scripts); it is not in git.
+OxygenOS / factory image; it is not in git. (`tools/phone-provision` and the
+Pixel extract scripts only know Pixel factory images — do not use them for
+dodge firmware.)
 
 
 ## Off-phone backups (CONTRIBUTING §3.3)
@@ -71,3 +73,12 @@ running kernel, and the firmware + EFS copies above.
 
 Turn on: `touch /etc/omamobile/modem-probe.enable`, then reboot. Turn off:
 remove the flag and reboot.
+
+## Modules path on a stock modules-push install
+
+`omamobile-modem` (and the Bluetooth helper) currently look for out-of-tree
+modules under `/usr/lib/modules/$(uname -r).held/` and
+`/usr/local/lib/omamobile/…`. A kernel installed by `modules-push` has
+neither path — the scripts fail safely (no load) until the package installs
+those modules next to the running release. Until then, treat modem/BT bring-up
+on a pure `modules-push` tree as manual.

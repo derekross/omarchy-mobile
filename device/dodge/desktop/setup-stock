@@ -5,8 +5,8 @@
 # volume keys, on-screen keyboard (squeekboard), the phone window rules,
 # menu entries, Chromium flags, screensaver branding. Run as root:
 #
-#   setup-stock [USER]            apply (USER defaults to ml)
-#   setup-stock --revert [USER]   undo: no lock, no PIN, dodge idle screen-off
+#   setup-stock USER              apply for USER (required; no default account)
+#   setup-stock --revert USER     undo: no lock, no PIN, dodge idle screen-off
 #
 # The user part is the packaged omamobile-setup-user (omamobile-shell) as is,
 # plus the tail of omamobile-firstboot's user step (credential type, the
@@ -30,7 +30,8 @@
 set -euo pipefail
 revert=0
 [[ ${1:-} == --revert ]] && { revert=1; shift; }
-U=${1:-ml}
+U=${1:-}
+[[ -n $U ]] || { echo "usage: setup-stock [--revert] USER" >&2; exit 2; }
 [[ $(id -u) == 0 ]] || { echo "run as root" >&2; exit 1; }
 id "$U" >/dev/null
 H=$(getent passwd "$U" | cut -d: -f6)
