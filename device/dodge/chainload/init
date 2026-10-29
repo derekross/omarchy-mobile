@@ -1,0 +1,39 @@
+#!/omamobile/busybox sh
+# SPDX-License-Identifier: MIT
+# Stage 1 of the dodge kexec chain-loader (device/dodge/PLAN.md §5.3).
+#
+# Runs on our kernel and ABL's stock DTB, from the kernel's built-in
+# initramfs, started by CONFIG_CMDLINE_FORCE rdinit=/omamobile/init.
+# Everything lives under /omamobile so the ramdisks ABL unpacks over
+# the built-in one (vendor_boot, Magisk's init_boot) cannot replace it.
+#
+# kexec_load (kexec-tools -c -l --dtb) starts stage 2: our kernel, our
+# DTB, our initramfs. -c matters: kexec-tools 2.0.32 tries kexec_file_load
+# first, which ignores --dtb on arm64 and hands stage 2 the running FDT,
+# stock's. Every boot before 2026-10-16 ran stage 2 on stock's DTB.
+# Each failure holds for its own time, so the time OxygenOS comes back
+# says which step failed:
+#   kexec -l fails      -> hold 230 s, then reset
+#   kexec -e returns    -> hold 200 s, then reset
+# Keep both away from stage 2's own fallbacks. PID 1 never exits.
+B=/omamobile/busybox
+$B mount -t proc proc /proc
+CMDLINE=$($B cat /omamobile/cmdline)
+# dodge_vbif (built into the dodge kernel, DIAG for the warm-boot display
+# drop): hand stage 1's VBIF snapshots (early_initcall and just before
+# kexec) to stage 2 on its command line. Skipped when the kernel lacks it.
+if $B mount -t sysfs sysfs /sys 2>/dev/null && [ -d /sys/module/dodge_vbif ]; then
+  V=/sys/module/dodge_vbif/parameters
+  echo 1 > $V/snap
+  CMDLINE="$CMDLINE dodge_vbif.s1e=$($B cat $V/early) dodge_vbif.s1k=$($B cat $V/last)"
+fi
+KEXEC="/omamobile/lib/ld-musl-aarch64.so.1 --library-path /omamobile/lib /omamobile/kexec"
+if $KEXEC -c -l /omamobile/Image --dtb=/omamobile/dodge.dtb \
+    --initrd=/omamobile/initrd --command-line="$CMDLINE"; then
+  $KEXEC -e
+  $B sleep 200
+else
+  $B sleep 230
+fi
+echo b > /proc/sysrq-trigger
+while :; do $B sleep 60; done

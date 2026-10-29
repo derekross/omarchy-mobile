@@ -1,0 +1,58 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: MIT
+# Timing-coded probe for stage 2 of the dodge chain-loader. No USB, no
+# log: the time until OxygenOS returns carries up to five yes/no facts.
+#
+# /probe-paths has one test per line, bit 0 first:
+#   a path or glob     the bit is set if it exists
+#   eq:PATH=VALUE      the bit is set if the file reads VALUE
+#   kmsg:TEXT          the bit is set if the kernel log contains TEXT
+#   deferred:NAME      the bit is set if NAME is in devices_deferred
+# v = sum of bit_i << i. After a 40 s settle the init holds 10 + 8*v s,
+# then resets. adb lands near 72 + 8*v s after Booting OKAY (stage 2 and
+# OxygenOS take about 22 s together; the 60 s hold came back at 82 s).
+# If the reset request is ignored, a panic at 320 s resets (panic=10).
+#
+# The cpio must carry /proc, /sys and /dev: without them every write to
+# /proc/sysrq-trigger fails and PID 1 sleeps forever (2026-10-15 probes).
+# PID 1 never exits.
+B=/bin/busybox
+$B mount -t proc proc /proc
+$B mount -t sysfs sysfs /sys
+$B mount -t devtmpfs devtmpfs /dev
+$B mount -t debugfs debugfs /sys/kernel/debug
+echo 1 > /proc/sys/kernel/sysrq
+( $B sleep 320; echo c > /proc/sysrq-trigger ) &
+$B sleep 40
+v=0
+i=0
+while read -r t; do
+  case $t in ''|'#'*) continue ;; esac
+  case $t in
+    eq:*)
+      t=${t#eq:}
+      [ "$($B cat "${t%%=*}" 2>/dev/null)" = "${t#*=}" ] && v=$((v | (1 << i)))
+      ;;
+    kmsg:*)
+      $B dmesg | $B grep -F "${t#kmsg:}" >/dev/null && v=$((v | (1 << i)))
+      ;;
+    deferred:*)
+      if $B grep -F "${t#deferred:}" /sys/kernel/debug/devices_deferred >/dev/null 2>&1; then
+        v=$((v | (1 << i)))
+      fi
+      ;;
+    *)
+      for f in $t; do
+        [ -e "$f" ] && v=$((v | (1 << i)))
+        break
+      done
+      ;;
+  esac
+  i=$((i + 1))
+done < /probe-paths
+echo "omamobile-probe v=$v" > /dev/kmsg
+$B sleep $((10 + 8 * v))
+echo b > /proc/sysrq-trigger
+$B sleep 5
+echo c > /proc/sysrq-trigger
+while :; do $B sleep 60; done
