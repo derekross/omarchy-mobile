@@ -16,11 +16,21 @@ Kernel series: [linux-omarchy-mobile #115](https://github.com/derekross/linux-om
 
 Descriptor: `BOOT_METHOD=qcom-abl`, `OMAMOBILE_SLOT=b`,
 `UFS_RW="boot_b userdata"`. Omarchy runs on slot B; stock stays on slot A.
-Day-2 kernel updates rewrite `boot_b`. The guarded inactive-slot installer
-and firmware-match helper are deferred to a later PR; how this phone was
-installed (firmware A→B copy for ARB, GPT bit-54 mark) is a record in
-[BRINGUP-M1.md](BRINGUP-M1.md), not a procedure for others. Never flash xbl,
-abl, vbmeta or modem from an image.
+`boot_b` is on UFS LUN **sde** (sde48); userdata is **sda15**. The shared
+init's sda-only guard therefore keeps `boot_b` read-only, so day-2 `push`
+cannot rewrite it on this phone until a LUN-aware change (optional follow-up).
+The guarded inactive-slot installer and firmware-match helper are deferred
+to a later PR; how this phone was installed (firmware A→B copy for ARB,
+GPT bit-54 mark) is a record in [BRINGUP-M1.md](BRINGUP-M1.md), not a
+procedure for others. Never flash xbl, abl, vbmeta or modem from an image.
+
+**Boot image shape.** Every image that has booted dodge so far is a
+header-v4, ramdisk-empty, empty-cmdline `boot.img` whose kernel carries a
+built-in `/omamobile/` chain-loader that kexecs stage 2 (our Image, DTB,
+initramfs). This ABL does not start header v2 under `fastboot boot`, and
+ignores a ramdisk in an uploaded v4 `boot.img` (stock `vendor_boot` still
+supplies the DTB). A plain `omamobile images` qcom-abl v2 pack is not
+bootable here; see [chainload/](chainload/) and the private bring-up notes.
 
 ## Feature matrix (phone-verified)
 

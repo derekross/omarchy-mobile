@@ -25,8 +25,11 @@ inactive-slot installer and firmware-match helper are deferred to a later PR.
 
 [device.conf](device.conf): `BOOT_METHOD=qcom-abl`, `BOOT_IMAGES=boot`,
 `UFS_RW="boot_b userdata"`, `OMAMOBILE_SLOT=b`, `COMPATIBLE="oneplus,dodge"`,
-`FASTBOOT_PRODUCT=sun`. Omarchy runs on slot B; stock stays on slot A. Day-2
-kernel updates rewrite `boot_b` only.
+`FASTBOOT_PRODUCT=sun`. Omarchy runs on slot B; stock stays on slot A.
+`boot_b` is on LUN sde (sde48), so the shared init keeps it read-only today;
+day-2 `push` cannot rewrite it until a LUN-aware change. The working boot
+image on this phone is the header-v4 kexec chain-loader, not a plain
+qcom-abl v2 pack from `omamobile images`.
 
 ## 3. How this phone was installed (record)
 
