@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# dodge: screen off after inactivity, no lock (user unit, see shell.qml).
+# Timeout: OMAMOBILE_IDLE_OFF_SECONDS here or in a drop-in. Off switch:
+#   systemctl --user disable --now omamobile-idle-off.service
+[Unit]
+Description=Screen off after inactivity (dodge, no lock)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Environment=OMAMOBILE_IDLE_OFF_SECONDS=150
+Environment=PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin
+Environment=OMARCHY_PATH=/usr/share/omarchy
+ExecStart=/usr/bin/quickshell -n -p /usr/share/omamobile/idle-off
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

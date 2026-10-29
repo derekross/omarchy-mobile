@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# PCIe and the power sequencer only. ath12k is loaded once,
+# afterwards, by omamobile-wifi-ath12k.service.
+D=/usr/local/lib/omamobile
+insmod "$D/pwrseq-core.ko" 2>/dev/null || true
+insmod "$D/pwrseq-qcom-wcn.ko" 2>/dev/null || true
+insmod "$D/pci-pwrctrl-core.ko" 2>/dev/null || true
+insmod "$D/pci-pwrctrl-pwrseq.ko" 2>/dev/null || true
+insmod "$D/phy-qcom-qmp-pcie.ko" 2>/dev/null || true
+sleep 1
+echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
