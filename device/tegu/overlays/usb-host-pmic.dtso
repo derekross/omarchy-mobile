@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/*
+ * Pixel 9a bring-up only; in no device's default DTB_OVERLAYS
+ * (USB-HOST-PLAN H2b): the MAX77779 PMIC block at 0x66 on hsi2c6
+ * (maxim,max77779-pmic, linux-omarchy-mobile#139) with the chip's
+ * interrupt line on gpa8-0, pinned as stock's if_pmic_irq (EINT, pull-up),
+ * and the RT9470 boost's interrupt on its SGPIO6 with a pull-up, as stock's
+ * zumapro-buck-charge-rt9471.dtsi has it (rt,intr_gpio). The PMIC node and
+ * the pin are those of linux-omarchy-mobile#127 at 5ada9ab0f, as an overlay
+ * on the palmtop's gn3 DTB (which has the hsi2c6, pinctrl_alive, gpa8 and
+ * otg_boost labels). Not the boost's enable-gpios (stock's rt,ceb_gpio on
+ * SGPIO7): that pin is the RT9470's charge enable, and driving it with
+ * nothing managing the charger could start it charging; the line stays
+ * with #127. Numbers: IRQ_TYPE_LEVEL_LOW 8, GPIO_ACTIVE_LOW 1,
+ * GPIO_PULL_UP 16.
+ */
+&hsi2c6 {
+	max77779_pmic: pmic@66 {
+		compatible = "maxim,max77779-pmic";
+		reg = <0x66>;
+		interrupt-parent = <&gpa8>;
+		interrupts = <0 8>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&if_pmic_irq>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+};
+
+&pinctrl_alive {
+	if_pmic_irq: if-pmic-irq-pins {
+		samsung,pins = "gpa8-0";
+		samsung,pin-function = <0x0f>;
+		samsung,pin-pud = <0x03>;
+		samsung,pin-drv = <0>;
+	};
+};
+
+&otg_boost {
+	int-gpios = <&max77779_pmic 6 17>;
+};

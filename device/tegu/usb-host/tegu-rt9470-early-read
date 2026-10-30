@@ -1,0 +1,35 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tegu-rt9470-early-read: one boot only (armed by its marker), read the
+# RT9470's OTG_EN (FUNCTION 0x02 bit 1), ICSTAT (0x0f) and STAT registers as
+# early as the I2C bus allows, before any RT9470 driver loads, then again at
+# 60 s of uptime. Read-only: i2cget only, no writes. USB-HOST-PLAN step H5.
+set -u
+A=/var/lib/omamobile-tegu/rt9470-early-read
+L=/var/log/omamobile/rt9470-early-read.log; mkdir -p /var/log/omamobile
+[[ -e $A/armed ]] || exit 0
+rm -f "$A/armed"; sync
+log() { echo "$(awk '{print $1}' /proc/uptime)s $*" >> "$L"; }
+bus=
+for _ in $(seq 1 300); do
+  for d in /sys/bus/i2c/devices/i2c-*; do
+    readlink -f "$d" | grep -c 10ca0000 >/dev/null && { bus=${d##*-}; break 2; }
+  done
+  sleep 0.1
+done
+[[ -n $bus ]] || { log "no hsi2c10 bus"; exit 1; }
+# i2c-dev is a module, and this runs before systemd-modules-load: load it
+# here (it is not an RT9470 driver), then wait for the bus's device node.
+modprobe i2c-dev 2>/dev/null
+for _ in $(seq 1 100); do [[ -e /dev/i2c-$bus ]] && break; sleep 0.1; done
+[[ -e /dev/i2c-$bus ]] || { log "no /dev/i2c-$bus"; exit 1; }
+read_all() {
+  local r out=
+  for r in 0x01 0x02 0x0c 0x0f 0x10 0x11 0x12 0x13; do
+    out+=" $r=$(i2cget -f -y "$bus" 0x5b "$r" 2>/dev/null || echo ?)"
+  done
+  log "$1: driver $(lsmod | grep -c '^tegu_rt9471_boost') vbus-bus$bus$out"
+}
+read_all early
+while (( $(awk '{print int($1)}' /proc/uptime) < 60 )); do sleep 1; done
+read_all at-60s

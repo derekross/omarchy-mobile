@@ -409,7 +409,7 @@ needs them.
 | LHBM on tg4c | 120 Hz only; brightness sets read from the panel; dim captures without overdrive |
 | Touch scale and geometry | 10x touch coordinates; sensor location unknown until F6 |
 | gpp1 shared with touch reset | a wrong pin write drops the touchscreen |
-| LDO15S | always-on on stock; our S2MPG15 description must not switch it off as unused |
+| LDO15S | always-on on stock; our S2MPG15 description must not switch it off as unused. One exception, on purpose: SLEEP-PLAN S2 turns it off for a single boot to measure its share of the sleep drain, with the fingerprint service and anything that starts the trusted app or `storageproxyd` stopped before the push and until the rollback (an enrolled template lives in Trusty) |
 | HAL dependencies | display, sensors, power, HIDL thermal; expect a few shim/prop iterations at F6c |
 
 ## F0 results (2026-10-27, night)

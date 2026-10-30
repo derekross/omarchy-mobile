@@ -30,7 +30,12 @@ The 9a's GNSS is the modem's own: stock's `cp_shmem` carries a
 over SPI (`gnss@0`, `samsung,gnss-spi`, interrupt on gpa5-4). So GNSS needs
 the modem up, but not a SIM. Following Derek's advice on issue #51, the
 modem comes up for GNSS first, and the SIM (a prepaid physical one on a
-T-Mobile-network MVNO, PIN off, activated on slot A) comes later.
+T-Mobile-network MVNO) comes later. It is activated in another phone or
+through the carrier's web activation, with its PIN turned off there, then
+put in the 9a with the 9a off. Not on slot A: stock there overwrites
+`userdata` before it reaches recovery ([NOTES, 2026-10-26 and 2026-10-28](NOTES.md#2026-10-26-and-2026-10-28-slot-a-fallbacks-that-cost-userdata)), so booting it loses the Linux
+root. The backup check and a
+fresh read-only backup before the first Linux modem session stay as below.
 
 ## Safety
 
@@ -514,9 +519,10 @@ startNmea 25; callbacks location 4, NMEA 5).
   POWER_OFF), Kepler still faulted on engine start; after six faults gnssd
   gave up ("chppPlatformNotifierWait in STATE_PERMANENT_FAILURE").
 - Correction (2026-10-27, night): a stock reference can't come from this
-  palmtop. Arch is on `userdata`, so stock Android on slot A can't mount its
-  data and stops in recovery (HANDOFF, 10-26 slot A fallback). It needs a
-  second 9a, or a factory reset and a reinstall. Was: boot slot A once with
+  palmtop. Arch is on `userdata`, and stock Android on slot A overwrites
+  `userdata` before it reaches recovery
+  ([NOTES, 2026-10-26 and 2026-10-28](NOTES.md#2026-10-26-and-2026-10-28-slot-a-fallbacks-that-cost-userdata)),
+  so booting it loses the Linux root. It needs a second 9a. Was: boot slot A once with
   root and capture `logcat -b all` and dmesg while an app gets a fix (gnssd, the HAL, CPIF's gnss
   lines, the timemark device it opens), then compare; or decode the fault
   dump. Then the NMEA FIFO into omamobile-gnss-nmea, as cheetah.

@@ -170,9 +170,7 @@ a G3 (GNSS) session: GNSS is off for this boot.
 S2 turns LDO15S off on purpose, for this one boot, although
 FINGERPRINT-PLAN's Risks table says our S2MPG15 description must not
 switch it off as unused: the sensor is unpowered for the boot, and that
-is the point of the measurement. FINGERPRINT-PLAN (on
-<https://github.com/derekross/omarchy-mobile/pull/138>'s branch) gets the
-matching note as a follow-up once it is on main. Steps:
+is the point of the measurement. FINGERPRINT-PLAN's Risks table names this exception. Steps:
 
 1. **Before (read-only).** On the running DTB, 60 s or more after boot,
    save `/sys/kernel/debug/regulator/regulator_summary` to
@@ -187,8 +185,8 @@ matching note as a follow-up once it is on main. Steps:
    that starts the trusted app or `storageproxyd` (the `omamobile-fp-stage`
    transient unit, `omamobile-fp-chroot start …` by hand, fprintd) are
    disabled or masked before the push and put back after the rollback.
-   F6c is still writing secure objects, and nothing in Trusty should meet
-   a sensor with no power while the calibration question is open. Check
+   An enrolled template lives in Trusty, and nothing in Trusty should
+   meet a sensor with no power. Check
    after the boot: `systemctl list-units 'omamobile-fp*'` empty, no
    `storageproxyd` process. Don't start the modem in this boot: the
    S5300's GNSS supplies are off. Nothing on the palmtop starts the modem
