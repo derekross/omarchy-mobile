@@ -123,10 +123,12 @@ each session. Those backups are never in git.
   Do not treat "returns to fastboot" as verified until that test is run.
 - **Do not use `omamobile fastboot` on this phone yet.** That tool falls
   through to `sysrq c` when `reboot-to bootloader` is ignored, and we have
-  not characterised what a panic does on this ABL. Use the buttons instead:
-  - **Forced restart:** hold **Power** for ~30 s until the phone resets.
-  - **Fastboot (bootloader):** from power-off (or after a forced restart),
-    hold **Volume Down + Power** for ~20 s until the bootloader screen.
+  not characterised what a panic does on this ABL. Prefer the buttons
+  instead of `omamobile fastboot` / sysrq-c. The combos below are the usual
+  ones for this form factor; they have **not** been verified on this phone:
+  - **Forced restart (unverified):** hold **Power** for ~30 s until the phone resets.
+  - **Fastboot / bootloader (unverified):** from power-off (or after a forced
+    restart), hold **Volume Down + Power** for ~20 s until the bootloader screen.
 - Until a `tools/phone-smoke` report from images built by
   `bin/omamobile images` on this branch exists, treat the shared init path
   as **untested on dodge**.
@@ -154,6 +156,7 @@ service or at boot (§3.1).
 | Partition entry / bit | GPT attribute **bit 54** on the `boot_b` entry |
 | Record size | At **4096-byte** logical sectors the GPT record is **8 sectors in 4 files**: primary header (LBA 1), primary entries (LBAs 2–4, 3 sectors), backup entries (LBAs 634875–634877, 3 sectors), backup header (LBA 634879). "Four sectors" would only be right at 512-byte sectors. |
 | Rollback (corrupted GPT) | Off-phone restore of the 4 dump files onto the matching LBAs. sde also holds `abl`/`xbl`; if both primary and backup GPTs on sde are corrupt the phone is likely EDL-only. Whether this ABL accepts `fastboot flash partition:<lun>` has **not** been checked (read-only docs / getvar only — not tried). |
+| Slot check on RAM boots | Under `fastboot boot` this ABL has not been observed to pass `androidboot.slot_suffix` in bootconfig or bootargs, so stage 1 falls back to the packed `/omamobile/slot_suffix` from `OMAMOBILE_SLOT`. phone-smoke's boot check then reflects the descriptor on those RAM boots, not a live ABL property. Live bootconfig/bootargs still win when present. |
 | Way back | With the phone's serial: `fastboot -s <serial> --set-active=a` then a userdata wipe before booting stock A over Omarchy `userdata`. Stock's own factory-reset path when it finds a foreign userdata has **not** been confirmed on this phone, so the record still uses `fastboot -s <serial> -w` (unsuffixed erase of `userdata`, and on many Qualcomm phones `metadata` too). Replace `<serial>` with the value from `fastboot devices`; never paste a real serial into the repo. |
 
 ### Morning read-only dump (2026-10-30 ~07:49 Europe/Copenhagen)
