@@ -86,7 +86,8 @@ grep -c 'border.color: Qt.rgba(0, 0, 0, 0.55)' "$l" >/dev/null || fail "the home
 # bar): on the Bottom layer, reserving its height, so Hyprland lifts
 # squeekboard (Top) above it and the strip covers no key. The masked strip
 # over an app and the keyboard's strip never show together, and both go
-# for a fullscreen window.
+# for a fullscreen window. The strip is a whole touch target tall, for the
+# swipe and the hide key at its right end.
 grep -c 'WlrLayershell.namespace: "omamobile-home-strip"' "$l" >/dev/null || fail "the keyboard's gesture strip has its namespace"
 python3 - "$l" <<'PY' || fail "the keyboard's gesture strip sits under squeekboard"
 import re, sys
@@ -106,9 +107,16 @@ strip, pill = window("omamobile-home-strip"), window("omamobile-home-indicator")
 assert "WlrLayershell.layer: WlrLayer.Bottom" in strip, "strip on the Bottom layer"
 assert "exclusionMode: ExclusionMode.Auto" in strip, "strip reserves its height"
 assert "implicitHeight: root.oskStripHeight" in strip
-h = int(re.search(r"readonly property int oskStripHeight: (\d+)", src).group(1))
-assert 24 <= h <= 36, h
-vis = lambda w: re.search(r"^\s*visible: (.*)$", w, re.M).group(1)
+h = re.search(r"readonly property int oskStripHeight: (\w+)", src).group(1)
+assert h == "touch" or int(h) >= 44, h
+def vis(w):
+    v = re.search(r"^\s*visible: (.*)$", w, re.M).group(1)
+    # A named condition on the launcher's root reads as its definition.
+    m = re.fullmatch(r"root\.(\w+)", v.strip())
+    if m:
+        d = re.search(r"readonly property bool %s: (.*)$" % m.group(1), src, re.M).group(1)
+        v = re.sub(r"(^|[^.\w])(\w+)", lambda x: x.group(1) + ("root." + x.group(2) if x.group(2) not in ("true", "false") else x.group(2)), d)
+    return v
 assert "root.oskOpen" in vis(strip) and "!root.oskOpen" not in vis(strip), vis(strip)
 assert "!root.oskOpen" in vis(pill), vis(pill)
 for w in (strip, pill):
@@ -117,7 +125,26 @@ assert "!root.sessionLocked" in vis(strip), "no strip under the lock's keyboard"
 assert "mask: Region { item: hitArea }" in pill, "the pill over an app stays masked"
 assert pill.count("HomeSwipe {") == 1 and strip.count("HomeSwipe {") == 1, "one swipe logic for both"
 assert "HomePill" in strip and "HomePill" in pill
+assert "HideKeyboardKey {" in strip and "HideKeyboardKey" not in pill, "the hide key is in the keyboard's strip only"
+assert "ownTaps: hideKey" in strip, "the hide key's taps are no double tap"
 PY
+# The keyboard's controls on the pill, through omamobile.keyboard's IPC:
+# a double tap toggles it, the hide key hides it, a hint toast once.
+grep -c 'if (doubleTap.tapCount === 2 && !onOwn && !wasOwn) root.keyboardCall("toggleKeyboard")' "$l" >/dev/null || fail "a double tap on the pill toggles the keyboard"
+grep -c 'onTapped: root.keyboardCall("hideKeyboard")' "$l" >/dev/null || fail "the hide key hides the keyboard"
+grep -c '"call", "shell", "call", "omamobile.keyboard", method, ""' "$l" >/dev/null || fail "keyboard calls go through omamobile.keyboard's IPC"
+if grep -n 'gesturePolicy' "$l" | grep -v '^[0-9]*: *//' ; then fail "the pill's tap handlers grab passively, so swipes get through"; fi
+grep -c 'omarchy-done ensure omamobile-keyboard-pill-hint && exec omarchy-notification-send' "$l" >/dev/null || fail "the double-tap hint shows once"
+grep -c 'keyboardHintText: "Double-tap the bar to show or hide the keyboard"' "$l" >/dev/null || fail "the double-tap hint's text"
+grep -c 'onTriggered: if (root.keyboardStripShown) root.keyboardHint()' "$l" >/dev/null || fail "the hint waits for the strip to stay"
+rc=0; out=$(bash test/pill-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the home pill under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home pill under touch (test/pill-touch)"
+else
+  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key"
+fi
 grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
@@ -258,10 +285,17 @@ assert m.line_for(True) == "visible true" and m.line_for(0) == "visible false"
 assert m.NAME == "sm.puri.OSK0" and m.PATH == "/sm/puri/OSK0"
 ' || fail "omamobile-osk-watch lines"
 grep -c "omamobile-osk-watch" plugins/omamobile.fingerprint/Fingerprint.qml >/dev/null || fail "the fingerprint plugin runs the keyboard watcher"
-grep -c "omamobile-osk-watch" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard button follows the watcher"
-grep -c 'namespace = "^omamobile-osk-hide\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the hide button works over the lock"
-python3 -c 'import json; assert {"id": "omamobile.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard button"
-pass "on-screen keyboard watcher"
+grep -c "omamobile-osk-watch" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin follows the watcher"
+python3 -c 'import json; assert {"id": "omamobile.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard plugin"
+# The keyboard plugin draws nothing any more: its floating hide button
+# covered a terminal's input line. Its IPC stays, for the home pill.
+if grep -nE 'PanelWindow|WlrLayershell' plugins/omamobile.keyboard/Keyboard.qml; then fail "the keyboard plugin floats nothing over apps"; fi
+if grep -rn 'omamobile-osk-hide' hypr plugins; then fail "no layer rule or window for the old hide button"; fi
+for m in hideKeyboard showKeyboard toggleKeyboard; do
+  grep -c "function $m() {" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin answers $m"
+done
+grep -c '"sm.puri.OSK0", "SetVisible", "b", visible ? "true" : "false"' plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin calls squeekboard's SetVisible"
+pass "on-screen keyboard watcher and calls"
 
 # PIN or password: the choice is recorded per user, never the secret, and
 # mirrored to Omarchy's credential-password toggle.

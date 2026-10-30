@@ -18,7 +18,7 @@ logical at scale 3).
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
-| `omamobile.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
+| `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts; draws nothing |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
@@ -292,18 +292,17 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   strip).
 * **Under the keyboard.** While squeekboard is up over an app, the masked
   strip gives way (it would take the bottom row's keys) and the pill moves
-  into a 32 px bar-coloured strip of its own under the keyboard, as Android's
-  gesture bar does. The same swipes work from anywhere along it. Bottom to
-  top:
+  into a 44 px bar-coloured strip of its own under the keyboard, as Android's
+  gesture bar does. The same swipes work from anywhere along it, and a
+  keyboard-down key at its right end hides the keyboard. Bottom to top:
 
   ```
   +-----------------------------+
   | app (resized above both)    |
-  | [hide-keyboard button]      |  omamobile-osk-hide, overlay, normal exclusion
   +-----------------------------+
   | squeekboard                 |  "osk", top layer, reserves its height
   +-----------------------------+
-  |         ==========          |  omamobile-home-strip, bottom layer, 32 px,
+  |         ==========      [v] |  omamobile-home-strip, bottom layer, 44 px,
   +-----------------------------+  reserves its height
   ```
 
@@ -317,6 +316,26 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   through `omarchy-shell lock isLocked` each time the keyboard comes up).
   The log names where a swipe started:
   `omamobile-home-indicator: swipe -142 recents (keyboard)`, or `(pill)`.
+* **The keyboard from the pill.** Nothing floats over the app for the
+  keyboard (a floating hide button covered a terminal's input line, and
+  Send and Next before that). Instead:
+  * the strip under the keyboard has a keyboard-down key at its right end, a
+    44 px touch target; a tap hides the keyboard. A swipe that starts on it
+    still goes home (its TapHandler grabs passively, like the pill's);
+  * a double tap on the pill, over an app or in the strip, shows or hides
+    the keyboard. Single taps do nothing, as before, and a swipe is never a
+    tap. Showing it with no text field focused shows squeekboard anyway;
+  * both go through `omamobile.keyboard`'s IPC (`toggleKeyboard`,
+    `hideKeyboard`), logged as `omamobile-home-indicator: keyboard <call>`;
+  * the first time the strip shows after this arrived, a toast says
+    "Double-tap the bar to show or hide the keyboard", once per user (Omarchy's
+    done marker `omamobile-keyboard-pill-hint` in
+    `~/.local/state/omarchy/done/`).
+
+  The strip isn't there under the lock's keyboard, for a fullscreen window
+  or on the home screen (where the dock is), so neither is the hide key:
+  there the keyboard folds when the text field loses the focus, and quick
+  settings' Keyboard tile shows or folds it.
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
@@ -682,16 +701,17 @@ earlier in `PATH` stands in for fprintd.
 
 ## omamobile.keyboard
 
-While squeekboard is unfolded (`sm.puri.OSK0` `Visible`, through
-`bin/omamobile-osk-watch`), a 44 px keyboard-close button sits right above the
-keyboard's top-left corner; a tap folds it (`SetVisible false`). It is on the
-left because apps put Send and Next at the bottom right, where it used to
-cover them. The window
-is the button only (anchored bottom-left with normal exclusion, so the
-compositor puts it just above the keyboard's reserved area), on the overlay
-layer, without keyboard focus; `hypr/phone.lua` lets it work over the lock
-(`above_lock = 2`). Quick settings has a Keyboard tile that shows or folds the
-keyboard on demand (showing closes the sheet).
+Shows and folds squeekboard (`sm.puri.OSK0` `SetVisible`) for the rest of
+the shell, and follows whether it is unfolded (`Visible`, through
+`bin/omamobile-osk-watch`). It draws nothing: the controls are on the home
+pill (`omamobile.launcher`, "The keyboard from the pill"), which calls it
+through IPC. Up to omamobile-shell 0.2.39 it drew a floating 44 px hide
+button just above the keyboard; at the bottom right it covered Send and
+Next, and at the bottom left a terminal's input line. A hide key inside
+squeekboard's layouts would cover nothing, but the text layouts are
+squeekboard's own, one per language, and overriding them means carrying
+copies of all of them. Quick settings has a Keyboard tile that shows or
+folds the keyboard on demand (showing closes the sheet).
 
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).

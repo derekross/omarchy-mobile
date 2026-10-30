@@ -1,0 +1,102 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The home pill (omamobile.launcher) under touch, offscreen in qmltestrunner:
+# the real HomePill, HomeSwipe and HideKeyboardKey components, the real
+# goHome, showRecents and keyboardCall, and the real contents of the two
+# gesture strips (over an app, and under the keyboard), cut out of
+# Launcher.qml into a plain Item with Quickshell and Omarchy's modules
+# stubbed (test/qml-stubs). A double tap shows or hides the keyboard, a
+# single tap does nothing, a swipe still goes home, the hide key hides the
+# keyboard and lets a swipe through. No compositor, no Quickshell. Exits 77
+# without qmltestrunner.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.launcher
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "pill-touch: no qmltestrunner" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/launcher"
+python3 -B - "$plugin/Launcher.qml" "$work/launcher/PillHarness.qml" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+
+def block(start):
+    """From start (an index at or before a '{') to its matching '}'."""
+    depth, j = 0, src.index("{", start)
+    while True:
+        depth += src[j] == "{"
+        depth -= src[j] == "}"
+        j += 1
+        if depth == 0:
+            return src[start:j]
+
+def component(name):
+    return block(src.index("  component %s: Item {" % name))
+
+def function(name):
+    return block(src.index("  function %s(" % name))
+
+def window_content(namespace):
+    i = src.index('WlrLayershell.namespace: "%s"' % namespace)
+    window = block(src.rindex("PanelWindow {", 0, i))
+    k = window.index("\n      Item {\n")
+    depth, j = 0, window.index("{", k)
+    while True:
+        depth += window[j] == "{"
+        depth -= window[j] == "}"
+        j += 1
+        if depth == 0:
+            return window[k + 1:j]
+
+strip_height = re.search(r"readonly property int oskStripHeight: (\w+)", src).group(1)
+out = """import QtQuick
+import Quickshell
+import qs.Commons
+import qs.Commons as Commons
+
+Item {
+  id: root
+  width: 412
+  height: 300
+  readonly property int touch: Math.max(44, Style.space(44))
+  readonly property int oskStripHeight: %s
+
+%s
+
+%s
+
+%s
+
+  Item {
+    objectName: "pillStrip"
+    width: parent.width
+    height: root.touch
+%s
+  }
+
+  Item {
+    objectName: "keyboardStrip"
+    y: 150
+    width: parent.width
+    height: root.oskStripHeight
+%s
+  }
+
+%s
+
+%s
+
+%s
+}
+""" % ("root." + strip_height if not strip_height.isdigit() else strip_height,
+       function("goHome"), function("showRecents"), function("keyboardCall"),
+       window_content("omamobile-home-indicator"), window_content("omamobile-home-strip"),
+       component("HomePill"), component("HomeSwipe"), component("HideKeyboardKey"))
+open(sys.argv[2], "w").write(out)
+PY
+cp "$here/pill-touch.qml" "$work/tst_pill_touch.qml"
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+exec "$runner" -import "$here/qml-stubs" -input "$work/tst_pill_touch.qml"

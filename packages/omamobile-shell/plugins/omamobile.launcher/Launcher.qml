@@ -330,6 +330,13 @@ Item {
   // way it sits above the dock on the home screen. The strip covers no key,
   // and a swipe that starts in it stays its own as the finger crosses the
   // keyboard.
+  //
+  // The keyboard's own controls live here too, so nothing floats over the
+  // app: a keyboard-down key at the strip's right end hides the keyboard,
+  // and a double tap on the pill (over an app or in the strip) shows or
+  // hides it. Both go through omamobile.keyboard's IPC (keyboardCall). The
+  // floating hide button that plugin drew above the keyboard covered a
+  // terminal's input line, and Send and Next before that.
   property bool oskOpen: false
 
   Process {
@@ -400,15 +407,46 @@ Item {
     Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.home", "goHome", ""])
   }
 
+  // The on-screen keyboard's calls are omamobile.keyboard's (squeekboard's
+  // sm.puri.OSK0 SetVisible): through IPC, as goHome reaches the home
+  // screen, since a plugin only calls into its own panels. method:
+  // hideKeyboard, showKeyboard or toggleKeyboard.
+  function keyboardCall(method) {
+    console.log("omamobile-home-indicator: keyboard", method)
+    Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.keyboard", method, ""])
+  }
+
+  // Once per user, the first time the keyboard comes up under the pill
+  // after the double tap arrived: say how it works, as a toast (Omarchy's
+  // notifications). The marker is Omarchy's own done store
+  // (~/.local/state/omarchy/done/, as omamobile-setup-user's steps), and
+  // `ensure` claims it atomically, so the toast shows once even with two
+  // screens or two shells.
+  readonly property string keyboardHintText: "Double-tap the bar to show or hide the keyboard"
+  function keyboardHint() {
+    Quickshell.execDetached(["sh", "-c", "omarchy-done ensure omamobile-keyboard-pill-hint && exec omarchy-notification-send -g \"$2\" \"$1\"",
+                             "sh", root.keyboardHintText, String.fromCodePoint(0xF030C)])
+  }
+
+  // A moment after the strip shows, so a keyboard that only flashes up (or
+  // the lock's, before isLocked answers) gets no toast.
+  onKeyboardStripShownChanged: keyboardStripShown ? hintDelay.restart() : hintDelay.stop()
+  Timer {
+    id: hintDelay
+    interval: 1500
+    onTriggered: if (root.keyboardStripShown) root.keyboardHint()
+  }
+
   function showRecents() {
     // Through the CLI, like the dock's swipe: a plugin may only summon
     // panels it owns, and the switcher is its own plugin.
     Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.switcher", "{}"])
   }
 
-  // The keyboard's strip: tall enough to start a swipe in, short enough to
-  // keep the app's view of what is being typed.
-  readonly property int oskStripHeight: 32
+  // The keyboard's strip: a full touch target tall (TOUCH-PLAN 2.5), for
+  // the swipe and for the hide key at its right end. It was 32 px before
+  // the hide key moved in; the app gives up 12 px more while typing.
+  readonly property int oskStripHeight: touch
 
   // Not under the lock screen's keyboard: the strip isn't drawn over the
   // lock, but its reserved height would still lift the keyboard and leave a
@@ -417,6 +455,9 @@ Item {
   // third-party plugin can bind to.
   property bool sessionLocked: false
   onOskOpenChanged: if (oskOpen && !lockCheck.running) lockCheck.running = true
+
+  // The keyboard's strip is on screen (each screen's window shows with it).
+  readonly property bool keyboardStripShown: appOnScreen && !opened && oskOpen && !sessionLocked && !fullscreenOnScreen
 
   Process {
     id: lockCheck
@@ -476,7 +517,7 @@ Item {
       required property var modelData
       screen: modelData
 
-      visible: root.appOnScreen && !root.opened && root.oskOpen && !root.sessionLocked && !root.fullscreenOnScreen
+      visible: root.keyboardStripShown
       anchors { bottom: true; left: true; right: true }
       implicitHeight: root.oskStripHeight
       // Auto: it reserves its height, which lifts the keyboard (and the app
@@ -498,6 +539,16 @@ Item {
         HomeSwipe {
           anchors.fill: parent
           strip: "keyboard"
+          ownTaps: hideKey
+        }
+
+        // Over the swipe's right end; a swipe that starts on it still goes
+        // home (see HideKeyboardKey).
+        HideKeyboardKey {
+          id: hideKey
+          anchors.right: parent.right
+          anchors.rightMargin: Style.spacing.xs
+          anchors.verticalCenter: parent.verticalCenter
         }
       }
     }
@@ -857,11 +908,35 @@ Item {
 
   // Where a home swipe starts. Swipe up and let go: home. Swipe up and hold
   // still for a moment (or swipe far up): recent apps, while the finger is
-  // still down, as Android's gesture navigation does. strip names the
-  // surface in the log: "pill" over an app, "keyboard" under the keyboard.
+  // still down, as Android's gesture navigation does. Double-tap: show or
+  // hide the on-screen keyboard. strip names the surface in the log: "pill"
+  // over an app, "keyboard" under the keyboard.
   component HomeSwipe: Item {
     id: swipeArea
     property string strip: "pill"
+    // An item over the strip whose taps are its own (the hide key): a tap
+    // there is never half of a double tap, or tapping the key twice would
+    // hide the keyboard and show it again.
+    property Item ownTaps: null
+
+    // A TapHandler with the default DragThreshold policy grabs only
+    // passively: once the touch moves past the drag threshold the
+    // DragHandler takes it over and the tap is cancelled, so a swipe is
+    // never also a tap. A tap never moves that far, so the DragHandler never
+    // activates and a double tap goes neither home nor to recent apps. A
+    // single tap does nothing, as before (the app still loses it).
+    TapHandler {
+      id: doubleTap
+      property bool lastOwn: false
+      onTapped: function(eventPoint) {
+        var own = swipeArea.ownTaps
+        var onOwn = !!own && own.visible
+          && own.contains(own.mapFromItem(swipeArea, eventPoint.position.x, eventPoint.position.y))
+        var wasOwn = doubleTap.lastOwn
+        doubleTap.lastOwn = onOwn
+        if (doubleTap.tapCount === 2 && !onOwn && !wasOwn) root.keyboardCall("toggleKeyboard")
+      }
+    }
 
     DragHandler {
       id: swipe
@@ -896,6 +971,43 @@ Item {
         swipe.recents = true
         root.showRecents()
       }
+    }
+  }
+
+  // The keyboard strip's hide key: a keyboard-down glyph in a full 44 px
+  // touch target at the strip's right end, where Android's gesture bar puts
+  // its keyboard-down button; it reads as part of the keyboard and covers
+  // nothing in the app. Its TapHandler keeps the default DragThreshold
+  // policy, a passive grab, so the press also reaches the HomeSwipe under
+  // it: a swipe that starts on the key still goes home (and doesn't hide
+  // the keyboard), as the switcher's cards let a drag through their tap.
+  component HideKeyboardKey: Item {
+    objectName: "hideKeyboard"
+    width: root.touch
+    height: root.touch
+
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width - 4
+      height: parent.height - 8
+      radius: height / 2
+      color: Qt.rgba(Commons.Color.bar.text.r, Commons.Color.bar.text.g, Commons.Color.bar.text.b, 0.18)
+      visible: hideTap.pressed
+    }
+
+    Text {
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      // nf-md-keyboard_close: a keyboard over a down chevron
+      text: String.fromCodePoint(0xF030F)
+      color: Commons.Color.bar.text
+      font.family: Style.font.family
+      font.pixelSize: 22
+    }
+
+    TapHandler {
+      id: hideTap
+      onTapped: root.keyboardCall("hideKeyboard")
     }
   }
 
