@@ -39,8 +39,13 @@
 # read" instead of the text. Weather comes from
 # ~/.local/state/omamobile/weather.json, written by the phone shell's
 # omamobile-weather service, and is hidden when absent or over 3 h old; the
-# lock makes no network calls. The clock follows the bar's clockFormat (shell.json), else
-# the locale. On a computer the lock is unchanged.
+# lock makes no network calls. The clock is 12- or 24-hour as the phone bar
+# and the home screen's clock decide, from the bar's clockFormat (shell.json,
+# read at once whatever the lock shows, on every change and whenever the
+# glance comes back; a failed read keeps the last), else the bar's default
+# (HH:mm), never the session's C/POSIX locale. The big glance time is built
+# without AM/PM (Qt's "h" without a marker counts to 23), the small clock
+# over the PIN view keeps it. On a computer the lock is unchanged.
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014, 0017
 # and 0019.
@@ -48,7 +53,7 @@ diff --git i/shell/plugins/lock/LockGlance.js w/shell/plugins/lock/LockGlance.js
 new file mode 100644
 --- /dev/null
 +++ w/shell/plugins/lock/LockGlance.js
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,164 @@
 +.pragma library
 +.import "../notifications/NotificationLogic.js" as NotificationLogic
 +
@@ -68,19 +73,44 @@ new file mode 100644
 +// A weather reading older than this is not shown.
 +var WEATHER_MAX_AGE_MS = 3 * 60 * 60 * 1000
 +
-+// The phone bar's clockFormat (shell.json bar.clockFormat), as the home
-+// screen's clock reads it: quoted literals ignored, an AM/PM marker or "h"
-+// without "H" means 12-hour. Without one, the locale's short time format.
-+function twelveHour(barFormat, localeFormat) {
-+  var f = String(barFormat || "").replace(/'[^']*'/g, "")
-+  if (!f) f = String(localeFormat || "").replace(/'[^']*'/g, "")
++// The bar's own default time format (omamobile-shell's bar, without a
++// clockFormat): the lock's clock agrees with it.
++var BAR_DEFAULT_FORMAT = "HH:mm"
++
++// 12- or 24-hour, decided as the phone bar and the home screen's clock decide
++// (omamobile-shell, HomeModel.systemTimeFormat) from the bar's clockFormat
++// (shell.json bar.clockFormat): quoted literals ignored, an AM/PM marker or
++// "h" without "H" means 12-hour. Without one, the bar's default (24-hour),
++// never the session's Qt locale, which is C/POSIX for the shell.
++function twelveHour(barFormat) {
++  var f = String(barFormat || BAR_DEFAULT_FORMAT).replace(/'[^']*'/g, "")
 +  return /a/i.test(f) || (/h/.test(f) && !/H/.test(f))
 +}
 +
-+// The large glance time leaves AM/PM out; the small clock over the PIN
-+// view keeps it.
-+function timeFormat(twelve, withMarker) {
-+  return twelve ? (withMarker ? "h:mm AP" : "h:mm") : "HH:mm"
++// The bar's clockFormat from shell.json's text: "" when it has none, null
++// when the text can't be read (a write caught half done), which keeps the
++// last one.
++function barClockFormat(text) {
++  var shell
++  try { shell = JSON.parse(String(text || "")) } catch (e) { return null }
++  if (!shell || typeof shell !== "object") return null
++  return shell.bar && shell.bar.clockFormat ? String(shell.bar.clockFormat) : ""
++}
++
++// The small clock over the PIN view: a Qt format, with AM/PM in 12-hour.
++function timeFormat(twelve) {
++  return twelve ? "h:mm AP" : "HH:mm"
++}
++
++// The large glance time, without AM/PM. Built here, not as the Qt format
++// "h:mm": without an AM/PM marker in the same format Qt counts "h" from 0
++// to 23, so a 12-hour bar got a 24-hour lock ("14:02").
++function glanceTime(date, twelve) {
++  var d = date instanceof Date ? date : new Date(date)
++  var h = d.getHours()
++  var mm = (d.getMinutes() < 10 ? "0" : "") + d.getMinutes()
++  if (twelve) return (h % 12 || 12) + ":" + mm
++  return (h < 10 ? "0" : "") + h + ":" + mm
 +}
 +
 +function age(timestamp, now) {
@@ -192,7 +222,7 @@ diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.q
 new file mode 100644
 --- /dev/null
 +++ w/shell/plugins/lock/LockGlance.qml
-@@ -0,0 +1,624 @@
+@@ -0,0 +1,628 @@
 +import QtQuick
 +import Quickshell
 +import Quickshell.Io
@@ -217,7 +247,8 @@ new file mode 100644
 +// clock format and the home screen's last weather reading. Nothing here
 +// acts on a notification or asks the network.
 +//
-+// On a computer (keypad off) it shows nothing and reads nothing.
++// On a computer (keypad off) it shows nothing and reads nothing but the
++// bar's clock format.
 +Item {
 +  id: glance
 +
@@ -242,7 +273,7 @@ new file mode 100644
 +  property string notificationsRaw: ""
 +  property string weatherRaw: ""
 +  readonly property double now: clock.date.getTime()
-+  readonly property bool twelveHour: Glance.twelveHour(barClockFormat, Qt.locale().timeFormat(Locale.ShortFormat))
++  readonly property bool twelveHour: Glance.twelveHour(barClockFormat)
 +  // Swiped away: hidden at once by file name, until a read no longer finds
 +  // the file (the service's forget runs on its file queue), as the shade
 +  // does. A mark the files still show after 15 s lapses (a forget that never
@@ -275,6 +306,7 @@ new file mode 100644
 +    if (!active || (lock && lock.authenticatingPassword)) return
 +    shown = true
 +    expanded = ({})
++    shellFile.reload()
 +    if (lock.passwordText.length > 0) lock.passwordTextEdited("")
 +    noteActivity()
 +    refresh()
@@ -528,16 +560,18 @@ new file mode 100644
 +  }
 +
 +  FileView {
-+    path: glance.active ? glance.home + "/.config/omarchy/shell.json" : ""
++    // The bar's clock format, read whatever the lock shows, at once (a small
++    // file), again on every change and each time the glance comes back. A
++    // read that fails (shell.json being replaced) keeps the last format.
++    id: shellFile
++    path: glance.home + "/.config/omarchy/shell.json"
++    blockLoading: true
 +    watchChanges: true
 +    printErrors: false
 +    onLoaded: {
-+      try {
-+        var shell = JSON.parse(text() || "{}")
-+        glance.barClockFormat = shell.bar && shell.bar.clockFormat ? String(shell.bar.clockFormat) : ""
-+      } catch (e) { glance.barClockFormat = "" }
++      var format = Glance.barClockFormat(text())
++      if (format !== null) glance.barClockFormat = format
 +    }
-+    onLoadFailed: glance.barClockFormat = ""
 +    onFileChanged: reload()
 +  }
 +
@@ -552,7 +586,7 @@ new file mode 100644
 +    y: Math.max(Style.space(24), glance.pinTop - Style.space(22) - height)
 +    visible: glance.progress < 1
 +    opacity: 1 - glance.progress
-+    text: Qt.formatDateTime(clock.date, Glance.timeFormat(glance.twelveHour, true))
++    text: Qt.formatDateTime(clock.date, Glance.timeFormat(glance.twelveHour))
 +    color: Commons.Color.lock.text
 +    font.family: Style.font.family
 +    font.pixelSize: Style.font.display
@@ -589,7 +623,7 @@ new file mode 100644
 +          width: parent.width
 +          horizontalAlignment: Text.AlignHCenter
 +          textFormat: Text.PlainText
-+          text: Qt.formatDateTime(clock.date, Glance.timeFormat(glance.twelveHour, false))
++          text: Glance.glanceTime(clock.date, glance.twelveHour)
 +          color: Commons.Color.lock.text
 +          font.family: Style.font.family
 +          font.weight: Font.Light

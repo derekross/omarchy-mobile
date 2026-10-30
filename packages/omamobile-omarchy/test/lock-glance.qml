@@ -8,6 +8,7 @@ import QtQuick
 import QtTest
 import Quickshell
 import "plugins/lock"
+import "plugins/lock/LockGlance.js" as Glance
 import "TestEnv.js" as TestEnv
 
 Item {
@@ -552,11 +553,76 @@ Item {
     function test_clock_follows_bar_format() {
       writeFile(".config/omarchy/shell.json", JSON.stringify({ bar: { clockFormat: "h:mm AP" } }))
       settle()
-      verify(/^\d{1,2}:\d\d$/.test(one("lockGlanceTime").text), one("lockGlanceTime").text)
-      verify(/^\d{1,2}:\d\d (AM|PM)$/i.test(one("lockPinClock").text), one("lockPinClock").text)
+      verify(/^([1-9]|1[0-2]):\d\d$/.test(one("lockGlanceTime").text), one("lockGlanceTime").text)
+      verify(/^([1-9]|1[0-2]):\d\d (AM|PM)$/i.test(one("lockPinClock").text), one("lockPinClock").text)
       writeFile(".config/omarchy/shell.json", JSON.stringify({ bar: { clockFormat: "HH:mm" } }))
       settle()
       verify(/^\d\d:\d\d$/.test(one("lockGlanceTime").text), one("lockGlanceTime").text)
+      verify(/^\d\d:\d\d$/.test(one("lockPinClock").text), one("lockPinClock").text)
+    }
+
+    // The maintainer's bar: a day, a date and a 12-hour time. The lock reads
+    // it at once, whether or not the glance is up yet (keypad off here, as
+    // before the lock-keypad toggle is read), and the session's locale (C,
+    // test/lock-glance) has no say.
+    function test_the_bars_12_hour_format_before_the_glance_is_up() {
+      compare(Qt.locale().name, "C", "the test runs under the C locale, as the shell does")
+      writeFile(".config/omarchy/shell.json", JSON.stringify({ version: 1, bar: { position: "top", clockFormat: "ddd MMM d  h:mm AP" } }))
+      var view = createTemporaryObject(lockComponent, harness, { keypad: false })
+      var g = findAll(view, function(i) { return i.objectName === "lockGlanceView" })[0].parent
+      compare(g.active, false)
+      compare(g.twelveHour, true, "12-hour from the bar's format, before the glance is up")
+      view.keypad = true
+      compare(g.twelveHour, true)
+      var pin = findAll(view, function(i) { return i.objectName === "lockPinClock" })[0]
+      var big = findAll(view, function(i) { return i.objectName === "lockGlanceTime" })[0]
+      verify(/^\d{1,2}:\d\d (AM|PM)$/i.test(pin.text), "the small clock keeps AM/PM: " + pin.text)
+      verify(/^([1-9]|1[0-2]):\d\d$/.test(big.text), "the big time is 12-hour without AM/PM: " + big.text)
+    }
+
+    function test_a_failed_read_keeps_the_format() {
+      writeFile(".config/omarchy/shell.json", JSON.stringify({ bar: { clockFormat: "h:mm AP" } }))
+      settle()
+      compare(glance().twelveHour, true)
+      writeFile(".config/omarchy/shell.json", "{\"bar\": {\"clockF")
+      settle()
+      compare(glance().twelveHour, true, "a half-written file keeps the last format")
+      writeFile(".config/omarchy/shell.json", "")
+      settle()
+      compare(glance().twelveHour, true, "a file being replaced keeps the last format")
+      writeFile(".config/omarchy/shell.json", JSON.stringify({ bar: { clockFormat: "HH:mm" } }))
+      settle()
+      compare(glance().twelveHour, false)
+    }
+
+    // The same 12/24-hour rule as the bar and the home clock
+    // (HomeModel.systemTimeFormat in omamobile-shell), and a big time that is
+    // really 12-hour.
+    function test_the_rule_and_the_big_time() {
+      verify(Glance.twelveHour("ddd MMM d  h:mm AP"))
+      verify(Glance.twelveHour("hh:mm"))
+      verify(Glance.twelveHour("h:mm ap"))
+      verify(!Glance.twelveHour("HH:mm"))
+      verify(!Glance.twelveHour("'h' HH:mm"), "quoted literals don't count")
+      verify(!Glance.twelveHour(""), "no format: the bar's default, HH:mm")
+      compare(Glance.timeFormat(true), "h:mm AP")
+      compare(Glance.timeFormat(false), "HH:mm")
+      compare(Glance.glanceTime(new Date(2026, 9, 30, 14, 2), true), "2:02")
+      compare(Glance.glanceTime(new Date(2026, 9, 30, 0, 5), true), "12:05")
+      compare(Glance.glanceTime(new Date(2026, 9, 30, 12, 30), true), "12:30")
+      compare(Glance.glanceTime(new Date(2026, 9, 30, 9, 41), true), "9:41")
+      compare(Glance.glanceTime(new Date(2026, 9, 30, 14, 2), false), "14:02")
+      compare(Glance.glanceTime(new Date(2026, 9, 30, 0, 5), false), "00:05")
+      compare(Glance.barClockFormat('{"bar": {"clockFormat": "h:mm AP"}}'), "h:mm AP")
+      compare(Glance.barClockFormat('{"bar": {}}'), "")
+      compare(Glance.barClockFormat('{"bar": {"clo'), null)
+    }
+
+    // No clockFormat: the bar shows its default, HH:mm, and so does the lock.
+    function test_no_bar_format_is_the_bars_default() {
+      writeFile(".config/omarchy/shell.json", JSON.stringify({ version: 1, bar: { position: "top" } }))
+      settle()
+      compare(glance().twelveHour, false)
       verify(/^\d\d:\d\d$/.test(one("lockPinClock").text), one("lockPinClock").text)
     }
 

@@ -23,4 +23,6 @@ printf '.pragma library\nvar HOME = "%s"\n' "$work/home" > "$work/TestEnv.js"
 
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
 export QML_XHR_ALLOW_FILE_READ=1
+# The shell runs under the C/POSIX locale on the phone; so does the test.
+export LC_ALL=C LANG=C
 exec "$runner" -import "$here/qml-stubs" -import "$work" -input "$work/tst_lock_glance.qml"

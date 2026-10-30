@@ -40,8 +40,10 @@ QtObject {
     }
   }
 
-  onPathChanged: Qt.callLater(reload)
-  Component.onCompleted: Qt.callLater(reload)
+  // blockLoading reads at once, as Quickshell's does; otherwise a moment later.
+  property bool ready: false
+  onPathChanged: if (ready) { if (blockLoading) reload(); else Qt.callLater(reload) }
+  Component.onCompleted: { ready = true; if (blockLoading) reload(); else Qt.callLater(reload) }
 
   property Connections watcher: Connections {
     target: Quickshell
