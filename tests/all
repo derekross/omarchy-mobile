@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # The installer's tests (no phone, nothing flashed): tools/install-phone
 # against a fake fastboot, tools/phone-provision against a synthetic backup
-# (and a container standing in for the phone, with Docker), the initramfs's
+# (and a container standing in for the phone, with Docker),
+# tools/phone-install-package against a stand-in phone, the initramfs's
 # first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
 # allowlist and the USB product string, bin/omamobile's boot-image layouts
 # and flash against a fake fastboot, omamobile-firstboot's own tests, and the
@@ -23,7 +24,7 @@ sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
-for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds; do
+for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/phone-provision tests/phone-install-package tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds; do
   echo "# $t"
   "$t"
 done
