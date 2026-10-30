@@ -2177,7 +2177,9 @@ check that the ultrawide is unchanged.
 # P.0 (laptop) every data file from your own HAL; never commit them
 ~/.cache/omamobile-venv/bin/python tools/extract-camera-data \
     --apex <vendor>/apex/com.google.pixel.camera.hal.apex -d /tmp/camdata
-#   expect: HAL sha256 ce9acaad...; IMX386 init 139, S5KGN1 init 1565,
+#   expect: HAL sha256 ce9acaad... (CP2A.260705.006; selectors at slots -1/-4)
+#   or d8f9abb0... (CP3A.261005.002.A1; slots -2/-5, the same five files);
+#   IMX386 init 139, S5KGN1 init 1565,
 #   S5K3J1 init 366 (5 modes), S5KGM5 init 4047 (4 modes);
 #   "D-PHY: 32 register writes, 3 by rate in 111 ranges (80-2147 Mbps)",
 #   settle 7 at 1548 and 8 at 1665; "C-PHY: 20 register writes, 2 by rate in

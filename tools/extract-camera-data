@@ -23,7 +23,13 @@ S5KGM5 (s5kgm5-tele.bin). Each one's default initialisation and mode
 lists are found from its model-ID function through the sensor driver's
 virtual table (for the 3J1, through the settings object its driver holds),
 the HAL's static initialisers that build the mode lists are run, and the
-output is data file version 2 (16-bit values).
+output is data file version 2 (16-bit values). Where the selectors sit
+in the virtual table changes between HAL builds, so the tool searches a
+few slots for them and prints the ones whose lists pass its checks.
+
+Checked against the Pixel 7 Pro's camera HAL from the factory images
+CP2A.260705.006 (liblyric_hwl.so sha256 ce9acaad...) and
+CP3A.261005.002.A1 (d8f9abb0...): both give the same five files.
 
 Every run also writes the DC-PHY receive settings (gs201-dcphy.bin), for
 D-PHY and C-PHY links alike: the HAL's PHY setup function is run once per
@@ -467,9 +473,16 @@ GN1_MODEL_ID_FN = bytes.fromhex("5f2403d5") + struct.pack("<I", 0x52800000 | GN1
 # The driver's virtual table, relative to its model-ID slot [HAL layout]:
 # the init list selector and the mode list selector. Both pick a variant by
 # debug flags in the driver object; with the flags clear they return the
-# defaults.
+# defaults. The Samsung parts and the IMX712 share the layout. The slots
+# move between HAL builds: -1 and -4 in CP2A.260705.006, -2 and -5 in
+# CP3A.261005.002.A1 (a method added between the init selector and the
+# model ID; the lists themselves are unchanged). So these are tried first,
+# and then every other pair within SEL_WINDOW slots before the model ID
+# (see selector_layouts); a pair counts only if its lists pass the part's
+# checks.
 GN1_SLOT_INIT = -1
 GN1_SLOT_MODES = -4
+SEL_WINDOW = 8
 GN1_THIS_SIZE = 0x4000
 GN1_BAYER = 1           # GRBG [I: CAM-M checks it with the solid colour pattern]
 GN1_AGAIN = (0x20, 0x200)
@@ -507,6 +520,43 @@ def gn1_vtables(emu, fn):
             out.append(base + pos)
         pos = blob.find(key, pos + 1)
     return out
+
+
+def selector_layouts():
+    """(init slot, mode slot) pairs to try, CP2A's first; then the pairs
+    that keep its spacing (a method added or removed before both), nearest
+    first; then every other pair in the window."""
+    gap = GN1_SLOT_MODES - GN1_SLOT_INIT
+    slots = range(-1, -SEL_WINDOW - 1, -1)
+    pairs = [(i, m) for i in slots for m in slots if i != m]
+    pairs.sort(key=lambda p: ((p[0], p[1]) != (GN1_SLOT_INIT, GN1_SLOT_MODES),
+                              p[1] - p[0] != gap,
+                              abs(p[0] - GN1_SLOT_INIT) + abs(p[1] - GN1_SLOT_MODES)))
+    return pairs
+
+
+def find_layout(emu, name, tables, probe):
+    """The first selector layout for which probe(vt, init_fn, modes_fn)
+    returns candidates from any of the part's virtual tables; one layout
+    holds for all of them (they share the base class). Returns the
+    candidates of that layout, with a line naming its slots."""
+    text, size = _section(emu, ".text")
+    for si, sm in selector_layouts():
+        found = []
+        for vt in tables:
+            init_fn, modes_fn = emu.u64(vt + 8 * si), emu.u64(vt + 8 * sm)
+            if not (text <= init_fn < text + size and text <= modes_fn < text + size):
+                continue
+            found += probe(vt, init_fn, modes_fn)
+        if found:
+            print(f"{name} selectors: virtual table slots {si} (init) and {sm} "
+                  "(modes) from the model ID")
+            return found
+    return []
+
+
+# What a wrong selector can raise in emulation: a fault, or the stack guard.
+EMU_ERRORS = (unicorn.UcError, RuntimeError)
 
 
 def gn1_run_initialisers(emu, near):
@@ -561,31 +611,29 @@ def build_gn1(hal):
 
     this = emu._alloc(GN1_THIS_SIZE)
     emu.uc.mem_write(this, bytes(GN1_THIS_SIZE))
-    found = []
-    for vt in tables:
-        init_fn = emu.u64(vt + 8 * GN1_SLOT_INIT)
-        modes_fn = emu.u64(vt + 8 * GN1_SLOT_MODES)
+
+    def probe(vt, init_fn, modes_fn):
         try:
             ptr = emu.call(init_fn, this)
             count = emu.uc.reg_read(A.UC_ARM64_REG_X1)
             init = read_regs16(emu, ptr, ptr + 16 * count) if 0 < count < 20000 else None
+            if not init or 0x0136 not in dict(init):
+                return []
             mptr = emu.call(modes_fn, this)
-        except unicorn.UcError:
-            continue
-        if not init or 0x0136 not in dict(init):
-            continue
-        # The mode selector returns the records' begin; its vector's end is
-        # the next word of the static vector it read. Find that vector.
-        modes = None
-        for a in range(HEAP_BASE, emu.heap, 8):
-            if emu.u64(a) == mptr:
-                end = emu.u64(a + 8)
-                if mptr < end <= emu.heap:
-                    modes = gn1_mode_records(emu, mptr, end)
-                    if modes:
-                        break
-        if modes:
-            found.append((init, modes))
+            # The mode selector returns the records' begin; its vector's end
+            # is the next word of the static vector it read. Find that vector.
+            for a in range(HEAP_BASE, emu.heap, 8):
+                if emu.u64(a) == mptr:
+                    end = emu.u64(a + 8)
+                    if mptr < end <= emu.heap:
+                        modes = gn1_mode_records(emu, mptr, end)
+                        if modes:
+                            return [(init, modes)]
+        except EMU_ERRORS:
+            pass
+        return []
+
+    found = find_layout(emu, "S5KGN1", tables, probe)
     if not found:
         die("S5KGN1 init and mode lists not found")
     # The phone's own driver is the one whose init list sets C-PHY lanes
@@ -665,7 +713,9 @@ def samsung_providers(emu, near, holder_off):
     """Virtual tables of the settings objects handed to the driver's
     constructor: the constructor stores its argument at holder_off, and its
     callers allocate the 8-byte object just before ('mov w0, #8; bl
-    operator new; adrp x8; add x8, x8, #lo', the table at lo + 0x10)."""
+    operator new; adrp x8; add x8, x8, #lo', the table at lo + 0x10). The
+    'mov w0, #8' may be scheduled several instructions before the call
+    (CP3A.261005.002.A1)."""
     d = emu.data
     ctors = set()
     for a in range(near - 0x40000, near + 0x40000, 4):
@@ -686,7 +736,7 @@ def samsung_providers(emu, near, holder_off):
         for k in range(i - 64, i):
             if words[k] & 0xFC000000 != 0x94000000 or \
                     _bl_name(emu, text + 4 * k) != "_Znwm" or \
-                    0x52800100 not in words[k - 3:k]:
+                    _w0_imm_before(words, k) != 8:
                 continue
             adrp = [j for j in range(k + 1, k + 4) if words[j] & 0x9F00001F == 0x90000008]
             if not adrp:
@@ -702,6 +752,19 @@ def samsung_providers(emu, near, holder_off):
     if not found:
         found = _samsung_providers_built(emu, words, text, ctors)
     return sorted(set(found))
+
+
+def _w0_imm_before(words, k, reach=16):
+    """The immediate of the 'mov w0, #imm' that last sets w0 before the call
+    at word k, looking back up to reach words and stopping at a branch;
+    None if there is none."""
+    for j in range(k - 1, max(k - 1 - reach, -1), -1):
+        w = words[j]
+        if w & 0xFFE0001F == 0x52800000:              # movz w0, #imm
+            return (w >> 5) & 0xFFFF
+        if w & 0x7C000000 == 0x14000000 or w & 0xFFFFFC1F == 0xD65F0000:
+            return None                               # b, bl, ret
+    return None
 
 
 def _adrp_vtable(words, text, j):
@@ -807,25 +870,27 @@ def samsung_ccs(regs, page=SAMSUNG_CCS_PAGE):
     return view, page
 
 
-def samsung_candidates(emu, chip, rec_size=SAMSUNG_REC_SIZE):
+def samsung_candidates(emu, chip, rec_size=SAMSUNG_REC_SIZE, name=None):
     """(init, [(record address, mode list)]) per driver variant."""
     fn = samsung_model_fn(emu, chip)
     tables = gn1_vtables(emu, fn)
     if not tables:
         die(f"no virtual table holds the 0x{chip:04x} model-ID function")
     gn1_run_initialisers(emu, fn)
-    out = []
-    for vt in tables:
-        init_sel = emu.u64(vt + 8 * GN1_SLOT_INIT)
-        modes_sel = emu.u64(vt + 8 * GN1_SLOT_MODES)
+    providers = {}
+    strides = set()
+
+    def probe(vt, init_sel, modes_sel):
         di, dm = samsung_delegate(emu, init_sel), samsung_delegate(emu, modes_sel)
-        calls = []
+        calls, out = [], []
         if di and dm and di[0] == dm[0]:
-            for pvt in samsung_providers(emu, fn, di[0]):
+            if di[0] not in providers:
+                providers[di[0]] = samsung_providers(emu, fn, di[0])
+            for pvt in providers[di[0]]:
                 obj = emu._alloc(64)
                 emu.uc.mem_write(obj, struct.pack("<Q", pvt))
                 calls.append((emu.u64(pvt + di[1]), emu.u64(pvt + dm[1]), obj))
-        else:
+        elif not di and not dm:
             this = emu._alloc(SAMSUNG_THIS_SIZE)
             emu.uc.mem_write(this, bytes(SAMSUNG_THIS_SIZE))
             calls.append((init_sel, modes_sel, this))
@@ -835,19 +900,25 @@ def samsung_candidates(emu, chip, rec_size=SAMSUNG_REC_SIZE):
                 count = emu.uc.reg_read(A.UC_ARM64_REG_X1)
                 init = samsung_list(emu, ptr, count) if 0 < count < 20000 else None
                 begin = emu.call(modes_fn, obj)
-            except unicorn.UcError:
+                recs = samsung_mode_vector(emu, begin) if init else None
+            except EMU_ERRORS:
                 continue
-            recs = samsung_mode_vector(emu, begin) if init else None
             if not recs:
                 continue
             offs = [off for off, _ in recs]
             stride = offs[1] - offs[0] if len(offs) > 1 else rec_size
             if stride != rec_size or any(b - a != stride for a, b in
                                                  zip(offs, offs[1:])):
-                die(f"mode records of {stride} bytes: unknown HAL version")
+                strides.add(stride)
+                continue
             first = offs[0] % stride
             out.append((init, [(begin + off - first, [(r, v, 0) for r, v in regs])
                                for off, regs in recs]))
+        return out
+
+    out = find_layout(emu, name or f"0x{chip:04x}", tables, probe)
+    if not out and strides:
+        die(f"mode records of {sorted(strides)} bytes: unknown HAL version")
     return out
 
 
@@ -899,7 +970,8 @@ def samsung_mode_info(emu, init, rec, regs, part=None):
 def build_samsung(hal, part):
     p = SAMSUNG_PARTS[part]
     emu = Emu(hal)
-    cands = samsung_candidates(emu, p["chip"], p.get("rec", (SAMSUNG_REC_SIZE,))[0])
+    cands = samsung_candidates(emu, p["chip"], p.get("rec", (SAMSUNG_REC_SIZE,))[0],
+                               part.upper())
     cands = [c for c in cands if len(c[0]) >= 100]
     if not cands:
         die(f"{part}: init and mode lists not found")
@@ -966,7 +1038,7 @@ IMX712_REC_PIXEL_RATE = 0x148
 
 def build_imx712(hal):
     """Init and mode lists of the IMX712 driver. Its virtual table has the
-    Samsung parts' layout (init selector at slot -1, mode selector at -4);
+    Samsung parts' layout, and its selectors are found the same way;
     of the drivers that hold the model-ID function, the one whose selectors
     don't delegate returns the lists directly. Values are 8-bit (Sony CCS),
     the geometry and rates come from the standard registers as for the
@@ -977,26 +1049,25 @@ def build_imx712(hal):
     if not tables:
         die("no virtual table holds the IMX712 model-ID function")
     gn1_run_initialisers(emu, fn)
-    found = []
-    for vt in tables:
-        init_sel = emu.u64(vt + 8 * GN1_SLOT_INIT)
-        modes_sel = emu.u64(vt + 8 * GN1_SLOT_MODES)
+
+    def probe(vt, init_sel, modes_sel):
         if samsung_delegate(emu, init_sel) or samsung_delegate(emu, modes_sel):
-            continue
+            return []
         this = emu._alloc(SAMSUNG_THIS_SIZE)
         emu.uc.mem_write(this, bytes(SAMSUNG_THIS_SIZE))
         try:
             ptr = emu.call(init_sel, this)
             count = emu.uc.reg_read(A.UC_ARM64_REG_X1)
             init = read_regs(emu, ptr, ptr + 16 * count) if 0 < count < 20000 else None
+            if not init or 0x0136 not in regs_dict(init):
+                return []
             begin = emu.call(modes_sel, this)
-        except unicorn.UcError:
-            continue
-        if not init or 0x0136 not in regs_dict(init):
-            continue
-        recs = samsung_mode_vector(emu, begin)
-        if recs:
-            found.append((init, begin, recs))
+            recs = samsung_mode_vector(emu, begin)
+        except EMU_ERRORS:
+            return []
+        return [(init, begin, recs)] if recs else []
+
+    found = find_layout(emu, "IMX712", tables, probe)
     if len(found) != 1:
         die(f"IMX712: {len(found)} drivers with lists, expected one: unknown HAL version")
     init, begin, recs = found[0]
