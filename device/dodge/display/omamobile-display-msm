@@ -20,8 +20,26 @@ P=/usr/local/lib/omamobile/display
 log() { echo "omamobile-display-msm: $*"; echo "omamobile-display-msm: $*" > /dev/kmsg 2>/dev/null; }
 
 [ -e "$DISABLE" ] && { log "disabled by $DISABLE, staying on simpledrm"; exit 0; }
-[ -e /sys/module/msm ] && { log "msm already loaded"; exit 0; }
+# Module present is not enough: udev can load msm.ko before dispcc, after which
+# msm-mdss fails -110 and leaves /sys/module/msm set with no DSI connector.
+for c in /sys/class/drm/card*-DSI-1; do
+	if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
+		log "msm already bound: $(basename "$c")"
+		exit 0
+	fi
+done
 [ -e "$STAMP" ] && { log "already tried this boot ($STAMP)"; exit 0; }
+
+# Do not stamp when the modules tree is missing. On a RAM-boot test Image
+# without $R.held, kmod-overlay fails and this unit runs too early; a later
+# tmpfs overlay on /lib/modules/$R (or installing $R.held) must be able to
+# retry. Stamping on a missing-.ko failure left tip boots on simpledrm after
+# msm-mdss -110 (dispcc never loaded before the deferred-probe timeout).
+DISPCC=$H/drivers/clk/qcom/dispcc-sm8750.ko
+if [ ! -f "$DISPCC" ] && ! grep -q '/dispcc-sm8750.ko$' "${H%/kernel}/modules.builtin" 2>/dev/null; then
+	log "no dispcc-sm8750 at $DISPCC (and not builtin); not stamping, staying on simpledrm"
+	exit 0
+fi
 : > "$STAMP"
 
 # Load what modules.dep lists for $1 first, last entry first. With the

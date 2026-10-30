@@ -165,4 +165,41 @@ printf 'androidboot.slot_suffix = "_a"\n' > "$bc"
 got=$("$rs" "$bc" /nonexistent "$pk")
 [[ $got == _a ]] || fail "bootconfig should beat packed, got '$got'"
 echo 'ok - live bootconfig beats packed slot_suffix'
+
+# display-msm must not stamp when dispcc.ko is missing (RAM-boot / no $R.held).
+# Stamping on a missing-.ko failure is what left msm-mdss at -110 after a later
+# tmpfs modules overlay + bare modprobe msm (no dispcc before deferred timeout).
+dms=device/dodge/display/omamobile-display-msm
+[[ -x $dms ]] || fail "omamobile-display-msm missing"
+grep -q 'not stamping, staying on simpledrm' "$dms" \
+  || fail "display-msm must refuse to stamp when dispcc.ko is missing"
+grep -q 'DISPCC=.*dispcc-sm8750.ko' "$dms" \
+  || fail "display-msm must gate the stamp on dispcc-sm8750.ko"
+# Simulate the missing-tree path: script exits 0 and leaves no stamp.
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+# Run under a fake uname by rewriting H via env is hard in sh; instead assert
+# the guard is before `: > "$STAMP"` and that a dry missing-file check works.
+stamp_line=$(grep -n ': > "\$STAMP"' "$dms" | head -1 | cut -d: -f1)
+dispcc_line=$(grep -n 'no dispcc-sm8750' "$dms" | head -1 | cut -d: -f1)
+[[ -n $stamp_line && -n $dispcc_line && $dispcc_line -lt $stamp_line ]] \
+  || fail "display-msm dispcc missing-guard must run before stamping (dispcc=$dispcc_line stamp=$stamp_line)"
+echo 'ok - display-msm does not stamp when dispcc.ko is missing'
+grep -q 'msm already bound' "$dms" \
+  || fail "display-msm must treat DSI bind (not mere /sys/module/msm) as already-done"
+echo 'ok - display-msm requires DSI bind before skipping as already-loaded'
+
+
+# stage-1 init must log which slot source won and dump bootconfig/bootargs.
+init=device/dodge/chainload/init
+grep -q 'slot_suffix=.*source=' "$init" \
+  || fail "stage-1 init must kmsg log slot_suffix source="
+grep -q 'omamobile-chain: /proc/bootconfig' "$init" \
+  || fail "stage-1 init must dump /proc/bootconfig to kmsg"
+grep -q 'omamobile-chain: chosen/bootargs' "$init" \
+  || fail "stage-1 init must dump chosen/bootargs to kmsg"
+grep -q 'SLOT_SRC=packed' "$init" \
+  || fail "stage-1 init must record packed as a slot source"
+echo 'ok - stage-1 init logs slot source and dumps bootconfig/bootargs'
+
 rm -f "$bc" "$ba" "$pk"

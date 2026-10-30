@@ -15,8 +15,9 @@ our DTB without flashing `vendor_boot` is this chain:
    `reg` with the copy saved at pack time from `$LIVE_DTB`, appends
    `androidboot.slot_suffix` from `/proc/bootconfig`, then
    `/proc/device-tree/chosen/bootargs`, then the packed
-   `/omamobile/slot_suffix` (from `OMAMOBILE_SLOT` — ABL omits it under
-   `fastboot boot`) (stage 1's own `/proc/cmdline` is
+   `/omamobile/slot_suffix` (from `OMAMOBILE_SLOT` — this ABL puts the
+   property in neither bootconfig nor bootargs under `fastboot boot`;
+   stage 1 dumps both to kmsg and logs `source=packed`) (stage 1's own `/proc/cmdline` is
    `CMDLINE_FORCE`d and has no ABL keys), and `kexec -c`
    into stage 2. Stage 1's kernel config has UFS disabled
    (`SCSI_UFS_QCOM` / `SCSI_UFSHCD`), so it does not probe storage on

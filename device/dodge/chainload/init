@@ -33,30 +33,60 @@ CMDLINE=$($B cat /omamobile/cmdline)
 # never carries ABL's androidboot.* keys. Read the suffix from /proc/bootconfig
 # first, then from the live DT chosen/bootargs (stock DTB with ABL fixups).
 SLOT_SUFFIX=
+SLOT_SRC=
+# Dump what ABL actually handed stage 1. Under `fastboot boot` this ABL has
+# been observed to leave both empty of androidboot.slot_suffix; the packed
+# fallback then applies. Log the chosen source so a stage-1 kmsg captures it
+# before kexec (stage 2 never sees these dumps).
+if [ -f /proc/bootconfig ]; then
+  echo "omamobile-chain: /proc/bootconfig:" > /dev/kmsg 2>/dev/null || true
+  $B cat /proc/bootconfig > /dev/kmsg 2>/dev/null || true
+else
+  echo "omamobile-chain: /proc/bootconfig: (missing)" > /dev/kmsg 2>/dev/null || true
+fi
+if [ -f /proc/device-tree/chosen/bootargs ]; then
+  echo "omamobile-chain: chosen/bootargs: $($B cat /proc/device-tree/chosen/bootargs)" > /dev/kmsg 2>/dev/null || true
+else
+  echo "omamobile-chain: chosen/bootargs: (missing)" > /dev/kmsg 2>/dev/null || true
+fi
 if [ -f /proc/bootconfig ]; then
   # bootconfig lines look like: androidboot.slot_suffix = "_b"
   SLOT_SUFFIX=$($B awk -F= '/^androidboot\.slot_suffix/ {
     v=$2; gsub(/^[ \t"]+|[ \t"]+$/, "", v); print v; exit
   }' /proc/bootconfig)
+  [ -n "$SLOT_SUFFIX" ] && SLOT_SRC=bootconfig
 fi
 if [ -z "$SLOT_SUFFIX" ] && [ -f /proc/device-tree/chosen/bootargs ]; then
   for tok in $($B cat /proc/device-tree/chosen/bootargs); do
     case $tok in
-      androidboot.slot_suffix=*) SLOT_SUFFIX=${tok#androidboot.slot_suffix=} ;;
+      androidboot.slot_suffix=*) SLOT_SUFFIX=${tok#androidboot.slot_suffix=}; SLOT_SRC=bootargs ;;
     esac
   done
 fi
-# fastboot boot does not pass ABL's bootconfig on this ABL; fall back to the
-# slot packed at image build time from the descriptor's OMAMOBILE_SLOT.
+# This ABL does not put androidboot.slot_suffix in bootconfig or
+# chosen/bootargs under `fastboot boot` (observed empty on tip RAM boots).
+# Keep the packed /omamobile/slot_suffix fallback from OMAMOBILE_SLOT.
 if [ -z "$SLOT_SUFFIX" ] && [ -f /omamobile/slot_suffix ]; then
   SLOT_SUFFIX=$($B cat /omamobile/slot_suffix)
+  SLOT_SRC=packed
 fi
 if [ -n "$SLOT_SUFFIX" ]; then
+  echo "omamobile-chain: slot_suffix=$SLOT_SUFFIX source=$SLOT_SRC" > /dev/kmsg 2>/dev/null || true
   tok="androidboot.slot_suffix=$SLOT_SUFFIX"
   case " $CMDLINE " in
     *" $tok "*) ;;
     *) CMDLINE="$CMDLINE $tok" ;;
   esac
+  # stage-1 kmsg is lost at kexec; carry the source on stage 2's cmdline too
+  if [ -n "$SLOT_SRC" ]; then
+    tok="omamobile.slot_src=$SLOT_SRC"
+    case " $CMDLINE " in
+      *" $tok "*) ;;
+      *) CMDLINE="$CMDLINE $tok" ;;
+    esac
+  fi
+else
+  echo "omamobile-chain: slot_suffix=(none) source=(none)" > /dev/kmsg 2>/dev/null || true
 fi
 # sysfs is optional; used only for the memory.reg cmp via /proc/device-tree.
 $B mount -t sysfs sysfs /sys 2>/dev/null || true
