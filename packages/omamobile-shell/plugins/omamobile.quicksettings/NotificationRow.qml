@@ -90,7 +90,7 @@ Item {
         textFormat: Text.PlainText
         text: [row.entry.app, NotificationsModel.ago(row.entry.timestamp, row.host ? row.host.nowMs : Date.now())]
           .filter(function(part) { return !!part }).join(" · ")
-        color: Qt.darker(row.foreground, 1.4)
+        color: Readable.secondary(row.foreground, Commons.Color.popups.background)
         font.family: Style.font.family
         font.pixelSize: Readable.px(Style.font.caption)
         elide: Text.ElideRight

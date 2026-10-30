@@ -740,7 +740,7 @@ function setGrid(layout, columns, rows, catalog) {
 // ---------------------------------------------------------------- landscape
 
 // The layout turned on its side, for a page wider than tall (TOUCH-PLAN
-// 2.4, #85): the grid's columns and rows swap, each item's x and y swap,
+// 2.4, #85): the grid's columns and rows swap, each widget's x and y swap,
 // and its box is turned with them. `pages` gives the portrait and the
 // landscape page in logical px ({ portrait: [w, h], landscape: [w, h] }):
 // the landscape grid's cells are wide and short (173x87 against 120x151 on
@@ -748,11 +748,16 @@ function setGrid(layout, columns, rows, catalog) {
 // ratio to keep about its size in pixels, which is what a widget's content
 // was laid out for; with the spans merely swapped a 2x2 widget lost half
 // its height and its rows landed on each other. Without `pages` the spans
-// just swap. The result goes through the same clamp and re-placement as a
-// loaded file (fitPages), so each widget keeps to its minimum and maximum
-// and nothing overlaps; an item with no room on its page moves on. Derived
-// for the view only: the file and the layout it came from stay portrait,
-// and nothing here is ever saved.
+// just swap. Each widget is clamped to its limits (cleanItem) and placed
+// where it lands if that is free, else at the first free spot, else at
+// the largest smaller size down to its minimum (placeShrunk). The app
+// tiles are not turned: a portrait row of tiles stays a row, in rows below
+// the widgets (placeAppRows); turned, a row became a column at the right
+// edge. Every page keeps to itself, so the view has as many pages as the
+// layout: an item with no room at all on its page is left out of the view
+// rather than pushed to a new page. Derived for the view only: the file
+// and the layout it came from stay portrait, and nothing here is ever
+// saved.
 function transposeLayout(layout, catalog, pages) {
   var grid = { columns: layout.grid.rows, rows: layout.grid.columns }
   var scaleW = 1, scaleH = 1
@@ -761,19 +766,88 @@ function transposeLayout(layout, catalog, pages) {
     var sideW = pages.landscape[0] / grid.columns, sideH = pages.landscape[1] / grid.rows
     if (cellW > 0 && cellH > 0 && sideW > 0 && sideH > 0) { scaleW = cellH / sideW; scaleH = cellW / sideH }
   }
-  var raw = { version: VERSION, grid: grid, home: layout.home, nextId: layout.nextId, pages: [] }
+  var out = emptyLayout(grid)
+  out.pages = []
+  out.nextId = layout.nextId
   for (var p = 0; p < layout.pages.length; p++) {
-    var items = []
-    for (var i = 0; i < layout.pages[p].items.length; i++) {
-      var item = layout.pages[p].items[i]
-      var t = copy(item)
-      t.x = item.y; t.y = item.x
-      t.w = Math.max(1, Math.round(item.h * scaleW)); t.h = Math.max(1, Math.round(item.w * scaleH))
-      items.push(t)
+    var source = layout.pages[p].items
+    var page = { items: [] }
+    var homeless = []
+    var apps = []
+    for (var i = 0; i < source.length; i++) {
+      var item = source[i]
+      if (item.kind === "app") { apps.push(item); continue }
+      var turned = copy(item)
+      turned.x = item.y; turned.y = item.x
+      turned.w = Math.max(1, Math.round(item.h * scaleW)); turned.h = Math.max(1, Math.round(item.w * scaleH))
+      turned = cleanItem(turned, grid, catalog)
+      if (!turned) continue
+      if (isFree(page.items, grid, turned, null)) page.items.push(turned)
+      else homeless.push(turned)
     }
-    raw.pages.push({ items: items })
+    for (var h = 0; h < homeless.length; h++) {
+      var placed = placeShrunk(page.items, grid, homeless[h], catalog)
+      if (placed) page.items.push(placed)
+    }
+    placeAppRows(page.items, grid, apps)
+    out.pages.push(page)
   }
-  return fitPages(raw, grid, catalog)
+  if (out.pages.length === 0) out.pages.push({ items: [] })
+  out.home = clampInt(layout.home, 0, out.pages.length - 1, 0)
+  return out
+}
+
+// A turned widget with no room where it landed: the first free spot in
+// reading order at its size (packed to the top, so the rows under the
+// widgets stay free for the tiles), else at the largest smaller size down
+// to its minimum (nearer its own shape on a tie), else null.
+function placeShrunk(items, grid, item, catalog) {
+  var limits = sizeLimits(item, grid, catalog)
+  var sizes = []
+  for (var h = item.h; h >= limits.minH; h--)
+    for (var w = item.w; w >= limits.minW; w--)
+      sizes.push({ w: w, h: h, loss: (item.w - w) + (item.h - h) })
+  sizes.sort(function(a, b) { return (b.w * b.h) - (a.w * a.h) || a.loss - b.loss })
+  for (var s = 0; s < sizes.length; s++) {
+    var spot = freeSpot(items, grid, sizes[s].w, sizes[s].h)
+    if (!spot) continue
+    var placed = copy(item)
+    placed.x = spot.x; placed.y = spot.y; placed.w = sizes[s].w; placed.h = sizes[s].h
+    return placed
+  }
+  return null
+}
+
+// The first free cell in reading order at or after column `col` of row
+// `row`, or null.
+function freeCellFrom(items, grid, row, col) {
+  for (var y = Math.max(0, row); y < grid.rows; y++)
+    for (var x = (y === row ? Math.max(0, col) : 0); x < grid.columns; x++)
+      if (isFree(items, grid, { x: x, y: y, w: 1, h: 1 }, null)) return { x: x, y: y }
+  return null
+}
+
+// A page's app tiles in rows under its widgets: in portrait reading order
+// from the first row below the lowest widget, a new portrait row starting
+// a new landscape row, so a row of tiles stays a row. A tile with no room
+// there takes the first free cell anywhere on the page; one with no free
+// cell at all is left out. Adds to `items` in place.
+function placeAppRows(items, grid, apps) {
+  var bottom = 0
+  for (var i = 0; i < items.length; i++) bottom = Math.max(bottom, items[i].y + items[i].h)
+  var sorted = apps.slice().sort(function(a, b) { return a.y - b.y || a.x - b.x })
+  var row = bottom, col = 0, lastRow = -1
+  for (var a = 0; a < sorted.length; a++) {
+    var app = sorted[a]
+    if (lastRow >= 0 && app.y !== lastRow && col > 0) { row++; col = 0 }
+    lastRow = app.y
+    var spot = freeCellFrom(items, grid, row, col) || freeSpot(items, grid, 1, 1)
+    if (!spot) continue
+    var tile = copy(app)
+    tile.x = spot.x; tile.y = spot.y; tile.w = 1; tile.h = 1
+    items.push(tile)
+    row = spot.y; col = spot.x + 1
+  }
 }
 
 // ---------------------------------------------------------------- widgets' pure parts
@@ -901,7 +975,7 @@ if (typeof module !== "undefined") {
     findItem: findItem, missingApps: missingApps,
     placeOn: placeOn, addWidget: addWidget, addApp: addApp, removeItem: removeItem, restoreItem: restoreItem,
     moveItem: moveItem, resizeItem: resizeItem, setConfig: setConfig,
-    addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid, transposeLayout: transposeLayout,
+    addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid, transposeLayout: transposeLayout, placeShrunk: placeShrunk, placeAppRows: placeAppRows,
     weatherText: weatherText, geocodeUrl: geocodeUrl, forecastUrl: forecastUrl,
     parseGeocode: parseGeocode, parseForecast: parseForecast, parseAgenda: parseAgenda, AGENDA_ARGV: AGENDA_ARGV,
     monthGrid: monthGrid, commandText: commandText

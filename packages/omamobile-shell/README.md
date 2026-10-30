@@ -5,17 +5,19 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | Path | What it is |
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
-| `plugins/omamobile.quicksettings` | Pull-down quick settings |
+| `plugins/omamobile.quicksettings` | Pull-down quick settings: tiles (a page behind Wi-Fi, Bluetooth, Screen record and Reminder), brightness and volume, the notification shade |
 | `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
 | `plugins/omamobile.keyboard` | Hide button above the on-screen keyboard |
 | `plugins/omamobile.back` | The back gesture: swipe in from a side edge for Escape |
 | `plugins/omamobile.update` | The update sheet: Omarchy's update for a phone, through `omamobile-update` (package `omamobile-omarchy`) |
+| `plugins/omamobile.onboarding` | The setup sheet: the first run's questions (name and email, a PIN or password, Omarchy's agent invitation) and System > PIN, through `omamobile-onboarding` and `omamobile-set-pin`, which keep their terminal prompts as the fallback |
 | `plugins/omamobile.access` | The permission sheet: "Allow Camera to use the camera?" with the app's icon and two large buttons, in place of xdg-desktop-portal-gtk's desktop dialog |
 | `plugins/omamobile.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |
 | `profile/shell.json` | The phone layout the setup seeds once |
 | `bin/omamobile-setup-user` | Omarchy Mobile's per-user setup (Omarchy lifecycle `setup-user`) |
+| `bin/omamobile-onboarding`, `bin/omamobile-set-pin` | First-run setup and the PIN or password: the sheet above when the shell runs it, gum prompts in a terminal otherwise; `--status --json`, `--identity`, `--invite-agent` and `--apply TYPE` (secrets on stdin) are what the sheet calls |
 | `bin/omamobile-launch` | One app per screen: every launch from the shell (drawer, home screen, widgets, links, the agent) gets a new empty workspace through a per-launch Hyprland exec rule, or focuses the app's open window; and the switcher's "Show with…" and "Move to its own screen" |
 | `bin/omamobile-osk-watch` | Reports squeekboard's visibility (sm.puri.OSK0) to the fingerprint plugin |
 | `bin/omamobile-osk-guard` | Turns the on-screen keyboard (`screen-keyboard-enabled`) back on when it was left off with no screensaver running (a user unit for every graphical session) |
@@ -28,6 +30,38 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `bin/omamobile-widget` | The user's own home-screen widgets: scan and check them, make one from the template, copy an example, remove one, start Omarchy's default agent in a widget's folder |
 | `widgets/WIDGETS.md` | The contract for user widgets, for people and coding agents (installed to `/usr/share/omamobile/shell/`) |
 | `widgets/template`, `widgets/examples` | The starter **Create a widget with AI** copies, and examples to copy (`widget-template/`, `widget-examples/`) |
+
+## Gestures
+
+What a finger does on the phone shell (docs/TOUCH-PLAN.md), by surface. Destructive actions take two taps: the first turns the button into a question ("Clear all?", "Forget <name>?", "Reset?") for a few seconds.
+
+| Where | Gesture | What it does |
+| --- | --- | --- |
+| Anywhere | Swipe in from the left or right edge | Back (Escape to the app), never over the lock or a fullscreen window |
+| Home pill (over an app) | Swipe up | Home (an empty workspace, then the home page) |
+| Home pill | Swipe up and hold, or a long swipe | Recent apps |
+| Dock (home screen) | Swipe up | Recent apps |
+| Dock | Tap the search pill | The app drawer with the keyboard |
+| App drawer | Pull down from the top, or the chevron | Close it |
+| App drawer | Long-press an app | Put it on the home page ("Added to home") |
+| Home page | Swipe sideways | The next or previous page |
+| Home page | Long-press (upright) | Edit mode: drag to move, handles to resize, tap the gear for a widget's settings; a notice says to turn the phone upright in landscape |
+| Home page | Tap a dimmed "Not installed" tile | A notice; hold to edit and remove it |
+| Status bar | Pull down | Quick settings, collapsed |
+| Quick settings | Pull down again, or tap the handle | Expand to every tile, with the volume slider |
+| Quick settings | Swipe up, tap outside, or Escape | Close |
+| Quick settings | Swipe sideways on the tiles | The next page of tiles |
+| Quick-settings tile | Tap | Toggle (or open: Clipboard, Dictation, Reminder) |
+| Quick-settings tile | Long-press, or its chevron | The page behind it (Wi-Fi, Bluetooth, Reminder's list, theme picker) |
+| Quick settings, pencil | Tap a tile | Remove it; hold and drag to move; tap one under Add tiles to add it |
+| Notification shade | Swipe a row sideways | Forget that notification |
+| Notification shade | Tap a row | Open it |
+| Recent apps | Swipe sideways | Through the cards |
+| Recent apps | Tap a card | Switch to it |
+| Recent apps | Flick a card up | Close it |
+| Recent apps | Long-press a card | Show it with another app, or give it its own screen |
+| Incoming call | Swipe the control up or down | Answer or decline |
+| Keyboard | Tap the button at its top-left | Hide it |
 
 ## AI Agent shortcut
 

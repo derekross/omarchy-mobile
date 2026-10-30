@@ -988,7 +988,13 @@ Item {
   function goHome() { setEditing(false); goToPage(layout.home, true); return String(layout.home) }
   function page(n) { goToPage(Number(n), true); return String(currentPage) }
   function edit(on) { return String(on) === "off" || String(on) === "false" ? (setEditing(false), "done") : requestEdit() }
-  function addApp(appId) { return addAppHere(String(appId || "")) }
+  // The drawer's long-press lands here (TOUCH-PLAN 3.7): the drawer closes
+  // and the home page shows the new tile, with a word that says so.
+  function addApp(appId) {
+    var id = addAppHere(String(appId || ""))
+    if (id !== "full") flash("Added to home")
+    return id
+  }
   function addWidget(type) {
     var t = String(type)
     return HomeModel.widgetSpec(t, userCatalog) || HomeModel.isUserType(t) ? addWidgetHere(t) : "unknown"

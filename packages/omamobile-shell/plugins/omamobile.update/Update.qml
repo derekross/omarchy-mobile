@@ -400,8 +400,7 @@ Item {
               visible: text !== ""
               textFormat: Text.PlainText
               text: root.checking ? "Asking the repositories (this takes a few seconds)." : root.summary.body
-              color: root.foreground
-              opacity: 0.8
+              color: Readable.secondary(root.foreground, Commons.Color.popups.background)
               font.family: Style.font.family
               font.pixelSize: Style.font.body
               wrapMode: Text.Wrap
@@ -527,6 +526,7 @@ Item {
               font.pixelSize: Style.font.title
               foreground: root.foreground
               placeholderText: root.digits ? "PIN" : "Password"
+              placeholderTextColor: Readable.secondary(root.foreground, Readable.flatten(Style.controlFill(activeFocus, hovered || hasCursor, foreground, accent), Commons.Color.popups.background))
               password: true
               enabled: !root.submitting
               inputMethodHints: root.digits
@@ -624,8 +624,7 @@ Item {
             width: parent.width
             textFormat: Text.PlainText
             text: root.progressText
-            color: root.foreground
-            opacity: 0.75
+            color: Readable.secondary(root.foreground, Commons.Color.popups.background)
             font.family: Style.font.family
             font.pixelSize: Readable.px(Style.font.caption)
             elide: Text.ElideRight
@@ -635,8 +634,7 @@ Item {
             width: parent.width
             textFormat: Text.PlainText
             text: "You can close this; the update keeps running and this sheet comes back with the result."
-            color: root.foreground
-            opacity: 0.6
+            color: Readable.secondary(root.foreground, Commons.Color.popups.background)
             font.family: Style.font.family
             font.pixelSize: Readable.px(Style.font.caption)
             wrapMode: Text.Wrap
@@ -720,8 +718,7 @@ Item {
               selectByMouse: true
               textFormat: TextEdit.PlainText
               text: "Log: " + root.outcome.log
-              color: root.foreground
-              opacity: 0.7
+              color: Readable.secondary(root.foreground, Commons.Color.popups.background)
               font.family: Style.font.family
               font.pixelSize: Readable.px(Style.font.caption)
               wrapMode: TextEdit.WrapAnywhere

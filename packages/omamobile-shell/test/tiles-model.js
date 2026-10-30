@@ -28,13 +28,17 @@ test("the default keeps the old ten tiles and leads with the most used", () => {
   assert.deepStrictEqual(M.quickRow(M.defaults()), ["wifi", "bluetooth", "dnd", "torch"])
 })
 
-test("Clipboard and Dictation close the default's second page, leaving the first as it was", () => {
+test("Clipboard and Dictation close the default's second page and Reminder opens a third, leaving the earlier pages as they were", () => {
   assert.deepStrictEqual(M.pages(M.defaults())[0],
     ["wifi", "bluetooth", "dnd", "torch", "mobile-data", "rotation-lock", "airplane", "location"])
-  assert.deepStrictEqual(M.DEFAULT_LAYOUT.slice(-2), ["clipboard", "dictation"])
-  assert.strictEqual(M.pages(M.defaults()).length, 2)
+  assert.deepStrictEqual(M.pages(M.defaults())[1],
+    ["battery-saver", "dark-theme", "night-light", "nfc", "fingerprint", "keyboard", "clipboard", "dictation"])
+  assert.deepStrictEqual(M.DEFAULT_LAYOUT.slice(-3), ["clipboard", "dictation", "reminder"])
+  assert.strictEqual(M.pages(M.defaults()).length, 3)
   assert.strictEqual(M.label("clipboard"), "Clipboard")
   assert.strictEqual(M.label("dictation"), "Dictation")
+  assert.strictEqual(M.label("reminder"), "Reminder")
+  assert.strictEqual(M.label("night-light"), "Night light")
 })
 
 test("defaults() is a copy", () => {
@@ -140,6 +144,31 @@ test("status helpers", () => {
   assert.strictEqual(M.dictationStatus("down"), "Not running")
   assert.strictEqual(M.dictationStatus("none"), "Not installed")
   assert.strictEqual(M.dictationStatus(undefined), "Not installed")
+})
+
+test("reminders: Omarchy's minutes rule, its argv, what it lists, the tile's status", () => {
+  assert.strictEqual(M.validMinutes("10"), 10)
+  assert.strictEqual(M.validMinutes(" 5 "), 5)
+  assert.strictEqual(M.validMinutes("0"), 0)
+  assert.strictEqual(M.validMinutes("-3"), 0)
+  assert.strictEqual(M.validMinutes("1.5"), 0)
+  assert.strictEqual(M.validMinutes(""), 0)
+  assert.strictEqual(M.validMinutes(undefined), 0)
+  assert.deepStrictEqual(M.reminderArgv("30", "Check the oven"), ["omarchy-reminder", "30", "Check the oven"])
+  assert.deepStrictEqual(M.reminderArgv(5, "  "), ["omarchy-reminder", "5"])
+  assert.strictEqual(M.reminderArgv("abc", "x"), null)
+  const listed = M.parseReminders(JSON.stringify({ count: 2, active: true, tooltip: "2 reminders", reminders: [
+    { unit: "omarchy-reminder-30m-1", minutes: 30, message: "Check the oven", label: "Check the oven", remaining: "12m 3s", at: 1, atTime: "14:35" },
+    { unit: "omarchy-reminder-5m-2", minutes: 5, message: "", label: "5-min reminder", remaining: "40s", at: 2, atTime: "14:24" }] }))
+  assert.deepStrictEqual(listed, [{ label: "Check the oven", atTime: "14:35", remaining: "12m 3s" }, { label: "5-min reminder", atTime: "14:24", remaining: "40s" }])
+  assert.deepStrictEqual(M.parseReminders('{"count":0,"reminders":[]}'), [])
+  assert.deepStrictEqual(M.parseReminders("not json"), [])
+  assert.deepStrictEqual(M.parseReminders(""), [])
+  assert.strictEqual(M.reminderStatus("none"), "Not installed")
+  assert.strictEqual(M.reminderStatus(undefined), "Not installed")
+  assert.strictEqual(M.reminderStatus("0"), "None set")
+  assert.strictEqual(M.reminderStatus("1"), "1 set")
+  assert.strictEqual(M.reminderStatus("3"), "3 set")
 })
 
 let failed = 0

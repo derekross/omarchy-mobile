@@ -7,8 +7,10 @@ import qs.Commons as Commons
 // An app shortcut: icon over its name, launched the way the app drawer
 // launches apps (omamobile-launch: uwsm-app -- gtk-launch on a new empty
 // workspace, or the app's open window focused).
-// An app that is no longer installed stays, dimmed, until it is removed in
-// edit mode (it may come back with its package).
+// An app that is no longer installed stays, dimmed and named "Not
+// installed" rather than by its raw id (TOUCH-PLAN 3.7), until it is
+// removed in edit mode (it may come back with its package); the widgets
+// sheet's Missing list still shows the id.
 Item {
   id: tile
 
@@ -54,7 +56,7 @@ Item {
     anchors.rightMargin: Style.spacing.xs
     horizontalAlignment: Text.AlignHCenter
     textFormat: Text.PlainText
-    text: tile.missing ? (tile.entry ? tile.entry.app : "") : (tile.library ? tile.library.entryName(tile.desktopEntry) : tile.desktopEntry.name)
+    text: tile.missing ? "Not installed" : (tile.library ? tile.library.entryName(tile.desktopEntry) : tile.desktopEntry.name)
     color: tile.home ? tile.home.foreground : "white"
     // An outline keeps the name readable on a light wallpaper; it costs
     // nothing like a blur or a drop shadow would.

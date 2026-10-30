@@ -7,8 +7,25 @@
 # default AI agent (Setup > Default Agent): Omarchy shows it after the first
 # update, a phone at first login.
 #
-#   omamobile-onboarding           open a terminal and run it
+#   omamobile-onboarding           open it: the shell's sheet
+#                                  (omamobile.onboarding, TOUCH-PLAN 1.11) when
+#                                  the shell runs it, else a terminal with the
+#                                  prompts
 #   omamobile-onboarding --nudge   at login: if anything is missing, say so
+#   omamobile-onboarding --status --json
+#                                  what is set, for the sheet: {"name", "email",
+#                                  "identity": bool, "pin": {"set", "type"},
+#                                  "agent": the default agent or ""}
+#   omamobile-onboarding --identity NAME EMAIL
+#                                  save the name and email, as the prompts do
+#                                  (nothing when both are empty)
+#   omamobile-onboarding --invite-agent
+#                                  Omarchy's one-time invitation to pick an agent
+#   omamobile-onboarding --inner   the terminal prompts (gum)
+#
+# The sheet asks the same questions in the same order and calls the entry
+# points above, so what each answer does lives here alone.
+# OMAMOBILE_PROMPTS=terminal skips the sheet.
 set -u
 
 omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
@@ -18,13 +35,43 @@ has_identity() {
 }
 
 has_pin() {
-  ! printf '' | unix_chkpwd "$USER" nullok 2>/dev/null
+  [[ $(omamobile-set-pin --status 2>/dev/null) == *'"set": true'* ]]
+}
+
+# Omarchy's own steps, with the answers as its installer passes them:
+# git's identity, and XCompose's <Multi_key> <space> <n>/<e> shortcuts.
+save_identity() {
+  local name=$1 email=$2
+  [[ -n $name || -n $email ]] || return 0
+  OMARCHY_USER_NAME=$name OMARCHY_USER_EMAIL=$email bash "$omarchy_path/install/user/git.sh"
+  OMARCHY_USER_NAME=$name OMARCHY_USER_EMAIL=$email bash "$omarchy_path/install/user/xcompose.sh"
 }
 
 # Omarchy's hook: one notification, only while no agent is chosen, never twice.
 invite_agent() {
   local hook=$omarchy_path/install/user/first-run/setup-agent.hook
   [[ -f $hook ]] && bash "$hook" || true
+}
+
+status_json() {
+  local pin
+  pin=$(omamobile-set-pin --status 2>/dev/null) || pin='{"set": false, "type": "pin"}'
+  python3 -I -c '
+import json, sys
+name, email, pin, agent = sys.argv[1:]
+try:
+    pin = json.loads(pin)
+except ValueError:
+    pin = {"set": False, "type": "pin"}
+print(json.dumps({"name": name, "email": email, "identity": bool(name and email), "pin": pin, "agent": agent}))
+' "$(git config --global user.name)" "$(git config --global user.email)" "$pin" "$(omarchy-default-agent 2>/dev/null | head -n1)"
+}
+
+# The shell's sheet, when the shell runs it: `summon` answers ok, or unknown
+# for a shell without the plugin; no shell at all fails.
+open_sheet() {
+  [[ ${OMAMOBILE_PROMPTS:-} == terminal ]] && return 1
+  [[ $(omarchy-shell shell summon omamobile.onboarding "$1" 2>/dev/null) == ok ]]
 }
 
 case "${1:-}" in
@@ -38,14 +85,22 @@ case "${1:-}" in
       "Add your name and email, and a PIN or password to lock it. Tap to start." \
       --exec omamobile-onboarding
     ;;
+  --status)
+    status_json
+    ;;
+  --identity)
+    save_identity "${2:-}" "${3:-}"
+    ;;
+  --invite-agent)
+    invite_agent
+    ;;
   --inner)
     echo "Welcome to Omarchy Mobile. Two quick steps."
     echo
     name=$(gum input --header "Your name" --placeholder "Ada Lovelace" --value "$(git config --global user.name)")
     email=$(gum input --header "Your email" --placeholder "ada@example.com" --value "$(git config --global user.email)")
     if [[ -n $name || -n $email ]]; then
-      OMARCHY_USER_NAME=$name OMARCHY_USER_EMAIL=$email bash "$omarchy_path/install/user/git.sh"
-      OMARCHY_USER_NAME=$name OMARCHY_USER_EMAIL=$email bash "$omarchy_path/install/user/xcompose.sh"
+      save_identity "$name" "$email"
       echo "Saved."
     fi
     echo
@@ -57,10 +112,11 @@ case "${1:-}" in
     invite_agent
     ;;
   "")
+    open_sheet '{}' && exit 0
     exec omarchy-launch-floating-terminal-with-presentation "omamobile-onboarding --inner"
     ;;
   *)
-    echo "Usage: omamobile-onboarding [--nudge]" >&2
+    echo "Usage: omamobile-onboarding [--nudge|--status --json|--identity NAME EMAIL|--invite-agent]" >&2
     exit 1
     ;;
 esac

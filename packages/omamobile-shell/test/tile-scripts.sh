@@ -49,7 +49,7 @@ echo '{"enabled":false,"temperature":6500}' >"$tmp/state/night"
 
 out=$(run "$dir/tile-state.sh")
 for line in airplane=off hotspot=off powerprofile=balanced theme_mode=dark theme_name=tokyo-night \
-            nightlight=off stayawake=off record=none data=none dictation=none; do
+            nightlight=off stayawake=off record=none data=none dictation=none reminders=none; do
   grep -cx "$line" <<<"$out" >/dev/null || fail "tile-state.sh prints $line (got: $(tr '\n' ' ' <<<"$out"))"
 done
 pass "tile-state.sh reads every probed tile"
@@ -118,3 +118,12 @@ for line in "voxtype record start" "voxtype record stop"; do
   grep -cxF "$line" "$log" >/dev/null || fail "tile-action.sh runs: $line"
 done
 pass "dictation follows voxtype's service and state, and starts and stops by direction"
+
+# Reminders: the count of Omarchy's own pending timers, from its JSON; a
+# phone without omarchy-reminder says none (above).
+stub omarchy-reminder '[ "$1" = show ] && [ "$2" = --json ] && cat '"$tmp"'/state/reminders'
+echo '{"count":0,"active":false,"tooltip":"Set Reminder","reminders":[]}' >"$tmp/state/reminders"
+grep -cx "reminders=0" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "no pending reminders reads as 0"
+echo '{"count":2,"active":true,"tooltip":"2 reminders","reminders":[{"label":"Check the oven","atTime":"14:35","remaining":"12m"},{"label":"5-min reminder","atTime":"14:24","remaining":"40s"}]}' >"$tmp/state/reminders"
+grep -cx "reminders=2" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "two pending reminders read as 2"
+pass "reminders count Omarchy's pending timers"

@@ -3,7 +3,9 @@
 # Offscreen review shots of the app drawer (omamobile.launcher), upright and
 # on its side (TOUCH-PLAN 2.4), in a dark and a light Omarchy theme, with
 # checks that the grid's columns follow the width and every cell, the
-# header and the input stay on the sheet: the real Launcher.qml, its
+# header and the input stay on the sheet, and that the secondary text (the
+# count, the placeholder, "No apps match") reads at 4.5:1 against the
+# sheet, sampled from the picture (TOUCH-PLAN 2.7): the real Launcher.qml, its
 # layer-shell windows plain Items, with an application library of twenty
 # made-up apps in place of the desktop entries. Runs inside the OWL
 # conformance container (tests/owl/Dockerfile), never on a desktop:
@@ -68,13 +70,14 @@ def shot(name, w, hh, **extra):
     return s
 print(json.dumps({"apps": apps, "shots": [
     shot("portrait", 480, 1040), shot("landscape", 1040, 480), shot("landscape-search", 1040, 480, query="ma"),
+    shot("portrait-nomatch", 480, 1040, query="zzzz"),
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 LAUNCHER_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/launcher-render.qml" > "$h/log-$theme" 2>&1 || true
   grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/launcher-render.txt" || true
-  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+  python3 - "$h/log-$theme" "$theme" "$out" <<'PY' || status=1
 import json, re, sys
-log, theme = sys.argv[1:]
+log, theme, out = sys.argv[1:]
 text = open(log).read()
 bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l) and "hyprctl" not in l and "delayed function evaluation" not in l]
 geo = {}
@@ -82,8 +85,35 @@ for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
     geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
 def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol or a["y"] + a["h"] <= b["y"] + tol or b["y"] + b["h"] <= a["y"] + tol
-ok = not bad and len(geo) == 3
-if len(geo) != 3: print("not ok - %s: %d of 3 shots taken" % (theme, len(geo)))
+ok = not bad and len(geo) == 4
+if len(geo) != 4: print("not ok - %s: %d of 4 shots taken" % (theme, len(geo)))
+# Contrast (TOUCH-PLAN 2.7), sampled from the picture: the part's rect
+# (logical px, drawn at 3x) cropped with magick, its histogram's most
+# common colour taken as the surface and the colour farthest from it in
+# luminance (among those with a few pixels, so antialiasing fringes don't
+# count) as the text. WCAG's ratio between the two must reach 4.5:1.
+import subprocess
+def luminance(c):
+    def ch(v):
+        v = v / 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+def ratio(a, b):
+    la, lb = luminance(a), luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+def sampled_contrast(png, r, scale=3):
+    geometry = "%dx%d+%d+%d" % (max(1, r["w"] * scale), max(1, r["h"] * scale), max(0, r["x"] * scale), max(0, r["y"] * scale))
+    out = subprocess.run(["magick", png, "-crop", geometry, "+repage", "-depth", "8", "-format", "%c", "histogram:info:-"],
+                         capture_output=True, text=True).stdout
+    colours = []
+    for m in re.finditer(r"^\s*(\d+): \(\s*(\d+),\s*(\d+),\s*(\d+)", out, re.M):
+        colours.append((int(m.group(1)), (int(m.group(2)), int(m.group(3)), int(m.group(4)))))
+    if not colours: return 0.0, None, None
+    colours.sort(reverse=True)
+    surface = colours[0][1]
+    ink = max((c for n, c in colours if n >= 12), key=lambda c: abs(luminance(c) - luminance(surface)), default=surface)
+    return ratio(ink, surface), ink, surface
+
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):
     global ok
@@ -96,6 +126,14 @@ for name, g in geo.items():
     check(name + ": the header, its collapse button and the input are on screen",
           all(k in parts and inside(parts[k], screen) and parts[k]["h"] >= 44 for k in ("drawerHeader", "collapse", "inputRow")), json.dumps([parts.get(k) for k in ("drawerHeader", "collapse", "inputRow")]))
     grid = parts.get("drawerGrid")
+    png = "%s/launcher-%s-%s.png" % (out, name, theme)
+    for part, what in (("drawerCount", "the count"), ("drawerInput", "the placeholder"), ("drawerEmpty", "No apps match")):
+        if part not in parts: continue
+        c, ink, surface = sampled_contrast(png, parts[part])
+        check(name + ": %s reads at 4.5:1 against the sheet" % what, c >= 4.5, "%.2f:1 (%s on %s)" % (c, ink, surface))
+    if g["apps"] == 0:
+        check(name + ": no cells and the empty text when nothing matches", "drawerEmpty" in parts and not [k for k in parts if k.startswith("app-")])
+        continue
     # The cells wholly on the grid's first screenful (the rest scroll,
     # clipped, a row cut at the edge among them).
     cells = [v for k, v in parts.items() if k.startswith("app-") and grid and inside(v, grid, 1)]
@@ -103,7 +141,7 @@ for name, g in geo.items():
     check(name + ": the first row holds the columns", grid is not None and len([c for c in cells if c["y"] == min(x["y"] for x in cells)]) == min(g["columns"], g["apps"]) if cells else False, json.dumps(cells[:9]))
     check(name + ": every shown cell is on the grid, at least 44 px", bool(cells) and all(inside(c, grid, 1) and min(c["w"], c["h"]) >= 44 for c in cells), json.dumps([c for c in cells if not inside(c, grid, 1)][:3]))
     check(name + ": no two cells overlap", all(apart(a, b) for i, a in enumerate(cells) for b in cells[i + 1:]))
-    if g["query"]:
+    if g["query"] and g["apps"]:
         check(name + ": the Ask row sits above the input, on screen", "askRow" in parts and inside(parts["askRow"], screen) and parts["askRow"]["y"] + parts["askRow"]["h"] <= parts["inputRow"]["y"])
 sys.exit(0 if ok else 1)
 PY

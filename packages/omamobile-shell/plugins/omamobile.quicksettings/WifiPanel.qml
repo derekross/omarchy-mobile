@@ -357,6 +357,25 @@ Item {
     runAction("disconnect", ssid, false, function(network) { network.disconnect() })
   }
 
+  // Forget drops the saved password, so it takes two taps (TOUCH-PLAN 3.7):
+  // the first turns it into "Forget <network>?" for a few seconds.
+  property bool confirmForget: false
+
+  Timer {
+    id: disarmForget
+    interval: 4000
+    onTriggered: root.confirmForget = false
+  }
+
+  function requestForget() {
+    if (!confirmForget) {
+      confirmForget = true
+      disarmForget.restart()
+      return
+    }
+    forgetSheet()
+  }
+
   function forgetSheet() {
     var ssid = sheetSsid
     var uuid = sheetUuid
@@ -400,6 +419,8 @@ Item {
     sheet = ""
     sheetError = ""
     showPassword = false
+    confirmForget = false
+    disarmForget.stop()
     passwordField.text = ""
     if (opened) panel.forceActiveFocus()
   }
@@ -594,7 +615,7 @@ Item {
           horizontalAlignment: Text.AlignHCenter
           textFormat: Text.PlainText
           text: root.device ? "Turn on Wi-Fi to see networks in range" : "No Wi-Fi radio"
-          color: Qt.darker(root.foreground, 1.4)
+          color: Readable.secondary(root.foreground, Commons.Color.popups.background)
           font.family: Style.font.family
           font.pixelSize: Style.font.body
           wrapMode: Text.Wrap
@@ -626,7 +647,7 @@ Item {
               visible: list.contentY < list.originY - Style.space(10)
               textFormat: Text.PlainText
               text: list.contentY < list.originY - list.pullThreshold ? "Release to scan" : "Pull to scan"
-              color: Qt.darker(root.foreground, 1.4)
+              color: Readable.secondary(root.foreground, Commons.Color.popups.background)
               font.family: Style.font.family
               font.pixelSize: Readable.px(Style.font.caption)
             }
@@ -666,7 +687,7 @@ Item {
               anchors.centerIn: parent
               textFormat: Text.PlainText
               text: entryItem.row.text
-              color: Qt.darker(root.foreground, 1.4)
+              color: Readable.secondary(root.foreground, Commons.Color.popups.background)
               font.family: Style.font.family
               font.pixelSize: Style.font.body
             }
@@ -721,7 +742,7 @@ Item {
                   textFormat: Text.PlainText
                   text: entryItem.isSaved ? (entryItem.failure || "Saved")
                     : WifiModel.rowStatus(entryItem.row, entryItem.busy ? root.actionKind : "", entryItem.failure)
-                  color: entryItem.failure ? Commons.Color.urgent : Qt.darker(root.foreground, 1.4)
+                  color: entryItem.failure ? Commons.Color.urgent : Readable.secondary(root.foreground, Commons.Color.popups.background)
                   font.family: Style.font.family
                   font.pixelSize: Readable.px(Style.font.caption)
                   elide: Text.ElideRight
@@ -830,6 +851,7 @@ Item {
                 font.pixelSize: Style.font.title
                 foreground: root.foreground
                 placeholderText: "Password"
+                placeholderTextColor: Readable.secondary(root.foreground, Readable.flatten(Style.controlFill(activeFocus, hovered || hasCursor, foreground, accent), Commons.Color.popups.background))
                 password: !root.showPassword
                 inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase | Qt.ImhPreferLowercase
                 onAccepted: root.submitPassword()
@@ -879,9 +901,9 @@ Item {
             SheetButton {
               visible: root.sheet === "actions" && (root.sheetKnown || root.sheetConnected)
               width: parent.width
-              label: "Forget"
+              label: root.confirmForget ? "Forget " + root.sheetSsid + "?" : "Forget"
               danger: true
-              onTapped: root.forgetSheet()
+              onTapped: root.requestForget()
             }
 
             SheetButton {

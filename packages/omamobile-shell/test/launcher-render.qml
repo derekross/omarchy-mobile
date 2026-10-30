@@ -9,9 +9,10 @@ import "launcher" as L
 // Offscreen review shots of the app drawer (test/launcher-render): the
 // real Launcher.qml at the phone's 480x1040 logical px and on its side at
 // 1040x480, its application library a stand-in over the job's apps, each
-// shot in $LAUNCHER_JOB (the drawer open, a search) saved as a PNG with the
-// sheet's, the header's, the input's and every cell's geometry printed for
-// the checks. Then it quits.
+// shot in $LAUNCHER_JOB (the drawer open, a search, a search with no
+// match) saved as a PNG with the sheet's, the header's, the input's and
+// every cell's geometry (and the named texts' colours) printed for the
+// checks. Then it quits.
 ShellRoot {
   id: harness
 
@@ -64,10 +65,17 @@ ShellRoot {
     return { x: Math.round(p.x), y: Math.round(p.y), w: Math.round(item.width), h: Math.round(item.height) }
   }
 
-  // The named parts that are shown, as {name: {x, y, w, h}} in screen px.
+  // The named parts that are shown, as {name: {x, y, w, h}} in screen px;
+  // a text's colour (a field's placeholder colour) comes along for the
+  // contrast checks.
   function describe(item, out) {
     if (!item || !item.visible || item.opacity === 0) return out
-    if (item.objectName) out[item.objectName] = harness.rectOf(item)
+    if (item.objectName) {
+      var r = harness.rectOf(item)
+      if (item.placeholderTextColor !== undefined) r.color = String(item.placeholderTextColor)
+      else if (item.color !== undefined && item.text !== undefined) r.color = String(item.color)
+      out[item.objectName] = r
+    }
     for (var i = 0; i < item.children.length; i++) harness.describe(item.children[i], out)
     return out
   }

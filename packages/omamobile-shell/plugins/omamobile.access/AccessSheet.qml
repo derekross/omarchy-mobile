@@ -4,6 +4,7 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "Readable.js" as Readable
 import "AccessModel.js" as AccessModel
 
 // The permission sheet itself: the scrim, and the card at the bottom with the
@@ -141,8 +142,7 @@ Item {
         horizontalAlignment: Text.AlignHCenter
         textFormat: Text.PlainText
         text: card.r.body || ""
-        color: sheet.foreground
-        opacity: 0.75
+        color: Readable.secondary(sheet.foreground, Commons.Color.popups.background)
         font.family: Style.font.family
         font.pixelSize: Style.font.heading
         lineHeight: 1.15

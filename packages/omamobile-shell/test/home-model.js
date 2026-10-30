@@ -601,7 +601,7 @@ function tidy(layout, original) {
 const pixelPages = { portrait: [480, 908], landscape: [1040, 348] }
 const byId = (layout) => { const o = {}; layout.pages.forEach((p, n) => p.items.forEach((i) => { o[i.id] = Object.assign({ page: n }, i) })); return o }
 
-test("landscape swaps the grid and turns every item with it", () => {
+test("landscape swaps the grid and turns every widget with it; the tiles keep their row", () => {
   const l = layoutOf([widget("w1", "clock", 0, 0, 4, 2), app("a1", 1, 5), app("a2", 3, 5)])
   const before = M.serialize(l)
   const t = M.transposeLayout(l, {})
@@ -610,8 +610,10 @@ test("landscape swaps the grid and turns every item with it", () => {
   const at = byId(t)
   // 4x2 turned is 2x4; the clock's maximum (4x3) keeps it to 3 rows.
   assert.deepStrictEqual([at.w1.x, at.w1.y, at.w1.w, at.w1.h], [0, 0, 2, 3])
-  assert.deepStrictEqual([at.a1.x, at.a1.y, at.a1.w, at.a1.h], [5, 1, 1, 1])
-  assert.deepStrictEqual([at.a2.x, at.a2.y], [5, 3])
+  // The tiles' portrait row (y 5) is a row under the clock, in order, not
+  // a column at the right edge (the batch 4 phone check).
+  assert.deepStrictEqual([at.a1.x, at.a1.y, at.a1.w, at.a1.h], [0, 3, 1, 1])
+  assert.deepStrictEqual([at.a2.x, at.a2.y], [1, 3])
   assert.strictEqual(M.serialize(l), before, "the portrait layout is left alone")
   assert.strictEqual(t.home, l.home)
   assert.strictEqual(t.nextId, l.nextId)
@@ -631,13 +633,66 @@ test("landscape keeps a widget's size in pixels on the short, wide cells", () =>
   assert.deepStrictEqual([at.a1.w, at.a1.h, at.a2.w, at.a2.h], [1, 1, 1, 1])
   assert.deepStrictEqual([at.w1.x, at.w1.y, at.w1.w, at.w1.h], [0, 0, 2, 3])
   // The battery (2x1, turned and clamped to 1x2) found no room beside the
-  // others and moved to a page of its own; the apps stayed.
-  assert.ok(t.pages.length >= 2)
-  assert.strictEqual(at.w3.page, 1)
-  assert.deepStrictEqual([at.w3.w, at.w3.h], [1, 2])
+  // others at that size, so it takes its minimum (1x1) on its own page
+  // rather than a page of its own; the tiles follow in the free cells.
+  assert.strictEqual(t.pages.length, 1)
+  assert.strictEqual(at.w3.page, 0)
+  assert.deepStrictEqual([at.w3.w, at.w3.h], [1, 1])
+  assert.strictEqual(at.a1.page, 0)
   assert.strictEqual(at.a2.page, 0)
+  assert.strictEqual(at.a1.y, at.a2.y, "the two tiles share a row")
   // Settings travel with the item.
   assert.deepStrictEqual(at.w2.config, l.pages[0].items[1].config)
+})
+
+test("landscape keeps a row of four tiles a row under two 2x2 widgets, on the page they came from", () => {
+  // Page 1 of two: the phone check's case (two widgets side by side, a dock
+  // row of four icons at the bottom). The view has two pages, like the
+  // layout, and page 1 keeps all six items with the icons in one row.
+  const l = layoutOf([widget("w0", "clock", 0, 0, 4, 2)],
+                     [widget("w1", "notes", 0, 0, 2, 2), widget("w2", "owl:simonschubert.today", 2, 0, 2, 2),
+                      app("a1", 0, 5), app("a2", 1, 5), app("a3", 2, 5), app("a4", 3, 5)])
+  const t = M.transposeLayout(l, {}, pixelPages)
+  tidy(t, l)
+  assert.strictEqual(t.pages.length, 2)
+  const at = byId(t)
+  for (const id of ["w1", "w2", "a1", "a2", "a3", "a4"]) assert.strictEqual(at[id].page, 1, id + " stays on page 1")
+  assert.deepStrictEqual([at.w1.x, at.w1.y, at.w1.w, at.w1.h], [0, 0, 2, 3])
+  assert.deepStrictEqual([at.w2.x, at.w2.y, at.w2.w, at.w2.h], [2, 0, 2, 3])
+  assert.deepStrictEqual(["a1", "a2", "a3", "a4"].map((id) => [at[id].x, at[id].y]), [[0, 3], [1, 3], [2, 3], [3, 3]])
+})
+
+test("landscape keeps two portrait rows of tiles as two rows, in order", () => {
+  const l = layoutOf([widget("w1", "clock", 0, 0, 4, 2), app("a1", 0, 4), app("a2", 1, 4), app("a3", 2, 4), app("a4", 3, 4),
+                      app("b1", 0, 5), app("b2", 1, 5), app("b3", 2, 5)])
+  const t = M.transposeLayout(l, {}, pixelPages)
+  tidy(t, l)
+  const at = byId(t)
+  assert.deepStrictEqual(["a1", "a2", "a3", "a4"].map((id) => [at[id].x, at[id].y]), [[0, 3], [1, 3], [2, 3], [3, 3]])
+  // No row below the fourth: the second row takes the first free cells.
+  assert.deepStrictEqual(["b1", "b2", "b3"].map((id) => [at[id].x, at[id].y]), [[2, 0], [3, 0], [4, 0]])
+})
+
+test("landscape never has more pages than the layout: a full page re-places, shrinks, then leaves out", () => {
+  // Four 2x2 notes (each 2x3 turned: 24 cells for a 24-cell page) and eight
+  // tiles: the fourth note shrinks to a 2x1, four tiles find cells, four
+  // are left out, and nothing goes to a second page.
+  const l = layoutOf([widget("w1", "notes", 0, 0, 2, 2), widget("w2", "notes", 2, 0, 2, 2), widget("w3", "notes", 0, 2, 2, 2), widget("w4", "notes", 2, 2, 2, 2),
+                      app("a1", 0, 4), app("a2", 1, 4), app("a3", 2, 4), app("a4", 3, 4), app("b1", 0, 5), app("b2", 1, 5), app("b3", 2, 5), app("b4", 3, 5)])
+  const t = M.transposeLayout(l, {}, pixelPages)
+  assert.strictEqual(t.pages.length, 1)
+  const items = t.pages[0].items
+  for (let i = 0; i < items.length; i++) {
+    assert.ok(M.fits(t.grid, items[i]), items[i].id + " fits")
+    for (let j = i + 1; j < items.length; j++) assert.ok(!M.overlaps(items[i], items[j]), items[i].id + " overlaps " + items[j].id)
+  }
+  const at = byId(t)
+  for (const id of ["w1", "w2", "w3", "w4"]) assert.ok(at[id], id + " is shown")
+  assert.ok(Math.min(at.w4.w * at.w4.h, at.w3.w * at.w3.h) < 6, "one note shrank")
+  const shown = items.filter((i) => i.kind === "app").map((i) => i.id)
+  assert.strictEqual(shown.length, 4, "four tiles fit: " + shown.join(" "))
+  assert.deepStrictEqual(shown, ["a1", "a2", "a3", "a4"], "the first row's tiles come first")
+  assert.strictEqual(M.serialize(l), M.serialize(M.normalize(JSON.parse(M.serialize(l)), {})), "the layout is untouched")
 })
 
 test("landscape of an empty layout is an empty layout on the turned grid", () => {

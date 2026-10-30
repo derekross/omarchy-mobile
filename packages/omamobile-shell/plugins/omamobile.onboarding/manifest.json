@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.onboarding",
+  "name": "Phone setup sheet",
+  "version": "0.1.0",
+  "author": "Omarchy Mobile",
+  "license": "MIT",
+  "description": "First-run setup and the PIN for a phone, as sheets in place of the terminal prompts: name and email, then a PIN or password, then Omarchy's invitation to pick a default agent. Every answer goes through omamobile-onboarding and omamobile-set-pin, which keep the terminal flow as the fallback.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Onboarding.qml"
+  }
+}

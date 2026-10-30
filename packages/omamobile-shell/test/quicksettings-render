@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: MIT
 # Offscreen review shots of quick settings (omamobile.quicksettings),
 # upright and on its side (TOUCH-PLAN 2.4), in a dark and a light Omarchy
-# theme, with checks that the sheet, its tiles and the notification shade
-# fit the screen: the real QuickSettings.qml, its layer-shell window a
-# plain Item, over a throwaway $HOME with a few notifications of our own
-# in the shade. No backend answers here (no D-Bus, no scripts on PATH), so
-# the tiles show as unavailable; it is the layout under review. Runs inside
+# theme, with checks that the sheet, its tiles, the notification shade and
+# the reminder page (TOUCH-PLAN 1.12) fit the screen, and that every
+# tile's name and status and the reminder page's placeholders read at
+# 4.5:1, sampled from the picture (TOUCH-PLAN 2.7): the real
+# QuickSettings.qml, its layer-shell windows plain Items, over a throwaway
+# $HOME with a few notifications of our own in the shade. No backend
+# answers here (no D-Bus, no scripts on PATH), so the tiles show as
+# unavailable and the reminder page lists nothing; it is the layout under
+# review. Runs inside
 # the OWL conformance container (tests/owl/Dockerfile), never on a desktop:
 #
 #   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
@@ -73,13 +77,14 @@ def shot(name, w, h, **extra):
 print(json.dumps({"shots": [
     shot("portrait", 480, 1040), shot("portrait-expanded", 480, 1040, expanded=True),
     shot("landscape", 1040, 480), shot("landscape-expanded", 1040, 480, expanded=True), shot("landscape-edit", 1040, 480, edit=True),
+    shot("portrait-reminder", 480, 1040, page="reminder"), shot("landscape-reminder", 1040, 480, page="reminder"),
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 QS_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/quicksettings-render.qml" > "$h/log-$theme" 2>&1 || true
   grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/quicksettings-render.txt" || true
-  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+  python3 - "$h/log-$theme" "$theme" "$out" <<'PY' || status=1
 import json, re, sys
-log, theme = sys.argv[1:]
+log, theme, out = sys.argv[1:]
 text = open(log).read()
 bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l) and "hyprctl" not in l and "delayed function evaluation" not in l]
 geo = {}
@@ -87,8 +92,35 @@ for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
     geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
 def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol or a["y"] + a["h"] <= b["y"] + tol or b["y"] + b["h"] <= a["y"] + tol
-ok = not bad and len(geo) == 5
-if len(geo) != 5: print("not ok - %s: %d of 5 shots taken" % (theme, len(geo)))
+ok = not bad and len(geo) == 7
+if len(geo) != 7: print("not ok - %s: %d of 7 shots taken" % (theme, len(geo)))
+# Contrast (TOUCH-PLAN 2.7), sampled from the picture: the part's rect
+# (logical px, drawn at 3x) cropped with magick, its histogram's most
+# common colour taken as the surface and the colour farthest from it in
+# luminance (among those with a few pixels, so antialiasing fringes don't
+# count) as the text. WCAG's ratio between the two must reach 4.5:1.
+import subprocess
+def luminance(c):
+    def ch(v):
+        v = v / 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+def ratio(a, b):
+    la, lb = luminance(a), luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+def sampled_contrast(png, r, scale=3):
+    geometry = "%dx%d+%d+%d" % (max(1, r["w"] * scale), max(1, r["h"] * scale), max(0, r["x"] * scale), max(0, r["y"] * scale))
+    out = subprocess.run(["magick", png, "-crop", geometry, "+repage", "-depth", "8", "-format", "%c", "histogram:info:-"],
+                         capture_output=True, text=True).stdout
+    colours = []
+    for m in re.finditer(r"^\s*(\d+): \(\s*(\d+),\s*(\d+),\s*(\d+)", out, re.M):
+        colours.append((int(m.group(1)), (int(m.group(2)), int(m.group(3)), int(m.group(4)))))
+    if not colours: return 0.0, None, None
+    colours.sort(reverse=True)
+    surface = colours[0][1]
+    ink = max((c for n, c in colours if n >= 12), key=lambda c: abs(luminance(c) - luminance(surface)), default=surface)
+    return ratio(ink, surface), ink, surface
+
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):
     global ok
@@ -98,6 +130,27 @@ for name, g in geo.items():
     screen = g["screen"]
     landscape = screen["w"] > screen["h"]
     parts = g["parts"]
+    png = "%s/quicksettings-%s-%s.png" % (out, name, theme)
+    if g.get("page") == "reminder":
+        for part, what in (("reminderMinutes", "the minutes placeholder"), ("reminderMessage", "the message placeholder")):
+            if part not in parts: continue
+            c, ink, surface = sampled_contrast(png, parts[part])
+            check(name + ": %s reads at 4.5:1" % what, c >= 4.5, "%.2f:1 (%s on %s)" % (c, ink, surface))
+        # The reminder page in the sheet's place: its card on screen, the
+        # presets, both fields and Set at least 44 px tall and on the
+        # card, the form under the header (it keeps to the bottom, above
+        # the keyboard), and no sheet behind it.
+        card = parts.get("reminderPanel")
+        check(name + ": the reminder card is on screen", card is not None and inside(card, screen, 1), json.dumps(card))
+        wanted = ["reminderMinutes", "reminderMessage", "reminderSet"] + ["reminderPreset-%d" % m for m in (5, 10, 15, 30, 60)]
+        check(name + ": the presets, the fields and Set are on the card, at least 44 px",
+              card is not None and all(k in parts and inside(parts[k], card, 1) and parts[k]["h"] >= 44 for k in wanted),
+              json.dumps([(k, parts.get(k)) for k in wanted if not (k in parts and card and inside(parts[k], card, 1) and parts[k]["h"] >= 44)]))
+        check(name + ": Set is the lowest part, under the fields", all(k in parts for k in ("reminderSet", "reminderMessage"))
+              and parts["reminderSet"]["y"] >= parts["reminderMessage"]["y"] + parts["reminderMessage"]["h"]
+              and card is not None and parts["reminderSet"]["y"] + parts["reminderSet"]["h"] >= card["y"] + card["h"] - 60)
+        check(name + ": no sheet behind the page", "sheet" not in parts)
+        continue
     check(name + ": the sheet is on screen", "sheet" in parts and inside(parts["sheet"], screen), json.dumps(parts.get("sheet")))
     # The pager's other pages lie to the right, clipped: only the tiles on
     # the shown page (within the grid or the pager) are judged.
@@ -106,6 +159,18 @@ for name, g in geo.items():
     check(name + ": the tiles are on the sheet, at least 44 px tall", len(tiles) >= (0 if g["edit"] else 4) and all(inside(t, parts["sheet"], 1) and t["h"] >= 44 for t in tiles),
           json.dumps([t for t in tiles if not (inside(t, parts["sheet"], 1) and t["h"] >= 44)][:3]))
     check(name + ": no two tiles overlap", all(apart(a, b, 1) for i, a in enumerate(tiles) for b in tiles[i + 1:]))
+    # Every shown tile's name and status (no backend answers here, so each
+    # is an unavailable tile with its reason) read at 4.5:1 against the
+    # tile: only the glyph is dimmed (TOUCH-PLAN 2.7).
+    texts = [(k, v) for k, v in parts.items() if (k.startswith("tileStatus") or k.startswith("tileLabel")) and grid and not apart(v, grid) and v["w"] > 10]
+    # The sliders scroll with the sheet: only the ones on the shown part.
+    texts += [(k, v) for k, v in parts.items() if k.startswith("sliderStatus") and v["w"] > 10 and not v.get("clipped")]
+    low = []
+    for k, v in texts:
+        c, ink, surface = sampled_contrast(png, v)
+        if c < 4.5: low.append((k, round(c, 2), ink, surface))
+    if not g["edit"]:
+        check(name + ": every tile's name and status and the sliders' reasons read at 4.5:1 (%d sampled)" % len(texts), bool(texts) and not low, json.dumps(low[:4]))
     if not g["edit"]:
         check(name + ": the handle and the settings gear are reachable", all(k in parts and inside(parts[k], screen) and parts[k]["h"] >= 44 for k in ("handle", "settingsButton")),
               json.dumps([parts.get("handle"), parts.get("settingsButton")]))

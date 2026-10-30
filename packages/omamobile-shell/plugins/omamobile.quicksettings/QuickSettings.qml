@@ -20,7 +20,8 @@ import "Readable.js" as Readable
 // handle) expands it to every tile, a page of eight at a time with a
 // sideways swipe between pages, and volume. Tap outside it, swipe it up, or
 // press Escape to put it away. The Wi-Fi and Bluetooth tiles' chevrons (or a
-// long-press) open the panels in WifiPanel.qml and BluetoothPanel.qml.
+// long-press) open the panels in WifiPanel.qml and BluetoothPanel.qml; the
+// Reminder tile opens ReminderPanel.qml (TOUCH-PLAN 1.12).
 //
 // Under the sheet, a second card is the notification shade: Omarchy's
 // notification history, newest first, with Clear all (NotificationsModel.js);
@@ -53,12 +54,12 @@ Item {
 
   // ---------------------------------------------------------------- lifecycle
 
-  // A payload of {"page": "wifi"} or {"page": "bluetooth"} opens that panel
-  // instead of the sheet.
+  // A payload of {"page": "wifi"}, {"page": "bluetooth"} or {"page":
+  // "reminder"} opens that panel instead of the sheet.
   function open(payloadJson) {
     var payload = {}
     try { payload = JSON.parse(payloadJson || "{}") || {} } catch (error) {}
-    if (payload.page === "wifi" || payload.page === "bluetooth") {
+    if (payload.page === "wifi" || payload.page === "bluetooth" || payload.page === "reminder") {
       openPage(payload.page)
       // Let the host finish delivering this open before it hears a hide.
       Qt.callLater(root.dismiss)
@@ -66,6 +67,7 @@ Item {
     }
     wifiPicker.close()
     bluetoothPanelItem.close()
+    reminderPanelItem.close()
     if (editing) finishEditing()
     expanded = payload.expanded === true
     if (payload.page === "edit") startEditing()
@@ -221,7 +223,7 @@ Item {
     "location": location, "nfc": nfc, "battery-saver": batterySaver, "dark-theme": darkTheme,
     "night-light": nightLight, "stay-awake": stayAwake, "mic": mic, "screenshot": screenshot,
     "screen-record": screenRecord, "fingerprint": fingerprint, "keyboard": keyboard,
-    "clipboard": clipboard, "dictation": dictation
+    "clipboard": clipboard, "dictation": dictation, "reminder": reminder
   })
 
   // ---------------------------------------------------------------- layout
@@ -578,6 +580,28 @@ Item {
     }
   }
 
+  // Reminders (TOUCH-PLAN 1.12) through Omarchy's own omarchy-reminder,
+  // which the desktop reaches with Super+Ctrl+R and a keyboard flow. A tap
+  // opens the page behind the tile (ReminderPanel.qml: minutes, a message,
+  // Set, what is pending); a long-press shows what is pending as Omarchy's
+  // own notification (`omarchy-reminder show`). The status counts the
+  // pending timers (tile-state.sh), and the tile lights while one is.
+  QtObject {
+    id: reminder
+    readonly property bool available: root.probedHas("reminders")
+    readonly property int count: parseInt(root.probed.reminders, 10) || 0
+    readonly property bool enabled: available && count > 0
+    readonly property string icon: "󰢌"
+    readonly property string status: TilesModel.reminderStatus(root.probed.reminders)
+    readonly property bool longPress: true
+    function toggle() { if (available) root.openReminderPanel() }
+    function openDetails() {
+      if (!available) return
+      root.dismiss()
+      Quickshell.execDetached(["omarchy-reminder", "show"])
+    }
+  }
+
   // ---------------------------------------------------------------- clock
 
   // The header follows the bar clock's 12/24-hour choice (Omarchy's clock
@@ -653,14 +677,29 @@ Item {
     root.dismiss()
   }
 
+  function openReminderPanel() {
+    openPage("reminder")
+    root.dismiss()
+  }
+
   // One page at a time.
   function openPage(page) {
     if (page !== "wifi") wifiPicker.close()
     if (page !== "bluetooth") bluetoothPanelItem.close()
     if (page !== "record") recordPanelItem.close()
+    if (page !== "reminder") reminderPanelItem.close()
     if (page === "wifi") wifiPicker.open()
     else if (page === "bluetooth") bluetoothPanelItem.open()
     else if (page === "record") recordPanelItem.open()
+    else if (page === "reminder") reminderPanelItem.open()
+  }
+
+  // The page behind the Reminder tile; its own window, like the others.
+  ReminderPanel {
+    id: reminderPanelItem
+    onBackRequested: root.backToSheet(reminderPanelItem)
+    onReminderSet: { reminderPanelItem.close(); probeLater.restart() }
+    onClearedAll: probeLater.restart()
   }
 
   RecordPanel {
@@ -1480,7 +1519,7 @@ Item {
               Text {
                 textFormat: Text.PlainText
                 text: Qt.formatDateTime(clock.date, "dddd, d MMMM")
-                color: Qt.darker(root.foreground, 1.4)
+                color: Readable.secondary(root.foreground, Commons.Color.popups.background)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.body
               }
@@ -1579,7 +1618,7 @@ Item {
                 anchors.centerIn: parent
                 textFormat: Text.PlainText
                 text: "No tiles. Tap 󰏫 to add some."
-                color: Qt.darker(root.foreground, 1.4)
+                color: Readable.secondary(root.foreground, Commons.Color.popups.background)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.body
               }
@@ -1638,7 +1677,7 @@ Item {
                 width: parent.width
                 textFormat: Text.PlainText
                 text: "Tap a tile to remove it. Hold and drag to move it."
-                color: Qt.darker(root.foreground, 1.4)
+                color: Readable.secondary(root.foreground, Commons.Color.popups.background)
                 font.family: Style.font.family
                 font.pixelSize: Readable.px(Style.font.caption)
                 wrapMode: Text.WordWrap
@@ -1685,7 +1724,7 @@ Item {
                   anchors.centerIn: parent
                   textFormat: Text.PlainText
                   text: "No tiles on the sheet"
-                  color: Qt.darker(root.foreground, 1.4)
+                  color: Readable.secondary(root.foreground, Commons.Color.popups.background)
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
                 }
@@ -1745,7 +1784,7 @@ Item {
                 visible: root.spareTiles.length === 0
                 textFormat: Text.PlainText
                 text: "Every tile is on the sheet"
-                color: Qt.darker(root.foreground, 1.4)
+                color: Readable.secondary(root.foreground, Commons.Color.popups.background)
                 font.family: Style.font.family
                 font.pixelSize: Readable.px(Style.font.caption)
               }
@@ -1930,7 +1969,7 @@ Item {
           width: parent.width
           textFormat: Text.PlainText
           text: "No notifications"
-          color: Qt.darker(root.foreground, 1.4)
+          color: Readable.secondary(root.foreground, Commons.Color.popups.background)
           font.family: Style.font.family
           font.pixelSize: Style.font.body
         }

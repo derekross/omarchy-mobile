@@ -3,9 +3,24 @@
 # Set or change the phone's PIN or password: it is the account password, so
 # Omarchy's lock screen, sudo and polkit all check it through PAM.
 #
-#   omamobile-set-pin           open a terminal to set or change it
-#   omamobile-set-pin --type    print this user's choice: pin or password
+#   omamobile-set-pin             set or change it: the shell's sheet
+#                                 (omamobile.onboarding, TOUCH-PLAN 1.11) when
+#                                 the shell runs it, else a terminal with the
+#                                 prompts below
+#   omamobile-set-pin --type      print this user's choice: pin or password
+#   omamobile-set-pin --status    JSON: {"set": bool, "type": "pin"|"password"}
+#   omamobile-set-pin --apply TYPE
+#                                 what the sheet runs: the current PIN or
+#                                 password (an empty line when there is none)
+#                                 and the new one on stdin, one per line, never
+#                                 in argv. passwd makes the change (driven on a
+#                                 pty, answering its prompts as the terminal
+#                                 flow does), then TYPE is recorded. Exit 0 set,
+#                                 3 the current one was wrong, 5 the new one
+#                                 was refused (the reason on stdout), 1 else.
+#   omamobile-set-pin --inner     the terminal prompts (gum)
 # (A phone without one is pointed here by omamobile-onboarding at login.)
+# OMAMOBILE_PROMPTS=terminal skips the sheet.
 #
 # The choice decides how the phone asks for it, like Android: a PIN gets the
 # lock screen's number pad and the on-screen keyboard's digits, a password the
@@ -26,9 +41,15 @@ current_type() {
   [[ $type == password ]] && echo password || echo pin
 }
 
+# Whether the account has a password at all: an empty one is accepted
+# (nullok) by unix_chkpwd, and means none.
+has_pin() {
+  ! printf '' | unix_chkpwd "$USER" nullok 2>/dev/null
+}
+
 # Record TYPE (pin or password) and set Omarchy's toggles to match.
 record_type() {
-  mkdir -p "$(dirname "$record")" "$toggles"
+  mkdir -p "${record%/*}" "$toggles"
   printf '%s\n' "$1" >"$record.new" && mv "$record.new" "$record"
   # the lock's number pad and the prompts' 123/ABC switch: a touch phone
   touch "$toggles/lock-keypad"
@@ -38,6 +59,100 @@ record_type() {
     rm -f "$toggles/credential-password"
   fi
 }
+
+# With a PIN or password set, the phone locks right after it starts.
+mark_lock_on_start() {
+  mkdir -p "$toggles"
+  touch "$toggles/lock-on-start"
+}
+
+status_json() {
+  local set=false
+  has_pin && set=true
+  printf '{"set": %s, "type": "%s"}\n' "$set" "$(current_type)"
+}
+
+# The shell's sheet, when the shell runs it: `summon` answers ok, or unknown
+# for a shell without the plugin; no shell at all fails.
+open_sheet() {
+  [[ ${OMAMOBILE_PROMPTS:-} == terminal ]] && return 1
+  [[ $(omarchy-shell shell summon omamobile.onboarding "$1" 2>/dev/null) == ok ]]
+}
+
+# passwd on a pty, its prompts answered from the two lines on our stdin.
+# Python's pty module, since passwd talks to the terminal, not stdin. The
+# secrets never reach argv, the environment or the output.
+read -r -d '' PASSWD_DRIVER <<'PY' || true
+import os, pty, re, select, sys, time
+current = sys.stdin.readline().rstrip("\n")
+new = sys.stdin.readline().rstrip("\n")
+if not new:
+    print("No new PIN or password was given")
+    sys.exit(1)
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["LC_ALL"] = "C"
+    try:
+        os.execvp("passwd", ["passwd"])
+    finally:
+        os._exit(127)
+out = b""
+seen = 0
+answered = []
+status = None
+deadline = time.time() + 60
+while time.time() < deadline:
+    try:
+        ready, _, _ = select.select([fd], [], [], 0.25)
+    except InterruptedError:
+        continue
+    if ready:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            chunk = b""
+        if not chunk:
+            break
+        out += chunk
+        pending = out[seen:].decode("utf-8", "replace")
+        prompt = re.search(r"([^\n]*password[^\n]*):\s*$", pending, re.I)
+        if prompt:
+            which = "new" if "new" in prompt.group(1).lower() else "current"
+            answered.append(which)
+            os.write(fd, ((new if which == "new" else current) + "\n").encode())
+            seen = len(out)
+        continue
+    done, st = os.waitpid(pid, os.WNOHANG)
+    if done:
+        status = st
+        break
+if status is None:
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+    _, status = os.waitpid(pid, 0)
+try:
+    os.close(fd)
+except OSError:
+    pass
+code = os.waitstatus_to_exitcode(status)
+text = out.decode("utf-8", "replace")
+if code == 0 and "updated successfully" in text:
+    sys.exit(0)
+# pam_unix's and pam_pwquality's refusals of the new one; "password
+# unchanged" is what passwd says after any failure, and means nothing here.
+refusals = ("BAD PASSWORD", "must choose", "too short", "too simple", "too similar", "do not match",
+            "No password has been supplied", "already used")
+for line in text.splitlines():
+    if any(key.lower() in line.lower() for key in refusals):
+        reason = re.sub(r"^.*BAD PASSWORD:\s*", "", line.strip(), flags=re.I)
+        print(reason or "The new one was refused")
+        sys.exit(5)
+if answered and answered[0] == "current" and "new" not in answered:
+    sys.exit(3)
+sys.exit(1)
+PY
 
 case "${1:-}" in
   --inner)
@@ -63,20 +178,34 @@ case "${1:-}" in
       gum confirm "Try again?" || exit 1
     done
     record_type "$type"
-    mkdir -p "$toggles"
-    touch "$toggles/lock-on-start"
+    mark_lock_on_start
     echo
     [[ $type == pin ]] && echo "PIN set." || echo "Password set."
     echo "Your phone now locks after it starts."
     ;;
+  --apply)
+    type=${2:-}
+    case $type in pin | password) ;; *) echo "Usage: omamobile-set-pin --apply pin|password" >&2; exit 2 ;; esac
+    python3 -I -c "$PASSWD_DRIVER"
+    rc=$?
+    if [[ $rc == 0 ]]; then
+      record_type "$type"
+      mark_lock_on_start
+    fi
+    exit $rc
+    ;;
   --type)
     current_type
     ;;
+  --status)
+    status_json
+    ;;
   "")
+    open_sheet '{"page":"pin"}' && exit 0
     exec omarchy-launch-floating-terminal-with-presentation "omamobile-set-pin --inner"
     ;;
   *)
-    echo "Usage: omamobile-set-pin [--type]" >&2
+    echo "Usage: omamobile-set-pin [--type|--status|--apply pin|password]" >&2
     exit 1
     ;;
 esac

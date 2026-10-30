@@ -47,6 +47,9 @@
     },
     {
       "id": "omamobile.back"
+    },
+    {
+      "id": "omamobile.onboarding"
     }
   ]
 }

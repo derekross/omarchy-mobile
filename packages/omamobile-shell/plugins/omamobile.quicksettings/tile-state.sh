@@ -21,6 +21,8 @@
 #   dictation     voxtype: on while recording, busy while transcribing, off
 #                 when idle; down when its user service isn't running, none
 #                 without voxtype (it is an optional Omarchy install)
+#   reminders     how many of Omarchy's reminder timers are pending
+#                 (omarchy-reminder show --json); none without it
 
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -97,6 +99,15 @@ if have voxtype; then
   fi
 else
   echo "dictation=none"
+fi
+
+# reminders: Omarchy's own count of its pending omarchy-reminder-* timers.
+if have omarchy-reminder; then
+  count=$(t omarchy-reminder show --json | grep -o '"count":[0-9]*' | head -n1)
+  count=${count#*:}
+  echo "reminders=${count:-0}"
+else
+  echo "reminders=none"
 fi
 
 # data: the daemon's public state is world-readable; the bearer service's

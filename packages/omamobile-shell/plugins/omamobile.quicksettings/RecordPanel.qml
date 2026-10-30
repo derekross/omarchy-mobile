@@ -5,6 +5,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "Readable.js" as Readable
 
 // The page behind the Screen record tile, after the Wi-Fi and Bluetooth
 // pickers: choose the video's sound (what the phone plays, the microphone,
@@ -130,8 +131,7 @@ Item {
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             text: "Record the screen with"
-            color: root.foreground
-            opacity: 0.7
+            color: Readable.secondary(root.foreground, Commons.Color.popups.background)
             font.family: Style.font.family
             font.pixelSize: Style.font.body
           }
@@ -185,8 +185,7 @@ Item {
                   textFormat: Text.PlainText
                   wrapMode: Text.Wrap
                   text: choiceRow.modelData.detail
-                  color: root.foreground
-                  opacity: 0.7
+                  color: Readable.secondary(root.foreground, Commons.Color.popups.background)
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
                 }

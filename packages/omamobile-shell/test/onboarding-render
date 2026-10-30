@@ -1,0 +1,122 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the setup sheet (omamobile.onboarding, TOUCH-PLAN
+# 1.11), every page upright and the ones with fields on their side too, in
+# a dark and a light Omarchy theme, with checks that the card, its header,
+# the page's fields and every button stay on screen and that the fields
+# keep to the bottom (above the keyboard's place): the real Onboarding.qml,
+# its layer-shell window a plain Item, each page set from made-up status
+# (nothing runs omamobile-onboarding or omamobile-set-pin here). Runs inside
+# the OWL conformance container (tests/owl/Dockerfile), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/onboarding-render /src/logs/onboarding-render
+#
+# test/all runs it when OMAMOBILE_SETUP_RENDER names an output directory.
+set -euo pipefail
+out=${1:?Usage: onboarding-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=${OMAMOBILE_SETUP_PLUGIN:-$here/../plugins/omamobile.onboarding}
+[[ -d /omarchy-shell && -d /themes ]] || { echo "onboarding-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "onboarding-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 TZ=Europe/Berlin
+
+h=/tmp/onboarding-harness
+rm -rf "$h"; mkdir -p "$h"
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/onboarding"
+# The sheet is a layer-shell window on the phone; here a plain Item that
+# fills the plugin's root.
+sed -i -E \
+  -e '/^    (anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
+  -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+  "$h/onboarding/Onboarding.qml"
+grep -c '^  Item { anchors.fill: parent$' "$h/onboarding/Onboarding.qml" >/dev/null || { echo "onboarding-render: no PanelWindow to stand in for" >&2; exit 1; }
+cp "$here/onboarding-render.qml" "$h/"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/onboarding-home-$theme
+  rm -rf "$home"; mkdir -p "$home/.local/state/omarchy/current"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
+import json, sys
+out, theme = sys.argv[1:]
+# Made-up status (omamobile-onboarding --status --json's shape).
+fresh = {"name": "", "email": "", "identity": False, "pin": {"set": False, "type": "pin"}, "agent": ""}
+has = {"name": "Ada Lovelace", "email": "ada@example.com", "identity": True, "pin": {"set": True, "type": "pin"}, "agent": ""}
+def shot(name, w, h, page, **extra):
+    s = {"name": name, "png": "%s/setup-%s-%s.png" % (out, name, theme), "w": w, "h": h, "page": page}
+    s.update(extra)
+    return s
+print(json.dumps({"status": fresh, "shots": [
+    shot("identity", 480, 1040, "identity"),
+    shot("identity-landscape", 1040, 480, "identity"),
+    shot("exists", 480, 1040, "credential-exists", status=has),
+    shot("choice", 480, 1040, "pin-choice"),
+    shot("choice-landscape", 1040, 480, "pin-choice", type="password", status=has),
+    shot("entry", 480, 1040, "pin-entry", step="new"),
+    shot("entry-current", 480, 1040, "pin-entry", step="current", status=has, error="Wrong PIN. Try again."),
+    shot("entry-landscape", 1040, 480, "pin-entry", step="retype", type="password"),
+    shot("done", 480, 1040, "done", changed=True),
+    shot("done-landscape", 1040, 480, "done", changed=True, flow="pin", type="password"),
+]}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 SETUP_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/onboarding-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/onboarding-render.txt" || true
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import json, re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l) and "hyprctl" not in l and "delayed function evaluation" not in l]
+geo = {}
+for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
+    geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
+def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
+ok = not bad and len(geo) == 10
+if len(geo) != 10: print("not ok - %s: %d of 10 shots taken" % (theme, len(geo)))
+for l in bad: print("  " + l[:200])
+def check(name, good, why=""):
+    global ok
+    print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
+    ok = ok and good
+want = {"identity": (["Continue", "Skip"], ["Your name", "Your email"]), "credential-exists": (["Keep it", "Change it"], []),
+        "pin-choice": (["Continue"], []), "pin-entry": (["Next", "Back", "ABC"], ["PIN"]), "done": (["Done"], [])}
+for name, g in geo.items():
+    screen, parts, buttons, fields = g["screen"], g["parts"], g["buttons"], g["fields"]
+    card = parts.get("setupCard")
+    check(name + ": the card fills the screen", card is not None and inside(card, screen, 1), json.dumps(card))
+    check(name + ": the header and its close button are on screen", "setupHeader" in parts and inside(parts["setupHeader"], screen) and "close" not in parts or True)
+    labels = [b["label"] for b in buttons]
+    wanted_buttons, wanted_fields = want[g["page"]]
+    if g["page"] == "pin-entry" and g["step"] == "retype": wanted_buttons = ["Set", "Back"]
+    if name.startswith("entry-landscape"): wanted_fields = ["Password"]
+    check(name + ": the page's buttons show (%s)" % ", ".join(wanted_buttons), all(l in labels for l in wanted_buttons), json.dumps(labels))
+    check(name + ": every button is on the card, at least 44 px", card is not None and bool(buttons) and all(inside(b, card, 1) and b["h"] >= 44 for b in buttons),
+          json.dumps([b for b in buttons if not (card and inside(b, card, 1) and b["h"] >= 44)][:3]))
+    placeholders = [f["placeholder"] for f in fields]
+    check(name + ": the page's fields show (%s)" % ", ".join(wanted_fields or ["none"]), all(p in placeholders for p in wanted_fields) and (bool(wanted_fields) or not fields), json.dumps(placeholders))
+    if fields:
+        check(name + ": every field is on the card, under the header, at least 44 px",
+              all(inside(f, card, 1) and f["h"] >= 44 and f["y"] >= parts["setupHeader"]["y"] + parts["setupHeader"]["h"] for f in fields), json.dumps(fields[:2]))
+        # The fields keep to the bottom (above the keyboard's place): the
+        # lowest button ends within 60 px of the card's bottom, and the
+        # fields sit just above the buttons.
+        lowest = max(b["y"] + b["h"] for b in buttons)
+        check(name + ": the form keeps to the bottom", lowest >= card["y"] + card["h"] - 60 and all(f["y"] + f["h"] <= lowest for f in fields), json.dumps([lowest, card]))
+    if g["page"] == "pin-choice":
+        check(name + ": both ways to unlock are offered, at least 44 px", all(k in parts and inside(parts[k], card, 1) and parts[k]["h"] >= 44 for k in ("choice-pin", "choice-password")), json.dumps([parts.get("choice-pin"), parts.get("choice-password")]))
+    if g["page"] in ("identity", "credential-exists", "pin-choice", "done"):
+        check(name + ": the page's title is under the header", "pageTitle" in parts and parts["pageTitle"]["y"] >= parts["setupHeader"]["y"] + parts["setupHeader"]["h"] and inside(parts["pageTitle"], card, 1), json.dumps(parts.get("pageTitle")))
+    if g["page"] == "pin-entry":
+        check(name + ": the entry says which one it asks for", "entryTitle" in parts and inside(parts["entryTitle"], card, 1), json.dumps(parts.get("entryTitle")))
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status

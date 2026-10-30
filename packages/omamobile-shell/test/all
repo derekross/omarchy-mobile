@@ -40,8 +40,39 @@ if command -v node >/dev/null; then
   node -e '
 const R = require(require("path").resolve(process.argv[1]))
 if (R.MIN_PX !== 12 || R.px(10) !== 12 || R.px(9) !== 12 || R.px(14) !== 14) throw new Error("Readable.px")
-' "$first" || fail "Readable.px floors at 12 px"
+// Contrast (TOUCH-PLAN 2.7): secondary text reaches 4.5:1 on a dark and a
+// light theme, is dimmer than the foreground where there is room, and is
+// the foreground itself when nothing dimmer would do.
+const hex = (h) => ({ r: parseInt(h.slice(1, 3), 16) / 255, g: parseInt(h.slice(3, 5), 16) / 255, b: parseInt(h.slice(5, 7), 16) / 255, a: 1 })
+const near = (a, b) => Math.abs(a - b) < 0.01
+if (!near(R.contrast(hex("#ffffff"), hex("#000000")), 21) || !near(R.contrast(hex("#777777"), hex("#777777")), 1)) throw new Error("Readable.contrast")
+for (const [fg, bg] of [["#a9b1d6", "#1a1b26"], ["#c0caf5", "#1a1b26"], ["#4c4f69", "#eff1f5"], ["#ffffff", "#000000"]]) {
+  const s = R.secondaryRgb(hex(fg), hex(bg))
+  const c = R.contrast(s, hex(bg))
+  if (c < 4.5) throw new Error("secondary " + fg + " on " + bg + " reads at " + c.toFixed(2))
+  if (c >= R.contrast(hex(fg), hex(bg))) throw new Error("secondary " + fg + " on " + bg + " is not dimmer")
+}
+const weak = R.secondaryRgb(hex("#777777"), hex("#555555"))
+if (!near(weak.r, 0x77 / 255)) throw new Error("a foreground that cannot reach 4.5:1 stays itself")
+const f = R.flattenRgb({ r: 1, g: 0, b: 0, a: 0.5 }, hex("#000000"))
+if (!near(f.r, 0.5) || !near(f.g, 0) || f.a !== 1) throw new Error("Readable.flattenRgb")
+' "$first" || fail "Readable: the 12 px floor and 4.5:1 secondary text"
 fi
+# Secondary text and placeholders go through Readable.secondary, not a
+# fixed darkening or opacity, which read at 3-4:1 on a dark theme; the
+# 1.3 darkenings left are glyphs, not text. On a tile only the glyph is
+# dimmed when its backend is missing.
+if grep -rnE 'Qt\.darker\((root|row|sheet)\.foreground, 1\.[4-9]\)' plugins --include=*.qml; then fail "secondary text is Readable.secondary, not a fixed darkening"; fi
+if grep -rnE 'placeholderText:' plugins/omamobile.launcher plugins/omamobile.quicksettings plugins/omamobile.update --include=*.qml | grep -v placeholderTextColor >/dev/null; then
+  for f in $(grep -rlE 'placeholderText:' plugins/omamobile.launcher plugins/omamobile.quicksettings plugins/omamobile.update --include=*.qml); do
+    [[ $(grep -c 'placeholderText:' "$f") == $(grep -c 'placeholderTextColor: Readable.secondary' "$f") ]] || fail "$f: every placeholder has a 4.5:1 colour"
+  done
+fi
+grep -c 'objectName: "tileLabel"' plugins/omamobile.quicksettings/Tile.qml >/dev/null || fail "the tile's name is named for the render"
+grep -c 'opacity: root.available ? 1 : 0.45' plugins/omamobile.quicksettings/SliderRow.qml >/dev/null || fail "an unavailable slider row dims its glyph only"
+if grep -nE '^  opacity: available' plugins/omamobile.quicksettings/SliderRow.qml; then fail "a slider row never dims as a whole"; fi
+[[ $(grep -c 'opacity: root._dim' plugins/omamobile.quicksettings/Tile.qml) == 2 ]] || fail "an unavailable tile dims its glyph and chevron only"
+grep -c 'color: Readable.secondary(root.foreground, Readable.flatten(root.color, Commons.Color.popups.background))' plugins/omamobile.quicksettings/Tile.qml >/dev/null || fail "a tile's status reads at 4.5:1 against the tile"
 # AppTile.qml is left to PR #43, which sets its label to caption + 3.
 if grep -rnE 'Style\.font\.caption' plugins --include=*.qml | grep -v 'Readable\.px(Style\.font\.caption' | grep -v 'omamobile.home/AppTile.qml:'; then
   fail "caption-sized text goes through Readable.px"
@@ -50,7 +81,7 @@ for qml in $(grep -rl 'Readable\.px' plugins --include=*.qml); do
   grep -c '^import "Readable.js" as Readable$' "$qml" >/dev/null || fail "$qml imports Readable.js"
   [[ -f $(dirname "$qml")/Readable.js ]] || fail "$qml has Readable.js beside it"
 done
-pass "readable text sizes"
+pass "readable text: the 12 px floor and 4.5:1 secondary text"
 
 # Touch: a swipe that starts on a quick-settings tile mustn't toggle it
 # (a passive TapHandler, not a MouseArea), and destructive actions take two
@@ -61,6 +92,13 @@ grep -c 'onTapped: bottomButton.modelData.action === "home" ? root.goHome() : ro
 grep -c 'onTapped: root.requestReset()' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "quick-settings Reset asks first"
 grep -c 'if (!settingsFlick.confirmRemove) { settingsFlick.confirmRemove = true; return }' plugins/omamobile.home/HomeSheets.qml >/dev/null || fail "a widget's Remove asks first"
 grep -c 'onTapped: root.requestClearNotifications()' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the shade's Clear all asks first"
+# TOUCH-PLAN 3.7: Forget (a saved Wi-Fi password, a Bluetooth pairing)
+# asks first too, naming what it forgets.
+for panel in WifiPanel BluetoothPanel; do
+  grep -c 'onTapped: root.requestForget()' "plugins/omamobile.quicksettings/$panel.qml" >/dev/null || fail "$panel: Forget asks first"
+  grep -cE 'label: root.confirmForget \? "Forget " \+ root.sheet(Ssid|Label) \+ "\?" : "Forget"' "plugins/omamobile.quicksettings/$panel.qml" >/dev/null || fail "$panel: the second tap names what it forgets"
+  grep -c 'confirmForget = false' "plugins/omamobile.quicksettings/$panel.qml" >/dev/null || fail "$panel: cancelling the sheet disarms Forget"
+done
 pass "touch: tiles and two-tap destructive actions"
 
 # Touch navigation (TOUCH-PLAN 1.2, 1.7, 1.8, 1.10, 2.5).
@@ -148,6 +186,22 @@ grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the sh
 grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
 grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
 grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/null || fail "the Clipboard tile opens Omarchy's clipboard history"
+# The Reminder tile (TOUCH-PLAN 1.12) is a page over Omarchy's own
+# omarchy-reminder: Set runs it with the minutes and message, Clear all
+# runs its clear after a second tap, the list is its JSON, and nothing
+# here starts a timer or a notification of its own. Night light was
+# already a tile (omarchy-toggle-nightlight, tile-action.sh).
+panel=plugins/omamobile.quicksettings/ReminderPanel.qml
+grep -cF 'var argv = TilesModel.reminderArgv(minutes, messageField.text)' "$panel" >/dev/null || fail "Set runs omarchy-reminder through reminderArgv"
+grep -cF 'Quickshell.execDetached(["omarchy-reminder", "clear"])' "$panel" >/dev/null || fail "Clear all runs omarchy-reminder clear"
+grep -cF 'onTapped: root.requestClear()' "$panel" >/dev/null || fail "Clear all asks first"
+grep -cF 'command: ["omarchy-reminder", "show", "--json"]' "$panel" >/dev/null || fail "the page lists omarchy-reminder's JSON"
+if grep -nE 'systemd-run|notification-send' "$panel"; then fail "the reminder page starts no timer or notification of its own"; fi
+grep -cF 'Quickshell.execDetached(["omarchy-reminder", "show"])' "$qs" >/dev/null || fail "a long-press on Reminder shows Omarchy's list"
+grep -cF '"reminder": reminder' "$qs" >/dev/null || fail "the Reminder tile has a backend"
+grep -cF 'else if (page === "reminder") reminderPanelItem.open()' "$qs" >/dev/null || fail "the Reminder tile opens its page"
+grep -cF 'exclusionMode: ExclusionMode.Normal' "$panel" >/dev/null || fail "the reminder page fits above the on-screen keyboard"
+grep -cF 'exec omarchy-toggle-nightlight' plugins/omamobile.quicksettings/tile-action.sh >/dev/null || fail "night light is Omarchy's toggle"
 # A swipe on a row forgets that one notification through the service's
 # forget call (omamobile-omarchy patch 0019), never by deleting its file
 # behind the service; the row's swipe is sideways only and off while the
@@ -371,6 +425,14 @@ fi
 grep -c 'Quickshell.execDetached(LauncherModel.appArgv(entry.id))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer launches through omamobile-launch"
 grep -c 'Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))' plugins/omamobile.home/Home.qml >/dev/null || fail "home-screen apps launch through omamobile-launch"
 grep -c 'tile.home.launch(tile.entry.app)' plugins/omamobile.home/AppTile.qml >/dev/null || fail "app tiles launch through the home screen"
+# TOUCH-PLAN 3.7's small parts: a missing app's tile says so rather than
+# showing its raw id, the drawer's long-press is answered on the home
+# page, and recents name apps by their desktop entry (test/switcher-touch).
+grep -c 'text: tile.missing ? "Not installed" :' plugins/omamobile.home/AppTile.qml >/dev/null || fail "a missing app's tile says Not installed"
+grep -c 'if (id !== "full") flash("Added to home")' plugins/omamobile.home/Home.qml >/dev/null || fail "the home says Added to home after the drawer's long-press"
+grep -c 'text: root.windowLabel(slot.modelData)' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "recents' cards are titled by windowLabel"
+grep -c 'var entry = DesktopEntries.byId(id) || DesktopEntries.byId(id + ".desktop")' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "recents look the app up by its desktop entry"
+grep -c '^## Gestures' README.md >/dev/null && grep -c 'Long-press an app | Put it on the home page' README.md >/dev/null || fail "the README has the gestures table"
 grep -c 'Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.launch goes through omamobile-launch"
 grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.openUrl goes through omamobile-launch"
 grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omamobile.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omamobile-launch"
@@ -411,7 +473,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
-  pass "recent apps under touch: Clear all, Home, a near miss, a card, the cards on their side"
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, the cards on their side, the apps' names"
 fi
 rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -476,6 +538,56 @@ if [[ -n ${OMAMOBILE_UPDATE_RENDER:-} ]]; then
   bash test/update-render "$OMAMOBILE_UPDATE_RENDER" >/dev/null || fail "update sheet render"
 fi
 pass "update sheet"
+
+# The setup sheet (omamobile.onboarding, TOUCH-PLAN 1.11): the first run's
+# questions and System > PIN as sheets in place of the gum prompts. The
+# scripts stay the one definition of what each answer does (their
+# function-level entry points, test/onboarding.sh), the sheet calls them,
+# the secrets go to omamobile-set-pin's stdin and nowhere else, and the
+# scripts open the sheet when the shell has it. test/onboarding-render
+# draws every page in the OWL container.
+python3 -c 'import json; assert {"id": "omamobile.onboarding"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables the setup sheet"
+grep -c 'add_plugin omamobile.onboarding' bin/omamobile-setup-user >/dev/null || fail "existing users get the setup sheet"
+bash test/onboarding.sh || fail "omamobile-onboarding and omamobile-set-pin entry points"
+if command -v node >/dev/null; then
+  node test/onboarding-model.js >/dev/null || { node test/onboarding-model.js; fail "setup sheet model"; }
+fi
+setup=plugins/omamobile.onboarding/Onboarding.qml
+grep -cF "omarchy-shell shell summon omamobile.onboarding \"\$1\"" bin/omamobile-onboarding >/dev/null || fail "omamobile-onboarding opens the sheet"
+grep -cF "omarchy-shell shell summon omamobile.onboarding \"\$1\"" bin/omamobile-set-pin >/dev/null || fail "omamobile-set-pin opens the sheet"
+grep -cF 'exec omarchy-launch-floating-terminal-with-presentation "omamobile-onboarding --inner"' bin/omamobile-onboarding >/dev/null || fail "the terminal prompts stay the fallback"
+grep -cF 'applyProc.write(root.currentSecret + "\n" + root.newSecret + "\n")' "$setup" >/dev/null || fail "the secrets go to omamobile-set-pin's stdin"
+if grep -nE 'command: .*(Secret|secretField)' "$setup"; then fail "a secret is never in argv"; fi
+if grep -nE 'console\.(log|info|warn|debug|error)\([^)]*(secret|Secret|pin|password)' "$setup"; then fail "a secret is never logged"; fi
+grep -cF 'if (name || email) Quickshell.execDetached(Model.identityArgv(name, email))' "$setup" >/dev/null || fail "the identity goes through omamobile-onboarding --identity"
+grep -cF 'Quickshell.execDetached(Model.INVITE_ARGV)' "$setup" >/dev/null || fail "the agent invitation goes through omamobile-onboarding --invite-agent"
+# (the comments may name passwd; the code may not run or imitate it)
+if [[ -n $(grep -nE 'git config|XCompose|passwd|chpasswd|toggles/' "$setup" plugins/omamobile.onboarding/OnboardingModel.js | grep -vE ':[0-9]+:\s*//') ]]; then
+  grep -nE 'git config|XCompose|passwd|chpasswd|toggles/' "$setup" plugins/omamobile.onboarding/OnboardingModel.js | grep -vE ':[0-9]+:\s*//'
+  fail "the sheet repeats none of the scripts' logic"
+fi
+grep -cF 'exclusionMode: ExclusionMode.Normal' "$setup" >/dev/null || fail "the setup sheet fits above the on-screen keyboard"
+python3 -B - <<'PY2' || fail "the setup sheet lints clean"
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
+spec = importlib.util.spec_from_loader("omamobile_widget", loader)
+tool = importlib.util.module_from_spec(spec)
+loader.exec_module(tool)
+if not tool.qmllint_path() or not os.path.isdir(os.path.join(tool.OMARCHY_PATH, "shell")):
+    print("ok - setup sheet lint # SKIP no qmllint or Omarchy shell")
+    sys.exit(0)
+lint = tool.run_qmllint([os.path.abspath("plugins/omamobile.onboarding/Onboarding.qml")])
+noise = ("is not creatable", "QProcess::ExitStatus")
+bad = lint["errors"] + [w for w in lint["warnings"] if not any(n in w for n in noise)]
+for line in bad:
+    print("  " + line)
+sys.exit(1 if bad else 0)
+PY2
+if [[ -n ${OMAMOBILE_SETUP_RENDER:-} ]]; then
+  bash test/onboarding-render "$OMAMOBILE_SETUP_RENDER" >/dev/null || fail "setup sheet render"
+fi
+pass "setup sheet: the scripts' entry points, the sheet's wiring, no secret in argv or the log"
 
 # The permission sheet: the portal Access backend (its pure parts, then the
 # D-Bus service on a private bus against a fake omarchy-shell), the sheet's

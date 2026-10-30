@@ -755,6 +755,31 @@ Omarchy's update).
 IPC: `omarchy-shell shell call omamobile.update snapshot ''` (page, step,
 result; never the PIN).
 
+## omamobile.onboarding
+
+The setup sheet (TOUCH-PLAN 1.11): the first run's questions and System >
+PIN as sheets, in place of the gum prompts `omamobile-onboarding` and
+`omamobile-set-pin` put in a terminal, which a touch screen can't answer
+(arrow keys and Enter). `omarchy-shell shell summon omamobile.onboarding
+'{}'` is the first run (name and email, then a PIN or password unless there
+is one, then Omarchy's invitation to pick a default agent); `'{"page":"pin"}'`
+is System > PIN (PIN or password, then the entry). The scripts open the sheet
+themselves when the shell runs it (`summon` answers `ok`) and fall back to
+the terminal prompts otherwise, or with `OMAMOBILE_PROMPTS=terminal`.
+
+The scripts stay the one definition of what each answer does: the sheet
+reads `omamobile-onboarding --status --json`, saves with `--identity NAME
+EMAIL` (Omarchy's `git.sh` and `xcompose.sh`), invites with
+`--invite-agent`, and sets the PIN with `omamobile-set-pin --apply TYPE`,
+which takes the current and the new secret on its stdin (never argv, a
+file or the log), drives `passwd` on a pty as the terminal flow's prompts
+did, and records the choice and `lock-on-start`. Its exit code says what
+happened (3 wrong current, 5 refused with the reason on stdout), and the
+sheet goes back to the step that needs another answer. The fields keep to
+the bottom of the card, above the on-screen keyboard, with the ABC/123
+switch of the update sheet. `test/onboarding.sh` drives the entry points
+against a fake `passwd`; `test/onboarding-render` draws every page.
+
 ## omamobile.access
 
 The question xdg-desktop-portal asks before an app first uses the camera, the

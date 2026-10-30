@@ -205,9 +205,22 @@ Item {
     dismiss()
   }
 
+  // The app's name from its desktop entry, by the window's app id (the
+  // entry's id, as Hyprland reports the class; a heuristic lookup when
+  // Quickshell has one, for ids that differ in case or a suffix), else the
+  // id itself (TOUCH-PLAN 3.7).
+  function appName(toplevel) {
+    if (!toplevel) return ""
+    var id = String(toplevel.appId || "")
+    if (!id) return "App"
+    var entry = DesktopEntries.byId(id) || DesktopEntries.byId(id + ".desktop")
+    if (!entry && typeof DesktopEntries.heuristicLookup === "function") entry = DesktopEntries.heuristicLookup(id)
+    return entry && entry.name ? String(entry.name) : id
+  }
+
   function windowLabel(toplevel) {
     if (!toplevel) return ""
-    return (toplevel.appId || "App") + (toplevel.title ? "  " + toplevel.title : "")
+    return appName(toplevel) + (toplevel.title ? "  " + toplevel.title : "")
   }
 
   readonly property color foreground: Commons.Color.menu.text
@@ -252,7 +265,7 @@ Item {
       visible: root.windows.length === 0
       textFormat: Text.PlainText
       text: "No recent apps"
-      color: Qt.darker(root.foreground, 1.4)
+      color: Readable.secondary(root.foreground, Commons.Color.menu.background)
       font.family: Style.font.family
       font.pixelSize: Style.font.subtitle
     }
@@ -299,7 +312,7 @@ Item {
           anchors.bottomMargin: Style.space(8)
           opacity: card.opacity
           textFormat: Text.PlainText
-          text: (slot.modelData.appId || "") + (slot.modelData.title ? "  " + slot.modelData.title : "")
+          text: root.windowLabel(slot.modelData)
           elide: Text.ElideRight
           color: root.foreground
           font.family: Style.font.family
@@ -487,7 +500,7 @@ Item {
             textFormat: Text.PlainText
             text: root.actionPage === "pick" ? "Show with…" : root.windowLabel(root.actionTarget)
             elide: Text.ElideRight
-            color: Qt.darker(root.foreground, 1.3)
+            color: Readable.secondary(root.foreground, Commons.Color.menu.background)
             font.family: Style.font.family
             font.pixelSize: Style.font.body
             bottomPadding: Style.space(6)
@@ -515,7 +528,7 @@ Item {
 
             delegate: SheetRow {
               required property var modelData
-              text: modelData.appId || "App"
+              text: root.appName(modelData)
               hint: modelData.title || ""
               onActivated: root.showWith(root.actionTarget, modelData)
             }
@@ -572,7 +585,7 @@ Item {
         textFormat: Text.PlainText
         text: sheetRow.hint
         elide: Text.ElideRight
-        color: Qt.darker(root.foreground, 1.4)
+        color: Readable.secondary(root.foreground, Commons.Color.menu.background)
         font.family: Style.font.family
         font.pixelSize: Readable.px(Style.font.caption)
       }

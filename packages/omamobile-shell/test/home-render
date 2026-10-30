@@ -153,10 +153,20 @@ for name, g in geo.items():
     landscape = g["w"] > g["h"]
     check(name + ": the view knows which way it is", g["landscape"] == landscape and g["grid"] == ({"columns": 6, "rows": 4} if landscape else {"columns": 4, "rows": 6}), json.dumps([g["landscape"], g["grid"]]))
     cells = g["cells"]
-    # On its side the battery (2x1, turned to 1x2) finds no room on the
-    # first page and joins the app on the second.
-    want = (2 if landscape else 1) if g["page"] == 1 else 5 if landscape else 6
+    # Every item stays on its own page either way: on its side the battery
+    # (2x1, turned and clamped to 1x2) finds no room at that size and takes
+    # its minimum, and the view has the layout's two pages (batch 5).
+    want = 1 if g["page"] == 1 else 6
     check(name + ": %d items on the page" % want, len(cells) == want, "%d: %s" % (len(cells), ", ".join(c["id"] for c in cells)))
+    if landscape and g["page"] == 0:
+        # The two app tiles keep their row, under the widgets, not a
+        # column at the right edge (the batch 4 phone check).
+        apps = [c for c in cells if c["id"] in ("a4", "a5")]
+        widgets = [c for c in cells if c["id"] not in ("a4", "a5")]
+        def above(a, w): return w["rect"]["x"] < a["rect"]["x"] + a["rect"]["w"] and a["rect"]["x"] < w["rect"]["x"] + w["rect"]["w"] and w["rect"]["y"] < a["rect"]["y"]
+        check(name + ": the app tiles share a row under the widgets", len(apps) == 2 and apps[0]["rect"]["y"] == apps[1]["rect"]["y"]
+              and all(w["rect"]["y"] + w["rect"]["h"] <= a["rect"]["y"] + 1 for a in apps for w in widgets if above(a, w))
+              and any(above(a, w) for a in apps for w in widgets), json.dumps([a["rect"] for a in apps]))
     check(name + ": every item inside the home area", all(inside(c["rect"], area, 1) for c in cells), json.dumps([c["rect"] for c in cells if not inside(c["rect"], area, 1)]))
     touching = [(a["id"], b["id"]) for i, a in enumerate(cells) for b in cells[i + 1:] if not apart(a["rect"], b["rect"], 1)]
     check(name + ": no two items overlap", not touching, json.dumps(touching))

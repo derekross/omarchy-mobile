@@ -33,18 +33,21 @@ var CATALOG = [
   { id: "fingerprint", label: "Fingerprint" },
   { id: "keyboard", label: "Keyboard" },
   { id: "clipboard", label: "Clipboard" },
-  { id: "dictation", label: "Dictation" }
+  { id: "dictation", label: "Dictation" },
+  { id: "reminder", label: "Reminder" }
 ]
 
 // The first four are the collapsed sheet's row, as on Android: the toggles
-// reached for most. Clipboard and Dictation close the second page: Omarchy
-// reaches them only by keyboard shortcut, so a tile is their touch path
-// (TOUCH-PLAN 1.12), and appending them leaves the first page as it was.
+// reached for most. Clipboard and Dictation close the second page and
+// Reminder opens a third: Omarchy reaches them only by keyboard shortcut,
+// so a tile is their touch path (TOUCH-PLAN 1.12), and appending them
+// leaves the earlier pages as they were.
 var DEFAULT_LAYOUT = [
   "wifi", "bluetooth", "dnd", "torch",
   "mobile-data", "rotation-lock", "airplane", "location",
   "battery-saver", "dark-theme", "night-light", "nfc",
-  "fingerprint", "keyboard", "clipboard", "dictation"
+  "fingerprint", "keyboard", "clipboard", "dictation",
+  "reminder"
 ]
 
 var QUICK_COUNT = 4
@@ -206,6 +209,46 @@ function dictationStatus(state) {
   return "Not installed"
 }
 
+// The Reminder tile (TOUCH-PLAN 1.12) runs Omarchy's own omarchy-reminder.
+// Minutes are whole and above zero, as Omarchy's flow checks them; 0 for
+// anything else.
+function validMinutes(text) {
+  var s = String(text === undefined || text === null ? "" : text).trim()
+  return /^[0-9]+$/.test(s) && Number(s) > 0 ? Number(s) : 0
+}
+
+// `omarchy-reminder <minutes> [message]`, or null for bad minutes. The
+// message is plain text in argv, as Omarchy's binding sends it.
+function reminderArgv(minutes, message) {
+  var n = validMinutes(minutes)
+  if (!n) return null
+  var argv = ["omarchy-reminder", String(n)]
+  var text = String(message === undefined || message === null ? "" : message).trim()
+  if (text) argv.push(text)
+  return argv
+}
+
+// What `omarchy-reminder show --json` lists: each pending reminder's
+// label, the time it fires and what is left, in its order.
+function parseReminders(text) {
+  var data = null
+  try { data = JSON.parse(String(text || "")) } catch (error) { return [] }
+  if (!data || typeof data !== "object" || !Array.isArray(data.reminders)) return []
+  return data.reminders.map(function(r) {
+    r = r && typeof r === "object" ? r : {}
+    return { label: String(r.label || ""), atTime: String(r.atTime || ""), remaining: String(r.remaining || "") }
+  })
+}
+
+// The tile's status from tile-state.sh's reminders key: the count of
+// pending timers, or none without omarchy-reminder.
+function reminderStatus(probe) {
+  if (probe === undefined || probe === "" || probe === "none") return "Not installed"
+  var n = parseInt(probe, 10)
+  if (!(n > 0)) return "None set"
+  return n === 1 ? "1 set" : n + " set"
+}
+
 function themeName(name) {
   return String(name || "").split("-").filter(function(part) { return part.length > 0 })
     .map(function(part) { return part.charAt(0).toUpperCase() + part.slice(1) }).join(" ")
@@ -237,6 +280,10 @@ if (typeof module !== "undefined") {
     parseProbe: parseProbe,
     powerStatus: powerStatus,
     dictationStatus: dictationStatus,
+    validMinutes: validMinutes,
+    reminderArgv: reminderArgv,
+    parseReminders: parseReminders,
+    reminderStatus: reminderStatus,
     themeName: themeName
   }
 }

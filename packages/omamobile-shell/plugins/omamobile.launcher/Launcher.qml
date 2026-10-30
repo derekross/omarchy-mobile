@@ -581,8 +581,9 @@ Item {
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
+          objectName: "drawerCount"
           text: root.hasQuery ? (root.apps.length === 1 ? "1 app" : root.apps.length + " apps") : "Apps"
-          color: Qt.darker(root.foreground, 1.4)
+          color: Readable.secondary(root.foreground, Commons.Color.menu.background)
           font.family: Style.font.family
           font.pixelSize: Style.font.subtitle
           font.bold: true
@@ -638,8 +639,9 @@ Item {
         anchors.centerIn: grid
         visible: root.hasQuery && root.apps.length === 0
         textFormat: Text.PlainText
+        objectName: "drawerEmpty"
         text: "No apps match"
-        color: Qt.darker(root.foreground, 1.6)
+        color: Readable.secondary(root.foreground, Commons.Color.menu.background)
         font.family: Style.font.family
         font.pixelSize: Style.font.body
       }
@@ -715,7 +717,7 @@ Item {
             width: parent.width
             textFormat: Text.PlainText
             text: root.query.trim()
-            color: Qt.darker(root.foreground, 1.4)
+            color: Readable.secondary(root.foreground, Commons.Color.menu.background)
             font.family: Style.font.family
             font.pixelSize: Readable.px(Style.font.caption)
             elide: Text.ElideRight
@@ -753,12 +755,14 @@ Item {
 
         TextField {
           id: input
+          objectName: "drawerInput"
           anchors.fill: parent
           anchors.margins: Style.spacing.xxl
           verticalAlignment: TextInput.AlignVCenter
           font.pixelSize: Style.font.title
           leftPadding: Style.spacing.controlPaddingX + Style.font.iconLarge + Style.spacing.xl
           placeholderText: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
+          placeholderTextColor: Readable.secondary(root.foreground, Readable.flatten(Style.controlFill(activeFocus, hovered || hasCursor, foreground, accent), Commons.Color.menu.background))
           foreground: root.foreground
           text: root.query
           onTextEdited: root.query = text
@@ -817,7 +821,7 @@ Item {
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: pill.placeholder
-      color: Qt.darker(root.foreground, 1.6)
+      color: Readable.secondary(root.foreground, Commons.Color.bar.background)
       font.family: Style.font.family
       font.pixelSize: Style.font.title
       elide: Text.ElideRight

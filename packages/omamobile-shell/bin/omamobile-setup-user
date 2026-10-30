@@ -321,6 +321,12 @@ fi
 if omarchy-done ensure omamobile-back-plugin; then
   add_plugin omamobile.back
 fi
+# The setup sheet (omamobile.onboarding, TOUCH-PLAN 1.11): the first run's
+# questions and System > PIN as sheets; omamobile-onboarding and
+# omamobile-set-pin open it when the shell has it, the terminal otherwise.
+if omarchy-done ensure omamobile-onboarding-plugin; then
+  add_plugin omamobile.onboarding
+fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"

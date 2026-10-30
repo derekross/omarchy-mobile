@@ -58,6 +58,7 @@ Item {
       ToplevelManager.toplevels.values = []
       Hyprland.toplevels.values = []
       Quickshell.executed = []
+      DesktopEntries.entries = {}
     }
 
     function openWith(windows) {
@@ -172,6 +173,22 @@ Item {
       tap(p.x, p.y)
       wait(2500)
       verify(!dispatched("hl.dsp.window.close"))
+    }
+
+    // A card is titled by the app's name from its desktop entry, not its
+    // window class (TOUCH-PLAN 3.7); an app without one keeps the class.
+    function test_cards_show_the_apps_name() {
+      DesktopEntries.entries = { "foot": { name: "Terminal", icon: "" } }
+      var foot = fakeWindow.createObject(top, { title: "~/src" })
+      var odd = fakeWindow.createObject(top, { appId: "com.example.Odd", title: "" })
+      openWith([foot, odd])
+      var cards = findKind(overlay.contentItem, "QQuickListView")
+      tryVerify(function() { return cards.count === 2 })
+      verify(findText(overlay.contentItem, "Terminal  ~/src"), "the terminal's card is titled by its name")
+      verify(findText(overlay.contentItem, "com.example.Odd"), "an app without an entry keeps its id")
+      verify(!findText(overlay.contentItem, "foot  ~/src"), "not the class")
+      compare(sw.appName({ appId: "FOOT" }), "Terminal", "a heuristic lookup for an id that differs in case")
+      compare(sw.appName({ appId: "" }), "App")
     }
 
     function test_card_tap_switches() {

@@ -7,8 +7,9 @@ import "Readable.js" as Readable
 
 // One quick-settings toggle: glyph, name and a one-line status, sized for a
 // thumb. Active tiles take the theme's selected fill and accent border; tiles
-// whose backend is missing stay on screen with the glyph and name dimmed and
-// ignore taps. Their status says why ("No modem"), so it stays readable.
+// whose backend is missing stay on screen with only the glyph dimmed and
+// ignore taps. Their name and status (which says why: "No modem") keep
+// their contrast, so they can be read (TOUCH-PLAN 2.7).
 //
 // Taps go through a TapHandler, which lets go once the touch becomes a drag:
 // a swipe that starts on a tile doesn't toggle it, and the sheet's own swipe
@@ -75,24 +76,26 @@ BorderSurface {
     spacing: Style.spacing.xxs
 
     Text {
+      objectName: "tileLabel"
       width: parent.width
       textFormat: Text.PlainText
       text: root.label
       color: root.foreground
-      opacity: root._dim
       font.family: Style.font.family
       font.pixelSize: Style.font.subtitle
       font.bold: true
       elide: Text.ElideRight
     }
 
-    // Dimmed once (by colour) and never by the tile: on an unavailable tile
-    // this is the reason, and it has to be read.
+    // Secondary by colour (4.5:1 against the tile, whatever the theme) and
+    // never dimmed by the tile: on an unavailable tile this is the reason,
+    // and it has to be read.
     Text {
+      objectName: "tileStatus"
       width: parent.width
       textFormat: Text.PlainText
       text: root.status
-      color: Qt.darker(root.foreground, 1.4)
+      color: Readable.secondary(root.foreground, Readable.flatten(root.color, Commons.Color.popups.background))
       font.family: Style.font.family
       font.pixelSize: Readable.px(Style.font.caption)
       elide: Text.ElideRight
