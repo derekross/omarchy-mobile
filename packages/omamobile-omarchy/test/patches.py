@@ -392,6 +392,7 @@ def real_package(t):
     screensaver_launcher(t, os.path.join(root, "usr/bin/omarchy-launch-screensaver"))
     notification_phrasing(t, os.path.join(root, "usr/bin/omarchy-notification-send"),
                           os.path.join(ex, "usr/bin/omarchy-notification-send"))
+    lock_fingerprint_probe(t, root)
     rc, out = run(root, "apply", series=SERIES)
     ok(rc == 0 and "already applied" in out, "real omarchy: already applied")
     rc, _ = run(root, "verify")
@@ -607,6 +608,124 @@ def notification_phrasing(t, patched, original):
        % (len(PHRASINGS), " " + repr(bad_phone) if bad_phone else ""))
     ok(not bad_desktop, "0020: a desktop sends exactly what unpatched Omarchy sends%s"
        % (" " + repr(bad_desktop) if bad_desktop else ""))
+
+
+# fprintd-list's answers (fprintd 1.94), with a placeholder user
+PROBE_NO_FINGERS = """found 1 devices
+Device at /net/reactivated/Fprint/Device/0
+Using device /net/reactivated/Fprint/Device/0
+User tester has no fingers enrolled for Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile).
+"""
+PROBE_ENROLLED = """found 1 devices
+Device at /net/reactivated/Fprint/Device/0
+Using device /net/reactivated/Fprint/Device/0
+Fingerprints for user tester on Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile) (press):
+ - #0: right-thumb
+"""
+PROBE_FAILED = """found 1 devices
+Device at /net/reactivated/Fprint/Device/0
+Using device /net/reactivated/Fprint/Device/0
+ListEnrolledFingers failed: GDBus.Error:net.reactivated.Fprint.Error.Internal: Failed to open device
+"""
+
+
+def lock_fingerprint_probe(t, root):
+    """Patch 0022 (upstream's 879d6583d probe, #170): the lock's probe and
+    omarchy-apply-lock call fingerprint set up only for an enrolled print, not
+    for "has no fingers enrolled", and a failed probe never turns it off."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    service = read(root, lock + "Service.qml")
+    ok("grep -qi finger" not in service and "onExited: root.applyFingerprintProbe(fingerprintCheckStdout.text)" in service
+       and 'import "FingerprintModel.js" as FingerprintModel' in service
+       and os.path.isfile(os.path.join(root, lock, "FingerprintModel.js")),
+       "real omarchy: the lock classifies fprintd-list's answer (0022)")
+    apply_fn = service.split("function applyFingerprintProbe(text) {", 1)
+    unknown = apply_fn[1].split('if (status === "unknown") {', 1)[1].split("\n    }\n", 1)[0] if len(apply_fn) == 2 else ""
+    ok(unknown and "fingerprintConfigured =" not in unknown and "if (fingerprintConfigured) return" in unknown,
+       "real omarchy: an unknown probe never turns fingerprint off (0022)")
+    ok("interval: 250" in service.split("id: fingerprintRetryTimer", 1)[1].split("}", 1)[0],
+       "real omarchy: a mismatch still retries at 250 ms (0022)")
+
+    d = os.path.join(t, "fp-probe")
+    fakes = os.path.join(d, "bin")
+    pam = os.path.join(d, "pam.d")
+    os.makedirs(fakes)
+    os.makedirs(pam)
+    answer = os.path.join(d, "answer")
+    with open(os.path.join(fakes, "fprintd-list"), "w") as f:
+        f.write('#!/bin/bash\n[[ $1 == tester ]] || exit 3\ncat "%s"\n[[ ! -e "%s.rc" ]] || exit "$(cat "%s.rc")"\n'
+                % (answer, answer, answer))
+    with open(os.path.join(fakes, "sudo"), "w") as f:
+        f.write('#!/bin/bash\nexec "$@"\n')
+    # Never the laptop's running shell
+    with open(os.path.join(fakes, "omarchy-shell"), "w") as f:
+        f.write('#!/bin/bash\nexit 1\n')
+    for n in ("fprintd-list", "sudo", "omarchy-shell"):
+        os.chmod(os.path.join(fakes, n), 0o755)
+    env = dict(os.environ, PATH=fakes + ":/usr/bin:/bin", USER="tester", OMARCHY_INSTALL_USER="tester")
+
+    def set_answer(text, rc=0):
+        with open(answer, "w") as f:
+            f.write(text)
+        if rc:
+            with open(answer + ".rc", "w") as f:
+                f.write(str(rc))
+        elif os.path.exists(answer + ".rc"):
+            os.unlink(answer + ".rc")
+
+    # The lock's own probe command, with the PAM path moved into the scratch
+    # tree, then its output through FingerprintModel.classifyProbe
+    cmd = service.split("id: fingerprintCheckProc", 1)[1].split('command: ["bash", "-c", "', 1)[1].split('"]\n', 1)[0]
+    cmd = cmd.replace('\\"', '"').replace("/etc/pam.d/", pam + "/")
+    node = shutil.which("node")
+    model = os.path.join(root, lock, "FingerprintModel.js")
+    cases = [("no fingers enrolled", PROBE_NO_FINGERS, 0, True, "no"),
+             ("an enrolled print", PROBE_ENROLLED, 0, True, "yes"),
+             ("a failed fprintd-list", PROBE_FAILED, 1, True, "unknown"),
+             ("no PAM file", PROBE_ENROLLED, 0, False, "no")]
+    if not node:
+        print("ok - real omarchy: the lock's probe end to end # SKIP no node")
+    else:
+        bad = []
+        for what, text, rc, pam_file, want in cases:
+            set_answer(text, rc)
+            fpam = os.path.join(pam, "omarchy-lock-fingerprint")
+            if pam_file:
+                open(fpam, "w").close()
+            elif os.path.exists(fpam):
+                os.unlink(fpam)
+            out = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True).stdout
+            got = subprocess.run([node, "-e", "process.stdout.write(require(process.argv[1]).classifyProbe(process.argv[2]))",
+                                  model, out], capture_output=True, text=True).stdout
+            if got != want:
+                bad.append((what, got))
+        ok(not bad, "real omarchy: the lock's probe says yes only for an enrolled print (0022)%s"
+           % (" " + repr(bad) if bad else ""))
+
+    # omarchy-apply-lock, with /etc/pam.d and /usr/bin/fprintd-list moved
+    script = read(root, "usr/bin/omarchy-apply-lock")
+    ok("grep -qi finger" not in script, "real omarchy: omarchy-apply-lock no longer greps for 'finger' (0022)")
+    script = script.replace("/usr/bin/fprintd-list", os.path.join(fakes, "fprintd-list")).replace("/etc/pam.d/", pam + "/")
+    tool = os.path.join(d, "omarchy-apply-lock")
+    with open(tool, "w") as f:
+        f.write(script)
+    fpam = os.path.join(pam, "omarchy-lock-fingerprint")
+    results = []
+    for what, text, rc, want in (("no fingers enrolled", PROBE_NO_FINGERS, 0, False),
+                                 ("an enrolled print", PROBE_ENROLLED, 0, True),
+                                 ("a failed fprintd-list", PROBE_FAILED, 1, "kept")):
+        with open(fpam, "w") as f:
+            f.write("kept\n")
+        set_answer(text, rc)
+        r = subprocess.run(["bash", tool], env=env, capture_output=True, text=True)
+        there = os.path.exists(fpam)
+        got = (open(fpam).read() == "kept\n" and "kept") if there else False
+        if there and got != "kept":
+            got = "pam_fprintd.so" in open(fpam).read()
+        results.append(r.returncode == 0 and got == want)
+    ok(all(results), "real omarchy: omarchy-apply-lock removes the fingerprint PAM file for no fingers, writes it "
+       "for an enrolled print, keeps it when fprintd-list fails (0022) %s" % results)
+
 
 
 def mod_patch(root, path):
