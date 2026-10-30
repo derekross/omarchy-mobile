@@ -56,8 +56,8 @@ proc (and optionally sysfs) only and **never opens a block device**
 (soft-check: if `/proc/mounts` lists a `/dev/sd*` mount, stage 1 holds and
 resets instead of kexec). Stage 1's `.config` disables `SCSI_UFS_QCOM` and
 `SCSI_UFSHCD`, so the kernel does not probe UFS on stock's DTB either
-(CONTRIBUTING §3.2). It also `cmp`s the live memory `reg` against the copy
-packed from `$LIVE_DTB`, and appends `androidboot.slot_suffix` from `/proc/bootconfig`,
+(CONTRIBUTING §3.2). It also `cmp`s this boot's memory `reg` with the copy
+saved at pack time from `$LIVE_DTB`, and appends `androidboot.slot_suffix` from `/proc/bootconfig`,
 then `/proc/device-tree/chosen/bootargs`, then the packed `/omamobile/slot_suffix`
 (from `OMAMOBILE_SLOT` in device.conf — this ABL omits the property under
 `fastboot boot`) into stage 2's command line (stage 1's
@@ -140,7 +140,7 @@ each session. Those backups are never in git.
 | `version-bootloader` | empty on this ABL | noted |
 | Boot-success | GPT bit 54 set by hand on `boot_b` only after first clean boot (`boot_a` already set by stock) | pass |
 | PR-tip chain smoke (2026-10-30 Europe/Copenhagen) | Morning (~07:46): RAM-only `fastboot boot` of chain image from this branch (no flash, no set_active). Stage-2 kernel was the private `7.3.0-rc6-dodge-gpu2` build (not the #115 head); package still `omamobile-device-dodge 20261016-1`. `tools/phone-smoke` overall **unknown**: required storage-guard/root/kernel-health/USB ok; display/GPU/touch/buttons/battery/sensors ok; required `boot` skip (forced cmdline, no slot suffix); required `session` not ok (Hyprland not up at ~40 s); sound cards none; Wi-Fi link down at that moment. A later #115-head RAM boot (~09:28) **hung** on the console (dual memory map; fixed in kernel DTS + stage2-dtb). Re-smoke of tip `f5e354e1c` after the fix: chain image booted; SSH in about 26 s; storage, root, USB and Hyprland ok; live FDT one `memory@a0000000`. GPU, touch, Wi-Fi, BT and battery failed only because the rootfs has no `/usr/lib/modules/` tree for `uname` `7.3.0-rc6-gf5e354e1cf2b` (only `7.3.0-rc6-dodge-gpu2` and `.held`; those drivers are `=m`). Phone returned to slot B. | partial |
-| PR-tip chain smoke (2026-10-30 evening, Europe/Copenhagen) | RAM-only `fastboot boot` of chain image from `bin/omamobile images` on this branch (no flash, no set_active). Stage-2 kernel `#115` tip; matching modules via tmpfs overlay (package still `omamobile-device-dodge 20261016-1`, so the packaged kmod units fail). Packing guard refuses a stage-1 Image as STAGE2_IMAGE; boot-chain ~64 MiB; UFS off in stage 1. `androidboot.slot_suffix` passed from bootconfig/chosen into stage 2 so phone-smoke's boot check can run. Remoteproc after overlay: modem offline, adsp running, cdsp offline (fw -2). Phone returned to slot B. | pending |
+| PR-tip chain smoke (2026-10-30 evening, Europe/Copenhagen) | RAM-only `fastboot boot` of chain image from `bin/omamobile images` at `7f5235b` (host `make LLVM=1` — `omamobile-build:24.04` absent; no flash, no set_active). Stage-2 kernel `1dc357e5ec2d`; matching modules via tmpfs overlay (package still `omamobile-device-dodge 20261016-1`, so packaged kmod units fail — honest manual `modprobe`). Packing guard OK; boot-chain **64.19 MiB** (`sha256 6650b71d…`); UFS off in stage 1. Slot: ABL omits `androidboot.slot_suffix` under `fastboot boot`; packed `/omamobile/slot_suffix=_b` from `OMAMOBILE_SLOT` reaches stage 2; phone-smoke **boot ok** (slot b). Full dmesg: **0 WARN**, no `Call trace` / `Modules linked in`. Remoteproc after overlay: modem offline, adsp running, cdsp offline (fw -2). GPU/touch/Wi-Fi not up on this tip after manual modprobe (no render node / no multitouch / no wlan). Returned to slot B; `7.3.0-rc6-dodge-gpu2` healthy (render node, display, touch). | done |
 
 ## 7. GPT bit-54 record (for §3.1)
 

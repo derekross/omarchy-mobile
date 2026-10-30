@@ -79,7 +79,7 @@ if [ -z "$MEM_REG" ] || [ ! -f /omamobile/memory.reg ]; then
   hold "refuse: no memory reg to cmp"
 fi
 if ! $B cmp -s "$MEM_REG" /omamobile/memory.reg; then
-  hold "refuse: live memory reg != pack-time LIVE_DTB"
+  hold "refuse: this boot memory reg != pack-time copy"
 fi
 KEXEC="/omamobile/lib/ld-musl-aarch64.so.1 --library-path /omamobile/lib /omamobile/kexec"
 if $KEXEC -c -l /omamobile/Image --dtb=/omamobile/stage2.dtb \

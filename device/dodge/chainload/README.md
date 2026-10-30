@@ -11,8 +11,8 @@ our DTB without flashing `vendor_boot` is this chain:
    header v4 image (`tools/dodge-chain pack`, also via
    `bin/omamobile images` when `BOOT_METHOD=qcom-abl`).
 2. Stage 1 (`init` here) runs as PID 1. It mounts proc (and optionally
-   sysfs) only, never opens a block device, compares the live memory
-   `reg` to the copy packed from `$LIVE_DTB`, appends
+   sysfs) only, never opens a block device, compares this boot's memory
+   `reg` with the copy saved at pack time from `$LIVE_DTB`, appends
    `androidboot.slot_suffix` from `/proc/bootconfig`, then
    `/proc/device-tree/chosen/bootargs`, then the packed
    `/omamobile/slot_suffix` (from `OMAMOBILE_SLOT` — ABL omits it under
