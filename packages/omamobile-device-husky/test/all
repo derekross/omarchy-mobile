@@ -89,3 +89,11 @@ pass "install stages the udev rule, the USB link, and the mirrorlist, and nothin
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"
+
+# USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
+# it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
+net=vendor/systemd/network/20-usb-gadget.network
+! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -q '^Gateway=' || fail "usb0 sets no default route in [Network] (metric 0)"
+metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
+[[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
+pass "USB is the last gateway"

@@ -1,0 +1,10 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Desktop harness stand-in for omamobile-fp-enroll, which would enroll on this
+# computer's fingerprint reader through fprintd. The fingerprint plugin then
+# reports no sensor.
+if [[ ${1:-} == enroll ]]; then
+  echo '{"event": "error", "kind": "no-device", "message": "Not available in the desktop harness"}'
+fi
+echo "omamobile-fp-enroll: not run in the desktop harness: it would act on this computer's fingerprint reader" >&2
+exit 1

@@ -1,0 +1,24 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The home screen's tiles under a mouse and under touch, offscreen in
+# qmltestrunner: AppTile.qml and LongPressEdit.qml themselves, with
+# Omarchy's modules stubbed (test/qml-stubs), in a pager built as Home.qml
+# builds it (a horizontal ListView of pages, the long-press layer over it at
+# z 50). A click and a tap launch an app, a long press either way enters
+# edit mode once, on a tile, a widget or empty space, and a drag doesn't
+# (issue #147). No compositor, no Quickshell. Exits 77 without
+# qmltestrunner.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.home
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "home-mouse: no qmltestrunner" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/home"
+cp "$plugin/AppTile.qml" "$plugin/LongPressEdit.qml" "$work/home/"
+cp "$here/home-mouse.qml" "$work/tst_home_mouse.qml"
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+exec "$runner" -import "$here/qml-stubs" -input "$work/tst_home_mouse.qml"

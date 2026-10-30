@@ -42,6 +42,11 @@ grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a ph
 for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
 done
+# both panels keep their allow_lhbm line (the 7 Pro's s6e3hc4, the 9a's tg4c),
+# read from the file the package ships, so CI checks it without the prebuilts
+lhbm=vendor/modprobe.d/omamobile-fingerprint-lhbm.conf
+[[ $(grep -c '^options panel_samsung_s6e3hc4 allow_lhbm=1$' "$lhbm") == 1 ]] || fail "s6e3hc4 allow_lhbm line missing"
+[[ $(grep -c '^options panel_google_tg4c allow_lhbm=1$' "$lhbm") == 1 ]] || fail "tg4c allow_lhbm line missing"
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
@@ -76,6 +81,8 @@ for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile
 done
 # nothing Google's may be staged
 [[ -z $(find "$stage" -path '*/root/*' -print -quit) ]] || fail "vendor files staged"
+# the modprobe file reached the stage
+[[ -f $stage/usr/lib/modprobe.d/omamobile-fingerprint-lhbm.conf ]] || fail "not staged: modprobe.d/omamobile-fingerprint-lhbm.conf"
 if command -v systemd-analyze >/dev/null; then
   out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-fp.service" 2>&1 || true)
   out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)

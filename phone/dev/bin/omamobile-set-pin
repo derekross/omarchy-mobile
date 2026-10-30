@@ -1,0 +1,6 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Desktop harness stand-in for omamobile-set-pin, which sets the account
+# password: on this computer, the password of the desktop's own account.
+echo "omamobile-set-pin: not run in the desktop harness: it would change this computer's account password" >&2
+exit 1

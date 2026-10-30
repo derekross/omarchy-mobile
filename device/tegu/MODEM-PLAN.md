@@ -955,6 +955,74 @@ three sessions and two resets is untouched. GNSS stays parked otherwise.
   unknown: suspend with the modem on is still unqualified on the 9a
   (AGENTS.md, "Suspend and modem").
 
+NFC across s2idle (2026-10-28, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`):
+with polling stopped by the sleep hook, the palmtop wakes, but NFC doesn't
+work afterwards. The first send after the wake gets no I2C ACK (`nxp-nci_i2c
+25-0008: NFC: Error -6 on I2C send`, also after the driver's 110 ms retry),
+and every NCI request then times out. Powering the adapter off and on
+through neard (a fresh NCI init) brings it back (#132). A hook that stops
+the poll loop and powers the adapter off before the sleep, and on after it,
+was tried once that day with an RTC wake: the palmtop didn't wake and
+needed the power key. Whether the power-off took effect isn't known: the
+hook discarded neard's errors, and none of the journals kept from that day
+shows that sleep. The stop-poll hook stays until a power-off hook that checks
+`Powered` wakes in attended runs.
+
+NFC's silence is idle, not s2idle (2026-10-29, the same release
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` as the day before,
+so the release doesn't tell the builds apart: the 10-28 runs had the earlier
+modules, the set-config from linux-omarchy-mobile#100 and no NFC mode; the
+runs with the fix below had `drivers/nfc/nxp-nci/core.c` blob
+`77fc35b61da5`, the head of
+[linux-omarchy-mobile#131](https://github.com/derekross/linux-omarchy-mobile/pull/131)).
+First the power-off hook, reworked to stop the poll loop, power the adapter
+off, check `Powered` and log each step, woke 1 of 1 (unattended, RTC +60 s,
+the modem not started; the log read `polling=false powered=false` before the
+sleep and `powered=true` after, the palmtop back after 65 s). But in that
+boot NFC had already failed before any sleep (`Error -6 on I2C send` at 76 s
+and 95 s, the suspend at 100 s), and it failed the same way after a plain
+power off and on with no sleep: init got as far as the ST54L's proprietary
+`ntf 0x107`, then the first command about 2 s later got no ACK and the poll
+start timed out. The one-variable comparison, with no sleep at all
+([#132](https://github.com/derekross/omarchy-mobile/issues/132)): each driver
+variant powered the adapter on through neard and started polling after a set
+delay.
+
+| Driver | 1 s | 3 s | 10 s | 30 s |
+| --- | --- | --- | --- | --- |
+| the boot's modules | polls | NACK, no poll | NACK, no poll | NACK, no poll |
+| A: no ST54L set-config | polls | NACK | NACK | NACK |
+| B: 5 quick retries, 2 ms apart | polls | NACK (retries end in -6) | NACK | NACK |
+| C: candidate [linux-omarchy-mobile#128](https://github.com/derekross/linux-omarchy-mobile/pull/128) | polls | no poll | NACK | no poll |
+
+So from about 3 s of idle the first command gets no ACK, with and without the
+set-config and with and without quick retries (B logged "5 quick retries,
+result -6" on almost every failure). The cause: ST's HAL turns the ST54L's
+NFC mode on after CORE_INIT (PROP_NFC_MODE_SET, `2f 02 02 02 01`) and then
+initializes it again, and nxp-nci never did. Without that step the
+controller goes silent on I2C about 2-3 s after init whenever it isn't
+discovering; with discovery running it never gets there, which is why it read
+cards on 10-27 and 10-28 and why it looked sleep-related. The fix is
+[linux-omarchy-mobile#131](https://github.com/derekross/linux-omarchy-mobile/pull/131)
+(now the palmtop's boot NFC driver). With it the palmtop polls after 3 s to
+3 minutes of idle, and polled after two RTC-woken s2idle cycles, one with the
+power-off hook and one without it, all with no NACK. Whether the poll loop
+was stopped for the cycle without the hook isn't recorded, so that cycle
+says nothing about the stop-poll rule yet (the 35 of 35 of 10-27 stand) and
+must be re-run with the hook's log. Those results are from #131's first
+version (`core.c` blob `77fc35b61da5`, a fixed 200 ms wait after the reset);
+the merged version waits for the controller's CORE_RESET_NTF instead
+(`c96704ddd480`) and was re-run the same day for six power-ons (55-60 ms
+each, one 160 ms, no NACK, no timeout) and polling at 3 s and at 30 s after
+power-on, no NACK. Ruled out on the way: the set-config
+(A), quick retries (B; C, #128, closed), the clock pad forced on (a test
+module through the kernel's SMC-backed PMU regmap, one register, 0x3e84 bit 0
+set and bit 16 cleared: the NACKs went on, read back as before when it was
+put back; `logs/tegu-nfc-sleep-20261029/tegu-nfc-clkpad2.c`), runtime PM and
+the interrupt. So no power-off hook is needed for NFC to come back after a
+wake; the stop-poll hook stays, for the reset of 10-27, which this doesn't
+explain.
+
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
 One step per run, the CPIF overlay not applied, the link overlay applied

@@ -472,11 +472,12 @@ wallpaper, swiped sideways, with page dots above the dock.
 * **Apps** launch the way the drawer does (`omamobile-launch app`: Omarchy's
   `uwsm-app -- gtk-launch`, on a screen of their own). An app that is no longer
   installed stays, dimmed, until you remove it: its package may come back.
-* **Edit mode.** Long-press anywhere (empty space, an app, a widget). Then
-  drag an item to move it (dropped on an item of the same size, the two swap;
-  on a bigger one, it takes the nearest free cell; dragged past the left or
-  right edge, it moves to that page, making a new page on the right), drag
-  the corner handle to resize a widget, tap the cross to remove (an
+* **Edit mode.** Long-press anywhere (empty space, an app, a widget), with a
+  finger or a held mouse button. Then drag an item to move it (dropped on an
+  item of the same size, the two swap; on a bigger one, it takes the nearest
+  free cell; dragged past the left or right edge, it moves to that page,
+  making a new page on the right), drag the corner handle to resize a
+  widget, tap the cross to remove (an
   **Undo** chip stays for 5 seconds and puts the item back, with its
   settings, where it was or in the nearest free cell), tap a
   widget for its settings. The toolbar: **Widgets** and **Apps** add to the
@@ -942,13 +943,13 @@ names an output directory).
 
 ## Testing in the desktop harness
 
-`phone/dev/run-desktop` copies the shell and runs it in a nested Hyprland, so
-point IPC at that copy and its Wayland display, never at
-`/usr/share/omarchy/shell` (your real desktop):
+`phone/dev/run-desktop` copies the shell into an Omarchy tree of its own and
+runs it in a nested Hyprland, so point IPC at that tree and its Wayland
+display, never at `/usr/share/omarchy` (your real desktop):
 
 ```sh
-HOME=~/android/phone-dev/home WAYLAND_DISPLAY=wayland-2 \
-  quickshell ipc -p ~/android/phone-dev/shell call shell listPlugins
+OMARCHY_PATH=~/android/phone-dev/omarchy WAYLAND_DISPLAY=wayland-2 \
+  omarchy-shell shell listPlugins
 ```
 
 (`quickshell list --all` shows which `wayland-N` the nested shell is on.)

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 # extract-vendor-firmware: copy the Wi-Fi, Bluetooth, haptics and speaker
 # amplifier firmware the Pixel 7 Pro (cheetah) needs out of a Google factory
-# image, on the user's own machine. The Pixel 7 (panther) and the Pixel 6
-# Pro (raven) are options (-d).
+# image, on the user's own machine. The Pixel 7 (panther), the Pixel 6 Pro
+# (raven) and the Pixel 9a (tegu) are options (-d).
 #
 # Google's firmware is not ours to redistribute, so Omarchy Mobile never ships it.
 # Like LineageOS's extract-files, this pulls it from an image the user already
@@ -37,6 +37,34 @@
 # missing tuning fails to load instead of falling back to the other speaker's
 # (or to linux-firmware's generic cirrus/cs35l41-dsp1-spk-prot.bin).
 #
+# The Pixel 9a (-d tegu; <board> is "google,zumapro-tegu"):
+#
+#   vendor/firmware/fw_bcmdhd.bin             -> brcm/brcmfmac4383-pcie.<board>.bin         (brcmfmac)
+#   vendor/firmware/bcmdhd.cal_4383_a3        -> brcm/brcmfmac4383-pcie.<board>.txt         (NVRAM)
+#   vendor/firmware/bcmdhd_clm.blob_4383_a3   -> brcm/brcmfmac4383-pcie.<board>.clm_blob    (regulatory)
+#   vendor/firmware/bcmdhd_txcap.blob_4383_a3 -> brcm/brcmfmac4383-pcie.<board>.txcap_blob  (TX capabilities)
+#   vendor/firmware/brcm/BCM.hcd              -> brcm/BCM.<board>.hcd                       (btbcm)
+#   vendor/firmware/aoc.bin                   -> aoc-tegu.bin            (the AoC DSP, under the 9a's own name)
+#   vendor/etc/sensors/registry/              -> /usr/share/omamobile/sensors/registry/
+#   vendor/firmware/cs40l26*.{wmfw,bin}       -> the same five files as cheetah's
+#
+# The 9a's radio is a BCM4383 A3, and stock's "_4383_a3" NVRAM, CLM and TX
+# capability files are the production silicon's (fw_bcmdhd.bin is the same
+# file as fw_bcmdhd.bin_4383_a3; the _EVT and _PROTO NVRAMs are pre-production
+# boards'). brcmfmac requests the txcap_blob on this chip, through the same
+# board-name lookup as the other three, so all four get the board suffix:
+# linux-firmware ships nothing for the 4383 today, and a generic file that
+# lands there later must not shadow the owner's. The AoC firmware is named
+# aoc-tegu.bin because the 9a's AoC start script requests that name
+# (device/tegu/GSA-PLAN.md F1): the AoC firmware is matched to its SoC and
+# authenticated by the GSA, and the name keeps a 7 Pro aoc.bin from ever
+# being fed to the 9a. Two of the 9a's needs come from linux-firmware, not
+# from the image: the Mali CSF firmware (arm/mali/arch11.8/mali_csffw.bin)
+# and the TAS2572 amplifiers' RCA profile (ti/audio/tas257x/tas2572-1-1amp-reg.bin,
+# installed as Top- and Bottom-tas2572RCA1.bin; stock's tismartpa_driver_tuning.bin
+# is in another format, device/tegu/AUDIO-PLAN.md). The modem's and GNSS's
+# files are tools/extract-vendor-chroot's.
+#
 # Output is a tree rooted at /, under usr/lib/firmware/updates (searched before
 # linux-firmware's files, and not owned by any package). Nothing touches the phone.
 #
@@ -49,6 +77,10 @@ export PATH=$PATH:/usr/sbin:/sbin
 BOARD="google,gs201-cheetah"
 DEVICE="cheetah"
 FW_BASE="brcmfmac4389c1-pcie"
+# The chip strings the sanity checks expect in fw_bcmdhd.bin ("<chip>-roml")
+# and in BCM.hcd ("BCM<CHIP> <release>")
+WIFI_CHIP="4389c1"
+BT_CHIP="BCM4389C1"
 DEST_REL="usr/lib/firmware/updates"
 
 # source path in the vendor partition -> path under $DEST_REL
@@ -74,11 +106,11 @@ usage() {
   cat <<USAGE
 Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
-  SOURCE   Google factory zip (cheetah-*-factory-*.zip), the image-cheetah-*.zip
+  SOURCE   Google factory zip (<device>-*-factory-*.zip), the image-<device>-*.zip
            inside it, or a raw/sparse vendor.img
   -o DIR   staging root to write into (default: ./out/vendor-firmware)
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
-  -d DEV   cheetah (default), panther or raven
+  -d DEV   cheetah (default), panther, raven or tegu
   -f       skip the android-info.txt board=$DEVICE check
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
@@ -138,7 +170,30 @@ case $DEVICE_OPT in
       "firmware/cs40l20.bin|cs40l20.bin"
       "firmware/cs40l25a_clab.bin|cs40l25a_clab.bin"
     ) ;;
-  *) die "unknown device $DEVICE_OPT (cheetah, panther or raven)" ;;
+  tegu)
+    # Pixel 9a: Wi-Fi (BCM4383 A3, with the TX capability blob brcmfmac
+    # requests on this chip), Bluetooth, the AoC under the 9a's own name,
+    # the haptics files and the AoC's sensor registry (the header). Its
+    # speaker amplifiers (TAS2572) and GPU take linux-firmware's files.
+    BOARD="google,zumapro-tegu"
+    DEVICE="tegu"
+    FW_BASE="brcmfmac4383-pcie"
+    WIFI_CHIP="4383a3"
+    BT_CHIP="BCM4383A3"
+    MAP=(
+      "firmware/fw_bcmdhd.bin|brcm/$FW_BASE.$BOARD.bin"
+      "firmware/bcmdhd.cal_4383_a3|brcm/$FW_BASE.$BOARD.txt"
+      "firmware/bcmdhd_clm.blob_4383_a3|brcm/$FW_BASE.$BOARD.clm_blob"
+      "firmware/bcmdhd_txcap.blob_4383_a3|brcm/$FW_BASE.$BOARD.txcap_blob"
+      "firmware/brcm/BCM.hcd|brcm/BCM.$BOARD.hcd"
+      "firmware/aoc.bin|aoc-tegu.bin"
+      "firmware/cs40l26.wmfw|cs40l26.wmfw"
+      "firmware/cs40l26.bin|cs40l26.bin"
+      "firmware/cs40l26-svc.bin|cs40l26-svc.bin"
+      "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
+      "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
+    ) ;;
+  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven or tegu)" ;;
 esac
 # The camera data flow (tools/extract-camera-data) exists for cheetah only
 [[ $DEVICE == cheetah || -z $CAMERA_APEX ]] || die "-c is cheetah's (no camera support for $DEVICE yet)"
@@ -240,9 +295,9 @@ if get_file build.prop "$WORK/build.prop"; then
 fi
 
 dest="$OUT/$DEST_REL"
-mkdir -p "$dest/brcm" "$dest/cirrus"
 for entry in "${MAP[@]}"; do
   from=${entry%%|*} to=${entry#*|}
+  mkdir -p "$dest/$(dirname "$to")"
   get_file "$from" "$dest/$to" || die "/vendor/$from is missing from this image"
   chmod 0644 "$dest/$to"
   printf '  /vendor/%-28s -> /%s/%s\n' "$from" "$DEST_REL" "$to"
@@ -263,53 +318,63 @@ fi
 
 # Sanity checks: right chip, text NVRAM, Cirrus file formats.
 brcm="$dest/brcm"
-grep -aq '4389c1-roml' "$brcm/$FW_BASE.$BOARD.bin" ||
-  die "fw_bcmdhd.bin is not a BCM4389C1 PCIe firmware"
-grep -aq 'BCM4389C1' "$brcm/BCM.$BOARD.hcd" ||
-  die "BCM.hcd is not a BCM4389C1 Bluetooth patch"
+grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
+  die "fw_bcmdhd.bin is not a $BT_CHIP PCIe firmware"
+grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
+  die "BCM.hcd is not a $BT_CHIP Bluetooth patch"
 grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
   die "bcmdhd.cal does not look like a Broadcom text NVRAM"
-# The speaker amplifiers' protection firmware, on both phones
 wmfw_halo() { # WMFW, Halo core (4): what cs_dsp accepts for this part
   [[ "$(head -c4 "$dest/$1")" == WMFW && "$(od -An -tu1 -j10 -N1 "$dest/$1" | tr -d ' ')" == 4 ]] ||
     die "$1 is not a Halo Core WMFW firmware"
 }
-wmfw_halo "cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"
-grep -aq 'FIRMWARE_HALO_CSPL' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
-  die "cs35l41-dsp1-spk-prot.wmfw is not the CS35L41 speaker protection firmware"
-grep -aq 'CAL_CHECKSUM' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
-  die "cs35l41-dsp1-spk-prot.wmfw has no calibration controls"
-cmp -s "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin" "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin" &&
-  die "the top and bottom speaker tunings are the same file"
-for f in top bottom; do
-  [[ "$(head -c4 "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-$f.bin")" == WMDR ]] ||
-    die "the $f speaker tuning is not a WMDR coefficient file"
-done
-# The gs201 phones' haptics and media deltas
-if [[ $DEVICE == cheetah || $DEVICE == panther ]]; then
+# The speaker amplifiers' protection firmware, on the CS35L41 phones
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]]; then
+  wmfw_halo "cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw"
+  grep -aq 'FIRMWARE_HALO_CSPL' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
+    die "cs35l41-dsp1-spk-prot.wmfw is not the CS35L41 speaker protection firmware"
+  grep -aq 'CAL_CHECKSUM' "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE.wmfw" ||
+    die "cs35l41-dsp1-spk-prot.wmfw has no calibration controls"
+  cmp -s "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-top.bin" "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-bottom.bin" &&
+    die "the top and bottom speaker tunings are the same file"
+  for f in top bottom; do
+    [[ "$(head -c4 "$dest/cirrus/cs35l41-dsp1-spk-prot-$DEVICE-$f.bin")" == WMDR ]] ||
+      die "the $f speaker tuning is not a WMDR coefficient file"
+  done
+fi
+# The CS40L26 haptics (the gs201 phones and tegu)
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
   for f in cs40l26.wmfw cs40l26-calib.wmfw; do wmfw_halo "$f"; done
   grep -aq 'FIRMWARE_CS40L26' "$dest/cs40l26.wmfw" ||
     die "cs40l26.wmfw is not a CS40L26 firmware"
   grep -aq 'BUZZ_EFFECTS2_BUZZ_LEVEL' "$dest/cs40l26.wmfw" ||
     die "cs40l26.wmfw has no buzz generator (cs40l26-vibra needs BUZZGEN)"
+fi
+# The gs201 phones' media deltas
+if [[ $DEVICE == cheetah || $DEVICE == panther ]]; then
   # The media deltas: comma-separated integers, the first the word count
   # (vendor mixer_paths.xml "speaker-post"; Google's cs35l41 driver parses them)
   for f in top bottom; do
     python3 -I -c 'import sys; w = [int(x) for x in open(sys.argv[1]).read().replace(" ", "").strip().split(",")]; sys.exit(w[0] != len(w))' \
       "$dest/cirrus/cs35l41-$DEVICE-$f-media-delta.txt" || die "the $f media delta is not a word list"
   done
+fi
+if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
   for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do
     [[ "$(head -c4 "$dest/$f")" == WMDR ]] || die "$f is not a WMDR coefficient file"
   done
 fi
 
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
-bt=$(grep -ao 'BCM4389C1 [^[]*' "$brcm/BCM.$BOARD.hcd" | head -1)
+bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
 (cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
 say "Wi-Fi firmware: ${ver:-unknown version}"
 say "Bluetooth patch: ${bt:-unknown version}"
-[[ $DEVICE == cheetah || $DEVICE == panther ]] &&
+[[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
-say "Speaker protection: cs35l41-dsp1-spk-prot-$DEVICE.wmfw and the top and bottom tunings"
+[[ $DEVICE == tegu ]] &&
+  say "AoC firmware: aoc-tegu.bin ($(stat -c %s "$dest/aoc-tegu.bin") bytes)"
+[[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == raven ]] &&
+  say "Speaker protection: cs35l41-dsp1-spk-prot-$DEVICE.wmfw and the top and bottom tunings"
 say "Staged in $OUT (checksums in $OUT/vendor-firmware.sha256)"
 echo "This is Google's proprietary firmware from your own factory image. Do not redistribute it."
