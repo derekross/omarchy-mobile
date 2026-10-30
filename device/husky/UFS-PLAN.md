@@ -3,7 +3,7 @@
 
 Goal: the mainline UFS driver brings up husky's UFS behind the read-only storage guard, the init's UFS probe report lists every LUN and partition by name, and the guard leaves only `UFS_RW` (slot B's boot images and `userdata`) writable. After that, the Arch root on `userdata` (as cheetah, [BRINGUP-M1](../cheetah/BRINGUP-M1.md)).
 
-**Status (2026-10-26):** U1-U3 done. UFS links at HS-G4 on two lanes behind the guard, and Arch runs from `userdata` (results below). The kernel side is derekross/linux-omarchy-mobile#49 (PMU tables), #50 (pinctrl) and #51 (UFS bindings), all merged, and #53, the DT follow-up to #13. U4 waits for the signed repository (issue #1).
+**Status (2026-10-30):** U1-U4 done. UFS links at HS-G4 on two lanes behind the guard, Arch runs from `userdata`, and Omarchy's image, built from the signed repository's development channel, boots to Omarchy's lock screen (results below). The kernel side is derekross/linux-omarchy-mobile#13, #49 (PMU tables), #50 (pinctrl), #51 (UFS bindings) and #53 (the DT follow-up), all merged. U5 and U6 are next for UFS.
 
 Path abbreviations as in [BRINGUP-M1.md](BRINGUP-M1.md). `GU/` = Google's GPL UFS driver, `GM/drivers/ufs` (`ufs-exynos.c`, `zuma/ufs-cal*.h`, `zuma/ufs-cal-if.c`). Facts are [V] (checked, with the source) or [I] (an inference to check).
 
@@ -87,11 +87,11 @@ Then run the same `install-phone` without `--dry-run`. It needs the human's go, 
 - **Risk:** low for the hardware, since the kernel is U2c's. `userdata` is erased by design. Mind slot B's retries (above).
 
 ### U4 The Omarchy root image (gate e)
-The kernel is tag `husky-test-20261026-k`: U2c's kernel and modules, with #53's device tree (test K), in `~/android/mainline/out-zuma-kinfo`. If #13 and #53 have merged by then, use a fresh build of `omamobile` instead, tagged before it's flashed.
-1. **Fill `out/repo/aarch64`** from the maintainer's signed repository, once its URL is on issue #1: `omamobile.db` with its `.sig`, and every package with its `.sig`. Don't run `tools/build-packages`: it signs with `keys/`, which only the maintainer holds. `build-rootfs`'s container trusts only omamobile-keyring's key, so a file the maintainer didn't sign stops the build.
-2. `DEVICE=husky KERNEL_OUT=~/android/mainline/out-zuma-kinfo tools/build-rootfs`. Add `--allow-missing` for any of our packages the repository doesn't carry; the MANIFEST lists them.
-3. `KERNEL_OUT=~/android/mainline/out-zuma-kinfo tools/install-phone --device husky --bootloader-slots-match ripcurrent-17.0-15681527`, with `--dry-run` first. It needs the human's go, because it erases `userdata` again.
-- **Needs:** the package in the signed `[omamobile]` repository (issue #1), and an aarch64 binfmt handler on the laptop (`qemu-user-binfmt`, installed).
+The kernel is a fresh build of `omamobile`, tagged before it's flashed: `husky-u4-20261030`, in `~/android/mainline/out-zuma-u4`, with its modules tarball, initramfs and images (`bin/omamobile modules`, `initramfs`, `images`).
+1. **Fill `out/repo/aarch64`** from the signed repository's development channel (`https://pkgs.omamobile.org/development/aarch64`): `omamobile.db` with its `.sig`, and every package the index lists with its `.sig`. Check each signature against `packages/omamobile-keyring/omamobile.gpg` and each sha256 against the index before using them. Don't run `tools/build-packages`: it signs with `keys/`, which only the maintainer holds. `build-rootfs`'s container trusts only omamobile-keyring's key, so a file the maintainer didn't sign stops the build.
+2. `DEVICE=husky KERNEL_OUT=~/android/mainline/out-zuma-u4 tools/build-rootfs`. Add `--allow-missing` for any of our packages the repository doesn't carry; the MANIFEST lists them. Never for `omamobile-device-husky`: it carries the storage guard's udev rule.
+3. `KERNEL_OUT=~/android/mainline/out-zuma-u4 tools/install-phone --device husky --bootloader-slots-match ripcurrent-17.0-15681527`, with `--dry-run` first, from a terminal (it reads the owner's answers from the keyboard). It needs the human's go, because it erases `userdata` again.
+- **Needs:** `omamobile-device-husky` in the signed `[omamobile]` repository (issue #1), an aarch64 binfmt handler on the laptop (`qemu-user-binfmt`, installed), and Omarchy's keyring. On a laptop without Omarchy, `OMARCHY_KEYRING_DIR` points at the three files of the `omarchy-keyring` package from `https://pkgs.omarchy.org/stable/aarch64`, after checking its signature against Omarchy's key `40DFB630FF42BCFFB047046CF0134EE680CAC571`, the fingerprint Omarchy's `omarchy-update-keyring` pins.
 - **Expect:**
   - as U3, then `omamobile-firstboot` creates the user from `firstboot.conf` and runs Omarchy's setup;
   - slot B's three retries count down as in U3, so stock boots on the fourth boot after the install unless `--set-active=b` runs again (above).
@@ -147,7 +147,7 @@ Omarchy's menu offers Suspend. At `spm_lvl` 5, system suspend powers the UFS dev
 
 ## Results
 
-Each kernel is the merge the phone booted, tagged on greenbrettmichael/linux-omarchy-mobile, so every `uname -r` resolves to public code. All of them sit on BRINGUP-M1 test 32's kernel (#13, #42, #49 and the two DT follow-ups, tag `husky-test-20261026-s`), with the shipped config, images by #27 and main's init. Logs are kept outside the repository (`~/android/reference/husky-u2*`, `husky-u3-*`).
+Each kernel is the merge the phone booted, tagged on greenbrettmichael/linux-omarchy-mobile, so every `uname -r` resolves to public code. U2 to K sit on BRINGUP-M1 test 32's kernel (#13, #42, #49 and the two DT follow-ups, tag `husky-test-20261026-s`); U4's is `omamobile` itself. All have the shipped config, images by #27 and main's init. Logs are kept outside the repository (`~/android/reference/husky-u2*`, `husky-u3-*`, `husky-k-*`, `husky-u4-*`).
 
 | Boot | Tag | Adds to test 32's kernel |
 | --- | --- | --- |
@@ -155,6 +155,7 @@ Each kernel is the merge the phone booted, tagged on greenbrettmichael/linux-oma
 | U2b | `husky-test-20261026-u2b` (`…-g536865667062`) | U2 + #50 (`3ab64be4a`'s tree) + the HSI2UFS pin controller only |
 | U2c, U3 | `husky-test-20261026-u2c` (`…-ge446d69d2ab2`) | #51 + #50 + the DT follow-up as published (`1888cb854`, `d84cce8c5` trees): both pin controllers and VCC on `gpp0-1` |
 | K | `husky-test-20261026-k` (`b5c7b15ed`). `uname -r` still reads `…-ge446d69d2ab2`: the kernel and modules are U2c's build, and only the DTB is rebuilt | U2c with #53's device tree at `28670f326`: two comments moved, and the debug carve-out ends where ABL's `debug_kinfo_reserved` begins |
+| U4 | `husky-u4-20261030` (`…-gfbbcac19d8ea`) | not test 32's kernel: `omamobile` at `fbbcac19d`, with #13 and #53 merged. Its `zuma-husky.dtb` is byte-identical to K's. New for husky since K: #62's write allowing C2 at the PMU's probe (husky's tree has no idle states, so C2 isn't entered) and the zumapro UFS changes (suspend and resume, and no CPU latency request on a host whose clocks stay on) |
 
 
 | # | Test | Seen | Meaning |
@@ -165,11 +166,12 @@ Each kernel is the merge the phone booted, tagged on greenbrettmichael/linux-oma
 | U2c | + PERIC0 and VCC as stock's GPIO regulator (`…-ge446d69d2ab2`) | `Power mode changed to : FAST series_B G_4 L_2`; 4 LUNs, 62 partitions with stock's names on stock's nodes; only `UFS_RW` writable, `sdb`-`sdd` read-only, `/dev/sda` removed; a 64 MiB read of `boot_b` at 1.8 GB/s | **gate c passed**: UFS up behind the guard, as on stock [V] |
 | U3 | U2c's kernel without `omamobile.initramfs`; `tools/install-phone` with the test root image (`device/husky/build-u3-root`, which rebuilds it with the same files) | the init grows the file system to all of `userdata` (108 GB) and switches to Arch; systemd `running`, no failed units, ssh with the installed key; the guard's read-only flags hold under Arch and `/dev/sda` stays gone; `reboot-to bootloader` from Arch reaches fastboot in 19 s; a second boot reaches ssh in 28 s | **gate d passed**: Arch on `userdata` [V] |
 | K | U3's root, test K's images by `bin/omamobile flash` | Arch `running`, ssh. No `OVERLAP DETECTED`: ABL's `debug_kinfo_reserved@fd3fe000` is in the booted tree and `debug@fd3f0000` is 0xe000, and `/proc/iomem` reserves `fd3f0000-fd3fefff`, as before. `tools/phone-smoke`: boot (with the tool's bootconfig fix), storage guard, root, kernel health and USB ok; GPU, session and touch not ok (no drivers, no Omarchy). `slot-retry-count:b` 2 after this one boot, then 3 after `--set-active=b` | #53's head as published [V]. Every boot of slot B uses a retry, clean ones too [V] |
+| U4 | `install-phone` with the Omarchy image (`build-rootfs`, development channel at 39 packages, Omarchy 4.0.6 from `stable`) and U4's images | first boot: `omamobile-firstboot` succeeded; the user exists, SDDM autologs into Hyprland with Omarchy's shell, and the panel shows Omarchy's lock screen. Its warnings: Node.js deferred (no network), and the pacman keyring (below). `systemd-firstboot` failed (208/STDIN, no console), as on panther. `tools/phone-smoke`: boot, storage guard, root, kernel health, USB, display, session and the lock ok; GPU and touch not ok (no drivers). Second boot, after `reboot-to bootloader` (20 s) and `--set-active=b`: ssh in 31 s, `running`, no failed units, first boot not rerun. The user's own ssh login works and `sudo` asks for the password. Without touch, `qs ipc call lock wake` and `wtype` over ssh unlock it, as on lynx | **gate e passed**: Omarchy on husky [V] |
 
 Findings:
 - **ABL hands UFS over powered down:** VCC off and the reference-clock pin a GPIO driven low (U2, U2b). Stock's kernel sets both up itself, so mainline needs the pin controller and the GPIO regulator.
 - **Hibern8 is untested, on Tensor G3 and on Tensor G4.** Here, the device never runtime-suspended, in the initramfs or under Arch, because the sd devices' runtime PM stays `on`. Tensor G4's UFS support didn't qualify it either.
 - **Slot B's retries count every boot (test K).** With no boot-success marker, an install runs three boots and then falls back to stock, which can't read `userdata` (Runbook).
-- **The full Omarchy image comes next (U4).** `tools/build-rootfs` needs `omamobile-device-husky` in the signed `[omamobile]` repository. U3's image used only Arch Linux ARM's base, so it has no desktop and no `omamobile-firstboot`. The user's answers sit unused in `/etc/omamobile/firstboot.conf`, and root logs in with the key.
+- **Omarchy runs on husky (U4),** from the signed repository, with no touch, buttons, GPU or Wi-Fi yet: the lock screen is unlocked over ssh.
 - **System suspend is untested (U6),** as hibern8 is, on Tensor G3 and on Tensor G4.
-- **No clock source:** with no RTC driver and no network time, the clock starts at the image's build date (it read Jul 24).
+- **No clock source:** with no RTC driver and no network time, the clock starts at systemd's built-in floor (U3 read Jul 24; U4's first boot, 2026-10-18). On U4's first boot that was earlier than the creation date of the release key `20567593566EEEE2DD8864608632C8075EB94673` (2026-10-26), so gpg skipped it as "created in the future" and `pacman-key --populate` couldn't sign it locally. Packages signed with `6C84FE3D240709E70E27CC94B301F5EA62B249FE` still verify, but anything signed with the new key would fail. Setting the clock over ssh (`date -u -s @<the laptop's time>`) and `pacman-key --populate omamobile` fixed it; `systemd-timesyncd` keeps the time across reboots from then on.
