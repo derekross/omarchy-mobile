@@ -546,13 +546,21 @@ cmd_initramfs() {
 
 cmd_images() {
   load_device
-  # Pixel and qcom-abl both prefer tree-local or SRC_DIR mkbootimg.py.
-  # qcom-abl packs a header-v4 chain via tools/dodge-chain (same lookup).
   local img="$KERNEL_OUT/images"
-  local tools="$ROOT/system/tools/mkbootimg"
-  [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
+  # Pixel path matches main: SRC_DIR only. Tree-local mkbootimg is for qcom-abl.
+  local tools="$SRC_DIR/system/tools/mkbootimg"
+  if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
+    tools="$ROOT/system/tools/mkbootimg"
+    [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
+  fi
   local dtc="$KERNEL_OUT/scripts/dtc/dtc" boot="$KERNEL_OUT/arch/arm64/boot"
   local dtb="$boot/dts/$DEV_DTB"
+  # qcom-abl needs the device's chainload dir before we touch a build.
+  if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
+    local chainload="$ROOT/device/$DEVICE/chainload"
+    [[ -d $chainload && -f $chainload/init && -f $chainload/stage2-dtb.py ]] ||
+      die "qcom-abl needs device/$DEVICE/chainload/ (init + stage2-dtb.py); refusing so the next phone does not inherit dodge's splash/panel/RSC"
+  fi
   [[ -f "$boot/Image" && -f "$dtb" ]] || die "build the kernel first: omamobile kernel"
   [[ -f "$KERNEL_OUT/initramfs.cpio.lz4" ]] || die "build the initramfs first: omamobile initramfs"
   # The init insmods INITRAMFS_MODULES, which only load into the kernel they
@@ -584,22 +592,37 @@ cmd_images() {
   lz4 -l -9 -f -q "$boot/Image" "$img/Image.lz4"
 
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
-    # Two-stage chain (device/dodge/chainload, tools/dodge-chain): ABL refuses
+    # Two-stage chain (device/$DEVICE/chainload, tools/dodge-chain): ABL refuses
     # header v2 under fastboot boot, and a v4 boot.img ramdisk is ignored
     # (stock DTB from vendor_boot). Stage 1 is a kernel-only header v4 image
     # with a built-in /omamobile init that kexecs stage 2 (this Image, the
-    # dodge DTB with the live memory map, and the shared initramfs). LIVE_DTB
+    # board DTB with the live memory map, and the shared initramfs). LIVE_DTB
     # is required and never committed. Pixel paths below are unchanged.
     [[ -n ${LIVE_DTB:-} && -f ${LIVE_DTB:-} ]] ||
       die "qcom-abl images need LIVE_DTB= path to the rooted live FDT (never committed)"
-    # dodge-chain resolves mkbootimg.py (tree-local / SRC_DIR) itself; leave
-    # a soft PATH check only as a hint when neither copy exists.
     if [[ ! -f $tools/mkbootimg.py ]]; then
       command -v mkbootimg >/dev/null ||
         die "qcom-abl images need $ROOT/system/tools/mkbootimg/mkbootimg.py or $SRC_DIR/system/tools/mkbootimg/mkbootimg.py (or mkbootimg on PATH)"
     fi
     local chain_out="${CHAIN_OUT:-$KERNEL_OUT/chain}"
-    say "Boot image (qcom-abl chain, header v4): boot via tools/dodge-chain"
+    local chainload="$ROOT/device/$DEVICE/chainload"
+    # Descriptor CMDLINE feeds stage 2 when set; else the known-good default.
+    local stage2_cmdline="${STAGE2_CMDLINE:-}"
+    if [[ -z $stage2_cmdline ]]; then
+      if [[ -n ${DEV_CMDLINE:-} ]]; then
+        stage2_cmdline="rdinit=/init ${DEV_CMDLINE} omamobile.ufs-probe"
+      else
+        stage2_cmdline="rdinit=/init clk_ignore_unused pd_ignore_unused panic=10 console=tty0 omamobile.ufs-probe"
+      fi
+    fi
+    say "Boot image (qcom-abl chain, header v4): boot via tools/dodge-chain ($DEVICE)"
+    KERNEL_DIR="$KERNEL_DIR" \
+    KERNEL_BASE="$KERNEL_BASE" \
+    WORK="$WORK" \
+    IMAGE="$IMAGE" \
+    CLANG_DIR="$CLANG_DIR" \
+    SRC_DIR="$SRC_DIR" \
+    CHAINLOAD_DIR="$chainload" \
     STAGE2_OUT="$KERNEL_OUT" \
     STAGE2_IMAGE="$boot/Image" \
     STAGE2_DTB_IN="$dtb" \
@@ -607,7 +630,8 @@ cmd_images() {
     CHAIN_OUT="$chain_out" \
     LIVE_DTB="$LIVE_DTB" \
     DTB_OPTS="${DTB_OPTS:-splash fb}" \
-    STAGE2_CMDLINE="${STAGE2_CMDLINE:-rdinit=/init clk_ignore_unused pd_ignore_unused panic=10 console=tty0 omamobile.ufs-probe}" \
+    STAGE2_CMDLINE="$stage2_cmdline" \
+    JOBS="$JOBS" \
       "$ROOT/tools/dodge-chain" pack
     cp -- "$chain_out/images/boot-chain.img" "$img/boot.img"
     printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
@@ -839,7 +863,7 @@ cmd_flash() {
   # Refuse here; day-2 updates use push once that path is viable, and the
   # installer PR can reopen flash with the rest.
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
-    die "flash refuses BOOT_METHOD=qcom-abl (use push for day-2, or wait for the installer PR); see device/$DEVICE/BRINGUP-M1.md"
+    die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   local serial
@@ -872,6 +896,11 @@ cmd_flash() {
 cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
   load_device
+  # Same class of refusal as flash: boot_b is on sde here, and there is no
+  # in-tree day-2 rewrite path for qcom-abl yet. Refuse before any phone I/O
+  # (modules-push would otherwise rewrite the running root's modules).
+  [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
+    die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   # Refuse before any write. A phone whose initramfs has no reboot-to would

@@ -42,12 +42,13 @@ if "$t/repo/tools/install-phone" --device flame > "$t/log" 2>&1; then fail "flam
 grep -q 'unsupported BOOT_METHOD=ram-only;' "$t/log" || fail "flame fails for the wrong reason"
 echo 'ok - the shipped flame descriptor has no persistent installer path'
 
-# qcom-abl is accepted by images (installer still refuses until a later PR).
-# flash refuses qcom-abl in this PR (set_active vs GPT bit 54). A complete
-# dodge-shaped descriptor must get past the BOOT_METHOD check; without a
-# kernel build, images stops at "build the kernel first".
-mkdir -p "$t/repo/device/abldev"
-cat > "$t/repo/device/abldev/device.conf" <<'EOF'
+# qcom-abl is accepted by images only when device/$DEVICE/chainload/ exists
+# (installer still refuses until a later PR). flash and push both refuse
+# qcom-abl before phone access. A complete dodge-shaped descriptor with
+# chainload must get past the BOOT_METHOD check; without a kernel build,
+# images stops at "build the kernel first".
+mkdir -p "$t/repo/device/abldev/chainload"
+cat > "$t/repo/device/abldev/device.conf" <<'DEVEOF'
 CODENAME=abldev
 NAME="ABL probe"
 SOC=sm8750
@@ -60,13 +61,55 @@ PANEL_SIZE=1440x3168
 BOOT_IMAGES=boot
 UFS_RW="boot_b userdata"
 OMAMOBILE_SLOT=b
-EOF
+DEVEOF
+# Minimal chainload stubs so images reaches the kernel check.
+printf '#!/bin/sh\n' > "$t/repo/device/abldev/chainload/init"
+printf '# stub\n' > "$t/repo/device/abldev/chainload/stage2-dtb.py"
 if DEVICE=abldev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images unexpectedly succeeded without a kernel"; fi
 grep -q 'unsupported BOOT_METHOD=qcom-abl' "$t/log" && fail "images still refuses qcom-abl"
 grep -q 'build the kernel first' "$t/log" || fail "images did not reach the kernel check for qcom-abl"
 [[ ! -e $t/calls ]] || fail "qcom-abl images accessed the phone"
-echo 'ok - BOOT_METHOD=qcom-abl accepted by images (stops before phone access)'
+echo 'ok - BOOT_METHOD=qcom-abl accepted by images with chainload/ (stops before phone access)'
+
+# Missing chainload/ must refuse before the kernel check.
+rm -rf "$t/repo/device/abldev/chainload"
+if DEVICE=abldev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images accepted qcom-abl without chainload"; fi
+grep -q 'qcom-abl needs device/abldev/chainload/' "$t/log" || fail "images did not require chainload/"
+[[ ! -e $t/calls ]] || fail "qcom-abl images without chainload accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by images without device/$DEVICE/chainload/'
+
+# Restore chainload for flash/push refuse checks (they load_device only).
+mkdir -p "$t/repo/device/abldev/chainload"
+printf '#!/bin/sh\n' > "$t/repo/device/abldev/chainload/init"
+printf '# stub\n' > "$t/repo/device/abldev/chainload/stage2-dtb.py"
+
 if DEVICE=abldev "$t/repo/bin/omamobile" flash > "$t/log" 2>&1; then fail "flash unexpectedly accepted qcom-abl"; fi
 grep -q 'flash refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "flash did not refuse qcom-abl"
+grep -q 'no in-tree day-2 update path' "$t/log" || fail "flash message still points at a day-2 path"
 [[ ! -e $t/calls ]] || fail "qcom-abl flash accessed the phone"
 echo 'ok - BOOT_METHOD=qcom-abl refused by flash before phone access'
+
+if DEVICE=abldev "$t/repo/bin/omamobile" push > "$t/log" 2>&1; then fail "push unexpectedly accepted qcom-abl"; fi
+grep -q 'push refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "push did not refuse qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl push accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by push before phone access'
+
+# slot_suffix resolver: bootconfig wins; bootargs fallback; empty if neither.
+rs="device/dodge/chainload/resolve-slot-suffix.sh"
+[[ -x $rs ]] || fail "resolve-slot-suffix.sh missing"
+bc=$(mktemp); ba=$(mktemp)
+printf 'androidboot.slot_suffix = "_b"\nother = 1\n' > "$bc"
+printf 'rdinit=/init androidboot.slot_suffix=_a console=tty0\n' > "$ba"
+got=$("$rs" "$bc" "$ba")
+[[ $got == _b ]] || fail "bootconfig should win, got '$got'"
+echo 'ok - slot_suffix from bootconfig wins over bootargs'
+got=$("$rs" /nonexistent "$ba")
+[[ $got == _a ]] || fail "bootargs fallback failed, got '$got'"
+echo 'ok - slot_suffix falls back to chosen/bootargs'
+got=$("$rs" /nonexistent /nonexistent)
+[[ -z $got ]] || fail "expected empty suffix, got '$got'"
+echo 'ok - slot_suffix empty when neither source has it'
+got=$("$rs" "$bc" /nonexistent)
+[[ $got == _b ]] || fail "bootconfig-only failed, got '$got'"
+echo 'ok - slot_suffix from bootconfig alone'
+rm -f "$bc" "$ba"

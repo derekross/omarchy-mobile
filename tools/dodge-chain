@@ -1,35 +1,43 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# dodge-chain: build the OnePlus 13 (dodge) kexec chain-loader boot.img.
+# dodge-chain: build a qcom-abl kexec chain-loader boot.img for one device.
 #
 #   tools/dodge-chain pack   stage 2 DTB, stage 1 kernel, boot-chain.img
 #
 # ABL does not start header v2 images under fastboot boot, and ignores a
 # ramdisk in an uploaded v4 boot.img. Stage 1 is therefore our kernel with
 # a built-in initramfs and a forced cmdline, packed as a kernel-only
-# header v4 image. ABL starts it on stock's DTB; device/dodge/chainload/init
+# header v4 image. ABL starts it on stock's DTB; device/$DEVICE/chainload/init
 # (PID 1; userspace never opens a block device) kexecs stage 2: our kernel,
-# our DTB, the shared initramfs from bin/omamobile initramfs. The stage-1
-# kernel may still probe UFS if stock's DTB matches a mainline driver.
-# Nothing is flashed.
+# our DTB, the shared initramfs from bin/omamobile initramfs.
+#
+# Stage 1's .config disables SCSI_UFS_QCOM / SCSI_UFSHCD so the kernel does
+# not probe UFS on stock's DTB (CONTRIBUTING §3.2).
+#
+# CHAINLOAD_DIR must point at device/$DEVICE/chainload/ (splash/panel/RSC
+# values live there; this tool has no device hardcodes). bin/omamobile
+# images refuses qcom-abl unless that directory exists and passes it here.
 #
 # Stage 2 inputs come from $STAGE2_OUT (Image, DTB, .config) and
 # $STAGE2_INITRD (normally $KERNEL_OUT/initramfs.cpio.lz4). Run
 # `omamobile kernel` and `omamobile initramfs` first, or point the
 # variables at an existing build. LIVE_DTB is required and never committed.
+# KERNEL_DIR must be set (bin/omamobile passes it); no silent ~/android default
+# that could diverge from stage 2's tree.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-KERNEL_DIR="${KERNEL_DIR:-$HOME/android/mainline/linux}"
-STAGE2_OUT="${STAGE2_OUT:-${KERNEL_OUT:-$HOME/android/mainline/out}}"
-CHAIN_OUT="${CHAIN_OUT:-$STAGE2_OUT/chain}"
+KERNEL_DIR="${KERNEL_DIR:-}"
+STAGE2_OUT="${STAGE2_OUT:-${KERNEL_OUT:-}}"
+CHAIN_OUT="${CHAIN_OUT:-${STAGE2_OUT:+$STAGE2_OUT/chain}}"
 JOBS="${JOBS:-$(nproc)}"
 LIVE_DTB="${LIVE_DTB:-}"
+CHAINLOAD_DIR="${CHAINLOAD_DIR:-}"
 # Known-good stage 2 DTB options (simpledrm on the splash buffer).
 DTB_OPTS="${DTB_OPTS:-splash fb}"
-STAGE2_IMAGE="${STAGE2_IMAGE:-$STAGE2_OUT/arch/arm64/boot/Image}"
-STAGE2_DTB_IN="${STAGE2_DTB_IN:-$STAGE2_OUT/arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dtb}"
-STAGE2_INITRD="${STAGE2_INITRD:-$STAGE2_OUT/initramfs.cpio.lz4}"
+STAGE2_IMAGE="${STAGE2_IMAGE:-${STAGE2_OUT:+$STAGE2_OUT/arch/arm64/boot/Image}}"
+STAGE2_DTB_IN="${STAGE2_DTB_IN:-}"
+STAGE2_INITRD="${STAGE2_INITRD:-${STAGE2_OUT:+$STAGE2_OUT/initramfs.cpio.lz4}}"
 STAGE2_CMDLINE="${STAGE2_CMDLINE:-rdinit=/init clk_ignore_unused pd_ignore_unused panic=10 console=tty0 omamobile.ufs-probe}"
 # Stage 1 must not enable LPIs: a GIC that already turned them on will not
 # give stage 2 a clean ITS.
@@ -48,6 +56,8 @@ Usage: tools/dodge-chain pack
          built-in chain-loader, and \$CHAIN_OUT/images/boot-chain.img.
          No phone access.
 
+CHAINLOAD_DIR=$CHAINLOAD_DIR
+KERNEL_DIR=$KERNEL_DIR
 STAGE2_OUT=$STAGE2_OUT
 CHAIN_OUT=$CHAIN_OUT
 STAGE2_INITRD=$STAGE2_INITRD
@@ -57,17 +67,68 @@ LIVE_DTB=${LIVE_DTB:-(required)}
 USAGE
 }
 
+# Run make/scripts/config in the omamobile build container when IMAGE and
+# CLANG_DIR are set (same toolchain as bin/omamobile kernel); otherwise on
+# the host. WORK/ROOT/KERNEL_BASE mounts match bin/omamobile's in_container.
+stage1_in_toolchain() {
+  local script=$1
+  if [[ -n ${IMAGE:-} && -n ${CLANG_DIR:-} && -n ${WORK:-} ]]; then
+    local tty=() kernel=()
+    [[ -t 0 && -t 1 ]] && tty=(-it)
+    local kb="${KERNEL_BASE:-$(dirname "$KERNEL_DIR")}"
+    [[ $kb == "$WORK" || $kb == "$WORK"/* || ! -d $kb ]] || kernel=(-v "$kb:$kb")
+    docker run --rm "${tty[@]}" \
+      --hostname omamobile-build \
+      -v "$WORK:$WORK" -v "$ROOT:$ROOT" "${kernel[@]}" \
+      -e PATH="$CLANG_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      -w "$KERNEL_DIR" \
+      "$IMAGE" bash -c "$script"
+  else
+    bash -c "$script"
+  fi
+}
+
+# Write the live FDT memory node's raw `reg` property to $1 for stage-1 cmp.
+save_live_memory_reg() {
+  local out=$1
+  python3 -I - "$LIVE_DTB" "$out" <<'PY'
+import re, struct, subprocess, sys
+live, out = sys.argv[1], sys.argv[2]
+dts = subprocess.check_output(["dtc", "-q", "-I", "dtb", "-O", "dts", live], text=True)
+# Prefer bare `memory {` (ABL), else first memory@…
+m = re.search(r"\n\tmemory \{([\s\S]*?)\n\t\};", dts)
+if not m:
+    m = re.search(r"\n\tmemory@[0-9a-fA-F]+ \{([\s\S]*?)\n\t\};", dts)
+if not m:
+    sys.exit("no memory node in LIVE_DTB")
+rm = re.search(r"reg = <([^>]*)>;", m.group(1))
+if not rm:
+    sys.exit("memory node has no reg")
+cells = [int(x, 0) for x in rm.group(1).split()]
+# DT property cells are big-endian u32
+open(out, "wb").write(b"".join(struct.pack(">I", c) for c in cells))
+PY
+}
+
 cmd_pack() {
   local f
+  [[ -n $CHAINLOAD_DIR && -d $CHAINLOAD_DIR ]] \
+    || die "set CHAINLOAD_DIR to device/<codename>/chainload/ (bin/omamobile images passes it)"
+  [[ -f $CHAINLOAD_DIR/init ]] || die "missing $CHAINLOAD_DIR/init"
+  [[ -f $CHAINLOAD_DIR/stage2-dtb.py ]] || die "missing $CHAINLOAD_DIR/stage2-dtb.py"
+  [[ -n $KERNEL_DIR ]] || die "set KERNEL_DIR to the same tree stage 2 was built from"
+  [[ -n $STAGE2_OUT ]] || die "set STAGE2_OUT (or KERNEL_OUT)"
+  [[ -n $CHAIN_OUT ]] || die "set CHAIN_OUT"
+  [[ -n $STAGE2_IMAGE ]] || die "set STAGE2_IMAGE"
+  [[ -n $STAGE2_DTB_IN ]] || die "set STAGE2_DTB_IN"
+  [[ -n $STAGE2_INITRD ]] || die "set STAGE2_INITRD"
   for f in "$STAGE2_IMAGE" "$STAGE2_DTB_IN" "$STAGE2_INITRD" "$STAGE2_OUT/.config"; do
     [[ -f $f ]] || die "missing $f (run: omamobile kernel && omamobile initramfs)"
   done
   [[ -n $LIVE_DTB && -f $LIVE_DTB ]] || die "set LIVE_DTB to the rooted live FDT (never committed)"
   [[ -d $KERNEL_DIR ]] || die "no kernel tree at KERNEL_DIR=$KERNEL_DIR"
   [[ -x $KERNEL_DIR/scripts/config ]] || die "KERNEL_DIR=$KERNEL_DIR has no scripts/config"
-  # Prefer tree-local mkbootimg.py (same lookup as bin/omamobile images /
-  # Pixel path). Host android-tools mkbootimg is a last resort — the build
-  # container does not ship it.
+  # Tree-local mkbootimg for qcom-abl only (Pixel path stays on SRC_DIR).
   SRC_DIR="${SRC_DIR:-$HOME/android}"
   MKBOOTIMG_PY=""
   for d in "$ROOT/system/tools/mkbootimg" "$SRC_DIR/system/tools/mkbootimg"; do
@@ -81,8 +142,11 @@ cmd_pack() {
 
   say "Stage 2 DTB (options: ${DTB_OPTS:-none})"
   # shellcheck disable=SC2086
-  python3 -I "$ROOT/device/dodge/chainload/stage2-dtb.py" \
-    "$STAGE2_DTB_IN" "$LIVE_DTB" "$work/dodge.dtb" $DTB_OPTS
+  python3 -I "$CHAINLOAD_DIR/stage2-dtb.py" \
+    "$STAGE2_DTB_IN" "$LIVE_DTB" "$work/stage2.dtb" $DTB_OPTS
+
+  say "Live memory reg for stage-1 cmp"
+  save_live_memory_reg "$work/memory.reg"
 
   say "Alpine busybox-static, kexec-tools and musl"
   local tarball="alpine-minirootfs-$ALPINE_VER-aarch64.tar.gz"
@@ -114,7 +178,7 @@ dir /sys 0755 0 0
 dir /omamobile 0755 0 0
 dir /omamobile/lib 0755 0 0
 file /omamobile/busybox $x/bin/busybox.static 0755 0 0
-file /omamobile/init $ROOT/device/dodge/chainload/init 0755 0 0
+file /omamobile/init $CHAINLOAD_DIR/init 0755 0 0
 file /omamobile/kexec $x/usr/sbin/kexec 0755 0 0
 file /omamobile/lib/ld-musl-aarch64.so.1 $x/lib/ld-musl-aarch64.so.1 0755 0 0
 file /omamobile/lib/libc.musl-aarch64.so.1 $x/lib/ld-musl-aarch64.so.1 0755 0 0
@@ -122,19 +186,31 @@ file /omamobile/lib/libz.so.1 $(readlink -f "$x/usr/lib/libz.so.1") 0644 0 0
 file /omamobile/lib/liblzma.so.5 $lzma 0644 0 0
 file /omamobile/lib/libzstd.so.1 $zstd 0644 0 0
 file /omamobile/Image $STAGE2_IMAGE 0644 0 0
-file /omamobile/dodge.dtb $work/dodge.dtb 0644 0 0
+file /omamobile/stage2.dtb $work/stage2.dtb 0644 0 0
 file /omamobile/initrd $STAGE2_INITRD 0644 0 0
 file /omamobile/cmdline $work/cmdline 0644 0 0
+file /omamobile/memory.reg $work/memory.reg 0644 0 0
 LIST
 
-  say "Stage 1 kernel in $CHAIN_OUT"
+  say "Stage 1 kernel in $CHAIN_OUT (UFS off)"
   cp "$STAGE2_OUT/.config" "$CHAIN_OUT/.config"
-  "$KERNEL_DIR/scripts/config" --file "$CHAIN_OUT/.config" \
-    --set-str INITRAMFS_SOURCE "$work/list" \
-    --disable INITRAMFS_COMPRESSION_GZIP --enable INITRAMFS_COMPRESSION_ZSTD \
-    --set-str CMDLINE "$STAGE1_CMDLINE" --enable CMDLINE_FORCE
-  make -s -C "$KERNEL_DIR" O="$CHAIN_OUT" ARCH=arm64 LLVM=1 olddefconfig
-  make -s -C "$KERNEL_DIR" O="$CHAIN_OUT" ARCH=arm64 LLVM=1 -j"$JOBS" Image
+  # Escape for embedding in the container script.
+  stage1_in_toolchain "
+    set -e
+    '$KERNEL_DIR/scripts/config' --file '$CHAIN_OUT/.config' \\
+      --set-str INITRAMFS_SOURCE '$work/list' \\
+      --disable INITRAMFS_COMPRESSION_GZIP --enable INITRAMFS_COMPRESSION_ZSTD \\
+      --set-str CMDLINE '$STAGE1_CMDLINE' --enable CMDLINE_FORCE \\
+      --disable SCSI_UFS_QCOM --disable SCSI_UFSHCD
+    make -s -C '$KERNEL_DIR' O='$CHAIN_OUT' ARCH=arm64 LLVM=1 olddefconfig
+    # Confirm UFS stayed off after olddefconfig (no select pulled it back).
+    if grep -q '^CONFIG_SCSI_UFS_QCOM=y' '$CHAIN_OUT/.config' || \
+       grep -q '^CONFIG_SCSI_UFSHCD=y' '$CHAIN_OUT/.config'; then
+      echo 'SCSI_UFS_QCOM/SCSI_UFSHCD still enabled in stage 1' >&2
+      exit 1
+    fi
+    make -s -C '$KERNEL_DIR' O='$CHAIN_OUT' ARCH=arm64 LLVM=1 -j$JOBS Image
+  "
   local out="$CHAIN_OUT/images/boot-chain.img"
   if [[ -n $MKBOOTIMG_PY ]]; then
     python3 "$MKBOOTIMG_PY" --header_version 4 --kernel "$CHAIN_OUT/arch/arm64/boot/Image" -o "$out"

@@ -54,19 +54,22 @@ unchanged.
 **Stage 1** (`device/dodge/chainload/init`) runs as **PID 1**. It mounts
 proc (and optionally sysfs) only and **never opens a block device**
 (soft-check: if `/proc/mounts` lists a `/dev/sd*` mount, stage 1 holds and
-resets instead of kexec). That is a userspace claim only: stage 1 boots the
-full stage-2 kernel config on **stock's DTB**, so a mainline driver whose
-compatible matches a stock node (for example UFS) may still probe before
-kexec. Stage 2 is the PR kernel `Image`, the dodge DTB (live memory map
-from `$LIVE_DTB`, never committed), and the shared initramfs from
-`bin/omamobile initramfs`. Stage 2 carries the shared storage guard.
+resets instead of kexec). Stage 1's `.config` disables `SCSI_UFS_QCOM` and
+`SCSI_UFSHCD`, so the kernel does not probe UFS on stock's DTB either
+(CONTRIBUTING §3.2). It also `cmp`s the live memory `reg` against the copy
+packed from `$LIVE_DTB`, and appends `androidboot.slot_suffix` from `/proc/bootconfig` or
+`/proc/device-tree/chosen/bootargs` into stage 2's command line (stage 1's
+own `/proc/cmdline` is `CMDLINE_FORCE`d and has no ABL keys). Stage 2 is the PR kernel
+`Image`, the dodge DTB (live memory map from `$LIVE_DTB`, never committed),
+and the shared initramfs from `bin/omamobile initramfs`. Stage 2 carries
+the shared storage guard.
 
-`bin/omamobile flash` **refuses** `BOOT_METHOD=qcom-abl` in this PR: a
-fastboot `--set-active` on this ABL may clear the successful bit and refill
-retries, undoing the GPT bit-54 mark that has no §3.1 entry yet. Owners
-update with `push` only once that path can see `boot_b` (see LUN note
-above). So with this PR there is no in-tree day-2 update path for dodge.
-The installer PR can reopen flash with the rest.
+`bin/omamobile flash` and `bin/omamobile push` both **refuse**
+`BOOT_METHOD=qcom-abl` in this PR: a fastboot `--set-active` on this ABL
+may clear the successful bit and refill retries, undoing the GPT bit-54
+mark that has no §3.1 entry yet, and `push` cannot see `boot_b` on sde
+with today's sda-only lookup. **There is no in-tree day-2 update path for
+dodge yet.** The installer PR can reopen those paths with the rest.
 
 ## 3. How this phone was installed (record)
 
@@ -116,6 +119,12 @@ each session. Those backups are never in git.
   rather than falling back to A, but whether this ABL enters a dump mode
   first has not been confirmed with a deliberate `sysrq c` on a booted B.
   Do not treat "returns to fastboot" as verified until that test is run.
+- **Do not use `omamobile fastboot` on this phone yet.** That tool falls
+  through to `sysrq c` when `reboot-to bootloader` is ignored, and we have
+  not characterised what a panic does on this ABL. Use the buttons instead:
+  - **Forced restart:** hold **Power** for ~30 s until the phone resets.
+  - **Fastboot (bootloader):** from power-off (or after a forced restart),
+    hold **Volume Down + Power** for ~20 s until the bootloader screen.
 - Until a `tools/phone-smoke` report from images built by
   `bin/omamobile images` on this branch exists, treat the shared init path
   as **untested on dodge**.
@@ -127,8 +136,9 @@ each session. Those backups are never in git.
 | Firmware-match | sha256 of every `*_a`/`*_b` pair: **27 differed**. Byte-exact A→B copy (read-back verified). Left untouched: vbmeta, qweslicstore, oplusstanvbk, modemst/fsg/fsc/persist/EFS/oplusdycnvbk/RPMB | pass |
 | Inactive-slot boot | Omarchy `boot_b` set active; stock OTA `boot.img` on `boot_a` only | pass |
 | `version-bootloader` | empty on this ABL | noted |
-| Boot-success | GPT bit 54 set by hand on `boot_b` after first clean boot | pass |
+| Boot-success | GPT bit 54 set by hand on `boot_b` only after first clean boot (`boot_a` already set by stock) | pass |
 | PR-tip chain smoke (2026-10-30 Europe/Copenhagen) | Morning (~07:46): RAM-only `fastboot boot` of chain image from this branch (no flash, no set_active). Stage-2 kernel was the private `7.3.0-rc6-dodge-gpu2` build (not the #115 head); package still `omamobile-device-dodge 20261016-1`. `tools/phone-smoke` overall **unknown**: required storage-guard/root/kernel-health/USB ok; display/GPU/touch/buttons/battery/sensors ok; required `boot` skip (forced cmdline, no slot suffix); required `session` not ok (Hyprland not up at ~40 s); sound cards none; Wi-Fi link down at that moment. A later #115-head RAM boot (~09:28) **hung** on the console (dual memory map; fixed in kernel DTS + stage2-dtb). Re-smoke of tip `f5e354e1c` after the fix: chain image booted; SSH in about 26 s; storage, root, USB and Hyprland ok; live FDT one `memory@a0000000`. GPU, touch, Wi-Fi, BT and battery failed only because the rootfs has no `/usr/lib/modules/` tree for `uname` `7.3.0-rc6-gf5e354e1cf2b` (only `7.3.0-rc6-dodge-gpu2` and `.held`; those drivers are `=m`). Phone returned to slot B. | partial |
+| PR-tip chain smoke (2026-10-30 evening, Europe/Copenhagen) | RAM-only `fastboot boot` of chain image from `bin/omamobile images` on this branch (no flash, no set_active). Stage-2 kernel `#115` tip; matching modules via tmpfs overlay (package still `omamobile-device-dodge 20261016-1`, so the packaged kmod units fail). Packing guard refuses a stage-1 Image as STAGE2_IMAGE; boot-chain ~64 MiB; UFS off in stage 1. `androidboot.slot_suffix` passed from bootconfig/chosen into stage 2 so phone-smoke's boot check can run. Remoteproc after overlay: modem offline, adsp running, cdsp offline (fw -2). Phone returned to slot B. | pending |
 
 ## 7. GPT bit-54 record (for §3.1)
 
@@ -142,14 +152,15 @@ service or at boot (§3.1).
 | Partition entry / bit | GPT attribute **bit 54** on the `boot_b` entry |
 | Record size | At **4096-byte** logical sectors the GPT record is **8 sectors in 4 files**: primary header (LBA 1), primary entries (LBAs 2–4, 3 sectors), backup entries (LBAs 634875–634877, 3 sectors), backup header (LBA 634879). "Four sectors" would only be right at 512-byte sectors. |
 | Rollback (corrupted GPT) | Off-phone restore of the 4 dump files onto the matching LBAs. sde also holds `abl`/`xbl`; if both primary and backup GPTs on sde are corrupt the phone is likely EDL-only. Whether this ABL accepts `fastboot flash partition:<lun>` has **not** been checked (read-only docs / getvar only — not tried). |
-| Way back | `fastboot --set-active=a` then `fastboot -w` (wipes Omarchy `userdata`); do not boot stock A over Omarchy userdata without that wipe. |
+| Way back | With the phone's serial: `fastboot -s <serial> --set-active=a` then a userdata wipe before booting stock A over Omarchy `userdata`. Stock's own factory-reset path when it finds a foreign userdata has **not** been confirmed on this phone, so the record still uses `fastboot -s <serial> -w` (unsuffixed erase of `userdata`, and on many Qualcomm phones `metadata` too). Replace `<serial>` with the value from `fastboot devices`; never paste a real serial into the repo. |
 
 ### Morning read-only dump (2026-10-30 ~07:49 Europe/Copenhagen)
 
-No GPT write this round. Bit 54 was already set on both `boot_a` and
-`boot_b` (by hand on 2026-10-28, without a pre-write dump), so the numbers
-below are the **current** state, not a before/after. The next by-hand write
-must record both.
+No GPT write this round. On 2026-10-28 **only `boot_b`'s** bit 54 was
+written by hand (no pre-write dump). `boot_a`'s bit 54 was already set
+(stock) and was **not** written by hand. The numbers below are the
+**current** state, not a before/after. The next by-hand write must record
+both.
 
 | Item | Value |
 | --- | --- |
@@ -164,6 +175,16 @@ must record both.
 | partition array CRC32 | **0x4950baae** (primary + backup match) |
 | boot_a attrs / bit 54 | 0x0072000000000000 / **1** (priority 2, retry 6, successful) |
 | boot_b attrs / bit 54 | 0x0077000000000000 / **1** (priority 3, active, retry 6, successful) |
+
+Fastboot getvars from the same morning (and again 2026-10-29 21:50
+Europe/Copenhagen), matching the decoded attrs:
+
+| getvar | a | b |
+| --- | --- | --- |
+| `slot-successful` | yes | yes |
+| `slot-unbootable` | no | no |
+| `slot-retry-count` | 6 | 6 |
+| `current-slot` | | **b** |
 
 Off-phone raw dumps (`sde-prim-hdr.bin`, `sde-bak-hdr.bin`,
 `sde-prim-entries.bin`, `sde-bak-entries.bin`) stay on the desktop only —

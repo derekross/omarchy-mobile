@@ -1,6 +1,6 @@
 #!/omamobile/busybox sh
 # SPDX-License-Identifier: MIT
-# Stage 1 of the dodge kexec chain-loader.
+# Stage 1 of the dodge kexec chain-loader (device/dodge/chainload/).
 #
 # Runs as PID 1 from the kernel's built-in initramfs, started by
 # CONFIG_CMDLINE_FORCE rdinit=/omamobile/init. ABL has started this
@@ -15,24 +15,69 @@
 # matters: kexec-tools 2.0.32 tries kexec_file_load first, which
 # ignores --dtb on arm64 and would hand stage 2 the running (stock)
 # FDT. Failure holds:
-#   kexec -l fails   -> sleep 230 s, then reset
-#   kexec -e returns -> sleep 200 s, then reset
+#   memory.reg mismatch -> sleep 230 s, then reset
+#   kexec -l fails      -> sleep 230 s, then reset
+#   kexec -e returns    -> sleep 200 s, then reset
 # PID 1 never exits.
 B=/omamobile/busybox
-$B mount -t proc proc /proc
-CMDLINE=$($B cat /omamobile/cmdline)
-# sysfs is optional; nothing here reads block devices from it.
-$B mount -t sysfs sysfs /sys 2>/dev/null || true
-# Soft storage-guard note: stage 1 must never have a block device mounted.
-# If somehow one is, hold rather than kexec (never write; never proceed).
-if $B grep -E '^/dev/sd' /proc/mounts >/dev/null 2>&1; then
-  echo "omamobile-chain: refuse: block device mounted in stage 1" > /dev/kmsg 2>/dev/null || true
+hold() {
+  echo "omamobile-chain: $1" > /dev/kmsg 2>/dev/null || true
   $B sleep 230
   echo b > /proc/sysrq-trigger
   while :; do $B sleep 60; done
+}
+$B mount -t proc proc /proc
+CMDLINE=$($B cat /omamobile/cmdline)
+# Append the bootloader's slot suffix so stage 2's phone-smoke boot check can run.
+# Stage 1 uses CONFIG_CMDLINE_FORCE, so /proc/cmdline is only STAGE1_CMDLINE and
+# never carries ABL's androidboot.* keys. Read the suffix from /proc/bootconfig
+# first, then from the live DT chosen/bootargs (stock DTB with ABL fixups).
+SLOT_SUFFIX=
+if [ -f /proc/bootconfig ]; then
+  # bootconfig lines look like: androidboot.slot_suffix = "_b"
+  SLOT_SUFFIX=$($B awk -F= '/^androidboot\.slot_suffix/ {
+    v=$2; gsub(/^[ \t"]+|[ \t"]+$/, "", v); print v; exit
+  }' /proc/bootconfig)
+fi
+if [ -z "$SLOT_SUFFIX" ] && [ -f /proc/device-tree/chosen/bootargs ]; then
+  for tok in $($B cat /proc/device-tree/chosen/bootargs); do
+    case $tok in
+      androidboot.slot_suffix=*) SLOT_SUFFIX=${tok#androidboot.slot_suffix=} ;;
+    esac
+  done
+fi
+if [ -n "$SLOT_SUFFIX" ]; then
+  tok="androidboot.slot_suffix=$SLOT_SUFFIX"
+  case " $CMDLINE " in
+    *" $tok "*) ;;
+    *) CMDLINE="$CMDLINE $tok" ;;
+  esac
+fi
+# sysfs is optional; used only for the memory.reg cmp via /proc/device-tree.
+$B mount -t sysfs sysfs /sys 2>/dev/null || true
+# Soft storage-guard note: stage 1 must never have a block device mounted.
+if $B grep -E '^/dev/sd' /proc/mounts >/dev/null 2>&1; then
+  hold "refuse: block device mounted in stage 1"
+fi
+# LIVE_DTB memory map baked at pack time must match this boot's map.
+MEM_REG=""
+if [ -f /proc/device-tree/memory/reg ]; then
+  MEM_REG=/proc/device-tree/memory/reg
+elif [ -f /proc/device-tree/memory@a0000000/reg ]; then
+  MEM_REG=/proc/device-tree/memory@a0000000/reg
+else
+  for cand in /proc/device-tree/memory@*/reg; do
+    if [ -f "$cand" ]; then MEM_REG=$cand; break; fi
+  done
+fi
+if [ -z "$MEM_REG" ] || [ ! -f /omamobile/memory.reg ]; then
+  hold "refuse: no memory reg to cmp"
+fi
+if ! $B cmp -s "$MEM_REG" /omamobile/memory.reg; then
+  hold "refuse: live memory reg != pack-time LIVE_DTB"
 fi
 KEXEC="/omamobile/lib/ld-musl-aarch64.so.1 --library-path /omamobile/lib /omamobile/kexec"
-if $KEXEC -c -l /omamobile/Image --dtb=/omamobile/dodge.dtb \
+if $KEXEC -c -l /omamobile/Image --dtb=/omamobile/stage2.dtb \
     --initrd=/omamobile/initrd --command-line="$CMDLINE"; then
   $KEXEC -e
   $B sleep 200
