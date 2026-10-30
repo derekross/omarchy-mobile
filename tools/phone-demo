@@ -189,6 +189,10 @@ need_display() {
   if ! display_on; then
     ((wake)) || die "the display is off, so grim would capture nothing: wake it first (power key, or --wake)"
     wake_display
+    # The lock's wake runs omarchy-system-wake in the background, so the
+    # panel can take a few seconds to report on.
+    local i
+    for i in 1 2 3 4 5 6 7 8; do display_on && break; sleep 0.5; done
     display_on || die "the display is still off"
   fi
 }
