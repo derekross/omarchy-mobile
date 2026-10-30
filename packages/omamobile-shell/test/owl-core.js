@@ -345,6 +345,16 @@ test("phone actions and android.* answers, with mocks", () => {
   eq([P.batteryFrom("").level, P.batteryFrom("").status], [null, null])
   eq([P.panelOff("0\n"), P.panelOff("4\n"), P.panelOff("")], [false, true, false])
 })
+test("the frame clock's rates and the hidden tick", () => {
+  // 20 fps untouched, 30 while touched: never the panel's 120 Hz.
+  eq([P.frameInterval(false), P.frameInterval(true)], [50, 33])
+  eq([P.frameSlow(20), P.frameSlow(21), P.frameSlow("x")], [false, true, false])
+  // A slow widget draws every other frame.
+  eq([0, 1, 2, 3].map((n) => P.frameSkipped(true, n)), [false, true, false, true])
+  eq([0, 1].map((n) => P.frameSkipped(false, n)), [false, false])
+  // Just past the next second while shown, the next 10 s while hidden.
+  eq([P.tickDelay(12300, false), P.tickDelay(12300, true), P.tickDelay(20000, true)], [705, 7705, 10005])
+})
 test("a terminal's output reads as lines", () => {
   const T = load("terminal.js")
   let st = T.empty()

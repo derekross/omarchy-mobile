@@ -1,0 +1,23 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# OWL widgets stop when nobody can see them, offscreen in qmltestrunner:
+# the real OwlScheduler, OwlWidget and OwlView, wired as OwlCell wires them,
+# with a host that answers from a fixture and a clock the test sets. A
+# widget whose page isn't shown runs no source, no `every` and no frames;
+# shown again it catches up once; a paused scheduler (the home screen
+# covered or off) stops frames and slows its tick; frames come at 20 fps,
+# 30 while touched, and half that for a widget over its budget. No
+# compositor, no Quickshell. Exits 77 without qmltestrunner.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.home
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "owl-idle: no qmltestrunner" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cp -r "$plugin/owl" "$work/owl"
+cp "$here/owl-idle.qml" "$work/tst_owl_idle.qml"
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+exec "$runner" -input "$work/tst_owl_idle.qml"

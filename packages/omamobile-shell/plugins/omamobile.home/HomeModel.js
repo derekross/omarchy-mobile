@@ -883,6 +883,48 @@ function urlLaunchArgv(url) {
   return [LAUNCH, "url", String(url || "")]
 }
 
+// ---------------------------------------------------------------- who can see it
+
+// Shell surfaces that cover the whole home screen while they are mapped:
+// the app drawer, recent apps and the full-screen call card. Hyprland says
+// when a layer surface maps and unmaps (openlayer>>NAMESPACE,
+// closelayer>>NAMESPACE); the quick-settings shade isn't here, since it
+// covers only part of the screen.
+var COVERING_LAYERS = ["omamobile-launcher", "omamobile-switcher", "omamobile-call"]
+
+// The covering surfaces mapped after one Hyprland event: { namespace: count }
+// (a surface per screen counts once each). Anything else returns `open`.
+function layersAfter(open, name, data) {
+  var ns = String(data || "").trim()
+  if ((name !== "openlayer" && name !== "closelayer") || COVERING_LAYERS.indexOf(ns) < 0) return open || {}
+  var next = {}
+  for (var k in open || {}) next[k] = open[k]
+  var n = (next[ns] || 0) + (name === "openlayer" ? 1 : -1)
+  if (n > 0) next[ns] = n
+  else delete next[ns]
+  return next
+}
+
+// Whether anyone can see the home screen: the panel is on, no app is on
+// the workspace and no covering surface is mapped. (The lock covers it too,
+// but tells no one; it blanks the panel soon after, which counts.)
+function homeShown(panelOff, appOnScreen, covering) {
+  return !panelOff && !appOnScreen && Object.keys(covering || {}).length === 0
+}
+
+// Whether a page's widgets can be seen: the home screen shows and the page
+// is the current one, or its neighbour while the pages are being swiped.
+function pageShown(page, current, moving, shown) {
+  if (!shown) return false
+  return page === current || (!!moving && Math.abs(page - current) === 1)
+}
+
+// A periodic job that waited while its widget was hidden is due when it is
+// shown again if its period passed since it last ran (or it never ran).
+function overdue(lastMs, periodMs, nowMs) {
+  return !(lastMs > 0) || nowMs - lastMs >= periodMs
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     LAUNCH: LAUNCH, appLaunchArgv: appLaunchArgv, commandLaunchArgv: commandLaunchArgv, urlLaunchArgv: urlLaunchArgv,
@@ -904,6 +946,7 @@ if (typeof module !== "undefined") {
     addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid, transposeLayout: transposeLayout,
     weatherText: weatherText, geocodeUrl: geocodeUrl, forecastUrl: forecastUrl,
     parseGeocode: parseGeocode, parseForecast: parseForecast, parseAgenda: parseAgenda, AGENDA_ARGV: AGENDA_ARGV,
-    monthGrid: monthGrid, commandText: commandText
+    monthGrid: monthGrid, commandText: commandText,
+    COVERING_LAYERS: COVERING_LAYERS, layersAfter: layersAfter, homeShown: homeShown, pageShown: pageShown, overdue: overdue
   }
 }

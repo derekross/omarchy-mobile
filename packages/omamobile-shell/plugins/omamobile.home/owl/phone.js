@@ -322,6 +322,26 @@ function panelOff(blPower) {
   return t !== "" && t !== "0"
 }
 
+// ---------------------------------------------------------------- the clock
+
+// The shared clock's rates (plan §2.6). An animation (a node or a Canvas
+// that reads `time`) gets 20 fps while nobody touches it and 30 fps while a
+// finger is on its widget and for 3 s after; never every vsync of the
+// 120 Hz panel. A widget whose frame (its JS, the layout and the Canvas
+// paint it causes) takes longer than the budget draws every other frame.
+// While the home screen is hidden only `at` triggers run, on a 10 s tick.
+var CLOCK = { idleMs: 50, touchMs: 33, touchHoldMs: 3000, budgetMs: 20, tickMs: 1000, hiddenTickMs: 10000 }
+
+function frameInterval(touched) { return touched ? CLOCK.touchMs : CLOCK.idleMs }
+function frameSlow(costMs) { return Number(costMs) > CLOCK.budgetMs }
+function frameSkipped(slow, frameCount) { return !!slow && frameCount % 2 === 1 }
+// Milliseconds to the next tick: just past the next whole second while the
+// home screen shows, the next 10 s boundary while it doesn't.
+function tickDelay(nowMs, hidden) {
+  var period = hidden ? CLOCK.hiddenTickMs : CLOCK.tickMs
+  return period - nowMs % period + 5
+}
+
 // ---------------------------------------------------------------- limits
 
 // The phone's limits on a source (plan §3.3): returns the interval and
@@ -345,6 +365,7 @@ if (typeof module !== "undefined") {
     sourceLimits: sourceLimits, LIMITS: LIMITS, hostOf: hostOf, OWL_CELL_DP: OWL_CELL_DP,
     actionArgv: actionArgv, volumeFrom: volumeFrom, mediaFrom: mediaFrom, MEDIA_FORMAT: MEDIA_FORMAT,
     modesFrom: modesFrom, systemFrom: systemFrom, storageFrom: storageFrom,
-    batteryFrom: batteryFrom, BATTERY_COMMAND: BATTERY_COMMAND, panelOff: panelOff, DEVICE_ACTIONS: DEVICE_ACTIONS
+    batteryFrom: batteryFrom, BATTERY_COMMAND: BATTERY_COMMAND, panelOff: panelOff, DEVICE_ACTIONS: DEVICE_ACTIONS,
+    CLOCK: CLOCK, frameInterval: frameInterval, frameSlow: frameSlow, frameSkipped: frameSkipped, tickDelay: tickDelay
   }
 }

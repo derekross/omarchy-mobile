@@ -506,6 +506,17 @@ and no GNSS power. The calendar reads khal's local store; syncing it is
 vdirsyncer's job. The text/command widget runs only what you typed into your
 own `home.json`.
 
+Idle. Widgets run only while someone can see them: their page is the one on
+screen (the neighbours too while you swipe), the screen is on, and no app,
+app drawer, recent apps or call card covers the home screen (Hyprland's
+`openlayer`/`closelayer` events say when those map). Hidden, OWL widgets
+run no sources, `every` or frames, and the built-ins' timers stop (the
+clock, the calendar's refresh, the weather, the command, the toggles' poll);
+shown again, what fell due runs once. OWL animation runs at 20 fps, 30 while
+you touch the widget. Since 0.2.44: before, a koi pond on page 2 animated
+behind page 1 and behind apps, about 118 % CPU. The lock screen doesn't say
+when it is up, so the widgets run under it until it blanks the panel.
+
 Storage. `~/.config/omamobile/home.json`, written atomically 300 ms after an
 edit and watched, so a hand edit shows up at once. `HomeModel.js` documents
 the format and repairs what it reads: unknown widgets and broken items are

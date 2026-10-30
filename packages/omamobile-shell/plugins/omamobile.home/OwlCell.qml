@@ -21,6 +21,9 @@ Item {
   property var home: null
   property var entry: null
   property bool editing: false
+  // Its page shows and nothing covers the home screen (Home.qml's
+  // pageShown): only then do its sources, `every` and frames run.
+  property bool shown: false
 
   // A user widget's id, or a built-in's type ("owl:simonschubert.today").
   readonly property string widgetId: !owlCell.entry ? "" : HomeModel.isOwlType(owlCell.entry.type) ? owlCell.entry.type : UserWidgets.idOf(owlCell.entry.type)
@@ -40,7 +43,7 @@ Item {
     host: owlCell.home ? owlCell.home.owlHost : null
     themeColors: owlCell.home ? owlCell.home.owlPalette : ({})
     approval: owlCell.card.approval
-    active: owlCell.running && !!owlCell.home && !!owlCell.entry && owlCell.home.owlActive(owlCell.entry.id)
+    active: owlCell.running && owlCell.shown && !!owlCell.home && !!owlCell.entry
     // While its screen is open, the screen's size is the view's own.
     tileVars: Phone.tileVars(owlCell.width, owlCell.height, owlCell.dp,
                              owl.screenOpen ? view.width : owlCell.home ? owlCell.home.owlScreenWidth : owlCell.width,
@@ -51,7 +54,10 @@ Item {
   TapHandler {
     enabled: owlCell.running && !owlCell.editing && !owl.screenOpen && !!owl.tree && !!owl.tree.onTap
     gesturePolicy: TapHandler.ReleaseWithinBounds
-    onTapped: function(point) { owl.runHandler(owl.tree.onTap, [point.position.x / owlCell.dp, point.position.y / owlCell.dp]) }
+    onTapped: function(point) {
+      if (owlCell.home) owlCell.home.owlScheduler.touched()
+      owl.runHandler(owl.tree.onTap, [point.position.x / owlCell.dp, point.position.y / owlCell.dp])
+    }
   }
 
   // The screen's title and the way back, as our built-ins show their
@@ -95,7 +101,11 @@ Item {
     iconFamily: Style.font.family
     homeDir: owlCell.home ? owlCell.home.homeDir : ""
     interactive: !owlCell.editing
-    onHandlerRun: function(handler, args) { owl.runHandler(handler, args) }
+    onHandlerRun: function(handler, args) {
+      // A finger on the widget: its animation runs at the touch rate a moment.
+      if (owlCell.home) owlCell.home.owlScheduler.touched()
+      owl.runHandler(handler, args)
+    }
     onKeyboardWanted: function(on) { if (owlCell.home && owlCell.home.owlKeyboard) owlCell.home.owlKeyboard(on) }
   }
 
@@ -105,7 +115,7 @@ Item {
   // originals take a place as `city`, and wttr.in reads "lat,lon" as one.
   // The coordinates go in while the city is empty or still the last ones put
   // in, so a city the user types wins. Needs its internet allowed.
-  readonly property bool wantsLocation: owlCell.running && owlCell.config.useLocation === true
+  readonly property bool wantsLocation: owlCell.running && owlCell.shown && owlCell.config.useLocation === true
     && !!owlCell.card.approval && owlCell.card.approval.network === true
   GeoLocation { id: geo; active: owlCell.wantsLocation }
   onLocationTextChanged: owlCell.fillLocation()
@@ -130,6 +140,7 @@ Item {
     key: owlCell.widgetId + "@" + (owlCell.entry ? owlCell.entry.id : ""),
     tick: function(now) { owl.tick(now) },
     frame: function(t) { owl.frame(t); view.frame++ },
+    cost: function() { return view.takeWork() },
     get active() { return owl.active }
   })
   readonly property bool animates: owl.active && view.animating

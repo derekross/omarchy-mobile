@@ -19,6 +19,9 @@ QtObject {
   property string widgetId: ""
   property string dir: ""
   property var capabilities: []
+  // Someone can see the widget: its page shows, no app, drawer or recent
+  // apps covers the home screen, and the panel is on. Poll only then.
+  property bool shown: true
 
   readonly property color foreground: home ? home.foreground : "white"
   readonly property color dimForeground: home ? home.dimForeground : "white"

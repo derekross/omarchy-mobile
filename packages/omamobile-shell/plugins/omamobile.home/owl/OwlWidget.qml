@@ -27,8 +27,9 @@ Item {
   property var themeColors: ({})
   // cols, rows, tileWidth, tileHeight, screenWidth, screenHeight, corners, linux.
   property var tileVars: ({})
-  // Sources and `every` run only while the widget is shown (its page or a
-  // neighbour, and the home screen not covered).
+  // Sources, `every` and the frame clock run only while the widget can be
+  // seen: its page shows (a neighbour too while the pages move) and nothing
+  // covers the home screen. The host sets it.
   property bool active: false
   // State to start with when nothing is saved yet: { name: value }.
   property var seedState: ({})
@@ -98,8 +99,11 @@ Item {
   onTileVarsChanged: if (widget.instance) { widget.instance.invalidate(); widget.render() }
   // Sources keep running while the screen is open, whatever page shows.
   readonly property bool live: widget.active || widget.screenOpen
+  // Shown again, it catches up once: what fell due while it was hidden runs
+  // now (a source whose period turned over, an `every` that passed), and
+  // nothing else; the frame clock picks up at the current `time`.
   onLiveChanged: {
-    if (widget.live) { widget.refresh(); widget.startLive() }
+    if (widget.live) { widget.catchUp(); widget.startLive() }
     else widget.stopLive()
   }
   Component.onDestruction: { widget.stopLive(); widget.saveNow() }
@@ -202,9 +206,10 @@ Item {
 
   function refresh() {
     widget.lastRun = ({})
-    // A host may fix the clock (the screenshot harness does).
-    widget.tick(widget.host && widget.host.now ? widget.host.now() : Date.now() / 1000)
+    widget.catchUp()
   }
+  // A host may fix the clock (the screenshot harness does).
+  function catchUp() { widget.tick(widget.host && widget.host.now ? widget.host.now() : Date.now() / 1000) }
   function refreshSoon() { refreshTimer.restart() }
   Timer { id: refreshTimer; interval: 250; onTriggered: widget.refresh() }
 

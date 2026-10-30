@@ -646,6 +646,53 @@ test("landscape of an empty layout is an empty layout on the turned grid", () =>
   assert.deepStrictEqual(t.pages, [{ items: [] }])
 })
 
+// ---------------------------------------------------------------- who can see it
+
+test("widgets run only on the shown page, neighbours while swiping", () => {
+  // Page 1 (index 0) shows: page 2's widgets are stopped, as the koi pond wasn't.
+  assert.strictEqual(M.pageShown(0, 0, false, true), true)
+  assert.strictEqual(M.pageShown(1, 0, false, true), false)
+  assert.strictEqual(M.pageShown(1, 0, true, true), true)
+  assert.strictEqual(M.pageShown(2, 0, true, true), false)
+  // Nothing runs while the home screen is hidden, whichever page.
+  assert.strictEqual(M.pageShown(0, 0, false, false), false)
+  assert.strictEqual(M.pageShown(1, 0, true, false), false)
+})
+
+test("the home screen is hidden by an app, a covering surface or the panel", () => {
+  assert.strictEqual(M.homeShown(false, false, {}), true)
+  assert.strictEqual(M.homeShown(true, false, {}), false)
+  assert.strictEqual(M.homeShown(false, true, {}), false)
+  assert.strictEqual(M.homeShown(false, false, { "omamobile-launcher": 1 }), false)
+  assert.strictEqual(M.homeShown(false, false, null), true)
+})
+
+test("the drawer, recent apps and the call card cover it while mapped", () => {
+  let open = {}
+  open = M.layersAfter(open, "openlayer", "omamobile-launcher")
+  assert.deepStrictEqual(open, { "omamobile-launcher": 1 })
+  // Other surfaces and other events change nothing: the shade covers only part.
+  assert.strictEqual(M.layersAfter(open, "openlayer", "omamobile-quicksettings"), open)
+  assert.strictEqual(M.layersAfter(open, "openwindow", "omamobile-switcher"), open)
+  open = M.layersAfter(open, "openlayer", "omamobile-switcher")
+  open = M.layersAfter(open, "closelayer", "omamobile-launcher")
+  assert.deepStrictEqual(open, { "omamobile-switcher": 1 })
+  open = M.layersAfter(open, "closelayer", "omamobile-switcher")
+  assert.deepStrictEqual(open, {})
+  // A close without an open (the shell started with it up) doesn't go negative.
+  assert.deepStrictEqual(M.layersAfter({}, "closelayer", "omamobile-call"), {})
+  // One per screen, counted.
+  open = M.layersAfter(M.layersAfter({}, "openlayer", "omamobile-call"), "openlayer", "omamobile-call")
+  assert.deepStrictEqual(M.layersAfter(open, "closelayer", "omamobile-call"), { "omamobile-call": 1 })
+  assert.deepStrictEqual(M.COVERING_LAYERS, ["omamobile-launcher", "omamobile-switcher", "omamobile-call"])
+})
+
+test("a job that waited while hidden runs when shown only if overdue", () => {
+  assert.strictEqual(M.overdue(0, 900000, 5000), true)
+  assert.strictEqual(M.overdue(1000, 900000, 600000), false)
+  assert.strictEqual(M.overdue(1000, 900000, 901000), true)
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - home model: " + name) } catch (e) { failed++; console.log("not ok - home model: " + name + "\n  " + (e.stack || e)) }

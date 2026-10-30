@@ -20,6 +20,9 @@ Item {
   property var home: null
   property var entry: null
   property bool editing: false
+  // Someone can see it (set by Home.qml); the widget gets it as `shown`
+  // when it declares that, and as host.shown.
+  property bool shown: true
 
   readonly property string widgetId: entry ? UserWidgets.idOf(entry.type) : ""
   readonly property var card: home && widgetId ? home.userCard(widgetId) : ({ state: "waiting", message: "", url: "", record: null })
@@ -86,6 +89,7 @@ Item {
     widgetId: frame.widgetId
     dir: frame.record ? frame.record.dir : ""
     capabilities: frame.manifest && frame.manifest.capabilities ? frame.manifest.capabilities : []
+    shown: frame.shown
   }
 
   Loader {
@@ -101,6 +105,7 @@ Item {
       bind("editing", Qt.binding(function() { return frame.editing }))
       bind("cellsWide", Qt.binding(function() { return frame.entry ? frame.entry.w : 1 }))
       bind("cellsHigh", Qt.binding(function() { return frame.entry ? frame.entry.h : 1 }))
+      bind("shown", Qt.binding(function() { return frame.shown }))
     }
     onStatusChanged: {
       if (status === Loader.Error && frame.home)

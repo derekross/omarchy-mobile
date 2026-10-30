@@ -5,7 +5,8 @@ import "paint.js" as Paint
 // Canvas: asks the widget for this frame's drawing calls and paints them,
 // in dp. One that read `time` repaints on the view's frame clock (30 fps at
 // most, and only while the view is shown); any other only when its node,
-// size or the theme changes.
+// size or the theme changes. Its paint time counts toward the frame's cost
+// (OwlView.addWork), so a heavy one drops to half rate.
 OwlNodeBase {
   id: canvasNode
 
@@ -36,6 +37,7 @@ OwlNodeBase {
     }
 
     onPaint: {
+      const began = Date.now()
       const ctx = getContext("2d")
       ctx.reset()
       if (!canvasNode.draw || width <= 0 || height <= 0) return
@@ -48,6 +50,7 @@ OwlNodeBase {
       const ratio = canvasNode.view ? canvasNode.view.devicePixelRatio : 1
       Paint.paintList(ctx, ops, { foreground: canvasNode.ink("foreground") },
                       canvasNode.view ? canvasNode.view.family("sans") : "sans-serif", art.image, dp * ratio)
+      if (canvasNode.view) canvasNode.view.addWork(Date.now() - began)
     }
   }
 }

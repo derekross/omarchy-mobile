@@ -377,6 +377,41 @@ for (const t of H.OWL_ORDER) if (!/^owl:simonschubert\.[a-z0-9-]+$/.test(t) || H
 fi
 pass "OWL built-ins"
 
+# Home widgets stop when nobody can see them (0.2.44): a koi pond on page 2
+# kept its frame clock going behind page 1 and behind apps, about 118 % CPU.
+# Every cell gets `shown` from Home's pageShown (the current page, its
+# neighbours only while swiping, and only while no app, drawer, recent apps
+# or call card covers the home screen and the panel is on); OWL widgets run
+# their sources, `every` and frames from it, the built-ins their timers.
+grep -c 'readonly property bool shown: root.pageShown(owner.index)' "$home" >/dev/null || fail "each cell knows whether it shows"
+grep -c 'if ("shown" in item) item.shown = Qt.binding(function() { return cell.shown })' "$home" >/dev/null || fail "widgets get shown"
+grep -c 'readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers)' "$home" >/dev/null || fail "the home screen knows when it is covered"
+grep -c 'root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)' "$home" >/dev/null || fail "the drawer and recent apps cover the home screen"
+grep -c 'onMovingChanged: root.pagesMoving = moving' "$home" >/dev/null || fail "neighbour pages show while swiping"
+grep -c 'Owl.OwlScheduler { id: owlSchedulerObject; paused: root.owlPaused }' "$home" >/dev/null || fail "the OWL clock pauses with the home screen"
+if grep -nE 'Math\.abs\(found\.page - currentPage\) <= 1' "$home"; then fail "a neighbour page's widgets stop while it isn't swiped to"; fi
+grep -c 'active: owlCell.running && owlCell.shown' plugins/omamobile.home/OwlCell.qml >/dev/null || fail "an OWL widget runs only while shown"
+grep -c 'owlCell.home.owlScheduler.touched()' plugins/omamobile.home/OwlCell.qml >/dev/null || fail "a touch raises the frame rate"
+grep -c 'cost: function() { return view.takeWork() }' plugins/omamobile.home/OwlCell.qml >/dev/null || fail "layout and paints count toward a frame's cost"
+for w in Clock Agenda Weather Command Toggles; do
+  grep -c '  property bool shown: true' "plugins/omamobile.home/${w}Widget.qml" >/dev/null || fail "the $w widget takes shown"
+done
+grep -c 'enabled: widget.shown' plugins/omamobile.home/ClockWidget.qml >/dev/null || fail "the clock stops while hidden"
+# No repeating timer or endless animation on the home screen runs unconditionally.
+if grep -nE 'repeat: true.*running: true|running: true.*repeat: true|loops: Animation.Infinite|FrameAnimation' plugins/omamobile.home/*.qml plugins/omamobile.home/owl/*.qml; then
+  fail "nothing on the home screen animates or polls forever"
+fi
+grep -c 'bind("shown", Qt.binding(function() { return frame.shown }))' plugins/omamobile.home/UserWidgetCell.qml >/dev/null || fail "user widgets get shown"
+grep -c '`property bool shown` (optional)' widgets/WIDGETS.md >/dev/null || fail "WIDGETS.md documents shown"
+rc=0; out=$(bash test/owl-idle 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "home widgets stop when nobody can see them # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "OWL widgets when hidden (test/owl-idle)"
+else
+  pass "home widgets stop when nobody can see them: no sources, every or frames hidden, one catch-up, 20/30 fps, half rate when slow"
+fi
+
 # The weather widgets' position: locate.sh against a fake where-am-i.
 bash -n plugins/omamobile.home/locate.sh || fail "locate.sh parses"
 loc=$(mktemp -d)

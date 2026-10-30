@@ -123,6 +123,7 @@ Declare these properties. The home screen sets them before
 | `property var settings` | The manifest's defaults overlaid with the user's values |
 | `property bool editing` | Edit mode is on: don't act on taps (the home screen takes them to move and resize) |
 | `property int cellsWide`, `property int cellsHigh` | The size in grid cells, for layouts that change with the size |
+| `property bool shown` (optional) | Someone can see the widget: its page shows, no app, app drawer or recent apps covers the home screen, and the screen is on. Run timers and animations only while it is `true` (`running: widget.shown`), and catch up once when it turns `true` again. A widget that doesn't declare it works as before |
 
 `host` gives you:
 
@@ -138,6 +139,7 @@ Declare these properties. The home screen sets them before
 | `host.launch(argv)` | Start something detached, such as an app (needs `"commands"`, at most once a second). A window it opens gets a new screen (workspace) of its own, as every launch on the phone does |
 | `host.openUrl(url)` | Open an `http(s)` link in the browser, on the browser's own screen (no capability needed, at most once a second). Use it instead of `Qt.openUrlExternally`, which opens the link wherever the browser happens to be |
 | `host.busy`, `host.canRunCommands` | A command is running; the manifest declares `"commands"` |
+| `host.shown` | The same as `shown`, for code that only has `host` |
 
 A minimal widget:
 

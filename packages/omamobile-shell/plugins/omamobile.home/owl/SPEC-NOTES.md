@@ -51,6 +51,8 @@ Each entry: the decision, the guide section it clarifies, and how it is tested.
 
 **N22. Capabilities are derived, not declared.** The compiler lists every command, URL and file; `commands`, `network` (an `http` source, or a command that runs `curl`/`wget` and the like, or `requires` curl or wget), `files` and `notifications` follow from that list. A widget is approved for one exact list; a change to the list asks again, a change to the layout doesn't.
 
+**N23. A page is live only while it is on screen.** (Triggers: "every 10s while the page is live (on screen or next to it)".) Sources, `every` and the frame clock run for the shown page, for its neighbours only while the pages are being swiped, and only while nothing covers the home screen (an app, the drawer, recent apps, the call card) and the panel is on. Keeping the next page live cost a hidden koi pond about 118 % CPU on the Pixel 7 Pro. When a widget shows again, a source whose period turned over runs once and an `every` that passed fires once; `time` jumps to the current value. `at` keeps running while hidden, on a 10 s tick. Frames come at 20 fps, 30 for 3 s after a touch, and a widget whose frame (its JS, the layout and the Canvas paint it causes) takes over 20 ms gets every other one. Tests: `test/owl-idle`, `test/home-model.js`, `owl-core.js`.
+
 ## Layout (`layout.js`)
 
 **N30.** A node is as big as its content unless it fills. Text without `width`, `weight` or `fill` takes the full width; `Progress`, `Sparkline`, `Grid`, `Slider` and `Input` take the width unless sized; `Canvas`, `Shader` and `Terminal` take all the space unless sized. Defaults: `Progress` 60x8, `Ring` 64x64, `Sparkline` 80x48, `Slider` 120x28, `Button` its text plus 20x12.

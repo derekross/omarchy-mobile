@@ -16,6 +16,8 @@ Item {
   property bool editing: false
   property int cellsWide: 1
   property int cellsHigh: 1
+  // Someone can see it: the poll waits while not (WIDGETS.md).
+  property bool shown: true
 
   readonly property string path: {
     var p = String(settings.path || "~").trim()
@@ -46,7 +48,9 @@ Item {
 
   Component.onCompleted: refresh(false)
   onPathChanged: refresh(true)
-  Timer { interval: widget.minutes * 60000; repeat: true; running: true; onTriggered: widget.refresh(true) }
+  Timer { interval: widget.minutes * 60000; repeat: true; running: widget.shown; onTriggered: widget.refresh(true) }
+  // Shown again: refresh(false) runs df only if the last answer is old.
+  onShownChanged: if (shown) refresh(false)
 
   readonly property color fg: host ? host.foreground : Commons.Color.menu.text
   readonly property color dim: host ? host.dimForeground : Commons.Color.menu.text
