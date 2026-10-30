@@ -217,6 +217,9 @@ cmd_pack() {
   [[ -x $x/bin/busybox.static && -x $x/usr/sbin/kexec && -f $lzma && -f $zstd ]] \
     || die "Alpine packages incomplete under $x"
   printf '%s\n' "$STAGE2_CMDLINE" > "$work/cmdline"
+  # Packed fallback when ABL omits androidboot.slot_suffix (fastboot boot).
+  # Empty file if SLOT_SUFFIX unset — init then leaves cmdline unchanged.
+  printf '%s' "${SLOT_SUFFIX:-}" > "$work/slot_suffix"
 
   cat > "$work/list" <<LIST
 dir /dev 0755 0 0
@@ -237,6 +240,7 @@ file /omamobile/Image $STAGE2_IMAGE 0644 0 0
 file /omamobile/stage2.dtb $work/stage2.dtb 0644 0 0
 file /omamobile/initrd $STAGE2_INITRD 0644 0 0
 file /omamobile/cmdline $work/cmdline 0644 0 0
+file /omamobile/slot_suffix $work/slot_suffix 0644 0 0
 file /omamobile/memory.reg $work/memory.reg 0644 0 0
 LIST
 

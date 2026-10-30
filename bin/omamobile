@@ -631,6 +631,7 @@ cmd_images() {
     LIVE_DTB="$LIVE_DTB" \
     DTB_OPTS="${DTB_OPTS:-splash fb}" \
     STAGE2_CMDLINE="$stage2_cmdline" \
+    SLOT_SUFFIX="${SLOT_SUFFIX:-${DEV_OMAMOBILE_SLOT:+_$DEV_OMAMOBILE_SLOT}}" \
     JOBS="$JOBS" \
       "$ROOT/tools/dodge-chain" pack
     cp -- "$chain_out/images/boot-chain.img" "$img/boot.img"

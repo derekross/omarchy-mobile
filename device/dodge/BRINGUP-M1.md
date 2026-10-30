@@ -57,8 +57,10 @@ proc (and optionally sysfs) only and **never opens a block device**
 resets instead of kexec). Stage 1's `.config` disables `SCSI_UFS_QCOM` and
 `SCSI_UFSHCD`, so the kernel does not probe UFS on stock's DTB either
 (CONTRIBUTING §3.2). It also `cmp`s the live memory `reg` against the copy
-packed from `$LIVE_DTB`, and appends `androidboot.slot_suffix` from `/proc/bootconfig` or
-`/proc/device-tree/chosen/bootargs` into stage 2's command line (stage 1's
+packed from `$LIVE_DTB`, and appends `androidboot.slot_suffix` from `/proc/bootconfig`,
+then `/proc/device-tree/chosen/bootargs`, then the packed `/omamobile/slot_suffix`
+(from `OMAMOBILE_SLOT` in device.conf — this ABL omits the property under
+`fastboot boot`) into stage 2's command line (stage 1's
 own `/proc/cmdline` is `CMDLINE_FORCE`d and has no ABL keys). Stage 2 is the PR kernel
 `Image`, the dodge DTB (live memory map from `$LIVE_DTB`, never committed),
 and the shared initramfs from `bin/omamobile initramfs`. Stage 2 carries

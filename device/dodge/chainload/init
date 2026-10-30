@@ -46,6 +46,11 @@ if [ -z "$SLOT_SUFFIX" ] && [ -f /proc/device-tree/chosen/bootargs ]; then
     esac
   done
 fi
+# fastboot boot does not pass ABL's bootconfig on this ABL; fall back to the
+# slot packed at image build time from the descriptor's OMAMOBILE_SLOT.
+if [ -z "$SLOT_SUFFIX" ] && [ -f /omamobile/slot_suffix ]; then
+  SLOT_SUFFIX=$($B cat /omamobile/slot_suffix)
+fi
 if [ -n "$SLOT_SUFFIX" ]; then
   tok="androidboot.slot_suffix=$SLOT_SUFFIX"
   case " $CMDLINE " in

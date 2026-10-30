@@ -152,4 +152,17 @@ echo 'ok - slot_suffix empty when neither source has it'
 got=$("$rs" "$bc" /nonexistent)
 [[ $got == _b ]] || fail "bootconfig-only failed, got '$got'"
 echo 'ok - slot_suffix from bootconfig alone'
-rm -f "$bc" "$ba"
+# Packed /omamobile/slot_suffix fallback (ABL omits it under fastboot boot).
+pk=$(mktemp)
+printf '_b' > "$pk"
+got=$("$rs" /nonexistent /nonexistent "$pk")
+[[ $got == _b ]] || fail "packed fallback failed, got '$got'"
+echo 'ok - slot_suffix falls back to packed /omamobile/slot_suffix'
+got=$("$rs" "$bc" /nonexistent "$pk")
+[[ $got == _b ]] || fail "bootconfig must beat packed, got '$got'"
+# Force bootconfig to _a to prove priority over packed _b
+printf 'androidboot.slot_suffix = "_a"\n' > "$bc"
+got=$("$rs" "$bc" /nonexistent "$pk")
+[[ $got == _a ]] || fail "bootconfig should beat packed, got '$got'"
+echo 'ok - live bootconfig beats packed slot_suffix'
+rm -f "$bc" "$ba" "$pk"
