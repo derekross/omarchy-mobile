@@ -420,7 +420,10 @@ python3 -B test/launch.py || fail "omamobile-launch"
 # Nothing launches around it: not Omarchy's AppLibrary.launch, not Qt's
 # openUrlExternally (a link opened wherever the browser was), not a bare
 # gtk-launch or the agent prompt.
-if grep -rnE 'appLibrary\.launch\(|openUrlExternally|"gtk-launch"|execArgv\(\["omarchy-agent-prompt"' plugins widgets --include=*.qml --include=*.js; then
+# The switcher's SwitcherModel.js names "gtk-launch" only in the list of
+# wrappers it skips when reading an Exec line for the program; it launches
+# nothing, so it is left out here.
+if grep -rnE 'appLibrary\.launch\(|openUrlExternally|"gtk-launch"|execArgv\(\["omarchy-agent-prompt"' plugins widgets --include=*.qml --include=*.js --exclude=SwitcherModel.js; then
   fail "every launch path goes through omamobile-launch"
 fi
 grep -c 'Quickshell.execDetached(LauncherModel.appArgv(entry.id))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer launches through omamobile-launch"
