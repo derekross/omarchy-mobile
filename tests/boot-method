@@ -175,19 +175,28 @@ grep -q 'not stamping, staying on simpledrm' "$dms" \
   || fail "display-msm must refuse to stamp when dispcc.ko is missing"
 grep -q 'DISPCC=.*dispcc-sm8750.ko' "$dms" \
   || fail "display-msm must gate the stamp on dispcc-sm8750.ko"
-# Simulate the missing-tree path: script exits 0 and leaves no stamp.
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-# Run under a fake uname by rewriting H via env is hard in sh; instead assert
-# the guard is before `: > "$STAMP"` and that a dry missing-file check works.
-stamp_line=$(grep -n ': > "\$STAMP"' "$dms" | head -1 | cut -d: -f1)
-dispcc_line=$(grep -n 'no dispcc-sm8750' "$dms" | head -1 | cut -d: -f1)
-[[ -n $stamp_line && -n $dispcc_line && $dispcc_line -lt $stamp_line ]] \
-  || fail "display-msm dispcc missing-guard must run before stamping (dispcc=$dispcc_line stamp=$stamp_line)"
-echo 'ok - display-msm does not stamp when dispcc.ko is missing'
-grep -q 'msm already bound' "$dms" \
+# Functional: empty modules tree -> exit 0, no stamp. OMAMOBILE_MODULES_H
+# overrides H so we don't need a fake uname. Rewrite STAMP/DISABLE on a copy
+# because those paths are fixed in the script.
+cp "$dms" "$t/display-msm"
+sed -i "s|^STAMP=.*|STAMP=$t/display-msm.tried|" "$t/display-msm"
+sed -i "s|^DISABLE=.*|DISABLE=/nonexistent|" "$t/display-msm"
+chmod +x "$t/display-msm"
+empty_h=$t/empty-modules/kernel
+mkdir -p "$empty_h"
+rm -f "$t/display-msm.tried"
+if ! OMAMOBILE_MODULES_H="$empty_h" "$t/display-msm" >"$t/dms.log" 2>&1; then
+  fail "display-msm with empty modules tree should exit 0"
+fi
+[[ ! -e $t/display-msm.tried ]] || fail "display-msm must not stamp when dispcc.ko is missing"
+grep -q "not stamping, staying on simpledrm" "$t/dms.log" \
+  || fail "display-msm should log not stamping on empty tree"
+echo "ok - display-msm does not stamp when dispcc.ko is missing"
+grep -q "msm already bound" "$dms" \
   || fail "display-msm must treat DSI bind (not mere /sys/module/msm) as already-done"
-echo 'ok - display-msm requires DSI bind before skipping as already-loaded'
+grep -q "rebinding" "$dms" \
+  || fail "display-msm must rebind msm-mdss when msm is loaded without DSI"
+echo "ok - display-msm requires DSI bind before skipping as already-loaded"
 
 
 # stage-1 init must log which slot source won and dump bootconfig/bootargs.

@@ -13,8 +13,12 @@ set -u
 WAIT=${WAIT:-20}
 DISABLE=/etc/omamobile/display-msm.disable
 STAMP=/run/omamobile-display-msm.tried
-H=/lib/modules/$(uname -r).held/kernel
-[ -d "$H" ] || H=/lib/modules/$(uname -r)/kernel
+if [ -n "${OMAMOBILE_MODULES_H:-}" ]; then
+	H=$OMAMOBILE_MODULES_H
+else
+	H=/lib/modules/$(uname -r).held/kernel
+	[ -d "$H" ] || H=/lib/modules/$(uname -r)/kernel
+fi
 P=/usr/local/lib/omamobile/display
 
 log() { echo "omamobile-display-msm: $*"; echo "omamobile-display-msm: $*" > /dev/kmsg 2>/dev/null; }
@@ -22,6 +26,7 @@ log() { echo "omamobile-display-msm: $*"; echo "omamobile-display-msm: $*" > /de
 [ -e "$DISABLE" ] && { log "disabled by $DISABLE, staying on simpledrm"; exit 0; }
 # Module present is not enough: udev can load msm.ko before dispcc, after which
 # msm-mdss fails -110 and leaves /sys/module/msm set with no DSI connector.
+# Dodge's panel shows up as card*-DSI-1 (not eDP/HDMI).
 for c in /sys/class/drm/card*-DSI-1; do
 	if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
 		log "msm already bound: $(basename "$c")"
@@ -76,6 +81,27 @@ do
 	load_deps "$k" || { log "a dependency of $n failed; staying on simpledrm"; exit 0; }
 	insmod "$k" || { log "insmod $n failed; staying on simpledrm"; exit 0; }
 done
+
+# If udev already loaded msm before dispcc, mdss probed with -110 and will
+# not retry on its own. After we have loaded dispcc, kick the platform device
+# so probe runs again with clocks available.
+dsi_bound=
+for c in /sys/class/drm/card*-DSI-1; do
+	if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
+		dsi_bound=1
+		break
+	fi
+done
+if [ -z "$dsi_bound" ] && grep -q '^msm ' /proc/modules; then
+	dev=ae00000.display-subsystem
+	drv=/sys/bus/platform/drivers/msm-mdss
+	if [ -d "$drv" ]; then
+		log "msm loaded without DSI; rebinding $dev after dispcc"
+		echo "$dev" > "$drv/unbind" 2>/dev/null || true
+		sleep 0.5
+		echo "$dev" > "$drv/bind" 2>/dev/null || true
+	fi
+fi
 
 i=0
 while [ $i -lt $((WAIT * 2)) ]; do
