@@ -20,7 +20,9 @@ if [[ -f $T/off_at ]] && (( $(cat "$T/clock") >= $(cat "$T/off_at") )); then rm 
 fake omarchy-toggle-enabled '[[ $1 == omamobile-sleep && -f $T/toggle ]]'
 fake omarchy-hw-display 'echo panel'
 fake hyprctl '[[ $1 == monitors ]] && printf "[{\"dpmsStatus\": %s}]\n" "$(cat "$T/dpms")"'
-fake omarchy-shell '[[ "$*" == "lock status" ]] && printf "{\"locked\":true,\"secure\":%s}\n" "$(cat "$T/secure")"'
+fake omarchy-shell '[[ "$*" == "lock status" ]] && printf "{\"locked\":true,\"secure\":%s}\n" "$(cat "$T/secure")"
+[[ "$*" == "lock dark" ]] && echo "omarchy-shell lock dark at $(cat "$T/clock")" >>"$T/log"
+true'
 fake ss 'cat "$T/ssh"'
 fake busctl 'printf "{\"type\":\"a(ssssuu)\",\"data\":[[%s]]}\n" "$(cat "$T/inhibitors")"'
 fake pactl 'cat "$T/sinks"'
@@ -64,6 +66,8 @@ reset; watch 100
 [[ $(suspends) -ge 1 ]] || fail "screen off and locked: it sleeps"
 at=$(first_at); ((at >= 1030 && at <= 1034)) || fail "the first sleep comes 30 s after the screen went off (at $at)"
 grep -c 'sleeping (screen off and locked for 30 s)' "$t/out" >/dev/null || fail "the sleep is logged with its cause"
+[[ $(sed -n 1p "$t/log") == "omarchy-shell lock dark at $at" && $(sed -n 2p "$t/log") == "systemctl suspend at $at" ]] \
+  || fail "the lock hears the screen is dark (back to its glance) just before the suspend"
 reset; watch 100 OMAMOBILE_SLEEP_AFTER_OFF=12
 at=$(first_at); ((at >= 1012 && at <= 1016)) || fail "OMAMOBILE_SLEEP_AFTER_OFF sets the wait (at $at)"
 reset; watch 100 OMAMOBILE_SLEEP_AFTER_OFF=0

@@ -1,34 +1,54 @@
 # Lock: a glance view on touch-only devices (the lock-keypad toggle), as a
 # phone's lock screen opens: the time, the date, the home screen's last
-# weather reading and the notifications, grouped by app, over the lock's
-# blurred wallpaper. A swipe up, a tap above the fingerprint sensor or a
-# typed key (kept in the field) moves to the PIN view, which is the lock as
-# before plus a small clock. With an empty field and no input it comes back
-# after 15 s, and whenever the lock is shown or the screen is woken (the
-# wake call from 0009). Only one view shows outside the short change; the
-# other is hidden, so nothing of the PIN view renders or takes touches under
-# the glance. Fingerprint unlock is untouched and works from both.
+# weather reading and the newest notifications, over the lock's blurred
+# wallpaper. Only a swipe up (a clear drag, 8 % of the height, or a quick
+# flick, from anywhere, a card included) or a typed key (kept in the field)
+# moves to the PIN view, which is the lock as before plus a small clock. A
+# tap never does: a tap on a card opens it to more of its text (summary up
+# to 2 lines, body up to 4) and runs nothing, a second tap closes it, and a
+# tap elsewhere does nothing. The first 12 px of a drag decide its way:
+# mostly sideways on a card swipes it as a toast swipes (0017's
+# finishSwipe: past 35 % or a flick it flies off), and that one notification
+# is forgotten through the notifications service's forget call (0019), the
+# call the phone's shade makes, so it leaves the history and the shade too,
+# and the next one moves up; mostly vertical is the swipe up. It comes back
+# whenever the lock is shown, the
+# screen is woken (the wake call from 0009) or the screen goes dark: the
+# lock's own blank, or a new "dark" call for what blanks it from outside
+# (the phone's power button, and sleep). With an empty field and no input it
+# also comes back after 15 s, counted on the wall clock so that a sleep in
+# between can't freeze it. A touch on a dark screen, and one within 400 ms
+# of a wake, only wakes it, and open cards close again. Only one view shows
+# outside the short change; the other is hidden, so nothing of the PIN view
+# renders or takes touches under the glance. Fingerprint unlock is untouched
+# and works from both.
 #
 # The cards are Omarchy's NotificationCard, static as the history uses it,
-# one per app (newest three apps, the rest as "N more from A and B"), with
-# three new card properties: summaryLines, bodyLines and a detail label.
-# Read-only, from the notifications plugin's persisted toasts and history
-# (~/.local/state/omarchy/notifications/*.json, history/*.json), none while
-# do-not-disturb is on (notifications.json "dnd"), as no toast shows then.
+# one per notification, newest first, as many as fit above the hint (up to
+# three), then a line for the rest ("N more from A and B", "N more from A,
+# B and 2 others"), with three new card properties: summaryLines, bodyLines
+# and a detail label (the age, "2m").
+# Read (the forget is the one change) from the notifications plugin's
+# persisted toasts and history
+# (~/.local/state/omarchy/notifications/*.json, history/*.json): the same
+# notifications the phone's shade lists, the newest ten with no age limit,
+# Omarchy's own messages (omarchy-action, shown as Omarchy) and notify-send
+# included. While do-not-disturb is on (notifications.json "dnd"), only what
+# still toasts shows: Omarchy's own messages and a critical notify-send.
 # The toggle lock-hide-notification-text shows the app name and "Unlock to
 # read" instead of the text. Weather comes from
-# ~/.local/state/omamobile/weather.json, written by the phone shell's weather
-# widget, and is hidden when absent or over 3 h old; the lock makes no
-# network calls. The clock follows the bar's clockFormat (shell.json), else
+# ~/.local/state/omamobile/weather.json, written by the phone shell's
+# omamobile-weather service, and is hidden when absent or over 3 h old; the
+# lock makes no network calls. The clock follows the bar's clockFormat (shell.json), else
 # the locale. On a computer the lock is unchanged.
 #
-# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014 and
-# 0017.
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014, 0017
+# and 0019.
 diff --git i/shell/plugins/lock/LockGlance.js w/shell/plugins/lock/LockGlance.js
 new file mode 100644
 --- /dev/null
 +++ w/shell/plugins/lock/LockGlance.js
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,139 @@
 +.pragma library
 +.import "../notifications/NotificationLogic.js" as NotificationLogic
 +
@@ -36,10 +56,15 @@ new file mode 100644
 +// 12- or 24-hour choice, the notifications grouped by app, and the weather
 +// line. Plain functions of their inputs, so the test can drive them.
 +
-+// Up to this many apps get a card; the rest fold into one line.
-+var MAX_GROUPS = 3
-+// Older notifications are not news on a lock screen.
-+var MAX_AGE_MS = 24 * 60 * 60 * 1000
++// Up to this many notifications get a card; the rest fold into one line.
++var MAX_CARDS = 3
++// The notifications the lock sums up are the ones the phone's notification
++// shade lists: the newest ten of the toasts on screen and the history,
++// which the notifications service trims to ten (historyLimit), with no age
++// limit and no app left out.
++var SHADE_LIMIT = 10
++// NotificationUrgency.Critical, for the do-not-disturb rule.
++var CRITICAL = 2
 +// A weather reading older than this is not shown.
 +var WEATHER_MAX_AGE_MS = 3 * 60 * 60 * 1000
 +
@@ -65,67 +90,85 @@ new file mode 100644
 +  return Math.floor(minutes / 60) + "h"
 +}
 +
-+function firstLine(text) {
-+  var lines = String(text || "").split(/\r\n|\r|\n|<br\s*\/?>/i)
-+  for (var i = 0; i < lines.length; i++) if (lines[i].trim()) return lines[i].trim()
-+  return ""
++
++// The name a card goes by: Omarchy's own messages (omarchy-action)
++// as Omarchy, a bare notify-send or a nameless sender as Notifications.
++function appName(app) {
++  var name = String(app || "").trim()
++  if (name === "omarchy-action") return "Omarchy"
++  if (!name || name === "notify-send") return "Notifications"
++  return name
 +}
 +
-+// The persisted popup and history files (the notifications plugin's state,
-+// one JSON line each, read together) as cards: newest first, one per app,
-+// at most MAX_GROUPS, and what is left over. Omarchy's own action toasts
-+// and bare notify-send pings are left out, as the notifications plugin
-+// leaves them out of what it keeps while silenced. hideText shows the app
-+// name and "Unlock to read" instead of the text, and no sender picture.
-+function groups(raw, now, hideText) {
-+  var rows = NotificationLogic.historyRows(raw, [], 1, 200)
-+  var byApp = {}
-+  var order = []
++// The shade's rows (see SHADE_LIMIT; a row with neither summary nor body is
++// skipped, as there) from the persisted popup and history files (the
++// notifications plugin's state, one JSON line each, read together).
++function shadeRows(raw) {
++  var rows = NotificationLogic.historyRows(raw, [], 1, 1000)
++  var out = []
++  for (var i = 0; i < rows.length && out.length < SHADE_LIMIT; i++) {
++    var e = rows[i]
++    if (!String(e.summary || "").trim() && !String(e.body || "").trim()) continue
++    out.push(e)
++  }
++  return out
++}
++
++// The file names (NotificationLogic.popupFileName) of every notification
++// the files hold, as a set.
++function fileNames(raw) {
++  var rows = NotificationLogic.historyRows(raw, [], 1, 1000)
++  var out = {}
++  for (var i = 0; i < rows.length; i++) out[NotificationLogic.popupFileName(rows[i])] = true
++  return out
++}
++
++// Those rows as cards, one per notification, newest first. While
++// do-not-disturb is on, only what would still toast: Omarchy's own
++// messages, and a critical notify-send (NotificationLogic.shouldBypassDnd).
++// hideText shows the app name and "Unlock to read" instead of the text, and
++// no sender picture. The detail beside the summary is the age ("2m").
++function cards(raw, now, hideText, dnd) {
++  var rows = shadeRows(raw)
++  var out = []
 +  for (var i = 0; i < rows.length; i++) {
 +    var e = rows[i]
-+    if (NotificationLogic.isEphemeralApp(e.app)) continue
-+    if (Number(now) - Number(e.timestamp || 0) > MAX_AGE_MS) continue
-+    var name = String(e.app || "").trim() || "Notifications"
-+    var key = name.toLowerCase()
-+    if (byApp[key]) { byApp[key].count += 1; continue }
-+    byApp[key] = {
++    if (dnd && !NotificationLogic.shouldBypassDnd({ appName: e.app, urgency: e.urgency }, CRITICAL)) continue
++    var name = appName(e.app)
++    out.push({
 +      app: name,
 +      appIcon: e.appIcon,
 +      image: hideText ? "" : e.image,
 +      glyph: e.glyph,
 +      urgency: e.urgency,
 +      timestamp: e.timestamp,
-+      summary: hideText ? name : String(e.summary || ""),
-+      body: hideText ? "Unlock to read" : firstLine(NotificationLogic.sanitizeBody(e.body, e.app, e.appIcon)),
-+      count: 1,
++      summary: hideText ? name : (String(e.summary || "").trim() || name),
++      body: hideText ? "Unlock to read" : NotificationLogic.sanitizeBody(e.body, e.app, e.appIcon),
++      detail: age(e.timestamp, now),
 +      file: NotificationLogic.popupFileName(e)
-+    }
-+    order.push(byApp[key])
++    })
 +  }
-+  for (var j = 0; j < order.length; j++) {
-+    var g = order[j]
-+    g.detail = (g.count > 1 ? g.count + " new, " : "") + age(g.timestamp, now)
-+    if (!g.summary) g.summary = g.app
-+  }
-+  return order
++  return out
 +}
 +
-+// "6 more from Mail and GitHub" for the apps without a card.
++// The line under the cards for the notifications without one: "5 more from
++// Mail and GitHub", "5 more from Mail, GitHub and 2 others", each app named
++// once, newest first.
 +function moreText(rest) {
 +  if (!rest || rest.length === 0) return ""
-+  var n = 0
 +  var names = []
 +  for (var i = 0; i < rest.length; i++) {
-+    n += rest[i].count
-+    names.push(rest[i].app)
++    var app = String(rest[i].app || "")
++    if (app && names.indexOf(app) < 0) names.push(app)
 +  }
++  if (names.length === 0) return rest.length + " more"
 +  var from = names.length <= 2 ? names.join(" and ")
 +    : names.slice(0, 2).join(", ") + " and " + (names.length - 2) + (names.length === 3 ? " other" : " others")
-+  return n + " more from " + from
++  return rest.length + " more from " + from
 +}
 +
 +// notifications.json's do-not-disturb flag: silenced notifications make no
-+// toast, so the lock shows none either.
++// toast, so the lock shows only what still toasts (cards).
 +function doNotDisturb(raw) {
 +  var parsed = NotificationLogic.parseSettings(raw)
 +  return parsed.dnd === true
@@ -149,7 +192,7 @@ diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.q
 new file mode 100644
 --- /dev/null
 +++ w/shell/plugins/lock/LockGlance.qml
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,624 @@
 +import QtQuick
 +import Quickshell
 +import Quickshell.Io
@@ -160,12 +203,14 @@ new file mode 100644
 +import "LockGlance.js" as Glance
 +
 +// The lock's glance view on touch-only devices (the lock-keypad toggle):
-+// the time, the date, the weather, the notifications grouped by app and a
-+// hint, over the lock's own blurred wallpaper. A swipe up, a tap above the
-+// fingerprint sensor or a typed key moves to the PIN view, which is the
-+// lock as before plus a small clock; with no input it comes back after
-+// 15 s, and whenever the lock is shown or the screen is woken. Fingerprint
-+// unlock runs underneath either view, untouched.
++// the time, the date, the weather, the newest notifications and a hint,
++// over the lock's own blurred wallpaper. A tap on a card opens it to more
++// of its text, a sideways swipe dismisses it (as in the shade); only a swipe up or a typed key moves to the PIN view, which
++// is the lock as before plus a small clock; with no input it comes back after
++// 15 s, and whenever the lock is shown, the screen goes dark (any way: the
++// lock's own blank, the power button, sleep) or the screen is woken. The
++// touch that wakes a dark screen only wakes it. Fingerprint unlock runs
++// underneath either view, untouched.
 +//
 +// Read-only: the notifications plugin's persisted toasts and history, its
 +// do-not-disturb flag, the lock-hide-notification-text toggle, the bar's
@@ -198,23 +243,38 @@ new file mode 100644
 +  property string weatherRaw: ""
 +  readonly property double now: clock.date.getTime()
 +  readonly property bool twelveHour: Glance.twelveHour(barClockFormat, Qt.locale().timeFormat(Locale.ShortFormat))
-+  readonly property var groups: active ? Glance.groups(notificationsRaw, now, hideText) : []
-+  readonly property var shownGroups: groups.slice(0, Glance.MAX_GROUPS)
++  // Swiped away: hidden at once by file name, until a read no longer finds
++  // the file (the service's forget runs on its file queue), as the shade
++  // does. A mark the files still show after 15 s lapses (a forget that never
++  // happened), and the card comes back.
++  property var dismissed: ({})
++  readonly property var cards: active ? Glance.cards(notificationsRaw, now, hideText, doNotDisturb)
++    .filter(function(c) { return !glance.dismissed[c.file] }) : []
++  readonly property var shownCards: cards.slice(0, Glance.MAX_CARDS)
 +  // How many of those cards fit above the hint (refit).
-+  property int fitCount: Glance.MAX_GROUPS
-+  readonly property string moreText: Glance.moreText(groups.slice(Math.min(fitCount, shownGroups.length)))
++  property int fitCount: Glance.MAX_CARDS
++  readonly property string moreText: Glance.moreText(cards.slice(Math.min(fitCount, shownCards.length)))
++  // The cards opened to more of their text, by notification file name;
++  // all closed again whenever the glance comes back.
++  property var expanded: ({})
 +  readonly property string weatherText: active ? Glance.weatherLine(weatherRaw, now) : ""
-+  // Where the under-display sensor's part of the screen starts: nothing
-+  // here reacts to a tap below it (LockView's keypadClearsSensor).
++  // Where the under-display sensor's part of the screen starts (LockView's
++  // keypadClearsSensor): the hint sits just below it, the cards above.
 +  readonly property real sensorTop: lock && lock.keypadClearsSensor ? height - lock.keypadBottomMargin : height
 +  property double lastActivity: Date.now()
 +  property bool polling: true
++  // A touch on a dark screen only wakes it, as on a phone, and so does one
++  // within this long of a wake (the rest of that touch, or a finger already
++  // on its way).
++  property int wakeGuardMs: 400
++  property double wakeGuardUntil: 0
 +
 +  visible: active
 +
 +  function show() {
 +    if (!active || (lock && lock.authenticatingPassword)) return
 +    shown = true
++    expanded = ({})
 +    if (lock.passwordText.length > 0) lock.passwordTextEdited("")
 +    noteActivity()
 +    refresh()
@@ -242,12 +302,27 @@ new file mode 100644
 +
 +  function noteActivity() {
 +    lastActivity = Date.now()
++    idleTimer.since = lastActivity
 +    if (!active) return
 +    if (!polling) {
 +      polling = true
 +      refresh()
 +    }
-+    if (idleTimer.running) idleTimer.restart()
++  }
++
++  function armWakeGuard() {
++    wakeGuardUntil = Date.now() + wakeGuardMs
++  }
++
++  // Whether a touch that starts now only wakes the screen; a dark one is
++  // lit through the lock, as any touch on the lock lights it.
++  function wakeTouch() {
++    if (lock.displayDark) {
++      armWakeGuard()
++      lock.wakeRequested()
++      return true
++    }
++    return Date.now() < wakeGuardUntil
 +  }
 +
 +  function refresh() {
@@ -264,7 +339,7 @@ new file mode 100644
 +      var item = cardsRepeater.itemAt(i)
 +      if (!item) break
 +      var h = item.implicitHeight + (n > 0 ? gap : 0)
-+      var needMore = i + 1 < groups.length
++      var needMore = i + 1 < cards.length
 +      if (used + h + (needMore ? moreHeight : 0) > avail) break
 +      used += h
 +      n++
@@ -272,7 +347,65 @@ new file mode 100644
 +    fitCount = n
 +  }
 +
-+  onShownGroupsChanged: Qt.callLater(refit)
++  onShownCardsChanged: Qt.callLater(refit)
++
++  // A card swiped off its side: that one notification is forgotten through
++  // the notifications service's forget call (omamobile-omarchy patch 0019),
++  // the call the phone's shade makes, so it leaves the toasts, the history
++  // and the shade too. Nothing of the notification runs.
++  property var forgetQueue: []
++  function dismiss(file) {
++    if (!file || dismissed[file]) return
++    var marks = {}
++    for (var k in dismissed) marks[k] = dismissed[k]
++    marks[file] = Date.now()
++    dismissed = marks
++    forgetQueue = forgetQueue.concat([file])
++    noteActivity()
++    Qt.callLater(runForget)
++  }
++
++  function runForget() {
++    if (forgetProc.running || forgetQueue.length === 0) return
++    forgetProc.command = ["sh", "-c",
++      "dir=$1; shift; for name; do qs ipc -p \"$dir\" call notifications forget \"$name\"; done; exit 0",
++      "sh", Quickshell.shellDir].concat(forgetQueue)
++    forgetQueue = []
++    forgetProc.running = true
++  }
++
++  function pruneDismissed(raw) {
++    var present = Glance.fileNames(raw)
++    var marks = {}
++    var any = false
++    for (var k in dismissed) {
++      if (!present[k]) continue
++      if (Date.now() - dismissed[k] > 15000) continue
++      marks[k] = dismissed[k]
++      any = true
++    }
++    dismissed = any ? marks : ({})
++  }
++
++  function toggleCard(file) {
++    var next = {}
++    for (var k in expanded) next[k] = expanded[k]
++    if (next[file]) delete next[file]
++    else next[file] = true
++    expanded = next
++    noteActivity()
++  }
++
++  // The card under a point of the glance, or null.
++  function cardAt(item, x, y) {
++    for (var i = 0; i < cardsRepeater.count; i++) {
++      var card = cardsRepeater.itemAt(i)
++      if (!card || !card.visible) continue
++      var p = item.mapToItem(card, x, y)
++      if (p.x >= 0 && p.y >= 0 && p.x <= card.width && p.y <= card.height) return card
++    }
++    return null
++  }
 +  onHeightChanged: Qt.callLater(refit)
 +
 +  // A typed key on the glance moves to the PIN view and keeps the key: a
@@ -297,7 +430,9 @@ new file mode 100644
 +    target: glance.lock
 +    enabled: glance.active
 +    function onInputEnabledChanged() { if (glance.lock.inputEnabled) glance.show() }
-+    function onWakeSerialChanged() { glance.show() }
++    function onWakeSerialChanged() { glance.armWakeGuard(); glance.show() }
++    function onBlankSerialChanged() { glance.show() }
++    function onDisplayDarkChanged() { if (!glance.lock.displayDark) glance.armWakeGuard() }
 +    function onWakeRequested() { glance.noteActivity() }
 +    // Text that reaches the field another way still shows the PIN view.
 +    function onPasswordTextChanged() { if (glance.showing && glance.lock.passwordText.length > 0) glance.reveal() }
@@ -306,13 +441,23 @@ new file mode 100644
 +  Component.onCompleted: if (active) { refresh(); Qt.callLater(function() { if (glance.showing) glance.forceActiveFocus() }) }
 +  onActiveChanged: if (active) refresh()
 +
-+  // Back to the glance after 15 s on the PIN view with nothing typed.
++  // Back to the glance after 15 s on the PIN view with nothing typed,
++  // counted on the wall clock as the lock's blank timer is: a countdown
++  // frozen by sleep would otherwise pick up where it stopped after resume.
 +  Timer {
 +    id: idleTimer
 +    objectName: "lockGlanceIdle"
-+    interval: 15000
++    property int returnAfter: 15000
++    // When the PIN view last had input, or the countdown began.
++    property double since: 0
++    interval: 1000
++    repeat: true
 +    running: glance.active && !glance.shown && glance.lock.passwordText.length === 0 && !glance.lock.authenticatingPassword
-+    onTriggered: glance.show()
++    onRunningChanged: if (running) since = Date.now()
++    onTriggered: {
++      if (!(since > 0)) since = Date.now()
++      else if (Date.now() - since >= returnAfter) glance.show()
++    }
 +  }
 +
 +  // The notification files have no change signal to watch, so they are read
@@ -340,7 +485,18 @@ new file mode 100644
 +              "--", glance.home + "/.local/state/omarchy/notifications/"]
 +    stdout: StdioCollector {
 +      waitForEnd: true
-+      onStreamFinished: glance.notificationsRaw = String(text || "")
++      onStreamFinished: {
++        glance.notificationsRaw = String(text || "")
++        glance.pruneDismissed(glance.notificationsRaw)
++      }
++    }
++  }
++
++  Process {
++    id: forgetProc
++    onExited: {
++      glance.runForget()
++      glance.refresh()
 +    }
 +  }
 +
@@ -479,7 +635,6 @@ new file mode 100644
 +        width: header.width
 +        height: Math.max(0, hint.y - Style.space(24) - y)
 +        onHeightChanged: Qt.callLater(glance.refit)
-+        visible: !glance.doNotDisturb
 +
 +        Column {
 +          id: cardsColumn
@@ -489,7 +644,7 @@ new file mode 100644
 +
 +          Repeater {
 +            id: cardsRepeater
-+            model: glance.shownGroups
++            model: glance.shownCards
 +
 +            NotificationCard {
 +              required property var modelData
@@ -506,14 +661,20 @@ new file mode 100644
 +              summary: modelData.summary
 +              body: modelData.body
 +              detail: modelData.detail
-+              summaryLines: 1
-+              bodyLines: 1
++              readonly property bool open: !!glance.expanded[modelData.file]
++              summaryLines: open ? 2 : 1
++              bodyLines: open ? 4 : 1
 +              cornerRadius: Style.cornerRadius
 +              fontFamily: Style.font.family
 +              swipeEnabled: false
 +              closeButtonShown: false
-+              // No actions from the lock: a tap asks for the PIN.
-+              onCardClicked: glance.reveal()
++              // No actions from the lock: a tap opens or closes the card
++              // (the glance's touch area below does it; this is the same
++              // for a click that reaches the card), and a card swiped off
++              // its side (the touch area moves it, the card's own
++              // finishSwipe from patch 0017 decides) is forgotten.
++              onCardClicked: glance.toggleCard(modelData.file)
++              onCloseRequested: glance.dismiss(modelData.file)
 +              onImplicitHeightChanged: Qt.callLater(glance.refit)
 +            }
 +          }
@@ -536,7 +697,7 @@ new file mode 100644
 +          Text {
 +            objectName: "lockGlanceQuiet"
 +            width: parent.width
-+            visible: glance.groups.length === 0
++            visible: glance.cards.length === 0
 +            horizontalAlignment: Text.AlignHCenter
 +            textFormat: Text.PlainText
 +            text: "No new notifications"
@@ -566,45 +727,117 @@ new file mode 100644
 +      }
 +    }
 +
-+    // Over everything, cards included (a card only asks for the PIN, like
-+    // any tap): a swipe up from anywhere, or a tap above the sensor's part
-+    // of the screen, shows the PIN view. A finger resting on the sensor
-+    // does neither.
++    // Over everything, cards included. The first 12 px of a drag decide its
++    // way: mostly sideways on a card swipes that card (off its side, past
++    // 35 % or a flick, dismisses it); mostly vertical is the swipe up to the
++    // PIN view (a clear drag, 8 % of the height, or a quick flick), from a
++    // card too. A tap on a card opens or closes it, a tap anywhere else does
++    // nothing, and a touch that wakes a dark screen only wakes it.
 +    MouseArea {
 +      id: swipe
 +      objectName: "lockGlanceSwipe"
 +      anchors.fill: parent
 +      property real startY: 0
++      property real startX: 0
++      property double startAt: 0
 +      property real dragY: 0
-+      onPressed: function(mouse) { startY = mouse.y; dragY = 0 }
-+      onPositionChanged: function(mouse) { dragY = mouse.y - startY }
++      // This touch woke the screen (glance.wakeTouch): it does nothing else.
++      property bool wakeOnly: false
++      // "", "x" (a card swipe) or "y" (toward the PIN view), from the first
++      // 12 px of movement.
++      property string axis: ""
++      property var swipeCard: null
++      property real lastX: 0
++      property double lastAt: 0
++      property real velocityX: 0
++      onPressed: function(mouse) {
++        wakeOnly = glance.wakeTouch()
++        startY = mouse.y
++        startX = mouse.x
++        startAt = Date.now()
++        lastX = mouse.x
++        lastAt = startAt
++        velocityX = 0
++        dragY = 0
++        axis = ""
++        swipeCard = null
++      }
++      onPositionChanged: function(mouse) {
++        if (wakeOnly) return
++        var dx = mouse.x - startX
++        var dy = mouse.y - startY
++        if (!axis && Math.max(Math.abs(dx), Math.abs(dy)) >= Style.space(12)) {
++          axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y"
++          if (axis === "x") {
++            var card = glance.cardAt(swipe, startX, startY)
++            swipeCard = card && !card.dismissing ? card : null
++          }
++        }
++        if (axis === "y") dragY = dy
++        if (axis === "x" && swipeCard) {
++          var t = Date.now()
++          if (t > lastAt) velocityX = (mouse.x - lastX) * 1000 / (t - lastAt)
++          lastX = mouse.x
++          lastAt = t
++          swipeCard.swipeOffset = dx
++          swipeCard.swipeVelocity = velocityX
++        }
++      }
 +      onReleased: function(mouse) {
 +        var moved = mouse.y - startY
 +        dragY = 0
-+        if (moved < -Style.space(60) || (Math.abs(moved) < Style.space(12) && mouse.y < glance.sensorTop)) glance.reveal()
++        if (wakeOnly) {
++          wakeOnly = false
++          return
++        }
++        if (axis === "x") {
++          if (swipeCard) swipeCard.finishSwipe()
++          swipeCard = null
++          return
++        }
++        var quick = Date.now() - startAt < 300 && moved < -Style.space(24)
++        if (axis === "y" && (moved < -glance.height * 0.08 || quick)) {
++          glance.reveal()
++          return
++        }
++        if (Math.abs(moved) < Style.space(12) && Math.abs(mouse.x - startX) < Style.space(12)) {
++          var card = glance.cardAt(swipe, mouse.x, mouse.y)
++          if (card) glance.toggleCard(card.modelData.file)
++        }
 +      }
-+      onCanceled: dragY = 0
++      onCanceled: {
++        dragY = 0
++        wakeOnly = false
++        if (swipeCard) {
++          swipeCard.swipeVelocity = 0
++          swipeCard.swipeOffset = 0
++        }
++        swipeCard = null
++      }
 +    }
 +  }
 +}
 diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
 --- i/shell/plugins/lock/LockView.qml
 +++ w/shell/plugins/lock/LockView.qml
-@@ -31,6 +31,13 @@
+@@ -31,6 +31,16 @@
    // The ABC/123 switch in the field swaps either way, so a password with
    // letters and digits can always be typed.
    property bool passwordFirst: false
 +  // The glance view (LockGlance.qml) over the PIN view on touch-only
 +  // devices: the PIN view's parts fade in as it goes, and are hidden while it
-+  // is up. The lock bumps wakeSerial when the screen is woken, which brings
-+  // the glance back.
++  // is up. The lock bumps wakeSerial when the screen is woken and
++  // blankSerial when it goes dark, and each brings the glance back; while
++  // displayDark, a touch only wakes the screen.
 +  property int wakeSerial: 0
++  property int blankSerial: 0
++  property bool displayDark: false
 +  readonly property real pinOpacity: 1 - glance.progress
 +  readonly property bool pinVisible: glance.progress < 1
    property bool switchedInput: false
    readonly property bool padShown: keypad && (passwordFirst === switchedInput)
    readonly property real inputSwitchReserve: keypad ? Math.round(inputSwitch.implicitWidth + 12) : 0
-@@ -73,6 +80,10 @@
+@@ -73,6 +83,10 @@
    }
  
    function forcePasswordFocus() {
@@ -615,7 +848,7 @@ diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
      if (padShown) {
        keypadKeys.forceActiveFocus()
        return
-@@ -200,7 +211,8 @@
+@@ -200,7 +214,8 @@
  
      Keypad {
        id: numberPad
@@ -625,7 +858,7 @@ diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
        enabled: root.inputEnabled && !root.authenticatingPassword
        anchors.horizontalCenter: parent.horizontalCenter
        anchors.bottom: parent.bottom
-@@ -226,6 +238,8 @@
+@@ -226,6 +241,8 @@
  
      BorderSurface {
        id: inputField
@@ -634,7 +867,7 @@ diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
        width: root.fieldWidth
        height: root.fieldHeight
        anchors.horizontalCenter: parent.horizontalCenter
-@@ -365,7 +379,8 @@
+@@ -365,7 +382,8 @@
        anchors.bottomMargin: Style.space(18)
        anchors.horizontalCenter: inputField.horizontalCenter
        width: parent.width - Style.space(32)
@@ -644,7 +877,7 @@ diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
        text: root.padShown ? "Touch the fingerprint sensor or enter your PIN"
          : "Touch the fingerprint sensor or enter your password"
        color: Commons.Color.lock.text
-@@ -383,9 +398,10 @@
+@@ -383,9 +401,10 @@
      Item {
        id: emergencyButton
        objectName: "lockEmergencyCall"
@@ -657,7 +890,7 @@ diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
        anchors.topMargin: Style.space(20)
        width: emergencyLabel.implicitWidth + Style.space(40)
        height: Math.max(Style.space(44), emergencyLabel.implicitHeight + Style.space(16))
-@@ -411,5 +427,12 @@
+@@ -411,5 +430,12 @@
          }
        }
      }
@@ -673,31 +906,76 @@ diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
 diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
 --- i/shell/plugins/lock/Service.qml
 +++ w/shell/plugins/lock/Service.qml
-@@ -31,6 +31,9 @@
+@@ -31,6 +31,15 @@
    property int failedAttempts: 0
    property string backgroundPath: ""
    property int backgroundVersion: 0
 +  // Bumped by the wake call (a phone's power button): the lock's glance view
 +  // comes back each time the screen is woken.
 +  property int wakeSerial: 0
++  // Bumped whenever the locked display goes dark: the lock's own blank, or
++  // the dark call (a phone's power button, sleep). The glance view comes
++  // back each time, and displayDark holds until the display is lit through
++  // the lock again, so the touch that wakes a dark screen only wakes it.
++  property int blankSerial: 0
++  property bool displayDark: false
    property string lastEvent: "init"
    property string lastEventAt: ""
    property bool strandedLock: false
-@@ -280,6 +283,7 @@
+@@ -178,14 +187,22 @@
+   }
+ 
+   function runWake() {
++    displayDark = false
+     if (!wakeProcess.running) wakeProcess.running = true
+     if (lockRequested) armBlankTimer()
+   }
+ 
+   function runBlank() {
++    markDark()
+     if (!blankProcess.running) blankProcess.running = true
+   }
+ 
++  function markDark() {
++    if (!lockRequested) return
++    blankSerial += 1
++    displayDark = true
++  }
++
+   function submitPassword(value) {
+     var password = String(value || "")
+     if (!lockRequested || authenticatingPassword || password.length === 0) return
+@@ -280,6 +297,9 @@
  
        LockView {
          keypad: root.keypad
 +        wakeSerial: root.wakeSerial
++        blankSerial: root.blankSerial
++        displayDark: root.displayDark
          id: lockView
          anchors.fill: parent
          backgroundPath: root.backgroundPath
-@@ -548,6 +552,7 @@
+@@ -548,10 +568,21 @@
      // it and re-arm the blank timer (a phone's power button).
      function wake(): string {
        if (!root.currentlyLocked()) return "unlocked"
 +      root.wakeSerial += 1
        root.runWake()
        return "ok"
+     }
+ 
++    // The locked display went dark some other way than the lock's own blank
++    // (a phone's power button, or just before sleep): back to the glance
++    // view, and the touch that next wakes the screen only wakes it. The
++    // display itself is left as it is.
++    function dark(): string {
++      if (!root.currentlyLocked()) return "unlocked"
++      root.markDark()
++      return "ok"
++    }
++
+     function isLocked(): string {
+       return root.currentlyLocked() ? "true" : "false"
      }
 diff --git i/shell/plugins/notifications/components/NotificationCard.qml w/shell/plugins/notifications/components/NotificationCard.qml
 --- i/shell/plugins/notifications/components/NotificationCard.qml

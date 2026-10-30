@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# omamobile-weather at login and every 30 minutes of the clock; a half hour
+# that passed while the phone slept runs on resume.
+[Unit]
+Description=Omarchy Mobile weather for the lock screen, every 30 minutes
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Timer]
+OnActiveSec=30s
+OnCalendar=*:00/30
+Persistent=true
+Unit=omamobile-weather.service
+
+[Install]
+WantedBy=graphical-session.target

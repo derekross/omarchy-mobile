@@ -5,7 +5,8 @@
 #   power, short       unlocked: lock and turn the screen off
 #                      unlocked, dark: screen on (nothing locked it, or the
 #                      panel was powered off by hand)
-#                      locked: screen off if it's on, on (PIN pad) if it's off
+#                      locked: screen off if it's on (the lock goes back to
+#                      its glance view), on if it's off
 #                      screensaver up: lock (it wakes to the PIN pad)
 #                      a press that turned the screen off behind a secure
 #                      lock also asks omamobile-sleepd to sleep now (it does
@@ -107,6 +108,13 @@ chord() {
   (sleep 0.4; omarchy-capture-screenshot fullscreen) >/dev/null 2>&1 &
 }
 
+# The locked screen is going dark: the lock goes back to its glance view, so
+# whatever wakes it next finds the glance, and the touch that wakes it only
+# wakes it (patches/omarchy/0023). An older lock without the call ignores it.
+lock_dark() {
+  omarchy-shell lock dark >/dev/null 2>&1
+}
+
 # The screen just went off: sleep now if the lock is secure (SUSPEND-PLAN
 # 6.1). omamobile-sleepd checks the toggle, the screen and its inhibitors
 # itself; in the background, so the key handler returns at once.
@@ -143,6 +151,7 @@ short_press() {
     if screen_off; then
       wake_locked
     else
+      lock_dark
       omarchy-brightness-display off
       sleep_now
     fi
@@ -174,6 +183,7 @@ short_press() {
       omarchy-shell lock status 2>/dev/null | grep -q '"secure":true' && break
       sleep 0.1
     done
+    lock_dark
     omarchy-brightness-display off
     # The brightness the next wake lights up with: the saved level, or 40 % when
     # the press caught the panel at 0.

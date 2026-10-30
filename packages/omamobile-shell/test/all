@@ -600,6 +600,8 @@ bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"
+python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
@@ -626,6 +628,16 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
    $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
   || fail "the sleep watcher is staged and runs for every user's session"
 grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
+# The lock screen's weather: a timer for every session, a one-shot service.
+[[ -x $tmp/root/usr/bin/omamobile-weather && -f $u/omamobile-weather.service && -f $u/omamobile-weather.timer &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-weather.timer") == ../omamobile-weather.timer ]] \
+  || fail "the weather timer is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-weather' systemd/user/omamobile-weather.service >/dev/null \
+  && grep -cx 'Type=oneshot' systemd/user/omamobile-weather.service >/dev/null \
+  && grep -cx 'OnCalendar=\*:00/30' systemd/user/omamobile-weather.timer >/dev/null \
+  && grep -cx 'Unit=omamobile-weather.service' systemd/user/omamobile-weather.timer >/dev/null \
+  || fail "the weather timer runs the one-shot service every 30 minutes"
+pass "the lock screen's weather runs at login and every 30 minutes"
 if grep -rnE '^[^#]*(omarchy-toggle omamobile-sleep( on| toggle|$)|toggles/omamobile-sleep)' bin install systemd plugins; then
   fail "nothing turns the omamobile-sleep toggle on by default"
 fi

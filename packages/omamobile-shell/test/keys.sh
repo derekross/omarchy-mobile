@@ -81,17 +81,24 @@ echo true >"$t/secure"
 echo foot >"$t/class"
 press() { reset; keys power-down; keys power-up; sleep 0.5; }
 
+# The lock hears that its screen goes dark before the panel goes off, so it
+# is back on its glance view for the next wake (patches/omarchy/0023).
+before() { awk -v a="$1" -v b="$2" '{ sub(/ +$/, "") } $0 == a && !x { x = NR } $0 == b && !y { y = NR } END { exit !(x && y && x < y) }' "$log"; }
 echo false >"$t/locked"; echo true >"$t/dpms"
 press; grep -q "omarchy-system-lock" "$log" || fail "unlocked and lit: a press locks"
+before "omarchy-system-lock" "omarchy-shell lock dark" && before "omarchy-shell lock dark" "omarchy-brightness-display off" \
+  || fail "unlocked and lit: the new lock hears it goes dark, before the panel goes off"
 echo false >"$t/locked"; echo false >"$t/dpms"
 press; grep -q "omarchy-brightness-display on" "$log" || fail "unlocked and dark: a press lights the screen"
 grep -q "omarchy-system-lock" "$log" && fail "unlocked and dark: a press does not lock"
 echo true >"$t/locked"; echo true >"$t/dpms"
 press; grep -q "omarchy-brightness-display off" "$log" || fail "locked and lit: a press turns the screen off"
+before "omarchy-shell lock dark" "omarchy-brightness-display off" || fail "locked and lit: the lock hears it goes dark, before the panel goes off"
 grep -q "omarchy-system-lock" "$log" && fail "locked and lit: a press does not lock again"
 echo true >"$t/locked"; echo false >"$t/dpms"
 press; grep -q "omarchy-shell lock wake" "$log" || fail "locked and dark: a press wakes the lock screen"
 grep -q "omarchy-brightness-display on" "$log" || fail "locked and dark: a press lights the screen"
+grep -q "lock dark" "$log" && fail "locked and dark: a wake doesn't tell the lock it went dark"
 grep -q "omarchy-system-lock" "$log" && fail "locked and dark: a press does not lock again"
 # hyprctl failing must read as "screen on": the press locks, never wakes blind.
 cat >"$t/bin/hyprctl" <<STUB

@@ -45,6 +45,11 @@ ln -sfn ../omamobile-osk-guard.service "$destination/usr/lib/systemd/user/graphi
 # until the user turns the omamobile-sleep toggle on.
 install -Dm644 systemd/user/omamobile-sleepd.service "$destination/usr/lib/systemd/user/omamobile-sleepd.service"
 ln -sfn ../omamobile-sleepd.service "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-sleepd.service"
+# The lock screen's weather, at login and every 30 minutes, for every user's
+# graphical session; it fetches nothing until a place is set.
+install -Dm644 systemd/user/omamobile-weather.service "$destination/usr/lib/systemd/user/omamobile-weather.service"
+install -Dm644 systemd/user/omamobile-weather.timer "$destination/usr/lib/systemd/user/omamobile-weather.timer"
+ln -sfn ../omamobile-weather.timer "$destination/usr/lib/systemd/user/graphical-session.target.wants/omamobile-weather.timer"
 # The file chooser: xdg-desktop-portal-gnome on plain Wayland (its drop-in).
 install -Dm644 systemd/user/xdg-desktop-portal-gnome-omamobile.conf \
   "$destination/usr/lib/systemd/user/xdg-desktop-portal-gnome.service.d/omamobile.conf"

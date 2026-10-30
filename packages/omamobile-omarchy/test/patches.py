@@ -460,12 +460,21 @@ def lock_glance(root):
     ok(len(wake) == 2 and "root.wakeSerial += 1" in wake[1].split("}", 1)[0]
        and "wakeSerial: root.wakeSerial" in service,
        "real omarchy: the wake call brings the glance back (0023)")
+    blank = service.split("function runBlank() {", 1)
+    dark = service.split("function dark(): string {", 1)
+    run_wake = service.split("function runWake() {", 1)
+    ok(len(blank) == 2 and "markDark()" in blank[1].split("}", 1)[0]
+       and len(dark) == 2 and "root.markDark()" in dark[1].split("}", 1)[0]
+       and len(run_wake) == 2 and "displayDark = false" in run_wake[1].split("}", 1)[0]
+       and "blankSerial: root.blankSerial" in service and "displayDark: root.displayDark" in service,
+       "real omarchy: the lock's blank and the dark call bring the glance back, a wake lights it (0023)")
     ok("maximumLineCount: root.summaryLines" in card and "maximumLineCount: root.bodyLines" in card
        and "property int summaryLines: 2" in card and "property int bodyLines: 3" in card,
        "real omarchy: notification toasts keep their line counts (0023)")
     glance = read(root, lock + "LockGlance.qml") + read(root, lock + "LockGlance.js")
-    ok("XMLHttpRequest" not in glance and "curl" not in glance and "execDetached" not in glance,
-       "real omarchy: the glance asks no network and runs nothing (0023)")
+    ok("XMLHttpRequest" not in glance and "curl" not in glance and "execDetached" not in glance
+       and "call notifications forget" in glance and "invokeAction" not in glance,
+       "real omarchy: the glance asks no network and runs no notification action, only the forget call (0023)")
     p = subprocess.run(["bash", os.path.join(HERE, "lock-glance"), os.path.join(root, "usr/share/omarchy/shell")],
                        capture_output=True, text=True)
     if p.returncode == 77:

@@ -119,6 +119,11 @@ wake_reason() {
 
 request() {
   log "sleeping ($1)"
+  # The lock goes back to its glance view before the freeze, for a screen
+  # that went dark some way that didn't tell it (patches/omarchy/0023): the
+  # next wake finds the glance, and a touch that wakes it only wakes it.
+  # Bounded: a stuck shell must not hold the watcher up.
+  timeout 3 omarchy-shell lock dark >/dev/null 2>&1
   systemctl suspend 2>&1 | sed 's/^/omamobile-sleepd: systemctl: /'
 }
 

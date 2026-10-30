@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# The current weather for the lock screen (~/.local/state/omamobile/weather.json),
+# one fetch per run, started by omamobile-weather.timer. Fetches nothing
+# until a place is set: omamobile-weather set CITY [F|C].
+[Unit]
+Description=Omarchy Mobile weather for the lock screen
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-weather
+TimeoutStartSec=60
