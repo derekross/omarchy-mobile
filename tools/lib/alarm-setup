@@ -3,7 +3,7 @@
 # Runs once inside a fresh Arch Linux ARM container (tools/lib/alarm.sh,
 # alarm_build_image): keyrings, the build pacman.conf, base-devel and the
 # unprivileged "builder" account makepkg needs. /setup holds Omarchy's and
-# Omarchy Mobile's keyring files.
+# Omarchy Mobile's keyring files, and local.asc when a local key is in use.
 set -euo pipefail
 
 pacman-key --init >/dev/null 2>&1
@@ -11,6 +11,14 @@ pacman-key --populate archlinuxarm >/dev/null 2>&1
 install -m644 /setup/omarchy.gpg /setup/omarchy-trusted /setup/omarchy-revoked \
   /setup/omamobile.gpg /setup/omamobile-trusted /setup/omamobile-revoked /usr/share/pacman/keyrings/
 pacman-key --populate omarchy omamobile >/dev/null 2>&1
+# A contributor's local key (ALARM_LOCAL_KEY): trusted in this image only
+if [[ -f /setup/local.asc ]]; then
+  pacman-key --add /setup/local.asc >/dev/null 2>&1
+  for fpr in $(gpg --show-keys --with-colons /setup/local.asc | awk -F: '$1 == "fpr" {print $10; exit}'); do
+    pacman-key --lsign-key "$fpr" >/dev/null 2>&1
+    echo "local key trusted: $fpr"
+  done
+fi
 
 # The order the phone uses: Omarchy's aarch64 builds before Arch Linux ARM's.
 # [omamobile] is added per run (file:///repo), when a repository exists.

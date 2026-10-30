@@ -1,18 +1,23 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7a (lynx): Wi-Fi and Bluetooth
 
-Status (2026-10-27): **parked.** The chip enumerates and reads host memory,
+Status (2026-10-28): **parked.** The chip enumerates and reads host memory,
 but its boot ROM stops at its authentication stage on the first firmware
 load, with the same unsigned image stock loads in 57 ms. Every host-side
 difference two testers could act on has been tried one at a time, one
 change per boot, and all were negative, including a stock-shaped power
-cycle with an 8 s and a 30 s wait (step 6). Bluetooth is not required for
-a good load. No run yet has had Google's host stack and full Android's wait
-before the load together; that is the next step (section 7). A stock-side
-read of the register the ROM consults is done (section 5). The published kernel has no PCIe node for
-lynx; the Wi-Fi branch stays local, and on the test phone `pcie_gs201` and
-`ath11k_pci` stay blacklisted (section 8). Bluetooth is on the same chip and
-waits on the same question. Tracking issue: #36.
+cycle with an 8 s and a 30 s wait (step 6) and, on 2026-10-27, Google's
+host stack with Google's own trigger and full Android's 5 s wait before
+the load (section 7, item 1): it stalls the same way, so that pair is
+ruled out and the variants are stopped. Bluetooth is not required for a
+good load. The one measurement left is the cold stock read (section 7,
+item 3), on this phone, at its owner's call. A stock-side read of the
+register the ROM consults is done (section 5). The published kernel has no
+PCIe node for lynx; the Wi-Fi branch stays local, and on the test phone
+`pcie_gs201` and `ath11k_pci` stay blacklisted (section 8). Bluetooth, on
+the same chip, scans on mainline through its own UART (linux-omarchy-mobile
+#98, in review); section 5 says what its device tree changes at the bench.
+Tracking issue: #36.
 
 Two phones contributed: this one (`latentoperator`, sections 3 to 6) and
 FlorencioJP's (#36, 2026-10-26: the ROM dump, the iATU bisection and the
@@ -189,11 +194,19 @@ What it says:
   first BHI on a chip that has never passed under Linux, so it is what the
   register shows after power-up with WLAN_EN high and no BHI yet, not a
   "good run finished" marker. The warm/cold reading built on it is
-  withdrawn. Two things stay open: at every Linux boot `gph2-5` reads
-  output low and stock logs `BUCK GPIO: [0]` at 2.5 s, so if that GPIO
-  really controls the rail the chip's core domain starts off on both
-  sides; and no rail has been measured, so the 0.5 s "buck drop" in step 6
-  is a GPIO drop. A cold read before the first-ever BHI still needs the
+  withdrawn. Two things stay open: on a kernel without the Bluetooth node
+  (linux-omarchy-mobile #98) `gph2-5` reads output low at every Linux boot,
+  and stock logs `BUCK GPIO: [0]` at 2.5 s, so if that GPIO really controls
+  the rail the chip's core domain starts off on both sides; and no rail
+  has been measured, so the 0.5 s "buck drop" in step 6 is a GPIO drop.
+  With the Bluetooth node, a regulator owns `gph2-5`: `hci_qca` raises it
+  for the firmware download a few seconds into boot, drops it when
+  Bluetooth goes down, and the controller boots unconfigured (no address),
+  so the buck goes up, down, and up again once the address service runs.
+  Before a Wi-Fi harness takes the pin on such a kernel, unbind the
+  Bluetooth serdev (`echo serial0-0 > /sys/bus/serial/drivers/hci_uart_qca/unbind`),
+  and record for every run whether its kernel had the Bluetooth node and
+  how the buck was dropped before the load. A cold read before the first-ever BHI still needs the
   calibration load held back on a stock phone (vendor init edited, or a
   build whose init does not write `fs_ready`).
 - Two registers that read 0 on mainline after the stall are nonzero under
@@ -254,10 +267,11 @@ below.
    lines between the probe and the second assert in a full-Android log,
    to confirm the first load goes through the calibration handler. This
    phone's two stock boots already show it (section 2). Then the stock-kernel
-   diagnostic boot again, same 52 modules, Bluetooth off, with one change:
-   write `1` to `cnss2`'s `fs_ready` attribute, as `init.lynx.rc` does,
-   instead of `powerup`. Nothing is mounted and the calibration result stays
-   in memory, so nothing is written to storage. Stop conditions as before:
+   diagnostic boot again, the 52 modules of the USB profile plus the 16 of
+   the CNSS profile (item 2), Bluetooth off, with one change: write `1` to
+   `cnss2`'s `fs_ready` attribute, as `init.lynx.rc` does, instead of
+   `powerup`. Nothing is mounted and the calibration result stays in
+   memory, so nothing is written to storage. Stop conditions as before:
    the watchdog armed, no windowed reads before `mhi_sync_power_up()`, the
    same stall timeout.
    - **Pass:** the first good load outside full Android, on a kernel and
@@ -266,10 +280,42 @@ below.
      step compares that boot with step 6 at the same points.
    - **Stall:** full Android does something else before the first BHI that
      the diagnostic doesn't. Go to item 2.
+   - **Done 2026-10-27, stalled** (FlorencioJP's phone, run 17, log
+     `stock-reference-last-console-17.log` on #36). Google's `boot.img`
+     kernel and `vendor_dlkm` modules, 68 modules, nothing mounted,
+     Bluetooth off (`btpower` loaded, rfkill soft-blocked, BT_EN low),
+     the watchdog armed, nothing read before `mhi_sync_power_up()`.
+     Probe: `BUCK GPIO: [0]` / `drive it HIGH` 5.584 s, `cannot receive
+     L23_READY` 5.781 s. `fs_ready` written at 10.800 s, state
+     `IN_COLD_BOOT_CAL | PCI PROBE DONE` (`0x400008`), the handler's 5 s
+     wait, then `BUCK GPIO: [1]` 15.844 s (WLAN_EN low for 10 s, the buck
+     held), `Starting image download via BHI` 16.001 s, `BHI_EXECENV 0`,
+     `BHI_STATUS 0`, `BHI_ERRDBG1 0xfad00000`, `BHI_ERRDBG3 0x80000` on
+     every dump from 23.0 s to 73.2 s, `MHI did not load image over BHI,
+     ret: -110` at 76.772 s. So Google's host stack, Google's trigger and
+     the 5 s wait together are not the pair.
 2. **What full Android does to the chip between the probe and the first
    BHI.** Bluetooth was the first candidate and is ruled out (section 2).
-   Next, read-only: the diagnostic's 52 modules against what full Android
-   has loaded by the first BHI.
+   Read-only background, no boots spent on it (FlorencioJP, #36
+   2026-10-28): full Android's second-stage `init` logs 177 `Loaded kernel
+   module` lines before its first BHI (10.404 s in boot trace 1); 142 of
+   them are not in the diagnostic and 33 of the diagnostic's are not in
+   that list. The 33 include `cnss2`, `mhi`, `qrtr` and
+   `pinctrl-exynos-gs`, which first-stage init loads without a `Loaded
+   kernel module` line, so the Android side of that comparison is
+   incomplete. The 142 are mostly display, audio, charging, Trusty, AoC,
+   thermal and debug; the ones that touch power or buses before 10 s and
+   that the diagnostic lacks are `cpif`/`google_modemctl` (the modem on
+   PCIe0), `google_bcl`, `exynos-acme`, `gs_thermal`, `bts`,
+   `slc_acpm`/`slc_pt`, `s2mpg12-powermeter`, `gsa`/`gsa_gsc`,
+   `trusty-*` and `sjtag-driver`; no causality is read into any of them.
+   The diagnostic's own set: the USB profile's 52 modules, plus the CNSS
+   profile's 16 in load order (`exynos-dm`, `exynos_devfreq`, `rfkill`,
+   `btpower`, `qrtr`, `qmi_helpers`, `wlan_firmware_service`,
+   `cnss_plat_ipc_qmi_svc`, `acpm_flexpmu_dbg`, `exynos-pm`,
+   `pcie-exynos-gs201-rc-cal`, `exynos-pcie-iommu`, `itmon`,
+   `pcie-exynos-gs`, `mhi`, `cnss2`); run 9 (2026-10-26) had the same
+   list without `rfkill` and `btpower`.
 3. **The cold stock read** (the maintainer's step 2 on #36, one host GPIO
    write). Turn Bluetooth off first: `btpower` drives `gph2-5` too. On
    stock, after `dev_boot shutdown` and `off`, drive `gph2-5` (GPIO 103) low
@@ -296,7 +342,7 @@ below.
    | `gph2-0` | PERST | input, low, pull-down; sleep input / down | output, no pull |
    | `gph2-1` | CLKREQ | input, high, no pull; sleep input / down | function 2, pull-up |
    | `gph2-4` | WLAN_EN | input, low, pull-down (FlorencioJP); here already output, low, no pull, claimed by `regulator-wlan-en` | output, pull-up active, pull-down asleep |
-   | `gph2-5` | buck | output, low, no pull | output, pull-down |
+   | `gph2-5` | buck | output, low, no pull (kernel without the Bluetooth node; section 5) | output, pull-down |
    | `gpa6-1` | host-wake | input, high, pull-down | EINT, pull-down |
 
    If a chip strap shares WLAN_EN or PERST, the pull-down is what the
@@ -324,6 +370,15 @@ below.
   `/usr/lib/firmware/updates/ath11k/WCN6855/hw2.1`: linux-firmware
   `amss.bin` and `m3.bin`, plus the phone's own calibration as
   `board.bin`. Nothing from the vendor image goes into this repository.
+- **Console capture on a stock-kernel diagnostic boot:** the ramoops
+  console (`/sys/fs/pstore`, collected into
+  `/var/lib/systemd/pstore/console-ramoops-0` on the next Linux boot)
+  survives only a **warm** return. A cold return loses it: the first two
+  `fs_ready` runs came back with an empty pstore, and so does a plain cold
+  `systemctl reboot` of mainline. The diagnostic's init writes `warm` to
+  `/sys/kernel/reboot/mode` before `reboot(bootloader)`; do the same
+  anywhere a stock-kernel console is wanted this way (FlorencioJP, #36
+  2026-10-28; applies to both phones).
 - **To resume:** read sections 6 and 7, re-check the live kernel, DT and
   the six protected hashes, then run the next item in section 7 as a gated
   step (expect, stop condition, rollback) and record the result here with

@@ -34,7 +34,8 @@
  *    is not the user's password: fprintd's own polkit check is what guards
  *    enrollment;
  *  - reads the touchscreen while an operation runs: a finger inside the
- *    sensor circle lights the circle (the panel's local_hbm_mode), then
+ *    sensor circle lights the circle (the panel's local_hbm_mode), then,
+ *    with the position scaled to panel pixels,
  *    onPointerDownWithContext and, a frame later, onUiReady; lifting the
  *    finger reverses that. The HAL reports halHandlesDisplayTouches and
  *    halControlsIllumination false, so both are the client's job.
@@ -230,6 +231,8 @@ static const char *inhibit_dir;		/* --inhibit: off unless given */
 /* The panel takes the circle at its next frame; a frame and a half at 60 Hz
  * would do, an idle panel may run at 10 Hz. Tuned in FINGERPRINT-PLAN F8. */
 static int lhbm_settle_ms = 120;
+/* --lhbm-first 1: light the circle before onPointerDown (the 9a) */
+static bool lhbm_first;
 /* The panel driver turns LHBM off after at most 3 s; refresh it meanwhile. */
 #define LHBM_REFRESH_MS	2000
 /* Sensor defaults (stock cheetah); getSensorProps() replaces them. */
@@ -934,20 +937,41 @@ static void lhbm(bool on)
 	lhbm_at = now_ms();
 }
 
+static int32_t touch_max_x, touch_max_y;	/* 0: unknown, no scaling */
+static int32_t scale(int32_t v, int32_t max, int32_t panel);
+
 static void pointer(bool down)
 {
 	AParcel *in = begin(session);
-	int64_t time = now_ms();
+	int64_t time;
 
-	if (down)
-		finger_since = time;
-	write_pointer(in, touch_x, touch_y, time, finger_since);
 	if (down) {
 		reply("FINGER DOWN");
+		/*
+		 * The 9a's HAL captures at pointer down, so the circle is lit
+		 * and settled first (--lhbm-first 1). The 7 Pro's waits for
+		 * onUiReady: pointer down, then the circle, then the settle.
+		 */
+		if (lhbm_first) {
+			lhbm(true);
+			if (lhbm_lit)
+				usleep(lhbm_settle_ms * 1000);
+		}
+		time = now_ms();
+		finger_since = time;
+	} else {
+		time = now_ms();
+	}
+	/* The HAL takes panel pixels, the frame of its sensor location. */
+	write_pointer(in, scale(touch_x, touch_max_x, panel_w),
+		      scale(touch_y, touch_max_y, panel_h), time, finger_since);
+	if (down) {
 		call_void(session, S_ON_POINTER_DOWN_WITH_CONTEXT, in, "onPointerDown");
-		lhbm(true);
-		if (lhbm_lit)
-			usleep(lhbm_settle_ms * 1000);
+		if (!lhbm_first) {
+			lhbm(true);
+			if (lhbm_lit)
+				usleep(lhbm_settle_ms * 1000);
+		}
 		call_void(session, S_ON_UI_READY, begin(session), "onUiReady");
 	} else {
 		call_void(session, S_ON_POINTER_UP_WITH_CONTEXT, in, "onPointerUp");
@@ -1026,7 +1050,6 @@ struct input_absinfo_ {
 	int32_t value, minimum, maximum, fuzz, flat, resolution;
 };
 #define EVIOCGABS_(abs)	_IOR('E', 0x40 + (abs), struct input_absinfo_)
-static int32_t touch_max_x, touch_max_y;	/* 0: unknown, no scaling */
 
 static void touch_range(void)
 {
@@ -1465,7 +1488,7 @@ static void usage(void)
 {
 	say("usage: omamobile-fp-bridge [--socket PATH] [--state DIR] [--touch EVDEV]\n"
 	    "                           [--lhbm PATH] [--settle MS] [--ui-state PATH]\n"
-	    "                           [--inhibit DIR] [--panel WxH]");
+	    "                           [--inhibit DIR] [--panel WxH] [--lhbm-first 0|1]");
 	exit(2);
 }
 
@@ -1487,6 +1510,8 @@ int main(int argc, char **argv, char **envp)
 			lhbm_path = v;
 		else if (!strcmp(argv[i], "--settle"))
 			lhbm_settle_ms = atoi(v);
+		else if (!strcmp(argv[i], "--lhbm-first"))
+			lhbm_first = atoi(v) != 0;
 		else if (!strcmp(argv[i], "--ui-state"))
 			ui_state_path = v;
 		else if (!strcmp(argv[i], "--inhibit"))

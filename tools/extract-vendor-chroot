@@ -82,6 +82,11 @@ profile_lists() {
         VENDOR_FILES+=(firmware/kepler.bin etc/gnss/gps.cfg etc/gnss/ca.pem
                        etc/init/init.gnss.rc)
         SYSTEM_DIRS+=(system/etc/security/cacerts)
+        # gnssd dlopen()s these (gps.cfg's GlueLayer_IsUseCustomGnssLib):
+        # libcustomgnss waits for the CP and opens RIL's GPS channel
+        # through libsitril-gps and libsitril-client (MODEM-PLAN G3).
+        VENDOR_LIBS+=(lib64/libcustomgnss.so lib64/libsitril-gps.so
+                      lib64/libsitril-client.so)
         # libandroid_net (gnssd) needs one symbol from the tethering APEX,
         # as gpsd on cheetah: the shim build provides a stub.
         STUB_LIBS=(libcom.android.tethering.connectivity_native.so)

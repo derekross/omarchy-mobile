@@ -8,8 +8,14 @@ source "$ROOT/omamobile.conf"
 [[ -f "$ROOT/omamobile.local.conf" ]] && source "$ROOT/omamobile.local.conf"
 
 WORK="${WORK:-$HOME/android}"
-KERNEL_DIR="${KERNEL_DIR:-$WORK/mainline/linux}"
-KERNEL_OUT="${KERNEL_OUT:-$WORK/mainline/out}"
+# The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
+# ~/omamobile-kernel, or $WORK/mainline on setups from before 2026-10-29.
+if [[ -z ${KERNEL_BASE:-} ]]; then
+  KERNEL_BASE=$HOME/omamobile-kernel
+  [[ -d $KERNEL_BASE || ! -d $WORK/mainline ]] || KERNEL_BASE=$WORK/mainline
+fi
+KERNEL_DIR="${KERNEL_DIR:-$KERNEL_BASE/linux}"
+KERNEL_OUT="${KERNEL_OUT:-$KERNEL_BASE/out}"
 REFERENCE_DIR="${REFERENCE_DIR:-$WORK/reference}"
 CLANG_DIR="${CLANG_DIR:-$(ls -d "$SRC_DIR"/prebuilts/clang/host/linux-x86/clang-r* 2>/dev/null | sort | tail -1 || true)}"
 
@@ -161,13 +167,16 @@ slot_b_allowed() { [[ " $DEV_UFS_RW " == *" ${1}_b "* ]]; }
 # vendor_kernel_boot.
 has_image() { [[ " $DEV_BOOT_IMAGES " == *" $1 "* ]]; }
 
-# Run a command in the build container with the work tree and this repo mounted.
+# Run a command in the build container with the work tree, the kernel tree
+# and this repo mounted.
 in_container() {
-  local tty=()
+  local tty=() kernel=()
   [[ -t 0 && -t 1 ]] && tty=(-it)
+  [[ $KERNEL_BASE == "$WORK" || $KERNEL_BASE == "$WORK"/* || ! -d $KERNEL_BASE ]] ||
+    kernel=(-v "$KERNEL_BASE:$KERNEL_BASE")
   docker run --rm "${tty[@]}" \
     --hostname omamobile-build \
-    -v "$WORK:$WORK" -v "$ROOT:$ROOT" \
+    -v "$WORK:$WORK" -v "$ROOT:$ROOT" "${kernel[@]}" \
     -e PATH="$CLANG_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     -w "$KERNEL_DIR" \
     "$IMAGE" bash -c "$1"

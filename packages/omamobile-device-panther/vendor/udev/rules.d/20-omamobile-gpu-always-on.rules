@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: keep the Mali-G710 powered while Panthor drives it. Powering the
+# GPU domain back up needs a secure restore call (SMC) our kernel doesn't make
+# yet (device/cheetah/GPU-PLAN.md), so runtime suspend must never happen.
+# Remove once a gs201 power-domain driver handles G3D properly.
+ACTION=="add|bind", SUBSYSTEM=="platform", KERNEL=="28000000.gpu", ATTR{power/control}="on"

@@ -19,7 +19,8 @@
 #   ufs-delay   A = Hibern8 after 150 ms idle (kernel default), B = after
 #               --delay-ms (default 4, the stock Android value)
 #   s2idle      A = awake, B = frozen in s2idle for the whole phase
-#               (rtcwake -m freeze, frozen again after an early wake). Turn
+#               (rtcwake -m freeze, or --suspend systemd; frozen again
+#               after an early wake). Turn
 #               the screen off after unplugging: both phases assume it off.
 #               Nothing runs while frozen, so both phases are measured
 #               from the gauge's charge counter (1 mAh steps: use phases of
@@ -38,6 +39,9 @@
 #   --user-units "U..."  user units for the units test
 #   --user NAME     whose user units (default: the first logged-in user)
 #   --detach        re-run itself with setsid/nohup and return at once
+#   --suspend HOW   s2idle: "rtcwake" freezes straight through /sys/power/state
+#                   (default); "systemd" arms the RTC and runs systemctl suspend,
+#                   so the system-sleep hooks run (the 9a's NFC hook must)
 #
 # Output: /var/lib/omamobile/power/<time>-<test>.csv (one sample a second:
 # time, phase, voltage_now uV, current_now uA, current_avg uA,
@@ -50,7 +54,7 @@
 
 set -uo pipefail
 
-unplug=60 phase=120 settle=20 rounds=4 delay_ms=4 detach=0 test=
+unplug=60 phase=120 settle=20 rounds=4 delay_ms=4 detach=0 test= suspend=rtcwake
 units= user_units= uname=
 
 usage() { sed -n '/^# Usage/,/^# See /p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -58,6 +62,7 @@ usage() { sed -n '/^# Usage/,/^# See /p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:
 while (($#)); do
   case "$1" in
     --unplug) unplug="${2:?}"; shift ;;
+    --suspend) suspend="${2:?}"; shift ;;
     --phase) phase="${2:?}"; shift ;;
     --settle) settle="${2:?}"; shift ;;
     --rounds) rounds="${2:?}"; shift ;;
@@ -77,7 +82,7 @@ done
 
 if ((detach)); then
   args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms"
-        --units "$units" --user-units "$user_units" --user "$uname" "$test")
+        --units "$units" --user-units "$user_units" --user "$uname" --suspend "$suspend" "$test")
   setsid nohup "$0" "${args[@]}" > /dev/null 2>&1 < /dev/null &
   echo "power-ab: started (pid $!); unplug within ${unplug} s"
   exit 0
@@ -101,7 +106,20 @@ case "$test" in
   s2idle)
     command -v rtcwake >/dev/null && grep -qw s2idle /sys/power/mem_sleep \
       || { echo "power-ab: needs rtcwake and s2idle" >&2; exit 1; }
-    [[ -r "$bat/charge_counter" ]] || { echo "power-ab: the gauge has no charge_counter" >&2; exit 1; } ;;
+    case "$suspend" in
+      rtcwake) ;;
+      systemd)
+        # systemctl suspend enters what sleep.conf and mem_sleep resolve to;
+        # deep never wakes on these phones, so refuse unless that is s2idle
+        msm=$(systemd-analyze cat-config systemd/sleep.conf 2>/dev/null |
+              sed -n 's/^MemorySleepMode=//p' | tail -n1)
+        if [[ -n $msm ]]; then [[ ${msm%% *} == s2idle ]]
+        else grep -q '\[s2idle\]' /sys/power/mem_sleep; fi ||
+          { echo "power-ab: systemctl suspend would not enter s2idle here" >&2; exit 1; } ;;
+      *) echo "power-ab: --suspend takes rtcwake or systemd, not '$suspend'" >&2; exit 1 ;;
+    esac
+    [[ -r "$bat/charge_counter" || -r "$bat/charge_now" ]] \
+      || { echo "power-ab: the gauge has neither charge_counter nor charge_now" >&2; exit 1; } ;;
   units)
     [[ -n "$units$user_units" ]] || { echo "power-ab: units needs --units or --user-units" >&2; exit 1; } ;;
 esac
@@ -162,7 +180,7 @@ stamp=$(date +%Y%m%d-%H%M%S)
 csv="$out/$stamp-$test.csv" txt="$out/$stamp-$test.txt"
 
 {
-  echo "# power-ab $test: phase ${phase}s settle ${settle}s rounds $rounds unplug ${unplug}s delay_ms $delay_ms"
+  echo "# power-ab $test: phase ${phase}s settle ${settle}s rounds $rounds unplug ${unplug}s delay_ms $delay_ms suspend $suspend"
   echo "# kernel $(uname -r); battery $bat; ufs ${ufs:-none}"
   [[ $test == units ]] && echo "# units: ${usys[*]}; user units ($uname): ${uusr[*]}"
   echo "time,phase,voltage_uv,current_ua,current_avg_ua,charge_counter_uah,charge_now_uah"
@@ -187,7 +205,20 @@ freeze_phase() { # one B phase of s2idle: frozen until the phase is over
   sample B-freeze
   sync
   while left=$(( phase - ($(date +%s) - t0) )); (( left > 5 )); do
-    rtcwake -m freeze -s "$left" > /dev/null 2>&1 || { echo "# rtcwake failed at $(date +%s)" >> "$csv"; sleep 1; }
+    if [[ $suspend == systemd ]]; then
+      # the sleep hooks run before the kernel freezes: with less than 30 s
+      # left the alarm could fire while still awake, so stay awake instead
+      if (( left < 30 )); then sleep "$left"; break; fi
+      # the RTC alarm, then systemd's suspend (hooks included); back when the
+      # success count moves or the alarm is well past
+      local s0 t1
+      s0=$(cat /sys/power/suspend_stats/success 2>/dev/null || echo 0); t1=$(date +%s)
+      rtcwake -m no -s "$left" > /dev/null 2>&1 || { echo "# rtcwake failed at $(date +%s)" >> "$csv"; sleep 1; continue; }
+      systemctl suspend > /dev/null 2>&1 || { echo "# systemctl suspend failed at $(date +%s)" >> "$csv"; sleep 5; continue; }
+      while [[ $(cat /sys/power/suspend_stats/success 2>/dev/null || echo 0) == "$s0" ]] && (( $(date +%s) - t1 < left + 60 )); do sleep 2; done
+    else
+      rtcwake -m freeze -s "$left" > /dev/null 2>&1 || { echo "# rtcwake failed at $(date +%s)" >> "$csv"; sleep 1; }
+    fi
   done
   sample B-end
 }
@@ -229,9 +260,12 @@ awk -F, -v test="$test" '
   }' "$csv" > "$txt"
 # From the charge counter (column 6, QH) and, as a cross-check, the
 # reported remaining charge (column 7, RepCap, which the gauge's model also
-# corrects): the charge used per phase over its duration. A phase spans its
+# corrects; the only one a gauge without charge_counter, such as the Pixel
+# 9a's, gives): the charge used per phase over its duration. A phase spans its
 # first counted sample (after the settle) to its last; B (s2idle) its
 # B-freeze row to its B-end row. 1 mAh steps: longer phases, finer numbers.
+# (reported charge is the gauge's model-corrected remaining charge: coarser
+# than a coulomb counter, and the only sleep figure on a gauge without one)
 for col in 6:"charge counter" 7:"reported charge"; do
 awk -F, -v c="${col%%:*}" -v name="${col#*:}" '
   /^#/ || $1 == "time" || $c == "" { next }

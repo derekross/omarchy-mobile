@@ -49,13 +49,23 @@ case $DEVICE in
   cheetah)
     TA=g7.app
     KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.trusty
-    PANEL=1440x3120 ;;
+    # the 7 Pro's HAL got a bare "on" and the circle after pointer down,
+    # and matches with both
+    PANEL=1440x3120 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0
+    PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0 ;;
   tegu)
     TA=g7a.app
     KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.rust.trusty
-    PANEL=1080x2424 ;;
+    # Google's panel_name is the DSI device's name, from the bootloader's
+    # "google-tg4c" panel; OMAMOBILE_FP_PANEL_NAME overrides it.
+    # the 9a's Trusty stores as block devices (FINGERPRINT-PLAN D1, F4b)
+    # the 9a's HAL parses the rate after the "@" of gs_panel's state line
+    # ("On: WxH@Hz") and captures at pointer down, so the circle comes first
+    PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST=1
+    PANEL_NAME=google-tg4c MAP_STORES=1 ;;
   *) echo "omamobile-fp: unknown device '$DEVICE' (cheetah, tegu)" >&2; exit 1 ;;
 esac
+PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
 PROPS_DEVICE=${OMAMOBILE_FP_PROPS_DEVICE:-/usr/lib/omamobile-fp/props-$DEVICE.conf}
 STATE=${OMAMOBILE_FP_STATE:-/var/lib/omamobile-fp}
 RUN=/run/omamobile-fp
@@ -177,14 +187,17 @@ setup_sys() {
     [[ -d /sys/module/$m ]] && bind "/sys/module/$m" "$sys/module/$m"
   done
   mkdir -p "$sys/devices/platform/exynos-drm/primary-panel"
-  echo sdc-s6e3hc4 > "$sys/devices/platform/exynos-drm/primary-panel/panel_name"
-  echo 60 > "$sys/devices/platform/exynos-drm/primary-panel/op_hz"
+  echo "$PANEL_NAME" > "$sys/devices/platform/exynos-drm/primary-panel/panel_name"
+  # The 9a's HAL reads the refresh rate from the backlight state, after its
+  # "@" (gs_panel's "On: WxH@Hz"); a bare "on" logs "Failed to parse refresh
+  # rate". PANEL_STATE is per device: the 7 Pro keeps its bare "on".
+  echo "$PANEL_HZ" > "$sys/devices/platform/exynos-drm/primary-panel/op_hz"
   # The panel driver's backlight device carries local_hbm_mode and
   # local_hbm_max_timeout; expose it under Google's name.
   bl=$(grep -l . /sys/class/backlight/*/local_hbm_mode 2>/dev/null | head -1 || true)
   mkdir -p "$sys/class/backlight/panel0-backlight"
   echo 0 > "$sys/class/backlight/panel0-backlight/hbm_mode"
-  echo on > "$sys/class/backlight/panel0-backlight/state"
+  echo "$PANEL_STATE" > "$sys/class/backlight/panel0-backlight/state"
   if [[ -n $bl ]]; then
     bl=$(dirname "$bl")
     bind "$bl/local_hbm_mode" "$sys/class/backlight/panel0-backlight/local_hbm_mode"
@@ -230,10 +243,36 @@ setup_dev() {
     install -m 0600 "$STATE/mfg_data.img" /run/omamobile-fp/mfg_data.img
     bind /run/omamobile-fp/mfg_data.img "$dev/block/by-name/mfg_data"
   fi
+  # Trusty's tamper-detect stores as block devices, as stock maps them
+  # (td: trusty_userdata, tdp: trusty_persist), each a loop device of a
+  # Linux-owned image in $STATE: storageproxyd takes its size limit (-m)
+  # only from a block device. Absent images keep the files in /data.
+  local name img loop
+  for name in td tdp; do
+    img=$STATE/$name.img
+    ((MAP_STORES)) && [[ -f $img ]] || continue
+    loop=$(losetup -j "$img" | cut -d: -f1 | head -1)
+    [[ -n $loop ]] || loop=$(losetup -f --show "$img")
+    bind "$loop" "$dev/block/ss-$name"
+  done
   # the target lives in the tmpfs just mounted on dev: create it first
   mkdir -p "$dev/__omamobile_props__"
   mount -t tmpfs -o mode=0755,nosuid,nodev,noexec props "$dev/__omamobile_props__"
   write_props "$dev/__omamobile_props__"
+}
+
+# Link a store path to its block device. A store already there (a file from
+# an earlier unmapped run, or the 7 Pro's restored copy) is moved aside with
+# a timestamp, never deleted: losing Trusty's state is never a side effect.
+link_store() {
+  local dev=$1 path=$2 aside
+  [[ -L $path && $(readlink "$path") == "$dev" ]] && return 0
+  if [[ -e $path || -L $path ]]; then
+    aside=$path.before-map.$(date +%Y%m%d%H%M%S)
+    mv -- "$path" "$aside" || die "can't move $path aside"
+    say "moved the existing $path to $aside"
+  fi
+  ln -s "$dev" "$path"
 }
 
 setup_data() {
@@ -248,6 +287,14 @@ setup_data() {
   # Linux-owned copy; FINGERPRINT-RESEARCH.md section 6 explains why.
   mkdir -p "$ROOT/data/vendor/ss/persist"
   mount --bind "$STATE/persist-ss" "$ROOT/data/vendor/ss/persist"
+  # A mapped store needs its link in place before storageproxyd starts, as
+  # on stock: without it storageproxyd answers "pending symlink" and Trusty
+  # reads the store as empty.
+  if ((MAP_STORES)); then
+    [[ -f $STATE/td.img ]] && link_store /dev/block/ss-td "$STATE/data/vendor/ss/0"
+    [[ -f $STATE/tdp.img ]] && link_store /dev/block/ss-tdp "$STATE/persist-ss/0"
+  fi
+  return 0
 }
 
 # Build the chroot in the current (private) mount namespace.
@@ -335,8 +382,13 @@ start() {
   sleep 1
   # storageproxyd sets ro.vendor.trusty.storage.fs_ready=1 once Trusty's
   # storage is mounted; trusty_apploader blocks until it runs.
+  local maps=()
+  if ((MAP_STORES)); then
+    [[ -f $STATE/td.img ]] && maps+=(-f 0:/dev/block/ss-td -m /dev/block/ss-td)
+    [[ -f $STATE/tdp.img ]] && maps+=(-f persist/0:/dev/block/ss-tdp)
+  fi
   spawn storageproxyd vendor /vendor/bin/storageproxyd -d /dev/trusty-ipc-dev0 \
-    -r /dev/sg-rpmb -p /data/vendor/ss -t ufs
+    -r /dev/sg-rpmb -p /data/vendor/ss -t ufs "${maps[@]}"
   wait_prop ro.vendor.trusty.storage.fs_ready 1 60 ||
     die "storageproxyd did not report fs_ready in 60 s"
   say "secure storage ready"
@@ -376,6 +428,7 @@ start() {
       --socket /dev/socket/omamobile-fp/bridge.sock --touch /dev/input/touchscreen \
       --ui-state /dev/socket/omamobile-fp-ui/state.json \
       --inhibit /dev/socket/omamobile-fp-ui/inhibit --panel "$PANEL" \
+      --lhbm-first "$LHBM_FIRST" \
       ${OMAMOBILE_FP_LHBM_SETTLE_MS:+--settle "$OMAMOBILE_FP_LHBM_SETTLE_MS"}
   fi
 

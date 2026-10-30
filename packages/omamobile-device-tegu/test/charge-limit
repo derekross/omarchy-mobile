@@ -1,0 +1,32 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-tegu-charge-limit in a scratch root: a percentage is written to
+# the charger, anything else is refused and leaves the charger alone.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script=$PWD/bin/omamobile-tegu-charge-limit
+fail() { printf 'not ok - charge-limit: %s\n' "$1" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export OMAMOBILE_TEGU_ROOT=$tmp/root
+file=$OMAMOBILE_TEGU_ROOT/etc/omamobile/charge-limit
+threshold=$OMAMOBILE_TEGU_ROOT/sys/class/power_supply/max77779-charger/charge_control_end_threshold
+mkdir -p "${file%/*}" "${threshold%/*}"
+echo 100 > "$threshold"
+
+"$script" || fail "no file is not an error"
+[[ $(cat "$threshold") == 100 ]] || fail "no file changed the charger"
+echo 80 > "$file"
+out=$("$script") || fail "80 is refused"
+[[ $(cat "$threshold") == 80 && $out == *"charge limit 80 %"* ]] || fail "80 was not written: $out"
+printf ' 090\n' > "$file"
+"$script" >/dev/null || fail "a padded number is refused"
+[[ $(cat "$threshold") == 90 ]] || fail "090 was not written as 90"
+for bad in abc 0 101 -5 8.5; do
+  echo "$bad" > "$file"
+  "$script" >/dev/null 2>&1 && fail "$bad was accepted"
+  [[ $(cat "$threshold") == 90 ]] || fail "$bad changed the charger"
+done
+rm -f "$threshold"
+echo 80 > "$file"
+"$script" >/dev/null || fail "a missing charger is an error"
+echo 'ok - charge-limit: percentages only, the charger otherwise untouched'

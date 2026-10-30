@@ -31,7 +31,7 @@
 #     --device CODENAME      repository mode: device/CODENAME/device.conf (default
 #                            $DEVICE or cheetah); in a bundle, its device.conf
 #     --images DIR           the slot B images (repository default:
-#                            $KERNEL_OUT/images, KERNEL_OUT=~/android/mainline/out-int)
+#                            $KERNEL_OUT/images, KERNEL_OUT=$KERNEL_BASE/out-int)
 #     --rootfs FILE          the root image (.img.zst; default: the newest
 #                            omamobile-rootfs-*-aarch64.img.zst in out/, or
 #                            beside a bundle)
@@ -90,7 +90,12 @@ else
   device=${device:-${DEVICE:-cheetah}}
   [[ $device =~ ^[a-z0-9]+$ ]] || die "--device must be a codename"
   conf=$repo/device/$device/device.conf
-  images=${images:-${KERNEL_OUT:-$HOME/android/mainline/out-int}/images}
+  # KERNEL_BASE: ~/omamobile-kernel, or ~/android/mainline on older setups.
+  if [[ -z ${KERNEL_BASE:-} ]]; then
+    KERNEL_BASE=$HOME/omamobile-kernel
+    [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
+  fi
+  images=${images:-${KERNEL_OUT:-$KERNEL_BASE/out-int}/images}
   if [[ -z $rootfs ]]; then
     for f in "$repo"/out/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
   fi

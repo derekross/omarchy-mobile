@@ -1,0 +1,48 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The charger's battery temperature guard (max77759_charger temp_guard,
+# device/cheetah/USB-C-PLAN.md gate B3g; on raven device/raven/USB-PLAN.md
+# section 4): stock's step-charging policy,
+# no charge outside 0-55 C. Off unless turned on here or by modprobe option.
+#   omamobile-charge-guard status   what the guard sees and what it set
+#   omamobile-charge-guard on|off   switch it at runtime (root)
+set -euo pipefail
+
+param=/sys/module/max77759_charger/parameters/temp_guard
+bat=/sys/class/power_supply/max170xx_battery
+chg=/sys/class/power_supply/max77759-charger
+
+read_or() { cat "$1" 2>/dev/null || echo "${2-?}"; }  # an empty default stays empty
+
+status() {
+  if [[ -r $param ]]; then
+    echo "guard:            $(read_or $param)"
+  else
+    echo "guard:            max77759_charger not loaded"
+  fi
+  local t; t=$(read_or "$bat/temp" "")
+  if [[ -n $t ]]; then
+    printf 'battery temp:     %d.%d C\n' $((t / 10)) $(((t < 0 ? -t : t) % 10))
+  else
+    echo "battery temp:     no reading"
+  fi
+  echo "battery voltage:  $(( $(read_or "$bat/voltage_now" 0) / 1000 )) mV"
+  echo "battery current:  $(( $(read_or "$bat/current_now" 0) / 1000 )) mA"
+  echo "charger status:   $(read_or "$chg/status") ($(read_or "$chg/charge_type"), health $(read_or "$chg/health"))"
+  # this driver reports the float voltage in mV, the currents in uA
+  echo "float voltage:    $(read_or "$chg/constant_charge_voltage_max") mV"
+  echo "fast charge:      $(( $(read_or "$chg/constant_charge_current_max" 0) / 1000 )) mA"
+  echo "input limit:      $(( $(read_or "$chg/input_current_limit" 0) / 1000 )) mA"
+  echo "last guard messages:"
+  journalctl -k -b --no-pager -o cat 2>/dev/null | grep -E "max77759-charger.*(guard|band|inhibit|no reading)" | tail -5 | sed 's/^/  /' || true
+}
+
+case "${1:-status}" in
+  status) status ;;
+  on|off)
+    [[ -w $param ]] || { echo "max77759_charger not loaded, or not root" >&2; exit 1; }
+    [[ $1 == on ]] && echo 1 > "$param" || echo 0 > "$param"
+    echo "temp_guard=$(cat $param); applied within 30 s"
+    ;;
+  *) echo "Usage: omamobile-charge-guard [status|on|off]" >&2; exit 1 ;;
+esac

@@ -55,7 +55,9 @@ check() { results+=("$1|$2|$3|${4:-}"); }
 # The desktop user (uid 1000 on our images) for user units and the session bus.
 user=$(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" {print $2; exit}')
 uid=$(id -u "$user" 2>/dev/null || true)
-as_user() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"; }
+# From the laptop this script arrives on bash's stdin, so a command that reads
+# stdin would swallow the rest of it: nothing here may read it.
+as_user() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@" </dev/null; }
 
 # ---------------------------------------------------------------- boot
 release=$(uname -r)
@@ -227,7 +229,10 @@ hot=$(for z in /sys/class/thermal/thermal_zone*/temp; do cat "$z" 2>/dev/null; d
 [[ -n $hot ]] && check ok 0 "thermal" "hottest zone $((hot / 1000)) °C"
 
 # ---------------------------------------------------------------- versions
-pkgs=$(pacman -Q 2>/dev/null | grep -E '^(omamobile[-a-z]*|omacam|omatel[-a-z]*|omaphone|omamessages|omarchy|mesa|libcamera|hyprland|quickshell) ' | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+# pacman -Q also loads the sync databases, and one signed by a key the phone
+# doesn't trust (a --local build's) makes it ask on stderr whether to import
+# the key, reading the answer from stdin: the rest of this script.
+pkgs=$(pacman -Q </dev/null 2>/dev/null | grep -E '^(omamobile[-a-z]*|omacam|omatel[-a-z]*|omaphone|omamessages|omarchy|mesa|libcamera|hyprland|quickshell) ' | tr '\n' ',' | sed 's/,$//; s/,/, /g')
 
 # ---------------------------------------------------------------- report
 device=${SMOKE_DEVICE:-unknown}

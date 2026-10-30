@@ -30,13 +30,20 @@
 # to the whole userdata partition on the first boot.
 #
 #   tools/build-rootfs [--version V] [--allow-missing "PKG..."] [--keep-raw]
+#                      [--local NAME]
 #     DEVICE       device/<codename>/device.conf (default cheetah)
 #     KERNEL_OUT   kernel build with modules-<release>.tar.zst
-#                  (default ~/android/mainline/out-int: bin/omamobile modules)
+#                  (default $KERNEL_BASE/out-int: bin/omamobile modules)
 #     --allow-missing   build even if these packages of ours aren't in out/repo
 #                       (say "mesa hyprland libcamera libcamera-ipa
 #                       gst-plugin-libcamera vulkan-panfrost" for a test image
 #                       without the slow builds; the MANIFEST lists them)
+#     --local NAME      a contributor's image for device NAME (review lesson
+#                       L-7): the repository is out/NAME/repo (build-packages
+#                       --local NAME), the image goes to out/NAME/, and the
+#                       build image trusts keys/NAME's public key. DEVICE
+#                       defaults to NAME. The phone does not trust that key:
+#                       see docs/RELEASES.md §10
 set -euo pipefail
 # debugfs and friends live in /sbin on Debian-like hosts
 export PATH=$PATH:/usr/sbin:/sbin
@@ -44,21 +51,38 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
 
+DEVICE_SET=${DEVICE:+1}  # --local defaults DEVICE to its codename
 DEVICE=${DEVICE:-cheetah}
-KERNEL_OUT=${KERNEL_OUT:-$HOME/android/mainline/out-int}
+# The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
+# ~/omamobile-kernel, or ~/android/mainline on setups from before 2026-10-29.
+if [[ -z ${KERNEL_BASE:-} ]]; then
+  KERNEL_BASE=$HOME/omamobile-kernel
+  [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
+fi
+KERNEL_OUT=${KERNEL_OUT:-$KERNEL_BASE/out-int}
 VERSION=$(date +%Y.%m.%d)
-ALLOW_MISSING="" KEEP_RAW=0
+ALLOW_MISSING="" KEEP_RAW=0 LOCAL=""
 while (($#)); do
   case $1 in
     --version) VERSION=${2:?}; shift ;;
     --allow-missing) ALLOW_MISSING=${2:?}; shift ;;
     --keep-raw) KEEP_RAW=1 ;;
-    -h|--help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --local) LOCAL=${2:?}; shift ;;
+    -h|--help) sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) alarm_die "unknown argument $1" ;;
   esac
   shift
 done
 [[ $VERSION =~ ^[0-9A-Za-z._-]+$ ]] || alarm_die "bad version '$VERSION'"
+outrel=out
+if [[ -n $LOCAL ]]; then
+  [[ $LOCAL =~ ^[a-z0-9]+$ ]] || alarm_die "--local needs a device codename"
+  [[ -n $DEVICE_SET ]] || DEVICE=$LOCAL
+  [[ $DEVICE == "$LOCAL" ]] || alarm_die "--local $LOCAL builds device $LOCAL, not DEVICE=$DEVICE"
+  [[ -f keys/$LOCAL/public.asc ]] || alarm_die "no keys/$LOCAL/public.asc (run: tools/local-key-init $LOCAL)"
+  export ALARM_LOCAL_KEY=$ROOT/keys/$LOCAL/public.asc
+  outrel=out/$LOCAL
+fi
 [[ $DEVICE =~ ^[a-z0-9]+$ ]] || alarm_die "DEVICE must be a codename"
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || alarm_die "no $conf"
@@ -67,16 +91,16 @@ DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
 ROOTFS_PACKAGES=$(sed -n 's/^ROOTFS_PACKAGES="\(.*\)"$/\1/p' "$conf")
 [[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
 
-repo=out/repo/aarch64
+repo=$outrel/repo/aarch64
 [[ -f $repo/omamobile.db ]] ||
-  alarm_die "no [omamobile] repository in out/repo: build it first with tools/build-packages (or tools/repo-build)"
+  alarm_die "no [omamobile] repository in $outrel/repo: build it first with tools/build-packages${LOCAL:+ --local $LOCAL} (or tools/repo-build)"
 [[ -f $KERNEL_OUT/include/config/kernel.release ]] || alarm_die "no kernel build in $KERNEL_OUT (KERNEL_OUT=...)"
 release=$(cat "$KERNEL_OUT/include/config/kernel.release")
 modules=$KERNEL_OUT/modules-$release.tar.zst
 [[ -f $modules ]] || alarm_die "no $modules: run KERNEL_OUT=$KERNEL_OUT bin/omamobile modules"
 
 name=omamobile-rootfs-$VERSION-aarch64
-out=$ROOT/out
+out=$ROOT/$outrel
 mkdir -p "$out"
 work=$out/.rootfs-$VERSION
 rm -rf "$work"; mkdir -p "$work"
@@ -92,7 +116,7 @@ start=$(date +%s)
 alarm_say "Building $name for $DEVICE (kernel $release)"
 commit=$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD -- rootfs packages tools device 2>/dev/null || echo "-dirty")
 docker run --rm --privileged --platform linux/arm64 \
-  -v "$ROOT:/src:ro" -v "$ROOT/out/repo:/repo:ro" -v "$modules:/modules:ro" \
+  -v "$ROOT:/src:ro" -v "$ROOT/$outrel/repo:/repo:ro" -v "$modules:/modules:ro" \
   -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
   -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
   -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" \

@@ -31,6 +31,11 @@ OMARCHY_CHANNEL=${OMARCHY_CHANNEL:-stable}
 # The keyring that signs [omarchy], taken from this (Omarchy) laptop, which
 # already trusts it: the container can't bootstrap that trust on its own.
 OMARCHY_KEYRING_DIR=${OMARCHY_KEYRING_DIR:-/usr/share/pacman/keyrings}
+# A contributor's local signing key (tools/local-key-init; --local in
+# build-packages and build-rootfs): the path of its exported public key.
+# When set, the build image also trusts that key, locally signed, and only
+# there: phones and the published repository never see it.
+ALARM_LOCAL_KEY=${ALARM_LOCAL_KEY:-}
 
 alarm_say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 alarm_die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
@@ -90,7 +95,8 @@ alarm_base_image() {
 }
 
 # The build image: the base plus initialised keyrings (Arch Linux ARM's,
-# Omarchy's from this laptop, Omarchy Mobile's from packages/), the build
+# Omarchy's from this laptop, Omarchy Mobile's from packages/, and
+# $ALARM_LOCAL_KEY when set, which is part of the image's hash), the build
 # pacman.conf, base-devel, arch-install-scripts and a "builder" user with
 # this laptop's uid. Prints its tag. $1: the repository root.
 alarm_build_image() {
@@ -102,6 +108,10 @@ alarm_build_image() {
   ctx=$(mktemp -d)
   cp "$OMARCHY_KEYRING_DIR"/omarchy{.gpg,-trusted,-revoked} "$ctx/"
   cp "$root"/packages/omamobile-keyring/omamobile{.gpg,-trusted,-revoked} "$ctx/"
+  if [[ -n $ALARM_LOCAL_KEY ]]; then
+    [[ -f $ALARM_LOCAL_KEY ]] || alarm_die "no local key $ALARM_LOCAL_KEY"
+    cp "$ALARM_LOCAL_KEY" "$ctx/local.asc"
+  fi
   cp "$root/tools/lib/alarm-setup" "$ctx/setup"
   hash=$( (echo "$base $OMARCHY_CHANNEL $(id -u)"; cat "$ctx"/*) | sha256sum | cut -c1-16)
   tag=omamobile-alarm-build:$hash

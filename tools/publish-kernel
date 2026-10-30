@@ -10,7 +10,13 @@
 #   tools/publish-kernel [branch] [upstream-tag]   (defaults: omamobile v7.3-rc6)
 set -euo pipefail
 
-linux=${KERNEL_DIR:-$HOME/android/mainline/linux}
+# The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
+# ~/omamobile-kernel, or ~/android/mainline on setups from before 2026-10-29.
+if [[ -z ${KERNEL_BASE:-} ]]; then
+  KERNEL_BASE=$HOME/omamobile-kernel
+  [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
+fi
+linux=${KERNEL_DIR:-$KERNEL_BASE/linux}
 branch=${1:-omamobile}
 tag=${2:-v7.3-rc6}
 remote=git@github.com:derekross/linux-omarchy-mobile.git

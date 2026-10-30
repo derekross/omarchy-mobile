@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# systemd-sleep hook for the Pixel 9a's NFC (ST54L on nxp-nci). Polling
+# through s2idle reset the palmtop (2026-10-27); with the poll loop stopped
+# first, every cycle since has woken (35 of 35 that day). So before the
+# sleep: stop neard's poll loop, read Polling back and log it. After the
+# wake: start the poll loop again if it was polling. Nothing happens
+# without neard, or with the adapter off.
+#
+# Powering the adapter off as well (the kernel refuses a device-down while
+# polling, EBUSY, so the poll loop stops first) was the workaround for a
+# controller that didn't answer on I2C after a wake: the symptom is
+# https://github.com/derekross/omarchy-mobile/issues/132, the fix
+# https://github.com/derekross/linux-omarchy-mobile/pull/131. That step is
+# off by default: it runs only while /etc/omamobile/nfc-power-off-across-sleep
+# exists (its record is one wake that needed the power key and one that
+# worked), and then the adapter is powered on again after the wake.
+# Logs every step to /var/log/omamobile/nfc-sleep.log.
+# OMAMOBILE_TEGU_ROOT: a scratch root for the package tests.
+root=${OMAMOBILE_TEGU_ROOT:-}
+A=/org/neard/nfc0
+D=$root/run/omamobile
+L=$root/var/log/omamobile/nfc-sleep.log
+POWER_OFF=$root/etc/omamobile/nfc-power-off-across-sleep
+mkdir -p "$D" "${L%/*}"
+log() { echo "$(date -Is) $1: $2" >> "$L"; }
+prop() { busctl get-property org.neard $A org.neard.Adapter "$1" 2>/dev/null; }
+is_true() { prop "$1" | grep -c true >/dev/null; }
+case "$1" in
+  pre)
+    rm -f "$D/nfc-was-polling" "$D/nfc-was-powered"
+    if ! is_true Powered; then
+      log pre "adapter off or no neard; nothing to do"
+      exit 0
+    fi
+    if is_true Polling; then
+      : > "$D/nfc-was-polling"
+      out=$(busctl call org.neard $A org.neard.Adapter StopPollLoop 2>&1) || log pre "StopPollLoop: $out"
+      for i in 1 2 3 4 5; do is_true Polling || break; sleep 0.2; done
+    fi
+    if [[ -e $POWER_OFF ]]; then
+      : > "$D/nfc-was-powered"
+      out=$(busctl set-property org.neard $A org.neard.Adapter Powered b false 2>&1) || log pre "Powered false: $out"
+      for i in 1 2 3 4 5; do is_true Powered || break; sleep 0.2; done
+    fi
+    log pre "polling=$(prop Polling) powered=$(prop Powered)"
+    sync
+    ;;
+  post)
+    if [[ -e $D/nfc-was-powered ]]; then
+      rm -f "$D/nfc-was-powered"
+      out=$(busctl set-property org.neard $A org.neard.Adapter Powered b true 2>&1) || log post "Powered true: $out"
+      for i in 1 2 3 4 5 6 7 8 9 10; do is_true Powered && break; sleep 0.3; done
+    fi
+    if [[ -e $D/nfc-was-polling ]]; then
+      rm -f "$D/nfc-was-polling"
+      out=$(busctl call org.neard $A org.neard.Adapter StartPollLoop s Initiator 2>&1) || log post "StartPollLoop: $out"
+    fi
+    log post "polling=$(prop Polling) powered=$(prop Powered)"
+    ;;
+esac
+exit 0

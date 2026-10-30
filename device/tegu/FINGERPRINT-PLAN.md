@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Fingerprint plan (tegu / zumapro): fingerprint unlock on the palmtop
 
-Status (2026-10-27, night): **F0, F2, F6a and F6b passed; F3-F5 and F6c wait for D1.** Earlier: **research and plan only, nothing run on the palmtop for
+Status (2026-10-29): **works on the owner's kernel: F0-F10 passed. The enrolled finger matches and other fingers don't, through the HAL and through fprintd, and the lock screen unlocks by fingerprint.** It runs on `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, the integration tree, with tg4c's LHBM loaded by hand. That LHBM isn't in the published tree yet: it's open as derekross/linux-omarchy-mobile#126, on the panel's own bands, which need no DSI reads (the reads are derekross/linux-omarchy-mobile#125, used only for the overdrive experiments). It also needs the bridge and runner fixes in #135. (F4, the first RPMB write, ran on 2026-10-27 under D1 = A.) Earlier: **research and plan only, nothing run on the palmtop for
 fingerprint.** Stage 16 of ALL-HARDWARE-PLAN (private). The
 Pixel 7 Pro stack works ([cheetah FINGERPRINT-PLAN](../cheetah/FINGERPRINT-PLAN.md),
 opt-in); this plan says what carries over to the Pixel 9a and what is new.
@@ -202,6 +202,10 @@ New for tegu:
   (`dd` from the node found by `PARTNAME`), and `persist` is read from the
   off-phone backup image, not mounted on the palmtop (f2fs: a read-only
   mount can still run recovery). Never add them to `UFS_RW`.
+- `fastboot oem udfps update-cal`, or any other `oem` command that writes,
+  doesn't run without Derek's explicit go and a named exception: it writes
+  `mfg_data`, outside slot B and `userdata`. Every `fastboot oem` step in a
+  runbook pins the serial with `-s`.
 - `sg` stays blacklisted from autoload; the runner loads it and binds only
   the RPMB LUN's node.
 - `gpp1` is shared with the touchscreen reset (`gpp1-1`): the fingerprint pin
@@ -232,7 +236,14 @@ New for tegu:
 Neither choice can roll back the RPMB: its write counter and superblocks move
 at the first run either way.
 
-**Decision:** _not taken yet._
+**Decision (2026-10-27): A, with the stores as block devices.** Taken by
+the owner (W4HO) at the console on 2026-10-27, evening: he never runs
+stock Android, so nothing is written outside `userdata` and stock on slot A
+is left to need a factory reset if it's ever booted. Within A, the stores
+are loop devices of Linux-owned images in `/var/lib/omamobile-fp`
+(`td.img`, `tdp.img`; step F4b), so storageproxyd gets its `-m` limit from
+a block device and maps `0` and `persist/0` the way stock does, but onto
+those images, never onto `trusty_userdata` or `trusty_persist`.
 
 ## 7. Runbook
 
@@ -320,6 +331,33 @@ requests, `fs_ready`, Trusty's log mounting its stores (TD new under A).
 **Stop** on authentication failures, MAC mismatches or storage errors: no
 retry loop, collect the logs. Rollback: stop the unit; the RPMB cannot be
 rolled back. Risk: irreversible for the RPMB; low for the running system.
+
+### F4b: the store images (TD and TDP as block devices; risk: low)
+
+Only on the 9a (the runner maps them only there, and only when the files
+exist). Both live in `/var/lib/omamobile-fp` (0700, root), are made on the
+palmtop and are **never committed or copied off it** (they hold Trusty's
+secure-storage state):
+
+```sh
+# TD: a fresh, empty 128 MiB store; storageproxyd takes its -m limit from it
+truncate -s 128M /var/lib/omamobile-fp/td.img && chmod 600 /var/lib/omamobile-fp/td.img
+# TDP: the F3 copy of trusty_persist (read-only copy, same size). Before the
+# first mapped run it is persist-ss/0; after it, that path is the link and the
+# copy is persist-ss/0.before-map.<time>.
+install -m 600 /var/lib/omamobile-fp/persist-ss/0 /var/lib/omamobile-fp/tdp.img
+```
+
+The runner then maps each to a loop device bound to `/dev/block/ss-td` and
+`/dev/block/ss-tdp` in the chroot, links `data/vendor/ss/0` and
+`persist-ss/0` to them before storageproxyd starts (an existing store there
+is moved aside with a timestamp, never deleted), and passes `-f 0:...`,
+`-f persist/0:...` and `-m`. Expect "secure storage ready" with "Using
+0x8000000 as max file size". Rollback: stop the runner, `losetup -d` both,
+delete the two images (Trusty's state in them is lost; the RPMB is not
+rolled back), then remove the two links (`data/vendor/ss/0`,
+`persist-ss/0`) and move any `*.before-map.*` file back to its own name, so
+the next unmapped run doesn't find links to nothing.
 
 ### F5: the TA (risk low)
 
@@ -415,3 +453,149 @@ needs them.
   reads it over SPI would. Touch, keys and haptics unaffected.
 - F6c (the HAL) needs the TA, which needs secure storage (F4), so it waits
   for D1 like F3-F5.
+
+## F3-F6c results (2026-10-27, evening, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+
+- **F3 passed.** `mfg_data`, `trusty_persist` and `persist` read with the
+  sha256 of the 10-27 backup. Stock's `persist/ss` holds only `0` (a link to
+  `trusty_persist`) and an empty `nsp`. **`mfg_data` is all zeros** on this
+  palmtop; `persist` has no fingerprint files.
+- **F4 ran (irreversible, D1 = A).** storageproxyd without `-f`/`-m`:
+  "secure storage ready" (fs_ready and fs_ready_rw), no RPMB errors.
+- **F5 passed.** g7a.app loaded; `com.goodix.fingerprint.test` open.
+- **F6c, sensor.** With LDO15S off (not described), the TA read chip id 0
+  ("SENSOR_NOT_AVAILABLE"). LDO15S is off at hand-off, as on cheetah: round
+  fp2 describes it (`S2MPG15_PMIC_L15S_CTRL` 0x3d in the regmap table, an
+  `ldo15s` descriptor, DT always on; reads 3.3 V). Then the sensor answers
+  and the HAL reports sensor0 at (540, 1769), radius 113.
+- **F6c, still failing: secure objects and calibration.** Every TA write
+  fails ("transaction would leave fs too full, abort", WRITE_SECURE_OBJECT),
+  the calibration objects (`GHBM_*`, `autoCalibrationParams`) don't open on
+  TD or TDP, and the TA says "spmt is not pass": no factory calibration, so
+  init ends in CALIBRATION_NOT_READY. Tried: `-m` (needs a block device:
+  TD now on a loop device of a 128 MiB Linux image, `0 -> /dev/block/ss-td`,
+  max 0x8000000; Trusty reads it, writes nothing); TDP mapped to a loop
+  device of the F3 copy (fs_ready never came); TD seeded from a copy of
+  stock's `trusty_userdata` (fs_ready never came: Trusty refuses it, so the
+  first F4 run moved its anchor). Back on the empty 128 MiB TD; the runner
+  with the loop store is `/root/omamobile-fp-chroot.td-loop` on the palmtop.
+- Open question: where the 9a's factory fingerprint calibration lives. It
+  isn't in `mfg_data` (zeros) or `persist`; stock's TD (`trusty_userdata`,
+  intact, read-only copy in `td.img.stock-copy`) is the likely place, now
+  unreadable to Trusty after F4. Next: find which file system is "too full"
+  (TP on the RPMB is the suspect), and whether the HAL can run SPMT-free
+  calibration (Google's `gf_cali` "default cali data" is disabled by the TA).
+- 2026-10-27, night: with TD and TDP both mapped as stock maps them
+  (`-f 0:` and `-f persist/0:` on loop devices of `td.img` and `tdp.img`,
+  `-m` the TD device) storageproxyd reports fs_ready; it first answered
+  "Pending symlink: forcing read result 0" for both (Trusty saw them empty)
+  until the symlinks `ss/0` and `ss/persist/0` existed, as on stock. Then
+  the "too full" commits stop, but every TA object open fails
+  (OPEN_SECURE_OBJECT, 1035), on TDP too: Trusty reads both devices (about
+  100 reads each) and finds no objects. The calibration (`GHBM_*`,
+  `autoCalibrationParams`) is the open question; Trusty's storage service
+  logs nothing at this log level. Runner copies on the palmtop:
+  `/root/omamobile-fp-chroot.td-loop` and the live one (TD+TDP maps).
+- 2026-10-27, night, later: with the symlinks in place, a copy of stock's
+  `trusty_userdata` as TD mounts too (fs_ready; it failed earlier only
+  because storageproxyd's pending-symlink reads showed Trusty an empty TD).
+  Trusty then wrote 13 blocks to the TDP copy and none to TD. The TA still
+  finds no calibration: "so(autoCalibrationParams.so_0_0) not exist", and
+  the `GHBM_*` bases don't open on TD or TDP. So the 9a's fingerprint
+  calibration isn't in `mfg_data` (zeros), `persist` (an empty `ss/nsp`),
+  stock's TD or the TDP. The HAL also names `/data/device_cali/` and
+  `/data/vendor_de/0/fpdata`, both on stock's userdata, which Arch replaced:
+  the likely home, and gone. Without it the TA refuses enrollment ("spmt is
+  not pass": the factory sensor test). Open: whether the TA can run on
+  default calibration (it logs "disable using default cali data") and what
+  enables that. The live runner maps TD (`td.img`, now the stock copy) and
+  TDP (`tdp.img`) as block devices with the symlinks.
+- 2026-10-28: the calibration's home is in ABL. Its strings carry
+  `oem udfps status`, `oem udfps get-cal-url`, `oem udfps update-cal`,
+  "udfps data is not valid", "Calibration signature matches/mismatch",
+  `udfps` next to `mfg_data`, and the URL template
+  `https://storage.googleapis.com/hardware-mfg-data-ext-sacal/%s.signed.cal`.
+  So Google keeps each sensor's factory calibration as a signed file on its
+  manufacturing bucket, and `update-cal` writes it into `mfg_data`; the zeros
+  there mean this palmtop's calibration was never written (or was wiped).
+  Next (needs the owner's hands at fastboot, Volume Down + Power: reaching
+  fastboot from Linux can fall back to stock on slot A): `fastboot oem udfps
+  status` and `get-cal-url` (read-only), fetch the file, then feed it to the TA from Linux (no partition write;
+  `update-cal` writes `mfg_data` and is under the rule in section 5). The URL's `%s` is presumably the device serial, so fetching it
+  sends the serial to Google: the owner's call.
+  With the owner's go, the URL with the serial (either case) answers 404,
+  so the id is something else, presumably the sensor's own id that ABL
+  reads at `udfps_init`. `fastboot oem udfps get-cal-url` will name it.
+- 2026-10-28, morning: at fastboot by the buttons, `fastboot oem udfps
+  status` answers "invalid sentinel 0x0" (no calibration stored) and
+  `get-cal-url` names the file on Google's bucket; its id isn't the serial.
+  With the owner's go the file was fetched (472,368 bytes, HTTP 200). It
+  and its id stay in the owner's private reference folder, never in the
+  repository or a log. Next: hand it to the TA from Linux, without writing
+  `mfg_data`.
+- 2026-10-28, afternoon: the HAL injects the calibration itself
+  (`DataSynchronizer::injectMtCali`). It reads a 112-byte header from offset
+  0 of `/dev/block/by-name/mfg_data` and logged "No SA calibration present"
+  on the zeros. The file `get-cal-url` names has exactly that layout: magic
+  `0xca11ca11`, version 1, and at 0x6c the payload length (file size − 112).
+  With the file written at offset 0 of the chroot's private `mfg_data.img`
+  copy (the real partition untouched), the "No SA calibration" line is gone
+  and the HAL sets `vendor.gf.cali.state = 1`. Next: enrollment (F8/F9, the
+  owner's finger).
+
+## F7-F8 results (2026-10-28, evening, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+
+- **F7 seen by eye.** LHBM, ported into the upstream-form `panel-google-tg4c`
+  (`allow_lhbm=1`, `local_hbm_mode` and `local_hbm_max_timeout` on the
+  backlight device), lit
+  the circle at 120 Hz, and the owner saw a white circle at the sensor.
+- **F8 passed: a finger is enrolled.** With the factory calibration in
+  the chroot's `mfg_data.img`, the bridge (rebuilt for the runner's
+  `--panel`) and `omamobile-fp-ctl enroll`: FINGER DOWN, ACQUIRED, and
+  PROGRESS counting down from 12 to 0, then ENROLLED.
+- **F9 doesn't match yet.** Every authenticate touch comes back ACQUIRED 2
+  (PARTIAL), with the HAL logging `valid_area=100` but `image_quality=29`.
+  A 300 ms LHBM settle changed nothing. Lead: the port wrote only `0x87 0x05`.
+  Google's tg4c first writes the LHBM brightness, the panel's own RGB values
+  per band read from 0xD1 on CMD2 page 2 plus an overdrive offset chosen by
+  the gray level under the circle, and then the LHBM gamma
+  (`0x6F 0x07; 0x87 0x01-0x04` by brightness).
+- **F9, later that evening.**
+  DSI reads now work (`gs-dsim-cmd` read support: the read request needs
+  `DSIM_PKTHDR_BTA`, bit 24), so the LHBM brightness bands are read from the
+  panel and written with overdrive group 0 and the gamma. PARTIAL stayed.
+  The HAL's log then showed three bridge and runner bugs (omamobile-fingerprint
+  0.1.11, PR #135): the HAL got raw touchscreen positions (10x panel pixels,
+  5432,17847 for the 540,1756 circle), it captures at
+  `onPointerDownWithContext` (before `onUiReady`, while the circle was still
+  dark), and it parses the refresh rate after the `@` in
+  `panel0-backlight/state` (`on: 1080x2424@120`; a bare `on` logged "Failed
+  to parse refresh rate"). With all three fixed, enrollment completes and
+  authenticate captures come back GOOD and reach the matcher, but every one
+  is NOMATCH at `image_quality` 15-26, at screen brightness 1500 and 3628
+  alike. Lead one: Google overdrives only the first stage. After the
+  effective delay (2 frames, 3 with IRC off) `tg4c_set_local_hbm_mode_post`
+  writes the normal bands, so stock captures under the normal circle, while
+  the port kept overdrive group 0 the whole time. From 2026-10-29 the
+  palmtop runs `lhbm_od=4` (the normal bands, read from the panel), and the
+  next step is to re-enroll and match under it. Other leads: whether the circle reaches LHBM luminance at all (nobody has yet
+  compared it with the shell's drawn target); the HAL's raw capture dump
+  (`vendor.gf.debug.dump_data=1` wrote nothing). Many misses lock the sensor
+  out (`LOCKOUT -1`); `omamobile-fp-ctl resetlockout` clears it.
+
+## F9-F10 results (2026-10-29, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+
+- **F9 passed.** With `lhbm_od=4` (the normal LHBM bands read from the
+  panel, which is where Google's tg4c sits after its first-stage
+  overdrive) and a fresh enrollment, `omamobile-fp-ctl auth` gave MATCH on
+  the first touch twice. A different finger gave NOMATCH.
+- **F10 passed.** fprintd was masked on the palmtop's own root: a link
+  to `/dev/null` from the same batch as the 9a's other bring-up masks
+  (ModemManager, NetworkManager, omamobile-aoc, omamobile-fp), made by the
+  private bring-up root it was installed from. Nothing in this repository
+  masks it. Unmasked, it
+  finds the bridge's device, `fprintd-enroll` completes (20 stages), and
+  `fprintd-verify` matches. Locked with `omarchy-shell lock lock`, the
+  palmtop unlocked with the enrolled finger, and refused a different finger
+  several times. The libfprint driver still names the device "Pixel 7 Pro
+  under-display fingerprint sensor".

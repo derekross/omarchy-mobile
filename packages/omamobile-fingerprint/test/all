@@ -10,6 +10,32 @@ for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; 
 grep -c 'TA=g7.app' lib/omamobile-fp-chroot >/dev/null || fail "cheetah loads g7.app"
 grep -c 'TA=g7a.app' lib/omamobile-fp-chroot >/dev/null || fail "tegu loads g7a.app"
 grep -c 'keymint-service.rust.trusty' lib/omamobile-fp-chroot >/dev/null || fail "tegu runs the Rust KeyMint"
+# Each phone's panel name, overridable; Trusty's stores mapped only when their images exist.
+grep -c 'PANEL_NAME=sdc-s6e3hc4' lib/omamobile-fp-chroot >/dev/null || fail "cheetah's panel name"
+grep -c 'PANEL_NAME=google-tg4c' lib/omamobile-fp-chroot >/dev/null || fail "tegu's panel name"
+grep -c 'OMAMOBILE_FP_PANEL_NAME' lib/omamobile-fp-chroot >/dev/null || fail "panel name override"
+grep -c 'sdc-s6e3hc4 >' lib/omamobile-fp-chroot >/dev/null && fail "a fixed panel name is written"
+grep -c 'PANEL_NAME=google-tg4c MAP_STORES=1' lib/omamobile-fp-chroot >/dev/null || fail "the 9a maps its stores"
+grep -c 'PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0' lib/omamobile-fp-chroot >/dev/null || fail "the 7 Pro never maps its stores"
+grep -c 'ln -sfn' lib/omamobile-fp-chroot >/dev/null && fail "no forced link over a store"
+grep -c '\[\[ -f \$STATE/td.img \]\] && maps+=(-f 0:/dev/block/ss-td -m /dev/block/ss-td)' lib/omamobile-fp-chroot >/dev/null ||
+  fail "TD maps only with its image"
+grep -c '\[\[ -f \$STATE/tdp.img \]\] && maps+=(-f persist/0:/dev/block/ss-tdp)' lib/omamobile-fp-chroot >/dev/null ||
+  fail "TDP maps only with its image"
+# Each phone's panel state and circle order: the 7 Pro keeps a bare "on" and
+# the circle after pointer down; the 9a's HAL parses the rate after the "@".
+grep -c 'PANEL=1440x3120 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0$' lib/omamobile-fp-chroot >/dev/null ||
+  fail "cheetah's panel rate, state and circle order"
+grep -c 'PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST=1$' lib/omamobile-fp-chroot >/dev/null ||
+  fail "tegu's panel rate, state and circle order"
+grep -c -- '--lhbm-first "\$LHBM_FIRST"' lib/omamobile-fp-chroot >/dev/null || fail "the runner passes the circle order"
+# Under set -u, each phone's case sets every value the spawn line uses.
+cases=$(sed -n '/^case \$DEVICE in/,/^esac/p' lib/omamobile-fp-chroot)
+for d in cheetah tegu; do
+  DEVICE=$d bash -uc "$cases"'
+    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST ]]' ||
+    fail "$d: the case leaves a panel value unset"
+done
 grep -c '^ro.hardware=tegu$' lib/props-tegu.conf >/dev/null || fail "props-tegu.conf"
 grep -c '^ro.hardware=cheetah$' lib/props-cheetah.conf >/dev/null || fail "props-cheetah.conf"
 grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a phone's ro.hardware"
@@ -29,6 +55,15 @@ for f in prebuilt/omamobile-fp-shim.so prebuilt/omamobile-fp-bridge; do
 done
 grep -c /system/bin/linker64 prebuilt/omamobile-fp-bridge >/dev/null ||
   fail "the bridge is not a bionic executable"
+# The prebuilt is built by hand, so it can be older than its source: a
+# bridge from before --panel rejects it and exits, and fingerprint stops on
+# every phone. It must know every option the runner passes it.
+opts=$(sed -n '/spawn bridge /,/^ *fi$/p' lib/omamobile-fp-chroot | grep -o -- '--[a-z][a-z-]*' | sort -u)
+[[ -n $opts ]] || fail "no bridge options found in lib/omamobile-fp-chroot"
+for o in $opts; do
+  grep -a -c -- "$o" prebuilt/omamobile-fp-bridge >/dev/null ||
+    fail "prebuilt/omamobile-fp-bridge doesn't know $o, which the runner passes: rebuild it (fingerprint/Makefile)"
+done
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 ./install "$stage"
 for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile-tipc-probe \

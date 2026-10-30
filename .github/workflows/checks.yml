@@ -48,6 +48,16 @@ jobs:
           pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd openssl \
             python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox \
             xz gzip qt6-declarative shellcheck
+          # Arch's nodejs can lag a simdjson soname bump: on 2026-10-29
+          # simdjson 5.0.8 dropped the libsimdjson.so.34 that nodejs still
+          # linked, and node no longer started. Only while node can't start,
+          # go back to the last simdjson it loads; once nodejs is rebuilt
+          # this does nothing.
+          if ! node --version >/dev/null 2>&1; then
+            pacman -U --noconfirm \
+              https://archive.archlinux.org/packages/s/simdjson/simdjson-1:5.0.5-1-x86_64.pkg.tar.zst
+            node --version
+          fi
       - uses: actions/checkout@v5
       - name: A normal user (some tests check what a user may not do)
         run: |

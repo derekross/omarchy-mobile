@@ -452,8 +452,11 @@ c9 c9-ok
   $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on &&
   $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels, boost on"; }
 echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
-( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
-wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); watchrun; wait
+# as jump(): after the watchdog's first reading, not at a fixed time
+rm -f "$r/watch.out"
+( for _ in $(seq 1 100); do grep -c 'watchdog: watching' "$r/watch.out" >/dev/null 2>&1 && break; sleep 0.05; done
+  sleep 0.3; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
+wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); WATCH_N=60 watchrun; wait
 ((rc == 1)) && muted && grep -c 'jumped 15.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 15 C jump of the estimate mutes"; }
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"

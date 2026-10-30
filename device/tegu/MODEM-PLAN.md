@@ -7,8 +7,12 @@ modem's cp2ap lines) is bound with its EINTs in the base DT
 trains Gen1 x1 and enumerates as 144d:a5a5; M3-M5 passed: CPIF and cbd
 boot it to **ONLINE** (Gen3 x2) with working IPC (pktproc), no SIM yet;
 G1-G2 passed: gnssd loads Kepler's firmware and talks CHPP over SPI;
-G3 partial: our HAL client starts sessions, but Kepler's core faults at
-engine start. Next: a stock GNSS capture, IOCC, the SIM.
+G3 partial: our HAL client starts sessions and the engine tracks
+satellites, but the CHPP link over the GNSS SPI loses bytes and gnssd's
+own watchdog resets Kepler (the "hardfault"); the clock and the transfer
+cut are in derekross/linux-omarchy-mobile#138 (in review), and GNSS is parked without a
+hardware probe (the owner's decision, 2026-10-29). The CP link hang with
+frequent Kepler resets is open. Next: a stock GNSS capture, IOCC, the SIM.
 The staged plan (sections F, K, U and runbooks M0.2-M6, G1-G4) is below,
 with each step's results under it. Kernel branches `omamobile-tegu-modem` and `omamobile-tegu-gnssif`
 (section K).
@@ -541,6 +545,343 @@ startNmea 25; callbacks location 4, NMEA 5).
   omamobile-modem 0.1.7 runs gnssd as an optional daemon, so its exit no
   longer stops the profile. Until M6 qualifies the power-off, don't stop the
   modem profile by hand; reboot with someone at the palmtop.
+- **gnssd's custom GNSS library (2026-10-28, omamobile-modem 0.1.8).** An
+  `strace` of gnssd found two gaps. gps.cfg sets
+  `GlueLayer_IsUseCustomGnssLib=1`, and gnssd `dlopen()`s
+  `/vendor/lib64/libcustomgnss.so` (ENOENT), which waits for the CP at
+  `/sys/bus/platform/devices/cpif/modem_state` and then `dlopen()`s
+  `libsitril-gps.so`, which uses `libsitril-client.so` (RIL's GPS channel,
+  over binder to the radioExternal HAL). Nothing links the three, so the
+  extractor never copied them; they are `VENDOR_LIBS` of the tegu modem
+  profile now, and the chroot binds cpif at its bus path too. With both,
+  libcustomgnss logs "Modem state ONLINE"; `GpsOpen()` still fails (no
+  radioExternal HAL in the chroot: no binder), and Kepler still faults at
+  every engine start. A re-run of the extractor on the BP3A factory image
+  (2026-10-29) resolves everything: 195 files against 188, the three
+  libraries plus libbinder, libbinder_ndk, libapexsupport and the
+  radioExternal NDK library, nothing new to stub. **An existing 9a chroot
+  gets the libraries only when its owner re-extracts** (`tools/extract-vendor-chroot
+  -p modem -d tegu` on the factory image, then the install line from its
+  usage text); a chroot from before 0.1.8 keeps running without them, as
+  before. The second `/sys` bind is in every phone's modem profile and is
+  harmless on the 7 Pro and the 6 Pro: cbd never looks there.
+
+### G3, third try: rails on (2026-10-28, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, round ps1 DTB with ldo9s-11s on)
+
+[V] With LDO9S-11S on, Kepler loads, reaches OPERATIONAL and no longer
+logs "FCAL Part 1 is not done yet": the RF front end calibrates now. The
+gnss-slsi HAL and our client start a session (capabilities 0xe7df, start
+and startNmea ok, status SESSION_BEGIN then ENGINE_ON), but every engine
+start still ends in the same fault: "KEP M7 HARDFAULT ... LR,PC 600B5B39
+0000062C" (16 times in 10 minutes, ENGINE_ON/ENGINE_OFF each time), no
+NMEA. So the rails were one missing piece, not the fault itself. Indoor or
+outdoor doesn't matter yet: the engine crashes before it searches.
+The G3 script's HARDFAULT count missed these (gnssd wrote them outside its
+window).
+
+### G3, fourth try: the AoC told the GNSS type (2026-10-28, evening, gn3 DTB)
+
+[V] With `&aoc { gnss-type = <2>; }` (kAOCGnssType, as Google's
+`zumapro-phone-ignss.dtsi`), Kepler loads, goes OPERATIONAL, and the
+gnss-slsi HAL and our client start a session (startNmea ok, "the HAL asks
+for a location"). But every engine start still ends in the same "KEP M7
+HARDFAULT ... LR,PC 600B5B39 0000062C" (20 in 4 minutes), so the type isn't
+it. In the register dump, R3 = 0x62D and PC = 0x62C: the M7 jumped
+through a function pointer holding 0x62D, a Thumb address near zero, which
+looks like an entry nobody filled in. Other leads from the logs:
+`aiding_timemark_reader_thread: open() errno:2` (gnssd can't open its
+time-mark device), `TGT_MEMS initInterface: fromBinder() failed` (the HAL's
+sensor service is missing), and `libsighandler.so` not found. Next, attended
+and on the charger, with the modem up: `strace -f` gnssd across one engine start, to see which
+files and devices it opens or fails to open (observation only).
+
+### G3, fifth to eighth tries (2026-10-29, night, same kernel, on the charger, outdoors spot)
+
+- **strace of gnssd across engine starts** (the g7 scripts, commit 8d77391d9 of [linux-omarchy-mobile#137](https://github.com/derekross/linux-omarchy-mobile/pull/137)):
+  the HAL's request reaches gnssd, gnssd talks CHPP to Kepler over
+  `gnss_ipc` normally (the all-zero reads after each write are the SPI
+  full-duplex bytes Google's `send_betp` passes up by design), and Kepler
+  stops answering a few seconds after the engine start; gnssd then reads the
+  GNSS image back (`IOCTL_READ_GNSS_IMAGE`) and dumps RAM. `umts_boot0`
+  ioctl 0x28 (EINVAL, not in our CPIF) comes after the fault, in the crash
+  path.
+- **Missing libraries**: gnssd `dlopen()`s `libcustomgnss.so`
+  (`GlueLayer_IsUseCustomGnssLib=1`), which needs `libsitril-gps.so` and
+  `libsitril-client.so` (RIL's GPS channel, binder to radioExternal). All
+  three were missing from the chroot. With them in, libcustomgnss reads the
+  CP state from `/sys/bus/platform/devices/cpif/modem_state`, which the
+  chroot lacked; with that bound, it logs "Modem state ONLINE". `GpsOpen()`
+  still fails (no radioExternal HAL). Kepler's fault is unchanged (PR #141).
+- **DVS and DFS off** through gnssd's `/data/vendor/gps/overlay/gps_overlay.conf`
+  (read 27 times): the fault is unchanged (9 in 4 minutes).
+- **Stock's rails are Kepler's to control**: LDO9S-11S carry
+  `channel-mux-selection` 0x29-0x2b (subsys GPS) in stock's DT, with
+  LDO9S ranging 0.725-1.3 V; our DT holds them on at fixed voltages.
+- **Hazard found**: after the modem profile has stopped (gnssd's exit),
+  starting the profile again in `OMAMOBILE_MODEM_STAGE=rfsd` reset the
+  palmtop silently (watchdog, no pstore). Reboot instead.
+- **Where the fault is** (local disassembly of the soft-watchdog RAM dump,
+  which is kepler.bin as loaded at 0x60000000; private, never committed):
+  the patch code at 0x600B5B34 calls a veneer at 0x600E143C that jumps to
+  0x200005B5 (R12 at the fault), code in Kepler's SRAM (the main stack is at
+  0x2002FF38). That code branched through R3 = 0x62D, and the M7 faulted
+  fetching 0x62C, low memory that isn't in the image. So something maps or
+  powers Kepler's low memory, or fills that pointer, and it hasn't happened
+  by engine start. `umts_boot0` ioctl 0x28 (gnssd's "SHMEM_SIZE -1") is
+  not defined in Google's tegu CPIF either, so stock gets EINVAL too and it
+  isn't the cause.
+- **The loaded image is intact.** The dump differs from kepler.bin in 17
+  words, all in the configuration header below 0x390, and they are gps.cfg's
+  values that gnssd writes before the load (RfMiscCtrl 0x80008001 at 0x10,
+  AidingConfiguration 0x20046 at 0x1c, the VDR 200/20 limits at
+  0x344-0x350). So the write-combine mapping of GNSS_FW (stock: cached,
+  over an I/O-coherent link) doesn't corrupt the load. The layout matches
+  stock too: GNSS_FW at cp_rmem + 8 MiB, 4 MiB long. The missing piece is
+  on the core's side (its low memory at engine start), which the AP can't
+  see; the next step is Kepler's own debug log (`gps_overlay.conf.next`).
+
+### G3, ninth to fourteenth tries: the "hardfault" is gnssd's watchdog (2026-10-29, night)
+
+[V] With gnssd's debug log on (`gps_overlay.conf`: `debug_enable=1`,
+`debug_console=1`, `chpp_log_level=4`), the engine is seen **working**: it
+tracks satellites (SVIDs 5, 11, 12, 13 at C/N0 29-35 dB-Hz) within ~10 s
+of the start. The fault that follows is gnssd's own: its soft watchdog
+logs "KEP soft_dog pos req timeout", then "sw version timeout", resets
+Kepler and sends BLC ID 6 ("Try and trigger hard fault to see if CPU is
+locked up or maybe we can get RAM dumps"), which is the "KEP M7
+HARDFAULT" with PC 0x62C. The watchdog fires because the CHPP link over
+the GNSS SPI loses packets: thousands of "ACK timeout" and 244 "Rx BAD
+checksum" in one run. In the raw reads, frames that should start with the
+CHPP preamble `68 43` often read `34 21`, the same bits one bit late, and
+long frames end in zeros.
+
+The SPI settings tried, each on a fresh boot (the CP boots once per boot):
+
+| SPI mode | rx chunk | feedback delay | RX bad checksums | Kepler |
+| --- | --- | --- | --- | --- |
+| 0 (as ported) | 64 | 2 (as ported) | 244 | tracks, then the watchdog |
+| 0 | 32 | 2 | 17 | opstate 0 |
+| 0 | 32 | 0 (stock's value) | 93 | opstate 0 |
+| 1 | 32 | 0 | 34 | opstate 0 |
+| 1 | 64 | 0 | 0 (RX clean) | TX lost: Kepler never sees our RESET-ACK |
+| 0, 1 MHz | 64 | 0 | 63 | opstate 0 |
+| 3 | 64 | 0 | 32 | opstate 0 |
+| 0, 32-bit words (swapped in gnss_spi) | 64 | 2 | 1 | RX transfers time out (-110), opstate 0 |
+| 0, 32-bit, auto CS (`google,gs101-spi` only) | 64 | 2 | 0 | RX transfers time out (-110), opstate 0 |
+| 0, auto CS | 64 | 2 | 274 | tracks, then the watchdog (as ported) |
+
+So RX samples the core's data a bit early in mode 0, mode 1 fixes RX but
+breaks TX, and neither the feedback delay nor a slower clock fixes it.
+Stock drives this SPI with 32-bit words, `swap-mode = <1>` and DMA
+(`dma-mode`, PDMA 0x14/0x15); our port uses PIO. 32-bit words alone (byte
+order fixed in gnss_spi) time out in PIO, so the next step is DMA for this
+SPI. Google's driver uses auto CS for this device (no
+`samsung,spi-chip-select-mode`), but auto CS changes nothing with 8-bit
+words. Our DT has no PDMA controller (stock's overlay uses `pdma1`), so DMA
+means a PL330 node for zumapro first. The palmtop is back on the as-ported setting (mode 0,
+64-byte reads, delay 2, the gn3 DTB).
+
+Next steps for the link, from the night of 10-29 (not tried yet):
+- **32-bit words in PIO time out** (`res -110`, every 64-byte read) under
+  mainline spi-s3c64xx. Not its FIFO-level check: Google's driver makes the
+  same `RX_FIFO_LVL < xfer->len` comparison for 32-bit words and works, so
+  the level counts bytes. -110 is mainline's interrupt wait
+  (`wait_for_completion_timeout` in `s3c64xx_wait_for_pio()` with
+  `use_irq`), which Google's driver doesn't have: it polls. The FIFO
+  trigger interrupt with 32-bit words is the next thing to read
+  (spi-s3c64xx is built in, so a change is a kernel push).
+- **DMA:** stock's `pdma1` is a PL330 at 0x10130000 (SPI 806, a 200 MHz
+  fixed clock, Samsung's 36-bit address wrappers, which mainline doesn't
+  have), with the GNSS SPI on channels 0x14 (tx) and 0x15 (rx). A
+  read-only probe (2026-10-29) read its PrimeCell IDs (periph 0x30 0x13,
+  cell 0x0d 0xf0) from Linux without an abort, so a DT node can probe it.
+  Mainline uses DMA only for transfers longer than the 64-byte FIFO, so the
+  64-byte reads would stay PIO.
+
+**What the link does (10-29, night), cause still open:** mainline spi-s3c64xx cuts
+every PIO transfer of 64 bytes or more into 63-byte pieces
+(`xfer->len = fifo_len - 1`), stopping and flushing the FIFO between them.
+So each 64-byte read of Kepler becomes 63 + 1 bytes, and each longer write
+is cut mid-frame; 32-bit words then can't work at all (63 isn't a multiple
+of 4: the `len-63` timeouts). Stock never splits: it uses DMA. But the
+split isn't shown to be the cause: with gnss_spi cutting every transfer
+into 60-byte pieces itself (one message, CS held, every pause on a 32-bit
+boundary, so the controller never cuts), the link garbled just the same
+(369 bad checksums, Kepler tracking, then the watchdog). Progress: a runtime test module
+registered stock's pdma1 (PL330 at 0x10130000, SPI 806) and the built-in
+pl330 driver probed it and ran a 256-byte memcpy correctly; a DTB with the
+node probes it at boot. But with `dmas` on the GNSS SPI (0x14/0x15, either
+order), RX DMA moves nothing (residue 64): the SPI's DMA requests don't
+reach pdma1, so some routing stock sets up is still missing (a sysreg or
+USI DMA select, or the PL330's peripheral security setting). The palmtop
+is back on gn3 without the node. A one-boot reset at 69 s happened on the
+second boot with the node, cause not seen.
+
+### G3, fifteenth to twenty-third tries: the SPI runs at twice stock's clock (2026-10-29, small hours)
+
+[V] Each try on a fresh boot of the gn3 kernel, gnssd's debug log on, a test
+`gnss_spi.ko` with module parameters (feedback delay, chip-select setup,
+clock, `HIGH_SPEED_EN`), raw RX bytes taken from strace of gnssd's reads of
+`/dev/gnss_ipc`. Results:
+
+| Try | Setting | Bad checksums | Kepler |
+| --- | --- | --- | --- |
+| baseline (control) | as ported: 8-bit, 64-byte reads, delay 2 | 46 | tracks (C/N0 29-34), then the watchdog |
+| w32p32 | 32-bit words, 32-byte pieces in one message | 19 | no watchdog, stops after RESET-ACK |
+| w32rx32 | 32-bit, 32-byte reads | 7 | same |
+| fb3 | 32-bit, feedback delay 3 | 5 | same |
+| cs200 | 32-bit, delay 3, 200 us CS setup | 0 | same |
+| osc | 32-bit, USI3 mux on OSCCLK, about 1.5 MHz | 0 | same |
+| acs | 32-bit, auto CS DTB | 0 | same |
+| osc8 | 8-bit, OSCCLK, about 1.5 MHz, delay 0 | 1 | same |
+| hs | 8-bit, `HIGH_SPEED_EN` forced, 32-byte transfers | 17 | same |
+| hs60 | 8-bit, `HIGH_SPEED_EN`, 60-byte reads | 408 | tracks, then the watchdog (38) |
+
+What the raw bytes show:
+
+- **The real SPI clock is 6.24 MHz, not 3.125.** USI3's mux (`zumapro_mout_hsi0_usi3_local`) is read-only in clk-zumapro and sits on the 399.36 MHz parent; the 4-bit divider stops at /16, so the IP clock is 24.96 MHz and the SPI clock 24.96 / 4, whatever spi-s3c64xx asks for. The "1 MHz" try of the night before ran at 6.24 MHz too.
+- **The baseline's errors are per byte:** one byte of a repeated frame arrives with its top bit taken from the previous byte's last bit (`10 01 00 0a ... 4f b6 25 9c` read as `08 00 00 05 ... 27 db 12 ce`), and the rest of the frame is right. That is the controller sampling before Kepler's data has settled: too little margin at 6.24 MHz, as mode 1 (which samples half a clock later) showed.
+- **Every changed setting broke the framing instead:** with 32-bit words, with the OSCCLK mux, and with chip select toggled every 32 bytes, CHPP frames arrive at any bit offset (8-bit baseline: always 0 or 1), the link stops after RESET-ACK, and the bad-checksum count drops only because few frames are recognised. A chip-select toggle in the middle of a frame drops one byte from Kepler at the break. So the low counts in this table are not improvements.
+
+The next step is the clock itself, in the kernel: let spi-s3c64xx reach 12.5 MHz on USI3 (3.125 MHz SPI) from a parent that can give it, as stock does, with nothing else changed. The OSCCLK try isn't a fair test of that (24.576 / 4, about 1.5 MHz, switched behind the clock framework's back). The palmtop is back on the baseline (`gnss_spi` aa4618bb, `gnssif` eb0f3d9a, gn3 DTB, no debug overlay). One reset at 348 s, after the hs60 run had ended, came during modem PCIe link activity ("PHY isolated"), not in the SPI path.
+
+### G3, twenty-fourth to thirty-fourth tries: stock's clock, mode 1 reads, where the bytes go (2026-10-29, small hours)
+
+**Stock's clock, tried (twenty-fourth try):** Google's zuma CMU table (`cmucal-vclk.c`, `div_clk_hsi0_usix_12mhz_lut_params` = div 1, mux 1) makes USI3's 12 MHz from OSCCLK / 2 (12.288 MHz, a 3.07 MHz SPI clock). A test module set exactly that (mux to OSCCLK, divider held at /2, 8-bit, delay 0). Framing broke as in the other OSCCLK try: Kepler resent one frame (`68 43 00 20 01 00 0a ...`) for seconds, and every copy arrived shifted by the same 4 bits across many separate reads, then by 5, then 6. So Kepler's bit counter runs on across chip-select cycles, and on OSCCLK it gains or loses clocks; on the 399.36 MHz parent (baseline, 6.24 MHz) the frames stay at bit 0 and only single bytes are misread. A clk-zumapro change that lets USI3 reach OSCCLK / 2 is drafted but not worth a kernel until the slip is understood; it would reproduce this test (later: [linux-omarchy-mobile#138](https://github.com/derekross/linux-omarchy-mobile/pull/138)). The palmtop is on the baseline again.
+
+**Read in mode 1, write in mode 0 (twenty-fifth and twenty-sixth tries).** The baseline's raw reads show more than single bytes: about 80% of CHPP frames arrive one whole bit late (the preamble found at bit offset 1, so CHPP never sees it), which is where most ACK timeouts come from. Feedback delay 3 at 8 bits changed nothing (57 bad checksums, same split of offsets). A test module that switches `spi->mode` per transfer (read-only transfers in mode 1, writes in mode 0; spi-s3c64xx reconfigures on every transfer because its `cur_speed` never equals the rate asked) put every frame at bit offset 0 for the first time on the as-ported clock: short frames pass, the engine reports satellites, the watchdog fires later. Long frames (279 bytes) still fail: the first byte or two after each read's chip select are damaged (in one string Kepler resent, the byte after a 60-byte boundary read `6` in one copy and `8` in the next, and `11 00 11` became `41`). 60-byte reads, so spi-s3c64xx never splits a read, didn't change that. Two resets came from the modem side, not the SPI: after Kepler's watchdog resets, gnssd reloads the image over the CP's PCIe link (`IOCTL_READ_GNSS_IMAGE`, then "PHY isolated"), and the SoC reset within a second (03:15, and 02:43 after the hs60 run). Frequent Kepler resets are therefore a crash risk until the link is fixed; keep GNSS runs short. Separately, two boots reset at about 34 s, right after Bluetooth started (01:41, 03:03), before any GNSS step.
+
+**Where the bytes go (twenty-seventh try, mode 1 reads with 50 us chip-select setup):** 101 bad checksums (260 without the setup), and the palmtop stayed up through 14 Kepler watchdog resets with omamobile-modem 0.1.9's slower CP watcher (#148). Comparing the copies Kepler resends: short frames inside one 64-byte read agree byte for byte, and every copy of a long frame loses the same one or two bytes at each 64-byte read boundary (`11 00 11 00 10 00 01` read as `11 00 00 | 00 01`, `00 00 31 2e 30 2e 30` as `00 00 2e | 2e 30`). So in mode 1 Kepler's stream drops bytes when chip select is released between reads, deterministically, not by timing. In the as-ported mode 0 the copies disagree mostly at byte 63, the one-byte tail spi-s3c64xx splits off each 64-byte read. Next: hold chip select across rx_work's consecutive reads of one Kepler message (one long transfer while gnss2ap stays high), which also removes the split.
+
+**Chip select held across a message (twenty-eighth try):** mode 1 reads with chip select kept asserted between rx_work's reads (released when gnss2ap drops or before a write) made it worse: 292 bad checksums, and the 279-byte frames now end in zeros (footer 0). Kepler wants chip select released between its 64-byte reads, as stock does, so the bytes lost at each release in the mode 1 tries have another cause. What's left untried needs stock evidence: a logic-analyzer capture of stock's SPI21 (CS, SCLK, MISO timing between reads), or stock's register state for SPI21 and CMU_HSI0 USI3 while GNSS runs.
+
+**One bit late, cleanly, with feedback delay 3 (twenty-ninth to thirty-second tries, offline checks on the saved reads with CHPP's CRC32 over the 8-byte header and payload):** at feedback delay 3 (mode 0, 8 bits, the as-ported clock) Kepler's frames are intact but one bit late: shifting the reads left one bit turns 11 valid frames into 123 (at delay 2 the same shift recovers nothing). Kepler is on time just after it starts and one bit late later, so a fixed shift lost its first RESET-ACKs for 2 s and set off a reset storm (125 RESETs from Kepler, 144 RESET-ACKs from gnssd); delaying our writes by one bit as well killed the link outright, so writes are right as they are. A per-read choice (a preamble at bit 0 keeps the read, at bit 1 shifts it, a read without one keeps the last choice) gives clean short frames and the engine reporting satellites, but 279- and 361-byte frames still fail: setting the one dropped bit at each 64-byte boundary every possible way repairs none of them, so more than a bit goes missing at each chip-select release, as in the mode 1 tries. The test module (`gnss_spi.c` with `fb_delay`, `realign`, `rx_cpha`, `hold`, `osc`, `div` parameters) is the `realign` commits of linux-omarchy-mobile#137 (b5229f35d, ff0eadd34, dacf3e304, a0877abc3); the palmtop is back on the baseline.
+
+**Stock's clock again, read correctly (thirty-third and thirty-fourth tries):** the OSCCLK frames are not garbled: every read that holds a frame has a valid one at some bit shift (offline: 32 of 33 valid when each read is shifted to its preamble). But at OSCCLK / 2 (3.07 MHz) Kepler's bit offset walks by one or two bits about every 100 ms (0, 2, 3, 5, 6, 7, 0, 1, 3 in the first second), roughly a clock edge gained or lost per transfer; with the offset tracked per read and our writes delayed by it, 20 frames came through clean but Kepler only answered RESETs. At OSCCLK / 1 (6.14 MHz) the offset changed twice in 100 s. So the drift grows as the clock slows, the opposite of a too-fast slave; a clock edge seen twice (or a glitch) at each transfer's start or stop would fit. The 05:02 reset (CLUSTER0_NONCPU_WDTRESET) came with #148's watcher installed: in its last minute the CP link cycled twice a second in step with gnssd's `IOCTL_LOAD_GNSS_IMAGE` calls, so the watcher was one source of link cycling, not the only one, and the hang (CPIF's link power-down racing an access, presumably) is still open. Keep GNSS runs short until it is fixed.
+
+### The CP link hang (2026-10-29, read from the CPIF source, offline)
+
+**The CP link hang, read from the source (offline):** our `tegu-pcie0-cp` guards DBI and configuration space while the PHY is isolated (accesses return 0 or are dropped), but not the CP's BAR window, which CPIF uses for its doorbell. CPIF's main doorbell path (`link_device.c`) looks safe: it rings under `pcie_tx_lock` after checking that `pcie_onoff_lock` is free and `pcie_powered_on` is set, and `s5100_poweroff_pcie()` takes `pcie_onoff_lock` first and then waits for `pcie_tx_lock` before it powers the link down, so a doorbell either finishes before the power-off or is reserved for later. `IOCTL_LOAD_GNSS_IMAGE` only copies into the GNSS_FW carve-out in AP memory (no link access); the reloads matter because the Kepler reset around them makes IPC traffic, so the link wakes and idles twice a second. I found no unguarded BAR access by reading; the other doorbell callers (`modem_ctrl_s5100.c`) are the CP boot and the power-on path. The step that would find it is below, gated; it has not run, and GNSS is parked (see "Parked" under the morning of 10-29), so it runs only if GNSS is ever resumed.
+
+**What the kept consoles say (2026-10-29, read offline from `/var/log/omamobile/ramoops/`,
+the 24 boots between 07:34 and 09:19 local; the extracts are in `logs/tegu-review-20261029/hangs/`,
+not committed).** Each saved console holds the bootloader's log of the boot
+that wrote it, the kernel's console, then the next boot's bootloader log,
+whose `[PRE] RST_STAT` names the reset. The morning's resets sort into
+three kinds:
+
+- `SYSTEM_SWRESET_SYSTEM` after `sysrq: Resetting` with a `---[ end trace ]---`
+  just before (eight boots): the curated start's fault check tripping on the
+  `OF: overlay` WARNING and resetting, as item 7 of the morning list says;
+- `SYSTEM_SWRESET_SYSTEM` after `reboot: Restarting system with command
+  'bootloader'` (two) or `'omamobile'` (six): the 150 s dead-man and the
+  pushes;
+- `CLUSTER0_NONCPU_WDTRESET` (eight, at 07:37, 07:42, 07:48, 07:51, 08:45,
+  08:52, 08:56, 09:09): the real hangs. Every one of them ends the same way.
+  The last line is the pair `samsung-pinctrl 154e0000.pinctrl: wake disabled
+  for irq N` / `wake enabled for irq N` (N = the `cp2ap_wakeup` line on
+  FAR_ALIVE, 85, 84, 70, 76 or 96 depending on the boot), which is CPIF's
+  `ap_wakeup_handler()` flipping the line's trigger after an edge; what
+  should follow 5 ms later, `tegu-pcie0-cp: PHY out of isolation`, never
+  comes. Before it the link was cycling once every half second: `PHY out
+  of isolation`, `link up: Gen3 x2`, 55 ms, the toggle (the CP releasing
+  the line), `PHY isolated`, 350 ms, the toggle (the line asserted again),
+  and so on, eight to twenty toggles in the last minute. One console (07:42)
+  caught the hang's shape: an `rcu_preempt detected stalls` report with
+  CPUs 0, 3 and 7 stuck (`idle=...1/0x4000000000000002`, 5255 jiffies,
+  detected by CPU 4) 22 s after the modem went ONLINE, i.e. right when
+  gnssd starts (`OMAMOBILE_MODEM_GNSS_DELAY` is 20 s), with no backtrace,
+  which is what a load that never completes looks like. Another (07:48)
+  has, as its last lines before the toggle, gnssd's `lal_state_thread`
+  opening `gnss_dump` and `gnss_boot` and CPIF answering `pcie_send_ap2cp_irq:
+  Reserve doorbell interrupt: PCI not powered on`: an AP-to-CP interrupt
+  asked for while the link was down, which CPIF parks and answers with
+  `s5100_try_gpio_cp_wakeup()`.
+
+  So the hang falls in the window after the CP (or the AP's own wake
+  request) asserts `cp2ap_wakeup` and before the link is back, and it
+  happens only while something cycles the link quickly: the old watcher's
+  open/close (the 07:37-07:51 boots, before #148's watcher, omamobile-modem
+  0.1.9, in review) or
+  gnssd's Kepler loads (the later ones). In that window the paths that run
+  are CPIF's `cp2ap_wakeup_work()` to `s5100_poweron_pcie()` and our
+  `gs201_pcie_cp_poweron()`, whose first hardware step is the PMU bypass
+  write that logs `PHY out of isolation`; nothing before that line touches
+  the PCIe block. A load that hangs the CPU therefore comes from another
+  thread in that window: a read of the modem's BAR window while the PHY is
+  isolated, as the cheetah gotcha describes, from a path that doesn't take
+  the link first. The GNSS image itself goes to DRAM (`SHMEM_GNSS_FW` through
+  `gnss_v_base`), so the candidates are the IPC paths that follow it:
+  `pcie_read_thread` on the shared-memory queues, `s51xx_pcie_restore_state()`
+  and the MSI set-up on the way back up, and CPIF's own status reads.
+
+  Two things follow for G3-L1. First, a cheaper step before the trace: a
+  cpif module parameter that makes `s5100_poweroff_pcie()` keep the link
+  up (Google's own "Skip pci power off" path, taken unconditionally), on a
+  bring-up branch, then three 12-second sessions. If the hang goes away
+  with the link held, the cause is a link-down access and the trace knows
+  where to look; if it stays, the link is not it. Second, the trace points:
+  `s5100_poweron_pcie()` entry and `gs201_pcie_cp_poweron()` entry (to see
+  whether the power-on path is ever entered before the hang), and every
+  `readl` of the BAR window in CPIF (the `s51xx_*` helpers and
+  `pcie_read_thread`'s queue reads) with `pcie_powered_on` in the line.
+
+**G3-L1: which BAR access lands after isolation (attended, on the charger; risk: medium-high).** It starts with the hold-the-link step from the section above: a cpif built with `keep_link_up=1` (kernel branch `tegu-cpif-keep-link`, commit 3f76f123b, the module staged on the palmtop as `modem/cpif-keep-link.ko`), three 12-second sessions, under exactly the frame below (M0.1 before and after, attended on the charger, kmsg to the laptop with `--watchdog`, the same Stop and Rollback); its sessions count toward the cap of three sessions, and a hang in them counts toward the two resets, so if the link held up still hangs, the trace gets what is left of the cap or waits for the next day. Then the trace: at each BAR access in CPIF and at `cp_phy_isolate()` (the caller, the lock state and `pcie_powered_on` in the kernel log), to see which access lands after isolation. The tracing change goes on a kernel branch first (`omamobile-tegu-modem`, or a bring-up branch on the fork, linked by commit), is built there and reaches slot B through `bin/omamobile push`; nothing is patched on the palmtop by hand, and the kernel never boots before the branch is pushed. Before the step: M0.1's partition check, the kmsg stream to the laptop with `--watchdog`, the palmtop on the charger with someone at it the whole time, and a 12-second GNSS session (as the morning's) to bring on Kepler's watchdog resets and the link cycling. Expect: the log names the access that follows `cp_phy_isolate()`, or the link cycles through Kepler's resets without a hang. Stop: two SoC resets (a hang with no record in pstore counts as one), or any `ufshcd_err_handler` line in dmesg, or an NV partition that reads `ro=0` or mounted; after a stop, no further boot of the tracing kernel that day. Cap: two resets per session and three sessions in all, then the step is closed and the hang waits for a stock capture. Rollback: `bin/omamobile push` of the previous images (the gn3 kernel), then M0.1 again, as after any reset with the modem up. Risk: medium-high, because each reset is a hang with the modem up, which has been followed by a recovered UFS error-handler pass on cheetah; the partition check afterwards is not optional.
+
+### G3, the morning of 10-29: the clock fixed, the cut fixed, and what is left (thirty-fifth to forty-fourth tries)
+
+[V] Two kernel changes, built from the gn3 source (`~/tegu/int-dt-20261026/kernel` on maclab, the reproducible build; the first attempt from `wt-modem` carried an older USI4 clock table and broke the audio I2C) and pushed as boot images only: spi-s3c64xx no longer cuts a transfer that fills the FIFO (64 bytes in one polled piece; the 32 + 32 test had shown every frame crossing a piece boundary failing with chip select held, so the cut, not the chip-select release, lost the bytes), and clk-zumapro lets USI3 reach OSCCLK (`nMUX`, so the framework may reparent, plus `CLK_SET_RATE_PARENT` on the divider and the source gate): `zumapro_gout_hsi0_usi3_ip` now reads 12.288 MHz after the first transfer, a 3.072 MHz bus, stock's rate. Both are in [linux-omarchy-mobile#138](https://github.com/derekross/linux-omarchy-mobile/pull/138) (in review; branch `tegu-spi-word-pieces`, replacing the closed #135). The morning's tries (thirty-fifth to forty-fourth) ran on those images; their `uname -r` is the night's string, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, because the build fixes LOCALVERSION, so the release does not change between these builds and the Image's sha256 tells them apart: `Image-osc` (sha256 7d620900…, the first attempt) and `Image-osc2` (75a44a1a…, the one the tries ran; `Image-nosplit` in the same directory is that same image), with the repack scripts in `logs/tegu-gnss-w32-20261029/`. Graphics, audio bring-up and touch are unaffected on that kernel. The SPI block's own prescaler does not exist on this IP (CLK_CFG reads 0 and ignores writes).
+
+[V] Reads, with every byte dumped to the kernel log (a gnssif built with `GNSS_PKT_DEBUG`, 64 bytes per line) and short 12-second sessions so Kepler's watchdog does not pile up resets:
+- Mode 0 at stock's clock is marginal at every feedback delay: the per-read detector flips between "on time" and "one bit late" within a session, and long frames fail wherever it flips. (Delay 3 at 6.24 MHz had looked stable only because the session was short.)
+- Mode 1 reads (writes stay mode 0) are byte-aligned and intact, but every block after the first one of a message loses its first byte: inserting one byte (0xAA) at the first position of block 1 makes Kepler's constant version frame pass its CRC. With a 100 us chip-select setup the protocol was the healthiest seen (0 ACK timeouts, our packets acknowledged), the first-byte loss unchanged. A 500 us gap before each read made Kepler stop sending long frames; a 50 us chip-select hold did nothing.
+- Padding each write to a whole 64-byte exchange (gnssif) changed nothing measurable.
+- CHPP's checksum is CRC32 over the 8-byte header and the payload (checked on short frames); the offline checks are in commit 8d77391d9 of linux-omarchy-mobile#137 and the captures in `logs/tegu-gnss-w32-20261029/`.
+
+So with the clock and the cut right, what is left is one byte per back-to-back chip-select cycle in mode 1, or a half-bit sampling margin in mode 0, which is exactly the kind of question a logic analyzer on SPI21's SCLK, CS and MISO answers in a minute and software guessing does not. The palmtop runs the new kernel with the as-ported modules. The resets during this morning's sessions were mostly the curated startup's 150 s dead-man after its own false-positive fault check (an `OF: overlay: WARNING` line), rebooting through `reboot-to bootloader`; a few hard resets with no record in pstore remain unexplained (`logs/morning-20261029.md` item 7).
+
+**The night's test code and the partition check** (the maintainer's points 4 and 5 on #138):
+- bring-up branch: [linux-omarchy-mobile#137](https://github.com/derekross/linux-omarchy-mobile/pull/137) (draft, `tegu-gnss-spi-bringup` on the owner's fork, head 8d77391d9, on top of the two kernel fixes): the gnssif_spi driver as ported (bb9999570), then one commit per variant in the order of the tries: 32-byte reads (401016f37), spi_mode and speed_hz (21cea1dd0), 32-bit words (45b492116), 60-byte pieces (7eec92532), w32p32 (c5223f5fc), the `fb_delay`/`cs_setup_us`/`osc` parameters with the USI3 mux write (cc78f333d), 8-bit words (840cac155), `hs` (e497c8be0, f8013d08b), the USI3 divider hold of the twenty-fourth try (b587e76f4), `rx_cpha`, the per-transfer `spi->mode` switch (f2dcd5241), `hold` (e8d4d64e2), `realign` 1-3 and `txshift` (b5229f35d, ff0eadd34, dacf3e304, a0877abc3), and the morning's `piece`, `carry`, `rx_gap_us`, the byte dump, `tx_gap_us`, padded writes, `psr` and `cs_hold_us` (dae13a1f9 to b8c423dda); the pdma1 ID probe and the runtime PL330 memcpy module (5f786c818, 288a87ecc); the feedback-delay-0, auto-CS, pdma1 and pdma1-swapped overlays (4d5548b4d); the g7 scripts and the offline CRC and bit-offset checks (8d77391d9). There was no separate USI3 mux-and-divider module: the mux write is the `osc` parameter and the divider hold the `div` parameter inside gnss_spi. Each test DTB and each of the morning's images reached slot B through our `bin/omamobile push`, run by a local wrapper that first runs `bin/omamobile images` with the base DTB and the overlays; `push` writes the `_b` images with `dd`, verifies them by sha256 and reboots with `reboot-to omamobile`. Never fastboot.
+- partition check (2026-10-29 10:20, after the night's sessions and resets, release `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`): `efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a` and `modem_b`, each found by `PARTNAME` and read with `sha256sum` only, all match the 10-28 read-only backup (`tegu-protected-post-android-20261028T174253Z`, off-repo), all `ro=1`, none mounted. The boots from 07:34 to 09:19 local, the morning's tries among them, ran before this check, so it covers them and their resets too; the next modem session starts from this baseline.
+
+**Stock's SPI configuration, read from the sources (2026-10-29, afternoon; no
+hardware).** Three things settle what stock does on this link, none of which
+the tries above reproduced together:
+
+- The board overlay (the private capture, fragment@110) gives the GNSS node
+  `swap-mode = <1>`, `spi-max-frequency = <3125000>`, `controller-data {
+  samsung,spi-feedback-delay = <0> }`, no `cs-gpios`, no `dma-mode` (the
+  SoC dtsi has the `dmas` line commented out: stock runs this SPI in PIO),
+  and no `samsung,spi-chip-select-mode`.
+- Google's `spi-s3c64xx.c` (google-modules/soc/gs at 183509aff980) makes
+  `cs_mode = AUTO_CS_MODE` the default when that property is absent
+  (`s3c64xx_get_slave_ctrldata()`), so stock drives chip select from the
+  controller (`SLAVE_SEL |= SLAVE_AUTO | NSC_CNT_2`): nCS asserted by the
+  hardware for the packet count and released with a two-clock inactive
+  gap, never by software around each transfer. Our zumapro port uses
+  manual native chip select (the SPI core asserts and releases it around
+  every 64-byte transfer). With `swap-mode` and 32-bit words Google's driver
+  programs `SWAP_CFG` (TX and RX byte and half-word swap); mainline has no
+  swap support and our 32-bit tries swapped in software.
+- Our running tree's node has `samsung,spi-feedback-delay = <2>`; stock's
+  is 0.
+- The gnssif port itself is byte for byte Google's (`gnss_link_device.c` and
+  `gnss_spi.c` differ from google-modules' gnssif_spi only by one include;
+  `gnss_main.c` by the platform glue), so the protocol handling, the
+  `gnss2ap_spi` ready handshake included, is stock's. Everything that differs
+  is in the SPI controller driver and the node.
+
+The "auto CS" try (`acs`, the night) ran with 32-bit words at 6.24 MHz,
+before the clock fix, and no try has run auto chip select at stock's clock
+with 8-bit words and feedback delay 0. That is the next boot when GNSS
+resumes (G3-A, attended, one DTB round): the `autocs` and `fb0` overlays from
+linux-omarchy-mobile#137 on the current kernel, 8-bit words, 3.07 MHz; then,
+if the first byte of a back-to-back block still goes missing, 32-bit words
+with the controller's own swap (`SWAP_CFG` as Google programs it, a small
+addition to the zumapro port) rather than a software swap. No analyzer in
+either.
+
+**Parked (2026-10-29, the owner's decision):** no logic analyzer, and no more module-level guessing. The two kernel changes stay ([linux-omarchy-mobile#138](https://github.com/derekross/linux-omarchy-mobile/pull/138), the signed-off replacement of #135); the as-ported gnssif and gnss_spi run on the palmtop. GNSS resumes when either a stock capture of SPI21's timing or a new idea about the first byte of a back-to-back block turns up.
 
 ### Suspend with the modem on (2026-10-27, early morning, same kernel)
 

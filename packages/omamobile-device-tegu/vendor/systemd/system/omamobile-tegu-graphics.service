@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# The GPU, display, haptics, torch, gauge and Bluetooth controller at boot,
+# enabled by the vendor multi-user.target.wants link. The drivers are
+# blacklisted for autoload (modprobe.d/omamobile-tegu-guards.conf), so this
+# hang-safe script is the only thing that loads them; if a start hangs, the
+# next boot leaves them off (see the script). Runs before the display
+# manager (display-manager.service.d/10-omamobile-tegu.conf). The two
+# ConditionPathExists=| lines are ORed by systemd: a DTB with the display
+# but no GPU still gets its display.
+[Unit]
+Description=Bring up the Pixel 9a GPU, display, haptics, torch, gauge and Bluetooth (hang-safe)
+After=local-fs.target systemd-modules-load.service
+Before=display-manager.service
+ConditionPathExists=|/sys/bus/platform/devices/1f000000.gpu
+ConditionPathExists=|/sys/bus/platform/devices/19470000.display-controller
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-tegu-graphics-start
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

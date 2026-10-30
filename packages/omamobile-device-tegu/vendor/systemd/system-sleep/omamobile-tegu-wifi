@@ -1,0 +1,70 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# systemd-sleep hook for the Pixel 9a's BCM4383 (device/tegu/WIFI-PLAN.md).
+#
+# Wi-Fi survives s2idle loaded: brcmfmac sends D3, the chip loses its
+# firmware in sleep, and on resume brcmfmac finds that and probes it again
+# ("device lost its state in sleep, probing again"); iwd reconnects within
+# seconds. So when /etc/omamobile/wifi-keep-across-sleep exists the hook
+# leaves Wi-Fi alone and only reloads it afterwards if it didn't come back.
+# Without the flag, or after a sleep that lost Wi-Fi, it unloads brcmfmac
+# before the sleep and reloads it afterwards. Nothing happens on a boot
+# where Wi-Fi was never loaded.
+# OMAMOBILE_TEGU_ROOT: a scratch root for the package tests.
+root=${OMAMOBILE_TEGU_ROOT:-}
+KEEP=$root/etc/omamobile/wifi-keep-across-sleep
+RUNDIR=$root/run/omamobile
+FALLBACK=$RUNDIR/wifi-unload-across-sleep
+UNLOADED=$RUNDIR/wifi-unloaded-for-sleep
+
+loaded() { lsmod | grep -c '^brcmfmac ' >/dev/null; }
+
+wifi_up() {
+  local i
+  for i in $(seq 1 20); do
+    ls "$root"/sys/bus/pci/drivers/brcmfmac/ 2>/dev/null | grep -c '^0000:' >/dev/null &&
+      ls "$root"/sys/class/ieee80211/ 2>/dev/null | grep -c . >/dev/null && return 0
+    sleep 1
+  done
+  return 1
+}
+
+unload() {
+  systemctl stop iwd
+  timeout 20 rmmod brcmfmac_wcc brcmfmac 2>/dev/null || true
+}
+
+reload() {
+  loaded || modprobe brcmfmac
+  systemctl start iwd
+}
+
+mkdir -p "$RUNDIR"
+case "$1" in
+  pre)
+    rm -f "$UNLOADED"
+    loaded || exit 0
+    if [[ -e $KEEP && ! -e $FALLBACK ]]; then
+      exit 0
+    fi
+    unload
+    : > "$UNLOADED"
+    ;;
+  post)
+    if [[ -e $UNLOADED ]]; then
+      rm -f "$UNLOADED"
+      reload
+      exit 0
+    fi
+    loaded || exit 0
+    if wifi_up; then
+      exit 0
+    fi
+    # Wi-Fi didn't come back: unload around sleeps for the rest of this boot.
+    : > "$FALLBACK"
+    logger -t omamobile-tegu-wifi "Wi-Fi lost across sleep; unloading it around sleeps until reboot"
+    unload
+    reload
+    ;;
+esac
+exit 0

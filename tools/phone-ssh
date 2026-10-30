@@ -5,6 +5,11 @@
 #
 #   tools/phone-ssh [--fresh | --stop] [COMMAND...]
 #
+# OMAMOBILE_SSH_HOST overrides root@172.16.42.1 (user@host).
+# OMAMOBILE_SSH_KEY selects an identity file (IdentitiesOnly=yes).
+# OMAMOBILE_SSH_KNOWN_HOSTS selects a file with strict host-key checking.
+# Explicit connection options require Python 3.
+#
 # OMAMOBILE_SSH_SHARE=1 makes every call share one connection (OpenSSH
 # ControlMaster, kept 60 s after the last call), so a key that needs a touch
 # per connection asks once instead of once per call: `bin/omamobile push`
@@ -12,15 +17,73 @@
 # a check that a step left SSH working (a USB or firewall change, AGENTS.md
 # section 1) must use --fresh, which never shares. --stop closes the shared
 # connection.
-opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=6)
+set -euo pipefail
+target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
+[[ $target != -* && $target != *[[:space:]]* ]] || {
+  echo 'phone-ssh: invalid OMAMOBILE_SSH_HOST' >&2; exit 1;
+}
+key=${OMAMOBILE_SSH_KEY:-}
+known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
+custom=0
 path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
+if [[ $target != root@172.16.42.1 || -n $key$known ]]; then
+  custom=1
+  # OpenSSH's %C omits identity/trust policy. Normalize explicit paths and
+  # include contents so cwd changes and key rotations never reuse a master.
+  # Python 3 is required only for these explicit connection options.
+  normalized=$(python3 - "$target" "$key" "$known" <<'PYCONTEXT'
+import hashlib, sys
+from pathlib import Path
+h = hashlib.sha256(); h.update(sys.argv[1].encode() + b'\0')
+paths = []
+for label, value in zip(('identity', 'known-hosts'), sys.argv[2:]):
+    if any(token in value for token in ('\n', '\r', '%', '${')):
+        sys.exit('phone-ssh: file paths must be literal, without newlines or OpenSSH expansion tokens')
+    path = Path(value).expanduser().resolve() if value else None
+    paths.append(str(path) if path else '')
+    h.update((str(path) if path else '').encode() + b'\0')
+    if path:
+        try:
+            if not path.is_file():
+                raise OSError('not a regular file')
+            h.update(path.read_bytes())
+        except OSError:
+            sys.exit('phone-ssh: cannot read explicit ' + label + ' file')
+    h.update(b'\0')
+print(*paths, h.hexdigest()[:12], sep='\n')
+PYCONTEXT
+  )
+  key=${normalized%%$'\n'*}
+  normalized=${normalized#*$'\n'}
+  known=${normalized%%$'\n'*}
+  context=${normalized#*$'\n'}
+  # Keep %C for the effective HostName/Port resolved from ssh_config. The
+  # short policy hash leaves room for OpenSSH's temporary 17-byte suffix.
+  path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
+fi
+opts=(-o LogLevel=ERROR -o ConnectTimeout=6)
+if [[ -n $known ]]; then
+  # This -o value is parsed again as ssh_config: protect spaces and quotes.
+  quoted=${known//\\/\\\\}
+  quoted=${quoted//\"/\\\"}
+  opts+=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$quoted\"")
+else
+  opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+fi
+[[ -z $key ]] || opts+=(-o IdentitiesOnly=yes -i "$key")
 case ${1:-} in
   --fresh) shift; opts+=(-o ControlMaster=no -o ControlPath=none) ;;
-  --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit root@172.16.42.1 2>/dev/null ;;
+  --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit "$target" 2>/dev/null ;;
   *)
     # Keepalives end a master whose phone rebooted within about 6 s, so
     # calls after a reboot don't wait on a dead connection.
-    [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 ]] && opts+=(-o ControlMaster=auto -o ControlPath="$path"
-      -o ControlPersist=60 -o ServerAliveInterval=2 -o ServerAliveCountMax=3) ;;
+    if [[ ${OMAMOBILE_SSH_SHARE:-0} == 1 ]]; then
+      opts+=(-o ControlMaster=auto -o ControlPath="$path"
+        -o ControlPersist=60 -o ServerAliveInterval=2 -o ServerAliveCountMax=3)
+    elif ((custom)); then
+      # A user's ssh_config may enable sharing globally. Explicit identity
+      # and trust options must apply to a new connection unless requested.
+      opts+=(-o ControlMaster=no -o ControlPath=none)
+    fi ;;
 esac
-exec ssh "${opts[@]}" root@172.16.42.1 "$@"
+exec ssh "${opts[@]}" "$target" "$@"

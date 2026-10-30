@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# The session's side of omamobile-tegu-graphics-start, sourced by uwsm from
+# /usr/share/uwsm/env.d (POSIX shell; a user's ~/.config/uwsm/env runs after
+# it and may override). The display controller's DRM node is the one the
+# start wrote to /run/omamobile-tegu-display-card, whichever card number it
+# got (the GPU may take card0); hardware GL only when the start reported the
+# GPU up in /run/omamobile-tegu-gpu-ready.json, otherwise llvmpipe, so a
+# phone whose GPU did not come up still gets a desktop.
+if [ -r /run/omamobile-tegu-display-card ]; then
+  read -r tegu_display_card < /run/omamobile-tegu-display-card
+  case "$tegu_display_card" in
+    /dev/dri/card[0-9]*)
+      if [ -c "$tegu_display_card" ]; then
+        export AQ_DRM_DEVICES="$tegu_display_card"
+      fi
+      ;;
+  esac
+  unset tegu_display_card
+fi
+if [ -c /dev/dri/renderD128 ] && [ -s /run/omamobile-tegu-gpu-ready.json ]; then
+  export LIBGL_ALWAYS_SOFTWARE=0
+  unset GALLIUM_DRIVER QT_QUICK_BACKEND
+  export QSG_RHI_BACKEND=opengl
+else
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+  export QT_QUICK_BACKEND=software
+  unset QSG_RHI_BACKEND
+fi
