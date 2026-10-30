@@ -1,0 +1,746 @@
+# Lock: a glance view on touch-only devices (the lock-keypad toggle), as a
+# phone's lock screen opens: the time, the date, the home screen's last
+# weather reading and the notifications, grouped by app, over the lock's
+# blurred wallpaper. A swipe up, a tap above the fingerprint sensor or a
+# typed key (kept in the field) moves to the PIN view, which is the lock as
+# before plus a small clock. With an empty field and no input it comes back
+# after 15 s, and whenever the lock is shown or the screen is woken (the
+# wake call from 0009). Only one view shows outside the short change; the
+# other is hidden, so nothing of the PIN view renders or takes touches under
+# the glance. Fingerprint unlock is untouched and works from both.
+#
+# The cards are Omarchy's NotificationCard, static as the history uses it,
+# one per app (newest three apps, the rest as "N more from A and B"), with
+# three new card properties: summaryLines, bodyLines and a detail label.
+# Read-only, from the notifications plugin's persisted toasts and history
+# (~/.local/state/omarchy/notifications/*.json, history/*.json), none while
+# do-not-disturb is on (notifications.json "dnd"), as no toast shows then.
+# The toggle lock-hide-notification-text shows the app name and "Unlock to
+# read" instead of the text. Weather comes from
+# ~/.local/state/omamobile/weather.json, written by the phone shell's weather
+# widget, and is hidden when absent or over 3 h old; the lock makes no
+# network calls. The clock follows the bar's clockFormat (shell.json), else
+# the locale. On a computer the lock is unchanged.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014 and
+# 0017.
+diff --git i/shell/plugins/lock/LockGlance.js w/shell/plugins/lock/LockGlance.js
+new file mode 100644
+--- /dev/null
++++ w/shell/plugins/lock/LockGlance.js
+@@ -0,0 +1,116 @@
++.pragma library
++.import "../notifications/NotificationLogic.js" as NotificationLogic
++
++// What the phone's lock shows at a glance (LockGlance.qml): the clock's
++// 12- or 24-hour choice, the notifications grouped by app, and the weather
++// line. Plain functions of their inputs, so the test can drive them.
++
++// Up to this many apps get a card; the rest fold into one line.
++var MAX_GROUPS = 3
++// Older notifications are not news on a lock screen.
++var MAX_AGE_MS = 24 * 60 * 60 * 1000
++// A weather reading older than this is not shown.
++var WEATHER_MAX_AGE_MS = 3 * 60 * 60 * 1000
++
++// The phone bar's clockFormat (shell.json bar.clockFormat), as the home
++// screen's clock reads it: quoted literals ignored, an AM/PM marker or "h"
++// without "H" means 12-hour. Without one, the locale's short time format.
++function twelveHour(barFormat, localeFormat) {
++  var f = String(barFormat || "").replace(/'[^']*'/g, "")
++  if (!f) f = String(localeFormat || "").replace(/'[^']*'/g, "")
++  return /a/i.test(f) || (/h/.test(f) && !/H/.test(f))
++}
++
++// The large glance time leaves AM/PM out; the small clock over the PIN
++// view keeps it.
++function timeFormat(twelve, withMarker) {
++  return twelve ? (withMarker ? "h:mm AP" : "h:mm") : "HH:mm"
++}
++
++function age(timestamp, now) {
++  var minutes = Math.floor(Math.max(0, Number(now) - Number(timestamp || 0)) / 60000)
++  if (minutes < 1) return "now"
++  if (minutes < 60) return minutes + "m"
++  return Math.floor(minutes / 60) + "h"
++}
++
++function firstLine(text) {
++  var lines = String(text || "").split(/\r\n|\r|\n|<br\s*\/?>/i)
++  for (var i = 0; i < lines.length; i++) if (lines[i].trim()) return lines[i].trim()
++  return ""
++}
++
++// The persisted popup and history files (the notifications plugin's state,
++// one JSON line each, read together) as cards: newest first, one per app,
++// at most MAX_GROUPS, and what is left over. Omarchy's own action toasts
++// and bare notify-send pings are left out, as the notifications plugin
++// leaves them out of what it keeps while silenced. hideText shows the app
++// name and "Unlock to read" instead of the text, and no sender picture.
++function groups(raw, now, hideText) {
++  var rows = NotificationLogic.historyRows(raw, [], 1, 200)
++  var byApp = {}
++  var order = []
++  for (var i = 0; i < rows.length; i++) {
++    var e = rows[i]
++    if (NotificationLogic.isEphemeralApp(e.app)) continue
++    if (Number(now) - Number(e.timestamp || 0) > MAX_AGE_MS) continue
++    var name = String(e.app || "").trim() || "Notifications"
++    var key = name.toLowerCase()
++    if (byApp[key]) { byApp[key].count += 1; continue }
++    byApp[key] = {
++      app: name,
++      appIcon: e.appIcon,
++      image: hideText ? "" : e.image,
++      glyph: e.glyph,
++      urgency: e.urgency,
++      timestamp: e.timestamp,
++      summary: hideText ? name : String(e.summary || ""),
++      body: hideText ? "Unlock to read" : firstLine(NotificationLogic.sanitizeBody(e.body, e.app, e.appIcon)),
++      count: 1,
++      file: NotificationLogic.popupFileName(e)
++    }
++    order.push(byApp[key])
++  }
++  for (var j = 0; j < order.length; j++) {
++    var g = order[j]
++    g.detail = (g.count > 1 ? g.count + " new, " : "") + age(g.timestamp, now)
++    if (!g.summary) g.summary = g.app
++  }
++  return order
++}
++
++// "6 more from Mail and GitHub" for the apps without a card.
++function moreText(rest) {
++  if (!rest || rest.length === 0) return ""
++  var n = 0
++  var names = []
++  for (var i = 0; i < rest.length; i++) {
++    n += rest[i].count
++    names.push(rest[i].app)
++  }
++  var from = names.length <= 2 ? names.join(" and ")
++    : names.slice(0, 2).join(", ") + " and " + (names.length - 2) + (names.length === 3 ? " other" : " others")
++  return n + " more from " + from
++}
++
++// notifications.json's do-not-disturb flag: silenced notifications make no
++// toast, so the lock shows none either.
++function doNotDisturb(raw) {
++  var parsed = NotificationLogic.parseSettings(raw)
++  return parsed.dnd === true
++}
++
++// The home screen weather widget's last reading, which omamobile-shell
++// keeps in ~/.local/state/omamobile/weather.json:
++//   {"at": <ms since epoch>, "temperature": 12, "unit": "°C", "text": "Partly cloudy"}
++// Shown as "12°, partly cloudy"; nothing when absent, unreadable or older
++// than WEATHER_MAX_AGE_MS. The lock itself never asks the network.
++function weatherLine(raw, now) {
++  var w
++  try { w = JSON.parse(String(raw || "")) } catch (e) { return "" }
++  if (!w || typeof w.temperature !== "number" || !isFinite(w.temperature)) return ""
++  var at = Number(w.at || 0)
++  if (!(at > 0) || Number(now) - at > WEATHER_MAX_AGE_MS || at - Number(now) > 5 * 60 * 1000) return ""
++  var text = String(w.text || "").trim()
++  return Math.round(w.temperature) + "°" + (text ? ", " + text.charAt(0).toLowerCase() + text.slice(1) : "")
++}
+diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.qml
+new file mode 100644
+--- /dev/null
++++ w/shell/plugins/lock/LockGlance.qml
+@@ -0,0 +1,437 @@
++import QtQuick
++import Quickshell
++import Quickshell.Io
++import qs.Commons
++import qs.Commons as Commons
++import qs.Ui
++import "../notifications/components"
++import "LockGlance.js" as Glance
++
++// The lock's glance view on touch-only devices (the lock-keypad toggle):
++// the time, the date, the weather, the notifications grouped by app and a
++// hint, over the lock's own blurred wallpaper. A swipe up, a tap above the
++// fingerprint sensor or a typed key moves to the PIN view, which is the
++// lock as before plus a small clock; with no input it comes back after
++// 15 s, and whenever the lock is shown or the screen is woken. Fingerprint
++// unlock runs underneath either view, untouched.
++//
++// Read-only: the notifications plugin's persisted toasts and history, its
++// do-not-disturb flag, the lock-hide-notification-text toggle, the bar's
++// clock format and the home screen's last weather reading. Nothing here
++// acts on a notification or asks the network.
++//
++// On a computer (keypad off) it shows nothing and reads nothing.
++Item {
++  id: glance
++
++  // The LockView this sits in.
++  property var lock: null
++  // Where the PIN view's own content starts (its hint or field), for the
++  // small clock above it.
++  property real pinTop: height * 0.2
++
++  readonly property bool active: !!lock && lock.keypad
++  property bool shown: true
++  readonly property bool showing: active && shown
++  // 1 with the glance up, 0 with the PIN view; animated in between. The
++  // view not in use is hidden (visible: false) once the change is over.
++  property real progress: showing ? 1 : 0
++  Behavior on progress { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
++
++  readonly property string home: Quickshell.env("HOME")
++  property bool hideText: false
++  property bool doNotDisturb: false
++  property string barClockFormat: ""
++  property string notificationsRaw: ""
++  property string weatherRaw: ""
++  readonly property double now: clock.date.getTime()
++  readonly property bool twelveHour: Glance.twelveHour(barClockFormat, Qt.locale().timeFormat(Locale.ShortFormat))
++  readonly property var groups: active ? Glance.groups(notificationsRaw, now, hideText) : []
++  readonly property var shownGroups: groups.slice(0, Glance.MAX_GROUPS)
++  // How many of those cards fit above the hint (refit).
++  property int fitCount: Glance.MAX_GROUPS
++  readonly property string moreText: Glance.moreText(groups.slice(Math.min(fitCount, shownGroups.length)))
++  readonly property string weatherText: active ? Glance.weatherLine(weatherRaw, now) : ""
++  // Where the under-display sensor's part of the screen starts: nothing
++  // here reacts to a tap below it (LockView's keypadClearsSensor).
++  readonly property real sensorTop: lock && lock.keypadClearsSensor ? height - lock.keypadBottomMargin : height
++  property double lastActivity: Date.now()
++  property bool polling: true
++
++  visible: active
++
++  function show() {
++    if (!active || (lock && lock.authenticatingPassword)) return
++    shown = true
++    if (lock.passwordText.length > 0) lock.passwordTextEdited("")
++    noteActivity()
++    refresh()
++    glance.forceActiveFocus()
++    if (lock.inputEnabled) lock.foldKeyboard()
++  }
++
++  function reveal() {
++    if (!showing) return
++    shown = false
++    pendingFocus = true
++    lock.wakeRequested()
++  }
++
++  // The PIN view's field takes focus once it is shown again (an item that
++  // is not visible can't), which brings up the on-screen keyboard for a
++  // password as before.
++  property bool pendingFocus: false
++  onProgressChanged: {
++    if (pendingFocus && progress < 1) {
++      pendingFocus = false
++      Qt.callLater(lock.forcePasswordFocus)
++    }
++  }
++
++  function noteActivity() {
++    lastActivity = Date.now()
++    if (!active) return
++    if (!polling) {
++      polling = true
++      refresh()
++    }
++    if (idleTimer.running) idleTimer.restart()
++  }
++
++  function refresh() {
++    if (active && !notificationsProc.running) notificationsProc.running = true
++  }
++
++  function refit() {
++    var avail = cardsArea.height
++    var gap = cardsColumn.spacing
++    var moreHeight = moreLabel.implicitHeight + gap
++    var used = 0
++    var n = 0
++    for (var i = 0; i < cardsRepeater.count; i++) {
++      var item = cardsRepeater.itemAt(i)
++      if (!item) break
++      var h = item.implicitHeight + (n > 0 ? gap : 0)
++      var needMore = i + 1 < groups.length
++      if (used + h + (needMore ? moreHeight : 0) > avail) break
++      used += h
++      n++
++    }
++    fitCount = n
++  }
++
++  onShownGroupsChanged: Qt.callLater(refit)
++  onHeightChanged: Qt.callLater(refit)
++
++  // A typed key on the glance moves to the PIN view and keeps the key: a
++  // digit (or, for a password, any character) goes into the field.
++  Keys.onPressed: function(event) {
++    if (!showing) return
++    var t = event.text
++    var printable = t.length === 1 && t.charCodeAt(0) >= 32 && !(event.modifiers & Qt.ControlModifier)
++    if (printable && lock.inputEnabled && !lock.authenticatingPassword
++        && (!lock.padShown || (t >= "0" && t <= "9"))) {
++      if (lock.failureMessage.length > 0) lock.clearFailureRequested()
++      lock.passwordTextEdited(lock.passwordText + t)
++    } else if (!printable && event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter
++               && event.key !== Qt.Key_Up && event.key !== Qt.Key_Space) {
++      return
++    }
++    reveal()
++    event.accepted = true
++  }
++
++  Connections {
++    target: glance.lock
++    enabled: glance.active
++    function onInputEnabledChanged() { if (glance.lock.inputEnabled) glance.show() }
++    function onWakeSerialChanged() { glance.show() }
++    function onWakeRequested() { glance.noteActivity() }
++    // Text that reaches the field another way still shows the PIN view.
++    function onPasswordTextChanged() { if (glance.showing && glance.lock.passwordText.length > 0) glance.reveal() }
++  }
++
++  Component.onCompleted: if (active) { refresh(); Qt.callLater(function() { if (glance.showing) glance.forceActiveFocus() }) }
++  onActiveChanged: if (active) refresh()
++
++  // Back to the glance after 15 s on the PIN view with nothing typed.
++  Timer {
++    id: idleTimer
++    objectName: "lockGlanceIdle"
++    interval: 15000
++    running: glance.active && !glance.shown && glance.lock.passwordText.length === 0 && !glance.lock.authenticatingPassword
++    onTriggered: glance.show()
++  }
++
++  // The notification files have no change signal to watch, so they are read
++  // again every few seconds while the lock is in use, and not while it sits
++  // dark: the lock blanks the screen 10 s after the last input.
++  Timer {
++    id: pollTimer
++    interval: 5000
++    repeat: true
++    running: glance.active && glance.polling
++    onTriggered: {
++      if (Date.now() - glance.lastActivity > 20000) glance.polling = false
++      else glance.refresh()
++    }
++  }
++
++  SystemClock {
++    id: clock
++    precision: SystemClock.Minutes
++  }
++
++  Process {
++    id: notificationsProc
++    command: ["bash", "-c", "shopt -s nullglob; set -- \"$1\"*.json \"$1\"history/*.json; (($#)) && awk 1 \"$@\" 2>/dev/null; true",
++              "--", glance.home + "/.local/state/omarchy/notifications/"]
++    stdout: StdioCollector {
++      waitForEnd: true
++      onStreamFinished: glance.notificationsRaw = String(text || "")
++    }
++  }
++
++  FileView {
++    path: glance.active ? glance.home + "/.local/state/omarchy/toggles/lock-hide-notification-text" : ""
++    watchChanges: true
++    printErrors: false
++    onLoaded: glance.hideText = true
++    onLoadFailed: glance.hideText = false
++    onFileChanged: reload()
++  }
++
++  FileView {
++    path: glance.active ? glance.home + "/.local/state/omarchy/notifications.json" : ""
++    watchChanges: true
++    printErrors: false
++    onLoaded: glance.doNotDisturb = Glance.doNotDisturb(text())
++    onLoadFailed: glance.doNotDisturb = false
++    onFileChanged: reload()
++  }
++
++  FileView {
++    path: glance.active ? glance.home + "/.local/state/omamobile/weather.json" : ""
++    watchChanges: true
++    printErrors: false
++    onLoaded: glance.weatherRaw = text()
++    onLoadFailed: glance.weatherRaw = ""
++    onFileChanged: reload()
++  }
++
++  FileView {
++    path: glance.active ? glance.home + "/.config/omarchy/shell.json" : ""
++    watchChanges: true
++    printErrors: false
++    onLoaded: {
++      try {
++        var shell = JSON.parse(text() || "{}")
++        glance.barClockFormat = shell.bar && shell.bar.clockFormat ? String(shell.bar.clockFormat) : ""
++      } catch (e) { glance.barClockFormat = "" }
++    }
++    onLoadFailed: glance.barClockFormat = ""
++    onFileChanged: reload()
++  }
++
++  // ---------------------------------------------------------------- PIN view
++
++  // The time, small, above the PIN view's hint or field.
++  Text {
++    id: pinClock
++    objectName: "lockPinClock"
++    textFormat: Text.PlainText
++    anchors.horizontalCenter: parent.horizontalCenter
++    y: Math.max(Style.space(24), glance.pinTop - Style.space(22) - height)
++    visible: glance.progress < 1
++    opacity: 1 - glance.progress
++    text: Qt.formatDateTime(clock.date, Glance.timeFormat(glance.twelveHour, true))
++    color: Commons.Color.lock.text
++    font.family: Style.font.family
++    font.pixelSize: Style.font.display
++  }
++
++  // ---------------------------------------------------------------- glance
++
++  Item {
++    id: glanceLayer
++    objectName: "lockGlanceView"
++    anchors.fill: parent
++    visible: glance.progress > 0
++    enabled: glance.showing
++    opacity: glance.progress
++
++    Item {
++      id: content
++      anchors.fill: parent
++      // Follows a swipe a little, and rises as the PIN view comes in.
++      transform: Translate {
++        y: Math.min(0, swipe.dragY) * 0.4 - Style.space(40) * (1 - glance.progress)
++      }
++
++      Column {
++        id: header
++        anchors.horizontalCenter: parent.horizontalCenter
++        y: Math.round(parent.height * 0.113)
++        width: Math.min(Style.space(380), parent.width - Style.space(32))
++        spacing: 0
++
++        Text {
++          id: timeLabel
++          objectName: "lockGlanceTime"
++          width: parent.width
++          horizontalAlignment: Text.AlignHCenter
++          textFormat: Text.PlainText
++          text: Qt.formatDateTime(clock.date, Glance.timeFormat(glance.twelveHour, false))
++          color: Commons.Color.lock.text
++          font.family: Style.font.family
++          font.weight: Font.Light
++          font.pixelSize: Math.round(Style.font.displayLarge * 3.7)
++          fontSizeMode: Text.HorizontalFit
++          minimumPixelSize: Style.font.display
++        }
++
++        Text {
++          objectName: "lockGlanceDate"
++          width: parent.width
++          topPadding: Style.space(14)
++          horizontalAlignment: Text.AlignHCenter
++          textFormat: Text.PlainText
++          text: Qt.formatDate(clock.date, "dddd, MMMM d")
++          color: Commons.Color.lock.text
++          font.family: Style.font.family
++          font.pixelSize: Style.font.heading
++          elide: Text.ElideRight
++        }
++
++        Text {
++          objectName: "lockGlanceWeather"
++          width: parent.width
++          topPadding: Style.space(6)
++          visible: glance.weatherText.length > 0
++          horizontalAlignment: Text.AlignHCenter
++          textFormat: Text.PlainText
++          text: glance.weatherText
++          color: Commons.Color.lock.placeholder
++          font.family: Style.font.family
++          font.pixelSize: Style.font.title
++          elide: Text.ElideRight
++        }
++      }
++
++      // Between the header and the hint; the cards that don't fit fold
++      // into the "more" line.
++      Item {
++        id: cardsArea
++        anchors.horizontalCenter: parent.horizontalCenter
++        y: header.y + header.height + Style.space(40)
++        width: header.width
++        height: Math.max(0, hint.y - Style.space(24) - y)
++        onHeightChanged: Qt.callLater(glance.refit)
++        visible: !glance.doNotDisturb
++
++        Column {
++          id: cardsColumn
++          objectName: "lockGlanceCards"
++          width: parent.width
++          spacing: Style.space(10)
++
++          Repeater {
++            id: cardsRepeater
++            model: glance.shownGroups
++
++            NotificationCard {
++              required property var modelData
++              required property int index
++              objectName: "lockGlanceCard"
++              width: cardsColumn.width
++              visible: index < glance.fitCount
++              app: modelData.app
++              appIcon: modelData.appIcon
++              image: modelData.image
++              glyph: modelData.glyph
++              urgency: modelData.urgency
++              timestamp: modelData.timestamp
++              summary: modelData.summary
++              body: modelData.body
++              detail: modelData.detail
++              summaryLines: 1
++              bodyLines: 1
++              cornerRadius: Style.cornerRadius
++              fontFamily: Style.font.family
++              swipeEnabled: false
++              closeButtonShown: false
++              // No actions from the lock: a tap asks for the PIN.
++              onCardClicked: glance.reveal()
++              onImplicitHeightChanged: Qt.callLater(glance.refit)
++            }
++          }
++
++          Text {
++            id: moreLabel
++            objectName: "lockGlanceMore"
++            width: parent.width
++            visible: glance.moreText.length > 0
++            topPadding: Style.space(2)
++            horizontalAlignment: Text.AlignHCenter
++            textFormat: Text.PlainText
++            text: glance.moreText
++            color: Commons.Color.lock.placeholder
++            font.family: Style.font.family
++            font.pixelSize: Style.font.subtitle
++            elide: Text.ElideRight
++          }
++
++          Text {
++            objectName: "lockGlanceQuiet"
++            width: parent.width
++            visible: glance.groups.length === 0
++            horizontalAlignment: Text.AlignHCenter
++            textFormat: Text.PlainText
++            text: "No new notifications"
++            color: Commons.Color.lock.placeholder
++            font.family: Style.font.family
++            font.pixelSize: Style.font.title
++          }
++        }
++      }
++
++      Text {
++        id: hint
++        objectName: "lockGlanceHint"
++        anchors.horizontalCenter: parent.horizontalCenter
++        width: parent.width - Style.space(32)
++        // Where the PIN view has its emergency call: above the sensor's
++        // fingerprint mark, or near the bottom without fingerprints.
++        y: glance.lock && glance.lock.keypadClearsSensor ? glance.sensorTop + Style.space(26)
++          : parent.height - (glance.lock ? glance.lock.keypadBottomMargin : 0) - height
++        textFormat: Text.PlainText
++        text: glance.lock && glance.lock.fingerprintConfigured ? "Touch the fingerprint sensor or swipe up" : "Swipe up to unlock"
++        color: Commons.Color.lock.text
++        font.family: Style.font.family
++        font.pixelSize: Style.font.subtitle
++        wrapMode: Text.WordWrap
++        horizontalAlignment: Text.AlignHCenter
++      }
++    }
++
++    // Over everything, cards included (a card only asks for the PIN, like
++    // any tap): a swipe up from anywhere, or a tap above the sensor's part
++    // of the screen, shows the PIN view. A finger resting on the sensor
++    // does neither.
++    MouseArea {
++      id: swipe
++      objectName: "lockGlanceSwipe"
++      anchors.fill: parent
++      property real startY: 0
++      property real dragY: 0
++      onPressed: function(mouse) { startY = mouse.y; dragY = 0 }
++      onPositionChanged: function(mouse) { dragY = mouse.y - startY }
++      onReleased: function(mouse) {
++        var moved = mouse.y - startY
++        dragY = 0
++        if (moved < -Style.space(60) || (Math.abs(moved) < Style.space(12) && mouse.y < glance.sensorTop)) glance.reveal()
++      }
++      onCanceled: dragY = 0
++    }
++  }
++}
+diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
+--- i/shell/plugins/lock/LockView.qml
++++ w/shell/plugins/lock/LockView.qml
+@@ -31,6 +31,13 @@
+   // The ABC/123 switch in the field swaps either way, so a password with
+   // letters and digits can always be typed.
+   property bool passwordFirst: false
++  // The glance view (LockGlance.qml) over the PIN view on touch-only
++  // devices: the PIN view's parts fade in as it goes, and are hidden while it
++  // is up. The lock bumps wakeSerial when the screen is woken, which brings
++  // the glance back.
++  property int wakeSerial: 0
++  readonly property real pinOpacity: 1 - glance.progress
++  readonly property bool pinVisible: glance.progress < 1
+   property bool switchedInput: false
+   readonly property bool padShown: keypad && (passwordFirst === switchedInput)
+   readonly property real inputSwitchReserve: keypad ? Math.round(inputSwitch.implicitWidth + 12) : 0
+@@ -73,6 +80,10 @@
+   }
+ 
+   function forcePasswordFocus() {
++    if (glance.showing) {
++      glance.forceActiveFocus()
++      return
++    }
+     if (padShown) {
+       keypadKeys.forceActiveFocus()
+       return
+@@ -200,7 +211,8 @@
+ 
+     Keypad {
+       id: numberPad
+-      visible: root.padShown
++      visible: root.padShown && root.pinVisible
++      opacity: root.pinOpacity
+       enabled: root.inputEnabled && !root.authenticatingPassword
+       anchors.horizontalCenter: parent.horizontalCenter
+       anchors.bottom: parent.bottom
+@@ -226,6 +238,8 @@
+ 
+     BorderSurface {
+       id: inputField
++      visible: root.pinVisible
++      opacity: root.pinOpacity
+       width: root.fieldWidth
+       height: root.fieldHeight
+       anchors.horizontalCenter: parent.horizontalCenter
+@@ -365,7 +379,8 @@
+       anchors.bottomMargin: Style.space(18)
+       anchors.horizontalCenter: inputField.horizontalCenter
+       width: parent.width - Style.space(32)
+-      visible: root.keypadClearsSensor
++      visible: root.keypadClearsSensor && root.pinVisible
++      opacity: root.pinOpacity
+       text: root.padShown ? "Touch the fingerprint sensor or enter your PIN"
+         : "Touch the fingerprint sensor or enter your password"
+       color: Commons.Color.lock.text
+@@ -383,9 +398,10 @@
+     Item {
+       id: emergencyButton
+       objectName: "lockEmergencyCall"
+-      visible: root.keypad
++      visible: root.keypad && root.pinVisible
++      opacity: root.pinOpacity
+       anchors.horizontalCenter: parent.horizontalCenter
+-      anchors.top: numberPad.visible ? numberPad.bottom : inputField.bottom
++      anchors.top: root.padShown ? numberPad.bottom : inputField.bottom
+       anchors.topMargin: Style.space(20)
+       width: emergencyLabel.implicitWidth + Style.space(40)
+       height: Math.max(Style.space(44), emergencyLabel.implicitHeight + Style.space(16))
+@@ -411,5 +427,12 @@
+         }
+       }
+     }
++
++    LockGlance {
++      id: glance
++      anchors.fill: parent
++      lock: root
++      pinTop: root.keypadClearsSensor ? keypadHint.y : inputField.y
++    }
+   }
+ }
+diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
+--- i/shell/plugins/lock/Service.qml
++++ w/shell/plugins/lock/Service.qml
+@@ -31,6 +31,9 @@
+   property int failedAttempts: 0
+   property string backgroundPath: ""
+   property int backgroundVersion: 0
++  // Bumped by the wake call (a phone's power button): the lock's glance view
++  // comes back each time the screen is woken.
++  property int wakeSerial: 0
+   property string lastEvent: "init"
+   property string lastEventAt: ""
+   property bool strandedLock: false
+@@ -280,6 +283,7 @@
+ 
+       LockView {
+         keypad: root.keypad
++        wakeSerial: root.wakeSerial
+         id: lockView
+         anchors.fill: parent
+         backgroundPath: root.backgroundPath
+@@ -548,6 +552,7 @@
+     // it and re-arm the blank timer (a phone's power button).
+     function wake(): string {
+       if (!root.currentlyLocked()) return "unlocked"
++      root.wakeSerial += 1
+       root.runWake()
+       return "ok"
+     }
+diff --git i/shell/plugins/notifications/components/NotificationCard.qml w/shell/plugins/notifications/components/NotificationCard.qml
+--- i/shell/plugins/notifications/components/NotificationCard.qml
++++ w/shell/plugins/notifications/components/NotificationCard.qml
+@@ -27,6 +27,11 @@
+   property int urgency: 1
+   property double timestamp: 0
+   property int cornerRadius: 0
++  // A static summary (a phone's lock screen) keeps each card short, and
++  // says beside the summary how many there are and how old ("2 new, 5m").
++  property int summaryLines: 2
++  property int bodyLines: 3
++  property string detail: ""
+ 
+   // System monospace font injected by the container.
+   property string fontFamily: ""
+@@ -300,7 +305,7 @@
+           font.bold: true
+           wrapMode: Text.WordWrap
+           elide: Text.ElideRight
+-          maximumLineCount: 2
++          maximumLineCount: root.summaryLines
+         }
+ 
+         Text {
+@@ -314,9 +319,19 @@
+           font.pixelSize: Style.font.title
+           wrapMode: Text.WordWrap
+           elide: Text.ElideRight
+-          maximumLineCount: 3
++          maximumLineCount: root.bodyLines
+         }
+       }
++
++      Text {
++        textFormat: Text.PlainText
++        Layout.alignment: Qt.AlignTop
++        visible: root.detail.length > 0
++        text: root.detail
++        color: root.dimColor
++        font.family: root.fontFamily
++        font.pixelSize: Style.font.bodySmall
++      }
+     }
+ 
+     // Reply, then a field with Send and Cancel, each tall enough to tap on

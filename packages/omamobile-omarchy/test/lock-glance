@@ -1,0 +1,26 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Patch 0023's glance view on the lock, offscreen in qmltestrunner: the
+# patched LockView, LockGlance and NotificationCard with Omarchy's real
+# Commons and Ui from the package (test/patches.py passes the patched
+# shell directory), and Quickshell stubbed (test/qml-stubs). No compositor,
+# no Quickshell, no session. Exits 77 without qmltestrunner.
+#   test/lock-glance SHELL_DIR
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+shell=${1:?usage: lock-glance SHELL_DIR}
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "lock-glance: no qmltestrunner" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/qs" "$work/plugins" "$work/home/.local/state/omarchy/toggles" \
+  "$work/home/.local/state/omamobile" "$work/home/.config/omarchy"
+cp -r "$shell/Commons" "$shell/Ui" "$work/qs/"
+cp -r "$shell/plugins/lock" "$shell/plugins/notifications" "$work/plugins/"
+cp "$here/lock-glance.qml" "$work/tst_lock_glance.qml"
+printf '.pragma library\nvar HOME = "%s"\n' "$work/home" > "$work/TestEnv.js"
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+export QML_XHR_ALLOW_FILE_READ=1
+exec "$runner" -import "$here/qml-stubs" -import "$work" -input "$work/tst_lock_glance.qml"

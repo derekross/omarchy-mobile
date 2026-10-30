@@ -9,7 +9,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam test/update.sh test/lock-pam.sh; do
+for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam test/update.sh test/lock-pam.sh test/lock-glance; do
   bash -n "$f" || fail "$f parses"
 done
 for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do

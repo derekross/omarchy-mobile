@@ -382,6 +382,7 @@ def real_package(t):
        "real omarchy: Backspace and Left still go back (0018)")
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
     qml_parse(root)
+    lock_glance(root)
     for name in ("omarchy-channel-set", "omarchy-refresh-pacman"):
         text = read(root, "usr/bin/" + name)
         guard = text.find("if [[ -x /usr/bin/omamobile-update ]]")
@@ -441,6 +442,40 @@ def qml_parse(root):
     bad = [f for f in sorted(files)
            if subprocess.run([tool, os.path.join(root, "usr/share/omarchy", f)], capture_output=True).returncode != 0]
     ok(files and not bad, "real omarchy: the %d patched QML files parse (qmlformat)%s" % (len(files), " " + str(bad) if bad else ""))
+
+
+def lock_glance(root):
+    """Patch 0023: the lock's glance view. Static checks on the patched
+    files, then test/lock-glance (qmltestrunner, offscreen) against them."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    view = read(root, lock + "LockView.qml")
+    service = read(root, lock + "Service.qml")
+    card = read(root, "usr/share/omarchy/shell/plugins/notifications/components/NotificationCard.qml")
+    ok(os.path.isfile(os.path.join(root, lock + "LockGlance.qml")) and os.path.isfile(os.path.join(root, lock + "LockGlance.js"))
+       and "LockGlance {\n      id: glance" in view,
+       "real omarchy: the lock has a glance view (0023)")
+    ok(view.count("opacity: root.pinOpacity") == 4 and view.count("&& root.pinVisible") == 3 and "visible: root.pinVisible" in view,
+       "real omarchy: every part of the PIN view hides under the glance (0023)")
+    wake = service.split("function wake(): string {", 1)
+    ok(len(wake) == 2 and "root.wakeSerial += 1" in wake[1].split("}", 1)[0]
+       and "wakeSerial: root.wakeSerial" in service,
+       "real omarchy: the wake call brings the glance back (0023)")
+    ok("maximumLineCount: root.summaryLines" in card and "maximumLineCount: root.bodyLines" in card
+       and "property int summaryLines: 2" in card and "property int bodyLines: 3" in card,
+       "real omarchy: notification toasts keep their line counts (0023)")
+    glance = read(root, lock + "LockGlance.qml") + read(root, lock + "LockGlance.js")
+    ok("XMLHttpRequest" not in glance and "curl" not in glance and "execDetached" not in glance,
+       "real omarchy: the glance asks no network and runs nothing (0023)")
+    p = subprocess.run(["bash", os.path.join(HERE, "lock-glance"), os.path.join(root, "usr/share/omarchy/shell")],
+                       capture_output=True, text=True)
+    if p.returncode == 77:
+        print("ok - real omarchy: the glance under qmltestrunner # SKIP no qmltestrunner")
+        return
+    out = p.stdout + p.stderr
+    totals = [l for l in out.splitlines() if l.startswith("Totals:")]
+    ok(p.returncode == 0, "real omarchy: the glance under qmltestrunner (0023: %s)" % (totals[-1] if totals else "no result"))
+    if p.returncode != 0:
+        print("\n".join(l for l in out.splitlines() if l.startswith(("FAIL", "   ", "QWARN")))[:4000])
 
 
 def screensaver_launcher(t, launcher):
