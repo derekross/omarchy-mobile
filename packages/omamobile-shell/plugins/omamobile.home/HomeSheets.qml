@@ -63,17 +63,18 @@ Item {
     MouseArea { anchors.fill: parent; onClicked: sheets.close() }
   }
 
-  Rectangle {
+  // Omarchy's surface: its corners (Style.cornerRadius) and its popup
+  // border, as the shade's sheets.
+  BorderSurface {
     id: panel
     objectName: "sheetPanel"
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     height: Math.min(parent.height * 0.82, Math.max(parent.height * 0.4, body.implicitHeight + header.height + Style.spacing.xxl * 2))
-    radius: Math.max(Style.cornerRadius, 14)
+    radius: Style.cornerRadius
     color: Commons.Color.menu.background
-    border.width: 1
-    border.color: Util.alpha(sheets.fg, 0.15)
+    borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
 
     // Taps on the sheet stay on the sheet.
     MouseArea { anchors.fill: parent }
@@ -531,7 +532,7 @@ Item {
           width: storeFlick.info && storeFlick.info.ok ? Math.min(parent.width, storeFlick.info.spec.size[0] * parent.width / 4) : 0
           height: storeFlick.info && storeFlick.info.ok ? storeFlick.info.spec.size[1] * (sheets.home.owlCellHeight) - Style.spacing.md * 2 : 0
           anchors.horizontalCenter: parent.horizontalCenter
-          radius: Math.max(Style.cornerRadius, 12)
+          radius: Style.cornerRadius
           color: sheets.home.cardColor
           clip: true
           Owl.OwlWidget {

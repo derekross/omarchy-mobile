@@ -15,7 +15,7 @@ runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/switcher"
-cp "$plugin/Readable.js" "$work/switcher/"
+cp "$plugin/Readable.js" "$plugin/SwitcherModel.js" "$work/switcher/"
 sed -E \
   -e '/^[[:space:]]*(WlrLayershell\.|exclusionMode:|anchors \{ top: true)/d' \
   -e 's/^([[:space:]]*)PanelWindow \{$/\1Window { width: 412; height: 892/' \

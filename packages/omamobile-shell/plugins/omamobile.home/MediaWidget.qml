@@ -123,7 +123,7 @@ Item {
 
           Rectangle {
             anchors.centerIn: parent
-            width: parent.width - 4; height: width; radius: width / 2
+            width: parent.width - 4; height: width; radius: Math.min(Style.cornerRadius, width / 2)
             color: tap.pressed ? Qt.rgba(1, 1, 1, 0.16) : "transparent"
           }
           Text {

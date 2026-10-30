@@ -80,7 +80,7 @@ Item {
           anchors.centerIn: parent
           width: Math.min(56, Math.min(parent.width, parent.height) - Style.spacing.lg * 2)
           height: width
-          radius: width / 2
+          radius: Math.min(Style.cornerRadius, width / 2)
           color: modelData.on ? Commons.Color.accent
             : touch.pressed ? Qt.rgba(1, 1, 1, 0.2) : Qt.rgba(1, 1, 1, 0.08)
 

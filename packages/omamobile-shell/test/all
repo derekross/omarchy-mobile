@@ -28,6 +28,26 @@ if grep -rnE 'Color\.menu\.selected([^A-Za-z]|$)' plugins --include=*.qml; then
 fi
 pass "palette tokens exist"
 
+# Omarchy's corners (Style.cornerRadius mirrors Hyprland's rounding: 0 by
+# default) on the home screen, its widget frames and sheets, and recent
+# apps: every radius there is that token, or that token clamped to a shape
+# (Math.min(Style.cornerRadius, width / 2)), never a rounding of our own,
+# so the widgets are square as the lock and the shade, and round again
+# when the user sets rounding. OWL widgets draw their own insides (owl/).
+for qml in plugins/omamobile.home/*.qml plugins/omamobile.switcher/*.qml; do
+  if grep -nE '(^|[^.[:alnum:]_])radius:' "$qml" | grep -v 'Style\.cornerRadius'; then
+    fail "$qml: corners follow Style.cornerRadius"
+  fi
+  if grep -nE 'Math\.max\(Style\.cornerRadius' "$qml"; then
+    fail "$qml: no rounding floor under Style.cornerRadius"
+  fi
+done
+# With rounding set, a widget's inside is masked to its card's corners.
+grep -c 'readonly property bool roundClip: cell.isWidget && Style.cornerRadius > 0' plugins/omamobile.home/Home.qml >/dev/null || fail "widgets are clipped to their card's corners"
+grep -c 'maskSource: cornerMask' plugins/omamobile.home/Home.qml >/dev/null || fail "the widget mask is the card's shape"
+grep -c 'borderSpec: Border.surfaceSpec("popups"' plugins/omamobile.home/HomeSheets.qml >/dev/null || fail "home sheets use Omarchy's popup border"
+pass "home and recent apps follow Omarchy's corners"
+
 # Readable text (TOUCH-PLAN 2.1): every plugin's Readable.js is the same
 # file, and no plugin text uses Omarchy's 10 px caption without its floor.
 first=
@@ -235,6 +255,7 @@ if command -v node >/dev/null; then
   node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
   node test/home-model.js || fail "home screen model"
   node test/back-model.js || fail "back gesture model"
+  node test/switcher-model.js || fail "recent apps' app names"
   # Our OWL runtime's core: probes against the reference runtime's recorded
   # outputs, the resource caps, sh() quoting, and the phone's rules.
   node test/owl-core.js >/dev/null || { node test/owl-core.js | grep -v '^ok'; fail "OWL runtime core"; }
@@ -445,7 +466,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
-  pass "recent apps under touch: Clear all, Home, a near miss, a card, the cards on their side"
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, app names, a centred card, the cards on their side"
 fi
 rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then

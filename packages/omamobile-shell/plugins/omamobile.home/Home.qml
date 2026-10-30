@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import QtQuick
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -1111,7 +1112,7 @@ Item {
               anchors.centerIn: parent
               width: index === root.currentPage ? 9 : 7
               height: width
-              radius: width / 2
+              radius: Math.min(Style.cornerRadius, width / 2)
               color: index === root.currentPage ? root.foreground : root.dimForeground
               opacity: index === root.currentPage ? 1 : 0.6
               border.width: index === root.layout.home && root.editing ? 1 : 0
@@ -1216,7 +1217,7 @@ Item {
         anchors.bottomMargin: Style.spacing.lg
         width: noticeText.implicitWidth + Style.spacing.xxl * 2 + (canUndo ? undoChip.width + Style.spacing.md : 0)
         height: canUndo ? root.touch : noticeText.implicitHeight + Style.spacing.lg * 2
-        radius: height / 2
+        radius: Math.min(Style.cornerRadius, height / 2)
         color: Commons.Color.menu.background
         Text {
           id: noticeText
@@ -1240,7 +1241,7 @@ Item {
           Rectangle {
             anchors.fill: parent
             anchors.margins: Style.spacing.xs
-            radius: height / 2
+            radius: Math.min(Style.cornerRadius, height / 2)
             color: undoTap.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent"
           }
           Text {
@@ -1369,20 +1370,44 @@ Item {
     z: dragging || resizing ? 20 : 1
 
     // The widget's card. Plain and opaque enough to read on any wallpaper;
-    // no blur or shadow, to keep the 120 Hz panel smooth.
+    // no blur or shadow, to keep the 120 Hz panel smooth. Its corners are
+    // Omarchy's (Style.cornerRadius, Hyprland's rounding: square by
+    // default, as the lock, the shade and the keypad), not a rounding of
+    // our own.
     Rectangle {
       id: card
       anchors.fill: parent
       anchors.margins: root.gap
       visible: cell.isWidget
-      radius: Math.max(Style.cornerRadius, 12)
+      radius: Style.cornerRadius
       color: root.cardColor
+    }
+
+    // The widget's inside is clipped to the card. Square, the plain clip is
+    // the card's shape and costs nothing; with rounding set, a mask of the
+    // card's shape keeps pictures out of the corners (a layer per widget,
+    // only then).
+    readonly property bool roundClip: cell.isWidget && Style.cornerRadius > 0
+    Rectangle {
+      id: cornerMask
+      anchors.fill: card
+      visible: false
+      layer.enabled: cell.roundClip
+      radius: Style.cornerRadius
+      color: "white"
     }
 
     Loader {
       id: content
       anchors.fill: cell.isWidget ? card : parent
       clip: cell.isWidget
+      layer.enabled: cell.roundClip
+      layer.effect: MultiEffect {
+        maskEnabled: true
+        maskSource: cornerMask
+        maskThresholdMin: 0.5
+        maskSpreadAtMin: 1.0
+      }
       // A user widget goes through UserWidgetCell, which loads its code
       // only when the scan calls it ok and shows an error card otherwise.
       source: (cell.isUser && root.isOwlType(cell.modelData.type)) || HomeModel.isOwlType(cell.modelData.type) ? Qt.resolvedUrl("OwlCell.qml")
@@ -1401,7 +1426,7 @@ Item {
       anchors.fill: parent
       anchors.margins: root.gap / 2
       visible: root.editing
-      radius: Math.max(Style.cornerRadius, 12)
+      radius: Style.cornerRadius
       color: cell.dragging ? Util.alpha(Commons.Color.accent, 0.12) : "transparent"
       border.width: cell.dragging || cell.resizing ? 2 : 1
       border.color: Commons.Color.accent
@@ -1462,7 +1487,7 @@ Item {
       Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
-        width: 24; height: 24; radius: 12
+        width: 24; height: 24; radius: Math.min(Style.cornerRadius, width / 2)
         color: Commons.Color.urgent
         Text {
           anchors.centerIn: parent
@@ -1487,7 +1512,7 @@ Item {
       Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        width: 26; height: 26; radius: 13
+        width: 26; height: 26; radius: Math.min(Style.cornerRadius, width / 2)
         color: Commons.Color.accent
         Text {
           anchors.centerIn: parent

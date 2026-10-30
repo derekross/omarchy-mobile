@@ -80,7 +80,7 @@ Item {
           spacing: Style.spacing.lg
 
           Rectangle {
-            width: 3; height: label.height; radius: 1.5
+            width: 3; height: label.height; radius: Math.min(Style.cornerRadius, 1.5)
             color: modelData.date === widget.todayIso ? Commons.Color.accent : widget.dim
           }
           Column {
@@ -140,7 +140,7 @@ Item {
           Rectangle {
             anchors.centerIn: parent
             visible: modelData.today
-            width: Math.min(parent.width, parent.height) - 2; height: width; radius: width / 2
+            width: Math.min(parent.width, parent.height) - 2; height: width; radius: Math.min(Style.cornerRadius, width / 2)
             color: Commons.Color.accent
           }
           Text {

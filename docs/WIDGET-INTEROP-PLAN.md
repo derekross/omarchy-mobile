@@ -113,7 +113,7 @@ A user widget is a folder `~/.config/omamobile/widgets/<id>/` with an Omarchy-st
 | Cache that survives layout edits (`host.cached`) | Not needed | Our runtime instances outlive cell rebuilds (§2.7) |
 | `editing` mode (taps go to the editor) | Long-press belongs to the home screen, the same model | Handlers disabled while editing |
 | 120 Hz performance rules (no endless animation, no effects) | `time` animates every frame | Our scheduler: at most 30 fps, paused when hidden (§2.6) |
-| Card look: rounded, mostly opaque theme background | Square 2 dp `muted` frame | Our card, with the widget's `padding` inside |
+| Card look: rounded, mostly opaque theme background | Square 2 dp `muted` frame | Our card, with Omarchy's corners (`Style.cornerRadius`: square by default) and the widget's `padding` inside |
 
 ---
 

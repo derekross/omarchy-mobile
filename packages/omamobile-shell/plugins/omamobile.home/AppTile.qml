@@ -26,7 +26,7 @@ Item {
     anchors.centerIn: icon
     width: icon.width + 12
     height: width
-    radius: width * 0.3
+    radius: Math.min(Style.cornerRadius, width * 0.3)
     color: touch.pressed ? Qt.rgba(1, 1, 1, 0.2) : "transparent"
   }
 

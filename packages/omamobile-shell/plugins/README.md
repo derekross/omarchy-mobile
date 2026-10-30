@@ -437,6 +437,15 @@ prompt, NFC links and the Create-a-widget agent.
   the app shares one) gives it a new empty workspace. Both act on the
   window's Hyprland address (`hl.dsp.window.move({ window = "address:…",
   workspace = … })`). Empty workspaces go away as Hyprland's always do.
+* **Cards are named by the app**, as the drawer names it: the desktop
+  entry's name, found by the window's class (`SwitcherModel.js`: the entry's
+  id, its `StartupWMClass`, a Chromium app's `chrome-<id>-<profile>` /
+  `crx_<id>`, an Omarchy web app's `chrome-<host>_<path>-<profile>` from its
+  URL, then the matches `omamobile-launch` uses), else the window's title,
+  else its class. One line, elided, centred over the card. A card is always
+  centred, its neighbours peeking in at the sides: recent apps open on the
+  newest, a swipe ends on the nearest card, and the view centres again when
+  the window gets its size or the window list changes.
 * **Keyboards** keep Omarchy's workspace bindings (Super+1…9, Super+Shift+1…9
   and the rest) unchanged.
 
@@ -453,6 +462,13 @@ wallpaper, swiped sideways, with page dots above the dock.
   apps goes back to it) is marked in the Pages sheet.
 * **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
   take one cell, widgets a span within their own limits.
+* **Omarchy's corners.** Widget cards, the edit outlines, the sheets and the
+  small badges follow `Style.cornerRadius` (Hyprland's rounding: square by
+  default, as the lock, the shade and the keypad); set rounding and they
+  round with it. A widget's inside is clipped to its card: square, a plain
+  clip; rounded, a mask of the card's shape (a layer per widget, only then).
+  The widget picker sheet has Omarchy's popup border. `test/all` fails on a
+  radius in `omamobile.home` or `omamobile.switcher` that isn't the token.
 * **Apps** launch the way the drawer does (`omamobile-launch app`: Omarchy's
   `uwsm-app -- gtk-launch`, on a screen of their own). An app that is no longer
   installed stays, dimmed, until you remove it: its package may come back.
@@ -460,7 +476,7 @@ wallpaper, swiped sideways, with page dots above the dock.
   drag an item to move it (dropped on an item of the same size, the two swap;
   on a bigger one, it takes the nearest free cell; dragged past the left or
   right edge, it moves to that page, making a new page on the right), drag
-  the round corner handle to resize a widget, tap the cross to remove (an
+  the corner handle to resize a widget, tap the cross to remove (an
   **Undo** chip stays for 5 seconds and puts the item back, with its
   settings, where it was or in the nearest free cell), tap a
   widget for its settings. The toolbar: **Widgets** and **Apps** add to the

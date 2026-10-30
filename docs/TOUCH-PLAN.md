@@ -60,7 +60,7 @@ Priorities: **P1** broken, unsafe, or a dead end on a phone; **P2** noticeably a
 - **3.4 Launcher clean-up (P2):** hide Disks, Evince (Papers stays), Snapshot (omacam is the camera), Fcitx 5 Configuration, CMake, lstopo, the printing apps, Foot Server/Client. LibreOffice, OBS, Kdenlive and the dev tools are unusable at 480 px; leave them installable but consider hiding.
 - **3.5 PiP and About (P2):** PiP at 300x169 in a corner, not maximized; a compact About layout under 600 px.
 - **3.6 Haptics (P3):** none in the shell. A small helper for long-press, the switcher hold and the answer threshold (cs40l26 exists). It buzzes: announce before testing.
-- **3.7 Polish (P3):** QS edit mode's "−" badges and Reset confirm; Wi-Fi/Bluetooth Forget confirm or undo; "Added to home" feedback after a drawer long-press; the missing-app tile says "Not installed" instead of its raw id; switcher cards show the app's name, not its id; OWL slider drags only on their own axis; a fade on the drawer's clipped last row; a safe-area token for the rounded corners; a pull-down strip over fullscreen apps; a Gestures table in the shell README.
+- **3.7 Polish (P3):** QS edit mode's "−" badges and Reset confirm; Wi-Fi/Bluetooth Forget confirm or undo; "Added to home" feedback after a drawer long-press; the missing-app tile says "Not installed" instead of its raw id; switcher cards show the app's name, not its id (0.2.43: the desktop entry's name, web apps included, centred over a card that snaps to the centre); OWL slider drags only on their own axis; a fade on the drawer's clipped last row; a safe-area token for the rounded corners; a pull-down strip over fullscreen apps; a Gestures table in the shell README.
 
 ## Omarchy patches this needs (upstreamable)
 

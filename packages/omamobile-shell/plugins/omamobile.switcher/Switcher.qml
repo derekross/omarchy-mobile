@@ -8,6 +8,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "Readable.js" as Readable
+import "SwitcherModel.js" as SwitcherModel
 
 // Recent apps, after Android: every open window as a card with a live
 // preview. Swipe sideways through them, tap one to switch to it, flick it up
@@ -21,6 +22,10 @@ import "Readable.js" as Readable
 //
 // On its side (TOUCH-PLAN 2.4: 1040x480) a card keeps the screen's shape,
 // so its preview isn't stretched, and the bottom actions keep their row.
+//
+// A card is named as the app drawer names the app: its desktop entry's
+// name, found by the window's class (SwitcherModel.js, which also knows
+// Chromium's and Omarchy's web apps), else the window's title.
 //
 // Windows come from the Wayland foreign-toplevel list, which gives each one
 // activate() and close(). Home and the hold actions need Hyprland: the
@@ -205,9 +210,15 @@ Item {
     dismiss()
   }
 
-  function windowLabel(toplevel) {
+  // The app's name: its desktop entry's, else the window's title, else its
+  // class. Re-evaluated when the desktop entries change.
+  function appName(toplevel) {
     if (!toplevel) return ""
-    return (toplevel.appId || "App") + (toplevel.title ? "  " + toplevel.title : "")
+    return SwitcherModel.appName(toplevel.appId, toplevel.title, DesktopEntries.applications.values || [])
+  }
+
+  function windowLabel(toplevel) {
+    return appName(toplevel)
   }
 
   readonly property color foreground: Commons.Color.menu.text
@@ -224,7 +235,7 @@ Item {
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
-    onVisibleChanged: if (visible) cards.positionViewAtBeginning()
+    onVisibleChanged: if (visible) cards.centreOn(0)
 
     Rectangle {
       anchors.fill: parent
@@ -273,7 +284,24 @@ Item {
       preferredHighlightBegin: (width - cardWidth) / 2
       preferredHighlightEnd: (width + cardWidth) / 2
       boundsBehavior: Flickable.StopAtBounds
+      highlightMoveDuration: 180
       model: root.windows
+
+      // A card is always centred, its neighbours peeking in at the sides: a
+      // swipe ends on the nearest card (SnapToItem in the strictly enforced
+      // centre range), and the newest card is centred when recent apps open.
+      // Centring runs again once the window has its size (a layer surface is
+      // sized after it is shown, and a range worked out from width 0 left
+      // the first card cut off at the left edge) and when the window list
+      // changes under the view.
+      function centreOn(index) {
+        if (count === 0) return
+        var i = Math.max(0, Math.min(count - 1, index))
+        currentIndex = i
+        positionViewAtIndex(i, ListView.Center)
+      }
+      onWidthChanged: Qt.callLater(function() { cards.centreOn(cards.currentIndex) })
+      onCountChanged: Qt.callLater(function() { cards.centreOn(cards.currentIndex) })
 
       // 72% of the width upright; on its side, no wider than the screen's
       // shape gives the card's height (the title sits above the card).
@@ -290,16 +318,20 @@ Item {
         width: cards.cardWidth
         height: cards.height
 
-        // Title row: app and window title.
+        // The app's name, one line, centred over the card.
         Text {
           id: title
+          objectName: "cardTitle"
           anchors.left: card.left
           anchors.right: card.right
           anchors.bottom: card.top
           anchors.bottomMargin: Style.space(8)
           opacity: card.opacity
           textFormat: Text.PlainText
-          text: (slot.modelData.appId || "") + (slot.modelData.title ? "  " + slot.modelData.title : "")
+          text: root.appName(slot.modelData)
+          horizontalAlignment: Text.AlignHCenter
+          maximumLineCount: 1
+          wrapMode: Text.NoWrap
           elide: Text.ElideRight
           color: root.foreground
           font.family: Style.font.family
@@ -515,7 +547,7 @@ Item {
 
             delegate: SheetRow {
               required property var modelData
-              text: modelData.appId || "App"
+              text: root.appName(modelData)
               hint: modelData.title || ""
               onActivated: root.showWith(root.actionTarget, modelData)
             }
