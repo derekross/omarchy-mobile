@@ -546,8 +546,8 @@ cmd_initramfs() {
 
 cmd_images() {
   load_device
-  # Pixel path: tree-local or SRC_DIR mkbootimg.py. qcom-abl uses host
-  # mkbootimg (android-tools) via tools/dodge-chain for a header-v4 image.
+  # Pixel and qcom-abl both prefer tree-local or SRC_DIR mkbootimg.py.
+  # qcom-abl packs a header-v4 chain via tools/dodge-chain (same lookup).
   local img="$KERNEL_OUT/images"
   local tools="$ROOT/system/tools/mkbootimg"
   [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
@@ -592,8 +592,12 @@ cmd_images() {
     # is required and never committed. Pixel paths below are unchanged.
     [[ -n ${LIVE_DTB:-} && -f ${LIVE_DTB:-} ]] ||
       die "qcom-abl images need LIVE_DTB= path to the rooted live FDT (never committed)"
-    command -v mkbootimg >/dev/null ||
-      die "qcom-abl images need mkbootimg on PATH (android-tools); the Pixel path still uses $tools"
+    # dodge-chain resolves mkbootimg.py (tree-local / SRC_DIR) itself; leave
+    # a soft PATH check only as a hint when neither copy exists.
+    if [[ ! -f $tools/mkbootimg.py ]]; then
+      command -v mkbootimg >/dev/null ||
+        die "qcom-abl images need $ROOT/system/tools/mkbootimg/mkbootimg.py or $SRC_DIR/system/tools/mkbootimg/mkbootimg.py (or mkbootimg on PATH)"
+    fi
     local chain_out="${CHAIN_OUT:-$KERNEL_OUT/chain}"
     say "Boot image (qcom-abl chain, header v4): boot via tools/dodge-chain"
     STAGE2_OUT="$KERNEL_OUT" \

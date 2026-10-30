@@ -11,7 +11,7 @@ our DTB without flashing `vendor_boot` is this chain:
    header v4 image (`tools/dodge-chain pack`, also via
    `bin/omamobile images` when `BOOT_METHOD=qcom-abl`).
 2. Stage 1 (`init` here) runs as PID 1. It mounts proc (and optionally
-   sysfs) only, touches no disk, and `kexec -c` into stage 2.
+   sysfs) only, never opens a block device, and `kexec -c` into stage 2. Stage-1 userspace claim only: the kernel may still probe UFS on stock's DTB.
 3. Stage 2 is the PR kernel `Image`, the dodge DTB (live memory map
    from `$LIVE_DTB`), and the shared initramfs from
    `bin/omamobile initramfs` (`INITRAMFS_INIT=/initramfs/init`).

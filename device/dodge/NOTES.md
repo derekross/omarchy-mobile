@@ -1,8 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # OnePlus 13 (dodge)
 
-Status (2026-10-28): native Arch Linux ARM / Omarchy Mobile on Qualcomm SM8750
-(`7.3.0-rc6-dodge-gpu2` lineage). Display, GPU (Adreno 830), touch, Wi-Fi,
+Status (2026-10-30): native Arch Linux ARM / Omarchy Mobile on Qualcomm SM8750
+(`7.3.0-rc6-dodge-gpu2` lineage on the installed slot B; #115 head smoke via
+RAM-only `fastboot boot`). Display, GPU (Adreno 830), touch, Wi-Fi,
 Bluetooth pairing, speakers/mics, sensors (autorotate), USB gadget networking
 and SSH work on the phone. Modem (MPSS + IPA + ModemManager + NetworkManager
 cellular) works behind an opt-in flag with a per-phone EFS restore (see
@@ -10,9 +11,9 @@ cellular) works behind an opt-in flag with a per-phone EFS restore (see
 this repository. Fingerprint, cameras and NFC are not started.
 
 Kernel series: [linux-omarchy-mobile #115](https://github.com/derekross/linux-omarchy-mobile/pull/115)
-(`dodge/pr-kernel-v1`; subsystem-split; gpu2 + IPA). Device tree:
+(`dodge/pr-kernel-v2`; subsystem-split; gpu2 + IPA). Device tree:
 `arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dts`. Userspace: this tree's
-`device/dodge/` and `packages/omamobile-device-dodge`.
+`device/dodge/` and `packages/omamobile-device-dodge` (0.1.0).
 
 Descriptor: `BOOT_METHOD=qcom-abl`, `OMAMOBILE_SLOT=b`,
 `UFS_RW="boot_b userdata"`. Omarchy runs on slot B; stock stays on slot A.
@@ -29,8 +30,11 @@ header-v4, ramdisk-empty, empty-cmdline `boot.img` whose kernel carries a
 built-in `/omamobile/` chain-loader that kexecs stage 2 (our Image, DTB,
 initramfs). This ABL does not start header v2 under `fastboot boot`, and
 ignores a ramdisk in an uploaded v4 `boot.img` (stock `vendor_boot` still
-supplies the DTB). A plain `omamobile images` qcom-abl v2 pack is not
-bootable here; see [chainload/](chainload/) and the private bring-up notes.
+supplies the DTB for stage 1). `bin/omamobile images` with
+`BOOT_METHOD=qcom-abl` now packs that chain via `tools/dodge-chain`
+(tree-local / `$SRC_DIR` `mkbootimg.py`, header v4); a plain header-v2
+qcom-abl pack is still not bootable here. See [chainload/](chainload/)
+and [BRINGUP-M1.md](BRINGUP-M1.md) §4 / §6.
 
 ## Feature matrix (phone-verified)
 

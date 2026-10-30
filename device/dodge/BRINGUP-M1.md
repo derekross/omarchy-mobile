@@ -52,9 +52,13 @@ This phone's ABL:
 unchanged.
 
 **Stage 1** (`device/dodge/chainload/init`) runs as **PID 1**. It mounts
-proc (and optionally sysfs) only, **touches no disk (soft-check: if `/proc/mounts` lists a `/dev/sd*` mount, stage 1 holds and resets instead of kexec)**, and never opens a
-block device. Stage 2 is the PR kernel `Image`, the dodge DTB (live memory
-map from `$LIVE_DTB`, never committed), and the shared initramfs from
+proc (and optionally sysfs) only and **never opens a block device**
+(soft-check: if `/proc/mounts` lists a `/dev/sd*` mount, stage 1 holds and
+resets instead of kexec). That is a userspace claim only: stage 1 boots the
+full stage-2 kernel config on **stock's DTB**, so a mainline driver whose
+compatible matches a stock node (for example UFS) may still probe before
+kexec. Stage 2 is the PR kernel `Image`, the dodge DTB (live memory map
+from `$LIVE_DTB`, never committed), and the shared initramfs from
 `bin/omamobile initramfs`. Stage 2 carries the shared storage guard.
 
 `bin/omamobile flash` **refuses** `BOOT_METHOD=qcom-abl` in this PR: a
@@ -105,9 +109,12 @@ each session. Those backups are never in git.
 - Allowlisted partitions are writable only when they live on `sda`.
   `userdata` does (`sda15`); `boot_b` does not (`sde48`) — see §2.
 - If `boot_arch` fails, the shared init waits ~45 s for a USB host then
-  triggers `sysrq c`. On this ABL a panic has historically returned the
-  phone to fastboot / a reboot rather than quietly continuing into stock
-  over Omarchy userdata; still confirm on the next smoke and record here.
+  triggers `sysrq c`. **Panic behaviour on this ABL is still open:** stage 2
+  carries `panic=10`, so the kernel resets after 10 s. With
+  `slot-successful:b=yes` the expected path is a reboot back into slot B
+  rather than falling back to A, but whether this ABL enters a dump mode
+  first has not been confirmed with a deliberate `sysrq c` on a booted B.
+  Do not treat "returns to fastboot" as verified until that test is run.
 - Until a `tools/phone-smoke` report from images built by
   `bin/omamobile images` on this branch exists, treat the shared init path
   as **untested on dodge**.
@@ -120,42 +127,50 @@ each session. Those backups are never in git.
 | Inactive-slot boot | Omarchy `boot_b` set active; stock OTA `boot.img` on `boot_a` only | pass |
 | `version-bootloader` | empty on this ABL | noted |
 | Boot-success | GPT bit 54 set by hand on `boot_b` after first clean boot | pass |
-| PR-tip chain smoke | `fastboot boot` of `bin/omamobile images` output (shared initramfs) | pending morning 2026-10-30 |
+| PR-tip chain smoke (2026-10-30 ~07:46 Europe/Copenhagen) | RAM-only `fastboot boot` of chain image from this branch (no flash, no set_active). Stage-2 kernel was the private `7.3.0-rc6-dodge-gpu2` build (not the #115 head); package still `omamobile-device-dodge 20261016-1`. `tools/phone-smoke` overall **unknown**: required storage-guard/root/kernel-health/USB ok; display/GPU/touch/buttons/battery/sensors ok; required `boot` skip (forced cmdline, no slot suffix); required `session` not ok (Hyprland not up at ~40 s); sound cards none; Wi-Fi link down at that moment. Shared init still marked untested for a #115-head boot — see the follow-up smoke after the kernel tip RAM boot. | partial |
 
 ## 7. GPT bit-54 record (for §3.1)
 
 **Shape:** by hand, once per install of slot B's boot image — never from a
-service or at boot (AGENTS.md).
+service or at boot (§3.1).
 
 | Item | Value |
 | --- | --- |
 | LUN | **sde** (boot_a=sde12, boot_b=sde48); userdata on **sda** (sda15) |
 | Sector size | 4096 logical |
 | Partition entry / bit | GPT attribute **bit 54** on the `boot_b` entry |
-| Four sectors | LBAs **1**, **2**, last−1, last on the LUN (primary header, primary entries, backup entries, backup header) — exact last LBA from morning dump |
-| Rollback | `fastboot --set-active=a` only after a userdata wipe plan; keep off-phone GPT snapshots before any rewrite |
-| Way back | stock on slot A; do not boot stock over Omarchy userdata |
+| Record size | At **4096-byte** logical sectors the GPT record is **8 sectors in 4 files**: primary header (LBA 1), primary entries (LBAs 2–4, 3 sectors), backup entries (LBAs 634875–634877, 3 sectors), backup header (LBA 634879). "Four sectors" would only be right at 512-byte sectors. |
+| Rollback (corrupted GPT) | Off-phone restore of the 4 dump files onto the matching LBAs. sde also holds `abl`/`xbl`; if both primary and backup GPTs on sde are corrupt the phone is likely EDL-only. Whether this ABL accepts `fastboot flash partition:<lun>` has **not** been checked (read-only docs / getvar only — not tried). |
+| Way back | `fastboot --set-active=a` then `fastboot -w` (wipes Omarchy `userdata`); do not boot stock A over Omarchy userdata without that wipe. |
 
-### Slot flags from fastboot (2026-10-29 ~21:50 Europe/Copenhagen)
+### Morning read-only dump (2026-10-30 ~07:49 Europe/Copenhagen)
 
-Phone in fastboot after a refused v2 `fastboot boot`; product `sun`,
-unlocked, `current-slot: b`:
+No GPT write this round. Bit 54 was already set on both `boot_a` and
+`boot_b` (by hand on 2026-10-28, without a pre-write dump), so the numbers
+below are the **current** state, not a before/after. The next by-hand write
+must record both.
 
-| var | a | b |
-| --- | --- | --- |
-| slot-successful | yes | yes |
-| slot-unbootable | no | no |
-| slot-retry-count | 6 | 6 |
+| Item | Value |
+| --- | --- |
+| logical sector size sde / sda | **4096** / 4096 |
+| sde last LBA | 634879 |
+| primary header LBA | 1 |
+| primary entries LBA | 2 (96 × 128 B over 3 sectors) |
+| backup entries LBA | 634875 (3 sectors) |
+| backup header LBA | 634879 |
+| primary header CRC32 | 0x04411e69 (matches calc) |
+| backup header CRC32 | 0x15af848b (matches calc) |
+| partition array CRC32 | **0x4950baae** (primary + backup match) |
+| boot_a attrs / bit 54 | 0x0072000000000000 / **1** (priority 2, retry 6, successful) |
+| boot_b attrs / bit 54 | 0x0077000000000000 / **1** (priority 3, active, retry 6, successful) |
 
-### Morning-only read-only steps (do not write)
+Off-phone raw dumps (`sde-prim-hdr.bin`, `sde-bak-hdr.bin`,
+`sde-prim-entries.bin`, `sde-bak-entries.bin`) stay on the desktop only —
+never in the repo.
 
-Still needed for the full §3.1 entry; all are read-only on a booted Omarchy
-or from a saved GPT image:
+### Still open for §3.1
 
-1. Dump GPT headers + entry arrays on **sde** (and sda for completeness):
-   `dd` of LBAs 1, 2, last−1, last; record sizes and CRCs before/after any
-   future hand edit.
-2. Record the `boot_b` partition entry bytes and confirm bit 54.
-3. Re-read `fastboot getvar` slot-successful / unbootable / retry-count for
-   both slots after the morning chain smoke (still read-only).
-4. Note panic / `sysrq c` behaviour if the shared init ever takes that path.
+1. Deliberate panic / `sysrq c` on a booted slot B, then re-read fastboot
+   slot-successful / unbootable / retry-count for both slots.
+2. Concrete GPT restore path that avoids EDL if both copies on sde are bad
+   (whether `fastboot flash partition:<lun>` works on this ABL).

@@ -8,8 +8,10 @@
 # ramdisk in an uploaded v4 boot.img. Stage 1 is therefore our kernel with
 # a built-in initramfs and a forced cmdline, packed as a kernel-only
 # header v4 image. ABL starts it on stock's DTB; device/dodge/chainload/init
-# (PID 1, no disk) kexecs stage 2: our kernel, our DTB, the shared
-# initramfs from bin/omamobile initramfs. Nothing is flashed.
+# (PID 1; userspace never opens a block device) kexecs stage 2: our kernel,
+# our DTB, the shared initramfs from bin/omamobile initramfs. The stage-1
+# kernel may still probe UFS if stock's DTB matches a mainline driver.
+# Nothing is flashed.
 #
 # Stage 2 inputs come from $STAGE2_OUT (Image, DTB, .config) and
 # $STAGE2_INITRD (normally $KERNEL_OUT/initramfs.cpio.lz4). Run
@@ -63,7 +65,17 @@ cmd_pack() {
   [[ -n $LIVE_DTB && -f $LIVE_DTB ]] || die "set LIVE_DTB to the rooted live FDT (never committed)"
   [[ -d $KERNEL_DIR ]] || die "no kernel tree at KERNEL_DIR=$KERNEL_DIR"
   [[ -x $KERNEL_DIR/scripts/config ]] || die "KERNEL_DIR=$KERNEL_DIR has no scripts/config"
-  command -v mkbootimg >/dev/null || die "mkbootimg is not installed (android-tools)"
+  # Prefer tree-local mkbootimg.py (same lookup as bin/omamobile images /
+  # Pixel path). Host android-tools mkbootimg is a last resort — the build
+  # container does not ship it.
+  SRC_DIR="${SRC_DIR:-$HOME/android}"
+  MKBOOTIMG_PY=""
+  for d in "$ROOT/system/tools/mkbootimg" "$SRC_DIR/system/tools/mkbootimg"; do
+    [[ -f $d/mkbootimg.py ]] && MKBOOTIMG_PY="$d/mkbootimg.py" && break
+  done
+  if [[ -z $MKBOOTIMG_PY ]]; then
+    command -v mkbootimg >/dev/null || die "no mkbootimg.py under $ROOT/system/tools/mkbootimg or $SRC_DIR/system/tools/mkbootimg, and no mkbootimg on PATH"
+  fi
   local work="$CHAIN_OUT/chain" dl="${ALPINE_DL:-$HOME/android/downloads/alpine}" apk
   mkdir -p "$work/x" "$CHAIN_OUT/images" "$dl"
 
@@ -124,7 +136,11 @@ LIST
   make -s -C "$KERNEL_DIR" O="$CHAIN_OUT" ARCH=arm64 LLVM=1 olddefconfig
   make -s -C "$KERNEL_DIR" O="$CHAIN_OUT" ARCH=arm64 LLVM=1 -j"$JOBS" Image
   local out="$CHAIN_OUT/images/boot-chain.img"
-  mkbootimg --header_version 4 --kernel "$CHAIN_OUT/arch/arm64/boot/Image" -o "$out"
+  if [[ -n $MKBOOTIMG_PY ]]; then
+    python3 "$MKBOOTIMG_PY" --header_version 4 --kernel "$CHAIN_OUT/arch/arm64/boot/Image" -o "$out"
+  else
+    mkbootimg --header_version 4 --kernel "$CHAIN_OUT/arch/arm64/boot/Image" -o "$out"
+  fi
   say "Packed $out"
   sha256sum "$out"
   ls -l "$out"
