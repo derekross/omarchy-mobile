@@ -65,7 +65,8 @@ from `$LIVE_DTB`, never committed), and the shared initramfs from
 fastboot `--set-active` on this ABL may clear the successful bit and refill
 retries, undoing the GPT bit-54 mark that has no §3.1 entry yet. Owners
 update with `push` only once that path can see `boot_b` (see LUN note
-above). The installer PR can reopen flash with the rest.
+above). So with this PR there is no in-tree day-2 update path for dodge.
+The installer PR can reopen flash with the rest.
 
 ## 3. How this phone was installed (record)
 
@@ -127,7 +128,7 @@ each session. Those backups are never in git.
 | Inactive-slot boot | Omarchy `boot_b` set active; stock OTA `boot.img` on `boot_a` only | pass |
 | `version-bootloader` | empty on this ABL | noted |
 | Boot-success | GPT bit 54 set by hand on `boot_b` after first clean boot | pass |
-| PR-tip chain smoke (2026-10-30 ~07:46 Europe/Copenhagen) | RAM-only `fastboot boot` of chain image from this branch (no flash, no set_active). Stage-2 kernel was the private `7.3.0-rc6-dodge-gpu2` build (not the #115 head); package still `omamobile-device-dodge 20261016-1`. `tools/phone-smoke` overall **unknown**: required storage-guard/root/kernel-health/USB ok; display/GPU/touch/buttons/battery/sensors ok; required `boot` skip (forced cmdline, no slot suffix); required `session` not ok (Hyprland not up at ~40 s); sound cards none; Wi-Fi link down at that moment. A later #115-head RAM boot (~09:28) **hung** on the console (dual memory map; fixed in kernel DTS + stage2-dtb); re-smoke of the #115 tip pending slot-B recovery. | partial |
+| PR-tip chain smoke (2026-10-30 Europe/Copenhagen) | Morning (~07:46): RAM-only `fastboot boot` of chain image from this branch (no flash, no set_active). Stage-2 kernel was the private `7.3.0-rc6-dodge-gpu2` build (not the #115 head); package still `omamobile-device-dodge 20261016-1`. `tools/phone-smoke` overall **unknown**: required storage-guard/root/kernel-health/USB ok; display/GPU/touch/buttons/battery/sensors ok; required `boot` skip (forced cmdline, no slot suffix); required `session` not ok (Hyprland not up at ~40 s); sound cards none; Wi-Fi link down at that moment. A later #115-head RAM boot (~09:28) **hung** on the console (dual memory map; fixed in kernel DTS + stage2-dtb). Re-smoke of tip `f5e354e1c` after the fix: chain image booted; SSH in about 26 s; storage, root, USB and Hyprland ok; live FDT one `memory@a0000000`. GPU, touch, Wi-Fi, BT and battery failed only because the rootfs has no `/usr/lib/modules/` tree for `uname` `7.3.0-rc6-gf5e354e1cf2b` (only `7.3.0-rc6-dodge-gpu2` and `.held`; those drivers are `=m`). Phone returned to slot B. | partial |
 
 ## 7. GPT bit-54 record (for §3.1)
 

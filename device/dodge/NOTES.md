@@ -20,6 +20,9 @@ Descriptor: `BOOT_METHOD=qcom-abl`, `OMAMOBILE_SLOT=b`,
 `boot_b` is on UFS LUN **sde** (sde48); userdata is **sda15**. The shared
 init's sda-only guard therefore keeps `boot_b` read-only, so day-2 `push`
 cannot rewrite it on this phone until a LUN-aware change (optional follow-up).
+Shared init untested on dodge until a full `tools/phone-smoke` of both PR
+heads from images built by `bin/omamobile images` on this branch (see
+[BRINGUP-M1.md](BRINGUP-M1.md) §5).
 The guarded inactive-slot installer and firmware-match helper are deferred
 to a later PR; how this phone was installed (firmware A→B copy for ARB,
 GPT bit-54 mark) is a record in [BRINGUP-M1.md](BRINGUP-M1.md), not a
