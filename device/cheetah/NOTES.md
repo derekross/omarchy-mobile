@@ -2,7 +2,25 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
-## 2026-10-28: a phone with an older stock vbmeta on slot B needs AVB footers on boot and init_boot
+## 2026-10-29: footers with CP2A's rollback index boot on a phone with CP3A on slot A
+
+- **A footer index below slot A's boots** [V]: the descriptor now carries
+  CP2A.260705.006's footer values as the review of #104 gives them,
+  rollback index 1783209600 (2026-07-05) and security patch 2026-07-05,
+  the oldest stock build an owner runs on slot A. Rebuilt with them, `boot` and `init_boot`
+  differ from the CP3A-footer images only in the footer, and the other
+  three images are byte for byte the same. `bin/omamobile push` wrote and
+  verified slot B, and the phone booted it: `androidboot.slot_suffix`
+  `_b`, `verifiedbootstate` orange, no failed units, slot B still marked
+  successful, `tools/phone-smoke` ok (cameras skipped: no data). Slot A
+  runs CP3A, whose footers and vbmeta carry 1791158400, so this unlocked
+  ABL accepts footer indexes below the CP3A one; libavb treats an index
+  below the stored one as a rollback error, which an unlocked boot may
+  continue past
+  [V: `result_should_continue()` in external/avb `c5066a9`]. Whether ABL
+  stores the indexes while unlocked is still untested.
+
+## 2026-10-28: a phone whose vbmeta_b chains boot and init_boot, as stock's does, needs AVB footers on them
 
 A second Pixel 7 Pro (cheetah MP1.0 B0), installed with
 `tools/install-phone` from a build of `f5da1df`, kernel
@@ -24,27 +42,30 @@ A second Pixel 7 Pro (cheetah MP1.0 B0), installed with
   and `slot-successful:b` no, and no USB gadget reached the laptop in four
   minutes. The symptom of issue #11.
 - **With `AVB_FOOTERS`, it boots** [V]: `boot` and `init_boot` get hash
-  footers from `bin/omamobile images` (AOSP's test key; stock CP3A's
-  rollback index 1791158400 and security patch 2026-10-05; padded to 64
-  and 8 MiB). After `bin/omamobile flash` the Omarchy splash came up, the
-  root grew to the whole of `userdata`, `omamobile-firstboot` finished and
-  `omamobile-boot-success` marked slot B successful. Nothing else changed
-  between the two: rebuilt from the same kernel output, `vendor_boot`,
-  `vendor_kernel_boot` and `dtbo` are byte for byte the same, and `boot`
-  and `init_boot` match up to their padding and footer. Each was flashed
-  once.
-- **Not known** [I]: whether the June 2025 `vbmeta_b` is what makes ABL
-  refuse a chained partition with no footer. The maintainer's phone boots
-  footer-less images on ABL 15199429 (device/lynx/NOTES.md), and so does
-  the Pixel 7 in #79 on 15902555; neither record says which build its
-  `vbmeta_b` holds. Issue #11's phone (ABL 15199429) booted after `fastboot oem
-  disable-verity` and `fastboot oem disable-verification` instead.
-- **Rollback index** [I]: `vbmeta_b`'s index (1749081600) is below the
-  CP3A index slot A booted with, and slot B boots with it, so this
-  unlocked ABL doesn't refuse a lower vbmeta index. The footers carry
-  stock CP3A's index, so on this phone they ask for nothing above what
-  stock has stored; on a phone running an older stock build they are
-  above its stock's (see the comment in `device.conf`).
+  footers from `bin/omamobile images` (AOSP's test key; that day stock
+  CP3A's rollback index 1791158400 and security patch 2026-10-05; padded
+  to 64 and 8 MiB). After `bin/omamobile flash` the Omarchy splash came
+  up, the root grew to the whole of `userdata`, `omamobile-firstboot`
+  finished and `omamobile-boot-success` marked slot B successful. Nothing
+  else changed between the two: rebuilt from the same kernel output,
+  `vendor_boot`, `vendor_kernel_boot` and `dtbo` are byte for byte the
+  same, and `boot` and `init_boot` match up to their padding and footer.
+  Each was flashed once.
+- **What triggers it: a vbmeta that chains them.** libavb reads a chained
+  partition with no footer as if vbmeta began at its first byte, finds an
+  invalid header and returns `ERROR_INVALID_METADATA`, which it never lets
+  an unlocked boot continue past. A wrong key (`ERROR_PUBLIC_KEY_REJECTED`)
+  or hash (`ERROR_VERIFICATION`) it does let through, and a vbmeta with
+  `VERIFICATION_DISABLED` set skips its descriptors [V:
+  `load_and_verify_vbmeta()` and `result_should_continue()` in
+  external/avb `c5066a9`]. The maintainer's `vbmeta_b` lists `boot` and
+  `init_boot` as hash descriptors rather than chaining them, which is why
+  that phone boots footer-less images (review of #104). This phone's `vbmeta_b` being from an older build doesn't
+  matter: stock's current vbmeta chains them the same way. So any Pixel 7
+  Pro whose `vbmeta_b` is stock's needs the footers, and a vbmeta that
+  doesn't chain them, or has verification disabled, never reads them.
+  Issue #11's phone booted after `fastboot oem disable-verification`,
+  which by its name sets that flag [I].
 
 ## 2026-10-27: the muted speakers were the open-loop coil estimate, not sleep; the static was the boost converter; the earpiece is the top speaker
 
