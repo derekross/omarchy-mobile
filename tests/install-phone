@@ -12,7 +12,12 @@ SRC=$PWD
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 for tool in debugfs mkfs.ext4 zstd openssl; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
-t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+t=$(mktemp -d)
+cleanup() {
+  [[ ! -d $t/gnupg ]] || gpgconf --homedir "$t/gnupg" --kill gpg-agent 2>/dev/null || true
+  [[ -n ${KEEP:-} ]] || rm -rf "$t"
+}
+trap cleanup EXIT
 
 # A repository-shaped tree: the script, a descriptor, images, a tiny root image
 R=$t/repo
@@ -97,6 +102,14 @@ command -v img2simg >/dev/null || expected=${expected//root.simg/root.img}
 grep -qF 'correct horse' "$t/out" && fail "the Wi-Fi password is never printed"
 [[ -z $(ls "$t/work") ]] || fail "the image copy (with the password hash) is removed"
 pass "dry run: exactly the allowed commands printed, only getvar sent"
+
+# An adjacent image for another device must not change the default selection.
+other=$R/out/omamobile-rootfs-zother-2099.01.01-aarch64.img.zst
+cp "$img" "$other"
+printf 'device: zother\n' > "${other%.img.zst}.MANIFEST"
+install --dry-run || { cat "$t/out"; fail "default root selection ignores another device"; }
+rm "$other" "${other%.img.zst}.MANIFEST"
+pass "default selection matches the device, including legacy filenames"
 
 install || { cat "$t/out"; fail "a full run succeeds"; }
 want="-s FAKE123 flash boot_b $t/images/boot.img
@@ -227,6 +240,7 @@ cp tools/install-phone "$BD/install"
 cp "$R/device/testdev/device.conf" "$BD/device.conf"
 for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do cp "$t/images/$p.img" "$BD/images/"; done
 cp "$img" "$img.sha256" "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST" "$t/bundle/"
+printf 'kernel release: 7.3.0-test-1\nroot image: %s (%s)\n' "$(basename "$img")" "$(cut -d' ' -f1 "$img.sha256")" > "$BD/MANIFEST"
 (cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
 binstall() {
   : > "$t/fastboot.log"
@@ -246,6 +260,44 @@ if command -v gpg >/dev/null; then
   gpg --homedir "$G" -q --batch --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
   if binstall --dry-run; then fail "refuses a bundle signed by another key"; fi
   grep -q 'not signed by the Omarchy Mobile key' "$t/out" || fail "says the signature is not the release key's"
+
+  # Trust only this ephemeral key in the copied installer. Sign and verify
+  # real bundle bytes with GPG; production's pinned keys stay unchanged.
+  signer=$(gpg --homedir "$G" --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
+  sed -i "s/^SIGNING_KEYS=.*/SIGNING_KEYS='$signer'/" "$BD/install"
+  seal() {
+    (cd "$BD" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+    gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
+  }
+  seal
+  binstall --dry-run || { cat "$t/out"; fail "a bundle signed by the pinned fixture key installs"; }
+  if binstall --dry-run --images "$t/images"; then fail "refuses images outside the signed bundle"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects unsigned boot images before contacting the phone"
+  grep -q 'a bundle uses its own images' "$t/out" || { cat "$t/out"; fail "names the external images refusal"; }
+  # The signed name wins over a newer neighbour, and --rootfs cannot rename it.
+  other=$t/bundle/omamobile-rootfs-zother-2099.01.01-aarch64.img.zst
+  cp "$img" "$other"
+  binstall --dry-run || { cat "$t/out"; fail "signed bundle selects exactly its named root image"; }
+  if binstall --dry-run --rootfs "$other"; then fail "refuses the right bytes under an unsigned name"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects an unsigned root name before contacting the phone"
+  rm "$other"
+  # Another matching-device image with its own valid checksum must not
+  # replace the root image named in the signed manifest.
+  cp "$t/root.img" "$t/changed.img"
+  printf 'substituted image\n' > "$t/changed.txt"
+  debugfs -w -R "write $t/changed.txt /etc/substituted" "$t/changed.img" >/dev/null 2>&1
+  zstd -q "$t/changed.img" -o "$t/changed.img.zst"
+  cp "$t/changed.img.zst" "$t/bundle/$(basename "$img")"
+  (cd "$t/bundle" && sha256sum "$(basename "$img")" > "$(basename "$img").sha256")
+  if binstall --dry-run; then fail "refuses a substituted root image with an updated checksum"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects substituted root before contacting the phone"
+  grep -q 'root image does not match the signed bundle' "$t/out" || { cat "$t/out"; fail "names the signed root mismatch"; }
+  cp "$img" "$img.sha256" "$t/bundle/"
+  # The manifest itself must be covered by the signed checksums.
+  sed -i '/  MANIFEST$/d' "$BD/SHA256SUMS"
+  gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
+  if binstall --dry-run; then fail "refuses a manifest outside the signed checksums"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects an unauthenticated manifest before contacting the phone"
 fi
 [[ -z $(flashing_calls) ]] || fail "a refused bundle flashes nothing"
 pass "bundle mode: signature required (pinned key), checksums checked, its own images used"

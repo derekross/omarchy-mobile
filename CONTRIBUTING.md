@@ -127,7 +127,7 @@ bin/omamobile images           # boot, init_boot, vendor_boot, vendor_kernel_boo
 
 # A first install: packages, root image, then the installer (phone in fastboot)
 tools/build-packages           # [omamobile] for aarch64 into out/repo, signed
-tools/build-rootfs             # out/omamobile-rootfs-<date>-aarch64.img.zst
+tools/build-rootfs             # out/omamobile-rootfs-<device>-<date>-aarch64.img.zst
 tools/install-phone --dry-run  # checks, questions, the exact commands; then without --dry-run
 # after the first boot: a read-only backup of the modem's partitions into DIR (REINSTALL-RUNBOOK 4a)
 tools/phone-provision --nv-backup DIR FACTORY.zip   # firmware and per-phone data

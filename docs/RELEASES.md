@@ -232,7 +232,7 @@ For a first install, or to recover a phone that won't boot. One bundle per devic
 | Piece | Where | Notes |
 | --- | --- | --- |
 | aarch64 packages without a phone | `tools/build-packages` | makepkg in an Arch Linux ARM container (the official tarball, MD5 and signature checked against the pinned build key, `tools/lib/alarm.sh`) under the laptop's qemu-user; signs with `keys/` into `out/repo/aarch64`. Mesa, Hyprland and libcamera take hours this way, so they're built only when named, once per version |
-| The shared root image | `tools/build-rootfs`, `rootfs/` | pacstrap in that container: `rootfs/packages.base`, then Omarchy's own `install/omarchy-base.packages` (minus `rootfs/packages.omarchy-skip` and what isn't built for aarch64), then `rootfs/packages.omamobile`, the device package and the board's `ROOTFS_PACKAGES`, the `[omamobile]` repository itself, the kernel modules of the current build, and `patches/omarchy`. Output `out/omamobile-rootfs-<date>-aarch64.img.zst`, `.sha256` and a `MANIFEST` with every package version (also inside, `/usr/share/omamobile/rootfs/MANIFEST`) |
+| The device's root image | `tools/build-rootfs`, `rootfs/` | pacstrap in that container: `rootfs/packages.base`, then Omarchy's own `install/omarchy-base.packages` (minus `rootfs/packages.omarchy-skip` and what isn't built for aarch64), then `rootfs/packages.omamobile`, the device package and the board's `ROOTFS_PACKAGES`, the `[omamobile]` repository itself, the kernel modules of the current build, and `patches/omarchy`. Output `out/omamobile-rootfs-<codename>-<date>-aarch64.img.zst`, `.sha256` and a `MANIFEST` with every package version (also inside, `/usr/share/omamobile/rootfs/MANIFEST`) |
 | First boot | `packages/omamobile-firstboot` | reads `/etc/omamobile/firstboot.conf` (data, never sourced), creates the user, SSH keys, ufw with SSH on `usb0`, runs Omarchy's own setup leaves (skipping four that don't fit a phone), SDDM autologin and the lock, Omarchy's and our user setup, then deletes the file |
 | Growing the root | `initramfs/init` (`grow_root`) | `resize2fs` before mounting, only for a file system labelled `omamobile-root` smaller than its partition; `omamobile.noresize` skips it |
 | The installer | `tools/install-phone` (the bundle's `install`) | as described below, steps 1, 3-5; the factory-image step (2) is `tools/phone-provision` after the first boot instead |
@@ -240,6 +240,8 @@ For a first install, or to recover a phone that won't boot. One bundle per devic
 | Per-phone data | `tools/phone-provision` | the extract tools on the user's factory image, pushed over USB SSH, plus the phone's own backup (modem board id and NV checksums, camera data, settings, home screens, fingerprint state only with `--fingerprint`) |
 
 Decisions taken in building it: the device packages are **installed** in the image, not only cached (one device so far; a first boot without a package step has one less way to fail; §12 decision 6 stays open for the second device); the image's `[omarchy]` is Omarchy's **stable** channel (from 2026-10-20; before that edge was the only one with aarch64 builds of `omarchy`, `omarchy-settings` and `quickshell`, and edge then moved to 4.5.0rc1, which the phone's patches don't apply to); the image is per device (its `MANIFEST` names the device, and the installer refuses a mismatch).
+
+Root image filenames include the device so two devices can share a version without overwriting each other. Builds use separate temporary directories and refuse a concurrent build of the same device/version in the same output directory. Compression and smoke checks finish before replacing the published files. `--local NAME` still uses `out/NAME/repo` and writes images under `out/NAME/`; use `--rootfs` to select one there. Independent package snapshots also need separate `ALARM_CACHE` directories (§10). Repository-mode installation and bundling select only images whose root `MANIFEST` matches the device, including older filenames.
 
 The design:
 
@@ -251,11 +253,13 @@ omamobile-<codename>-<version>/
   images/boot.img init_boot.img vendor_boot.img vendor_kernel_boot.img dtbo.img
   MANIFEST                          kernel release, package versions, both repositories' commits
   SHA256SUMS  SHA256SUMS.sig        checksums of everything above, signed
-omamobile-rootfs-<version>-aarch64.img.zst   shared by every device, downloaded once
-  .sha256 .sig
+omamobile-rootfs-<codename>-<version>-aarch64.img.zst
+  .sha256 .MANIFEST
 ```
 
-**The shared root image** is an ext4 Arch Linux ARM root with Omarchy, the `[omamobile]` repository configured and its keyring, `linux-omamobile`, `omamobile-shell` and every device package in the package cache but **none installed**. It is built by `pacstrap` in an aarch64 container. It contains no Google file. Its size is a few GB, flashed sparse; the first boot grows it to the whole `userdata` partition (`resize2fs` in the initramfs, before mounting).
+**The device's root image** is an ext4 Arch Linux ARM root with Omarchy, the `[omamobile]` repository configured and its keyring, `omamobile-shell`, the device package installed and the matching kernel modules. It is built by `pacstrap` in an aarch64 container. It contains no Google file. Its size is a few GB, flashed sparse; the first boot grows it to the whole `userdata` partition (`resize2fs` in the initramfs, before mounting).
+
+The bundle's signed `SHA256SUMS` covers its `MANIFEST`, which names the exact root image and its SHA256 digest. The installer checks the selected image's name and bytes against that signed record before contacting the phone; changing the separate `.sha256` cannot authorize a replacement. Bundles use their own checked boot images; `--images` overrides are for repository mode. `--unsigned` remains available for development bundles, which use the root image's `.sha256` check.
 
 **`install`** (`tools/install-phone`), run on the laptop with the phone in fastboot:
 
