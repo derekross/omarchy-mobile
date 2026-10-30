@@ -10,6 +10,21 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-10-30: the buttons
+
+Power and volume work through `gpio-keys` on a test kernel, the U4 kernel plus [kernel #148](https://github.com/derekross/linux-omarchy-mobile/pull/148) (in review). The test booted the U4 Omarchy image from `userdata` ([UFS-PLAN](UFS-PLAN.md)), with U4's kernel config.
+
+- **The pins** [V, `R/` live DT]: power on `gpa4-0` (pull-up), volume down on `gpa4-1` and volume up on `gpa6-2`. All are active low, in the EINT function, and wake-up sources.
+- **The ALIVE pin controller** [V, `R/` live DT]:
+  - It is at `0x154d0000`, controller 0 of the driver's zuma data, with ten banks (gpa0–gpa4, gpa6–gpa10).
+  - Each of its 50 pins has its own GIC interrupt, SPI 10–59 in pin order, level high, through a wake-up interrupt controller like Tensor G4's.
+  - zuma's upstream device tree had no ALIVE node, so #148 adds it.
+- **Events** [V, tags `husky-test-20261030-b` and `-b2` on greenbrettmichael/linux-omarchy-mobile]: a reader on `/dev/input/event0` (`gpio-keys`) logged a down and an up event for each press of volume down (`KEY_VOLUMEDOWN`), volume up (`KEY_VOLUMEUP`) and power (`KEY_POWER`).
+- **In Omarchy** [V]:
+  - A short press of power locks and darkens the screen, and the next one wakes it (omamobile-keys).
+  - Volume does nothing visible yet, since there is no sound card.
+- **The driver's `irq number not available`** [V]: once ALIVE was described, the zuma pinctrl data ran the GPIO EINT setup on ALIVE, whose banks are all wake-up EINTs, and it logged this line at every boot. #148 drops that setup from ALIVE, as gs101 does, and test `-b2` logs no such line.
+
 ## 2026-10-21: stage 0, part 4: root capture, backup, and how ABL picks the DTB
 
 Root for the capture: the stock `init_boot` from the CP3A.261005.005 OTA, extracted with `payload-dumper-go` 2.1.0 (hashes checked against the signed payload) and patched with Magisk v31.0, the first release with Android 17 support. It was flashed to **`init_boot_b` only**, with slot B booted. Slot A was not written. The capture and backup were read-only (`su -c cat`), into `~/android/reference/husky-root-*` (never the repository).
