@@ -94,6 +94,46 @@ grep -q 'push refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "push did not refus
 [[ ! -e $t/calls ]] || fail "qcom-abl push accessed the phone"
 echo 'ok - BOOT_METHOD=qcom-abl refused by push before phone access'
 
+# dodge-chain must refuse a stage-1 Image as STAGE2_IMAGE (nested pack → ~87MiB hang).
+cp tools/dodge-chain "$t/repo/tools/"
+# Fake "Image" carrying the stage-1 cmdline marker (strings fallback when no ikconfig).
+printf 'padding\nrdinit=/omamobile/init\npadding\n' > "$t/fake-stage1-Image"
+if "$t/repo/tools/dodge-chain" check-stage2-image "$t/fake-stage1-Image" > "$t/log" 2>&1; then
+  fail "check-stage2-image accepted a stage-1 marker Image"
+fi
+grep -q 'stage-1 cmdline marker\|looks like stage 1\|INITRAMFS_SOURCE\|CMDLINE_FORCE' "$t/log" \
+  || fail "check-stage2-image refused for the wrong reason: $(cat "$t/log")"
+echo 'ok - dodge-chain check-stage2-image refuses stage-1 marker Image'
+
+# Nesting under CHAIN_OUT must refuse even without markers.
+mkdir -p "$t/chain/arch/arm64/boot"
+printf 'clean-looking-payload\n' > "$t/chain/arch/arm64/boot/Image"
+if CHAIN_OUT="$t/chain" STAGE2_OUT="$t/s2" \
+    "$t/repo/tools/dodge-chain" check-stage2-image "$t/chain/arch/arm64/boot/Image" > "$t/log" 2>&1; then
+  fail "check-stage2-image accepted Image under CHAIN_OUT"
+fi
+grep -q 'under CHAIN_OUT\|nested stage-1' "$t/log" \
+  || fail "CHAIN_OUT nest refused for the wrong reason: $(cat "$t/log")"
+echo 'ok - dodge-chain check-stage2-image refuses Image under CHAIN_OUT'
+
+# CHAIN_OUT == STAGE2_OUT must refuse (would overwrite stage-2 Image with stage-1).
+mkdir -p "$t/same/arch/arm64/boot"
+printf 'clean-looking-payload\n' > "$t/same/arch/arm64/boot/Image"
+if CHAIN_OUT="$t/same" STAGE2_OUT="$t/same" \
+    "$t/repo/tools/dodge-chain" check-stage2-image "$t/same/arch/arm64/boot/Image" > "$t/log" 2>&1; then
+  fail "check-stage2-image accepted CHAIN_OUT == STAGE2_OUT"
+fi
+grep -q 'CHAIN_OUT must be distinct\|under CHAIN_OUT\|nested stage-1' "$t/log" \
+  || fail "equal CHAIN_OUT/STAGE2_OUT refused for the wrong reason: $(cat "$t/log")"
+echo 'ok - dodge-chain check-stage2-image refuses CHAIN_OUT == STAGE2_OUT'
+
+# A clean Image (no markers, not under CHAIN_OUT) must pass.
+printf 'clean-looking-payload\n' > "$t/clean-Image"
+"$t/repo/tools/dodge-chain" check-stage2-image "$t/clean-Image" > "$t/log" 2>&1 \
+  || fail "check-stage2-image rejected a clean Image: $(cat "$t/log")"
+grep -q 'ok - STAGE2_IMAGE is clean' "$t/log" || fail "clean Image missing ok line"
+echo 'ok - dodge-chain check-stage2-image accepts a clean Image'
+
 # slot_suffix resolver: bootconfig wins; bootargs fallback; empty if neither.
 rs="device/dodge/chainload/resolve-slot-suffix.sh"
 [[ -x $rs ]] || fail "resolve-slot-suffix.sh missing"

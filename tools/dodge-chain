@@ -50,7 +50,7 @@ die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<USAGE
-Usage: tools/dodge-chain pack
+Usage: tools/dodge-chain pack|check-stage2-image <Image>
 
   pack   Stage 2 DTB (live memory map, DTB_OPTS), stage 1 kernel with the
          built-in chain-loader, and \$CHAIN_OUT/images/boot-chain.img.
@@ -110,6 +110,53 @@ open(out, "wb").write(b"".join(struct.pack(">I", c) for c in cells))
 PY
 }
 
+# Refuse a stage-1 (chain-loader) Image as STAGE2_IMAGE. A prior pack that
+# wrote into STAGE2_OUT (or a copied stage-1 .config) leaves an Image with
+# INITRAMFS_SOURCE / CMDLINE_FORCE set; embedding that nests stage 1 inside
+# stage 1 (~87MiB) and hung on RAM boot while the morning-good ~66MiB pack
+# (clean 44MiB stage-2 Image) booted.
+assert_clean_stage2_image() {
+  local img=$1 cfg="" ik="" img_r chain_r out_r
+  [[ -f $img ]] || die "missing STAGE2_IMAGE=$img"
+  img_r=$(readlink -f "$img")
+  if [[ -n ${CHAIN_OUT:-} ]]; then
+    chain_r=$(readlink -f "$CHAIN_OUT")
+    case $img_r in
+      "$chain_r"|"$chain_r"/*)
+        die "STAGE2_IMAGE=$img is under CHAIN_OUT=$CHAIN_OUT (refusing nested stage-1)"
+        ;;
+    esac
+  fi
+  if [[ -n ${STAGE2_OUT:-} ]]; then
+    out_r=$(readlink -f "$STAGE2_OUT")
+    chain_r=$(readlink -f "${CHAIN_OUT:-}")
+    [[ -n $CHAIN_OUT && $chain_r != "$out_r" ]] \
+      || die "CHAIN_OUT must be distinct from STAGE2_OUT (use \$STAGE2_OUT/chain); got CHAIN_OUT=${CHAIN_OUT:-unset} STAGE2_OUT=$STAGE2_OUT"
+  fi
+  ik="${KERNEL_DIR:+$KERNEL_DIR/scripts/extract-ikconfig}"
+  if [[ -n $ik && -f $ik ]]; then
+    cfg=$("$ik" "$img" 2>/dev/null) || cfg=""
+  fi
+  # Use here-strings, not printf|grep -q: with pipefail, grep -q closes the
+  # pipe on the first hit and printf's SIGPIPE (141) makes the if fail open.
+  if [[ -n $cfg ]]; then
+    if grep -q '^CONFIG_CMDLINE_FORCE=y' <<<"$cfg"; then
+      die "STAGE2_IMAGE=$img looks like stage 1 (CONFIG_CMDLINE_FORCE=y); rebuild stage 2 without initramfs/cmdline force"
+    fi
+    # Non-empty INITRAMFS_SOURCE (stage 1 sets it to the chain list path).
+    if grep -q '^CONFIG_INITRAMFS_SOURCE=' <<<"$cfg" &&        ! grep -q '^CONFIG_INITRAMFS_SOURCE=""$' <<<"$cfg"; then
+      die "STAGE2_IMAGE=$img looks like stage 1 (INITRAMFS_SOURCE set); rebuild stage 2 without a built-in initramfs"
+    fi
+  else
+    local s
+    s=$(strings "$img" 2>/dev/null || true)
+    if grep -Fq 'rdinit=/omamobile/init' <<<"$s"; then
+      die "STAGE2_IMAGE=$img carries stage-1 cmdline marker rdinit=/omamobile/init"
+    fi
+  fi
+}
+
+
 cmd_pack() {
   local f
   [[ -n $CHAINLOAD_DIR && -d $CHAINLOAD_DIR ]] \
@@ -125,6 +172,7 @@ cmd_pack() {
   for f in "$STAGE2_IMAGE" "$STAGE2_DTB_IN" "$STAGE2_INITRD" "$STAGE2_OUT/.config"; do
     [[ -f $f ]] || die "missing $f (run: omamobile kernel && omamobile initramfs)"
   done
+  assert_clean_stage2_image "$STAGE2_IMAGE"
   [[ -n $LIVE_DTB && -f $LIVE_DTB ]] || die "set LIVE_DTB to the rooted live FDT (never committed)"
   [[ -d $KERNEL_DIR ]] || die "no kernel tree at KERNEL_DIR=$KERNEL_DIR"
   [[ -x $KERNEL_DIR/scripts/config ]] || die "KERNEL_DIR=$KERNEL_DIR has no scripts/config"
@@ -224,6 +272,14 @@ LIST
 
 case "${1:-}" in
   pack) cmd_pack ;;
+  check-stage2-image)
+    # Test/CI helper: validate one Image path with the same rules as pack.
+    [[ -n ${2:-} ]] || die "usage: tools/dodge-chain check-stage2-image <Image>"
+    STAGE2_IMAGE=$2
+    # Optional CHAIN_OUT/STAGE2_OUT/KERNEL_DIR from the environment.
+    assert_clean_stage2_image "$STAGE2_IMAGE"
+    echo "ok - STAGE2_IMAGE is clean: $STAGE2_IMAGE"
+    ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
