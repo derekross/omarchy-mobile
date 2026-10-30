@@ -17,12 +17,26 @@ The tools, all offline-tested (`tests/all`):
 | `tools/build-rootfs` | laptop (Arch Linux ARM container) | `out/omamobile-rootfs-<date>-aarch64.img.zst` (+ `.sha256`, `.MANIFEST`) |
 | `tools/install-phone` | laptop, phone in fastboot | checks, questions, `firstboot.conf` into a local image copy, then only `fastboot flash <img>_b`, `flash userdata`, `--set-active=b`, `reboot` |
 | `omamobile-firstboot` | phone, first boot | user, keys, firewall, Omarchy's setup, autologin and lock |
-| `tools/phone-provision` | laptop, over USB SSH | Google's firmware and vendor trees from the factory image; modem props, NV sums, camera data, home screens, fingerprint state from the backup |
+| `tools/phone-provision` | laptop, over USB SSH | Google's firmware and vendor trees from the factory image; modem props, NV sums, camera data, home screens, fingerprint state from the backup (without a `phone-config.tar`: the NV sums from the owner's NV backup, the board id from the phone's bootconfig) |
 
 Each step lists its commands, what to expect, a **stop** condition, the
 rollback and a risk level. Read-only steps come first. Quote results (with
 `uname -r`) into section 7 when done; check every quote for identifiers
 (MAC addresses, serials, SSIDs) first.
+
+**Without a `phone-config.tar`.** Sections 1, 5 and 7 are written for a
+reinstall over the hand-installed system that Phase 0 backed up
+(`~/android/reference/phone-backup-20261013`), and its `phone-config.tar` is
+what `tools/phone-provision` restores from. Nothing in the repository makes
+one, so every other install has none: a first install, and a later
+reinstall of your own too. Then the backup is section 4a's, a read-only
+copy of the modem's partitions that `tools/phone-provision` takes with
+`--nv-backup`. Such an install skips P1 and P2 (they check Phase 0's
+backup) and the fingerprint restore (section 7), and needs P3 only when an
+earlier install is running. It runs P4, sections 2-4, section 4a, section 5
+with `--nv-backup` (V1-V3) and section 6. `tools/phone-provision` never
+takes the section 4a backup itself: it holds the phone's IMEI, so the owner
+takes it, checks it and stores it off the repository.
 
 ## 0. What changes and what doesn't
 
@@ -37,7 +51,9 @@ rollback and a risk level. Read-only steps come first. Quote results (with
   modem `props.conf` (cdt_hwid), `modem-nv.sha256`, camera data (if the
   factory extraction can't regenerate it), `/etc/omamobile/*.conf`, Wi-Fi
   connections, home screens, quick settings, widgets, and (only with the
-  human's go) the fingerprint state.
+  human's go) the fingerprint state. Without a `phone-config.tar` none of
+  it does: the NV checksums come from section 4a's backup, the board id
+  from the phone's bootconfig and the camera data from the factory image.
 - **Is new:** the user account (its name is asked by the installer; it is no
   longer the project name), host name, SSH host keys, pacman keyring,
   machine id. The laptop's `known_hosts` doesn't matter (`tools/phone-ssh`
@@ -87,7 +103,7 @@ is what hung the last shutdown), then run P2 again.
   it; it continues without).
 - The factory image for P5 of section 5: `~/android/factory/cheetah-*-factory-*.zip`
   (the build the phone's stock slot A runs; its `.sha256` from Google checked).
-- A kmsg log stream for the first boot: `tools/phone-ssh 'cat /dev/kmsg' | tee logs/reinstall-kmsg.log`
+- A kmsg log stream for the first boot: `mkdir -p logs && tools/phone-ssh 'cat /dev/kmsg' | tee logs/reinstall-kmsg.log`
   (start it once the phone answers SSH in section 4; the initramfs answers
   before Arch starts).
 
@@ -184,6 +200,11 @@ A's from the stock capture (`~/android/reference/cheetah-stock-cp2a/fastboot-get
 taken with slot A current). **Stop** if they differ: setting slot B active
 runs slot B's bootloader; flash the same factory bootloader to both from
 stock first. If equal, that value is the `--bootloader-slots-match` below.
+On a first install the phone comes from stock Android: slot `a` is current,
+so `version-bootloader` is slot A's, and there is no stock capture to
+compare it with. I2's dry run checks the slots, and when the phone reports
+only the current one it says what to check; if you can't tell slot B's
+version, stop and ask (CONTRIBUTING §3.1).
 
 ### I2. Dry run (risk none: reads variables, prepares a local copy, writes nothing)
 
@@ -266,6 +287,75 @@ Expect the `usb0` rule, a fresh login with ufw active, then after the reboot
 ufw active and `omamobile-firstboot` inactive (its condition is gone).
 **Stop** if the fresh login fails: wait 90 s for the dead-man to disable ufw.
 
+## 4a. First install (no `phone-config.tar`): the read-only backup of the modem's partitions (laptop over USB SSH)
+
+Only without a `phone-config.tar` (above), after F3 and before section 5.
+These are the MODEM-PLAN M0.1 reads, plus `devinfo`: each partition is
+found by `PARTNAME` in `/sys/class/block/*/uevent` (the Arch root has no
+`/dev/disk/by-partlabel`), and the storage guard keeps every one of them
+read-only. Nothing here writes to the phone. A section 4a backup from an
+earlier install will do instead while the phone's partitions still match
+it: V3's commands for this case, with `B` set to that backup, print `SAME`.
+
+### N1. Find the partitions, read-only and unmounted (phone, read-only; risk none)
+
+```sh
+B=~/android/reference/nv-backup-$(date +%Y%m%d-%H%M)   # a new directory, outside the repository
+mkdir -p ~/android/reference && mkdir -m 700 "$B" &&   # mkdir refuses a directory that exists
+tools/phone-ssh 'for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  echo "$p ${d:-none} ro=$(cat /sys/class/block/$d/ro 2>/dev/null) mounted=$(grep -c "^/dev/$d " /proc/mounts)"; done' | tee "$B/partitions.txt" &&
+grep -c ' ro=1 mounted=0$' "$B/partitions.txt"
+```
+
+Expect seven lines `<name> sdXN ro=1 mounted=0`, then `7`. **Stop** on
+`none`, `ro=0` or a `mounted=` other than 0: a partition is missing, or the
+guard isn't holding. Ask before going on. `File exists` means a backup of
+that name is already there and nothing ran: leave it as it is, and run N1
+again a minute later, for a new name.
+
+### N2. Copy each one and check the copy against the phone (phone, read-only, ~430 MB over USB; risk none)
+
+```sh
+: > "$B/SHA256SUMS"
+for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
+  d=$(awk -v p="$p" '$1 == p && $3 == "ro=1" && $4 == "mounted=0" { print $2 }' "$B/partitions.txt")
+  [ -n "$d" ] || { echo "STOP: $p is not read-only and unmounted"; break; }
+  tools/phone-ssh "cat /dev/$d" > "$B/$p.img"
+  on_phone=$(tools/phone-ssh "sha256sum < /dev/$d" | cut -d' ' -f1)
+  copy=$(sha256sum < "$B/$p.img" | cut -d' ' -f1)
+  [ "$on_phone" = "$copy" ] || { echo "STOP: $p.img differs from the phone's $p"; break; }
+  echo "$copy  $p.img" >> "$B/SHA256SUMS"
+done
+chmod 600 "$B"/*
+(cd "$B" && wc -l < SHA256SUMS && sha256sum -c SHA256SUMS)
+```
+
+Each copy's checksum is compared with one computed on the phone from the
+partition itself, and only a match goes into `SHA256SUMS`. Expect no `STOP`
+line, then `7` and seven `OK`. **Stop** on a `STOP` line or a count other
+than 7: run N2 again (it starts `SHA256SUMS` afresh); if a copy keeps
+differing, ask.
+
+### N3. Store it (laptop; risk none)
+
+`$B` now holds the seven images, `partitions.txt` and `SHA256SUMS`, readable
+only by you. Keep it outside the repository; a second copy on storage only
+you control is worth having. The images hold the phone's IMEI and serial
+numbers: never commit, post or attach them. `--nv-backup "$B"` in section 5
+puts its six NV lines on the phone as `/etc/omamobile/modem-nv.sha256`, and
+the modem starts only from copies of its partitions that match them.
+**After any stock Android boot** (a fallback to slot A counts), take a fresh
+backup: stock's modem stack writes `efs`, `persist` and `modem_userdata`, so
+the old checksums stop matching. N1 puts it in a new directory, so the old
+set stays beside it; keep both. Then
+`tools/phone-provision --skip-extract --nv-backup "$B"` puts the new
+checksums on the phone. Expect `the six NV lines of …/SHA256SUMS`, `pushed
+1 files to /, verified`, `wrote /var/lib/omamobile-vendor/modem/props.conf
+on the phone …` (the board id again, from the same bootconfig; the file's
+other lines stay) and `camera data: none from this run …` (the camera files
+section 5 pushed stay).
+
 ## 5. Provision (laptop over USB SSH)
 
 ### V1. Dry run (risk none: extracts nothing, contacts nothing)
@@ -280,6 +370,22 @@ names to the new (`/var/lib/omamobile-vendor/modem/props.conf`,
 `/etc/omamobile/modem-nv.sha256`, `/etc/omamobile/*.conf`, the user's
 `~/.config/omamobile/{home.json,quicksettings.json,widgets}`).
 
+Without a `phone-config.tar`, section 4a's backup (`$B` from N1) takes its
+place (`--import-home`, `--restore-config`, `--restore-wifi` and
+`--fingerprint` need that tar and are refused):
+
+```sh
+F=~/android/factory/cheetah-*-factory-*.zip
+tools/phone-provision --dry-run --user <user> --nv-backup "$B" $F
+```
+
+Expect `SHA256SUMS: one line for each of modem_a modem_b efs efs_backup
+modem_userdata persist`, the extraction commands, `the six NV lines of
+…/SHA256SUMS`, `would push 1 files to / (merge)` and `would write
+/var/lib/omamobile-vendor/modem/props.conf (root's, mode 600) on the phone,
+from androidboot.cdt_hwid in its /proc/bootconfig`. **Stop** on `needs one
+'<sha256>  NAME.img' line for each of the six NV images`: redo N2.
+
 ### V2. Provision (risk low: files only, no hardware)
 
 ```sh
@@ -292,6 +398,23 @@ Everything lands owned by root (the home files by the user). **Stop** on a
 failed extraction or verify. Rollback: rerun (idempotent), or remove the
 pushed trees.
 
+Without a `phone-config.tar`:
+
+```sh
+tools/phone-provision --nv-backup "$B" $F
+```
+
+Expect `board id: androidboot.cdt_hwid is in the phone's /proc/bootconfig
+(not shown)` before anything is pushed, each push "verified", then `wrote
+/var/lib/omamobile-vendor/modem/props.conf on the phone from its
+/proc/bootconfig (root's, mode 600; the board id isn't shown)`. The board
+id is read and written on the phone and never printed. The camera data
+comes from the factory extraction only: without the unicorn venv a note
+says there is none. **Stop** on `no androidboot.cdt_hwid in the phone's
+/proc/bootconfig` or `isn't 0x and hex digits`: nothing was written. The
+modem needs this phone's board id, so ask rather than write `props.conf` by
+hand.
+
 ### V3. Reboot and the radio partitions again (risk low; read-only check)
 
 ```sh
@@ -300,6 +423,21 @@ tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 ```
 
 Expect `SAME`: the reinstall never touched them. **Stop** on a difference.
+Without a `phone-config.tar` there is no P2 to repeat: after the reboot,
+read the six partitions by `PARTNAME`, as N1 finds them, and compare them
+with section 4a's backup:
+
+```sh
+mkdir -p logs
+tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' > logs/reinstall-v3.sha256
+grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' "$B/SHA256SUMS" | sort -k2 |
+  diff - <(sort -k2 logs/reinstall-v3.sha256) && echo SAME
+```
+
+Expect `SAME`: nothing wrote them since the backup. **Stop** on a
+difference.
 
 ## 6. Subsystem checklist (DEVICES.md; the human looks and listens)
 
@@ -334,6 +472,11 @@ tools/phone-provision --skip-extract --fingerprint          # copies; omamobile-
 
 Then re-enrol fingers through Setup > Security > Fingerprint (the enrolment
 state may not survive the new install's Gatekeeper secret).
+
+Without a `phone-config.tar` there is no fingerprint state to restore
+(`--fingerprint` is refused): an earlier install's went with `userdata`.
+The first fingerprint service start writes Trusty's secure storage
+(FINGERPRINT-PLAN F4), so it needs the human's go too.
 
 ## 8. Modem
 

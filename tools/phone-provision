@@ -3,11 +3,13 @@
 # phone-provision: after a fresh install's first boot, put back what the root
 # image can't carry: Google's firmware and vendor files (extracted here, on
 # the laptop, from the user's own factory image) and this phone's own data
-# (from the read-only backup taken before the reinstall). Runs as root on the
-# phone over tools/phone-ssh. Every step is idempotent and prints what it wrote.
+# (from the read-only backup taken before the reinstall, or on a first
+# install the modem's board id and NV checksums). Runs as root on the phone
+# over tools/phone-ssh. Every step is idempotent and prints what it wrote.
 #
 #   tools/phone-provision [options] FACTORY.zip
 #   tools/phone-provision [options] --skip-extract     (backup only)
+#   tools/phone-provision [options] --nv-backup DIR FACTORY.zip   (a first install)
 #
 # From the factory image (tools/extract-*; nothing Google's leaves the laptop
 # except into this phone):
@@ -18,7 +20,8 @@
 #   fingerprint  the HAL's Android tree -> /usr/lib/omamobile-fp/{root,MANIFEST,SOURCE}
 #   camera       sensor and PHY data -> /usr/lib/firmware/omamobile/camera (needs
 #                python with unicorn and pyelftools, ~/.cache/omamobile-venv;
-#                without it, the backup's copies are used)
+#                without it, the backup's copies are used, and a first
+#                install has none)
 # From the backup (default ~/android/reference/phone-backup-20261013, made
 # before the rename: its paths use the old names and are mapped to the new):
 #   always       the modem's board id (var/lib/omamobile-vendor/modem/props.conf)
@@ -32,6 +35,26 @@
 #                     fingerprint service stopped. It never starts the service:
 #                     the first storageproxyd start needs the human's go
 #                     (FINGERPRINT-PLAN F4)
+# A first install (cheetah with no phone-config.tar in the backup directory;
+# nothing here makes one, only the backup taken before the rename has it, so
+# a later reinstall counts too) has no backup to restore from, so
+# --nv-backup DIR is required, as on raven:
+# the owner's read-only backup of the modem's partitions, taken and stored
+# off the repository by the owner (device/cheetah/REINSTALL-RUNBOOK.md
+# section 4a). Its SHA256SUMS must hold one "<sha256>  NAME.img" line for
+# each of modem_a, modem_b, efs, efs_backup, modem_userdata and persist;
+# those six lines become /etc/omamobile/modem-nv.sha256. The board id is
+# androidboot.cdt_hwid in the phone's /proc/bootconfig (Android's init sets
+# ro.boot.cdt_hwid from it), read and written on the phone into
+# /var/lib/omamobile-vendor/modem/props.conf (root's, mode 600) as
+# ro.boot.cdt_hwid and persist.vendor.modem.cdt_hwid (a props.conf already
+# there keeps its other lines). The value is never printed and never leaves
+# the phone; if it is missing, empty or not 0x and hex digits, the run stops
+# before it writes anything. The camera data then comes from the
+# factory extraction only. --restore-config, --restore-wifi, --import-home,
+# --fingerprint, --force and --backup restore from a phone-config.tar and
+# are refused there, and --nv-backup is refused when there is a
+# phone-config.tar.
 # Options:
 #   --backup DIR   the backup directory      --user NAME   the phone's user
 #   --work DIR     local staging (default ~/.cache/omamobile-provision; it holds
@@ -49,8 +72,12 @@
 #                  yet
 #   --getprop FILE raven: stock Android's getprop capture (default
 #                  ~/android/reference/raven-stock/getprop.txt)
-#   --nv-backup DIR  raven: the read-only NV backup with SHA256SUMS (default
-#                  the newest ~/android/reference/raven-backup-*)
+#   --nv-backup DIR  the read-only NV backup with SHA256SUMS. Cheetah: a
+#                  first install only (no default). Raven: default the
+#                  newest ~/android/reference/raven-backup-*
+# Test seams: PHONE_SSH, the command that runs a shell command on the phone
+# (default tools/phone-ssh), and PHONE_BOOTCONFIG, the file on the phone
+# that a first install reads the board id from (default /proc/bootconfig).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
@@ -66,6 +93,7 @@ nv_backup=""
 dry=0 skip_extract=0 fingerprint=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0 backup_given=0
 user="" factory="" device=cheetah
 PHONE_SSH=${PHONE_SSH:-$ROOT/tools/phone-ssh}
+bootconfig=${PHONE_BOOTCONFIG:-/proc/bootconfig}
 while (($#)); do
   case $1 in
     --dry-run) dry=1 ;;
@@ -83,7 +111,7 @@ while (($#)); do
     -d) device=${2:?}; shift ;;
     --getprop) getprop=${2:?}; shift ;;
     --nv-backup) nv_backup=${2:?}; shift ;;
-    -h|--help) sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$ROOT/tools/phone-provision"; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) [[ -z $factory ]] || die "one factory image only"; factory=$1 ;;
   esac
@@ -110,11 +138,80 @@ fi
 
 phone() { "$PHONE_SSH" "$@"; }
 
+# board_id check|write: on the phone, find this phone's board id
+# (androidboot.cdt_hwid in bootconfig; Android's init makes it
+# ro.boot.cdt_hwid) and, for write, put it into props.conf there: root's,
+# mode 600, through a temporary file renamed into place. A props.conf
+# already there keeps its other lines (per-phone tweaks, as MODEM-PLAN
+# M4.1h's command keeps them); the two keys go last. The value stays on the
+# phone, where only shell builtins get it as an argument, so nothing here
+# can print or log it. Exit status 3: no androidboot.cdt_hwid, or an empty
+# one; 5: a value other than 0x and hex digits.
+board_id() {
+  phone "BOOTCONFIG='$bootconfig' ACTION=$1 sh -s" <<'SH'
+set -eu
+v=$(sed -n 's/^androidboot\.cdt_hwid[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$BOOTCONFIG" 2>/dev/null | head -n 1) || v=
+[ -n "$v" ] || exit 3
+case $v in 0x?*) ;; *) exit 5 ;; esac
+case ${v#0x} in *[!0-9a-fA-F]*) exit 5 ;; esac
+[ "$ACTION" = write ] || exit 0
+d=/var/lib/omamobile-vendor/modem
+mkdir -p "$d"
+t=$(mktemp "$d/.props.conf.XXXXXX")
+trap 'rm -f "$t"' EXIT
+if [ -e "$d/props.conf" ]; then
+  grep -v -e '^ro\.boot\.cdt_hwid=' -e '^persist\.vendor\.modem\.cdt_hwid=' "$d/props.conf" > "$t" || [ $? = 1 ]
+fi
+printf 'ro.boot.cdt_hwid=%s\npersist.vendor.modem.cdt_hwid=%s\n' "$v" "$v" >> "$t"
+chown 0:0 "$t"
+chmod 600 "$t"
+mv -f "$t" "$d/props.conf"
+[ "$(stat -c %a:%u:%g "$d/props.conf")" = 600:0:0 ] || exit 4
+[ "$(grep -c -e '^ro\.boot\.cdt_hwid=' -e '^persist\.vendor\.modem\.cdt_hwid=' "$d/props.conf")" = 2 ] || exit 4
+[ "$(tail -n 2 "$d/props.conf")" = "$(printf 'ro.boot.cdt_hwid=%s\npersist.vendor.modem.cdt_hwid=%s' "$v" "$v")" ] || exit 4
+SH
+}
+
 # --- Inputs ------------------------------------------------------------------
-if [[ $device == cheetah ]]; then
+# A first install (cheetah, no phone-config.tar): the NV checksums come from
+# the owner's read-only backup (--nv-backup, as on raven), the board id from
+# the phone itself. The backup is checked here, before the phone is
+# contacted; the board id as soon as the phone answers, before any push.
+first_install=0
+nv_images=(modem_a modem_b efs efs_backup modem_userdata persist)
+if [[ $device == cheetah && ! -f $backup/phone-config.tar ]]; then
+  [[ -n $nv_backup ]] ||
+    die "no $backup/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions and give it with --nv-backup DIR (device/cheetah/REINSTALL-RUNBOOK.md section 4a)"
+  first_install=1
+  unsupported=()
+  ((fingerprint)) && unsupported+=(--fingerprint)
+  ((import_home)) && unsupported+=(--import-home)
+  ((restore_config)) && unsupported+=(--restore-config)
+  ((restore_wifi)) && unsupported+=(--restore-wifi)
+  ((force)) && unsupported+=(--force)
+  ((backup_given)) && unsupported+=(--backup)
+  ((${#unsupported[@]} == 0)) ||
+    die "a first install (--nv-backup, no phone-config.tar) doesn't support ${unsupported[*]} (a restore from a phone-config.tar)"
+  [[ $bootconfig =~ ^/[A-Za-z0-9_./-]+$ ]] || die "PHONE_BOOTCONFIG must be an absolute path of letters, digits and _ . / -"
+  say "Checking the NV backup in $nv_backup"
+  nv_sums=$nv_backup/SHA256SUMS
+  [[ -f $nv_sums ]] || die "no $nv_sums (--nv-backup DIR: the read-only backup of the modem's partitions)"
+  # exactly one line per image, in sha256sum's own format (the modem
+  # profile compares its copies with these); the sums themselves aren't shown
+  bad=()
+  for p in "${nv_images[@]}"; do
+    [[ $(grep -cE "^[0-9a-f]{64}  $p\\.img\$" "$nv_sums" || true) == 1 ]] || bad+=("$p.img")
+  done
+  ((${#bad[@]} == 0)) ||
+    die "$nv_sums needs one '<sha256>  NAME.img' line for each of the six NV images; none or more than one for ${bad[*]}"
+  note "SHA256SUMS: one line for each of ${nv_images[*]}"
+fi
+
+if [[ $device == cheetah ]] && ((first_install == 0)); then
+[[ -z $nv_backup ]] ||
+  die "--nv-backup is for a first install, with no phone-config.tar: $backup/phone-config.tar already holds this phone's board id and NV checksums (leave out --nv-backup)"
 say "Checking the backup in $backup"
 config_tar=$backup/phone-config.tar fp_tar=$backup/var-lib-omandroid-fp.tar
-[[ -f $config_tar ]] || die "no $config_tar"
 for f in "$config_tar" $( ((fingerprint)) && echo "$fp_tar"); do
   [[ -f $f ]] || die "no $f"
   if [[ -f $f.sha256 ]]; then
@@ -139,6 +236,14 @@ else
   [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "no user on the phone (or --user NAME)"
   phone "getent passwd '$user' >/dev/null" || die "no account '$user' on the phone"
   note "user $user, kernel $(phone 'uname -r')"
+  if ((first_install)); then
+    rc=0
+    board_id check || rc=$?
+    ((rc != 3)) || die "no androidboot.cdt_hwid in the phone's $bootconfig, or an empty one: the modem needs this phone's board id (nothing was written)"
+    ((rc != 5)) || die "androidboot.cdt_hwid in the phone's $bootconfig isn't 0x and hex digits (not shown): the modem needs this phone's board id (nothing was written)"
+    ((rc == 0)) || die "couldn't read the phone's $bootconfig"
+    note "board id: androidboot.cdt_hwid is in the phone's $bootconfig (not shown)"
+  fi
 fi
 
 mkdir -p "$work"
@@ -279,7 +384,11 @@ if ((skip_extract == 0)); then
   for p in "${profiles[@]}"; do extract tools/extract-vendor-chroot -p "$p" -o "$W/chroot-$p" -w "$W" "$factory"; done
   extract tools/extract-fingerprint-vendor -o "$W/fp-vendor" -w "$W" "$factory"
   ((have_unicorn)) && extract "$py" tools/extract-camera-data --apex "$W/camera.apex" -d "$W/camera"
-  ((have_unicorn)) || note "no unicorn/pyelftools for $py: camera data comes from the backup instead"
+  ((have_unicorn || first_install)) || note "no unicorn/pyelftools for $py: camera data comes from the backup instead"
+  if ((first_install)); then
+    ((have_unicorn)) && note "camera data: from the factory image only (no phone-config.tar to fall back on)"
+    ((have_unicorn)) || note "no unicorn/pyelftools for $py: no camera data (no phone-config.tar to fall back on)"
+  fi
 
   say "Pushing Google's files"
   if ((dry)); then
@@ -301,7 +410,33 @@ if ((skip_extract == 0)); then
   fi
 fi
 
+# --- A first install: the modem's per-phone files ------------------------------
+if ((first_install)); then
+  say "Writing this phone's modem files (a first install: no phone-config.tar)"
+  ((skip_extract)) && note "camera data: none from this run (--skip-extract, and no phone-config.tar to take it from); camera files already on the phone stay"
+  mkdir -p "$W/modem-stage/etc/omamobile"
+  nv_re=$(IFS='|'; echo "${nv_images[*]}")
+  grep -E "^[0-9a-f]{64}  ($nv_re)\\.img\$" "$nv_sums" > "$W/modem-stage/etc/omamobile/modem-nv.sha256"
+  chmod 644 "$W/modem-stage/etc/omamobile/modem-nv.sha256"
+  note "/etc/omamobile/modem-nv.sha256: the six NV lines of $nv_sums"
+  push_tree "$W/modem-stage" / merge
+  props_file=/var/lib/omamobile-vendor/modem/props.conf
+  if ((dry)); then
+    note "would write $props_file (root's, mode 600) on the phone, from androidboot.cdt_hwid in its $bootconfig"
+    DID+=("would write $props_file")
+  else
+    rc=0
+    board_id write || rc=$?
+    ((rc != 3)) || die "no androidboot.cdt_hwid in the phone's $bootconfig, or an empty one: $props_file not written"
+    ((rc != 5)) || die "androidboot.cdt_hwid in the phone's $bootconfig isn't 0x and hex digits (not shown): $props_file not written"
+    ((rc == 0)) || die "writing $props_file on the phone failed"
+    note "wrote $props_file on the phone from its $bootconfig (root's, mode 600; the board id isn't shown)"
+    DID+=("wrote $props_file (the board id)")
+  fi
+fi
+
 # --- From the backup -----------------------------------------------------------
+if ((first_install == 0)); then
 say "Restoring this phone's data from the backup"
 mkdir -p "$W/backup" "$W/stage"
 tar -C "$W/backup" -xf "$config_tar" --no-same-owner
@@ -325,6 +460,7 @@ for f in "${take[@]}"; do
   note "$f -> /$new"
 done
 push_tree "$W/stage" / merge
+fi
 
 if ((import_home)); then
   say "Importing home screens, quick settings and widgets for $user"

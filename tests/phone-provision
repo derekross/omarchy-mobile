@@ -8,7 +8,17 @@
 # under the new names owned by root (tar --no-same-owner), the fingerprint
 # tree keeps its Android owners, the home import belongs to the user, a
 # second run is idempotent, and differing fingerprint state is never replaced
-# without --force.
+# without --force. A first install (no phone-config.tar) with a stand-in NV
+# backup (made-up sums): its dry run, its refusals (no --nv-backup, one of
+# the six NV lines missing or not in sha256sum's format, no SHA256SUMS, an
+# option that needs phone-config.tar, an unsafe PHONE_BOOTCONFIG); without
+# Docker, against a stand-in that runs only the board id check, a missing,
+# empty or malformed androidboot.cdt_hwid refused before any push, the six
+# lines staged, and the value in no output or command; and in the container
+# the board id from a stand-in bootconfig into props.conf (root's, mode
+# 600, its other lines kept on a second run), the six lines into
+# modem-nv.sha256, the refusals with nothing written, and the value never in
+# the output, a bash -x trace or the laptop's staging.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
@@ -97,6 +107,147 @@ cp "$t/sum" "$B/phone-config.tar.sha256"
 tools/phone-provision --dry-run --backup "$B" --work "$t/work" >/dev/null 2>&1 && fail "needs a factory image or --skip-extract"
 pass "opt-in steps stay off by default; a bad backup checksum or a missing factory image is refused"
 
+# A first install on cheetah: no phone-config.tar, so the owner's read-only
+# NV backup instead. A stand-in SHA256SUMS with made-up sums, devinfo
+# included as in a real one. HOME is an empty directory, so there is no
+# default backup (~/android/reference/phone-backup-20261013) either
+N=$t/nv-backup H=$t/home
+mkdir -p "$N" "$H" "$t/nv-short"
+for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
+  printf '%s  %s.img\n' "$(printf 'made up %s' "$p" | sha256sum | cut -d' ' -f1)" "$p"
+done > "$N/SHA256SUMS"
+grep -v ' devinfo\.img$' "$N/SHA256SUMS" > "$t/nv-six"
+fresh() { HOME=$H PHONE_SSH=$t/no-ssh tools/phone-provision --work "$t/work" "$@" 2>&1; }
+out=$(fresh --dry-run --user alice --nv-backup "$N" "$t/factory.zip") || { echo "$out"; fail "a first install's dry run succeeds"; }
+[[ ! -e $t/ssh.calls ]] || fail "a first install's dry run never contacts the phone"
+for line in \
+  "Checking the NV backup in $N" \
+  "SHA256SUMS: one line for each of modem_a modem_b efs efs_backup modem_userdata persist" \
+  "would run: tools/extract-vendor-firmware -o" \
+  "no phone-config.tar to fall back on" \
+  "/etc/omamobile/modem-nv.sha256: the six NV lines of $N/SHA256SUMS" \
+  "would push 1 files to / (merge)" \
+  "would write /var/lib/omamobile-vendor/modem/props.conf (root's, mode 600) on the phone, from androidboot.cdt_hwid in its /proc/bootconfig"; do
+  grep -qF -- "$line" <<<"$out" || { echo "$out"; fail "first install, dry run: $line"; }
+done
+if grep -qF 'from the backup' <<<"$out"; then echo "$out"; fail "a first install takes nothing from a backup"; fi
+while read -r sum _; do
+  if grep -qF "$sum" <<<"$out"; then fail "the NV checksums aren't printed"; fi
+done < "$N/SHA256SUMS"
+[[ -z $(ls -A "$t/work") ]] || fail "the staging is removed"
+pass "first install, dry run: the six NV lines and props.conf from the phone's bootconfig, phone untouched, nothing from a backup"
+
+# Refusals, all before the phone is contacted (these runs aren't dry runs)
+if out=$(fresh --user alice "$t/factory.zip"); then fail "a first install without --nv-backup is refused"; fi
+grep -qF -- "no $H/android/reference/phone-backup-20261013/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions and give it with --nv-backup DIR" <<<"$out" ||
+  { echo "$out"; fail "says to give --nv-backup"; }
+for p in modem_a modem_b efs efs_backup modem_userdata persist; do
+  grep -v "  $p\\.img\$" "$N/SHA256SUMS" > "$t/nv-short/SHA256SUMS"
+  if out=$(fresh --user alice --nv-backup "$t/nv-short" "$t/factory.zip"); then fail "refuses an NV backup without $p.img"; fi
+  grep -qE "none or more than one for $p\\.img\$" <<<"$out" || { echo "$out"; fail "names the missing $p.img"; }
+done
+cat "$N/SHA256SUMS" <(grep ' modem_a\.img$' "$N/SHA256SUMS") > "$t/nv-short/SHA256SUMS"
+if out=$(fresh --user alice --nv-backup "$t/nv-short" "$t/factory.zip"); then fail "refuses an NV backup with modem_a.img twice"; fi
+grep -qE 'none or more than one for modem_a\.img$' <<<"$out" || { echo "$out"; fail "names the repeated modem_a.img"; }
+for o in --fingerprint --import-home --restore-config --restore-wifi --force "--backup $H"; do
+  # shellcheck disable=SC2086 # the --backup case is two words on purpose
+  if out=$(fresh --user alice --nv-backup "$N" $o "$t/factory.zip"); then fail "a first install refuses $o"; fi
+  grep -qF -- "doesn't support ${o%% *} (a restore from a phone-config.tar)" <<<"$out" || { echo "$out"; fail "says it refuses $o"; }
+done
+if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --skip-extract --backup "$B" --work "$t/work" --user alice --nv-backup "$N" 2>&1); then
+  fail "--nv-backup beside a phone-config.tar is refused"
+fi
+grep -qF -- "--nv-backup is for a first install, with no phone-config.tar" <<<"$out" || { echo "$out"; fail "says --nv-backup is for a first install"; }
+[[ ! -e $t/ssh.calls ]] || fail "a refused first install never contacts the phone"
+pass "first install: refused without --nv-backup, with one of the six NV lines missing or repeated, with an option that needs phone-config.tar, and --nv-backup beside a phone-config.tar"
+
+# The SHA256SUMS file and its line format (sha256sum's own: lower-case hex,
+# two spaces), PHONE_BOOTCONFIG (it goes into the command run on the phone)
+mkdir -p "$t/nv-none"
+if out=$(fresh --user alice --nv-backup "$t/nv-none" "$t/factory.zip"); then fail "refuses an NV backup with no SHA256SUMS"; fi
+grep -qF "no $t/nv-none/SHA256SUMS (--nv-backup DIR" <<<"$out" || { echo "$out"; fail "says there is no SHA256SUMS"; }
+for how in upper one-space binary; do
+  case $how in
+    upper) sed -E '/ modem_a\.img$/ s/^[0-9a-f]+/\U&/' "$N/SHA256SUMS" ;;
+    one-space) sed -E '/ modem_a\.img$/ s/  / /' "$N/SHA256SUMS" ;;
+    binary) sed -E '/ modem_a\.img$/ s/  / */' "$N/SHA256SUMS" ;;
+  esac > "$t/nv-short/SHA256SUMS"
+  cmp -s "$N/SHA256SUMS" "$t/nv-short/SHA256SUMS" && fail "the $how line differs from sha256sum's"
+  if out=$(fresh --user alice --nv-backup "$t/nv-short" "$t/factory.zip"); then fail "refuses a modem_a line that isn't sha256sum's format ($how)"; fi
+  grep -qE "none or more than one for modem_a\\.img\$" <<<"$out" || { echo "$out"; fail "names modem_a.img ($how)"; }
+done
+for b in relative/bootconfig "/proc/boot config" "/x;reboot" "/x'y"; do
+  if out=$(PHONE_BOOTCONFIG=$b fresh --user alice --nv-backup "$N" "$t/factory.zip"); then fail "refuses PHONE_BOOTCONFIG=$b"; fi
+  grep -qF "PHONE_BOOTCONFIG must be an absolute path" <<<"$out" || { echo "$out"; fail "says why ($b)"; }
+done
+[[ ! -e $t/ssh.calls ]] || fail "these refusals never contact the phone"
+rel=$(realpath --relative-to="$t" "$SRC")
+help=$(cd "$t" && "$rel/tools/phone-provision" --help) || fail "--help works by a relative path from another directory"
+grep -qF "PHONE_BOOTCONFIG, the file on the phone" <<<"$help" || { echo "$help"; fail "--help prints the whole header"; }
+if grep -qF 'set -euo pipefail' <<<"$help"; then fail "--help stops at the end of the header"; fi
+pass "first install: refused with no SHA256SUMS, a line not in sha256sum's format, or an unsafe PHONE_BOOTCONFIG; --help prints the whole header"
+
+# The board id check and the staged NV lines, without Docker (CI has none).
+# A stand-in phone answers the connection, user and kernel checks, and runs
+# the board id check here: that part only reads the stand-in bootconfig and
+# exits before any write. Everything else it only logs, as a push, and
+# doesn't run
+hwid=0x7e57b0a2d1d000000000000000c0ffee
+cat > "$t/check-ssh" <<'EOF'
+#!/bin/bash
+case $* in
+  true | "getent passwd 'alice' >/dev/null") exit 0 ;;
+  "uname -r") echo 7.3.0-test; exit 0 ;;
+  "BOOTCONFIG='"*"' ACTION=check sh -s") exec sh -c "$1" ;;
+esac
+printf '%s\n' "$*" >> "$T/pushes"
+cat > /dev/null
+EOF
+chmod +x "$t/check-ssh"
+check_run() {
+  HOME=$H PHONE_SSH=$t/check-ssh PHONE_BOOTCONFIG=$t/bootconfig tools/phone-provision --skip-extract --user alice \
+    --nv-backup "$N" --work "$t/work" "$@" < /dev/null 2>&1
+}
+for how in missing absent empty blank no-0x not-hex; do
+  rm -f "$t/pushes" "$t/bootconfig"
+  why="no androidboot.cdt_hwid in the phone's $t/bootconfig, or an empty one"
+  case $how in
+    missing) ;;
+    absent) printf 'androidboot.mode = "normal"\nandroidboot.cdt_hwidx = "%s"\n' "$hwid" > "$t/bootconfig" ;;
+    empty) printf 'androidboot.mode = "normal"\nandroidboot.cdt_hwid = ""\n' > "$t/bootconfig" ;;
+    blank) printf 'androidboot.cdt_hwid = "   "\n' > "$t/bootconfig" ;;
+    no-0x) printf 'androidboot.cdt_hwid = "%s"\n' "${hwid#0x}" > "$t/bootconfig" ;;
+    not-hex) printf 'androidboot.cdt_hwid = "%sz"\n' "$hwid" > "$t/bootconfig" ;;
+  esac
+  case $how in blank | no-0x | not-hex) why="androidboot.cdt_hwid in the phone's $t/bootconfig isn't 0x and hex digits (not shown)" ;; esac
+  if out=$(check_run); then echo "$out"; fail "refuses a phone whose androidboot.cdt_hwid is $how"; fi
+  grep -qF "$why" <<<"$out" || { echo "$out"; fail "says why ($how)"; }
+  [[ ! -e $t/pushes ]] || { cat "$t/pushes"; fail "nothing is pushed when androidboot.cdt_hwid is $how"; }
+  if grep -qF "${hwid#0x}" <<<"$out"; then fail "the value isn't printed ($how)"; fi
+done
+pass "first install, no Docker: a missing, empty or malformed androidboot.cdt_hwid is refused before any push, the value never printed"
+
+printf 'androidboot.mode = "normal"\nandroidboot.cdt_hwid = "%s"\nandroidboot.slot_suffix = "_b"\n' "$hwid" > "$t/bootconfig"
+rm -f "$t/pushes"
+out=$(check_run --keep) || { echo "$out"; fail "a first install against the logging stand-in succeeds"; }
+grep -qF "board id: androidboot.cdt_hwid is in the phone's $t/bootconfig (not shown)" <<<"$out" || { echo "$out"; fail "says the board id is there"; }
+grep -qF 'camera data: none from this run (--skip-extract, and no phone-config.tar to take it from); camera files already on the phone stay' <<<"$out" ||
+  { echo "$out"; fail "says this run pushes no camera data"; }
+# what went to the phone, in order: the staged tree, its check, then the
+# board id written there from its own bootconfig. Never the value
+expect="set -e; mkdir -p '/'; tar -C '/' -xf - --no-same-owner --no-overwrite-dir
+cd '/' && sha256sum -c --quiet
+BOOTCONFIG='$t/bootconfig' ACTION=write sh -s"
+[[ $(cat "$t/pushes") == "$expect" ]] || { cat "$t/pushes"; fail "pushes the six lines, checks them, then writes props.conf on the phone"; }
+if grep -qF "${hwid#0x}" "$t/pushes"; then fail "the board id is in no command sent to the phone"; fi
+if grep -qF "${hwid#0x}" <<<"$out"; then fail "the board id isn't printed"; fi
+staged=("$t"/work/run.*/modem-stage/etc/omamobile/modem-nv.sha256)
+cmp -s "${staged[0]}" "$t/nv-six" || { cat "${staged[0]}"; fail "modem-nv.sha256 is exactly the six NV lines, devinfo's left out"; }
+[[ $(stat -c %a "${staged[0]}") == 644 ]] || fail "modem-nv.sha256 is staged mode 644"
+[[ $(find "$t"/work/run.* -type f | wc -l) == 1 ]] || { find "$t/work"; fail "modem-nv.sha256 is the only file staged"; }
+rm -rf "${t:?}/work/"run.*
+pass "first install, no Docker: the six NV lines staged (mode 644), then props.conf written on the phone, the value in no command"
+
 # --- a real run against a container standing in for the phone -----------------
 if ! command -v docker >/dev/null || ! docker image inspect archlinux:latest >/dev/null 2>&1; then
   echo "ok - # skip: no docker or archlinux:latest image for the end-to-end run"
@@ -106,9 +257,10 @@ container=omamobile-provision-test-$$
 docker run -d --name "$container" --network none archlinux:latest sleep 600 >/dev/null
 docker exec "$container" bash -c 'useradd -m -u 1000 alice && mkdir -p /var/lib/omamobile/firstboot /usr/lib/omamobile-vendor/modem &&
   echo alice > /var/lib/omamobile/firstboot/user && echo package-file > /usr/lib/omamobile-vendor/modem/profile.conf'
+# docker keeps the caller's HOME (the first-install runs below change it)
 cat > "$t/phone-ssh" <<EOF
 #!/bin/bash
-exec docker exec -i $container bash -c "\$*"
+HOME=$(printf %q "$HOME") exec docker exec -i $container bash -c "\$*"
 EOF
 chmod +x "$t/phone-ssh"
 prov() { PHONE_SSH=$t/phone-ssh tools/phone-provision --skip-extract --backup "$B" --work "$t/work" "$@" > "$t/out" 2>&1; }
@@ -136,3 +288,62 @@ prov --fingerprint && fail "differing fingerprint state is never replaced withou
 grep -q -- '--force' "$t/out" || fail "says how to replace it"
 [[ $(on 'cat /var/lib/omamobile-fp/persist-ss/0') == enrolled-since ]] || fail "the phone's newer state is untouched"
 pass "differing fingerprint state is kept unless --force"
+
+# A first install against the stand-in phone: the board id from a stand-in
+# bootconfig (PHONE_BOOTCONFIG), the NV checksums from the stand-in backup.
+# The made-up board id (hwid, above) must never show in the output or the
+# laptop's staging
+on 'rm -rf /var/lib/omamobile-vendor /etc/omamobile/modem-nv.sha256'
+bootconfig() { docker exec -i "$container" sh -c 'cat > /run/test-bootconfig'; }
+fresh_on() { HOME=$H PHONE_SSH=$t/phone-ssh PHONE_BOOTCONFIG=/run/test-bootconfig tools/phone-provision --skip-extract --nv-backup "$N" --work "$t/work" "$@" > "$t/out" 2>&1; }
+for how in missing absent empty not-hex; do
+  why="no androidboot.cdt_hwid in the phone's /run/test-bootconfig, or an empty one"
+  case $how in
+    missing) on 'rm -f /run/test-bootconfig' ;;
+    absent) printf 'androidboot.mode = "normal"\nandroidboot.cdt_hwidx = "%s"\n' "$hwid" | bootconfig ;;
+    empty) printf 'androidboot.mode = "normal"\nandroidboot.cdt_hwid = ""\n' | bootconfig ;;
+    not-hex) printf 'androidboot.cdt_hwid = "%s "\n' "$hwid" | bootconfig
+      why="androidboot.cdt_hwid in the phone's /run/test-bootconfig isn't 0x and hex digits (not shown)" ;;
+  esac
+  if fresh_on; then cat "$t/out"; fail "refuses a phone whose androidboot.cdt_hwid is $how"; fi
+  grep -qF "$why" "$t/out" || { cat "$t/out"; fail "says why ($how)"; }
+  on 'test ! -e /var/lib/omamobile-vendor && test ! -e /etc/omamobile/modem-nv.sha256' || fail "nothing is written when androidboot.cdt_hwid is $how"
+  if grep -qF "${hwid#0x}" "$t/out"; then fail "a near-miss key's value isn't printed ($how)"; fi
+done
+pass "first install: a missing, empty or malformed androidboot.cdt_hwid is refused before anything is written"
+
+printf 'androidboot.mode = "normal"\nandroidboot.cdt_hwid = "%s"\nandroidboot.slot_suffix = "_b"\n' "$hwid" | bootconfig
+# under bash -x, so the trace is checked for the value too; --keep leaves
+# the staging to look at
+HOME=$H PHONE_SSH=$t/phone-ssh PHONE_BOOTCONFIG=/run/test-bootconfig bash -x tools/phone-provision --skip-extract --nv-backup "$N" \
+  --work "$t/work" --keep > "$t/out" 2>&1 || { cat "$t/out"; fail "a first install against the stand-in phone succeeds"; }
+# props_ok LABEL [LINES]: props.conf is root's, mode 600, and holds LINES
+# (other lines kept from before), then both keys set to the board id
+props_ok() {
+  [[ $(on 'stat -c %a:%u:%g /var/lib/omamobile-vendor/modem/props.conf') == 600:0:0 ]] || fail "props.conf is root's, mode 600 ($1)"
+  [[ $(on 'cat /var/lib/omamobile-vendor/modem/props.conf') == "${2:-}ro.boot.cdt_hwid=$hwid"$'\n'"persist.vendor.modem.cdt_hwid=$hwid" ]] ||
+    { on 'cat /var/lib/omamobile-vendor/modem/props.conf' | sed "s/${hwid#0x}/<the value>/"; fail "props.conf holds both keys, set to bootconfig's androidboot.cdt_hwid ($1)"; }
+  [[ $(on 'ls -A /var/lib/omamobile-vendor/modem') == props.conf ]] || fail "no temporary file is left beside props.conf ($1)"
+}
+props_ok "first run"
+[[ $(on 'LC_ALL=C sort /etc/omamobile/modem-nv.sha256') == "$(LC_ALL=C sort "$t/nv-six")" ]] || fail "modem-nv.sha256 holds exactly the six NV lines"
+[[ $(on 'stat -c %a:%u:%g /etc/omamobile/modem-nv.sha256') == 644:0:0 ]] || fail "modem-nv.sha256 is root's, mode 644"
+grep -qF "wrote /var/lib/omamobile-vendor/modem/props.conf on the phone from its /run/test-bootconfig (root's, mode 600; the board id isn't shown)" "$t/out" ||
+  { cat "$t/out"; fail "says it wrote props.conf"; }
+grep -qF 'camera data: none from this run (--skip-extract, and no phone-config.tar to take it from); camera files already on the phone stay' "$t/out" ||
+  { cat "$t/out"; fail "says this run pushes no camera data"; }
+if grep -qF "${hwid#0x}" "$t/out"; then fail "the board id never shows in the output, not even under bash -x"; fi
+[[ -n $(ls -A "$t/work") ]] || fail "--keep kept the staging"
+if grep -rqF "${hwid#0x}" "$t/work"; then fail "the board id never reaches the laptop's staging"; fi
+rm -rf "${t:?}/work/"run.*
+pass "first install: props.conf (root's, mode 600) with both keys from bootconfig, the six NV lines, and the board id never on the laptop"
+
+# a second run (as after a fresh backup, REINSTALL-RUNBOOK N3) over stale
+# keys and a per-phone tweak, mode 644: the keys are replaced, the tweak
+# and the line with no newline at the end stay
+on 'printf "ro.boot.cdt_hwid=0x0ld\nper.phone.tweak=kept\npersist.vendor.modem.cdt_hwid=0x0ld\nno.newline=kept" > /var/lib/omamobile-vendor/modem/props.conf &&
+  chmod 644 /var/lib/omamobile-vendor/modem/props.conf'
+fresh_on || { cat "$t/out"; fail "a second first-install run succeeds"; }
+props_ok "second run" $'per.phone.tweak=kept\nno.newline=kept\n'
+if grep -qF "${hwid#0x}" "$t/out"; then fail "the board id never shows in the output (second run)"; fi
+pass "running a first install again replaces the stale keys, keeps props.conf's other lines, root's and mode 600 again"

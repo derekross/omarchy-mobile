@@ -129,7 +129,8 @@ bin/omamobile images           # boot, init_boot, vendor_boot, vendor_kernel_boo
 tools/build-packages           # [omamobile] for aarch64 into out/repo, signed
 tools/build-rootfs             # out/omamobile-rootfs-<date>-aarch64.img.zst
 tools/install-phone --dry-run  # checks, questions, the exact commands; then without --dry-run
-tools/phone-provision FACTORY.zip   # after the first boot: firmware and per-phone data
+# after the first boot: a read-only backup of the modem's partitions into DIR (REINSTALL-RUNBOOK 4a)
+tools/phone-provision --nv-backup DIR FACTORY.zip   # firmware and per-phone data
 
 # Phone in fastboot (developer loop, or when Linux won't boot)
 bin/omamobile fastboot         # get there without buttons, if possible
@@ -164,7 +165,7 @@ tools/phone-mirror             # the phone's screen in a window here, mouse and 
 
 - **Packages** build natively on the phone: `tools/phone-install-package packages/<name>` builds one with makepkg and installs it with pacman. The maintainer publishes the signed `[omamobile]` repository with `tools/build-packages` (built on the laptop, in an Arch Linux ARM container under qemu-user; no phone needed, the default) and `tools/repo-push`. `tools/repo-build` builds on a connected phone instead, an opt-in shortcut for the packages that take hours under qemu (Mesa, Hyprland, libcamera).
 - **Shell UI** can be developed on the desktop in a nested Hyprland: `phone/dev/run-desktop` ([phone/README.md](phone/README.md)).
-- **Getting Arch onto `userdata`** (an ext4 Arch Linux ARM root with Omarchy's packages, which the initramfs hands over to): `tools/build-packages` fills `out/repo`, `tools/build-rootfs` builds the root image from it, and `tools/install-phone` (phone in fastboot) asks for the user name, password, Wi-Fi and SSH key, writes them into a local copy of the image, and flashes only slot B's boot images and `userdata`. On the first boot the initramfs grows the image to the whole partition and `omamobile-firstboot` creates the user and runs Omarchy's setup; then `tools/phone-provision FACTORY.zip` puts back Google's firmware (from your own factory image) and the phone's own data. `--dry-run` shows every command first. Flashing `userdata` erases stock Android's data: slot A will need a factory reset if you ever boot it again. The full gated procedure: [REINSTALL-RUNBOOK](device/cheetah/REINSTALL-RUNBOOK.md); the design: [docs/RELEASES.md](docs/RELEASES.md) §6.
+- **Getting Arch onto `userdata`** (an ext4 Arch Linux ARM root with Omarchy's packages, which the initramfs hands over to): `tools/build-packages` fills `out/repo`, `tools/build-rootfs` builds the root image from it, and `tools/install-phone` (phone in fastboot) asks for the user name, password, Wi-Fi and SSH key, writes them into a local copy of the image, and flashes only slot B's boot images and `userdata`. On the first boot the initramfs grows the image to the whole partition and `omamobile-firstboot` creates the user and runs Omarchy's setup; then, after a read-only backup of the modem's partitions (REINSTALL-RUNBOOK section 4a), `tools/phone-provision --nv-backup DIR FACTORY.zip` puts back Google's firmware (from your own factory image) and the phone's own data (the NV checksums from that backup, the modem's board id from the phone's bootconfig). `--dry-run` shows every command first. Flashing `userdata` erases stock Android's data: slot A will need a factory reset if you ever boot it again. The full gated procedure: [REINSTALL-RUNBOOK](device/cheetah/REINSTALL-RUNBOOK.md); the design: [docs/RELEASES.md](docs/RELEASES.md) §6.
 
 ## 5. Bringing up a new device
 
