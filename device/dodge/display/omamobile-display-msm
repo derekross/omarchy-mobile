@@ -60,6 +60,28 @@ load_deps() {
 	done
 }
 
+# Prefer an out-of-tree .ko under $P only when its vermagic matches this
+# uname; otherwise a tip Image with a tmpfs modules overlay would insmod a
+# stale 6.16 panel/msm from userdata and give up (Invalid module format).
+ko_for() {
+	local p_ko=$1 h_ko=$2 v
+	if [ -f "$p_ko" ]; then
+		v=$(modinfo -F vermagic "$p_ko" 2>/dev/null || true)
+		case $v in
+			"$(uname -r) "*) echo "$p_ko"; return ;;
+		esac
+	fi
+	echo "$h_ko"
+}
+PANEL_KO=$(ko_for "$P/panel-aa569-p-3-a0019-dsc.ko" 	"$H/drivers/gpu/drm/panel/panel-aa569-p-3-a0019-dsc.ko")
+MSM_KO=$(ko_for "$P/msm.ko" "$H/drivers/gpu/drm/msm/msm.ko")
+
+# Only rebind when udev loaded msm before we had dispcc. Rebinding a
+# device we just insmod'd races the in-flight probe and can hang the
+# oneshot past TimeoutStartSec (no /dev/dri, load spikes).
+msm_preloaded=
+grep -q '^msm ' /proc/modules && msm_preloaded=1
+
 # dispcc first: msm-mdss otherwise fails -110 after the deferred-probe timeout.
 for k in \
 	$H/drivers/clk/qcom/dispcc-sm8750.ko \
@@ -71,8 +93,8 @@ for k in \
 	$H/drivers/soc/qcom/llcc-qcom.ko \
 	$H/drivers/soc/qcom/ocmem.ko \
 	$H/drivers/soc/qcom/mdt_loader.ko \
-	$P/panel-aa569-p-3-a0019-dsc.ko \
-	$( [ -f $P/msm.ko ] && echo $P/msm.ko || echo $H/drivers/gpu/drm/msm/msm.ko )
+	$PANEL_KO \
+	$MSM_KO
 do
 	n=$(basename "$k" .ko | tr - _)
 	grep -q "^$n " /proc/modules && continue
@@ -92,11 +114,11 @@ for c in /sys/class/drm/card*-DSI-1; do
 		break
 	fi
 done
-if [ -z "$dsi_bound" ] && grep -q '^msm ' /proc/modules; then
+if [ -n "$msm_preloaded" ] && [ -z "$dsi_bound" ] && grep -q '^msm ' /proc/modules; then
 	dev=ae00000.display-subsystem
 	drv=/sys/bus/platform/drivers/msm-mdss
 	if [ -d "$drv" ]; then
-		log "msm loaded without DSI; rebinding $dev after dispcc"
+		log "msm was preloaded without DSI; rebinding $dev after dispcc"
 		echo "$dev" > "$drv/unbind" 2>/dev/null || true
 		sleep 0.5
 		echo "$dev" > "$drv/bind" 2>/dev/null || true

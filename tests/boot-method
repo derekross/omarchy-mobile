@@ -198,6 +198,16 @@ grep -q "rebinding" "$dms" \
   || fail "display-msm must rebind msm-mdss when msm is loaded without DSI"
 echo "ok - display-msm requires DSI bind before skipping as already-loaded"
 
+grep -q 'ko_for' "$dms" \
+  || fail "display-msm must pick panel/msm by matching vermagic (ko_for)"
+echo "ok - display-msm prefers matching-vermagic panel/msm over stale \$P"
+
+grep -q 'msm_preloaded' "$dms" \
+  || fail "display-msm must only rebind when msm was preloaded before dispcc"
+grep -q 'rebinding' "$dms" \
+  || fail "display-msm must still rebind preloaded msm after dispcc"
+echo "ok - display-msm rebinds only when msm was preloaded before dispcc"
+
 
 # stage-1 init must log which slot source won and dump bootconfig/bootargs.
 init=device/dodge/chainload/init
