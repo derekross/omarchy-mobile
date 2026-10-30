@@ -45,7 +45,7 @@ LIVE = (mm.CALL_DIALING, mm.CALL_RINGING_OUT, mm.CALL_RINGING_IN, mm.CALL_ACTIVE
         mm.CALL_WAITING)
 NOT_YET = {
     'data': 'Mobile data through ModemManager (T3); omamobile-sit-data owns rmnet0 for now',
-    'pin': 'SIM PIN entry (T8); take the PIN lock off in another phone',
+    'pin': 'Only SendPin is supported; PUK and PIN changes belong in another phone',
     'emergency': 'Emergency calls on this phone (they are untested; keep another phone for emergencies)',
 }
 
@@ -93,8 +93,34 @@ def derive(status):
         operator_name=m.get('operator_name', '') if registered else '',
         home=reg == 'home',
         emergency_numbers=list(m.get('emergency_numbers') or ('112', '911')),
+        bearer_ip=(m.get('bearer') or {}) if d['data'] else {},
+        # sitd's decoded IND_SIGNAL_STRENGTH (its per-RAT layout is still to
+        # be confirmed on hardware): MM's quality, recent while reports come.
+        quality=(int(m.get('signal') or 0), bool(m.get('signal_detail'))) if registered else (0, False),
+        signal_detail=(m.get('signal_detail') or {}) if registered else {},
     )
     return d
+
+
+def signal_values(detail, rat, keys):
+    """An MM Signal.Lte/Nr5g dictionary (doubles, dBm/dB)."""
+    values = detail.get(rat) or {}
+    return {k: GLib.Variant('d', float(values[k])) for k in keys if values.get(k) is not None}
+
+
+def ip_config(config):
+    """A Bearer.Ip4Config/Ip6Config dictionary from what omamobile-sit-data
+    configured (sitd's private status): static, the address, its prefix and
+    up to three DNS servers. Empty when the family isn't configured. The CLAT's
+    IPv4 address is the phone's own, not the bearer's: not exported."""
+    if not isinstance(config, dict) or not config.get('address') or config.get('clat'):
+        return {}
+    out = {'method': GLib.Variant('u', mm.IP_METHOD_STATIC),
+           'address': GLib.Variant('s', str(config['address'])),
+           'prefix': GLib.Variant('u', int(config.get('prefix', 0)))}
+    for index, server in enumerate(list(config.get('dns') or [])[:3], 1):
+        out[f'dns{index}'] = GLib.Variant('s', str(server))
+    return out
 
 
 def is_emergency(number, d):
@@ -185,7 +211,7 @@ class Bridge:
         if d['data'] and not self.bearer:
             self.create_bearer(d)
         if self.bearer:
-            self.x.set(self.bearer, mm.BEARER, Connected=d['data'])
+            self.x.set(self.bearer, mm.BEARER, **self.bearer_dynamic(d))
         for name in d['interfaces']:
             if not self.x.has(self.modem, name):
                 self.x.add_interface(self.modem, name, self.interface_props(name, d))
@@ -215,7 +241,7 @@ class Bridge:
                 CurrentCapabilities=mm.CAP_GSM_UMTS | mm.CAP_LTE, MaxBearers=1, MaxActiveBearers=1,
                 SupportedModes=[(mm.MODE_4G, mm.MODE_NONE)], CurrentModes=(mm.MODE_4G, mm.MODE_NONE),
                 SupportedBands=[mm.BAND_UNKNOWN], CurrentBands=[mm.BAND_UNKNOWN],
-                SupportedIpFamilies=mm.IP_V4 | mm.IP_V6 | mm.IP_V4V6, SignalQuality=(0, False))
+                SupportedIpFamilies=mm.IP_V4 | mm.IP_V6 | mm.IP_V4V6)
         if name == mm.MODEM_3GPP:
             apn, ip_type = self.settings.get('apn', ''), self.settings.get('ip_type', 'ipv4v6')
             settings = {'apn': GLib.Variant('s', apn),
@@ -232,7 +258,7 @@ class Bridge:
             return dict(Sim=self.sim or '/', Bearers=[self.bearer] if self.bearer else [],
                         State=d['state'], StateFailedReason=d['failed'], UnlockRequired=d['unlock'],
                         UnlockRetries=d['retries'], PowerState=d['power'],
-                        AccessTechnologies=d['access'])
+                        AccessTechnologies=d['access'], SignalQuality=d['quality'])
         if name == mm.MODEM_3GPP:
             return dict(RegistrationState=d['registration'], OperatorCode=d['plmn'],
                         OperatorName=d['operator_name'], PacketServiceState=d['packet'])
@@ -245,7 +271,11 @@ class Bridge:
         if name == mm.MESSAGING:
             return dict(Messages=list(self.messages))
         if name == mm.SIGNAL:
-            return dict(self.signal)
+            # As MM: the extended values only while a client asked for a rate.
+            on = self.signal['Rate'] > 0
+            return dict(self.signal,
+                        Lte=signal_values(d['signal_detail'], 'lte', ('rssi', 'rsrp', 'rsrq', 'snr')) if on else {},
+                        Nr5g=signal_values(d['signal_detail'], 'nr', ('rsrp', 'rsrq', 'snr')) if on else {})
         return {}
 
     def create_sim(self, d):
@@ -264,10 +294,15 @@ class Bridge:
         self.bearer = self.path('Bearer')
         apn, ip_type = self.settings.get('apn', ''), self.settings.get('ip_type', 'ipv4v6')
         self.x.add(self.bearer, {mm.BEARER: dict(
-            Interface='rmnet0', Connected=d['data'], IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
+            Interface='rmnet0', IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
             ProfileId=-1, Properties={'apn': GLib.Variant('s', apn),
-                                      'ip-type': GLib.Variant('u', IP_TYPES.get(ip_type, mm.IP_V4V6))})},
+                                      'ip-type': GLib.Variant('u', IP_TYPES.get(ip_type, mm.IP_V4V6))},
+            **self.bearer_dynamic(d))},
             self.handle_bearer)
+
+    def bearer_dynamic(self, d):
+        return dict(Connected=d['data'], Ip4Config=ip_config(d['bearer_ip'].get('ipv4')),
+                    Ip6Config=ip_config(d['bearer_ip'].get('ipv6')))
 
     # ---- calls ----------------------------------------------------------------
 
@@ -441,7 +476,7 @@ class Bridge:
                 # uint32, the rest only once registered.
                 status = {'state': GLib.Variant('u', d['state'] & 0xffffffff)}
                 if d['state'] >= mm.STATE_REGISTERED:
-                    status.update({'signal-quality': GLib.Variant('(ub)', (0, False)),
+                    status.update({'signal-quality': GLib.Variant('(ub)', d['quality']),
                                    'current-bands': GLib.Variant('au', [mm.BAND_UNKNOWN]),
                                    'access-technologies': GLib.Variant('u', d['access']),
                                    'm3gpp-registration-state': GLib.Variant('u', d['registration'])})
@@ -471,7 +506,7 @@ class Bridge:
                 settings = args[0]
                 self.signal['RssiThreshold'] = int(settings.get('rssi-threshold', 0))
                 self.signal['ErrorRateThreshold'] = bool(settings.get('error-rate-threshold', False))
-            self.x.set(self.modem, mm.SIGNAL, **self.signal)
+            self.x.set(self.modem, mm.SIGNAL, **self.dynamic_props(mm.SIGNAL, d))
             return reply.ok()
         if interface == mm.VOICE:
             return self.handle_voice(method, args, reply)
@@ -669,6 +704,12 @@ class Bridge:
                           number=self.x.get(path, mm.SMS, 'Number'), text=self.x.get(path, mm.SMS, 'Text'))
 
     def handle_sim(self, interface, method, args, reply):
+        # SendPin only (sitd's one VERIFY_SIM_PIN, refused with fewer than two
+        # tries left); PUK, PIN changes and the lock itself stay off.
+        if method == 'SendPin':
+            if self.derived['sim'] != 'pin':
+                raise MMError('WrongState', 'The SIM is not asking for its PIN')
+            return self.link.request('sim-pin', self.answer(reply), timeout=40, pin=args[0])
         raise unsupported(NOT_YET['pin'])
 
     def handle_bearer(self, interface, method, args, reply):

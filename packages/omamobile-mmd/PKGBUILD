@@ -7,7 +7,7 @@ pkgdesc="Omarchy Mobile ModemManager-compatible bridge: org.freedesktop.ModemMan
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(python python-gobject glib2 dbus polkit 'omamobile-modem-sit>=0.3.0')
+depends=(python python-gobject glib2 dbus polkit 'omamobile-modem-sit>=0.4.0')
 checkdepends=(dbus)
 # It owns ModemManager's bus name and ships its bus policy and polkit
 # actions. Nothing in Arch or Arch Linux ARM hard-depends on modemmanager

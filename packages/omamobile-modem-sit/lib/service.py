@@ -18,6 +18,8 @@ it. No radio, NV, SIM or raw-request command is exposed.
   {"action": "sms-delete", "id": "..."}
   {"action": "screen-state", "on": true|false}
   {"action": "radio", "on": true|false}      AT+CFUN, the rollback short of a reboot
+  {"action": "sim-pin", "pin": "1234"}      VERIFY_SIM_PIN once, only while the
+      SIM asks for its PIN and has at least two tries left; never retried
   {"action": "subscribe"}                    keep the connection: one
       {"event": "status", "status": {...}} line now and after every change
       (the full private status, with the received SMS IDs). A subscriber
@@ -47,6 +49,7 @@ from data_call import paths as bearer_paths
 from ims import REGISTRATION, record_registration
 from inbox import persist_sms
 from sit import Sit, ModemError
+import sit_signal
 from sms_codec import submit, received_pdu, number
 from voice_audio import VoiceAudio, aoc_card
 
@@ -66,6 +69,7 @@ APP_STATES = {0: 'unknown', 1: 'detected', 2: 'pin', 3: 'puk', 4: 'network-locke
 EMERGENCY = ('112', '911')
 EMERGENCY_NO_SIM = ('000', '08', '110', '118', '119', '999')
 SUBSCRIBERS = 8
+SIGNAL_REFRESH = 10
 
 
 def sim_status(payload):
@@ -87,6 +91,28 @@ def sim_status(payload):
     if status['state'] in ('pin', 'puk', 'ready'):
         status.update(pin_retries=app[59], puk_retries=app[60])
     return status
+
+
+def bearer_ip():
+    try:
+        record = json.loads((paths.RUN / 'bearer-ip.json').read_text())
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def pin_payload(status_payload, pin):
+    """VERIFY_SIM_PIN (MODEM-SIT-RESEARCH 3.2, len 38): PIN length, the PIN
+    as ASCII digits in 8 bytes, the USIM's AID length and AID in 16. The AID
+    is read here and sent back only; never logged or published."""
+    if not isinstance(pin, str) or not re.fullmatch(r'[0-9]{4,8}', pin):
+        raise ValueError('A SIM PIN is 4 to 8 digits')
+    apps = [status_payload[i:i + 63] for i in range(3, 3 + status_payload[2] * 63, 63)]
+    usim = next((a for a in apps if a[0] == 2), None)
+    if usim is None or not 1 <= usim[3] <= 16:
+        raise RuntimeError('No USIM application to unlock')
+    return (bytes([len(pin)]) + pin.encode('ascii').ljust(8, b'\0') +
+            bytes([usim[3]]) + bytes(usim[4:4 + usim[3]]).ljust(16, b'\0'))
 
 
 def database(path):
@@ -142,6 +168,9 @@ class Service:
         self.published = None
         self.subscribers = []
         self.broadcast_line = None
+        # IND_SIGNAL_STRENGTH, decoded (sit_signal.py): MM's quality and the
+        # LTE/NR values, refreshed at most every SIGNAL_REFRESH s.
+        self.signal = dict(quality=0, detail=None, at=0)
 
     def stage(self, name):
         self.current_stage = name
@@ -243,6 +272,20 @@ class Service:
             for path in paths.INBOX.glob('*.sit'):
                 self.ingest(path)
             self.publish()
+        elif ident == 0x0906:
+            decoded = sit_signal.decode(packet[8:])
+            now = time.monotonic()
+            quality = sit_signal.quality(decoded, self.net['rat'])
+            if decoded is None:
+                return
+            detail = {rat: {k: round(v) for k, v in decoded[rat].items()} for rat in ('lte', 'nr')
+                      if rat in decoded}
+            changed = abs(quality - self.signal['quality']) >= 5 or self.signal['detail'] is None
+            if changed or now - self.signal['at'] >= SIGNAL_REFRESH:
+                self.signal = dict(quality=quality, detail=dict(detail, layout=decoded['layout']), at=now)
+                self.publish()
+            else:
+                self.signal['seen'] = now
         elif ident == 0x0d05:
             record_registration(packet)
             self.publish()
@@ -292,6 +335,10 @@ class Service:
         if time.monotonic() < self.next_poll:
             return
         self.next_poll = time.monotonic() + 30
+        if self.signal['detail'] is not None and \
+                time.monotonic() - self.signal.get('seen', self.signal['at']) > 90:
+            # No report for 90 s (the screen-off filter, or no service).
+            self.signal = dict(quality=0, detail=None, at=0)
         # GET_SIM_STATUS and GET_RADIO_POWER: the probe's read-only requests.
         try:
             self.sim = sim_status(self.client.request(0x0200, timeout=5))
@@ -377,6 +424,40 @@ class Service:
         self.db.commit()
         return dict(state=state, error=error, completed=completed)
 
+    def verify_pin(self, pin):
+        """One VERIFY_SIM_PIN, on the user's request only. Refused unless the
+        SIM is asking for its PIN right now with two or more tries left: the
+        last try (and a PUK) belongs in another phone, where a mistake can't
+        cost the SIM. Nothing here retries; the PIN is never logged."""
+        payload = self.client.request(0x0200, timeout=5)
+        self.sim = sim_status(payload)
+        self.publish()
+        if self.sim['state'] != 'pin':
+            raise RuntimeError('The SIM is not asking for its PIN')
+        if self.sim.get('pin_retries', 0) < 2:
+            raise RuntimeError('One PIN try left: enter it in another phone '
+                               '(a wrong one locks the SIM to its PUK)')
+        body = pin_payload(payload, pin)
+        pin = None
+        self.next_poll = 0
+        try:
+            result = self.client.request(0x0201, body, timeout=20)
+        except ModemError as error:
+            # Stock reads the tries left as a u32 at the start of the reply,
+            # error 3 (RCM_E_PASSWORD_INCORRECT) meaning a wrong PIN.
+            left = struct.unpack_from('<I', error.payload)[0] if len(error.payload) >= 4 else None
+            if error.error == 3:
+                print('SIM PIN rejected;', 'unknown' if left is None else left, 'tries left', flush=True)
+                raise RuntimeError('Wrong SIM PIN' + ('' if left is None else f'; {left} tries left')) from None
+            print('SIM PIN request failed with error', error.error, flush=True)
+            raise RuntimeError('The SIM PIN request failed') from None
+        except TimeoutError:
+            raise RuntimeError('The SIM PIN result is unknown; check the SIM state before trying again') from None
+        finally:
+            body = None
+        print('SIM PIN accepted', flush=True)
+        return dict(accepted=True, tries_left=struct.unpack_from('<I', result)[0] if len(result) >= 4 else None)
+
     def status(self, *, public=False):
         reg = self.registration()
         voice = reg.get('state') == 2 and reg.get('features', 0) & 1 != 0
@@ -387,7 +468,8 @@ class Service:
                      registration=self.net['reg'], tech=self.net['rat'],
                      operator=self.net['operator'] or self.net['plmn'],
                      plmn=self.net['plmn'], operator_name=self.net['operator'],
-                     voice=voice, sms=sms, data=data, signal=0, audio=True,
+                     voice=voice, sms=sms, data=data, signal=self.signal['quality'], audio=True,
+                     signal_detail=self.signal['detail'],
                      radio=self.radio, sim=dict(self.sim),
                      ims='registered' if voice or sms else self.ims_state,
                      emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
@@ -398,6 +480,9 @@ class Service:
             unread = self.db.execute('SELECT COUNT(*) FROM received WHERE consumed=0').fetchone()[0]
             return dict(modem=modem, calls=calls, sms=dict(unread=unread), updated=int(time.time()))
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
+        # The addresses omamobile-sit-data configured (private: never in
+        # state.json or a log); omamobile-mmd's bearer Ip4Config/Ip6Config.
+        modem = dict(modem, bearer=bearer_ip() if data else None)
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
                                speaker=False, speaker_available=False, error=''))
@@ -493,6 +578,8 @@ class Service:
             radio(on)
             self.next_poll = 0
             return dict(radio='on' if on else 'off')
+        if action == 'sim-pin':
+            return self.verify_pin(request.get('pin'))
         if action == 'power-status':
             return dict(screen_on=self.screen_on, indications=dict(self.indication_counts))
         if action == 'status':
@@ -656,11 +743,23 @@ def serve_one(service, connection, clients):
     return False
 
 
-def probe():
+def start_trace(client, settings):
+    """[trace] record = yes: the scrubbed SIT record (sit_trace.py), on the phone."""
+    section = settings['trace']
+    if section.getboolean('record', False):
+        from sit_trace import Tracer
+        client.tracer = Tracer(section.get('directory', str(paths.STATE / 'trace')),
+                               section.getint('max_bytes', 4 << 20))
+        print('Recording the scrubbed SIT trace (IDs, lengths and codes only)', flush=True)
+
+
+def probe(settings=None):
     """Read-only first contact (MODEM-PLAN M4.1): SIM card and application
     states, radio state, packet registration, NR mode, whether an SMSC is
     set. No identifiers are printed; nothing is changed."""
     client = Sit()
+    if settings is not None:
+        start_trace(client, settings)
     try:
         sim = client.request(0x0200)
         if len(sim) >= 3 and sim[2] <= 8 and len(sim) >= 3 + sim[2] * 63:
@@ -701,8 +800,9 @@ def main():
     if not cp.online():
         raise SystemExit('CP is not ONLINE: start omamobile-modem.service first')
     if args.probe:
-        return probe()
-    client = Sit(allow_sms=True, allow_calls=True)
+        return probe(settings)
+    client = Sit(allow_sms=True, allow_calls=True, allow_pin=True)
+    start_trace(client, settings)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     service = None
     stopping = False

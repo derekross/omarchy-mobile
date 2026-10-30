@@ -13,6 +13,8 @@
   omamobile-sit sms list [--json]      received, not yet deleted
   omamobile-sit sms delete ID
   omamobile-sit data on|off            the cellular fallback route (rmnet0)
+  omamobile-sit sim-pin                the SIM PIN, typed at the prompt (one try;
+                                       refused with fewer than two tries left)
   omamobile-sit radio on|off           AT+CFUN 1/0 (registration and bearers go
                                        with "off"; a restart needs a reboot)
 
@@ -71,6 +73,10 @@ def show(status):
                if 'pin_retries' in sim else '')
     print(f"SIM: {sim.get('state', 'unknown')}{retries}; radio: {m.get('radio', 'unknown')}")
     print(f"network: {m.get('registration')} {m.get('tech')} {m.get('operator')}".rstrip())
+    detail = m.get('signal_detail') or {}
+    rsrp = (detail.get('nr') or detail.get('lte') or {}).get('rsrp')
+    if m.get('signal') or rsrp is not None:
+        print(f"signal: {m.get('signal', 0)}%" + (f" (RSRP {rsrp} dBm)" if rsrp is not None else ''))
     print(f"IMS voice: {'yes' if m.get('voice') else 'no'}, SMS: {'yes' if m.get('sms') else 'no'}, "
           f"data bearer: {'up' if m.get('data') else 'down'} (IMS {m.get('ims', 'unknown')})")
     for call in status.get('calls', []):
@@ -134,6 +140,15 @@ def main(argv):
             return 0
         if cmd == 'sms' and rest[:1] == ['delete'] and len(rest) == 2:
             request('sms-delete', id=rest[1])
+            return 0
+        if cmd == 'sim-pin' and not rest:
+            import getpass
+            # The PIN from the terminal, never from the command line (it
+            # would land in the shell history); tests pipe it on stdin.
+            pin = getpass.getpass('SIM PIN: ') if sys.stdin.isatty() else sys.stdin.readline().strip()
+            result = request('sim-pin', timeout=40, pin=pin)
+            left = result.get('tries_left')
+            print('accepted' + ('' if left is None else f' ({left} tries left)'))
             return 0
         if cmd == 'radio' and rest in (['on'], ['off']):
             print(request('radio', timeout=60, on=rest[0] == 'on')['radio'])

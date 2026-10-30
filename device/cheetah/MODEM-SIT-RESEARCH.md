@@ -203,7 +203,7 @@ START_NETWORK, 1 for STOP_NETWORK.
 |---|---|---|---|---|
 | 0x0200 | GET_SIM_STATUS | request: bare header. Response: 0x0c u8 card state, 0x0d u8 (universal PIN state, assumed), 0x0e u8 number of applications (at most 100), then 63-byte application records from 0x0f, then optional trailing slot data, read only when the message is long enough (not decoded yet) | high (offsets), medium (card state values: stock special-cases 3 and 4) | `ProtocolSimStatusAdapter::Init` and getters |
 | | application record (63 bytes) | +0 u8 app type, +1 u8 app state, +2 u8 perso substate (the three by analogy with RIL_AppStatus, low), +3 u8 AID length, +4 AID (16 bytes), +20 u8 label length, +21 label (32 bytes), +53..+56 not read by the parser (pin1-replaced and padding, low), **+57 u8 PIN1 state, +58 u8 PIN2 state, +59 u8 PIN1 retries left, +60 u8 PUK1 retries left, +61 u8 PIN2 retries left, +62 u8 PUK2 retries left** | high for +3..+62, low for +0..+2 | `GetAID`, `GetApplicationLabel`, `GetPinState`, `GetPinRemainCount`, `GetPukRemainCount` |
-| 0x0201 / 0x0203 | VERIFY_SIM_PIN / VERIFY_SIM_PIN2 | len 38: 0x0c u8 PIN length (at most 8), 0x0d PIN as ASCII digits (8 bytes), 0x15 u8 AID length, 0x16 AID binary (16 bytes; from the hex string Android passes) | high | `ProtocolSimBuilder::BuildSimVerifyPin` (type 0 gives 0x0201, type 1 gives 0x0203) |
+| 0x0201 / 0x0203 | VERIFY_SIM_PIN / VERIFY_SIM_PIN2 | len 38: 0x0c u8 PIN length (at most 8), 0x0d PIN as ASCII digits (8 bytes), 0x15 u8 AID length, 0x16 AID binary (16 bytes; from the hex string Android passes). Response: the tries left as a 32-bit read at 0x0c, whatever the error; error 3 (RCM_E_PASSWORD_INCORRECT) is a wrong PIN, 0x15 SIM_PUK_REQ | high (request, retries offset, error 3), medium (u8 or u32 on the wire) | `ProtocolSimBuilder::BuildSimVerifyPin` (type 0 gives 0x0201, type 1 gives 0x0203); `ProtocolSimVerifyPinAdapter::Init`, `SimLockHandler::OnVerifyPinDone` |
 | 0x0202 / 0x0204 | VERIFY_SIM_PUK / PUK2 | not read; same family as above | low | names |
 | 0x0210 | IND_SIM_STATUS_CHANGED | re-read GET_SIM_STATUS | medium | name |
 | 0x0400 | GET_IMSI | request len 29: 0x0c u8 AID length, 0x0d AID (16 bytes). Response: 0x0c u8 IMSI length (at most 15), 0x0d IMSI as ASCII digits | high | `ProtocolSimBuilder::BuildGetImsi`, `ProtocolSimImsiAdapter::Init` |
@@ -245,8 +245,41 @@ unknown, 5 roaming (medium: no remapping found in libsitril's
 | 0x0906 | IND_SIGNAL_STRENGTH | payload: u16 at 0x08, then a versioned block per RAT (GSM, WCDMA, CDMA, EVDO, LTE v1/v4, NR v2/v4), chosen by an "ssVer" the RIL is configured with (1, 4, 5 or default) | medium (framing), low (per-RAT fields) | `ProtocolSignalStrengthIndAdapter::GetSignalStrength`, `SignalStrengthAdapter::Fill*` |
 | 0x0943 | SET_SIGNAL_STRENGTH_REPORTING_CRITERIA | len 67 | high (ID/len) | `BuildSetSignalReportCriteria` |
 
-The per-RAT field order is not needed for registration; it is a later read
-of `SignalStrengthAdapter::Fill{Lte,Nr}SignalStrength*`.
+**The per-RAT layouts (read 2026-10-26, offline).** The parsers are in
+`vendor.radio.protocol.sit.stream.so` (`SignalStrengthParserV1/V2/V4/V5::FillSignalStrength`).
+The version choice and the HAL conversion are in `libsitril.so` and
+`libril_sitril.so`. Confidence is high for the offsets read from the
+parsers. It is medium for units, which are inferred from the HAL's range
+checks.
+
+- **Framing.** Parameters start with an s16 RAT-presence mask. The body
+  follows (IND at absolute 0x0a, GET response at 0x0e) and is made of
+  s32 LE fields at fixed offsets. A block is read only if its mask bit is
+  set. INT_MAX means absent.
+- **Version selection.** Stock does not choose by length. It reads the
+  RIL property `SignalStrength`, which comes from the modem's
+  **SET_DEVICE_INFO (0x0922) reply**, an ASCII `key=value,...` string.
+  Without that property it uses the default for the HAL version, V2 on
+  this phone's. V1, V4 and V5 have their own parsers; every other value
+  uses V2. The minimum body lengths are V1 60, V2 108, V4 196, and V5
+  exactly 196 (which parses as V4) or exactly 200.
+- **Body offsets per version:**
+
+  | Version | LTE | NR | Other |
+  |---|---|---|---|
+  | V2 | bit 2 at 0x3c: ss, rsrp, rsrq, rssnr, cqi, ta | bit 6 at 0x54: ss-rsrp, ss-rsrq, ss-sinr, csi-rsrp, csi-rsrq, csi-sinr | GSM bit 0 at 0x00, WCDMA bit 1 at 0x0c, CDMA bit 3 at 0x1c, EVDO bit 4 at 0x24, TD-SCDMA bit 5 at 0x30 |
+  | V4 | at 0x3c: ss, rsrp, rsrq, rssnr, cqi-table, cqi, ta | at 0x58: the six above, then csi-cqi-table at 0x70; at 0x74 one CQI report, or INT_MAX followed by 19 at 0x78 | as V2 |
+  | V5 | as V4, taken on mask bit 2 or 7 | as V4, plus NR timing advance at 0xc4 | as V2 |
+  | V1 | bit 3 at 0x1c | none | GW, CDMA, EVDO and TD-SCDMA blocks first |
+
+- **Units.** Nothing is scaled. The modem sends Android's convention: LTE
+  RSRP 44-150 and RSRQ 3-20 as positive magnitudes, RSSNR in 0.1 dB, ss
+  0-31 or 99; NR SS-RSRP 44-140, SS-RSRQ -20..43, SS-SINR -23..40. The
+  HAL turns anything out of range into INT_MAX.
+- **What we do with it.** `omamobile-modem-sit` 0.4.0 (`sit_signal.py`)
+  never sends SET_DEVICE_INFO, so it chooses the layout by length. That
+  choice is the part to confirm on hardware: MODEM-PLAN A8 compares it
+  with the trace's body length and byte shape.
 
 ### 3.5 PS data
 
@@ -254,7 +287,7 @@ of `SignalStrengthAdapter::Fill{Lte,Nr}SignalStrength*`.
 |---|---|---|---|---|
 | 0x0603 | SET_INITIAL_ATTACH_APN | len 251, same front part as SETUP_DATA_CALL below; 0x0d carries the RAT (14 LTE or 22 for NR); a second PDP type and P-CSCF request for roaming at 0xf8/0xf9 | high (ID/len/APN fields), medium (rest) | `ProtocolPsBuilder::BuildSetInitialAttachApn` |
 | 0x0600 | SETUP_DATA_CALL | legacy form len 246 (`sit_pdp_setup_data_call_req`): 0x0c u8 profile/CID, 0x0d u8 RAT, 0x0e u8 flag (1 when the context's mode is 1, low), 0x0f u8 APN type, **0x10 APN (ASCII, 101 bytes)**, **0x75 user name (50)**, **0xa7 password (50)**, **0xd9 u8 auth type** (0 none, 1 PAP, 2 CHAP, 3 PAP or CHAP), **0xda u8 PDP type** (1 IP, 2 IPv6, 3 IPv4v6, 5 non-IP), 0xdb u8 P-CSCF request type, 0xdc.. handover addresses, 0xf1 u32 (from the APN setting, low), rest 0. Newer forms are 638 and 983 bytes (traffic descriptors, slicing, match-all rules) | high (ID/len/APN/auth/PDP), medium (others) | `BuildSetupDataCall` (both overloads), `GetPdpType`, `ConvertAuthTypeToProtocolAuthType` |
-| 0x0600 | (response) | short form (total length < 0x90): 0x0c s16 status (fail cause), 0x0e u8 CID, 0x0f u8 active, 0x10 u8 PDP type, then 20-byte address slots (4 bytes IPv4, then 16 bytes IPv6) at 0x11 address, 0x25 gateway, 0x39 DNS1, 0x4d DNS2 and P-CSCF. Longer messages are "data call v11": a 0x84-byte base item followed by versioned extensions (P-CSCF, AMBR, default QoS, slice info), decoded by size | medium (small form), low (v11 base item) | `ProtocolPsSetupDataCallAdapter::Init`, `DataCallUtil::FillDataCallListFromModemPayload`, `DetermineDCTypeBySize` |
+| 0x0600 | (response) | total length 0x90 or more ("v11", what this firmware sends): the item starts at params+0. **Base item, offsets from the item start:** 0x00 u16 status, 0x02 CID, 0x03 active (modem 1 is up, 2 is dormant), 0x04 PDP type, 0x05 IPv4 address, 0x09 IPv6 address, **0x19 u8 DNS family** (1 v4, 2 v6, 3 both), 0x1a/0x1e DNS1 v4/v6, 0x2e/0x32 DNS2 v4/v6, 0x42 P-CSCF family, 0x43/0x47/0x4b IPv4 P-CSCF, 0x4f/0x5f/0x6f IPv6 P-CSCF, **0x7f u32 MTU**, 0x83 u8 (unknown). No prefix length (libsitril appends "/64" to IPv6) and no gateway (filled from fixed strings). Extended items (0xea/0xef/0xf6/0x118/0x124+ bytes): 0x84 version byte, more P-CSCFs, retry time at 0xeb, AMBR, then mtuV6 at 0xfa and the PDU session at 0xfe (medium). Shorter messages: a legacy form with 20-byte address slots | high (base item, read 2026-10-26; the offsets the working stack used are confirmed), medium (extensions) | `ProtocolPsSetupDataCallAdapter::Init` (stream library), `DataCallUtil::FillDataCallListFromModemPayload`, `DetermineDCTypeBySize`, libsitril `DataCallListResponse::SetDataCall` |
 | 0x0601 | DEACT_DATA_CALL | len 14: 0x0c u8 CID, 0x0d u8 reason | high | `BuildDeactDataCall` |
 | 0x0602 | GET_DATA_CALL_LIST | bare header; response is a list of the items above | high (request) | `BuildGetDataCallList` |
 | 0x0604 | IND_DATA_CALL_LIST_CHANGED | list of items | medium | `ProtocolPsDataCallListChangedAdapter` |
@@ -394,11 +427,11 @@ still enforced behind its allow-list, and `tools/sit-sim` now speaks the
 1. Does the modem need SET_MODEM_CONFIG / slot mapping / SGC / device info
    before it accepts SET_RADIO_POWER? (Static code only shows stock sends
    them first.)
-2. The card-state and application-type values in GET_SIM_STATUS, and the
-   per-RAT signal strength layout.
-3. The v11 data call item (0x84-byte base): field order beyond CID at +2.
-   Needed before data works with this firmware, which likely sends the
-   long form.
+2. The card-state and application-type values in GET_SIM_STATUS, and
+   which signal strength layout (V1/V2/V4/V5) this firmware sends without
+   SET_DEVICE_INFO. The offsets per layout are known (3.4).
+3. ~~The v11 data call item~~: read on 2026-10-26 (3.5). Still open: the
+   byte at item 0x83, and whether the modem sends the extended item.
 4. Socket 1's `ifstart`: does SIM slot 1 use `rmnet0` upwards too?
 5. SET_FORWARDING_AT_COMMAND (0x0931) and IND_FORWARDING_AT_COMMAND (0x0932)
    look like an AT tunnel to the modem. If the modem has an AT parser behind

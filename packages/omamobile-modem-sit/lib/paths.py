@@ -30,9 +30,13 @@ DEFAULTS = {
     'network': {'apn': '', 'ip_type': 'ipv4v6', 'ims': 'yes', 'ims_apn': 'ims',
                 'ims_required': 'no', 'ims_timeout': '120',
                 'nr': 'off', 'sim_timeout': '120', 'register_timeout': '180'},
-    'data': {'route': 'yes', 'metric': '700'},
+    'data': {'route': 'yes', 'metric': '700', 'ipv6': 'yes', 'ra_timeout': '10',
+             'clat': 'auto', 'clat_prefix': ''},
     'control': {'group': 'wheel'},
+    'ims': {'hidden_menu': '523:30 527:30 529:30 531:30 533:30',
+            'add_pdn_flags': '17 0 0 1 0 0 35 0 0 1', 'profile_dir': '/etc/omamobile/ims.d'},
     'audio': {'card': 'none', 'mic_boost_db': '6'},
+    'trace': {'record': 'no', 'directory': str(STATE / 'trace'), 'max_bytes': str(4 << 20)},
 }
 
 

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: 0BSD
+#
+# Omarchy Mobile build of TAYGA, a stateless NAT64 (SIIT) translator in
+# user space, for the CLAT (464XLAT) that omamobile-sit-data runs on an
+# IPv6-only cellular bearer (device/cheetah/MODEM-CLIENT.md, section 1.3).
+# Arch Linux and Arch Linux ARM don't package it; this is a plain build of
+# the upstream release. No unit or config is installed: omamobile-sit-data
+# writes TAYGA's config to /run/omamobile-sit and runs it as a child process.
+
+pkgname=tayga
+pkgver=0.9.6
+pkgrel=1
+pkgdesc='Stateless NAT64 / SIIT translator for Linux (TUN based)'
+arch=(aarch64)
+url='https://github.com/apalrd/tayga'
+license=(GPL-2.0-only)
+depends=(glibc)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/apalrd/tayga/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('64da04887e59207be0f62082e63dca98b1e770283fa37102ccb0a3e8d2acedc5')
+
+build() {
+  cd "$pkgname-$pkgver"
+  # The release tarball ships version.h; the Makefile regenerates it only
+  # inside a git checkout.
+  make CC="${CC:-gcc}" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  make DESTDIR="$pkgdir" prefix=/usr sbindir=/usr/bin install
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

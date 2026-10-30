@@ -28,6 +28,9 @@ ALLOWED = {0x0000, 0x0102, 0x0108, 0x0200, 0x0600, 0x0601, 0x0602, 0x0603, 0x061
            0x0d38, 0x0d39, 0x0d3a}
 SMS = {0x0d1b}                              # AIMS_SEND_SMS
 CALLS = {0x0d00, 0x0d02, 0x0d03, 0x0d0a}    # AIMS_DIAL, _ANSWER, _HANGUP, _SEND_DTMF
+# VERIFY_SIM_PIN only: never PUK, PIN2, PIN change or the lock itself
+# (CHG_SIM_PIN* and SET_FACILITY_LOCK are on the do-not-send list).
+PIN = {0x0201}
 
 # The research note's do-not-send list, by name, plus the VSIM (0x0e) and
 # satellite (0x13) families.
@@ -55,17 +58,20 @@ class ModemError(RuntimeError):
         self.payload = payload  # private; never include payload in str/repr
 
 
-def check(ident, *, sms=False, calls=False):
+def check(ident, *, sms=False, calls=False, pin=False):
     if ident in DENIED or (ident >> 8) in DENIED_FAMILIES:
         raise ValueError('request on the do-not-send list')
-    if not (ident in ALLOWED or (sms and ident in SMS) or (calls and ident in CALLS)):
+    if not (ident in ALLOWED or (sms and ident in SMS) or (calls and ident in CALLS) or (pin and ident in PIN)):
         raise ValueError('request outside the allow-list')
 
 
 class Sit:
-    def __init__(self, *, allow_sms=False, allow_calls=False, device=None):
+    tracer = None   # see __init__
+
+    def __init__(self, *, allow_sms=False, allow_calls=False, allow_pin=False, device=None):
         self.allow_sms = allow_sms
         self.allow_calls = allow_calls
+        self.allow_pin = allow_pin
         private_dir(RUN)
         self.lock = os.open(RUN / 'ipc0.lock', os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
         try:
@@ -77,8 +83,12 @@ class Sit:
         self.token = int.from_bytes(os.urandom(4), 'little') & 0x7fffffff
         self.buffer = bytearray()
         self.indications = deque()
+        # sit_trace.Tracer when [trace] record = yes: IDs, lengths and codes only.
+        self.tracer = None
 
     def close(self):
+        if self.tracer is not None:
+            self.tracer.close()
         os.close(self.fd)
         os.close(self.lock)
 
@@ -92,6 +102,8 @@ class Sit:
                 if len(self.buffer) >= length:
                     packet = bytes(self.buffer[:length])
                     del self.buffer[:length]
+                    if self.tracer is not None:
+                        self.tracer.incoming(packet)
                     return packet
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -111,9 +123,11 @@ class Sit:
 
     def request(self, ident, payload=b'', timeout=8):
         check(ident, sms=getattr(self, 'allow_sms', False),
-              calls=getattr(self, 'allow_calls', False))
+              calls=getattr(self, 'allow_calls', False), pin=getattr(self, 'allow_pin', False))
         self.token = (self.token + 1) & 0xffffffff
         data = struct.pack('<BBHHIBB', 0, 0, ident, 12 + len(payload), self.token, 0, 0) + payload
+        if self.tracer is not None:
+            self.tracer.request(ident, self.token, len(data))
         if os.write(self.fd, data) != len(data):
             raise RuntimeError('short SIT write')
         deadline = time.monotonic() + timeout

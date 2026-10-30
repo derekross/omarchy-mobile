@@ -189,6 +189,46 @@ class Registered(BridgeTests):
         self.assertTrue(any('State' in s[3][1] for s in changes))
         self.assertEqual(self.sitd.actions(), [])
 
+    def test_bearer_ip_configuration(self):
+        # What omamobile-sit-data configured: IPv6 only with a CLAT, then
+        # dual stack. The CLAT's IPv4 is the phone's own: no Ip4Config.
+        v6 = dict(address='2001:db8:64::2', prefix=64, dns=['2001:db8:64::53', '2001:db8:64::54'])
+        self.push(data=True, bearer=dict(pdp=2, ipv4=dict(address='192.0.0.1', prefix=29, dns=[], clat=True),
+                                         ipv6=v6, clat=True))
+        wait_until(lambda: self.modem() == mm.STATE_CONNECTED, 5, 'connected')
+        path = self.modem('Bearers')[0]
+        wait_until(lambda: self.client.props(path, mm.BEARER)['Ip6Config'], 5, 'Ip6Config')
+        bearer = self.client.props(path, mm.BEARER)
+        self.assertEqual(bearer['Ip4Config'], {})
+        self.assertEqual(bearer['Ip6Config'], {'method': mm.IP_METHOD_STATIC, 'address': '2001:db8:64::2',
+                                               'prefix': 64, 'dns1': '2001:db8:64::53',
+                                               'dns2': '2001:db8:64::54'})
+        self.push(bearer=dict(pdp=3, ipv4=dict(address='192.0.2.2', prefix=32, dns=['192.0.2.53']),
+                              ipv6=v6, clat=False))
+        wait_until(lambda: self.client.props(path, mm.BEARER)['Ip4Config'], 5, 'Ip4Config')
+        self.assertEqual(self.client.props(path, mm.BEARER)['Ip4Config'],
+                         {'method': mm.IP_METHOD_STATIC, 'address': '192.0.2.2', 'prefix': 32,
+                          'dns1': '192.0.2.53'})
+        self.push(data=False)
+        wait_until(lambda: not self.client.props(path, mm.BEARER)['Connected'], 5, 'disconnected')
+        bearer = self.client.props(path, mm.BEARER)
+        self.assertEqual((bearer['Ip4Config'], bearer['Ip6Config']), ({}, {}))
+        self.assertNotIn('2001:db8', self.mmd.output())
+
+    def test_signal_quality_and_values(self):
+        detail = dict(layout='v2', lte=dict(rssi=-73, rsrp=-95, rsrq=-10, snr=12))
+        self.push(signal=60, signal_detail=detail)
+        wait_until(lambda: tuple(self.modem('SignalQuality')) == (60, True), 5, 'quality')
+        self.assertEqual(self.modem('Lte', mm.SIGNAL), {})          # no rate asked yet, as MM
+        self.client.call(MODEM0, mm.SIGNAL, 'Setup', 'u', (5,))
+        self.assertEqual(self.modem('Lte', mm.SIGNAL), dict(rssi=-73.0, rsrp=-95.0, rsrq=-10.0, snr=12.0))
+        self.assertEqual(self.modem('Nr5g', mm.SIGNAL), {})
+        status = self.client.call(MODEM0, mm.SIMPLE, 'GetStatus')[0]
+        self.assertEqual(tuple(status['signal-quality']), (60, True))
+        self.push(signal=0, signal_detail=None)
+        wait_until(lambda: tuple(self.modem('SignalQuality')) == (0, False), 5, 'stale')
+        self.assertEqual(self.modem('Lte', mm.SIGNAL), {})
+
     def test_signal_and_location_setup(self):
         self.client.call(MODEM0, mm.SIGNAL, 'Setup', 'u', (5,))
         self.assertEqual(self.modem('Rate', mm.SIGNAL), 5)
@@ -377,9 +417,26 @@ class Registered(BridgeTests):
                 (MODEM0, mm.MODEM_3GPP, 'Register', 's', ('',)),
                 (MODEM0, mm.MODEM_3GPP, 'Scan', None, ()),
                 (MODEM0, mm.SIMPLE, 'Connect', 'a{sv}', ({},)),
-                (sim, mm.SIM, 'SendPin', 's', ('0000',))):
+                (sim, mm.SIM, 'SendPuk', 'ss', ('00000000', '0000')),
+                (sim, mm.SIM, 'ChangePin', 'ss', ('0000', '1111'))):
             self.assertEqual(self.error_of(path, interface, method, signature, args), mm.ERROR_PREFIX + 'Unsupported')
+        # A ready SIM isn't asking for its PIN: nothing goes to sitd.
+        self.assertEqual(self.error_of(sim, mm.SIM, 'SendPin', 's', ('0000',)), mm.ERROR_PREFIX + 'WrongState')
         self.assertEqual(self.sitd.actions(), [])
+
+    def test_send_pin_goes_to_sitd_once(self):
+        status = blank_status(sim='pin')
+        status['modem']['sim'].update(pin_retries=3, puk_retries=10)
+        self.push(status)
+        wait_until(lambda: self.modem() == mm.STATE_LOCKED, 5, 'locked')
+        sim = self.modem('Sim')
+        self.sitd.handlers['sim-pin'] = lambda r: (_ for _ in ()).throw(FakeRefusal('Wrong SIM PIN; 2 tries left'))
+        self.assertEqual(self.error_of(sim, mm.SIM, 'SendPin', 's', ('1357',)), mm.ERROR_PREFIX + 'Failed')
+        self.sitd.handlers['sim-pin'] = lambda r: dict(accepted=True, tries_left=2)
+        self.client.call(sim, mm.SIM, 'SendPin', 's', ('2468',))
+        self.assertEqual(self.sitd.actions(), ['sim-pin', 'sim-pin'])
+        self.assertEqual([r['pin'] for r in self.sitd.requests], ['1357', '2468'])
+        self.assertNotIn('2468', self.mmd.output())
 
     def test_sitd_going_away_and_coming_back(self):
         self.sitd.status['calls'] = [call('200', 'ringing-in')]

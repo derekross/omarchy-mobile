@@ -1,11 +1,20 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem client: the SIT RIL, its interface, and the user-facing path
 
-Status (2026-10-25): **`omamobile-modem-sit` 0.3.3, built and tested
-offline against `tools/sit-sim`.** On our phone, without a SIM: the
-read-only probe (MODEM-PLAN M4.1h-M4.1k) and sitd behind the ModemManager
-bridge (T1, 0.3.0). Nothing with a SIM yet: the first SIM test is
-MODEM-PLAN's "M4.2-M4.7: the first SIM test"; section 1.4 says which SIM. The RIL is a port of a SIT stack that registered on LTE, made and
+Status (2026-10-26): **`omamobile-modem-sit` 0.4.0 and `omamobile-mmd`
+0.2.0 are built and tested offline against `tools/sit-sim`.** 0.4.0 adds:
+
+- IPv6 on rmnet0, with a CLAT for IPv6-only bearers;
+- signal strength;
+- the carrier's IMS values in the config;
+- a scrubbed SIT trace;
+- SIM PIN entry (section 1.3).
+
+On our phone, without a SIM, only two things have run: the read-only
+probe (MODEM-PLAN M4.1h-M4.1k) and sitd 0.3.0 behind the ModemManager
+bridge (T1). Nothing has run with a SIM yet. The first SIM test is
+MODEM-PLAN's "M4.2-M4.7: the first SIM test", and section 1.4 says which
+SIM to use. The RIL is a port of a SIT stack that registered on LTE, made and
 answered IMS calls with two-way audio, sent and received SMS and carried
 LTE data **on this phone model** (Pixel 7 Pro, the same stock firmware
 family, the same architecture: stock `cbd`/`rfsd` in a RAM-only chroot plus
@@ -27,7 +36,9 @@ Two packages:
 | Package | What |
 |---|---|
 | `packages/omamobile-modem` 0.1.0 (new) | The runtime: `omamobile-modem.service` loads CPIF and runs the `modem` vendor-chroot profile (rfsd, then a one-shot cbd, on RAM copies of NV); `omamobile-modem-cp` (CP state, crash record, power-off for the unit's stop, the baseband version, the stock NV checksum); the M0.5 read-only udev rule |
-| `packages/omamobile-modem-sit` 0.3.3 | The RIL: `omamobile-sitd` (registration, calls, SMS), `omamobile-sit-data` (the cellular route), `omamobile-sit` (CLI) |
+| `packages/omamobile-modem-sit` 0.4.0 | The RIL: `omamobile-sitd` (registration, calls, SMS), `omamobile-sit-data` (the cellular routes), `omamobile-sit` (CLI) |
+| `packages/omamobile-mmd` 0.2.0 | The ModemManager bridge (MODEM-PLAN T1) |
+| `packages/tayga` 0.9.6 | The NAT64 translator for the CLAT. Optional, upstream build, nothing enabled |
 
 `omamobile-modem-sit/lib/` (installed to `/usr/lib/omamobile-sit/`):
 
@@ -37,13 +48,16 @@ Two packages:
 | `sit_names.py` | ours | The 602 message names, for logs |
 | `bringup.py` | ported, carrier values moved to the config | The start-up order (section 1.1) |
 | `data_call.py` | ported, APN from the config | Setup (983 bytes), initial attach (251), data profile (246), PDU sessions; bearer ownership recorded in RAM before each setup, never retried blindly |
-| `ims.py` | ported (identity strings ours) | IMS stack start, hidden-menu configuration, ADD_PDN_INFO from the IMS bearer, the registration indication |
+| `ims.py` | ported (identity strings and the configurable values ours) | IMS stack start, hidden-menu configuration, ADD_PDN_INFO from the IMS bearer, the registration indication. From 0.4.0 the hidden-menu items and the ADD_PDN_INFO flags come from `[ims]`, or from a per-network profile kept on the phone. The defaults are byte-identical to 0.3.3 |
 | `radio_settings.py` | ported | NR mode byte (3 -> 0 keeps LTE; the original kept in RAM) |
 | `sms_codec.py` | ported | GSM 7-bit / UCS-2 SMS-SUBMIT with concatenation, SMS-DELIVER with the SMSC prefix the modem adds, WAP push kept as bytes |
 | `calls.py`, `inbox.py` | ported | IMS dial/ring/status layouts; received SMS written and fsynced before the ACK |
 | `voice_audio.py` | ported, card lookup ours | AoC call routes: PCM 4 playback (EP5), PCM 11 capture (EP4), `TDM_0_RX Mixer EP5`, `EP4 TX Mixer INTERNAL_MIC_TX`, mic gain 130 cB + 6 dB; every changed control restored at the end of the call |
 | `service.py` | ported (app service), access and status ours | The daemon: one IPC0 owner for start-up, SMS and calls; the socket API (section 2); `state.json` |
-| `data_network.py` | ported, resolved support ours | rmnet0's /32, metric-700 default route behind Wi-Fi, carrier DNS only while cellular is the only way out, dead-bearer detection |
+| `data_network.py` | ported; resolved support, IPv6 and the MTU ours | rmnet0's IPv4 /32 and IPv6 address (SLAAC with the network's interface identifier, or the response's /64), one metric-700 default route per family behind Wi-Fi, carrier DNS only while cellular is the only way out, dead-bearer detection. It records what it configured for sitd's private status (`bearer-ip.json`, RAM, root only) |
+| `clat.py` | ours | The CLAT for an IPv6-only bearer (section 1.3): TAYGA on `v4-rmnet0`, a /127 out of the bearer's /64, the NAT64 prefix from the config or RFC 7050, per-interface forwarding, two tagged ip6tables FORWARD rules |
+| `sit_signal.py` | ours | IND_SIGNAL_STRENGTH decoded passively in the stock codec's layouts (MODEM-SIT-RESEARCH 3.4), giving LTE/NR RSRP, RSRQ, SNR and MM's quality |
+| `sit_trace.py` | ours | The scrubbed SIT trace (`[trace] record`, off by default). It records IDs, lengths, error and status codes, and the zero/non-zero byte shape of a few messages that carry no identifier. It never records a payload value |
 | `at.py` | ported (fixed commands only) | `AT+CFUN=0/1` on `/dev/umts_router` for radio power during start-up (SIT radio state and AT CFUN were seen to disagree; the working sequence used AT) |
 | `cp.py`, `paths.py` | ours | CP state ioctl; the one power-off path; paths and config |
 
@@ -56,20 +70,42 @@ Units (`systemd/`), none enabled by the package:
   on|off` starts and stops it.
 - `/usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf`: `rmnet*` unmanaged.
 
-Config: `/etc/omamobile/modem-sit.conf` (`[network] apn` is required; `ims`,
-`ims_apn`, `ims_required` (default no: an IMS failure keeps data, 0.3.2),
-`nr`, timeouts including `ims_timeout`; `[control] group`; `[audio] card`
-(default `none` since 0.3.3: calls route no audio until M5),
-`mic_boost_db`).
+Config: `/etc/omamobile/modem-sit.conf`.
 
-Tests: `packages/omamobile-modem-sit/test/all` (about 10 s): 53 unit tests
-(most ported with the code: transport, layouts, bearer lifecycle failure
-cases, SMS codec, audio cleanup, the route watch), then three runs of the
-real daemon against `tools/sit-sim`: start-up to IMS registration with the
-request order checked, SMS both ways, a call through the CLI, no
-identifiers in the logs; a rejected bearer ends start-up before any IMS
-request; no APN means no radio command. `packages/omamobile-modem/test/all`
-checks the CP helper's parsers on made-up inputs.
+| Section | Keys |
+|---|---|
+| `[network]` | `apn` (required), `ims`, `ims_apn`, `ims_required` (default no: an IMS failure keeps data, 0.3.2), `nr`, timeouts including `ims_timeout` |
+| `[data]` (0.4.0) | `ipv6`, `ra_timeout`, `clat` (`auto`/`off`), `clat_prefix` |
+| `[ims]` (0.4.0) | `hidden_menu`, `add_pdn_flags`, `profile_dir` (default `/etc/omamobile/ims.d`, with files named `<MCCMNC>.conf`, on the phone only) |
+| `[control]` | `group` |
+| `[audio]` | `card` (default `none` since 0.3.3: calls route no audio until M5), `mic_boost_db` |
+| `[trace]` (0.4.0) | `record` (default no), `directory`, `max_bytes` |
+
+Tests: `packages/omamobile-modem-sit/test/all` takes about 40 s and runs
+110 tests.
+
+- **Unit tests,** most of them ported with the code: transport, layouts,
+  bearer lifecycle failure cases, the SMS codec, audio cleanup and the
+  route watch. 0.4.0 adds the IPv6 response fields, RFC 7050 prefix
+  discovery, the CLAT addresses, signal layouts, and IMS values held to
+  0.3.3's SHA-256 digests.
+- **rmnet0 in a private network namespace** (`unshare -rn`, with a dummy
+  rmnet0, a stub tayga and a stub ip6tables). These check addresses,
+  routes, sysctls and that teardown restores everything. They are
+  skipped where the machine can't create such a namespace.
+- **The real daemon against `tools/sit-sim`:**
+  - start-up to IMS registration, with the request order and the
+    hidden-menu digest checked;
+  - SMS both ways, a call through the CLI, and signal strength;
+  - no identifiers in the logs;
+  - a rejected bearer ends start-up before any IMS request;
+  - no APN means no radio command;
+  - an IPv6-only bearer through to `omamobile-sit-data` with a CLAT;
+  - the scrub test of the trace;
+  - SIM PIN entry and its last-try refusal.
+
+`packages/omamobile-modem/test/all` checks the CP helper's parsers on
+made-up inputs.
 
 ### 1.1 The start-up order (bringup.py)
 
@@ -126,13 +162,43 @@ registration indication), unless `ims_required = yes`.
 | Call audio | Off by default (`[audio] card = none`, 0.3.3): calls connect silent. TDM 0 feeds both amplifiers and the top one is the earpiece; until an earpiece mode exists (TELEPHONY-APPS-PLAN T4, MODEM-PLAN M5) a configured card is refused unless speaker protection runs at stage media or c8, the top amplifier is at analog 6 or less (AUDIO-PLAN section 4) and both are within the media stage |
 | Speakerphone | Not routed; calls use the stock voice path (EP5 to TDM 0) |
 | Call waiting, conference, emergency and short codes, MMS download | Refused or not implemented (emergency numbers are refused by the dialer check: **this phone cannot call emergency services under Linux**) |
-| Signal strength | Reported as 0 |
+| Signal strength | Decoded from IND_SIGNAL_STRENGTH (0.4.0). The stock codec's per-RAT offsets are read, but **which layout this firmware sends is unconfirmed** (MODEM-PLAN step A8). Stock chooses it from a version the modem announces in SET_DEVICE_INFO's reply, which we never send; here it is chosen by length. Readings outside stock's ranges count as absent |
 | Operator name | GET_OPERATOR decoded with the research note's layout, display only, not yet seen on hardware |
-| IPv6 on rmnet0 | The bearer is IPv4v6 but only IPv4 is configured |
+| IPv6 on rmnet0 | Configured from 0.4.0, and an IPv6-only bearer gets a CLAT (below). Unverified on hardware: that the network's router advertisements reach the raw-IP rmnet0 and SLAAC forms the address. If the response carries a global address, that path doesn't need SLAAC |
 | Warm CP restart | None: about one fresh start in twenty crashed during registration on this phone model; the crash is recorded and the phone needs a reboot |
-| Carrier values | The IMS hidden-menu items and IMS PDN layout are the ones that registered on a T-Mobile-network MVNO; other carriers may need different values |
+| Carrier values | The default IMS hidden-menu items and ADD_PDN_INFO flags are the ones that registered on a T-Mobile-network MVNO. From 0.4.0 they are in `[ims]`, with per-network profiles on the phone, so another carrier can be tried after a reboot without a release. Which values another carrier needs is unknown. The identity strings (tags 772-776, 519) are still fixed (MODEM-PLAN W5) |
 | Suspend with the modem on | Not handled (CPIF's suspend refusal, the pull on cp2ap-wakeup, the receive-ring check after link wake: MODEM-PLAN 6) |
-| SIM PIN entry, the eSIM | None: take the PIN lock off in another phone; the RIL speaks only to the physical slot (`umts_ipc0`; `umts_ipc1` is the eSIM's) |
+| SIM PIN entry | From 0.4.0: `omamobile-sit sim-pin` (or MM's `Sim.SendPin`) sends one VERIFY_SIM_PIN, only while the SIM asks for its PIN and has two or more tries left. It never retries; PUK and PIN changes stay in another phone. Untested on hardware. Start-up (`--bringup`) still stops on a locked SIM, so for the first SIM test the PIN lock stays off |
+| The eSIM | None: the RIL speaks only to the physical slot (`umts_ipc0`; `umts_ipc1` is the eSIM's) |
+
+**The CLAT, and why it is ours.** On an IPv6-only bearer, `clat.py`
+gives the phone IPv4 through the carrier's NAT64.
+
+- **Translation:** TAYGA, a small C translator on a TUN device. Neither
+  Arch Linux nor Arch Linux ARM packages it; `packages/tayga` builds the
+  upstream release, and it is an optional dependency.
+- **Addressing:** the IPv4 side is 192.0.0.1/29 on `v4-rmnet0` (RFC 7335).
+  The IPv6 side is a /127 out of the bearer's /64, which the network
+  routes to the phone.
+- **NAT64 prefix:** from `[data] clat_prefix`, or else from the carrier's
+  DNS64 (RFC 7050), asked over rmnet0 only.
+- **Routing and firewall:** IPv6 forwarding is enabled on `rmnet0` and
+  `v4-rmnet0` only (`force_forwarding`, Linux 6.17+), and two tagged
+  ip6tables FORWARD rules let the /127 through ufw.
+- **Routes:** the IPv4 default route sits behind Wi-Fi's (metric 700),
+  like the others.
+
+The ready-made option was the `clatd` script. Neither repository packages
+it, it needs Perl modules that aren't packaged either, and it assumes an
+Ethernet-like uplink, using proxy NDP or NAT66. It would also duplicate
+what `omamobile-sit-data` already owns on rmnet0: the addresses, routes,
+DNS, the dead-bearer watch and teardown. A translator written in Python
+would be too slow per packet. So we use TAYGA for translation and about
+200 lines of our own to configure it.
+
+Unverified on hardware: the carrier's DNS64 answer, TAYGA's throughput,
+and ufw's real chain order. If any of these fail, IPv6 keeps working
+and the journal says why the CLAT didn't start.
 
 ### 1.4 Which SIM for the first test
 
@@ -152,9 +218,11 @@ What the repository can justify, for a temporary US prepaid SIM:
   another network can still pass SIM detection, registration and data
   (the attach APN and data profile are the generic 3GPP requests);
   its IMS, SMS and calls are unverified and likely need other values.
-- **IPv4 on the internet bearer.** rmnet0 is configured IPv4 only (1.3);
-  a bearer that comes back IPv6-only fails MODEM-PLAN S8 until that gap
-  is closed. Prefer a plan whose APN is documented as IPv4 or IPv4v6.
+- **The internet bearer's IP type.** From 0.4.0 an IPv6-only bearer is
+  configured with a CLAT (1.3), but that path has never met a real
+  network. An APN documented as IPv4 or IPv4v6 is the safer first test.
+  T-Mobile's own APNs are often IPv6-only, which is now the case 0.4.0
+  was built for.
 - **Physical, not eSIM;** PIN lock off (or turned off in another phone);
   a plan with voice, SMS and data.
 
@@ -183,6 +251,15 @@ connect. Replies are `{"ok": true, "result": ...}` or `{"ok": false,
 | `{"action": "sms-send", "request_id": <32 hex>, "number": ..., "text": ...}` | `state` sent/failed/unknown; the same id never sends twice |
 | `{"action": "sms-status", "request_id": ...}`, `{"action": "sms-list"}`, `{"action": "sms-delete", "id": ...}` | |
 | `{"action": "screen-state", "on": bool}` | SIT screen state and the indication filter (fewer wakeups with the screen off); refused during a call |
+| `{"action": "sim-pin", "pin": "1234"}` (0.4.0) | `{"accepted": true, "tries_left": n}`. One VERIFY_SIM_PIN. It is refused unless the SIM asks for its PIN with two or more tries left. A wrong PIN fails with the number of tries left. The PIN is never logged |
+
+From 0.4.0 the `status` result also carries:
+
+- `modem.signal`: MM's quality in percent, 0 when unknown;
+- `modem.signal_detail`: the layout name and LTE/NR `rsrp`, `rsrq`,
+  `snr` and `rssi` in dBm and dB, or null;
+- `modem.bearer`, private only: what `omamobile-sit-data` configured
+  (`ipv4`, `ipv6`, `clat`). It is never in `state.json`.
 
 `/run/omamobile-sit/state.json` holds the same status without numbers
 (calls as direction and state only, an unread SMS count), rewritten on
@@ -190,26 +267,25 @@ every change, for pollers.
 
 ## 3. The user-facing path for calls, SMS and data
 
-**Today: the `omamobile-sit` CLI and the socket above.** `omamobile-sit
-status`, `dial`, `answer`, `hangup`, `dtmf`, `mute`, `sms send|list|delete`,
-`data on|off`, `watch`. Mobile data needs nothing from the user once
-`omamobile-sit-data` runs: rmnet0 is a fallback route behind Wi-Fi, so any
-application uses it when Wi-Fi is down.
+**sitd is the only process that talks to the modem.** Everything else
+reaches it through the socket in section 2.
 
-The stack this is ported from has **no ModemManager plugin, no oFono driver
-and no D-Bus API**: its own phone and messaging apps talk to exactly this
-socket protocol (JSON lines, the same actions). So:
+| Layer | What it is | State |
+|---|---|---|
+| `omamobile-sit` CLI and the socket | `status`, `dial`, `answer`, `hangup`, `dtmf`, `mute`, `sms send\|list\|delete`, `data on\|off`, `sim-pin`, `radio`, `watch` | Tested against `tools/sit-sim`; never with a SIM |
+| `omamobile-mmd` (MODEM-PLAN T1, TELEPHONY-APPS-PLAN T0/T1) | Serves ModemManager 1.24's D-Bus API (`org.freedesktop.ModemManager1`) from sitd's `subscribe` stream. It conflicts with ModemManager, enables nothing and has no D-Bus activation | Passed T1 on the phone without a SIM (2026-10-14). 0.2.0 adds bearer IP config, signal quality and `Sim.SendPin` |
+| ModemManager clients | GNOME Calls 51.1 and Chatty 0.8.9 pass the bridge's conformance run in a container (`packages/omamobile-mmd/test/conformance`). NetworkManager sees a `gsm` device | Test bench only (TELEPHONY-APPS-PLAN, option A) |
+| omatel | `omatel-agent`, Phone (`omaphone`) and Messages (`omamessages`) use the ModemManager API through the bridge (TELEPHONY-APPS-PLAN T6/T7) | Built offline; not run on the phone |
+| `omamobile-shell` | The status bar's mobile network indicator (bars, network type, No SIM, SIM locked, radio off) and the call card come from ModemManager's API and omatel-agent (TELEPHONY-APPS-PLAN T5) | Offline; bars show once sitd reports a signal (0.4.0) |
+| Mobile data | `omamobile-sit-data` keeps rmnet0 as a fallback behind Wi-Fi, so any application uses it when Wi-Fi is down. NetworkManager leaves `rmnet*` unmanaged, and the bearer object is read-only | NM-driven data through `Simple.Connect` is T3 (owner's Q5) |
 
-- The shell's quick-settings "Mobile data" tile (`omamobile-shell`) can
-  read `omamobile-sit status --json` or `state.json` and toggle with
-  `omamobile-sit data on|off`, as section 2.1 of the 0.1 note planned.
-- An incoming call shows up in `status`/`state.json` (`ringing-in`); a
-  shell overlay that polls `watch` and offers answer/hang-up is the
-  smallest useful UI. Not built yet.
-- Desktop apps that expect ModemManager (GNOME Calls, Chatty) can't use it.
-  The options are unchanged from the 0.1 note: an oFono `sitmodem` driver
-  (the natural fit: SIT families map one to one onto oFono atoms; port
-  `sit.py`'s layouts to C and test it against `tools/sit-sim`) or a
-  ModemManager SIT port type upstream. Either replaces `omamobile-sitd` as
-  the IPC0 owner (`Conflicts=` between the units), because SIT has no
-  multiplexing.
+Not there yet:
+
+- call audio (M5 / T4);
+- MMS (T3);
+- emergency calls (refused everywhere; T8);
+- hold, waiting and conference calls.
+
+The 0.1 note weighed an oFono `sitmodem` driver and an upstream
+ModemManager SIT port. Neither is needed for these clients any more: the
+bridge serves them without a second IPC0 owner.

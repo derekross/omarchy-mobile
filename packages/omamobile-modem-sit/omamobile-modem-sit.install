@@ -14,6 +14,11 @@ post_upgrade() {
     echo "  earpiece mode exists; with a card, audio is refused above the earpiece ceiling."
     echo "  New settings: [network] ims_required, ims_timeout. Check modem-sit.conf.pacnew if listed."
   fi
+  if [[ $(vercmp "$2" 0.4.0) -lt 0 ]]; then
+    echo "omamobile-modem-sit 0.4.0: IPv6 on rmnet0 and a CLAT for IPv6-only bearers (install tayga),"
+    echo "  signal strength, configurable IMS values ([ims]), SIM PIN entry (omamobile-sit sim-pin),"
+    echo "  and a scrubbed SIT trace ([trace], off). Merge modem-sit.conf.pacnew if listed."
+  fi
 }
 pre_remove() {
   systemctl disable --now omamobile-sit-data.service omamobile-sitd.service 2>/dev/null || true

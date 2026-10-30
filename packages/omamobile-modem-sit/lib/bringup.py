@@ -21,8 +21,9 @@ import time
 
 from at import radio
 from data_call import activate, initial_attach, provision_default_profile
-from ims import register, start_stack
+from ims import register, start_stack, values as ims_values
 from radio_settings import nr_mode
+from sit import ModemError
 
 
 def sim_ready(payload):
@@ -150,9 +151,18 @@ def start(service, settings, stopped=lambda: False):
     service.ims_state = 'pending'
     service.stage('ims')
     try:
+        # The carrier's IMS values: the config's, or the registered
+        # network's own profile on the phone (ims.values). The PLMN is
+        # used to pick the file and never printed.
+        from service import operator_name
+        try:
+            plmn = operator_name(client.request(0x0702, timeout=5))['plmn']
+        except (ModemError, TimeoutError):
+            plmn = ''
+        values = ims_values(settings, plmn)
         start_stack(client)
         activate(client, net.get('ims_apn', 'ims'), ims=True)
-        register(client)
+        register(client, values)
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and
                  service.registration().get('features', 0) & 3 == 3,

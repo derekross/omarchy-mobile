@@ -8,6 +8,7 @@ arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
 depends=(python iproute2 iputils systemd alsa-lib alsa-utils omamobile-modem)
+optdepends=('tayga: CLAT (IPv4 through the carrier NAT64) on an IPv6-only bearer')
 backup=(etc/omamobile/modem-sit.conf)
 install=omamobile-modem-sit.install
 
