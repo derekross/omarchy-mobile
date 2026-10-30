@@ -111,6 +111,29 @@ run >/dev/null 2>&1 && fail "fails without pacman's database"
 [[ $(left) == "$before" ]] || fail "nothing removed without pacman's database"
 pass "without pacman's database nothing is removed"
 
+# The incident's case: pushed in an earlier boot, so only .omamobile-next or
+# its rank protects it, and here its marker was written under a 1970 clock
+cp "$t/pacman.good" "$t/bin/pacman"
+setup
+rm -rf "$t/root/7.3.0-pushed"
+tree 7.4.0-next 99999 marker
+touch -h -d @100000 "$t/root/7.4.0-next/.omamobile-tarball" "$t/root/7.4.0-next"
+echo 7.4.0-next > "$t/root/.omamobile-next"
+out=$(run) || fail "cleanup with .omamobile-next"
+[[ -d $t/root/7.4.0-next ]] || fail "the release named in .omamobile-next is kept: $out"
+grep -qxF 'modules-cleanup: keep 7.4.0-next: pushed for the next boot (.omamobile-next)' <<<"$out" || fail "logs the next-boot tree: $out"
+[[ -d $t/root/7.2.0-new1 && -d $t/root/7.2.0-new2 && ! -e $t/root/7.1.0-old1 ]] || fail "the rollback ranking is unchanged: $(left)"
+pass "the release modules-push named for the next boot is kept, even pushed in an earlier boot"
+
+setup
+rm -rf "$t/root/7.3.0-pushed"
+tree 7.4.0-reset 99999 marker
+touch -h -d @100000 "$t/root/7.4.0-reset/.omamobile-tarball" "$t/root/7.4.0-reset"
+out=$(run) || fail "cleanup with a 1970 stamp"
+[[ -d $t/root/7.4.0-reset ]] || fail "a tree stamped before 2026 is kept: $out"
+grep -qxF 'modules-cleanup: keep 7.4.0-reset: its time is before 2026 (a reset clock), so its age is unknown' <<<"$out" || fail "logs the reset-clock tree"
+pass "a tree stamped under a reset clock is kept, not ranked oldest"
+
 # An empty root and a missing one are fine
 cp "$t/pacman.good" "$t/bin/pacman"
 rm -rf "$t/root"; mkdir -p "$t/root"

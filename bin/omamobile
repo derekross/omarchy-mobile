@@ -272,7 +272,8 @@ cmd_modules_push() {
     zstd -dc | tar -C /usr/lib/modules/.$rel.new -xf -
     rm -rf /usr/lib/modules/$rel; mv /usr/lib/modules/.$rel.new/$rel /usr/lib/modules/$rel
     rmdir /usr/lib/modules/.$rel.new; depmod -a $rel
-    echo $(sha256sum < "$tarball" | cut -d' ' -f1) > /usr/lib/modules/$rel/.omamobile-tarball; sync" < "$tarball"
+    echo $(sha256sum < "$tarball" | cut -d' ' -f1) > /usr/lib/modules/$rel/.omamobile-tarball
+    echo $rel > /usr/lib/modules/.omamobile-next; sync" < "$tarball"
   "$ssh" "find /usr/lib/modules/$rel -name '*.ko*' | wc -l; ls /usr/lib/modules/$rel/modules.dep"
 }
 

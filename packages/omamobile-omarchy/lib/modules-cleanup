@@ -8,7 +8,8 @@
 # kernels never come from pacman: `bin/omamobile modules-push` unpacks the
 # next boot's tree and writes <release>/.omamobile-tarball, so any boot
 # between the push and the reboot into the new kernel took that tree away,
-# and the new kernel came up without drivers (cheetah NOTES, 2026-10-27).
+# and the new kernel came up without drivers (on the Pixel 7, 2026-10-27,
+# recorded in #149's device/panther NOTES).
 # This package holds that unit off (linux-modules-cleanup.service.d) and runs
 # this instead, from omamobile-modules-cleanup.timer, well after boot.
 #
@@ -18,6 +19,11 @@
 #     tree's mtime or ctime (a rename sets it), is after the boot time
 #     (/proc/stat btime): that is the next boot's kernel (ctime counts only
 #     here, so a push caught before it writes its marker is kept too);
+#   - the release `bin/omamobile modules-push` last pushed, which it names in
+#     /usr/lib/modules/.omamobile-next: the next boot's kernel even when the
+#     push was in an earlier boot or its times are wrong;
+#   - every tree whose time is before 2026, which only a phone clock reset
+#     to 1970 writes: its age is unknown, so it isn't ranked;
 #   - every tree a package owns (pacman -Qo);
 #   - the KEEP (2) newest of the rest, by marker mtime (else the tree's
 #     mtime): the rollback kernels.
@@ -52,6 +58,12 @@ if [[ ! -d $root || -L $root ]]; then
   exit 0
 fi
 running=$(uname -r)
+# modules-push names the release it pushed; a stamp before 2026 is a reset clock
+next=""
+if [[ -f $root/.omamobile-next && ! -L $root/.omamobile-next ]]; then
+  read -r next < "$root/.omamobile-next" || true
+fi
+floor=1767225600   # 2026-01-01 UTC
 btime=$(awk '$1 == "btime" { print $2; exit }' "${OMAMOBILE_PROC_STAT:-/proc/stat}")
 [[ $btime =~ ^[0-9]+$ ]] || { log "no boot time in ${OMAMOBILE_PROC_STAT:-/proc/stat}; nothing removed"; exit 1; }
 # Without a working package database "not owned" can't be told from an error
@@ -86,7 +98,15 @@ for tree in "$root"/[0-9]*; do
     log "keep $name: running"
     continue
   fi
+  if [[ -n $next && $name == "$next" ]]; then
+    log "keep $name: pushed for the next boot (.omamobile-next)"
+    continue
+  fi
   t=$(pushed "$tree")
+  if (( t < floor )); then
+    log "keep $name: its time is before 2026 (a reset clock), so its age is unknown"
+    continue
+  fi
   if arrived "$tree" "$t"; then
     log "keep $name: arrived during this boot (the next boot's kernel)"
     continue
