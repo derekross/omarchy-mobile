@@ -63,6 +63,80 @@ Item {
       wait(30)
     }
 
+    // Each case's bottom windows: what each reserves, in all what the app
+    // above them loses (squeekboard reserves its own height on top), and
+    // how many reserve at once.
+    function zones(state) {
+      harness.appOnScreen = !!state.app
+      harness.opened = !!state.drawer
+      harness.oskOpen = !!state.osk
+      harness.fullscreenOnScreen = !!state.fullscreen
+      harness.sessionLocked = !!state.locked
+      return { dock: harness.dockZone, strip: harness.stripZone,
+               total: harness.dockZone + harness.stripZone,
+               reserving: (harness.dockZone > 0 ? 1 : 0) + (harness.stripZone > 0 ? 1 : 0) }
+    }
+
+    function test_over_an_app_the_strip_reserves_its_height() {
+      var z = zones({ app: true })
+      compare(z.strip, harness.touch, JSON.stringify(z))
+      verify(z.strip >= 44, "a whole touch target")
+      compare(z.total, z.strip, "nothing else reserves: " + JSON.stringify(z))
+    }
+
+    function test_the_keyboard_never_changes_what_the_strip_reserves() {
+      var before = zones({ app: true })
+      var typing = zones({ app: true, osk: true })
+      var after = zones({ app: true })
+      compare(typing.total, before.total, "keyboard up: " + JSON.stringify(typing))
+      compare(after.total, before.total, "keyboard down: " + JSON.stringify(after))
+      verify(harness.keyboardStripShown === false)
+      zones({ app: true, osk: true })
+      verify(harness.keyboardStripShown, "the strip is the keyboard's while it is up")
+    }
+
+    function test_never_two_reserving_bottom_windows_at_once() {
+      var keys = ["app", "drawer", "osk", "fullscreen", "locked"]
+      for (var bits = 0; bits < 32; bits++) {
+        var state = {}
+        for (var k = 0; k < keys.length; k++) state[keys[k]] = (bits >> k) & 1
+        var z = zones(state)
+        verify(z.reserving <= 1, JSON.stringify(state) + " " + JSON.stringify(z))
+      }
+    }
+
+    function test_home_reserves_only_the_dock() {
+      var z = zones({})
+      compare(z.strip, 0, JSON.stringify(z))
+      compare(z.dock, harness.dockHeight)
+      compare(zones({ osk: true }).strip, 0, "nor with the keyboard on home")
+    }
+
+    function test_a_fullscreen_window_keeps_the_whole_screen() {
+      compare(zones({ app: true, fullscreen: true }).total, 0)
+      compare(zones({ app: true, fullscreen: true, osk: true }).total, 0)
+    }
+
+    function test_nothing_reserves_under_the_drawer_or_the_locks_keyboard() {
+      compare(zones({ app: true, drawer: true }).total, 0, "the drawer")
+      compare(zones({ drawer: true }).total, 0)
+      compare(zones({ app: true, osk: true, locked: true }).total, 0, "the lock's keyboard")
+    }
+
+    function test_the_hide_key_shows_only_with_the_keyboard() {
+      var key = find(find(harness, "pillStrip"), "hideKeyboard")
+      verify(key && !key.visible, "no hide key over an app")
+      verify(find(find(harness, "keyboardStrip"), "hideKeyboard").visible)
+    }
+
+    function test_two_taps_where_the_hidden_key_sits_are_a_double_tap() {
+      var strip = find(harness, "pillStrip")
+      tap(strip, strip.width - 20, strip.height / 2)
+      tap(strip, strip.width - 20, strip.height / 2)
+      compare(keyboardCalls("toggleKeyboard"), 1, JSON.stringify(Quickshell.executed))
+      compare(keyboardCalls("hideKeyboard"), 0)
+    }
+
     function test_single_tap_on_the_pill_does_nothing() {
       var strip = find(harness, "pillStrip")
       tap(strip, strip.width / 2, strip.height / 2)

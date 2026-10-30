@@ -6,7 +6,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
 | `plugins/omamobile.quicksettings` | Pull-down quick settings |
-| `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent |
+| `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (the same strip carries the hide key under the keyboard) |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
 | `plugins/omamobile.keyboard` | The on-screen keyboard's show and hide calls, for the home pill (a hide key in the strip under the keyboard, double-tap the pill) and scripts |

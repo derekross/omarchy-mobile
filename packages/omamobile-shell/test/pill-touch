@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: MIT
 # The home pill (omamobile.launcher) under touch, offscreen in qmltestrunner:
 # the real HomePill, HomeSwipe and HideKeyboardKey components, the real
-# goHome, showRecents and keyboardCall, and the real contents of the two
-# gesture strips (over an app, and under the keyboard), cut out of
-# Launcher.qml into a plain Item with Quickshell and Omarchy's modules
-# stubbed (test/qml-stubs). A double tap shows or hides the keyboard, a
-# single tap does nothing, a swipe still goes home, the hide key hides the
-# keyboard and lets a swipe through. No compositor, no Quickshell. Exits 77
+# goHome, showRecents and keyboardCall, and the real content of the strip
+# (over an app, and under the keyboard), cut out of Launcher.qml into a
+# plain Item with Quickshell and Omarchy's modules stubbed (test/qml-stubs).
+# A double tap shows or hides the keyboard, a single tap does nothing, a
+# swipe still goes home, the hide key (only with the keyboard) hides it and
+# lets a swipe through, and what the bottom windows reserve (an exclusive
+# zone): the strip's height over an app with the keyboard up or down, never
+# two windows at once, nothing on home, fullscreen, under the drawer or the
+# lock's keyboard. No compositor, no Quickshell. Exits 77
 # without qmltestrunner.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -50,7 +53,30 @@ def window_content(namespace):
         if depth == 0:
             return window[k + 1:j]
 
-strip_height = re.search(r"readonly property int oskStripHeight: (\w+)", src).group(1)
+strip_height = re.search(r"readonly property int stripHeight: (\w+)", src).group(1)
+
+# What each bottom window reserves, from its own visible, exclusionMode and
+# implicitHeight lines: visible and Auto, its height; otherwise nothing.
+def zone(namespace):
+    i = src.index('WlrLayershell.namespace: "%s"' % namespace)
+    window = block(src.rindex("PanelWindow {", 0, i))
+    visible = re.search(r"^\s*visible: (.*)$", window, re.M).group(1)
+    height = re.search(r"^\s*implicitHeight: (.*)$", window, re.M).group(1)
+    auto = "exclusionMode: ExclusionMode.Auto" in window
+    return "(%s) ? %s : 0" % (visible, height if auto else "0")
+def definition(name):
+    return re.search(r"readonly property bool %s: (.*)$" % name, src, re.M).group(1)
+# Every bottom-anchored window in the launcher, by namespace: the tests
+# count the ones that reserve.
+bottoms = []
+for m in re.finditer(r'WlrLayershell.namespace: "([\w-]+)"', src):
+    window = block(src.rindex("PanelWindow {", 0, m.start()))
+    if re.search(r"anchors \{ bottom: true; left: true; right: true \}", window):
+        bottoms.append(m.group(1))
+assert bottoms == ["omamobile-dock", "omamobile-home-strip"], bottoms
+# The one strip's content, twice: over an app and under the keyboard, each
+# in a component of its own so their ids don't clash.
+content = window_content("omamobile-home-strip")
 out = """import QtQuick
 import Quickshell
 import qs.Commons
@@ -61,7 +87,20 @@ Item {
   width: 412
   height: 300
   readonly property int touch: Math.max(44, Style.space(44))
-  readonly property int oskStripHeight: %s
+  readonly property int stripHeight: %s
+
+  // The state the bottom windows follow, set by the tests, and what each
+  // reserves at the bottom edge (an exclusive zone), from Launcher.qml.
+  readonly property int dockHeight: 96
+  property bool appOnScreen: false
+  property bool opened: false
+  property bool oskOpen: false
+  property bool fullscreenOnScreen: false
+  property bool sessionLocked: false
+  readonly property bool stripShown: %s
+  readonly property bool keyboardStripShown: %s
+  readonly property int dockZone: %s
+  readonly property int stripZone: %s
 
 %s
 
@@ -69,19 +108,27 @@ Item {
 
 %s
 
-  Item {
-    objectName: "pillStrip"
+  Loader {
     width: parent.width
-    height: root.touch
+    height: root.stripHeight
+    sourceComponent: Component {
+      Item {
+        objectName: "pillStrip"
 %s
+      }
+    }
   }
 
-  Item {
-    objectName: "keyboardStrip"
+  Loader {
     y: 150
     width: parent.width
-    height: root.oskStripHeight
+    height: root.stripHeight
+    sourceComponent: Component {
+      Item {
+        objectName: "keyboardStrip"
 %s
+      }
+    }
   }
 
 %s
@@ -91,8 +138,10 @@ Item {
 %s
 }
 """ % ("root." + strip_height if not strip_height.isdigit() else strip_height,
+       definition("stripShown"), definition("keyboardStripShown"),
+       zone("omamobile-dock"), zone("omamobile-home-strip"),
        function("goHome"), function("showRecents"), function("keyboardCall"),
-       window_content("omamobile-home-indicator"), window_content("omamobile-home-strip"),
+       content.replace("root.oskOpen", "false"), content.replace("root.oskOpen", "true"),
        component("HomePill"), component("HomeSwipe"), component("HideKeyboardKey"))
 open(sys.argv[2], "w").write(out)
 PY

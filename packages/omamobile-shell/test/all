@@ -78,18 +78,19 @@ grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back stri
 grep -c 'visible: !root.fullscreenOnScreen' "$b" >/dev/null || fail "back strips hide for fullscreen windows"
 if grep -n 'omamobile-back' hypr/phone.lua | grep -c above_lock >/dev/null; then fail "back strips never work over the lock"; fi
 if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail "back uses Hyprland's dispatcher"; fi
-# Home pill: a 44 px hit strip and a pill with an outline.
+# Home pill: a 44 px strip and a pill with an outline.
 l=plugins/omamobile.launcher/Launcher.qml
-grep -c 'implicitHeight: root.touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
+grep -c 'readonly property int stripHeight: touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
 grep -c 'border.color: Qt.rgba(0, 0, 0, 0.55)' "$l" >/dev/null || fail "the home pill has a dark outline"
-# Under the keyboard, the pill has a strip of its own (Android's gesture
-# bar): on the Bottom layer, reserving its height, so Hyprland lifts
-# squeekboard (Top) above it and the strip covers no key. The masked strip
-# over an app and the keyboard's strip never show together, and both go
-# for a fullscreen window. The strip is a whole touch target tall, for the
-# swipe and the hide key at its right end.
-grep -c 'WlrLayershell.namespace: "omamobile-home-strip"' "$l" >/dev/null || fail "the keyboard's gesture strip has its namespace"
-python3 - "$l" <<'PY' || fail "the keyboard's gesture strip sits under squeekboard"
+# One strip over an app and under the keyboard (Android's gesture bar): on
+# the Bottom layer, reserving its height, so windows end above it and
+# Hyprland lifts squeekboard (Top) above it, covering no key. The keyboard
+# only changes its content (the hide key), never its mapping or height: two
+# windows swapping at each keyboard show and hide left an app at a
+# transient size (a 44 px gap above the strip). It goes for a fullscreen
+# window, the drawer, the home screen and the lock's keyboard.
+grep -c 'WlrLayershell.namespace: "omamobile-home-strip"' "$l" >/dev/null || fail "the home pill's strip has its namespace"
+python3 - "$l" <<'PY' || fail "one home strip, reserving its height, under squeekboard"
 import re, sys
 src = open(sys.argv[1]).read()
 def window(namespace):
@@ -103,12 +104,12 @@ def window(namespace):
         j += 1
         if depth == 0:
             return src[start:j]
-strip, pill = window("omamobile-home-strip"), window("omamobile-home-indicator")
+assert 'namespace: "omamobile-home-indicator"' not in src, "no second strip"
+strip, dock = window("omamobile-home-strip"), window("omamobile-dock")
 assert "WlrLayershell.layer: WlrLayer.Bottom" in strip, "strip on the Bottom layer"
 assert "exclusionMode: ExclusionMode.Auto" in strip, "strip reserves its height"
-assert "implicitHeight: root.oskStripHeight" in strip
-h = re.search(r"readonly property int oskStripHeight: (\w+)", src).group(1)
-assert h == "touch" or int(h) >= 44, h
+assert "implicitHeight: root.stripHeight" in strip
+assert "color: Commons.Color.bar.background" in strip, "bar-coloured"
 def vis(w):
     v = re.search(r"^\s*visible: (.*)$", w, re.M).group(1)
     # A named condition on the launcher's root reads as its definition.
@@ -117,16 +118,15 @@ def vis(w):
         d = re.search(r"readonly property bool %s: (.*)$" % m.group(1), src, re.M).group(1)
         v = re.sub(r"(^|[^.\w])(\w+)", lambda x: x.group(1) + ("root." + x.group(2) if x.group(2) not in ("true", "false") else x.group(2)), d)
     return v
-assert "root.oskOpen" in vis(strip) and "!root.oskOpen" not in vis(strip), vis(strip)
-assert "!root.oskOpen" in vis(pill), vis(pill)
-for w in (strip, pill):
-    assert "!root.fullscreenOnScreen" in vis(w) and "root.appOnScreen" in vis(w) and "!root.opened" in vis(w), vis(w)
-assert "!root.sessionLocked" in vis(strip), "no strip under the lock's keyboard"
-assert "mask: Region { item: hitArea }" in pill, "the pill over an app stays masked"
-assert pill.count("HomeSwipe {") == 1 and strip.count("HomeSwipe {") == 1, "one swipe logic for both"
-assert "HomePill" in strip and "HomePill" in pill
-assert "HideKeyboardKey {" in strip and "HideKeyboardKey" not in pill, "the hide key is in the keyboard's strip only"
+v = vis(strip)
+for need in ("root.appOnScreen", "!root.opened", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
+    assert need in v, (need, v)
+assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
+assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
+assert strip.count("HomeSwipe {") == 1 and "HomePill" in strip, "one swipe logic"
+assert "HideKeyboardKey {" in strip and "visible: root.oskOpen" in strip, "the hide key, only with the keyboard"
 assert "ownTaps: hideKey" in strip, "the hide key's taps are no double tap"
+assert re.search(r"readonly property bool keyboardStripShown: stripShown && oskOpen$", src, re.M)
 PY
 # The keyboard's controls on the pill, through omamobile.keyboard's IPC:
 # a double tap toggles it, the hide key hides it, a hint toast once.
@@ -143,7 +143,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home pill under touch (test/pill-touch)"
 else
-  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key"
+  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip"
 fi
 grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
