@@ -47,6 +47,19 @@ def node_span(s, header):
     raise ValueError(header)
 
 
+def memory_span(s):
+    """ABL / live FDT uses `memory {`; the dodge DTS uses `memory@…`."""
+    for header in ("\n\tmemory {",):
+        try:
+            return node_span(s, header)
+        except ValueError:
+            pass
+    m = re.search(r"\n\tmemory@[0-9a-fA-F]+ \{", s)
+    if not m:
+        raise ValueError("no memory node")
+    return node_span(s, m.group(0))
+
+
 def insert_in(s, header, text):
     _, j = node_span(s, header)
     line = s.rindex("\n", 0, j)
@@ -56,9 +69,9 @@ def insert_in(s, header, text):
 built, live, out, *opts = sys.argv[1:]
 ours, theirs = dts(built), dts(live)
 
-i, j = node_span(theirs, "\n\tmemory {")
+i, j = memory_span(theirs)
 live_reg = re.search(r"reg = <[^>]*>;", theirs[i:j]).group(0)
-i, j = node_span(ours, "\n\tmemory {")
+i, j = memory_span(ours)
 block = ours[i:j]
 ours = ours[:i] + block.replace(re.search(r"reg = <[^>]*>;", block).group(0), live_reg) + ours[j:]
 
