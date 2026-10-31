@@ -17,6 +17,20 @@ pass "build stays inside the package directory"
 ./build "$tmp/build" || fail "C tools compile"
 pass "C tools compile"
 
+# The host is a fallback gateway; Wi-Fi DHCP (metric 600) wins.
+python3 - <<'ROUTE'
+import configparser
+from pathlib import Path
+p = configparser.ConfigParser(strict=False)
+p.read('vendor/systemd/network/20-usb-gadget.network')
+assert p['Match']['Name'] == 'usb0'
+assert p['Network']['Address'] == '172.16.42.1/24'
+assert 'Gateway' not in p['Network']
+assert p['Route']['Gateway'] == '172.16.42.2'
+assert p['Route'].getint('Metric') == 1024
+ROUTE
+pass "USB gateway is a fallback route in the Route section"
+
 # omamobile-bootctl against a synthetic devinfo: dump works, and a dry run
 # of mark-successful plans exactly one flag byte and writes nothing
 python3 - "$tmp/devinfo" <<'PY'
