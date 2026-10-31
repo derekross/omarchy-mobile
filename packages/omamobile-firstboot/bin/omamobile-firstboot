@@ -211,6 +211,20 @@ step() {
 }
 
 s_keyring() {
+  # A phone without a working RTC can boot before its signing keys existed.
+  # Installed public keyrings are part of the verified root image; use their
+  # newest mtime as a floor before GnuPG creates or imports keys offline.
+  # Never move a valid clock backwards, and do nothing without a keyring.
+  local keyring stamp floor=0 now
+  for keyring in "$ROOT"/usr/share/pacman/keyrings/*.gpg; do
+    [[ -f $keyring ]] || continue
+    stamp=$(stat -c %Y "$keyring")
+    ((stamp <= floor)) || floor=$stamp
+  done
+  now=$(date -u +%s)
+  if ((now < floor)); then
+    date -u -s "@$floor" >/dev/null
+  fi
   if [[ ! -f $ROOT/etc/pacman.d/gnupg/trustdb.gpg ]]; then
     pacman-key --init
   fi
