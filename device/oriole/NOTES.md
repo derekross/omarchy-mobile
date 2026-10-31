@@ -60,13 +60,26 @@ this audit did not reflash or inspect the phone's current partitions.
   installation used the local `tools/install-phone` after its dry run,
   writing `boot_b`, `vendor_boot_b`, `dtbo_b` and `userdata`. Later kernel
   deployments used the local `bin/omamobile push` with B-image readback.
-  Bring-up also used separately owner-authorized exceptions: a flags-3
-  stock copy of `vbmeta_b`, and an audited B-success flag update at offset
-  `0x35` in `devinfo`, preserving the other bytes and restoring read-only
-  protection. Early verification tests restored original `vbmeta_b`;
-  the later native-root run records retain the B verification change.
-  These exceptions are historical facts, not instructions or an extension
-  of this repository's public installer permissions.
+  The flags-3 stock-copy write to `vbmeta_b` and the B-success flag
+  update at offset `0x35` in `devinfo` were done without project approval.
+  The run records report the other `devinfo` bytes preserved and read-only
+  protection restored. Early verification tests restored original
+  `vbmeta_b`; the later native-root run records retain the B verification
+  change. No further `devinfo` or `vbmeta` writes will be made without
+  the maintainer's explicit approval. These are historical facts, not
+  instructions or an extension of the public installer's permissions.
+- **Local deployment tools** [V, recovered October 28 source snapshot]:
+  `tools/install-phone` is byte-identical to the version at the mobile
+  base `1155a7c352ed` above. `bin/omamobile` has local changes; its `push`
+  path adds a `PUSH_MODULES_POLICY=require-match` option, follows image
+  symlinks for readback length, and uses systemd's reboot on a native root.
+  The complete two-file comparison against that base is in
+  [PR #200](https://github.com/derekross/omarchy-mobile/pull/200).
+  This is a dated source-snapshot comparison, not proof of the exact
+  script bytes used for every earlier deployment, and not a comparison
+  against today's main. The recovered Oriole descriptor still allows
+  only `boot_b vendor_boot_b dtbo_b userdata`; the metadata writes were
+  separate bring-up operations.
 - **Slot A and bootloaders** [I, historical run records]: before Linux
   installation, the matching factory build and full OTA booted stock on
   B and then A, both reporting `slider-17.0-15681480`. The separate
@@ -76,6 +89,36 @@ this audit did not reflash or inspect the phone's current partitions.
   has not been performed for this PR. `userdata` now contains Linux;
   returning to Android requires deliberate data restoration, not simply
   switching to slot A.
+
+### Historical B-success write: mechanism and evidence limits
+
+[V, recovered October 18 source and execution transcript] The separate
+`mark-b-success-37.py` wrapper made `devinfo` writable with `blockdev --setrw`
+on its containing boot LUN and then the partition. It restored the partition
+and then the disk to read-only with an EXIT trap, backed by a 20-second
+systemd undo timer and a 120-second watchdog. The wrapper did not stop the
+storage watcher or change its allowlist. The recovered init's watcher skipped
+nodes already marked in `/run/ufs-ro/`; it did not continuously reassert their
+read-only flags. This is how the explicit opening remained possible.
+
+The helper wrote a **128-byte header**, with only bit 1 at offset `0x35`
+changed, followed by comparison of the full 8192-byte record. The gate's
+2026-10-18 09:04:51 UTC execution result reports the one-bit change, unchanged
+slot-A/opaque bytes, both nodes restored read-only and refreshed backups
+verified. This was not a one-byte write.
+
+The next Fastboot controller completed at 09:06:19 UTC after requiring
+`current-slot=b`, `slot-successful:b=yes` and `slot-unbootable:b=no`, without
+issuing set-active. The native audit at 09:11:29 UTC reported B success
+persisting and A's record unchanged. These are recovered executed assertions
+and results; the original Fastboot output and contemporaneous retry count
+have not been recovered.
+
+The original gate's before/after images are listed in the private backup
+inventory but are not available locally, and the backup host was unreachable
+during this audit. The exact bytes at `0x30`–`0x37` therefore remain unverified
+for the original pair. This gap is not filled by deriving bytes from the
+helper's logic or from a later backup. No new metadata write was attempted.
 
 ## 2026-10-30: native boot and RTC alarm status
 
