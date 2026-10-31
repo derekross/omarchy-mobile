@@ -1,11 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a sleep: why s2idle drains so much
 
-Status (2026-10-30): s2idle works (RTC and power-key wakes; NFC and Wi-Fi
-have their own notes in NOTES and AGENTS), but the drain in sleep is high,
-and three test sleeps have never woken (two direct freezes and one
-30-minute systemd sleep with `tegu-mif-sleep` loaded; S1), so sleep tests
-are attended. The shell's auto-sleep (the `omamobile-sleep` toggle) is
+Status (2026-10-31): s2idle usually works (RTC and power-key wakes; ten of
+ten 30-second cycles on 10-31 with the console kept through the freeze),
+but not always: four sleeps have never woken (two direct freezes, one
+30-minute systemd sleep with `tegu-mif-sleep` loaded, and the sixth
+30-second cycle of a boot on 10-30, which left the USB bus and needed a
+forced restart), and one more woke with UFS dead (`link startup failed` x5,
+then I/O errors and `emergency_ro`, 10-30 afternoon). The drain in sleep is
+high. Sleep tests are attended and unattended sleep stays off. The shell's auto-sleep (the `omamobile-sleep` toggle) is
 off on the palmtop since the 2026-10-30 shell reinstall (the package ships
 it off), so it doesn't sleep unattended at present; while it was on, its
 systemd-path sleeps without the module all woke, and turning it back on is
@@ -317,6 +320,16 @@ with the cable in.
   storage shape of the 10-30 afternoon (which kept answering SSH from
   memory): the SoC itself is hung or down, and nothing can be read until a
   forced restart. Waiting on that to read the console from pstore.
+- **What the forced restart left, and how the cycles slept (for the
+  rule).** After the sixth-cycle hang of 10-30 and the morning's forced
+  restart, `/sys/fs/pstore` held nothing from the hung boot: the kept
+  console (`console-1030-205427.txt`) has that boot's bootloader log and
+  then the next boot's, with no kernel lines from the hang, because printk
+  had suspended the consoles at the freeze (below). Every 30-second cycle,
+  that night and this morning, entered sleep the systemd way: `rtcwake -m
+  no -s 30` to arm the alarm, then `systemctl suspend`, so the sleep hooks
+  (NFC's poll stop, Wi-Fi's) ran each time; none was a direct write to
+  `/sys/power/state`.
 - **2026-10-31 morning: ten of ten cycles clean, and the console now
   survives the freeze.** The reason every earlier hang left no kernel
   evidence is that printk suspends the consoles at the freeze ("Suspending
@@ -389,11 +402,23 @@ with the cable in.
   would time out exactly as the failing console shows, with no first DME
   set and no power-mode change. That is a hypothesis, not a finding: the
   ordering in `exynos_ufs_setup_clocks()` is meant to prevent it.
-  The test is cheap and attended: `CLKGATE=0` in
-  `runners/13-s2idle-counted.sh` turns gating off for the run
-  (`clkgate_enable` 0) and the cycles run as usual. One failure in about 50
-  resumes means a clean run of ten proves nothing by itself, so it is worth
-  running both ways and counting.
+  The test, as a runbook step (attended, cable in, modem never loaded in
+  the boot, console kept through the freeze; risk: low):
+
+  ```sh
+  # S3. UFS idle clock gating off for a run of cycles
+  tools/phone-ssh 'echo N > /sys/module/printk/parameters/console_suspend'
+  tools/phone-ssh 'u=/sys/devices/platform/soc/13200000.ufs; cat $u/clkgate_enable; echo 0 > $u/clkgate_enable; cat $u/clkgate_enable'
+  #   Expect: 1 then 0
+  # ten cycles, each: rtcwake -m no -s 30; systemctl suspend; after the wake:
+  tools/phone-ssh 'dmesg | grep -cE "link startup failed|Host init failed|I/O error|ufshcd_err_handler"; cat /sys/power/suspend_stats/success'
+  #   Expect: 0, and success counting up by one per cycle
+  #   Stop: any count above 0, or no SSH 120 s after the alarm (forced restart, read pstore and the kept console)
+  #   Rollback: echo 1 > clkgate_enable, or a reboot (the setting does not persist)
+  ```
+
+  One failure in about 50 resumes means a clean run of ten proves nothing
+  by itself, so run it both ways and count.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
@@ -495,7 +520,13 @@ step 2 in reverse).
   alarm fired at all, and its other bits name what else the PMIC latched.
   Reading PMIC registers from userspace is allowed (the rule that forbids
   it is about the PMU), through that chip's regmap in debugfs, and a single
-  register rather than a whole dump (lesson from the amplifier regmap).
+  register rather than a whole dump (lesson from the amplifier regmap). Is
+  `STATUS2` cleared on read, so that a userspace read could take the alarm
+  away from the RTC driver? Not by the driver's own account: in the
+  S2MPG14 regmap only `INT1` to `INT5` are marked precious ("clear on
+  read"), and `STATUS2` is listed as volatile ("RTC alarm flag") and not
+  precious, so it is a level flag that a read does not change, and regmap's
+  debugfs refuses precious registers anyway.
   kernel #149 is the same readback for gs101's S2MPG10, which this tree
   gets wrong today; zumapro's and gs201's cases are already right, so that
   PR doesn't change what the 9a or the 7 Pro report.

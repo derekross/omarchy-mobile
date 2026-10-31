@@ -60,8 +60,9 @@ with nothing but Bluetooth starting resets again at that time, start here.
   asleep, about 40 mA under the figure without the module. Three sleeps
   have never woken (two direct freezes, one systemd sleep with the module)
   and no single factor explains them, so sleep tests stay attended and the
-  module stays off at boot; the shell's nightly auto-sleep (systemd path,
-  no module) has woken every time and goes on as before.
+  module stays off at boot; the shell's auto-sleep toggle is off on the
+  palmtop since the 2026-10-30 shell reinstall, and unattended sleep stays
+  off until the hangs below are understood.
 - The 2026-10-27 "140 mA asleep" figure doesn't hold up against 2026-10-28
   (434-445 mA cable out, as-is) and tonight; treat about 300 mA cable out
   as the baseline.
