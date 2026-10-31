@@ -101,6 +101,25 @@ grep -q 'fastboot refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "fastboot did n
 [[ ! -e $t/calls ]] || fail "qcom-abl fastboot accessed the phone"
 echo 'ok - BOOT_METHOD=qcom-abl refused by fastboot before phone access'
 
+# Non-qcom descriptor must get past the refuse. Make fastboot report a
+# phone already in fastboot so cmd_fastboot returns before the reboot loop.
+rm -f "$t/calls"
+mkdir -p "$t/repo/device/cheetah"
+cp device/cheetah/device.conf "$t/repo/device/cheetah/"
+printf '#!/bin/sh\necho "SERIAL\tfastboot"\n' > "$t/bin/fastboot"
+chmod +x "$t/bin/fastboot"
+if ! DEVICE=cheetah "$t/repo/bin/omamobile" fastboot > "$t/log" 2>&1; then
+  fail "android-v4 fastboot should succeed when already in fastboot: $(cat "$t/log")"
+fi
+grep -q 'fastboot refuses BOOT_METHOD=qcom-abl' "$t/log" \
+  && fail "android-v4 cheetah was refused as qcom-abl"
+grep -q 'Already in fastboot' "$t/log" \
+  || fail "android-v4 fastboot did not take the already-in path: $(cat "$t/log")"
+# Restore the "any phone command is a failure" stub for later checks.
+printf '#!/bin/sh\necho called >> "$CALLS"\nexit 97\n' > "$t/bin/fastboot"
+chmod +x "$t/bin/fastboot"
+echo 'ok - BOOT_METHOD=android-v4 (cheetah) gets past fastboot qcom-abl refuse'
+
 # dodge-chain must refuse a stage-1 Image as STAGE2_IMAGE (nested pack → ~87MiB hang).
 cp tools/dodge-chain "$t/repo/tools/"
 # Fake "Image" carrying the stage-1 cmdline marker (strings fallback when no ikconfig).
