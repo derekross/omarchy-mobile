@@ -100,10 +100,13 @@ grep -c '/^omamobile-earpiece@(on|off)\\.service$/' polkit/50-omamobile-earpiece
 grep -c '^ExecStart=/usr/bin/omamobile-speaker-protection earpiece %i$' systemd/omamobile-earpiece@.service >/dev/null &&
   grep -c '^Requisite=omamobile-speaker-protection.service$' systemd/omamobile-earpiece@.service >/dev/null || fail "earpiece unit: runs the script, only while the protection runs"
 grep -c '"~alsa_output.\*Earpiece.\*"' wireplumber/51-omamobile-aoc.conf >/dev/null || fail "WirePlumber: the earpiece sink's name"
-grep -c 'profile.name ~= "Voice Call"' wireplumber/scripts/omamobile-no-voice-call-restore.lua >/dev/null &&
-  grep -c 'after = "device/find-stored-profile"' wireplumber/scripts/omamobile-no-voice-call-restore.lua >/dev/null &&
-  grep -c 'event:set_data ("selected-profile", nil)' wireplumber/scripts/omamobile-no-voice-call-restore.lua >/dev/null &&
-  grep -c 'name = omamobile-no-voice-call-restore.lua, type = script/lua' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null ||
+h=wireplumber/scripts/omamobile-no-voice-call-restore.lua
+grep -c 'string.find (stored.name, "^Voice Call")' $h >/dev/null &&
+  grep -c 'after = { "device/find-stored-profile" },' $h >/dev/null &&
+  grep -c 'before = { "device/apply-profile" },' $h >/dev/null &&
+  grep -c 'event:set_data ("selected-profile", best)' $h >/dev/null &&
+  grep -c 'name = omamobile-no-voice-call-restore.lua, type = script/lua' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null &&
+  grep -c 'before = \[ monitor.alsa \]' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null ||
   fail "WirePlumber: a stored Voice Call profile is never restored at startup"
 command -v luac >/dev/null && { luac -p wireplumber/scripts/omamobile-no-voice-call-restore.lua || fail "the WirePlumber hook parses"; }
 pass "UCM finds the PCMs by id and leaves the amplifiers alone"
