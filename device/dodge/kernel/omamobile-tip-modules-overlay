@@ -109,15 +109,21 @@ if [ -e /etc/omamobile/sensors.enable ]; then
 fi
 
 # Session: tip boots start sddm on simpledrm; msm handoff kills
-# sddm-helper (exit 255). B avoids this because display-msm finishes
-# before sddm (After=). After tip overlay, bounce sddm once DSI is up.
+# sddm-helper (exit 255). On B, sddm.service.d/50-dodge.conf After=
+# omamobile-display-msm so the greeter never starts on simpledrm. After tip
+# overlay, bounce sddm once DSI is up (stamp so a re-run does not kill a live session).
 dsi=
 for c in /sys/class/drm/card*-DSI-1; do
 	[ -r "$c/status" ] || continue
 	[ "$(cat "$c/status")" = connected ] && dsi=$(basename "$c")
 done
 if [ -n "$dsi" ] && systemctl is-enabled -q sddm.service 2>/dev/null; then
-	log "bouncing sddm after $dsi bound"
-	systemctl restart sddm.service 2>/dev/null || true
+	if [ ! -e /run/omamobile-tip-sddm.bounced ]; then
+		touch /run/omamobile-tip-sddm.bounced
+		log "bouncing sddm after $dsi bound"
+		systemctl restart sddm.service 2>/dev/null || true
+	else
+		log "sddm already bounced this boot; leaving session alone"
+	fi
 fi
 log "done"

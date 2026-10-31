@@ -433,6 +433,16 @@ grep -q 'mount -t tmpfs' "$tip" \
   || fail "tip-modules-overlay must mount tmpfs for RAM-only extract"
 echo "ok - kmod-overlay tip path + tip-modules-overlay present"
 
+# Dual-write installs must use a private bind of / (not only omamobile.*).
+grep -q 'mount --bind /' device/dodge/modem/install \
+  || fail "modem/install must private-bind / to write through kmod-overlay"
+grep -q 'mount --bind /' device/dodge/audio/install \
+  || fail "audio/install must private-bind / to write through kmod-overlay"
+grep -q 'omamobile-tip-sddm.bounced' device/dodge/kernel/omamobile-tip-modules-overlay \
+  || fail "tip-modules-overlay must stamp sddm bounce"
+echo "ok - dual-write private-bind + sddm bounce stamp"
+
+
 # Runtime: adsp-battery prefers modprobe when it succeeds.
 tad=$t/adsp-modprobe
 rm -rf "$tad"

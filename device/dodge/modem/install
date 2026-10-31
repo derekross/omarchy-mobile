@@ -10,7 +10,25 @@ for f in /usr/local/bin/rmtfs /usr/local/bin/tqftpserv /usr/local/lib/omamobile/
 	[ -e "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 install -Dm755 omamobile-modem /usr/local/lib/omamobile/modem/omamobile-modem
-install -Dm755 adsp-battery.sh /usr/local/lib/omamobile/adsp-battery.sh
+
+# Install adsp-battery into the live path, and when that path is a bind
+# (omamobile-kmod-overlay), also into the real rootfs via a private bind of /
+# plus every omamobile.* tree so tip RAM (no bind) sees the tip-aware script.
+install_adsp_battery() {
+	install -Dm755 adsp-battery.sh /usr/local/lib/omamobile/adsp-battery.sh
+	mountpoint -q /usr/local/lib/omamobile 2>/dev/null || return 0
+	tmp=$(mktemp -d)
+	mount --bind / "$tmp"
+	install -Dm755 adsp-battery.sh "$tmp/usr/local/lib/omamobile/adsp-battery.sh"
+	for d in "$tmp"/usr/local/lib/omamobile.*; do
+		[ -d "$d" ] || continue
+		install -Dm755 adsp-battery.sh "$d/adsp-battery.sh"
+	done
+	umount "$tmp"
+	rmdir "$tmp"
+}
+install_adsp_battery
+
 install -Dm644 omamobile-adsp-battery.service /etc/systemd/system/omamobile-adsp-battery.service
 systemctl enable omamobile-adsp-battery.service || true
 install -Dm644 78-omamobile-mm-fake-net.rules /etc/udev/rules.d/78-omamobile-mm-fake-net.rules

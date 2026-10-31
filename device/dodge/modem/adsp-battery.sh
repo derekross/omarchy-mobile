@@ -29,14 +29,16 @@ load() {
 		return 0
 	fi
 	hyphen=$(echo "$name" | tr _ -)
+	# $D (LOCAL out-of-tree) before pinned $HELD — held also ships
+	# qcom_q6v5_pas / qcom_pd_mapper; LOCAL copies are the intentional ones.
 	for f in \
+		"$D/$name.ko" "$D/$hyphen.ko" \
 		"$HELD/net/qrtr/$name.ko" "$HELD/net/qrtr/$hyphen.ko" \
 		"$HELD/drivers/soc/qcom/$name.ko" "$HELD/drivers/soc/qcom/$hyphen.ko" \
 		"$HELD/drivers/remoteproc/$name.ko" "$HELD/drivers/remoteproc/$hyphen.ko" \
 		"$HELD/drivers/rpmsg/$name.ko" "$HELD/drivers/rpmsg/$hyphen.ko" \
 		"$HELD/drivers/power/supply/$name.ko" "$HELD/drivers/power/supply/$hyphen.ko" \
-		"$HELD/drivers/misc/$name.ko" "$HELD/drivers/misc/$hyphen.ko" \
-		"$D/$name.ko" "$D/$hyphen.ko"
+		"$HELD/drivers/misc/$name.ko" "$HELD/drivers/misc/$hyphen.ko"
 	do
 		[ -f "$f" ] || continue
 		if [ "$#" -gt 0 ]; then
