@@ -470,5 +470,18 @@ step 2 in reverse).
   first five are clean (2026-10-30 night, above). Next: the cycles again
   from a fresh boot with the kmsg stream to the laptop, counting sleeps,
   and the console from the forced restart of tonight's hang.
+- Which PMIC event ends an early RTC cycle, and now how to read it. The
+  record says it has never been read; the driver names the register. In
+  `rtc-s5m.c`, `s5m_check_pending_alarm_interrupt()` reads
+  `S2MPG14_PMIC_STATUS2` on zumapro (`S2MPG12_PMIC_STATUS2` on gs201) and
+  takes the alarm from `RTCA0E`, bit 2 (`RTCA1E`, bit 1, is the second
+  alarm). So after a cycle that woke early, that register says whether the
+  alarm fired at all, and its other bits name what else the PMIC latched.
+  Reading PMIC registers from userspace is allowed (the rule that forbids
+  it is about the PMU), through that chip's regmap in debugfs, and a single
+  register rather than a whole dump (lesson from the amplifier regmap).
+  kernel #149 is the same readback for gs101's S2MPG10, which this tree
+  gets wrong today; zumapro's and gs201's cases are already right, so that
+  PR doesn't change what the 9a or the 7 Pro report.
 - What the GNSS and fingerprint rails cost in sleep (S2).
 - What MIF in sleep saves with the cable out (S1).
