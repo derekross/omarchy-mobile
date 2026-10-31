@@ -48,3 +48,11 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+Version 0.2.18: `hypr/phone.lua` optionally loads the device package's
+`/usr/share/omamobile/hypr/device.lua` after the shared rules. The existing
+setup-user looknfeel.lua include brings this to new and existing sessions;
+no hook file means no change. Device packages own this single optional hook.
+
+New-user setup seeds `MONITOR_SCALE` from the device descriptor, falling back
+to 3 when absent. Existing monitor settings keep their once-only setup marker.

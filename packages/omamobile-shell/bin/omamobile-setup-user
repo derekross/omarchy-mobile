@@ -79,9 +79,12 @@ if omarchy-done ensure omamobile-credential-type; then
   fi
 fi
 
-# Phone scale: 1440x3120 at 3 is 480x1040 logical, seeded once
+# Phone scale, seeded once: the device descriptor's MONITOR_SCALE (a scale
+# that divides the panel cleanly, e.g. comet's 2152x2076 at 2), else 3
+# (1440x3120 at 3 is 480x1040 logical).
 if omarchy-done ensure omamobile-monitor-scale; then
-  sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
+  scale=$(sed -n 's/^MONITOR_SCALE=\([0-9][0-9.]*\)$/\1/p' /usr/share/omamobile/device.conf 2>/dev/null | head -n1)
+  sed -i "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = ${scale:-3}/" ~/.config/hypr/monitors.lua
 fi
 
 # Touch phone: no pointer on screen (it still hides on touch if a USB mouse is

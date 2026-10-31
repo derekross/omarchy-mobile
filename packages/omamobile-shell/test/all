@@ -6,6 +6,21 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
+python3 test/device-scale.py || fail "device monitor scale"
+
+# Device settings reach both newly configured and existing phone-rule users.
+python3 - <<'PY'
+from pathlib import Path
+phone = Path('hypr/phone.lua').read_text()
+setup = Path('bin/omamobile-setup-user').read_text()
+assert 'dofile("$share/hypr/phone.lua")' in setup
+assert 'local device_hook = "/usr/share/omamobile/hypr/device.lua"' in phone
+assert 'io.open(device_hook, "r")' in phone
+assert phone.index('if device_file then') < phone.index('device_file:close()') < phone.index('dofile(device_hook)')
+PY
+pass "optional package-owned device session hook"
+
+
 for manifest in plugins/*/manifest.json; do
   python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); assert m["id"].startswith("omamobile.")' "$manifest" \
     || fail "$manifest is valid JSON with an omamobile.* id"

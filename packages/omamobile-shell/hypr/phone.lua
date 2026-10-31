@@ -78,3 +78,12 @@ hl.layer_rule({ match = { namespace = "^omamobile-osk-hide$" }, above_lock = 2, 
 -- call is answered from the lock screen, and the in-call controls stay
 -- reachable while it's locked. The card offers call actions only.
 hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 2 })
+
+-- Device packages may supply monitor/input settings. No device hook means
+-- unchanged behavior for devices that use the shared phone defaults.
+local device_hook = "/usr/share/omamobile/hypr/device.lua"
+local device_file = io.open(device_hook, "r")
+if device_file then
+  device_file:close()
+  dofile(device_hook)
+end
