@@ -495,8 +495,9 @@ rm -f "$r/watch.out"
 wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=0.01); WATCH_N=60 watchrun; wait
 ((rc == 0)) && ! muted && grep -c 'jump rule 20 C' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 the default jump rule is 20 C, so a 15 C rise plays on"; }
 # C9d-8: a stream's first estimates are the firmware's 25 C reference until
-# it has measured the coil, often warmer: the step to the measured value is
-# the baseline, and rises above it are held to the jump.
+# it has measured the coil, often warmer, a step of about a second: the
+# estimate at the settle time is the baseline, rises above it are held to
+# the jump.
 c9settle() {  # name settle steps...: steps are delay_s:temp_bytes, applied in order
   local n=$1 st=$2; shift 2; local steps=("$@")
   c9 "$n"; ((rc == 0)) || { cat "$r/out" >&2; fail "$n: start"; }
@@ -509,8 +510,8 @@ c9settle() {  # name settle steps...: steps are delay_s:temp_bytes, applied in o
   WATCH_N=80 watchrun; wait
 }
 c9settle c9-step 1.5 0.2:0x00,0x0a,0x00,0x00    # 25 -> 40 C: the measured value, a step
-((rc == 0)) && ! muted && grep -c 'above the first measured estimate' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 the step from the reference to the measured coil does not mute"; }
-c9settle c9-rise 1.5 0.2:0x00,0x08,0x40,0x00 0.8:0x00,0x0a,0x40,0x00    # 25 -> 33, then 33 -> 41 C
+((rc == 0)) && ! muted && grep -c 's into a stream' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 the step from the reference to the measured coil does not mute"; }
+c9settle c9-rise 0.6 0.2:0x00,0x08,0x40,0x00 1.2:0x00,0x0a,0x40,0x00    # 25 -> 33 in the window, then 33 -> 41 C
 ((rc == 1)) && muted && grep -c 'jumped 8.0 C (33.0 -> 41.0)' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a rise of 8 C above the measured value mutes"; }
 c9settle c9-cold 0.4 1.5:0x00,0x07,0xc0,0x00    # no step: the baseline at 0.4 s, then 25 -> 31 C
 ((rc == 1)) && muted && grep -c 'jumped 6.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 6 C rise after the settle window mutes"; }

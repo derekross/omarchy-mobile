@@ -542,10 +542,10 @@ def jump_settle():
     coil estimates are the firmware's reference (CAL_AMBIENT, 25 C) until
     it has measured the coil, and the coils are often warmer than that (31
     C battery, 33 C top coil on USB the same day), so the measured value is
-    a step up, not a rise. The rule's baseline is the first sample that has
-    left the reference, or the sample at OMAMOBILE_SPK_TEMP_SETTLE seconds
-    (default 2) if none has; every rise above the baseline is held to the
-    jump. The temperature backstop applies throughout."""
+    a step up, not a rise, and it takes about a second. The rule's
+    baseline is the estimate once the stream has played for
+    OMAMOBILE_SPK_TEMP_SETTLE seconds (default 2); every rise above it is
+    held to the jump. The temperature backstop applies throughout."""
     return float(os.environ.get('OMAMOBILE_SPK_TEMP_SETTLE', '') or 2.0)
 
 
@@ -1177,7 +1177,7 @@ def cmd_watch(args):
         return 1
     log(f'watchdog: watching {pcm}, ceilings digital {digital_ceil} analog {analog_ceil}, '
         f'heartbeat {"enforced" if strict_hb else "logged"}, coil temperature backstop {temp_max:g} C, '
-        f'jump rule {f"{temp_jump:g} C above the first measured estimate (at most {jump_settle():g} s in)" if temp_jump else "off (analog 10 or below: the estimate is open-loop, C9j)"}')
+        f'jump rule {f"{temp_jump:g} C above the estimate {jump_settle():g} s into a stream" if temp_jump else "off (analog 10 or below: the estimate is open-loop, C9j)"}')
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
     mode = os.environ.get('OMAMOBILE_SPK_MEDIA_DELTA', '')
@@ -1306,15 +1306,19 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                 if t is not None and temp_jump is not None:
                     tf = first_temp.setdefault(amp, t)
                     if amp not in start_temp:
-                        # still the reference: wait for the measured value
-                        if abs(t - tf) < 0.05 and now - since < settle:
+                        # the step from the reference to the measured coil
+                        # takes about a second, so the baseline is the
+                        # estimate once the stream has played for `settle`
+                        # seconds (a mid-step sample, 27 C on the way to 50,
+                        # made the step itself look like a rise, 2026-10-31)
+                        if now - since < settle:
                             continue
                         start_temp[amp] = t
                         continue
                     t0 = start_temp[amp]
                     if t - t0 > temp_jump:
                         problems.append(f'{amp}: coil temperature jumped {t - t0:.1f} C '
-                                        f'({t0:.1f} -> {t:.1f}) above its first measured value, above {temp_jump} C')
+                                        f'({t0:.1f} -> {t:.1f}) above its value {settle:g} s into the stream, above {temp_jump} C')
             for amp in AMPS if mode == 'speaker' else ():
                 hb = v.get((amp, 'HALO_HEARTBEAT'))
                 last = beat.get(amp)
