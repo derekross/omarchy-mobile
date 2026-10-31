@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Synaptics TouchComm over GENI SPI. Oneshoot: modules stay loaded.
+# Synaptics TouchComm over GENI SPI. Oneshot: modules stay loaded.
 [Unit]
 Description=S3910 touch (gpi, spi_geni_qcom, synaptics_tcm2)
 DefaultDependencies=no
