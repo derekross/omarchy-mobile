@@ -109,6 +109,8 @@ grep -c 'string.find (stored.name, "^Voice Call")' $h >/dev/null &&
   grep -c 'before = \[ monitor.alsa \]' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null ||
   fail "WirePlumber: a stored Voice Call profile is never restored at startup"
 command -v luac >/dev/null && { luac -p wireplumber/scripts/omamobile-no-voice-call-restore.lua || fail "the WirePlumber hook parses"; }
+awk '/SectionDevice."Speaker"/,/^}/' ucm2/Google/cheetah/HiFi.conf | grep -c 'exec "/usr/bin/systemctl start --no-block --no-ask-password omamobile-earpiece@off.service"' >/dev/null ||
+  fail "HiFi's Speaker device returns the amplifiers to speaker mode"
 pass "UCM finds the PCMs by id and leaves the amplifiers alone"
 
 # --- the speaker protection service, with stand-ins ---------------------------
