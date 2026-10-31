@@ -94,6 +94,32 @@ grep -q 'push refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "push did not refus
 [[ ! -e $t/calls ]] || fail "qcom-abl push accessed the phone"
 echo 'ok - BOOT_METHOD=qcom-abl refused by push before phone access'
 
+# Same class: fastboot refuses qcom-abl before any phone I/O (no sysrq-c).
+rm -f "$t/calls"
+if DEVICE=abldev "$t/repo/bin/omamobile" fastboot > "$t/log" 2>&1; then fail "fastboot unexpectedly accepted qcom-abl"; fi
+grep -q 'fastboot refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "fastboot did not refuse qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl fastboot accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by fastboot before phone access'
+
+# Non-qcom descriptor must get past the refuse. Make fastboot report a
+# phone already in fastboot so cmd_fastboot returns before the reboot loop.
+rm -f "$t/calls"
+mkdir -p "$t/repo/device/cheetah"
+cp device/cheetah/device.conf "$t/repo/device/cheetah/"
+printf '#!/bin/sh\necho "SERIAL\tfastboot"\n' > "$t/bin/fastboot"
+chmod +x "$t/bin/fastboot"
+if ! DEVICE=cheetah "$t/repo/bin/omamobile" fastboot > "$t/log" 2>&1; then
+  fail "android-v4 fastboot should succeed when already in fastboot: $(cat "$t/log")"
+fi
+grep -q 'fastboot refuses BOOT_METHOD=qcom-abl' "$t/log" \
+  && fail "android-v4 cheetah was refused as qcom-abl"
+grep -q 'Already in fastboot' "$t/log" \
+  || fail "android-v4 fastboot did not take the already-in path: $(cat "$t/log")"
+# Restore the "any phone command is a failure" stub for later checks.
+printf '#!/bin/sh\necho called >> "$CALLS"\nexit 97\n' > "$t/bin/fastboot"
+chmod +x "$t/bin/fastboot"
+echo 'ok - BOOT_METHOD=android-v4 (cheetah) gets past fastboot qcom-abl refuse'
+
 # dodge-chain must refuse a stage-1 Image as STAGE2_IMAGE (nested pack → ~87MiB hang).
 cp tools/dodge-chain "$t/repo/tools/"
 # Fake "Image" carrying the stage-1 cmdline marker (strings fallback when no ikconfig).
@@ -433,14 +459,46 @@ grep -q 'mount -t tmpfs' "$tip" \
   || fail "tip-modules-overlay must mount tmpfs for RAM-only extract"
 echo "ok - kmod-overlay tip path + tip-modules-overlay present"
 
-# Dual-write installs must use a private bind of / (not only omamobile.*).
-grep -q 'mount --bind /' device/dodge/modem/install \
-  || fail "modem/install must private-bind / to write through kmod-overlay"
-grep -q 'mount --bind /' device/dodge/audio/install \
-  || fail "audio/install must private-bind / to write through kmod-overlay"
-grep -q 'omamobile-tip-sddm.bounced' device/dodge/kernel/omamobile-tip-modules-overlay \
-  || fail "tip-modules-overlay must stamp sddm bounce"
-echo "ok - dual-write private-bind + sddm bounce stamp"
+# Dual-write installs must use a private bind of / (not only omamobile.*),
+# and undo that bind in an EXIT trap so a mid-install failure cannot leave /
+# bound under a leftover tmpdir.
+for inst in device/dodge/modem/install device/dodge/audio/install; do
+  grep -q 'mount --bind /' "$inst"     || fail "$inst must private-bind / to write through kmod-overlay"
+  grep -q "trap 'umount" "$inst"     || fail "$inst must trap-umount the private bind of / on exit/error"
+done
+grep -q 'omamobile-tip-sddm.bounced' device/dodge/kernel/omamobile-tip-modules-overlay   || fail "tip-modules-overlay must stamp sddm bounce"
+echo "ok - dual-write private-bind + cleanup trap + sddm bounce stamp"
+
+# Runtime: audio/install's private bind must be umounted when install fails
+# after mount --bind /. Fake mountpoint/mktemp/mount/install/systemctl.
+tbind=$t/bind-trap
+rm -rf "$tbind"
+mkdir -p "$tbind/bin" "$tbind/src"
+: > "$tbind/log"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$tbind/bin/mountpoint"
+printf '%s\n' '#!/bin/sh' "d=$tbind/tmpbind; mkdir -p \"\$d\"; echo \"\$d\"" > "$tbind/bin/mktemp"
+printf '%s\n' '#!/bin/sh' "echo mount:\"\$*\" >> \"$tbind/log\""   "mkdir -p \"$tbind/tmpbind/usr/local/lib/omamobile\" \"$tbind/tmpbind/usr/local/lib/omamobile.fake\""   'exit 0' > "$tbind/bin/mount"
+printf '%s\n' '#!/bin/sh' "echo umount:\"\$*\" >> \"$tbind/log\"" 'exit 0' > "$tbind/bin/umount"
+printf '%s\n' '#!/bin/sh' "echo rmdir:\"\$*\" >> \"$tbind/log\"" 'exit 0' > "$tbind/bin/rmdir"
+# First install (live path) succeeds; any install into the bind tmp fails.
+printf '%s\n' '#!/bin/sh' "echo install:\"\$*\" >> \"$tbind/log\""   "case \"\$*\" in *$tbind/tmpbind*) echo forced-fail >&2; exit 1 ;; esac"   'exit 0' > "$tbind/bin/install"
+printf '%s\n' '#!/bin/sh' "echo systemctl:\"\$*\" >> \"$tbind/log\"" 'exit 0' > "$tbind/bin/systemctl"
+chmod +x "$tbind/bin"/*
+cp device/dodge/audio/install "$tbind/src/install"
+cp device/dodge/audio/audio-bringup.sh "$tbind/src/" 2>/dev/null   || printf '#!/bin/sh\n' > "$tbind/src/audio-bringup.sh"
+cp device/dodge/audio/omamobile-dodge-audio.service "$tbind/src/" 2>/dev/null   || : > "$tbind/src/omamobile-dodge-audio.service"
+chmod +x "$tbind/src/install"
+# Fake id as root so any root check passes (audio/install has none; keep for modem reuse).
+printf '%s\n' '#!/bin/sh' 'echo 0' > "$tbind/bin/id"
+chmod +x "$tbind/bin/id"
+set +e
+PATH="$tbind/bin:/usr/bin:/bin" "$tbind/src/install" >"$tbind/out" 2>&1
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || { cat "$tbind/out" "$tbind/log"; fail "audio/install should fail when bind-path install fails"; }
+grep -q 'mount:--bind /' "$tbind/log" || { cat "$tbind/log" "$tbind/out"; fail "audio/install should mount --bind /"; }
+grep -q 'umount:' "$tbind/log" || { cat "$tbind/log" "$tbind/out"; fail "audio/install trap must umount on failure after bind"; }
+echo "ok - audio/install undoes private bind of / on failure"
 
 
 # Runtime: adsp-battery prefers modprobe when it succeeds.

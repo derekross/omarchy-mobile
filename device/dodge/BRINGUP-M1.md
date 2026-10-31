@@ -71,7 +71,9 @@ the shared storage guard.
 may clear the successful bit and refill retries, undoing the GPT bit-54
 mark that has no §3.1 entry yet, and `push` cannot see `boot_b` on sde
 with today's sda-only lookup. **There is no in-tree day-2 update path for
-dodge yet.** The installer PR can reopen those paths with the rest.
+dodge yet.** `bin/omamobile fastboot` also refuses: its sysrq-c fallthrough
+is uncharacterized on this ABL (see §5). The installer PR can reopen the
+flash/push paths with the rest; fastboot stays refused until panic is gated.
 
 ## 3. How this phone was installed (record)
 
@@ -120,11 +122,13 @@ each session. Those backups are never in git.
   `slot-successful:b=yes` the expected path is a reboot back into slot B
   rather than falling back to A, but whether this ABL enters a dump mode
   first has not been confirmed with a deliberate `sysrq c` on a booted B.
-  Do not treat "returns to fastboot" as verified until that test is run.
-- **Do not use `omamobile fastboot` on this phone yet.** That tool falls
-  through to `sysrq c` when `reboot-to bootloader` is ignored, and we have
-  not characterised what a panic does on this ABL. Prefer the buttons
-  instead of `omamobile fastboot` / sysrq-c. Button behaviour on this phone
+  Do not treat "returns to fastboot" as verified. That deliberate test is
+  parked until gated (see below); do not run it.
+- **`omamobile fastboot` refuses on this phone.** The tool would fall
+  through to `sysrq c` when `reboot-to bootloader` is ignored, and panic
+  behaviour on this ABL is still uncharacterized, so `bin/omamobile` now
+  refuses `BOOT_METHOD=qcom-abl` before any phone I/O (same class as
+  `flash` / `push`). Prefer the buttons. Button behaviour on this phone
   (Omarchy Mobile on slot B; confirmed 2026-10-31):
   - **Forced restart (working):** holding **Power** alone does **not** force
     a restart under Omarchy Mobile — it opens the Omarchy power menu
@@ -204,7 +208,14 @@ never in the repo.
 
 ### Still open for §3.1
 
-1. Deliberate panic / `sysrq c` on a booted slot B, then re-read fastboot
-   slot-successful / unbootable / retry-count for both slots.
-2. Concrete GPT restore path that avoids EDL if both copies on sde are bad
+1. Concrete GPT restore path that avoids EDL if both copies on sde are bad
    (whether `fastboot flash partition:<lun>` works on this ABL).
+
+### Parked until gated
+
+- **Deliberate panic / `sysrq c` on a booted slot B** (then re-read fastboot
+  slot-successful / unbootable / retry-count for both slots). Not an
+  actionable step today. Do not run it. It stays parked until there is an
+  explicit gate (off by default), a documented stop condition, and a
+  documented way back. Until then, treat panic behaviour on this ABL as
+  unknown and keep using the buttons instead of any sysrq-c path.
