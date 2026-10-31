@@ -9,7 +9,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam test/update.sh test/lock-pam.sh test/lock-glance; do
+for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam test/update.sh test/lock-pam.sh test/lock-glance test/sleep-lock.sh; do
   bash -n "$f" || fail "$f parses"
 done
 for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do
@@ -52,11 +52,14 @@ python3 -B test/patches.py || fail "re-patch tool"
 pkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
 if [[ -n $pkg ]] && command -v bsdtar >/dev/null; then
   mkdir -p "$t/omarchy-pkg"
-  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock
+  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock usr/share/omarchy/bin/omarchy-system-sleep-lock
   OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/lock-pam.sh || fail "lock-pam"
+  # Patch 0021 run against the real sleep lock, with fakes.
+  OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/sleep-lock.sh || fail "sleep-lock"
 else
   bash test/lock-pam.sh || fail "lock-pam"
   pass "lock-pam against the real omarchy-apply-lock # SKIP no omarchy package or bsdtar"
+  pass "the sleep lock turns the display off (0021) # SKIP no omarchy package or bsdtar"
 fi
 [[ $(grep -cx '  /usr/lib/omamobile-omarchy/lock-pam || true' omamobile-omarchy.install) == 2 ]] \
   || fail "install and upgrade write the lock's PAM file"

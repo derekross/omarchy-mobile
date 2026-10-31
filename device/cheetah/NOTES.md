@@ -83,6 +83,42 @@ port.
   [V: `result_should_continue()` in external/avb `c5066a9`]. Whether ABL
   stores the indexes while unlocked is still untested.
 
+## 2026-10-28: at 0 %, upower's critical suspend slept behind a lit lock screen and kept a charging phone flat
+
+Kernel `7.3.0-rc6-omamobile-push1-00591-gebc0cd6858ee`, omamobile-shell
+0.2.32, device-cheetah 0.1.34, Omarchy 4.0.6; the laptop's USB port (the
+charger's input limit read 500 mA).
+
+- **What it looked like:** the battery at 0 % (3.11-3.26 V) didn't climb
+  on the laptop's port, the USB link dropped and came back every few
+  minutes, and the lock screen showed a grey fingerprint that didn't work
+  until Power was pressed.
+- **The cause, from the journal:** `suspend requested from client ...
+  'upowerd'` at each drop: at 0 % upower's critical action suspended the
+  phone, also 20 s after a fresh boot. Omarchy's sleep lock
+  (`omarchy-system-sleep-lock`, under a delay inhibitor) lights the lock
+  screen and waits for it to be secure, and the sleep hook doesn't touch
+  the panel, so the phone slept with the lock screen lit: the panel holds
+  the frame, nothing behind it runs, and fprintd had already parked the
+  sensor (`Failed to install a sleep delay inhibitor: OperationInProgress`).
+  A power-key wake brought it all back, so the grey fingerprint was a
+  phone asleep, not a broken sensor.
+- **Why it didn't charge:** lit, the phone drew more than the 500 mA input
+  (battery -350 to -760 mA, status `Discharging`), asleep behind the lit
+  panel too, and every wake to check repeated it. Awake with the screen off
+  it gained +25 to +200 mA. With upower stopped and the screen off, the
+  voltage rose from 3.13 to 3.35 V in about 15 minutes while the gauge
+  still read 0 % (it counts up only above its empty voltage).
+- **Also seen:** upower warns `max77759-charger without usb_type property`;
+  with the screen lit the battery reads `Discharging` although the charger
+  is online, so upower counts the phone as on battery (SUSPEND-PLAN 6.6).
+  Quickshell used about 1.4 cores with the screen on, from an animated
+  OWL widget on the home page (the frame clock runs at 30 fps while a shown
+  widget animates; it pauses with the screen off).
+- **Fix for the lit sleep:** omamobile-omarchy 0.1.13, patch 0021: once the
+  session is secure, the sleep lock turns the display off (SUSPEND-PLAN
+  6.8). upower's action is unchanged until P7 (6.6).
+
 ## 2026-10-28: a phone whose vbmeta_b chains boot and init_boot, as stock's does, needs AVB footers on them
 
 A second Pixel 7 Pro (cheetah MP1.0 B0), installed with
