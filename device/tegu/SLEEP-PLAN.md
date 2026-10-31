@@ -317,6 +317,22 @@ with the cable in.
   storage shape of the 10-30 afternoon (which kept answering SSH from
   memory): the SoC itself is hung or down, and nothing can be read until a
   forced restart. Waiting on that to read the console from pstore.
+- **2026-10-31 morning: ten of ten cycles clean, and the console now
+  survives the freeze.** The reason every earlier hang left no kernel
+  evidence is that printk suspends the consoles at the freeze ("Suspending
+  console(s) (use no_console_suspend to debug)"), so nothing reached
+  ramoops after that line. It does not need a boot argument:
+  `/sys/module/printk/parameters/console_suspend` is writable, and `echo N`
+  into it keeps the console alive through s2idle. With that set, ten
+  30-second RTC-woken cycles on the daily boot all woke with the storage
+  counters, the ACPM timeout count and the watchdog count at zero,
+  `suspend_stats` reading `success=10 fail=0`, and the kernel log streamed
+  to the laptop for the whole run (10086 lines,
+  `logs/tegu-review-20261029/runners/13b-20261031-0807-kmsg.txt`, not
+  committed), with all ten entry and exit pairs in it and each wake showing
+  the power key and Wi-Fi host-wake disarmed again (irq 59 and irq 73).
+  So the next hang will leave its last words, which is the one thing the
+  10-30 night could not give.
 - **Read back from the afternoon's own console (2026-10-30 night, offline):
   the failing suspend was the third of its boot, not a late one.** The
   console holds nine suspend entries (387.7 s, 4746.9 s, 10798.6 s, then
