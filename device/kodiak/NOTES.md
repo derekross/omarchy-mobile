@@ -51,3 +51,14 @@ Stock facts collected and both slots restored to factory. Device descriptor in #
 - Battery technology: Li-ion, temperature ~25.5 °C (dumpsys battery)
 - LCD density: 480 (getprop ro.sf.lcd_density)
 - Display: HDR and wide color supported (getprop ro.surface_flinger.has_*)
+
+## Hardware from stock DTB (vendor_kernel_boot, 2026-11-01)
+
+- Root compatible: "google,mbu"
+- Display subsystem: verisilicon,display-subsystem + verisilicon,dc9x00 DPU
+- MIPI DSI2 hosts present (verisilicon,dc9x00-mipi-dsi2h)
+- UFS controller present (ufs@3c2d0000)
+- Edge TPU: google,edgetpu-malibu
+- AoC: google,aoc
+- PMIC: google,da9188mfd (and regulators/gpio/rtc)
+- GPU: PowerVR (confirmed earlier via getprop; no Mali nodes)
