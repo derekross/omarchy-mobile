@@ -86,7 +86,12 @@ set -uo pipefail
 
 KERNEL_DIGITAL_MAX=817
 
-STAGE=${OMAMOBILE_SPK_STAGE:-media}
+# auto (the default): c9 at the everyday loud levels below when the phone
+# has what c9 needs (aoc_alsa_dev speaker_protection=1, which device-cheetah
+# sets, and a verification stamp for this firmware: AOC-PLAN.md C9a), media
+# otherwise. Resolved once the helpers are defined (resolve_stage, below).
+STAGE=${OMAMOBILE_SPK_STAGE:-auto}
+set_stage() {
 case $STAGE in
   # media (the default): the everyday level until stock's gains are proven
   # (AOC-PLAN.md C9d-2): digital -10 dB, analog 10.5 dB on both, inside
@@ -100,13 +105,26 @@ case $STAGE in
   c9) DIGITAL_CEIL=817 ANALOG_CEIL_TOP=17 ANALOG_CEIL_BOTTOM=17 ;;
   *) DIGITAL_CEIL=0 ANALOG_CEIL_TOP=0 ANALOG_CEIL_BOTTOM=0 ;;
 esac
-analog_ceil() { [[ $1 == Top ]] && echo "$ANALOG_CEIL_TOP" || echo "$ANALOG_CEIL_BOTTOM"; }
 
 if [[ $STAGE == media ]]; then
   DIGITAL=${OMAMOBILE_SPK_DIGITAL:-737} ANALOG=${OMAMOBILE_SPK_ANALOG:-10}
+elif [[ $STAGE == c9 ]]; then
+  # The everyday loud levels (AOC-PLAN.md, "C9 with real music", 2026-10-31):
+  # stock's digital 817 on both, the bottom (the loudspeaker) at analog 14
+  # and the top (the small speaker by the earpiece) at 11. With music at full
+  # volume for 3.5 minutes both coils settled at 60-65 C (peaks 66.8 and
+  # 67.2 C), 13 C under the watchdog's 80 C backstop; at stock's 17 on both
+  # the top reached 80 C in about 4 s and the bottom after a minute or two.
+  DIGITAL=${OMAMOBILE_SPK_DIGITAL:-817} ANALOG=${OMAMOBILE_SPK_ANALOG:-14}
+  : "${OMAMOBILE_SPK_TOP_ANALOG:=11}"
 else
   DIGITAL=${OMAMOBILE_SPK_DIGITAL:-657} ANALOG=${OMAMOBILE_SPK_ANALOG:-6}
 fi
+EAR_DIGITAL_CEIL=$((DIGITAL_CEIL < 737 ? DIGITAL_CEIL : 737))
+EAR_ANALOG_CEIL=$((ANALOG_CEIL_TOP < 6 ? ANALOG_CEIL_TOP : 6))
+}
+[[ $STAGE == auto ]] || set_stage
+analog_ceil() { [[ $1 == Top ]] && echo "$ANALOG_CEIL_TOP" || echo "$ANALOG_CEIL_BOTTOM"; }
 
 # The earpiece (AOC-PLAN.md C9k): the top amplifier alone with its DSP
 # bypassed, as stock's handset path (mixer_paths.xml "handset": PCM Source
@@ -117,8 +135,6 @@ fi
 # The default 657 is 20 dB under stock's handset gain, AUDIO-PLAN section 4's
 # first-sound level: the earpiece is held at the ear, and unlike stock's path
 # nothing in front of it (no AoC handset processing) lowers the signal.
-EAR_DIGITAL_CEIL=$((DIGITAL_CEIL < 737 ? DIGITAL_CEIL : 737))
-EAR_ANALOG_CEIL=$((ANALOG_CEIL_TOP < 6 ? ANALOG_CEIL_TOP : 6))
 EAR_DIGITAL=${OMAMOBILE_SPK_EARPIECE_DIGITAL:-657}
 EAR_ANALOG=${OMAMOBILE_SPK_EARPIECE_ANALOG:-6}
 # DRE as in speaker mode unless set: stock runs it on the handset path too
@@ -735,6 +751,22 @@ earpiece() {
   set_status_ok
   log "earpiece mode off: both amplifiers through their DSPs at $(levels_text), every control at the stage's value"
 }
+
+
+# auto: c9 when the phone has what c9 needs, media otherwise (see STAGE above)
+resolve_stage() {
+  [[ $STAGE == auto ]] || return 0
+  local prot
+  prot=$(cat "$SYSMODULE/aoc_alsa_dev/parameters/speaker_protection" 2>/dev/null)
+  if [[ $prot == Y && -r $stamp && $(sed -n 's/^firmware //p' "$stamp") == "$(fw_digest 2>/dev/null)" ]]; then
+    STAGE=c9
+  else
+    STAGE=media
+  fi
+  set_stage
+  export OMAMOBILE_SPK_STAGE=$STAGE
+}
+resolve_stage
 
 case ${1:-} in
   start|restart|recover)
