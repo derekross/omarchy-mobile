@@ -18,6 +18,8 @@ install_adsp_battery() {
 	install -Dm755 adsp-battery.sh /usr/local/lib/omamobile/adsp-battery.sh
 	mountpoint -q /usr/local/lib/omamobile 2>/dev/null || return 0
 	tmp=$(mktemp -d)
+	# Undo the private bind of / on any exit or error (install may fail mid-loop).
+	trap 'umount "$tmp" 2>/dev/null; rmdir "$tmp" 2>/dev/null' EXIT
 	mount --bind / "$tmp"
 	install -Dm755 adsp-battery.sh "$tmp/usr/local/lib/omamobile/adsp-battery.sh"
 	for d in "$tmp"/usr/local/lib/omamobile.*; do
@@ -26,6 +28,7 @@ install_adsp_battery() {
 	done
 	umount "$tmp"
 	rmdir "$tmp"
+	trap - EXIT
 }
 install_adsp_battery
 
