@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# The GPU, display, haptics, torch, gauge, Bluetooth controller and NFC at boot,
+# The GPU, display, haptics, torch, gauge, Bluetooth controller, NFC and Wi-Fi at boot,
 # enabled by the vendor multi-user.target.wants link. The drivers are
 # blacklisted for autoload (modprobe.d/omamobile-tegu-guards.conf), so this
 # hang-safe script is the only thing that loads them; if a start hangs, the
@@ -8,7 +8,7 @@
 # ConditionPathExists=| lines are ORed by systemd: a DTB with the display
 # but no GPU still gets its display.
 [Unit]
-Description=Bring up the Pixel 9a GPU, display, haptics, torch, gauge, Bluetooth and NFC (hang-safe)
+Description=Bring up the Pixel 9a GPU, display, haptics, torch, gauge, Bluetooth, NFC and Wi-Fi (hang-safe)
 After=local-fs.target systemd-modules-load.service
 Before=display-manager.service
 ConditionPathExists=|/sys/bus/platform/devices/1f000000.gpu

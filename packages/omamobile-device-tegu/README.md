@@ -39,8 +39,9 @@ runs the package tests in a scratch root (`OMAMOBILE_TEGU_ROOT`), with no
 phone and no hardware.
 
 The package does not mark the boot slot successful (Derek decides how that
-works on the 9a), does not start Wi-Fi, NFC, the modem, the charger driver
-or the cameras, and carries no vendor files and no per-phone data.
+works on the 9a), does not start the modem; Wi-Fi and NFC come up from the graphics start
+when the device tree describes them, and the charger and the cameras load
+from the device tree on their own, and carries no vendor files and no per-phone data.
 
 ## What the kernel command line has to stop carrying
 

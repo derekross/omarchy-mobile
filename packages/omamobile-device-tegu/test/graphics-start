@@ -45,6 +45,8 @@ case $1 in
   leds_lm3644) mkdir -p "$TEST_ROOT/sys/class/leds/white:torch"; echo "${TORCH_LIT:-0}" > "$TEST_ROOT/sys/class/leds/white:torch/brightness" ;;
   max77779_battery) mkdir -p "$TEST_ROOT/sys/class/power_supply/max77779-battery"; echo 77 > "$TEST_ROOT/sys/class/power_supply/max77779-battery/capacity" ;;
   nxp_nci_i2c) mkdir -p "$TEST_ROOT/sys/class/nfc/nfc0" ;;
+  pcie_zumapro) mkdir -p "$TEST_ROOT/sys/bus/pci/devices/0000:01:00.0" ;;
+  brcmfmac) mkdir -p "$TEST_ROOT/sys/class/net/wlan0" ;;
 esac
 echo "$*" >> "$TEST_LOG"
 EOF
@@ -191,4 +193,15 @@ reset; out=$(FAIL_MODULE=nxp_nci_i2c "$script" || true)
 rm -f "$dt/soc/usi@10c900c0/i2c@10c90000/nfc@8/clocks"; reset; out=$("$script")
 [[ $(loads) == "$all" && $out == *"no NFC with its clock"* ]] || fail "an NFC node without clocks must be skipped: $(loads)"
 rm -rf "$dt/soc/usi@10c900c0/i2c@10c90000/nfc@8"
+# Wi-Fi: with the host node, the DMA pool and the firmware, pcie_zumapro
+# then brcmfmac load last and wlan0 counts as up; a missing endpoint skips it
+reset
+mkdir -p "$devices/13120000.pcie" "$dt/reserved-memory/wifi-dma-pool" "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/brcm"
+: > "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/brcm/brcmfmac4383-pcie.bin"
+out=$("$script")
+[[ $(loads) == "$all pcie_zumapro brcmfmac" ]] || fail "Wi-Fi load order: $(loads)"
+[[ $out == *", Wi-Fi (wlan0)"* ]] || fail "Wi-Fi summary: $out"
+reset; rm -rf "$OMAMOBILE_TEGU_ROOT/sys/bus/pci"; out=$(FAIL_MODULE=pcie_zumapro "$script" || true)
+[[ $out == *"pcie_zumapro failed"* && $(loads) != *brcmfmac* && ! -e $marker ]] || fail "a failed host load skips brcmfmac: $out"
+rm -rf "$devices/13120000.pcie" "$dt/reserved-memory" "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware" "$OMAMOBILE_TEGU_ROOT/sys/bus/pci"
 echo 'ok - graphics-start: marker first, order kept, failures skipped and named, allow_tx for google-tg4c only, --retry works'

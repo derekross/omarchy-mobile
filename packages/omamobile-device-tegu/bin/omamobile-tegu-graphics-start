@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Bring up the Pixel 9a's GPU, display, haptics, torch, battery gauge,
-# Bluetooth controller and NFC at boot, hang-safe. All seven drivers are in the kernel
+# Bluetooth controller, NFC and Wi-Fi at boot, hang-safe. All nine drivers are in the kernel
 # tree and blacklisted for autoload (modprobe.d/omamobile-tegu-guards.conf),
 # so this script is the only thing that loads them, in this order, after a
 # marker has been written and synced. Each step keys on its own device node
@@ -44,6 +44,9 @@ torch_node=$dt/soc/usi@108b00c0/i2c@108b0000/led-controller@63
 bluetooth_node=$dt/soc/usi@155d00c0/serial@155d0000/bluetooth
 nfc_node=$dt/soc/usi@10c900c0/i2c@10c90000/nfc@8
 nfc=$root/sys/class/nfc/nfc0
+wifi_pcie=$root/sys/bus/platform/devices/13120000.pcie
+wifi_pool=$dt/reserved-memory/wifi-dma-pool
+wifi_fw=$root/usr/lib/firmware/brcm/brcmfmac4383-pcie.bin
 
 log() { echo "omamobile-tegu-graphics: $*"; }
 loaded() { [[ -d $root/sys/module/$1 ]]; }
@@ -78,7 +81,7 @@ case ${1:-} in
 esac
 
 if [[ -e $marker ]]; then
-  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the GPU, display, haptics, torch, gauge, Bluetooth and NFC stay off this boot."
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the GPU, display, haptics, torch, gauge, Bluetooth, NFC and Wi-Fi stay off this boot."
   log "after checking the previous boot's log, retry with: omamobile-tegu-graphics-start --retry"
   exit 0
 fi
@@ -217,6 +220,33 @@ if enabled "$nfc_node" && [[ -e $nfc_node/clocks ]]; then
   fi
 else
   log "no NFC with its clock in this DTB; skipped"
+fi
+
+# Wi-Fi: the zumapro PCIe host for channel 1 (pcie_zumapro, whose probe
+# brings the link up), then the BCM4383 on brcmfmac. Only with the host's
+# node, the restricted DMA pool the endpoint needs, and the owner's firmware
+# (tools/extract-vendor-firmware). Never unloaded: a reboot undoes it.
+if [[ -e $wifi_pcie && -e $wifi_pool && -e $wifi_fw ]]; then
+  phase wifi
+  if ! modprobe pcie_zumapro; then
+    skip Wi-Fi "pcie_zumapro failed (see dmesg)"
+  else
+    for _ in $(seq 20); do [[ -e $root/sys/bus/pci/devices/0000:01:00.0 ]] && break; sleep 0.25; done
+    if [[ ! -e $root/sys/bus/pci/devices/0000:01:00.0 ]]; then
+      skip Wi-Fi "no Wi-Fi endpoint on the PCIe link (see dmesg)"
+    elif ! modprobe brcmfmac; then
+      skip Wi-Fi "brcmfmac failed (see dmesg)"
+    else
+      wl=
+      for _ in $(seq 60); do
+        for d in "$root"/sys/class/net/wl*; do [[ -e $d ]] && wl=${d##*/} && break; done
+        [[ -n $wl ]] && break; sleep 0.5
+      done
+      if [[ -n $wl ]]; then up+="${up:+, }Wi-Fi ($wl)"; else skip Wi-Fi "brcmfmac brought up no interface (see dmesg)"; fi
+    fi
+  fi
+else
+  log "no Wi-Fi host, DMA pool or BCM4383 firmware in this boot; skipped"
 fi
 
 finish
