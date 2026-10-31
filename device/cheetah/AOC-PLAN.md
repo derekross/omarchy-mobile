@@ -1892,6 +1892,29 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      the firmware calls VMON too low at gain 13-17 (DSP input routing, VMON
      scale or reference, the tuning's expected gain); if that finds
      nothing, the same reading on stock (slot A).
+   - **The offline comparison (2026-10-31)** found no sense-path difference
+     from Google's driver: DSP RX3/RX4 are VMON/IMON in both, RX5 VPMON,
+     RX7 TEMPMON (RX6 the known difference); `VPVBST_FS_SEL` and
+     `VIMON_SPKMON_RESYNC` both 0; the OTP trim map identical; nothing
+     gain-dependent in Google's `set_pdata`. And the firmware's temperature
+     tracks its own measured Z (25 + (Z/CAL_R - 1)/0.0039) in every run, at
+     gain 13 too, where an estimate from the tuning's expected gain would be
+     about 58 % off: **the coil is measured, closed-loop.** `BDLOG_VMON_LOW_FLAG`
+     sits in the firmware's threshold logger with the max-hold and counter
+     fields; it reads None idle and 1 from a stream's first sample to its
+     end, so whether it latches is not settled.
+   - **The readings (same day):** battery 31 C (the only thermal zone); at
+     817/17, -30 dBFS 1 kHz, the top coil 33.4 C and the bottom 29.8 C from
+     Z. The coils are warm (the phone on USB, the top nearer the SoC) and
+     the firmware starts each stream at its 25 C reference: the "jump" is
+     the move to the measured value. At 737/10 the logger gives no
+     measurement at any of 400 Hz, 1 kHz or 4 kHz at -13 dBFS (codes
+     0xffffd4-0xffffdb; the tool's filter now drops 0xffff00 and above, the
+     "2058" ratios were these codes). At 817/17, -21 dBFS: 400 Hz measures
+     (top 1.060 -> 1.087 within the burst, bottom 1.032 -> 1.044), 1 kHz
+     measures once (1.091 / 1.045) and then not, 4 kHz not at all. So
+     whether Z depends on the gain cannot be read at 737/10, and the
+     firmware measures from low-frequency content.
 
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The

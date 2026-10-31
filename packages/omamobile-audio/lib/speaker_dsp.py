@@ -1056,14 +1056,14 @@ def cmd_feedback(args):
 # then takes five samples about 0.2 s apart: RTLOG_STATE := 0, wait for it to
 # read 1, read RTLOG_DATA. Word 1 of the data is the impedance the firmware
 # measures from its voltage and current sense, in the same units as CAL_R
-# (0xfffffd and 0xfffffe: no valid measurement, e.g. a signal too low to
+# (0xffff00 and above, e.g. 0xffffd4 and 0xfffffd: no valid measurement, a signal too low to
 # measure). So Z / CAL_R is the coil's resistance relative to the factory
 # calibration: about 1.00 at room temperature, +0.39 % per degree C (copper).
 # Printed only as that ratio, never as a resistance: the calibration is this
 # phone's. Writes only the logger's own controls.
 
 RTLOG_VARIABLES = (0x39d, 0x3b3, 0x3b4)
-RTLOG_INVALID = 0xfffffd
+RTLOG_INVALID = 0xffff00   # 0xffffd4..0xfffffe seen on the phone: no measurement (2026-10-31)
 COPPER_TC = 0.0039
 
 
