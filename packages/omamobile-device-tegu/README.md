@@ -14,7 +14,7 @@ packaged yet. What is here is what runs on in-tree drivers.
 | `uwsm/env.d/omamobile-tegu-graphics` | `/usr/share/uwsm/env.d` | The session's side of the graphics start, sourced by uwsm (it walks `XDG_DATA_DIRS` too; a user's `~/.config/uwsm/env` runs after it): the KMS device from `/run/omamobile-tegu-display-card`, hardware GL when `/run/omamobile-tegu-gpu-ready.json` exists and llvmpipe otherwise, so a phone whose GPU did not come up still gets a desktop |
 | `vendor/modprobe.d/omamobile-tegu-guards.conf` | `/usr/lib/modprobe.d` | Keeps those drivers (and the Wi-Fi, PCIe and NFC ones, for the day they are in tree) from autoloading ahead of the guard. No `install` lines: they would break the guard's own modprobe |
 | `vendor/modprobe.d/omamobile-tegu-display.conf`, `omamobile-tegu-clk-acpm.conf` | `/usr/lib/modprobe.d` | 120 Hz as the ceiling and the panel really off on DPMS (the DSI commands themselves are allowed by the graphics start, for google-tg4c only); the GPU DVFS ceiling at 890 MHz |
-| `bin/omamobile-tegu-aoc-start` + `vendor/systemd/system/omamobile-tegu-aoc.service` + `vendor/modprobe.d/omamobile-tegu-aoc.conf` | `/usr/bin`, `/usr/lib/systemd/system` (not enabled), `/usr/lib/modprobe.d` | Boots the AoC (audio and sensor DSP) hang-safe: Trusty, the GSA, the AoC drivers, `aoc-tegu.bin`, then waits for its 93 services. Ships disabled: see below |
+| `bin/omamobile-tegu-aoc-start` + `vendor/systemd/system/omamobile-tegu-aoc.service` + `vendor/modprobe.d/omamobile-tegu-aoc.conf` | `/usr/bin`, `/usr/lib/systemd/system` (enabled; also `omamobile-aoc.service`), `/usr/lib/modprobe.d` | Boots the AoC (audio and sensor DSP) hang-safe: Trusty, the GSA, the AoC drivers, `aoc-tegu.bin`, waits for its 93 services, then loads the TAS2572 amplifiers. See below |
 | `bin/omamobile-bt-addr` + `vendor/systemd/system/omamobile-bt-addr@.service` + `vendor/udev/rules.d/80-omamobile-bt-addr.rules` | `/usr/bin`, `/usr/lib/systemd/system`, `/usr/lib/udev/rules.d` | Gives the BCM4383 its real Bluetooth address from the bootloader's device tree when the controller appears, powering it on once first (set on a never-powered controller, the kernel withdraws the index for good). The Pixel 7 Pro's script, with the extra waits the 9a needed |
 | `bin/omamobile-tegu-usb-rescue` + `src/tegu-tcpc-switch.c` + `vendor/systemd/system/omamobile-tegu-usb-rescue.service` | `/usr/bin`, `/usr/lib/systemd/system` (enabled by a vendor wants link) | Closes the MAX77779's USB data switch after a cable replug while no Type-C driver owns the chip; with one loaded it exits. The helper reads the chip's identity and VBUS before its one write and never forces an address a driver holds |
 | `bin/omamobile-tegu-charge-limit` + `vendor/udev/rules.d/75-omamobile-tegu-charger.rules` | `/usr/bin`, `/usr/lib/udev/rules.d` | Applies `/etc/omamobile/charge-limit` (a percentage, say `80`): charging stops there and starts again 5 below. With the kernel's `max77779-charger` driver, which has charge inhibit and no end threshold, udev runs it on every battery change and it switches `charge_behaviour` between `inhibit-charge` and `auto` by the battery's capacity. No file: charge to 100 % |
@@ -67,15 +67,17 @@ watchdog runs from boot, so a hung graphics start ends in a reset and the
 marker. The public tegu DTS carries `panic=10` but not that, so on it a
 hang that does not panic ends at the power key (held about 30 s).
 
-## The AoC start ships disabled
+## The AoC start at boot
 
 `omamobile-tegu-aoc-start` is the Pixel 7 Pro's AoC start with the 9a's
 names (`154b0000.aoc`, `aoc-tegu.bin`, 93 services, the sensors' USF
-channel through `aoc_channel_dev`). It needs a kernel whose device tree
-enables the AoC, GSA and Trusty nodes; today the bring-up turns them on
-with out-of-tree overlay modules, and so `omamobile-tegu-aoc.service` has
-no wants link. Once a kernel enables them, `systemctl enable
-omamobile-tegu-aoc.service` and reboot. A step that returns and fails is
+channel through `aoc_channel_dev`), plus the TAS2572 amplifiers once the
+AoC is online. It runs at every boot (a wants link) and answers to
+`omamobile-aoc.service`, the name the sensor proxy and the fingerprint
+service order themselves after. It needs a kernel whose device tree
+enables the AoC, GSA and Trusty nodes (the kernel branch `tegu-dt-aoc`);
+on a device tree without the AoC node the unit's condition skips it, so
+the bring-up's overlay boots are unaffected. A step that returns and fails is
 named in the journal and clears the marker (a load that came back is not a
 hang; `test/aoc-start` checks this). Only a boot that hangs in the start
 leaves the marker, and then the next boot leaves the AoC off until

@@ -43,7 +43,7 @@ loads() { grep -v '^synced$' "$TEST_LOG" | tr '\n' ' ' | sed 's/ $//'; }
 
 reset
 out=$("$script")
-[[ $(loads) == "trusty_core trusty_log trusty_ipc trusty_virtio gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev" ]] \
+[[ $(loads) == "trusty_core trusty_log trusty_ipc trusty_virtio gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev snd_soc_tas2781_i2c" ]] \
   || fail "load order: $(loads)"
 [[ $(cat "$node/firmware") == aoc-tegu.bin ]] || fail "the firmware request names aoc-tegu.bin"
 [[ ! -e $marker ]] || fail "a finished start leaves the marker"
