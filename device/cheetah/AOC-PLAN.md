@@ -1931,6 +1931,26 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    check during playback), or an intermediate stage (e.g. 817/13) is shown
    to stay under the backstop with music. The backstop stays at 80 C.
 
+   **The firmware's thermal limits (offline, 2026-10-31).** Not readable
+   offline: each tuning's algorithm-0xcd block is 1404 unlabelled YM words
+   (Cirrus "Protect Lite"; the wmfw names no YM parameters, 443 words differ
+   top/bottom), and both tunings' metadata gives `amplifier_gain` 17.5.
+   There is no live attenuation readout: ATTENUATION, REDUCE_POWER,
+   CH_BAL, CAL_AMBIENT and CSPL_ENABLE are settings; the volatile controls
+   are the temperature, state, errorno, output power, CAL_R_SELECTED and
+   the BDLOG max/count fields, the RT logger (words 0 and 2 of stock's three
+   variables unidentified) and the event logger (alg 0xf20b). Read on the
+   phone: CSPL_ENABLE 1 on both, ATTENUATION 0x7fffff (1.0), REDUCE_POWER 0,
+   EVNTLG_ENABLED 0. No host-side thermal step is missing that we can see.
+   0.5.4's +6 dB limiter drive raises music's average power over stock's.
+   **Next:** music at 817/17 for 10 s with the drive at 0, logging at 2-4 Hz
+   the temperature, BDLOG fields, all 30 RT logger words and the phone
+   microphone's level (the only direct view of attenuation); the backstop
+   stays at 80 C. A plateau below 80 C or a falling mic level at a steady
+   input means the firmware protects; otherwise an intermediate stage, or
+   one stock capture (slot A: audiometrics speaker_temp with the same
+   controls during maximum-volume music, then fresh NV backups).
+
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
    amplifiers stay at stage media (737/10) in sections A-D, so every step
