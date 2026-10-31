@@ -94,6 +94,13 @@ grep -q 'push refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "push did not refus
 [[ ! -e $t/calls ]] || fail "qcom-abl push accessed the phone"
 echo 'ok - BOOT_METHOD=qcom-abl refused by push before phone access'
 
+# Same class: fastboot refuses qcom-abl before any phone I/O (no sysrq-c).
+rm -f "$t/calls"
+if DEVICE=abldev "$t/repo/bin/omamobile" fastboot > "$t/log" 2>&1; then fail "fastboot unexpectedly accepted qcom-abl"; fi
+grep -q 'fastboot refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "fastboot did not refuse qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl fastboot accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by fastboot before phone access'
+
 # dodge-chain must refuse a stage-1 Image as STAGE2_IMAGE (nested pack → ~87MiB hang).
 cp tools/dodge-chain "$t/repo/tools/"
 # Fake "Image" carrying the stage-1 cmdline marker (strings fallback when no ikconfig).

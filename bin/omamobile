@@ -831,6 +831,12 @@ fastboot_serial() {
 
 cmd_fastboot() {
   local ssh="$ROOT/tools/phone-ssh" i
+  load_device
+  # Qualcomm ABL panic path is uncharacterized on dodge (sysrq-c fallthrough
+  # when reboot-to bootloader is ignored). Refuse before any phone I/O; use
+  # the buttons instead (see device/$DEVICE/BRINGUP-M1.md).
+  [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
+    die "fastboot refuses BOOT_METHOD=qcom-abl (panic path uncharacterized on this ABL; use the buttons — see device/$DEVICE/BRINGUP-M1.md)"
   in_fastboot && { say "Already in fastboot"; return 0; }
   for i in $(seq 1 12); do
     if adb get-state 2>/dev/null | grep -q device; then
