@@ -45,7 +45,9 @@ this audit did not reflash or inspect the phone's current partitions.
   list. The keyring payload matches the installed package's mtree in the
   recovered image; the additional key verifies the archived local device
   package. The local key therefore entered the packaged trust list, not
-  only the build environment. This does not follow the contributor-build
+  only the build environment. The rebuilt source recipe has not yet been
+  recovered; this establishes the package contents, not its exact build
+  command. This does not follow the contributor-build
   policy, and that rebuilt keyring must not be distributed as the project's
   keyring. Neither the modified keyring nor signing material is included
   in this PR. The correction for the next image is the existing
