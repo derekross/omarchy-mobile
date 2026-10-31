@@ -494,26 +494,27 @@ rm -f "$r/watch.out"
   sleep 0.3; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
 wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=0.01); WATCH_N=60 watchrun; wait
 ((rc == 1)) && muted && grep -c 'jumped 15.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 15 C jump of the estimate mutes"; }
-# C9d-8: at gain 17 the estimate reads 6-8 C high from a stream's first
-# sample. Inside the settle window an offset up to OFFSET_MAX is taken as
-# the baseline; more mutes at once; after the window the jump rule holds.
-c9settle() {  # name delay_s temp_bytes settle: the bottom's estimate goes 25 -> temp after delay
-  c9 "$1"; ((rc == 0)) || { cat "$r/out" >&2; fail "$1: start"; }
+# C9d-8: a stream's first estimates are the firmware's 25 C reference until
+# it has measured the coil, often warmer: the step to the measured value is
+# the baseline, and rises above it are held to the jump.
+c9settle() {  # name settle steps...: steps are delay_s:temp_bytes, applied in order
+  local n=$1 st=$2; shift 2; local steps=("$@")
+  c9 "$n"; ((rc == 0)) || { cat "$r/out" >&2; fail "$n: start"; }
   echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
   amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x06,0x40,0x00 >/dev/null
   rm -f "$r/watch.out"
   ( for _ in $(seq 1 100); do grep -c 'watchdog: watching' "$r/watch.out" >/dev/null 2>&1 && break; sleep 0.05; done
-    sleep "$2"; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" "$3" >/dev/null ) &
-  wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=$4)
+    for s in "${steps[@]}"; do sleep "${s%%:*}"; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" "${s#*:}" >/dev/null; done ) &
+  wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=$st)
   WATCH_N=80 watchrun; wait
 }
-c9settle c9-offset 0.2 0x00,0x08,0x40,0x00 1.5    # 25 -> 33 C in the window
-((rc == 0)) && ! muted && grep -c 'after a 1.5 s settle' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 an 8 C offset inside the settle window does not mute"; }
-c9settle c9-offset-big 0.2 0x00,0x0a,0x00,0x00 1.5    # 25 -> 40 C in the window
-((rc == 1)) && muted && grep -c 'rose 15.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 15 C rise inside the settle window mutes"; }
-c9settle c9-after 1.5 0x00,0x07,0xc0,0x00 0.4    # 25 -> 31 C after the window
+c9settle c9-step 1.5 0.2:0x00,0x0a,0x00,0x00    # 25 -> 40 C: the measured value, a step
+((rc == 0)) && ! muted && grep -c 'above the first measured estimate' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 the step from the reference to the measured coil does not mute"; }
+c9settle c9-rise 1.5 0.2:0x00,0x08,0x40,0x00 0.8:0x00,0x0a,0x40,0x00    # 25 -> 33, then 33 -> 41 C
+((rc == 1)) && muted && grep -c 'jumped 8.0 C (33.0 -> 41.0)' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a rise of 8 C above the measured value mutes"; }
+c9settle c9-cold 0.4 1.5:0x00,0x07,0xc0,0x00    # no step: the baseline at 0.4 s, then 25 -> 31 C
 ((rc == 1)) && muted && grep -c 'jumped 6.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 6 C rise after the settle window mutes"; }
-pass "watchdog: in stage c9 the jump rule settles past the gain-17 offset (C9d-8)"
+pass "watchdog: in stage c9 the jump rule starts from the measured coil (C9d-8)"
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
 mktree tmpfw; c9prep=(OMAMOBILE_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"
