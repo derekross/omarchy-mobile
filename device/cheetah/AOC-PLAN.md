@@ -1850,6 +1850,37 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    Whatever the outcome, no step above 1 s at analog 17 until a burst
    reads plausibly, and the default stays stage media.
 
+   **C9d-8 results (2026-10-31, `7.3.0-rc6-omamobile-push1-gc32dd8e2d33e`,
+   omamobile-audio 0.5.6, boost converter off at 10 and on at 17).**
+   - Step 2 at 737/10 (-23 dBFS, 3 s): CLEAN. The impedance readout came
+     out near 2048 times a plausible ratio (2058.8 top, 1946.3 bottom, all
+     four samples identical, vmon low 1): at gain 10 the logger's word is
+     not in CAL_R's units, or it is a stale value. A clue, not a reading.
+   - Stage c9 first refused (`speaker_protection` read N; the bring-up file
+     `/etc/modprobe.d/omamobile-audio-c9-bringup.conf` was gone):
+     written again, one reboot, `Y`, analog limit 17. The C9a stamp still
+     matched the firmware.
+   - Step 3 at 817/17 (-30 dBFS, 1 s): **Z/CAL_R 1.032 top (1.029-1.032),
+     1.022 bottom**, as coil rises +8.1 C and +5.7 C; the top's estimate
+     went 25.0 -> 32.4 C and the burst tool's 5 C rule tripped. A 1 s tone
+     at -30 dBFS cannot heat a coil 8 C: the firmware measures the coil 2-3 %
+     high at gain 17. Much smaller than October's 25 C with the converter
+     off at 17.
+   - The register snapshot (both amplifiers, read below 0x10100, mid-tone
+     at 737/10 and at 817/17) differs only in `AMP_GAIN_CTRL` (0x6c04, 10 ->
+     17), `PWR_CTRL2` (0x2018, the boost enable), `AMP_DIG_VOL_CTRL`
+     (0x6000, the level and the watchdog's mute) and interrupt status
+     registers (0x10014, 0x10090-0x10098). No sense-path register differs.
+     (A slow read at 817/17 delayed the watchdog, which muted with "the
+     speaker watchdog stopped"; read one register range at a time next.)
+   - **Decision (the owner, 2026-10-31):** treat the offset as a known bias
+     in the safe direction (the firmware protects early) rather than boot
+     stock to compare. omamobile-audio 0.5.7 takes the jump rule's baseline
+     after a 2 s settle and bounds the offset inside it at 12 C; the
+     temperature backstop is unchanged. Next: C9d stepping (817/13, then
+     817/17) with `SETTLE=2` bursts, watching that the estimate stays flat
+     within each burst after the settle.
+
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
    amplifiers stay at stage media (737/10) in sections A-D, so every step
