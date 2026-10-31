@@ -1118,11 +1118,36 @@ morning say why:
   (`restore_state`, the BAR0 write, the wake-irq toggle), which is the same
   shape as 10-29 and 10-30.
 
-So the avoidance needs L1.2, and L1.2 needs its own problem solved. What
-remains: why the link leaves L1.2 after minutes (CLKREQ# wiring and the
-timings this commit programs, TPowerOn 200 us, TCommon 32 us, entrance
-latency 64 us, are all worth checking against stock's), and handling an
-unexpected link-down in that state rather than dying with it. Three mistakes of
+A third run settles the timing question and corrects a guess of mine. With
+`tpoweron` raised to Google's largest value (0xfa, 3100 us) on the theory
+that the endpoint needed longer to restore its clock, the cycling did not
+stop at all: the trace counted **486 link cycles by 244 s**, and the
+console ends mid-cycle right after `PHY isolated`, which is the original
+hang. So the 200 us Google uses for this modem (0xa1) is right, and a
+longer TPowerOn makes L1.2 unusable, after which the modem goes back to
+asking for a full power-off.
+
+The three configurations, all on the same kernel and session script:
+
+| `l1ss_mask` / `tpoweron` | link cycles | result |
+| --- | --- | --- |
+| 0xf / 0xa1 (Google's) | 7 in 5 minutes | 157 of 165 GGA fixed, CP ONLINE throughout, then an unexpected LINK_DOWN at 325 s and the SoC with it |
+| 0xa / 0xa1 (no L1.2) | continuous | the original hang at 165.9 s |
+| 0xf / 0xfa (3100 us) | 486 by 244 s | the original hang |
+
+What the pin side says: CLKREQ# is described and applied. The overlay gives
+`pcie@12100000` `pinctrl-0 = <&pcie0_clkreq>, <&pcie0_perst>` under the
+name "active", and the driver selects that state before the PHY, with
+gph0-1 at function 2, pull-up, drive 3 and the same through power-down. Our
+`MSTR_PEND_SEL_NAK`, `DBI_L1_EXIT_DISABLE` ("use aux_clk in L1.2") and the
+HW L1-exit mode all match Google's. So the configuration is not obviously
+wrong, and what is left is the unexpected LINK_DOWN itself: recovering from
+it instead of dying with it, and reading the LTSSM and the endpoint's L1SS
+status at the moment it happens.
+
+Best known configuration for a GNSS session today: `l1ss_mask` 0xf,
+`tpoweron` 0xa1, set after the CP is ONLINE, which gives about five
+minutes of fixes. Three mistakes of
 mine on the way there, all worth recording: the module built for this
 palmtop must carry `google,zumapro-pcie-cp` in its match table and treat
 `samsung,sysreg` as optional (the in-tree branch has neither, so a module
