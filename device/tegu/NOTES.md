@@ -93,6 +93,38 @@ resets) and are in [MODEM-PLAN](MODEM-PLAN.md) under "G3, twenty-fourth to
 thirty-fourth tries" and "The CP link hang". Not a GNSS matter: if a boot
 with nothing but Bluetooth starting resets again at that time, start here.
 
+## 2026-10-29: the s2idle drain is the SoC floor, not the CPUs or the radios
+
+- Cable out, screen off: 311 mA awake, 302 mA asleep (two 30-minute
+  `systemctl suspend` rounds through `power-ab --suspend systemd`). The CPUs
+  sleep (timekeeping suspended for the whole of a 60 s test, one deep-state
+  entry per CPU); Bluetooth, NFC and Wi-Fi cost nothing measurable at idle.
+  What stays on is MIF, the buses and the always-on rails: there is no
+  system idle state in our kernel. `tegu-mif-sleep.ko` (MIF 421 MHz in
+  sleep) saves about 60-75 mA by the coulomb counter; a hand unit loaded it
+  at boot for one night and was disabled the next day (below).
+  Details and method in [SLEEP-PLAN](SLEEP-PLAN.md) S1.
+- `rtcwake -m freeze` written straight to `/sys/power/state` failed to wake
+  again (the second time in two days); every `systemctl suspend` after
+  `rtcwake -m no` had woken up to then. The next day showed the entry
+  path isn't the whole story (the 2026-10-30 bullet).
+- 2026-10-30: the cable-out `power-ab --suspend systemd` run with the
+  module loaded never woke from its 30-minute sleep (not from the RTC, not
+  from the power key; reset by hand), so the hand unit that loaded the
+  module at boot is disabled. The same day a cable-in 30-minute systemd
+  sleep with the module, its alarm logged as armed, woke on the alarm to
+  the second, and the afternoon's repeat of the cable-out run with the
+  module loaded by hand woke too: 273 mA awake with the screen off, 260 mA
+  asleep, about 40 mA under the figure without the module. Three sleeps
+  have never woken (two direct freezes, one systemd sleep with the module)
+  and no single factor explains them, so sleep tests stay attended and the
+  module stays off at boot; the shell's auto-sleep toggle is off on the
+  palmtop since the 2026-10-30 shell reinstall, and unattended sleep stays
+  off until the hangs below are understood.
+- The 2026-10-27 "140 mA asleep" figure doesn't hold up against 2026-10-28
+  (434-445 mA cable out, as-is) and tonight; treat about 300 mA cable out
+  as the baseline.
+
 ## 2026-10-28, evening: USB-C host mode through TCPM
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the
