@@ -94,7 +94,11 @@ v=ucm2/Google/cheetah/VoiceCall.conf
   sed -n '/SectionDevice."Earpiece"/,/^}/p' $v | sed -n '/EnableSequence/,/\]/p' | grep -c 'exec "/usr/bin/systemctl start --no-ask-password omamobile-earpiece@on.service"' >/dev/null &&
   sed -n '/SectionDevice."Earpiece"/,/^}/p' $v | sed -n '/DisableSequence/,/\]/p' | grep -c 'exec "/usr/bin/systemctl start --no-ask-password omamobile-earpiece@off.service"' >/dev/null ||
   fail "UCM: the Earpiece's enable asks for earpiece on, its disable for off"
-! grep -c 'exec\|Earpiece' ucm2/Google/cheetah/HiFi.conf >/dev/null || fail "UCM: HiFi asks for no mode"
+# HiFi asks for speaker mode only (its Speaker device, after a restart that
+# skipped the Earpiece's disable) and never for earpiece mode
+h=ucm2/Google/cheetah/HiFi.conf
+[[ $(grep -c '^[[:space:]]*exec' $h) == 1 ]] && ! grep -c 'earpiece@on' $h >/dev/null ||
+  fail "UCM: HiFi asks for speaker mode only"
 grep -c '/^omamobile-earpiece@(on|off)\\.service$/' polkit/50-omamobile-earpiece.rules >/dev/null &&
   grep -c 'action.lookup("verb") == "start"' polkit/50-omamobile-earpiece.rules >/dev/null || fail "polkit: the two earpiece units, start only"
 grep -c '^ExecStart=/usr/bin/omamobile-speaker-protection earpiece %i$' systemd/omamobile-earpiece@.service >/dev/null &&
@@ -109,8 +113,8 @@ grep -c 'string.find (stored.name, "^Voice Call")' $h >/dev/null &&
   grep -c 'before = \[ monitor.alsa \]' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null ||
   fail "WirePlumber: a stored Voice Call profile is never restored at startup"
 command -v luac >/dev/null && { luac -p wireplumber/scripts/omamobile-no-voice-call-restore.lua || fail "the WirePlumber hook parses"; }
-awk '/SectionDevice."Speaker"/,/^}/' ucm2/Google/cheetah/HiFi.conf | grep -c 'exec "/usr/bin/systemctl start --no-block --no-ask-password omamobile-earpiece@off.service"' >/dev/null ||
-  fail "HiFi's Speaker device returns the amplifiers to speaker mode"
+sed -n '/SectionDevice."Speaker"/,/^}/p' ucm2/Google/cheetah/HiFi.conf | sed -n '/EnableSequence/,/\]/p' | grep -c 'exec "/usr/bin/systemctl start --no-block --no-ask-password omamobile-earpiece@off.service"' >/dev/null ||
+  fail "UCM: HiFi's Speaker device returns the amplifiers to speaker mode"
 pass "UCM finds the PCMs by id and leaves the amplifiers alone"
 
 # --- the speaker protection service, with stand-ins ---------------------------
