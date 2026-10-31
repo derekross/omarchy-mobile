@@ -1096,8 +1096,33 @@ three boots of three). Set after the CP is ONLINE:
 | the CP | crashed 103-108 s after ONLINE when the link was held instead | ONLINE throughout |
 | fixes | about a minute's worth | 157 of 165 GGA sentences fixed at 5 minutes, still running |
 
-So the hang was never reached because the link stopped being torn down,
-which is what stock does and what the modem asks for. Three mistakes of
+So the hang was never reached, because the link stopped being torn down.
+It is not the end of the story, though, and two further runs the same
+morning say why:
+
+- **L1.2 (`l1ss_mask` 0xf, Google's value): the cycling stops and the
+  session holds for minutes, then the link drops on its own.** At 325 s the
+  console has `link down completion timeout (IRQ0/1/2 0x0 0x400
+  0x371b1000)`, with IRQ1 bit 10 (LINK_DOWN) latched, then `s51xx
+  0001:01:00.0: Unable to change power state from D0 to D3hot, device
+  inaccessible` and cpif's `Can't set D3 state!!!!`: the link was already
+  down when the orderly power-off began, so PME_Turn_Off could not
+  complete, and the SoC went with it. Our `cp_pme_turn_off()` does ask for
+  an L1 exit first, so this is the link leaving L1.2 unexpectedly rather
+  than a missing exit request. CLKREQ#, which L1.2 needs to remove the
+  reference clock, is the first thing to check on this board.
+- **L1.1 only (`l1ss_mask` 0xa): the cycling does not stop.** Without L1.2
+  the modem still asks for the link to be powered off when it goes idle, so
+  the isolate and un-isolate pairs continue and the original hang came back
+  at 165.9 s, with the console ending right after a link-up
+  (`restore_state`, the BAR0 write, the wake-irq toggle), which is the same
+  shape as 10-29 and 10-30.
+
+So the avoidance needs L1.2, and L1.2 needs its own problem solved. What
+remains: why the link leaves L1.2 after minutes (CLKREQ# wiring and the
+timings this commit programs, TPowerOn 200 us, TCommon 32 us, entrance
+latency 64 us, are all worth checking against stock's), and handling an
+unexpected link-down in that state rather than dying with it. Three mistakes of
 mine on the way there, all worth recording: the module built for this
 palmtop must carry `google,zumapro-pcie-cp` in its match table and treat
 `samsung,sysreg` as optional (the in-tree branch has neither, so a module
