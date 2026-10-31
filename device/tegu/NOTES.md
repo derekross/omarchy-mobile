@@ -17,10 +17,12 @@ Raw captures, recordings, backups and vendor files remain off repository.
 
 The receiver gets a position fix on the owner's kernel: up to 13 satellites
 used, HDOP 0.8-1.2, GPS, Galileo, BeiDou and GLONASS tracked, CHPP clean
-for about a minute per boot. Two fixes did it: spi-s3c64xx
+for about a minute per boot. One fix did it: spi-s3c64xx
 turned the channels off after clearing the packet count, which lost a few
-bits per transfer on a streaming slave (linux-omarchy-mobile#150), and the
-GNSS SPI's pins ran on the bootloader's drive 0 (#151). What ends the fix is
+bits per transfer on a streaming slave (linux-omarchy-mobile#150). A pin
+drive change (#151) was credited too and withdrawn on 10-31: at the
+bootloader's drive 0 with #150 alone, 50 of 53 fixed and every frame at bit
+offset 0 with a valid CRC. What ends the fix is
 the CP link under GNSS traffic: held up it crashes the CP 103-108 s after
 ONLINE (six boots of six), left to cycle it hangs the SoC about 170 s after
 ONLINE. Details, the configuration and the sweep in
