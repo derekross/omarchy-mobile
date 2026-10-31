@@ -26,7 +26,7 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   cp ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf "$u/conf.virt.d/aoctest.conf"
   # No card here: stand in for the card substitutions, keep the rest as is
   sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
-      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/cheetah/HiFi.conf"
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/cheetah/HiFi.conf" "$u/Google/cheetah/VoiceCall.conf"
   ucm() { ALSA_CONFIG_UCM2=$u alsaucm -c aoctest "$@" 2>&1; }
   [[ $(ucm list _verbs) == *"0: HiFi"* ]] || fail "UCM: the HiFi verb"
   out=$(ucm list _devices/HiFi)
@@ -34,6 +34,13 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucm get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM: Speaker PCM"
   [[ $(ucm get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM: Mic PCM"
   pass "UCM profile parses: HiFi with Speaker and Mic"
+  # C9k: the Voice Call verb, its Earpiece on the speaker's PCM; HiFi as before
+  [[ $(ucm list _verbs) == *"1: Voice Call"* ]] || fail "UCM: the Voice Call verb"
+  out=$(ucm list "_devices/Voice Call")
+  [[ $out == *"0: Earpiece"* && $out != *Speaker* && $out != *Mic* ]] || { echo "$out" >&2; fail "UCM: Voice Call has the Earpiece only"; }
+  [[ $(ucm get "PlaybackPCM/Earpiece/Voice Call") == *"hw:0,5" ]] || fail "UCM: the Earpiece plays on the speaker's PCM"
+  [[ $(ucm list _devices/HiFi | grep -c ':') == 2 ]] || fail "UCM: HiFi still has exactly Speaker and Mic"
+  pass "UCM profile parses: Voice Call with the Earpiece on EP6, HiFi unchanged"
   # tegu: its own long-name file in the same conf.d directory
   # The long-name file must be named exactly as alsa-ucm-conf looks it up, or
   # alsa falls back to the shared profile and cheetah's microphone list.
@@ -76,9 +83,29 @@ raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53
 [[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"
 ! grep -c "raven" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf >/dev/null || fail "cheetah's shared profile has no raven branch"
-if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/tegu/HiFi.conf ucm2/Google/raven/HiFi.conf; then
+if grep -E "cset .*(PCM Volume|PCM Source|DSP|Analog|Digital)" ucm2/Google/cheetah/HiFi.conf ucm2/Google/cheetah/VoiceCall.conf ucm2/Google/tegu/HiFi.conf ucm2/Google/raven/HiFi.conf; then
   fail "UCM touches no amplifier control"
 fi
+# C9k: the Earpiece asks the protection service for the mode, both ways;
+# HiFi asks nothing (its behaviour is unchanged); the polkit rule lets the
+# user start those two units and nothing else
+v=ucm2/Google/cheetah/VoiceCall.conf
+[[ $(sed -n '/SectionDevice."Earpiece"/,/^}/p' $v | grep -c '^[[:space:]]*exec') == 2 ]] &&
+  sed -n '/SectionDevice."Earpiece"/,/^}/p' $v | sed -n '/EnableSequence/,/\]/p' | grep -c 'exec "/usr/bin/systemctl start --no-ask-password omamobile-earpiece@on.service"' >/dev/null &&
+  sed -n '/SectionDevice."Earpiece"/,/^}/p' $v | sed -n '/DisableSequence/,/\]/p' | grep -c 'exec "/usr/bin/systemctl start --no-ask-password omamobile-earpiece@off.service"' >/dev/null ||
+  fail "UCM: the Earpiece's enable asks for earpiece on, its disable for off"
+! grep -c 'exec\|Earpiece' ucm2/Google/cheetah/HiFi.conf >/dev/null || fail "UCM: HiFi asks for no mode"
+grep -c '/^omamobile-earpiece@(on|off)\\.service$/' polkit/50-omamobile-earpiece.rules >/dev/null &&
+  grep -c 'action.lookup("verb") == "start"' polkit/50-omamobile-earpiece.rules >/dev/null || fail "polkit: the two earpiece units, start only"
+grep -c '^ExecStart=/usr/bin/omamobile-speaker-protection earpiece %i$' systemd/omamobile-earpiece@.service >/dev/null &&
+  grep -c '^Requisite=omamobile-speaker-protection.service$' systemd/omamobile-earpiece@.service >/dev/null || fail "earpiece unit: runs the script, only while the protection runs"
+grep -c '"~alsa_output.\*Earpiece.\*"' wireplumber/51-omamobile-aoc.conf >/dev/null || fail "WirePlumber: the earpiece sink's name"
+grep -c 'profile.name ~= "Voice Call"' wireplumber/scripts/omamobile-no-voice-call-restore.lua >/dev/null &&
+  grep -c 'after = "device/find-stored-profile"' wireplumber/scripts/omamobile-no-voice-call-restore.lua >/dev/null &&
+  grep -c 'event:set_data ("selected-profile", nil)' wireplumber/scripts/omamobile-no-voice-call-restore.lua >/dev/null &&
+  grep -c 'name = omamobile-no-voice-call-restore.lua, type = script/lua' wireplumber/54-omamobile-no-voice-call-restore.conf >/dev/null ||
+  fail "WirePlumber: a stored Voice Call profile is never restored at startup"
+command -v luac >/dev/null && { luac -p wireplumber/scripts/omamobile-no-voice-call-restore.lua || fail "the WirePlumber hook parses"; }
 pass "UCM finds the PCMs by id and leaves the amplifiers alone"
 
 # --- the speaker protection service, with stand-ins ---------------------------
@@ -468,6 +495,131 @@ rc=0; prep=(OMAMOBILE_SPK_ANALOG=11 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&
 check_refused_early "c8 keeps analog at 10 even with speaker_protection=1"
 pass "stage c9: stock levels only with speaker_protection=1 and a stamp for this firmware"
 
+# --- earpiece mode (AOC-PLAN C9k) -------------------------------------------------
+# The controls each mode sets, as "name=value" lines (enumerated by item index:
+# PCM Source ASP 0, DSP 1; DSP RX ASPRX1 1)
+ampstate() {
+  local p n
+  for p in Top Bottom; do
+    for n in "PCM Source" "DSP RX1 Source" "DSP RX2 Source" "DRE Switch" "HW Noise Gate Enable" "Analog PCM Volume" "Digital PCM Volume"; do
+      echo "$p $n=$(val "$p $n")"
+    done
+  done
+}
+earset() {  # the earpiece state by hand: TOP_DIGITAL TOP_ANALOG BOTTOM_DIGITAL
+  amx cset "name=Top PCM Source" ASP >/dev/null; amx cset "name=Top Analog PCM Volume" "${2:-6}" >/dev/null
+  amx cset "name=Top Digital PCM Volume" "${1:-657}" >/dev/null; amx cset "name=Bottom Digital PCM Volume" "${3:-0}" >/dev/null
+  echo earpiece > "$r/run/speaker-mode"
+}
+media() { prep=(OMAMOBILE_SPK_STAGE=media "$@"); }
+# the watchdog in the foreground, in stage media
+ewatch() { wprep=(OMAMOBILE_SPK_STAGE=media "${wprep[@]}"); watchrun; }
+
+# the watchdog's limits in earpiece mode
+media; run e-w-idle; earset; ewatch
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 657 && $(cat "$r/run/speaker-watch-mode") == earpiece ]] || { cat "$r/watch.out" >&2; fail "earpiece watchdog: the earpiece state passes, idle; the mode answered"; }
+grep -c 'earpiece mode: Top through ASP or DSP at digital <= 737, analog <= 6' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "earpiece watchdog: says its ceilings"; }
+media; run e-w-run; earset; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Bottom CSPL_STATE 1; dspset Top CAL_SET_STATUS 1
+echo '4,100,200,300' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"; echo '4,100,200,301' > "$r/fw/cirrus/cs35l41-cheetah-bottom-media-delta.txt"
+( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
+wprep=(FAKE_HB_STUCK=1 OMAMOBILE_SPK_TEMP_JUMP=5 OMAMOBILE_SPK_MEDIA_DELTA=1 FAKE_DELTA_LOG=$r/delta.log); ewatch; wait
+((rc == 0)) && ! muted && [[ ! -e $r/delta.log ]] || { cat "$r/watch.out" >&2; fail "earpiece watchdog: no DSP rule while neither DSP is audible (heartbeat, CSPL, calibration, jump, no media delta)"; }
+ewfail() {  # name, setup...: the watchdog mutes, and says $want
+  local n=$1; shift
+  media; run "$n"; earset; "$@"; ewatch
+  ((rc == 1)) && muted && grep -c -- "$want" "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" "$r/run/speaker-protection" >&2; fail "earpiece watchdog: $n mutes"; }
+}
+want='Bottom: Digital PCM Volume 1 in earpiece mode, not muted'; ewfail e-w-bottom amx cset "name=Bottom Digital PCM Volume" 1
+want='Top: Analog PCM Volume 7 above 6'; ewfail e-w-top-analog amx cset "name=Top Analog PCM Volume" 7
+want='Top: Digital PCM Volume 738 above 737'; ewfail e-w-top-digital amx cset "name=Top Digital PCM Volume" 738
+want='Bottom: PCM Source is ASP, not DSP'; ewfail e-w-bottom-asp amx cset "name=Bottom PCM Source" ASP
+want="unknown speaker mode 'loud'"; ewfail e-w-mode eval 'echo loud > "$r/run/speaker-mode"'
+mktree e-w-c8; rc=0; sp start > "$r/out" 2>&1 || rc=$?; earset 658 6 0; watchrun
+((rc == 1)) && muted && grep -c 'Top: Digital PCM Volume 658 above 657' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "earpiece watchdog: never above the stage's own digital ceiling (c8: 657)"; }
+media; run e-w-spk; amx cset "name=Top PCM Source" ASP >/dev/null; amx cset "name=Top Analog PCM Volume" 6 >/dev/null; ewatch
+((rc == 1)) && muted || fail "earpiece watchdog: the bypass without earpiece mode still mutes"
+pass "earpiece watchdog: the top within 737/6 through ASP, the bottom muted, no DSP rule; mutes on anything else, an unknown mode included"
+
+# omamobile-speaker-protection earpiece on|off with a live watchdog
+bgwatch() {
+  prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_WATCH_INTERVAL=0.05 OMAMOBILE_WATCH_GRACE=0.1 OMAMOBILE_WATCH_HB_TIMEOUT=0.3
+        OMAMOBILE_WATCH_ITERATIONS=600 "${wprep[@]}")
+  sp watch >> "$r/bgwatch.out" 2>&1 &
+  wpid=$!; prep=(); wprep=()
+  for _ in $(seq 50); do [[ -e $r/run/speaker-watch-mode ]] && break; sleep 0.1; done
+}
+stopwatch() {  # the job, the script under it and its python
+  local k=$wpid c
+  for c in $(pgrep -P "$wpid"); do k+=" $c $(pgrep -P "$c" | tr '\n' ' ')"; done
+  kill $k 2>/dev/null; wait "$wpid" 2>/dev/null || true
+}
+ear() { prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_ACK_WAIT=2 "${eprep[@]}"); rc=0; sp earpiece "$@" > "$r/ear.out" 2>&1 || rc=$?; prep=(); eprep=(); }
+eprep=()
+media; run e-on; ((rc == 0)) || { cat "$r/out" >&2; fail "earpiece: start"; }
+ampstate > "$r/speaker-state"; bgwatch; : > "$r/cset.log"
+ear on
+((rc == 0)) || { cat "$r/ear.out" "$r/bgwatch.out" >&2; fail "earpiece on succeeds"; }
+[[ $(val "Top PCM Source") == 0 && $(val "Top Analog PCM Volume") == 6 && $(val "Top Digital PCM Volume") == 657 && $(val "Top DRE Switch") == on ]] || { ampstate >&2; fail "earpiece on: the top at 657/6 through ASP, DRE on"; }
+[[ $(val "Bottom Digital PCM Volume") == 0 && $(val "Bottom PCM Source") == 1 && $(val "Bottom Analog PCM Volume") == 10 ]] || { ampstate >&2; fail "earpiece on: the bottom muted, the rest of it untouched"; }
+[[ $(val "Top DSP RX1 Source") == 1 && $(val "Top HW Noise Gate Enable") == 63 && $(val "Top DSP1 Protection cd CAL_R") == 0x00,0x00,0x20,0x00 ]] || fail "earpiece on: the DSP's routing, the gate and the calibration untouched"
+[[ $(cat "$r/cset.log") == $'Top Digital PCM Volume=0\nBottom Digital PCM Volume=0\nTop Analog PCM Volume=6\nTop PCM Source=ASP\nTop DRE Switch=on\nTop Digital PCM Volume=657' ]] || { cat "$r/cset.log" >&2; fail "earpiece on: mute, analog down, (mode taken), bypass, DRE, unmute the top last"; }
+[[ $(cat "$r/run/speaker-mode") == earpiece && $(cat "$r/run/speaker-watch-mode") == earpiece ]] || fail "earpiece on: the mode named and taken by the watchdog"
+[[ $(cat "$r/run/speaker-protection") == "ok: stage media, mode earpiece: Top 657/6 through PCM Source ASP"*"Bottom muted"*"boost converter off"* ]] || { cat "$r/run/speaker-protection" >&2; fail "earpiece on: status"; }
+sleep 0.3; [[ $(val "Top Digital PCM Volume") == 657 ]] || { cat "$r/bgwatch.out" >&2; fail "earpiece on: the watchdog accepts it"; }
+sp status | grep -c '^mode: earpiece (the watchdog enforces: earpiece)' >/dev/null || fail "earpiece: status shows the mode"
+: > "$r/cset.log"; ear on
+((rc == 0)) && [[ ! -s $r/cset.log ]] && grep -c 'already on' "$r/ear.out" >/dev/null || { cat "$r/ear.out" >&2; fail "earpiece on twice: nothing written the second time"; }
+rc=0; prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_VERIFY_SECONDS=0.2); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && grep -c 'earpiece mode' "$r/v.out" >/dev/null || fail "verify refuses in earpiece mode"
+: > "$r/cset.log"; ear off
+((rc == 0)) || { cat "$r/ear.out" "$r/bgwatch.out" >&2; fail "earpiece off succeeds"; }
+[[ $(ampstate) == "$(cat "$r/speaker-state")" ]] || { diff <(ampstate) "$r/speaker-state" >&2; fail "earpiece off: every control back at its speaker-mode value"; }
+[[ $(cat "$r/cset.log") == $'Top Digital PCM Volume=0\nBottom Digital PCM Volume=0\nTop PCM Source=DSP\nTop Analog PCM Volume=10\nTop DRE Switch=on\nTop Digital PCM Volume=737\nBottom Digital PCM Volume=737' ]] || { cat "$r/cset.log" >&2; fail "earpiece off: mute, DSP back, (mode taken), gains, unmute both last"; }
+[[ ! -e $r/run/speaker-mode && $(cat "$r/run/speaker-watch-mode") == speaker ]] || fail "earpiece off: speaker mode taken by the watchdog"
+[[ $(cat "$r/run/speaker-protection") == "ok: stage media, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog Top 737/10, Bottom 737/10, boost converter off"* ]] || { cat "$r/run/speaker-protection" >&2; fail "earpiece off: the speaker status line again"; }
+: > "$r/cset.log"; ear off
+((rc == 0)) && [[ ! -s $r/cset.log ]] && grep -c 'already off' "$r/ear.out" >/dev/null || fail "earpiece off twice: nothing written"
+eprep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=577 OMAMOBILE_SPK_EARPIECE_DRE=0); ear on
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 577 && $(val "Top DRE Switch") == off ]] || { cat "$r/ear.out" >&2; fail "earpiece on: configured level and DRE"; }
+ear off; ((rc == 0)) && [[ $(ampstate) == "$(cat "$r/speaker-state")" ]] || fail "earpiece off: DRE back on"
+sleep 0.2; grep -c 'amplifiers muted' "$r/bgwatch.out" >/dev/null && { cat "$r/bgwatch.out" >&2; fail "earpiece: the watchdog never muted through on, off and on again"; }
+# a restart in earpiece mode ends in speaker mode
+ear on; stopwatch; rc=0; prep=(OMAMOBILE_SPK_STAGE=media); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ ! -e $r/run/speaker-mode && ! -e $r/run/speaker-watch-mode && $(ampstate) == "$(cat "$r/speaker-state")" ]] || { cat "$r/out" >&2; fail "a restart in earpiece mode ends in speaker mode"; }
+pass "earpiece on/off: every control written and read back, the order safe at each step, the watchdog's answer awaited, idempotent, back to every speaker value; a restart ends in speaker mode"
+
+# refusals: nothing changes
+refused() {  # name
+  ((rc == 1)) && grep -c 'refused' "$r/ear.out" >/dev/null && [[ ! -s $r/cset.log && ! -e $r/run/speaker-mode ]] || { cat "$r/ear.out" "$r/cset.log" >&2; fail "earpiece: $1 refused, nothing changed"; }
+}
+media; run e-ref; bgwatch
+: > "$r/cset.log"; eprep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=738); ear on; refused "digital above 737"
+eprep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=0); ear on; refused "digital 0"
+eprep=(OMAMOBILE_SPK_EARPIECE_ANALOG=7); ear on; refused "analog above 6"
+eprep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=6x); ear on; refused "a level that is no number"
+eprep=(OMAMOBILE_SPK_EARPIECE_DRE=yes); ear on; refused "a DRE that is not 0 or 1"
+eprep=(OMAMOBILE_SPK_DIGITAL=800); ear on; refused "speaker levels above the stage's"
+eprep=(OMAMOBILE_SPK_BOOST=1); ear on; refused "OMAMOBILE_SPK_BOOST=1 with the converter off"
+ear sideways; ((rc == 2)) || fail "earpiece: an unknown request"
+stopwatch
+prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_BOOST=1); run e-boost; bgwatch; : > "$r/cset.log"
+ear on; refused "the boost converter left on (needs a rebind)"
+grep -c 'needs the boost converter off' "$r/ear.out" >/dev/null || fail "earpiece: says why the boost refuses"
+eprep=(OMAMOBILE_SPK_BOOST=1); ear on; ((rc == 0)) && [[ $(val "Top PCM Source") == 0 ]] || { cat "$r/ear.out" >&2; fail "earpiece: OMAMOBILE_SPK_BOOST=1 accepts the converter on"; }
+stopwatch
+prep=(OMAMOBILE_SPK_STAGE=c8 OMAMOBILE_SPK_EARPIECE_DIGITAL=658); run e-c8; : > "$r/cset.log"
+rc=0; prep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=658); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
+refused "stage c8: digital above 657"
+media; run e-muted; sp mute >/dev/null; : > "$r/cset.log"; ear on; refused "after a mute (status not ok)"
+media; run e-marker; touch "$r/state/speaker-protection-started"; : > "$r/cset.log"; ear on; refused "with a hang marker"
+media; run e-health; kmsg "$(uptime_now) + 100" 'cs35l41 spi6.1: CSPL Error Detected'; : > "$r/cset.log"; ear on; refused "an amplifier error since the start"
+grep -c 'CSPL Error Detected' "$r/ear.out" >/dev/null || fail "earpiece: names the health problem"
+media; run e-off-muted; sp mute >/dev/null; : > "$r/cset.log"; ear off; refused "off after a mute"
+media; run e-nowatch; : > "$r/cset.log"; ear on
+((rc == 1)) && muted && [[ $(cat "$r/run/speaker-protection") == "muted: earpiece: the watchdog did not take earpiece mode"* && $(val "Top PCM Source") == 1 ]] || { cat "$r/ear.out" >&2; fail "earpiece on without a watchdog: both muted, the DSP never bypassed"; }
+pass "earpiece: refuses levels above the ceilings, a boost converter left on, a stopped, unhealthy or half-started protection; without a watchdog both stay muted"
+
 # status, health and mute
 r=$tmp/run.ok
 out=$(sp status)
@@ -539,6 +691,30 @@ assert g('mtx_t') == {'Gain 1': 1, 'Gain 2': 0} and g('mtx_b') == {'Gain 1': 0, 
 assert g('pre_t') == {'Gain 1': 1, 'Gain 2': 0, 'Gain 3': 0}, 'bassmono and harmonics off (top)'
 assert g('pre_b') == {'Gain 1': 1, 'Gain 2': 0, 'Gain 3': 0, 'Gain 4': 0}, 'bassmono and harmonics off (bottom)'
 PY
+# C9k: the filter's output never falls back to another sink (on the phone it
+# followed the default into the Earpiece sink once the speaker sink was gone).
+# WirePlumber 0.5's find-filter-target only stops at node.dont-fallback, and
+# destroys the filter unless node.linger is set; a defined target
+# (target.object) or node.dont-reconnect destroyed it at start.
+python3 - "$conf" <<'PY' || fail "filter: no fallback to another sink when the speaker sink is gone (C9k)"
+import re, sys
+s = re.sub(r'#[^\n]*', '', open(sys.argv[1]).read())
+pb = re.search(r'playback\.props = \{([^}]*)\}', s).group(1)
+assert 'node.name = "effect_output.omamobile_speaker_loudness"' in pb
+for k in ('node.passive', 'node.dont-fallback', 'node.linger'):
+    assert re.search(re.escape(k) + r' = true\b', pb), k
+for k in ('target.object', 'node.target', 'node.dont-reconnect'):
+    assert k not in pb, k
+cap = re.search(r'capture\.props = \{(.*?)\n            \}', s, re.S).group(1)
+assert 'filter.smart = true' in cap and 'filter.smart.target = {' in cap
+assert not re.search(r'filter\.smart\.(disabled|targetable) = true', s)
+# the same guard for a copy saved by an older omamobile-speaker-eq
+rules = re.search(r'^stream\.rules = \[(.*?)^\]', s, re.S | re.M).group(1)
+assert 'matches = [ { node.name = "effect_output.omamobile_speaker_loudness" } ]' in rules
+assert re.search(r'update-props = \{ node\.dont-fallback = true node\.linger = true \}', rules)
+assert s.index('stream.rules') < s.index('context.modules'), 'outside the conditional module'
+PY
+pass "filter: smart, in front of the speaker sink only, never falls back to the earpiece (C9k)"
 ln -sf "$here/test/fake-pw" "$fake/pw-dump"; ln -sf "$here/test/fake-pw" "$fake/pw-cli"
 ln -sf "$here/test/fake-pw" "$fake/wpctl"; ln -sf "$here/test/fake-pw" "$fake/pw-play"; ln -sf "$here/test/fake-pw" "$fake/pw-record"
 pwt=$tmp/pw; mkdir -p "$pwt"
@@ -706,8 +882,12 @@ for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-s
          usr/share/wireplumber/wireplumber.conf.d/52-omamobile-tegu-aoc.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/google,raven-aoc-snd-card.conf usr/share/alsa/ucm2/Google/raven/HiFi.conf \
          usr/share/wireplumber/wireplumber.conf.d/53-omamobile-raven-aoc.conf \
+         usr/share/wireplumber/wireplumber.conf.d/54-omamobile-no-voice-call-restore.conf \
+         usr/share/wireplumber/scripts/omamobile-no-voice-call-restore.lua \
          usr/share/pipewire/pipewire.conf.d/60-omamobile-speaker-loudness.conf usr/bin/omamobile-speaker-eq \
-         usr/lib/omamobile-audio/speaker_response.py usr/lib/systemd/user/omamobile-speaker-orient.service; do
+         usr/lib/omamobile-audio/speaker_response.py usr/lib/systemd/user/omamobile-speaker-orient.service \
+         usr/lib/systemd/system/omamobile-earpiece@.service usr/share/polkit-1/rules.d/50-omamobile-earpiece.rules \
+         usr/share/alsa/ucm2/Google/cheetah/VoiceCall.conf; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done
 [[ -z $(find "$tmp/root" -path '*wants*') ]] || fail "install enables nothing"
