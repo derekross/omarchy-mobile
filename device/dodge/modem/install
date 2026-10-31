@@ -1,0 +1,46 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Run as root on the phone from device/dodge/modem. Installs the modem helper
+# and units, the ModemManager drop-in and udev rule, and enables them. They do nothing unless
+# /etc/omamobile/modem-probe.enable exists. Needs: /usr/local/bin/rmtfs and
+# tqftpserv (built from linux-msm git), qcom_rmtfs_mem.ko, the EFS copies.
+set -eu
+cd "$(dirname "$0")"
+for f in /usr/local/bin/rmtfs /usr/local/bin/tqftpserv /usr/local/lib/omamobile/modem/qcom_rmtfs_mem.ko; do
+	[ -e "$f" ] || { echo "missing $f" >&2; exit 1; }
+done
+install -Dm755 omamobile-modem /usr/local/lib/omamobile/modem/omamobile-modem
+
+# Install adsp-battery into the live path, and when that path is a bind
+# (omamobile-kmod-overlay), also into the real rootfs via a private bind of /
+# plus every omamobile.* tree so tip RAM (no bind) sees the tip-aware script.
+install_adsp_battery() {
+	install -Dm755 adsp-battery.sh /usr/local/lib/omamobile/adsp-battery.sh
+	mountpoint -q /usr/local/lib/omamobile 2>/dev/null || return 0
+	tmp=$(mktemp -d)
+	mount --bind / "$tmp"
+	install -Dm755 adsp-battery.sh "$tmp/usr/local/lib/omamobile/adsp-battery.sh"
+	for d in "$tmp"/usr/local/lib/omamobile.*; do
+		[ -d "$d" ] || continue
+		install -Dm755 adsp-battery.sh "$d/adsp-battery.sh"
+	done
+	umount "$tmp"
+	rmdir "$tmp"
+}
+install_adsp_battery
+
+install -Dm644 omamobile-adsp-battery.service /etc/systemd/system/omamobile-adsp-battery.service
+systemctl enable omamobile-adsp-battery.service || true
+install -Dm644 78-omamobile-mm-fake-net.rules /etc/udev/rules.d/78-omamobile-mm-fake-net.rules
+install -Dm600 omamobile-cellular.nmconnection /etc/NetworkManager/system-connections/omamobile-cellular.nmconnection
+install -Dm644 ModemManager-omamobile.conf /etc/systemd/system/ModemManager.service.d/omamobile.conf
+for u in omamobile-modem-efs omamobile-rmtfs omamobile-tqftpserv omamobile-modem omamobile-modem-online omamobile-mm-netport; do
+	install -Dm644 "$u.service" "/etc/systemd/system/$u.service"
+done
+systemctl daemon-reload
+nmcli connection reload || true
+udevadm control --reload
+systemctl unmask ModemManager.service
+systemctl enable omamobile-modem-efs.service omamobile-modem-online.service omamobile-rmtfs.service omamobile-tqftpserv.service omamobile-modem.service \
+	omamobile-mm-netport.service ModemManager.service
+echo "installed; active only with /etc/omamobile/modem-probe.enable"

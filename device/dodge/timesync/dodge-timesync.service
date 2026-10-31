@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+# User unit on the host: sync the dodge's clock over the USB link.
+# Install: copy both units to ~/.config/systemd/user/, set the path below,
+# then run systemctl --user enable --now dodge-timesync.timer
+[Unit]
+Description=Set the dodge phone's clock from this host
+
+[Service]
+Type=oneshot
+ExecStart=%h/Repos/omarchy-mobile/tools/dodge-timesync

@@ -1,0 +1,23 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Install the msm display load at boot on the phone. Run as root, from
+# this directory (copied to the phone), or with the directory as $1.
+# Idempotent. Installs omamobile-display-msm (script and unit) and
+# display-try, and enables the unit; it does not start it (one load per
+# boot, the next boot loads it). msm.ko and the panel module in
+# /usr/local/lib/omamobile/display are installed separately.
+# Off switch: touch /etc/omamobile/display-msm.disable
+set -eu
+SRC=${1:-$(dirname "$0")}
+log() { echo "dodge-display-install: $*"; }
+[ "$(id -u)" = 0 ] || { log "run as root"; exit 1; }
+install -D -m 755 "$SRC/omamobile-display-msm" /usr/local/sbin/omamobile-display-msm
+install -D -m 644 "$SRC/omamobile-display-msm.service" /etc/systemd/system/omamobile-display-msm.service
+install -D -m 755 "$SRC/display-try" /usr/local/sbin/display-try
+systemctl daemon-reload
+systemctl enable omamobile-display-msm.service
+for f in msm.ko panel-aa569-p-3-a0019-dsc.ko; do
+	[ -f "/usr/local/lib/omamobile/display/$f" ] || log "warning: /usr/local/lib/omamobile/display/$f missing"
+done
+[ -e /etc/omamobile/display-msm.disable ] && log "note: disabled by /etc/omamobile/display-msm.disable"
+log "done; the next boot loads msm"

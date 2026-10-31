@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=ADSP and PMIC battery manager
+After=local-fs.target omamobile-kmod-overlay.service
+ConditionPathExists=/lib/firmware/qcom/sm8750/OnePlus/adsp.mbn
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/omamobile/adsp-battery.sh
+TimeoutStartSec=40
+
+[Install]
+WantedBy=multi-user.target

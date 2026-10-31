@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# openssh 10.6p1-2 does not ship this. Without the user, sshd-session
+# exits and a locked root never gets as far as the authorized key.
+u sshd - "Privilege separation user" /usr/share/empty.sshd

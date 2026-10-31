@@ -441,6 +441,17 @@ Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, tools at `7310
 
 Packages: hyprland 0.56.2-5.1, libcamera 0.7.2-4.16, mesa 1:26.2.4-1.4, omacam 0.1.9-1, omamobile-apps 0.2.0-1, omamobile-audio 0.4.1-1, omamobile-device-tegu 0.1.0-1, omamobile-fingerprint 0.1.8-1, omamobile-firstboot 0.1.0-1, omamobile-gnss 0.2.1-1, omamobile-keyring 20261013-1, omamobile-mirror 0.1.1-1, omamobile-modem 0.1.4-1, omamobile-omarchy 0.1.4-1, omamobile-owl-widgets 0.1.1-1, omamobile-sensors 0.2.0-1, omamobile-shell 0.2.17-1, omarchy 4.0.6-1, quickshell 0.3.2.r7.g2b4501a-1
 
+## 2026-10-25: display scale 8/3
+
+On the reference 9a (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, 1080x2424 panel at
+60 Hz), the owner compared the bring-up's scale 2 (540x1212 logical) with
+8/3 (405x909) on the running desktop, side by side with an iPhone, and kept
+8/3: "about right", about a third larger than 2. Hyprland reported no config
+errors, and running apps fit. 3 (360x808) is the Pixel 7 Pro's default and
+too small here. omamobile-shell 0.2.35 makes 8/3 the scale a new 9a user
+gets (`omamobile-setup-user`, seeded once), so it's the default for every
+new 9a install, not only this one; a user's own scale is kept.
+
 ## 2026-10-24: local curated candidate
 
 [V] A later candidate, `7.3.0-rc6-omamobile-tegu-g7e457a96fc45`, reaches
@@ -657,7 +668,7 @@ stock-B Android boot is not claimed.
 | Root and CPUs | Arch on internal ext4 userdata, systemd/SDDM/UWSM/logind, CPU0-7 online. KVM disabled. |
 | Protection | Whole main-LUN node absent; only five B boot partitions and userdata writable; protected partitions read-only; per-boot guard and watchdog checks pass. |
 | USB | NCM, ACM and root SSH over the connected cable. |
-| Display | Bootloader framebuffer through simpledrm, 1080x2424, scale 2. Reported 60 Hz is not an independently measured panel rate. |
+| Display | Bootloader framebuffer through simpledrm, 1080x2424, then scale 2 (first light). Scale 8/3 since 2026-10-25, see that entry. Reported 60 Hz is not an independently measured panel rate. |
 | Touch | Synaptics S3908 TouchComm v1: taps, long press, launcher, quick settings and all four swipe directions physically exercised by the owner. |
 | GPU | Mali-G715 MC7: Panthor initialization, system Mesa GLES3.1 color readback, actual Hyprland/shell GPU rendering and automatic startup after local reboot. |
 

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Before rmtfs: refuse to start the modem without an IPA data path, snapshot
+# the copies as the previous boot left them (rotated auto-* snapshots), then
+# restore the named good set from /etc/omamobile/modem-efs-good. Copies only:
+# /var/lib/omamobile/modem-efs, never a partition. A failure here keeps rmtfs
+# and the MPSS down for this boot.
+[Unit]
+Description=dodge modem EFS copies: snapshot and restore the good set
+ConditionPathExists=/etc/omamobile/modem-probe.enable
+ConditionPathExists=/etc/omamobile/modem-efs-good
+After=omamobile-adsp-battery.service
+Before=omamobile-rmtfs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=180
+ExecStart=/usr/local/lib/omamobile/modem/omamobile-modem efs-prepare
+
+[Install]
+WantedBy=multi-user.target

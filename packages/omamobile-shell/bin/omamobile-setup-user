@@ -100,9 +100,13 @@ if omarchy-done ensure omamobile-credential-type; then
   fi
 fi
 
-# Phone scale: 1440x3120 at 3 is 480x1040 logical, seeded once
+# Phone scale, seeded once: the Pixel 7 Pro's 1440x3120 at 3 is 480x1040
+# logical; the Pixel 9a's 1080x2424 at 8/3 is 405x909, its owner's choice
+# (device/tegu NOTES, 2026-10-25). monitors.lua is Lua, so 8 / 3 is a value.
+scale=3
+tr -d '\0' < "${OMAMOBILE_DT:-/proc/device-tree}/compatible" 2>/dev/null | grep -c 'google,zumapro-tegu' >/dev/null && scale='8 \/ 3'
 if omarchy-done ensure omamobile-monitor-scale; then
-  sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
+  sed -i "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $scale/" ~/.config/hypr/monitors.lua
 fi
 # ...and GDK_SCALE to match (TOUCH-PLAN 2.8): at Omarchy's 2, X11 GTK apps
 # (xwayland force_zero_scaling) drew at two thirds of the size of the rest.
@@ -166,14 +170,25 @@ if omarchy-done ensure omamobile-suspend-off; then
   touch ~/.local/state/omarchy/toggles/suspend-off
 fi
 
-# Phone window rules (apps fill the screen instead of floating at desktop
-# sizes), loaded after Omarchy's defaults from the user's override file, once.
+# Phone window and layer rules (apps fill the screen instead of floating at
+# desktop sizes; the fingerprint target, the keyboard and the call card draw
+# above the lock), loaded after Omarchy's defaults from the user's override
+# file, once. Omarchy's hyprland.lua requires looknfeel.lua, so the dofile
+# goes there; a hyprland.lua of the user's own that never loads looknfeel.lua
+# (a bring-up gate, say) gets it appended directly, or the rules would never
+# run and the fingerprint target would sit under the lock, unseen.
 if omarchy-done ensure omamobile-phone-rules; then
-  cat >>~/.config/hypr/looknfeel.lua <<LUA
+  phone_rules_target=~/.config/hypr/looknfeel.lua
+  if [[ -f ~/.config/hypr/hyprland.lua ]] && ! grep -q 'looknfeel' ~/.config/hypr/hyprland.lua; then
+    phone_rules_target=~/.config/hypr/hyprland.lua
+  fi
+  if ! grep -qs 'hypr/phone\.lua' ~/.config/hypr/*.lua; then
+    cat >>"$phone_rules_target" <<LUA
 
 -- Omarchy Mobile: phone window rules
 dofile("$share/hypr/phone.lua")
 LUA
+  fi
 fi
 
 # Chromium's first-run dialogs are desktop-sized: their buttons land off a

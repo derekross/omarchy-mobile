@@ -1,0 +1,97 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Bring up Bluetooth on the WCN7860 (peach) once per boot: load the
+# Bluetooth stack and hci_uart, wait for hci0, and give it a public
+# address so it leaves the "unconfigured" state.
+#
+# Prefer modprobe so a tip Image with a tmpfs modules overlay gets
+# matching kos. Fall back to /usr/local/lib/omamobile/bt (and
+# /usr/local/lib/omamobile) for the packaged held tree.
+#
+# hci_qca powers the chip through the WCN7850 power sequencer that
+# omamobile-wifi-pcie loads, downloads qca/gngbtfw20.mbn and
+# qca/gngbtnv20.bin, and then waits for an address.
+#
+# The real BD address lives in the persist partition, which we never
+# read. Instead this uses a random address generated once on this phone
+# and kept in /var/lib/omamobile/bt-public-addr (mode 600, never
+# committed). The first octet is 0x02 (locally administered).
+set -u
+D=/usr/local/lib/omamobile/bt
+W=/usr/local/lib/omamobile
+STAMP=/run/omamobile-bt.tried
+ADDR=/var/lib/omamobile/bt-public-addr
+
+log() { echo "omamobile-bt: $*"; }
+
+if [ -e "$STAMP" ]; then
+	log "already tried this boot ($STAMP)"
+	exit 0
+fi
+: > "$STAMP"
+
+load() {
+	name=$(echo "$1" | tr - _)
+	[ -e "/sys/module/$name" ] && return 0
+	if modprobe "$name" 2>/dev/null; then
+		return 0
+	fi
+	hyphen=$(echo "$name" | tr _ -)
+	for f in "$D/$name.ko" "$D/$hyphen.ko" "$W/$name.ko" "$W/$hyphen.ko"; do
+		[ -f "$f" ] && { insmod "$f" && return 0; }
+	done
+	[ -e "/sys/module/$name" ]
+}
+
+# kpp is a module on 7.3 and built in on 6.16 (no file there).
+if [ -f "$D/kpp.ko" ] || modprobe -n kpp 2>/dev/null; then
+	load kpp || log "kpp failed to load"
+fi
+for m in rfkill ecc ecdh_generic bluetooth btqca btbcm hci_uart; do
+	load "$m" || { log "$m failed to load"; exit 1; }
+done
+
+# hci0 is registered before hci_qca has downloaded the firmware (about
+# 1.5 s), so its sysfs node is not the signal. Wait until mgmt reports
+# it either as a configured controller or as unconfigured with a
+# missing public address.
+state=
+i=0
+while [ $i -lt 60 ]; do
+	if btmgmt info 2>/dev/null | grep -q '^hci0:.*Primary controller'; then
+		state=configured
+		break
+	fi
+	if btmgmt -i 0 config 2>/dev/null |
+	   grep -q 'missing options:.*public-address'; then
+		state=needs-address
+		break
+	fi
+	sleep 0.5
+	i=$((i + 1))
+done
+case $state in
+configured)
+	log "hci0 configured"
+	exit 0 ;;
+needs-address) ;;
+*)
+	log "hci0 did not finish setup in 30 s"
+	exit 1 ;;
+esac
+
+if [ ! -s "$ADDR" ]; then
+	mkdir -p "${ADDR%/*}"
+	(umask 077
+	 od -An -N5 -tx1 /dev/urandom |
+		awk '{ printf "02:%s:%s:%s:%s:%s\n", $1, $2, $3, $4, $5 }' |
+		tr a-f A-F > "$ADDR")
+	log "generated a new public address in $ADDR"
+fi
+chmod 600 "$ADDR"
+if btmgmt -i 0 public-addr "$(cat "$ADDR")" >/dev/null 2>&1; then
+	log "hci0 public address set from $ADDR"
+else
+	log "setting the public address failed"
+	exit 1
+fi

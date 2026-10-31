@@ -1,0 +1,109 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Run the real builder with a small container stand-in: device namespaces,
+# concurrent builds and failed-build cleanup, without an ARM image build.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for tool in zstd flock; do command -v "$tool" >/dev/null || { echo "skip: no $tool"; exit 0; }; done
+fail() { echo "not ok - $*" >&2; exit 1; }
+t=$(mktemp -d)
+pid=""
+cleanup() { touch "$t/release"; [[ -z $pid ]] || wait "$pid" 2>/dev/null || true; rm -rf "$t"; }
+trap cleanup EXIT
+R=$t/repo
+mkdir -p "$R/tools/lib" "$R/tests" "$R/out/repo/aarch64" "$t/bin" "$t/kernel/include/config"
+cp tools/build-rootfs tools/make-bundle tools/install-phone "$R/tools/"
+touch "$R/out/repo/aarch64/omamobile.db" "$t/kernel/modules-fixture.tar.zst" "$t/alarm.tar"
+echo fixture > "$t/kernel/include/config/kernel.release"
+for device in first second; do
+  mkdir -p "$R/device/$device"
+  printf 'PACKAGE=omamobile-device-%s\nCODENAME=%s\nNAME="%s"\nBOOT_IMAGES="boot"\n' "$device" "$device" "$device" > "$R/device/$device/device.conf"
+done
+cat > "$R/tools/lib/alarm.sh" <<'EOF'
+alarm_die() { echo "$*" >&2; exit 1; }
+alarm_say() { echo "$*"; }
+alarm_fetch() { :; }
+alarm_build_image() { echo fixture; }
+EOF
+cat > "$t/bin/git" <<'EOF'
+#!/bin/sh
+if [ "$1" = rev-parse ]; then echo fixture; fi
+EOF
+cat > "$t/bin/docker" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+[[ $1 == run ]] || exit 0
+work="" device=""
+while (($#)); do
+  case $1 in
+    -v) [[ $2 != *:/out ]] || work=${2%:/out}; shift ;;
+    -e) [[ $2 != DEVICE=* ]] || device=${2#DEVICE=}; shift ;;
+  esac
+  shift
+done
+[[ -n $work && -n $device ]]
+if [[ ${BLOCK_BUILD:-0} == 1 ]]; then
+  touch "$T/ready"
+  for ((i=0; i<100; i++)); do
+    [[ ! -e $T/release ]] || break
+    sleep 0.1
+  done
+  [[ -e $T/release ]]
+fi
+[[ ${FAIL_BUILD:-0} != 1 ]] || exit 1
+printf '%s\n' "$device" > "$work/rootfs.img"
+printf 'device: %s\n' "$device" > "$work/MANIFEST"
+EOF
+cat > "$R/tests/rootfs-smoke" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+[[ ${FAIL_SMOKE:-0} != 1 ]] || exit 1
+zstd -qt "$1"
+[[ -s ${1%.img.zst}.MANIFEST ]]
+EOF
+chmod +x "$t/bin/"* "$R/tests/rootfs-smoke"
+export T=$t PATH="$t/bin:$PATH" KERNEL_OUT=$t/kernel ALARM_CACHE=$t/cache ALARM_TARBALL=$t/alarm.tar OMARCHY_CHANNEL=stable
+build() { DEVICE=$1 "$R/tools/build-rootfs" --version fixture "${@:2}"; }
+BLOCK_BUILD=1 build first > "$t/first.log" 2>&1 & pid=$!
+for ((i=0; i<100; i++)); do [[ ! -e $t/ready ]] || break; sleep 0.05; done
+[[ -e $t/ready ]] || { cat "$t/first.log"; fail "first build reached the container"; }
+if build first > "$t/duplicate.log" 2>&1; then fail "concurrent builds of one artifact are refused"; fi
+grep -q 'already building' "$t/duplicate.log" || { cat "$t/duplicate.log"; fail "names the conflicting build"; }
+build second > "$t/second.log" 2>&1 || { cat "$t/second.log"; fail "another device can build concurrently"; }
+touch "$t/release"
+wait "$pid" || { cat "$t/first.log"; fail "first build completes"; }; pid=""
+for device in first second; do
+  image=$R/out/omamobile-rootfs-$device-fixture-aarch64.img.zst
+  [[ $(zstd -qdc "$image") == "$device" ]] || fail "distinct $device image"
+  (cd "$R/out" && sha256sum -c "${image##*/}.sha256") >/dev/null
+done
+echo 'ok - different devices build concurrently; duplicate device/version is locked'
+
+before=$(sha256sum "$R/out/omamobile-rootfs-first-fixture-aarch64.img.zst")
+if FAIL_BUILD=1 build first > "$t/failed.log" 2>&1; then fail "container failure propagates"; fi
+if FAIL_SMOKE=1 build first > "$t/failed.log" 2>&1; then fail "smoke failure propagates"; fi
+[[ $(sha256sum "$R/out/omamobile-rootfs-first-fixture-aarch64.img.zst") == "$before" ]] || fail "failed rebuild preserves published image"
+[[ -z $(find "$R/out" -maxdepth 1 -type d -name '.omamobile-rootfs-*') ]] || fail "temporary build directories are removed"
+echo 'ok - failed rebuild preserves the previous image and removes only its own work'
+
+mkdir -p "$R/keys/first" "$R/out/first/repo/aarch64"
+touch "$R/keys/first/public.asc" "$R/out/first/repo/aarch64/omamobile.db"
+build first --local first > "$t/local.log" 2>&1 || { cat "$t/local.log"; fail "local build"; }
+[[ $(zstd -qdc "$R/out/first/omamobile-rootfs-first-fixture-aarch64.img.zst") == first ]] || fail "local image remains under out/first"
+echo 'ok - --local keeps its device repository and output directory'
+
+# Bundling must select this device even when another device sorts later.
+mkdir -p "$t/kernel/images" "$R/packages/omamobile-keyring"
+echo first > "$t/kernel/images/DEVICE"
+echo boot > "$t/kernel/images/boot.img"
+echo public-key > "$R/packages/omamobile-keyring/omamobile.gpg"
+bundle() { DEVICE=first "$R/tools/make-bundle" --unsigned --version fixture "$@"; }
+bundle > "$t/bundle.log" 2>&1 || { cat "$t/bundle.log"; fail "bundling selects this device's image"; }
+image=omamobile-rootfs-first-fixture-aarch64.img.zst
+digest=$(sha256sum < "$R/out/$image" | cut -d' ' -f1)
+grep -Fxq "root image: $image ($digest)" "$R/out/bundle/omamobile-first-fixture/MANIFEST" || fail "bundle records the selected image and its actual digest"
+if bundle --rootfs "$R/out/omamobile-rootfs-second-fixture-aarch64.img.zst" > "$t/bundle.log" 2>&1; then fail "bundling refuses another device's image"; fi
+echo bad-checksum > "$R/out/$image.sha256"
+if bundle > "$t/bundle.log" 2>&1; then fail "bundling refuses stale image checksum"; fi
+grep -q "doesn't match its .sha256" "$t/bundle.log" || { cat "$t/bundle.log"; fail "bundling identifies the stale checksum"; }
+echo 'ok - bundles select matching-device images and record verified bytes'

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# dodge speaker audio at boot: FastRPC audio PD, q6apm, the amplifiers and
+# the DT sound card, then the MultiMedia1 -> speakers route.
+[Unit]
+Description=dodge speaker audio bring-up
+Requires=omamobile-adsp-battery.service
+After=omamobile-adsp-battery.service systemd-udev-settle.service systemd-modules-load.service omamobile-kmod-overlay.service
+ConditionPathExists=/usr/local/lib/omamobile/audio-bringup.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/omamobile/audio-bringup.sh
+ExecStartPost=/usr/bin/amixer -q -c OnePlusdodge cset name="SECONDARY_MI2S_RX Audio Mixer MultiMedia1" 1
+ExecStartPost=/usr/bin/amixer -q -c OnePlusdodge cset name="Left Amp Volume" 703
+ExecStartPost=/usr/bin/amixer -q -c OnePlusdodge cset name="Right Amp Volume" 703
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
