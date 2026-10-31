@@ -68,10 +68,12 @@ ln -s "$t/i2c/platform/soc@0/10d60000.i2c/i2c-6" "$t/devices/i2c-6"
 sed -e "s|/etc/omamobile-|$t/etc/omamobile-|g" \
     -e "s|/proc/device-tree/compatible|$t/compatible|" \
     -e "s|/lib/modules/omamobile|$t/mod|g" \
+    -e "s|/usr/local/bin/module-load-once|$t/bin/module-load-once|g" \
     -e "s|/sys/bus/i2c/devices|$t/devices|" \
     -e 's|( while sleep 2; do usb_switch quiet; done ) &|:|' \
     "$t/fn.sh" > "$t/fn-test.sh"
 printf '#!/bin/sh\necho "insmod $*" >> "%s/hw.log"\n' "$t" > "$t/bin/insmod"
+printf '#!/bin/sh\necho "module-load-once $*" >> "%s/hw.log"\nexit "${MODULE_LOAD_STATUS:-0}"\n' "$t" > "$t/bin/module-load-once"
 printf '#!/bin/sh\necho "i2cget $*" >> "%s/hw.log"\ncat "%s/reg"\n' "$t" "$t" > "$t/bin/i2cget"
 printf '#!/bin/sh\necho "i2cset $*" >> "%s/hw.log"\necho 0x09 > "%s/reg"\n' "$t" "$t" > "$t/bin/i2cset"
 printf '#!/bin/sh\nexit 0\n' > "$t/bin/sleep"
@@ -85,7 +87,17 @@ run() {  # $1: the step
 printf 'sec-acpm\nmax77759\n' > "$t/mod/order"
 printf 'google,gs101-raven\n' > "$t/etc/omamobile-compatible"
 run load_modules
-[[ $(cat "$t/hw.log") == "insmod $t/mod/sec-acpm.ko"$'\n'"insmod $t/mod/max77759.ko" ]] || fail "a matching board loads its modules in order"
+[[ $(cat "$t/hw.log") == "module-load-once $t/mod/sec-acpm.ko"$'\n'"module-load-once $t/mod/max77759.ko" ]] || fail "a matching board loads its modules in order"
+# A failed helper must not fall back to BusyBox insmod or retry the module.
+MODULE_LOAD_STATUS=1 run load_modules
+[[ $(cat "$t/hw.log") == "module-load-once $t/mod/sec-acpm.ko"$'\n'"module-load-once $t/mod/max77759.ko" ]] || fail "failed loads are attempted only once, in order"
+[[ $(cat "$t/said") == "module-load-once sec-acpm failed"$'\n'"module-load-once max77759 failed" ]] || fail "each failed load is reported"
+# A missing helper is also a failure, never permission to use insmod.
+mv "$t/bin/module-load-once" "$t/bin/module-load-once.saved"
+run load_modules
+[[ ! -e $t/hw.log ]] || fail "missing helper fell back to insmod"
+[[ $(wc -l < "$t/said") == 2 ]] || fail "missing helper failures are reported"
+mv "$t/bin/module-load-once.saved" "$t/bin/module-load-once"
 printf 'google,gs201-cheetah\n' > "$t/etc/omamobile-compatible"
 run load_modules
 [[ ! -e $t/hw.log ]] || fail "another board's image loaded a module"

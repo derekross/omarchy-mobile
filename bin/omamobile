@@ -514,6 +514,11 @@ cmd_initramfs() {
     "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
       -o "$stage/usr/local/bin/reboot-to" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
       "$reboot_src" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
+    if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
+      "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
+        -o "$stage/usr/local/bin/module-load-once" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
+        "$ROOT/tools/module-load-once.c" -L"$sysroot/usr/lib" -lc "$builtins" "$sysroot/usr/lib/crtn.o"
+    fi
     # A/B slot metadata in devinfo (Apache-2.0 port of Google's boot HAL). Not called by init yet.
     "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
       -o "$stage/usr/local/bin/omamobile-bootctl" "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
@@ -535,6 +540,14 @@ cmd_initramfs() {
       "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
       "$reboot_src" "$sysroot/usr/lib/libc.a" "$sysroot/usr/lib/crtn.o" \
       || die "reboot-to failed to link"
+    if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
+      clang --target=aarch64-linux-musl --sysroot="$sysroot" -nostdinc -isystem "$sysroot/usr/include" \
+        -static -nostdlib -O2 -fno-stack-protector -fno-pie -fuse-ld=lld \
+        -o "$stage/usr/local/bin/module-load-once" \
+        "$sysroot/usr/lib/crt1.o" "$sysroot/usr/lib/crti.o" \
+        "$ROOT/tools/module-load-once.c" "$sysroot/usr/lib/libc.a" "$sysroot/usr/lib/crtn.o" \
+        || die "module-load-once failed to link"
+    fi
     say "No $DEV_PACKAGE bootctl; built freestanding devmem and musl reboot-to"
   fi
   mkdir -p "$stage/root/.ssh"
