@@ -215,7 +215,7 @@ grep -q 'no DSI node' "$dms" \
 echo "ok - display-msm waits / skips rebind on not-yet-connected DSI"
 
 # Functional: preloaded msm + DSI node present but status!=connected must NOT
-# rebind (the 2026-10-31 a345 race). Redirect sysfs/proc via sed on a copy;
+# rebind (half-ready DSI race). Redirect sysfs/proc via sed on a copy;
 # list every load-loop module in fake /proc/modules so insmod is skipped.
 rebind_test() {
   local name=$1 expect_rebind=$2

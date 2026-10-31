@@ -109,7 +109,7 @@ done
 # so probe runs again with clocks available.
 # Wait briefly for panel attach: a just-loaded or preloaded msm can bind DSI
 # and register DRM before status=connected. Immediate rebind then destroys a
-# good probe (seen 2026-10-31 on rootfs a345 vs healthy boot -38).
+# good probe (seen on a RAM boot: an early rebind tore down a probe that was about to connect).
 dsi_bound=
 i=0
 while [ $i -lt 6 ]; do
@@ -119,7 +119,7 @@ while [ $i -lt 6 ]; do
 			break 2
 		fi
 	done
-	# Any DRM card means probe progressed; keep waiting, do not rebind yet.
+	# Fixed grace: simpledrm already provides card0, so "any card" is not proof of msm progress; wait before deciding to rebind.
 	for c in /sys/class/drm/card[0-9]*; do
 		if [ -e "$c" ]; then
 			sleep 0.5
