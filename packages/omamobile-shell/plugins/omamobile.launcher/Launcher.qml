@@ -202,6 +202,7 @@ Item {
     query = ""
     homeSwipe = false
     pulling = false
+    dockAway = false
     settleTo(false, gestureSpeed)
     gestureSpeed = 0
   }
@@ -277,20 +278,27 @@ Item {
   property bool homeSwipe: false
   property bool pulling: false
   readonly property bool fingerOnDrawer: homeSwipe || pulling
+  // The sheet is drawn: open, moving or under a finger. Closed, nothing in
+  // the (always mapped) drawer window is.
+  readonly property bool drawerShown: opened || fingerOnDrawer || progress > 0 || settle.running
   // This touch moved the drawer, so it is not also a tap on an app.
   property bool pullMoved: false
   // The first pixels a tap's jitter may move before a pull starts.
   readonly property int pullSlop: 8
   // The pulling finger's recent positions, for its speed at release.
   property var pullSamples: []
+  // The time (ms) finger speeds are measured by; the tests set their own.
+  property var clock: function() { return Date.now() }
   // The speed (px/s, down positive) a finger let the drawer go at, for the
   // settle that follows through the host's summon or hide.
   property real gestureSpeed: 0
   // The drawer has the bottom edge: set once it has slid fully open (at
-  // once for a tap on the dock, whose keyboard needs the edge), cleared once
-  // it has slid away. Until then the dock stays under the sliding sheet, so
-  // the home screen and the drawer's window keep their size while a finger
-  // moves it: the windows below never re-lay out mid-swipe.
+  // once for a tap on the dock, whose keyboard needs the edge), cleared as
+  // soon as it leaves the open place (a pull starts, or it closes). The
+  // dock's coming and going resizes the home screen (it sits between the
+  // bar and the dock), so it happens only while the sheet still covers the
+  // home screen, never while the home screen shows: with the dock back only
+  // after the drawer had slid away, the widgets jumped as it settled.
   property bool dockAway: false
   // What takes the keyboard focus when the drawer shows: the search field
   // after a tap on the dock, the sheet after a swipe (open above).
@@ -335,7 +343,6 @@ Item {
   }
 
   function focusDrawer() {
-    if (!drawer.visible) return
     if (focusInputOnShow) input.forceActiveFocus()
     else sheet.forceActiveFocus()
   }
@@ -663,7 +670,14 @@ Item {
   PanelWindow {
     id: drawer
 
-    visible: root.opened || root.fingerOnDrawer || root.progress > 0
+    // Mapped for the life of the shell. Mapped on each open, a new layer
+    // surface's first frames drew before the output's scale and the slide
+    // applied (the grid at 3x, or faded at its final place, then a jump):
+    // now opening, closing and dragging only move the sheet. Closed, the
+    // window draws nothing (its content is hidden, so Qt renders no
+    // frames), takes no touch (an empty input region) and no keyboard.
+    visible: true
+    mask: Region { item: root.opened ? sheet : null }
     anchors { top: true; bottom: true; left: true; right: true }
     // Normal: fit between the bar and the on-screen keyboard, like Android's
     // adjustResize.
@@ -675,8 +689,6 @@ Item {
     // one holds exclusive focus, and that includes the on-screen keyboard.
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
-    onVisibleChanged: if (visible) root.focusDrawer()
-
     // The home screen dims under the rising drawer: Omarchy's own menu
     // scrim (the theme's), as strong as the drawer is open. It shows only
     // above the sheet while it slides; open, the sheet covers it.
@@ -685,7 +697,7 @@ Item {
       anchors.fill: parent
       color: Commons.Color.menu.scrim
       opacity: root.progress
-      visible: root.progress > 0 && root.progress < 1
+      visible: root.drawerShown && root.progress > 0 && root.progress < 1
     }
 
     Rectangle {
@@ -693,9 +705,12 @@ Item {
       objectName: "drawer"
       width: parent.width
       height: parent.height
-      // Moved, never re-laid out: only y and opacity change with the finger.
+      // Moved, never re-laid out: only y changes with the finger. Opaque,
+      // and clipped to itself, so nothing of it shows above its top edge
+      // while it slides; the scrim does the dimming.
       y: Math.round((1 - root.progress) * height)
-      opacity: Math.min(1, 0.5 + root.progress)
+      visible: root.drawerShown
+      clip: true
       color: Commons.Color.menu.background
 
       // After a swipe the sheet has the keyboard focus, not the field (no
@@ -747,7 +762,7 @@ Item {
             candidate = false
             if (!root.pulling) return
             root.pulling = false
-            var speed = LauncherModel.speedOf(root.pullSamples, Date.now())
+            var speed = LauncherModel.speedOf(root.pullSamples, root.clock())
             if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)
             else root.dismiss(speed)
           }
@@ -766,9 +781,13 @@ Item {
               root.pullSamples = []
               root.pulling = true
               root.pullMoved = true
+              // The dock comes back under the sheet now, while it covers the
+              // home screen, and the keyboard goes.
+              root.dockAway = false
+              sheet.forceActiveFocus()
             }
             root.progress = Math.max(0, Math.min(1, 1 - (dy - base) / root.travel))
-            root.pullSamples = LauncherModel.addSample(root.pullSamples, Date.now(), point.scenePosition.y)
+            root.pullSamples = LauncherModel.addSample(root.pullSamples, root.clock(), point.scenePosition.y)
           }
         }
       }

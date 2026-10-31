@@ -181,6 +181,19 @@ grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail 
 # the launcher publishes itself, the home screen loads DrawerLinkClient.qml
 # from the launcher's folder beside it.
 grep -c 'objectName: "drawerHandle"' "$l" >/dev/null || fail "the drawer has a handle"
+# The drawer's layer surface stays mapped (a newly mapped one drew its first
+# frames before the output's scale: the grid at 3x on every swipe up); closed,
+# it takes no touch and draws nothing. The home screen doesn't scale under it
+# (widgets snapped between pixels as it animated).
+grep -c 'mask: Region { item: root.opened ? sheet : null }' "$l" >/dev/null || fail "the closed drawer takes no touch"
+python3 - "$l" <<'PY2' || fail "the drawer's window stays mapped"
+import sys
+src = open(sys.argv[1]).read()
+i = src.index('WlrLayershell.namespace: "omamobile-launcher"')
+w = src[src.rindex("PanelWindow {", 0, i):i]
+assert "\n    visible: true\n" in w, w
+PY2
+grep -cE '^\s*scale:' plugins/omamobile.home/Home.qml >/dev/null && fail "the home screen doesn't scale under the drawer"
 grep -c 'objectName: "collapse"' "$l" >/dev/null && fail "the drawer's chevron is gone"
 grep -c 'Component.onCompleted: DrawerLink.publish(root)' "$l" >/dev/null || fail "the drawer publishes itself for the home screen's swipe"
 grep -c 'source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen reaches the drawer through the launcher's DrawerLinkClient.qml"

@@ -886,11 +886,14 @@ function urlLaunchArgv(url) {
 // ---------------------------------------------------------------- who can see it
 
 // Shell surfaces that cover the whole home screen while they are mapped:
-// the app drawer, recent apps and the full-screen call card. Hyprland says
+// recent apps and the full-screen call card. The app drawer isn't here: its
+// surface stays mapped for the life of the shell (a new layer surface's
+// first frames draw at the wrong scale), so Home.qml asks it how far open
+// it is instead (DrawerLink.js). Hyprland says
 // when a layer surface maps and unmaps (openlayer>>NAMESPACE,
 // closelayer>>NAMESPACE); the quick-settings shade isn't here, since it
 // covers only part of the screen.
-var COVERING_LAYERS = ["omamobile-launcher", "omamobile-switcher", "omamobile-call"]
+var COVERING_LAYERS = ["omamobile-switcher", "omamobile-call"]
 
 // The covering surfaces mapped after one Hyprland event: { namespace: count }
 // (a surface per screen counts once each). Anything else returns `open`.

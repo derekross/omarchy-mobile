@@ -32,6 +32,8 @@ ListView {
 
   // The drag's recent scroll positions, for its speed at release.
   property var samples: []
+  // The time (ms) the speed is measured by; the tests set their own.
+  property var clock: function() { return Date.now() }
 
   function pageX(i) { return originX + i * width }
 
@@ -78,11 +80,11 @@ ListView {
   onDraggingChanged: {
     if (!dragging) return
     settle.stop()
-    samples = HomeModel.addSample([], Date.now(), contentX)
+    samples = HomeModel.addSample([], pager.clock(), contentX)
   }
-  onContentXChanged: if (dragging) samples = HomeModel.addSample(samples, Date.now(), contentX)
+  onContentXChanged: if (dragging) samples = HomeModel.addSample(samples, pager.clock(), contentX)
   onDragEnded: {
-    var speed = HomeModel.speedOf(samples, Date.now())
+    var speed = HomeModel.speedOf(samples, pager.clock())
     slideTo(HomeModel.pageAfterSwipe(contentX - originX, width, count, speed), speed)
   }
   // The ListView's own flick would carry on past the page: the slide above

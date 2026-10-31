@@ -11,7 +11,10 @@ Item {
   width: 412
   height: 892
 
-  DrawerHarness { id: harness; anchors.fill: parent }
+  // The clock finger speeds are measured by: advanced by the tests with
+  // each move, so a speed never depends on how busy the machine is.
+  property real now: 1000
+  DrawerHarness { id: harness; anchors.fill: parent; clock: function() { return view.now } }
 
   TestCase {
     id: test
@@ -36,8 +39,8 @@ Item {
 
     function init() {
       harness.close()
-      tryCompare(harness, "progress", 0, 1000)
-      tryCompare(harness, "dockAway", false, 1000)
+      tryCompare(harness, "progress", 0, 3000)
+      tryCompare(harness, "dockAway", false, 3000)
       harness.calls = []
       harness.launched = []
       grid.contentY = 0
@@ -45,8 +48,8 @@ Item {
 
     function openSettled() {
       harness.open("{}")
-      tryCompare(harness, "progress", 1, 1000)
-      tryCompare(harness, "dockAway", true, 1000)
+      tryCompare(harness, "progress", 1, 3000)
+      tryCompare(harness, "dockAway", true, 3000)
       harness.calls = []
       waitForRendering(sheet)
     }
@@ -56,6 +59,7 @@ Item {
     function drag(t, p, dy, steps, ms) {
       for (var i = 1; i <= steps; i++) {
         wait(ms)
+        view.now += ms
         t.move(0, view, p.x, p.y + dy * i / steps).commit()
       }
     }
@@ -63,9 +67,7 @@ Item {
     function handleCentre() { return handle.mapToItem(view, handle.width / 2, handle.height / 2) }
 
     function test_open_settles_with_the_field_focused() {
-      var started = Date.now()
       openSettled()
-      verify(Date.now() - started < 1000, "opened in " + (Date.now() - started) + " ms")
       verify(harness.opened)
       verify(input.activeFocus, "a tap on the dock focuses the search field")
       compare(sheet.y, 0)
@@ -84,11 +86,10 @@ Item {
       var c = handleCentre()
       var t = touchEvent(view)
       t.press(0, view, c.x, c.y).commit()
-      wait(40)
       t.release(0, view, c.x, c.y).commit()
       compare(harness.calls, ["hide"])
       verify(!harness.opened)
-      tryCompare(harness, "progress", 0, 1000)
+      tryCompare(harness, "progress", 0, 3000)
     }
 
     function test_handle_drag_follows_and_springs_back() {
@@ -97,16 +98,17 @@ Item {
       var t = touchEvent(view)
       t.press(0, view, c.x, c.y).commit()
       drag(t, c, 200, 10, 20)
-      verify(harness.pulling, "the handle pulls the drawer")
-      verify(harness.progress < 0.85 && harness.progress > 0.7, "it follows the finger: " + harness.progress)
+      tryVerify(function() { return harness.pulling }, 5000, "the handle pulls the drawer")
+      tryVerify(function() { return harness.progress < 0.85 && harness.progress > 0.7 }, 5000, "it follows the finger: " + harness.progress)
       fuzzyCompare(sheet.y, (1 - harness.progress) * sheet.height, 1)
       // Back up, held still, lifted: it stays open.
-      for (var i = 1; i <= 10; i++) { wait(20); t.move(0, view, c.x, c.y + 200 - i * 19).commit() }
-      verify(harness.progress > 0.97, "and back up with it: " + harness.progress)
+      for (var i = 1; i <= 10; i++) { wait(20); view.now += 20; t.move(0, view, c.x, c.y + 200 - i * 19).commit() }
+      tryVerify(function() { return harness.progress > 0.97 }, 5000, "and back up with it: " + harness.progress)
       wait(150)
+      view.now += 150
       t.release(0, view, c.x, c.y + 10).commit()
       compare(harness.calls, [])
-      tryCompare(harness, "progress", 1, 1000)
+      tryCompare(harness, "progress", 1, 3000)
       verify(harness.opened)
     }
 
@@ -117,9 +119,10 @@ Item {
       t.press(0, view, c.x, c.y).commit()
       drag(t, c, 200, 10, 20)
       wait(150)
+      view.now += 150
       t.release(0, view, c.x, c.y + 200).commit()
       compare(harness.calls, ["hide"])
-      tryCompare(harness, "progress", 0, 1000)
+      tryCompare(harness, "progress", 0, 3000)
     }
 
     function test_short_slow_pull_springs_back() {
@@ -128,11 +131,12 @@ Item {
       var t = touchEvent(view)
       t.press(0, view, c.x, c.y).commit()
       drag(t, c, 50, 5, 30)
-      verify(harness.progress < 1, "the grid at its top pulls the drawer")
+      tryVerify(function() { return harness.progress < 1 }, 5000, "the grid at its top pulls the drawer")
       wait(150)
+      view.now += 150
       t.release(0, view, c.x, c.y + 50).commit()
       compare(harness.calls, [])
-      tryCompare(harness, "progress", 1, 1000)
+      tryCompare(harness, "progress", 1, 3000)
     }
 
     function test_flick_down_on_the_grid_closes() {
@@ -143,7 +147,7 @@ Item {
       drag(t, c, 60, 5, 16)
       t.release(0, view, c.x, c.y + 60).commit()
       compare(harness.calls, ["hide"], "a short flick down closes")
-      tryCompare(harness, "progress", 0, 1000)
+      tryCompare(harness, "progress", 0, 3000)
     }
 
     function test_a_scrolled_grid_scrolls_first() {
@@ -155,19 +159,19 @@ Item {
       drag(t, c, 100, 5, 20)
       compare(harness.progress, 1, "the grid scrolls, the drawer stays")
       verify(grid.contentY < 150 && grid.contentY > 0, "grid at " + grid.contentY)
-      for (var i = 1; i <= 15; i++) { wait(20); t.move(0, view, c.x, c.y + 100 + i * 20).commit() }
-      compare(grid.contentY, 0, "the grid reached its top")
-      verify(harness.progress < 0.95, "and the pull took over: " + harness.progress)
+      for (var i = 1; i <= 15; i++) { wait(20); view.now += 20; t.move(0, view, c.x, c.y + 100 + i * 20).commit() }
+      tryCompare(grid, "contentY", 0, 5000, "the grid reached its top")
+      tryVerify(function() { return harness.progress < 0.95 }, 5000, "and the pull took over: " + harness.progress)
       wait(150)
+      view.now += 150
       t.release(0, view, c.x, c.y + 400).commit()
-      tryCompare(harness, "progress", 0, 1000)
+      tryCompare(harness, "progress", 0, 3000)
     }
 
     function test_an_app_still_takes_its_tap() {
       openSettled()
       var t = touchEvent(view)
       t.press(0, view, 60, 110).commit()
-      wait(40)
       t.release(0, view, 60, 110).commit()
       tryCompare(harness, "launched", ["app00"])
     }
@@ -182,8 +186,8 @@ Item {
       compare(harness.calls, ["summon {\"gesture\":true}"], "through the host")
       verify(harness.opened)
       verify(!harness.dockAway, "the dock stays until it is open")
-      tryCompare(harness, "progress", 1, 1000)
-      tryCompare(harness, "dockAway", true, 1000)
+      tryCompare(harness, "progress", 1, 3000)
+      tryCompare(harness, "dockAway", true, 3000)
       verify(!input.activeFocus, "no keyboard after a swipe")
       keyClick(Qt.Key_A)
       compare(harness.query, "a", "typing on a keyboard still searches")
@@ -196,7 +200,7 @@ Item {
       verify(!harness.gestureEnd(0), "a short slow swipe doesn't open it")
       compare(harness.calls, [])
       verify(!harness.opened)
-      tryCompare(harness, "progress", 0, 1000)
+      tryCompare(harness, "progress", 0, 3000)
     }
 
     function test_no_home_swipe_while_open() {

@@ -663,19 +663,20 @@ test("the home screen is hidden by an app, a covering surface or the panel", () 
   assert.strictEqual(M.homeShown(false, false, {}), true)
   assert.strictEqual(M.homeShown(true, false, {}), false)
   assert.strictEqual(M.homeShown(false, true, {}), false)
-  assert.strictEqual(M.homeShown(false, false, { "omamobile-launcher": 1 }), false)
+  assert.strictEqual(M.homeShown(false, false, { "omamobile-switcher": 1 }), false)
   assert.strictEqual(M.homeShown(false, false, null), true)
 })
 
-test("the drawer, recent apps and the call card cover it while mapped", () => {
+test("recent apps and the call card cover it while mapped (the drawer stays mapped)", () => {
   let open = {}
-  open = M.layersAfter(open, "openlayer", "omamobile-launcher")
-  assert.deepStrictEqual(open, { "omamobile-launcher": 1 })
+  assert.deepStrictEqual(M.layersAfter(open, "openlayer", "omamobile-launcher"), {}, "the drawer's surface is always mapped")
+  open = M.layersAfter(open, "openlayer", "omamobile-call")
+  assert.deepStrictEqual(open, { "omamobile-call": 1 })
   // Other surfaces and other events change nothing: the shade covers only part.
   assert.strictEqual(M.layersAfter(open, "openlayer", "omamobile-quicksettings"), open)
   assert.strictEqual(M.layersAfter(open, "openwindow", "omamobile-switcher"), open)
   open = M.layersAfter(open, "openlayer", "omamobile-switcher")
-  open = M.layersAfter(open, "closelayer", "omamobile-launcher")
+  open = M.layersAfter(open, "closelayer", "omamobile-call")
   assert.deepStrictEqual(open, { "omamobile-switcher": 1 })
   open = M.layersAfter(open, "closelayer", "omamobile-switcher")
   assert.deepStrictEqual(open, {})
@@ -684,7 +685,7 @@ test("the drawer, recent apps and the call card cover it while mapped", () => {
   // One per screen, counted.
   open = M.layersAfter(M.layersAfter({}, "openlayer", "omamobile-call"), "openlayer", "omamobile-call")
   assert.deepStrictEqual(M.layersAfter(open, "closelayer", "omamobile-call"), { "omamobile-call": 1 })
-  assert.deepStrictEqual(M.COVERING_LAYERS, ["omamobile-launcher", "omamobile-switcher", "omamobile-call"])
+  assert.deepStrictEqual(M.COVERING_LAYERS, ["omamobile-switcher", "omamobile-call"])
 })
 
 test("a job that waited while hidden runs when shown only if overdue", () => {

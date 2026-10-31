@@ -580,7 +580,9 @@ Item {
         root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)
     }
   }
-  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers)
+  // The app drawer covers it once fully open (its surface is always mapped,
+  // so it has no openlayer event to go by; drawerProgress below).
+  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers) && drawerProgress < 1
   readonly property bool owlPaused: !homeShown
   // The app drawer (omamobile.launcher's root, through its DrawerLink.js,
   // which DrawerLinkClient.qml beside it imports), for the swipe up and for
@@ -1096,10 +1098,6 @@ Item {
       id: screenItem
       anchors.fill: parent
       focus: true
-      // The home screen recedes a little under the rising drawer (its scrim
-      // dims it): a scale of the whole surface, a transform only, nothing
-      // laid out again.
-      scale: 1 - 0.04 * root.drawerProgress
       onWidthChanged: root.owlScreenWidth = width
       onHeightChanged: root.owlScreenHeight = height
       Keys.onEscapePressed: {

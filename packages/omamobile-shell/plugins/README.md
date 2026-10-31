@@ -364,7 +364,10 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   way, else springs back. A grid scrolled down scrolls first; the pull takes
   over where it reaches the top. Settling is one Easing.OutCubic slide of
   120-260 ms that starts at the finger's speed; the home screen dims under
-  the theme's menu scrim and recedes slightly as the drawer rises. The home
+  the theme's menu scrim as the drawer rises (opacity only: a scale of the
+  home made its widgets snap between pixels). The drawer's surface stays
+  mapped for the life of the shell, drawing nothing and taking no touch while
+  closed: mapped on each open, its first frames drew at the wrong scale. The home
   screen reaches the drawer in-process through `DrawerLink.js` (a
   `.pragma library` script both plugins import from the launcher's folder);
   without it the swipe still opens the drawer through the host on release.

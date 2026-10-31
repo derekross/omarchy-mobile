@@ -37,6 +37,8 @@ Item {
   property real travel: 0
   // This touch landed on a widget's own vertical gesture.
   property bool blocked: false
+  // The time (ms) the finger's speed is measured by; the tests set their own.
+  property var clock: function() { return Date.now() }
 
   // Without the drawer in reach: open it through the host.
   signal fallbackOpen()
@@ -100,7 +102,7 @@ Item {
       onActiveChanged: {
         if (active) {
           up = centroid.scenePosition.y < centroid.scenePressPosition.y
-          samples = HomeModel.addSample([], Date.now(), centroid.scenePosition.y)
+          samples = HomeModel.addSample([], swipe.clock(), centroid.scenePosition.y)
           swipe.travel = 0
           linked = false
           if (!up) return
@@ -110,7 +112,7 @@ Item {
         }
         if (!up) return
         up = false
-        var speed = HomeModel.speedOf(samples, Date.now())
+        var speed = HomeModel.speedOf(samples, swipe.clock())
         var travel = swipe.travel
         swipe.travel = 0
         if (linked) {
@@ -124,7 +126,7 @@ Item {
       onCentroidChanged: {
         if (!active || !up) return
         swipe.travel = Math.max(0, centroid.scenePressPosition.y - centroid.scenePosition.y)
-        samples = HomeModel.addSample(samples, Date.now(), centroid.scenePosition.y)
+        samples = HomeModel.addSample(samples, swipe.clock(), centroid.scenePosition.y)
         if (linked) {
           try { swipe.drawer.gestureMove(swipe.travel) } catch (e) { linked = false }
         }
