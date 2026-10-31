@@ -13,6 +13,19 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-30, evening: GNSS gets a fix
+
+The receiver gets a position fix on the owner's kernel: up to 13 satellites
+used, HDOP 0.8-1.2, GPS, Galileo, BeiDou and GLONASS tracked, CHPP clean
+for about a minute per boot. Two fixes did it: spi-s3c64xx
+turned the channels off after clearing the packet count, which lost a few
+bits per transfer on a streaming slave (linux-omarchy-mobile#150), and the
+GNSS SPI's pins ran on the bootloader's drive 0 (#151). What ends the fix is
+the CP link under GNSS traffic: held up it crashes the CP 103-108 s after
+ONLINE (six boots of six), left to cycle it hangs the SoC about 170 s after
+ONLINE. Details, the configuration and the sweep in
+[MODEM-PLAN](MODEM-PLAN.md) "G3, GNSS gets a fix".
+
 ## 2026-10-29: two resets at about 34 s, right after Bluetooth started
 
 [V] During the night's GNSS G3 tries (kernel

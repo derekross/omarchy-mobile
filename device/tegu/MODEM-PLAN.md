@@ -7,15 +7,21 @@ modem's cp2ap lines) is bound with its EINTs in the base DT
 trains Gen1 x1 and enumerates as 144d:a5a5; M3-M5 passed: CPIF and cbd
 boot it to **ONLINE** (Gen3 x2) with working IPC (pktproc), no SIM yet;
 G1-G2 passed: gnssd loads Kepler's firmware and talks CHPP over SPI;
-G3 partial: our HAL client starts sessions and the engine tracks
-satellites, but the CHPP link over the GNSS SPI loses bytes and gnssd's
-own watchdog resets Kepler (the "hardfault"); the clock and the transfer
-cut are in derekross/linux-omarchy-mobile#138 (in review), and GNSS is parked without a
-hardware probe (the owner's decision, 2026-10-29); G3-A (automatic chip
-select, 2026-10-30) ended in the same CHPP failure with clean checksums, and
-G3-A2 (32-bit words with the controller's swap) is the one boot left to
-build. The CP link hang with frequent Kepler resets is open. Next: a stock
-GNSS capture, IOCC, the SIM.
+**G3 resolved (2026-10-30, evening): a position fix on the owner's kernel.**
+The CHPP link lost bits because spi-s3c64xx's flush cleared the packet
+count before turning the channels off
+(derekross/linux-omarchy-mobile#150) and because the GNSS SPI's pins ran on
+the bootloader's drive 0 (#151). Open: the CP link under GNSS traffic. Our
+controller never enabled the link's L1 substates (a stub), so an idle link
+is torn down and rebuilt about twice a second and one of those cycles hangs
+the SoC, about 170 s after ONLINE; holding the link instead crashes the CP
+(103-108 s after ONLINE with the wake line high, no GNSS data with it
+answered). A session lasts one to five minutes depending on the cycling.
+The substates are being enabled on the real capability offset (0x160, both
+ends) on the bring-up branch; not yet observed to take effect. Section
+"G3, GNSS gets a fix" below, and G3-L1.
+Left: the GNSS and CPIF drivers aren't in the published kernel, and GNSS
+still starts by hand. Next: the SIM.
 The staged plan (sections F, K, U and runbooks M0.2-M6, G1-G4) is below,
 with each step's results under it. Kernel branches `omamobile-tegu-modem` and `omamobile-tegu-gnssif`
 (section K).
@@ -936,6 +942,368 @@ ff9aceacb40286f6) and a gnss_spi variant that asks for 32-bit words and
 does no software swap, which is not built yet. One session, no reset: this
 was G3-A's own one DTB round, not a G3-L1 session, so the trace's cap of
 three sessions and two resets is untouched. GNSS stays parked otherwise.
+
+### G3, GNSS gets a fix (2026-10-30, evening, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+
+[V] **The receiver gets a position fix.** On the owner's kernel with the
+two fixes below and stock's SPI configuration: a 3-minute session by a
+window with 36 of 38 GGA sentences at fix quality 1, 13 satellites used,
+HDOP 0.8; a 10-minute session with 38 of 43 fixed, 10-13 satellites, HDOP
+about 1; GPS, Galileo, BeiDou and GLONASS tracked at C/N0 up to about
+41 dB-Hz. CHPP clean in both: no ACK timeout, no bad checksum, no permanent
+failure, no Kepler fault, no CP link isolation, no UFS error, no reset (11
+minutes of uptime at the end of the long one). No position or height is
+recorded here.
+
+**Cause 1, the flush order (kernel, [linux-omarchy-mobile#150](https://github.com/derekross/linux-omarchy-mobile/pull/150)).**
+`s3c64xx_flush_fifo()` cleared PACKET_CNT, and with it PACKET_CNT_EN, while
+RXCH_ON was still set. For that one write the controller received with no
+packet count and ran SCK freely, and with automatic chip select the slave
+stayed selected and shifted out bits the flush threw away. Kepler streams
+CHPP across chip-select cycles, so every transfer lost 2-6 bits: each read
+arrived at a different bit offset (0, 2, 4 or 6, changing from read to read),
+the data inside a read was intact, and frames that crossed reads failed
+their CRC. Google's driver turns the channels off first; #150 does the same.
+Found by comparing Google's and mainline's transfer paths register write by
+register write, after the sweep below had shown the slip per transfer.
+
+**Cause 2, the pins (DT, [linux-omarchy-mobile#151](https://github.com/derekross/linux-omarchy-mobile/pull/151)).**
+SPI21 had no pinctrl, so the bus ran on the bootloader's pin state, read
+from PERIC1's pin registers on the palmtop: gpp22-0..3 in function 2 at
+drive 0, gpp22-2 (data in) pulled down. With drive 3 (as gpp21, the other
+SPI bus on PERIC1, the touchscreen's) the data inside each read became
+clean; with the flush fix as well, every read arrived at bit 0 with a valid
+CRC32. #151 describes the pins in the board DT; the palmtop uses
+[`overlays/gnss-spi-pins.dtso`](overlays/gnss-spi-pins.dtso) until it lands.
+
+**The configuration that works is stock's**: SPI mode 0 (stock's node has
+no spi-cpha or spi-cpol), 32-bit words, feedback delay 0
+([`overlays/gnss-spi-fb0.dtso`](overlays/gnss-spi-fb0.dtso)), automatic chip
+select ([`overlays/gnss-spi-autocs.dtso`](overlays/gnss-spi-autocs.dtso), the
+`google,gs101-spi` compatible), 64-byte reads (`gnss_spi piece=64`, one
+transfer that fills the FIFO, polled whole since #138), no software realign.
+**The byte swap needs no new DT property**: Google's `swap-mode` (the
+controller's SWAP_CFG, commit 11ea0ef5e on the bring-up branch) works, and so
+does swapping in gnss_spi (`word32=2`, commit 734f5f8c8 on
+`tegu-gnss-spi-bringup`): 54 of 56 GGA fixed, 10 satellites, HDOP 1.2, no
+errors, on a boot without the swap-mode property. The palmtop runs the
+software swap.
+
+**The CP link under GNSS traffic, G3-L1's first step answered, and a
+correction.** With GNSS running for minutes on the normal boot, the hang of
+10-29 came back once (CLUSTER0_NONCPU_WDTRESET about 260 s into the boot,
+170 s after ONLINE, after 62 fixes). cpif's `keep_link_up` (bring-up module
+`cpif-keep-link.ko`, branch `tegu-cpif-keep-link`, 3f76f123b) set at load
+keeps the CP from ever reaching ONLINE (`cbd exit 143 and the CP is
+BOOTING`): the CP needs its link power cycles while it boots. Set after
+ONLINE (the parameter is 0644), no hang followed, and that is as far as the
+good news goes: in every one of the six boots that held the link (18:31 to
+19:31), `cp_active_handler` saw PHONE_ACTIVE drop 103-108 s after ONLINE
+(`ONLINE -> CRASH_EXIT`, the CP's own crash, nothing in the kernel log
+before it, CHPP healthy: 9 bad checksums in thousands of frames), gnssd went
+into crash handling and the modem profile stopped. The sessions first
+reported as clean 3- and 10-minute runs were not: their 38-56 GGA sentences
+are about a minute of fixes before that crash, which the counting (fixed of
+total) hid. So: the hang is a link-down access while GNSS traffic flows, as
+the 10-29 console reading said, and refusing the CP's power-down crashes
+the CP about 105 s later. `keep_link_up` is a diagnostic, not an answer;
+the answer is in CPIF's power-off path (G3-L1's trace: which BAR access
+lands after isolation), so that the link may cycle as the CP asks.
+
+**How the sweep got there** (runners in the owner's
+`logs/tegu-review-20261029/runners/05-g3a*.sh`, not in git):
+- G3-A2: 32-bit words with swap-mode; the first Image, built from the GNSS
+  worktree, lacked the S2MPG15 regulator work (6 regulators instead of 28,
+  no GNSS rails) and was rebuilt from the gn3 tree. The reads showed the
+  reply frames intact but 2, 4 and 6 bits late in successive reads.
+- SPI modes 0-3 (a `spi_mode` override in gnss_spi): mode 3 brought the link
+  up once (24 frames), but marginally; the same boot again failed.
+- Feedback delays 1-3 with mode 3: a stable offset per boot (1 or 3 bits),
+  different from boot to boot.
+- Software realign in gnss_spi: `realign=3` (offset found from each read's
+  preamble) got 86 of 173 frames valid; `realign=4` (carrying the bits
+  across reads) made it worse, which showed the stream isn't continuous
+  across reads, so bits were being lost between transfers.
+- The pins at drive 3: frames inside a read clean, offsets still changing.
+- The flush order: offsets gone, link up, a fix.
+
+**Left for GNSS:** the GNSS link driver (gnssif) and CPIF aren't in the
+published kernel, so this runs on the owner's kernel only; #150 and #151 are
+open; the CP link under GNSS traffic is unsolved: the hold crashes the CP,
+the cycling hangs the SoC, and the way out is the L1 substates the
+controller never enabled (G3-L1, 10-31), which are being enabled on the
+real capability offset and have not yet been seen to take effect. A session
+lasts one to five minutes. GNSS still starts by hand
+([`bringup/tegu-gnss-session`](bringup/tegu-gnss-session), which starts the
+modem, holds the link after ONLINE for the diagnostic and runs the HAL for a
+set time; once per boot), or through Omarchy's Location switch with the hand
+units in [`bringup/location/`](bringup/location): two drop-ins that make
+`omamobile-gnss.service` run the 9a's stack instead of the 7 Pro's chip
+driver, and `tegu-gnss-start`, which brings the modem up with GNSS and runs
+the gnss-slsi profile with its NMEA on the FIFO `omamobile-gnss-nmea` reads.
+Tested on 2026-10-30: `omamobile-gnss-nmea.socket` enabled, a client's connect
+starts the stack, the HAL serves NMEA to `/run/omamobile-gnss/nmea.sock` and
+the fixes arrive (first fix about 80 s after the connect, 46 of 52 GGA
+sentences fixed in the first run, with the link held and the wake line left
+high, `HOLD=1`; the script's later default of 2 moves no data and is only
+there as a diagnostic), for as long as the CP link lasts.
+
+**Attended only, and not for the daily boot.** With these drop-ins in place
+any GeoClue client can start a session, and a session can still hang the
+SoC with the modem up (about 170 s after ONLINE while the link cycles), so
+a hang could repeat at every boot. The package's own units are masked on
+the 9a by the boot command line (`systemd.mask=omamobile-gnss.service` in
+the kit's `package-startup.dtso`); keep that mask until the CPIF link fix
+lands, and install the drop-ins only for an attended session:
+
+```sh
+# install (attended, charger in, modem not started this boot)
+tools/phone-ssh 'mkdir -p /etc/systemd/system/omamobile-gnss.service.d /etc/systemd/system/omamobile-gnss-nmea.service.d'
+tools/phone-ssh 'cat > /usr/local/sbin/tegu-gnss-start' < device/tegu/bringup/location/tegu-gnss-start
+tools/phone-ssh 'cat > /etc/systemd/system/omamobile-gnss.service.d/tegu.conf' < device/tegu/bringup/location/omamobile-gnss.service.d-tegu.conf
+tools/phone-ssh 'cat > /etc/systemd/system/omamobile-gnss-nmea.service.d/tegu.conf' < device/tegu/bringup/location/omamobile-gnss-nmea.service.d-tegu.conf
+tools/phone-ssh 'chmod 755 /usr/local/sbin/tegu-gnss-start; systemctl daemon-reload; systemctl unmask omamobile-gnss.service omamobile-gnss-nmea.service omamobile-gnss-nmea.socket; systemctl start omamobile-gnss-nmea.socket'
+# the boot mask still applies at the next boot, which is intended
+# remove (after the session; a reboot ends the modem anyway)
+tools/phone-ssh 'systemctl stop omamobile-gnss-nmea.socket omamobile-gnss-nmea.service omamobile-gnss.service; rm -rf /etc/systemd/system/omamobile-gnss.service.d /etc/systemd/system/omamobile-gnss-nmea.service.d /usr/local/sbin/tegu-gnss-start; systemctl daemon-reload'
+```
+
+**The doorbell under the controller's lock didn't stop the hang.** The modem
+driver's doorbell write and its read-back loop in the modem's BAR window were
+the clearest unguarded access in the window (the read-back retries for up to
+100 ms, and the CP can ask for the link down inside it), so the controller got
+a doorbell access that runs under `cfg_lock`, the lock `cp_link_down()` takes
+to clear `cfg_ep_ok` (branch `tegu-cpif-doorbell`, ee8ce0061 on the owner's
+fork). With it, a 10-minute GNSS session ran 26 minutes into the boot before
+the same hang (`CLUSTER0_NONCPU_WDTRESET`, the console ending mid-cycle right
+after `wake enabled for irq 96`), so the doorbell is not it, or not all of it.
+What is left in that window: the MSI set-up and `s51xx_pcie_restore_state()`
+on the way up, CPIF's own status reads, and the cycle itself (PHY isolate and
+un-isolate twice a second, each with its PMU write through the secure
+monitor). The trace of G3-L1 is the next step, now with the doorbell ruled
+out.
+
+**The CP link, three ways, none of them good (2026-10-30 night, same
+kernel plus the doorbell commit).** `keep_link_up` now takes a value, and
+each one fails differently, which between them says what the link is for:
+
+| cpif `keep_link_up` | What the link does | Result |
+| --- | --- | --- |
+| 0 | cycles twice a second under GNSS traffic | fixes arrive; the SoC hangs. About 170 s after ONLINE without the doorbell commit (five boots); with it, one session reached 26 minutes of uptime before the same `CLUSTER0_NONCPU_WDTRESET`, the console ending mid-cycle right after `wake enabled for irq 96` |
+| 1 | held up, `ap2cp_wakeup` left high | fixes arrive for about a minute; the CP crashes 103-108 s after ONLINE (`PHONE_ACTIVE` drops, `ONLINE -> CRASH_EXIT`), six boots of six |
+| 2 | held up, `ap2cp_wakeup` answered as the full path does | nothing hangs and nothing crashes: 16 minutes with the modem ONLINE, no isolation, no UFS error. And no GNSS at all: `gnss_spi` transferred nothing all boot, the HAL reported status 1 and 3 and served no sentence |
+
+So `ap2cp_wakeup` is not a formality: high means the AP wants the link, and
+the CP stops serving GNSS when it goes low, while leaving it high with the
+link held makes the CP declare a fault. The link has to cycle, and the
+answer is to make the cycling safe. The doorbell commit moved the hang from
+170 s to 26 minutes, so that access was one of the unguarded ones but not
+the last. What is left in the window: the MSI set-up and
+`s51xx_pcie_restore_state()` on the way up, CPIF's own BAR reads
+(`offset_boot_indicator`, the capability and magic words, the queue
+head/tail if any of them sit in the window rather than in the reserved
+DRAM), and the cycle itself, each step of which writes the PMU through the
+secure monitor. That is G3-L1's trace, and it is next.
+
+**G3-L1 answered (2026-10-31 morning): the link cycled because our L1
+substates were a stub, and with them the session holds.** Implemented as
+Google's `exynos_pcie_rc_set_l1ss()` does for the modem endpoint, behind a
+`l1ss` parameter on the controller because the modem driver's last call in
+`s51xx_pcie_restore_state()` is an unconditional enable that also arrives
+during the ROM boot: acting on it there stops the image download (the CP
+never leaves BOOTING, `cpif` reports no PCIe endpoint for the ROM boot,
+three boots of three). Set after the CP is ONLINE:
+
+| | before (10-30 night) | with L1 substates (10-31) |
+| --- | --- | --- |
+| isolate/un-isolate pairs under GNSS traffic | about 2 a second, thousands in a session | 2 in the first 2.5 minutes, 7 in 5 minutes |
+| the SoC hang | about 170 s after ONLINE, or 26 minutes with the doorbell fix | none |
+| the CP | crashed 103-108 s after ONLINE when the link was held instead | ONLINE throughout |
+| fixes | about a minute's worth | 157 of 165 GGA sentences fixed at 5 minutes, still running |
+
+So the hang was never reached, because the link stopped being torn down.
+It is not the end of the story, though, and two further runs the same
+morning say why:
+
+- **L1.2 (`l1ss_mask` 0xf, Google's value): the cycling stops and the
+  session holds for minutes, then the link drops on its own.** At 325 s the
+  console has `link down completion timeout (IRQ0/1/2 0x0 0x400
+  0x371b1000)`, with IRQ1 bit 10 (LINK_DOWN) latched, then `s51xx
+  0001:01:00.0: Unable to change power state from D0 to D3hot, device
+  inaccessible` and cpif's `Can't set D3 state!!!!`: the link was already
+  down when the orderly power-off began, so PME_Turn_Off could not
+  complete, and the SoC went with it. Our `cp_pme_turn_off()` does ask for
+  an L1 exit first, so this is the link leaving L1.2 unexpectedly rather
+  than a missing exit request. CLKREQ#, which L1.2 needs to remove the
+  reference clock, is the first thing to check on this board.
+- **L1.1 only (`l1ss_mask` 0xa): the cycling does not stop.** Without L1.2
+  the modem still asks for the link to be powered off when it goes idle, so
+  the isolate and un-isolate pairs continue and the original hang came back
+  at 165.9 s, with the console ending right after a link-up
+  (`restore_state`, the BAR0 write, the wake-irq toggle), which is the same
+  shape as 10-29 and 10-30.
+
+A third run settles the timing question and corrects a guess of mine. With
+`tpoweron` raised to Google's largest value (0xfa, 3100 us) on the theory
+that the endpoint needed longer to restore its clock, the cycling did not
+stop at all: the trace counted **486 link cycles by 244 s**, and the
+console ends mid-cycle right after `PHY isolated`, which is the original
+hang. So the 200 us Google uses for this modem (0xa1) is right, and a
+longer TPowerOn makes L1.2 unusable, after which the modem goes back to
+asking for a full power-off.
+
+The three configurations, all on the same kernel and session script:
+
+| `l1ss_mask` / `tpoweron` | link cycles | result |
+| --- | --- | --- |
+| 0xf / 0xa1 (Google's) | 7 in 5 minutes | 157 of 165 GGA fixed, CP ONLINE throughout, then an unexpected LINK_DOWN at 325 s and the SoC with it |
+| 0xa / 0xa1 (no L1.2) | continuous | the original hang at 165.9 s |
+| 0xf / 0xfa (3100 us) | 486 by 244 s | the original hang |
+
+What the pin side says: CLKREQ# is described and applied. The overlay gives
+`pcie@12100000` `pinctrl-0 = <&pcie0_clkreq>, <&pcie0_perst>` under the
+name "active", and the driver selects that state before the PHY, with
+gph0-1 at function 2, pull-up, drive 3 and the same through power-down. Our
+`MSTR_PEND_SEL_NAK`, `DBI_L1_EXIT_DISABLE` ("use aux_clk in L1.2") and the
+HW L1-exit mode all match Google's. So the configuration is not obviously
+wrong, and what is left is the unexpected LINK_DOWN itself: recovering from
+it instead of dying with it, and reading the LTSSM and the endpoint's L1SS
+status at the moment it happens.
+
+**And then the instrumentation showed all three of those runs were measuring
+nothing (2026-10-31, later).** With the link-down capture in place, every
+drop printed `L1SS_CTL1 0x0, CTL2 0x0` with `LNKCTL 0x...42`: the root
+port's substate control read zero while ASPM L1 was on. Two mistakes
+behind that:
+
+- The register offsets came from Google's driver (`PCIE_LINK_L1SS_CONTROL`
+  0x19c, `CONTROL2` 0x1a0). On this controller the L1SS capability sits at
+  **0x160** on both the root port and the endpoint, read from the hardware
+  with `pci_find_ext_capability()`; 0x19c is something else, so the writes
+  landed on unrelated registers and read back as zero.
+- Those registers are also behind DBI's read-only lock, which a write needs
+  `dw_pcie_dbi_ro_wr_en()` to lift. Lifting it alone changed nothing,
+  because the offset was still wrong.
+
+What that means for the three rows above: the `l1ss_mask` and `tpoweron`
+values never reached the hardware, so the differences between those runs
+are not the substates. The one real change was plain ASPM L1 on the link
+control register, which does take (`LNKCTL` bit 1 set, `0x...42`), and
+that alone is what the five-minute run had. The capability's own values at
+that point, read live during a session with the link up:
+
+| | capability | CTL1 | CTL2 |
+| --- | --- | --- | --- |
+| root port 0000:00:00.0 | 0x160 | 0x40a30a00 (substates off) | 0x79 |
+| endpoint 0000:01:00.0 | 0x160 | 0x40a30000 (substates off) | 0x79 |
+
+Decoded, both ends support everything that is needed (read live, link up):
+
+| | CAP | supports | CTL1 enables | TCommon | LTR threshold | TPowerOn |
+| --- | --- | --- | --- | --- | --- | --- |
+| root port | 0x280a1f | PCI-PM L1.1/L1.2, ASPM L1.1/L1.2, L1 PM substates | 0 (none) | 10 us | 163 x scale 2 | 57 x scale 1 |
+| endpoint | 0x790a1f | the same four | 0 (none) | 0 | 163 x scale 2 | 57 x scale 1 |
+
+So the hardware is willing on both sides and the timing fields are already
+populated by whoever set them; only the four enable bits are clear. An
+earlier reading of mine that the endpoint had no L1SS capability was taken
+with the link down, where the whole config space reads 0xffff, and is
+withdrawn.
+
+What has and has not been made to work from userspace, with `setpci` during
+a session: the root port takes the enable bits (CTL1 0x4600 to 0x460f) and
+ASPM L1 in its link control (0x40 to 0x42), and so does the endpoint's link
+control, but a window in which both ends' config space is readable is hard
+to catch once the CP is ONLINE, because the link is down most of the time:
+a 1 Hz poll missed it for 120 s, and a 50 Hz poll caught one window but the
+boot ended before the measurement. Inside the driver the write belongs
+right after the ATU is set, which is where the implementation puts it, and
+it has not yet been observed to take effect: no readback line appeared in
+three runs, so the next step is a print at the entry of
+`gs201_pcie_cp_l1ss()` to see whether the modem driver's request arrives at
+all, rather than more guessing about the registers. The implementation now
+reads both offsets from the hardware and logs CTL1 back after writing, so
+the next run says whether the substates are on rather than leaving it to
+be assumed. Three mistakes of
+mine on the way there, all worth recording: the module built for this
+palmtop must carry `google,zumapro-pcie-cp` in its match table and treat
+`samsung,sysreg` as optional (the in-tree branch has neither, so a module
+built from it never binds and the modem reports "no PCIe endpoint for the
+ROM boot"); a module built without `LOCALVERSION=-s2mpg15-m1` is refused as
+"Invalid module format", and a plain `make drivers/.../x.o` in the shared
+output tree rewrites `utsrelease.h` so later module builds inherit the
+wrong release; and the controller needs `allow_hw=1`, which an edit to the
+start script's insmod line must not drop.
+
+**Every register path in the cycling window, audited from the source
+(2026-10-30 night, offline).** With the doorbell fixed and the hang still
+there at 26 minutes, the obvious next question is which other access lands
+after isolation. Reading all of them says: none that is unguarded.
+
+- The modem driver's shared-memory reads are not in the BAR window at all.
+  `mld->base` comes from `cp_shmem_get_region()` / `cp_shmem_get_nc_region()`
+  (`shm_ipc.c`, `memremap()` of the reserved DRAM), so the boot indicator,
+  the magic and capability words and the queue head/tail are plain DRAM and
+  safe while the link is down.
+- Every DBI access goes through `cp_dbi_read()` / `cp_dbi_write()`
+  (`.read_dbi` / `.write_dbi` of `cp_dw_ops`), which take `dbi_lock` and do
+  nothing unless `dbi_ok`. That covers the per-queue MSI handlers'
+  `dw_pcie_readl_dbi()`, which fire on exactly this traffic.
+- The link's own interrupt handler, `cp_ctrl_irq_handler()`, takes
+  `cfg_lock` and returns `IRQ_NONE` unless `cfg_root_ok`; `cp_ctrl_irq(cp,
+  false)` uses `disable_irq()`, which waits for a handler already running,
+  and it runs first in `cp_link_down()`.
+- Configuration space, root and endpoint, is behind `cfg_root_ok` and
+  `cfg_ep_ok` under the same lock, which `cp_link_down()` clears before it
+  touches PERST#, the PHY or the isolation.
+- `gs201_pcie_cp_link_ok()` and `gs201_pcie_cp_dump()` read ELBI under
+  `cfg_lock` with `cfg_root_ok` checked.
+- The doorbell was the one exception, and it is fixed (branch
+  `tegu-cpif-doorbell`, in `gs201_pcie_cp_doorbell()`).
+
+So the remaining hang is most likely not a stray register read but
+something that accumulates over the cycles themselves: about 3000 of them
+in the 26 minutes that session lasted, each with a PMU write through the
+secure monitor, a `phy_init()` / `phy_exit()` pair, an MSI re-arm and a
+root-port window restore. G3-L1's trace should therefore number the cycles
+and log each step's entry, so the console says which step of which cycle
+stopped, rather than hunting a read that the audit above says is not
+there. The interrupt enable and disable calls are paired behind
+`ctrl_irq_on` and `msi_irqs_on`, so a plain enable/disable imbalance is
+out.
+
+**Why the link cycles twice a second at all: our L1 substates are a stub
+(2026-10-30 night, offline).** `gs201_pcie_cp_l1ss()` in our controller
+returns 0 and does nothing; its own comment says L1 substates are never
+enabled on this link. The modem driver asks for them after every link-up
+(`s51xx_pcie_restore_state()` calls `s51xx_pcie_l1ss_ctrl(1, ...)`), and
+Google's driver implements that call: `exynos_pcie_rc_set_l1ss()` finds the
+endpoint's L1SS capability and writes `PCI_L1SS_CTL1`/`CTL2` and the link
+control register on both ends, for the Samsung modem endpoint among others,
+behind a `use_l1ss` property in its device tree.
+
+So on stock the modem can park an idle link in L1.2 and keep it up; on ours
+the only way it can save power when it goes idle is to ask the AP to power
+the link off, which is exactly the isolate and un-isolate pair we see about
+twice a second under GNSS traffic. That is not a symptom of the hang, it is
+what makes the hang reachable in minutes: every cycle is another chance at
+whatever breaks, and the console shows the hang falling inside one.
+
+That gives the next kernel change after the trace: implement
+`gs201_pcie_cp_l1ss()` for real, as Google does, so an idle link parks
+instead of being torn down. If the cycling stops, the hang stops mattering
+for a GNSS session even before its root cause is found, and the
+`keep_link_up` diagnostic can be dropped. The registers to write are the
+root port's and the endpoint's `PCI_L1SS_CTL1` and `CTL2` plus
+`PCI_EXP_LNKCTL`'s ASPM bits, with the endpoint's capability found through
+`pci_find_ext_capability(..., PCI_EXT_CAP_ID_L1SS)`; it needs the link up
+and the ATU set, which is why Google defers the request until then and
+keeps a pending mask.
+
+The bring-up start script
+[`bringup/omamobile-tegu-modem-up`](bringup/omamobile-tegu-modem-up) loads
+`cpif-keep-link.ko keep_link_up=0` and `gnss_spi.ko word32=2 piece=64
+spi_mode=0`.
 
 ### Suspend with the modem on (2026-10-27, early morning, same kernel)
 

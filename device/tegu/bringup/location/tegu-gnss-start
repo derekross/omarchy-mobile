@@ -1,0 +1,37 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tegu-gnss-start: the Pixel 9a's GNSS stack for omamobile-gnss.service, so
+# that Omarchy's Location switch starts it (MODEM-PLAN G3, resolved).
+#
+# On the 7 Pro omamobile-gnss.service loads a GNSS chip driver and runs the
+# gnss vendor profile. On the 9a the receiver is the modem's own GNSS core, so
+# the stack is: the modem up with GNSS (gnssd listens on @GNSSND), then the
+# gnss-slsi profile with its NMEA on the FIFO omamobile-gnss-nmea reads.
+#
+# Two bring-up limits, both in the plan: the modem starts once per boot (a
+# second start needs a reboot), and the CP's PCIe link under GNSS traffic is
+# unsolved, so a session lasts a minute or two. HOLD picks which way it fails:
+# 2 (default) holds the link and answers the CP on ap2cp_wakeup, 1 holds it
+# with the line high (the CP then crashes 103-108 s after ONLINE), 0 lets the
+# link cycle (the SoC hangs about 170 s after ONLINE).
+#
+# Install: /usr/local/sbin, with the two drop-ins beside this file.
+set -euo pipefail
+say() { printf "tegu-gnss: %s\n" "$*" >&2; }
+grep -qs okay /sys/firmware/devicetree/base/soc/usi@111e00c0/spi@111e0000/status ||
+  { say "SPI21 is not enabled in this device tree; nothing to do"; exit 0; }
+if ! systemctl is-active -q omamobile-tegu-modem; then
+  if [[ -d /sys/module/cpif ]]; then
+    say "the modem ran this boot and is down; reboot before turning location on again"; exit 1
+  fi
+  /usr/local/bin/omamobile-tegu-modem-up --gnss
+fi
+# The CP's link: see HOLD in the header. Nothing here fixes it; this only
+# chooses which failure the session gets.
+echo "${HOLD:-2}" > /sys/module/cpif/parameters/keep_link_up 2>/dev/null &&
+  say "CP link: keep_link_up=$(cat /sys/module/cpif/parameters/keep_link_up)"
+for _ in $(seq 1 120); do grep -q "@GNSSND" /proc/net/unix && break; sleep 0.25; done
+grep -q "@GNSSND" /proc/net/unix || { say "gnssd is not listening (the modem profile ran without GNSS?)"; exit 1; }
+sleep 5				# let gnssd settle before the HAL opens the link
+mkdir -p /run/omamobile-gnss && touch /run/omamobile-gnss/pinned
+exec env OMAMOBILE_GNSS_NMEA_OUT=fifo /usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss-slsi start
