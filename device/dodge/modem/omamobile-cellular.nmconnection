@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Mobile data through NetworkManager + ModemManager. NM reads the bearer's
+# IP config from MM (static on QMI) and applies address, routes, DNS and MTU
+# on the qmapmux link (rmnet_ipa0 underneath on the IPA kernel). The APN is
+# the generic "internet"; no SIM-specific value lives here. Wi-Fi stays
+# preferred: lower autoconnect priority than Wi-Fi profiles (default 0) and
+# route metric 700 against Wi-Fi's 600, so with both up the default route is
+# Wi-Fi and cellular takes over only when Wi-Fi is gone.
+# Inert without a ModemManager modem (modem flag /etc/omamobile/modem-probe.enable off).
+[connection]
+id=omamobile-cellular
+type=gsm
+autoconnect=true
+autoconnect-priority=-10
+autoconnect-retries=0
+
+[gsm]
+apn=internet
+
+[ipv4]
+method=auto
+route-metric=700
+
+[ipv6]
+method=auto
+addr-gen-mode=stable-privacy
+route-metric=700

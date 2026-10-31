@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: 0BSD
 #
-# Omarchy Mobile build of libfprint for the Pixel 7 Pro: upstream libfprint with
+# Omarchy Mobile build of libfprint for the Pixel 7 Pro and 9a: upstream libfprint with
 # one more driver, omamobile_udfps (omamobile-udfps.c), which reaches the
 # phone's under-display sensor through omamobile-fp-bridge
 # (packages/omamobile-fingerprint, device/cheetah/FINGERPRINT-PLAN.md).
@@ -15,9 +15,9 @@
 
 pkgname=libfprint
 pkgver=1.94.100
-pkgrel=1.6
+pkgrel=1.7
 _tag=v$pkgver
-pkgdesc="Library for fingerprint readers (Omarchy Mobile: Pixel 7 Pro under-display sensor)"
+pkgdesc="Library for fingerprint readers (Omarchy Mobile: Pixel under-display sensors)"
 arch=(aarch64)
 url="https://fprint.freedesktop.org/"
 license=(LGPL-2.1-or-later)
@@ -28,8 +28,8 @@ source=("git+https://gitlab.freedesktop.org/libfprint/libfprint.git#tag=$_tag"
         0001-add-the-omamobile_udfps-driver.patch
         omamobile-udfps.c)
 sha256sums=('SKIP'
-            'fa0cf06a639cc128fcf048cded822643b6821ce0b230db4771cde3061e7f5cab'
-            '1c7e0007cce1c7dacf803e6e1214b869c110b781d12b2ba33d7a440d05019502')
+            '931c2e1aa2164f704a9d5e629460938d89e33567ac2a340c848b6c109ea6beff'
+            'ea0560ba96bdb9231917d81b3098d84525e6fa57b9a4743d462c6e67dc47548e')
 
 prepare() {
   cd libfprint

@@ -34,6 +34,18 @@ BOOT = os.environ.get('OMAMOBILE_MODEM_BOOT', '/dev/umts_boot0')
 ALLOW = Path('/sys/module/cpif/parameters/allow_poweroff')
 CRASH_LOG = Path(os.environ.get('OMAMOBILE_MODEM_CRASH_LOG', '/var/log/omamobile/modem-crashes.log'))
 RUN = Path(os.environ.get('OMAMOBILE_MODEM_RUN', '/run/omamobile-modem'))
+# watch's poll interval (OMAMOBILE_MODEM_WATCH_SECONDS overrides it; read in
+# watch(), so a bad value can't break the other subcommands). On the Pixel
+# 9a each open and close of umts_boot0 woke the CP's PCIe link for about
+# 100 ms: the old watch, one open per 0.5 s poll, woke it about 120 times a
+# minute. The status ioctl on a file held open doesn't wake it at all (0
+# link-ups in a minute at 0.5 s, measured 2026-10-29), so the file is held
+# for the whole watch and the interval stays at 0.5 s. The watcher was one
+# source of link cycling; the hang seen while gnssd reloaded Kepler
+# (device/tegu/MODEM-PLAN.md G3) is still open, it happened with the held
+# file too. A crash shows within a second.
+WATCH_SECONDS_DEFAULT = 0.5
+WATCH_SECONDS_RANGE = (0.2, 60.0)
 
 IOCTL_POWER_OFF = 0x6f20            # _IO('o', 0x20)
 IOCTL_GET_CP_STATUS = 0x6f27        # _IO('o', 0x27)
@@ -128,11 +140,43 @@ def record_crash():
         os.fsync(out.fileno())
 
 
+def watch_seconds():
+    """OMAMOBILE_MODEM_WATCH_SECONDS within WATCH_SECONDS_RANGE, else the
+    default (with a note), so a typo there can't stop the watch."""
+    value = os.environ.get('OMAMOBILE_MODEM_WATCH_SECONDS')
+    if value is None:
+        return WATCH_SECONDS_DEFAULT
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = float('nan')
+    low, high = WATCH_SECONDS_RANGE
+    if not low <= seconds <= high:
+        say(f'OMAMOBILE_MODEM_WATCH_SECONDS={value!r} is not {low:g}-{high:g} s: '
+            f'polling every {WATCH_SECONDS_DEFAULT:g} s')
+        return WATCH_SECONDS_DEFAULT
+    return seconds
+
+
 def watch(marker=None):
+    seconds = watch_seconds()
     was_online = False
     crashed = False
+    fd = None
     while True:
-        now = state()
+        # one open file for the whole watch, so each poll is a single ioctl
+        # (the open and close woke the 9a's CP link; see WATCH_SECONDS_DEFAULT)
+        try:
+            if fd is None:
+                fd = os.open(BOOT, os.O_RDWR | os.O_CLOEXEC)
+            now = fcntl.ioctl(fd, IOCTL_GET_CP_STATUS)
+        except FileNotFoundError:
+            now = 0
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            now = state()
         if now == ONLINE and not was_online:
             was_online = True
             say('CP ONLINE')
@@ -146,7 +190,7 @@ def watch(marker=None):
             (RUN / 'crashed').write_text(STATES.get(now, str(now)) + '\n')
             say('the CP left ONLINE: crash recorded; nothing restarts it. '
                 'Reboot to recover (the reboot powers it off).')
-        time.sleep(.5)
+        time.sleep(seconds)
 
 
 def baseband_version(path):

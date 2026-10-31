@@ -25,6 +25,12 @@ ShellRoot {
   }
 
   Component.onCompleted: {
+    // Upstream's new board information must keep a cancellable source.
+    for (const kind of ["system", "device"]) {
+      const request = owlHost.android(null, kind, function() { check(false, "cancelled board-info callback") })
+      check(request && typeof request.stop === "function", kind + " returns its cancellation handle")
+      request.stop()
+    }
     owlHost.command(null, "python3 -c 'import sys; sys.stdout.write(\"x\"*3000000); sys.stderr.write(\"y\"*3000000)'", 5, function(r) {
       check(r.ok && r.out === "x".repeat(65536) && r.err === "y".repeat(65536), "command output is bounded on both pipes")
       pass()

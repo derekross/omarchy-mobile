@@ -1,0 +1,42 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Install the dodge Bluetooth bring-up on the phone. Run as root, from
+# this directory (copied to the phone), or with the directory as $1.
+# Idempotent.
+#
+# Installs omamobile-bt (script and unit), enables it and BlueZ's
+# bluetooth.service. It does not start them.
+#
+# It also copies the WCN7860 Bluetooth firmware from the phone's own
+# bluetooth_a partition (read-only loop mount of a copy) to
+# /lib/firmware/qca: gngbtfw20.mbn (rampatch) and gngbtnv20.* (NVM).
+# Nothing is shipped or committed. Existing files are left alone. The
+# kernel modules in /usr/local/lib/omamobile/bt are installed separately.
+set -eu
+SRC=${1:-$(dirname "$0")}
+FW=/lib/firmware/qca
+
+log() { echo "dodge-bt-install: $*"; }
+
+[ "$(id -u)" = 0 ] || { log "run as root"; exit 1; }
+
+install -D -m 755 "$SRC/omamobile-bt" /usr/local/sbin/omamobile-bt
+install -D -m 644 "$SRC/omamobile-bt.service" /etc/systemd/system/omamobile-bt.service
+systemctl daemon-reload
+systemctl enable omamobile-bt.service bluetooth.service
+
+if [ -s "$FW/gngbtfw20.mbn" ] && [ -s "$FW/gngbtnv20.bin" ]; then
+	log "firmware already in $FW"
+else
+	part=$(readlink -f /dev/disk/by-partlabel/bluetooth_a)
+	[ -b "$part" ] || { log "no bluetooth_a partition"; exit 1; }
+	tmp=$(mktemp -d)
+	trap 'umount "$tmp/m" 2>/dev/null; rm -rf "$tmp"' EXIT
+	mkdir "$tmp/m"
+	dd if="$part" of="$tmp/bt.img" bs=1M status=none
+	mount -o ro,loop "$tmp/bt.img" "$tmp/m"
+	mkdir -p "$FW"
+	cp -n "$tmp/m/image/gngbtfw20.mbn" "$tmp/m/image"/gngbtnv20.* "$FW/"
+	log "copied $(ls "$FW" | grep -c '^gngbt') gngbt* files to $FW"
+fi
+log "done; the next boot brings up hci0"

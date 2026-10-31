@@ -15,6 +15,11 @@ told when the kernel blocks the radio, so on a block the adapter is powered
 off through neard (on a kernel that already did, neard's view stays stale),
 and on an unblock neard is restarted: it finds the adapter again, powers it
 (DefaultPowered), and a new poll loop starts.
+
+And it polls only while the screen is lit, as stock Android does: with every
+display connector off (DPMS) for SCREEN_OFF_SECONDS, the poll loop stops,
+and it starts again when the screen comes on. A poll loop is the radio
+searching for cards, which costs the Pixel 9a about 60 mA.
 """
 import glob
 import subprocess
@@ -30,6 +35,7 @@ NEARD = "org.neard"
 RECORD = "org.neard.Record"
 ADAPTER = "org.neard.Adapter"
 REPEAT_SECONDS = 3.0
+SCREEN_OFF_SECONDS = 4
 
 last = {"uri": None, "time": 0.0}
 
@@ -80,7 +86,10 @@ def on_interfaces_added(_conn, _sender, _path, _iface, _signal, params, _data):
 
 def start_polling(bus):
     """Power the first adapter and start a poll loop (neard's ConstantPoll
-    keeps it going after each tag)."""
+    keeps it going after each tag). True means "try again": neard isn't
+    answering, has no adapter yet, or refused the power-on."""
+    if rfkill["blocked"]:
+        return False  # switched off meanwhile; the next unblock restarts neard
     try:
         objects = bus.call_sync(NEARD, "/", "org.freedesktop.DBus.ObjectManager",
                                 "GetManagedObjects", None, None,
@@ -93,10 +102,18 @@ def start_polling(bus):
         if adapter is None:
             continue
         if not adapter.get("Powered"):
-            bus.call_sync(NEARD, path, "org.freedesktop.DBus.Properties", "Set",
-                          GLib.Variant("(ssv)", (ADAPTER, "Powered", GLib.Variant("b", True))),
-                          None, Gio.DBusCallFlags.NONE, -1, None)
-        if not adapter.get("Polling"):
+            # This runs from GLib timeouts too: an exception would remove the
+            # timer for good, so a failed power-on is logged and retried.
+            try:
+                bus.call_sync(NEARD, path, "org.freedesktop.DBus.Properties", "Set",
+                              GLib.Variant("(ssv)", (ADAPTER, "Powered", GLib.Variant("b", True))),
+                              None, Gio.DBusCallFlags.NONE, -1, None)
+            except GLib.Error as error:
+                log(f"{path}: Powered=True: {error.message}")
+                return True
+        if not adapter.get("Polling") and not screen["lit"]:
+            log(f"screen off: {path} powered, polling waits for the screen")
+        elif not adapter.get("Polling"):
             try:
                 bus.call_sync(NEARD, path, ADAPTER, "StartPollLoop",
                               GLib.Variant("(s)", ("Initiator",)), None,
@@ -141,6 +158,65 @@ def set_powered(bus, powered):
 
 
 rfkill = {"blocked": None}
+screen = {"lit": True, "dark_for": 0, "start": False}
+
+
+def screen_lit(drm="/sys/class/drm"):
+    """True unless every connected display connector reports DPMS off."""
+    states = []
+    for path in glob.glob(f"{drm}/card*-*"):
+        try:
+            with open(f"{path}/status") as f:
+                if f.read().strip() != "connected":
+                    continue
+            with open(f"{path}/dpms") as f:
+                states.append(f.read().strip())
+        except OSError:
+            continue
+    return not states or any(state == "On" for state in states)
+
+
+def stop_polling(bus):
+    try:
+        objects = bus.call_sync(NEARD, "/", "org.freedesktop.DBus.ObjectManager",
+                                "GetManagedObjects", None, None,
+                                Gio.DBusCallFlags.NONE, -1, None).unpack()[0]
+    except GLib.Error:
+        return
+    for path, interfaces in objects.items():
+        adapter = interfaces.get(ADAPTER)
+        if adapter is None or not adapter.get("Polling"):
+            continue
+        try:
+            bus.call_sync(NEARD, path, ADAPTER, "StopPollLoop", None, None,
+                          Gio.DBusCallFlags.NONE, -1, None)
+            log(f"screen off: polling stopped on {path}")
+        except GLib.Error as error:
+            log(f"could not stop polling on {path}: {error.message}")
+
+
+def follow_screen(bus):
+    """Every 2 s: once the screen has been off for a while, stop any poll loop
+    (each time, so one that neard, a restart or the sleep hook started while
+    the screen was dark stops too); start it again when the screen lights
+    (unless NFC is switched off)."""
+    lit = screen_lit()
+    if lit:
+        screen["dark_for"] = 0
+        if not screen["lit"]:
+            screen["lit"] = True
+            screen["start"] = not rfkill["blocked"]
+            if screen["start"]:
+                log("screen on: polling again")
+        if screen["start"]:
+            screen["start"] = start_polling(bus)
+        return True
+    screen["dark_for"] += 2
+    if screen["dark_for"] >= SCREEN_OFF_SECONDS:
+        screen["lit"] = False
+        if not rfkill["blocked"]:
+            stop_polling(bus)
+    return True
 
 
 def follow_rfkill(bus):
@@ -172,6 +248,7 @@ def main():
         # earlier run of it): start from a fresh neard.
         restart_neard(bus)
     GLib.timeout_add_seconds(2, follow_rfkill, bus)
+    GLib.timeout_add_seconds(2, follow_screen, bus)
     GLib.MainLoop().run()
 
 

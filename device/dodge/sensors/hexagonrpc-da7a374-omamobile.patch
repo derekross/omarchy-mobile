@@ -1,0 +1,101 @@
+diff --git a/hexagonrpcd/listener.c b/hexagonrpcd/listener.c
+index 3414974..891fcf4 100644
+--- a/hexagonrpcd/listener.c
++++ b/hexagonrpcd/listener.c
+@@ -588,12 +588,21 @@ int run_fastrpc_listener(int fd,
+ 
+ 		if (returned != NULL)
+ 			iobuf_free(n_outbufs, returned);
++		returned = NULL;
+ 
+ 		ret = invoke_requested_procedure(n_ifaces, ifaces,
+ 						 handle, sc, &result,
+ 						 decoded, &returned);
+-		if (ret)
+-			break;
++		if (ret) {
++			/* Report the error to the DSP and keep serving. */
++			if (decoded != NULL)
++				iobuf_free(REMOTE_SCALARS_INBUFS(sc), decoded);
++			decoded = NULL;
++			sc = REMOTE_SCALARS_MAKE(0, 0, 0);
++			n_outbufs = 0;
++			ret = 0;
++			continue;
++		}
+ 
+ 		if (decoded != NULL)
+ 			iobuf_free(REMOTE_SCALARS_INBUFS(sc), decoded);
+diff --git a/hexagonrpcd/rpcd_builder.c b/hexagonrpcd/rpcd_builder.c
+index d374958..93e44ba 100644
+--- a/hexagonrpcd/rpcd_builder.c
++++ b/hexagonrpcd/rpcd_builder.c
+@@ -31,6 +31,7 @@
+ #define SENSORS_CONFIG		"/sensors/config/"
+ #define SENSORS_REGISTRY	"/sensors/registry/"
+ #define SNS_REG_CONFIG		"/sensors/sns_reg.conf"
++#define SENSORS_ODM		"/sensors/config/"
+ #define SYSFS_SOCINFO		"/socinfo/"
+ 
+ static struct hexagonfs_dirent *hfs_mkdir(const char *name, size_t n_ents, ...)
+@@ -111,7 +112,7 @@ static struct hexagonfs_dirent *hfs_map_or_empty(const char *name, const char *p
+  */
+ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ {
+-	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
++	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo, *sns_odm;
+ 	size_t n_prefix;
+ 	struct hexagonfs_dirent *persist_dir, *vendor_dir;
+ 
+@@ -122,6 +123,7 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 	sns_reg = malloc(n_prefix + strlen(SENSORS_REGISTRY) + 1);
+ 	sns_reg_config = malloc(n_prefix + strlen(SNS_REG_CONFIG) + 1);
+ 	socinfo = malloc(n_prefix + strlen(SYSFS_SOCINFO) + 1);
++	sns_odm = malloc(n_prefix + strlen(SENSORS_ODM) + 1);
+ 
+ 	dsp_libs = malloc(n_prefix + strlen(DSP_LIBS) + strlen(dsp) + 1);
+ 
+@@ -150,6 +152,11 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 		strcat(socinfo, SYSFS_SOCINFO);
+ 	}
+ 
++	if (sns_odm != NULL) {
++		strcpy(sns_odm, prefix);
++		strcat(sns_odm, SENSORS_ODM);
++	}
++
+ 	if (dsp_libs != NULL) {
+ 		strcpy(dsp_libs, prefix);
+ 		strcat(dsp_libs, DSP_LIBS);
+@@ -172,6 +179,14 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 	 * Some platforms need vendor in / and some need it in /system. Form
+ 	 * a hard link between both locations.
+ 	 */
++	struct hexagonfs_dirent *odm_dir = hfs_mkdir("odm", 1,
++				hfs_mkdir("etc", 1,
++					hfs_mkdir("sensor", 1,
++						hfs_map_or_empty("config", sns_odm)
++					)
++				)
++		      );
++
+ 	vendor_dir = hfs_mkdir("vendor", 1,
+ 				hfs_mkdir("etc", 2,
+ 					hfs_mkdir("sensors", 2,
+@@ -182,7 +197,7 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 				)
+ 			);
+ 
+-	return hfs_mkdir("/", 6,
++	return hfs_mkdir("/", 7,
+ 			hfs_mkdir("mnt", 1,
+ 				hfs_mkdir("vendor", 1,
+ 					persist_dir
+@@ -197,6 +212,7 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 			hfs_mkdir("system", 1,
+ 				vendor_dir
+ 			),
++			odm_dir,
+ 			hfs_mkdir("usr", 1,
+ 				hfs_mkdir("lib", 1,
+ 					hfs_mkdir("qcom", 1,
