@@ -32,6 +32,12 @@ successful). Bytes 0x30-0x37 went from `02 1b 00 00 02 1c 00 00` to
 `02 1b 00 00 02 1e 00 00`. Every later boot found B already successful, and
 the unit wrote nothing.
 
+The writable interval was limited to each helper invocation; an exact
+wall-clock duration was not captured. Before-write fastboot slot flag
+output is not available in this curated record. The table above is the
+2026-10-30 after-state, not a reconstructed before/after getvar comparison.
+Those missing observations remain questions for the maintainer.
+
 **Paused on 2026-10-30** at the maintainer's request (#143): the unit is
 masked on the phone (`systemctl mask omamobile-boot-success`). No further
 devinfo write until it is agreed on the issue. Because slot A is unbootable,
