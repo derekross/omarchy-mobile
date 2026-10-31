@@ -1172,8 +1172,31 @@ that point, read live during a session with the link up:
 | root port 0000:00:00.0 | 0x160 | 0x40a30a00 (substates off) | 0x79 |
 | endpoint 0000:01:00.0 | 0x160 | 0x40a30000 (substates off) | 0x79 |
 
-So the LTR threshold and TCommon fields are already populated by whoever
-set them, and only the four enable bits are clear. The implementation now
+Decoded, both ends support everything that is needed (read live, link up):
+
+| | CAP | supports | CTL1 enables | TCommon | LTR threshold | TPowerOn |
+| --- | --- | --- | --- | --- | --- | --- |
+| root port | 0x280a1f | PCI-PM L1.1/L1.2, ASPM L1.1/L1.2, L1 PM substates | 0 (none) | 10 us | 163 x scale 2 | 57 x scale 1 |
+| endpoint | 0x790a1f | the same four | 0 (none) | 0 | 163 x scale 2 | 57 x scale 1 |
+
+So the hardware is willing on both sides and the timing fields are already
+populated by whoever set them; only the four enable bits are clear. An
+earlier reading of mine that the endpoint had no L1SS capability was taken
+with the link down, where the whole config space reads 0xffff, and is
+withdrawn.
+
+What has and has not been made to work from userspace, with `setpci` during
+a session: the root port takes the enable bits (CTL1 0x4600 to 0x460f) and
+ASPM L1 in its link control (0x40 to 0x42), and so does the endpoint's link
+control, but a window in which both ends' config space is readable is hard
+to catch once the CP is ONLINE, because the link is down most of the time:
+a 1 Hz poll missed it for 120 s, and a 50 Hz poll caught one window but the
+boot ended before the measurement. Inside the driver the write belongs
+right after the ATU is set, which is where the implementation puts it, and
+it has not yet been observed to take effect: no readback line appeared in
+three runs, so the next step is a print at the entry of
+`gs201_pcie_cp_l1ss()` to see whether the modem driver's request arrives at
+all, rather than more guessing about the registers. The implementation now
 reads both offsets from the hardware and logs CTL1 back after writing, so
 the next run says whether the substates are on rather than leaving it to
 be assumed. Three mistakes of
