@@ -56,6 +56,7 @@ install -Dm644 systemd/user/xdg-desktop-portal-gnome-omamobile.conf \
 install -Dm644 polkit/49-omamobile-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omamobile-admin-self.rules"
 install -Dm644 applications/omamobile-agent.desktop "$destination/usr/share/applications/omamobile-agent.desktop"
 install -Dm644 applications/omamobile-open-intent.desktop "$destination/usr/share/applications/omamobile-open-intent.desktop"
+install -Dm644 applications/omamobile-update.desktop "$destination/usr/share/applications/omamobile-update.desktop"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-shell/LICENSE"
 # OWL.md is Simon Schubert's OWL guide (MIT). The built-in widgets themselves
 # come from omamobile-owl-widgets, which ships the store's licence.

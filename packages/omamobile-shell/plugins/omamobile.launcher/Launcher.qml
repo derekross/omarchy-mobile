@@ -140,7 +140,7 @@ Item {
   // own if it is already open. Omarchy's "Launching…" feedback stays.
   function launchApp(entry) {
     if (!entry || !entry.id) return
-    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function")
+    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function" && !LauncherModel.opensShellSurface(entry))
       appLibrary.beginLaunchFeedback(appLibrary.entryName(entry))
     Quickshell.execDetached(LauncherModel.appArgv(entry.id))
     dismiss()

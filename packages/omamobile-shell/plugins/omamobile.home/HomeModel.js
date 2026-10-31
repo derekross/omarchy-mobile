@@ -871,6 +871,15 @@ function commandText(output, maxLines) {
 // widget's host.launch, a text widget's tap) and links as argv.
 var LAUNCH = "omamobile-launch"
 
+// A desktop entry that runs omarchy-shell opens a shell surface (the
+// Updates entry summons the update sheet), never a window, so Omarchy's
+// launch toast would wait for a toplevel that doesn't come and sit over the
+// sheet until it times out: no toast for it.
+function opensShellSurface(entry) {
+  var command = entry && entry.command ? entry.command : []
+  return command.length > 0 && String(command[0]).replace(/^.*\//, "") === "omarchy-shell"
+}
+
 function appLaunchArgv(desktopId) {
   return [LAUNCH, "app", String(desktopId || "")]
 }
@@ -1033,7 +1042,7 @@ if (typeof module !== "undefined") {
     addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid, transposeLayout: transposeLayout,
     weatherText: weatherText, geocodeUrl: geocodeUrl, forecastUrl: forecastUrl,
     parseGeocode: parseGeocode, parseForecast: parseForecast, parseAgenda: parseAgenda, AGENDA_ARGV: AGENDA_ARGV,
-    monthGrid: monthGrid, commandText: commandText,
+    monthGrid: monthGrid, commandText: commandText, opensShellSurface: opensShellSurface,
     COVERING_LAYERS: COVERING_LAYERS, layersAfter: layersAfter, homeShown: homeShown, pageShown: pageShown, overdue: overdue
   }
 }

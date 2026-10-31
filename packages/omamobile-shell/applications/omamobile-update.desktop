@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+[Desktop Entry]
+Type=Application
+Name=Updates
+Comment=Update Omarchy and the phone's packages
+Exec=omarchy-shell shell summon omamobile.update "{}"
+TryExec=omarchy-shell
+Icon=software-updater
+Terminal=false
+Categories=System;
+Keywords=update;upgrade;packages;software;

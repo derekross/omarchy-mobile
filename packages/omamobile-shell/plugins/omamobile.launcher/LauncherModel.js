@@ -78,6 +78,15 @@ function agentName(id) {
 // open there: one app per screen, as on Android.
 var LAUNCH = "omamobile-launch"
 
+// A desktop entry that runs omarchy-shell opens a shell surface (the
+// Updates entry summons the update sheet), never a window, so Omarchy's
+// launch toast would wait for a toplevel that doesn't come and sit over the
+// sheet until it times out: no toast for it.
+function opensShellSurface(entry) {
+  var command = entry && entry.command ? entry.command : []
+  return command.length > 0 && String(command[0]).replace(/^.*\//, "") === "omarchy-shell"
+}
+
 function appArgv(desktopId) {
   return [LAUNCH, "app", String(desktopId || "")]
 }
@@ -161,6 +170,7 @@ if (typeof module !== "undefined") {
     agentName: agentName,
     LAUNCH: LAUNCH,
     appArgv: appArgv,
+    opensShellSurface: opensShellSurface,
     promptArgv: promptArgv,
     PICK_AGENT_ARGV: PICK_AGENT_ARGV,
     DRAWER_FLING: DRAWER_FLING,

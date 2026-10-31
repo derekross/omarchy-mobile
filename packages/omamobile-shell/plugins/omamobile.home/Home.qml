@@ -916,7 +916,7 @@ Item {
   function launch(appId) {
     var entry = entryFor(appId)
     if (!entry || !entry.id) return false
-    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function")
+    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function" && !HomeModel.opensShellSurface(entry))
       appLibrary.beginLaunchFeedback(appLibrary.entryName(entry))
     Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))
     return true
