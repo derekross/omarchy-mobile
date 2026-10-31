@@ -419,6 +419,14 @@ with the cable in.
 
   One failure in about 50 resumes means a clean run of ten proves nothing
   by itself, so run it both ways and count.
+
+  **S3 result, 2026-10-31 (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`):**
+  clock gating off (`clkgate_enable` 0), console kept, modem never loaded
+  that boot, ten 30-second RTC cycles: ten of ten woke, `suspend_stats`
+  success 10 and fail 0, no UFS error-handler, link-startup or I/O lines,
+  no ACPM timeouts. With gating on, 10-31's earlier run was also ten of ten,
+  so this does not yet separate the two; the count both ways goes on until
+  one side fails.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
