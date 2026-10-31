@@ -174,8 +174,64 @@ fi
 grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
-grep -c 'var close = root.pulling && root.pull > root.pullToClose' "$l" >/dev/null || fail "pulling the drawer down closes it"
+grep -c 'if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)' "$l" >/dev/null || fail "pulling the drawer down closes it"
 grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail "a pull doesn't launch the app under it"
+# The drawer's handle is a pill (no chevron), and the home screen's swipe up
+# reaches the drawer through DrawerLink.js, one script for both plugins:
+# the launcher publishes itself, the home screen loads DrawerLinkClient.qml
+# from the launcher's folder beside it.
+grep -c 'objectName: "drawerHandle"' "$l" >/dev/null || fail "the drawer has a handle"
+# The drawer's layer surface stays mapped (a newly mapped one drew its first
+# frames before the output's scale: the grid at 3x on every swipe up); closed,
+# it takes no touch and draws nothing. The home screen doesn't scale under it
+# (widgets snapped between pixels as it animated).
+grep -c 'mask: Region { item: root.opened ? sheet : null }' "$l" >/dev/null || fail "the closed drawer takes no touch"
+# Nothing changes size as the drawer moves: the dock reserves nothing (the
+# home screen keeps its height free, dockInset), so its window never grows
+# under a settling drawer (a frame of the old buffer centred: the first row
+# jumped half a dock); the search row is never faded in or out; the drawer's
+# render loop is awake before the finger moves (gesturePrepare).
+python3 - "$l" <<'PY3' || fail "the dock reserves nothing and the drawer's layout never changes"
+import re, sys
+src = open(sys.argv[1]).read()
+i = src.index('WlrLayershell.namespace: "omamobile-dock"')
+dock = src[src.rindex("PanelWindow {", 0, i):i]
+assert "exclusionMode: ExclusionMode.Ignore" in dock, dock
+assert "dockAway" not in src, "no dock handover"
+assert "running: root.warm || root.fingerOnDrawer || settle.running" in src
+PY3
+grep -c 'readonly property int dockInset:' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen keeps the dock's height free"
+grep -c 'swipe.drawer.gesturePrepare()' plugins/omamobile.home/DrawerSwipe.qml >/dev/null || fail "a press on the home screen wakes the drawer"
+grep -c 'if (!same) apps = entries' "$l" >/dev/null || fail "an unchanged app list keeps the grid's model"
+python3 - "$l" <<'PY2' || fail "the drawer's window stays mapped"
+import sys
+src = open(sys.argv[1]).read()
+i = src.index('WlrLayershell.namespace: "omamobile-launcher"')
+w = src[src.rindex("PanelWindow {", 0, i):i]
+assert "\n    visible: true\n" in w, w
+PY2
+grep -cE '^\s*scale:' plugins/omamobile.home/Home.qml >/dev/null && fail "the home screen doesn't scale under the drawer"
+grep -c 'objectName: "collapse"' "$l" >/dev/null && fail "the drawer's chevron is gone"
+grep -c 'Component.onCompleted: DrawerLink.publish(root)' "$l" >/dev/null || fail "the drawer publishes itself for the home screen's swipe"
+grep -c 'source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen reaches the drawer through the launcher's DrawerLinkClient.qml"
+grep -c '^import "DrawerLink.js" as DrawerLink$' plugins/omamobile.launcher/DrawerLinkClient.qml >/dev/null || fail "DrawerLinkClient.qml imports the launcher's DrawerLink.js"
+head -3 plugins/omamobile.launcher/DrawerLink.js | grep -c '^\.pragma library$' >/dev/null || fail "DrawerLink.js is one instance per engine (.pragma library)"
+rc=0; out=$(bash test/drawer-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the drawer under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the drawer under touch (test/drawer-touch)"
+else
+  pass "the drawer under touch: the handle taps and drags, a pull or a flick closes, a scrolled grid scrolls first, the home screen's swipe opens it"
+fi
+rc=0; out=$(bash test/home-gestures 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the home screen's swipes # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home screen's swipes (test/home-gestures)"
+else
+  pass "the home screen's swipes: up for the drawer with the finger, sideways and short flicks turn the page, taps and holds still work"
+fi
 # Home: Undo after a remove; sheets keep the focused field in view, with
 # their buttons pinned outside the Flickable.
 h=plugins/omamobile.home
@@ -252,8 +308,17 @@ fi
 # Pure-JS models, under Node when it's there.
 if command -v node >/dev/null; then
   for js in plugins/*/*.js; do
-    node --check "$js" || fail "$js parses"
+    # A `.pragma library` line is QML's, not JavaScript: check the rest.
+    if grep -c '^\.pragma library$' "$js" >/dev/null; then
+      tmp=$(mktemp --suffix=.js)
+      sed 's/^\.pragma library$//' "$js" > "$tmp"
+      node --check "$tmp" || fail "$js parses"
+      rm -f "$tmp"
+    else
+      node --check "$js" || fail "$js parses"
+    fi
   done
+  node test/gesture-model.js >/dev/null || { node test/gesture-model.js | grep -v '^ok'; fail "home and drawer gesture rules"; }
   node test/wifi-model.js || fail "Wi-Fi model"
   node test/bluetooth-model.js || fail "Bluetooth model"
   node test/sensor-model.js || fail "fingerprint sensor model"
@@ -393,7 +458,7 @@ grep -c 'readonly property bool shown: root.pageShown(owner.index)' "$home" >/de
 grep -c 'if ("shown" in item) item.shown = Qt.binding(function() { return cell.shown })' "$home" >/dev/null || fail "widgets get shown"
 grep -c 'readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers)' "$home" >/dev/null || fail "the home screen knows when it is covered"
 grep -c 'root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)' "$home" >/dev/null || fail "the drawer and recent apps cover the home screen"
-grep -c 'onMovingChanged: root.pagesMoving = moving' "$home" >/dev/null || fail "neighbour pages show while swiping"
+grep -c 'readonly property bool pagesMoving: !!pager && pager.swiping' "$home" >/dev/null || fail "neighbour pages show while swiping"
 grep -c 'Owl.OwlScheduler { id: owlSchedulerObject; paused: root.owlPaused }' "$home" >/dev/null || fail "the OWL clock pauses with the home screen"
 if grep -nE 'Math\.abs\(found\.page - currentPage\) <= 1' "$home"; then fail "a neighbour page's widgets stop while it isn't swiped to"; fi
 grep -c 'active: owlCell.running && owlCell.shown' plugins/omamobile.home/OwlCell.qml >/dev/null || fail "an OWL widget runs only while shown"

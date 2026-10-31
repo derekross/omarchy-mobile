@@ -38,6 +38,10 @@ find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
   -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
 for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
 cp -r "$plugin" "$h/home"
+# The drawer's link (the swipe up), beside it as the plugins are installed;
+# no drawer publishes itself here.
+mkdir -p "$h/omamobile.launcher"
+cp "$here/../plugins/omamobile.launcher/"{DrawerLink.js,DrawerLinkClient.qml} "$h/omamobile.launcher/"
 # The surface is a layer-shell window on the phone; here a plain Item that
 # fills the plugin's root. The OWL host is swapped for one that answers
 # from fixtures (the plugin's own property since 0.2.30; a before tree's

@@ -105,11 +105,13 @@ Item {
       }
     }
 
-    function test_home_reserves_only_the_dock() {
+    function test_home_reserves_nothing() {
+      // The dock shows on home but reserves nothing (the home screen keeps
+      // its height free), so the drawer opening over it resizes no window.
       var z = zones({})
-      compare(z.strip, 0, JSON.stringify(z))
-      compare(z.dock, harness.dockHeight)
-      compare(zones({ osk: true }).strip, 0, "nor with the keyboard on home")
+      compare(z.total, 0, JSON.stringify(z))
+      compare(zones({ drawer: true }).total, 0, "nor with the drawer open")
+      compare(zones({ osk: true }).strip, 0, "nor the strip with the keyboard on home")
     }
 
     function test_a_fullscreen_window_keeps_the_whole_screen() {
