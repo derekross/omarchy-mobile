@@ -29,7 +29,7 @@ Touch works on a test kernel, [kernel #153](https://github.com/derekross/linux-o
 - **Orientation** [V, tag `husky-test-20261031-c5` on greenbrettmichael/linux-omarchy-mobile]: stock's node inverts both axes, but `salixp` already reports in the panel's orientation.
   - With stock's inversion, taps came in rotated 180°: a tap at the top-left read (1191, 2824).
   - Without it, a tap at the top-left reads (87, 144) of 1343 × 2991.
-- **In Omarchy** [V]: Hyprland lists the touchscreen (`salixp-touchscreen`). The lock screen's PIN pad takes the keys that are touched, and the phone unlocks by touch.
+- **In Omarchy** [V]: Hyprland lists the touchscreen (`salixp-touchscreen`). The lock screen's PIN pad takes the keys that are touched, and the phone unlocks by touch. A touch wakes the screen.
 
 ## 2026-10-30: the buttons
 
