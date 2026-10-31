@@ -122,7 +122,8 @@ each session. Those backups are never in git.
   `slot-successful:b=yes` the expected path is a reboot back into slot B
   rather than falling back to A, but whether this ABL enters a dump mode
   first has not been confirmed with a deliberate `sysrq c` on a booted B.
-  Do not treat "returns to fastboot" as verified until that test is run.
+  Do not treat "returns to fastboot" as verified. That deliberate test is
+  parked until gated (see below); do not run it.
 - **`omamobile fastboot` refuses on this phone.** The tool would fall
   through to `sysrq c` when `reboot-to bootloader` is ignored, and panic
   behaviour on this ABL is still uncharacterized, so `bin/omamobile` now
@@ -207,7 +208,14 @@ never in the repo.
 
 ### Still open for §3.1
 
-1. Deliberate panic / `sysrq c` on a booted slot B, then re-read fastboot
-   slot-successful / unbootable / retry-count for both slots.
-2. Concrete GPT restore path that avoids EDL if both copies on sde are bad
+1. Concrete GPT restore path that avoids EDL if both copies on sde are bad
    (whether `fastboot flash partition:<lun>` works on this ABL).
+
+### Parked until gated
+
+- **Deliberate panic / `sysrq c` on a booted slot B** (then re-read fastboot
+  slot-successful / unbootable / retry-count for both slots). Not an
+  actionable step today. Do not run it. It stays parked until there is an
+  explicit gate (off by default), a documented stop condition, and a
+  documented way back. Until then, treat panic behaviour on this ABL as
+  unknown and keep using the buttons instead of any sysrq-c path.
