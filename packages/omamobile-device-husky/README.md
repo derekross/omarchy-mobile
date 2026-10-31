@@ -15,4 +15,15 @@ Omarchy Mobile's first userspace package for the Google Pixel 8 Pro (codename hu
 
 `./build [DIR]` compiles `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the copies when it is run from the repository.
 
-Not in this package: the boot-success marker, Wi-Fi, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook. There is no lid drop-in: husky has no hinge.
+Not in this package: the boot-success marker, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook. There is no lid drop-in: husky has no hinge.
+
+## Firmware the phone needs
+
+Nothing here is in the package. Wi-Fi needs four files from Google's firmware for the BCM4398 D0, which `tools/extract-vendor-firmware -d husky -s SKU` takes from the owner's own factory image or OTA `vendor.img`. They're installed under `/usr/lib/firmware/updates/brcm`, with the board-suffixed names brcmfmac loads first:
+
+- `brcmfmac4398d0-pcie.google,zuma-husky.bin`: the firmware;
+- `.txt`: the NVRAM for the phone's region, which `-s` picks from the hardware SKU (`grep hardware.sku /proc/bootconfig`);
+- `.clm_blob`: the regulatory data;
+- `.txcap_blob`: the TX capabilities.
+
+The kernel side is [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (a draft). Nothing in this package starts or configures Wi-Fi: NetworkManager finds `wlp1s0` on its own.
