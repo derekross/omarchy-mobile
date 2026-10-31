@@ -36,3 +36,11 @@ Stock facts collected and both slots restored to factory. Device descriptor in #
 - Display physical: 1344x2992 (dumpsys display)
 - Display HDR: supported types 2/3/4, max luminance 1000 (dumpsys display)
 - Battery: Li-ion, 100%, USB charging 3A/5V, health good (dumpsys battery)
+
+## Confirmed hardware (2026-11-01)
+
+- dtbo_idx: 37 (getprop ro.boot.dtbo_idx)
+- Platform: malibu (getprop ro.boot.hardware.platform)
+- SoC model: Tensor G6 (getprop ro.soc.model)
+- CPU: 6× 0xd8b rev 1 + 1× 0xd8c rev 0 (/proc/cpuinfo)
+- Verified boot state: orange (unlocked, getprop ro.boot.verifiedbootstate)
