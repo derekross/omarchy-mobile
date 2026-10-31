@@ -25,3 +25,14 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 ## Status
 
 Stock facts collected and both slots restored to factory. Device descriptor in #231. Ready for first slot-B experiments once the descriptor lands.
+
+## Additional stock facts (2026-10-31)
+
+- Current slot: _a (getprop ro.boot.slot_suffix)
+- DDR: 16GiB Samsung LPDDR5 (getprop ro.boot.hardware.ddr)
+- Android version: 17 (SDK 37), security patch 2026-09-01 (getprop ro.build.version.*)
+- Board: kodiak (getprop ro.product.board)
+- Display logical: 1080x2404 @ 120 Hz, density 390 (dumpsys display)
+- Display physical: 1344x2992 (dumpsys display)
+- Display HDR: supported types 2/3/4, max luminance 1000 (dumpsys display)
+- Battery: Li-ion, 100%, USB charging 3A/5V, health good (dumpsys battery)
