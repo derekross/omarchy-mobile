@@ -10,6 +10,34 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-10-31: Wi-Fi
+
+Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (a draft, stacked on #153, #143 and #56), at `f47c5bd34` on greenbrettmichael/linux-omarchy-mobile `omamobile-zuma-husky-wifi`, with the repository's husky config (`CONFIG_PHY_ZUMA_PCIE=m` is in #214), `modules-push` and the firmware from [#214](https://github.com/derekross/omarchy-mobile/pull/214). The phone joins its network at boot through NetworkManager.
+
+- **The chip** [V]: a BCM4398 D0 (chip `0x4398` rev 3, PCI `14e4:4444`) on pcie_1, one Gen3 lane, as on stock.
+  - Its backplane is Broadcom's newer NCI interconnect (socitype 6), not AI. #156 ports enough of Google's `nciutils.c` to brcmfmac to find the cores and run the ARM.
+  - The firmware is stock's 24.100.671.86.2 (shared-memory API 9).
+- **Power and pins** [V, `R/` live DT]: WL_REG_ON is `gph3-4`, PERST `gph3-0`, CLKREQ `gph3-1`, dev_wake `gph3-5` and host_wake `gpa5-1` (FAR_ALIVE). BT_REG_ON (`gpn8-0`) isn't wired yet.
+- **The PCIe PHY** [V, `G/`]: zuma's Gen3 PHY is not gs201's, so #156 adds its own driver from stock's tables, and releases the PHY's isolation through the PMU (0x3ec8). The host is gs201's driver with a zuma compatible.
+- **The firmware files** [V, the first husky's stock log]: stock loads `fw_bcmdhd.bin_4398_d0`, `bcmdhd_clm.blob_4398_d0` and `bcmdhd_txcap.blob_4398_d0` by chip revision.
+  - It picks the NVRAM by the hardware SKU: `bcmdhd.cal_MMW` on this phone.
+  - `tools/extract-vendor-firmware -d husky -s SKU` (#214) does the same from the owner's own image.
+- **What brcmfmac needed** [V]:
+  - `event_msgs_ext`, a 4-entry band list, escan v3, v114 BSS info, and the versioned join without firmware supplicant;
+  - control buffers at the lowest packet IDs;
+  - D2H items read only after the firmware's checksum and epoch say they're finished;
+  - the 4389's host-side 802.3/LLC TX header (without it the firmware trapped in `txq_hw_fill`);
+  - a wait for the firmware's boot interrupt before reading its shared address.
+- **Reloading** [V]: the chip's always-on domain keeps the firmware's state across WL_REG_ON, FLR and a PMU watchdog. A second load got no boot interrupt until the phone rebooted.
+  - #156 makes the firmware trap before release (doorbell 7, `0xdead0002`, as bcmdhd's `DHD_DONGLE_TRAP_IN_DETACH`).
+  - Since then, `brcmfmac` reloads and `pcie_gs201` + `brcmfmac` reloads reconnect in 17–18 s.
+- **Throughput** [V]: on 2.4 GHz at -42 dBm (195/172 Mbit/s link rates), 50–87 Mbit/s down and 47–70 up. A Pixel 9 gets 95 down on the same network. The scan sees 5 GHz networks; none was joined yet.
+- **Not done** [V]:
+  - P2P: `brcmf_p2p_create_p2pdev: timeout occurred` at load, since the firmware never confirms the P2P device interface. Station mode doesn't need it.
+  - A reload after a real firmware crash, which can't take the trap, is untested.
+  - Bluetooth.
+- **Lesson** [V]: a raw `/dev/mem` read of the Wi-Fi chip's BAR0 while it was in a bad state hung the phone, which panicked and rebooted. Don't read the endpoint's BARs from userspace.
+
 ## 2026-10-31: a second phone: Kioxia 256 GB, UFS 4.0
 
 A second retail Pixel 8 Pro, first run through the same read-only steps. `R2/` below means read-only queries of this phone (`adb shell getprop` while booted, `fastboot getvar all`, the fastboot screen), facts only, no serial, IMEI or MACs. The kernel is `omamobile` at `1c5ba1aa2` unless noted.
