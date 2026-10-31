@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Deliberately static and disabled: no Install section or wants link.
+[Unit]
+Description=Comet AoC firmware start (M18 gated)
+After=local-fs.target systemd-modules-load.service
+ConditionPathExists=/var/lib/omamobile/comet-aoc-start-approved
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-aoc-start
+RemainAfterExit=yes
+TimeoutStartSec=45

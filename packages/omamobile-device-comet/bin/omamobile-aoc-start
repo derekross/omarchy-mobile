@@ -1,0 +1,57 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Comet only. Invoke through omamobile-aoc.service after AOC-PLAN admission.
+# No retries, module unload or secure-storage services. Missing ports fail closed.
+set -euo pipefail
+state=/var/lib/omamobile
+run=/run/omamobile
+node=/sys/bus/platform/devices/17000000.aoc
+compatible=/proc/device-tree/compatible
+fail() { echo "omamobile-aoc: $*" >&2; exit 1; }
+[[ $# == 0 ]] || fail "no arguments supported; recovery requires a reviewed reboot"
+tr '\0' '\n' < "$compatible" | grep -x 'google,zumapro-comet' >/dev/null || fail "Comet only"
+mkdir -p "$run"
+exec 9>"$run/aoc-start.lock"
+flock -n 9 || fail "another start is running"
+if grep '^Services : [1-9]' "$node/services" >/dev/null 2>&1; then
+    echo 'omamobile-aoc: already online'; exit 0
+fi
+[[ ! -e $run/aoc-attempted ]] || fail "already attempted this boot"
+[[ ! -e $state/aoc-bringup-started ]] || fail "previous attempt failed; inspect logs before recovery"
+# This approval never substitutes for driver support. The imported core is
+# gs201-only today, and must be rejected before any modprobe or rail change.
+[[ -e $state/comet-aoc-start-approved ]] || fail "M18 firmware start is not admitted"
+modinfo -F alias aoc_core | grep 'Cgoogle,zumapro-aoc\(C\|$\)' >/dev/null || fail "no G4 AoC core port"
+modinfo comet_aoc_rails >/dev/null 2>&1 || fail "no reviewed Comet sensor-rail owner"
+[[ -e $node ]] || fail "AoC DT node disabled or absent"
+[[ -s /usr/lib/firmware/updates/aoc.bin ]] || fail "extract owner's Comet aoc.bin first"
+mkdir -p "$state"
+date -Is > "$state/aoc-bringup-started"
+sync -f "$state/aoc-bringup-started"
+date -Is > "$run/aoc-attempted"
+# Failed markers are deliberately retained, including module-load failures.
+for m in trusty_core trusty_log trusty_ipc trusty_virtio; do modprobe "$m"; done
+for ((i=0; i<50; i++)); do
+    [[ -c /dev/trusty-ipc-dev0 ]] && break
+    sleep 0.2
+done
+[[ -c /dev/trusty-ipc-dev0 ]] || fail "Trusty IPC unavailable"
+modprobe gsa
+# This helper is not supplied yet: never substitute gs201 PMIC registers.
+# Its contract must implement 150 ms sensor off-time with shared ownership.
+modprobe comet_aoc_rails enable=1 cycle=1
+for m in gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev; do
+    modprobe "$m"
+done
+[[ -w $node/firmware ]] || fail "AoC core did not bind"
+printf 'aoc.bin\n' > "$node/firmware"
+for ((i=0; i<75; i++)); do
+    if grep '^Services : [1-9]' "$node/services" >/dev/null 2>&1; then
+        rm -- "$state/aoc-bringup-started"
+        sync -f "$state"
+        echo 'omamobile-aoc: services online'
+        exit 0
+    fi
+    sleep 0.2
+done
+fail "no services in 15 seconds; keep markers and logs, never rmmod"

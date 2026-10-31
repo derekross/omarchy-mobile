@@ -1,0 +1,369 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-device-comet. The C tools are compiled from src/ in
+# this directory, so a copied package still builds. Do not execute reboot-to.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+bash -n PKGBUILD || fail "PKGBUILD parses"
+for script in build install bin/* omamobile-device-comet.install; do
+  bash -n "$script" || fail "$script parses"
+done
+pass "scripts parse"
+python3 test/aoc || fail "AoC startup guards"
+
+grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
+pass "build and install stay inside the package directory"
+
+# Shared files stay the same bytes as the other device packages
+if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
+  h=../omamobile-device-cheetah
+  for f in src/reboot-to.c src/omamobile-bootctl.c LICENSE.Apache-2.0 etc/omamobile-mirrorlist \
+           vendor/udev/rules.d/10-omamobile-storage.rules \
+           vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
+           vendor/systemd/network/20-usb-gadget.network \
+           vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+           vendor/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf; do
+    cmp -s "$f" "$h/$f" || fail "$f drifted from the cheetah package"
+  done
+  cmp -s omamobile-device-comet.install "$h/omamobile-device-cheetah.install" \
+    || fail "the pacman install script drifted from the cheetah package"
+  pass "shared sources, policy files and the pacman install script match the cheetah package"
+fi
+if [[ -f ../omamobile-device-felix/vendor/systemd/logind.conf.d/10-omamobile-lid.conf ]]; then
+  cmp -s vendor/systemd/logind.conf.d/10-omamobile-lid.conf \
+    ../omamobile-device-felix/vendor/systemd/logind.conf.d/10-omamobile-lid.conf \
+    || fail "the lid drop-in drifted from the felix package"
+  pass "the lid drop-in matches the felix package"
+fi
+
+grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
+grep -q '^install=omamobile-device-comet.install$' PKGBUILD || fail "the pacman install script is not named"
+grep -q '^arch=(aarch64)$' PKGBUILD || fail "the package is aarch64"
+grep -q '^license=(MIT Apache-2.0)$' PKGBUILD || fail "omamobile-bootctl is Apache-2.0"
+[[ $(cat version) == 0.1.20 ]] || fail "version is 0.1.20"
+grep -q '^STATUS=boot-policy$' status && ! grep -qi 'inert' status || fail "status is no longer inert"
+grep -qx 'INSTALLABLE_PROFILE=no' status || fail "status does not claim an installable release"
+pass "PKGBUILD and status"
+
+# The descriptor in the package is the repository's descriptor, and the USB
+# product string comes from it (USB_PRODUCT, else NAME), nowhere else
+if [[ -f ../../device/comet/device.conf ]]; then
+  cmp -s device.conf ../../device/comet/device.conf \
+    || fail "device.conf drifted from device/comet/device.conf (copy it after changing the descriptor)"
+  pass "device.conf matches the descriptor"
+fi
+get() { sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" device.conf | head -n 1; }
+[[ $(get CODENAME) == comet && $(get PACKAGE) == omamobile-device-comet ]] || fail "the descriptor is comet's"
+product=$(get USB_PRODUCT); product=${product:-$(get NAME)}
+[[ -n $product && ${#product} -le 126 && $product =~ ^[[:print:]]+$ ]] \
+  || fail "the descriptor gives a printable USB product string of at most 126 characters"
+grep -rIn 'Pixel 9 Pro Fold' bin vendor src etc build install >/dev/null 2>&1 \
+  && fail "a USB product string is hard-coded outside the descriptor"
+pass "USB product string comes from the descriptor ($product)"
+
+./build "$tmp/build" || fail "C tools compile"
+[[ -x $tmp/build/reboot-to && -x $tmp/build/omamobile-bootctl ]] || fail "C tools are executable"
+pass "C tools compile"
+
+./install "$tmp/root" "$tmp/build"
+# Exactly these files, nothing that enables or starts hardware
+expected="etc/pacman.d/omamobile-mirrorlist
+usr/bin/omamobile-aoc-start
+usr/bin/omamobile-boot-success
+usr/bin/omamobile-bootctl
+usr/bin/reboot-to
+usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf
+usr/lib/modprobe.d/omamobile-comet-aoc.conf
+usr/lib/modules-load.d/omamobile-comet-display.conf
+usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf
+usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf
+usr/lib/systemd/network/20-usb-gadget.network
+usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf
+usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-comet.conf
+usr/lib/systemd/system/omamobile-aoc.service
+usr/lib/systemd/system/omamobile-boot-success.service
+usr/lib/udev/rules.d/10-omamobile-storage.rules
+usr/share/licenses/omamobile-device-comet/LICENSE
+usr/share/licenses/omamobile-device-comet/LICENSE.Apache-2.0
+usr/share/omamobile/device-comet/README.md
+usr/share/omamobile/device-comet/inner-touch.lua
+usr/share/omamobile/device-comet/status
+usr/share/omamobile/device-comet/version
+usr/share/omamobile/device.conf"
+actual=$(cd "$tmp/root" && find . \( -type f -o -type l \) | sed 's|^\./||' | sort)
+[[ $actual == "$expected" ]] || fail "install stages exactly the expected files: $(diff <(echo "$expected") <(echo "$actual") || true)"
+[[ -z $(find "$tmp/root" -type l) ]] || fail "no unit is enabled by default"
+pass "install stages expected files with no enabled units"
+
+r=$tmp/root/usr/lib
+# The display modules load at boot, in dependency order, and nothing else does
+load=$r/modules-load.d/omamobile-comet-display.conf
+[[ $(grep -v '^#' "$load") == $'gs_dsim_cmd\ngs_decon\npanthor' ]] \
+  || fail "modules-load.d loads exactly gs_dsim_cmd, gs_decon, panthor, in that order"
+grep -rqE 'blacklist (gs_decon|gs_dsim_cmd|panthor)' "$r/modprobe.d" \
+  && fail "the package must not blacklist the display modules it loads"
+pass "the inner display modules load at boot, in order, with nothing else"
+
+grep -q 'KERNEL=="sda", MODE="0000"' "$r/udev/rules.d/10-omamobile-storage.rules" \
+  || fail "the whole-disk node is made inaccessible"
+grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$r/udev/rules.d/10-omamobile-storage.rules" \
+  || fail "userdata is the only partition desktop tools may see"
+grep -q 'UDISKS_IGNORE' "$r/udev/rules.d/10-omamobile-storage.rules" \
+  || fail "Android partitions are hidden from desktop tools"
+grep -q 'Address=172.16.42.1/24' "$r/systemd/network/20-usb-gadget.network" \
+  || fail "usb0 keeps the initramfs address"
+grep -q 'Name=usb0' "$r/systemd/network/20-usb-gadget.network" || fail "the USB link is usb0"
+grep -q 'unmanaged-devices=interface-name:usb0' "$r/NetworkManager/conf.d/10-omamobile-usb.conf" \
+  || fail "NetworkManager stays off usb0"
+power=$r/systemd/logind.conf.d/10-omamobile-power-key.conf
+grep -qx '\[Login\]' "$power" && grep -qx 'HandlePowerKey=ignore' "$power" \
+  && grep -qx 'HandlePowerKeyLongPress=ignore' "$power" || fail "the power key is ignored by logind"
+lid=$r/systemd/logind.conf.d/10-omamobile-lid.conf
+for k in HandleLidSwitch HandleLidSwitchDocked HandleLidSwitchExternalPower; do
+  grep -qx "$k=ignore" "$lid" || fail "a closed fold must not suspend ($k)"
+done
+grep -qx 'RebootWatchdogSec=1min' "$r/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf" \
+  || fail "a hung shutdown resets after a minute"
+grep -qx 'ConditionPathExists=!/usr/share/omamobile/device-comet/version' \
+  "$r/systemd/system/linux-modules-cleanup.service.d/10-omamobile-comet.conf" \
+  || fail "Arch's module cleanup skips tarball-installed kernels"
+cmp -s "$tmp/root/usr/share/omamobile/device.conf" device.conf || fail "the installed descriptor is the package's"
+pass "storage guard, USB link, power key, closed fold, shutdown watchdog and module retention"
+
+# The unit remains installed for future agreement on #143; no wants link
+# enables it. The retained helper is exercised only against synthetic files.
+unit=$r/systemd/system/omamobile-boot-success.service
+! grep -q 'boot-success-approved' "$unit" bin/omamobile-boot-success || fail "the per-write approval file is gone"
+grep -qx 'ExecStart=/usr/bin/omamobile-boot-success' "$unit" || fail "the boot-success unit runs the script"
+grep -qx 'WantedBy=multi-user.target' "$unit" || fail "the boot-success unit is wanted by multi-user.target"
+grep -qE '^After=.*multi-user.target' "$unit" || fail "the boot-success unit runs after the system is up"
+grep -qE '^After=.*sddm.service' "$unit" && grep -qE '^After=.*sshd.service' "$unit" \
+  || fail "the boot-success unit waits for the session and ssh"
+[[ $(grep -l '^\[Install\]' "$r"/systemd/system/*.service) == "$unit" ]] || fail "the boot-success unit is the only one with an [Install] section"
+pass "boot-success remains installed but disabled by default"
+
+# omamobile-boot-success against a synthetic devinfo, sysfs, proc and systemd:
+# the real omamobile-bootctl does the write, the script's paths point into $tmp
+python3 - "$tmp/devinfo.orig" <<'PY'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 15)
+buf[0x30:0x34] = bytes([2, 0x0a, 0, 0])   # slot a: successful
+buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
+buf[0x40] = 0x5a                           # ABL-owned bytes elsewhere
+open(sys.argv[1], "wb").write(buf)
+PY
+fake=$tmp/fake
+mkdir -p "$fake"/{proc,dev,bin,var/lib/omamobile,sys/block/sdd/sdd1,sys/class/block}
+printf 'PARTNAME=devinfo\n' >"$fake/sys/block/sdd/sdd1/uevent"
+ln -s ../../block/sdd/sdd1 "$fake/sys/class/block/sdd1"
+cat >"$fake/bin/blockdev" <<'STUB'
+#!/bin/bash
+echo "$*" >>"$FAKE_BLOCKDEV_LOG"
+STUB
+cat >"$fake/bin/systemctl" <<'STUB'
+#!/bin/bash
+case $1 in
+  is-active) shift; [[ ${1:-} == --quiet ]] && shift
+             for u in $FAKE_INACTIVE; do [[ $1 == "$u" ]] && exit 3; done; exit 0 ;;
+  --failed) printf '%s' "$FAKE_FAILED" ;;
+  *) echo "unexpected systemctl $*" >&2; exit 99 ;;
+esac
+STUB
+# bootctl, with ways to fail like a lost race with the storage guard (FAKE_BOOTCTL_FAIL
+# attempts fail first) or to misbehave (FAKE_BOOTCTL_MODE=extra|nowrite|wrongbyte)
+cat >"$fake/bin/omamobile-bootctl" <<'STUB'
+#!/bin/bash
+if [[ $1 == mark-successful ]]; then
+  echo x >>"$FAKE_BOOTCTL_CALLS"
+  if (( $(wc -l <"$FAKE_BOOTCTL_CALLS") <= ${FAKE_BOOTCTL_FAIL:-0} )); then
+    echo "omamobile-bootctl: open $2 for writing: Permission denied" >&2; exit 1
+  fi
+  [[ ${FAKE_BOOTCTL_MODE:-} == nowrite ]] && exit 0
+  "$REAL_BOOTCTL" "$@" || exit $?
+  case ${FAKE_BOOTCTL_MODE:-} in
+    extra) printf '\x00' | dd of="$2" bs=1 seek=$((0x40)) conv=notrunc status=none ;;
+    wrongbyte) printf '\x0f' | dd of="$2" bs=1 seek=$((0x35)) conv=notrunc status=none ;;
+  esac
+  exit 0
+fi
+exec "$REAL_BOOTCTL" "$@"
+STUB
+chmod +x "$fake/bin/"*
+export REAL_BOOTCTL=$tmp/build/omamobile-bootctl
+sed -e "s|^bootconfig=.*|bootconfig=$fake/proc/bootconfig|" \
+    -e "s|^sysblock=.*|sysblock=$fake/sys/block|" \
+    -e "s|^sysclass=.*|sysclass=$fake/sys/class/block|" \
+    -e "s|^sysnet=.*|sysnet=$fake/sys/class/net|" \
+    -e "s|^sysdrm=.*|sysdrm=$fake/sys/class/drm|" \
+    -e "s|^gadget=.*|gadget=$fake/sys/kernel/config/usb_gadget|" \
+    -e "s|^procdir=.*|procdir=$fake/proc|" \
+    -e "s|^uptimefile=.*|uptimefile=$fake/proc/uptime|" \
+    -e "s|^bootidfile=.*|bootidfile=$fake/proc/boot_id|" \
+    -e "s|^devdir=.*|devdir=$fake/dev|" \
+    -e "s|^statedir=.*|statedir=$fake/var/lib/omamobile|" \
+    -e "s|^ddflags=.*|ddflags=|" \
+    -e "s|^settle=.*|settle=60|" \
+    -e "s|^health_wait=.*|health_wait=0|" \
+    bin/omamobile-boot-success >"$fake/boot-success"
+chmod +x "$fake/boot-success"
+for v in bootconfig sysblock sysclass sysnet sysdrm gadget procdir uptimefile bootidfile devdir statedir ddflags health_wait; do
+  grep -q "^$v=.*$fake\\|^ddflags=\$\\|^health_wait=0" "$fake/boot-success" || fail "the test could not point $v at the fake system"
+done
+export FAKE_BLOCKDEV_LOG=$fake/blockdev.log FAKE_BOOTCTL_CALLS=$fake/bootctl.calls
+boot_id=0a1b2c3d-1111-2222-3333-444455556666
+before=$fake/var/lib/omamobile/devinfo-before-$boot_id.img
+after=$fake/var/lib/omamobile/devinfo-after-$boot_id.img
+run() { PATH="$fake/bin:$tmp/build:$PATH" "$fake/boot-success" 2>&1; }
+# A healthy, settled phone booted from slot B with an unmarked devinfo
+reset() {
+  cp "$tmp/devinfo.orig" "$fake/dev/sdd1"
+  rm -rf "$fake/var/lib/omamobile" "$FAKE_BLOCKDEV_LOG" "$FAKE_BOOTCTL_CALLS" "$fake/sys/class/net" \
+         "$fake/sys/class/drm" "$fake/sys/kernel" "$fake"/proc/[0-9]*
+  unset FAKE_INACTIVE FAKE_FAILED FAKE_BOOTCTL_FAIL FAKE_BOOTCTL_MODE
+  mkdir -p "$fake/var/lib/omamobile" "$fake/sys/class/net/usb0" "$fake/sys/class/drm/card0-DSI-1" \
+           "$fake/sys/kernel/config/usb_gadget/g1" "$fake/proc/4242"
+  printf '16\n' >"$fake/sys/block/sdd/sdd1/size"
+  printf '1\n' >"$fake/sys/block/sdd/sdd1/ro"; printf '1\n' >"$fake/sys/block/sdd/ro"
+  printf 'up\n' >"$fake/sys/class/net/usb0/operstate"
+  printf 'connected\n' >"$fake/sys/class/drm/card0-DSI-1/status"; printf 'enabled\n' >"$fake/sys/class/drm/card0-DSI-1/enabled"
+  printf '11210000.usb\n' >"$fake/sys/kernel/config/usb_gadget/g1/UDC"
+  printf 'Hyprland\n' >"$fake/proc/4242/comm"
+  printf '3104.55 20000.00\n' >"$fake/proc/uptime"
+  printf '%s\n' "$boot_id" >"$fake/proc/boot_id"
+  printf 'androidboot.slot_suffix = "_b"\n' >"$fake/proc/bootconfig"
+  rm -f "$fake/dev/sda"
+}
+untouched() { cmp -s "$fake/dev/sdd1" "$tmp/devinfo.orig" && [[ ! -e $FAKE_BLOCKDEV_LOG && ! -e $FAKE_BOOTCTL_CALLS ]]; }
+devfiles() { find "$fake/var/lib/omamobile" -type f | sort; }
+
+# slot A is never marked, and nothing is read or opened
+reset
+printf 'androidboot.slot_suffix = "_a"\n' >"$fake/proc/bootconfig"
+out=$(run) && fail "slot A must be refused"
+grep -q 'only slot B is ours' <<<"$out" || fail "slot A: says why ($out)"
+untouched && [[ -z $(devfiles) ]] || fail "slot A: nothing is read, written or opened"
+printf 'androidboot.slot_suffix = "_c"\n' >"$fake/proc/bootconfig"
+run >/dev/null && fail "an unknown slot must refuse"
+untouched || fail "an unknown slot writes nothing"
+pass "slot A and unknown slots are refused before devinfo is touched"
+
+# a slot B that is already successful is a silent no-op, with no copy left over
+reset
+python3 - "$fake/dev/sdd1" <<'PY'
+import sys
+b = bytearray(open(sys.argv[1], "rb").read()); b[0x35] = 0x06; open(sys.argv[1], "wb").write(b)
+PY
+cp "$fake/dev/sdd1" "$fake/successful"
+out=$(run) || fail "an already successful slot exits cleanly ($out)"
+[[ -z $out ]] || fail "an already successful slot is silent ($out)"
+cmp -s "$fake/dev/sdd1" "$fake/successful" && [[ ! -e $FAKE_BLOCKDEV_LOG && ! -e $FAKE_BOOTCTL_CALLS && -z $(devfiles) ]] \
+  || fail "an already successful slot opens nothing, writes nothing and leaves no copy"
+pass "an already successful slot is a silent no-op"
+
+# each health check, on its own, withholds the mark; nothing is opened read-write
+health_case() {
+  local what=$1 expect=$2 setup=$3 out
+  reset
+  eval "$setup"
+  out=$(run) && fail "$what: the health check must refuse"
+  grep -q "$expect" <<<"$out" || fail "$what: says why ($out)"
+  untouched || fail "$what: nothing is written and nothing is opened read-write"
+}
+health_case "storage guard stopped" "storage guard service is not running" 'export FAKE_INACTIVE=comet-storage-guard.service'
+health_case "whole disk present" "whole-disk node" ': >"$fake/dev/sda"'
+health_case "devinfo not read-only" "not read-only" 'printf "0\n" >"$fake/sys/block/sdd/sdd1/ro"'
+health_case "disk not read-only" "not read-only" 'printf "0\n" >"$fake/sys/block/sdd/ro"'
+health_case "sshd down" "sshd is not running" 'export FAKE_INACTIVE=sshd.service'
+health_case "usb0 down" "usb0 is down" 'printf "down\n" >"$fake/sys/class/net/usb0/operstate"'
+health_case "gadget unbound" "no UDC bound" ': >"$fake/sys/kernel/config/usb_gadget/g1/UDC"'
+health_case "a failed unit" "failed units: foo.service" 'export FAKE_FAILED="foo.service loaded failed failed Foo"'
+health_case "sddm down" "sddm is not running" 'export FAKE_INACTIVE=sddm.service'
+health_case "no session" "no Hyprland session" 'rm -rf "$fake"/proc/4242'
+health_case "display off" "no enabled display connector" 'printf "disabled\n" >"$fake/sys/class/drm/card0-DSI-1/enabled"'
+health_case "just booted" "up only 12s" 'printf "12.00 40.00\n" >"$fake/proc/uptime"'
+pass "a failing health check (guard, ssh, usb, failed unit, session, display, settle) withholds the mark"
+
+# an unverified layout never opens the disk read-write
+reset
+python3 - "$fake/dev/sdd1" <<'PY'
+import struct, sys
+b = bytearray(open(sys.argv[1], "rb").read()); struct.pack_into("<HH", b, 4, 3, 14); open(sys.argv[1], "wb").write(b)
+PY
+cp "$fake/dev/sdd1" "$fake/unverified"
+out=$(run) && fail "an unverified devinfo layout must refuse"
+grep -q 'not the verified 3.15 layout' <<<"$out" || fail "an unverified layout says why ($out)"
+cmp -s "$fake/dev/sdd1" "$fake/unverified" && [[ ! -e $FAKE_BLOCKDEV_LOG && ! -e $FAKE_BOOTCTL_CALLS ]] \
+  || fail "an unverified layout writes nothing and never opens the disk read-write"
+pass "an unverified devinfo layout is refused before anything opens"
+
+# the happy path: exactly byte 0x35, 04 -> 06
+reset
+out=$(run) || fail "a healthy slot B is marked ($out)"
+grep -q 'slot b marked successful' <<<"$out" || fail "it reports the write ($out)"
+python3 - "$tmp/devinfo.orig" "$fake/dev/sdd1" <<'PY' || fail "exactly byte 0x35 changed, 04 -> 06"
+import sys
+a, b = (open(p, "rb").read() for p in sys.argv[1:])
+assert len(a) == len(b)
+d = [i for i in range(len(a)) if a[i] != b[i]]
+assert d == [0x35] and a[0x35] == 4 and b[0x35] == 6, d
+PY
+cmp -s "$before" "$tmp/devinfo.orig" || fail "the copy taken before the write is the original devinfo"
+[[ $(od -An -tx1 -j 53 -N 1 "$after" | tr -d ' ') == 06 ]] && cmp -s "$after" "$fake/dev/sdd1" \
+  || fail "the copy taken after the write is the new devinfo"
+[[ $(devfiles) == "$after"$'\n'"$before" || $(devfiles) == "$before"$'\n'"$after" ]] || fail "only the two copies are kept: $(devfiles)"
+[[ $(tr '\n' ' ' <"$FAKE_BLOCKDEV_LOG") == "--setrw $fake/dev/sdd --setrw $fake/dev/sdd1 --setro $fake/dev/sdd1 --setro $fake/dev/sdd " ]] \
+  || fail "devinfo opens read-write for the one write and is locked again: $(tr '\n' ' ' <"$FAKE_BLOCKDEV_LOG")"
+[[ $(wc -l <"$FAKE_BOOTCTL_CALLS") == 1 ]] || fail "one write, one call"
+pass "a healthy slot B is marked: only byte 0x35 changed, before/after copies kept, devinfo re-locked"
+
+rm -f "$FAKE_BLOCKDEV_LOG" "$FAKE_BOOTCTL_CALLS"
+out=$(run) || fail "the next boot's run exits cleanly ($out)"
+[[ -z $out && ! -e $FAKE_BLOCKDEV_LOG ]] || fail "once successful, the next run is silent and opens nothing"
+pass "once marked, the next run is silent"
+
+# losing the race with the storage guard is retried, and the mark still lands
+reset
+export FAKE_BOOTCTL_FAIL=2
+out=$(run) || fail "a write that loses the guard race twice still lands ($out)"
+[[ $(wc -l <"$FAKE_BOOTCTL_CALLS") == 3 ]] && grep -q 'write attempt 2 failed' <<<"$out" || fail "it retried: $out"
+[[ $(od -An -tx1 -j 53 -N 1 "$fake/dev/sdd1" | tr -d ' ') == 06 ]] || fail "retry: byte 0x35 is marked"
+[[ $(tail -n 2 "$FAKE_BLOCKDEV_LOG" | tr '\n' ' ') == "--setro $fake/dev/sdd1 --setro $fake/dev/sdd " ]] \
+  || fail "retry: devinfo is locked again at the end"
+[[ $(grep -c -- --setro "$FAKE_BLOCKDEV_LOG") == 2 ]] || fail "retry: locked once, after the last attempt"
+pass "a write that loses the race with the storage guard is retried"
+
+# a write that never lands leaves devinfo as it was, locked
+reset
+export FAKE_BOOTCTL_FAIL=99
+out=$(run) && fail "a write that never lands must refuse"
+grep -q 'unchanged after 8 tries' <<<"$out" || fail "it says nothing was written ($out)"
+cmp -s "$fake/dev/sdd1" "$tmp/devinfo.orig" || fail "a failed write leaves devinfo as it was"
+[[ $(tail -n 2 "$FAKE_BLOCKDEV_LOG" | tr '\n' ' ') == "--setro $fake/dev/sdd1 --setro $fake/dev/sdd " ]] \
+  || fail "a failed write still closes the disk again"
+pass "a write that never lands is refused, and devinfo stays locked"
+
+# any difference but byte 0x35 is refused, and logged; nothing is written back
+reset
+export FAKE_BOOTCTL_MODE=extra
+out=$(run) && fail "a second changed byte must refuse"
+grep -q 'unexpected difference' <<<"$out" && grep -q '0x35 0x40' <<<"$out" || fail "it names the differing bytes ($out)"
+[[ $(od -An -tx1 -j 64 -N 1 "$fake/dev/sdd1" | tr -d ' ') == 00 ]] || fail "it does not write anything back"
+[[ $(tail -n 2 "$FAKE_BLOCKDEV_LOG" | tr '\n' ' ') == "--setro $fake/dev/sdd1 --setro $fake/dev/sdd " ]] \
+  || fail "an unexpected difference still locks devinfo"
+reset
+export FAKE_BOOTCTL_MODE=wrongbyte
+out=$(run) && fail "byte 0x35 with the wrong value must refuse"
+grep -q 'expected 0x06' <<<"$out" || fail "it says what 0x35 should have been ($out)"
+reset
+export FAKE_BOOTCTL_MODE=nowrite
+out=$(run) && fail "a write that did not happen must refuse"
+grep -q 'devinfo is unchanged' <<<"$out" || fail "it notices that nothing changed ($out)"
+pass "an unexpected difference (extra byte, wrong value, no change) is refused and logged"
+
+echo 'ok - comet package stages boot policy; boot-success is disabled by default'

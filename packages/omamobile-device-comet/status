@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+SCHEMA=omamobile-device-v1
+CODENAME=comet
+PACKAGE=omamobile-device-comet
+STATUS=boot-policy
+PHYSICAL_SUPPORT=boot-usb-storage-guard
+INSTALLABLE_PROFILE=no
+BOOT_SUCCESS=automatic-slot-b-only

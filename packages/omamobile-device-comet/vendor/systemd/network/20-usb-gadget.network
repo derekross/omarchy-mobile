@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: USB networking to the host. The initramfs sets up the USB
+# gadget (CDC NCM) before handing over to Arch; this gives it an address.
+# The host shares its internet over this link (NetworkManager "shared"
+# mode on 172.16.42.2), so it is also the gateway. DNS goes to public resolvers.
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+Gateway=172.16.42.2
+DNS=1.1.1.1
+DNS=9.9.9.9
+ConfigureWithoutCarrier=yes

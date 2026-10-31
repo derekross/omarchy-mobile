@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Disabled by default pending maintainer agreement on issue #143.
+# Do not enable or run while the Comet devinfo write pause remains in force.
+[Unit]
+Description=Mark slot B successful for the bootloader after a healthy boot
+After=multi-user.target sshd.service sddm.service systemd-networkd.service comet-storage-guard.service
+ConditionPathExists=/proc/bootconfig
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-boot-success
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

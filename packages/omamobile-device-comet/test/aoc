@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Exercise startup refusal/once-per-boot markers with a synthetic filesystem."""
+import os
+import pathlib
+import subprocess
+import tempfile
+
+package = pathlib.Path(__file__).resolve().parent.parent
+source = (package / 'bin/omamobile-aoc-start').read_text()
+unit = (package / 'vendor/systemd/system/omamobile-aoc.service').read_text()
+assert '[Install]' not in unit and 'TimeoutStartSec=45' in unit
+assert 'rmmod ' not in source
+with tempfile.TemporaryDirectory() as d:
+    root = pathlib.Path(d)
+    for p in ('state', 'run', 'node', 'bin', 'fw'):
+        (root / p).mkdir()
+    (root / 'compatible').write_bytes(b'google,zumapro-comet\0')
+    (root / 'fw/aoc.bin').write_bytes(b'synthetic')
+    (root / 'ipc').touch()
+    text = source.replace('state=/var/lib/omamobile', f'state={root}/state')
+    text = text.replace('run=/run/omamobile', f'run={root}/run')
+    text = text.replace('node=/sys/bus/platform/devices/17000000.aoc', f'node={root}/node')
+    text = text.replace('compatible=/proc/device-tree/compatible', f'compatible={root}/compatible')
+    text = text.replace('/usr/lib/firmware/updates/aoc.bin', f'{root}/fw/aoc.bin')
+    text = text.replace('-c /dev/trusty-ipc-dev0', f'-e {root}/ipc')
+    script = root / 'start'; script.write_text(text)
+    for name, body in {
+        'flock': 'exit 0',  # hermetic: macOS has no flock, and the lock is not under test
+        'modprobe': 'echo "$*" >> "$FIXTURE/calls"; exit "${PROBE_RC:-0}"',
+        'modinfo': 'test "$PORT" = 1 || exit 1; echo of:N*T*Cgoogle,zumapro-aoc',
+        'sleep': 'if test -s "$FIXTURE/node/firmware"; then echo "Services : 1" > "$FIXTURE/node/services"; fi',
+    }.items():
+        p = root / 'bin' / name; p.write_text('#!/bin/bash\n' + body + '\n'); p.chmod(0o755)
+    env = dict(os.environ, PATH=f'{root}/bin:' + os.environ['PATH'], FIXTURE=d, PORT='0')
+    def run(ok, why=None):
+        r = subprocess.run(['bash', str(script)], env=env, capture_output=True)
+        assert (r.returncode == 0) == ok, r.stderr.decode()
+        # A refusal must come from the guard under test, not from a missing tool.
+        assert why is None or why in r.stderr.decode(), r.stderr.decode()
+    run(False, 'not admitted')  # no admission
+    (root / 'state/comet-aoc-start-approved').touch()
+    run(False, 'no G4 AoC core port')  # even approval cannot make a gs201-only core acceptable
+    assert not (root / 'calls').exists()
+    env['PORT'] = '1'; env['PROBE_RC'] = '1'
+    run(False)  # modprobe fails after both markers were written
+    assert (root / 'state/aoc-bringup-started').exists()
+    assert (root / 'run/aoc-attempted').exists()
+    calls = (root / 'calls').read_text()
+    run(False, 'already attempted this boot')
+    assert (root / 'calls').read_text() == calls  # no retry after failure
+    (root / 'node/services').write_text('Services : 3\n')
+    run(True)  # an online core is never rewritten, even with failed markers
+    assert (root / 'calls').read_text() == calls
+    (root / 'node/services').unlink()
+    (root / 'state/aoc-bringup-started').unlink()
+    (root / 'run/aoc-attempted').unlink()
+    (root / 'node/firmware').touch()
+    (root / 'calls').unlink(); env['PROBE_RC'] = '0'
+    run(True)
+    assert (root / 'node/firmware').read_text() == 'aoc.bin\n'
+    assert (root / 'run/aoc-attempted').exists()
+    assert not (root / 'state/aoc-bringup-started').exists()
+    assert (root / 'calls').read_text().splitlines() == [
+        'trusty_core', 'trusty_log', 'trusty_ipc', 'trusty_virtio', 'gsa',
+        'comet_aoc_rails enable=1 cycle=1', 'gs201_aoc_sysmmu', 'mailbox_wc',
+        'aoc_core', 'aoc_channel_dev', 'aoc_alsa_dev', 'aoc_char_dev']
+print('ok - Comet admission, module order, cycle=1, retained failure and once-per-boot firmware request')

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+pkgname=omamobile-device-comet
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile boot policy for the Google Pixel 9 Pro Fold (comet): storage guard, USB networking, reboot-to"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT Apache-2.0)
+depends=(bash coreutils grep sed systemd util-linux kmod omamobile-keyring)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist)
+install=omamobile-device-comet.install
+makedepends=(gcc)
+
+build() {
+  "$startdir/build" "$srcdir/build"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir/build"
+}

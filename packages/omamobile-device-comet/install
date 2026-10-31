@@ -1,0 +1,29 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-device-comet into DESTDIR. The boot-success unit is
+# enabled by a vendor wants link (the owner's standing approval of
+# 2026-10-29, slot B only); no radio, charger, sensor or camera service is
+# shipped.
+#   ./install DESTDIR [BUILDDIR]   (BUILDDIR holds the compiled C tools)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
+build=${2:-build}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+# install -D is not portable (the tests also run where install is BSD's)
+put() { mkdir -p "$(dirname -- "$3")"; install -m "$1" "$2" "$3"; }
+for tool in omamobile-bootctl reboot-to; do put 755 "$build/$tool" "$destination/usr/bin/$tool"; done
+put 755 bin/omamobile-aoc-start "$destination/usr/bin/omamobile-aoc-start"
+put 755 bin/omamobile-boot-success "$destination/usr/bin/omamobile-boot-success"
+while IFS= read -r -d '' file; do
+  put 644 "$file" "$destination/usr/lib/${file#vendor/}"
+done < <(find vendor -type f -print0)
+put 644 device.conf "$destination/usr/share/omamobile/device.conf"
+put 644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+put 644 LICENSE "$destination/usr/share/licenses/omamobile-device-comet/LICENSE"
+put 644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-comet/LICENSE.Apache-2.0"
+put 644 version "$destination/usr/share/omamobile/device-comet/version"
+put 644 status "$destination/usr/share/omamobile/device-comet/status"
+put 644 README.md "$destination/usr/share/omamobile/device-comet/README.md"
+
+put 644 config/inner-touch.lua "$destination/usr/share/omamobile/device-comet/inner-touch.lua"

@@ -1,0 +1,192 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Mark the slot we booted from as successful, as Android's boot-control
+# service does after every good boot. Without this the bootloader burns a
+# retry each boot and eventually abandons the slot, and on the Tensor G4
+# phones a fallback to stock Android costs the Linux root (AGENTS.md,
+# "Pixel 9a: a fallback to slot A costs the Linux root").
+#
+# This runs by itself after every boot (omamobile-boot-success.service is
+# enabled), under the owner's standing approval of 2026-10-29. The approval
+# covers exactly one write: slot B's "successful" bit, byte 0x35 of devinfo
+# (OR 0x02), after a health check passes, checked against a fresh read-only
+# copy of devinfo taken just before the write. Nothing else in devinfo,
+# never slot A. It does, in order:
+#
+#   1. slot A: refuse. Only slot B is ours.
+#   2. read devinfo (O_DIRECT, so the page cache can't vouch for it). Slot B
+#      already successful: exit silently.
+#   3. health check: storage guard running and holding, USB gadget and
+#      sshd up, no failed unit, the inner display and session up. It waits
+#      for the system to settle, and refuses if it never does.
+#   4. read devinfo again into /var/lib/omamobile/devinfo-before-<boot_id>.img,
+#      the copy of record. Only a verified 3.15 layout with B not yet
+#      successful goes on.
+#   5. open exactly devinfo's disk and partition read-write, run
+#      `omamobile-bootctl mark-successful` (it re-reads and refuses if the
+#      partition moved, and touches only 0x30-0x37), close them again.
+#   6. read devinfo again (O_DIRECT) and require that exactly byte 0x35
+#      changed against the copy, and by exactly 0x02. Anything else is
+#      refused and logged, and nothing is written to put it back.
+#
+# devinfo sits on a bootloader LUN (sdd) that the storage guard keeps
+# read-only. The guard loop sets it read-only again within a fraction of a
+# second, so the write is retried a few times if it loses that race.
+set -euo pipefail
+
+bootconfig=/proc/bootconfig
+sysblock=/sys/block
+sysclass=/sys/class/block
+sysnet=/sys/class/net
+sysdrm=/sys/class/drm
+gadget=/sys/kernel/config/usb_gadget
+procdir=/proc
+uptimefile=/proc/uptime
+bootidfile=/proc/sys/kernel/random/boot_id
+devdir=/dev
+statedir=/var/lib/omamobile
+ddflags=direct        # tests run on a file system without O_DIRECT
+settle=60             # seconds of uptime before the slot may be marked
+health_wait=120       # seconds to wait for the health check to pass
+write_tries=8
+
+log() { echo "omamobile-boot-success: $*"; }
+refuse() { log "refusing: $*"; exit 1; }
+
+slot=$(sed -n 's/^androidboot.slot_suffix = "_\([ab]\)"$/\1/p' "$bootconfig")
+[[ "$slot" == a || "$slot" == b ]] || refuse "unknown boot slot"
+[[ $slot == b ]] || refuse "booted from slot $slot; only slot B is ours to mark"
+
+dev=""
+for s in "$sysblock"/sd*/sd*; do
+  grep -qx PARTNAME=devinfo "$s/uevent" 2>/dev/null && dev=$devdir/${s##*/}
+done
+[[ -n "$dev" ]] || refuse "devinfo partition not found"
+part=${dev#"$devdir"/}
+disk=$devdir/$(basename "$(dirname "$(readlink -f "$sysclass/$part")")")
+sectors=$(<"$sysclass/$part/size")
+[[ $sectors =~ ^[0-9]+$ ]] && ((sectors > 0 && sectors % 8 == 0)) \
+  || refuse "devinfo size ($sectors sectors) is not a whole number of 4 KiB blocks"
+
+# Whole-partition read that bypasses the page cache, so that what we compare
+# is what the UFS holds. Never opens the partition for writing.
+read_devinfo() {
+  dd if="$dev" of="$1" bs=4096 count=$((sectors / 8)) ${ddflags:+iflag=$ddflags} status=none
+}
+
+# Offsets (hex, one per line) of the bytes that differ between two files of
+# the same length. od and bash only: the phone has no cmp or diff.
+differing_offsets() {
+  local x y i=0
+  while IFS= read -r x <&3 && IFS= read -r y <&4; do
+    [[ ${x// /} == "${y// /}" ]] || printf '0x%02x\n' "$i"
+    i=$((i + 1))
+  done 3< <(od -An -v -tx1 -w1 -- "$1") 4< <(od -An -v -tx1 -w1 -- "$2")
+  [[ $(od -An -v -tx1 -- "$1" | wc -l) == $(od -An -v -tx1 -- "$2" | wc -l) ]] || echo length
+}
+
+byte_at() { local v; v=$(od -An -v -tu1 -j "$2" -N 1 -- "$1"); echo "${v// /}"; }
+
+boot_id=$(<"$bootidfile")
+[[ $boot_id =~ ^[0-9a-f-]{36}$ ]] || refuse "no usable boot id"
+before=$statedir/devinfo-before-$boot_id.img
+after=$statedir/devinfo-after-$boot_id.img
+probe=$statedir/devinfo-probe.$$
+mkdir -p -- "$statedir"
+trap 'rm -f -- "$probe"' EXIT
+read_devinfo "$probe" || refuse "could not read $dev"
+if omamobile-bootctl dump "$probe" | sed -n '/^slot b /,/retry-count/p' | grep -c 'successful:  yes' >/dev/null; then
+  exit 0
+fi
+rm -f -- "$probe"
+
+# --- health check ---------------------------------------------------------
+health_failures() {
+  local f="" u c p up
+  systemctl is-active --quiet comet-storage-guard.service || f+="storage guard service is not running"$'\n'
+  [[ ! -e $devdir/sda ]] || f+="the whole-disk node $devdir/sda exists"$'\n'
+  [[ $(<"$sysblock/${disk#"$devdir"/}/ro") == 1 && $(<"$sysclass/$part/ro") == 1 ]] \
+    || f+="devinfo or its disk is not read-only"$'\n'
+  systemctl is-active --quiet sshd.service || f+="sshd is not running"$'\n'
+  case $(cat "$sysnet/usb0/operstate" 2>/dev/null) in up | unknown) ;; *) f+="usb0 is down"$'\n' ;; esac
+  c=$(cat "$gadget"/*/UDC 2>/dev/null || true)
+  [[ -n ${c//[$' \n']/} ]] || f+="the USB gadget has no UDC bound"$'\n'
+  u=$(systemctl --failed --no-legend --plain 2>/dev/null | sed 's/ .*//' || true)
+  [[ -z $u ]] || f+="failed units: ${u//$'\n'/ }"$'\n'
+  systemctl is-active --quiet sddm.service || f+="sddm is not running"$'\n'
+  p=0
+  for c in "$procdir"/[0-9]*/comm; do
+    [[ $(cat "$c" 2>/dev/null) == Hyprland ]] && { p=1; break; }
+  done
+  ((p)) || f+="no Hyprland session"$'\n'
+  c=0
+  for p in "$sysdrm"/card*-*/enabled; do
+    [[ -r $p && $(<"$p") == enabled ]] && { c=1; break; }
+  done
+  ((c)) || f+="no enabled display connector"$'\n'
+  up=$(cut -d. -f1 "$uptimefile")
+  ((up >= settle)) || f+="up only ${up}s of $settle"$'\n'
+  printf '%s' "$f"
+}
+
+waited=0
+while :; do
+  failures=$(health_failures)
+  [[ -z $failures ]] && break
+  ((waited >= health_wait)) && refuse "health check failed after ${waited}s: ${failures//$'\n'/; }"
+  sleep 5
+  waited=$((waited + 5))
+done
+log "health check passed"
+
+# --- the one write --------------------------------------------------------
+# The copy of record is taken now, after the health check, so it is as fresh
+# as the write it guards.
+read_devinfo "$before" || refuse "could not read $dev"
+dump=$(omamobile-bootctl dump "$before")
+grep -q '(verified layout)' <<<"$dump" || refuse "devinfo is not the verified 3.15 layout"
+flags=$(byte_at "$before" 0x35)
+[[ $flags =~ ^[0-9]+$ ]] || refuse "cannot read byte 0x35"
+((flags & 2)) && refuse "slot B's flag byte 0x35 already has the successful bit (0x$(printf %02x "$flags"))"
+
+opened=0
+relock() {
+  ((opened)) || return 0
+  opened=0
+  blockdev --setro "$dev"
+  blockdev --setro "$disk"
+}
+trap 'relock; rm -f -- "$probe"' EXIT
+
+tries=0
+written=0
+while ((tries < write_tries)); do
+  tries=$((tries + 1))
+  opened=1
+  blockdev --setrw "$disk"
+  blockdev --setrw "$dev"
+  if omamobile-bootctl mark-successful "$dev" b --i-understand; then
+    written=1
+    break
+  fi
+  log "write attempt $tries failed (the storage guard may have locked the disk again)"
+  sleep 0.3
+done
+relock
+
+read_devinfo "$after.partial" || { rm -f -- "$after.partial"; refuse "could not read $dev back; the copy is $before"; }
+mv -f -- "$after.partial" "$after"
+changed=$(differing_offsets "$before" "$after")
+if [[ -z $changed ]]; then
+  ((written)) && refuse "bootctl reported a write but devinfo is unchanged (copy: $before)"
+  refuse "devinfo is unchanged after $tries tries; slot B is still not marked"
+fi
+[[ $changed == 0x35 ]] \
+  || refuse "unexpected difference against $before: $(tr '\n' ' ' <<<"$changed")(expected only 0x35); NOT putting it back, see $after"
+want=$((flags | 2))
+now=$(byte_at "$after" 0x35)
+((now == want)) || refuse "byte 0x35 is 0x$(printf %02x "$now"), expected 0x$(printf %02x "$want") (copy: $before)"
+for f in "$sysblock/${disk#"$devdir"/}/ro" "$sysclass/$part/ro"; do
+  [[ $(<"$f") == 1 ]] || log "WARNING: $f is not 1 after the write; the storage guard should set it read-only again"
+done
+log "slot b marked successful (byte 0x35 $(printf %02x "$flags") -> $(printf %02x "$now"), nothing else changed; copy: $before)"
