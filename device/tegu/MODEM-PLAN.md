@@ -1145,9 +1145,38 @@ wrong, and what is left is the unexpected LINK_DOWN itself: recovering from
 it instead of dying with it, and reading the LTSSM and the endpoint's L1SS
 status at the moment it happens.
 
-Best known configuration for a GNSS session today: `l1ss_mask` 0xf,
-`tpoweron` 0xa1, set after the CP is ONLINE, which gives about five
-minutes of fixes. Three mistakes of
+**And then the instrumentation showed all three of those runs were measuring
+nothing (2026-10-31, later).** With the link-down capture in place, every
+drop printed `L1SS_CTL1 0x0, CTL2 0x0` with `LNKCTL 0x...42`: the root
+port's substate control read zero while ASPM L1 was on. Two mistakes
+behind that:
+
+- The register offsets came from Google's driver (`PCIE_LINK_L1SS_CONTROL`
+  0x19c, `CONTROL2` 0x1a0). On this controller the L1SS capability sits at
+  **0x160** on both the root port and the endpoint, read from the hardware
+  with `pci_find_ext_capability()`; 0x19c is something else, so the writes
+  landed on unrelated registers and read back as zero.
+- Those registers are also behind DBI's read-only lock, which a write needs
+  `dw_pcie_dbi_ro_wr_en()` to lift. Lifting it alone changed nothing,
+  because the offset was still wrong.
+
+What that means for the three rows above: the `l1ss_mask` and `tpoweron`
+values never reached the hardware, so the differences between those runs
+are not the substates. The one real change was plain ASPM L1 on the link
+control register, which does take (`LNKCTL` bit 1 set, `0x...42`), and
+that alone is what the five-minute run had. The capability's own values at
+that point, read live during a session with the link up:
+
+| | capability | CTL1 | CTL2 |
+| --- | --- | --- | --- |
+| root port 0000:00:00.0 | 0x160 | 0x40a30a00 (substates off) | 0x79 |
+| endpoint 0000:01:00.0 | 0x160 | 0x40a30000 (substates off) | 0x79 |
+
+So the LTR threshold and TCommon fields are already populated by whoever
+set them, and only the four enable bits are clear. The implementation now
+reads both offsets from the hardware and logs CTL1 back after writing, so
+the next run says whether the substates are on rather than leaving it to
+be assumed. Three mistakes of
 mine on the way there, all worth recording: the module built for this
 palmtop must carry `google,zumapro-pcie-cp` in its match table and treat
 `samsung,sysreg` as optional (the in-tree branch has neither, so a module
