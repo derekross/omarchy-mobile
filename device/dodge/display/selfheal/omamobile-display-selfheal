@@ -1,0 +1,41 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Display self-heal (dodge), OPT-IN. If the first msm panel init this boot
+# failed with a DSI cmd DMA timeout (-110: the warm-boot display drop), the
+# screen stays dark and the phone freezes ~6 min later. Reboot once so the
+# next warm boot (usually good) brings the display back.
+#
+# Enable:  touch /etc/omamobile/display-selfheal.enable
+#          systemctl enable omamobile-display-selfheal.service
+# Loop guard: at most one self-heal reboot per $GAP seconds (marker mtime
+# in /var/lib/omamobile). A good boot removes the marker.
+set -u
+MARK=/var/lib/omamobile/display-selfheal
+GAP=${GAP:-600}
+WAIT=${WAIT:-25}
+log() { echo "omamobile-display-selfheal: $*"; echo "omamobile-display-selfheal: $*" > /dev/kmsg 2>/dev/null; }
+
+# give msm time to bind and send the first panel commands
+i=0
+while [ $i -lt "$WAIT" ]; do
+	journalctl -k -b -q --no-pager | grep -q -e 'cmd dma tx failed' -e 'Failed to initialize panel' && break
+	[ -e /sys/class/drm/card1-DSI-1 ] || [ -e /sys/class/drm/card0-DSI-1 ] && [ $i -ge 10 ] && break
+	sleep 1; i=$((i + 1))
+done
+
+if ! journalctl -k -b -q --no-pager | grep -q -e 'ret=-110' -e 'Failed to initialize panel: -110'; then
+	[ -e "$MARK" ] && { rm -f "$MARK"; log "display OK, cleared marker"; }
+	exit 0
+fi
+
+mkdir -p "${MARK%/*}"
+if [ -e "$MARK" ]; then
+	age=$(( $(date +%s) - $(stat -c %Y "$MARK") ))
+	if [ "$age" -lt "$GAP" ]; then
+		log "panel init -110 again, but already self-healed ${age}s ago; not rebooting"
+		exit 0
+	fi
+fi
+: > "$MARK"; sync
+log "first panel init failed with -110 (display dark); rebooting once"
+systemctl reboot

@@ -151,16 +151,23 @@ QtObject {
     if (kind === "media") { fromCommand("playerctl metadata --format " + JSON.stringify(Phone.MEDIA_FORMAT) + " 2>/dev/null", Phone.mediaFrom); return }
     if (kind === "modes") { fromCommand("brightnessctl --device=white:torch get 2>/dev/null || echo; makoctl mode 2>/dev/null", Phone.modesFrom); return }
     if (kind === "system") {
-      fromCommand("cat /proc/meminfo; echo '@@'; cat /proc/uptime; echo '@@'; uname -r; echo '@@'; df -B1 --output=size,used / | tail -1", function(t) {
-        const parts = t.split("@@\n")
-        return Phone.systemFrom(parts[0], parts[1], parts[2], parts[3])
+      fromCommand("cat /proc/meminfo; echo '@@'; cat /proc/uptime; echo '@@'; uname -r; echo '@@'; df -B1 --output=size,used / | tail -1; echo '@@@'; " + Phone.DEVICE_COMMAND, function(t) {
+        const halves = t.split("@@@\n")
+        const parts = halves[0].split("@@\n")
+        return Phone.systemFrom(parts[0], parts[1], parts[2], parts[3], Phone.boardFrom(halves[1]))
       })
       return
     }
     if (kind === "battery") { fromCommand(Phone.BATTERY_COMMAND, Phone.batteryFrom); return }
     if (kind === "alarm") { done({ value: { set: false, time: null, app: null } }); return }
     if (kind === "notifications") { done({ value: { available: false, count: 0, items: [] } }); return }
-    if (kind === "device") { done({ value: { model: "Pixel 7 Pro", maker: "Google", android: null, sdk: null, soc: "gs201" } }); return }
+    if (kind === "device") {
+      fromCommand(Phone.DEVICE_COMMAND, function(t) {
+        const b = Phone.boardFrom(t)
+        return { model: b.model, maker: b.maker, android: null, sdk: null, soc: b.soc }
+      })
+      return
+    }
     done({ value: null })
   }
 

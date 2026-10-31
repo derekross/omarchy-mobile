@@ -89,7 +89,7 @@ Each step: commands, Expect/Pass, Stop, Rollback, risk.
    `omamobile.initramfs`, so the init hands over to Arch. Then, phone in
    fastboot, run by the owner (it asks for the user, password and SSH key):
    `tools/install-phone --device panther --images ~/android/mainline/out/images
-   --rootfs out/panther/omamobile-rootfs-<date>-aarch64.img.zst --dry-run`,
+   --rootfs out/panther/omamobile-rootfs-panther-<date>-aarch64.img.zst --dry-run`,
    and without `--dry-run` after reading every command.
    Expect: the initramfs grows the root to the partition, `arch: switching
    to Arch Linux on /dev/sda31`, `omamobile-firstboot` creates the user,

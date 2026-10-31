@@ -130,6 +130,13 @@ Item {
 
     function test_5_paused_home_stops_frames_and_slows_the_tick() {
       verify(scheduler.tickInterval <= Phone.CLOCK.tickMs + 5)
+      // tickDelay() returns the time to the next boundary, so in the last
+      // second of a hidden period the paused delay is legitimately shorter
+      // than a tick. Step over that boundary before pausing, or the check
+      // below asserts something untrue about one second in every
+      // hiddenTickMs (it failed in CI that way).
+      if (Phone.tickDelay(Date.now(), true) <= Phone.CLOCK.tickMs + 5)
+        wait(Phone.CLOCK.tickMs + 20)
       scheduler.paused = true
       tryVerify(function() { return !scheduler.framing }, 500, "covered or off: no frames")
       verify(scheduler.tickInterval > Phone.CLOCK.tickMs + 5, "the tick slows while paused (" + scheduler.tickInterval + " ms)")

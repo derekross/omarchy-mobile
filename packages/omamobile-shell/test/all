@@ -91,6 +91,12 @@ b=plugins/omamobile.back/Back.qml
 python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the back gesture"
 grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
+grep -c "google,zumapro-tegu' >/dev/null && scale='8 \\\\/ 3'" bin/omamobile-setup-user >/dev/null || fail "the 9a's scale is 8/3"
+# the seeded line stays valid Lua for both scales
+for sc in 3 '8 \/ 3'; do
+  t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
+  [[ $t == 'local omarchy_monitor_scale = 3' || $t == 'local omarchy_monitor_scale = 8 / 3' ]] || fail "the seeded scale line ($t)"
+done
 grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
 grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
 grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
@@ -469,6 +475,10 @@ grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omamobi
 grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omamobile.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omamobile-launch"
 grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fail "NFC links open through omamobile-launch"
 grep -c 'GLib.timeout_add_seconds(2, follow_rfkill, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service follows the rfkill switch"
+grep -c 'GLib.timeout_add_seconds(2, follow_screen, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service stops polling with the screen off"
+python3 -B test/nfc-screen.py >/dev/null || { python3 -B test/nfc-screen.py | grep -v '^ok'; fail "screen_lit reads the connectors"; }
+grep -c 'polling waits for the screen' bin/omamobile-nfc-open >/dev/null || fail "start_polling leaves the loop off while the screen is dark"
+grep -c 'timeout_add_seconds(4' bin/omamobile-nfc-open >/dev/null && fail "the one-shot stop is gone: the screen check stops polling every time"
 grep -c '"systemctl", "restart", "neard"' bin/omamobile-nfc-open >/dev/null || fail "an NFC unblock restarts neard"
 grep -c '^Requires=neard' systemd/omamobile-nfc-open.service >/dev/null && fail "omamobile-nfc-open restarts neard, so it must not Require= it (the restart would loop)"
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"

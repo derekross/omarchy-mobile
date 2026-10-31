@@ -11,11 +11,15 @@ G1-G2 passed: gnssd loads Kepler's firmware and talks CHPP over SPI;
 The CHPP link lost bits because spi-s3c64xx's flush cleared the packet
 count before turning the channels off
 (derekross/linux-omarchy-mobile#150) and because the GNSS SPI's pins ran on
-the bootloader's drive 0 (#151). Open: the CP link under GNSS traffic. Held
-up (cpif `keep_link_up=1` after ONLINE) the CP crashes 103-108 s after
-ONLINE, six boots of six; left to cycle, the SoC hangs about 170 s after
-ONLINE (the 10-29 hang), so a fix lasts about a minute. Section "G3,
-resolved" below, and G3-L1.
+the bootloader's drive 0 (#151). Open: the CP link under GNSS traffic. Our
+controller never enabled the link's L1 substates (a stub), so an idle link
+is torn down and rebuilt about twice a second and one of those cycles hangs
+the SoC, about 170 s after ONLINE; holding the link instead crashes the CP
+(103-108 s after ONLINE with the wake line high, no GNSS data with it
+answered). A session lasts one to five minutes depending on the cycling.
+The substates are being enabled on the real capability offset (0x160, both
+ends) on the bring-up branch; not yet observed to take effect. Section
+"G3, GNSS gets a fix" below, and G3-L1.
 Left: the GNSS and CPIF drivers aren't in the published kernel, and GNSS
 still starts by hand. Next: the SIM.
 The staged plan (sections F, K, U and runbooks M0.2-M6, G1-G4) is below,
@@ -939,7 +943,7 @@ does no software swap, which is not built yet. One session, no reset: this
 was G3-A's own one DTB round, not a G3-L1 session, so the trace's cap of
 three sessions and two resets is untouched. GNSS stays parked otherwise.
 
-### G3, resolved: a fix (2026-10-30, evening, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+### G3, GNSS gets a fix (2026-10-30, evening, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
 
 [V] **The receiver gets a position fix.** On the owner's kernel with the
 two fixes below and stock's SPI configuration: a 3-minute session by a
@@ -1025,9 +1029,11 @@ lands after isolation), so that the link may cycle as the CP asks.
 
 **Left for GNSS:** the GNSS link driver (gnssif) and CPIF aren't in the
 published kernel, so this runs on the owner's kernel only; #150 and #151 are
-open; the CP link under GNSS traffic is unsolved (above: the hold crashes
-the CP, the cycling hangs the SoC), so a fix lasts about a minute per boot
-until CPIF's power-off path is made safe; GNSS still starts by hand
+open; the CP link under GNSS traffic is unsolved: the hold crashes the CP,
+the cycling hangs the SoC, and the way out is the L1 substates the
+controller never enabled (G3-L1, 10-31), which are being enabled on the
+real capability offset and have not yet been seen to take effect. A session
+lasts one to five minutes. GNSS still starts by hand
 ([`bringup/tegu-gnss-session`](bringup/tegu-gnss-session), which starts the
 modem, holds the link after ONLINE for the diagnostic and runs the HAL for a
 set time; once per boot), or through Omarchy's Location switch with the hand
@@ -1038,10 +1044,29 @@ the gnss-slsi profile with its NMEA on the FIFO `omamobile-gnss-nmea` reads.
 Tested on 2026-10-30: `omamobile-gnss-nmea.socket` enabled, a client's connect
 starts the stack, the HAL serves NMEA to `/run/omamobile-gnss/nmea.sock` and
 the fixes arrive (first fix about 80 s after the connect, 46 of 52 GGA
-sentences fixed in the first run), for as long as the CP link lasts. The
-package's own units are masked on the 9a by the boot command line
-(`systemd.mask=omamobile-gnss.service` in `package-startup.dtso`), so the
-switch needs that mask dropped as well.
+sentences fixed in the first run, with the link held and the wake line left
+high, `HOLD=1`; the script's later default of 2 moves no data and is only
+there as a diagnostic), for as long as the CP link lasts.
+
+**Attended only, and not for the daily boot.** With these drop-ins in place
+any GeoClue client can start a session, and a session can still hang the
+SoC with the modem up (about 170 s after ONLINE while the link cycles), so
+a hang could repeat at every boot. The package's own units are masked on
+the 9a by the boot command line (`systemd.mask=omamobile-gnss.service` in
+the kit's `package-startup.dtso`); keep that mask until the CPIF link fix
+lands, and install the drop-ins only for an attended session:
+
+```sh
+# install (attended, charger in, modem not started this boot)
+tools/phone-ssh 'mkdir -p /etc/systemd/system/omamobile-gnss.service.d /etc/systemd/system/omamobile-gnss-nmea.service.d'
+tools/phone-ssh 'cat > /usr/local/sbin/tegu-gnss-start' < device/tegu/bringup/location/tegu-gnss-start
+tools/phone-ssh 'cat > /etc/systemd/system/omamobile-gnss.service.d/tegu.conf' < device/tegu/bringup/location/omamobile-gnss.service.d-tegu.conf
+tools/phone-ssh 'cat > /etc/systemd/system/omamobile-gnss-nmea.service.d/tegu.conf' < device/tegu/bringup/location/omamobile-gnss-nmea.service.d-tegu.conf
+tools/phone-ssh 'chmod 755 /usr/local/sbin/tegu-gnss-start; systemctl daemon-reload; systemctl unmask omamobile-gnss.service omamobile-gnss-nmea.service omamobile-gnss-nmea.socket; systemctl start omamobile-gnss-nmea.socket'
+# the boot mask still applies at the next boot, which is intended
+# remove (after the session; a reboot ends the modem anyway)
+tools/phone-ssh 'systemctl stop omamobile-gnss-nmea.socket omamobile-gnss-nmea.service omamobile-gnss.service; rm -rf /etc/systemd/system/omamobile-gnss.service.d /etc/systemd/system/omamobile-gnss-nmea.service.d /usr/local/sbin/tegu-gnss-start; systemctl daemon-reload'
+```
 
 **The doorbell under the controller's lock didn't stop the hang.** The modem
 driver's doorbell write and its read-back loop in the modem's BAR window were

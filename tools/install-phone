@@ -30,11 +30,11 @@
 #                            instead of running it
 #     --device CODENAME      repository mode: device/CODENAME/device.conf (default
 #                            $DEVICE or cheetah); in a bundle, its device.conf
-#     --images DIR           the slot B images (repository default:
+#     --images DIR           repository mode: the slot B images (default:
 #                            $KERNEL_OUT/images, KERNEL_OUT=$KERNEL_BASE/out-int)
 #     --rootfs FILE          the root image (.img.zst; default: the newest
-#                            omamobile-rootfs-*-aarch64.img.zst in out/, or
-#                            beside a bundle)
+#                            image for this device in out/, or the exact
+#                            image named by a signed bundle's MANIFEST)
 #     --work DIR             where the local image copy goes (default
 #                            ~/.cache/omamobile-install; needs the image's size free)
 #     --bootloader-slots-match VERSION
@@ -80,10 +80,10 @@ done
 if [[ -f $here/device.conf && -d $here/images ]]; then
   mode=bundle
   conf=$here/device.conf
+  [[ -z $images || $(readlink -f "$images") == "$here/images" ]] ||
+    die "a bundle uses its own images; --images is only available in repository mode"
   images=${images:-$here/images}
-  if [[ -z $rootfs ]]; then
-    for f in "$here"/../omamobile-rootfs-*-aarch64.img.zst "$here"/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
-  fi
+  root_dirs=("$here/.." "$here")
 else
   mode=repository
   repo=$(cd -- "$here/.." && pwd)
@@ -96,9 +96,7 @@ else
     [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
   fi
   images=${images:-${KERNEL_OUT:-$KERNEL_BASE/out-int}/images}
-  if [[ -z $rootfs ]]; then
-    for f in "$repo"/out/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
-  fi
+  root_dirs=("$repo/out")
 fi
 [[ -f $conf ]] || die "no device descriptor $conf"
 
@@ -136,7 +134,6 @@ if [[ $mode == repository ]]; then
   [[ $built_for == "$CODENAME" ]] \
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
-[[ -n $rootfs && -f $rootfs ]] || die "no root image (tools/build-rootfs makes one; or --rootfs FILE)"
 for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum; do
   command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"
 done
@@ -154,6 +151,7 @@ done
 
 # --- Integrity of what will be written ---------------------------------------
 say "Checking the files ($mode mode)"
+root_digest="" root_name=""
 if [[ $mode == bundle ]]; then
   [[ -f $here/SHA256SUMS ]] || die "the bundle has no SHA256SUMS"
   if [[ -f $here/SHA256SUMS.sig ]]; then
@@ -171,8 +169,38 @@ if [[ $mode == bundle ]]; then
   fi
   (cd "$here" && sha256sum -c --quiet SHA256SUMS) || die "a bundle file doesn't match SHA256SUMS"
   note "bundle checksums match"
+  if [[ -f $here/SHA256SUMS.sig ]]; then
+    # The root image sits beside the bundle, outside SHA256SUMS. Only the
+    # signed manifest can authorize its name and bytes; its .sha256 cannot.
+    [[ $(grep -Ec '^[0-9a-f]{64} [ *](\./)?MANIFEST$' "$here/SHA256SUMS") == 1 ]] ||
+      die "the signed checksums must cover MANIFEST exactly once"
+    root_record=$(sed -n 's/^root image: //p' "$here/MANIFEST")
+    root_pattern='^([A-Za-z0-9._-]+\.img\.zst) \(([0-9a-f]{64})\)$'
+    [[ $root_record =~ $root_pattern ]] || die "the signed MANIFEST must name one root image and its SHA256"
+    root_name=${BASH_REMATCH[1]} root_digest=${BASH_REMATCH[2]}
+  fi
 fi
-if [[ -f $rootfs.sha256 ]]; then
+if [[ -z $rootfs ]]; then
+  if [[ -n $root_name ]]; then
+    for dir in "${root_dirs[@]}"; do
+      [[ ! -f $dir/$root_name ]] || rootfs=$dir/$root_name
+    done
+  else
+    # Read the device from the manifest, including images with legacy names.
+    for dir in "${root_dirs[@]}"; do
+      for f in "$dir"/omamobile-rootfs-*-aarch64.img.zst; do
+        built_for=$(sed -n 's/^device: \([a-z0-9]*\).*/\1/p' "${f%.img.zst}.MANIFEST" 2>/dev/null || true)
+        [[ $built_for != "$CODENAME" ]] || rootfs=$f
+      done
+    done
+  fi
+fi
+[[ -n $rootfs && -f $rootfs ]] || die "no root image for $CODENAME${root_name:+ ($root_name)} (tools/build-rootfs makes one; or --rootfs FILE)"
+if [[ -n $root_digest ]]; then
+  [[ ${rootfs##*/} == "$root_name" ]] || die "root image must be $root_name, as named by the signed bundle"
+  [[ $(sha256sum < "$rootfs" | cut -d' ' -f1) == "$root_digest" ]] || die "root image does not match the signed bundle"
+  note "root image matches the signed bundle"
+elif [[ -f $rootfs.sha256 ]]; then
   (cd "$(dirname "$rootfs")" && sha256sum -c --quiet "$(basename "$rootfs").sha256") || die "$rootfs doesn't match its .sha256"
   note "root image checksum matches"
 else

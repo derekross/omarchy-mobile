@@ -127,7 +127,7 @@ bin/omamobile images           # boot, init_boot, vendor_boot, vendor_kernel_boo
 
 # A first install: packages, root image, then the installer (phone in fastboot)
 tools/build-packages           # [omamobile] for aarch64 into out/repo, signed
-tools/build-rootfs             # out/omamobile-rootfs-<date>-aarch64.img.zst
+tools/build-rootfs             # out/omamobile-rootfs-<device>-<date>-aarch64.img.zst
 tools/install-phone --dry-run  # checks, questions, the exact commands; then without --dry-run
 # after the first boot: a read-only backup of the modem's partitions into DIR (REINSTALL-RUNBOOK 4a)
 tools/phone-provision --nv-backup DIR FACTORY.zip   # firmware and per-phone data
@@ -144,7 +144,7 @@ tools/phone-mirror             # the phone's screen in a window here, mouse and 
 ```
 
 - **An SSH key that needs a touch per connection** (a security key): set `OMAMOBILE_SSH_SHARE=1`, and `tools/phone-ssh` (so `push` too) shares one connection and asks once. Check that SSH still works after a USB or firewall step with `tools/phone-ssh --fresh`, which never shares.
-- **An explicit SSH connection:** set `OMAMOBILE_SSH_HOST` (`user@host`), `OMAMOBILE_SSH_KEY` (identity file) or `OMAMOBILE_SSH_KNOWN_HOSTS` (strict host-key checking with that file); these options need Python 3 and keep shared connections separate for each target, identity and known-hosts policy.
+- **An explicit SSH connection:** set `OMAMOBILE_SSH_HOST` (`user@host`), `OMAMOBILE_SSH_KEY` (identity file) or `OMAMOBILE_SSH_KNOWN_HOSTS` (strict host-key checking with that file). `OMAMOBILE_SSH_HOST_KEY_ALIAS` selects the name in the known-hosts file when native Linux and recovery share the USB address but have different keys. These options need Python 3 and keep shared connections separate for each target, identity, known-hosts file and host-key alias.
 - **The device** comes from `DEVICE` (default `cheetah`, in [`omamobile.conf`](omamobile.conf)) and its descriptor `device/<codename>/device.conf`: `DEVICE=<codename> bin/omamobile images`. How builds and releases work for several devices: [docs/RELEASES.md](docs/RELEASES.md).
 - **One worktree per subsystem branch.** Each branch gets its own output directory (`KERNEL_DIR=~/omamobile-kernel/wt-gnss KERNEL_OUT=~/omamobile-kernel/out-gnss bin/omamobile kernel`), so builds don't step on each other.
 - **The kernel command line goes in the DTB** (`/chosen/bootargs`), not in `vendor_boot`: the Pixel bootloader (ABL) ignores the vendor_boot cmdline.

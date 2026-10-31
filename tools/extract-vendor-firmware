@@ -319,7 +319,7 @@ fi
 # Sanity checks: right chip, text NVRAM, Cirrus file formats.
 brcm="$dest/brcm"
 grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
-  die "fw_bcmdhd.bin is not a $BT_CHIP PCIe firmware"
+  die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
 grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
   die "BCM.hcd is not a $BT_CHIP Bluetooth patch"
 grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
