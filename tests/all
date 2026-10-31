@@ -17,6 +17,7 @@ for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/buil
          tools/local-key-init tools/fetch-published \
          tools/lib/alarm.sh tools/lib/alarm-setup rootfs/build-inside tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
+  [[ $f == *.py ]] && continue
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
 done
 sh -n initramfs/init
@@ -24,6 +25,7 @@ sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
+python3 tests/bt-uart-gpio.py
 for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package; do
   echo "# $t"
   "$t"

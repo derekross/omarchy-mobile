@@ -41,6 +41,7 @@
 # CMU or PMU registers; the only hardware it drives is the tty and two GPIOs.
 
 import array
+import contextlib
 import fcntl
 import os
 import select
@@ -117,18 +118,22 @@ def open_tty(path, baud, rtscts):
         die(f"unsupported baud {baud}")
     say(f"open {path} raw 8N1 {baud} rtscts={int(rtscts)}")
     fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-    attr = termios.tcgetattr(fd)
-    attr[0] = 0                                   # iflag
-    attr[1] = 0                                   # oflag
-    attr[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-    if rtscts:
-        attr[2] |= termios.CRTSCTS
-    attr[3] = 0                                   # lflag
-    attr[4] = attr[5] = BAUD[baud]
-    attr[6][termios.VMIN] = 0
-    attr[6][termios.VTIME] = 0
-    termios.tcsetattr(fd, termios.TCSANOW, attr)
-    termios.tcflush(fd, termios.TCIOFLUSH)
+    try:
+        attr = termios.tcgetattr(fd)
+        attr[0] = 0                                   # iflag
+        attr[1] = 0                                   # oflag
+        attr[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+        if rtscts:
+            attr[2] |= termios.CRTSCTS
+        attr[3] = 0                                   # lflag
+        attr[4] = attr[5] = BAUD[baud]
+        attr[6][termios.VMIN] = 0
+        attr[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attr)
+        termios.tcflush(fd, termios.TCIOFLUSH)
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
@@ -271,64 +276,68 @@ class WakeLine:
 def cmd_hci(tty, baud, on_ms, wake):
     wake_bank, wake_line = wake.split(":")
     wake_line = int(wake_line)
-    chip_fd, path, _ = find_chip(BT_BANK)
-    if chip_fd is None:
-        die(f"no gpiochip labelled {BT_BANK}: is the PERIC0 pin controller enabled?")
-    wake_fd = wake_lines = None
-    if wake_bank == BT_BANK:
-        say(f"{BT_BANK} is {path}; request lines {BT_REG_ON} (BT_REG_ON) and "
-            f"{wake_line} (BT_DEV_WAKE) as outputs, low")
-        lines = Lines(chip_fd, [BT_REG_ON, wake_line], "bt-uart-test")
-    else:
-        wake_fd, wake_path, _ = find_chip(wake_bank)
-        if wake_fd is None:
-            die(f"no gpiochip labelled {wake_bank}")
-        say(f"{BT_BANK} is {path} (line {BT_REG_ON}, BT_REG_ON), {wake_bank} is "
-            f"{wake_path} (line {wake_line}, BT_DEV_WAKE); outputs, low")
-        lines = Lines(chip_fd, [BT_REG_ON], "bt-uart-test")
-        wake_lines = Lines(wake_fd, [wake_line], "bt-uart-test")
-    dev_wake = WakeLine(lines, wake_lines, wake_line)
-    fd = open_tty(tty, baud, rtscts=True)
-    rc = 1
-    try:
-        say("BT_DEV_WAKE high (keep the controller awake)")
-        dev_wake.set(1)
-        say("BT_REG_ON high (power the BT core); Wi-Fi's WL_REG_ON is not touched")
-        lines.set(BT_REG_ON, 1)
-        time.sleep(on_ms / 1000)
-        junk = read_exact(fd, 64, 0.1)
-        if junk:
-            say(f"bytes after power-on (ignored): {hexs(junk)}")
-        termios.tcflush(fd, termios.TCIFLUSH)
+    if baud not in BAUD or on_ms < 0:
+        die("unsupported baud or negative power-on delay")
+    with contextlib.ExitStack() as cleanup:
+        def request(bank, offsets):
+            chip_fd, path, _ = find_chip(bank)
+            if chip_fd is None:
+                die(f"no gpiochip labelled {bank}")
+            cleanup.callback(os.close, chip_fd)
+            lines = Lines(chip_fd, offsets, "bt-uart-test")
+            cleanup.callback(lines.close)
+            return lines
 
-        if hci_cmd(fd, 0x0c03) is None:              # HCI_Reset
-            say("HCI_Reset FAIL. If 0 bytes: check RTS/CTS (try --baud 3000000 "
-                "only if the chip was left running), BT_REG_ON, the baud clock")
-            return 1
-        say("HCI_Reset PASS")
-
-        ver = hci_cmd(fd, 0x1001)                    # Read Local Version
-        if ver and len(ver) >= 9:
-            hci_ver, hci_rev, lmp_ver, manuf, subver = struct.unpack_from("<BHBHH", ver, 1)
-            say(f"version: HCI {hci_ver} rev 0x{hci_rev:04x} LMP {lmp_ver} "
-                f"manufacturer {manuf} LMP subversion 0x{subver:04x} "
-                f"({(subver >> 13) & 7}.{(subver >> 8) & 0x1f}.{subver & 0xff})")
-
-        cfg = hci_cmd(fd, 0xfc79)                    # BCM Read Verbose Config
-        if cfg and len(cfg) >= 2:
-            say(f"BCM chip id {cfg[1]} (btbcm prints this as 'BCM: chip id')")
-        rc = 0
-    finally:
-        say("BT_REG_ON low, BT_DEV_WAKE low")
-        lines.set(BT_REG_ON, 0)
-        dev_wake.set(0)
-        lines.close()
-        os.close(chip_fd)
-        if wake_lines:
-            wake_lines.close()
-            os.close(wake_fd)
-        os.close(fd)
+        if wake_bank == BT_BANK:
+            lines = request(BT_BANK, [BT_REG_ON, wake_line])
+            dev_wake = WakeLine(lines, None, wake_line)
+        else:
+            lines = request(BT_BANK, [BT_REG_ON])
+            dev_wake = WakeLine(lines, request(wake_bank, [wake_line]), wake_line)
+        fd = open_tty(tty, baud, rtscts=True)
+        cleanup.callback(os.close, fd)
+        cleanup.callback(dev_wake.set, 0)
+        cleanup.callback(lines.set, BT_REG_ON, 0)
+        rc = hci_exchange(fd, lines, dev_wake, on_ms)
     say("hci " + ("PASS" if rc == 0 else "FAIL"))
+    return rc
+
+
+def hci_exchange(fd, lines, dev_wake, on_ms):
+    rc = 1
+    say("BT_DEV_WAKE high (keep the controller awake)")
+    dev_wake.set(1)
+    say("BT_REG_ON high (power the BT core); Wi-Fi's WL_REG_ON is not touched")
+    lines.set(BT_REG_ON, 1)
+    time.sleep(on_ms / 1000)
+    junk = read_exact(fd, 64, 0.1)
+    if junk:
+        say(f"bytes after power-on (ignored): {hexs(junk)}")
+    termios.tcflush(fd, termios.TCIFLUSH)
+
+    if hci_cmd(fd, 0x0c03) is None:              # HCI_Reset
+        say("HCI_Reset FAIL. If 0 bytes: check RTS/CTS (try --baud 3000000 "
+            "only if the chip was left running), BT_REG_ON, the baud clock")
+        return 1
+    say("HCI_Reset PASS")
+
+    ver = hci_cmd(fd, 0x1001)                    # Read Local Version
+    if not ver or len(ver) < 9:
+        say("Read Local Version FAIL")
+        return 1
+    if ver and len(ver) >= 9:
+        hci_ver, hci_rev, lmp_ver, manuf, subver = struct.unpack_from("<BHBHH", ver, 1)
+        say(f"version: HCI {hci_ver} rev 0x{hci_rev:04x} LMP {lmp_ver} "
+            f"manufacturer {manuf} LMP subversion 0x{subver:04x} "
+            f"({(subver >> 13) & 7}.{(subver >> 8) & 0x1f}.{subver & 0xff})")
+
+    cfg = hci_cmd(fd, 0xfc79)                    # BCM Read Verbose Config
+    if not cfg or len(cfg) < 2:
+        say("Read Verbose Config FAIL")
+        return 1
+    if cfg and len(cfg) >= 2:
+        say(f"BCM chip id {cfg[1]} (btbcm prints this as 'BCM: chip id')")
+    rc = 0
     return rc
 
 
