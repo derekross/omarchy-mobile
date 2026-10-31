@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: MIT
+// The "Voice Call" UCM verb's Earpiece device (device/cheetah/AOC-PLAN.md
+// C9k): let the active local user start omamobile-earpiece@on.service and
+// omamobile-earpiece@off.service, which run "omamobile-speaker-protection
+// earpiece on|off" as root, from PipeWire. Neither raises a level: on
+// lowers the top amplifier to the earpiece's ceilings and mutes the bottom
+// one, off returns both to the stage's levels. Nothing else.
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.local && subject.active &&
+      /^omamobile-earpiece@(on|off)\.service$/.test(action.lookup("unit")) &&
+      action.lookup("verb") == "start") {
+    return polkit.Result.YES;
+  }
+});

@@ -41,6 +41,22 @@
 #   omamobile-speaker-protection watch              (omamobile-speaker-watch.service)
 #   omamobile-speaker-protection status | monitor [SECONDS] | health
 #   omamobile-speaker-protection verify             (during playback; C9a)
+#   omamobile-speaker-protection earpiece on|off|status
+#                           (AOC-PLAN.md C9k; omamobile-earpiece@on|off.service
+#                           runs it for the "Voice Call" UCM verb's Earpiece)
+#                           on: stock's handset path. Both muted, the top
+#                           amplifier's analog gain lowered to the earpiece's,
+#                           the watchdog told the mode (and its answer awaited),
+#                           then the top amplifier's DSP bypassed (PCM Source
+#                           ASP) and the top unmuted alone at the earpiece's
+#                           digital level; the bottom stays at Digital PCM
+#                           Volume 0. off: muted again, the top back through
+#                           its DSP, the watchdog back in speaker mode, every
+#                           control back at the stage's value and read back,
+#                           then both unmuted. Both refuse unless the
+#                           protection runs (status ok, health, the watchdog
+#                           answering); a failure half-way mutes both. Both
+#                           are idempotent; a start always ends in speaker mode
 #   omamobile-speaker-protection signal tone|multitone FILE [options]
 #   omamobile-speaker-protection mute [--reason TEXT]
 #   omamobile-speaker-protection impedance [--rounds N]
@@ -60,6 +76,10 @@
 #   OMAMOBILE_SPK_ANALOG    Analog PCM Volume (media 10, else 6)
 #   OMAMOBILE_SPK_TOP_DIGITAL, _TOP_ANALOG, _BOTTOM_DIGITAL, _BOTTOM_ANALOG
 #                           per amplifier, overriding the two above
+#   OMAMOBILE_SPK_EARPIECE_DIGITAL, _EARPIECE_ANALOG, _EARPIECE_DRE
+#                           the top amplifier in earpiece mode: 657 / 6, DRE as
+#                           OMAMOBILE_SPK_DRE; at most 737 (and the stage's
+#                           digital ceiling) / 6 in every stage
 # Values above the stage's ceilings are refused. Never print or log the
 # calibration values: the repository and its logs are public.
 set -uo pipefail
@@ -87,6 +107,23 @@ if [[ $STAGE == media ]]; then
 else
   DIGITAL=${OMAMOBILE_SPK_DIGITAL:-657} ANALOG=${OMAMOBILE_SPK_ANALOG:-6}
 fi
+
+# The earpiece (AOC-PLAN.md C9k): the top amplifier alone with its DSP
+# bypassed, as stock's handset path (mixer_paths.xml "handset": PCM Source
+# ASP, AMP PCM Gain 6, Digital PCM Volume 817 from init). Analog at most 6
+# in every stage (AUDIO-PLAN.md section 4: the top amplifier as earpiece;
+# stock's in-call 7 with a 3.5 A boost peak stays out); digital at most the
+# media stage's 737 (-10 dB against stock) and never above the stage's own.
+# The default 657 is 20 dB under stock's handset gain, AUDIO-PLAN section 4's
+# first-sound level: the earpiece is held at the ear, and unlike stock's path
+# nothing in front of it (no AoC handset processing) lowers the signal.
+EAR_DIGITAL_CEIL=$((DIGITAL_CEIL < 737 ? DIGITAL_CEIL : 737))
+EAR_ANALOG_CEIL=$((ANALOG_CEIL_TOP < 6 ? ANALOG_CEIL_TOP : 6))
+EAR_DIGITAL=${OMAMOBILE_SPK_EARPIECE_DIGITAL:-657}
+EAR_ANALOG=${OMAMOBILE_SPK_EARPIECE_ANALOG:-6}
+# DRE as in speaker mode unless set: stock runs it on the handset path too
+# (its init turns it on for good)
+EAR_DRE=${OMAMOBILE_SPK_EARPIECE_DRE:-${OMAMOBILE_SPK_DRE:-1}}
 
 # The DT's cirrus,subsystem-id; with the "Top"/"Bottom" name prefixes it makes
 # the firmware names mainline wm_adsp requests. Read from the top amplifier's
@@ -129,6 +166,14 @@ fi
 marker=$STATE/speaker-protection-started
 stamp=$STATE/speaker-protection-verified
 status_file=$RUN/speaker-protection
+# the boost converter's state from the last start ("boost converter on ..."
+# or "... off ..."): the module parameter only applies when the amplifiers
+# probe, so its current value says nothing about the running chips
+boost_file=$RUN/speaker-protection-boost
+# earpiece mode: the mode file names it (no file: speaker mode); the
+# watchdog writes the mode it enforces to the ack file
+mode_file=$RUN/speaker-mode
+ack_file=$RUN/speaker-watch-mode
 cal=$RUN/speaker.cal
 card=
 
@@ -355,6 +400,10 @@ start() {
   mkdir -p "$STATE"
   date -Is > "$marker"
   sync -f "$marker" 2>/dev/null || sync
+  # A start always ends in speaker mode (C9k): earpiece mode never outlives
+  # a restart, and no earpiece request is taken while this runs.
+  rm -f "$mode_file" "$ack_file" "$boost_file"
+  set_status "starting"
   # the kernel log's clock (CLOCK_MONOTONIC; /proc/uptime also counts suspend)
   since=$(python3 -c 'import time; print(time.monotonic())')
 
@@ -397,6 +446,7 @@ start() {
     boost_state="boost converter on (kernel without boost_en)"
   fi
   log "$boost_state"
+  echo "$boost_state" > "$boost_file"
 
   # 2. Mute before anything else
   mute || fail "muting failed"
@@ -452,7 +502,7 @@ start() {
     # Its start-of-stream step used to trip the watchdog's coil jump rule
     # at the everyday level; that rule now applies above analog 10 only.
     # OMAMOBILE_SPK_DRE=0 leaves it off.
-    [[ ${OMAMOBILE_SPK_DRE:-1} == 1 ]] && dre_want=on || dre_want=off
+    dre_want=$(dre_value)
     ctl_set "$p DRE Switch" "$dre_want" || fail "$p DRE Switch failed"
     [[ $(ctl_values "$p DRE Switch") == "$dre_want" ]] || fail "$p DRE Switch did not read back"
     # The amplifier's hardware noise gate, as stock's DT sets it
@@ -476,10 +526,17 @@ start() {
     [[ $v =~ ^[0-9]+$ ]] && ((v <= DIGITAL_CEIL)) || fail "$p Digital PCM Volume reads ${v:-nothing}"
   done
 
-  v="Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(level Bottom DIGITAL)/$(level Bottom ANALOG)"
-  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $v, $boost_state"
-  log "speaker protection on (stage $STAGE): both amplifiers through the DSP, digital/analog $v"
+  set_status_ok
+  log "speaker protection on (stage $STAGE): both amplifiers through the DSP, digital/analog $(levels_text)"
   finish
+}
+
+dre_value() { [[ ${OMAMOBILE_SPK_DRE:-1} == 1 ]] && echo on || echo off; }
+levels_text() { echo "Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(level Bottom DIGITAL)/$(level Bottom ANALOG)"; }
+# The status line in speaker mode. omamobile-sitd's call audio reads its
+# "ok: stage <stage>," start, so keep that.
+set_status_ok() {
+  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)"
 }
 
 # Read-only report. Prints the DSP state but never the calibration values.
@@ -488,6 +545,7 @@ status() {
   cat "$status_file" 2>/dev/null || echo "no state ($status_file)"
   [[ -e $marker ]] && echo "marker present: $(cat "$marker" 2>/dev/null) (a start never finished)"
   [[ -r $stamp ]] && echo "verified: $(sed -n 's/^date //p' "$stamp") ($(sed -n 's/^firmware //p' "$stamp" | cut -c1-12)…, current firmware $(fw_digest | cut -c1-12)…)"
+  echo "mode: $(cur_mode) (the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported'))"
   find_card || { echo "no AoC sound card"; return 1; }
   local have_cal=0
   read_calibration >/dev/null 2>&1 && have_cal=1
@@ -521,12 +579,170 @@ verify() {
   echo "stamp written: $stamp"
 }
 
+# --- earpiece mode (AOC-PLAN.md C9k) ---------------------------------------------
+cur_mode() { local m; m=$(cat "$mode_file" 2>/dev/null) && echo "${m:-speaker}" || echo speaker; }
+ear_dre_value() { [[ $EAR_DRE == 1 ]] && echo on || echo off; }
+
+# Refused before anything changed: the amplifiers stay as they are.
+ear_refuse() { log "earpiece $1 refused: $2"; exit 1; }
+# Failed half-way: both muted, the service has to be restarted.
+ear_fail() {
+  log "earpiece: $*"
+  if mute; then
+    set_status "muted: earpiece: $*"
+    log "both amplifiers muted; systemctl restart omamobile-speaker-protection"
+  else
+    set_status "MUTE FAILED: earpiece: $*"
+  fi
+  exit 1
+}
+
+# Echoes why the protection is not verified-running, or nothing.
+not_running() {
+  local s out
+  s=$(cat "$status_file" 2>/dev/null)
+  [[ $s == ok:* ]] || { echo "speaker protection is not running (${s:-no state}): systemctl restart omamobile-speaker-protection"; return; }
+  [[ -e $marker ]] && { echo "a start never finished (the hang marker is there)"; return; }
+  find_card || { echo "no AoC sound card"; return; }
+  out=$(dsp --card "$card" health 2>&1) || { echo "${out##*$'\n'}"; return; }
+}
+# One control: set it and read it back. ENUMERATED controls by item name.
+ear_set() {  # NAME VALUE [enum]
+  ctl_set "$1" "$2" || ear_fail "writing $1 failed"
+  ear_is "$1" "$2" "${3:-}" || ear_fail "$1 reads $(ear_read "$1" "${3:-}"), not $2"
+}
+ear_read() { if [[ -n ${2:-} ]]; then ctl_enum "$1"; else ctl_values "$1"; fi; }
+ear_is() { [[ $(ear_read "$1" "${3:-}") == "$2" ]]; }
+
+# Every control earpiece mode sets, against its earpiece value; echoes the
+# first that differs.
+earpiece_state() {
+  ear_is "Top PCM Source" ASP enum || { echo "Top PCM Source $(ctl_enum "Top PCM Source")"; return 1; }
+  ear_is "Top Analog PCM Volume" "$EAR_ANALOG" || { echo "Top Analog PCM Volume $(ctl_values "Top Analog PCM Volume")"; return 1; }
+  ear_is "Top DRE Switch" "$(ear_dre_value)" || { echo "Top DRE Switch $(ctl_values "Top DRE Switch")"; return 1; }
+  ear_is "Top Digital PCM Volume" "$EAR_DIGITAL" || { echo "Top Digital PCM Volume $(ctl_values "Top Digital PCM Volume")"; return 1; }
+  ear_is "Bottom Digital PCM Volume" 0 || { echo "Bottom Digital PCM Volume $(ctl_values "Bottom Digital PCM Volume")"; return 1; }
+  ear_is "Bottom PCM Source" DSP enum || { echo "Bottom PCM Source $(ctl_enum "Bottom PCM Source")"; return 1; }
+}
+# Every control start sets (but the DSP's firmware and calibration, which
+# earpiece mode never touches and the watchdog checks during playback),
+# against its speaker-mode value; echoes the first that differs.
+speaker_state() {
+  local p n want
+  for p in "${AMPS[@]}"; do
+    for n in "PCM Source=DSP" "DSP RX1 Source=ASPRX1" "DSP RX2 Source=ASPRX1"; do
+      ear_is "$p ${n%%=*}" "${n#*=}" enum || { echo "$p ${n%%=*} $(ctl_enum "$p ${n%%=*}")"; return 1; }
+    done
+    want=("DRE Switch=$(dre_value)" "Analog PCM Volume=$(level "$p" ANALOG)" "Digital PCM Volume=$(level "$p" DIGITAL)")
+    [[ ${OMAMOBILE_SPK_NOISE_GATE:-1} == 1 ]] && want+=("HW Noise Gate Enable=63")
+    for n in "${want[@]}"; do
+      ear_is "$p ${n%%=*}" "${n#*=}" || { echo "$p ${n%%=*} $(ctl_values "$p ${n%%=*}")"; return 1; }
+    done
+  done
+}
+
+# Until the watchdog reports that it enforces MODE (it writes the ack file
+# at its next round, at most OMAMOBILE_WATCH_INTERVAL later). Removing the
+# file first makes a stale answer from a watchdog that has since died
+# impossible: only a live one writes it again.
+wait_ack() {
+  local i n=$((${OMAMOBILE_SPK_ACK_WAIT:-5} * 10))
+  for ((i = 0; i < n; i++)); do
+    [[ $(cat "$ack_file" 2>/dev/null) == "$1" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+earpiece() {
+  local want=${1:-} why b p
+  case $want in
+    on|off) ;;
+    status) echo "mode: $(cur_mode); the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported')"; return 0 ;;
+    *) echo "Usage: omamobile-speaker-protection earpiece on|off|status" >&2; exit 2 ;;
+  esac
+  mkdir -p "$RUN"
+  # one change at a time (the UCM's disable and enable sequences can ask for
+  # both in quick succession)
+  exec 9>"$RUN/speaker-mode.lock"
+  flock -w 20 9 || ear_refuse "$want" "another earpiece change still runs"
+  why=$(not_running)
+  [[ -z $why ]] || ear_refuse "$want" "$why"
+  # every control helper reads amixer -c "$card": find it before any check
+  find_card || ear_refuse "$want" "no AoC sound card"
+  check_limits >/dev/null 2>&1 || ear_refuse "$want" "the configured levels fail the limits check ($(check_limits 2>&1 | tail -n1))"
+
+  if [[ $want == on ]]; then
+    [[ $EAR_DIGITAL =~ ^[0-9]+$ && $EAR_ANALOG =~ ^[0-9]+$ ]] || ear_refuse on "earpiece levels '$EAR_DIGITAL/$EAR_ANALOG' are not numbers"
+    ((EAR_DIGITAL >= 1 && EAR_DIGITAL <= EAR_DIGITAL_CEIL)) ||
+      ear_refuse on "earpiece digital level $EAR_DIGITAL is outside 1..$EAR_DIGITAL_CEIL (stage $STAGE)"
+    ((EAR_ANALOG <= EAR_ANALOG_CEIL)) || ear_refuse on "earpiece analog level $EAR_ANALOG is above $EAR_ANALOG_CEIL"
+    [[ $EAR_DRE == [01] ]] || ear_refuse on "OMAMOBILE_SPK_EARPIECE_DRE=$EAR_DRE: 1 (on) or 0 (off)"
+    # The boost converter follows the earpiece's own analog gain, as start
+    # makes it follow the speakers' (C9j): off at 10 and below, so off for
+    # the earpiece unless OMAMOBILE_SPK_BOOST forces it. It is set when the
+    # amplifiers probe, so a start that left it on (stage c9, or a kernel
+    # without boost_en) cannot serve the earpiece without a rebind: refuse.
+    b=$(cat "$boost_file" 2>/dev/null)
+    if [[ ${OMAMOBILE_SPK_BOOST:-0} == 1 ]]; then
+      [[ $b == "boost converter on"* ]] || ear_refuse on "OMAMOBILE_SPK_BOOST=1 but the last start left: ${b:-nothing recorded}"
+    else
+      [[ $b == "boost converter off"* ]] ||
+        ear_refuse on "the earpiece (analog $EAR_ANALOG) needs the boost converter off (AOC-PLAN C9j), and the last start left: ${b:-nothing recorded} (stage $STAGE)"
+    fi
+    if [[ $(cur_mode) == earpiece ]] && earpiece_state >/dev/null; then
+      rm -f "$ack_file"
+      wait_ack earpiece || ear_fail "the watchdog did not answer within ${OMAMOBILE_SPK_ACK_WAIT:-5} s (omamobile-speaker-watch running?)"
+      log "earpiece mode already on: top $EAR_DIGITAL/$EAR_ANALOG through ASP, bottom muted; the watchdog enforces it"
+      return 0
+    fi
+    # Every step leaves a state the watchdog accepts in the mode it
+    # enforces at that moment: both muted, the top's analog gain down to
+    # the earpiece's (fine in speaker mode too), the mode named and taken,
+    # then the bypass, DRE and the top's level.
+    mute || ear_fail "muting failed"
+    ear_set "Top Analog PCM Volume" "$EAR_ANALOG"
+    rm -f "$ack_file"
+    echo earpiece > "$mode_file"
+    wait_ack earpiece || ear_fail "the watchdog did not take earpiece mode within ${OMAMOBILE_SPK_ACK_WAIT:-5} s (omamobile-speaker-watch running?)"
+    ear_set "Top PCM Source" ASP enum
+    ear_set "Top DRE Switch" "$(ear_dre_value)"
+    ear_is "Bottom Digital PCM Volume" 0 || ear_fail "the bottom amplifier is not muted"
+    ear_set "Top Digital PCM Volume" "$EAR_DIGITAL"
+    why=$(earpiece_state) || ear_fail "after the change: $why"
+    set_status "ok: stage $STAGE, mode earpiece: Top $EAR_DIGITAL/$EAR_ANALOG through PCM Source ASP (DSP bypassed, stock's handset path), DRE $(ear_dre_value); Bottom muted (Digital PCM Volume 0); $b"
+    log "earpiece mode on: the top amplifier alone at $EAR_DIGITAL/$EAR_ANALOG, its DSP bypassed; the bottom muted; the watchdog enforces it"
+    return 0
+  fi
+
+  if [[ $(cur_mode) != earpiece ]] && speaker_state >/dev/null; then
+    rm -f "$ack_file"
+    wait_ack speaker || ear_fail "the watchdog did not answer within ${OMAMOBILE_SPK_ACK_WAIT:-5} s (omamobile-speaker-watch running?)"
+    log "earpiece mode already off: both amplifiers through their DSPs at $(levels_text)"
+    return 0
+  fi
+  # Both muted, the top through its DSP again, speaker mode named and taken,
+  # then the stage's gains, a health check, and both unmuted last.
+  mute || ear_fail "muting failed"
+  ear_set "Top PCM Source" DSP enum
+  rm -f "$ack_file" "$mode_file"
+  wait_ack speaker || ear_fail "the watchdog did not take speaker mode within ${OMAMOBILE_SPK_ACK_WAIT:-5} s (omamobile-speaker-watch running?)"
+  ear_set "Top Analog PCM Volume" "$(level Top ANALOG)"
+  ear_set "Top DRE Switch" "$(dre_value)"
+  dsp --card "$card" health >/dev/null 2>&1 || ear_fail "health check: $(dsp --card "$card" health 2>&1 | tail -n1)"
+  for p in "${AMPS[@]}"; do ear_set "$p Digital PCM Volume" "$(level "$p" DIGITAL)"; done
+  why=$(speaker_state) || ear_fail "after the change: $why"
+  set_status_ok
+  log "earpiece mode off: both amplifiers through their DSPs at $(levels_text), every control at the stage's value"
+}
+
 case ${1:-} in
   start|restart|recover)
     [[ ${2:-} == --retry ]] && rm -f "$marker"
     start ;;
   watch) find_card || { log "watchdog: no AoC sound card"; exit 1; }; dsp --card "$card" watch ;;
   status) status ;;
+  earpiece) earpiece "${2:-}" ;;
   health) dsp health ;;
   monitor) dsp monitor --duration "${2:-10}" --interval "${3:-1}" ;;
   verify) shift; verify "$@" ;;
@@ -545,6 +761,7 @@ case ${1:-} in
     fi ;;
   *)
     echo "Usage: omamobile-speaker-protection start [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
+    echo "       | earpiece on|off|status   (the top amplifier alone as the earpiece, AOC-PLAN C9k)" >&2
     echo "       | verify | signal tone|multitone FILE [--level DBFS --seconds S --channels both|left|right] | mute [--reason TEXT]" >&2
     echo "       | impedance [--rounds N] [--no-arm]   (during playback: the firmware's measured coil impedance / CAL_R)" >&2
     echo "       | feedback start [--seconds S]|stop|status   (the amplifiers' V/I stream to the AoC, AOC-PLAN C9d-7)" >&2
