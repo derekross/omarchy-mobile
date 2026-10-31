@@ -1,9 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Build Omarchy Mobile's root file system image (docs/RELEASES.md §6):
-#   out/omamobile-rootfs-<version>-aarch64.img.zst   ext4, label omamobile-root
-#   out/omamobile-rootfs-<version>-aarch64.img.zst.sha256
-#   out/omamobile-rootfs-<version>-aarch64.MANIFEST  what is in it, with versions
+#   out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   ext4, label omamobile-root
+#   out/omamobile-rootfs-<device>-<version>-aarch64.img.zst.sha256
+#   out/omamobile-rootfs-<device>-<version>-aarch64.MANIFEST  contents and versions
 #
 # Inside an Arch Linux ARM container (tools/lib/alarm.sh) it pacstraps:
 #   rootfs/packages.base       Arch Linux ARM's base, sshd, NetworkManager,
@@ -99,18 +99,25 @@ release=$(cat "$KERNEL_OUT/include/config/kernel.release")
 modules=$KERNEL_OUT/modules-$release.tar.zst
 [[ -f $modules ]] || alarm_die "no $modules: run KERNEL_OUT=$KERNEL_OUT bin/omamobile modules"
 
-name=omamobile-rootfs-$VERSION-aarch64
+name=omamobile-rootfs-$DEVICE-$VERSION-aarch64
 out=$ROOT/$outrel
 mkdir -p "$out"
-work=$out/.rootfs-$VERSION
-rm -rf "$work"; mkdir -p "$work"
+# Keep the lock file: unlinking it could let two callers lock different inodes.
+command -v flock >/dev/null || alarm_die "flock not found (util-linux)"
+exec {lock}>"$out/.$name.lock"
+flock -n "$lock" || alarm_die "already building $name in $out"
+work=$(mktemp -d "$out/.$name.XXXXXX")
+volume=""
+cleanup() {
+  [[ -z $volume ]] || docker volume rm -f "$volume" >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 alarm_fetch
 image=$(alarm_build_image "$ROOT")
 volume=omamobile-rootfs-target-$$
 docker volume create "$volume" >/dev/null
-cleanup() { docker volume rm -f "$volume" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 start=$(date +%s)
 alarm_say "Building $name for $DEVICE (kernel $release)"
@@ -126,14 +133,16 @@ docker run --rm --privileged --platform linux/arm64 \
   "$image" bash /src/rootfs/build-inside
 
 alarm_say "Compressing"
-zstd -q -T0 -12 -f "$work/rootfs.img" -o "$out/$name.img.zst"
-(cd "$out" && sha256sum "$name.img.zst" > "$name.img.zst.sha256")
-cp "$work/MANIFEST" "$out/$name.MANIFEST"
-if ((KEEP_RAW)); then mv "$work/rootfs.img" "$out/$name.img"; fi
-rm -rf "$work"
+zstd -q -T0 -12 "$work/rootfs.img" -o "$work/$name.img.zst"
+(cd "$work" && sha256sum "$name.img.zst" > "$name.img.zst.sha256")
+mv "$work/MANIFEST" "$work/$name.MANIFEST"
 
 alarm_say "Checking the image"
-tests/rootfs-smoke "$out/$name.img.zst"
+tests/rootfs-smoke "$work/$name.img.zst"
+# Publish only a complete, checked build. A failed rebuild leaves the old one.
+mv "$work/$name.img.zst" "$work/$name.MANIFEST" "$out/"
+mv "$work/$name.img.zst.sha256" "$out/"
+if ((KEEP_RAW)); then mv "$work/rootfs.img" "$out/$name.img"; fi
 echo
 ls -lh "$out/$name".*
 echo "built in $(( ($(date +%s) - start) / 60 )) min"

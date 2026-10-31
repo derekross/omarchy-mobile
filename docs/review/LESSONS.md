@@ -1792,6 +1792,38 @@ never change, so reviews can cite them.
 
 ## Claims and evidence
 
+- **L-344. A console quoted as "just before" a failure is checked against
+  that console's own timestamps.** The 9a's owner cited ACPM channel timeouts as
+  preceding the 9a's UFS resume failure in #152; that console has no ACPM
+  timeout at all, and the 25 s before its failing suspend hold only PAM and
+  audit lines. The timeouts were from a different boot of the same day.
+  *Check:* grep the file you are citing for the line, and compare the
+  bracketed uptimes, before writing "before" or "then" in a PR. *From:*
+  kernel #152, written and corrected the same night.
+- **L-345. "The Nth of a series failed" is counted from the console, not
+  from the session you remember.** The 9a's UFS failure was called a late
+  sleep in a long boot; the console shows nine suspend entries and the
+  third one failing, which retired the sleep-count theory the record had
+  just acquired. *Check:* count the `PM: suspend entry` lines before the
+  failure. *From:* #166, 2026-10-31.
+- **L-346. A flaky check is read for what it asserts before it is blamed on
+  the machine.** `test/owl-idle`'s paused-tick check failed on four PRs that
+  don't touch the home plugin, and under parallel load locally, which looked
+  like a slow runner. `tickDelay()` returns the time to the next boundary,
+  so the assertion is false for one second in every ten by construction,
+  and the CI message's own figure (554 ms) placed the clock 9451 ms into a
+  10000 ms period. *Check:* work the printed value back through the function
+  before calling a check timing-sensitive; 30 local runs that pass prove
+  nothing against a 10 % window. *From:* #207.
+- **L-347. "A shared static means the instances collide" is checked against
+  how its index is assigned.** `eint_wake_mask_values[]` in
+  `pinctrl-exynos.c` is file-scope and written by three wake-capable
+  controllers on the 9a, which reads like a collision; `eint_num` is also
+  file-scope and never reset, so the numbering is continuous and the shared
+  array is the point. *Check:* find where the index comes from before
+  reporting the sharing. *From:* the 9a's sleep hang, 2026-10-30, a
+  candidate dropped before it reached a PR.
+
 - **L-343. A `-dirty` release that stays the same across a fix doesn't
   identify the tested build.** The 9a's NFC runs without the fix (10-28) and
   with it (10-29) report the same `…-dirty` release, and #137 quoted that

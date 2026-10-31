@@ -9,7 +9,8 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam test/update.sh test/lock-pam.sh test/lock-glance; do
+for f in install omamobile-omarchy.install lib/update-bin/* lib/lock-pam lib/modules-cleanup test/update.sh \
+         test/lock-pam.sh test/lock-glance test/sleep-lock.sh test/modules-cleanup.sh; do
   bash -n "$f" || fail "$f parses"
 done
 for f in bin/omamobile-omarchy-patches bin/omamobile-update test/patches.py; do
@@ -39,6 +40,30 @@ done
 grep -q AbortOnFail "$hook" && fail "hook: a failed re-patch must not abort pacman"
 pass "the hook re-applies after Omarchy or this package changes"
 
+# The module-tree cleanup: Arch's unit held off, ours staged and enabled
+u=$t/stage/usr/lib/systemd/system
+[[ -x $t/stage/usr/lib/omamobile-omarchy/modules-cleanup ]] || fail "modules-cleanup staged executable"
+for f in omamobile-modules-cleanup.service omamobile-modules-cleanup.timer linux-modules-cleanup.service.d/10-omamobile.conf; do
+  [[ -f $u/$f ]] || fail "not staged: $f"
+done
+[[ $(readlink "$u/timers.target.wants/omamobile-modules-cleanup.timer") == ../omamobile-modules-cleanup.timer ]] \
+  || fail "the cleanup timer is enabled by a vendor wants link"
+grep -qxF 'ConditionPathExists=!/usr/share/omamobile/omarchy/version' "$u/linux-modules-cleanup.service.d/10-omamobile.conf" \
+  || fail "the drop-in holds linux-modules-cleanup off on this package's version file"
+grep -qxF '[Unit]' "$u/linux-modules-cleanup.service.d/10-omamobile.conf" || fail "the drop-in's condition is in [Unit]"
+grep -qxF 'ExecStart=/usr/lib/omamobile-omarchy/modules-cleanup' "$u/omamobile-modules-cleanup.service" || fail "the unit runs the script"
+grep -qxF 'Type=oneshot' "$u/omamobile-modules-cleanup.service" || fail "the unit is a oneshot"
+grep -q '^TimeoutStartSec=' "$u/omamobile-modules-cleanup.service" || fail "the unit can't hang"
+grep -q '^WantedBy=\|^RequiredBy=\|^Before=' "$u/omamobile-modules-cleanup.service" && fail "nothing on the boot path waits for the unit"
+grep -qx 'OnBootSec=[0-9]*min' "$u/omamobile-modules-cleanup.timer" || fail "the timer starts it after boot"
+if command -v systemd-analyze >/dev/null; then
+  systemd-analyze verify --root="$t/stage" --man=no "$u/omamobile-modules-cleanup.service" "$u/omamobile-modules-cleanup.timer" 2>&1 \
+    | grep -v "linux-modules-cleanup\|Failed to prepare filename\|is not executable" | grep . \
+    && fail "systemd-analyze verify"
+fi
+pass "install stages the module cleanup, its timer's wants link and the drop-in for Arch's"
+bash test/modules-cleanup.sh || fail "modules-cleanup"
+
 # Every patch file says what it is for, before its first diff
 for p in patches/*.patch; do
   [[ $(sed -n '1p' "$p") == \#* || $(sed -n '1p' "$p") == commit* ]] || fail "$p starts with a header"
@@ -52,11 +77,14 @@ python3 -B test/patches.py || fail "re-patch tool"
 pkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
 if [[ -n $pkg ]] && command -v bsdtar >/dev/null; then
   mkdir -p "$t/omarchy-pkg"
-  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock
+  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock usr/share/omarchy/bin/omarchy-system-sleep-lock
   OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/lock-pam.sh || fail "lock-pam"
+  # Patch 0021 run against the real sleep lock, with fakes.
+  OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/sleep-lock.sh || fail "sleep-lock"
 else
   bash test/lock-pam.sh || fail "lock-pam"
   pass "lock-pam against the real omarchy-apply-lock # SKIP no omarchy package or bsdtar"
+  pass "the sleep lock turns the display off (0021) # SKIP no omarchy package or bsdtar"
 fi
 [[ $(grep -cx '  /usr/lib/omamobile-omarchy/lock-pam || true' omamobile-omarchy.install) == 2 ]] \
   || fail "install and upgrade write the lock's PAM file"

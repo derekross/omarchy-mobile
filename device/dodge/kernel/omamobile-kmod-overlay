@@ -1,0 +1,46 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# dodge's module loaders historically insmod from two fixed places, built
+# for the pinned release: /usr/lib/modules/$PINNED.held and
+# /usr/local/lib/omamobile. When another kernel runs (a test Image), bind
+# its own copies over both, so nothing loads modules built for a
+# different kernel. With the pinned kernel this does nothing, and the
+# original directories are never changed.
+#
+# Tip RAM path: there is no $R.held / omamobile.$R. After a tmpfs modules
+# overlay lands at /lib/modules/$R (modules.dep present), this unit exits
+# 0 so After= dependents can start. The actual stamp-clear + unit restart
+# is omamobile-tip-modules-overlay (the one hand step).
+PINNED=6.16.0-gb3ee311dab85
+R=$(uname -r)
+[ "$R" = "$PINNED" ] && exit 0
+
+H=/usr/lib/modules/$R.held
+L=/usr/local/lib/omamobile.$R
+if [ -d "$H" ] && [ -d "$L" ]; then
+	mountpoint -q "/usr/lib/modules/$PINNED.held" || \
+		mount --bind "$H" "/usr/lib/modules/$PINNED.held"
+	mountpoint -q /usr/local/lib/omamobile || \
+		mount --bind "$L" /usr/local/lib/omamobile
+	echo "kmod-overlay: $R modules over $PINNED paths"
+	if [ -r "$L/skip-units" ]; then
+		mkdir -p /run/omamobile-skip
+		grep -v '^#' "$L/skip-units" | while read -r u; do
+			[ -n "$u" ] || continue
+			: > "/run/omamobile-skip/$u"
+			echo "kmod-overlay: skip $u on $R"
+		done
+	fi
+	exit 0
+fi
+
+# Tip RAM: modules tree already extracted (tmpfs overlay). Exit 0 so a
+# late `systemctl start` after the hand overlay unblocks After= chains;
+# tip-modules-overlay does the stamp clear + restarts.
+if [ -r "/usr/lib/modules/$R/modules.dep" ] || [ -r "/lib/modules/$R/modules.dep" ]; then
+	echo "kmod-overlay: tip modules present for $R"
+	exit 0
+fi
+
+echo "kmod-overlay: no $H or $L for $R; loaders will fail vermagic" >&2
+exit 1

@@ -11,7 +11,7 @@ dir=${1:?Usage: tools/phone-install-package packages/<name>}
 name=$(basename "$dir")
 [[ -f $dir/PKGBUILD ]] || { echo "No PKGBUILD in $dir" >&2; exit 1; }
 
-ssh=tools/phone-ssh
+ssh=${PHONE_SSH:-tools/phone-ssh}   # tests/phone-install-package stands in for the phone
 # The phone's account: whoever is logged in on its screen (as tools/acpm-stage
 # and tools/speaker-trip-burst find it), or PHONE_USER=<name>. makepkg runs
 # as that user, in its home; no account name is built in.
@@ -33,11 +33,27 @@ tar cf - --exclude="./$name/pkg" --exclude="./$name/src/build" --exclude="*.pkg.
 srcinfo=$("$ssh" "su - '$phone_user' -c 'cd $build/$name && makepkg --printsrcinfo'")
 want=$(awk '$1 ~ /^(depends|makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
 buildonly=$(awk '$1 ~ /^(makedepends|checkdepends)$/ {print $3}' <<<"$srcinfo" | sort -u | tr '\n' ' ')
+# Each one goes to the phone's shell in single quotes: unquoted, a versioned
+# one (omarchy>=4.0.6) was a redirect there, so pacman -T's answer went into
+# a file named "=4.0.6" and the missing ones were never installed.
+quoted() { printf "'%s' " "$@"; }
 missing=""
-[[ -n ${want// } ]] && missing=$("$ssh" "pacman -T $want" || true)
+[[ -n ${want// } ]] && missing=$("$ssh" "pacman -T $(quoted $want)" || true)
+# pacman -T also names an installed package that is older than a version
+# asks for. Updating it here would be a partial upgrade, --asdeps would make
+# it a dependency, and a build-only one would be removed afterwards: that is
+# the phone's own update to do.
+old=""
+if [[ -n $missing ]]; then
+  installed=$("$ssh" "pacman -Qq")
+  for dep in $missing; do
+    grep -qx -- "${dep%%[<>=]*}" <<<"$installed" && old+="$dep "
+  done
+fi
+[[ -z $old ]] || { echo "The phone's packages are older than ${old% } asks for: update it (omarchy update), then run this again" >&2; exit 1; }
 if [[ -n $missing ]]; then
   echo "build dependencies: $(tr '\n' ' ' <<<"$missing")"
-  "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -S --needed --noconfirm --asdeps $(tr '\n' ' ' <<<"$missing") >/dev/null"
+  "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -S --needed --noconfirm --asdeps $(quoted $missing) >/dev/null"
 fi
 remove=""
 for dep in $missing; do

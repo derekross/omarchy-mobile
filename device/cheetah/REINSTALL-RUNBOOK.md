@@ -14,7 +14,7 @@ The tools, all offline-tested (`tests/all`):
 | --- | --- | --- |
 | `tools/build-packages` | laptop (Arch Linux ARM container, qemu) | builds `packages/*` for aarch64, signs them, `out/repo/aarch64` |
 | `bin/omamobile kernel/modules/initramfs/images` | laptop (build container) | kernel, modules tarball, initramfs (now with `resize2fs`), slot B images |
-| `tools/build-rootfs` | laptop (Arch Linux ARM container) | `out/omamobile-rootfs-<date>-aarch64.img.zst` (+ `.sha256`, `.MANIFEST`) |
+| `tools/build-rootfs` | laptop (Arch Linux ARM container) | `out/omamobile-rootfs-<device>-<date>-aarch64.img.zst` (+ `.sha256`, `.MANIFEST`) |
 | `tools/install-phone` | laptop, phone in fastboot | checks, questions, `firstboot.conf` into a local image copy, then only `fastboot flash <img>_b`, `flash userdata`, `--set-active=b`, `reboot` |
 | `omamobile-firstboot` | phone, first boot | user, keys, firewall, Omarchy's setup, autologin and lock |
 | `tools/phone-provision` | laptop, over USB SSH | Google's firmware and vendor trees from the factory image; modem props, NV sums, camera data, home screens, fingerprint state from the backup (without a `phone-config.tar`: the NV sums from the owner's NV backup, the board id from the phone's bootconfig) |
@@ -152,7 +152,7 @@ RELEASES §5.2).
 ### B3. Root image (risk none; about 20 minutes)
 
 ```sh
-tools/build-rootfs                         # out/omamobile-rootfs-<date>-aarch64.img.zst, runs tests/rootfs-smoke
+tools/build-rootfs                         # out/omamobile-rootfs-<device>-<date>-aarch64.img.zst, runs tests/rootfs-smoke
 less out/omamobile-rootfs-*-aarch64.MANIFEST
 ```
 

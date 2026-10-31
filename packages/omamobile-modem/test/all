@@ -59,6 +59,19 @@ python3 "$cp" baseband-version "$t/noinfo.bin" 2>/dev/null && fail "a TOC withou
 python3 "$cp" baseband-version "$t/notoc.bin" 2>/dev/null && fail "a file without a TOC is refused"
 pass "baseband version"
 
+# watch's poll interval is read inside watch(): a value outside the range,
+# or not a number, falls back to the default, and never stops another
+# subcommand (power-off at the profile's stop runs with the same environment).
+ws() {
+  OMAMOBILE_MODEM_WATCH_SECONDS=$1 python3 -c '
+import sys; g = {"__name__": "cp"}; exec(open(sys.argv[1]).read(), g); print(g["watch_seconds"]())' "$cp" 2>/dev/null
+}
+[[ $(ws 5) == 5.0 && $(ws 60) == 60.0 && $(ws five) == 0.5 && $(ws 0) == 0.5 && $(ws 600) == 0.5 && $(ws nan) == 0.5 ]] ||
+  fail "watch interval: $(ws 0.5) $(ws 60) $(ws five) $(ws 0) $(ws 600) $(ws nan)"
+[[ $(OMAMOBILE_MODEM_WATCH_SECONDS=five python3 "$cp" baseband-version "$t/modem.bin" 2>/dev/null) == test-version-001 ]] ||
+  fail "a bad watch interval leaves other subcommands alone"
+pass "watch interval"
+
 mkdir -p "$t/efs" "$t/efs_backup"
 for f in efs/nv_normal.bin efs/nv_protected.bin efs_backup/nv_protected.bak; do
   printf 'made-up %s' "$f" > "$t/$f"
@@ -100,6 +113,48 @@ out=$(RUN=$t CBD_ATTEMPTS=1 bash -c '
   fail "cbd stopped after one failed boot: $out"
 [[ ! -e $t/cbd.pid ]] || fail "cbd pid file removed"
 pass "cbd stopped after its first failed boot"
+
+# One start per boot (the marker outlives the profile). The refusal comes from
+# the check, before the start script writes its persistent marker; the marker
+# is written only when cbd is about to power the CP on, so an rfsd-only staged
+# start followed by the full profile in the same boot is allowed.
+once=$t/once; mkdir -p "$once"
+out=$(OMAMOBILE_MODEM_BOOT_MARK=$once/profile-started bash -c '
+  die() { echo "die: $*"; exit 7; }
+  eval "$(sed -n "/^modem_once_check() {$/,/^}$/p; /^modem_once_mark() {$/,/^}$/p" profiles/modem.conf)"
+  modem_once_check && echo check-1-ok          # the rfsd-only stage: check passes, nothing written
+  [[ -e $OMAMOBILE_MODEM_BOOT_MARK ]] && echo "marker-after-rfsd-stage"
+  modem_once_check && modem_once_mark && echo full-start-ok   # the full profile in the same boot
+  modem_once_check; echo "rc=$?"' 2>&1) || true
+[[ $out == *check-1-ok* && $out != *marker-after-rfsd-stage* && $out == *full-start-ok* ]] ||
+  fail "an rfsd-only stage then the full profile is one start: $out"
+[[ $out == *"die: the modem profile already started this boot"* && $out != *"rc=0"* ]] ||
+  fail "a second start in the same boot is refused: $out"
+[[ -s $once/profile-started ]] || fail "the once-per-boot marker is written at the CP power-on"
+pass "one CP power-on per boot: staged start allowed, a second start refused"
+
+# The order that makes a refused start harmless: profile_check refuses before
+# the start script writes /var/lib/omamobile/modem-bringup-started (so the
+# next boot doesn't skip the modem), and the marker is written after the
+# rfsd-stage return and before cbd.
+conf=profiles/modem.conf
+chk=$(grep -n '^profile_check() {' $conf | cut -d: -f1)
+[[ $(sed -n "$chk,$((chk+3))p" $conf) == *modem_once_check* ]] || fail "profile_check runs the once-per-boot check first"
+st=$(grep -n '^profile_start() {' $conf | cut -d: -f1)
+body=$(sed -n "$st,/^}/p" $conf)
+r=$(grep -n 'MODEM_STAGE == rfsd' <<<"$body" | cut -d: -f1); m=$(grep -n '^  modem_once_mark$' <<<"$body" | cut -d: -f1); c=$(grep -n '/vendor/bin/cbd ' <<<"$body" | cut -d: -f1)
+[[ -n $r && -n $m && -n $c && $r -lt $m && $m -lt $c ]] || fail "the marker is written after the rfsd-stage return and before cbd (rfsd=$r mark=$m cbd=$c)"
+[[ $(grep -n '^  modem_once_mark$' <<<"$body" | wc -l) -eq 1 ]] || fail "one marker write in profile_start"
+grep -q '^  modem_once_check$' <<<"$body" || fail "profile_start checks the marker itself too"
+s=lib/omamobile-modem-start
+sc=$(grep -n 'omamobile-vendor-chroot" modem check' $s | cut -d: -f1); sm=$(grep -n '> "\$MARK"' $s | cut -d: -f1)
+[[ -n $sc && -n $sm && $sc -lt $sm ]] || fail "the start script checks before it writes its persistent marker (check=$sc mark=$sm)"
+out=$(OMAMOBILE_MODEM_BOOT_MARK=$once/profile-started bash -c '
+  die() { echo "die: $*"; exit 7; }
+  eval "$(sed -n "/^modem_once_check() {$/,/^}$/p" profiles/modem.conf)"
+  modem_once_check; echo "rc=$?"; echo "would write the persistent marker"' 2>&1) || true
+[[ $out == *"die: "* && $out != *"would write the persistent marker"* ]] || fail "a refused check stops before the persistent marker: $out"
+pass "a refused start leaves the persistent marker as it was"
 
 # The board id is required (M4.1g/h): the check refuses a missing or empty
 # ro.boot.cdt_hwid and a persist copy that differs. Made-up values only.

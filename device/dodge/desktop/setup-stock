@@ -1,0 +1,132 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# dodge-setup-stock: the rest of the stock Omarchy Mobile setup on the
+# OnePlus 13 (dodge), after setup-ui: lock screen with PIN pad, power and
+# volume keys, on-screen keyboard (squeekboard), the phone window rules,
+# menu entries, Chromium flags, screensaver branding. Run as root:
+#
+#   setup-stock USER              apply for USER (required; no default account)
+#   setup-stock --revert USER     undo: no lock, no PIN, dodge idle screen-off
+#
+# The user part is the packaged omamobile-setup-user (omamobile-shell) as is,
+# plus the tail of omamobile-firstboot's user step (credential type, the
+# lock-keypad toggle; lock-on-start only once a PIN exists). The PIN is the
+# account password (stock: omamobile-set-pin runs passwd); this script never
+# sets or stores one. Set it as root with `passwd USER`, or later from the
+# phone's menu (System > PIN).
+#
+# Kept dodge-specific, stock skipped (would break dodge):
+#  - ufw (firstboot allows ssh on usb0 only): root ssh over Wi-Fi must work.
+#  - sddm autologin: staged separately by login-sddm (it changes how the
+#    phone boots); until then omamobile-hyprland.service starts Hyprland.
+#  - `usermod -L root`: root ssh is key-only already (sshd 10-omamobile.conf).
+# Replaced: dodge's omamobile-idle-off.service (screen off at 150 s, no lock)
+# is disabled; the stock idle path runs instead (screensaver 150 s, lock
+# 300 s, the lock blanks the panel 10 s later). `--revert` brings it back.
+# Backups: ~USER/.local/state/dodge-setup-stock/, /var/lib/dodge-setup-stock/.
+# Omarchy's default keyring (step 1b) is kept on --revert: it may hold
+# Chromium's cookie key and other secrets by then. Remove it by hand if needed
+# (~USER/.local/share/keyrings/Default_keyring.keyring and default).
+set -euo pipefail
+revert=0
+[[ ${1:-} == --revert ]] && { revert=1; shift; }
+U=${1:-}
+[[ -n $U ]] || { echo "usage: setup-stock [--revert] USER" >&2; exit 2; }
+[[ $(id -u) == 0 ]] || { echo "run as root" >&2; exit 1; }
+id "$U" >/dev/null
+H=$(getent passwd "$U" | cut -d: -f6)
+uid=$(id -u "$U")
+bk=$H/.local/state/dodge-setup-stock
+rbk=/var/lib/dodge-setup-stock
+files=(.config/hypr/autostart.lua .config/hypr/looknfeel.lua .config/omarchy/shell.json
+  .config/omarchy/extensions/omarchy-menu.jsonc .config/chromium-flags.conf
+  .config/omarchy/branding/screensaver.txt .config/foot/screensaver.ini)
+added_toggles=(lock-keypad lock-on-start lock-after-screensaver suspend-off credential-password)
+
+as_user() {
+  local sig
+  sig=$(ls -t "/run/user/$uid/hypr" 2>/dev/null | head -1 || true)
+  runuser -u "$U" -- env LANG=C.UTF-8 HOME="$H" USER="$U" LOGNAME="$U" PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin \
+    XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    WAYLAND_DISPLAY=wayland-1 HYPRLAND_INSTANCE_SIGNATURE="$sig" OMARCHY_PATH=/usr/share/omarchy "$@"
+}
+live() {  # apply to a running session, if there is one
+  pgrep -u "$U" -x Hyprland >/dev/null || return 0
+  as_user hyprctl reload >/dev/null || true
+  as_user bash -c "$1" </dev/null >/dev/null 2>&1 || true  # daemons: keep no pipe open
+  as_user bash -c 'setsid omarchy-restart-shell' </dev/null >/dev/null 2>&1 &
+}
+
+if ((revert)); then
+  [[ -f $bk/files.tgz ]] || { echo "no backup in $bk; nothing to revert" >&2; exit 1; }
+  # Removing the PAM file under a held lock would leave a lock nobody can open
+  # (the shell prints a locale WARN on stdout without LANG, hence grep -x).
+  if pgrep -u "$U" -x Hyprland >/dev/null && as_user omarchy-shell lock isLocked 2>/dev/null | grep -qx true; then
+    echo "the session is locked; unlock it first (or reboot), then revert" >&2; exit 1
+  fi
+  as_user bash -s "$bk" "${files[@]}" <<'SH'
+set -u; bk=$1; shift; cd ~
+for f in "$@"; do grep -qxF "$f" "$bk/files.list" || rm -f "$f"; done
+tar -xzf "$bk/files.tgz"
+t=~/.local/state/omarchy/toggles d=~/.local/state/omarchy/done
+for x in lock-keypad lock-on-start lock-after-screensaver suspend-off credential-password screensaver-off; do
+  if grep -qxF "$x" "$bk/toggles.list"; then touch "$t/$x"; else rm -f "$t/$x"; fi
+done
+for m in "$d"/*; do grep -qxF "$(basename "$m")" "$bk/done.list" || rm -f "$m"; done
+[[ -f $bk/credential ]] || rm -f ~/.config/omamobile/credential
+gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false 2>/dev/null || true
+SH
+  # The PIN is the account password: put back what was there before (locked).
+  if [[ -f $rbk/shadow.$U ]]; then usermod -p "$(cat "$rbk/shadow.$U")" "$U"; else usermod -p '!' "$U"; fi
+  [[ -f $rbk/pam-created ]] && rm -f /etc/pam.d/omarchy-lock-password /etc/pam.d/omarchy-lock-fingerprint "$rbk/pam-created"
+  systemctl --global enable omamobile-idle-off.service 2>/dev/null || true
+  live 'pkill -u "$USER" -x squeekboard; omarchy-shell lock unlock >/dev/null 2>&1; systemctl --user start omamobile-idle-off.service'
+  echo "reverted: no lock, no PIN, dodge idle screen-off"; exit 0
+fi
+
+command -v omamobile-setup-user >/dev/null || { echo "omamobile-shell is not installed" >&2; exit 1; }
+command -v squeekboard >/dev/null || { echo "squeekboard is not installed" >&2; exit 1; }
+# Backups, once (a second run must not overwrite the pre-stock state).
+install -d -m 700 "$rbk"
+[[ -f $rbk/shadow.$U ]] || { getent shadow "$U" | cut -d: -f2 > "$rbk/shadow.$U"; chmod 600 "$rbk/shadow.$U"; }
+if [[ ! -f $bk/files.tgz ]]; then
+  as_user bash -s "$bk" "${files[@]}" <<'SH'
+set -eu; bk=$1; shift; mkdir -p "$bk"; cd ~
+: > "$bk/files.list"; for f in "$@"; do [[ -e $f ]] && echo "$f" >> "$bk/files.list"; done
+tar -czf "$bk/files.tgz" -T "$bk/files.list"
+ls ~/.local/state/omarchy/toggles > "$bk/toggles.list"; ls ~/.local/state/omarchy/done > "$bk/done.list"
+[[ -f ~/.config/omamobile/credential ]] && cp ~/.config/omamobile/credential "$bk/credential" || true
+SH
+fi
+
+# 0. The lock's PAM service (Omarchy install/config/lockscreen-pam.sh, which
+# omamobile-firstboot runs; dodge's rootfs never ran firstboot). Without it
+# the lock refuses to engage ("missing-pam").
+[[ -f /etc/pam.d/omarchy-lock-password || -f $rbk/pam-created ]] || touch "$rbk/pam-created"
+OMARCHY_INSTALL_USER=$U omarchy-apply-lock >/dev/null
+# 1. Stock user setup, unchanged (idempotent via omarchy-done markers).
+as_user omamobile-setup-user
+# 1b. Omarchy's default keyring (install/user/default-keyring.sh, from
+# omarchy-provision-user, which firstboot runs; dodge never did). Without it
+# gnome-keyring raises an invisible "create keyring" prompt and Chromium
+# (--password-store=gnome-libsecret) hangs every request with cookies.
+# Idempotent: it only writes the files that are missing.
+kr=$H/.local/share/keyrings/Default_keyring.keyring
+had_kr=0; [[ -f $kr ]] && had_kr=1
+as_user bash -eu /usr/share/omarchy/install/user/default-keyring.sh
+if ((!had_kr)) && pgrep -u "$U" -f gnome-keyring-daemon >/dev/null; then
+  echo "new default keyring: restart gnome-keyring-daemon (or log in again) to use it"
+fi
+# 2. omamobile-firstboot's user tail: PIN type, number pad, lock after start.
+as_user bash -c 't=~/.local/state/omarchy/toggles; mkdir -p "$t" ~/.config/omamobile
+  [[ -f ~/.config/omamobile/credential ]] || echo pin > ~/.config/omamobile/credential
+  touch "$t/lock-keypad"; rm -f "$t/screensaver-off"'
+if [[ $(passwd -S "$U" | awk '{print $2}') == P ]]; then
+  as_user touch "$H/.local/state/omarchy/toggles/lock-on-start"
+else
+  echo "no PIN yet: set one with 'passwd $U' (digits for the number pad), then rerun to lock after start"
+fi
+# 3. Stock idle path instead of dodge's screen-off-without-lock.
+systemctl --global disable omamobile-idle-off.service 2>/dev/null || true
+live 'systemctl --user stop omamobile-idle-off.service; pgrep -u "$USER" -x squeekboard >/dev/null || setsid squeekboard >/dev/null 2>&1 &'
+echo "done: stock lock, keys and keyboard; revert with: $0 --revert $U"
