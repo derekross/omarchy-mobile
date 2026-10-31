@@ -9,6 +9,8 @@ install -Dm755 audio-bringup.sh /usr/local/lib/omamobile/audio-bringup.sh
 install -Dm644 omamobile-dodge-audio.service /etc/systemd/system/omamobile-dodge-audio.service
 if mountpoint -q /usr/local/lib/omamobile 2>/dev/null; then
 	tmp=$(mktemp -d)
+	# Undo the private bind of / on any exit or error (install may fail mid-loop).
+	trap 'umount "$tmp" 2>/dev/null; rmdir "$tmp" 2>/dev/null' EXIT
 	mount --bind / "$tmp"
 	install -Dm755 audio-bringup.sh "$tmp/usr/local/lib/omamobile/audio-bringup.sh"
 	for d in "$tmp"/usr/local/lib/omamobile.*; do
@@ -17,6 +19,7 @@ if mountpoint -q /usr/local/lib/omamobile 2>/dev/null; then
 	done
 	umount "$tmp"
 	rmdir "$tmp"
+	trap - EXIT
 fi
 systemctl daemon-reload
 systemctl enable omamobile-dodge-audio.service || true

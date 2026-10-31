@@ -7,19 +7,18 @@ modem's cp2ap lines) is bound with its EINTs in the base DT
 trains Gen1 x1 and enumerates as 144d:a5a5; M3-M5 passed: CPIF and cbd
 boot it to **ONLINE** (Gen3 x2) with working IPC (pktproc), no SIM yet;
 G1-G2 passed: gnssd loads Kepler's firmware and talks CHPP over SPI;
-**G3 resolved (2026-10-30, evening): a position fix on the owner's kernel.**
+**G3: a position fix on the owner's kernel (2026-10-30, evening).**
 The CHPP link lost bits because spi-s3c64xx's flush cleared the packet
 count before turning the channels off
 (derekross/linux-omarchy-mobile#150). That fix alone does it: a pin drive
-change (#151) was credited at first and withdrawn on 10-31, see cause 2.
-Open: the CP link under GNSS traffic. Our
-controller never enabled the link's L1 substates (a stub), so an idle link
-is torn down and rebuilt about twice a second and one of those cycles hangs
-the SoC, about 170 s after ONLINE; holding the link instead crashes the CP
-(103-108 s after ONLINE with the wake line high, no GNSS data with it
-answered). A session lasts one to five minutes depending on the cycling.
-The substates are being enabled on the real capability offset (0x160, both
-ends) on the bring-up branch; not yet observed to take effect. Section
+change (linux-omarchy-mobile#151) was credited at first and withdrawn on 10-31, see cause 2.
+Open: the CP link under GNSS traffic. The link powers down and up about
+twice a second, as on stock: cpif powers it off each time the CP says it
+sleeps. One of those cycles hangs the SoC, 170-630 s after ONLINE; holding
+the link instead crashes the CP (103-108 s after ONLINE with the wake line
+high, no GNSS data with it answered). A session lasts one to ten minutes.
+The L1 substates, enabled on the real capability offset (0x160, both ends),
+take effect but don't stop the cycling (G3-L1, 10-31). Section
 "G3, GNSS gets a fix" below, and G3-L1.
 Left: the GNSS and CPIF drivers aren't in the published kernel, and GNSS
 still starts by hand. Next: the SIM.
@@ -964,7 +963,7 @@ stayed selected and shifted out bits the flush threw away. Kepler streams
 CHPP across chip-select cycles, so every transfer lost 2-6 bits: each read
 arrived at a different bit offset (0, 2, 4 or 6, changing from read to read),
 the data inside a read was intact, and frames that crossed reads failed
-their CRC. Google's driver turns the channels off first; #150 does the same.
+their CRC. Google's driver turns the channels off first; linux-omarchy-mobile#150 does the same.
 Found by comparing Google's and mainline's transfer paths register write by
 register write, after the sweep below had shown the slip per transfer.
 
@@ -972,17 +971,17 @@ register write, after the sweep below had shown the slip per transfer.
 SPI21 has no pinctrl, so the bus runs on the bootloader's pin state, read
 from PERIC1's pin registers on the palmtop: gpp22-0..3 in function 2 at
 drive 0, gpp22-2 (data in) pulled down. Raising the drive to 3 (as gpp21,
-the touchscreen's SPI) seemed to clean the data inside each read, and #151
+the touchscreen's SPI) seemed to clean the data inside each read, and linux-omarchy-mobile#151
 put that in the board DT. The maintainer's reading of Google's tegu tree
 said gpp22 is the eSE's SPI15 (chip select on gpp22-3) and stock's SPI21
-has no pin group at all, and asked for a check with #150 alone at drive 0.
+has no pin group at all, and asked for a check with linux-omarchy-mobile#150 alone at drive 0.
 That boot (10-31, `DRV(0x0)` on all four pins read back from the
 controller) gave 50 of 53 GGA fixed in a 3-minute session, 0 bad
 checksums, 0 ACK timeouts, 0 permanent failures, and all 41 received
 reads holding a frame at bit offset 0 with a valid CRC32: the same quality
-as at drive 3. The improvement was #150's throughout; the drive-3 run that
+as at drive 3. The improvement was linux-omarchy-mobile#150's throughout; the drive-3 run that
 looked cleaner had been compared against reads with the flush bug still in
-place. #151 is closed, `overlays/gnss-spi-pins.dtso` stays in the tree as
+place. linux-omarchy-mobile#151 is closed, `overlays/gnss-spi-pins.dtso` stays in the tree as
 a record only and is not in the palmtop's boot set.
 
 **The configuration that works is stock's**: SPI mode 0 (stock's node has
@@ -1057,12 +1056,11 @@ lands after isolation), so that the link may cycle as the CP asks.
 - The flush order: offsets gone, link up, a fix.
 
 **Left for GNSS:** the GNSS link driver (gnssif) and CPIF aren't in the
-published kernel, so this runs on the owner's kernel only; #150 is open
-and #151 is closed as unnecessary; the CP link under GNSS traffic is unsolved: the hold crashes the CP,
-the cycling hangs the SoC, and the way out is the L1 substates the
-controller never enabled (G3-L1, 10-31), which are being enabled on the
-real capability offset and have not yet been seen to take effect. A session
-lasts one to five minutes. GNSS still starts by hand
+published kernel, so this runs on the owner's kernel only; linux-omarchy-mobile#150 merged on
+2026-10-31 and linux-omarchy-mobile#151 is closed as unnecessary; the CP link under GNSS traffic is unsolved: the hold crashes the CP,
+the cycling hangs the SoC; the L1 substates take effect on the real
+capability offset but don't stop it (G3-L1, 10-31), and the last trace puts
+the hang in cpif's power-down path. A session lasts one to ten minutes. GNSS still starts by hand
 ([`bringup/tegu-gnss-session`](bringup/tegu-gnss-session), which starts the
 modem, holds the link after ONLINE for the diagnostic and runs the HAL for a
 set time; once per boot), or through Omarchy's Location switch with the hand
@@ -1074,8 +1072,10 @@ Tested on 2026-10-30: `omamobile-gnss-nmea.socket` enabled, a client's connect
 starts the stack, the HAL serves NMEA to `/run/omamobile-gnss/nmea.sock` and
 the fixes arrive (first fix about 80 s after the connect, 46 of 52 GGA
 sentences fixed in the first run, with the link held and the wake line left
-high, `HOLD=1`; the script's later default of 2 moves no data and is only
-there as a diagnostic), for as long as the CP link lasts.
+high, `HOLD=1`). An attended session uses `HOLD=1`, now the script's
+default: it is the only setting that moves data. `HOLD=2` (answer the CP
+on ap2cp_wakeup) moved none and is kept only as a diagnostic, and `HOLD=0`
+lets the link cycle, for as long as the CP link lasts.
 
 **Attended only, and not for the daily boot.** With these drop-ins in place
 any GeoClue client can start a session, and a session can still hang the

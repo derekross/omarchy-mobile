@@ -20,13 +20,73 @@ used, HDOP 0.8-1.2, GPS, Galileo, BeiDou and GLONASS tracked, CHPP clean
 for about a minute per boot. One fix did it: spi-s3c64xx
 turned the channels off after clearing the packet count, which lost a few
 bits per transfer on a streaming slave (linux-omarchy-mobile#150). A pin
-drive change (#151) was credited too and withdrawn on 10-31: at the
-bootloader's drive 0 with #150 alone, 50 of 53 fixed and every frame at bit
+drive change (linux-omarchy-mobile#151) was credited too and withdrawn on 10-31: at the
+bootloader's drive 0 with linux-omarchy-mobile#150 alone, 50 of 53 fixed and every frame at bit
 offset 0 with a valid CRC. What ends the fix is
 the CP link under GNSS traffic: held up it crashes the CP 103-108 s after
 ONLINE (six boots of six), left to cycle it hangs the SoC about 170 s after
 ONLINE. Details, the configuration and the sweep in
 [MODEM-PLAN](MODEM-PLAN.md) "G3, GNSS gets a fix".
+
+## 2026-10-29: the device package boot, and what this row rests on
+
+The palmtop's bring-up runs from `omamobile-device-tegu` 0.2.0
+(<https://github.com/derekross/omarchy-mobile/pull/152>) since the 12:28
+local boot on 2026-10-29, release
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the unpublished
+integration tree; the board device tree is in review as linux-omarchy-mobile
+#80), with the hand copies the package replaces moved aside under
+`/var/lib/omamobile-tegu/before-pkg/`. `tools/phone-smoke` on that boot:
+19 of 19 (boot on slot B, the storage guard with only `userdata` and slot
+B's images writable, the ext4 root, no oops or WARN, no failed units, the
+USB gadget, the panel at 1080x2424, a render node on panthor, Hyprland and
+the shell, the lock, Synaptics touch, gpio-keys, wlan0 up, hci0 powered,
+the gauge, the AoC sound card, three sensors, three cameras, hottest zone
+44 °C). Packages on it: omamobile-device-tegu 0.2.0-1, omamobile-audio
+0.4.1-1, omamobile-fingerprint 0.1.8-1, omamobile-apps 0.2.0-1, hyprland
+0.56.2-5.1, mesa 1:26.2.4-1.4, libcamera 0.7.2-4.22.
+
+What each cell of the DEVICES row rests on, beyond the 10-27 and 10-28
+list below:
+
+- **Boot:** slot B marked successful by hand on 2026-10-28 (the `devinfo`
+  write approved on 2026-10-22, now on hold, #125); the package does not
+  mark it. A fallback to slot A would cost the Linux root.
+- **Started by the package at boot** (`omamobile-tegu-graphics.service`):
+  the display at 120 Hz (the start sets `allow_tx` for `google-tg4c`, with
+  or without the bootloader's panel-id suffix), the GPU, haptics, the torch,
+  the gauge and Bluetooth; the USB rescue helper. Everything else in the
+  row that says "by hand" is not.
+- **GPU:** on this boot devfreq reports `simple_ondemand` with min, max and
+  current all 159.7 MHz and `runtime_status` suspended, so the desktop
+  renders and the GPU sleeps when idle, but frequency scaling is not
+  active on the published form and counts as in review (kernel #85, #87).
+- **Battery through UPower, 2026-10-29 evening:** energy-rate 1.06 W, time
+  to empty 18.5 h at 87 %.
+- **Sensors:** accelerometer, ambient light and proximity, as every smoke
+  report of the day lists them. No gyroscope or compass has been seen on
+  this palmtop; the row no longer claims them.
+- **Wi-Fi across sleep:** kept loaded by the package's sleep hook
+  (`/etc/omamobile/wifi-keep-across-sleep` is set) through the 2026-10-29
+  S1 sleeps ([SLEEP-PLAN](SLEEP-PLAN.md) S1).
+- **NFC:** a payment card read on the morning of 2026-10-29 with the
+  kernel #131 modules (its thread has the dmesg lines); neard started by
+  hand, polling stopped before sleep by the package's hook.
+- **Suspend:** with the `omamobile-sleep` toggle on (it ships off), the
+  shell's sleep daemon (`omamobile-sleepd`) suspends the palmtop once the
+  screen is off and locked; the power key and the RTC wake it, but three test
+  sleeps have not woken, so sleep tests stay attended (SLEEP-PLAN S1); the
+  drain is the S1 figure.
+- **Speakers:** the -10 dB ceiling recorded below, by hand with the AoC.
+- **GNSS, 2026-10-30 evening:** a position fix on a bring-up kernel (the gn3
+  tree with the spi-s3c64xx swap-mode change and the flush-order fix of
+  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, mode 0,
+  32-bit words, feedback delay 0, automatic chip select, 64-byte reads; that boot also
+  raised the pins' drive to 3, which the 10-31 check at drive 0 showed was
+  not needed, linux-omarchy-mobile#151 closed):
+  in a 3-minute session by a window, 23 of 25 GGA sentences with fix quality
+  1, up to 13 satellites used, HDOP 0.8, every CHPP read at bit 0 with a
+  valid CRC; started by hand through the modem bring-up, not by a package.
 
 ## 2026-10-29: two resets at about 34 s, right after Bluetooth started
 
@@ -49,6 +109,38 @@ resets came from the modem side (the CP link hang after Kepler's watchdog
 resets) and are in [MODEM-PLAN](MODEM-PLAN.md) under "G3, twenty-fourth to
 thirty-fourth tries" and "The CP link hang". Not a GNSS matter: if a boot
 with nothing but Bluetooth starting resets again at that time, start here.
+
+## 2026-10-29: the s2idle drain is the SoC floor, not the CPUs or the radios
+
+- Cable out, screen off: 311 mA awake, 302 mA asleep (two 30-minute
+  `systemctl suspend` rounds through `power-ab --suspend systemd`). The CPUs
+  sleep (timekeeping suspended for the whole of a 60 s test, one deep-state
+  entry per CPU); Bluetooth, NFC and Wi-Fi cost nothing measurable at idle.
+  What stays on is MIF, the buses and the always-on rails: there is no
+  system idle state in our kernel. `tegu-mif-sleep.ko` (MIF 421 MHz in
+  sleep) saves about 60-75 mA by the coulomb counter; a hand unit loaded it
+  at boot for one night and was disabled the next day (below).
+  Details and method in [SLEEP-PLAN](SLEEP-PLAN.md) S1.
+- `rtcwake -m freeze` written straight to `/sys/power/state` failed to wake
+  again (the second time in two days); every `systemctl suspend` after
+  `rtcwake -m no` had woken up to then. The next day showed the entry
+  path isn't the whole story (the 2026-10-30 bullet).
+- 2026-10-30: the cable-out `power-ab --suspend systemd` run with the
+  module loaded never woke from its 30-minute sleep (not from the RTC, not
+  from the power key; reset by hand), so the hand unit that loaded the
+  module at boot is disabled. The same day a cable-in 30-minute systemd
+  sleep with the module, its alarm logged as armed, woke on the alarm to
+  the second, and the afternoon's repeat of the cable-out run with the
+  module loaded by hand woke too: 273 mA awake with the screen off, 260 mA
+  asleep, about 40 mA under the figure without the module. Three sleeps
+  have never woken (two direct freezes, one systemd sleep with the module)
+  and no single factor explains them, so sleep tests stay attended and the
+  module stays off at boot; the shell's auto-sleep toggle is off on the
+  palmtop since the 2026-10-30 shell reinstall, and unattended sleep stays
+  off until the hangs below are understood.
+- The 2026-10-27 "140 mA asleep" figure doesn't hold up against 2026-10-28
+  (434-445 mA cable out, as-is) and tonight; treat about 300 mA cable out
+  as the baseline.
 
 ## 2026-10-28, evening: USB-C host mode through TCPM
 

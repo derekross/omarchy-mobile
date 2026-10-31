@@ -30,7 +30,7 @@ insmod $M/tegu-pcie0-cp.ko allow_hw=1
 insmod $M/shm_ipc.ko
 # cpif built with keep_link_up (bring-up, branch tegu-cpif-keep-link 3f76f123b):
 # off at load, or the CP never reaches ONLINE; tegu-gnss-session turns it on
-# after ONLINE (MODEM-PLAN G3, resolved)
+# after ONLINE (MODEM-PLAN G3)
 insmod $M/cpif-keep-link.ko keep_link_up=0
 # stock's GNSS SPI setup: mode 0, 32-bit words swapped in gnss_spi, 64-byte reads
 insmod $M/gnss_spi.ko word32=2 piece=64 spi_mode=0

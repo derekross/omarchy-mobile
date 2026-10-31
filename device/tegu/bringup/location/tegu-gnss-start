@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # tegu-gnss-start: the Pixel 9a's GNSS stack for omamobile-gnss.service, so
-# that Omarchy's Location switch starts it (MODEM-PLAN G3, resolved).
+# that Omarchy's Location switch starts it (MODEM-PLAN G3).
 #
 # On the 7 Pro omamobile-gnss.service loads a GNSS chip driver and runs the
 # gnss vendor profile. On the 9a the receiver is the modem's own GNSS core, so
@@ -11,9 +11,11 @@
 # Two bring-up limits, both in the plan: the modem starts once per boot (a
 # second start needs a reboot), and the CP's PCIe link under GNSS traffic is
 # unsolved, so a session lasts a minute or two. HOLD picks which way it fails:
-# 2 (default) holds the link and answers the CP on ap2cp_wakeup, 1 holds it
-# with the line high (the CP then crashes 103-108 s after ONLINE), 0 lets the
-# link cycle (the SoC hangs about 170 s after ONLINE).
+# 1 (default, the one an attended session uses: the only setting that moves
+# data) holds it with the line high (the CP then crashes 103-108 s after
+# ONLINE), 2 holds the link and answers the CP on ap2cp_wakeup (moves no
+# data; a diagnostic), 0 lets the link cycle (the SoC hangs some minutes
+# after ONLINE).
 #
 # Install: /usr/local/sbin, with the two drop-ins beside this file.
 set -euo pipefail
@@ -28,7 +30,7 @@ if ! systemctl is-active -q omamobile-tegu-modem; then
 fi
 # The CP's link: see HOLD in the header. Nothing here fixes it; this only
 # chooses which failure the session gets.
-echo "${HOLD:-2}" > /sys/module/cpif/parameters/keep_link_up 2>/dev/null &&
+echo "${HOLD:-1}" > /sys/module/cpif/parameters/keep_link_up 2>/dev/null &&
   say "CP link: keep_link_up=$(cat /sys/module/cpif/parameters/keep_link_up)"
 for _ in $(seq 1 120); do grep -q "@GNSSND" /proc/net/unix && break; sleep 0.25; done
 grep -q "@GNSSND" /proc/net/unix || { say "gnssd is not listening (the modem profile ran without GNSS?)"; exit 1; }

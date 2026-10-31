@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Pixel 9a bring-up: one GNSS session (MODEM-PLAN G3, resolved). Checks the
+# Pixel 9a bring-up: one GNSS session (MODEM-PLAN G3). Checks the
 # GNSS rails, starts the modem with GNSS (omamobile-tegu-modem-up --gnss),
 # with HOLD=1 holds the CP link up once the CP is ONLINE (cpif keep_link_up=1,
 # a diagnostic: the CP then crashes 103-108 s later; at load it would keep the
