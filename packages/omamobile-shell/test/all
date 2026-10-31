@@ -417,6 +417,14 @@ elif [[ $rc != 0 ]]; then
 else
   pass "home widgets stop when nobody can see them: no sources, every or frames hidden, one catch-up, 20/30 fps, half rate when slow"
 fi
+rc=0; out=$(python3 -B test/widget-host.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "widget host output limits # SKIP no Quickshell"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "widget host output limits"
+else
+  pass "widget host output limits, cancellation and state"
+fi
 
 # The weather widgets' position: locate.sh against a fake where-am-i.
 bash -n plugins/omamobile.home/locate.sh || fail "locate.sh parses"
