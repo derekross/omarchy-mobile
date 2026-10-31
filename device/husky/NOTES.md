@@ -10,6 +10,27 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-10-31: the touchscreen
+
+Touch works on a test kernel, [kernel #153](https://github.com/derekross/linux-omarchy-mobile/pull/153) (in review, stacked on #148). The test booted the U4 Omarchy image from `userdata` ([UFS-PLAN](UFS-PLAN.md)), with U4's kernel config.
+
+- **The controller** [V, `R/` live DT]: an ST FTM5 (SALIXP, chip id `36 40`, firmware `0083`) on HSI0's USI2 SPI at `0x111d0000`.
+  - It runs at 10 MHz with manual chip select, as stock's `fts` node.
+  - Its attention line is `gpn0-0` (CUSTOM_ALIVE) and its reset is `gpp21-2` (PERIC1).
+  - The panel is 1344 × 2992.
+- **Its rails** [V, `R/` live DT]: the main PMIC's (S2MPG14) LDO25M at 1.8 V and LDO4M at 3.3 V. The firmware leaves both off, already at those voltages.
+  - The PMIC sits behind ACPM, so #153 adds ACPM and its mailbox too.
+- **Its clock** [V, `G/` CMUCAL tables]: the bootloader leaves USI2 at 399.36 MHz (PLL_SHARED2 / 2).
+  - zuma had no clock driver, so #153 adds one: it describes the path from CMU_TOP to USI2.
+  - It writes only USI2's divider and gates.
+- **The scan echo** [V]: after the scan command, husky's firmware first reports a forced calibration (`43 05 01`), then echoes the command about 60 ms later.
+  - The `salixp` driver gave up after 50 ms. #153 waits up to stock's 2.5 s and stops at the echo.
+  - The touchscreen registers 3.8 s into the boot.
+- **Orientation** [V, tag `husky-test-20261031-c5` on greenbrettmichael/linux-omarchy-mobile]: stock's node inverts both axes, but `salixp` already reports in the panel's orientation.
+  - With stock's inversion, taps came in rotated 180°: a tap at the top-left read (1191, 2824).
+  - Without it, a tap at the top-left reads (87, 144) of 1343 × 2991.
+- **In Omarchy** [V]: Hyprland lists the touchscreen (`salixp-touchscreen`). The lock screen's PIN pad takes the keys that are touched, and the phone unlocks by touch.
+
 ## 2026-10-30: the buttons
 
 Power and volume work through `gpio-keys` on a test kernel, the U4 kernel plus [kernel #148](https://github.com/derekross/linux-omarchy-mobile/pull/148) (in review). The test booted the U4 Omarchy image from `userdata` ([UFS-PLAN](UFS-PLAN.md)), with U4's kernel config.
