@@ -1916,6 +1916,21 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      whether Z depends on the gain cannot be read at 737/10, and the
      firmware measures from low-frequency content.
 
+   **C9 with real music (2026-10-31, omamobile-audio 0.5.7 with the 20 C
+   jump above the estimate 2 s in, backstop 80 C; the owner listening,
+   phone on a table, YouTube Music).** At 817/13 a -20 dBFS multitone
+   raised the top coil 5.3 C above its measured value within 2 s (38.1 ->
+   43.4): real heating, so the 5 C rule was dropped for 20 C. At 817/17
+   with music, the top coil went 37 -> 55 -> 69 -> 81 C in about 4 s (the
+   bottom 31 -> 56 C) and the 80 C backstop muted; it cooled to 49 C within
+   2 s. The firmware's over-temperature count stayed 0, so its own limit
+   is above 80 C, and whether it attenuates before that limit is not known.
+   "Very loud and sounded good" (the owner) for the seconds it played.
+   **c9 is not a default until** the tuning's temperature limit and
+   attenuation behaviour are known (control names first, then a read-only
+   check during playback), or an intermediate stage (e.g. 817/13) is shown
+   to stay under the backstop with music. The backstop stays at 80 C.
+
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
    amplifiers stay at stage media (737/10) in sections A-D, so every step
