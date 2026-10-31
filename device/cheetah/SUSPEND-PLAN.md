@@ -480,6 +480,48 @@ P0 checks; otherwise the package documents the two keys) with
 off with about 150 mAh left. It is not clearly safe before P7, so it isn't
 on the branch.
 
+**Update (2026-10-28).** The default suspend also fires on a phone on the
+charger: on the laptop's 500 mA port a lit screen draws more than the input,
+so the battery reads `Discharging`, and upower warns that
+`max77759-charger` has no `usb_type`; at 0 % it suspended the phone every
+few minutes and 20 s after a fresh boot (NOTES 2026-10-28). Each of those
+suspends slept behind a lit lock screen (6.8), so the phone never charged.
+Before P7, decide whether the drop-in should also keep upower from acting
+while the charger is online, which needs a read of how upower decides
+"on battery" here (`upower -d`, `OnBattery`, with the charger online and
+the battery `Discharging`).
+
+### 6.8 A suspend that starts with the screen on (2026-10-28)
+
+**Finding.** The sleep hook (6.2) only handles Wi-Fi, and Omarchy's sleep
+lock (`omarchy-system-sleep-lock`, run under a delay inhibitor by
+`omarchy-system-sleep-monitor`) lights the lock screen and waits for it to
+be secure before releasing the inhibitor. gs-decon doesn't power the panel
+down for system sleep, so a suspend that didn't start from the power key
+(upower's critical action, the system menu) slept with the lock screen lit
+and drained as if awake (NOTES 2026-10-28). The power key's path was never
+affected: it turns the display off before it asks omamobile-sleepd to sleep.
+
+**Fix (omamobile-omarchy 0.1.13, patch 0021).** Once the session is secure,
+the sleep lock runs `omarchy-brightness-display off` (DPMS off and bl_power
+4, patch 0008) within what is left of its budget, on panels whose bl_power
+the user may write, so laptops are unchanged. A power-key wake lights the
+PIN pad again (`omamobile-keys wake`: locked and dark, so `wake_locked`);
+any other wake stays dark and omamobile-sleepd sleeps again after its grace.
+`test/sleep-lock.sh` runs the patch against the real 4.0.6 script with fakes.
+
+**Later, in the kernel.** gs-decon and the panel driver powering the panel
+down in system suspend would make this hold whatever userspace does.
+
+**Runbook (risk: low; announce: the screen goes off and the phone sleeps).**
+With 0021 installed and the screen lit and unlocked, `systemctl suspend`
+from SSH (the link drops while it sleeps). **Expect:** the lock comes up and
+the panel goes dark before the sleep; a power-key wake lights the PIN pad;
+`journalctl -b | grep -E "suspend (entry|exit)|woken by"` shows one cycle.
+**Stop:** the panel stays lit in sleep, or a power-key wake leaves it dark
+(then Power again; `omarchy-brightness-display on` over SSH). **Rollback:**
+reinstall omamobile-omarchy 0.1.12, whose hook re-applies the series without 0021.
+
 ### 6.7 Alarms: the path from a timer to the RTC (2026-10-26, on paper)
 
 How a `WakeSystem=yes` timer reaches the RTC, from the kernel sources

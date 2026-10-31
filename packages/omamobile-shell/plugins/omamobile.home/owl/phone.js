@@ -305,14 +305,37 @@ function batteryFrom(text) {
            temp: null, voltage: null, health: null, plugged: null, technology: null, cycles: null }
 }
 
-// /proc/meminfo, /proc/uptime, uname and df -> android.system.
-function systemFrom(meminfo, uptime, kernel, df) {
+// The board from the device tree: "model" and the "compatible" list, read by
+// DEVICE_COMMAND as "<model>\n@@\n<compatible, one per line>".
+var DEVICE_COMMAND = "tr -d '\\0' < /proc/device-tree/model 2>/dev/null; echo; echo '@@'; tr '\\0' '\\n' < /proc/device-tree/compatible 2>/dev/null"
+// What the device tree doesn't say, for the boards Omarchy Mobile runs on:
+// the panel's size, density and top refresh rate (what it can do, not the
+// rate it runs at now).
+var BOARDS = {
+  cheetah: { model: "Pixel 7 Pro", soc: "gs201", display: { width: 1440, height: 3120, hz: 120, dpi: 512 } },
+  tegu: { model: "Pixel 9a", soc: "zumapro", display: { width: 1080, height: 2424, hz: 120, dpi: 422 } }
+}
+// "google,gs201-cheetah" or "google,zumapro-tegu" -> codename and SoC.
+function boardFrom(text) {
+  var parts = String(text || "").split("@@\n")
+  var model = String(parts[0] || "").trim()
+  var compat = String(parts[1] || "").split("\n").map(function(c) { return c.trim() }).filter(function(c) { return c })
+  var m = /^[^,]+,([^-]+)-(.+)$/.exec(compat[0] || "")
+  var codename = m ? m[2] : null
+  var known = (codename && BOARDS[codename]) || {}
+  return { model: known.model || model.replace(/^Google\s+/, "") || null, maker: /^Google\b/.test(model) || /^google,/.test(compat[0] || "") ? "Google" : null,
+           codename: codename, soc: known.soc || (m ? m[1] : null), display: known.display || null }
+}
+
+// /proc/meminfo, /proc/uptime, uname and df (and the board) -> android.system.
+function systemFrom(meminfo, uptime, kernel, df, board) {
+  var b = board || {}
   var kb = function(name) { var m = new RegExp("^" + name + ":\\s+(\\d+)", "m").exec(meminfo || ""); return m ? parseInt(m[1], 10) * 1024 : null }
   var total = kb("MemTotal"), available = kb("MemAvailable")
   return { kernel: String(kernel || "").trim() || null, uptime: Math.floor(parseFloat(uptime) || 0),
            memory: { total: total, used: total !== null && available !== null ? total - available : null, available: available },
-           storage: storageFrom(df), cpu: { soc: "gs201", maker: "Google", hardware: null, cores: 8, abi: "arm64-v8a", maxMhz: null },
-           display: { width: 1440, height: 3120, hz: 120, dpi: 512 }, build: null, codename: "cheetah", patch: null,
+           storage: storageFrom(df), cpu: { soc: b.soc || null, maker: b.maker || null, hardware: null, cores: 8, abi: "arm64-v8a", maxMhz: null },
+           display: b.display || null, build: null, codename: b.codename || null, patch: null,
            locale: null, timezone: null, launcher: "omamobile", theme: null, apps: 0 }
 }
 
@@ -366,6 +389,7 @@ if (typeof module !== "undefined") {
     actionArgv: actionArgv, volumeFrom: volumeFrom, mediaFrom: mediaFrom, MEDIA_FORMAT: MEDIA_FORMAT,
     modesFrom: modesFrom, systemFrom: systemFrom, storageFrom: storageFrom,
     batteryFrom: batteryFrom, BATTERY_COMMAND: BATTERY_COMMAND, panelOff: panelOff, DEVICE_ACTIONS: DEVICE_ACTIONS,
+    boardFrom: boardFrom, DEVICE_COMMAND: DEVICE_COMMAND, BOARDS: BOARDS,
     CLOCK: CLOCK, frameInterval: frameInterval, frameSlow: frameSlow, frameSkipped: frameSkipped, tickDelay: tickDelay
   }
 }

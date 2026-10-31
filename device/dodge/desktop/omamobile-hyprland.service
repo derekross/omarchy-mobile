@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# The desktop: Hyprland (through uwsm) on tty1 as user ml, no display
+# manager. Starts after omamobile-display-msm (the msm DSI panel) without
+# requiring it, so it comes up on simpledrm if msm did not load.
+# Rendering is software (llvmpipe) on either path.
+[Unit]
+Description=Hyprland desktop (msm DSI panel, simpledrm fallback)
+After=systemd-user-sessions.service systemd-logind.service omamobile-display-msm.service
+Conflicts=getty@tty1.service
+OnFailure=getty@tty1.service
+
+[Service]
+User=ml
+Group=ml
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+WorkingDirectory=/home/ml
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+ExecStart=/usr/bin/uwsm start -e -D Hyprland hyprland.desktop
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

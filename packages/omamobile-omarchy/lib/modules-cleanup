@@ -1,0 +1,133 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Prune old kernel module trees on a phone, keeping the ones a boot needs.
+#
+# Omarchy's kernel-modules-hook runs linux-modules-cleanup.service at every
+# boot, which moves each /usr/lib/modules/<release> that isn't the running
+# kernel and that no package owns into /usr/lib/modules/.old. A phone's
+# kernels never come from pacman: `bin/omamobile modules-push` unpacks the
+# next boot's tree and writes <release>/.omamobile-tarball, so any boot
+# between the push and the reboot into the new kernel took that tree away,
+# and the new kernel came up without drivers (on the Pixel 7, 2026-10-27,
+# recorded in #149's device/panther NOTES).
+# This package holds that unit off (linux-modules-cleanup.service.d) and runs
+# this instead, from omamobile-modules-cleanup.timer, well after boot.
+#
+# It keeps, in /usr/lib/modules:
+#   - the running release (uname -r);
+#   - every tree that arrived during this boot: its marker's mtime, or the
+#     tree's mtime or ctime (a rename sets it), is after the boot time
+#     (/proc/stat btime): that is the next boot's kernel (ctime counts only
+#     here, so a push caught before it writes its marker is kept too);
+#   - the release `bin/omamobile modules-push` last pushed, which it names in
+#     /usr/lib/modules/.omamobile-next: the next boot's kernel even when the
+#     push was in an earlier boot or its times are wrong;
+#   - every tree whose time is before 2026, which only a phone clock reset
+#     to 1970 writes: its age is unknown, so it isn't ranked;
+#   - every tree a package owns (pacman -Qo);
+#   - the KEEP (2) newest of the rest, by marker mtime (else the tree's
+#     mtime): the rollback kernels.
+# and removes the others with rm -rf. Only direct children named like a
+# release ([0-9]*) are candidates; symlinks, dot-directories (.old, the
+# .<release>.new of a push in progress) and plain files are never touched.
+# A removed tree is recoverable: `bin/omamobile push` re-sends a tree whose
+# marker is missing. When pacman can't answer, nothing is removed.
+#
+#   modules-cleanup [--dry-run]
+# Environment:
+#   OMAMOBILE_MODULES_CLEANUP_DRY_RUN=1   the same as --dry-run
+#   OMAMOBILE_MODULES_ROOT                the module root (/usr/lib/modules)
+#   OMAMOBILE_MODULES_KEEP                rollback trees kept (2)
+#   OMAMOBILE_PROC_STAT                   where btime is read (/proc/stat; tests)
+set -euo pipefail
+
+dry=${OMAMOBILE_MODULES_CLEANUP_DRY_RUN:-}
+[[ $dry == 0 ]] && dry=
+case ${1:-} in
+  --dry-run) dry=1 ;;
+  '') ;;
+  *) echo "Usage: modules-cleanup [--dry-run]" >&2; exit 2 ;;
+esac
+root=${OMAMOBILE_MODULES_ROOT:-/usr/lib/modules}
+keep=${OMAMOBILE_MODULES_KEEP:-2}
+[[ $keep =~ ^[0-9]+$ ]] || { echo "modules-cleanup: OMAMOBILE_MODULES_KEEP must be a number" >&2; exit 2; }
+log() { echo "modules-cleanup: $*"; }
+
+if [[ ! -d $root || -L $root ]]; then
+  log "no directory $root; nothing to do"
+  exit 0
+fi
+running=$(uname -r)
+# modules-push names the release it pushed; a stamp before 2026 is a reset clock
+next=""
+if [[ -f $root/.omamobile-next && ! -L $root/.omamobile-next ]]; then
+  read -r next < "$root/.omamobile-next" || true
+fi
+floor=1767225600   # 2026-01-01 UTC
+btime=$(awk '$1 == "btime" { print $2; exit }' "${OMAMOBILE_PROC_STAT:-/proc/stat}")
+[[ $btime =~ ^[0-9]+$ ]] || { log "no boot time in ${OMAMOBILE_PROC_STAT:-/proc/stat}; nothing removed"; exit 1; }
+# Without a working package database "not owned" can't be told from an error
+pacman -Qq >/dev/null 2>&1 || { log "pacman can't read its database; nothing removed"; exit 1; }
+
+# When the tree came: its marker's mtime (modules-push writes it last), else
+# the tree's mtime (depmod's files land in it). Rollback trees rank by this.
+pushed() {
+  if [[ -f $1/.omamobile-tarball && ! -L $1/.omamobile-tarball ]]; then
+    stat -c %Y -- "$1/.omamobile-tarball"
+  else
+    stat -c %Y -- "$1"
+  fi
+}
+# Whether it arrived during this boot: also the tree's own mtime and ctime,
+# so a push caught between its rename into place and its marker counts too
+arrived() {
+  local m c
+  read -r m c < <(stat -c '%Y %Z' -- "$1")
+  (( $2 >= btime || m >= btime || c >= btime ))
+}
+
+rest=()
+for tree in "$root"/[0-9]*; do
+  [[ -e $tree || -L $tree ]] || continue   # the glob matched nothing
+  name=${tree##*/}
+  if [[ -L $tree || ! -d $tree ]]; then
+    log "skip $name: not a directory"
+    continue
+  fi
+  if [[ $name == "$running" ]]; then
+    log "keep $name: running"
+    continue
+  fi
+  if [[ -n $next && $name == "$next" ]]; then
+    log "keep $name: pushed for the next boot (.omamobile-next)"
+    continue
+  fi
+  t=$(pushed "$tree")
+  if (( t < floor )); then
+    log "keep $name: its time is before 2026 (a reset clock), so its age is unknown"
+    continue
+  fi
+  if arrived "$tree" "$t"; then
+    log "keep $name: arrived during this boot (the next boot's kernel)"
+    continue
+  fi
+  if owner=$(pacman -Qqo -- "$tree" 2>/dev/null); then
+    log "keep $name: owned by ${owner//$'\n'/ }"
+    continue
+  fi
+  rest+=("$t $name")
+done
+
+n=0
+while read -r t name; do
+  [[ -n $name ]] || continue
+  if (( n < keep )); then
+    n=$((n + 1))
+    log "keep $name: rollback ($(date -d "@$t" '+%F %T' 2>/dev/null || echo "$t"))"
+  elif [[ -n $dry ]]; then
+    log "would remove $name (dry run)"
+  else
+    log "remove $name"
+    rm -rf --one-file-system -- "${root:?}/$name"
+  fi
+done < <(printf '%s\n' "${rest[@]+"${rest[@]}"}" | sort -rn)

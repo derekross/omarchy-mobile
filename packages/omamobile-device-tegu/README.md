@@ -88,7 +88,8 @@ Nothing here is in the package; `tools/extract-vendor-firmware` and
 
 - `aoc-tegu.bin` (the AoC), `Top-tas2572RCA1.bin` and
   `Bottom-tas2572RCA1.bin` (the speaker amplifiers);
-- `brcm/brcmfmac4383-pcie.bin`, `.clm_blob`, `.txcap_blob` and `.txt` (Wi-Fi);
+- `brcm/brcmfmac4383-pcie.google,zumapro-tegu.bin`, `.clm_blob`, `.txcap_blob`
+  and `.txt` (Wi-Fi, the board-suffixed names brcmfmac loads first);
 - `updates/brcm/BCM.google,zumapro-tegu.hcd` (Bluetooth);
 - `updates/cs40l26.wmfw` and `cs40l26.bin` (haptics);
 - `arm/mali/arch11.8/mali_csffw.bin` (the GPU's firmware, from Mesa's
