@@ -469,6 +469,10 @@ grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omamobi
 grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omamobile.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omamobile-launch"
 grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fail "NFC links open through omamobile-launch"
 grep -c 'GLib.timeout_add_seconds(2, follow_rfkill, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service follows the rfkill switch"
+grep -c 'GLib.timeout_add_seconds(2, follow_screen, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service stops polling with the screen off"
+python3 -B test/nfc-screen.py >/dev/null || { python3 -B test/nfc-screen.py | grep -v '^ok'; fail "screen_lit reads the connectors"; }
+grep -c 'polling waits for the screen' bin/omamobile-nfc-open >/dev/null || fail "start_polling leaves the loop off while the screen is dark"
+grep -c 'timeout_add_seconds(4' bin/omamobile-nfc-open >/dev/null && fail "the one-shot stop is gone: the screen check stops polling every time"
 grep -c '"systemctl", "restart", "neard"' bin/omamobile-nfc-open >/dev/null || fail "an NFC unblock restarts neard"
 grep -c '^Requires=neard' systemd/omamobile-nfc-open.service >/dev/null && fail "omamobile-nfc-open restarts neard, so it must not Require= it (the restart would loop)"
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
