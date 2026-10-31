@@ -124,6 +124,23 @@ grep -c '^omamobile-keys' "$t/log" >/dev/null && fail "an RTC wake doesn't light
 reset; echo 111 >"$t/wake_irq"; printf 'echo 0 >"%s"; echo true >"%s"\n' "$t/sys/class/backlight/panel/bl_power" "$t/dpms" >"$t/on_resume"; watch 700
 grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "a power-key wake asks omamobile-keys to light the PIN pad"
 grep -c 'a power-key wake: lighting the lock screen' "$t/out" >/dev/null || fail "the power-key wake is logged"
+# A touch woke it: the touchscreen's interrupt carries its device's name
+# (the input device with INPUT_PROP_DIRECT, parent "spi3.0"), and the lock
+# is lit the same way; Hyprland's DPMS state and bl_power would otherwise
+# stay as the sleep left them.
+reset; mkdir -p "$t/sys/class/input/input0" "$t/sys/devices/spi3.0"; echo 2 >"$t/sys/class/input/input0/properties"; ln -sfn "$t/sys/devices/spi3.0" "$t/sys/class/input/input0/device"
+printf '  73:         12          0  gpa7   6 Edge      spi3.0\n' >>"$t/proc/interrupts"
+echo 73 >"$t/wake_irq"; printf 'echo 0 >"%s"; echo true >"%s"\n' "$t/sys/class/backlight/panel/bl_power" "$t/dpms" >"$t/on_resume"; watch 700
+grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "a touch wake asks omamobile-keys to light the PIN pad"
+grep -c 'a touch wake: lighting the lock screen' "$t/out" >/dev/null || fail "the touch wake is logged"
+# The same interrupt line with no touchscreen among the input devices is a dark resume.
+reset; rm -rf "$t/sys/class/input"; printf '  73:         12          0  gpa7   6 Edge      spi3.0\n' >>"$t/proc/interrupts"; echo 73 >"$t/wake_irq"; watch 700
+grep -c '^omamobile-keys' "$t/log" >/dev/null && fail "an unknown wake doesn't light the screen"
+# A virtual direct-touch device (no `device` link, as uinput makes) listed
+# before the real one must not mask it: the real touchscreen's name is used.
+reset; mkdir -p "$t/sys/class/input/input0" "$t/sys/class/input/input1" "$t/sys/devices/spi3.0"; echo 2 >"$t/sys/class/input/input0/properties"; echo 2 >"$t/sys/class/input/input1/properties"; ln -sfn "$t/sys/devices/spi3.0" "$t/sys/class/input/input1/device"
+printf '  73:         12          0  gpa7   6 Edge      spi3.0\n' >>"$t/proc/interrupts"; echo 73 >"$t/wake_irq"; printf 'echo 0 >"%s"; echo true >"%s"\n' "$t/sys/class/backlight/panel/bl_power" "$t/dpms" >"$t/on_resume"; watch 700
+grep -c 'a touch wake: lighting the lock screen' "$t/out" >/dev/null || fail "a virtual touch device without a parent doesn't mask the real touchscreen"
 # A failed suspend is logged and retried no sooner than 30 s later.
 reset
 fake systemctl 'echo "systemctl $* at $(cat "$T/clock")" >>"$T/log"

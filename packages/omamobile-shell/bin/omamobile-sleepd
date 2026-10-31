@@ -16,8 +16,9 @@
 # and the sleep hook apply) once the screen has been off and the lock secure
 # for OMAMOBILE_SLEEP_AFTER_OFF seconds (30), and again OMAMOBILE_SLEEP_GRACE
 # seconds (5) after a dark resume: a wake that left the screen off (an alarm,
-# the RTC, Bluetooth, the fuel gauge, a volume key). A power-key wake lights
-# the PIN pad (omamobile-keys wake, from here), and a lit screen never sleeps.
+# the RTC, Bluetooth, the fuel gauge, a volume key). A power-key or a touch
+# wake lights the PIN pad (omamobile-keys wake, from here), and a lit screen
+# never sleeps.
 #
 # Never while:
 #   - the toggle is off, the screen is on, or the lock isn't secure;
@@ -117,6 +118,31 @@ wake_reason() {
   echo "IRQ $irq:${name:- (unknown)}"
 }
 
+# The touchscreen's interrupt, as /proc/interrupts names it: the driver
+# requests it under its device's name (the SPI or I2C device, "spi3.0"), so
+# find the input device that is a direct touch surface (INPUT_PROP_DIRECT)
+# with a parent device, and take that parent's name. A virtual input device
+# (uinput, a test tool) has no `device` link and is skipped, so it can't
+# mask the real touchscreen. Empty when there is none.
+touch_irq_name() {
+  local d props
+  for d in "$sys"/class/input/input*; do
+    props=$(cat "$d/properties" 2>/dev/null) || continue
+    (( (0x${props:-0} & 0x2) )) || continue
+    [[ -e $d/device ]] || continue
+    basename "$(readlink -f "$d/device")"
+    return 0
+  done
+  return 1
+}
+
+# A touch woke the phone: the wake IRQ is the touchscreen's.
+touch_woke() {
+  local name
+  name=$(touch_irq_name) || return 1
+  [[ -n $name && $1 == *" $name" ]]
+}
+
 request() {
   log "sleeping ($1)"
   # The lock goes back to its glance view before the freeze, for a screen
@@ -155,10 +181,19 @@ watch() {
       # The press that woke the phone never reaches Hyprland's binds: the
       # session is frozen while the kernel takes it. Light the PIN pad here,
       # as that press would have (omamobile-keys ignores the press itself if
-      # it does arrive, so the screen doesn't go straight back off).
-      if [[ $woke == *KEY_POWER* ]] && command -v omamobile-keys >/dev/null; then
-        log "a power-key wake: lighting the lock screen"
-        omamobile-keys wake >/dev/null 2>&1 &
+      # it does arrive, so the screen doesn't go straight back off). A touch
+      # wake is the same: Hyprland's DPMS state and the panel's backlight
+      # power stay as the sleep left them unless the lock is lit through
+      # omamobile-keys, and on tegu that left a lit lock screen that Hyprland
+      # read as dark and whose panel refused the fingerprint circle.
+      if command -v omamobile-keys >/dev/null; then
+        if [[ $woke == *KEY_POWER* ]]; then
+          log "a power-key wake: lighting the lock screen"
+          omamobile-keys wake >/dev/null 2>&1 &
+        elif touch_woke "$woke"; then
+          log "a touch wake: lighting the lock screen"
+          omamobile-keys wake >/dev/null 2>&1 &
+        fi
       fi
       # Any wake that leaves the screen off and locked is dark: back to
       # sleep after the grace. A power-key wake lights the screen and
