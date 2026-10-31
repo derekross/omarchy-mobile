@@ -1,13 +1,19 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 (oriole) bring-up notes
 
-Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Nothing has been flashed or booted yet: the phone facts come from read-only adb and fastboot queries of a stock phone.
+Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference or a recovered report still to check). The October 14–16 phone facts below came from read-only queries of a stock phone; later tests booted Linux on a Pixel 6.
 
 Sources:
 
 - `F/`: Google's public factory image `oriole-cp3a.261005.002.a1` ([developers.google.com/android/images](https://developers.google.com/android/images#oriole)), read with HTTP range requests; facts only, no files kept in the repository.
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
+
+## 2026-10-30: native boot and RTC alarm status
+
+- [V] A Pixel 6 booted native Linux from slot B with its root on `userdata`, using the unpublished `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty` kernel and a separate integration package set. A read-only `phone-smoke --here --json` run passed all required checks: storage guard, root, USB and desktop session. It reported no failed units, oops, BUG or WARN, and 48 existing dmesg error lines; sound, sensors and cameras were skipped. This is a test-phone result, not an installation claim for the public images.
+- [V, source] On the published kernel's `omamobile` branch, the S2MPG10 alarm callback reads `S2MPS14_REG_ST2` at offset `0x08`. On S2MPG10 that is `INT3M`; [Google's register definitions](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/include/linux/mfd/samsung/s2mpg10-register.h) place `STATUS2` at `0x0d`, and its [RTC driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/rtc/rtc-s2mpg10.c) reads the alarm-0 status bit there. The proposed kernel fix is S2MPG10-specific; the S2MPG12 path remains unchanged. The test phone's unpublished kernel already contains the correction.
+- [I] The smoke test does not exercise a live pending alarm, alarm delivery, suspend or wake. Those paths remain to be independently verified.
 
 ## 2026-10-16: stage 0, part 2: a retail Pixel 6 (stock, bootloader locked)
 
