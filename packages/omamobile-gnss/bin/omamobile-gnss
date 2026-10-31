@@ -30,6 +30,8 @@ AGENT=omamobile-geoclue-agent.service
 LTO_TIMER=omamobile-gnss-lto.timer
 LTO_FILE=/var/lib/omamobile-vendor/gnss/data/vendor/gps/lto2.dat
 ROOT=/usr/lib/omamobile-vendor/gnss/root
+# the Pixel 9a's image (gnss-slsi): no Broadcom orbit predictions there
+[[ ! -d $ROOT && -d /usr/lib/omamobile-vendor/gnss-slsi/root ]] && ROOT=/usr/lib/omamobile-vendor/gnss-slsi/root
 
 usage() {
   sed -n '3,17s/^# \{0,1\}//p' "$0" >&2
@@ -95,14 +97,15 @@ status() {
       none|unknown) echo "orbit predictions (LTO): $lto" ;;
       *) echo "orbit predictions (LTO): ${lto} h old" ;;
     esac
-    [[ -d $ROOT ]] || echo "vendor files: missing ($ROOT; tools/extract-vendor-chroot -p gnss)"
+    [[ -d $ROOT ]] || echo "vendor files: missing ($ROOT; tools/extract-vendor-chroot -p gnss, or -p gnss-slsi -d tegu)"
   fi
 }
 
 case ${1:-} in
   on)
     as_root on
-    systemctl enable --now "$SOCKET" "$LTO_TIMER"
+    systemctl enable --now "$SOCKET"
+    [[ $ROOT == */gnss/root ]] && systemctl enable --now "$LTO_TIMER"
     systemctl --global enable "$AGENT"
     ;;
   off)

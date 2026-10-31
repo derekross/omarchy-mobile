@@ -10,6 +10,52 @@ for f in bin/omamobile-gnss lib/omamobile-vendor-chroot lib/omamobile-gnss-start
   bash -n "$f" || fail "syntax: $f"
 done
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/omamobile-gnss-nmea || fail "python: omamobile-gnss-nmea"
+# The Pixel 9a's path: gnss-slsi from the start script, its FIFO in the bridge and the units.
+grep -c 'gnss-slsi start' lib/omamobile-gnss-start >/dev/null || fail "the 9a starts gnss-slsi"
+# the 9a writes the hang marker before its session and clears it only in --stop
+s=lib/omamobile-gnss-start
+[[ $(grep -n 'date -Is > "\$MARK"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'gnss-slsi start' $s | head -1 | cut -d: -f1) ]] || fail "the 9a's marker goes down before gnss-slsi start"
+[[ $(grep -n 'rm -f "\$MARK"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'profile.*stop' $s | head -1 | cut -d: -f1) ]] || fail "--stop clears the marker"
+grep -c 'OMAMOBILE_DT:-/proc/device-tree' $s >/dev/null || fail "the compatible is read through an overridable path"
+# both branches, with a fake device tree and a stub chroot: the 9a path writes
+# the marker and runs gnss-slsi, the 7 Pro path neither (no SPI5 node here)
+tmp=$(mktemp -d); mkdir -p "$tmp/dt" "$tmp/bin" "$tmp/lib/omamobile-vendor" "$tmp/var/lib/omamobile"
+printf 'google,zumapro-tegu\0google,zumapro\0' > "$tmp/dt/compatible"
+cat > "$tmp/stub" <<'EOF'
+#!/bin/sh
+echo "chroot $*" >> "${STUB_LOG}"
+EOF
+chmod +x "$tmp/stub"
+run_start() { # $1 dt dir, $2 fake unix table
+  STUB_LOG="$tmp/log" OMAMOBILE_DT="$1" bash -c '
+    MARKDIR='"$tmp"'/var/lib/omamobile
+    sed -e "s|/var/lib/omamobile/gnss-bringup-started|'"$tmp"'/var/lib/omamobile/gnss-bringup-started|" \
+        -e "s|/proc/net/unix|'"$2"'|" \
+        -e "s|/usr/lib/omamobile-vendor/omamobile-vendor-chroot|'"$tmp"'/stub|" lib/omamobile-gnss-start > '"$tmp"'/start
+    bash '"$tmp"'/start "$@"' _ "${3:-}" 2>/dev/null
+}
+: > "$tmp/log"; printf '@GNSSND\n' > "$tmp/unix"
+run_start "$tmp/dt" "$tmp/unix"
+grep -c 'chroot gnss-slsi start' "$tmp/log" >/dev/null || fail "9a branch: gnss-slsi start ran"
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "9a branch: the marker was written before the session"
+run_start "$tmp/dt" "$tmp/unix"
+grep -c 'never finished; skipping' <(STUB_LOG="$tmp/log" OMAMOBILE_DT="$tmp/dt" bash "$tmp/start" 2>&1) >/dev/null || fail "9a branch: a leftover marker skips the next start"
+run_start "$tmp/dt" "$tmp/unix" --stop
+[[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "--stop clears the marker"
+grep -c 'chroot gnss-slsi stop' "$tmp/log" >/dev/null || fail "9a branch: --stop stops gnss-slsi"
+: > "$tmp/log"; printf 'google,gs201-cheetah\0google,gs201\0' > "$tmp/dt/compatible"
+run_start "$tmp/dt" "$tmp/unix"
+grep -c 'gnss-slsi' "$tmp/log" >/dev/null && fail "7 Pro branch: must not touch gnss-slsi"
+[[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "7 Pro branch: no SPI5 node here, so no marker"
+rm -rf "$tmp"
+echo "ok - the 9a's start writes the marker, --stop clears it, both branches behave"
+grep -c 'OMAMOBILE_GNSS_NMEA_OUT=fifo' lib/omamobile-gnss-start >/dev/null || fail "the 9a's NMEA goes to the FIFO"
+grep -c 'gnss-slsi/data/vendor/gps/nmea_out' lib/omamobile-gnss-nmea >/dev/null || fail "the bridge reads the 9a's FIFO"
+grep -c '^ConditionPathExists=|/usr/lib/omamobile-vendor/gnss-slsi/root$' vendor/systemd/system/omamobile-gnss.service >/dev/null || fail "the service runs with the 9a's image"
+grep -c '^ExecStop=/usr/lib/omamobile-vendor/omamobile-gnss-start --stop$' vendor/systemd/system/omamobile-gnss.service >/dev/null || fail "stop picks the profile"
+grep -c 'gnss-slsi/data/vendor/gps' vendor/systemd/system/omamobile-gnss-nmea.service >/dev/null || fail "the bridge may open the 9a's FIFO"
+# --stop comes before the hang marker, so a leftover marker never skips a stop
+[[ $(grep -n -- '--stop' lib/omamobile-gnss-start | head -1 | cut -d: -f1) -lt $(grep -n 'elif \[\[ -e \$MARK' lib/omamobile-gnss-start | cut -d: -f1) ]] || fail "--stop before the marker"
 # A running stack keeps the phone awake (SUSPEND-PLAN 6.1).
 grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
   vendor/systemd/system/omamobile-gnss.service || fail "the stack holds a sleep inhibitor while it runs"
@@ -55,8 +101,13 @@ grep -q '^\[geoclue-where-am-i\]' etc/geoclue/conf.d/90-omamobile-gnss.conf || f
 # status must not print "nono" (forced suffix only when forced)
 grep -q 'forced/yes' bin/omamobile-gnss && fail "status forced suffix"
 grep -q 'blacklist bcm4775x_gnss' vendor/modprobe.d/omamobile-gnss.conf || fail "driver must stay blacklisted from autoload"
-grep -q '^ExecStop=.*omamobile-vendor-chroot gnss stop$' vendor/systemd/system/omamobile-gnss.service ||
-  fail "the stack must stop gpsd's request before the stop signal"
+# ExecStop runs before the stop signal, and the start script's --stop ends in
+# the profile's own stop (gnss on the 7 Pro, gnss-slsi on the 9a), so gpsd's
+# request is withdrawn before the chroot is killed.
+grep -c '^ExecStop=/usr/lib/omamobile-vendor/omamobile-gnss-start --stop$' vendor/systemd/system/omamobile-gnss.service >/dev/null ||
+  fail "the stack must stop the profile before the stop signal"
+grep -c 'exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot "\$profile" stop' lib/omamobile-gnss-start >/dev/null ||
+  fail "--stop must end in the profile's stop"
 grep -q 'omamobile-gnss-lto.timer\|LTO_TIMER' bin/omamobile-gnss || fail "the Location switch must handle the LTO timer"
 grep -q 'etc/omamobile/gnss.conf' PKGBUILD || fail "gnss.conf must be a backup file"
 
