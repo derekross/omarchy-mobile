@@ -1,0 +1,68 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+./build "$t/build"
+python3 - "$t/devinfo" <<'PY'
+import struct, sys
+data = bytearray(8192)
+data[:4] = b'DEVI'
+struct.pack_into('<HH', data, 4, 3, 15)
+data[0x30:0x34] = bytes([2, 0x0a, 0, 0])
+data[0x34:0x38] = bytes([1, 0x04, 0, 0])
+open(sys.argv[1], 'wb').write(data)
+PY
+cp "$t/devinfo" "$t/original"
+"$t/build/omamobile-bootctl" dump "$t/devinfo" > "$t/dump"
+grep -q 'version: 3.15' "$t/dump"
+"$t/build/omamobile-bootctl" mark-successful "$t/devinfo" b > "$t/plan" 2>&1 || true
+grep -q '0x35: 04 -> 06' "$t/plan"
+cmp "$t/devinfo" "$t/original"
+echo 'ok - helpers compile; boot-control dry run leaves the synthetic partition unchanged'
+./install "$t/root" "$t/build"
+for file in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-setup-system \
+  usr/lib/udev/rules.d/10-omamobile-storage.rules \
+  usr/lib/systemd/network/20-usb-gadget.network \
+  usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+  usr/lib/systemd/sleep.conf.d/20-omamobile-unqualified-sleep.conf \
+  etc/UPower/UPower.conf.d/20-omamobile-critical-power.conf \
+  usr/lib/modprobe.d/omamobile-oriole-bringup.conf \
+  usr/share/licenses/omamobile-device-oriole/LICENSE \
+  usr/share/licenses/omamobile-device-oriole/LICENSE.Apache-2.0; do
+  test -f "$t/root/$file"
+done
+test ! -d "$t/root/usr/lib/systemd/system/multi-user.target.wants"
+if ./install / "$t/build" > "$t/refusal" 2>&1; then
+  echo 'not ok - installation must refuse the host root' >&2
+  exit 1
+fi
+echo 'ok - installation stages policy and helpers, with no enabled hardware services'
+
+python3 - "$t/root/usr/lib/systemd/network/20-usb-gadget.network" <<'PY_ROUTE'
+import configparser, sys
+network = configparser.ConfigParser(strict=False)
+network.read(sys.argv[1])
+assert network['Match']['Name'] == 'usb0'
+assert network['Network']['Address'] == '172.16.42.1/24'
+assert 'Gateway' not in network['Network']
+assert network['Route']['Gateway'] == '172.16.42.2'
+assert int(network['Route']['Metric']) > 1024
+print('ok - USB keeps its direct SSH address and a fallback route below Wi-Fi priority')
+PY_ROUTE
+
+python3 - "$t/root" <<'PY_POLICY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+policy = (root/'usr/lib/modprobe.d/omamobile-oriole-bringup.conf').read_text().splitlines()
+for module in ('clk_acpm', 'max77759_charger', 'gpio_max77759', 'arm_dsu_pmu', 'at24', 'max17042_battery'):
+    assert f'blacklist {module}' in policy
+    assert f'install {module} /bin/false' in policy
+sleep = (root/'usr/lib/systemd/sleep.conf.d/20-omamobile-unqualified-sleep.conf').read_text().splitlines()
+for mode in ('Suspend', 'Hibernation', 'SuspendThenHibernate', 'HybridSleep'):
+    assert f'Allow{mode}=no' in sleep
+assert not list(root.rglob('*.service'))
+print('ok - coldplug refusals, disabled sleep modes and no service units')
+PY_POLICY
