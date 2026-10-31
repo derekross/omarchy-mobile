@@ -35,8 +35,11 @@ Item {
     anchors.horizontalCenter: parent.horizontalCenter
     anchors.bottom: parent.verticalCenter
     anchors.bottomMargin: -Math.round(width * 0.18)
-    // Phone-sized, like a home-screen icon on iOS: most of the cell's width.
-    width: Math.min(64, Math.max(40, Math.min(tile.width, tile.height) * 0.62))
+    // Like a home-screen icon on iOS: most of the cell's width, with no
+    // fixed cap, so a phone at scale 2 or a 3-column grid gets bigger icons.
+    // The height limit keeps the icon's top in the cell and leaves room for
+    // the name under it (cells taller than about 61 px).
+    width: Math.max(40, Math.min(tile.width * 0.62, tile.height * 0.6))
     height: width
     fillMode: Image.PreserveAspectFit
     asynchronous: true
