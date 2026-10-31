@@ -46,14 +46,12 @@ QtObject {
   function runSource(widget, spec, arg, headers, done) {
     if (spec.kind === "http") {
       if (!host.networkAllowed(widget)) { done({ error: "the internet is off for this widget" }); return }
-      host.get(arg, headers, Phone.sourceLimits(spec, false).timeout, spec, done)
-      return
+      return host.get(arg, headers, Phone.sourceLimits(spec, false).timeout, spec, done)
     }
     if (spec.kind === "file") { host.readFile(arg, done); return }
     if (spec.kind === "cmd") {
       if (host.usesNetwork(arg) && !host.networkAllowed(widget)) { done({ error: "the internet is off for this widget" }); return }
-      host.command(widget, arg, Phone.sourceLimits(spec, false).timeout, done)
-      return
+      return host.command(widget, arg, Phone.sourceLimits(spec, false).timeout, done)
     }
     done({ error: "unknown source " + spec.kind })
   }
@@ -63,35 +61,52 @@ QtObject {
       command: ["timeout", "-k", "2", String(Math.max(1, Math.min(Phone.LIMITS.timeoutMax, seconds))), "bash", "-c", String(text)]
     })
     proc.done = function(code, out, err) {
-      done({ code: code, ok: code === 0, out: out.slice(0, Phone.LIMITS.cmdOutput), err: err.slice(0, Phone.LIMITS.cmdOutput) })
+      done({ code: code, ok: code === 0, out: out, err: err })
     }
     proc.running = true
+    return { stop: function() { proc.stop() } }
   }
 
   function get(url, headers, seconds, spec, done) {
     const xhr = new XMLHttpRequest()
     let finished = false
     const timer = timerComponent.createObject(host, { interval: seconds * 1000 })
-    timer.triggered.connect(function() {
+    const stop = function() {
       if (finished) return
       finished = true
+      timer.stop()
       xhr.abort()
       timer.destroy()
+    }
+    timer.triggered.connect(function() {
+      if (finished) return
+      stop()
       done(spec.status ? { code: 124, ok: false, out: "", err: "timed out" } : { error: "timed out" })
     })
     xhr.onreadystatechange = function() {
-      if (xhr.readyState !== XMLHttpRequest.DONE || finished) return
+      if (finished || xhr.readyState < XMLHttpRequest.LOADING) return
+      // Qt emits LOADING on each received chunk. Check raw bytes there,
+      // before a chunked or compressed reply can grow without a bound.
+      if (xhr.response.byteLength > Phone.LIMITS.bodyBytes) {
+        stop()
+        done({ error: "the answer is over 1 MB" })
+        return
+      }
+      if (xhr.readyState !== XMLHttpRequest.DONE) return
       finished = true
+      timer.stop()
       timer.destroy()
       const body = String(xhr.responseText || "")
-      if (body.length > Phone.LIMITS.bodyBytes) { done({ error: "the answer is over 1 MB" }); return }
       const ok = xhr.status >= 200 && xhr.status < 300
       done({ code: xhr.status, ok: ok, out: body, err: ok ? "" : "HTTP " + xhr.status })
     }
     xhr.open("GET", url)
+    // Qt still supplies responseText for decoding at DONE.
+    xhr.responseType = "arraybuffer"
     for (const name in headers) xhr.setRequestHeader(name, String(headers[name]))
     timer.start()
     xhr.send()
+    return { stop: stop }
   }
 
   function readFile(path, done) {
@@ -145,28 +160,26 @@ QtObject {
   // and mako's modes, system from /proc and df.
   function android(widget, kind, done) {
     const fromCommand = function(text, parse) {
-      host.command(widget, text, 5, function(r) { done({ value: parse(String(r.out || "")) }) })
+      return host.command(widget, text, 5, function(r) { done({ value: parse(String(r.out || "")) }) })
     }
-    if (kind === "volume") { fromCommand("wpctl get-volume @DEFAULT_AUDIO_SINK@", Phone.volumeFrom); return }
-    if (kind === "media") { fromCommand("playerctl metadata --format " + JSON.stringify(Phone.MEDIA_FORMAT) + " 2>/dev/null", Phone.mediaFrom); return }
-    if (kind === "modes") { fromCommand("brightnessctl --device=white:torch get 2>/dev/null || echo; makoctl mode 2>/dev/null", Phone.modesFrom); return }
+    if (kind === "volume") return fromCommand("wpctl get-volume @DEFAULT_AUDIO_SINK@", Phone.volumeFrom)
+    if (kind === "media") return fromCommand("playerctl metadata --format " + JSON.stringify(Phone.MEDIA_FORMAT) + " 2>/dev/null", Phone.mediaFrom)
+    if (kind === "modes") return fromCommand("brightnessctl --device=white:torch get 2>/dev/null || echo; makoctl mode 2>/dev/null", Phone.modesFrom)
     if (kind === "system") {
-      fromCommand("cat /proc/meminfo; echo '@@'; cat /proc/uptime; echo '@@'; uname -r; echo '@@'; df -B1 --output=size,used / | tail -1; echo '@@@'; " + Phone.DEVICE_COMMAND, function(t) {
+      return fromCommand("cat /proc/meminfo; echo '@@'; cat /proc/uptime; echo '@@'; uname -r; echo '@@'; df -B1 --output=size,used / | tail -1; echo '@@@'; " + Phone.DEVICE_COMMAND, function(t) {
         const halves = t.split("@@@\n")
         const parts = halves[0].split("@@\n")
         return Phone.systemFrom(parts[0], parts[1], parts[2], parts[3], Phone.boardFrom(halves[1]))
       })
-      return
     }
-    if (kind === "battery") { fromCommand(Phone.BATTERY_COMMAND, Phone.batteryFrom); return }
+    if (kind === "battery") return fromCommand(Phone.BATTERY_COMMAND, Phone.batteryFrom)
     if (kind === "alarm") { done({ value: { set: false, time: null, app: null } }); return }
     if (kind === "notifications") { done({ value: { available: false, count: 0, items: [] } }); return }
     if (kind === "device") {
-      fromCommand(Phone.DEVICE_COMMAND, function(t) {
+      return fromCommand(Phone.DEVICE_COMMAND, function(t) {
         const b = Phone.boardFrom(t)
         return { model: b.model, maker: b.maker, android: null, sdk: null, soc: b.soc }
       })
-      return
     }
     done({ value: null })
   }
@@ -274,18 +287,7 @@ QtObject {
   // ---------------------------------------------------------------- parts
 
   property Component processComponent: Component {
-    Process {
-      id: proc
-      property var done: null
-      stdout: StdioCollector { id: out; waitForEnd: true }
-      stderr: StdioCollector { id: err; waitForEnd: true }
-      onExited: function(code) {
-        const finish = proc.done
-        proc.done = null
-        if (finish) finish(code, String(out.text || ""), String(err.text || ""))
-        proc.destroy()
-      }
-    }
+    BoundedProcess { }
   }
 
   property Component timerComponent: Component { Timer { } }

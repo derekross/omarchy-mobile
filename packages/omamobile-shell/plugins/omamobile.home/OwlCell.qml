@@ -44,6 +44,7 @@ Item {
     themeColors: owlCell.home ? owlCell.home.owlPalette : ({})
     approval: owlCell.card.approval
     active: owlCell.running && owlCell.shown && !!owlCell.home && !!owlCell.entry
+    paused: !owlCell.home || owlCell.home.owlPaused
     // While its screen is open, the screen's size is the view's own.
     tileVars: Phone.tileVars(owlCell.width, owlCell.height, owlCell.dp,
                              owl.screenOpen ? view.width : owlCell.home ? owlCell.home.owlScreenWidth : owlCell.width,
