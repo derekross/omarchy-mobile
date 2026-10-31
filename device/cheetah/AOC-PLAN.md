@@ -1850,6 +1850,107 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    Whatever the outcome, no step above 1 s at analog 17 until a burst
    reads plausibly, and the default stays stage media.
 
+   **C9d-8 results (2026-10-31, `7.3.0-rc6-omamobile-push1-gc32dd8e2d33e`,
+   omamobile-audio 0.5.6, boost converter off at 10 and on at 17).**
+   - Step 2 at 737/10 (-23 dBFS, 3 s): CLEAN. The impedance readout came
+     out near 2048 times a plausible ratio (2058.8 top, 1946.3 bottom, all
+     four samples identical, vmon low 1): at gain 10 the logger's word is
+     not in CAL_R's units, or it is a stale value. A clue, not a reading.
+   - Stage c9 first refused (`speaker_protection` read N; the bring-up file
+     `/etc/modprobe.d/omamobile-audio-c9-bringup.conf` was gone):
+     written again, one reboot, `Y`, analog limit 17. The C9a stamp still
+     matched the firmware.
+   - Step 3 at 817/17 (-30 dBFS, 1 s): **Z/CAL_R 1.032 top (1.029-1.032),
+     1.022 bottom**, as coil rises +8.1 C and +5.7 C; the top's estimate
+     went 25.0 -> 32.4 C and the burst tool's 5 C rule tripped. A 1 s tone
+     at -30 dBFS cannot heat a coil 8 C: the firmware measures the coil 2-3 %
+     high at gain 17. Much smaller than October's 25 C with the converter
+     off at 17.
+   - The register snapshot (both amplifiers, read below 0x10100, mid-tone
+     at 737/10 and at 817/17) differs only in `AMP_GAIN_CTRL` (0x6c04, 10 ->
+     17), `PWR_CTRL2` (0x2018, the boost enable), `AMP_DIG_VOL_CTRL`
+     (0x6000, the level and the watchdog's mute) and interrupt status
+     registers (0x10014, 0x10090-0x10098). No sense-path register differs.
+     (A slow read at 817/17 delayed the watchdog, which muted with "the
+     speaker watchdog stopped"; read one register range at a time next.)
+   - **Decision (the owner, 2026-10-31):** treat the offset as a known bias
+     in the safe direction (the firmware protects early) rather than boot
+     stock to compare. omamobile-audio 0.5.7 takes the jump rule's baseline
+     after a 2 s settle and bounds the offset inside it at 12 C; the
+     temperature backstop is unchanged. Next: C9d stepping (817/13, then
+     817/17) with `SETTLE=2` bursts, watching that the estimate stays flat
+     within each burst after the settle.
+   - **C9d stepping, step 1 (817/13, -20 dBFS multitone, 0.5.7):** the
+     watchdog muted about 1 s in: "Top: coil temperature rose 14.9 C (25.5
+     -> 40.4) in the first 2 s, above 12 C"; Z/CAL_R 1.049 top, 1.027
+     bottom; `vmon low 1` throughout, and the estimate then fell along a
+     smooth curve (the model cooling). **The offset grows with the signal**
+     (+7 C at -30 dBFS, +15 C at -20 dBFS), and with vmon low 1 the
+     firmware never senses the coil: it runs its open-loop model, whose
+     error scales with level. A settle window would only hide that, so 0.5.7
+     is not for merging as it stands. Stepping stopped. Next: offline, why
+     the firmware calls VMON too low at gain 13-17 (DSP input routing, VMON
+     scale or reference, the tuning's expected gain); if that finds
+     nothing, the same reading on stock (slot A).
+   - **The offline comparison (2026-10-31)** found no sense-path difference
+     from Google's driver: DSP RX3/RX4 are VMON/IMON in both, RX5 VPMON,
+     RX7 TEMPMON (RX6 the known difference); `VPVBST_FS_SEL` and
+     `VIMON_SPKMON_RESYNC` both 0; the OTP trim map identical; nothing
+     gain-dependent in Google's `set_pdata`. And the firmware's temperature
+     tracks its own measured Z (25 + (Z/CAL_R - 1)/0.0039) in every run, at
+     gain 13 too, where an estimate from the tuning's expected gain would be
+     about 58 % off: **the coil is measured, closed-loop.** `BDLOG_VMON_LOW_FLAG`
+     sits in the firmware's threshold logger with the max-hold and counter
+     fields; it reads None idle and 1 from a stream's first sample to its
+     end, so whether it latches is not settled.
+   - **The readings (same day):** battery 31 C (the only thermal zone); at
+     817/17, -30 dBFS 1 kHz, the top coil 33.4 C and the bottom 29.8 C from
+     Z. The coils are warm (the phone on USB, the top nearer the SoC) and
+     the firmware starts each stream at its 25 C reference: the "jump" is
+     the move to the measured value. At 737/10 the logger gives no
+     measurement at any of 400 Hz, 1 kHz or 4 kHz at -13 dBFS (codes
+     0xffffd4-0xffffdb; the tool's filter now drops 0xffff00 and above, the
+     "2058" ratios were these codes). At 817/17, -21 dBFS: 400 Hz measures
+     (top 1.060 -> 1.087 within the burst, bottom 1.032 -> 1.044), 1 kHz
+     measures once (1.091 / 1.045) and then not, 4 kHz not at all. So
+     whether Z depends on the gain cannot be read at 737/10, and the
+     firmware measures from low-frequency content.
+
+   **C9 with real music (2026-10-31, omamobile-audio 0.5.7 with the 20 C
+   jump above the estimate 2 s in, backstop 80 C; the owner listening,
+   phone on a table, YouTube Music).** At 817/13 a -20 dBFS multitone
+   raised the top coil 5.3 C above its measured value within 2 s (38.1 ->
+   43.4): real heating, so the 5 C rule was dropped for 20 C. At 817/17
+   with music, the top coil went 37 -> 55 -> 69 -> 81 C in about 4 s (the
+   bottom 31 -> 56 C) and the 80 C backstop muted; it cooled to 49 C within
+   2 s. The firmware's over-temperature count stayed 0, so its own limit
+   is above 80 C, and whether it attenuates before that limit is not known.
+   "Very loud and sounded good" (the owner) for the seconds it played.
+   **c9 is not a default until** the tuning's temperature limit and
+   attenuation behaviour are known (control names first, then a read-only
+   check during playback), or an intermediate stage (e.g. 817/13) is shown
+   to stay under the backstop with music. The backstop stays at 80 C.
+
+   **The firmware's thermal limits (offline, 2026-10-31).** Not readable
+   offline: each tuning's algorithm-0xcd block is 1404 unlabelled YM words
+   (Cirrus "Protect Lite"; the wmfw names no YM parameters, 443 words differ
+   top/bottom), and both tunings' metadata gives `amplifier_gain` 17.5.
+   There is no live attenuation readout: ATTENUATION, REDUCE_POWER,
+   CH_BAL, CAL_AMBIENT and CSPL_ENABLE are settings; the volatile controls
+   are the temperature, state, errorno, output power, CAL_R_SELECTED and
+   the BDLOG max/count fields, the RT logger (words 0 and 2 of stock's three
+   variables unidentified) and the event logger (alg 0xf20b). Read on the
+   phone: CSPL_ENABLE 1 on both, ATTENUATION 0x7fffff (1.0), REDUCE_POWER 0,
+   EVNTLG_ENABLED 0. No host-side thermal step is missing that we can see.
+   0.5.4's +6 dB limiter drive raises music's average power over stock's.
+   **Next:** music at 817/17 for 10 s with the drive at 0, logging at 2-4 Hz
+   the temperature, BDLOG fields, all 30 RT logger words and the phone
+   microphone's level (the only direct view of attenuation); the backstop
+   stays at 80 C. A plateau below 80 C or a falling mic level at a steady
+   input means the firmware protects; otherwise an intermediate stage, or
+   one stock capture (slot A: audiometrics speaker_temp with the same
+   controls during maximum-volume music, then fresh NV backups).
+
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
    amplifiers stay at stage media (737/10) in sections A-D, so every step
