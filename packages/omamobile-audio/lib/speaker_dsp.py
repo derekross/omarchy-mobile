@@ -524,13 +524,17 @@ def earpiece_ceilings(digital_ceil, analog_ceil):
 
 
 def jump_rule(analog_ceil):
-    """The coil-estimate jump rule for these analog ceilings (C9j): 5 C
-    above analog 10 only; OMAMOBILE_SPK_TEMP_JUMP sets it in any stage and
-    mode, 0 turns it off."""
+    """The coil-estimate jump rule for these analog ceilings: above analog
+    10 only (C9j), 20 C above the first measured estimate. The firmware
+    measures the coil closed-loop and attenuates as it heats, and at stock
+    levels the top coil really heats about 5 C in a second or two (C9d-8,
+    2026-10-31), so the rule only catches an estimate that makes no sense;
+    the temperature backstop (80 C) is the hard limit.
+    OMAMOBILE_SPK_TEMP_JUMP sets it in any stage and mode, 0 turns it off."""
     tj = os.environ.get('OMAMOBILE_SPK_TEMP_JUMP', '')
     if tj != '':
         return float(tj) or None
-    return 5.0 if max(analog_ceil.values()) > 10 else None
+    return 20.0 if max(analog_ceil.values()) > 10 else None
 
 
 def jump_settle():
