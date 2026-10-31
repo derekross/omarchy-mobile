@@ -242,9 +242,19 @@ Item {
   // (written synchronously) while it loads and for its first seconds; an
   // entry still there at the next start was running when the shell died,
   // and that widget stays off until its files change (a new hash).
+  // The file also carries the boot id it was written in: a widget still
+  // "loading" from another boot was cut off by a reboot or a dead battery,
+  // not by its own code, so it is not marked crashed.
   readonly property string guardPath: configDir + "/widget-guard.json"
   property var guardLoading: ({})
   property var guardCrashed: ({})
+  FileView {
+    id: bootIdFile
+    path: "/proc/sys/kernel/random/boot_id"
+    blockLoading: true
+    printErrors: false
+  }
+  readonly property string bootId: String(bootIdFile.text() || "").trim()
   FileView {
     id: guardFile
     path: root.guardPath
@@ -255,16 +265,20 @@ Item {
     onLoaded: {
       var data = {}
       try { data = JSON.parse(text() || "{}") || {} } catch (e) { data = {} }
-      root.guardCrashed = Object.assign({}, data.crashed || {}, data.loading || {})
+      var loading = data.loading || {}
+      var sameBoot = !root.bootId || !data.boot || data.boot === root.bootId
+      root.guardCrashed = Object.assign({}, data.crashed || {}, sameBoot ? loading : {})
       root.guardLoading = ({})
-      Object.keys(data.loading || {}).forEach(function(id) {
-        console.warn("omamobile.home: widget " + id + " was loading when the shell stopped; it stays off until it changes")
+      Object.keys(loading).forEach(function(id) {
+        console.warn(sameBoot
+          ? "omamobile.home: widget " + id + " was loading when the shell stopped; it stays off until it changes"
+          : "omamobile.home: widget " + id + " was loading when the system went down last boot; not a crash, so it loads again")
       })
       root.guardWrite()
     }
   }
   function guardWrite() {
-    guardFile.setText(JSON.stringify({ loading: guardLoading, crashed: guardCrashed }) + "\n")
+    guardFile.setText(JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed }) + "\n")
   }
   function guardBegin(widgetId, hash) {
     var next = Object.assign({}, guardLoading); next[widgetId] = hash
