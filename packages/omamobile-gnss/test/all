@@ -101,8 +101,13 @@ grep -q '^\[geoclue-where-am-i\]' etc/geoclue/conf.d/90-omamobile-gnss.conf || f
 # status must not print "nono" (forced suffix only when forced)
 grep -q 'forced/yes' bin/omamobile-gnss && fail "status forced suffix"
 grep -q 'blacklist bcm4775x_gnss' vendor/modprobe.d/omamobile-gnss.conf || fail "driver must stay blacklisted from autoload"
-grep -q '^ExecStop=.*omamobile-vendor-chroot gnss stop$' vendor/systemd/system/omamobile-gnss.service ||
-  fail "the stack must stop gpsd's request before the stop signal"
+# ExecStop runs before the stop signal, and the start script's --stop ends in
+# the profile's own stop (gnss on the 7 Pro, gnss-slsi on the 9a), so gpsd's
+# request is withdrawn before the chroot is killed.
+grep -c '^ExecStop=/usr/lib/omamobile-vendor/omamobile-gnss-start --stop$' vendor/systemd/system/omamobile-gnss.service >/dev/null ||
+  fail "the stack must stop the profile before the stop signal"
+grep -c 'exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot "\$profile" stop' lib/omamobile-gnss-start >/dev/null ||
+  fail "--stop must end in the profile's stop"
 grep -q 'omamobile-gnss-lto.timer\|LTO_TIMER' bin/omamobile-gnss || fail "the Location switch must handle the LTO timer"
 grep -q 'etc/omamobile/gnss.conf' PKGBUILD || fail "gnss.conf must be a backup file"
 
