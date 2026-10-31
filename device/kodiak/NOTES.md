@@ -44,3 +44,10 @@ Stock facts collected and both slots restored to factory. Device descriptor in #
 - SoC model: Tensor G6 (getprop ro.soc.model)
 - CPU: 6× 0xd8b rev 1 + 1× 0xd8c rev 0 (/proc/cpuinfo)
 - Verified boot state: orange (unlocked, getprop ro.boot.verifiedbootstate)
+
+## Battery and display extras (2026-11-01)
+
+- Battery charge_full: 5265000 µAh (~5265 mAh) (/sys/class/power_supply/battery/charge_full)
+- Battery technology: Li-ion, temperature ~25.5 °C (dumpsys battery)
+- LCD density: 480 (getprop ro.sf.lcd_density)
+- Display: HDR and wide color supported (getprop ro.surface_flinger.has_*)
