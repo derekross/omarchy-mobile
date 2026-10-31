@@ -533,6 +533,23 @@ def jump_rule(analog_ceil):
     return 5.0 if max(analog_ceil.values()) > 10 else None
 
 
+def jump_settle():
+    """The jump rule's settle window and offset bound (C9d-8, 2026-10-31).
+    At analog 17 the firmware reads the coil's resistance 2-3 % high from
+    the first sample of a stream (Z/CAL_R 1.02-1.03 on a -30 dBFS, 1 s tone:
+    6-8 C hotter than the coil is, a bias towards protecting early), with
+    no configuration register to explain it (a snapshot at 737/10 and at
+    817/17 differs only in the gain, the boost converter and status bits).
+    So the rule's baseline is the estimate once the stream has played for
+    OMAMOBILE_SPK_TEMP_SETTLE seconds (default 2), and during that window
+    the estimate may rise at most OMAMOBILE_SPK_TEMP_OFFSET_MAX (default
+    12 C) above its first in-stream sample: October's 25 C runaway still
+    mutes at once, and any rise after the window is held to the jump."""
+    settle = float(os.environ.get('OMAMOBILE_SPK_TEMP_SETTLE', '') or 2.0)
+    offset_max = float(os.environ.get('OMAMOBILE_SPK_TEMP_OFFSET_MAX', '') or 12.0)
+    return settle, offset_max
+
+
 def ceilings():
     """This stage's ceilings, the same numbers the service checks before it
     unmutes: digital, then analog per amplifier (c8: the top drives the
@@ -1161,7 +1178,7 @@ def cmd_watch(args):
         return 1
     log(f'watchdog: watching {pcm}, ceilings digital {digital_ceil} analog {analog_ceil}, '
         f'heartbeat {"enforced" if strict_hb else "logged"}, coil temperature backstop {temp_max:g} C, '
-        f'jump rule {f"{temp_jump:g} C within a stream" if temp_jump else "off (analog 10 or below: the estimate is open-loop, C9j)"}')
+        f'jump rule {f"{temp_jump:g} C after a {jump_settle()[0]:g} s settle (at most {jump_settle()[1]:g} C during it)" if temp_jump else "off (analog 10 or below: the estimate is open-loop, C9j)"}')
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
     mode = os.environ.get('OMAMOBILE_SPK_MEDIA_DELTA', '')
@@ -1193,6 +1210,8 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
     since = None
     beat = {}
     start_temp = {}
+    first_temp = {}
+    settle, offset_max = jump_settle()
     warned = False
     applied = False
     problems_delta = []
@@ -1256,6 +1275,7 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                 since = now
                 beat = {}
                 start_temp = {}
+                first_temp = {}
                 applied = False
                 problems_delta = []
                 if feedback:
@@ -1284,11 +1304,18 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
             # heartbeat rule (the levels, the bypass and the mute are checked)
             for amp in AMPS if mode == 'speaker' else ():
                 t = q(v.get((amp, 'CSPL_TEMPERATURE')), 14)
-                if t is not None:
+                if t is not None and temp_jump is not None:
+                    tf = first_temp.setdefault(amp, t)
+                    if now - since < settle:
+                        # the settle window: the gain-17 offset, bounded
+                        if t - tf > offset_max:
+                            problems.append(f'{amp}: coil temperature rose {t - tf:.1f} C '
+                                            f'({tf:.1f} -> {t:.1f}) in the first {settle:g} s, above {offset_max:g} C')
+                        continue
                     t0 = start_temp.setdefault(amp, t)
-                    if temp_jump is not None and t - t0 > temp_jump:
+                    if t - t0 > temp_jump:
                         problems.append(f'{amp}: coil temperature jumped {t - t0:.1f} C '
-                                        f'({t0:.1f} -> {t:.1f}) in this stream, above {temp_jump} C')
+                                        f'({t0:.1f} -> {t:.1f}) after the settle, above {temp_jump} C')
             for amp in AMPS if mode == 'speaker' else ():
                 hb = v.get((amp, 'HALO_HEARTBEAT'))
                 last = beat.get(amp)
