@@ -76,7 +76,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/bin/omamobile-tegu-usb-rescue usr/lib/systemd/system/omamobile-tegu-usb-rescue.service \
          usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service \
          usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
-         usr/bin/omamobile-tegu-charge-limit usr/lib/udev/rules.d/75-omamobile-tegu-charger.rules \
+         usr/bin/omamobile-tegu-charge-limit usr/bin/omamobile-setup-system usr/lib/udev/rules.d/75-omamobile-tegu-charger.rules \
          usr/lib/modprobe.d/omamobile-tegu-guards.conf usr/lib/modprobe.d/omamobile-tegu-aoc.conf \
          usr/lib/modprobe.d/omamobile-tegu-display.conf usr/lib/modprobe.d/omamobile-tegu-clk-acpm.conf \
          usr/lib/systemd/system-sleep/omamobile-tegu-wifi usr/lib/systemd/system-sleep/omamobile-tegu-nfc \
@@ -176,6 +176,8 @@ grep -q 'chosen/config/bt_addr' bin/omamobile-bt-addr || fail "the Bluetooth add
 grep -q 'HandlePowerKey' -r vendor && fail "no power-key policy from this package (omamobile-shell owns it on tegu)"
 pass "the Bluetooth address is read at run time"
 
+grep -c '^for unit in omamobile-sensor-proxy.service omamobile-nfc-open.service; do$' bin/omamobile-setup-system >/dev/null || fail "setup-system enables the sensor proxy and the NFC opener"
+grep -qE 'omamobile-(fp|gnss-nmea|speaker-protection)' <(grep '^for unit' bin/omamobile-setup-system) && fail "setup-system must not enable fingerprint, GNSS or speaker protection on the 9a"
 for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/charge-limit; do
   "$t" || fail "$t"
 done
