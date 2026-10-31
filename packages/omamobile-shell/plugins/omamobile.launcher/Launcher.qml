@@ -10,6 +10,7 @@ import qs.Ui
 import qs.services as OmarchyServices
 import "LauncherModel.js" as LauncherModel
 import "Readable.js" as Readable
+import "DrawerLink.js" as DrawerLink
 
 // The phone's home surface, after Omalauncher: one bar at the bottom of the
 // screen that is app search, app grid and coding-agent prompt at once.
@@ -174,22 +175,39 @@ Item {
 
   // `shell summon omamobile.launcher '{"query":"..."}'` opens the
   // drawer, optionally pre-filled.
+  //
+  // '{"gesture":true}' is the home screen's swipe letting go past the point
+  // that opens (gestureEnd below): the drawer carries on from under the
+  // finger at the finger's speed, the dock stays until it is fully open,
+  // and the search field waits for a tap, so no keyboard comes up, as on
+  // Android. Any other open (a tap on the dock, IPC) focuses the field.
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
+    var gesture = payload.gesture === true
     query = typeof payload.query === "string" ? payload.query : ""
-    if (appLibrary) appLibrary.refreshIcons()
     refreshApps()
     opened = true
+    focusInputOnShow = !gesture
+    if (!gesture) dockAway = true
+    focusDrawer()
+    settleTo(true, gesture ? gestureSpeed : 0)
+    gestureSpeed = 0
   }
 
-  // Host-initiated close (`shell hide`).
+  // Host-initiated close (`shell hide`): the drawer slides away from where
+  // it is, at the speed of the finger that let it go (dismiss(speed)).
   function close() {
     opened = false
     query = ""
+    homeSwipe = false
+    pulling = false
+    settleTo(false, gestureSpeed)
+    gestureSpeed = 0
   }
 
-  function dismiss() {
+  function dismiss(speed) {
+    gestureSpeed = Number(speed) || 0
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else close()
   }
@@ -235,28 +253,127 @@ Item {
   readonly property int touch: Math.max(44, Style.space(44))
   readonly property int inputHeight: Math.max(48, Style.space(48))
   readonly property int dockHeight: inputHeight + Style.spacing.xxl * 2
+  // The dock shows on the home screen unless the drawer has the bottom
+  // edge (dockAway, below).
+  readonly property bool dockShown: !dockAway && !appOnScreen
   // No dock under an app: while the focused workspace has a window, the
   // dock (and its exclusive zone) goes away and only the home pill's thin
   // strip stays at the bottom, as on a phone. Home (an empty workspace)
   // brings the dock back.
   readonly property bool appOnScreen: !!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0
 
-  property real reveal: opened ? 1 : 0
-  Behavior on reveal { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+  // ---------------------------------------------------------------- drawer position
 
-  // How far the drawer is pulled down by a finger (pull to close), the pull
-  // that closes it, and the first pixels a tap's jitter may move.
-  // pulling: a finger is pulling now; pullMoved: this touch moved the
-  // drawer, so it is not also a tap on an app.
-  property real pull: 0
+  // Where the drawer is: 0 closed (its sheet just below its window) to 1
+  // open, as a share of the sheet's height, so the sheet's top stays under
+  // a finger whatever size the window has. A finger moves it directly (no
+  // animation in between, so it never lags); letting go settles it with a
+  // short ease that starts at the finger's speed (settleTo,
+  // LauncherModel.settleMs: 120-260 ms, Easing.OutCubic, no overshoot).
+  property real progress: 0
+  // A finger moves the drawer: the home screen's swipe up (gestureBegin to
+  // gestureEnd, reached through DrawerLink.js), or a pull down in the
+  // drawer (the handle, the header, empty space, or the grid at its top).
+  property bool homeSwipe: false
   property bool pulling: false
+  readonly property bool fingerOnDrawer: homeSwipe || pulling
+  // This touch moved the drawer, so it is not also a tap on an app.
   property bool pullMoved: false
-  readonly property int pullToClose: Math.max(80, Style.space(80))
+  // The first pixels a tap's jitter may move before a pull starts.
   readonly property int pullSlop: 8
-  Behavior on pull {
-    enabled: !root.pulling
-    NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+  // The pulling finger's recent positions, for its speed at release.
+  property var pullSamples: []
+  // The speed (px/s, down positive) a finger let the drawer go at, for the
+  // settle that follows through the host's summon or hide.
+  property real gestureSpeed: 0
+  // The drawer has the bottom edge: set once it has slid fully open (at
+  // once for a tap on the dock, whose keyboard needs the edge), cleared once
+  // it has slid away. Until then the dock stays under the sliding sheet, so
+  // the home screen and the drawer's window keep their size while a finger
+  // moves it: the windows below never re-lay out mid-swipe.
+  property bool dockAway: false
+  // What takes the keyboard focus when the drawer shows: the search field
+  // after a tap on the dock, the sheet after a swipe (open above).
+  property bool focusInputOnShow: true
+  // The sheet's travel: the drawer window's height once it has one, the
+  // screen's before the compositor's first configure.
+  readonly property real travel: Math.max(1, drawer.height > 0 ? drawer.height
+    : screenInfo && screenInfo.height > 0 ? screenInfo.height : 1000)
+
+  NumberAnimation {
+    id: settle
+    target: root
+    property: "progress"
+    easing.type: Easing.OutCubic
+    property bool toOpen: false
+    onFinished: root.settled(settle.toOpen)
   }
+
+  // Ease to open or closed from wherever the drawer is; speed is the
+  // finger's (px/s), if one let it go.
+  function settleTo(open, speed) {
+    settle.stop()
+    var to = open ? 1 : 0
+    var ms = LauncherModel.settleMs((to - progress) * travel, travel, speed)
+    settle.toOpen = open
+    if (ms <= 0) {
+      progress = to
+      settled(open)
+      return
+    }
+    settle.from = progress
+    settle.to = to
+    settle.duration = ms
+    settle.start()
+  }
+
+  function settled(open) {
+    dockAway = open
+    // New icons (an app installed since): after the slide, so the grid
+    // doesn't rebuild under it.
+    if (open && appLibrary) appLibrary.refreshIcons()
+  }
+
+  function focusDrawer() {
+    if (!drawer.visible) return
+    if (focusInputOnShow) input.forceActiveFocus()
+    else sheet.forceActiveFocus()
+  }
+
+  // The home screen's swipe up (omamobile.home, through DrawerLink.js):
+  // begin once its finger turns out to be going up, move with how far it
+  // has gone up (px), end with its speed (px/s, negative up). The drawer
+  // decides there whether it opens (LauncherModel.drawerEndsOpen: a fling,
+  // or a quarter of the way) and then opens through the host, as a tap does.
+  function gestureBegin() {
+    if (opened) return false
+    settle.stop()
+    pulling = false
+    homeSwipe = true
+    return true
+  }
+
+  function gestureMove(px) {
+    if (!homeSwipe) return
+    progress = Math.max(0, Math.min(1, (Number(px) || 0) / travel))
+  }
+
+  function gestureEnd(speed) {
+    if (!homeSwipe) return false
+    homeSwipe = false
+    var v = Number(speed) || 0
+    if (!LauncherModel.drawerEndsOpen(progress, v, false)) {
+      settleTo(false, v)
+      return false
+    }
+    gestureSpeed = v
+    if (shell && typeof shell.summon === "function") shell.summon(pluginId, JSON.stringify({ gesture: true }))
+    else open(JSON.stringify({ gesture: true }))
+    return true
+  }
+
+  Component.onCompleted: DrawerLink.publish(root)
+  Component.onDestruction: DrawerLink.withdraw(root)
 
   // ---------------------------------------------------------------- dock
 
@@ -267,9 +384,9 @@ Item {
       required property var modelData
       screen: modelData
 
-      // Hidden while the drawer is open, so the on-screen keyboard takes the
-      // bottom edge and the drawer's input sits right above it.
-      visible: !root.opened && !root.appOnScreen
+      // Hidden while the drawer has the bottom edge (dockAway), so the
+      // on-screen keyboard takes it and the drawer's input sits right above.
+      visible: root.dockShown
       anchors { bottom: true; left: true; right: true }
       implicitHeight: root.dockHeight
       exclusionMode: ExclusionMode.Auto
@@ -546,7 +663,7 @@ Item {
   PanelWindow {
     id: drawer
 
-    visible: root.opened || root.reveal > 0
+    visible: root.opened || root.fingerOnDrawer || root.progress > 0
     anchors { top: true; bottom: true; left: true; right: true }
     // Normal: fit between the bar and the on-screen keyboard, like Android's
     // adjustResize.
@@ -558,9 +675,17 @@ Item {
     // one holds exclusive focus, and that includes the on-screen keyboard.
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
-    onVisibleChanged: {
-      if (visible) Qt.callLater(function() { input.forceActiveFocus() })
-      else root.pull = 0
+    onVisibleChanged: if (visible) root.focusDrawer()
+
+    // The home screen dims under the rising drawer: Omarchy's own menu
+    // scrim (the theme's), as strong as the drawer is open. It shows only
+    // above the sheet while it slides; open, the sheet covers it.
+    Rectangle {
+      objectName: "drawerScrim"
+      anchors.fill: parent
+      color: Commons.Color.menu.scrim
+      opacity: root.progress
+      visible: root.progress > 0 && root.progress < 1
     }
 
     Rectangle {
@@ -568,43 +693,87 @@ Item {
       objectName: "drawer"
       width: parent.width
       height: parent.height
-      y: Math.round((1 - root.reveal) * Style.space(80) + root.pull)
-      opacity: root.reveal * Math.max(0.5, 1 - root.pull / Math.max(1, height))
+      // Moved, never re-laid out: only y and opacity change with the finger.
+      y: Math.round((1 - root.progress) * height)
+      opacity: Math.min(1, 0.5 + root.progress)
       color: Commons.Color.menu.background
 
+      // After a swipe the sheet has the keyboard focus, not the field (no
+      // on-screen keyboard until the field is tapped); typing on a real
+      // keyboard still searches, and Escape closes.
+      Keys.onEscapePressed: root.dismiss(0)
+      Keys.onPressed: function(event) {
+        if (!event.text || event.text < " " || (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) return
+        input.forceActiveFocus()
+        root.query = root.query + event.text
+        event.accepted = true
+      }
+
       // Pull down to close (TOUCH-PLAN 1.8), as on Android: a drag down that
-      // starts on the header, or on the grid while it is scrolled to its
-      // top, moves the drawer with the finger, and letting go past
-      // pullToClose closes it (less springs back). A PointHandler only
-      // watches (a passive grab), so the grid still scrolls and the app
-      // cells still take taps; the grid can't scroll further up from its
-      // top (StopAtBounds), so it stays put while the drawer follows.
-      PointHandler {
-        id: pullPoint
-        readonly property real dy: active ? point.scenePosition.y - point.scenePressPosition.y : 0
-        onActiveChanged: {
-          if (active) {
-            var at = point.pressPosition
-            var onHeader = at.y < header.y + header.height
-            var onGridTop = !root.hasQuery && grid.atYBeginning
-              && at.y >= grid.y && at.y < grid.y + grid.height
-            root.pullMoved = false
-            root.pulling = root.opened && (onHeader || onGridTop)
-            return
+      // starts anywhere above the search rows (the handle, the header, empty
+      // space, or the grid while it is scrolled to its top) moves the drawer
+      // with the finger; a grid scrolled down scrolls first, and the pull
+      // takes over where it reaches its top. Letting go closes it on a
+      // downward flick or past a tenth of the way
+      // (LauncherModel.drawerEndsOpen); otherwise it springs back. A
+      // PointHandler only watches (a passive grab), so the grid still
+      // scrolls and the app cells still take taps; while the drawer follows
+      // the finger the grid holds still.
+      Item {
+        // Over everything in the sheet, so the press reaches it before the
+        // grid and its cells take it (a handler on the sheet itself never
+        // saw a press on the grid).
+        anchors.fill: parent
+        z: 10
+
+        PointHandler {
+          id: pullPoint
+          // This touch may become a pull, it started on the grid, and the dy
+          // (scene px, down positive) the pull counts from.
+          property bool candidate: false
+          property bool onGrid: false
+          property real base: 0
+          onActiveChanged: {
+            if (active) {
+              var at = point.pressPosition
+              var onHeader = at.y < header.y + header.height
+              var searchTop = askRow.visible ? askRow.y : inputRow.y
+              onGrid = !onHeader && at.y >= grid.y && at.y < grid.y + grid.height
+              base = 0
+              root.pullMoved = false
+              candidate = root.opened && !root.homeSwipe && at.y < searchTop && (!onGrid || !root.hasQuery)
+              return
+            }
+            candidate = false
+            if (!root.pulling) return
+            root.pulling = false
+            var speed = LauncherModel.speedOf(root.pullSamples, Date.now())
+            if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)
+            else root.dismiss(speed)
           }
-          var close = root.pulling && root.pull > root.pullToClose
-          root.pulling = false
-          if (close) root.dismiss()
-          else root.pull = 0
-        }
-        onDyChanged: {
-          if (!root.pulling || !active) return
-          root.pull = Math.max(0, dy - root.pullSlop)
-          if (root.pull > 0) root.pullMoved = true
+          onPointChanged: {
+            if (!active || !candidate) return
+            var dx = point.scenePosition.x - point.scenePressPosition.x
+            var dy = point.scenePosition.y - point.scenePressPosition.y
+            if (!root.pulling) {
+              // Sideways first: never a pull.
+              if (Math.abs(dx) > root.pullSlop && Math.abs(dx) > Math.abs(dy - base)) { candidate = false; return }
+              // While the grid scrolls, the pull counts from where it is.
+              if (onGrid && !grid.atYBeginning) { base = dy; return }
+              if (dy - base <= root.pullSlop || Math.abs(dy - base) < Math.abs(dx)) return
+              settle.stop()
+              base = dy
+              root.pullSamples = []
+              root.pulling = true
+              root.pullMoved = true
+            }
+            root.progress = Math.max(0, Math.min(1, 1 - (dy - base) / root.travel))
+            root.pullSamples = LauncherModel.addSample(root.pullSamples, Date.now(), point.scenePosition.y)
+          }
         }
       }
 
-      // ---------- Header: count and a collapse control
+      // ---------- Header: the count
       Item {
         id: header
         objectName: "drawerHeader"
@@ -612,7 +781,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.leftMargin: Style.spacing.panelPadding
-        anchors.rightMargin: Style.spacing.sm
+        anchors.rightMargin: Style.spacing.panelPadding
         height: root.touch + Style.spacing.sm
 
         Text {
@@ -625,17 +794,32 @@ Item {
           font.pixelSize: Style.font.subtitle
           font.bold: true
         }
+      }
 
-        Button {
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          width: root.touch
-          height: root.touch
-          objectName: "collapse"
-          iconText: "󰅀"
-          iconSize: Style.font.iconLarge
-          foreground: root.foreground
-          onClicked: root.dismiss()
+      // ---------- The handle: a pill centred at the top, as the home pill
+      // is at the bottom over an app. A tap closes the drawer; a drag moves
+      // it down and back up with the finger (the pull above), and letting go
+      // closes it or springs back. The pill is small; its touch target is
+      // the header's full height (at least 44 px) and three targets wide.
+      Item {
+        id: handle
+        objectName: "drawerHandle"
+        anchors.top: parent.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: root.touch * 3
+        height: header.height
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: Math.max(36, Style.space(40))
+          height: Math.max(4, Style.space(5))
+          radius: height / 2
+          color: handleTap.pressed || root.pulling ? Commons.Color.accent : Util.alpha(root.foreground, 0.45)
+        }
+
+        TapHandler {
+          id: handleTap
+          onTapped: root.dismiss(0)
         }
       }
 
@@ -652,6 +836,8 @@ Item {
         anchors.bottomMargin: Style.spacing.lg
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        // Still while a finger pulls the drawer.
+        interactive: !root.pulling
         // While searching, results stack up from the input so the best match
         // sits nearest the thumb; the full list reads top-down.
         verticalLayoutDirection: root.hasQuery ? GridView.BottomToTop : GridView.TopToBottom
@@ -788,6 +974,11 @@ Item {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: root.dockHeight
+        // While a swipe slides the drawer up, the dock's own search pill is
+        // still under it; the drawer's field shows once the dock has gone,
+        // in its place.
+        opacity: root.dockAway ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
         TextField {
           id: input

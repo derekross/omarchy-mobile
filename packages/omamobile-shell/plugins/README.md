@@ -352,9 +352,22 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
-  sits by your thumb, highlighted. Pull the header down, or the grid when it
-  is scrolled to its top, past about 80 px to close it (the drawer follows the
-  finger); the chevron at the top right still closes it too.
+  sits by your thumb, highlighted. **Swipe up anywhere on the home screen** to
+  open it: the drawer rises with the finger and opens on an upward flick or
+  past a quarter of the way, else falls back (only on the home screen: not
+  over an app, in edit mode or under a sheet; a widget that scrolls keeps its
+  own swipe). Opened that way, no keyboard comes up until the field is
+  tapped; typing on a hardware keyboard still searches. To close it, tap the
+  **handle** (the pill centred at the top, a 44 px target), or drag it, the
+  header, empty space or the grid at its top down: the drawer follows the
+  finger both ways and closes on a downward flick or past a tenth of the
+  way, else springs back. A grid scrolled down scrolls first; the pull takes
+  over where it reaches the top. Settling is one Easing.OutCubic slide of
+  120-260 ms that starts at the finger's speed; the home screen dims under
+  the theme's menu scrim and recedes slightly as the drawer rises. The home
+  screen reaches the drawer in-process through `DrawerLink.js` (a
+  `.pragma library` script both plugins import from the launcher's folder);
+  without it the swipe still opens the drawer through the host on release.
 * **Ask the agent.** Any text also offers an "Ask Claude" row above the input.
   Text that reads as a prompt (3+ words, ends in `?`, `.` or `!`, or matches no
   app) makes that row the primary action: it is highlighted, the input glyph
@@ -458,7 +471,11 @@ wallpaper, swiped sideways, with page dots above the dock.
 ![Home screens](../../../phone/screenshots/home-screens.png)
 ![Edit mode](../../../phone/screenshots/home-screens-edit.png)
 
-* **Pages.** Swipe sideways; tap a dot to jump. The home page (Home in recent
+* **Pages.** Swipe sideways; tap a dot to jump. The page follows the finger
+  1:1 (the ListView's own drag); a flick of 300 px/s turns the page even on
+  a short swipe, a slower release settles on the nearer page, with one
+  Easing.OutCubic slide of 120-250 ms that starts at the finger's speed
+  (`HomePager.qml`, rules in `HomeModel.js`). Swipe up for the app drawer. The home page (Home in recent
   apps goes back to it) is marked in the Pages sheet.
 * **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
   take one cell, widgets a span within their own limits.

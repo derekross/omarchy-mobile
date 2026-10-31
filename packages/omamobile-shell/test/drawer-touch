@@ -1,0 +1,114 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The app drawer (omamobile.launcher) under a finger, offscreen in
+# qmltestrunner: the real drawer window's content (the scrim, the sheet
+# with its handle, header, grid, ask row and input), the real AppCell, and
+# the real drawer position, open, close, dismiss and gesture functions,
+# cut out of Launcher.qml into a plain Item with Quickshell and Omarchy's
+# modules stubbed (test/qml-stubs) and a stand-in for the host's summon and
+# hide. A tap on the handle closes, a drag on the handle or the grid at its
+# top follows the finger and closes on a flick or springs back, a scrolled
+# grid scrolls first, an app still takes its tap, and the home screen's
+# swipe (gestureBegin/Move/End) opens the drawer from under the finger
+# without the keyboard. No compositor, no Quickshell. Exits 77 without
+# qmltestrunner.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=$here/../plugins/omamobile.launcher
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "drawer-touch: no qmltestrunner" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/launcher"
+cp "$plugin/LauncherModel.js" "$plugin/Readable.js" "$work/launcher/"
+python3 -B - "$plugin/Launcher.qml" "$work/launcher/DrawerHarness.qml" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+
+def block(start):
+    """From start (an index at or before a '{') to its matching '}'."""
+    depth, j = 0, src.index("{", start)
+    while True:
+        depth += src[j] == "{"
+        depth -= src[j] == "}"
+        j += 1
+        if depth == 0:
+            return src[start:j]
+
+def function(name):
+    return block(src.index("  function %s(" % name))
+
+position = src[src.index("  // ---------------------------------------------------------------- drawer position"):
+               src.index("  Component.onCompleted: DrawerLink.publish(root)")]
+window = block(src.index("  PanelWindow {\n    id: drawer"))
+# The layer-shell window becomes an Item over the harness.
+window = window.replace("  PanelWindow {", "  Item {\n    anchors.fill: parent", 1)
+window = "\n".join(l for l in window.split("\n")
+                   if not re.match(r"^    (anchors \{ top|exclusionMode:|WlrLayershell\.|color: \"transparent\"|mask: Region)", l))
+cell = block(src.index("  component AppCell: Item {"))
+
+out = """import QtQuick
+import qs.Commons
+import qs.Commons as Commons
+import qs.Ui
+import "LauncherModel.js" as LauncherModel
+import "Readable.js" as Readable
+
+Item {
+  id: root
+  width: 412
+  height: 892
+
+  // The host: summon and hide reach open() and close() as shell.qml's do.
+  property var calls: []
+  readonly property var shell: ({
+    summon: function(id, payload) { root.calls = root.calls.concat(["summon " + payload]); root.open(payload); return true },
+    hide: function(id) { root.calls = root.calls.concat(["hide"]); root.close(); return true }
+  })
+  readonly property string pluginId: "omamobile.launcher"
+  property bool opened: false
+  property string query: ""
+  property var apps: []
+  readonly property bool hasQuery: query.trim().length > 0
+  readonly property bool promptMode: false
+  readonly property QtObject appLibrary: QtObject {
+    function iconSource(icon) { return "" }
+    function entryName(entry) { return entry ? entry.name : "" }
+    function refreshIcons() { }
+  }
+  readonly property color foreground: Commons.Color.menu.text
+  readonly property int touch: 44
+  readonly property int inputHeight: 48
+  readonly property int dockHeight: inputHeight + Style.spacing.xxl * 2
+  property var screenInfo: ({ width: 412, height: 892 })
+  function drawerColumns(width) { return 4 }
+  readonly property bool hasAgent: false
+  readonly property string agentName: ""
+  readonly property string agentIcon: ""
+  property var launched: []
+  function launchApp(entry) { launched = launched.concat([entry.id]); dismiss() }
+  function addToHome(entry) { }
+  function askAgent(prompt) { }
+  function activate() { }
+  function refreshApps() { }
+
+%s
+
+%s
+
+%s
+
+%s
+
+%s
+
+%s
+}
+""" % (function("open"), function("close"), function("dismiss"), position, window, cell)
+open(sys.argv[2], "w").write(out)
+PY
+cp "$here/drawer-touch.qml" "$work/tst_drawer_touch.qml"
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+exec "$runner" -import "$here/qml-stubs" -input "$work/tst_drawer_touch.qml" "$@"

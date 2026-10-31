@@ -582,8 +582,19 @@ Item {
   }
   readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers)
   readonly property bool owlPaused: !homeShown
-  // The pages are being swiped: the neighbours show too.
-  property bool pagesMoving: false
+  // The app drawer (omamobile.launcher's root, through its DrawerLink.js,
+  // which DrawerLinkClient.qml beside it imports), for the swipe up and for
+  // how far open it is. Loaded from the launcher's folder so both plugins
+  // share one script; missing, the swipe still opens it through the host.
+  Loader {
+    id: drawerLink
+    source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")
+  }
+  readonly property var drawer: drawerLink.item ? drawerLink.item.drawer : null
+  readonly property real drawerProgress: drawer && drawer.progress !== undefined ? Number(drawer.progress) || 0 : 0
+
+  // The pages are being swiped, or slide to a page: the neighbours show too.
+  readonly property bool pagesMoving: !!pager && pager.swiping
   function pageShown(index) { return HomeModel.pageShown(index, currentPage, pagesMoving, homeShown) }
   // A finger on the home screen proves it shows: an event missed while the
   // shell was busy can't keep the widgets stopped.
@@ -873,10 +884,7 @@ Item {
   function goToPage(index, animate) {
     var i = Math.max(0, Math.min(viewLayout.pages.length - 1, Number(index) || 0))
     currentPage = i
-    if (pager) {
-      pager.highlightMoveDuration = animate === false ? 0 : 250
-      pager.currentIndex = i
-    }
+    if (pager) pager.goTo(i, animate)
   }
 
   function setEditing(on) {
@@ -1088,6 +1096,10 @@ Item {
       id: screenItem
       anchors.fill: parent
       focus: true
+      // The home screen recedes a little under the rising drawer (its scrim
+      // dims it): a scale of the whole surface, a transform only, nothing
+      // laid out again.
+      scale: 1 - 0.04 * root.drawerProgress
       onWidthChanged: root.owlScreenWidth = width
       onHeightChanged: root.owlScreenHeight = height
       Keys.onEscapePressed: {
@@ -1096,26 +1108,20 @@ Item {
       }
 
       // ---------- pages
-      ListView {
+      // HomePager: the ListView's drag (1:1 under the finger), and a short
+      // slide of its own on release (a flick turns the page).
+      HomePager {
         id: pager
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: dots.top
         anchors.topMargin: Style.spacing.lg
-        orientation: ListView.Horizontal
-        snapMode: ListView.SnapOneItem
-        highlightRangeMode: ListView.StrictlyEnforceRange
-        highlightMoveDuration: 250
-        boundsBehavior: Flickable.StopAtBounds
         // In edit mode a drag moves items; pages change by swiping empty
         // space or tapping the dots.
         interactive: !root.editing && root.sheet === ""
-        flickDeceleration: 4000
-        cacheBuffer: width * 2
         model: root.viewLayout.pages.length
-        onCurrentIndexChanged: root.currentPage = currentIndex
-        onMovingChanged: root.pagesMoving = moving
+        onPageChanged: root.currentPage = page
         onMovementStarted: root.sawTouch()
 
         delegate: Page { }
@@ -1228,6 +1234,20 @@ Item {
         z: 50
         home: root
         active: !root.editing && root.sheet === ""
+      }
+
+      // ---------- swipe up anywhere: the app drawer, with the finger
+      // Above the long press; a mostly sideways drag stays the pager's.
+      DrawerSwipe {
+        anchors.fill: pager
+        z: 51
+        home: root
+        pages: pager
+        drawer: root.drawer
+        active: HomeModel.drawerSwipeAllowed(root.appOnScreen, root.editing, root.sheet)
+        // The drawer out of reach (DrawerLink.js): open it through the
+        // host, without the keyboard, as a swipe opens it.
+        onFallbackOpen: Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.launcher", "{\"gesture\":true}"])
       }
 
       // ---------- a short notice, with Undo after a remove

@@ -1,0 +1,28 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The home screen's swipes under a finger, offscreen in qmltestrunner: the
+# real HomePager.qml, DrawerSwipe.qml, AppTile.qml and LongPressEdit.qml
+# (omamobile.home) laid out as Home.qml lays them out, and the real
+# DrawerLink.js and DrawerLinkClient.qml (omamobile.launcher) in folders
+# side by side as the plugins are installed, with a stand-in drawer.
+# A swipe up anywhere moves the drawer with the finger (not from a widget
+# that scrolls, not while editing), a sideways swipe or a short flick turns
+# the page with a short slide, taps and holds still work, and a mouse drag
+# still turns the page. No compositor, no Quickshell. Exits 77 without
+# qmltestrunner.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugins=$here/../plugins
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "home-gestures: no qmltestrunner" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/omamobile.home" "$work/omamobile.launcher"
+cp "$plugins/omamobile.home/"{HomePager.qml,DrawerSwipe.qml,AppTile.qml,LongPressEdit.qml,HomeModel.js,Readable.js} "$work/omamobile.home/"
+cp "$plugins/omamobile.launcher/"{DrawerLink.js,DrawerLinkClient.qml,LauncherModel.js} "$work/omamobile.launcher/"
+cp "$here/home-gestures-drawer.qml" "$work/FakeDrawer.qml"
+cp "$here/home-gestures.qml" "$work/tst_home_gestures.qml"
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+exec "$runner" -import "$here/qml-stubs" -input "$work/tst_home_gestures.qml"

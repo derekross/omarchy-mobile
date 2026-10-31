@@ -93,8 +93,8 @@ for name, g in geo.items():
     screen, parts = g["screen"], g["parts"]
     landscape = screen["w"] > screen["h"]
     check(name + ": the drawer fills the screen", "drawer" in parts and inside(parts["drawer"], screen, 1), json.dumps(parts.get("drawer")))
-    check(name + ": the header, its collapse button and the input are on screen",
-          all(k in parts and inside(parts[k], screen) and parts[k]["h"] >= 44 for k in ("drawerHeader", "collapse", "inputRow")), json.dumps([parts.get(k) for k in ("drawerHeader", "collapse", "inputRow")]))
+    check(name + ": the header, its handle and the input are on screen",
+          all(k in parts and inside(parts[k], screen) and parts[k]["h"] >= 44 for k in ("drawerHeader", "drawerHandle", "inputRow")), json.dumps([parts.get(k) for k in ("drawerHeader", "drawerHandle", "inputRow")]))
     grid = parts.get("drawerGrid")
     # The cells wholly on the grid's first screenful (the rest scroll,
     # clipped, a row cut at the edge among them).
