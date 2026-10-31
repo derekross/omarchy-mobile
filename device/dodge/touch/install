@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Install the dodge touch bring-up on the phone. Run as root, from this
+# directory (copied to the phone), or with the directory as $1.
+# Idempotent. Installs omamobile-touch-load and omamobile-touch.service
+# and enables the unit; it does not start it (one load per boot).
+# Held kos (gpi.ko, spi-geni-qcom.ko, synaptics_tcm2.ko) under
+# /usr/local/lib/omamobile are installed separately.
+set -eu
+SRC=${1:-$(dirname "$0")}
+log() { echo "dodge-touch-install: $*"; }
+[ "$(id -u)" = 0 ] || { log "run as root"; exit 1; }
+install -D -m 755 "$SRC/omamobile-touch-load" /usr/local/sbin/omamobile-touch-load
+install -D -m 644 "$SRC/omamobile-touch.service" /etc/systemd/system/omamobile-touch.service
+systemctl daemon-reload
+systemctl enable omamobile-touch.service
+for f in gpi.ko spi-geni-qcom.ko synaptics_tcm2.ko; do
+	[ -f "/usr/local/lib/omamobile/$f" ] || log "warning: /usr/local/lib/omamobile/$f missing"
+done
+log "done; the next boot loads touch"

@@ -297,3 +297,83 @@ grep -q 'SLOT_SRC=packed' "$init" \
 echo 'ok - stage-1 init logs slot source and dumps bootconfig/bootargs'
 
 rm -f "$bc" "$ba" "$pk"
+
+# Tip-aware wifi / touch load: modprobe first, held .ko fallback.
+wifi_pcie=device/dodge/wifi/omamobile-wifi-pcie
+wifi_ath=device/dodge/wifi/omamobile-wifi-ath12k
+touch_load=device/dodge/touch/omamobile-touch-load
+[[ -x $wifi_pcie ]] || fail "omamobile-wifi-pcie missing"
+[[ -x $wifi_ath ]] || fail "omamobile-wifi-ath12k missing"
+[[ -x $touch_load ]] || fail "omamobile-touch-load missing"
+grep -q 'modprobe' "$wifi_pcie" \
+  || fail "wifi-pcie must prefer modprobe for tip overlay"
+grep -q '/usr/local/lib/omamobile' "$wifi_pcie" \
+  || fail "wifi-pcie must fall back to held kos under /usr/local/lib/omamobile"
+grep -q 'modprobe' "$wifi_ath" \
+  || fail "wifi-ath12k must prefer modprobe for tip overlay"
+grep -q 'gpi' "$touch_load" && grep -q 'spi_geni_qcom' "$touch_load" \
+  && grep -q 'synaptics_tcm2' "$touch_load" \
+  || fail "touch-load must load gpi, spi_geni_qcom, synaptics_tcm2"
+grep -q 'modprobe' "$touch_load" \
+  || fail "touch-load must prefer modprobe for tip overlay"
+grep -q '/usr/local/lib/omamobile' "$touch_load" \
+  || fail "touch-load must fall back to held kos under /usr/local/lib/omamobile"
+# Order: gpi before spi_geni before synaptics (dependency chain).
+awk '
+  /^opt gpi$/ { g=NR }
+  /^opt spi_geni_qcom$/ { s=NR }
+  /^opt synaptics_tcm2$/ { t=NR }
+  END {
+    if (!g || !s || !t) { print "missing opt gpi/spi_geni_qcom/synaptics_tcm2"; exit 1 }
+    if (!(g < s && s < t)) { print "order opt gpi < spi_geni_qcom < synaptics_tcm2 required"; exit 1 }
+  }
+' "$touch_load" || fail "touch-load module order wrong"
+# Runtime preference: with a fake modprobe that succeeds, held insmod must not run.
+tmod=$t/touch-modprobe
+rm -rf "$tmod"
+mkdir -p "$tmod/bin" "$tmod/sys/module" "$tmod/held"
+printf '%s\n' '#!/bin/sh' 'echo modprobe:"$*" >> "'"$tmod"'/log"' 'mkdir -p "'"$tmod"'/sys/module/$(echo "$1" | tr - _)"' 'exit 0' \
+  > "$tmod/bin/modprobe"
+printf '%s\n' '#!/bin/sh' 'echo insmod:"$*" >> "'"$tmod"'/log"' 'exit 0' \
+  > "$tmod/bin/insmod"
+chmod +x "$tmod/bin/modprobe" "$tmod/bin/insmod"
+# Point D at empty held so a mistaken insmod would still be logged.
+cp "$touch_load" "$tmod/touch-load"
+sed -i "s|^D=.*|D=$tmod/held|" "$tmod/touch-load"
+sed -i "s|/sys/module|$tmod/sys/module|g" "$tmod/touch-load"
+chmod +x "$tmod/touch-load"
+: > "$tmod/log"
+PATH="$tmod/bin:$PATH" "$tmod/touch-load" >"$tmod/out" 2>&1 || fail "touch-load with working modprobe should exit 0"
+grep -q 'modprobe:gpi' "$tmod/log" || { cat "$tmod/log" "$tmod/out"; fail "touch-load should modprobe gpi"; }
+grep -q 'modprobe:spi_geni_qcom' "$tmod/log" || fail "touch-load should modprobe spi_geni_qcom"
+grep -q 'modprobe:synaptics_tcm2' "$tmod/log" || fail "touch-load should modprobe synaptics_tcm2"
+grep -q 'insmod:' "$tmod/log" && { cat "$tmod/log"; fail "touch-load must not insmod when modprobe works"; }
+echo "ok - touch-load prefers modprobe over held kos"
+
+# Fallback: modprobe fails, held .ko present -> insmod.
+rm -rf "$tmod"
+mkdir -p "$tmod/bin" "$tmod/sys/module" "$tmod/held"
+printf '%s\n' '#!/bin/sh' 'echo modprobe_fail:"$*" >> "'"$tmod"'/log"' 'exit 1' \
+  > "$tmod/bin/modprobe"
+printf '%s\n' '#!/bin/sh' 'echo insmod:"$*" >> "'"$tmod"'/log"' 'exit 0' \
+  > "$tmod/bin/insmod"
+chmod +x "$tmod/bin/modprobe" "$tmod/bin/insmod"
+: > "$tmod/held/gpi.ko"
+: > "$tmod/held/spi-geni-qcom.ko"
+: > "$tmod/held/synaptics_tcm2.ko"
+cp "$touch_load" "$tmod/touch-load"
+sed -i "s|^D=.*|D=$tmod/held|" "$tmod/touch-load"
+sed -i "s|/sys/module|$tmod/sys/module|g" "$tmod/touch-load"
+chmod +x "$tmod/touch-load"
+: > "$tmod/log"
+PATH="$tmod/bin:$PATH" "$tmod/touch-load" >"$tmod/out" 2>&1 || fail "touch-load held fallback should exit 0"
+grep -q 'insmod:.*gpi' "$tmod/log" || { cat "$tmod/log" "$tmod/out"; fail "touch-load should insmod held gpi.ko"; }
+grep -q 'insmod:.*spi-geni-qcom' "$tmod/log" || fail "touch-load should insmod held spi-geni-qcom.ko"
+grep -q 'insmod:.*synaptics_tcm2' "$tmod/log" || fail "touch-load should insmod held synaptics_tcm2.ko"
+echo "ok - touch-load falls back to held kos when modprobe fails"
+
+[[ -f device/dodge/touch/omamobile-touch.service ]] \
+  || fail "omamobile-touch.service missing"
+grep -q 'ExecStart=/usr/local/sbin/omamobile-touch-load' device/dodge/touch/omamobile-touch.service \
+  || fail "touch unit must ExecStart omamobile-touch-load"
+echo "ok - tip-aware wifi/touch load scripts present"
