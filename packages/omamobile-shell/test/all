@@ -186,6 +186,23 @@ grep -c 'objectName: "drawerHandle"' "$l" >/dev/null || fail "the drawer has a h
 # it takes no touch and draws nothing. The home screen doesn't scale under it
 # (widgets snapped between pixels as it animated).
 grep -c 'mask: Region { item: root.opened ? sheet : null }' "$l" >/dev/null || fail "the closed drawer takes no touch"
+# Nothing changes size as the drawer moves: the dock reserves nothing (the
+# home screen keeps its height free, dockInset), so its window never grows
+# under a settling drawer (a frame of the old buffer centred: the first row
+# jumped half a dock); the search row is never faded in or out; the drawer's
+# render loop is awake before the finger moves (gesturePrepare).
+python3 - "$l" <<'PY3' || fail "the dock reserves nothing and the drawer's layout never changes"
+import re, sys
+src = open(sys.argv[1]).read()
+i = src.index('WlrLayershell.namespace: "omamobile-dock"')
+dock = src[src.rindex("PanelWindow {", 0, i):i]
+assert "exclusionMode: ExclusionMode.Ignore" in dock, dock
+assert "dockAway" not in src, "no dock handover"
+assert "running: root.warm || root.fingerOnDrawer || settle.running" in src
+PY3
+grep -c 'readonly property int dockInset:' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen keeps the dock's height free"
+grep -c 'swipe.drawer.gesturePrepare()' plugins/omamobile.home/DrawerSwipe.qml >/dev/null || fail "a press on the home screen wakes the drawer"
+grep -c 'if (!same) apps = entries' "$l" >/dev/null || fail "an unchanged app list keeps the grid's model"
 python3 - "$l" <<'PY2' || fail "the drawer's window stays mapped"
 import sys
 src = open(sys.argv[1]).read()

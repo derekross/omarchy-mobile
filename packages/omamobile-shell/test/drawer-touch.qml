@@ -40,7 +40,6 @@ Item {
     function init() {
       harness.close()
       tryCompare(harness, "progress", 0, 3000)
-      tryCompare(harness, "dockAway", false, 3000)
       harness.calls = []
       harness.launched = []
       grid.contentY = 0
@@ -49,7 +48,6 @@ Item {
     function openSettled() {
       harness.open("{}")
       tryCompare(harness, "progress", 1, 3000)
-      tryCompare(harness, "dockAway", true, 3000)
       harness.calls = []
       waitForRendering(sheet)
     }
@@ -181,13 +179,10 @@ Item {
       harness.gestureMove(300)
       fuzzyCompare(harness.progress, 300 / sheet.height, 0.001)
       fuzzyCompare(sheet.y, sheet.height - 300, 1, "the sheet's top is where the finger has brought it")
-      verify(!harness.dockAway, "the dock stays under the sliding sheet")
       verify(harness.gestureEnd(-800), "a flick up opens it")
       compare(harness.calls, ["summon {\"gesture\":true}"], "through the host")
       verify(harness.opened)
-      verify(!harness.dockAway, "the dock stays until it is open")
       tryCompare(harness, "progress", 1, 3000)
-      tryCompare(harness, "dockAway", true, 3000)
       verify(!input.activeFocus, "no keyboard after a swipe")
       keyClick(Qt.Key_A)
       compare(harness.query, "a", "typing on a keyboard still searches")
@@ -201,6 +196,45 @@ Item {
       compare(harness.calls, [])
       verify(!harness.opened)
       tryCompare(harness, "progress", 0, 3000)
+    }
+
+    // Where the grid, its first cell, the header and the search row sit on
+    // the sheet, and the sheet's size: none of it may change as the drawer
+    // moves (only the sheet's y does), or the first row jumps at the start
+    // of a pull or the end of a slide.
+    function layoutOf() {
+      var cell = findChild(grid, "app-app00")
+      var inputRow = findChild(harness, "inputRow")
+      return JSON.stringify({
+        sheet: [sheet.width, sheet.height],
+        grid: [grid.x, grid.y, grid.width, grid.height],
+        cell: cell ? [cell.mapToItem(sheet, 0, 0).x, cell.mapToItem(sheet, 0, 0).y] : null,
+        header: findChild(harness, "drawerHeader").height,
+        input: [inputRow.y, inputRow.height, inputRow.opacity, inputRow.visible]
+      })
+    }
+
+    function test_nothing_moves_on_the_sheet_but_the_sheet() {
+      var closed = layoutOf()
+      harness.gestureBegin()
+      harness.gestureMove(300)
+      compare(layoutOf(), closed, "mid-swipe")
+      harness.gestureEnd(-800)
+      compare(layoutOf(), closed, "settling open")
+      tryCompare(harness, "progress", 1, 3000)
+      wait(200)
+      compare(layoutOf(), closed, "open and settled")
+      var c = handleCentre()
+      var t = touchEvent(view)
+      t.press(0, view, c.x, c.y).commit()
+      compare(layoutOf(), closed, "a finger on the handle")
+      drag(t, c, 120, 6, 20)
+      tryVerify(function() { return harness.pulling }, 5000)
+      compare(layoutOf(), closed, "mid-pull")
+      view.now += 150
+      t.release(0, view, c.x, c.y + 120).commit()
+      tryCompare(harness, "progress", 0, 3000)
+      compare(layoutOf(), closed, "closed again")
     }
 
     function test_no_home_swipe_while_open() {

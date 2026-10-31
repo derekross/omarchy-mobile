@@ -594,6 +594,14 @@ Item {
   }
   readonly property var drawer: drawerLink.item ? drawerLink.item.drawer : null
   readonly property real drawerProgress: drawer && drawer.progress !== undefined ? Number(drawer.progress) || 0 : 0
+  // The dock (omamobile.launcher) reserves no space, so that no window
+  // changes size as the drawer opens over it; the home screen keeps its
+  // height free here instead: the drawer's dockHeight, nothing while the
+  // on-screen keyboard (which covers the dock) is up, and the same formula
+  // as the launcher's when the drawer is out of reach.
+  readonly property int dockInset: drawer && drawer.dockHeight !== undefined
+    ? (drawer.oskOpen ? 0 : drawer.dockHeight)
+    : Math.max(48, Style.space(48)) + Style.spacing.xxl * 2
 
   // The pages are being swiped, or slide to a page: the neighbours show too.
   readonly property bool pagesMoving: !!pager && pager.swiping
@@ -1133,6 +1141,7 @@ Item {
         objectName: "pageDots"
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: toolbar.visible ? toolbar.top : parent.bottom
+        anchors.bottomMargin: toolbar.visible ? 0 : root.dockInset
         height: root.viewLayout.pages.length > 1 || root.editing ? 28 : Style.spacing.lg
         spacing: 0
 
@@ -1169,7 +1178,7 @@ Item {
         visible: root.editing
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottomMargin: Style.spacing.sm
+        anchors.bottomMargin: Style.spacing.sm + root.dockInset
         height: visible ? root.touch + Style.spacing.lg : 0
         spacing: Style.spacing.sm
 
@@ -1311,6 +1320,7 @@ Item {
       HomeSheets {
         z: 100
         anchors.fill: parent
+        anchors.bottomMargin: root.dockInset
         home: root
       }
     }

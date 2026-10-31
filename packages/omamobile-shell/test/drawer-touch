@@ -49,6 +49,7 @@ window = "\n".join(l for l in window.split("\n")
 cell = block(src.index("  component AppCell: Item {"))
 
 out = """import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui

@@ -116,7 +116,12 @@ Item {
     var entries = []
     for (var i = 0; i < rows.length; i++)
       if (rows[i] && rows[i].entry) entries.push(rows[i].entry)
-    apps = entries
+    // The same list again (each open asks; the icon refresh after a slide
+    // asks again) keeps the model: a new array resets the grid and rebuilds
+    // every cell, a visible flash under a sliding drawer.
+    var same = entries.length === apps.length
+    for (var j = 0; same && j < entries.length; j++) same = entries[j] === apps[j]
+    if (!same) apps = entries
   }
 
   onQueryChanged: refreshApps()
@@ -189,7 +194,6 @@ Item {
     refreshApps()
     opened = true
     focusInputOnShow = !gesture
-    if (!gesture) dockAway = true
     focusDrawer()
     settleTo(true, gesture ? gestureSpeed : 0)
     gestureSpeed = 0
@@ -202,7 +206,6 @@ Item {
     query = ""
     homeSwipe = false
     pulling = false
-    dockAway = false
     settleTo(false, gestureSpeed)
     gestureSpeed = 0
   }
@@ -254,9 +257,14 @@ Item {
   readonly property int touch: Math.max(44, Style.space(44))
   readonly property int inputHeight: Math.max(48, Style.space(48))
   readonly property int dockHeight: inputHeight + Style.spacing.xxl * 2
-  // The dock shows on the home screen unless the drawer has the bottom
-  // edge (dockAway, below).
-  readonly property bool dockShown: !dockAway && !appOnScreen
+  // The dock shows on every empty workspace, under the drawer too: it
+  // reserves no space (ExclusionMode.Ignore), so neither its coming and
+  // going nor the drawer's opening resizes any window. The home screen keeps
+  // the dock's height free itself (omamobile.home, dockInset). When the dock
+  // reserved its height and went away under an open drawer, the drawer's
+  // window grew by it as the slide ended, and the compositor showed the old
+  // buffer centred in the new size for a frame: the grid jumped half a dock.
+  readonly property bool dockShown: !appOnScreen
   // No dock under an app: while the focused workspace has a window, the
   // dock (and its exclusive zone) goes away and only the home pill's thin
   // strip stays at the bottom, as on a phone. Home (an empty workspace)
@@ -278,9 +286,6 @@ Item {
   property bool homeSwipe: false
   property bool pulling: false
   readonly property bool fingerOnDrawer: homeSwipe || pulling
-  // The sheet is drawn: open, moving or under a finger. Closed, nothing in
-  // the (always mapped) drawer window is.
-  readonly property bool drawerShown: opened || fingerOnDrawer || progress > 0 || settle.running
   // This touch moved the drawer, so it is not also a tap on an app.
   property bool pullMoved: false
   // The first pixels a tap's jitter may move before a pull starts.
@@ -292,14 +297,21 @@ Item {
   // The speed (px/s, down positive) a finger let the drawer go at, for the
   // settle that follows through the host's summon or hide.
   property real gestureSpeed: 0
-  // The drawer has the bottom edge: set once it has slid fully open (at
-  // once for a tap on the dock, whose keyboard needs the edge), cleared as
-  // soon as it leaves the open place (a pull starts, or it closes). The
-  // dock's coming and going resizes the home screen (it sits between the
-  // bar and the dock), so it happens only while the sheet still covers the
-  // home screen, never while the home screen shows: with the dock back only
-  // after the drawer had slid away, the widgets jumped as it settled.
-  property bool dockAway: false
+  // The drawer window's render loop is kept ticking from the moment a
+  // finger lands on the home screen (gesturePrepare) until the drawer
+  // settles: waking from idle mid-swipe, its first frame waited on the
+  // compositor (about 100 ms: the sheet stuck, then jumped).
+  property bool warm: false
+  Timer { id: warmTimer; interval: 600; onTriggered: root.warm = false }
+  function gesturePrepare() {
+    if (opened) return false
+    warm = true
+    warmTimer.restart()
+    return true
+  }
+  // OMAMOBILE_DRAWER_FPS=1 logs how many frames the drawer window ticked per
+  // gesture ("omamobile-launcher: drawer N frames in M ms").
+  readonly property bool fpsLog: Quickshell.env("OMAMOBILE_DRAWER_FPS") === "1"
   // What takes the keyboard focus when the drawer shows: the search field
   // after a tap on the dock, the sheet after a swipe (open above).
   property bool focusInputOnShow: true
@@ -336,7 +348,6 @@ Item {
   }
 
   function settled(open) {
-    dockAway = open
     // New icons (an app installed since): after the slide, so the grid
     // doesn't rebuild under it.
     if (open && appLibrary) appLibrary.refreshIcons()
@@ -391,17 +402,20 @@ Item {
       required property var modelData
       screen: modelData
 
-      // Hidden while the drawer has the bottom edge (dockAway), so the
-      // on-screen keyboard takes it and the drawer's input sits right above.
+      // On every empty workspace, under the drawer too (dockShown). It
+      // reserves nothing: the drawer slides up over it from the screen's
+      // bottom, the drawer's own search row taking the pill's place, and no
+      // window changes size when the drawer opens or closes. The on-screen
+      // keyboard covers it.
       visible: root.dockShown
       anchors { bottom: true; left: true; right: true }
       implicitHeight: root.dockHeight
-      exclusionMode: ExclusionMode.Auto
+      exclusionMode: ExclusionMode.Ignore
       color: Commons.Color.bar.background
       WlrLayershell.namespace: "omamobile-dock"
-      // Bottom, not Top: its exclusive zone still keeps windows off it, and
-      // fullscreen windows (the screensaver, video) cover it. On Top it was
-      // drawn over a fullscreen window when it re-mapped after the drawer.
+      // Bottom, not Top: fullscreen windows (the screensaver, video) cover
+      // it. On Top it was drawn over a fullscreen window when it re-mapped
+      // after the drawer.
       WlrLayershell.layer: WlrLayer.Bottom
 
       // Swipe up on the dock for recent apps (omamobile.switcher), as on
@@ -673,9 +687,11 @@ Item {
     // Mapped for the life of the shell. Mapped on each open, a new layer
     // surface's first frames drew before the output's scale and the slide
     // applied (the grid at 3x, or faded at its final place, then a jump):
-    // now opening, closing and dragging only move the sheet. Closed, the
-    // window draws nothing (its content is hidden, so Qt renders no
-    // frames), takes no touch (an empty input region) and no keyboard.
+    // now opening, closing and dragging only move the sheet (no visible,
+    // anchor or size changes anywhere). Closed, the sheet sits just below
+    // the window and the scrim is at opacity 0, so nothing is drawn and,
+    // with nothing changing, Qt renders no frames; the window takes no
+    // touch (an empty input region) and no keyboard.
     visible: true
     mask: Region { item: root.opened ? sheet : null }
     anchors { top: true; bottom: true; left: true; right: true }
@@ -697,7 +713,19 @@ Item {
       anchors.fill: parent
       color: Commons.Color.menu.scrim
       opacity: root.progress
-      visible: root.drawerShown && root.progress > 0 && root.progress < 1
+    }
+
+    // Keeps this window's render loop ticking every vsync while a finger is
+    // on the home screen or the drawer, or the drawer slides, so a new
+    // position is drawn on the next frame, never after an idle wake-up.
+    FrameAnimation {
+      id: drawerTicker
+      running: root.warm || root.fingerOnDrawer || settle.running
+      property real since: 0
+      onRunningChanged: {
+        if (running) { since = root.clock(); return }
+        if (root.fpsLog) console.log("omamobile-launcher: drawer", currentFrame, "frames in", Math.round(root.clock() - since), "ms")
+      }
     }
 
     Rectangle {
@@ -709,7 +737,6 @@ Item {
       // and clipped to itself, so nothing of it shows above its top edge
       // while it slides; the scrim does the dimming.
       y: Math.round((1 - root.progress) * height)
-      visible: root.drawerShown
       clip: true
       color: Commons.Color.menu.background
 
@@ -781,10 +808,9 @@ Item {
               root.pullSamples = []
               root.pulling = true
               root.pullMoved = true
-              // The dock comes back under the sheet now, while it covers the
-              // home screen, and the keyboard goes.
-              root.dockAway = false
-              sheet.forceActiveFocus()
+              // Nothing else changes here: no focus (the keyboard folding
+              // would resize the window under the finger), no dock, no
+              // layout; only the sheet's y follows.
             }
             root.progress = Math.max(0, Math.min(1, 1 - (dy - base) / root.travel))
             root.pullSamples = LauncherModel.addSample(root.pullSamples, root.clock(), point.scenePosition.y)
@@ -992,12 +1018,9 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
+        // Always the dock's height, always shown: it rides up with the
+        // sheet over the dock's own pill and comes to rest exactly on it.
         height: root.dockHeight
-        // While a swipe slides the drawer up, the dock's own search pill is
-        // still under it; the drawer's field shows once the dock has gone,
-        // in its place.
-        opacity: root.dockAway ? 1 : 0
-        Behavior on opacity { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
         TextField {
           id: input

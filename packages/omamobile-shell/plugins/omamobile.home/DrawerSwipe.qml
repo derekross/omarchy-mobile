@@ -79,7 +79,15 @@ Item {
     PointHandler {
       acceptedDevices: PointerDevice.TouchScreen
       enabled: swipe.active
-      onActiveChanged: if (active) swipe.blocked = swipe.innerGestureAt(point.scenePressPosition)
+      onActiveChanged: {
+        if (!active) return
+        swipe.blocked = swipe.innerGestureAt(point.scenePressPosition)
+        // Wake the drawer's window now, while the finger hasn't moved, so
+        // its first frame of the swipe isn't a wake-up from idle.
+        if (!swipe.blocked && swipe.drawer && typeof swipe.drawer.gesturePrepare === "function") {
+          try { swipe.drawer.gesturePrepare() } catch (e) { }
+        }
+      }
     }
   }
 

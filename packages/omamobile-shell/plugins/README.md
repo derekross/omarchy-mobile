@@ -296,7 +296,9 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   the very bottom, the Phone app's Favorites, Recents, Contacts and Keypad
   tabs among them. 44 px, a whole touch target (TOUCH-PLAN 2.5), is all an
   app gives up. The zone goes with the strip: nothing is reserved for it on
-  the home screen (the dock reserves its own height there), with the drawer
+  the home screen (where the dock reserves nothing since 0.2.56: the home
+  screen keeps its height free, so the drawer opening over it resizes no
+  window), with the drawer
   open, under the lock screen's keyboard, or for a real fullscreen window
   (video, the screensaver), which keeps the whole screen. Under the lock it
   isn't drawn (no `above_lock` rule), and the lock covers the whole screen
