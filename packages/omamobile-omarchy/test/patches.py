@@ -384,6 +384,11 @@ def real_package(t):
     qml_parse(root)
     lock_glance(root)
     app_icons_largest(root)
+    lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
+    launch = lib.split("  function launch(desktopId, name) {", 1)
+    ok("function launchesShellSurface(id)" in lib and 'String(command[0]).replace(/^.*\\//, "") === "omarchy-shell"' in lib
+       and len(launch) == 2 and "if (!root.launchesShellSurface(id)) root.beginLaunchFeedback(name)" in launch[1].split("\n  }", 1)[0],
+       "real omarchy: no launch toast for an entry that runs omarchy-shell, every other launch keeps it (0025)")
     for name in ("omarchy-channel-set", "omarchy-refresh-pacman"):
         text = read(root, "usr/bin/" + name)
         guard = text.find("if [[ -x /usr/bin/omamobile-update ]]")
