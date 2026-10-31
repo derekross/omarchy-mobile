@@ -124,11 +124,15 @@ each session. Those backups are never in git.
 - **Do not use `omamobile fastboot` on this phone yet.** That tool falls
   through to `sysrq c` when `reboot-to bootloader` is ignored, and we have
   not characterised what a panic does on this ABL. Prefer the buttons
-  instead of `omamobile fastboot` / sysrq-c. The combos below are the usual
-  ones for this form factor; they have **not** been verified on this phone:
-  - **Forced restart (unverified):** hold **Power** for ~30 s until the phone resets.
-  - **Fastboot / bootloader (unverified):** from power-off (or after a forced
-    restart), hold **Volume Down + Power** for ~20 s until the bootloader screen.
+  instead of `omamobile fastboot` / sysrq-c. Button behaviour on this phone
+  (Omarchy Mobile on slot B; confirmed 2026-10-31):
+  - **Forced restart (working):** holding **Power** alone does **not** force
+    a restart under Omarchy Mobile — it opens the Omarchy power menu
+    (tested 2026-10-31). Holding **Power + Volume Up + Volume Down** until
+    the phone resets is what has worked for us when hung (confirmed; no
+    specific hold time claimed).
+  - **Fastboot / bootloader (working):** from power-off, hold **Volume Down**
+    while powering on (confirmed; usual method here).
 - Until a `tools/phone-smoke` report from images built by
   `bin/omamobile images` on this branch exists, treat the shared init path
   as **untested on dodge**.
