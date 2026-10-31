@@ -123,6 +123,17 @@ Item {
     startProc.running = true
   }
 
+  // The PIN page is the only one that types: leaving it (the run started,
+  // or back to the overview) takes the focus and the on-screen keyboard
+  // away. The sheet covers the home bar's hide key, so nothing else would
+  // hide the keyboard (2026-10-31, the first run on the Pixel 7 Pro).
+  onPageChanged: {
+    if (page === "auth") return
+    pinField.focus = false
+    Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call",
+                             "omamobile.keyboard", "hideKeyboard", ""])
+  }
+
   function followEvents(path) {
     eventsPath = path
     detailLines = []
@@ -764,12 +775,24 @@ Item {
           visible: root.page === "progress" || (root.page === "result" && root.detailLines.length > 0)
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.top: root.page === "progress" ? progressColumn.bottom : undefined
+          // Anchors that change with the page go through AnchorChanges: as
+          // conditional bindings, the progress page's top anchor stayed set
+          // on the result page, so the box ran from the header down to the
+          // buttons and covered the result's text (2026-10-31).
           anchors.topMargin: Style.spacing.xl
-          anchors.bottom: root.page === "progress" ? parent.bottom : resultButtons.top
           anchors.bottomMargin: root.page === "progress" ? 0 : Style.spacing.lg
           height: root.page === "result" ? (root.detailsOpen ? parent.height / 2 : root.touchSize) : 0
           z: 1
+          states: [
+            State {
+              when: root.page === "progress"
+              AnchorChanges { target: detailsBox; anchors.top: progressColumn.bottom; anchors.bottom: detailsBox.parent.bottom }
+            },
+            State {
+              when: root.page === "result"
+              AnchorChanges { target: detailsBox; anchors.top: undefined; anchors.bottom: resultButtons.top }
+            }
+          ]
 
           SheetAction {
             id: detailsToggle

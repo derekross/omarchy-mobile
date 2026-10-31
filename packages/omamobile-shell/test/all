@@ -476,6 +476,8 @@ if grep -rnE 'appLibrary\.launch\(|openUrlExternally|"gtk-launch"|execArgv\(\["o
   fail "every launch path goes through omamobile-launch"
 fi
 grep -c 'Quickshell.execDetached(LauncherModel.appArgv(entry.id))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer launches through omamobile-launch"
+grep -c '!LauncherModel.opensShellSurface(entry))' plugins/omamobile.launcher/Launcher.qml >/dev/null &&
+  grep -c '!HomeModel.opensShellSurface(entry))' plugins/omamobile.home/Home.qml >/dev/null || fail "no launch toast for an entry that opens a shell surface (drawer and home)"
 grep -c 'Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))' plugins/omamobile.home/Home.qml >/dev/null || fail "home-screen apps launch through omamobile-launch"
 grep -c 'tile.home.launch(tile.entry.app)' plugins/omamobile.home/AppTile.qml >/dev/null || fail "app tiles launch through the home screen"
 grep -c 'Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.launch goes through omamobile-launch"
@@ -499,6 +501,10 @@ if command -v node >/dev/null; then
 const L = require("./plugins/omamobile.launcher/LauncherModel.js")
 const eq = (a, b, what) => { if (a !== b) throw new Error(what + ": " + a + " != " + b) }
 eq(L.drawerColumns(4, 456, 480, 12), 4, "upright")
+eq(L.opensShellSurface({ command: ["omarchy-shell", "shell", "summon", "omamobile.update", "{}"] }), true, "the Updates entry opens a shell surface")
+eq(L.opensShellSurface({ command: ["/usr/bin/omarchy-shell", "osd"] }), true, "by path too")
+eq(L.opensShellSurface({ command: ["chromium"] }), false, "an app keeps the launch toast")
+eq(L.opensShellSurface({}), false, "an entry without a command keeps it")
 eq(L.drawerColumns(4, 1016, 480, 12), 8, "on its side")
 eq(L.drawerColumns(5, 1016, 480, 12), 11, "five across upright")
 eq(L.drawerColumns(4, 1016, 0, 12), 4, "no screen known")
@@ -577,6 +583,13 @@ fi
 grep -c 'startProc.write(startProc.secret + "\\n")' plugins/omamobile.update/Update.qml >/dev/null || fail "the PIN goes to stdin"
 if grep -nE 'command: .*(secret|pinField)' plugins/omamobile.update/Update.qml; then fail "the PIN is never in argv"; fi
 grep -c 'exclusionMode: ExclusionMode.Normal' plugins/omamobile.update/Update.qml >/dev/null || fail "the sheet stays above the on-screen keyboard"
+u=plugins/omamobile.update/Update.qml
+awk '/onPageChanged: \{/,/^  \}/' $u | grep -c '"omamobile.keyboard", "hideKeyboard"' >/dev/null &&
+  awk '/onPageChanged: \{/,/^  \}/' $u | grep -c 'if (page === "auth") return' >/dev/null ||
+  fail "leaving the PIN page hides the on-screen keyboard"
+grep -c 'AnchorChanges { target: detailsBox; anchors.top: undefined; anchors.bottom: resultButtons.top }' $u >/dev/null &&
+  ! grep -c 'anchors.top: root.page === "progress" ? progressColumn.bottom' $u >/dev/null ||
+  fail "the result page's Details box sits above the buttons, not over the result"
 python3 -B - <<'PY' || fail "the update sheet lints clean"
 import importlib.machinery, importlib.util, os, sys
 loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
@@ -700,6 +713,14 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 [[ -f $tmp/root/usr/share/applications/omamobile-agent.desktop ]] || fail "install stages the AI Agent shortcut"
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$tmp/root/usr/share/applications/omamobile-agent.desktop" || fail "AI Agent desktop entry validates"
+fi
+# The app drawer's Updates entry opens the update sheet (omamobile.update)
+u=$tmp/root/usr/share/applications/omamobile-update.desktop
+[[ -f $u ]] && grep -c '^Exec=omarchy-shell shell summon omamobile.update "{}"$' "$u" >/dev/null &&
+  grep -c '^Icon=software-updater$' "$u" >/dev/null && [[ -f plugins/omamobile.update/manifest.json ]] ||
+  fail "install stages the Updates entry, which opens the update sheet"
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$u" || fail "Updates desktop entry validates"
 fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
 # Updates reach users set up earlier: setup-user reruns at every login, and
