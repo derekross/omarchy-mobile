@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) touch: the supplies, then the chip ID
 
-Status (2026-10-27): all gates passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on, reports touches with the axes right, and the lock screen PIN was entered by touch. Autoload passed too: the touch comes up on its own at boot. T6 (2026-10-29) booted the final node in review, [linux-omarchy-mobile#134](https://github.com/derekross/linux-omarchy-mobile/pull/134), with the driver's review fixes, [#133](https://github.com/derekross/linux-omarchy-mobile/pull/133): it passes the same way ([NOTES.md](NOTES.md)).
+Status (2026-10-29): all gates passed (T2 stopped on its voltage rule, which T2b fixed): the FT3658 answers with chip ID 0x56 once its supplies are on, reports touches with the axes right, and the lock screen PIN was entered by touch. Autoload passed too: the touch comes up on its own at boot. T6 (2026-10-29) booted the final node, [linux-omarchy-mobile#134](https://github.com/derekross/linux-omarchy-mobile/pull/134), since merged, with the driver's review fixes, [#133](https://github.com/derekross/linux-omarchy-mobile/pull/133): it passes the same way ([NOTES.md](NOTES.md)).
 
 The touch controller is a FocalTech FT3658 (chip ID 0x56) on USI0 SPI,
 wired as the Pixel 7 Pro's S3908. A local driver

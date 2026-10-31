@@ -7,7 +7,7 @@ The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](ht
 
 ## 2026-10-29: the touch node, suspend-to-idle and LDO25M (T6)
 
-One boot of the board branch in review ([linux-omarchy-mobile#134](https://github.com/derekross/linux-omarchy-mobile/pull/134): the GPU, the haptics, `mem_sleep_default=s2idle`, LDO25M fixed at 1.8 V and the final touch node), merged with the driver's review fixes ([#133](https://github.com/derekross/linux-omarchy-mobile/pull/133): DMA-safe SPI buffers, `fsleep()`), with `CONFIG_TOUCHSCREEN_FOCALTECH_FT3658=m` from this directory's `kernel.config`. The modules were pushed before the boot.
+One boot of kernel `7.3.0-rc6-omamobile-push1-g8d46192a301e`: the board branch of [linux-omarchy-mobile#134](https://github.com/derekross/linux-omarchy-mobile/pull/134) (the GPU, the haptics, `mem_sleep_default=s2idle`, LDO25M fixed at 1.8 V and the final touch node, since merged) merged with the driver's review fixes, [#133](https://github.com/derekross/linux-omarchy-mobile/pull/133) (DMA-safe SPI buffers, `fsleep()`), with `CONFIG_TOUCHSCREEN_FOCALTECH_FT3658=m` from `kernel/configs/omamobile.config`. The build's local merge, `8d46192a3`, predates the commit messages' test paragraphs and sign-offs; its tree is the same as the merge of the PR heads, #134 at `ace1ba57fbe7` and #133 at `fdc4f4403103` (both `0eb5d6eb`). The modules were pushed before the boot.
 
 - `/sys/power/mem_sleep` reads `[s2idle] deep`.
 - `vdd-ts` reads 1.8 V and `avdd-ts` 3.0 V, each with the touch controller as its only consumer.
@@ -60,7 +60,14 @@ fastboot (getvar: current slot A, B retry 0, not unbootable), and
 taken from Linux right after (each partition `ro=1`, found by `PARTNAME`,
 checksum-matched against the phone): against the 2026-10-27 baseline,
 `modem_a` and `modem_b` match, `persist`, `efs`, `efs_backup` and
-`modem_userdata` differ in 100-750 bytes each, `devinfo` in 2. That copy is
+`modem_userdata` differ in 100-750 bytes each, `devinfo` in 2. Those bytes
+sit in the same places as after boot 6 (compared block by block, both
+backups read-only): in each F2FS partition, the checkpoint (the other of
+its two copies this time) and the root inode's node block written just
+before it; in `persist`, the ext4 superblock, the first five journal blocks
+and one inode table block, where only the ctime of `/sensors` and
+`/sensors/registry` moved, the same two inodes as after boot 6. No data
+block changed in any of them, so recovery's mount explains it. That copy is
 the baseline now. To reach fastboot without spending a retry, hold Power
 and Volume Down on the running phone until the bootloader shows, without
 shutting down first.
