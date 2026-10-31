@@ -1077,6 +1077,8 @@ default: it is the only setting that moves data. `HOLD=2` (answer the CP
 on ap2cp_wakeup) moved none and is kept only as a diagnostic, and `HOLD=0`
 lets the link cycle, for as long as the CP link lasts.
 
+**Precondition: no `systemd.mask=` for these units on the command line.** `systemctl unmask` can't lift a mask the kernel command line sets, so check `tr ' ' '\n' < /proc/cmdline | grep -E 'mask=omamobile-gnss'` prints nothing first: the daily bootargs mask none of `omamobile-gnss.service`, `omamobile-gnss-nmea.service` or the socket, but the older bring-up overlays (`public-native-root`, `public-phone-local`) mask `omamobile-gnss.service`.
+
 **Attended only, and not for the daily boot.** With these drop-ins in place
 any GeoClue client can start a session, and a session can still hang the
 SoC with the modem up (about 170 s after ONLINE while the link cycles), so
