@@ -577,6 +577,13 @@ fi
 grep -c 'startProc.write(startProc.secret + "\\n")' plugins/omamobile.update/Update.qml >/dev/null || fail "the PIN goes to stdin"
 if grep -nE 'command: .*(secret|pinField)' plugins/omamobile.update/Update.qml; then fail "the PIN is never in argv"; fi
 grep -c 'exclusionMode: ExclusionMode.Normal' plugins/omamobile.update/Update.qml >/dev/null || fail "the sheet stays above the on-screen keyboard"
+u=plugins/omamobile.update/Update.qml
+awk '/onPageChanged: \{/,/^  \}/' $u | grep -c '"omamobile.keyboard", "hideKeyboard"' >/dev/null &&
+  awk '/onPageChanged: \{/,/^  \}/' $u | grep -c 'if (page === "auth") return' >/dev/null ||
+  fail "leaving the PIN page hides the on-screen keyboard"
+grep -c 'AnchorChanges { target: detailsBox; anchors.top: undefined; anchors.bottom: resultButtons.top }' $u >/dev/null &&
+  ! grep -c 'anchors.top: root.page === "progress" ? progressColumn.bottom' $u >/dev/null ||
+  fail "the result page's Details box sits above the buttons, not over the result"
 python3 -B - <<'PY' || fail "the update sheet lints clean"
 import importlib.machinery, importlib.util, os, sys
 loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
