@@ -1,13 +1,87 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 (oriole) bring-up notes
 
-Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Nothing has been flashed or booted yet: the phone facts come from read-only adb and fastboot queries of a stock phone.
+Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference or a recovered report still to check). The October 14–16 phone facts below came from read-only queries of a stock phone; later tests booted Linux on a Pixel 6.
 
 Sources:
 
 - `F/`: Google's public factory image `oriole-cp3a.261005.002.a1` ([developers.google.com/android/images](https://developers.google.com/android/images#oriole)), read with HTTP range requests; facts only, no files kept in the repository.
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
+
+## 2026-10-31: build provenance and recovery limits
+
+This describes the unpublished stack in the October 30 smoke report. It is
+not a reproducible build of the public Oriole descriptor or an installer
+qualification. The records and recovered artifacts were audited offline;
+this audit did not reflash or inspect the phone's current partitions.
+
+- **Kernel** [V, recovered source metadata]: the base is
+  [`omamobile` commit `4bd35d34abb9`](https://github.com/derekross/linux-omarchy-mobile/commit/4bd35d34abb92a745479a2de62816b28304b4449).
+  The native build used a detached worktree at that commit with unpublished
+  local changes, producing
+  `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`.
+  There is no published branch containing that complete integration tree.
+- **Packages** [V, recovered sources and build receipts]: the mobile source
+  was local branch `pixel6-bringup`, based on
+  [`1155a7c352ed`](https://github.com/derekross/omarchy-mobile/commit/1155a7c352edf6313fb4e2ff02f054c9cb1902b6),
+  with unpublished changes and separate package-source snapshots. The
+  `omamobile-device-oriole 0.1.9-2` source matches all 24 files in its build
+  receipt; its archived package and the GPU, Wi-Fi, Bluetooth, torch,
+  battery, charger, NFC and backlight packages are local builds, not
+  packages from the project's published repository. The device package
+  was built in an offline ARM64 package container. The smoke report
+  establishes the installed versions; source receipts alone do not.
+- **Shell** [V, recovered package]: local `omamobile-shell 0.2.12-1` was
+  rebuilt from the installed local 0.2.10 source on
+  `omamobile-oriole-canvas-budget`, preserving its phone-specific files and
+  backporting the Canvas budget fix from
+  [`be98c2c22e2b`](https://github.com/derekross/omarchy-mobile/commit/be98c2c22e2b260300c59787861fee200ef2ad58).
+  The recovered package's `runtime.js` matches that commit byte for byte.
+  This is not a claim that upstream shell 0.2.12 was installed unchanged.
+- **Keyring correction** [V, recovered root image]: the local rebuild
+  `omamobile-keyring 20261013.oriole1-1` retained the upstream public key
+  and added a local public signing key to `omamobile.gpg` and its trusted
+  list. The keyring payload matches the installed package's mtree in the
+  recovered image; the additional key verifies the archived local device
+  package. The local key therefore entered the packaged trust list, not
+  only the build environment. The rebuilt source recipe has not yet been
+  recovered; this establishes the package contents, not its exact build
+  command. This does not follow the contributor-build
+  policy, and that rebuilt keyring must not be distributed as the project's
+  keyring. Neither the modified keyring nor signing material is included
+  in this PR. The correction for the next image is the existing
+  [contributor build workflow](../../docs/RELEASES.md#10-signing):
+  unchanged upstream keyring, preserved published-package signatures,
+  separate `keys/oriole/` and `out/oriole/`, and local-key trust confined to
+  the build image. Any later on-device local trust is a separate owner
+  action. No installed trust database was changed by this audit.
+- **Slot B installation** [I, historical run records]: the initial root
+  installation used the local `tools/install-phone` after its dry run,
+  writing `boot_b`, `vendor_boot_b`, `dtbo_b` and `userdata`. Later kernel
+  deployments used the local `bin/omamobile push` with B-image readback.
+  Bring-up also used separately owner-authorized exceptions: a flags-3
+  stock copy of `vbmeta_b`, and an audited B-success flag update at offset
+  `0x35` in `devinfo`, preserving the other bytes and restoring read-only
+  protection. Early verification tests restored original `vbmeta_b`;
+  the later native-root run records retain the B verification change.
+  These exceptions are historical facts, not instructions or an extension
+  of this repository's public installer permissions.
+- **Slot A and bootloaders** [I, historical run records]: before Linux
+  installation, the matching factory build and full OTA booted stock on
+  B and then A, both reporting `slider-17.0-15681480`. The separate
+  per-slot bootloader-version variables were unsupported, so independent
+  partition-version equality was not established. The subsequent Linux
+  records preserve A's images and slot record. A fresh partition audit
+  has not been performed for this PR. `userdata` now contains Linux;
+  returning to Android requires deliberate data restoration, not simply
+  switching to slot A.
+
+## 2026-10-30: native boot and RTC alarm status
+
+- [V] A Pixel 6 booted native Linux from slot B with its root on `userdata`, using the unpublished `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty` kernel and a separate integration package set. A read-only `phone-smoke --here --json` run passed all required checks: storage guard, root, USB and desktop session. It reported no failed units, oops, BUG or WARN, and 48 existing dmesg error lines; sound, sensors and cameras were skipped. This is a test-phone result, not an installation claim for the public images.
+- [V, source] On the published kernel's `omamobile` branch, the S2MPG10 alarm callback reads `S2MPS14_REG_ST2` at offset `0x08`. On S2MPG10 that is `INT3M`; [Google's register definitions](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/include/linux/mfd/samsung/s2mpg10-register.h) place `STATUS2` at `0x0d`, and its [RTC driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/rtc/rtc-s2mpg10.c) reads the alarm-0 status bit there. The proposed kernel fix is S2MPG10-specific; the S2MPG12 path remains unchanged. The test phone's unpublished kernel already contains the correction.
+- [I] The smoke test does not exercise a live pending alarm, alarm delivery, suspend or wake. Those paths remain to be independently verified.
 
 ## 2026-10-16: stage 0, part 2: a retail Pixel 6 (stock, bootloader locked)
 
