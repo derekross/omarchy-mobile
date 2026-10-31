@@ -701,6 +701,14 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$tmp/root/usr/share/applications/omamobile-agent.desktop" || fail "AI Agent desktop entry validates"
 fi
+# The app drawer's Updates entry opens the update sheet (omamobile.update)
+u=$tmp/root/usr/share/applications/omamobile-update.desktop
+[[ -f $u ]] && grep -c '^Exec=omarchy-shell shell summon omamobile.update "{}"$' "$u" >/dev/null &&
+  grep -c '^Icon=software-updater$' "$u" >/dev/null && [[ -f plugins/omamobile.update/manifest.json ]] ||
+  fail "install stages the Updates entry, which opens the update sheet"
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$u" || fail "Updates desktop entry validates"
+fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
 # Updates reach users set up earlier: setup-user reruns at every login, and
 # only for a user whose first run left the marker the unit waits for.
