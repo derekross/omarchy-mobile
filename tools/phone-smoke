@@ -100,7 +100,7 @@ fi
 
 # ---------------------------------------------------------------- kernel health
 oops=$(dmesg 2>/dev/null | grep -cE 'Oops|BUG:|Kernel panic|Unable to handle kernel' || true)
-warns=$(dmesg 2>/dev/null | grep -cE 'WARNING: CPU' || true)
+warns=$(dmesg 2>/dev/null | grep -cE 'WARNING: (CPU:|drivers/)' || true)
 errs=$(dmesg --level=emerg,alert,crit,err 2>/dev/null | wc -l)
 if ((oops)); then
   check "not ok" 1 "kernel health" "$oops oops/BUG, $warns WARN, $errs error lines in dmesg"

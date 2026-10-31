@@ -2,11 +2,51 @@
 # SPDX-License-Identifier: MIT
 # PCIe and the power sequencer only. ath12k is loaded once,
 # afterwards, by omamobile-wifi-ath12k.service.
+#
+# Prefer modprobe so a tip Image with a tmpfs modules overlay gets the
+# matching pwrseq/phy. Fall back to /usr/local/lib/omamobile (the
+# packaged gpu2 held kos) when there is no modules tree for uname -r
+# yet — that is the normal rootfs boot before any overlay.
+set -u
 D=/usr/local/lib/omamobile
-insmod "$D/pwrseq-core.ko" 2>/dev/null || true
-insmod "$D/pwrseq-qcom-wcn.ko" 2>/dev/null || true
-insmod "$D/pci-pwrctrl-core.ko" 2>/dev/null || true
-insmod "$D/pci-pwrctrl-pwrseq.ko" 2>/dev/null || true
-insmod "$D/phy-qcom-qmp-pcie.ko" 2>/dev/null || true
+
+log() { echo "omamobile-wifi-pcie: $*"; }
+
+# Load by module name. modprobe first (resolves deps from the running
+# kernel's tree); else insmod the held .ko under $D (hyphen or underscore).
+load() {
+	name=$(echo "$1" | tr - _)
+	if modprobe "$name" 2>/dev/null; then
+		return 0
+	fi
+	hyphen=$(echo "$name" | tr _ -)
+	if [ -f "$D/$hyphen.ko" ]; then
+		insmod "$D/$hyphen.ko" 2>/dev/null && return 0
+	fi
+	if [ -f "$D/$name.ko" ]; then
+		insmod "$D/$name.ko" 2>/dev/null && return 0
+	fi
+	return 1
+}
+
+# Optional: skip quietly when neither modprobe nor a held .ko works
+# (built-in on this kernel, or not shipped in $D).
+opt() {
+	if load "$1"; then
+		return 0
+	fi
+	log "$1 not loaded (built-in, or no matching .ko yet)"
+	return 0
+}
+
+opt pwrseq_core
+opt pwrseq_qcom_wcn
+opt pci_pwrctrl_core
+opt pci_pwrctrl_pwrseq
+opt phy_qcom_qmp_pcie
 sleep 1
-echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
+if [ -w /sys/bus/pci/rescan ]; then
+	echo 1 > /sys/bus/pci/rescan
+else
+	log "no /sys/bus/pci/rescan"
+fi
