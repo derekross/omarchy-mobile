@@ -208,6 +208,81 @@ grep -q 'rebinding' "$dms" \
   || fail "display-msm must still rebind preloaded msm after dispcc"
 echo "ok - display-msm rebinds only when msm was preloaded before dispcc"
 
+grep -q 'skipping rebind' "$dms" \
+  || fail "display-msm must skip rebind when a DSI node exists but is not yet connected"
+grep -q 'no DSI node' "$dms" \
+  || fail "display-msm must only rebind when there is no DSI connector node"
+echo "ok - display-msm waits / skips rebind on not-yet-connected DSI"
+
+# Functional: preloaded msm + DSI node present but status!=connected must NOT
+# rebind (the 2026-10-31 a345 race). Redirect sysfs/proc via sed on a copy;
+# list every load-loop module in fake /proc/modules so insmod is skipped.
+rebind_test() {
+  local name=$1 expect_rebind=$2
+  local td=$t/rebind-$name
+  rm -rf "$td"
+  mkdir -p "$td/bin" "$td/proc" "$td/sys/class/drm" \
+    "$td/sys/bus/platform/drivers/msm-mdss" \
+    "$td/empty-modules/kernel/drivers/clk/qcom" \
+    "$td/empty-modules/kernel/drivers/gpu/drm/msm" \
+    "$td/empty-modules/kernel/drivers/gpu/drm/panel"
+  # Stamp gate needs the file present; load loop skips via /proc/modules.
+  : > "$td/empty-modules/kernel/drivers/clk/qcom/dispcc-sm8750.ko"
+  : > "$td/empty-modules/kernel/drivers/gpu/drm/msm/msm.ko"
+  : > "$td/empty-modules/kernel/drivers/gpu/drm/panel/panel-aa569-p-3-a0019-dsc.ko"
+  cat > "$td/proc/modules" <<EOF
+msm 1 0 - Live 0x0
+dispcc_sm8750 1 0 - Live 0x0
+backlight 1 0 - Live 0x0
+drm_display_helper 1 0 - Live 0x0
+drm_dp_aux_bus 1 0 - Live 0x0
+drm_exec 1 0 - Live 0x0
+gpu_sched 1 0 - Live 0x0
+llcc_qcom 1 0 - Live 0x0
+ocmem 1 0 - Live 0x0
+mdt_loader 1 0 - Live 0x0
+panel_aa569_p_3_a0019_dsc 1 0 - Live 0x0
+EOF
+  : > "$td/sys/bus/platform/drivers/msm-mdss/unbind"
+  : > "$td/sys/bus/platform/drivers/msm-mdss/bind"
+  if [ "$name" = halfready ]; then
+    mkdir -p "$td/sys/class/drm/card1-DSI-1"
+    echo disconnected > "$td/sys/class/drm/card1-DSI-1/status"
+  fi
+  # No-op helpers so a stray load cannot touch the host.
+  printf '%s\n' '#!/bin/sh' 'exit 0' > "$td/bin/insmod"
+  printf '%s\n' '#!/bin/sh' 'exit 0' > "$td/bin/modinfo"
+  chmod +x "$td/bin/insmod" "$td/bin/modinfo"
+  cp "$dms" "$td/display-msm"
+  sed -i "s|^STAMP=.*|STAMP=$td/display-msm.tried|" "$td/display-msm"
+  sed -i "s|^DISABLE=.*|DISABLE=/nonexistent|" "$td/display-msm"
+  # Shrink the pre-rebind wait (6 x 0.5s) so the halfready case stays fast.
+  sed -i 's/while \[ \$i -lt 6 \]/while [ $i -lt 2 ]/' "$td/display-msm"
+  sed -i "s|/sys/class/drm|$td/sys/class/drm|g" "$td/display-msm"
+  sed -i "s|/proc/modules|$td/proc/modules|g" "$td/display-msm"
+  sed -i "s|/sys/bus/platform/drivers/msm-mdss|$td/sys/bus/platform/drivers/msm-mdss|g" "$td/display-msm"
+  chmod +x "$td/display-msm"
+  rm -f "$td/display-msm.tried"
+  if ! PATH="$td/bin:$PATH" WAIT=1 OMAMOBILE_MODULES_H="$td/empty-modules/kernel" \
+      "$td/display-msm" >"$td/dms.log" 2>&1; then
+    fail "display-msm rebind-$name should exit 0"
+  fi
+  if [ "$expect_rebind" = yes ]; then
+    grep -q "rebinding" "$td/dms.log" \
+      || { cat "$td/dms.log"; fail "rebind-$name should rebind"; }
+    grep -q ae00000.display-subsystem "$td/sys/bus/platform/drivers/msm-mdss/unbind" \
+      || fail "rebind-$name should write unbind"
+  else
+    grep -q "skipping rebind" "$td/dms.log" \
+      || { cat "$td/dms.log"; fail "rebind-$name should skip rebind"; }
+    [[ ! -s $td/sys/bus/platform/drivers/msm-mdss/unbind ]] \
+      || fail "rebind-$name must not write unbind"
+  fi
+}
+rebind_test halfready no
+rebind_test nodsi yes
+echo "ok - display-msm does not immediately rebind a not-yet-connected DSI"
+
 
 # stage-1 init must log which slot source won and dump bootconfig/bootargs.
 init=device/dodge/chainload/init

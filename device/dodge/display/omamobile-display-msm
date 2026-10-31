@@ -107,21 +107,47 @@ done
 # If udev already loaded msm before dispcc, mdss probed with -110 and will
 # not retry on its own. After we have loaded dispcc, kick the platform device
 # so probe runs again with clocks available.
+# Wait briefly for panel attach: a just-loaded or preloaded msm can bind DSI
+# and register DRM before status=connected. Immediate rebind then destroys a
+# good probe (seen 2026-10-31 on rootfs a345 vs healthy boot -38).
 dsi_bound=
-for c in /sys/class/drm/card*-DSI-1; do
-	if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
-		dsi_bound=1
-		break
-	fi
+i=0
+while [ $i -lt 6 ]; do
+	for c in /sys/class/drm/card*-DSI-1; do
+		if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
+			dsi_bound=1
+			break 2
+		fi
+	done
+	# Any DRM card means probe progressed; keep waiting, do not rebind yet.
+	for c in /sys/class/drm/card[0-9]*; do
+		if [ -e "$c" ]; then
+			sleep 0.5
+			i=$((i + 1))
+			continue 2
+		fi
+	done
+	break
 done
+# Only rebind when msm was preloaded before dispcc AND there is still no DSI
+# connector node at all (classic mdss -110 / no DRM). Never unbind a
+# half-ready probe that already registered card*-DSI-1.
 if [ -n "$msm_preloaded" ] && [ -z "$dsi_bound" ] && grep -q '^msm ' /proc/modules; then
-	dev=ae00000.display-subsystem
-	drv=/sys/bus/platform/drivers/msm-mdss
-	if [ -d "$drv" ]; then
-		log "msm was preloaded without DSI; rebinding $dev after dispcc"
-		echo "$dev" > "$drv/unbind" 2>/dev/null || true
-		sleep 0.5
-		echo "$dev" > "$drv/bind" 2>/dev/null || true
+	have_dsi_node=
+	for c in /sys/class/drm/card*-DSI-1; do
+		[ -e "$c" ] && have_dsi_node=1 && break
+	done
+	if [ -z "$have_dsi_node" ]; then
+		dev=ae00000.display-subsystem
+		drv=/sys/bus/platform/drivers/msm-mdss
+		if [ -d "$drv" ]; then
+			log "msm was preloaded with no DSI node; rebinding $dev after dispcc"
+			echo "$dev" > "$drv/unbind" 2>/dev/null || true
+			sleep 0.5
+			echo "$dev" > "$drv/bind" 2>/dev/null || true
+		fi
+	else
+		log "msm has DSI node but not connected yet; skipping rebind"
 	fi
 fi
 
