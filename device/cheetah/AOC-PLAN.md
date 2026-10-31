@@ -1880,6 +1880,18 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      temperature backstop is unchanged. Next: C9d stepping (817/13, then
      817/17) with `SETTLE=2` bursts, watching that the estimate stays flat
      within each burst after the settle.
+   - **C9d stepping, step 1 (817/13, -20 dBFS multitone, 0.5.7):** the
+     watchdog muted about 1 s in: "Top: coil temperature rose 14.9 C (25.5
+     -> 40.4) in the first 2 s, above 12 C"; Z/CAL_R 1.049 top, 1.027
+     bottom; `vmon low 1` throughout, and the estimate then fell along a
+     smooth curve (the model cooling). **The offset grows with the signal**
+     (+7 C at -30 dBFS, +15 C at -20 dBFS), and with vmon low 1 the
+     firmware never senses the coil: it runs its open-loop model, whose
+     error scales with level. A settle window would only hide that, so 0.5.7
+     is not for merging as it stands. Stepping stopped. Next: offline, why
+     the firmware calls VMON too low at gain 13-17 (DSP input routing, VMON
+     scale or reference, the tuning's expected gain); if that finds
+     nothing, the same reading on stock (slot A).
 
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
