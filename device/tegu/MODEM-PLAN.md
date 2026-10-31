@@ -1080,6 +1080,34 @@ head/tail if any of them sit in the window rather than in the reserved
 DRAM), and the cycle itself, each step of which writes the PMU through the
 secure monitor. That is G3-L1's trace, and it is next.
 
+**G3-L1 answered (2026-10-31 morning): the link cycled because our L1
+substates were a stub, and with them the session holds.** Implemented as
+Google's `exynos_pcie_rc_set_l1ss()` does for the modem endpoint, behind a
+`l1ss` parameter on the controller because the modem driver's last call in
+`s51xx_pcie_restore_state()` is an unconditional enable that also arrives
+during the ROM boot: acting on it there stops the image download (the CP
+never leaves BOOTING, `cpif` reports no PCIe endpoint for the ROM boot,
+three boots of three). Set after the CP is ONLINE:
+
+| | before (10-30 night) | with L1 substates (10-31) |
+| --- | --- | --- |
+| isolate/un-isolate pairs under GNSS traffic | about 2 a second, thousands in a session | 2 in the first 2.5 minutes, 7 in 5 minutes |
+| the SoC hang | about 170 s after ONLINE, or 26 minutes with the doorbell fix | none |
+| the CP | crashed 103-108 s after ONLINE when the link was held instead | ONLINE throughout |
+| fixes | about a minute's worth | 157 of 165 GGA sentences fixed at 5 minutes, still running |
+
+So the hang was never reached because the link stopped being torn down,
+which is what stock does and what the modem asks for. Three mistakes of
+mine on the way there, all worth recording: the module built for this
+palmtop must carry `google,zumapro-pcie-cp` in its match table and treat
+`samsung,sysreg` as optional (the in-tree branch has neither, so a module
+built from it never binds and the modem reports "no PCIe endpoint for the
+ROM boot"); a module built without `LOCALVERSION=-s2mpg15-m1` is refused as
+"Invalid module format", and a plain `make drivers/.../x.o` in the shared
+output tree rewrites `utsrelease.h` so later module builds inherit the
+wrong release; and the controller needs `allow_hw=1`, which an edit to the
+start script's insmod line must not drop.
+
 **Every register path in the cycling window, audited from the source
 (2026-10-30 night, offline).** With the doorbell fixed and the hang still
 there at 26 minutes, the obvious next question is which other access lands
