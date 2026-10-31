@@ -4,7 +4,7 @@
 # sequencer and rfkill.
 [Unit]
 Description=Bluetooth for the WCN7860 (peach), once per boot
-After=omamobile-wifi-pcie.service omamobile-wifi-ath12k.service local-fs.target
+After=omamobile-wifi-pcie.service omamobile-wifi-ath12k.service local-fs.target omamobile-kmod-overlay.service
 Wants=omamobile-wifi-pcie.service
 Before=bluetooth.service
 ConditionPathExists=!/run/omamobile-bt.tried

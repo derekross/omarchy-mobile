@@ -377,3 +377,87 @@ echo "ok - touch-load falls back to held kos when modprobe fails"
 grep -q 'ExecStart=/usr/local/sbin/omamobile-touch-load' device/dodge/touch/omamobile-touch.service \
   || fail "touch unit must ExecStart omamobile-touch-load"
 echo "ok - tip-aware wifi/touch load scripts present"
+
+# Tip-aware ADSP / BT / audio + kmod-overlay tip path + tip-modules helper.
+adsp=device/dodge/modem/adsp-battery.sh
+[[ -f $adsp ]] || fail "adsp-battery.sh missing"
+grep -q 'modprobe' "$adsp" \
+  || fail "adsp-battery must prefer modprobe for tip overlay"
+grep -q 'fastrpc' "$adsp" \
+  || fail "adsp-battery must load fastrpc for sensors/audio"
+grep -q 'qcom_q6v5_pas\|qcom-q6v5-pas' "$adsp" \
+  || fail "adsp-battery must load qcom_q6v5_pas"
+[[ -f device/dodge/modem/omamobile-adsp-battery.service ]] \
+  || fail "omamobile-adsp-battery.service missing"
+grep -q 'After=.*omamobile-kmod-overlay' device/dodge/modem/omamobile-adsp-battery.service \
+  || fail "adsp-battery unit must After= kmod-overlay"
+echo "ok - tip-aware adsp-battery present"
+
+bt=device/dodge/bluetooth/omamobile-bt
+[[ -f $bt ]] || fail "omamobile-bt missing"
+grep -q 'modprobe' "$bt" \
+  || fail "omamobile-bt must prefer modprobe for tip overlay"
+grep -q 'bt-public-addr\|public-addr' "$bt" \
+  || fail "omamobile-bt must set a public address"
+grep -q 'ExecStart=/usr/local/sbin/omamobile-bt' device/dodge/bluetooth/omamobile-bt.service \
+  || fail "bt unit must ExecStart /usr/local/sbin/omamobile-bt"
+echo "ok - tip-aware bluetooth present"
+
+audio=device/dodge/audio/audio-bringup.sh
+[[ -f $audio ]] || fail "audio-bringup.sh missing"
+grep -q 'modprobe' "$audio" \
+  || fail "audio-bringup must prefer modprobe for tip overlay"
+grep -q 'heap_ready\|createstaticpd:audiopd' "$audio" \
+  || fail "audio-bringup must wait for audiopd heap"
+grep -q 'snd-soc-sc8280xp\|snd_soc_sc8280xp' "$audio" \
+  || fail "audio-bringup must load machine driver"
+[[ -f device/dodge/audio/omamobile-dodge-audio.service ]] \
+  || fail "omamobile-dodge-audio.service missing"
+echo "ok - tip-aware audio-bringup present"
+
+kmod=device/dodge/kernel/omamobile-kmod-overlay
+tip=device/dodge/kernel/omamobile-tip-modules-overlay
+[[ -f $kmod ]] || fail "omamobile-kmod-overlay missing"
+[[ -f $tip ]] || fail "omamobile-tip-modules-overlay missing"
+grep -q 'modules.dep' "$kmod" \
+  || fail "kmod-overlay must accept tip modules.dep path"
+grep -q 'omamobile-bt.tried' "$tip" \
+  || fail "tip-modules-overlay must clear bt stamp"
+grep -q 'omamobile-display-msm.tried' "$tip" \
+  || fail "tip-modules-overlay must clear display-msm stamp"
+grep -q 'restart sddm\|systemctl restart sddm' "$tip" \
+  || fail "tip-modules-overlay must bounce sddm after DSI"
+grep -q 'omamobile-adsp-battery' "$tip" \
+  || fail "tip-modules-overlay must restart adsp-battery"
+grep -q 'mount -t tmpfs' "$tip" \
+  || fail "tip-modules-overlay must mount tmpfs for RAM-only extract"
+echo "ok - kmod-overlay tip path + tip-modules-overlay present"
+
+# Runtime: adsp-battery prefers modprobe when it succeeds.
+tad=$t/adsp-modprobe
+rm -rf "$tad"
+mkdir -p "$tad/bin" "$tad/proc"
+printf '%s\n' '#!/bin/sh' 'echo modprobe:"$*" >> "'"$tad"'/log"' 'exit 0' \
+  > "$tad/bin/modprobe"
+printf '%s\n' '#!/bin/sh' 'echo insmod:"$*" >> "'"$tad"'/log"' 'exit 0' \
+  > "$tad/bin/insmod"
+# Fake empty /proc/modules and no remoteproc (script tolerates).
+: > "$tad/proc/modules"
+chmod +x "$tad/bin/modprobe" "$tad/bin/insmod"
+cp "$adsp" "$tad/adsp-battery.sh"
+# Point HELD/D at empty so fallback cannot succeed; force awk to read our modules.
+sed -i "s|^HELD=.*|HELD=$tad/held/kernel|" "$tad/adsp-battery.sh"
+sed -i "s|^D=.*|D=$tad/omamobile|" "$tad/adsp-battery.sh"
+sed -i "s|/proc/modules|$tad/proc/modules|g" "$tad/adsp-battery.sh"
+sed -i "s|/sys/class/remoteproc|$tad/remoteproc|g" "$tad/adsp-battery.sh"
+mkdir -p "$tad/held/kernel" "$tad/omamobile" "$tad/remoteproc"
+chmod +x "$tad/adsp-battery.sh"
+: > "$tad/log"
+PATH="$tad/bin:$PATH" "$tad/adsp-battery.sh" >"$tad/out" 2>&1 \
+  || fail "adsp-battery with working modprobe should exit 0"
+grep -q 'modprobe:qrtr' "$tad/log" || { cat "$tad/log" "$tad/out"; fail "adsp-battery should modprobe qrtr"; }
+grep -q 'modprobe:qcom_q6v5_pas\|modprobe:qcom-q6v5-pas' "$tad/log" \
+  || { cat "$tad/log" "$tad/out"; fail "adsp-battery should modprobe qcom_q6v5_pas"; }
+grep -q 'modprobe:fastrpc' "$tad/log" || fail "adsp-battery should modprobe fastrpc"
+grep -q 'insmod:' "$tad/log" && { cat "$tad/log"; fail "adsp-battery must not insmod when modprobe works"; }
+echo "ok - adsp-battery prefers modprobe over held kos"

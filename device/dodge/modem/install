@@ -11,6 +11,8 @@ for f in /usr/local/bin/rmtfs /usr/local/bin/tqftpserv /usr/local/lib/omamobile/
 done
 install -Dm755 omamobile-modem /usr/local/lib/omamobile/modem/omamobile-modem
 install -Dm755 adsp-battery.sh /usr/local/lib/omamobile/adsp-battery.sh
+install -Dm644 omamobile-adsp-battery.service /etc/systemd/system/omamobile-adsp-battery.service
+systemctl enable omamobile-adsp-battery.service || true
 install -Dm644 78-omamobile-mm-fake-net.rules /etc/udev/rules.d/78-omamobile-mm-fake-net.rules
 install -Dm600 omamobile-cellular.nmconnection /etc/NetworkManager/system-connections/omamobile-cellular.nmconnection
 install -Dm644 ModemManager-omamobile.conf /etc/systemd/system/ModemManager.service.d/omamobile.conf

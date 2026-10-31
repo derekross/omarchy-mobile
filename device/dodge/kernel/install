@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Install the kmod-overlay + tip-modules-overlay helpers. Run as root.
+set -eu
+cd "$(dirname "$0")"
+install -Dm755 omamobile-kmod-overlay /usr/local/sbin/omamobile-kmod-overlay
+install -Dm755 omamobile-tip-modules-overlay /usr/local/sbin/omamobile-tip-modules-overlay
+install -Dm644 omamobile-kmod-overlay.service /etc/systemd/system/omamobile-kmod-overlay.service
+systemctl daemon-reload
+systemctl enable omamobile-kmod-overlay.service || true
+echo "installed omamobile-kmod-overlay + tip-modules-overlay"

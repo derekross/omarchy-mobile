@@ -1,0 +1,9 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+cd "$(dirname "$0")"
+install -Dm755 audio-bringup.sh /usr/local/lib/omamobile/audio-bringup.sh
+install -Dm644 omamobile-dodge-audio.service /etc/systemd/system/omamobile-dodge-audio.service
+systemctl daemon-reload
+systemctl enable omamobile-dodge-audio.service || true
+echo "installed omamobile-dodge-audio"

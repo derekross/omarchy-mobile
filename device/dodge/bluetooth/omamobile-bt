@@ -1,14 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Bring up Bluetooth on the WCN7860 (peach) once per boot: load the
-# Bluetooth stack and hci_uart from /usr/local/lib/omamobile/bt (no
-# /lib/modules tree here, so nothing autoloads), wait for hci0, and
-# give it a public address so it leaves the "unconfigured" state.
+# Bluetooth stack and hci_uart, wait for hci0, and give it a public
+# address so it leaves the "unconfigured" state.
+#
+# Prefer modprobe so a tip Image with a tmpfs modules overlay gets
+# matching kos. Fall back to /usr/local/lib/omamobile/bt (and
+# /usr/local/lib/omamobile) for the packaged held tree.
 #
 # hci_qca powers the chip through the WCN7850 power sequencer that
 # omamobile-wifi-pcie loads, downloads qca/gngbtfw20.mbn and
-# qca/gngbtnv20.bin (from the phone's own bluetooth_a partition, not
-# shipped here), and then waits for an address.
+# qca/gngbtnv20.bin, and then waits for an address.
 #
 # The real BD address lives in the persist partition, which we never
 # read. Instead this uses a random address generated once on this phone
@@ -29,15 +31,22 @@ fi
 : > "$STAMP"
 
 load() {
-	[ -e "/sys/module/$1" ] && return 0
-	for f in "$D/$1.ko" "$W/$1.ko"; do
+	name=$(echo "$1" | tr - _)
+	[ -e "/sys/module/$name" ] && return 0
+	if modprobe "$name" 2>/dev/null; then
+		return 0
+	fi
+	hyphen=$(echo "$name" | tr _ -)
+	for f in "$D/$name.ko" "$D/$hyphen.ko" "$W/$name.ko" "$W/$hyphen.ko"; do
 		[ -f "$f" ] && { insmod "$f" && return 0; }
 	done
-	[ -e "/sys/module/$1" ]
+	[ -e "/sys/module/$name" ]
 }
 
 # kpp is a module on 7.3 and built in on 6.16 (no file there).
-[ -f "$D/kpp.ko" ] && { load kpp || log "kpp failed to load"; }
+if [ -f "$D/kpp.ko" ] || modprobe -n kpp 2>/dev/null; then
+	load kpp || log "kpp failed to load"
+fi
 for m in rfkill ecc ecdh_generic bluetooth btqca btbcm hci_uart; do
 	load "$m" || { log "$m failed to load"; exit 1; }
 done
