@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# Earpiece mode for the speaker amplifiers (device/cheetah/AOC-PLAN.md C9k):
+#   omamobile-earpiece@on.service    the top amplifier alone as the earpiece:
+#                                    DSP bypassed (stock's handset path),
+#                                    analog <= 6, digital <= 737 (657 by
+#                                    default); the bottom one muted
+#   omamobile-earpiece@off.service   both amplifiers through their DSPs at the
+#                                    stage's levels again, every control read
+#                                    back
+# The "Voice Call" UCM verb's Earpiece device starts these from PipeWire;
+# the polkit rule 50-omamobile-earpiece.rules lets the active local user
+# start these two instances and nothing else. Neither raises a level above
+# the stage's: the script refuses unless the protection runs and the
+# watchdog takes the mode, and the watchdog mutes on anything the mode does
+# not allow. A request, not a state: a protection restart always ends in
+# speaker mode. Not enabled.
+[Unit]
+Description=Speaker amplifiers: earpiece %i
+Requisite=omamobile-speaker-protection.service
+After=omamobile-speaker-protection.service omamobile-speaker-watch.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/omamobile/speaker.conf
+ExecStart=/usr/bin/omamobile-speaker-protection earpiece %i
+TimeoutStartSec=30

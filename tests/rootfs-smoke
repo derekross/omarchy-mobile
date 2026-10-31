@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Smoke test of a root image from tools/build-rootfs, read through debugfs
 # (no root, no loop mount, nothing written):
-#   tests/rootfs-smoke out/omamobile-rootfs-<version>-aarch64.img.zst   (or a raw .img)
+#   tests/rootfs-smoke out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   (or a raw .img)
 # Checks the label, that there is no account but a locked root, the keyrings,
 # the [omamobile] repository and its place in pacman.conf, the first-boot
 # unit, the kernel modules, the MANIFEST, and that no per-machine state,

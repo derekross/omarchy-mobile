@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Install tip-aware audio-bringup. When /usr/local/lib/omamobile is a bind
+# of omamobile.$R, also write through a private bind of / so tip RAM boots
+# (no bind) see the tip-aware script on the real rootfs path.
+set -eu
+cd "$(dirname "$0")"
+install -Dm755 audio-bringup.sh /usr/local/lib/omamobile/audio-bringup.sh
+install -Dm644 omamobile-dodge-audio.service /etc/systemd/system/omamobile-dodge-audio.service
+if mountpoint -q /usr/local/lib/omamobile 2>/dev/null; then
+	tmp=$(mktemp -d)
+	# Undo the private bind of / on any exit or error (install may fail mid-loop).
+	trap 'umount "$tmp" 2>/dev/null; rmdir "$tmp" 2>/dev/null' EXIT
+	mount --bind / "$tmp"
+	install -Dm755 audio-bringup.sh "$tmp/usr/local/lib/omamobile/audio-bringup.sh"
+	for d in "$tmp"/usr/local/lib/omamobile.*; do
+		[ -d "$d" ] || continue
+		install -Dm755 audio-bringup.sh "$d/audio-bringup.sh"
+	done
+	umount "$tmp"
+	rmdir "$tmp"
+	trap - EXIT
+fi
+systemctl daemon-reload
+systemctl enable omamobile-dodge-audio.service || true
+echo "installed omamobile-dodge-audio"

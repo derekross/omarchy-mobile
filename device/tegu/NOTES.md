@@ -13,6 +13,64 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-29: the device package boot, and what this row rests on
+
+The palmtop's bring-up runs from `omamobile-device-tegu` 0.2.0
+(<https://github.com/derekross/omarchy-mobile/pull/152>) since the 12:28
+local boot on 2026-10-29, release
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the unpublished
+integration tree; the board device tree is in review as linux-omarchy-mobile
+#80), with the hand copies the package replaces moved aside under
+`/var/lib/omamobile-tegu/before-pkg/`. `tools/phone-smoke` on that boot:
+19 of 19 (boot on slot B, the storage guard with only `userdata` and slot
+B's images writable, the ext4 root, no oops or WARN, no failed units, the
+USB gadget, the panel at 1080x2424, a render node on panthor, Hyprland and
+the shell, the lock, Synaptics touch, gpio-keys, wlan0 up, hci0 powered,
+the gauge, the AoC sound card, three sensors, three cameras, hottest zone
+44 °C). Packages on it: omamobile-device-tegu 0.2.0-1, omamobile-audio
+0.4.1-1, omamobile-fingerprint 0.1.8-1, omamobile-apps 0.2.0-1, hyprland
+0.56.2-5.1, mesa 1:26.2.4-1.4, libcamera 0.7.2-4.22.
+
+What each cell of the DEVICES row rests on, beyond the 10-27 and 10-28
+list below:
+
+- **Boot:** slot B marked successful by hand on 2026-10-28 (the `devinfo`
+  write approved on 2026-10-22, now on hold, #125); the package does not
+  mark it. A fallback to slot A would cost the Linux root.
+- **Started by the package at boot** (`omamobile-tegu-graphics.service`):
+  the display at 120 Hz (the start sets `allow_tx` for `google-tg4c`, with
+  or without the bootloader's panel-id suffix), the GPU, haptics, the torch,
+  the gauge and Bluetooth; the USB rescue helper. Everything else in the
+  row that says "by hand" is not.
+- **GPU:** on this boot devfreq reports `simple_ondemand` with min, max and
+  current all 159.7 MHz and `runtime_status` suspended, so the desktop
+  renders and the GPU sleeps when idle, but frequency scaling is not
+  active on the published form and counts as in review (kernel #85, #87).
+- **Battery through UPower, 2026-10-29 evening:** energy-rate 1.06 W, time
+  to empty 18.5 h at 87 %.
+- **Sensors:** accelerometer, ambient light and proximity, as every smoke
+  report of the day lists them. No gyroscope or compass has been seen on
+  this palmtop; the row no longer claims them.
+- **Wi-Fi across sleep:** kept loaded by the package's sleep hook
+  (`/etc/omamobile/wifi-keep-across-sleep` is set) through the 2026-10-29
+  S1 sleeps ([SLEEP-PLAN](SLEEP-PLAN.md) S1).
+- **NFC:** a payment card read on the morning of 2026-10-29 with the
+  kernel #131 modules (its thread has the dmesg lines); neard started by
+  hand, polling stopped before sleep by the package's hook.
+- **Suspend:** with the `omamobile-sleep` toggle on (it ships off), the
+  shell's sleep daemon (`omamobile-sleepd`) suspends the palmtop once the
+  screen is off and locked; the power key and the RTC wake it, but three test
+  sleeps have not woken, so sleep tests stay attended (SLEEP-PLAN S1); the
+  drain is the S1 figure.
+- **Speakers:** the -10 dB ceiling recorded below, by hand with the AoC.
+- **GNSS, 2026-10-30 evening:** a position fix on a bring-up kernel (the gn3
+  tree with the spi-s3c64xx swap-mode change and the flush-order fix of
+  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, drive 3, mode
+  0, 32-bit words, feedback delay 0, automatic chip select, 64-byte reads):
+  in a 3-minute session by a window, 23 of 25 GGA sentences with fix quality
+  1, up to 13 satellites used, HDOP 0.8, every CHPP read at bit 0 with a
+  valid CRC; started by hand through the modem bring-up, not by a package.
+
 ## 2026-10-29: two resets at about 34 s, right after Bluetooth started
 
 [V] During the night's GNSS G3 tries (kernel
@@ -34,6 +92,38 @@ resets came from the modem side (the CP link hang after Kepler's watchdog
 resets) and are in [MODEM-PLAN](MODEM-PLAN.md) under "G3, twenty-fourth to
 thirty-fourth tries" and "The CP link hang". Not a GNSS matter: if a boot
 with nothing but Bluetooth starting resets again at that time, start here.
+
+## 2026-10-29: the s2idle drain is the SoC floor, not the CPUs or the radios
+
+- Cable out, screen off: 311 mA awake, 302 mA asleep (two 30-minute
+  `systemctl suspend` rounds through `power-ab --suspend systemd`). The CPUs
+  sleep (timekeeping suspended for the whole of a 60 s test, one deep-state
+  entry per CPU); Bluetooth, NFC and Wi-Fi cost nothing measurable at idle.
+  What stays on is MIF, the buses and the always-on rails: there is no
+  system idle state in our kernel. `tegu-mif-sleep.ko` (MIF 421 MHz in
+  sleep) saves about 60-75 mA by the coulomb counter; a hand unit loaded it
+  at boot for one night and was disabled the next day (below).
+  Details and method in [SLEEP-PLAN](SLEEP-PLAN.md) S1.
+- `rtcwake -m freeze` written straight to `/sys/power/state` failed to wake
+  again (the second time in two days); every `systemctl suspend` after
+  `rtcwake -m no` had woken up to then. The next day showed the entry
+  path isn't the whole story (the 2026-10-30 bullet).
+- 2026-10-30: the cable-out `power-ab --suspend systemd` run with the
+  module loaded never woke from its 30-minute sleep (not from the RTC, not
+  from the power key; reset by hand), so the hand unit that loaded the
+  module at boot is disabled. The same day a cable-in 30-minute systemd
+  sleep with the module, its alarm logged as armed, woke on the alarm to
+  the second, and the afternoon's repeat of the cable-out run with the
+  module loaded by hand woke too: 273 mA awake with the screen off, 260 mA
+  asleep, about 40 mA under the figure without the module. Three sleeps
+  have never woken (two direct freezes, one systemd sleep with the module)
+  and no single factor explains them, so sleep tests stay attended and the
+  module stays off at boot; the shell's auto-sleep toggle is off on the
+  palmtop since the 2026-10-30 shell reinstall, and unattended sleep stays
+  off until the hangs below are understood.
+- The 2026-10-27 "140 mA asleep" figure doesn't hold up against 2026-10-28
+  (434-445 mA cable out, as-is) and tonight; treat about 300 mA cable out
+  as the baseline.
 
 ## 2026-10-28, evening: USB-C host mode through TCPM
 
@@ -410,6 +500,17 @@ Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, tools at `7310
 
 Packages: hyprland 0.56.2-5.1, libcamera 0.7.2-4.16, mesa 1:26.2.4-1.4, omacam 0.1.9-1, omamobile-apps 0.2.0-1, omamobile-audio 0.4.1-1, omamobile-device-tegu 0.1.0-1, omamobile-fingerprint 0.1.8-1, omamobile-firstboot 0.1.0-1, omamobile-gnss 0.2.1-1, omamobile-keyring 20261013-1, omamobile-mirror 0.1.1-1, omamobile-modem 0.1.4-1, omamobile-omarchy 0.1.4-1, omamobile-owl-widgets 0.1.1-1, omamobile-sensors 0.2.0-1, omamobile-shell 0.2.17-1, omarchy 4.0.6-1, quickshell 0.3.2.r7.g2b4501a-1
 
+## 2026-10-25: display scale 8/3
+
+On the reference 9a (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, 1080x2424 panel at
+60 Hz), the owner compared the bring-up's scale 2 (540x1212 logical) with
+8/3 (405x909) on the running desktop, side by side with an iPhone, and kept
+8/3: "about right", about a third larger than 2. Hyprland reported no config
+errors, and running apps fit. 3 (360x808) is the Pixel 7 Pro's default and
+too small here. omamobile-shell 0.2.35 makes 8/3 the scale a new 9a user
+gets (`omamobile-setup-user`, seeded once), so it's the default for every
+new 9a install, not only this one; a user's own scale is kept.
+
 ## 2026-10-24: local curated candidate
 
 [V] A later candidate, `7.3.0-rc6-omamobile-tegu-g7e457a96fc45`, reaches
@@ -626,7 +727,7 @@ stock-B Android boot is not claimed.
 | Root and CPUs | Arch on internal ext4 userdata, systemd/SDDM/UWSM/logind, CPU0-7 online. KVM disabled. |
 | Protection | Whole main-LUN node absent; only five B boot partitions and userdata writable; protected partitions read-only; per-boot guard and watchdog checks pass. |
 | USB | NCM, ACM and root SSH over the connected cable. |
-| Display | Bootloader framebuffer through simpledrm, 1080x2424, scale 2. Reported 60 Hz is not an independently measured panel rate. |
+| Display | Bootloader framebuffer through simpledrm, 1080x2424, then scale 2 (first light). Scale 8/3 since 2026-10-25, see that entry. Reported 60 Hz is not an independently measured panel rate. |
 | Touch | Synaptics S3908 TouchComm v1: taps, long press, launcher, quick settings and all four swipe directions physically exercised by the owner. |
 | GPU | Mali-G715 MC7: Panthor initialization, system Mesa GLES3.1 color readback, actual Hyprland/shell GPU rendering and automatic startup after local reboot. |
 

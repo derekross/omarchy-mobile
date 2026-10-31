@@ -1,0 +1,5 @@
+# dodge: accel and proximity live in the ADSP sensors PD (libssc via QRTR).
+# Upstream 80-iio-sensor-proxy.rules only adds ssc-light/ssc-compass.
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp-secure", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity"
+# dodge: the BMI26x in the sensors PD reports X and Y inverted (upright portrait read as bottom-up).
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp-secure", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, -1, 0; 0, 0, 1"

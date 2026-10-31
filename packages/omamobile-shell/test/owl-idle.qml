@@ -42,6 +42,7 @@ Item {
     text: 'widget "idle" {\n  meta { owl: 4 }\n  source n = cmd("echo hi") every 2s\n  state ticks = 0\n  every 1s { ticks = ticks + 1 }\n  Text { text: fixed(time, 1) }\n}'
     host: fixture
     active: top.shown
+    paused: scheduler.paused
   }
 
   OwlView {
@@ -130,10 +131,26 @@ Item {
 
     function test_5_paused_home_stops_frames_and_slows_the_tick() {
       verify(scheduler.tickInterval <= Phone.CLOCK.tickMs + 5)
+      // tickDelay() returns the time to the next boundary, so in the last
+      // second of a hidden period the paused delay is legitimately shorter
+      // than a tick. Step over that boundary before pausing, or the check
+      // below asserts something untrue about one second in every
+      // hiddenTickMs (it failed in CI that way).
+      if (Phone.tickDelay(Date.now(), true) <= Phone.CLOCK.tickMs + 5)
+        wait(Phone.CLOCK.tickMs + 20)
       scheduler.paused = true
       tryVerify(function() { return !scheduler.framing }, 500, "covered or off: no frames")
       verify(scheduler.tickInterval > Phone.CLOCK.tickMs + 5, "the tick slows while paused (" + scheduler.tickInterval + " ms)")
       const frames = top.frames
+      const runs = fixture.runs
+      const ticks = top.ticks()
+      // An expanded screen must not bypass the global pause.
+      owl.screenOpen = true
+      fixture.t += 10
+      scheduler.tick()
+      compare(fixture.runs, runs, "no sources while paused, even with a screen open")
+      compare(top.ticks(), ticks, "no `every` while paused")
+      owl.screenOpen = false
       wait(300)
       compare(top.frames, frames)
       scheduler.paused = false

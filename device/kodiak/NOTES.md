@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: MIT -->
 # Pixel 11 Pro XL (kodiak)
 
 Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199

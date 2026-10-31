@@ -11,7 +11,7 @@
 #     MANIFEST       kernel release, root image, both repositories' commits
 #     SHA256SUMS     checksums of everything above
 #     SHA256SUMS.sig signed with the key in keys/ (maintainer only; --unsigned skips)
-#   out/bundle/omamobile-rootfs-<version>-aarch64.img.zst (+ .sha256, .MANIFEST)
+#   out/bundle/omamobile-rootfs-<codename>-<version>-aarch64.img.zst (+ .sha256, .MANIFEST)
 #
 #   tools/make-bundle [--version V] [--rootfs FILE] [--unsigned]
 #     DEVICE (default cheetah), KERNEL_OUT (default $KERNEL_BASE/out-int,
@@ -50,10 +50,24 @@ boot_images=$(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$conf")
 [[ -n $boot_images ]] || die "$conf has no BOOT_IMAGES"
 if [[ -z $rootfs ]]; then
   shopt -s nullglob
-  for f in out/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
+  for f in out/omamobile-rootfs-*-aarch64.img.zst; do
+    built_for=$(sed -n 's/^device: \([a-z0-9]*\).*/\1/p' "${f%.img.zst}.MANIFEST" 2>/dev/null || true)
+    [[ $built_for != "$DEVICE" ]] || rootfs=$f
+  done
 fi
 [[ -n $rootfs && -f $rootfs && -f $rootfs.sha256 ]] || die "no root image with a .sha256 (tools/build-rootfs)"
 release=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) || die "no kernel build in $KERNEL_OUT"
+rootname=$(basename "$rootfs")
+[[ $rootname =~ ^[A-Za-z0-9._-]+\.img\.zst$ ]] || die "root image needs a plain filename ending in .img.zst"
+manifest=${rootfs%.img.zst}.MANIFEST
+[[ -f $manifest ]] || die "no $manifest"
+built_for=$(sed -n 's/^device: \([a-z0-9]*\).*/\1/p' "$manifest")
+[[ $built_for == "$DEVICE" ]] || die "the root image was built for '${built_for:-an unknown device}', not $DEVICE"
+modules_release=$(sed -n 's/^kernel modules: \([^ ]*\).*/\1/p' "$manifest")
+[[ -z $modules_release || $modules_release == "$release" ]] ||
+  die "the root image has modules for $modules_release, but the boot images are $release: rebuild one to match"
+root_digest=$(sha256sum < "$rootfs" | cut -d' ' -f1)
+[[ $(cut -d' ' -f1 "$rootfs.sha256") == "$root_digest" ]] || die "$rootfs doesn't match its .sha256"
 
 name=omamobile-$DEVICE-$version
 out=out/bundle
@@ -77,7 +91,6 @@ for f in arch/arm64/boot/Image initramfs.cpio.lz4; do
     die "$KERNEL_OUT/images is older than $f: run bin/omamobile images"
 done
 
-rootname=$(basename "$rootfs")
 for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
   [[ -f $f ]] && ln -f "$f" "$out/" 2>/dev/null || cp -f "$f" "$out/"
 done
@@ -89,7 +102,7 @@ kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12
   echo "kernel release: $release"
   echo "kernel commit (linux-omarchy-mobile): $kernel_commit"
   echo "omarchy-mobile commit: $(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)"
-  echo "root image: $rootname ($(cut -d' ' -f1 "$rootfs.sha256"))"
+  echo "root image: $rootname ($root_digest)"
   echo
   echo "# boot images"
   (cd "$dir/images" && sha256sum -- *.img)

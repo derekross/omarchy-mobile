@@ -17,6 +17,7 @@ for cmd in fastboot ssh docker; do
   chmod +x "$t/bin/$cmd"
 done
 export PATH="$t/bin:$PATH" CALLS="$t/calls"
+unset KERNEL_OUT KERNEL_DIR KERNEL_BASE WORK || true
 fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
 for method in ram-only uboot-ext4 unknown ''; do
   printf 'CODENAME=probe\nBOOT_METHOD="%s"\nBOOT_IMAGES=""\nUFS_RW=""\n' "$method" > "$t/repo/device/probe/device.conf"
@@ -40,3 +41,491 @@ cp device/flame/device.conf "$t/repo/device/flame/"
 if "$t/repo/tools/install-phone" --device flame > "$t/log" 2>&1; then fail "flame installs"; fi
 grep -q 'unsupported BOOT_METHOD=ram-only;' "$t/log" || fail "flame fails for the wrong reason"
 echo 'ok - the shipped flame descriptor has no persistent installer path'
+
+# qcom-abl is accepted by images only when device/$DEVICE/chainload/ exists
+# (installer still refuses until a later PR). flash and push both refuse
+# qcom-abl before phone access. A complete dodge-shaped descriptor with
+# chainload must get past the BOOT_METHOD check; without a kernel build,
+# images stops at "build the kernel first".
+mkdir -p "$t/repo/device/abldev/chainload"
+cat > "$t/repo/device/abldev/device.conf" <<'DEVEOF'
+CODENAME=abldev
+NAME="ABL probe"
+SOC=sm8750
+COMPATIBLE="oneplus,abldev"
+PACKAGE=omamobile-device-abldev
+BOOT_METHOD=qcom-abl
+DTB=qcom/sm8750-oneplus-dodge.dtb
+INITRAMFS_INIT=initramfs/init
+PANEL_SIZE=1440x3168
+BOOT_IMAGES=boot
+UFS_RW="boot_b userdata"
+OMAMOBILE_SLOT=b
+DEVEOF
+# Minimal chainload stubs so images reaches the kernel check.
+printf '#!/bin/sh\n' > "$t/repo/device/abldev/chainload/init"
+printf '# stub\n' > "$t/repo/device/abldev/chainload/stage2-dtb.py"
+if DEVICE=abldev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images unexpectedly succeeded without a kernel"; fi
+grep -q 'unsupported BOOT_METHOD=qcom-abl' "$t/log" && fail "images still refuses qcom-abl"
+grep -q 'build the kernel first' "$t/log" || fail "images did not reach the kernel check for qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl images accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl accepted by images with chainload/ (stops before phone access)'
+
+# Missing chainload/ must refuse before the kernel check.
+rm -rf "$t/repo/device/abldev/chainload"
+if DEVICE=abldev "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "images accepted qcom-abl without chainload"; fi
+grep -q 'qcom-abl needs device/abldev/chainload/' "$t/log" || fail "images did not require chainload/"
+[[ ! -e $t/calls ]] || fail "qcom-abl images without chainload accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by images without device/$DEVICE/chainload/'
+
+# Restore chainload for flash/push refuse checks (they load_device only).
+mkdir -p "$t/repo/device/abldev/chainload"
+printf '#!/bin/sh\n' > "$t/repo/device/abldev/chainload/init"
+printf '# stub\n' > "$t/repo/device/abldev/chainload/stage2-dtb.py"
+
+if DEVICE=abldev "$t/repo/bin/omamobile" flash > "$t/log" 2>&1; then fail "flash unexpectedly accepted qcom-abl"; fi
+grep -q 'flash refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "flash did not refuse qcom-abl"
+grep -q 'no in-tree day-2 update path' "$t/log" || fail "flash message still points at a day-2 path"
+[[ ! -e $t/calls ]] || fail "qcom-abl flash accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by flash before phone access'
+
+if DEVICE=abldev "$t/repo/bin/omamobile" push > "$t/log" 2>&1; then fail "push unexpectedly accepted qcom-abl"; fi
+grep -q 'push refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "push did not refuse qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl push accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by push before phone access'
+
+# Same class: fastboot refuses qcom-abl before any phone I/O (no sysrq-c).
+rm -f "$t/calls"
+if DEVICE=abldev "$t/repo/bin/omamobile" fastboot > "$t/log" 2>&1; then fail "fastboot unexpectedly accepted qcom-abl"; fi
+grep -q 'fastboot refuses BOOT_METHOD=qcom-abl' "$t/log" || fail "fastboot did not refuse qcom-abl"
+[[ ! -e $t/calls ]] || fail "qcom-abl fastboot accessed the phone"
+echo 'ok - BOOT_METHOD=qcom-abl refused by fastboot before phone access'
+
+# Non-qcom descriptor must get past the refuse. Make fastboot report a
+# phone already in fastboot so cmd_fastboot returns before the reboot loop.
+rm -f "$t/calls"
+mkdir -p "$t/repo/device/cheetah"
+cp device/cheetah/device.conf "$t/repo/device/cheetah/"
+printf '#!/bin/sh\necho "SERIAL\tfastboot"\n' > "$t/bin/fastboot"
+chmod +x "$t/bin/fastboot"
+if ! DEVICE=cheetah "$t/repo/bin/omamobile" fastboot > "$t/log" 2>&1; then
+  fail "android-v4 fastboot should succeed when already in fastboot: $(cat "$t/log")"
+fi
+grep -q 'fastboot refuses BOOT_METHOD=qcom-abl' "$t/log" \
+  && fail "android-v4 cheetah was refused as qcom-abl"
+grep -q 'Already in fastboot' "$t/log" \
+  || fail "android-v4 fastboot did not take the already-in path: $(cat "$t/log")"
+# Restore the "any phone command is a failure" stub for later checks.
+printf '#!/bin/sh\necho called >> "$CALLS"\nexit 97\n' > "$t/bin/fastboot"
+chmod +x "$t/bin/fastboot"
+echo 'ok - BOOT_METHOD=android-v4 (cheetah) gets past fastboot qcom-abl refuse'
+
+# dodge-chain must refuse a stage-1 Image as STAGE2_IMAGE (nested pack → ~87MiB hang).
+cp tools/dodge-chain "$t/repo/tools/"
+# Fake "Image" carrying the stage-1 cmdline marker (strings fallback when no ikconfig).
+printf 'padding\nrdinit=/omamobile/init\npadding\n' > "$t/fake-stage1-Image"
+if "$t/repo/tools/dodge-chain" check-stage2-image "$t/fake-stage1-Image" > "$t/log" 2>&1; then
+  fail "check-stage2-image accepted a stage-1 marker Image"
+fi
+grep -q 'stage-1 cmdline marker\|looks like stage 1\|INITRAMFS_SOURCE\|CMDLINE_FORCE' "$t/log" \
+  || fail "check-stage2-image refused for the wrong reason: $(cat "$t/log")"
+echo 'ok - dodge-chain check-stage2-image refuses stage-1 marker Image'
+
+# Nesting under CHAIN_OUT must refuse even without markers.
+mkdir -p "$t/chain/arch/arm64/boot"
+printf 'clean-looking-payload\n' > "$t/chain/arch/arm64/boot/Image"
+if CHAIN_OUT="$t/chain" STAGE2_OUT="$t/s2" \
+    "$t/repo/tools/dodge-chain" check-stage2-image "$t/chain/arch/arm64/boot/Image" > "$t/log" 2>&1; then
+  fail "check-stage2-image accepted Image under CHAIN_OUT"
+fi
+grep -q 'under CHAIN_OUT\|nested stage-1' "$t/log" \
+  || fail "CHAIN_OUT nest refused for the wrong reason: $(cat "$t/log")"
+echo 'ok - dodge-chain check-stage2-image refuses Image under CHAIN_OUT'
+
+# CHAIN_OUT == STAGE2_OUT must refuse (would overwrite stage-2 Image with stage-1).
+mkdir -p "$t/same/arch/arm64/boot"
+printf 'clean-looking-payload\n' > "$t/same/arch/arm64/boot/Image"
+if CHAIN_OUT="$t/same" STAGE2_OUT="$t/same" \
+    "$t/repo/tools/dodge-chain" check-stage2-image "$t/same/arch/arm64/boot/Image" > "$t/log" 2>&1; then
+  fail "check-stage2-image accepted CHAIN_OUT == STAGE2_OUT"
+fi
+grep -q 'CHAIN_OUT must be distinct\|under CHAIN_OUT\|nested stage-1' "$t/log" \
+  || fail "equal CHAIN_OUT/STAGE2_OUT refused for the wrong reason: $(cat "$t/log")"
+echo 'ok - dodge-chain check-stage2-image refuses CHAIN_OUT == STAGE2_OUT'
+
+# A clean Image (no markers, not under CHAIN_OUT) must pass.
+printf 'clean-looking-payload\n' > "$t/clean-Image"
+"$t/repo/tools/dodge-chain" check-stage2-image "$t/clean-Image" > "$t/log" 2>&1 \
+  || fail "check-stage2-image rejected a clean Image: $(cat "$t/log")"
+grep -q 'ok - STAGE2_IMAGE is clean' "$t/log" || fail "clean Image missing ok line"
+echo 'ok - dodge-chain check-stage2-image accepts a clean Image'
+
+# slot_suffix resolver: bootconfig wins; bootargs fallback; empty if neither.
+rs="device/dodge/chainload/resolve-slot-suffix.sh"
+[[ -x $rs ]] || fail "resolve-slot-suffix.sh missing"
+bc=$(mktemp); ba=$(mktemp)
+printf 'androidboot.slot_suffix = "_b"\nother = 1\n' > "$bc"
+printf 'rdinit=/init androidboot.slot_suffix=_a console=tty0\n' > "$ba"
+got=$("$rs" "$bc" "$ba")
+[[ $got == _b ]] || fail "bootconfig should win, got '$got'"
+echo 'ok - slot_suffix from bootconfig wins over bootargs'
+got=$("$rs" /nonexistent "$ba")
+[[ $got == _a ]] || fail "bootargs fallback failed, got '$got'"
+echo 'ok - slot_suffix falls back to chosen/bootargs'
+got=$("$rs" /nonexistent /nonexistent)
+[[ -z $got ]] || fail "expected empty suffix, got '$got'"
+echo 'ok - slot_suffix empty when neither source has it'
+got=$("$rs" "$bc" /nonexistent)
+[[ $got == _b ]] || fail "bootconfig-only failed, got '$got'"
+echo 'ok - slot_suffix from bootconfig alone'
+# Packed /omamobile/slot_suffix fallback (ABL omits it under fastboot boot).
+pk=$(mktemp)
+printf '_b' > "$pk"
+got=$("$rs" /nonexistent /nonexistent "$pk")
+[[ $got == _b ]] || fail "packed fallback failed, got '$got'"
+echo 'ok - slot_suffix falls back to packed /omamobile/slot_suffix'
+got=$("$rs" "$bc" /nonexistent "$pk")
+[[ $got == _b ]] || fail "bootconfig must beat packed, got '$got'"
+# Force bootconfig to _a to prove priority over packed _b
+printf 'androidboot.slot_suffix = "_a"\n' > "$bc"
+got=$("$rs" "$bc" /nonexistent "$pk")
+[[ $got == _a ]] || fail "bootconfig should beat packed, got '$got'"
+echo 'ok - live bootconfig beats packed slot_suffix'
+
+# display-msm must not stamp when dispcc.ko is missing (RAM-boot / no $R.held).
+# Stamping on a missing-.ko failure is what left msm-mdss at -110 after a later
+# tmpfs modules overlay + bare modprobe msm (no dispcc before deferred timeout).
+dms=device/dodge/display/omamobile-display-msm
+[[ -x $dms ]] || fail "omamobile-display-msm missing"
+grep -q 'not stamping, staying on simpledrm' "$dms" \
+  || fail "display-msm must refuse to stamp when dispcc.ko is missing"
+grep -q 'DISPCC=.*dispcc-sm8750.ko' "$dms" \
+  || fail "display-msm must gate the stamp on dispcc-sm8750.ko"
+# Functional: empty modules tree -> exit 0, no stamp. OMAMOBILE_MODULES_H
+# overrides H so we don't need a fake uname. Rewrite STAMP/DISABLE on a copy
+# because those paths are fixed in the script.
+cp "$dms" "$t/display-msm"
+sed -i "s|^STAMP=.*|STAMP=$t/display-msm.tried|" "$t/display-msm"
+sed -i "s|^DISABLE=.*|DISABLE=/nonexistent|" "$t/display-msm"
+chmod +x "$t/display-msm"
+empty_h=$t/empty-modules/kernel
+mkdir -p "$empty_h"
+rm -f "$t/display-msm.tried"
+if ! OMAMOBILE_MODULES_H="$empty_h" "$t/display-msm" >"$t/dms.log" 2>&1; then
+  fail "display-msm with empty modules tree should exit 0"
+fi
+[[ ! -e $t/display-msm.tried ]] || fail "display-msm must not stamp when dispcc.ko is missing"
+grep -q "not stamping, staying on simpledrm" "$t/dms.log" \
+  || fail "display-msm should log not stamping on empty tree"
+echo "ok - display-msm does not stamp when dispcc.ko is missing"
+grep -q "msm already bound" "$dms" \
+  || fail "display-msm must treat DSI bind (not mere /sys/module/msm) as already-done"
+grep -q "rebinding" "$dms" \
+  || fail "display-msm must rebind msm-mdss when msm is loaded without DSI"
+echo "ok - display-msm requires DSI bind before skipping as already-loaded"
+
+grep -q 'ko_for' "$dms" \
+  || fail "display-msm must pick panel/msm by matching vermagic (ko_for)"
+echo "ok - display-msm prefers matching-vermagic panel/msm over stale \$P"
+
+grep -q 'msm_preloaded' "$dms" \
+  || fail "display-msm must only rebind when msm was preloaded before dispcc"
+grep -q 'rebinding' "$dms" \
+  || fail "display-msm must still rebind preloaded msm after dispcc"
+echo "ok - display-msm rebinds only when msm was preloaded before dispcc"
+
+grep -q 'skipping rebind' "$dms" \
+  || fail "display-msm must skip rebind when a DSI node exists but is not yet connected"
+grep -q 'no DSI node' "$dms" \
+  || fail "display-msm must only rebind when there is no DSI connector node"
+echo "ok - display-msm waits / skips rebind on not-yet-connected DSI"
+
+# Functional: preloaded msm + DSI node present but status!=connected must NOT
+# rebind (half-ready DSI race). Redirect sysfs/proc via sed on a copy;
+# list every load-loop module in fake /proc/modules so insmod is skipped.
+rebind_test() {
+  local name=$1 expect_rebind=$2
+  local td=$t/rebind-$name
+  rm -rf "$td"
+  mkdir -p "$td/bin" "$td/proc" "$td/sys/class/drm" \
+    "$td/sys/bus/platform/drivers/msm-mdss" \
+    "$td/empty-modules/kernel/drivers/clk/qcom" \
+    "$td/empty-modules/kernel/drivers/gpu/drm/msm" \
+    "$td/empty-modules/kernel/drivers/gpu/drm/panel"
+  # Stamp gate needs the file present; load loop skips via /proc/modules.
+  : > "$td/empty-modules/kernel/drivers/clk/qcom/dispcc-sm8750.ko"
+  : > "$td/empty-modules/kernel/drivers/gpu/drm/msm/msm.ko"
+  : > "$td/empty-modules/kernel/drivers/gpu/drm/panel/panel-aa569-p-3-a0019-dsc.ko"
+  cat > "$td/proc/modules" <<EOF
+msm 1 0 - Live 0x0
+dispcc_sm8750 1 0 - Live 0x0
+backlight 1 0 - Live 0x0
+drm_display_helper 1 0 - Live 0x0
+drm_dp_aux_bus 1 0 - Live 0x0
+drm_exec 1 0 - Live 0x0
+gpu_sched 1 0 - Live 0x0
+llcc_qcom 1 0 - Live 0x0
+ocmem 1 0 - Live 0x0
+mdt_loader 1 0 - Live 0x0
+panel_aa569_p_3_a0019_dsc 1 0 - Live 0x0
+EOF
+  : > "$td/sys/bus/platform/drivers/msm-mdss/unbind"
+  : > "$td/sys/bus/platform/drivers/msm-mdss/bind"
+  if [ "$name" = halfready ]; then
+    mkdir -p "$td/sys/class/drm/card1-DSI-1"
+    echo disconnected > "$td/sys/class/drm/card1-DSI-1/status"
+  fi
+  # No-op helpers so a stray load cannot touch the host.
+  printf '%s\n' '#!/bin/sh' 'exit 0' > "$td/bin/insmod"
+  printf '%s\n' '#!/bin/sh' 'exit 0' > "$td/bin/modinfo"
+  chmod +x "$td/bin/insmod" "$td/bin/modinfo"
+  cp "$dms" "$td/display-msm"
+  sed -i "s|^STAMP=.*|STAMP=$td/display-msm.tried|" "$td/display-msm"
+  sed -i "s|^DISABLE=.*|DISABLE=/nonexistent|" "$td/display-msm"
+  # Shrink the pre-rebind wait (6 x 0.5s) so the halfready case stays fast.
+  sed -i 's/while \[ \$i -lt 6 \]/while [ $i -lt 2 ]/' "$td/display-msm"
+  sed -i "s|/sys/class/drm|$td/sys/class/drm|g" "$td/display-msm"
+  sed -i "s|/proc/modules|$td/proc/modules|g" "$td/display-msm"
+  sed -i "s|/sys/bus/platform/drivers/msm-mdss|$td/sys/bus/platform/drivers/msm-mdss|g" "$td/display-msm"
+  chmod +x "$td/display-msm"
+  rm -f "$td/display-msm.tried"
+  if ! PATH="$td/bin:$PATH" WAIT=1 OMAMOBILE_MODULES_H="$td/empty-modules/kernel" \
+      "$td/display-msm" >"$td/dms.log" 2>&1; then
+    fail "display-msm rebind-$name should exit 0"
+  fi
+  if [ "$expect_rebind" = yes ]; then
+    grep -q "rebinding" "$td/dms.log" \
+      || { cat "$td/dms.log"; fail "rebind-$name should rebind"; }
+    grep -q ae00000.display-subsystem "$td/sys/bus/platform/drivers/msm-mdss/unbind" \
+      || fail "rebind-$name should write unbind"
+  else
+    grep -q "skipping rebind" "$td/dms.log" \
+      || { cat "$td/dms.log"; fail "rebind-$name should skip rebind"; }
+    [[ ! -s $td/sys/bus/platform/drivers/msm-mdss/unbind ]] \
+      || fail "rebind-$name must not write unbind"
+  fi
+}
+rebind_test halfready no
+rebind_test nodsi yes
+echo "ok - display-msm does not immediately rebind a not-yet-connected DSI"
+
+
+# stage-1 init must log which slot source won and dump bootconfig/bootargs.
+init=device/dodge/chainload/init
+grep -q 'slot_suffix=.*source=' "$init" \
+  || fail "stage-1 init must kmsg log slot_suffix source="
+grep -q 'omamobile-chain: /proc/bootconfig' "$init" \
+  || fail "stage-1 init must dump /proc/bootconfig to kmsg"
+grep -q 'omamobile-chain: chosen/bootargs' "$init" \
+  || fail "stage-1 init must dump chosen/bootargs to kmsg"
+grep -q 'SLOT_SRC=packed' "$init" \
+  || fail "stage-1 init must record packed as a slot source"
+echo 'ok - stage-1 init logs slot source and dumps bootconfig/bootargs'
+
+rm -f "$bc" "$ba" "$pk"
+
+# Tip-aware wifi / touch load: modprobe first, held .ko fallback.
+wifi_pcie=device/dodge/wifi/omamobile-wifi-pcie
+wifi_ath=device/dodge/wifi/omamobile-wifi-ath12k
+touch_load=device/dodge/touch/omamobile-touch-load
+[[ -x $wifi_pcie ]] || fail "omamobile-wifi-pcie missing"
+[[ -x $wifi_ath ]] || fail "omamobile-wifi-ath12k missing"
+[[ -x $touch_load ]] || fail "omamobile-touch-load missing"
+grep -q 'modprobe' "$wifi_pcie" \
+  || fail "wifi-pcie must prefer modprobe for tip overlay"
+grep -q '/usr/local/lib/omamobile' "$wifi_pcie" \
+  || fail "wifi-pcie must fall back to held kos under /usr/local/lib/omamobile"
+grep -q 'modprobe' "$wifi_ath" \
+  || fail "wifi-ath12k must prefer modprobe for tip overlay"
+grep -q 'gpi' "$touch_load" && grep -q 'spi_geni_qcom' "$touch_load" \
+  && grep -q 'synaptics_tcm2' "$touch_load" \
+  || fail "touch-load must load gpi, spi_geni_qcom, synaptics_tcm2"
+grep -q 'modprobe' "$touch_load" \
+  || fail "touch-load must prefer modprobe for tip overlay"
+grep -q '/usr/local/lib/omamobile' "$touch_load" \
+  || fail "touch-load must fall back to held kos under /usr/local/lib/omamobile"
+# Order: gpi before spi_geni before synaptics (dependency chain).
+awk '
+  /^opt gpi$/ { g=NR }
+  /^opt spi_geni_qcom$/ { s=NR }
+  /^opt synaptics_tcm2$/ { t=NR }
+  END {
+    if (!g || !s || !t) { print "missing opt gpi/spi_geni_qcom/synaptics_tcm2"; exit 1 }
+    if (!(g < s && s < t)) { print "order opt gpi < spi_geni_qcom < synaptics_tcm2 required"; exit 1 }
+  }
+' "$touch_load" || fail "touch-load module order wrong"
+# Runtime preference: with a fake modprobe that succeeds, held insmod must not run.
+tmod=$t/touch-modprobe
+rm -rf "$tmod"
+mkdir -p "$tmod/bin" "$tmod/sys/module" "$tmod/held"
+printf '%s\n' '#!/bin/sh' 'echo modprobe:"$*" >> "'"$tmod"'/log"' 'mkdir -p "'"$tmod"'/sys/module/$(echo "$1" | tr - _)"' 'exit 0' \
+  > "$tmod/bin/modprobe"
+printf '%s\n' '#!/bin/sh' 'echo insmod:"$*" >> "'"$tmod"'/log"' 'exit 0' \
+  > "$tmod/bin/insmod"
+chmod +x "$tmod/bin/modprobe" "$tmod/bin/insmod"
+# Point D at empty held so a mistaken insmod would still be logged.
+cp "$touch_load" "$tmod/touch-load"
+sed -i "s|^D=.*|D=$tmod/held|" "$tmod/touch-load"
+sed -i "s|/sys/module|$tmod/sys/module|g" "$tmod/touch-load"
+chmod +x "$tmod/touch-load"
+: > "$tmod/log"
+PATH="$tmod/bin:$PATH" "$tmod/touch-load" >"$tmod/out" 2>&1 || fail "touch-load with working modprobe should exit 0"
+grep -q 'modprobe:gpi' "$tmod/log" || { cat "$tmod/log" "$tmod/out"; fail "touch-load should modprobe gpi"; }
+grep -q 'modprobe:spi_geni_qcom' "$tmod/log" || fail "touch-load should modprobe spi_geni_qcom"
+grep -q 'modprobe:synaptics_tcm2' "$tmod/log" || fail "touch-load should modprobe synaptics_tcm2"
+grep -q 'insmod:' "$tmod/log" && { cat "$tmod/log"; fail "touch-load must not insmod when modprobe works"; }
+echo "ok - touch-load prefers modprobe over held kos"
+
+# Fallback: modprobe fails, held .ko present -> insmod.
+rm -rf "$tmod"
+mkdir -p "$tmod/bin" "$tmod/sys/module" "$tmod/held"
+printf '%s\n' '#!/bin/sh' 'echo modprobe_fail:"$*" >> "'"$tmod"'/log"' 'exit 1' \
+  > "$tmod/bin/modprobe"
+printf '%s\n' '#!/bin/sh' 'echo insmod:"$*" >> "'"$tmod"'/log"' 'exit 0' \
+  > "$tmod/bin/insmod"
+chmod +x "$tmod/bin/modprobe" "$tmod/bin/insmod"
+: > "$tmod/held/gpi.ko"
+: > "$tmod/held/spi-geni-qcom.ko"
+: > "$tmod/held/synaptics_tcm2.ko"
+cp "$touch_load" "$tmod/touch-load"
+sed -i "s|^D=.*|D=$tmod/held|" "$tmod/touch-load"
+sed -i "s|/sys/module|$tmod/sys/module|g" "$tmod/touch-load"
+chmod +x "$tmod/touch-load"
+: > "$tmod/log"
+PATH="$tmod/bin:$PATH" "$tmod/touch-load" >"$tmod/out" 2>&1 || fail "touch-load held fallback should exit 0"
+grep -q 'insmod:.*gpi' "$tmod/log" || { cat "$tmod/log" "$tmod/out"; fail "touch-load should insmod held gpi.ko"; }
+grep -q 'insmod:.*spi-geni-qcom' "$tmod/log" || fail "touch-load should insmod held spi-geni-qcom.ko"
+grep -q 'insmod:.*synaptics_tcm2' "$tmod/log" || fail "touch-load should insmod held synaptics_tcm2.ko"
+echo "ok - touch-load falls back to held kos when modprobe fails"
+
+[[ -f device/dodge/touch/omamobile-touch.service ]] \
+  || fail "omamobile-touch.service missing"
+grep -q 'ExecStart=/usr/local/sbin/omamobile-touch-load' device/dodge/touch/omamobile-touch.service \
+  || fail "touch unit must ExecStart omamobile-touch-load"
+echo "ok - tip-aware wifi/touch load scripts present"
+
+# Tip-aware ADSP / BT / audio + kmod-overlay tip path + tip-modules helper.
+adsp=device/dodge/modem/adsp-battery.sh
+[[ -f $adsp ]] || fail "adsp-battery.sh missing"
+grep -q 'modprobe' "$adsp" \
+  || fail "adsp-battery must prefer modprobe for tip overlay"
+grep -q 'fastrpc' "$adsp" \
+  || fail "adsp-battery must load fastrpc for sensors/audio"
+grep -q 'qcom_q6v5_pas\|qcom-q6v5-pas' "$adsp" \
+  || fail "adsp-battery must load qcom_q6v5_pas"
+[[ -f device/dodge/modem/omamobile-adsp-battery.service ]] \
+  || fail "omamobile-adsp-battery.service missing"
+grep -q 'After=.*omamobile-kmod-overlay' device/dodge/modem/omamobile-adsp-battery.service \
+  || fail "adsp-battery unit must After= kmod-overlay"
+echo "ok - tip-aware adsp-battery present"
+
+bt=device/dodge/bluetooth/omamobile-bt
+[[ -f $bt ]] || fail "omamobile-bt missing"
+grep -q 'modprobe' "$bt" \
+  || fail "omamobile-bt must prefer modprobe for tip overlay"
+grep -q 'bt-public-addr\|public-addr' "$bt" \
+  || fail "omamobile-bt must set a public address"
+grep -q 'ExecStart=/usr/local/sbin/omamobile-bt' device/dodge/bluetooth/omamobile-bt.service \
+  || fail "bt unit must ExecStart /usr/local/sbin/omamobile-bt"
+echo "ok - tip-aware bluetooth present"
+
+audio=device/dodge/audio/audio-bringup.sh
+[[ -f $audio ]] || fail "audio-bringup.sh missing"
+grep -q 'modprobe' "$audio" \
+  || fail "audio-bringup must prefer modprobe for tip overlay"
+grep -q 'heap_ready\|createstaticpd:audiopd' "$audio" \
+  || fail "audio-bringup must wait for audiopd heap"
+grep -q 'snd-soc-sc8280xp\|snd_soc_sc8280xp' "$audio" \
+  || fail "audio-bringup must load machine driver"
+[[ -f device/dodge/audio/omamobile-dodge-audio.service ]] \
+  || fail "omamobile-dodge-audio.service missing"
+echo "ok - tip-aware audio-bringup present"
+
+kmod=device/dodge/kernel/omamobile-kmod-overlay
+tip=device/dodge/kernel/omamobile-tip-modules-overlay
+[[ -f $kmod ]] || fail "omamobile-kmod-overlay missing"
+[[ -f $tip ]] || fail "omamobile-tip-modules-overlay missing"
+grep -q 'modules.dep' "$kmod" \
+  || fail "kmod-overlay must accept tip modules.dep path"
+grep -q 'omamobile-bt.tried' "$tip" \
+  || fail "tip-modules-overlay must clear bt stamp"
+grep -q 'omamobile-display-msm.tried' "$tip" \
+  || fail "tip-modules-overlay must clear display-msm stamp"
+grep -q 'restart sddm\|systemctl restart sddm' "$tip" \
+  || fail "tip-modules-overlay must bounce sddm after DSI"
+grep -q 'omamobile-adsp-battery' "$tip" \
+  || fail "tip-modules-overlay must restart adsp-battery"
+grep -q 'mount -t tmpfs' "$tip" \
+  || fail "tip-modules-overlay must mount tmpfs for RAM-only extract"
+echo "ok - kmod-overlay tip path + tip-modules-overlay present"
+
+# Dual-write installs must use a private bind of / (not only omamobile.*),
+# and undo that bind in an EXIT trap so a mid-install failure cannot leave /
+# bound under a leftover tmpdir.
+for inst in device/dodge/modem/install device/dodge/audio/install; do
+  grep -q 'mount --bind /' "$inst"     || fail "$inst must private-bind / to write through kmod-overlay"
+  grep -q "trap 'umount" "$inst"     || fail "$inst must trap-umount the private bind of / on exit/error"
+done
+grep -q 'omamobile-tip-sddm.bounced' device/dodge/kernel/omamobile-tip-modules-overlay   || fail "tip-modules-overlay must stamp sddm bounce"
+echo "ok - dual-write private-bind + cleanup trap + sddm bounce stamp"
+
+# Runtime: audio/install's private bind must be umounted when install fails
+# after mount --bind /. Fake mountpoint/mktemp/mount/install/systemctl.
+tbind=$t/bind-trap
+rm -rf "$tbind"
+mkdir -p "$tbind/bin" "$tbind/src"
+: > "$tbind/log"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$tbind/bin/mountpoint"
+printf '%s\n' '#!/bin/sh' "d=$tbind/tmpbind; mkdir -p \"\$d\"; echo \"\$d\"" > "$tbind/bin/mktemp"
+printf '%s\n' '#!/bin/sh' "echo mount:\"\$*\" >> \"$tbind/log\""   "mkdir -p \"$tbind/tmpbind/usr/local/lib/omamobile\" \"$tbind/tmpbind/usr/local/lib/omamobile.fake\""   'exit 0' > "$tbind/bin/mount"
+printf '%s\n' '#!/bin/sh' "echo umount:\"\$*\" >> \"$tbind/log\"" 'exit 0' > "$tbind/bin/umount"
+printf '%s\n' '#!/bin/sh' "echo rmdir:\"\$*\" >> \"$tbind/log\"" 'exit 0' > "$tbind/bin/rmdir"
+# First install (live path) succeeds; any install into the bind tmp fails.
+printf '%s\n' '#!/bin/sh' "echo install:\"\$*\" >> \"$tbind/log\""   "case \"\$*\" in *$tbind/tmpbind*) echo forced-fail >&2; exit 1 ;; esac"   'exit 0' > "$tbind/bin/install"
+printf '%s\n' '#!/bin/sh' "echo systemctl:\"\$*\" >> \"$tbind/log\"" 'exit 0' > "$tbind/bin/systemctl"
+chmod +x "$tbind/bin"/*
+cp device/dodge/audio/install "$tbind/src/install"
+cp device/dodge/audio/audio-bringup.sh "$tbind/src/" 2>/dev/null   || printf '#!/bin/sh\n' > "$tbind/src/audio-bringup.sh"
+cp device/dodge/audio/omamobile-dodge-audio.service "$tbind/src/" 2>/dev/null   || : > "$tbind/src/omamobile-dodge-audio.service"
+chmod +x "$tbind/src/install"
+# Fake id as root so any root check passes (audio/install has none; keep for modem reuse).
+printf '%s\n' '#!/bin/sh' 'echo 0' > "$tbind/bin/id"
+chmod +x "$tbind/bin/id"
+set +e
+PATH="$tbind/bin:/usr/bin:/bin" "$tbind/src/install" >"$tbind/out" 2>&1
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || { cat "$tbind/out" "$tbind/log"; fail "audio/install should fail when bind-path install fails"; }
+grep -q 'mount:--bind /' "$tbind/log" || { cat "$tbind/log" "$tbind/out"; fail "audio/install should mount --bind /"; }
+grep -q 'umount:' "$tbind/log" || { cat "$tbind/log" "$tbind/out"; fail "audio/install trap must umount on failure after bind"; }
+echo "ok - audio/install undoes private bind of / on failure"
+
+
+# Runtime: adsp-battery prefers modprobe when it succeeds.
+tad=$t/adsp-modprobe
+rm -rf "$tad"
+mkdir -p "$tad/bin" "$tad/proc"
+printf '%s\n' '#!/bin/sh' 'echo modprobe:"$*" >> "'"$tad"'/log"' 'exit 0' \
+  > "$tad/bin/modprobe"
+printf '%s\n' '#!/bin/sh' 'echo insmod:"$*" >> "'"$tad"'/log"' 'exit 0' \
+  > "$tad/bin/insmod"
+# Fake empty /proc/modules and no remoteproc (script tolerates).
+: > "$tad/proc/modules"
+chmod +x "$tad/bin/modprobe" "$tad/bin/insmod"
+cp "$adsp" "$tad/adsp-battery.sh"
+# Point HELD/D at empty so fallback cannot succeed; force awk to read our modules.
+sed -i "s|^HELD=.*|HELD=$tad/held/kernel|" "$tad/adsp-battery.sh"
+sed -i "s|^D=.*|D=$tad/omamobile|" "$tad/adsp-battery.sh"
+sed -i "s|/proc/modules|$tad/proc/modules|g" "$tad/adsp-battery.sh"
+sed -i "s|/sys/class/remoteproc|$tad/remoteproc|g" "$tad/adsp-battery.sh"
+mkdir -p "$tad/held/kernel" "$tad/omamobile" "$tad/remoteproc"
+chmod +x "$tad/adsp-battery.sh"
+: > "$tad/log"
+PATH="$tad/bin:$PATH" "$tad/adsp-battery.sh" >"$tad/out" 2>&1 \
+  || fail "adsp-battery with working modprobe should exit 0"
+grep -q 'modprobe:qrtr' "$tad/log" || { cat "$tad/log" "$tad/out"; fail "adsp-battery should modprobe qrtr"; }
+grep -q 'modprobe:qcom_q6v5_pas\|modprobe:qcom-q6v5-pas' "$tad/log" \
+  || { cat "$tad/log" "$tad/out"; fail "adsp-battery should modprobe qcom_q6v5_pas"; }
+grep -q 'modprobe:fastrpc' "$tad/log" || fail "adsp-battery should modprobe fastrpc"
+grep -q 'insmod:' "$tad/log" && { cat "$tad/log"; fail "adsp-battery must not insmod when modprobe works"; }
+echo "ok - adsp-battery prefers modprobe over held kos"

@@ -383,6 +383,12 @@ def real_package(t):
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
     qml_parse(root)
     lock_glance(root)
+    app_icons_largest(root)
+    lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
+    launch = lib.split("  function launch(desktopId, name) {", 1)
+    ok("function launchesShellSurface(id)" in lib and 'String(command[0]).replace(/^.*\\//, "") === "omarchy-shell"' in lib
+       and len(launch) == 2 and "if (!root.launchesShellSurface(id)) root.beginLaunchFeedback(name)" in launch[1].split("\n  }", 1)[0],
+       "real omarchy: no launch toast for an entry that runs omarchy-shell, every other launch keeps it (0025)")
     for name in ("omarchy-channel-set", "omarchy-refresh-pacman"):
         text = read(root, "usr/bin/" + name)
         guard = text.find("if [[ -x /usr/bin/omamobile-update ]]")
@@ -443,6 +449,38 @@ def qml_parse(root):
     bad = [f for f in sorted(files)
            if subprocess.run([tool, os.path.join(root, "usr/share/omarchy", f)], capture_output=True).returncode != 0]
     ok(files and not bad, "real omarchy: the %d patched QML files parse (qmlformat)%s" % (len(files), " " + str(bad) if bad else ""))
+
+
+def app_icons_largest(root):
+    """Patch 0024: the icon index keeps the largest size per name. The
+    patched indexIconLine and iconPathSize run in node against paths in
+    the scan's order (SVGs first, then PNGs in directory order)."""
+    lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
+    fns = []
+    for name in ("iconPathSize", "indexIconLine"):
+        i = lib.find("  function %s(" % name)
+        j = lib.find("\n  }\n", i)
+        ok(i >= 0 and j > i, "real omarchy: AppLibrary has %s (0024)" % name)
+        if i < 0 or j < 0:
+            return
+        fns.append(lib[i:j + 4])
+    js = ("var root = {pendingIconIndex: {}};\n" + "\n".join("function " + f.strip()[len("function "):] for f in fns) +
+          "\n[process.argv.slice(1)].forEach(function(ps) { ps.forEach(indexIconLine) });"
+          "\nconsole.log(JSON.stringify(root.pendingIconIndex))")
+    paths = ["/usr/share/icons/hicolor/scalable/apps/foot.svg",
+             "/usr/share/icons/hicolor/32x32/apps/chromium.png",
+             "/usr/share/icons/hicolor/48x48/apps/chromium.png",
+             "/usr/share/icons/hicolor/256x256/apps/chromium.png",
+             "/usr/share/icons/hicolor/128x128/apps/chromium.png",
+             "/usr/share/icons/hicolor/64x64/apps/foot.png",
+             "/usr/share/pixmaps/odd.png",
+             "/usr/share/icons/hicolor/24x24/apps/odd.png"]
+    p = subprocess.run(["node", "-e", js, "--"] + paths, capture_output=True, text=True)
+    got = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
+    ok(got.get("chromium", "").endswith("/256x256/apps/chromium.png")
+       and got.get("foot", "").endswith("/scalable/apps/foot.svg")
+       and got.get("odd", "").endswith("/24x24/apps/odd.png"),
+       "real omarchy: the icon index keeps the largest size, an SVG over any PNG (0024: %s)" % (got or p.stderr.strip()[:120]))
 
 
 def lock_glance(root):

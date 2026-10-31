@@ -1,0 +1,46 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Load the Synaptics TouchComm path (gpi -> spi_geni_qcom ->
+# synaptics_tcm2). Prefer modprobe so a tip Image with a tmpfs modules
+# overlay gets matching kos; fall back to /usr/local/lib/omamobile (the
+# packaged gpu2 held kos) when there is no modules tree for uname -r
+# yet — that is the normal rootfs boot before any overlay.
+#
+# Does not load the rest of the held tree, so msm does not take the
+# framebuffer from a bare tip RAM boot that has not run display-msm.
+set -u
+D=/usr/local/lib/omamobile
+
+log() { echo "omamobile-touch-load: $*"; }
+
+# Load by module name. modprobe first (resolves deps from the running
+# kernel's tree); else insmod the held .ko under $D (hyphen or underscore).
+load() {
+	name=$(echo "$1" | tr - _)
+	[ -e "/sys/module/$name" ] && return 0
+	if modprobe "$name" 2>/dev/null; then
+		return 0
+	fi
+	hyphen=$(echo "$name" | tr _ -)
+	if [ -f "$D/$hyphen.ko" ]; then
+		insmod "$D/$hyphen.ko" 2>/dev/null && return 0
+	fi
+	if [ -f "$D/$name.ko" ]; then
+		insmod "$D/$name.ko" 2>/dev/null && return 0
+	fi
+	return 1
+}
+
+# Optional: skip quietly when neither modprobe nor a held .ko works
+# (built-in on this kernel, or not shipped in $D).
+opt() {
+	if load "$1"; then
+		return 0
+	fi
+	log "$1 not loaded (built-in, or no matching .ko yet)"
+	return 0
+}
+
+opt gpi
+opt spi_geni_qcom
+opt synaptics_tcm2

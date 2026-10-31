@@ -91,6 +91,12 @@ b=plugins/omamobile.back/Back.qml
 python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the back gesture"
 grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
+grep -c "google,zumapro-tegu' >/dev/null && scale='8 \\\\/ 3'" bin/omamobile-setup-user >/dev/null || fail "the 9a's scale is 8/3"
+# the seeded line stays valid Lua for both scales
+for sc in 3 '8 \/ 3'; do
+  t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
+  [[ $t == 'local omarchy_monitor_scale = 3' || $t == 'local omarchy_monitor_scale = 8 / 3' ]] || fail "the seeded scale line ($t)"
+done
 grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
 grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
 grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
@@ -411,6 +417,14 @@ elif [[ $rc != 0 ]]; then
 else
   pass "home widgets stop when nobody can see them: no sources, every or frames hidden, one catch-up, 20/30 fps, half rate when slow"
 fi
+rc=0; out=$(python3 -B test/widget-host.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "widget host output limits # SKIP no Quickshell"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "widget host output limits"
+else
+  pass "widget host output limits, cancellation and state"
+fi
 
 # The weather widgets' position: locate.sh against a fake where-am-i.
 bash -n plugins/omamobile.home/locate.sh || fail "locate.sh parses"
@@ -462,6 +476,8 @@ if grep -rnE 'appLibrary\.launch\(|openUrlExternally|"gtk-launch"|execArgv\(\["o
   fail "every launch path goes through omamobile-launch"
 fi
 grep -c 'Quickshell.execDetached(LauncherModel.appArgv(entry.id))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer launches through omamobile-launch"
+grep -c '!LauncherModel.opensShellSurface(entry))' plugins/omamobile.launcher/Launcher.qml >/dev/null &&
+  grep -c '!HomeModel.opensShellSurface(entry))' plugins/omamobile.home/Home.qml >/dev/null || fail "no launch toast for an entry that opens a shell surface (drawer and home)"
 grep -c 'Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))' plugins/omamobile.home/Home.qml >/dev/null || fail "home-screen apps launch through omamobile-launch"
 grep -c 'tile.home.launch(tile.entry.app)' plugins/omamobile.home/AppTile.qml >/dev/null || fail "app tiles launch through the home screen"
 grep -c 'Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.launch goes through omamobile-launch"
@@ -469,6 +485,10 @@ grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omamobi
 grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omamobile.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omamobile-launch"
 grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fail "NFC links open through omamobile-launch"
 grep -c 'GLib.timeout_add_seconds(2, follow_rfkill, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service follows the rfkill switch"
+grep -c 'GLib.timeout_add_seconds(2, follow_screen, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service stops polling with the screen off"
+python3 -B test/nfc-screen.py >/dev/null || { python3 -B test/nfc-screen.py | grep -v '^ok'; fail "screen_lit reads the connectors"; }
+grep -c 'polling waits for the screen' bin/omamobile-nfc-open >/dev/null || fail "start_polling leaves the loop off while the screen is dark"
+grep -c 'timeout_add_seconds(4' bin/omamobile-nfc-open >/dev/null && fail "the one-shot stop is gone: the screen check stops polling every time"
 grep -c '"systemctl", "restart", "neard"' bin/omamobile-nfc-open >/dev/null || fail "an NFC unblock restarts neard"
 grep -c '^Requires=neard' systemd/omamobile-nfc-open.service >/dev/null && fail "omamobile-nfc-open restarts neard, so it must not Require= it (the restart would loop)"
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
@@ -481,6 +501,10 @@ if command -v node >/dev/null; then
 const L = require("./plugins/omamobile.launcher/LauncherModel.js")
 const eq = (a, b, what) => { if (a !== b) throw new Error(what + ": " + a + " != " + b) }
 eq(L.drawerColumns(4, 456, 480, 12), 4, "upright")
+eq(L.opensShellSurface({ command: ["omarchy-shell", "shell", "summon", "omamobile.update", "{}"] }), true, "the Updates entry opens a shell surface")
+eq(L.opensShellSurface({ command: ["/usr/bin/omarchy-shell", "osd"] }), true, "by path too")
+eq(L.opensShellSurface({ command: ["chromium"] }), false, "an app keeps the launch toast")
+eq(L.opensShellSurface({}), false, "an entry without a command keeps it")
 eq(L.drawerColumns(4, 1016, 480, 12), 8, "on its side")
 eq(L.drawerColumns(5, 1016, 480, 12), 11, "five across upright")
 eq(L.drawerColumns(4, 1016, 0, 12), 4, "no screen known")
@@ -559,6 +583,13 @@ fi
 grep -c 'startProc.write(startProc.secret + "\\n")' plugins/omamobile.update/Update.qml >/dev/null || fail "the PIN goes to stdin"
 if grep -nE 'command: .*(secret|pinField)' plugins/omamobile.update/Update.qml; then fail "the PIN is never in argv"; fi
 grep -c 'exclusionMode: ExclusionMode.Normal' plugins/omamobile.update/Update.qml >/dev/null || fail "the sheet stays above the on-screen keyboard"
+u=plugins/omamobile.update/Update.qml
+awk '/onPageChanged: \{/,/^  \}/' $u | grep -c '"omamobile.keyboard", "hideKeyboard"' >/dev/null &&
+  awk '/onPageChanged: \{/,/^  \}/' $u | grep -c 'if (page === "auth") return' >/dev/null ||
+  fail "leaving the PIN page hides the on-screen keyboard"
+grep -c 'AnchorChanges { target: detailsBox; anchors.top: undefined; anchors.bottom: resultButtons.top }' $u >/dev/null &&
+  ! grep -c 'anchors.top: root.page === "progress" ? progressColumn.bottom' $u >/dev/null ||
+  fail "the result page's Details box sits above the buttons, not over the result"
 python3 -B - <<'PY' || fail "the update sheet lints clean"
 import importlib.machinery, importlib.util, os, sys
 loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
@@ -682,6 +713,14 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 [[ -f $tmp/root/usr/share/applications/omamobile-agent.desktop ]] || fail "install stages the AI Agent shortcut"
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$tmp/root/usr/share/applications/omamobile-agent.desktop" || fail "AI Agent desktop entry validates"
+fi
+# The app drawer's Updates entry opens the update sheet (omamobile.update)
+u=$tmp/root/usr/share/applications/omamobile-update.desktop
+[[ -f $u ]] && grep -c '^Exec=omarchy-shell shell summon omamobile.update "{}"$' "$u" >/dev/null &&
+  grep -c '^Icon=software-updater$' "$u" >/dev/null && [[ -f plugins/omamobile.update/manifest.json ]] ||
+  fail "install stages the Updates entry, which opens the update sheet"
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$u" || fail "Updates desktop entry validates"
 fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
 # Updates reach users set up earlier: setup-user reruns at every login, and
