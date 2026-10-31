@@ -1,0 +1,15 @@
+[Unit]
+Description=Omarchy Mobile dodge: hexagonrpcd for the ADSP sensors PD (read-only file server)
+ConditionPathExists=/etc/omamobile/sensors.enable
+ConditionPathExists=/var/lib/omamobile/sensors/root/sensors/registry
+After=omamobile-adsp-battery.service
+Requires=omamobile-adsp-battery.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hexagonrpcd -f /dev/fastrpc-adsp-secure -d adsp -s -R /var/lib/omamobile/sensors/root
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

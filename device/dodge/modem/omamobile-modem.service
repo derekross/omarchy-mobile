@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Starts the MPSS once rmtfs and tqftpserv run. Needs only_adsp=0, which
+# adsp-battery.sh uses when the same flag file exists. No ExecStop: stopping
+# the MPSS hard-resets the phone on 7.3, so it runs until the reboot.
+[Unit]
+Description=dodge modem DSP start
+ConditionPathExists=/etc/omamobile/modem-probe.enable
+Requires=omamobile-modem-efs.service omamobile-rmtfs.service omamobile-tqftpserv.service
+After=omamobile-modem-efs.service omamobile-rmtfs.service omamobile-tqftpserv.service omamobile-adsp-battery.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/omamobile/modem/omamobile-modem start
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Experiment (2026-10-21): ModemManager refuses a QMI modem without a net port,
+# and SM8750 has no IPA driver in 6.16 yet. Offer a tun device as the
+# qcom-soc net port so MM creates the modem for control (registration, SIM,
+# voice/SMS). Data through it cannot work. Remove once IPA exists.
+ACTION!="add|change|move|bind", GOTO="omamobile_mm_fake_end"
+SUBSYSTEM=="net", KERNEL=="rmnet_mm0", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_QCOM_SOC}="1", ENV{ID_MM_PHYSDEV_UID}="qcom-soc", ENV{ID_MM_CANDIDATE}="1"
+LABEL="omamobile_mm_fake_end"
