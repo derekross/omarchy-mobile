@@ -8,6 +8,8 @@
 # OMAMOBILE_SSH_HOST overrides root@172.16.42.1 (user@host).
 # OMAMOBILE_SSH_KEY selects an identity file (IdentitiesOnly=yes).
 # OMAMOBILE_SSH_KNOWN_HOSTS selects a file with strict host-key checking.
+# OMAMOBILE_SSH_HOST_KEY_ALIAS selects the name checked in that file, so
+# native and recovery systems can keep distinct pins at the same USB address.
 # Explicit connection options require Python 3.
 #
 # OMAMOBILE_SSH_SHARE=1 makes every call share one connection (OpenSSH
@@ -24,19 +26,25 @@ target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
 }
 key=${OMAMOBILE_SSH_KEY:-}
 known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
+alias=${OMAMOBILE_SSH_HOST_KEY_ALIAS:-}
+[[ -z $alias || ( $alias != -* && $alias =~ ^[a-zA-Z0-9._:-]+$ ) ]] || {
+  echo 'phone-ssh: invalid OMAMOBILE_SSH_HOST_KEY_ALIAS' >&2; exit 1;
+}
 custom=0
 path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
-if [[ $target != root@172.16.42.1 || -n $key$known ]]; then
+if [[ $target != root@172.16.42.1 || -n $key$known$alias ]]; then
   custom=1
   # OpenSSH's %C omits identity/trust policy. Normalize explicit paths and
   # include contents so cwd changes and key rotations never reuse a master.
   # Python 3 is required only for these explicit connection options.
-  normalized=$(python3 - "$target" "$key" "$known" <<'PYCONTEXT'
+  normalized=$(python3 - "$target" "$key" "$known" "$alias" <<'PYCONTEXT'
 import hashlib, sys
 from pathlib import Path
 h = hashlib.sha256(); h.update(sys.argv[1].encode() + b'\0')
+if sys.argv[4]:
+    h.update(sys.argv[4].encode() + b'\0')
 paths = []
-for label, value in zip(('identity', 'known-hosts'), sys.argv[2:]):
+for label, value in zip(('identity', 'known-hosts'), sys.argv[2:4]):
     if any(token in value for token in ('\n', '\r', '%', '${')):
         sys.exit('phone-ssh: file paths must be literal, without newlines or OpenSSH expansion tokens')
     path = Path(value).expanduser().resolve() if value else None
@@ -71,6 +79,7 @@ else
   opts+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 fi
 [[ -z $key ]] || opts+=(-o IdentitiesOnly=yes -i "$key")
+[[ -z $alias ]] || opts+=(-o "HostKeyAlias=$alias")
 case ${1:-} in
   --fresh) shift; opts+=(-o ControlMaster=no -o ControlPath=none) ;;
   --stop) exec ssh "${opts[@]}" -o ControlPath="$path" -O exit "$target" 2>/dev/null ;;
