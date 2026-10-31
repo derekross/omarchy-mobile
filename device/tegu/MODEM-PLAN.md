@@ -998,6 +998,25 @@ does swapping in gnss_spi (`word32=2`, commit 734f5f8c8 on
 errors, on a boot without the swap-mode property. The palmtop runs the
 software swap.
 
+**G3-L1, the L1 substates on for real (2026-10-31, one boot, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`).**
+The controller module's v8 bring-up build (sha256 `dbbb6f5f335f7640…`)
+logs each step of its L1SS path behind `trace=1` and with `l1ss=2` enables
+the substates at every link-up. The trace answered why the earlier runs
+showed nothing: with `l1ss` at its default 0 the requests were dropped. With
+`l1ss=2` both ends read back enabled at every link-up (root CTL1
+`0x40a3200f`, endpoint `0x40a3000f`, capability at 0x160 on both). The
+cycling did not stop, and that is by design: cpif's `cp2ap_suspend`
+handler, the CP saying it sleeps, disables the substates in
+`s51xx_pcie_save_state()` and calls `s5100_poweroff_pcie()` about 90 ms
+after each enable, so the link powers down and up about twice a second as
+on stock. So the substates are not what the cycling lacks. With them on,
+one 240 s Location session gave 87 of 155 fixed and the palmtop survived
+the session, `omamobile-gnss off`, and minutes of idle cycling, then hung
+about 630 s after ONLINE (cycle 1083, last line `up: dbi allowed`, nothing
+in pstore). Earlier hangs came about 170 s after ONLINE. One boot each way,
+so the substates may delay the hang; they do not prevent it. The next step
+is the hang inside one cycle: what follows `up: dbi allowed`.
+
 **The CP link under GNSS traffic, G3-L1's first step answered, and a
 correction.** With GNSS running for minutes on the normal boot, the hang of
 10-29 came back once (CLUSTER0_NONCPU_WDTRESET about 260 s into the boot,
