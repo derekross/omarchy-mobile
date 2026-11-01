@@ -13,6 +13,114 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-30: the hands-on morning (fingerprint, card, USB-C host, GNSS)
+
+Release `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, device
+package 0.2.0, the first morning of hands-on tests on the package boot. Each
+run had one thing in its way that the package boot no longer does by itself.
+
+- **Fingerprint (kernel #126's panel module, one-minute repeat): pass.** The
+  enrolled finger lit the circle and unlocked on the first press; three
+  presses of a wrong finger were refused; the right one matched again. Two
+  things had to be done by hand first: the sensor driver is not under
+  `/lib/modules` for this release (`goodix-fp.ko` lives in
+  `/var/lib/omamobile-tegu/`, loaded by `insmod`), and the stack has to be
+  started as `omamobile-fp-chroot start bridge`, not `start storage`. A
+  hand unit, `tegu-fp-stage.service` (insmod the driver, then the bridge
+  stage, after the graphics start), does both at boot since the afternoon,
+  so the lock screen takes a finger without a hand step; it is not in the
+  repository, like the clock-pad unit below.
+- **No circle after a tap wake.** The power key turned the screen off, a
+  tap woke it to the PIN pad, and there the panel's backlight device still
+  read `bl_power` 4; setting it back to 0 was not enough, because the
+  backlight core's blank bit stayed set, `backlight_get_brightness()`
+  returned 0, and `local_hbm_mode` refused with EPERM (the driver's
+  allow_lhbm-and-brightness check). A DPMS off and on through Hyprland
+  cleared it, and so did a later power-key press, which is the wake the
+  shell handles fully. Cause and fix are in omamobile-shell
+  <https://github.com/derekross/omarchy-mobile/pull/183>: a touch wake from
+  s2idle got no `omamobile-keys wake`, so Hyprland never re-enabled the
+  display; it now runs the same wake as the power key. The panel driver
+  refusing LHBM in that state is the safe behaviour and stays.
+- **NFC card read (kernel #131's modules): pass**, after two misses. The
+  controller answered every NCI command and neard reported Powered and
+  Polling (Mode stayed "Idle"), but no card was ever seen, because the NFC
+  clock pad (PMU 0x3e84) was off on this boot: the hand script that set it
+  at boot no longer runs on the package boot. `tegu-nfc-clkpad extpad=1`
+  (0x00000000 to 0x00010000) and a rebind of the driver, and the very next
+  60 s `nfctool -d nfc0 -p Initiator` poll found the card. The tool is
+  `tegu-nfc-clkpad.ko`, a bring-up kernel module (source in the owner's
+  logs, `logs/tegu-nfc-20261026/clkpad/tegu-nfc-clkpad.c`, not in the
+  repository): it takes the kernel's SMC-backed PMU regmap
+  (`exynos_get_pmu_regmap()`), does one `regmap_update_bits()` on 0x3e84
+  (EXTPAD_EN | PAD_EN), reads the register back, and is removed again;
+  never `/dev/mem`. A hand unit, `tegu-nfc-clkpad.service`, runs
+  `insmod … extpad=1 && rmmod` after `systemd-modules-load.service` and
+  before `sysinit.target`, and leaves a hang marker
+  (`/var/lib/omamobile-tegu/clkpad-started`, written before the insmod and
+  removed after; a boot that finds it skips the write and logs it). It
+  stays until kernel #100's in-driver handling is on the palmtop. Rule of
+  thumb: a controller that talks NCI but never sees a tag is the clock pad.
+- **USB-C host (H2b, H4, H5): recorded in [USB-HOST-PLAN](USB-HOST-PLAN.md)**
+  (pull request #178). H2b passed (the PMIC block probes with its interrupt, the boost's
+  watchdog is serviced from it); H4 showed that unbinding the charger takes
+  the Type-C port down with it as a device-link consumer (a WARN in
+  `tcpm_port_unregister_pd`, VBUS to 0, the laptop link gone until the
+  dead-man reboot); H5 ran with its Expect not met, within the stop window
+  (the boost stays on across a reset, read at 3.13 s of the next boot, and
+  drops by itself when the RT9470's watchdog expires; the reworked driver
+  then takes it over).
+- **GNSS G3-A (automatic chip select, feedback delay 0): same CHPP failure,
+  clean checksums**, recorded in [MODEM-PLAN](MODEM-PLAN.md) (pull request
+  #179). G3-A2 (stock's 32-bit words) is the one boot left on that trace.
+- **Pushes from the run kit are refused by its own guard.** The kit's
+  `omamobile.local.conf` puts a `deny-hardware` directory of stubs (ssh,
+  fastboot, dd, ...) first on PATH, from the hands-free packing days; every
+  push since reads "phone not reachable". Today's pushes went through the
+  repository's own `bin/omamobile push` from a scratch checkout of main
+  carrying the kit's `device.conf`. After H5's boot the push wrote and
+  verified slot B but its reboot command never reached the palmtop: the USB
+  link had dropped again and Wi-Fi was unreachable too while touch still
+  worked; the owner rebooted from the menu and the new slot booted.
+- **Sleep:** `tegu-mif-sleep.ko` loads at boot from a hand unit since last
+  night; a cable-out `power-ab` run with it is in progress (result in
+  [SLEEP-PLAN](SLEEP-PLAN.md) S1).
+- **UFS did not come back from an s2idle, and the root went read-only
+  (afternoon).** A forced 10-minute `systemctl suspend` woke on its alarm
+  with `link startup failed 1` / `Host init failed 1` five times and
+  `ufshcd_wl_resume failed: 1` in the console; every disk read then failed,
+  ext4 went `emergency_ro`, and for an hour the palmtop answered SSH from
+  memory while `systemctl suspend`/`reboot` did nothing and the power key
+  could not light the screen. A sysrq `b` reset recovered it with a clean
+  journal replay. A palmtop that seems never to wake may be exactly this.
+  Record and rule in [SLEEP-PLAN](SLEEP-PLAN.md) S1 (#166).
+- **The GPU ran at a fixed 160 MHz on the package boot.** `omamobile-tegu-graphics`
+  gives panthor the one inherited CMU point; the 10-27 table's 150-890 MHz
+  came from the hand `tegu-gpu-dvfs-activate` overlay module (adds stock's
+  G3D levels to `/opp-table-gpu`), which the package boot no longer applied.
+  Since this evening a hand unit, `tegu-gpu-dvfs.service`, applies it after
+  the graphics start with `activate=1` and re-binds `1f000000.gpu` before
+  the session starts (the module refuses to apply before panthor is bound;
+  the first two tries at boot failed on that), and devfreq shows 14 steps,
+  150 to 890 MHz, `simple_ondemand`. Kernel #85/#87 carry the proper form.
+  `tegu-gpu-dvfs.service` leaves no hang marker (its ExecStart checks panthor
+  is bound, inserts the activate module and rebinds `1f000000.gpu`), a known
+  gap; the `gpu-thermal` zone's passive trip at 85 °C (critical 105 °C), with
+  `devfreq-1f000000.gpu` as its cooling device, is what throttles the GPU at
+  890 MHz on that boot.
+- **The lock's fingerprint state got stuck after the afternoon's sleeps.**
+  With the owner on the desktop, `omarchy-shell lock status` said
+  `locked:true, sessionLocked:true, fingerprint:true`, the lock's PAM
+  fingerprint verify ran in a loop every few seconds (fprintd always
+  claimed, `fprintd-verify` refused with AlreadyInUse), and
+  `omarchy-restart-shell` refused "while the session is locked". A fresh
+  `omarchy-shell lock lock` and a PIN unlock put the state back. Separately,
+  the lock shows no fingerprint marker over the sensor (only the PIN pad's
+  small icon), so the owner aims blind; the circle lights only on a touch
+  inside the sensor's 101 px radius at (540, 1756), which is why the
+  morning's unlock worked once the circle had shown the spot and the
+  afternoon's attempts saw no finger down at all.
+
 ## 2026-10-29: the device package boot, and what this row rests on
 
 The palmtop's bring-up runs from `omamobile-device-tegu` 0.2.0
@@ -124,6 +232,89 @@ with nothing but Bluetooth starting resets again at that time, start here.
 - The 2026-10-27 "140 mA asleep" figure doesn't hold up against 2026-10-28
   (434-445 mA cable out, as-is) and tonight; treat about 300 mA cable out
   as the baseline.
+
+## 2026-10-28: the second 9a (the phone behind #74)
+
+These results are from a second retail Pixel 9a, the one behind
+<https://github.com/derekross/omarchy-mobile/pull/74>. They don't replace
+the palmtop's results in the entries around this one.
+
+**Slot A, as it stands:** stock `CP3A.261005.005` (Android 17, October
+2026). All five live slot A boot images match the official October images
+by hash. Selecting A and asking for recovery reached Android's `No command`
+screen, recovery ADB and its shell answered (slot A, `CP3A.261005.005`),
+and recovery went back to fastboot and B back to Omarchy with no image
+written and no userdata reset. That verifies stock's recovery boot, not a
+full Android boot: Arch holds `userdata`, so going back to Android means
+resetting it, as with the installer. An earlier draft of this entry said A
+"is not currently a qualified rollback"; that was before the recovery check
+and no longer holds. Recovery for these trials also relied on retained,
+checksum-verified slot B image sets.
+
+**Fastboot is by the buttons on this phone:** with the phone off, hold
+Volume Down, add Power, and keep both held about 20 s. Software
+`reboot-to bootloader` came back to a normal boot of B instead.
+
+### Prototype kernel, simple framebuffer
+
+Kernel `7.3.0-rc6-omamobile-push1-g9ea0e19f8dc2`, from an unpublished
+branch on public `omamobile` `33267e524` plus the clock and binding changes
+then in review and prototype board, USB, UFS and touch changes. It is not
+the tree in linux-omarchy-mobile #80 and #81.
+
+`DEVICE=tegu bin/omamobile flash` wrote only `boot_b`, `init_boot_b`,
+`vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`, selected B and
+rebooted; a second trial used an initramfs without builder SSH keys. Both
+reached Arch, Hyprland and the Omarchy shell on the existing `userdata`.
+The display was ABL's simple framebuffer with a DECON trigger write, on
+October 2026 headers; none of that is in the shared descriptor.
+
+`tools/phone-smoke`: boot, storage guard (62 guarded partitions), ext4
+root, kernel health, USB and session passed; display 1080x2424 and
+Synaptics touch found. No GPU render node; Wi-Fi, Bluetooth, battery and
+charging, audio, sensors and cameras absent or skipped.
+
+The touch start marker: a normal reboot registered touch and cleared the
+marker; a reboot with the marker kept on purpose left touch off and logged
+the skip; `--retry`, with kmsg streamed to the laptop and the watchdog
+armed, brought touch back and cleared it. A fresh SSH login worked
+afterwards.
+
+### Public base, oldest headers
+
+The public board and touch base `9386dfaa1d5d` with this directory's
+`kernel.config` boots as `7.3.0-rc6-omamobile-push1-g9386dfaa1d5d`. With
+Android 16 / September 2025 headers and no AVB footers, B went back to
+fastboot (`bootfailure`, `enter-reason` "boot failure"), with no log that
+names the cause. The same payloads, byte for byte, with hash footers
+(the image tool's AOSP test key, rollback index 0, OS version 16, security
+patch 2025-09-05) booted Arch with USB and SSH. ACPM reported 16 usable
+channels at 0.22 s; touch registered at 36.1 s. Smoke at 97 s: boot, all 62
+storage guards, root, kernel health, USB, touch and buttons passed.
+
+So this newer phone boots the oldest shared header values with
+index-zero footers. That says nothing about footers on the palmtop, and the
+shared descriptor is unchanged. This base had no display driver (Plymouth
+failed, the Google logo stayed).
+
+### Native display
+
+Display tree `1175a53bf9b2` booted as
+`7.3.0-rc6-omamobile-push1-gde2e0689c517`, same headers and footers, no
+trigger write. The first boot found that Arch's `kernel-modules-hook`
+cleanup, during the previous kernel's boot, had deleted the unowned modules
+of the next kernel; the package's `linux-modules-cleanup` drop-in (carried
+into 0.2.0) skips that cleanup. With the modules restored: `card0-DSI-1`,
+Omarchy on camera, touch confirmed by hand. A later reboot kept all 1,782
+modules, brought up the panel at 3.66 s at 1080x2424, 60 Hz (the cap this
+branch's package set; 0.2.0 drops it), and the lock screen came back on
+DPMS wake. Smoke at 223 s: boot, storage guard, root, kernel health, USB,
+the session, touch and buttons passed.
+
+Still open on this phone: Plymouth's splash crashes in `strcmp` with no
+console; no GPU render node (this kernel has no GPU node); Wi-Fi,
+Bluetooth, battery and charging, audio, sensors and cameras unqualified; no
+clean install; B not marked successful. Stock A was never written.
 
 ## 2026-10-28, evening: USB-C host mode through TCPM
 

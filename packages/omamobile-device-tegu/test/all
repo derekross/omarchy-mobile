@@ -76,7 +76,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/bin/omamobile-tegu-usb-rescue usr/lib/systemd/system/omamobile-tegu-usb-rescue.service \
          usr/bin/omamobile-bt-addr usr/lib/systemd/system/omamobile-bt-addr@.service \
          usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
-         usr/bin/omamobile-tegu-charge-limit usr/lib/udev/rules.d/75-omamobile-tegu-charger.rules \
+         usr/bin/omamobile-tegu-charge-limit usr/bin/omamobile-setup-system usr/lib/udev/rules.d/75-omamobile-tegu-charger.rules \
          usr/lib/modprobe.d/omamobile-tegu-guards.conf usr/lib/modprobe.d/omamobile-tegu-aoc.conf \
          usr/lib/modprobe.d/omamobile-tegu-display.conf usr/lib/modprobe.d/omamobile-tegu-clk-acpm.conf \
          usr/lib/systemd/system-sleep/omamobile-tegu-wifi usr/lib/systemd/system-sleep/omamobile-tegu-nfc \
@@ -100,8 +100,14 @@ for unit in omamobile-tegu-graphics omamobile-tegu-usb-rescue; do
   [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/$unit.service") == ../$unit.service ]] \
     || fail "$unit is enabled by a vendor wants link"
 done
-[[ ! -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-aoc.service ]] \
-  || fail "the AoC start ships disabled (no wants link)"
+# The AoC start runs at every boot (its condition skips a DTB without the
+# node), and answers to omamobile-aoc.service for the sensor and fp units.
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-aoc.service") == ../omamobile-tegu-aoc.service ]] \
+  || fail "the AoC start is enabled by a vendor wants link"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/omamobile-aoc.service") == omamobile-tegu-aoc.service ]] \
+  || fail "omamobile-aoc.service names the 9a's AoC start"
+grep -qx 'ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc' vendor/systemd/system/omamobile-tegu-aoc.service \
+  || fail "the AoC start is skipped without the AoC node"
 grep -q 'KERNEL=="sda", MODE="0000"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
   || fail "the whole-disk node is made inaccessible"
 grep -q 'ID_PART_ENTRY_NAME}!="userdata"' "$tmp/root/usr/lib/udev/rules.d/10-omamobile-storage.rules" \
@@ -151,7 +157,7 @@ done
 for m in panthor gs_decon cs40l26_vibra leds_lm3644 max77779_battery hci_uart; do
   grep -qE "modprobe $m\b" bin/omamobile-tegu-graphics-start || fail "the graphics guard no longer loads $m"
 done
-for m in gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev; do
+for m in trusty_core trusty_log trusty_ipc trusty_virtio gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev snd_soc_tas2781_i2c; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-tegu-aoc.conf \
     || fail "$m is loaded by the AoC guard but not blacklisted"
 done
@@ -170,6 +176,8 @@ grep -q 'chosen/config/bt_addr' bin/omamobile-bt-addr || fail "the Bluetooth add
 grep -q 'HandlePowerKey' -r vendor && fail "no power-key policy from this package (omamobile-shell owns it on tegu)"
 pass "the Bluetooth address is read at run time"
 
+grep -c '^for unit in omamobile-sensor-proxy.service omamobile-nfc-open.service; do$' bin/omamobile-setup-system >/dev/null || fail "setup-system enables the sensor proxy and the NFC opener"
+grep -qE 'omamobile-(fp|gnss-nmea|speaker-protection)' <(grep '^for unit' bin/omamobile-setup-system) && fail "setup-system must not enable fingerprint, GNSS or speaker protection on the 9a"
 for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/charge-limit; do
   "$t" || fail "$t"
 done

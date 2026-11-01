@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# A signed bundle must refuse a development initramfs that grants its
+# builder SSH access, while an unsigned development bundle may use it.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for tool in cpio lz4 sha256sum; do
+  command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+r=$t/repo
+mkdir -p "$r/tools" "$r/device/testdev" "$r/packages/omamobile-keyring" \
+  "$r/out" "$t/kernel/include/config" "$t/ramdisk/root/.ssh"
+cp tools/make-bundle "$r/tools/"
+: > "$r/tools/install-phone"
+printf 'BOOT_IMAGES="boot"\nNAME="Test device"\n' > "$r/device/testdev/device.conf"
+: > "$r/packages/omamobile-keyring/omamobile.gpg"
+echo test-release > "$t/kernel/include/config/kernel.release"
+printf x > "$r/out/omamobile-rootfs-test-aarch64.img.zst"
+sha256sum "$r/out/omamobile-rootfs-test-aarch64.img.zst" > \
+  "$r/out/omamobile-rootfs-test-aarch64.img.zst.sha256"
+printf 'device: testdev\nkernel modules: test-release\n' > \
+  "$r/out/omamobile-rootfs-test-aarch64.MANIFEST"
+archive=$t/kernel/initramfs.cpio.lz4
+pack() {
+  (cd "$t/ramdisk" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$archive"
+}
+run() {
+  DEVICE=testdev KERNEL_OUT="$t/kernel" "$r/tools/make-bundle" --version test \
+    --rootfs "$r/out/omamobile-rootfs-test-aarch64.img.zst" "$@" 2>&1
+}
+expect_refusal() {
+  local output
+  output=$(run "${@:2}") && { echo "not ok - accepted $1" >&2; exit 1; }
+  grep -cF "$1" <<<"$output" >/dev/null || {
+    echo "not ok - wrong refusal: $output" >&2; exit 1;
+  }
+}
+
+printf 'developer key\n' > "$t/ramdisk/root/.ssh/authorized_keys"
+pack
+expect_refusal 'initramfs contains SSH credentials'
+echo 'ok - signed bundle refuses the builder SSH key'
+expect_refusal 'holds images for' --unsigned
+echo 'ok - unsigned development bundle may pass the key guard'
+
+rm -rf "$t/ramdisk/root/.ssh"
+pack
+expect_refusal 'holds images for'
+echo 'ok - release initramfs passes the key guard'
+
+printf corrupt > "$archive"
+expect_refusal 'not a valid initramfs archive'
+echo 'ok - signed bundle refuses a corrupt initramfs'
