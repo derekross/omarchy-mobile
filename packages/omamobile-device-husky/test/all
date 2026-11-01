@@ -63,6 +63,9 @@ for f in usr/bin/reboot-to \
          usr/lib/modprobe.d/omamobile-husky-display.conf \
          usr/lib/systemd/system/omamobile-husky-display.service \
          usr/lib/systemd/system/display-manager.service.d/10-omamobile-husky.conf \
+         usr/lib/modprobe.d/omamobile-max77759.conf \
+         usr/bin/omamobile-usb-rescue \
+         usr/lib/systemd/system/omamobile-usb-rescue.service \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
@@ -89,8 +92,8 @@ grep -qx 'blacklist gs_decon' "$tmp/root/usr/lib/modprobe.d/omamobile-husky-disp
   || fail "gs_decon autoloads ahead of the display start"
 grep -qx 'options gs_decon screen_off=2' "$tmp/root/usr/lib/modprobe.d/omamobile-husky-display.conf" \
   || fail "DPMS off leaves the panel awake, showing black frames"
-[[ $(grep -h '^blacklist ' vendor/modprobe.d/*.conf) == 'blacklist gs_decon' ]] \
-  || fail "only gs_decon is guarded"
+[[ $(grep -h '^blacklist ' vendor/modprobe.d/omamobile-husky-display.conf) == 'blacklist gs_decon' ]] \
+  || fail "the display file guards only gs_decon"
 [[ -x $tmp/root/usr/bin/omamobile-husky-display-start ]] || fail "install stages the display start"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-display.service") == ../omamobile-husky-display.service ]] \
   || fail "the display start is not enabled"
@@ -98,6 +101,31 @@ grep -qx 'After=omamobile-husky-display.service' "$tmp/root/usr/lib/systemd/syst
   || fail "the display manager can start before the display driver"
 grep -qx 'ConditionPathExists=/sys/bus/platform/devices/19470000.display-controller' "$tmp/root/usr/lib/systemd/system/omamobile-husky-display.service" \
   || fail "the display start runs (and fails) on a kernel without DECON0"
+# modprobe.d only sets options, except the display file (gs_decon) and the
+# MAX77759 file, which keeps the charger and the Type-C driver from loading
+# before their bring-up steps (as on the Pixel 7 Pro): blacklist only, so a
+# manual modprobe still works.
+for conf in vendor/modprobe.d/*.conf; do
+  [[ $conf == vendor/modprobe.d/omamobile-max77759.conf || $conf == vendor/modprobe.d/omamobile-husky-display.conf ]] && continue
+  ! grep -qE '^(install|blacklist) ' "$conf" || fail "$conf only sets options"
+done
+conf=vendor/modprobe.d/omamobile-max77759.conf
+! grep -qE '^install ' "$conf" || fail "the MAX77759 file only blacklists, a manual modprobe must still work"
+for m in max77759_charger tcpci_maxim gpio_max77759 nvmem_max77759; do
+  grep -qx "blacklist $m" "$conf" || fail "$m is kept from autoloading"
+done
+! grep -qE '^blacklist (max17042_battery|max77759)$' "$conf" || fail "the fuel gauge and the MFD core keep autoloading"
+pass "the MAX77759 cell drivers and the Type-C driver are blacklisted, the gauge and the MFD core are not"
+bash -n bin/omamobile-usb-rescue || fail "the USB rescue parses"
+grep -q '10cb0000.i2c' bin/omamobile-usb-rescue || fail "the USB rescue watches husky's bus (hsi2c_11)"
+grep -q 'i2cset -f -y "$bus" $tcpc 0x93 0x09' bin/omamobile-usb-rescue || fail "the USB rescue closes the data switch"
+[[ $(grep -c 'i2cset' bin/omamobile-usb-rescue) -eq 1 ]] || fail "the USB rescue writes one register only"
+grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamobile-usb-rescue.service \
+  || fail "the USB rescue unit runs the script"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
+  || fail "the USB rescue is enabled by a vendor wants link"
+grep -q 'i2c-tools' PKGBUILD || fail "the USB rescue needs i2cget and i2cset"
+pass "the USB replug rescue is installed, enabled by a wants link, and writes one register"
 grep -q '^PACKAGE=omamobile-device-husky$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is husky"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
