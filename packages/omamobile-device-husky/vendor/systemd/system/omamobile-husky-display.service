@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# The display driver at boot, enabled by the vendor multi-user.target.wants
+# link. gs_decon is blacklisted for autoload (modprobe.d/
+# omamobile-husky-display.conf), so this hang-safe script is the only thing
+# that loads it; if a start hangs, the next boot leaves it off (see the
+# script). Runs before the display manager
+# (display-manager.service.d/10-omamobile-husky.conf).
+[Unit]
+Description=Bring up the Pixel 8 Pro display driver (hang-safe)
+After=local-fs.target systemd-modules-load.service
+Before=display-manager.service
+ConditionPathExists=/sys/bus/platform/devices/19470000.display-controller
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-husky-display-start
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

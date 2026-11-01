@@ -382,9 +382,13 @@ assert m.NAME == "sm.puri.OSK0" and m.PATH == "/sm/puri/OSK0"
 grep -c "omamobile-osk-watch" plugins/omamobile.fingerprint/Fingerprint.qml >/dev/null || fail "the fingerprint plugin runs the keyboard watcher"
 grep -c "omamobile-osk-watch" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin follows the watcher"
 python3 -c 'import json; assert {"id": "omamobile.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard plugin"
-# The keyboard plugin draws nothing any more: its floating hide button
-# covered a terminal's input line. Its IPC stays, for the home pill.
+# The keyboard plugin floats nothing over apps any more: its floating hide
+# button covered a terminal's input line. Its IPC stays, for the home pill.
+# Its one window is the language sheet, mapped only while it is open.
 if grep -nE 'PanelWindow|WlrLayershell' plugins/omamobile.keyboard/Keyboard.qml; then fail "the keyboard plugin floats nothing over apps"; fi
+[[ $(grep -lE 'PanelWindow \{' plugins/omamobile.keyboard/*.qml) == plugins/omamobile.keyboard/LanguageWindow.qml ]] \
+  || fail "the language sheet is the keyboard plugin's only window"
+grep -c '^  visible: opened || reveal > 0$' plugins/omamobile.keyboard/LanguageWindow.qml >/dev/null || fail "the language sheet is mapped only while open"
 if grep -rn 'omamobile-osk-hide' hypr plugins; then fail "no layer rule or window for the old hide button"; fi
 for m in hideKeyboard showKeyboard toggleKeyboard; do
   grep -c "function $m() {" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin answers $m"
@@ -420,10 +424,41 @@ if [[ $rc == 77 ]]; then
   pass "keyboard layouts # SKIP no PyYAML"
 elif [[ $rc != 0 ]]; then
   grep -v '^ok' <<<"$out" >&2; fail "keyboard layouts (test/keyboard-layouts.py)"
+else
+  # every language's layout is what squeekboard/generate makes of upstream's
+  python3 -B squeekboard/generate --check >/dev/null || { python3 -B squeekboard/generate --check | grep -v '^ok' >&2; fail "the generated layouts (squeekboard/generate --check)"; }
 fi
+grep -c 'done < <(find squeekboard/keyboards -type f -name' install >/dev/null || fail "every layout is installed"
 grep -c 'hl.device({ name = osk_device, resolve_binds_by_sym = true })' hypr/phone.lua >/dev/null || fail "squeekboard's binds resolve by keysym"
 grep -c 'local osk_device = "hl-virtual-keyboard-squeekboard"' hypr/phone.lua >/dev/null || fail "squeekboard's virtual keyboard by its Hyprland name"
 pass "the keyboard: theme stylesheet, layouts with the action row, its binds"
+
+# The globe key: every layout sends XF86MediaLanguageMenu instead of opening
+# squeekboard's popover (test/keyboard-layouts.py checks each file), bound for
+# squeekboard alone (test/phone-rules.lua) to the language sheet, which lists
+# and switches through omamobile-keyboard-languages as squeekboard's popover
+# does (test/keyboard-languages.sh). test/keyboard-render draws it in the OWL
+# container.
+if grep -rln 'show_prefs' squeekboard/keyboards; then fail "no layout opens squeekboard's popover"; fi
+grep -c 'o.bind("XF86MediaLanguageMenu", "Keyboard: languages", "omarchy-shell shell call omamobile.keyboard languages '"''"'", { device = osk_only })' hypr/phone.lua >/dev/null \
+  || fail "the globe opens the language sheet, from squeekboard only"
+for m in languages closeLanguages; do
+  grep -c "function $m() {" "$k" >/dev/null || fail "the keyboard plugin answers $m"
+done
+for m in pickLanguage removeLanguage; do
+  grep -c "function $m(name) {" "$k" >/dev/null || fail "the keyboard plugin answers $m"
+done
+grep -c 'command: \["omamobile-keyboard-languages", "list"\]' "$k" >/dev/null || fail "the sheet reads its list from omamobile-keyboard-languages"
+grep -c 'readonly property int rowHeight: Math.max(56, Style.space(56))' plugins/omamobile.keyboard/LanguageSheet.qml >/dev/null || fail "the sheet's rows are thumb-sized"
+grep -c 'onClicked: sheet.dismissed()' plugins/omamobile.keyboard/LanguageSheet.qml >/dev/null || fail "a tap outside closes the sheet"
+grep -c 'if (offset > Style.space(60)) sheet.dismissed()' plugins/omamobile.keyboard/LanguageSheet.qml >/dev/null || fail "a swipe down closes the sheet"
+if grep -n 'gnome-control-center\|Keyboard Settings' plugins/omamobile.keyboard/*.qml; then fail "no link to a GNOME settings panel the phone doesn't have"; fi
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-languages || fail "omamobile-keyboard-languages parses"
+bash test/keyboard-languages.sh >/dev/null || { bash test/keyboard-languages.sh; fail "omamobile-keyboard-languages"; }
+if [[ -n ${OMAMOBILE_KEYBOARD_RENDER:-} ]]; then
+  bash test/keyboard-render "$OMAMOBILE_KEYBOARD_RENDER" >/dev/null || fail "language sheet render"
+fi
+pass "the globe key opens the language sheet"
 
 # PIN or password: the choice is recorded per user, never the secret, and
 # mirrored to Omarchy's credential-password toggle.
@@ -788,6 +823,16 @@ grep -c 'omarchy-done ensure omamobile-menu-voice' bin/omamobile-setup-user >/de
 grep -c 'o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })' hypr/phone.lua >/dev/null ||
   fail "volume up's release ends push-to-talk"
 grep -c "jq -e '.powerVolumeUp == true'" bin/omamobile-keys >/dev/null || fail "Power + Volume Up is off unless turned on"
+# The live preview (phase 3): omamobile-voice-preview against a fake voxtype,
+# run only while the bar's own recording listens, stopped when it ends, its
+# words in the theme's muted colour between the meter and the buttons.
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-voice-preview || fail "omamobile-voice-preview parses"
+python3 -B test/voice-preview.py >/dev/null || { python3 -B test/voice-preview.py | grep -v '^ok'; fail "omamobile-voice-preview"; }
+grep -c 'running: VoiceModel.previewRuns(root.phase, root.mine, root.settings.livePreview)' "$v" >/dev/null || fail "the preview runs only while the bar listens"
+awk '/objectName: "liveText"/,/Accessible.name/' "$v" | grep -c 'color: root.live.final ? root.foreground : Commons.Color.muted' >/dev/null ||
+  fail "the preview is in the theme's muted colour, the final words in the text colour"
+if grep -nE '#[0-9a-fA-F]{6}' "$v" | grep -vE '^\S+:\s*//'; then fail "Voice.qml uses theme tokens, no colours of its own"; fi
+grep -c 'voxtype record start' bin/omamobile-voice-preview >/dev/null && fail "the preview never starts a recording of its own"
 # Offscreen review shots in the OWL container only (test/voice-render).
 if [[ -n ${OMAMOBILE_VOICE_RENDER:-} ]]; then
   bash test/voice-render "$OMAMOBILE_VOICE_RENDER" >/dev/null || fail "voice bar render"
@@ -880,6 +925,26 @@ pass "session environment"
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
+# The widget crash guard counts a shell death inside the same boot as a
+# crash. A widget still "loading" from another boot (reboot, shutdown, dead
+# battery, or a system crash it caused) gets one retry as a suspect, and is
+# held back if it is still loading at the next start; a clean run clears it.
+h=plugins/omamobile.home/Home.qml
+grep -c 'path: "/proc/sys/kernel/random/boot_id"' $h >/dev/null || fail "the crash guard reads the boot id"
+grep -c 'JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed, suspect: guardSuspect })' $h >/dev/null || fail "the crash guard records the boot id and the suspects"
+grep -c 'if (sameBoot || suspect\[id\] === loading\[id\]) {' $h >/dev/null || fail "a same-boot death or a second unclean end in a row is a crash"
+grep -c 'suspect\[id\] = loading\[id\]' $h >/dev/null || fail "a widget loading in another boot is a suspect, not a crash"
+grep -c 'var suspect = ran && (widgetId in guardSuspect)' $h >/dev/null || fail "a clean run clears a suspect"
+grep -c 'Component.onDestruction: {' $h >/dev/null || fail "a deliberate quit clears what was still loading"
+grep -c 'target: Qt.application' $h >/dev/null && fail "Quickshell 0.3 never delivers aboutToQuit to QML"
+rc=0; out=$(bash test/widget-guard 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "widget crash guard across starts and boots # SKIP no quickshell"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -v '^ok' >&2; fail "widget crash guard (test/widget-guard)"
+else
+  pass "widget crash guard: same-boot death held back, one retry after a system going down, clean run and quit clear"
+fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"

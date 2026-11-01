@@ -109,11 +109,21 @@ ShellRoot {
         voice.dest = s.state === "home" ? "ask" : s.state
         voice.phase = "listening"
         voice.chooserOpen = s.state === "home"
+        // the live preview's words so far (none yet on the home shot)
+        if (s.state !== "home") voice.partial = harness.job.partial
         vox = "recording"
       } else if (s.state === "transcribing") {
         voice.dest = "type"
         voice.phase = "transcribing"
+        voice.partial = harness.job.partial
         vox = "transcribing"
+      } else if (s.state === "delivered") {
+        // the final words in the preview's place, held for the shot (the
+        // bar closes after VoiceModel.DELIVERED_MS on the phone)
+        voice.dest = "type"
+        voice.partial = harness.job.partial
+        voice.deliveredText = harness.job.transcript
+        voice.phase = "delivered"
       } else if (s.state === "error") {
         voice.dest = "ask"
         voice.errorText = "Didn't catch that. Try again, a little closer to the phone."

@@ -48,7 +48,7 @@ for b in gs201-cheetah:gs201 zumapro-tegu:zumapro; do
 done
 run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
-    OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" \
+    OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
     bash bin/omamobile-setup-user >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -179,24 +179,47 @@ grep -cx 'local omarchy_monitor_scale = 8 / 3' "$h9/.config/hypr/monitors.lua" >
 grep -cx 'local omarchy_gdk_scale = 2' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's GDK_SCALE step is skipped"
 pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2"
 
-# Voxtype's model: tiny.en once it is downloaded and the config still has
-# Omarchy's base.en (voxtype ignores a per-recording --model it hasn't
-# prepared); a model the user chose stays; voxtype restarts only then.
-hv=$t/voice; mkdir -p "$hv/.config/hypr" "$hv/.config/omarchy/extensions" "$hv/.config/voxtype"
-cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hv/.config/hypr/"
-printf 'state_file = "auto"\n\n[audio]\nmodel = "base.en"\n\n[whisper]\nmodel = "base.en"\nlanguage = "en"\n' >"$hv/.config/voxtype/config.toml"
+# Voxtype (phase 3): base.en stays the model, and Whisper's context is cut to
+# the clip (context_window_optimization) once; 0.2.58-0.2.62's tiny.en is
+# undone once if nobody changed the config since; a user's model and a
+# user's own context setting stay; voxtype restarts only when something changed.
+vc() { sed -n '/^\[whisper\]$/,/^\[/p' "$1/.config/voxtype/config.toml"; }
+vhome() {
+  mkdir -p "$1/.config/hypr" "$1/.config/omarchy/extensions" "$1/.config/voxtype" "$1/.local/share/voxtype/models" "$1/.local/state/omarchy/done"
+  cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$1/.config/hypr/"
+  touch "$1/.local/share/voxtype/models/ggml-tiny.en.bin" "$1/.local/share/voxtype/models/ggml-base.en.bin"
+}
+hv=$t/voice; vhome "$hv"
+printf 'state_file = "auto"\n\n[audio]\nmodel = "base.en"\n\n[whisper]\nmodel = "base.en"\nlanguage = "en"\n# context_window_optimization = true\n' >"$hv/.config/voxtype/config.toml"
 RUN_HOME=$hv run
-[[ $(grep -cx 'model = "base.en"' "$hv/.config/voxtype/config.toml") == 2 ]] || fail "no tiny.en on disk: the model stays base.en"
-mkdir -p "$hv/.local/share/voxtype/models"; touch "$hv/.local/share/voxtype/models/ggml-tiny.en.bin"
+[[ $(grep -cx 'model = "base.en"' "$hv/.config/voxtype/config.toml") == 2 ]] || fail "tiny.en on disk: the model stays base.en"
+[[ $(vc "$hv" | grep -cx 'context_window_optimization = true') == 1 ]] || fail "the context cut goes under [whisper] once (a commented line isn't a setting)"
+sed -n '/^\[audio\]$/,/^\[/p' "$hv/.config/voxtype/config.toml" | grep -c context_window >/dev/null && fail "only [whisper] changes"
+[[ $(grep -c 'systemctl --user try-restart voxtype.service' "$hv/calls") == 1 ]] || fail "voxtype restarts once, for the new setting"
+sed -i '/^context_window_optimization = true$/d' "$hv/.config/voxtype/config.toml"
 RUN_HOME=$hv run
-sed -n '/^\[whisper\]$/,/^\[/p' "$hv/.config/voxtype/config.toml" | grep -cx 'model = "tiny.en"' >/dev/null || fail "tiny.en downloaded: the daemon's model is tiny.en"
-sed -n '/^\[audio\]$/,/^\[/p' "$hv/.config/voxtype/config.toml" | grep -cx 'model = "base.en"' >/dev/null || fail "only [whisper] changes"
-[[ $(grep -c 'systemctl --user try-restart voxtype.service' "$hv/calls") == 1 ]] || fail "voxtype restarts once, when the model changed"
-hc=$t/voice-chosen; cp -r "$hv" "$hc"; rm -rf "$hc/.local/state" "$hc/calls"
-sed -i 's/^model = "tiny.en"$/model = "small.en"/' "$hc/.config/voxtype/config.toml"
+if vc "$hv" | grep -cx 'context_window_optimization = true' >/dev/null; then fail "a user who removed the setting keeps it removed"; fi
+[[ $(grep -c 'systemctl --user try-restart voxtype.service' "$hv/calls") == 1 ]] || fail "voxtype isn't restarted for nothing"
+# 0.2.62's switch to tiny.en, untouched since: back to base.en, once
+h2=$t/voice-tiny; vhome "$h2"
+printf '[whisper]\nmodel = "tiny.en"\ncontext_window_optimization = false\n' >"$h2/.config/voxtype/config.toml"
+touch "$h2/.local/state/omarchy/done/omamobile-voxtype-tiny"
+hc=$t/voice-chosen; cp -r "$h2" "$hc"
+h3=$t/voice-nobase; cp -r "$h2" "$h3"; rm "$h3/.local/share/voxtype/models/ggml-base.en.bin"
+RUN_HOME=$h2 run
+vc "$h2" | grep -cx 'model = "base.en"' >/dev/null || fail "setup's own tiny.en goes back to base.en"
+vc "$h2" | grep -cx 'context_window_optimization = false' >/dev/null || fail "a user's own context setting stays"
+[[ $(grep -c 'try-restart voxtype' "$h2/calls") == 1 ]] || fail "voxtype restarts once, for the model"
+sed -i 's/^model = "base.en"$/model = "tiny.en"/' "$h2/.config/voxtype/config.toml"
+RUN_HOME=$h2 run
+vc "$h2" | grep -cx 'model = "tiny.en"' >/dev/null || fail "tiny.en chosen after the switch back stays (it happens once)"
+# tiny.en chosen after 0.2.62's switch (the config is newer than the marker): it stays
+touch -d '-1 hour' "$hc/.local/state/omarchy/done/omamobile-voxtype-tiny"
 RUN_HOME=$hc run
-grep -cx 'model = "small.en"' "$hc/.config/voxtype/config.toml" >/dev/null || fail "a model the user chose stays"
+vc "$hc" | grep -cx 'model = "tiny.en"' >/dev/null || fail "a model the user chose since stays"
 if grep -c 'try-restart voxtype' "$hc/calls" >/dev/null 2>&1; then fail "voxtype isn't restarted for nothing"; fi
+RUN_HOME=$h3 run
+vc "$h3" | grep -cx 'model = "tiny.en"' >/dev/null || fail "without base.en on disk, tiny.en stays"
 python3 -I - "$hv/.config/omarchy/extensions/omarchy-menu.jsonc" <<'PY' || fail "Setup > Voice opens the voice settings"
 import json, re, sys
 text = open(sys.argv[1]).read()
@@ -206,16 +229,29 @@ voice = json.loads(text)["setup.voice"]
 assert voice["action"] == "omarchy-shell shell summon omamobile.voice '{\"page\":\"settings\"}'", voice
 assert voice["label"] == "Voice" and voice["icon"] == "\U000f036c", voice
 PY
-pass "voxtype's model: tiny.en once downloaded over Omarchy's base.en, a user's choice kept"
+pass "voxtype: base.en with the context cut, 0.2.62's tiny.en undone once, a user's choices kept"
 
-# The keyboard: all four layouts linked, the theme written at every login,
-# its gtk.css import and theme-set hook added once (H ran three times).
-for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
+# The keyboard: every layout the package carries linked (the terminal's, and
+# each language's from squeekboard/generate), the theme written at every
+# login, its gtk.css import and theme-set hook added once (H ran three times).
+for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml de.yaml fr_wide.yaml url/us.yaml terminal/de.yaml; do
   [[ $(readlink "$H/.local/share/squeekboard/keyboards/$layout") == "/usr/share/omamobile/squeekboard/keyboards/$layout" ]] \
     || fail "the $layout layout is linked"
 done
+[[ $(find "$H/.local/share/squeekboard/keyboards" -type l | wc -l) == $(find squeekboard/keyboards -type f -name '*.yaml' | wc -l) ]] \
+  || fail "every layout in the package is linked"
 [[ $(grep -c '^omamobile-keyboard-theme --import --restart$' "$H/calls") == 1 && $(grep -c '^omamobile-keyboard-theme --restart$' "$H/calls") -ge 1 ]] \
   || fail "the keyboard theme: --import at the first login, a rewrite after; a running squeekboard restarts when either is new"
 [[ $(readlink "$H/.config/omarchy/hooks/theme-set.d/50-omamobile-keyboard") == "$pkg/hooks/theme-set-keyboard" ]] \
   || fail "the keyboard's theme-set hook is linked"
-pass "the keyboard: four layouts, the theme at each login, its import and hook once"
+pass "the keyboard: every layout, the theme at each login, its import and hook once"
+
+# A layout of the user's own stays theirs
+hk=$t/keyboard-own; mkdir -p "$hk/.config/hypr" "$hk/.config/omarchy/extensions" "$hk/.local/share/squeekboard/keyboards"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hk/.config/hypr/"
+printf '# mine\n' >"$hk/.local/share/squeekboard/keyboards/de.yaml"
+RUN_HOME=$hk run
+[[ ! -L $hk/.local/share/squeekboard/keyboards/de.yaml && $(cat "$hk/.local/share/squeekboard/keyboards/de.yaml") == "# mine" ]] \
+  || fail "a layout the user wrote stays"
+[[ -L $hk/.local/share/squeekboard/keyboards/fr.yaml ]] || fail "the others are linked beside it"
+pass "the keyboard: a layout of the user's own stays"

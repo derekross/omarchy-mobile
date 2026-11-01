@@ -427,6 +427,123 @@ with the cable in.
   no ACPM timeouts. With gating on, 10-31's earlier run was also ten of ten,
   so this does not yet separate the two; the count both ways goes on until
   one side fails.
+
+  **S1 on the clock-fix kernel, 2026-11-01 (same release, the daily kernel
+  with the PERIC0 GPIO clock kept on, linux-omarchy-mobile #172).** That
+  gate hung the SoC under the modem's GPIO traffic (MODEM-PLAN G3-L1), so
+  it was a candidate for these no-wakes too. Cable in, modem never loaded,
+  NFC polling off before every cycle, UFS clock gating on (the default),
+  thirty 30-second RTC cycles planned: cycles 1-20 woke (47-80 s from
+  suspend to SSH, `suspend_stats` success 20 and fail 0, no UFS or ACPM
+  lines, wake IRQ 56 each time), and cycle 21 did not wake: no SSH 160 s
+  after the suspend, and it needed Power + Volume Up. So the clock gate is
+  not the sleep hang; one in 21 here, against about one in 40 before.
+  After the reset (2026-11-01 morning), nothing from the hung sleep was
+  kept: `/sys/fs/pstore` was empty, and the persistent journal of that
+  boot ends on `PM: suspend entry (s2idle)` with nothing after it. That
+  run didn't keep the console through sleep (`printk.console_suspend=N`
+  went into the script after it), and a Power + Volume Up reset may not
+  keep the ramoops region anyway. The next run keeps the console, and
+  whether the SoC watchdog still runs in s2idle (a watchdog reset keeps
+  ramoops; the buttons were needed every time so far) is the next thing
+  to check.
+
+  **A watchdog through s2idle, tried 2026-11-01 (same release): it breaks
+  the sleep, so it can't catch the hang.** `s3c2410_wdt` stops both
+  watchdogs in its suspend callback, so a hang in s2idle never resets the
+  palmtop. A bring-up module (`tegu-wdt-s2idle`, in the owner's logs)
+  restarted the cluster 0 watchdog in the noirq phase with the PMU reset
+  path unmasked and the counter enabled, as the driver's own enable does,
+  and stopped it in resume_noirq. Armed, three sleeps of three ended in a
+  reset: the s2idle wake came within 60 ms of arming, and after resume
+  ACPM stopped answering (`Timeout! ch:2`, then `RX front can not keep up
+  with TX front` and `sec-pmic-acpm … Failed to read IRQ status: -110`
+  every 0.5 s) until the restored 10 s watchdog reset the SoC; ramoops
+  kept all of it. Loaded but disarmed, two sleeps of two woke (after 1.5
+  and 1.6 s, wake IRQ 56, no ACPM timeouts). So a running cluster 0
+  watchdog (or its PMU counter enable) during s2idle upsets the APM, and
+  this module is not a way to record the real hang. The real hang's
+  console is still unknown; what this run does show is what an APM that
+  stops answering after resume looks like, which matches the stall seen
+  in G3-L1's CPU-sleep run (MODEM-PLAN).
+
+  **The sleeps that woke were short: the PMIC wakes s2idle about a second
+  in (2026-11-01, same release).** In the disarmed sleeps above,
+  `PM: suspend exit` came 1.5 and 1.6 s after `PM: suspend entry`, not
+  at the 30 s RTC alarm, with `/sys/power/pm_wakeup_irq` 56, the
+  S2MPG14's own line (GICv3 106, `s2mpg14-pmic`). One more 30 s sleep
+  with `pm_debug_messages` on: "Triggering wakeup from IRQ 56" 0.6 s
+  after entry, exit 1.5 s after it. Across that sleep and the 40 s after
+  it, the PMIC line counted 2 and `rtc-alarm0`, its only mapped child,
+  1, which is the real alarm going off after the wake; awake, the same
+  `rtcwake -m no -s 30` alarm fired at 30 s as it should. So another PMIC
+  source, one without a mapped child, raises the line as the palmtop
+  goes to sleep. Earlier cycle logs only recorded wake IRQ 56 and the
+  time to SSH, which can't tell a short sleep from a full one, so S1's
+  wake counts may describe sleeps of about a second. Next: read the
+  S2MPG14 interrupt registers (INT1-INT5 through the ACPM regmap, from
+  the kernel, never from userspace) at that wake, and check the 30-minute
+  sleeps' records for their real length.
+
+  A bring-up module (`tegu-pmic-wakeread`) then read INT1-INT5 and their
+  masks through the PMIC's regmap in suspend_noirq and resume_noirq
+  (reads only; INT1-INT5 clear on read). Three sleeps, all woken about a
+  second in:
+
+  | Alarm set | INT1-5 at sleep | INT1-5 at wake | Wake IRQ |
+  | --- | --- | --- | --- |
+  | 30 s | 00 09 00 00 00 | 00 0c 00 00 00 | 56 (PMIC) |
+  | 120 s | 00 09 00 00 00 | 00 0d 00 00 00 | 56 (PMIC) |
+  | none (`rtcwake -m disable`) | 00 08 00 00 00 | 02 09 00 00 00 | 59 (Power key, gpa4-0) |
+
+  The masks read `ff fb ff ff ff` each time, so only INT2 bit 2, alarm 0,
+  is unmasked. With an alarm set, alarm 0 latched within 60 ms of the
+  suspend_noirq read, whether it was due in 30 or 120 s; with none set,
+  INT1 bit 1 (power key released) latched and the power key's GPIO woke
+  the SoC, with nobody touching the key. So something in the last stage
+  of the suspend makes the S2MPG14 raise events that didn't happen, and
+  every sleep since at least 2026-10-30 has probably lasted about a
+  second. The 1 s and 60 s RTC ticks (INT2 bits 3 and 0) were latched
+  but masked throughout. After the no-alarm sleep, SSH over USB took
+  about 8 minutes to come back, with nothing in the kernel log about
+  USB.
+
+  **With CPU core power-down off, the sleep lasted its full length.**
+  The only deeper cpuidle state on each CPU is state1
+  (`cpu-a520-sleep`, `cpu-a720-sleep`, `cpu-x4-sleep`, PSCI core
+  power-down; each was used 4-5 times by s2idle in the short sleeps).
+  With state1 disabled on all eight CPUs (WFI only) and a 30 s alarm,
+  `PM: suspend entry` at 472.7 s and the wake at 501.9 s, on IRQ 56 with
+  INT2 `0c` (alarm 0): the real alarm, 29 s in. So the events that end
+  every other sleep a second in come with the CPUs' power-down during
+  s2idle, most likely from the firmware's side of that power-down, not
+  from the PMIC drivers. One sleep so far; next: a series of longer
+  sleeps with state1 off (a sleep hook can turn it off before the sleep
+  and on after), their hang rate, and the drain against the short-sleep
+  figures.
+
+  Our idle states match stock's: the same three `c2` states with
+  `arm,psci-suspend-param = <0x10000>` (core power-down) and stock's
+  latencies. What stock has besides them is Samsung's `exynos-cpupm`
+  node: cluster power-down per cluster (`cpd_cl0` for CPUs 0-3, `cpd_cl1`
+  for 4-6, `cpd_cl2` for 7) and `sicd` across all eight (system idle
+  clock down), which its vendor driver coordinates with the APM. Mainline
+  has no such driver, so when every CPU sits in core power-down in s2idle,
+  the firmware sees a state stock's kernel would have announced to it
+  first. That the PMIC's false events come from there is an inference,
+  not a measurement. The device package's fix for now is a sleep hook
+  that allows only WFI for the length of a sleep (`omamobile-device-tegu`
+  0.2.5, #255).
+
+  **Ten sleeps with the hook (2026-11-01, same release, device-tegu 0.2.5
+  installed from its branch).** `systemctl suspend` with a 60 s RTC alarm,
+  ten times: nine slept 55-61 s, entry to exit, and woke on IRQ 56 (the
+  alarm); the seventh's resume took longer than the 8 s the script waited
+  before measuring, so its length isn't known, but it woke and the hook
+  restored the states. `suspend_stats` 6 to 15 successes, 0 failures; no
+  UFS errors, no ACPM timeouts. The screen stayed lit through these sleeps
+  (`systemctl suspend` skips the shell's blanking), so no drain figure
+  from this run.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or

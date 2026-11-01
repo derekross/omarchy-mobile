@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Offscreen review shots of the voice bar (omamobile.voice) in each context
 # (an app with the keyboard up, an agent's terminal, the home screen with
-# the destination list open, the check before Ask, transcribing, an error)
+# the destination list open, the check before Ask, transcribing, an error,
+# the delivered words; the live preview's words while listening)
 # and of the voice settings, upright and on its side (TOUCH-PLAN 2.4), in a
 # dark and a light Omarchy theme, with checks that the bar sits in the space
 # above the keyboard or the bottom bar and that its chip, its list and its
@@ -65,7 +66,9 @@ def shot(name, w, h, state, below, **extra):
     s.update(extra)
     return s
 # below: what sits under the bar (the keyboard and the strip, the strip, the dock)
-print(json.dumps({"transcript": "Check the battery drain from last night and tell me which service woke the phone most.", "shots": [
+print(json.dumps({"transcript": "Check the battery drain from last night and tell me which service woke the phone most.",
+                  "partial": "check the battery drain from last night and tell me which service woke the",
+                  "shots": [
     shot("app", 480, 1040, "type", 334),
     shot("agent", 480, 1040, "agent", 44),
     shot("home", 480, 1040, "home", 96),
@@ -74,6 +77,7 @@ print(json.dumps({"transcript": "Check the battery drain from last night and tel
     shot("error", 480, 1040, "error", 96),
     shot("settings", 480, 1040, "settings", 0),
     shot("landscape-app", 1040, 480, "type", 44),
+    shot("delivered", 480, 1040, "delivered", 334),
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 VOICE_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/voice-render.qml" > "$h/log-$theme" 2>&1 || true
@@ -89,15 +93,16 @@ for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
     geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
 def below(a, b): return a["y"] >= b["y"] + b["h"] - 1
-ok = not bad and len(geo) == 8
-if len(geo) != 8: print("not ok - %s: %d of 8 shots taken" % (theme, len(geo)))
+ok = not bad and len(geo) == 9
+if len(geo) != 9: print("not ok - %s: %d of 9 shots taken" % (theme, len(geo)))
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):
     global ok
     print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
     ok = ok and good
 want = {"type": ["Done · type it", "Cancel"], "agent": ["Done · send", "Cancel"], "home": ["Done · ask", "Cancel"],
-        "result": ["Ask", "Again", "Discard"], "transcribing": ["Cancel"], "error": ["Try again", "Close"], "settings": []}
+        "result": ["Ask", "Again", "Discard"], "transcribing": ["Cancel"], "error": ["Try again", "Close"], "settings": [],
+        "delivered": []}
 for name, g in geo.items():
     parts, buttons, state, area = g["parts"], g["buttons"], g["state"], g["area"]
     labels = [b["label"] for b in buttons]
@@ -105,7 +110,7 @@ for name, g in geo.items():
     if state == "settings":
         card = parts.get("voiceCard")
         check(name + ": the settings card fills the space", bool(card) and inside(card, area, 1) and card["h"] >= area["h"] - 20, json.dumps(card))
-        rows = [parts.get("model-" + m) for m in ("tiny.en", "base.en", "small.en")] + [parts.get("setting-" + k) for k in ("powerVolumeUp", "confirmSend")]
+        rows = [parts.get("model-" + m) for m in ("tiny.en", "base.en", "small.en")] + [parts.get("setting-" + k) for k in ("powerVolumeUp", "livePreview", "confirmSend")]
         check(name + ": the models and the switches are rows of 44 px or more", all(r and r["h"] >= 44 and inside(r, card, 1) for r in rows), json.dumps(rows))
         for gone in ("setting-holdPill", "setting-micKey", "setting-agentMic", "submit-auto"):
             check(name + ": no %s" % gone, gone not in parts)
@@ -117,6 +122,15 @@ for name, g in geo.items():
     check(name + ": every button is on the bar, at least 44 px", all(inside(b, bar, 1) and b["h"] >= 44 for b in buttons), json.dumps(buttons))
     if state in ("type", "agent", "home", "transcribing"):
         check(name + ": the level meter shows", "levelMeter" in parts)
+    live = parts.get("liveText")
+    if state in ("type", "agent", "transcribing"):
+        meter = parts.get("levelMeter")
+        check(name + ": the words so far sit between the meter and the buttons", bool(live) and bool(meter) and below(live, meter)
+              and all(below(b, live) for b in buttons) and inside(live, bar, 1), json.dumps([live, meter]))
+    elif state == "delivered":
+        check(name + ": the final words on the bar, no buttons", bool(live) and inside(live, bar, 1) and not buttons, json.dumps([live, buttons]))
+    else:
+        check(name + ": no preview line", live is None, json.dumps(live))
     if state == "agent":
         check(name + ": the agent's hint line", g.get("hint") == "Types what you say into the prompt and presses Enter.", repr(g.get("hint")))
     if state == "home":

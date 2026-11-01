@@ -1,0 +1,251 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's terminal/us+dvorak_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view, and the globe key
+# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
+# opening squeekboard's popover. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 618.24: 2 x 185.472 + 2 x 123.648.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: English (Dvorak)
+---
+outlines:
+    default:       { width: 61.824,  height: 42   }
+    action:        { width: 103.04,  height: 42   }
+    change-view:   { width: 92.736,  height: 42   }
+    change-view-2: { width: 103.04,  height: 42   }
+    large:         { width: 92.736,  height: 42   }
+    small-row:     { width: 68.693,  height: 25.2 }
+    spaceline:     { width: 267.904, height: 42   }
+    special:       { width: 61.824,  height: 42   }
+    special-2:     { width: 92.736,  height: 42   }
+    special-3:     { width: 103.04,  height: 42   }
+    mic:           { width: 185.472, height: 32 }
+    paste:         { width: 185.472, height: 32 }
+    emoji:         { width: 123.648, height: 32 }
+    hide:          { width: 123.648, height: 32 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt Shift ↑ ↓ ← →"
+        - "show_upper p y f g c r l BackSpace"
+        - "a o e u i d h t n s"
+        - ", q j k x b m w v z"
+        - "show_numbers preferences space show_actions Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt Shift PageUp PageDown Home End"
+        - "show_upper P Y F G C R L BackSpace"
+        - "A O E U I D H T N S"
+        - ", Q J K X B M W V Z"
+        - "show_numbers preferences space show_actions Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt Shift ↑ ↓ ← →"
+        - "show_symbols , \" ' : ; ! ? BackSpace"
+        - "* # $ / & - _ + ( )"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "show_letters preferences space . Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt Shift ↑ ↓ ← →"
+        - "show_numbers \\ % < > = [ ] BackSpace"
+        - "© ® £ € ¥ ^ ° @ { }"
+        - "~ ` | · √ π τ ÷ × ¶"
+        - "show_letters preferences space . Return"
+    actions:
+        - "Mic Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt Shift PageUp PageDown Home End"
+        - "F1  F2  F3  F4  F5  F6"
+        - "F7  F8  F9  F10 F11 F12"
+        - "Esc Tab Pause Insert Up Del"
+        - "show_letters_actions Menu Break Left Down Right"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        keysym: "XF86MediaLanguageMenu"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view"
+        label: "ABC"
+    show_letters_actions:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ABC"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "τ=\\"
+    show_actions:
+        action:
+            set_view: "actions"
+        outline: "change-view"
+        label: ">_"
+    .:
+        outline: "large"
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    F1:
+        outline: "action"
+        keysym: "F1"
+    F2:
+        outline: "action"
+        keysym: "F2"
+    F3:
+        outline: "action"
+        keysym: "F3"
+    F4:
+        outline: "action"
+        keysym: "F4"
+    F5:
+        outline: "action"
+        keysym: "F5"
+    F6:
+        outline: "action"
+        keysym: "F6"
+    F7:
+        outline: "action"
+        keysym: "F7"
+    F8:
+        outline: "action"
+        keysym: "F8"
+    F9:
+        outline: "action"
+        keysym: "F9"
+    F10:
+        outline: "action"
+        keysym: "F10"
+    F11:
+        outline: "action"
+        keysym: "F11"
+    F12:
+        outline: "action"
+        keysym: "F12"
+    Esc:
+        outline: "action"
+        keysym: "Escape"
+    Esc-small:
+        outline: "small-row"
+        keysym: "Escape"
+        label: "Esc"
+    Tab:
+        outline: "action"
+        keysym: "Tab"
+    Tab-small:
+        outline: "small-row"
+        keysym: "Tab"
+        label: "Tab"
+    Del:
+        outline: "action"
+        keysym: "Delete"
+    Insert:
+        outline: "action"
+        keysym: "Insert"
+    Menu:
+        outline: "action"
+        keysym: "Menu"
+    Pause:
+        outline: "action"
+        keysym: "Pause"
+    Break:
+        outline: "action"
+        keysym: "Break"
+    Home:
+        outline: "small-row"
+        keysym: "Home"
+    End:
+        outline: "small-row"
+        keysym: "End"
+    PageUp:
+        outline: "small-row"
+        keysym: "Page_Up"
+        label: "Page ↑"
+    PageDown:
+        outline: "small-row"
+        keysym: "Page_Down"
+        label: "Page ↓"
+    "↑":
+        outline: "small-row"
+        keysym: "Up"
+    "↓":
+        outline: "small-row"
+        keysym: "Down"
+    "←":
+        outline: "small-row"
+        keysym: "Left"
+    "→":
+        outline: "small-row"
+        keysym: "Right"
+    Up:
+        label: "↑"
+        outline: "action"
+        keysym: "Up"
+    Left:
+        label: "←"
+        outline: "action"
+        keysym: "Left"
+    Down:
+        label: "↓"
+        outline: "action"
+        keysym: "Down"
+    Right:
+        label: "→"
+        outline: "action"
+        keysym: "Right"
+    Ctrl:
+        modifier: "Control"
+        outline: "small-row"
+        label: "Ctrl"
+    Alt:
+        modifier: "Alt"
+        outline: "small-row"
+        label: "Alt"
+    Shift:
+        modifier: "Shift"
+        outline: "small-row"
+        label: "Shift"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"

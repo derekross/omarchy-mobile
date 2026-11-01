@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""The on-screen keyboard's languages, for the language sheet
+(omamobile.keyboard, the keyboard's globe key).
+
+    omamobile-keyboard-languages list          JSON: the configured sources,
+                                               the current one, and the
+                                               layouts that can be added
+    omamobile-keyboard-languages set NAME      switch to xkb layout NAME
+                                               (added when it isn't there)
+    omamobile-keyboard-languages remove NAME   take NAME off the list (never
+                                               the last one)
+
+squeekboard 1.43 shows the first entry of org.gnome.desktop.input-sources
+`sources` and re-reads it on every change of that schema
+(eekboard/eekboard-context-service.c, settings_get_layout and its
+change-event handler). Its own popover switches by moving the chosen
+(kind, name) pair to the front and keeping the rest in order
+(src/popover.rs, set_layout); `set` does exactly that, so a switch here and
+one in squeekboard leave the same list. The names are the ones squeekboard's
+popover shows: xkeyboard-config's descriptions (gnome-desktop's XkbInfo reads
+the same evdev.xml), "layout+variant" for a variant.
+
+Layouts that can be added are the ones the keyboard has: the layouts in
+/usr/share/omamobile/squeekboard/keyboards/ (squeekboard's own, with our
+action row), not yet in the list. squeekboard's Emoji and Terminal overlays
+are not sources and can't be chosen from outside squeekboard (docs/VOICE-PLAN.md,
+"The language sheet").
+
+OMAMOBILE_XKB_RULES and OMAMOBILE_KEYBOARDS_DIR point elsewhere for tests."""
+
+import ast
+import glob
+import json
+import os
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+SCHEMA = "org.gnome.desktop.input-sources"
+KEY = "sources"
+RULES = os.environ.get("OMAMOBILE_XKB_RULES", "/usr/share/X11/xkb/rules/evdev.xml")
+KEYBOARDS = os.environ.get("OMAMOBILE_KEYBOARDS_DIR", "/usr/share/omamobile/squeekboard/keyboards")
+# What squeekboard shows with no sources at all (src/state.rs, Application::new)
+FALLBACK = "us"
+
+
+def gsettings(*args):
+    return subprocess.run(["gsettings"] + list(args), check=True, capture_output=True, text=True).stdout
+
+
+def parse_sources(text):
+    """gsettings' print of an a(ss): "[('xkb', 'us'), ('xkb', 'de')]", or
+    "@a(ss) []" when empty."""
+    text = text.strip()
+    if text.startswith("@"):
+        text = text.split(" ", 1)[1] if " " in text else "[]"
+    value = ast.literal_eval(text or "[]")
+    return [(str(k), str(n)) for k, n in value]
+
+
+def format_sources(sources):
+    if not sources:
+        return "@a(ss) []"
+    def quote(s):
+        return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    return "[" + ", ".join("(%s, %s)" % (quote(k), quote(n)) for k, n in sources) + "]"
+
+
+def read_sources():
+    return parse_sources(gsettings("get", SCHEMA, KEY))
+
+
+def write_sources(sources):
+    gsettings("set", SCHEMA, KEY, format_sources(sources))
+
+
+def xkb_names():
+    """{"us": "English (US)", "us+colemak": "English (Colemak)", ...}"""
+    names = {}
+    for path in (RULES, RULES.replace("evdev.xml", "evdev.extras.xml")):
+        try:
+            root = ET.parse(path).getroot()
+        except (OSError, ET.ParseError):
+            continue
+        for layout in root.iter("layout"):
+            item = layout.find("configItem")
+            if item is None or item.findtext("name") is None:
+                continue
+            base = item.findtext("name")
+            names.setdefault(base, item.findtext("description") or base)
+            for variant in layout.iter("variant"):
+                vitem = variant.find("configItem")
+                if vitem is None or vitem.findtext("name") is None:
+                    continue
+                vid = base + "+" + vitem.findtext("name")
+                names.setdefault(vid, vitem.findtext("description") or vid)
+    return names
+
+
+def carried():
+    """The layout names the keyboard has a file for (portrait files; the
+    _wide ones are their landscape twins)."""
+    out = set()
+    for path in glob.glob(os.path.join(KEYBOARDS, "*.yaml")):
+        name = os.path.basename(path)[:-len(".yaml")]
+        if not name.endswith("_wide"):
+            out.add(name)
+    return out
+
+
+def label(names, name):
+    """xkeyboard-config's name; for a variant it doesn't list (ch+de), the
+    base layout's with the variant in brackets."""
+    if name in names:
+        return names[name]
+    base, _, variant = name.partition("+")
+    if variant and base in names:
+        return "%s (%s)" % (names[base], variant)
+    return name
+
+
+def listing():
+    names = xkb_names()
+    sources = read_sources()
+    shown = sources or [("xkb", FALLBACK)]
+    current = shown[0][1]
+    rows = [{"kind": k, "name": n, "label": label(names, n)} for k, n in shown]
+    # squeekboard sorts its popover by name, the current one included
+    rows.sort(key=lambda r: r["label"].casefold())
+    have = {n for _, n in shown}
+    available = [{"name": n, "label": label(names, n)} for n in carried() - have]
+    available.sort(key=lambda r: r["label"].casefold())
+    return {"current": current, "configured": len(sources), "sources": rows, "available": available}
+
+
+def set_layout(name):
+    # An empty list means squeekboard's fallback: keep it as the second one
+    sources = read_sources() or [("xkb", FALLBACK)]
+    entry = next((s for s in sources if s[1] == name), ("xkb", name))
+    write_sources([entry] + [s for s in sources if s != entry])
+
+
+def remove_layout(name):
+    sources = read_sources()
+    kept = [s for s in sources if s[1] != name]
+    if not kept:
+        raise SystemExit("omamobile-keyboard-languages: %s is the only language; not removing it" % name)
+    if kept != sources:
+        write_sources(kept)
+
+
+def main(argv):
+    if argv[1:] == ["list"]:
+        print(json.dumps(listing()))
+        return 0
+    if len(argv) == 3 and argv[1] in ("set", "remove") and argv[2] and not argv[2].startswith("-"):
+        (set_layout if argv[1] == "set" else remove_layout)(argv[2])
+        return 0
+    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

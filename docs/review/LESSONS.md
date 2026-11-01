@@ -2234,6 +2234,159 @@ never change, so reviews can cite them.
   0.2.12, 33 versions behind main. *Check:* for a shared package, ask for
   (or run) the head installed on the reference phone. *From:* #193,
   2026-10-31.
+- **L-362. A gotcha that blames a stale per-user file is checked against the
+  package's own per-login repair first.** #243 blamed stale plugin links, but
+  `omamobile-setup-user.service` re-links them at every login; the fault was
+  the service not running because its profile marker was missing. *Check:*
+  `git grep` the package for a unit or script that rewrites the file, read its
+  `Condition*=` lines and ask whether it ran. *From:* #243, 2026-11-01.
+- **L-363. A new fact about what unmarks a boot slot is walked through the
+  recovery path the same gotcha prescribes.** #224's "a plain fastboot flash
+  unmarks B" turns the gotcha's own fastboot recovery into an unmark while
+  marking is on hold. Extends L-284. *From:* #224, 2026-11-01.
+- **L-364. Review ref names are unique per run, not per device.** Two
+  parallel reviewers both used `review/prN-r1-tegu` and deleted each other's
+  refs. *Check:* `git branch --list "review/*-<topic>"` is empty before the
+  first fetch. Extends L-43 and L-127. *From:* the 2026-11-01 round.
+- **L-365. A new device descriptor's `BRINGUP_PROBE` is checked against the
+  SoC its addresses were written for.** #231 (kodiak) kept an initramfs probe
+  that reads gs201 watchdog and DPP addresses on any board whose
+  `COMPATIBLE` matches. Also, `DTBO_BOARD_ID` is never `dtbo_idx`. *From:*
+  #231, 2026-11-01.
+- **L-366. A stop added to a detached phone tool is checked for where its
+  message goes.** `power-ab --detach` discards stderr, so #226's new stop
+  explained itself to nobody. *Check:* ask for the reason in the output file.
+  *From:* #226, 2026-11-01.
+- **L-367. A userspace limit driven by a freezable poll stops during
+  s2idle.** #230's charge limit follows max77779-battery change events from a
+  30 s poll on `system_freezable_wq`. *Check:* the workqueue of the driver's
+  `power_supply_changed()` callers. *From:* #230, 2026-11-01.
+- **L-368. A config-fragment PR that grows by commits keeps its first
+  title.** *Check:* compare the title and body with every commit (#227).
+  Extends L-340 and L-356. *From:* #227, 2026-11-01.
+- **L-369. Moving a mailbox or firmware-protocol option from module to
+  built-in in the shared fragment is a cheetah change when cheetah's DT
+  enables that driver's node** (#227: `acpm_ipc`). *Check:* `git grep` the
+  compatible in `gs201*.dts*`. Extends L-8 and L-206. *From:* #227,
+  2026-11-01.
+- **L-370. A shared-fragment PR and a device `kernel.config` PR that set the
+  same options are reconciled together** (#227 with #240). Extends L-337.
+  *From:* #227, #240, 2026-11-01.
+- **L-371. A clock floor taken from a file's mtime is checked against every
+  step that writes that file.** #97 took it from the keyring's mtime.
+  *Check:* grep `tools/` for `SOURCE_DATE_EPOCH` and `touch -d`. *From:* #97,
+  2026-11-01.
+- **L-372. A contributor's merge of main puts a "Merge remote-tracking
+  branch" body into a COMMIT_MESSAGES squash** (#75). *Check:* `git log
+  --merges base..head`, and write the squash body by hand. Extends L-312 and
+  L-355. *From:* #75, 2026-11-01.
+- **L-373. A notes entry that pins a tested kernel commit is range-diffed
+  against the kernel PR's current head before the matrix cites it.** #216
+  pinned `f47c5bd34`; kernel #156 was rebased after. *From:* #216,
+  2026-11-01.
+- **L-374. A per-SKU firmware map copied from Google's table is checked for
+  the regions it sends to the default.** #214 sent the JPN and EU SKUs to the
+  default; Google also tries `_<rev>_<sku>` names. *From:* #214, 2026-11-01.
+- **L-375. Device PRs from one contributor that each append to
+  `device/<codename>/kernel.config` conflict with each other** (#214 and
+  #228). *Check:* say in the merge order who rebases. Extends L-353. *From:*
+  #214, #228, 2026-11-01.
+- **L-376. A "cap kept below a threshold" change is checked in every
+  orientation of the reference phone.** #124's `tile.width > 128` caught the
+  7 Pro's landscape cells and shrank icons from 51 to 49 px. Prefer
+  `max(old, new)` when a change should only grow. Extends L-300 and L-8.
+  *From:* #124, 2026-11-01.
+- **L-377. A crash guard relaxed for "the system went down" is checked
+  against causes that take the system down.** Under #217 a widget that causes
+  a watchdog reset would load at every boot. *Check:* ask for one retry
+  rather than a free pass. *From:* #217, 2026-11-01.
+- **L-378. When a safety paragraph cites a mask, marker or guard, check it
+  exists on the phone that ran the steps.** #202 cited #114's mask, which had
+  been dropped from the contributor's boot set. Extends L-284 and L-188.
+  *From:* #202 with #114, 2026-11-01.
+- **L-379. A "Tested" paragraph carried into a reopened PR is checked against
+  the head that ran.** Kernel #155 cited a run of #139's v1 head. Extends
+  L-45, L-86 and L-131. *From:* kernel #155, 2026-11-01.
+- **L-380. "Interrupt path works" needs a non-zero `/proc/interrupts` count
+  and the condition that raised it.** Extends L-29. *From:* kernel #155,
+  2026-11-01.
+- **L-381. A new interrupt-controller binding for a PMIC block is checked
+  against sibling bindings that already promise an interrupt "through the
+  PMIC"** (kernel #155 against `maxim,max77779-charger.yaml`). Extends L-53
+  and L-164. *From:* kernel #155, 2026-11-01.
+- **L-382. Stock's `cs-clock-delay` applies only with a GPIO chip select or
+  manual CS mode in Google's spi-s3c64xx.** *Check:* read stock's `cs-gpios`
+  first (kernel #166; the check passed). Extends L-75. *From:* kernel #166,
+  2026-11-01.
+- **L-383. `power-supplies` in a board DT is a fw_devlink supplier link:** the
+  consumer waits for the supplier's probe. *Check:* say which device now waits
+  on which. *From:* kernel #161, 2026-11-01.
+- **L-384. Two PRs that add clock ids to the same block of a dt-bindings
+  header can merge without a conflict and leave duplicate numbers** (kernel
+  #157 and #163 in `google,zuma.h`). *Check:* after merging, look for
+  duplicate values and the `nr_clk_ids` value. *From:* kernel #157, #163,
+  2026-11-01.
+- **L-385. "Tag X has the same commits" is checked by fetching the tag.**
+  Extends L-360. *From:* kernel #163, 2026-11-01.
+- **L-386. A new CPU OPP table is checked against the board's BCL `freq_qos`
+  caps, as the merged sibling's table is;** mark OPPs above the caps
+  `turbo-mode`. Extends L-208. *From:* kernel #158 against #169, 2026-11-01.
+- **L-387. A DTS comment that promises userspace protection (a blacklist) is
+  checked against that device's package.** *Check:* list the MFD's cells.
+  *From:* kernel #163, 2026-11-01.
+- **L-388. A stock pin value is the last one in include order.** Kernel #163:
+  `hsi2c11_bus` is `PULL_NONE`, then `PULL_UP` in `zuma-typec.dtsi`. Extends
+  L-330. *From:* kernel #163, 2026-11-01.
+- **L-389. Scratch conflict resolutions chain the marker check into the
+  continue:** `script && ! grep -q '^<<<<<<<' f && git add f && git
+  cherry-pick --continue`. A reviewer committed conflict markers once.
+  Extends L-254. *From:* the 2026-11-01 round.
+
+- **L-390. A dmesg delta across s2idle is not a sleep length:** the kernel
+  log's clock stops while the SoC is suspended, so the delta reads about
+  1.5 s whatever the real sleep was. *Check:* take sleep lengths from the RTC
+  (`/sys/class/rtc/rtc0/since_epoch` before and after), wall-clock journal
+  times or `suspend_stats/last_hw_sleep`. *From:* #244, #255, #256,
+  2026-11-01.
+- **L-391. A reader of `/sys/class/power_supply` skips `scope=Device`
+  supplies** and takes status only from the battery that gave the level.
+  HID and controller batteries are type `Battery` with `present` 1 and sort
+  before the Tensor gauges. *Check:* a test with a Device-scope battery at
+  Full and the charger offline. *From:* #267, 2026-11-01.
+- **L-392. A mode that skips "only the risky steps" is probed for what the
+  other steps write:** run the PR's test and dump the touched files.
+  *From:* #259, 2026-11-01.
+- **L-393. A shared-fragment `=m` to `=y` change is checked against every
+  package, plan and AGENTS line that loads or blacklists that module;** a
+  built-in module ignores `blacklist` and load order. *Check:* `git grep -n
+  '<module>' packages device/*/*-PLAN.md AGENTS.md`. *From:* #227,
+  2026-11-01.
+- **L-394. Every symbol added to the shared fragment exists on the published
+  kernel branch;** merge_config drops unknown ones silently. *Check:* `git
+  grep -n '^config <SYM>$' github/omamobile`. *From:* #227, 2026-11-01.
+- **L-395. A descriptor PR is checked with the loader, not only CI:**
+  `tests/device-overlays` sources the file, so CI showed one shell error
+  where `bin/omamobile` had four refusals. *Check:* `DEVICE=x bin/omamobile
+  initramfs-config <tmp>`. *From:* #231, 2026-11-01.
+- **L-396. Before answering "may I enable node X", check its parent bus,
+  USI and CMU in the published DTS.** *From:* issue #1 (husky
+  `usb-typec@25` under a disabled `hsi2c_11`), 2026-11-01.
+- **L-397. A charge-rate claim is checked against the percentage change in
+  the same report** (pack capacity x delta % / time against the quoted
+  current). *From:* issue #1, 2026-11-01.
+- **L-398. Sibling PRs that each carry a copy of the same commit conflict
+  pairwise in `git merge-tree`;** simulate the real order with
+  `--merge-base` before asking anyone to resolve. Extends L-214. *From:*
+  kernel #136 and #161, 2026-11-01.
+- **L-399. A contributor's "it can't work on your branch" is checked against
+  the base's driver, our fragment, the PR's own match table and the boot's
+  `lsmod` before we answer.** *From:* kernel #174, 2026-11-01.
+- **L-400. A PR retargeted after its last push gets no CI until it is pushed
+  again.** *From:* kernel #174, 2026-11-01.
+- **L-401. Supplies named in a board comment are checked against Google's
+  `<board>-display.dtsi` and `-pmic.dtsi`,** and a driver that follows a
+  sibling is compared with the sibling's current version. *From:* kernel
+  #177, 2026-11-01.
 
 ## Corrections (where a review was wrong)
 
@@ -2398,3 +2551,11 @@ never change, so reviews can cite them.
   lynx-only `kernel.config`,** which the release kernel never reads; an
   option that breaks no phone belongs in `kernel/configs/omamobile.config`.
   *Lesson:* L-337. *From:* #98 and kernel #98.
+- **C-25 (2026-11-01). Our round 32 comment asked kernel #165 to pin LDO15S
+  at min = max "so the core sets 3.3 V before enabling it".** #101's
+  `s2mpg14_ldo_ops` has no `set_voltage_sel`, so the pin either writes
+  nothing or fails registration, and `s2mps11` then fails its whole probe.
+  The wording reached the contributor's commit message; round 33 owned it
+  and asked for the hand-off voltage. *Lesson:* before asking for min = max,
+  read the regulator's ops on the target branch. *From:* kernel #165 with
+  #101.

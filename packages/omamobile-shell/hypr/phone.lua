@@ -117,7 +117,7 @@ hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
 hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 2 })
 
 -- The on-screen keyboard's own keys (squeekboard/keyboards/: the action row
--- Mic, Paste, Emoji and Hide). squeekboard can't run a command, so
+-- Mic, Paste, Emoji and Hide, and the globe). squeekboard can't run a command, so
 -- each key sends an XF86 keysym and these binds act on it. squeekboard puts
 -- every key on a keycode of a keymap it generates, and Hyprland resolves a
 -- bind's keysym through kb_layout unless the device resolves binds by its
@@ -144,6 +144,11 @@ o.bind("XF86Dictate", "Keyboard: voice released", voice("release"), { device = o
 o.bind("XF86Paste", "Keyboard: clipboard", "omarchy-menu-clipboard", { device = osk_only })
 o.bind("XF86EmojiPicker", "Keyboard: emoji", "omarchy-menu-emoji", { device = osk_only })
 o.bind("XF86Keyboard", "Keyboard: hide", "omarchy-shell shell call omamobile.keyboard hideKeyboard ''", { device = osk_only })
+-- The globe opens the language sheet (omamobile.keyboard) in place of
+-- squeekboard's own popover, which was mouse-sized, stuck out above the
+-- keyboard's surface where taps didn't land, and offered a GNOME settings
+-- panel the phone doesn't have. XF86MediaLanguageMenu is KEY_LANGUAGE's.
+o.bind("XF86MediaLanguageMenu", "Keyboard: languages", "omarchy-shell shell call omamobile.keyboard languages ''", { device = osk_only })
 -- Resolving squeekboard's binds by keysym also lets its Ctrl, Alt, Tab,
 -- Delete and F-keys reach Omarchy's own binds, which they never did: Ctrl +
 -- Alt + Delete would close every window, F9 would start Voxtype instead of

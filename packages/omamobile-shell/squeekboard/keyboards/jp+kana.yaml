@@ -1,0 +1,624 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's jp+kana.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view, and the globe key
+# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
+# opening squeekboard's popover. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 356.57: 2 x 106.971 + 2 x 71.314.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: Japanese (Kana)
+# Based on work by: Mark Müller <markmueller86@gmail.com>
+---
+outlines:
+    default:         { width: 71.314, height: 52 }
+    change-view:     { width: 71.314, height: 52 }
+    character-group: { width: 71.314, height: 52 }
+    placeholder:     { width: 71.314, height: 52 }
+    special:         { width: 71.314, height: 52 }
+    mic:             { width: 106.971, height: 40 }
+    paste:           { width: 106.971, height: 40 }
+    emoji:           { width: 71.314, height: 40 }
+    hide:            { width: 71.314, height: 40 }
+
+views:
+    base: # hiragana
+        - "Mic Paste Emoji Hide"
+        - "preferences _a ka sa BackSpace"
+        - "Left ta na ha Right"
+        - "カタカナ ma ya ra space"
+        - "switch2roman symbols wa punct Return"
+    _a:
+        - "Mic Paste Emoji Hide"
+        - "preferences _A _a -- BackSpace"
+        - "あ い う え お"
+        - "ぁ ぃ ぅ ぇ ぉ" # 2 code points each
+        - "-- -- ゔ -- --"
+    ka:
+        - "Mic Paste Emoji Hide"
+        - "preferences KA ka -- BackSpace"
+        - "か き く け こ"
+        - "が ぎ ぐ げ ご"
+        - "ゕ -- -- ゖ --"
+    sa:
+        - "Mic Paste Emoji Hide"
+        - "preferences SA sa -- BackSpace"
+        - "さ し す せ そ"
+        - "ざ じ ず ぜ ぞ"
+        - "-- -- -- -- --"
+    ta:
+        - "Mic Paste Emoji Hide"
+        - "preferences TA ta -- BackSpace"
+        - "た ち つ て と"
+        - "だ ぢ づ で ど"
+        - "-- -- っ -- --"
+    na:
+        - "Mic Paste Emoji Hide"
+        - "preferences NA na -- BackSpace"
+        - "な に ぬ ね の"
+        - "-- -- -- -- --"
+        - "-- -- -- -- --"
+    ha:
+        - "Mic Paste Emoji Hide"
+        - "preferences HA ha -- BackSpace"
+        - "は ひ ふ へ ほ"
+        - "ば び ぶ べ ぼ"
+        - "ぱ ぴ ぷ ぺ ぽ"
+    ma:
+        - "Mic Paste Emoji Hide"
+        - "preferences MA ma -- BackSpace"
+        - "ま み む め も"
+        - "-- -- -- -- --"
+        - "-- -- -- -- --"
+    ya:
+        - "Mic Paste Emoji Hide"
+        - "preferences YA ya -- BackSpace"
+        - "や -- ゆ -- よ"
+        - "ゃ -- ゅ -- ょ"
+        - "-- -- -- -- --"
+    ra:
+        - "Mic Paste Emoji Hide"
+        - "preferences RA ra -- BackSpace"
+        - "ら り る れ ろ"
+        - "-- -- -- -- --"
+        - "-- -- -- -- --"
+    wa:
+        - "Mic Paste Emoji Hide"
+        - "preferences WA wa -- BackSpace"
+        - "わ ゐ -- ゑ を"
+        - "ゎ -- -- -- --"
+        - "-- -- ん -- --"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "preferences punct symbols -- BackSpace"
+        - "「 」 （ ） §"
+        - "【 】 ＜ ＞ ＝"
+        - "＋ ＊ ＆ ％ ＄ "
+    punct:
+        - "Mic Paste Emoji Hide"
+        - "preferences symbols punct -- BackSpace"
+        - "。 、 ？ ！ ー"
+        - "： ； ・ 〜 …"
+        - "♪ ” ’  ゙  ゚"
+#              k       s       t       n       h       m       y       r       w
+#a 	あア 	かカ 	さサ 	たタ 	なナ 	はハ 	まマ 	やヤ	らラ 	わワ
+#i 	いイ 	きキ 	しシ 	ちチ 	にニ 	ひヒ 	みミ 	※	りリ 	ゐヰ
+#u 	うウ 	くク 	すス 	つツ 	ぬヌ 	ふフ 	むム 	ゆユ	るル 	※
+#e 	えエ 	けケ 	せセ 	てテ 	ねネ 	へヘ 	めメ 	※	れレ 	ゑヱ
+#o 	おオ 	こコ 	そソ 	とト 	のノ 	ほホ 	もモ 	よヨ	ろロ 	をヲ
+
+#      g       z       d       b       p       n
+#a 	が ガ 	ざ ザ 	だ ダ 	ば バ 	ぱ パ	ん ン
+#i 	ぎ ギ 	じ ジ 	ぢ ヂ 	び ビ 	ぴ ピ 
+#u 	ぐ グ 	ず ズ 	づ ヅ 	ぶ ブ 	ぷ プ 
+#e 	げ ゲ 	ぜ ゼ 	で デ 	べ ベ 	ぺ ペ 
+#o 	ご ゴ 	ぞ ゾ 	ど ド 	ぼ ボ 	ぽ ポ 
+
+    カタカナ: # katakana
+        - "Mic Paste Emoji Hide"
+        - "preferences _A KA SA BackSpace"
+        - "Left TA NA HA Right"
+        - "ひらがな MA YA RA space"
+        - "switch2roman SYMBOLS WA PUNCT Return"
+    _A:
+        - "Mic Paste Emoji Hide"
+        - "preferences _a _A -- BackSpace"
+        - "ア イ ウ エ オ"
+        - "ァ ィ ゥ ェ ォ"
+        - "-- -- ヴ -- --"
+    KA:
+        - "Mic Paste Emoji Hide"
+        - "preferences ka KA -- BackSpace"
+        - "カ キ ク ケ コ"
+        - "ガ ギ グ ゲ ゴ"
+        - "ヵ -- ㇰ ヶ --"
+    SA:
+        - "Mic Paste Emoji Hide"
+        - "preferences sa SA -- BackSpace"
+        - "サ シ ス セ ソ"
+        - "ザ ジ ズ ゼ ゾ"
+        - "-- ㇱ ㇲ -- --"
+    TA:
+        - "Mic Paste Emoji Hide"
+        - "preferences ta TA -- BackSpace"
+        - "タ チ ツ テ ト"
+        - "ダ ヂ ヅ デ ド"
+        - "-- -- ッ -- ㇳ"
+    NA: 
+        - "Mic Paste Emoji Hide"
+        - "preferences na NA -- BackSpace"
+        - "ナ ニ ヌ ネ ノ"
+        - "-- -- ㇴ -- --"
+        - "-- -- -- -- --"
+    HA:
+        - "Mic Paste Emoji Hide"
+        - "preferences ha HA -- BackSpace"
+        - "ハ ヒ フ ヘ ホ"
+        - "バ ビ ブ ベ ボ"
+        - "パ ピ プ ペ ポ"
+    MA:
+        - "Mic Paste Emoji Hide"
+        - "preferences ma MA -- BackSpace"
+        - "マ ミ ム メ モ"
+        - "-- -- ㇺ -- --"
+        - "-- -- -- -- --"
+    YA:
+        - "Mic Paste Emoji Hide"
+        - "preferences ya YA -- BackSpace"
+        - "ヤ -- ユ -- ヨ"
+        - "ャ -- ュ -- ョ"
+        - "-- -- -- -- --"
+    RA:
+        - "Mic Paste Emoji Hide"
+        - "preferences ra RA -- BackSpace"
+        - "ラ リ ル レ ロ"
+        - "ㇻ ㇼ ㇽ ㇾ ㇿ"
+        - "-- -- -- -- --"
+    WA:
+        - "Mic Paste Emoji Hide"
+        - "preferences wa WA -- BackSpace"
+        - "ワ ヰ -- ヱ ヲ"
+        - "ヮ ヸ -- ヹ ヺ"
+        - "-- -- ン -- --"
+    SYMBOLS:
+        - "Mic Paste Emoji Hide"
+        - "preferences PUNCT SYMBOLS -- BackSpace"
+        - "「 」 （ ） §"
+        - "【 】 ＜ ＞ ＝"
+        - "＋ ＊ ＆ ％ ＄ "
+    PUNCT:
+        - "Mic Paste Emoji Hide"
+        - "preferences SYMBOLS PUNCT -- BackSpace"
+        - "。 、 ？ ！ ー"
+        - "： ； ・ 〜 …"
+        - "♪ ” ’ ゙  ゚"
+    # numbers view
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "preferences 1 2 3 BackSpace"
+        - "Left 4 5 6 Right"
+        - "roman 7 8 9 space"
+        - "switch2kana * 0 # Return"
+    # Roman alphabet view
+    roman:
+        - "Mic Paste Emoji Hide"
+        - "preferences RSYM1 ABC DEF BackSpace"
+        - "Left GHI JKL MNO Right"
+        - "ひらがな PQRS TUV WXYZ space"
+        - "switch2num RSYM2 RSYM3 RSYM4 Return"
+    RSYM1:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- RSYM1 -- BackSpace"
+        - "@ # $ § :"
+        - "| € ¥ £ --"
+        - "1 -- -- -- --"
+    ABC:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- ABC -- BackSpace"
+        - "A B C Ä ç"
+        - "a b c ä --"
+        - "2 -- -- -- --"
+    DEF:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- DEF -- BackSpace"
+        - "D E F -- --"
+        - "d e f -- --"
+        - "3 -- -- -- --"
+    GHI:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- GHI -- BackSpace"
+        - "G H I -- --"
+        - "g h i -- --"
+        - "4 -- -- -- --"
+    JKL:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- JKL -- BackSpace"
+        - "J K L -- --"
+        - "j k l -- --"
+        - "5 -- -- -- --"
+    MNO:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- MNO -- BackSpace"
+        - "M N O Ö --"
+        - "m n o ö --"
+        - "6 -- -- -- --"
+    PQRS:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- PQRS -- BackSpace"
+        - "P Q R S --"
+        - "p q r s ß"
+        - "7 -- -- -- --"
+    TUV:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- TUV -- BackSpace"
+        - "T U V Ü --"
+        - "t u v ü --"
+        - "8 -- -- -- --"
+    WXYZ:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- WXYZ -- BackSpace"
+        - "W X Y Z --"
+        - "w x y z --"
+        - "9 -- -- -- --"
+    RSYM2:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- RSYM2 -- BackSpace"
+        - "( ) ' \" ~"
+        - "[ ] { } _"
+        - "-- -- -- -- --"
+    RSYM3:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- RSYM3 -- BackSpace"
+        - "+ - * / ="
+        - "< > ^ ° --"
+        - "0 -- -- -- --"
+    RSYM4:
+        - "Mic Paste Emoji Hide"
+        - "preferences -- RSYM4 -- BackSpace"
+        - ", . ? ! ;"
+        - "\\ ´ ` · ¶"
+        - "-- -- -- -- --"
+
+buttons:
+    # following 4 buttons use the corresponding xkb name as keysym
+    BackSpace:
+        outline: "special"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    Return:
+        outline: "special"
+        icon: "key-enter"
+        keysym: "Return"
+    Left:
+        outline: "special"
+        label: "←"
+        keysym: "Left"
+    Right:
+        outline: "special"
+        label: "→"
+        keysym: "Right"
+    # special button "preferences" is handled in the code
+    preferences:
+        keysym: "XF86MediaLanguageMenu"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    # space button using text tag for ideographic space
+    space:
+        label: "␣"
+        text: "　"
+    # switch to number view
+    numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    # switch to latin characters
+    roman:
+        action:
+            set_view: "roman"
+        outline: "change-view"
+        label: "ᴀʙᴄ"
+    # toggle button with 3 different states
+    switch2roman: # switch from kana to latin characters view
+        action:
+            set_view: "roman"
+        outline: "change-view"
+        label: "あᴀ₁"
+    switch2num: # switch from latin characters to numbers view
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "ぁA₁"
+    switch2kana: # switch from numbers to hiragana view
+        action:
+            set_view: "base"
+        outline: "change-view"
+        label: "ぁᴀ1"
+    # Buttons for katakana and symbols
+    ひらがな:
+        action:
+            set_view: "base"
+        outline: "change-view"
+        label: "あさ"
+    _a:
+        action:
+            locking:
+                lock_view: "_a"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "あ"
+    ka:
+        action:
+            locking:
+                lock_view: "ka"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "か"
+    sa:
+        action:
+            locking:
+                lock_view: "sa"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "さ"
+    ta:
+        action:
+            locking:
+                lock_view: "ta"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "た"
+    na:
+        action:
+            locking:
+                lock_view: "na"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "な"
+    ha:
+        action:
+            locking:
+                lock_view: "ha"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "は"
+    ma:
+        action:
+            locking:
+                lock_view: "ma"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "ま"
+    ya:
+        action:
+            locking:
+                lock_view: "ya"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "や"
+    ra:
+        action:
+            locking:
+                lock_view: "ra"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "ら"
+    wa:
+        action:
+            locking:
+                lock_view: "wa"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "わ"
+    --:
+        outline: "placeholder"
+        text: ""
+    # buttons available on different views like symbols and punct should go
+    # back to their corresponding view
+    symbols:
+        action:
+            locking:
+                lock_view: "symbols"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "（）"
+    punct:
+        action:
+            locking:
+                lock_view: "punct"
+                unlock_view: "base"
+        outline: "character-group"
+        label: "。"
+    # Buttons for katakana and symbols
+    カタカナ:
+        action:
+            set_view: "カタカナ"
+        outline: "change-view"
+        label: "アサ"
+    _A:
+        action:
+            locking:
+                lock_view: "_A"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "ア"
+    KA:
+        action:
+            locking:
+                lock_view: "KA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "カ"
+    SA:
+        action:
+            locking:
+                lock_view: "SA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "サ"
+    TA:
+        action:
+            locking:
+                lock_view: "TA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "タ"
+    NA:
+        action:
+            locking:
+                lock_view: "NA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "ナ"
+    HA:
+        action:
+            locking:
+                lock_view: "HA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "ハ"
+    MA:
+        action:
+            locking:
+                lock_view: "MA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "マ"
+    YA:
+        action:
+            locking:
+                lock_view: "YA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "ヤ"
+    RA:
+        action:
+            locking:
+                lock_view: "RA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "ラ"
+    WA:
+        action:
+            locking:
+                lock_view: "WA"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "ワ"
+    SYMBOLS:
+        action:
+            locking:
+                lock_view: "SYMBOLS"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "（）"
+    PUNCT:
+        action:
+            locking:
+                lock_view: "PUNCT"
+                unlock_view: "カタカナ"
+        outline: "character-group"
+        label: "。"
+    # Buttons for Latin characters
+    RSYM1:
+        action:
+            locking:
+                lock_view: "RSYM1"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "@#"
+    ABC:
+        action:
+            locking:
+                lock_view: "ABC"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ᴀʙᴄ"
+    DEF:
+        action:
+            locking:
+                lock_view: "DEF"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ᴅᴇꜰ"
+    GHI:
+        action:
+            locking:
+                lock_view: "GHI"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ɢʜɪ"
+    JKL:
+        action:
+            locking:
+                lock_view: "JKL"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ᴊᴋʟ"
+    MNO:
+        action:
+            locking:
+                lock_view: "MNO"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ᴍɴᴏ"
+    PQRS:
+        action:
+            locking:
+                lock_view: "PQRS"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ᴘǫʀs"
+    TUV:
+        action:
+            locking:
+                lock_view: "TUV"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ᴛᴜᴠ"
+    WXYZ:
+        action:
+            locking:
+                lock_view: "WXYZ"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "ᴡxʏᴢ"
+    RSYM2:
+        action:
+            locking:
+                lock_view: "RSYM2"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "()"
+    RSYM3:
+        action:
+            locking:
+                lock_view: "RSYM3"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: "+-"
+    RSYM4:
+        action:
+            locking:
+                lock_view: "RSYM4"
+                unlock_view: "roman"
+        outline: "character-group"
+        label: ",.?"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"

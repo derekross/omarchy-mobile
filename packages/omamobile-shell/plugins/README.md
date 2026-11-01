@@ -18,7 +18,7 @@ logical at scale 3).
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
-| `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts; draws nothing |
+| `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts, and the language sheet for the keyboard's globe key |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
@@ -779,6 +779,28 @@ folds the keyboard on demand (showing closes the sheet).
 
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).
+
+**The language sheet** (0.2.65): the one thing it draws, and only when
+asked. squeekboard's globe key opened its own GTK popover, drawn at mouse
+size, sticking out above the keyboard's surface where taps didn't land, with
+a Keyboard Settings item for a GNOME panel the phone doesn't have. Every
+layout we carry now sends `XF86MediaLanguageMenu` from the globe
+(`squeekboard/generate`), and `hypr/phone.lua` binds it, for squeekboard
+only, to `languages`: a bottom sheet over the keyboard (`LanguageWindow.qml`
+on the overlay layer, `LanguageSheet.qml`) with a 56 px row per language in
+`org.gnome.desktop.input-sources` `sources` (xkeyboard-config's names, as
+squeekboard shows them), the current one checked, a remove target on the
+others, and "Add a language", a scrolling list of the layouts the keyboard
+has. A tap switches and closes; a tap outside or a swipe down closes. One
+language still opens the sheet, so people find it. `bin/omamobile-keyboard-languages`
+lists and switches: it moves the chosen layout to the front of `sources`,
+exactly as squeekboard's popover does, and squeekboard follows that key.
+squeekboard's Emoji and Terminal overlays aren't offered: they are internal
+to squeekboard and nothing outside it can select them (docs/VOICE-PLAN.md,
+"The language sheet"). The Emoji key opens Omarchy's emoji picker, and the
+terminal layout comes up on its own in a terminal.
+
+IPC: `languages|closeLanguages ''`, `pickLanguage|removeLanguage '<layout>'`.
 
 ## omamobile.back
 

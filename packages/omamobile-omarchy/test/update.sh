@@ -131,6 +131,15 @@ good_conf
 battery 20 Discharging 0
 out=$(python3 -I "$U" check --json --offline)
 ok "battery 20%, unplugged: blocked" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"battery_ok\"] and not d[\"ok\"] and \"20%\" in d[\"blockers\"][0]" "$out"'
+# A paired controller's battery (scope Device) sorts first and is full: the
+# phone's own 20 % still counts, and the controller doesn't make it "charging"
+battery 20 Discharging 0
+mkdir -p "$t/power/aa-controller-battery"
+echo Battery >"$t/power/aa-controller-battery/type"; echo 1 >"$t/power/aa-controller-battery/present"
+echo Device >"$t/power/aa-controller-battery/scope"
+echo 100 >"$t/power/aa-controller-battery/capacity"; echo Full >"$t/power/aa-controller-battery/status"
+out=$(python3 -I "$U" check --json --offline)
+ok "battery 20% with a full controller paired: still blocked" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"battery\"][\"percent\"] == 20 and not d[\"battery\"][\"charging\"] and not d[\"battery_ok\"]" "$out"'
 battery 20 Discharging 1
 out=$(python3 -I "$U" check --json --offline)
 ok "battery 20%, charger in: fine" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"battery_ok\"] and d[\"battery\"][\"charging\"]" "$out"'

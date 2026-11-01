@@ -48,7 +48,55 @@ function toggleTarget(visible, lastRequest, msSinceRequest) {
   return !visible
 }
 
+// The language sheet (the keyboard's globe key). omamobile-keyboard-languages
+// list prints {current, configured, sources: [{kind, name, label}],
+// available: [{name, label}]}; anything else is no listing (null), and the
+// sheet then shows nothing to pick rather than stale rows.
+function parseListing(text) {
+  var data
+  try { data = JSON.parse(String(text || "")) } catch (e) { return null }
+  if (!data || typeof data !== "object" || !Array.isArray(data.sources)) return null
+  var clean = function(list) {
+    return (Array.isArray(list) ? list : []).filter(function(r) {
+      return r && typeof r.name === "string" && r.name !== ""
+    }).map(function(r) {
+      return { name: r.name, label: typeof r.label === "string" && r.label !== "" ? r.label : r.name }
+    })
+  }
+  return {
+    current: typeof data.current === "string" ? data.current : "",
+    configured: Number(data.configured) || 0,
+    sources: clean(data.sources),
+    available: clean(data.available)
+  }
+}
+
+// The sheet's first page: one row per language, the current one marked, a
+// remove target on the others while more than one is configured, and "Add
+// a language" when the keyboard has a layout that isn't on the list. A
+// single language still gets its row (the globe always opens the sheet, so
+// people find it).
+function languageRows(listing) {
+  if (!listing) return []
+  var rows = listing.sources.map(function(s) {
+    var current = s.name === listing.current
+    return { kind: "language", name: s.name, label: s.label, current: current,
+             removable: !current && listing.configured > 1 }
+  })
+  if (listing.available.length > 0) rows.push({ kind: "add", name: "", label: "Add a language", current: false, removable: false })
+  return rows
+}
+
+// The add page: the keyboard's other layouts; a tap adds one and switches.
+function addRows(listing) {
+  if (!listing) return []
+  return listing.available.map(function(a) {
+    return { kind: "language", name: a.name, label: a.label, current: false, removable: false }
+  })
+}
+
 if (typeof module !== "undefined") {
   module.exports = { shownByHandAfter: shownByHandAfter, homeOnScreen: homeOnScreen, shouldHide: shouldHide,
-                     TOGGLE_SETTLE_MS: TOGGLE_SETTLE_MS, toggleTarget: toggleTarget }
+                     TOGGLE_SETTLE_MS: TOGGLE_SETTLE_MS, toggleTarget: toggleTarget,
+                     parseListing: parseListing, languageRows: languageRows, addRows: addRows }
 }
