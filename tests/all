@@ -9,8 +9,9 @@
 # and flash against a fake fastboot, omamobile-firstboot's own tests, and the
 # smoke test of the newest root image in out/ if there is one, the felix,
 # lynx and panther device packages' own tests, tools/alarm-wake-test's
-# check, and a contributor's local builds (tools/local-key-init,
-# tools/fetch-published, --local).
+# check, a contributor's local builds (tools/local-key-init,
+# tools/fetch-published, --local), and the OWL conformance report's
+# differences on the host.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
@@ -28,6 +29,8 @@ for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/instal
   echo "# $t"
   "$t"
 done
+echo "# tests/owl/conformance-test.js"
+node tests/owl/conformance-test.js
 shopt -s nullglob
 latest=""
 for f in out/omamobile-rootfs-*-aarch64.img.zst; do latest=$f; done
