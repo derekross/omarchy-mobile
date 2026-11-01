@@ -125,6 +125,89 @@ with nothing but Bluetooth starting resets again at that time, start here.
   (434-445 mA cable out, as-is) and tonight; treat about 300 mA cable out
   as the baseline.
 
+## 2026-10-28: the second 9a (the phone behind #74)
+
+These results are from a second retail Pixel 9a, the one behind
+<https://github.com/derekross/omarchy-mobile/pull/74>. They don't replace
+the palmtop's results in the entries around this one.
+
+**Slot A, as it stands:** stock `CP3A.261005.005` (Android 17, October
+2026). All five live slot A boot images match the official October images
+by hash. Selecting A and asking for recovery reached Android's `No command`
+screen, recovery ADB and its shell answered (slot A, `CP3A.261005.005`),
+and recovery went back to fastboot and B back to Omarchy with no image
+written and no userdata reset. That verifies stock's recovery boot, not a
+full Android boot: Arch holds `userdata`, so going back to Android means
+resetting it, as with the installer. An earlier draft of this entry said A
+"is not currently a qualified rollback"; that was before the recovery check
+and no longer holds. Recovery for these trials also relied on retained,
+checksum-verified slot B image sets.
+
+**Fastboot is by the buttons on this phone:** with the phone off, hold
+Volume Down, add Power, and keep both held about 20 s. Software
+`reboot-to bootloader` came back to a normal boot of B instead.
+
+### Prototype kernel, simple framebuffer
+
+Kernel `7.3.0-rc6-omamobile-push1-g9ea0e19f8dc2`, from an unpublished
+branch on public `omamobile` `33267e524` plus the clock and binding changes
+then in review and prototype board, USB, UFS and touch changes. It is not
+the tree in linux-omarchy-mobile #80 and #81.
+
+`DEVICE=tegu bin/omamobile flash` wrote only `boot_b`, `init_boot_b`,
+`vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`, selected B and
+rebooted; a second trial used an initramfs without builder SSH keys. Both
+reached Arch, Hyprland and the Omarchy shell on the existing `userdata`.
+The display was ABL's simple framebuffer with a DECON trigger write, on
+October 2026 headers; none of that is in the shared descriptor.
+
+`tools/phone-smoke`: boot, storage guard (62 guarded partitions), ext4
+root, kernel health, USB and session passed; display 1080x2424 and
+Synaptics touch found. No GPU render node; Wi-Fi, Bluetooth, battery and
+charging, audio, sensors and cameras absent or skipped.
+
+The touch start marker: a normal reboot registered touch and cleared the
+marker; a reboot with the marker kept on purpose left touch off and logged
+the skip; `--retry`, with kmsg streamed to the laptop and the watchdog
+armed, brought touch back and cleared it. A fresh SSH login worked
+afterwards.
+
+### Public base, oldest headers
+
+The public board and touch base `9386dfaa1d5d` with this directory's
+`kernel.config` boots as `7.3.0-rc6-omamobile-push1-g9386dfaa1d5d`. With
+Android 16 / September 2025 headers and no AVB footers, B went back to
+fastboot (`bootfailure`, `enter-reason` "boot failure"), with no log that
+names the cause. The same payloads, byte for byte, with hash footers
+(the image tool's AOSP test key, rollback index 0, OS version 16, security
+patch 2025-09-05) booted Arch with USB and SSH. ACPM reported 16 usable
+channels at 0.22 s; touch registered at 36.1 s. Smoke at 97 s: boot, all 62
+storage guards, root, kernel health, USB, touch and buttons passed.
+
+So this newer phone boots the oldest shared header values with
+index-zero footers. That says nothing about footers on the palmtop, and the
+shared descriptor is unchanged. This base had no display driver (Plymouth
+failed, the Google logo stayed).
+
+### Native display
+
+Display tree `1175a53bf9b2` booted as
+`7.3.0-rc6-omamobile-push1-gde2e0689c517`, same headers and footers, no
+trigger write. The first boot found that Arch's `kernel-modules-hook`
+cleanup, during the previous kernel's boot, had deleted the unowned modules
+of the next kernel; the package's `linux-modules-cleanup` drop-in (carried
+into 0.2.0) skips that cleanup. With the modules restored: `card0-DSI-1`,
+Omarchy on camera, touch confirmed by hand. A later reboot kept all 1,782
+modules, brought up the panel at 3.66 s at 1080x2424, 60 Hz (the cap this
+branch's package set; 0.2.0 drops it), and the lock screen came back on
+DPMS wake. Smoke at 223 s: boot, storage guard, root, kernel health, USB,
+the session, touch and buttons passed.
+
+Still open on this phone: Plymouth's splash crashes in `strcmp` with no
+console; no GPU render node (this kernel has no GPU node); Wi-Fi,
+Bluetooth, battery and charging, audio, sensors and cameras unqualified; no
+clean install; B not marked successful. Stock A was never written.
+
 ## 2026-10-28, evening: USB-C host mode through TCPM
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the
