@@ -1071,6 +1071,27 @@ with the link down and nothing after it in the log. Next: trace lines
 through cpif's wake work and `s5100_poweron_pcie()` up to its call into
 the controller.
 
+**G3-L1 found: the PERIC0 GPIO clock gate (2026-11-01, night).** With
+those trace lines the next reset stopped inside
+`mif_gpio_set_value(AP2CP_WAKEUP, 1, 5)`, and with cpif's `trace_lines`
+on the one after logged the GPIO write itself as the last line. The AP2CP
+lines are on PERIC0 (gpp8, gpp12, gpp16), and `CLK_GOUT_GPIO_PERIC0` is
+the one writable GPIO gate in `clk-zumapro.c` (the APM and PERIC1 GPIO
+gates are read-only). It runs in manual mode (`CLK_CON_GAT` 0x20b8 reads
+`0x100000` between accesses), and the Samsung pin controller enables and
+disables its pclk around every register access, so cpif's GPIO writes
+switch the gate on and off about twice a second each way. With the clock
+held on by a bring-up module (`tegu-gpio-pclk-hold.ko`), two 600 s
+sessions ran 1325 and 1326 link cycles with no reset (550 of 557 and 558
+of 564 fixed). Then the same change in the kernel
+(<https://github.com/derekross/linux-omarchy-mobile/pull/172>: the gate
+marked `CLK_IS_CRITICAL`, built into the daily kernel's tree, Image
+`7f3674d21e92d758`, the release unchanged) with the palmtop's own daily
+modem modules and nothing held by hand: two more 600 s sessions, 1335 and
+1333 link cycles, no reset, 568 of 570 and 558 of 567 fixed. Every session
+before reset the palmtop. That kernel is the daily kernel from now on
+(the kit's Image pin in `logs/tegu-review-20261029/runners/lib.sh`).
+
 **G3-L1, the controller's own steps traced (2026-11-01, daily kernel).**
 The same pair with a trace line after each step of the controller's
 `cp_link_down()` and `cp_link_try()`, the modem started after the boot's
