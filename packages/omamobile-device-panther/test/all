@@ -108,6 +108,8 @@ grep -q '^MemorySleepMode=s2idle$' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-om
   || fail "suspend must be s2idle: gs201 never wakes from deep"
 grep -qx 'options gs_dsim_cmd allow_tx=1' "$tmp/root/usr/lib/modprobe.d/omamobile-display.conf" \
   || fail "the DSI command host may send to the panel (brightness)"
+grep -qx 'options gs_decon screen_off=2' "$tmp/root/usr/lib/modprobe.d/omamobile-display.conf" \
+  || fail "screen off stops DECON's frames and sleeps the panel"
 [[ -x $tmp/root/usr/bin/omamobile-usb-rescue ]] || fail "omamobile-usb-rescue is executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
   || fail "omamobile-usb-rescue starts at boot"
