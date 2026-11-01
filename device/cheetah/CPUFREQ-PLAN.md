@@ -6,8 +6,11 @@ release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`). Three schedutil policies
 up to 1803/1999/2252 MHz, the firmware runs every normal level it is asked
 for, six thermal zones, throttling holds an all-core load at 78-80 °C,
 Whisper runs about 2x faster, and an s2idle cycle resumes cleanly. Boost
-(the turbo levels) stays off for the first release; C5 and C6 haven't run. Kernel branch `omamobile-cpufreq` in
-`~/omamobile-kernel/wt-cpufreq`, four commits on `d15487384604` (the test
+(the turbo levels) stays off for the first release; C5 and C6 haven't run.
+GPU cooling is built and untested (section 10, runbook C8-C9; branch
+`omamobile-gpu-cooling`); the energy model is planned (section 11, starting
+with the read-only C10) and the BCL researched (section 12). Kernel
+branch `omamobile-cpufreq` in `~/omamobile-kernel/wt-cpufreq`, four commits on `d15487384604` (the test
 kernel the phone ran: `phonetests` plus the s3c64xx and ACPM-defer fixes),
 built into `~/omamobile-kernel/out-cpufreq`, images in
 `~/omamobile-kernel/out-cpufreq/images`. The runbook is section 7.
@@ -427,10 +430,160 @@ tools/phone-ssh 'rtcwake -m freeze -s 20; for p in 0 4 6; do cat /sys/devices/sy
 - **Stop:** no wake (Power wakes it; then roll back), errors.
 - **Risk:** low-medium.
 
+### C8. GPU cooling: boot the kernel, then read only
+
+The kernel of section 10 (`omamobile-gpu-cooling`, DT only). Announce: the
+phone reboots. Keep the kernel log on the laptop as above.
+
+```sh
+KERNEL_DIR=~/omamobile-kernel/wt-gpu-cooling KERNEL_OUT=~/omamobile-kernel/out-gpu-cooling bin/omamobile push
+tools/phone-ssh --fresh 'uname -r
+cat /sys/module/clk_acpm/parameters/gs201_gpu_max_khz
+for z in /sys/class/thermal/thermal_zone*; do t=$(cat $z/type); [ "$t" = gpu-thermal ] || continue
+  echo "$z $t $(cat $z/temp) $(cat $z/policy)"; for i in 0 1 2; do echo "  trip$i $(cat $z/trip_point_${i}_type) $(cat $z/trip_point_${i}_temp)"; done
+  ls -d $z/cdev* 2>/dev/null; for c in $z/cdev?; do echo "  $(cat $c/type) trip $(cat ${c}_trip_point) lower $(cat ${c}_lower 2>/dev/null) upper $(cat ${c}_upper 2>/dev/null)"; done
+done
+for c in /sys/class/thermal/cooling_device*; do echo "$c $(cat $c/type) max $(cat $c/max_state) cur $(cat $c/cur_state)"; done
+d=$(ls -d /sys/class/devfreq/*.gpu 2>/dev/null | head -1); echo "$d $(cat $d/cur_freq) max $(cat $d/max_freq)"
+dmesg | grep -i -E "thermal|devfreq|panthor|cooling" | tail -20; dmesg | grep -c ufshcd_err_handler'
+```
+
+- **Expect:** the release of the new build; the cap still `572000`;
+  `gpu-thermal` with trips `passive 75000`, `passive 85000`,
+  `critical 110000`, two `cdev` links (`trip 0` lower 3, `trip 1` lower 8;
+  upper 11) to the GPU's devfreq cooling device (max 11, cur 0 while cool);
+  the three CPU cooling devices as in C1; devfreq at 151-572 MHz; no new
+  thermal or panthor errors; `ufshcd_err_handler` 0.
+- **Pass:** all of the above, the shell draws as before.
+- **Stop:** no `cdev` link on `gpu-thermal`, a GPU zone reading 0, negative
+  or above 90 °C at idle, panthor or ACPM errors: roll back.
+- **Risk:** low (device tree only, the cap stays).
+- **Rollback:** section 6, with `wt-cpufreq`/`out-cpufreq` as the previous
+  kernel (the release C1-C7 ran).
+
+### C9. GPU cooling acts (emulated temperature, then real load)
+
+Announce: the GPU slows on purpose for about a minute; the shell may stutter.
+First an emulated temperature (no heat), on `gpu-thermal` only, **never 110000
+or above** (the critical trip shuts the phone down):
+
+```sh
+tools/phone-ssh 'bash -s' <<'EOF'
+for z in /sys/class/thermal/thermal_zone*; do [ "$(cat $z/type)" = gpu-thermal ] && Z=$z; done
+for c in /sys/class/thermal/cooling_device*; do case $(cat $c/type) in *gpu*|*devfreq*) C=$c;; esac; done
+[ -n "$Z" ] && [ -n "$C" ] || { echo "STOP: no GPU zone or cooling device"; exit 1; }
+d=$(ls -d /sys/class/devfreq/*.gpu | head -1)
+trap 'echo 0 > $Z/emul_temp' EXIT
+for t in 80000 80000 80000 90000 90000 90000 0 0 0; do
+  echo $t > $Z/emul_temp; sleep 2
+  echo "emul $t temp $(cat $Z/temp) state $(cat $C/cur_state) max_freq $(cat $d/max_freq)"
+done
+EOF
+```
+
+- **Expect:** at 80 °C the state goes to 3 at once and then climbs one step
+  per poll; at 90 °C it is 8 or more (devfreq `max_freq` 302000000 or
+  lower); after `0` it falls back to 0 within a few seconds and `max_freq`
+  returns.
+- **Stop:** a state that never moves, a shutdown message, an error.
+
+Then real load at the 572 MHz cap, on the charger, 120 s, with a 95 °C kill
+switch, to record what the GPU zone does under load (the data for lifting
+the cap later):
+
+```sh
+tools/phone-ssh 'bash -s' <<'EOF'
+for z in /sys/class/thermal/thermal_zone*; do [ "$(cat $z/type)" = gpu-thermal ] && Z=$z; done
+for c in /sys/class/thermal/cooling_device*; do case $(cat $c/type) in *gpu*|*devfreq*) C=$c;; esac; done
+d=$(ls -d /sys/class/devfreq/*.gpu | head -1)
+command -v glmark2-es2-drm glmark2-es2-wayland glmark2-wayland vkmark || { echo "STOP: no GPU benchmark installed"; exit 1; }
+B=$(command -v glmark2-es2-wayland || command -v glmark2-wayland || command -v glmark2-es2-drm)
+sudo -u "$(loginctl list-users --no-legend | awk '{print $2; exit}')" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 timeout 120 $B --run-forever --off-screen >/dev/null 2>&1 &
+for i in $(seq 1 125); do
+  v=$(cat $Z/temp); echo "$i temp $v state $(cat $C/cur_state) freq $(cat $d/cur_freq)"
+  [ "$v" -ge 95000 ] && { echo "STOP: $v"; pkill -f glmark2; echo 151000000 > $d/max_freq; exit 1; }
+  sleep 1
+done
+EOF
+```
+
+(The `WAYLAND_DISPLAY` and user lookup may need adjusting to the session;
+`glmark2-es2-drm` doesn't run while Hyprland holds the display.)
+
+- **Expect:** devfreq at 572 MHz under load; the GPU zone's peak recorded;
+  whether it reaches 75 °C at the cap at all (if it does, the state rises to
+  3, which changes nothing at the cap, then 4 = 510 MHz and down).
+- **Pass:** 120 s without a STOP or a reset; the emulated part acted as
+  expected.
+- **Stop:** the 95 °C guard (it also caps devfreq at 151 MHz; not
+  `gs201_gpu_max_khz=0`, which only stops sending and leaves the firmware
+  at its last level), a reset, ACPM errors. Afterwards
+  `echo 848000000 > $d/max_freq` restores the ceiling.
+- **Risk:** low-medium (emulation is a software path; the load runs at the
+  cap the phone has run since ACPM-PLAN A5).
+- **Rollback:** `echo 0 > .../emul_temp`; section 6.
+
+### C10. Read this chip's voltage table (read-only, for the energy model)
+
+No kernel change; any kernel. The ACPM firmware keeps the fused
+frequency/voltage map (`fvmap`) in APM SRAM at offset 0x31000 (stock's DT:
+`acpm_ipc` `fvmap_addr = <0x31000>`; APM SRAM at 0x18500000), the table
+stock's cpufreq adds its OPP voltages from (section 11). APM SRAM is always
+on (every ACPM message goes through it), and reading it has no side effects.
+First one word (`devmem ADDR` with **no second argument**, which would be a
+write):
+
+```sh
+tools/phone-ssh 'devmem 0x18531000'
+```
+
+- **Expect:** a non-zero word whose second byte (bits 15:8) is 0x0d (MIF has
+  13 levels). **Stop** if it reads 0 or 0xffffffff, or the session drops.
+
+Then the whole map, read-only (`PROT_READ`, aligned 32-bit words only):
+
+```sh
+tools/phone-ssh 'python3 -' <<'EOF' | tee logs/fvmap-$(date +%Y%m%d).txt
+import mmap, os, struct
+BASE, SIZE = 0x18531000, 0x2000
+fd = os.open("/dev/mem", os.O_RDONLY | os.O_SYNC)
+m = mmap.mmap(fd, SIZE, mmap.MAP_SHARED, mmap.PROT_READ, offset=BASE)
+def w(off):
+    assert off % 4 == 0 and off + 4 <= SIZE
+    return struct.unpack_from("<I", m, off)[0]
+names = ["mif", "int", "cpucl0", "cpucl1", "cpucl2", "g3d", "g3dl2"]
+for i, n in enumerate(names):
+    h = b"".join(struct.pack("<I", w(i * 24 + k)) for k in range(0, 24, 4))
+    lv = h[1]
+    o_ratevolt = struct.unpack_from("<H", h, 20)[0]
+    print(n, "levels", lv, "o_ratevolt", hex(o_ratevolt))
+    if o_ratevolt % 4 or lv > 32:
+        print("STOP: implausible header"); break
+    for j in range(lv):
+        print("  %7d kHz %7d uV" % (w(o_ratevolt + 8 * j), w(o_ratevolt + 8 * j + 4)))
+EOF
+```
+
+(The header layout is Google's `struct fvmap_header`, 24 bytes per domain,
+domains in ACPM DVFS order; `GS/drivers/soc/google/cal-if/fvmap.h`.)
+
+- **Expect:** cpucl0 15 levels, cpucl1 17, cpucl2 21, g3d 12, g3dl2 7, with
+  exactly the ECT's rates (section 1, ACPM-PLAN section 2); voltages between
+  about 450 000 and 1 100 000 µV, falling with the rate; the G3D column
+  inside ACPM-PLAN section 3's range by ASV group.
+- **Pass:** all rates match. The voltages then go into section 11 (they are
+  this chip's: don't publish them as the 7 Pro's).
+- **Stop:** any mismatch in level counts or rates (the map isn't where
+  stock's DT says: the firmware's initdata may point elsewhere; don't
+  search SRAM by hand), a SIGBUS (an unaligned read: fix the script),
+  a hang.
+- **Risk:** low (reads of always-on SRAM, nothing written).
+- **Rollback:** none needed.
+
 ## 8. Results
 
-On 2026-10-31 unless noted, release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`, each
-step approved by Derek.
+On 2026-10-31 unless noted, release
+`7.3.0-rc6-omamobile-push1-g63c35fb0c871`, each step approved by Derek.
 
 - **C1 passed.** Six zones (big, mid, little, gpu, isp, tpu) at 47-50 °C idle
   on the charger. Four cooling devices: `cpufreq-cpu0` 0/10, `cpufreq-cpu4`
@@ -470,10 +623,260 @@ step approved by Derek.
 1. Make it permanent: merge `omamobile-cpufreq` into `omamobile-int`; a
    tmpfiles entry for the governors as raven has
    (`omamobile-raven-cpufreq.conf`) isn't needed (schedutil is the default).
-2. GPU cooling on `gpu-thermal` (panthor's devfreq `#cooling-cells`), then
-   lift the 572 MHz GPU cap (ACPM-PLAN 8.2).
-3. An energy model (`opp-microwatt` from stock's `pixel-em`), then
-   power_allocator for the big cluster.
+2. GPU cooling on `gpu-thermal`: built (section 10, runbook C8-C9). The
+   572 MHz cap stays: it is stock's own GPU cap on a battery droop, so
+   lifting it belongs with the BCL (item 5), as the CPU turbo levels do.
+3. An energy model, then power_allocator for the big cluster: planned, not
+   built (section 11). Stock's DT has no usable power table; the numbers
+   need this chip's voltages first (C10).
 4. The little-cluster floor (5.4), if C4 shows it matters.
 5. A BCL driver (S2MPG12/13 OCP and UVLO), before the turbo levels can be
-   on by default.
+   on by default: researched (section 12).
+
+## 10. GPU cooling (item 2)
+
+Kernel branch `omamobile-gpu-cooling` in `~/omamobile-kernel/wt-gpu-cooling`,
+one commit on `63c35fb0c871` (the kernel C1-C7 ran), built into
+`~/omamobile-kernel/out-gpu-cooling`. Device tree only: panthor needs no
+change.
+
+**What was there.** Panthor's devfreq already registers a cooling device
+(`devfreq_cooling_em_register()` in `panthor_devfreq.c`; C1 saw it as the
+fourth cooling device, 0/11), but nothing bound it: a zone's `cooling-maps`
+can only point at a node with `#cooling-cells`, and `gpu-thermal` had only
+its 110 °C critical trip. The binding (`arm,mali-valhall-csf.yaml`) allows
+`#cooling-cells = <2>`.
+
+**The commit** (`arm64: dts: exynos: google: gs201: throttle the GPU on
+gpu-thermal`), in `gs201.dtsi` like the CPU cooling:
+
+| Trip | Type | GPU cooling | Why |
+|---|---|---|---|
+| 75 °C | passive | state 3 and up (572 MHz and below), then step_wise | the levels above 572 MHz go at once, as the CPU turbo levels do at 75 °C |
+| 85 °C | passive | state 8 = 302 MHz | a deep drop for a fast burst: at the ECT's G3D voltages (ACPM-PLAN section 3), 302 MHz takes 41-43 % of 572 MHz's dynamic power in every ASV group |
+| 110 °C | critical | | as before |
+
+States count from the top of the 12-level table (state 0 = 848 MHz,
+11 = 151 MHz). Polling is 250 ms, 100 ms while passive, as the CPU zones
+(it was 1000/250 with only a critical trip). Stock throttles the GPU from
+100 °C (`gpu-control-temp`, Google's `gs201-b0.dts:485`). The Pixel 7, 7a and
+Fold boards enable the same GPU node and inherit this untested; gs101 and
+zuma are untouched.
+
+**The 572 MHz cap stays, and lifting it doesn't belong here.** Today the cap
+is a staging module parameter, `options clk_acpm gs201_gpu_max_khz=572000`
+in `omamobile-device-cheetah`'s `omamobile-acpm.conf`: the paired GPU clock
+rounds every request down to it, so devfreq may ask for 848 MHz and get
+572 (`acpm_clk_paired_find()` in `clk-acpm.c`). ACPM-PLAN A5 planned to raise
+it to 848000 "when GPU thermal throttling exists", but there is a second
+reason for it now: 572 MHz is exactly what stock's BCL allows the GPU on a
+battery voltage droop (`vdroop2` and `smpl_gm`), and 701 MHz on battery
+overcurrent (`batoilo`; `gs201-cloudripper-bcl.dtsi:203-252`). That is the
+same argument that keeps the CPUs at 1999/2252 MHz: stock runs above those
+levels only because its BCL can pull them back. So:
+
+- with this commit the cooling is in place, and at the cap states 0-3 all
+  mean 572 MHz (the cooling starts to bite at state 4 = 510 MHz);
+- lifting the cap to 701-848 MHz is, like CPU boost (C6), a charger-only
+  experiment until a BCL exists (section 12); it needs no rebuild
+  (`echo 848000 > /sys/module/clk_acpm/parameters/gs201_gpu_max_khz`);
+- the cap's long-term form is in KERNEL-PUBLISH ("cap through the OPP
+  table, drop the parameter and the package option together"); that rework
+  is for when the parameter goes, not for this branch.
+
+**Gates (2026-10-31).** Head `70eed773f2f4`, no Signed-off-by: Derek signs
+off. It applies cleanly onto the published `omamobile` (`c534374d9c12`).
+
+- `bin/omamobile kernel`, `modules`, `initramfs`, `images`: clean, release
+  `7.3.0-rc6-omamobile-push1-g70eed773f2f4`, images in
+  `~/omamobile-kernel/out-gpu-cooling/images` (the descriptor's 15 overlays
+  apply; AVB footers on `boot` and `init_boot`).
+- `tools/kernel-pr-check -C ~/omamobile-kernel/wt-gpu-cooling --build
+  ~/omamobile-kernel/out-gpu-cooling-check 63c35fb0c871 HEAD` (Android clang
+  and dtschema 2026.9 on `PATH`): subjects, policy ok; checkpatch --strict no
+  errors, no warnings; **7 device trees build with W=1 and dtbs_check with no
+  new warnings** (the binding accepts `#cooling-cells`); no C files touched;
+  the only failure is the missing human Signed-off-by, as intended.
+- **DTBs:** `gs101-oriole`, `gs101-raven` and `zuma-husky` are byte-identical
+  to the `63c35fb0c871` build; only the four gs201 boards change. In the
+  cheetah DTB, `gpu-thermal` polls 100/250 ms and has trips at 75, 85 and
+  110 °C with maps to the GPU at states 3 and 8.
+- The runbook is C8-C9.
+
+## 11. Energy model and power_allocator (item 3): plan, not built
+
+**What stock does.** Stock's kernel energy model is not a table in the DT.
+`exynos-acme` adds each CPU OPP with the voltage the ACPM firmware reports
+for it (`cal_dfs_get_asv_table()` → `fvmap_get_voltage_table()`,
+`GS/drivers/cpufreq/exynos-acme.c:1249,1345`,
+`GS/drivers/soc/google/cal-if/cal-if.c:438-440`, `fvmap.c:119-140`), then calls
+`dev_pm_opp_of_register_em()` (`exynos-acme.c:1390`), which computes
+P = C·V²·f from the `dynamic-power-coefficient` (89, 513, 757: the values our
+`gs201.dtsi` already carries). The voltages are the chip's fused ASV
+voltages, copied by the firmware into an "fvmap" in APM SRAM (stock's DT:
+`fvmap_addr = <0x31000>` on `acpm_ipc`; `GS/drivers/soc/google/acpm/acpm_ipc.c:152-157`).
+Stock's boot log shows "EM: created perf domain" for the clusters right
+after `exynos_acme` initialises each domain.
+
+**Why stock's `pixel-em` isn't the source** (correcting item 3 of section 9
+as first written). Cheetah's DT carries one `pixel-em` profile, named
+`cam1` (`G/devices/google/gs201/dts/gs201-cpu.dtsi:366-420`, the same in
+stock's DT). `pixel_em` builds every named profile from the kernel's own EM
+and overwrites the listed entries (`generate_default_em_profile()`,
+`GS/drivers/soc/google/vh/kernel/pixel_em/pixel_em.c:520,841`): `cam1` is a
+scheduler tuning profile (by its name, for camera use), not the physical
+model. A `default` profile
+exists only in `gs201-b0_v2-ipop.dts`, a different package (`B0_IPOP`,
+`pkg_mode = <1>`) that cheetah doesn't run; its numbers fit
+757 × (846 mV)² × 2252 MHz = 1.22 W for the big core at 2252 MHz, so it was
+itself generated from C·V²·f on one chip.
+
+**So the inputs are the coefficients (citable, already in our DT) and this
+chip's voltages.** Mainline's `dev_pm_opp_calc_power()` (`drivers/opp/of.c`)
+uses the same formula, C × mV² × MHz / 10⁶ µW. The voltages differ from chip
+to chip: G3D at 572 MHz runs at 556-706 mV across the ECT's ASV groups
+(ACPM-PLAN section 3), about ±25 % in power. Any fixed table is therefore
+one chip's, and picking an ASV group without reading the fuse is a guess.
+**No `opp-microwatt` is committed.**
+
+**Steps:**
+
+1. **C10 (read-only):** read this phone's fvmap (rates and voltages for
+   CPUCL0-2, G3D, G3DL2). This gives the real power per level for this chip
+   and checks the layout for step 3.
+2. **A local experiment, not for publishing:** `opp-microwatt` for this phone
+   only (computed from C10 with the formula above) in an overlay or a test
+   commit on top of `omamobile-cpufreq`, to measure what an EM changes. Note
+   that any EM on these asymmetric CPUs (`capacity-dmips-mhz` 250/927/…)
+   with schedutil **turns EAS on**: task placement changes for everything,
+   so it needs C4 (Whisper), UI smoothness and a `tools/power-ab` run, and
+   `sysctl kernel.sched_energy_aware=0` turns EAS off at runtime for the
+   comparison.
+3. **The real form:** the ACPM DVFS side reads the fvmap at probe and
+   provides the voltages at runtime, as stock does, so every chip gets its
+   own model. Two shapes to choose from: set the OPP voltages
+   (`dev_pm_opp_adjust_voltage()`) before cpufreq-dt registers the EM (probe
+   order between `clk_acpm` and cpufreq-dt makes this delicate), or let
+   cpufreq-dt register without an EM and update it later through the EM
+   runtime-modification API (`em_dev_update_perf_domain()`). Either is new
+   code in `drivers/firmware/samsung/` or `clk-acpm`, gated on the gs201
+   compatible; upstream review will want the fvmap layout documented.
+   The GPU's EM comes from the same map (G3D) and a coefficient (Google's
+   kbase uses `gpu_power_coeff = <625>`, `gs201-gpu.dtsi:142`, in kbase's own
+   units: check before reusing it as `dynamic-power-coefficient`).
+
+**power_allocator for the big cluster: worth trying after step 2, modest
+gain.** Mainline's IPA needs an EM on every cooling device bound to the zone;
+it treats the first passive trip as switch-on and the last as the control
+temperature, and derives `k_po`/`k_pu`/`k_i` from `sustainable-power` and the
+gap between them. Stock's BIG zone runs Google's own PI controller with
+`sustainable_power = <2000>` (mW), switch-on 80 °C and control 100 °C
+(`G/devices/google/gs201/dts/gs201-b0.dts:153-176,300-320`); its k-constants
+are in that driver's units, so only the sustainable power carries over.
+A first try: `big-thermal` with `thermal-governor` power_allocator,
+switch-on 75 °C, control 85 °C, `cpu6`/`cpu7` over their whole range on the
+control trip, `sustainable-power = <2000>`; mid and little stay step_wise.
+C3 showed step_wise already holds an all-core load at 78-80 °C; IPA would
+give steadier ceilings, but the three clusters share one die, so one zone
+on IPA next to two on step_wise may oscillate. Measure with C3's script
+before and after; keep it only if the curve is clearly better.
+
+## 12. BCL (item 5): research
+
+What Google's driver does on gs201, what we have, and the order to build it.
+Sources: Google's `google-modules/power/mitigation` (`google_bcl_core.c`,
+`google_bcl_qos.c`, `google_bcl_util.c`, `max77759_vdroop.c`, `bcl.h`), its DT
+`gs201-cloudripper-bcl.dtsi` (BCL) and `gs201-pmic.dtsi` (P), the event and
+register header `GS/include/dt-bindings/soc/google/gs201-bcl.h` (H), Google's
+`s2mpg12-register.h` and `s2mpg12-regulator.c`, and stock's DT and dmesg.
+`M/` = `G/google-modules/power/mitigation`.
+
+### 12.1 The events
+
+- **Over-current warnings (S2MPG12/13 `OCP_WARN`)** are PMIC output pins
+  wired to SoC GPIOs, not register interrupts: S2MPG12 B3M (mid cluster)
+  on gpa5-1, B2M (big cluster) on gpa5-2, their soft variants on gpa5-3/4,
+  B10M (TPU) on gpp19-1; S2MPG13 B2S (GPU) on gpp19-0 (P:48-54, 716-722;
+  buck assignment `M/google_bcl_core.c:1763-1770`, H:84-91). The registers
+  are S2MPG12 `B2M/B3M/B10M_OCP_WARN` 0xC3-0xC5 and the soft ones 0xC6-0xC8
+  (bit 7 enable, bit 6 count, bit 5 DVS mask, bits 4:0 level).
+- **Thresholds come from the kernel, not the bootloader.** Google's regulator
+  driver writes `SMPL_WARN_CTRL` (0x16) and every `OCP_WARN` register at
+  probe (`s2mpg12-regulator.c:765-830`); stock's dmesg logs the values:
+  `SMPL_WARN_CTRL` 0x68 (2.9 V, 200 mV hysteresis), B2M/B3M/B10M_OCP_WARN
+  0x80 (enabled, level 0 = 12 A / 8 A / 12 A), the soft ones 0 (off), and
+  S2MPG13 `B2S_OCP_WARN` 0x80 (12 A) (P:60-95, 725-733).
+- **vdroop1, vdroop2 and BATOILO come from the MAX77759 charger**, not the
+  PMIC: vdroop1 is its UVLO1 on gpa5-5; BATOILO and UVLO2 ("vdroop2") share
+  gpa5-6, and the driver reads the MAX77759's interrupt register to tell them
+  apart (BCL:47-48, `M/google_bcl_core.c:673-679,1337-1353`,
+  `M/max77759_vdroop.c`). BATOILO trips at 5000 mA (4800 on USB/OTG) with a
+  30 µs deglitch the driver writes to `CHG_CNFG_17` (BCL:38-43,
+  `M/google_bcl_core.c:1361-1368`).
+- **SMPL_WARN** (battery under 2.9 V) on gpa5-0, and the PMIC's 120 °C,
+  140 °C and over-temperature interrupts through the S2MPG12 IRQ chip.
+
+### 12.2 What it does
+
+- On an edge, a work item checks the line, clears the source and applies
+  `freq_qos` max caps per event (BCL:203-252; kHz):
+
+  | Event | little | mid | big | GPU | TPU |
+  |---|---|---|---|---|---|
+  | batoilo | 930000 | 1197000 | 1426000 | 701000 | 627000 |
+  | vdroop1 | 1803000 | 1999000 | 2252000 | 848000 | 627000 |
+  | vdroop2, smpl_gm | 1803000 | 1999000 | 2252000 | 572000 | 401000 |
+
+  then steps through LIGHT/MEDIUM/HEAVY states 5 ms apart, polls the line
+  every 5 ms while it is asserted, and releases when it clears
+  (`M/google_bcl_core.c:203-319,660-751`, `M/google_bcl_qos.c:73-165`).
+- **The fast path is hardware.** The driver programs a clock divider in each
+  CPU cluster, the GPU and the TPU (`CLKDIVSTEP` 0x830, `VDROOP_FLT` 0x838,
+  `CON_HEAVY` 0x840, `CON_LIGHT` 0x844 in CPUCL0/1/2 at 0x20c00000/
+  0x20c10000/0x20c20000, G3D at 0x27f00000, TPU at 0x1cc00000; H:100-122;
+  values in BCL:24-37; writes in `M/google_bcl_core.c:524-566,2031-2070` and
+  `M/google_bcl_util.c:97-148`), checking first that the GPU or TPU block is
+  powered (`M/google_bcl_util.c:231-258`). It also rewrites `GPA5_CON`
+  (`M/google_bcl_core.c:2012-2028`), apparently handing the droop pins to a
+  hardware function: unconfirmed. Which signal feeds which divider isn't
+  documented in the source.
+- No latency figures in the source; the software path is IRQ + work item +
+  an ACPM DVFS request, the hardware divider is what reacts within
+  microseconds.
+
+### 12.3 What we have
+
+- Mainline has no BCL, OCP-warn or UVLO mitigation for any Samsung PMIC or
+  gs101. Our `omamobile` has an S2MPG12/13 MFD over ACPM, the S2MPG12 RTC,
+  S2MPG13 LDOs and GPIO, and an S2MPG12 IRQ chip with SMPL, 120C, 140C, TSD
+  and the buck OCP interrupts (`drivers/mfd/sec-irq.c`). The S2MPG12 regmap
+  doesn't expose 0x16 or 0xC3-0xC8 yet (`drivers/mfd/sec-acpm.c`).
+- Nothing writes the OCP-warn registers or the dividers on our kernel, and
+  we don't know whether the PMIC's power-on defaults or ABL leave either
+  armed. Google's driver arms both itself.
+
+### 12.4 Order of work
+
+1. **B0, read-only:** add 0x16 and 0xC3-0xC8 (S2MPG12) and `B2S_OCP_WARN`
+   (S2MPG13) as readable ranges in `sec-acpm.c` (a small
+   regmap change, read-only, gated on the S2MPG12/13 types), read them once
+   through debugfs regmap; read the levels of gpa5-0..6 and gpp19-0..3; read
+   `CLKDIVSTEP`/`CON_*` of CPUCL1 and CPUCL2 one register per call, with the
+   cluster's CPUs online (the AGENTS.md rule for unknown blocks). This tells
+   whether anything is armed; it protects nothing.
+2. **B1, listener:** a gs201 driver that takes the vdroop1 (gpa5-5),
+   vdroop2/BATOILO (gpa5-6) and SMPL_WARN (gpa5-0) interrupts and applies
+   stock's `freq_qos` caps (the stricter BATOILO row for gpa5-6 until the
+   MAX77759 register read is in), with 5 ms polling and a minimum hold before
+   release. It writes nothing to the PMIC, so ABL's defaults stay. It covers
+   droops that last milliseconds, which is what would let the CPU turbo
+   levels and the GPU's 701-848 MHz run on battery under test; it does not
+   cover microsecond transients (that's the divider) and needs the GPU cap
+   wired to devfreq QoS rather than the module parameter.
+3. **B2, writes, each with its own runbook:** enable `OCP_WARN` at stock's
+   levels, then the cluster clock dividers. Both are kernel writes to the PMIC
+   and to CPU-cluster registers; neither is safe to try before B0 has shown
+   the current state.
+
+Until B1 passes on the phone, the 1999/2252 MHz CPU ceiling and the 572 MHz
+GPU cap stay.
