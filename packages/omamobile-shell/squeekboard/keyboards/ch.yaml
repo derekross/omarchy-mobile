@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's ch.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 356.565: 2 x 106.969 + 2 x 71.313.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: German (Switzerland)
+# Maintained by: Jordy Bossy <jordi@bossy.space>
+# and Patrick Jörg <patrickjoerg@gmx.ch>. No Copyright, enjoy!
+
+---
+outlines:
+    default:       { width: 32.415, height: 52 }
+    change-view:   { width: 48.622, height: 52 }
+    change-view-2: { width: 56.726, height: 52 }
+    fill:          { width: 64.83,  height: 52 }
+    spaceline:     { width: 105.35, height: 52 }
+    special:       { width: 32.415, height: 52 }
+    special-2:     { width: 48.622, height: 52 }
+    special-3:     { width: 56.726, height: 52 }
+    mic:           { width: 106.969, height: 40 }
+    paste:         { width: 106.969, height: 40 }
+    emoji:         { width: 71.313, height: 40 }
+    hide:          { width: 71.313, height: 40 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "q w e r t z u i o p ü"
+        - "a s d f g h j k l ö ä"
+        - "show_upper y x c v b n m ' BackSpace"
+        - "show_numbers show_eschars preferences space , . Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - "Q W E R T Z U I O P Ü"
+        - "A S D F G H J K L Ö Ä"
+        - "show_upper Y X C V B N M \" BackSpace"
+        - "show_numbers show_eschars preferences space , . Return"
+    numbers:      
+        - "Mic Paste Emoji Hide"
+        - "1 2 3 4 5 6 7 8 9 0 ^"
+        - "* + - = ( ) ~ < > ! ?"
+        - "show_symbols _ # & / \\ √ ; : BackSpace"
+        - "show_letters show_eschars preferences space , . Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "€ $ £ ¥ % | § µ [ ] ²"
+        - "© ® § ` { } @ · ¡ ¿ ³"
+        - "show_numbers « » ÷ × “ ” „ BackSpace"
+        - "show_letters show_eschars preferences space , . Return"
+    eschars:
+        - "Mic Paste Emoji Hide"
+        - "à â ç é è ê î ô ù û ñ"
+        - "À Â Ç É È Ê Î Ô Ù Û Ñ"
+        - "show_numbers æ œ ä ë ï ö ü ß BackSpace"
+        - "show_letters show_eschars preferences space ° Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view"
+        label: "ABC"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "*/="
+    show_eschars:
+        action:
+            locking:
+                lock_view: "eschars"
+                unlock_view: "base"
+        outline: "change-view"
+        label: "Ââ"
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    °:
+        outline: "fill"
+    ×:
+        outline: "fill"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"

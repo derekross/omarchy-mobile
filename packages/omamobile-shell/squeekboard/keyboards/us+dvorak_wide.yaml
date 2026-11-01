@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's us+dvorak_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 537.6: 2 x 161.28 + 2 x 107.52.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: English (Dvorak)
+---
+outlines:
+    default:       { width: 53.76,  height: 42 }
+    change-view:   { width: 80.64,  height: 42 }
+    change-view-2: { width: 94.08,  height: 42 }
+    large:         { width: 53.76,  height: 42 }
+    spaceline:     { width: 241.92, height: 42 }
+    special:       { width: 53.76,  height: 42 }
+    special-2:     { width: 80.64,  height: 42 }
+    special-3:     { width: 94.08,  height: 42 }
+    mic:           { width: 161.28, height: 32 }
+    paste:         { width: 161.28, height: 32 }
+    emoji:         { width: 107.52, height: 32 }
+    hide:          { width: 107.52, height: 32 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "show_upper p y f g c r l BackSpace"
+        - "a o e u i d h t n s"
+        - ", q j k x b m w v z"
+        - "show_numbers preferences space . Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - "show_upper P Y F G C R L BackSpace"
+        - "A O E U I D H T N S"
+        - ", Q J K X B M W V Z"
+        - "show_numbers preferences space . Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "show_symbols , \" ' : ; ! ? BackSpace"
+        - "* # $ / & - _ + ( )"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "show_letters preferences space . Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "show_numbers_from_symbols \\ % < > = [ ] BackSpace"
+        - "© ® £ € ¥ ^ ° @ { }"
+        - "~ ` | · √ π τ ÷ × ¶"
+        - "show_letters preferences space . Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "123"
+    show_numbers_from_symbols:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ABC"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "*/="
+    .:
+        outline: "large"
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"
+
+# The US QWERTY layout has fewer letters on the third row, and so has
+# the shift & backspace keys placed there. In contrast, the US DVORAK
+# layout has fewer letters on the first row, which makes it a good
+# choice for the shift & backspace keys. That leads to what may be,
+# for many people, an unexpected layout in numbers mode: the numerals
+# are on the third row (not the first) so that the backspace key
+# remains in a consistent location regardless of mode, without
+# sacrificing key width. (Once could argue that in numbers mode, the
+# numerals should be closer to the enter key.) As with any keyboard
+# layout, familiarity comes with repeated use.

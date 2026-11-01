@@ -20,12 +20,13 @@ while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omamobile/shell/widget-${file#widgets/}"
 done < <(find widgets/template widgets/examples -type f -print0)
 install -Dm644 environment.d/20-omamobile-osk.conf "$destination/usr/lib/environment.d/20-omamobile-osk.conf"
-# squeekboard's US English and terminal layouts with our action row
-# (GPL-3.0-or-later, from squeekboard); omamobile-setup-user links them into
-# the user's data dir.
-for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
-  install -Dm644 "squeekboard/keyboards/$layout" "$destination/usr/share/omamobile/squeekboard/keyboards/$layout"
-done
+# squeekboard's layouts with our action row (GPL-3.0-or-later, from
+# squeekboard): the terminal layout by hand, every language's made by
+# squeekboard/generate; omamobile-setup-user links them into the user's data
+# dir.
+while IFS= read -r -d '' layout; do
+  install -Dm644 "$layout" "$destination/usr/share/omamobile/$layout"
+done < <(find squeekboard/keyboards -type f -name '*.yaml' -print0)
 # Omarchy hook scripts that omamobile-setup-user links into the user's
 # ~/.config/omarchy/hooks/ (the keyboard's theme-set hook)
 install -Dm755 hooks/theme-set-keyboard "$destination/usr/share/omamobile/shell/hooks/theme-set-keyboard"

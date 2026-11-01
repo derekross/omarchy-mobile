@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's ir_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 537.6: 2 x 161.28 + 2 x 107.52.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: Azerbaijani (Iran)
+---
+outlines:
+    default:       { width: 44.8,  height: 42 }
+    change-view:   { width: 67.2,  height: 42 }
+    change-view-2: { width: 78.4,  height: 42 }
+    fill:          { width: 89.6,  height: 42 }
+    placeholder:   { width: 44.8,  height: 42 }
+    spaceline:     { width: 201.6, height: 42 }
+    special:       { width: 44.8,  height: 42 }
+    special-2:     { width: 67.2,  height: 42 }
+    special-3:     { width: 78.4,  height: 42 }
+    mic:           { width: 161.28, height: 32 }
+    paste:         { width: 161.28, height: 32 }
+    emoji:         { width: 107.52, height: 32 }
+    hide:          { width: 107.52, height: 32 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "ض ص ث ق ف غ ع ه خ ح ج چ"
+        - "ش س ی ب ل ا ت ن م ک گ /"
+        - "show_upper ظ ط ز ر ذ د پ و ، BackSpace"
+        - "show_numbers preferences space zwnj ؟ . Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - " ْ  ٌ  ٍ  ً  ُ  ِ  َ  ّ  ] [ @ #"
+        - "ؤ ئ ي إ أ آ ة » « : ؛ \\"
+        - "show_upper ك  ٓ ژ ٰ  ‌  ٔ  ء  >  < BackSpace"
+        - "show_numbers preferences space ، ؟ ! Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "-- ۱ ۲ ۳ ۴ ۵ ۶ ۷ ۸ ۹ ۰ |"
+        - "… ٬ ٫ ﷼ ٪ ^ * ° ) ( − _"
+        - "show_symbols + - × ÷ = / % > < BackSpace"
+        - "show_letters preferences space ، ؟ . Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "-- & ` | · • % π τ ¶ [ ]"
+        - "© ® £ € ¥ ^ * ° { } -- --"
+        - "show_numbers_from_symbols + - × ÷ = \\ % < > BackSpace"
+        - "show_letters preferences space ، ! . Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "۱۲۳"
+    show_numbers_from_symbols:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "۱۲۳"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ا‌ب‌پ"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "*/="
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    zwnj:
+        icon: "zwnj"
+        text: "‌"
+    --:
+        outline: "placeholder"
+        text: ""
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"
