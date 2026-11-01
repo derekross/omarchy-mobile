@@ -410,8 +410,19 @@ dmesg | grep -iE "psci|cpuidle|SMC failed"'
 **Expect:** driver `psci_idle`, `state1` "c2" on cpu0-7 with `usage`
 growing and `rejected` a small fraction of it; no "SMC failed". Check twice,
 a minute apart. For a more cautious start, disable `state1` on cpu4-7 right
-after boot (`echo 1 > /sys/devices/system/cpu/cpu[4-7]/cpuidle/state1/disable`)
-and re-enable after a few minutes. Then a 30-minute soak with normal use and
+after boot and re-enable it after a few minutes (the same command with
+`v=0`). It names each core's file, since a glob can't be a redirect target,
+reads the value back and stops at the first core that doesn't take it (a
+"stop" line, non-zero exit); the cores it printed before that keep the new
+value. If either run stops, go no further: collect `dmesg` and report.
+
+```sh
+tools/phone-ssh 'v=1; for c in 4 5 6 7; do f=/sys/devices/system/cpu/cpu$c/cpuidle/state1/disable
+  [ -e "$f" ] && echo $v > "$f" && [ "$(cat "$f")" = $v ] || { echo "cpu$c: state1/disable is not $v, stop" >&2; exit 1; }
+  echo "cpu$c state1/disable=$v"; done'
+```
+
+Then a 30-minute soak with normal use and
 one all-core load (`stress-ng --cpu 8 --timeout 60`, or 8 `yes > /dev/null`
 for a minute), looking for RCU stalls, soft lockups or a frozen screen.
 
