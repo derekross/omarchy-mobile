@@ -616,6 +616,10 @@ grep -c '!LauncherModel.opensShellSurface(entry))' plugins/omamobile.launcher/La
   grep -c '!HomeModel.opensShellSurface(entry))' plugins/omamobile.home/Home.qml >/dev/null || fail "no launch toast for an entry that opens a shell surface (drawer and home)"
 grep -c 'Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))' plugins/omamobile.home/Home.qml >/dev/null || fail "home-screen apps launch through omamobile-launch"
 grep -c 'tile.home.launch(tile.entry.app)' plugins/omamobile.home/AppTile.qml >/dev/null || fail "app tiles launch through the home screen"
+# Home icons: unchanged (capped at 64) up to a 128 px cell, the cell's 62 %
+# beyond it (scale 2, the 3-column grid)
+grep -c 'Math.min(64, Math.max(40, Math.min(tile.width, tile.height) \* 0.62))' plugins/omamobile.home/AppTile.qml >/dev/null || fail "narrow cells keep the 64 px icon"
+grep -c 'width: tile.width > 128' plugins/omamobile.home/AppTile.qml >/dev/null || fail "wide cells lift the icon cap"
 grep -c 'Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.launch goes through omamobile-launch"
 grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.openUrl goes through omamobile-launch"
 grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omamobile.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omamobile-launch"
