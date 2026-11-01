@@ -222,14 +222,23 @@ else
   log "no NFC with its clock in this DTB; skipped"
 fi
 
-# Wi-Fi: the zumapro PCIe host for channel 1 (pcie_zumapro, whose probe
-# brings the link up), then the BCM4383 on brcmfmac. Only with the host's
-# node, the restricted DMA pool the endpoint needs, and the owner's firmware
-# (tools/extract-vendor-firmware). Never unloaded: a reboot undoes it.
+# Wi-Fi: the PCIe host for channel 1, whose probe brings the link up, then
+# the BCM4383 on brcmfmac. The host is the shared zuma-family pair
+# (phy_zuma_pcie, then pcie_gs201) when the node says google,zuma-pcie
+# (linux-omarchy-mobile#178), else the older standalone pcie_zumapro (#168).
+# Only with the host's node, the restricted DMA pool the endpoint needs, and
+# the owner's firmware (tools/extract-vendor-firmware). Never unloaded: a
+# reboot undoes it.
+wifi_host=pcie_zumapro
+[[ -f $dt/soc/pcie@13120000/compatible ]] &&
+  tr -d '\0' < "$dt/soc/pcie@13120000/compatible" | grep -c 'google,zuma-pcie' >/dev/null &&
+  wifi_host="phy_zuma_pcie pcie_gs201"
 if [[ -e $wifi_pcie && -e $wifi_pool && -e $wifi_fw ]]; then
   phase wifi
-  if ! modprobe pcie_zumapro; then
-    skip Wi-Fi "pcie_zumapro failed (see dmesg)"
+  failed_host=
+  for m in $wifi_host; do modprobe "$m" || { failed_host=$m; break; }; done
+  if [[ -n $failed_host ]]; then
+    skip Wi-Fi "$failed_host failed (see dmesg)"
   else
     for _ in $(seq 20); do [[ -e $root/sys/bus/pci/devices/0000:01:00.0 ]] && break; sleep 0.25; done
     if [[ ! -e $root/sys/bus/pci/devices/0000:01:00.0 ]]; then
