@@ -1013,6 +1013,23 @@ power-on, so the next trace goes on the power-on path
 (`s51xx_pcie_restore_state()` and the link-up). The save-once change alone
 does not fix the hang.
 
+**G3-L1, the power-on trace (2026-11-01, daily kernel).** With the
+save-once build plus trace lines through `s5100_poweron_pcie()`, the session
+went through 53 power-off/power-on cycles (the previous build 3) and then
+hung; the last line was "link ack doorbell", printed after a complete
+power-on (link on, config restored, MSI set, RX queues kicked), so the SoC
+hung in the link-ack doorbell: the controller's `gs201_pcie_cp_doorbell()`
+writes the BAR register under `cfg_lock` and reads it back. Both hangs are
+non-posted reads to the endpoint (a config read, a BAR read-back). The root
+port's completion timeout is enabled (DEVCAP2 `0x00010c1f`, DEVCTL2
+`0x0405`: range B, 16-55 ms, not disabled), so an unanswered read should
+end in an error, not a hang; a silent hang there points at the access
+reaching the controller with its clocks or PHY already off (a fabric-level
+hang below PCIe) rather than at the endpoint. Next: read the controller's
+clock and isolation state at the doorbell (in the controller, under the
+same lock), and check whether `cp_link_down()` can run from the
+controller's own link-down path without `pcie_onoff_lock`.
+
 **G3-L1, the L1 substates on for real (2026-10-31, one boot, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`).**
 The controller module's v8 bring-up build (sha256 `dbbb6f5f335f7640…`)
 logs each step of its L1SS path behind `trace=1` and with `l1ss=2` enables
