@@ -1,18 +1,17 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a sleep: why s2idle drains so much
 
-Status (2026-10-31): s2idle usually works (RTC and power-key wakes; ten of
+Status (2026-11-01): s2idle usually works (RTC and power-key wakes; ten of
 ten 30-second cycles on 10-31 with the console kept through the freeze),
 but not always: four sleeps have never woken (two direct freezes, one
 30-minute systemd sleep with `tegu-mif-sleep` loaded, and the sixth
 30-second cycle of a boot on 10-30, which left the USB bus and needed a
 forced restart), and one more woke with UFS dead (`link startup failed` x5,
 then I/O errors and `emergency_ro`, 10-30 afternoon). The drain in sleep is
-high. Sleep tests are attended and unattended sleep stays off. The shell's auto-sleep (the `omamobile-sleep` toggle) is
-off on the palmtop since the 2026-10-30 shell reinstall (the package ships
-it off), so it doesn't sleep unattended at present; while it was on, its
-systemd-path sleeps without the module all woke, and turning it back on is
-the owner's call.
+high. Sleep tests are attended. The shell's auto-sleep (the `omamobile-sleep`
+toggle, which the package ships off) has been on on the palmtop since
+2026-11-01 by the owner's choice, and every sleep it took that day woke
+(see "A day of use with auto-sleep on" below).
 This plan gathers what's measured, an audit from stock's device tree and
 a read-only snapshot of the palmtop, the candidates ranked, and a
 measurement runbook.
@@ -509,6 +508,25 @@ with the cable in.
   earlier rate of about one hang in 21, thirty clean sleeps would still
   happen by chance about one time in four, so this narrows the hang but
   doesn't retire it.
+
+  **A day of use with auto-sleep on (2026-11-01, same release).** The
+  owner turned the shell's auto-sleep back on in the morning: sleep 30 s
+  after the screen goes off behind the secure lock, wake by the power key,
+  cable in or out. A temporary hook logged each sleep's real length by the
+  RTC. Seven sleeps in real use between 11:15 and 12:57 (1021, 1300, 11,
+  266, 61, 700 and 1065 s) all woke, with no UFS errors. Later that day, a 30 s sleep with an RTC
+  alarm and a power-key wake on the shell's 0.2.68 also woke clean. One
+  morning wake looked like a hang to the owner ("pressed Power, no
+  reaction") and was taken for one at the time. It wasn't: the journal
+  shows the press woke the palmtop at 12:11:04, and sleepd took the wake
+  for a dark resume (the 9a's power key is `Power` in
+  `/proc/interrupts`, not `KEY_POWER`) and slept again 5 s later. The
+  owner's next press, part of a Power + Volume Up hold, woke it again and
+  lit the screen. omamobile-shell 0.2.68 (#268) recognises the 9a's power
+  key, and #275 cut the time from the press to a lit screen from about
+  1.2 s to about 0.25 s; before that, a second press often looked
+  necessary. So none of the day's sleeps hung. This adds to the evidence
+  but doesn't retire the hang of 10-28 to 10-30 either.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
