@@ -7,8 +7,13 @@
 # commit holding the exact upstream tag's tree, with our commits replayed on
 # top unchanged. The trees are identical to the local branch, which keeps the
 # real upstream history for sending patches.
-#   tools/publish-kernel [branch] [upstream-tag]   (defaults: omamobile v7.3-rc6)
+#   tools/publish-kernel [--rebuild] [branch] [upstream-tag]
+#                                        (defaults: omamobile v7.3-rc6)
+# --rebuild allows replacing a published branch whose tip matches no commit
+# on the local branch (local history was rewritten); without it that stops.
 set -euo pipefail
+rebuild=
+[[ ${1:-} != --rebuild ]] || { rebuild=1; shift; }
 
 # The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
 # ~/omamobile-kernel, or ~/android/mainline on setups from before 2026-10-29.
@@ -37,15 +42,31 @@ individual commits; they apply unchanged on top of the upstream tag.")
 # full replay gives every commit a new id. So when the published tip has the
 # tree of a commit on the local branch, replay only the commits after it, on
 # top of the published tip, and push a fast-forward. Only when no such commit
-# exists (local history rewritten) is the branch rebuilt and force-pushed.
-pub=
-git fetch -q "$remote" "refs/heads/$branch" 2>/dev/null && pub=$(git rev-parse FETCH_HEAD)
+# exists (local history rewritten) is the branch rebuilt, and only with
+# --rebuild. A failed read is not a missing branch: ls-remote exits 2 only
+# when the remote answered without the branch, and anything else stops the
+# run. The push leases the tip seen here (no tip: the branch must not exist),
+# so a branch that moved during the run is never overwritten.
+status=0
+refs=$(git ls-remote --exit-code "$remote" "refs/heads/$branch") || status=$?
+[[ $status == 0 || $status == 2 ]] || { echo "Can't read $branch from $remote (git ls-remote exit $status); not publishing" >&2; exit 1; }
+pub=$(awk -v r="refs/heads/$branch" '$2 == r { print $1 }' <<<"$refs")
 from=
 if [[ -n $pub ]]; then
+  git fetch -q "$remote" "refs/heads/$branch" || { echo "Can't fetch $branch ($pub) from $remote; not publishing" >&2; exit 1; }
+  pub=$(git rev-parse FETCH_HEAD)
   ptree=$(git rev-parse "$pub^{tree}")
   for c in $(git rev-list "$tag..$branch"); do
     [[ $(git rev-parse "$c^{tree}") == "$ptree" ]] && { from=$c; break; }
   done
+  if [[ -z $from ]]; then
+    [[ -n $rebuild ]] || {
+      echo "The published $branch ($pub) matches no commit on the local $branch; not publishing." >&2
+      echo "To replace it, which changes every published commit id: $0 --rebuild $branch $tag" >&2
+      exit 1
+    }
+    echo "Replacing the published $branch ($pub): every published commit id changes" >&2
+  fi
 fi
 
 # Replay in a throwaway worktree, so no checkout in use changes.
@@ -60,12 +81,10 @@ fi
 published=$(git -C "$work" rev-parse HEAD)
 
 [[ -z $(git diff "$branch" "$published") ]] || { echo "Replayed tree differs from $branch; not publishing" >&2; exit 1; }
+git push --force-with-lease="refs/heads/$branch:$pub" "$remote" "$published:refs/heads/$branch"
 git branch -f "publish/$branch" "$published"
 if [[ -n $from ]]; then
-  git push "$remote" "publish/$branch:refs/heads/$branch"
   echo "Published $branch to $remote: $(git rev-list --count "$pub..$published") new commit(s), fast-forward"
 else
-  echo "No published commit matches $branch's history: rebuilding, which changes every published commit id" >&2
-  git push --force "$remote" "publish/$branch:refs/heads/$branch"
   echo "Published $branch ($(git rev-list --count "$tag..$branch") commits on $tag) to $remote"
 fi
