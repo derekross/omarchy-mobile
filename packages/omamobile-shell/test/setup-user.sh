@@ -196,4 +196,13 @@ sed -i 's/^model = "tiny.en"$/model = "small.en"/' "$hc/.config/voxtype/config.t
 RUN_HOME=$hc run
 grep -cx 'model = "small.en"' "$hc/.config/voxtype/config.toml" >/dev/null || fail "a model the user chose stays"
 if grep -c 'try-restart voxtype' "$hc/calls" >/dev/null 2>&1; then fail "voxtype isn't restarted for nothing"; fi
+python3 -I - "$hv/.config/omarchy/extensions/omarchy-menu.jsonc" <<'PY' || fail "Setup > Voice opens the voice settings"
+import json, re, sys
+text = open(sys.argv[1]).read()
+text = re.sub(r"(?m)^\s*//.*$", "", text)
+text = re.sub(r",(\s*[}\]])", r"\1", text)
+voice = json.loads(text)["setup.voice"]
+assert voice["action"] == "omarchy-shell shell summon omamobile.voice '{\"page\":\"settings\"}'", voice
+assert voice["label"] == "Voice" and voice["icon"] == "\U000f036c", voice
+PY
 pass "voxtype's model: tiny.en once downloaded over Omarchy's base.en, a user's choice kept"

@@ -79,6 +79,9 @@ o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { lo
 -- photo while the Camera app is in front (and raise the volume otherwise).
 hl.unbind("XF86AudioRaiseVolume")
 o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true })
+-- Its release ends Power + Volume Up push-to-talk (voice input, off unless
+-- turned on in the voice settings); omamobile-keys ignores every other one.
+o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })
 
 -- A fresh phone (no name and email, or no PIN): a notification offers the
 -- onboarding that Omarchy's installer does on a computer.

@@ -152,7 +152,7 @@ assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve t
 assert strip.count("HomeSwipe {") == 1 and "HomePill" in strip, "one swipe logic"
 assert "HideKeyboardKey {" in strip and "visible: root.oskOpen" in strip, "the hide key, only with the keyboard"
 assert "ownTaps: [hideKey, micKey]" in strip, "the hide and mic keys' taps are no double tap"
-assert "MicKey {" in strip and strip.count("visible: root.oskOpen") == 2, "the mic key, only with the keyboard"
+assert "MicKey {" in strip and 'visible: root.oskOpen && root.voiceSetting("micKey")' in strip, "the mic key, only with the keyboard (and the setting)"
 assert re.search(r"readonly property bool keyboardStripShown: stripShown && oskOpen$", src, re.M)
 PY
 # The keyboard's controls on the pill, through omamobile.keyboard's IPC:
@@ -711,12 +711,12 @@ grep -c 'exclusionMode: ExclusionMode.Normal' "$v" >/dev/null || fail "the sheet
 grep -c 'WlrLayershell.namespace: "omamobile-voice-strip"' "$v" >/dev/null &&
   awk '/id: stripWindow/,/IdleInhibitor/' "$v" | grep -c 'WlrLayershell.keyboardFocus: WlrKeyboardFocus.None' >/dev/null ||
   fail "the listening strip never takes the keyboard from the app"
-[[ $(grep -c 'IdleInhibitor {' "$v") == 2 ]] || fail "the screen stays on while listening (sheet and strip)"
+[[ $(grep -c 'IdleInhibitor {' "$v") == 3 ]] || fail "the screen stays on while listening (sheet, strip and agent mic)"
 grep -c 'VoiceLink.publish(root)' "$v" >/dev/null || fail "voice publishes itself for the pill"
 cmp -s plugins/omamobile.voice/VoiceLink.js plugins/omamobile.launcher/DrawerLink.js && fail "VoiceLink.js is its own script"
 grep -c 'source: Qt.resolvedUrl("../omamobile.voice/VoiceLinkClient.qml")' "$l" >/dev/null || fail "the launcher loads the voice link"
 grep -c '"call", "shell", "call", "omamobile.voice", method, ""' "$l" >/dev/null || fail "voice calls fall back to the plugin's IPC"
-grep -c 'onHeld: root.voiceCall("askPress")' "$l" >/dev/null && grep -c 'onReleased: root.voiceCall("askRelease")' "$l" >/dev/null ||
+grep -c 'onHeld: if (root.voiceSetting("holdPill")) root.voiceCall("askPress")' "$l" >/dev/null && grep -c 'onReleased: if (root.voiceSetting("holdPill")) root.voiceCall("askRelease")' "$l" >/dev/null ||
   fail "holding the dock's pill asks the agent"
 grep -c 'onTapped: root.voiceCall("dictateTap")' "$l" >/dev/null || fail "the mic key toggles dictation"
 grep -c 'onMicTap: root.voiceCall("askTap")' "$l" >/dev/null && grep -c 'Accessible.name: "Ask by voice"' "$l" >/dev/null ||
@@ -734,9 +734,25 @@ grep -c 'mask: Region { item: touchArea }' "$h" >/dev/null &&
 grep -c 'exec voxtype record start --no-osd --type' plugins/omamobile.quicksettings/tile-action.sh >/dev/null || fail "the Dictation tile hides Voxtype's overlay"
 # Voxtype finds wtype and wl-copy with `which`; without it nothing is typed.
 sed -n "/^depends=(/,/)/p" PKGBUILD | grep -cE "^[[:space:]]+which[[:space:]]+#" >/dev/null || fail "omamobile-shell depends on which (voxtype's output check)"
-if grep -rn -- '--model' plugins/omamobile.voice plugins/omamobile.quicksettings/tile-action.sh | grep -v '^\S*:[0-9]*:\s*\(//\|#\)'; then
+if awk '/^function startArgv/,/^}/' "$vm" | grep -n -- '--model' || grep -n -- '--model' plugins/omamobile.quicksettings/tile-action.sh | grep -v '^[0-9]*:\s*#'; then
   fail "no per-recording --model: voxtype ignores one it hasn't prepared"
 fi
+# Phase 2: the mic over an agent, the settings, Power + Volume Up, ticks.
+grep -c 'VoiceModel.isAgent(ToplevelManager.activeToplevel.appId)' "$v" >/dev/null || fail "the agent mic follows the agent's terminal (org.omarchy.agent)"
+grep -c 'WlrLayershell.namespace: "omamobile-voice-agent-mic"' "$v" >/dev/null &&
+  awk '/id: agentMicWindow/,/IdleInhibitor/' "$v" | grep -c 'WlrLayershell.keyboardFocus: WlrKeyboardFocus.None' >/dev/null ||
+  fail "the agent mic never takes the keyboard from the agent"
+grep -c '(settings.agentMic && agentInFront && !oskOpen && !opened && !busy)' "$v" >/dev/null || fail "the agent mic hides with the keyboard up and over other apps"
+grep -c 'var submit = settings.sayToSend && (who === "agent" || agentInFront)' "$v" >/dev/null || fail "Enter on send only in agents, and only with the setting"
+grep -c 'readonly property string settingsPath: configDir + "/voice.json"' "$v" >/dev/null || fail "voice settings live in ~/.config/omamobile/voice.json"
+grep -c 'if (r.phase === "review" && !settings.confirmSend && hasAgent) send()' "$v" >/dev/null || fail "Ask before sending off sends straight away"
+grep -c 'Quickshell.execDetached(VoiceModel.HAPTIC_ARGV)' "$v" >/dev/null || fail "listening ticks"
+grep -c 'if (!settings.powerVolumeUp) return "off"' "$v" >/dev/null || fail "Power + Volume Up is the settings' call"
+grep -c '"omamobile.voice", "{\\"page\\":\\"settings\\"}"' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the Dictation tile's long press opens the voice settings"
+grep -c 'omarchy-done ensure omamobile-menu-voice' bin/omamobile-setup-user >/dev/null || fail "Setup > Voice in Omarchy's menu"
+grep -c 'o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })' hypr/phone.lua >/dev/null ||
+  fail "volume up's release ends push-to-talk"
+grep -c "jq -e '.powerVolumeUp == true'" bin/omamobile-keys >/dev/null || fail "Power + Volume Up is off unless turned on"
 # Offscreen review shots in the OWL container only (test/voice-render).
 if [[ -n ${OMAMOBILE_VOICE_RENDER:-} ]]; then
   bash test/voice-render "$OMAMOBILE_VOICE_RENDER" >/dev/null || fail "voice sheet render"

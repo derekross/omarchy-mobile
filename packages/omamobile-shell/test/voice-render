@@ -48,6 +48,9 @@ s = re.sub(r"(?m)^\s*(anchors \{ (top|bottom): true[^\n]*|exclusionMode:[^\n]*|W
 s = s.replace("  PanelWindow {\n    id: sheetWindow", "  Item { anchors.fill: parent\n    id: sheetWindow", 1)
 s = s.replace("  Variants {\n    model: Quickshell.screens\n\n    PanelWindow {\n      id: stripWindow",
               "  Item {\n    anchors.fill: parent\n\n    Item {\n      anchors.bottom: parent.bottom\n      width: parent.width\n      height: implicitHeight\n      id: stripWindow", 1)
+s = re.sub(r"(?m)^\s*margins \{[^\n]*\}\n", "", s)
+s = s.replace("  Variants {\n    model: Quickshell.screens\n\n    PanelWindow {\n      id: agentMicWindow",
+              "  Item {\n    anchors.fill: parent\n\n    Item {\n      anchors.bottom: parent.bottom\n      anchors.right: parent.right\n      anchors.margins: 24\n      width: implicitWidth\n      height: implicitHeight\n      id: agentMicWindow", 1)
 assert "PanelWindow" not in s, "voice-render: a window left to stand in for"
 open(p, "w").write(s)
 PY
@@ -73,6 +76,8 @@ print(json.dumps({"transcript": "Look at the speaker plan and tell me what's lef
     shot("review-keyboard", 480, 1040, "review", keyboard=290),
     shot("error", 480, 1040, "error"),
     shot("strip", 480, 1040, "strip", keyboard=290),
+    shot("settings", 480, 1040, "settings"),
+    shot("agent-mic", 480, 1040, "agent"),
     shot("landscape-listen", 1040, 480, "listen"),
     shot("landscape-review", 1040, 480, "review"),
 ]}))
@@ -89,20 +94,35 @@ for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
     geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
 def below(a, b): return a["y"] >= b["y"] + b["h"]
-ok = not bad and len(geo) == 8
-if len(geo) != 8: print("not ok - %s: %d of 8 shots taken" % (theme, len(geo)))
+ok = not bad and len(geo) == 10
+if len(geo) != 10: print("not ok - %s: %d of 10 shots taken" % (theme, len(geo)))
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):
     global ok
     print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
     ok = ok and good
 want = {"listen": ["Stop", "Cancel"], "transcribing": ["Stop", "Cancel"], "review": ["Send to Claude Code", "Cancel", "Copy", "Type into last app"],
-        "error": ["Say again", "Cancel"], "strip": ["Done · type it", "Cancel"]}
+        "error": ["Say again", "Cancel"], "strip": ["Done · type it", "Cancel"], "settings": [], "agent": []}
 for name, g in geo.items():
     screen, parts, buttons, state = g["screen"], g["parts"], g["buttons"], g["state"]
     area = g["area"]
     labels = [b["label"] for b in buttons]
     check(name + ": the buttons show (%s)" % ", ".join(want[state]), all(l in labels for l in want[state]), json.dumps(labels))
+    if state == "agent":
+        m = parts.get("agentMic")
+        check(name + ": the agent mic is a 56 px target at the bottom right", bool(m) and m["w"] >= 56 and m["h"] >= 56 and inside(m, area, 1)
+              and m["x"] + m["w"] >= area["w"] - 60 and m["y"] + m["h"] >= area["y"] + area["h"] - 60, json.dumps(m))
+        check(name + ": no Listening strip for the agent (the mic shows it)", "listeningStrip" not in parts)
+        continue
+    if state == "settings":
+        card = parts.get("voiceCard")
+        check(name + ": the settings card fills the space", bool(card) and inside(card, area, 1) and card["h"] >= area["h"] - 20, json.dumps(card))
+        check(name + ": a close button, no agent chip", "settingsClose" in parts and "agentChip" not in parts and parts["settingsClose"]["h"] >= 44)
+        rows = [parts.get("model-" + m) for m in ("tiny.en", "base.en", "small.en")]
+        check(name + ": the three models are rows of 44 px or more on the card", all(r and r["h"] >= 44 and inside(r, card, 1) for r in rows), json.dumps(rows))
+        sets = [parts.get("setting-" + k) for k in ("holdPill", "micKey", "agentMic", "powerVolumeUp")]
+        check(name + ": the triggers are 44 px rows", all(r and r["h"] >= 44 for r in sets), json.dumps(sets))
+        continue
     if state == "strip":
         st = parts.get("listeningStrip")
         check(name + ": the strip sits above the keyboard", bool(st) and inside(st, area, 1) and st["y"] + st["h"] >= area["h"] - 20, json.dumps(st))

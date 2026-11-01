@@ -881,7 +881,23 @@ measured speeds and phase 2 are in
 * The launcher reaches it through `VoiceLink.js` (as the home screen
   reaches the drawer through DrawerLink.js), so a release needs no process.
 
-IPC: `omarchy-shell shell call omamobile.voice <askPress|askRelease|dictatePress|dictateRelease|dictateTap|stop|cancel|snapshot> ''`.
+* **Follow-up in an agent:** while an agent's terminal (`org.omarchy.agent`)
+  is in front and the keyboard is down, a round mic at the bottom right:
+  hold to talk, tap to toggle; Voxtype types into the agent and, with "Say
+  'send' to press Enter" on, presses Enter on "send"
+  (`--smart-auto-submit`).
+* **Power + Volume Up** (omamobile-keys): push-to-talk into the app in
+  front, or the agent sheet on the home screen; off until turned on in the
+  settings, never on the lock screen.
+* **Settings** (long-press the Dictation tile, Setup > Voice, or
+  `omarchy-shell shell summon omamobile.voice '{"page":"settings"}'`): the
+  speech model (Voxtype downloads and switches it), the triggers, "Say
+  'send'", and "Ask before sending to an agent", in
+  `~/.config/omamobile/voice.json`.
+* A haptic tick at the start and end of listening (feedbackd's
+  `button-pressed`, so the feedback profile decides).
+
+IPC: `omarchy-shell shell call omamobile.voice <askPress|askRelease|askTap|dictatePress|dictateRelease|dictateTap|agentTap|keyPress|keyRelease|openSettings|stop|cancel|snapshot> ''`.
 
 ## omamobile.access
 

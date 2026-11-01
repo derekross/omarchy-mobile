@@ -443,8 +443,8 @@ Item {
           placeholder: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
           onTapped: root.expand()
           // Hold: ask the agent by voice (omamobile.voice).
-          onHeld: root.voiceCall("askPress")
-          onReleased: root.voiceCall("askRelease")
+          onHeld: if (root.voiceSetting("holdPill")) root.voiceCall("askPress")
+          onReleased: if (root.voiceSetting("holdPill")) root.voiceCall("askRelease")
           // The mic: tap to listen hands free, hold to talk.
           onMicTap: root.voiceCall("askTap")
           onMicHold: root.voiceCall("askPress")
@@ -588,6 +588,13 @@ Item {
   }
   readonly property var voice: voiceLink.item ? voiceLink.item.voice : null
 
+  // A voice setting (~/.config/omamobile/voice.json, through the voice
+  // service): on unless the user turned it off, and on when the service is
+  // out of reach (its IPC still answers).
+  function voiceSetting(key) {
+    return !root.voice || !root.voice.settings || root.voice.settings[key] !== false
+  }
+
   function voiceCall(method) {
     console.log("omamobile-home-indicator: voice", method)
     if (root.voice && typeof root.voice[method] === "function") return root.voice[method]()
@@ -718,7 +725,7 @@ Item {
         // into the app (see MicKey).
         MicKey {
           id: micKey
-          visible: root.oskOpen
+          visible: root.oskOpen && root.voiceSetting("micKey")
           anchors.left: parent.left
           anchors.leftMargin: Style.spacing.xs
           anchors.verticalCenter: parent.verticalCenter
@@ -1304,6 +1311,7 @@ Item {
       }
       onLongPressed: {
         if (swipeArea.onOwnKey(doubleTap.point.position.x, doubleTap.point.position.y)) return
+        if (!root.voiceSetting("holdPill")) return
         swipeArea.voiceHeld = true
         root.voiceCall("askPress")
       }

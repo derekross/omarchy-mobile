@@ -108,7 +108,8 @@ Item {
   readonly property int stripZone: %s
 
   // No omamobile.voice here: voiceCall goes through its IPC.
-  readonly property var voice: null
+  // Tests set voice settings through a stand-in with no methods.
+  property var voice: null
   // What the dock's search pill reads, and its tap (the drawer opening,
   // recorded as a command so the tests can count it).
   readonly property bool hasAgent: false
@@ -172,7 +173,7 @@ Item {
 """ % ("root." + strip_height if not strip_height.isdigit() else strip_height,
        definition("stripShown"), definition("keyboardStripShown"), definition("dockShown"),
        zone("omamobile-dock"), zone("omamobile-home-strip"),
-       function("goHome"), function("showRecents"), function("keyboardCall"), function("voiceCall"),
+       function("goHome"), function("showRecents"), function("keyboardCall"), function("voiceSetting") + "\n\n" + function("voiceCall"),
        content.replace("root.oskOpen", "false"), window_content("omamobile-dock"), content.replace("root.oskOpen", "true"),
        component("SearchPill"), component("HomePill"), component("HomeSwipe"), component("HideKeyboardKey"), component("MicKey"))
 open(sys.argv[2], "w").write(out)

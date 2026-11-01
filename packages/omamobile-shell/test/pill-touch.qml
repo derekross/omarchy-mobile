@@ -238,6 +238,23 @@ Item {
       compare(voiceCalls("ask"), 0)
     }
 
+    function test_holds_follow_the_voice_settings() {
+      harness.voice = { settings: { holdPill: false, micKey: false } }
+      var strip = find(harness, "pillStrip")
+      hold(strip, strip.width / 2, strip.height / 2, 800)
+      var dock = find(harness, "dock")
+      hold(dock, dock.width / 2, dock.height / 2, 800)
+      compare(voiceCalls("ask"), 0, "hold the pill off: " + JSON.stringify(Quickshell.executed))
+      verify(!find(find(harness, "keyboardStrip"), "micKey").visible, "mic key off")
+      var mic = find(dock, "pillMic")
+      var c = mic.mapToItem(dock, mic.width / 2, mic.height / 2)
+      tap(dock, c.x, c.y)
+      wait(600)
+      compare(voiceCalls("askTap"), 1, "the search bar's mic always works")
+      harness.voice = null
+      verify(find(find(harness, "keyboardStrip"), "micKey").visible)
+    }
+
     function test_over_an_app_the_strip_reserves_its_height() {
       var z = zones({ app: true })
       compare(z.strip, harness.touch, JSON.stringify(z))

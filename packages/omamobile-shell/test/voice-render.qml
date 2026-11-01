@@ -83,12 +83,24 @@ ShellRoot {
     voice.levels = [0.1, 0.3, 0.6, 0.9, 0.5, 0.7, 0.3, 0.6, 0.8, 0.4, 0.2, 0.6, 0.9, 0.4, 0.15, 0.5, 0.7, 0.3]
     voice.listenStart = Date.now() - 7000
     voice.elapsed = 7
-    voxState.setText(s.state === "listen" || s.state === "strip" ? "recording\n" : s.state === "transcribing" ? "transcribing\n" : "idle\n")
+    voxState.setText(s.state === "listen" || s.state === "strip" || s.state === "agent" ? "recording\n" : s.state === "transcribing" ? "transcribing\n" : "idle\n")
     voice.pushToTalk = true
+    voice.settingsOpen = false
     if (s.state === "strip") {
       voice.opened = false
       voice.owner = "type"
       voice.phase = "listening"
+    } else if (s.state === "agent") {
+      voice.opened = false
+      voice.owner = "agent"
+      voice.phase = "listening"
+    } else if (s.state === "settings") {
+      voice.owner = ""
+      voice.phase = "idle"
+      voice.installed = ["tiny.en", "base.en"]
+      voice.modelId = "tiny.en"
+      voice.settingsOpen = true
+      voice.opened = true
     } else {
       voice.owner = "ask"
       voice.opened = true

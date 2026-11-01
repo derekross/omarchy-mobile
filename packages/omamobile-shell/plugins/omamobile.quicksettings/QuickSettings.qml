@@ -570,6 +570,13 @@ Item {
     readonly property string icon: enabled ? "󰍬" : "󰍭"
     readonly property string status: root.optimistic["dictation"] !== undefined
       ? (enabled ? "Listening" : "Off") : TilesModel.dictationStatus(probe)
+    // Long-press: the voice settings (omamobile.voice), through the CLI,
+    // since a plugin only summons its own panels.
+    readonly property bool longPress: true
+    function openDetails() {
+      root.dismiss()
+      Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.voice", "{\"page\":\"settings\"}"])
+    }
     function toggle() {
       if (!available || busy) return
       var start = !enabled

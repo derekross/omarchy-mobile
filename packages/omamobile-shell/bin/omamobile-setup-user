@@ -342,6 +342,14 @@ fi
 if omarchy-done ensure omamobile-voice-plugin; then
   add_plugin omamobile.voice
 fi
+# Setup > Voice in Omarchy's menu opens the voice settings (omamobile.voice),
+# through the menu extension file. Added once.
+if omarchy-done ensure omamobile-menu-voice; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"setup.voice"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "setup.voice": {"icon":"\xf3\xb0\x8d\xac","label":"Voice","description":"Speech model and how voice input starts","action":"omarchy-shell shell summon omamobile.voice '"'"'{\\"page\\":\\"settings\\"}'"'"'"},/' "$extension"
+  fi
+fi
 # Voxtype's faster model on the phone: tiny.en turns 10 s of speech into
 # text in 3.9 s on the Pixel 7 Pro, base.en (Omarchy's default) in 8.8 s.
 # Voxtype ignores a per-recording `--model` it hasn't prepared, so the

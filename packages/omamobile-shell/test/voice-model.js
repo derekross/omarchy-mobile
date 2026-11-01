@@ -167,6 +167,82 @@ test("copy and type: the text on stdin, never in the shell string", () => {
   assert.ok(M.typeArgv("x")[2].startsWith("sleep "), "after the sheet has gone")
 })
 
+test("typing into an agent with Say 'send' on presses Enter on 'send'; nowhere else", () => {
+  assert.deepStrictEqual(M.startArgv("type", "", true), ["voxtype", "record", "start", "--no-osd", "--type", "--smart-auto-submit"])
+  assert.ok(!M.startArgv("type", "", false).includes("--smart-auto-submit"))
+  assert.ok(!M.startArgv("file", "/r/t.txt", true).includes("--smart-auto-submit"), "never for the agent sheet's transcript")
+  assert.strictEqual(M.isAgent("org.omarchy.agent"), true)
+  assert.strictEqual(M.isAgent("foot"), false)
+  assert.strictEqual(M.isAgent(undefined), false)
+})
+
+test("settings: defaults, only known booleans, round trip", () => {
+  const d = M.parseSettings("")
+  assert.deepStrictEqual(d, { version: 1, holdPill: true, micKey: true, agentMic: true, powerVolumeUp: false, sayToSend: true, confirmSend: true })
+  assert.strictEqual(M.parseSettings("{not json").powerVolumeUp, false)
+  const s = M.parseSettings('{"powerVolumeUp": true, "holdPill": "no", "evil": true, "confirmSend": false}')
+  assert.strictEqual(s.powerVolumeUp, true)
+  assert.strictEqual(s.holdPill, true, "a non-boolean keeps the default")
+  assert.strictEqual(s.evil, undefined)
+  assert.strictEqual(s.confirmSend, false)
+  const t = M.withSetting(d, "sayToSend", false)
+  assert.strictEqual(t.sayToSend, false)
+  assert.strictEqual(d.sayToSend, true, "a copy")
+  assert.deepStrictEqual(M.withSetting(d, "nope", true), d)
+  assert.deepStrictEqual(M.parseSettings(M.serializeSettings(t)), t)
+  assert.ok(M.serializeSettings(t).endsWith("\n"))
+})
+
+test("models: the config's [whisper] model, what is downloaded, the rows", () => {
+  assert.strictEqual(M.configModel('state_file = "auto"\n[audio]\nmodel = "x"\n[whisper]\nmodel = "tiny.en"\nlanguage = "en"\n'), "tiny.en")
+  assert.strictEqual(M.configModel('[whisper]\nlanguage = "en"\n'), "base.en")
+  assert.strictEqual(M.configModel(""), "base.en")
+  assert.deepStrictEqual(M.installedModels("ggml-tiny.en.bin\nggml-base.en.bin\nsilero.onnx\n"), ["tiny.en", "base.en"])
+  const rows = M.modelRows("tiny.en", ["tiny.en", "base.en"])
+  assert.deepStrictEqual(rows.map((r) => r.id), ["tiny.en", "base.en", "small.en"])
+  assert.deepStrictEqual(rows.map((r) => r.name), ["Fast", "Balanced", "Accurate"])
+  assert.deepStrictEqual(rows.map((r) => r.chosen), [true, false, false])
+  assert.deepStrictEqual(rows.map((r) => r.downloaded), [true, true, false])
+  assert.strictEqual(rows[2].line, "small · 466 MB · download")
+  assert.strictEqual(M.modelFile("small.en"), "ggml-small.en.bin")
+})
+
+test("models: Voxtype's own download and switch, nothing interpolated", () => {
+  assert.deepStrictEqual(M.downloadArgv("small.en"),
+    ["voxtype", "setup", "--download", "--model", "small.en", "--no-post-install", "--progress-format", "json"])
+  const sw = M.switchArgv("small.en; rm -rf ~")
+  assert.strictEqual(sw[0], "sh")
+  assert.ok(sw[2].includes('voxtype config set whisper.model "$1"'))
+  assert.ok(sw[2].includes("systemctl --user try-restart voxtype.service"))
+  assert.strictEqual(sw[4], "small.en; rm -rf ~")
+  assert.ok(!sw[2].includes("small.en"))
+})
+
+test("download progress lines", () => {
+  assert.deepStrictEqual(M.parseProgress('{"percent": 41.6}'), { percent: 42, text: "42%" })
+  assert.deepStrictEqual(M.parseProgress('{"progress": 0.5}'), { percent: 50, text: "50%" })
+  assert.deepStrictEqual(M.parseProgress('{"downloaded": 25, "total": 100}'), { percent: 25, text: "25%" })
+  assert.deepStrictEqual(M.parseProgress('{"bytes": 10485760}'), { percent: -1, text: "10 MB" })
+  assert.strictEqual(M.parseProgress('{"event": "done"}'), null)
+  assert.strictEqual(M.parseProgress("Downloading..."), null)
+})
+
+test("haptic ticks: listening starting and ending, the shell's recordings only", () => {
+  assert.strictEqual(M.ticks("starting", "listening", "type"), true)
+  assert.strictEqual(M.ticks("listening", "transcribing", "agent"), true)
+  assert.strictEqual(M.ticks("listening", "idle", "ask"), true)
+  assert.strictEqual(M.ticks("listening", "listening", "ask"), false)
+  assert.strictEqual(M.ticks("transcribing", "idle", "type"), false)
+  assert.strictEqual(M.ticks("idle", "listening", ""), false, "not a recording someone else started")
+  assert.ok(M.HAPTIC_ARGV[2].includes("fbcli -E button-pressed"), "feedbackd: the user's profile decides")
+  assert.ok(M.HAPTIC_ARGV[2].startsWith("command -v fbcli"))
+})
+
+test("Power + Volume Up: the agent sheet on the home screen, typing over an app", () => {
+  assert.strictEqual(M.keyTarget(false), "ask")
+  assert.strictEqual(M.keyTarget(true), "type")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try {

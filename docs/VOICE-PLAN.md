@@ -1,6 +1,6 @@
 # Voice input plan
 
-Status: 2026-10-31. Phase 1 is built and tested offline in omamobile-shell 0.2.57 (branch `shell-voice`): the model and argv tests, the pill and mic key under touch (qmltestrunner) and the offscreen review shots pass. On its first run on the phone (0.2.57), taps on the home screen's search pill did nothing, and the hold gesture couldn't be found. Dictated text never arrived, and tiny.en was ignored. 0.2.58 fixes all four (below). The rest of the [phone checks](#phase-1-checks-on-the-phone) are still open. Phase 2 is design only.
+Status: 2026-10-31. Phase 1 is built and tested offline in omamobile-shell 0.2.57 (branch `shell-voice`): the model and argv tests, the pill and mic key under touch (qmltestrunner) and the offscreen review shots pass. On its first run on the phone (0.2.57), taps on the home screen's search pill did nothing, and the hold gesture couldn't be found. Dictated text never arrived, and tiny.en was ignored. 0.2.58 fixes all four (below). With 0.2.58, dictation typed correctly into Claude Code (foot) and into a Chromium web app on the phone. Phase 2 is built and tested offline in 0.2.59 (below) and has not been run on the phone yet. Phase 3 is design only.
 
 Design (approved by the maintainer): the voice canvas, <https://claude.ai/artifact/K93k88TFaqyKvChsdk2ugK>. It has five artboards: Main (dictation strip above the keyboard), Ask (listening sheet), Confirm (check and send), FollowUp (phase 2) and Settings (phase 2). The mockups use Tokyo Night hex colours as a stand-in. The shell draws with the applied theme's tokens (`Commons.Color`, `Style`, `Border`) and the update sheet's components, and the recording colour is the theme's `urgent`.
 
@@ -49,14 +49,25 @@ Read-only first; each step needs only the shell. Announce before starting, becau
 
 Stop condition: anything typed into the wrong window, squeekboard stops responding, or the shell restarts. Rollback: `voxtype record cancel`, then reinstall omamobile-shell 0.2.56.
 
-## Phase 2 (follow-up)
+## Phase 2 (0.2.59, built offline)
 
-- **Follow-up inside the agent (artboard FollowUp):** a mic in the agent's terminal that types as you speak and submits on "send" (`--type --smart-auto-submit`), with "hold to talk" under the prompt.
-- **Voice settings sheet (artboard Settings):** the speech model (Fast tiny.en / Balanced base.en / Accurate small.en, with download through `omarchy-voxtype-model`), the triggers (hold the home pill, the mic key, Power + Volume Up), "Say 'send' to press Enter", and "Ask before sending to an agent" (on by default).
-- **Power + Volume Up push-to-talk** in `omamobile-keys`, with a release handler (it works with the screen locked; what that may do from the lock needs its own design).
-- **Haptic ticks** at start and stop (CS40L26).
-- **Live partial text** once the 7 Pro has CPU frequency scaling, which it lacks today: Voxtype's streaming engines, or a faster Whisper model.
-- **A mic key inside squeekboard's layouts**: a keysym bound in Hyprland would be the most natural trigger, but the text layouts are squeekboard's own, one per language (the hide key's history in omamobile.keyboard), so the key lives in the strip for now.
+- **Follow-up inside the agent (artboard FollowUp).** While an agent's terminal is in front (`org.omarchy.agent`, the one app id `omarchy-agent` gives every agent through `omarchy-launch-tui`; read from the Wayland toplevel's app id) and the keyboard is down, a round mic (60 px, the theme's popup colours, the recording colour while listening) sits at the bottom right above the home strip. Hold it to talk, or tap to start and tap again to stop. Voxtype types into the agent (`record start --no-osd --type`), adding `--smart-auto-submit` when "Say 'send' to press Enter" is on, so a prompt that ends in "send" is submitted. The mic hides over other apps and while the keyboard is up (the keyboard strip's mic key covers that case). It stays on screen during its own recording, because unmapping a surface under a held finger would lose the release.
+- **Voice settings (artboard Settings).** Opened from a long press on the Dictation tile, from Omarchy's Setup > Voice (added to the menu extension by `omamobile-setup-user`), or with `omarchy-shell shell summon omamobile.voice '{"page":"settings"}'`. The sheet has:
+  - the local-only notice;
+  - the speech model: Fast tiny.en 75 MB, Balanced base.en 142 MB, or Accurate small.en 466 MB. A model that isn't downloaded yet downloads through Voxtype itself (`voxtype setup --download --model X --no-post-install --progress-format json`, progress on the row). The switch is `voxtype config set whisper.model X` followed by `systemctl --user try-restart voxtype.service`;
+  - the triggers: hold the home pill, the mic key under the keyboard, the mic over agents, and Power + Volume Up (off by default);
+  - "Say 'send' to press Enter" (on);
+  - "Ask before sending to an agent" (on; when off, the transcript goes straight to the agent).
+
+  The settings are stored in `~/.config/omamobile/voice.json`, beside quicksettings.json and home.json. The search pill's mic always works, so voice can't be switched off by accident.
+- **Power + Volume Up push-to-talk** (`omamobile-keys`). Hold Power, then Volume Up, or the other way round: it dictates into the app in front, or opens the agent sheet on the home screen. Letting go stops it. The volume doesn't change, and Power's own gesture is skipped for that press, as with the screenshot chord. It is off unless `powerVolumeUp` is true in voice.json, and it never runs on the lock screen. A new Volume Up release bind ends it; every other release does nothing. Hyprland drops a key's release bind once another key goes down after it, so Power's release ends it too.
+- **Haptic ticks** at the start and end of listening, through feedbackd (`fbcli -E button-pressed`, the same event the OWL widgets use), so the user's feedback profile (silent, quiet) decides. Nothing happens without fbcli.
+
+## Phase 3
+
+- **Live partial text** once the 7 Pro has CPU frequency scaling, which it lacks today: Voxtype's streaming engines, or a faster Whisper model on a faster CPU.
+- **A Talk key inside squeekboard.** A keysym bound in Hyprland would be the most natural trigger. squeekboard's text layouts are its own, one per language (see the hide key's history in omamobile.keyboard), so for now the key lives in the strip.
+- **Power + Volume Up on the lock screen**, for example to ask the agent hands-free. It needs its own design for what may run while locked.
 
 ## Risks
 

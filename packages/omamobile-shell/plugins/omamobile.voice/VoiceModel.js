@@ -26,11 +26,14 @@ var HOLD_MS = 700
 var LEVEL_BARS = 24
 
 // The argv that starts a recording. mode: "type" (Voxtype types into the
-// focused window) or "file" (the transcript goes to filePath).
-function startArgv(mode, filePath) {
+// focused window) or "file" (the transcript goes to filePath). submit:
+// typing into an agent with "Say 'send' to press Enter" on, so Voxtype
+// presses Enter when the speech ends in "send" (--smart-auto-submit).
+function startArgv(mode, filePath, submit) {
   var argv = [VOXTYPE, "record", "start", "--no-osd"]
   if (mode === "file") argv.push("--file=" + String(filePath || ""))
   else argv.push("--type")
+  if (mode !== "file" && submit) argv.push("--smart-auto-submit")
   return argv
 }
 
@@ -187,6 +190,155 @@ function typeArgv(text) {
   return ["sh", "-c", 'sleep 0.5; printf %s "$1" | exec wtype -', "sh", String(text || "")]
 }
 
+// ---------------------------------------------------------------- phase 2
+
+// The agent terminals Omarchy starts (omarchy-agent: omarchy-launch-tui
+// --app-id=org.omarchy.agent, one class for every agent).
+var AGENT_APP_ID = "org.omarchy.agent"
+
+function isAgent(appId) {
+  return String(appId || "") === AGENT_APP_ID
+}
+
+// The voice settings, in ~/.config/omamobile/voice.json (as
+// quicksettings.json and home.json): which triggers start listening, "Say
+// 'send' to press Enter" in agents, and the check before sending to an
+// agent. Power + Volume Up is off until the user turns it on.
+var SETTINGS_VERSION = 1
+var DEFAULT_SETTINGS = {
+  version: SETTINGS_VERSION,
+  holdPill: true,
+  micKey: true,
+  agentMic: true,
+  powerVolumeUp: false,
+  sayToSend: true,
+  confirmSend: true
+}
+var SETTING_KEYS = ["holdPill", "micKey", "agentMic", "powerVolumeUp", "sayToSend", "confirmSend"]
+
+function defaultSettings() {
+  var out = {}
+  for (var k in DEFAULT_SETTINGS) out[k] = DEFAULT_SETTINGS[k]
+  return out
+}
+
+// Whatever is in the file, over the defaults: only known keys, only
+// booleans; anything unreadable is the defaults.
+function parseSettings(text) {
+  var out = defaultSettings()
+  var o = null
+  try { o = JSON.parse(String(text || "")) } catch (e) { o = null }
+  if (!o || typeof o !== "object") return out
+  for (var i = 0; i < SETTING_KEYS.length; i++) {
+    var k = SETTING_KEYS[i]
+    if (typeof o[k] === "boolean") out[k] = o[k]
+  }
+  return out
+}
+
+function withSetting(settings, key, value) {
+  var out = parseSettings(JSON.stringify(settings || {}))
+  if (SETTING_KEYS.indexOf(key) >= 0) out[key] = !!value
+  return out
+}
+
+function serializeSettings(settings) {
+  return JSON.stringify(parseSettings(JSON.stringify(settings || {})), null, 2) + "\n"
+}
+
+// The speech models the sheet offers (Whisper's English ones, as the
+// design's Fast, Balanced and Accurate), with their download sizes.
+var MODELS = [
+  { id: "tiny.en", name: "Fast", detail: "tiny", size: "75 MB", note: "quickest, rougher" },
+  { id: "base.en", name: "Balanced", detail: "base", size: "142 MB", note: "Omarchy's default" },
+  { id: "small.en", name: "Accurate", detail: "small", size: "466 MB", note: "slower" }
+]
+
+function modelFile(id) {
+  return "ggml-" + String(id) + ".bin"
+}
+
+// The daemon's model from the user's voxtype config.toml: [whisper]'s
+// `model = "..."`, or Omarchy's default.
+function configModel(text) {
+  var lines = String(text || "").split("\n")
+  var section = ""
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim()
+    var sec = line.match(/^\[([^\]]+)\]$/)
+    if (sec) { section = sec[1].trim(); continue }
+    if (section !== "whisper") continue
+    var m = line.match(/^model\s*=\s*"([^"]*)"/)
+    if (m) return m[1]
+  }
+  return "base.en"
+}
+
+// The model files present in Voxtype's models directory (one name a line).
+function installedModels(listing) {
+  var out = []
+  String(listing || "").split("\n").forEach(function(name) {
+    var m = name.trim().match(/^ggml-(.+)\.bin$/)
+    if (m) out.push(m[1])
+  })
+  return out
+}
+
+// Each model's row: chosen, downloaded, and its line under the name.
+function modelRows(current, installed) {
+  var have = installed || []
+  return MODELS.map(function(m) {
+    var downloaded = have.indexOf(m.id) >= 0
+    return {
+      id: m.id, name: m.name, chosen: m.id === current, downloaded: downloaded, size: m.size,
+      line: m.detail + " · " + m.size + " · " + (downloaded ? m.note : "download")
+    }
+  })
+}
+
+// Voxtype's own download (non-interactive, NDJSON progress), then the
+// switch: Voxtype's config setter and a restart of its daemon.
+function downloadArgv(id) {
+  return [VOXTYPE, "setup", "--download", "--model", String(id), "--no-post-install", "--progress-format", "json"]
+}
+
+function switchArgv(id) {
+  return ["sh", "-c", 'voxtype config set whisper.model "$1" && exec systemctl --user try-restart voxtype.service', "sh", String(id)]
+}
+
+// One progress line of the download: a percentage when it can tell, else
+// the megabytes so far; null for anything else.
+function parseProgress(line) {
+  var o = null
+  try { o = JSON.parse(String(line || "")) } catch (e) { return null }
+  if (!o || typeof o !== "object") return null
+  var pct = typeof o.percent === "number" ? o.percent : typeof o.progress === "number" ? (o.progress <= 1 ? o.progress * 100 : o.progress) : NaN
+  var done = Number(o.downloaded !== undefined ? o.downloaded : o.bytes !== undefined ? o.bytes : o.current)
+  var total = Number(o.total !== undefined ? o.total : o.total_bytes !== undefined ? o.total_bytes : o.size)
+  if (isNaN(pct) && done > 0 && total > 0) pct = done / total * 100
+  if (!isNaN(pct)) return { percent: Math.max(0, Math.min(100, Math.round(pct))), text: Math.round(Math.max(0, Math.min(100, pct))) + "%" }
+  if (done > 0) return { percent: -1, text: Math.round(done / 1048576) + " MB" }
+  return null
+}
+
+// A short tick at the start and the end of listening: a feedbackd event, so
+// the user's feedback profile (silent, quiet) decides; nothing without fbcli.
+var HAPTIC_ARGV = ["sh", "-c", "command -v fbcli >/dev/null 2>&1 && exec fbcli -E button-pressed"]
+
+// Does this phase change tick? Listening starting, and listening ending
+// (to transcribing or straight to idle), for the shell's own recordings.
+function ticks(was, now, owner) {
+  if (!owner) return false
+  var listen = function(p) { return p === "listening" }
+  return (listen(now) && !listen(was)) || (listen(was) && !listen(now))
+}
+
+// A hardware-key push-to-talk: the agent sheet on the home screen, typing
+// into the app otherwise.
+function keyTarget(appOnScreen) {
+  return appOnScreen ? "type" : "ask"
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     VOXTYPE: VOXTYPE, MAX_SECONDS: MAX_SECONDS,
@@ -196,6 +348,12 @@ if (typeof module !== "undefined") {
     voxState: voxState, step: step, cleanTranscript: cleanTranscript,
     afterRead: afterRead, releaseStops: releaseStops, clock: clock, elapsedText: elapsedText,
     pushLevel: pushLevel, meterBars: meterBars, parseLevel: parseLevel, statusText: statusText, askHint: askHint,
-    permissionText: permissionText, sendLabel: sendLabel, copyArgv: copyArgv, typeArgv: typeArgv
+    permissionText: permissionText, sendLabel: sendLabel, copyArgv: copyArgv, typeArgv: typeArgv,
+    AGENT_APP_ID: AGENT_APP_ID, isAgent: isAgent, SETTINGS_VERSION: SETTINGS_VERSION,
+    DEFAULT_SETTINGS: DEFAULT_SETTINGS, SETTING_KEYS: SETTING_KEYS, defaultSettings: defaultSettings,
+    parseSettings: parseSettings, withSetting: withSetting, serializeSettings: serializeSettings,
+    MODELS: MODELS, modelFile: modelFile, configModel: configModel, installedModels: installedModels,
+    modelRows: modelRows, downloadArgv: downloadArgv, switchArgv: switchArgv, parseProgress: parseProgress,
+    HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks, keyTarget: keyTarget
   }
 }
