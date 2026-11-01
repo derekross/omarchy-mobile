@@ -10,6 +10,9 @@
 set -euo pipefail
 
 MARK=/var/lib/omamobile/gnss-bringup-started
+# The 9a's session of this boot: written with the marker, in /run so that a
+# reset empties it.
+SESSION=/run/omamobile-gnss/session
 say() { printf 'omamobile-gnss: %s\n' "$*" >&2; }
 
 # the Pixel 9a (zumapro-tegu) runs the gnss-slsi profile, the Pixel 7 Pro gnss
@@ -19,9 +22,14 @@ tegu() { tr -d '\0' < "${OMAMOBILE_DT:-/proc/device-tree}/compatible" 2>/dev/nul
 if [[ ${1:-} == --stop ]]; then
   # A clean stop is the only place the 9a's marker is cleared: its session
   # runs in the foreground until then, so a reset in between leaves the
-  # marker and the next boot skips GNSS until --retry.
-  rm -f "$MARK"
-  sync
+  # marker and the next boot skips GNSS until --retry. Only a session of
+  # this boot clears it: systemd runs ExecStop after a start that skipped
+  # on a leftover marker too, and that stop must leave the marker alone.
+  # The 7 Pro's start clears its own marker once the driver is up.
+  if [[ -e $SESSION ]]; then
+    rm -f "$MARK" "$SESSION"
+    sync
+  fi
   if tegu; then profile=gnss-slsi; else profile=gnss; fi
   exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot "$profile" stop
 fi
@@ -46,8 +54,9 @@ if tegu; then
   # (MODEM-PLAN G3-L1), and socket activation lets any GeoClue client start
   # one: without the marker a hang could repeat at every boot. It is
   # cleared by --stop, not here, since this exec never returns.
-  mkdir -p "$(dirname "$MARK")"
+  mkdir -p "$(dirname "$MARK")" "$(dirname "$SESSION")"
   date -Is > "$MARK"
+  : > "$SESSION"
   sync
   say "starting the 9a's GNSS HAL and client"
   OMAMOBILE_GNSS_NMEA_OUT=fifo exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss-slsi start

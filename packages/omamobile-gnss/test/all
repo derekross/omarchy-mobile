@@ -15,7 +15,7 @@ grep -c 'gnss-slsi start' lib/omamobile-gnss-start >/dev/null || fail "the 9a st
 # the 9a writes the hang marker before its session and clears it only in --stop
 s=lib/omamobile-gnss-start
 [[ $(grep -n 'date -Is > "\$MARK"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'gnss-slsi start' $s | head -1 | cut -d: -f1) ]] || fail "the 9a's marker goes down before gnss-slsi start"
-[[ $(grep -n 'rm -f "\$MARK"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'profile.*stop' $s | head -1 | cut -d: -f1) ]] || fail "--stop clears the marker"
+[[ $(grep -n 'rm -f "\$MARK" "\$SESSION"' $s | head -1 | cut -d: -f1) -lt $(grep -n 'profile.*stop' $s | head -1 | cut -d: -f1) ]] || fail "--stop clears the marker"
 grep -c 'OMAMOBILE_DT:-/proc/device-tree' $s >/dev/null || fail "the compatible is read through an overridable path"
 # both branches, with a fake device tree and a stub chroot: the 9a path writes
 # the marker and runs gnss-slsi, the 7 Pro path neither (no SPI5 node here)
@@ -31,6 +31,7 @@ run_start() { # $1 dt dir, $2 fake unix table
     MARKDIR='"$tmp"'/var/lib/omamobile
     sed -e "s|/var/lib/omamobile/gnss-bringup-started|'"$tmp"'/var/lib/omamobile/gnss-bringup-started|" \
         -e "s|/proc/net/unix|'"$2"'|" \
+        -e "s|/run/omamobile-gnss/session|'"$tmp"'/run/omamobile-gnss/session|" \
         -e "s|/usr/lib/omamobile-vendor/omamobile-vendor-chroot|'"$tmp"'/stub|" lib/omamobile-gnss-start > '"$tmp"'/start
     bash '"$tmp"'/start "$@"' _ "${3:-}" 2>/dev/null
 }
@@ -40,9 +41,17 @@ grep -c 'chroot gnss-slsi start' "$tmp/log" >/dev/null || fail "9a branch: gnss-
 [[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "9a branch: the marker was written before the session"
 run_start "$tmp/dt" "$tmp/unix"
 grep -c 'never finished; skipping' <(STUB_LOG="$tmp/log" OMAMOBILE_DT="$tmp/dt" bash "$tmp/start" 2>&1) >/dev/null || fail "9a branch: a leftover marker skips the next start"
+# after a reset: the marker is left over and /run is empty. The start skips,
+# systemd runs ExecStop anyway, and the marker must still be there afterwards
+rm -rf "$tmp/run"
 run_start "$tmp/dt" "$tmp/unix" --stop
-[[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "--stop clears the marker"
+[[ -e "$tmp/var/lib/omamobile/gnss-bringup-started" ]] || fail "a stop after a skipped start cleared the leftover marker"
 grep -c 'chroot gnss-slsi stop' "$tmp/log" >/dev/null || fail "9a branch: --stop stops gnss-slsi"
+# a session of this boot: --stop clears the marker and the session file
+run_start "$tmp/dt" "$tmp/unix" --retry
+[[ -e "$tmp/run/omamobile-gnss/session" ]] || fail "9a branch: the session file is written with the marker"
+run_start "$tmp/dt" "$tmp/unix" --stop
+[[ ! -e "$tmp/var/lib/omamobile/gnss-bringup-started" && ! -e "$tmp/run/omamobile-gnss/session" ]] || fail "--stop after a session clears the marker"
 : > "$tmp/log"; printf 'google,gs201-cheetah\0google,gs201\0' > "$tmp/dt/compatible"
 run_start "$tmp/dt" "$tmp/unix"
 grep -c 'gnss-slsi' "$tmp/log" >/dev/null && fail "7 Pro branch: must not touch gnss-slsi"
