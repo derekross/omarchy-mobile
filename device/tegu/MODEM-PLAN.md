@@ -1659,6 +1659,43 @@ HDOP recorded, gnssd stopped when Location is off (the CP stays on).
 Constellations, SGEE/assistance over the network (gnssd uses libcurl),
 power: as cheetah's GNSS-PLAN section 7, adapted to gps.cfg's keys.
 
+### P: publishing the 9a's modem link (offline; risk: none until a boot)
+
+GNSS and the modem run only on the owner's kernel: the link driver
+(`tegu-pcie0-cp.ko`) and cpif are out-of-tree modules built against it.
+The gs201 versions of both are in review as
+<https://github.com/derekross/linux-omarchy-mobile/pull/144> (the 7 Pro's
+curated modem stack, `pcie-gs201-cp.c` and `drivers/soc/google/cpif`), and
+the 9a's link driver began as a copy of that controller, so the 9a goes in
+as a second compatible of the same driver, stacked on #144, not as a new
+driver. What `google,zumapro-pcie-cp` has to add, from a diff of the two
+(2026-11-01):
+
+- **PHY:** no PHY driver on zumapro: channel 0's sequences run from tables
+  (power-down clear, configuration, power-down; `tegu-pcie0-seq.h`, from
+  Google's GPL zuma CAL), plus the host's channel 0 extras: SOC_CTRL
+  0x4000 = 0x15, PMU PHY control bit 10 set at power-on, UDBG 0xC800 bits
+  6:5 cleared, PMA 0x32C = 0, PCS 0x150 = 0x300d5 after training.
+- **iATU:** no secure-ATU SMC: the host writes the unrolled outbound iATU
+  (DBI + 0x300000): region 0 CFG0 to bus 1 at the config window, region 1
+  the first 2 MiB of the memory window.
+- **APP_XFER_PENDING** (ELBI 0x74) raised before training and dropped at
+  the end of link-up; two lanes set in the port logic.
+- **No clocks:** stock describes none, and a read of CMU_HSI1's PCIe gate
+  hung the SoC (M0.4).
+- **PHY isolation:** set bypass once and keep it, as stock (no
+  `use-phy-isol-en` on zumapro); the experiments ran both ways (G3-L1).
+- **The doorbell** as a posted write under `cfg_lock` with no read-back
+  (G3-L1), which suits gs201 too.
+- Left out: the L1 substates parameters and the cycle trace, bring-up
+  only.
+
+The device tree: HSI1 GEN3A_0 and the modem node from
+`device/tegu/overlays/tegu-modem-link.dtso` and `tegu-modem-cpif.dtso`
+into `zumapro.dtsi` and `zumapro-tegu.dts`, and the binding extended.
+The PERIC0 clock fix (#172) goes in first. Test: a published-style kernel
+from #144 plus this, cpif built in-tree, then the G3 session runbook.
+
 ### SIM test (M-SIM), 2026-11-03 (gated runbook, written 2026-10-29)
 
 **The runbook to follow when the SIM arrives:** a prepaid physical nano-SIM
