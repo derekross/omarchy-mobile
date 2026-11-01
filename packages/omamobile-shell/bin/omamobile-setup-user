@@ -6,16 +6,19 @@
 # markers, so the user's later changes are never overwritten.
 set -euo pipefail
 
-# --adopt: for a user set up by hand (a bring-up), not by firstboot. Every
-# once-only step is marked done without being run, so the user's files stay
-# as they are (shell.json isn't reseeded, nothing is appended twice), while
-# the parts that run at every login (plugin links, keyboard layouts and
-# theme, the menu entries kept current) still run. A step the user does want
-# can be had afterwards by removing its marker from
+# --adopt: for a user set up by hand (a bring-up), not by firstboot. The
+# once-only steps that would overwrite or repeat what such a user already
+# has are marked done without running: the shell profile (shell.json), the
+# monitor scale, the cursor and on-screen keyboard lines appended to the
+# Hyprland files, and the screensaver's branding files. Every other step
+# checks the user's files itself before it changes anything, so it runs as
+# on a new user (Chromium's flags, the menu entries, the plugins). A marked
+# step the user does want can be had by removing its marker from
 # ~/.local/state/omarchy/done/ before the next login.
 if [[ ${1:-} == --adopt ]]; then
+  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver "
   omarchy-done() {
-    if [[ $1 == ensure ]]; then
+    if [[ $1 == ensure && $adopt == *" $2 "* ]]; then
       command omarchy-done check "$2" 2>/dev/null || { command omarchy-done mark "$2"; echo "omamobile-setup-user: adopted $2 (marked done, not run)"; }
       return 1
     fi
