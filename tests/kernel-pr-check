@@ -93,6 +93,39 @@ rel_build_out=$(cd "$k" && "$here/tools/kernel-pr-check" -C . --build out omamob
 [[ $rel_build_status == 2 ]] || { echo "$rel_build_out"; fail "a relative --build inside the tree: exit $rel_build_status, expected 2"; }
 echo "ok - --build is refused inside the kernel tree, relative or not"
 
+# Nor where the builds would delete the tree or its git directory. clang and
+# ld.lld stubs let the tool reach the builds, and its rm records what under
+# $c (resolved, as the rm compares resolved paths) it is asked to delete and
+# deletes none of it: a regression reports the deletion instead of making it.
+c=$(cd -- "$t" && pwd -P)/collide real_rm=$(command -v rm)
+mkdir -p "$c/bin" "$c/link-out" "$c/deep-out/build"
+printf '#!/bin/sh\nexit 0\n' > "$c/bin/clang"
+cp "$c/bin/clang" "$c/bin/ld.lld"
+cat > "$c/bin/rm" <<'EOF'
+#!/bin/bash
+for a; do [[ $a == -* ]] || [[ $(realpath -m -- "$a")/ != "$COLLIDE"/* ]] || { echo "$a" >> "$COLLIDE/rm.log"; exit 1; }; done
+exec "$REAL_RM" "$@"
+EOF
+chmod +x "$c/bin/clang" "$c/bin/ld.lld" "$c/bin/rm"
+git clone -q "$k" "$c/src"
+git clone -q "$k" "$c/main/src"
+git -C "$c/main/src" worktree add -q "$c/main/wt" HEAD
+ln -s "$c/src" "$c/link-out/build"
+ln -s "$c/src/arch" "$c/deep-out/build/arch"
+refused() { # name tree out
+  local out status=0
+  out=$(PATH=$c/bin:$PATH COLLIDE=$c REAL_RM=$real_rm "$here/tools/kernel-pr-check" -C "$2" --build "$3" origin/omamobile HEAD 2>&1) || status=$?
+  [[ ! -e $c/rm.log ]] || { echo "$out"; fail "$1: deleted $(paste -sd' ' "$c/rm.log")"; }
+  [[ $status == 2 ]] || { echo "$out"; fail "$1: exit $status, expected 2"; }
+  grep -c 'overlaps the kernel tree' <<<"$out" >/dev/null || { echo "$out"; fail "$1: silent"; }
+}
+refused "OUT holds a tree named src" "$c/src" "$c"
+refused "OUT/build links to the tree" "$c/src" "$c/link-out"
+refused "OUT/build/arch links into the tree" "$c/src" "$c/deep-out"
+refused "OUT/src holds a worktree's git directory" "$c/main/wt" "$c/main"
+[[ -x $c/src/scripts/checkpatch.pl && -d $c/main/src/.git ]] || fail "a collision fixture lost its tree"
+echo "ok - --build is refused where its src, src-base, build or build-base would delete the tree or its git directory"
+
 # --merge: the base moves on after the branch is cut. A clean merge passes
 # and says so; a conflict fails as "rebase needed" while the commit checks
 # still run.
