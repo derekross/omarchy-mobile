@@ -34,7 +34,7 @@ The audit behind this design (2026-10-13). "Step" names the roadmap step that re
 | `bin/omamobile capture` | the default capture name `cheetah-<date>` | 1 (done) |
 | `bin/omamobile push`, `flash` | the partition lookup assumes the main LUN is `sda` | 1 (allowlist check and `BOOT_IMAGES` layouts done; the Pixel 6 has no `init_boot` or `vendor_kernel_boot`, [oriole NOTES](../device/oriole/NOTES.md)), 3 |
 | `initramfs/init` | `probe()` when `BRINGUP_PROBE=1` and the board matches `COMPATIBLE` (watchdog and DPP reads); the main LUN `sda`. The TRIG_CON write is `SIMPLEFB_TRIG_CON`, the storage-guard allowlist `UFS_RW` and the USB product string `USB_PRODUCT`, all packed from the descriptor into that device's initramfs only | 2 (trigger, allowlist and USB name done; the rest still step 2) |
-| `bin/omamobile initramfs` | the developer's `~/.ssh/*.pub` baked in as `authorized_keys` (fine for development, never for a release) | 2 |
+| `bin/omamobile initramfs` | the developer's `~/.ssh/*.pub` baked in as `authorized_keys` (fine for development, never for a release); `--release` leaves them out, and `tools/make-bundle` refuses to sign an initramfs that has them | 2 (done) |
 | `tools/extract-vendor-firmware` | `BOARD="google,gs201-cheetah"`, `DEVICE="cheetah"`, the firmware `MAP` | 4 |
 | `tools/extract-vendor-chroot`, `extract-fingerprint-vendor` | `DEVICE="cheetah"`, cheetah's file lists | 4 |
 | `tools/aoc-stage` | the AoC firmware path under `vendor/google/cheetah` | bring-up tool, per plan |
@@ -165,7 +165,7 @@ The device package, not the kernel package, turns the kernel into bootable slot-
 
 The same Alpine-based initramfs, with release differences:
 
-- **No developer keys.** It ships without `authorized_keys`. The hook appends a second, tiny cpio to the ramdisk that holds the phone's own `/root/.ssh/authorized_keys` (the kernel unpacks concatenated cpio archives in order), so SSH into the initramfs keeps working for the phone's owner and nobody else.
+- **No developer keys.** It ships without `authorized_keys`: `bin/omamobile initramfs --release` builds it that way, and `tools/make-bundle` refuses to sign a bundle whose initramfs still holds SSH keys. The hook appends a second, tiny cpio to the ramdisk that holds the phone's own `/root/.ssh/authorized_keys` (the kernel unpacks concatenated cpio archives in order), so SSH into the initramfs keeps working for the phone's owner and nobody else.
 - **No bring-up probes.** `probe()` and `omamobile.debug` stay in development builds only.
 - **Quirks from the descriptor.** The trigger write is already per device: `bin/omamobile initramfs` packs `SIMPLEFB_TRIG_CON` into `/etc/omamobile-simplefb-trig` and `COMPATIBLE` beside it. The init writes the pair only when the board's first compatible string matches. A device without the trigger key gets no register write. The storage guard's allowlist is packed the same way, from `UFS_RW` into `/etc/omamobile-ufs-rw`, and the init leaves every partition read-only without a valid one. So is the USB product string (`USB_PRODUCT`, else `NAME`). Step 2 still turns the remaining quirk (`MAIN_LUN`) into a generated `/etc/omamobile/device.conf` the shared init reads at boot. That remaining step changes what boots, so it gets its own runbook and a test boot from `bin/omamobile push`; it is not a refactor.
 - **Reproducible:** fixed mtimes (`SOURCE_DATE_EPOCH`), sorted file list, `cpio --reproducible`.
@@ -341,7 +341,7 @@ Per release, in order. Stop at any failed step.
 1. **Kernel:** every subsystem branch meant for the release merged into `omamobile-int`; it boots on each released device, with `uname -r` and the result in that device's NOTES.
 2. **Curate:** move what has passed into `omamobile` (§8); publish `omamobile` and the `omamobile-int` snapshot; tag `omamobile-int-<date>`.
 3. **Build** the kernel from the tag in the pinned container, release `LOCALVERSION`; pack `linux-omamobile`.
-4. **Images** for every device: `DEVICE=<codename> bin/omamobile images`, twice, checksums equal.
+4. **Images** for every device: `DEVICE=<codename> bin/omamobile initramfs --release`, then `DEVICE=<codename> bin/omamobile images`, twice, checksums equal.
 5. **Packages:** every changed package has a bumped `version`, its `test/all` passes, `tools/build-packages` builds and signs them and the database on the laptop (`tools/repo-build` on a phone only as an opt-in shortcut).
 6. **Test install** on each released device, attended: the bundle's `install` on a phone whose stock slot A and backups are known good; first boot, device package installed, `omarchy update` clean, then a package-hook kernel update and a reboot into it.
 7. **Identifiers:** grep the bundle, the root image's file list, `MANIFEST` and the release notes for MAC addresses (`[0-9a-f]{2}(:[0-9a-f]{2}){5}`), serial numbers, SSIDs and account names; confirm no file from a factory image is in any artifact.

@@ -524,13 +524,26 @@ def earpiece_ceilings(digital_ceil, analog_ceil):
 
 
 def jump_rule(analog_ceil):
-    """The coil-estimate jump rule for these analog ceilings (C9j): 5 C
-    above analog 10 only; OMAMOBILE_SPK_TEMP_JUMP sets it in any stage and
-    mode, 0 turns it off."""
+    """The coil-estimate jump rule: off by default. The firmware measures
+    the coil closed-loop, and with music at the c9 levels the coils really
+    heat to a 60-65 C plateau within a minute (C9d-8 and "C9 with real
+    music", 2026-10-31), so a rise rule muted normal listening; the
+    temperature backstop (80 C) is the hard limit. OMAMOBILE_SPK_TEMP_JUMP
+    sets it in any stage and mode, measured from the estimate
+    OMAMOBILE_SPK_TEMP_SETTLE seconds into a stream; 0 turns it off."""
     tj = os.environ.get('OMAMOBILE_SPK_TEMP_JUMP', '')
-    if tj != '':
-        return float(tj) or None
-    return 5.0 if max(analog_ceil.values()) > 10 else None
+    return (float(tj) or None) if tj != '' else None
+
+def jump_settle():
+    """The jump rule's settle window (C9d-8, 2026-10-31). A stream's first
+    coil estimates are the firmware's reference (CAL_AMBIENT, 25 C) until
+    it has measured the coil, and the coils are often warmer than that (31
+    C battery, 33 C top coil on USB the same day), so the measured value is
+    a step up, not a rise, and it takes about a second. The rule's
+    baseline is the estimate once the stream has played for
+    OMAMOBILE_SPK_TEMP_SETTLE seconds (default 2); every rise above it is
+    held to the jump. The temperature backstop applies throughout."""
+    return float(os.environ.get('OMAMOBILE_SPK_TEMP_SETTLE', '') or 2.0)
 
 
 def ceilings():
@@ -1039,14 +1052,14 @@ def cmd_feedback(args):
 # then takes five samples about 0.2 s apart: RTLOG_STATE := 0, wait for it to
 # read 1, read RTLOG_DATA. Word 1 of the data is the impedance the firmware
 # measures from its voltage and current sense, in the same units as CAL_R
-# (0xfffffd and 0xfffffe: no valid measurement, e.g. a signal too low to
+# (0xffff00 and above, e.g. 0xffffd4 and 0xfffffd: no valid measurement, a signal too low to
 # measure). So Z / CAL_R is the coil's resistance relative to the factory
 # calibration: about 1.00 at room temperature, +0.39 % per degree C (copper).
 # Printed only as that ratio, never as a resistance: the calibration is this
 # phone's. Writes only the logger's own controls.
 
 RTLOG_VARIABLES = (0x39d, 0x3b3, 0x3b4)
-RTLOG_INVALID = 0xfffffd
+RTLOG_INVALID = 0xffff00   # 0xffffd4..0xfffffe seen on the phone: no measurement (2026-10-31)
 COPPER_TC = 0.0039
 
 
@@ -1161,7 +1174,7 @@ def cmd_watch(args):
         return 1
     log(f'watchdog: watching {pcm}, ceilings digital {digital_ceil} analog {analog_ceil}, '
         f'heartbeat {"enforced" if strict_hb else "logged"}, coil temperature backstop {temp_max:g} C, '
-        f'jump rule {f"{temp_jump:g} C within a stream" if temp_jump else "off (analog 10 or below: the estimate is open-loop, C9j)"}')
+        f'jump rule {f"{temp_jump:g} C above the estimate {jump_settle():g} s into a stream" if temp_jump else "off (the 80 C backstop is the limit; OMAMOBILE_SPK_TEMP_JUMP sets one)"}')
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
     mode = os.environ.get('OMAMOBILE_SPK_MEDIA_DELTA', '')
@@ -1193,6 +1206,8 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
     since = None
     beat = {}
     start_temp = {}
+    first_temp = {}
+    settle = jump_settle()
     warned = False
     applied = False
     problems_delta = []
@@ -1256,6 +1271,7 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                 since = now
                 beat = {}
                 start_temp = {}
+                first_temp = {}
                 applied = False
                 problems_delta = []
                 if feedback:
@@ -1284,11 +1300,22 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
             # heartbeat rule (the levels, the bypass and the mute are checked)
             for amp in AMPS if mode == 'speaker' else ():
                 t = q(v.get((amp, 'CSPL_TEMPERATURE')), 14)
-                if t is not None:
-                    t0 = start_temp.setdefault(amp, t)
-                    if temp_jump is not None and t - t0 > temp_jump:
+                if t is not None and temp_jump is not None:
+                    tf = first_temp.setdefault(amp, t)
+                    if amp not in start_temp:
+                        # the step from the reference to the measured coil
+                        # takes about a second, so the baseline is the
+                        # estimate once the stream has played for `settle`
+                        # seconds (a mid-step sample, 27 C on the way to 50,
+                        # made the step itself look like a rise, 2026-10-31)
+                        if now - since < settle:
+                            continue
+                        start_temp[amp] = t
+                        continue
+                    t0 = start_temp[amp]
+                    if t - t0 > temp_jump:
                         problems.append(f'{amp}: coil temperature jumped {t - t0:.1f} C '
-                                        f'({t0:.1f} -> {t:.1f}) in this stream, above {temp_jump} C')
+                                        f'({t0:.1f} -> {t:.1f}) above its value {settle:g} s into the stream, above {temp_jump} C')
             for amp in AMPS if mode == 'speaker' else ():
                 hb = v.get((amp, 'HALO_HEARTBEAT'))
                 last = beat.get(amp)

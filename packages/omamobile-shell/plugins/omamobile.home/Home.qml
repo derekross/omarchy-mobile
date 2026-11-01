@@ -580,10 +580,31 @@ Item {
         root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)
     }
   }
-  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers)
+  // The app drawer covers it once fully open (its surface is always mapped,
+  // so it has no openlayer event to go by; drawerProgress below).
+  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers) && drawerProgress < 1
   readonly property bool owlPaused: !homeShown
-  // The pages are being swiped: the neighbours show too.
-  property bool pagesMoving: false
+  // The app drawer (omamobile.launcher's root, through its DrawerLink.js,
+  // which DrawerLinkClient.qml beside it imports), for the swipe up and for
+  // how far open it is. Loaded from the launcher's folder so both plugins
+  // share one script; missing, the swipe still opens it through the host.
+  Loader {
+    id: drawerLink
+    source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")
+  }
+  readonly property var drawer: drawerLink.item ? drawerLink.item.drawer : null
+  readonly property real drawerProgress: drawer && drawer.progress !== undefined ? Number(drawer.progress) || 0 : 0
+  // The dock (omamobile.launcher) reserves no space, so that no window
+  // changes size as the drawer opens over it; the home screen keeps its
+  // height free here instead: the drawer's dockHeight, nothing while the
+  // on-screen keyboard (which covers the dock) is up, and the same formula
+  // as the launcher's when the drawer is out of reach.
+  readonly property int dockInset: drawer && drawer.dockHeight !== undefined
+    ? (drawer.oskOpen ? 0 : drawer.dockHeight)
+    : Math.max(48, Style.space(48)) + Style.spacing.xxl * 2
+
+  // The pages are being swiped, or slide to a page: the neighbours show too.
+  readonly property bool pagesMoving: !!pager && pager.swiping
   function pageShown(index) { return HomeModel.pageShown(index, currentPage, pagesMoving, homeShown) }
   // A finger on the home screen proves it shows: an event missed while the
   // shell was busy can't keep the widgets stopped.
@@ -873,10 +894,7 @@ Item {
   function goToPage(index, animate) {
     var i = Math.max(0, Math.min(viewLayout.pages.length - 1, Number(index) || 0))
     currentPage = i
-    if (pager) {
-      pager.highlightMoveDuration = animate === false ? 0 : 250
-      pager.currentIndex = i
-    }
+    if (pager) pager.goTo(i, animate)
   }
 
   function setEditing(on) {
@@ -898,7 +916,7 @@ Item {
   function launch(appId) {
     var entry = entryFor(appId)
     if (!entry || !entry.id) return false
-    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function")
+    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function" && !HomeModel.opensShellSurface(entry))
       appLibrary.beginLaunchFeedback(appLibrary.entryName(entry))
     Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))
     return true
@@ -1083,6 +1101,21 @@ Item {
     // Bottom: above the wallpaper, below every window.
     WlrLayershell.layer: WlrLayer.Bottom
     WlrLayershell.keyboardFocus: root.wantsKeyboard ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+    // No touch in the dock's strip: since the dock stopped reserving its
+    // height (0.2.56), this window reaches down over it, on the same Bottom
+    // layer. Which of the two is on top then depends on which mapped last:
+    // after a shell restart the home screen (slower to load) mapped after
+    // the dock and took every tap on the search pill (2026-10-31, 0.2.57 on
+    // the Pixel 7 Pro); coming back from an app re-mapped the dock and hid
+    // it. Nothing here draws or takes touches below dockInset anyway.
+    mask: Region { item: touchArea }
+
+    Item {
+      id: touchArea
+      objectName: "homeTouchArea"
+      anchors.fill: parent
+      anchors.bottomMargin: root.dockInset
+    }
 
     Item {
       id: screenItem
@@ -1096,26 +1129,20 @@ Item {
       }
 
       // ---------- pages
-      ListView {
+      // HomePager: the ListView's drag (1:1 under the finger), and a short
+      // slide of its own on release (a flick turns the page).
+      HomePager {
         id: pager
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: dots.top
         anchors.topMargin: Style.spacing.lg
-        orientation: ListView.Horizontal
-        snapMode: ListView.SnapOneItem
-        highlightRangeMode: ListView.StrictlyEnforceRange
-        highlightMoveDuration: 250
-        boundsBehavior: Flickable.StopAtBounds
         // In edit mode a drag moves items; pages change by swiping empty
         // space or tapping the dots.
         interactive: !root.editing && root.sheet === ""
-        flickDeceleration: 4000
-        cacheBuffer: width * 2
         model: root.viewLayout.pages.length
-        onCurrentIndexChanged: root.currentPage = currentIndex
-        onMovingChanged: root.pagesMoving = moving
+        onPageChanged: root.currentPage = page
         onMovementStarted: root.sawTouch()
 
         delegate: Page { }
@@ -1129,6 +1156,7 @@ Item {
         objectName: "pageDots"
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: toolbar.visible ? toolbar.top : parent.bottom
+        anchors.bottomMargin: toolbar.visible ? 0 : root.dockInset
         height: root.viewLayout.pages.length > 1 || root.editing ? 28 : Style.spacing.lg
         spacing: 0
 
@@ -1165,7 +1193,7 @@ Item {
         visible: root.editing
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottomMargin: Style.spacing.sm
+        anchors.bottomMargin: Style.spacing.sm + root.dockInset
         height: visible ? root.touch + Style.spacing.lg : 0
         spacing: Style.spacing.sm
 
@@ -1228,6 +1256,20 @@ Item {
         z: 50
         home: root
         active: !root.editing && root.sheet === ""
+      }
+
+      // ---------- swipe up anywhere: the app drawer, with the finger
+      // Above the long press; a mostly sideways drag stays the pager's.
+      DrawerSwipe {
+        anchors.fill: pager
+        z: 51
+        home: root
+        pages: pager
+        drawer: root.drawer
+        active: HomeModel.drawerSwipeAllowed(root.appOnScreen, root.editing, root.sheet)
+        // The drawer out of reach (DrawerLink.js): open it through the
+        // host, without the keyboard, as a swipe opens it.
+        onFallbackOpen: Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.launcher", "{\"gesture\":true}"])
       }
 
       // ---------- a short notice, with Undo after a remove
@@ -1293,6 +1335,7 @@ Item {
       HomeSheets {
         z: 100
         anchors.fill: parent
+        anchors.bottomMargin: root.dockInset
         home: root
       }
     }

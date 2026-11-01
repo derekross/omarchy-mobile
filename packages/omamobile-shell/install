@@ -20,9 +20,15 @@ while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omamobile/shell/widget-${file#widgets/}"
 done < <(find widgets/template widgets/examples -type f -print0)
 install -Dm644 environment.d/20-omamobile-osk.conf "$destination/usr/lib/environment.d/20-omamobile-osk.conf"
-# squeekboard's terminal layout with an Esc key (GPL-3.0-or-later, from
-# squeekboard); omamobile-setup-user links it into the user's data dir.
-install -Dm644 squeekboard/keyboards/terminal/us.yaml "$destination/usr/share/omamobile/squeekboard/keyboards/terminal/us.yaml"
+# squeekboard's US English and terminal layouts with our action row
+# (GPL-3.0-or-later, from squeekboard); omamobile-setup-user links them into
+# the user's data dir.
+for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
+  install -Dm644 "squeekboard/keyboards/$layout" "$destination/usr/share/omamobile/squeekboard/keyboards/$layout"
+done
+# Omarchy hook scripts that omamobile-setup-user links into the user's
+# ~/.config/omarchy/hooks/ (the keyboard's theme-set hook)
+install -Dm755 hooks/theme-set-keyboard "$destination/usr/share/omamobile/shell/hooks/theme-set-keyboard"
 install -Dm644 systemd/omamobile-nfc-open.service "$destination/usr/lib/systemd/system/omamobile-nfc-open.service"
 install -Dm644 systemd/user/omarchy-fcitx5-omamobile.conf "$destination/usr/lib/systemd/user/omarchy-fcitx5.service.d/omamobile.conf"
 # The permission sheet: the portal's Access backend, its D-Bus activation and
@@ -56,6 +62,7 @@ install -Dm644 systemd/user/xdg-desktop-portal-gnome-omamobile.conf \
 install -Dm644 polkit/49-omamobile-admin-self.rules "$destination/usr/share/polkit-1/rules.d/49-omamobile-admin-self.rules"
 install -Dm644 applications/omamobile-agent.desktop "$destination/usr/share/applications/omamobile-agent.desktop"
 install -Dm644 applications/omamobile-open-intent.desktop "$destination/usr/share/applications/omamobile-open-intent.desktop"
+install -Dm644 applications/omamobile-update.desktop "$destination/usr/share/applications/omamobile-update.desktop"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-shell/LICENSE"
 # OWL.md is Simon Schubert's OWL guide (MIT). The built-in widgets themselves
 # come from omamobile-owl-widgets, which ships the store's licence.

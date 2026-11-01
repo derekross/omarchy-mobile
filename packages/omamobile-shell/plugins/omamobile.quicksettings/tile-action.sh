@@ -89,10 +89,11 @@ case $tile in
     exec omamobile-sit data "$want"
     ;;
   dictation)
-    # voxtype types what it hears into the focused window. A direction, not
-    # `record toggle`, so a second tap while the probe catches up can't undo
-    # the first.
-    if [ "$want" = on ]; then exec voxtype record start; else exec voxtype record stop; fi
+    # The voice bar (omamobile.voice), the same bar as the bottom bar's mic:
+    # it types into the app in front, sends to an agent, or asks it from
+    # the home screen. A direction, not toggle, so a second tap while the
+    # probe catches up can't undo the first.
+    if [ "$want" = on ]; then exec omamobile-voice start; else exec omamobile-voice done; fi
     ;;
   *)
     echo "tile-action.sh: unknown tile $tile" >&2

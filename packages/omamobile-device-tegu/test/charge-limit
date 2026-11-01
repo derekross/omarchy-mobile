@@ -30,3 +30,20 @@ rm -f "$threshold"
 echo 80 > "$file"
 "$script" >/dev/null || fail "a missing charger is an error"
 echo 'ok - charge-limit: percentages only, the charger otherwise untouched'
+
+# The kernel's driver: no threshold, charge_behaviour instead, by capacity.
+b=$OMAMOBILE_TEGU_ROOT/sys/class/power_supply/max77779-charger/charge_behaviour
+c=$OMAMOBILE_TEGU_ROOT/sys/class/power_supply/max77779-battery/capacity
+mkdir -p "${c%/*}"
+level() { echo "$1" > "$c"; "$script" >/dev/null || fail "capacity $1 failed"; }
+echo '[auto] inhibit-charge force-discharge' > "$b"; echo 80 > "$file"
+level 79; [[ $(cat "$b") == '[auto] inhibit-charge force-discharge' ]] || fail "79 of 80 changed the charger"
+level 80; [[ $(cat "$b") == inhibit-charge ]] || fail "80 of 80 did not inhibit"
+level 77; [[ $(cat "$b") == inhibit-charge ]] || fail "77 of 80 resumed inside the 5-point band"
+level 75; [[ $(cat "$b") == auto ]] || fail "75 of 80 did not resume"
+rm -f "$file"; echo inhibit-charge > "$b"; level 90
+[[ $(cat "$b") == auto ]] || fail "no file left charging inhibited"
+echo abc > "$file"; echo inhibit-charge > "$b"; echo 90 > "$c"
+"$script" >/dev/null 2>&1 && fail "abc was accepted"
+[[ $(cat "$b") == auto ]] || fail "a bad file left charging inhibited"
+echo 'ok - charge-limit: charge_behaviour holds charging off from the limit to 5 below'

@@ -18,6 +18,10 @@
 #                       sleep: the PIN pad, as the lost press would have
 #   volume down alone   lowers the volume after a 0.15 s wait for power
 #   volume up           raises the volume
+#   power + volume up held together, when turned on in the voice settings
+#                       (~/.config/omamobile/voice.json powerVolumeUp, off by
+#                       default): push-to-talk through omamobile.voice until
+#                       volume up is let go; never on the lock screen
 #   either volume key while the Camera app (omacam) is in front and the phone
 #                       is unlocked: take a photo (omacam --remote shutter),
 #                       as Android's camera does; held keys take one photo
@@ -54,6 +58,24 @@ camera_in_front() {
   [[ $(hyprctl activewindow -j 2>/dev/null | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("class", ""))
 except Exception: print("")') == omacam ]] && ! locked
+}
+
+# Power + Volume Up push-to-talk (docs/VOICE-PLAN.md): only when the user
+# turned it on, and never on the lock screen.
+voice_ptt_enabled() {
+  jq -e '.powerVolumeUp == true' "${XDG_CONFIG_HOME:-$HOME/.config}/omamobile/voice.json" >/dev/null 2>&1 && ! locked
+}
+
+voice_call() {
+  omarchy-shell shell call omamobile.voice "$1" '' >/dev/null 2>&1 &
+}
+
+# The chord's start: like the screenshot's, the power key's own gestures are
+# off for this press (its release finds the chord marker).
+start_ptt() {
+  touch "$state/chord" "$state/ptt"
+  rm -f "$state/power"
+  voice_call keyPress
 }
 
 screensaver_up() {
@@ -201,6 +223,8 @@ case "${1:-}" in
     echo "$press" >"$state/power"
     if recent volume-down; then
       chord
+    elif [[ -f $state/volume-up-held ]] && recent volume-up && voice_ptt_enabled; then
+      start_ptt
     else
       # Long press: still the same press, still held, no chord in between.
       (
@@ -213,7 +237,14 @@ case "${1:-}" in
     press=$(now)
     previous=$(cat "$state/volume-up" 2>/dev/null || echo 0)
     echo "$press" >"$state/volume-up"
-    if camera_in_front; then
+    touch "$state/volume-up-held"
+    # Push-to-talk under way: key repeat while held does nothing.
+    if [[ -f $state/ptt ]]; then
+      :
+    # Power held: the voice chord, when it is turned on.
+    elif [[ -f $state/power ]] && voice_ptt_enabled; then
+      start_ptt
+    elif camera_in_front; then
       # One photo per press: key repeat while held takes no more.
       ((press - previous < 700)) || omacam --remote shutter
     else
@@ -244,11 +275,26 @@ case "${1:-}" in
       ) >/dev/null 2>&1 &
     fi
     ;;
+  volume-up-release)
+    # The only volume release that does anything: the end of push-to-talk.
+    rm -f "$state/volume-up-held"
+    if [[ -f $state/ptt ]]; then
+      rm -f "$state/ptt"
+      voice_call keyRelease
+    fi
+    ;;
   power-up)
     # Released: forget the press before acting on it. Locking takes about a
     # second, longer than the long-press timer, which then found power still
     # "held" and woke the lock it had just taken (a flash of the PIN pad).
     rm -f "$state/power"
+    # Push-to-talk ends on whichever key's release still arrives: Hyprland
+    # drops a key's release bind once another key went down after it, so
+    # with volume up pressed first only power's release comes.
+    if [[ -f $state/ptt ]]; then
+      rm -f "$state/ptt"
+      voice_call keyRelease
+    fi
     if [[ -f $state/chord ]]; then
       rm -f "$state/chord"
     elif [[ -f $state/long ]]; then
@@ -264,7 +310,7 @@ case "${1:-}" in
     if locked && screen_off; then wake_locked; fi
     ;;
   *)
-    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up|wake" >&2
+    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up|volume-up-release|wake" >&2
     exit 1
     ;;
 esac

@@ -42,6 +42,7 @@ Item {
     text: 'widget "idle" {\n  meta { owl: 4 }\n  source n = cmd("echo hi") every 2s\n  state ticks = 0\n  every 1s { ticks = ticks + 1 }\n  Text { text: fixed(time, 1) }\n}'
     host: fixture
     active: top.shown
+    paused: scheduler.paused
   }
 
   OwlView {
@@ -141,6 +142,15 @@ Item {
       tryVerify(function() { return !scheduler.framing }, 500, "covered or off: no frames")
       verify(scheduler.tickInterval > Phone.CLOCK.tickMs + 5, "the tick slows while paused (" + scheduler.tickInterval + " ms)")
       const frames = top.frames
+      const runs = fixture.runs
+      const ticks = top.ticks()
+      // An expanded screen must not bypass the global pause.
+      owl.screenOpen = true
+      fixture.t += 10
+      scheduler.tick()
+      compare(fixture.runs, runs, "no sources while paused, even with a screen open")
+      compare(top.ticks(), ticks, "no `every` while paused")
+      owl.screenOpen = false
       wait(300)
       compare(top.frames, frames)
       scheduler.paused = false

@@ -144,10 +144,36 @@ fi
 # Terminals get squeekboard's terminal layout (Tab, Ctrl, Alt, arrows); ours
 # adds Esc to its top row, for vim and friends. squeekboard reads layouts only
 # from the user's data dir, so link ours there unless the user has their own.
-k=${XDG_DATA_HOME:-$HOME/.local/share}/squeekboard/keyboards/terminal
-if [[ ! -e $k/us.yaml && ! -L $k/us.yaml ]]; then
-  mkdir -p "$k"
-  ln -s /usr/share/omamobile/squeekboard/keyboards/terminal/us.yaml "$k/us.yaml"
+# Since 0.2.61 the US English text layout too, and both in landscape (_wide:
+# squeekboard would otherwise take its own built-in landscape layout before
+# our portrait one), each with an action row (Talk, Ask, Paste, Emoji, Hide)
+# that hypr/phone.lua binds. Each file linked unless the user has their own.
+k=${XDG_DATA_HOME:-$HOME/.local/share}/squeekboard/keyboards
+for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
+  if [[ ! -e $k/$layout && ! -L $k/$layout ]]; then
+    mkdir -p "$(dirname "$k/$layout")"
+    ln -s "/usr/share/omamobile/squeekboard/keyboards/$layout" "$k/$layout"
+  fi
+done
+
+# The keyboard in the Omarchy theme (omamobile-keyboard-theme): its
+# stylesheet from the theme's colours at every login (cheap, and it catches
+# a theme changed while the hook wasn't there); once, the @import line in
+# ~/.config/gtk-3.0/gtk.css that makes squeekboard read it, and the
+# theme-set hook that rewrites it and restarts squeekboard on a theme
+# change. A user who removes either keeps it removed.
+# --restart: a squeekboard already running (setup run again by hand, or a
+# package update that changed the stylesheet) reads gtk.css only when it
+# starts, so it restarts when the @import or the stylesheet is new; at
+# login it isn't up yet, and nothing restarts.
+if command -v omamobile-keyboard-theme >/dev/null; then
+  if omarchy-done ensure omamobile-keyboard-theme; then
+    omamobile-keyboard-theme --import --restart || true
+    mkdir -p "$config/hooks/theme-set.d"
+    ln -sfn "$share/hooks/theme-set-keyboard" "$config/hooks/theme-set.d/50-omamobile-keyboard"
+  else
+    omamobile-keyboard-theme --restart || true
+  fi
 fi
 
 # squeekboard needs Hyprland's input-method slot, which Omarchy's fcitx5 (run
@@ -335,6 +361,33 @@ fi
 # The back gesture (omamobile.back): swipe in from a side edge for Escape.
 if omarchy-done ensure omamobile-back-plugin; then
   add_plugin omamobile.back
+fi
+# Voice input (omamobile.voice): hold the home pill to ask the agent, the
+# keyboard strip's mic key to dictate, through Voxtype when it is
+# installed (Install > AI > Dictation); without it the sheet says so.
+if omarchy-done ensure omamobile-voice-plugin; then
+  add_plugin omamobile.voice
+fi
+# Setup > Voice in Omarchy's menu opens the voice settings (omamobile.voice),
+# through the menu extension file. Added once.
+if omarchy-done ensure omamobile-menu-voice; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"setup.voice"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "setup.voice": {"icon":"\xf3\xb0\x8d\xac","label":"Voice","description":"Speech model and how voice input starts","action":"omarchy-shell shell summon omamobile.voice '"'"'{\\"page\\":\\"settings\\"}'"'"'"},/' "$extension"
+  fi
+fi
+# Voxtype's faster model on the phone: tiny.en turns 10 s of speech into
+# text in 3.9 s on the Pixel 7 Pro, base.en (Omarchy's default) in 8.8 s.
+# Voxtype ignores a per-recording `--model` it hasn't prepared, so the
+# daemon's own [whisper] model is set: once, only when tiny.en is
+# downloaded and the user's config still has Omarchy's base.en (a model
+# the user chose stays), and voxtype restarts only if it was running.
+voxconf=~/.config/voxtype/config.toml
+if [[ -f ~/.local/share/voxtype/models/ggml-tiny.en.bin && -f $voxconf ]] &&
+  sed -n '/^\[whisper\]$/,/^\[/p' "$voxconf" | grep -c '^model = "base.en"$' >/dev/null &&
+  omarchy-done ensure omamobile-voxtype-tiny; then
+  sed -i '/^\[whisper\]$/,/^\[/s/^model = "base.en"$/model = "tiny.en"/' "$voxconf"
+  systemctl --user try-restart voxtype.service || true
 fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc

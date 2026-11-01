@@ -20,6 +20,7 @@ logical at scale 3).
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts; draws nothing |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
+| `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
@@ -137,7 +138,7 @@ existed finds them under "Add tiles" too.
 | Torch | The rear flash LED in torch mode (`brightnessctl --device=white:torch`); "No flash LED" without it |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
 | Clipboard | Puts the sheet away and opens Omarchy's clipboard history (`omarchy-shell shell summon omarchy.clipboard`, Super+Ctrl+V on the desktop); a pick pastes into the app underneath |
-| Dictation | voxtype (`voxtype record start`, a second tap `record stop`); a start puts the sheet away so the words land in the app underneath. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
+| Dictation | The voice bar (omamobile.voice: `omamobile-voice start`, a second tap `omamobile-voice done`); a start puts the sheet away so the words land in the app underneath. Its chevron (and a long press) opens the voice settings, as Wi-Fi's and Bluetooth's open their pages. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
 | Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omamobile.fingerprint`); the status counts this user's fingerprints through fprintd (`omamobile-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
@@ -296,7 +297,9 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   the very bottom, the Phone app's Favorites, Recents, Contacts and Keypad
   tabs among them. 44 px, a whole touch target (TOUCH-PLAN 2.5), is all an
   app gives up. The zone goes with the strip: nothing is reserved for it on
-  the home screen (the dock reserves its own height there), with the drawer
+  the home screen (where the dock reserves nothing since 0.2.56: the home
+  screen keeps its height free, so the drawer opening over it resizes no
+  window), with the drawer
   open, under the lock screen's keyboard, or for a real fullscreen window
   (video, the screensaver), which keeps the whole screen. Under the lock it
   isn't drawn (no `above_lock` rule), and the lock covers the whole screen
@@ -352,9 +355,25 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
-  sits by your thumb, highlighted. Pull the header down, or the grid when it
-  is scrolled to its top, past about 80 px to close it (the drawer follows the
-  finger); the chevron at the top right still closes it too.
+  sits by your thumb, highlighted. **Swipe up anywhere on the home screen** to
+  open it: the drawer rises with the finger and opens on an upward flick or
+  past a quarter of the way, else falls back (only on the home screen: not
+  over an app, in edit mode or under a sheet; a widget that scrolls keeps its
+  own swipe). Opened that way, no keyboard comes up until the field is
+  tapped; typing on a hardware keyboard still searches. To close it, tap the
+  **handle** (the pill centred at the top, a 44 px target), or drag it, the
+  header, empty space or the grid at its top down: the drawer follows the
+  finger both ways and closes on a downward flick or past a tenth of the
+  way, else springs back. A grid scrolled down scrolls first; the pull takes
+  over where it reaches the top. Settling is one Easing.OutCubic slide of
+  120-260 ms that starts at the finger's speed; the home screen dims under
+  the theme's menu scrim as the drawer rises (opacity only: a scale of the
+  home made its widgets snap between pixels). The drawer's surface stays
+  mapped for the life of the shell, drawing nothing and taking no touch while
+  closed: mapped on each open, its first frames drew at the wrong scale. The home
+  screen reaches the drawer in-process through `DrawerLink.js` (a
+  `.pragma library` script both plugins import from the launcher's folder);
+  without it the swipe still opens the drawer through the host on release.
 * **Ask the agent.** Any text also offers an "Ask Claude" row above the input.
   Text that reads as a prompt (3+ words, ends in `?`, `.` or `!`, or matches no
   app) makes that row the primary action: it is highlighted, the input glyph
@@ -458,7 +477,11 @@ wallpaper, swiped sideways, with page dots above the dock.
 ![Home screens](../../../phone/screenshots/home-screens.png)
 ![Edit mode](../../../phone/screenshots/home-screens-edit.png)
 
-* **Pages.** Swipe sideways; tap a dot to jump. The home page (Home in recent
+* **Pages.** Swipe sideways; tap a dot to jump. The page follows the finger
+  1:1 (the ListView's own drag); a flick of 300 px/s turns the page even on
+  a short swipe, a slower release settles on the nearer page, with one
+  Easing.OutCubic slide of 120-250 ms that starts at the finger's speed
+  (`HomePager.qml`, rules in `HomeModel.js`). Swipe up for the app drawer. The home page (Home in recent
   apps goes back to it) is marked in the Pages sheet.
 * **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
   take one cell, widgets a span within their own limits.
@@ -816,6 +839,35 @@ Omarchy's update).
 
 IPC: `omarchy-shell shell call omamobile.update snapshot ''` (page, step,
 result; never the PIN).
+
+## omamobile.voice
+
+Voice input: one voice bar, through Voxtype's user daemon
+(`voxtype.service`, Omarchy's Install > AI > Dictation). The design and its
+history are in [VOICE-PLAN.md](../../../docs/VOICE-PLAN.md).
+
+* **Ways in:** hold the pill in an app, or the search bar on the home
+  screen; the keyboard's Mic key; Power + Volume Up (when turned on); the
+  Dictation tile (its chevron opens the settings); or
+  `omamobile-voice [toggle|start|done|cancel|settings]`.
+  The bottom bar has no buttons: as on Android, a hold is voice and a
+  double tap the keyboard.
+* **The bar** rises above the keyboard (or the bottom bar): the destination
+  chip, the time, the level, Cancel and "Done · <verb>", in the recording
+  colour while it listens. The destination follows what is in front: Send
+  to the agent in its terminal (typed, then Enter), Type here in any other
+  app, Ask the agent on the home screen; the chip also offers Copy to
+  clipboard and Search apps.
+* **Ask** checks first: the transcript to edit in the theme's warning
+  colour, the full-permissions warning, Discard / Again / Ask.
+* Every recording is `voxtype record start --no-osd --file=<transcript>`,
+  delivered by the shell (wtype, wl-copy, the launcher). The model is the
+  daemon's (tiny.en once downloaded); the screen stays on while it
+  listens; a haptic tick at the start and end.
+* **Settings** (`~/.config/omamobile/voice.json`): the speech model, Power +
+  Volume Up, the check before Ask.
+
+IPC: `omarchy-shell shell call omamobile.voice <toggle|start|done|cancel|press|release|keyPress|keyRelease|openSettings|snapshot> ''`.
 
 ## omamobile.access
 

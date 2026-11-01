@@ -68,6 +68,14 @@ modules_release=$(sed -n 's/^kernel modules: \([^ ]*\).*/\1/p' "$manifest")
   die "the root image has modules for $modules_release, but the boot images are $release: rebuild one to match"
 root_digest=$(sha256sum < "$rootfs" | cut -d' ' -f1)
 [[ $(cut -d' ' -f1 "$rootfs.sha256") == "$root_digest" ]] || die "$rootfs doesn't match its .sha256"
+if ((unsigned == 0)); then
+  initramfs=$KERNEL_OUT/initramfs.cpio.lz4
+  [[ -f $initramfs ]] || die "no $initramfs: build it with bin/omamobile initramfs --release"
+  entries=$(lz4 -dc "$initramfs" | cpio -t --quiet 2>/dev/null) || die "$initramfs is not a valid initramfs archive"
+  if grep -cE '^(\./)?root/\.ssh(/|$)|^(\./)?etc/dropbear/dropbear_.*_host_key$' <<<"$entries" >/dev/null; then
+    die "initramfs contains SSH credentials: rebuild with bin/omamobile initramfs --release, then bin/omamobile images"
+  fi
+fi
 
 name=omamobile-$DEVICE-$version
 out=out/bundle

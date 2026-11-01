@@ -78,6 +78,15 @@ function agentName(id) {
 // open there: one app per screen, as on Android.
 var LAUNCH = "omamobile-launch"
 
+// A desktop entry that runs omarchy-shell opens a shell surface (the
+// Updates entry summons the update sheet), never a window, so Omarchy's
+// launch toast would wait for a toplevel that doesn't come and sit over the
+// sheet until it times out: no toast for it.
+function opensShellSurface(entry) {
+  var command = entry && entry.command ? entry.command : []
+  return command.length > 0 && String(command[0]).replace(/^.*\//, "") === "omarchy-shell"
+}
+
 function appArgv(desktopId) {
   return [LAUNCH, "app", String(desktopId || "")]
 }
@@ -90,6 +99,66 @@ function promptArgv(prompt) {
 
 var PICK_AGENT_ARGV = ["omarchy", "menu", "summon", "setup.default.agent"]
 
+// ---------------------------------------------------------------- drawer gestures
+//
+// The drawer follows a finger both ways: up from anywhere on the home
+// screen (omamobile.home drives it through DrawerLink.js) and down from the
+// drawer itself or its handle. Its position is `progress`, 0 closed to 1
+// open, a share of its own height, so the sheet's top stays under the
+// finger whatever the window's size.
+
+// A release this fast (logical px/s) decides by its direction alone.
+var DRAWER_FLING = 350
+// A slower release opens the drawer past a quarter of the way up, and
+// closes an open one pulled down a tenth of the way (about 90-100 px on the
+// phone, near the 80 px pull that closed it before).
+var DRAWER_OPEN_AT = 0.25
+var DRAWER_CLOSE_AT = 0.1
+
+// Whether the drawer ends open: velocity in px/s along the screen's y axis
+// (negative is up, toward open); fromOpen says which way the finger started.
+function drawerEndsOpen(progress, velocity, fromOpen) {
+  var v = Number(velocity) || 0
+  if (v <= -DRAWER_FLING) return true
+  if (v >= DRAWER_FLING) return false
+  var p = Number(progress) || 0
+  return fromOpen ? p > 1 - DRAWER_CLOSE_AT : p >= DRAWER_OPEN_AT
+}
+
+// How long a settle takes (ms) for `distance` px of a `span` px travel:
+// 120 ms plus up to 140 ms with the distance (half the way, about 190 ms),
+// and no slower than the finger was moving, so a fling carries on at its
+// own speed (Easing.OutCubic starts at three times its average speed).
+function settleMs(distance, span, speed) {
+  var d = Math.abs(Number(distance) || 0)
+  if (d < 0.5) return 0
+  var byDistance = 120 + 140 * Math.min(1, d / Math.max(1, Number(span) || 1))
+  var v = Math.abs(Number(speed) || 0)
+  var bySpeed = v > 0 ? 3 * d / v * 1000 : Infinity
+  return Math.round(Math.max(120, Math.min(byDistance, bySpeed)))
+}
+
+// A finger's speed from its recent positions: samples are { t (ms), pos
+// (px) }, newest last. Only the last 100 ms count, so a finger that stopped
+// before it let go has no speed (no fling), and one sample is no speed.
+var SAMPLE_WINDOW_MS = 100
+function addSample(samples, t, pos) {
+  var out = []
+  for (var i = 0; i < (samples || []).length; i++)
+    if (t - samples[i].t <= SAMPLE_WINDOW_MS * 2) out.push(samples[i])
+  out.push({ t: t, pos: pos })
+  return out
+}
+function speedOf(samples, now) {
+  var recent = []
+  for (var i = 0; i < (samples || []).length; i++)
+    if (now - samples[i].t <= SAMPLE_WINDOW_MS) recent.push(samples[i])
+  if (recent.length < 2) return 0
+  var a = recent[0], b = recent[recent.length - 1]
+  var dt = b.t - a.t
+  return dt >= 8 ? (b.pos - a.pos) / dt * 1000 : 0
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     drawerColumns: drawerColumns,
@@ -101,7 +170,15 @@ if (typeof module !== "undefined") {
     agentName: agentName,
     LAUNCH: LAUNCH,
     appArgv: appArgv,
+    opensShellSurface: opensShellSurface,
     promptArgv: promptArgv,
-    PICK_AGENT_ARGV: PICK_AGENT_ARGV
+    PICK_AGENT_ARGV: PICK_AGENT_ARGV,
+    DRAWER_FLING: DRAWER_FLING,
+    DRAWER_OPEN_AT: DRAWER_OPEN_AT,
+    DRAWER_CLOSE_AT: DRAWER_CLOSE_AT,
+    drawerEndsOpen: drawerEndsOpen,
+    settleMs: settleMs,
+    addSample: addSample,
+    speedOf: speedOf
   }
 }

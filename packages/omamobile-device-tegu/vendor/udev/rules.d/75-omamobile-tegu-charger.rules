@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Omarchy Mobile: apply /etc/omamobile/charge-limit when the MAX77779 charger
-# appears (omamobile-tegu-charge-limit).
+# appears, and on every battery change: the kernel's charger driver limits by
+# charge inhibit, so the script follows the battery's capacity
+# (omamobile-tegu-charge-limit).
 ACTION=="add", SUBSYSTEM=="power_supply", KERNEL=="max77779-charger", RUN+="/usr/bin/omamobile-tegu-charge-limit"
+ACTION=="change", SUBSYSTEM=="power_supply", KERNEL=="max77779-battery", RUN+="/usr/bin/omamobile-tegu-charge-limit"

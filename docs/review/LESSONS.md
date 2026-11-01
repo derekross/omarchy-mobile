@@ -649,6 +649,18 @@ never change, so reviews can cite them.
   package, and `mem_sleep_default` in the board's bootargs. *From:* #88,
   round 22.
 
+- **L-348. A shared driver's change is judged against every user of it on
+  `omamobile-int`, not only on `omamobile`.** Kernel #150 (spi-s3c64xx) has
+  one SPI user on the published base (touch) but three on the integration
+  line the 7 Pro runs (touch, both CS35L41 amplifiers, the BCM4775 GNSS).
+  *Check:* list the bus's consumers in the int tree's DT before writing the
+  7 Pro test, and exercise each one. *From:* kernel #150, 2026-10-31.
+- **L-349. A board pin group is checked against every stock user of those
+  pins.** Kernel #151 gave SPI21 the gpp22 pins, which Google's tegu tree uses
+  as SPI15 for the eSE. *Check:* grep the pin bank and number across Google's
+  device repository for the board (not only the SoC's), and confirm the
+  controller's USI block and the pin bank's block agree. *From:* kernel #151,
+  2026-10-31.
 
 ## Shell and scripts
 
@@ -1197,6 +1209,22 @@ never change, so reviews can cite them.
   for every write path, what the next boot finds and how userspace undoes it.
   *From:* kernel #92, round 22.
 
+- **L-350. A flag that hands off ownership is set under the lock its
+  consumer holds, after rechecking completion.** #152's first "abandon" flag
+  was set outside `rx_lock`, so an answer drained just before the timeout
+  still leaked the slot. *Check:* for any timed-out-request cleanup, find the
+  lock the completion path holds and the order of check and set. *From:*
+  kernel #152, 2026-10-31.
+- **L-351. A helper node under `/chosen` fails dtbs_check.** dtschema's
+  `chosen.yaml` allows only `framebuffer*` and `pinctrl-N` children (#154's
+  `panel`). *Check:* run dt-validate on the DTB for any node a PR adds under
+  `/chosen`; a node at the root validates, and fw_devlink still skips it.
+  *From:* kernel #154, 2026-10-31.
+- **L-352. A per-panel constant a contributor calls "approximate" may be in
+  Google's panel driver.** The 8 Pro's 70 x 155 mm is `HK3_WIDTH_MM`/
+  `HK3_HEIGHT_MM` in `panel-gs-hk3.c`. *Check:* `kernel/devices/google/
+  <device>/display/panel-gs-*.c` before accepting an estimate. *From:*
+  kernel #154, 2026-10-31.
 
 ## The gates themselves
 
@@ -1789,6 +1817,36 @@ never change, so reviews can cite them.
   package and ask for the first free one, or say "the next free version at
   merge" and set it ourselves. Extends L-12. *From:* #78, round 22.
 
+- **L-353. A same-day notes PR on one device conflicts with its sibling.**
+  Both add their section at the top of NOTES (#208, #209). *Check:*
+  merge-tree the second PR onto the first one's squash and plan the order
+  before merging the first. *From:* #208 and #209, 2026-10-31.
+- **L-354. A contributor's "kept your rows" after merging the maintainer's
+  push is checked by a merge simulation, and so is the maintainer's own
+  pass.** #165's merge brought back old husky and panther rows; then, rebased
+  onto our DEVICES pass, it dropped its own works/testing row because it
+  assumed the pass carried it, and the 9a read WIP everywhere until the row
+  was restored from the PR's force-push history. *Check:* word-diff
+  `origin/main` against the merge-tree result for every line outside the
+  PR's own row, and after a contributor "reduces" a PR to what the pass
+  lacks, diff the pass against their previous head. *From:* #165,
+  2026-10-31.
+- **L-355. A stacked PR whose author merges main instead of rebasing still
+  carries its bottom's old head.** #115 and #117 carried an old #99, so they
+  conflicted once #99 landed. *Check:* `git merge-base --is-ancestor <bottom
+  head> <PR head>`; hand over (or land) a file-level rebuild from the PR's
+  own files, checked to reproduce its tree. *From:* #115 and #117,
+  2026-10-31.
+- **L-356. A version renumbered by a merge leaves the title on the old
+  version.** #115, #117, #124 and #183 all named older versions than their
+  `version` files. *Check:* compare every title with the head's version on
+  each push, and write the squash subject from the file. *From:* round of
+  2026-10-31.
+- **L-357. A contributor's merge of main can resolve to main's tree and drop
+  the PR.** #99's b3ceaf1 left the branch identical to main; the push of the
+  maintainer's merge was then rejected as non-fast-forward. *Check:* `git
+  diff origin/main <head>` is not empty before reviewing or pushing on top.
+  *From:* #99, 2026-10-31.
 
 ## Claims and evidence
 
@@ -2154,6 +2212,28 @@ never change, so reviews can cite them.
   missing PM ops, but st-nci on cheetah has none and suspends. *Check:* `git
   grep dev_pm_ops` across sibling drivers. *From:* #72, round 22.
 
+- **L-358. A smoke report's package list is evidence about the tree.**
+  Versions not on main, `*-<codename>` packages or a rebuilt keyring mean an
+  unpublished stack (#200). *Check:* diff the list against
+  `packages/*/version` and ask for the provenance before matrix cells cite
+  it. *From:* #200, 2026-10-31.
+- **L-359. "Owner-authorized" in a contributor's record means the
+  contributor approved their own exception.** #200 recorded a flags-3
+  `vbmeta_b` and a `devinfo` boot-success write as owner-authorized, never
+  approved by the maintainer. *Check:* treat it as a CONTRIBUTING §3.1 event:
+  ask what lifted the guard, for the before/after bytes, and say no further
+  writes without the maintainer's go. *From:* #200, 2026-10-31.
+- **L-360. A promised fix is checked against the head's commit times; named
+  test tags are checked on the remote.** #153's ACPM fix was promised at
+  13:00 with the last commit at 11:55; #157/#158 cite tags absent from the
+  fork. *Check:* `git log -1 --format=%cI <head>` against the promise, and
+  `git ls-remote --tags <fork>`. *From:* kernel #153, #157, #158,
+  2026-10-31.
+- **L-361. A file swap into an older installed package tests the files in
+  that old context only.** #193's phone check swapped five files into shell
+  0.2.12, 33 versions behind main. *Check:* for a shared package, ask for
+  (or run) the head installed on the reference phone. *From:* #193,
+  2026-10-31.
 
 ## Corrections (where a review was wrong)
 
@@ -2309,3 +2389,12 @@ never change, so reviews can cite them.
   comment that quoted the phone's public Bluetooth address without flagging
   it;** a second comment repeated it. The round 29 draft asked for both to be
   edited. *Lesson:* L-324. *From:* kernel #98, round 29.
+- **C-23 (2026-10-31). Our 10-28 comment on kernel #107 suggested
+  `tools/usbc-deadman` for the 9a's repeater test,** but the tool is
+  hard-wired to the 7 Pro's MAX77759; the 31st's round corrected it to a
+  `systemd-run` reboot timer plus a fresh SSH login. *Lesson:* L-295 (a
+  tool's device scope before recommending it). *From:* kernel #107.
+- **C-24 (2026-10-31). Our earlier lynx rounds let `CONFIG_BT_BNEP` sit in a
+  lynx-only `kernel.config`,** which the release kernel never reads; an
+  option that breaks no phone belongs in `kernel/configs/omamobile.config`.
+  *Lesson:* L-337. *From:* #98 and kernel #98.

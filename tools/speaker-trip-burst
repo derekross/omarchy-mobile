@@ -11,13 +11,14 @@
 # first reading in the burst, the player is killed and both amplifiers are
 # muted at once (omamobile-speaker-protection mute). Prints the monitor lines
 # and TRIPPED or CLEAN.
+#   SETTLE=2 count the rise from the samples after 2 s of playback (gain 17)
 #   IMP=1   also sample the firmware's measured coil impedance (Z/CAL_R)
 #           during the burst (omamobile-speaker-protection impedance)
 #   FB=1    run the amplifiers' V/I feedback stream to the AoC for the burst
 #           (omamobile-speaker-protection feedback; needs the TX slot overlay)
 # Needs omamobile-audio 0.4.0 or later for IMP and FB.
 set -u
-F=${F:?file} S=${S:-5} VOL=${VOL:-1.0} RISE=${RISE:-5} IMP=${IMP:-0} FB=${FB:-0}
+F=${F:?file} S=${S:-5} VOL=${VOL:-1.0} RISE=${RISE:-5} IMP=${IMP:-0} FB=${FB:-0} SETTLE=${SETTLE:-0}
 SP=omamobile-speaker-protection
 U=$(loginctl list-users --no-legend | awk '$2 != "root" {print $2; exit}')
 I=$(id -u "$U")
@@ -29,7 +30,7 @@ if [[ $FB == 1 ]]; then
   sleep 0.3
 fi
 as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ "$VOL"
-$SP monitor $(( S + 3 )) 0.5 > "$mon" 2>&1 &
+$SP monitor $(( S + 3 )) 0.5 >> "$mon" 2>&1 &   # append: SETTLE truncates it
 mpid=$!
 sleep 0.5
 as_user timeout "$S" pw-play "$F" 2>/dev/null &
@@ -39,6 +40,13 @@ if [[ $IMP == 1 ]]; then
   ipid=$!
 fi
 result=CLEAN
+# SETTLE: the rise is counted from the samples after this many seconds of
+# playback (the gain-17 offset, AOC-PLAN C9d-8); the service's watchdog
+# still bounds the offset inside that window
+: > /tmp/trip-mon-settle.txt
+if [[ $SETTLE != 0 ]]; then
+  sleep "$SETTLE"; cp "$mon" /tmp/trip-mon-settle.txt; : > "$mon"
+fi
 while kill -0 "$ppid" 2>/dev/null; do
   if awk -v rise="$RISE" '
       / RUN  / { amp = $3; t = $5 + 0
@@ -58,6 +66,7 @@ sleep 1
 kill "$mpid" 2>/dev/null
 wait "$mpid" 2>/dev/null
 [[ $FB == 1 ]] && $SP feedback stop
+[[ $SETTLE != 0 ]] && grep -E " (RUN|idle) " /tmp/trip-mon-settle.txt | sed "s/^/settle: /"
 grep -E ' (RUN|idle) ' "$mon"
 [[ $IMP == 1 ]] && sed 's/^/impedance: /' "$imp"
 dmesg | grep -iE 'cs35l41.*(err|fail)' | tail -3

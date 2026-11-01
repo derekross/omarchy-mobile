@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.voice",
+  "name": "Voice input",
+  "version": "0.2.0",
+  "author": "Omarchy Mobile",
+  "license": "MIT",
+  "description": "The voice bar: speech to text on the phone through Voxtype. Hold the pill (or the keyboard's Mic key, Power + Volume Up, the Dictation tile): it types into the app in front, sends to the agent in its terminal, or asks it from the home screen, with Copy and Search a tap away.",
+  "kinds": [
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Voice.qml"
+  }
+}

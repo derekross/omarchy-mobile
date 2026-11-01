@@ -1,0 +1,29 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# omamobile-voice [toggle|start|done|cancel|settings|snapshot]: the voice
+# bar (omamobile.voice) for anything outside the shell: the Dictation tile
+# in quick settings, squeekboard's dictation key (a Hyprland bind on
+# XF86Dictate), scripts. Every way in opens the same bar.
+#   toggle    start listening, or finish what is under way (the default)
+#   start     start listening (nothing if it already is)
+#   done      stop listening; the words go where the bar says
+#   cancel    stop and throw the words away
+#   settings  the voice settings: speech model, Power + Volume Up
+#   snapshot  the bar's state, as JSON
+set -u
+action=${1:-toggle}
+case $action in
+  toggle | start | done | cancel | snapshot)
+    exec omarchy-shell shell call omamobile.voice "$action" ''
+    ;;
+  settings)
+    exec omarchy-shell shell summon omamobile.voice '{"page":"settings"}'
+    ;;
+  -h | --help)
+    sed -n '3,12s/^# \{0,1\}//p' "$0"
+    ;;
+  *)
+    echo "usage: omamobile-voice [toggle|start|done|cancel|settings|snapshot]" >&2
+    exit 2
+    ;;
+esac
