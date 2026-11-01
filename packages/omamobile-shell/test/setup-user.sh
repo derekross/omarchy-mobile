@@ -16,6 +16,7 @@ fake() { printf '#!/bin/bash\n%s\n' "$2" >"$F/$1"; chmod +x "$F/$1"; }
 fake omarchy-done 'd=$HOME/.local/state/omarchy/done; mkdir -p "$d"
 case $1 in
   ensure) [[ -e $d/$2 ]] && exit 1; touch "$d/$2" ;;
+  check) [[ -e $d/$2 ]] ;;
   mark) touch "$d/$2" ;;
 esac'
 fake gsettings 'echo "gsettings $*" >>"$HOME/calls"'
@@ -49,7 +50,7 @@ done
 run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
     OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
-    bash bin/omamobile-setup-user >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
+    bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
 # A user who wants Logout back gives the row their own entry
@@ -255,3 +256,32 @@ RUN_HOME=$hk run
   || fail "a layout the user wrote stays"
 [[ -L $hk/.local/share/squeekboard/keyboards/fr.yaml ]] || fail "the others are linked beside it"
 pass "the keyboard: a layout of the user's own stays"
+
+# --adopt: a user set up by hand, with no markers, keeps the files the
+# overwriting steps would change (shell.json, the scale, the cursor and
+# keyboard lines, the screensaver), while the steps that check before they
+# change still run (Chromium's flags among them); a login afterwards changes
+# nothing more
+ha=$t/home-adopt; mkdir -p "$ha/.config/hypr" "$ha/.config/omarchy/extensions" "$ha/.config/foot" "$ha/.config/omarchy/branding"
+printf '[main]\npad=10x10\n\n[touch]\nlong-press-delay=500\n' >"$ha/.config/foot/foot.ini"
+printf '{\n}\n' >"$ha/.config/omarchy/extensions/omarchy-menu.jsonc"
+printf '{"plugins": [{"id": "mine"}]}\n' >"$ha/.config/omarchy/shell.json"
+printf -- '-- mine\nhl.config({ cursor = { invisible = true } })\ndofile("%s/hypr/phone.lua")\n' "$pkg" >"$ha/.config/hypr/looknfeel.lua"
+printf -- '-- mine\n' >"$ha/.config/hypr/autostart.lua"
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = 2\n' >"$ha/.config/hypr/monitors.lua"
+printf 'mine\n' >"$ha/.config/omarchy/branding/screensaver.txt"
+snap() { (cd "$ha/.config" && cat hypr/looknfeel.lua hypr/autostart.lua hypr/monitors.lua omarchy/branding/screensaver.txt foot/foot.ini) | sha256sum; }
+before=$(snap)
+RUN_HOME=$ha run --adopt; out=$(cat "$t/out")
+[[ $(snap) == "$before" ]] || fail "--adopt changed a file an overwriting step owns"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert {"id":"mine"} in d["plugins"]' "$ha/.config/omarchy/shell.json" || fail "--adopt reseeded shell.json"
+for s in omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver; do
+  [[ -e $ha/.local/state/omarchy/done/$s ]] || fail "--adopt did not mark $s"
+  grep -c "adopted $s" <<<"$out" >/dev/null || fail "--adopt did not say it adopted $s"
+done
+grep -cx -- --no-first-run "$ha/.config/chromium-flags.conf" >/dev/null || fail "--adopt skipped Chromium's flags"
+[[ -L $ha/.config/omarchy/plugins/omamobile.home ]] || fail "--adopt still links the plugins"
+before=$(snap); flags=$(sha256sum <"$ha/.config/chromium-flags.conf")
+RUN_HOME=$ha run
+[[ $(snap) == "$before" && $(sha256sum <"$ha/.config/chromium-flags.conf") == "$flags" ]] || fail "a login after --adopt changed the user's files"
+pass "--adopt: the overwriting steps are marked and skipped, the checked steps (Chromium's flags) run, and later logins change nothing"
