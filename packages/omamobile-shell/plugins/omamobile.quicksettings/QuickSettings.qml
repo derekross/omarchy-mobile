@@ -570,9 +570,10 @@ Item {
     readonly property string icon: enabled ? "󰍬" : "󰍭"
     readonly property string status: root.optimistic["dictation"] !== undefined
       ? (enabled ? "Listening" : "Off") : TilesModel.dictationStatus(probe)
-    // Long-press: the voice settings (omamobile.voice), through the CLI,
-    // since a plugin only summons its own panels.
-    readonly property bool longPress: true
+    // The chevron (and a long press, as on Wi-Fi and Bluetooth): the voice
+    // settings (omamobile.voice), through the CLI, since a plugin only
+    // summons its own panels. A tap on the body opens or finishes the bar.
+    readonly property bool details: true
     function openDetails() {
       root.dismiss()
       Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.voice", "{\"page\":\"settings\"}"])

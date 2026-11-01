@@ -64,11 +64,39 @@ Item {
 
     function handleCentre() { return handle.mapToItem(view, handle.width / 2, handle.height / 2) }
 
-    function test_open_settles_with_the_field_focused() {
+    // A tap on the dock opens the drawer with the field waiting for a tap
+    // (no keyboard); a field focused before the drawer had the keyboard
+    // focus raised the keyboard at the first touch, as a pull down closed it.
+    function test_open_settles_with_the_field_waiting_for_a_tap() {
       openSettled()
       verify(harness.opened)
-      verify(input.activeFocus, "a tap on the dock focuses the search field")
+      verify(!input.activeFocus, "the field waits for a tap")
+      verify(sheet.activeFocus, "the sheet has the focus (typed keys still search)")
       compare(sheet.y, 0)
+    }
+
+    function test_an_open_that_asks_focuses_the_field() {
+      harness.open(JSON.stringify({ focus: true }))
+      tryCompare(harness, "progress", 1, 3000)
+      verify(input.activeFocus)
+    }
+
+    function test_closing_never_holds_a_focused_field() {
+      openSettled()
+      input.forceActiveFocus()
+      verify(input.activeFocus, "the user tapped the field")
+      var c = handleCentre()
+      var t = touchEvent(view)
+      t.press(0, view, c.x, c.y).commit()
+      drag(t, c, 200, 10, 20)
+      wait(150)
+      view.now += 150
+      t.release(0, view, c.x, c.y + 200).commit()
+      compare(harness.calls, ["hide"])
+      harness.close()
+      verify(!input.activeFocus, "the field gave the focus back as the drawer closed")
+      tryCompare(harness, "progress", 0, 3000)
+      verify(!input.activeFocus, "and doesn't take it back")
     }
 
     function test_the_handle_is_a_centred_pill_with_a_full_target() {

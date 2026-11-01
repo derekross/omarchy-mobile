@@ -17,11 +17,12 @@ import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 // Voxtype's user daemon (voxtype.service, Omarchy's Install > AI >
 // Dictation). Speech is turned into text on the phone.
 //
-// The ways in, as on Android: a hold on the pill (omamobile.launcher: the
-// pill over an app, the search pill on the home screen), the keyboard's
+// The ways in, as on Android: a hold on the pill in an app, or on the
+// search bar on the home screen (omamobile.launcher), the keyboard's
 // Mic key (squeekboard's XF86Dictate, bound in hypr/phone.lua), Power +
 // Volume Up (omamobile-keys, when turned on) and the Dictation tile in
-// quick settings (`omamobile-voice start`). All open the same bar.
+// quick settings (`omamobile-voice start`; its chevron opens the
+// settings). All open the same bar.
 //
 // The bar rises above the keyboard when it is up, else above the bottom
 // bar: the destination chip (where the words go; a tap lists the others),
@@ -935,7 +936,7 @@ Item {
             Text {
               width: parent.width
               textFormat: Text.PlainText
-              text: "Speech is turned into text on this phone. Nothing you say leaves it. Hold the pill at the bottom of the screen to talk (double-tap it for the keyboard), or use the keyboard's Mic key or the Dictation tile."
+              text: "Speech is turned into text on this phone. Nothing you say leaves it. To talk, hold the pill in an app, or the search bar on the home screen (double-tap the pill for the keyboard), or use the keyboard's Mic key or the Dictation tile."
               color: root.foreground
               opacity: 0.8
               font.family: Style.font.family

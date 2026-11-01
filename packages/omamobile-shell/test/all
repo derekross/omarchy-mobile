@@ -412,6 +412,7 @@ pass "a keyboard shown by hand goes away on the home screen"
 # squeekboard parses them, and the binds (test/phone-rules.lua).
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-theme || fail "omamobile-keyboard-theme parses"
 bash test/keyboard-theme.sh >/dev/null || fail "omamobile-keyboard-theme"
+bash test/install-hook.sh || fail "the upgrade reloads Hyprland, so new binds take effect"
 bash -n hooks/theme-set-keyboard || fail "the theme-set hook parses"
 grep -cx 'exec omamobile-keyboard-theme --restart' hooks/theme-set-keyboard >/dev/null || fail "the theme-set hook rewrites and restarts"
 rc=0; out=$(python3 -B test/keyboard-layouts.py 2>&1) || rc=$?
@@ -780,6 +781,9 @@ grep -c 'readonly property string settingsPath: configDir + "/voice.json"' "$v" 
 grep -c 'if (mine && VoiceModel.ticks(was, r.phase)) Quickshell.execDetached(VoiceModel.HAPTIC_ARGV)' "$v" >/dev/null || fail "listening ticks"
 grep -c 'if (!settings.powerVolumeUp) return "off"' "$v" >/dev/null || fail "Power + Volume Up is the settings' call"
 grep -c '"omamobile.voice", "{\\"page\\":\\"settings\\"}"' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the Dictation tile's long press opens the voice settings"
+awk '/id: dictation$/,/function toggle/' plugins/omamobile.quicksettings/QuickSettings.qml | grep -c 'readonly property bool details: true' >/dev/null &&
+  ! awk '/id: dictation$/,/function toggle/' plugins/omamobile.quicksettings/QuickSettings.qml | grep -c 'property bool longPress' >/dev/null ||
+  fail "the Dictation tile has the Wi-Fi and Bluetooth tiles' chevron (and their long press) for the voice settings"
 grep -c 'omarchy-done ensure omamobile-menu-voice' bin/omamobile-setup-user >/dev/null || fail "Setup > Voice in Omarchy's menu"
 grep -c 'o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })' hypr/phone.lua >/dev/null ||
   fail "volume up's release ends push-to-talk"

@@ -14,7 +14,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `bin/omamobile-keyboard-theme` | squeekboard in the applied Omarchy theme: a stylesheet from `colors.toml` and Omarchy's monospace font, imported from `~/.config/gtk-3.0/gtk.css`; rewritten at login and, with a squeekboard restart, by Omarchy's theme-set hook (`hooks/theme-set-keyboard`) |
 | `plugins/omamobile.back` | The back gesture: swipe in from a side edge for Escape |
 | `plugins/omamobile.update` | The update sheet: Omarchy's update for a phone, through `omamobile-update` (package `omamobile-omarchy`) |
-| `plugins/omamobile.voice` | The voice bar, through Voxtype: hold the pill (or the keyboard's Mic key, Power + Volume Up, the Dictation tile); it types into the app, sends to the agent in its terminal, or asks it from the home screen (docs/VOICE-PLAN.md) |
+| `plugins/omamobile.voice` | The voice bar, through Voxtype: hold the pill in an app or the search bar on the home screen (or the keyboard's Mic key, Power + Volume Up, the Dictation tile, whose chevron opens the settings); it types into the app, sends to the agent in its terminal, or asks it from the home screen (docs/VOICE-PLAN.md) |
 | `plugins/omamobile.access` | The permission sheet: "Allow Camera to use the camera?" with the app's icon and two large buttons, in place of xdg-desktop-portal-gtk's desktop dialog |
 | `plugins/omamobile.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |
 | `profile/shell.json` | The phone layout the setup seeds once |

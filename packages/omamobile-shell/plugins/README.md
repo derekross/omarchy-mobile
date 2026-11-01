@@ -138,7 +138,7 @@ existed finds them under "Add tiles" too.
 | Torch | The rear flash LED in torch mode (`brightnessctl --device=white:torch`); "No flash LED" without it |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
 | Clipboard | Puts the sheet away and opens Omarchy's clipboard history (`omarchy-shell shell summon omarchy.clipboard`, Super+Ctrl+V on the desktop); a pick pastes into the app underneath |
-| Dictation | voxtype (`voxtype record start`, a second tap `record stop`); a start puts the sheet away so the words land in the app underneath. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
+| Dictation | The voice bar (omamobile.voice: `omamobile-voice start`, a second tap `omamobile-voice done`); a start puts the sheet away so the words land in the app underneath. Its chevron (and a long press) opens the voice settings, as Wi-Fi's and Bluetooth's open their pages. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
 | Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omamobile.fingerprint`); the status counts this user's fingerprints through fprintd (`omamobile-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
@@ -846,9 +846,10 @@ Voice input: one voice bar, through Voxtype's user daemon
 (`voxtype.service`, Omarchy's Install > AI > Dictation). The design and its
 history are in [VOICE-PLAN.md](../../../docs/VOICE-PLAN.md).
 
-* **Ways in:** hold the pill (over an app; the search pill on the home
-  screen), the keyboard's Mic key, Power + Volume Up (when turned on), the
-  Dictation tile, or `omamobile-voice [toggle|start|done|cancel|settings]`.
+* **Ways in:** hold the pill in an app, or the search bar on the home
+  screen; the keyboard's Mic key; Power + Volume Up (when turned on); the
+  Dictation tile (its chevron opens the settings); or
+  `omamobile-voice [toggle|start|done|cancel|settings]`.
   The bottom bar has no buttons: as on Android, a hold is voice and a
   double tap the keyboard.
 * **The bar** rises above the keyboard (or the bottom bar): the destination

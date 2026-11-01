@@ -1,8 +1,6 @@
 # Voice input plan
 
-Status: 2026-10-31. Phase 1 is built and tested offline in omamobile-shell 0.2.57 (branch `shell-voice`): the model and argv tests, the pill and mic key under touch (qmltestrunner) and the offscreen review shots pass. On its first run on the phone (0.2.57), taps on the home screen's search pill did nothing, and the hold gesture couldn't be found. Dictated text never arrived, and tiny.en was ignored. 0.2.58 fixes all four (below). With 0.2.58, dictation typed correctly into Claude Code (foot) and into a Chromium web app on the phone. Phase 2 shipped in 0.2.59. On its first run the agent mic typed into Claude Code, but nothing submitted: Voxtype submits on a spoken "submit", not "send", which it just typed, and the floating mic covered the right end of the agent's prompt box. 0.2.60, built offline, submits automatically and moves the mic into the home strip (below). Phase 3 is design only.
-
-**0.2.61 replaces all of that with one voice bar** (canvas row U1-U4: UApp, UAgent, UHome, UResult), approved by the maintainer after the earlier UIs had multiplied: a dictation strip, an Ask sheet, a Confirm sheet, a mic in the search pill plus a hold on it, a keyboard-strip mic key and an agent mic in the home strip, each with its own look and its own rules. The sections after [The voice bar](#the-voice-bar-0261) record how the project got there, and what the phone taught at each step.
+Status: 2026-10-31. **One voice bar** (canvas row U1-U4: UApp, UAgent, UHome, UResult), approved by the maintainer, ships in omamobile-shell 0.2.61 (branch `shell-voice`, PR #241, not merged yet). It replaces the voice UIs of 0.2.57-0.2.60 (a dictation strip, an Ask sheet, a Confirm sheet, a mic and a hold on the search pill, a keyboard-strip mic key, an agent mic in the home strip), which had multiplied, each with its own look and rules. On the phone with 0.2.61, the maintainer confirmed that holding the pill and the keyboard's Mic key both work and insert text. 0.2.62 fixes what that run found ([below](#found-on-the-phone-0261-fixed-in-0262)): the keyboard flashing up as the drawer closed, and Hyprland keeping old binds until a reload. [The voice bar](#the-voice-bar-0261) is the current design. The sections from [History](#history-0257-0260) on record the earlier flows and what the phone taught at each step; don't follow them for how voice works today.
 
 Design (approved by the maintainer): the voice canvas, <https://claude.ai/artifact/K93k88TFaqyKvChsdk2ugK>. It has five artboards: Main (dictation strip above the keyboard), Ask (listening sheet), Confirm (check and send), FollowUp (phase 2) and Settings (phase 2). The mockups use Tokyo Night hex colours as a stand-in. The shell draws with the applied theme's tokens (`Commons.Color`, `Style`, `Border`) and the update sheet's components, and the recording colour is the theme's `urgent`.
 
@@ -10,7 +8,7 @@ Design (approved by the maintainer): the voice canvas, <https://claude.ai/artifa
 
 One bar, one set of rules, wherever voice starts.
 
-- **Ways in.** As on Android, the bottom bar is just the pill. **Hold the pill** for about 0.45 s, without moving past the swipe threshold, and the bar opens listening, with a haptic tick. A swipe takes the touch first and cancels the hold, and a finger that moves after the hold fired is still a swipe (home or recent apps, the 0.2.56 gestures). On the home screen, a hold on the search pill does the same. **Double-tap the pill** to show or hide the keyboard. A second double tap now always hides it, even before the first show is reported: `KeyboardModel.toggleTarget` trusts the last request for 1.5 s. The keyboard's **Mic** key, **Power + Volume Up** (when turned on) and the **Dictation tile** open the same bar. One command, `omamobile-voice [toggle|start|done|cancel|settings|snapshot]`, is there for the tile and for scripts. The first time the pill-only bar shows over an app, a toast says "Hold the pill to talk · double-tap for the keyboard" (Omarchy's done store, `omamobile-pill-hint`). The Voice settings say it too.
+- **Ways in.** As on Android, the bottom bar is just the pill. **Hold the pill in an app, or the search bar on the home screen** (the home screen has no pill; its search bar plays that part), for about 0.45 s without moving past the swipe threshold, and the bar opens listening, with a haptic tick. A swipe takes the touch first and cancels the hold, and a finger that moves after the hold fired is still a swipe (home or recent apps, the 0.2.56 gestures). **Double-tap the pill** to show or hide the keyboard. A second double tap now always hides it, even before the first show is reported: `KeyboardModel.toggleTarget` trusts the last request for 1.5 s. The keyboard's **Mic** key, **Power + Volume Up** (when turned on) and the **Dictation tile** open the same bar. One command, `omamobile-voice [toggle|start|done|cancel|settings|snapshot]`, is there for the tile and for scripts. The first time the pill-only bar shows over an app, a toast says "Hold the pill to talk · double-tap for the keyboard" (Omarchy's done store, `omamobile-pill-hint`). The Voice settings say it too.
   - Why no buttons: a mic at the right end of the bar and a keyboard key at its left end repeated the keyboard's own Mic and Hide keys while the keyboard was up, and fading them in and out only moved the problem. Android has no buttons there either: a hold is the assistant, and the keyboard brings its own controls.
 - **The bar.** A top-layer surface that reserves its height, so the app's field ends above it. It rises above the keyboard when the keyboard is up, above the home strip over an app, and above the dock on the home screen (the dock reserves nothing, so the bar takes the dock's height from the launcher through DrawerLink.js). It never takes the keyboard focus while listening, so the app keeps it and the words go there. From the top:
   - the destination chip (top left);
@@ -28,16 +26,29 @@ One bar, one set of rules, wherever voice starts.
   A tap on the chip lists, inside the bar, the context's own choices plus **Copy to clipboard** (`wl-copy`) and **Search apps** (the launcher, opened with the words as its query).
 - **One recording mode.** Every recording is `voxtype record start --no-osd --file=$XDG_RUNTIME_DIR/omamobile-voice.txt`, and the shell delivers the transcript when it is text. The destination can therefore change while you speak, and Voxtype's per-recording output flags (`--type`, `--auto-submit`, `--smart-auto-submit`) are no longer used. A recording the bar didn't start (a desktop hotkey, F9 on a hardware keyboard) shows nothing and delivers nothing.
 - **The result step,** only for Ask (UResult): the bar turns the warning colour and shows the editable transcript, "<Agent> runs with full permissions on this phone. Check the words before it starts.", and Discard / Again / Ask. Every other destination delivers the moment the words are text. "Check before asking the agent" off (in the settings) sends straight away.
-- **Settings** (`omamobile-voice settings`, the Dictation tile's long press, Setup > Voice): the speech model, Power + Volume Up and the check before Ask. voice.json is now version 3. Earlier keys (`holdPill`, `micKey`, `agentMic`, `agentSubmit`, `sayToSend`) are read past and dropped on the next write; the two that still mean something keep their values.
+- **Settings** (the Dictation tile's chevron, as on the Wi-Fi and Bluetooth tiles, with a long press as a silent alias; `omamobile-voice settings`; Setup > Voice): the speech model, Power + Volume Up and the check before Ask. voice.json is now version 3. Earlier keys (`holdPill`, `micKey`, `agentMic`, `agentSubmit`, `sayToSend`) are read past and dropped on the next write; the two that still mean something keep their values.
 - **Kept from before:** the service and its state machine, haptic ticks (feedbackd `button-pressed`), Power + Volume Up in omamobile-keys, the home surface's input mask over the dock (0.2.58), tiny.en through the daemon's config, and the `which` dependency.
 
+### Found on the phone (0.2.61), fixed in 0.2.62
+
+- **Holding the pill works and inserts text.**
+- **The keyboard flashed up as the drawer closed,** after the drawer was opened by a tap on the search pill, but not after a swipe. The tap focused the search field before the drawer's surface had the keyboard focus. The first touch on the drawer (the pull down to close it) gave the surface that focus, the focused field asked for the keyboard, and squeekboard came up over the closing drawer. Now every open leaves the field waiting for a tap, as a swipe already did (typed keys still search, through the sheet), and a closing drawer gives the field's focus back first.
+- **The keyboard's Mic key did nothing.** Hyprland reads `hypr/phone.lua` at start and on `hyprctl reload`, so the running session kept 0.2.60's binds for calls that no longer exist. `omamobile-shell.install` now reloads every running Hyprland after an upgrade, as its own user. Mic stays press/release: a tap opens the bar listening (the release does nothing), a hold longer than 0.7 s stops on release (push-to-talk), and a press while the bar listens is Done.
+
 ### Checks on the phone (0.2.61, the bar)
+
+Results on the Pixel 7 Pro, 2026-10-31, omamobile-shell 0.2.61 (the maintainer): holding the pill opens the bar and the text is typed; the keyboard's Mic key works once Hyprland has reloaded (see above); with the keyboard up, the words are typed into the field and Send sends them; Power + Volume Up opens the bar; the Dictation tile opens it, and its long press opens the settings (0.2.62 adds the chevron). The keyboard's Paste opens the clipboard manager, and Emoji inserts the emoji picked. Ask from a hold on the home screen's search bar showed the editable check with the full-permissions warning and sent the prompt; changing the chip to Copy to clipboard while listening put the text on the clipboard. Every check passed, apart from what 0.2.62 fixes.
+
 
 1. `omamobile-voice snapshot` answers `"phase":"idle"`.
 2. In Messages with the keyboard up, tap the keyboard's Mic, speak, then tap Done · type it: the text is typed into the field. The bar sits right above the keyboard.
 3. In Claude Code (keyboard down), hold the pill: the bar says Send to Claude Code with the hint; speak, then Done · send. The text is typed and submitted.
-4. On the home screen, hold the search pill: Ask Claude Code. Tap the chip: the list shows Ask, Copy, Search. Speak, then Done · ask: the warning-coloured check, then Ask opens a terminal with the prompt.
+4. On the home screen, hold the search bar: Ask Claude Code. Tap the chip: the list shows Ask, Copy, Search. Speak, then Done · ask: the warning-coloured check, then Ask opens a terminal with the prompt.
 5. Hold the pill and swipe up without letting go: you go home, and the bar keeps listening (Cancel closes it). A quick swipe goes home with no bar. Double-tap the pill twice: the keyboard shows, then hides.
+
+## History (0.2.57-0.2.60)
+
+Superseded by [the voice bar](#the-voice-bar-0261). Kept for the facts and for what each phone run found. The sheets, strips and mic keys described below no longer exist.
 
 ## Facts (Pixel 7 Pro, 2026-10-31)
 
@@ -45,9 +56,9 @@ One bar, one set of rules, wherever voice starts.
 - **Control:** `voxtype record start|stop|toggle|cancel`. `record start` takes `--type | --clipboard | --paste | --file[=PATH]`, `--model <name>` (for this recording only: any downloaded model; the daemon keeps it loaded), `--no-osd`, `--auto-submit` and `--smart-auto-submit` (`voxtype record start --help` on the phone).
 - **State:** `$XDG_RUNTIME_DIR/voxtype/state` holds `idle`, `recording`, `streaming` or `transcribing`. `voxtype-audio-bridge` prints one NDJSON frame per audio block (`{"peak","rms","vad","ts_ms"}`) from the daemon's `audio.sock`. Voxtype's own `voxtype-shared/{StateReader,AudioBridge}.qml` show how to read both; the plugin follows them and doesn't import them.
 - **OSD:** Voxtype's GTK overlay anchors bottom centre, over the dock and the home pill, so every recording the shell starts passes `--no-osd`.
-- **Speed:** with no CPU frequency scaling on this kernel yet, `tiny.en` turns 10 s of speech into text in 3.9 s and `base.en` takes 8.8 s; both were word-perfect. Text therefore appears after the recording stops, and phase 1 shows no live partial text. `tiny.en` is downloaded on the reference phone (`~/.local/share/voxtype/models/ggml-tiny.en.bin`).
+- **Speed:** before CPU frequency scaling, `tiny.en` turned 10 s of speech into text in 3.9 s and `base.en` in 8.8 s; both were word-perfect. With cpufreq-dt on ACPM (kernel #169, merged), it is 2.36 s for tiny.en and 5.97 s for base.en per 12 s of speech. Text appears after the recording stops (no live partial text yet). `tiny.en` is downloaded on the reference phone (`~/.local/share/voxtype/models/ggml-tiny.en.bin`).
 
-## Architecture (phase 1)
+## Architecture (phase 1, history)
 
 | Piece | Where | What |
 | --- | --- | --- |
@@ -62,14 +73,14 @@ One bar, one set of rules, wherever voice starts.
 
 **Dictation flow:** the mic key or the tile runs `--type`, and Voxtype types into the focused app. The listening strip sits on the top layer with its own exclusive zone, so the app's field ends above it, and it never takes the keyboard focus. It shows "Listening", the time ("stops at 1:00" for the last 10 s), the level, Cancel and "Done · type it".
 
-## Found on the phone (0.2.57, 2026-10-31)
+## Found on the phone (0.2.57, 2026-10-31, history)
 
 - **Taps on the home screen's search pill did nothing.** Since 0.2.56 the dock reserves no space. The home screen's full-screen surface (Bottom layer, normal exclusion) therefore reaches down over the dock, and both sit on the Bottom layer. Whichever surface mapped last is on top. After a shell restart the home screen, which is slower to load, mapped after the dock and took every touch in the dock's strip. Coming back from an app re-maps the dock and hides the problem, which is presumably why 0.2.56 looked fine. 0.2.58 gives the home surface an input mask that ends above the dock (`dockInset`; the whole screen while the keyboard is up).
 - **Nobody could find the hold gesture.** 0.2.58 adds a visible mic in the search pill and a one-time toast.
 - **Dictated text never arrived** ("Output failed: All output methods failed"; debug log: "wtype not available … clipboard (wl-copy) not available"). Voxtype 1.1.1 checks for its output tools with `which`, and the phone image has no `which` package (Omarchy's desktop installs do). omamobile-shell now depends on `which`.
 - **tiny.en was ignored** ("Requested model 'tiny.en' not in available models, falling back to default 'base.en'"). Voxtype only accepts a `--model` it has prepared (`whisper.model` or `whisper.secondary_model`), so the per-recording `--model tiny.en` did nothing. 0.2.58 drops it. Instead, `omamobile-setup-user` sets `[whisper] model = "tiny.en"` in `~/.config/voxtype/config.toml`, once, and only when `ggml-tiny.en.bin` is downloaded and the config still has Omarchy's base.en; a model the user chose stays. It then runs `systemctl --user try-restart voxtype.service`. Downloading tiny.en stays a phase-2 settings action (`omarchy-voxtype-model`).
 
-## Phase 1 checks on the phone
+## Phase 1 checks on the phone (history)
 
 Read-only first; each step needs only the shell. Announce before starting, because the microphone opens and text gets typed.
 
@@ -84,7 +95,7 @@ Read-only first; each step needs only the shell. Announce before starting, becau
 
 Stop condition: anything typed into the wrong window, squeekboard stops responding, or the shell restarts. Rollback: `voxtype record cancel`, then reinstall omamobile-shell 0.2.56.
 
-## Phase 2 (0.2.59, built offline)
+## Phase 2 (0.2.59-0.2.60, history)
 
 - **Follow-up inside the agent (artboard FollowUp).** While an agent's terminal is in front (`org.omarchy.agent`, the one app id `omarchy-agent` gives every agent through `omarchy-launch-tui`; read from the Wayland toplevel's app id) and the keyboard is down, the home strip carries a mic at its right end, in the hide key's place. Hold it to talk, or tap to start and tap again to stop. Voxtype types into the agent (`record start --no-osd --type`), then by default presses Enter (`--auto-submit`). The agent setting can change this to Enter only when the speech ends in "submit" (`--smart-auto-submit`) or never.
   - The first version (0.2.59) floated a 60 px round mic at the bottom right. A terminal agent's prompt line sits at the bottom of the screen, so the mic covered its right end. The strip already reserves its height, so apps end above it, and the mic fits inside without changing that height.
@@ -102,7 +113,7 @@ Stop condition: anything typed into the wrong window, squeekboard stops respondi
 - **Power + Volume Up push-to-talk** (`omamobile-keys`). Hold Power, then Volume Up, or the other way round: it dictates into the app in front, or opens the agent sheet on the home screen. Letting go stops it. The volume doesn't change, and Power's own gesture is skipped for that press, as with the screenshot chord. It is off unless `powerVolumeUp` is true in voice.json, and it never runs on the lock screen. A new Volume Up release bind ends it; every other release does nothing. Hyprland drops a key's release bind once another key goes down after it, so Power's release ends it too.
 - **Haptic ticks** at the start and end of listening, through feedbackd (`fbcli -E button-pressed`, the same event the OWL widgets use), so the user's feedback profile (silent, quiet) decides. Nothing happens without fbcli.
 
-## The themed keyboard and its action row (0.2.61, built offline)
+## The themed keyboard and its action row (0.2.61)
 
 Artboard 6 of the voice canvas (Keyboard): squeekboard in the Omarchy theme, with a row of our own keys.
 
@@ -128,8 +139,9 @@ Risk: low (userspace only). Rollback: reinstall omamobile-shell 0.2.60; remove t
 
 ## Phase 3
 
-- **Live partial text** once the 7 Pro has CPU frequency scaling, which it lacks today: Voxtype's streaming engines, or a faster Whisper model on a faster CPU.
-- **Talk and Ask keys for every language.** Only US English and the terminal layout carry the action row (above); the other languages would each need a carried copy of squeekboard's layout.
+- **Live partial text** is now feasible: CPU frequency scaling is merged (kernel #169, cpufreq-dt on ACPM), and tiny.en transcribes 12 s of speech in 2.36 s (base.en in 5.97 s). Try Voxtype's streaming engines and show the words in the bar as they come.
+- **base.en as the default** is a candidate, now that it is about half real time: more accurate than tiny.en, at 5.97 s per 12 s of speech. Measure it in the bar before switching setup's default.
+- **The action row (Mic, Paste, Emoji, Hide) for every language.** Only US English and the terminal layout carry it (above); the other languages would each need a carried copy of squeekboard's layout.
 - **Power + Volume Up on the lock screen**, for example to ask the agent hands-free. It needs its own design for what may run while locked.
 
 ## Risks
@@ -137,4 +149,4 @@ Risk: low (userspace only). Rollback: reinstall omamobile-shell 0.2.60; remove t
 - **wtype vs squeekboard:** both register a zwp virtual keyboard with their own keymap. Text typed while the keyboard is up may come out with the wrong keymap, or upset squeekboard's. Test with the keyboard visible (check 6). The fallback is `--clipboard` followed by a paste.
 - **Agents run with auto permissions** (`claude --permission-mode auto`, and the same for the others). A misheard prompt is acted on without another question, so the check-and-send step always shows, and the setting to skip it (phase 2) defaults to asking.
 - **Layer order:** the listening strip and squeekboard are both top-layer surfaces that reserve space. If squeekboard maps after the strip, the strip can end up under the keyboard rather than above it. It still works there, but it is not where the design puts it.
-- **No CPU frequency scaling:** a long recording takes a while to transcribe on base.en (about 0.9 s per second of speech), which is why setup switches the daemon to tiny.en once it's downloaded.
+- **Transcription time:** before CPU frequency scaling, base.en took about 0.9 s per second of speech, which is why setup switches the daemon to tiny.en once it's downloaded. With scaling merged (kernel #169) it is about 0.5 s per second, tiny.en about 0.2 s: a phone on an older kernel is still slow on base.en.

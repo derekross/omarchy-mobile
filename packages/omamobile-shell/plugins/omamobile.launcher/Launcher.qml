@@ -185,7 +185,12 @@ Item {
   // that opens (gestureEnd below): the drawer carries on from under the
   // finger at the finger's speed, the dock stays until it is fully open,
   // and the search field waits for a tap, so no keyboard comes up, as on
-  // Android. Any other open (a tap on the dock, IPC) focuses the field.
+  // Android. Every open does that since 0.2.62 (a tap on the dock too):
+  // a field focused before the drawer's surface had the keyboard focus woke
+  // up at the first touch on the drawer, so a pull down to close it raised
+  // the keyboard over the closing drawer (2026-10-31, the Pixel 7 Pro). The
+  // field takes the focus when it is tapped; typing on a real keyboard
+  // still searches (the sheet passes keys on).
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
@@ -193,7 +198,7 @@ Item {
     query = typeof payload.query === "string" ? payload.query : ""
     refreshApps()
     opened = true
-    focusInputOnShow = !gesture
+    focusInputOnShow = payload.focus === true
     focusDrawer()
     settleTo(true, gesture ? gestureSpeed : 0)
     gestureSpeed = 0
@@ -201,7 +206,10 @@ Item {
 
   // Host-initiated close (`shell hide`): the drawer slides away from where
   // it is, at the speed of the finger that let it go (dismiss(speed)).
+  // A closing drawer never holds a focused text field: the field gives the
+  // focus back first, so nothing asks for the keyboard as the drawer goes.
   function close() {
+    if (input.activeFocus) sheet.forceActiveFocus()
     opened = false
     query = ""
     homeSwipe = false
@@ -312,8 +320,9 @@ Item {
   // OMAMOBILE_DRAWER_FPS=1 logs how many frames the drawer window ticked per
   // gesture ("omamobile-launcher: drawer N frames in M ms").
   readonly property bool fpsLog: Quickshell.env("OMAMOBILE_DRAWER_FPS") === "1"
-  // What takes the keyboard focus when the drawer shows: the search field
-  // after a tap on the dock, the sheet after a swipe (open above).
+  // What takes the keyboard focus when the drawer shows: the sheet (the
+  // field waits for a tap), or the field for an open that asks for it
+  // ('{"focus":true}').
   property bool focusInputOnShow: true
   // The sheet's travel: the drawer window's height once it has one, the
   // screen's before the compositor's first configure.
