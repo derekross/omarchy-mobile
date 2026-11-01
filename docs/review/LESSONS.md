@@ -2342,6 +2342,52 @@ never change, so reviews can cite them.
   cherry-pick --continue`. A reviewer committed conflict markers once.
   Extends L-254. *From:* the 2026-11-01 round.
 
+- **L-390. A dmesg delta across s2idle is not a sleep length:** the kernel
+  log's clock stops while the SoC is suspended, so the delta reads about
+  1.5 s whatever the real sleep was. *Check:* take sleep lengths from the RTC
+  (`/sys/class/rtc/rtc0/since_epoch` before and after), wall-clock journal
+  times or `suspend_stats/last_hw_sleep`. *From:* #244, #255, #256,
+  2026-11-01.
+- **L-391. A reader of `/sys/class/power_supply` skips `scope=Device`
+  supplies** and takes status only from the battery that gave the level.
+  HID and controller batteries are type `Battery` with `present` 1 and sort
+  before the Tensor gauges. *Check:* a test with a Device-scope battery at
+  Full and the charger offline. *From:* #267, 2026-11-01.
+- **L-392. A mode that skips "only the risky steps" is probed for what the
+  other steps write:** run the PR's test and dump the touched files.
+  *From:* #259, 2026-11-01.
+- **L-393. A shared-fragment `=m` to `=y` change is checked against every
+  package, plan and AGENTS line that loads or blacklists that module;** a
+  built-in module ignores `blacklist` and load order. *Check:* `git grep -n
+  '<module>' packages device/*/*-PLAN.md AGENTS.md`. *From:* #227,
+  2026-11-01.
+- **L-394. Every symbol added to the shared fragment exists on the published
+  kernel branch;** merge_config drops unknown ones silently. *Check:* `git
+  grep -n '^config <SYM>$' github/omamobile`. *From:* #227, 2026-11-01.
+- **L-395. A descriptor PR is checked with the loader, not only CI:**
+  `tests/device-overlays` sources the file, so CI showed one shell error
+  where `bin/omamobile` had four refusals. *Check:* `DEVICE=x bin/omamobile
+  initramfs-config <tmp>`. *From:* #231, 2026-11-01.
+- **L-396. Before answering "may I enable node X", check its parent bus,
+  USI and CMU in the published DTS.** *From:* issue #1 (husky
+  `usb-typec@25` under a disabled `hsi2c_11`), 2026-11-01.
+- **L-397. A charge-rate claim is checked against the percentage change in
+  the same report** (pack capacity x delta % / time against the quoted
+  current). *From:* issue #1, 2026-11-01.
+- **L-398. Sibling PRs that each carry a copy of the same commit conflict
+  pairwise in `git merge-tree`;** simulate the real order with
+  `--merge-base` before asking anyone to resolve. Extends L-214. *From:*
+  kernel #136 and #161, 2026-11-01.
+- **L-399. A contributor's "it can't work on your branch" is checked against
+  the base's driver, our fragment, the PR's own match table and the boot's
+  `lsmod` before we answer.** *From:* kernel #174, 2026-11-01.
+- **L-400. A PR retargeted after its last push gets no CI until it is pushed
+  again.** *From:* kernel #174, 2026-11-01.
+- **L-401. Supplies named in a board comment are checked against Google's
+  `<board>-display.dtsi` and `-pmic.dtsi`,** and a driver that follows a
+  sibling is compared with the sibling's current version. *From:* kernel
+  #177, 2026-11-01.
+
 ## Corrections (where a review was wrong)
 
 - **C-1 (2026-10-22). We blamed the 30 s unused-regulator cleanup for the
@@ -2505,3 +2551,11 @@ never change, so reviews can cite them.
   lynx-only `kernel.config`,** which the release kernel never reads; an
   option that breaks no phone belongs in `kernel/configs/omamobile.config`.
   *Lesson:* L-337. *From:* #98 and kernel #98.
+- **C-25 (2026-11-01). Our round 32 comment asked kernel #165 to pin LDO15S
+  at min = max "so the core sets 3.3 V before enabling it".** #101's
+  `s2mpg14_ldo_ops` has no `set_voltage_sel`, so the pin either writes
+  nothing or fails registration, and `s2mps11` then fails its whole probe.
+  The wording reached the contributor's commit message; round 33 owned it
+  and asked for the hand-off voltage. *Lesson:* before asking for min = max,
+  read the regulator's ops on the target branch. *From:* kernel #165 with
+  #101.
