@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.voice",
+  "name": "Voice input",
+  "version": "0.1.0",
+  "author": "Omarchy Mobile",
+  "license": "MIT",
+  "description": "Speech to text on the phone through Voxtype: hold the home pill to ask your coding agent (a listening sheet, then a check-and-send sheet), and the keyboard strip's mic key to dictate into any app, with a listening strip above the keyboard.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Voice.qml"
+  }
+}

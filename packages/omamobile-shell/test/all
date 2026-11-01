@@ -151,7 +151,8 @@ assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
 assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
 assert strip.count("HomeSwipe {") == 1 and "HomePill" in strip, "one swipe logic"
 assert "HideKeyboardKey {" in strip and "visible: root.oskOpen" in strip, "the hide key, only with the keyboard"
-assert "ownTaps: hideKey" in strip, "the hide key's taps are no double tap"
+assert "ownTaps: [hideKey, micKey]" in strip, "the hide and mic keys' taps are no double tap"
+assert "MicKey {" in strip and strip.count("visible: root.oskOpen") == 2, "the mic key, only with the keyboard"
 assert re.search(r"readonly property bool keyboardStripShown: stripShown && oskOpen$", src, re.M)
 PY
 # The keyboard's controls on the pill, through omamobile.keyboard's IPC:
@@ -679,6 +680,51 @@ if [[ -n ${OMAMOBILE_UPDATE_RENDER:-} ]]; then
   bash test/update-render "$OMAMOBILE_UPDATE_RENDER" >/dev/null || fail "update sheet render"
 fi
 pass "update sheet"
+
+# Voice input (omamobile.voice, docs/VOICE-PLAN.md): enabled for new and
+# existing users; every recording the shell starts (the sheet, the mic
+# key, the Dictation tile) passes --no-osd, so Voxtype's overlay never sits
+# over the dock; the agent flow records to the runtime transcript and
+# sends through the launcher's promptArgv; the pill and the mic key reach
+# it through VoiceLink.js.
+v=plugins/omamobile.voice/Voice.qml
+vm=plugins/omamobile.voice/VoiceModel.js
+python3 -c 'import json; assert {"id": "omamobile.voice"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "the phone profile enables voice input"
+grep -c 'add_plugin omamobile.voice' bin/omamobile-setup-user >/dev/null || fail "existing users get voice input"
+if command -v node >/dev/null; then
+  node test/voice-model.js || fail "voice model"
+fi
+# Every `record start` in the package passes --no-osd: the model's argv
+# and the tile's.
+grep -c 'var argv = \[VOXTYPE, "record", "start", "--no-osd"\]' "$vm" >/dev/null || fail "the shell's recordings pass --no-osd"
+if grep -rn 'voxtype record start' plugins bin --include=*.sh --include=*.qml --include=*.js | grep -v -- '--no-osd' | grep -vE '^\S+:[0-9]+:\s*(//|#)'; then
+  fail "every voxtype record start passes --no-osd"
+fi
+if grep -nE '"record", *"(start|toggle)"' "$v"; then fail "Voice.qml starts recordings only through VoiceModel.startArgv"; fi
+grep -c 'var TRANSCRIPT_NAME = "omamobile-voice.txt"' "$vm" >/dev/null || fail "the transcript is \$XDG_RUNTIME_DIR/omamobile-voice.txt"
+grep -c 'VoiceModel.fileStartArgv(transcriptPath, fast)' "$v" >/dev/null || fail "the agent flow records to the transcript"
+grep -c 'Util.execArgv(LauncherModel.promptArgv(finalText))' "$v" >/dev/null || fail "Send is the launcher's promptArgv"
+grep -c 'Util.execArgv(LauncherModel.PICK_AGENT_ARGV)' "$v" >/dev/null || fail "the agent chip opens Omarchy's agent picker"
+grep -c 'import "../omamobile.launcher/LauncherModel.js" as LauncherModel' "$v" >/dev/null || fail "voice reuses the launcher's agent model"
+grep -c 'exclusionMode: ExclusionMode.Normal' "$v" >/dev/null || fail "the sheet stays above the on-screen keyboard"
+grep -c 'WlrLayershell.namespace: "omamobile-voice-strip"' "$v" >/dev/null &&
+  awk '/id: stripWindow/,/IdleInhibitor/' "$v" | grep -c 'WlrLayershell.keyboardFocus: WlrKeyboardFocus.None' >/dev/null ||
+  fail "the listening strip never takes the keyboard from the app"
+[[ $(grep -c 'IdleInhibitor {' "$v") == 2 ]] || fail "the screen stays on while listening (sheet and strip)"
+grep -c 'VoiceLink.publish(root)' "$v" >/dev/null || fail "voice publishes itself for the pill"
+cmp -s plugins/omamobile.voice/VoiceLink.js plugins/omamobile.launcher/DrawerLink.js && fail "VoiceLink.js is its own script"
+grep -c 'source: Qt.resolvedUrl("../omamobile.voice/VoiceLinkClient.qml")' "$l" >/dev/null || fail "the launcher loads the voice link"
+grep -c '"call", "shell", "call", "omamobile.voice", method, ""' "$l" >/dev/null || fail "voice calls fall back to the plugin's IPC"
+grep -c 'onHeld: root.voiceCall("askPress")' "$l" >/dev/null && grep -c 'onReleased: root.voiceCall("askRelease")' "$l" >/dev/null ||
+  fail "holding the dock's pill asks the agent"
+grep -c 'onTapped: root.voiceCall("dictateTap")' "$l" >/dev/null || fail "the mic key toggles dictation"
+grep -c 'exec voxtype record start --no-osd --type' plugins/omamobile.quicksettings/tile-action.sh >/dev/null || fail "the Dictation tile hides Voxtype's overlay"
+# Offscreen review shots in the OWL container only (test/voice-render).
+if [[ -n ${OMAMOBILE_VOICE_RENDER:-} ]]; then
+  bash test/voice-render "$OMAMOBILE_VOICE_RENDER" >/dev/null || fail "voice sheet render"
+fi
+pass "voice input: the pill asks the agent, the mic key dictates, no Voxtype overlay"
 
 # The permission sheet: the portal Access backend (its pure parts, then the
 # D-Bus service on a private bus against a fake omarchy-shell), the sheet's

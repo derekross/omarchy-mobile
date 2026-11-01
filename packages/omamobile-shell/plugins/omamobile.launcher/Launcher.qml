@@ -442,6 +442,9 @@ Item {
           anchors.margins: Style.spacing.xxl
           placeholder: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
           onTapped: root.expand()
+          // Hold: ask the agent by voice (omamobile.voice).
+          onHeld: root.voiceCall("askPress")
+          onReleased: root.voiceCall("askRelease")
         }
       }
     }
@@ -568,6 +571,26 @@ Item {
     Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.keyboard", method, ""])
   }
 
+  // Voice input (omamobile.voice): hold the pill to ask the agent, the mic
+  // key under the keyboard to dictate. A press and its release must reach
+  // it without a process in between, so it is called directly through its
+  // VoiceLink.js (the script beside VoiceLinkClient.qml, as the home screen
+  // reaches the drawer through DrawerLink.js), and through its IPC when
+  // that isn't loaded. method: askPress, askRelease, dictatePress,
+  // dictateRelease or dictateTap.
+  Loader {
+    id: voiceLink
+    source: Qt.resolvedUrl("../omamobile.voice/VoiceLinkClient.qml")
+  }
+  readonly property var voice: voiceLink.item ? voiceLink.item.voice : null
+
+  function voiceCall(method) {
+    console.log("omamobile-home-indicator: voice", method)
+    if (root.voice && typeof root.voice[method] === "function") return root.voice[method]()
+    Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.voice", method, ""])
+    return "ipc"
+  }
+
   // Once per user, the first time the keyboard comes up under the pill
   // after the double tap arrived: say how it works, as a toast (Omarchy's
   // notifications). The marker is Omarchy's own done store
@@ -663,7 +686,17 @@ Item {
         HomeSwipe {
           anchors.fill: parent
           strip: root.oskOpen ? "keyboard" : "pill"
-          ownTaps: hideKey
+          ownTaps: [hideKey, micKey]
+        }
+
+        // The mic at the left end, only while the keyboard is up: dictate
+        // into the app (see MicKey).
+        MicKey {
+          id: micKey
+          visible: root.oskOpen
+          anchors.left: parent.left
+          anchors.leftMargin: Style.spacing.xs
+          anchors.verticalCenter: parent.verticalCenter
         }
 
         // Over the swipe's right end, only while the keyboard is up; a
@@ -1094,11 +1127,26 @@ Item {
       elide: Text.ElideRight
     }
 
+    property bool voiceHeld: false
+    signal held()
+    signal released()
+
     // A TapHandler, not a MouseArea: it lets go once the touch turns into a
-    // drag, so the dock's swipe-up (recent apps) still sees it.
+    // drag, so the dock's swipe-up (recent apps) still sees it. Held still
+    // for half a second, it asks the agent by voice until the finger lets
+    // go (held, released).
     TapHandler {
       id: pillTouch
+      longPressThreshold: 0.5
       onTapped: pill.tapped()
+      onPressedChanged: {
+        if (pressed) { pill.voiceHeld = false; return }
+        if (pill.voiceHeld) pill.released()
+      }
+      onLongPressed: {
+        pill.voiceHeld = true
+        pill.held()
+      }
     }
   }
 
@@ -1129,15 +1177,29 @@ Item {
   // Where a home swipe starts. Swipe up and let go: home. Swipe up and hold
   // still for a moment (or swipe far up): recent apps, while the finger is
   // still down, as Android's gesture navigation does. Double-tap: show or
-  // hide the on-screen keyboard. strip names the surface in the log: "pill"
-  // over an app, "keyboard" under the keyboard.
+  // hide the on-screen keyboard. Hold still: ask the agent by voice
+  // (omamobile.voice) until the finger lets go. strip names the surface in
+  // the log: "pill" over an app, "keyboard" under the keyboard.
   component HomeSwipe: Item {
     id: swipeArea
     property string strip: "pill"
-    // An item over the strip whose taps are its own (the hide key): a tap
-    // there is never half of a double tap, or tapping the key twice would
-    // hide the keyboard and show it again.
-    property Item ownTaps: null
+    // Items over the strip whose taps are their own (the hide key, the mic
+    // key): a tap there is never half of a double tap, or tapping the key
+    // twice would hide the keyboard and show it again, and a hold there is
+    // the key's own.
+    property var ownTaps: []
+    // This touch's long press went to voice: its release stops listening,
+    // and it neither goes home nor opens recent apps if it then moves.
+    property bool voiceHeld: false
+
+    function onOwnKey(x, y) {
+      var keys = swipeArea.ownTaps || []
+      for (var i = 0; i < keys.length; i++) {
+        var own = keys[i]
+        if (own && own.visible && own.contains(own.mapFromItem(swipeArea, x, y))) return true
+      }
+      return false
+    }
 
     // A TapHandler with the default DragThreshold policy grabs only
     // passively: once the touch moves past the drag threshold the
@@ -1145,13 +1207,26 @@ Item {
     // never also a tap. A tap never moves that far, so the DragHandler never
     // activates and a double tap goes neither home nor to recent apps. A
     // single tap does nothing, as before (the app still loses it).
+    //
+    // A long press (still, half a second) asks the agent by voice: the
+    // voice sheet opens and listens while the finger stays down. It never
+    // moved past the drag threshold, so it is no swipe; a tap or a double
+    // tap lets go well before it.
     TapHandler {
       id: doubleTap
       property bool lastOwn: false
+      longPressThreshold: 0.5
+      onPressedChanged: {
+        if (pressed) { swipeArea.voiceHeld = false; return }
+        if (swipeArea.voiceHeld) root.voiceCall("askRelease")
+      }
+      onLongPressed: {
+        if (swipeArea.onOwnKey(doubleTap.point.position.x, doubleTap.point.position.y)) return
+        swipeArea.voiceHeld = true
+        root.voiceCall("askPress")
+      }
       onTapped: function(eventPoint) {
-        var own = swipeArea.ownTaps
-        var onOwn = !!own && own.visible
-          && own.contains(own.mapFromItem(swipeArea, eventPoint.position.x, eventPoint.position.y))
+        var onOwn = swipeArea.onOwnKey(eventPoint.position.x, eventPoint.position.y)
         var wasOwn = doubleTap.lastOwn
         doubleTap.lastOwn = onOwn
         if (doubleTap.tapCount === 2 && !onOwn && !wasOwn) root.keyboardCall("toggleKeyboard")
@@ -1166,7 +1241,7 @@ Item {
       property bool recents: false
       onActiveTranslationChanged: {
         swipeY = activeTranslation.y
-        if (recents) return
+        if (recents || swipeArea.voiceHeld) return
         if (swipeY < -120) {
           recents = true
           hold.stop()
@@ -1178,6 +1253,9 @@ Item {
       onActiveChanged: {
         if (active) { swipeY = 0; recents = false; return }
         hold.stop()
+        // A finger that held for voice and then moved: listening stopped
+        // as the swipe took the touch; it doesn't also go home.
+        if (swipeArea.voiceHeld) return
         console.log("omamobile-home-indicator: swipe", Math.round(swipeY), recents ? "recents" : "", "(" + swipeArea.strip + ")")
         if (!recents && swipeY < -24) root.goHome()
       }
@@ -1228,6 +1306,57 @@ Item {
     TapHandler {
       id: hideTap
       onTapped: root.keyboardCall("hideKeyboard")
+    }
+  }
+
+  // The keyboard strip's mic key, at its left end (the hide key's mirror):
+  // dictation into the focused app through omamobile.voice (Voxtype types
+  // what it hears). Hold to talk, let go to stop; a tap starts listening
+  // and a second tap stops (or Done on the listening strip above the
+  // keyboard). Lit in the recording colour while it listens. Its
+  // TapHandler grabs passively too, so a swipe that starts on it still
+  // goes home.
+  component MicKey: Item {
+    id: micItem
+    objectName: "micKey"
+    width: root.touch
+    height: root.touch
+    property bool held: false
+    readonly property bool live: !!root.voice && root.voice.owner !== "ask"
+      && (root.voice.phase === "listening" || root.voice.phase === "starting")
+
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width - 4
+      height: parent.height - 8
+      radius: height / 2
+      color: micItem.live ? Commons.Color.urgent
+        : Qt.rgba(Commons.Color.bar.text.r, Commons.Color.bar.text.g, Commons.Color.bar.text.b, 0.18)
+      visible: micTap.pressed || micItem.live
+    }
+
+    Text {
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      // nf-md-microphone
+      text: String.fromCodePoint(0xF036C)
+      color: micItem.live ? Commons.Color.bar.background : Commons.Color.bar.text
+      font.family: Style.font.family
+      font.pixelSize: 22
+    }
+
+    TapHandler {
+      id: micTap
+      longPressThreshold: 0.3
+      onPressedChanged: {
+        if (pressed) { micItem.held = false; return }
+        if (micItem.held) root.voiceCall("dictateRelease")
+      }
+      onLongPressed: {
+        micItem.held = true
+        root.voiceCall("dictatePress")
+      }
+      onTapped: root.voiceCall("dictateTap")
     }
   }
 

@@ -336,6 +336,12 @@ fi
 if omarchy-done ensure omamobile-back-plugin; then
   add_plugin omamobile.back
 fi
+# Voice input (omamobile.voice): hold the home pill to ask the agent, the
+# keyboard strip's mic key to dictate, through Voxtype when it is
+# installed (Install > AI > Dictation); without it the sheet says so.
+if omarchy-done ensure omamobile-voice-plugin; then
+  add_plugin omamobile.voice
+fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"

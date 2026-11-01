@@ -33,6 +33,10 @@ find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
   -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
 for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
 cp -r "$plugin" "$h/launcher"
+# The voice link the pill and the mic key call (omamobile.voice), beside
+# the launcher as on the phone; with nothing published it stays null.
+mkdir -p "$h/omamobile.voice"
+cp "$here/../plugins/omamobile.voice/"{VoiceLink.js,VoiceLinkClient.qml} "$h/omamobile.voice/"
 # The drawer is a layer-shell window on the phone, here a plain Item that
 # fills the plugin's root; the dock and the gesture strips (one per screen,
 # through Variants) become Items with no parent, so they are not drawn.
