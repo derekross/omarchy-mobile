@@ -1,0 +1,101 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-husky-display-start in a scratch root: the marker goes down and
+# is synced before the first driver loads, the panel's DSI commands are
+# allowed for google-hk3 only and before gs_decon, a load that returns and
+# fails is logged and clears the marker, and a marker from a previous boot
+# keeps gs_decon off until --retry. No hardware is touched: modprobe, sync
+# and sleep are fakes on PATH.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script=$PWD/bin/omamobile-husky-display-start
+fail() { printf 'not ok - display-start: %s\n' "$1" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export OMAMOBILE_HUSKY_ROOT=$tmp/root
+export TEST_LOG=$tmp/calls
+export TEST_ROOT=$OMAMOBILE_HUSKY_ROOT
+marker=$OMAMOBILE_HUSKY_ROOT/var/lib/omamobile/husky-display-started
+export TEST_MARKER=$marker
+decon=$OMAMOBILE_HUSKY_ROOT/sys/bus/platform/devices/19470000.display-controller
+allow_tx=$OMAMOBILE_HUSKY_ROOT/sys/module/gs_dsim_cmd/parameters/allow_tx
+mkdir -p "$tmp/bin" "$decon" "$OMAMOBILE_HUSKY_ROOT/sys/bus/platform/drivers/gs-decon"
+export PATH=$tmp/bin:$PATH
+# modprobe: the marker must already be on disk; gs_dsim_cmd brings its
+# allow_tx parameter (0, the kernel's default); gs_decon "binds" and its line
+# records what allow_tx read when it loaded; FAIL_MODULE fails that load.
+cat > "$tmp/bin/modprobe" <<'FAKE'
+#!/bin/bash
+set -euo pipefail
+test -s "$TEST_MARKER"
+grep -qx synced "$TEST_LOG"
+[[ ${FAIL_MODULE:-} != "$1" ]] || { echo "$*" >> "$TEST_LOG"; exit 1; }
+case $1 in
+  gs_dsim_cmd) p=$TEST_ROOT/sys/module/gs_dsim_cmd/parameters; [[ -e $p/allow_tx ]] || { mkdir -p "$p"; echo 0 > "$p/allow_tx"; } ;;
+  gs_decon) mkdir -p "$TEST_ROOT/sys/module/gs_decon"
+            ln -sfn "$TEST_ROOT/sys/bus/platform/drivers/gs-decon" "$TEST_ROOT/sys/bus/platform/devices/19470000.display-controller/driver"
+            set -- "$@" "allow_tx=$(cat "$TEST_ROOT/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo none)" ;;
+esac
+echo "$*" >> "$TEST_LOG"
+FAKE
+printf '#!/bin/bash\necho synced >> "$TEST_LOG"\n' > "$tmp/bin/sync"
+printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
+chmod +x "$tmp/bin/"*
+cmdline() { mkdir -p "$OMAMOBILE_HUSKY_ROOT/proc"; echo "console=null panic=10 ${1:+exynos_drm.panel_name=$1 }bootconfig" > "$OMAMOBILE_HUSKY_ROOT/proc/cmdline"; }
+reset() {
+  : > "$TEST_LOG"
+  rm -rf "$marker" "$decon/driver" "$OMAMOBILE_HUSKY_ROOT/sys/module"
+  mkdir -p "$OMAMOBILE_HUSKY_ROOT/sys/class/backlight/19440000.dsi.0"
+  echo 900 > "$OMAMOBILE_HUSKY_ROOT/sys/class/backlight/19440000.dsi.0/brightness"
+  cmdline "${1-google-hk3.20800a}"
+}
+
+# The bootloader's form, the name with the panel's id: allowed before gs_decon
+reset
+out=$("$script")
+[[ ! -e $marker ]] || fail "a finished start leaves the marker"
+grep -q '^gs_decon stage=2 fbdev=0 allow_tx=1$' "$TEST_LOG" || fail "allow_tx was not 1 before gs_decon loaded: $(cat "$TEST_LOG")"
+[[ $(grep -c '^gs_dsim_cmd' "$TEST_LOG") == 1 ]] || fail "gs_dsim_cmd is loaded once, before the write"
+[[ $out == *"panel google-hk3.20800a: DSI commands allowed"* && $out == *"up: display"* ]] || fail "summary: $out"
+# the level restored at boot is sent again after allow_tx
+[[ $out == *"brightness of 19440000.dsi.0: level 900 sent"* ]] || fail "the brightness is not sent again: $out"
+[[ $(cat "$OMAMOBILE_HUSKY_ROOT/sys/class/backlight/19440000.dsi.0/brightness") == 900 ]] || fail "the brightness level changed"
+
+# The bare name: allowed too
+reset google-hk3
+"$script" > /dev/null
+grep -q '^gs_decon .*allow_tx=1$' "$TEST_LOG" || fail "google-hk3 without an id is not allowed"
+
+# Another panel, or none: gs_decon still loads, DSI commands stay off
+for p in google-tg4c google-hk3x ""; do
+  reset "$p"
+  out=$("$script")
+  grep -q '^gs_decon .*allow_tx=0$' "$TEST_LOG" || fail "allow_tx turned on for panel '${p}': $(cat "$TEST_LOG")"
+  [[ $out == *"level 900 sent"* ]] && fail "brightness sent with DSI commands off for '${p}'"
+  [[ $out == *"DSI commands stay off"* ]] || fail "the refusal for '${p}' is not logged: $out"
+done
+
+# A load that returns and fails: logged, exit 1, the marker cleared
+reset
+if out=$(FAIL_MODULE=gs_decon "$script"); then fail "a failed gs_decon load exits 0"; fi
+[[ ! -e $marker ]] || fail "a failed load that returned keeps the marker"
+[[ $out == *"gs_decon failed"* ]] || fail "the failure is not logged: $out"
+
+# A marker from a previous boot (a load that never came back): nothing loads
+reset
+mkdir -p "$(dirname "$marker")"; echo "2026-10-31T00:00:00+00:00 display" > "$marker"
+out=$("$script")
+[[ ! -s $TEST_LOG ]] || fail "a stale marker still loaded: $(cat "$TEST_LOG")"
+[[ $out == *"never finished"* && -e $marker ]] || fail "the stale marker is not reported and kept: $out"
+# --retry clears it and starts
+out=$("$script" --retry)
+grep -q '^gs_decon .*allow_tx=1$' "$TEST_LOG" || fail "--retry did not start"
+[[ ! -e $marker ]] || fail "--retry leaves the marker"
+
+# Already started this boot: nothing again
+out=$("$script")
+[[ $out == *"already started"* ]] || fail "a second start reloads: $out"
+
+# No display controller in the DTB: nothing to do
+reset; rm -rf "$decon"
+out=$("$script")
+[[ $out == *"no display controller"* && ! -s $TEST_LOG ]] || fail "a DTB without DECON0: $out"

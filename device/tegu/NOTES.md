@@ -13,6 +13,109 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-31 and 11-01: every testing row on a published-style kernel
+
+Each line is a boot of the named head on the palmtop, built with
+defconfig + `kernel/configs/omamobile.config` (plus #227's options) +
+`olddefconfig`, pushed with `bin/omamobile push`, results collected, then
+the daily integration kernel pushed back. Each row gives the release of
+its boot (`uname -r`; the hash is the built tree's commit). Details are on
+each pull request.
+
+- [V] **Kernel config gaps (#227, `7.3.0-rc6-omamobile-push1-g5628f1888904` with all four built in).**
+  A build from the fragment booted with no USB: the eUSB2 PHY and the ACPM, mailbox and S2MPG14 path its rails
+  come through were modules, and the initramfs loads none. The fragment
+  also lacked the MAX77779 fuel gauge and charger, the RT6160 camera
+  regulator, the zumapro PCIe host (as a module) and the TAS2572 driver.
+- [V] **Display and GPU (kernel #96, `7.3.0-rc6-omamobile-push1-g5628f1888904`):** DSI-1 connected at 1080x2424, a
+  panthor render node, from the package's graphics start.
+- [V] **Bluetooth (kernel #122, `7.3.0-rc6-omamobile-push1-g6ec07aeee91d`):** hci0 up, host wake 6 interrupts idle and
+  38 after a 12 s scan.
+- [V] **Charging (kernel #161, omarchy-mobile #230,
+  `7.3.0-rc6-omamobile-push1-g7dbac6f4e65c`):** the charger binds at
+  0x69, and the charge limit holds charging off at 80 % through
+  `charge_behaviour`.
+- [V] **AoC, speakers, microphone, sensors (kernel #162, omarchy-mobile
+  #234, `7.3.0-rc6-omamobile-push1-g922812d75006`):** the AoC from the device tree at boot (93 services), the sound
+  card, a tone heard from the speaker, the microphone at -32 dBFS, and the
+  sensor proxy with five sensors.
+- [V] **NFC (kernel #104 rework, #105, omarchy-mobile #235,
+  `7.3.0-rc6-omamobile-push1-gb45a0d400e49`):** the clock pad
+  from clk-exynos-clkout, `nfc0` polling with no I2C errors, neard and the
+  link opener from the package. The pad variant's optional parent needed
+  `of_property_match_string()` first: `of_clk_get_by_name()` returns -EINVAL,
+  not -ENOENT, when a node has no `clock-names`.
+- [V] **Cameras (kernel #164, `7.3.0-rc6-omamobile-push1-g4023f585ccae`):** all three stream (19 fps main, 30 fps
+  ultrawide and front, 1280x960) once PMU 0x3ebc, the DC-PHY's isolation,
+  is in the zuma PMU allowlist; without it every `phy_power_on()` failed
+  with -EIO.
+- [V] **Fingerprint (kernel #165, `7.3.0-rc6-omamobile-push1-gb533af3f1cbc`):** goodix-fp binds from the device tree
+  (`/dev/goodix_fp`, irq on gpa7-6); matching was not run, since the
+  service writes Trusty's secure storage.
+- [V] **Wi-Fi (kernel #168, omarchy-mobile #238,
+  `7.3.0-rc6-omamobile-push1-g07bdf006cdc2`):** the new zumapro PCIe
+  channel-1 host plus #56's brcmfmac: the link, the BCM4383 at
+  `14e4:4449`, `wlan0` connected at boot, a ping over it.
+
+## 2026-10-31 and 11-01: leftovers on the palmtop from bring-up
+
+- [V] **A plugin link in `~/.config/omarchy/plugins/` outranks the package.**
+  `omamobile.quicksettings` pointed at a 10-17 hand copy (no notification
+  shade) and `omamobile.switcher` at a 10-22 copy; four plugins were not
+  linked at all. Relinked with `omamobile-setup-user`'s loop (AGENTS, #243).
+- [V] **NetworkManager was masked in `/etc` and iwd ran Wi-Fi,** so the
+  quick-settings Wi-Fi tile had no device. The switch, under a two-minute
+  dead-man unit that would have masked NetworkManager and started iwd
+  again: remove `/etc/systemd/system/NetworkManager.service` (the mask, a
+  link to `/dev/null`), `systemctl daemon-reload`, `systemctl disable --now
+  iwd`, `systemctl enable --now NetworkManager`, then `nmcli device` showed
+  `wlan0` managed, and a fresh SSH login stopped the dead-man. The
+  bring-up start script on the palmtop that used to start iwd now leaves
+  Wi-Fi to NetworkManager when it is enabled.
+- [V] **`omamobile-aoc`, `omamobile-sensor-proxy` and `omamobile-nfc-open`
+  were masked in `/etc`;** the three masks are gone, recorded in
+  `/root/bringup-backup/etc-masks/`.
+- [V] **A fastboot flash of slot B's images clears slot B's successful
+  flag** (#224): the evidence, and the `devinfo` write that marked B again,
+  are in the next entry.
+
+## 2026-10-31: a fastboot flash of slot B cleared its successful mark, and B was marked again
+
+[V] Linux-omarchy-mobile #96's test kernel came up without USB (the config
+gaps in #227), so the palmtop went to fastboot by the buttons and got the
+daily images back. Before the flashes, `fastboot getvar` read
+`current-slot: b`, `slot-successful:b: yes`, `slot-unbootable:b: no`,
+`slot-retry-count:b: 2`. The five commands, suffixed, with no
+`--set-active`:
+
+```sh
+fastboot -s <serial> flash boot_b boot.img
+fastboot -s <serial> flash init_boot_b init_boot.img
+fastboot -s <serial> flash vendor_boot_b vendor_boot.img
+fastboot -s <serial> flash vendor_kernel_boot_b vendor_kernel_boot.img
+fastboot -s <serial> flash dtbo_b dtbo.img
+```
+
+After them, `slot-successful:b: no` and `current-slot: b`. The retry count
+wasn't read again in fastboot; on the boot that followed, `devinfo` read B
+active, not successful, `retry-count` 2.
+
+[V] B was then marked successful again, a `devinfo` write against the 9a
+rule's hold, made under the 10-22 approval that the hold had replaced. The tool
+was `omamobile-bootctl` (`packages/omamobile-device-cheetah/src/omamobile-bootctl.c`,
+a static arm64 build with its source and binary hashes pinned in the
+runner). The steps: the live 8192 bytes copied off the palmtop and
+compared with the backup taken after the 10-28 stock boot (only the
+bootloader-owned slot bytes and the record at 0x6d-0x70 differed); a dry
+run that planned one byte, 0x35 `1c` to `1e` (B's successful bit); a
+detached relock armed for 30 s; then `blockdev --setrw` on the disk and on
+`devinfo`, the write, and an EXIT trap that set both read-only again. The
+read-back matched the predicted image in all 8192 bytes, so 0x35 is the
+only byte that changed, slot A's bytes are unchanged, and both read-only
+flags read 1 afterwards. No other backup was taken first. Until the
+maintainer decides how B is marked on the 9a, there are no more `devinfo`
+writes: with B unmarked, reboots stay few and images are tried with `push`.
+
 ## 2026-10-30: the hands-on morning (fingerprint, card, USB-C host, GNSS)
 
 Release `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, device
