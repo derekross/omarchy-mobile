@@ -281,7 +281,7 @@ before=$(snap)
 RUN_HOME=$ha run --adopt; out=$(cat "$t/out")
 [[ $(snap) == "$before" ]] || fail "--adopt changed a file an overwriting step owns"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert {"id":"mine"} in d["plugins"]' "$ha/.config/omarchy/shell.json" || fail "--adopt reseeded shell.json"
-for s in omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver; do
+for s in omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap; do
   [[ -e $ha/.local/state/omarchy/done/$s ]] || fail "--adopt did not mark $s"
   grep -c "adopted $s" <<<"$out" >/dev/null || fail "--adopt did not say it adopted $s"
 done
