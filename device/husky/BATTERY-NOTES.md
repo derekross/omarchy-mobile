@@ -97,7 +97,7 @@ Done on husky:
 2. Model chosen: Google's `default-a1-0k`. In Google's driver the unknown-pack path sets the battery ID to 0 (`DEFAULT_BATTERY_ID`) and matches the node with `maxim,batt-id-kohm = 0`. The other nodes are `default-fake-batt` (ID 170, Google's dummy), `atl-a1-1k`, `cos-a1-2k` and `lsn-a1-3k`.
 3. Flashed through the images workflow (`DTB_OVERLAYS`), no kernel rebuild.
 
-Result, verified: dmesg `max17042 0-0036: battery model loaded (DesignCap 0x994, TaskPeriod 0x2d00)`; `Status` 0x0000 (power-on bit cleared); `Config`, `TGAIN`, `TOFF` at 0x4217, 0xed51, 0x1eba; **TEMP 34.4 C**, drifting down slowly as a freshly booted phone cools, matching the hand (a hair above room temperature). The model survives reboots (no reload, the power-on bit stays clear). The gauge interrupt: I read 1,595 in `/proc/interrupts` shortly after the boot that loaded the model (flat over the next 15 s), and 803 on a later boot after about 18 minutes, during which the battery level changed by one step (76 to 75 %), then flat. That looks like the burst of hundreds of interrupts per 1 % step that kernel #170 describes. These counts are from my own reads, not from a saved log; a detached log on the phone (count and level every 30 s) is now running to see it step by step.
+Result, verified: dmesg `max17042 0-0036: battery model loaded (DesignCap 0x994, TaskPeriod 0x2d00)`; `Status` 0x0000 (power-on bit cleared); `Config`, `TGAIN`, `TOFF` at 0x4217, 0xed51, 0x1eba; **TEMP 34.4 C**, drifting down slowly as a freshly booted phone cools, matching the hand (a hair above room temperature). The model survives reboots (no reload, the power-on bit stays clear). The gauge interrupt bursts on every 1 % step with the stock module, as kernel #170 describes: a logger on the phone reads the gauge's line in `/proc/interrupts` (summed over the CPUs) and the battery level every 30 s, and with a CPU load forcing steps the count rose by 466 for 75 to 74 % (803 to 1,269) and by 402 for 74 to 73 % (1,269 to 1,671). With #170's patch (applied cleanly to this tree, only `max17042_battery.ko` rebuilt with the release name pinned, swapped on the running phone with `rmmod` and `insmod`, the model staying loaded) the 73 to 72 % and 72 to 71 % steps each added 1 interrupt (1,671 to 1,672 and 1,672 to 1,673). The log is `work/logs-gauge-irq-170-test.txt`. Not tested: another pack or model, more than two patched steps.
 
 ### 5.5 Consequences, honestly
 
@@ -138,6 +138,31 @@ Not verified, and not claimed: how much current the charger actually draws from 
 
 A note for UI authors: the charger power supply says `Charging` (fast charge) while the gauge's own power supply says `Discharging` whenever the net current is negative, so the status-bar icon (charger) and the fetch widget (gauge) can disagree. Both are telling the truth.
 
+### 7.1 What stock does, decoded, and a first safe step (a proposal, nothing implemented)
+
+Read-only research on Google's stock husky device tree (the MP overlay, capacity 0x1356 = 4950 mAh) and Google's GPL charger sources (shusky `bms` repository). The decoded tables were recomputed independently and match.
+
+Stock's profile (`google,chg-temp-limits`, `google,chg-cv-limits`, `google,chg-cc-limits`; the current limits are percent of the 4950 mAh capacity). Bands 0 to 10, 10 to 20, 20 to 42, 42 to 46, 46 to 48 and 48 to 55 C; voltage tiers 4.20, 4.30, 4.35 and 4.48 V (`fv-max-uv` is 4.48 V):
+
+| Band (C) | up to 4.20 V | 4.20 to 4.30 V | 4.30 to 4.35 V | 4.35 to 4.48 V |
+| --- | --- | --- | --- | --- |
+| 0 to 10 | 2475 mA (0.5 C) | 1485 mA (0.3 C) | no charge | no charge |
+| 10 to 20 | 3465 mA (0.7 C) | 1485 mA | 1485 mA | 1485 mA |
+| 20 to 42 | 5940 mA (1.2 C) | 5940 mA | 5940 mA | 2475 mA (0.5 C) |
+| 42 to 46 | 4950 mA (1.0 C) | 4950 mA | 4950 mA | 2475 mA |
+| 46 to 48 | 2475 mA | 2475 mA | 2475 mA | no charge |
+| 48 to 55 | no charge | 1485 mA | no charge | no charge |
+
+Adaptive charging by cycle count lowers the 20 to 42 C row from 120 % to 110 % at 300 cycles and 100 % at 1000. The battery defender starts after 21,600 s at 35 C or more and above 4.270 V, drains to 80 %, recharges at 4.250 V and 79 %, and resumes at 29 C or below.
+
+What stock does not do, verified in the source: no JEITA registers are programmed in the charger chip (the hardware thermistor monitor THM2 is off on husky, and it is a USB-connector sensor in any case), and the fast-charge safety timer is disabled. All the bands are software, from the fuel gauge's temperature. Our driver's temperature guard already uses the same band edges (0, 10, 20, 42, 46, 48, 55 C); its tiers (4.20, 4.30 and 4.45 V) and percentages are from the Pixel 7 era and differ, and the log line `band 20-42 C, float 4200 mV, charge 1485000 uA` is its 100 % of 4950 mAh clamped by the device tree's 4.2 V and 1.485 A.
+
+The PCA9468 (0x57) is a 2:1 direct charger fed by USB-PD PPS (10.5 V maximum, 3 A at the adapter), chosen by stock's power manager between 3.4 and 4.35 V battery voltage; it carries the rows above about 3 A, and wireless DC. Without a driver there is no fast charge; the MAX77759's own buck is what stock itself uses above 4.35 V. Not verified: the part's power-on default and the state of its enable GPIO under Linux, so check that before relying on "unconfigured is safe".
+
+Input limit: the charger's `CHGIN_ILIM` code is 0x04 plus (uA minus 125,000) divided by 25,000. Stock votes 500 mA (USB 2) or 900 mA (USB 3) for a standard port and 1.5 A for a charging port after BC1.2 detection, and whatever the contract says for PD. Our 500 and 900 mA are the no-advertisement defaults; without BC1.2 or PD a higher limit on a plain 5 V source would be a guess.
+
+A proposal for review, not implemented: keep the 4.20 V float, and band the current by temperature, for example 0.3 C at 0 to 10 C, 0.5 C at 10 to 20 C, 0.5 C or at most 0.7 C at 20 to 42 C, 0.5 C at 42 to 46 C, 0.3 C at 46 to 48 C, and no charge outside 0 to 48 C. Not to be raised without a review: the float above 4.2 V (it needs the tier switching, full detection, recharge logic, adaptive charging and the defender), the current above 0.7 C, the input limit beyond what the port advertises, and stock's odd 48 to 55 C row. Putting such a table in the driver is a kernel change (its table is hard-coded) for a later PR.
+
 ## 8. USB link lost after an unplug
 
 Symptom: after unplugging and replugging the cable the phone does not come back on the USB link until it is rebooted. The kernel log of that boot shows nothing at the unplug. Cause (read from the cheetah and raven notes, then confirmed on husky): on unplug the MAX77759's Type-C side opens its USB2 data switch (TCPC 0x25, vendor register 0x93; 0x09 is closed, 0x00 open), and with no Type-C driver nothing closes it again; the bootloader does at the next boot.
@@ -159,7 +184,7 @@ What can and cannot be cross-checked against `fastboot getvar`:
 - The flags agree with every reading I took: slot A successful, slot B not successful, and slot B the active one.
 - The retry count agrees with one reading only: on 2026-10-31 at 13:54, right after the 13:35 backup and with no boot in between, `getvar` said retry 1 on both slots, as the file does. The counter moves with each boot of slot B, and between the other backups and my other readings slot B booted and was reset with `set_active`, so the file's retry value cannot be compared with those readings, and I am not using them.
 
-So the layout is consistent with husky's [verified, read-only, on files]: the magic and version are right, the flags match every reading, and the retry counts match the one reading that can be compared. That is not proof that the marker works on husky. Marking the slot successful would write `devinfo`, which today is hidden by the storage guard and listed as never-touch in AGENTS.md, so that is a decision for the maintainer, with its own runbook and a test against a backup first. This document only reports that the layout looks the same.
+So the layout is consistent with husky's [verified, read-only, on files]: the magic and version are right, the flags match every reading, and the retry counts match the one reading that can be compared. That is not proof that the marker works on husky. Marking the slot successful would write `devinfo`, which today is hidden by the storage guard and listed as never-touch in AGENTS.md, so that is a decision for the maintainer, with its own runbook and a test against a backup first. Dry run, read-only on files: cheetah's `omamobile-bootctl dump` run on all three backups of the partition prints `magic 0x49564544 "DEVI"`, `version: 3.15 (verified layout)` and the same slot bytes as above (slot A `01 0a 00 00`, slot B `01 04 00 00`). This document only reports that the layout looks the same.
 
 ## 10. What was combined, and what we did not do
 
