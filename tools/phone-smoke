@@ -104,7 +104,9 @@ warns=$(dmesg 2>/dev/null | grep -cE 'WARNING: (CPU:|[^ ]+:[0-9]+ at )' || true)
 # Error lines that are understood, so that a new one stands out instead of
 # hiding in a raw count. Each entry is an extended regex with the reason it is
 # known; "fix:" marks one we mean to remove. Keep it short and specific to a
-# driver; never add a line here to make a regression look normal.
+# driver; never add a line here to make a regression look normal, nor one that
+# is also a fault's own message (ASoC's "no backend DAIs" is both PipeWire's
+# probe and a broken UCM route). The list is the 7 Pro's for now.
 known_errors=(
   # brcmfmac built with CONFIG_BRCMDBG logs routine information at error level
   'brcmfmac: brcmf_fw_alloc_request: using '
@@ -126,8 +128,6 @@ known_errors=(
   '^not support hac amp'
   'aoc: unsupported (sensor|dmic) power list'
   'failed to register acpm aoc reset callback'
-  # PipeWire opens the PCMs before the UCM verb sets routes (AGENTS, AoC)
-  'ASoC: no backend DAIs enabled for audio_playback'
   # the camera lens motors fail one command on wake (NOTES); fix: camera work
   'ak73[0-9]+_vcm_resume (I2C|INC) failure'
   # CPU energy model against the OPP tables; fix: cpufreq
@@ -138,6 +138,11 @@ known_errors=(
   'Warning: unable to open an initial console'
   "systemd-gpt-auto-generator' failed"
 )
+mask_ids() {
+  sed -E -e 's/[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}/<MAC>/g' \
+    -e "s/\"[^\"]*\"/\"…\"/g; s/'[^']*'/'…'/g" \
+    -e 's/[[:alnum:]_.-]*[0-9][[:alnum:]_.-]*/N/g'
+}
 errlog=$(dmesg --level=emerg,alert,crit,err 2>/dev/null | sed -E 's/^\[[ 0-9.]+\] //')
 errs=$(grep -c . <<<"$errlog" || true)
 newlog=$(grep -vE -f <(printf '%s\n' "${known_errors[@]}") <<<"$errlog" || true)
@@ -149,8 +154,10 @@ else
   check ok 1 "kernel health" "no oops or BUG; $health"
 fi
 if ((newerrs)); then
-  # Numbers and hex runs become N, so no address, serial or MAC is printed.
-  top=$(sed -E 's/(0x)?[0-9a-fA-F]*[0-9][0-9a-fA-F]*/N/g' <<<"$newlog" | sort | uniq -c | sort -rn | head -3 \
+  # MAC-shaped octets, quoted strings and every word with a digit in it are
+  # masked, which keeps addresses, serials and network names out of the row;
+  # still read it before pasting the report anywhere public.
+  top=$(mask_ids <<<"$newlog" | sort | uniq -c | sort -rn | head -3 \
     | awk '{n=$1; $1=""; sub(/^ /, ""); printf "%s%s x%d", (NR > 1 ? "; " : ""), $0, n}')
   check "not ok" 0 "new dmesg errors" "$top"
 fi
