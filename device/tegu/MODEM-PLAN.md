@@ -1013,6 +1013,20 @@ power-on, so the next trace goes on the power-on path
 (`s51xx_pcie_restore_state()` and the link-up). The save-once change alone
 does not fix the hang.
 
+**G3-L1, two more runs (2026-11-01, daily kernel).** With Wi-Fi left down
+for the whole boot (the BCM4383 firmware moved aside, PCIe channel 1
+unbound, no `wl*` interface) the session still hung, after 65 cycles, at
+the same line as before ("settled"), so the Wi-Fi bring-up is not the
+racer. With a trace line on each step after "settled": cycle 232's
+power-up trained, the PCS PLL/bias write went through, the capability
+walk over DBI returned 0x70, and the next access, the 16-bit DBI read of
+LNKSTA at 0x82, never returned. So the SoC can hang on a read of the
+controller's own register right after a good link-up, with no link-down
+interrupt logged before it. Next: compare the controller's error-response
+setup with Google's (`pcie-exynos-gs`: AXI slave error response, the ELBI
+error enables), since a stalled access instead of an error response would
+explain hangs at whatever access comes next.
+
 **G3-L1, the controller's own steps traced (2026-11-01, daily kernel).**
 The same pair with a trace line after each step of the controller's
 `cp_link_down()` and `cp_link_try()`, the modem started after the boot's
