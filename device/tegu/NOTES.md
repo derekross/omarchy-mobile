@@ -13,6 +13,59 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-31 and 11-01: every testing row on a published-style kernel
+
+Each line is a boot of the named head on the palmtop, built with
+defconfig + `kernel/configs/omamobile.config` (plus #227's options) +
+`olddefconfig`, pushed with `bin/omamobile push`, results collected, then
+the daily integration kernel pushed back. Details are on each pull request.
+
+- [V] **Kernel config gaps (#227).** A build from the fragment booted with
+  no USB: the eUSB2 PHY and the ACPM, mailbox and S2MPG14 path its rails
+  come through were modules, and the initramfs loads none. The fragment
+  also lacked the MAX77779 fuel gauge and charger, the RT6160 camera
+  regulator, the zumapro PCIe host (as a module) and the TAS2572 driver.
+- [V] **Display and GPU (kernel #96):** DSI-1 connected at 1080x2424, a
+  panthor render node, from the package's graphics start.
+- [V] **Bluetooth (kernel #122):** hci0 up, host wake 6 interrupts idle and
+  38 after a 12 s scan.
+- [V] **Charging (kernel #161, omarchy-mobile #230):** the charger binds at
+  0x69, and the charge limit holds charging off at 80 % through
+  `charge_behaviour`.
+- [V] **AoC, speakers, microphone, sensors (kernel #162, omarchy-mobile
+  #234):** the AoC from the device tree at boot (93 services), the sound
+  card, a tone heard from the speaker, the microphone at -32 dBFS, and the
+  sensor proxy with five sensors.
+- [V] **NFC (kernel #104 rework, #105, omarchy-mobile #235):** the clock pad
+  from clk-exynos-clkout, `nfc0` polling with no I2C errors, neard and the
+  link opener from the package. The pad variant's optional parent needed
+  `of_property_match_string()` first: `of_clk_get_by_name()` returns -EINVAL,
+  not -ENOENT, when a node has no `clock-names`.
+- [V] **Cameras (kernel #164):** all three stream (19 fps main, 30 fps
+  ultrawide and front, 1280x960) once PMU 0x3ebc, the DC-PHY's isolation,
+  is in the zuma PMU allowlist; without it every `phy_power_on()` failed
+  with -EIO.
+- [V] **Fingerprint (kernel #165):** goodix-fp binds from the device tree
+  (`/dev/goodix_fp`, irq on gpa7-6); matching was not run, since the
+  service writes Trusty's secure storage.
+- [V] **Wi-Fi (kernel #168, omarchy-mobile #238):** the new zumapro PCIe
+  channel-1 host plus #56's brcmfmac: the link, the BCM4383 at
+  `14e4:4449`, `wlan0` connected at boot, a ping over it.
+
+## 2026-10-31 and 11-01: leftovers on the palmtop from bring-up
+
+- [V] **A plugin link in `~/.config/omarchy/plugins/` outranks the package.**
+  `omamobile.quicksettings` pointed at a 10-17 hand copy (no notification
+  shade) and `omamobile.switcher` at a 10-22 copy; four plugins were not
+  linked at all. Relinked with `omamobile-setup-user`'s loop (AGENTS, #243).
+- [V] **NetworkManager was masked in `/etc` and iwd ran Wi-Fi,** so the
+  quick-settings Wi-Fi tile had no device. NetworkManager runs Wi-Fi now.
+- [V] **`omamobile-aoc`, `omamobile-sensor-proxy` and `omamobile-nfc-open`
+  were masked in `/etc`;** the three masks are gone, recorded in
+  `/root/bringup-backup/etc-masks/`.
+- [V] **A plain `fastboot flash` of a `_b` image clears slot B's successful
+  flag** (#224); slot B was marked again with the checked one-byte update.
+
 ## 2026-10-30: the hands-on morning (fingerprint, card, USB-C host, GNSS)
 
 Release `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, device
