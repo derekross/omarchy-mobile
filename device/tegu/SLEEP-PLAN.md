@@ -438,6 +438,15 @@ with the cable in.
   lines, wake IRQ 56 each time), and cycle 21 did not wake: no SSH 160 s
   after the suspend, and it needed Power + Volume Up. So the clock gate is
   not the sleep hang; one in 21 here, against about one in 40 before.
+  After the reset (2026-11-01 morning), nothing from the hung sleep was
+  kept: `/sys/fs/pstore` was empty, and the persistent journal of that
+  boot ends on `PM: suspend entry (s2idle)` with nothing after it. That
+  run didn't keep the console through sleep (`printk.console_suspend=N`
+  went into the script after it), and a Power + Volume Up reset may not
+  keep the ramoops region anyway. The next run keeps the console, and
+  whether the SoC watchdog still runs in s2idle (a watchdog reset keeps
+  ramoops; the buttons were needed every time so far) is the next thing
+  to check.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
