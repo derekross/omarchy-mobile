@@ -11,7 +11,7 @@ Requires=omamobile-gnss-nmea.socket
 After=omamobile-gnss-nmea.socket
 
 [Service]
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 150); do [ -p /var/lib/omamobile-vendor/gnss/data/vendor/gps/nmea_out ] && exit 0; sleep 0.2; done; exit 1'
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 150); do for f in /var/lib/omamobile-vendor/gnss/data/vendor/gps/nmea_out /var/lib/omamobile-vendor/gnss-slsi/data/vendor/gps/nmea_out; do [ -p $f ] && exit 0; done; sleep 0.2; done; exit 1'
 ExecStart=/usr/lib/omamobile-vendor/omamobile-gnss-nmea --idle-exit 60
 ProtectSystem=strict
-ReadWritePaths=-/var/lib/omamobile-vendor/gnss/data/vendor/gps -/run/omamobile-gnss
+ReadWritePaths=-/var/lib/omamobile-vendor/gnss/data/vendor/gps -/var/lib/omamobile-vendor/gnss-slsi/data/vendor/gps -/run/omamobile-gnss

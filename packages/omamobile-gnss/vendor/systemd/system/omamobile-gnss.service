@@ -5,10 +5,11 @@
 # bridge does (StopWhenUnneeded), which closes /dev/ttyBCM and powers the
 # chip off.
 [Unit]
-Description=Omarchy Mobile GNSS (BCM4775x, stock lhd and gpsd)
+Description=Omarchy Mobile GNSS (Pixel 7 Pro: BCM4775x, stock lhd and gpsd; Pixel 9a: the modem's Kepler through the stock HAL)
 After=network-online.target
 StopWhenUnneeded=yes
-ConditionPathExists=/usr/lib/omamobile-vendor/gnss/root
+ConditionPathExists=|/usr/lib/omamobile-vendor/gnss/root
+ConditionPathExists=|/usr/lib/omamobile-vendor/gnss-slsi/root
 
 [Service]
 # A location session keeps the phone awake: while the stack runs it holds a
@@ -17,5 +18,5 @@ ConditionPathExists=/usr/lib/omamobile-vendor/gnss/root
 ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start
 # Before the stop signal: ask gpsd to end its request, so it saves its
 # state (gldata.sto) for the next start. Bounded at ~4 s.
-ExecStop=/usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss stop
+ExecStop=/usr/lib/omamobile-vendor/omamobile-gnss-start --stop
 TimeoutStopSec=15
