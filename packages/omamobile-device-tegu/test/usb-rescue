@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # omamobile-tegu-usb-rescue in a scratch root, one pass at a time: a
-# configured gadget is left alone, an open switch on an unconfigured gadget
+# configured gadget only has its switch read, and closed if a replug left it
+# open with VBUS, an open switch on an unconfigured gadget
 # with VBUS is closed once, a closed switch is not written, the cable out
 # (no VBUS) costs one register read and no log line, and a Type-C driver
 # that owns the chip ends the watch before the chip is read.
@@ -12,6 +13,7 @@ fail() { printf 'not ok - usb-rescue: %s\n' "$1" >&2; exit 1; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export OMAMOBILE_TEGU_ROOT=$tmp/root
 export OMAMOBILE_TEGU_RESCUE_GRACE=0
+export OMAMOBILE_TEGU_RESCUE_STALE=0
 export TEST_LOG=$tmp/calls
 export TEGU_TCPC_SWITCH=$tmp/bin/tegu-tcpc-switch
 udc=$OMAMOBILE_TEGU_ROOT/sys/class/udc/11110000.dwc3
@@ -26,8 +28,19 @@ chmod +x "$tmp/bin/tegu-tcpc-switch"
 calls() { tr '\n' ' ' < "$TEST_LOG" | sed 's/ $//'; }
 
 : > "$TEST_LOG"; echo configured > "$udc/state"
-SW=0x00 "$script" --once >/dev/null
-[[ -z $(calls) ]] || fail "a configured gadget was touched: $(calls)"
+out=$(SW=0x09 "$script" --once)
+[[ $(calls) == "switch" && $out != *closing* ]] || fail "a configured gadget with the switch closed: one read, nothing else: $(calls)"
+
+# configured, but the switch is open with VBUS: a replug dwc3 never saw
+: > "$TEST_LOG"
+out=$(SW=0x00 "$script" --once)
+[[ $(calls) == "switch power connect" ]] || fail "a stale configured gadget's open switch was not closed: $(calls)"
+[[ $out == *"a replug the gadget didn't see"* ]] || fail "the stale-gadget close is not logged"
+
+# configured and open with the cable out: nothing written, nothing logged
+: > "$TEST_LOG"
+out=$(PW=0x00 SW=0x00 "$script" --once)
+[[ $(calls) == "switch power" && $out != *closing* ]] || fail "a stale gadget with the cable out was written: $(calls)"
 
 : > "$TEST_LOG"; echo 'not attached' > "$udc/state"
 out=$(SW=0x00 "$script" --once)

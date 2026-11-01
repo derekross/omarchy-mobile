@@ -14,6 +14,12 @@
 # OMAMOBILE_TEGU_ROOT: a scratch root for the package tests;
 # OMAMOBILE_TEGU_RESCUE_GRACE: seconds the gadget may stay unconfigured
 # before the chip is read (default 4; then once per grace period).
+# A configured gadget isn't proof the cable stayed in: with no Type-C
+# driver, dwc3 never hears of an unplug, so after a replug the gadget can
+# still read "configured" with the switch open and the phone off the bus.
+# So while configured, the switch is read once per
+# OMAMOBILE_TEGU_RESCUE_STALE seconds (default 10), and closed if it is
+# open with VBUS present.
 set -uo pipefail
 
 root=${OMAMOBILE_TEGU_ROOT:-}
@@ -22,6 +28,7 @@ if [[ -n $root ]]; then
 fi
 tool=${TEGU_TCPC_SWITCH:-/usr/bin/tegu-tcpc-switch}
 grace=${OMAMOBILE_TEGU_RESCUE_GRACE:-4}
+stale=${OMAMOBILE_TEGU_RESCUE_STALE:-10}
 once=0
 [[ ${1:-} == --once ]] && once=1
 log() { echo "omamobile-tegu-usb-rescue: $*"; }
@@ -33,6 +40,7 @@ gadget_state() { cat "$root"/sys/class/udc/*/state 2>/dev/null | head -1; }
 vbus_present() { local p; p=$("$tool" power 2>/dev/null | tail -1); [[ -n $p ]] && (( (p & 4) != 0 )); }
 
 open_since=0
+checked=0
 log "watching the gadget state and the TCPC data switch"
 while :; do
   if tcpm_owns; then
@@ -42,6 +50,15 @@ while :; do
   state=$(gadget_state)
   if [[ $state == configured ]]; then
     open_since=0
+    now=$(date +%s)
+    if (( now - checked >= stale )); then
+      checked=$now
+      sw=$("$tool" switch 2>/dev/null | tail -1)
+      if [[ -n $sw && $sw != 0x09 ]] && vbus_present; then
+        log "gadget configured but USBSW_CTRL $sw with VBUS present (a replug the gadget didn't see): closing the data switch"
+        "$tool" connect 2>&1 | tail -1
+      fi
+    fi
   else
     now=$(date +%s)
     (( open_since == 0 )) && open_since=$now
