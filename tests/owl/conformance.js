@@ -98,6 +98,9 @@ function same(a, b) {
   }
   return a === b
 }
+// A value for the report; a member one side lacks is undefined, which
+// JSON.stringify returns as undefined rather than as text.
+function shown(v) { return v === undefined ? "(missing)" : JSON.stringify(v).slice(0, 160) }
 // The first place two walks differ, for the report.
 function firstDifference(a, b, at) {
   at = at || "$"
@@ -109,7 +112,7 @@ function firstDifference(a, b, at) {
       if (d) return d
     }
   }
-  return { at, expected: JSON.stringify(a).slice(0, 160), ours: JSON.stringify(b).slice(0, 160) }
+  return { at, expected: shown(a), ours: shown(b) }
 }
 
 function compileMatch(exp, got) {
