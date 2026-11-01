@@ -346,6 +346,8 @@ test("phone actions and android.* answers, with mocks", () => {
   eq([tegu.model, tegu.maker, tegu.codename, tegu.soc, tegu.display.width], ["Pixel 9a", "Google", "tegu", "zumapro", 1080])
   const cheetah = P.boardFrom("Google Pixel 7 Pro\n@@\ngoogle,gs201-cheetah\ngoogle,gs201\n")
   eq([cheetah.model, cheetah.codename, cheetah.soc, cheetah.display.height], ["Pixel 7 Pro", "cheetah", "gs201", 3120])
+  const husky = P.boardFrom("Google Pixel 8 Pro\n@@\ngoogle,zuma-husky\ngoogle,zuma\n")
+  eq([husky.model, husky.maker, husky.codename, husky.soc, husky.display], ["Pixel 8 Pro", "Google", "husky", "zuma", { width: 1344, height: 2992, hz: 120, dpi: 489 }])
   const other = P.boardFrom("OnePlus 13\n@@\noneplus,sm8750-dodge\nqcom,sm8750\n")
   eq([other.model, other.maker, other.codename, other.soc, other.display], ["OnePlus 13", null, "dodge", "sm8750", null])
   eq([P.boardFrom("").model, P.boardFrom("").codename], [null, null])
