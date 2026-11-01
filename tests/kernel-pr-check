@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # tools/kernel-pr-check's commit checks against a stand-in kernel tree (a
-# git repository with a fake scripts/checkpatch.pl): sign-offs, prefixes and
-# checkpatch errors. Its device-tree comparison runs against a second
+# git repository with a fake scripts/checkpatch.pl): sign-offs, prefixes,
+# checkpatch errors and warnings, and a checker that is missing or doesn't
+# run to the end. Its device-tree comparison runs against a second
 # stand-in whose make prints the messages each board file asks for; the
 # real builds (clang, dtc, dt-validate) need a real tree and are run by hand.
 set -euo pipefail
@@ -13,10 +14,17 @@ fail() { echo "not ok - $*" >&2; exit 1; }
 
 k=$t/linux
 mkdir -p "$k/scripts" "$k/drivers"
-# checkpatch's stand-in: an ERROR for any added line with "BADSTYLE".
+# checkpatch's stand-in: an ERROR for any added line with "BADSTYLE", a
+# WARNING for "WARNSTYLE", and checkpatch's exit status: 1 when it reported
+# something.
 cat > "$k/scripts/checkpatch.pl" <<'EOF'
 #!/usr/bin/perl
-while (<STDIN>) { print "-:1: ERROR:CODE_STYLE: bad style\n" if /^\+.*BADSTYLE/; }
+my $st = 0;
+while (<STDIN>) {
+  if (/^\+.*BADSTYLE/) { print "-:1: ERROR:CODE_STYLE: bad style\n"; $st = 1; }
+  if (/^\+.*WARNSTYLE/) { print "-:1: WARNING:CODE_STYLE: odd style\n"; $st = 1; }
+}
+exit $st;
 EOF
 chmod +x "$k/scripts/checkpatch.pl"
 cd "$k"
@@ -26,11 +34,12 @@ git config user.email human@example.org
 echo base > drivers/a.c
 git add -A && git commit -q -m "base"
 
-run() { # name expect pattern
+run() { # name expect [pattern] [absent pattern]; $rbase and $rhead stand in for omamobile and HEAD
   local out status=0
-  out=$("$here/tools/kernel-pr-check" -C "$k" omamobile HEAD 2>&1) || status=$?
+  out=$("$here/tools/kernel-pr-check" -C "$k" "${rbase:-omamobile}" "${rhead:-HEAD}" 2>&1) || status=$?
   [[ $status == "$2" ]] || { echo "$out"; fail "$1: exit $status, expected $2"; }
   [[ -z ${3:-} ]] || grep -c -- "$3" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$3'"; }
+  [[ -z ${4:-} ]] || ! grep -c -- "$4" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$4'"; }
 }
 branch() { git checkout -q omamobile && git checkout -q -b "$1"; }
 
@@ -67,8 +76,39 @@ echo "ok - a subject without a subsystem prefix fails"
 branch style
 echo "BADSTYLE" >> drivers/a.c
 git commit -q -am "drivers: a: style" -m "Signed-off-by: A Human <human@example.org>"
-run "a checkpatch error" 1 "checkpatch --strict errors"
+run "a checkpatch error" 1 "checkpatch --strict errors" "didn't run to the end"
 echo "ok - a checkpatch error fails"
+
+branch warn
+echo "WARNSTYLE" >> drivers/a.c
+git commit -q -am "drivers: a: warn" -m "Signed-off-by: A Human <human@example.org>"
+run "a checkpatch warning" 0 "checkpatch --strict: no errors (1 warnings"
+echo "ok - a checkpatch warning (exit 1) is listed, not failed"
+
+# A checker that doesn't run to the end fails, and what it said on stderr
+# is shown. checkpatch comes from the merge base, so each one is committed
+# on its own base, with a clean change on top.
+cpbase() { # name [checker]   (no checker: the base deletes it)
+  branch "cp-$1"
+  if [[ -n ${2:-} ]]; then printf '%s\n' "$2" > scripts/checkpatch.pl; else git rm -q scripts/checkpatch.pl; fi
+  git commit -q -am "base: $1 checker"
+  git checkout -q -b "cp-$1-change"
+  echo x >> drivers/a.c
+  git commit -q -am "drivers: a: a clean change" -m "Signed-off-by: A Human <human@example.org>"
+  git checkout -q omamobile   # the tree the tool reads always has a checker
+}
+cpbase crash 'while (<STDIN>) {} print STDERR "checkpatch: crashed here\n"; exit 255;'
+rbase=cp-crash rhead=cp-crash-change run "a crashing checker" 1 "^    checkpatch: crashed here" "no errors"
+cpbase syntax 'sub {'
+rbase=cp-syntax rhead=cp-syntax-change run "a checker that doesn't compile" 1 "didn't run to the end" "no errors"
+cpbase stdout 'while (<STDIN>) {} print "checkpatch: needs a newer perl\n"; exit 1;'
+rbase=cp-stdout rhead=cp-stdout-change run "a checker that exits 1 reporting nothing" 1 "^    checkpatch: needs a newer perl" "no errors"
+cpbase signal 'kill "TERM", $$;'
+rbase=cp-signal rhead=cp-signal-change run "a checker killed by a signal" 1 ": exit 143$" "no errors"
+echo "ok - a checker that crashes, doesn't compile, exits 1 with no report or dies on a signal fails, with what it said"
+cpbase missing
+rbase=cp-missing rhead=cp-missing-change run "a merge base without a checker" 1 "Can't open perl script" "no errors"
+echo "ok - a merge base without scripts/checkpatch.pl fails"
 
 # CI runs `kernel-pr-check -C linux` from the directory that contains the
 # kernel checkout. The path has to still work after the tool cds in.

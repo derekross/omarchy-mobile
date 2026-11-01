@@ -9,7 +9,8 @@
 #   - every subject has a subsystem prefix ("clk: samsung: ...");
 #   - scripts/checkpatch.pl --strict on each commit, against that commit's
 #     bindings and MAINTAINERS: errors fail, warnings
-#     are listed;
+#     are listed, and a checker that is missing or doesn't run to the end
+#     fails with what it printed;
 #   - tools/pr-check's policy checks: identifiers, blobs;
 #   - with --build OUT: each touched C file builds with W=1 (arm64, LLVM,
 #     defconfig plus kernel/configs/omamobile.config), every touched
@@ -53,7 +54,7 @@ while (($#)); do
     -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
     --build) out=${2:?--build needs an output directory}; shift 2 ;;
     --merge) merge=1; shift ;;
-    -h|--help) sed -n '3,35p' "$self"; exit 0 ;;
+    -h|--help) sed -n '3,37p' "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -160,12 +161,15 @@ done
 for e in "$kernel"/Documentation/*; do
   [[ ${e##*/} == devicetree ]] || ln -s "$e" "$cpdir/tree/Documentation/${e##*/}"
 done
-cp_errors="" cp_warnings="" cp_count=0
+# A checker that is missing, can't run or crashes fails the check, with what
+# it said: its empty report is not a clean one.
+cp_errors="" cp_warnings="" cp_count=0 cp_broken=""
 for c in $commits; do
   rm -rf "$cpdir/tree/Documentation/devicetree" "$cpdir/tree/MAINTAINERS"
   docs=$(git ls-tree --name-only "$c" Documentation/devicetree MAINTAINERS)
   [[ -n $docs ]] && git archive "$c" $docs | tar -x -C "$cpdir/tree"
-  report=$(git format-patch -1 --stdout "$c" | perl "$cpdir/checker/scripts/checkpatch.pl" --root="$cpdir/tree" --strict --no-signoff --terse --show-types - 2>/dev/null)
+  report=$({ git format-patch -1 --stdout "$c" | perl "$cpdir/checker/scripts/checkpatch.pl" --root="$cpdir/tree" --strict --no-signoff --terse --show-types -; } 2>"$cpdir/stderr")
+  cp_status=$?
   short=$(git log -1 --format='%h %s' "$c")
   errors=$(grep -E ': ERROR:' <<<"$report" || true)
   [[ -n $errors ]] && cp_errors+="  $short"$'\n'"$(sed 's/^/    /' <<<"$errors")"$'\n'
@@ -174,9 +178,20 @@ for c in $commits; do
     cp_count=$((cp_count + $(wc -l <<<"$warnings")))
     cp_warnings+="#   $short"$'\n'"$(sed -E -e 's/^-:[0-9]+: /#     /' -e "s,$cpdir/tree/,," <<<"$warnings")"$'\n'
   fi
+  # checkpatch exits 1 when it reports something, 0 when it doesn't.
+  # Anything else, or a 1 with nothing reported, means it never finished:
+  # show what it said, on stderr and in any stdout line that isn't a
+  # diagnostic (some of its own failures print there).
+  if ((cp_status > 1)) || { ((cp_status == 1)) && [[ -z $errors$warnings ]]; }; then
+    cp_said=$({ grep -vE ': (ERROR|WARNING|CHECK):' <<<"$report"; cat "$cpdir/stderr"; } | sed -e '/^$/d' -e "s,$cpdir/,,g" -e 's/^/    /')
+    cp_broken+="  $short: exit $cp_status"$'\n'"${cp_said:+$cp_said$'\n'}"
+  fi
 done
-[[ -z $cp_errors ]] && pass "checkpatch --strict: no errors ($cp_count warnings and checks to read)" || fail "checkpatch --strict errors:
+[[ -n $cp_broken ]] && fail "checkpatch --strict didn't run to the end:
+${cp_broken%$'\n'}"
+[[ -n $cp_errors ]] && fail "checkpatch --strict errors:
 ${cp_errors%$'\n'}"
+[[ -z $cp_broken$cp_errors ]] && pass "checkpatch --strict: no errors ($cp_count warnings and checks to read)"
 # The warnings themselves, so a reviewer reads them without rerunning it.
 [[ -n $cp_warnings ]] && printf '%s' "$cp_warnings"
 
