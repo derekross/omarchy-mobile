@@ -1089,7 +1089,8 @@ marked `CLK_IS_CRITICAL`, built into the daily kernel's tree, Image
 `7f3674d21e92d758`, the release unchanged) with the palmtop's own daily
 modem modules and nothing held by hand: two more 600 s sessions, 1335 and
 1333 link cycles, no reset, 568 of 570 and 558 of 567 fixed. Every session
-before reset the palmtop. That kernel is the daily kernel from now on
+before reset the palmtop. A 30-minute session on that kernel followed: 3759 link
+cycles, no reset, 1763 of 1765 fixed. That kernel is the daily kernel from now on
 (the kit's Image pin in `logs/tegu-review-20261029/runners/lib.sh`).
 
 **G3-L1, the controller's own steps traced (2026-11-01, daily kernel).**
