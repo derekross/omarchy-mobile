@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # CPU frequency plan: cpufreq-dt on the ACPM DVFS clocks (cheetah / gs201)
 
-Status (2026-10-31): **C1, C3, C4 and C7 passed on the phone** (section 8;
+Status (2026-11-01): **C1, C2, C3, C4 and C7 passed on the phone** (section 8;
 release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`). Three schedutil policies
-up to 1803/1999/2252 MHz, six thermal zones, throttling holds an all-core
-load at 78-80 °C, Whisper runs about 2x faster, and an s2idle cycle resumes
-cleanly. Boost (the turbo levels) stays off for the first release; C2, C5
-and C6 haven't run. Kernel branch `omamobile-cpufreq` in
+up to 1803/1999/2252 MHz, the firmware runs every normal level it is asked
+for, six thermal zones, throttling holds an all-core load at 78-80 °C,
+Whisper runs about 2x faster, and an s2idle cycle resumes cleanly. Boost
+(the turbo levels) stays off for the first release; C5 and C6 haven't run. Kernel branch `omamobile-cpufreq` in
 `~/omamobile-kernel/wt-cpufreq`, four commits on `d15487384604` (the test
 kernel the phone ran: `phonetests` plus the s3c64xx and ACPM-defer fixes),
 built into `~/omamobile-kernel/out-cpufreq`, images in
@@ -429,7 +429,7 @@ tools/phone-ssh 'rtcwake -m freeze -s 20; for p in 0 4 6; do cat /sys/devices/sy
 
 ## 8. Results
 
-All on 2026-10-31, release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`, each
+On 2026-10-31 unless noted, release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`, each
 step approved by Derek.
 
 - **C1 passed.** Six zones (big, mid, little, gpu, isp, tpu) at 47-50 °C idle
@@ -449,12 +449,20 @@ step approved by Derek.
   ceilings settled at about 1598-1704 MHz little, 1024-1328 mid and
   1277-1426 big. No thermal, TMU or ACPM errors; 80 to 56 °C within 20 s
   after the load. The kill switch never triggered.
+- **C2 passed** (2026-11-01, same release). For every normal level of
+  policy6 (12 levels, 500-2252 MHz), policy4 (12 levels, 400-1999 MHz) and
+  policy0 (11 levels, 300-1803 MHz), `cpuinfo_cur_freq` (the firmware's
+  rate) matched the level set through `userspace`/`scaling_setspeed`. The
+  governors went back to schedutil, with no ACPM or cpufreq errors and
+  `ufshcd_err_handler` 0. `taskset -c 6 openssl speed -seconds 3 sha256`
+  under schedutil: 1414168.58k at 16 KiB blocks. There is no baseline from
+  before cpufreq, so the "about twice today's" expectation is unchecked; the
+  number is the reference for later kernels.
 - **C7 passed.** One 30 s s2idle (`rtcwake -m no` for the alarm, then
   `systemctl suspend`): `suspend_stats` success 1, fail 0; `omamobile-sleepd`
   logged the wake by IRQ 125 (the s2mpg12 PMIC, the RTC alarm). After
   resume all policies scaled, the zones read 48-51 °C, `ufshcd_err_handler` 0.
-- **Not run:** C2 (per-level firmware readback), C5 (all-core load on
-  battery), C6 (boost). Boost stays off for the first release: without a
+- **Not run:** C5 (all-core load on battery), C6 (boost). Boost stays off for the first release: without a
   BCL driver the turbo levels need C5 and C6 first.
 
 ## 9. After this
