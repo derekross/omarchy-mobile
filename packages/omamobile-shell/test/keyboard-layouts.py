@@ -4,8 +4,10 @@
 src/data/parsing.rs): known top-level keys, every button with one of text,
 keysym, modifier or action and only known fields, keysyms that xkbcommon
 knows (when libxkbcommon is there), every key in a view defined or a single
-character, rows that line up, and the action row in every view, its keys
-sending the keysyms hypr/phone.lua binds. The terminal layout is ours by
+character, rows that line up, the action row in every view, its keys
+sending the keysyms hypr/phone.lua binds, and the globe key sending
+XF86MediaLanguageMenu (the shell's language sheet) instead of opening
+squeekboard's popover (show_prefs). The terminal layout is ours by
 hand and gets the strict checks; every other layout is made by
 squeekboard/generate from squeekboard's own (its --check, also in test/all,
 proves the rest of each file is upstream's, which may type a multi-character
@@ -26,6 +28,7 @@ except ImportError:
 ACTION_ROW = "Mic Paste Emoji Hide"
 ACTION_KEYSYMS = {"Mic": "XF86Dictate", "Paste": "XF86Paste",
                   "Emoji": "XF86EmojiPicker", "Hide": "XF86Keyboard"}
+GLOBE_KEYSYM = "XF86MediaLanguageMenu"
 BUTTON_FIELDS = {"label", "icon", "outline", "text", "keysym", "action", "modifier"}
 MODIFIERS = {"Control", "Shift", "Lock", "Alt", "Mod1", "Mod2", "Mod3", "Mod4", "Mod5"}
 
@@ -88,6 +91,10 @@ for path in paths:
             fail(path, "button %s: modifier %r" % (bname, b["modifier"]))
         if strict and b.get("outline", "default") not in outlines:
             fail(path, "button %s: outline %r is defined" % (bname, b.get("outline")))
+    if buttons.get("preferences", {}).get("keysym") != GLOBE_KEYSYM:
+        fail(path, "the globe key (preferences) sends %s" % GLOBE_KEYSYM)
+    if any(b.get("action") == "show_prefs" for b in buttons.values()):
+        fail(path, "no key opens squeekboard's popover (show_prefs)")
     for bname, sym in ACTION_KEYSYMS.items():
         if buttons.get(bname, {}).get("keysym") != sym:
             fail(path, "%s sends %s" % (bname, sym))
