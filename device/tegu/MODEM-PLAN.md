@@ -1013,6 +1013,23 @@ power-on, so the next trace goes on the power-on path
 (`s51xx_pcie_restore_state()` and the link-up). The save-once change alone
 does not fix the hang.
 
+**G3-L1, save-once plus a write-only doorbell (2026-11-01, daily kernel).**
+Both changes together (cpif and the controller from the build tree of the
+v8/v9 traces, which drives the PHY from `tegu-pcie0-seq.h`; the tree that
+expects a separate PHY driver fails with "no PHY" and then "no PCIe
+endpoint for the ROM boot"): the CP came up ONLINE, the session ran 37
+power-off cycles, and the palmtop reset again, the last line right after a
+power-off ("kept the saved config"). So the hang has now landed at three
+different points (in `pci_save_state()`, at the doorbell after a power-on,
+after a power-off). The controller's own interrupt paths are guarded (the
+control interrupt is disabled synchronously and its handler checks
+`cfg_root_ok` under `cfg_lock`; the MSI queue interrupts are disabled before
+isolation), so the remaining suspect is an access by cpif itself to the
+modem's BAR window (shared memory, doorbell or MSI registers) racing a
+power-off from another path, which the controller cannot guard. Next:
+instrument cpif's BAR accesses with the link state at the time of the
+access.
+
 **G3-L1, the power-on trace (2026-11-01, daily kernel).** With the
 save-once build plus trace lines through `s5100_poweron_pcie()`, the session
 went through 53 power-off/power-on cycles (the previous build 3) and then
