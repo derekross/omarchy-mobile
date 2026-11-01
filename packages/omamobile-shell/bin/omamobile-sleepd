@@ -156,7 +156,9 @@ watch() {
       # session is frozen while the kernel takes it. Light the PIN pad here,
       # as that press would have (omamobile-keys ignores the press itself if
       # it does arrive, so the screen doesn't go straight back off).
-      if [[ $woke == *KEY_POWER* ]] && command -v omamobile-keys >/dev/null; then
+      # The key's gpio-keys label names the line: KEY_POWER on the Pixel 7
+      # Pro's device tree, "Power" on the Pixel 9a's.
+      if [[ $woke =~ [[:space:]](KEY_POWER|Power)$ ]] && command -v omamobile-keys >/dev/null; then
         log "a power-key wake: lighting the lock screen"
         omamobile-keys wake >/dev/null 2>&1 &
       fi

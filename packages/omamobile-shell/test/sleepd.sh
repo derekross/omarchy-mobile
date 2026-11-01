@@ -47,6 +47,7 @@ reset() {
   echo 0 >"$t/sys/power/suspend_stats/success"; echo 0 >"$t/sys/power/suspend_stats/fail"
   printf ' 145:          3          0  s2mpg12-pmic   0 Edge      rtc-alarm0\n' >"$t/proc/interrupts"
   printf ' 111:         76          1  gpa10   0 Edge      KEY_POWER\n' >>"$t/proc/interrupts"
+  printf ' 59:         12          0  gpa4   0 Edge      Power\n' >>"$t/proc/interrupts"
   rm -f "$t/wake_irq" "$t/sys/power/pm_wakeup_irq" "$t/on_resume" "$t/now_at" "$t/off_at" "$t/active" "$t/home/.local/state/omarchy/indicators/stay-awake"
 }
 # Watch until the fake clock reaches 1000 + $1.
@@ -124,6 +125,9 @@ grep -c '^omamobile-keys' "$t/log" >/dev/null && fail "an RTC wake doesn't light
 reset; echo 111 >"$t/wake_irq"; printf 'echo 0 >"%s"; echo true >"%s"\n' "$t/sys/class/backlight/panel/bl_power" "$t/dpms" >"$t/on_resume"; watch 700
 grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "a power-key wake asks omamobile-keys to light the PIN pad"
 grep -c 'a power-key wake: lighting the lock screen' "$t/out" >/dev/null || fail "the power-key wake is logged"
+# The Pixel 9a's device tree labels the key "Power", not KEY_POWER.
+reset; echo 59 >"$t/wake_irq"; printf 'echo 0 >"%s"; echo true >"%s"\n' "$t/sys/class/backlight/panel/bl_power" "$t/dpms" >"$t/on_resume"; watch 700
+grep -c '^omamobile-keys wake' "$t/log" >/dev/null || fail "a power-key wake labelled Power (the 9a) lights the PIN pad"
 # A failed suspend is logged and retried no sooner than 30 s later.
 reset
 fake systemctl 'echo "systemctl $* at $(cat "$T/clock")" >>"$T/log"
