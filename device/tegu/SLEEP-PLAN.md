@@ -533,7 +533,17 @@ with the cable in.
   first. That the PMIC's false events come from there is an inference,
   not a measurement. The device package's fix for now is a sleep hook
   that allows only WFI for the length of a sleep (`omamobile-device-tegu`
-  0.2.5, not yet run on the palmtop).
+  0.2.5, #255).
+
+  **Ten sleeps with the hook (2026-11-01, same release, device-tegu 0.2.5
+  installed from its branch).** `systemctl suspend` with a 60 s RTC alarm,
+  ten times: nine slept 55-61 s, entry to exit, and woke on IRQ 56 (the
+  alarm); the seventh's resume took longer than the 8 s the script waited
+  before measuring, so its length isn't known, but it woke and the hook
+  restored the states. `suspend_stats` 6 to 15 successes, 0 failures; no
+  UFS errors, no ACPM timeouts. The screen stayed lit through these sleeps
+  (`systemctl suspend` skips the shell's blanking), so no drain figure
+  from this run.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
