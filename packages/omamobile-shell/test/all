@@ -895,6 +895,11 @@ python3 -c 'import json; assert {"id": "omamobile.access"} in json.load(open("pr
 grep -c 'add_plugin omamobile.access' bin/omamobile-setup-user >/dev/null || fail "existing users get the permission sheet"
 grep -cx 'org.freedesktop.impl.portal.Access=omamobile;gtk' portal/hyprland-portals.conf >/dev/null || fail "Hyprland's portals.conf picks the sheet for Access only"
 ! grep -c '^default' portal/hyprland-portals.conf >/dev/null || fail "the override leaves the default portals alone"
+# The file chooser's backend must not itself use the portal (#277): the
+# session's GDK_DEBUG=portals / GTK_USE_PORTAL=1 made it wait 25 s on the main
+# portal, which was waiting for it.
+grep -cx 'UnsetEnvironment=GDK_DEBUG GTK_USE_PORTAL' systemd/user/xdg-desktop-portal-gnome-omamobile.conf >/dev/null \
+  || fail "xdg-desktop-portal-gnome runs without the session's portal variables"
 grep -cx 'DBusName=org.freedesktop.impl.portal.desktop.omamobile' portal/omamobile.portal >/dev/null || fail "omamobile.portal names the service"
 grep -cx 'BusName=org.freedesktop.impl.portal.desktop.omamobile' systemd/user/omamobile-portal-access.service >/dev/null || fail "the unit owns the bus name"
 if grep -n 'above_lock' hypr/phone.lua | grep -c 'omamobile-access' >/dev/null; then fail "the permission sheet never shows over the lock"; fi
