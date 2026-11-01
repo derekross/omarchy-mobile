@@ -1,0 +1,95 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/alpine-fetch.py's dependency resolution (no network): the script runs
+# against two synthetic APKINDEX archives served by a stand-in for urlopen
+# that refuses any other URL. A package or dependency with no package or
+# provider in either index must stop it before it downloads or prints
+# anything; minirootfs packages, providers (so:, /bin/sh), version
+# constraints and conflicts (!name) must not.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+
+cat > "$t/run.py" <<'EOF'
+import io, runpy, sys, tarfile, urllib.request
+
+script, log = sys.argv[1], sys.argv[2]
+cdn = "https://dl-cdn.alpinelinux.org/alpine/v3.22"
+index = {
+    "main": [
+        dict(P="a", V="1-r0", D="so:libb.so.1 c>=1.0 d~2 musl /bin/sh !x !y e"),
+        dict(P="b", V="2-r0", p="so:libb.so.1=2"),
+        dict(P="c", V="1.1-r0"),
+        dict(P="d", V="2.3-r0"),
+        dict(P="x", V="1-r0"),
+        dict(P="busybox-binsh", V="1-r0", p="/bin/sh cmd:sh=1"),
+        dict(P="musl", V="1-r0"),
+        dict(P="needs-ghost", V="1-r0", D="c ghost"),
+        dict(P="needs-ghost-lib", V="1-r0", D="so:libghost.so.1"),
+    ],
+    "community": [dict(P="e", V="5-r0")],
+}
+urls = {}
+for repo, entries in index.items():
+    for e in entries:
+        size = len(e["P"]) + 100
+        e["S"] = str(size)
+        urls[f"{cdn}/{repo}/aarch64/{e['P']}-{e['V']}.apk"] = b"\0" * size
+    data = ("\n\n".join("\n".join(f"{k}:{v}" for k, v in e.items()) for e in entries) + "\n").encode()
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("APKINDEX")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    urls[f"{cdn}/{repo}/aarch64/APKINDEX.tar.gz"] = buf.getvalue()
+
+def urlopen(url):
+    with open(log, "a") as f:
+        print(url, file=f)
+    if url not in urls:
+        raise OSError(f"test: no network ({url})")
+    return io.BytesIO(urls[url])
+
+urllib.request.urlopen = urlopen
+sys.argv = [script, "3.22.1", *sys.argv[3:]]
+runpy.run_path(script, run_name="__main__")
+EOF
+
+# The packages; leaves stdout, stderr, the URLs and the status in $t
+fetch() {
+  rm -rf "$t/apks"; : > "$t/urls"
+  status=0
+  python3 -I "$t/run.py" tools/alpine-fetch.py "$t/urls" "$t/apks" "$@" > "$t/out" 2> "$t/err" || status=$?
+}
+downloads() { { grep -v APKINDEX "$t/urls" || true; } | sed 's,.*/,,' | sort | tr '\n' ' '; }
+
+fetch a
+[[ $status == 0 ]] || { cat "$t/err"; fail "a resolves"; }
+want="$t/apks/a-1-r0.apk $t/apks/b-2-r0.apk $t/apks/c-1.1-r0.apk $t/apks/d-2.3-r0.apk $t/apks/e-5-r0.apk"
+what="a pulls b (so: provider), c (>=), d (~) and e (community)"
+[[ $(tr '\n' ' ' < "$t/out") == "$want " ]] || { cat "$t/out"; fail "$what"; }
+pass "$what"
+[[ $(downloads) == "a-1-r0.apk b-2-r0.apk c-1.1-r0.apk d-2.3-r0.apk e-5-r0.apk " ]] || fail "a downloads exactly what it prints"
+[[ $(stat -c %s "$t/apks/e-5-r0.apk") == 101 ]] || fail "e is written whole"
+pass "minirootfs packages (musl, /bin/sh's busybox-binsh) are skipped, not downloaded"
+pass "conflicts are not requirements: !x (in the index) is not downloaded, !y (not in it) does not fail"
+
+fetch musl
+[[ $status == 0 && ! -s $t/out && -z $(downloads) ]] || { cat "$t/err"; fail "a minirootfs package resolves to nothing"; }
+pass "a minirootfs package on the command line resolves to nothing"
+
+refuses() {  # $1: what, $2: the message, then the packages
+  local what=$1 msg=$2; shift 2
+  fetch "$@"
+  [[ $status != 0 ]] || fail "refuses $what"
+  grep -c -F -- "$msg" "$t/err" >/dev/null || { cat "$t/err"; fail "names what is missing for $what"; }
+  [[ ! -s $t/out ]] || { cat "$t/out"; fail "prints no paths for $what"; }
+  [[ -z $(downloads) ]] || fail "downloads nothing for $what ($(downloads))"
+  pass "refuses $what before downloading or printing anything"
+}
+refuses "a package no index has" "nope (needed by the command line)" a nope
+refuses "a dependency no index has" "ghost (needed by needs-ghost)" needs-ghost
+refuses "a so: dependency nothing provides" "so:libghost.so.1 (needed by needs-ghost-lib)" needs-ghost-lib
+refuses "a conflict asked for on the command line" "!x (needed by the command line)" '!x'
