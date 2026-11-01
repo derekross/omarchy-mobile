@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up probe, never default (HOST-MODE-PLAN.md stage 1): wires the USB
+ * controller to the Type-C port so TCPM owns the data role. The dwc3 becomes
+ * OTG with a role switch (default peripheral, so the gadget comes up exactly
+ * as before), and an OF graph links its port to the connector's port@0 (the
+ * high-speed lines). No VBUS: there is no vbus-supply, the connector stays
+ * power-role = "sink" (pd-disable, Rp sensing), and nothing here can source
+ * power. Host mode is only reachable by hand through
+ * /sys/class/usb_role/11210000.usb-role-switch/role, over Wi-Fi, with the
+ * cable out.
+ *
+ * Needs typec-test (the usb-typec@25 node is "okay") and battery-i2c-test
+ * (the bus) applied first. The connector has no label in zuma-husky.dts, so
+ * it is addressed through its parent bus; both endpoint labels are defined
+ * here, in the same overlay, so dtc -@ records them as local fixups and
+ * fdtoverlay resolves the two remote-endpoint phandles when it applies this.
+ */
+/dts-v1/;
+/plugin/;
+
+&usb_dwc3 {
+	dr_mode = "otg";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
+
+	port {
+		usb_dwc3_role: endpoint {
+			remote-endpoint = <&typec_role>;
+		};
+	};
+};
+
+&hsi2c_11 {
+	usb-typec@25 {
+		connector {
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					typec_role: endpoint {
+						remote-endpoint = <&usb_dwc3_role>;
+					};
+				};
+			};
+		};
+	};
+};

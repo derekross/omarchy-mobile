@@ -3,9 +3,10 @@
 #
 # husky-deadman-phone: the phone half of tools/husky-deadman. Runs ONE charger
 # bring-up step on the Pixel 8 Pro detached from SSH, under a dead-man switch
-# and a battery guard. Ported from tools/usbc-deadman-phone (cheetah); the
-# Type-C / USB data-switch parts are left out on purpose: on husky the USB
-# gadget is built in and nothing here loads tcpci_maxim (that is M6).
+# and a battery guard. Ported from tools/usbc-deadman-phone (cheetah). The
+# Type-C step (b4-tcpm, TYPEC-FAST-CHARGE-PLAN.md stage 4) is the port of
+# cheetah's b4a-tcpm: it may take the USB port away, so Wi-Fi (wlp1s0) is the
+# way in and the only precondition on the link.
 #
 #   1. refuse unless the preconditions hold (nothing is applied if not);
 #   2. arm the SoC watchdog (/dev/watchdog0 = 10060000.watchdog) with a feeder
@@ -26,30 +27,122 @@
 #
 # Usage (normally started by tools/husky-deadman):
 #   husky-deadman-phone run STEP [--confirm S] [--grace S] [--ilim UA] [--soak S]
-#                       [--no-watchdog] [--allow-soc]
+#                       [--no-watchdog] [--allow-soc] [--meter]
 #   husky-deadman-phone confirm | undo STEP | dump | status
+#   husky-deadman-phone baseline     read-only: CHG_DETAILS_00/01/02 with the
+#                                    cable out, 5 reads, kept for this boot
+#   husky-deadman-phone boot-undo    what husky-deadman-undo.service runs at
+#                                    the boot after a reset mid b5-host
 #
-# STEP: noop | b3-charger | wd-drill
+# STEP: noop | b3-charger | b4-tcpm | b5-host | wd-drill
 #   noop        applies nothing; exercises refuse/confirm/watchdog/undo.
 #   wd-drill    applies nothing and stops feeding the watchdog: the phone MUST
 #               reset by itself within ~15-20 s. Needs the user present.
 #   b3-charger  modprobe max77759_charger default_ilim_ua=UA temp_guard=1
 #               guard_psy=max170xx_battery.
+#   b4-tcpm     stop omamobile-usb-rescue, modprobe tcpci_maxim (pulls tcpci
+#               and tcpm; the DT keeps pd-disable: Rp sensing only, no PD).
+#               Needs Wi-Fi up, the Type-C node enabled (typec-test overlay)
+#               and unbound. Spends no boot retry by itself: only a watchdog
+#               reset does (one of slot B's 3). Two cases, see preflight_tcpm:
+#               charger-less (max77759_charger not loaded: tcpm only reports),
+#               or AFTER b3-charger in the same boot (b3-done present and
+#               default_ilim_ua > 0): the charger then follows the tcpm psy
+#               (online + current_max -> input limit 0xc2, offline -> mode OFF)
+#               and the guard logs tcpm/charger/battery every 10 s.
+#               Undo: modprobe -r tcpci_maxim tcpci tcpm, USBSW_CTRL 0x93 =
+#               0x09 if VBUS is valid, start omamobile-usb-rescue; then, if the
+#               charger was loaded by b3-charger, the b3 undo too (modprobe -r
+#               max77759_charger, restore the limits, mode 0x4 = charging off),
+#               so nothing is left unguarded. Either unload failing -> reset.
+#   b5-host     HOST-MODE-RUNBOOK.md stage (a), NOTHING ATTACHED but a passive
+#               USB-C meter: source 5 V on VBUS from husky's EXTERNAL boost in
+#               Google's order (kernel/google-modules/bms, branch
+#               android-gs-shusky-6.1-android16, max77759_usecase.c:
+#               gs101_standby_to_otg -> gs101_otg_enable default branch, the
+#               one stock husky's max77759,ext-otg-only takes):
+#                 1. charger MODE 0xb9 = 0x00 (Google's "mode=0x0 in MW" for
+#                    this use case; gs101_otg_mode returns early). Then the
+#                    CHG_DETAILS are compared with the cable-out baseline:
+#                    a change STOPS the run before any VBUS (item 4 below).
+#                 2. gs101_otg_bypass_enable: CHG_CNFG_11 0xc4 = 0x00 (OTG_VBYP
+#                    code for 5000 mV: stock husky has no max77759,usb-otg-mv,
+#                    so GS101_OTG_DEFAULT_MV 5000 -> (5000-5000)/50 = 0), then
+#                    CHG_CNFG_18 0xcb bit 3 OTG_V_PGM set (read-modify-write
+#                    of that bit only; CHGPROT 0xbf unlocked and relocked only
+#                    if the readback fails).
+#                 3. gs101_ext_mode(OTG_5_0V): MAX77759 GPIO5 "bst_on" high
+#                    (gpio-max77759 line "GPIO5", libgpiod gpioset), 5 ms.
+#                 4. gs101_ls_mode(1): load switch LSW1 = TCPC vendor register
+#                    EXTBST_CTRL 0x92 = 0x01 (whole byte), 30 ms, VBUS expected.
+#               gs101_ext_bst_mode (s2mpg14 GPIO4) is not done. Needs: Wi-Fi,
+#               a 'baseline' taken in this boot, b4-tcpm applied in this boot
+#               (tcpci_maxim bound, TCPM enabled the TCPC's VBUS monitor), the
+#               usb-role-test overlay (dwc3 role file, reads device),
+#               max77759_charger NOT loaded, the desktop cable OUT, CC_STATUS
+#               showing no partner Rp, 0x92 == 0, GPIO5 low, TCPC VBUS < 0.8 V,
+#               no undo marker from an earlier boot, libgpiod, and --meter: the
+#               operator's statement that an independent USB-C meter is on the
+#               port and read 0 V (the TCPC's 0x70 is the chip we drive, not
+#               an independent check). Guard, once a second: battery (as b3),
+#               VBUS outside 4.5..5.5 V (collapse below 4.0 V = short or
+#               overload; the 1 s poll is the ONLY overcurrent detection),
+#               battery discharge jump > 1 A over the pre-step value (a short),
+#               CC_STATUS 0x1d showing a source's Rp (something that can
+#               source got plugged in: undo at once), CHG_DETAILS_00/01/02
+#               leaving the baseline in their known fields, 0x92 changed under
+#               us, FAULT_STATUS 0x1f (logged only: no VBUS OCP bit is known),
+#               Wi-Fi dead. Undo, reverse order: 0x92 = 0x00, 20 ms, GPIO5
+#               low, readbacks, VBUS must fall below 0.8 V within 3 s (logged,
+#               not fatal), then 0xcb bit 3, 0xc4 and 0xb9 back to the saved
+#               values (gs101_otg_bypass_disable clears the bit). The soak
+#               ENDS IN THE UNDO: VBUS is never left on without the guard.
+#               --no-watchdog is refused (a dead tool must end in a reset,
+#               which runs boot-undo). One b5 per
+#               boot. Attached devices (--device) are NOT in this tool: dwc3
+#               stays in device role, nothing can enumerate; they go through
+#               the kernel path (regulator-fixed vbus-supply, TCPM) later.
+#               GPIO5 and 0x92 live in the PMIC and survive a SoC reset, so
+#               before its first write b5-host installs husky-deadman-undo
+#               .service (oneshot, ConditionPathExists= a marker in /var/lib)
+#               that runs boot-undo early in the NEXT boot and then removes
+#               itself; a clean undo removes it in this boot. If the phone
+#               freezes nothing runs: unplug, force a restart, 'boot-undo'.
 #
-# The only charger writes are in restore_charger (the undo path).
+# The charger writes are in restore_charger (the b3 undo path) and in b5-host
+# (0xb9, 0xc4, 0xcb bit 3, 0xbf only on a failed 0xcb readback, all saved
+# first and written back by the undo); the TCPC writes are USBSW_CTRL 0x93 =
+# 0x09 in the b4 undo path and EXTBST_CTRL 0x92 = 0x01 / 0x00 in b5-host.
 set -u
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 D=/run/husky-deadman
 LOG=/var/log/husky-deadman.log
-CHG=0x69
+CHG=0x69 TCPC=0x25
 PSY=/sys/class/power_supply/max170xx_battery
 WD=/dev/watchdog0
-confirm_s=90 grace_s=60 ilim=500000 use_wd=1 soak_s=600 allow_soc=0
+WIFI=wlp1s0
+RESCUE=omamobile-usb-rescue.service
+confirm_s=90 grace_s=60 ilim=500000 use_wd=1 soak_s=600 allow_soc=0 meter=0
 gpid=
+# b5-host: TCPC VBUS_VOLTAGE (mV) window while sourcing, the collapse level
+# (short/overload), the most VBUS allowed before the step (nothing sourcing),
+# and the discharge jump over the pre-step value that trips (a short).
+VB_MIN=4500 VB_MAX=5500 VB_COLLAPSE=4000 VB_IDLE_MAX=800 I_JUMP=1000000
+ROLE=/sys/class/usb_role/11210000.usb-role-switch/role
+# b5-host: the cable-out baseline of this boot (read-only 'baseline' command),
+# the boot-undo marker (persistent: /run is gone after a reset) and its unit.
+BASE=$D/baseline BASE_N=5
+MARK=/var/lib/husky-deadman/undo-pending
+UNDO_UNIT=/etc/systemd/system/husky-deadman-undo.service
+# OTG_VBYP code for 5000 mV (Google: max77759_otg_vbyp_mv_to_code, (mV-5000)/50)
+VBYP_5000=0x00
 
 # Guard limits (uV, uA, 0.1 C). The DT caps the float voltage at 4.2 V.
 V_TRIP=4300000 V_MIN=3000000 I_TRIP=1700000 T_MAX=450 T_MIN=50
+# b4-tcpm guard: consecutive 2 s reads (so 6 s) of USBSW_CTRL != 0x09 while
+# VBUS is valid, or of both links dead, before the trip
+SW_BAD_N=3
 # Preconditions
 SOC_MIN=30 SOC_MAX=80 START_V_MAX=4150000 START_T_MIN=100 START_T_MAX=400
 ILIM_MAX=900000
@@ -76,13 +169,307 @@ hexok() { [[ ${1:-} =~ ^0x[0-9a-fA-F]{1,2}$ ]]; }
 psy() { cat "$PSY/$1" 2>/dev/null; }                  # psy FILE
 udc_state() { cat /sys/class/udc/*/state 2>/dev/null || echo none; }
 charger_loaded() { lsmod | grep -q '^max77759_charger '; }
+tcpc_loaded() { lsmod | grep -qE '^(tcpci_maxim|tcpci|tcpm) '; }
+# usb0 keeps its carrier after an unplug, so the gadget state is the link test
+usb_up() { [[ $(udc_state) == configured ]]; }
+wifi_up() {
+  [[ $(cat /sys/class/net/$WIFI/carrier 2>/dev/null) == 1 ]] &&
+    ip -4 -o addr show dev $WIFI 2>/dev/null | grep -q ' inet '
+}
+# VBUS as the charger sees it: CHG_DETAILS_00.CHGIN_DTLS (bits 6:5) == 3
+vbus_valid() {
+  local v
+  v=$(rd $CHG 0xb5); hexok "$v" || return 1
+  (( ((v >> 5) & 3) == 3 ))
+}
+
+# ---- Type-C (b4-tcpm) ----
+# The I2C client of usb-typec@25 (needs the typec-test overlay), the tcpm
+# debugfs log and the power supply tcpm registers for it (tcpm.c names them
+# after the device: tcpm-source-psy-<bus>-0025).
+tcpc_dev() { echo "/sys/bus/i2c/devices/$BUS-0025"; }
+tcpm_log() { echo "/sys/kernel/debug/usb/tcpm-$BUS-0025/log"; }
+tcpm_psy() { echo "/sys/class/power_supply/tcpm-source-psy-$BUS-0025"; }
+# tcpm logs "Received hard reset" but also the states HARD_RESET_SEND/_START,
+# SNK_HARD_RESET_* (a VBUS dip during discovery) and CHECK_CONTAMINANT: all stop the step.
+TCPM_BAD_RE='hard[ _]reset|contaminant'
+tcpm_hard_resets() { local n; n=$(grep -ciE "$TCPM_BAD_RE" "$(tcpm_log)" 2>/dev/null); echo "${n:-0}"; }
+rescue_active() { systemctl is-active --quiet $RESCUE; }
+
+# The MAX77759 opens its USB2 data switch (TCPC vendor USBSW_CTRL 0x93) on
+# unplug and only a Type-C driver or the rescue service closes it; 0x09
+# connects D+/D-. Written only after the driver is gone, and only with VBUS.
+usbsw_restore() {
+  local sw
+  if vbus_valid; then
+    sw=$(rd $TCPC 0x93)
+    log "VBUS valid, USBSW_CTRL was $sw"
+    [[ $sw == 0x09 ]] || wr $TCPC 0x93 0x09
+    log "USBSW_CTRL now $(rd $TCPC 0x93) (0x09 = data connected)"
+  else
+    log "no valid VBUS (CHG_DETAILS_00 $(rd $CHG 0xb5)): USBSW_CTRL left as is"
+  fi
+}
+
+# ---- host mode (b5-host) ----
+# TCPC VBUS_VOLTAGE 0x70/0x71: 10 bits, 25 mV per LSB (include/linux/usb/
+# tcpci.h:159-161); Google reads it on this chip (tcpci_max77759.c:1426).
+# SMBus word reads are little-endian, so "w" gives the 16-bit value directly.
+# Valid only while POWER_CTRL 0x1c bit 6 (VBUS voltage monitor disable) is 0;
+# tcpci_maxim writes POWER_CTRL = 0 at init (tcpci_maxim_core.c:111-116).
+# Bits 11:10 are the TCPCI scale factor (x1, x2, x4; the TCPCI spec, not in
+# tcpci.h, which masks them off). A non-zero scale would under-read by 2 or
+# 4, so the reading counts as unreadable (-1) rather than guessed.
+vbus_mv() {
+  local w
+  w=$(i2cget -f -y "$BUS" $TCPC 0x70 w 2>/dev/null)
+  [[ $w =~ ^0x[0-9a-fA-F]{1,4}$ ]] || { echo -1; return 1; }
+  (( (w & 0xc00) == 0 )) || { echo -1; return 1; }
+  echo $(( (w & 0x3ff) * 25 ))
+}
+vbus_mon_on() { local p; p=$(rd $TCPC 0x1c); hexok "$p" && (( (p & 0x40) == 0 )); }
+# POWER_STATUS 0x1e bits: 4 SOURCING_VBUS, 3 VBUS_DET, 2 VBUS_PRES, 0 SINKING_VBUS (tcpci.h:96-103)
+pwr_status() { rd $TCPC 0x1e; }
+extbst() { rd $TCPC 0x92; }
+# The charger's detail registers and the fields mainline names in them
+# (include/linux/mfd/max77759.h:83-89): CHG_DETAILS_00 0xb5 CHGIN_DTLS bits
+# 6:5, CHG_DETAILS_01 0xb6 BAT_DTLS bits 6:4 and CHG_DTLS bits 3:0 (0..3 =
+# prequal/CC/CV/top-off, 8 = off), CHG_DETAILS_02 0xb7 CHGIN_STS bit 5. The
+# other bits are not named there and are logged, never compared.
+DETAILS="0xb5 0xb6 0xb7"
+det_mask() { case $1 in 0xb5) echo 0x60 ;; 0xb6) echo 0x7f ;; 0xb7) echo 0x20 ;; esac; }
+boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown; }
+base_val() { awk -v r="$1" '$1 == r && $2 != "unstable" {print $2}' $BASE 2>/dev/null; }
+base_ok() {   # a baseline from THIS boot, every register stable
+  [[ -f $BASE ]] && [[ $(awk '$1 == "boot" {print $2}' $BASE) == "$(boot_id)" ]] &&
+    ! grep -q unstable $BASE
+}
+# Prints nothing while every named field still reads as in the baseline,
+# else what moved. Derek (PR review): a guard tripping on an absolute value
+# (0xb1 was in every dump of the day) says nothing; compare with the baseline.
+chg_vs_baseline() {
+  local r m b v out=
+  for r in $DETAILS; do
+    m=$(det_mask "$r"); b=$(base_val "$r"); v=$(rd $CHG "$r")
+    if ! hexok "$b" || ! hexok "$v"; then out+="$r unreadable (now '$v', baseline '$b'); "
+    elif (( (v & m) != (b & m) )); then out+="$r $v vs baseline $b (fields $m); "
+    fi
+  done
+  echo "$out"
+}
+# Read-only. 5 reads of the details a second apart with the cable out, kept
+# in $BASE for this boot (boot_id). No write anywhere.
+baseline() {
+  local n r v rc=0
+  [[ -n "$BUS" ]] || { echo "refused: no i2c bus for 10cb0000.i2c"; return 1; }
+  [[ $(udc_state) != configured ]] || { echo "refused: USB gadget is configured, the cable is in"; return 1; }
+  vbus_valid && { echo "refused: charger CHG_DETAILS_00 $(rd $CHG 0xb5) says CHGIN valid: a cable is in"; return 1; }
+  wifi_up || { echo "refused: Wi-Fi is not up (the baseline is for the Wi-Fi-only b5-host)"; return 1; }
+  charger_loaded && { echo "refused: max77759_charger is loaded; b5-host runs charger-less, so must the baseline"; return 1; }
+  mkdir -p $D; rm -f $BASE $BASE.reads
+  for n in $(seq 1 $BASE_N); do
+    for r in $DETAILS; do v=$(rd $CHG "$r"); hexok "$v" || v='?'; echo "$r $v" >> $BASE.reads; done
+    (( n < BASE_N )) && sleep 1
+  done
+  {
+    echo "boot $(boot_id)"; echo "taken $(date '+%F %T')"; echo "mode $(rd $CHG 0xb9)"; echo "udc $(udc_state)"
+    for r in $DETAILS; do
+      v=$(awk -v r="$r" '$1 == r {print $2}' $BASE.reads | sort -u | tr '\n' ' ')
+      if [[ $v =~ ^0x[0-9a-fA-F]{2}\ $ ]]; then echo "$r ${v% }"; else echo "$r unstable $v"; rc=1; fi
+    done
+  } > $BASE.tmp
+  mv $BASE.tmp $BASE; rm -f $BASE.reads
+  log "baseline (read-only, cable out, charger-less, $BASE_N reads): $(tr '\n' ';' < $BASE)"
+  (( rc )) && log "baseline has an unstable register: b5-host will refuse until a stable one is taken"
+  return $rc
+}
+
+# CC_STATUS 0x1d (include/linux/usb/tcpci.h:87-93): bit 5 TOGGLING (result
+# not valid), bit 4 TERM (1 = this port presents Rd, as a sink does), bits
+# 3:2 CC2 and 1:0 CC1. With Rd presented, 1/2/3 = the partner's Rp default /
+# 1.5 A / 3 A, 0 = open (tcpci_to_typec_cc, tcpci.h:246-261, as tcpci.c's
+# tcpci_get_cc decodes it). Prints nothing when both CCs are open, "?" when
+# unreadable or toggling, else what is seen. A partner Rp is a SOURCE on the
+# port: with our VBUS on that is two sources back to back.
+cc_partner() {
+  local c c1 c2 out=
+  c=$(rd $TCPC 0x1d); hexok "$c" || { echo "?"; return; }
+  (( c & 0x20 )) && { echo "?"; return; }
+  (( (c & 0x10) == 0 )) && { echo "term=Rp($c)"; return; }
+  c1=$(( c & 0x3 )); c2=$(( (c >> 2) & 0x3 ))
+  (( c1 )) && out+="cc1=Rp$c1 "
+  (( c2 )) && out+="cc2=Rp$c2 "
+  echo "${out% }"
+}
+
+# CHG_CNFG_18 0xcb bit 3 OTG_V_PGM (Google's max77759_A1_regs.h and
+# max77759_v0p65_121919_regs.h, both (0x1 << 3); mainline's header names only
+# WDTEN bit 0 there). Read-modify-write of that bit only. Whether 0xcb takes
+# the write without the CHGPROT unlock (0xbf bits 3:2 = 11, mainline
+# unlock_prot_regs, max77759_charger.c:145-149) is not known: the readback
+# decides, and 0xbf goes back to what it was.
+otg_v_pgm() {   # otg_v_pgm 1|0
+  local cur new p0
+  cur=$(rd $CHG 0xcb); hexok "$cur" || { log "cannot read CHG_CNFG_18 0xcb (got '$cur')"; return 1; }
+  new=$(printf '0x%02x' $(( $1 ? (cur | 0x08) : (cur & 0xf7) )))
+  [[ $new == "$cur" ]] && { log "CHG_CNFG_18 0xcb already $cur (OTG_V_PGM=$1)"; return 0; }
+  wr $CHG 0xcb "$new" || return 1
+  [[ $(rd $CHG 0xcb) == "$new" ]] && return 0
+  p0=$(rd $CHG 0xbf); hexok "$p0" || { log "0xcb readback failed and CHGPROT 0xbf unreadable"; return 1; }
+  log "0xcb readback $(rd $CHG 0xcb), not $new: CHGPROT unlock (0xbf $p0 -> bits 3:2 set), retry, relock to $p0"
+  wr $CHG 0xbf "$(printf '0x%02x' $(( p0 | 0x0c )))" || return 1
+  wr $CHG 0xcb "$new"
+  wr $CHG 0xbf "$p0"
+  [[ $(rd $CHG 0xcb) == "$new" ]] || { log "0xcb still $(rd $CHG 0xcb) after the unlock"; return 1; }
+}
+# restore_bypass_mode FILE: 0xcb bit 3, 0xc4 and 0xb9 back to FILE's saved values
+restore_bypass_mode() {
+  local s rc=0
+  s=$(awk '$1 == "0xcb" {print $2}' "$1")
+  if hexok "$s"; then otg_v_pgm $(( (s & 0x08) != 0 )) || rc=1; else log "no saved 0xcb in $1"; rc=1; fi
+  s=$(awk '$1 == "0xc4" {print $2}' "$1")
+  if hexok "$s"; then [[ $(rd $CHG 0xc4) == "$s" ]] || wr $CHG 0xc4 "$s" || rc=1; else log "no saved 0xc4 in $1"; rc=1; fi
+  s=$(awk '$1 == "0xb9" {print $2}' "$1")
+  if hexok "$s"; then
+    [[ $(rd $CHG 0xb9) == "$s" ]] || { log "restoring charger MODE 0xb9 to the saved $s"; wr $CHG 0xb9 "$s" || rc=1; }
+  else log "no saved 0xb9 in $1"; rc=1; fi
+  log "bypass/mode now vs saved: 0xc4 $(rd $CHG 0xc4) / $(awk '$1 == "0xc4" {print $2}' "$1"), 0xcb $(rd $CHG 0xcb) / $(awk '$1 == "0xcb" {print $2}' "$1"), 0xb9 $(rd $CHG 0xb9) / $(awk '$1 == "0xb9" {print $2}' "$1")"
+  return $rc
+}
+
+# GPIO5 and 0x92 keep their values across a SoC reset (they live in the
+# PMIC), so a crash mid-step leaves the port hot through the reboot. Before
+# its first write b5-host installs a oneshot unit for the NEXT boot, gated on
+# a persistent marker that also carries the saved registers; a clean undo
+# removes both in this boot, boot-undo removes both after it ran. Without the
+# marker the unit's ConditionPathExists= skips it, and boot-undo itself exits
+# at once, so a normal boot never runs it.
+undo_unit_install() {
+  # the unit first, the marker last: a failure here leaves no marker behind
+  mkdir -p "$(dirname $MARK)" || return 1
+  cat > $UNDO_UNIT <<EOF || { log "cannot write $UNDO_UNIT; no marker written"; rm -f $UNDO_UNIT; return 1; }
+[Unit]
+Description=husky-deadman: switch the external VBUS boost off after a reset mid b5-host
+ConditionPathExists=$MARK
+DefaultDependencies=no
+RequiresMountsFor=$(dirname $MARK) /usr/local/bin
+After=sysinit.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=basic.target
+
+[Service]
+Type=oneshot
+# boot-undo waits up to 60 s for the I2C bus and 10 s for the gpiochip
+TimeoutStartSec=180
+ExecStart=/usr/local/bin/husky-deadman-phone boot-undo
+
+[Install]
+WantedBy=basic.target
+EOF
+  if ! systemctl daemon-reload || ! systemctl enable --quiet husky-deadman-undo.service; then
+    log "cannot enable $UNDO_UNIT: unit removed, no marker written"
+    rm -f $UNDO_UNIT; systemctl daemon-reload 2>/dev/null
+    return 1
+  fi
+  if ! { echo "boot $(boot_id)"; echo "installed $(date '+%F %T')"; cat $D/host.saved; } > $MARK.tmp || ! mv $MARK.tmp $MARK; then
+    log "cannot write $MARK: unit disabled and removed again"
+    rm -f $MARK.tmp; undo_unit_remove
+    return 1
+  fi
+  sync
+  log "boot undo armed: $UNDO_UNIT runs boot-undo at the next boot while $MARK exists"
+}
+undo_unit_remove() {
+  rm -f $MARK
+  systemctl disable --quiet husky-deadman-undo.service 2>/dev/null
+  rm -f $UNDO_UNIT
+  systemctl daemon-reload 2>/dev/null
+  sync
+  log "boot undo disarmed: $MARK and $UNDO_UNIT removed"
+}
+boot_undo() {
+  local i rc=0
+  [[ -f $MARK ]] || { log "boot-undo: no $MARK, nothing to do"; return 0; }
+  log "boot-undo: marker from boot $(awk '$1 == "boot" {print $2}' $MARK) (installed $(awk '$1 == "installed" {print $2, $3}' $MARK)), now boot $(boot_id): switching the external boost off"
+  for i in $(seq 1 30); do BUS=$(i2c_bus) && [[ -n $BUS ]] && break; sleep 2; done
+  [[ -n "$BUS" ]] || { log "boot-undo: no i2c bus after 60 s: marker kept, undo by hand"; return 1; }
+  gpio_chip >/dev/null || modprobe gpio_max77759 2>/dev/null
+  for i in $(seq 1 10); do gpio_chip >/dev/null && break; sleep 1; done
+  log "boot-undo: before: 0x92 $(extbst), gpio5 $(command -v gpioget >/dev/null && gpio5_get || echo 'no gpioget'), 0xb9 $(rd $CHG 0xb9), 0xc4 $(rd $CHG 0xc4), 0xcb $(rd $CHG 0xcb), POWER_STATUS $(pwr_status), VBUS $(vbus_mv) mV$(vbus_mon_on || echo ' (monitor off: not valid)'), CC $(cc_partner)"
+  tcpc_loaded && log "boot-undo: WARNING a Type-C driver is loaded at boot (it is blocked, not expected); 0x92 is written anyway, mainline never touches it"
+  # Two outcomes kept apart: the port COLD (0x92 reads 0x00 and GPIO5 reads
+  # 0: the marker's job is done, it goes) and the charger registers restored
+  # (if not, they are left for the person in $LEFT, the marker does not stay
+  # for them, or the unit would fire at every boot for registers it cannot
+  # write, e.g. with the charger driver loaded).
+  local cold=1 LEFT
+  LEFT="$(dirname "$MARK")/registers-not-restored"
+  wr $TCPC 0x92 0x00 || cold=0
+  [[ $(extbst) == 0x00 ]] || { log "boot-undo: 0x92 readback $(extbst), not 0x00"; cold=0; }
+  sleep 0.02
+  if gpio_chip >/dev/null && command -v gpioset >/dev/null && command -v gpioget >/dev/null; then
+    gpio5_set 0 || { log "boot-undo: GPIO5 readback is not 0 (got $(gpio5_get))"; cold=0; }
+  else
+    log "boot-undo: no max77759 gpiochip or no libgpiod: GPIO5 NOT cleared"; cold=0
+  fi
+  if charger_loaded; then
+    log "boot-undo: max77759_charger is loaded: 0xcb/0xc4/0xb9 left alone (its regmap cache would not see the writes)"; rc=1
+  else
+    restore_bypass_mode $MARK || rc=1
+  fi
+  log "boot-undo: after: 0x92 $(extbst), gpio5 $(command -v gpioget >/dev/null && gpio5_get || echo '?'), VBUS $(vbus_mv) mV, port cold: $cold, registers restored: $(( !rc ))"
+  if (( cold )); then
+    if (( rc )); then
+      cp $MARK "$LEFT" 2>/dev/null
+      log "boot-undo: port is cold but the charger registers were NOT all restored: the saved values are in $LEFT, restore them by hand (0xcb bit 3, 0xc4, 0xb9) with the charger driver unloaded"
+    fi
+    undo_unit_remove
+  else
+    log "boot-undo: the port is NOT proven cold: $MARK kept, the unit runs again at the next boot; finish by hand (i2cset 0x25 0x92 0x00, gpioset GPIO5=0) and then remove $MARK"
+    rc=1
+  fi
+  return $rc
+}
+role_now() { cat $ROLE 2>/dev/null || echo none; }
+# MAX77759 GPIO5 = gpio-max77759 line 0, named "GPIO5" (gpio-max77759.c:24);
+# the chip is the "max77759-gpio" MFD cell's gpiochip. Lines are set through
+# libgpiod's gpioset (v2: holds the line until killed); the output value lives
+# in the PMIC's MaxQ GPIO control register and the driver has no .free hook,
+# so the value stays after the request is released. gpioget must use --as-is:
+# without it libgpiod turns the line into an input.
+gpio_chip() {
+  local d
+  for d in /sys/bus/platform/devices/max77759-gpio*/gpiochip*; do
+    [[ -e $d ]] && { echo "/dev/$(basename "$d")"; return 0; }
+  done
+  return 1
+}
+gpio5_get() {   # prints 0/1, or "?" on failure
+  local v
+  v=$(gpioget --as-is -c "$(gpio_chip)" GPIO5 2>/dev/null | sed 's/.*=//; s/^inactive$/0/; s/^active$/1/')
+  [[ $v == 0 || $v == 1 ]] && echo "$v" || echo "?"
+}
+gpio5_set() {   # gpio5_set 0|1; returns 1 when the readback disagrees
+  local chip
+  chip=$(gpio_chip) || { log "no max77759 gpiochip"; return 1; }
+  log "gpioset -c $chip GPIO5=$1 (bst_on)"
+  gpioset -c "$chip" GPIO5="$1" &
+  local p=$!
+  # gpioset v2 holds the line while it runs, and gpioget cannot read a held
+  # line, so: hold 0.2 s, release, read back. In b5-host this makes bst_on
+  # high for about 0.2 s (logged) before 0x92, not Google's 5 ms.
+  sleep 0.2
+  kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
+  [[ $(gpio5_get) == "$1" ]]
+}
 
 # ---- charger registers: saved before the step, written back by the undo ----
 # 0xbb CHG_CNFG_02 (fast-charge current), 0xbd CNFG_04 (float voltage),
 # 0xc2 CNFG_09 (input current limit): written back. 0xb9 CNFG_00 (mode): only
 # logged. 0xbf (CHGPROT), 0xc5 CNFG_12 and 0xcb CNFG_18 are also written by
-# the driver's probe but need the CHGPROT unlock; they are recorded, never
-# written, so a person can compare them (dump).
+# the driver's probe but need the CHGPROT unlock; the b3 path records them,
+# never writes them, so a person can compare them (dump). b5-host's own
+# writes (0xb9, 0xc4, 0xcb bit 3) are saved in host.saved and the marker.
 SAVE_RESTORE="0xbb 0xbd 0xc2"
 SAVE_ONLY="0xb9 0xbf 0xc5 0xcb"
 save_charger() {
@@ -128,9 +515,17 @@ preflight() {   # preflight STEP
   [[ -n "$BUS" ]] || { refuse "no i2c bus for 10cb0000.i2c"; return 1; }
   command -v i2cget >/dev/null || { refuse "i2c-tools missing"; return 1; }
   [[ -d $PSY ]] || { refuse "no battery power supply $PSY (load max17042_battery)"; return 1; }
-  [[ $(udc_state) == configured ]] || { refuse "USB gadget not configured ($(udc_state))"; return 1; }
+  if [[ $1 == b4-tcpm || $1 == b5-host ]]; then
+    # the step may take the USB port away: Wi-Fi is the way in, USB is not required
+    wifi_up || { refuse "Wi-Fi is not up ($WIFI needs carrier and an IPv4 address): it is the only way in during $1"; return 1; }
+  else
+    [[ $(udc_state) == configured ]] || { refuse "USB gadget not configured ($(udc_state))"; return 1; }
+  fi
   [[ $ilim =~ ^[0-9]+$ ]] && (( ilim <= ILIM_MAX )) || { refuse "--ilim '$ilim' must be a number up to $ILIM_MAX"; return 1; }
-  charger_loaded && { refuse "max77759_charger is already loaded"; return 1; }
+  if [[ $1 == b5-host ]] && charger_loaded; then
+    refuse "max77759_charger is loaded: b5-host sources VBUS with MODE 0xb9 untouched and the charger's CHGIN may see that 5 V (Google keeps MODE 0 while on the external boost); the driver also owns the bypass registers 0xc4/0xcb through a cached regmap. Not proven safe together: reboot without b3-charger first"; return 1
+  fi
+  [[ $1 != b4-tcpm && $1 != b5-host ]] && charger_loaded && { refuse "max77759_charger is already loaded"; return 1; }
   # the recovery boot depends on the charger being blocked at boot (the drill proves it)
   if [[ $1 != noop ]]; then
     grep -qsE '^(install|blacklist) max77759_charger( |$)' /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf ||
@@ -138,8 +533,14 @@ preflight() {   # preflight STEP
   fi
   [[ $1 == noop || $1 == wd-drill ]] && return 0
   lsmod | grep -q '^max77759 ' || { refuse "max77759 (MFD) not loaded"; return 1; }
-  lsmod | grep -qE '^(tcpci_maxim|tcpci|tcpm) ' && { refuse "a Type-C driver is loaded (that is M6)"; return 1; }
-  [[ -e $D/b3-done ]] && { refuse "b3-charger already ran in this boot: reboot first (the MFD register cache no longer matches the chip)"; return 1; }
+  if [[ $1 == b3-charger ]]; then
+    tcpc_loaded && { refuse "a Type-C driver is loaded: run b3-charger before b4-tcpm"; return 1; }
+    [[ -e $D/b3-done ]] && { refuse "b3-charger already ran in this boot: reboot first (the MFD register cache no longer matches the chip)"; return 1; }
+  elif [[ $1 == b5-host ]]; then
+    preflight_host || return 1
+  else
+    preflight_tcpm || return 1
+  fi
   v=$(psy voltage_now); t=$(psy temp); s=$(psy capacity)
   [[ $v =~ ^[0-9]+$ && $t =~ ^-?[0-9]+$ && $s =~ ^[0-9]+$ ]] || { refuse "battery readings unreadable (v='$v' t='$t' soc='$s')"; return 1; }
   (( v >= V_MIN && v <= V_TRIP )) || { refuse "voltage_now $v uV is not sane"; return 1; }
@@ -155,6 +556,93 @@ preflight() {   # preflight STEP
   return 0
 }
 
+# b4-tcpm preconditions. The charger may be loaded or not (the plan allows
+# charger + tcpm together): with it loaded, max77759_charger follows the
+# tcpm-source power supply (psy_work_item): online and current_max 0 (default
+# Rp, the only case with pd-disable on today's sources) -> its own
+# default_ilim_ua; online and current_max > 0 (Rp 1.5/3 A) -> that value,
+# up to the register range, NOT clamped at 900 mA; offline -> mode OFF (no
+# charging, the phone runs from the battery). So default_ilim_ua must not be
+# 0 (the charger would switch off on the desktop port), and the 1.7 A battery
+# trip stays the limit on what an Rp 3 A source can push: the DT caps the
+# battery current at 1.485 A anyway.
+preflight_tcpm() {
+  local p
+  tcpc_loaded && { refuse "tcpci_maxim/tcpci/tcpm already loaded: b4-tcpm applies nothing (undo b4-tcpm to unload)"; return 1; }
+  [[ -e $D/b4-done ]] && { refuse "b4-tcpm already ran in this boot: reboot first (the TCPC was re-initialised by the driver)"; return 1; }
+  grep -qsE '^(install|blacklist) tcpci_maxim( |$)' /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf ||
+    { refuse "tcpci_maxim is not blocked in modprobe.d: a reset would boot with the Type-C driver autoloading"; return 1; }
+  [[ -d $(tcpc_dev) ]] || { refuse "no I2C client $(tcpc_dev): the DTB lacks the typec-test overlay (usb-typec@25 is disabled)"; return 1; }
+  [[ -e $(tcpc_dev)/driver ]] && { refuse "$(tcpc_dev) is already bound to $(basename "$(readlink -f "$(tcpc_dev)/driver")")"; return 1; }
+  rescue_active || { refuse "$RESCUE is not active: start it first (the undo restarts it, and its state must be known)"; return 1; }
+  # Charger + tcpm together is allowed only when b3-charger loaded the charger
+  # in this boot (b3-done: the saved registers and the mode-off undo are ours)
+  # and default_ilim_ua > 0 (with 0, tcpm online + current_max 0 would switch
+  # the charger OFF). The b4 undo then also runs the b3 undo (see revert).
+  if charger_loaded; then
+    [[ -e $D/b3-done ]] || { refuse "max77759_charger is loaded but not by b3-charger in this boot (no b3-done): the undo does not own it; reboot, then b3-charger before b4-tcpm"; return 1; }
+    p=$(cat /sys/module/max77759_charger/parameters/default_ilim_ua 2>/dev/null)
+    [[ $p =~ ^[0-9]+$ ]] && (( p > 0 )) || { refuse "max77759_charger default_ilim_ua is '$p': with tcpm up and default Rp the charger would switch off"; return 1; }
+    log "case: charger + tcpm. max77759_charger loaded by b3-charger with default_ilim_ua=$p: tcpm online + current_max 0 keeps that limit; Rp 1.5/3 A raises 0xc2 to that value (battery trip $I_TRIP uA stays; the b4 undo also undoes b3)"
+  else
+    log "case: charger-less. tcpm only reports; input limit register 0xc2 stays as the bootloader left it"
+  fi
+  [[ $(rd $TCPC 0x93) == 0x09 ]] || { refuse "USBSW_CTRL 0x93 is $(rd $TCPC 0x93), not 0x09 before the step (rescue not done, or no VBUS)"; return 1; }
+  return 0
+}
+
+# b5-host preconditions. The Type-C driver must be up (b4-tcpm in this boot):
+# TCPM initialised the TCPC (POWER_CTRL 0 = VBUS voltage monitor on, alerts
+# unmasked, USBSW 0x93 handled) and its log shows what it makes of VBUS
+# appearing on an unattached sink (tcpm.c _tcpm_pd_vbus_on has no case for
+# SNK_UNATTACHED/TOGGLING: no state change expected). The dwc3 role file is
+# the usb-role-test overlay. Nothing may be sourcing or sinking VBUS: the
+# desktop cable is out. 0x92 must read 0 and GPIO5 low (no half-applied
+# state from a crashed run: a watchdog reset does not clear either).
+preflight_host() {
+  local v p
+  [[ -e $D/b5-done ]] && { refuse "b5-host already ran in this boot: reboot first"; return 1; }
+  ((use_wd)) || { refuse "--no-watchdog is not allowed for b5-host: a dead tool must end in a reset, which runs boot-undo"; return 1; }
+  ((meter)) || { refuse "no --meter: stage (a) is gated on an independent USB-C meter on the port reading 0 V now (the TCPC's 0x70 is the chip we drive); put it on, read it, and say so with --meter"; return 1; }
+  [[ -e $MARK ]] && { refuse "$MARK exists: an earlier b5-host did not finish its undo (or boot-undo failed); run 'husky-deadman-phone boot-undo' by hand, check the dump, then remove the marker"; return 1; }
+  [[ -e $(dirname $MARK)/registers-not-restored ]] && { refuse "$(dirname $MARK)/registers-not-restored exists: a boot-undo left 0xcb/0xc4/0xb9 unrestored; restore them by hand from that file, compare with the dump, then remove it"; return 1; }
+  base_ok || { refuse "no stable cable-out baseline from this boot ($BASE): run 'husky-deadman-phone baseline' (read-only) first; the charger guard is defined against it"; return 1; }
+  [[ -e $D/b4-done ]] && tcpc_loaded && [[ -e $(tcpc_dev)/driver ]] ||
+    { refuse "b4-tcpm has not run in this boot (b4-done, tcpci_maxim bound): b5-host needs TCPM owning the TCPC"; return 1; }
+  [[ -d /sys/class/typec/port0 ]] || { refuse "no /sys/class/typec/port0"; return 1; }
+  [[ $(cat /sys/class/typec/port0/power_role 2>/dev/null) == "[sink]" ]] ||
+    { refuse "typec port0 power_role is '$(cat /sys/class/typec/port0/power_role 2>/dev/null)', expected '[sink]' (the connector must still be sink-only; TCPM must not also drive VBUS)"; return 1; }
+  [[ -e $ROLE ]] || { refuse "no $ROLE: the DTB lacks the usb-role-test overlay"; return 1; }
+  [[ $(role_now) == device ]] || { refuse "dwc3 role is '$(role_now)', not device (a host toggle is still applied)"; return 1; }
+  [[ $(udc_state) != configured ]] || { refuse "USB gadget is configured: the desktop cable is still in. Unplug it (Wi-Fi is the way in)"; return 1; }
+  lsmod | grep -q '^gpio_max77759 ' || [[ -n $(gpio_chip) ]] || { refuse "gpio-max77759 is not loaded (modprobe gpio_max77759): GPIO5 bst_on is its line 0"; return 1; }
+  gpio_chip >/dev/null || { refuse "no gpiochip under /sys/bus/platform/devices/max77759-gpio*"; return 1; }
+  command -v gpioset >/dev/null && command -v gpioget >/dev/null ||
+    { refuse "libgpiod tools missing (pacman -S libgpiod): gpioset/gpioget drive GPIO5"; return 1; }
+  gpioget --help 2>&1 | grep -q -- '--as-is' || { refuse "gpioget has no --as-is (libgpiod v1?): v2 is required, or the readback would turn GPIO5 into an input"; return 1; }
+  v=$(gpio5_get)
+  [[ $v == 0 ]] || { refuse "GPIO5 (bst_on) reads '$v', expected 0 (inactive) before the step"; return 1; }
+  v=$(extbst); hexok "$v" || { refuse "cannot read TCPC EXTBST_CTRL 0x92 (got '$v')"; return 1; }
+  [[ $v == 0x00 ]] || { refuse "TCPC EXTBST_CTRL 0x92 is $v, expected 0x00 before the step"; return 1; }
+  vbus_mon_on || { refuse "TCPC POWER_CTRL 0x1c = $(rd $TCPC 0x1c): VBUS voltage monitor is disabled (bit 6), no VBUS reading possible"; return 1; }
+  p=$(pwr_status); hexok "$p" || { refuse "cannot read TCPC POWER_STATUS (got '$p')"; return 1; }
+  (( (p & 0x15) == 0 )) || { refuse "TCPC POWER_STATUS $p: VBUS present/sourcing/sinking (bits 4,2,0). Nothing may be on VBUS before the step"; return 1; }
+  v=$(vbus_mv)
+  [[ $v =~ ^[0-9]+$ ]] || { refuse "TCPC VBUS_VOLTAGE 0x70 unreadable"; return 1; }
+  (( v <= VB_IDLE_MAX )) || { refuse "TCPC VBUS_VOLTAGE reads $v mV with nothing attached (limit $VB_IDLE_MAX): something is sourcing, or the ADC is not trustworthy"; return 1; }
+  vbus_valid && { refuse "charger CHG_DETAILS_00 $(rd $CHG 0xb5) says CHGIN valid: a cable is in"; return 1; }
+  v=$(rd $CHG 0xb9); hexok "$v" || { refuse "cannot read charger MODE 0xb9"; return 1; }
+  (( (v & 0x8) == 0 )) || { refuse "charger MODE 0xb9 = $v has a boost bit set (0x8/0x9/0xa/0xc/0xd): the internal boost is on, not our path"; return 1; }
+  v=$(cc_partner)
+  [[ -z $v ]] || { refuse "TCPC CC_STATUS 0x1d = $(rd $TCPC 0x1d) ($v): a partner presents a source's Rp, or the reading is not valid. Nothing that can source may be on the port (the meter must be passive)"; return 1; }
+  v=$(chg_vs_baseline)
+  [[ -z $v ]] || { refuse "CHG_DETAILS differ from this boot's baseline before the step: $v. Take a new baseline (cable out) and compare"; return 1; }
+  v=$(rd $CHG 0xcb); hexok "$v" && (( v & 0x08 )) && log "note: CHG_CNFG_18 0xcb = $v already has OTG_V_PGM (bit 3) set before the step; it is saved and put back as is by the undo"
+  [[ $(rd $CHG 0xc4) == "$VBYP_5000" ]] || log "note: CHG_CNFG_11 0xc4 = $(rd $CHG 0xc4), not $VBYP_5000; it is saved and put back by the undo"
+  log "stage (a): nothing attached but the passive meter. VBUS is read from the TCPC once a second; a > $I_JUMP uA discharge jump, a partner Rp on CC, or the details leaving the baseline trip the undo"
+  return 0
+}
+
 # ---- steps ----
 apply() {
   case "$1" in
@@ -167,6 +655,90 @@ apply() {
       sleep 2
       charger_loaded || return 1
       [[ -d /sys/class/power_supply/max77759-charger ]] || { log "max77759_charger loaded but no max77759-charger power_supply: the probe failed"; return 1; } ;;
+    b4-tcpm)
+      echo "0x93 $(rd $TCPC 0x93)" > $D/tcpc.saved
+      log "saved TCPC USBSW_CTRL: $(cat $D/tcpc.saved); tcpm log hard resets so far: n/a (no port yet)"
+      touch $D/b4-done
+      log "systemctl stop $RESCUE (so its 2 s poll cannot race the driver's first USBSW_CTRL write)"
+      systemctl stop $RESCUE || return 1
+      # the package blocklist has blacklist lines only; --ignore-install is
+      # needed only if someone added an install ... /bin/false line
+      if grep -qsE '^install tcpci_maxim( |$)' /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf; then
+        log "modprobe --ignore-install tcpci_maxim (DT keeps pd-disable; TCPM takes the port, expect one USB re-enumeration)"
+        modprobe --ignore-install tcpci_maxim || return 1
+      else
+        log "modprobe tcpci_maxim (DT keeps pd-disable; TCPM takes the port, expect one USB re-enumeration)"
+        modprobe tcpci_maxim || return 1
+      fi
+      sleep 5
+      tcpc_loaded || return 1
+      [[ -e $(tcpc_dev)/driver ]] || { log "tcpci_maxim loaded but $(tcpc_dev) is unbound: the probe failed"; return 1; }
+      [[ -d /sys/class/typec/port0 ]] || { log "no /sys/class/typec/port0: tcpm did not register the port"; return 1; }
+      [[ -d $(tcpm_psy) ]] || { log "no $(tcpm_psy): the charger has nothing to follow"; return 1; }
+      log "typec port0: power_role '$(cat /sys/class/typec/port0/power_role 2>/dev/null)' data_role '$(cat /sys/class/typec/port0/data_role 2>/dev/null)' power_operation_mode '$(cat /sys/class/typec/port0/power_operation_mode 2>/dev/null)'"
+      log "tcpm psy: online $(cat "$(tcpm_psy)/online" 2>/dev/null) current_max $(cat "$(tcpm_psy)/current_max" 2>/dev/null) uA; USBSW_CTRL $(rd $TCPC 0x93); charger 0xc2 $(rd $CHG 0xc2); hard resets $(tcpm_hard_resets)"
+      (( $(tcpm_hard_resets) == 0 )) || { log "hard reset in the tcpm log right after the probe"; return 1; } ;;
+    b5-host)
+      # Google's order (max77759_usecase.c, gs101_standby_to_otg:985-996 ->
+      # gs101_otg_enable default branch 833-857): MODE stays 0 for this use
+      # case (gs101_otg_mode:729-737 returns early with ext_otg_only), the
+      # bypass registers (gs101_otg_bypass_enable:370-383), bst_on high
+      # (gs101_ext_mode:220-250), 5 ms, LSW1 closed through EXTBST_CTRL
+      # (gs101_ls_mode:144-160), 30 ms, then VBUS is expected.
+      local i0 v p n d t0
+      i0=$(psy current_now)
+      [[ $i0 =~ ^-?[0-9]+$ ]] || { log "battery current unreadable ('$i0')"; return 1; }
+      echo "$i0" > $D/b5.ibase
+      {
+        echo "0x92 $(extbst)"; echo "0xc4 $(rd $CHG 0xc4)"; echo "0xcb $(rd $CHG 0xcb)"
+        echo "0xb9 $(rd $CHG 0xb9)"; echo "0xbf $(rd $CHG 0xbf)"
+        echo "0xb5 $(rd $CHG 0xb5)"; echo "0xb6 $(rd $CHG 0xb6)"; echo "0xb7 $(rd $CHG 0xb7)"
+        echo "0x1d $(rd $TCPC 0x1d)"; echo "0x1e $(pwr_status)"; echo "0x1c $(rd $TCPC 0x1c)"
+        echo "0x1f $(rd $TCPC 0x1f)"; echo "0x24 $(i2cget -f -y "$BUS" $TCPC 0x24 w 2>/dev/null)"
+        echo "vbus_mv $(vbus_mv)"; echo "gpio5 $(gpio5_get)"; echo "role $(role_now)"; echo "ibase $i0"
+      } > $D/host.saved
+      log "saved before b5-host: $(tr '\n' ' ' < $D/host.saved); baseline: $(tr '\n' ';' < $BASE)"
+      touch $D/b5-done
+      # the boot-undo unit goes in BEFORE the first write
+      undo_unit_install || { log "cannot arm the boot undo: nothing written"; return 1; }
+      # Step 1: MODE 0x00. With the bootloader's 0x05 (buck + charger on) the
+      # charger would charge the pack from our own 5 V (seen 2026-11-01 21:33,
+      # CHG_DTLS in 0xb1). Google runs the external boost with MODE 0 (the
+      # "5-1: mode=0x0 in MW, EXT_B=1, LS1=1" comment, usecase.c:945-955).
+      log "charger MODE 0xb9 $(rd $CHG 0xb9) -> 0x00 while the external boost sources VBUS; restored by the undo"
+      wr $CHG 0xb9 0x00 || { log "cannot write charger MODE"; return 1; }
+      [[ $(rd $CHG 0xb9) == 0x00 ]] || { log "charger MODE readback $(rd $CHG 0xb9), not 0x00"; return 1; }
+      sleep 0.2
+      log "with MODE 0x00 (no VBUS yet): 0xb5 $(rd $CHG 0xb5) 0xb6 $(rd $CHG 0xb6) 0xb7 $(rd $CHG 0xb7)"
+      d=$(chg_vs_baseline)
+      if [[ -n $d ]]; then
+        log "MODE 0x00 alone moved CHG_DETAILS off the cable-out baseline: $d. Stopping BEFORE any VBUS: the guard is defined against the cable-out baseline and has to be re-derived against the MODE-0 reading above once that is reviewed (HOST-MODE-RUNBOOK.md, item 4)"
+        return 1
+      fi
+      # Step 2: the bypass registers, Google's gs101_otg_bypass_enable
+      log "bypass: CHG_CNFG_11 0xc4 $(rd $CHG 0xc4) -> $VBYP_5000 (OTG_VBYP code for 5000 mV), then CHG_CNFG_18 0xcb bit 3 OTG_V_PGM set; both restored by the undo"
+      wr $CHG 0xc4 $VBYP_5000 || { log "cannot write 0xc4"; return 1; }
+      [[ $(rd $CHG 0xc4) == "$VBYP_5000" ]] || { log "0xc4 readback $(rd $CHG 0xc4), not $VBYP_5000"; return 1; }
+      otg_v_pgm 1 || { log "cannot set OTG_V_PGM in 0xcb"; return 1; }
+      # Step 3 and 4: bst_on, 5 ms, LSW1, 30 ms
+      t0=$(date +%s%N)
+      gpio5_set 1 || { log "GPIO5 readback is not 1 after gpioset (got $(gpio5_get))"; return 1; }
+      sleep 0.005
+      log "bst_on high for $(( ($(date +%s%N) - t0) / 1000000 )) ms before 0x92 (Google: 5 ms; longer here because gpioset must hold, then release, then be read back)"
+      wr $TCPC 0x92 0x01 || return 1
+      v=$(extbst); [[ $v == 0x01 ]] || { log "EXTBST_CTRL readback $v, not 0x01"; return 1; }
+      sleep 0.03
+      # settle: up to 1 s for VBUS to enter the window
+      for n in 1 2 3 4 5; do
+        v=$(vbus_mv); p=$(pwr_status)
+        log "VBUS after ${n}00 ms: $v mV, POWER_STATUS $p, CC_STATUS $(rd $TCPC 0x1d), FAULT_STATUS $(rd $TCPC 0x1f), battery i=$(psy current_now) uA (before $i0)"
+        [[ $v =~ ^[0-9]+$ ]] && (( v >= VB_MIN && v <= VB_MAX )) && break
+        sleep 0.1
+      done
+      [[ $v =~ ^[0-9]+$ ]] && (( v >= VB_MIN && v <= VB_MAX )) || { log "VBUS $v mV is outside $VB_MIN..$VB_MAX mV after the sequence: no 5 V from the external boost on this path"; return 1; }
+      d=$(cc_partner); [[ -z $d ]] || { log "CC_STATUS shows a partner ($d) right after VBUS came up"; return 1; }
+      d=$(chg_vs_baseline); [[ -z $d ]] || { log "CHG_DETAILS left the baseline right after VBUS came up: $d (the charger sees its own 5 V?)"; return 1; }
+      log "VBUS up: $v mV (the meter is the real reading: write it down); tcpm log tail: $(tail -3 "$(tcpm_log)" 2>/dev/null | tr '\n' '|')" ;;
     *) log "unknown step $1"; return 1 ;;
   esac
 }
@@ -184,16 +756,155 @@ revert() {
         return 1
       fi
       restore_charger || { log "charging is NOT confirmed off (mode readback is not 0x4)"; return 1; } ;;
+    b4-tcpm)
+      # Type-C first (the switch is written only once the driver is gone), then
+      # the charger if b3-charger loaded it in this boot: a loaded charger must
+      # not be left at a TCPM-derived input limit with nothing guarding it.
+      # A charger loaded some other way (no b3-done) is left alone and logged.
+      local rc=0
+      log "modprobe -r tcpci_maxim tcpci tcpm (charger loaded: $(charger_loaded && echo yes || echo no), b3-done: $([[ -e $D/b3-done ]] && echo yes || echo no))"
+      modprobe -r tcpci_maxim tcpci tcpm
+      if tcpc_loaded; then
+        log "a Type-C module did NOT unload: $(lsmod | awk '/^(tcpci_maxim|tcpci|tcpm) / {printf "%s ", $1}')"
+        systemctl start $RESCUE
+        rc=1
+      else
+        usbsw_restore
+        log "systemctl start $RESCUE"
+        systemctl start $RESCUE || log "WARNING: $RESCUE did not start"
+      fi
+      if charger_loaded && [[ -e $D/b3-done ]]; then
+        log "charger was loaded by b3-charger: running the b3-charger undo too (charging ends off)"
+        revert b3-charger || rc=1
+      elif charger_loaded; then
+        log "WARNING: max77759_charger is loaded but not by b3-charger (no b3-done): left alone at its last input limit 0xc2 $(rd $CHG 0xc2), mode 0xb9 $(rd $CHG 0xb9)"
+      fi
+      log "undo done (rc $rc): USBSW_CTRL $(rd $TCPC 0x93), udc $(udc_state), wifi $(wifi_up && echo up || echo down), charger loaded: $(charger_loaded && echo yes || echo no)"
+      return $rc ;;
+    b5-host)
+      # Google's off order (usecase.c:1199-1204, ls_mode(0) then ext_mode(0);
+      # gs101_otg_bypass_disable:385-389 clears OTG_V_PGM): load switch open
+      # (0x92 = 0x00, also the TCPC driver's clear-on-toggle value), 20 ms,
+      # bst_on low, VBUS fall, then 0xcb bit 3, 0xc4 and 0xb9 back to the
+      # saved values. The dwc3 role is never changed by this version; if
+      # someone set it to host by hand it goes back first.
+      local rc=0 v n saved=$D/host.saved
+      [[ -f $saved ]] || { saved=$MARK; log "no $D/host.saved (new boot?): restoring from $MARK"; }
+      if [[ $(role_now) == host ]]; then
+        log "echo device > $ROLE"
+        echo device > $ROLE || { log "cannot set the dwc3 role back to device"; rc=1; }
+      fi
+      wr $TCPC 0x92 0x00 || rc=1
+      v=$(extbst); [[ $v == 0x00 ]] || { log "EXTBST_CTRL readback $v, not 0x00"; rc=1; }
+      sleep 0.02
+      gpio5_set 0 || { log "GPIO5 readback is not 0 after gpioset (got $(gpio5_get))"; rc=1; }
+      for n in 1 2 3; do
+        sleep 1
+        v=$(vbus_mv)
+        [[ $v =~ ^[0-9]+$ ]] && (( v <= VB_IDLE_MAX )) && break
+      done
+      log "VBUS ${n} s after the undo: $v mV (expected <= $VB_IDLE_MAX; bleed/discharge behaviour of this path is unknown, so this is logged, not fatal; the meter must read 0 V)"
+      if [[ -f $saved ]]; then
+        restore_bypass_mode "$saved" || rc=1
+      else
+        log "no saved registers anywhere: 0xcb bit 3 cleared blind, 0xc4 and 0xb9 left as they are"
+        otg_v_pgm 0 || rc=1
+      fi
+      log "undo done (rc $rc): 0x92 $(extbst), gpio5 $(gpio5_get), CC $(cc_partner), role $(role_now), POWER_STATUS $(pwr_status), udc $(udc_state), wifi $(wifi_up && echo up || echo down)"
+      if (( rc == 0 )); then undo_unit_remove; else log "undo NOT complete: $MARK stays, husky-deadman-undo.service runs boot-undo at the next boot"; fi
+      return $rc ;;
   esac
+  return 0
+}
+
+# b5-host guard, once a second: VBUS window and collapse, a partner Rp on CC
+# (a source got plugged in), the discharge jump (a short), the charger
+# details leaving the cable-out baseline, 0x92 changed under us, FAULT_STATUS
+# logged (no VBUS OCP bit exists in tcpci.h or Google's vendor header for
+# this chip), Wi-Fi dead SW_BAD_N reads in a row.
+host_guard() {
+  local v p f i0 i c
+  c=$(cc_partner)
+  if [[ $c == "?" ]]; then
+    ccbad=$((ccbad + 1))
+    (( ccbad >= SW_BAD_N )) && { echo "CC_STATUS 0x1d unreadable or toggling $ccbad times ($(rd $TCPC 0x1d))" > $D/trip; return 1; }
+  elif [[ -n $c ]]; then
+    echo "CC_STATUS 0x1d $(rd $TCPC 0x1d): a partner presents a source's Rp ($c) while we source: unplug it" > $D/trip; return 1
+  else
+    ccbad=0
+  fi
+  v=$(vbus_mv); p=$(pwr_status); f=$(rd $TCPC 0x1f)
+  if [[ $v =~ ^[0-9]+$ ]]; then
+    vbad=0
+    if (( v < VB_COLLAPSE )); then echo "VBUS collapsed to $v mV (< $VB_COLLAPSE): short or overload" > $D/trip; return 1
+    elif (( v < VB_MIN || v > VB_MAX )); then echo "VBUS $v mV outside $VB_MIN..$VB_MAX" > $D/trip; return 1
+    fi
+  else
+    vbad=$((vbad + 1))
+    (( vbad >= SW_BAD_N )) && { echo "TCPC VBUS_VOLTAGE unreadable $vbad times" > $D/trip; return 1; }
+  fi
+  [[ $(extbst) == 0x01 ]] || { echo "EXTBST_CTRL 0x92 is $(extbst), not 0x01: the load switch was changed under us" > $D/trip; return 1; }
+  c=$(chg_vs_baseline)
+  [[ -z $c ]] || { echo "charger details left the cable-out baseline while sourcing: $c" > $D/trip; return 1; }
+  i0=$(cat $D/b5.ibase 2>/dev/null); i=$(psy current_now)
+  if [[ $i0 =~ ^-?[0-9]+$ && $i =~ ^-?[0-9]+$ ]] && (( i0 - i > I_JUMP )); then
+    echo "battery discharge jumped $(( i0 - i )) uA over the pre-step value with nothing attached (short on VBUS?)" > $D/trip; return 1
+  fi
+  [[ $f != 0x00 ]] && hexok "$f" && log "FAULT_STATUS 0x1f = $f (bit 1 VCONN_OC, bit 7 ALL_REG_RST_TO_DEFAULT are the known ones; logged, not a trip)"
+  if ! wifi_up; then
+    linkbad=$((linkbad + 1))
+    (( linkbad >= SW_BAD_N )) && { echo "$WIFI dead $linkbad reads in a row" > $D/trip; return 1; }
+  else
+    linkbad=0
+  fi
+  echo "vbus=${v}mV pwr=$p cc=$(rd $TCPC 0x1d) fault=$f 0x92=$(extbst) dtls=$(rd $CHG 0xb5)/$(rd $CHG 0xb6)/$(rd $CHG 0xb7) wifi=$(wifi_up && echo up || echo down)" > $D/guard.tcpc
   return 0
 }
 
 # ---- guard: reads the battery every 2 s while the step is applied ----
 # A breach, or 3 failed reads in a row, writes $D/trip; the main loop undoes.
-guard() {
-  local bad=0 v t i
+# For b4-tcpm it also watches the TCPC: a hard reset in the tcpm log trips at
+# once; USBSW_CTRL != 0x09 while VBUS is valid, or usb0 and wlp1s0 both dead,
+# trip after SW_BAD_N reads in a row.
+tcpc_guard() {   # returns 1 and writes $D/trip on a breach
+  local sw
+  if (( $(tcpm_hard_resets) > 0 )); then
+    echo "hard reset in the tcpm log ($(grep -iE "$TCPM_BAD_RE" "$(tcpm_log)" 2>/dev/null | tail -1))" > $D/trip; return 1
+  fi
+  sw=$(rd $TCPC 0x93)
+  # VBUS dropping must NOT reset the counter (a discovery hard reset is a VBUS dip):
+  # only a good switch value clears it.
+  if [[ $sw == 0x09 ]]; then
+    swbad=0
+  elif vbus_valid; then
+    swbad=$((swbad + 1))
+    if (( swbad >= SW_BAD_N )); then echo "USBSW_CTRL $sw != 0x09 with VBUS valid, $swbad reads in a row" > $D/trip; return 1; fi
+  fi
+  if ! usb_up && ! wifi_up; then
+    linkbad=$((linkbad + 1))
+    if (( linkbad >= SW_BAD_N )); then echo "usb0 (udc $(udc_state)) and $WIFI both dead, $linkbad reads in a row" > $D/trip; return 1; fi
+  else
+    linkbad=0
+  fi
+  echo "sw=$sw udc=$(udc_state) wifi=$(wifi_up && echo up || echo down) hr=$(tcpm_hard_resets)" > $D/guard.tcpc
+  return 0
+}
+
+guard() {   # guard STEP
+  local bad=0 v t i swbad=0 linkbad=0 vbad=0 ccbad=0 n=0 period=2
+  [[ $1 == b5-host ]] && period=1
   while :; do
+    if [[ $1 == b4-tcpm ]]; then tcpc_guard || return 1; fi
+    if [[ $1 == b5-host ]]; then
+      host_guard || return 1
+      (( n++ % 5 == 0 )) && log "b5: $(cat $D/guard.tcpc) battery i=$(psy current_now) uA v=$(psy voltage_now) uV t=$(psy temp)"
+    fi
     v=$(psy voltage_now); t=$(psy temp); i=$(psy current_now)
+    # b4 with the charger loaded: every 10 s (5 reads) a line of evidence in
+    # the log: what tcpm hands over, what the charger did with it, the battery
+    if [[ $1 == b4-tcpm ]] && charger_loaded && (( n++ % 5 == 0 )); then
+      log "b4+charger: tcpm psy online $(cat "$(tcpm_psy)/online" 2>/dev/null) current_max $(cat "$(tcpm_psy)/current_max" 2>/dev/null) uA; charger 0xc2 $(rd $CHG 0xc2) 0xb9 $(rd $CHG 0xb9); battery i=$i uA v=$v uV t=$t"
+    fi
     if [[ $v =~ ^[0-9]+$ && $t =~ ^-?[0-9]+$ && $i =~ ^-?[0-9]+$ ]]; then
       bad=0
       if   (( v > V_TRIP ));  then echo "voltage $v uV > $V_TRIP" > $D/trip; return 1
@@ -207,8 +918,8 @@ guard() {
       bad=$((bad + 1))
       if (( bad >= 3 )); then echo "battery unreadable 3 times (v='$v' t='$t' i='$i')" > $D/trip; return 1; fi
     fi
-    echo "$(date +%T) v=$v t=$t i=$i" > $D/guard.last
-    sleep 2
+    echo "$(date +%T) v=$v t=$t i=$i $(cat $D/guard.tcpc 2>/dev/null)" > $D/guard.last
+    sleep $period
   done
 }
 
@@ -312,8 +1023,13 @@ run() {
   local step="$1" rc
   mkdir -p $D
   guard_kill
-  rm -f $D/confirm $D/result $D/trip $D/guard.last
-  log "=== step $step: confirm ${confirm_s}s, grace ${grace_s}s, soak ${soak_s}s, watchdog $use_wd, ilim $ilim; udc $(udc_state); battery v=$(psy voltage_now) t=$(psy temp) soc=$(psy capacity)"
+  rm -f $D/confirm $D/result $D/trip $D/guard.last $D/guard.tcpc
+  log "=== step $step: confirm ${confirm_s}s, grace ${grace_s}s, soak ${soak_s}s, watchdog $use_wd, ilim $ilim; udc $(udc_state); wifi $(wifi_up && echo up || echo down); battery v=$(psy voltage_now) t=$(psy temp) soc=$(psy capacity)"
+  if [[ $step == b4-tcpm ]]; then
+    log "b4-tcpm spends NO boot retry by itself (no reboot, no slot change); only a watchdog reset does, and each reset spends one of slot B's 3 boots. USB may drop: the confirmation must come over Wi-Fi ($WIFI)"
+  elif [[ $step == b5-host ]]; then
+    log "b5-host stage (a): sources 5 V on VBUS from the external boost (MODE 0, bypass 0xc4/0xcb, GPIO5 bst_on, TCPC 0x92 = 0x01) with NOTHING on the port but a passive meter. The desktop cable must be OUT; the confirmation comes over Wi-Fi ($WIFI). A reset does NOT switch the boost off (the PMIC keeps GPIO5 and 0x92): husky-deadman-undo.service runs boot-undo at the next boot; if the phone freezes, unplug first, force a restart, and run 'husky-deadman-phone boot-undo' first thing"
+  fi
   preflight "$step" || return 1
   if ((use_wd)); then
     wd_arm || { refuse "cannot open $WD, held by: $(wd_holders) (stop that, or --no-watchdog)"; return 1; }
@@ -338,7 +1054,7 @@ run() {
     final_reset "$step"
     return 1
   fi
-  guard &
+  guard "$step" &
   gpid=$!
   echo "$gpid" > $D/guard.pid
   wait_confirm "$confirm_s"; rc=$?
@@ -357,6 +1073,16 @@ run() {
     done
     guard_kill
     if [[ -e $D/trip ]]; then trip_undo "$step"; return 1; fi
+    if [[ $step == b5-host ]]; then
+      # a hot port is never left without the 1 s poll: the soak ends in the undo
+      log "=== step $step SOAKED clean; switching VBUS off now (stage (a) ends in the undo, nothing stays applied)"
+      wd_extend $(( grace_s + 20 ))
+      if ! revert "$step"; then final_reset "$step"; return 1; fi
+      wd_disarm
+      log "=== step $step SOAKED and UNDONE: VBUS off"
+      echo soaked > $D/result
+      return 0
+    fi
     wd_disarm
     log "=== step $step SOAKED clean; left applied"
     echo soaked > $D/result
@@ -377,12 +1103,20 @@ run() {
 
 dump() {
   local r
-  echo "i2c bus ${BUS:-none}; udc $(udc_state); modules: $(lsmod | awk '/max77759|tcpci|tcpm|max17042/ {printf "%s ", $1}')"
+  echo "i2c bus ${BUS:-none}; udc $(udc_state); wifi $WIFI $(wifi_up && echo up || echo down); $RESCUE $(systemctl is-active $RESCUE 2>/dev/null); modules: $(lsmod | awk '/max77759|tcpci|tcpm|max17042/ {printf "%s ", $1}')"
   echo "battery: v=$(psy voltage_now) uV i=$(psy current_now) uA t=$(psy temp) (0.1 C) soc=$(psy capacity) % status=$(psy status)"
   [[ -f $D/guard.last ]] && echo "guard last: $(cat $D/guard.last)"
   if [[ -n "$BUS" ]]; then
     echo "charger 0x69 (read only):"
     for r in 0xb5 0xb6 0xb9 0xbb 0xbd 0xbf 0xc2 0xc5 0xcb; do echo "  $r = $(rd $CHG $r)"; done
+    echo "tcpc 0x25 (read only): 0x1d CC_STATUS = $(rd $TCPC 0x1d), 0x1e POWER_STATUS = $(rd $TCPC 0x1e), 0x93 USBSW_CTRL = $(rd $TCPC 0x93) (0x09 = data connected)"
+    echo "tcpc host (read only): 0x92 EXTBST_CTRL = $(rd $TCPC 0x92), 0x1c POWER_CTRL = $(rd $TCPC 0x1c), 0x1f FAULT_STATUS = $(rd $TCPC 0x1f), 0x70 VBUS = $(vbus_mv) mV$(vbus_mon_on || echo ' (monitor disabled: not valid)'), CC partner: $(v=$(cc_partner); echo "${v:-none}"); charger 0xc4 = $(rd $CHG 0xc4) 0xcb = $(rd $CHG 0xcb) (bit 3 OTG_V_PGM); gpio5 bst_on = $(command -v gpioget >/dev/null && gpio5_get || echo 'no gpioget'); dwc3 role $(role_now)"
+    echo "charger details 0xb5/0xb6/0xb7 = $(rd $CHG 0xb5)/$(rd $CHG 0xb6)/$(rd $CHG 0xb7); baseline this boot: $(base_ok && tr '\n' ';' < $BASE || echo none); boot-undo marker: $([[ -e $MARK ]] && echo "PRESENT ($MARK)" || echo none)"
+    [[ -d $(tcpc_dev) ]] && echo "typec client $(tcpc_dev): driver $(basename "$(readlink -f "$(tcpc_dev)/driver" 2>/dev/null)" 2>/dev/null || echo none)"
+  fi
+  if [[ -d /sys/class/typec/port0 ]]; then
+    echo "typec port0: power_role '$(cat /sys/class/typec/port0/power_role 2>/dev/null)' data_role '$(cat /sys/class/typec/port0/data_role 2>/dev/null)' power_operation_mode '$(cat /sys/class/typec/port0/power_operation_mode 2>/dev/null)'"
+    [[ -d $(tcpm_psy) ]] && echo "tcpm psy: online $(cat "$(tcpm_psy)/online" 2>/dev/null) current_max $(cat "$(tcpm_psy)/current_max" 2>/dev/null) uA voltage_now $(cat "$(tcpm_psy)/voltage_now" 2>/dev/null) uV; hard resets $(tcpm_hard_resets)"
   fi
 }
 
@@ -399,6 +1133,8 @@ while (($#)); do
     --soak) soak_s="${2:?}"; shift ;;
     --no-watchdog) use_wd=0 ;;
     --allow-soc) allow_soc=1 ;;
+    --meter) meter=1 ;;
+    --device|--no-device) echo "$1 is gone: b5-host is stage (a) only, nothing attached; devices go through the kernel path (HOST-MODE-RUNBOOK.md)" >&2; exit 1 ;;
     *) echo "unknown option $1" >&2; exit 1 ;;
   esac
   shift
@@ -411,5 +1147,7 @@ case "$cmd" in
   undo) revert "$step" ;;
   dump) dump ;;
   status) cat $D/result 2>/dev/null || echo none ;;
-  *) echo "usage: husky-deadman-phone run|confirm|undo|dump|status" >&2; exit 1 ;;
+  baseline) baseline ;;
+  boot-undo) boot_undo ;;
+  *) echo "usage: husky-deadman-phone run|confirm|undo|dump|status|baseline|boot-undo" >&2; exit 1 ;;
 esac

@@ -212,7 +212,7 @@ So the layout is consistent with husky's [verified, read-only, on files]: the ma
 
 - The bring-up used a modprobe block by hand and an overlay each time, not the package. Once the package ships `omamobile-max77759.conf`, delete the local `/etc/modprobe.d/omamobile-battery-test.conf`: a file in `/etc` of the same name would replace the package's and its later changes would not apply.
 - `modprobe -r max77759_charger` was used four times (by the tool's undo). CONTRIBUTING warns about unloading bring-up modules; for this driver the unload worked every time, but note that the driver has no remove function and leaves charging on when unloaded, which is why the undo forces the mode to 0x4 explicitly.
-- No Type-C work, no charger limits above the conservative ones, no JEITA, no PCA9468, no wireless, no OTG.
+- No Type-C work, no charger limits above the conservative ones, no JEITA, no PCA9468, no wireless. OTG (sourcing 5 V on the port from the external boost) has a draft runbook, [HOST-MODE-RUNBOOK.md](HOST-MODE-RUNBOOK.md), with the `b5-host` and `baseline` steps of the dead-man tool; nothing in it runs until the maintainer says go.
 
 ## 11. Open questions, in the order they matter
 
@@ -225,7 +225,7 @@ So the layout is consistent with husky's [verified, read-only, on files]: the ma
 
 ## 12. Files
 
-In this repository: `device/husky/overlays/battery-clk-test.dtso`, `battery-i2c-test.dtso`, `gauge-model.dtso`, `gauge-model-atl.dtso`, `pack-eeprom-test.dtso` (all under `device/husky/overlays/`), `tools/gen-gauge-overlay.py`, `tools/husky-deadman`, `tools/husky-deadman-phone`, and the package changes (USB rescue, blocklist) in #250. Kernel side: kernel #163 (the bus) and #154 (panel size, which the on-screen keyboard needs).
+In this repository: `device/husky/overlays/battery-clk-test.dtso`, `battery-i2c-test.dtso`, `gauge-model.dtso`, `gauge-model-atl.dtso`, `pack-eeprom-test.dtso`, `typec-test.dtso`, `usb-role-test.dtso` (all under `device/husky/overlays/`), `tools/gen-gauge-overlay.py`, `tools/husky-deadman`, `tools/husky-deadman-phone` (with `tests/husky-deadman`), [HOST-MODE-RUNBOOK.md](HOST-MODE-RUNBOOK.md), and the package changes (USB rescue, blocklist) in #250. Kernel side: kernel #163 (the bus) and #154 (panel size, which the on-screen keyboard needs).
 
 Kept locally, available on request, no serials: the dead-man tool's per-run kernel logs, the gauge test logs (including the interrupt log for #170), the charge-watch logs, and the `tools/phone-smoke` report from this kernel.
 
