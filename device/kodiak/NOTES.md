@@ -5,60 +5,44 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 
 ## Stock facts
 
-- Model: Pixel 11 Pro XL (getprop ro.product.model)
-- Codename: kodiak (getprop ro.product.device)
-- SoC: Tensor G6 (platform malibu; DT compatible "google,mbu" from factory vendor_kernel_boot DTB)
-- GPU: PowerVR (getprop ro.hardware.egl / ro.hardware.vulkan)
-- RAM: 16 GB Samsung LPDDR5 (fastboot getvar ddr-size / ddr-manu / ddr-type)
-- Storage: 512 GB Micron UFS 4.1 (fastboot getvar storage-*)
-- Build: CD1A.260905.001.B1 (getprop ro.build.id)
-- Bootloader: spacecraft-17.4-16262255 (fastboot getvar version-bootloader)
-- Kernel: 6.12.69-android16-6-g5c5f2fea42dd-ab15835541-4k (uname -a)
-- CPU: 6× 0xd8b (rev 1) + 1× 0xd8c (rev 0) (/proc/cpuinfo)
-- Boot image header: v4 (unpack_bootimg on factory boot.img)
-- DTB: in vendor_kernel_boot.img (unpack_bootimg)
-- Display: Verisilicon DC9x00 DPU + MIPI DSI2 (factory DTB nodes)
-- dtbo_idx: 37 (getprop ro.boot.dtbo_idx)
-- Bootloader unlocked: yes (fastboot getvar unlocked)
+- Model: Pixel 11 Pro XL (`ro.product.model`)
+- Codename: kodiak (`ro.product.device`)
+- SoC: Tensor G6 (platform malibu; DT compatible `google,mbu`)
+- GPU: PowerVR
+- RAM: 16 GB Samsung LPDDR5
+- Storage: 512 GB Micron UFS 4.1
+- Build: CD1A.260905.001.B1
+- Bootloader: spacecraft-17.4-16262255
+- Kernel: 6.12.69-android16-6-g5c5f2fea42dd-ab15835541-4k
+- CPU: 6× 0xd8b (rev 1) + 1× 0xd8c (rev 0)
+- Boot image header: v4
+- DTB: in `vendor_kernel_boot.img`
+- Display: Verisilicon DC9x00 DPU + MIPI DSI2
+- dtbo_idx: 37
+- Bootloader unlocked: yes
 - Current confirmed bootable slots: both (factory flash + full OTA sideload)
+
+## Hardware from stock DTB (vendor_kernel_boot)
+
+- Root compatible: `google,mbu` (no `soc_id` present)
+- Display subsystem: `verisilicon,display-subsystem` + `verisilicon,dc9x00` DPU
+- MIPI DSI2 hosts present
+- UFS controller present (`ufs@3c2d0000`)
+- Edge TPU: `google,edgetpu-malibu`
+- AoC: `google,aoc`
+- PMIC: `google,da9188mfd`
+- GPU: PowerVR (no Mali nodes)
+
+## Display and battery
+
+- Physical resolution: 1344×2992
+- Logical resolution: 1080×2404 @ 120 Hz, density 390
+- LCD density: 480
+- HDR: supported (types 2/3/4), max luminance 1000
+- Battery: Li-ion, charge_full ~5265 mAh
 
 ## Status
 
-Stock facts collected and both slots restored to factory. Device descriptor in #231. Ready for first slot-B experiments once the descriptor lands.
-
-## Additional stock facts (2026-10-31)
-
-- Current slot: _a (getprop ro.boot.slot_suffix)
-- DDR: 16GiB Samsung LPDDR5 (getprop ro.boot.hardware.ddr)
-- Android version: 17 (SDK 37), security patch 2026-09-01 (getprop ro.build.version.*)
-- Board: kodiak (getprop ro.product.board)
-- Display logical: 1080x2404 @ 120 Hz, density 390 (dumpsys display)
-- Display physical: 1344x2992 (dumpsys display)
-- Display HDR: supported types 2/3/4, max luminance 1000 (dumpsys display)
-- Battery: Li-ion, 100%, USB charging 3A/5V, health good (dumpsys battery)
-
-## Confirmed hardware (2026-11-01)
-
-- dtbo_idx: 37 (getprop ro.boot.dtbo_idx)
-- Platform: malibu (getprop ro.boot.hardware.platform)
-- SoC model: Tensor G6 (getprop ro.soc.model)
-- CPU: 6× 0xd8b rev 1 + 1× 0xd8c rev 0 (/proc/cpuinfo)
-- Verified boot state: orange (unlocked, getprop ro.boot.verifiedbootstate)
-
-## Battery and display extras (2026-11-01)
-
-- Battery charge_full: 5265000 µAh (~5265 mAh) (/sys/class/power_supply/battery/charge_full)
-- Battery technology: Li-ion, temperature ~25.5 °C (dumpsys battery)
-- LCD density: 480 (getprop ro.sf.lcd_density)
-- Display: HDR and wide color supported (getprop ro.surface_flinger.has_*)
-
-## Hardware from stock DTB (vendor_kernel_boot, 2026-11-01)
-
-- Root compatible: "google,mbu"
-- Display subsystem: verisilicon,display-subsystem + verisilicon,dc9x00 DPU
-- MIPI DSI2 hosts present (verisilicon,dc9x00-mipi-dsi2h)
-- UFS controller present (ufs@3c2d0000)
-- Edge TPU: google,edgetpu-malibu
-- AoC: google,aoc
-- PMIC: google,da9188mfd (and regulators/gpio/rtc)
-- GPU: PowerVR (confirmed earlier via getprop; no Mali nodes)
+Stock facts collected and both slots restored to factory.  
+Device descriptor added in `device/kodiak/device.conf`.  
+Ready for first slot-B experiments once the descriptor lands.
