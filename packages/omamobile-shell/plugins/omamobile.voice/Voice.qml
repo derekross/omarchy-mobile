@@ -31,10 +31,12 @@ import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 //   `omarchy-shell shell summon omamobile.voice '{}'` opens it listening.
 //
 // * Follow-up in an agent. While an agent's terminal (org.omarchy.agent)
-//   is in front and the keyboard is down, a round mic floats at the bottom
-//   right: hold to talk, tap to toggle. Voxtype types into the agent and,
-//   with "Say 'send' to press Enter" on, presses Enter when the speech ends
-//   in "send" (--smart-auto-submit).
+//   is in front and the keyboard is down, the home strip carries a mic at
+//   its right end (omamobile.launcher; a floating button covered the
+//   agent's prompt line): hold to talk, tap to toggle. Voxtype types into
+//   the agent and presses Enter after it ("Send automatically", the
+//   default), only when the speech ends in "submit", or never (the agent
+//   setting).
 //
 // * Power + Volume Up (omamobile-keys, off until turned on in the settings):
 //   push-to-talk into the app in front, or the agent sheet on the home
@@ -43,7 +45,8 @@ import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 // * Settings (`shell summon omamobile.voice '{"page":"settings"}'`, the
 //   Dictation tile's long press, Omarchy's Setup > Voice): the speech model
 //   (downloaded through Voxtype and switched with `voxtype config set`), the
-//   triggers, "Say 'send'", and the check before sending to an agent, kept
+//   triggers, how typing into an agent submits, and the check before
+//   sending to an agent, kept
 //   in ~/.config/omamobile/voice.json.
 //
 // * Dictation into any app. The mic key at the left end of the keyboard's
@@ -95,7 +98,7 @@ Item {
   readonly property bool busy: phase === "starting" || phase === "listening" || phase === "transcribing"
   readonly property bool listening: phase === "listening"
   // The Listening strip is for typing into an app; the agent sheet and the
-  // floating agent mic show their own state.
+  // strip's agent mic show their own state.
   readonly property bool stripShown: owner !== "ask" && owner !== "agent" && (busy || phase === "error")
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
   readonly property string transcriptPath: VoiceModel.transcriptPath(runtimeDir)
@@ -211,29 +214,11 @@ Item {
     return "ok"
   }
 
-  // The on-screen keyboard: the floating agent mic gives way to the
-  // keyboard strip's mic key while it is up.
-  property bool oskOpen: false
-
-  Process {
-    id: oskWatch
-    command: ["omamobile-osk-watch"]
-    running: true
-    stdout: SplitParser {
-      onRead: function(line) {
-        var words = String(line).trim().split(" ")
-        if (words[0] === "visible") root.oskOpen = words[1] === "true"
-      }
-    }
-    onExited: { root.oskOpen = false; oskRestart.restart() }
-  }
-
-  Timer { id: oskRestart; interval: 3000; onTriggered: oskWatch.running = true }
-
-  // The floating mic over an agent: its own recording keeps it on screen
-  // (unmapping it under a held finger would lose the release).
+  // The mic in the home strip over an agent (omamobile.launcher draws it,
+  // at the strip's right end, while the keyboard is down): shown while an
+  // agent is in front, and while its own recording runs.
   readonly property bool agentMicShown: (owner === "agent" && busy)
-    || (settings.agentMic && agentInFront && !oskOpen && !opened && !busy)
+    || (settings.agentMic && agentInFront && !opened)
 
   readonly property int touchSize: Math.max(44, Style.space(48))
   readonly property int pad: Style.spacing.panelPadding
@@ -340,8 +325,8 @@ Item {
     else if (phase === "error") sayAgain()
   }
 
-  // The floating mic over an agent: held, a push-to-talk; tapped, on and
-  // off. Types into the agent, Enter on "send" when that setting is on.
+  // The strip's mic over an agent: held, a push-to-talk; tapped, on and
+  // off. Types into the agent, then Enter as the agent setting says.
   function agentPress() {
     if (busy) return "busy"
     begin("agent", true)
@@ -365,7 +350,7 @@ Item {
     if (!settings.powerVolumeUp) return "off"
     if (busy) return "busy"
     if (VoiceModel.keyTarget(appOnScreen) === "ask") beginAsk(true)
-    else begin("type", true)
+    else begin("type", true, true)
     return "ok"
   }
 
@@ -418,7 +403,9 @@ Item {
     else opened = true
   }
 
-  function begin(who, hold) {
+  // viaKey: Power + Volume Up, which follows the agent setting over an
+  // agent; the other typing triggers never submit (VoiceModel.submitFor).
+  function begin(who, hold, viaKey) {
     if (busy) Quickshell.execDetached(VoiceModel.CANCEL_ARGV)
     owner = who
     phase = "starting"
@@ -430,8 +417,8 @@ Item {
     levels = []
     elapsed = 0
     startProc.running = false
-    // Enter on "send" only where it means something: typing into an agent.
-    var submit = settings.sayToSend && (who === "agent" || agentInFront)
+    // Enter after the text only where it means something: an agent.
+    var submit = VoiceModel.submitFor(who, !!viaKey, agentInFront, settings)
     startProc.command = who === "ask" ? VoiceModel.fileStartArgv(transcriptPath)
                                       : VoiceModel.startArgv("type", "", submit)
     startProc.running = true
@@ -816,12 +803,34 @@ Item {
 
             SettingRow { objectName: "setting-holdPill"; title: "Hold the home pill"; note: "or the search bar; the mic in the search bar always works"; checked: root.settings.holdPill === true; onToggled: root.setSetting("holdPill", !checked) }
             SettingRow { objectName: "setting-micKey"; title: "Mic key under the keyboard"; checked: root.settings.micKey === true; onToggled: root.setSetting("micKey", !checked) }
-            SettingRow { objectName: "setting-agentMic"; title: "Mic over agents"; note: "a round mic while an agent is in front"; checked: root.settings.agentMic === true; onToggled: root.setSetting("agentMic", !checked) }
+            SettingRow { objectName: "setting-agentMic"; title: "Mic in the bar over agents"; note: "at the right end of the home bar while an agent is in front"; checked: root.settings.agentMic === true; onToggled: root.setSetting("agentMic", !checked) }
             SettingRow { objectName: "setting-powerVolumeUp"; title: "Power + Volume Up"; note: "hold both to talk; not on the lock screen"; checked: root.settings.powerVolumeUp === true; onToggled: root.setSetting("powerVolumeUp", !checked) }
 
             SectionLabel { text: "Sending" }
 
-            SettingRow { objectName: "setting-sayToSend"; title: "Say “send” to press Enter"; note: "in agents"; checked: root.settings.sayToSend === true; onToggled: root.setSetting("sayToSend", !checked) }
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "Talking to an agent"
+              color: root.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+            }
+
+            Repeater {
+              model: VoiceModel.SUBMIT_CHOICES
+              delegate: ModelRow {
+                required property var modelData
+                width: settingsColumn.width
+                objectName: "submit-" + modelData.id
+                title: modelData.name
+                line: modelData.line
+                chosen: root.settings.agentSubmit === modelData.id
+                badge: ""
+                onTapped: root.setSetting("agentSubmit", modelData.id)
+              }
+            }
+
             SettingRow { objectName: "setting-confirmSend"; title: "Ask before sending to an agent"; note: "off: what you say goes to the agent as soon as it is text"; checked: root.settings.confirmSend === true; onToggled: root.setSetting("confirmSend", !checked) }
           }
         }
@@ -1257,88 +1266,6 @@ Item {
               onTapped: root.cancel()
             }
           }
-        }
-      }
-    }
-  }
-
-  // ---------------------------------------------------------------- the mic over an agent
-
-  // FollowUp in the design: a round mic at the bottom right while an
-  // agent's terminal is in front and the keyboard is down (the keyboard
-  // strip's mic key covers typing with it up). Hold to talk, tap to start
-  // and tap again to stop; Voxtype types into the agent. Normal exclusion,
-  // so it sits above the home strip; it never takes the keyboard focus.
-  Variants {
-    model: Quickshell.screens
-
-    PanelWindow {
-      id: agentMicWindow
-      required property var modelData
-      screen: modelData
-
-      visible: root.agentMicShown
-      anchors { bottom: true; right: true }
-      margins { bottom: Style.gapsOut + Style.spacing.xl; right: Style.gapsOut + Style.spacing.xl }
-      implicitWidth: agentMic.width
-      implicitHeight: agentMic.height
-      exclusionMode: ExclusionMode.Normal
-      color: "transparent"
-      WlrLayershell.namespace: "omamobile-voice-agent-mic"
-      WlrLayershell.layer: WlrLayer.Top
-      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
-
-      IdleInhibitor {
-        window: agentMicWindow
-        enabled: root.owner === "agent" && root.busy
-      }
-
-      BorderSurface {
-        id: agentMic
-        objectName: "agentMic"
-        property bool held: false
-        readonly property bool live: root.owner === "agent" && (root.phase === "listening" || root.phase === "starting")
-        width: Math.max(56, Style.space(60))
-        height: width
-        radius: Math.min(Style.cornerRadius, width / 2)
-        color: agentMic.live ? root.recording
-          : agentMicTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent)
-          : Commons.Color.popups.background
-        borderSpec: Border.surfaceSpec("popups", "border", agentMic.live ? root.recording : Commons.Color.popups.border, Math.max(1, Style.space(2)))
-        Accessible.role: Accessible.Button
-        Accessible.name: agentMic.live ? "Stop talking to the agent" : "Talk to the agent"
-
-        Text {
-          id: agentMicGlyph
-          anchors.centerIn: parent
-          textFormat: Text.PlainText
-          // nf-md-microphone; the reload glyph while transcribing
-          text: root.owner === "agent" && root.phase === "transcribing" ? "󰑐" : "󰍬"
-          color: agentMic.live ? Commons.Color.popups.background : root.foreground
-          font.family: Style.font.family
-          font.pixelSize: Math.round(agentMic.width * 0.42)
-          RotationAnimator on rotation {
-            running: root.owner === "agent" && root.phase === "transcribing"
-            from: 0
-            to: 360
-            duration: 1200
-            loops: Animation.Infinite
-            onRunningChanged: if (!running) agentMicGlyph.rotation = 0
-          }
-        }
-
-        TapHandler {
-          id: agentMicTouch
-          longPressThreshold: 0.3
-          onPressedChanged: {
-            if (pressed) { agentMic.held = false; return }
-            if (agentMic.held) root.agentRelease()
-          }
-          onLongPressed: {
-            agentMic.held = true
-            root.agentPress()
-          }
-          onTapped: root.agentTap()
         }
       }
     }

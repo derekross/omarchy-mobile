@@ -46,6 +46,8 @@ sed -i -E \
   -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
   -e 's/^    PanelWindow \{$/    Item {/' \
   "$h/launcher/Launcher.qml"
+# No idle inhibitor without a compositor (the strip's, for the agent mic).
+python3 -B -c 'import re,sys; p=sys.argv[1]; s=open(p).read(); open(p,"w").write(re.sub(r"\n\s*IdleInhibitor \{[^}]*\}\n", "\n", s))' "$h/launcher/Launcher.qml"
 grep -c '^  Item { anchors.fill: parent$' "$h/launcher/Launcher.qml" >/dev/null || { echo "launcher-render: no drawer window to stand in for" >&2; exit 1; }
 cp "$here/launcher-render.qml" "$h/"
 # App icons: twenty plain tiles in the theme's hues, drawn here.

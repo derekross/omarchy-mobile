@@ -708,6 +708,13 @@ Item {
       WlrLayershell.layer: WlrLayer.Bottom
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
+      // The screen stays on while the agent mic listens (the voice
+      // service's own surfaces aren't up for it).
+      IdleInhibitor {
+        window: homeStrip
+        enabled: !!root.voice && root.voice.owner === "agent" && root.voice.busy === true
+      }
+
       Item {
         anchors.fill: parent
 
@@ -718,7 +725,7 @@ Item {
         HomeSwipe {
           anchors.fill: parent
           strip: root.oskOpen ? "keyboard" : "pill"
-          ownTaps: [hideKey, micKey]
+          ownTaps: [hideKey, micKey, agentMicKey]
         }
 
         // The mic at the left end, only while the keyboard is up: dictate
@@ -728,6 +735,18 @@ Item {
           visible: root.oskOpen && root.voiceSetting("micKey")
           anchors.left: parent.left
           anchors.leftMargin: Style.spacing.xs
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        // The hide key's place while the keyboard is down and an agent's
+        // terminal is in front: talk to the agent (see AgentMicKey). In the
+        // strip, not floating over the app: an agent's prompt line is at
+        // the bottom, and a floating button covered its right end.
+        AgentMicKey {
+          id: agentMicKey
+          visible: !root.oskOpen && !!root.voice && root.voice.agentMicShown === true
+          anchors.right: parent.right
+          anchors.rightMargin: Style.spacing.xs
           anchors.verticalCenter: parent.verticalCenter
         }
 
@@ -1447,6 +1466,59 @@ Item {
         root.voiceCall("dictatePress")
       }
       onTapped: root.voiceCall("dictateTap")
+    }
+  }
+
+  // The strip's agent mic, at its right end while the keyboard is down and
+  // an agent's terminal is in front (omamobile.voice's agentMicShown): hold
+  // to talk, tap to start and tap again to stop. Voxtype types into the
+  // agent and submits as the voice settings say (Send automatically by
+  // default). The keyboard mic key's look; a passive grab, so a swipe that
+  // starts on it still goes home.
+  component AgentMicKey: Item {
+    id: agentItem
+    objectName: "agentMicKey"
+    width: root.touch
+    height: root.touch
+    Accessible.role: Accessible.Button
+    Accessible.name: "Talk to the agent"
+    property bool held: false
+    readonly property bool live: !!root.voice && root.voice.owner === "agent"
+      && (root.voice.phase === "listening" || root.voice.phase === "starting")
+    readonly property bool working: !!root.voice && root.voice.owner === "agent" && root.voice.phase === "transcribing"
+
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width - 4
+      height: parent.height - 8
+      radius: height / 2
+      color: agentItem.live ? Commons.Color.urgent
+        : Qt.rgba(Commons.Color.bar.text.r, Commons.Color.bar.text.g, Commons.Color.bar.text.b, 0.18)
+      visible: agentTap.pressed || agentItem.live || agentItem.working
+    }
+
+    Text {
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      // nf-md-microphone; nf-md-reload while it turns speech into text
+      text: String.fromCodePoint(agentItem.working ? 0xF0450 : 0xF036C)
+      color: agentItem.live ? Commons.Color.bar.background : Commons.Color.bar.text
+      font.family: Style.font.family
+      font.pixelSize: 22
+    }
+
+    TapHandler {
+      id: agentTap
+      longPressThreshold: 0.3
+      onPressedChanged: {
+        if (pressed) { agentItem.held = false; return }
+        if (agentItem.held) root.voiceCall("agentRelease")
+      }
+      onLongPressed: {
+        agentItem.held = true
+        root.voiceCall("agentPress")
+      }
+      onTapped: root.voiceCall("agentTap")
     }
   }
 

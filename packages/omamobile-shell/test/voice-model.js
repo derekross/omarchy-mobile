@@ -167,10 +167,15 @@ test("copy and type: the text on stdin, never in the shell string", () => {
   assert.ok(M.typeArgv("x")[2].startsWith("sleep "), "after the sheet has gone")
 })
 
-test("typing into an agent with Say 'send' on presses Enter on 'send'; nowhere else", () => {
-  assert.deepStrictEqual(M.startArgv("type", "", true), ["voxtype", "record", "start", "--no-osd", "--type", "--smart-auto-submit"])
-  assert.ok(!M.startArgv("type", "", false).includes("--smart-auto-submit"))
-  assert.ok(!M.startArgv("file", "/r/t.txt", true).includes("--smart-auto-submit"), "never for the agent sheet's transcript")
+test("typing into an agent: Enter after the text, on a spoken 'send', or never", () => {
+  assert.deepStrictEqual(M.startArgv("type", "", "auto"), ["voxtype", "record", "start", "--no-osd", "--type", "--auto-submit"])
+  assert.deepStrictEqual(M.startArgv("type", "", "say"), ["voxtype", "record", "start", "--no-osd", "--type", "--smart-auto-submit"])
+  assert.deepStrictEqual(M.startArgv("type", "", "off"), ["voxtype", "record", "start", "--no-osd", "--type"])
+  assert.deepStrictEqual(M.startArgv("type", ""), ["voxtype", "record", "start", "--no-osd", "--type"])
+  for (const sub of ["auto", "say"]) {
+    const a = M.startArgv("file", "/r/t.txt", sub)
+    assert.ok(!a.includes("--auto-submit") && !a.includes("--smart-auto-submit"), "never for the agent sheet's transcript")
+  }
   assert.strictEqual(M.isAgent("org.omarchy.agent"), true)
   assert.strictEqual(M.isAgent("foot"), false)
   assert.strictEqual(M.isAgent(undefined), false)
@@ -178,19 +183,42 @@ test("typing into an agent with Say 'send' on presses Enter on 'send'; nowhere e
 
 test("settings: defaults, only known booleans, round trip", () => {
   const d = M.parseSettings("")
-  assert.deepStrictEqual(d, { version: 1, holdPill: true, micKey: true, agentMic: true, powerVolumeUp: false, sayToSend: true, confirmSend: true })
+  assert.deepStrictEqual(d, { version: 2, holdPill: true, micKey: true, agentMic: true, powerVolumeUp: false, agentSubmit: "auto", confirmSend: true })
   assert.strictEqual(M.parseSettings("{not json").powerVolumeUp, false)
   const s = M.parseSettings('{"powerVolumeUp": true, "holdPill": "no", "evil": true, "confirmSend": false}')
   assert.strictEqual(s.powerVolumeUp, true)
   assert.strictEqual(s.holdPill, true, "a non-boolean keeps the default")
   assert.strictEqual(s.evil, undefined)
   assert.strictEqual(s.confirmSend, false)
-  const t = M.withSetting(d, "sayToSend", false)
-  assert.strictEqual(t.sayToSend, false)
-  assert.strictEqual(d.sayToSend, true, "a copy")
+  const t = M.withSetting(d, "agentSubmit", "say")
+  assert.strictEqual(t.agentSubmit, "say")
+  assert.strictEqual(d.agentSubmit, "auto", "a copy")
+  assert.strictEqual(M.withSetting(d, "agentSubmit", "always").agentSubmit, "auto", "only the three choices")
   assert.deepStrictEqual(M.withSetting(d, "nope", true), d)
   assert.deepStrictEqual(M.parseSettings(M.serializeSettings(t)), t)
   assert.ok(M.serializeSettings(t).endsWith("\n"))
+})
+
+test("settings: 0.2.59's Say 'send' switch moves to the agent choice", () => {
+  assert.strictEqual(M.parseSettings('{"version": 1, "sayToSend": true}').agentSubmit, "auto", "on (the default) becomes Send automatically")
+  assert.strictEqual(M.parseSettings('{"version": 1, "sayToSend": false}').agentSubmit, "off")
+  assert.strictEqual(M.parseSettings('{"agentSubmit": "say", "sayToSend": false}').agentSubmit, "say", "a choice wins over the old switch")
+  assert.strictEqual(M.parseSettings('{"agentSubmit": 3}').agentSubmit, "auto")
+  assert.strictEqual(M.serializeSettings(M.parseSettings('{"sayToSend": true}')).includes("sayToSend"), false, "the old key is dropped")
+  assert.deepStrictEqual(M.SUBMIT_CHOICES.map((c) => c.id), ["auto", "say", "off"])
+  assert.strictEqual(M.SUBMIT_CHOICES[0].name, "Send automatically")
+  assert.strictEqual(M.SUBMIT_CHOICES[1].name, "Say \u201csubmit\u201d to send", "Voxtype's trigger word is submit")
+})
+
+test("submitting: the agent mic and the key chord over an agent follow the setting; other dictation never", () => {
+  const s = M.defaultSettings()
+  assert.strictEqual(M.submitFor("agent", false, true, s), "auto")
+  assert.strictEqual(M.submitFor("agent", false, true, M.withSetting(s, "agentSubmit", "say")), "say")
+  assert.strictEqual(M.submitFor("type", true, true, s), "auto", "Power + Volume Up over an agent")
+  assert.strictEqual(M.submitFor("type", true, false, s), "off", "Power + Volume Up over another app")
+  assert.strictEqual(M.submitFor("type", false, true, s), "off", "the keyboard's mic key, even over an agent")
+  assert.strictEqual(M.submitFor("type", false, false, s), "off")
+  assert.strictEqual(M.submitFor("ask", true, true, s), "off", "the agent sheet sends itself")
 })
 
 test("models: the config's [whisper] model, what is downloaded, the rows", () => {

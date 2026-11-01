@@ -238,6 +238,33 @@ Item {
       compare(voiceCalls("ask"), 0)
     }
 
+    // The agent mic in the strip (over an agent, keyboard down): at the
+    // right end, a whole touch target, its taps and holds its own.
+    function test_the_agent_mic_sits_in_the_strip_over_an_agent() {
+      var strip = find(harness, "pillStrip")
+      verify(!find(strip, "agentMicKey").visible, "no agent mic without an agent")
+      harness.voice = { agentMicShown: true, settings: {} }
+      var key = find(strip, "agentMicKey")
+      verify(key.visible, "an agent in front: the mic shows")
+      verify(key.width >= 44 && key.height >= 44, key.width + "x" + key.height)
+      compare(strip.height, harness.stripHeight, "the strip keeps its height")
+      var p = key.mapToItem(strip, 0, 0)
+      verify(strip.width - (p.x + key.width) <= 8, "at the right end")
+      verify(!find(find(harness, "keyboardStrip"), "agentMicKey").visible, "the keyboard strip keeps its hide key there")
+      var c = key.mapToItem(strip, key.width / 2, key.height / 2)
+      tap(strip, c.x, c.y)
+      tap(strip, c.x, c.y)
+      compare(voiceCalls("agentTap"), 2, JSON.stringify(Quickshell.executed))
+      compare(keyboardCalls("toggleKeyboard"), 0, "two taps on it are no double tap")
+      wait(600)
+      Quickshell.executed = []
+      hold(strip, c.x, c.y, 800)
+      compare(voiceCalls("agentPress"), 1, JSON.stringify(Quickshell.executed))
+      compare(voiceCalls("agentRelease"), 1)
+      compare(voiceCalls("ask"), 0, "its hold is its own, not the strip's")
+      harness.voice = null
+    }
+
     function test_holds_follow_the_voice_settings() {
       harness.voice = { settings: { holdPill: false, micKey: false } }
       var strip = find(harness, "pillStrip")

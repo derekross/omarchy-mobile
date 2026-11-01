@@ -26,14 +26,17 @@ var HOLD_MS = 700
 var LEVEL_BARS = 24
 
 // The argv that starts a recording. mode: "type" (Voxtype types into the
-// focused window) or "file" (the transcript goes to filePath). submit:
-// typing into an agent with "Say 'send' to press Enter" on, so Voxtype
-// presses Enter when the speech ends in "send" (--smart-auto-submit).
+// focused window) or "file" (the transcript goes to filePath). submit,
+// for typing into an agent (submitFor): "auto" presses Enter after the
+// text (--auto-submit), "say" only when the speech ends in "submit"
+// (Voxtype's text.smart_auto_submit: a fixed word, not configurable)
+// (--smart-auto-submit), anything else never.
 function startArgv(mode, filePath, submit) {
   var argv = [VOXTYPE, "record", "start", "--no-osd"]
   if (mode === "file") argv.push("--file=" + String(filePath || ""))
   else argv.push("--type")
-  if (mode !== "file" && submit) argv.push("--smart-auto-submit")
+  if (mode !== "file" && submit === "auto") argv.push("--auto-submit")
+  else if (mode !== "file" && submit === "say") argv.push("--smart-auto-submit")
   return argv
 }
 
@@ -202,19 +205,26 @@ function isAgent(appId) {
 
 // The voice settings, in ~/.config/omamobile/voice.json (as
 // quicksettings.json and home.json): which triggers start listening, "Say
-// 'send' to press Enter" in agents, and the check before sending to an
-// agent. Power + Volume Up is off until the user turns it on.
-var SETTINGS_VERSION = 1
+// agentSubmit: what typing into an agent does at the end ("auto": Enter
+// after the text, the default; "say": Enter when the speech ends in
+// "send"; "off": never), and the check before sending to an agent. Power +
+// Volume Up is off until the user turns it on.
+var SETTINGS_VERSION = 2
 var DEFAULT_SETTINGS = {
   version: SETTINGS_VERSION,
   holdPill: true,
   micKey: true,
   agentMic: true,
   powerVolumeUp: false,
-  sayToSend: true,
+  agentSubmit: "auto",
   confirmSend: true
 }
-var SETTING_KEYS = ["holdPill", "micKey", "agentMic", "powerVolumeUp", "sayToSend", "confirmSend"]
+var SETTING_KEYS = ["holdPill", "micKey", "agentMic", "powerVolumeUp", "confirmSend"]
+var SUBMIT_CHOICES = [
+  { id: "auto", name: "Send automatically", line: "Enter after the text" },
+  { id: "say", name: "Say \u201csubmit\u201d to send", line: "Enter only when you end with \u201csubmit\u201d" },
+  { id: "off", name: "Don't submit", line: "the text waits for you" }
+]
 
 function defaultSettings() {
   var out = {}
@@ -233,13 +243,33 @@ function parseSettings(text) {
     var k = SETTING_KEYS[i]
     if (typeof o[k] === "boolean") out[k] = o[k]
   }
+  if (validSubmit(o.agentSubmit)) out.agentSubmit = o.agentSubmit
+  // 0.2.59's "Say 'send' to press Enter" switch: on was the default, and
+  // the first user wanted Enter without saying "send", so on becomes the
+  // new default (auto); off stays off.
+  else if (o.sayToSend === false) out.agentSubmit = "off"
   return out
+}
+
+function validSubmit(v) {
+  return v === "auto" || v === "say" || v === "off"
 }
 
 function withSetting(settings, key, value) {
   var out = parseSettings(JSON.stringify(settings || {}))
   if (SETTING_KEYS.indexOf(key) >= 0) out[key] = !!value
+  else if (key === "agentSubmit" && validSubmit(value)) out.agentSubmit = value
   return out
+}
+
+// How a recording into an app ends: the agent setting for the mic in the
+// strip over an agent, and for Power + Volume Up while an agent is in
+// front; never for dictation anywhere else (the keyboard's mic key, the
+// Dictation tile, the key chord over other apps).
+function submitFor(who, viaKey, agentInFront, settings) {
+  var choice = settings && validSubmit(settings.agentSubmit) ? settings.agentSubmit : DEFAULT_SETTINGS.agentSubmit
+  if (who === "agent" || (who === "type" && viaKey && agentInFront)) return choice
+  return "off"
 }
 
 function serializeSettings(settings) {
@@ -354,6 +384,7 @@ if (typeof module !== "undefined") {
     parseSettings: parseSettings, withSetting: withSetting, serializeSettings: serializeSettings,
     MODELS: MODELS, modelFile: modelFile, configModel: configModel, installedModels: installedModels,
     modelRows: modelRows, downloadArgv: downloadArgv, switchArgv: switchArgv, parseProgress: parseProgress,
-    HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks, keyTarget: keyTarget
+    HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks, keyTarget: keyTarget,
+    SUBMIT_CHOICES: SUBMIT_CHOICES, validSubmit: validSubmit, submitFor: submitFor
   }
 }

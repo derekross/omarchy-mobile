@@ -882,17 +882,18 @@ measured speeds and phase 2 are in
   reaches the drawer through DrawerLink.js), so a release needs no process.
 
 * **Follow-up in an agent:** while an agent's terminal (`org.omarchy.agent`)
-  is in front and the keyboard is down, a round mic at the bottom right:
-  hold to talk, tap to toggle; Voxtype types into the agent and, with "Say
-  'send' to press Enter" on, presses Enter on "send"
-  (`--smart-auto-submit`).
+  is in front and the keyboard is down, a mic at the right end of the home
+  strip (omamobile.launcher draws it; a floating one covered the agent's
+  prompt line): hold to talk, tap to toggle. Voxtype types into the agent
+  and presses Enter after it (`--auto-submit`), or only when you end with "submit" (Voxtype's fixed word),
+  or never, as the settings say.
 * **Power + Volume Up** (omamobile-keys): push-to-talk into the app in
   front, or the agent sheet on the home screen; off until turned on in the
   settings, never on the lock screen.
 * **Settings** (long-press the Dictation tile, Setup > Voice, or
   `omarchy-shell shell summon omamobile.voice '{"page":"settings"}'`): the
-  speech model (Voxtype downloads and switches it), the triggers, "Say
-  'send'", and "Ask before sending to an agent", in
+  speech model (Voxtype downloads and switches it), the triggers, how
+  talking to an agent submits, and "Ask before sending to an agent", in
   `~/.config/omamobile/voice.json`.
 * A haptic tick at the start and end of listening (feedbackd's
   `button-pressed`, so the feedback profile decides).

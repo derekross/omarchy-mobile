@@ -151,7 +151,7 @@ assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
 assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
 assert strip.count("HomeSwipe {") == 1 and "HomePill" in strip, "one swipe logic"
 assert "HideKeyboardKey {" in strip and "visible: root.oskOpen" in strip, "the hide key, only with the keyboard"
-assert "ownTaps: [hideKey, micKey]" in strip, "the hide and mic keys' taps are no double tap"
+assert "ownTaps: [hideKey, micKey, agentMicKey]" in strip and "AgentMicKey {" in strip, "the hide, mic and agent mic keys' taps are no double tap"
 assert "MicKey {" in strip and 'visible: root.oskOpen && root.voiceSetting("micKey")' in strip, "the mic key, only with the keyboard (and the setting)"
 assert re.search(r"readonly property bool keyboardStripShown: stripShown && oskOpen$", src, re.M)
 PY
@@ -711,7 +711,8 @@ grep -c 'exclusionMode: ExclusionMode.Normal' "$v" >/dev/null || fail "the sheet
 grep -c 'WlrLayershell.namespace: "omamobile-voice-strip"' "$v" >/dev/null &&
   awk '/id: stripWindow/,/IdleInhibitor/' "$v" | grep -c 'WlrLayershell.keyboardFocus: WlrKeyboardFocus.None' >/dev/null ||
   fail "the listening strip never takes the keyboard from the app"
-[[ $(grep -c 'IdleInhibitor {' "$v") == 3 ]] || fail "the screen stays on while listening (sheet, strip and agent mic)"
+[[ $(grep -c 'IdleInhibitor {' "$v") == 2 ]] && grep -c 'enabled: !!root.voice && root.voice.owner === "agent" && root.voice.busy === true' "$l" >/dev/null ||
+  fail "the screen stays on while listening (sheet, strip, and the home strip for the agent mic)"
 grep -c 'VoiceLink.publish(root)' "$v" >/dev/null || fail "voice publishes itself for the pill"
 cmp -s plugins/omamobile.voice/VoiceLink.js plugins/omamobile.launcher/DrawerLink.js && fail "VoiceLink.js is its own script"
 grep -c 'source: Qt.resolvedUrl("../omamobile.voice/VoiceLinkClient.qml")' "$l" >/dev/null || fail "the launcher loads the voice link"
@@ -739,11 +740,14 @@ if awk '/^function startArgv/,/^}/' "$vm" | grep -n -- '--model' || grep -n -- '
 fi
 # Phase 2: the mic over an agent, the settings, Power + Volume Up, ticks.
 grep -c 'VoiceModel.isAgent(ToplevelManager.activeToplevel.appId)' "$v" >/dev/null || fail "the agent mic follows the agent's terminal (org.omarchy.agent)"
-grep -c 'WlrLayershell.namespace: "omamobile-voice-agent-mic"' "$v" >/dev/null &&
-  awk '/id: agentMicWindow/,/IdleInhibitor/' "$v" | grep -c 'WlrLayershell.keyboardFocus: WlrKeyboardFocus.None' >/dev/null ||
-  fail "the agent mic never takes the keyboard from the agent"
-grep -c '(settings.agentMic && agentInFront && !oskOpen && !opened && !busy)' "$v" >/dev/null || fail "the agent mic hides with the keyboard up and over other apps"
-grep -c 'var submit = settings.sayToSend && (who === "agent" || agentInFront)' "$v" >/dev/null || fail "Enter on send only in agents, and only with the setting"
+# The agent mic lives in the home strip (a floating one covered the
+# agent's prompt line), in the hide key's place while the keyboard is down.
+if grep -n 'omamobile-voice-agent-mic' "$v"; then fail "no floating agent mic over the app"; fi
+grep -c 'visible: !root.oskOpen && !!root.voice && root.voice.agentMicShown === true' "$l" >/dev/null &&
+  grep -c 'ownTaps: \[hideKey, micKey, agentMicKey\]' "$l" >/dev/null || fail "the agent mic is the strip's own key, with the keyboard down"
+grep -c '|| (settings.agentMic && agentInFront && !opened)' "$v" >/dev/null || fail "the agent mic shows over agents only, as the setting says"
+grep -c 'var submit = VoiceModel.submitFor(who, !!viaKey, agentInFront, settings)' "$v" >/dev/null &&
+  grep -c 'else begin("type", true, true)' "$v" >/dev/null || fail "submitting follows the agent setting, for the agent mic and the key chord only"
 grep -c 'readonly property string settingsPath: configDir + "/voice.json"' "$v" >/dev/null || fail "voice settings live in ~/.config/omamobile/voice.json"
 grep -c 'if (r.phase === "review" && !settings.confirmSend && hasAgent) send()' "$v" >/dev/null || fail "Ask before sending off sends straight away"
 grep -c 'Quickshell.execDetached(VoiceModel.HAPTIC_ARGV)' "$v" >/dev/null || fail "listening ticks"
