@@ -19,7 +19,12 @@ case $1 in
   check) [[ -e $d/$2 ]] ;;
   mark) touch "$d/$2" ;;
 esac'
-fake gsettings 'echo "gsettings $*" >>"$HOME/calls"'
+# gsettings: logs calls; list-keys answers for Nautilus (click-policy unless
+# GSETTINGS_NO_CLICK_POLICY plays a Nautilus without the key)
+fake gsettings 'echo "gsettings $*" >>"$HOME/calls"
+if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
+  printf "default-folder-viewer\n"; [[ -n ${GSETTINGS_NO_CLICK_POLICY:-} ]] || printf "click-policy\n"
+fi'
 fake systemctl 'echo "systemctl $*" >>"$HOME/calls"'
 fake chromium 'echo "Chromium 153.0.0.0"'
 fake omamobile-keyboard-theme 'echo "omamobile-keyboard-theme $*" >>"$HOME/calls"'
@@ -50,6 +55,7 @@ done
 run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
     OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
+    GSETTINGS_NO_CLICK_POLICY="${GSETTINGS_NO_CLICK_POLICY:-}" \
     bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -285,3 +291,13 @@ before=$(snap); flags=$(sha256sum <"$ha/.config/chromium-flags.conf")
 RUN_HOME=$ha run
 [[ $(snap) == "$before" && $(sha256sum <"$ha/.config/chromium-flags.conf") == "$flags" ]] || fail "a login after --adopt changed the user's files"
 pass "--adopt: the overwriting steps are marked and skipped, the checked steps (Chromium's flags) run, and later logins change nothing"
+# Files opens folders with one tap (issue #261): set once (H ran three times),
+# and not at all on a Nautilus without the click-policy key
+[[ $(grep -c '^gsettings set org.gnome.nautilus.preferences click-policy single$' "$H/calls") == 1 ]] \
+  || fail "Nautilus's click-policy is set to single once"
+hn=$t/no-click-policy; mkdir -p "$hn/.config/hypr" "$hn/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hn/.config/hypr/"
+RUN_HOME=$hn GSETTINGS_NO_CLICK_POLICY=1 run
+grep -q '^gsettings set org.gnome.nautilus.preferences' "$hn/calls" && fail "nothing is set on a Nautilus without click-policy"
+[[ ! -e $hn/.local/state/omarchy/done/omamobile-files-single-tap ]] || fail "the step isn't marked done when the key is missing"
+pass "Files: one tap opens a folder, set once, skipped on a Nautilus without the key"

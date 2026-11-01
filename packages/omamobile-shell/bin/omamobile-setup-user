@@ -164,6 +164,15 @@ o.launch_on_start("squeekboard")
 LUA
 fi
 
+# Files (Nautilus) opens folders with one tap: a double tap is a mouse habit
+# (issue #261). Set once, so a user who goes back to double-click keeps it;
+# skipped when this Nautilus has no click-policy key, so a release that drops
+# it can't break the login setup.
+if gsettings list-keys org.gnome.nautilus.preferences 2>/dev/null | grep -cx click-policy >/dev/null \
+  && omarchy-done ensure omamobile-files-single-tap; then
+  gsettings set org.gnome.nautilus.preferences click-policy single
+fi
+
 # Terminals get squeekboard's terminal layout (Tab, Ctrl, Alt, arrows); ours
 # adds Esc to its top row, for vim and friends. squeekboard reads layouts only
 # from the user's data dir, so link ours there unless the user has their own.
