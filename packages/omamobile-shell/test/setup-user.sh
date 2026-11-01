@@ -21,6 +21,7 @@ esac'
 fake gsettings 'echo "gsettings $*" >>"$HOME/calls"'
 fake systemctl 'echo "systemctl $*" >>"$HOME/calls"'
 fake chromium 'echo "Chromium 153.0.0.0"'
+fake omamobile-keyboard-theme 'echo "omamobile-keyboard-theme $*" >>"$HOME/calls"'
 for f in monitors looknfeel autostart; do echo "-- $f" >"$H/.config/hypr/$f.lua"; done
 printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = "auto"\n' >"$H/.config/hypr/monitors.lua"
 # Omarchy's shipped foot.ini, in the parts the phone changes
@@ -206,3 +207,15 @@ assert voice["action"] == "omarchy-shell shell summon omamobile.voice '{\"page\"
 assert voice["label"] == "Voice" and voice["icon"] == "\U000f036c", voice
 PY
 pass "voxtype's model: tiny.en once downloaded over Omarchy's base.en, a user's choice kept"
+
+# The keyboard: all four layouts linked, the theme written at every login,
+# its gtk.css import and theme-set hook added once (H ran three times).
+for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
+  [[ $(readlink "$H/.local/share/squeekboard/keyboards/$layout") == "/usr/share/omamobile/squeekboard/keyboards/$layout" ]] \
+    || fail "the $layout layout is linked"
+done
+[[ $(grep -c '^omamobile-keyboard-theme --import$' "$H/calls") == 1 && $(grep -c '^omamobile-keyboard-theme $' "$H/calls") -ge 1 ]] \
+  || fail "the keyboard theme: --import at the first login, a plain rewrite after"
+[[ $(readlink "$H/.config/omarchy/hooks/theme-set.d/50-omamobile-keyboard") == "$pkg/hooks/theme-set-keyboard" ]] \
+  || fail "the keyboard's theme-set hook is linked"
+pass "the keyboard: four layouts, the theme at each login, its import and hook once"

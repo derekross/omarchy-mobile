@@ -390,6 +390,37 @@ done
 grep -c '"sm.puri.OSK0", "SetVisible", "b", visible ? "true" : "false"' plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin calls squeekboard's SetVisible"
 pass "on-screen keyboard watcher and calls"
 
+# A keyboard shown by hand (the pill's double tap) is put away when the home
+# screen comes up; one squeekboard showed for a text field is left alone.
+k=plugins/omamobile.keyboard/Keyboard.qml
+grep -c 'import "KeyboardModel.js" as KeyboardModel' "$k" >/dev/null || fail "the keyboard plugin imports its model"
+grep -c 'readonly property bool homeOnScreen: KeyboardModel.homeOnScreen(Hyprland.focusedWorkspace)' "$k" >/dev/null || fail "the keyboard plugin follows the home screen"
+grep -c 'if (!KeyboardModel.shouldHide(shownByHand, oskOpen, homeOnScreen)) return' "$k" >/dev/null || fail "the keyboard plugin hides by the model's rule"
+grep -c 'onHomeOnScreenChanged: checkHome()' "$k" >/dev/null && grep -c 'shownByHand = KeyboardModel.shownByHandAfter(shownByHand, oskOpen)' "$k" >/dev/null \
+  || fail "the rule is checked when the home screen or the keyboard changes"
+grep -A1 'function setVisible(visible) {' "$k" | grep -c 'shownByHand = visible' >/dev/null || fail "showing by hand is remembered"
+if command -v node >/dev/null; then
+  node test/keyboard-model.js >/dev/null || { node test/keyboard-model.js; fail "keyboard model"; }
+fi
+pass "a keyboard shown by hand goes away on the home screen"
+
+# The keyboard in the Omarchy theme and its action row (Talk, Ask, Paste,
+# Emoji, Hide): the stylesheet from a sample theme, the layouts as
+# squeekboard parses them, and the binds (test/phone-rules.lua).
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-theme || fail "omamobile-keyboard-theme parses"
+bash test/keyboard-theme.sh >/dev/null || fail "omamobile-keyboard-theme"
+bash -n hooks/theme-set-keyboard || fail "the theme-set hook parses"
+grep -cx 'exec omamobile-keyboard-theme --restart' hooks/theme-set-keyboard >/dev/null || fail "the theme-set hook rewrites and restarts"
+rc=0; out=$(python3 -B test/keyboard-layouts.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "keyboard layouts # SKIP no PyYAML"
+elif [[ $rc != 0 ]]; then
+  grep -v '^ok' <<<"$out" >&2; fail "keyboard layouts (test/keyboard-layouts.py)"
+fi
+grep -c 'hl.device({ name = osk_device, resolve_binds_by_sym = true })' hypr/phone.lua >/dev/null || fail "squeekboard's binds resolve by keysym"
+grep -c 'local osk_device = "hl-virtual-keyboard-squeekboard"' hypr/phone.lua >/dev/null || fail "squeekboard's virtual keyboard by its Hyprland name"
+pass "the keyboard: theme stylesheet, layouts with the action row, its binds"
+
 # PIN or password: the choice is recorded per user, never the secret, and
 # mirrored to Omarchy's credential-password toggle.
 bash -n bin/omamobile-set-pin || fail "omamobile-set-pin parses"
@@ -871,6 +902,11 @@ if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$u" || fail "Updates desktop entry validates"
 fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
+for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
+  [[ -f $tmp/root/usr/share/omamobile/squeekboard/keyboards/$layout ]] || fail "install stages the $layout layout"
+done
+[[ -x $tmp/root/usr/bin/omamobile-keyboard-theme && -x $tmp/root/usr/share/omamobile/shell/hooks/theme-set-keyboard ]] \
+  || fail "install stages the keyboard theme and its hook"
 # Updates reach users set up earlier: setup-user reruns at every login, and
 # only for a user whose first run left the marker the unit waits for.
 u=$tmp/root/usr/lib/systemd/user
