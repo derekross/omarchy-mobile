@@ -1,0 +1,14 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Restart fprintd after a wake: suspend can wedge its claim, and the lock's
+# fingerprint attempts then fail about three times a second until fprintd
+# exits (seen on the Pixel 9a, 2026-11-01). Omarchy ships the same hook from
+# 4.5 (default/systemd/system-sleep/fprintd-resume, installed by a
+# migration); where it is in place this one stands aside.
+# Upstream: https://gitlab.freedesktop.org/libfprint/fprintd/-/issues/173
+# OMAMOBILE_FP_ROOT: a scratch root for the package tests.
+root=${OMAMOBILE_FP_ROOT:-}
+[[ $1 == post ]] || exit 0
+[[ -e $root/usr/lib/systemd/system-sleep/fprintd-resume ]] && exit 0
+# user.slice stays frozen until this hook returns; enqueue rather than wait.
+systemctl --no-block try-restart fprintd.service 2>/dev/null || true

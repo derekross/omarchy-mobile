@@ -49,6 +49,19 @@ lhbm=vendor/modprobe.d/omamobile-fingerprint-lhbm.conf
 [[ $(grep -c '^options panel_google_tg4c allow_lhbm=1$' "$lhbm") == 1 ]] || fail "tg4c allow_lhbm line missing"
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
+# The resume hook restarts fprintd after a wake, and stands aside where
+# Omarchy's own fprintd-resume is installed.
+h=vendor/systemd/system-sleep/omamobile-fprintd-resume
+bash -n "$h" || { echo "not ok - fprintd resume hook parses"; exit 1; }
+r=$(mktemp -d); mkdir -p "$r/bin"; printf '#!/bin/bash\necho "systemctl $*" >>"%s/calls"\n' "$r" >"$r/bin/systemctl"; chmod +x "$r/bin/systemctl"
+PATH=$r/bin:$PATH OMAMOBILE_FP_ROOT=$r bash "$h" pre; PATH=$r/bin:$PATH OMAMOBILE_FP_ROOT=$r bash "$h" post
+[[ $(cat "$r/calls" 2>/dev/null) == "systemctl --no-block try-restart fprintd.service" ]] || { echo "not ok - the resume hook restarts fprintd after a wake, and only then"; exit 1; }
+: >"$r/calls"; mkdir -p "$r/usr/lib/systemd/system-sleep"; : >"$r/usr/lib/systemd/system-sleep/fprintd-resume"
+PATH=$r/bin:$PATH OMAMOBILE_FP_ROOT=$r bash "$h" post
+[[ ! -s $r/calls ]] || { echo "not ok - the resume hook stands aside for Omarchy's"; exit 1; }
+rm -rf "$r"
+echo "ok - fprintd is restarted after a wake, unless Omarchy's own hook does it"
+
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
   exit 0
