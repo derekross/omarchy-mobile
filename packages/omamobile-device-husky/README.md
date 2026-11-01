@@ -8,6 +8,7 @@ Omarchy Mobile's first userspace package for the Google Pixel 8 Pro (codename hu
 | `vendor/systemd/network/20-usb-gadget.network` | `/usr/lib/systemd/network` | Sets usb0 to 172.16.42.1/24 after handover. A replug may need a reboot: this package does not close the USB2 switch again (as on the Pixel Fold; husky's replug is untested) |
 | `vendor/systemd/logind.conf.d/10-omamobile-power-key.conf` | `/usr/lib/systemd/logind.conf.d` | A short power press does not power the phone off. Same drop-in as the Pixel 7 Pro. On husky the forced reset is Power + Volume Up held 15-30 s ([BRINGUP-M1](../../device/husky/BRINGUP-M1.md) test 23) |
 | `vendor/NetworkManager/conf.d/10-omamobile-usb.conf` | `/usr/lib/NetworkManager/conf.d` | Keeps NetworkManager off that link |
+| `vendor/modprobe.d/omamobile-husky-clk-acpm.conf` | `/usr/lib/modprobe.d` | Lets the GPU's ACPM clock move up to 890 MHz, stock's top (`zuma_gpu_max_khz`, kernel #157). The GPU thermal zone throttles it from 85 C. Without it the GPU stays at the bootloader's 150 MHz |
 | `etc/omamobile-mirrorlist` | `/etc/pacman.d/omamobile-mirrorlist` | Where pacman finds the `[omamobile]` repository. Same file as the Pixel 7 Pro package |
 | `omamobile-device-husky.install` | pacman hook | Adds `[omamobile]` to `pacman.conf` before `[omarchy]`, once. Same script as the Pixel 7 Pro package |
 | `src/reboot-to.c` | `/usr/bin/reboot-to` | Reboot with a reason the bootloader understands. Same bytes as the Pixel 7 Pro package; the test checks |
