@@ -7,7 +7,7 @@ up to 1803/1999/2252 MHz, the firmware runs every normal level it is asked
 for, six thermal zones, throttling holds an all-core load at 78-80 °C,
 Whisper runs about 2x faster, and an s2idle cycle resumes cleanly. Boost
 (the turbo levels) stays off for the first release; C6 hasn't run.
-GPU cooling is built and untested (section 10, runbook C8-C9; branch
+GPU cooling passed C8 and C9's emulated step (section 10, runbook C8-C9; branch
 `omamobile-gpu-cooling`); the energy model is planned (section 11, starting
 with the read-only C10) and the BCL researched (section 12). Kernel
 branch `omamobile-cpufreq` in `~/omamobile-kernel/wt-cpufreq`, four commits on `d15487384604` (the test
@@ -625,6 +625,17 @@ On 2026-10-31 unless noted, release
   after. At 99 % the cell sits at its highest voltage, so a repeat near
   50 % would test the margin harder; it is still the gate for leaving
   schedutil on at the normal levels by default.
+- **C8 passed** (2026-11-01, release
+  `7.3.0-rc6-omamobile-push1-g8e6f0f3e3763`, `omamobile-gpu-cooling` at
+  `8e6f0f3e3763`). `gpu-thermal` at 54 °C idle, `step_wise`, trips 75000
+  and 85000 passive and 110000 critical; cdev0 and cdev1 both
+  `devfreq-28000000.gpu` (max state 11), bound to trips 0 and 1, at state
+  0. `gs201_gpu_max_khz` still 572000. No new errors (only panthor's old
+  "no regulator (mali)" line); `ufshcd_err_handler` 0.
+- **C9, emulated part passed** (same release). `emul_temp` 80000: cooling
+  state 3 and devfreq `max_freq` 572 MHz (from 848); 90000: state 8 and
+  302 MHz; back to 0: state 0 and 848 MHz again. The 120 s GPU load hasn't
+  run yet.
 - **Not run:** C6 (boost). Boost stays off for the first release: without a
   BCL driver the turbo levels need a BCL (section 12) before they run on
   battery.
