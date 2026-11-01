@@ -484,6 +484,29 @@ with the cable in.
   S2MPG14 interrupt registers (INT1-INT5 through the ACPM regmap, from
   the kernel, never from userspace) at that wake, and check the 30-minute
   sleeps' records for their real length.
+
+  A bring-up module (`tegu-pmic-wakeread`) then read INT1-INT5 and their
+  masks through the PMIC's regmap in suspend_noirq and resume_noirq
+  (reads only; INT1-INT5 clear on read). Three sleeps, all woken about a
+  second in:
+
+  | Alarm set | INT1-5 at sleep | INT1-5 at wake | Wake IRQ |
+  | --- | --- | --- | --- |
+  | 30 s | 00 09 00 00 00 | 00 0c 00 00 00 | 56 (PMIC) |
+  | 120 s | 00 09 00 00 00 | 00 0d 00 00 00 | 56 (PMIC) |
+  | none (`rtcwake -m disable`) | 00 08 00 00 00 | 02 09 00 00 00 | 59 (Power key, gpa4-0) |
+
+  The masks read `ff fb ff ff ff` each time, so only INT2 bit 2, alarm 0,
+  is unmasked. With an alarm set, alarm 0 latched within 60 ms of the
+  suspend_noirq read, whether it was due in 30 or 120 s; with none set,
+  INT1 bit 1 (power key released) latched and the power key's GPIO woke
+  the SoC, with nobody touching the key. So something in the last stage
+  of the suspend makes the S2MPG14 raise events that didn't happen, and
+  every sleep since at least 2026-10-30 has probably lasted about a
+  second. The 1 s and 60 s RTC ticks (INT2 bits 3 and 0) were latched
+  but masked throughout. After the no-alarm sleep, SSH over USB took
+  about 8 minutes to come back, with nothing in the kernel log about
+  USB.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
