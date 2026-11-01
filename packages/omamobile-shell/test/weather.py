@@ -9,6 +9,7 @@ import glob
 import importlib.machinery
 import importlib.util
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -43,18 +44,23 @@ def reset():
 
 
 # The words agree with the home screen widget's for every code.
-js = ("const M = require(process.argv[1]); const out = {};"
-      "for (let c = -1; c <= 120; c++) out[c] = M.weatherText(c).text;"
-      "out.x = M.weatherText('x').text; out.n = M.weatherText(null).text;"
-      "console.log(JSON.stringify(out))")
-theirs = json.loads(subprocess.run(["node", "-e", js, os.path.join(ROOT, "plugins/omamobile.home/HomeModel.js")],
-                                   check=True, capture_output=True, text=True).stdout)
-mine = {str(c): W.weather_text(c) for c in range(-1, 121)}
-mine["x"] = W.weather_text("x")
-mine["n"] = W.weather_text(None)
-diff = {k: (mine[k], theirs[k]) for k in theirs if mine.get(k) != theirs[k]}
-ok(not diff, "the words for each code are the home screen widget's %s" % diff)
-print("ok - weather: the words for every code are the home screen widget's (HomeModel.weatherText)")
+# It runs the widget's JavaScript, so it needs node, like the model tests in
+# test/all; without node it is skipped as they are.
+if shutil.which("node"):
+    js = ("const M = require(process.argv[1]); const out = {};"
+          "for (let c = -1; c <= 120; c++) out[c] = M.weatherText(c).text;"
+          "out.x = M.weatherText('x').text; out.n = M.weatherText(null).text;"
+          "console.log(JSON.stringify(out))")
+    theirs = json.loads(subprocess.run(["node", "-e", js, os.path.join(ROOT, "plugins/omamobile.home/HomeModel.js")],
+                                       check=True, capture_output=True, text=True).stdout)
+    mine = {str(c): W.weather_text(c) for c in range(-1, 121)}
+    mine["x"] = W.weather_text("x")
+    mine["n"] = W.weather_text(None)
+    diff = {k: (mine[k], theirs[k]) for k in theirs if mine.get(k) != theirs[k]}
+    ok(not diff, "the words for each code are the home screen widget's %s" % diff)
+    print("ok - weather: the words for every code are the home screen widget's (HomeModel.weatherText)")
+else:
+    print("ok - weather: the words match the home screen widget's # SKIP no node")
 
 # Settings and where to look
 us = {"LANG": "en_US.UTF-8"}
