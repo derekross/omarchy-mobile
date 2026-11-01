@@ -116,6 +116,23 @@ flags read 1 afterwards. No other backup was taken first. Until the
 maintainer decides how B is marked on the 9a, there are no more `devinfo`
 writes: with B unmarked, reboots stay few and images are tried with `push`.
 
+## 2026-10-30, evening: GNSS gets a fix
+
+The receiver gets a position fix on the owner's kernel: up to 13 satellites
+used, HDOP 0.8-1.2, GPS, Galileo, BeiDou and GLONASS tracked, CHPP clean
+for about a minute per boot. One fix did it: spi-s3c64xx
+turned the channels off after clearing the packet count, which lost a few
+bits per transfer on a streaming slave (linux-omarchy-mobile#150). A pin
+drive change (linux-omarchy-mobile#151) was credited too and withdrawn on 10-31: at the
+bootloader's drive 0 with linux-omarchy-mobile#150 alone, 50 of 53 fixed and every frame at bit
+offset 0 with a valid CRC. What ends the fix is
+the CP link under GNSS traffic: held up it crashes the CP 103-108 s after
+ONLINE (six boots of six), left to cycle it hung the SoC 170 s to about 26 minutes
+after ONLINE. That hang was the PERIC0 GPIO bus clock gate (found
+2026-11-01, linux-omarchy-mobile#172); with the gate kept on and the link
+left to cycle, a 30-minute session through the Location switch ran clean. Details, the configuration and the sweep in
+[MODEM-PLAN](MODEM-PLAN.md) "G3, GNSS gets a fix" and G3-L1.
+
 ## 2026-10-30: the hands-on morning (fingerprint, card, USB-C host, GNSS)
 
 Release `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, device
@@ -276,8 +293,10 @@ list below:
 - **Speakers:** the -10 dB ceiling recorded below, by hand with the AoC.
 - **GNSS, 2026-10-30 evening:** a position fix on a bring-up kernel (the gn3
   tree with the spi-s3c64xx swap-mode change and the flush-order fix of
-  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, drive 3, mode
-  0, 32-bit words, feedback delay 0, automatic chip select, 64-byte reads):
+  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, mode 0,
+  32-bit words, feedback delay 0, automatic chip select, 64-byte reads; that boot also
+  raised the pins' drive to 3, which the 10-31 check at drive 0 showed was
+  not needed, linux-omarchy-mobile#151 closed):
   in a 3-minute session by a window, 23 of 25 GGA sentences with fix quality
   1, up to 13 satellites used, HDOP 0.8, every CHPP read at bit 0 with a
   valid CRC; started by hand through the modem bring-up, not by a package.
