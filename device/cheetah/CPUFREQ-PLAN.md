@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # CPU frequency plan: cpufreq-dt on the ACPM DVFS clocks (cheetah / gs201)
 
-Status (2026-11-01): **C1, C2, C3, C4 and C7 passed on the phone** (section 8;
+Status (2026-11-01): **C1, C2, C3, C4, C5 and C7 passed on the phone** (section 8;
 release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`). Three schedutil policies
 up to 1803/1999/2252 MHz, the firmware runs every normal level it is asked
 for, six thermal zones, throttling holds an all-core load at 78-80 °C,
 Whisper runs about 2x faster, and an s2idle cycle resumes cleanly. Boost
-(the turbo levels) stays off for the first release; C5 and C6 haven't run.
+(the turbo levels) stays off for the first release; C6 hasn't run.
 GPU cooling is built and untested (section 10, runbook C8-C9; branch
 `omamobile-gpu-cooling`); the energy model is planned (section 11, starting
 with the read-only C10) and the BCL researched (section 12). Kernel
@@ -615,8 +615,19 @@ On 2026-10-31 unless noted, release
   `systemctl suspend`): `suspend_stats` success 1, fail 0; `omamobile-sleepd`
   logged the wake by IRQ 125 (the s2mpg12 PMIC, the RTC alarm). After
   resume all policies scaled, the zones read 48-51 °C, `ufshcd_err_handler` 0.
-- **Not run:** C5 (all-core load on battery), C6 (boost). Boost stays off for the first release: without a
-  BCL driver the turbo levels need C5 and C6 first.
+- **C5 passed** (2026-11-01, same release; 60 s, all eight cores busy, on
+  battery, started by the unplug from a detached script with the 95 °C kill
+  switch). Battery at 99 %. The lowest voltage under load was 4.243 V, the
+  highest current 1.99 A; peak 84 °C, the ceilings settling at about
+  1598-1704 / 1663-1836 / 1277-1426 MHz (cooling states up to 2/5/13). No
+  reset (uptime unbroken), no `uvlo`/`smpl`/OCP or ACPM messages,
+  `ufshcd_err_handler` 0; the zones fell from 81 to 57 °C within 10 s
+  after. At 99 % the cell sits at its highest voltage, so a repeat near
+  50 % would test the margin harder; it is still the gate for leaving
+  schedutil on at the normal levels by default.
+- **Not run:** C6 (boost). Boost stays off for the first release: without a
+  BCL driver the turbo levels need a BCL (section 12) before they run on
+  battery.
 
 ## 9. After this
 
