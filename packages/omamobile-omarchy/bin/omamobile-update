@@ -140,10 +140,16 @@ def battery():
     for name in supplies:
         d = os.path.join(POWER, name)
         kind = read_sys(os.path.join(d, "type"))
+        # A keyboard's, mouse's or controller's battery is a Battery too, with
+        # scope Device, and sorts before the phone's gauge: skip it, and take
+        # the status only from the battery that gave the level.
+        if kind == "Battery" and read_sys(os.path.join(d, "scope")) == "Device":
+            continue
         if kind == "Battery" and read_sys(os.path.join(d, "present")) != "0" and not present:
             cap = read_sys(os.path.join(d, "capacity"))
-            if cap.isdigit():
-                present, percent = True, int(cap)
+            if not cap.isdigit():
+                continue
+            present, percent = True, int(cap)
             if read_sys(os.path.join(d, "status")) in ("Charging", "Full"):
                 charging = True
         elif kind in ("Mains", "USB", "USB_C", "USB_PD", "Wireless") and read_sys(os.path.join(d, "online")) == "1":
