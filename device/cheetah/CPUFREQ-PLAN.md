@@ -634,8 +634,27 @@ On 2026-10-31 unless noted, release
   "no regulator (mali)" line); `ufshcd_err_handler` 0.
 - **C9, emulated part passed** (same release). `emul_temp` 80000: cooling
   state 3 and devfreq `max_freq` 572 MHz (from 848); 90000: state 8 and
-  302 MHz; back to 0: state 0 and 848 MHz again. The 120 s GPU load hasn't
-  run yet.
+  302 MHz; back to 0: state 0 and 848 MHz again.
+- **C9, real load passed** (2026-11-01, release
+  `7.3.0-rc6-omamobile-push1-g291da0df9327`: the GPU-cooling kernel plus
+  shared-driver commits from kernel #164 and #56, no thermal change).
+  `glmark2-es2-wayland --run-forever --off-screen` for 120 s on the charger:
+  the GPU held 572 MHz (the cap) for 117 of 125 one-second samples, the
+  `gpu-thermal` zone peaked at 60 °C and settled at 56-58 °C, and the
+  cooling state stayed 0, so the first trip (75 °C) was never reached. At
+  the cap the GPU stays 15 °C under its first trip on sustained load: the
+  data for lifting the cap once a BCL exists (section 12).
+- **C10 passed** (same day; read-only `PROT_READ` mmap of APM SRAM at
+  0x18531000, aligned words; `devmem` isn't on the Arch root, so the first
+  word came from the same Python read). First word 0x02080d00 (MIF, 13
+  levels). Level counts mif 13, int 7, cpucl0 15, cpucl1 17, cpucl2 21,
+  g3d 12, g3dl2 7, as expected. Every rate in the kernel's tables is in the
+  map (policy0's 11, policy4's 12 plus boost, policy6's 12 plus boost), and
+  the G3D column matches the GPU's 12 levels exactly; the map also lists
+  the higher levels the kernel leaves out. Voltages run 500-1075 mV,
+  falling with the rate. This chip's table is in `logs/fvmap-20261101.txt`
+  (not committed: it's one phone's fused values) for the energy model
+  (section 11).
 - **Not run:** C6 (boost). Boost stays off for the first release: without a
   BCL driver the turbo levels need a BCL (section 12) before they run on
   battery.
