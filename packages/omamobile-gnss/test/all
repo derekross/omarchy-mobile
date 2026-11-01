@@ -32,6 +32,7 @@ run_start() { # $1 dt dir, $2 fake unix table
     sed -e "s|/var/lib/omamobile/gnss-bringup-started|'"$tmp"'/var/lib/omamobile/gnss-bringup-started|" \
         -e "s|/proc/net/unix|'"$2"'|" \
         -e "s|/run/omamobile-gnss/session|'"$tmp"'/run/omamobile-gnss/session|" \
+        -e "s|/sys/firmware/devicetree/base/soc@0/usi@109400c0/spi@10940000/status|'"$tmp"'/no-spi5|" \
         -e "s|/usr/lib/omamobile-vendor/omamobile-vendor-chroot|'"$tmp"'/stub|" lib/omamobile-gnss-start > '"$tmp"'/start
     bash '"$tmp"'/start "$@"' _ "${3:-}" 2>/dev/null
 }
