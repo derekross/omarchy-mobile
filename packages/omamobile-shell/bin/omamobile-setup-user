@@ -6,6 +6,23 @@
 # markers, so the user's later changes are never overwritten.
 set -euo pipefail
 
+# --adopt: for a user set up by hand (a bring-up), not by firstboot. Every
+# once-only step is marked done without being run, so the user's files stay
+# as they are (shell.json isn't reseeded, nothing is appended twice), while
+# the parts that run at every login (plugin links, keyboard layouts and
+# theme, the menu entries kept current) still run. A step the user does want
+# can be had afterwards by removing its marker from
+# ~/.local/state/omarchy/done/ before the next login.
+if [[ ${1:-} == --adopt ]]; then
+  omarchy-done() {
+    if [[ $1 == ensure ]]; then
+      command omarchy-done check "$2" 2>/dev/null || { command omarchy-done mark "$2"; echo "omamobile-setup-user: adopted $2 (marked done, not run)"; }
+      return 1
+    fi
+    command omarchy-done "$@"
+  }
+fi
+
 # (test/setup-user.sh points both at the package's own tree and a scratch dir)
 share=${OMAMOBILE_SHELL_SHARE:-/usr/share/omamobile/shell}
 config=~/.config/omarchy

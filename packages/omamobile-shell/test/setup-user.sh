@@ -16,6 +16,7 @@ fake() { printf '#!/bin/bash\n%s\n' "$2" >"$F/$1"; chmod +x "$F/$1"; }
 fake omarchy-done 'd=$HOME/.local/state/omarchy/done; mkdir -p "$d"
 case $1 in
   ensure) [[ -e $d/$2 ]] && exit 1; touch "$d/$2" ;;
+  check) [[ -e $d/$2 ]] ;;
   mark) touch "$d/$2" ;;
 esac'
 fake gsettings 'echo "gsettings $*" >>"$HOME/calls"'
@@ -49,7 +50,7 @@ done
 run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
     OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
-    bash bin/omamobile-setup-user >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
+    bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
 # A user who wants Logout back gives the row their own entry
@@ -255,3 +256,26 @@ RUN_HOME=$hk run
   || fail "a layout the user wrote stays"
 [[ -L $hk/.local/share/squeekboard/keyboards/fr.yaml ]] || fail "the others are linked beside it"
 pass "the keyboard: a layout of the user's own stays"
+
+# --adopt: a user set up by hand, with no markers, keeps every file as it is;
+# every once-only step is marked done, the plugin links are made, and a
+# normal login afterwards changes nothing
+ha=$t/home-adopt; mkdir -p "$ha/.config/hypr" "$ha/.config/omarchy/extensions" "$ha/.config/foot"
+cp "$H/.config/foot/foot.ini" "$ha/.config/foot/foot.ini"
+cp "$t/home/.config/omarchy/extensions/omarchy-menu.jsonc" "$ha/.config/omarchy/extensions/" 2>/dev/null || printf '{\n}\n' >"$ha/.config/omarchy/extensions/omarchy-menu.jsonc"
+printf '{"plugins": [{"id": "mine"}]}\n' >"$ha/.config/omarchy/shell.json"
+printf -- '-- mine\nhl.config({ cursor = { invisible = true } })\n' >"$ha/.config/hypr/looknfeel.lua"
+printf -- '-- mine\n' >"$ha/.config/hypr/autostart.lua"
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = 2\n' >"$ha/.config/hypr/monitors.lua"
+snap() { (cd "$ha/.config" && cat omarchy/shell.json hypr/looknfeel.lua hypr/autostart.lua hypr/monitors.lua foot/foot.ini) | sha256sum; }
+before=$(snap)
+RUN_HOME=$ha run --adopt; out=$(cat "$t/out")
+[[ $(snap) == "$before" ]] || fail "--adopt changed the user's files"
+n=$(grep -c 'omarchy-done ensure' bin/omamobile-setup-user)
+m=$(ls "$ha/.local/state/omarchy/done" | grep -c '^omamobile-')
+(( m >= n - 1 )) || fail "--adopt marked $m steps of about $n"
+[[ -L $ha/.config/omarchy/plugins/omamobile.home ]] || fail "--adopt still links the plugins"
+grep -c 'adopted omamobile-shell-profile' <<<"$out" >/dev/null || fail "--adopt says what it marked"
+RUN_HOME=$ha run >/dev/null
+[[ $(snap) == "$before" ]] || fail "a login after --adopt changed the user's files"
+pass "--adopt: a hand-set-up user keeps their files, every once-only step is marked, and later logins change nothing"
