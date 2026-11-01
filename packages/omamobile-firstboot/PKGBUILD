@@ -2,7 +2,7 @@
 # Maintainer: Derek Ross <derekross@gmail.com>
 pkgname=omamobile-firstboot
 pkgver=$(cat "${startdir:-.}/version")
-pkgrel=2
+pkgrel=1
 pkgdesc="Omarchy Mobile first boot: the user, SSH key, firewall and Omarchy's setup from the installer's answers"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"

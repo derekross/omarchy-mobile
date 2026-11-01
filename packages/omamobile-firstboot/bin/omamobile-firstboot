@@ -212,7 +212,7 @@ step() {
 
 s_keyring() {
   # A phone without a working RTC can boot before its signing keys existed.
-  # Installed public keyrings are part of the verified root image; use their
+  # Installed public keyrings are part of the root image; use their
   # newest mtime as a floor before GnuPG creates or imports keys offline.
   # Never move a valid clock backwards, and do nothing without a keyring.
   local keyring stamp floor=0 now
