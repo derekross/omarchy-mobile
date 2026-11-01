@@ -11,6 +11,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 bash -n build || fail "build parses"
 bash -n install || fail "install parses"
+bash -n bin/omamobile-usb-rescue || fail "omamobile-usb-rescue parses"
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -44,6 +45,12 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
   pass "the pacman install script matches the cheetah package"
+  cmp -s bin/omamobile-usb-rescue ../omamobile-device-cheetah/bin/omamobile-usb-rescue \
+    || fail "omamobile-usb-rescue drifted from the cheetah package"
+  cmp -s vendor/systemd/system/omamobile-usb-rescue.service \
+    ../omamobile-device-cheetah/vendor/systemd/system/omamobile-usb-rescue.service \
+    || fail "the usb-rescue unit drifted from the cheetah package"
+  pass "omamobile-usb-rescue and its unit match the cheetah package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-panther.install$' PKGBUILD \
@@ -73,6 +80,8 @@ for f in usr/bin/reboot-to \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-panther/version \
          usr/share/licenses/omamobile-device-panther/LICENSE \
+         usr/bin/omamobile-usb-rescue \
+         usr/lib/systemd/system/omamobile-usb-rescue.service \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
@@ -96,6 +105,10 @@ grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
   || fail "the long press stays the PMIC reset"
 grep -q '^MemorySleepMode=s2idle$' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-omamobile.conf" \
   || fail "suspend must be s2idle: gs201 never wakes from deep"
+[[ -x $tmp/root/usr/bin/omamobile-usb-rescue ]] || fail "omamobile-usb-rescue is executable"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
+  || fail "omamobile-usb-rescue starts at boot"
+grep -q 'i2c-tools' PKGBUILD || fail "omamobile-usb-rescue needs i2c-tools"
 grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is panther"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
@@ -105,7 +118,7 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rules, the USB link, and the mirrorlist, and nothing that marks a slot or starts hardware"
+pass "install stages the udev rules, the USB link and its rescue, and the mirrorlist, and nothing that marks a slot or starts hardware"
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
