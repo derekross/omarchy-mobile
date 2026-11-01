@@ -93,193 +93,119 @@ Item {
       wait(30)
     }
 
-    function test_holding_the_pill_asks_the_agent_until_it_lets_go() {
-      var strip = find(harness, "pillStrip")
-      var t = touchEvent(strip)
-      t.press(0, strip, strip.width / 2, strip.height / 2).commit()
-      wait(800)
-      compare(voiceCalls("askPress"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("askRelease"), 0, "still listening while the finger is down")
-      t.release(0, strip, strip.width / 2, strip.height / 2).commit()
-      wait(30)
-      compare(voiceCalls("askRelease"), 1, JSON.stringify(Quickshell.executed))
-      compare(keyboardCalls("Keyboard"), 0, "a hold is no tap")
-      compare(calls("hl.dsp.focus"), 0, "nor a swipe home")
+    // The voice key: the bottom bar's one mic, at the right end of the
+    // strip (over an app and under the keyboard) and of the dock.
+    function test_the_voice_key_sits_at_the_right_end_of_every_bottom_row() {
+      var names = ["pillStrip", "keyboardStrip", "dock"]
+      for (var i = 0; i < names.length; i++) {
+        var row = find(harness, names[i])
+        var key = find(row, "voiceKey")
+        verify(key && key.visible, names[i] + ": a voice key")
+        verify(key.width >= 44 && key.height >= 44, names[i] + ": " + key.width + "x" + key.height)
+        compare(key.Accessible.name, "Voice")
+        var p = key.mapToItem(row, 0, 0)
+        verify(row.width - (p.x + key.width) <= Style.spacing.xxl, names[i] + ": at the right end, " + p.x)
+        verify(p.y >= 0 && p.y + key.height <= row.height, names[i] + ": inside the row")
+      }
+      compare(find(harness, "pillStrip").height, harness.stripHeight, "the strip keeps its height")
+    }
+
+    function test_tapping_the_voice_key_toggles_the_bar() {
+      var names = ["pillStrip", "keyboardStrip", "dock"]
+      for (var i = 0; i < names.length; i++) {
+        Quickshell.executed = []
+        var row = find(harness, names[i])
+        var key = find(row, "voiceKey")
+        var c = key.mapToItem(row, key.width / 2, key.height / 2)
+        tap(row, c.x, c.y)
+        wait(600)
+        compare(voiceCalls("toggle"), 1, names[i] + ": " + JSON.stringify(Quickshell.executed))
+        compare(calls("expand"), 0, names[i] + ": the voice key's tap doesn't open the drawer")
+        compare(keyboardCalls("Keyboard"), 0, names[i] + ": nor the keyboard")
+      }
     }
 
     function test_the_voice_call_goes_through_the_plugins_ipc() {
-      var strip = find(harness, "pillStrip")
-      hold(strip, strip.width / 2, strip.height / 2, 800)
+      var row = find(harness, "pillStrip")
+      var key = find(row, "voiceKey")
+      var c = key.mapToItem(row, key.width / 2, key.height / 2)
+      tap(row, c.x, c.y)
       compare(JSON.stringify(Quickshell.executed[0]),
-              JSON.stringify(["qs", "ipc", "-p", "/stub/shell", "call", "shell", "call", "omamobile.voice", "askPress", ""]))
+              JSON.stringify(["qs", "ipc", "-p", "/stub/shell", "call", "shell", "call", "omamobile.voice", "toggle", ""]))
     }
 
-    function test_holding_the_keyboard_strip_asks_the_agent_too() {
-      var strip = find(harness, "keyboardStrip")
-      hold(strip, strip.width / 2, strip.height / 2, 800)
-      compare(voiceCalls("askPress"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("askRelease"), 1)
-    }
-
-    function test_a_tap_and_a_double_tap_never_ask() {
-      var strip = find(harness, "pillStrip")
-      tap(strip, strip.width / 2, strip.height / 2)
-      tap(strip, strip.width / 2, strip.height / 2)
-      wait(700)
-      compare(voiceCalls("ask"), 0, JSON.stringify(Quickshell.executed))
-    }
-
-    function test_a_swipe_after_a_hold_stops_listening_and_stays() {
-      var strip = find(harness, "pillStrip")
-      var x = strip.width / 2, y = strip.height / 2
-      var t = touchEvent(strip)
-      t.press(0, strip, x, y).commit()
+    function test_holding_the_voice_key_is_push_to_talk() {
+      var row = find(harness, "pillStrip")
+      var key = find(row, "voiceKey")
+      var c = key.mapToItem(row, key.width / 2, key.height / 2)
+      var t = touchEvent(row)
+      t.press(0, row, c.x, c.y).commit()
       wait(800)
-      for (var dy = 6; dy <= 72; dy += 6) {
-        t.move(0, strip, x, y - dy).commit()
-        wait(5)
-      }
-      t.release(0, strip, x, y - 72).commit()
+      compare(voiceCalls("press"), 1, JSON.stringify(Quickshell.executed))
+      compare(voiceCalls("release"), 0, "still talking while the finger is down")
+      t.release(0, row, c.x, c.y).commit()
       wait(30)
-      compare(voiceCalls("askPress"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("askRelease"), 1, "listening stops")
-      compare(calls("hl.dsp.focus"), 0, "a held finger that moves doesn't go home")
-      compare(calls("omamobile.switcher"), 0, "nor to recent apps")
+      compare(voiceCalls("release"), 1)
+      compare(voiceCalls("toggle"), 0, "a hold is no tap")
     }
 
-    function test_the_mic_key_shows_only_with_the_keyboard_at_the_left_end() {
-      verify(!find(find(harness, "pillStrip"), "micKey").visible, "no mic over an app")
-      var strip = find(harness, "keyboardStrip")
-      var key = find(strip, "micKey")
-      verify(key.visible)
-      verify(key.width >= 44 && key.height >= 44, key.width + "x" + key.height)
-      var p = key.mapToItem(strip, 0, 0)
-      verify(p.x <= 8, "at the left end: " + p.x)
+    function test_two_taps_on_the_voice_key_are_no_double_tap() {
+      var row = find(harness, "pillStrip")
+      var key = find(row, "voiceKey")
+      var c = key.mapToItem(row, key.width / 2, key.height / 2)
+      tap(row, c.x, c.y)
+      tap(row, c.x, c.y)
+      compare(voiceCalls("toggle"), 2, JSON.stringify(Quickshell.executed))
+      compare(keyboardCalls("toggleKeyboard"), 0)
     }
 
-    function test_tapping_the_mic_key_toggles_dictation() {
-      var strip = find(harness, "keyboardStrip")
-      var key = find(strip, "micKey")
-      var c = key.mapToItem(strip, key.width / 2, key.height / 2)
-      tap(strip, c.x, c.y)
-      compare(voiceCalls("dictateTap"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("ask"), 0)
-      tap(strip, c.x, c.y)
-      compare(voiceCalls("dictateTap"), 2)
-      compare(keyboardCalls("toggleKeyboard"), 0, "two taps on the mic are no double tap")
+    function test_a_swipe_from_the_voice_key_goes_home() {
+      var row = find(harness, "pillStrip")
+      var key = find(row, "voiceKey")
+      var c = key.mapToItem(row, key.width / 2, key.height / 2)
+      swipeUp(row, c.x, c.y)
+      compare(calls("hl.dsp.focus"), 1, JSON.stringify(Quickshell.executed))
+      compare(voiceCalls("o"), 0, "the swipe is no voice")
     }
 
-    function test_holding_the_mic_key_is_push_to_talk() {
-      var strip = find(harness, "keyboardStrip")
-      var key = find(strip, "micKey")
-      var c = key.mapToItem(strip, key.width / 2, key.height / 2)
-      hold(strip, c.x, c.y, 800)
-      compare(voiceCalls("dictatePress"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("dictateRelease"), 1)
-      compare(voiceCalls("dictateTap"), 0, "a hold is no tap")
-      compare(voiceCalls("ask"), 0, "the mic's hold is its own, not the strip's")
+    function test_holding_the_strip_itself_does_nothing() {
+      var strip = find(harness, "pillStrip")
+      hold(strip, strip.width / 2, strip.height / 2, 800)
+      compare(Quickshell.executed.length, 0, "no more voice on the pill's hold: " + JSON.stringify(Quickshell.executed))
     }
 
-    // The dock's search pill on the home screen: tap opens the drawer
-    // (with the keyboard), hold asks by voice, the mic at its right end
-    // listens on a tap and talks on a hold, a swipe opens recent apps.
+    // The dock's search pill on the home screen: a tap opens the drawer
+    // (with the keyboard), a hold does nothing, a swipe opens recent apps.
     function test_a_tap_on_the_search_pill_opens_the_drawer() {
       var dock = find(harness, "dock")
-      tap(dock, dock.width / 2, dock.height / 2)
+      tap(dock, dock.width / 3, dock.height / 2)
       wait(600)
       compare(calls("expand"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("ask"), 0, "a tap is no voice")
+      compare(voiceCalls("o"), 0, "a tap is no voice")
     }
 
-    function test_holding_the_search_pill_asks_by_voice() {
+    function test_holding_the_search_pill_does_nothing() {
       var dock = find(harness, "dock")
-      hold(dock, dock.width / 2, dock.height / 2, 800)
-      compare(voiceCalls("askPress"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("askRelease"), 1)
+      hold(dock, dock.width / 3, dock.height / 2, 800)
+      compare(voiceCalls("o"), 0, JSON.stringify(Quickshell.executed))
       compare(calls("expand"), 0, "a hold doesn't open the drawer")
     }
 
-    function test_the_search_pill_has_a_mic_at_its_right_end() {
+    function test_the_search_pill_leaves_the_voice_key_its_place() {
       var dock = find(harness, "dock")
-      var mic = find(dock, "pillMic")
-      verify(mic && mic.visible, "a mic button")
-      verify(mic.width >= 44 && mic.height >= 44, mic.width + "x" + mic.height)
-      compare(mic.Accessible.name, "Ask by voice")
-      var p = mic.mapToItem(dock, 0, 0)
-      verify(dock.width - (p.x + mic.width) <= Style.spacing.xxl + 8, "at the right end: " + p.x)
-    }
-
-    function test_tapping_the_mic_listens_hands_free() {
-      var dock = find(harness, "dock")
-      var mic = find(dock, "pillMic")
-      var c = mic.mapToItem(dock, mic.width / 2, mic.height / 2)
-      tap(dock, c.x, c.y)
+      var key = find(dock, "voiceKey")
+      var kp = key.mapToItem(dock, 0, 0)
+      verify(kp.x > dock.width / 2, "the key is on the right")
+      tap(dock, kp.x - Style.spacing.md - 6, dock.height / 2)
       wait(600)
-      compare(voiceCalls("askTap"), 1, JSON.stringify(Quickshell.executed))
-      compare(calls("expand"), 0, "the mic's tap doesn't open the drawer")
-    }
-
-    function test_holding_the_mic_is_push_to_talk() {
-      var dock = find(harness, "dock")
-      var mic = find(dock, "pillMic")
-      var c = mic.mapToItem(dock, mic.width / 2, mic.height / 2)
-      hold(dock, c.x, c.y, 800)
-      compare(voiceCalls("askPress"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("askRelease"), 1)
-      compare(voiceCalls("askTap"), 0)
-      compare(calls("expand"), 0)
+      compare(calls("expand"), 1, "just left of the key is the pill")
     }
 
     function test_a_swipe_on_the_dock_opens_recent_apps() {
       var dock = find(harness, "dock")
-      swipeUp(dock, dock.width / 2, dock.height / 2)
+      swipeUp(dock, dock.width / 3, dock.height / 2)
       compare(calls("omamobile.switcher"), 1, JSON.stringify(Quickshell.executed))
       compare(calls("expand"), 0, "a swipe is no tap")
-      compare(voiceCalls("ask"), 0)
-    }
-
-    // The agent mic in the strip (over an agent, keyboard down): at the
-    // right end, a whole touch target, its taps and holds its own.
-    function test_the_agent_mic_sits_in_the_strip_over_an_agent() {
-      var strip = find(harness, "pillStrip")
-      verify(!find(strip, "agentMicKey").visible, "no agent mic without an agent")
-      harness.voice = { agentMicShown: true, settings: {} }
-      var key = find(strip, "agentMicKey")
-      verify(key.visible, "an agent in front: the mic shows")
-      verify(key.width >= 44 && key.height >= 44, key.width + "x" + key.height)
-      compare(strip.height, harness.stripHeight, "the strip keeps its height")
-      var p = key.mapToItem(strip, 0, 0)
-      verify(strip.width - (p.x + key.width) <= 8, "at the right end")
-      verify(!find(find(harness, "keyboardStrip"), "agentMicKey").visible, "the keyboard strip keeps its hide key there")
-      var c = key.mapToItem(strip, key.width / 2, key.height / 2)
-      tap(strip, c.x, c.y)
-      tap(strip, c.x, c.y)
-      compare(voiceCalls("agentTap"), 2, JSON.stringify(Quickshell.executed))
-      compare(keyboardCalls("toggleKeyboard"), 0, "two taps on it are no double tap")
-      wait(600)
-      Quickshell.executed = []
-      hold(strip, c.x, c.y, 800)
-      compare(voiceCalls("agentPress"), 1, JSON.stringify(Quickshell.executed))
-      compare(voiceCalls("agentRelease"), 1)
-      compare(voiceCalls("ask"), 0, "its hold is its own, not the strip's")
-      harness.voice = null
-    }
-
-    function test_holds_follow_the_voice_settings() {
-      harness.voice = { settings: { holdPill: false, micKey: false } }
-      var strip = find(harness, "pillStrip")
-      hold(strip, strip.width / 2, strip.height / 2, 800)
-      var dock = find(harness, "dock")
-      hold(dock, dock.width / 2, dock.height / 2, 800)
-      compare(voiceCalls("ask"), 0, "hold the pill off: " + JSON.stringify(Quickshell.executed))
-      verify(!find(find(harness, "keyboardStrip"), "micKey").visible, "mic key off")
-      var mic = find(dock, "pillMic")
-      var c = mic.mapToItem(dock, mic.width / 2, mic.height / 2)
-      tap(dock, c.x, c.y)
-      wait(600)
-      compare(voiceCalls("askTap"), 1, "the search bar's mic always works")
-      harness.voice = null
-      verify(find(find(harness, "keyboardStrip"), "micKey").visible)
     }
 
     function test_over_an_app_the_strip_reserves_its_height() {
@@ -338,8 +264,8 @@ Item {
 
     function test_two_taps_where_the_hidden_key_sits_are_a_double_tap() {
       var strip = find(harness, "pillStrip")
-      tap(strip, strip.width - 20, strip.height / 2)
-      tap(strip, strip.width - 20, strip.height / 2)
+      tap(strip, 20, strip.height / 2)
+      tap(strip, 20, strip.height / 2)
       compare(keyboardCalls("toggleKeyboard"), 1, JSON.stringify(Quickshell.executed))
       compare(keyboardCalls("hideKeyboard"), 0)
     }
@@ -383,7 +309,7 @@ Item {
       compare(calls("hl.dsp.focus"), 0)
     }
 
-    function test_the_hide_key_is_a_touch_target_at_the_strips_right_end() {
+    function test_the_hide_key_is_a_touch_target_at_the_strips_left_end() {
       var strip = find(harness, "keyboardStrip")
       var key = find(strip, "hideKeyboard")
       verify(key, "the strip has a hide key")
@@ -391,7 +317,7 @@ Item {
       verify(strip.height >= 44, "the strip holds a whole touch target: " + strip.height)
       var p = key.mapToItem(strip, 0, 0)
       verify(p.y >= 0 && p.y + key.height <= strip.height, "inside the strip")
-      verify(strip.width - (p.x + key.width) <= 8, "at its right end")
+      verify(p.x <= 8, "at its left end (the right end is the voice key's)")
     }
 
     function test_tapping_the_hide_key_hides_the_keyboard() {

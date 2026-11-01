@@ -100,6 +100,7 @@ pass "tile-action.sh refuses unknown tiles and states"
 # stopped user service "down" (whatever its stale state file says), and the
 # daemon's own state file otherwise.
 stub voxtype 'echo "voxtype $*" >>'"$log"
+stub omamobile-voice 'echo "omamobile-voice $*" >>'"$log"
 stub systemctl '[ -e '"$tmp"'/state/voxtype-up ] || exit 3; echo "systemctl $*" >>'"$log"
 mkdir -p "$tmp/run/voxtype"; echo recording >"$tmp/run/voxtype/state"
 grep -cx "dictation=down" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is down while voxtype.service isn't active"
@@ -114,7 +115,7 @@ rm -f "$tmp/run/voxtype/state"
 grep -cx "dictation=off" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is off before voxtype writes its state"
 run "$dir/tile-action.sh" dictation on
 run "$dir/tile-action.sh" dictation off
-for line in "voxtype record start --no-osd --type" "voxtype record stop"; do
+for line in "omamobile-voice start" "omamobile-voice done"; do
   grep -cxF "$line" "$log" >/dev/null || fail "tile-action.sh runs: $line"
 done
-pass "dictation follows voxtype's service and state, starts (no OSD) and stops by direction"
+pass "dictation follows voxtype's service and state, opens and finishes the voice bar by direction"

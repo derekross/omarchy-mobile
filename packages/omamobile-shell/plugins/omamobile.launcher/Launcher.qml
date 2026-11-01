@@ -438,17 +438,23 @@ Item {
         }
 
         SearchPill {
-          anchors.fill: parent
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          anchors.left: parent.left
+          anchors.right: dockVoice.left
           anchors.margins: Style.spacing.xxl
+          anchors.rightMargin: Style.spacing.md
           placeholder: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
           onTapped: root.expand()
-          // Hold: ask the agent by voice (omamobile.voice).
-          onHeld: if (root.voiceSetting("holdPill")) root.voiceCall("askPress")
-          onReleased: if (root.voiceSetting("holdPill")) root.voiceCall("askRelease")
-          // The mic: tap to listen hands free, hold to talk.
-          onMicTap: root.voiceCall("askTap")
-          onMicHold: root.voiceCall("askPress")
-          onMicRelease: root.voiceCall("askRelease")
+        }
+
+        // Voice (omamobile.voice): the one mic on screen, at the right end
+        // of the bottom row, as over an app (see VoiceKey).
+        VoiceKey {
+          id: dockVoice
+          anchors.right: parent.right
+          anchors.rightMargin: Style.spacing.xxl - Style.spacing.xs
+          anchors.verticalCenter: parent.verticalCenter
         }
       }
     }
@@ -491,7 +497,7 @@ Item {
   // gesture's edge strips (omamobile.back) end above it.
   //
   // The keyboard's own controls live here too, so nothing floats over the
-  // app: a keyboard-down key at the strip's right end hides the keyboard
+  // app: a keyboard-down key at the strip's left end hides the keyboard
   // (only while it is up), and a double tap on the strip shows or hides it.
   // Both go through omamobile.keyboard's IPC (keyboardCall). The floating
   // hide button that plugin drew above the keyboard covered a terminal's
@@ -575,25 +581,17 @@ Item {
     Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.keyboard", method, ""])
   }
 
-  // Voice input (omamobile.voice): hold the pill to ask the agent, the mic
-  // key under the keyboard to dictate. A press and its release must reach
+  // Voice input (omamobile.voice): the voice key at the bottom bar's right
+  // end opens the voice bar. A press and its release must reach
   // it without a process in between, so it is called directly through its
   // VoiceLink.js (the script beside VoiceLinkClient.qml, as the home screen
   // reaches the drawer through DrawerLink.js), and through its IPC when
-  // that isn't loaded. method: askPress, askRelease, dictatePress,
-  // dictateRelease or dictateTap.
+  // that isn't loaded. method: toggle, press or release.
   Loader {
     id: voiceLink
     source: Qt.resolvedUrl("../omamobile.voice/VoiceLinkClient.qml")
   }
   readonly property var voice: voiceLink.item ? voiceLink.item.voice : null
-
-  // A voice setting (~/.config/omamobile/voice.json, through the voice
-  // service): on unless the user turned it off, and on when the service is
-  // out of reach (its IPC still answers).
-  function voiceSetting(key) {
-    return !root.voice || !root.voice.settings || root.voice.settings[key] !== false
-  }
 
   function voiceCall(method) {
     console.log("omamobile-home-indicator: voice", method)
@@ -624,11 +622,12 @@ Item {
   }
 
   // Once per user, the first time the dock has shown for a moment after
-  // voice input arrived: how to start it, as the keyboard tip above does
-  // (Omarchy's done store claims it, so it shows once).
-  readonly property string voiceHintText: "Tap the mic, or hold the search bar, to ask by voice"
+  // the voice bar arrived: where it starts, as the keyboard tip above does
+  // (Omarchy's done store claims it, so it shows once; a new marker, since
+  // 0.2.58's tip named the gestures the bar replaced).
+  readonly property string voiceHintText: "Tap the mic at the bottom right to talk: type, ask your agent, or search"
   function voiceHint() {
-    Quickshell.execDetached(["sh", "-c", "omarchy-done ensure omamobile-voice-hint && exec omarchy-notification-send -g \"$2\" \"$1\"",
+    Quickshell.execDetached(["sh", "-c", "omarchy-done ensure omamobile-voice-bar-hint && exec omarchy-notification-send -g \"$2\" \"$1\"",
                              "sh", root.voiceHintText, String.fromCodePoint(0xF036C)])
   }
   onDockShownChanged: dockShown ? voiceHintDelay.restart() : voiceHintDelay.stop()
@@ -651,7 +650,7 @@ Item {
   }
 
   // The strip: a full touch target tall (TOUCH-PLAN 2.5), and no taller,
-  // for the swipe and for the hide key at its right end. That is all an app
+  // for the swipe and for the keys at its ends. That is all an app
   // gives up, over it and under the keyboard alike.
   readonly property int stripHeight: touch
 
@@ -708,13 +707,6 @@ Item {
       WlrLayershell.layer: WlrLayer.Bottom
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
-      // The screen stays on while the agent mic listens (the voice
-      // service's own surfaces aren't up for it).
-      IdleInhibitor {
-        window: homeStrip
-        enabled: !!root.voice && root.voice.owner === "agent" && root.voice.busy === true
-      }
-
       Item {
         anchors.fill: parent
 
@@ -725,38 +717,25 @@ Item {
         HomeSwipe {
           anchors.fill: parent
           strip: root.oskOpen ? "keyboard" : "pill"
-          ownTaps: [hideKey, micKey, agentMicKey]
+          ownTaps: [hideKey, stripVoice]
         }
 
-        // The mic at the left end, only while the keyboard is up: dictate
-        // into the app (see MicKey).
-        MicKey {
-          id: micKey
-          visible: root.oskOpen && root.voiceSetting("micKey")
-          anchors.left: parent.left
-          anchors.leftMargin: Style.spacing.xs
-          anchors.verticalCenter: parent.verticalCenter
-        }
-
-        // The hide key's place while the keyboard is down and an agent's
-        // terminal is in front: talk to the agent (see AgentMicKey). In the
-        // strip, not floating over the app: an agent's prompt line is at
-        // the bottom, and a floating button covered its right end.
-        AgentMicKey {
-          id: agentMicKey
-          visible: !root.oskOpen && !!root.voice && root.voice.agentMicShown === true
+        // Voice at the right end, always (see VoiceKey): the bottom bar's
+        // one mic, over an app and under the keyboard alike.
+        VoiceKey {
+          id: stripVoice
           anchors.right: parent.right
           anchors.rightMargin: Style.spacing.xs
           anchors.verticalCenter: parent.verticalCenter
         }
 
-        // Over the swipe's right end, only while the keyboard is up; a
-        // swipe that starts on it still goes home (see HideKeyboardKey).
+        // At the left end, only while the keyboard is up; a swipe that
+        // starts on it still goes home (see HideKeyboardKey).
         HideKeyboardKey {
           id: hideKey
           visible: root.oskOpen
-          anchors.right: parent.right
-          anchors.rightMargin: Style.spacing.xs
+          anchors.left: parent.left
+          anchors.leftMargin: Style.spacing.xs
           anchors.verticalCenter: parent.verticalCenter
         }
       }
@@ -1147,25 +1126,10 @@ Item {
 
     property string placeholder: ""
     signal tapped()
-    // Holding the pill itself (voice: push-to-talk, a shortcut).
-    property bool voiceHeld: false
-    signal held()
-    signal released()
-    // The mic button at its right end: a tap starts listening hands free,
-    // a hold is push-to-talk.
-    property bool micHeld: false
-    signal micTap()
-    signal micHold()
-    signal micRelease()
 
     radius: Style.cornerRadius
-    color: pillTouch.pressed && !pill.onMic(pillTouch.point.pressPosition.x, pillTouch.point.pressPosition.y)
-      ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : Style.normalFill
+    color: pillTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : Style.normalFill
     borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
-
-    function onMic(x, y) {
-      return pillMic.visible && pillMic.contains(pillMic.mapFromItem(pill, x, y))
-    }
 
     Text {
       id: pillIcon
@@ -1182,8 +1146,8 @@ Item {
     Text {
       anchors.left: pillIcon.right
       anchors.leftMargin: Style.spacing.xl
-      anchors.right: pillMic.left
-      anchors.rightMargin: Style.spacing.md
+      anchors.right: parent.right
+      anchors.rightMargin: Style.spacing.controlPaddingX
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: pill.placeholder
@@ -1193,68 +1157,11 @@ Item {
       elide: Text.ElideRight
     }
 
-    // Ask by voice (omamobile.voice): the hold on the pill is invisible, so
-    // the mic says it is there. A full touch target at the right end; lit
-    // in the recording colour while the agent sheet listens.
-    Item {
-      id: pillMic
-      objectName: "pillMic"
-      anchors.right: parent.right
-      anchors.rightMargin: pill.borderRight + Style.spacing.xs
-      anchors.verticalCenter: parent.verticalCenter
-      width: Math.max(44, Style.space(44))
-      height: width
-      Accessible.role: Accessible.Button
-      Accessible.name: "Ask by voice"
-      readonly property bool live: !!root.voice && root.voice.owner === "ask"
-        && (root.voice.phase === "listening" || root.voice.phase === "starting")
-
-      Rectangle {
-        anchors.centerIn: parent
-        width: parent.width - 4
-        height: parent.height - 4
-        radius: Math.min(Style.cornerRadius, width / 2)
-        color: Style.pressedFillFor(root.foreground, Commons.Color.accent)
-        visible: pillTouch.pressed && pill.onMic(pillTouch.point.pressPosition.x, pillTouch.point.pressPosition.y)
-      }
-
-      Text {
-        anchors.centerIn: parent
-        textFormat: Text.PlainText
-        // nf-md-microphone
-        text: String.fromCodePoint(0xF036C)
-        color: pillMic.live ? Commons.Color.urgent : Qt.darker(root.foreground, 1.3)
-        font.family: Style.font.family
-        font.pixelSize: Style.font.iconLarge
-      }
-    }
-
     // A TapHandler, not a MouseArea: it lets go once the touch turns into a
-    // drag, so the dock's swipe-up (recent apps) still sees it. One handler
-    // for the pill and its mic, told apart by where the press landed (two
-    // passive handlers would both take a tap). Held still for half a
-    // second, either asks the agent by voice until the finger lets go.
+    // drag, so the dock's swipe-up (recent apps) still sees it.
     TapHandler {
       id: pillTouch
-      longPressThreshold: 0.5
-      onTapped: function(eventPoint) {
-        if (pill.onMic(eventPoint.pressPosition.x, eventPoint.pressPosition.y)) pill.micTap()
-        else pill.tapped()
-      }
-      onPressedChanged: {
-        if (pressed) { pill.voiceHeld = false; pill.micHeld = false; return }
-        if (pill.micHeld) pill.micRelease()
-        else if (pill.voiceHeld) pill.released()
-      }
-      onLongPressed: {
-        if (pill.onMic(pillTouch.point.pressPosition.x, pillTouch.point.pressPosition.y)) {
-          pill.micHeld = true
-          pill.micHold()
-        } else {
-          pill.voiceHeld = true
-          pill.held()
-        }
-      }
+      onTapped: pill.tapped()
     }
   }
 
@@ -1291,14 +1198,10 @@ Item {
   component HomeSwipe: Item {
     id: swipeArea
     property string strip: "pill"
-    // Items over the strip whose taps are their own (the hide key, the mic
-    // key): a tap there is never half of a double tap, or tapping the key
-    // twice would hide the keyboard and show it again, and a hold there is
-    // the key's own.
+    // Items over the strip whose taps are their own (the hide key, the
+    // voice key): a tap there is never half of a double tap, or tapping the
+    // key twice would hide the keyboard and show it again.
     property var ownTaps: []
-    // This touch's long press went to voice: its release stops listening,
-    // and it neither goes home nor opens recent apps if it then moves.
-    property bool voiceHeld: false
 
     function onOwnKey(x, y) {
       var keys = swipeArea.ownTaps || []
@@ -1315,25 +1218,9 @@ Item {
     // never also a tap. A tap never moves that far, so the DragHandler never
     // activates and a double tap goes neither home nor to recent apps. A
     // single tap does nothing, as before (the app still loses it).
-    //
-    // A long press (still, half a second) asks the agent by voice: the
-    // voice sheet opens and listens while the finger stays down. It never
-    // moved past the drag threshold, so it is no swipe; a tap or a double
-    // tap lets go well before it.
     TapHandler {
       id: doubleTap
       property bool lastOwn: false
-      longPressThreshold: 0.5
-      onPressedChanged: {
-        if (pressed) { swipeArea.voiceHeld = false; return }
-        if (swipeArea.voiceHeld) root.voiceCall("askRelease")
-      }
-      onLongPressed: {
-        if (swipeArea.onOwnKey(doubleTap.point.position.x, doubleTap.point.position.y)) return
-        if (!root.voiceSetting("holdPill")) return
-        swipeArea.voiceHeld = true
-        root.voiceCall("askPress")
-      }
       onTapped: function(eventPoint) {
         var onOwn = swipeArea.onOwnKey(eventPoint.position.x, eventPoint.position.y)
         var wasOwn = doubleTap.lastOwn
@@ -1350,7 +1237,7 @@ Item {
       property bool recents: false
       onActiveTranslationChanged: {
         swipeY = activeTranslation.y
-        if (recents || swipeArea.voiceHeld) return
+        if (recents) return
         if (swipeY < -120) {
           recents = true
           hold.stop()
@@ -1362,9 +1249,6 @@ Item {
       onActiveChanged: {
         if (active) { swipeY = 0; recents = false; return }
         hold.stop()
-        // A finger that held for voice and then moved: listening stopped
-        // as the swipe took the touch; it doesn't also go home.
-        if (swipeArea.voiceHeld) return
         console.log("omamobile-home-indicator: swipe", Math.round(swipeY), recents ? "recents" : "", "(" + swipeArea.strip + ")")
         if (!recents && swipeY < -24) root.goHome()
       }
@@ -1382,9 +1266,9 @@ Item {
   }
 
   // The keyboard strip's hide key: a keyboard-down glyph in a full 44 px
-  // touch target at the strip's right end, where Android's gesture bar puts
-  // its keyboard-down button; it reads as part of the keyboard and covers
-  // nothing in the app. Its TapHandler keeps the default DragThreshold
+  // touch target at the strip's left end (the right end is the voice key's,
+  // the bottom bar's one mic, since 0.2.61); it reads as part of the
+  // keyboard and covers nothing in the app. Its TapHandler keeps the default DragThreshold
   // policy, a passive grab, so the press also reaches the HomeSwipe under
   // it: a swipe that starts on the key still goes home (and doesn't hide
   // the keyboard), as the switcher's cards let a drag through their tap.
@@ -1418,107 +1302,57 @@ Item {
     }
   }
 
-  // The keyboard strip's mic key, at its left end (the hide key's mirror):
-  // dictation into the focused app through omamobile.voice (Voxtype types
-  // what it hears). Hold to talk, let go to stop; a tap starts listening
-  // and a second tap stops (or Done on the listening strip above the
-  // keyboard). Lit in the recording colour while it listens. Its
-  // TapHandler grabs passively too, so a swipe that starts on it still
-  // goes home.
-  component MicKey: Item {
-    id: micItem
-    objectName: "micKey"
-    width: root.touch
-    height: root.touch
-    property bool held: false
-    readonly property bool live: !!root.voice && root.voice.owner !== "ask"
-      && (root.voice.phase === "listening" || root.voice.phase === "starting")
-
-    Rectangle {
-      anchors.centerIn: parent
-      width: parent.width - 4
-      height: parent.height - 8
-      radius: height / 2
-      color: micItem.live ? Commons.Color.urgent
-        : Qt.rgba(Commons.Color.bar.text.r, Commons.Color.bar.text.g, Commons.Color.bar.text.b, 0.18)
-      visible: micTap.pressed || micItem.live
-    }
-
-    Text {
-      anchors.centerIn: parent
-      textFormat: Text.PlainText
-      // nf-md-microphone
-      text: String.fromCodePoint(0xF036C)
-      color: micItem.live ? Commons.Color.bar.background : Commons.Color.bar.text
-      font.family: Style.font.family
-      font.pixelSize: 22
-    }
-
-    TapHandler {
-      id: micTap
-      longPressThreshold: 0.3
-      onPressedChanged: {
-        if (pressed) { micItem.held = false; return }
-        if (micItem.held) root.voiceCall("dictateRelease")
-      }
-      onLongPressed: {
-        micItem.held = true
-        root.voiceCall("dictatePress")
-      }
-      onTapped: root.voiceCall("dictateTap")
-    }
-  }
-
-  // The strip's agent mic, at its right end while the keyboard is down and
-  // an agent's terminal is in front (omamobile.voice's agentMicShown): hold
-  // to talk, tap to start and tap again to stop. Voxtype types into the
-  // agent and submits as the voice settings say (Send automatically by
-  // default). The keyboard mic key's look; a passive grab, so a swipe that
-  // starts on it still goes home.
-  component AgentMicKey: Item {
-    id: agentItem
-    objectName: "agentMicKey"
+  // The bottom bar's voice key (omamobile.voice's voice bar), at the right
+  // end of the dock on the home screen and of the strip over an app: tap to
+  // start and tap again (or Done) to finish, hold to talk. The bar's one
+  // way in on screen; the rest (Power + Volume Up, the Dictation tile,
+  // squeekboard's dictation key) open the same bar. Lit in the recording
+  // colour while the bar listens. Its TapHandler grabs passively, so a
+  // swipe that starts on it still goes home.
+  component VoiceKey: Item {
+    id: voiceItem
+    objectName: "voiceKey"
     width: root.touch
     height: root.touch
     Accessible.role: Accessible.Button
-    Accessible.name: "Talk to the agent"
+    Accessible.name: voiceItem.live ? "Voice, listening" : "Voice"
     property bool held: false
-    readonly property bool live: !!root.voice && root.voice.owner === "agent"
+    readonly property bool live: !!root.voice && root.voice.mine === true
       && (root.voice.phase === "listening" || root.voice.phase === "starting")
-    readonly property bool working: !!root.voice && root.voice.owner === "agent" && root.voice.phase === "transcribing"
+    readonly property bool working: !!root.voice && root.voice.mine === true && root.voice.phase === "transcribing"
 
     Rectangle {
       anchors.centerIn: parent
       width: parent.width - 4
       height: parent.height - 8
-      radius: height / 2
-      color: agentItem.live ? Commons.Color.urgent
+      radius: Math.min(Style.cornerRadius, height / 2)
+      color: voiceItem.live ? Commons.Color.urgent
         : Qt.rgba(Commons.Color.bar.text.r, Commons.Color.bar.text.g, Commons.Color.bar.text.b, 0.18)
-      visible: agentTap.pressed || agentItem.live || agentItem.working
+      visible: voiceTap.pressed || voiceItem.live || voiceItem.working
     }
 
     Text {
       anchors.centerIn: parent
       textFormat: Text.PlainText
       // nf-md-microphone; nf-md-reload while it turns speech into text
-      text: String.fromCodePoint(agentItem.working ? 0xF0450 : 0xF036C)
-      color: agentItem.live ? Commons.Color.bar.background : Commons.Color.bar.text
+      text: String.fromCodePoint(voiceItem.working ? 0xF0450 : 0xF036C)
+      color: voiceItem.live ? Commons.Color.bar.background : Commons.Color.bar.text
       font.family: Style.font.family
       font.pixelSize: 22
     }
 
     TapHandler {
-      id: agentTap
-      longPressThreshold: 0.3
+      id: voiceTap
+      longPressThreshold: 0.35
       onPressedChanged: {
-        if (pressed) { agentItem.held = false; return }
-        if (agentItem.held) root.voiceCall("agentRelease")
+        if (pressed) { voiceItem.held = false; return }
+        if (voiceItem.held) root.voiceCall("release")
       }
       onLongPressed: {
-        agentItem.held = true
-        root.voiceCall("agentPress")
+        voiceItem.held = true
+        root.voiceCall("press")
       }
-      onTapped: root.voiceCall("agentTap")
+      onTapped: root.voiceCall("toggle")
     }
   }
 

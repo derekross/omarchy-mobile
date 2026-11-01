@@ -1,51 +1,41 @@
 // SPDX-License-Identifier: MIT
-// Voice input's pure parts: the Voxtype commands the shell runs, what the
-// daemon's state file means for the sheet and the listening strip, the
-// clock and the level meter. No QML here, so test/voice-model.js runs it
-// under Node through the module.exports below.
+// The voice bar's pure parts: the Voxtype commands the shell runs, what the
+// daemon's state file means for the bar, where the words go (the
+// destination) and how they get there, the clock, the level meter and the
+// settings. No QML here, so test/voice-model.js runs it under Node through
+// the module.exports below.
 //
-// Every recording the shell starts passes --no-osd: Voxtype's own GTK
-// overlay anchors bottom-centre, over the dock and the home pill, and the
-// shell draws its own (the sheet, the strip).
+// One recording mode for everything: Voxtype writes the transcript to a
+// file (--file), and the shell delivers it to the destination chosen in the
+// bar, so the destination can change while the user speaks. Every recording
+// passes --no-osd: Voxtype's own GTK overlay anchors bottom-centre, over the
+// bottom bar, and the bar draws its own.
 
 var VOXTYPE = "voxtype"
 // Voxtype stops a recording itself at max_duration_secs (Omarchy's config:
-// 60); the sheet and the strip count down to it.
+// 60); the bar counts down to it.
 var MAX_SECONDS = 60
 // The model is the daemon's ([whisper] model): Voxtype ignores a
 // per-recording --model it hasn't prepared ("not in available models"), so
 // omamobile-setup-user switches the user's config to tiny.en once it is
 // downloaded (3.9 s for 10 s of speech on the Pixel 7 Pro, base.en 8.8 s).
-// The agent flow's transcript, in the runtime directory (tmpfs, the user's
-// own, gone at logout).
+// The transcript, in the runtime directory (tmpfs, the user's own, gone at
+// logout).
 var TRANSCRIPT_NAME = "omamobile-voice.txt"
 // A hold shorter than this (from the moment listening began) is a press,
-// not push-to-talk: listening goes on until Stop.
+// not push-to-talk: listening goes on until Done.
 var HOLD_MS = 700
 // Bars in the level meter.
 var LEVEL_BARS = 24
 
-// The argv that starts a recording. mode: "type" (Voxtype types into the
-// focused window) or "file" (the transcript goes to filePath). submit,
-// for typing into an agent (submitFor): "auto" presses Enter after the
-// text (--auto-submit), "say" only when the speech ends in "submit"
-// (Voxtype's text.smart_auto_submit: a fixed word, not configurable)
-// (--smart-auto-submit), anything else never.
-function startArgv(mode, filePath, submit) {
-  var argv = [VOXTYPE, "record", "start", "--no-osd"]
-  if (mode === "file") argv.push("--file=" + String(filePath || ""))
-  else argv.push("--type")
-  if (mode !== "file" && submit === "auto") argv.push("--auto-submit")
-  else if (mode !== "file" && submit === "say") argv.push("--smart-auto-submit")
-  return argv
-}
-
-// The agent flow removes the old transcript before it starts, so a
-// recording that writes nothing can't hand back the last one. One process:
-// sh with the path and the start argv as arguments, nothing interpolated.
-function fileStartArgv(filePath) {
-  return ["sh", "-c", 'rm -f -- "$1"; shift; exec "$@"', "sh", String(filePath || "")]
-    .concat(startArgv("file", filePath))
+// The argv that starts a recording: the old transcript removed first (a
+// recording that writes nothing can't hand back the last one), then
+// Voxtype writing the new one to filePath. One process: sh with the path
+// and the argv as arguments, nothing interpolated.
+function startArgv(filePath) {
+  var path = String(filePath || "")
+  return ["sh", "-c", 'rm -f -- "$1"; shift; exec "$@"', "sh", path,
+          VOXTYPE, "record", "start", "--no-osd", "--file=" + path]
 }
 
 var STOP_ARGV = [VOXTYPE, "record", "stop"]
@@ -63,25 +53,22 @@ function voxState(text) {
   return "idle"
 }
 
-// What the shell shows, from where it was and the daemon's new state.
+// What the bar shows, from where it was and the daemon's new state.
 //
-// phase: idle | starting | listening | transcribing | review | error
-// owner: "ask" (the agent sheet started it), "type" (the mic key or the
-//   Dictation tile), or "" (a recording the shell didn't start)
+// phase: idle | starting | listening | transcribing | result | error
+// mine: the bar started this recording (one it didn't start, say from a
+//   desktop hotkey, shows nothing and delivers nothing)
 //
-// Returns { phase, owner, read }: read is true when the agent flow's
-// recording has ended and its transcript is to be read now.
-function step(phase, owner, vox) {
-  var listening = vox === "recording" || vox === "streaming"
-  if (listening) return { phase: "listening", owner: owner || "", read: false }
-  if (vox === "transcribing") return { phase: "transcribing", owner: owner || "", read: false }
-  // Idle. The review and error pages stay until the user leaves them, and
-  // a start that hasn't reached the daemon yet stays starting.
-  if (phase === "review" || phase === "error" || phase === "starting")
-    return { phase: phase, owner: owner, read: false }
-  if (owner === "ask" && (phase === "listening" || phase === "transcribing"))
-    return { phase: "transcribing", owner: "ask", read: true }
-  return { phase: "idle", owner: "", read: false }
+// Returns { phase, read }: read is true when the bar's recording has ended
+// and its transcript is to be read now.
+function step(phase, mine, vox) {
+  if (!mine) return { phase: phase === "result" || phase === "error" ? phase : "idle", read: false }
+  if (vox === "recording" || vox === "streaming") return { phase: "listening", read: false }
+  if (vox === "transcribing") return { phase: "transcribing", read: false }
+  // Idle. The result and the error stay until the user leaves them, and a
+  // start that hasn't reached the daemon yet stays starting.
+  if (phase === "result" || phase === "error" || phase === "starting" || phase === "idle") return { phase: phase, read: false }
+  return { phase: "transcribing", read: true }
 }
 
 // Voxtype's transcript, tidied: one paragraph, no surrounding space.
@@ -89,13 +76,7 @@ function cleanTranscript(text) {
   return String(text || "").replace(/\s+/g, " ").trim()
 }
 
-// What the agent flow does with what it read: the review page, or an error
-// when nothing was heard.
-function afterRead(text) {
-  var t = cleanTranscript(text)
-  if (t) return { phase: "review", text: t, error: "" }
-  return { phase: "error", text: "", error: "Didn't catch that. Try again, a little closer to the phone." }
-}
+var NOTHING_HEARD = "Didn't catch that. Try again, a little closer to the phone."
 
 // Push-to-talk: does letting go stop the recording? Not when the finger
 // let go within HOLD_MS of listening starting (a press: it keeps
@@ -105,6 +86,118 @@ function releaseStops(phase, heldMs) {
   return Number(heldMs) >= HOLD_MS
 }
 
+// ---------------------------------------------------------------- destinations
+
+// The agent terminals Omarchy starts (omarchy-agent: omarchy-launch-tui
+// --app-id=org.omarchy.agent, one class for every agent).
+var AGENT_APP_ID = "org.omarchy.agent"
+
+function isAgent(appId) {
+  return String(appId || "") === AGENT_APP_ID
+}
+
+// Where the words go, from what is in front: an agent's terminal, Send to
+// the agent (typed into its prompt, then Enter); any other app, Type here
+// (into the focused field); the home screen, Ask the agent (a new prompt,
+// checked first).
+function contextDestination(appOnScreen, agentInFront) {
+  if (appOnScreen && agentInFront) return "agent"
+  if (appOnScreen) return "type"
+  return "ask"
+}
+
+// The choices the destination chip offers: the context's own, then the
+// two that work anywhere.
+function destinations(appOnScreen, agentInFront) {
+  var list
+  if (appOnScreen && agentInFront) list = ["agent", "type"]
+  else if (appOnScreen) list = ["type"]
+  else list = ["ask"]
+  return list.concat(["copy", "search"])
+}
+
+function agentLabel(agentName) {
+  return agentName || "your agent"
+}
+
+// The chip's words, the list's second column, and the primary button's verb.
+function destinationLabel(dest, agentName) {
+  switch (dest) {
+  case "type": return "Type here"
+  case "agent": return "Send to " + agentLabel(agentName)
+  case "ask": return "Ask " + agentLabel(agentName)
+  case "copy": return "Copy to clipboard"
+  case "search": return "Search apps"
+  default: return ""
+  }
+}
+
+function destinationNote(dest) {
+  switch (dest) {
+  case "type": return "into the focused field"
+  case "agent": return "prompt, then Enter"
+  case "ask": return "new prompt"
+  case "copy": return "paste anywhere"
+  case "search": return "launcher"
+  default: return ""
+  }
+}
+
+function doneVerb(dest) {
+  switch (dest) {
+  case "type": return "type it"
+  case "agent": return "send"
+  case "ask": return "ask"
+  case "copy": return "copy"
+  case "search": return "search"
+  default: return "done"
+  }
+}
+
+// The line under the meter, for the one destination that acts on its own.
+function destinationHint(dest) {
+  return dest === "agent" ? "Types what you say into the prompt and presses Enter." : ""
+}
+
+// How the transcript is delivered once it is text: an argv to run, or
+// "result" for the check step (a new prompt for the agent) unless the
+// user turned the check off ("send", which runs the launcher's prompt).
+// The text goes on stdin or as one argv element, never into a shell
+// string. Typing needs no wait: the bar never takes the keyboard focus, so
+// the app still has it.
+function deliveryArgv(dest, text) {
+  var t = String(text || "")
+  switch (dest) {
+  case "type": return ["sh", "-c", 'printf %s "$1" | exec wtype -', "sh", t]
+  case "agent": return ["sh", "-c", 'printf %s "$1" | wtype - && exec wtype -k Return', "sh", t]
+  case "copy": return ["sh", "-c", 'printf %s "$1" | exec wl-copy', "sh", t]
+  case "search": return ["omarchy-shell", "shell", "summon", "omamobile.launcher", JSON.stringify({ query: t })]
+  default: return null
+  }
+}
+
+// After the transcript is read: the next phase and what to run. ask goes
+// to the result step (or straight to the agent with the check off), the
+// rest deliver at once and the bar closes.
+function afterRead(dest, text, confirmAsk) {
+  var t = cleanTranscript(text)
+  if (!t) return { phase: "error", text: "", error: NOTHING_HEARD, argv: null, send: false }
+  if (dest === "ask") {
+    if (confirmAsk === false) return { phase: "idle", text: t, error: "", argv: null, send: true }
+    return { phase: "result", text: t, error: "", argv: null, send: false }
+  }
+  return { phase: "idle", text: t, error: "", argv: deliveryArgv(dest, t), send: false }
+}
+
+// The result step's warning: Omarchy starts every agent unattended (Claude
+// Code with --permission-mode auto, and the like), so a misheard prompt is
+// acted on without another question.
+function permissionText(agentName) {
+  return (agentName || "Your agent") + " runs with full permissions on this phone. Check the words before it starts."
+}
+
+// ---------------------------------------------------------------- the bar's words
+
 // "0:07", "1:00".
 function clock(seconds) {
   var s = Math.max(0, Math.floor(Number(seconds) || 0))
@@ -113,11 +206,26 @@ function clock(seconds) {
   return m + ":" + (r < 10 ? "0" : "") + r
 }
 
-// The listening line's time: elapsed, and the cap once it is near.
+// The time at the top right: elapsed, and the cap once it is near.
 function elapsedText(seconds) {
   var s = Math.max(0, Math.floor(Number(seconds) || 0))
   if (s >= MAX_SECONDS - 10) return clock(Math.min(s, MAX_SECONDS)) + " · stops at " + clock(MAX_SECONDS)
   return clock(s)
+}
+
+// The word beside the meter.
+function statusText(phase) {
+  switch (phase) {
+  case "starting": return "starting"
+  case "listening": return "listening"
+  case "transcribing": return "turning it into text"
+  default: return ""
+  }
+}
+
+// The model's short name for the result's time line ("0:06 · tiny").
+function modelShort(id) {
+  return String(id || "").replace(/\.en$/, "")
 }
 
 // The level meter: the last LEVEL_BARS loudness values (0..1), oldest
@@ -155,76 +263,33 @@ function parseLevel(line) {
   return null
 }
 
-// The strip's and the sheet's words for each phase.
-function statusText(phase, owner) {
-  switch (phase) {
-  case "starting": return "Starting"
-  case "listening": return "Listening"
-  case "transcribing": return owner === "type" ? "Typing" : "Transcribing"
-  default: return ""
+// The theme's warning colour (the result step): colors.toml's `yellow`,
+// else its `color3`, else "" (the caller falls back to the accent).
+function themeWarning(colorsToml) {
+  var text = String(colorsToml || "")
+  var keys = ["yellow", "color3"]
+  for (var i = 0; i < keys.length; i++) {
+    var m = text.match(new RegExp("^\\s*" + keys[i] + "\\s*=\\s*[\"']?(#[0-9a-fA-F]{6,8})", "m"))
+    if (m) return m[1]
   }
+  return ""
 }
 
-// The hint under the listening sheet.
-function askHint(phase, pushToTalk) {
-  if (phase === "transcribing") return "Turning speech into text on this phone"
-  if (pushToTalk) return "Let go of the pill to stop · transcribed on this phone"
-  return "Tap Stop when you're done · transcribed on this phone"
-}
-
-// The auto-permissions line on the check-and-send page.
-function permissionText(agentName) {
-  var name = agentName || "Your agent"
-  return name + " runs with auto permissions here, so it acts on this without asking again."
-}
-
-function sendLabel(agentName) {
-  return agentName ? "Send to " + agentName : "Choose an agent"
-}
-
-// Copy and "Type into last app": the text goes on stdin, never into a
-// shell string. Typing waits for the sheet to close and the app to have
-// the keyboard focus again.
-function copyArgv(text) {
-  return ["sh", "-c", 'printf %s "$1" | exec wl-copy', "sh", String(text || "")]
-}
-
-function typeArgv(text) {
-  return ["sh", "-c", 'sleep 0.5; printf %s "$1" | exec wtype -', "sh", String(text || "")]
-}
-
-// ---------------------------------------------------------------- phase 2
-
-// The agent terminals Omarchy starts (omarchy-agent: omarchy-launch-tui
-// --app-id=org.omarchy.agent, one class for every agent).
-var AGENT_APP_ID = "org.omarchy.agent"
-
-function isAgent(appId) {
-  return String(appId || "") === AGENT_APP_ID
-}
+// ---------------------------------------------------------------- settings
 
 // The voice settings, in ~/.config/omamobile/voice.json (as
-// quicksettings.json and home.json): which triggers start listening, "Say
-// agentSubmit: what typing into an agent does at the end ("auto": Enter
-// after the text, the default; "say": Enter when the speech ends in
-// "send"; "off": never), and the check before sending to an agent. Power +
-// Volume Up is off until the user turns it on.
-var SETTINGS_VERSION = 2
+// quicksettings.json and home.json). The bar has one way in, so only two
+// switches are left: Power + Volume Up (off until the user turns it on)
+// and the check before a new prompt goes to the agent. Keys from earlier
+// versions (holdPill, micKey, agentMic, agentSubmit, sayToSend) are
+// dropped on the next write.
+var SETTINGS_VERSION = 3
 var DEFAULT_SETTINGS = {
   version: SETTINGS_VERSION,
-  holdPill: true,
-  micKey: true,
-  agentMic: true,
   powerVolumeUp: false,
-  agentSubmit: "auto",
   confirmSend: true
 }
-var SETTING_KEYS = ["holdPill", "micKey", "agentMic", "powerVolumeUp", "confirmSend"]
-var SUBMIT_CHOICES = [
-  { id: "auto", name: "Send automatically", line: "Enter after the text" },
-  { id: "say", name: "Say \u201csubmit\u201d to send", line: "Enter only when you end with \u201csubmit\u201d" },
-  { id: "off", name: "Don't submit", line: "the text waits for you" }
-]
+var SETTING_KEYS = ["powerVolumeUp", "confirmSend"]
 
 function defaultSettings() {
   var out = {}
@@ -243,41 +308,23 @@ function parseSettings(text) {
     var k = SETTING_KEYS[i]
     if (typeof o[k] === "boolean") out[k] = o[k]
   }
-  if (validSubmit(o.agentSubmit)) out.agentSubmit = o.agentSubmit
-  // 0.2.59's "Say 'send' to press Enter" switch: on was the default, and
-  // the first user wanted Enter without saying "send", so on becomes the
-  // new default (auto); off stays off.
-  else if (o.sayToSend === false) out.agentSubmit = "off"
   return out
-}
-
-function validSubmit(v) {
-  return v === "auto" || v === "say" || v === "off"
 }
 
 function withSetting(settings, key, value) {
   var out = parseSettings(JSON.stringify(settings || {}))
   if (SETTING_KEYS.indexOf(key) >= 0) out[key] = !!value
-  else if (key === "agentSubmit" && validSubmit(value)) out.agentSubmit = value
   return out
-}
-
-// How a recording into an app ends: the agent setting for the mic in the
-// strip over an agent, and for Power + Volume Up while an agent is in
-// front; never for dictation anywhere else (the keyboard's mic key, the
-// Dictation tile, the key chord over other apps).
-function submitFor(who, viaKey, agentInFront, settings) {
-  var choice = settings && validSubmit(settings.agentSubmit) ? settings.agentSubmit : DEFAULT_SETTINGS.agentSubmit
-  if (who === "agent" || (who === "type" && viaKey && agentInFront)) return choice
-  return "off"
 }
 
 function serializeSettings(settings) {
   return JSON.stringify(parseSettings(JSON.stringify(settings || {})), null, 2) + "\n"
 }
 
-// The speech models the sheet offers (Whisper's English ones, as the
-// design's Fast, Balanced and Accurate), with their download sizes.
+// ---------------------------------------------------------------- models
+
+// The speech models the settings offer (Whisper's English ones), with
+// their download sizes.
 var MODELS = [
   { id: "tiny.en", name: "Fast", detail: "tiny", size: "75 MB", note: "quickest, rougher" },
   { id: "base.en", name: "Balanced", detail: "base", size: "142 MB", note: "Omarchy's default" },
@@ -351,40 +398,33 @@ function parseProgress(line) {
   return null
 }
 
+// ---------------------------------------------------------------- feel
+
 // A short tick at the start and the end of listening: a feedbackd event, so
 // the user's feedback profile (silent, quiet) decides; nothing without fbcli.
 var HAPTIC_ARGV = ["sh", "-c", "command -v fbcli >/dev/null 2>&1 && exec fbcli -E button-pressed"]
 
-// Does this phase change tick? Listening starting, and listening ending
-// (to transcribing or straight to idle), for the shell's own recordings.
-function ticks(was, now, owner) {
-  if (!owner) return false
-  var listen = function(p) { return p === "listening" }
-  return (listen(now) && !listen(was)) || (listen(was) && !listen(now))
-}
-
-// A hardware-key push-to-talk: the agent sheet on the home screen, typing
-// into the app otherwise.
-function keyTarget(appOnScreen) {
-  return appOnScreen ? "type" : "ask"
+// Does this phase change tick? Listening starting, and listening ending.
+function ticks(was, now) {
+  return (now === "listening") !== (was === "listening")
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
-    VOXTYPE: VOXTYPE, MAX_SECONDS: MAX_SECONDS,
-    TRANSCRIPT_NAME: TRANSCRIPT_NAME, HOLD_MS: HOLD_MS, LEVEL_BARS: LEVEL_BARS,
-    STOP_ARGV: STOP_ARGV, CANCEL_ARGV: CANCEL_ARGV,
-    startArgv: startArgv, fileStartArgv: fileStartArgv, transcriptPath: transcriptPath,
-    voxState: voxState, step: step, cleanTranscript: cleanTranscript,
-    afterRead: afterRead, releaseStops: releaseStops, clock: clock, elapsedText: elapsedText,
-    pushLevel: pushLevel, meterBars: meterBars, parseLevel: parseLevel, statusText: statusText, askHint: askHint,
-    permissionText: permissionText, sendLabel: sendLabel, copyArgv: copyArgv, typeArgv: typeArgv,
-    AGENT_APP_ID: AGENT_APP_ID, isAgent: isAgent, SETTINGS_VERSION: SETTINGS_VERSION,
-    DEFAULT_SETTINGS: DEFAULT_SETTINGS, SETTING_KEYS: SETTING_KEYS, defaultSettings: defaultSettings,
-    parseSettings: parseSettings, withSetting: withSetting, serializeSettings: serializeSettings,
-    MODELS: MODELS, modelFile: modelFile, configModel: configModel, installedModels: installedModels,
-    modelRows: modelRows, downloadArgv: downloadArgv, switchArgv: switchArgv, parseProgress: parseProgress,
-    HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks, keyTarget: keyTarget,
-    SUBMIT_CHOICES: SUBMIT_CHOICES, validSubmit: validSubmit, submitFor: submitFor
+    VOXTYPE: VOXTYPE, MAX_SECONDS: MAX_SECONDS, TRANSCRIPT_NAME: TRANSCRIPT_NAME, HOLD_MS: HOLD_MS,
+    LEVEL_BARS: LEVEL_BARS, STOP_ARGV: STOP_ARGV, CANCEL_ARGV: CANCEL_ARGV, NOTHING_HEARD: NOTHING_HEARD,
+    startArgv: startArgv, transcriptPath: transcriptPath, voxState: voxState, step: step,
+    cleanTranscript: cleanTranscript, releaseStops: releaseStops,
+    AGENT_APP_ID: AGENT_APP_ID, isAgent: isAgent, contextDestination: contextDestination,
+    destinations: destinations, destinationLabel: destinationLabel, destinationNote: destinationNote,
+    doneVerb: doneVerb, destinationHint: destinationHint, deliveryArgv: deliveryArgv, afterRead: afterRead,
+    permissionText: permissionText, clock: clock, elapsedText: elapsedText, statusText: statusText,
+    modelShort: modelShort, pushLevel: pushLevel, meterBars: meterBars, parseLevel: parseLevel,
+    themeWarning: themeWarning, SETTINGS_VERSION: SETTINGS_VERSION, DEFAULT_SETTINGS: DEFAULT_SETTINGS,
+    SETTING_KEYS: SETTING_KEYS, defaultSettings: defaultSettings, parseSettings: parseSettings,
+    withSetting: withSetting, serializeSettings: serializeSettings, MODELS: MODELS, modelFile: modelFile,
+    configModel: configModel, installedModels: installedModels, modelRows: modelRows,
+    downloadArgv: downloadArgv, switchArgv: switchArgv, parseProgress: parseProgress,
+    HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks
   }
 }

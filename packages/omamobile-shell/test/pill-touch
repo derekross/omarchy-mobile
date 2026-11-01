@@ -7,8 +7,8 @@
 # plain Item with Quickshell and Omarchy's modules stubbed (test/qml-stubs).
 # A double tap shows or hides the keyboard, a single tap does nothing, a
 # swipe still goes home, the hide key (only with the keyboard) hides it and
-# lets a swipe through, a long press asks the agent by voice and the mic
-# key dictates (omamobile.voice, through its IPC here), and what the
+# lets a swipe through, the voice key at the right end opens the voice
+# bar (omamobile.voice, through its IPC here), and what the
 # bottom windows reserve (an exclusive zone): the strip's height over an app with the keyboard up or down, never
 # two windows at once, nothing on home, fullscreen, under the drawer or the
 # lock's keyboard. No compositor, no Quickshell. Exits 77
@@ -173,9 +173,9 @@ Item {
 """ % ("root." + strip_height if not strip_height.isdigit() else strip_height,
        definition("stripShown"), definition("keyboardStripShown"), definition("dockShown"),
        zone("omamobile-dock"), zone("omamobile-home-strip"),
-       function("goHome"), function("showRecents"), function("keyboardCall"), function("voiceSetting") + "\n\n" + function("voiceCall"),
+       function("goHome"), function("showRecents"), function("keyboardCall"), function("voiceCall"),
        content.replace("root.oskOpen", "false"), window_content("omamobile-dock"), content.replace("root.oskOpen", "true"),
-       component("SearchPill"), component("HomePill"), component("HomeSwipe"), component("HideKeyboardKey"), component("MicKey") + "\n\n" + component("AgentMicKey"))
+       component("SearchPill"), component("HomePill"), component("HomeSwipe"), component("HideKeyboardKey"), component("VoiceKey"))
 open(sys.argv[2], "w").write(out)
 PY
 cp "$here/pill-touch.qml" "$work/tst_pill_touch.qml"

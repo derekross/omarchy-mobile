@@ -13,59 +13,40 @@ import "VoiceLink.js" as VoiceLink
 import "Readable.js" as Readable
 import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 
-// Voice input for the phone (docs/VOICE-PLAN.md), through Voxtype's user
-// daemon (voxtype.service, Omarchy's Install > AI > Dictation): speech is
-// turned into text on the phone.
+// Voice input for the phone (docs/VOICE-PLAN.md): one voice bar, through
+// Voxtype's user daemon (voxtype.service, Omarchy's Install > AI >
+// Dictation). Speech is turned into text on the phone.
 //
-// Two ways in:
+// One way in on screen, the mic at the right end of the bottom bar
+// (omamobile.launcher: the dock on the home screen, the home strip over an
+// app; tap to start, tap or Done to finish, hold to talk). Power + Volume
+// Up (omamobile-keys, when turned on), the Dictation tile in quick
+// settings and squeekboard's dictation key (`omamobile-voice toggle`) open
+// the same bar.
 //
-// * Ask your agent. Hold the home pill (omamobile.launcher: the dock's
-//   search pill on the home screen, the thin strip over an app): this
-//   sheet opens and listens; letting go stops, and Voxtype writes the
-//   transcript to $XDG_RUNTIME_DIR/omamobile-voice.txt. A press shorter
-//   than VoiceModel.HOLD_MS keeps listening until Stop. Then the
-//   check-and-send page: the transcript to edit, the agent (a tap opens
-//   Omarchy's agent picker), the auto-permissions warning, and Send (the
-//   launcher's promptArgv: a terminal running the agent with the text as
-//   its first prompt), Say again, Cancel, Copy and Type into last app.
-//   `omarchy-shell shell summon omamobile.voice '{}'` opens it listening.
+// The bar rises above the keyboard when it is up, else above the bottom
+// bar: the destination chip (where the words go; a tap lists the others),
+// a pulsing dot and the time, the level from voxtype-audio-bridge, Cancel
+// and "Done · <verb>". The destination follows what is in front: an
+// agent's terminal (org.omarchy.agent), Send to the agent (typed into its
+// prompt, then Enter); any other app, Type here; the home screen, Ask the
+// agent (a new prompt). Copy to clipboard and Search apps work anywhere.
+// Only Ask has a second step: the transcript to check and edit, in the
+// theme's warning colour, with the full-permissions warning and Discard /
+// Again / Ask. Everything else is delivered the moment it is text.
 //
-// * Follow-up in an agent. While an agent's terminal (org.omarchy.agent)
-//   is in front and the keyboard is down, the home strip carries a mic at
-//   its right end (omamobile.launcher; a floating button covered the
-//   agent's prompt line): hold to talk, tap to toggle. Voxtype types into
-//   the agent and presses Enter after it ("Send automatically", the
-//   default), only when the speech ends in "submit", or never (the agent
-//   setting).
-//
-// * Power + Volume Up (omamobile-keys, off until turned on in the settings):
-//   push-to-talk into the app in front, or the agent sheet on the home
-//   screen.
-//
-// * Settings (`shell summon omamobile.voice '{"page":"settings"}'`, the
-//   Dictation tile's long press, Omarchy's Setup > Voice): the speech model
-//   (downloaded through Voxtype and switched with `voxtype config set`), the
-//   triggers, how typing into an agent submits, and the check before
-//   sending to an agent, kept
-//   in ~/.config/omamobile/voice.json.
-//
-// * Dictation into any app. The mic key at the left end of the keyboard's
-//   strip (omamobile.launcher), or the Dictation tile in quick settings:
-//   Voxtype types into the focused window, and while it listens a strip
-//   above the keyboard shows the level, the time, Cancel and Done. The
-//   strip shows for any recording the shell didn't start for the agent,
-//   so the tile's recordings get it too.
-//
-// The model is the daemon's own (omamobile-setup-user sets tiny.en once it
-// is downloaded; a per-recording --model is ignored unless prepared).
-// Voxtype checks for wtype and wl-copy with `which` (a dependency).
-// Every recording the shell starts passes --no-osd (VoiceModel.startArgv):
-// Voxtype's GTK overlay would sit over the dock. The daemon's state file
-// ($XDG_RUNTIME_DIR/voxtype/state) says what it is doing; the level comes
-// from voxtype-audio-bridge (NDJSON from the daemon's audio socket). The
-// screen stays on while listening and transcribing (an idle inhibitor on
-// whichever surface shows). The other plugins reach this one through
-// VoiceLink.js (a press and its release need no process in between).
+// Every recording is `voxtype record start --no-osd --file=<transcript>`
+// (VoiceModel.startArgv): Voxtype's GTK overlay would sit over the bottom
+// bar, and with the transcript in a file the shell delivers it to whatever
+// destination is chosen when Done is tapped (wtype into the focused app,
+// which keeps the keyboard focus because the bar never takes it; wl-copy;
+// the launcher's search; the launcher's agent prompt). The daemon's state
+// file says what it is doing; the screen stays on while the bar listens or
+// transcribes (an idle inhibitor). The model is the daemon's own
+// (omamobile-setup-user sets tiny.en once it is downloaded). Settings
+// (`omamobile-voice settings`, the Dictation tile's long press, Setup >
+// Voice): the model, Power + Volume Up, and the check before Ask, in
+// ~/.config/omamobile/voice.json.
 Item {
   id: root
 
@@ -77,29 +58,30 @@ Item {
 
   // ---------------------------------------------------------------- state
 
-  property bool opened: false
-  // idle | starting | listening | transcribing | review | error
+  // idle | starting | listening | transcribing | result | error
   property string phase: "idle"
-  // "ask" (this sheet), "type" (mic key, tile), "" (not started here)
-  property string owner: ""
+  // The bar started the recording under way (one started elsewhere, such
+  // as a desktop hotkey, shows nothing).
+  property bool mine: false
+  // type | agent | ask | copy | search
+  property string dest: "type"
+  property bool chooserOpen: false
   property bool pushToTalk: false
   property bool fingerDown: false
   property real pressedAt: 0
   property bool pendingStop: false
   property real listenStart: 0
   property real elapsed: 0
+  property real spoke: 0
   property var levels: []
   property real lastLevelAt: 0
   property string transcript: ""
   property string errorText: ""
   property int readTries: 0
-  property bool copied: false
 
   readonly property bool busy: phase === "starting" || phase === "listening" || phase === "transcribing"
   readonly property bool listening: phase === "listening"
-  // The Listening strip is for typing into an app; the agent sheet and the
-  // strip's agent mic show their own state.
-  readonly property bool stripShown: owner !== "ask" && owner !== "agent" && (busy || phase === "error")
+  readonly property bool barShown: busy || phase === "result" || phase === "error"
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
   readonly property string transcriptPath: VoiceModel.transcriptPath(runtimeDir)
   readonly property string statePath: runtimeDir + "/voxtype/state"
@@ -107,6 +89,53 @@ Item {
   // The app in front is an agent's terminal (Omarchy's one class for them).
   readonly property bool agentInFront: appOnScreen && !!ToplevelManager.activeToplevel
     && VoiceModel.isAgent(ToplevelManager.activeToplevel.appId)
+  readonly property var choices: VoiceModel.destinations(appOnScreen, agentInFront)
+
+  readonly property int touchSize: Math.max(44, Style.space(48))
+  readonly property int pad: Style.spacing.panelPadding
+  readonly property color foreground: Commons.Color.popups.text
+  // Recording is the theme's urgent colour; the check before Ask its warning
+  // colour (colors.toml's yellow), or the accent when the theme has none.
+  readonly property color recording: Commons.Color.urgent
+  property string warningHex: ""
+  readonly property color warning: warningHex !== "" ? warningHex : Commons.Color.accent
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.warningHex = VoiceModel.themeWarning(text())
+    onLoadFailed: root.warningHex = ""
+  }
+
+  // The agent, as the launcher reads it: Omarchy's default agent
+  // (omarchy-default-agent writes ~/.config/omarchy/defaults/agent), unset
+  // until the user picks one.
+  property string agentId: ""
+  readonly property string agentName: LauncherModel.agentName(agentId)
+  readonly property bool hasAgent: agentId.length > 0
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.config/omarchy/defaults/agent"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.agentId = LauncherModel.agentId(text())
+    onLoadFailed: root.agentId = ""
+  }
+
+  // Where the bar sits on the home screen: above the dock, which reserves
+  // nothing (omamobile.launcher, through its DrawerLink.js). Over an app the
+  // home strip reserves its height, and the keyboard its own, so the bar
+  // lands above them without help.
+  Loader {
+    id: drawerLink
+    source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")
+  }
+  readonly property var launcher: drawerLink.item ? drawerLink.item.drawer : null
+  readonly property int dockGap: launcher && launcher.dockShown === true && launcher.oskOpen !== true
+    && launcher.opened !== true ? Number(launcher.dockHeight) || 0 : 0
 
   // ---------------------------------------------------------------- settings
 
@@ -206,178 +235,98 @@ Item {
     }
   }
 
-  function openSettings() {
-    settingsOpen = true
-    refreshModels()
-    if (!opened && shell && typeof shell.summon === "function") shell.summon(pluginId, JSON.stringify({ page: "settings" }))
-    else opened = true
-    return "ok"
-  }
-
-  // The mic in the home strip over an agent (omamobile.launcher draws it,
-  // at the strip's right end, while the keyboard is down): shown while an
-  // agent is in front, and while its own recording runs.
-  readonly property bool agentMicShown: (owner === "agent" && busy)
-    || (settings.agentMic && agentInFront && !opened)
-
-  readonly property int touchSize: Math.max(44, Style.space(48))
-  readonly property int pad: Style.spacing.panelPadding
-  readonly property color foreground: Commons.Color.popups.text
-  readonly property color recording: Commons.Color.urgent
-
-  // The agent, as the launcher reads it: Omarchy's default agent
-  // (omarchy-default-agent writes ~/.config/omarchy/defaults/agent), unset
-  // until the user picks one.
-  property string omarchyPath: Quickshell.env("OMARCHY_PATH")
-  property string agentId: ""
-  readonly property string agentName: LauncherModel.agentName(agentId)
-  readonly property bool hasAgent: agentId.length > 0
-  readonly property string agentIcon: hasAgent
-    ? Util.fileUrl(omarchyPath + "/shell/plugins/agents/assets/" + agentId + ".svg") : ""
-
-  FileView {
-    path: Quickshell.env("HOME") + "/.config/omarchy/defaults/agent"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: root.agentId = LauncherModel.agentId(text())
-    onLoadFailed: root.agentId = ""
-  }
-
   // ---------------------------------------------------------------- host API
 
-  // A summon from elsewhere (`shell summon omamobile.voice '{}'`) starts
-  // listening, hands free; the long press has started already.
+  // The host's panel is the settings sheet: `shell summon omamobile.voice
+  // '{"page":"settings"}'`. Any other summon starts the bar and gives the
+  // panel straight back, as the keyboard plugin does.
+  property bool opened: false
+
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") || ({}) } catch (e) { payload = ({}) }
-    opened = true
     if (payload.page === "settings") {
+      opened = true
       settingsOpen = true
       refreshModels()
       return
     }
-    if (settingsOpen) return
-    if (phase === "idle" || (phase === "error" && owner !== "ask")) beginAsk(false)
+    Qt.callLater(function() {
+      if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.pluginId)
+    })
+    if (!busy) listen(false)
   }
 
-  // Closing the sheet while it listens or transcribes throws the
-  // recording away; closing the review or the error leaves nothing behind.
   function close() {
-    if (!opened) return
     opened = false
     settingsOpen = false
-    editor.focus = false
-    if (owner === "ask") {
-      if (busy) Quickshell.execDetached(VoiceModel.CANCEL_ARGV)
-      reset()
-    }
   }
 
-  function dismiss() {
+  function dismissSettings() {
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else close()
   }
 
-  function reset() {
-    phase = "idle"
-    owner = ""
-    pendingStop = false
-    pushToTalk = false
-    fingerDown = false
-    levels = []
-    startTimeout.stop()
+  function openSettings() {
+    if (shell && typeof shell.summon === "function") shell.summon(pluginId, JSON.stringify({ page: "settings" }))
+    else open(JSON.stringify({ page: "settings" }))
+    return "ok"
   }
 
-  // `shell call omamobile.voice snapshot ''`
+  // `omamobile-voice snapshot`
   function snapshot() {
-    return JSON.stringify({ opened: opened, phase: phase, owner: owner, pushToTalk: pushToTalk,
-                            elapsed: Math.floor(elapsed), agent: agentId, chars: transcript.length,
-                            agentInFront: agentInFront, model: modelId, settings: settings })
+    return JSON.stringify({ phase: phase, mine: mine, dest: dest, choices: choices, chooser: chooserOpen,
+                            pushToTalk: pushToTalk, elapsed: Math.floor(elapsed), agent: agentId,
+                            agentInFront: agentInFront, appOnScreen: appOnScreen, chars: transcript.length,
+                            model: modelId, settings: settings })
   }
 
-  // ---------------------------------------------------------------- calls (VoiceLink.js and IPC)
+  // ---------------------------------------------------------------- calls (VoiceLink.js, IPC, omamobile-voice)
 
-  // The home pill's long press, and its release.
-  function askPress() {
-    if (busy && owner === "ask") return "busy"
-    beginAsk(true)
-    return "ok"
+  // The bottom bar's mic, the Dictation tile and squeekboard's dictation
+  // key: start, or finish what is under way (Done), or close a result.
+  function toggle() {
+    if (busy) return done()
+    if (phase === "result" || phase === "error") { reset(); return "closed" }
+    listen(false)
+    return "listening"
   }
 
-  function askRelease() {
-    return release("ask")
-  }
-
-  // The search pill's mic button: a tap opens the sheet listening, hands
-  // free (Stop, or a tap on the sheet's mic, ends it); a tap while it
-  // listens stops.
-  function askTap() {
-    if (busy && owner === "ask") { stop(); return "stopping" }
-    beginAsk(false)
-    return "ok"
-  }
-
-  // The sheet's mic circle: stops while listening, listens again after an
-  // error.
-  function micTapped() {
-    if (phase === "listening" || phase === "starting") stop()
-    else if (phase === "error") sayAgain()
-  }
-
-  // The strip's mic over an agent: held, a push-to-talk; tapped, on and
-  // off. Types into the agent, then Enter as the agent setting says.
-  function agentPress() {
+  function start() {
     if (busy) return "busy"
-    begin("agent", true)
-    return "ok"
+    listen(false)
+    return "listening"
   }
 
-  function agentRelease() {
-    return release("agent")
-  }
-
-  function agentTap() {
-    if (busy && owner === "agent") { stop(); return "stopping" }
+  // Holding the mic: push-to-talk; letting go stops (a short press keeps
+  // listening, as a tap does).
+  function press() {
     if (busy) return "busy"
-    begin("agent", false)
-    return "ok"
+    listen(true)
+    return "listening"
   }
 
-  // Power + Volume Up (omamobile-keys), when turned on in the settings:
-  // the agent sheet on the home screen, typing into the app otherwise.
+  function release() {
+    if (!mine || !fingerDown) return "idle"
+    fingerDown = false
+    if (VoiceModel.releaseStops(phase, Date.now() - pressedAt)) return done()
+    pushToTalk = false
+    return "listening"
+  }
+
+  // Power + Volume Up (omamobile-keys), when turned on in the settings.
   function keyPress() {
     if (!settings.powerVolumeUp) return "off"
-    if (busy) return "busy"
-    if (VoiceModel.keyTarget(appOnScreen) === "ask") beginAsk(true)
-    else begin("type", true, true)
-    return "ok"
+    return press()
   }
 
   function keyRelease() {
-    if (owner === "ask" || owner === "type") return release(owner)
-    return "idle"
+    return release()
   }
 
-  // The mic key: held, a push-to-talk; tapped, on and off.
-  function dictatePress() {
-    if (busy) return "busy"
-    begin("type", true)
-    return "ok"
-  }
-
-  function dictateRelease() {
-    return release("type")
-  }
-
-  function dictateTap() {
-    if (busy && owner !== "ask") { stop(); return "stopping" }
-    if (busy) return "busy"
-    begin("type", false)
-    return "ok"
-  }
-
-  function stop() {
+  // Done: stop listening; the transcript goes where the chip says.
+  function done() {
+    chooserOpen = false
     if (phase === "starting") { pendingStop = true; return "pending" }
     if (phase !== "listening") return "idle"
     Quickshell.execDetached(VoiceModel.STOP_ARGV)
@@ -385,31 +334,27 @@ Item {
   }
 
   function cancel() {
-    if (busy) Quickshell.execDetached(VoiceModel.CANCEL_ARGV)
-    var wasAsk = owner === "ask"
+    if (busy && mine) Quickshell.execDetached(VoiceModel.CANCEL_ARGV)
     reset()
-    if (wasAsk && opened) dismiss()
     return "ok"
+  }
+
+  function choose(d) {
+    if (choices.indexOf(d) >= 0) dest = d
+    chooserOpen = false
   }
 
   // ---------------------------------------------------------------- recording
 
-  function beginAsk(hold) {
+  function listen(hold) {
+    if (busy) return
+    dest = VoiceModel.contextDestination(appOnScreen, agentInFront)
+    mine = true
+    phase = "starting"
+    chooserOpen = false
+    errorText = ""
     transcript = ""
     editor.text = ""
-    copied = false
-    begin("ask", hold)
-    if (!opened && shell && typeof shell.summon === "function") shell.summon(pluginId, "{}")
-    else opened = true
-  }
-
-  // viaKey: Power + Volume Up, which follows the agent setting over an
-  // agent; the other typing triggers never submit (VoiceModel.submitFor).
-  function begin(who, hold, viaKey) {
-    if (busy) Quickshell.execDetached(VoiceModel.CANCEL_ARGV)
-    owner = who
-    phase = "starting"
-    errorText = ""
     pushToTalk = hold
     fingerDown = hold
     pressedAt = Date.now()
@@ -417,22 +362,22 @@ Item {
     levels = []
     elapsed = 0
     startProc.running = false
-    // Enter after the text only where it means something: an agent.
-    var submit = VoiceModel.submitFor(who, !!viaKey, agentInFront, settings)
-    startProc.command = who === "ask" ? VoiceModel.fileStartArgv(transcriptPath)
-                                      : VoiceModel.startArgv("type", "", submit)
+    startProc.command = VoiceModel.startArgv(transcriptPath)
     startProc.running = true
     startTimeout.restart()
     stateFile.reload()
   }
 
-  // Letting go: stops a push-to-talk; a short press keeps listening.
-  function release(who) {
-    if (owner !== who || !fingerDown) return "idle"
-    fingerDown = false
-    if (VoiceModel.releaseStops(phase, Date.now() - pressedAt)) return stop()
+  function reset() {
+    phase = "idle"
+    mine = false
+    chooserOpen = false
+    pendingStop = false
     pushToTalk = false
-    return "listening"
+    fingerDown = false
+    levels = []
+    startTimeout.stop()
+    editor.focus = false
   }
 
   function fail(text) {
@@ -441,14 +386,13 @@ Item {
     errorText = text
     pushToTalk = false
     fingerDown = false
-    if (owner !== "ask") errorClear.restart()
   }
 
   function handleVox(text) {
     var vox = VoiceModel.voxState(text)
     var was = phase
-    var r = VoiceModel.step(phase, owner, vox)
-    if (VoiceModel.ticks(was, r.phase, owner)) Quickshell.execDetached(VoiceModel.HAPTIC_ARGV)
+    var r = VoiceModel.step(phase, mine, vox)
+    if (mine && VoiceModel.ticks(was, r.phase)) Quickshell.execDetached(VoiceModel.HAPTIC_ARGV)
     if (r.phase === "listening" && was !== "listening") {
       startTimeout.stop()
       listenStart = Date.now()
@@ -461,9 +405,8 @@ Item {
         Quickshell.execDetached(VoiceModel.STOP_ARGV)
       }
     }
+    if (was === "listening" && r.phase !== "listening") spoke = elapsed
     phase = r.phase
-    owner = r.owner
-    if (r.phase === "idle") { pushToTalk = false; fingerDown = false }
     if (r.read) {
       readTries = 0
       readTimer.restart()
@@ -471,63 +414,41 @@ Item {
   }
 
   function applyTranscript(text) {
-    var r = VoiceModel.afterRead(text)
+    var r = VoiceModel.afterRead(dest, text, settings.confirmSend)
     if (r.phase === "error" && readTries < 4) {
       readTries++
       readTimer.restart()
       return
     }
-    phase = r.phase
-    errorText = r.error
     transcript = r.text
     editor.text = r.text
-    pushToTalk = false
-    // "Ask before sending to an agent" off: straight to the agent.
-    if (r.phase === "review" && !settings.confirmSend && hasAgent) send()
+    errorText = r.error
+    if (r.argv) Quickshell.execDetached(r.argv)
+    if (r.send) sendAsk(r.text)
+    phase = r.phase
+    if (r.phase === "idle") reset()
   }
 
-  // ---------------------------------------------------------------- review actions
-
-  readonly property string finalText: VoiceModel.cleanTranscript(editor.text)
-
-  function send() {
-    if (!hasAgent) { pickAgent(); return }
-    if (!finalText) return
-    Util.execArgv(LauncherModel.promptArgv(finalText))
-    dismiss()
+  // Ask: the launcher's prompt (a terminal with the agent and the text as
+  // its first prompt), or Omarchy's agent picker when none is chosen yet.
+  function sendAsk(text) {
+    var t = VoiceModel.cleanTranscript(text)
+    if (!t) return
+    if (hasAgent) Util.execArgv(LauncherModel.promptArgv(t))
+    else Util.execArgv(LauncherModel.PICK_AGENT_ARGV)
   }
 
-  function pickAgent() {
-    Util.execArgv(LauncherModel.PICK_AGENT_ARGV)
+  function askNow() {
+    var t = VoiceModel.cleanTranscript(editor.text)
+    reset()
+    sendAsk(t)
   }
 
-  function copyText() {
-    if (!finalText) return
-    Quickshell.execDetached(VoiceModel.copyArgv(finalText))
-    copied = true
-  }
-
-  // After the sheet has gone, so the app has the keyboard focus again.
-  function typeIntoApp() {
-    if (!finalText) return
-    var argv = VoiceModel.typeArgv(finalText)
-    dismiss()
-    Quickshell.execDetached(argv)
-  }
-
-  function sayAgain() {
-    beginAsk(false)
-  }
-
-  // The review page is the only one that types: leaving it takes the
-  // focus and the on-screen keyboard away, as the update sheet does.
-  onPhaseChanged: {
-    if (phase === "review" || owner !== "ask") return
-    if (editor.activeFocus) {
-      editor.focus = false
-      Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call",
-                               "omamobile.keyboard", "hideKeyboard", ""])
-    }
+  function again() {
+    var keep = dest
+    reset()
+    listen(false)
+    dest = keep
   }
 
   // ---------------------------------------------------------------- processes
@@ -566,12 +487,6 @@ Item {
   }
 
   Timer {
-    id: errorClear
-    interval: 4000
-    onTriggered: if (root.phase === "error" && root.owner !== "ask") root.reset()
-  }
-
-  Timer {
     id: readTimer
     interval: 200
     onTriggered: { readProc.running = false; readProc.running = true }
@@ -587,7 +502,7 @@ Item {
   Process {
     id: levelBridge
     command: ["voxtype-audio-bridge"]
-    running: root.listening && (root.opened || root.stripShown)
+    running: root.listening && root.mine
     stdout: SplitParser {
       onRead: function(line) {
         var frame = VoiceModel.parseLevel(line)
@@ -609,50 +524,330 @@ Item {
 
   IpcHandler {
     target: "omamobile.voice"
-    function askPress(): string { return root.askPress() }
-    function askRelease(): string { return root.askRelease() }
-    function askTap(): string { return root.askTap() }
-    function agentTap(): string { return root.agentTap() }
+    function toggle(): string { return root.toggle() }
+    function start(): string { return root.start() }
+    function done(): string { return root.done() }
+    function cancel(): string { return root.cancel() }
+    function press(): string { return root.press() }
+    function release(): string { return root.release() }
     function keyPress(): string { return root.keyPress() }
     function keyRelease(): string { return root.keyRelease() }
     function openSettings(): string { return root.openSettings() }
-    function dictatePress(): string { return root.dictatePress() }
-    function dictateRelease(): string { return root.dictateRelease() }
-    function dictateTap(): string { return root.dictateTap() }
-    function stop(): string { return root.stop() }
-    function cancel(): string { return root.cancel() }
     function snapshot(): string { return root.snapshot() }
   }
 
   Component.onCompleted: VoiceLink.publish(root)
   Component.onDestruction: VoiceLink.withdraw(root)
 
-  // ---------------------------------------------------------------- the sheet
+  // ---------------------------------------------------------------- the voice bar
+
+  PanelWindow {
+    id: barWindow
+
+    screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
+    visible: root.barShown
+    anchors { bottom: true; left: true; right: true }
+    margins { bottom: root.dockGap }
+    implicitHeight: barCard.implicitHeight + Style.gapsOut * 2
+    // It reserves its height, so the app's field ends above the bar rather
+    // than under it.
+    exclusionMode: ExclusionMode.Auto
+    color: "transparent"
+    WlrLayershell.namespace: "omamobile-voice-bar"
+    WlrLayershell.layer: WlrLayer.Top
+    // Never the keyboard while listening: the words are typed into the app,
+    // which must keep the focus. The check before Ask edits its own text.
+    WlrLayershell.keyboardFocus: root.phase === "result" ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+
+    IdleInhibitor {
+      window: barWindow
+      enabled: root.busy
+    }
+
+    BorderSurface {
+      id: barCard
+      objectName: "voiceBar"
+      anchors.fill: parent
+      anchors.margins: Style.gapsOut
+      implicitHeight: barColumn.implicitHeight + Style.spacing.xl * 2
+      color: Commons.Color.popups.background
+      borderSpec: Border.flat(root.phase === "result" ? root.warning
+                              : root.phase === "error" ? Commons.Color.urgent
+                              : root.busy ? root.recording : Commons.Color.popups.border,
+                              Math.max(1, Style.space(2)))
+      radius: Style.cornerRadius
+
+      Column {
+        id: barColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.spacing.xl
+        spacing: Style.spacing.lg
+
+        // ---------- the destination and the time
+        Item {
+          width: parent.width
+          height: root.touchSize
+
+          DestChip {
+            id: destChip
+            objectName: "destChip"
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.min(implicitWidth, parent.width - timeRow.width - Style.spacing.lg)
+            label: VoiceModel.destinationLabel(root.dest, root.agentName)
+            glyph: root.dest === "type" ? "󰌌" : root.dest === "copy" ? "󰆏" : root.dest === "search" ? "󰍉" : "󰚩"
+            tone: root.phase === "result" ? root.warning : root.foreground
+            open: root.chooserOpen
+            enabled: root.busy
+            Accessible.name: "Destination: " + label + ". Change"
+            onTapped: root.chooserOpen = !root.chooserOpen
+          }
+
+          Row {
+            id: timeRow
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.md
+
+            Rectangle {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.busy
+              width: Style.space(8)
+              height: width
+              radius: width / 2
+              color: root.listening ? root.recording : Commons.Color.accent
+              SequentialAnimation on opacity {
+                running: root.listening
+                loops: Animation.Infinite
+                NumberAnimation { from: 1; to: 0.45; duration: 600 }
+                NumberAnimation { from: 0.45; to: 1; duration: 600 }
+              }
+            }
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.phase === "result" ? VoiceModel.clock(root.spoke) + " · " + VoiceModel.modelShort(root.modelId)
+                : root.busy ? VoiceModel.elapsedText(root.elapsed) : ""
+              color: root.listening ? root.recording : root.foreground
+              opacity: root.listening ? 1 : 0.7
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              font.bold: root.listening
+            }
+          }
+        }
+
+        // ---------- the level
+        Item {
+          width: parent.width
+          height: Style.space(28)
+          visible: root.busy
+
+          LevelMeter {
+            anchors.left: parent.left
+            anchors.right: statusWord.left
+            anchors.rightMargin: Style.spacing.lg
+            anchors.verticalCenter: parent.verticalCenter
+            height: parent.height
+            levels: root.levels
+            active: root.listening
+          }
+
+          Text {
+            id: statusWord
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: VoiceModel.statusText(root.phase)
+            color: root.foreground
+            opacity: 0.7
+            font.family: Style.font.family
+            font.pixelSize: Readable.px(Style.font.caption)
+          }
+        }
+
+        Text {
+          width: parent.width
+          visible: root.busy && text !== ""
+          textFormat: Text.PlainText
+          text: VoiceModel.destinationHint(root.dest)
+          color: root.foreground
+          opacity: 0.8
+          font.family: Style.font.family
+          font.pixelSize: Readable.px(Style.font.caption)
+          wrapMode: Text.Wrap
+        }
+
+        // ---------- where else the words can go
+        Column {
+          id: chooser
+          objectName: "destChooser"
+          width: parent.width
+          visible: root.busy && root.chooserOpen
+          spacing: 0
+
+          Repeater {
+            model: root.choices
+            delegate: OptionRow {
+              required property var modelData
+              width: chooser.width
+              objectName: "dest-" + modelData
+              title: VoiceModel.destinationLabel(modelData, root.agentName)
+              note: VoiceModel.destinationNote(modelData)
+              chosen: modelData === root.dest
+              onTapped: root.choose(modelData)
+            }
+          }
+        }
+
+        // ---------- the check before Ask
+        Flickable {
+          id: editFlick
+          objectName: "transcript"
+          width: parent.width
+          height: visible ? Math.min(Style.space(150), Math.max(Style.space(88), editor.implicitHeight)) : 0
+          visible: root.phase === "result"
+          contentHeight: editor.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+
+          Controls.TextArea.flickable: Controls.TextArea {
+            id: editor
+            wrapMode: TextEdit.Wrap
+            textFormat: TextEdit.PlainText
+            color: root.foreground
+            selectionColor: Style.selectionFillFor(root.foreground, Commons.Color.accent)
+            selectedTextColor: root.foreground
+            placeholderText: "Say or type what to ask"
+            placeholderTextColor: Qt.darker(root.foreground, 1.6)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.subtitle
+            leftPadding: Style.spacing.controlPaddingX + Math.max(1, Style.space(2))
+            rightPadding: leftPadding
+            topPadding: Style.spacing.lg
+            bottomPadding: Style.spacing.lg
+            background: BorderSurface {
+              color: Style.controlFill(editor.activeFocus, false, root.foreground, Commons.Color.accent)
+              borderSpec: Border.controlSpec(editor.activeFocus ? "focus" : "normal", root.foreground, Commons.Color.accent)
+              radius: Style.cornerRadius
+            }
+          }
+        }
+
+        InfoRow {
+          objectName: "permissionWarning"
+          width: parent.width
+          visible: root.phase === "result" && root.hasAgent
+          glyph: "󰀦"
+          text: VoiceModel.permissionText(root.agentName)
+          foreground: root.warning
+        }
+
+        InfoRow {
+          width: parent.width
+          visible: root.phase === "error"
+          glyph: "󰍭"
+          text: root.errorText
+          urgent: true
+        }
+
+        // ---------- the buttons
+        Row {
+          width: parent.width
+          height: root.touchSize
+          spacing: Style.spacing.lg
+          layoutDirection: Qt.RightToLeft
+          visible: root.busy
+
+          SheetAction {
+            objectName: "done"
+            width: (parent.width - parent.spacing) * 2 / 3
+            label: root.phase === "transcribing" ? "Turning it into text..." : "Done · " + VoiceModel.doneVerb(root.dest)
+            primary: true
+            tone: root.recording
+            enabled: root.phase === "listening" || root.phase === "starting"
+            onTapped: root.done()
+          }
+
+          SheetAction {
+            width: (parent.width - parent.spacing) / 3
+            label: "Cancel"
+            onTapped: root.cancel()
+          }
+        }
+
+        Row {
+          width: parent.width
+          height: root.touchSize
+          spacing: Style.spacing.lg
+          layoutDirection: Qt.RightToLeft
+          visible: root.phase === "result"
+
+          SheetAction {
+            objectName: "ask"
+            width: (parent.width - parent.spacing * 2) / 3
+            label: root.hasAgent ? "Ask" : "Choose agent"
+            primary: true
+            tone: root.warning
+            enabled: !root.hasAgent || VoiceModel.cleanTranscript(editor.text).length > 0
+            onTapped: root.askNow()
+          }
+
+          SheetAction {
+            width: (parent.width - parent.spacing * 2) / 3
+            label: "Again"
+            onTapped: root.again()
+          }
+
+          SheetAction {
+            width: (parent.width - parent.spacing * 2) / 3
+            label: "Discard"
+            onTapped: root.reset()
+          }
+        }
+
+        Row {
+          width: parent.width
+          height: root.touchSize
+          spacing: Style.spacing.lg
+          layoutDirection: Qt.RightToLeft
+          visible: root.phase === "error"
+
+          SheetAction {
+            width: (parent.width - parent.spacing) / 2
+            label: "Try again"
+            primary: true
+            onTapped: root.again()
+          }
+
+          SheetAction {
+            width: (parent.width - parent.spacing) / 2
+            label: "Close"
+            onTapped: root.reset()
+          }
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- the settings sheet
 
   property real reveal: opened ? 1 : 0
   Behavior on reveal { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-
-  readonly property string page: settingsOpen ? "settings" : phase === "review" ? "review" : phase === "error" ? "error" : "listen"
 
   PanelWindow {
     id: sheetWindow
 
     visible: root.opened || root.reveal > 0
     anchors { top: true; bottom: true; left: true; right: true }
-    // Normal: between the status bar and the on-screen keyboard, so the
-    // transcript stays above the keys while it is edited.
     exclusionMode: ExclusionMode.Normal
     color: "transparent"
     WlrLayershell.namespace: "omamobile-voice"
     WlrLayershell.layer: WlrLayer.Top
-    // The keyboard only for the review page's text; listening, the app
-    // underneath keeps it (Type into last app types there).
-    WlrLayershell.keyboardFocus: root.opened && root.page === "review" ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
-
-    IdleInhibitor {
-      window: sheetWindow
-      enabled: root.opened && root.owner === "ask" && root.busy
-    }
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
 
     Rectangle {
       anchors.fill: parent
@@ -662,10 +857,7 @@ Item {
 
     MouseArea {
       anchors.fill: parent
-      onClicked: {
-        if (root.page === "settings") root.dismiss()
-        else if (root.page !== "review") root.cancel()
-      }
+      onClicked: root.dismissSettings()
     }
 
     BorderSurface {
@@ -674,30 +866,23 @@ Item {
 
       x: Style.gapsOut
       width: parent.width - Style.gapsOut * 2
-      // The settings take the whole height; the rest is a bottom sheet.
-      height: root.page === "settings" ? parent.height - Style.gapsOut * 2
-        : Math.min(parent.height - Style.gapsOut * 2, Math.max(Style.space(520), parent.height * 0.6))
-      y: parent.height - height - Style.gapsOut + Math.round((1 - root.reveal) * Style.space(60))
+      height: parent.height - Style.gapsOut * 2
+      y: Style.gapsOut + Math.round((1 - root.reveal) * Style.space(60))
       opacity: root.reveal
       color: Commons.Color.popups.background
       borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
       radius: Style.cornerRadius
       padding: root.pad
 
-      focus: root.opened
-      Keys.onEscapePressed: root.page === "settings" ? root.dismiss() : root.cancel()
-
       MouseArea { anchors.fill: parent }
 
       Item {
-        id: content
         anchors.fill: parent
         anchors.topMargin: card.contentTopInset
         anchors.rightMargin: card.contentRightInset
         anchors.bottomMargin: card.contentBottomInset
         anchors.leftMargin: card.contentLeftInset
 
-        // ---------- Header: title and the agent
         Item {
           id: headerRow
           objectName: "voiceHeader"
@@ -708,11 +893,10 @@ Item {
 
           Text {
             anchors.left: parent.left
-            anchors.right: root.page === "settings" ? settingsClose.left : agentChip.left
-            anchors.rightMargin: Style.spacing.lg
+            anchors.right: settingsClose.left
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: root.page === "settings" ? "Voice" : root.page === "review" ? "Send to your agent?" : "Ask your agent"
+            text: "Voice"
             color: root.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.title
@@ -723,31 +907,17 @@ Item {
           GlyphTap {
             id: settingsClose
             objectName: "settingsClose"
-            visible: root.page === "settings"
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             glyph: "󰅖"
             Accessible.name: "Close"
-            onTapped: root.dismiss()
-          }
-
-          AgentChip {
-            id: agentChip
-            objectName: "agentChip"
-            visible: root.page !== "settings"
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            name: root.hasAgent ? root.agentName : "Choose agent"
-            icon: root.agentIcon
-            onTapped: root.pickAgent()
+            onTapped: root.dismissSettings()
           }
         }
 
-        // ---------- Settings (Settings in the design)
         Flickable {
           id: settingsFlick
           objectName: "voiceSettings"
-          visible: root.page === "settings"
           anchors.top: headerRow.bottom
           anchors.topMargin: Style.spacing.lg
           anchors.left: parent.left
@@ -765,7 +935,7 @@ Item {
             Text {
               width: parent.width
               textFormat: Text.PlainText
-              text: "Speech is turned into text on this phone. Nothing you say leaves it."
+              text: "Speech is turned into text on this phone. Nothing you say leaves it. Tap the mic at the right end of the bottom bar to talk."
               color: root.foreground
               opacity: 0.8
               font.family: Style.font.family
@@ -799,472 +969,10 @@ Item {
               urgent: true
             }
 
-            SectionLabel { text: "Start listening with" }
+            SectionLabel { text: "More" }
 
-            SettingRow { objectName: "setting-holdPill"; title: "Hold the home pill"; note: "or the search bar; the mic in the search bar always works"; checked: root.settings.holdPill === true; onToggled: root.setSetting("holdPill", !checked) }
-            SettingRow { objectName: "setting-micKey"; title: "Mic key under the keyboard"; checked: root.settings.micKey === true; onToggled: root.setSetting("micKey", !checked) }
-            SettingRow { objectName: "setting-agentMic"; title: "Mic in the bar over agents"; note: "at the right end of the home bar while an agent is in front"; checked: root.settings.agentMic === true; onToggled: root.setSetting("agentMic", !checked) }
             SettingRow { objectName: "setting-powerVolumeUp"; title: "Power + Volume Up"; note: "hold both to talk; not on the lock screen"; checked: root.settings.powerVolumeUp === true; onToggled: root.setSetting("powerVolumeUp", !checked) }
-
-            SectionLabel { text: "Sending" }
-
-            Text {
-              width: parent.width
-              textFormat: Text.PlainText
-              text: "Talking to an agent"
-              color: root.foreground
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-            }
-
-            Repeater {
-              model: VoiceModel.SUBMIT_CHOICES
-              delegate: ModelRow {
-                required property var modelData
-                width: settingsColumn.width
-                objectName: "submit-" + modelData.id
-                title: modelData.name
-                line: modelData.line
-                chosen: root.settings.agentSubmit === modelData.id
-                badge: ""
-                onTapped: root.setSetting("agentSubmit", modelData.id)
-              }
-            }
-
-            SettingRow { objectName: "setting-confirmSend"; title: "Ask before sending to an agent"; note: "off: what you say goes to the agent as soon as it is text"; checked: root.settings.confirmSend === true; onToggled: root.setSetting("confirmSend", !checked) }
-          }
-        }
-
-        // ---------- Listen: the mic, the time, the level
-        Item {
-          id: listenPage
-          visible: root.page === "listen"
-          anchors.top: headerRow.bottom
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: listenButtons.top
-          anchors.bottomMargin: Style.spacing.lg
-
-          Column {
-            anchors.centerIn: parent
-            width: parent.width
-            spacing: Style.spacing.xl
-
-            Item {
-              id: micCircle
-              objectName: "micCircle"
-              readonly property int size: Math.max(72, Math.min(Style.space(168), listenPage.height - Style.space(150)))
-              anchors.horizontalCenter: parent.horizontalCenter
-              width: size
-              height: size
-              Accessible.role: Accessible.Button
-              Accessible.name: root.listening ? "Stop listening" : "Ask by voice"
-
-              // A tap on the mic stops listening, as Stop does.
-              TapHandler {
-                onTapped: root.micTapped()
-              }
-
-              Rectangle {
-                id: ring
-                anchors.centerIn: parent
-                width: parent.width
-                height: width
-                radius: width / 2
-                color: Qt.rgba(0, 0, 0, 0)
-                border.width: Math.max(1, Style.space(2))
-                border.color: root.listening ? root.recording : Commons.Color.accent
-                opacity: 0.5
-                SequentialAnimation on scale {
-                  running: root.listening && root.opened
-                  loops: Animation.Infinite
-                  NumberAnimation { from: 0.8; to: 1.0; duration: 800; easing.type: Easing.OutCubic }
-                  NumberAnimation { from: 1.0; to: 0.8; duration: 800; easing.type: Easing.InCubic }
-                }
-              }
-
-              Rectangle {
-                anchors.centerIn: parent
-                width: Math.round(parent.width * 0.57)
-                height: width
-                radius: width / 2
-                color: root.listening ? root.recording : Util.alpha(Commons.Color.accent, Style.selectedFillAlpha)
-
-                Text {
-                  id: micGlyph
-                  anchors.centerIn: parent
-                  textFormat: Text.PlainText
-                  // nf-md-microphone; the reload glyph while transcribing
-                  text: root.phase === "transcribing" ? "󰑐" : "󰍬"
-                  color: root.listening ? Commons.Color.popups.background : Commons.Color.accent
-                  font.family: Style.font.family
-                  font.pixelSize: Math.round(parent.width * 0.42)
-                  RotationAnimator on rotation {
-                    running: root.phase === "transcribing" && root.opened
-                    from: 0
-                    to: 360
-                    duration: 1200
-                    loops: Animation.Infinite
-                    onRunningChanged: if (!running) micGlyph.rotation = 0
-                  }
-                }
-              }
-            }
-
-            StatusLine {
-              anchors.horizontalCenter: parent.horizontalCenter
-              phase: root.phase
-              owner: root.owner
-              elapsed: root.elapsed
-            }
-
-            LevelMeter {
-              anchors.horizontalCenter: parent.horizontalCenter
-              width: Math.min(parent.width, Style.space(260))
-              height: Style.space(26)
-              levels: root.levels
-              active: root.listening
-            }
-
-            Text {
-              width: parent.width
-              horizontalAlignment: Text.AlignHCenter
-              textFormat: Text.PlainText
-              text: VoiceModel.askHint(root.phase, root.pushToTalk)
-              color: root.foreground
-              opacity: 0.7
-              font.family: Style.font.family
-              font.pixelSize: Readable.px(Style.font.caption)
-              wrapMode: Text.Wrap
-            }
-          }
-        }
-
-        Row {
-          id: listenButtons
-          visible: root.page === "listen"
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: parent.bottom
-          height: root.touchSize
-          spacing: Style.spacing.lg
-          layoutDirection: Qt.RightToLeft
-
-          SheetAction {
-            width: (parent.width - parent.spacing) / 2
-            label: "Stop"
-            primary: true
-            tone: root.recording
-            enabled: root.phase === "listening" || root.phase === "starting"
-            onTapped: root.stop()
-          }
-
-          SheetAction {
-            width: (parent.width - parent.spacing) / 2
-            label: "Cancel"
-            onTapped: root.cancel()
-          }
-        }
-
-        // ---------- Error: nothing heard, or Voxtype missing
-        Column {
-          visible: root.page === "error"
-          anchors.top: headerRow.bottom
-          anchors.topMargin: Style.spacing.xl
-          anchors.left: parent.left
-          anchors.right: parent.right
-          spacing: Style.spacing.xl
-
-          InfoRow {
-            width: parent.width
-            glyph: "󰍭"
-            text: root.errorText
-            urgent: true
-          }
-        }
-
-        Row {
-          id: errorButtons
-          visible: root.page === "error"
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: parent.bottom
-          height: root.touchSize
-          spacing: Style.spacing.lg
-          layoutDirection: Qt.RightToLeft
-
-          SheetAction {
-            width: (parent.width - parent.spacing) / 2
-            label: "Say again"
-            primary: true
-            onTapped: root.sayAgain()
-          }
-
-          SheetAction {
-            width: (parent.width - parent.spacing) / 2
-            label: "Cancel"
-            onTapped: root.cancel()
-          }
-        }
-
-        // ---------- Review: check and send
-        Text {
-          id: editLabel
-          visible: root.page === "review"
-          anchors.top: headerRow.bottom
-          anchors.topMargin: Style.spacing.lg
-          anchors.left: parent.left
-          anchors.right: parent.right
-          textFormat: Text.PlainText
-          text: "What you said · tap to edit"
-          color: root.foreground
-          opacity: 0.7
-          font.family: Style.font.family
-          font.pixelSize: Readable.px(Style.font.caption)
-          elide: Text.ElideRight
-        }
-
-        Flickable {
-          id: editFlick
-          objectName: "transcript"
-          visible: root.page === "review"
-          anchors.top: editLabel.bottom
-          anchors.topMargin: Style.spacing.md
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: warning.top
-          anchors.bottomMargin: Style.spacing.lg
-          clip: true
-          boundsBehavior: Flickable.StopAtBounds
-
-          Controls.TextArea.flickable: Controls.TextArea {
-            id: editor
-            wrapMode: TextEdit.Wrap
-            textFormat: TextEdit.PlainText
-            color: root.foreground
-            selectionColor: Style.selectionFillFor(root.foreground, Commons.Color.accent)
-            selectedTextColor: root.foreground
-            placeholderText: "Say or type what to ask"
-            placeholderTextColor: Qt.darker(root.foreground, 1.6)
-            font.family: Style.font.family
-            font.pixelSize: Style.font.title
-            leftPadding: Style.spacing.controlPaddingX + Math.max(1, Style.space(2))
-            rightPadding: leftPadding
-            topPadding: Style.spacing.lg
-            bottomPadding: Style.spacing.lg
-            background: BorderSurface {
-              color: Style.controlFill(editor.activeFocus, false, root.foreground, Commons.Color.accent)
-              borderSpec: Border.controlSpec(editor.activeFocus ? "focus" : "selected", root.foreground, Commons.Color.accent)
-              radius: Style.cornerRadius
-            }
-            onTextChanged: root.copied = false
-          }
-        }
-
-        InfoRow {
-          id: warning
-          objectName: "permissionWarning"
-          visible: root.page === "review" && root.hasAgent
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: alsoRow.top
-          anchors.bottomMargin: Style.spacing.lg
-          height: visible ? implicitHeight : 0
-          glyph: "󰀦"
-          text: VoiceModel.permissionText(root.agentName)
-        }
-
-        Row {
-          id: alsoRow
-          visible: root.page === "review"
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: reviewButtons.top
-          anchors.bottomMargin: Style.spacing.lg
-          height: root.touchSize
-          spacing: Style.spacing.lg
-
-          Text {
-            id: alsoLabel
-            anchors.verticalCenter: parent.verticalCenter
-            textFormat: Text.PlainText
-            text: "Also:"
-            color: root.foreground
-            opacity: 0.7
-            font.family: Style.font.family
-            font.pixelSize: Readable.px(Style.font.caption)
-          }
-
-          SheetAction {
-            width: (parent.width - alsoLabel.width - parent.spacing * 2) * 0.4
-            label: root.copied ? "Copied" : "Copy"
-            small: true
-            enabled: root.finalText.length > 0
-            onTapped: root.copyText()
-          }
-
-          SheetAction {
-            width: (parent.width - alsoLabel.width - parent.spacing * 2) * 0.6
-            label: "Type into last app"
-            small: true
-            enabled: root.finalText.length > 0 && root.appOnScreen
-            onTapped: root.typeIntoApp()
-          }
-        }
-
-        Row {
-          id: reviewButtons
-          visible: root.page === "review"
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.bottom: parent.bottom
-          height: root.touchSize
-          spacing: Style.spacing.lg
-          layoutDirection: Qt.RightToLeft
-
-          SheetAction {
-            id: sendButton
-            objectName: "send"
-            width: (parent.width - sayAgainButton.width - parent.spacing * 2) * 2 / 3
-            label: VoiceModel.sendLabel(root.hasAgent ? root.agentName : "")
-            primary: true
-            enabled: !root.hasAgent || root.finalText.length > 0
-            onTapped: root.send()
-          }
-
-          SheetAction {
-            width: (parent.width - sayAgainButton.width - parent.spacing * 2) / 3
-            label: "Cancel"
-            onTapped: root.cancel()
-          }
-
-          GlyphTap {
-            id: sayAgainButton
-            objectName: "sayAgain"
-            glyph: "󰍬"
-            framed: true
-            onTapped: root.sayAgain()
-          }
-        }
-      }
-    }
-  }
-
-  // ---------------------------------------------------------------- the listening strip
-
-  // Above the on-screen keyboard while Voxtype types into an app (Main in
-  // the design): the level, the time, Cancel and Done. It reserves its
-  // height (an exclusive zone), so the app's text field ends above it
-  // rather than under it, and it never takes the keyboard focus, so the
-  // text keeps going to the app.
-  Variants {
-    model: Quickshell.screens
-
-    PanelWindow {
-      id: stripWindow
-      required property var modelData
-      screen: modelData
-
-      visible: root.stripShown
-      anchors { bottom: true; left: true; right: true }
-      implicitHeight: stripCard.implicitHeight + Style.gapsOut * 2
-      exclusionMode: ExclusionMode.Auto
-      color: "transparent"
-      WlrLayershell.namespace: "omamobile-voice-strip"
-      WlrLayershell.layer: WlrLayer.Top
-      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
-
-      IdleInhibitor {
-        window: stripWindow
-        enabled: root.stripShown && root.busy
-      }
-
-      // Main in the design. Written out here rather than as an inline
-      // component, which couldn't see root.
-      BorderSurface {
-        id: stripCard
-        anchors.fill: parent
-        anchors.margins: Style.gapsOut
-        objectName: "listeningStrip"
-        implicitHeight: stripColumn.implicitHeight + Style.spacing.xl * 2
-        color: Commons.Color.popups.background
-        borderSpec: Border.flat(root.phase === "error" ? Commons.Color.urgent : root.busy ? root.recording : Commons.Color.popups.border,
-                                Math.max(1, Style.space(2)))
-        radius: Style.cornerRadius
-
-        Column {
-          id: stripColumn
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.margins: Style.spacing.xl
-          spacing: Style.spacing.lg
-
-          Item {
-            width: parent.width
-            height: Math.max(stripStatus.implicitHeight, stripTime.implicitHeight)
-            visible: root.phase !== "error"
-
-            StatusLine {
-              id: stripStatus
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              phase: root.phase
-              owner: root.owner
-              elapsed: -1
-            }
-
-            Text {
-              id: stripTime
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: VoiceModel.elapsedText(root.elapsed) + " · on this phone"
-              visible: root.listening
-              color: root.foreground
-              opacity: 0.7
-              font.family: Style.font.family
-              font.pixelSize: Readable.px(Style.font.caption)
-            }
-          }
-
-          InfoRow {
-            width: parent.width
-            visible: root.phase === "error"
-            glyph: "󰍭"
-            text: root.errorText
-            urgent: true
-          }
-
-          LevelMeter {
-            width: parent.width
-            height: Style.space(26)
-            visible: root.phase !== "error"
-            levels: root.levels
-            active: root.listening
-          }
-
-          Row {
-            width: parent.width
-            height: root.touchSize
-            spacing: Style.spacing.lg
-            layoutDirection: Qt.RightToLeft
-            visible: root.phase !== "error"
-
-            SheetAction {
-              width: (parent.width - parent.spacing) * 2 / 3
-              label: root.phase === "transcribing" ? "Typing..." : "Done · type it"
-              primary: true
-              tone: root.recording
-              enabled: root.phase === "listening" || root.phase === "starting"
-              onTapped: root.stop()
-            }
-
-            SheetAction {
-              width: (parent.width - parent.spacing) / 3
-              label: "Cancel"
-              onTapped: root.cancel()
-            }
+            SettingRow { objectName: "setting-confirmSend"; title: "Check before asking the agent"; note: "off: on the home screen, what you say goes to the agent as soon as it is text"; checked: root.settings.confirmSend === true; onToggled: root.setSetting("confirmSend", !checked) }
           }
         }
       }
@@ -1273,36 +981,116 @@ Item {
 
   // ---------------------------------------------------------------- pieces
 
-  // "● Listening · 0:05" (elapsed < 0 leaves the time out).
-  component StatusLine: Row {
-    id: statusItem
-    property string phase: "idle"
-    property string owner: ""
-    property real elapsed: 0
-    spacing: Style.spacing.md
+  // The destination chip: what it does, and a chevron for the others.
+  component DestChip: BorderSurface {
+    id: chip
+    property string label: ""
+    property string glyph: ""
+    property color tone: Commons.Color.popups.text
+    property bool open: false
+    signal tapped()
+    readonly property int touchSize: Math.max(44, Style.space(48))
+    height: chip.touchSize
+    implicitWidth: chipRow.implicitWidth + Style.spacing.controlPaddingX * 2
+    radius: Style.cornerRadius
+    color: chipTouch.pressed ? Style.pressedFillFor(chip.tone, Commons.Color.accent)
+      : Style.normalFillFor(chip.tone, Commons.Color.accent)
+    borderSpec: Border.flat(Util.alpha(chip.tone, 0.5), Math.max(1, Style.normalBorderWidth))
+    Accessible.role: Accessible.Button
 
-    Rectangle {
+    Row {
+      id: chipRow
       anchors.verticalCenter: parent.verticalCenter
-      width: Style.space(8)
-      height: width
-      radius: width / 2
-      color: statusItem.phase === "listening" ? Commons.Color.urgent : Commons.Color.accent
-      SequentialAnimation on opacity {
-        running: statusItem.phase === "listening"
-        loops: Animation.Infinite
-        NumberAnimation { from: 1; to: 0.45; duration: 600 }
-        NumberAnimation { from: 0.45; to: 1; duration: 600 }
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spacing.controlPaddingX
+      spacing: Style.spacing.md
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
+        text: chip.glyph
+        color: chip.tone
+        font.family: Style.font.family
+        font.pixelSize: Style.font.iconLarge
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.min(implicitWidth, chip.width - Style.spacing.controlPaddingX * 2 - Style.font.iconLarge * 2 - Style.spacing.md * 2)
+        textFormat: Text.PlainText
+        text: chip.label
+        color: chip.tone
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+        elide: Text.ElideRight
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        visible: chip.enabled
+        textFormat: Text.PlainText
+        // nf-md-chevron_down / up
+        text: chip.open ? "󰅃" : "󰅀"
+        color: chip.tone
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
       }
     }
 
+    MouseArea {
+      id: chipTouch
+      anchors.fill: parent
+      enabled: chip.enabled
+      onClicked: chip.tapped()
+    }
+  }
+
+  // One destination in the chip's list: its name, and what it does.
+  component OptionRow: Rectangle {
+    id: optionItem
+    property string title: ""
+    property string note: ""
+    property bool chosen: false
+    signal tapped()
+    height: Math.max(44, Style.space(44))
+    radius: Style.cornerRadius
+    color: optionTouch.pressed ? Style.pressedFillFor(Commons.Color.popups.text, Commons.Color.accent)
+      : optionItem.chosen ? Commons.Color.menu.selectedBackground : "transparent"
+    Accessible.role: Accessible.RadioButton
+    Accessible.name: optionItem.title
+    Accessible.checked: optionItem.chosen
+
     Text {
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spacing.controlPaddingX
+      anchors.right: optionNote.left
+      anchors.rightMargin: Style.spacing.md
+      anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
-      text: VoiceModel.statusText(statusItem.phase, statusItem.owner) +
-        (statusItem.elapsed >= 0 && statusItem.phase === "listening" ? " · " + VoiceModel.elapsedText(statusItem.elapsed) : "")
-      color: statusItem.phase === "listening" ? Commons.Color.urgent : Commons.Color.popups.text
+      text: optionItem.title
+      color: optionItem.chosen ? Commons.Color.menu.selectedText : Commons.Color.popups.text
       font.family: Style.font.family
       font.pixelSize: Style.font.body
-      font.bold: true
+      elide: Text.ElideRight
+    }
+
+    Text {
+      id: optionNote
+      anchors.right: parent.right
+      anchors.rightMargin: Style.spacing.controlPaddingX
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: optionItem.note
+      color: Commons.Color.popups.text
+      opacity: 0.7
+      font.family: Style.font.family
+      font.pixelSize: Readable.px(Style.font.caption)
+    }
+
+    MouseArea {
+      id: optionTouch
+      anchors.fill: parent
+      onClicked: optionItem.tapped()
     }
   }
 
@@ -1471,65 +1259,7 @@ Item {
     }
   }
 
-  component AgentChip: BorderSurface {
-    id: chip
-    property string name: ""
-    property string icon: ""
-    signal tapped()
-    readonly property int touchSize: Math.max(44, Style.space(48))
-    height: chip.touchSize
-    width: chipRow.implicitWidth + Style.spacing.controlPaddingX * 2
-    radius: Style.cornerRadius
-    color: chipTouch.pressed ? Style.pressedFillFor(Commons.Color.popups.text, Commons.Color.accent)
-      : Style.normalFillFor(Commons.Color.popups.text, Commons.Color.accent)
-    borderSpec: Border.controlSpec("normal", Commons.Color.popups.text, Commons.Color.accent)
 
-    Row {
-      id: chipRow
-      anchors.centerIn: parent
-      spacing: Style.spacing.md
-
-      Image {
-        anchors.verticalCenter: parent.verticalCenter
-        // A fixed size: a width that followed `visible` changed sourceSize,
-        // which reloaded the image, which hid it again (a binding loop).
-        visible: chip.icon !== "" && status === Image.Ready
-        width: Style.space(18)
-        height: Style.space(18)
-        sourceSize.width: Style.space(18) * 3
-        sourceSize.height: Style.space(18) * 3
-        fillMode: Image.PreserveAspectFit
-        source: chip.icon
-      }
-
-      Text {
-        anchors.verticalCenter: parent.verticalCenter
-        textFormat: Text.PlainText
-        text: chip.name
-        color: Commons.Color.popups.text
-        font.family: Style.font.family
-        font.pixelSize: Style.font.body
-      }
-
-      Text {
-        anchors.verticalCenter: parent.verticalCenter
-        textFormat: Text.PlainText
-        // nf-md-chevron_down
-        text: "󰅀"
-        color: Commons.Color.popups.text
-        font.family: Style.font.family
-        font.pixelSize: Style.font.body
-      }
-    }
-
-    MouseArea {
-      id: chipTouch
-      anchors.fill: parent
-      onClicked: chip.tapped()
-    }
-  }
-
-  // Inline components have their own scope: no `root` in here.
   component GlyphTap: BorderSurface {
     id: glyphItem
     property string glyph: ""
