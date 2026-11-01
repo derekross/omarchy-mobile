@@ -14,23 +14,23 @@ Nothing in this document contains a serial number, IMEI, MAC address, IP address
 | --- | --- |
 | I2C bus hsi2c_11 (USI11, CMU_PERIC1) | Works. Needs kernel #163 and a bring-up overlay. |
 | Fuel gauge (0x36, `max17042_battery`) | Works: percentage, voltage, current, temperature, in the status bar, the home widget and UPower. |
-| Gauge battery model | Not in the device tree. Loading Google's `default-a1-0k` model through an overlay fixed the stuck temperature (22.0 C became 34.4 C). The real pack (ATL, COS or LSN) is not known. |
+| Gauge battery model | Google's ATL model (the pack's real ID, read from its EEPROM), loaded through an overlay. The temperature reads about 35 C and moves; replacing the fallback model with the right one dropped the reported level by 10 points (section 5.6). |
 | MFD core (PMIC at 0x66, `max77759`) | Binds, no interrupt storm, loads at boot. |
 | Charger (0x69, `max77759_charger`) | Loaded by hand under a dead-man tool, three runs: 500 mA and 900 mA on a desktop USB port, and a wall charger. The driver charges the battery, slowly (see section 7). |
 | Type-C controller (0x25, `tcpci_maxim`) | No driver loaded: it stays disabled and blocked. The only access to the chip is its USB data switch register (0x25:0x93), read and written by the rescue service (section 8). |
 | USB link across an unplug | Lost until a reboot, because the Type-C chip opens the USB data switch. Fixed with `omamobile-usb-rescue`. |
 | Slot B boot retries | A hazard: each boot of slot B uses one retry (3 after a flash or `set_active`), and when they run out the bootloader falls back to GrapheneOS, whose first boot wiped `userdata`. A cure exists (section 9). |
 | PCA9468 direct charger (0x57) | No mainline driver. Not touched. |
-| Pack ID, charge-limit step table, JEITA, a reset restoring the charger registers | Open. See section 11. |
+| Charge-limit step table, JEITA, a reset restoring the charger registers, why charging is so slow | Open. See section 11. |
 
 ## 2. Hardware, as found
 
-All of this is from Google's stock device tree (`private` copy of the GrapheneOS husky images, `ov15.dts` and `ov16.dts`), Google's GPL kernel source (`android-gs-shusky-6.1-android16` for the clocks, the shusky `bms` repository for the gauge) and reads on the phone.
+All of this is from Google's stock device tree (a copy of the GrapheneOS husky images; the Pixel 8 Pro's own overlay is `ov8.dts`, the retail MP one with the 4950 mAh pack; `ov16.dts` is the Pixel 8 with a smaller pack and different ATL, COS and LSN model nodes, do not use it for husky), Google's GPL kernel source (`android-gs-shusky-6.1-android16` for the clocks, the shusky `bms` repository for the gauge) and reads on the phone.
 
 - **Bus:** hsi2c_11 at 0x10CB0000, GIC SPI 659, on USI11 at 0x10cb00c0. USI11 needs CMU_PERIC1 at 0x10c00000 and the PERIC1 sysreg at 0x10c21000 (SW_CONF at offset 0xc). Pins gpp21-0 and gpp21-1.
 - **Devices on the bus:** fuel gauge 0x36 (`maxim,max77759-fg`, interrupt gpa7-7), PMIC 0x66 (`maxim,max77759`, interrupt gpa8-0), the charger's registers at 0x69 (a dummy I2C client created by the PMIC driver), the Type-C controller 0x25 (interrupt gpa8-3), and a PCA9468 direct charger at 0x57 with no driver.
 - **Chip identity:** the PMIC driver binds only if `PMIC_ID` is 59 (0x3b). Read back on the phone: PMIC_ID 0x3b, PMIC_REVISION 0x02, OTP_REVISION 0x31. So the chip at 0x66 is a MAX77759, not the MAX77729 that Google's device tree names on the same interrupt.
-- **Pack:** 4950 mAh in our device tree (`simple-battery`). Google's gauge models carry a design capacity of 0x0994 (the `default-a1-0k` model) or 0x08e3 (the ATL, COS and LSN models). After the model load, the kernel reports `charge_full` 4,844,000 uAh and `charge_full_design` 4,904,000 uAh. Which pack is fitted is **not known**: Google reads the pack ID from an EEPROM (`at,24c08` at 0x50 on hsi2c_9, byte 0x17 per Google's `google_eeprom.c`), and that bus is not in our tree.
+- **Pack:** 4950 mAh in our device tree (`simple-battery`). The pack's EEPROM says ATL (section 5.6). Husky's ATL model carries a design capacity of 0x09cf, which the gauge reports as 5,022,000 uAh (0.5 mAh per unit), and its fallback model `default-a1-0k` 0x0994 (4,904,000 uAh). With the ATL model loaded the kernel reports `charge_full` 4,978,000 uAh and `charge_full_design` 5,022,000 uAh.
 - **Bootloader state at boot (before any Linux driver):** charger mode 0x5 (charge and buck on), float voltage 4350 mV, fast charge 1,933,420 uA, input limit 500 mA. Read from the register dump and from the charger driver's own probe line.
 - **Stock charging steps:** 4.20, 4.30, 4.35 and 4.48 V by temperature (`google,chg-cv-limits`, edges at 0, 10, 20, 42, 46, 48, 55 C). Our device tree is deliberately more conservative: 4.2 V and 0.3 C (1.485 A). Raising it needs a review (section 11).
 
@@ -94,7 +94,7 @@ Evidence from a sibling: on a Pixel 7, nesmeck's kernel PR #171 reports the same
 Done on husky:
 
 1. `device/husky/overlays/gauge-model.dtso` adds `maxim,fg-model` (48 u16) and `maxim,fg-params` (27 u16) to `fuel-gauge@36`. It is generated from Google's stock husky node by `tools/gen-gauge-overlay.py` (each stock u32 table cell split into two u16, high half first; the stock parameter bytes read as big-endian u16 in the order of `struct max77759_fg_params`), so no number is typed by hand. The leading words of the table and of the parameters matched an independently derived copy; the whole table was not re-compared by hand.
-2. Model chosen: Google's `default-a1-0k`. In Google's driver the unknown-pack path sets the battery ID to 0 (`DEFAULT_BATTERY_ID`) and matches the node with `maxim,batt-id-kohm = 0`. The other nodes are `default-fake-batt` (ID 170, Google's dummy), `atl-a1-1k`, `cos-a1-2k` and `lsn-a1-3k`.
+2. Model chosen: Google's `default-a1-0k`. In Google's driver the unknown-pack path sets the battery ID to 0 (`DEFAULT_BATTERY_ID`) and matches the node with `maxim,batt-id-kohm = 0`. The other nodes are `default-fake-batt` (ID 170, Google's dummy), `atl-a1-1k`, `cos-a1-2k` and `lsn-a1-3k`. (Replaced by the ATL model once the pack ID was read, section 5.6.)
 3. Flashed through the images workflow (`DTB_OVERLAYS`), no kernel rebuild.
 
 Result, verified: dmesg `max17042 0-0036: battery model loaded (DesignCap 0x994, TaskPeriod 0x2d00)`; `Status` 0x0000 (power-on bit cleared); `Config`, `TGAIN`, `TOFF` at 0x4217, 0xed51, 0x1eba; **TEMP 34.4 C**, drifting down slowly as a freshly booted phone cools, matching the hand (a hair above room temperature). The model survives reboots (no reload, the power-on bit stays clear). The gauge interrupt bursts on every 1 % step with the stock module, as kernel #170 describes: a logger on the phone reads the gauge's line in `/proc/interrupts` (summed over the CPUs) and the battery level every 30 s, and with a CPU load forcing steps the count rose by 466 for 75 to 74 % (803 to 1,269) and by 402 for 74 to 73 % (1,269 to 1,671). With #170's patch (applied cleanly to this tree, only `max17042_battery.ko` rebuilt with the release name pinned, swapped on the running phone with `rmmod` and `insmod`, the model staying loaded) the 73 to 72 % and 72 to 71 % steps each added 1 interrupt (1,671 to 1,672 and 1,672 to 1,673). The log is `work/logs-gauge-irq-170-test.txt`. Not tested: another pack or model, more than two patched steps.
@@ -104,7 +104,24 @@ Result, verified: dmesg `max17042 0-0036: battery model loaded (DesignCap 0x994,
 - The model is **sticky** until the gauge is reset. Google's reset is writing 0x000F to the gauge's command register (0x60) (`max1720x_full_reset()`); not tried on husky.
 - A wrong table moves the percentage (often several percent) and the gauge's own full threshold. It does not change the charger's voltage limit, which comes from the device tree.
 - Google's driver, if Android ever boots again on this gauge, compares a version byte with the model for the pack ID it reads and reloads Google's own model on a mismatch. The Linux driver never writes that byte. Not verified on a phone.
-- The pack ID is still needed. Reading Google's EEPROM needs the hsi2c_9 bus in our tree (a USI9 clock path, the node, an EEPROM driver), one kernel change and one boot.
+- The pack ID was found afterwards and the model replaced, see 5.6.
+
+### 5.6 The pack ID, and switching to the ATL model
+
+**Reading the ID.** Google's pack EEPROM is an `at,24c08` at 0x50 on hsi2c_9 (USI9, on CMU_PERIC1 like the battery bus, base 0x10c90000, GIC SPI 657, pins gpp19-4 and gpp19-5). Four kernel commits describe it: the USI9 clock ids, the USI9 path in `clk-zuma.c` (mux 0x690, divider 0x1824 and gates 0x2070, 0x2074, 0x20a0 in CMU_PERIC1, each checked against Google's cmucal tables and next to the USI11 set that already works), the `usi9` and `hsi2c_9` nodes with their pins, and a read-only `atmel,24c08` node in the board file (stock calls it `at,24c08`). `CONFIG_EEPROM_AT24=m` was already on. A bring-up overlay (`pack-eeprom-test.dtso`) switches the bus on. At boot the log shows `at24 0-0050: 1024 byte 24c08 EEPROM, read-only` and the three extra addresses (0x51 to 0x53) of the 24c08 appear. With the new bus the I2C adapter numbers move (the EEPROM bus became `i2c-0` and the battery chips `i2c-1`): look the bus up by its device path, as the tools here do.
+
+Google's driver reads one byte at offset 0x17 (the battery ID, no checksum) and matches it exactly against `maxim,batt-id-kohm` of the model nodes: 170 is Google's dummy model, 0 `default-a1-0k`, 1 `atl-a1-1k`, 2 `cos-a1-2k`, 3 `lsn-a1-3k`. On this phone byte 0x17 is **1: an ATL pack** [verified: the byte read with `dd` from the nvmem file; the mapping is from Google's driver and the husky overlay]. An independent check: at the start of the day, before the gauge fell back to its power-on state, it reported a design capacity of 5,022,000 uAh, which is exactly the ATL model's 0x09cf times 2 mAh. The rest of the EEPROM holds the pack's part number, dates and history: only that one byte was ever read and printed, and nothing else of it is published.
+
+**Switching the model.** The model is sticky (the driver loads it only while the gauge's Status bit 1, power-on reset, is set, and clears the bit), so replacing it needs a reset. Reviewed before doing it:
+
+1. Set the power-on bit by hand: write 0x0002 to Status. The bit does **not** stick (read back 0x0000); the hardware owns it. Nothing changed.
+2. Unload `max17042_battery`, write 0x000F to the gauge's register 0x60 (the `max1720x_full_reset()` code of Google's driver, which Google sends to this gauge itself when the model version changes; on this gauge's register map 0x60 is also the extra-config unlock, so this is not a documented command here), wait 0.4 s, read back, reload the driver. Read back right after the reset: Status 0x0002 (power-on set), Config 0x2350, TGAIN 0xeb8d, TOFF 0x20aa, DesignCap 0x0bb8, TEMP 0x1600: exactly the power-on defaults. After the reload: `battery model loaded (DesignCap 0x9cf, TaskPeriod 0x2d00)`; Status 0x0000, Config 0x4217, Config2 0x0090 (load bit clear), TGAIN 0xed51, TOFF 0x1eba, DesignCap and FullCapNom 0x09cf, TEMP about 35.3 C and steady.
+
+The overlay for this is `gauge-model-atl.dtso`, generated by `tools/gen-gauge-overlay.py` from the husky MP overlay's `atl-a1-1k` node (model version 5, DesignCap 0x09cf). It has to be in the booted device tree before the reset (the driver reads the model from it at probe), so the switch was: flash the images with the ATL overlay, boot, reset, reload.
+
+**What changed for the user.** The wrong table had been overstating the charge. At the same moment and about 3.95 V, the fallback model reported 70 % and the ATL model reports 60 %. The percentage after the load can jump (the driver writes RepCap to 0, loads, waits for it to become non-zero), and then settles.
+
+**Not verified.** Whether the Status write ever works on another gauge state, and what Android does on a later boot (Google's driver compares a version byte stored in `TAlrtTh` and reloads its own model on a mismatch; the Linux loader does not write it). The 0x000F reset is Google's own code path but is documented nowhere for this chip, so the first time on a phone was done with the driver unloaded, a read-back at every step and the stop conditions above; it behaved as the reviewers expected.
 
 ## 6. The dead-man tool
 
@@ -194,7 +211,7 @@ So the layout is consistent with husky's [verified, read-only, on files]: the ma
 
 ## 11. Open questions, in the order they matter
 
-1. **The pack ID.** Read Google's EEPROM (hsi2c_9, 0x50, byte 0x17) so the right model replaces the fallback. Needs a kernel change and a boot.
+1. **The model in the board file.** The pack is ATL (section 5.6), so the ATL model can become a device-tree change (a kernel PR) instead of an overlay, once a second pack or phone shows whether the ID should still be read at runtime.
 2. **A device-tree model.** Once the pack is known, the model belongs in the board file (a kernel PR), not in an overlay.
 3. **Charge limits.** Our 4.2 V and 1.485 A are conservative on purpose; stock steps up to 4.48 V by temperature. Review before anything raises them. Also unknown: whether the charger chip's own thermistor and JEITA protection are armed by default (nothing in the Linux driver configures them; Google's driver disables the charger watchdog and the THM2 interrupt).
 4. **Does a reset put the charger registers back?** The software-reboot case can be checked directly; the emergency watchdog case needs a combined drill.

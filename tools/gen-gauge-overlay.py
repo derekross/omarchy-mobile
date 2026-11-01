@@ -2,7 +2,7 @@
 """Generate device/husky/overlays/gauge-model.dtso from Google's stock husky devicetree.
 
 Usage: gen-gauge-overlay.py STOCK.dts NODE OUT.dtso
-  STOCK.dts  the stock husky overlay source (dtc -I dtb -O dts of the factory image's dtbo), the one
+  STOCK.dts  the husky MP stock overlay source (ov8: dtc -I dtb -O dts of the factory image's dtbo; not the Pixel 8's ov16, its models differ), the one
              with the "maxim,<NODE> { maxim,fg-model ... maxim,fg-params ... }" nodes
   NODE       the model node, e.g. default-a1-0k (Google's fallback for an unknown pack),
              atl-a1-1k, cos-a1-2k, lsn-a1-3k, default-fake-batt
@@ -27,13 +27,14 @@ assert len(pw) in (27, 28), len(pw)
 def fmt(ws): return "\n".join("\t\t\t" + " ".join("0x%04x" % w for w in ws[i:i + 8]) for i in range(0, len(ws), 8))
 open(out, "w").write(f"""// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Bring-up overlay, never default (BATTERY-NOTES.md M4c): load Google's ModelGauge m5 model for an
- * unknown pack into the husky fuel gauge (Google falls back to the {node} node when the
- * battery ID is unknown). Generated from the stock DT by tools/gen-gauge-overlay.py:
- * maxim,fg-model = the 24 stock u32 cells split into 48 u16 (high half first),
- * maxim,fg-params = the stock byte list as big-endian u16 words, in the order of
- * struct max77759_fg_params. The driver loads it only while the gauge reports power-on
- * reset (Status bit 1), then clears that bit.
+ * Bring-up overlay, never default (BATTERY-NOTES.md M4c and 5.6): load Google's
+ * ModelGauge m5 model "{node}" into the husky fuel gauge. The node is picked by the
+ * pack's ID, byte 0x17 of its EEPROM: 0 default-a1-0k (what Google falls back to for
+ * an unknown pack), 1 atl-a1-1k, 2 cos-a1-2k, 3 lsn-a1-3k. Generated from the husky
+ * stock overlay by tools/gen-gauge-overlay.py: maxim,fg-model = the 24 stock u32 cells
+ * split into 48 u16 (high half first), maxim,fg-params = the stock byte list as
+ * big-endian u16 words, in the order of struct max77759_fg_params. The driver loads it
+ * only while the gauge reports power-on reset (Status bit 1), then clears that bit.
  */
 /dts-v1/;
 /plugin/;
