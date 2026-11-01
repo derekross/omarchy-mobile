@@ -196,8 +196,8 @@ rm -rf "$dt/soc/usi@10c900c0/i2c@10c90000/nfc@8"
 # Wi-Fi: with the host node, the DMA pool and the firmware, pcie_zumapro
 # then brcmfmac load last and wlan0 counts as up; a missing endpoint skips it
 reset
-mkdir -p "$devices/13120000.pcie" "$dt/reserved-memory/wifi-dma-pool" "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/brcm"
-: > "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/brcm/brcmfmac4383-pcie.bin"
+mkdir -p "$devices/13120000.pcie" "$dt/reserved-memory/wifi-dma-pool" "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/updates/brcm"
+: > "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/updates/brcm/brcmfmac4383-pcie.google,zumapro-tegu.bin"
 out=$("$script")
 [[ $(loads) == "$all pcie_zumapro brcmfmac" ]] || fail "Wi-Fi load order: $(loads)"
 [[ $out == *", Wi-Fi (wlan0)"* ]] || fail "Wi-Fi summary: $out"

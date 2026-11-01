@@ -46,7 +46,7 @@ nfc_node=$dt/soc/usi@10c900c0/i2c@10c90000/nfc@8
 nfc=$root/sys/class/nfc/nfc0
 wifi_pcie=$root/sys/bus/platform/devices/13120000.pcie
 wifi_pool=$dt/reserved-memory/wifi-dma-pool
-wifi_fw=$root/usr/lib/firmware/brcm/brcmfmac4383-pcie.bin
+wifi_fw=$root/usr/lib/firmware/updates/brcm/brcmfmac4383-pcie.google,zumapro-tegu.bin
 
 log() { echo "omamobile-tegu-graphics: $*"; }
 loaded() { [[ -d $root/sys/module/$1 ]]; }
