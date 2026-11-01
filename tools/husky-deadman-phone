@@ -402,7 +402,8 @@ boot_undo() {
   # (if not, they are left for the person in $LEFT, the marker does not stay
   # for them, or the unit would fire at every boot for registers it cannot
   # write, e.g. with the charger driver loaded).
-  local cold=1 LEFT="$(dirname $MARK)/registers-not-restored"
+  local cold=1 LEFT
+  LEFT="$(dirname "$MARK")/registers-not-restored"
   wr $TCPC 0x92 0x00 || cold=0
   [[ $(extbst) == 0x00 ]] || { log "boot-undo: 0x92 readback $(extbst), not 0x00"; cold=0; }
   sleep 0.02
