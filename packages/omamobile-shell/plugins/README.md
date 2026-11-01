@@ -780,7 +780,7 @@ folds the keyboard on demand (showing closes the sheet).
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).
 
-**The language sheet** (0.2.64): the one thing it draws, and only when
+**The language sheet** (0.2.65): the one thing it draws, and only when
 asked. squeekboard's globe key opened its own GTK popover, drawn at mouse
 size, sticking out above the keyboard's surface where taps didn't land, with
 a Keyboard Settings item for a GNOME panel the phone doesn't have. Every

@@ -27,7 +27,7 @@ import "KeyboardModel.js" as KeyboardModel
 // (squeekboard/keyboards/) have a Hide key in their action row, which
 // hypr/phone.lua binds to hideKeyboard; other languages have the double tap.
 //
-// The one thing it draws, only when asked: the language sheet (since 0.2.64).
+// The one thing it draws, only when asked: the language sheet (since 0.2.65).
 // squeekboard's globe key opened squeekboard's own GTK popover, mouse-sized,
 // sticking out above the keyboard's surface where taps didn't land. Every
 // layout we carry now sends XF86MediaLanguageMenu from the globe instead
