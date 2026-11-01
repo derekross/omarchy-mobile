@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Generate squeekboard/keyboards/ from squeekboard's own layouts: each one
-with the action row (Mic, Paste, Emoji, Hide) on top of every view.
+with the action row (Mic, Paste, Emoji, Hide) on top of every view, and the
+globe key sending a keysym instead of opening squeekboard's popover.
 
     squeekboard/generate UPSTREAM_KEYBOARDS_DIR   write keyboards/
     squeekboard/generate --check                  each generated file is
@@ -11,10 +12,18 @@ with the action row (Mic, Paste, Emoji, Hide) on top of every view.
 UPSTREAM_KEYBOARDS_DIR is data/keyboards/ of squeekboard 1.43.1 (tag
 v1.43.1, https://gitlab.gnome.org/World/Phosh/squeekboard), the version
 Arch Linux ARM ships. The upstream file is kept byte for byte; the
-generator only adds lines: a header, four outlines, the row at the top of
-each view and four buttons. --check takes those lines out again, runs the
-generator on what is left and compares, so the upstream copies need not be
-in this repository. test/all runs --check.
+generator adds lines (a header, four outlines, the row at the top of each
+view and four buttons) and changes one: the globe key's
+`action: "show_prefs"` becomes `keysym: "XF86MediaLanguageMenu"`. --check
+takes those lines out again (and puts the action back), runs the generator
+on what is left and compares, so the upstream copies need not be in this
+repository. test/all runs --check.
+
+The globe: squeekboard's show_prefs opens its own GTK popover (src/popover.rs),
+mouse-sized, sticking out above the keyboard's surface where taps don't land,
+with a Keyboard Settings item for a GNOME panel the phone doesn't have. The
+keysym (KEY_LANGUAGE's) is bound in hypr/phone.lua, for squeekboard only, to
+the shell's language sheet (omamobile.keyboard `languages`).
 
 The row is as wide as the layout's widest row (squeekboard centres
 narrower rows): Mic and Paste 30 % each, Emoji and Hide 20 % each, and 10/13
@@ -44,6 +53,9 @@ KEYS = [
 ]
 BUTTONS_COMMENT = "# The action row (hypr/phone.lua binds the keysyms)"
 HEADER_END = "# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/."
+# The globe key: squeekboard's popover out, our language sheet in
+GLOBE_UPSTREAM = 'action: "show_prefs"'
+GLOBE = 'keysym: "XF86MediaLanguageMenu"'
 HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml"}
 SKIP_DIRS = {"emoji", "number", "pin"}
 
@@ -129,13 +141,20 @@ def generate(upstream, rel):
                 pad * 2 + 'keysym: "%s"' % keysym, pad * 2 + 'label: "%s"' % label]
     lines[last + 1:last + 1] = new
 
+    # the globe key: a keysym for hypr/phone.lua instead of the popover
+    globes = [i for i, line in enumerate(lines) if line.strip() == GLOBE_UPSTREAM]
+    assert len(globes) == 1, (rel, "one show_prefs key", len(globes))
+    lines[globes[0]] = lines[globes[0]].replace(GLOBE_UPSTREAM, GLOBE)
+
     a, b = shares["mic"], shares["emoji"]
     header = [
         "# SPDX-License-Identifier: GPL-3.0-or-later",
         "# squeekboard %s's %s (https://gitlab.gnome.org/World/Phosh/squeekboard," % (VERSION, rel),
-        "# tag v%s, GPL-3.0-or-later), with one change for Omarchy Mobile: the" % VERSION,
+        "# tag v%s, GPL-3.0-or-later), with two changes for Omarchy Mobile: the" % VERSION,
         "# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua",
-        "# binds for squeekboard only) on top of every view. Made by",
+        "# binds for squeekboard only) on top of every view, and the globe key",
+        "# sending XF86MediaLanguageMenu (the shell's language sheet) instead of",
+        "# opening squeekboard's popover. Made by",
         "# squeekboard/generate (change the generator, not this file). The row",
         "# sums to the widest row's %s: 2 x %s + 2 x %s." % (num(width), a, b),
         HEADER_END,
@@ -144,6 +163,7 @@ def generate(upstream, rel):
     check = yaml.safe_load(out)
     for vname, rows in check["views"].items():
         assert rows[0] == ACTION_ROW and rows[1:] == data["views"][vname], (rel, vname)
+    assert [b for b in check["buttons"].values() if b.get("action") == "show_prefs"] == [], rel
     return out
 
 
@@ -163,6 +183,8 @@ def strip(generated):
             continue
         if outline.match(line) or line.strip() == row:
             continue
+        if line.strip() == GLOBE:
+            line = line.replace(GLOBE, GLOBE_UPSTREAM)
         out.append(line)
     return "\n".join(out)
 

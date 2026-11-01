@@ -26,6 +26,15 @@ import "KeyboardModel.js" as KeyboardModel
 // them.) Since 0.2.61 the US English and terminal layouts we carry
 // (squeekboard/keyboards/) have a Hide key in their action row, which
 // hypr/phone.lua binds to hideKeyboard; other languages have the double tap.
+//
+// The one thing it draws, only when asked: the language sheet (since 0.2.64).
+// squeekboard's globe key opened squeekboard's own GTK popover, mouse-sized,
+// sticking out above the keyboard's surface where taps didn't land. Every
+// layout we carry now sends XF86MediaLanguageMenu from the globe instead
+// (squeekboard/generate), and hypr/phone.lua binds it to `languages` here: a
+// bottom sheet (LanguageWindow.qml, LanguageSheet.qml) with a row per
+// language. bin/omamobile-keyboard-languages lists and switches them through
+// org.gnome.desktop.input-sources, as squeekboard's popover does.
 Item {
   id: root
 
@@ -43,7 +52,87 @@ Item {
 
   // `shell call omamobile.keyboard state ''`
   function state() {
-    return JSON.stringify({ keyboard: oskOpen, watcher: oskWatch.running, shownByHand: shownByHand, home: homeOnScreen })
+    return JSON.stringify({ keyboard: oskOpen, watcher: oskWatch.running, shownByHand: shownByHand, home: homeOnScreen,
+                            languages: languagesOpen, listing: listing })
+  }
+
+  // ------------------------------------------------------- the language sheet
+
+  // `shell call omamobile.keyboard languages ''`: the keyboard's globe key
+  // (hypr/phone.lua). Opens once the list is read, so the sheet comes up
+  // with its rows; a second call while it is open closes it.
+  function languages() {
+    if (languagesOpen) { closeLanguages(); return "closing" }
+    languagesWanted = true
+    refreshLanguages()
+    return "opening"
+  }
+  // `shell call omamobile.keyboard closeLanguages ''`
+  function closeLanguages() {
+    languagesWanted = false
+    languagesOpen = false
+    return "ok"
+  }
+  // `shell call omamobile.keyboard pickLanguage 'de'`: switch (adding it when
+  // it isn't on the list) and close.
+  function pickLanguage(name) {
+    var n = String(name || "")
+    if (n === "") return "no layout"
+    change(["set", n], false)
+    closeLanguages()
+    return "ok"
+  }
+  // `shell call omamobile.keyboard removeLanguage 'de'`: take it off the
+  // list; the sheet stays open with the new list.
+  function removeLanguage(name) {
+    var n = String(name || "")
+    if (n === "") return "no layout"
+    change(["remove", n], true)
+    return "ok"
+  }
+
+  property bool languagesWanted: false
+  property bool languagesOpen: false
+  property var listing: null
+  property bool relistAfterChange: false
+
+  function refreshLanguages() {
+    if (!languagesList.running) languagesList.running = true
+  }
+  function change(args, relist) {
+    if (languagesChange.running) return
+    relistAfterChange = relist
+    languagesChange.command = ["omamobile-keyboard-languages"].concat(args)
+    languagesChange.running = true
+  }
+
+  Process {
+    id: languagesList
+    command: ["omamobile-keyboard-languages", "list"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.listing = KeyboardModel.parseListing(text)
+        if (!root.listing) console.warn("omamobile.keyboard: omamobile-keyboard-languages list gave no listing")
+        if (root.languagesWanted) root.languagesOpen = true
+      }
+    }
+  }
+
+  Process {
+    id: languagesChange
+    onExited: function(code) {
+      if (code !== 0) console.warn("omamobile.keyboard: " + languagesChange.command.join(" ") + " failed (" + code + ")")
+      if (root.relistAfterChange && root.languagesOpen) root.refreshLanguages()
+    }
+  }
+
+  LanguageWindow {
+    opened: root.languagesOpen
+    listing: root.listing
+    onPicked: function(name) { root.pickLanguage(name) }
+    onRemoved: function(name) { root.removeLanguage(name) }
+    onDismissed: root.closeLanguages()
   }
 
   // `shell call omamobile.keyboard hideKeyboard ''` / `showKeyboard ''` /

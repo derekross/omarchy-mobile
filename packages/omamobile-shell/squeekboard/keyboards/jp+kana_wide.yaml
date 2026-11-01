@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's jp+kana_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
-# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
 # action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
-# binds for squeekboard only) on top of every view. Made by
+# binds for squeekboard only) on top of every view, and the globe key
+# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
+# opening squeekboard's popover. Made by
 # squeekboard/generate (change the generator, not this file). The row
 # sums to the widest row's 420: 2 x 126 + 2 x 84.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
@@ -298,7 +300,7 @@ buttons:
         keysym: "Right"
     # special button "preferences" is handled in the code
     preferences:
-        action: "show_prefs"
+        keysym: "XF86MediaLanguageMenu"
         outline: "special"
         icon: "keyboard-mode-symbolic"
     # space button using text tag for ideographic space

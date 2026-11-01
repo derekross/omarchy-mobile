@@ -382,9 +382,13 @@ assert m.NAME == "sm.puri.OSK0" and m.PATH == "/sm/puri/OSK0"
 grep -c "omamobile-osk-watch" plugins/omamobile.fingerprint/Fingerprint.qml >/dev/null || fail "the fingerprint plugin runs the keyboard watcher"
 grep -c "omamobile-osk-watch" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin follows the watcher"
 python3 -c 'import json; assert {"id": "omamobile.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard plugin"
-# The keyboard plugin draws nothing any more: its floating hide button
-# covered a terminal's input line. Its IPC stays, for the home pill.
+# The keyboard plugin floats nothing over apps any more: its floating hide
+# button covered a terminal's input line. Its IPC stays, for the home pill.
+# Its one window is the language sheet, mapped only while it is open.
 if grep -nE 'PanelWindow|WlrLayershell' plugins/omamobile.keyboard/Keyboard.qml; then fail "the keyboard plugin floats nothing over apps"; fi
+[[ $(grep -lE 'PanelWindow \{' plugins/omamobile.keyboard/*.qml) == plugins/omamobile.keyboard/LanguageWindow.qml ]] \
+  || fail "the language sheet is the keyboard plugin's only window"
+grep -c '^  visible: opened || reveal > 0$' plugins/omamobile.keyboard/LanguageWindow.qml >/dev/null || fail "the language sheet is mapped only while open"
 if grep -rn 'omamobile-osk-hide' hypr plugins; then fail "no layer rule or window for the old hide button"; fi
 for m in hideKeyboard showKeyboard toggleKeyboard; do
   grep -c "function $m() {" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin answers $m"
@@ -428,6 +432,33 @@ grep -c 'done < <(find squeekboard/keyboards -type f -name' install >/dev/null |
 grep -c 'hl.device({ name = osk_device, resolve_binds_by_sym = true })' hypr/phone.lua >/dev/null || fail "squeekboard's binds resolve by keysym"
 grep -c 'local osk_device = "hl-virtual-keyboard-squeekboard"' hypr/phone.lua >/dev/null || fail "squeekboard's virtual keyboard by its Hyprland name"
 pass "the keyboard: theme stylesheet, layouts with the action row, its binds"
+
+# The globe key: every layout sends XF86MediaLanguageMenu instead of opening
+# squeekboard's popover (test/keyboard-layouts.py checks each file), bound for
+# squeekboard alone (test/phone-rules.lua) to the language sheet, which lists
+# and switches through omamobile-keyboard-languages as squeekboard's popover
+# does (test/keyboard-languages.sh). test/keyboard-render draws it in the OWL
+# container.
+if grep -rln 'show_prefs' squeekboard/keyboards; then fail "no layout opens squeekboard's popover"; fi
+grep -c 'o.bind("XF86MediaLanguageMenu", "Keyboard: languages", "omarchy-shell shell call omamobile.keyboard languages '"''"'", { device = osk_only })' hypr/phone.lua >/dev/null \
+  || fail "the globe opens the language sheet, from squeekboard only"
+for m in languages closeLanguages; do
+  grep -c "function $m() {" "$k" >/dev/null || fail "the keyboard plugin answers $m"
+done
+for m in pickLanguage removeLanguage; do
+  grep -c "function $m(name) {" "$k" >/dev/null || fail "the keyboard plugin answers $m"
+done
+grep -c 'command: \["omamobile-keyboard-languages", "list"\]' "$k" >/dev/null || fail "the sheet reads its list from omamobile-keyboard-languages"
+grep -c 'readonly property int rowHeight: Math.max(56, Style.space(56))' plugins/omamobile.keyboard/LanguageSheet.qml >/dev/null || fail "the sheet's rows are thumb-sized"
+grep -c 'onClicked: sheet.dismissed()' plugins/omamobile.keyboard/LanguageSheet.qml >/dev/null || fail "a tap outside closes the sheet"
+grep -c 'if (offset > Style.space(60)) sheet.dismissed()' plugins/omamobile.keyboard/LanguageSheet.qml >/dev/null || fail "a swipe down closes the sheet"
+if grep -n 'gnome-control-center\|Keyboard Settings' plugins/omamobile.keyboard/*.qml; then fail "no link to a GNOME settings panel the phone doesn't have"; fi
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-languages || fail "omamobile-keyboard-languages parses"
+bash test/keyboard-languages.sh >/dev/null || { bash test/keyboard-languages.sh; fail "omamobile-keyboard-languages"; }
+if [[ -n ${OMAMOBILE_KEYBOARD_RENDER:-} ]]; then
+  bash test/keyboard-render "$OMAMOBILE_KEYBOARD_RENDER" >/dev/null || fail "language sheet render"
+fi
+pass "the globe key opens the language sheet"
 
 # PIN or password: the choice is recorded per user, never the secret, and
 # mirrored to Omarchy's credential-password toggle.

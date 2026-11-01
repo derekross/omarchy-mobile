@@ -9,6 +9,9 @@
 #     on lift-off, so Mic is push-to-talk (a tap keeps listening).
 #   - a terminal row of Esc, Tab, Ctrl, Alt, | ~ / and the arrows (upstream's
 #     Shift modifier stays on the Shift view's row, with Page Up/Down, Home, End).
+#   - the globe key sends XF86MediaLanguageMenu, which hypr/phone.lua binds to
+#     the shell's language sheet (omamobile.keyboard), instead of opening
+#     squeekboard's own popover.
 # Widths: the portrait layout's (terminal/us.yaml) times 618.24 / 404.1, so
 # every row sums to 618.24, the letter rows' 10 x 61.824, as in upstream's
 # landscape layout; heights 42 (letters), 30 (actions) and 26 (terminal row).
@@ -89,7 +92,7 @@ buttons:
         icon: "edit-clear-symbolic"
         action: "erase"
     preferences:
-        action: "show_prefs"
+        keysym: "XF86MediaLanguageMenu"
         outline: "special"
         icon: "keyboard-mode-symbolic"
     show_numbers:

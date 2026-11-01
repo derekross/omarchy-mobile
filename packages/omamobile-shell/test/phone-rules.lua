@@ -131,6 +131,8 @@ check(#find("XF86Assistant") == 0, "no Ask key any more: Mic is the one voice ke
 check(one("XF86Paste", false, "omarchy-menu-clipboard"), "Paste opens Omarchy's clipboard")
 check(one("XF86EmojiPicker", false, "omarchy-menu-emoji"), "Emoji opens Omarchy's emoji picker")
 check(one("XF86Keyboard", false, "omarchy-shell shell call omamobile.keyboard hideKeyboard ''"), "Hide hides the keyboard")
+check(one("XF86MediaLanguageMenu", false, "omarchy-shell shell call omamobile.keyboard languages ''"),
+  "the globe opens the language sheet, from squeekboard only")
 for _, keys in ipairs({ "CTRL + ALT + DELETE", "ALT + TAB", "ALT + SHIFT + TAB", "CTRL + ALT + TAB", "CTRL + ALT + SHIFT + TAB", "F9" }) do
   local f = find(keys)
   local ok = #f > 0

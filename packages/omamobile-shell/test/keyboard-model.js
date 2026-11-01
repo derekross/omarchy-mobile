@@ -83,6 +83,38 @@ test("the double tap: shows when down, hides when up", () => {
   assert.strictEqual(M.toggleTarget(false, true, M.TOGGLE_SETTLE_MS + 1), true, "a keyboard that went away on its own shows again")
 })
 
+// The language sheet (the globe key), from omamobile-keyboard-languages list.
+const listing = JSON.stringify({
+  current: "de", configured: 2,
+  sources: [{ kind: "xkb", name: "us", label: "English (US)" }, { kind: "xkb", name: "de", label: "German" }],
+  available: [{ name: "fr", label: "French" }]
+})
+
+test("the sheet's rows: each language, the current one marked, others removable, then Add", () => {
+  const rows = M.languageRows(M.parseListing(listing))
+  assert.deepStrictEqual(rows.map(r => [r.kind, r.name, r.label, r.current, r.removable]), [
+    ["language", "us", "English (US)", false, true],
+    ["language", "de", "German", true, false],
+    ["add", "", "Add a language", false, false],
+  ])
+  assert.deepStrictEqual(M.addRows(M.parseListing(listing)).map(r => [r.name, r.label, r.current]), [["fr", "French", false]])
+})
+
+test("one language still gets its row (the globe always opens the sheet), and it can't be removed", () => {
+  const one = M.parseListing(JSON.stringify({ current: "us", configured: 0,
+    sources: [{ kind: "xkb", name: "us", label: "English (US)" }], available: [] }))
+  assert.deepStrictEqual(M.languageRows(one).map(r => [r.name, r.current, r.removable]), [["us", true, false]])
+})
+
+test("a broken listing shows nothing rather than stale rows", () => {
+  for (const bad of ["", "not json", "null", "{}", '{"sources": 3}']) {
+    assert.strictEqual(M.parseListing(bad), null, bad)
+    assert.deepStrictEqual(M.languageRows(M.parseListing(bad)), [])
+  }
+  const odd = M.parseListing('{"current": "us", "sources": [{"name": "us"}, {"label": "no name"}, null]}')
+  assert.deepStrictEqual(odd.sources, [{ name: "us", label: "us" }], "a missing label falls back to the name; a row without a name goes")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - " + name) } catch (e) { failed++; console.log("not ok - " + name + "\n  " + e.message) }
