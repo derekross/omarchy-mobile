@@ -5,6 +5,10 @@ Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the
 
 The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
 
+## 2026-10-31: the battery
+
+The MAX77759's fuel gauge reports the battery with stock's Coslight 1 kOhm model: 4326 mAh, the pack's temperature and a real percentage, in upower and the shell's bar. Every 1 % step used to fire the gauge's interrupt about 430 times; a driver change fixes it. Gates, values and results: [BATTERY-PLAN.md](BATTERY-PLAN.md). Kernel: [linux-omarchy-mobile#171](https://github.com/derekross/linux-omarchy-mobile/pull/171) and [#170](https://github.com/derekross/linux-omarchy-mobile/pull/170), in review.
+
 ## 2026-10-31: the new omamobile base, #133's alignment, and stock's touch details
 
 Three boots, one change each, on `omamobile` at b0d62d9e7 (new spi-s3c64xx PIO fixes, ACPM and RTC changes), each with the USB bus commit:
