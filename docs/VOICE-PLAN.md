@@ -1,6 +1,6 @@
 # Voice input plan
 
-Status: 2026-10-31. **One voice bar** (canvas row U1-U4: UApp, UAgent, UHome, UResult), approved by the maintainer, ships in omamobile-shell 0.2.61 (branch `shell-voice`, PR #241, not merged yet). It replaces the voice UIs of 0.2.57-0.2.60 (a dictation strip, an Ask sheet, a Confirm sheet, a mic and a hold on the search pill, a keyboard-strip mic key, an agent mic in the home strip), which had multiplied, each with its own look and rules. On the phone with 0.2.61, the maintainer confirmed that holding the pill and the keyboard's Mic key both work and insert text. 0.2.62 fixes what that run found ([below](#found-on-the-phone-0261-fixed-in-0262)): the keyboard flashing up as the drawer closed, and Hyprland keeping old binds until a reload. [The voice bar](#the-voice-bar-0261) is the current design. The sections from [History](#history-0257-0260) on record the earlier flows and what the phone taught at each step; don't follow them for how voice works today.
+Status: 2026-10-31. **Phase 3 is built in omamobile-shell 0.2.63** (branch `voice-phase3`, not on the phone yet; [Phase 3](#phase-3-0263-branch-voice-phase3)): live words in the bar while you speak (Voxtype 1.1.1 can't hand its partials over, so the shell transcribes a second capture in chunks with tiny.en), base.en back as the default with Whisper's context cut to the clip (12 s of speech in about 2.2 s), the keyboard's action row in every language squeekboard ships, and a design for voice on the lock screen. Before that: **one voice bar** (canvas row U1-U4: UApp, UAgent, UHome, UResult), approved by the maintainer, ships in omamobile-shell 0.2.61 (branch `shell-voice`, PR #241, not merged yet). It replaces the voice UIs of 0.2.57-0.2.60 (a dictation strip, an Ask sheet, a Confirm sheet, a mic and a hold on the search pill, a keyboard-strip mic key, an agent mic in the home strip), which had multiplied, each with its own look and rules. On the phone with 0.2.61, the maintainer confirmed that holding the pill and the keyboard's Mic key both work and insert text. 0.2.62 fixes what that run found ([below](#found-on-the-phone-0261-fixed-in-0262)): the keyboard flashing up as the drawer closed, and Hyprland keeping old binds until a reload. [The voice bar](#the-voice-bar-0261) is the current design. The sections from [History](#history-0257-0260) on record the earlier flows and what the phone taught at each step; don't follow them for how voice works today.
 
 Design (approved by the maintainer): the voice canvas, <https://claude.ai/artifact/K93k88TFaqyKvChsdk2ugK>. It has five artboards: Main (dictation strip above the keyboard), Ask (listening sheet), Confirm (check and send), FollowUp (phase 2) and Settings (phase 2). The mockups use Tokyo Night hex colours as a stand-in. The shell draws with the applied theme's tokens (`Commons.Color`, `Style`, `Border`) and the update sheet's components, and the recording colour is the theme's `urgent`.
 
@@ -56,7 +56,7 @@ Superseded by [the voice bar](#the-voice-bar-0261). Kept for the facts and for w
 - **Control:** `voxtype record start|stop|toggle|cancel`. `record start` takes `--type | --clipboard | --paste | --file[=PATH]`, `--model <name>` (for this recording only: any downloaded model; the daemon keeps it loaded), `--no-osd`, `--auto-submit` and `--smart-auto-submit` (`voxtype record start --help` on the phone).
 - **State:** `$XDG_RUNTIME_DIR/voxtype/state` holds `idle`, `recording`, `streaming` or `transcribing`. `voxtype-audio-bridge` prints one NDJSON frame per audio block (`{"peak","rms","vad","ts_ms"}`) from the daemon's `audio.sock`. Voxtype's own `voxtype-shared/{StateReader,AudioBridge}.qml` show how to read both; the plugin follows them and doesn't import them.
 - **OSD:** Voxtype's GTK overlay anchors bottom centre, over the dock and the home pill, so every recording the shell starts passes `--no-osd`.
-- **Speed:** before CPU frequency scaling, `tiny.en` turned 10 s of speech into text in 3.9 s and `base.en` in 8.8 s; both were word-perfect. With cpufreq-dt on ACPM (kernel #169, merged), it is 2.36 s for tiny.en and 5.97 s for base.en per 12 s of speech. Text appears after the recording stops (no live partial text yet). `tiny.en` is downloaded on the reference phone (`~/.local/share/voxtype/models/ggml-tiny.en.bin`).
+- **Speed:** before CPU frequency scaling, `tiny.en` turned 10 s of speech into text in 3.9 s and `base.en` in 8.8 s; both were word-perfect. With cpufreq-dt on ACPM (kernel #169, merged), it is 2.36 s for tiny.en and 5.97 s for base.en per 12 s of speech, and with Whisper's context cut to the clip (`context_window_optimization`, 0.2.63) 1.0 s and 2.2 s ([Phase 3](#measurements)). Voxtype's text appears after the recording stops; the bar's live words come from its own preview (0.2.63). `tiny.en` is downloaded on the reference phone (`~/.local/share/voxtype/models/ggml-tiny.en.bin`).
 
 ## Architecture (phase 1, history)
 
@@ -137,16 +137,89 @@ Read-only first, then one change at a time. Announce before restarting squeekboa
 
 Risk: low (userspace only). Rollback: reinstall omamobile-shell 0.2.60; remove the import line from gtk.css and the hook link to go back to squeekboard's own look.
 
-## Phase 3
+## Phase 3 (0.2.63, branch `voice-phase3`)
 
-- **Live partial text** is now feasible: CPU frequency scaling is merged (kernel #169, cpufreq-dt on ACPM), and tiny.en transcribes 12 s of speech in 2.36 s (base.en in 5.97 s). Try Voxtype's streaming engines and show the words in the bar as they come.
-- **base.en as the default** is a candidate, now that it is about half real time: more accurate than tiny.en, at 5.97 s per 12 s of speech. Measure it in the bar before switching setup's default.
-- **The action row (Mic, Paste, Emoji, Hide) for every language.** Only US English and the terminal layout carry it (above); the other languages would each need a carried copy of squeekboard's layout.
-- **Power + Volume Up on the lock screen**, for example to ask the agent hands-free. It needs its own design for what may run while locked.
+Built offline; nothing was installed on the phone. The timings below are read-only runs on the Pixel 7 Pro (2026-10-31, kernel with cpufreq-dt on ACPM, on the charger) of `voxtype transcribe` on the 11.9 s clip from the CPUFREQ-PLAN C4 run (the maintainer's own recording, on the phone only, never in the repository) and on slices and repeats of it made on the laptop. No new recording was made and no microphone was opened.
+
+### What Voxtype 1.1.1 can do for streaming
+
+Read from the installed binary (`voxtype --help`, `voxtype record start --help`, `voxtype info engines`, the strings in `/usr/lib/voxtype/voxtype-cpu`) and Voxtype's source at tag v1.1.1 (`src/daemon.rs`, `src/output/streaming.rs`):
+
+- **Engines.** The active binary (`voxtype-cpu`) has Whisper only; `voxtype-onnx` adds Parakeet, Moonshine and others. Parakeet's cache-aware streaming (`parakeet-unified-en-0.6b`) is the one native streaming engine; Whisper gets a sliding-window streaming mode (`[whisper] streaming = true`, tuned in a `[streaming]` section: `interval_secs` 0.8, `min_audio_secs` 1.0, `type_partials`, `revision_mode` and so on). It is marked experimental, needs toggle activation and `on_demand_loading = false`, and is a setting of the daemon, so it would apply to every recording, desktop hotkeys included.
+- **Where partials go.** Into the focused window only. In type mode the daemon types each committed delta at the cursor (and backspaces in revision mode). With `--file`, which the bar uses so the destination can change while you speak, the partials are kept in memory (`observe_partial_delta`) and only the final text is written, at the end. The state file says `streaming` and nothing more; `voxtype status --follow` carries partials only for the Soniox cloud engine. So the shell can't read Voxtype's partial text, and typing partials into the app would break Ask, Copy and Search and the chip's change of mind mid-sentence.
+- **Eager processing** (`[whisper] eager_processing`, 5 s chunks cut at quiet points) transcribes chunks while you speak, but combines them only when the recording stops: it would shorten the wait after Done, not show words earlier. Not turned on (below).
+- **Context window optimization** (`[whisper] context_window_optimization`, off by default; Voxtype warns of repetition loops on large-v3 and turbo) runs Whisper's encoder on the clip's length instead of a full 30 s window, for clips under 22.5 s. This is the big lever on the phone (next section).
+
+### Measurements
+
+Each run is a fresh `voxtype transcribe` process, so the times include loading the model (about 0.07 s from the page cache); the daemon keeps its model loaded and is a little faster.
+
+| Audio | tiny.en, full window | tiny.en, context cut | base.en, full window | base.en, context cut |
+| --- | --- | --- | --- | --- |
+| 1 s | 2.06 s | 0.46 s | | |
+| 3 s | 2.05 s | 0.51 s | | 1.06 s |
+| 6 s | 2.22 s | 0.66 s | | |
+| 11.9 s | 2.21-2.36 s | 1.03 s | 5.01 s | 2.22 s |
+| 23.8 s | | | | 5.24 s (over 22.5 s: full window) |
+| 47.5 s | | 5.06 s (full window) | | 11.08 s (full window) |
+
+With the full window every clip under 30 s costs the same, which is why a 1 s clip took as long as 12 s. Accuracy on the clip, as text: base.en with the full window "Open the voice plan. Check which tests still fail on the phone and send me a short summary before dinner."; base.en with the cut "... which test still fail ..."; tiny.en with the cut "Or open the voice plan, check which tests still fail on the phone and send me ..."; tiny.en with the full window "... fail in the phone ...". Both models hear an "or" in the first second when given only that second, so which start is right needs the speaker. One clip can't rank the models; it shows they differ by a word or so per sentence here.
+
+**The live preview, end to end on the phone** (`omamobile-voice-preview --from -`, the clip fed at real time, no microphone): the first words after 1.2 s, then a pass every 1.2 s of new audio at 0.58-0.92 s each, the text 1.2-2 s behind the speech, and the preview's last text matched the final transcript word for word. On 47.5 s (the clip four times over): passes at 0.53-0.92 s throughout, one pass dropped by the timeout (below), and 1.8 CPU cores busy on average while listening (86.6 s of CPU time in 48 s, Python included). The daemon's own transcription starts after Done and isn't slowed: the preview is stopped first.
+
+### What 0.2.63 does
+
+1. **Live partial text in the bar.** `bin/omamobile-voice-preview` opens a second capture of the same microphone (`pw-record --raw`, 16 kHz mono, node `omamobile-voice-preview`, role Communication), keeps it in memory and never writes it to disk, and transcribes it in chunks with `voxtype transcribe`, tiny.en and the context cut (`-c` from a pipe: `context_window_optimization = true`, `threads = 4`, nice 10), while the daemon records the real thing.
+   - Chunks: the audio since the last commit is transcribed again after each 1.2 s of new audio (2.5 s when only base.en is there; no preview with small.en, which would lag). At 8 s it is cut at its quietest 50 ms within 0.5-2.5 s of the end, that part's text is kept and the rest starts the next chunk, so a pass never sees more than 8 s whatever the length of the recording.
+   - A chunk quieter than an RMS of 120 (int16) is skipped: Whisper makes up words for silence. Tags such as `[BLANK_AUDIO]` and `(music)` are dropped.
+   - A pass that takes longer than 2 x step + 0.5 s is killed: with the short context Whisper once looped 5.9 s on a chunk that was mostly silence ("for alternatively."). The next pass catches up.
+   - It stops on SIGTERM (killing the pass under way at once, so the daemon has the CPU), when its capture ends, and after 75 s whatever happens; its children get SIGTERM if it dies (`PR_SET_PDEATHSIG`), so the microphone is never left open.
+   - The bar runs it only while its own recording listens (`VoiceModel.previewRuns`) and with **Show words as you speak** on in the settings (on by default; voice.json's new `livePreview`). The words sit between the meter and the buttons in the theme's `Commons.Color.muted`, the last two lines with an ellipsis in front (`partialTail`); they stay while the daemon transcribes, and the final text replaces them, in the text colour, for 0.9 s (phase `delivered`) before the bar closes. Ask keeps its editable check, which shows the final text.
+2. **Model choice: base.en is the default again, with the context cut.** With the cut, base.en turns 12 s of speech into text in about 2.2 s: what tiny.en cost before (2.36 s), with the larger model. tiny.en stays the preview's model. `omamobile-setup-user`:
+   - adds `context_window_optimization = true` under the user's `[whisper]` once, unless the config sets it already (a user's `false` stays; removing it keeps it removed);
+   - no longer switches to tiny.en, and undoes 0.2.58-0.2.62's switch once: only when the `omamobile-voxtype-tiny` marker exists, base.en is downloaded, the model still reads tiny.en and the config is no newer than that marker (plus a minute). A model the user chose since then stays. The reference phone has no such marker (tiny.en was set there by hand or in the settings), so it keeps tiny.en until the maintainer picks Balanced;
+   - restarts voxtype once, only if something changed and it was running.
+   Above 22.5 s the cut doesn't apply and base.en takes 5-11 s for 24-48 s of speech. Eager processing would hide most of that wait; it is left for a phone check of its own (it changes how the daemon records).
+3. **The action row for every language.** `squeekboard/generate` makes each of squeekboard 1.43.1's layouts (60 languages and variants, portrait and `_wide`, the email and URL layouts, and the German, Spanish, French, BÉPO and Dvorak terminal layouts: 118 files) from upstream's own file, keeping it byte for byte and adding a header, four outlines, the row at the top of every view and four buttons. The row is as wide as the layout's widest row (Mic and Paste 30 % each, Emoji and Hide 20 %) and 10/13 of a letter key's height. The US English files it makes are the 0.2.61 hand-made ones line for line, apart from the header. `--check` (in test/all) takes those lines out, runs the generator on what is left and compares, so the upstream copies needn't be in the repository. The emoji, number and PIN layouts get no row (a PIN pad must not start the microphone); terminal/us stays ours by hand. Setup links every installed layout unless the user has a file of their own by that name.
+4. **Voice on the lock screen:** design only, [below](#voice-on-the-lock-screen-design).
+
+### Checks on the phone (0.2.63)
+
+Announce first: the microphone opens, the keyboard restarts once (new layouts), and the voxtype daemon restarts once (the new setting). Read-only steps first.
+
+1. `pacman -Q omamobile-shell` reads 0.2.63. After a login (or `omamobile-setup-user`): `grep -n context_window_optimization ~/.config/voxtype/config.toml` shows it under `[whisper]`; `ls ~/.local/share/squeekboard/keyboards | wc -l` is about 100 (plus the subdirectories). Pass: both. Risk: none.
+2. `omarchy-shell shell call omamobile.voice snapshot ''`: `"phase":"idle"`, `"preview":false`, `settings.livePreview` true.
+3. Hold the pill in Messages and say a sentence of 10 s or so. Expect the first words in the bar about 1.5 s in, muted, growing every second or so; after Done, "turning it into text" with the words still there, then the final words in the text colour for under a second and the text in the field. Pass: words appear while speaking; the final text is typed. Stop condition: no words after 5 s of speech (check `journalctl --user -b | grep -i voice-preview` and `pw-dump | grep omamobile-voice-preview`), or the final text is missing or wrong (preview interfering with Voxtype's capture). Rollback: Show words as you speak off in Voice settings, or reinstall 0.2.62.
+4. The wait after Done with base.en: settings > Balanced, then the same 10 s sentence. Expect 2-3 s of "turning it into text". Pass: under 3.5 s, and the text at least as good as tiny.en's. If not, keep Fast (the setting stays).
+5. While listening, from SSH: `pgrep -a pw-record` shows one `omamobile-voice-preview` capture; after Done or Cancel it is gone within a second, and `pgrep -f "voxtype -q -c"` finds nothing.
+6. Switch the keyboard to German (squeekboard's globe key): the action row is on top; Mic opens the bar. Then in landscape. Pass: row present, keys work.
+7. Leave the bar listening past 60 s: Voxtype stops at 1:00; the preview is gone (step 5's checks).
+
+Risk: low (userspace). Battery: about two cores while listening, nothing otherwise.
+
+### Voice on the lock screen (design)
+
+Not built. Today Power + Volume Up does nothing while locked (`omamobile-keys` checks `omarchy-shell lock isLocked`), and the voice bar, a Top-layer surface, can't show over Omarchy's lock anyway.
+
+**The rule:** while the phone is locked, speech may be heard and turned into text on the phone, and nothing may act on it. Whoever holds a locked phone isn't known to be its owner, and the agent runs with full permissions.
+
+May run while locked:
+- **The trigger:** Power + Volume Up only, held (push-to-talk), and only with a second switch, "Also on the lock screen", off by default under Power + Volume Up. No pill hold, no tile and no keyboard key: the lock has none of them, and nothing starts the microphone on its own (no wake word).
+- **Recording and transcription,** local as always, with the live preview, under Voxtype's 60 s cap; the haptic ticks as unlocked.
+- **A lock-screen card** on the overlay layer, allowed over the lock the way the call screen is (`above_lock` in `hypr/phone.lua`, namespace `omamobile-voice-lock`): the meter, the words so far, Cancel and "Done · ask after unlock". It shows only what was just said: no agent output, no earlier transcripts, no notification text.
+- **One pending ask,** kept in the session's runtime directory (`$XDG_RUNTIME_DIR/omamobile-voice-pending.json`, mode 0600, tmpfs, gone at logout), with its time. A new recording replaces it; it expires after 10 minutes; Cancel deletes it.
+
+Must wait for unlock:
+- **Anything that acts:** a prompt to the agent, typing (wtype would type into the app behind the lock), the clipboard, the launcher's search, starting an app. The destination chip isn't offered on the lock: the only destination is "ask after unlock".
+- **The check before Ask always shows** for a pending ask, even with "Check before asking the agent" off: after unlock the bar opens in its result step with the text, the full-permissions warning and Discard / Again / Ask. An unlock more than 10 minutes later finds nothing.
+- **Settings and model downloads**, as now.
+
+Edges: the screen stays on while the card listens (the lock's own idle rules otherwise); a call ringing takes over (the call screen is above, and the recording is cancelled); unlocking while listening moves the recording to the ordinary bar with the "ask" destination, unchecked words still going to the check. Test plan when built: locked, chord held, speak, let go: the card shows the words; unlock: the check shows them; with the switch off the chord does nothing locked; after 10 minutes nothing pending; nothing typed or copied while locked (watch `wl-paste` and the app behind).
 
 ## Risks
 
 - **wtype vs squeekboard:** both register a zwp virtual keyboard with their own keymap. Text typed while the keyboard is up may come out with the wrong keymap, or upset squeekboard's. Test with the keyboard visible (check 6). The fallback is `--clipboard` followed by a paste.
 - **Agents run with auto permissions** (`claude --permission-mode auto`, and the same for the others). A misheard prompt is acted on without another question, so the check-and-send step always shows, and the setting to skip it (phase 2) defaults to asking.
 - **Layer order:** the listening strip and squeekboard are both top-layer surfaces that reserve space. If squeekboard maps after the strip, the strip can end up under the keyboard rather than above it. It still works there, but it is not where the design puts it.
-- **Transcription time:** before CPU frequency scaling, base.en took about 0.9 s per second of speech, which is why setup switches the daemon to tiny.en once it's downloaded. With scaling merged (kernel #169) it is about 0.5 s per second, tiny.en about 0.2 s: a phone on an older kernel is still slow on base.en.
+- **Transcription time:** before CPU frequency scaling, base.en took about 0.9 s per second of speech, which is why setup switches the daemon to tiny.en once it's downloaded. With scaling merged (kernel #169) it is about 0.5 s per second, tiny.en about 0.2 s, and with the context cut (0.2.63) about 0.19 s and 0.09 s for clips under 22.5 s: a phone on an older kernel is still slow on base.en.
+- **The live preview opens the microphone twice** (Voxtype's capture and `pw-record`). PipeWire shares the source, but this hasn't run on the phone yet: phase 3 check 3 watches for a final transcript that comes out wrong or empty. It costs about two CPU cores while listening; the setting turns it off.

@@ -146,15 +146,21 @@ fi
 # from the user's data dir, so link ours there unless the user has their own.
 # Since 0.2.61 the US English text layout too, and both in landscape (_wide:
 # squeekboard would otherwise take its own built-in landscape layout before
-# our portrait one), each with an action row (Talk, Ask, Paste, Emoji, Hide)
-# that hypr/phone.lua binds. Each file linked unless the user has their own.
+# our portrait one), each with an action row (Mic, Paste, Emoji, Hide) that
+# hypr/phone.lua binds. Since 0.2.63 every language squeekboard ships, made
+# by squeekboard/generate (OMAMOBILE_SQUEEKBOARD_SHARE points the tests at the
+# package's copy). Each file linked unless the user has their own.
 k=${XDG_DATA_HOME:-$HOME/.local/share}/squeekboard/keyboards
-for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
-  if [[ ! -e $k/$layout && ! -L $k/$layout ]]; then
-    mkdir -p "$(dirname "$k/$layout")"
-    ln -s "/usr/share/omamobile/squeekboard/keyboards/$layout" "$k/$layout"
-  fi
-done
+layouts=${OMAMOBILE_SQUEEKBOARD_SHARE:-/usr/share/omamobile/squeekboard/keyboards}
+if [[ -d $layouts ]]; then
+  while IFS= read -r -d '' file; do
+    layout=${file#"$layouts"/}
+    if [[ ! -e $k/$layout && ! -L $k/$layout ]]; then
+      mkdir -p "$(dirname "$k/$layout")"
+      ln -s "/usr/share/omamobile/squeekboard/keyboards/$layout" "$k/$layout"
+    fi
+  done < <(find "$layouts" -type f -name '*.yaml' -print0)
+fi
 
 # The keyboard in the Omarchy theme (omamobile-keyboard-theme): its
 # stylesheet from the theme's colours at every login (cheap, and it catches
@@ -376,18 +382,44 @@ if omarchy-done ensure omamobile-menu-voice; then
     sed -i '0,/^{/s//{\n  "setup.voice": {"icon":"\xf3\xb0\x8d\xac","label":"Voice","description":"Speech model and how voice input starts","action":"omarchy-shell shell summon omamobile.voice '"'"'{\\"page\\":\\"settings\\"}'"'"'"},/' "$extension"
   fi
 fi
-# Voxtype's faster model on the phone: tiny.en turns 10 s of speech into
-# text in 3.9 s on the Pixel 7 Pro, base.en (Omarchy's default) in 8.8 s.
-# Voxtype ignores a per-recording `--model` it hasn't prepared, so the
-# daemon's own [whisper] model is set: once, only when tiny.en is
-# downloaded and the user's config still has Omarchy's base.en (a model
-# the user chose stays), and voxtype restarts only if it was running.
+# Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
+# stays the model, with Whisper's audio context cut to the clip's length
+# (context_window_optimization, for clips under 22.5 s). On the Pixel 7 Pro
+# with CPU frequency scaling, 12 s of speech takes base.en about 2.2 s that
+# way (5.0 s with the full 30 s window) and tiny.en 1.0 s (2.3 s), so base.en
+# now costs what tiny.en did.
+#  - The setting goes under [whisper] once, unless the config already sets
+#    it (a user's own value stays; a user who removes it keeps it removed).
+#  - 0.2.58-0.2.62 switched the daemon to tiny.en (the omamobile-voxtype-tiny
+#    marker). That is undone once, when base.en is downloaded, the model is
+#    still tiny.en and the config hasn't changed since (not newer than the
+#    marker by more than a minute): a model the user chose since stays.
+# Voxtype ignores a per-recording `--model` it hasn't prepared, so this is
+# the daemon's own config; it restarts once, and only if it was running.
 voxconf=~/.config/voxtype/config.toml
-if [[ -f ~/.local/share/voxtype/models/ggml-tiny.en.bin && -f $voxconf ]] &&
-  sed -n '/^\[whisper\]$/,/^\[/p' "$voxconf" | grep -c '^model = "base.en"$' >/dev/null &&
-  omarchy-done ensure omamobile-voxtype-tiny; then
-  sed -i '/^\[whisper\]$/,/^\[/s/^model = "base.en"$/model = "tiny.en"/' "$voxconf"
-  systemctl --user try-restart voxtype.service || true
+voxdone=~/.local/state/omarchy/done
+if [[ -f $voxconf ]]; then
+  voxrestart=0
+  if [[ -f $voxdone/omamobile-voxtype-tiny && -f ~/.local/share/voxtype/models/ggml-base.en.bin ]] &&
+    (($(stat -c %Y "$voxconf") <= $(stat -c %Y "$voxdone/omamobile-voxtype-tiny") + 60)) &&
+    sed -n '/^\[whisper\]$/,/^\[/p' "$voxconf" | grep -c '^model = "tiny.en"$' >/dev/null &&
+    omarchy-done ensure omamobile-voxtype-base; then
+    sed -i '/^\[whisper\]$/,/^\[/s/^model = "tiny.en"$/model = "base.en"/' "$voxconf"
+    voxrestart=1
+  fi
+  if ! grep -c '^[[:space:]]*context_window_optimization[[:space:]]*=' "$voxconf" >/dev/null &&
+    omarchy-done ensure omamobile-voxtype-context; then
+    if grep -c '^\[whisper\]$' "$voxconf" >/dev/null; then
+      sed -i -e '/^\[whisper\]$/a # Omarchy Mobile: Whisper'"'"'s context cut to the clip, about twice as fast on a phone' \
+        -e '/^\[whisper\]$/a context_window_optimization = true' "$voxconf"
+    else
+      printf '\n[whisper]\ncontext_window_optimization = true\n' >>"$voxconf"
+    fi
+    voxrestart=1
+  fi
+  if ((voxrestart)); then
+    systemctl --user try-restart voxtype.service || true
+  fi
 fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc

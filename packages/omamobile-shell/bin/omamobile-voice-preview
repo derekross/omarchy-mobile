@@ -1,0 +1,371 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-voice-preview: rough live text for the voice bar while Voxtype
+records (docs/VOICE-PLAN.md, phase 3).
+
+Voxtype 1.1.1 can't hand partial text to another program. Its Whisper
+streaming types partials at the cursor, and with --file it keeps them in
+memory and writes only the final transcript; `voxtype status` doesn't carry
+them. So the bar makes its own preview. This opens a second capture of the
+same microphone (pw-record, 16 kHz mono, kept in memory and never written to
+disk) and transcribes it in chunks with `voxtype transcribe`, the Fast model
+(tiny.en) and Whisper's context cut to the chunk's length, while the daemon
+records the real thing. The daemon's transcript, from the user's own model,
+replaces the preview when it is done.
+
+Chunks: the audio since the last commit is transcribed again each time
+STEP seconds of new audio have come in. Once it is COMMIT seconds long it is
+cut at its quietest point near the end, that part's text is kept, and the
+rest starts the next chunk, so each pass stays short (about 0.5 s for up to
+8 s of speech on the Pixel 7 Pro) whatever the length of the recording.
+
+    omamobile-voice-preview [--from WAV] [--speed N]
+
+Prints one JSON line per pass, {"text", "secs", "ms"}, or one status line
+and exits: {"status": "no-model" | "no-voxtype" | "no-audio"}. It ends on
+SIGTERM or SIGINT (the bar stops it when listening ends), when the capture
+ends, and after MAX_SECONDS whatever happens, so the microphone is never
+left open. --from WAV feeds a 16 kHz mono WAV (- for stdin) instead of the microphone, at
+--speed times real time: a check of the whole loop without recording.
+
+OMAMOBILE_VOXTYPE names the voxtype binary (tests use a fake one)."""
+
+import array
+import ctypes
+import io
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+import wave
+
+RATE = 16000
+BYTES = 2  # s16le mono
+MIN_AUDIO = 1.0
+COMMIT = 8.0
+# where a commit may cut, back from the chunk's end
+CUT_FROM, CUT_TO = 2.5, 0.5
+FRAME = 0.05
+# int16 RMS below which a chunk is silence (Whisper invents words for it)
+SILENCE_RMS = 120
+MAX_SECONDS = 75
+# A pass longer than this is dropped (killed): with a short context, Whisper
+# now and then loops on a chunk that is mostly silence ("for
+# alternatively.", 5.9 s on the Pixel 7 Pro); the next pass catches up.
+def pass_timeout(step):
+    return 2 * step + 0.5
+
+
+# The models the preview may use, with the new audio between passes: tiny.en
+# keeps up comfortably; base.en takes about twice as long a pass, so half as
+# often; anything bigger would lag behind the speech.
+STEPS = [("tiny.en", 1.2), ("base.en", 2.5)]
+CONFIG = "[whisper]\nlanguage = \"en\"\ncontext_window_optimization = true\nthreads = 4\n"
+NOISE = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*")
+
+
+# ---------------------------------------------------------------- pure parts
+
+def daemon_model(config_text):
+    """[whisper]'s model in the user's voxtype config, or Omarchy's base.en."""
+    section = ""
+    for line in str(config_text or "").split("\n"):
+        line = line.strip()
+        m = re.match(r"^\[([^\]]+)\]$", line)
+        if m:
+            section = m.group(1).strip()
+            continue
+        if section == "whisper":
+            m = re.match(r'^model\s*=\s*"([^"]*)"', line)
+            if m:
+                return m.group(1)
+    return "base.en"
+
+
+def pick_model(installed, config_text):
+    """(model, step seconds) for the preview, or None: tiny.en when it is
+    downloaded, else the daemon's own model when it is base.en."""
+    have = set(installed)
+    if "tiny.en" in have:
+        return ("tiny.en", STEPS[0][1])
+    own = daemon_model(config_text)
+    for name, step in STEPS:
+        if name == own and name in have:
+            return (name, step)
+    return None
+
+
+def wav_bytes(pcm):
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(BYTES)
+        w.setframerate(RATE)
+        w.writeframes(pcm)
+    return out.getvalue()
+
+
+def samples(pcm):
+    a = array.array("h")
+    a.frombytes(pcm[:len(pcm) - len(pcm) % BYTES])
+    if sys.byteorder == "big":
+        a.byteswap()
+    return a
+
+
+def rms(pcm):
+    a = samples(pcm)
+    if not a:
+        return 0.0
+    return (sum(x * x for x in a) / len(a)) ** 0.5
+
+
+def quietest_cut(pcm, lo, hi):
+    """The sample index of the quietest FRAME-long stretch's middle between
+    samples lo and hi of pcm (whole frames only); hi if there is no room."""
+    step = int(RATE * FRAME)
+    best, at = None, hi
+    i = lo
+    while i + step <= hi:
+        level = rms(pcm[i * BYTES:(i + step) * BYTES])
+        if best is None or level < best:
+            best, at = level, i + step // 2
+        i += step
+    return at
+
+
+def plan(total, start, last_end, step):
+    """What to transcribe now, in samples: None (wait), ("partial", start,
+    total) or ("commit", start, cut_lo, cut_hi), the cut to be chosen
+    between cut_lo and cut_hi. start is the end of the last commit, last_end
+    where the last pass ended."""
+    have = (total - start) / RATE
+    if have < MIN_AUDIO or (total - last_end) / RATE < step:
+        return None
+    if have >= COMMIT:
+        return ("commit", start, total - int(CUT_FROM * RATE), total - int(CUT_TO * RATE))
+    return ("partial", start, total)
+
+
+def clean(text):
+    """Whisper's text tidied for the bar: no [BLANK_AUDIO], (music) or
+    *noise* tags, one line."""
+    return re.sub(r"\s+", " ", NOISE.sub(" ", str(text or ""))).strip()
+
+
+def join(committed, tentative):
+    return (committed + " " + tentative).strip() if tentative else committed
+
+
+def transcript_from(stdout):
+    """voxtype transcribe's stdout: its progress lines, a blank line, then
+    the text."""
+    lines = str(stdout or "").split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("Processing "):
+            return clean(" ".join(lines[i + 1:]))
+    return clean(lines[-1] if lines else "")
+
+
+# ---------------------------------------------------------------- the loop
+
+def die_with_parent():
+    """Children (pw-record, voxtype) get SIGTERM if this process dies."""
+    try:
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
+
+
+def nice_child():
+    die_with_parent()
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+class Capture:
+    """The audio so far, filled by a thread."""
+
+    def __init__(self):
+        self.pcm = bytearray()
+        self.lock = threading.Lock()
+        self.ended = False
+        self.proc = None
+
+    def snapshot(self):
+        with self.lock:
+            return bytes(self.pcm)
+
+    def feed(self, read, pace=None):
+        try:
+            while True:
+                chunk = read()
+                if not chunk:
+                    break
+                with self.lock:
+                    self.pcm.extend(chunk)
+                if pace:
+                    time.sleep(pace(len(chunk)))
+        finally:
+            self.ended = True
+
+    def from_mic(self):
+        argv = ["pw-record", "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16",
+                "-P", '{ "node.name": "omamobile-voice-preview", "media.role": "Communication" }', "-"]
+        self.proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     preexec_fn=die_with_parent)
+        out = self.proc.stdout
+        threading.Thread(target=self.feed, args=(lambda: out.read1(3200),), daemon=True).start()
+
+    def from_wav(self, path, speed):
+        w = wave.open(sys.stdin.buffer if path == "-" else path, "rb")
+        if w.getframerate() != RATE or w.getnchannels() != 1 or w.getsampwidth() != BYTES:
+            raise ValueError("a 16 kHz mono 16-bit WAV")
+        def pace(n):
+            return n / BYTES / RATE / speed
+        threading.Thread(target=self.feed, args=(lambda: w.readframes(1600), pace), daemon=True).start()
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+
+# The pass under way, so that a stop ends it at once: the daemon's own
+# transcription starts the moment listening ends and shouldn't share the CPU.
+CURRENT = []
+
+
+def transcribe(voxtype, model_path, pcm, timeout):
+    r, wfd = os.pipe()
+    os.write(wfd, CONFIG.encode())
+    os.close(wfd)
+    try:
+        p = subprocess.Popen([voxtype, "-q", "-c", "/dev/fd/%d" % r, "--model", model_path, "transcribe", "/dev/stdin"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             pass_fds=(r,), preexec_fn=nice_child)
+    finally:
+        os.close(r)
+    CURRENT.append(p)
+    try:
+        out, _ = p.communicate(wav_bytes(pcm), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        raise
+    finally:
+        CURRENT.remove(p)
+    return transcript_from(out.decode("utf-8", "replace")) if p.returncode == 0 else None
+
+
+def run(args):
+    home = os.environ.get("HOME", "")
+    voxtype = os.environ.get("OMAMOBILE_VOXTYPE", "voxtype")
+    models_dir = os.path.join(home, ".local/share/voxtype/models")
+    try:
+        installed = [m.group(1) for m in (re.match(r"^ggml-(.+)\.bin$", f) for f in os.listdir(models_dir)) if m]
+    except OSError:
+        installed = []
+    try:
+        with open(os.path.join(home, ".config/voxtype/config.toml"), encoding="utf-8") as f:
+            config_text = f.read()
+    except OSError:
+        config_text = ""
+    picked = pick_model(installed, config_text)
+    if not picked:
+        emit({"status": "no-model"})
+        return 0
+    model, step = picked
+    model_path = os.path.join(models_dir, "ggml-%s.bin" % model)
+    if not any(os.access(os.path.join(d, voxtype), os.X_OK) for d in os.environ.get("PATH", "").split(":")) \
+            and not os.access(voxtype, os.X_OK):
+        emit({"status": "no-voxtype"})
+        return 0
+
+    cap = Capture()
+    stopping = threading.Event()
+
+    def on_signal(*_):
+        stopping.set()
+        for p in list(CURRENT):
+            p.kill()
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+
+    try:
+        if args.get("from"):
+            cap.from_wav(args["from"], float(args.get("speed") or 1))
+        else:
+            cap.from_mic()
+    except (OSError, ValueError):
+        emit({"status": "no-audio"})
+        return 0
+
+    began = time.monotonic()
+    committed, start, last_end, passes = "", 0, 0, 0
+    while not stopping.is_set() and time.monotonic() - began < MAX_SECONDS:
+        pcm = cap.snapshot()
+        total = len(pcm) // BYTES
+        step_now = plan(total, start, last_end, step)
+        if step_now is None:
+            if cap.ended:
+                break
+            stopping.wait(0.1)
+            continue
+        if step_now[0] == "commit":
+            end = quietest_cut(pcm, step_now[2], step_now[3])
+        else:
+            end = step_now[2]
+        piece = pcm[start * BYTES:end * BYTES]
+        last_end = total
+        if rms(piece) < SILENCE_RMS:
+            if step_now[0] == "commit":
+                start = end
+            continue
+        t0 = time.monotonic()
+        try:
+            text = transcribe(voxtype, model_path, piece, pass_timeout(step))
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            text = None
+        if stopping.is_set():
+            break
+        if text is None:
+            continue
+        passes += 1
+        if step_now[0] == "commit":
+            committed = join(committed, text)
+            start = end
+            text = ""
+        emit({"text": join(committed, text), "secs": round(total / RATE, 2),
+              "ms": int((time.monotonic() - t0) * 1000), "model": model})
+    cap.stop()
+    return 0
+
+
+def main(argv):
+    args, i = {}, 1
+    while i < len(argv):
+        if argv[i] in ("--from", "--speed") and i + 1 < len(argv):
+            args[argv[i][2:]] = argv[i + 1]
+            i += 2
+        elif argv[i] in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            print("usage: omamobile-voice-preview [--from WAV] [--speed N]", file=sys.stderr)
+            return 2
+    return run(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

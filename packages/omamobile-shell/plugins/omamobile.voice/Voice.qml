@@ -42,10 +42,15 @@ import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 // which keeps the keyboard focus because the bar never takes it; wl-copy;
 // the launcher's search; the launcher's agent prompt). The daemon's state
 // file says what it is doing; the screen stays on while the bar listens or
-// transcribes (an idle inhibitor). The model is the daemon's own
-// (omamobile-setup-user sets tiny.en once it is downloaded). Settings
-// (`omamobile-voice settings`, the Dictation tile's long press, Setup >
-// Voice): the model, Power + Volume Up, and the check before Ask, in
+// transcribes (an idle inhibitor). The model is the daemon's own (base.en
+// unless the user picks another; omamobile-setup-user cuts Whisper's
+// context to the clip). While it listens, omamobile-voice-preview shows the
+// words so far between the meter and the buttons, in the theme's muted
+// colour: tiny.en on a second capture of the microphone, in chunks, because
+// Voxtype 1.1.1 can't hand its own partial text over. The final words
+// replace them for a moment once delivered. Settings (`omamobile-voice
+// settings`, the Dictation tile's chevron, Setup > Voice): the model, Power +
+// Volume Up, the live preview and the check before Ask, in
 // ~/.config/omamobile/voice.json.
 Item {
   id: root
@@ -78,10 +83,15 @@ Item {
   property string transcript: ""
   property string errorText: ""
   property int readTries: 0
+  // The live preview's words so far (omamobile-voice-preview), and the
+  // final words shown for a moment once they are delivered.
+  property string partial: ""
+  property string deliveredText: ""
+  readonly property var live: VoiceModel.liveLine(phase, partial, deliveredText)
 
   readonly property bool busy: phase === "starting" || phase === "listening" || phase === "transcribing"
   readonly property bool listening: phase === "listening"
-  readonly property bool barShown: busy || phase === "result" || phase === "error"
+  readonly property bool barShown: busy || phase === "result" || phase === "error" || phase === "delivered"
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
   readonly property string transcriptPath: VoiceModel.transcriptPath(runtimeDir)
   readonly property string statePath: runtimeDir + "/voxtype/state"
@@ -278,6 +288,7 @@ Item {
     return JSON.stringify({ phase: phase, mine: mine, dest: dest, choices: choices, chooser: chooserOpen,
                             pushToTalk: pushToTalk, elapsed: Math.floor(elapsed), agent: agentId,
                             agentInFront: agentInFront, appOnScreen: appOnScreen, chars: transcript.length,
+                            preview: previewProc.running, partialChars: partial.length,
                             model: modelId, settings: settings })
   }
 
@@ -355,6 +366,9 @@ Item {
     chooserOpen = false
     errorText = ""
     transcript = ""
+    partial = ""
+    deliveredText = ""
+    deliveredTimer.stop()
     editor.text = ""
     pushToTalk = hold
     fingerDown = hold
@@ -377,6 +391,9 @@ Item {
     pushToTalk = false
     fingerDown = false
     levels = []
+    partial = ""
+    deliveredText = ""
+    deliveredTimer.stop()
     startTimeout.stop()
     editor.focus = false
   }
@@ -427,7 +444,12 @@ Item {
     if (r.argv) Quickshell.execDetached(r.argv)
     if (r.send) sendAsk(r.text)
     phase = r.phase
-    if (r.phase === "idle") reset()
+    // The final words take the preview's place for a moment, then the bar
+    // closes.
+    if (r.phase === "delivered") {
+      deliveredText = r.text
+      deliveredTimer.restart()
+    }
   }
 
   // Ask: the launcher's prompt (a terminal with the agent and the text as
@@ -514,6 +536,29 @@ Item {
         root.levels = VoiceModel.pushLevel(root.levels, frame.rms)
       }
     }
+  }
+
+  // The live preview: omamobile-voice-preview transcribes a second capture
+  // of the microphone in chunks with tiny.en while Voxtype records, one JSON
+  // line per pass. It stops (SIGTERM) the moment listening ends, so the
+  // daemon's own transcription has the CPU; the last preview stays, muted,
+  // until the final words replace it.
+  Process {
+    id: previewProc
+    command: VoiceModel.PREVIEW_ARGV
+    running: VoiceModel.previewRuns(root.phase, root.mine, root.settings.livePreview)
+    stdout: SplitParser {
+      onRead: function(line) {
+        var p = VoiceModel.parsePartial(line)
+        if (p && p.text !== undefined && root.busy) root.partial = p.text
+      }
+    }
+  }
+
+  Timer {
+    id: deliveredTimer
+    interval: VoiceModel.DELIVERED_MS
+    onTriggered: if (root.phase === "delivered") root.reset()
   }
 
   Timer {
@@ -668,6 +713,24 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Readable.px(Style.font.caption)
           }
+        }
+
+        // ---------- the words so far (the live preview, in the theme's muted
+        // colour), then the final words for a moment once delivered
+        Text {
+          objectName: "liveText"
+          width: parent.width
+          visible: text !== ""
+          textFormat: Text.PlainText
+          text: VoiceModel.partialTail(root.live.text, 90)
+          color: root.live.final ? root.foreground : Commons.Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+          maximumLineCount: 2
+          elide: Text.ElideRight
+          Accessible.role: Accessible.StaticText
+          Accessible.name: root.live.final ? "Sent: " + text : "So far: " + text
         }
 
         Text {
@@ -973,6 +1036,7 @@ Item {
             SectionLabel { text: "More" }
 
             SettingRow { objectName: "setting-powerVolumeUp"; title: "Power + Volume Up"; note: "hold both to talk; not on the lock screen"; checked: root.settings.powerVolumeUp === true; onToggled: root.setSetting("powerVolumeUp", !checked) }
+            SettingRow { objectName: "setting-livePreview"; title: "Show words as you speak"; note: "a rough draft from the Fast model while you talk; your speech model writes the final text. Uses more battery while listening"; checked: root.settings.livePreview !== false; onToggled: root.setSetting("livePreview", !checked) }
             SettingRow { objectName: "setting-confirmSend"; title: "Check before asking the agent"; note: "off: on the home screen, what you say goes to the agent as soon as it is text"; checked: root.settings.confirmSend === true; onToggled: root.setSetting("confirmSend", !checked) }
           }
         }

@@ -107,9 +107,9 @@ test("delivery: the text on stdin or one argv element, never in a shell string",
 test("after the transcript: Ask checks first (or sends with the check off), the rest deliver at once", () => {
   const a = M.afterRead("ask", "  Check the battery\ndrain.  ", true)
   assert.deepStrictEqual(a, { phase: "result", text: "Check the battery drain.", error: "", argv: null, send: false })
-  assert.deepStrictEqual(M.afterRead("ask", "Hi", false), { phase: "idle", text: "Hi", error: "", argv: null, send: true })
+  assert.deepStrictEqual(M.afterRead("ask", "Hi", false), { phase: "delivered", text: "Hi", error: "", argv: null, send: true })
   const t = M.afterRead("type", "hello", true)
-  assert.strictEqual(t.phase, "idle")
+  assert.strictEqual(t.phase, "delivered", "the final words show for a moment, then the bar closes")
   assert.deepStrictEqual(t.argv, M.deliveryArgv("type", "hello"))
   assert.strictEqual(t.send, false)
   const e = M.afterRead("agent", "  \n", true)
@@ -159,11 +159,13 @@ test("the theme's warning colour, from colors.toml", () => {
   assert.strictEqual(M.themeWarning(""), "")
 })
 
-test("settings: two switches left, earlier keys dropped", () => {
+test("settings: three switches, earlier keys dropped, the preview on unless turned off", () => {
   const d = M.parseSettings("")
-  assert.deepStrictEqual(d, { version: 3, powerVolumeUp: false, confirmSend: true })
+  assert.deepStrictEqual(d, { version: 3, powerVolumeUp: false, confirmSend: true, livePreview: true })
   const old = M.parseSettings('{"version": 2, "holdPill": false, "micKey": false, "agentMic": true, "agentSubmit": "say", "powerVolumeUp": true, "confirmSend": false, "sayToSend": true}')
-  assert.deepStrictEqual(old, { version: 3, powerVolumeUp: true, confirmSend: false }, "0.2.58-0.2.60 keys migrate: the two that still mean something stay")
+  assert.deepStrictEqual(old, { version: 3, powerVolumeUp: true, confirmSend: false, livePreview: true }, "0.2.58-0.2.62 files: the keys that still mean something stay, the preview gets its default")
+  assert.strictEqual(M.parseSettings('{"livePreview": false}').livePreview, false)
+  assert.strictEqual(M.withSetting(d, "livePreview", false).livePreview, false)
   assert.strictEqual(M.parseSettings('{"powerVolumeUp": "yes"}').powerVolumeUp, false)
   const t = M.withSetting(d, "powerVolumeUp", true)
   assert.strictEqual(t.powerVolumeUp, true)
@@ -192,6 +194,41 @@ test("models: Voxtype's own download and switch, nothing interpolated", () => {
   assert.deepStrictEqual(M.parseProgress('{"percent": 41.6}'), { percent: 42, text: "42%" })
   assert.deepStrictEqual(M.parseProgress('{"downloaded": 25, "total": 100}'), { percent: 25, text: "25%" })
   assert.strictEqual(M.parseProgress("Downloading..."), null)
+})
+
+test("the delivered words stay through the daemon's idle, then the timer closes the bar", () => {
+  assert.deepStrictEqual(M.step("delivered", true, "idle"), { phase: "delivered", read: false })
+  assert.deepStrictEqual(M.step("delivered", false, "idle"), { phase: "delivered", read: false })
+  assert.deepStrictEqual(M.step("delivered", true, "recording"), { phase: "listening", read: false }, "a new recording takes over")
+  assert.ok(M.DELIVERED_MS >= 500 && M.DELIVERED_MS <= 1500, "a moment, not a wait")
+})
+
+test("live preview: the helper's lines, when it runs, what the bar's line shows", () => {
+  assert.deepStrictEqual(M.PREVIEW_ARGV, ["omamobile-voice-preview"])
+  assert.deepStrictEqual(M.parsePartial('{"text": "  open the\\nvoice plan ", "secs": 2.4, "ms": 600}'), { text: "open the voice plan" })
+  assert.deepStrictEqual(M.parsePartial('{"status": "no-model"}'), { status: "no-model" })
+  assert.strictEqual(M.parsePartial("not json"), null)
+  assert.strictEqual(M.parsePartial('{"peak": 1}'), null)
+  assert.strictEqual(M.previewRuns("listening", true, true), true)
+  assert.strictEqual(M.previewRuns("listening", true, undefined), true, "on by default")
+  assert.strictEqual(M.previewRuns("listening", true, false), false, "the setting turns it off")
+  assert.strictEqual(M.previewRuns("transcribing", true, true), false, "it stops when listening ends, so the daemon has the CPU")
+  assert.strictEqual(M.previewRuns("starting", true, true), false, "not before the daemon listens")
+  assert.strictEqual(M.previewRuns("listening", false, true), false, "not for a recording the bar didn't start")
+  assert.deepStrictEqual(M.liveLine("listening", "open the", ""), { text: "open the", final: false })
+  assert.deepStrictEqual(M.liveLine("transcribing", "open the voice", ""), { text: "open the voice", final: false }, "the last preview stays while the daemon works")
+  assert.deepStrictEqual(M.liveLine("delivered", "open the voice", "Open the voice plan."), { text: "Open the voice plan.", final: true }, "the final words replace it")
+  assert.deepStrictEqual(M.liveLine("result", "x", "y"), { text: "", final: false }, "the check before Ask has its own text")
+  assert.deepStrictEqual(M.liveLine("idle", "x", "y"), { text: "", final: false })
+})
+
+test("live preview: a long preview keeps its newest words, cut at a word", () => {
+  assert.strictEqual(M.partialTail("short words", 90), "short words")
+  const long = "one two three four five six seven eight nine ten eleven twelve"
+  const tail = M.partialTail(long, 20)
+  assert.ok(tail.startsWith("…") && long.endsWith(tail.slice(1)), tail)
+  assert.ok(tail.length <= 21, tail)
+  assert.ok(!tail.slice(1).startsWith(" ") && long.split(" ").includes(tail.slice(1).split(" ")[0]), "starts on a whole word: " + tail)
 })
 
 test("haptic ticks: listening starting and ending", () => {
