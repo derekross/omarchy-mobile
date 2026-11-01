@@ -466,6 +466,24 @@ with the cable in.
   console is still unknown; what this run does show is what an APM that
   stops answering after resume looks like, which matches the stall seen
   in G3-L1's CPU-sleep run (MODEM-PLAN).
+
+  **The sleeps that woke were short: the PMIC wakes s2idle about a second
+  in (2026-11-01, same release).** In the disarmed sleeps above,
+  `PM: suspend exit` came 1.5 and 1.6 s after `PM: suspend entry`, not
+  at the 30 s RTC alarm, with `/sys/power/pm_wakeup_irq` 56, the
+  S2MPG14's own line (GICv3 106, `s2mpg14-pmic`). One more 30 s sleep
+  with `pm_debug_messages` on: "Triggering wakeup from IRQ 56" 0.6 s
+  after entry, exit 1.5 s after it. Across that sleep and the 40 s after
+  it, the PMIC line counted 2 and `rtc-alarm0`, its only mapped child,
+  1, which is the real alarm going off after the wake; awake, the same
+  `rtcwake -m no -s 30` alarm fired at 30 s as it should. So another PMIC
+  source, one without a mapped child, raises the line as the palmtop
+  goes to sleep. Earlier cycle logs only recorded wake IRQ 56 and the
+  time to SSH, which can't tell a short sleep from a full one, so S1's
+  wake counts may describe sleeps of about a second. Next: read the
+  S2MPG14 interrupt registers (INT1-INT5 through the ACPM regmap, from
+  the kernel, never from userspace) at that wake, and check the 30-minute
+  sleeps' records for their real length.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
