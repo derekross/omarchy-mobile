@@ -492,6 +492,19 @@ with the cable in.
   (`/sys/class/rtc/rtc0/since_epoch`) before and after, not dmesg (this
   kernel has no `suspend_stats/last_hw_sleep`). Twenty more 120 s sleeps the same day with core power-down off
   all woke, but they don't speak to the hang with core power-down on.
+
+  **Thirty 120 s sleeps with core power-down on (2026-11-01, same release,
+  device-tegu 0.2.4).** Screen off through Hyprland's DPMS before each
+  `systemctl suspend`, `printk.console_suspend=N`, NFC polling stopped by
+  its hook, Wi-Fi kept: thirty of thirty woke on the alarm (IRQ 56).
+  Measured by the RTC (`since_epoch` before and after, less about 15 s
+  of the cycle that isn't sleep), they lasted 118-123 s, 28 of them; one
+  lasted 106 s, one 112 s and one 64 s. The dmesg delta read 1.5-1.6 s
+  every time, so the correction above holds. `suspend_stats` 36 to 66
+  successes, 0 failures; no UFS errors and no ACPM timeouts. At the
+  earlier rate of about one hang in 21, thirty clean sleeps would still
+  happen by chance about one time in four, so this narrows the hang but
+  doesn't retire it.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
