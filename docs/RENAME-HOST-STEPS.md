@@ -105,8 +105,8 @@ reached `omamobile-int`:
   (5) said `omandroid/camera/`.
 - **Kernel release.** `kernel/configs/omamobile.config` sets
   `CONFIG_LOCALVERSION="-omamobile-push1"`, and the modules marker is
-  `.omamobile-tarball`, so the first push after the rename reinstalled the
-  modules (expected).
+  `.omamobile-tarball`, so the first push after the rename was expected to
+  reinstall the modules.
 
 Phase 2 renamed the kernel branches (`omandroid*` to `omamobile*`) and
 merged the `omamobile.ufs-probe` bootargs and `omamobile/camera` firmware
@@ -120,8 +120,8 @@ kernel has been published since 2026-10-19. Where the kernel tree lives today is
 
 ## 8. Phase 3 (GitHub and the working tree)
 
-The plan renamed the GitHub repository `derekross/omandroid` to
-`derekross/omarchy-mobile` and moved the maintainer's checkout from an
+Phase 3 called for renaming the GitHub repository `derekross/omandroid` to
+`derekross/omarchy-mobile` and moving the maintainer's checkout from an
 `omandroid` directory to an `omarchy-mobile` one; the docs use the new
 names. Checkouts made since clone `github.com/derekross/omarchy-mobile`
 directly. The rename plan's Phase 3
