@@ -1,12 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Reinstall runbook (cheetah): a clean Omarchy Mobile install with the installer
 
-Status (2026-10-13): **written and tested offline, not run.** Phase 5 of the
-rename plan: wipe the hand-installed root on `userdata` and install the
-renamed system with `tools/install-phone`, then put the phone's own data back
-with `tools/phone-provision`. The human runs or approves every step. Nothing
-here writes anything but slot B and `userdata`; stock Android on slot A stays
-the way back.
+Status (2026-10-13): **the first clean reinstall passed** (section 10
+lists the steps that passed and what was fixed afterwards). That run was
+Phase 5 of the rename plan: wipe the hand-installed root on `userdata` and
+install the renamed system with `tools/install-phone`, then put the phone's
+own data back with `tools/phone-provision`. Section 4a and the install
+without a `phone-config.tar`, added on 2026-10-30, have no result in section
+10 yet. The human runs or approves every step. Nothing here writes anything
+but slot B and `userdata`; stock Android on slot A stays the way back.
 
 The tools, all offline-tested (`tests/all`):
 
@@ -21,7 +23,7 @@ The tools, all offline-tested (`tests/all`):
 
 Each step lists its commands, what to expect, a **stop** condition, the
 rollback and a risk level. Read-only steps come first. Quote results (with
-`uname -r`) into section 7 when done; check every quote for identifiers
+`uname -r`) into section 10 when done; check every quote for identifiers
 (MAC addresses, serials, SSIDs) first.
 
 **Without a `phone-config.tar`.** Sections 1, 5 and 7 are written for a
@@ -456,7 +458,7 @@ difference.
 | S11 | Shell | home screens, widgets, quick settings, one app per screen | the imported layout |
 | S12 | Update path | `omarchy update` in a terminal | finishes; `[omamobile]` first |
 
-Record each result in section 7.
+Record each result in section 10.
 
 ## 7. Fingerprint (needs the human's explicit go; IRREVERSIBLE)
 
