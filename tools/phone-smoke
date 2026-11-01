@@ -101,11 +101,58 @@ fi
 # ---------------------------------------------------------------- kernel health
 oops=$(dmesg 2>/dev/null | grep -cE 'Oops|BUG:|Kernel panic|Unable to handle kernel' || true)
 warns=$(dmesg 2>/dev/null | grep -cE 'WARNING: (CPU:|[^ ]+:[0-9]+ at )' || true)
-errs=$(dmesg --level=emerg,alert,crit,err 2>/dev/null | wc -l)
+# Error lines that are understood, so that a new one stands out instead of
+# hiding in a raw count. Each entry is an extended regex with the reason it is
+# known; "fix:" marks one we mean to remove. Keep it short and specific to a
+# driver; never add a line here to make a regression look normal.
+known_errors=(
+  # brcmfmac built with CONFIG_BRCMDBG logs routine information at error level
+  'brcmfmac: brcmf_fw_alloc_request: using '
+  'brcmfmac: brcmf_c_preinit_dcmds: Firmware: '
+  'brcmfmac: brcmf_c_process_txcap_blob: no txcap_blob'
+  'brcmf_construct_chaninfo: Ignoring unexpected firmware channel'
+  'brcmf_msgbuf_process_rx_complete: Received unexpected monitor pkt'
+  # P2P and roam settings this firmware doesn't take
+  'brcmf_p2p_create_p2pdev: timeout occurred'
+  'brcmf_cfg80211_add_iface: add iface p2p-dev'
+  'brcmf_dongle_roam: WLC_SET_ROAM_TRIGGER error'
+  # the controller doesn't answer HCI Read Local Supported Codecs v2
+  'Bluetooth: hci[0-9]+: Failed to read codec capabilities'
+  # the AoC sound card probing before the AoC is up (it retries and binds);
+  # fix: defer quietly
+  'alsa: Cannot find aoc device node'
+  'alsa: of_parse_one_dai: fail to parse codec'
+  'alsa: aoc_snd_card_parse_of: fail to parse fai_link'
+  '^not support hac amp'
+  'aoc: unsupported (sensor|dmic) power list'
+  'failed to register acpm aoc reset callback'
+  # PipeWire opens the PCMs before the UCM verb sets routes (AGENTS, AoC)
+  'ASoC: no backend DAIs enabled for audio_playback'
+  # the camera lens motors fail one command on wake (NOTES); fix: camera work
+  'ak73[0-9]+_vcm_resume (I2C|INC) failure'
+  # CPU energy model against the OPP tables; fix: cpufreq
+  'cpu cpu[0-9]+: EM: invalid perf\. state'
+  # the GPU's supply belongs to the ACPM firmware, not a Linux regulator
+  'panthor .*no regulator \(mali\) found'
+  # ABL appends console=null; no GPT auto-mounting on these phones
+  'Warning: unable to open an initial console'
+  "systemd-gpt-auto-generator' failed"
+)
+errlog=$(dmesg --level=emerg,alert,crit,err 2>/dev/null | sed -E 's/^\[[ 0-9.]+\] //')
+errs=$(grep -c . <<<"$errlog" || true)
+newlog=$(grep -vE -f <(printf '%s\n' "${known_errors[@]}") <<<"$errlog" || true)
+newerrs=$(grep -c . <<<"$newlog" || true)
+health="$warns WARN, $errs error lines in dmesg ($((errs - newerrs)) known, $newerrs new)"
 if ((oops)); then
-  check "not ok" 1 "kernel health" "$oops oops/BUG, $warns WARN, $errs error lines in dmesg"
+  check "not ok" 1 "kernel health" "$oops oops/BUG, $health"
 else
-  check ok 1 "kernel health" "no oops or BUG; $warns WARN, $errs error lines in dmesg"
+  check ok 1 "kernel health" "no oops or BUG; $health"
+fi
+if ((newerrs)); then
+  # Numbers and hex runs become N, so no address, serial or MAC is printed.
+  top=$(sed -E 's/(0x)?[0-9a-fA-F]*[0-9][0-9a-fA-F]*/N/g' <<<"$newlog" | sort | uniq -c | sort -rn | head -3 \
+    | awk '{n=$1; $1=""; sub(/^ /, ""); printf "%s%s x%d", (NR > 1 ? "; " : ""), $0, n}')
+  check "not ok" 0 "new dmesg errors" "$top"
 fi
 
 failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
