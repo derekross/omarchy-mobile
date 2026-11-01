@@ -1,13 +1,16 @@
 <!-- SPDX-License-Identifier: MIT -->
 # CPU frequency plan: cpufreq-dt on the ACPM DVFS clocks (cheetah / gs201)
 
-Status (2026-10-31): **built offline, nothing run on the phone yet.**
-Kernel branch `omamobile-cpufreq` in `~/omamobile-kernel/wt-cpufreq`, four
-commits on `d15487384604` (the test kernel the phone runs:
-`phonetests` plus the s3c64xx and ACPM-defer fixes), built into
-`~/omamobile-kernel/out-cpufreq`, images in
-`~/omamobile-kernel/out-cpufreq/images`. Release
-`7.3.0-rc6-omamobile-push1-g63c35fb0c871`. The runbook is section 7; C0 is next.
+Status (2026-10-31): **C1, C3, C4 and C7 passed on the phone** (section 8;
+release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`). Three schedutil policies
+up to 1803/1999/2252 MHz, six thermal zones, throttling holds an all-core
+load at 78-80 °C, Whisper runs about 2x faster, and an s2idle cycle resumes
+cleanly. Boost (the turbo levels) stays off for the first release; C2, C5
+and C6 haven't run. Kernel branch `omamobile-cpufreq` in
+`~/omamobile-kernel/wt-cpufreq`, four commits on `d15487384604` (the test
+kernel the phone ran: `phonetests` plus the s3c64xx and ACPM-defer fixes),
+built into `~/omamobile-kernel/out-cpufreq`, images in
+`~/omamobile-kernel/out-cpufreq/images`. The runbook is section 7.
 
 **Goal.** Today the phone has no cpufreq at all
 (`/sys/devices/system/cpu/cpufreq` is empty): every core stays at the
@@ -426,7 +429,33 @@ tools/phone-ssh 'rtcwake -m freeze -s 20; for p in 0 4 6; do cat /sys/devices/sy
 
 ## 8. Results
 
-(none yet)
+All on 2026-10-31, release `7.3.0-rc6-omamobile-push1-g63c35fb0c871`, each
+step approved by Derek.
+
+- **C1 passed.** Six zones (big, mid, little, gpu, isp, tpu) at 47-50 °C idle
+  on the charger. Four cooling devices: `cpufreq-cpu0` 0/10, `cpufreq-cpu4`
+  0/14, `cpufreq-cpu6` 0/17, and the GPU's devfreq 0/11. Three policies on
+  schedutil: 300-1803, 400-1999 and 500-2252 MHz (11, 12 and 12 normal
+  levels), boost 0. No new errors: only the panthor "no regulator (mali)"
+  and AoC "acpm aoc reset callback" lines older kernels print too;
+  `ufshcd_err_handler` 0.
+- **C4 passed.** 12 s of speech: tiny.en in 2.36 s (before: 3.9 s per 10 s,
+  so about 2x faster), base.en in 5.97 s (before: 8.8 s per 10 s, about
+  1.8x). In those 8 s of load the CPU zones went from 56 to 77-80 °C and the
+  ceilings came down to 1598/1663/2048 MHz: throttling works during a real
+  job. The little-cluster floor comparison (5.4) wasn't run.
+- **C3 passed** (180 s, all eight cores busy, on the charger, 95 °C kill
+  switch). Peak 83 °C at 20 s, then a steady 78-80 °C to the end. The
+  ceilings settled at about 1598-1704 MHz little, 1024-1328 mid and
+  1277-1426 big. No thermal, TMU or ACPM errors; 80 to 56 °C within 20 s
+  after the load. The kill switch never triggered.
+- **C7 passed.** One 30 s s2idle (`rtcwake -m no` for the alarm, then
+  `systemctl suspend`): `suspend_stats` success 1, fail 0; `omamobile-sleepd`
+  logged the wake by IRQ 125 (the s2mpg12 PMIC, the RTC alarm). After
+  resume all policies scaled, the zones read 48-51 °C, `ufshcd_err_handler` 0.
+- **Not run:** C2 (per-level firmware readback), C5 (all-core load on
+  battery), C6 (boost). Boost stays off for the first release: without a
+  BCL driver the turbo levels need C5 and C6 first.
 
 ## 9. After this
 
