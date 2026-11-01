@@ -496,10 +496,14 @@ with the cable in.
   **Thirty 120 s sleeps with core power-down on (2026-11-01, same release,
   device-tegu 0.2.4).** Screen off through Hyprland's DPMS before each
   `systemctl suspend`, `printk.console_suspend=N`, NFC polling stopped by
-  its hook, Wi-Fi kept: thirty of thirty woke on the alarm (IRQ 56).
+  its hook, Wi-Fi kept: thirty of thirty woke on the PMIC line (IRQ 56,
+  the S2MPG14's, which the RTC alarm shares with other PMIC events).
   Measured by the RTC (`since_epoch` before and after, less about 15 s
-  of the cycle that isn't sleep), they lasted 118-123 s, 28 of them; one
-  lasted 106 s, one 112 s and one 64 s. The dmesg delta read 1.5-1.6 s
+  of the cycle that isn't sleep), 27 lasted 118-123 s, the alarm's time;
+  one lasted 106 s, one 112 s and one 64 s, too early for the 120 s alarm.
+  The series recorded only the wake IRQ, not the `rtc-alarm0` count or
+  INT2, so what woke those three isn't known: count them as early PMIC
+  wakes, as on the 7 Pro, not as alarm wakes. The dmesg delta read 1.5-1.6 s
   every time, so the correction above holds. `suspend_stats` 36 to 66
   successes, 0 failures; no UFS errors and no ACPM timeouts. At the
   earlier rate of about one hang in 21, thirty clean sleeps would still
