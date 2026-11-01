@@ -40,6 +40,12 @@ Scope {
 PY
 
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+# Quickshell needs a runtime directory (for its instance files); a CI job
+# or an SSH login may have none.
+if [[ -z ${XDG_RUNTIME_DIR:-} || ! -w ${XDG_RUNTIME_DIR:-/nonexistent} ]]; then
+  export XDG_RUNTIME_DIR=$work/run
+  mkdir -m 700 -p "$XDG_RUNTIME_DIR"
+fi
 n=0 rc=0
 dir=
 fresh() { n=$((n + 1)); dir=$work/c$n; mkdir -p "$dir"; }
