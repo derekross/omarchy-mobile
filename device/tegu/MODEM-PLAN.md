@@ -1027,6 +1027,50 @@ setup with Google's (`pcie-exynos-gs`: AXI slave error response, the ELBI
 error enables), since a stalled access instead of an error response would
 explain hangs at whatever access comes next.
 
+**G3-L1, a hang with nothing touching the link, and the link held up (2026-11-01, daily kernel).**
+With the controller holding `APP_XFER_PENDING` until the end of each
+power-up, the session ran 147 power-offs and the palmtop reset. The kernel
+log streamed over SSH and the console log that systemd-pstore keeps from
+ramoops (`/var/lib/systemd/pstore/`) end on the same line: cycle 140's
+power-down finished every step ("down: isolated") and nothing followed,
+not cpif's return from the power-off nor the next cycle's "up: begin". So
+the SoC hung while neither driver was touching the controller or the
+endpoint. With cpif's `keep_link_up` set once the CP was ONLINE (the link
+never powered off on the CP's request), the CP crashed about 80 s into the
+session (`cp_active` dropped, ONLINE to CRASH_EXIT), after four refused
+power-offs, and the palmtop did not reset. The CP needs its power-offs, so
+holding the link is not a fix. With the CPU sleep idle state (PSCI core
+power-down) disabled on all eight CPUs, the session ran 1070 cycles and
+the palmtop reset, so core power-down is not the trigger. This time the
+pstore console log kept what followed: cycle 1070's power-down finished
+("down: isolated"), 360 ms later the CP's wake interrupt fired (cpif's
+`cp2ap_wakeup` handler toggling irq 96's wake) and the power-up never
+started (no "up: begin"). Then the SoC stalled piece by piece, not at
+once: a Wi-Fi firmware query timed out at +5.5 s, ACPM's thermal channel
+(9) timed out from +8.5 s ("Timeout! ch:9", "RX front can not keep up with
+TX front"), and at +22 s RCU reported CPUs 0-3 and 7 stalled (detected by
+CPU 5), before the watchdog reset. CPUs stuck one by one, with the APM
+unanswering, is a stalled interconnect target, not one stuck access by
+these drivers. One difference from stock stands out: stock's zumapro node
+has no `use-phy-isol-en`, so Google's driver puts the PHY in bypass once
+and never isolates it again (and sets PMU bit 10 at each power-on but
+never clears it), while ours isolates the PHY and clears bit 10 at every
+power-down, about twice a second. A controller that keeps the PHY in
+bypass and bit 10 set between cycles (`isolate=0`, no PMU isolation write
+in the whole session) still reset the palmtop, after 191 cycles; the
+pstore log ends on cpif's "kept the saved config" with nothing after it,
+the hang this time at once, in the power-off's PME_Turn_Off on the
+controller's ELBI. So the runtime isolation is not the cause either. Next:
+the RCU stall timeout at its 3 s minimum, so that a stall that spreads, as
+in the CPU-sleep run, is reported with the stuck CPUs' tasks before the
+10 s runtime watchdog resets the palmtop. That run reset after 47 cycles
+with no stall report at all, and the pstore log ends as the CPU-sleep
+run's did: cycle 47 "down: isolated", the CP's wake interrupt 373 ms
+later, and no "up: begin". Two resets in a row now start at the CP's wake
+with the link down and nothing after it in the log. Next: trace lines
+through cpif's wake work and `s5100_poweron_pcie()` up to its call into
+the controller.
+
 **G3-L1, the controller's own steps traced (2026-11-01, daily kernel).**
 The same pair with a trace line after each step of the controller's
 `cp_link_down()` and `cp_link_try()`, the modem started after the boot's
