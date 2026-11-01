@@ -12,12 +12,12 @@
 #      aoc_alsa_dev before aoc_char_dev, which takes every service still free).
 #   4. The firmware load (aoc-tegu.bin), then wait for the 93 services and
 #      the sensor channel.
-# The TAS2572 amplifiers come up from the device tree through the tas2781
-# codec driver; the card's UCM profile (omamobile-audio) does the routing.
+#   5. The TAS2572 amplifiers (snd_soc_tas2781_i2c) from their device-tree
+#      nodes; the card's UCM profile (omamobile-audio) does the routing.
 #
-# This waits for a kernel whose device tree enables the AoC, GSA and Trusty
-# nodes: today they are turned on by out-of-tree overlay modules that no
-# package can ship, so the unit has no wants link (README.md).
+# The unit starts this at every boot (a wants link) and is also
+# omamobile-aoc.service, the name the sensor proxy and fingerprint units
+# use. On a device tree without the AoC node it does nothing.
 # A marker is written and synced before any of it, and removed at the end,
 # after a step that returned and failed too (that is not a hang). If a boot
 # hangs here, the next one finds the marker and leaves the AoC off;
@@ -115,6 +115,8 @@ for _ in $(seq 150); do
     log "up: $(head -1 "$node/services"), firmware $(head -1 "$node/revision" 2>/dev/null)"
     for _ in $(seq 25); do [[ -e $root/dev/acd-com.google.usf ]] && break; sleep 0.2; done
     [[ -e $root/dev/acd-com.google.usf ]] || log "no /dev/acd-com.google.usf (sensors unavailable)"
+    # 5. The speaker amplifiers, now that the AoC's back end is there
+    modprobe snd_soc_tas2781_i2c || log "the TAS2572 amplifiers did not load (no speakers)"
     finish; exit 0
   fi
   sleep 0.2
