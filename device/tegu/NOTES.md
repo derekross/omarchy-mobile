@@ -26,8 +26,8 @@ offset 0 with a valid CRC. What ends the fix is
 the CP link under GNSS traffic: held up it crashes the CP 103-108 s after
 ONLINE (six boots of six), left to cycle it hung the SoC 170 s to about 26 minutes
 after ONLINE. That hang was the PERIC0 GPIO bus clock gate (found
-2026-11-01, linux-omarchy-mobile#172); with the gate kept on, a 30-minute
-session ran clean. Details, the configuration and the sweep in
+2026-11-01, linux-omarchy-mobile#172); with the gate kept on and the link
+left to cycle, a 30-minute session through the Location switch ran clean. Details, the configuration and the sweep in
 [MODEM-PLAN](MODEM-PLAN.md) "G3, GNSS gets a fix" and G3-L1.
 
 ## 2026-10-30: the hands-on morning (fingerprint, card, USB-C host, GNSS)

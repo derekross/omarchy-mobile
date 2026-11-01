@@ -1164,7 +1164,28 @@ modem modules and nothing held by hand: two more 600 s sessions, 1335 and
 1333 link cycles, no reset, 568 of 570 and 558 of 567 fixed. Every session
 before reset the palmtop. A 30-minute session on that kernel followed: 3759 link
 cycles, no reset, 1763 of 1765 fixed. That kernel is the daily kernel from now on
-(the kit's Image pin in `logs/tegu-review-20261029/runners/lib.sh`).
+(the owner's kit pins that Image).
+
+All three sessions on that kernel took the Location path, with the link
+left to cycle: the modem started by hand (`omamobile-tegu-modem-up
+--gnss`), Location turned on (`omamobile-gnss on`) and a client connected
+for 600 or 1800 s, so `omamobile-gnss-nmea.socket` started
+`omamobile-gnss.service` from omamobile-gnss 0.2.5
+(<https://github.com/derekross/omarchy-mobile/pull/114>), whose 9a branch
+runs the gnss-slsi profile and never writes cpif's `keep_link_up`. That is
+`HOLD=0` in the bring-up scripts' terms; neither `tegu-gnss-session` nor
+the hand units in `bringup/location/` were on the palmtop then. The clock
+file built into Image `7f3674d21e92d758` has blob
+`6a23897406017ab7aab70baf27ffa0c28be9accd`: the integration tree's
+`clk-zumapro.c` with only the gate's flag changed from `CLK_IGNORE_UNUSED`
+to `CLK_IS_CRITICAL`. The tree's copy was put back after the build, so
+this was checked by rebuilding the object from that source: it matches the
+Image's `clk-zumapro.o` byte for byte with debug info stripped, and the
+unchanged file does not. At linux-omarchy-mobile#172's head (c36e4f49d)
+the file's blob is `a2811b7fd001a50f0aabf86221326fae44dfe857`. The blobs
+differ because the tested tree is the older integration tree; against each
+base the change is the same flag on the same gate, and #172 adds a comment
+above the table.
 
 **The CP link under GNSS traffic, G3-L1's first step answered, and a
 correction.** With GNSS running for minutes on the normal boot, the hang of
@@ -1207,13 +1228,17 @@ lands after isolation), so that the link may cycle as the CP asks.
 
 **Left for GNSS:** the GNSS link driver (gnssif) and CPIF aren't in the
 published kernel, so this runs on the owner's kernel only; linux-omarchy-mobile#150 merged on
-2026-10-31 and linux-omarchy-mobile#151 is closed as unnecessary; the CP link under GNSS traffic is unsolved: the hold crashes the CP,
-the cycling hangs the SoC; the L1 substates take effect on the real
-capability offset but don't stop it (G3-L1, 10-31), and the last trace puts
-the hang in cpif's power-down path. A session lasts one to ten minutes. GNSS still starts by hand
+2026-10-31 and linux-omarchy-mobile#151 is closed as unnecessary. The SoC
+hang under GNSS traffic is fixed by linux-omarchy-mobile#172 (in review,
+G3-L1 found): with it the CP link cycles as the CP asks, and sessions of
+10 and 30 minutes ran clean; without it the cycling link hangs the SoC 170 s
+to about 26 minutes after ONLINE, and holding the link crashes the CP. GNSS
+still starts by hand
 ([`bringup/tegu-gnss-session`](bringup/tegu-gnss-session), which starts the
-modem, holds the link after ONLINE for the diagnostic and runs the HAL for a
-set time; once per boot), or through Omarchy's Location switch with the hand
+modem and runs the HAL for a set time, the link cycling unless `HOLD=1`;
+once per boot), or through Omarchy's Location switch: omamobile-gnss 0.2.5
+(<https://github.com/derekross/omarchy-mobile/pull/114>) with the modem
+started by hand first, as in the fixed-kernel sessions, or the hand
 units in [`bringup/location/`](bringup/location): two drop-ins that make
 `omamobile-gnss.service` run the 9a's stack instead of the 7 Pro's chip
 driver, and `tegu-gnss-start`, which brings the modem up with GNSS and runs
@@ -1222,10 +1247,14 @@ Tested on 2026-10-30: `omamobile-gnss-nmea.socket` enabled, a client's connect
 starts the stack, the HAL serves NMEA to `/run/omamobile-gnss/nmea.sock` and
 the fixes arrive (first fix about 80 s after the connect, 46 of 52 GGA
 sentences fixed in the first run, with the link held and the wake line left
-high, `HOLD=1`). An attended session uses `HOLD=1`, now the script's
-default: it is the only setting that moves data. `HOLD=2` (answer the CP
-on ap2cp_wakeup) moved none and is kept only as a diagnostic, and `HOLD=0`
-lets the link cycle, for as long as the CP link lasts.
+high, `HOLD=1`). With linux-omarchy-mobile#172 the cycling link is the
+working setting, and `HOLD=0` is the script's default: an attended session
+uses it. Without #172 the cycling link hangs the SoC, so don't run these
+units on a kernel without it. `HOLD=1` (the link held with the wake line
+high: the CP crashes 103-108 s after ONLINE) and `HOLD=2` (the link held
+and the CP answered on ap2cp_wakeup: no data) are diagnostics only. The
+fixed-kernel sessions went through the package's start, not this script,
+so `tegu-gnss-start` with `HOLD=0` still needs its own run on that kernel.
 
 **Precondition: no `systemd.mask=` for these units on the command line.** `systemctl unmask` can't lift a mask the kernel command line sets, so check `tr ' ' '\n' < /proc/cmdline | grep -E 'mask=omamobile-gnss'` prints nothing first: the daily bootargs mask none of `omamobile-gnss.service`, `omamobile-gnss-nmea.service` or the socket, but the older bring-up overlays (`public-native-root`, `public-phone-local`) mask `omamobile-gnss.service`.
 
