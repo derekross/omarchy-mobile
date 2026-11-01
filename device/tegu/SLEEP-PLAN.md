@@ -447,6 +447,25 @@ with the cable in.
   whether the SoC watchdog still runs in s2idle (a watchdog reset keeps
   ramoops; the buttons were needed every time so far) is the next thing
   to check.
+
+  **A watchdog through s2idle, tried 2026-11-01 (same release): it breaks
+  the sleep, so it can't catch the hang.** `s3c2410_wdt` stops both
+  watchdogs in its suspend callback, so a hang in s2idle never resets the
+  palmtop. A bring-up module (`tegu-wdt-s2idle`, in the owner's logs)
+  restarted the cluster 0 watchdog in the noirq phase with the PMU reset
+  path unmasked and the counter enabled, as the driver's own enable does,
+  and stopped it in resume_noirq. Armed, three sleeps of three ended in a
+  reset: the s2idle wake came within 60 ms of arming, and after resume
+  ACPM stopped answering (`Timeout! ch:2`, then `RX front can not keep up
+  with TX front` and `sec-pmic-acpm … Failed to read IRQ status: -110`
+  every 0.5 s) until the restored 10 s watchdog reset the SoC; ramoops
+  kept all of it. Loaded but disarmed, two sleeps of two woke (after 1.5
+  and 1.6 s, wake IRQ 56, no ACPM timeouts). So a running cluster 0
+  watchdog (or its PMU counter enable) during s2idle upsets the APM, and
+  this module is not a way to record the real hang. The real hang's
+  console is still unknown; what this run does show is what an APM that
+  stops answering after resume looks like, which matches the stall seen
+  in G3-L1's CPU-sleep run (MODEM-PLAN).
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
