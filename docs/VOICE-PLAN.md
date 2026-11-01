@@ -197,6 +197,14 @@ Announce first: the microphone opens, the keyboard restarts once (new layouts), 
 
 Risk: low (userspace). Battery: about two cores while listening, nothing otherwise.
 
+**Results, 2026-11-01** (`7.3.0-rc6-omamobile-push1-g8e6f0f3e3763`, omamobile-shell 0.2.63-1):
+
+- 1, 2: pass after `omamobile-setup-user` and a shell restart (`context_window_optimization = true` under `[whisper]`, 107 layout files, `preview` in the snapshot). The restart waits for an unlocked phone: `omarchy-restart-shell` refuses while locked, so the old plugin kept running until then. The model stayed tiny.en: this phone had no `omamobile-voxtype-tiny` marker, so setup treats tiny.en as the owner's choice, as designed.
+- 3: pass. Words appeared in the bar while speaking (31 characters three seconds in), the final text was typed.
+- 5: pass. One `omamobile-voice-preview` capture while listening; after Done no `pw-record` and no `voxtype -q -c` left.
+- 6: pass. German (input sources `us`, `de`): the action row on top, Mic opens the bar, upright and on its side. Found on the way: squeekboard's globe menu (a GTK popover) is drawn at mouse size and sticks out above the keyboard's surface, and taps on it don't land, so a layout can't be picked by touch. Not from 0.2.63; the follow-up replaces the globe's menu with a language picker in the shell.
+- 4, 7: not run (base.en's wait after Done, the 60 s cap).
+
 ### Voice on the lock screen (design)
 
 Not built. Today Power + Volume Up does nothing while locked (`omamobile-keys` checks `omarchy-shell lock isLocked`), and the voice bar, a Top-layer surface, can't show over Omarchy's lock anyway.
