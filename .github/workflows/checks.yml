@@ -46,7 +46,7 @@ jobs:
       - name: Packages the tests use
         run: |
           pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd openssl \
-            python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox \
+            python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox rsync \
             xz gzip qt6-declarative shellcheck
           # Arch's nodejs can lag a simdjson soname bump: on 2026-10-29
           # simdjson 5.0.8 dropped the libsimdjson.so.34 that nodejs still
