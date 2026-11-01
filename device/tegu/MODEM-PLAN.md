@@ -1001,7 +1001,7 @@ software swap.
 A copy of the palmtop's own cpif (the K4 build, `5a10811b940d51ff`) with
 eight trace lines around `s51xx_pcie_save_state()` and
 `exynos_pcie_poweroff()`, nothing else changed, and one GNSS session with the
-kernel log streamed: the hang came about 13 minutes in, and the last line
+kernel log streamed: the hang came about 11 minutes in, and the last line
 before it was "master cleared" with no "config saved" after it, so the SoC
 hangs inside `pci_save_state()`. cpif reads the endpoint's config space
 after the CP has asked for the power-off (it is going to sleep), and an
