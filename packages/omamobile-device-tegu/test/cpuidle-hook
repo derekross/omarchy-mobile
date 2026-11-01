@@ -1,0 +1,27 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The cpuidle sleep hook in a scratch root: every "*-sleep" state is
+# disabled before the sleep and put back as it was after; WFI is untouched;
+# a post with nothing saved does nothing.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+hook=$PWD/vendor/systemd/system-sleep/omamobile-tegu-cpuidle
+fail() { printf 'not ok - cpuidle-hook: %s\n' "$1" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export OMAMOBILE_TEGU_ROOT=$tmp/root
+mkdir -p "$tmp/bin"; printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/logger"; chmod +x "$tmp/bin/logger"
+export PATH=$tmp/bin:$PATH
+mk() { local d=$OMAMOBILE_TEGU_ROOT/sys/devices/system/cpu/cpu$1/cpuidle/state$2; mkdir -p "$d"; echo "$3" > "$d/name"; echo "$4" > "$d/disable"; }
+for c in 0 1 2 3; do mk $c 0 WFI 0; mk $c 1 cpu-a520-sleep 0; done
+for c in 4 5 6; do mk $c 0 WFI 0; mk $c 1 cpu-a720-sleep 0; done
+mk 7 0 WFI 0; mk 7 1 cpu-x4-sleep 1   # already off by hand: stays off after
+d() { cat "$OMAMOBILE_TEGU_ROOT/sys/devices/system/cpu/cpu$1/cpuidle/state$2/disable"; }
+"$hook" post
+[[ $(d 0 1) == 0 ]] || fail "a post with nothing saved changed a state"
+"$hook" pre
+for c in 0 1 2 3 4 5 6 7; do [[ $(d $c 1) == 1 ]] || fail "cpu$c's sleep state not disabled before the sleep"; [[ $(d $c 0) == 0 ]] || fail "cpu$c's WFI touched"; done
+"$hook" post
+for c in 0 1 2 3 4 5 6; do [[ $(d $c 1) == 0 ]] || fail "cpu$c's sleep state not restored"; done
+[[ $(d 7 1) == 1 ]] || fail "a state that was off before the sleep was turned on after it"
+[[ ! -e $OMAMOBILE_TEGU_ROOT/run/omamobile/cpuidle-before-sleep ]] || fail "the saved list was left behind"
+echo "ok - cpuidle-hook: core power-down off for the sleep and restored after"

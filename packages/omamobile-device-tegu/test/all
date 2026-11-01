@@ -178,7 +178,7 @@ pass "the Bluetooth address is read at run time"
 
 grep -c '^for unit in omamobile-sensor-proxy.service omamobile-nfc-open.service; do$' bin/omamobile-setup-system >/dev/null || fail "setup-system enables the sensor proxy and the NFC opener"
 grep -qE 'omamobile-(fp|gnss-nmea|speaker-protection)' <(grep '^for unit' bin/omamobile-setup-system) && fail "setup-system must not enable fingerprint, GNSS or speaker protection on the 9a"
-for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/charge-limit; do
+for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/cpuidle-hook test/charge-limit; do
   "$t" || fail "$t"
 done
 pass "the scripts behave in a scratch root"

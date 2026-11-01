@@ -1,0 +1,46 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# systemd-sleep hook: keep the Pixel 9a's CPUs out of core power-down while
+# the palmtop sleeps (device/tegu/SLEEP-PLAN.md S1).
+#
+# In s2idle with the CPUs' power-down state (cpuidle state "cpu-*-sleep",
+# PSCI core power-down) allowed, the S2MPG14 raised an event that hadn't
+# happened about a second in (an early RTC alarm, or a power key release
+# nobody made), and every sleep ended there. With only WFI allowed, a 30 s
+# sleep lasted until its alarm. So before the sleep this disables every
+# "*-sleep" cpuidle state, remembering what it was, and afterwards puts each
+# one back as it found it.
+# OMAMOBILE_TEGU_ROOT: a scratch root for the package tests.
+root=${OMAMOBILE_TEGU_ROOT:-}
+SAVED=$root/run/omamobile/cpuidle-before-sleep
+
+states() {
+  local s
+  for s in "$root"/sys/devices/system/cpu/cpu[0-9]*/cpuidle/state[0-9]*; do
+    [[ -f $s/name && -f $s/disable ]] || continue
+    [[ $(cat "$s/name") == *-sleep ]] && echo "$s"
+  done
+}
+
+case ${1:-} in
+  pre)
+    mkdir -p "${SAVED%/*}"
+    : > "$SAVED.new"
+    n=0
+    while read -r s; do
+      echo "$s $(cat "$s/disable")" >> "$SAVED.new"
+      echo 1 > "$s/disable" && n=$((n + 1))
+    done < <(states)
+    mv "$SAVED.new" "$SAVED"
+    logger -t omamobile-tegu-cpuidle "core power-down off for the sleep ($n states)"
+    ;;
+  post)
+    [[ -f $SAVED ]] || exit 0
+    while read -r s v; do
+      [[ -f $s/disable ]] && echo "$v" > "$s/disable"
+    done < "$SAVED"
+    rm -f "$SAVED"
+    logger -t omamobile-tegu-cpuidle "core power-down restored after the sleep"
+    ;;
+esac
+exit 0
