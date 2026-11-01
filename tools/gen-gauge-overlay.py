@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate device/husky/overlays/gauge-model.dtso from Google's stock husky devicetree.
 
 Usage: gen-gauge-overlay.py STOCK.dts NODE OUT.dtso

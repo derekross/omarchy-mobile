@@ -58,13 +58,17 @@ Physical recovery, in order:
   1. Wait 2 minutes: the phone undoes the step, then its watchdog resets it
      (the screen goes black and the boot logo returns). Linux on slot B boots
      with max77759_charger blocked in /etc/modprobe.d.
-  2. Unplug the cable. Hold Power ~30 s until the phone is off, release, press
-     Power: it boots slot B again.
+  2. Unplug the cable. Force a restart: hold Power + Volume Up for 15 to 30 s
+     (Power alone does nothing on the 8 Pro under our kernel). It boots slot B
+     again. EVERY reset spends one of slot B's three boot tries; at zero the
+     bootloader falls back to slot A and its first boot wipes userdata. Count
+     the boots since your last "bin/omamobile flash" (it gives B three again),
+     and when one is left, flash your known-good image set instead of resetting.
   3. Whether a reset puts the charger registers back is NOT known for husky:
      keep the phone on a cable only while you watch it, and check the
      battery temperature by hand.
-  4. Fastboot by hand: hold Power ~30 s (off), then Volume Down + Power for
-     ~20 s until "Fastboot Mode"; flash build/out-battery/images-m2-known-good.
+  4. Fastboot by hand: force a restart as in 2, then Power + Volume Down until
+     "Fastboot Mode"; flash your known-good image set.
 TXT
 }
 
@@ -106,6 +110,9 @@ done
 
 phone true || die "phone not reachable at 172.16.42.1: nothing started"
 install_phone
+if [[ $step == wd-drill ]]; then
+  warn "wd-drill RESETS the phone and spends one of slot B's three boot tries (at zero the bootloader falls back to slot A, whose first boot wipes userdata; count the boots since your last bin/omamobile flash)"
+fi
 mkdir -p "$LOGDIR"
 stamp=$(date +%Y%m%d-%H%M%S)
 log="$LOGDIR/husky-$step-$stamp.log"

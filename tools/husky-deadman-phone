@@ -123,6 +123,8 @@ refuse() { log "refusing: $*"; echo "refused: $*" > $D/result; }
 
 preflight() {   # preflight STEP
   local v t s
+  tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -qx 'google,zuma-husky' ||
+    { refuse "this is not a Pixel 8 Pro (device tree compatible is not google,zuma-husky)"; return 1; }
   [[ -n "$BUS" ]] || { refuse "no i2c bus for 10cb0000.i2c"; return 1; }
   command -v i2cget >/dev/null || { refuse "i2c-tools missing"; return 1; }
   [[ -d $PSY ]] || { refuse "no battery power supply $PSY (load max17042_battery)"; return 1; }
