@@ -1,0 +1,136 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for bin/lineage-ref sync's branch handling (no Docker, no download):
+# stand-ins for docker (runs the container's command on the host) and repo
+# (records its calls and the manifest branch the way repo does, in
+# .repo/manifests.git/config) sync a synthetic source tree, with BRANCH
+# changed in omamobile.local.conf. A new tree, or one with no recorded
+# branch, runs the full repo init; a tree already on BRANCH runs no repo
+# init; a tree on another branch runs repo init -b BRANCH only (so the
+# manifest URL stays) before repo sync; a failed repo init stops before
+# repo sync.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+
+# A repository-shaped tree: the tool, its manifests, a config on the old
+# branch and a local config that changes it
+R=$t/repo SRC=$t/src
+mkdir -p "$R/bin" "$t/bin"
+cp bin/lineage-ref "$R/bin/lineage-ref"
+cp -r manifests "$R/manifests"
+cat > "$R/omamobile.conf" <<EOF
+BRANCH=lineage-23.2
+DEVICE=cheetah
+VARIANT=userdebug
+SRC_DIR=$SRC
+CCACHE_DIR=$t/ccache
+CCACHE_SIZE=1G
+JOBS=1
+IMAGE=omamobile-build:test
+EOF
+printf 'BRANCH=lineage-24.0\n' > "$R/omamobile.local.conf"
+
+cat > "$t/bin/docker" <<'SH'
+#!/bin/bash
+# docker run stand-in: run the command lineage-ref hands the container in
+# its -w directory, with the manifests mount at its host path.
+set -euo pipefail
+echo "docker $1" >> "$CALLS"
+script=${!#} w= manifests=
+while (($#)); do
+  case $1 in
+    -w) w=$2; shift 2 ;;
+    -v) [[ $2 == *:/omamobile-manifests:ro ]] && manifests=${2%%:*}; shift 2 ;;
+    -e|--hostname) shift 2 ;;
+    *) shift ;;
+  esac
+done
+cd -- "$w"
+exec bash -c "${script//\/omamobile-manifests/$manifests}"
+SH
+cat > "$t/bin/repo" <<'SH'
+#!/bin/bash
+# repo stand-in: init records -u and -b as repo does; REPO_INIT_FAIL fails init.
+set -euo pipefail
+echo "repo $*" >> "$CALLS"
+[[ $1 == init ]] || exit 0
+[[ -z ${REPO_INIT_FAIL:-} ]] || { echo "repo: fatal: init failed" >&2; exit 1; }
+mkdir -p .repo/manifests .repo/manifests.git
+while (($#)); do
+  case $1 in
+    -u) git config --file .repo/manifests.git/config remote.origin.url "$2" ;;
+    -b) git config --file .repo/manifests.git/config branch.default.merge "refs/heads/$2" ;;
+  esac
+  shift
+done
+SH
+chmod +x "$t/bin/docker" "$t/bin/repo"
+export PATH="$t/bin:$PATH" CALLS=$t/calls
+# Only the fixture's Git configuration: the tool reads the global identity.
+export GIT_CONFIG_GLOBAL=$t/gitconfig GIT_CONFIG_NOSYSTEM=1
+git config --global user.name 'Test Builder'
+git config --global user.email test@example.invalid
+
+# src_tree <recorded branch or "">: an existing source tree, or a new one with "new"
+src_tree() {
+  rm -rf "$SRC"; : > "$CALLS"
+  mkdir -p "$SRC/build"
+  echo "breakfast() { echo \"breakfast \$*\" >> \"\$CALLS\"; }" > "$SRC/build/envsetup.sh"
+  [[ $1 == new ]] && return
+  mkdir -p "$SRC/.repo/manifests" "$SRC/.repo/manifests.git"
+  mcfg remote.origin.url https://mirror.invalid/LineageOS/android.git
+  [[ -z $1 ]] || mcfg branch.default.merge "refs/heads/$1"
+}
+mcfg() { git config --file "$SRC/.repo/manifests.git/config" "$@"; }
+full_init='repo init -u https://github.com/LineageOS/android.git -b lineage-24.0 --git-lfs --no-clone-bundle'
+# The checks name the case in $name.
+sync_ok() { "$R/bin/lineage-ref" sync > "$t/out" 2>&1 || { cat "$t/out" >&2; fail "$name: sync failed"; }; }
+calls() { printf '%s\n' "$@" | diff -u - "$CALLS" || fail "$name: calls"; }
+recorded() {
+  [[ $(mcfg --get branch.default.merge) == "refs/heads/$1" ]] || fail "$name: recorded branch"
+}
+url_kept() {
+  [[ $(mcfg --get remote.origin.url) == https://mirror.invalid/LineageOS/android.git ]] || fail "$name: manifest URL changed"
+}
+
+name='new tree'
+src_tree new
+sync_ok
+calls 'docker run' "$full_init" 'repo sync' 'breakfast cheetah userdebug'
+recorded lineage-24.0
+cmp -s manifests/omamobile.xml "$SRC/.repo/local_manifests/omamobile.xml" || fail "$name: local manifest"
+pass "$name: repo init with the local config's BRANCH, then repo sync"
+
+name='tree on BRANCH'
+src_tree lineage-24.0
+sync_ok
+calls 'docker run' 'repo sync' 'breakfast cheetah userdebug'
+! grep -q switching "$t/out" || fail "$name: announced a switch"
+recorded lineage-24.0; url_kept
+pass "$name: no repo init, repo sync"
+
+name='tree on another branch'
+src_tree lineage-23.2
+sync_ok
+calls 'docker run' 'repo init -b lineage-24.0' 'repo sync' 'breakfast cheetah userdebug'
+grep -q "follows lineage-23.2; switching it to lineage-24.0" "$t/out" || fail "$name: no switch message"
+recorded lineage-24.0; url_kept
+pass "$name: repo init -b BRANCH (URL kept), then repo sync"
+
+name='tree with no recorded branch'
+src_tree ''
+sync_ok
+calls 'docker run' "$full_init" 'repo sync' 'breakfast cheetah userdebug'
+recorded lineage-24.0
+pass "$name: the full repo init, then repo sync"
+
+name='failed repo init'
+src_tree lineage-23.2
+if REPO_INIT_FAIL=1 "$R/bin/lineage-ref" sync > "$t/out" 2>&1; then fail "$name: sync succeeded"; fi
+calls 'docker run' 'repo init -b lineage-24.0'
+recorded lineage-23.2; url_kept
+pass "$name: stops before repo sync"
