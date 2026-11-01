@@ -932,6 +932,7 @@ h=plugins/omamobile.home/Home.qml
 grep -c 'path: "/proc/sys/kernel/random/boot_id"' $h >/dev/null || fail "the crash guard reads the boot id"
 grep -c 'JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed })' $h >/dev/null || fail "the crash guard records the boot id"
 grep -c 'sameBoot ? loading : {}' $h >/dev/null || fail "a widget loading in another boot is not a crash"
+grep -c 'function onAboutToQuit()' $h >/dev/null || fail "a deliberate quit clears what was still loading"
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"

@@ -277,6 +277,18 @@ Item {
       root.guardWrite()
     }
   }
+  // A deliberate quit (omarchy-restart-shell's `quickshell kill`, a logout)
+  // goes through the application's aboutToQuit; a crash never does. So a
+  // quit clears what was still loading, and only a shell that died leaves
+  // entries behind for the next start.
+  Connections {
+    target: Qt.application
+    function onAboutToQuit() {
+      if (Object.keys(root.guardLoading).length === 0) return
+      root.guardLoading = ({})
+      root.guardWrite()
+    }
+  }
   function guardWrite() {
     guardFile.setText(JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed }) + "\n")
   }
