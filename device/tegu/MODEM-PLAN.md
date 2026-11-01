@@ -997,6 +997,22 @@ does swapping in gnss_spi (`word32=2`, commit 734f5f8c8 on
 errors, on a boot without the swap-mode property. The palmtop runs the
 software swap.
 
+**G3-L1, where in the power-down the SoC hangs (2026-10-31, evening, daily kernel).**
+A copy of the palmtop's own cpif (the K4 build, `5a10811b940d51ff`) with
+eight trace lines around `s51xx_pcie_save_state()` and
+`exynos_pcie_poweroff()`, nothing else changed, and one GNSS session with the
+kernel log streamed: the hang came about 13 minutes in, and the last line
+before it was "master cleared" with no "config saved" after it, so the SoC
+hangs inside `pci_save_state()`. cpif reads the endpoint's config space
+after the CP has asked for the power-off (it is going to sleep), and an
+unanswered config read on this controller hangs the SoC. A second build
+keeps probe's saved config and skips every config access in that path
+("kept the saved config"): that boot hung too, about 90 s after ONLINE,
+after its third completed power-off ("link off") and before the next
+power-on, so the next trace goes on the power-on path
+(`s51xx_pcie_restore_state()` and the link-up). The save-once change alone
+does not fix the hang.
+
 **G3-L1, the L1 substates on for real (2026-10-31, one boot, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`).**
 The controller module's v8 bring-up build (sha256 `dbbb6f5f335f7640…`)
 logs each step of its L1SS path behind `trace=1` and with `l1ss=2` enables
