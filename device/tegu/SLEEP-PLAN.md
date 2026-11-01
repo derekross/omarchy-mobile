@@ -507,6 +507,20 @@ with the cable in.
   but masked throughout. After the no-alarm sleep, SSH over USB took
   about 8 minutes to come back, with nothing in the kernel log about
   USB.
+
+  **With CPU core power-down off, the sleep lasted its full length.**
+  The only deeper cpuidle state on each CPU is state1
+  (`cpu-a520-sleep`, `cpu-a720-sleep`, `cpu-x4-sleep`, PSCI core
+  power-down; each was used 4-5 times by s2idle in the short sleeps).
+  With state1 disabled on all eight CPUs (WFI only) and a 30 s alarm,
+  `PM: suspend entry` at 472.7 s and the wake at 501.9 s, on IRQ 56 with
+  INT2 `0c` (alarm 0): the real alarm, 29 s in. So the events that end
+  every other sleep a second in come with the CPUs' power-down during
+  s2idle, most likely from the firmware's side of that power-down, not
+  from the PMIC drivers. One sleep so far; next: a series of longer
+  sleeps with state1 off (a sleep hook can turn it off before the sleep
+  and on after), their hang rate, and the drain against the short-sleep
+  figures.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
