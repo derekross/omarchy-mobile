@@ -255,6 +255,8 @@ Announce first: the keyboard changes layout during the test. Read-only first. Ro
 6. Add a language: pick French; the keyboard is AZERTY and French is on the list. Then × on French (while another is current): it goes. The current language has no ×. Risk: low (the list changes; rollback above).
 7. On its side: the sheet keeps to 600 px, centred, and the list scrolls on the add page.
 
+**Results, 2026-11-01** (`7.3.0-rc6-omamobile-push1-g8e6f0f3e3763`, omamobile-shell 0.2.65-1): all pass on the Pixel 7 Pro. The globe opens the sheet, English and German switch both ways, tapping outside and swiping down close it, a language can be added and removed, and the sheet works on its side. The first globe tap did nothing only because the phone was locked when the package went on, so `omarchy-restart-shell` refused and the old shell kept running until the restart after unlock.
+
 ## Risks
 
 - **wtype vs squeekboard:** both register a zwp virtual keyboard with their own keymap. Text typed while the keyboard is up may come out with the wrong keymap, or upset squeekboard's. Test with the keyboard visible (check 6). The fallback is `--clipboard` followed by a paste.
