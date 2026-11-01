@@ -62,8 +62,10 @@ if me == 'pw-cli':
         if k not in vals or os.environ.get('FAKE_PW_IGNORE') == '1':
             continue                          # the filter ignores unknown controls
         vals[k] = float(v)
-    with open(state, 'w') as f:
+    tmp = f'{state}.{os.getpid()}'
+    with open(tmp, 'w') as f:
         json.dump(vals, f)
+    os.replace(tmp, state)
     log(args[3])
     sys.exit(0)
 if me == 'wpctl':

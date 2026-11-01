@@ -341,9 +341,30 @@ test("phone actions and android.* answers, with mocks", () => {
   eq([sys.kernel, sys.uptime, sys.memory], ["7.3.0", 123, { total: 8192000, used: 5120000, available: 3072000 }])
   eq(P.systemFrom("", "1", "7.3.0\n", " 116041613312 16160268288\n").storage, { total: 116041613312, used: 16160268288, available: 99881345024 })
   eq([sys.storage, P.storageFrom("Size Used"), P.storageFrom("0 0")], [null, null, null])
+  // the board comes from the device tree, not a fixed Pixel 7 Pro
+  const tegu = P.boardFrom("Google Pixel 9a\n@@\ngoogle,zumapro-tegu\ngoogle,zumapro\n")
+  eq([tegu.model, tegu.maker, tegu.codename, tegu.soc, tegu.display.width], ["Pixel 9a", "Google", "tegu", "zumapro", 1080])
+  const cheetah = P.boardFrom("Google Pixel 7 Pro\n@@\ngoogle,gs201-cheetah\ngoogle,gs201\n")
+  eq([cheetah.model, cheetah.codename, cheetah.soc, cheetah.display.height], ["Pixel 7 Pro", "cheetah", "gs201", 3120])
+  const other = P.boardFrom("OnePlus 13\n@@\noneplus,sm8750-dodge\nqcom,sm8750\n")
+  eq([other.model, other.maker, other.codename, other.soc, other.display], ["OnePlus 13", null, "dodge", "sm8750", null])
+  eq([P.boardFrom("").model, P.boardFrom("").codename], [null, null])
+  const s9 = P.systemFrom("", "1", "7.3.0\n", "", tegu)
+  eq([s9.codename, s9.cpu.soc, s9.display.dpi], ["tegu", "zumapro", 422])
+  eq([P.systemFrom("", "1", "7.3.0\n").codename, P.systemFrom("", "1", "7.3.0\n").display], [null, null])
   eq([P.batteryFrom("97\nCharging\n").level, P.batteryFrom("97\nCharging\n").charging, P.batteryFrom("97\nCharging\n").status], [97, true, "charging"])
   eq([P.batteryFrom("").level, P.batteryFrom("").status], [null, null])
   eq([P.panelOff("0\n"), P.panelOff("4\n"), P.panelOff("")], [false, true, false])
+})
+test("the frame clock's rates and the hidden tick", () => {
+  // 20 fps untouched, 30 while touched: never the panel's 120 Hz.
+  eq([P.frameInterval(false), P.frameInterval(true)], [50, 33])
+  eq([P.frameSlow(20), P.frameSlow(21), P.frameSlow("x")], [false, true, false])
+  // A slow widget draws every other frame.
+  eq([0, 1, 2, 3].map((n) => P.frameSkipped(true, n)), [false, true, false, true])
+  eq([0, 1].map((n) => P.frameSkipped(false, n)), [false, false])
+  // Just past the next second while shown, the next 10 s while hidden.
+  eq([P.tickDelay(12300, false), P.tickDelay(12300, true), P.tickDelay(20000, true)], [705, 7705, 10005])
 })
 test("a terminal's output reads as lines", () => {
   const T = load("terminal.js")

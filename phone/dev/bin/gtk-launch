@@ -1,0 +1,43 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Desktop harness stand-in for gtk-launch, which app launches reach through
+# uwsm-app with the caller's PATH (omamobile-launch, Omarchy's app library).
+# The nested session shares this computer's session bus, so GIO starts an
+# entry with DBusActivatable=true through D-Bus activation, with the user
+# manager's environment, and the app opens on the desktop (Files, for one).
+# For those entries only, run gtk-launch with its bus address at /dev/null
+# (unset, GLib would still find the bus at $XDG_RUNTIME_DIR/bus): GIO then
+# runs the entry's Exec here. Every other entry starts as it would anyway.
+#
+# Limits:
+# - an app started without the session bus loses what it does over it: for
+#   Files, the Trash, Recent and Network locations (moving files to the
+#   trash still works), and settings changes aren't saved;
+# - what such an app opens has no session bus either: a page Files opens in
+#   the browser starts the browser without its keyring, unless the browser
+#   is already open on the desktop;
+# - an app that hands off to an instance already open on the desktop
+#   (Telegram, Brave) still opens there.
+#
+# GIO activates an entry over D-Bus only when its name is a bus name, as
+# org.gnome.Nautilus is, so the check below asks the same of the entry GIO
+# resolves. It runs /usr/bin/python3: a python3 earlier on PATH (mise, a
+# virtualenv) may have no PyGObject, and the app would open on the desktop.
+if [[ -n ${1:-} && $1 != -* ]] && /usr/bin/python3 -I - "$1" <<'EOF'
+import os, sys
+import gi
+gi.require_version("GioUnix", "2.0")
+from gi.repository import Gio, GioUnix
+app_id = sys.argv[1] if sys.argv[1].endswith(".desktop") else sys.argv[1] + ".desktop"
+try:
+    app = GioUnix.DesktopAppInfo.new(app_id)
+except TypeError:  # no such entry, which gtk-launch reports itself
+    sys.exit(1)
+name = os.path.basename(app.get_filename()).removesuffix(".desktop")
+bus_name = Gio.dbus_is_name(name) and not name.startswith(":")
+sys.exit(0 if app.get_boolean("DBusActivatable") and bus_name else 1)
+EOF
+then
+  export DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null
+fi
+exec /usr/bin/gtk-launch "$@"

@@ -1,0 +1,8 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Desktop harness stand-in for omarchy-shell. The nested shell runs from
+# run-desktop's own Omarchy tree, which an interactive bash takes out of
+# OMARCHY_PATH again (Omarchy's env-bootstrap), so put it back and run the
+# real omarchy-shell from that tree.
+export OMARCHY_PATH="${PHONE_DEV_OMARCHY_PATH:?not in the desktop harness}"
+exec "$OMARCHY_PATH/bin/omarchy-shell" "$@"

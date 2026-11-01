@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Close the USB data switch after each replug (omamobile-tegu-usb-rescue).
+# Exits by itself when a Type-C driver owns the MAX77779.
+[Unit]
+Description=Reconnect USB after a replug (MAX77779 data switch)
+After=systemd-modules-load.service
+
+[Service]
+ExecStartPre=-/usr/bin/modprobe i2c-dev
+ExecStart=/usr/bin/omamobile-tegu-usb-rescue
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

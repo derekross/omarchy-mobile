@@ -13,15 +13,426 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-10-29: the device package boot, and what this row rests on
+
+The palmtop's bring-up runs from `omamobile-device-tegu` 0.2.0
+(<https://github.com/derekross/omarchy-mobile/pull/152>) since the 12:28
+local boot on 2026-10-29, release
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the unpublished
+integration tree; the board device tree is in review as linux-omarchy-mobile
+#80), with the hand copies the package replaces moved aside under
+`/var/lib/omamobile-tegu/before-pkg/`. `tools/phone-smoke` on that boot:
+19 of 19 (boot on slot B, the storage guard with only `userdata` and slot
+B's images writable, the ext4 root, no oops or WARN, no failed units, the
+USB gadget, the panel at 1080x2424, a render node on panthor, Hyprland and
+the shell, the lock, Synaptics touch, gpio-keys, wlan0 up, hci0 powered,
+the gauge, the AoC sound card, three sensors, three cameras, hottest zone
+44 °C). Packages on it: omamobile-device-tegu 0.2.0-1, omamobile-audio
+0.4.1-1, omamobile-fingerprint 0.1.8-1, omamobile-apps 0.2.0-1, hyprland
+0.56.2-5.1, mesa 1:26.2.4-1.4, libcamera 0.7.2-4.22.
+
+What each cell of the DEVICES row rests on, beyond the 10-27 and 10-28
+list below:
+
+- **Boot:** slot B marked successful by hand on 2026-10-28 (the `devinfo`
+  write approved on 2026-10-22, now on hold, #125); the package does not
+  mark it. A fallback to slot A would cost the Linux root.
+- **Started by the package at boot** (`omamobile-tegu-graphics.service`):
+  the display at 120 Hz (the start sets `allow_tx` for `google-tg4c`, with
+  or without the bootloader's panel-id suffix), the GPU, haptics, the torch,
+  the gauge and Bluetooth; the USB rescue helper. Everything else in the
+  row that says "by hand" is not.
+- **GPU:** on this boot devfreq reports `simple_ondemand` with min, max and
+  current all 159.7 MHz and `runtime_status` suspended, so the desktop
+  renders and the GPU sleeps when idle, but frequency scaling is not
+  active on the published form and counts as in review (kernel #85, #87).
+- **Battery through UPower, 2026-10-29 evening:** energy-rate 1.06 W, time
+  to empty 18.5 h at 87 %.
+- **Sensors:** accelerometer, ambient light and proximity, as every smoke
+  report of the day lists them. No gyroscope or compass has been seen on
+  this palmtop; the row no longer claims them.
+- **Wi-Fi across sleep:** kept loaded by the package's sleep hook
+  (`/etc/omamobile/wifi-keep-across-sleep` is set) through the 2026-10-29
+  S1 sleeps ([SLEEP-PLAN](SLEEP-PLAN.md) S1).
+- **NFC:** a payment card read on the morning of 2026-10-29 with the
+  kernel #131 modules (its thread has the dmesg lines); neard started by
+  hand, polling stopped before sleep by the package's hook.
+- **Suspend:** with the `omamobile-sleep` toggle on (it ships off), the
+  shell's sleep daemon (`omamobile-sleepd`) suspends the palmtop once the
+  screen is off and locked; the power key and the RTC wake it, but three test
+  sleeps have not woken, so sleep tests stay attended (SLEEP-PLAN S1); the
+  drain is the S1 figure.
+- **Speakers:** the -10 dB ceiling recorded below, by hand with the AoC.
+- **GNSS, 2026-10-30 evening:** a position fix on a bring-up kernel (the gn3
+  tree with the spi-s3c64xx swap-mode change and the flush-order fix of
+  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, drive 3, mode
+  0, 32-bit words, feedback delay 0, automatic chip select, 64-byte reads):
+  in a 3-minute session by a window, 23 of 25 GGA sentences with fix quality
+  1, up to 13 satellites used, HDOP 0.8, every CHPP read at bit 0 with a
+  valid CRC; started by hand through the modem bring-up, not by a package.
+
+## 2026-10-29: two resets at about 34 s, right after Bluetooth started
+
+[V] During the night's GNSS G3 tries (kernel
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, gn3 DTB), two
+boots reset at about 34 s of uptime, right after Bluetooth started (01:41
+and 03:03), before any GNSS step. The cause was not seen. Read again from
+the journal on 10-29 afternoon (the 03:03 boot; the 01:41 one is out of the
+journal and its console was rotated out): its last 34 s are the same
+timeline, to the tenth of a second, as the two boots around it that
+survived (the Bluetooth firmware at 27.9 and 31.4 s, MGMT at 33.0,
+`tegu-curated-bluetooth-prepare` at 34.1, `bluetooth.service` at 34.2,
+`systemd-hostnamed` at 34.4, then nothing), and it ends there. The curated
+Bluetooth dead-man is armed for 120 s, so it was not that; the audio
+bring-up script had not yet acted (its first action comes 5-7 s later in
+the surviving boots); the only thing running in that window is bluetoothd
+setting the adapter up over the UART. Without the console of the reset
+there is nothing more to read. The night's other
+resets came from the modem side (the CP link hang after Kepler's watchdog
+resets) and are in [MODEM-PLAN](MODEM-PLAN.md) under "G3, twenty-fourth to
+thirty-fourth tries" and "The CP link hang". Not a GNSS matter: if a boot
+with nothing but Bluetooth starting resets again at that time, start here.
+
+## 2026-10-29: the s2idle drain is the SoC floor, not the CPUs or the radios
+
+- Cable out, screen off: 311 mA awake, 302 mA asleep (two 30-minute
+  `systemctl suspend` rounds through `power-ab --suspend systemd`). The CPUs
+  sleep (timekeeping suspended for the whole of a 60 s test, one deep-state
+  entry per CPU); Bluetooth, NFC and Wi-Fi cost nothing measurable at idle.
+  What stays on is MIF, the buses and the always-on rails: there is no
+  system idle state in our kernel. `tegu-mif-sleep.ko` (MIF 421 MHz in
+  sleep) saves about 60-75 mA by the coulomb counter; a hand unit loaded it
+  at boot for one night and was disabled the next day (below).
+  Details and method in [SLEEP-PLAN](SLEEP-PLAN.md) S1.
+- `rtcwake -m freeze` written straight to `/sys/power/state` failed to wake
+  again (the second time in two days); every `systemctl suspend` after
+  `rtcwake -m no` had woken up to then. The next day showed the entry
+  path isn't the whole story (the 2026-10-30 bullet).
+- 2026-10-30: the cable-out `power-ab --suspend systemd` run with the
+  module loaded never woke from its 30-minute sleep (not from the RTC, not
+  from the power key; reset by hand), so the hand unit that loaded the
+  module at boot is disabled. The same day a cable-in 30-minute systemd
+  sleep with the module, its alarm logged as armed, woke on the alarm to
+  the second, and the afternoon's repeat of the cable-out run with the
+  module loaded by hand woke too: 273 mA awake with the screen off, 260 mA
+  asleep, about 40 mA under the figure without the module. Three sleeps
+  have never woken (two direct freezes, one systemd sleep with the module)
+  and no single factor explains them, so sleep tests stay attended and the
+  module stays off at boot; the shell's auto-sleep toggle is off on the
+  palmtop since the 2026-10-30 shell reinstall, and unattended sleep stays
+  off until the hangs below are understood.
+- The 2026-10-27 "140 mA asleep" figure doesn't hold up against 2026-10-28
+  (434-445 mA cable out, as-is) and tonight; treat about 300 mA cable out
+  as the baseline.
+
+## 2026-10-28, evening: USB-C host mode through TCPM
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the
+integration tree), DTB with the TCPC as a dual-role port.
+
+- **USB-C host mode works end to end** [V]. TCPM runs the port as dual-role
+  (try sink, source PDO 5 V 900 mA), with `vbus-supply` = the MAX77779
+  charger's `chgin-otg` regulator (kernel #124) over the RT9470's OTG boost,
+  and a graph to dwc3's role switch. A USB flash drive attaches as source
+  (SRC_READY), VBUS holds at 5.2 V, the data role goes to host, and the
+  drive enumerates at high speed (`sde: sde1 sde2`). With the drive out and
+  the laptop back: sink, a PD contract, the gadget configured. Again after a
+  fresh boot. Two parts of that setup aren't in a public tree yet: the DT
+  fragment (the TCPC as dual-role with `vbus-supply`, the graph to dwc3) and
+  the RT9470 bring-up module that writes OTG_EN, JEITA_EN and the watchdog
+  bits. They are on the kernel bring-up branch
+  derekross/linux-omarchy-mobile#127, with the plan and runbook in #136.
+  This supersedes #100's "the eUSB2 repeater doesn't take the host role
+  yet".
+- **How the cable swaps were covered** [V]: attended, with W4HO at the
+  palmtop for every swap. Taking the laptop out cuts the only link, so each
+  sampling script carried its own dead-man: with no USB gadget configured 6
+  to 8 minutes after the cable came out, it unloaded `tcpci_maxim` and set
+  the role switch back to device, so the laptop would come back as a sink.
+  It never fired, because the laptop came back every time. The DTB boot
+  itself ran under a one-boot DTB dead-man. The next run uses a reboot
+  timer armed before the unplug and stopped over a fresh login (#136's
+  runbook). `tools/usbc-deadman` is written for the 7 Pro's MAX77759 and
+  doesn't apply here.
+- **Why VBUS collapsed at first** [V]: the RT9470's JEITA temperature
+  control (0x0c bit 7) was on with STAT2 reading 0x80, and its I2C
+  watchdog (0x01 bits 1:0) had expired (STAT3 0x20). That JEITA read "hot"
+  is an inference [I]: the TS pin may have no thermistor on it, which
+  hasn't been checked. With either set, the
+  boost reported OTG (ICSTAT 0x0f) while VBUS fell from 5.2 V within ~60 ms,
+  and TCPM retried every second. Google's `rt9471_charger` turns JEITA off
+  on the 9a (`en-jeita` is unset in `zumapro-buck-charge-rt9471.dtsi`) and
+  only runs the watchdog while it kicks it. With both off, VBUS holds under
+  Rd and Rp, with and without AutoDischargeDisconnect. The boost's driver
+  has to clear both.
+- **What that leaves open** [I]: with the watchdog off, nothing turns the
+  boost off after a crash. What a warm reboot with host mode on leaves
+  behind (the RT9470's OTG bit and ICSTAT before any driver loads) hasn't
+  been measured, so whether VBUS stays out across one is unknown. With
+  JEITA off the RT9470 has no temperature cut-off of its own, which
+  matters only if it charges. Its CE comes from the MAX77779's sGPIO 7,
+  which hasn't been read. On the charger with the battery full, FUNCTION
+  read 0x41 (`CHG_EN` set) and ICSTAT 0xf1 (VBUS ready, not charging), so
+  whether it charges under our kernel isn't known yet.
+- **The eUSB2 side** [V]: the PHY has to come out of reset with the device
+  attached. A drive plugged into a port that's already host isn't seen
+  (the TUSB2E11's attach-detect interrupt never latched). TCPM's flow
+  (attach on CC, then the role switch, then `phy-snps-eusb2` resetting the
+  PHY on the role change) does it in that order.
+- **NFC after s2idle** [V]: the ST54L loses its NCI state across a
+  suspend. The first command after resume gets no I2C ACK (`NFC: Error -6
+  on I2C send`), and every NCI request times out after it. Powering the
+  adapter off and on through neard (a fresh NCI init) brings it back, so
+  the sleep hook has to power the adapter off before the sleep and on
+  after it, not only stop polling (10-29: not needed with
+  https://github.com/derekross/linux-omarchy-mobile/pull/131, and a
+  power-off hook failed to wake once; see #137).
+- **Fingerprint calibration** [V]: the HAL injects it itself
+  (`injectMtCali`), reading a 112-byte header at offset 0 of
+  `/dev/block/by-name/mfg_data`. The file `fastboot oem udfps get-cal-url`
+  names has exactly that layout (magic `0xca11ca11`, version 1, and the
+  payload length at 0x6c). Written into the chroot's private `mfg_data.img`
+  copy (the partition itself untouched), it's accepted:
+  `vendor.gf.cali.state = 1`, and the "No SA calibration present" line is
+  gone. Later that evening enrollment completed, but matching doesn't work
+  yet (#135; 10-29: it does now, see FINGERPRINT-PLAN F9/F10 in #138).
+- **GNSS** [V]: telling the AoC the GNSS type (`gnss-type = <2>`, as
+  Google's `zumapro-phone-ignss.dtsi`) doesn't change the fault. Kepler
+  loads and goes OPERATIONAL, and the HAL starts a session, but every engine
+  start still ends in "KEP M7 HARDFAULT ... LR,PC 600B5B39 0000062C"
+  (20 in 4 minutes).
+
+## 2026-10-26 and 2026-10-28: slot A fallbacks that cost userdata
+
+Both times slot B was active but **not marked successful**, so each boot
+used up one ABL retry. After `fastboot --set-active=b` the 9a's ABL gives
+B **three** tries (10-28: retry 3 after the flash, 1 after two boots, from
+the devinfo dumps below). A boot that never reaches the USB host is crashed
+by the initramfs safety net about 65 s in, so a bad image uses up the tries
+within minutes, and ABL then boots stock on slot A.
+
+**2026-10-26.** The failing boot was a comparison run of Google's own
+kernel (`6.1.134-android14-11-g2bae8aca899a-ab13800907`), written to slot B
+by `omamobile flash` (so `--set-active=b`). It ran with a RAM-only
+filesystem assembled from our initramfs files, with PID 1 replaced by a
+static supervisor that opens no block device. Stock's own first stage didn't
+run on slot B. It never brought up USB.
+Fastboot (buttons) then showed A selected and B at retry 0. Stock's own
+boot wasn't captured. Afterwards `userdata`'s ext4 and F2FS magics were
+gone, with non-zero data in their place, `e2fsck -fn` failed, and `persist`
+had changed. [I] Stock on slot A wrote over the start of `userdata`; nobody
+saw its boot. At 16:35 MST the palmtop sat in stock recovery (USB 18d1:4ee7,
+sideload-only adbd: every adb command answered `error: closed`). Nobody
+chose anything in recovery. A fresh read-only backup of efs, efs_backup,
+modem_userdata, persist, modem_a/b, devinfo and metadata was taken
+(off-repo). Slot B came back by `omamobile flash` of the last good five
+images (which set it active again). The root came back by streaming the
+verified 10-25 recovery image over USB SSH into `userdata` from our
+initramfs, with a readback hash and a read-only `e2fsck`. B was then on its
+last try (byte 0x34 `00` in the "before" row below): one more unmarked
+reboot would have fallen back again.
+
+**2026-10-28.** Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`
+(the release the day's run kit records; the string stays the same across
+that tree's builds, so it names the tree, not one build) with our initramfs
+(`bin/omamobile initramfs`, `initramfs/init`, packed by the kit), and a new
+DTB (the TCPC as a dual-role port with a link to dwc3's role switch). In the morning, slot B was
+written by `omamobile flash`, recovering from a test boot of kernel #55's
+head that hung on the Google logo, and it was **not marked** afterwards.
+Every `push` round after that ran unmarked, so the tries ran out on the
+first round that failed. That's the situation the rule is there to prevent. The DTB round lost USB on its boot (`push`: "no SSH after
+reboot"), and a few minutes later the palmtop was on stock. adb answered
+`error: closed` again, the same sideload-only adbd as 10-26. The owner
+doesn't remember what the screen showed, and nobody tapped anything.
+Afterwards `userdata` read as non-zero data with no filesystem magic (the
+first 64 KiB looks random), and the root wouldn't mount. Fastboot by the
+buttons, `omamobile flash` of the last good images, the 10-25 recovery
+image streamed to `userdata` and read back against its sha256, then a boot.
+Fresh read-only backup of the same eight partitions, taken before the boot:
+efs, efs_backup, modem_userdata, persist, devinfo and metadata differed
+from the 10-26 backup, modem_a/b didn't. `fastboot getvar slot-*` wasn't
+captured either day, apart from `current-slot: a` on 10-28.
+
+So stock doesn't just stop at a recovery prompt: on both days `userdata`
+was overwritten before anyone could choose anything. Treat a fallback to
+slot A as losing the Linux root.
+
+**Marking B both days** was the approved operation below, `omamobile-bootctl
+mark-successful` for B. The binary was built statically from
+`packages/omamobile-device-cheetah/src/omamobile-bootctl.c` (source sha256
+`89d03460…`, binary `f44936d5…`), driven by a laptop script that:
+
+1. reads a fresh full `devinfo` snapshot and checks its sha256 against live
+   storage right before the write;
+2. runs the tool's dry run, which must plan exactly one byte;
+3. arms a 30 s timed read-only restore, writes, reads back all 8192 bytes
+   against the predicted image, and checks the read-only flags over a fresh
+   SSH login.
+
+systemd's 10 s runtime watchdog was running throughout (the bring-up checks
+for it). The script didn't arm anything beyond that.
+
+The laptop keeps the command log. The 10-28 harness copy differed from the
+10-26 one only in its baseline paths (slot A's bytes are read live).
+
+| Moment | Bytes 0x30–0x37 |
+| --- | --- |
+| 10-26, before | `02 1a 00 00 00 14 00 00` |
+| 10-26, after | `02 1a 00 00 00 16 00 00` |
+| 10-28, before | `02 1a 00 00 01 14 00 00` |
+| 10-28, after | `02 1a 00 00 01 16 00 00` |
+
+Only byte 0x35 changed (bit 0x02), and slot A was untouched.
+
+## 2026-10-28: what the device table's claims rest on
+
+Each line is a run on this 9a, on `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`
+unless it says otherwise; the kernel pull request has the details.
+
+- **Display:** the published kernel drives the panel at 60 Hz. 120 Hz runs
+  on the palmtop with kernel #88's two files (DECON timers per panel), in
+  review.
+- **Touch, sleep fix (kernel #82):** 20 s2idle cycles with RTC wakes in a
+  row, no `bad message header`, touch working after each; without it touch
+  broke at the 13th.
+- **Buttons, Power wakes s2idle:** checked by hand on 2026-10-27, Power from
+  a freeze back to the desktop.
+- **Bluetooth, BCM4383 (kernel #94, merged):** `hci_uart` reloaded with that
+  exact `hci_bcm.c`: the controller came up as `hci0` on its REG_ON latch.
+  Pairing (A2DP) ran with the older form of the code.
+- **Charging, status and inhibit (kernel #92):** the driver bound at 0x69;
+  status, and inhibit through `charge_behaviour`, read and set on the
+  palmtop.
+- **Haptics, CS40L26 with VPBR (kernel #95, merged):** binds, loads its
+  firmware with brownout prevention at 3.008 V, plays effects.
+- **Torch, LM3644 (DT in kernel #96):** 25 brightness steps up to 75 mA on
+  the torch LED.
+- **Suspend, Power and RTC wakes:** Power by hand as above; RTC wakes in the
+  #82 run and in the 2026-10-28 sleep tests, where one of four never woke
+  (recorded in the camera switching entry below).
+
+## 2026-10-28: camera switching, pstore, idle hints, sleep memory rate
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`.
+
+- **Camera switching works** (kernel #103). The first capture after a
+  switch away from the ultrawide or front camera came back empty about
+  half the time. The LoCH's EN_STATUS (0x0a8) stays active with the old
+  link in its low bits after a stream that stopped cleanly, and a disabled
+  LoCH ignores the abort, so the next stream on another link got no
+  interrupts. Enabling it for the abort fixes it: nine captures, every
+  switch order, all write frames.
+- **pstore** (kernel #106): ramoops on stock's region survives a watchdog
+  reset on zumapro (the bootloader writes its own log at the start of the
+  console zone).
+- **Core and cluster power-down hints** (the CPU_INFORM register Google's
+  driver writes at every idle entry): powering down cluster 0 stops ACPM
+  answering its DVFS channel, and the palmtop resets (pstore shows it);
+  Google never powers down cluster 0. Clusters 1 and 2 are stable, but
+  neither hint saves anything measurable, screen on or off. Dropped.
+- **Memory rate in s2idle:** with the cable in and charging paused,
+  10-minute RTC-woken freezes drew 371 and 373 mA at MIF 2028 MHz and
+  314 mA at 421 MHz. One later freeze never woke (in s2idle the watchdog
+  is stopped); a hand restart brings it back.
+- **Link errors** on every camera are ERR_WRONG_CONFIG: packets on VC 0
+  with a data type no channel takes (an embedded-data line a frame on the
+  front and ultrawide, about 527 PDAF packets a frame on the main camera).
+- **Fingerprint:** the trusted app's secure storage is up, with Trusty's
+  stores at the paths stock uses (`0`, `persist/0`) but on loop devices of
+  Linux-owned images under `/var/lib/omamobile-fp`, not on stock's
+  `trusty_userdata` and `trusty_persist` (omarchy-mobile #101;
+  FINGERPRINT-PLAN D1 and F4b). The factory
+  calibration lives with Google: the bootloader names the file (its
+  `get-cal-url` answer) and it comes from a manufacturing bucket. The panel's
+  id isn't the key (omarchy-mobile #101).
+- **GNSS:** the S2MPG15's three GNSS rails are off at hand-off and stock
+  turns them on; they're now described (kernel #101) and on.
+
+### Reserved memory beyond Google's map (kernel #80)
+
+`zumapro-reserved-memory.dtsi` in #80 carries Google's fixed regions from
+`zumapro-rmem.dtsi`, zuma's xhci pools, and three more:
+
+- `abl@f8800000`: predeclared in stock's own factory base DTB as 32 MiB,
+  which ABL shrinks to 16 MiB at hand-off.
+- `0x913a0000` (+0x60000) and `0xfd7ff000` (+0x1000): two ranges the early
+  bring-up kept reserved, next to GXP and the debug tail. They come from the
+  private DRAM map the first boots were built from, not from a public
+  source.
+
+Keeping them reserved is the safe direction. What would free the two gaps
+is stock's live `/proc/iomem` and reserved-memory nodes compared with ours;
+this palmtop can't produce that (stock on slot A overwrites `userdata`
+before it reaches recovery: [2026-10-26 and 2026-10-28](#2026-10-26-and-2026-10-28-slot-a-fallbacks-that-cost-userdata)),
+so it needs a second 9a or a reinstall of stock.
+
+## 2026-10-27: cameras, NFC, USB-C, storage power, fingerprint, drain
+
+Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` (the
+integration tree; the pieces are kernel PRs, linked below) for everything
+here. The 35 s2idle cycles in AGENTS.md's NFC entry ran on this release too.
+
+**Cameras (kernel #63, #103).** `cam -l`:
+
+    1: Internal back camera (/base/soc/usi@108c00c0/i2c@108c0000/camera@56)
+    2: Internal back camera (/base/soc/usi@108900c0/i2c@10890000/camera@1a)
+    3: Internal front camera (/base/soc/usi@108a00c0/i2c@108a0000/camera@1a)
+
+`tools/phone-smoke`: `| cameras | ok | 3 listed by libcamera |`. With the
+ultrawide's test pattern on, LoCH 0 on link 1 (CTL 0x01000200, RESOL
+0x0c001070, 5312 bytes a line, format 4) wrote three 4208x3072 frames
+(48955392 bytes) showing the sensor's eight colour bars, full width and
+height; the solid-colour pattern (R 1023, Gr 0, B 341, Gb 682) reads back as
+BGGR. The main camera (S5KGN8, C-PHY) delivers whole 4000x3000 frames once
+gs201-csis raises the INT domain and the ISP front end's NOC clock while it
+streams. The ultrawide and the front stream at about 29 fps through the
+software ISP. The tested `phy-gs201-mipi-dcphy-rx.c` is #63's (ed3dacc7f958);
+the tested `gs201-csis.c` (acd8d7d0987a) differs from #63's in one comment.
+Open: the first capture after a camera switch is often empty.
+
+**NFC (kernel #100).** The ST54L reads a contactless card through the
+kernel and neard once nxp-nci sends ST's CORE_SET_CONFIG after init: an
+ISO-DEP target on NFC-A, 15 activations in 45 s with the card held, neard
+lists a tag, with no periodic discovery restart. NFC polling costs about
+60 mA, so omamobile-shell 0.2.33 (PR #99 here) stops it with the screen off.
+
+**USB-C.** tcpci_maxim (merged, kernel #97) loads at boot: a PD contract at
+5 V 3 A, replug back within 1 s. Host mode: VBUS comes from the RT9470 on
+USI10 (Google's ext-otg-only use case; USI10 clocks in kernel #102), the
+TCPC sees VBUS, dwc3 goes host, but a flash drive never connects: the
+eUSB2 repeater (hsi2c9 0x3e) doesn't take the host role yet. Plug-in wakes
+s2idle once the TCPC's interrupt is armed.
+
+**Storage power (kernel #99).** UFS idle clock gating: the cores spend
+60-68 % of an idle minute in C2 with the core's latency request left on
+(0 % with the clocks held on), no UFS errors under load.
+
+**Fingerprint.** The sensor's 3.3 V is S2MPG15 LDO15S, off at hand-off
+(kernel #101); with it on the trusted app finds the sensor and the HAL
+reports it at (540, 1769), radius 113. Init still ends without factory
+calibration: `mfg_data` is all zeros on this palmtop and the TA's
+calibration objects don't open (FINGERPRINT-PLAN.md).
+
+**Drain, cable out.** Awake with the screen off: 556 mA before UFS gating,
+409 mA after it at MIF 2028 MHz and 366 mA at 421 MHz (ACPM lowers MIF on
+request); NFC polling about 60 mA of that; Wi-Fi off and the CPUs at their
+lowest changed little. s2idle: about 140 mA over 59 min. MIF stays at the
+bootloader's 2028 MHz until something asks for less.
+
+**Recovery.** A reboot stuck in `device_shutdown` needs Power held about
+30 s, then Power; with a task stuck in D, reboot with `echo b >
+/proc/sysrq-trigger` instead of `systemctl reboot`.
+
 ## 2026-10-26: audio (speakers, microphones, A2DP) with omamobile-audio 0.5.0
 
 Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`: the private
 integration tree for now (the pieces go to linux-omarchy-mobile one by one;
 the S2MPG14 RTC is #54), with the AoC started by a staged script. The card
 is `google,tegu-aoc-snd-card`; the TAS2572 amplifiers (I2C 19, top 0x48 and
-bottom 0x49) take their gains from the owner's `tas2572RCA1.bin` (the Pixel
-9a's own file from the factory image, not linux-firmware) at every playback
-start, and the codec exposes only `Top/Bottom Speaker Digital Volume` = 220
+bottom 0x49) take their gains from `tas2572RCA1.bin` at every playback
+start (corrected 10-29: that file is linux-firmware's
+`ti/audio/tas257x/tas2572-1-1amp-reg.bin`, byte for byte; stock's factory
+image carries no RCA-format profile, only its own `ti_sp_tuning.bin`), and the codec exposes only `Top/Bottom Speaker Digital Volume` = 220
 (0 dB; 232 is +6 dB), unchanged during a 1 kHz tone at 100 % PipeWire volume.
 Without stock's speaker processing or protection in the path, PipeWire's
 100 % is full scale into stock's amplifier gains, so the WirePlumber rule caps
@@ -88,6 +499,17 @@ Kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, tools at `7310
 | thermal | ok | hottest zone 46 °C |
 
 Packages: hyprland 0.56.2-5.1, libcamera 0.7.2-4.16, mesa 1:26.2.4-1.4, omacam 0.1.9-1, omamobile-apps 0.2.0-1, omamobile-audio 0.4.1-1, omamobile-device-tegu 0.1.0-1, omamobile-fingerprint 0.1.8-1, omamobile-firstboot 0.1.0-1, omamobile-gnss 0.2.1-1, omamobile-keyring 20261013-1, omamobile-mirror 0.1.1-1, omamobile-modem 0.1.4-1, omamobile-omarchy 0.1.4-1, omamobile-owl-widgets 0.1.1-1, omamobile-sensors 0.2.0-1, omamobile-shell 0.2.17-1, omarchy 4.0.6-1, quickshell 0.3.2.r7.g2b4501a-1
+
+## 2026-10-25: display scale 8/3
+
+On the reference 9a (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, 1080x2424 panel at
+60 Hz), the owner compared the bring-up's scale 2 (540x1212 logical) with
+8/3 (405x909) on the running desktop, side by side with an iPhone, and kept
+8/3: "about right", about a third larger than 2. Hyprland reported no config
+errors, and running apps fit. 3 (360x808) is the Pixel 7 Pro's default and
+too small here. omamobile-shell 0.2.35 makes 8/3 the scale a new 9a user
+gets (`omamobile-setup-user`, seeded once), so it's the default for every
+new 9a install, not only this one; a user's own scale is kept.
 
 ## 2026-10-24: local curated candidate
 
@@ -305,7 +727,7 @@ stock-B Android boot is not claimed.
 | Root and CPUs | Arch on internal ext4 userdata, systemd/SDDM/UWSM/logind, CPU0-7 online. KVM disabled. |
 | Protection | Whole main-LUN node absent; only five B boot partitions and userdata writable; protected partitions read-only; per-boot guard and watchdog checks pass. |
 | USB | NCM, ACM and root SSH over the connected cable. |
-| Display | Bootloader framebuffer through simpledrm, 1080x2424, scale 2. Reported 60 Hz is not an independently measured panel rate. |
+| Display | Bootloader framebuffer through simpledrm, 1080x2424, then scale 2 (first light). Scale 8/3 since 2026-10-25, see that entry. Reported 60 Hz is not an independently measured panel rate. |
 | Touch | Synaptics S3908 TouchComm v1: taps, long press, launcher, quick settings and all four swipe directions physically exercised by the owner. |
 | GPU | Mali-G715 MC7: Panthor initialization, system Mesa GLES3.1 color readback, actual Hyprland/shell GPU rendering and automatic startup after local reboot. |
 

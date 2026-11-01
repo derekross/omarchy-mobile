@@ -20,6 +20,8 @@ echo test-release > "$t/kernel/include/config/kernel.release"
 printf x > "$r/out/omamobile-rootfs-test-aarch64.img.zst"
 sha256sum "$r/out/omamobile-rootfs-test-aarch64.img.zst" > \
   "$r/out/omamobile-rootfs-test-aarch64.img.zst.sha256"
+printf 'device: testdev\nkernel modules: test-release\n' > \
+  "$r/out/omamobile-rootfs-test-aarch64.MANIFEST"
 archive=$t/kernel/initramfs.cpio.lz4
 pack() {
   (cd "$t/ramdisk" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$archive"

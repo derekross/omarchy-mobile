@@ -1,0 +1,35 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-device-lynx into DESTDIR. Never activates anything: the
+# boot-success unit is enabled by a vendor wants link, as on the Pixel 7 Pro.
+# Nothing starts the radio, the charger, or a camera.
+#   ./install DESTDIR [BUILDDIR]
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
+build=${2:-build}
+[[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omamobile-boot-success "$destination/usr/bin/omamobile-boot-success"
+for tool in omamobile-bootctl reboot-to; do install -Dm755 "$build/$tool" "$destination/usr/bin/$tool"; done
+install -Dm644 vendor/systemd/system/omamobile-boot-success.service \
+  "$destination/usr/lib/systemd/system/omamobile-boot-success.service"
+install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
+ln -sfn ../omamobile-boot-success.service \
+  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service"
+install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
+  "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
+install -Dm644 vendor/systemd/network/20-usb-gadget.network \
+  "$destination/usr/lib/systemd/network/20-usb-gadget.network"
+install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
+  "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
+install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
+  "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
+install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
+  "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+install -Dm644 device.conf \
+  "$destination/usr/share/omamobile/device.conf"
+install -Dm644 etc/omamobile-mirrorlist \
+  "$destination/etc/pacman.d/omamobile-mirrorlist"
+install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-lynx/LICENSE"
+install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-lynx/LICENSE.Apache-2.0"
+install -Dm644 version "$destination/usr/share/omamobile/device-lynx/version"

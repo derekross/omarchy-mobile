@@ -1,0 +1,122 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of quick settings (omamobile.quicksettings),
+# upright and on its side (TOUCH-PLAN 2.4), in a dark and a light Omarchy
+# theme, with checks that the sheet, its tiles and the notification shade
+# fit the screen: the real QuickSettings.qml, its layer-shell window a
+# plain Item, over a throwaway $HOME with a few notifications of our own
+# in the shade. No backend answers here (no D-Bus, no scripts on PATH), so
+# the tiles show as unavailable; it is the layout under review. Runs inside
+# the OWL conformance container (tests/owl/Dockerfile), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/quicksettings-render /src/logs/quicksettings-render
+#
+# test/all runs it when OMAMOBILE_QS_RENDER names an output directory.
+# OMAMOBILE_QS_PLUGIN draws another tree's plugin instead (a before picture).
+set -euo pipefail
+out=${1:?Usage: quicksettings-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=${OMAMOBILE_QS_PLUGIN:-$here/../plugins/omamobile.quicksettings}
+[[ -d /omarchy-shell && -d /themes ]] || { echo "quicksettings-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "quicksettings-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 TZ=Europe/Berlin
+
+h=/tmp/quicksettings-harness
+rm -rf "$h"; mkdir -p "$h"
+# Omarchy's Commons and Ui, with its palette qualified as on the phone
+# (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/quicksettings"
+# The sheet and the panels are layer-shell windows on the phone (none can
+# be made offscreen); here each is a plain Item that fills its plugin's root.
+for qml in "$h"/quicksettings/*.qml; do
+  grep -c '^  PanelWindow {$' "$qml" >/dev/null || continue
+  sed -i -E \
+    -e '/^    (anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
+    -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
+    "$qml"
+done
+grep -c '^  Item { anchors.fill: parent$' "$h/quicksettings/QuickSettings.qml" >/dev/null || { echo "quicksettings-render: no PanelWindow to stand in for" >&2; exit 1; }
+cp "$here/quicksettings-render.qml" "$h/"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/quicksettings-home-$theme
+  rm -rf "$home"; mkdir -p "$home/.local/state/omarchy/current" "$home/.local/state/omarchy/notifications/history" "$home/.config/omamobile"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  # Three notifications of our own in the history, as Omarchy's service
+  # writes them (one line each, named <timestamp>-<id>.json).
+  python3 - "$home/.local/state/omarchy/notifications/history" <<'PY'
+import json, sys
+d = sys.argv[1]
+rows = [(1760000300000, 1, "Signal", "Ana", "See you soon"), (1760000200000, 2, "Omarchy", "Update available", "Omarchy 4.0.7 is ready to install"),
+        (1760000100000, 3, "Clock", "Alarm", "Tomorrow 07:00")]
+for ts, i, app, summary, body in rows:
+    with open("%s/%d-%d.json" % (d, ts, i), "w") as f:
+        f.write(json.dumps({"id": i, "originalId": i, "app": app, "appIcon": "", "summary": summary, "body": body, "image": "", "glyph": "",
+                            "execArgv": "", "urgency": 1, "expireTimeout": 0, "timestamp": ts}) + "\n")
+PY
+  python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
+import json, sys
+out, theme = sys.argv[1:]
+def shot(name, w, h, **extra):
+    s = {"name": name, "png": "%s/quicksettings-%s-%s.png" % (out, name, theme), "w": w, "h": h}
+    s.update(extra)
+    return s
+print(json.dumps({"shots": [
+    shot("portrait", 480, 1040), shot("portrait-expanded", 480, 1040, expanded=True),
+    shot("landscape", 1040, 480), shot("landscape-expanded", 1040, 480, expanded=True), shot("landscape-edit", 1040, 480, edit=True),
+]}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 QS_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/quicksettings-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/quicksettings-render.txt" || true
+  python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
+import json, re, sys
+log, theme = sys.argv[1:]
+text = open(log).read()
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:)", l) and "hyprctl" not in l and "delayed function evaluation" not in l]
+geo = {}
+for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
+    geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
+def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
+def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol or a["y"] + a["h"] <= b["y"] + tol or b["y"] + b["h"] <= a["y"] + tol
+ok = not bad and len(geo) == 5
+if len(geo) != 5: print("not ok - %s: %d of 5 shots taken" % (theme, len(geo)))
+for l in bad: print("  " + l[:200])
+def check(name, good, why=""):
+    global ok
+    print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
+    ok = ok and good
+for name, g in geo.items():
+    screen = g["screen"]
+    landscape = screen["w"] > screen["h"]
+    parts = g["parts"]
+    check(name + ": the sheet is on screen", "sheet" in parts and inside(parts["sheet"], screen), json.dumps(parts.get("sheet")))
+    # The pager's other pages lie to the right, clipped: only the tiles on
+    # the shown page (within the grid or the pager) are judged.
+    grid = parts.get("tilePager") or parts.get("quickGrid")
+    tiles = [v for k, v in parts.items() if k.startswith("tile-") and grid and not apart(v, grid)]
+    check(name + ": the tiles are on the sheet, at least 44 px tall", len(tiles) >= (0 if g["edit"] else 4) and all(inside(t, parts["sheet"], 1) and t["h"] >= 44 for t in tiles),
+          json.dumps([t for t in tiles if not (inside(t, parts["sheet"], 1) and t["h"] >= 44)][:3]))
+    check(name + ": no two tiles overlap", all(apart(a, b, 1) for i, a in enumerate(tiles) for b in tiles[i + 1:]))
+    if not g["edit"]:
+        check(name + ": the handle and the settings gear are reachable", all(k in parts and inside(parts[k], screen) and parts[k]["h"] >= 44 for k in ("handle", "settingsButton")),
+              json.dumps([parts.get("handle"), parts.get("settingsButton")]))
+        has_shade = "shade" in parts
+        check(name + ": the notification shade shows", has_shade and inside(parts["shade"], screen, 1) and parts["shade"]["h"] >= 100, json.dumps(parts.get("shade")))
+        if has_shade:
+            beside = parts["shade"]["x"] >= parts["sheet"]["x"] + parts["sheet"]["w"] if landscape else parts["shade"]["y"] >= parts["sheet"]["y"] + parts["sheet"]["h"]
+            check(name + ": the shade is %s the sheet" % ("beside" if landscape else "under"), beside and apart(parts["sheet"], parts["shade"]))
+            check(name + ": Clear all is on the shade", "clearNotifications" in parts and inside(parts["clearNotifications"], parts["shade"], 1) and parts["clearNotifications"]["h"] >= 44)
+    check(name + ": columns follow the width", g["columns"] == (3 if landscape else 2), str(g["columns"]))
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status

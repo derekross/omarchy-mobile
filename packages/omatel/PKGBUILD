@@ -15,7 +15,7 @@
 # prepare() and builds offline. A developer iterating on omatel
 # cross-compiles instead (omatel's bin/cross).
 pkgname=omatel-agent
-pkgver=0.2.3
+pkgver=0.2.4
 pkgrel=1
 pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
 arch=(aarch64)
@@ -36,7 +36,7 @@ checkdepends=(dbus)
 install=omatel-agent.install
 options=('!debug' '!lto')
 source=("omatel-$pkgver.tar.gz::https://github.com/derekross/omatel/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('f8bafc1d6cda4bcc7aeaaa140b043002bdfea64207979ecbd19a8ba0c66191db')
+sha256sums=('e02986f33b70e89accb67bf62c4d4e1b695b2d12acc801008db80c1bf6242670')
 
 prepare() {
   cd "omatel-$pkgver"

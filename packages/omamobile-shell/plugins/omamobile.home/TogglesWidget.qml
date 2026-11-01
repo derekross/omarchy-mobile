@@ -18,6 +18,8 @@ Item {
   property var home: null
   property var entry: null
   property bool editing: false
+  // Someone can see it (set by Home.qml): its timers wait while not.
+  property bool shown: true
 
   readonly property color fg: home ? home.foreground : "white"
   property bool dnd: false
@@ -61,7 +63,8 @@ Item {
   }
 
   Timer { id: dndRead; interval: 400; onTriggered: if (!dndProc.running) dndProc.running = true }
-  Timer { interval: 30000; repeat: true; running: true; triggeredOnStart: true; onTriggered: dndRead.restart() }
+  // Started again when shown, and triggeredOnStart reads it at once then.
+  Timer { interval: 30000; repeat: true; running: widget.shown; triggeredOnStart: true; onTriggered: dndRead.restart() }
 
   Grid {
     anchors.centerIn: parent
@@ -80,7 +83,7 @@ Item {
           anchors.centerIn: parent
           width: Math.min(56, Math.min(parent.width, parent.height) - Style.spacing.lg * 2)
           height: width
-          radius: width / 2
+          radius: Math.min(Style.cornerRadius, width / 2)
           color: modelData.on ? Commons.Color.accent
             : touch.pressed ? Qt.rgba(1, 1, 1, 0.2) : Qt.rgba(1, 1, 1, 0.08)
 

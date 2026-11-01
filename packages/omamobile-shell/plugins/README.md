@@ -18,7 +18,7 @@ logical at scale 3).
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
-| `omamobile.keyboard` | `panel` (keepLoaded) | A hide button right above the on-screen keyboard while it is up (also over the lock) |
+| `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts; draws nothing |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
@@ -127,7 +127,7 @@ existed finds them under "Add tiles" too.
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
 | Dark theme | Swaps between the user's last dark and last light Omarchy theme (`omarchy-theme-set`; defaults Tokyo Night and Catppuccin Latte, choices kept in `~/.local/state/omamobile/theme-{dark,light}`). Long-press opens Omarchy's theme picker |
 | Night light | `omarchy-toggle-nightlight` (hyprsunset); "No hyprsunset" without it |
-| Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator |
+| Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator. It also keeps the phone out of sleep: `omamobile-sleepd` refuses while it is on, even with the screen off (a download, a long task) |
 | Microphone | Mute of PipeWire's default source; "No microphone" without one |
 | Screenshot | Puts the sheet away, then `omarchy-capture-screenshot fullscreen` (file, clipboard and a notification) |
 | Screen record | `omarchy-capture-screenrecording --fullscreen`, a second tap `--stop-recording`; "No recorder" without gpu-screen-recorder |
@@ -285,44 +285,94 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   in a bar-coloured strip that reserves its height so windows tile above it.
   Tapping it opens the drawer.
 * **Home pill (over an app, where the dock is hidden).** A light bar with a
-  dark outline, so it shows over dark and light apps, at the bottom middle.
-  Swipe up from it to go home; swipe up and hold, or further, for recent apps.
-  The swipe may start anywhere in a 240x44 px strip around it (an input mask:
-  the rest of the bottom edge stays the app's, but the app loses taps in that
-  strip).
-* **Under the keyboard.** While squeekboard is up over an app, the masked
-  strip gives way (it would take the bottom row's keys) and the pill moves
-  into a 32 px bar-coloured strip of its own under the keyboard, as Android's
-  gesture bar does. The same swipes work from anywhere along it. Bottom to
-  top:
+  dark outline, centred in a 44 px bar-coloured strip along the bottom edge
+  (`omamobile-home-strip`, bottom layer). Swipe up from anywhere along it to
+  go home; swipe up and hold, or further, for recent apps; double-tap it for
+  the keyboard.
+
+  The strip reserves its height (an exclusive zone), as Android's gesture-nav
+  inset does, so windows end above it and nothing of the app is under the
+  pill. Before 0.2.42 it reserved nothing and covered whatever an app keeps at
+  the very bottom, the Phone app's Favorites, Recents, Contacts and Keypad
+  tabs among them. 44 px, a whole touch target (TOUCH-PLAN 2.5), is all an
+  app gives up. The zone goes with the strip: nothing is reserved for it on
+  the home screen (where the dock reserves nothing since 0.2.56: the home
+  screen keeps its height free, so the drawer opening over it resizes no
+  window), with the drawer
+  open, under the lock screen's keyboard, or for a real fullscreen window
+  (video, the screensaver), which keeps the whole screen. Under the lock it
+  isn't drawn (no `above_lock` rule), and the lock covers the whole screen
+  anyway. The back gesture's edge strips end above it, and the shell's
+  sheets (top and overlay layers) draw over it.
+* **Under the keyboard.** While squeekboard is up over an app, the same strip
+  is the keyboard's, as Android's gesture bar is: it stays mapped at the same
+  height, and a keyboard-down key appears at its right end. Bottom to top:
 
   ```
   +-----------------------------+
   | app (resized above both)    |
-  | [hide-keyboard button]      |  omamobile-osk-hide, overlay, normal exclusion
   +-----------------------------+
   | squeekboard                 |  "osk", top layer, reserves its height
   +-----------------------------+
-  |         ==========          |  omamobile-home-strip, bottom layer, 32 px,
+  |         ==========      [v] |  omamobile-home-strip, bottom layer, 44 px,
   +-----------------------------+  reserves its height
   ```
 
-  The strip is on the bottom layer and reserves its height (an exclusive
-  zone). Hyprland lays out the surfaces that reserve space layer by layer
-  from the bottom, so the strip takes the screen's edge first and the
-  keyboard sits right above it, as it sits above the dock on the home
-  screen; the strip covers no key, and a swipe that starts in it stays its
-  own as the finger crosses the keyboard. It isn't shown for a fullscreen
-  window, with the drawer open, or under the lock screen's keyboard (asked
-  through `omarchy-shell lock isLocked` each time the keyboard comes up).
-  The log names where a swipe started:
+  Hyprland lays out the surfaces that reserve space layer by layer from the
+  bottom, so the strip takes the screen's edge first and the keyboard sits
+  right above it, as it sits above the dock on the home screen; the strip
+  covers no key, and a swipe that starts in it stays its own as the finger
+  crosses the keyboard. One window for both, so what is reserved at the
+  bottom never changes while an app is shown and the app resizes only by
+  the keyboard's own height. (Two strips swapping at each keyboard show and
+  hide were both mapped for a moment: an app resized to that 88 px, missed
+  the final resize and left a 44 px gap above the
+  strip.) Whether the lock is up is asked through
+  `omarchy-shell lock isLocked` each time the keyboard comes up or goes, and
+  again 1.5 s after it goes. The log names where a swipe started:
   `omamobile-home-indicator: swipe -142 recents (keyboard)`, or `(pill)`.
+* **The keyboard from the pill.** Nothing floats over the app for the
+  keyboard (a floating hide button covered a terminal's input line, and
+  Send and Next before that). Instead:
+  * the strip under the keyboard has a keyboard-down key at its right end, a
+    44 px touch target; a tap hides the keyboard. A swipe that starts on it
+    still goes home (its TapHandler grabs passively, like the pill's);
+  * a double tap on the pill, over an app or in the strip, shows or hides
+    the keyboard. Single taps do nothing, as before, and a swipe is never a
+    tap. Showing it with no text field focused shows squeekboard anyway;
+  * both go through `omamobile.keyboard`'s IPC (`toggleKeyboard`,
+    `hideKeyboard`), logged as `omamobile-home-indicator: keyboard <call>`;
+  * the first time the strip shows after this arrived, a toast says
+    "Double-tap the bar to show or hide the keyboard", once per user (Omarchy's
+    done marker `omamobile-keyboard-pill-hint` in
+    `~/.local/state/omarchy/done/`).
+
+  The strip isn't there under the lock's keyboard, for a fullscreen window
+  or on the home screen (where the dock is), so neither is the hide key:
+  there the keyboard folds when the text field loses the focus, and quick
+  settings' Keyboard tile shows or folds it.
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
-  sits by your thumb, highlighted. Pull the header down, or the grid when it
-  is scrolled to its top, past about 80 px to close it (the drawer follows the
-  finger); the chevron at the top right still closes it too.
+  sits by your thumb, highlighted. **Swipe up anywhere on the home screen** to
+  open it: the drawer rises with the finger and opens on an upward flick or
+  past a quarter of the way, else falls back (only on the home screen: not
+  over an app, in edit mode or under a sheet; a widget that scrolls keeps its
+  own swipe). Opened that way, no keyboard comes up until the field is
+  tapped; typing on a hardware keyboard still searches. To close it, tap the
+  **handle** (the pill centred at the top, a 44 px target), or drag it, the
+  header, empty space or the grid at its top down: the drawer follows the
+  finger both ways and closes on a downward flick or past a tenth of the
+  way, else springs back. A grid scrolled down scrolls first; the pull takes
+  over where it reaches the top. Settling is one Easing.OutCubic slide of
+  120-260 ms that starts at the finger's speed; the home screen dims under
+  the theme's menu scrim as the drawer rises (opacity only: a scale of the
+  home made its widgets snap between pixels). The drawer's surface stays
+  mapped for the life of the shell, drawing nothing and taking no touch while
+  closed: mapped on each open, its first frames drew at the wrong scale. The home
+  screen reaches the drawer in-process through `DrawerLink.js` (a
+  `.pragma library` script both plugins import from the launcher's folder);
+  without it the swipe still opens the drawer through the host on release.
 * **Ask the agent.** Any text also offers an "Ask Claude" row above the input.
   Text that reads as a prompt (3+ words, ends in `?`, `.` or `!`, or matches no
   app) makes that row the primary action: it is highlighted, the input glyph
@@ -405,6 +455,15 @@ prompt, NFC links and the Create-a-widget agent.
   the app shares one) gives it a new empty workspace. Both act on the
   window's Hyprland address (`hl.dsp.window.move({ window = "address:…",
   workspace = … })`). Empty workspaces go away as Hyprland's always do.
+* **Cards are named by the app**, as the drawer names it: the desktop
+  entry's name, found by the window's class (`SwitcherModel.js`: the entry's
+  id, its `StartupWMClass`, a Chromium app's `chrome-<id>-<profile>` /
+  `crx_<id>`, an Omarchy web app's `chrome-<host>_<path>-<profile>` from its
+  URL, then the matches `omamobile-launch` uses), else the window's title,
+  else its class. One line, elided, centred over the card. A card is always
+  centred, its neighbours peeking in at the sides: recent apps open on the
+  newest, a swipe ends on the nearest card, and the view centres again when
+  the window gets its size or the window list changes.
 * **Keyboards** keep Omarchy's workspace bindings (Super+1…9, Super+Shift+1…9
   and the rest) unchanged.
 
@@ -417,18 +476,30 @@ wallpaper, swiped sideways, with page dots above the dock.
 ![Home screens](../../../phone/screenshots/home-screens.png)
 ![Edit mode](../../../phone/screenshots/home-screens-edit.png)
 
-* **Pages.** Swipe sideways; tap a dot to jump. The home page (Home in recent
+* **Pages.** Swipe sideways; tap a dot to jump. The page follows the finger
+  1:1 (the ListView's own drag); a flick of 300 px/s turns the page even on
+  a short swipe, a slower release settles on the nearer page, with one
+  Easing.OutCubic slide of 120-250 ms that starts at the finger's speed
+  (`HomePager.qml`, rules in `HomeModel.js`). Swipe up for the app drawer. The home page (Home in recent
   apps goes back to it) is marked in the Pages sheet.
 * **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
   take one cell, widgets a span within their own limits.
+* **Omarchy's corners.** Widget cards, the edit outlines, the sheets and the
+  small badges follow `Style.cornerRadius` (Hyprland's rounding: square by
+  default, as the lock, the shade and the keypad); set rounding and they
+  round with it. A widget's inside is clipped to its card: square, a plain
+  clip; rounded, a mask of the card's shape (a layer per widget, only then).
+  The widget picker sheet has Omarchy's popup border. `test/all` fails on a
+  radius in `omamobile.home` or `omamobile.switcher` that isn't the token.
 * **Apps** launch the way the drawer does (`omamobile-launch app`: Omarchy's
   `uwsm-app -- gtk-launch`, on a screen of their own). An app that is no longer
   installed stays, dimmed, until you remove it: its package may come back.
-* **Edit mode.** Long-press anywhere (empty space, an app, a widget). Then
-  drag an item to move it (dropped on an item of the same size, the two swap;
-  on a bigger one, it takes the nearest free cell; dragged past the left or
-  right edge, it moves to that page, making a new page on the right), drag
-  the round corner handle to resize a widget, tap the cross to remove (an
+* **Edit mode.** Long-press anywhere (empty space, an app, a widget), with a
+  finger or a held mouse button. Then drag an item to move it (dropped on an
+  item of the same size, the two swap; on a bigger one, it takes the nearest
+  free cell; dragged past the left or right edge, it moves to that page,
+  making a new page on the right), drag the corner handle to resize a
+  widget, tap the cross to remove (an
   **Undo** chip stays for 5 seconds and puts the item back, with its
   settings, where it was or in the nearest free cell), tap a
   widget for its settings. The toolbar: **Widgets** and **Apps** add to the
@@ -457,6 +528,17 @@ coordinates rounded to about 1 km. No key or account. Location from GeoClue
 and no GNSS power. The calendar reads khal's local store; syncing it is
 vdirsyncer's job. The text/command widget runs only what you typed into your
 own `home.json`.
+
+Idle. Widgets run only while someone can see them: their page is the one on
+screen (the neighbours too while you swipe), the screen is on, and no app,
+app drawer, recent apps or call card covers the home screen (Hyprland's
+`openlayer`/`closelayer` events say when those map). Hidden, OWL widgets
+run no sources, `every` or frames, and the built-ins' timers stop (the
+clock, the calendar's refresh, the weather, the command, the toggles' poll);
+shown again, what fell due runs once. OWL animation runs at 20 fps, 30 while
+you touch the widget. Since 0.2.44: before, a koi pond on page 2 animated
+behind page 1 and behind apps, about 118 % CPU. The lock screen doesn't say
+when it is up, so the widgets run under it until it blanks the panel.
 
 Storage. `~/.config/omamobile/home.json`, written atomically 300 ms after an
 edit and watched, so a hand edit shows up at once. `HomeModel.js` documents
@@ -682,16 +764,17 @@ earlier in `PATH` stands in for fprintd.
 
 ## omamobile.keyboard
 
-While squeekboard is unfolded (`sm.puri.OSK0` `Visible`, through
-`bin/omamobile-osk-watch`), a 44 px keyboard-close button sits right above the
-keyboard's top-left corner; a tap folds it (`SetVisible false`). It is on the
-left because apps put Send and Next at the bottom right, where it used to
-cover them. The window
-is the button only (anchored bottom-left with normal exclusion, so the
-compositor puts it just above the keyboard's reserved area), on the overlay
-layer, without keyboard focus; `hypr/phone.lua` lets it work over the lock
-(`above_lock = 2`). Quick settings has a Keyboard tile that shows or folds the
-keyboard on demand (showing closes the sheet).
+Shows and folds squeekboard (`sm.puri.OSK0` `SetVisible`) for the rest of
+the shell, and follows whether it is unfolded (`Visible`, through
+`bin/omamobile-osk-watch`). It draws nothing: the controls are on the home
+pill (`omamobile.launcher`, "The keyboard from the pill"), which calls it
+through IPC. Up to omamobile-shell 0.2.39 it drew a floating 44 px hide
+button just above the keyboard; at the bottom right it covered Send and
+Next, and at the bottom left a terminal's input line. A hide key inside
+squeekboard's layouts would cover nothing, but the text layouts are
+squeekboard's own, one per language, and overriding them means carrying
+copies of all of them. Quick settings has a Keyboard tile that shows or
+folds the keyboard on demand (showing closes the sheet).
 
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).
@@ -710,7 +793,8 @@ sheets) closes with a tap outside it instead.
 Each edge is a 14 px strip on the overlay layer, masked like the home pill,
 in a window wide enough to draw the arrow that follows the finger. Normal
 exclusion keeps the strips between the status bar and the on-screen keyboard
-(or the dock), so they never take the keyboard's edge keys. They hide for a
+(or the dock, or the home pill's strip over an app), so they never take the
+keyboard's edge keys or the pill's swipe. They hide for a
 real fullscreen window, as the home pill does, and aren't shown over the
 lock. A page swipe on the home screen that starts in the outer 14 px goes
 back instead; start it further in.
@@ -839,7 +923,9 @@ and `omamobile-call-top` (the strip), on the overlay layer, with
   mute, route, the replies) as a JSON line per change, lights the screen
   when a call rings (`omarchy-shell lock wake`, as the power key), and owns
   `org.omamobile.CallCard` while it runs, so the agent can tell the shell
-  shows ringing calls itself. The plugin asks `omarchy-shell lock isLocked`
+  shows ringing calls itself. While a call rings or runs it holds a logind
+  sleep inhibitor (block mode), so the phone never sleeps under a call
+  (`omamobile-sleepd`, SUSPEND-PLAN 6.1). The plugin asks `omarchy-shell lock isLocked`
   once a second while a call exists.
 * **Requests:** `busctl --user call org.omamobile.Phone1 … Answer|Decline|
   Hangup|SetMute|SetRoute` and `org.omamobile.Messages1 … Send` for a reply,
@@ -879,13 +965,13 @@ names an output directory).
 
 ## Testing in the desktop harness
 
-`phone/dev/run-desktop` copies the shell and runs it in a nested Hyprland, so
-point IPC at that copy and its Wayland display, never at
-`/usr/share/omarchy/shell` (your real desktop):
+`phone/dev/run-desktop` copies the shell into an Omarchy tree of its own and
+runs it in a nested Hyprland, so point IPC at that tree and its Wayland
+display, never at `/usr/share/omarchy` (your real desktop):
 
 ```sh
-HOME=~/android/phone-dev/home WAYLAND_DISPLAY=wayland-2 \
-  quickshell ipc -p ~/android/phone-dev/shell call shell listPlugins
+OMARCHY_PATH=~/android/phone-dev/omarchy WAYLAND_DISPLAY=wayland-2 \
+  omarchy-shell shell listPlugins
 ```
 
 (`quickshell list --all` shows which `wayland-N` the nested shell is on.)

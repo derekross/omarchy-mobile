@@ -32,6 +32,10 @@ import "Readable.js" as Readable
 // The layout is per user, in ~/.config/omamobile/quicksettings.json
 // (TilesModel.js has the format and the default).
 //
+// On its side (TOUCH-PLAN 2.4: 1040x480) the sheet keeps to the left 58%
+// of the width with the shade beside it, the tile grids take as many
+// columns as fit 180 px each, and a sheet taller than the screen scrolls.
+//
 // Backends are the same ones Omarchy's desktop panels drive: Quickshell's
 // NetworkManager and BlueZ services, omarchy-bluetooth-power, PipeWire, the
 // notification service's do-not-disturb, and brightnessctl for the panel
@@ -225,7 +229,9 @@ Item {
   property bool expanded: false
   property bool editing: false
   property var layout: TilesModel.defaults()
-  readonly property var quickTiles: TilesModel.quickRow(layout)
+  // Collapsed: the first tiles, in whole rows (four upright at two
+  // columns, six on the side at three).
+  readonly property var quickTiles: TilesModel.quickRow(layout, Math.ceil(TilesModel.QUICK_COUNT / tileColumns) * tileColumns)
   readonly property var tilePages: TilesModel.pages(layout)
   readonly property var spareTiles: TilesModel.available(layout)
 
@@ -465,7 +471,8 @@ Item {
     function toggle() { if (available) root.runTileAction("night-light", !enabled) }
   }
 
-  // Stay awake: Omarchy's idle indicator, which keeps the screen on.
+  // Stay awake: Omarchy's idle indicator, which keeps the screen on and
+  // the phone out of sleep (omamobile-sleepd refuses while it is on).
   QtObject {
     id: stayAwake
     readonly property bool available: root.probedHas("stayawake")
@@ -1312,10 +1319,14 @@ Item {
   readonly property int tileHeight: Math.max(64, Style.space(68))
   readonly property int editTileHeight: Math.max(56, Style.space(60))
   readonly property int editColumns: 3
+  // Wider than tall: the phone on its side.
+  readonly property bool wide: window.width > window.height
+  // Tile columns from the sheet's width: two upright, three on its side.
+  readonly property int tileColumns: Math.max(2, Math.min(4, Math.floor(content.width / 180)))
   readonly property int pageRows: {
     var most = 0
     for (var i = 0; i < tilePages.length; i++) most = Math.max(most, tilePages[i].length)
-    return Math.max(1, Math.ceil(most / 2))
+    return Math.max(1, Math.ceil(most / tileColumns))
   }
   // Edit mode scrolls past this, so the sheet stays on screen.
   readonly property real editMaxHeight: Math.max(200, window.height - Style.gapsOut * 2 - root.pad * 4 - Math.max(44, Style.space(48)) - Style.space(40))
@@ -1344,10 +1355,14 @@ Item {
 
     BorderSurface {
       id: sheet
+      objectName: "sheet"
 
       x: Style.gapsOut
-      width: parent.width - Style.gapsOut * 2
-      height: content.implicitHeight + sheet.contentTopInset + sheet.contentBottomInset
+      width: root.wide ? Math.round((parent.width - Style.gapsOut * 2 - Style.spacing.lg) * 0.58) : parent.width - Style.gapsOut * 2
+      // No taller than the screen: past that the content scrolls, above
+      // the handle.
+      readonly property real handleRoom: handleRow.visible ? handleRow.height + root.pad : 0
+      height: Math.min(content.implicitHeight + handleRoom + sheet.contentTopInset + sheet.contentBottomInset, window.height - Style.gapsOut * 2)
       y: Style.gapsOut - (height + Style.gapsOut * 2) * (1 - root.reveal) + drag.offset
       color: Commons.Color.popups.background
       borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Math.max(1, Style.space(2)))
@@ -1379,456 +1394,484 @@ Item {
         onCanceled: offset = 0
       }
 
-      Column {
-        id: content
+      Flickable {
+        id: sheetFlick
         anchors.fill: parent
         anchors.topMargin: sheet.contentTopInset
         anchors.rightMargin: sheet.contentRightInset
-        anchors.bottomMargin: sheet.contentBottomInset
+        anchors.bottomMargin: sheet.contentBottomInset + sheet.handleRoom
         anchors.leftMargin: sheet.contentLeftInset
-        spacing: root.pad
+        contentWidth: width
+        contentHeight: content.implicitHeight
+        // Only once the sheet is cut to the screen: a Flickable with nothing
+        // to scroll would still take the swipe that closes the sheet.
+        interactive: contentHeight > height + 1
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
 
-        // ---------- Edit mode's header
-        Item {
-          visible: root.editing
-          width: parent.width
-          height: visible ? doneButton.height : 0
+        Column {
+          id: content
+          width: sheetFlick.width
+          spacing: root.pad
 
-          Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            textFormat: Text.PlainText
-            text: "Edit tiles"
-            color: root.foreground
-            font.family: Style.font.family
-            font.pixelSize: Style.font.title
-            font.bold: true
-          }
-
-          Row {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.lg
-
-            SheetButton {
-              width: Math.max(80, Style.space(88))
-              label: root.confirmReset ? "Reset?" : "Reset"
-              danger: root.confirmReset
-              foreground: root.foreground
-              enabled: !TilesModel.sameLayout(root.layout, TilesModel.DEFAULT_LAYOUT)
-              onTapped: root.requestReset()
-            }
-
-            SheetButton {
-              id: doneButton
-              width: Math.max(80, Style.space(88))
-              label: "Done"
-              primary: true
-              foreground: root.foreground
-              onTapped: root.finishEditing()
-            }
-          }
-        }
-
-        // ---------- Header: time and date, battery on the right
-        Item {
-          visible: !root.editing
-          width: parent.width
-          implicitHeight: visible ? Math.max(headerClock.implicitHeight, headerBattery.implicitHeight, settingsButton.height) : 0
-
-          Column {
-            id: headerClock
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.xxs
+          // ---------- Edit mode's header
+          Item {
+            visible: root.editing
+            width: parent.width
+            height: visible ? doneButton.height : 0
 
             Text {
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              text: Qt.formatDateTime(clock.date, root.twelveHour ? "h:mm AP" : "HH:mm")
+              text: "Edit tiles"
               color: root.foreground
               font.family: Style.font.family
-              font.pixelSize: Style.font.displayLarge
+              font.pixelSize: Style.font.title
               font.bold: true
             }
 
-            Text {
-              textFormat: Text.PlainText
-              text: Qt.formatDateTime(clock.date, "dddd, d MMMM")
-              color: Qt.darker(root.foreground, 1.4)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
+            Row {
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.lg
+
+              SheetButton {
+                width: Math.max(80, Style.space(88))
+                label: root.confirmReset ? "Reset?" : "Reset"
+                danger: root.confirmReset
+                foreground: root.foreground
+                enabled: !TilesModel.sameLayout(root.layout, TilesModel.DEFAULT_LAYOUT)
+                onTapped: root.requestReset()
+              }
+
+              SheetButton {
+                id: doneButton
+                width: Math.max(80, Style.space(88))
+                label: "Done"
+                primary: true
+                foreground: root.foreground
+                onTapped: root.finishEditing()
+              }
             }
           }
 
-          Text {
-            id: headerBattery
-            visible: root.hasBattery
-            anchors.right: settingsButton.left
-            anchors.rightMargin: Style.spacing.md
-            anchors.verticalCenter: parent.verticalCenter
-            textFormat: Text.PlainText
-            text: root.hasBattery
-              ? (UPower.onBattery ? "󰁹 " : "󰂄 ") + Math.round(root.battery.percentage * 100) + "%"
-              : ""
-            color: root.foreground
-            font.family: Style.font.family
-            font.pixelSize: Style.font.title
-          }
+          // ---------- Header: time and date, battery on the right
+          Item {
+            visible: !root.editing
+            width: parent.width
+            implicitHeight: visible ? Math.max(headerClock.implicitHeight, headerBattery.implicitHeight, settingsButton.height) : 0
 
-          // Omarchy's menu at its root: Setup, Style, Install and the rest
-          // (TOUCH-PLAN 1.3). Summon, not toggle: it opens even if the menu
-          // was left open under the sheet.
-          GlyphButton {
-            id: settingsButton
-            objectName: "settingsButton"
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            glyph: "󰒓"
-            foreground: root.foreground
-            onTapped: root.openSettings()
-          }
-        }
+            Column {
+              id: headerClock
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.xxs
 
-        PanelSeparator { foreground: root.foreground }
+              Text {
+                textFormat: Text.PlainText
+                text: Qt.formatDateTime(clock.date, root.twelveHour ? "h:mm AP" : "HH:mm")
+                color: root.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.displayLarge
+                font.bold: true
+              }
 
-        // ---------- Collapsed: the first row of tiles
-        Grid {
-          id: quickGrid
-          visible: !root.expanded && !root.editing && root.quickTiles.length > 0
-          width: parent.width
-          columns: 2
-          columnSpacing: root.gap
-          rowSpacing: root.gap
-
-          Repeater {
-            model: root.quickTiles
-            delegate: BoundTile {
-              host: root
-              tileId: modelData
-              width: (quickGrid.width - quickGrid.columnSpacing) / 2
-            }
-          }
-        }
-
-        // ---------- Expanded: every tile, eight to a page
-        ListView {
-          id: pager
-          visible: root.expanded && !root.editing
-          width: parent.width
-          height: visible ? root.pageRows * root.tileHeight + (root.pageRows - 1) * root.gap : 0
-          orientation: ListView.Horizontal
-          snapMode: ListView.SnapOneItem
-          highlightRangeMode: ListView.StrictlyEnforceRange
-          boundsBehavior: Flickable.StopAtBounds
-          clip: true
-          model: root.tilePages
-
-          delegate: Item {
-            width: pager.width
-            height: pager.height
-
-            Grid {
-              id: pageGrid
-              width: parent.width
-              columns: 2
-              columnSpacing: root.gap
-              rowSpacing: root.gap
-
-              Repeater {
-                model: modelData
-                delegate: BoundTile {
-                  host: root
-                  tileId: modelData
-                  width: (pageGrid.width - pageGrid.columnSpacing) / 2
-                }
+              Text {
+                textFormat: Text.PlainText
+                text: Qt.formatDateTime(clock.date, "dddd, d MMMM")
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
               }
             }
 
             Text {
-              visible: modelData.length === 0
-              anchors.centerIn: parent
+              id: headerBattery
+              visible: root.hasBattery
+              anchors.right: settingsButton.left
+              anchors.rightMargin: Style.spacing.md
+              anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              text: "No tiles. Tap 󰏫 to add some."
-              color: Qt.darker(root.foreground, 1.4)
+              text: root.hasBattery
+                ? (UPower.onBattery ? "󰁹 " : "󰂄 ") + Math.round(root.battery.percentage * 100) + "%"
+                : ""
+              color: root.foreground
               font.family: Style.font.family
-              font.pixelSize: Style.font.body
+              font.pixelSize: Style.font.title
+            }
+
+            // Omarchy's menu at its root: Setup, Style, Install and the rest
+            // (TOUCH-PLAN 1.3). Summon, not toggle: it opens even if the menu
+            // was left open under the sheet.
+            GlyphButton {
+              id: settingsButton
+              objectName: "settingsButton"
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              glyph: "󰒓"
+              foreground: root.foreground
+              onTapped: root.openSettings()
             }
           }
-        }
 
-        // ---------- Page dots and the pencil
-        Item {
-          visible: root.expanded && !root.editing
-          width: parent.width
-          height: visible ? editButton.height : 0
+          PanelSeparator { foreground: root.foreground }
 
-          Row {
-            anchors.centerIn: parent
-            spacing: Style.spacing.md
-            visible: root.tilePages.length > 1
+          // ---------- Collapsed: the first row of tiles
+          Grid {
+            id: quickGrid
+            objectName: "quickGrid"
+            visible: !root.expanded && !root.editing && root.quickTiles.length > 0
+            width: parent.width
+            columns: root.tileColumns
+            columnSpacing: root.gap
+            rowSpacing: root.gap
+            readonly property real tileWidth: (width - columnSpacing * (columns - 1)) / columns
 
             Repeater {
-              model: root.tilePages.length
-              delegate: Rectangle {
-                width: Math.max(6, Style.space(7))
-                height: width
-                radius: width / 2
-                color: index === pager.currentIndex ? Commons.Color.accent : Util.alpha(root.foreground, 0.3)
+              model: root.quickTiles
+              delegate: BoundTile {
+                host: root
+                tileId: modelData
+                width: quickGrid.tileWidth
               }
             }
           }
 
-          GlyphButton {
-            id: editButton
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            glyph: "󰏫"
-            foreground: root.foreground
-            onTapped: root.startEditing()
-          }
-        }
+          // ---------- Expanded: every tile, eight to a page
+          ListView {
+            id: pager
+            objectName: "tilePager"
+            visible: root.expanded && !root.editing
+            width: parent.width
+            height: visible ? root.pageRows * root.tileHeight + (root.pageRows - 1) * root.gap : 0
+            orientation: ListView.Horizontal
+            snapMode: ListView.SnapOneItem
+            highlightRangeMode: ListView.StrictlyEnforceRange
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+            model: root.tilePages
 
-        // ---------- Edit mode: the shown tiles, then the ones to add
-        Flickable {
-          id: editFlick
-          visible: root.editing
-          width: parent.width
-          height: visible ? Math.min(contentHeight, root.editMaxHeight) : 0
-          contentWidth: width
-          contentHeight: editColumn.implicitHeight
-          boundsBehavior: Flickable.StopAtBounds
-          clip: true
+            delegate: Item {
+              width: pager.width
+              height: pager.height
 
-          Column {
-            id: editColumn
-            width: editFlick.width
-            spacing: Style.spacing.lg
-
-            Text {
-              width: parent.width
-              textFormat: Text.PlainText
-              text: "Tap a tile to remove it. Hold and drag to move it."
-              color: Qt.darker(root.foreground, 1.4)
-              font.family: Style.font.family
-              font.pixelSize: Readable.px(Style.font.caption)
-              wrapMode: Text.WordWrap
-            }
-
-            // The grids reach half a gap past the sheet's padding on each
-            // side, so the tiles' outer edges line up with the separators.
-            Item {
-              x: -root.gap / 2
-              width: parent.width + root.gap
-              height: editGrid.height
-
-              GridView {
-                id: editGrid
+              Grid {
+                id: pageGrid
                 width: parent.width
-                height: Math.max(1, Math.ceil(count / root.editColumns)) * cellHeight
-                interactive: false
-                cellWidth: width / root.editColumns
-                cellHeight: root.editTileHeight + root.gap
-                model: editModel
-                property int dragIndex: -1
+                columns: root.tileColumns
+                columnSpacing: root.gap
+                rowSpacing: root.gap
+                readonly property real tileWidth: (width - columnSpacing * (columns - 1)) / columns
 
-                move: Transition { NumberAnimation { properties: "x,y"; duration: 140; easing.type: Easing.OutCubic } }
-                moveDisplaced: Transition { NumberAnimation { properties: "x,y"; duration: 140; easing.type: Easing.OutCubic } }
-                removeDisplaced: Transition { NumberAnimation { properties: "x,y"; duration: 140 } }
-
-                delegate: Item {
-                  width: editGrid.cellWidth
-                  height: editGrid.cellHeight
-
-                  EditTile {
-                    x: root.gap / 2
-                    width: parent.width - root.gap
-                    height: root.editTileHeight
-                    icon: root.backends[model.tileId] ? root.backends[model.tileId].icon : ""
-                    label: TilesModel.label(model.tileId)
-                    lifted: editGrid.dragIndex === index
+                Repeater {
+                  model: modelData
+                  delegate: BoundTile {
+                    host: root
+                    tileId: modelData
+                    width: pageGrid.tileWidth
                   }
                 }
               }
 
               Text {
-                visible: editModel.count === 0
+                visible: modelData.length === 0
                 anchors.centerIn: parent
                 textFormat: Text.PlainText
-                text: "No tiles on the sheet"
+                text: "No tiles. Tap 󰏫 to add some."
                 color: Qt.darker(root.foreground, 1.4)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.body
               }
-
-              // One touch handler over the whole grid: a tap removes, a hold
-              // lifts the tile and moving the finger walks it through the grid.
-              MouseArea {
-                id: editTouch
-                anchors.fill: parent
-                pressAndHoldInterval: 350
-                property bool dragging: false
-
-                onPressAndHold: function(mouse) {
-                  var index = editGrid.indexAt(mouse.x, mouse.y)
-                  if (index < 0) return
-                  editGrid.dragIndex = index
-                  dragging = true
-                  editFlick.interactive = false
-                }
-                onPositionChanged: function(mouse) {
-                  if (!dragging) return
-                  var index = editGrid.indexAt(Math.max(0, Math.min(editGrid.width - 1, mouse.x)),
-                                               Math.max(0, Math.min(editGrid.height - 1, mouse.y)))
-                  if (index >= 0 && index !== editGrid.dragIndex) {
-                    editModel.move(editGrid.dragIndex, index, 1)
-                    editGrid.dragIndex = index
-                  }
-                }
-                onReleased: editTouch.drop()
-                onCanceled: editTouch.drop()
-                onClicked: function(mouse) {
-                  if (dragging) return
-                  root.removeTileAt(editGrid.indexAt(mouse.x, mouse.y))
-                }
-
-                function drop() {
-                  if (dragging) root.saveLayout(root.editModelLayout())
-                  dragging = false
-                  editGrid.dragIndex = -1
-                  editFlick.interactive = true
-                }
-              }
             }
+          }
 
-            PanelSeparator { foreground: root.foreground }
+          // ---------- Page dots and the pencil
+          Item {
+            visible: root.expanded && !root.editing
+            width: parent.width
+            height: visible ? editButton.height : 0
 
-            Text {
-              textFormat: Text.PlainText
-              text: "Add tiles"
-              color: root.foreground
-              font.family: Style.font.family
-              font.pixelSize: Style.font.subtitle
-              font.bold: true
-            }
-
-            Text {
-              visible: root.spareTiles.length === 0
-              textFormat: Text.PlainText
-              text: "Every tile is on the sheet"
-              color: Qt.darker(root.foreground, 1.4)
-              font.family: Style.font.family
-              font.pixelSize: Readable.px(Style.font.caption)
-            }
-
-            Grid {
-              id: spareGrid
-              x: -root.gap / 2
-              width: parent.width + root.gap
-              columns: root.editColumns
+            Row {
+              anchors.centerIn: parent
+              spacing: Style.spacing.md
+              visible: root.tilePages.length > 1
 
               Repeater {
-                model: root.spareTiles
-                delegate: Item {
-                  width: spareGrid.width / root.editColumns
-                  height: root.editTileHeight + root.gap
+                model: root.tilePages.length
+                delegate: Rectangle {
+                  width: Math.max(6, Style.space(7))
+                  height: width
+                  radius: width / 2
+                  color: index === pager.currentIndex ? Commons.Color.accent : Util.alpha(root.foreground, 0.3)
+                }
+              }
+            }
 
-                  EditTile {
-                    x: root.gap / 2
-                    width: parent.width - root.gap
-                    height: root.editTileHeight
-                    icon: root.backends[modelData] ? root.backends[modelData].icon : ""
-                    label: TilesModel.label(modelData)
-                    adding: true
-                    opacity: spareTouch.pressed ? 0.7 : 1
+            GlyphButton {
+              id: editButton
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              glyph: "󰏫"
+              foreground: root.foreground
+              onTapped: root.startEditing()
+            }
+          }
+
+          // ---------- Edit mode: the shown tiles, then the ones to add
+          Flickable {
+            id: editFlick
+            visible: root.editing
+            width: parent.width
+            height: visible ? Math.min(contentHeight, root.editMaxHeight) : 0
+            contentWidth: width
+            contentHeight: editColumn.implicitHeight
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+
+            Column {
+              id: editColumn
+              width: editFlick.width
+              spacing: Style.spacing.lg
+
+              Text {
+                width: parent.width
+                textFormat: Text.PlainText
+                text: "Tap a tile to remove it. Hold and drag to move it."
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: Style.font.family
+                font.pixelSize: Readable.px(Style.font.caption)
+                wrapMode: Text.WordWrap
+              }
+
+              // The grids reach half a gap past the sheet's padding on each
+              // side, so the tiles' outer edges line up with the separators.
+              Item {
+                x: -root.gap / 2
+                width: parent.width + root.gap
+                height: editGrid.height
+
+                GridView {
+                  id: editGrid
+                  width: parent.width
+                  height: Math.max(1, Math.ceil(count / root.editColumns)) * cellHeight
+                  interactive: false
+                  cellWidth: width / root.editColumns
+                  cellHeight: root.editTileHeight + root.gap
+                  model: editModel
+                  property int dragIndex: -1
+
+                  move: Transition { NumberAnimation { properties: "x,y"; duration: 140; easing.type: Easing.OutCubic } }
+                  moveDisplaced: Transition { NumberAnimation { properties: "x,y"; duration: 140; easing.type: Easing.OutCubic } }
+                  removeDisplaced: Transition { NumberAnimation { properties: "x,y"; duration: 140 } }
+
+                  delegate: Item {
+                    width: editGrid.cellWidth
+                    height: editGrid.cellHeight
+
+                    EditTile {
+                      x: root.gap / 2
+                      width: parent.width - root.gap
+                      height: root.editTileHeight
+                      icon: root.backends[model.tileId] ? root.backends[model.tileId].icon : ""
+                      label: TilesModel.label(model.tileId)
+                      lifted: editGrid.dragIndex === index
+                    }
+                  }
+                }
+
+                Text {
+                  visible: editModel.count === 0
+                  anchors.centerIn: parent
+                  textFormat: Text.PlainText
+                  text: "No tiles on the sheet"
+                  color: Qt.darker(root.foreground, 1.4)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                }
+
+                // One touch handler over the whole grid: a tap removes, a hold
+                // lifts the tile and moving the finger walks it through the grid.
+                MouseArea {
+                  id: editTouch
+                  anchors.fill: parent
+                  pressAndHoldInterval: 350
+                  property bool dragging: false
+
+                  onPressAndHold: function(mouse) {
+                    var index = editGrid.indexAt(mouse.x, mouse.y)
+                    if (index < 0) return
+                    editGrid.dragIndex = index
+                    dragging = true
+                    editFlick.interactive = false
+                  }
+                  onPositionChanged: function(mouse) {
+                    if (!dragging) return
+                    var index = editGrid.indexAt(Math.max(0, Math.min(editGrid.width - 1, mouse.x)),
+                                                 Math.max(0, Math.min(editGrid.height - 1, mouse.y)))
+                    if (index >= 0 && index !== editGrid.dragIndex) {
+                      editModel.move(editGrid.dragIndex, index, 1)
+                      editGrid.dragIndex = index
+                    }
+                  }
+                  onReleased: editTouch.drop()
+                  onCanceled: editTouch.drop()
+                  onClicked: function(mouse) {
+                    if (dragging) return
+                    root.removeTileAt(editGrid.indexAt(mouse.x, mouse.y))
                   }
 
-                  MouseArea {
-                    id: spareTouch
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.addTile(modelData)
+                  function drop() {
+                    if (dragging) root.saveLayout(root.editModelLayout())
+                    dragging = false
+                    editGrid.dragIndex = -1
+                    editFlick.interactive = true
+                  }
+                }
+              }
+
+              PanelSeparator { foreground: root.foreground }
+
+              Text {
+                textFormat: Text.PlainText
+                text: "Add tiles"
+                color: root.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
+
+              Text {
+                visible: root.spareTiles.length === 0
+                textFormat: Text.PlainText
+                text: "Every tile is on the sheet"
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: Style.font.family
+                font.pixelSize: Readable.px(Style.font.caption)
+              }
+
+              Grid {
+                id: spareGrid
+                x: -root.gap / 2
+                width: parent.width + root.gap
+                columns: root.editColumns
+
+                Repeater {
+                  model: root.spareTiles
+                  delegate: Item {
+                    width: spareGrid.width / root.editColumns
+                    height: root.editTileHeight + root.gap
+
+                    EditTile {
+                      x: root.gap / 2
+                      width: parent.width - root.gap
+                      height: root.editTileHeight
+                      icon: root.backends[modelData] ? root.backends[modelData].icon : ""
+                      label: TilesModel.label(modelData)
+                      adding: true
+                      opacity: spareTouch.pressed ? 0.7 : 1
+                    }
+
+                    MouseArea {
+                      id: spareTouch
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.addTile(modelData)
+                    }
                   }
                 }
               }
             }
           }
+
+          PanelSeparator { foreground: root.foreground; visible: !root.editing }
+
+          // ---------- Sliders: brightness always, volume when expanded
+          Column {
+            visible: !root.editing
+            width: parent.width
+            spacing: Style.spacing.sm
+
+            SliderRow {
+              width: parent.width
+              icon: "󰃠"
+              value: brightness.percent / 100
+              available: brightness.available
+              unavailableText: "No backlight"
+              onMoved: function(value) { brightness.set(value) }
+            }
+
+            SliderRow {
+              visible: root.expanded
+              width: parent.width
+              icon: audio.icon
+              value: audio.volume
+              available: audio.available
+              unavailableText: "No audio output"
+              onMoved: function(value) { audio.setVolume(value) }
+              onIconClicked: audio.toggleMute()
+            }
+          }
+
+        }
+      }
+
+      // ---------- Handle: a visible cue that the sheet swipes back up
+      // Collapsed, a tap on it (or a pull down anywhere) expands the sheet.
+      // Under the scrolling part, so it stays in reach when the sheet is
+      // taller than the screen.
+      Item {
+        id: handleRow
+        visible: !root.editing
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: sheet.contentBottomInset
+        anchors.leftMargin: sheet.contentLeftInset
+        anchors.rightMargin: sheet.contentRightInset
+        height: visible ? Math.max(28, Style.space(28)) : 0
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: Style.space(48)
+          height: Math.max(4, Style.space(4))
+          radius: height / 2
+          color: Util.alpha(root.foreground, 0.35)
         }
 
-        PanelSeparator { foreground: root.foreground; visible: !root.editing }
-
-        // ---------- Sliders: brightness always, volume when expanded
-        Column {
-          visible: !root.editing
-          width: parent.width
-          spacing: Style.spacing.sm
-
-          SliderRow {
-            width: parent.width
-            icon: "󰃠"
-            value: brightness.percent / 100
-            available: brightness.available
-            unavailableText: "No backlight"
-            onMoved: function(value) { brightness.set(value) }
-          }
-
-          SliderRow {
-            visible: root.expanded
-            width: parent.width
-            icon: audio.icon
-            value: audio.volume
-            available: audio.available
-            unavailableText: "No audio output"
-            onMoved: function(value) { audio.setVolume(value) }
-            onIconClicked: audio.toggleMute()
-          }
-        }
-
-        // ---------- Handle: a visible cue that the sheet swipes back up
-        // Collapsed, a tap on it (or a pull down anywhere) expands the sheet.
-        Item {
-          visible: !root.editing
-          width: parent.width
-          height: visible ? Math.max(28, Style.space(28)) : 0
-
-          Rectangle {
-            anchors.centerIn: parent
-            width: Style.space(48)
-            height: Math.max(4, Style.space(4))
-            radius: height / 2
-            color: Util.alpha(root.foreground, 0.35)
-          }
-
-          // A thumb-high target (44 px) over the 28 px row: it reaches into
-          // the padding above and below, so the layout doesn't move.
-          MouseArea {
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.verticalCenter: parent.verticalCenter
-            width: Math.max(96, Style.space(120))
-            height: Math.max(44, parent.height)
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.expanded = !root.expanded
-          }
+        // A thumb-high target (44 px) over the 28 px row: it reaches into
+        // the padding above and below, so the layout doesn't move.
+        MouseArea {
+          objectName: "handle"
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.verticalCenter: parent.verticalCenter
+          width: Math.max(96, Style.space(120))
+          height: Math.max(44, parent.height)
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.expanded = !root.expanded
         }
       }
     }
 
     // ---------- The notification shade: a card under the sheet that slides
-    // with it and takes the room left below it, scrolling past that.
+    // with it and takes the room left below it, scrolling past that. On
+    // its side, beside the sheet, the height of the screen.
     BorderSurface {
       id: shade
+      objectName: "shade"
 
       // Not "top": every Item already has a FINAL top anchor line, and
       // Qt 6.12 refuses to load a file that redeclares it.
-      readonly property real shadeTop: sheet.y + sheet.height + Style.spacing.lg
+      readonly property real shadeTop: root.wide ? sheet.y : sheet.y + sheet.height + Style.spacing.lg
       readonly property real room: window.height - shadeTop - Style.gapsOut
       readonly property real insets: shade.contentTopInset + shade.contentBottomInset
       readonly property real listHeight: root.notifications.length > 0 ? shadeList.contentHeight : shadeEmpty.implicitHeight
       readonly property real natural: insets + shadeHeader.height + shadeColumn.spacing + listHeight
 
       visible: !root.editing && root.reveal > 0 && room >= insets + shadeHeader.height
-      x: sheet.x
+      x: root.wide ? sheet.x + sheet.width + Style.spacing.lg : sheet.x
       y: shadeTop
-      width: sheet.width
+      width: root.wide ? window.width - Style.gapsOut - x : sheet.width
       height: Math.min(natural, room)
       opacity: root.reveal
       color: Commons.Color.popups.background
@@ -1927,6 +1970,7 @@ Item {
   component BoundTile: Tile {
     property var host: null
     property string tileId: ""
+    objectName: "tile-" + tileId
     readonly property var backend: host && host.backends[tileId] ? host.backends[tileId] : null
 
     icon: backend ? backend.icon : ""

@@ -28,6 +28,12 @@ Item {
   property var terminals: null
   // Bumped by the scheduler (30 fps at most) while something animates.
   property int frame: 0
+  // Milliseconds spent laying out and painting since the scheduler last
+  // asked (takeWork()): what a frame costs after the widget's own JS, so a
+  // heavy Canvas drops to half rate.
+  property real workMs: 0
+  function addWork(ms) { view.workMs += Math.max(0, ms) }
+  function takeWork() { const ms = view.workMs; view.workMs = 0; return ms }
   readonly property real devicePixelRatio: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
 
   property int inkVersion: 0
@@ -145,6 +151,7 @@ Item {
   onMonoFamilyChanged: { view.widthCache = ({}); view.schedule() }
 
   function rebuild() {
+    const began = Date.now()
     const seen = {}
     if (view.tree && view.width > 0 && view.height > 0 && view.dp > 0) {
       view.boxes = Layout.layout(view.tree.children || [], view.width / view.dp, view.height / view.dp, view.measure)
@@ -158,6 +165,7 @@ Item {
       else view.items[key].destroy()
     }
     view.items = keep
+    view.addWork(Date.now() - began)
   }
 
   function place(box, parentItem, seen, z) {

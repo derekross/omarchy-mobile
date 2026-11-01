@@ -40,8 +40,14 @@ done
 printf '[Desktop Entry]\nType=Application\nName=Disks\nNoDisplay=false\nExec=gnome-disks\n' >"$A/org.gnome.DiskUtility.desktop"
 printf '[Desktop Entry]\nType=Application\nName=Papers\nExec=papers\n' >"$A/org.gnome.Papers.desktop"
 
+# The board, from a fake device tree so the host's own doesn't matter: the
+# Pixel 7 Pro by default, the Pixel 9a where a test asks for it
+for b in gs201-cheetah:gs201 zumapro-tegu:zumapro; do
+  mkdir -p "$t/dt-${b%%:*}"; printf 'google,%s\0google,%s\0' "${b%%:*}" "${b#*:}" >"$t/dt-${b%%:*}/compatible"
+done
 run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
+    OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" \
     bash bin/omamobile-setup-user >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -110,6 +116,21 @@ RUN_HOME=$t/own run
 [[ $(idle "$t/own") == '{"screensaver": 300, "lock": 0}' ]] && ! toggle "$t/own" || fail "a user's own idle block is kept, and their screensaver"
 pass "idle: lock after a minute, no screensaver, unless the user set their own"
 
+# The phone rules land where Hyprland reads them: looknfeel.lua under
+# Omarchy's hyprland.lua, hyprland.lua itself when the user's own file never
+# loads looknfeel.lua (a bring-up gate); never twice.
+grep -c 'dofile(".*hypr/phone.lua")' "$H/.config/hypr/looknfeel.lua" >/dev/null || fail "the phone rules are loaded from looknfeel.lua"
+[[ $(grep -c 'hypr/phone.lua' "$H/.config/hypr/looknfeel.lua") == 1 ]] || fail "the phone rules are added once"
+mkdir -p "$t/gate/.config/hypr" "$t/gate/.config/omarchy/extensions"
+printf 'dofile("/usr/share/omarchy/default/hypr/bootstrap.lua")\nrequire("default.hypr.omarchy")\n' >"$t/gate/.config/hypr/hyprland.lua"
+for f in monitors looknfeel autostart; do echo "-- $f" >"$t/gate/.config/hypr/$f.lua"; done
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = "auto"\n' >"$t/gate/.config/hypr/monitors.lua"
+cp "$H/.config/omarchy/extensions/omarchy-menu.jsonc" "$t/gate/.config/omarchy/extensions/"
+RUN_HOME=$t/gate run
+grep -c 'dofile(".*hypr/phone.lua")' "$t/gate/.config/hypr/hyprland.lua" >/dev/null || fail "a hyprland.lua that skips looknfeel.lua gets the phone rules itself"
+grep -c 'hypr/phone.lua' "$t/gate/.config/hypr/looknfeel.lua" >/dev/null && fail "the phone rules aren't put where Hyprland never reads them"
+pass "the phone rules go to the file Hyprland loads, once"
+
 # GDK_SCALE follows the phone's monitor scale (TOUCH-PLAN 2.8)
 grep -cx 'local omarchy_monitor_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "the monitor scale is 3"
 grep -cx 'local omarchy_gdk_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE is 3 with it"
@@ -146,3 +167,13 @@ cmp -s "$h/.config/foot/foot.ini" "$t/custom-foot.ini" || fail "a user's own foo
 [[ $(grep -cx -- --enable-wayland-ime "$h/.config/chromium-flags.conf") == 1 ]] || fail "a flag the user has isn't added twice"
 grep -cx -- --wayland-text-input-version=3 "$h/.config/chromium-flags.conf" >/dev/null || fail "the missing flag is added"
 pass "GDK scale, foot and Chromium's input method, once each, and a user's own values are kept"
+
+# The Pixel 9a: a new user gets 8 / 3 (405x909 logical), and GDK_SCALE stays
+# Omarchy's 2 (its step only follows a monitor scale of exactly 3)
+h9=$t/tegu; mkdir -p "$h9/.config/hypr" "$h9/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$h9/.config/hypr/"
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = "auto"\n' >"$h9/.config/hypr/monitors.lua"
+RUN_HOME=$h9 RUN_DT=$t/dt-zumapro-tegu run
+grep -cx 'local omarchy_monitor_scale = 8 / 3' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's monitor scale is 8 / 3"
+grep -cx 'local omarchy_gdk_scale = 2' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's GDK_SCALE step is skipped"
+pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2"

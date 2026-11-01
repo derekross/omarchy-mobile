@@ -27,9 +27,12 @@ Item {
   property var themeColors: ({})
   // cols, rows, tileWidth, tileHeight, screenWidth, screenHeight, corners, linux.
   property var tileVars: ({})
-  // Sources and `every` run only while the widget is shown (its page or a
-  // neighbour, and the home screen not covered).
+  // Sources, `every` and the frame clock run only while the widget can be
+  // seen: its page shows (a neighbour too while the pages move) and nothing
+  // covers the home screen. The host sets it.
   property bool active: false
+  // Global pause wins even over an expanded widget screen.
+  property bool paused: false
   // State to start with when nothing is saved yet: { name: value }.
   property var seedState: ({})
   // The approval this widget runs under ({ commands, network }), for the host.
@@ -55,6 +58,8 @@ Item {
   Component.onCompleted: Qt.callLater(widget.load)
 
   function load() {
+    widget.saveNow()
+    widget.stopSources()
     widget.stopLive()
     widget.screenOpen = false
     widget.screenTree = null
@@ -73,9 +78,12 @@ Item {
       return
     }
     const saved = Object.assign({}, widget.seedState || {}, widget.host && widget.stateKey ? widget.host.loadState(widget.stateKey) || {} : {})
-    widget.instance = new Runtime.Instance(widget.program, widget.bridge, saved)
+    const next = new Runtime.Instance(widget.program, widget.bridge, saved)
+    widget.lastSaved = JSON.stringify(next.persisted())
+    // Publishing the instance lets OwlCell seed location/state immediately.
+    widget.instance = next
     widget.render()
-    if (widget.active) { widget.refresh(); widget.startLive() }
+    if (widget.live) { widget.refresh(); widget.startLive() }
   }
 
   // What the instance calls back into.
@@ -87,7 +95,8 @@ Item {
     tile: function(name) { return widget.tileVars ? widget.tileVars[name] : null },
     act: function(name, args) { widget.act(name, args) },
     runInto: function(command, slot) {
-      if (widget.host) widget.host.runInto(widget, command, function(out) { if (widget.instance) widget.instance.setState(slot, out) })
+      const owner = widget.instance
+      if (widget.host) widget.host.runInto(widget, command, function(out) { if (owner && widget.instance === owner) owner.setState(slot, out) })
     },
     report: function(message) { widget.report(message) },
     changed: function() { widget.changed() },
@@ -97,12 +106,15 @@ Item {
   onThemeColorsChanged: if (widget.instance) { widget.instance.invalidate(); widget.render() }
   onTileVarsChanged: if (widget.instance) { widget.instance.invalidate(); widget.render() }
   // Sources keep running while the screen is open, whatever page shows.
-  readonly property bool live: widget.active || widget.screenOpen
+  readonly property bool live: !widget.paused && (widget.active || widget.screenOpen)
+  // Shown again, it catches up once: what fell due while it was hidden runs
+  // now (a source whose period turned over, an `every` that passed), and
+  // nothing else; the frame clock picks up at the current `time`.
   onLiveChanged: {
-    if (widget.live) { widget.refresh(); widget.startLive() }
-    else widget.stopLive()
+    if (widget.live) { widget.catchUp(); widget.startLive() }
+    else { widget.stopSources(); widget.stopLive() }
   }
-  Component.onDestruction: { widget.stopLive(); widget.saveNow() }
+  Component.onDestruction: { widget.stopSources(); widget.stopLive(); widget.saveNow(); widget.instance = null }
 
   // ---------------------------------------------------------------- drawing
 
@@ -202,9 +214,10 @@ Item {
 
   function refresh() {
     widget.lastRun = ({})
-    // A host may fix the clock (the screenshot harness does).
-    widget.tick(widget.host && widget.host.now ? widget.host.now() : Date.now() / 1000)
+    widget.catchUp()
   }
+  // A host may fix the clock (the screenshot harness does).
+  function catchUp() { widget.tick(widget.host && widget.host.now ? widget.host.now() : Date.now() / 1000) }
   function refreshSoon() { refreshTimer.restart() }
   Timer { id: refreshTimer; interval: 250; onTriggered: widget.refresh() }
 
@@ -215,10 +228,13 @@ Item {
       return
     }
     if (!widget.host || widget.running[s.slot]) return
-    widget.running[s.slot] = true
+    const owner = widget.instance
+    const pending = { stop: null }
+    widget.running[s.slot] = pending
     const finish = function(result) {
-      widget.running[s.slot] = false
-      if (!widget.instance || !result) return
+      if (widget.instance !== owner || widget.running[s.slot] !== pending) return
+      delete widget.running[s.slot]
+      if (!result) return
       if (result.error) { widget.report(s.name + ": " + result.error); return }
       if (result.value !== undefined) { widget.instance.setSource(s.slot, V.fromPlain(result.value)); return }
       if (s.status) {
@@ -232,8 +248,19 @@ Item {
       if (!result.ok && result.err) widget.report(s.name + ": " + String(result.err).split("\n")[0])
       widget.instance.setSource(s.slot, String(result.out === undefined ? "" : result.out))
     }
-    if (s.kind.indexOf("android.") === 0) widget.host.android(widget, s.kind.slice(8), finish)
-    else widget.host.runSource(widget, s, s.arg(), s.headers(), finish)
+    const handle = s.kind.indexOf("android.") === 0 ? widget.host.android(widget, s.kind.slice(8), finish)
+      : widget.host.runSource(widget, s, s.arg(), s.headers(), finish)
+    if (handle) pending.stop = handle.stop
+  }
+
+  function stopSources() {
+    const pending = widget.running
+    widget.running = ({})
+    for (const slot in pending) {
+      // A cancelled read has no value: try again when shown.
+      delete widget.lastRun[slot]
+      if (pending[slot].stop) pending[slot].stop()
+    }
   }
 
   // A state's value by name (undefined: no such state), and setting one as
@@ -254,15 +281,20 @@ Item {
   // `stream(...)` (a line is a value) and `file(...)` (read again when it
   // changes): started while the widget shows, stopped when it doesn't.
   property var liveHandles: []
+  property int liveGeneration: 0
   function startLive() {
-    if (!widget.instance || !widget.host || widget.liveHandles.length) return
+    if (!widget.live || !widget.instance || !widget.host || widget.liveHandles.length) return
+    const owner = widget.instance
+    const generation = ++widget.liveGeneration
     const specs = widget.instance.sources()
     const handles = []
     for (let i = 0; i < specs.length; i++) {
       const s = specs[i]
       if (s.kind !== "stream" && s.kind !== "file") continue
       const slot = s.slot
-      const onValue = function(text) { if (widget.instance) widget.instance.setSource(slot, String(text)) }
+      const onValue = function(text) {
+        if (widget.instance === owner && widget.liveGeneration === generation) owner.setSource(slot, String(text))
+      }
       const h = s.kind === "stream" ? widget.host.stream(widget, s, s.arg(), onValue)
         : widget.host.watch(widget, s, s.arg(), onValue)
       if (h) handles.push(h)
@@ -270,6 +302,7 @@ Item {
     widget.liveHandles = handles
   }
   function stopLive() {
+    widget.liveGeneration++
     const handles = widget.liveHandles
     widget.liveHandles = []
     for (let i = 0; i < handles.length; i++) handles[i].stop()
@@ -286,13 +319,23 @@ Item {
 
   // ---------------------------------------------------------------- persisted state
 
-  function saveSoon() { if (widget.stateKey) saveTimer.restart() }
+  property string lastSaved: ""
+  function saveSoon() {
+    if (widget.instance && widget.stateKey && !saveTimer.running
+        && JSON.stringify(widget.instance.persisted()) !== widget.lastSaved) saveTimer.start()
+  }
   Timer {
     id: saveTimer
     interval: 1000
-    onTriggered: if (widget.instance && widget.host && widget.stateKey) widget.host.saveState(widget.stateKey, widget.instance.persisted())
+    onTriggered: widget.saveNow()
   }
   function saveNow() {
-    if (widget.instance && widget.host && widget.stateKey && saveTimer.running) widget.host.saveState(widget.stateKey, widget.instance.persisted())
+    saveTimer.stop()
+    if (!widget.instance || !widget.host || !widget.stateKey) return
+    const data = widget.instance.persisted()
+    const json = JSON.stringify(data)
+    if (json === widget.lastSaved) return
+    widget.host.saveState(widget.stateKey, data)
+    widget.lastSaved = json
   }
 }

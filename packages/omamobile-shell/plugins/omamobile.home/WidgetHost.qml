@@ -19,6 +19,9 @@ QtObject {
   property string widgetId: ""
   property string dir: ""
   property var capabilities: []
+  // Someone can see the widget: its page shows, no app, drawer or recent
+  // apps covers the home screen, and the panel is on. Poll only then.
+  property bool shown: true
 
   readonly property color foreground: home ? home.foreground : "white"
   readonly property color dimForeground: home ? home.dimForeground : "white"
@@ -60,10 +63,10 @@ QtObject {
     var seconds = UserWidgets.runTimeout(options)
     lastStart = Date.now()
     var proc = processComponent.createObject(host, { command: UserWidgets.timeoutArgv(argv, seconds) })
-    proc.done = function(result) {
+    proc.done = function(code, out, err) {
       host.running = null
       if (typeof callback === "function") {
-        try { callback(result) } catch (e) { console.warn("omamobile.home: widget " + host.widgetId + ": " + e) }
+        try { callback(UserWidgets.runResult(code, out, err)) } catch (e) { console.warn("omamobile.home: widget " + host.widgetId + ": " + e) }
       }
     }
     running = proc
@@ -99,23 +102,11 @@ QtObject {
   }
 
   property Component processComponent: Component {
-    Process {
-      id: proc
-      property var done: null
-      stdout: StdioCollector { id: out; waitForEnd: true }
-      stderr: StdioCollector { id: err; waitForEnd: true }
-      onExited: function(code) {
-        var result = UserWidgets.runResult(code, out.text, err.text)
-        var finish = proc.done
-        proc.done = null
-        if (finish) finish(result)
-        proc.destroy()
-      }
-    }
+    BoundedProcess { }
   }
 
   // A widget that goes away takes its command with it.
   Component.onDestruction: {
-    if (running) { running.done = null; running.running = false }
+    if (running) running.stop()
   }
 }

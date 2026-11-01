@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Compile the C tools into BUILDDIR (default: build).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+out=${1:-build}
+mkdir -p "$out"
+${CC:-cc} ${CFLAGS:--O2} -Wall -Wextra -o "$out/reboot-to" src/reboot-to.c ${LDFLAGS:-}
+${CC:-cc} ${CFLAGS:--O2} -Wall -Wextra -o "$out/tegu-tcpc-switch" src/tegu-tcpc-switch.c ${LDFLAGS:-}

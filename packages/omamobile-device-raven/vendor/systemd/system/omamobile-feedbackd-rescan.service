@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Started by 72-omamobile-feedbackd.rules when the haptics motor's input
+# device appears. feedbackd only looks for it when it starts, and it is
+# D-Bus activated: stopping a running one makes the next request start it
+# again with the motor. No feedbackd running: nothing to do.
+[Unit]
+Description=Omarchy Mobile: let feedbackd pick up the haptics motor
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/pkill -x feedbackd

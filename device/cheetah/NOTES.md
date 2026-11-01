@@ -2,6 +2,302 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-10-30: the charger reads offline at Full, and slot B now needs its AVB footers
+
+Kernels `7.3.0-rc6-omamobile-push1-00566-g66497d0197dc` (10-29),
+`…-00568-gcfd00cdd22e6` (the gauge fix plus the fast-charge timer off),
+`…-00571-gd40c36abfc0d` (`omamobile-int` with all three charging branches)
+and the curated `…-gaae3b058ef98`; device-cheetah 0.1.34; the laptop's USB
+port.
+
+**Charging** [V]:
+
+- **What looked broken on 10-29:** a phone at 0 % didn't gain a percent on
+  the laptop and then a wall charger, and USB dropped and came back. It was
+  neither a boot loop nor USB: the drops were upower's 0 % suspends, and SSH
+  failed because the laptop's Tailscale exit node routed 172.16.42.1 away
+  from the cable (`ip route get` showed `dev tailscale0 table 52`; fixed with
+  `tailscale set --exit-node-allow-lan-access=true`). A reboot by hand
+  charged at once. Why that boot's charger stayed offline after a replug in
+  the evening is still open: the journal has no entries from 10:24 to 22:00
+  (the boot clock read 1999 until the time was set), and the gauge model had
+  failed to load at that boot (-110). The flat-battery case is issue #169.
+- **Charging works asleep:** in a fresh boot the battery took 226 mAh in 9.5
+  min of `rtcwake -m freeze` and 260 mAh in 10 min of `systemctl suspend`
+  (about 1.4-1.56 A), the same as awake.
+- **Input current:** CNFG_09 reads 0x13 (500 mA, as `default_ilim_ua` sets
+  it), but NO_AUTOIBUS is clear, so the charger picks its input current
+  itself; Google's driver sets it. The gauge's 1.42 A is real.
+- **At Full** (03:25 on 00568): CHG_DETAILS_01 went CC 0xb1, CV 0xb2, top-off
+  0xb3, DONE 0xb4, and CHG_INT_OK went 0xdd to 0xcd (CHG_OK clears) with
+  CNFG_00 still 0x05. The driver's `online` required CHG_OK as well as
+  CHGIN_OK, so a full phone on the cable read offline and upower counted it
+  as on battery. "power: supply: max77759: stay online while a full battery
+  is on the charger" reports the input from CHGIN_OK alone; on 00571 the
+  charger reads online at Full.
+- **Fast-charge timer:** CNFG_01 0x99 to 0x98 (FCHGTIME off), as Google's
+  driver sets it; read back on 00568.
+- **Replug after Full** (08:19 on 00568): after five hours at DONE, out for
+  a minute and back in; `omamobile-usb-rescue` closed the data switch and the
+  charger charged again (+373 mA at 98 %). A long unplug with the battery well
+  down, and a phone run flat, are still to be repeated.
+
+**AVB footers, the hard way** [V]:
+
+- `vbmeta_b` on this phone is byte-identical to `vbmeta_a` (stock CP2A's,
+  chaining `boot` and `init_boot` at rollback index locations 2 and 4), not
+  the one in the 10-11 backup: slot B got CP2A's factory bootloader and
+  `vbmeta` during the M1 bring-up (BRINGUP-M1 step 10). bl1, bl2, bl31, gsa,
+  ldfw, pbl, tzsw and modem match slot A's.
+- #104's images (footers with CP2A's index) booted on 00571 at 09:15 with
+  every smoke check ok. After that boot, footer-less images no longer
+  booted: curated images built by a checkout from before #104 made ABL stop
+  in fastboot at once, and a saved 00571 set from before #104 used up B's
+  tries (no USB gadget, the initramfs safety net) and fell back to stock,
+  whose recovery offered "Try again" and "Factory data reset". Neither was
+  chosen; Volume Down + Power gave fastboot, and the 00571 set with footers
+  booted, then the curated kernel rebuilt with current tools.
+- Stock's recovery ran twice and rewrote `efs`, `efs_backup`,
+  `modem_userdata` and `persist` (they matched the 10-12 backup that
+  morning); `modem_a/b` are unchanged. A fresh read-only backup was taken
+  and verified the same hour.
+- So: build every image with the current `bin/omamobile`, keep rollback sets
+  built the same way, and never choose either option on stock's recovery
+  screen.
+
+## 2026-10-29: footers with CP2A's rollback index boot on a phone with CP3A on slot A
+
+- **A footer index below slot A's boots** [V]: the descriptor now carries
+  CP2A.260705.006's footer values as the review of #104 gives them,
+  rollback index 1783209600 (2026-07-05) and security patch 2026-07-05,
+  the oldest stock build an owner runs on slot A. Rebuilt with them, `boot` and `init_boot`
+  differ from the CP3A-footer images only in the footer, and the other
+  three images are byte for byte the same. `bin/omamobile push` wrote and
+  verified slot B, and the phone booted it: `androidboot.slot_suffix`
+  `_b`, `verifiedbootstate` orange, no failed units, slot B still marked
+  successful, `tools/phone-smoke` ok (cameras skipped: no data). Slot A
+  runs CP3A, whose footers and vbmeta carry 1791158400, so this unlocked
+  ABL accepts footer indexes below the CP3A one; libavb treats an index
+  below the stored one as a rollback error, which an unlocked boot may
+  continue past
+  [V: `result_should_continue()` in external/avb `c5066a9`]. Whether ABL
+  stores the indexes while unlocked is still untested.
+
+## 2026-10-28: at 0 %, upower's critical suspend slept behind a lit lock screen and kept a charging phone flat
+
+Kernel `7.3.0-rc6-omamobile-push1-00591-gebc0cd6858ee`, omamobile-shell
+0.2.32, device-cheetah 0.1.34, Omarchy 4.0.6; the laptop's USB port (the
+charger's input limit read 500 mA).
+
+- **What it looked like:** the battery at 0 % (3.11-3.26 V) didn't climb
+  on the laptop's port, the USB link dropped and came back every few
+  minutes, and the lock screen showed a grey fingerprint that didn't work
+  until Power was pressed.
+- **The cause, from the journal:** `suspend requested from client ...
+  'upowerd'` at each drop: at 0 % upower's critical action suspended the
+  phone, also 20 s after a fresh boot. Omarchy's sleep lock
+  (`omarchy-system-sleep-lock`, under a delay inhibitor) lights the lock
+  screen and waits for it to be secure, and the sleep hook doesn't touch
+  the panel, so the phone slept with the lock screen lit: the panel holds
+  the frame, nothing behind it runs, and fprintd had already parked the
+  sensor (`Failed to install a sleep delay inhibitor: OperationInProgress`).
+  A power-key wake brought it all back, so the grey fingerprint was a
+  phone asleep, not a broken sensor.
+- **Why it didn't charge:** lit, the phone drew more than the 500 mA input
+  (battery -350 to -760 mA, status `Discharging`), asleep behind the lit
+  panel too, and every wake to check repeated it. Awake with the screen off
+  it gained +25 to +200 mA. With upower stopped and the screen off, the
+  voltage rose from 3.13 to 3.35 V in about 15 minutes while the gauge
+  still read 0 % (it counts up only above its empty voltage).
+- **Also seen:** upower warns `max77759-charger without usb_type property`;
+  with the screen lit the battery reads `Discharging` although the charger
+  is online, so upower counts the phone as on battery (SUSPEND-PLAN 6.6).
+  Quickshell used about 1.4 cores with the screen on, from an animated
+  OWL widget on the home page (the frame clock runs at 30 fps while a shown
+  widget animates; it pauses with the screen off).
+- **Fix for the lit sleep:** omamobile-omarchy 0.1.13, patch 0021: once the
+  session is secure, the sleep lock turns the display off (SUSPEND-PLAN
+  6.8). upower's action is unchanged until P7 (6.6).
+
+## 2026-10-28: a phone whose vbmeta_b chains boot and init_boot, as stock's does, needs AVB footers on them
+
+A second Pixel 7 Pro (cheetah MP1.0 B0), installed with
+`tools/install-phone` from a build of `f5da1df`, kernel
+`7.3.0-rc6-omamobile-push1-g1cb4bd36f3be`.
+
+- **The phone before the install** [V, `fastboot getvar`; `avbtool
+  info_image` on `vbmeta_a` and `vbmeta_b`, read over SSH from the guarded
+  root after the install]: stock `CP3A.261005.002.A1` on slot A; ABL
+  `cloudripper-17.0-15902555` on both slots (slot B's written from that
+  factory image's bootloader image, then read back with slot B current).
+  The rest of slot B was left from an earlier stock build: `vbmeta_b` is
+  `BP2A.250605.031.A2` (Android 16, rollback index 1749081600), its radio
+  `g5300q-250320-250425-B-13407682`. `vbmeta_a` is the factory image's
+  `vbmeta.img` byte for byte, zero-padded to the partition (rollback index
+  1791158400). Both chain `boot` (rollback index location 2) and
+  `init_boot` (location 4), flags 0.
+- **Without footers, slot B never started** [V]: the phone ended in
+  Fastboot Mode with "Enter reason: BL1 requested", `slot-retry-count:b` 1
+  and `slot-successful:b` no, and no USB gadget reached the laptop in four
+  minutes. The symptom of issue #11.
+- **With `AVB_FOOTERS`, it boots** [V]: `boot` and `init_boot` get hash
+  footers from `bin/omamobile images` (AOSP's test key; that day stock
+  CP3A's rollback index 1791158400 and security patch 2026-10-05; padded
+  to 64 and 8 MiB). After `bin/omamobile flash` the Omarchy splash came
+  up, the root grew to the whole of `userdata`, `omamobile-firstboot`
+  finished and `omamobile-boot-success` marked slot B successful. Nothing
+  else changed between the two: rebuilt from the same kernel output,
+  `vendor_boot`, `vendor_kernel_boot` and `dtbo` are byte for byte the
+  same, and `boot` and `init_boot` match up to their padding and footer.
+  Each was flashed once.
+- **What triggers it: a vbmeta that chains them.** libavb reads a chained
+  partition with no footer as if vbmeta began at its first byte, finds an
+  invalid header and returns `ERROR_INVALID_METADATA`, which it never lets
+  an unlocked boot continue past. A wrong key (`ERROR_PUBLIC_KEY_REJECTED`)
+  or hash (`ERROR_VERIFICATION`) it does let through, and a vbmeta with
+  `VERIFICATION_DISABLED` set skips its descriptors [V:
+  `load_and_verify_vbmeta()` and `result_should_continue()` in
+  external/avb `c5066a9`]. The maintainer's `vbmeta_b` lists `boot` and
+  `init_boot` as hash descriptors rather than chaining them, which is why
+  that phone boots footer-less images (review of #104). This phone's `vbmeta_b` being from an older build doesn't
+  matter: stock's current vbmeta chains them the same way. So any Pixel 7
+  Pro whose `vbmeta_b` is stock's needs the footers, and a vbmeta that
+  doesn't chain them, or has verification disabled, never reads them.
+  Issue #11's phone booted after `fastboot oem disable-verification`,
+  which by its name sets that flag [I].
+
+## 2026-10-27: earpiece mode, written offline (omamobile-audio 0.5.5)
+
+- **Not run on the phone yet; the runbook is AOC-PLAN C9k.**
+  `omamobile-speaker-protection earpiece on` puts the amplifiers on
+  stock's handset path at 20 dB under stock's gain: the top amplifier
+  alone, DSP bypassed, 657/6, the bottom at Digital PCM Volume 0, and the
+  watchdog in earpiece mode, which `on` waits for before it unmutes.
+  `off` restores and reads back every control. A "Voice Call" UCM verb
+  (never the default) has an Earpiece sink on the speaker's PCM that
+  switches the mode through `omamobile-earpiece@on|off.service` and a
+  polkit rule. Earpiece mode refuses while the boost converter is on,
+  because it follows the earpiece's analog gain of 6 (C9j). It never
+  touches the boost peak current: stock's in-call 3.5 A and gain 7 stay
+  out.
+- **A smart filter follows the default sink when its target is gone.** On
+  the phone, with the Voice Call profile active (the speaker sink gone, the
+  Earpiece sink the default), `pw-link -l` showed the speaker filter's
+  output (`effect_output.omamobile_speaker_loudness`) linked into the
+  Earpiece sink: its 6 dB of limiter drive at the ear. WirePlumber 0.5
+  hands a smart filter whose `filter.smart.target` matches nothing to the
+  default-target hooks unless the stream has `node.dont-fallback`; with
+  that alone it destroys the stream while the target is missing, which is
+  every PipeWire start, so `node.linger` too. A `target.object` with
+  `node.dont-reconnect` destroyed the filter even in HiFi (music
+  unfiltered). Fixed in the branch's 0.5.5; proven offline on null sinks;
+  C9k's E1, E4 and E7 check the links.
+- **Restart the protection service after installing 0.5.5.** The running
+  watchdog was 0.5.4's and didn't answer the new mode handshake, so
+  `earpiece off` muted both amplifiers until
+  `systemctl restart omamobile-speaker-protection` (harmless: muted is the
+  safe side). C9k E1 now restarts it.
+
+## 2026-10-27: the muted speakers were the open-loop coil estimate, not sleep; the static was the boost converter; the earpiece is the top speaker
+
+- **The speaker watchdog had muted media at every boot since 10-26 22:28**
+  ("Bottom: coil temperature jumped 14-27 C in this stream" at stage media
+  737/10), and nothing in the UI shows a mute. Not sleep: it repeated
+  2.5 min into a cold boot with no suspend, so the 10-26 note that a
+  power-off cleared it was wrong. The cause is the bottom CS35L41's
+  protection model with **DRE on at analog gain 10**: it over-estimates
+  its output by about 20 dB on any signal above a low level (a -20 dBFS
+  multitone took its coil estimate from 25 to 31 C within a second; the
+  top amplifier on the same content, slots swapped, rose 0.17 C). DRE off
+  restores the 10-12 numbers (bottom +0.15 C on that burst, +0.25 C on
+  30 s of music at full sink volume). Stock runs DRE only at gain 17.
+  But DRE is only the first trigger: the bottom's estimate jumps 10-15 C
+  on **any level drop** (a volume step down during music, a 13 dB drop
+  cut into the music itself with the sink untouched, the end of a stream,
+  the shell's duck at unlock), while the firmware's own attenuation stays
+  at full scale and the top amplifier moves by 0.1 C. At analog 10 the
+  firmware does not sense the coil, so this is an open-loop estimate the
+  levels do not depend on (AUDIO-PLAN section 4). omamobile-audio 0.5.3:
+  the watchdog's 5 C jump rule only above the stage's analog ceiling of
+  10 (stage c9); the 80 C backstop and every other rule stay; DRE stays
+  on. AOC-PLAN C9j.
+- **Media does not play through the wrong speaker.** The registers, the
+  UCM and listening tests agree with stock: left in TDM slot 0 to the top
+  amplifier, right in slot 1 to the bottom. The earpiece is the top
+  speaker and carries the full left channel at the same gain as the
+  bottom one; stock adds 17 dB, Waves processing and a proximity mute.
+  With the sink at 60 % on top of the stage cap, media was about 30 dB
+  under stock's maximum, hence "sounds like the call speaker".
+- **The "static" under music is the amplifiers' boost converter at light
+  load.** Measured through the phone's own mic (validated with an external
+  tone): at 737/10 a 1 kHz tone distorts 44 % on the bottom speaker at
+  -20 dBFS and 10 % on the top at -10 dBFS, at a fixed output per speaker
+  (about 30 and 25 mA peak), at every frequency, with the DSPs bypassed,
+  out of the case. With the converter off (kernel 00590 `boost_en=N`: the
+  output stage from VP) the same inputs are 8-11 dB louder and clean (top
+  1 %, bottom 0.5-4 % with DRE on). Stock's 817/17 never runs the
+  converter in that regime. omamobile-audio 0.5.3 turns it off at analog
+  10 and below. AOC-PLAN C9j has the whole elimination.
+- **Streamed music is 10-15 dB under a test tone by its normalisation;** the
+  package filter's limiter drive gives it back (0.5.4: flat, drive 6 dB, the
+  owner's choice). 817/10 without the boost converter is not usable: the
+  output stage runs out of supply near 2 V peak (bottom 82 % THD at
+  -10 dBFS). AOC-PLAN C9j.
+- **Routing TDM_0_TX into an EP capture crashes the AoC** (its watchdog
+  fires, the AoC goes offline, every service answers -517 until a reboot).
+  The amplifiers' V/I return has no host-readable copy on this card.
+- Kernel 00561's S2MPG12 LDOs: 28 registered, no users, none disabled at
+  the 30 s cleanup (`regulator_summary`); only `vddio_cam` is, as before.
+
+## 2026-10-26: auto-sleep on the phone; the bottom speaker's protection broke after sleep
+
+Kernel `7.3.0-rc6-omamobile-push1-00588-gcd72ae58ee47` (the test-bt-wifi
+build), `omamobile-shell` 0.2.29 and `omamobile-device-cheetah` 0.1.34 from
+the `suspend-tier1` branch. SUSPEND-PLAN P0-P5 has the step-by-step record.
+
+- **Suspend itself held up.** 13 s2idle cycles in one boot: `systemctl
+  suspend` by hand, the RTC, a WakeSystem timer (on time to 1 s), Power and
+  Volume Down as wakes, and `omamobile-sleepd`'s own requests. There were
+  0 failures, no `ufshcd_err_handler`, and Wi-Fi stayed connected (the D3
+  ACK by control message in 13-20 ms).
+- **The press that wakes the phone never reaches Hyprland.** logind logs
+  it ("Power key pressed short"), but the user session is still frozen
+  while the kernel takes the key, so the Power binding never ran and the
+  phone woke to a dark screen. `omamobile-sleepd` now lights the PIN pad
+  itself when the wake IRQ is `KEY_POWER` (`omamobile-keys wake`), and
+  `omamobile-keys` ignores a late copy of that press within 1.5 s.
+- **A freeze in the middle of a fingerprint cancel wedged fprintd** ("the
+  device is still busy"): the lock retried about three times a second and
+  never showed the sensor. The sleep hook now try-restarts fprintd on
+  every resume, and the lock re-claims it within about 0.5 s.
+- **Locking with Power flashed the PIN pad.** This was an old
+  `omamobile-keys` bug, unrelated to suspend: the long-press timer (0.6 s)
+  fired while the lock was still being taken (0.9 s) and woke it. Fixed;
+  `power-up` now forgets the press first.
+- **After the sleeps, the bottom speaker's protection read a false coil
+  temperature.** The first sound after 13 sleeps tripped the watchdog:
+  "Bottom: coil temperature jumped 14.5 C (25.0 -> 39.5)" within 2 s.
+  - It read 35 °C while silent and peaked at 40.7 °C; the top amplifier
+    stayed at 25.0 °C.
+  - Neither a restart of `omamobile-speaker-protection` nor a warm reboot
+    cleared it. A full power-off did: both amplifiers read 25.00 °C, and
+    playback at stage media works again, with the bottom amplifier moving
+    more than the top.
+  - So sleep left the bottom CS35L41 (or its DSP state) wrong, and that
+    state survives a warm reboot, much like the LSM6DSV in AOC-PLAN C6.
+  - Every earlier sleep test (S6) ran with no sound playing. This was the
+    first playback after a sleep.
+  - **Auto-sleep stays off** until the amplifiers' suspend and resume are
+    understood: whether the driver's system-sleep ops run on gs201, and
+    whether the DSP, its calibration and the TDM back end come back.
+  - The speakers also hissed briefly when the amplifiers powered up during
+    the cold boot; whether that is new hasn't been checked.
+  - **Correction (2026-10-27):** not sleep, and a power-off did not clear it; the trip repeated 2.5 min into a cold boot. It was the watchdog's jump rule on the bottom amplifier's open-loop coil estimate; see the 2026-10-27 entry and AOC-PLAN C9j.
+- **"Quiet and thin" is still the stage-media cap**, about 17 dB below
+  stock, and both amplifiers report `vmon low 1` at analog gain 10. The
+  owner hears it as the call speaker carrying the sound. The next speaker
+  session is AOC-PLAN C9i, on the `speakers-offline` branch.
+
 ## 2026-10-23: the S2MPG12 regulator driver binds read-only (kernel #27); UFS and touch PRs boot
 
 - **Kernel #19 + #22 (Tensor G4 UFS host and PHY, with error propagation

@@ -1,0 +1,64 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tegu-usb-host-h5-reset: USB-HOST-PLAN step H5, the published form of the
+# script that runs while the laptop is out. Start it detached before the
+# swap (systemd-run --unit=tegu-usb-host-h5 /usr/local/sbin/tegu-usb-host-h5-reset).
+# It waits for the laptop link to go and for a USB drive to enumerate in host
+# mode, logs the boost's state 20 s later, syncs, and resets the palmtop
+# without a shutdown (echo b > /proc/sysrq-trigger), so that the next boot's
+# tegu-rt9470-early-read shows what a reset leaves with host mode on. It
+# refuses to reset unless that read is armed and its unit enabled, and
+# unless a drive has enumerated: without them the reset would show nothing.
+# On every exit without a reset it removes the armed marker, and it traps
+# TERM to do the same (the swap timer's reboot stops this unit first), so a
+# fallback reboot (the swap timer, a systemctl reboot) doesn't produce an
+# early-read log that looks like this step's. The early read counts only when this
+# script's log ends with the "resetting now" line.
+# Reads are i2cget only; the writes are the marker's removal and the sysrq.
+set -u
+L=/var/log/omamobile/usb-host-h5.log; mkdir -p /var/log/omamobile
+A=/var/lib/omamobile-tegu/rt9470-early-read/armed
+log() { echo "$(date -Is) $*" >> "$L"; }
+disarm() { rm -f "$A"; sync; log "no reset: early read disarmed ($A removed)"; }
+trap 'disarm; exit 1' TERM
+bus_of() { local d; for d in /sys/bus/i2c/devices/i2c-*; do readlink -f "$d" | grep -c "$1" >/dev/null && { echo "${d##*-}"; return; }; done; }
+CB=$(bus_of 108d0000.i2c)   # hsi2c6: the TCPC at 0x25, the charger at 0x69
+RB=$(bus_of 10ca0000.i2c)   # hsi2c10: the RT9470 at 0x5b
+[[ -n $CB && -n $RB ]] || { log "no hsi2c6 or hsi2c10 bus: nothing done"; disarm; exit 1; }
+vbus_mv() { # TCPCI VBUS_VOLTAGE: bits 9:0 in 25 mV steps, bits 11:10 the scale
+  local lo hi
+  lo=$(i2cget -f -y "$CB" 0x25 0x70 2>/dev/null) && hi=$(i2cget -f -y "$CB" 0x25 0x71 2>/dev/null) || { echo "?"; return; }
+  echo "$(( (((hi & 0x03) << 8 | lo) * 25) << ((hi >> 2) & 0x03) )) (0x71/0x70 $hi/$lo)"
+}
+snap() {
+  log "$1 vbus_mV=$(vbus_mv) chg_cnfg_00=$(i2cget -f -y "$CB" 0x69 0xbc 2>/dev/null || echo ?) rt function=$(i2cget -f -y "$RB" 0x5b 0x02 2>/dev/null || echo ?) icstat=$(i2cget -f -y "$RB" 0x5b 0x0f 2>/dev/null || echo ?) stat0-3=$(for r in 0x10 0x11 0x12 0x13; do i2cget -f -y "$RB" 0x5b $r 2>/dev/null || echo ?; done | tr '\n' '/')"
+  log "$1 typec: pr=$(cat /sys/class/typec/port0/power_role 2>/dev/null) dr=$(cat /sys/class/typec/port0/data_role 2>/dev/null) role=$(cat /sys/class/usb_role/*/role 2>/dev/null) udc=$(cat /sys/class/udc/*/state 2>/dev/null) regulators: $(for r in /sys/class/regulator/regulator.*; do n=$(cat "$r/name"); case $n in otg-boost|chgin-otg) printf '%s=%s ' "$n" "$(cat "$r/state")";; esac; done)"
+  log "$1 usb: $(cat /sys/bus/usb/devices/*/product 2>/dev/null | tr '\n' '|') disks: $(lsblk -dno NAME,SIZE,TRAN 2>/dev/null | grep usb | tr '\n' '|')"
+}
+log "start"
+if [[ ! -e $A || $(systemctl is-enabled tegu-rt9470-early-read 2>/dev/null) != enabled ]]; then
+  log "early read not armed and enabled ($A, $(systemctl is-enabled tegu-rt9470-early-read 2>&1)): no reset"; disarm; exit 1
+fi
+snap pre
+# the laptop goes out
+for _ in $(seq 1 600); do [[ $(cat /sys/class/udc/*/state 2>/dev/null) != configured ]] && break; sleep 1; done
+[[ $(cat /sys/class/udc/*/state 2>/dev/null) != configured ]] || { log "laptop never left in 10 min: no reset"; disarm; exit 0; }
+log "laptop link gone"
+# the drive enumerates in host mode
+drive=
+for _ in $(seq 1 180); do
+  drive=$(lsblk -dno NAME,TRAN 2>/dev/null | awk '$2 == "usb" { print $1; exit }')
+  [[ -n $drive ]] && break
+  sleep 1
+done
+[[ -n $drive ]] || { snap no-drive; log "no USB drive in 3 min: no reset"; disarm; exit 1; }
+log "drive $drive enumerated"; snap attached
+sleep 20; snap t+20
+dmesg | grep -iE "max77779|rt9471|regulator|otg|tcpm|vbus|usb [0-9]|sd[a-z]" | tail -30 >> "$L"
+log "resetting now: echo b > /proc/sysrq-trigger (the early read is armed for the next boot)"
+sync; sleep 1
+echo b > /proc/sysrq-trigger
+sleep 10
+log "still running 10 s after the sysrq: the reset did not happen"
+disarm
+exit 1

@@ -1,9 +1,9 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Shared first-light init. One script for every device.
-# The only display-register write is the pair in /etc/omamobile-simplefb-trig,
+# The only display-register writes are the pairs in /etc/omamobile-simplefb-trig,
 # which bin/omamobile initramfs installs from SIMPLEFB_TRIG_CON. The init
-# writes it only when the board's first compatible string matches
+# writes each pair only when the board's first compatible string matches
 # /etc/omamobile-compatible, the descriptor's COMPATIBLE packed beside it.
 # No trigger file, or a different board, means no write. The bring-up probe
 # uses that same check, so a cheetah image does not read every DPP elsewhere.
@@ -25,8 +25,16 @@ SCREEN=/dev/tty0
 if grep -qw splash /proc/cmdline; then
   SCREEN=/dev/null
   # Replace the bootloader's logo with Omarchy's at once; Plymouth draws the
-  # same screen when Arch starts, so the two join up.
-  [ -f /splash.bgra.gz ] && zcat /splash.bgra.gz > /dev/fb0 2>/dev/null
+  # same screen when Arch starts, so the two join up. With the descriptor's
+  # INITRAMFS_FB_WAIT (raven: simpledrm's fb0 appears only once the PMIC
+  # module loaded below gives it its rails), wait for fb0 in the background.
+  if [ -f /etc/omamobile-fb-wait ]; then
+    [ -f /splash.bgra.gz ] && (
+      for _ in $(seq 1 60); do [ -e /dev/fb0 ] && break; sleep 0.05; done
+      zcat /splash.bgra.gz > /dev/fb0 2>/dev/null ) &
+  else
+    [ -f /splash.bgra.gz ] && zcat /splash.bgra.gz > /dev/fb0 2>/dev/null
+  fi
 fi
 
 # --- UFS safety: every SCSI disk is read-only, before anything else runs ---
@@ -159,17 +167,33 @@ board_matches() {
   return 0
 }
 
+# Modules this image carries (the descriptor's INITRAMFS_MODULES), insmodded
+# in the packed order before any other step: on raven the PMIC regulator
+# driver the simple-framebuffer waits for, and the MAX77759 nvmem that ABL
+# reads the reboot reason from. They were built for this image's board.
+load_modules() {
+  local m
+  [ -s /lib/modules/omamobile/order ] || return 0
+  board_matches "initramfs modules" || return 0
+  while read -r m; do
+    insmod "/lib/modules/omamobile/$m.ko" 2>/dev/null || say "insmod $m failed"
+  done < /lib/modules/omamobile/order
+}
+load_modules
+
 # Command-mode panels take a new frame only when their DECON sends one.
 # ABL masks that trigger after the logo. The descriptor's SIMPLEFB_TRIG_CON
-# is the address and value for this phone (TRIG_CON: clear
-# HW_TRIG_MASK_DECON, set HW_TRIG_EN). devmem's second argument is the
-# value, not a width. Stopgap until a real DECON/DSI driver.
+# is one pair per line for this phone (TRIG_CON: clear HW_TRIG_MASK_DECON,
+# set HW_TRIG_EN). devmem's second argument is the value, not a width.
+# Stopgap until a real DECON/DSI driver.
 simplefb_trigger() {
   local trig_addr trig_val
   [ -s /etc/omamobile-simplefb-trig ] || return 0
   board_matches "simplefb trigger" || return 0
-  read -r trig_addr trig_val < /etc/omamobile-simplefb-trig
-  devmem "$trig_addr" "$trig_val" >/dev/null || say "simplefb trigger failed"
+  while read -r trig_addr trig_val; do
+    [ -n "$trig_addr" ] || continue
+    devmem "$trig_addr" "$trig_val" >/dev/null || say "simplefb trigger failed"
+  done < /etc/omamobile-simplefb-trig
 }
 simplefb_trigger
 
@@ -229,6 +253,44 @@ if [ -n "$udc" ]; then
 else
   say "no USB device controller found"
 fi
+
+# The MAX77759's Type-C side can leave its USB2 data switch (TCPC vendor
+# register USBSW_CTRL, 0x93) open, and no Type-C driver runs here to close
+# it: the gadget is up but the host never sees it. The descriptor's
+# USB_SWITCH names the TCPC's I2C controller and address; put the register
+# back to 0x09 (D+/D- connected), as cheetah's omamobile-usb-rescue does on
+# the same chip. Only ever reads that one register and writes that one value,
+# and skips the write when it already reads 0x09, the value it holds
+# whenever the link works (USB-C-PLAN.md). No dead-man switch is possible
+# this early; if USB still doesn't come up, the write changed nothing else.
+usb_switch() {
+  local ctl addr d bus="" sw i quiet=${1:-}
+  read -r ctl addr < /etc/omamobile-usb-switch
+  for i in $(seq 1 10); do
+    for d in /sys/bus/i2c/devices/i2c-*; do
+      readlink -f "$d" | grep -q "/$ctl/" && bus=${d##*-}
+    done
+    [ -n "$bus" ] && break
+    sleep 1
+  done
+  [ -n "$bus" ] || { say "usb switch: no I2C bus for $ctl"; return; }
+  sw=$(i2cget -f -y "$bus" "$addr" 0x93 2>&1)
+  [ -n "$quiet" ] && [ "$sw" = 0x09 ] && return
+  say "usb switch: USBSW_CTRL on i2c-$bus is $sw"
+  case $sw in
+    0x09) ;;
+    0x*) i2cset -f -y "$bus" "$addr" 0x93 0x09
+         say "usb switch: closed, now $(i2cget -f -y "$bus" "$addr" 0x93 2>&1)" ;;
+  esac
+}
+maybe_usb_switch() {
+  [ -s /etc/omamobile-usb-switch ] || return 0
+  board_matches "usb switch" || return 0
+  usb_switch
+  # Keep it closed across replugs (it opens on unplug), as cheetah's rescue does
+  ( while sleep 2; do usb_switch quiet; done ) &
+}
+maybe_usb_switch
 
 # Network: phone is 172.16.42.1. The host sets 172.16.42.2/24 itself
 # (CONTRIBUTING.md section 2): Alpine's busybox has no udhcpd applet.

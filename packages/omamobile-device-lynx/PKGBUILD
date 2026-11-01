@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-device-lynx
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile support for the Google Pixel 7a (lynx): storage guard, USB networking, and boot-success marker"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT Apache-2.0)
+depends=(bash systemd util-linux omamobile-keyring)
+provides=(omamobile-device)
+conflicts=(omamobile-device)
+backup=(etc/pacman.d/omamobile-mirrorlist)
+install=omamobile-device-lynx.install
+makedepends=(gcc python)
+
+build() {
+  "$startdir/build" "$srcdir/build"
+}
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir" "$srcdir/build"
+}

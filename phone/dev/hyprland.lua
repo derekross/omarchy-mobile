@@ -20,8 +20,9 @@ hl.config({
   misc = { disable_hyprland_logo = true, disable_splash_rendering = true, disable_watchdog_warning = true },
 })
 
--- The outer desktop owns SUPER, so the phone session uses ALT
-hl.bind("ALT + RETURN", hl.dsp.exec_cmd("alacritty"), { description = "Terminal" })
+-- The outer desktop owns SUPER, so the phone session uses ALT. The default
+-- terminal, started directly rather than through uwsm, opens in this session
+hl.bind("ALT + RETURN", hl.dsp.exec_cmd("xdg-terminal-exec"), { description = "Terminal" })
 
 hl.on("hyprland.start", function()
   -- Omarchy's shell, from the dev copy, with the phone profile's home directory

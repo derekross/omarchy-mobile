@@ -1,0 +1,61 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Pixel 9a: close the MAX77779's USB data switch after a cable replug. The
+# chip opens USBSW_CTRL (0x93) on unplug and leaves it open when VBUS
+# returns, so the phone never re-enumerates (device/tegu/NOTES.md 2026-10-26).
+# While the gadget is not configured, VBUS is present and the switch is open,
+# tegu-tcpc-switch connect (identity and VBUS checked, I2C_SLAVE never
+# forced) writes 0x09 back. With the cable out (no VBUS) the switch is open
+# too, and the helper would refuse: the power register is read first, so a
+# day on battery costs I2C reads, not journal lines. A Type-C driver that
+# owns the chip (tcpci_maxim, since kernel #124) closes the switch itself:
+# then this exits and leaves the chip to it.
+#   omamobile-tegu-usb-rescue [--once]   (--once: one pass, for the tests)
+# OMAMOBILE_TEGU_ROOT: a scratch root for the package tests;
+# OMAMOBILE_TEGU_RESCUE_GRACE: seconds the gadget may stay unconfigured
+# before the chip is read (default 4; then once per grace period).
+set -uo pipefail
+
+root=${OMAMOBILE_TEGU_ROOT:-}
+if [[ -n $root ]]; then
+  [[ $root == /* && $root != / && -d $root ]] || exit 2
+fi
+tool=${TEGU_TCPC_SWITCH:-/usr/bin/tegu-tcpc-switch}
+grace=${OMAMOBILE_TEGU_RESCUE_GRACE:-4}
+once=0
+[[ ${1:-} == --once ]] && once=1
+log() { echo "omamobile-tegu-usb-rescue: $*"; }
+
+[[ -x $tool ]] || { log "no $tool"; exit 0; }
+tcpm_owns() { local d; for d in "$root"/sys/bus/i2c/devices/*-0025; do [[ -e $d/driver ]] && return 0; done; return 1; }
+gadget_state() { cat "$root"/sys/class/udc/*/state 2>/dev/null | head -1; }
+# TCPC_POWER_STATUS (0x1e) bit 2: VBUS present
+vbus_present() { local p; p=$("$tool" power 2>/dev/null | tail -1); [[ -n $p ]] && (( (p & 4) != 0 )); }
+
+open_since=0
+log "watching the gadget state and the TCPC data switch"
+while :; do
+  if tcpm_owns; then
+    log "a Type-C driver owns the chip; nothing to do"
+    exit 0
+  fi
+  state=$(gadget_state)
+  if [[ $state == configured ]]; then
+    open_since=0
+  else
+    now=$(date +%s)
+    (( open_since == 0 )) && open_since=$now
+    if (( now - open_since >= grace )); then
+      open_since=$now
+      if vbus_present; then
+        sw=$("$tool" switch 2>/dev/null | tail -1)
+        if [[ -n $sw && $sw != 0x09 ]]; then
+          log "gadget ${state:-absent}, VBUS present, USBSW_CTRL $sw: closing the data switch"
+          "$tool" connect 2>&1 | tail -1
+        fi
+      fi
+    fi
+  fi
+  ((once)) && exit 0
+  sleep 2
+done

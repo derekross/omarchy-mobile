@@ -1,0 +1,180 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-tegu-graphics-start in a scratch root: the marker goes down and
+# is synced before the first driver loads, the drivers load in order, a load
+# that returns and fails is logged, skipped and clears the marker (the rest
+# still loads), each step keys on its own device node, the panel's DSI
+# commands are allowed for google-tg4c only and before gs_decon, and a
+# marker from a previous boot keeps every driver off until --retry. No
+# hardware is touched: modprobe, sync and sleep are fakes on PATH.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script=$PWD/bin/omamobile-tegu-graphics-start
+fail() { printf 'not ok - graphics-start: %s\n' "$1" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export OMAMOBILE_TEGU_ROOT=$tmp/root
+export TEST_LOG=$tmp/calls
+export TEST_ROOT=$OMAMOBILE_TEGU_ROOT
+marker=$OMAMOBILE_TEGU_ROOT/var/lib/omamobile/tegu-graphics-started
+export TEST_MARKER=$marker
+dt=$OMAMOBILE_TEGU_ROOT/proc/device-tree
+devices=$OMAMOBILE_TEGU_ROOT/sys/bus/platform/devices
+allow_tx=$OMAMOBILE_TEGU_ROOT/sys/module/gs_dsim_cmd/parameters/allow_tx
+mkdir -p "$tmp/bin" "$devices/1f000000.gpu" "$devices/19470000.display-controller" \
+  "$OMAMOBILE_TEGU_ROOT/sys/bus/platform/drivers/panthor" "$OMAMOBILE_TEGU_ROOT/sys/bus/platform/drivers/gs-decon" \
+  "$dt/soc/usi@10c900c0/i2c@10c90000/haptic-driver@43" \
+  "$dt/soc/usi@108b00c0/i2c@108b0000/led-controller@63" \
+  "$dt/soc/usi@155d00c0/serial@155d0000/bluetooth"
+printf 'okay\0' > "$dt/soc/usi@10c900c0/i2c@10c90000/haptic-driver@43/status"
+export PATH=$tmp/bin:$PATH
+# modprobe: the marker must already be on disk; a module "binds" by creating
+# what the script waits for; FAIL_MODULE fails that one load. gs_dsim_cmd
+# brings its allow_tx parameter (0, the kernel's default), and gs_decon's
+# line records what allow_tx read when it loaded.
+cat > "$tmp/bin/modprobe" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+test -s "$TEST_MARKER"
+grep -qx synced "$TEST_LOG"
+[[ ${FAIL_MODULE:-} != "$1" ]] || { echo "$*" >> "$TEST_LOG"; exit 1; }
+case $1 in
+  panthor) ln -sfn "$TEST_ROOT/sys/bus/platform/drivers/panthor" "$TEST_ROOT/sys/bus/platform/devices/1f000000.gpu/driver" ;;
+  gs_dsim_cmd) p=$TEST_ROOT/sys/module/gs_dsim_cmd/parameters; [[ -e $p/allow_tx ]] || { mkdir -p "$p"; echo 0 > "$p/allow_tx"; } ;;
+  gs_decon) ln -sfn "$TEST_ROOT/sys/bus/platform/drivers/gs-decon" "$TEST_ROOT/sys/bus/platform/devices/19470000.display-controller/driver"
+            set -- "$@" "allow_tx=$(cat "$TEST_ROOT/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo none)" ;;
+  leds_lm3644) mkdir -p "$TEST_ROOT/sys/class/leds/white:torch"; echo "${TORCH_LIT:-0}" > "$TEST_ROOT/sys/class/leds/white:torch/brightness" ;;
+  max77779_battery) mkdir -p "$TEST_ROOT/sys/class/power_supply/max77779-battery"; echo 77 > "$TEST_ROOT/sys/class/power_supply/max77779-battery/capacity" ;;
+esac
+echo "$*" >> "$TEST_LOG"
+EOF
+printf '#!/bin/bash\necho synced >> "$TEST_LOG"\n' > "$tmp/bin/sync"
+printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
+chmod +x "$tmp/bin/"*
+# The command line the bootloader built, with its panel name
+cmdline() { mkdir -p "$OMAMOBILE_TEGU_ROOT/proc"; echo "console=null panic=10 ${1:+exynos_drm.panel_name=$1 }mem_sleep_default=s2idle" > "$OMAMOBILE_TEGU_ROOT/proc/cmdline"; }
+reset() {
+  : > "$TEST_LOG"
+  rm -rf "$marker" "$devices/1f000000.gpu/driver" "$devices/19470000.display-controller/driver" \
+    "$OMAMOBILE_TEGU_ROOT/sys/class" "$OMAMOBILE_TEGU_ROOT/sys/module" "$OMAMOBILE_TEGU_ROOT/run"
+  cmdline google-tg4c
+}
+loads() { grep -v '^synced$' "$TEST_LOG" | cut -d' ' -f1 | tr '\n' ' ' | sed 's/ $//'; }
+all="panthor gs_dsim_cmd gs_decon cs40l26_vibra leds_lm3644 max77779_battery hci_uart"
+
+# A full start: the order, the gs_decon options, the marker gone, the summary,
+# the session's two files
+reset
+out=$("$script")
+[[ ! -e $marker ]] || fail "a finished start leaves the marker"
+[[ $(loads) == "$all" ]] || fail "load order: $(loads)"
+grep -q '^gs_decon stage=2 fbdev=0 ' "$TEST_LOG" || fail "gs_decon gets the full driver stage"
+[[ $out == *"up: GPU, display, haptics, torch, gauge 77 %, Bluetooth"* ]] || fail "summary: $out"
+[[ -s $OMAMOBILE_TEGU_ROOT/run/omamobile-tegu-gpu-ready.json ]] || fail "no gpu-ready file for the session"
+
+# google-tg4c on the command line: allow_tx reads 1 when gs_decon loads
+grep -q '^gs_decon .*allow_tx=1$' "$TEST_LOG" || fail "allow_tx was not 1 before gs_decon loaded: $(grep '^gs_decon' "$TEST_LOG")"
+[[ $(cat "$allow_tx") == 1 ]] || fail "allow_tx was not written"
+[[ $out == *"panel google-tg4c: DSI commands allowed"* ]] || fail "the allow is not logged: $out"
+
+# The bootloader's form, the name with the panel's id appended (the palmtop's
+# command line): allowed too
+reset; cmdline google-tg4c.2d008004
+out=$("$script")
+grep -q '^gs_decon .*allow_tx=1$' "$TEST_LOG" || fail "the suffixed panel name was not allowed: $(grep '^gs_decon' "$TEST_LOG")"
+[[ $out == *"panel google-tg4c.2d008004: DSI commands allowed"* ]] || fail "the suffixed allow is not logged: $out"
+
+# Another panel: allow_tx stays 0, gs_decon still loads
+reset; cmdline google-xyz9
+out=$("$script")
+grep -q '^gs_decon .*allow_tx=0$' "$TEST_LOG" || fail "another panel got allow_tx: $(grep '^gs_decon' "$TEST_LOG")"
+[[ $(cat "$allow_tx") == 0 ]] || fail "allow_tx was touched for another panel"
+[[ $out == *"panel google-xyz9: DSI commands stay off"* ]] || fail "the other panel is not named: $out"
+[[ $(loads) == "$all" ]] || fail "another panel changed the loads: $(loads)"
+
+# No panel name at all: the same, and said so
+reset; cmdline ""
+out=$("$script")
+grep -q '^gs_decon .*allow_tx=0$' "$TEST_LOG" || fail "an unnamed panel got allow_tx"
+[[ $out == *"panel unnamed: DSI commands stay off"* ]] || fail "an unnamed panel is not reported: $out"
+
+# A failed display load: exit 1, logged and skipped, the rest still loads,
+# the marker is cleared (the load returned, no hang)
+reset
+out=$(FAIL_MODULE=gs_decon "$script") && fail "a failed load exits 0"
+[[ ! -e $marker ]] || fail "a failed load kept the marker: $(cat "$marker")"
+[[ $(loads) == "$all" ]] || fail "a failed load stopped the rest: $(loads)"
+[[ $out == *"gs_decon failed"*"skipped"* && $out == *"failed: display"* ]] || fail "the failed step is not named: $out"
+[[ $out == *"up: GPU, haptics, torch, gauge 77 %, Bluetooth"* ]] || fail "summary after a failed display: $out"
+[[ ! -e $OMAMOBILE_TEGU_ROOT/run/omamobile-tegu-display-card ]] || fail "a display that did not come up left a card file"
+
+# panthor fails (no mali_csffw.bin yet): the display still comes up, and the
+# session gets no gpu-ready file
+reset
+out=$(FAIL_MODULE=panthor "$script") && fail "a failed GPU exits 0"
+[[ ! -e $marker ]] || fail "a failed GPU kept the marker"
+[[ $(loads) == "$all" ]] || fail "a failed GPU took the display with it: $(loads)"
+[[ $out == *"panthor failed"* && $out == *"up: display, haptics, torch, gauge 77 %, Bluetooth"* ]] || fail "panthor fails: $out"
+[[ ! -e $OMAMOBILE_TEGU_ROOT/run/omamobile-tegu-gpu-ready.json ]] || fail "a GPU that did not come up was reported ready"
+
+# No GPU in the DTB: the display and the rest still come up, the unit's own
+# condition aside
+reset
+mv "$devices/1f000000.gpu" "$tmp/gpu"
+out=$("$script") || fail "no GPU node is not a failure"
+[[ $(loads) == "gs_dsim_cmd gs_decon cs40l26_vibra leds_lm3644 max77779_battery hci_uart" ]] || fail "no GPU node: $(loads)"
+[[ ! -e $marker && $out == *"no GPU in this DTB"* && $out == *"up: display, haptics"* ]] || fail "no GPU node: $out"
+mv "$tmp/gpu" "$devices/1f000000.gpu"
+
+# No display controller in the DTB: the GPU and the rest still come up
+reset
+mv "$devices/19470000.display-controller" "$tmp/decon"
+out=$("$script") || fail "no display node is not a failure"
+[[ $(loads) == "panthor cs40l26_vibra leds_lm3644 max77779_battery hci_uart" ]] || fail "no display node: $(loads)"
+[[ $out == *"no display controller in this DTB"* ]] || fail "no display node: $out"
+mv "$tmp/decon" "$devices/19470000.display-controller"
+
+# Neither: nothing to do
+reset
+mv "$devices/1f000000.gpu" "$tmp/gpu"; mv "$devices/19470000.display-controller" "$tmp/decon"
+out=$("$script")
+[[ -z $(loads) && ! -e $marker && $out == *"nothing to do"* ]] || fail "no GPU and no display were not skipped"
+mv "$tmp/gpu" "$devices/1f000000.gpu"; mv "$tmp/decon" "$devices/19470000.display-controller"
+
+# A marker left by a boot that hung: nothing loads, the hint is printed
+reset
+printf '%s display\n' "$(date -Is)" > "$marker"
+out=$("$script")
+[[ -s $marker && -z $(loads) ]] || fail "a leftover marker did not keep the drivers off"
+[[ $out == *"--retry"* ]] || fail "no retry hint"
+
+# --retry clears it and starts again
+out=$("$script" --retry)
+[[ ! -e $marker && $(loads) == "$all" ]] || fail "--retry did not start again: $(loads)"
+
+# A torch that comes up lit is turned off and counted as failed; the rest
+# still loads
+reset
+out=$(TORCH_LIT=1 "$script") && fail "a lit torch passed"
+[[ $(cat "$OMAMOBILE_TEGU_ROOT/sys/class/leds/white:torch/brightness") == 0 ]] || fail "a lit torch was left lit"
+[[ $out == *"came up lit"* && $out == *"failed: torch"* && $(loads) == "$all" ]] || fail "lit torch: $out"
+[[ ! -e $marker ]] || fail "a lit torch kept the marker"
+
+# A disabled haptics node is skipped, a missing Bluetooth node too
+reset
+printf 'disabled\0' > "$dt/soc/usi@10c900c0/i2c@10c90000/haptic-driver@43/status"
+mv "$dt/soc/usi@155d00c0" "$tmp/bt-node"
+out=$("$script")
+[[ $(loads) == "panthor gs_dsim_cmd gs_decon leds_lm3644 max77779_battery" ]] || fail "disabled nodes were loaded: $(loads)"
+[[ $out == *"no haptics in this DTB"* && $out == *"no Bluetooth in this DTB"* ]] || fail "skips are not reported"
+printf 'okay\0' > "$dt/soc/usi@10c900c0/i2c@10c90000/haptic-driver@43/status"
+mv "$tmp/bt-node" "$dt/soc/usi@155d00c0"
+
+# A driver already loaded this boot is never retried
+reset
+mkdir -p "$OMAMOBILE_TEGU_ROOT/sys/module/panthor"
+out=$("$script")
+[[ -z $(loads) && ! -e $marker && $out == *"already started"* ]] || fail "a loaded driver was retried"
+
+# A bad argument
+"$script" --bogus >/dev/null 2>&1 && fail "a bad argument is accepted"
+echo 'ok - graphics-start: marker first, order kept, failures skipped and named, allow_tx for google-tg4c only, --retry works'

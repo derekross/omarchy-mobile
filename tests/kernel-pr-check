@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: MIT
 # tools/kernel-pr-check's commit checks against a stand-in kernel tree (a
 # git repository with a fake scripts/checkpatch.pl): sign-offs, prefixes and
-# checkpatch errors. The --build half needs a real tree and is run by hand.
+# checkpatch errors. Its device-tree comparison runs against a second
+# stand-in whose make prints the messages each board file asks for; the
+# real builds (clang, dtc, dt-validate) need a real tree and are run by hand.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 t=$(mktemp -d)
@@ -113,3 +115,89 @@ c_out=$("$here/tools/kernel-pr-check" -C "$k" --merge newbase good 2>&1) || c_st
 grep -q 'rebase needed' <<<"$c_out" && grep -q 'drivers/a.c' <<<"$c_out" || { echo "$c_out"; fail "--merge, conflict: doesn't name the rebase or the file"; }
 grep -q 'signed off by their authors' <<<"$c_out" || { echo "$c_out"; fail "--merge, conflict: skipped the commit checks"; }
 echo "ok - --merge fails a conflicting branch as 'rebase needed', and still checks its commits"
+
+# ---------------------------------------------------------------- --build
+# The device-tree comparison, with a stand-in make: each board's .dts lists
+# the messages its build prints ("msg <text>", @B@ for the board's name),
+# "broken" fails its build, and a board with no .dts stops make there, as
+# the kernel's does when asked for a DTB it has no source for.
+d=$t/dtk
+mkdir -p "$d/scripts/kconfig" "$d/arch/arm64/boot/dts/exynos/google" "$t/bin"
+cp "$k/scripts/checkpatch.pl" "$d/scripts/"
+printf '#!/bin/sh\nexit 0\n' > "$d/scripts/kconfig/merge_config.sh"
+cat > "$d/scripts/fake-dtbs" <<'EOF'
+#!/bin/sh
+for t; do
+  f=arch/arm64/boot/dts/${t%.dtb}.dts b=$(basename "$t" .dtb)
+  [ -e "$f" ] || { echo "make[5]: *** No rule to make target '$f'.  Stop." >&2; exit 2; }
+  grep -q '^broken' "$f" && { echo "make[5]: *** [$t] Error 1" >&2; exit 2; }
+  sed -n 's/^msg //p' "$f" | sed "s|@B@|$b|g; s|^|arch/arm64/boot/dts/$t: |"
+done
+EOF
+chmod +x "$d/scripts/kconfig/merge_config.sh" "$d/scripts/fake-dtbs"
+cat > "$d/Makefile" <<'EOF'
+DTBS := $(filter %.dtb,$(MAKECMDGOALS))
+.PHONY: defconfig olddefconfig $(DTBS)
+defconfig olddefconfig:
+	@mkdir -p $(O) && touch $(O)/.config
+$(firstword $(DTBS)):
+	@sh scripts/fake-dtbs $(DTBS)
+$(wordlist 2,999,$(DTBS)):
+	@:
+EOF
+# Builds are skipped without clang, ld.lld and dt-validate; the stand-in
+# make calls none of them.
+for b in clang ld.lld dt-validate; do printf '#!/bin/sh\nexit 0\n' > "$t/bin/$b"; chmod +x "$t/bin/$b"; done
+g=$d/arch/arm64/boot/dts/exynos/google
+soc="msg / (google,@B@): soc_id: b'\\t\\x85P\\x01' is not of type 'object'"
+cd "$d"
+git init -q -b omamobile
+git config user.name "A Human"
+git config user.email human@example.org
+printf '%s\n' "$soc" > "$g/gs201-cheetah.dts"
+printf '%s\n' "msg phy@11110000 (google,zuma-eusb2-phy): 'vdd-supply' is a required property" > "$g/zuma-husky.dts"
+git add -A && git commit -q -m "base"
+brun() { # name expect pattern [not-pattern]   ($merge: --merge or empty)
+  local out status=0
+  out=$(PATH=$t/bin:$PATH "$here/tools/kernel-pr-check" -C "$d" --build "$t/out" ${merge-} omamobile HEAD 2>&1) || status=$?
+  [[ $status == "$2" ]] || { echo "$out"; fail "$1: exit $status, expected $2"; }
+  grep -c -- "$3" <<<"$out" >/dev/null || { echo "$out"; fail "$1: doesn't say '$3'"; }
+  [[ -z ${4:-} ]] || ! grep -c -- "$4" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$4'"; }
+}
+dbranch() { git checkout -q omamobile && git checkout -q -b "$1"; }
+merge=--merge
+
+# kernel #108: a new gs201 board, whose only message is one cheetah has at
+# the base. The base build was asked for the new board too and stopped
+# there, before zuma-husky, so husky's warning read as new; and panther's
+# soc_id message, cheetah's word for word, counted as new.
+dbranch newboard
+printf '%s\n' "$soc" > "$g/gs201-panther.dts"
+git add -A && git commit -q -m "arm64: dts: exynos: google: add panther" -m "Signed-off-by: A Human <human@example.org>"
+brun "a new board with a sibling's message" 0 "no new warnings" "zuma-husky"
+brun "a new board with a sibling's message" 0 "^#   arch/arm64/boot/dts/exynos/google/gs201-panther.dtb: / (google,gs201-panther): soc_id"
+echo "ok - a new board isn't failed for a base board it stopped the base build before, or for its sibling's message (kernel #108)"
+
+dbranch newboard-own
+printf '%s\n' "$soc" "msg / (google,@B@): 'foo' is a required property" > "$g/gs201-panther.dts"
+git add -A && git commit -q -m "arm64: dts: exynos: google: add panther" -m "Signed-off-by: A Human <human@example.org>"
+brun "a new board's own message" 1 "^    arch/arm64/boot/dts/exynos/google/gs201-panther.dtb: / (google,gs201-panther): 'foo' is a required"
+echo "ok - a message no sibling has at the base is new on a new board"
+
+dbranch oldboard
+printf '%s\n' "$soc" "msg phy@11110000 (google,zuma-eusb2-phy): 'vdd-supply' is a required property" > "$g/zuma-husky.dts"
+git commit -q -am "arm64: dts: exynos: google: zuma-husky: change" -m "Signed-off-by: A Human <human@example.org>"
+brun "a sibling's message on a board the base has" 1 "zuma-husky.dtb: / (google,zuma-husky): soc_id"
+echo "ok - a board the base has is compared with itself, not with its siblings"
+
+# A base that doesn't build (here a pull request fixes it): the boards that
+# did build are still compared, and the log says which didn't. Without
+# --merge, so the base is the branch point. husky built nowhere at the base,
+# so its message counts as new; cheetah's does not.
+git checkout -q omamobile && echo broken >> "$g/zuma-husky.dts" && git commit -q -am "base: break husky"
+dbranch fixbase
+sed -i '/^broken/d' "$g/zuma-husky.dts"
+git commit -q -am "arm64: dts: exynos: google: zuma-husky: fix" -m "Signed-off-by: A Human <human@example.org>"
+merge="" brun "a base that doesn't build" 1 "the base's device trees don't all build"
+merge="" brun "a base that doesn't build" 1 "^    arch/arm64/boot/dts/exynos/google/zuma-husky.dtb: phy" "^    .*gs201-cheetah.dtb"
+echo "ok - a base that doesn't all build is compared where it did, and says so"

@@ -14,7 +14,11 @@ Used by omamobile-speaker-protection (AOC-PLAN.md stages C8/C9):
                     resume); while the speaker PCM runs, also that both DSPs
                     run the protection firmware with the calibration applied.
                     Mutes both amplifiers (through "omamobile-speaker-protection
-                    mute") on any failure and exits
+                    mute") on any failure and exits. In earpiece mode
+                    (AOC-PLAN C9k: the mode file names it) it expects the top
+                    amplifier alone, its DSP bypassed, at the earpiece's
+                    ceilings and the bottom one muted, and it answers each
+                    mode change in the ack file
   verify            the watch checks plus liveness and plausibility over a few
                     seconds of playback; exit 0 only if all pass
   signal            write a test signal (1 kHz tone or pink multitone) as WAV
@@ -221,6 +225,14 @@ class JsonCtl:
         except (OSError, ValueError):
             return {}
 
+    def _save(self, state):
+        # rename over the file, so the fake mixer reading it at the same
+        # moment never sees half of it
+        tmp = f'{self.path}.{os.getpid()}'
+        with open(tmp, 'w') as f:
+            json.dump(state, f)
+        os.replace(tmp, self.path)
+
     def names(self):
         return list(self._load())
 
@@ -238,8 +250,7 @@ class JsonCtl:
             if name.endswith('HALO_HEARTBEAT') and os.environ.get('FAKE_HB_STUCK') != '1' and not frozen:
                 v += 1           # the firmware's heartbeat moves while it runs
                 c['v'] = list(v.to_bytes(4, 'big'))
-                with open(self.path, 'w') as f:
-                    json.dump(state, f)
+                self._save(state)
             return v
         if t == 'ENUMERATED':
             return c['items'][c['v']]
@@ -274,8 +285,7 @@ class JsonCtl:
             if log_path:
                 with open(log_path, 'a') as f:
                     f.write(name + '\n')
-        with open(self.path, 'w') as f:
-            json.dump(state, f)
+        self._save(state)
         return True
 
 
@@ -474,6 +484,68 @@ def kmsg_problems(records, since=0.0):
 
 # --- limits and checks --------------------------------------------------------
 
+# Earpiece mode (AOC-PLAN.md C9k): the top amplifier alone with its DSP
+# bypassed (PCM Source ASP), as stock's handset path; the bottom muted. The
+# same ceilings omamobile-speaker-protection checks: analog 6 (AUDIO-PLAN.md
+# section 4, the top amplifier as earpiece), digital the media stage's 737,
+# both never above the stage's own.
+EARPIECE_DIGITAL_CEIL = 737
+EARPIECE_ANALOG_CEIL = 6
+MODES = ('speaker', 'earpiece')
+
+
+def run_dir():
+    return os.environ.get('OMAMOBILE_RUN', '/run/omamobile')
+
+
+def speaker_mode():
+    """The mode omamobile-speaker-protection set: speaker (no file, the
+    default) or earpiece; anything else is returned as it is (and refused)."""
+    try:
+        with open(os.path.join(run_dir(), 'speaker-mode')) as f:
+            return f.read().strip() or 'speaker'
+    except OSError:
+        return 'speaker'
+
+
+def ack_mode(mode):
+    """Tell omamobile-speaker-protection which mode this watchdog enforces."""
+    path = os.path.join(run_dir(), 'speaker-watch-mode')
+    try:
+        with open(path + '.tmp', 'w') as f:
+            f.write(mode + '\n')
+        os.replace(path + '.tmp', path)
+    except OSError as e:
+        log(f'watchdog: cannot write {path}: {e}')
+
+
+def earpiece_ceilings(digital_ceil, analog_ceil):
+    return min(digital_ceil, EARPIECE_DIGITAL_CEIL), min(analog_ceil['Top'], EARPIECE_ANALOG_CEIL)
+
+
+def jump_rule(analog_ceil):
+    """The coil-estimate jump rule: off by default. The firmware measures
+    the coil closed-loop, and with music at the c9 levels the coils really
+    heat to a 60-65 C plateau within a minute (C9d-8 and "C9 with real
+    music", 2026-10-31), so a rise rule muted normal listening; the
+    temperature backstop (80 C) is the hard limit. OMAMOBILE_SPK_TEMP_JUMP
+    sets it in any stage and mode, measured from the estimate
+    OMAMOBILE_SPK_TEMP_SETTLE seconds into a stream; 0 turns it off."""
+    tj = os.environ.get('OMAMOBILE_SPK_TEMP_JUMP', '')
+    return (float(tj) or None) if tj != '' else None
+
+def jump_settle():
+    """The jump rule's settle window (C9d-8, 2026-10-31). A stream's first
+    coil estimates are the firmware's reference (CAL_AMBIENT, 25 C) until
+    it has measured the coil, and the coils are often warmer than that (31
+    C battery, 33 C top coil on USB the same day), so the measured value is
+    a step up, not a rise, and it takes about a second. The rule's
+    baseline is the estimate once the stream has played for
+    OMAMOBILE_SPK_TEMP_SETTLE seconds (default 2); every rise above it is
+    held to the jump. The temperature backstop applies throughout."""
+    return float(os.environ.get('OMAMOBILE_SPK_TEMP_SETTLE', '') or 2.0)
+
+
 def ceilings():
     """This stage's ceilings, the same numbers the service checks before it
     unmutes: digital, then analog per amplifier (c8: the top drives the
@@ -486,20 +558,35 @@ def ceilings():
     return 657, {'Top': 6, 'Bottom': 10}
 
 
-def check(v, digital_ceil, analog_ceil, temp_max, strict=True):
+def check(v, digital_ceil, analog_ceil, temp_max, strict=True, mode='speaker'):
     """Problems with one reading of both amplifiers (empty if none). With
-    strict, the checks that only hold once the DSP runs a stream are on."""
+    strict, the checks that only hold once the DSP runs a stream are on.
+    In earpiece mode the top amplifier may bypass its DSP (PCM Source ASP;
+    DSP while the mode changes) within the earpiece's ceilings, the bottom
+    one must be muted, and neither DSP is judged: neither is in an audible
+    path (stock's handset path runs without protection)."""
     problems = []
+    if mode not in MODES:
+        return [f'unknown speaker mode {mode!r}']
+    ear_d, ear_a = earpiece_ceilings(digital_ceil, analog_ceil)
     for amp in AMPS:
         g = lambda k: v.get((amp, k))
-        if g('PCM Source') != 'DSP':
-            problems.append(f'{amp}: PCM Source is {g("PCM Source")}, not DSP')
+        src = g('PCM Source')
+        dc, ac = digital_ceil, analog_ceil[amp]
+        if mode == 'earpiece' and amp == 'Top':
+            dc, ac = ear_d, ear_a
+            if src not in ('ASP', 'DSP'):
+                problems.append(f'{amp}: PCM Source is {src}, not ASP or DSP (earpiece mode)')
+        elif src != 'DSP':
+            problems.append(f'{amp}: PCM Source is {src}, not DSP')
         d, a = g('Digital PCM Volume'), g('Analog PCM Volume')
-        if d is None or d > digital_ceil:
-            problems.append(f'{amp}: Digital PCM Volume {d} above {digital_ceil}')
-        if a is None or a > analog_ceil[amp]:
-            problems.append(f'{amp}: Analog PCM Volume {a} above {analog_ceil[amp]}')
-        if not strict:
+        if d is None or d > dc:
+            problems.append(f'{amp}: Digital PCM Volume {d} above {dc}')
+        if a is None or a > ac:
+            problems.append(f'{amp}: Analog PCM Volume {a} above {ac}')
+        if mode == 'earpiece' and amp == 'Bottom' and d != 0:
+            problems.append(f'{amp}: Digital PCM Volume {d} in earpiece mode, not muted')
+        if not strict or mode == 'earpiece':
             continue
         if g('HALO_STATE') != HALO_RUN:
             problems.append(f'{amp}: HALO_STATE {g("HALO_STATE")}, not running')
@@ -965,14 +1052,14 @@ def cmd_feedback(args):
 # then takes five samples about 0.2 s apart: RTLOG_STATE := 0, wait for it to
 # read 1, read RTLOG_DATA. Word 1 of the data is the impedance the firmware
 # measures from its voltage and current sense, in the same units as CAL_R
-# (0xfffffd and 0xfffffe: no valid measurement, e.g. a signal too low to
+# (0xffff00 and above, e.g. 0xffffd4 and 0xfffffd: no valid measurement, a signal too low to
 # measure). So Z / CAL_R is the coil's resistance relative to the factory
 # calibration: about 1.00 at room temperature, +0.39 % per degree C (copper).
 # Printed only as that ratio, never as a resistance: the calibration is this
 # phone's. Writes only the logger's own controls.
 
 RTLOG_VARIABLES = (0x39d, 0x3b3, 0x3b4)
-RTLOG_INVALID = 0xfffffd
+RTLOG_INVALID = 0xffff00   # 0xffffd4..0xfffffe seen on the phone: no measurement (2026-10-31)
 COPPER_TC = 0.0039
 
 
@@ -1063,8 +1150,15 @@ def cmd_watch(args):
     # A real coil warms by tenths of a degree in a few seconds at these
     # levels (C9d step 2). A reading more than this many degrees above the
     # stream's first one is the false runaway of C9d-3..5 (25 -> 56 C within
-    # 1 s): mute on it at once, without waiting for temp_max.
-    temp_jump = float(os.environ.get('OMAMOBILE_SPK_TEMP_JUMP', '5'))
+    # 1 s): mute on it at once, without waiting for temp_max. Only above
+    # analog 10, though: at the everyday level the firmware does not sense
+    # the coil (vmon low 1) and the bottom amplifier's open-loop estimate
+    # jumps 10-15 C on any level drop (a quiet passage in music, a volume
+    # step down, the end of a stream, DRE engaging; AOC-PLAN C9j) while the
+    # firmware attenuates nothing and the output stays inside the
+    # no-protection limits (AUDIO-PLAN section 4). OMAMOBILE_SPK_TEMP_JUMP
+    # sets the rule in any stage; 0 turns it off. temp_max stays.
+    temp_jump = jump_rule(analog_ceil)
     amps = Amps(args.card)
     devs = amp_devices()
     try:
@@ -1079,7 +1173,8 @@ def cmd_watch(args):
         mute('watchdog: no speaker PCM')
         return 1
     log(f'watchdog: watching {pcm}, ceilings digital {digital_ceil} analog {analog_ceil}, '
-        f'heartbeat {"enforced" if strict_hb else "logged"}')
+        f'heartbeat {"enforced" if strict_hb else "logged"}, coil temperature backstop {temp_max:g} C, '
+        f'jump rule {f"{temp_jump:g} C above the estimate {jump_settle():g} s into a stream" if temp_jump else "off (the 80 C backstop is the limit; OMAMOBILE_SPK_TEMP_JUMP sets one)"}')
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
     mode = os.environ.get('OMAMOBILE_SPK_MEDIA_DELTA', '')
@@ -1111,15 +1206,41 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
     since = None
     beat = {}
     start_temp = {}
+    first_temp = {}
+    settle = jump_settle()
     warned = False
     applied = False
     problems_delta = []
     problems_fb = []
     failures = 0
     n = 0
+    acked = None
     while args.iterations == 0 or n < args.iterations:
         n += 1
         now = time.monotonic()
+        # The mode (C9k): taken at the start of a round and answered in the
+        # ack file, which omamobile-speaker-protection waits for before it
+        # changes anything the new mode allows and the old one does not.
+        # A change starts the stream's checks afresh (grace, heartbeat,
+        # coil readings, the media delta).
+        mode = speaker_mode()
+        if mode != acked or not os.path.exists(os.path.join(run_dir(), 'speaker-watch-mode')):
+            if mode != acked:
+                if acked is not None:
+                    log(f'watchdog: {mode} mode (was {acked})')
+                if mode == 'earpiece':
+                    ed, ea = earpiece_ceilings(digital_ceil, analog_ceil)
+                    # The jump rule follows the earpiece's own analog
+                    # ceiling (6: off, as at every gain of 10 or below), and
+                    # with neither DSP audible no DSP rule applies at all.
+                    log(f'watchdog: earpiece mode: Top through ASP or DSP at digital <= {ed}, analog <= {ea}; '
+                        'Bottom muted; no DSP rule (coil estimate, jump, heartbeat, media delta): '
+                        'neither DSP is in an audible path')
+                if since is not None:
+                    since = now
+                beat, start_temp, applied, problems_delta = {}, {}, False, []
+            acked = mode
+            ack_mode(mode)
         fatal, warn = kmsg_problems(kmsg.records())
         for w in warn:
             log(f'watchdog: note: {w}')
@@ -1141,12 +1262,16 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
             problems_fb = []
             # Levels are checked when idle too: nobody raises them by hand.
             v = amps.read(AMP_KEYS)
-            problems = check(v, digital_ceil, analog_ceil, temp_max, strict=False)
+            if speaker_mode() != mode:     # changed while reading: next round
+                time.sleep(args.interval)
+                continue
+            problems = check(v, digital_ceil, analog_ceil, temp_max, strict=False, mode=mode)
         else:
             if since is None:
                 since = now
                 beat = {}
                 start_temp = {}
+                first_temp = {}
                 applied = False
                 problems_delta = []
                 if feedback:
@@ -1157,7 +1282,7 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
             elif feedback and not feedback.alive():
                 problems_fb = ['V/I feedback stream: the hostless capture stopped during the stream']
             strict = now - since >= args.grace
-            if strict and media_delta and not applied:
+            if strict and media_delta and not applied and mode == 'speaker':
                 applied = True
                 for amp in AMPS:
                     err = apply_delta(amps, amp)
@@ -1166,15 +1291,32 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                     else:
                         log(f'watchdog: {amp}: stock media delta applied')
             v = amps.read()
-            problems = check(v, digital_ceil, analog_ceil, temp_max, strict=strict) + problems_delta + problems_fb
-            for amp in AMPS:
+            if speaker_mode() != mode:     # changed while reading: next round
+                time.sleep(args.interval)
+                continue
+            problems = (check(v, digital_ceil, analog_ceil, temp_max, strict=strict, mode=mode)
+                        + problems_delta + problems_fb)
+            # In earpiece mode neither DSP is in an audible path: no coil or
+            # heartbeat rule (the levels, the bypass and the mute are checked)
+            for amp in AMPS if mode == 'speaker' else ():
                 t = q(v.get((amp, 'CSPL_TEMPERATURE')), 14)
-                if t is not None:
-                    t0 = start_temp.setdefault(amp, t)
+                if t is not None and temp_jump is not None:
+                    tf = first_temp.setdefault(amp, t)
+                    if amp not in start_temp:
+                        # the step from the reference to the measured coil
+                        # takes about a second, so the baseline is the
+                        # estimate once the stream has played for `settle`
+                        # seconds (a mid-step sample, 27 C on the way to 50,
+                        # made the step itself look like a rise, 2026-10-31)
+                        if now - since < settle:
+                            continue
+                        start_temp[amp] = t
+                        continue
+                    t0 = start_temp[amp]
                     if t - t0 > temp_jump:
                         problems.append(f'{amp}: coil temperature jumped {t - t0:.1f} C '
-                                        f'({t0:.1f} -> {t:.1f}) in this stream, above {temp_jump} C')
-            for amp in AMPS:
+                                        f'({t0:.1f} -> {t:.1f}) above its value {settle:g} s into the stream, above {temp_jump} C')
+            for amp in AMPS if mode == 'speaker' else ():
                 hb = v.get((amp, 'HALO_HEARTBEAT'))
                 last = beat.get(amp)
                 if last is None or hb != last[0]:
@@ -1203,6 +1345,10 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
 
 
 def cmd_verify(args):
+    if speaker_mode() != 'speaker':
+        print(f'not verified: the amplifiers are in {speaker_mode()} mode '
+              '(omamobile-speaker-protection earpiece off)')
+        return 1
     digital_ceil, analog_ceil = ceilings()
     temp_max = float(os.environ.get('OMAMOBILE_SPK_TEMP_MAX', '80'))
     amps = Amps(args.card)

@@ -107,8 +107,6 @@ hl.layer_rule({ match = { namespace = "^omamobile-fingerprint$" }, above_lock = 
 -- (patches/omarchy/0011), and a session lock otherwise hides every other
 -- surface, keyboards included.
 hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
--- ...and its hide button (omamobile.keyboard) with it.
-hl.layer_rule({ match = { namespace = "^omamobile-osk-hide$" }, above_lock = 2, no_anim = true })
 
 -- Calls (omamobile.call) above the lock too, taking touches (2): a ringing
 -- call is answered from the lock screen, and the in-call controls stay

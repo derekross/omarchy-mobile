@@ -34,7 +34,8 @@
  *    is not the user's password: fprintd's own polkit check is what guards
  *    enrollment;
  *  - reads the touchscreen while an operation runs: a finger inside the
- *    sensor circle lights the circle (the panel's local_hbm_mode), then
+ *    sensor circle lights the circle (the panel's local_hbm_mode), then,
+ *    with the position scaled to panel pixels,
  *    onPointerDownWithContext and, a frame later, onUiReady; lifting the
  *    finger reverses that. The HAL reports halHandlesDisplayTouches and
  *    halControlsIllumination false, so both are the client's job.
@@ -74,6 +75,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -229,12 +231,15 @@ static const char *inhibit_dir;		/* --inhibit: off unless given */
 /* The panel takes the circle at its next frame; a frame and a half at 60 Hz
  * would do, an idle panel may run at 10 Hz. Tuned in FINGERPRINT-PLAN F8. */
 static int lhbm_settle_ms = 120;
+/* --lhbm-first 1: light the circle before onPointerDown (the 9a) */
+static bool lhbm_first;
 /* The panel driver turns LHBM off after at most 3 s; refresh it meanwhile. */
 #define LHBM_REFRESH_MS	2000
 /* Sensor defaults (stock cheetah); getSensorProps() replaces them. */
 static int32_t sensor_x = 720, sensor_y = 2360, sensor_r = 120;
-#define PANEL_W	1440
-#define PANEL_H	3120
+/* The panel in pixels, the frame of the HAL's sensor location (--panel;
+ * the Pixel 7 Pro's by default, the Pixel 9a is 1080x2424). */
+static int32_t panel_w = 1440, panel_h = 3120;
 
 /* --- logging --- */
 
@@ -596,7 +601,7 @@ static void sensor_props(AIBinder *fingerprint)
 	AParcel_readInt32(out, &x);
 	AParcel_readInt32(out, &y);
 	AParcel_readInt32(out, &r);
-	if (x > 0 && x < PANEL_W && y > 0 && y < PANEL_H && r > 10 && r < 400) {
+	if (x > 0 && x < panel_w && y > 0 && y < panel_h && r > 10 && r < 400) {
 		sensor_x = x;
 		sensor_y = y;
 		sensor_r = r;
@@ -932,20 +937,41 @@ static void lhbm(bool on)
 	lhbm_at = now_ms();
 }
 
+static int32_t touch_max_x, touch_max_y;	/* 0: unknown, no scaling */
+static int32_t scale(int32_t v, int32_t max, int32_t panel);
+
 static void pointer(bool down)
 {
 	AParcel *in = begin(session);
-	int64_t time = now_ms();
+	int64_t time;
 
-	if (down)
-		finger_since = time;
-	write_pointer(in, touch_x, touch_y, time, finger_since);
 	if (down) {
 		reply("FINGER DOWN");
+		/*
+		 * The 9a's HAL captures at pointer down, so the circle is lit
+		 * and settled first (--lhbm-first 1). The 7 Pro's waits for
+		 * onUiReady: pointer down, then the circle, then the settle.
+		 */
+		if (lhbm_first) {
+			lhbm(true);
+			if (lhbm_lit)
+				usleep(lhbm_settle_ms * 1000);
+		}
+		time = now_ms();
+		finger_since = time;
+	} else {
+		time = now_ms();
+	}
+	/* The HAL takes panel pixels, the frame of its sensor location. */
+	write_pointer(in, scale(touch_x, touch_max_x, panel_w),
+		      scale(touch_y, touch_max_y, panel_h), time, finger_since);
+	if (down) {
 		call_void(session, S_ON_POINTER_DOWN_WITH_CONTEXT, in, "onPointerDown");
-		lhbm(true);
-		if (lhbm_lit)
-			usleep(lhbm_settle_ms * 1000);
+		if (!lhbm_first) {
+			lhbm(true);
+			if (lhbm_lit)
+				usleep(lhbm_settle_ms * 1000);
+		}
 		call_void(session, S_ON_UI_READY, begin(session), "onUiReady");
 	} else {
 		call_void(session, S_ON_POINTER_UP_WITH_CONTEXT, in, "onPointerUp");
@@ -1015,6 +1041,33 @@ struct input_event_ {
 #define ABS_MT_POSITION_Y_	0x36
 #define ABS_MT_TRACKING_ID_	0x39
 
+/*
+ * The touchscreen's own coordinate range: a touchscreen may report finer
+ * than the panel's pixels (the Pixel 9a's reports ten times finer), so
+ * positions are scaled to the panel before they meet the sensor location.
+ */
+struct input_absinfo_ {
+	int32_t value, minimum, maximum, fuzz, flat, resolution;
+};
+#define EVIOCGABS_(abs)	_IOR('E', 0x40 + (abs), struct input_absinfo_)
+
+static void touch_range(void)
+{
+	struct input_absinfo_ info;
+
+	if (!ioctl(touch_fd, EVIOCGABS_(ABS_MT_POSITION_X_), &info))
+		touch_max_x = info.maximum;
+	if (!ioctl(touch_fd, EVIOCGABS_(ABS_MT_POSITION_Y_), &info))
+		touch_max_y = info.maximum;
+	say("touchscreen range %d x %d for a %d x %d panel", touch_max_x + 1, touch_max_y + 1,
+	    panel_w, panel_h);
+}
+
+static int32_t scale(int32_t v, int32_t max, int32_t panel)
+{
+	return max > 0 ? (int32_t)((int64_t)v * panel / (max + 1)) : v;
+}
+
 static void touch_events(bool capturing)
 {
 	struct input_event_ ev[32];
@@ -1033,7 +1086,8 @@ static void touch_events(bool capturing)
 			else if (ev[i].code == ABS_MT_TRACKING_ID_)
 				touch_tracking = ev[i].value;
 		} else if (ev[i].type == EV_SYN_ && ev[i].code == 0) {
-			int64_t dx = touch_x - sensor_x, dy = touch_y - sensor_y;
+			int64_t dx = scale(touch_x, touch_max_x, panel_w) - sensor_x;
+			int64_t dy = scale(touch_y, touch_max_y, panel_h) - sensor_y;
 			int64_t r = sensor_r * 3 / 2;	/* some slack at the rim */
 			bool inside = dx * dx + dy * dy <= r * r;
 			bool on = capturing && touch_tracking >= 0 && inside;
@@ -1091,7 +1145,7 @@ static void publish(void)
 		     "\"w\":%d,\"h\":%d,\"seq\":%u,\"acquired\":%d,\"remaining\":%d,"
 		     "\"error\":%d,\"last\":\"%s\",\"contact\":%s}\n",
 		     what, finger && capturing() ? "true" : "false",
-		     sensor_x, sensor_y, sensor_r, PANEL_W, PANEL_H,
+		     sensor_x, sensor_y, sensor_r, panel_w, panel_h,
 		     ui_seq, ui_acquired, ui_remaining, ui_error, ui_last,
 		     sensor_contact ? "true" : "false");
 	if (n < 0 || n >= (int)sizeof(line) || !strcmp(line, last))
@@ -1434,7 +1488,7 @@ static void usage(void)
 {
 	say("usage: omamobile-fp-bridge [--socket PATH] [--state DIR] [--touch EVDEV]\n"
 	    "                           [--lhbm PATH] [--settle MS] [--ui-state PATH]\n"
-	    "                           [--inhibit DIR]");
+	    "                           [--inhibit DIR] [--panel WxH] [--lhbm-first 0|1]");
 	exit(2);
 }
 
@@ -1456,11 +1510,17 @@ int main(int argc, char **argv, char **envp)
 			lhbm_path = v;
 		else if (!strcmp(argv[i], "--settle"))
 			lhbm_settle_ms = atoi(v);
+		else if (!strcmp(argv[i], "--lhbm-first"))
+			lhbm_first = atoi(v) != 0;
 		else if (!strcmp(argv[i], "--ui-state"))
 			ui_state_path = v;
 		else if (!strcmp(argv[i], "--inhibit"))
 			inhibit_dir = v;
-		else
+		else if (!strcmp(argv[i], "--panel")) {
+			if (sscanf(v, "%dx%d", &panel_w, &panel_h) != 2 ||
+			    panel_w < 100 || panel_h < 100)
+				usage();
+		} else
 			usage();
 	}
 	signal(SIGPIPE, SIG_IGN);
@@ -1489,6 +1549,8 @@ int main(int argc, char **argv, char **envp)
 	if (touch_fd < 0)
 		say("no touchscreen at %s (%s): captures will not start", touch_path,
 		    strerror(errno));
+	else
+		touch_range();
 	listen_fd = open_listener();
 	if (listen_fd < 0) {
 		say("cannot listen on %s: %s", socket_path, strerror(errno));

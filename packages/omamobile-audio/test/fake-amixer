@@ -76,8 +76,12 @@ def load():
 
 
 def save(c):
-    with open(state_path, 'w') as f:
+    # write and rename, so a reader running at the same moment (the
+    # watchdog while a test changes a control) never sees half a file
+    tmp = f'{state_path}.{os.getpid()}'
+    with open(tmp, 'w') as f:
         json.dump(c, f)
+    os.replace(tmp, state_path)
 
 
 def show(name, ctl):
@@ -107,6 +111,11 @@ def show(name, ctl):
 def main(argv):
     args = [a for a in argv if a != '-q']
     if args[:1] == ['-c']:
+        # like the real amixer, an empty card fails (the earpiece path once
+        # read every control before looking up the card)
+        if not args[1]:
+            print("amixer: Invalid card number ''.", file=sys.stderr)
+            return 1
         args = args[2:]
     c = load()
     cmd = args[0]

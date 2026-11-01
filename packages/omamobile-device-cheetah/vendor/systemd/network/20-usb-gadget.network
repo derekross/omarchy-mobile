@@ -2,13 +2,21 @@
 # Omarchy Mobile: USB networking to the host. The initramfs sets up the USB
 # gadget (CDC NCM) before handing over to Arch; this gives it an address.
 # The host shares its internet over this link (NetworkManager "shared"
-# mode on 172.16.42.2), so it is also the gateway. DNS goes to public resolvers.
+# mode on 172.16.42.2), so it is also a gateway, the last one: Wi-Fi (600)
+# and mobile data (700) go first. ConfigureWithoutCarrier keeps this route
+# after an unplug (and usb0 keeps its carrier anyway), so at metric 0 IPv4
+# went into the dead cable once the phone left the desk: IPv4-only sites
+# such as github.com failed on Wi-Fi while IPv6 ones loaded (raven,
+# 2026-10-28). DNS goes to public resolvers.
 [Match]
 Name=usb0
 
 [Network]
 Address=172.16.42.1/24
-Gateway=172.16.42.2
 DNS=1.1.1.1
 DNS=9.9.9.9
 ConfigureWithoutCarrier=yes
+
+[Route]
+Gateway=172.16.42.2
+Metric=2000

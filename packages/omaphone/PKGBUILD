@@ -13,7 +13,7 @@
 # (README.md). Build: cargo fetches the crates, omatel's from git at the
 # pinned tag, in prepare(), and builds offline.
 pkgname=omaphone
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc="Phone: dialpad with smart dial, call log, favorites, contacts and the in-call screen"
 arch=(aarch64)
@@ -24,7 +24,7 @@ makedepends=(cargo git pkgconf gtk4 libadwaita sqlite)
 install=omaphone.install
 options=('!debug' '!lto')
 source=("omaphone-$pkgver.tar.gz::https://github.com/derekross/omaphone/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('74888911bca9873f21e4db622f988a1454df84c7105a5fc7c626489243ba91b1')
+sha256sums=('c72b7808eb4bd19cd543c58ad67545dc4fce8e319718bce46a70727d5b043a25')
 
 prepare() {
   cd "omaphone-$pkgver"

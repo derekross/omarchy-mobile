@@ -7,4 +7,5 @@ QtObject {
   property string shellDir: "/stub/shell"
   property var executed: []
   function execDetached(argv) { executed = executed.concat([argv]) }
+  function env(name) { return "" }
 }

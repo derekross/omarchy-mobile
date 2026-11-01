@@ -582,6 +582,118 @@ test("what each port could do, for approving its original without asking", () =>
   assert.strictEqual(M.portCapabilities("weather"), null)
 })
 
+// ---------------------------------------------------------------- landscape (TOUCH-PLAN 2.4, #85)
+
+// Every item once, on the grid, overlapping nothing.
+function tidy(layout, original) {
+  const seen = []
+  for (const page of layout.pages) {
+    for (let i = 0; i < page.items.length; i++) {
+      const a = page.items[i]
+      assert.ok(M.fits(layout.grid, a), a.id + " fits " + JSON.stringify(a))
+      for (let j = i + 1; j < page.items.length; j++) assert.ok(!M.overlaps(a, page.items[j]), a.id + " overlaps " + page.items[j].id)
+      seen.push(a.id)
+    }
+  }
+  const all = [].concat(...original.pages.map((p) => p.items.map((i) => i.id)))
+  assert.deepStrictEqual(seen.sort(), all.sort())
+}
+const pixelPages = { portrait: [480, 908], landscape: [1040, 348] }
+const byId = (layout) => { const o = {}; layout.pages.forEach((p, n) => p.items.forEach((i) => { o[i.id] = Object.assign({ page: n }, i) })); return o }
+
+test("landscape swaps the grid and turns every item with it", () => {
+  const l = layoutOf([widget("w1", "clock", 0, 0, 4, 2), app("a1", 1, 5), app("a2", 3, 5)])
+  const before = M.serialize(l)
+  const t = M.transposeLayout(l, {})
+  assert.deepStrictEqual(t.grid, { columns: 6, rows: 4 })
+  tidy(t, l)
+  const at = byId(t)
+  // 4x2 turned is 2x4; the clock's maximum (4x3) keeps it to 3 rows.
+  assert.deepStrictEqual([at.w1.x, at.w1.y, at.w1.w, at.w1.h], [0, 0, 2, 3])
+  assert.deepStrictEqual([at.a1.x, at.a1.y, at.a1.w, at.a1.h], [5, 1, 1, 1])
+  assert.deepStrictEqual([at.a2.x, at.a2.y], [5, 3])
+  assert.strictEqual(M.serialize(l), before, "the portrait layout is left alone")
+  assert.strictEqual(t.home, l.home)
+  assert.strictEqual(t.nextId, l.nextId)
+})
+
+test("landscape keeps a widget's size in pixels on the short, wide cells", () => {
+  // Portrait cells are 120x151 px, landscape ones 173x87: a 2x2 today (240x302)
+  // turned is 2 columns by 3 rows (346x261), not 2x2 (346x174), so its content
+  // still fits; the 1x1 apps stay 1x1.
+  const l = layoutOf([widget("w1", "clock", 0, 0, 4, 2), widget("w2", "owl:simonschubert.today", 0, 2, 2, 2),
+                      widget("w3", "battery", 2, 2, 2, 1), app("a1", 2, 3), app("a2", 3, 3), widget("w4", "owl:simonschubert.fetch", 0, 4, 4, 2)])
+  const t = M.transposeLayout(l, {}, pixelPages)
+  tidy(t, l)
+  const at = byId(t)
+  assert.deepStrictEqual([at.w2.w, at.w2.h], [2, 3])
+  assert.deepStrictEqual([at.w4.w, at.w4.h], [2, 4])
+  assert.deepStrictEqual([at.a1.w, at.a1.h, at.a2.w, at.a2.h], [1, 1, 1, 1])
+  assert.deepStrictEqual([at.w1.x, at.w1.y, at.w1.w, at.w1.h], [0, 0, 2, 3])
+  // The battery (2x1, turned and clamped to 1x2) found no room beside the
+  // others and moved to a page of its own; the apps stayed.
+  assert.ok(t.pages.length >= 2)
+  assert.strictEqual(at.w3.page, 1)
+  assert.deepStrictEqual([at.w3.w, at.w3.h], [1, 2])
+  assert.strictEqual(at.a2.page, 0)
+  // Settings travel with the item.
+  assert.deepStrictEqual(at.w2.config, l.pages[0].items[1].config)
+})
+
+test("landscape of an empty layout is an empty layout on the turned grid", () => {
+  const t = M.transposeLayout(M.emptyLayout(grid), {}, pixelPages)
+  assert.deepStrictEqual(t.grid, { columns: 6, rows: 4 })
+  assert.deepStrictEqual(t.pages, [{ items: [] }])
+})
+
+// ---------------------------------------------------------------- who can see it
+
+test("widgets run only on the shown page, neighbours while swiping", () => {
+  // Page 1 (index 0) shows: page 2's widgets are stopped, as the koi pond wasn't.
+  assert.strictEqual(M.pageShown(0, 0, false, true), true)
+  assert.strictEqual(M.pageShown(1, 0, false, true), false)
+  assert.strictEqual(M.pageShown(1, 0, true, true), true)
+  assert.strictEqual(M.pageShown(2, 0, true, true), false)
+  // Nothing runs while the home screen is hidden, whichever page.
+  assert.strictEqual(M.pageShown(0, 0, false, false), false)
+  assert.strictEqual(M.pageShown(1, 0, true, false), false)
+})
+
+test("the home screen is hidden by an app, a covering surface or the panel", () => {
+  assert.strictEqual(M.homeShown(false, false, {}), true)
+  assert.strictEqual(M.homeShown(true, false, {}), false)
+  assert.strictEqual(M.homeShown(false, true, {}), false)
+  assert.strictEqual(M.homeShown(false, false, { "omamobile-switcher": 1 }), false)
+  assert.strictEqual(M.homeShown(false, false, null), true)
+})
+
+test("recent apps and the call card cover it while mapped (the drawer stays mapped)", () => {
+  let open = {}
+  assert.deepStrictEqual(M.layersAfter(open, "openlayer", "omamobile-launcher"), {}, "the drawer's surface is always mapped")
+  open = M.layersAfter(open, "openlayer", "omamobile-call")
+  assert.deepStrictEqual(open, { "omamobile-call": 1 })
+  // Other surfaces and other events change nothing: the shade covers only part.
+  assert.strictEqual(M.layersAfter(open, "openlayer", "omamobile-quicksettings"), open)
+  assert.strictEqual(M.layersAfter(open, "openwindow", "omamobile-switcher"), open)
+  open = M.layersAfter(open, "openlayer", "omamobile-switcher")
+  open = M.layersAfter(open, "closelayer", "omamobile-call")
+  assert.deepStrictEqual(open, { "omamobile-switcher": 1 })
+  open = M.layersAfter(open, "closelayer", "omamobile-switcher")
+  assert.deepStrictEqual(open, {})
+  // A close without an open (the shell started with it up) doesn't go negative.
+  assert.deepStrictEqual(M.layersAfter({}, "closelayer", "omamobile-call"), {})
+  // One per screen, counted.
+  open = M.layersAfter(M.layersAfter({}, "openlayer", "omamobile-call"), "openlayer", "omamobile-call")
+  assert.deepStrictEqual(M.layersAfter(open, "closelayer", "omamobile-call"), { "omamobile-call": 1 })
+  assert.deepStrictEqual(M.COVERING_LAYERS, ["omamobile-switcher", "omamobile-call"])
+})
+
+test("a job that waited while hidden runs when shown only if overdue", () => {
+  assert.strictEqual(M.overdue(0, 900000, 5000), true)
+  assert.strictEqual(M.overdue(1000, 900000, 600000), false)
+  assert.strictEqual(M.overdue(1000, 900000, 901000), true)
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - home model: " + name) } catch (e) { failed++; console.log("not ok - home model: " + name + "\n  " + (e.stack || e)) }

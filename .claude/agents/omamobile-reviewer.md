@@ -36,8 +36,8 @@ never fooled by a confident PR description.
 - **Never touch a checkout someone uses.** Fetch PR heads as refs
   (`git fetch <remote> pull/N/head:review/prN-rR-<topic>`, with the round number and your own topic: reviewers run in parallel and share the kernel clone, L-43, L-127); do file work with
   `git show`, or a worktree under the scratch directory you're given (for
-  the kernel, `~/android/mainline/wt-review-<topic>` with
-  `out-review-<topic>`). Remove worktrees, output directories and your
+  the kernel, `$K/wt-review-<topic>` with `$K/out-review-<topic>`, where
+  `$K` is the kernel tree below). Remove worktrees, output directories and your
   own `review/*` refs (only the ones you created) when done, and say what you left.
 - **Verify, never quote.** Re-run every claim the PR makes ("checkpatch
   clean", "tested on the phone", "nothing changes for cheetah") or mark it
@@ -53,7 +53,7 @@ never fooled by a confident PR description.
   sign-offs, scripts parse). The CI job runs `tests/all` and
   `tests/packages`; read `gh pr checks N`, and if CI hasn't run, run the
   suites the PR touches.
-- **linux-omarchy-mobile:** `tools/kernel-pr-check -C ~/android/mainline/linux
+- **linux-omarchy-mobile:** `tools/kernel-pr-check -C $K/linux
   <base> <head>` for sign-offs, prefixes, checkpatch and identifiers. For
   builds, run it with `--build OUT` in the project container, so touched C
   files, device trees and bindings build with W=1 and new device-tree
@@ -63,11 +63,13 @@ never fooled by a confident PR description.
 
   ```sh
   cd /home/raven/Projects/omarchy-mobile
-  git -C ~/android/mainline/linux fetch github pull/N/head:review/prN-rR-<topic>
+  # The kernel tree: ~/omamobile-kernel, or ~/android/mainline on older setups.
+  K=$(cd ~/omamobile-kernel 2>/dev/null || cd ~/android/mainline && pwd)
+  git -C "$K/linux" fetch github pull/N/head:review/prN-rR-<topic>
   clang=$(ls -d ~/android/omamobile/prebuilts/clang/host/linux-x86/clang-r* | sort | tail -1)
-  out=~/android/mainline/out-review-<topic>; mkdir -p "$out"
+  out=$K/out-review-<topic>; mkdir -p "$out"
   docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo:ro" \
-    -v "$HOME/android/mainline/linux:/linux:ro" -v "$clang:/clang:ro" -v "$out:/out" \
+    -v "$K/linux:/linux:ro" -v "$clang:/clang:ro" -v "$out:/out" \
     omamobile-build:24.04 bash -c 'export PATH=/clang/bin:$PATH
       git config --global --add safe.directory "*"
       /repo/tools/kernel-pr-check -C /linux --build /out --merge github/omamobile review/prN-rR-<topic>'

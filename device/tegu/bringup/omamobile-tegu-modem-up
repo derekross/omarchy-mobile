@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-tegu-modem-up: start the Pixel 9a's modem (MODEM-PLAN M5) once per
+# boot, after omamobile-tegu-audio-up: the CPIF overlay, the zumapro link
+# driver with its hardware steps allowed, shm_ipc and CPIF, the GNSS SPI and
+# gnssif, then the modem vendor-chroot profile as the transient unit
+# omamobile-tegu-modem, whose stop powers the CP off before rfsd goes.
+#   omamobile-tegu-modem-up [--gnss]   --gnss: gnssd too (OMAMOBILE_MODEM_GNSS=1)
+# Stop it only by an attended reboot: the unit's ExecStop powers the CP off
+# during shutdown (MODEM-PLAN M5, M-SIM); never stop the profile by hand. A
+# second CP boot in the same Linux boot stalled in the ROM: reboot before
+# starting it again.
+set -euo pipefail
+M=/var/lib/omamobile-tegu/modem
+say() { printf 'omamobile-tegu-modem-up: %s\n' "$*"; }
+[[ $EUID -eq 0 ]] || { say "run as root"; exit 1; }
+gnss=0; [[ ${1:-} == --gnss ]] && gnss=1
+if systemctl is-active -q omamobile-tegu-modem; then
+  say "already running: $(/usr/lib/omamobile-vendor/omamobile-modem-cp state 2>/dev/null || echo unknown)"; exit 0
+fi
+if [[ -d /sys/module/cpif ]]; then
+  say "CPIF was loaded earlier this boot; reboot before starting the modem again"; exit 1
+fi
+[[ -e /sys/bus/platform/devices/154e0000.pinctrl ]] || { say "no FAR_ALIVE pinctrl (old DTB)"; exit 1; }
+for f in tegu-modem-cpif-activate.ko tegu-pcie0-cp.ko shm_ipc.ko cpif.ko gnss_spi.ko gnssif.ko; do
+  [[ -f $M/$f ]] || { say "missing $M/$f"; exit 1; }
+done
+insmod $M/tegu-modem-cpif-activate.ko activate=1
+insmod $M/tegu-pcie0-cp.ko allow_hw=1
+insmod $M/shm_ipc.ko
+insmod $M/cpif.ko
+insmod $M/gnss_spi.ko
+insmod $M/gnssif.ko
+echo performance > /sys/module/pcie_aspm/parameters/policy 2>/dev/null || true
+/usr/lib/omamobile-vendor/omamobile-vendor-chroot modem check
+mkdir -p /var/log/omamobile
+# No system suspend while the CP has been up this boot: a suspend with it ONLINE never
+# woke (2026-10-27, held power key needed). The inhibitor is its own unit, so it
+# outlives the modem profile (the CP can stay ONLINE after the profile stops) and
+# lasts until the reboot. systemctl suspend and logind's suspend then refuse.
+systemctl is-active -q omamobile-tegu-modem-nosleep ||
+  systemd-run -q --unit=omamobile-tegu-modem-nosleep \
+    systemd-inhibit --what=sleep --who=omamobile-tegu-modem \
+    --why="suspend with the modem up never woke the palmtop" --mode=block sleep infinity
+systemd-run -q --unit=omamobile-tegu-modem -p KillSignal=SIGINT -p TimeoutStopSec=60 \
+  -p "ExecStop=/usr/lib/omamobile-vendor/omamobile-vendor-chroot modem stop" \
+  --setenv=OMAMOBILE_MODEM_GNSS=$gnss \
+  bash -c 'exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot modem start >> /var/log/omamobile/modem.log 2>&1'
+for _ in $(seq 1 60); do
+  s=$(/usr/lib/omamobile-vendor/omamobile-modem-cp state 2>/dev/null || true)
+  [[ $s == ONLINE ]] && break
+  systemctl is-active -q omamobile-tegu-modem || break
+  sleep 1
+done
+s=$(/usr/lib/omamobile-vendor/omamobile-modem-cp state 2>/dev/null || echo unknown)
+if [[ $s == ONLINE ]]; then
+  say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log)"
+else
+  say "modem not ONLINE ($s); see /var/log/omamobile/modem.log"; exit 1
+fi

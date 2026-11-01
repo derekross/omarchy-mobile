@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-weather: the phone's current weather, for the lock screen.
+
+Fetches the current weather from Open-Meteo (open-meteo.com: free, no key,
+no account; the same API and the same words as the home screen's weather
+widget, HomeModel.js) and writes ~/.local/state/omamobile/weather.json, which
+Omarchy's lock glance shows (omamobile-omarchy patch 0023; it hides a
+reading over 3 h old):
+
+  {"at": <ms since epoch>, "temperature": 12, "unit": "°C", "text": "Partly cloudy",
+   "source": "location" | "widget" | "setting"}
+
+Run by omamobile-weather.timer (at login and every 30 minutes). Where, in
+this order:
+
+  1. location: the phone's position from GeoClue at city accuracy (no GNSS
+     power-up), asked at most every 3 h, and only while the Location switch
+     has GeoClue's agent running (omamobile-geoclue-agent.service, from
+     omamobile-gnss); the client is GeoClue's where-am-i, which GeoClue lets
+     through without asking, so a timer never raises a prompt. A fix that
+     fails or times out falls back to the last one, up to a day old.
+  2. widget: the city the home screen's "today" widget is set to (the newest
+     ~/.local/state/omamobile/owl/owl_simonschubert.today_*.json), or else
+     the shell weather widget's named place.
+  3. setting: ~/.config/omamobile/weather.json,
+
+       {"city": "State College, PA", "unit": "F"}      or
+       {"latitude": 40.79, "longitude": -77.86, "unit": "C"}
+
+     which wins over 2, and over 1 too with "location": "fixed" (default
+     "auto").
+
+A city is looked up once with Open-Meteo's geocoding and kept, by name, in
+~/.local/state/omamobile/weather-place.json with the last position fix. The
+unit is the setting's, else the locale's (°F in the US). With no place at
+all, nothing is fetched. No IP geolocation.
+
+One try per run with short timeouts; on any failure the old reading stays.
+Only coordinates rounded to about 1 km, or the city name, leave the phone.
+
+  omamobile-weather                      fetch once and write the reading
+  omamobile-weather set CITY [F|C]       save the place (and the unit)
+  omamobile-weather show                 print where it would look and the reading
+"""
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+
+TIMEOUT = 10
+HOME = os.path.expanduser("~")
+CONFIG = os.path.join(HOME, ".config/omamobile/weather.json")
+HOME_LAYOUT = os.path.join(HOME, ".config/omamobile/home.json")
+STATE_DIR = os.path.join(HOME, ".local/state/omamobile")
+READING = os.path.join(STATE_DIR, "weather.json")
+PLACE = os.path.join(STATE_DIR, "weather-place.json")
+OWL_TODAY = os.path.join(STATE_DIR, "owl", "owl_simonschubert.today_*.json")
+WHERE_AM_I = os.environ.get("OMAMOBILE_WHERE_AM_I", "/usr/lib/geoclue-2.0/demos/where-am-i")
+GEOCLUE_AGENT = "omamobile-geoclue-agent.service"
+FIX_FRESH = 3 * 3600      # ask GeoClue at most this often
+FIX_KEEP = 24 * 3600      # a failed fix falls back to the last one this young
+
+# Open-Meteo's WMO weather codes -> words, as HomeModel.weatherText (the
+# test checks the two agree for every code).
+def weather_text(code):
+    # As JavaScript's Number(code): nothing or "" is 0, anything unreadable
+    # has no words.
+    if code is None or (isinstance(code, str) and not code.strip()):
+        code = 0
+    try:
+        c = float(code)
+    except (TypeError, ValueError):
+        return ""
+    if c != c or c != int(c):
+        return ""
+    c = int(c)
+    if c == 0:
+        return "Clear"
+    if c in (1, 2):
+        return "Mostly clear" if c == 1 else "Partly cloudy"
+    if c == 3:
+        return "Overcast"
+    if c in (45, 48):
+        return "Fog"
+    if 51 <= c <= 57:
+        return "Drizzle"
+    if 61 <= c <= 67 or 80 <= c <= 82:
+        return "Rain"
+    if 71 <= c <= 77 or c in (85, 86):
+        return "Snow"
+    if 95 <= c <= 99:
+        return "Thunderstorm"
+    return ""
+
+
+# Countries that measure temperature in °F.
+FAHRENHEIT_TERRITORIES = {"US", "LR", "MM", "BS", "BZ", "KY", "PW", "FM", "MH", "PR", "GU", "VI", "AS", "MP", "UM"}
+
+US_STATES = {
+    "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas", "ca": "california", "co": "colorado",
+    "ct": "connecticut", "de": "delaware", "dc": "district of columbia", "fl": "florida", "ga": "georgia",
+    "hi": "hawaii", "id": "idaho", "il": "illinois", "in": "indiana", "ia": "iowa", "ks": "kansas",
+    "ky": "kentucky", "la": "louisiana", "me": "maine", "md": "maryland", "ma": "massachusetts",
+    "mi": "michigan", "mn": "minnesota", "ms": "mississippi", "mo": "missouri", "mt": "montana",
+    "ne": "nebraska", "nv": "nevada", "nh": "new hampshire", "nj": "new jersey", "nm": "new mexico",
+    "ny": "new york", "nc": "north carolina", "nd": "north dakota", "oh": "ohio", "ok": "oklahoma",
+    "or": "oregon", "pa": "pennsylvania", "ri": "rhode island", "sc": "south carolina", "sd": "south dakota",
+    "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont", "va": "virginia", "wa": "washington",
+    "wv": "west virginia", "wi": "wisconsin", "wy": "wyoming",
+}
+
+
+def log(message):
+    print("omamobile-weather: " + message, file=sys.stderr)
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = json.load(f)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_json(path, value):
+    """Whole or not at all: a temporary file in the same directory, renamed."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".weather-", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def locale_unit(env=None):
+    env = os.environ if env is None else env
+    for name in ("LC_ALL", "LC_MEASUREMENT", "LANG"):
+        value = env.get(name) or ""
+        if value:
+            territory = value.split(".")[0].split("@")[0].partition("_")[2].upper()
+            return "F" if territory in FAHRENHEIT_TERRITORIES else "C"
+    return "C"
+
+
+def unit_of(value, env=None):
+    v = str(value or "").strip().upper().lstrip("°")
+    if v in ("F", "FAHRENHEIT"):
+        return "F"
+    if v in ("C", "CELSIUS"):
+        return "C"
+    return locale_unit(env)
+
+
+def number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and value == value else None
+
+
+def setting_place(config, env=None):
+    """The setting's place ({"city"} or {"latitude", "longitude"}) with its
+    unit and "fixed", or None without a place."""
+    if not config:
+        return None
+    unit = unit_of(config.get("unit"), env)
+    fixed = str(config.get("location") or "auto").strip().lower() == "fixed"
+    lat, lon = number(config.get("latitude")), number(config.get("longitude"))
+    if lat is not None and lon is not None:
+        return {"latitude": lat, "longitude": lon, "unit": unit, "fixed": fixed}
+    city = str(config.get("city") or "").strip()
+    if city:
+        return {"city": city, "unit": unit, "fixed": fixed}
+    return None
+
+
+def today_city(pattern=None):
+    """The city of the newest "today" home screen widget, or ""."""
+    files = glob.glob(pattern or OWL_TODAY)
+    for path in sorted(files, key=lambda f: os.path.getmtime(f), reverse=True):
+        city = str((read_json(path) or {}).get("city") or "").strip()
+        if city:
+            return city
+    return ""
+
+
+def home_widget_place(layout):
+    """The shell weather widget's named place, if it is on and has one."""
+    for page in (layout or {}).get("pages") or []:
+        for item in (page or {}).get("items") or []:
+            if not isinstance(item, dict) or item.get("type") != "weather":
+                continue
+            c = item.get("config") or {}
+            lat, lon = number(c.get("latitude")), number(c.get("longitude"))
+            if c.get("enabled") is True and lat is not None and lon is not None:
+                return {"latitude": lat, "longitude": lon,
+                        "unit": "F" if c.get("units") == "fahrenheit" else "C" if c.get("units") == "celsius" else None}
+    return None
+
+
+def geoclue_usable():
+    """GeoClue answers this user only while its agent runs (the Location
+    switch); without it a request queues for ever, so it isn't made."""
+    if not os.access(WHERE_AM_I, os.X_OK):
+        return False
+    return subprocess.run(["systemctl", "--user", "--quiet", "is-active", GEOCLUE_AGENT],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def where_am_i():
+    """(lat, lon) from GeoClue at city accuracy, or None; never longer than
+    about 20 s, whatever GeoClue does."""
+    try:
+        out = subprocess.run(["timeout", "-k", "2", "20", WHERE_AM_I, "-a", "4", "-t", "12"],
+                             capture_output=True, text=True, env=dict(os.environ, LC_ALL="C")).stdout
+    except OSError:
+        return None
+    lat = re.findall(r"^Latitude:\s*(-?[0-9][0-9.]*)", out, re.M)
+    lon = re.findall(r"^Longitude:\s*(-?[0-9][0-9.]*)", out, re.M)
+    if not lat or not lon:
+        return None
+    return round(float(lat[-1]), 2), round(float(lon[-1]), 2)
+
+
+def position(state, now_s):
+    """The phone's position (lat, lon), or None: a fix younger than 3 h as
+    it is, else a new one from GeoClue when it is usable (kept in state),
+    else, when that fails, the last one up to a day old."""
+    fix = state.get("fix") if isinstance(state.get("fix"), dict) else None
+    age = now_s - number(fix.get("at")) if fix and number(fix.get("at")) is not None else None
+    have = fix and number(fix.get("latitude")) is not None and number(fix.get("longitude")) is not None
+    if have and age is not None and 0 <= age < FIX_FRESH:
+        return fix["latitude"], fix["longitude"]
+    if not geoclue_usable():
+        return None
+    got = where_am_i()
+    if got:
+        state["fix"] = {"latitude": got[0], "longitude": got[1], "at": int(now_s)}
+        return got
+    if have and age is not None and 0 <= age < FIX_KEEP:
+        log("no position from GeoClue: the last one, %d min old" % (age // 60))
+        return fix["latitude"], fix["longitude"]
+    return None
+
+
+def resolve(config, layout, state, now_s, env=None, owl_pattern=None):
+    """Where to fetch for, in order (location, the setting, the widgets):
+    {"latitude", "longitude"} or {"city"}, with "unit" and "source"; or None."""
+    setting = setting_place(config, env)
+    unit = setting["unit"] if setting else unit_of((config or {}).get("unit"), env)
+    if setting and setting["fixed"]:
+        return dict(setting, source="setting")
+    here = position(state, now_s)
+    if here:
+        return {"latitude": here[0], "longitude": here[1], "unit": unit, "source": "location"}
+    if setting:
+        return dict(setting, source="setting")
+    city = today_city(owl_pattern)
+    if city:
+        return {"city": city, "unit": unit, "source": "widget"}
+    home = home_widget_place(layout)
+    if home:
+        return {"latitude": home["latitude"], "longitude": home["longitude"],
+                "unit": unit if (config or {}).get("unit") else home["unit"] or unit, "source": "widget"}
+    return None
+
+
+def city_key(city):
+    return " ".join(str(city or "").lower().split())
+
+
+def geocode_url(name):
+    return "https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=" + urllib.parse.quote(name)
+
+
+def pick_place(city, answer):
+    """The best geocoding result for "Town, Region": the first whose region,
+    country or country code matches what follows the comma (US state
+    abbreviations read as states), else the first."""
+    results = (answer or {}).get("results") or []
+    results = [r for r in results if isinstance(r, dict) and number(r.get("latitude")) is not None and number(r.get("longitude")) is not None]
+    if not results:
+        return None
+    qualifiers = [q.strip().lower() for q in str(city).split(",")[1:] if q.strip()]
+    wanted = set()
+    for q in qualifiers:
+        wanted.add(q)
+        if q in US_STATES:
+            wanted.add(US_STATES[q])
+    best = results[0]
+    if wanted:
+        for r in results:
+            fields = {str(r.get(k) or "").lower() for k in ("admin1", "admin2", "country", "country_code")}
+            if wanted & fields:
+                best = r
+                break
+    return {"latitude": best["latitude"], "longitude": best["longitude"], "name": str(best.get("name") or "")}
+
+
+def forecast_url(latitude, longitude, unit):
+    lat = round(float(latitude) * 100) / 100
+    lon = round(float(longitude) * 100) / 100
+    return ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&current=temperature_2m,weather_code&timezone=auto"
+            % (lat, lon)) + ("&temperature_unit=fahrenheit" if unit == "F" else "")
+
+
+def reading(answer, unit, now_ms):
+    """The lock's reading from a forecast answer, or None."""
+    cur = (answer or {}).get("current") or {}
+    t = number(cur.get("temperature_2m"))
+    if t is None:
+        return None
+    return {"at": int(now_ms), "temperature": int(round(t)), "unit": "°F" if unit == "F" else "°C",
+            "text": weather_text(cur.get("weather_code"))}
+
+
+def fetch_json(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "omamobile-weather"})
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def coordinates(where, state, fetch=fetch_json):
+    """(lat, lon) for a place; a city from state's "cities", else looked up
+    (and kept there)."""
+    if "city" not in where:
+        return where["latitude"], where["longitude"]
+    key = city_key(where["city"])
+    cities = state.get("cities") if isinstance(state.get("cities"), dict) else {}
+    known = cities.get(key)
+    if isinstance(known, dict) and number(known.get("latitude")) is not None and number(known.get("longitude")) is not None:
+        return known["latitude"], known["longitude"]
+    town = where["city"].split(",")[0].strip()
+    place = pick_place(where["city"], fetch(geocode_url(town)))
+    if not place:
+        raise LookupError("no place called %r" % where["city"])
+    cities = dict(cities)
+    cities[key] = {"latitude": place["latitude"], "longitude": place["longitude"], "name": place["name"]}
+    state["cities"] = cities
+    log("%s is at %.2f, %.2f" % (where["city"], place["latitude"], place["longitude"]))
+    return place["latitude"], place["longitude"]
+
+
+def run(fetch=fetch_json, now=time.time, env=None):
+    now_s = now()
+    state = read_json(PLACE) or {}
+    before = json.dumps(state, sort_keys=True)
+    where = resolve(read_json(CONFIG), read_json(HOME_LAYOUT), state, now_s, env)
+    try:
+        if not where:
+            log("no place (Location off, no today widget city, no setting: omamobile-weather set CITY): nothing fetched")
+            return 0
+        try:
+            lat, lon = coordinates(where, state, fetch)
+            value = reading(fetch(forecast_url(lat, lon, where["unit"])), where["unit"], now_s * 1000)
+        except Exception as e:  # one try; the old reading stays
+            log("weather unavailable: %s" % e)
+            return 1
+        if not value:
+            log("weather unavailable: no temperature in the answer")
+            return 1
+        value["source"] = where["source"]
+        write_json(READING, value)
+        return 0
+    finally:
+        if json.dumps(state, sort_keys=True) != before:
+            write_json(PLACE, state)
+
+
+def main(argv):
+    if len(argv) <= 1:
+        return run()
+    if argv[1] == "set" and len(argv) in (3, 4):
+        config = {"city": argv[2].strip()}
+        if len(argv) == 4:
+            if argv[3].strip().upper().lstrip("°") not in ("F", "C"):
+                print("Usage: omamobile-weather set CITY [F|C]", file=sys.stderr)
+                return 2
+            config["unit"] = argv[3].strip().upper().lstrip("°")
+        write_json(CONFIG, config)
+        print("saved %s" % json.dumps(config, ensure_ascii=False))
+        return 0
+    if argv[1] == "show" and len(argv) == 2:
+        state = read_json(PLACE) or {}
+        print(json.dumps({"where": resolve(read_json(CONFIG), read_json(HOME_LAYOUT), state, time.time()),
+                          "reading": read_json(READING)}, ensure_ascii=False, indent=2))
+        return 0
+    print("Usage: omamobile-weather [set CITY [F|C] | show]", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

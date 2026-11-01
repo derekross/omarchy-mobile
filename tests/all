@@ -2,15 +2,19 @@
 # SPDX-License-Identifier: MIT
 # The installer's tests (no phone, nothing flashed): tools/install-phone
 # against a fake fastboot, tools/phone-provision against a synthetic backup
-# (and a container standing in for the phone, with Docker), the initramfs's
-# first-boot growth, the bring-up overlays, the simplefb trigger, the storage guard's packed
+# (and a container standing in for the phone, with Docker),
+# tools/phone-install-package against a stand-in phone, the initramfs's
+# first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
 # allowlist and the USB product string, bin/omamobile's boot-image layouts
 # and flash against a fake fastboot, omamobile-firstboot's own tests, and the
-# smoke test of the newest root image in out/ if there is one, and the
-# felix device package's own test.
+# smoke test of the newest root image in out/ if there is one, the felix,
+# lynx and panther device packages' own tests, tools/alarm-wake-test's
+# check, and a contributor's local builds (tools/local-key-init,
+# tools/fetch-published, --local).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
+         tools/local-key-init tools/fetch-published \
          tools/lib/alarm.sh tools/lib/alarm-setup rootfs/build-inside tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
@@ -20,7 +24,7 @@ sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
-for t in tests/pr-check tests/kernel-pr-check tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/storage-guard tests/usb-product tests/boot-method tests/make-bundle-keys tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all; do
+for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/make-bundle-keys tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package; do
   echo "# $t"
   "$t"
 done
@@ -33,3 +37,6 @@ if [[ -n $latest ]]; then
 else
   echo "ok - # skip: no root image in out/ for tests/rootfs-smoke (tools/build-rootfs)"
 fi
+
+echo "# tests/phone-ssh"
+tests/phone-ssh

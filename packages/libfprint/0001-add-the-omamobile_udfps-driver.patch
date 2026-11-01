@@ -18,7 +18,7 @@ index ab09dc1..f530a49 100644
      'focaltech_moc': {},
      'mafpmoc': {},
      'secugen': {},
-+    # Pixel 7 Pro under-display sensor through Omarchy Mobile's HAL bridge;
++    # Pixel 7 Pro and 9a under-display sensors through Omarchy Mobile's HAL bridge;
 +    # appears only when FP_OMAMOBILE_UDFPS names the bridge's socket
 +    'omamobile_udfps': {},
  

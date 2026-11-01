@@ -1,0 +1,107 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# A contributor's local builds (no phone, no network, no Docker): every run
+# happens in a copy of the repository, so the real keys/ and out/ are never
+# touched. tools/local-key-init makes keys/NAME once; tools/fetch-published
+# takes only what a trusted, unrevoked Omarchy Mobile key signed, against a
+# fake server (file://) and a test keyring; build-packages and build-rootfs
+# --local refuse before any build without the local key, and never fall
+# back to the maintainer's keys/ or out/repo.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+command -v gpg >/dev/null && command -v gpgv >/dev/null || { pass "# skip: no gpg"; exit 0; }
+t=$(mktemp -d)
+export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
+trap 'gpgconf --homedir "$t/signer" --kill gpg-agent 2>/dev/null || true; gpgconf --homedir "$t/other" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"' EXIT
+
+R=$t/repo
+mkdir -p "$R/tools/lib" "$R/device/panther" "$R/packages"
+cp tools/local-key-init tools/fetch-published tools/build-packages tools/build-rootfs "$R/tools/"
+cp tools/lib/alarm.sh tools/lib/alarm-setup "$R/tools/lib/"
+cp device/panther/device.conf "$R/device/panther/"
+cp -a packages/omamobile-device-panther "$R/packages/"
+run() { (cd "$R" && "$@") > "$t/log" 2>&1; }
+
+# --- tools/local-key-init ---
+if run tools/local-key-init nosuch; then fail "local-key-init refuses a codename without a descriptor"; fi
+run tools/local-key-init panther || { cat "$t/log"; fail "local-key-init makes keys/panther"; }
+fpr=$(cat "$R/keys/panther/fingerprint")
+[[ $fpr =~ ^[0-9A-F]{40}$ ]] || fail "the fingerprint is 40 hex digits"
+[[ $(gpg --show-keys --with-colons "$R/keys/panther/public.asc" | awk -F: '$1 == "fpr" {print $10; exit}') == "$fpr" ]] \
+  || fail "public.asc is the key named in fingerprint"
+[[ $(stat -c %a "$R/keys/panther/gnupg") == 700 ]] || fail "the keyring directory is private"
+if run tools/local-key-init panther; then fail "local-key-init refuses to replace an existing key"; fi
+gpgconf --homedir "$R/keys/panther/gnupg" --kill gpg-agent 2>/dev/null || true
+pass "local-key-init makes one signing key in keys/panther, once"
+
+# --- tools/fetch-published ---
+mkdir -m 700 "$t/signer" "$t/other"
+GNUPGHOME=$t/signer gpg --batch --quiet --passphrase '' --quick-generate-key "test signer <s@invalid>" ed25519 sign never
+GNUPGHOME=$t/other gpg --batch --quiet --passphrase '' --quick-generate-key "someone else <o@invalid>" ed25519 sign never
+signer=$(GNUPGHOME=$t/signer gpg --with-colons --list-keys | awk -F: '$1 == "fpr" {print $10; exit}')
+kr=$R/packages/omamobile-keyring && mkdir -p "$kr"
+GNUPGHOME=$t/signer gpg --batch --armor --export "$signer" > "$kr/omamobile.gpg"
+echo "$signer:4:" > "$kr/omamobile-trusted"
+: > "$kr/omamobile-revoked"
+
+srv=$t/srv/development/aarch64 && mkdir -p "$srv"
+sign() { GNUPGHOME=$t/$1 gpg --batch --yes --quiet --detach-sign -o "$2.sig" "$2"; }
+make_index() {  # make_index SIGNER: an index of foo whose checksum matches the file
+  local sum
+  sum=$(sha256sum < "$srv/foo-1-1-any.pkg.tar.zst" | cut -d' ' -f1)
+  rm -rf "$t/db" && mkdir -p "$t/db/foo-1-1"
+  printf '%%FILENAME%%\nfoo-1-1-any.pkg.tar.zst\n\n%%SHA256SUM%%\n%s\n' "$sum" > "$t/db/foo-1-1/desc"
+  tar -czf "$srv/omamobile.db" -C "$t/db" foo-1-1
+  sign "$1" "$srv/omamobile.db"
+}
+echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
+sign signer "$srv/foo-1-1-any.pkg.tar.zst"
+make_index signer
+fetch() { (cd "$R" && OMAMOBILE_PKGS_URL=file://$t/srv tools/fetch-published "$t/got") > "$t/log" 2>&1; }
+
+fetch || { cat "$t/log"; fail "fetch-published takes a trusted index and package"; }
+[[ -f $t/got/foo-1-1-any.pkg.tar.zst && -f $t/got/foo-1-1-any.pkg.tar.zst.sig ]] || fail "the package comes with its signature"
+pass "fetch-published takes what a trusted key signed, with its .sig"
+
+make_index other
+if fetch; then fail "refuses an index signed by an untrusted key"; fi
+grep -q 'index is not signed by a trusted' "$t/log" || { cat "$t/log"; fail "says the index is untrusted"; }
+make_index signer
+sign other "$srv/foo-1-1-any.pkg.tar.zst"
+rm -rf "$t/got"
+if fetch; then fail "refuses a package signed by an untrusted key"; fi
+grep -q 'foo-1-1-any.pkg.tar.zst is not signed by a trusted' "$t/log" || { cat "$t/log"; fail "says the package is untrusted"; }
+sign signer "$srv/foo-1-1-any.pkg.tar.zst"
+echo "tampered" >> "$srv/foo-1-1-any.pkg.tar.zst"
+rm -rf "$t/got"
+if fetch; then fail "refuses a package that does not match the index"; fi
+grep -q 'does not match the index' "$t/log" || { cat "$t/log"; fail "says the package does not match"; }
+pass "fetch-published refuses an untrusted index, an untrusted package and a changed package"
+
+echo "package bytes" > "$srv/foo-1-1-any.pkg.tar.zst"
+sign signer "$srv/foo-1-1-any.pkg.tar.zst"
+make_index signer
+echo "$signer revoked" > "$kr/omamobile-revoked"
+if fetch; then fail "refuses a revoked key"; fi
+pass "fetch-published refuses a revoked key"
+
+# --- build-packages and build-rootfs --local ---
+mv "$R/keys/panther" "$t/panther-key"
+if run tools/build-packages --local panther packages/omamobile-device-panther; then fail "build-packages --local refuses without the local key"; fi
+grep -q 'no local key in keys/panther' "$t/log" || { cat "$t/log"; fail "says the local key is missing"; }
+mkdir -p "$R/keys/gnupg" && echo "$signer" > "$R/keys/fingerprint"
+if run tools/build-packages --local panther packages/omamobile-device-panther; then fail "build-packages --local never falls back to keys/"; fi
+if run tools/build-packages --local nosuch packages/omamobile-device-panther; then fail "build-packages --local refuses an unknown codename"; fi
+[[ ! -e $R/out/repo ]] || fail "build-packages --local made nothing in out/repo"
+pass "build-packages --local refuses without keys/NAME, and never uses keys/ or out/repo"
+
+if (cd "$R" && DEVICE=cheetah tools/build-rootfs --local panther) > "$t/log" 2>&1; then fail "build-rootfs --local refuses another DEVICE"; fi
+grep -q 'builds device panther, not DEVICE=cheetah' "$t/log" || { cat "$t/log"; fail "says the device does not match"; }
+if run tools/build-rootfs --local panther; then fail "build-rootfs --local refuses without keys/panther/public.asc"; fi
+grep -q 'no keys/panther/public.asc' "$t/log" || { cat "$t/log"; fail "says the public key is missing"; }
+mv "$t/panther-key" "$R/keys/panther"
+if run tools/build-rootfs --local panther; then fail "build-rootfs --local refuses without out/panther/repo"; fi
+grep -q 'no \[omamobile\] repository in out/panther/repo' "$t/log" || { cat "$t/log"; fail "says out/panther/repo is missing"; }
+pass "build-rootfs --local checks the device, the key and out/NAME/repo"

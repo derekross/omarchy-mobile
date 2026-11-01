@@ -1,0 +1,26 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Pixel 9a charge limit: /etc/omamobile/charge-limit holds the percentage at
+# which charging stops (say 80); the charger starts again 5 below it. No
+# file, or not a number from 1 to 100: charge to 100 %. Run by udev when the
+# MAX77779 charger appears (75-omamobile-tegu-charger.rules), and by hand
+# after editing the file.
+set -uo pipefail
+
+root=${OMAMOBILE_TEGU_ROOT:-}
+if [[ -n $root ]]; then
+  [[ $root == /* && $root != / && -d $root ]] || exit 2
+fi
+file=$root/etc/omamobile/charge-limit
+threshold=$root/sys/class/power_supply/max77779-charger/charge_control_end_threshold
+log() { echo "omamobile-tegu-charge-limit: $*"; }
+
+[[ -s $file ]] || exit 0
+[[ -w $threshold ]] || { log "no charger threshold to set"; exit 0; }
+limit=$(tr -d ' \t\n' < "$file")
+if [[ ! $limit =~ ^[0-9]+$ ]] || (( 10#$limit < 1 || 10#$limit > 100 )); then
+  log "$file is not a percentage from 1 to 100; no limit"
+  exit 1
+fi
+echo "$((10#$limit))" > "$threshold" || { log "the charger refused $limit"; exit 1; }
+log "charge limit $(cat "$threshold") %"

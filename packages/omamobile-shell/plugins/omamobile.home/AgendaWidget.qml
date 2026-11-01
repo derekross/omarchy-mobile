@@ -17,12 +17,15 @@ Item {
   property var home: null
   property var entry: null
   property bool editing: false
+  // Someone can see it (set by Home.qml): its timers wait while not.
+  property bool shown: true
 
   readonly property color fg: home ? home.foreground : "white"
   readonly property color dim: home ? home.dimForeground : "white"
 
   SystemClock {
     id: clock
+    enabled: widget.shown
     precision: SystemClock.Hours
   }
 
@@ -39,10 +42,13 @@ Item {
     onExited: function(code) { widget.hasKhal = code !== 3 }
   }
 
-  function refresh() { if (!agendaProc.running) agendaProc.running = true }
+  property real lastRefresh: 0
+  function refresh() { if (!agendaProc.running) { widget.lastRefresh = Date.now(); agendaProc.running = true } }
   Component.onCompleted: refresh()
-  Connections { target: clock; function onDateChanged() { widget.refresh() } }
-  Timer { interval: 15 * 60 * 1000; repeat: true; running: true; onTriggered: widget.refresh() }
+  Connections { target: clock; function onDateChanged() { if (widget.shown) widget.refresh() } }
+  Timer { interval: 15 * 60 * 1000; repeat: true; running: widget.shown; onTriggered: widget.refresh() }
+  // Shown again: once, if 15 minutes passed.
+  onShownChanged: if (shown && HomeModel.overdue(lastRefresh, 15 * 60 * 1000, Date.now())) refresh()
 
   readonly property bool listMode: hasKhal && events.length > 0
   readonly property string todayIso: Qt.formatDate(clock.date, "yyyy-MM-dd")
@@ -80,7 +86,7 @@ Item {
           spacing: Style.spacing.lg
 
           Rectangle {
-            width: 3; height: label.height; radius: 1.5
+            width: 3; height: label.height; radius: Math.min(Style.cornerRadius, 1.5)
             color: modelData.date === widget.todayIso ? Commons.Color.accent : widget.dim
           }
           Column {
@@ -140,7 +146,7 @@ Item {
           Rectangle {
             anchors.centerIn: parent
             visible: modelData.today
-            width: Math.min(parent.width, parent.height) - 2; height: width; radius: width / 2
+            width: Math.min(parent.width, parent.height) - 2; height: width; radius: Math.min(Style.cornerRadius, width / 2)
             color: Commons.Color.accent
           }
           Text {

@@ -1,8 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # extract-fingerprint-vendor: build the fingerprint chroot's Android files for
-# the Pixel 7 Pro (cheetah) out of a Google factory image, on the user's own
-# machine.
+# the Pixel 7 Pro (cheetah) or, with -d tegu, the Pixel 9a out of a Google
+# factory image, on the user's own machine.
 #
 # Fingerprint on Omarchy Mobile runs Google's own fingerprint HAL against the
 # Goodix trusted application (g7.app) in Trusty, inside a small chroot
@@ -57,10 +57,11 @@ RUNTIME_FILES=(bin/linker64 lib64/bionic/libc.so lib64/bionic/libm.so
 
 usage() {
   cat <<USAGE
-Usage: extract-fingerprint-vendor [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
+Usage: extract-fingerprint-vendor [-d DEVICE] [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
 
-  SOURCE   Google factory zip (cheetah-*-factory-*.zip) or the
-           image-cheetah-*.zip inside it
+  SOURCE   Google factory zip (DEVICE-*-factory-*.zip) or the
+           image-DEVICE-*.zip inside it
+  -d NAME  cheetah (default) or tegu
   -o DIR   output directory (default: ./out/fingerprint-vendor)
   -w DIR   scratch directory for vendor.img and system.img, about 2.5 GB
            (default: a temp dir in \$TMPDIR)
@@ -77,8 +78,9 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
 
 OUT="./out/fingerprint-vendor" WORK="" FORCE=""
-while getopts "o:w:fh" opt; do
+while getopts "d:o:w:fh" opt; do
   case $opt in
+    d) DEVICE=$OPTARG ;;
     o) OUT=$OPTARG ;;
     w) WORK=$OPTARG ;;
     f) FORCE=1 ;;
@@ -88,6 +90,24 @@ while getopts "o:w:fh" opt; do
 done
 shift $((OPTIND - 1))
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+case $DEVICE in
+  cheetah) ;;
+  tegu)
+    # The Pixel 9a: the same Goodix HAL family against g7a.app, and the Rust
+    # KeyMint (device/tegu/FINGERPRINT-PLAN.md). fp_utils.so and
+    # biometricsuez.so are the HAL's DT_NEEDED, so the closure walk finds them.
+    VENDOR_BINS=(
+      bin/hw/android.hardware.biometrics.fingerprint-service.goodix
+      bin/hw/android.hardware.gatekeeper-service.trusty
+      bin/hw/android.hardware.security.keymint-service.rust.trusty
+      bin/storageproxyd
+      bin/trusty_apploader
+      bin/vndservicemanager
+    )
+    VENDOR_FILES=(firmware/g7a.app build.prop)
+    ;;
+  *) die "unknown device '$DEVICE' (cheetah, tegu)" ;;
+esac
 SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
 
@@ -316,8 +336,9 @@ while read -r l; do
 done < <(find "$root" -type l)
 
 # Sanity checks: the TA is a signed Trusty app; the HAL is the Goodix one.
-head -c 64 "$root/vendor/firmware/g7.app" | grep -aq TrustyApp ||
-  die "g7.app does not look like a Trusty application package"
+ta=g7.app; [[ $DEVICE == tegu ]] && ta=g7a.app
+head -c 64 "$root/vendor/firmware/$ta" | grep -aq TrustyApp ||
+  die "$ta does not look like a Trusty application package"
 grep -aq 'g7_trusty' "$root/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix" ||
   die "the fingerprint HAL is not the Goodix G7 one"
 

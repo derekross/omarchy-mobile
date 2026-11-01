@@ -1,0 +1,8 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Desktop harness stand-in for omamobile-bt-agent, which would make itself the
+# default Bluetooth agent of this computer. The error event is what the
+# quick-settings Bluetooth panel shows.
+echo '{"event": "error", "message": "Not available in the desktop harness"}'
+echo "omamobile-bt-agent: not run in the desktop harness: it would act on this computer's Bluetooth" >&2
+exit 1

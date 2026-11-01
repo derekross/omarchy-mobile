@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Pixel 9a: read the RT9470's boost state before its driver loads (one boot)
+ConditionPathExists=/var/lib/omamobile-tegu/rt9470-early-read/armed
+DefaultDependencies=no
+After=systemd-udevd.service systemd-remount-fs.service
+Before=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/tegu-rt9470-early-read
+
+[Install]
+WantedBy=sysinit.target

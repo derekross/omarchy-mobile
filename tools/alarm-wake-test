@@ -1,0 +1,105 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# alarm-wake-test: does a systemd timer with WakeSystem=yes wake a sleeping
+# phone on time? (device/cheetah/SUSPEND-PLAN.md, runbook P6.) Run ON THE
+# PHONE as root, streamed from the laptop:
+#
+#   tools/phone-ssh 'bash -s check' < tools/alarm-wake-test
+#   tools/phone-ssh 'SECS=120 bash -s arm' < tools/alarm-wake-test
+#   tools/phone-ssh 'SECS=120 SUSPEND=1 bash -s arm' < tools/alarm-wake-test
+#   tools/phone-ssh 'bash -s report' < tools/alarm-wake-test
+#
+# check   read-only: the RTC, its wakeup flag, and whether the kernel's
+#         alarmtimer took it (only then do WakeSystem= timers and
+#         CLOCK_*_ALARM timerfds program a wake; without it they still fire,
+#         but only when something else wakes the phone)
+# arm     check, then a transient system timer (omamobile-alarm-test.timer,
+#         WakeSystem=yes, AccuracySec=1s) SECS seconds out (default 120)
+#         that records when it fired and the wake IRQ. With SUSPEND=1 it
+#         also suspends the phone 10 s later, detached ("systemctl suspend",
+#         so logind's inhibitors and the sleep hook apply): the USB link
+#         drops until the phone wakes. Nothing else changes.
+# report  the record: due, fired, how late, the wake IRQ, and the sleep
+#         hook's journal lines since the arm
+#
+# A user's timer can't do this: WakeSystem= needs CAP_WAKE_ALARM, which only
+# the system manager has (timerfd_create(CLOCK_*_ALARM) is EPERM without it).
+# The record is /var/lib/omamobile/suspend/alarm-test.log on the phone.
+set -u
+SYS=${ALARM_TEST_SYSFS:-/sys}  # a fake /sys for tests
+SECS=${SECS:-120}
+dir=/var/lib/omamobile/suspend
+rec=$dir/alarm-test.log
+unit=omamobile-alarm-test
+
+check() {
+  local rtc ok=0
+  rtc=$SYS/class/rtc/rtc0
+  if [[ ! -e $rtc ]]; then
+    echo "not ok - no rtc0: the S2MPG12 RTC isn't up (sec_acpm and rtc-s5m loaded? the pmic-1 node enabled?)"
+    return 1
+  fi
+  echo "rtc0: $(cat "$rtc/name" 2>/dev/null) on $(basename "$(readlink -f "$rtc/device")")"
+  if [[ $(cat "$rtc/device/power/wakeup" 2>/dev/null) == enabled ]]; then
+    echo "ok - rtc0's device may wake the system"
+  else
+    echo "not ok - rtc0's device has wakeup $(cat "$rtc/device/power/wakeup" 2>/dev/null || echo missing)"; ok=1
+  fi
+  # alarmtimer registers an "alarmtimer.N.auto" platform device when it
+  # adopts a wake-capable RTC (kernel/time/alarmtimer.c), at boot or when
+  # the RTC's module loads later; the first such RTC wins.
+  if compgen -G "$SYS/bus/platform/devices/alarmtimer.*" >/dev/null; then
+    echo "ok - alarmtimer has an RTC: WakeSystem timers program it at suspend"
+  else
+    echo "not ok - no alarmtimer device: WakeSystem timers will not wake the phone"; ok=1
+  fi
+  return "$ok"
+}
+
+case "${1:-check}" in
+  check)
+    check
+    ;;
+  arm)
+    [[ $SECS =~ ^[0-9]+$ ]] && ((SECS >= 30)) || { echo "SECS must be a number of seconds, at least 30"; exit 1; }
+    check || { echo "stop: fix the RTC first (runbook P0)"; exit 1; }
+    [[ $(id -u) == 0 ]] || { echo "run as root (the system manager has CAP_WAKE_ALARM)"; exit 1; }
+    mkdir -p "$dir"
+    systemctl stop "$unit.timer" "$unit.service" 2>/dev/null
+    now=$(date +%s)
+    printf 'armed %s due %s\n' "$now" "$((now + SECS))" >"$rec"
+    systemd-run --quiet --unit="$unit" --on-active="${SECS}s" \
+      --timer-property=WakeSystem=yes --timer-property=AccuracySec=1s \
+      /bin/sh -c "printf 'fired %s irq %s\n' \"\$(date +%s)\" \"\$(cat /sys/power/pm_wakeup_irq 2>/dev/null || echo none)\" >>$rec" ||
+      { echo "not ok - systemd-run refused the timer"; exit 1; }
+    systemctl show -p NextElapseUSecMonotonic,WakeSystem "$unit.timer"
+    echo "armed: due in $SECS s ($(date -d "@$((now + SECS))" +%T))"
+    if [[ ${SUSPEND:-0} == 1 ]]; then
+      systemd-run --quiet --unit=omamobile-alarm-test-suspend --on-active=10s /usr/bin/systemctl suspend
+      echo "the phone suspends in 10 s; the USB link drops until it wakes. Then: bash -s report"
+    fi
+    ;;
+  report)
+    [[ -r $rec ]] || { echo "no record ($rec): arm first"; exit 1; }
+    cat "$rec"
+    read -r _ armed _ due <"$rec"
+    fired=$(awk '$1 == "fired" { print $2; exit }' "$rec")
+    irq=$(awk '$1 == "fired" { print $4; exit }' "$rec")
+    if [[ -z $fired ]]; then
+      echo "not ok - the timer hasn't fired ($(($(date +%s) - due)) s past due)"
+    else
+      late=$((fired - due))
+      name=$(awk -v i="$irq:" '$1 == i { $1 = ""; print; exit }' /proc/interrupts | tr -s ' ')
+      echo "fired $late s after it was due; wake IRQ $irq:${name:- (none recorded)}"
+      if ((late <= 5)); then echo "ok - on time"; else echo "not ok - $late s late (did the RTC wake the phone, or something later?)"; fi
+    fi
+    journalctl -b -o short-monotonic --since "@$armed" --no-pager 2>/dev/null |
+      grep -E 'omamobile-sleep|PM: suspend (entry|exit)|omamobile-alarm-test' | tail -n 20
+    cat /sys/power/suspend_stats/success /sys/power/suspend_stats/fail 2>/dev/null | paste -sd' ' | sed 's/^/suspend_stats success fail: /'
+    ;;
+  *)
+    echo "Usage: bash -s check|arm|report < tools/alarm-wake-test" >&2
+    exit 2
+    ;;
+esac

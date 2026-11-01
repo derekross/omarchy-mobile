@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-tegu-usb-rescue in a scratch root, one pass at a time: a
+# configured gadget is left alone, an open switch on an unconfigured gadget
+# with VBUS is closed once, a closed switch is not written, the cable out
+# (no VBUS) costs one register read and no log line, and a Type-C driver
+# that owns the chip ends the watch before the chip is read.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script=$PWD/bin/omamobile-tegu-usb-rescue
+fail() { printf 'not ok - usb-rescue: %s\n' "$1" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export OMAMOBILE_TEGU_ROOT=$tmp/root
+export OMAMOBILE_TEGU_RESCUE_GRACE=0
+export TEST_LOG=$tmp/calls
+export TEGU_TCPC_SWITCH=$tmp/bin/tegu-tcpc-switch
+udc=$OMAMOBILE_TEGU_ROOT/sys/class/udc/11110000.dwc3
+mkdir -p "$tmp/bin" "$udc" "$OMAMOBILE_TEGU_ROOT/sys/bus/i2c/devices/21-0025"
+# power: TCPC_POWER_STATUS, bit 2 VBUS present (0x04 unless PW says otherwise)
+cat > "$tmp/bin/tegu-tcpc-switch" <<'EOF'
+#!/bin/bash
+echo "$1" >> "$TEST_LOG"
+case $1 in power) echo "${PW:-0x04}" ;; switch) echo "${SW:-0x09}" ;; connect) echo 0x09 ;; esac
+EOF
+chmod +x "$tmp/bin/tegu-tcpc-switch"
+calls() { tr '\n' ' ' < "$TEST_LOG" | sed 's/ $//'; }
+
+: > "$TEST_LOG"; echo configured > "$udc/state"
+SW=0x00 "$script" --once >/dev/null
+[[ -z $(calls) ]] || fail "a configured gadget was touched: $(calls)"
+
+: > "$TEST_LOG"; echo 'not attached' > "$udc/state"
+out=$(SW=0x00 "$script" --once)
+[[ $(calls) == "power switch connect" ]] || fail "an open switch was not closed once: $(calls)"
+[[ $out == *"closing the data switch"* ]] || fail "the close is not logged"
+
+: > "$TEST_LOG"
+out=$(SW=0x09 "$script" --once)
+[[ $(calls) == "power switch" ]] || fail "a closed switch was written: $(calls)"
+[[ $out != *"closing"* ]] || fail "a closed switch was logged as closed again"
+
+# The cable out: the switch reads open (as the chip leaves it), but with no
+# VBUS nothing is written and nothing is logged beyond the watch line
+: > "$TEST_LOG"
+out=$(PW=0x00 SW=0x00 "$script" --once)
+[[ $(calls) == "power" ]] || fail "the cable out still read or wrote the switch: $(calls)"
+[[ $(printf '%s\n' "$out" | grep -c .) == 1 && $out == *"watching"* ]] || fail "the cable out wrote to the journal: $out"
+
+: > "$TEST_LOG"; ln -s /dev/null "$OMAMOBILE_TEGU_ROOT/sys/bus/i2c/devices/21-0025/driver"
+out=$(SW=0x00 "$script" --once)
+[[ -z $(calls) && $out == *"owns the chip"* ]] || fail "a Type-C driver did not end the watch: $(calls)"
+
+rm -f "$TEGU_TCPC_SWITCH"
+"$script" --once >/dev/null || fail "a missing helper is not fatal"
+echo 'ok - usb-rescue: closes an open switch once with VBUS, quiet with the cable out, defers to a Type-C driver'

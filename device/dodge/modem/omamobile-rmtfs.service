@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# rmtfs for the dodge modem. Read-only on copies: -r keeps every modem write
+# in RAM, -o serves /var/lib/omamobile/modem-efs. Never -P (real partitions).
+[Unit]
+Description=dodge modem remote file system (read-only copies)
+ConditionPathExists=/etc/omamobile/modem-probe.enable
+ConditionPathExists=/var/lib/omamobile/modem-efs/modem_fs1
+Requires=omamobile-modem-efs.service
+After=omamobile-adsp-battery.service omamobile-modem-efs.service
+
+[Service]
+ExecStartPre=/usr/local/lib/omamobile/modem/omamobile-modem rmtfs-mem
+ExecStart=/usr/local/bin/rmtfs -r -o /var/lib/omamobile/modem-efs -v
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

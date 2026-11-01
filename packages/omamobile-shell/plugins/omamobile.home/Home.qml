@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import QtQuick
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -149,7 +150,7 @@ Item {
     layout = parsed
     if (ports.length) saveTimer.restart()
     if (!loaded) { loaded = true; goToPage(layout.home, false) }
-    else if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
+    else if (currentPage >= viewLayout.pages.length) goToPage(viewLayout.pages.length - 1, false)
   }
 
   // A first start: a clock and a few installed apps. Waits for the desktop
@@ -201,7 +202,7 @@ Item {
   function commit(next) {
     if (!next) return false
     layout = next
-    if (currentPage >= layout.pages.length) goToPage(layout.pages.length - 1, false)
+    if (currentPage >= viewLayout.pages.length) goToPage(viewLayout.pages.length - 1, false)
     saveTimer.restart()
     return true
   }
@@ -404,13 +405,42 @@ Item {
   }
 
   readonly property string homeDir: Quickshell.env("HOME")
-  // Geometry: one OWL dp from the page width (Omalauncher's 6 columns of 69 dp).
+  // Geometry: the pager (one page) and the surface, in logical px.
   property real owlPageWidth: 480
   property real owlPagerHeight: 908
-  readonly property real owlCellHeight: owlPagerHeight / Math.max(1, layout.grid.rows)
   property real owlScreenWidth: 480
   property real owlScreenHeight: 924
-  readonly property real owlDp: OwlPhone.dpFor(owlPageWidth)
+  // The screen the surface is on (the offscreen renders put a stand-in
+  // here), and its shorter side: the portrait page width, whichever way the
+  // phone is held (the surface itself loses the bar and the dock).
+  property var screenInfo: surface.screen || null
+  readonly property real owlShortSide: screenInfo && screenInfo.width > 0 && screenInfo.height > 0
+    ? Math.min(screenInfo.width, screenInfo.height) : Math.min(owlPageWidth, owlScreenHeight)
+  // One OWL dp from that side (Omalauncher's 6 columns of 69 dp), so a
+  // widget draws at one size in both orientations. From the landscape width
+  // it drew 2.2 times larger into cells 2.6 times shorter, and its rows
+  // landed on each other (#85).
+  readonly property real owlDp: OwlPhone.dpFor(landscape ? owlShortSide : owlPageWidth)
+  // The portrait page's height, which the catalog sizes widgets in (the
+  // file's grid is portrait): in landscape, this pager's height plus the
+  // screen's long side less its short one, since the bar and the dock take
+  // the same room either way.
+  readonly property real owlPortraitPagerHeight: landscape ? owlPagerHeight + Math.max(0, Math.max(owlScreenWidth, owlScreenHeight) - owlShortSide) : owlPagerHeight
+  readonly property real owlCellHeight: owlPortraitPagerHeight / Math.max(1, layout.grid.rows)
+
+  // ---------------------------------------------------------------- landscape (TOUCH-PLAN 2.4)
+
+  // A page wider than tall (the phone on its side, Hyprland transform 1 or
+  // 3) shows the layout turned with it: columns and rows swap, and each
+  // item's place and box turn too, kept to its size in pixels and to its
+  // limits (HomeModel.transposeLayout). `layout` and the file stay portrait;
+  // the view derives this and never saves it. Edit mode moves and resizes on
+  // the portrait grid, so it waits for portrait; the sheets still open.
+  readonly property bool landscape: owlPageWidth > owlPagerHeight
+  readonly property var viewLayout: landscape
+    ? HomeModel.transposeLayout(layout, userCatalog, { portrait: [owlShortSide, owlPortraitPagerHeight], landscape: [owlPageWidth, owlPagerHeight] })
+    : layout
+  onLandscapeChanged: if (landscape && editing) setEditing(false)
 
   // What each OWL widget compiles to, its sizes and what it may do.
   readonly property var owlInfo: {
@@ -532,18 +562,63 @@ Item {
     return card
   }
 
-  // Sources run while the widget's page or a neighbour shows and no app
-  // covers the home screen (an app on this workspace).
-  readonly property bool owlPaused: owlPanelOff || (!!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0)
+  // ---------- who can see the home screen
+
+  // Widgets run (OWL sources, `every` and frames, the built-ins' timers)
+  // only while someone can see them: the panel is on, no app is on the
+  // workspace, no drawer, recent apps or call card covers the home screen
+  // (HomeModel.homeShown), and their page shows (pageShown). Kept running
+  // behind an app, a koi pond on page 2 cost the phone about 118 % CPU.
+  readonly property bool appOnScreen: !!Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.toplevels.values.length > 0
+  // The covering surfaces mapped now, from Hyprland's openlayer and
+  // closelayer events ({ namespace: count }).
+  property var coveringLayers: ({})
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event && (event.name === "openlayer" || event.name === "closelayer"))
+        root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)
+    }
+  }
+  // The app drawer covers it once fully open (its surface is always mapped,
+  // so it has no openlayer event to go by; drawerProgress below).
+  readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers) && drawerProgress < 1
+  readonly property bool owlPaused: !homeShown
+  // The app drawer (omamobile.launcher's root, through its DrawerLink.js,
+  // which DrawerLinkClient.qml beside it imports), for the swipe up and for
+  // how far open it is. Loaded from the launcher's folder so both plugins
+  // share one script; missing, the swipe still opens it through the host.
+  Loader {
+    id: drawerLink
+    source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")
+  }
+  readonly property var drawer: drawerLink.item ? drawerLink.item.drawer : null
+  readonly property real drawerProgress: drawer && drawer.progress !== undefined ? Number(drawer.progress) || 0 : 0
+  // The dock (omamobile.launcher) reserves no space, so that no window
+  // changes size as the drawer opens over it; the home screen keeps its
+  // height free here instead: the drawer's dockHeight, nothing while the
+  // on-screen keyboard (which covers the dock) is up, and the same formula
+  // as the launcher's when the drawer is out of reach.
+  readonly property int dockInset: drawer && drawer.dockHeight !== undefined
+    ? (drawer.oskOpen ? 0 : drawer.dockHeight)
+    : Math.max(48, Style.space(48)) + Style.spacing.xxl * 2
+
+  // The pages are being swiped, or slide to a page: the neighbours show too.
+  readonly property bool pagesMoving: !!pager && pager.swiping
+  function pageShown(index) { return HomeModel.pageShown(index, currentPage, pagesMoving, homeShown) }
+  // A finger on the home screen proves it shows: an event missed while the
+  // shell was busy can't keep the widgets stopped.
+  function sawTouch() { if (Object.keys(coveringLayers).length) coveringLayers = ({}) }
 
   // The panel is off when its backlight's bl_power isn't 0, read the way
   // omamobile-keys reads it (the device from omarchy-hw-display). sysfs has
-  // no change events, so it is read every 2 s, a cheap file read.
+  // no change events, so it is read every 2 s, a cheap file read. Every
+  // widget stops on it, OWL or not.
   property bool owlPanelOff: false
   property string owlBacklight: ""
   Process {
     command: ["omarchy-hw-display"]
-    running: root.owlEnabled
+    running: true
     stdout: StdioCollector { id: displayName; waitForEnd: true; onStreamFinished: root.owlBacklight = String(displayName.text || "").trim().split("\n")[0] }
   }
   FileView {
@@ -555,16 +630,18 @@ Item {
   Timer {
     interval: 2000
     repeat: true
-    running: root.owlEnabled && root.owlBacklight !== ""
+    running: root.owlBacklight !== ""
     onTriggered: blPower.reload()
   }
 
   // An OWL Input has focus: the surface takes the keyboard.
   property bool owlTyping: false
   function owlKeyboard(on) { owlTyping = !!on }
+  // Whether a placed widget runs now (its cell has the same answer as
+  // `shown`); the pages drawn are the view layout's.
   function owlActive(entryId) {
-    const found = HomeModel.findItem(layout, entryId)
-    return !!found && Math.abs(found.page - currentPage) <= 1 && !owlPaused
+    const found = HomeModel.findItem(viewLayout, entryId)
+    return !!found && pageShown(found.page)
   }
 
   // The palette OWL names resolve to: the Omarchy theme, with the names that
@@ -594,7 +671,9 @@ Item {
   }
 
   OwlPhoneHost { id: owlHostObject; home: root }
-  readonly property var owlHost: owlHostObject
+  // Not readonly: the offscreen renders (test/home-render.qml) put a host
+  // that answers from fixtures in its place, so no widget runs a command.
+  property var owlHost: owlHostObject
   Owl.OwlScheduler { id: owlSchedulerObject; paused: root.owlPaused }
   readonly property var owlScheduler: owlSchedulerObject
 
@@ -813,21 +892,20 @@ Item {
   // ---------------------------------------------------------------- actions
 
   function goToPage(index, animate) {
-    var i = Math.max(0, Math.min(layout.pages.length - 1, Number(index) || 0))
+    var i = Math.max(0, Math.min(viewLayout.pages.length - 1, Number(index) || 0))
     currentPage = i
-    if (pager) {
-      pager.highlightMoveDuration = animate === false ? 0 : 250
-      pager.currentIndex = i
-    }
+    if (pager) pager.goTo(i, animate)
   }
 
   function setEditing(on) {
-    editing = !!on
+    editing = !!on && !landscape
     if (!editing) { sheet = ""; settingsId = "" }
   }
 
   function requestEdit() {
     if (!longPressAllowed()) return "busy"
+    if (landscape) { flash("Turn the phone upright to edit"); return "landscape" }
+    sawTouch()
     setEditing(true)
     return "editing"
   }
@@ -838,7 +916,7 @@ Item {
   function launch(appId) {
     var entry = entryFor(appId)
     if (!entry || !entry.id) return false
-    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function")
+    if (appLibrary && typeof appLibrary.beginLaunchFeedback === "function" && !HomeModel.opensShellSurface(entry))
       appLibrary.beginLaunchFeedback(appLibrary.entryName(entry))
     Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))
     return true
@@ -1001,7 +1079,7 @@ Item {
   function state() {
     return JSON.stringify({
       loaded: loaded, path: layoutPath, page: currentPage, pages: layout.pages.length, home: layout.home,
-      grid: layout.grid, editing: editing, sheet: sheet, settings: settingsId, fpBusy: fpBusy,
+      grid: layout.grid, landscape: landscape, viewGrid: viewLayout.grid, editing: editing, sheet: sheet, settings: settingsId, fpBusy: fpBusy,
       items: layout.pages.map(function(p) { return p.items.length }),
       missing: HomeModel.missingApps(layout, availableAppIds())
     })
@@ -1036,25 +1114,21 @@ Item {
       }
 
       // ---------- pages
-      ListView {
+      // HomePager: the ListView's drag (1:1 under the finger), and a short
+      // slide of its own on release (a flick turns the page).
+      HomePager {
         id: pager
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: dots.top
         anchors.topMargin: Style.spacing.lg
-        orientation: ListView.Horizontal
-        snapMode: ListView.SnapOneItem
-        highlightRangeMode: ListView.StrictlyEnforceRange
-        highlightMoveDuration: 250
-        boundsBehavior: Flickable.StopAtBounds
         // In edit mode a drag moves items; pages change by swiping empty
         // space or tapping the dots.
         interactive: !root.editing && root.sheet === ""
-        flickDeceleration: 4000
-        cacheBuffer: width * 2
-        model: root.layout.pages.length
-        onCurrentIndexChanged: root.currentPage = currentIndex
+        model: root.viewLayout.pages.length
+        onPageChanged: root.currentPage = page
+        onMovementStarted: root.sawTouch()
 
         delegate: Page { }
         onWidthChanged: root.owlPageWidth = width
@@ -1064,13 +1138,15 @@ Item {
       // ---------- page dots
       Row {
         id: dots
+        objectName: "pageDots"
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: toolbar.visible ? toolbar.top : parent.bottom
-        height: root.layout.pages.length > 1 || root.editing ? 28 : Style.spacing.lg
+        anchors.bottomMargin: toolbar.visible ? 0 : root.dockInset
+        height: root.viewLayout.pages.length > 1 || root.editing ? 28 : Style.spacing.lg
         spacing: 0
 
         Repeater {
-          model: root.layout.pages.length > 1 || root.editing ? root.layout.pages.length : 0
+          model: root.viewLayout.pages.length > 1 || root.editing ? root.viewLayout.pages.length : 0
           delegate: Item {
             required property int index
             width: 22; height: 28
@@ -1078,7 +1154,7 @@ Item {
               anchors.centerIn: parent
               width: index === root.currentPage ? 9 : 7
               height: width
-              radius: width / 2
+              radius: Math.min(Style.cornerRadius, width / 2)
               color: index === root.currentPage ? root.foreground : root.dimForeground
               opacity: index === root.currentPage ? 1 : 0.6
               border.width: index === root.layout.home && root.editing ? 1 : 0
@@ -1098,10 +1174,11 @@ Item {
       // ---------- edit toolbar
       Row {
         id: toolbar
+        objectName: "editToolbar"
         visible: root.editing
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottomMargin: Style.spacing.sm
+        anchors.bottomMargin: Style.spacing.sm + root.dockInset
         height: visible ? root.touch + Style.spacing.lg : 0
         spacing: Style.spacing.sm
 
@@ -1156,23 +1233,34 @@ Item {
       }
 
       // ---------- long-press anywhere: edit mode
-      // On top of everything and passive (DragThreshold takes no grab), so
-      // apps and widgets still get their taps and the pager its swipes; a
-      // drag cancels it.
-      Item {
+      // On top of everything, watching without taking presses, so apps and
+      // widgets still get their taps and the pager its swipes; a drag
+      // cancels it. Touch and the mouse each have their own handler there.
+      LongPressEdit {
         anchors.fill: pager
         z: 50
-        TapHandler {
-          enabled: !root.editing && root.sheet === ""
-          gesturePolicy: TapHandler.DragThreshold
-          longPressThreshold: 0.5
-          onLongPressed: root.requestEdit()
-        }
+        home: root
+        active: !root.editing && root.sheet === ""
+      }
+
+      // ---------- swipe up anywhere: the app drawer, with the finger
+      // Above the long press; a mostly sideways drag stays the pager's.
+      DrawerSwipe {
+        anchors.fill: pager
+        z: 51
+        home: root
+        pages: pager
+        drawer: root.drawer
+        active: HomeModel.drawerSwipeAllowed(root.appOnScreen, root.editing, root.sheet)
+        // The drawer out of reach (DrawerLink.js): open it through the
+        // host, without the keyboard, as a swipe opens it.
+        onFallbackOpen: Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.launcher", "{\"gesture\":true}"])
       }
 
       // ---------- a short notice, with Undo after a remove
       Rectangle {
         id: noticePill
+        objectName: "notice"
         z: 60
         visible: root.notice !== ""
         readonly property bool canUndo: root.undoRemoved !== null
@@ -1181,7 +1269,7 @@ Item {
         anchors.bottomMargin: Style.spacing.lg
         width: noticeText.implicitWidth + Style.spacing.xxl * 2 + (canUndo ? undoChip.width + Style.spacing.md : 0)
         height: canUndo ? root.touch : noticeText.implicitHeight + Style.spacing.lg * 2
-        radius: height / 2
+        radius: Math.min(Style.cornerRadius, height / 2)
         color: Commons.Color.menu.background
         Text {
           id: noticeText
@@ -1205,7 +1293,7 @@ Item {
           Rectangle {
             anchors.fill: parent
             anchors.margins: Style.spacing.xs
-            radius: height / 2
+            radius: Math.min(Style.cornerRadius, height / 2)
             color: undoTap.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent"
           }
           Text {
@@ -1232,6 +1320,7 @@ Item {
       HomeSheets {
         z: 100
         anchors.fill: parent
+        anchors.bottomMargin: root.dockInset
         home: root
       }
     }
@@ -1246,9 +1335,9 @@ Item {
     width: pager.width
     height: pager.height
 
-    readonly property var items: root.layout.pages[index] ? root.layout.pages[index].items : []
-    readonly property int columns: root.layout.grid.columns
-    readonly property int rows: root.layout.grid.rows
+    readonly property var items: root.viewLayout.pages[index] ? root.viewLayout.pages[index].items : []
+    readonly property int columns: root.viewLayout.grid.columns
+    readonly property int rows: root.viewLayout.grid.rows
     readonly property real cellW: width / columns
     readonly property real cellH: height / rows
     // Where a dragged item would land, in cells (null: not dragging).
@@ -1325,8 +1414,10 @@ Item {
     property real growY: 0
     property bool resizing: false
 
-    readonly property var limits: HomeModel.sizeLimits(modelData, root.layout.grid, root.userCatalog)
+    readonly property var limits: HomeModel.sizeLimits(modelData, root.viewLayout.grid, root.userCatalog)
     readonly property bool isUser: isWidget && HomeModel.isUserType(modelData.type)
+    // Someone can see this cell's widget (Home's pageShown).
+    readonly property bool shown: root.pageShown(owner.index)
     x: modelData.x * owner.cellW + dragX
     y: modelData.y * owner.cellH + dragY
     width: Math.max(limits.minW * owner.cellW, Math.min(limits.maxW * owner.cellW, modelData.w * owner.cellW + growX))
@@ -1334,20 +1425,44 @@ Item {
     z: dragging || resizing ? 20 : 1
 
     // The widget's card. Plain and opaque enough to read on any wallpaper;
-    // no blur or shadow, to keep the 120 Hz panel smooth.
+    // no blur or shadow, to keep the 120 Hz panel smooth. Its corners are
+    // Omarchy's (Style.cornerRadius, Hyprland's rounding: square by
+    // default, as the lock, the shade and the keypad), not a rounding of
+    // our own.
     Rectangle {
       id: card
       anchors.fill: parent
       anchors.margins: root.gap
       visible: cell.isWidget
-      radius: Math.max(Style.cornerRadius, 12)
+      radius: Style.cornerRadius
       color: root.cardColor
+    }
+
+    // The widget's inside is clipped to the card. Square, the plain clip is
+    // the card's shape and costs nothing; with rounding set, a mask of the
+    // card's shape keeps pictures out of the corners (a layer per widget,
+    // only then).
+    readonly property bool roundClip: cell.isWidget && Style.cornerRadius > 0
+    Rectangle {
+      id: cornerMask
+      anchors.fill: card
+      visible: false
+      layer.enabled: cell.roundClip
+      radius: Style.cornerRadius
+      color: "white"
     }
 
     Loader {
       id: content
       anchors.fill: cell.isWidget ? card : parent
       clip: cell.isWidget
+      layer.enabled: cell.roundClip
+      layer.effect: MultiEffect {
+        maskEnabled: true
+        maskSource: cornerMask
+        maskThresholdMin: 0.5
+        maskSpreadAtMin: 1.0
+      }
       // A user widget goes through UserWidgetCell, which loads its code
       // only when the scan calls it ok and shows an error card otherwise.
       source: (cell.isUser && root.isOwlType(cell.modelData.type)) || HomeModel.isOwlType(cell.modelData.type) ? Qt.resolvedUrl("OwlCell.qml")
@@ -1358,6 +1473,8 @@ Item {
         item.home = root
         item.entry = Qt.binding(function() { return cell.modelData })
         item.editing = Qt.binding(function() { return root.editing })
+        // Widgets stop their timers while nobody can see them.
+        if ("shown" in item) item.shown = Qt.binding(function() { return cell.shown })
       }
     }
 
@@ -1366,7 +1483,7 @@ Item {
       anchors.fill: parent
       anchors.margins: root.gap / 2
       visible: root.editing
-      radius: Math.max(Style.cornerRadius, 12)
+      radius: Style.cornerRadius
       color: cell.dragging ? Util.alpha(Commons.Color.accent, 0.12) : "transparent"
       border.width: cell.dragging || cell.resizing ? 2 : 1
       border.color: Commons.Color.accent
@@ -1406,7 +1523,7 @@ Item {
 
     // Where the dragged item lands: { page, x, y, w, h }.
     function target() {
-      var grid = root.layout.grid
+      var grid = root.viewLayout.grid
       var cx = (modelData.x * owner.cellW + dragX) / owner.cellW
       var shift = HomeModel.pageShift(cx, modelData.w, grid)
       var cellAt = HomeModel.cellForPoint(modelData.x * owner.cellW + dragX, modelData.y * owner.cellH + dragY,
@@ -1427,7 +1544,7 @@ Item {
       Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
-        width: 24; height: 24; radius: 12
+        width: 24; height: 24; radius: Math.min(Style.cornerRadius, width / 2)
         color: Commons.Color.urgent
         Text {
           anchors.centerIn: parent
@@ -1452,7 +1569,7 @@ Item {
       Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        width: 26; height: 26; radius: 13
+        width: 26; height: 26; radius: Math.min(Style.cornerRadius, width / 2)
         color: Commons.Color.accent
         Text {
           anchors.centerIn: parent

@@ -553,6 +553,7 @@ Omarchy Mobile runs OWL widgets with its own runtime (`/usr/share/omamobile/shel
 - **Pictures** load from local files and embedded assets only, not from web addresses.
 - **Android.** `android.notifications` and `android.alarm` are empty; `androidApp()` and `notification()` do nothing (no Android here); `android.media`, `volume`, `modes` and `system` come from MPRIS, PipeWire, the torch LED, mako and `/proc`. `Shader` draws its `fallback`.
 - **`on x { }`** doesn't fire for x's first value, as the guide says.
+- **Live means on screen.** Sources, `every` and animation run only while the widget's page shows (its neighbours too while the pages are being swiped) and no app, app drawer, recent apps or call card covers the home screen, with the screen on. Shown again, what fell due runs once. Animation runs at 20 fps, 30 while you touch the widget, and half that for a widget whose frames take too long.
 
 ---
 

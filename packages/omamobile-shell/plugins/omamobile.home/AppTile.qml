@@ -26,7 +26,7 @@ Item {
     anchors.centerIn: icon
     width: icon.width + 12
     height: width
-    radius: width * 0.3
+    radius: Math.min(Style.cornerRadius, width * 0.3)
     color: touch.pressed ? Qt.rgba(1, 1, 1, 0.2) : "transparent"
   }
 
@@ -71,6 +71,12 @@ Item {
     id: touch
     anchors.fill: parent
     enabled: !tile.editing
+    // A hold is the long press (LongPressEdit, over the pages, asks for
+    // edit mode), not a click: taking it here keeps its release from
+    // launching the app. Qt 6.12 still sent the click after edit mode had
+    // disabled this MouseArea mid-press.
+    pressAndHoldInterval: 500
+    onPressAndHold: function(mouse) { mouse.accepted = true }
     onClicked: {
       if (!tile.home) return
       if (tile.missing) tile.home.flash("Not installed: hold to edit")

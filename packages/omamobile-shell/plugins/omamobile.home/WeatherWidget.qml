@@ -18,12 +18,14 @@ Item {
   property var home: null
   property var entry: null
   property bool editing: false
+  // Someone can see it (set by Home.qml): its timers wait while not.
+  property bool shown: true
   readonly property var config: entry && entry.config ? entry.config : ({})
   readonly property bool hasPlace: typeof config.latitude === "number" && typeof config.longitude === "number"
   readonly property bool useLocation: config.useLocation !== false
   readonly property bool configured: config.enabled === true && (useLocation || hasPlace)
 
-  GeoLocation { id: geo; active: widget.configured && widget.useLocation }
+  GeoLocation { id: geo; active: widget.shown && widget.configured && widget.useLocation }
   // Where the forecast is for: here, when the position is known; else the
   // named place; else nowhere yet.
   readonly property bool here: useLocation && !!geo.fix
@@ -63,9 +65,11 @@ Item {
   Timer {
     interval: 30 * 60 * 1000
     repeat: true
-    running: widget.configured
+    running: widget.configured && widget.shown
     onTriggered: widget.refresh(true)
   }
+  // Shown again: refresh() asks only when the cached answer is 30 minutes old.
+  onShownChanged: if (shown) refresh(false)
 
   readonly property var look: forecast ? HomeModel.weatherText(forecast.code) : ({ icon: "󰖐", text: "" })
   readonly property string unit: config.units === "fahrenheit" ? "°F" : "°C"

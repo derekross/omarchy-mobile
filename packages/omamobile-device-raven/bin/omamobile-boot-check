@@ -1,0 +1,134 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Checks that every part of the phone came up at this boot, so a part that
+# went missing shows here rather than when someone needs it. Run by
+# omamobile-boot-check.timer two minutes after boot (the AoC's sensors and
+# Bluetooth's firmware take that long at most); read-only.
+#
+# Appends one line per boot to /var/log/omamobile/boot-check.log:
+#   <date> <boot id> <kernel> ok|FAIL <failed parts>
+# and keeps the full report of the last 30 boots in
+# /var/log/omamobile/boot-check/<boot id>.txt. A failure also goes to the
+# journal at warning level.
+#   omamobile-boot-check          check now and record
+#   omamobile-boot-check --show   check now, print only
+set -uo pipefail
+
+logdir=/var/log/omamobile
+record=1
+[[ ${1:-} == --show ]] && record=
+
+report=()
+failed=()
+check() {
+  local name=$1 detail=$2
+  shift 2
+  if "$@"; then
+    report+=("ok    $name${detail:+: $detail}")
+  else
+    report+=("FAIL  $name${detail:+: $detail}")
+    failed+=("$name")
+  fi
+}
+note() { report+=("info  $1: $2"); }
+
+sensor() {
+  [[ $(busctl get-property net.hadess.SensorProxy "/net/hadess/SensorProxy$2" \
+    "net.hadess.SensorProxy$3" "$1" 2>/dev/null) == "b true" ]]
+}
+
+# Display, GPU, input
+dsi=$(cat /sys/class/drm/card*-DSI-1/status 2>/dev/null | head -1)
+check display "${dsi:-no DSI connector}" test "$dsi" = connected
+gpu=$(basename "$(readlink -f /sys/class/drm/renderD128/device/driver 2>/dev/null)" 2>/dev/null)
+check gpu "${gpu:-no render node}" test -n "$gpu" -a "$gpu" != .
+check touch "" grep -q 'Name="s6sy761"' /proc/bus/input/devices
+check keys "" grep -q 'Name="gpio-keys"' /proc/bus/input/devices
+
+# Radios
+wifi=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | awk -F: '$1 ~ /^wl/ { print $2; exit }')
+check wifi "${wifi:-no device}" test -n "$wifi"
+[[ $wifi == connected ]] || note wifi-link "${wifi:-none}"
+bt=$(btmgmt --index 0 info 2>/dev/null | grep -m1 'current settings:')
+rebinds=$(cat /run/omamobile/bt-rebinds 2>/dev/null || echo 0)
+check bluetooth "$( ((rebinds)) && echo "after $rebinds power cycle(s)")" grep -qw powered <<<"$bt"
+if [[ -s /proc/device-tree/chosen/config/bt_addr ]]; then
+  want=$(tr -d '\0' </proc/device-tree/chosen/config/bt_addr | tr a-f A-F)
+  have=$(btmgmt --index 0 info 2>/dev/null | awk '/addr/ { print $2; exit }')
+  check bluetooth-address "" test "$want" = "$have"
+fi
+
+# AoC: audio and sensors
+check aoc "" test -e /run/omamobile/aoc-firmware-loaded
+check audio-card "" grep -q aoc-snd-card /proc/asound/cards
+# No speakers check: speaker protection isn't enabled on raven yet
+# (AUDIO-PLAN.md), and without it the amplifiers stay unloaded.
+check accelerometer "" sensor HasAccelerometer "" ""
+check light "" sensor HasAmbientLight "" ""
+check proximity "" sensor HasProximity "" ""
+check compass "" sensor HasCompass /Compass .Compass
+
+# Modem (MODEM-PLAN): the CP, the packet processor, each SIM. A SIM still
+# waiting for its PIN is noted, not failed: nobody may have unlocked yet.
+if systemctl is-enabled -q omamobile-modem 2>/dev/null; then
+  check modem "" systemctl is-active -q omamobile-modem
+  check modem-data-path "" test -r /sys/devices/platform/cpif/pktproc/status
+  for n in 1 2; do
+    unit=omamobile-sitd$([[ $n == 2 ]] && echo -2)
+    systemctl is-enabled -q "$unit" 2>/dev/null || continue
+    run=/run/omamobile-sit$([[ $n == 2 ]] && echo -2)
+    sim=$(python3 -I - "$run/state.json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    m = json.load(open(sys.argv[1])).get('modem') or {}
+except (OSError, ValueError):
+    print('none'); sys.exit()
+s = m.get('sim') or {}
+words = [s.get('label') or '', m.get('registration') or '', m.get('tech') or '']
+print(s.get('state', 'unknown'), m.get('stage', ''), ' '.join(w for w in words if w))
+PY
+)
+    read -r state stage detail <<<"${sim:-none}"
+    if [[ $state == pin ]]; then
+      note "sim-$n" "${detail:-SIM $n} waiting for its PIN"
+    else
+      check "sim-$n" "${detail:-$state $stage}" test "$stage" = running
+    fi
+  done
+  ufs=$(dmesg 2>/dev/null | grep -c ufshcd_err_handler || true)
+  check ufs-errors "$ufs" test "$ufs" = 0
+fi
+
+# Power, USB
+cap=$(cat /sys/class/power_supply/max170xx_battery/capacity 2>/dev/null)
+check battery "${cap:+$cap %}" test -n "$cap"
+check usb-rescue "" systemctl is-active -q omamobile-usb-rescue
+hot=$(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -1)
+[[ -n $hot ]] && note hottest "$((hot / 1000)) °C"
+
+# Services and kernel
+units=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '$1 != "plymouth-start.service" { print $1 }' | tr '\n' ' ')
+check services "${units:-none failed}" test -z "$units"
+oops=$(dmesg 2>/dev/null | grep -cE 'Internal error:|Unable to handle kernel|BUG:|WARNING: CPU:|Call trace:' || true)
+check kernel "$oops oops/warning lines" test "$oops" = 0
+
+kernel=$(uname -r)
+boot=$(tr -d - </proc/sys/kernel/random/boot_id)
+status=ok
+((${#failed[@]})) && status=FAIL
+summary="$(date '+%F %T') ${boot:0:8} ${kernel##*-} $status ${failed[*]}"
+
+if [[ -z $record ]]; then
+  printf '%s\n' "$kernel" "${report[@]}"
+  exit 0
+fi
+mkdir -p "$logdir/boot-check"
+printf '%s\n' "$(date '+%F %T')" "$kernel" "${report[@]}" >"$logdir/boot-check/$boot.txt"
+echo "$summary" >>"$logdir/boot-check.log"
+ls -t "$logdir"/boot-check/*.txt | tail -n +31 | xargs -r rm -f
+if [[ $status == ok ]]; then
+  echo "omamobile-boot-check: all parts up"
+else
+  echo "<4>omamobile-boot-check: missing: ${failed[*]}"
+fi
+exit 0

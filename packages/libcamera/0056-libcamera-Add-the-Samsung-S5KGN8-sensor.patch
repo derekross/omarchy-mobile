@@ -1,0 +1,113 @@
+From 1564b1df852180ea2e7ffcf2643429b05df2699d Mon Sep 17 00:00:00 2001
+From: W4HO <87742609+W4HO-ham@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 03:18:25 -0700
+Subject: [PATCH] libcamera: Add the Samsung S5KGN8 sensor
+
+The S5KGN8 is the main camera of the Google Pixel 9a, captured through
+the zumapro CSIS receiver and the simple pipeline handler with the
+software ISP. Without a helper the simple IPA ran it with no black level
+and took the gain code for the gain.
+
+Add a camera sensor helper with the black level measured on the
+palmtop (64.0 on all four channels at 10 bits, minimum exposure and 1x
+gain, in the dark) and the linear analogue gain of the S5KGN1, code / 32,
+which matches the driver's 0x20 to 0x200 range. Add the sensor
+properties with two-frame control delays; the unit cell and test pattern
+numbering are not known. Add a tuning file with the defaults that don't
+depend on the sensor, and no colour matrix or autofocus yet.
+---
+ src/ipa/libipa/camera_sensor_helper.cpp       | 13 +++++++++++
+ src/ipa/simple/data/meson.build               |  1 +
+ src/ipa/simple/data/s5kgn8.yaml               | 22 +++++++++++++++++++
+ .../sensor/camera_sensor_properties.cpp       | 10 +++++++++
+ 4 files changed, 46 insertions(+)
+ create mode 100644 src/ipa/simple/data/s5kgn8.yaml
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index 34891a4..aab98a1 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -883,6 +883,19 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("s5kgn1", CameraSensorHelperS5kgn1)
+ 
++class CameraSensorHelperS5kgn8 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5kgn8()
++	{
++		/* 64 at 10 bits, measured on the Pixel 9a's main camera. */
++		blackLevel_ = 4096;
++		/* Code / 32, as on the S5KGN1: the driver offers 0x20 to 0x200. */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5kgn8", CameraSensorHelperS5kgn8)
++
+ class CameraSensorHelperVd55g1 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/ipa/simple/data/meson.build b/src/ipa/simple/data/meson.build
+index 31f141e..eaef79f 100644
+--- a/src/ipa/simple/data/meson.build
++++ b/src/ipa/simple/data/meson.build
+@@ -5,6 +5,7 @@ conf_files = files([
+     's5k3j1.yaml',
+     's5kgm5.yaml',
+     's5kgn1.yaml',
++    's5kgn8.yaml',
+     'uncalibrated.yaml',
+ ])
+ 
+diff --git a/src/ipa/simple/data/s5kgn8.yaml b/src/ipa/simple/data/s5kgn8.yaml
+new file mode 100644
+index 0000000..51ca9b0
+--- /dev/null
++++ b/src/ipa/simple/data/s5kgn8.yaml
+@@ -0,0 +1,22 @@
++# SPDX-License-Identifier: CC0-1.0
++#
++# Samsung S5KGN8 (the Pixel 9a's main camera), not calibrated yet. The
++# black level comes from the sensor's helper. No colour matrix until one is
++# fitted on daylight shots, and no autofocus until the lens has a driver.
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++  - Awb:
++  # Defaults for applications that do not set the controls.
++  - Adjust:
++      contrast: 1.2
++      saturation: 1.1
++  # Luma and chroma noise reduction and sharpening, scaled with the gain
++  - Detail:
++      sharpen: 0.6
++      denoise: 0.015
++      chromaDenoise: 0.03
++  - Agc:
++...
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+index 4dba1aa..a2502a2 100644
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -549,6 +549,16 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 2
+ 			},
+ 		} },
++		{ "s5kgn8", {
++			.unitCellSize = {},
++			.testPatternModes = {},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "vd55g1", {
+ 			.unitCellSize = { 2160, 2160 },
+ 			.testPatternModes = {
+-- 
+2.53.0
+

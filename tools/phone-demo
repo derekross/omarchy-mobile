@@ -1,0 +1,868 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# phone-demo: fictional demo data on the phone for screenshots and the
+# showcase video (docs/DEMO.md): contacts, message threads, a call history
+# and a few notifications, so the phone looks like it is in everyday use.
+#
+#   tools/phone-demo seed [--close-apps] [--no-notify]
+#   tools/phone-demo notify          (re)send the demo notifications
+#   tools/phone-demo clear [--close-apps] [--restore-backup]
+#   tools/phone-demo status
+#   tools/phone-demo shot [--wake] [NAME|FILE.png]
+#   tools/phone-demo record [--wake] [--width N|native] SECONDS [NAME|FILE.mp4]
+#
+# From the laptop, over tools/phone-ssh (the script runs on the phone as
+# root, as tools/phone-smoke does); --here runs it on the phone itself.
+#
+# Where it writes (the session user's own app data, nothing else):
+#   Contacts   ~/.local/share/contacts/default/omamobile-demo-NN.vcf (the
+#              vdir that Phone, Contacts and Messages read)
+#   Messages   ~/.local/share/omatel/messages.db (conversations,
+#              participants, messages)
+#   Calls      ~/.local/share/omatel/calls.db (calls)
+#   Notices    org.freedesktop.Notifications, as Messages, Phone, Calendar
+#              and Omarchy: Omarchy's notification service keeps them in
+#              ~/.local/state/omarchy/notifications/, which the shade and the
+#              lock glance read
+# Before it writes, seed backs up every one of those (the databases through
+# SQLite's backup API, the two directories as tar files) into
+# /var/lib/omamobile-demo/backup-<time>/ (root, mode 0700), and records what
+# it added in /var/lib/omamobile-demo/manifest.json. It refuses to seed
+# twice. clear deletes exactly the recorded rows and files, takes the demo
+# notifications away, puts back history entries the demo pushed out of
+# Omarchy's ten, and compares the databases with the backup;
+# --restore-backup copies the backed-up databases back over instead (the
+# agent stopped meanwhile). clear is idempotent. The backups stay until you
+# remove them (they hold copies of your messages and calls).
+#
+# Every name is invented and every number is in the 555-01xx range set aside
+# for fiction; emails are at example.com. No modem, SIM, NV or system state
+# is read or written. The apps must be closed while data changes under
+# them (--close-apps closes them); omatel-agent, if it runs, is restarted so
+# its clients (the shell, an open app) read the stores again.
+#
+# shot and record capture the screen as the session user (grim, wf-recorder)
+# and copy the file to logs/demo/ on the laptop. A display that is off gives
+# grim nothing: --wake lights it first (omarchy-shell lock wake), which the
+# person holding the phone will notice.
+set -uo pipefail
+
+usage() { sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+here=0
+if [[ ${1:-} == --here ]]; then here=1; shift; fi
+cmd=${1:-}
+[[ -n $cmd ]] || usage 2
+[[ $cmd == -h || $cmd == --help ]] && usage 0
+shift
+case $cmd in
+  seed|notify|clear|status|shot|record) ;;
+  *) echo "phone-demo: unknown command $cmd" >&2; usage 2 ;;
+esac
+
+# ======================================================= on the laptop ====
+if ((!here)); then
+  repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+  ssh_run() { "$repo/tools/phone-ssh" "bash -s -- --here $*" < "$0"; }
+  case $cmd in
+    shot|record)
+      # Options (and record's SECONDS) go to the phone; a NAME or FILE
+      # names the output on the laptop.
+      args=() name= secs=
+      while (($#)); do
+        case $1 in
+          --wake) args+=(--wake) ;;
+          --width) args+=(--width "${2:?--width needs a value}"); shift ;;
+          *) if [[ $cmd == record && -z $secs && $1 =~ ^[0-9]+$ ]]; then secs=$1; args+=("$1")
+             else name=$1; fi ;;
+        esac
+        shift
+      done
+      ext=png; [[ $cmd == record ]] && ext=mp4
+      if [[ $cmd == record && -z $secs ]]; then
+        echo "phone-demo: record needs SECONDS" >&2; exit 2
+      fi
+      [[ -n $name ]] || name=$cmd-$(date +%Y%m%d-%H%M%S)
+      if [[ $name == */* || $name == *.$ext ]]; then out=$name
+      else mkdir -p "$repo/logs/demo"; out=$repo/logs/demo/$name.$ext; fi
+      [[ $out == *.$ext ]] || out=$out.$ext
+      for a in "${args[@]}"; do
+        [[ $a =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "phone-demo: bad argument $a" >&2; exit 2; }
+      done
+      tmp=$(mktemp "$(dirname -- "$out")/.phone-demo.XXXXXX") || exit 1
+      if ! ssh_run "$cmd" "${args[@]}" > "$tmp"; then rm -f "$tmp"; exit 1; fi
+      if [[ ! -s $tmp ]]; then rm -f "$tmp"; echo "phone-demo: nothing captured" >&2; exit 1; fi
+      mv "$tmp" "$out"
+      echo "$out"
+      exit 0 ;;
+    *)
+      for a in "$@"; do
+        [[ $a =~ ^--[a-z-]+$ ]] || { echo "phone-demo: bad argument $a" >&2; exit 2; }
+      done
+      ssh_run "$cmd" "$@"
+      exit $? ;;
+  esac
+fi
+
+# ======================================================== on the phone ====
+# From the laptop this script arrives on bash's stdin: nothing below may read
+# stdin (as_user closes it), or it would swallow the rest of the script.
+
+die() { echo "phone-demo: $*" >&2; exit 1; }
+say() { echo "$*" >&2; }
+
+[[ $(id -u) == 0 ]] || die "run as root on the phone (tools/phone-ssh logs in as root)"
+
+close_apps=0 no_notify=0 restore_backup=0 wake=0 width=1080 secs= extra=()
+while (($#)); do
+  case $1 in
+    --close-apps) close_apps=1 ;;
+    --no-notify) no_notify=1 ;;
+    --restore-backup) restore_backup=1 ;;
+    --wake) wake=1 ;;
+    --width) width=${2:-}; shift ;;
+    *) if [[ $cmd == record && -z $secs && $1 =~ ^[0-9]+$ ]]; then secs=$1; else extra+=("$1"); fi ;;
+  esac
+  shift
+done
+((${#extra[@]} == 0)) || die "unknown argument ${extra[0]}"
+
+state=/var/lib/omamobile-demo
+manifest=$state/manifest.json
+
+# The session user (uid 1000 on our images), its home and its session.
+user=$(loginctl list-users --no-legend 2>/dev/null </dev/null | awk '$2 != "root" {print $2; exit}')
+[[ -n $user ]] || die "no logged-in user"
+uid=$(id -u "$user") || die "no uid for the session user"
+home=$(getent passwd "$user" | cut -d: -f6)
+rt=/run/user/$uid
+[[ -S $rt/bus ]] || die "the session user has no session bus ($rt/bus)"
+
+# Hyprland's environment, for grim, wf-recorder, hyprctl and omarchy-shell.
+session_env=()
+hpid=$(pgrep -u "$uid" -x Hyprland </dev/null | head -1)
+[[ -n $hpid ]] || hpid=$(pgrep -u "$uid" -x hyprland </dev/null | head -1)
+if [[ -n $hpid && -r /proc/$hpid/environ ]]; then
+  while IFS= read -r -d '' kv; do
+    case $kv in
+      WAYLAND_DISPLAY=*|HYPRLAND_INSTANCE_SIGNATURE=*) session_env+=("$kv") ;;
+    esac
+  done < "/proc/$hpid/environ"
+fi
+if [[ " ${session_env[*]} " != *" WAYLAND_DISPLAY="* ]]; then
+  for s in "$rt"/wayland-*; do
+    [[ -S $s ]] && { session_env+=("WAYLAND_DISPLAY=${s##*/}"); break; }
+  done
+fi
+
+as_user() {
+  runuser -u "$user" -- env HOME="$home" XDG_RUNTIME_DIR="$rt" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$rt/bus" OMARCHY_PATH=/usr/share/omarchy \
+    PATH="/usr/share/omarchy/bin:/usr/local/bin:/usr/bin" "${session_env[@]}" "$@" </dev/null
+}
+
+data=$(as_user systemctl --user show-environment 2>/dev/null | sed -n 's/^XDG_DATA_HOME=//p')
+[[ -n $data ]] || data=$home/.local/share
+notes_dir=$home/.local/state/omarchy/notifications
+
+# ---------------------------------------------------- screen capture ------
+
+display_on() {   # unknown (no hyprctl answer) counts as on
+  as_user hyprctl -j monitors 2>/dev/null | python3 -c 'import json,sys
+try: m=json.load(sys.stdin)
+except ValueError: sys.exit(0)
+f=[x for x in m if x.get("focused")] or m
+sys.exit(0 if not f or f[0].get("dpmsStatus", True) else 1)'
+}
+output_name() {
+  as_user hyprctl -j monitors 2>/dev/null | python3 -c 'import json,sys
+m=json.load(sys.stdin); f=[x for x in m if x.get("focused")] or m
+print(f[0]["name"] if f else "")'
+}
+wake_display() {
+  say "phone-demo: waking the display (the person holding the phone will see it)"
+  [[ $(as_user omarchy-shell lock wake 2>/dev/null) == ok ]] || as_user omarchy-brightness-display on >/dev/null 2>&1
+  sleep 1
+}
+need_display() {
+  [[ " ${session_env[*]} " == *" WAYLAND_DISPLAY="* ]] || die "no Wayland session for $user"
+  if ! display_on; then
+    ((wake)) || die "the display is off, so grim would capture nothing: wake it first (power key, or --wake)"
+    wake_display
+    # The lock's wake runs omarchy-system-wake in the background, so the
+    # panel can take a few seconds to report on.
+    local i
+    for i in 1 2 3 4 5 6 7 8; do display_on && break; sleep 0.5; done
+    display_on || die "the display is still off"
+  fi
+}
+
+case $cmd in
+  shot)
+    need_display
+    # grim captures at the output's own scale: the panel's full resolution.
+    as_user grim -t png - || die "grim failed"
+    exit 0 ;;
+  record)
+    [[ -n $secs ]] || die "record needs SECONDS"
+    ((secs >= 1 && secs <= 600)) || die "SECONDS must be 1-600"
+    command -v wf-recorder >/dev/null || die "wf-recorder is not installed"
+    need_display
+    out=$(output_name); [[ -n $out ]] || die "no display found"
+    scale="scale=iw:ih"
+    if [[ $width != native ]]; then
+      [[ $width =~ ^[0-9]+$ ]] || die "--width takes a number or native"
+      scale="scale=$width:-2"
+    fi
+    tmpdir=$(runuser -u "$user" -- mktemp -d "$rt/omamobile-demo-rec.XXXXXX" </dev/null) || die "no temporary directory"
+    trap 'rm -rf "$tmpdir"' EXIT
+    say "phone-demo: recording $secs s from $out"
+    # As omamobile-screenrecord does (x264 on the CPU, BT.709 full range),
+    # without its start and stop toasts, which would be in the video.
+    as_user timeout -s INT "$((secs + 1))" wf-recorder -o "$out" -c libx264 \
+      -p preset=ultrafast -p crf=20 -F "$scale:out_color_matrix=bt709:out_range=pc" \
+      -p x264-params=colorprim=bt709:transfer=bt709:colormatrix=bt709:range=pc \
+      -r 30 -f "$tmpdir/rec.mp4" -y >"$tmpdir/log" 2>&1
+    [[ -s $tmpdir/rec.mp4 ]] || { tail -3 "$tmpdir/log" >&2; die "wf-recorder wrote nothing"; }
+    cat "$tmpdir/rec.mp4"
+    exit 0 ;;
+esac
+
+# ------------------------------------------------------- data commands ----
+
+install -d -m 0700 -o root -g root "$state"
+stage=$(runuser -u "$user" -- mktemp -d "$rt/omamobile-demo.XXXXXX" </dev/null) || die "no temporary directory"
+trap 'rm -rf "$stage"' EXIT
+
+cat > "$stage/demo.py" <<'PY'
+# The phone side of tools/phone-demo, run as the session user.
+import datetime, glob, json, os, shutil, sqlite3, subprocess, sys, time
+
+STAGE = os.environ["DEMO_STAGE"]
+DATA = os.environ["DEMO_DATA"]
+HOME = os.environ["DEMO_HOME"]
+OMATEL = os.path.join(DATA, "omatel")
+MESSAGES_DB = os.path.join(OMATEL, "messages.db")
+CALLS_DB = os.path.join(OMATEL, "calls.db")
+CONTACTS = os.path.join(DATA, "contacts")
+BOOK = os.path.join(CONTACTS, "default")
+NOTES = os.path.join(HOME, ".local/state/omarchy/notifications")
+UID_PREFIX = "omamobile-demo-"
+# omatel 0.2.x's schemas (crates/omatel-store): messages.db at user_version
+# 1, calls.db at 2. A newer schema means this tool needs a look first.
+SCHEMA = {MESSAGES_DB: 1, CALLS_DB: 2}
+
+# Invented people; 555-01xx numbers are reserved for fiction.
+# key: (name, E.164, email, starred)
+PEOPLE = {
+    "priya": ("Priya Raman", "+18145550123", "priya.raman@example.com", True),
+    "marcus": ("Marcus Bell", "+18145550134", None, False),
+    "elena": ("Elena Sokolova", "+18145550142", "elena@example.com", True),
+    "tomas": ("Tomás Herrera", "+18145550157", None, False),
+    "aiko": ("Aiko Tanaka", "+18145550161", "aiko.tanaka@example.com", False),
+    "grace": ("Grace Okafor", "+18145550178", None, True),
+    "noah": ("Noah Lindqvist", "+18145550185", None, False),
+    "fatima": ("Fatima Haddad", "+18145550109", "fatima.h@example.com", False),
+    "sam": ("Sam Whitfield", "+18145550116", None, False),
+    "mateo": ("Mateo Rossi", "+18145550190", None, False),
+}
+STRANGER = "+18145550199"  # not in the contacts
+
+# Times: ("m", minutes ago) or ("d", days ago, "HH:MM" local time).
+THREADS = [
+    ("priya", [
+        ("in", ("d", 2, "18:05"), "Are you around this weekend? The farmers market is back on Saturday 🍓"),
+        ("out", ("d", 2, "18:12"), "Yes! I've been waiting for that. Morning?"),
+        ("in", ("d", 2, "18:14"), "9ish? Then coffee after"),
+        ("out", ("d", 2, "18:15"), "Perfect, see you by the fountain"),
+        ("in", ("m", 48), "Forecast says sunny on Saturday ☀️"),
+        ("in", ("m", 47), "Bring a bag for the peaches, last time we ran out of hands 😄"),
+    ], 2),  # the last two unread
+    ("grace", [
+        ("in", ("d", 3, "19:30"), "Mom wants everyone over on Sunday for her birthday dinner"),
+        ("out", ("d", 3, "19:41"), "I'm in! What should I bring?"),
+        ("in", ("d", 3, "19:44"), "Dessert? She loved your lemon cake last year"),
+        ("out", ("d", 3, "19:45"), "Lemon cake it is 🍋"),
+        ("in", ("d", 1, "20:02"), "Dad found the old photo albums, prepare yourself"),
+        ("out", ("d", 1, "20:10"), "Oh no 😂 I'll bring snacks"),
+    ], 0),
+    ("tomas", [
+        ("in", ("d", 1, "13:22"), "Hey, a parcel for you was left on our porch by mistake"),
+        ("in", ("d", 1, "13:23"), "I'll bring it over when I get home around 6"),
+        ("out", ("d", 1, "13:40"), "Thank you so much! No rush at all"),
+        ("out", ("d", 1, "18:25"), "Got it, thanks Tomás! Cookies are on me this week 🍪"),
+        ("in", ("d", 1, "18:27"), "Ha, deal 👍"),
+    ], 0),
+    ("aiko", [
+        ("in", ("d", 1, "16:50"), "Thanks for the notes from today's demo, they were really clear"),
+        ("out", ("d", 1, "16:52"), "Glad they helped!"),
+        ("in", ("m", 22), "Reminder: standup moves to 9:30 tomorrow. Short one, planning right after"),
+    ], 1),
+    ("marcus", [
+        ("out", ("d", 4, "12:15"), "Finished the book you lent me. That ending!"),
+        ("in", ("d", 4, "12:31"), "Right?? I couldn't sleep after it"),
+        ("in", ("d", 4, "12:32"), "Coffee on Thursday and we can argue about it?"),
+        ("out", ("d", 4, "12:40"), "Deal ☕"),
+    ], 0),
+    ("elena", [
+        ("in", ("d", 2, "08:10"), "Running about 5 minutes late, save me a seat!"),
+        ("out", ("d", 2, "08:11"), "No problem, I'm by the window"),
+        ("in", ("d", 2, "21:05"), "Thanks for today, that was fun. Let's do it again soon"),
+    ], 0),
+]
+
+# (who or a number, direction, outcome, when, seconds talked, seen)
+CALLS = [
+    ("marcus", "in", "missed", ("m", 25), 0, False),
+    ("grace", "out", "answered", ("d", 1, "20:15"), 852, True),
+    ("fatima", "in", "answered", ("d", 1, "11:05"), 128, True),
+    ("tomas", "out", "unanswered", ("d", 2, "17:30"), 0, True),
+    ("elena", "in", "answered", ("d", 2, "07:58"), 95, True),
+    ("priya", "out", "answered", ("d", 3, "12:30"), 410, True),
+    (STRANGER, "in", "missed", ("d", 3, "10:12"), 0, True),
+    ("aiko", "in", "answered", ("d", 3, "15:00"), 340, True),
+    ("mateo", "out", "answered", ("d", 4, "19:20"), 1320, True),
+]
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def when(spec, now):
+    if spec[0] == "m":
+        return now - spec[1] * 60000
+    hh, mm = (int(x) for x in spec[2].split(":"))
+    day = datetime.date.today() - datetime.timedelta(days=spec[1])
+    t = datetime.datetime.combine(day, datetime.time(hh, mm)).timestamp()
+    return min(int(t * 1000), now - 60000)
+
+
+def pretty(e164):
+    # +18145550123 -> +1 814-555-0123, as a phone shows it
+    d = e164[2:]
+    return "+1 %s-%s-%s" % (d[:3], d[3:6], d[6:])
+
+
+def number_of(who):
+    return PEOPLE[who][1] if who in PEOPLE else who
+
+
+def connect(path):
+    conn = sqlite3.connect(path, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 10000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def check_schema(path):
+    if not os.path.exists(path):
+        sys.exit("phone-demo: %s is missing" % path)
+    conn = connect(path)
+    v = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    if v != SCHEMA[path]:
+        sys.exit("phone-demo: %s is at schema %d, this tool knows %d: update tools/phone-demo first"
+                 % (os.path.basename(path), v, SCHEMA[path]))
+
+
+def vcard(uid, name, number, email, starred):
+    given, _, family = name.rpartition(" ")
+    lines = ["BEGIN:VCARD", "VERSION:3.0", "UID:" + uid, "FN:" + name,
+             "N:%s;%s;;;" % (family, given), "TEL;TYPE=CELL:" + pretty(number)]
+    if email:
+        lines.append("EMAIL;TYPE=INTERNET:" + email)
+    if starred:
+        lines.append("CATEGORIES:Starred")
+    lines.append("END:VCARD")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def load_manifest():
+    path = os.path.join(STAGE, "manifest.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+# ------------------------------------------------------------ backup
+
+def backup():
+    out = os.path.join(STAGE, "backup")
+    os.makedirs(out, exist_ok=True)
+    for path in (MESSAGES_DB, CALLS_DB):
+        check_schema(path)
+        src = connect(path)
+        dst = sqlite3.connect(os.path.join(out, os.path.basename(path)))
+        src.backup(dst)
+        dst.close()
+        src.close()
+    print("backed up messages.db and calls.db")
+
+
+# -------------------------------------------------------------- seed
+
+def seed():
+    for path in (MESSAGES_DB, CALLS_DB):
+        check_schema(path)
+    now = now_ms()
+    m = {"version": 1, "seeded_at": now, "data_home": DATA, "contacts": [], "made_dirs": [],
+         "conversations": {}, "messages": [], "calls": [], "backup": os.environ.get("DEMO_BACKUP", "")}
+
+    # Leftovers from an earlier run would mix in: refuse.
+    for key, (name, number, email, starred) in PEOPLE.items():
+        if os.path.exists(os.path.join(BOOK, UID_PREFIX + key + ".vcf")):
+            sys.exit("phone-demo: a demo contact file is already there; run clear first")
+    conn = connect(MESSAGES_DB)
+    for key, _, _ in THREADS:
+        if conn.execute("SELECT 1 FROM conversations WHERE address = ?", (number_of(key),)).fetchone():
+            sys.exit("phone-demo: a conversation with a demo number already exists; run clear first")
+
+    try:
+        # Contacts: one vCard 3.0 file each, as omatel's address book writes.
+        for d in (CONTACTS, BOOK):
+            if not os.path.isdir(d):
+                os.makedirs(d, mode=0o700)
+                m["made_dirs"].append(d)
+        for key, (name, number, email, starred) in PEOPLE.items():
+            uid = UID_PREFIX + key
+            path = os.path.join(BOOK, uid + ".vcf")
+            tmp = os.path.join(BOOK, "." + uid + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(vcard(uid, name, number, email, starred))
+            os.replace(tmp, path)
+            m["contacts"].append(path)
+
+        # Messages: what omatel-agent writes for received and sent texts.
+        with conn:
+            for key, msgs, unread in THREADS:
+                number = number_of(key)
+                times, last = [], 0
+                for _, spec, _ in msgs:
+                    t = max(when(spec, now), last + 60000)
+                    times.append(t)
+                    last = t
+                cur = conn.execute(
+                    "INSERT INTO conversations (address, created_at, last_at) VALUES (?, ?, ?)",
+                    (number, times[0], times[-1]))
+                conv = cur.lastrowid
+                m["conversations"][key] = conv
+                conn.execute("INSERT INTO participants (conversation_id, number, raw_number) VALUES (?, ?, ?)",
+                             (conv, number, number))
+                for i, ((direction, _, body), at) in enumerate(zip(msgs, times)):
+                    if direction == "in":
+                        read = 0 if i >= len(msgs) - unread else 1
+                        cur = conn.execute(
+                            "INSERT INTO messages (conversation_id, direction, body, at, sent_at, state, read, dedupe_key)"
+                            " VALUES (?, 'in', ?, ?, ?, 'received', ?, ?)",
+                            (conv, body, at, at - 3000, read, "omamobile-demo|%s|%d|%d" % (number, at, i)))
+                    else:
+                        cur = conn.execute(
+                            "INSERT INTO messages (conversation_id, direction, body, at, sent_at, delivered_at, state, read)"
+                            " VALUES (?, 'out', ?, ?, ?, ?, 'delivered', 1)",
+                            (conv, body, at, at + 2000, at + 6000))
+                    m["messages"].append(cur.lastrowid)
+        conn.close()
+
+        # The call log.
+        conn = connect(CALLS_DB)
+        with conn:
+            for who, direction, outcome, spec, secs, seen in CALLS:
+                number = number_of(who)
+                start = when(spec, now)
+                answered = start + 6000 if outcome == "answered" else None
+                ended = (answered or start) + secs * 1000 + (0 if answered else 25000)
+                cur = conn.execute(
+                    "INSERT INTO calls (number, raw_number, direction, outcome, started_at, answered_at, ended_at, duration, seen)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (number, number, direction, outcome, start, answered, ended, secs, 1 if seen else 0))
+                m["calls"].append(cur.lastrowid)
+        conn.close()
+    except BaseException as e:
+        m["partial"] = True
+        clear_data(m, quiet=True)
+        if isinstance(e, SystemExit):
+            raise
+        sys.exit("phone-demo: seeding failed (%s); what was written is removed" % e)
+
+    with open(os.path.join(STAGE, "manifest.json"), "w") as f:
+        json.dump(m, f, indent=1, ensure_ascii=False)
+    print("seeded: %d contacts, %d conversations (%d messages, %d unread), %d calls"
+          % (len(m["contacts"]), len(m["conversations"]), len(m["messages"]),
+             sum(u for _, _, u in THREADS), len(m["calls"])))
+
+
+# ------------------------------------------------------------- clear
+
+def clear_data(m, quiet=False):
+    """Delete exactly what the manifest says seed added."""
+    convs = list(m.get("conversations", {}).values())
+    if convs and os.path.exists(MESSAGES_DB):
+        conn = connect(MESSAGES_DB)
+        with conn:
+            q = ",".join("?" * len(convs))
+            # Everything in a demo conversation is demo data (a reply typed
+            # into one during the demo included); then the rows themselves.
+            conn.execute("DELETE FROM messages WHERE conversation_id IN (%s)" % q, convs)
+            conn.execute("DELETE FROM participants WHERE conversation_id IN (%s)" % q, convs)
+            conn.execute("DELETE FROM conversations WHERE id IN (%s)" % q, convs)
+        conn.close()
+    calls = m.get("calls", [])
+    if os.path.exists(CALLS_DB):
+        conn = connect(CALLS_DB)
+        demo_numbers = [p[1] for p in PEOPLE.values()] + [STRANGER]
+        with conn:
+            if calls:
+                q = ",".join("?" * len(calls))
+                conn.execute("DELETE FROM calls WHERE id IN (%s) AND number IN (%s)"
+                             % (q, ",".join("?" * len(demo_numbers))), calls + demo_numbers)
+            # A demo contact the Phone app put in its favorites order.
+            conn.execute("DELETE FROM favorites WHERE uid LIKE ?", (UID_PREFIX + "%",))
+        conn.close()
+    for path in m.get("contacts", []):
+        # Only our own files, by name and by the UID inside.
+        if not os.path.basename(path).startswith(UID_PREFIX):
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                ours = ("UID:" + os.path.basename(path)[:-4]) in f.read()
+            if ours:
+                os.remove(path)
+        except FileNotFoundError:
+            pass
+    for d in reversed(m.get("made_dirs", [])):
+        try:
+            os.rmdir(d)  # only when empty
+        except OSError:
+            pass
+    if not quiet:
+        print("removed: %d contacts, %d conversations, %d calls"
+              % (len(m.get("contacts", [])), len(convs), len(calls)))
+
+
+def rows(path):
+    conn = connect(path)
+    out = {}
+    for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'"
+                                 " AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'messages_fts%'"):
+        out[table] = set(conn.execute("SELECT * FROM %s" % table).fetchall())
+    conn.close()
+    return out
+
+
+def compare():
+    """The stores against the backup seed took; True when they match."""
+    same = True
+    for path in (MESSAGES_DB, CALLS_DB):
+        bak = os.path.join(STAGE, "backup", os.path.basename(path))
+        if not os.path.exists(bak):
+            print("%s: no backup to compare with" % os.path.basename(path))
+            continue
+        before, after = rows(bak), rows(path)
+        diffs = []
+        for table in sorted(set(before) | set(after)):
+            b, a = before.get(table, set()), after.get(table, set())
+            if a - b or b - a:
+                diffs.append("%s: %d rows new since the seed, %d changed or gone" % (table, len(a - b), len(b - a)))
+        if diffs:
+            same = False
+            print("%s differs from the backup (not demo data: something changed during the demo):" % os.path.basename(path))
+            for d in diffs:
+                print("  " + d)
+        else:
+            print("%s matches the backup taken before the seed" % os.path.basename(path))
+    return same
+
+
+def clear():
+    m = load_manifest()
+    if m:
+        clear_data(m)
+        if not compare():
+            print("the new rows are kept; clear --restore-backup puts the backed-up databases back instead")
+    forget_notes()
+
+
+def restore_backup():
+    for path in (MESSAGES_DB, CALLS_DB):
+        bak = os.path.join(STAGE, "backup", os.path.basename(path))
+        if not os.path.exists(bak):
+            sys.exit("phone-demo: no backup of %s" % os.path.basename(path))
+    for path in (MESSAGES_DB, CALLS_DB):
+        bak = os.path.join(STAGE, "backup", os.path.basename(path))
+        for side in ("-wal", "-shm"):
+            try:
+                os.remove(path + side)
+            except FileNotFoundError:
+                pass
+        tmp = path + ".omamobile-demo"
+        shutil.copyfile(bak, tmp)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        print("restored %s from the backup" % os.path.basename(path))
+
+
+# ----------------------------------------------------- notifications
+
+def note_list(m):
+    """The demo notifications, oldest first: (app, icon, glyph, summary, body, exec)."""
+    convs = (m or {}).get("conversations", {})
+    msg_icon = "org.omamobile.Messages"
+    phone_icon = "org.omamobile.Phone"
+    have = lambda icon: os.path.exists("/usr/share/icons/hicolor/scalable/apps/%s.svg" % icon)
+    def messages(key):
+        _, msgs, unread = next(t for t in THREADS if t[0] == key)
+        bodies = [b for _, _, b in msgs[-unread:]]
+        name = PEOPLE[key][0]
+        summary = "%s (%d)" % (name, len(bodies)) if len(bodies) > 1 else name
+        ex = ["omamessages", "--conversation", str(convs[key])] if key in convs else ["omamessages"]
+        return ("Messages", msg_icon if have(msg_icon) else "", "" if have(msg_icon) else "\U000f0361",
+                summary, "\n".join(bodies), ex)
+    return [
+        ("Omarchy", "", "\U000f06b0", "Update available",
+         "A new Omarchy release is ready. Tap to see what's new and update.",
+         ["omarchy-shell", "shell", "summon", "omamobile.update", "{}"]),
+        ("Calendar", "", "\U000f00ed", "Book club", "Today at 7:00 PM · Marcus's place", None),
+        ("Phone", phone_icon if have(phone_icon) else "", "" if have(phone_icon) else "\U000f03f2",
+         "Missed call", PEOPLE["marcus"][0], ["omaphone", "--recents"]),
+        messages("aiko"),
+        messages("priya"),
+    ]
+
+
+def demo_note_files():
+    """Omarchy's files (toasts on screen and history) holding a demo notification."""
+    wanted = {(a, s, b) for a, _, _, s, b, _ in note_list(None)}
+    found = []
+    for path in glob.glob(os.path.join(NOTES, "*.json")) + glob.glob(os.path.join(NOTES, "history", "*.json")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                v = json.loads(f.readline())
+        except (OSError, ValueError):
+            continue
+        if isinstance(v, dict) and (v.get("app"), v.get("summary"), v.get("body")) in wanted:
+            found.append(path)
+    return found
+
+
+def shell(*args):
+    try:
+        return subprocess.run(["omarchy-shell"] + list(args), capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def forget_notes():
+    files = demo_note_files()
+    for path in files:
+        # Omarchy's own forget (patch 0019) closes a toast on screen and
+        # deletes the entry; without the shell, the file goes directly.
+        if shell("notifications", "forget", os.path.basename(path)) != "ok":
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+    for _ in range(20):
+        if not demo_note_files():
+            break
+        time.sleep(0.25)
+    left = demo_note_files()
+    for path in left:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    print("took away %d demo notification(s)" % len(files))
+
+
+def dnd_on():
+    try:
+        with open(os.path.join(HOME, ".local/state/omarchy/notifications.json")) as f:
+            return json.load(f).get("dnd") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def notify():
+    m = load_manifest()
+    forget_notes()
+    if dnd_on():
+        print("warning: Do Not Disturb is on: no toasts, and the lock glance shows no notifications")
+    sent = 0
+    for app, icon, glyph, summary, body, ex in note_list(m):
+        argv = ["omarchy-notification-send", "--app-name", app, "-u", "normal"]
+        if icon:
+            argv += ["-i", icon]
+        if glyph:
+            argv += ["-g", glyph]
+        argv += [summary, body]
+        if ex:
+            argv += ["--exec"] + ex
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            print("could not send %r: %s" % (summary, r.stderr.strip()))
+            continue
+        sent += 1
+        time.sleep(1.2)  # one toast at a time, in order
+    print("sent %d demo notification(s)" % sent)
+
+
+def restore_notes():
+    """Put back history entries (and their images) the demo pushed out of the newest ten."""
+    src = os.path.join(STAGE, "notes", "notifications")
+    n = 0
+    for sub in ("history", "images"):
+        for path in glob.glob(os.path.join(src, sub, "*")):
+            name = os.path.basename(path)
+            dest = os.path.join(NOTES, sub, name)
+            if os.path.exists(dest) or os.path.exists(os.path.join(NOTES, name)):
+                continue
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(path, dest)
+            n += 1 if sub == "history" else 0
+    print("put back %d notification history entr%s" % (n, "y" if n == 1 else "ies"))
+
+
+# ------------------------------------------------------------ status
+
+def status():
+    m = load_manifest()
+    if not m:
+        print("seeded: no")
+    else:
+        t = datetime.datetime.fromtimestamp(m["seeded_at"] / 1000).strftime("%Y-%m-%d %H:%M")
+        convs = list(m["conversations"].values())
+        present = lambda db, sql, ids: (connect(db).execute(sql % ",".join("?" * len(ids)), ids).fetchone()[0]
+                                        if ids and os.path.exists(db) else 0)
+        print("seeded: yes, at %s" % t)
+        print("  contacts: %d of %d files present" % (sum(os.path.exists(p) for p in m["contacts"]), len(m["contacts"])))
+        print("  conversations: %d of %d present, %d unread messages in them" % (
+            present(MESSAGES_DB, "SELECT count(*) FROM conversations WHERE id IN (%s)", convs), len(convs),
+            present(MESSAGES_DB, "SELECT count(*) FROM messages WHERE read = 0 AND conversation_id IN (%s)", convs)))
+        print("  calls: %d of %d present" % (
+            present(CALLS_DB, "SELECT count(*) FROM calls WHERE id IN (%s)", m["calls"]), len(m["calls"])))
+        print("  backup: %s" % (m.get("backup") or "?"))
+    print("demo notifications on the phone: %d" % len(demo_note_files()))
+    print("do not disturb: %s" % ("on (the lock glance shows no notifications)" if dnd_on() else "off"))
+    if os.path.exists(os.path.join(HOME, ".local/state/omarchy/toggles/lock-hide-notification-text")):
+        print("lock-hide-notification-text: on (the glance shows \"Unlock to read\")")
+    try:
+        with open(os.path.join(HOME, ".local/state/omamobile/weather.json")) as f:
+            age = (now_ms() - int(json.load(f).get("at", 0))) / 60000
+        print("weather on the lock glance: %s" % ("yes" if age <= 180 else "no (the reading is %d min old; the weather widget refreshes it online)" % age))
+    except (OSError, ValueError, TypeError, AttributeError):
+        print("weather on the lock glance: no reading yet (the home screen's weather widget writes it)")
+
+
+if __name__ == "__main__":
+    {"backup": backup, "seed": seed, "clear": clear, "restore-backup": restore_backup,
+     "notify": notify, "forget": forget_notes, "restore-notes": restore_notes,
+     "status": status}[sys.argv[1]]()
+PY
+
+py() {
+  as_user env DEMO_STAGE="$stage" DEMO_DATA="$data" DEMO_HOME="$home" DEMO_BACKUP="${backup_dir:-}" \
+    python3 "$stage/demo.py" "$@"
+}
+give() { install -m 0600 -o "$user" -g "$(id -gn "$user")" "$1" "$2"; }   # root's copy -> the stage
+pkg() { pacman -Q "$1" >/dev/null 2>&1 </dev/null; }
+agent_active() { as_user systemctl --user is-active --quiet omatel-agent.service; }
+
+apps_running() { pgrep -u "$uid" -x omamessages </dev/null >/dev/null || pgrep -u "$uid" -x omaphone </dev/null >/dev/null; }
+check_apps() {
+  apps_running || return 0
+  ((close_apps)) || die "Messages or Phone is open: close them (swipe them away in the app switcher) or pass --close-apps"
+  say "phone-demo: closing Messages and Phone"
+  pkill -TERM -u "$uid" -x omamessages </dev/null; pkill -TERM -u "$uid" -x omaphone </dev/null
+  for _ in $(seq 20); do apps_running || return 0; sleep 0.25; done
+  die "Messages or Phone didn't close"
+}
+# omatel-agent keeps the stores open (WAL, so our writes are safe) but its
+# clients cache what it last said (missed calls, the service banner): a
+# restart makes the shell and any open app read everything again.
+restart_agent() {
+  if agent_active; then
+    as_user systemctl --user restart omatel-agent.service && say "phone-demo: restarted omatel-agent"
+  fi
+}
+copy_backup_in() {   # the backup's databases and notifications into the stage
+  local b=$1
+  mkdir -p "$stage/backup" "$stage/notes"
+  for f in messages.db calls.db; do [[ -f $b/$f ]] && give "$b/$f" "$stage/backup/$f"; done
+  [[ -f $b/notifications.tar ]] && tar -C "$stage/notes" -xf "$b/notifications.tar"
+  chown -R "$user:" "$stage/backup" "$stage/notes"
+}
+
+case $cmd in
+  status)
+    for p in omatel-agent omaphone omamessages; do
+      pkg "$p" && say "$(pacman -Q "$p" </dev/null)" || say "$p: not installed"
+    done
+    agent_active && say "omatel-agent: running" || say "omatel-agent: not running (the apps show a \"service isn't running\" banner)"
+    [[ -f $manifest ]] && give "$manifest" "$stage/manifest.json"
+    py status
+    ls -d "$state"/backup-* 2>/dev/null | sed 's/^/backup kept: /' >&2
+    ;;
+
+  seed)
+    [[ -f $manifest ]] && die "already seeded (see tools/phone-demo status); run clear first"
+    pkg omatel-agent || die "omatel-agent is not installed (install omatel-agent, omaphone and omamessages first)"
+    pkg omaphone || say "phone-demo: omaphone is not installed: the Phone and Contacts apps won't show the data"
+    pkg omamessages || say "phone-demo: omamessages is not installed: the Messages app won't show the data"
+    check_apps
+    if [[ ! -f $data/omatel/messages.db || ! -f $data/omatel/calls.db ]]; then
+      # The agent creates the stores (and their schema) when it starts.
+      say "phone-demo: starting omatel-agent to create its stores"
+      as_user systemctl --user start omatel-agent.service || die "omatel-agent didn't start"
+      for _ in $(seq 40); do [[ -f $data/omatel/messages.db && -f $data/omatel/calls.db ]] && break; sleep 0.25; done
+    fi
+    backup_dir=$state/backup-$(date +%Y%m%d-%H%M%S)
+    py backup || die "backup failed; nothing was changed"
+    [[ -d $data/contacts ]] && tar -C "$data" -cf "$stage/backup/contacts.tar" contacts
+    [[ -d $notes_dir ]] && tar -C "${notes_dir%/*}" -cf "$stage/backup/notifications.tar" notifications
+    install -d -m 0700 -o root -g root "$backup_dir"
+    for f in "$stage"/backup/*; do install -m 0600 -o root -g root "$f" "$backup_dir/"; done
+    printf 'tools/phone-demo backup, %s, user %s\nmessages.db, calls.db: %s/omatel\ncontacts.tar: %s/contacts\nnotifications.tar: %s\n' \
+      "$(date -Is)" "$user" "$data" "$data" "$notes_dir" > "$backup_dir/README"
+    chmod 0600 "$backup_dir/README"
+    say "phone-demo: backup in $backup_dir"
+    py seed || die "seed failed (see above); the backup stays in $backup_dir"
+    install -m 0600 -o root -g root "$stage/manifest.json" "$manifest"
+    restart_agent
+    ((no_notify)) || py notify
+    say "phone-demo: done. Open Messages, Phone and Contacts; clear puts everything back."
+    ;;
+
+  notify)
+    [[ -f $manifest ]] || die "not seeded: run seed first (the notifications point at the seeded threads)"
+    give "$manifest" "$stage/manifest.json"
+    py notify
+    ;;
+
+  clear)
+    if [[ ! -f $manifest ]]; then
+      say "phone-demo: nothing seeded"
+      py forget
+      exit 0
+    fi
+    check_apps
+    give "$manifest" "$stage/manifest.json"
+    backup_dir=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("backup",""))' "$manifest" </dev/null)
+    [[ -n $backup_dir && -d $backup_dir ]] && copy_backup_in "$backup_dir"
+    if ((restore_backup)); then
+      [[ -f $stage/backup/messages.db && -f $stage/backup/calls.db ]] || die "no backed-up databases in ${backup_dir:-?}"
+      was_active=0; agent_active && was_active=1
+      ((was_active)) && as_user systemctl --user stop omatel-agent.service
+      py clear >/dev/null   # the contact files and notifications, as usual
+      py restore-backup || die "restoring the databases failed"
+      ((was_active)) && as_user systemctl --user start omatel-agent.service
+    else
+      py clear || die "clear failed (the manifest is kept; run clear again)"
+      restart_agent
+    fi
+    [[ -d $stage/notes/notifications ]] && py restore-notes
+    rm -f "$manifest"
+    say "phone-demo: cleared. The backup stays in ${backup_dir:-?} (it holds copies of your messages and calls): rm -r it when you no longer need it."
+    ;;
+esac

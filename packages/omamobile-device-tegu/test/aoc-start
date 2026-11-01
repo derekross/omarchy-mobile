@@ -1,0 +1,83 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-tegu-aoc-start in a scratch root: the marker first, Trusty before
+# the GSA before the AoC drivers, the firmware request, and the ways out
+# (no node, no firmware, a leftover marker, a second start on the same boot).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+script=$PWD/bin/omamobile-tegu-aoc-start
+fail() { printf 'not ok - aoc-start: %s\n' "$1" >&2; exit 1; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+export OMAMOBILE_TEGU_ROOT=$tmp/root
+export TEST_LOG=$tmp/calls
+export TEST_ROOT=$OMAMOBILE_TEGU_ROOT
+marker=$OMAMOBILE_TEGU_ROOT/var/lib/omamobile/tegu-aoc-started
+export TEST_MARKER=$marker
+node=$OMAMOBILE_TEGU_ROOT/sys/bus/platform/devices/154b0000.aoc
+mkdir -p "$tmp/bin" "$node" "$OMAMOBILE_TEGU_ROOT/proc/device-tree/trusty" "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware" "$OMAMOBILE_TEGU_ROOT/dev"
+printf 'okay\0' > "$OMAMOBILE_TEGU_ROOT/proc/device-tree/trusty/status"
+: > "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/aoc-tegu.bin"
+export PATH=$tmp/bin:$PATH
+cat > "$tmp/bin/modprobe" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+test -s "$TEST_MARKER"
+grep -qx synced "$TEST_LOG"
+echo "$1" >> "$TEST_LOG"
+[[ ${FAIL_MODULE:-} != "$1" ]] || exit 1
+case $1 in
+  trusty_virtio) : > "$TEST_ROOT/dev/trusty-ipc-dev0" ;;
+  aoc_core) : > "$TEST_ROOT/sys/bus/platform/devices/154b0000.aoc/firmware" ;;
+  aoc_char_dev) echo 'Services : 93' > "$TEST_ROOT/sys/bus/platform/devices/154b0000.aoc/services"; : > "$TEST_ROOT/dev/acd-com.google.usf" ;;
+esac
+EOF
+printf '#!/bin/bash\necho synced >> "$TEST_LOG"\n' > "$tmp/bin/sync"
+printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
+chmod +x "$tmp/bin/"*
+reset() {
+  : > "$TEST_LOG"
+  rm -rf "$marker" "$OMAMOBILE_TEGU_ROOT/run" "$node/firmware" "$OMAMOBILE_TEGU_ROOT/dev/"*
+  echo 'Services : 0' > "$node/services"
+}
+loads() { grep -v '^synced$' "$TEST_LOG" | tr '\n' ' ' | sed 's/ $//'; }
+
+reset
+out=$("$script")
+[[ $(loads) == "trusty_core trusty_log trusty_ipc trusty_virtio gsa gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev" ]] \
+  || fail "load order: $(loads)"
+[[ $(cat "$node/firmware") == aoc-tegu.bin ]] || fail "the firmware request names aoc-tegu.bin"
+[[ ! -e $marker ]] || fail "a finished start leaves the marker"
+[[ -e $OMAMOBILE_TEGU_ROOT/run/omamobile/tegu-aoc-firmware-loaded ]] || fail "no firmware-loaded note for this boot"
+[[ $out == *"up: Services : 93"* ]] || fail "summary: $out"
+
+# Started again on the same boot while not online: refuse, no loads
+echo 'Services : 0' > "$node/services"; : > "$TEST_LOG"
+"$script" >/dev/null && fail "a second start on the same boot was accepted"
+[[ -z $(loads) ]] || fail "a second start loaded drivers"
+
+# A leftover marker keeps the AoC off
+reset
+echo stale > "$marker"
+out=$("$script")
+[[ -z $(loads) && $out == *"--retry"* ]] || fail "a leftover marker did not keep the AoC off"
+
+# A failed GSA load: exit 1, the marker is cleared (the load returned, no hang)
+reset
+FAIL_MODULE=gsa "$script" >/dev/null && fail "a failed load exits 0"
+[[ $(loads) == "trusty_core trusty_log trusty_ipc trusty_virtio gsa" && ! -e $marker ]] \
+  || fail "a failed load went on or kept the marker: $(loads)"
+
+# No firmware: refuse before anything loads
+reset
+mv "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/aoc-tegu.bin" "$tmp/fw"
+"$script" >/dev/null && fail "a missing firmware was accepted"
+[[ -z $(loads) && ! -e $marker ]] || fail "a missing firmware loaded drivers"
+mv "$tmp/fw" "$OMAMOBILE_TEGU_ROOT/usr/lib/firmware/aoc-tegu.bin"
+
+# No AoC node: nothing to do, exit 0
+reset
+mv "$node" "$tmp/node"
+out=$("$script")
+[[ -z $(loads) && $out == *"not enabled"* ]] || fail "a missing node was not skipped"
+mv "$tmp/node" "$node"
+echo 'ok - aoc-start: marker first, Trusty then GSA then the AoC, firmware named, refusals in place'

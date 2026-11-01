@@ -382,6 +382,13 @@ def real_package(t):
        "real omarchy: Backspace and Left still go back (0018)")
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
     qml_parse(root)
+    lock_glance(root)
+    app_icons_largest(root)
+    lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
+    launch = lib.split("  function launch(desktopId, name) {", 1)
+    ok("function launchesShellSurface(id)" in lib and 'String(command[0]).replace(/^.*\\//, "") === "omarchy-shell"' in lib
+       and len(launch) == 2 and "if (!root.launchesShellSurface(id)) root.beginLaunchFeedback(name)" in launch[1].split("\n  }", 1)[0],
+       "real omarchy: no launch toast for an entry that runs omarchy-shell, every other launch keeps it (0025)")
     for name in ("omarchy-channel-set", "omarchy-refresh-pacman"):
         text = read(root, "usr/bin/" + name)
         guard = text.find("if [[ -x /usr/bin/omamobile-update ]]")
@@ -391,6 +398,7 @@ def real_package(t):
     screensaver_launcher(t, os.path.join(root, "usr/bin/omarchy-launch-screensaver"))
     notification_phrasing(t, os.path.join(root, "usr/bin/omarchy-notification-send"),
                           os.path.join(ex, "usr/bin/omarchy-notification-send"))
+    lock_fingerprint_probe(t, root)
     rc, out = run(root, "apply", series=SERIES)
     ok(rc == 0 and "already applied" in out, "real omarchy: already applied")
     rc, _ = run(root, "verify")
@@ -441,6 +449,81 @@ def qml_parse(root):
     bad = [f for f in sorted(files)
            if subprocess.run([tool, os.path.join(root, "usr/share/omarchy", f)], capture_output=True).returncode != 0]
     ok(files and not bad, "real omarchy: the %d patched QML files parse (qmlformat)%s" % (len(files), " " + str(bad) if bad else ""))
+
+
+def app_icons_largest(root):
+    """Patch 0024: the icon index keeps the largest size per name. The
+    patched indexIconLine and iconPathSize run in node against paths in
+    the scan's order (SVGs first, then PNGs in directory order)."""
+    lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
+    fns = []
+    for name in ("iconPathSize", "indexIconLine"):
+        i = lib.find("  function %s(" % name)
+        j = lib.find("\n  }\n", i)
+        ok(i >= 0 and j > i, "real omarchy: AppLibrary has %s (0024)" % name)
+        if i < 0 or j < 0:
+            return
+        fns.append(lib[i:j + 4])
+    js = ("var root = {pendingIconIndex: {}};\n" + "\n".join("function " + f.strip()[len("function "):] for f in fns) +
+          "\n[process.argv.slice(1)].forEach(function(ps) { ps.forEach(indexIconLine) });"
+          "\nconsole.log(JSON.stringify(root.pendingIconIndex))")
+    paths = ["/usr/share/icons/hicolor/scalable/apps/foot.svg",
+             "/usr/share/icons/hicolor/32x32/apps/chromium.png",
+             "/usr/share/icons/hicolor/48x48/apps/chromium.png",
+             "/usr/share/icons/hicolor/256x256/apps/chromium.png",
+             "/usr/share/icons/hicolor/128x128/apps/chromium.png",
+             "/usr/share/icons/hicolor/64x64/apps/foot.png",
+             "/usr/share/pixmaps/odd.png",
+             "/usr/share/icons/hicolor/24x24/apps/odd.png"]
+    p = subprocess.run(["node", "-e", js, "--"] + paths, capture_output=True, text=True)
+    got = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
+    ok(got.get("chromium", "").endswith("/256x256/apps/chromium.png")
+       and got.get("foot", "").endswith("/scalable/apps/foot.svg")
+       and got.get("odd", "").endswith("/24x24/apps/odd.png"),
+       "real omarchy: the icon index keeps the largest size, an SVG over any PNG (0024: %s)" % (got or p.stderr.strip()[:120]))
+
+
+def lock_glance(root):
+    """Patch 0023: the lock's glance view. Static checks on the patched
+    files, then test/lock-glance (qmltestrunner, offscreen) against them."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    view = read(root, lock + "LockView.qml")
+    service = read(root, lock + "Service.qml")
+    card = read(root, "usr/share/omarchy/shell/plugins/notifications/components/NotificationCard.qml")
+    ok(os.path.isfile(os.path.join(root, lock + "LockGlance.qml")) and os.path.isfile(os.path.join(root, lock + "LockGlance.js"))
+       and "LockGlance {\n      id: glance" in view,
+       "real omarchy: the lock has a glance view (0023)")
+    ok(view.count("opacity: root.pinOpacity") == 4 and view.count("&& root.pinVisible") == 3 and "visible: root.pinVisible" in view,
+       "real omarchy: every part of the PIN view hides under the glance (0023)")
+    wake = service.split("function wake(): string {", 1)
+    ok(len(wake) == 2 and "root.wakeSerial += 1" in wake[1].split("}", 1)[0]
+       and "wakeSerial: root.wakeSerial" in service,
+       "real omarchy: the wake call brings the glance back (0023)")
+    blank = service.split("function runBlank() {", 1)
+    dark = service.split("function dark(): string {", 1)
+    run_wake = service.split("function runWake() {", 1)
+    ok(len(blank) == 2 and "markDark()" in blank[1].split("}", 1)[0]
+       and len(dark) == 2 and "root.markDark()" in dark[1].split("}", 1)[0]
+       and len(run_wake) == 2 and "displayDark = false" in run_wake[1].split("}", 1)[0]
+       and "blankSerial: root.blankSerial" in service and "displayDark: root.displayDark" in service,
+       "real omarchy: the lock's blank and the dark call bring the glance back, a wake lights it (0023)")
+    ok("maximumLineCount: root.summaryLines" in card and "maximumLineCount: root.bodyLines" in card
+       and "property int summaryLines: 2" in card and "property int bodyLines: 3" in card,
+       "real omarchy: notification toasts keep their line counts (0023)")
+    glance = read(root, lock + "LockGlance.qml") + read(root, lock + "LockGlance.js")
+    ok("XMLHttpRequest" not in glance and "curl" not in glance and "execDetached" not in glance
+       and "call notifications forget" in glance and "invokeAction" not in glance,
+       "real omarchy: the glance asks no network and runs no notification action, only the forget call (0023)")
+    p = subprocess.run(["bash", os.path.join(HERE, "lock-glance"), os.path.join(root, "usr/share/omarchy/shell")],
+                       capture_output=True, text=True)
+    if p.returncode == 77:
+        print("ok - real omarchy: the glance under qmltestrunner # SKIP no qmltestrunner")
+        return
+    out = p.stdout + p.stderr
+    totals = [l for l in out.splitlines() if l.startswith("Totals:")]
+    ok(p.returncode == 0, "real omarchy: the glance under qmltestrunner (0023: %s)" % (totals[-1] if totals else "no result"))
+    if p.returncode != 0:
+        print("\n".join(l for l in out.splitlines() if l.startswith(("FAIL", "   ", "QWARN")))[:4000])
 
 
 def screensaver_launcher(t, launcher):
@@ -563,6 +646,124 @@ def notification_phrasing(t, patched, original):
        % (len(PHRASINGS), " " + repr(bad_phone) if bad_phone else ""))
     ok(not bad_desktop, "0020: a desktop sends exactly what unpatched Omarchy sends%s"
        % (" " + repr(bad_desktop) if bad_desktop else ""))
+
+
+# fprintd-list's answers (fprintd 1.94), with a placeholder user
+PROBE_NO_FINGERS = """found 1 devices
+Device at /net/reactivated/Fprint/Device/0
+Using device /net/reactivated/Fprint/Device/0
+User tester has no fingers enrolled for Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile).
+"""
+PROBE_ENROLLED = """found 1 devices
+Device at /net/reactivated/Fprint/Device/0
+Using device /net/reactivated/Fprint/Device/0
+Fingerprints for user tester on Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile) (press):
+ - #0: right-thumb
+"""
+PROBE_FAILED = """found 1 devices
+Device at /net/reactivated/Fprint/Device/0
+Using device /net/reactivated/Fprint/Device/0
+ListEnrolledFingers failed: GDBus.Error:net.reactivated.Fprint.Error.Internal: Failed to open device
+"""
+
+
+def lock_fingerprint_probe(t, root):
+    """Patch 0022 (upstream's 879d6583d probe, #170): the lock's probe and
+    omarchy-apply-lock call fingerprint set up only for an enrolled print, not
+    for "has no fingers enrolled", and a failed probe never turns it off."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    service = read(root, lock + "Service.qml")
+    ok("grep -qi finger" not in service and "onExited: root.applyFingerprintProbe(fingerprintCheckStdout.text)" in service
+       and 'import "FingerprintModel.js" as FingerprintModel' in service
+       and os.path.isfile(os.path.join(root, lock, "FingerprintModel.js")),
+       "real omarchy: the lock classifies fprintd-list's answer (0022)")
+    apply_fn = service.split("function applyFingerprintProbe(text) {", 1)
+    unknown = apply_fn[1].split('if (status === "unknown") {', 1)[1].split("\n    }\n", 1)[0] if len(apply_fn) == 2 else ""
+    ok(unknown and "fingerprintConfigured =" not in unknown and "if (fingerprintConfigured) return" in unknown,
+       "real omarchy: an unknown probe never turns fingerprint off (0022)")
+    ok("interval: 250" in service.split("id: fingerprintRetryTimer", 1)[1].split("}", 1)[0],
+       "real omarchy: a mismatch still retries at 250 ms (0022)")
+
+    d = os.path.join(t, "fp-probe")
+    fakes = os.path.join(d, "bin")
+    pam = os.path.join(d, "pam.d")
+    os.makedirs(fakes)
+    os.makedirs(pam)
+    answer = os.path.join(d, "answer")
+    with open(os.path.join(fakes, "fprintd-list"), "w") as f:
+        f.write('#!/bin/bash\n[[ $1 == tester ]] || exit 3\ncat "%s"\n[[ ! -e "%s.rc" ]] || exit "$(cat "%s.rc")"\n'
+                % (answer, answer, answer))
+    with open(os.path.join(fakes, "sudo"), "w") as f:
+        f.write('#!/bin/bash\nexec "$@"\n')
+    # Never the laptop's running shell
+    with open(os.path.join(fakes, "omarchy-shell"), "w") as f:
+        f.write('#!/bin/bash\nexit 1\n')
+    for n in ("fprintd-list", "sudo", "omarchy-shell"):
+        os.chmod(os.path.join(fakes, n), 0o755)
+    env = dict(os.environ, PATH=fakes + ":/usr/bin:/bin", USER="tester", OMARCHY_INSTALL_USER="tester")
+
+    def set_answer(text, rc=0):
+        with open(answer, "w") as f:
+            f.write(text)
+        if rc:
+            with open(answer + ".rc", "w") as f:
+                f.write(str(rc))
+        elif os.path.exists(answer + ".rc"):
+            os.unlink(answer + ".rc")
+
+    # The lock's own probe command, with the PAM path moved into the scratch
+    # tree, then its output through FingerprintModel.classifyProbe
+    cmd = service.split("id: fingerprintCheckProc", 1)[1].split('command: ["bash", "-c", "', 1)[1].split('"]\n', 1)[0]
+    cmd = cmd.replace('\\"', '"').replace("/etc/pam.d/", pam + "/")
+    node = shutil.which("node")
+    model = os.path.join(root, lock, "FingerprintModel.js")
+    cases = [("no fingers enrolled", PROBE_NO_FINGERS, 0, True, "no"),
+             ("an enrolled print", PROBE_ENROLLED, 0, True, "yes"),
+             ("a failed fprintd-list", PROBE_FAILED, 1, True, "unknown"),
+             ("no PAM file", PROBE_ENROLLED, 0, False, "no")]
+    if not node:
+        print("ok - real omarchy: the lock's probe end to end # SKIP no node")
+    else:
+        bad = []
+        for what, text, rc, pam_file, want in cases:
+            set_answer(text, rc)
+            fpam = os.path.join(pam, "omarchy-lock-fingerprint")
+            if pam_file:
+                open(fpam, "w").close()
+            elif os.path.exists(fpam):
+                os.unlink(fpam)
+            out = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True).stdout
+            got = subprocess.run([node, "-e", "process.stdout.write(require(process.argv[1]).classifyProbe(process.argv[2]))",
+                                  model, out], capture_output=True, text=True).stdout
+            if got != want:
+                bad.append((what, got))
+        ok(not bad, "real omarchy: the lock's probe says yes only for an enrolled print (0022)%s"
+           % (" " + repr(bad) if bad else ""))
+
+    # omarchy-apply-lock, with /etc/pam.d and /usr/bin/fprintd-list moved
+    script = read(root, "usr/bin/omarchy-apply-lock")
+    ok("grep -qi finger" not in script, "real omarchy: omarchy-apply-lock no longer greps for 'finger' (0022)")
+    script = script.replace("/usr/bin/fprintd-list", os.path.join(fakes, "fprintd-list")).replace("/etc/pam.d/", pam + "/")
+    tool = os.path.join(d, "omarchy-apply-lock")
+    with open(tool, "w") as f:
+        f.write(script)
+    fpam = os.path.join(pam, "omarchy-lock-fingerprint")
+    results = []
+    for what, text, rc, want in (("no fingers enrolled", PROBE_NO_FINGERS, 0, False),
+                                 ("an enrolled print", PROBE_ENROLLED, 0, True),
+                                 ("a failed fprintd-list", PROBE_FAILED, 1, "kept")):
+        with open(fpam, "w") as f:
+            f.write("kept\n")
+        set_answer(text, rc)
+        r = subprocess.run(["bash", tool], env=env, capture_output=True, text=True)
+        there = os.path.exists(fpam)
+        got = (open(fpam).read() == "kept\n" and "kept") if there else False
+        if there and got != "kept":
+            got = "pam_fprintd.so" in open(fpam).read()
+        results.append(r.returncode == 0 and got == want)
+    ok(all(results), "real omarchy: omarchy-apply-lock removes the fingerprint PAM file for no fingers, writes it "
+       "for an enrolled print, keeps it when fprintd-list fails (0022) %s" % results)
+
 
 
 def mod_patch(root, path):

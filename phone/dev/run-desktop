@@ -8,20 +8,56 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
-DEV="${PHONE_DEV:-$HOME/android/phone-dev}"
-OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+# Absolute and without a trailing slash: omarchy-shell finds the shell by
+# this exact string (qs ipc, and from Omarchy 4.5 the shell's socket name)
+DEV="$(realpath -m -- "${PHONE_DEV:-$HOME/android/phone-dev}")"
+OMARCHY_SRC="$(readlink -f -- "${OMARCHY_PATH:-/usr/share/omarchy}")"
+LAYOUT="$DEV/omarchy"
 FAKE_HOME="$DEV/home"
 
-# A private copy of the shell gives it its own config path, so IPC calls
-# can't reach the desktop's running shell by accident (and vice versa)
-mkdir -p "$DEV"
-rsync -a --delete "$OMARCHY_PATH/shell/" "$DEV/shell/"
+if [[ -n ${PHONE_DEV_OMARCHY_PATH:-} ]]; then
+  echo "run-desktop: run it from the desktop, not from inside the harness" >&2
+  exit 1
+fi
+if [[ ! -f $OMARCHY_SRC/shell/shell.qml ]]; then
+  echo "run-desktop: no Omarchy shell in $OMARCHY_SRC" >&2
+  exit 1
+fi
+
+# The nested session's own Omarchy tree. Its shell is a private copy, which
+# gives it its own config path, so IPC calls can't reach the desktop's
+# running shell by accident (and vice versa); the rest links to the real
+# tree. OMARCHY_PATH points here in the nested session, so omarchy-shell
+# finds the nested shell at $OMARCHY_PATH/shell.
+mkdir -p "$LAYOUT"
+rsync -a --delete "$OMARCHY_SRC/shell/" "$LAYOUT/shell/"
+for entry in "$OMARCHY_SRC"/*; do
+  name=${entry##*/}
+  [[ $name == shell ]] && continue
+  # ln -sfn onto a real directory would put the link inside it
+  if [[ -L $LAYOUT/$name || ! -e $LAYOUT/$name ]]; then
+    ln -sfn "$entry" "$LAYOUT/$name"
+  fi
+done
+# Links to what a newer Omarchy no longer has
+find "$LAYOUT" -mindepth 1 -maxdepth 1 -xtype l -delete
 
 mkdir -p "$FAKE_HOME/.config/omarchy" "$FAKE_HOME/.local/state/omarchy"
 ln -sfn "$HOME/.local/state/omarchy/current" "$FAKE_HOME/.local/state/omarchy/current"
 ln -sfn "$ROOT/packages/omamobile-shell/plugins" "$FAKE_HOME/.config/omarchy/plugins"
-# Copied, not linked: the shell writes to shell.json when settings change
-cp "$ROOT/packages/omamobile-shell/profile/shell.json" "$FAKE_HOME/.config/omarchy/shell.json"
+# Copied, not linked: the shell writes to shell.json when settings change.
+# Without the idle lock (0 is off), as a phone emulator never locks: the
+# profile's lock after 60 s would lock the window behind this computer's
+# account password, and omarchy-system-lock's cleanup reaches the desktop.
+python3 -I - "$ROOT/packages/omamobile-shell/profile/shell.json" "$FAKE_HOME/.config/omarchy/shell.json" <<'EOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+config.setdefault("idle", {})["lock"] = 0
+with open(sys.argv[2], "w") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+EOF
 
 # Once the nested window appears on the desktop, float it at the phone's
 # 13:6 aspect. Uses the desktop compositor's own dispatchers; no config changes.
@@ -41,5 +77,25 @@ print(c[-1]["address"] if c else "")')
   done
 ) &
 
-export PHONE_DEV_SHELL_CMD="env HOME=$FAKE_HOME OMARCHY_PATH=$OMARCHY_PATH quickshell -p $DEV/shell"
+# The phone package's commands, as on the phone (every launch goes through
+# omamobile-launch), behind dev/bin's stand-ins for those that would act on
+# this computer
+export PATH="$ROOT/phone/dev/bin:$ROOT/packages/omamobile-shell/bin:$PATH"
+
+# The nested session's Omarchy, for everything it starts. An interactive
+# bash sets OMARCHY_PATH back to the system's (Omarchy's env-bootstrap), so
+# dev/bin's omarchy-shell takes it from PHONE_DEV_OMARCHY_PATH.
+export OMARCHY_PATH="$LAYOUT" PHONE_DEV_OMARCHY_PATH="$LAYOUT"
+
+# The shell has its own HOME, and Omarchy's app library looks in
+# $HOME/.local/share for which entries are hidden and for icons (and,
+# without uwsm's XDG_DATA_HOME, for this computer's own entries, Omarchy's
+# web apps among them). So the real data directory goes first in the
+# shell's XDG_DATA_DIRS, for omamobile-launch too, and its entries win over
+# the system's as they do on the desktop.
+data_dirs="${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# Hyprland runs it with sh -c
+printf -v PHONE_DEV_SHELL_CMD '%q ' env HOME="$FAKE_HOME" OMARCHY_PATH="$OMARCHY_PATH" \
+  XDG_DATA_DIRS="$data_dirs" quickshell -p "$OMARCHY_PATH/shell"
+export PHONE_DEV_SHELL_CMD
 exec env -u HYPRLAND_INSTANCE_SIGNATURE Hyprland -c "$ROOT/phone/dev/hyprland.lua"

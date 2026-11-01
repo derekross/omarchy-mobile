@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "omamobile.keyboard",
-  "name": "Keyboard hide button",
-  "version": "0.1.0",
+  "name": "On-screen keyboard",
+  "version": "0.2.0",
   "author": "Omarchy Mobile",
   "license": "MIT",
-  "description": "A small button just above the on-screen keyboard that folds it away, also over the lock screen.",
+  "description": "Shows and hides the on-screen keyboard for the home pill (its hide key and double tap) and scripts.",
   "kinds": ["panel"],
   "keepLoaded": true,
   "entryPoints": {

@@ -75,3 +75,11 @@ grep -qx '\[Login\]' "$power" || fail "the power-key drop-in needs a [Login] hea
 grep -qx 'HandlePowerKey=ignore' "$power" || fail "a short press must not power the phone off"
 grep -qx 'HandlePowerKeyLongPress=ignore' "$power" || fail "the long press stays the PMIC reset"
 pass "install stages the package"
+
+# USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
+# it sent IPv4 into a dead cable (raven, 2026-10-28).
+net=vendor/systemd/network/20-usb-gadget.network
+! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -q '^Gateway=' || fail "usb0 sets no default route in [Network] (metric 0)"
+metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
+[[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
+pass "USB is the last gateway"

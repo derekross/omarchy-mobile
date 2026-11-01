@@ -1,0 +1,122 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Boot the Pixel 9a's AoC (audio and sensor DSP), hang-safe, in the order
+# the bring-up proved on the palmtop (its omamobile-tegu-audio-up, still
+# outside the package; device/tegu/NOTES.md 2026-10-26) and the Pixel 7
+# Pro's omamobile-aoc-start uses:
+#   1. Trusty (trusty_core, trusty_log, trusty_ipc, then trusty_virtio):
+#      the AoC is started by Trusty's hwmgr.aoc service.
+#   2. The GSA mailbox (gsa), which authenticates the image.
+#   3. The AoC System MMU, mailboxes, core and service front ends
+#      (aoc_channel_dev for the sensors' USF channel and the sound card's
+#      aoc_alsa_dev before aoc_char_dev, which takes every service still free).
+#   4. The firmware load (aoc-tegu.bin), then wait for the 93 services and
+#      the sensor channel.
+# The TAS2572 amplifiers come up from the device tree through the tas2781
+# codec driver; the card's UCM profile (omamobile-audio) does the routing.
+#
+# This waits for a kernel whose device tree enables the AoC, GSA and Trusty
+# nodes: today they are turned on by out-of-tree overlay modules that no
+# package can ship, so the unit has no wants link (README.md).
+# A marker is written and synced before any of it, and removed at the end,
+# after a step that returned and failed too (that is not a hang). If a boot
+# hangs here, the next one finds the marker and leaves the AoC off;
+# "omamobile-tegu-aoc-start --retry" tries again.
+#   omamobile-tegu-aoc-start [--retry]
+set -uo pipefail
+
+root=${OMAMOBILE_TEGU_ROOT:-}
+if [[ -n $root ]]; then
+  [[ $root == /* && $root != / && -d $root ]] || exit 2
+fi
+state=$root/var/lib/omamobile
+marker=$state/tegu-aoc-started
+# Set right before the firmware load, gone after a reboot (tmpfs)
+loaded=$root/run/omamobile/tegu-aoc-firmware-loaded
+node=$root/sys/bus/platform/devices/154b0000.aoc
+trusty=$root/proc/device-tree/trusty/status
+
+log() { echo "omamobile-tegu-aoc: $*"; }
+
+case ${1:-} in
+  '') ;;
+  --retry) rm -f "$marker" ;;
+  *) log "usage: omamobile-tegu-aoc-start [--retry]"; exit 2 ;;
+esac
+
+if [[ -e $marker ]]; then
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the AoC stays off this boot."
+  log "after checking the previous boot's log, retry with: omamobile-tegu-aoc-start --retry"
+  exit 0
+fi
+if [[ ! -e $node ]]; then
+  log "the AoC is not enabled in this DTB; nothing to do"
+  exit 0
+fi
+# The AoC starts once per boot: a second firmware load takes the running AoC
+# down (the GSA refuses the image while it runs, and there is no AoC reset).
+if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
+  log "already online: $(head -1 "$node/services")"
+  exit 0
+fi
+if [[ -e $loaded ]]; then
+  log "the AoC was already started this boot but is not online; reboot to start it again"
+  exit 1
+fi
+if [[ ! -e $trusty ]] || [[ $(tr -d '\0' < "$trusty") != okay ]]; then
+  log "Trusty is not enabled in this DTB; the AoC cannot be started"
+  exit 1
+fi
+fw=
+for d in "$root/usr/lib/firmware/updates" "$root/usr/lib/firmware"; do
+  [[ -e $d/aoc-tegu.bin ]] && fw=$d/aoc-tegu.bin && break
+done
+if [[ -z $fw ]]; then
+  log "no aoc-tegu.bin (install it from the phone's vendor partition: tools/extract-vendor-firmware)"
+  exit 1
+fi
+
+mkdir -p "$state"
+date -Is > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
+fail() { log "$*"; finish; exit 1; }
+
+# 1. Trusty
+for m in trusty_core trusty_log trusty_ipc trusty_virtio; do
+  modprobe "$m" || fail "$m failed"
+done
+for _ in $(seq 50); do [[ -e $root/dev/trusty-ipc-dev0 ]] && break; sleep 0.2; done
+[[ -e $root/dev/trusty-ipc-dev0 ]] || fail "no /dev/trusty-ipc-dev0"
+
+# 2. GSA
+modprobe gsa || fail "gsa failed"
+
+# 3. AoC drivers
+for m in gs201_aoc_sysmmu mailbox_wc aoc_core aoc_channel_dev aoc_alsa_dev aoc_char_dev; do
+  modprobe "$m" || fail "$m failed"
+done
+[[ -w $node/firmware ]] || fail "the AoC core did not bind ($node/firmware missing)"
+
+# 4. Firmware; the core loads, authenticates and starts it in the background.
+# The bring-up saw the service count flap before it settled, so wait for it
+# to hold for 3 s.
+mkdir -p "${loaded%/*}" && date -Is > "$loaded"
+echo aoc-tegu.bin > "$node/firmware" || fail "firmware load request failed"
+stable=0
+for _ in $(seq 150); do
+  if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
+    stable=$((stable + 1))
+  else
+    stable=0
+  fi
+  if ((stable >= 15)); then
+    log "up: $(head -1 "$node/services"), firmware $(head -1 "$node/revision" 2>/dev/null)"
+    for _ in $(seq 25); do [[ -e $root/dev/acd-com.google.usf ]] && break; sleep 0.2; done
+    [[ -e $root/dev/acd-com.google.usf ]] || log "no /dev/acd-com.google.usf (sensors unavailable)"
+    finish; exit 0
+  fi
+  sleep 0.2
+done
+fail "no stable AoC services after 30 s (see dmesg and /dev/acd-logging)"

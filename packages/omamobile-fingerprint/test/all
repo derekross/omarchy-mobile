@@ -6,9 +6,47 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "FAIL: $*" >&2; exit 1; }
 for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; done
+# Each phone: its trusted app, its KeyMint HAL and its bootloader properties.
+grep -c 'TA=g7.app' lib/omamobile-fp-chroot >/dev/null || fail "cheetah loads g7.app"
+grep -c 'TA=g7a.app' lib/omamobile-fp-chroot >/dev/null || fail "tegu loads g7a.app"
+grep -c 'keymint-service.rust.trusty' lib/omamobile-fp-chroot >/dev/null || fail "tegu runs the Rust KeyMint"
+# Each phone's panel name, overridable; Trusty's stores mapped only when their images exist.
+grep -c 'PANEL_NAME=sdc-s6e3hc4' lib/omamobile-fp-chroot >/dev/null || fail "cheetah's panel name"
+grep -c 'PANEL_NAME=google-tg4c' lib/omamobile-fp-chroot >/dev/null || fail "tegu's panel name"
+grep -c 'OMAMOBILE_FP_PANEL_NAME' lib/omamobile-fp-chroot >/dev/null || fail "panel name override"
+grep -c 'sdc-s6e3hc4 >' lib/omamobile-fp-chroot >/dev/null && fail "a fixed panel name is written"
+grep -c 'PANEL_NAME=google-tg4c MAP_STORES=1' lib/omamobile-fp-chroot >/dev/null || fail "the 9a maps its stores"
+grep -c 'PANEL_NAME=sdc-s6e3hc4 MAP_STORES=0' lib/omamobile-fp-chroot >/dev/null || fail "the 7 Pro never maps its stores"
+grep -c 'ln -sfn' lib/omamobile-fp-chroot >/dev/null && fail "no forced link over a store"
+grep -c '\[\[ -f \$STATE/td.img \]\] && maps+=(-f 0:/dev/block/ss-td -m /dev/block/ss-td)' lib/omamobile-fp-chroot >/dev/null ||
+  fail "TD maps only with its image"
+grep -c '\[\[ -f \$STATE/tdp.img \]\] && maps+=(-f persist/0:/dev/block/ss-tdp)' lib/omamobile-fp-chroot >/dev/null ||
+  fail "TDP maps only with its image"
+# Each phone's panel state and circle order: the 7 Pro keeps a bare "on" and
+# the circle after pointer down; the 9a's HAL parses the rate after the "@".
+grep -c 'PANEL=1440x3120 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0$' lib/omamobile-fp-chroot >/dev/null ||
+  fail "cheetah's panel rate, state and circle order"
+grep -c 'PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST=1$' lib/omamobile-fp-chroot >/dev/null ||
+  fail "tegu's panel rate, state and circle order"
+grep -c -- '--lhbm-first "\$LHBM_FIRST"' lib/omamobile-fp-chroot >/dev/null || fail "the runner passes the circle order"
+# Under set -u, each phone's case sets every value the spawn line uses.
+cases=$(sed -n '/^case \$DEVICE in/,/^esac/p' lib/omamobile-fp-chroot)
+for d in cheetah tegu; do
+  DEVICE=$d bash -uc "$cases"'
+    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST ]]' ||
+    fail "$d: the case leaves a panel value unset"
+done
+grep -c '^ro.hardware=tegu$' lib/props-tegu.conf >/dev/null || fail "props-tegu.conf"
+grep -c '^ro.hardware=cheetah$' lib/props-cheetah.conf >/dev/null || fail "props-cheetah.conf"
+grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a phone's ro.hardware"
 for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
 done
+# both panels keep their allow_lhbm line (the 7 Pro's s6e3hc4, the 9a's tg4c),
+# read from the file the package ships, so CI checks it without the prebuilts
+lhbm=vendor/modprobe.d/omamobile-fingerprint-lhbm.conf
+[[ $(grep -c '^options panel_samsung_s6e3hc4 allow_lhbm=1$' "$lhbm") == 1 ]] || fail "s6e3hc4 allow_lhbm line missing"
+[[ $(grep -c '^options panel_google_tg4c allow_lhbm=1$' "$lhbm") == 1 ]] || fail "tg4c allow_lhbm line missing"
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
@@ -22,17 +60,29 @@ for f in prebuilt/omamobile-fp-shim.so prebuilt/omamobile-fp-bridge; do
 done
 grep -c /system/bin/linker64 prebuilt/omamobile-fp-bridge >/dev/null ||
   fail "the bridge is not a bionic executable"
+# The prebuilt is built by hand, so it can be older than its source: a
+# bridge from before --panel rejects it and exits, and fingerprint stops on
+# every phone. It must know every option the runner passes it.
+opts=$(sed -n '/spawn bridge /,/^ *fi$/p' lib/omamobile-fp-chroot | grep -o -- '--[a-z][a-z-]*' | sort -u)
+[[ -n $opts ]] || fail "no bridge options found in lib/omamobile-fp-chroot"
+for o in $opts; do
+  grep -a -c -- "$o" prebuilt/omamobile-fp-bridge >/dev/null ||
+    fail "prebuilt/omamobile-fp-bridge doesn't know $o, which the runner passes: rebuild it (fingerprint/Makefile)"
+done
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 ./install "$stage"
 for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile-tipc-probe \
          usr/lib/omamobile-fp/omamobile-fp-ctl \
          usr/lib/omamobile-fp/props.conf usr/lib/omamobile-fp/omamobile-fp-shim.so \
+         usr/lib/omamobile-fp/props-cheetah.conf usr/lib/omamobile-fp/props-tegu.conf \
          usr/lib/omamobile-fp/omamobile-fp-bridge usr/lib/systemd/system/omamobile-fp.service \
          usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf; do
   [[ -e $stage/$f ]] || fail "not staged: $f"
 done
 # nothing Google's may be staged
 [[ -z $(find "$stage" -path '*/root/*' -print -quit) ]] || fail "vendor files staged"
+# the modprobe file reached the stage
+[[ -f $stage/usr/lib/modprobe.d/omamobile-fingerprint-lhbm.conf ]] || fail "not staged: modprobe.d/omamobile-fingerprint-lhbm.conf"
 if command -v systemd-analyze >/dev/null; then
   out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-fp.service" 2>&1 || true)
   out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)

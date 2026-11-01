@@ -48,13 +48,13 @@ Item {
       Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
         width: 10; height: 4; y: 0
-        radius: 1
+        radius: Math.min(Style.cornerRadius, 1)
         color: widget.home ? widget.home.dimForeground : "white"
       }
       Rectangle {
         id: shell
         y: 4; width: parent.width; height: parent.height - 4
-        radius: 4
+        radius: Math.min(Style.cornerRadius, 4)
         color: "transparent"
         border.width: 2
         border.color: widget.home ? widget.home.dimForeground : "white"
@@ -65,7 +65,7 @@ Item {
           anchors.bottomMargin: 4
           width: parent.width - 8
           height: Math.max(0, (parent.height - 8) * Math.max(0, widget.percent) / 100)
-          radius: 2
+          radius: Math.min(Style.cornerRadius, 2)
           color: widget.levelColor
         }
       }
@@ -107,9 +107,9 @@ Item {
       font.pixelSize: Style.font.heading
     }
     Rectangle {
-      width: widget.width * 0.6; height: 4; radius: 2
+      width: widget.width * 0.6; height: 4; radius: Math.min(Style.cornerRadius, 2)
       color: Qt.rgba(1, 1, 1, 0.2)
-      Rectangle { width: parent.width * Math.max(0, widget.percent) / 100; height: parent.height; radius: 2; color: widget.levelColor }
+      Rectangle { width: parent.width * Math.max(0, widget.percent) / 100; height: parent.height; radius: Math.min(Style.cornerRadius, 2); color: widget.levelColor }
     }
   }
 }

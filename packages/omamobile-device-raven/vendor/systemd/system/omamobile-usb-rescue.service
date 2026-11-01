@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Keep the USB link up across replugs (MAX77759 data switch)
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=sysinit.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-usb-rescue
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=sysinit.target

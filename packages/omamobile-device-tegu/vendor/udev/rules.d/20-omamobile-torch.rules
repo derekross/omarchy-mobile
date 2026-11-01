@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# The rear torch tile uses brightnessctl as the desktop user. Grant the
+# existing video group access only to this driver's brightness attribute;
+# the kernel's board current cap still limits every request.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="white:torch", DRIVERS=="lm3644", RUN+="/usr/bin/chgrp video /sys%p/brightness", RUN+="/usr/bin/chmod g+w /sys%p/brightness"

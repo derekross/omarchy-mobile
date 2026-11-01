@@ -22,17 +22,29 @@ ONLINE = 4
 MODEM_UNIT = 'omamobile-modem.service'
 
 
+# One open file for every status request. On the Pixel 9a each open and
+# close of umts_boot0 wakes the CP's PCIe link for about 100 ms, while the
+# status ioctl on a held file doesn't wake it at all (omamobile-modem 0.1.9,
+# measured 2026-10-29), so the service's 2 s check would otherwise cycle the
+# link thirty times a minute for as long as it runs.
+_fd = None
+
+
 def state():
+    global _fd
     if BOOT == 'none':
         return ONLINE
     try:
-        fd = os.open(BOOT, os.O_RDWR | os.O_CLOEXEC)
+        if _fd is None:
+            _fd = os.open(BOOT, os.O_RDWR | os.O_CLOEXEC)
+        return fcntl.ioctl(_fd, IOCTL_GET_CP_STATUS, 0)
     except FileNotFoundError:
         return 0
-    try:
-        return fcntl.ioctl(fd, IOCTL_GET_CP_STATUS, 0)
-    finally:
-        os.close(fd)
+    except OSError:
+        if _fd is not None:
+            os.close(_fd)
+            _fd = None
+        raise
 
 
 def online():

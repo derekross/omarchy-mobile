@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Desktop harness stand-in for omarchy-restart-shell (the menu's Update >
+# Process > Shell, omarchy-font-set, omarchy-refresh-shell). The real one
+# takes OMARCHY_PATH from the systemd user manager, which is the desktop's,
+# and stops that shell on every display: from here it would restart this
+# computer's desktop shell.
+echo "omarchy-restart-shell: not run in the desktop harness: it would restart this computer's desktop shell; close and reopen run-desktop instead" >&2
+exit 1

@@ -18,6 +18,8 @@ Item {
   property var home: null
   property var entry: null
   property bool editing: false
+  // Someone can see it (set by Home.qml): its timers wait while not.
+  property bool shown: true
   readonly property var config: entry && entry.config ? entry.config : ({})
 
   readonly property color fg: home ? home.foreground : "white"
@@ -51,7 +53,9 @@ Item {
 
   onCommandChanged: run(false)
   Component.onCompleted: run(false)
-  Timer { interval: Math.max(30, widget.interval) * 1000; repeat: true; running: widget.interval > 0 && !!widget.command; onTriggered: widget.run(true) }
+  Timer { interval: Math.max(30, widget.interval) * 1000; repeat: true; running: widget.shown && widget.interval > 0 && !!widget.command; onTriggered: widget.run(true) }
+  // Shown again: run(false) runs only when the last output is older than the interval.
+  onShownChanged: if (shown) run(false)
 
   readonly property string title: String(config.title || "")
   readonly property string body: command ? HomeModel.commandText(output, 12) : String(config.text || "")

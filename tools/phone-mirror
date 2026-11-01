@@ -22,7 +22,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ADDRESS=172.16.42.1
 PORT=5900
 TITLE="Omarchy Mobile phone"
-PHONE_W=1440 PHONE_H=3120	# the panel in pixels: what wayvnc sends (portrait)
+PHONE_W=1440 PHONE_H=3120	# the panel in pixels, what wayvnc sends (portrait): read from the phone below
 KEEP=0 FIT=0 VIEWER= HEIGHT=900
 
 usage() { sed -n '3,19s/^# \{0,1\}//p' "$0" >&2; exit 2; }
@@ -39,7 +39,6 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ $HEIGHT =~ ^[0-9]+$ ]] && (( HEIGHT >= 200 )) || die "--height takes a number of pixels"
-WIDTH=$(( HEIGHT * PHONE_W / PHONE_H ))
 
 have() { command -v "$1" >/dev/null; }
 remmina_vnc() { # Remmina without libvncserver has no VNC plugin
@@ -51,7 +50,7 @@ phone-mirror: no VNC viewer found on this computer. Install one:
   sudo pacman -S tigervnc               # recommended: vncviewer, fast and full quality (no scaling: scroll)
   sudo pacman -S gamescope              # with tigervnc: --fit shows the whole phone in the window
   sudo pacman -S gtk-vnc                # gvncviewer: works, but slower
-(Remmina's VNC plugin refuses the phone's 1440x3120 frame, "Rect too large",
+(Remmina's VNC plugin refuses the phone's full-size frame, "Rect too large",
 and reports a time-out; it is only used when asked for with --viewer remmina.)
 EOF
   exit 1
@@ -78,6 +77,10 @@ if (( FIT )); then
 fi
 
 tools/phone-ssh true 2>/dev/null || die "the phone does not answer on $ADDRESS (USB cable, tools/phone-ssh)"
+# The panel's own mode (the Pixel 7 Pro is 1440x3120, the Pixel 9a 1080x2424)
+mode=$(tools/phone-ssh 'cat /sys/class/drm/card*-DSI-*/modes 2>/dev/null | head -1' 2>/dev/null || true)
+[[ $mode =~ ^([0-9]+)x([0-9]+) ]] && PHONE_W=${BASH_REMATCH[1]} PHONE_H=${BASH_REMATCH[2]}
+WIDTH=$(( HEIGHT * PHONE_W / PHONE_H ))
 tools/phone-ssh command -v omamobile-mirror >/dev/null ||
   die "omamobile-mirror is not installed on the phone: tools/phone-install-package packages/omamobile-mirror"
 

@@ -66,24 +66,39 @@ for tool in omarchy-brightness-display omarchy-system-lock omarchy-shell brightn
   cat >"$t/bin/$tool" <<STUB
 #!/bin/bash
 [[ "$tool \$*" == "omarchy-shell lock isLocked" ]] && { cat "$t/locked"; exit 0; }
+[[ "$tool \$*" == "omarchy-shell lock status" ]] && { printf '{"locked":true,"secure":%s}\n' "\$(cat "$t/secure")"; exit 0; }
 echo "$tool \$*" >>"$log"
 STUB
 done
 chmod +x "$t"/bin/*
+# omamobile-sleepd decides itself (toggle, inhibitors); the key only asks.
+cat >"$t/bin/omamobile-sleepd" <<STUB
+#!/bin/bash
+echo "omamobile-sleepd \$*" >>"$log"
+STUB
+chmod +x "$t"/bin/*
+echo true >"$t/secure"
 echo foot >"$t/class"
 press() { reset; keys power-down; keys power-up; sleep 0.5; }
 
+# The lock hears that its screen goes dark before the panel goes off, so it
+# is back on its glance view for the next wake (patches/omarchy/0023).
+before() { awk -v a="$1" -v b="$2" '{ sub(/ +$/, "") } $0 == a && !x { x = NR } $0 == b && !y { y = NR } END { exit !(x && y && x < y) }' "$log"; }
 echo false >"$t/locked"; echo true >"$t/dpms"
 press; grep -q "omarchy-system-lock" "$log" || fail "unlocked and lit: a press locks"
+before "omarchy-system-lock" "omarchy-shell lock dark" && before "omarchy-shell lock dark" "omarchy-brightness-display off" \
+  || fail "unlocked and lit: the new lock hears it goes dark, before the panel goes off"
 echo false >"$t/locked"; echo false >"$t/dpms"
 press; grep -q "omarchy-brightness-display on" "$log" || fail "unlocked and dark: a press lights the screen"
 grep -q "omarchy-system-lock" "$log" && fail "unlocked and dark: a press does not lock"
 echo true >"$t/locked"; echo true >"$t/dpms"
 press; grep -q "omarchy-brightness-display off" "$log" || fail "locked and lit: a press turns the screen off"
+before "omarchy-shell lock dark" "omarchy-brightness-display off" || fail "locked and lit: the lock hears it goes dark, before the panel goes off"
 grep -q "omarchy-system-lock" "$log" && fail "locked and lit: a press does not lock again"
 echo true >"$t/locked"; echo false >"$t/dpms"
 press; grep -q "omarchy-shell lock wake" "$log" || fail "locked and dark: a press wakes the lock screen"
 grep -q "omarchy-brightness-display on" "$log" || fail "locked and dark: a press lights the screen"
+grep -q "lock dark" "$log" && fail "locked and dark: a wake doesn't tell the lock it went dark"
 grep -q "omarchy-system-lock" "$log" && fail "locked and dark: a press does not lock again"
 # hyprctl failing must read as "screen on": the press locks, never wakes blind.
 cat >"$t/bin/hyprctl" <<STUB
@@ -93,3 +108,56 @@ STUB
 echo false >"$t/locked"
 press; grep -q "omarchy-system-lock" "$log" || fail "an unanswered screen state reads as lit: the press locks"
 echo "ok - power key: lock, screen off, and wake by lock and screen state"
+
+# A lock slower than the long-press timer (it takes about a second on the
+# phone) must not turn the short press into a long one that wakes the lock.
+cat >"$t/bin/hyprctl" <<STUB
+#!/bin/bash
+if [[ \$1 == monitors ]]; then printf '[{"dpmsStatus": %s}]\n' "\$(cat "$t/dpms")"; exit 0; fi
+printf '{"class": "%s"}\n' "\$(cat "$t/class")"
+STUB
+mv "$t/bin/omarchy-system-lock" "$t/bin/omarchy-system-lock.fast"
+cat >"$t/bin/omarchy-system-lock" <<STUB
+#!/bin/bash
+echo "omarchy-system-lock" >>"$log"
+echo true >"$t/locked"
+sleep 1
+STUB
+chmod +x "$t/bin/omarchy-system-lock"
+echo false >"$t/locked"; echo true >"$t/dpms"
+press; sleep 0.6
+grep -q "omarchy-system-lock" "$log" || fail "slow lock: the press locks"
+grep -q "lock wake\|brightness-display on\|omarchy-menu" "$log" && fail "slow lock: the long-press timer doesn't wake the lock it just took"
+mv "$t/bin/omarchy-system-lock.fast" "$t/bin/omarchy-system-lock"
+# After a power-key wake from sleep, sleepd lights the PIN pad; the waking
+# press, if Hyprland delivers it late, must not turn the screen back off.
+echo true >"$t/locked"; echo false >"$t/dpms"
+reset; keys wake
+grep -q "omarchy-shell lock wake" "$log" || fail "wake: a dark locked phone lights the PIN pad"
+echo true >"$t/dpms"; : >"$log"; keys power-down; keys power-up; sleep 0.5
+grep -q "omarchy-brightness-display off" "$log" && fail "the press that woke the phone doesn't turn the screen off again"
+echo true >"$t/locked"; echo true >"$t/dpms"
+reset; keys wake
+grep -q "lock wake" "$log" && fail "wake: a lit screen is left alone"
+echo "ok - power key: a slow lock stays a short press, and the press that woke the phone is the wake"
+
+# Sleep now (SUSPEND-PLAN 6.1): only after a press that turned the screen
+# off behind a secure lock; never after a wake or with the lock not secure.
+cat >"$t/bin/hyprctl" <<STUB
+#!/bin/bash
+if [[ \$1 == monitors ]]; then printf '[{"dpmsStatus": %s}]\n' "\$(cat "$t/dpms")"; exit 0; fi
+printf '{"class": "%s"}\n' "\$(cat "$t/class")"
+STUB
+echo true >"$t/secure"
+echo false >"$t/locked"; echo true >"$t/dpms"
+press; grep -c "omamobile-sleepd now" "$log" >/dev/null || fail "unlocked and lit: the press that locks asks for sleep"
+echo true >"$t/locked"; echo true >"$t/dpms"
+press; grep -c "omamobile-sleepd now" "$log" >/dev/null || fail "locked and lit: the press that turns the screen off asks for sleep"
+echo true >"$t/locked"; echo false >"$t/dpms"
+press; grep -c "omamobile-sleepd" "$log" >/dev/null && fail "locked and dark: a wake never asks for sleep"
+echo false >"$t/locked"; echo false >"$t/dpms"
+press; grep -c "omamobile-sleepd" "$log" >/dev/null && fail "unlocked and dark: lighting the screen never asks for sleep"
+echo false >"$t/secure"
+echo true >"$t/locked"; echo true >"$t/dpms"
+press; grep -c "omamobile-sleepd" "$log" >/dev/null && fail "a lock that isn't secure never asks for sleep"
+echo "ok - power key: screen off behind a secure lock asks omamobile-sleepd to sleep now"

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Sleep (s2idle) once the phone is locked with the panel off. Runs in every
+# session but does nothing until "omarchy-toggle omamobile-sleep on".
+[Unit]
+Description=Sleep when locked and dark
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-sleepd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# After the MPSS runs and before ModemManager: provision SIM slot 1 (if the
+# modem did not bind it itself), go online, wait for registration, then take
+# a "reg" snapshot of the copies. UIM provisioning-session and DMS online
+# only: no PDC or NV writes. ModemManager latches sim-missing if it starts first.
+[Unit]
+Description=dodge modem SIM provisioning and online
+ConditionPathExists=/etc/omamobile/modem-probe.enable
+Requires=omamobile-modem.service
+After=omamobile-modem.service
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=180
+ExecStart=/usr/local/lib/omamobile/modem/omamobile-modem online
+
+[Install]
+WantedBy=multi-user.target

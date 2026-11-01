@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Martin Lund <mrlund@hotmail.com>
+pkgname=omamobile-device-dodge
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Omarchy Mobile support for the OnePlus 13 (dodge): reboot-to-fastboot and USB networking"
+arch=(aarch64)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash systemd)
+
+build() {
+  # Same syscall as device/dodge/initramfs/reboot-to.c. No libc.
+  gcc -nostdlib -static -ffreestanding -fno-stack-protector \
+    -fno-asynchronous-unwind-tables -Oz \
+    -o "$srcdir/reboot-to" "$startdir/reboot-to.c"
+}
+
+package() {
+  install -Dm755 "$srcdir/reboot-to" "$pkgdir/usr/local/bin/reboot-to"
+  install -Dm755 "$startdir/reboot" "$pkgdir/usr/local/bin/reboot"
+  install -Dm644 "$startdir/20-usb-gadget.network" \
+    "$pkgdir/usr/lib/systemd/network/20-usb-gadget.network"
+  install -Dm644 "$startdir/10-omamobile-usb.conf" \
+    "$pkgdir/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
+  install -Dm644 "$startdir/sshd-omamobile.conf" \
+    "$pkgdir/etc/ssh/sshd_config.d/omamobile.conf"
+  install -Dm644 "$startdir/sshd.sysusers" \
+    "$pkgdir/usr/lib/sysusers.d/sshd.conf"
+  # The console prompt has no keyboard on this phone, and it is
+  # Before=sysinit, so it holds the boot ahead of sshd.
+  install -d "$pkgdir/etc/systemd/system"
+  ln -s /dev/null "$pkgdir/etc/systemd/system/systemd-firstboot.service"
+  install -Dm644 "$startdir/omamobile-mirrorlist" \
+    "$pkgdir/etc/pacman.d/omamobile-mirrorlist"
+  install -Dm644 "$startdir/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # Enable sshd and networkd. Nothing else starts.
+  local wants="$pkgdir/usr/lib/systemd/system/multi-user.target.wants"
+  install -d "$wants"
+  ln -s ../systemd-networkd.service "$wants/systemd-networkd.service"
+  ln -s ../sshd.service "$wants/sshd.service"
+}

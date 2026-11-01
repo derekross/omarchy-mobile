@@ -1,0 +1,111 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Puts the phone to sleep (s2idle) once it is locked with the panel off, as
+# Android does (device/raven/SUSPEND-PLAN.md). A user service; it only acts
+# while the Omarchy toggle "omamobile-sleep" is on:
+#   omarchy-toggle omamobile-sleep on
+#
+# Every 2 s it checks: panel off (bl_power != 0), session locked, no USB
+# host, no SSH connection over a live link, no inhibitor blocking sleep. After
+# OMAMOBILE_SLEEP_AFTER_OFF seconds of that (default 10), or
+# OMAMOBILE_SLEEP_GRACE seconds after a dark wake (default 5), it runs
+# "systemctl suspend". Waking with Power
+# lights the PIN pad through omamobile-keys; the sleep hook reloads Wi-Fi
+# once the panel is lit.
+#   omamobile-sleepd now   ask a running watcher to sleep without the delay
+set -u
+
+after=${OMAMOBILE_SLEEP_AFTER_OFF:-10}
+grace=${OMAMOBILE_SLEEP_GRACE:-5}
+request=${XDG_RUNTIME_DIR:-/run/user/$UID}/omamobile-sleepd-now
+stats=/sys/power/suspend_stats
+
+if [[ ${1:-} == now ]]; then
+  touch "$request"
+  exit 0
+fi
+
+log() { echo "omamobile-sleepd: $*"; }
+
+panel_off() {
+  local p found=
+  for p in /sys/class/backlight/*/bl_power; do
+    [[ -r $p ]] || continue
+    found=1
+    [[ $(<"$p") == 0 ]] && return 1
+  done
+  [[ -n $found ]]
+}
+
+locked() { [[ $(omarchy-shell lock isLocked 2>/dev/null) == true ]]; }
+
+# An SSH connection counts only while the link it runs over is up: pulling
+# the USB cable leaves its socket established for a long time, and usb0
+# even keeps its carrier, so over usb0 that means the laptop is there.
+ssh_connected() {
+  local addr dev
+  while read -r _ _ addr _; do
+    dev=$(ip -o addr show to "${addr%:*}" 2>/dev/null | awk '{ print $2; exit }')
+    [[ -n $dev ]] || continue
+    if [[ $dev == usb0 ]]; then usb_host && return 0
+    elif [[ $(cat "/sys/class/net/$dev/carrier" 2>/dev/null) == 1 ]]; then return 0
+    fi
+  done < <(ss -Htn state established '( sport = :22 )' 2>/dev/null)
+  return 1
+}
+
+# A laptop on the USB cable: omamobile-usb-rescue keeps this marker while
+# VBUS is present with the data switch connected (a wall charger holds the
+# switch elsewhere). The gadget's own state can't tell: the switch just
+# opens on unplug, and the controller stays "configured".
+usb_host() { [[ -e /run/omamobile/usb-host ]]; }
+
+sleep_blocked() {
+  # (what, who, why, mode, uid, pid) for each inhibitor
+  busctl --json=short call org.freedesktop.login1 /org/freedesktop/login1 \
+    org.freedesktop.login1.Manager ListInhibitors 2>/dev/null |
+    jq -e 'any(.data[0][]; (.[0] | split(":") | index("sleep")) and .[3] == "block")' >/dev/null
+}
+
+why_not() {
+  omarchy-toggle-enabled omamobile-sleep || { echo "toggle off"; return; }
+  panel_off || { echo "panel lit"; return; }
+  locked || { echo "unlocked"; return; }
+  usb_host && { echo "USB host connected"; return; }
+  ssh_connected && { echo "SSH connected"; return; }
+  sleep_blocked && { echo "inhibited"; return; }
+}
+
+dark_since=
+reason=
+while :; do
+  now=$(date +%s)
+  why=$(why_not)
+  if [[ -n $why ]]; then
+    [[ $why != "$reason" ]] && log "not sleeping: $why"
+    reason=$why
+    dark_since=
+    rm -f "$request"
+  else
+    reason=
+    [[ -n $dark_since ]] || dark_since=$now
+    if [[ -e $request ]] || ((now - dark_since >= after)); then
+      rm -f "$request"
+      ok=$(<"$stats/success") fail=$(<"$stats/fail")
+      log "suspending (dark and locked for $((now - dark_since)) s)"
+      systemctl suspend || log "systemctl suspend failed"
+      # Wait for the resume: one of the counters moves (60 s at most).
+      for _ in $(seq 120); do
+        [[ $(<"$stats/success") != "$ok" || $(<"$stats/fail") != "$fail" ]] && break
+        sleep 0.5
+      done
+      if [[ $(<"$stats/fail") != "$fail" ]]; then
+        log "suspend failed (last failed device: $(cat "$stats/last_failed_dev" 2>/dev/null)); backing off 60 s"
+        sleep 60
+      fi
+      # Still dark after a wake: sleep again after the grace period.
+      dark_since=$(($(date +%s) - after + grace))
+    fi
+  fi
+  sleep 2
+done

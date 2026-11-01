@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 [Unit]
 Description=Open web links from NFC tags in the user's browser
-Requires=neard.service
+# Wants=, not Requires=: this service restarts neard, and with Requires= that
+# restart would restart this service too, over and over.
+Wants=neard.service
 After=neard.service
 
 [Service]

@@ -28,6 +28,26 @@ if grep -rnE 'Color\.menu\.selected([^A-Za-z]|$)' plugins --include=*.qml; then
 fi
 pass "palette tokens exist"
 
+# Omarchy's corners (Style.cornerRadius mirrors Hyprland's rounding: 0 by
+# default) on the home screen, its widget frames and sheets, and recent
+# apps: every radius there is that token, or that token clamped to a shape
+# (Math.min(Style.cornerRadius, width / 2)), never a rounding of our own,
+# so the widgets are square as the lock and the shade, and round again
+# when the user sets rounding. OWL widgets draw their own insides (owl/).
+for qml in plugins/omamobile.home/*.qml plugins/omamobile.switcher/*.qml; do
+  if grep -nE '(^|[^.[:alnum:]_])radius:' "$qml" | grep -v 'Style\.cornerRadius'; then
+    fail "$qml: corners follow Style.cornerRadius"
+  fi
+  if grep -nE 'Math\.max\(Style\.cornerRadius' "$qml"; then
+    fail "$qml: no rounding floor under Style.cornerRadius"
+  fi
+done
+# With rounding set, a widget's inside is masked to its card's corners.
+grep -c 'readonly property bool roundClip: cell.isWidget && Style.cornerRadius > 0' plugins/omamobile.home/Home.qml >/dev/null || fail "widgets are clipped to their card's corners"
+grep -c 'maskSource: cornerMask' plugins/omamobile.home/Home.qml >/dev/null || fail "the widget mask is the card's shape"
+grep -c 'borderSpec: Border.surfaceSpec("popups"' plugins/omamobile.home/HomeSheets.qml >/dev/null || fail "home sheets use Omarchy's popup border"
+pass "home and recent apps follow Omarchy's corners"
+
 # Readable text (TOUCH-PLAN 2.1): every plugin's Readable.js is the same
 # file, and no plugin text uses Omarchy's 10 px caption without its floor.
 first=
@@ -71,6 +91,12 @@ b=plugins/omamobile.back/Back.qml
 python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the back gesture"
 grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
+grep -c "google,zumapro-tegu' >/dev/null && scale='8 \\\\/ 3'" bin/omamobile-setup-user >/dev/null || fail "the 9a's scale is 8/3"
+# the seeded line stays valid Lua for both scales
+for sc in 3 '8 \/ 3'; do
+  t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
+  [[ $t == 'local omarchy_monitor_scale = 3' || $t == 'local omarchy_monitor_scale = 8 / 3' ]] || fail "the seeded scale line ($t)"
+done
 grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
 grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
 grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
@@ -78,17 +104,19 @@ grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back stri
 grep -c 'visible: !root.fullscreenOnScreen' "$b" >/dev/null || fail "back strips hide for fullscreen windows"
 if grep -n 'omamobile-back' hypr/phone.lua | grep -c above_lock >/dev/null; then fail "back strips never work over the lock"; fi
 if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail "back uses Hyprland's dispatcher"; fi
-# Home pill: a 44 px hit strip and a pill with an outline.
+# Home pill: a 44 px strip and a pill with an outline.
 l=plugins/omamobile.launcher/Launcher.qml
-grep -c 'implicitHeight: root.touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
+grep -c 'readonly property int stripHeight: touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
 grep -c 'border.color: Qt.rgba(0, 0, 0, 0.55)' "$l" >/dev/null || fail "the home pill has a dark outline"
-# Under the keyboard, the pill has a strip of its own (Android's gesture
-# bar): on the Bottom layer, reserving its height, so Hyprland lifts
-# squeekboard (Top) above it and the strip covers no key. The masked strip
-# over an app and the keyboard's strip never show together, and both go
-# for a fullscreen window.
-grep -c 'WlrLayershell.namespace: "omamobile-home-strip"' "$l" >/dev/null || fail "the keyboard's gesture strip has its namespace"
-python3 - "$l" <<'PY' || fail "the keyboard's gesture strip sits under squeekboard"
+# One strip over an app and under the keyboard (Android's gesture bar): on
+# the Bottom layer, reserving its height, so windows end above it and
+# Hyprland lifts squeekboard (Top) above it, covering no key. The keyboard
+# only changes its content (the hide key), never its mapping or height: two
+# windows swapping at each keyboard show and hide left an app at a
+# transient size (a 44 px gap above the strip). It goes for a fullscreen
+# window, the drawer, the home screen and the lock's keyboard.
+grep -c 'WlrLayershell.namespace: "omamobile-home-strip"' "$l" >/dev/null || fail "the home pill's strip has its namespace"
+python3 - "$l" <<'PY' || fail "one home strip, reserving its height, under squeekboard"
 import re, sys
 src = open(sys.argv[1]).read()
 def window(namespace):
@@ -102,27 +130,108 @@ def window(namespace):
         j += 1
         if depth == 0:
             return src[start:j]
-strip, pill = window("omamobile-home-strip"), window("omamobile-home-indicator")
+assert 'namespace: "omamobile-home-indicator"' not in src, "no second strip"
+strip, dock = window("omamobile-home-strip"), window("omamobile-dock")
 assert "WlrLayershell.layer: WlrLayer.Bottom" in strip, "strip on the Bottom layer"
 assert "exclusionMode: ExclusionMode.Auto" in strip, "strip reserves its height"
-assert "implicitHeight: root.oskStripHeight" in strip
-h = int(re.search(r"readonly property int oskStripHeight: (\d+)", src).group(1))
-assert 24 <= h <= 36, h
-vis = lambda w: re.search(r"^\s*visible: (.*)$", w, re.M).group(1)
-assert "root.oskOpen" in vis(strip) and "!root.oskOpen" not in vis(strip), vis(strip)
-assert "!root.oskOpen" in vis(pill), vis(pill)
-for w in (strip, pill):
-    assert "!root.fullscreenOnScreen" in vis(w) and "root.appOnScreen" in vis(w) and "!root.opened" in vis(w), vis(w)
-assert "!root.sessionLocked" in vis(strip), "no strip under the lock's keyboard"
-assert "mask: Region { item: hitArea }" in pill, "the pill over an app stays masked"
-assert pill.count("HomeSwipe {") == 1 and strip.count("HomeSwipe {") == 1, "one swipe logic for both"
-assert "HomePill" in strip and "HomePill" in pill
+assert "implicitHeight: root.stripHeight" in strip
+assert "color: Commons.Color.bar.background" in strip, "bar-coloured"
+def vis(w):
+    v = re.search(r"^\s*visible: (.*)$", w, re.M).group(1)
+    # A named condition on the launcher's root reads as its definition.
+    m = re.fullmatch(r"root\.(\w+)", v.strip())
+    if m:
+        d = re.search(r"readonly property bool %s: (.*)$" % m.group(1), src, re.M).group(1)
+        v = re.sub(r"(^|[^.\w])(\w+)", lambda x: x.group(1) + ("root." + x.group(2) if x.group(2) not in ("true", "false") else x.group(2)), d)
+    return v
+v = vis(strip)
+for need in ("root.appOnScreen", "!root.opened", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
+    assert need in v, (need, v)
+assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
+assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
+assert strip.count("HomeSwipe {") == 1 and "HomePill" in strip, "one swipe logic"
+assert "HideKeyboardKey {" in strip and "visible: root.oskOpen" in strip, "the hide key, only with the keyboard"
+assert "ownTaps: hideKey" in strip, "the hide key's taps are no double tap"
+assert re.search(r"readonly property bool keyboardStripShown: stripShown && oskOpen$", src, re.M)
 PY
+# The keyboard's controls on the pill, through omamobile.keyboard's IPC:
+# a double tap toggles it, the hide key hides it, a hint toast once.
+grep -c 'if (doubleTap.tapCount === 2 && !onOwn && !wasOwn) root.keyboardCall("toggleKeyboard")' "$l" >/dev/null || fail "a double tap on the pill toggles the keyboard"
+grep -c 'onTapped: root.keyboardCall("hideKeyboard")' "$l" >/dev/null || fail "the hide key hides the keyboard"
+grep -c '"call", "shell", "call", "omamobile.keyboard", method, ""' "$l" >/dev/null || fail "keyboard calls go through omamobile.keyboard's IPC"
+if grep -n 'gesturePolicy' "$l" | grep -v '^[0-9]*: *//' ; then fail "the pill's tap handlers grab passively, so swipes get through"; fi
+grep -c 'omarchy-done ensure omamobile-keyboard-pill-hint && exec omarchy-notification-send' "$l" >/dev/null || fail "the double-tap hint shows once"
+grep -c 'keyboardHintText: "Double-tap the bar to show or hide the keyboard"' "$l" >/dev/null || fail "the double-tap hint's text"
+grep -c 'onTriggered: if (root.keyboardStripShown) root.keyboardHint()' "$l" >/dev/null || fail "the hint waits for the strip to stay"
+rc=0; out=$(bash test/pill-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the home pill under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home pill under touch (test/pill-touch)"
+else
+  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip"
+fi
 grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
-grep -c 'var close = root.pulling && root.pull > root.pullToClose' "$l" >/dev/null || fail "pulling the drawer down closes it"
+grep -c 'if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)' "$l" >/dev/null || fail "pulling the drawer down closes it"
 grep -c 'onClicked: if (!root.pullMoved) cell.tapped()' "$l" >/dev/null || fail "a pull doesn't launch the app under it"
+# The drawer's handle is a pill (no chevron), and the home screen's swipe up
+# reaches the drawer through DrawerLink.js, one script for both plugins:
+# the launcher publishes itself, the home screen loads DrawerLinkClient.qml
+# from the launcher's folder beside it.
+grep -c 'objectName: "drawerHandle"' "$l" >/dev/null || fail "the drawer has a handle"
+# The drawer's layer surface stays mapped (a newly mapped one drew its first
+# frames before the output's scale: the grid at 3x on every swipe up); closed,
+# it takes no touch and draws nothing. The home screen doesn't scale under it
+# (widgets snapped between pixels as it animated).
+grep -c 'mask: Region { item: root.opened ? sheet : null }' "$l" >/dev/null || fail "the closed drawer takes no touch"
+# Nothing changes size as the drawer moves: the dock reserves nothing (the
+# home screen keeps its height free, dockInset), so its window never grows
+# under a settling drawer (a frame of the old buffer centred: the first row
+# jumped half a dock); the search row is never faded in or out; the drawer's
+# render loop is awake before the finger moves (gesturePrepare).
+python3 - "$l" <<'PY3' || fail "the dock reserves nothing and the drawer's layout never changes"
+import re, sys
+src = open(sys.argv[1]).read()
+i = src.index('WlrLayershell.namespace: "omamobile-dock"')
+dock = src[src.rindex("PanelWindow {", 0, i):i]
+assert "exclusionMode: ExclusionMode.Ignore" in dock, dock
+assert "dockAway" not in src, "no dock handover"
+assert "running: root.warm || root.fingerOnDrawer || settle.running" in src
+PY3
+grep -c 'readonly property int dockInset:' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen keeps the dock's height free"
+grep -c 'swipe.drawer.gesturePrepare()' plugins/omamobile.home/DrawerSwipe.qml >/dev/null || fail "a press on the home screen wakes the drawer"
+grep -c 'if (!same) apps = entries' "$l" >/dev/null || fail "an unchanged app list keeps the grid's model"
+python3 - "$l" <<'PY2' || fail "the drawer's window stays mapped"
+import sys
+src = open(sys.argv[1]).read()
+i = src.index('WlrLayershell.namespace: "omamobile-launcher"')
+w = src[src.rindex("PanelWindow {", 0, i):i]
+assert "\n    visible: true\n" in w, w
+PY2
+grep -cE '^\s*scale:' plugins/omamobile.home/Home.qml >/dev/null && fail "the home screen doesn't scale under the drawer"
+grep -c 'objectName: "collapse"' "$l" >/dev/null && fail "the drawer's chevron is gone"
+grep -c 'Component.onCompleted: DrawerLink.publish(root)' "$l" >/dev/null || fail "the drawer publishes itself for the home screen's swipe"
+grep -c 'source: Qt.resolvedUrl("../omamobile.launcher/DrawerLinkClient.qml")' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen reaches the drawer through the launcher's DrawerLinkClient.qml"
+grep -c '^import "DrawerLink.js" as DrawerLink$' plugins/omamobile.launcher/DrawerLinkClient.qml >/dev/null || fail "DrawerLinkClient.qml imports the launcher's DrawerLink.js"
+head -3 plugins/omamobile.launcher/DrawerLink.js | grep -c '^\.pragma library$' >/dev/null || fail "DrawerLink.js is one instance per engine (.pragma library)"
+rc=0; out=$(bash test/drawer-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the drawer under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the drawer under touch (test/drawer-touch)"
+else
+  pass "the drawer under touch: the handle taps and drags, a pull or a flick closes, a scrolled grid scrolls first, the home screen's swipe opens it"
+fi
+rc=0; out=$(bash test/home-gestures 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the home screen's swipes # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home screen's swipes (test/home-gestures)"
+else
+  pass "the home screen's swipes: up for the drawer with the finger, sideways and short flicks turn the page, taps and holds still work"
+fi
 # Home: Undo after a remove; sheets keep the focused field in view, with
 # their buttons pinned outside the Flickable.
 h=plugins/omamobile.home
@@ -168,9 +277,25 @@ grep -cF "omamobile-omarchy>=" PKGBUILD >/dev/null || fail "omamobile-shell need
 if grep -nE 'property +[a-z]+ +(top|bottom|left|right|horizontalCenter|verticalCenter|baseline) *:' plugins/*/*.qml; then fail "no plugin redeclares an anchor line"; fi
 pass "notification shade, Settings gear, unread count and Clipboard wiring"
 
+# Quick settings on its side (TOUCH-PLAN 2.4): the sheet keeps to 58% of
+# the width with the shade beside it, the tile columns follow the sheet's
+# width, and a sheet taller than the screen scrolls above a pinned handle.
+# test/quicksettings-render draws it in the OWL container.
+grep -c 'readonly property bool wide: window.width > window.height' "$qs" >/dev/null || fail "quick settings knows a screen wider than tall"
+grep -c 'readonly property int tileColumns: Math.max(2, Math.min(4, Math.floor(content.width / 180)))' "$qs" >/dev/null || fail "tile columns follow the sheet's width"
+grep -c 'return Math.max(1, Math.ceil(most / tileColumns))' "$qs" >/dev/null || fail "the pager's rows follow the columns"
+grep -c 'readonly property real shadeTop: root.wide ? sheet.y : sheet.y + sheet.height + Style.spacing.lg' "$qs" >/dev/null || fail "the shade sits beside the sheet on its side"
+grep -c 'interactive: contentHeight > height + 1' "$qs" >/dev/null || fail "the sheet scrolls only when taller than the screen"
+grep -c 'anchors.bottomMargin: sheet.contentBottomInset + sheet.handleRoom' "$qs" >/dev/null || fail "the handle stays under the scrolling part"
+if [[ -n ${OMAMOBILE_QS_RENDER:-} ]]; then
+  bash test/quicksettings-render "$OMAMOBILE_QS_RENDER" >/dev/null || fail "quick settings render"
+fi
+pass "quick settings on its side"
+
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
-# without needing the shell's own imports to resolve.
-qmlformat=$(command -v qmlformat || command -v /usr/lib/qt6/bin/qmlformat || true)
+# without needing the shell's own imports to resolve. Qt 6's first: a Qt 5
+# qmlformat on PATH (Arch's qt5-declarative) rejects Qt 6 syntax.
+qmlformat=$(command -v /usr/lib/qt6/bin/qmlformat || command -v qmlformat6 || command -v qmlformat || true)
 if [[ -n $qmlformat ]]; then
   for qml in plugins/*/*.qml plugins/omamobile.home/owl/*.qml; do
     "$qmlformat" "$qml" >/dev/null 2>&1 || fail "$qml parses"
@@ -183,8 +308,17 @@ fi
 # Pure-JS models, under Node when it's there.
 if command -v node >/dev/null; then
   for js in plugins/*/*.js; do
-    node --check "$js" || fail "$js parses"
+    # A `.pragma library` line is QML's, not JavaScript: check the rest.
+    if grep -c '^\.pragma library$' "$js" >/dev/null; then
+      tmp=$(mktemp --suffix=.js)
+      sed 's/^\.pragma library$//' "$js" > "$tmp"
+      node --check "$tmp" || fail "$js parses"
+      rm -f "$tmp"
+    else
+      node --check "$js" || fail "$js parses"
+    fi
   done
+  node test/gesture-model.js >/dev/null || { node test/gesture-model.js | grep -v '^ok'; fail "home and drawer gesture rules"; }
   node test/wifi-model.js || fail "Wi-Fi model"
   node test/bluetooth-model.js || fail "Bluetooth model"
   node test/sensor-model.js || fail "fingerprint sensor model"
@@ -192,6 +326,7 @@ if command -v node >/dev/null; then
   node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
   node test/home-model.js || fail "home screen model"
   node test/back-model.js || fail "back gesture model"
+  node test/switcher-model.js || fail "recent apps' app names"
   # Our OWL runtime's core: probes against the reference runtime's recorded
   # outputs, the resource caps, sh() quoting, and the phone's rules.
   node test/owl-core.js >/dev/null || { node test/owl-core.js | grep -v '^ok'; fail "OWL runtime core"; }
@@ -242,10 +377,17 @@ assert m.line_for(True) == "visible true" and m.line_for(0) == "visible false"
 assert m.NAME == "sm.puri.OSK0" and m.PATH == "/sm/puri/OSK0"
 ' || fail "omamobile-osk-watch lines"
 grep -c "omamobile-osk-watch" plugins/omamobile.fingerprint/Fingerprint.qml >/dev/null || fail "the fingerprint plugin runs the keyboard watcher"
-grep -c "omamobile-osk-watch" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard button follows the watcher"
-grep -c 'namespace = "^omamobile-osk-hide\$" }, above_lock = 2' hypr/phone.lua >/dev/null || fail "the hide button works over the lock"
-python3 -c 'import json; assert {"id": "omamobile.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard button"
-pass "on-screen keyboard watcher"
+grep -c "omamobile-osk-watch" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin follows the watcher"
+python3 -c 'import json; assert {"id": "omamobile.keyboard"} in json.load(open("profile/shell.json"))["plugins"]' || fail "the profile enables the keyboard plugin"
+# The keyboard plugin draws nothing any more: its floating hide button
+# covered a terminal's input line. Its IPC stays, for the home pill.
+if grep -nE 'PanelWindow|WlrLayershell' plugins/omamobile.keyboard/Keyboard.qml; then fail "the keyboard plugin floats nothing over apps"; fi
+if grep -rn 'omamobile-osk-hide' hypr plugins; then fail "no layer rule or window for the old hide button"; fi
+for m in hideKeyboard showKeyboard toggleKeyboard; do
+  grep -c "function $m() {" plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin answers $m"
+done
+grep -c '"sm.puri.OSK0", "SetVisible", "b", visible ? "true" : "false"' plugins/omamobile.keyboard/Keyboard.qml >/dev/null || fail "the keyboard plugin calls squeekboard's SetVisible"
+pass "on-screen keyboard watcher and calls"
 
 # PIN or password: the choice is recorded per user, never the secret, and
 # mirrored to Omarchy's credential-password toggle.
@@ -270,6 +412,27 @@ if command -v node >/dev/null; then
 fi
 pass "home screen wiring"
 
+# Landscape (TOUCH-PLAN 2.4, #85): a page wider than tall shows the layout
+# turned on its side (HomeModel.transposeLayout, tested in test/home-model.js),
+# derived for the view and never saved; the OWL dp comes from the screen's
+# shorter side, the catalog keeps the portrait cell height, and edit mode
+# waits for portrait. test/home-render draws it in the OWL container.
+home=plugins/omamobile.home/Home.qml
+grep -c 'readonly property bool landscape: owlPageWidth > owlPagerHeight' "$home" >/dev/null || fail "the home knows a page wider than tall"
+grep -c 'HomeModel.transposeLayout(layout, userCatalog, { portrait: \[owlShortSide, owlPortraitPagerHeight\], landscape: \[owlPageWidth, owlPagerHeight\] })' "$home" >/dev/null \
+  || fail "the landscape view turns the layout with the pages' sizes"
+grep -c 'OwlPhone.dpFor(landscape ? owlShortSide : owlPageWidth)' "$home" >/dev/null || fail "the OWL dp comes from the shorter side"
+grep -c 'readonly property real owlCellHeight: owlPortraitPagerHeight / Math.max(1, layout.grid.rows)' "$home" >/dev/null || fail "the catalog keeps the portrait cell height"
+grep -c 'editing = !!on && !landscape' "$home" >/dev/null || fail "edit mode waits for portrait"
+if grep -nE 'commit\(.*viewLayout|setText\(.*viewLayout|serialize\(viewLayout' "$home"; then fail "the landscape view is never saved"; fi
+for use in 'model: root.viewLayout.pages.length' 'readonly property int columns: root.viewLayout.grid.columns' 'readonly property var items: root.viewLayout.pages\[index\]'; do
+  grep -c "$use" "$home" >/dev/null || fail "the pages draw the view layout ($use)"
+done
+if [[ -n ${OMAMOBILE_HOME_RENDER:-} ]]; then
+  bash test/home-render "$OMAMOBILE_HOME_RENDER" >/dev/null || fail "home screen render"
+fi
+pass "home screens in landscape"
+
 # The built-ins from omarchy-widgets are the OWL originals now (the
 # omamobile-owl-widgets package): no QML ports are left, each built-in names
 # its store widget, and the guide's MIT notice ships with the shell.
@@ -284,6 +447,49 @@ for (const t of H.OWL_ORDER) if (!/^owl:simonschubert\.[a-z0-9-]+$/.test(t) || H
 ' || fail "every old port has its OWL original as a built-in"
 fi
 pass "OWL built-ins"
+
+# Home widgets stop when nobody can see them (0.2.44): a koi pond on page 2
+# kept its frame clock going behind page 1 and behind apps, about 118 % CPU.
+# Every cell gets `shown` from Home's pageShown (the current page, its
+# neighbours only while swiping, and only while no app, drawer, recent apps
+# or call card covers the home screen and the panel is on); OWL widgets run
+# their sources, `every` and frames from it, the built-ins their timers.
+grep -c 'readonly property bool shown: root.pageShown(owner.index)' "$home" >/dev/null || fail "each cell knows whether it shows"
+grep -c 'if ("shown" in item) item.shown = Qt.binding(function() { return cell.shown })' "$home" >/dev/null || fail "widgets get shown"
+grep -c 'readonly property bool homeShown: HomeModel.homeShown(owlPanelOff, appOnScreen, coveringLayers)' "$home" >/dev/null || fail "the home screen knows when it is covered"
+grep -c 'root.coveringLayers = HomeModel.layersAfter(root.coveringLayers, event.name, event.data)' "$home" >/dev/null || fail "the drawer and recent apps cover the home screen"
+grep -c 'readonly property bool pagesMoving: !!pager && pager.swiping' "$home" >/dev/null || fail "neighbour pages show while swiping"
+grep -c 'Owl.OwlScheduler { id: owlSchedulerObject; paused: root.owlPaused }' "$home" >/dev/null || fail "the OWL clock pauses with the home screen"
+if grep -nE 'Math\.abs\(found\.page - currentPage\) <= 1' "$home"; then fail "a neighbour page's widgets stop while it isn't swiped to"; fi
+grep -c 'active: owlCell.running && owlCell.shown' plugins/omamobile.home/OwlCell.qml >/dev/null || fail "an OWL widget runs only while shown"
+grep -c 'owlCell.home.owlScheduler.touched()' plugins/omamobile.home/OwlCell.qml >/dev/null || fail "a touch raises the frame rate"
+grep -c 'cost: function() { return view.takeWork() }' plugins/omamobile.home/OwlCell.qml >/dev/null || fail "layout and paints count toward a frame's cost"
+for w in Clock Agenda Weather Command Toggles; do
+  grep -c '  property bool shown: true' "plugins/omamobile.home/${w}Widget.qml" >/dev/null || fail "the $w widget takes shown"
+done
+grep -c 'enabled: widget.shown' plugins/omamobile.home/ClockWidget.qml >/dev/null || fail "the clock stops while hidden"
+# No repeating timer or endless animation on the home screen runs unconditionally.
+if grep -nE 'repeat: true.*running: true|running: true.*repeat: true|loops: Animation.Infinite|FrameAnimation' plugins/omamobile.home/*.qml plugins/omamobile.home/owl/*.qml; then
+  fail "nothing on the home screen animates or polls forever"
+fi
+grep -c 'bind("shown", Qt.binding(function() { return frame.shown }))' plugins/omamobile.home/UserWidgetCell.qml >/dev/null || fail "user widgets get shown"
+grep -c '`property bool shown` (optional)' widgets/WIDGETS.md >/dev/null || fail "WIDGETS.md documents shown"
+rc=0; out=$(bash test/owl-idle 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "home widgets stop when nobody can see them # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "OWL widgets when hidden (test/owl-idle)"
+else
+  pass "home widgets stop when nobody can see them: no sources, every or frames hidden, one catch-up, 20/30 fps, half rate when slow"
+fi
+rc=0; out=$(python3 -B test/widget-host.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "widget host output limits # SKIP no Quickshell"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "widget host output limits"
+else
+  pass "widget host output limits, cancellation and state"
+fi
 
 # The weather widgets' position: locate.sh against a fake where-am-i.
 bash -n plugins/omamobile.home/locate.sh || fail "locate.sh parses"
@@ -328,19 +534,52 @@ python3 -B test/launch.py || fail "omamobile-launch"
 # Nothing launches around it: not Omarchy's AppLibrary.launch, not Qt's
 # openUrlExternally (a link opened wherever the browser was), not a bare
 # gtk-launch or the agent prompt.
-if grep -rnE 'appLibrary\.launch\(|openUrlExternally|"gtk-launch"|execArgv\(\["omarchy-agent-prompt"' plugins widgets --include=*.qml --include=*.js; then
+# The switcher's SwitcherModel.js names "gtk-launch" only in the list of
+# wrappers it skips when reading an Exec line for the program; it launches
+# nothing, so it is left out here.
+if grep -rnE 'appLibrary\.launch\(|openUrlExternally|"gtk-launch"|execArgv\(\["omarchy-agent-prompt"' plugins widgets --include=*.qml --include=*.js --exclude=SwitcherModel.js; then
   fail "every launch path goes through omamobile-launch"
 fi
 grep -c 'Quickshell.execDetached(LauncherModel.appArgv(entry.id))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer launches through omamobile-launch"
+grep -c '!LauncherModel.opensShellSurface(entry))' plugins/omamobile.launcher/Launcher.qml >/dev/null &&
+  grep -c '!HomeModel.opensShellSurface(entry))' plugins/omamobile.home/Home.qml >/dev/null || fail "no launch toast for an entry that opens a shell surface (drawer and home)"
 grep -c 'Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))' plugins/omamobile.home/Home.qml >/dev/null || fail "home-screen apps launch through omamobile-launch"
 grep -c 'tile.home.launch(tile.entry.app)' plugins/omamobile.home/AppTile.qml >/dev/null || fail "app tiles launch through the home screen"
 grep -c 'Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.launch goes through omamobile-launch"
 grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.openUrl goes through omamobile-launch"
 grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omamobile.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omamobile-launch"
 grep -c '"omamobile-launch", "url", uri' bin/omamobile-nfc-open >/dev/null || fail "NFC links open through omamobile-launch"
+grep -c 'GLib.timeout_add_seconds(2, follow_rfkill, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service follows the rfkill switch"
+grep -c 'GLib.timeout_add_seconds(2, follow_screen, bus)' bin/omamobile-nfc-open >/dev/null || fail "the NFC service stops polling with the screen off"
+python3 -B test/nfc-screen.py >/dev/null || { python3 -B test/nfc-screen.py | grep -v '^ok'; fail "screen_lit reads the connectors"; }
+grep -c 'polling waits for the screen' bin/omamobile-nfc-open >/dev/null || fail "start_polling leaves the loop off while the screen is dark"
+grep -c 'timeout_add_seconds(4' bin/omamobile-nfc-open >/dev/null && fail "the one-shot stop is gone: the screen check stops polling every time"
+grep -c '"systemctl", "restart", "neard"' bin/omamobile-nfc-open >/dev/null || fail "an NFC unblock restarts neard"
+grep -c '^Requires=neard' systemd/omamobile-nfc-open.service >/dev/null && fail "omamobile-nfc-open restarts neard, so it must not Require= it (the restart would loop)"
 grep -c '"omamobile-launch", "empty"' bin/omamobile-widget >/dev/null || fail "the widget agent's terminal gets an empty workspace"
 grep -c '"omamobile-launch", "show-with"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher shows apps together"
 grep -c '"omamobile-launch", "own-screen"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "the switcher moves apps to their own screen"
+# The drawer on its side (TOUCH-PLAN 2.4): columns of the portrait width.
+grep -c 'cellWidth: Math.floor(width / root.drawerColumns(width))' plugins/omamobile.launcher/Launcher.qml >/dev/null || fail "the drawer's columns follow its width"
+if command -v node >/dev/null; then
+  node -e '
+const L = require("./plugins/omamobile.launcher/LauncherModel.js")
+const eq = (a, b, what) => { if (a !== b) throw new Error(what + ": " + a + " != " + b) }
+eq(L.drawerColumns(4, 456, 480, 12), 4, "upright")
+eq(L.opensShellSurface({ command: ["omarchy-shell", "shell", "summon", "omamobile.update", "{}"] }), true, "the Updates entry opens a shell surface")
+eq(L.opensShellSurface({ command: ["/usr/bin/omarchy-shell", "osd"] }), true, "by path too")
+eq(L.opensShellSurface({ command: ["chromium"] }), false, "an app keeps the launch toast")
+eq(L.opensShellSurface({}), false, "an entry without a command keeps it")
+eq(L.drawerColumns(4, 1016, 480, 12), 8, "on its side")
+eq(L.drawerColumns(5, 1016, 480, 12), 11, "five across upright")
+eq(L.drawerColumns(4, 1016, 0, 12), 4, "no screen known")
+eq(L.drawerColumns(4, 300, 480, 12), 4, "narrower than the screen")
+' || fail "the drawer's columns on its side"
+fi
+if [[ -n ${OMAMOBILE_LAUNCHER_RENDER:-} ]]; then
+  bash test/launcher-render "$OMAMOBILE_LAUNCHER_RENDER" >/dev/null || fail "app drawer render"
+fi
+pass "the drawer on its side"
 # Recent apps' bottom actions take a touch tap alone: an exclusive
 # TapHandler in a band that swallows touches, so the tap-to-dismiss area
 # under them (which disarmed Clear all and closed recents before the second
@@ -354,7 +593,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "recent apps under touch (test/switcher-touch)"
 else
-  pass "recent apps under touch: Clear all, Home, a near miss, a card"
+  pass "recent apps under touch: Clear all, Home, a near miss, a card, app names, a centred card, the cards on their side"
 fi
 rc=0; out=$(bash test/shade-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -363,6 +602,20 @@ elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the shade under touch (test/shade-touch)"
 else
   pass "the shade under touch: a swipe forgets one, a short one springs back, a tap taps, a drag scrolls"
+fi
+# The home screen's long press (issue #147): a TapHandler over the pager
+# took mouse presses from the tiles, so it takes touch alone and a mouse
+# hold is timed from a PointHandler. test/home-mouse clicks, taps and holds.
+lp=plugins/omamobile.home/LongPressEdit.qml
+grep -c 'acceptedDevices: PointerDevice.TouchScreen' "$lp" >/dev/null || fail "the long-press TapHandler takes touch alone"
+grep -c 'LongPressEdit {' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen lays LongPressEdit over its pages"
+rc=0; out=$(bash test/home-mouse 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the home screen under a mouse and touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home screen under a mouse and touch (test/home-mouse)"
+else
+  pass "the home screen under a mouse and touch: a click and a tap launch, a hold edits once, a drag turns the page"
 fi
 if command -v node >/dev/null; then
   node -e '
@@ -395,6 +648,13 @@ fi
 grep -c 'startProc.write(startProc.secret + "\\n")' plugins/omamobile.update/Update.qml >/dev/null || fail "the PIN goes to stdin"
 if grep -nE 'command: .*(secret|pinField)' plugins/omamobile.update/Update.qml; then fail "the PIN is never in argv"; fi
 grep -c 'exclusionMode: ExclusionMode.Normal' plugins/omamobile.update/Update.qml >/dev/null || fail "the sheet stays above the on-screen keyboard"
+u=plugins/omamobile.update/Update.qml
+awk '/onPageChanged: \{/,/^  \}/' $u | grep -c '"omamobile.keyboard", "hideKeyboard"' >/dev/null &&
+  awk '/onPageChanged: \{/,/^  \}/' $u | grep -c 'if (page === "auth") return' >/dev/null ||
+  fail "leaving the PIN page hides the on-screen keyboard"
+grep -c 'AnchorChanges { target: detailsBox; anchors.top: undefined; anchors.bottom: resultButtons.top }' $u >/dev/null &&
+  ! grep -c 'anchors.top: root.page === "progress" ? progressColumn.bottom' $u >/dev/null ||
+  fail "the result page's Details box sits above the buttons, not over the result"
 python3 -B - <<'PY' || fail "the update sheet lints clean"
 import importlib.machinery, importlib.util, os, sys
 loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
@@ -412,6 +672,12 @@ for line in bad:
     print("  " + line)
 sys.exit(1 if bad else 0)
 PY
+# On its side (TOUCH-PLAN 2.4) the sheet fits as it is: the card fills the
+# screen, the overview and the result scroll, the PIN sits above the
+# keyboard. test/update-render draws every page in the OWL container.
+if [[ -n ${OMAMOBILE_UPDATE_RENDER:-} ]]; then
+  bash test/update-render "$OMAMOBILE_UPDATE_RENDER" >/dev/null || fail "update sheet render"
+fi
 pass "update sheet"
 
 # The permission sheet: the portal Access backend (its pure parts, then the
@@ -501,6 +767,10 @@ bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
+bash test/sleepd.sh || fail "omamobile-sleepd"
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"
+python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 ./install "$tmp/root"
 [[ -x $tmp/root/usr/bin/omamobile-setup-user && -f $tmp/root/usr/share/omamobile/shell/profile/shell.json ]] \
@@ -508,6 +778,14 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 [[ -f $tmp/root/usr/share/applications/omamobile-agent.desktop ]] || fail "install stages the AI Agent shortcut"
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$tmp/root/usr/share/applications/omamobile-agent.desktop" || fail "AI Agent desktop entry validates"
+fi
+# The app drawer's Updates entry opens the update sheet (omamobile.update)
+u=$tmp/root/usr/share/applications/omamobile-update.desktop
+[[ -f $u ]] && grep -c '^Exec=omarchy-shell shell summon omamobile.update "{}"$' "$u" >/dev/null &&
+  grep -c '^Icon=software-updater$' "$u" >/dev/null && [[ -f plugins/omamobile.update/manifest.json ]] ||
+  fail "install stages the Updates entry, which opens the update sheet"
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$u" || fail "Updates desktop entry validates"
 fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
 # Updates reach users set up earlier: setup-user reruns at every login, and
@@ -521,6 +799,25 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
 [[ -x $tmp/root/usr/bin/omamobile-osk-guard && -f $u/omamobile-osk-guard.service &&
    $(readlink "$u/graphical-session.target.wants/omamobile-osk-guard.service") == ../omamobile-osk-guard.service ]] \
   || fail "the keyboard safety net is staged and enabled for every user's session"
+# Sleep on screen-off: staged and running for every session, but off until
+# the user's toggle (SUSPEND-PLAN 6.2): nothing in the package turns it on.
+[[ -x $tmp/root/usr/bin/omamobile-sleepd && -f $u/omamobile-sleepd.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
+  || fail "the sleep watcher is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
+# The lock screen's weather: a timer for every session, a one-shot service.
+[[ -x $tmp/root/usr/bin/omamobile-weather && -f $u/omamobile-weather.service && -f $u/omamobile-weather.timer &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-weather.timer") == ../omamobile-weather.timer ]] \
+  || fail "the weather timer is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-weather' systemd/user/omamobile-weather.service >/dev/null \
+  && grep -cx 'Type=oneshot' systemd/user/omamobile-weather.service >/dev/null \
+  && grep -cx 'OnCalendar=\*:00/30' systemd/user/omamobile-weather.timer >/dev/null \
+  && grep -cx 'Unit=omamobile-weather.service' systemd/user/omamobile-weather.timer >/dev/null \
+  || fail "the weather timer runs the one-shot service every 30 minutes"
+pass "the lock screen's weather runs at login and every 30 minutes"
+if grep -rnE '^[^#]*(omarchy-toggle omamobile-sleep( on| toggle|$)|toggles/omamobile-sleep)' bin install systemd plugins; then
+  fail "nothing turns the omamobile-sleep toggle on by default"
+fi
 [[ -x $tmp/root/usr/bin/omamobile-setup-user ]] || fail "setup-user is installed where the unit runs it"
 [[ -x $tmp/root/usr/bin/omamobile-portal-access && -f $tmp/root/usr/share/xdg-desktop-portal/portals/omamobile.portal \
    && -f $tmp/root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf \

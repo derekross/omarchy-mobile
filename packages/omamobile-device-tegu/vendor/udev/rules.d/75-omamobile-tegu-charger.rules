@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: apply /etc/omamobile/charge-limit when the MAX77779 charger
+# appears (omamobile-tegu-charge-limit).
+ACTION=="add", SUBSYSTEM=="power_supply", KERNEL=="max77779-charger", RUN+="/usr/bin/omamobile-tegu-charge-limit"

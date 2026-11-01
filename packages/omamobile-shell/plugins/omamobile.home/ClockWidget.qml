@@ -15,6 +15,8 @@ Item {
   property var home: null
   property var entry: null
   property bool editing: false
+  // Someone can see it (set by Home.qml): its timers wait while not.
+  property bool shown: true
   readonly property var config: entry && entry.config ? entry.config : ({})
 
   property string barFormat: ""
@@ -34,8 +36,10 @@ Item {
 
   readonly property string timeFormat: widget.config.timeFormat || HomeModel.systemTimeFormat(widget.barFormat)
 
+  // Stopped while hidden; it reads the time again when enabled.
   SystemClock {
     id: clock
+    enabled: widget.shown
     precision: SystemClock.Minutes
   }
 
