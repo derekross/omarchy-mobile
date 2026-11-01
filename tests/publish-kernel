@@ -1,0 +1,140 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/publish-kernel against a stand-in kernel tree and a bare repository
+# in a scratch folder, never GitHub: the publisher's remote URL is rewritten
+# to the local repository, every Git protocol but file is refused, and the
+# test stops before running anything unless the URL resolves into the
+# scratch folder. A shim in front of git fails a fetch, or moves a branch
+# just before the push, to stand in for a network error or a second
+# publisher.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+url=$(sed -n 's/^remote=//p' "$here/tools/publish-kernel")
+[[ -n $url ]] || { echo "not ok - tools/publish-kernel names its remote" >&2; exit 1; }
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$t/gitconfig GIT_SSH_COMMAND=false
+
+realgit=$(command -v git)
+mkdir "$t/bin"
+cat > "$t/bin/git" <<EOF
+#!/bin/bash
+case \${1:-}/\${FAKE_GIT:-} in
+  fetch/fail-fetch) echo "fatal: the remote end hung up unexpectedly" >&2; exit 128 ;;
+  push/move) "$realgit" -C "\$MOVE_REPO" update-ref "\$MOVE_REF" "\$MOVE_TO" ;;
+esac
+exec "$realgit" "\$@"
+EOF
+chmod +x "$t/bin/git"
+
+fail() { echo "# $*" >&2; exit 1; }
+fixture() { # name: a kernel tree (tag v1.0, two commits on omamobile) and an empty remote
+  k=$t/$1/linux r=$t/$1/remote.git
+  printf '[user]\n\tname = A Human\n\temail = human@example.org\n[protocol]\n\tallow = never\n[protocol "file"]\n\tallow = always\n[url "%s"]\n\tinsteadOf = %s\n' \
+    "$r" "$url" > "$GIT_CONFIG_GLOBAL"
+  [[ $r == "$t"/* && $(git ls-remote --get-url "$url") == "$r" ]] || {
+    echo "Bail out! $url does not resolve to the scratch remote" >&2; exit 2; }
+  [[ $(git ls-remote ssh://example.invalid/none 2>&1) == *"transport 'ssh' not allowed"* ]] || {
+    echo "Bail out! Git protocols other than file are allowed" >&2; exit 2; }
+  git init -q --bare "$r"
+  git init -q -b omamobile "$k"
+  commit base && git -C "$k" tag v1.0
+  commit one && commit two
+}
+commit() { echo "$1" >> "$k/file"; git -C "$k" add file; git -C "$k" commit -q -m "$1"; }
+tip() { git -C "$r" rev-parse -q --verify refs/heads/omamobile || true; }
+pubref() { git -C "$k" rev-parse -q --verify refs/heads/publish/omamobile || true; }
+publish() { # ok|fail [pattern] [-- args...]: the output must contain pattern
+  local want=$1 pattern= status=0 out; shift
+  [[ ${1:-} == -- ]] || { pattern=$1; shift; }; shift
+  out=$(KERNEL_DIR=$k "$here/tools/publish-kernel" "$@" 2>&1) || status=$?
+  [[ ($want == ok && $status == 0) || ($want == fail && $status != 0) ]] || { echo "$out" >&2; fail "exit $status, expected $want"; }
+  [[ -z $pattern ]] || grep -c -- "$pattern" <<<"$out" >/dev/null || { echo "$out" >&2; fail "doesn't say '$pattern'"; }
+}
+published() { fixture "$1"; publish ok -- omamobile v1.0; p1=$(tip); }
+rewrite() { echo changed >> "$k/file"; git -C "$k" commit -q -a --amend -m two; }
+same_tree() { [[ $(git -C "$k" rev-parse "$1^{tree}") == $(git -C "$k" rev-parse "omamobile^{tree}") ]]; }
+
+case_first() {
+  fixture first
+  publish ok -- omamobile v1.0
+  [[ -n $(tip) && $(tip) == $(pubref) ]] || fail "no published branch"
+  same_tree "$(tip)" || fail "published tree differs"
+  echo "ok - a first publication creates the branch"
+}
+case_ff() {
+  published ff
+  commit three
+  publish ok -- omamobile v1.0
+  [[ $(git -C "$r" rev-parse "$(tip)^") == "$p1" ]] || fail "not one commit on the old tip"
+  same_tree "$(tip)" || fail "published tree differs"
+  echo "ok - a new local commit is published as a fast-forward"
+}
+case_fetch_fails() {
+  published fetchfail
+  commit three
+  PATH=$t/bin:$PATH FAKE_GIT=fail-fetch publish fail "Can't fetch" -- omamobile v1.0
+  [[ $(tip) == "$p1" ]] || fail "the published branch was replaced"
+  [[ $(pubref) == "$p1" ]] || fail "publish/omamobile moved"
+  echo "ok - a failed fetch of the published branch stops before anything changes"
+}
+case_unreadable() {
+  published unreadable
+  commit three
+  mv "$r" "$r.gone"
+  publish fail "Can't read" -- omamobile v1.0
+  mv "$r.gone" "$r"
+  [[ $(tip) == "$p1" && $(pubref) == "$p1" ]] || fail "something changed"
+  echo "ok - a remote that can't be read is not taken for a missing branch"
+}
+case_rewritten() {
+  published rewritten
+  rewrite
+  publish fail --rebuild -- omamobile v1.0
+  [[ $(tip) == "$p1" && $(pubref) == "$p1" ]] || fail "the published branch was replaced"
+  publish ok -- --rebuild omamobile v1.0
+  ! git -C "$r" merge-base --is-ancestor "$p1" "$(tip)" || fail "not rebuilt"
+  same_tree "$(tip)" || fail "published tree differs"
+  echo "ok - a rewritten local history stops, and --rebuild replaces the published branch"
+}
+moved() { # name prepare [args...]: a second publisher moves the branch back just before the push
+  published "$1"
+  $2; shift 2
+  local back; back=$(git -C "$r" rev-parse "$p1^")
+  PATH=$t/bin:$PATH FAKE_GIT=move MOVE_REPO=$r MOVE_REF=refs/heads/omamobile MOVE_TO=$back publish fail "stale info" -- "$@" omamobile v1.0
+  [[ $(tip) == "$back" ]] || fail "the moved branch was overwritten"
+  [[ $(pubref) == "$p1" ]] || fail "publish/omamobile names a commit that wasn't published"
+}
+case_moved_ff() {
+  moved movedff "commit three"
+  echo "ok - a fast-forward doesn't overwrite a branch that moved during the run"
+}
+case_moved_rebuild() {
+  moved movedrebuild rewrite --rebuild
+  echo "ok - --rebuild doesn't overwrite a branch that moved during the run"
+}
+case_local_moved() {
+  published localmoved
+  commit three
+  PATH=$t/bin:$PATH FAKE_GIT=move MOVE_REPO=$k MOVE_REF=refs/heads/publish/omamobile MOVE_TO=$(git -C "$k" rev-parse v1.0) \
+    publish ok -- omamobile v1.0
+  [[ $(git -C "$r" rev-parse "$(tip)^") == "$p1" ]] || fail "pushed something other than the checked replay"
+  same_tree "$(tip)" || fail "published tree differs"
+  echo "ok - the push sends the checked replay, not whatever publish/omamobile points at by then"
+}
+case_hidden() {
+  published hidden
+  git -C "$r" config uploadpack.hideRefs refs/heads/omamobile
+  commit three
+  publish fail "stale info" -- omamobile v1.0
+  [[ $(tip) == "$p1" && $(pubref) == "$p1" ]] || fail "the published branch or publish/omamobile changed"
+  echo "ok - a branch that looks missing but exists at push time is not overwritten"
+}
+
+failed=0
+for c in first ff fetch_fails unreadable rewritten moved_ff moved_rebuild local_moved hidden; do
+  set +e; ( set -e; "case_$c" ); s=$?; set -e
+  [[ $s != 2 ]] || exit 2
+  [[ $s == 0 ]] || { echo "not ok - $c"; failed=1; }
+done
+exit "$failed"

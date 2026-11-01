@@ -4,11 +4,12 @@
 Status (2026-10-19): **published.** `omamobile` is on GitHub
 (linux-omarchy-mobile, 146 commits on v7.3-rc6) and moves forward without
 rewriting published commits: `tools/publish-kernel` fast-forwards when the
-published tip's tree matches a local commit. Community kernel PRs are reviewed
-against it (felix's board file and UFS are merged). First patch sent
-upstream: "power: supply: max17042_battery: infer the status when no
-supplier is described" (linux-pm, 2026-10-19), Reviewed-by Hans de Goede,
-waiting for the maintainer.
+published tip's tree matches a local commit, and otherwise stops unless
+given `--rebuild`; it always stops when it can't read the published tip.
+Community kernel PRs are reviewed against it (felix's board file and UFS
+are merged). First patch sent upstream: "power: supply: max17042_battery:
+infer the status when no supplier is described" (linux-pm, 2026-10-19),
+Reviewed-by Hans de Goede, waiting for the maintainer.
 
 Earlier status (2026-10-12): **prepared, not pushed.** Branch `omamobile-next` in
 `~/android/mainline/wt-next`, built in `~/android/mainline/out-next`
@@ -303,10 +304,13 @@ tools/publish-kernel                         # defaults: branch omamobile, tag v
 `tools/publish-kernel` replays the 123 commits on the squashed v7.3-rc6
 base in a throwaway worktree, checks the tree matches `omamobile`, and
 force-pushes `publish/omamobile` to `github.com/derekross/linux-omarchy-mobile`.
-Pass: "Published omamobile (123 commits on v7.3-rc6)". Rollback: the
+Pass: "Published omamobile (123 commits on v7.3-rc6)". (Since 2026-11-01 the
+tool fast-forwards a published branch and stops instead of rewriting one: a
+rebuild like this one takes `tools/publish-kernel --rebuild`, and its push
+is leased on the published tip the run read.) Rollback: the
 previous published head is `publish/omamobile` before the run
-(`056bfe463`); `git push --force <remote> 056bfe463:refs/heads/omamobile`
-restores it.
+(`056bfe463`); `git push --force-with-lease=refs/heads/omamobile:<the tip
+it replaces> <remote> 056bfe463:refs/heads/omamobile` restores it.
 
 Afterwards: `git worktree remove ~/android/mainline/wt-next` and
 `git branch -d omamobile-next` once merged.

@@ -287,7 +287,7 @@ A release never contains a kernel or package that isn't in `[omamobile]` at the 
 
 ## 8. The kernel branches
 
-- **`omamobile-int`** is the snapshot the phone runs and that releases are built from. Before each release it is published as a snapshot (`tools/publish-kernel omamobile-int`) and tagged `omamobile-int-<date>`, so anyone can rebuild a release's kernel.
+- **`omamobile-int`** is the snapshot the phone runs and that releases are built from. Before each release it is published as a snapshot (`tools/publish-kernel omamobile-int`; when `omamobile-int` was rebuilt since the last snapshot, the tool stops and the rebuilt branch needs `--rebuild`) and tagged `omamobile-int-<date>`, so anyone can rebuild a release's kernel.
 - **`omamobile`** stays the curated, upstream-ready series. Before each release, a curation pass moves whatever has passed on the phone since the last one out of `omamobile-int` into `omamobile` as clean commits (the `omamobile-next` process in [KERNEL-PUBLISH](../device/cheetah/KERNEL-PUBLISH.md)), and `omamobile` is published. The release notes list how many commits `omamobile-int` still carries beyond `omamobile`; that number should shrink over time.
 - Board DTS files for new devices land in the device's topic branch first, then in both branches as above.
 
