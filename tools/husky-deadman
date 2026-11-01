@@ -15,8 +15,40 @@
 #   tools/husky-deadman STEP [options]   run STEP under the dead-man switch
 #   tools/husky-deadman undo STEP        revert a confirmed STEP by hand
 #   tools/husky-deadman log              the phone's /var/log/husky-deadman.log
+#   tools/husky-deadman baseline         read-only: the charger's CHG_DETAILS
+#                                        with the cable out, kept for this boot
+#                                        (b5-host refuses without it)
+#   tools/husky-deadman boot-undo        run the b5-host boot undo by hand (what
+#                                        husky-deadman-undo.service runs after
+#                                        a reset mid-step)
 #
-# STEP: noop | wd-drill | b3-charger
+# STEP: noop | wd-drill | b3-charger | b4-tcpm | b5-host
+#   b5-host (device/husky/HOST-MODE-RUNBOOK.md stage (a), NOT to be run until
+#   the maintainer says go) sources 5 V on VBUS from husky's external boost
+#   with nothing on the port but a passive USB-C meter: charger MODE 0xb9 =
+#   0, the bypass registers (0xc4 = 0x00 for 5000 mV, 0xcb bit 3 OTG_V_PGM),
+#   MAX77759 GPIO5 bst_on high (libgpiod gpioset), 5 ms, TCPC EXTBST_CTRL
+#   0x92 = 0x01, 30 ms; all saved first and restored by the undo. Wi-Fi only,
+#   desktop cable OUT, a 'baseline' and b4-tcpm in the same boot, charger NOT
+#   loaded, usb-role-test image, --meter (you state that an independent meter
+#   is on the port and reads 0 V). Soak 30 s unless --soak, and the soak ENDS
+#   IN THE UNDO (VBUS is never left on without the guard). --no-watchdog is
+#   refused. Undo: 0x92 = 0,
+#   GPIO5 low, registers back. A reset does NOT switch the boost off (the
+#   PMIC keeps GPIO5 and 0x92): the phone installs a oneshot unit that undoes
+#   it early in the next boot; after a freeze, unplug, force a restart and run
+#   'tools/husky-deadman boot-undo' first. No --device: attached devices go
+#   through the kernel path later (see the runbook).
+#   b4-tcpm loads tcpci_maxim (Type-C, pd-disable) and may take the USB port
+#   away, so it must be run over Wi-Fi: OMAMOBILE_SSH_HOST=root@<wifi-ip>
+#   tools/husky-deadman b4-tcpm. It spends
+#   no boot retry unless the watchdog fires (one of slot B's 3 per reset).
+#   Two cases: charger-less (max77759_charger not loaded), or AFTER b3-charger
+#   in the same boot (b3-charger soaked, then b4-tcpm): the charger then follows
+#   tcpm's current limit (Rp 3 A -> input limit 3 A, battery still capped at
+#   1.485 A by the DT) and the b4 undo also undoes b3 (charging ends off).
+#   The phone refuses b4 if the charger was loaded any other way, or with
+#   default_ilim_ua 0. b3-charger refuses while a Type-C driver is loaded.
 #
 # Options:
 #   --confirm SECS   phone waits this long for our confirmation (default 90)
@@ -28,6 +60,8 @@
 #   --no-watchdog    phone falls back to a crash (panic=10) instead of the
 #                    watchdog if the undo fails too
 #   --no-confirm     do not confirm until the phone has undone the step
+#   --meter          b5-host: an independent USB-C meter is on the port and
+#                    reads 0 V now (required; the phone refuses without it)
 #
 # Exit codes: 0 confirmed (or undone on purpose with --no-confirm),
 # 3 undone (no confirmation in time), 4 no answer from the phone,
@@ -69,6 +103,10 @@ Physical recovery, in order:
      battery temperature by hand.
   4. Fastboot by hand: force a restart as in 2, then Power + Volume Down until
      "Fastboot Mode"; flash your known-good image set.
+  5. After a reset mid b5-host the port may still be HOT (GPIO5 and 0x92 live
+     in the PMIC): plug nothing in; the phone's husky-deadman-undo.service
+     switches it off early in the boot. If it did not run (frozen phone,
+     forced restart): tools/husky-deadman boot-undo first thing.
 TXT
 }
 
@@ -80,18 +118,28 @@ install_phone() {
 }
 
 cmd="${1:-}"; shift || true
-step= confirm= grace=60 soak=600 ilim=500000 nowd= noconfirm=0 allowsoc=
+step= confirm= grace=60 soak= ilim=500000 nowd= noconfirm=0 allowsoc= meter=
 case "$cmd" in
   ''|-h|--help) usage ;;
   install) install_phone; say "installed /usr/local/bin/husky-deadman-phone"; exit 0 ;;
   dump) install_phone; phone 'husky-deadman-phone dump'; exit $? ;;
   log) phone 'cat /var/log/husky-deadman.log'; exit $? ;;
-  undo) install_phone; phone "husky-deadman-phone undo ${1:?STEP}"; rc=$?
-        if ((rc)); then warn "the undo did not finish cleanly (charger may still be loaded, with charging forced off): reboot the phone"; recovery; fi
+  baseline) install_phone; phone 'husky-deadman-phone baseline'; exit $? ;;
+  boot-undo) install_phone; phone 'husky-deadman-phone boot-undo'; rc=$?
+        if ((rc)); then warn "the boot undo did not finish: the port may still be hot, plug nothing in; read 'tools/husky-deadman dump' and finish by hand (gpioset GPIO5=0, i2cset -f -y BUS 0x25 0x92 0x00)"; fi
         exit $rc ;;
-  noop|wd-drill|b3-charger) step="$cmd" ;;
+  undo) install_phone; phone "husky-deadman-phone undo ${1:?STEP}"; rc=$?
+        # undo b4-tcpm after b3-charger also undoes b3 (charger unloaded, charging off)
+        if ((rc)); then warn "the undo did not finish cleanly (a module may still be loaded, with charging forced off): reboot the phone"; recovery; fi
+        exit $rc ;;
+  noop|wd-drill|b3-charger|b4-tcpm|b5-host) step="$cmd" ;;
   *) usage 1 ;;
 esac
+if [[ $step == b4-tcpm || $step == b5-host ]]; then
+  case "${OMAMOBILE_SSH_HOST:-}" in
+    ''|*172.16.42.1) die "$step must run over Wi-Fi (the step may take the USB port away): OMAMOBILE_SSH_HOST=root@<wifi-ip> $0 $step" ;;
+  esac
+fi
 while (($#)); do
   case "$1" in
     --confirm) confirm="${2:?}"; shift ;;
@@ -101,14 +149,25 @@ while (($#)); do
     --allow-soc) allowsoc=--allow-soc ;;
     --no-watchdog) nowd=--no-watchdog ;;
     --no-confirm) noconfirm=1 ;;
+    --meter) meter=--meter ;;
+    --device|--no-device) die "$1 is gone: b5-host is stage (a) only (nothing attached); devices go through the kernel path, see device/husky/HOST-MODE-RUNBOOK.md" ;;
     *) usage 1 ;;
   esac
   shift
 done
 [[ -n "$confirm" ]] || confirm=90
+if [[ $step == b5-host ]]; then
+  [[ -n "$soak" ]] || soak=30
+  [[ -n "$meter" ]] || die "b5-host needs --meter: an independent USB-C meter on the port, reading 0 V now (the phone refuses without it)"
+  [[ -z "$nowd" ]] || die "--no-watchdog is not allowed for b5-host (a dead tool must end in a reset, which runs boot-undo)"
+  warn "b5-host stage (a): the desktop cable must be OUT, nothing on the port but the passive meter (reading 0 V), nothing that can source anywhere near it; a 'baseline' must have been taken in this boot"
+else
+  [[ -z "$meter" ]] || die "--meter only applies to b5-host"
+fi
+[[ -n "$soak" ]] || soak=600
 [[ $ilim =~ ^[0-9]+$ ]] && (( ilim <= 900000 )) || die "--ilim must be a number up to 900000 (the driver clamps there)"
 
-phone true || die "phone not reachable at 172.16.42.1: nothing started"
+phone true || die "phone not reachable at ${OMAMOBILE_SSH_HOST:-root@172.16.42.1}: nothing started"
 install_phone
 if [[ $step == wd-drill ]]; then
   warn "wd-drill RESETS the phone and spends one of slot B's three boot tries (at zero the bootloader falls back to slot A, whose first boot wipes userdata; count the boots since your last bin/omamobile flash)"
@@ -136,7 +195,7 @@ trap stop_logger EXIT
 sleep 2
 
 unit="husky-deadman-$step-$stamp"
-args="run $step --confirm $confirm --grace $grace --soak $soak --ilim $ilim $nowd $allowsoc"
+args="run $step --confirm $confirm --grace $grace --soak $soak --ilim $ilim $nowd $allowsoc $meter"
 say "starting $step on the phone, detached (unit $unit): husky-deadman-phone $args"
 phone "if command -v systemd-run >/dev/null; then
          systemd-run --quiet --collect --unit=$unit /usr/local/bin/husky-deadman-phone $args
@@ -167,7 +226,7 @@ while (( $(date +%s) < deadline )); do
     fi
   else
     if [[ $step == wd-drill ]]; then result=drill; break; fi
-    ((dropped)) || { echo; warn "link down (not expected for these steps); waiting"; }
+    ((dropped)) || { echo; warn "link down (not expected for these steps over Wi-Fi; b4-tcpm over USB would, which is why it refuses USB); waiting"; }
     dropped=1
   fi
   printf '.'
@@ -179,8 +238,12 @@ rc=1
 case "$result" in
   soaked)
     rc=0
-    say "step $step CONFIRMED and the soak finished clean; it stays applied. NOTHING guards it now (no watchdog, no guard): read the dump, then 'tools/husky-deadman undo $step' or watch the gauge by hand; reboot before another b3-charger. State:"
-    phone 'husky-deadman-phone dump; dmesg | grep -iE "max77759|max17042|charger|guard" | tail -25'
+    if [[ $step == b5-host ]]; then
+      say "step b5-host CONFIRMED, soaked clean and UNDONE by the phone (stage (a) ends in the undo): the meter must read 0 V now, 0x92 0x00, gpio5 0, no marker. State:"
+    else
+      say "step $step CONFIRMED and the soak finished clean; it stays applied. NOTHING guards it now (no watchdog, no guard): read the dump, then 'tools/husky-deadman undo $step' or watch the gauge by hand; reboot before another $step. State:"
+    fi
+    phone 'husky-deadman-phone dump; dmesg | grep -iE "max77759|max17042|charger|guard|tcpci|tcpm|typec|xhci|usb [0-9]" | tail -30'
     ;;
   confirmed)
     rc=4
