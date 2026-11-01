@@ -20,6 +20,7 @@ logical at scale 3).
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts; draws nothing |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
+| `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
@@ -137,7 +138,7 @@ existed finds them under "Add tiles" too.
 | Torch | The rear flash LED in torch mode (`brightnessctl --device=white:torch`); "No flash LED" without it |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
 | Clipboard | Puts the sheet away and opens Omarchy's clipboard history (`omarchy-shell shell summon omarchy.clipboard`, Super+Ctrl+V on the desktop); a pick pastes into the app underneath |
-| Dictation | voxtype (`voxtype record start`, a second tap `record stop`); a start puts the sheet away so the words land in the app underneath. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
+| Dictation | The voice bar (omamobile.voice: `omamobile-voice start`, a second tap `omamobile-voice done`); a start puts the sheet away so the words land in the app underneath. Its chevron (and a long press) opens the voice settings, as Wi-Fi's and Bluetooth's open their pages. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
 | Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omamobile.fingerprint`); the status counts this user's fingerprints through fprintd (`omamobile-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
@@ -838,6 +839,35 @@ Omarchy's update).
 
 IPC: `omarchy-shell shell call omamobile.update snapshot ''` (page, step,
 result; never the PIN).
+
+## omamobile.voice
+
+Voice input: one voice bar, through Voxtype's user daemon
+(`voxtype.service`, Omarchy's Install > AI > Dictation). The design and its
+history are in [VOICE-PLAN.md](../../../docs/VOICE-PLAN.md).
+
+* **Ways in:** hold the pill in an app, or the search bar on the home
+  screen; the keyboard's Mic key; Power + Volume Up (when turned on); the
+  Dictation tile (its chevron opens the settings); or
+  `omamobile-voice [toggle|start|done|cancel|settings]`.
+  The bottom bar has no buttons: as on Android, a hold is voice and a
+  double tap the keyboard.
+* **The bar** rises above the keyboard (or the bottom bar): the destination
+  chip, the time, the level, Cancel and "Done · <verb>", in the recording
+  colour while it listens. The destination follows what is in front: Send
+  to the agent in its terminal (typed, then Enter), Type here in any other
+  app, Ask the agent on the home screen; the chip also offers Copy to
+  clipboard and Search apps.
+* **Ask** checks first: the transcript to edit in the theme's warning
+  colour, the full-permissions warning, Discard / Again / Ask.
+* Every recording is `voxtype record start --no-osd --file=<transcript>`,
+  delivered by the shell (wtype, wl-copy, the launcher). The model is the
+  daemon's (tiny.en once downloaded); the screen stays on while it
+  listens; a haptic tick at the start and end.
+* **Settings** (`~/.config/omamobile/voice.json`): the speech model, Power +
+  Volume Up, the check before Ask.
+
+IPC: `omarchy-shell shell call omamobile.voice <toggle|start|done|cancel|press|release|keyPress|keyRelease|openSettings|snapshot> ''`.
 
 ## omamobile.access
 

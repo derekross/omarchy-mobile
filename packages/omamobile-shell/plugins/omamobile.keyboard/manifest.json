@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "omamobile.keyboard",
   "name": "On-screen keyboard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Omarchy Mobile",
   "license": "MIT",
-  "description": "Shows and hides the on-screen keyboard for the home pill (its hide key and double tap) and scripts.",
+  "description": "Shows and hides the on-screen keyboard for the home pill (its double tap), the keyboard's Hide key and scripts.",
   "kinds": ["panel"],
   "keepLoaded": true,
   "entryPoints": {

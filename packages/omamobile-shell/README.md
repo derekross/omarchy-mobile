@@ -6,12 +6,15 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
 | `plugins/omamobile.quicksettings` | Pull-down quick settings |
-| `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (the same strip carries the hide key under the keyboard) |
+| `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
-| `plugins/omamobile.keyboard` | The on-screen keyboard's show and hide calls, for the home pill (a hide key in the strip under the keyboard, double-tap the pill) and scripts |
+| `plugins/omamobile.keyboard` | The on-screen keyboard's show and hide calls, for the home pill (double-tap it), the keyboard's Hide key and scripts; a keyboard shown by hand goes away when the home screen comes up |
+| `squeekboard/keyboards/` | squeekboard's US English and terminal layouts (GPL-3.0-or-later, portrait and landscape) with an action row of Mic, Paste, Emoji and Hide, XF86 keysyms that `hypr/phone.lua` binds for squeekboard's virtual keyboard only (docs/VOICE-PLAN.md) |
+| `bin/omamobile-keyboard-theme` | squeekboard in the applied Omarchy theme: a stylesheet from `colors.toml` and Omarchy's monospace font, imported from `~/.config/gtk-3.0/gtk.css`; rewritten at login and, with a squeekboard restart, by Omarchy's theme-set hook (`hooks/theme-set-keyboard`) |
 | `plugins/omamobile.back` | The back gesture: swipe in from a side edge for Escape |
 | `plugins/omamobile.update` | The update sheet: Omarchy's update for a phone, through `omamobile-update` (package `omamobile-omarchy`) |
+| `plugins/omamobile.voice` | The voice bar, through Voxtype: hold the pill in an app or the search bar on the home screen (or the keyboard's Mic key, Power + Volume Up, the Dictation tile, whose chevron opens the settings); it types into the app, sends to the agent in its terminal, or asks it from the home screen (docs/VOICE-PLAN.md) |
 | `plugins/omamobile.access` | The permission sheet: "Allow Camera to use the camera?" with the app's icon and two large buttons, in place of xdg-desktop-portal-gtk's desktop dialog |
 | `plugins/omamobile.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |
 | `profile/shell.json` | The phone layout the setup seeds once |

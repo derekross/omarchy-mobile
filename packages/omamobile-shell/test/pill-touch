@@ -1,14 +1,14 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # The home pill (omamobile.launcher) under touch, offscreen in qmltestrunner:
-# the real HomePill, HomeSwipe and HideKeyboardKey components, the real
+# the real HomePill, HomeSwipe and SearchPill components, the real
 # goHome, showRecents and keyboardCall, and the real content of the strip
 # (over an app, and under the keyboard), cut out of Launcher.qml into a
 # plain Item with Quickshell and Omarchy's modules stubbed (test/qml-stubs).
 # A double tap shows or hides the keyboard, a single tap does nothing, a
-# swipe still goes home, the hide key (only with the keyboard) hides it and
-# lets a swipe through, and what the bottom windows reserve (an exclusive
-# zone): the strip's height over an app with the keyboard up or down, never
+# swipe still goes home, a hold opens the voice bar (and a swipe after it
+# is still a swipe; omamobile.voice through its IPC here), and what the
+# bottom windows reserve (an exclusive zone): the strip's height over an app with the keyboard up or down, never
 # two windows at once, nothing on home, fullscreen, under the drawer or the
 # lock's keyboard. No compositor, no Quickshell. Exits 77
 # without qmltestrunner.
@@ -36,7 +36,7 @@ def block(start):
             return src[start:j]
 
 def component(name):
-    return block(src.index("  component %s: Item {" % name))
+    return block(re.search(r"(?m)^  component %s: \w+ \{" % name, src).start())
 
 def function(name):
     return block(src.index("  function %s(" % name))
@@ -81,6 +81,7 @@ out = """import QtQuick
 import Quickshell
 import qs.Commons
 import qs.Commons as Commons
+import qs.Ui
 
 Item {
   id: root
@@ -105,6 +106,18 @@ Item {
   readonly property int dockZone: %s
   readonly property int stripZone: %s
 
+  // No omamobile.voice here: voiceCall goes through its IPC.
+  // Tests set voice settings through a stand-in with no methods.
+  property var voice: null
+  // What the dock's search pill reads, and its tap (the drawer opening,
+  // recorded as a command so the tests can count it).
+  readonly property bool hasAgent: false
+  readonly property string agentName: ""
+  readonly property color foreground: "#c0caf5"
+  function expand() { Quickshell.execDetached(["expand"]) }
+
+%s
+
 %s
 
 %s
@@ -117,6 +130,18 @@ Item {
     sourceComponent: Component {
       Item {
         objectName: "pillStrip"
+%s
+      }
+    }
+  }
+
+  Loader {
+    y: 200
+    width: parent.width
+    height: root.dockHeight
+    sourceComponent: Component {
+      Item {
+        objectName: "dock"
 %s
       }
     }
@@ -143,9 +168,9 @@ Item {
 """ % ("root." + strip_height if not strip_height.isdigit() else strip_height,
        definition("stripShown"), definition("keyboardStripShown"), definition("dockShown"),
        zone("omamobile-dock"), zone("omamobile-home-strip"),
-       function("goHome"), function("showRecents"), function("keyboardCall"),
-       content.replace("root.oskOpen", "false"), content.replace("root.oskOpen", "true"),
-       component("HomePill"), component("HomeSwipe"), component("HideKeyboardKey"))
+       function("goHome"), function("showRecents"), function("keyboardCall"), function("voiceHold") + "\n\n" + function("voiceCall"),
+       content.replace("root.oskOpen", "false"), window_content("omamobile-dock"), content.replace("root.oskOpen", "true"),
+       component("SearchPill"), component("HomePill"), component("HomeSwipe"))
 open(sys.argv[2], "w").write(out)
 PY
 cp "$here/pill-touch.qml" "$work/tst_pill_touch.qml"

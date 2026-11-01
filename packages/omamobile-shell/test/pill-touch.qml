@@ -5,6 +5,7 @@
 import QtQuick
 import QtTest
 import Quickshell
+import qs.Commons
 import "launcher"
 
 Item {
@@ -77,6 +78,130 @@ Item {
                reserving: (harness.dockZone > 0 ? 1 : 0) + (harness.stripZone > 0 ? 1 : 0) }
     }
 
+    function voiceCalls(method) {
+      return Quickshell.executed.filter(function(argv) {
+        return argv.indexOf("omamobile.voice") >= 0 && argv.join(" ").indexOf(method) >= 0
+      }).length
+    }
+
+    // A finger that stays still for ms, then lets go.
+    function hold(item, x, y, ms) {
+      var t = touchEvent(item)
+      t.press(0, item, x, y).commit()
+      wait(ms)
+      t.release(0, item, x, y).commit()
+      wait(30)
+    }
+
+    // The pill, as on Android: a tap does nothing, a double tap toggles the
+    // keyboard, a hold opens the voice bar (with a tick), a swipe goes home.
+    function ticks() {
+      return Quickshell.executed.filter(function(argv) { return argv.join(" ").indexOf("fbcli -E button-pressed") >= 0 }).length
+    }
+
+    function test_holding_the_pill_opens_the_voice_bar_with_a_tick() {
+      var strips = ["pillStrip", "keyboardStrip"]
+      for (var i = 0; i < strips.length; i++) {
+        Quickshell.executed = []
+        var strip = find(harness, strips[i])
+        var t = touchEvent(strip)
+        t.press(0, strip, strip.width / 2, strip.height / 2).commit()
+        wait(300)
+        compare(voiceCalls("start"), 0, strips[i] + ": not before the hold takes")
+        wait(400)
+        compare(voiceCalls("start"), 1, strips[i] + ": " + JSON.stringify(Quickshell.executed))
+        compare(ticks(), 1, strips[i] + ": a tick as it takes")
+        t.release(0, strip, strip.width / 2, strip.height / 2).commit()
+        wait(30)
+        compare(keyboardCalls("Keyboard"), 0, strips[i] + ": a hold is no tap")
+        compare(calls("hl.dsp.focus"), 0, strips[i] + ": nor a swipe")
+        wait(600)
+      }
+    }
+
+    function test_the_voice_call_goes_through_the_plugins_ipc() {
+      var strip = find(harness, "pillStrip")
+      hold(strip, strip.width / 2, strip.height / 2, 700)
+      var call = Quickshell.executed.filter(function(argv) { return argv.indexOf("omamobile.voice") >= 0 })[0]
+      compare(JSON.stringify(call), JSON.stringify(["qs", "ipc", "-p", "/stub/shell", "call", "shell", "call", "omamobile.voice", "start", ""]))
+    }
+
+    function test_a_swipe_after_the_hold_is_still_a_swipe() {
+      var strip = find(harness, "pillStrip")
+      var x = strip.width / 2, y = strip.height / 2
+      var t = touchEvent(strip)
+      t.press(0, strip, x, y).commit()
+      wait(700)
+      for (var dy = 6; dy <= 72; dy += 6) {
+        t.move(0, strip, x, y - dy).commit()
+        wait(5)
+      }
+      t.release(0, strip, x, y - 72).commit()
+      wait(30)
+      compare(voiceCalls("start"), 1, "the hold took: " + JSON.stringify(Quickshell.executed))
+      compare(calls("hl.dsp.focus"), 1, "and the swipe still goes home")
+    }
+
+    function test_a_swipe_cancels_the_hold() {
+      var strip = find(harness, "pillStrip")
+      var x = strip.width / 2, y = strip.height / 2
+      var t = touchEvent(strip)
+      t.press(0, strip, x, y).commit()
+      wait(100)
+      for (var dy = 6; dy <= 72; dy += 6) {
+        t.move(0, strip, x, y - dy).commit()
+        wait(5)
+      }
+      wait(600)
+      t.release(0, strip, x, y - 72).commit()
+      wait(30)
+      compare(voiceCalls("start"), 0, "moved past the threshold first: no voice, " + JSON.stringify(Quickshell.executed))
+      compare(ticks(), 0)
+    }
+
+    function test_a_tap_and_a_double_tap_never_open_voice() {
+      var strip = find(harness, "pillStrip")
+      tap(strip, strip.width / 2, strip.height / 2)
+      tap(strip, strip.width / 2, strip.height / 2)
+      wait(700)
+      compare(voiceCalls("start"), 0, JSON.stringify(Quickshell.executed))
+      compare(keyboardCalls("toggleKeyboard"), 1, "the double tap is the keyboard's")
+    }
+
+    function test_the_strip_is_just_the_pill() {
+      var strips = ["pillStrip", "keyboardStrip"]
+      for (var i = 0; i < strips.length; i++) {
+        var strip = find(harness, strips[i])
+        verify(!find(strip, "voiceKey") && !find(strip, "keyboardKey") && !find(strip, "hideKeyboard"), strips[i] + ": no buttons")
+      }
+    }
+
+    // The dock's search pill on the home screen: a tap opens the drawer
+    // (with the keyboard), a hold opens the voice bar, a swipe recent apps.
+    function test_a_tap_on_the_search_pill_opens_the_drawer() {
+      var dock = find(harness, "dock")
+      tap(dock, dock.width / 2, dock.height / 2)
+      wait(600)
+      compare(calls("expand"), 1, JSON.stringify(Quickshell.executed))
+      compare(voiceCalls("start"), 0, "a tap is no voice")
+    }
+
+    function test_holding_the_search_pill_opens_the_voice_bar() {
+      var dock = find(harness, "dock")
+      hold(dock, dock.width / 2, dock.height / 2, 700)
+      compare(voiceCalls("start"), 1, JSON.stringify(Quickshell.executed))
+      compare(ticks(), 1)
+      compare(calls("expand"), 0, "a hold doesn't open the drawer")
+    }
+
+    function test_a_swipe_on_the_dock_opens_recent_apps() {
+      var dock = find(harness, "dock")
+      swipeUp(dock, dock.width / 2, dock.height / 2)
+      compare(calls("omamobile.switcher"), 1, JSON.stringify(Quickshell.executed))
+      compare(calls("expand"), 0, "a swipe is no tap")
+      compare(voiceCalls("start"), 0)
+    }
+
     function test_over_an_app_the_strip_reserves_its_height() {
       var z = zones({ app: true })
       compare(z.strip, harness.touch, JSON.stringify(z))
@@ -125,18 +250,12 @@ Item {
       compare(zones({ app: true, osk: true, locked: true }).total, 0, "the lock's keyboard")
     }
 
-    function test_the_hide_key_shows_only_with_the_keyboard() {
-      var key = find(find(harness, "pillStrip"), "hideKeyboard")
-      verify(key && !key.visible, "no hide key over an app")
-      verify(find(find(harness, "keyboardStrip"), "hideKeyboard").visible)
-    }
-
-    function test_two_taps_where_the_hidden_key_sits_are_a_double_tap() {
-      var strip = find(harness, "pillStrip")
-      tap(strip, strip.width - 20, strip.height / 2)
-      tap(strip, strip.width - 20, strip.height / 2)
+    function test_two_taps_at_the_strips_end_are_a_double_tap() {
+      var strip = find(harness, "keyboardStrip")
+      tap(strip, 20, strip.height / 2)
+      tap(strip, 20, strip.height / 2)
       compare(keyboardCalls("toggleKeyboard"), 1, JSON.stringify(Quickshell.executed))
-      compare(keyboardCalls("hideKeyboard"), 0)
+      compare(voiceCalls("o"), 0)
     }
 
     function test_single_tap_on_the_pill_does_nothing() {
@@ -176,45 +295,6 @@ Item {
       tap(strip, strip.width / 2, strip.height / 2)
       compare(keyboardCalls("toggleKeyboard"), 1, JSON.stringify(Quickshell.executed))
       compare(calls("hl.dsp.focus"), 0)
-    }
-
-    function test_the_hide_key_is_a_touch_target_at_the_strips_right_end() {
-      var strip = find(harness, "keyboardStrip")
-      var key = find(strip, "hideKeyboard")
-      verify(key, "the strip has a hide key")
-      verify(key.width >= 44 && key.height >= 44, key.width + "x" + key.height)
-      verify(strip.height >= 44, "the strip holds a whole touch target: " + strip.height)
-      var p = key.mapToItem(strip, 0, 0)
-      verify(p.y >= 0 && p.y + key.height <= strip.height, "inside the strip")
-      verify(strip.width - (p.x + key.width) <= 8, "at its right end")
-    }
-
-    function test_tapping_the_hide_key_hides_the_keyboard() {
-      var strip = find(harness, "keyboardStrip")
-      var key = find(strip, "hideKeyboard")
-      var c = key.mapToItem(strip, key.width / 2, key.height / 2)
-      tap(strip, c.x, c.y)
-      compare(keyboardCalls("hideKeyboard"), 1, JSON.stringify(Quickshell.executed))
-      compare(keyboardCalls("toggleKeyboard"), 0)
-      compare(calls("hl.dsp.focus"), 0)
-    }
-
-    function test_two_taps_on_the_hide_key_are_no_double_tap() {
-      var strip = find(harness, "keyboardStrip")
-      var key = find(strip, "hideKeyboard")
-      var c = key.mapToItem(strip, key.width / 2, key.height / 2)
-      tap(strip, c.x, c.y)
-      tap(strip, c.x, c.y)
-      compare(keyboardCalls("toggleKeyboard"), 0, JSON.stringify(Quickshell.executed))
-    }
-
-    function test_a_swipe_from_the_hide_key_goes_home() {
-      var strip = find(harness, "keyboardStrip")
-      var key = find(strip, "hideKeyboard")
-      var c = key.mapToItem(strip, key.width / 2, key.height / 2)
-      swipeUp(strip, c.x, c.y)
-      compare(calls("hl.dsp.focus"), 1, JSON.stringify(Quickshell.executed))
-      compare(keyboardCalls("hideKeyboard"), 0, "the swipe doesn't also hide the keyboard")
     }
 
     function test_swipe_in_the_keyboard_strip_goes_home() {

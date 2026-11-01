@@ -5,4 +5,5 @@ import QtQuick
 Rectangle {
   property var borderSpec: ({})
   property real borderLeft: 0
+  property real borderRight: 0
 }

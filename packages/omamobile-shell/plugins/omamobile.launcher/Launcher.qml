@@ -185,7 +185,12 @@ Item {
   // that opens (gestureEnd below): the drawer carries on from under the
   // finger at the finger's speed, the dock stays until it is fully open,
   // and the search field waits for a tap, so no keyboard comes up, as on
-  // Android. Any other open (a tap on the dock, IPC) focuses the field.
+  // Android. Every open does that since 0.2.62 (a tap on the dock too):
+  // a field focused before the drawer's surface had the keyboard focus woke
+  // up at the first touch on the drawer, so a pull down to close it raised
+  // the keyboard over the closing drawer (2026-10-31, the Pixel 7 Pro). The
+  // field takes the focus when it is tapped; typing on a real keyboard
+  // still searches (the sheet passes keys on).
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
@@ -193,7 +198,7 @@ Item {
     query = typeof payload.query === "string" ? payload.query : ""
     refreshApps()
     opened = true
-    focusInputOnShow = !gesture
+    focusInputOnShow = payload.focus === true
     focusDrawer()
     settleTo(true, gesture ? gestureSpeed : 0)
     gestureSpeed = 0
@@ -201,7 +206,10 @@ Item {
 
   // Host-initiated close (`shell hide`): the drawer slides away from where
   // it is, at the speed of the finger that let it go (dismiss(speed)).
+  // A closing drawer never holds a focused text field: the field gives the
+  // focus back first, so nothing asks for the keyboard as the drawer goes.
   function close() {
+    if (input.activeFocus) sheet.forceActiveFocus()
     opened = false
     query = ""
     homeSwipe = false
@@ -312,8 +320,9 @@ Item {
   // OMAMOBILE_DRAWER_FPS=1 logs how many frames the drawer window ticked per
   // gesture ("omamobile-launcher: drawer N frames in M ms").
   readonly property bool fpsLog: Quickshell.env("OMAMOBILE_DRAWER_FPS") === "1"
-  // What takes the keyboard focus when the drawer shows: the search field
-  // after a tap on the dock, the sheet after a swipe (open above).
+  // What takes the keyboard focus when the drawer shows: the sheet (the
+  // field waits for a tap), or the field for an open that asks for it
+  // ('{"focus":true}').
   property bool focusInputOnShow: true
   // The sheet's travel: the drawer window's height once it has one, the
   // screen's before the compositor's first configure.
@@ -442,6 +451,8 @@ Item {
           anchors.margins: Style.spacing.xxl
           placeholder: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
           onTapped: root.expand()
+          // Hold: the voice bar, as a hold on the pill over an app.
+          onHeld: root.voiceHold()
         }
       }
     }
@@ -484,8 +495,9 @@ Item {
   // gesture's edge strips (omamobile.back) end above it.
   //
   // The keyboard's own controls live here too, so nothing floats over the
-  // app: a keyboard-down key at the strip's right end hides the keyboard
-  // (only while it is up), and a double tap on the strip shows or hides it.
+  // app, as on Android: the strip is just the pill. A double tap shows or
+  // hides the keyboard (the keyboard's own action row has Hide and Mic), and
+  // a hold opens the voice bar.
   // Both go through omamobile.keyboard's IPC (keyboardCall). The floating
   // hide button that plugin drew above the keyboard covered a terminal's
   // input line, and Send and Next before that.
@@ -568,25 +580,59 @@ Item {
     Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.keyboard", method, ""])
   }
 
-  // Once per user, the first time the keyboard comes up under the pill
-  // after the double tap arrived: say how it works, as a toast (Omarchy's
-  // notifications). The marker is Omarchy's own done store
-  // (~/.local/state/omarchy/done/, as omamobile-setup-user's steps), and
-  // `ensure` claims it atomically, so the toast shows once even with two
-  // screens or two shells.
-  readonly property string keyboardHintText: "Double-tap the bar to show or hide the keyboard"
-  function keyboardHint() {
-    Quickshell.execDetached(["sh", "-c", "omarchy-done ensure omamobile-keyboard-pill-hint && exec omarchy-notification-send -g \"$2\" \"$1\"",
-                             "sh", root.keyboardHintText, String.fromCodePoint(0xF030C)])
+  // Voice input (omamobile.voice): a hold on the pill opens the voice bar.
+  // A call must reach
+  // it without a process in between, so it is called directly through its
+  // VoiceLink.js (the script beside VoiceLinkClient.qml, as the home screen
+  // reaches the drawer through DrawerLink.js), and through its IPC when
+  // that isn't loaded. method: start (and toggle, press, release for
+  // anything that needs them).
+  Loader {
+    id: voiceLink
+    source: Qt.resolvedUrl("../omamobile.voice/VoiceLinkClient.qml")
+  }
+  readonly property var voice: voiceLink.item ? voiceLink.item.voice : null
+
+  // A hold on the pill (over an app) or the search pill (the home screen):
+  // the voice bar, listening, with a haptic tick as the hold takes, as
+  // Android's assistant gesture does (feedbackd's button-pressed, so the
+  // feedback profile decides).
+  function voiceHold() {
+    Quickshell.execDetached(["sh", "-c", "command -v fbcli >/dev/null 2>&1 && exec fbcli -E button-pressed"])
+    return voiceCall("start")
   }
 
-  // A moment after the strip shows, so a keyboard that only flashes up (or
-  // the lock's, before isLocked answers) gets no toast.
-  onKeyboardStripShownChanged: keyboardStripShown ? hintDelay.restart() : hintDelay.stop()
+  function voiceCall(method) {
+    console.log("omamobile-home-indicator: voice", method)
+    if (root.voice && typeof root.voice[method] === "function") return root.voice[method]()
+    Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.voice", method, ""])
+    return "ipc"
+  }
+
+  // Once per user, the first time the pill-only bar shows over an app:
+  // what the pill does, as a toast (Omarchy's notifications). The marker is
+  // Omarchy's own done store (~/.local/state/omarchy/done/, as
+  // omamobile-setup-user's steps), and `ensure` claims it atomically, so the
+  // toast shows once even with two screens or two shells. A new marker for
+  // 0.2.61: the earlier tips named the buttons and gestures this replaced.
+  readonly property string pillHintText: "Hold the pill to talk · double-tap for the keyboard"
+  function pillHint() {
+    Quickshell.execDetached(["sh", "-c", "omarchy-done ensure omamobile-pill-hint && exec omarchy-notification-send -g \"$2\" \"$1\"",
+                             "sh", root.pillHintText, String.fromCodePoint(0xF036C)])
+  }
+
+  // A moment after the strip shows, so a strip that only flashes up (or
+  // the lock's keyboard, before isLocked answers) gets no toast.
+  onStripShownChanged: stripShown ? hintDelay.restart() : hintDelay.stop()
   Timer {
     id: hintDelay
     interval: 1500
-    onTriggered: if (root.keyboardStripShown) root.keyboardHint()
+    property bool asked: false
+    onTriggered: {
+      if (asked || !root.stripShown) return
+      asked = true
+      root.pillHint()
+    }
   }
 
   function showRecents() {
@@ -596,7 +642,7 @@ Item {
   }
 
   // The strip: a full touch target tall (TOUCH-PLAN 2.5), and no taller,
-  // for the swipe and for the hide key at its right end. That is all an app
+  // for the swipe, the double tap and the hold. That is all an app
   // gives up, over it and under the keyboard alike.
   readonly property int stripHeight: touch
 
@@ -663,17 +709,6 @@ Item {
         HomeSwipe {
           anchors.fill: parent
           strip: root.oskOpen ? "keyboard" : "pill"
-          ownTaps: hideKey
-        }
-
-        // Over the swipe's right end, only while the keyboard is up; a
-        // swipe that starts on it still goes home (see HideKeyboardKey).
-        HideKeyboardKey {
-          id: hideKey
-          visible: root.oskOpen
-          anchors.right: parent.right
-          anchors.rightMargin: Style.spacing.xs
-          anchors.verticalCenter: parent.verticalCenter
         }
       }
     }
@@ -1063,6 +1098,7 @@ Item {
 
     property string placeholder: ""
     signal tapped()
+    signal held()
 
     radius: Style.cornerRadius
     color: pillTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : Style.normalFill
@@ -1095,10 +1131,13 @@ Item {
     }
 
     // A TapHandler, not a MouseArea: it lets go once the touch turns into a
-    // drag, so the dock's swipe-up (recent apps) still sees it.
+    // drag, so the dock's swipe-up (recent apps) still sees it. Held still,
+    // the voice bar (held), as on the pill over an app.
     TapHandler {
       id: pillTouch
+      longPressThreshold: 0.45
       onTapped: pill.tapped()
+      onLongPressed: pill.held()
     }
   }
 
@@ -1129,15 +1168,25 @@ Item {
   // Where a home swipe starts. Swipe up and let go: home. Swipe up and hold
   // still for a moment (or swipe far up): recent apps, while the finger is
   // still down, as Android's gesture navigation does. Double-tap: show or
-  // hide the on-screen keyboard. strip names the surface in the log: "pill"
-  // over an app, "keyboard" under the keyboard.
+  // hide the on-screen keyboard. Hold still: ask the agent by voice
+  // (omamobile.voice) until the finger lets go. strip names the surface in
+  // the log: "pill" over an app, "keyboard" under the keyboard.
   component HomeSwipe: Item {
     id: swipeArea
     property string strip: "pill"
-    // An item over the strip whose taps are its own (the hide key): a tap
-    // there is never half of a double tap, or tapping the key twice would
-    // hide the keyboard and show it again.
-    property Item ownTaps: null
+    // Items over the strip whose taps are their own: a tap there is never
+    // half of a double tap, and a hold there isn't the pill's. None since
+    // 0.2.61 (the pill is the whole bar), kept for keys a layout may add.
+    property var ownTaps: []
+
+    function onOwnKey(x, y) {
+      var keys = swipeArea.ownTaps || []
+      for (var i = 0; i < keys.length; i++) {
+        var own = keys[i]
+        if (own && own.visible && own.contains(own.mapFromItem(swipeArea, x, y))) return true
+      }
+      return false
+    }
 
     // A TapHandler with the default DragThreshold policy grabs only
     // passively: once the touch moves past the drag threshold the
@@ -1145,13 +1194,22 @@ Item {
     // never also a tap. A tap never moves that far, so the DragHandler never
     // activates and a double tap goes neither home nor to recent apps. A
     // single tap does nothing, as before (the app still loses it).
+    //
+    // A hold (still, 0.45 s) opens the voice bar (root.voiceHold), as
+    // Android's assistant gesture does. It fires only while the finger
+    // hasn't moved past the drag threshold: a swipe takes the touch first
+    // and cancels it, and a finger that moves after it fired is still a
+    // swipe (home or recent apps).
     TapHandler {
       id: doubleTap
       property bool lastOwn: false
+      longPressThreshold: 0.45
+      onLongPressed: {
+        if (swipeArea.onOwnKey(doubleTap.point.position.x, doubleTap.point.position.y)) return
+        root.voiceHold()
+      }
       onTapped: function(eventPoint) {
-        var own = swipeArea.ownTaps
-        var onOwn = !!own && own.visible
-          && own.contains(own.mapFromItem(swipeArea, eventPoint.position.x, eventPoint.position.y))
+        var onOwn = swipeArea.onOwnKey(eventPoint.position.x, eventPoint.position.y)
         var wasOwn = doubleTap.lastOwn
         doubleTap.lastOwn = onOwn
         if (doubleTap.tapCount === 2 && !onOwn && !wasOwn) root.keyboardCall("toggleKeyboard")
@@ -1191,43 +1249,6 @@ Item {
         swipe.recents = true
         root.showRecents()
       }
-    }
-  }
-
-  // The keyboard strip's hide key: a keyboard-down glyph in a full 44 px
-  // touch target at the strip's right end, where Android's gesture bar puts
-  // its keyboard-down button; it reads as part of the keyboard and covers
-  // nothing in the app. Its TapHandler keeps the default DragThreshold
-  // policy, a passive grab, so the press also reaches the HomeSwipe under
-  // it: a swipe that starts on the key still goes home (and doesn't hide
-  // the keyboard), as the switcher's cards let a drag through their tap.
-  component HideKeyboardKey: Item {
-    objectName: "hideKeyboard"
-    width: root.touch
-    height: root.touch
-
-    Rectangle {
-      anchors.centerIn: parent
-      width: parent.width - 4
-      height: parent.height - 8
-      radius: height / 2
-      color: Qt.rgba(Commons.Color.bar.text.r, Commons.Color.bar.text.g, Commons.Color.bar.text.b, 0.18)
-      visible: hideTap.pressed
-    }
-
-    Text {
-      anchors.centerIn: parent
-      textFormat: Text.PlainText
-      // nf-md-keyboard_close: a keyboard over a down chevron
-      text: String.fromCodePoint(0xF030F)
-      color: Commons.Color.bar.text
-      font.family: Style.font.family
-      font.pixelSize: 22
-    }
-
-    TapHandler {
-      id: hideTap
-      onTapped: root.keyboardCall("hideKeyboard")
     }
   }
 

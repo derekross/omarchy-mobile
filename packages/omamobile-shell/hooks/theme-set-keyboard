@@ -1,0 +1,9 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Omarchy's theme-set hook for the on-screen keyboard: omarchy-theme-set runs
+# `omarchy-hook theme-set <name>` after applying a theme, which runs every
+# file in ~/.config/omarchy/hooks/theme-set.d/. omamobile-setup-user links
+# this file there as 50-omamobile-keyboard. It rewrites squeekboard's
+# stylesheet from the new colours and restarts a running squeekboard (GTK 3
+# reads gtk.css only at startup), so the keyboard blinks out for a moment.
+exec omamobile-keyboard-theme --restart

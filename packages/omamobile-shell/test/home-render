@@ -47,7 +47,7 @@ cp "$here/../plugins/omamobile.launcher/"{DrawerLink.js,DrawerLinkClient.qml} "$
 # from fixtures (the plugin's own property since 0.2.30; a before tree's
 # is made writable the same way).
 sed -i -E \
-  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
+  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
   -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
   -e 's/^  readonly property var owlHost: owlHostObject$/  property var owlHost: owlHostObject/' \
   "$h/home/Home.qml"
