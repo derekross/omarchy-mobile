@@ -10,12 +10,12 @@ pass() { printf 'ok - %s\n' "$1"; }
 t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
 
 # --- Pack time ---
-for d in "cheetah:Pixel 7 Pro (M1)" "felix:Pixel Fold" "oriole:Pixel 6"; do
+for d in "cheetah:Pixel 7 Pro (M1)" "felix:Pixel Fold" "oriole:Pixel 6" "bluejay:Pixel 6a"; do
   dev=${d%%:*} want=${d#*:}
   DEVICE=$dev bin/omamobile initramfs-config "$t/etc-$dev" > "$t/log" 2>&1 || { cat "$t/log"; fail "$dev: initramfs-config"; }
   [[ $(cat "$t/etc-$dev/omamobile-usb-product") == "$want" ]] || fail "$dev packs '$want' (got $(cat "$t/etc-$dev/omamobile-usb-product"))"
 done
-pass "cheetah keeps 'Pixel 7 Pro (M1)'; felix and oriole use their NAME"
+pass "cheetah keeps 'Pixel 7 Pro (M1)'; felix, oriole and bluejay use their NAME"
 
 R=$t/repo
 mkdir -p "$R/bin" "$R/device/six"
