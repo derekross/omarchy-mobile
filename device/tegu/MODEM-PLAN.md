@@ -1695,6 +1695,10 @@ The device tree: HSI1 GEN3A_0 and the modem node from
 into `zumapro.dtsi` and `zumapro-tegu.dts`, and the binding extended.
 The PERIC0 clock fix (#172) goes in first. Test: a published-style kernel
 from #144 plus this, cpif built in-tree, then the G3 session runbook.
+The driver and binding are drafted as
+<https://github.com/derekross/linux-omarchy-mobile/pull/173> (stacked on
+#144, `W=1` and checkpatch clean, not booted yet); the DT nodes follow once
+#144 is on `omamobile`, whose zumapro board DT the stack's base lacks.
 
 ### SIM test (M-SIM), 2026-11-03 (gated runbook, written 2026-10-29)
 
