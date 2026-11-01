@@ -847,7 +847,9 @@ Speech to text on the phone through Voxtype's user daemon
 measured speeds and phase 2 are in
 [VOICE-PLAN.md](../../../docs/VOICE-PLAN.md).
 
-* **Ask your agent:** hold the home pill (the dock's search pill on the
+* **Ask your agent:** tap the mic at the right end of the home screen's
+  search pill (hands free: Stop, or a tap on the sheet's mic, ends it; hold
+  it to talk), or hold the home pill (the dock's search pill on the
   home screen, the strip over an app, half a second): a bottom sheet opens
   and listens, with the time, a level meter and Stop/Cancel; letting go
   stops (a press shorter than 0.7 s keeps listening until Stop). Voxtype
@@ -857,7 +859,8 @@ measured speeds and phase 2 are in
   auto-permissions warning, Send to <agent> (the launcher's `promptArgv`),
   Say again, Cancel, Copy (`wl-copy`) and Type into last app (`wtype`
   after the sheet has gone). `omarchy-shell shell summon omamobile.voice
-  '{}'` opens it listening.
+  '{}'` opens it listening. A toast says so once, the first time the dock
+  shows ("Tap the mic, or hold the search bar, to ask by voice").
 * **Dictation:** the mic key at the left end of the keyboard's strip
   (omamobile.launcher): hold to talk, or tap to start and tap (or Done) to
   stop. Voxtype types into the focused app. While it listens, a strip above
@@ -865,9 +868,13 @@ measured speeds and phase 2 are in
   focus) shows the level, the time (Voxtype stops at 60 s), Cancel and
   Done. The Dictation tile in quick settings gets the same strip.
 * Every recording the shell starts passes `--no-osd` (Voxtype's overlay
-  sits over the dock), and `--model tiny.en` when
-  `~/.local/share/voxtype/models/ggml-tiny.en.bin` exists (3.9 s for 10 s
-  of speech on the Pixel 7 Pro, against 8.8 s for base.en). The state comes
+  sits over the dock). The model is the daemon's: `omamobile-setup-user`
+  sets `[whisper] model = "tiny.en"` in `~/.config/voxtype/config.toml`
+  once `~/.local/share/voxtype/models/ggml-tiny.en.bin` exists and the
+  config still has Omarchy's base.en (3.9 s for 10 s of speech on the
+  Pixel 7 Pro, against 8.8 s); a per-recording `--model` is ignored unless
+  Voxtype prepared it. Voxtype finds `wtype` and `wl-copy` with `which`,
+  so the package depends on it. The state comes
   from `$XDG_RUNTIME_DIR/voxtype/state`, the level from
   `voxtype-audio-bridge`; an idle inhibitor on the sheet or the strip keeps
   the screen on meanwhile.

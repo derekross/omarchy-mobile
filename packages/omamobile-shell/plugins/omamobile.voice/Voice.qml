@@ -37,6 +37,9 @@ import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 //   strip shows for any recording the shell didn't start for the agent,
 //   so the tile's recordings get it too.
 //
+// The model is the daemon's own (omamobile-setup-user sets tiny.en once it
+// is downloaded; a per-recording --model is ignored unless prepared).
+// Voxtype checks for wtype and wl-copy with `which` (a dependency).
 // Every recording the shell starts passes --no-osd (VoiceModel.startArgv):
 // Voxtype's GTK overlay would sit over the dock. The daemon's state file
 // ($XDG_RUNTIME_DIR/voxtype/state) says what it is doing; the level comes
@@ -70,7 +73,6 @@ Item {
   property real lastLevelAt: 0
   property string transcript: ""
   property string errorText: ""
-  property bool fast: false
   property int readTries: 0
   property bool copied: false
 
@@ -145,7 +147,7 @@ Item {
   // `shell call omamobile.voice snapshot ''`
   function snapshot() {
     return JSON.stringify({ opened: opened, phase: phase, owner: owner, pushToTalk: pushToTalk,
-                            elapsed: Math.floor(elapsed), fast: fast, agent: agentId, chars: transcript.length })
+                            elapsed: Math.floor(elapsed), agent: agentId, chars: transcript.length })
   }
 
   // ---------------------------------------------------------------- calls (VoiceLink.js and IPC)
@@ -159,6 +161,22 @@ Item {
 
   function askRelease() {
     return release("ask")
+  }
+
+  // The search pill's mic button: a tap opens the sheet listening, hands
+  // free (Stop, or a tap on the sheet's mic, ends it); a tap while it
+  // listens stops.
+  function askTap() {
+    if (busy && owner === "ask") { stop(); return "stopping" }
+    beginAsk(false)
+    return "ok"
+  }
+
+  // The sheet's mic circle: stops while listening, listens again after an
+  // error.
+  function micTapped() {
+    if (phase === "listening" || phase === "starting") stop()
+    else if (phase === "error") sayAgain()
   }
 
   // The mic key: held, a push-to-talk; tapped, on and off.
@@ -217,8 +235,8 @@ Item {
     levels = []
     elapsed = 0
     startProc.running = false
-    startProc.command = who === "ask" ? VoiceModel.fileStartArgv(transcriptPath, fast)
-                                      : VoiceModel.startArgv("type", "", fast)
+    startProc.command = who === "ask" ? VoiceModel.fileStartArgv(transcriptPath)
+                                      : VoiceModel.startArgv("type", "")
     startProc.running = true
     startTimeout.restart()
     stateFile.reload()
@@ -265,7 +283,6 @@ Item {
       readTries = 0
       readTimer.restart()
     }
-    if (was !== "idle" && r.phase === "idle") fastCheck.running = true
   }
 
   function applyTranscript(text) {
@@ -380,14 +397,6 @@ Item {
     onExited: root.applyTranscript(readOut.text)
   }
 
-  // tiny.en when it is downloaded (Voxtype keeps models in
-  // ~/.local/share/voxtype/models), else the daemon's default.
-  Process {
-    id: fastCheck
-    command: ["test", "-e", VoiceModel.fastModelPath(Quickshell.env("HOME"))]
-    onExited: function(exitCode) { root.fast = exitCode === 0 }
-  }
-
   Process {
     id: levelBridge
     command: ["voxtype-audio-bridge"]
@@ -415,6 +424,7 @@ Item {
     target: "omamobile.voice"
     function askPress(): string { return root.askPress() }
     function askRelease(): string { return root.askRelease() }
+    function askTap(): string { return root.askTap() }
     function dictatePress(): string { return root.dictatePress() }
     function dictateRelease(): string { return root.dictateRelease() }
     function dictateTap(): string { return root.dictateTap() }
@@ -423,10 +433,7 @@ Item {
     function snapshot(): string { return root.snapshot() }
   }
 
-  Component.onCompleted: {
-    fastCheck.running = true
-    VoiceLink.publish(root)
-  }
+  Component.onCompleted: VoiceLink.publish(root)
   Component.onDestruction: VoiceLink.withdraw(root)
 
   // ---------------------------------------------------------------- the sheet
@@ -550,6 +557,13 @@ Item {
               anchors.horizontalCenter: parent.horizontalCenter
               width: size
               height: size
+              Accessible.role: Accessible.Button
+              Accessible.name: root.listening ? "Stop listening" : "Ask by voice"
+
+              // A tap on the mic stops listening, as Stop does.
+              TapHandler {
+                onTapped: root.micTapped()
+              }
 
               Rectangle {
                 id: ring
@@ -1040,11 +1054,13 @@ Item {
 
       Image {
         anchors.verticalCenter: parent.verticalCenter
+        // A fixed size: a width that followed `visible` changed sourceSize,
+        // which reloaded the image, which hid it again (a binding loop).
         visible: chip.icon !== "" && status === Image.Ready
-        width: visible ? Style.space(18) : 0
+        width: Style.space(18)
         height: Style.space(18)
-        sourceSize.width: width * 3
-        sourceSize.height: height * 3
+        sourceSize.width: Style.space(18) * 3
+        sourceSize.height: Style.space(18) * 3
         fillMode: Image.PreserveAspectFit
         source: chip.icon
       }

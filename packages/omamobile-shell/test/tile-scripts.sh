@@ -114,10 +114,7 @@ rm -f "$tmp/run/voxtype/state"
 grep -cx "dictation=off" <<<"$(run "$dir/tile-state.sh")" >/dev/null || fail "dictation is off before voxtype writes its state"
 run "$dir/tile-action.sh" dictation on
 run "$dir/tile-action.sh" dictation off
-mkdir -p "$tmp/home/.local/share/voxtype/models"; touch "$tmp/home/.local/share/voxtype/models/ggml-tiny.en.bin"
-run "$dir/tile-action.sh" dictation on
-rm -f "$tmp/home/.local/share/voxtype/models/ggml-tiny.en.bin"
-for line in "voxtype record start --no-osd --type" "voxtype record start --no-osd --type --model tiny.en" "voxtype record stop"; do
+for line in "voxtype record start --no-osd --type" "voxtype record stop"; do
   grep -cxF "$line" "$log" >/dev/null || fail "tile-action.sh runs: $line"
 done
-pass "dictation follows voxtype's service and state, starts (no OSD, tiny.en when downloaded) and stops by direction"
+pass "dictation follows voxtype's service and state, starts (no OSD) and stops by direction"

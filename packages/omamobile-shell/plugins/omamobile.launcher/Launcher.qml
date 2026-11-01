@@ -445,6 +445,10 @@ Item {
           // Hold: ask the agent by voice (omamobile.voice).
           onHeld: root.voiceCall("askPress")
           onReleased: root.voiceCall("askRelease")
+          // The mic: tap to listen hands free, hold to talk.
+          onMicTap: root.voiceCall("askTap")
+          onMicHold: root.voiceCall("askPress")
+          onMicRelease: root.voiceCall("askRelease")
         }
       }
     }
@@ -610,6 +614,27 @@ Item {
     id: hintDelay
     interval: 1500
     onTriggered: if (root.keyboardStripShown) root.keyboardHint()
+  }
+
+  // Once per user, the first time the dock has shown for a moment after
+  // voice input arrived: how to start it, as the keyboard tip above does
+  // (Omarchy's done store claims it, so it shows once).
+  readonly property string voiceHintText: "Tap the mic, or hold the search bar, to ask by voice"
+  function voiceHint() {
+    Quickshell.execDetached(["sh", "-c", "omarchy-done ensure omamobile-voice-hint && exec omarchy-notification-send -g \"$2\" \"$1\"",
+                             "sh", root.voiceHintText, String.fromCodePoint(0xF036C)])
+  }
+  onDockShownChanged: dockShown ? voiceHintDelay.restart() : voiceHintDelay.stop()
+  Timer {
+    id: voiceHintDelay
+    interval: 3000
+    running: root.dockShown
+    property bool asked: false
+    onTriggered: {
+      if (asked || !root.dockShown || root.opened) return
+      asked = true
+      root.voiceHint()
+    }
   }
 
   function showRecents() {
@@ -1096,10 +1121,25 @@ Item {
 
     property string placeholder: ""
     signal tapped()
+    // Holding the pill itself (voice: push-to-talk, a shortcut).
+    property bool voiceHeld: false
+    signal held()
+    signal released()
+    // The mic button at its right end: a tap starts listening hands free,
+    // a hold is push-to-talk.
+    property bool micHeld: false
+    signal micTap()
+    signal micHold()
+    signal micRelease()
 
     radius: Style.cornerRadius
-    color: pillTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : Style.normalFill
+    color: pillTouch.pressed && !pill.onMic(pillTouch.point.pressPosition.x, pillTouch.point.pressPosition.y)
+      ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : Style.normalFill
     borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
+
+    function onMic(x, y) {
+      return pillMic.visible && pillMic.contains(pillMic.mapFromItem(pill, x, y))
+    }
 
     Text {
       id: pillIcon
@@ -1116,8 +1156,8 @@ Item {
     Text {
       anchors.left: pillIcon.right
       anchors.leftMargin: Style.spacing.xl
-      anchors.right: parent.right
-      anchors.rightMargin: Style.spacing.controlPaddingX
+      anchors.right: pillMic.left
+      anchors.rightMargin: Style.spacing.md
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: pill.placeholder
@@ -1127,25 +1167,67 @@ Item {
       elide: Text.ElideRight
     }
 
-    property bool voiceHeld: false
-    signal held()
-    signal released()
+    // Ask by voice (omamobile.voice): the hold on the pill is invisible, so
+    // the mic says it is there. A full touch target at the right end; lit
+    // in the recording colour while the agent sheet listens.
+    Item {
+      id: pillMic
+      objectName: "pillMic"
+      anchors.right: parent.right
+      anchors.rightMargin: pill.borderRight + Style.spacing.xs
+      anchors.verticalCenter: parent.verticalCenter
+      width: Math.max(44, Style.space(44))
+      height: width
+      Accessible.role: Accessible.Button
+      Accessible.name: "Ask by voice"
+      readonly property bool live: !!root.voice && root.voice.owner === "ask"
+        && (root.voice.phase === "listening" || root.voice.phase === "starting")
+
+      Rectangle {
+        anchors.centerIn: parent
+        width: parent.width - 4
+        height: parent.height - 4
+        radius: Math.min(Style.cornerRadius, width / 2)
+        color: Style.pressedFillFor(root.foreground, Commons.Color.accent)
+        visible: pillTouch.pressed && pill.onMic(pillTouch.point.pressPosition.x, pillTouch.point.pressPosition.y)
+      }
+
+      Text {
+        anchors.centerIn: parent
+        textFormat: Text.PlainText
+        // nf-md-microphone
+        text: String.fromCodePoint(0xF036C)
+        color: pillMic.live ? Commons.Color.urgent : Qt.darker(root.foreground, 1.3)
+        font.family: Style.font.family
+        font.pixelSize: Style.font.iconLarge
+      }
+    }
 
     // A TapHandler, not a MouseArea: it lets go once the touch turns into a
-    // drag, so the dock's swipe-up (recent apps) still sees it. Held still
-    // for half a second, it asks the agent by voice until the finger lets
-    // go (held, released).
+    // drag, so the dock's swipe-up (recent apps) still sees it. One handler
+    // for the pill and its mic, told apart by where the press landed (two
+    // passive handlers would both take a tap). Held still for half a
+    // second, either asks the agent by voice until the finger lets go.
     TapHandler {
       id: pillTouch
       longPressThreshold: 0.5
-      onTapped: pill.tapped()
+      onTapped: function(eventPoint) {
+        if (pill.onMic(eventPoint.pressPosition.x, eventPoint.pressPosition.y)) pill.micTap()
+        else pill.tapped()
+      }
       onPressedChanged: {
-        if (pressed) { pill.voiceHeld = false; return }
-        if (pill.voiceHeld) pill.released()
+        if (pressed) { pill.voiceHeld = false; pill.micHeld = false; return }
+        if (pill.micHeld) pill.micRelease()
+        else if (pill.voiceHeld) pill.released()
       }
       onLongPressed: {
-        pill.voiceHeld = true
-        pill.held()
+        if (pill.onMic(pillTouch.point.pressPosition.x, pillTouch.point.pressPosition.y)) {
+          pill.micHeld = true
+          pill.micHold()
+        } else {
+          pill.voiceHeld = true
+          pill.held()
+        }
       }
     }
   }

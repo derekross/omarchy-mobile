@@ -342,6 +342,19 @@ fi
 if omarchy-done ensure omamobile-voice-plugin; then
   add_plugin omamobile.voice
 fi
+# Voxtype's faster model on the phone: tiny.en turns 10 s of speech into
+# text in 3.9 s on the Pixel 7 Pro, base.en (Omarchy's default) in 8.8 s.
+# Voxtype ignores a per-recording `--model` it hasn't prepared, so the
+# daemon's own [whisper] model is set: once, only when tiny.en is
+# downloaded and the user's config still has Omarchy's base.en (a model
+# the user chose stays), and voxtype restarts only if it was running.
+voxconf=~/.config/voxtype/config.toml
+if [[ -f ~/.local/share/voxtype/models/ggml-tiny.en.bin && -f $voxconf ]] &&
+  sed -n '/^\[whisper\]$/,/^\[/p' "$voxconf" | grep -c '^model = "base.en"$' >/dev/null &&
+  omarchy-done ensure omamobile-voxtype-tiny; then
+  sed -i '/^\[whisper\]$/,/^\[/s/^model = "base.en"$/model = "tiny.en"/' "$voxconf"
+  systemctl --user try-restart voxtype.service || true
+fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   mkdir -p "$(dirname "$extension")"

@@ -1101,6 +1101,21 @@ Item {
     // Bottom: above the wallpaper, below every window.
     WlrLayershell.layer: WlrLayer.Bottom
     WlrLayershell.keyboardFocus: root.wantsKeyboard ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+    // No touch in the dock's strip: since the dock stopped reserving its
+    // height (0.2.56), this window reaches down over it, on the same Bottom
+    // layer. Which of the two is on top then depends on which mapped last:
+    // after a shell restart the home screen (slower to load) mapped after
+    // the dock and took every tap on the search pill (2026-10-31, 0.2.57 on
+    // the Pixel 7 Pro); coming back from an app re-mapped the dock and hid
+    // it. Nothing here draws or takes touches below dockInset anyway.
+    mask: Region { item: touchArea }
+
+    Item {
+      id: touchArea
+      objectName: "homeTouchArea"
+      anchors.fill: parent
+      anchors.bottomMargin: root.dockInset
+    }
 
     Item {
       id: screenItem

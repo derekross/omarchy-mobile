@@ -170,7 +170,7 @@ if [[ $rc == 77 ]]; then
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home pill under touch (test/pill-touch)"
 else
-  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip"
+  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip, the search pill (tap, hold, mic), voice holds"
 fi
 grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
@@ -703,7 +703,7 @@ if grep -rn 'voxtype record start' plugins bin --include=*.sh --include=*.qml --
 fi
 if grep -nE '"record", *"(start|toggle)"' "$v"; then fail "Voice.qml starts recordings only through VoiceModel.startArgv"; fi
 grep -c 'var TRANSCRIPT_NAME = "omamobile-voice.txt"' "$vm" >/dev/null || fail "the transcript is \$XDG_RUNTIME_DIR/omamobile-voice.txt"
-grep -c 'VoiceModel.fileStartArgv(transcriptPath, fast)' "$v" >/dev/null || fail "the agent flow records to the transcript"
+grep -c 'VoiceModel.fileStartArgv(transcriptPath)' "$v" >/dev/null || fail "the agent flow records to the transcript"
 grep -c 'Util.execArgv(LauncherModel.promptArgv(finalText))' "$v" >/dev/null || fail "Send is the launcher's promptArgv"
 grep -c 'Util.execArgv(LauncherModel.PICK_AGENT_ARGV)' "$v" >/dev/null || fail "the agent chip opens Omarchy's agent picker"
 grep -c 'import "../omamobile.launcher/LauncherModel.js" as LauncherModel' "$v" >/dev/null || fail "voice reuses the launcher's agent model"
@@ -719,7 +719,24 @@ grep -c '"call", "shell", "call", "omamobile.voice", method, ""' "$l" >/dev/null
 grep -c 'onHeld: root.voiceCall("askPress")' "$l" >/dev/null && grep -c 'onReleased: root.voiceCall("askRelease")' "$l" >/dev/null ||
   fail "holding the dock's pill asks the agent"
 grep -c 'onTapped: root.voiceCall("dictateTap")' "$l" >/dev/null || fail "the mic key toggles dictation"
+grep -c 'onMicTap: root.voiceCall("askTap")' "$l" >/dev/null && grep -c 'Accessible.name: "Ask by voice"' "$l" >/dev/null ||
+  fail "the search pill's mic asks by voice"
+grep -c 'omarchy-done ensure omamobile-voice-hint && exec omarchy-notification-send' "$l" >/dev/null &&
+  grep -c 'voiceHintText: "Tap the mic, or hold the search bar, to ask by voice"' "$l" >/dev/null || fail "the voice hint shows once"
+# The home screen's window takes no touch in the dock's strip: since the
+# dock reserves nothing it lies under the home surface on the same layer,
+# and after a shell restart the home surface was on top and took every tap
+# on the search pill (0.2.57 on the Pixel 7 Pro).
+h=plugins/omamobile.home/Home.qml
+grep -c 'mask: Region { item: touchArea }' "$h" >/dev/null &&
+  awk '/id: touchArea/,/}/' "$h" | grep -c 'anchors.bottomMargin: root.dockInset' >/dev/null ||
+  fail "the home surface leaves the dock's strip to the dock"
 grep -c 'exec voxtype record start --no-osd --type' plugins/omamobile.quicksettings/tile-action.sh >/dev/null || fail "the Dictation tile hides Voxtype's overlay"
+# Voxtype finds wtype and wl-copy with `which`; without it nothing is typed.
+sed -n "/^depends=(/,/)/p" PKGBUILD | grep -cE "^[[:space:]]+which[[:space:]]+#" >/dev/null || fail "omamobile-shell depends on which (voxtype's output check)"
+if grep -rn -- '--model' plugins/omamobile.voice plugins/omamobile.quicksettings/tile-action.sh | grep -v '^\S*:[0-9]*:\s*\(//\|#\)'; then
+  fail "no per-recording --model: voxtype ignores one it hasn't prepared"
+fi
 # Offscreen review shots in the OWL container only (test/voice-render).
 if [[ -n ${OMAMOBILE_VOICE_RENDER:-} ]]; then
   bash test/voice-render "$OMAMOBILE_VOICE_RENDER" >/dev/null || fail "voice sheet render"

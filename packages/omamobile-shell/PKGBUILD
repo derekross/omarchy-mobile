@@ -8,6 +8,7 @@ arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT GPL-3.0-or-later)  # GPL: the squeekboard layout
 depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' omamobile-owl-widgets bash squeekboard bluez wf-recorder python python-dbus python-gobject
+         which  # voice input: voxtype finds wtype and wl-copy with which
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative
          iproute2 jq  # omamobile-sleepd: ss for SSH sessions; jq also for omamobile-keys

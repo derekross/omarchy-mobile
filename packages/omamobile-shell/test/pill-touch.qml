@@ -5,6 +5,7 @@
 import QtQuick
 import QtTest
 import Quickshell
+import qs.Commons
 import "launcher"
 
 Item {
@@ -177,6 +178,64 @@ Item {
       compare(voiceCalls("dictateRelease"), 1)
       compare(voiceCalls("dictateTap"), 0, "a hold is no tap")
       compare(voiceCalls("ask"), 0, "the mic's hold is its own, not the strip's")
+    }
+
+    // The dock's search pill on the home screen: tap opens the drawer
+    // (with the keyboard), hold asks by voice, the mic at its right end
+    // listens on a tap and talks on a hold, a swipe opens recent apps.
+    function test_a_tap_on_the_search_pill_opens_the_drawer() {
+      var dock = find(harness, "dock")
+      tap(dock, dock.width / 2, dock.height / 2)
+      wait(600)
+      compare(calls("expand"), 1, JSON.stringify(Quickshell.executed))
+      compare(voiceCalls("ask"), 0, "a tap is no voice")
+    }
+
+    function test_holding_the_search_pill_asks_by_voice() {
+      var dock = find(harness, "dock")
+      hold(dock, dock.width / 2, dock.height / 2, 800)
+      compare(voiceCalls("askPress"), 1, JSON.stringify(Quickshell.executed))
+      compare(voiceCalls("askRelease"), 1)
+      compare(calls("expand"), 0, "a hold doesn't open the drawer")
+    }
+
+    function test_the_search_pill_has_a_mic_at_its_right_end() {
+      var dock = find(harness, "dock")
+      var mic = find(dock, "pillMic")
+      verify(mic && mic.visible, "a mic button")
+      verify(mic.width >= 44 && mic.height >= 44, mic.width + "x" + mic.height)
+      compare(mic.Accessible.name, "Ask by voice")
+      var p = mic.mapToItem(dock, 0, 0)
+      verify(dock.width - (p.x + mic.width) <= Style.spacing.xxl + 8, "at the right end: " + p.x)
+    }
+
+    function test_tapping_the_mic_listens_hands_free() {
+      var dock = find(harness, "dock")
+      var mic = find(dock, "pillMic")
+      var c = mic.mapToItem(dock, mic.width / 2, mic.height / 2)
+      tap(dock, c.x, c.y)
+      wait(600)
+      compare(voiceCalls("askTap"), 1, JSON.stringify(Quickshell.executed))
+      compare(calls("expand"), 0, "the mic's tap doesn't open the drawer")
+    }
+
+    function test_holding_the_mic_is_push_to_talk() {
+      var dock = find(harness, "dock")
+      var mic = find(dock, "pillMic")
+      var c = mic.mapToItem(dock, mic.width / 2, mic.height / 2)
+      hold(dock, c.x, c.y, 800)
+      compare(voiceCalls("askPress"), 1, JSON.stringify(Quickshell.executed))
+      compare(voiceCalls("askRelease"), 1)
+      compare(voiceCalls("askTap"), 0)
+      compare(calls("expand"), 0)
+    }
+
+    function test_a_swipe_on_the_dock_opens_recent_apps() {
+      var dock = find(harness, "dock")
+      swipeUp(dock, dock.width / 2, dock.height / 2)
+      compare(calls("omamobile.switcher"), 1, JSON.stringify(Quickshell.executed))
+      compare(calls("expand"), 0, "a swipe is no tap")
+      compare(voiceCalls("ask"), 0)
     }
 
     function test_over_an_app_the_strip_reserves_its_height() {

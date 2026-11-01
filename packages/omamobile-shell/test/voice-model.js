@@ -9,27 +9,24 @@ const L = require(path.join(__dirname, "../plugins/omamobile.launcher/LauncherMo
 const tests = []
 const test = (name, fn) => tests.push([name, fn])
 
-test("every start passes --no-osd: typing, the agent's file, either model", () => {
+test("every start passes --no-osd, and no per-recording --model (voxtype ignores one it hasn't prepared)", () => {
   for (const mode of ["type", "file"]) {
-    for (const fast of [false, true]) {
-      const argv = M.startArgv(mode, "/run/user/1000/omamobile-voice.txt", fast)
-      assert.deepStrictEqual(argv.slice(0, 4), ["voxtype", "record", "start", "--no-osd"])
-      assert.strictEqual(argv.includes("--model"), fast)
-      if (fast) assert.strictEqual(argv[argv.indexOf("--model") + 1], "tiny.en")
-    }
+    const argv = M.startArgv(mode, "/run/user/1000/omamobile-voice.txt")
+    assert.deepStrictEqual(argv.slice(0, 4), ["voxtype", "record", "start", "--no-osd"])
+    assert.ok(!argv.includes("--model"))
   }
-  assert.deepStrictEqual(M.startArgv("type", "", false), ["voxtype", "record", "start", "--no-osd", "--type"])
-  assert.deepStrictEqual(M.startArgv("file", "/r/omamobile-voice.txt", true),
-    ["voxtype", "record", "start", "--no-osd", "--file=/r/omamobile-voice.txt", "--model", "tiny.en"])
+  assert.deepStrictEqual(M.startArgv("type", ""), ["voxtype", "record", "start", "--no-osd", "--type"])
+  assert.deepStrictEqual(M.startArgv("file", "/r/omamobile-voice.txt"),
+    ["voxtype", "record", "start", "--no-osd", "--file=/r/omamobile-voice.txt"])
 })
 
 test("the agent's recording removes the old transcript first, in one process, nothing interpolated", () => {
   const p = "/run/user/1000/it's \"odd\"; rm -rf ~/omamobile-voice.txt"
-  const argv = M.fileStartArgv(p, false)
+  const argv = M.fileStartArgv(p)
   assert.deepStrictEqual(argv.slice(0, 3), ["sh", "-c", 'rm -f -- "$1"; shift; exec "$@"'])
   assert.strictEqual(argv[3], "sh")
   assert.strictEqual(argv[4], p)
-  assert.deepStrictEqual(argv.slice(5), M.startArgv("file", p, false))
+  assert.deepStrictEqual(argv.slice(5), M.startArgv("file", p))
   assert.ok(!argv[2].includes(p))
 })
 
@@ -37,7 +34,6 @@ test("stop, cancel and the transcript's path", () => {
   assert.deepStrictEqual(M.STOP_ARGV, ["voxtype", "record", "stop"])
   assert.deepStrictEqual(M.CANCEL_ARGV, ["voxtype", "record", "cancel"])
   assert.strictEqual(M.transcriptPath("/run/user/1000"), "/run/user/1000/omamobile-voice.txt")
-  assert.strictEqual(M.fastModelPath("/home/u"), "/home/u/.local/share/voxtype/models/ggml-tiny.en.bin")
 })
 
 test("the daemon's state file", () => {

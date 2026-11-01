@@ -92,17 +92,8 @@ case $tile in
     # voxtype types what it hears into the focused window. A direction, not
     # `record toggle`, so a second tap while the probe catches up can't undo
     # the first. --no-osd: the shell's listening strip above the keyboard
-    # (omamobile.voice) shows it, not Voxtype's overlay over the dock; and
-    # the faster tiny.en model when it is downloaded, as the strip's own
-    # recordings do (VoiceModel.startArgv).
-    if [ "$want" = on ]; then
-      if [ -e "$HOME/.local/share/voxtype/models/ggml-tiny.en.bin" ]; then
-        exec voxtype record start --no-osd --type --model tiny.en
-      fi
-      exec voxtype record start --no-osd --type
-    else
-      exec voxtype record stop
-    fi
+    # (omamobile.voice) shows it, not Voxtype's overlay over the dock.
+    if [ "$want" = on ]; then exec voxtype record start --no-osd --type; else exec voxtype record stop; fi
     ;;
   *)
     echo "tile-action.sh: unknown tile $tile" >&2

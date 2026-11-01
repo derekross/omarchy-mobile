@@ -177,3 +177,23 @@ RUN_HOME=$h9 RUN_DT=$t/dt-zumapro-tegu run
 grep -cx 'local omarchy_monitor_scale = 8 / 3' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's monitor scale is 8 / 3"
 grep -cx 'local omarchy_gdk_scale = 2' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's GDK_SCALE step is skipped"
 pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2"
+
+# Voxtype's model: tiny.en once it is downloaded and the config still has
+# Omarchy's base.en (voxtype ignores a per-recording --model it hasn't
+# prepared); a model the user chose stays; voxtype restarts only then.
+hv=$t/voice; mkdir -p "$hv/.config/hypr" "$hv/.config/omarchy/extensions" "$hv/.config/voxtype"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hv/.config/hypr/"
+printf 'state_file = "auto"\n\n[audio]\nmodel = "base.en"\n\n[whisper]\nmodel = "base.en"\nlanguage = "en"\n' >"$hv/.config/voxtype/config.toml"
+RUN_HOME=$hv run
+[[ $(grep -cx 'model = "base.en"' "$hv/.config/voxtype/config.toml") == 2 ]] || fail "no tiny.en on disk: the model stays base.en"
+mkdir -p "$hv/.local/share/voxtype/models"; touch "$hv/.local/share/voxtype/models/ggml-tiny.en.bin"
+RUN_HOME=$hv run
+sed -n '/^\[whisper\]$/,/^\[/p' "$hv/.config/voxtype/config.toml" | grep -cx 'model = "tiny.en"' >/dev/null || fail "tiny.en downloaded: the daemon's model is tiny.en"
+sed -n '/^\[audio\]$/,/^\[/p' "$hv/.config/voxtype/config.toml" | grep -cx 'model = "base.en"' >/dev/null || fail "only [whisper] changes"
+[[ $(grep -c 'systemctl --user try-restart voxtype.service' "$hv/calls") == 1 ]] || fail "voxtype restarts once, when the model changed"
+hc=$t/voice-chosen; cp -r "$hv" "$hc"; rm -rf "$hc/.local/state" "$hc/calls"
+sed -i 's/^model = "tiny.en"$/model = "small.en"/' "$hc/.config/voxtype/config.toml"
+RUN_HOME=$hc run
+grep -cx 'model = "small.en"' "$hc/.config/voxtype/config.toml" >/dev/null || fail "a model the user chose stays"
+if grep -c 'try-restart voxtype' "$hc/calls" >/dev/null 2>&1; then fail "voxtype isn't restarted for nothing"; fi
+pass "voxtype's model: tiny.en once downloaded over Omarchy's base.en, a user's choice kept"

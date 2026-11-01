@@ -12,10 +12,10 @@ var VOXTYPE = "voxtype"
 // Voxtype stops a recording itself at max_duration_secs (Omarchy's config:
 // 60); the sheet and the strip count down to it.
 var MAX_SECONDS = 60
-// The faster Whisper model, when the user has it: tiny.en transcribes 10 s
-// of speech in 3.9 s on the Pixel 7 Pro, base.en (the default) in 8.8 s.
-var FAST_MODEL = "tiny.en"
-var FAST_MODEL_FILE = "/.local/share/voxtype/models/ggml-tiny.en.bin"
+// The model is the daemon's ([whisper] model): Voxtype ignores a
+// per-recording --model it hasn't prepared ("not in available models"), so
+// omamobile-setup-user switches the user's config to tiny.en once it is
+// downloaded (3.9 s for 10 s of speech on the Pixel 7 Pro, base.en 8.8 s).
 // The agent flow's transcript, in the runtime directory (tmpfs, the user's
 // own, gone at logout).
 var TRANSCRIPT_NAME = "omamobile-voice.txt"
@@ -26,22 +26,20 @@ var HOLD_MS = 700
 var LEVEL_BARS = 24
 
 // The argv that starts a recording. mode: "type" (Voxtype types into the
-// focused window) or "file" (the transcript goes to filePath). fast: the
-// tiny.en model is on disk.
-function startArgv(mode, filePath, fast) {
+// focused window) or "file" (the transcript goes to filePath).
+function startArgv(mode, filePath) {
   var argv = [VOXTYPE, "record", "start", "--no-osd"]
   if (mode === "file") argv.push("--file=" + String(filePath || ""))
   else argv.push("--type")
-  if (fast) argv.push("--model", FAST_MODEL)
   return argv
 }
 
 // The agent flow removes the old transcript before it starts, so a
 // recording that writes nothing can't hand back the last one. One process:
 // sh with the path and the start argv as arguments, nothing interpolated.
-function fileStartArgv(filePath, fast) {
+function fileStartArgv(filePath) {
   return ["sh", "-c", 'rm -f -- "$1"; shift; exec "$@"', "sh", String(filePath || "")]
-    .concat(startArgv("file", filePath, fast))
+    .concat(startArgv("file", filePath))
 }
 
 var STOP_ARGV = [VOXTYPE, "record", "stop"]
@@ -49,10 +47,6 @@ var CANCEL_ARGV = [VOXTYPE, "record", "cancel"]
 
 function transcriptPath(runtimeDir) {
   return String(runtimeDir || "/tmp") + "/" + TRANSCRIPT_NAME
-}
-
-function fastModelPath(home) {
-  return String(home || "") + FAST_MODEL_FILE
 }
 
 // The daemon's state file: idle, recording, streaming or transcribing.
@@ -195,11 +189,11 @@ function typeArgv(text) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    VOXTYPE: VOXTYPE, MAX_SECONDS: MAX_SECONDS, FAST_MODEL: FAST_MODEL, FAST_MODEL_FILE: FAST_MODEL_FILE,
+    VOXTYPE: VOXTYPE, MAX_SECONDS: MAX_SECONDS,
     TRANSCRIPT_NAME: TRANSCRIPT_NAME, HOLD_MS: HOLD_MS, LEVEL_BARS: LEVEL_BARS,
     STOP_ARGV: STOP_ARGV, CANCEL_ARGV: CANCEL_ARGV,
     startArgv: startArgv, fileStartArgv: fileStartArgv, transcriptPath: transcriptPath,
-    fastModelPath: fastModelPath, voxState: voxState, step: step, cleanTranscript: cleanTranscript,
+    voxState: voxState, step: step, cleanTranscript: cleanTranscript,
     afterRead: afterRead, releaseStops: releaseStops, clock: clock, elapsedText: elapsedText,
     pushLevel: pushLevel, meterBars: meterBars, parseLevel: parseLevel, statusText: statusText, askHint: askHint,
     permissionText: permissionText, sendLabel: sendLabel, copyArgv: copyArgv, typeArgv: typeArgv
