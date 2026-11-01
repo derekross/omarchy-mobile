@@ -12,14 +12,14 @@ The CHPP link lost bits because spi-s3c64xx's flush cleared the packet
 count before turning the channels off
 (derekross/linux-omarchy-mobile#150). That fix alone does it: a pin drive
 change (linux-omarchy-mobile#151) was credited at first and withdrawn on 10-31, see cause 2.
-Open: the CP link under GNSS traffic. The link powers down and up about
-twice a second, as on stock: cpif powers it off each time the CP says it
-sleeps. One of those cycles hangs the SoC, 170-630 s after ONLINE; holding
-the link instead crashes the CP (103-108 s after ONLINE with the wake line
-high, no GNSS data with it answered). A session lasts one to ten minutes.
-The L1 substates, enabled on the real capability offset (0x160, both ends),
-take effect but don't stop the cycling (G3-L1, 10-31). Section
-"G3, GNSS gets a fix" below, and G3-L1.
+Fixed (2026-11-01): the SoC hang under GNSS traffic. The CP link powers
+down and up about twice a second, as on stock, and cpif writes the AP2CP
+lines on PERIC0 each time; the PERIC0 GPIO bus clock was a manual gate
+that the pin controller switched off after every access, and that hung the
+SoC within minutes. Kept on
+(<https://github.com/derekross/linux-omarchy-mobile/pull/172>), five
+sessions ran with no reset, the longest 30 minutes and 3759 link cycles
+(G3-L1).
 Left: the GNSS and CPIF drivers aren't in the published kernel, and GNSS
 still starts by hand. Next: the SIM.
 The staged plan (sections F, K, U and runbooks M0.2-M6, G1-G4) is below,
