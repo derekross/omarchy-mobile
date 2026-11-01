@@ -15,6 +15,7 @@ export OMAMOBILE_TEGU_ROOT=$tmp/root
 export TEST_LOG=$tmp/calls
 export TEST_LOADED=$tmp/loaded
 export TEST_NFC=$tmp/nfc
+export TEST_RUNS=$tmp/runs
 mkdir -p "$tmp/bin" "$OMAMOBILE_TEGU_ROOT/etc/omamobile" "$TEST_NFC"
 export PATH=$tmp/bin:$PATH
 printf '#!/bin/bash\n[[ -e $TEST_LOADED ]] && echo "brcmfmac 1 0"\nexit 0\n' > "$tmp/bin/lsmod"
@@ -25,6 +26,9 @@ printf '#!/bin/bash\necho "logger $*" >> "$TEST_LOG"\n' > "$tmp/bin/logger"
 printf '#!/bin/bash\nshift; exec "$@"\n' > "$tmp/bin/timeout"
 printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sleep"
 printf '#!/bin/bash\nexit 0\n' > "$tmp/bin/sync"
+# systemd-run: logged to TEST_RUNS, then the command runs here, in the test's
+# environment
+printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do shift; done\necho "$*" >> "$TEST_RUNS"; exec "$@"\n' > "$tmp/bin/systemd-run"
 # busctl: Polling and Powered are files in TEST_NFC; calls and sets are logged
 cat > "$tmp/bin/busctl" <<'EOF'
 #!/bin/bash
@@ -62,10 +66,12 @@ no_iface() { rm -rf "$OMAMOBILE_TEGU_ROOT/sys"; }
 [[ $(calls) == "systemctl stop iwd;rmmod brcmfmac_wcc brcmfmac;modprobe brcmfmac;systemctl start iwd" && ! -e $run/wifi-unloaded-for-sleep ]] \
   || fail "no keep flag: not reloaded after the sleep: $(calls)"
 
-# Kept and back after the sleep: nothing happens
-: > "$TEST_LOG"; : > "$TEST_LOADED"; : > "$keep"; iface
+# Kept and back after the sleep: nothing happens, and the check runs as its
+# own unit, so the hook doesn't hold user.slice frozen while it waits
+: > "$TEST_LOG"; : > "$TEST_LOADED"; : > "$keep"; iface; : > "$TEST_RUNS"
 "$wifi" pre; "$wifi" post
 [[ -z $(calls) ]] || fail "kept Wi-Fi was touched: $(calls)"
+[[ $(cat "$TEST_RUNS") == "$wifi check" ]] || fail "the kept check is not handed to systemd-run: $(cat "$TEST_RUNS")"
 
 # Kept but lost in the sleep: fall back to unloading for the rest of the boot
 : > "$TEST_LOG"; no_iface
