@@ -30,6 +30,13 @@ install -Dm644 vendor/systemd/system/display-manager.service.d/10-omamobile-husk
 install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
 ln -sfn ../omamobile-husky-display.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-display.service"
+install -Dm644 vendor/modprobe.d/omamobile-max77759.conf \
+  "$destination/usr/lib/modprobe.d/omamobile-max77759.conf"
+install -Dm755 bin/omamobile-usb-rescue "$destination/usr/bin/omamobile-usb-rescue"
+install -Dm644 vendor/systemd/system/omamobile-usb-rescue.service \
+  "$destination/usr/lib/systemd/system/omamobile-usb-rescue.service"
+ln -sfn ../omamobile-usb-rescue.service \
+  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \

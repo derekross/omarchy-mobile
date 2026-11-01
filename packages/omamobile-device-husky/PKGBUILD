@@ -3,11 +3,11 @@
 pkgname=omamobile-device-husky
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the Google Pixel 8 Pro (husky): storage guard and USB networking"
+pkgdesc="Omarchy Mobile support for the Google Pixel 8 Pro (husky): storage guard, USB networking and the USB replug rescue"
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(bash systemd omamobile-keyring)
+depends=(bash systemd omamobile-keyring i2c-tools)
 provides=(omamobile-device)
 conflicts=(omamobile-device)
 backup=(etc/pacman.d/omamobile-mirrorlist)

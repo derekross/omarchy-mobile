@@ -1,0 +1,46 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Keep the USB link working across unplugs on the Pixel 8 Pro. Ported from the
+# Pixel 7 Pro's omamobile-usb-rescue; the bus here is 10cb0000.i2c (hsi2c_11). The MAX77759's Type-C side opens
+# its USB2 data switch (TCPC vendor register USBSW_CTRL, 0x93) on unplug, and
+# with no Type-C driver yet nothing closes it again, so the phone stays off
+# the bus after a replug until the bootloader runs at the next boot. While
+# VBUS is valid, put the switch back to 0x09 (D+/D- connected), as the
+# bootloader leaves it. Stands aside once a Type-C driver owns the chip.
+# Only reads 0x25:0x93 and 0x69:0xb5 and writes 0x25:0x93. It also logs every
+# change of the switch, VBUS and the UDC state to the journal (to explain the
+# next loss).
+set -uo pipefail
+
+chg=0x69 tcpc=0x25
+log() { echo "omamobile-usb-rescue: $*"; }
+
+bus=
+for d in /sys/bus/i2c/devices/i2c-*; do
+  readlink -f "$d" | grep -q 10cb0000.i2c && { bus=${d##*-}; break; }
+done
+[[ -n $bus ]] || { log "no I2C bus for 10cb0000.i2c"; exit 0; }
+
+rd() { i2cget -f -y "$bus" "$1" "$2" 2>/dev/null; }
+# VBUS as the charger sees it: CHG_DETAILS_00.CHGIN_DTLS (bits 6:5) == 3.
+vbus_valid() { local v; v=$(rd $chg 0xb5) || return 1; (( ((v >> 5) & 3) == 3 )); }
+tcpm_owns() { [[ -e /sys/bus/i2c/devices/$bus-0025/driver ]]; }
+udc_state() { cat /sys/class/udc/*/state 2>/dev/null | head -1; }
+
+log "watching the USB data switch on I2C bus $bus"
+last=
+while :; do
+  if tcpm_owns; then
+    log "a Type-C driver owns the chip; nothing to do"
+    exit 0
+  fi
+  sw=$(rd $tcpc 0x93)
+  if vbus_valid; then vb=1; else vb=0; fi
+  now="usbsw=${sw:-?} vbus=$vb udc=$(udc_state)"
+  [[ $now != "$last" ]] && { log "$now"; last=$now; }
+  if (( vb )) && [[ -n $sw && $sw != 0x09 ]]; then
+    log "VBUS valid, USBSW_CTRL $sw: closing the data switch"
+    i2cset -f -y "$bus" $tcpc 0x93 0x09
+  fi
+  sleep 2
+done
