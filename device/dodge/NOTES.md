@@ -43,7 +43,7 @@ and [BRINGUP-M1.md](BRINGUP-M1.md) §4 / §6.
 
 | Block | Status | Notes |
 | --- | --- | --- |
-| Boot | testing | Omarchy on `boot_b` (2026-10-28); stock `boot_a` kept; GPT bit 54 marked by hand (kernel in review, [#115](https://github.com/derekross/linux-omarchy-mobile/pull/115)) |
+| Boot | testing | Omarchy on `boot_b` (2026-10-28); stock `boot_a` kept; GPT bit 54 marked by hand (kernel in the contributor's fork; [kernel #115](https://github.com/derekross/linux-omarchy-mobile/pull/115) closed) |
 | Storage | testing | UFS; guard allowlists `boot_b` and `userdata` (shared `initramfs/init`) |
 | Display | testing | Samsung panel through msm/dpu; brightness and DPMS; warm-boot drop fixed (QTB read) |
 | GPU | testing | Adreno 830 (gpu2); glmark2 / Freedreno on the phone; Vulkan untested |
