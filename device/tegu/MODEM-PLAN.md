@@ -1013,6 +1013,24 @@ power-on, so the next trace goes on the power-on path
 (`s51xx_pcie_restore_state()` and the link-up). The save-once change alone
 does not fix the hang.
 
+**G3-L1, the controller's own steps traced (2026-11-01, daily kernel).**
+The same pair with a trace line after each step of the controller's
+`cp_link_down()` and `cp_link_try()`, the modem started after the boot's
+bring-up had finished: 299 power-off cycles before the reset (the runs
+before stopped after 8 to 53). The last lines: cycle 292's power-down ran
+every step (interrupts off, LTSSM off, soft reset, PHY off, isolated), its
+power-up trained ("L0", "settled"), and nothing after it, not even the
+"link up: GenN" line, which the controller prints after one PCS write and
+two DBI reads of its own registers. So the hang point moves from run to
+run (inside cpif's config save, the doorbell, the start of
+`cp_link_down()`, and now just after the link settles), and at least once
+it is an access to the controller's own registers with the PHY powered and
+the link trained. That points at something outside these two drivers
+racing them, not at one bad access in their order: candidates are the
+Wi-Fi bring-up module on the same boot (PCIe channel 1, its own PMU
+isolation register and HSI2 parts), or a PMU or clock change from another
+path. Next: one session with Wi-Fi left down for the whole boot.
+
 **G3-L1, save-once plus a write-only doorbell (2026-11-01, daily kernel).**
 Both changes together (cpif and the controller from the build tree of the
 v8/v9 traces, which drives the PHY from `tegu-pcie0-seq.h`; the tree that
