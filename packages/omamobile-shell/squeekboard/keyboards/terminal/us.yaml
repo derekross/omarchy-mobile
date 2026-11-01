@@ -1,10 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's terminal/us.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
-# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: an Esc key
-# at the start of the top row, as upstream's own terminal/us_wide.yaml has.
-# That row now holds nine keys instead of eight, so "small-row" is a ninth of
-# the letter rows' width (10 x 40.41 = 404.1; 404.1 / 9 = 44.9) instead of an
-# eighth (50.512), and the rows still line up. omamobile-setup-user links it as
+# tag v1.43.1, GPL-3.0-or-later), changed for Omarchy Mobile:
+#   - an action row on top (Talk, Ask, Paste, Emoji, Hide). Each sends an XF86
+#     keysym that hypr/phone.lua binds, for squeekboard's virtual keyboard only
+#     (dictation and the agent through omamobile.voice, Omarchy's clipboard and
+#     emoji pickers, and omamobile.keyboard's hide). squeekboard has no action
+#     that runs a command, and a keysym key presses on touch-down and releases
+#     on lift-off, so Talk and Ask are push-to-talk.
+#   - a terminal row of Esc, Tab, Ctrl, Alt, | ~ / and the arrows (upstream's
+#     Shift modifier stays on the Shift view's row, with Page Up/Down, Home, End).
+# Widths: every row sums to 404.1, the letter rows' 10 x 40.41. The action row
+# is 4 x 90.9225 + 40.41; the terminal row 4 x 42.09 + 7 x 33.675; the Shift
+# and actions views' top row 4 x 42.09 + 5 x 47.145. The outline names are CSS classes
+# that omamobile-keyboard-theme styles from the Omarchy theme.
+# omamobile-setup-user links it as
 # ~/.local/share/squeekboard/keyboards/terminal/us.yaml, the only place
 # squeekboard reads layouts from besides its built-in ones.
 # Language: Englisch (US)
@@ -17,7 +26,14 @@ outlines:
     halfwidth:     { width: 20.205,  height: 52     }
     large:         { width: 60.615,  height: 52     }
     narrow:        { width: 30.307,  height: 52     }
-    small-row:     { width: 44.9,    height: 27.725 }
+    small-row:     { width: 47.145,  height: 32     }
+    term-key:      { width: 42.09,   height: 32     }
+    term-narrow:   { width: 33.675,  height: 32     }
+    talk:          { width: 90.9225, height: 36     }
+    ask:           { width: 90.9225, height: 36     }
+    paste:         { width: 90.9225, height: 36     }
+    emoji:         { width: 90.9225, height: 36     }
+    hide:          { width: 40.41,   height: 36     }
     spaceline:     { width: 148.17,  height: 52     }
     special:       { width: 60.615,  height: 52     }
     special-2:     { width: 60.615,  height: 52     }
@@ -25,30 +41,35 @@ outlines:
 
 views:
     base:
-        - "Esc-small Tab-small Ctrl Alt Shift ↑ ↓ ← →"
+        - "Talk Ask Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt |-small ~-small /-small ← ↑ ↓ →"
         - "q w e r t y u i o p"
         - ".-thin a s d f g h j k l --thin"
         - "show_upper z x c v b n m BackSpace"
         - "show_numbers preferences space show_actions Return"
     upper:
+        - "Talk Ask Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt Shift PageUp PageDown Home End"
         - "Q W E R T Y U I O P"
         - "/-thin A S D F G H J K L |-thin"
         - "show_upper Z X C V B N M BackSpace"
         - "show_numbers preferences space show_actions Return"
     numbers:
-        - "Esc-small Tab-small Ctrl Alt Shift ↑ ↓ ← →"
+        - "Talk Ask Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt |-small ~-small /-small ← ↑ ↓ →"
         - "1 2 3 4 5 6 7 8 9 0"
         - "\\ * # $ / & - + ( ) _"
         - "show_symbols , \" ' : ; ! ? BackSpace"
         - "show_letters preferences space . Return"
     symbols:
-        - "Esc-small Tab-small Ctrl Alt Shift ↑ ↓ ← →"
+        - "Talk Ask Paste Emoji Hide"
+        - "Esc-small Tab-small Ctrl Alt |-small ~-small /-small ← ↑ ↓ →"
         - "~ ` · √ π τ ÷ × ¶ @"
         - "\\ © ® £ € ¥ ^ ° { } _"
         - "show_numbers_from_symbols % | < > = [ ] BackSpace"
         - "show_letters preferences space . Return"
     actions:
+        - "Talk Ask Paste Emoji Hide"
         - "Esc-small Tab-small Ctrl Alt Shift PageUp PageDown Home End"
         - "F1  F2  F3  F4  F5  F6"
         - "F7  F8  F9  F10 F11 F12"
@@ -150,14 +171,14 @@ buttons:
         outline: "action"
         keysym: "Escape"
     Esc-small:
-        outline: "small-row"
+        outline: "term-key"
         keysym: "Escape"
         label: "Esc"
     Tab:
         outline: "action"
         keysym: "Tab"
     Tab-small:
-        outline: "small-row"
+        outline: "term-key"
         keysym: "Tab"
         label: "Tab"
     Del:
@@ -190,16 +211,16 @@ buttons:
         keysym: "Page_Down"
         label: "Page ↓"
     "↑":
-        outline: "small-row"
+        outline: "term-narrow"
         keysym: "Up"
     "↓":
-        outline: "small-row"
+        outline: "term-narrow"
         keysym: "Down"
     "←":
-        outline: "small-row"
+        outline: "term-narrow"
         keysym: "Left"
     "→":
-        outline: "small-row"
+        outline: "term-narrow"
         keysym: "Right"
     Up:
         label: "↑"
@@ -219,11 +240,11 @@ buttons:
         keysym: "Right"
     Ctrl:
         modifier: "Control"
-        outline: "small-row"
+        outline: "term-key"
         label: "Ctrl"
     Alt:
         modifier: "Alt"
-        outline: "small-row"
+        outline: "term-key"
         label: "Alt"
     Shift:
         modifier: "Shift"
@@ -245,3 +266,33 @@ buttons:
         outline: "halfwidth"
     _:
         outline: "halfwidth"
+    "|-small":
+        outline: "term-narrow"
+        text: "|"
+    "~-small":
+        outline: "term-narrow"
+        text: "~"
+    "/-small":
+        outline: "term-narrow"
+        text: "/"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Talk:
+        outline: "talk"
+        keysym: "XF86Dictate"
+        label: "Talk"
+    Ask:
+        outline: "ask"
+        keysym: "XF86Assistant"
+        label: "Ask"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "☺"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "⌄"

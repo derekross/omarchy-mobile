@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's us_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row of terminal/us.yaml on top (Talk, Ask, Paste, Emoji, Hide; XF86
+# keysyms that hypr/phone.lua binds for squeekboard only). The row sums to the
+# letter rows' 537.6: 4 x 120.96 + 53.76. Only US English is carried: other
+# languages keep squeekboard's own layouts (each is a copy to keep up to date).
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: English (US)
+---
+outlines:
+    default:       { width: 53.76,  height: 42 }
+    change-view:   { width: 80.64,  height: 42 }
+    change-view-2: { width: 94.08,  height: 42 }
+    large:         { width: 53.76,  height: 42 }
+    spaceline:     { width: 241.92, height: 42 }
+    special:       { width: 53.76,  height: 42 }
+    special-2:     { width: 80.64,  height: 42 }
+    special-3:     { width: 94.08,  height: 42 }
+    talk:          { width: 120.96, height: 32 }
+    ask:           { width: 120.96, height: 32 }
+    paste:         { width: 120.96, height: 32 }
+    emoji:         { width: 120.96, height: 32 }
+    hide:          { width: 53.76, height: 32 }
+
+views:
+    base:
+        - "Talk Ask Paste Emoji Hide"
+        - "q w e r t y u i o p"
+        - "a s d f g h j k l"
+        - "show_upper z x c v b n m BackSpace"
+        - "show_numbers preferences space . Return"
+    upper:
+        - "Talk Ask Paste Emoji Hide"
+        - "Q W E R T Y U I O P"
+        - "A S D F G H J K L"
+        - "show_upper Z X C V B N M BackSpace"
+        - "show_numbers preferences space . Return"
+    numbers:
+        - "Talk Ask Paste Emoji Hide"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "@ # $ % & - _ + ( )"
+        - "show_symbols , \" ' : ; ! ? BackSpace"
+        - "show_letters preferences space . Return"
+    symbols:
+        - "Talk Ask Paste Emoji Hide"
+        - "~ ` | · √ π τ ÷ × ¶"
+        - "© ® £ € ¥ ^ ° * { }"
+        - "show_numbers_from_symbols \\ / < > = [ ] BackSpace"
+        - "show_letters preferences space . Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "123"
+    show_numbers_from_symbols:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ABC"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "*/="
+    .:
+        outline: "large"
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Talk:
+        outline: "talk"
+        keysym: "XF86Dictate"
+        label: "Talk"
+    Ask:
+        outline: "ask"
+        keysym: "XF86Assistant"
+        label: "Ask"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "☺"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "⌄"

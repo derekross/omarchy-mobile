@@ -115,3 +115,67 @@ hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
 -- call is answered from the lock screen, and the in-call controls stay
 -- reachable while it's locked. The card offers call actions only.
 hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 2 })
+
+-- The on-screen keyboard's own keys (squeekboard/keyboards/: the action row
+-- Talk, Ask, Paste, Emoji and Hide). squeekboard can't run a command, so
+-- each key sends an XF86 keysym and these binds act on it. squeekboard puts
+-- every key on a keycode of a keymap it generates, and Hyprland resolves a
+-- bind's keysym through kb_layout unless the device resolves binds by its
+-- own keymap, so its virtual keyboard (named after the process) does. The
+-- binds take keys from squeekboard only: a hardware keyboard's XF86Paste
+-- still pastes.
+local osk_device = "hl-virtual-keyboard-squeekboard"
+local osk_only = { inclusive = true, list = { osk_device } }
+local not_osk = { inclusive = false, list = { osk_device } }
+hl.device({ name = osk_device, resolve_binds_by_sym = true })
+local function voice(method)
+  return "omarchy-shell shell call omamobile.voice " .. method .. " ''"
+end
+-- Talk dictates into the focused app and Ask opens the agent's listening
+-- sheet (omamobile.voice), both push-to-talk: squeekboard presses a keysym
+-- key on touch-down and releases it on lift-off; a short tap keeps listening
+-- hands free, as the strip's mic key and the home pill do.
+o.bind("XF86Dictate", "Keyboard: dictate", voice("dictatePress"), { device = osk_only })
+o.bind("XF86Dictate", "Keyboard: dictate released", voice("dictateRelease"), { device = osk_only, release = true })
+o.bind("XF86Assistant", "Keyboard: ask the agent", voice("askPress"), { device = osk_only })
+o.bind("XF86Assistant", "Keyboard: ask released", voice("askRelease"), { device = osk_only, release = true })
+-- Paste opens Omarchy's clipboard history (a tap pastes an entry), Emoji its
+-- emoji picker (a tap types one; its search needs typed letters), and Hide
+-- puts the keyboard away through omamobile.keyboard.
+o.bind("XF86Paste", "Keyboard: clipboard", "omarchy-menu-clipboard", { device = osk_only })
+o.bind("XF86EmojiPicker", "Keyboard: emoji", "omarchy-menu-emoji", { device = osk_only })
+o.bind("XF86Keyboard", "Keyboard: hide", "omarchy-shell shell call omamobile.keyboard hideKeyboard ''", { device = osk_only })
+-- Resolving squeekboard's binds by keysym also lets its Ctrl, Alt, Tab,
+-- Delete and F-keys reach Omarchy's own binds, which they never did: Ctrl +
+-- Alt + Delete would close every window, F9 would start Voxtype instead of
+-- reaching the terminal, Alt + Tab would switch windows. Those binds are
+-- taken back here and given again to every keyboard but squeekboard
+-- (Omarchy's default/hypr/bindings/tiling.lua and voxtype.lua). hl.unbind
+-- takes a key's every bind, so a user's own bind on one of these keys in
+-- bindings.lua goes too. squeekboard has no Super key, so SUPER binds are
+-- out of its reach.
+local function not_from_osk(keys, binds)
+  hl.unbind(keys)
+  for _, b in ipairs(binds) do
+    local opts = b[3] or {}
+    opts.device = not_osk
+    o.bind(keys, b[1], b[2], opts)
+  end
+end
+not_from_osk("CTRL + ALT + DELETE", { { "Close all windows", "omarchy-hyprland-window-close-all" } })
+not_from_osk("ALT + TAB", {
+  { "Focus on next window", hl.dsp.window.cycle_next() },
+  { "Reveal active window on top", hl.dsp.window.bring_to_top() },
+})
+not_from_osk("ALT + SHIFT + TAB", {
+  { "Focus on previous window", hl.dsp.window.cycle_next({ next = false }) },
+  { "Reveal active window on top", hl.dsp.window.bring_to_top() },
+})
+not_from_osk("CTRL + ALT + TAB", { { "Focus on next monitor", hl.dsp.focus({ monitor = "+1" }) } })
+not_from_osk("CTRL + ALT + SHIFT + TAB", { { "Focus on previous monitor", hl.dsp.focus({ monitor = "-1" }) } })
+if o.cmd_present("voxtype") then
+  not_from_osk("F9", {
+    { "Start dictation (push-to-talk)", "voxtype record start" },
+    { "Stop dictation (push-to-talk)", "voxtype record stop", { release = true } },
+  })
+end
