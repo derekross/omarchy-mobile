@@ -441,7 +441,7 @@ tools/phone-ssh --fresh 'uname -r
 cat /sys/module/clk_acpm/parameters/gs201_gpu_max_khz
 for z in /sys/class/thermal/thermal_zone*; do t=$(cat $z/type); [ "$t" = gpu-thermal ] || continue
   echo "$z $t $(cat $z/temp) $(cat $z/policy)"; for i in 0 1 2; do echo "  trip$i $(cat $z/trip_point_${i}_type) $(cat $z/trip_point_${i}_temp)"; done
-  ls -d $z/cdev* 2>/dev/null; for c in $z/cdev?; do echo "  $(cat $c/type) trip $(cat ${c}_trip_point) lower $(cat ${c}_lower 2>/dev/null) upper $(cat ${c}_upper 2>/dev/null)"; done
+  ls -d $z/cdev* 2>/dev/null; for c in $z/cdev?; do echo "  $(cat $c/type) trip $(cat ${c}_trip_point)"; done
 done
 for c in /sys/class/thermal/cooling_device*; do echo "$c $(cat $c/type) max $(cat $c/max_state) cur $(cat $c/cur_state)"; done
 d=$(ls -d /sys/class/devfreq/*.gpu 2>/dev/null | head -1); echo "$d $(cat $d/cur_freq) max $(cat $d/max_freq)"
@@ -450,8 +450,8 @@ dmesg | grep -i -E "thermal|devfreq|panthor|cooling" | tail -20; dmesg | grep -c
 
 - **Expect:** the release of the new build; the cap still `572000`;
   `gpu-thermal` with trips `passive 75000`, `passive 85000`,
-  `critical 110000`, two `cdev` links (`trip 0` lower 3, `trip 1` lower 8;
-  upper 11) to the GPU's devfreq cooling device (max 11, cur 0 while cool);
+  `critical 110000`, two `cdev` links (`trip 0` and `trip 1`; the lower
+  limits 3 and 8 show in C9) to the GPU's devfreq cooling device (max 11, cur 0 while cool);
   the three CPU cooling devices as in C1; devfreq at 151-572 MHz; no new
   thermal or panthor errors; `ufshcd_err_handler` 0.
 - **Pass:** all of the above, the shell draws as before.
