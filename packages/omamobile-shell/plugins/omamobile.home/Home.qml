@@ -242,12 +242,17 @@ Item {
   // (written synchronously) while it loads and for its first seconds; an
   // entry still there at the next start was running when the shell died,
   // and that widget stays off until its files change (a new hash).
-  // The file also carries the boot id it was written in: a widget still
-  // "loading" from another boot was cut off by a reboot or a dead battery,
-  // not by its own code, so it is not marked crashed.
+  // The file also carries the boot id it was written in. A widget still
+  // "loading" from another boot was most likely cut off by a reboot or a
+  // dead battery (Quickshell dies on the session's SIGTERM without tearing
+  // anything down), but it could also have brought the whole system down.
+  // So it gets one retry: it loads again and is kept as a suspect, and if
+  // it is still loading when the next start finds it (a second unclean
+  // end in a row), it is held back as a crash. A clean run clears it.
   readonly property string guardPath: configDir + "/widget-guard.json"
   property var guardLoading: ({})
   property var guardCrashed: ({})
+  property var guardSuspect: ({})
   FileView {
     id: bootIdFile
     path: "/proc/sys/kernel/random/boot_id"
@@ -267,30 +272,40 @@ Item {
       try { data = JSON.parse(text() || "{}") || {} } catch (e) { data = {} }
       var loading = data.loading || {}
       var sameBoot = !root.bootId || !data.boot || data.boot === root.bootId
-      root.guardCrashed = Object.assign({}, data.crashed || {}, sameBoot ? loading : {})
-      root.guardLoading = ({})
+      var crashed = Object.assign({}, data.crashed || {})
+      var suspect = Object.assign({}, data.suspect || {})
       Object.keys(loading).forEach(function(id) {
-        console.warn(sameBoot
-          ? "omamobile.home: widget " + id + " was loading when the shell stopped; it stays off until it changes"
-          : "omamobile.home: widget " + id + " was loading when the system went down last boot; not a crash, so it loads again")
+        if (sameBoot || suspect[id] === loading[id]) {
+          crashed[id] = loading[id]
+          delete suspect[id]
+          console.warn("omamobile.home: widget " + id + (sameBoot
+            ? " was loading when the shell stopped"
+            : " was loading when the system went down twice in a row")
+            + "; it stays off until it changes")
+        } else {
+          suspect[id] = loading[id]
+          console.warn("omamobile.home: widget " + id + " was loading when the system went down last boot; it loads once more as a suspect")
+        }
       })
+      root.guardCrashed = crashed
+      root.guardSuspect = suspect
+      root.guardLoading = ({})
       root.guardWrite()
     }
   }
-  // A deliberate quit (omarchy-restart-shell's `quickshell kill`, a logout)
-  // goes through the application's aboutToQuit; a crash never does. So a
-  // quit clears what was still loading, and only a shell that died leaves
-  // entries behind for the next start.
-  Connections {
-    target: Qt.application
-    function onAboutToQuit() {
-      if (Object.keys(root.guardLoading).length === 0) return
-      root.guardLoading = ({})
-      root.guardWrite()
-    }
+  // A deliberate quit (omarchy-restart-shell's `quickshell kill`, a logout
+  // through Omarchy) tears the QML tree down, and Home's onDestruction runs;
+  // a crash or a signal never gets there. Quickshell 0.3 doesn't deliver
+  // Qt.application's aboutToQuit to QML, so this is the hook. A quit clears
+  // what was still loading, and only a shell that died leaves entries
+  // behind for the next start.
+  Component.onDestruction: {
+    if (Object.keys(root.guardLoading).length === 0) return
+    root.guardLoading = ({})
+    root.guardWrite()
   }
   function guardWrite() {
-    guardFile.setText(JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed }) + "\n")
+    guardFile.setText(JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed, suspect: guardSuspect }) + "\n")
   }
   function guardBegin(widgetId, hash) {
     var next = Object.assign({}, guardLoading); next[widgetId] = hash
@@ -299,10 +314,12 @@ Item {
   // `ran`: the widget has now run cleanly, so an older crash of it is forgotten.
   function guardEnd(widgetId, ran) {
     var crashed = ran && (widgetId in guardCrashed)
-    if (!(widgetId in guardLoading) && !crashed) return
+    var suspect = ran && (widgetId in guardSuspect)
+    if (!(widgetId in guardLoading) && !crashed && !suspect) return
     var next = Object.assign({}, guardLoading); delete next[widgetId]
     guardLoading = next
     if (crashed) { var c = Object.assign({}, guardCrashed); delete c[widgetId]; guardCrashed = c }
+    if (suspect) { var x = Object.assign({}, guardSuspect); delete x[widgetId]; guardSuspect = x }
     guardWrite()
   }
 

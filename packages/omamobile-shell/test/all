@@ -925,14 +925,26 @@ pass "session environment"
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
-# The widget crash guard counts only a shell death inside the same boot: a
-# widget still "loading" from another boot (reboot, shutdown, dead battery)
-# is not marked crashed.
+# The widget crash guard counts a shell death inside the same boot as a
+# crash. A widget still "loading" from another boot (reboot, shutdown, dead
+# battery, or a system crash it caused) gets one retry as a suspect, and is
+# held back if it is still loading at the next start; a clean run clears it.
 h=plugins/omamobile.home/Home.qml
 grep -c 'path: "/proc/sys/kernel/random/boot_id"' $h >/dev/null || fail "the crash guard reads the boot id"
-grep -c 'JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed })' $h >/dev/null || fail "the crash guard records the boot id"
-grep -c 'sameBoot ? loading : {}' $h >/dev/null || fail "a widget loading in another boot is not a crash"
-grep -c 'function onAboutToQuit()' $h >/dev/null || fail "a deliberate quit clears what was still loading"
+grep -c 'JSON.stringify({ boot: bootId, loading: guardLoading, crashed: guardCrashed, suspect: guardSuspect })' $h >/dev/null || fail "the crash guard records the boot id and the suspects"
+grep -c 'if (sameBoot || suspect\[id\] === loading\[id\]) {' $h >/dev/null || fail "a same-boot death or a second unclean end in a row is a crash"
+grep -c 'suspect\[id\] = loading\[id\]' $h >/dev/null || fail "a widget loading in another boot is a suspect, not a crash"
+grep -c 'var suspect = ran && (widgetId in guardSuspect)' $h >/dev/null || fail "a clean run clears a suspect"
+grep -c 'Component.onDestruction: {' $h >/dev/null || fail "a deliberate quit clears what was still loading"
+grep -c 'target: Qt.application' $h >/dev/null && fail "Quickshell 0.3 never delivers aboutToQuit to QML"
+rc=0; out=$(bash test/widget-guard 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "widget crash guard across starts and boots # SKIP no quickshell"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -v '^ok' >&2; fail "widget crash guard (test/widget-guard)"
+else
+  pass "widget crash guard: same-boot death held back, one retry after a system going down, clean run and quit clear"
+fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"
