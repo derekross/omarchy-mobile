@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's tr_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 537.6: 2 x 161.28 + 2 x 107.52.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: Turkish
+---
+outlines:
+    default:            { width: 44.8,  height: 42 }
+    change-view:        { width: 67.2,  height: 42 }
+    fill:               { width: 89.6,  height: 42 }
+    placeholder:        { width: 44.8,  height: 42 }
+    spaceline:          { width: 201.6, height: 42 }
+    special:            { width: 44.8,  height: 42 }
+    special-2:          { width: 67.2,  height: 42 }
+    subtle-highlight:   { width: 44.8,  height: 42 }
+    subtle-highlight-2: { width: 89.6,  height: 42 }
+    mic:                { width: 161.28, height: 32 }
+    paste:              { width: 161.28, height: 32 }
+    emoji:              { width: 107.52, height: 32 }
+    hide:               { width: 107.52, height: 32 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "q w e r t y u ı o p ğ ü"
+        - "a s d f g h j k l ş i --"
+        - "show_upper z x c v b n m ö ç BackSpace"
+        - "show_numbers show_eschars preferences space , . Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - "Q W E R T Y U I O P Ğ Ü"
+        - "A S D F G H J K L Ş İ --"
+        - "show_upper Z X C V B N M Ö Ç BackSpace"
+        - "show_numbers show_eschars preferences space ! ? Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "1 2 3 4 5 6 7 8 9 0 ²"
+        - "@ # ₺ % & - _ + ( ) ³"
+        - "show_symbols -- ; \" ' : = < > -- BackSpace"
+        - "show_letters show_eschars preferences space , . Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "~ ` € | · √ µ ÷ × ¶ ²"
+        - "© ® £ $ ¥ ^ ° * { } ³"
+        - "show_numbers -- \\ / § π τ [ ] -- BackSpace"
+        - "show_letters show_eschars preferences space , . Return"
+    eschars:
+        - "Mic Paste Emoji Hide"
+        - "ä æ é ö-subtle-highlight ü-subtle-highlight Ä Æ É Ö-subtle-highlight Ü-subtle-highlight"
+        - "à â ê î ô À Â Ê Î Ô"
+        - "show_numbers -- ğ-subtle-highlight ç-subtle-highlight ş-subtle-highlight Ğ-subtle-highlight Ç-subtle-highlight Ş-subtle-highlight ß -- BackSpace"
+        - "show_letters show_eschars preferences space û Û Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view"
+        label: "ABC"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "*/="
+    show_eschars:
+        action:
+            locking:
+                lock_view: "eschars"
+                unlock_view: "base"
+        outline: "change-view"
+        label: "Çğ"
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-2"
+        icon: "key-enter"
+        keysym: "Return"
+    --:
+        outline: "placeholder"
+        text: ""
+    5:
+        outline: "fill"
+    "&":
+        outline: "fill"
+    ·:
+        outline: "fill"
+    ¥:
+        outline: "fill"
+    ô:
+        outline: "fill"
+    Ä:
+        outline: "fill"
+    À:
+        outline: "fill"
+    ğ-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "ğ"
+    Ğ-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "Ğ"
+    ü-subtle-highlight:
+        outline: "subtle-highlight-2"
+        text: "ü"
+    Ü-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "Ü"
+    ş-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "ş"
+    Ş-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "Ş"
+    ç-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "ç"
+    Ç-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "Ç"
+    ö-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "ö"
+    Ö-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "Ö"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"

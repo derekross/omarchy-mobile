@@ -1,0 +1,319 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's gr+polytonic_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 537.6: 2 x 161.28 + 2 x 107.52.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: Greek (polytonic)
+# Greek polytonic layout by Antonis Tsolomitis
+# University of the Aegean, Department of Mathematics, atsol@aegean.gr
+# March 2022
+# 
+---
+outlines:
+    default:          { width: 51.968,  height: 42 }
+    change-view:      { width: 69.888,  height: 42 }
+    change-view-2:    { width: 103.936, height: 42 }
+    character-group:  { width: 93.542,  height: 42 }
+    fill:             { width: 69.888,  height: 42 }
+    large:            { width: 69.888,  height: 42 }
+    placeholder:      { width: 51.968,  height: 42 }
+    placeholder-2:    { width: 93.542,  height: 42 }
+    spaceline:        { width: 199.808, height: 42 }
+    spaceline-2:      { width: 303.744, height: 42 }
+    special:          { width: 51.968,  height: 42 }
+    special-2:        { width: 69.888,  height: 42 }
+    special-3:        { width: 77.952,  height: 42 }
+    subtle-highlight: { width: 51.968,  height: 42 }
+    mic:              { width: 161.28, height: 32 }
+    paste:            { width: 161.28, height: 32 }
+    emoji:            { width: 107.52, height: 32 }
+    hide:             { width: 107.52, height: 32 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "; ς ε ρ τ υ θ ι ο π-fill"
+        - "α σ δ φ γ η ξ κ λ show_accents"
+        - "show_upper ζ χ ψ ω β ν μ BackSpace"
+        - "show_numbers preferences space . ,-subtle-highlight Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - ": € Ε Ρ Τ Υ Θ Ι Ο Π"
+        - "Α Σ Δ Φ Γ Η Ξ Κ Λ show_accents"
+        - "show_upper Ζ Χ Ψ Ω Β Ν Μ BackSpace"
+        - "show_numbers preferences space ! ·-subtle-highlight Return"
+    accents:
+        - "Mic Paste Emoji Hide"
+        - "show_psiliordasiaandvaria show_psiliordasiaandoxia show_psiliordasia show_bariaorperispomeni show_oxia ᾿"
+        - "show_PsiliOrDasiaAndVaria show_PsiliOrDasiaAndOxia show_PsiliOrDasia show_BariaOrPerispomeni show_Oxia show_base"
+        - "--- show_PsiliOrDasiaAndPerispomeni show_psiliordasiaandperispomeni --- --- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    oxia:
+        - "Mic Paste Emoji Hide"
+        - "ά έ ή ί ϊ ΐ ό ύ ϋ ώ"
+        - "show_Oxia -- ᾳ ᾴ ῃ ῄ ῳ ῴ show_base"
+        - "Ϗ ϐ ϑ ϗ ϖ ΰ ϕ – — BackSpace"
+        - "show_numbers preferences space « » Return"
+    Oxia:
+        - "Mic Paste Emoji Hide"
+        - "Ά Έ Ή Ί Ϊ Ό Ύ Ϋ Ώ --"
+        - "show_oxia -- -- ᾼ ῌ ῼ -- -- show_base"
+        - "Ϗ ϐ ϑ ϗ ϖ -- ϕ – — BackSpace"
+        - "show_numbers preferences space « » Return"
+    bariaorperispomeni:
+        - "Mic Paste Emoji Hide"
+        - "ὰ ὲ ὴ ὶ ῒ ὸ ὺ ὼ ῐ ῑ"
+        - "show_BariaOrPerispomeni ᾳ ᾲ ῃ ῂ ῳ ῲ ῠ show_base"
+        - "ᾶ ᾷ ῆ ῖ ῗ ῦ ῧ ῶ ῡ BackSpace"
+        - "show_numbers preferences space ῇ ῷ Return"
+    BariaOrPerispomeni:
+        - "Mic Paste Emoji Hide"
+        - "-- Ὰ Ὲ Ὴ Ὶ Ὸ Ὺ Ὼ -- --"
+        - "show_bariaorperispomeni -- -- ᾼ ῌ ῼ -- -- show_base"
+        - "--- -- -- -- -- -- -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    psiliordasia:
+        - "Mic Paste Emoji Hide"
+        - "ἀ ἐ ἠ ἰ ὀ ὐ ὠ ᾀ ᾐ ᾠ"
+        - "show_PsiliOrDasia ἁ ἑ ἡ ἱ ὁ ὑ ὡ show_base"
+        - "--- ᾁ ᾑ ᾡ ῤ ῥ -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    PsiliOrDasia:
+        - "Mic Paste Emoji Hide"
+        - "Ἀ Ἐ Ἠ Ἰ Ὀ Ὠ ᾈ ᾘ ᾨ --"
+        - "show_psiliordasia Ἁ Ἑ Ἡ Ἱ Ὁ Ὑ Ὡ show_base"
+        - "--- -- ᾉ ᾙ ᾩ Ῥ -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    psiliordasiaandoxia:
+        - "Mic Paste Emoji Hide"
+        - "ἄ ἔ ἤ ἴ ὄ ὔ ὤ ᾄ ᾔ ᾤ"
+        - "show_PsiliOrDasiaAndOxia ἅ ἕ ἥ ἵ ὅ ὕ ὥ show_base"
+        - "--- -- ᾅ ᾕ ᾥ -- -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    PsiliOrDasiaAndOxia:
+        - "Mic Paste Emoji Hide"
+        - "Ἄ Ἔ Ἤ Ἴ Ὄ Ὤ ᾌ ᾜ ᾬ --"
+        - "show_psiliordasiaandoxia Ἅ Ἕ Ἥ Ἵ Ὅ Ὕ Ὥ show_base"
+        - "--- -- ᾍ ᾝ ᾭ -- -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    psiliordasiaandvaria:
+        - "Mic Paste Emoji Hide"
+        - "ἂ ἒ ἢ ἲ ὂ ὒ ὢ ᾂ ᾒ ᾢ"
+        - "show_PsiliOrDasiaAndVaria ἃ ἓ ἣ ἳ ὃ ὓ ὣ show_base"
+        - "--- -- ᾃ ᾓ ᾣ -- -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    PsiliOrDasiaAndVaria:
+        - "Mic Paste Emoji Hide"
+        - "Ἂ Ἒ Ἢ Ἲ Ὂ Ὢ ᾊ ᾚ ᾪ --"
+        - "show_psiliordasiaandvaria Ἃ Ἓ Ἣ Ἳ Ὃ Ὓ Ὣ show_base"
+        - "--- -- ᾋ ᾛ ᾫ -- -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    psiliordasiaandperispomeni:
+        - "Mic Paste Emoji Hide"
+        - "-- ἆ ἦ ἶ ὖ ὦ ᾆ ᾖ ᾦ --"
+        - "show_PsiliOrDasiaAndPerispomeni -- ἇ ἧ ἷ ὗ ὧ -- show_base"
+        - "--- -- ᾇ ᾗ ᾧ -- -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    PsiliOrDasiaAndPerispomeni:
+        - "Mic Paste Emoji Hide"
+        - "-- Ἆ Ἦ Ἶ Ὦ ᾎ ᾞ ᾮ -- --"
+        - "show_psiliordasiaandperispomeni -- Ἇ Ἧ Ἷ Ὗ Ὧ -- show_base"
+        - "--- -- ᾏ ᾟ ᾯ -- -- -- BackSpace"
+        - "show_numbers preferences space-spaceline-2 Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "@ # $ % & - _ + ( )"
+        - "show_symbols ,-subtle-highlight \" ' : ; ! ? BackSpace"
+        - "show_letters preferences space . ,-subtle-highlight Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "~ ` | · √ π τ ÷ × ¶"
+        - "© ® £ € ¥ ^ ° * { }"
+        - "show_numbers \\ / < > = [ ] BackSpace"
+        - "show_letters preferences space . ,-subtle-highlight Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view-2"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_oxia:
+        action:
+            set_view: "oxia"
+        outline: "character-group"
+        label: "´ ΅"
+    show_Oxia:
+        action:
+            set_view: "Oxia"
+        outline: "character-group"
+        label: "´¨↑"
+    show_bariaorperispomeni:
+        action:
+            set_view: "bariaorperispomeni"
+        outline: "character-group"
+        label: "` ῀"
+    show_BariaOrPerispomeni:
+        action:
+            set_view: "BariaOrPerispomeni"
+        outline: "character-group"
+        label: "`῀↑"
+    show_psiliordasia:
+        action:
+            set_view: "psiliordasia"
+        outline: "character-group"
+        label: "᾿ ῾"
+    show_PsiliOrDasia:
+        action:
+            set_view: "PsiliOrDasia"
+        outline: "character-group"
+        label: "᾿῾↑"
+    show_psiliordasiaandoxia:
+        action:
+            set_view: "psiliordasiaandoxia"
+        outline: "character-group"
+        label: "῎ ῞"
+    show_PsiliOrDasiaAndOxia:
+        action:
+            set_view: "PsiliOrDasiaAndOxia"
+        outline: "character-group"
+        label: "῎῞↑"
+    show_psiliordasiaandvaria:
+        action:
+            set_view: "psiliordasiaandvaria"
+        outline: "character-group"
+        label: "῍ ῝"
+    show_PsiliOrDasiaAndVaria:
+        action:
+            set_view: "PsiliOrDasiaAndVaria"
+        outline: "character-group"
+        label: "῍῝↑"
+    show_psiliordasiaandperispomeni:
+        action:
+            set_view: "psiliordasiaandperispomeni"
+        outline: "character-group"
+        label: "῏ ῟"
+    show_PsiliOrDasiaAndPerispomeni:
+        action:
+            set_view: "PsiliOrDasiaAndPerispomeni"
+        outline: "character-group"
+        label: "῏῟↑"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ΑΒΓ"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view-2"
+        label: "*/="
+    show_accents:
+        action:
+            locking:
+                lock_view: "accents"
+                unlock_view: "base"
+        outline: "change-view"
+        label: "ᾦ"
+    show_base:
+        action:
+            set_view: "base"
+        outline: "change-view"
+        label: "αι"
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    .:
+        outline: "subtle-highlight"
+    ·-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "·"
+    ",-subtle-highlight":
+        outline: "subtle-highlight"
+        text: ","
+    ":":
+        outline: "subtle-highlight"
+    ;:
+        outline: "subtle-highlight"
+    "!":
+        outline: "subtle-highlight"
+    «:
+        outline: "subtle-highlight"
+    »:
+        outline: "subtle-highlight"
+    €:
+        outline: "subtle-highlight"
+    space-spaceline-2:
+        outline: "spaceline-2"
+        text: " "
+    --:
+        outline: "placeholder"
+        text: ""
+    ---:
+        outline: "placeholder-2"
+        text: ""
+    ᾿:
+        outline: "large"
+    π-fill:
+        outline: "fill"
+        text: "π"
+    Π:
+        outline: "fill"
+    0:
+        outline: "fill"
+    ):
+        outline: "fill"
+    ¶:
+        outline: "fill"
+    "}":
+        outline: "fill"
+    ώ:
+        outline: "fill"
+    ῑ:
+        outline: "fill"
+    ᾠ:
+        outline: "fill"
+    ᾤ:
+        outline: "fill"
+    ᾢ:
+        outline: "fill"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"

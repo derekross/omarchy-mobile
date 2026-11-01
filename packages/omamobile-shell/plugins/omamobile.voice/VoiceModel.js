@@ -16,9 +16,11 @@ var VOXTYPE = "voxtype"
 // 60); the bar counts down to it.
 var MAX_SECONDS = 60
 // The model is the daemon's ([whisper] model): Voxtype ignores a
-// per-recording --model it hasn't prepared ("not in available models"), so
-// omamobile-setup-user switches the user's config to tiny.en once it is
-// downloaded (3.9 s for 10 s of speech on the Pixel 7 Pro, base.en 8.8 s).
+// per-recording --model it hasn't prepared ("not in available models").
+// Since 0.2.63 that is Omarchy's base.en, with omamobile-setup-user cutting
+// Whisper's context to the clip: 12 s of speech in about 2.2 s on the Pixel
+// 7 Pro (tiny.en 1.0 s). The live preview runs tiny.en on its own
+// (omamobile-voice-preview).
 // The transcript, in the runtime directory (tmpfs, the user's own, gone at
 // logout).
 var TRANSCRIPT_NAME = "omamobile-voice.txt"
@@ -61,15 +63,23 @@ function voxState(text) {
 //
 // Returns { phase, read }: read is true when the bar's recording has ended
 // and its transcript is to be read now.
+//
+// delivered: the words have gone where the chip said, and the bar shows them
+// for a moment (DELIVERED_MS) in the preview's place before it closes.
 function step(phase, mine, vox) {
-  if (!mine) return { phase: phase === "result" || phase === "error" ? phase : "idle", read: false }
+  var stays = phase === "result" || phase === "error" || phase === "delivered"
+  if (!mine) return { phase: stays ? phase : "idle", read: false }
   if (vox === "recording" || vox === "streaming") return { phase: "listening", read: false }
   if (vox === "transcribing") return { phase: "transcribing", read: false }
-  // Idle. The result and the error stay until the user leaves them, and a
-  // start that hasn't reached the daemon yet stays starting.
-  if (phase === "result" || phase === "error" || phase === "starting" || phase === "idle") return { phase: phase, read: false }
+  // Idle. The result, the error and the delivered words stay until the user
+  // (or the delivered timer) leaves them, and a start that hasn't reached
+  // the daemon yet stays starting.
+  if (stays || phase === "starting" || phase === "idle") return { phase: phase, read: false }
   return { phase: "transcribing", read: true }
 }
+
+// How long the delivered words stay in the bar before it closes.
+var DELIVERED_MS = 900
 
 // Voxtype's transcript, tidied: one paragraph, no surrounding space.
 function cleanTranscript(text) {
@@ -178,15 +188,63 @@ function deliveryArgv(dest, text) {
 
 // After the transcript is read: the next phase and what to run. ask goes
 // to the result step (or straight to the agent with the check off), the
-// rest deliver at once and the bar closes.
+// rest deliver at once; the bar shows the final words for a moment in the
+// preview's place (delivered), then closes.
 function afterRead(dest, text, confirmAsk) {
   var t = cleanTranscript(text)
   if (!t) return { phase: "error", text: "", error: NOTHING_HEARD, argv: null, send: false }
   if (dest === "ask") {
-    if (confirmAsk === false) return { phase: "idle", text: t, error: "", argv: null, send: true }
+    if (confirmAsk === false) return { phase: "delivered", text: t, error: "", argv: null, send: true }
     return { phase: "result", text: t, error: "", argv: null, send: false }
   }
-  return { phase: "idle", text: t, error: "", argv: deliveryArgv(dest, t), send: false }
+  return { phase: "delivered", text: t, error: "", argv: deliveryArgv(dest, t), send: false }
+}
+
+// ---------------------------------------------------------------- live preview
+
+// omamobile-voice-preview: a second capture of the microphone, transcribed
+// in chunks with tiny.en while Voxtype records (Voxtype 1.1.1 has no way to
+// hand its own partial text to the shell). One JSON line per pass.
+var PREVIEW_ARGV = ["omamobile-voice-preview"]
+
+// One line of the preview: { text } for a pass, { status } when it can't
+// run (no-model, no-voxtype, no-audio), else null.
+function parsePartial(line) {
+  var o = null
+  try { o = JSON.parse(String(line || "")) } catch (e) { return null }
+  if (!o || typeof o !== "object") return null
+  if (typeof o.text === "string") return { text: cleanTranscript(o.text) }
+  if (typeof o.status === "string") return { status: o.status }
+  return null
+}
+
+// The end of a long preview: the bar has room for two lines, and the newest
+// words matter. Cut at a word, with an ellipsis in front.
+function partialTail(text, maxChars) {
+  var t = cleanTranscript(text)
+  var max = Math.max(8, Number(maxChars) || 90)
+  if (t.length <= max) return t
+  var tail = t.slice(t.length - max)
+  var space = tail.indexOf(" ")
+  if (space >= 0 && space < tail.length - 1) tail = tail.slice(space + 1)
+  return "…" + tail
+}
+
+// Does the preview run? While the bar's own recording listens, with the
+// setting on.
+function previewRuns(phase, mine, livePreview) {
+  return !!mine && phase === "listening" && livePreview !== false
+}
+
+// The bar's text line between the meter and the buttons: the preview while
+// listening and transcribing (muted), the delivered words for their moment
+// (final); nothing otherwise (the check before Ask has its own editable
+// text).
+function liveLine(phase, partial, finalText) {
+  if (phase === "delivered") return { text: cleanTranscript(finalText), final: true }
+  if (phase === "starting" || phase === "listening" || phase === "transcribing")
+    return { text: cleanTranscript(partial), final: false }
+  return { text: "", final: false }
 }
 
 // The result step's warning: Omarchy starts every agent unattended (Claude
@@ -278,18 +336,19 @@ function themeWarning(colorsToml) {
 // ---------------------------------------------------------------- settings
 
 // The voice settings, in ~/.config/omamobile/voice.json (as
-// quicksettings.json and home.json). The bar has one way in, so only two
-// switches are left: Power + Volume Up (off until the user turns it on)
-// and the check before a new prompt goes to the agent. Keys from earlier
-// versions (holdPill, micKey, agentMic, agentSubmit, sayToSend) are
-// dropped on the next write.
+// quicksettings.json and home.json): Power + Volume Up (off until the user
+// turns it on), the check before a new prompt goes to the agent, and the
+// live preview (0.2.63, on; a file without the key gets the default). Keys
+// from earlier versions (holdPill, micKey, agentMic, agentSubmit,
+// sayToSend) are dropped on the next write.
 var SETTINGS_VERSION = 3
 var DEFAULT_SETTINGS = {
   version: SETTINGS_VERSION,
   powerVolumeUp: false,
-  confirmSend: true
+  confirmSend: true,
+  livePreview: true
 }
-var SETTING_KEYS = ["powerVolumeUp", "confirmSend"]
+var SETTING_KEYS = ["powerVolumeUp", "confirmSend", "livePreview"]
 
 function defaultSettings() {
   var out = {}
@@ -327,7 +386,7 @@ function serializeSettings(settings) {
 // their download sizes.
 var MODELS = [
   { id: "tiny.en", name: "Fast", detail: "tiny", size: "75 MB", note: "quickest, rougher" },
-  { id: "base.en", name: "Balanced", detail: "base", size: "142 MB", note: "Omarchy's default" },
+  { id: "base.en", name: "Balanced", detail: "base", size: "142 MB", note: "the default" },
   { id: "small.en", name: "Accurate", detail: "small", size: "466 MB", note: "slower" }
 ]
 
@@ -425,6 +484,7 @@ if (typeof module !== "undefined") {
     withSetting: withSetting, serializeSettings: serializeSettings, MODELS: MODELS, modelFile: modelFile,
     configModel: configModel, installedModels: installedModels, modelRows: modelRows,
     downloadArgv: downloadArgv, switchArgv: switchArgv, parseProgress: parseProgress,
-    HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks
+    HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks, DELIVERED_MS: DELIVERED_MS, PREVIEW_ARGV: PREVIEW_ARGV,
+    parsePartial: parsePartial, partialTail: partialTail, previewRuns: previewRuns, liveLine: liveLine
   }
 }

@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Generate squeekboard/keyboards/ from squeekboard's own layouts: each one
+with the action row (Mic, Paste, Emoji, Hide) on top of every view.
+
+    squeekboard/generate UPSTREAM_KEYBOARDS_DIR   write keyboards/
+    squeekboard/generate --check                  each generated file is
+                                                  what the generator makes
+                                                  of its own upstream part
+
+UPSTREAM_KEYBOARDS_DIR is data/keyboards/ of squeekboard 1.43.1 (tag
+v1.43.1, https://gitlab.gnome.org/World/Phosh/squeekboard), the version
+Arch Linux ARM ships. The upstream file is kept byte for byte; the
+generator only adds lines: a header, four outlines, the row at the top of
+each view and four buttons. --check takes those lines out again, runs the
+generator on what is left and compares, so the upstream copies need not be
+in this repository. test/all runs --check.
+
+The row is as wide as the layout's widest row (squeekboard centres
+narrower rows): Mic and Paste 30 % each, Emoji and Hide 20 % each, and 10/13
+of the letter keys' height. terminal/us.yaml is ours by hand (it adds a
+terminal row as well) and is left alone. The emoji, number and PIN layouts
+get no row: the emoji list has its own keys, and a PIN pad (the lock
+screen) must not start the microphone.
+
+Needs PyYAML."""
+
+import os
+import re
+import sys
+
+import yaml
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "keyboards")
+VERSION = "1.43.1"
+ACTION_ROW = "Mic Paste Emoji Hide"
+# (name, outline, share of the row, keysym, label)
+KEYS = [
+    ("Mic", "mic", 0.3, "XF86Dictate", "\U000f036c Mic"),
+    ("Paste", "paste", 0.3, "XF86Paste", "\U000f0192 Paste"),
+    ("Emoji", "emoji", 0.2, "XF86EmojiPicker", "\U000f0785 Emoji"),
+    ("Hide", "hide", 0.2, "XF86Keyboard", "\U000f030f Hide"),
+]
+BUTTONS_COMMENT = "# The action row (hypr/phone.lua binds the keysyms)"
+HEADER_END = "# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/."
+HAND_MADE = {"terminal/us.yaml", "terminal/us_wide.yaml"}
+SKIP_DIRS = {"emoji", "number", "pin"}
+
+
+def wanted(rel):
+    return rel.endswith(".yaml") and rel not in HAND_MADE and rel.split("/")[0] not in SKIP_DIRS
+
+
+def num(x):
+    s = "%.3f" % x
+    return s.rstrip("0").rstrip(".")
+
+
+def widest_row(data):
+    outlines = data["outlines"]
+    buttons = data.get("buttons") or {}
+    best = 0.0
+    for rows in data["views"].values():
+        for row in rows:
+            total = 0.0
+            for key in row.split():
+                outline = (buttons.get(key) or {}).get("outline", "default")
+                total += outlines.get(outline, outlines["default"])["width"]
+            best = max(best, total)
+    return round(best, 3)
+
+
+def block(lines, name):
+    """The index of the top-level `name:` line and of the last indented,
+    non-blank line under it, and that block's child indentation."""
+    start = lines.index(name + ":")
+    last, indent = start, None
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        # blank lines and comments (some layouts comment in column 0
+        # inside a block) don't end it
+        if line.strip() == "" or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            break
+        last = i
+        if indent is None:
+            indent = len(line) - len(line.lstrip())
+    return start, last, indent
+
+
+def generate(upstream, rel):
+    data = yaml.safe_load(upstream)
+    width = widest_row(data)
+    height = round(data["outlines"]["default"]["height"] * 10 / 13)
+    lines = upstream.split("\n")
+    shares = {k[1]: num(width * k[2]) for k in KEYS}
+
+    # outlines, after the last one, "{" in the same column
+    start, last, indent = block(lines, "outlines")
+    first = lines[start + 1]
+    column = first.index("{") if "{" in first else indent + 15
+    new = []
+    for _, outline, _, _, _ in KEYS:
+        head = " " * indent + outline + ":"
+        new.append(head.ljust(max(column, len(head) + 1)) + "{ width: %s, height: %d }" % (shares[outline], height))
+    lines[last + 1:last + 1] = new
+
+    # the row at the top of every view
+    start, last, indent = block(lines, "views")
+    view = re.compile(r"^ {%d}\S[^:]*:\s*(#.*)?$" % indent)
+    i = start + 1
+    while i <= last:
+        if view.match(lines[i]):
+            row = lines[i + 1]
+            pad = len(row) - len(row.lstrip())
+            lines.insert(i + 1, " " * pad + '- "%s"' % ACTION_ROW)
+            last += 1
+            i += 1
+        i += 1
+
+    # the buttons, at the end of the buttons block
+    start, last, indent = block(lines, "buttons")
+    pad = " " * indent
+    new = [pad + BUTTONS_COMMENT]
+    for name, outline, _, keysym, label in KEYS:
+        new += [pad + name + ":", pad * 2 + 'outline: "%s"' % outline,
+                pad * 2 + 'keysym: "%s"' % keysym, pad * 2 + 'label: "%s"' % label]
+    lines[last + 1:last + 1] = new
+
+    a, b = shares["mic"], shares["emoji"]
+    header = [
+        "# SPDX-License-Identifier: GPL-3.0-or-later",
+        "# squeekboard %s's %s (https://gitlab.gnome.org/World/Phosh/squeekboard," % (VERSION, rel),
+        "# tag v%s, GPL-3.0-or-later), with one change for Omarchy Mobile: the" % VERSION,
+        "# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua",
+        "# binds for squeekboard only) on top of every view. Made by",
+        "# squeekboard/generate (change the generator, not this file). The row",
+        "# sums to the widest row's %s: 2 x %s + 2 x %s." % (num(width), a, b),
+        HEADER_END,
+    ]
+    out = "\n".join(header + lines)
+    check = yaml.safe_load(out)
+    for vname, rows in check["views"].items():
+        assert rows[0] == ACTION_ROW and rows[1:] == data["views"][vname], (rel, vname)
+    return out
+
+
+def strip(generated):
+    """The upstream file back from a generated one."""
+    lines = generated.split("\n")
+    lines = lines[lines.index(HEADER_END) + 1:]
+    outline = re.compile(r"^\s+(%s):\s+\{ width: " % "|".join(k[1] for k in KEYS))
+    row = '- "%s"' % ACTION_ROW
+    out, skip = [], 0
+    for line in lines:
+        if skip:
+            skip -= 1
+            continue
+        if line.strip() == BUTTONS_COMMENT:
+            skip = 4 * len(KEYS)
+            continue
+        if outline.match(line) or line.strip() == row:
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def generated_files():
+    for dirpath, _, files in os.walk(OUT):
+        for f in sorted(files):
+            rel = os.path.relpath(os.path.join(dirpath, f), OUT)
+            if wanted(rel):
+                yield rel
+
+
+def main(argv):
+    if argv[1:] == ["--check"]:
+        bad = 0
+        rels = sorted(generated_files())
+        for rel in rels:
+            with open(os.path.join(OUT, rel), encoding="utf-8") as f:
+                text = f.read()
+            if generate(strip(text), rel) != text:
+                print("not ok - %s is not what squeekboard/generate makes" % rel)
+                bad += 1
+        print("%s - %d generated layouts" % ("not ok" if bad else "ok", len(rels)))
+        return 1 if bad else 0
+    if len(argv) != 2 or argv[1].startswith("-"):
+        print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 2
+    src = argv[1]
+    count = 0
+    for dirpath, _, files in os.walk(src):
+        for f in sorted(files):
+            rel = os.path.relpath(os.path.join(dirpath, f), src)
+            if not wanted(rel):
+                continue
+            with open(os.path.join(dirpath, f), encoding="utf-8") as fh:
+                text = fh.read()
+            dest = os.path.join(OUT, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(generate(text, rel))
+            count += 1
+    print("wrote %d layouts to %s" % (count, OUT))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

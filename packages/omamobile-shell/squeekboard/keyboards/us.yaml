@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # squeekboard 1.43.1's us.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
 # tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
-# action row of terminal/us.yaml on top (Mic, Paste, Emoji, Hide; XF86
-# keysyms that hypr/phone.lua binds for squeekboard only). The row sums to the
-# letter rows' 356.57: 2 x 106.971 + 2 x 71.314. Only US English is carried: other
-# languages keep squeekboard's own layouts (each is a copy to keep up to date).
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 356.57: 2 x 106.971 + 2 x 71.314.
 # omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
 # Language: English (US)
 ---

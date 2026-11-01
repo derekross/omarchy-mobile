@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's gr_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 543.564: 2 x 163.069 + 2 x 108.713.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: Greek
+# Created by Sotiris Papadopoulos, sotirios.papadopoulos@inserm.fr
+---
+outlines:
+    default:          { width: 51.768,  height: 42 }
+    fill:             { width: 77.652,  height: 42 }
+    change-view:      { width: 77.652,  height: 42 }
+    change-view-2:    { width: 103.536, height: 42 }
+    spaceline:        { width: 181.188, height: 42 }
+    special:          { width: 51.768,  height: 42 }
+    special-2:        { width: 77.652,  height: 42 }
+    special-3:        { width: 103.536, height: 42 }
+    subtle-highlight: { width: 51.768,  height: 42 }
+    mic:              { width: 163.069, height: 32 }
+    paste:            { width: 163.069, height: 32 }
+    emoji:            { width: 108.713, height: 32 }
+    hide:             { width: 108.713, height: 32 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "; ς ε ρ τ υ θ ι ο π-fill"
+        - "α σ δ φ γ η ξ κ λ show_accented"
+        - "show_upper ζ χ ψ ω β ν μ BackSpace"
+        - "show_numbers preferences space . ,-subtle-highlight Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - ": ! Ε Ρ Τ Υ Θ Ι Ο Π"
+        - "Α Σ Δ Φ Γ Η Ξ Κ Λ show_accented"
+        - "show_upper Ζ Χ Ψ Ω Β Ν Μ BackSpace"
+        - "show_numbers preferences space ·-subtle-highlight ᾿ Return"
+    accented:
+        - "Mic Paste Emoji Hide"
+        - "ά έ ή ί ϊ ΐ ό ύ ϋ ώ"
+        - "Ά Έ Ή Ί Ϊ Ό Ύ Ϋ Ώ show_accented"
+        - "Ϗ ϐ ϑ ϗ ϖ ΰ ϕ – — BackSpace"
+        - "show_numbers preferences space « » Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "@ # $ % & - _ + ( )"
+        - "show_symbols ,-subtle-highlight \" ' : ; ! ? BackSpace"
+        - "show_letters preferences space . ,-subtle-highlight Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "~ ` | · √ π τ ÷ × ¶"
+        - "© ® £ € ¥ ^ ° * { }"
+        - "show_numbers \\ / < > = [ ] BackSpace"
+        - "show_letters preferences space . ,-subtle-highlight Return"
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view-2"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ΑΒΓ"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view-2"
+        label: "*/="
+    show_accented:
+        action:
+            locking:
+                lock_view: "accented"
+                unlock_view: "base"
+        outline: "change-view"
+        label: "άΐ"
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    .:
+        outline: "subtle-highlight"
+    ·-subtle-highlight:
+        outline: "subtle-highlight"
+        text: "·"
+    ",-subtle-highlight":
+        outline: "subtle-highlight"
+        text: ","
+    ":":
+        outline: "subtle-highlight"
+    ;:
+        outline: "subtle-highlight"
+    ᾿:
+        outline: "subtle-highlight"
+    "!":
+        outline: "subtle-highlight"
+    «:
+        outline: "subtle-highlight"
+    »:
+        outline: "subtle-highlight"
+    π-fill:
+        outline: "fill"
+        text: "π"
+    Π:
+        outline: "fill"
+    ώ:
+        outline: "fill"
+    0:
+        outline: "fill"
+    ):
+        outline: "fill"
+    ¶:
+        outline: "fill"
+    "}":
+        outline: "fill"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"

@@ -1,0 +1,833 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's jp.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with one change for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 445.704: 2 x 133.711 + 2 x 89.141.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: Japanese
+---
+outlines:
+    default:       { width: 37.142, height: 52 }
+    default-2:     { width: 44.570, height: 52 }
+    change-view:   { width: 34.284, height: 52 }
+    change-view-2: { width: 66.855, height: 52 }
+    change-view-3: { width: 74.284, height: 52 }
+    placeholder:   { width: 44.570, height: 52 }
+    placeholder-2: { width: 74.284, height: 52 }
+    spaceline:     { width: 74.284, height: 52 }
+    special:       { width: 34.284, height: 52 }
+    special-2:     { width: 37.142, height: 52 }
+    special-3:     { width: 66.855, height: 52 }
+    thin:          { width: 34.284, height: 52 }
+    mic:           { width: 133.711, height: 40 }
+    paste:         { width: 133.711, height: 40 }
+    emoji:         { width: 89.141, height: 40 }
+    hide:          { width: 89.141, height: 40 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "ぬ ふ あ う え お や ゆ よ わ ほ へ"
+        - "た て い す か ん な に ら せ  ゙  ゚ "
+        - "ち と し は き く ま の り れ け む"
+        - "show_hiragana_upper つ さ そ ひ こ み も ね る め ろ BackSpace"
+        - "show_numbers show_romaji preferences fullwidth-space --- show_katakana Return"
+    hiragana_upper:
+        - "Mic Paste Emoji Hide"
+        - "ぬ ふ ぁ ぅ ぇ ぉ ゃ ゅ ょ を ほ ゑ"
+        - "た て ぃ す ヵ ん な に ら せ  ゙ 「"
+        - "ち と し ゎ き く ま の り れ ヶ 」"
+        - "show_hiragana_upper っ さ そ ゐ こ み も 、 。 ・ ー BackSpace"
+        - "show_numbers show_romaji preferences fullwidth-space --- show_katakana Return"
+    katakana:
+        - "Mic Paste Emoji Hide"
+        - "ヌ フ ア ウ エ オ ヤ ユ ヨ ワ ホ ヘ"
+        - "タ テ イ ス カ ン ナ ニ ラ セ  ゙  ゚ "
+        - "チ ト シ ハ キ ク マ ノ リ レ ケ ム"
+        - "show_katakana_upper ツ サ ソ ヒ コ ミ モ ネ ル メ ロ BackSpace"
+        - "show_numbers show_romaji preferences fullwidth-space katakana_width_toggle_half show_hiragana Return"
+    katakana_upper:
+        - "Mic Paste Emoji Hide"
+        - "ヌ フ ァ ゥ ェ ォ ャ ュ ョ ヲ ホ ヱ"
+        - "タ テ ィ ス ヵ ン ナ ニ ラ セ  ゙ 「"
+        - "チ ト シ ハ キ ク マ ノ リ レ ケ 」"
+        - "show_katakana_upper ッ サ ソ ヰ コ ミ モ 、 。 ・ ー BackSpace"
+        - "show_numbers show_romaji preferences fullwidth-space katakana_width_toggle_half show_hiragana Return"
+    katakana_halfwidth:
+        - "Mic Paste Emoji Hide"
+        - "ﾇ ﾌ ｱ ｳ ｴ ｵ ﾔ ﾕ ﾖ ﾜ ﾎ ﾍ"
+        - "ﾀ ﾃ ｲ ｽ ｶ ﾝ ﾅ ﾆ ﾗ ｾ  ゙  ゚ "
+        - "ﾁ ﾄ ｼ ﾊ ｷ ｸ ﾏ ﾉ ﾘ ﾚ ｹ ﾑ"
+        - "show_katakana_halfwidth_upper ﾂ ｻ ｿ ﾋ ｺ ﾐ ﾓ ﾈ ﾙ ﾒ ﾛ BackSpace"
+        - "show_numbers show_romaji preferences space katakana_halfwidth_width_toggle_full show_hiragana Return"
+    katakana_halfwidth_upper:
+        - "Mic Paste Emoji Hide"
+        - "ﾇ ﾌ ｧ ｩ ｪ ｫ ｬ ｭ ｮ ｦ ｪ ﾍ"
+        - "ﾀ ﾃ ｨ ｽ ｶ ﾝ ﾅ ﾆ ﾗ ｾ  ゙ ｢"
+        - "ﾁ ﾄ ｼ ﾜ ｷ ｸ ﾏ ﾉ ﾘ ﾚ ｹ ｣"
+        - "show_katakana_halfwidth_upper ｯ ｻ ｿ ﾋ ｺ ﾐ ﾓ ､ ｡ ･ ｰ BackSpace"
+        - "show_numbers show_romaji preferences space katakana_halfwidth_width_toggle_full show_hiragana Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - " … -- -- -- -- -- -- -- ² ³"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "@ # ¥ % & - _ + ( )"
+        - "show_symbols ; \" ' : = < > BackSpace-wide"
+        - "show_hiragana show_romaji preferences space numbers_width_toggle_full , . Return"
+    numbers_fullwidth:
+        - "Mic Paste Emoji Hide"
+        - "゠ -- -- -- -- -- -- -- -- --"
+        - "１ ２ ３ ４ ５ ６ ７ ８ ９ ０"
+        - "＠ ＃ ￥ ％ ＆ － ＿ ＋ （ ）"
+        - "show_symbols_fullwidth ； ＂ ＇ ： ＝ ＜ ＞ BackSpace-wide"
+        - "show_hiragana show_romaji_fullwidth preferences fullwidth-space numbers_fullwidth_width_toggle_half ， ． Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "ヽ ♪ -- -- -- -- -- ヿ 【 】"
+        - "~ ` ´ | · √ µ ÷ × ¶"
+        - "© ® £ $ € ^ ° * { }"
+        - "show_numbers_from_symbols \\ / § π τ [ ] BackSpace-wide"
+        - "show_hiragana show_romaji preferences space symbols_width_toggle_full ! ? Return"
+    symbols_fullwidth:
+        - "Mic Paste Emoji Hide"
+        - "￣ ￤ -- -- -- -- -- ￢ ｟ ｠"
+        - "～ ｀ -- ｜ -- -- -- -- -- --"
+        - "-- -- ￡ ＄ -- ＾ -- ＊ ｛ ｝"
+        - "show_numbers_fullwidth_from_symbols ＼ ／ -- -- -- ［ ］ BackSpace-wide"
+        - "show_hiragana show_romaji_fullwidth preferences fullwidth-space symbols_fullwidth_width_toggle_half ！ ？ Return"
+    romaji:
+        - "Mic Paste Emoji Hide"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "q w e r t y u i o p"
+        - "a s d f g h j k l --"
+        - "show_romaji_upper z x c v b n m BackSpace-wide"
+        - "show_numbers show_hiragana preferences space romaji_width_toggle_full , . Return"
+    romaji_upper:
+        - "Mic Paste Emoji Hide"
+        - "1 2 3 4 5 6 7 8 9 0"
+        - "Q W E R T Y U I O P"
+        - "A S D F G H J K L --"
+        - "show_romaji_upper Z X C V B N M BackSpace-wide"
+        - "show_numbers show_hiragana preferences space romaji_width_toggle_full ! ? Return"
+    romaji_fullwidth:
+        - "Mic Paste Emoji Hide"
+        - "１ ２ ３ ４ ５ ６ ７ ８ ９ ０"
+        - "ｑ ｗ ｅ ｒ ｔ ｙ ｕ ｉ ｏ ｐ"
+        - "ａ ｓ ｄ ｆ ｇ ｈ ｊ ｋ ｌ --"
+        - "show_romaji_fullwidth_upper ｚ ｘ ｃ ｖ ｂ ｎ ｍ BackSpace-wide"
+        - "show_numbers_fullwidth show_hiragana preferences fullwidth-space romaji_fullwidth_width_toggle_half ， ． Return"
+    romaji_fullwidth_upper:
+        - "Mic Paste Emoji Hide"
+        - "１ ２ ３ ４ ５ ６ ７ ８ ９ ０"
+        - "Ｑ Ｗ Ｅ Ｒ Ｔ Ｙ Ｕ Ｉ Ｏ Ｐ"
+        - "Ａ Ｓ Ｄ Ｆ Ｇ Ｈ Ｊ Ｋ Ｌ --"
+        - "show_romaji_fullwidth_upper Ｚ Ｘ Ｃ Ｖ Ｂ Ｎ Ｍ BackSpace-wide"
+        - "show_numbers_fullwidth show_hiragana preferences fullwidth-space romaji_fullwidth_width_toggle_half ！ ？ Return"
+
+
+#              k       s       t       n       h       m       y       r       w
+#a 	あア 	かカ 	さサ 	たタ 	なナ 	はハ 	まマ 	やヤ	らラ 	わワ
+#i 	いイ 	きキ 	しシ 	ちチ 	にニ 	ひヒ 	みミ 	※	りリ 	ゐヰ
+#u 	うウ 	くク 	すス 	つツ 	ぬヌ 	ふフ 	むム 	ゆユ	るル 	※
+#e 	えエ 	けケ 	せセ 	てテ 	ねネ 	へヘ 	めメ 	※	れレ 	ゑヱ
+#o 	おオ 	こコ 	そソ 	とト 	のノ 	ほホ 	もモ 	よヨ	ろロ 	をヲ
+
+#      g       z       d       b       p       n
+#a 	が ガ 	ざ ザ 	だ ダ 	ば バ 	ぱ パ	ん ン
+#i 	ぎ ギ 	じ ジ 	ぢ ヂ 	び ビ 	ぴ ピ
+#u 	ぐ グ 	ず ズ 	づ ヅ 	ぶ ブ 	ぷ プ
+#e 	げ ゲ 	ぜ ゼ 	で デ 	べ ベ 	ぺ ペ
+#o 	ご ゴ 	ぞ ゾ 	ど ド 	ぼ ボ 	ぽ ポ
+
+
+buttons:
+    BackSpace:
+        outline: "special"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    BackSpace-wide:
+        outline: "special-3"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        action: "show_prefs"
+        outline: "special-2"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-3"
+        label: "123"
+    show_numbers_from_symbols:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "123"
+    numbers_fullwidth_width_toggle_half:
+        action:
+            set_view: "numbers"
+        outline: "change-view-3"
+        label: "半／全"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view-2"
+        label: "*/="
+    symbols_fullwidth_width_toggle_half:
+        action:
+            set_view: "symbols"
+        outline: "change-view-3"
+        label: "半／全"
+    show_hiragana:
+        action:
+            set_view: "base"
+        outline: "change-view-3"
+        label: "あいう"
+    show_hiragana_upper:
+        action:
+            locking:
+                lock_view: "hiragana_upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    show_katakana:
+        action:
+            set_view: "katakana"
+        outline: "change-view-3"
+        label: "アイウ"
+    katakana_halfwidth_width_toggle_full:
+        action:
+            set_view: "katakana"
+        outline: "change-view-3"
+        label: "半／全"
+    show_katakana_upper:
+        action:
+            locking:
+                lock_view: "katakana_upper"
+                unlock_view: "katakana"
+        outline: "change-view"
+        icon: "key-shift"
+    show_romaji:
+        action:
+            set_view: "romaji"
+        outline: "change-view-3"
+        label: "ABC"
+    romaji_fullwidth_width_toggle_half:
+        action:
+            set_view: "romaji"
+        outline: "change-view-3"
+        label: "半／全"
+    show_romaji_upper:
+        action:
+            locking:
+                lock_view: "romaji_upper"
+                unlock_view: "romaji"
+        outline: "change-view-2"
+        icon: "key-shift"
+    katakana_width_toggle_half:
+        action:
+            set_view: "katakana_halfwidth"
+        outline: "change-view-3"
+        label: "半／全"
+    show_katakana_halfwidth_upper:
+        action:
+            locking:
+                lock_view: "katakana_halfwidth_upper"
+                unlock_view: "katakana_halfwidth"
+        outline: "change-view"
+        icon: "key-shift"
+    show_romaji_fullwidth:
+        action:
+            set_view: "romaji_fullwidth"
+        outline: "change-view-3"
+        label: "ＡＢＣ"
+    romaji_width_toggle_full:
+        action:
+            set_view: "romaji_fullwidth"
+        outline: "change-view-3"
+        label: "半／全"
+    show_romaji_fullwidth_upper:
+        action:
+            locking:
+                lock_view: "romaji_fullwidth_upper"
+                unlock_view: "romaji_fullwidth"
+        outline: "change-view-2"
+        icon: "key-shift"
+    show_numbers_fullwidth:
+        action:
+            set_view: "numbers_fullwidth"
+        outline: "change-view-3"
+        label: "１２３"
+    show_numbers_fullwidth_from_symbols:
+        action:
+            set_view: "numbers_fullwidth"
+        outline: "change-view-2"
+        label: "１２３"
+    numbers_width_toggle_full:
+        action:
+            set_view: "numbers_fullwidth"
+        outline: "change-view-3"
+        label: "半／全"
+    show_symbols_fullwidth:
+        action:
+            set_view: "symbols_fullwidth"
+        outline: "change-view-2"
+        label: "＊／＝"
+    symbols_width_toggle_full:
+        action:
+            set_view: "symbols_fullwidth"
+        outline: "change-view-3"
+        label: "半／全"
+    space:
+        outline: "spaceline"
+        text: " "
+        label: "␣"
+    fullwidth-space:
+        outline: "spaceline"
+        text: "　"
+        label: "␣"
+    Return:
+        outline: "special-2"
+        icon: "key-enter"
+        keysym: "Return"
+    --:
+        outline: "placeholder"
+        text: ""
+    ---:
+        outline: "placeholder-2"
+        text: ""
+    つ:
+        outline: "thin"
+    さ:
+        outline: "thin"
+    そ:
+        outline: "thin"
+    ひ:
+        outline: "thin"
+    こ:
+        outline: "thin"
+    み:
+        outline: "thin"
+    も:
+        outline: "thin"
+    ね:
+        outline: "thin"
+    る:
+        outline: "thin"
+    め:
+        outline: "thin"
+    ろ:
+        outline: "thin"
+    っ:
+        outline: "thin"
+    ゐ:
+        outline: "thin"
+    、:
+        outline: "thin"
+    。:
+        outline: "thin"
+    ・:
+        outline: "thin"
+    ー:
+        outline: "thin"
+    ツ:
+        outline: "thin"
+    サ:
+        outline: "thin"
+    ソ:
+        outline: "thin"
+    ヒ:
+        outline: "thin"
+    コ:
+        outline: "thin"
+    ミ:
+        outline: "thin"
+    モ:
+        outline: "thin"
+    ネ:
+        outline: "thin"
+    ル:
+        outline: "thin"
+    メ:
+        outline: "thin"
+    ロ:
+        outline: "thin"
+    ッ:
+        outline: "thin"
+    ﾂ:
+        outline: "thin"
+    ｻ:
+        outline: "thin"
+    ｿ:
+        outline: "thin"
+    ヰ:
+        outline: "thin"
+    ﾋ:
+        outline: "thin"
+    ｺ:
+        outline: "thin"
+    ﾐ:
+        outline: "thin"
+    ﾓ:
+        outline: "thin"
+    ﾈ:
+        outline: "thin"
+    ﾙ:
+        outline: "thin"
+    ﾒ:
+        outline: "thin"
+    ﾛ:
+        outline: "thin"
+    ｯ:
+        outline: "thin"
+    ､:
+        outline: "thin"
+    ｡:
+        outline: "thin"
+    ･:
+        outline: "thin"
+    ｰ:
+        outline: "thin"
+    …:
+        outline: "default-2"
+    1:
+        outline: "default-2"
+    2:
+        outline: "default-2"
+    3:
+        outline: "default-2"
+    4:
+        outline: "default-2"
+    5:
+        outline: "default-2"
+    6:
+        outline: "default-2"
+    7:
+        outline: "default-2"
+    8:
+        outline: "default-2"
+    9:
+        outline: "default-2"
+    0:
+        outline: "default-2"
+    ²:
+        outline: "default-2"
+    ³:
+        outline: "default-2"
+    "@":
+        outline: "default-2"
+    "#":
+        outline: "default-2"
+    ¥:
+        outline: "default-2"
+    "%":
+        outline: "default-2"
+    "&":
+        outline: "default-2"
+    -:
+        outline: "default-2"
+    _:
+        outline: "default-2"
+    +:
+        outline: "default-2"
+    (:
+        outline: "default-2"
+    ):
+        outline: "default-2"
+    ;:
+        outline: "default-2"
+    "\"":
+        outline: "default-2"
+    "'":
+        outline: "default-2"
+    ":":
+        outline: "default-2"
+    =:
+        outline: "default-2"
+    <:
+        outline: "default-2"
+    ">":
+        outline: "default-2"
+    a:
+        outline: "default-2"
+    b:
+        outline: "default-2"
+    c:
+        outline: "default-2"
+    d:
+        outline: "default-2"
+    e:
+        outline: "default-2"
+    f:
+        outline: "default-2"
+    g:
+        outline: "default-2"
+    h:
+        outline: "default-2"
+    i:
+        outline: "default-2"
+    j:
+        outline: "default-2"
+    k:
+        outline: "default-2"
+    l:
+        outline: "default-2"
+    m:
+        outline: "default-2"
+    n:
+        outline: "default-2"
+    o:
+        outline: "default-2"
+    p:
+        outline: "default-2"
+    q:
+        outline: "default-2"
+    r:
+        outline: "default-2"
+    s:
+        outline: "default-2"
+    t:
+        outline: "default-2"
+    u:
+        outline: "default-2"
+    v:
+        outline: "default-2"
+    w:
+        outline: "default-2"
+    x:
+        outline: "default-2"
+    y:
+        outline: "default-2"
+    z:
+        outline: "default-2"
+    A:
+        outline: "default-2"
+    B:
+        outline: "default-2"
+    C:
+        outline: "default-2"
+    D:
+        outline: "default-2"
+    E:
+        outline: "default-2"
+    F:
+        outline: "default-2"
+    G:
+        outline: "default-2"
+    H:
+        outline: "default-2"
+    I:
+        outline: "default-2"
+    J:
+        outline: "default-2"
+    K:
+        outline: "default-2"
+    L:
+        outline: "default-2"
+    M:
+        outline: "default-2"
+    N:
+        outline: "default-2"
+    O:
+        outline: "default-2"
+    P:
+        outline: "default-2"
+    Q:
+        outline: "default-2"
+    R:
+        outline: "default-2"
+    S:
+        outline: "default-2"
+    T:
+        outline: "default-2"
+    U:
+        outline: "default-2"
+    V:
+        outline: "default-2"
+    W:
+        outline: "default-2"
+    X:
+        outline: "default-2"
+    Y:
+        outline: "default-2"
+    Z:
+        outline: "default-2"
+    １:
+        outline: "default-2"
+    ２:
+        outline: "default-2"
+    ３:
+        outline: "default-2"
+    ４:
+        outline: "default-2"
+    ５:
+        outline: "default-2"
+    ６:
+        outline: "default-2"
+    ７:
+        outline: "default-2"
+    ８:
+        outline: "default-2"
+    ９:
+        outline: "default-2"
+    ０:
+        outline: "default-2"
+    ａ:
+        outline: "default-2"
+    ｂ:
+        outline: "default-2"
+    ｃ:
+        outline: "default-2"
+    ｄ:
+        outline: "default-2"
+    ｅ:
+        outline: "default-2"
+    ｆ:
+        outline: "default-2"
+    ｇ:
+        outline: "default-2"
+    ｈ:
+        outline: "default-2"
+    ｉ:
+        outline: "default-2"
+    ｊ:
+        outline: "default-2"
+    ｋ:
+        outline: "default-2"
+    ｌ:
+        outline: "default-2"
+    ｍ:
+        outline: "default-2"
+    ｎ:
+        outline: "default-2"
+    ｏ:
+        outline: "default-2"
+    ｐ:
+        outline: "default-2"
+    ｑ:
+        outline: "default-2"
+    ｒ:
+        outline: "default-2"
+    ｓ:
+        outline: "default-2"
+    ｔ:
+        outline: "default-2"
+    ｕ:
+        outline: "default-2"
+    ｖ:
+        outline: "default-2"
+    ｗ:
+        outline: "default-2"
+    ｘ:
+        outline: "default-2"
+    ｙ:
+        outline: "default-2"
+    ｚ:
+        outline: "default-2"
+    Ａ:
+        outline: "default-2"
+    Ｂ:
+        outline: "default-2"
+    Ｃ:
+        outline: "default-2"
+    Ｄ:
+        outline: "default-2"
+    Ｅ:
+        outline: "default-2"
+    Ｆ:
+        outline: "default-2"
+    Ｇ:
+        outline: "default-2"
+    Ｈ:
+        outline: "default-2"
+    Ｉ:
+        outline: "default-2"
+    Ｊ:
+        outline: "default-2"
+    Ｋ:
+        outline: "default-2"
+    Ｌ:
+        outline: "default-2"
+    Ｍ:
+        outline: "default-2"
+    Ｎ:
+        outline: "default-2"
+    Ｏ:
+        outline: "default-2"
+    Ｐ:
+        outline: "default-2"
+    Ｑ:
+        outline: "default-2"
+    Ｒ:
+        outline: "default-2"
+    Ｓ:
+        outline: "default-2"
+    Ｔ:
+        outline: "default-2"
+    Ｕ:
+        outline: "default-2"
+    Ｖ:
+        outline: "default-2"
+    Ｗ:
+        outline: "default-2"
+    Ｘ:
+        outline: "default-2"
+    Ｙ:
+        outline: "default-2"
+    Ｚ:
+        outline: "default-2"
+    ヽ:
+        outline: "default-2"
+    ♪:
+        outline: "default-2"
+    ヿ:
+        outline: "default-2"
+    【:
+        outline: "default-2"
+    】:
+        outline: "default-2"
+    ~:
+        outline: "default-2"
+    "`":
+        outline: "default-2"
+    ´:
+        outline: "default-2"
+    "|":
+        outline: "default-2"
+    ·:
+        outline: "default-2"
+    √:
+        outline: "default-2"
+    µ:
+        outline: "default-2"
+    ÷:
+        outline: "default-2"
+    ×:
+        outline: "default-2"
+    ¶:
+        outline: "default-2"
+    ©:
+        outline: "default-2"
+    ®:
+        outline: "default-2"
+    £:
+        outline: "default-2"
+    $:
+        outline: "default-2"
+    €:
+        outline: "default-2"
+    ^:
+        outline: "default-2"
+    °:
+        outline: "default-2"
+    "*":
+        outline: "default-2"
+    "{":
+        outline: "default-2"
+    "}":
+        outline: "default-2"
+    "\\":
+        outline: "default-2"
+    /:
+        outline: "default-2"
+    §:
+        outline: "default-2"
+    π:
+        outline: "default-2"
+    τ:
+        outline: "default-2"
+    "[":
+        outline: "default-2"
+    "]":
+        outline: "default-2"
+    ゠:
+        outline: "default-2"
+    ＠:
+        outline: "default-2"
+    ＃:
+        outline: "default-2"
+    ￥:
+        outline: "default-2"
+    ％:
+        outline: "default-2"
+    ＆:
+        outline: "default-2"
+    －:
+        outline: "default-2"
+    ＿:
+        outline: "default-2"
+    ＋:
+        outline: "default-2"
+    （:
+        outline: "default-2"
+    ）:
+        outline: "default-2"
+    ；:
+        outline: "default-2"
+    ＂:
+        outline: "default-2"
+    ＇:
+        outline: "default-2"
+    ：:
+        outline: "default-2"
+    ＝:
+        outline: "default-2"
+    ＜:
+        outline: "default-2"
+    ＞:
+        outline: "default-2"
+    ￣:
+        outline: "default-2"
+    ￤:
+        outline: "default-2"
+    ￢:
+        outline: "default-2"
+    ｟:
+        outline: "default-2"
+    ｠:
+        outline: "default-2"
+    ～:
+        outline: "default-2"
+    ｀:
+        outline: "default-2"
+    ｜:
+        outline: "default-2"
+    ￡:
+        outline: "default-2"
+    ＄:
+        outline: "default-2"
+    ＾:
+        outline: "default-2"
+    ＊:
+        outline: "default-2"
+    ｛:
+        outline: "default-2"
+    ｝:
+        outline: "default-2"
+    ＼:
+        outline: "default-2"
+    ／:
+        outline: "default-2"
+    ［:
+        outline: "default-2"
+    ］:
+        outline: "default-2"
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"

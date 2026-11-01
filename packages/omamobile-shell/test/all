@@ -420,7 +420,11 @@ if [[ $rc == 77 ]]; then
   pass "keyboard layouts # SKIP no PyYAML"
 elif [[ $rc != 0 ]]; then
   grep -v '^ok' <<<"$out" >&2; fail "keyboard layouts (test/keyboard-layouts.py)"
+else
+  # every language's layout is what squeekboard/generate makes of upstream's
+  python3 -B squeekboard/generate --check >/dev/null || { python3 -B squeekboard/generate --check | grep -v '^ok' >&2; fail "the generated layouts (squeekboard/generate --check)"; }
 fi
+grep -c 'done < <(find squeekboard/keyboards -type f -name' install >/dev/null || fail "every layout is installed"
 grep -c 'hl.device({ name = osk_device, resolve_binds_by_sym = true })' hypr/phone.lua >/dev/null || fail "squeekboard's binds resolve by keysym"
 grep -c 'local osk_device = "hl-virtual-keyboard-squeekboard"' hypr/phone.lua >/dev/null || fail "squeekboard's virtual keyboard by its Hyprland name"
 pass "the keyboard: theme stylesheet, layouts with the action row, its binds"
@@ -788,6 +792,16 @@ grep -c 'omarchy-done ensure omamobile-menu-voice' bin/omamobile-setup-user >/de
 grep -c 'o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })' hypr/phone.lua >/dev/null ||
   fail "volume up's release ends push-to-talk"
 grep -c "jq -e '.powerVolumeUp == true'" bin/omamobile-keys >/dev/null || fail "Power + Volume Up is off unless turned on"
+# The live preview (phase 3): omamobile-voice-preview against a fake voxtype,
+# run only while the bar's own recording listens, stopped when it ends, its
+# words in the theme's muted colour between the meter and the buttons.
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-voice-preview || fail "omamobile-voice-preview parses"
+python3 -B test/voice-preview.py >/dev/null || { python3 -B test/voice-preview.py | grep -v '^ok'; fail "omamobile-voice-preview"; }
+grep -c 'running: VoiceModel.previewRuns(root.phase, root.mine, root.settings.livePreview)' "$v" >/dev/null || fail "the preview runs only while the bar listens"
+awk '/objectName: "liveText"/,/Accessible.name/' "$v" | grep -c 'color: root.live.final ? root.foreground : Commons.Color.muted' >/dev/null ||
+  fail "the preview is in the theme's muted colour, the final words in the text colour"
+if grep -nE '#[0-9a-fA-F]{6}' "$v" | grep -vE '^\S+:\s*//'; then fail "Voice.qml uses theme tokens, no colours of its own"; fi
+grep -c 'voxtype record start' bin/omamobile-voice-preview >/dev/null && fail "the preview never starts a recording of its own"
 # Offscreen review shots in the OWL container only (test/voice-render).
 if [[ -n ${OMAMOBILE_VOICE_RENDER:-} ]]; then
   bash test/voice-render "$OMAMOBILE_VOICE_RENDER" >/dev/null || fail "voice bar render"
