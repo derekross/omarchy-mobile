@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up probe, never default (BATTERY-NOTES.md M2b): only CMU_PERIC1 and its
+ * sysreg, with USI11 and the bus still off. Read clk_summary afterwards;
+ * nothing consumes the USI11 gates yet.
+ */
+/dts-v1/;
+/plugin/;
+
+&cmu_peric1 {
+	status = "okay";
+};
+
+&sysreg_peric1 {
+	status = "okay";
+};
