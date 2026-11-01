@@ -521,6 +521,19 @@ with the cable in.
   sleeps with state1 off (a sleep hook can turn it off before the sleep
   and on after), their hang rate, and the drain against the short-sleep
   figures.
+
+  Our idle states match stock's: the same three `c2` states with
+  `arm,psci-suspend-param = <0x10000>` (core power-down) and stock's
+  latencies. What stock has besides them is Samsung's `exynos-cpupm`
+  node: cluster power-down per cluster (`cpd_cl0` for CPUs 0-3, `cpd_cl1`
+  for 4-6, `cpd_cl2` for 7) and `sicd` across all eight (system idle
+  clock down), which its vendor driver coordinates with the APM. Mainline
+  has no such driver, so when every CPU sits in core power-down in s2idle,
+  the firmware sees a state stock's kernel would have announced to it
+  first. That the PMIC's false events come from there is an inference,
+  not a measurement. The device package's fix for now is a sleep hook
+  that allows only WFI for the length of a sleep (`omamobile-device-tegu`
+  0.2.5, not yet run on the palmtop).
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
