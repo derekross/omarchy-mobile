@@ -11,6 +11,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 bash -n build || fail "build parses"
 bash -n install || fail "install parses"
+bash -n bin/omamobile-husky-display-start || fail "the display start parses"
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -59,6 +60,9 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/lib/modprobe.d/omamobile-husky-clk-acpm.conf \
+         usr/lib/modprobe.d/omamobile-husky-display.conf \
+         usr/lib/systemd/system/omamobile-husky-display.service \
+         usr/lib/systemd/system/display-manager.service.d/10-omamobile-husky.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
@@ -80,7 +84,20 @@ grep -q '^HandlePowerKeyLongPress=ignore$' "$power" \
   || fail "the long press stays the PMIC reset"
 grep -qE '^options clk_acpm zuma_gpu_max_khz=[0-9]+$' "$tmp/root/usr/lib/modprobe.d/omamobile-husky-clk-acpm.conf" \
   || fail "the GPU DVFS ceiling is set"
-grep -qE '^(install|blacklist) ' vendor/modprobe.d/*.conf && fail "modprobe.d only sets options"
+grep -qE '^install ' vendor/modprobe.d/*.conf && fail "an install line in modprobe.d would break the display start's modprobe"
+grep -qx 'blacklist gs_decon' "$tmp/root/usr/lib/modprobe.d/omamobile-husky-display.conf" \
+  || fail "gs_decon autoloads ahead of the display start"
+grep -qx 'options gs_decon screen_off=2' "$tmp/root/usr/lib/modprobe.d/omamobile-husky-display.conf" \
+  || fail "DPMS off leaves the panel awake, showing black frames"
+[[ $(grep -h '^blacklist ' vendor/modprobe.d/*.conf) == 'blacklist gs_decon' ]] \
+  || fail "only gs_decon is guarded"
+[[ -x $tmp/root/usr/bin/omamobile-husky-display-start ]] || fail "install stages the display start"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-display.service") == ../omamobile-husky-display.service ]] \
+  || fail "the display start is not enabled"
+grep -qx 'After=omamobile-husky-display.service' "$tmp/root/usr/lib/systemd/system/display-manager.service.d/10-omamobile-husky.conf" \
+  || fail "the display manager can start before the display driver"
+grep -qx 'ConditionPathExists=/sys/bus/platform/devices/19470000.display-controller' "$tmp/root/usr/lib/systemd/system/omamobile-husky-display.service" \
+  || fail "the display start runs (and fails) on a kernel without DECON0"
 grep -q '^PACKAGE=omamobile-device-husky$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is husky"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
@@ -89,10 +106,13 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rule, the USB link, and the mirrorlist, and nothing that marks a slot or starts hardware"
+pass "install stages the udev rule, the USB link, the mirrorlist and the display start, and nothing that marks a slot or starts the radio, the charger or a camera"
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"
+
+test/display-start || fail "test/display-start"
+pass "the display start loads gs_decon after allowing DSI commands for google-hk3 only"
 
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
