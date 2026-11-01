@@ -427,6 +427,17 @@ with the cable in.
   no ACPM timeouts. With gating on, 10-31's earlier run was also ten of ten,
   so this does not yet separate the two; the count both ways goes on until
   one side fails.
+
+  **S1 on the clock-fix kernel, 2026-11-01 (same release, the daily kernel
+  with the PERIC0 GPIO clock kept on, linux-omarchy-mobile #172).** That
+  gate hung the SoC under the modem's GPIO traffic (MODEM-PLAN G3-L1), so
+  it was a candidate for these no-wakes too. Cable in, modem never loaded,
+  NFC polling off before every cycle, UFS clock gating on (the default),
+  thirty 30-second RTC cycles planned: cycles 1-20 woke (47-80 s from
+  suspend to SSH, `suspend_stats` success 20 and fail 0, no UFS or ACPM
+  lines, wake IRQ 56 each time), and cycle 21 did not wake: no SSH 160 s
+  after the suspend, and it needed Power + Volume Up. So the clock gate is
+  not the sleep hang; one in 21 here, against about one in 40 before.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
