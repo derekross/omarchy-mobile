@@ -71,6 +71,7 @@ Priorities: **P1** broken, unsafe, or a dead end on a phone; **P2** noticeably a
 5. Web apps: per-site browser flags (3.1).
 6. Later: a gum shim that uses the shell's dmenu mode on touch (1.11).
 7. Notifications: platform phrasing. On a touch platform `omarchy-notification-send` says "Tap to" for "Click to", "Tap to edit/open" for the screenshot and recording toasts' "Super + Alt + , (or click this)", points Voxtype's "Hold F9" at the Dictation tile (1.12), and drops parenthesised or whole-line "Super + …" hints; a desktop sends what it did before. Patch 0020, omamobile-omarchy 0.1.12 (offline as above).
+8. Lock: the battery on the lock screen (the bar's glyph, which carries the bolt while charging, and the percentage), top right over the glance and the PIN view, nothing on a device without a battery. Patch 0026, omamobile-omarchy 0.1.24 (built and tested offline against Omarchy 4.0.6 under qmltestrunner; not yet checked on a phone). Charging follows the charger supply being online, as `omamobile-update` reads it, since the fuel gauge says Discharging while plugged in whenever the net current is negative. A supply read that hangs is cut by `timeout` (3 s) and a stale timer and clears the state; a blank drops the bolt so a wake never paints a stale one.
 
 ## Batch 4: landscape
 

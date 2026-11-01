@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.dirname(HERE)
@@ -383,6 +384,7 @@ def real_package(t):
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
     qml_parse(root)
     lock_glance(root)
+    lock_battery(t, root)
     app_icons_largest(root)
     lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
     launch = lib.split("  function launch(desktopId, name) {", 1)
@@ -524,6 +526,105 @@ def lock_glance(root):
     ok(p.returncode == 0, "real omarchy: the glance under qmltestrunner (0023: %s)" % (totals[-1] if totals else "no result"))
     if p.returncode != 0:
         print("\n".join(l for l in out.splitlines() if l.startswith(("FAIL", "   ", "QWARN")))[:4000])
+
+
+# Power supplies as the kernel lists them: (name, type, present, capacity,
+# status, online); "" for an attribute the supply has not got.
+SUPPLIES = {
+    # cheetah plugged in: the gauge says Discharging (net current negative), the USB charger is online
+    "phone-plugged": [("battery", "Battery", "1", "87", "Discharging", ""), ("usb", "USB", "", "", "Charging", "1")],
+    "phone-unplugged": [("battery", "Battery", "1", "87", "Discharging", ""), ("usb", "USB", "", "", "Not charging", "0")],
+    "phone-full": [("battery", "Battery", "1", "100", "Full", ""), ("usb", "USB", "", "", "", "1")],
+    "laptop": [("AC", "Mains", "", "", "", "0"), ("BAT0", "Battery", "1", "9", "Discharging", "")],
+    # a desktop: only a wireless mouse's battery, not present
+    "desktop": [("hidpp_battery_0", "Battery", "0", "50", "", "")],
+    "none": [],
+    # the odd shapes: a Mains supply with no online file says nothing about charging
+    "mains-no-online": [("AC", "Mains", "", "", "", ""), ("BAT0", "Battery", "1", "42", "Discharging", "")],
+    # a battery with no present file counts as present (omamobile-update's rule)
+    "no-present-file": [("battery", "Battery", "", "63", "Discharging", "")],
+    # the other charger types online, the gauge still saying Discharging
+    "usb-c": [("battery", "Battery", "1", "50", "Discharging", ""), ("usbc", "USB_C", "", "", "", "1")],
+    "usb-pd": [("battery", "Battery", "1", "51", "Discharging", ""), ("pd", "USB_PD", "", "", "", "1")],
+    "wireless": [("battery", "Battery", "1", "52", "Discharging", ""), ("qi", "Wireless", "", "", "", "1")],
+    # a charger that is there but offline
+    "charger-offline": [("battery", "Battery", "1", "53", "Discharging", ""), ("usbc", "USB_C", "", "", "", "0")],
+}
+WANT = {
+    "phone-plugged": (True, 87, True, False), "phone-unplugged": (True, 87, False, False),
+    "phone-full": (True, 100, True, True), "laptop": (True, 9, False, False),
+    "desktop": (False, -1, False, False), "none": (False, -1, False, False),
+    "mains-no-online": (True, 42, False, False), "no-present-file": (True, 63, False, False),
+    "usb-c": (True, 50, True, False), "usb-pd": (True, 51, True, False), "wireless": (True, 52, True, False),
+    "charger-offline": (True, 53, False, False),
+}
+
+
+def lock_battery(t, root):
+    """Patch 0026: the battery on the lock. Static checks, then the supply
+    command run against fake /sys/class/power_supply trees and its output
+    through LockBattery.parse in node: omamobile-update's rule."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    view = read(root, lock + "LockView.qml")
+    qml = read(root, lock + "LockBattery.qml") or ""
+    js = os.path.join(root, lock, "LockBattery.js")
+    ok(os.path.isfile(js) and qml and 'LockBattery {\n      objectName: "lockBattery"' in view
+       and "lit: !root.displayDark" in view and "wakeSerial: root.wakeSerial" in view,
+       "real omarchy: the lock has a battery indicator, polled only while lit (0026)")
+    ok("visible: present" in qml and "No battery" not in qml and '"/sys/class/power_supply"' in qml
+       and "running: battery.lit" in qml.split("Timer {", 1)[1].split("}", 1)[0]
+       and "UPower" not in qml and "XMLHttpRequest" not in qml,
+       "real omarchy: nothing shows without a battery, and the lock asks the kernel, not UPower (0026)")
+    argv_prefix = '["timeout", "-k", "1", "3", "bash", "-c", Battery.COMMAND, "--", "/sys/class/power_supply"]'
+    dark = qml.split("onLitChanged:", 1)[1].split("onWakeSerialChanged", 1)[0] if "onLitChanged:" in qml else ""
+    ok(argv_prefix in qml and "id: stale" in qml and "battery.clear()" in qml and "stale.restart()" in qml
+       and "charging = false" in dark and "full = false" in dark and "lockBatteryBolt" not in qml,
+       "real omarchy: a hung reading is cut and cleared, a blank drops the bolt, and the bar's glyph carries the "
+       "only bolt (0026)")
+    node = shutil.which("node")
+    if not node:
+        print("ok - real omarchy: the lock's battery rule # SKIP no node")
+        return
+    cmd = subprocess.run([node, "-e", "process.stdout.write(require(process.argv[1]).COMMAND)", js],
+                         capture_output=True, text=True).stdout
+    bad = []
+    for name, supplies in SUPPLIES.items():
+        d = os.path.join(t, "ps-" + name)
+        os.makedirs(d)
+        for s in supplies:
+            sd = os.path.join(d, s[0])
+            os.makedirs(sd)
+            for attr, value in zip(("type", "present", "capacity", "status", "online"), s[1:]):
+                if value != "":
+                    with open(os.path.join(sd, attr), "w") as f:
+                        f.write(value + "\n")
+        out = subprocess.run(["bash", "-c", cmd, "--", d], capture_output=True, text=True)
+        got = subprocess.run([node, "-e", "var m = require(process.argv[1]); var s = m.parse(process.argv[2]);"
+                              "process.stdout.write(JSON.stringify([s.present, s.percent, s.charging, s.full, "
+                              "m.icon(s.percent, s.charging, s.full)]))", js, out.stdout],
+                             capture_output=True, text=True).stdout
+        want = list(WANT[name])
+        got = json.loads(got) if got else None
+        if out.stderr or not got or got[:4] != want or (want[0] and not got[4]) or (not want[0] and got[4]):
+            bad.append((name, got, out.stderr.strip()[:80]))
+    ok(not bad, "real omarchy: the lock's battery reads the supplies as omamobile-update does, a charger online is "
+       "charging, no battery is nothing (0026)%s" % (" " + repr(bad) if bad else ""))
+    # A sysfs read that never returns (a FIFO nobody writes): the lock's argv
+    # ends it through timeout(1), non-zero, and the output so far parses to
+    # no battery.
+    d = os.path.join(t, "ps-hang", "battery")
+    os.makedirs(d)
+    os.mkfifo(os.path.join(d, "type"))
+    started = time.monotonic()
+    out = subprocess.run(["timeout", "-k", "1", "3", "bash", "-c", cmd, "--", os.path.dirname(d)],
+                         capture_output=True, text=True, timeout=20)
+    took = time.monotonic() - started
+    got = subprocess.run([node, "-e", "var s = require(process.argv[1]).parse(process.argv[2]);"
+                          "process.stdout.write(JSON.stringify([s.present, s.charging]))", js, out.stdout],
+                         capture_output=True, text=True).stdout
+    ok(out.returncode != 0 and took < 8 and got == "[false,false]",
+       "real omarchy: a hung supply read ends through timeout(1) with no battery (0026: rc %s, %.1fs)"
+       % (out.returncode, took))
 
 
 def screensaver_launcher(t, launcher):

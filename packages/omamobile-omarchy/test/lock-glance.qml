@@ -21,6 +21,12 @@ Item {
   property int wakes: 0
   property string notificationsRaw: ""
   property var view: null
+  // The kernel's power supplies as the lock's LockBattery command lists
+  // them (patch 0026): by default the phone plugged in, its gauge still
+  // saying Discharging.
+  property string supplies: "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
+  // A supply read that never comes back: the responder gives no answer.
+  property bool suppliesHang: false
 
   readonly property string home: TestEnv.HOME
   readonly property double minute: 60 * 1000
@@ -120,6 +126,8 @@ Item {
       harness.submitted = []
       harness.wakes = 0
       harness.notificationsRaw = ""
+      harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
+      harness.suppliesHang = false
       Quickshell.vars = { HOME: harness.home }
       Quickshell.started = []
       Quickshell.responder = function(argv) {
@@ -134,6 +142,7 @@ Item {
           }).join("\n") + "\n"
           return ""
         }
+        if (cmd.indexOf("/sys/class/power_supply") >= 0) return harness.suppliesHang ? null : harness.supplies
         return cmd.indexOf("/.local/state/omarchy/notifications/") >= 0 ? harness.notificationsRaw : null
       }
       writeFile(".local/state/omarchy/toggles/lock-hide-notification-text", "")
@@ -651,6 +660,69 @@ Item {
       compare(one("lockPinClock").visible, false)
       compare(one("lockEmergencyCall").visible, false)
       verify(findAll(harness.view, function(i) { return i.visible && String(i.text) === "Enter Password" }).length > 0)
+    }
+
+    // Patch 0026: the battery, top right, over the glance and the PIN view
+    // alike. A charger online is charging, whatever the gauge says; the bar's
+    // glyph carries the bolt (87%: 󰂋 charging, 󰂂 not), there is no second one.
+    function test_battery_on_both_views() {
+      var battery = one("lockBattery")
+      tryVerify(function() { return battery.visible }, 2000)
+      compare(one("lockBatteryPercent").text, "87%")
+      compare(one("lockBatteryIcon").text, "󰂋", "the glyph's bolt follows the charger, not the gauge")
+      compare(byName("lockBatteryBolt").length, 0, "no second bolt beside the glyph, as the bar")
+      verify(battery.x > harness.width / 2 && battery.x + battery.width <= harness.width, "top right")
+      verify(battery.y >= 0 && battery.y + battery.height <= one("lockGlanceTime").mapToItem(harness.view, 0, 0).y,
+             "above the glance's clock")
+      toPin()
+      verify(battery.visible)
+      blank()
+      // Dark: the bolt goes at once, the level stays, so a wake never paints a stale bolt.
+      compare(one("lockBatteryIcon").text, "󰂂")
+      compare(one("lockBatteryPercent").text, "87%")
+      harness.supplies = "Battery\t1\t86\tDischarging\t\nUSB\t\t\tNot charging\t0\n"
+      show()
+      tryCompare(one("lockBatteryPercent"), "text", "86%")
+      compare(one("lockBatteryIcon").text, "󰂂")
+    }
+
+    // Unplugged while the display stays lit: the next reading drops the bolt.
+    function test_unplug_while_lit() {
+      tryCompare(one("lockBatteryIcon"), "text", "󰂋")
+      harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tNot charging\t0\n"
+      one("lockBattery").refresh()
+      tryCompare(one("lockBatteryIcon"), "text", "󰂂")
+      compare(one("lockBatteryPercent").text, "87%")
+      harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
+      one("lockBattery").refresh()
+      tryCompare(one("lockBatteryIcon"), "text", "󰂋")
+    }
+
+    // A reading that never comes back is not left up: the stale timer clears
+    // it, and the next reading that does answer brings it back.
+    function test_hung_reading_clears() {
+      var battery = one("lockBattery")
+      tryVerify(function() { return battery.visible }, 2000)
+      harness.suppliesHang = true
+      battery.refresh()
+      wait(1000)
+      verify(battery.visible, "the last reading stays up for a while")
+      tryCompare(battery, "visible", false, 6000)
+      harness.suppliesHang = false
+      battery.refresh()
+      tryVerify(function() { return battery.visible }, 2000)
+      compare(one("lockBatteryPercent").text, "87%")
+    }
+
+    function test_no_battery_shows_nothing() {
+      // a desktop with a wireless mouse: a Battery supply, not present
+      harness.supplies = "Battery\t0\t50\t\t\n"
+      show()
+      tryCompare(one("lockBattery"), "visible", false)
+      compare(findAll(harness.view, function(i) { return i.visible && String(i.text) === "No battery" }).length, 0)
+      harness.view.keypad = false
+      settle()
+      compare(one("lockBattery").visible, false)
     }
   }
 }

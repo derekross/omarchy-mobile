@@ -1,0 +1,224 @@
+# Lock: the battery on the lock screen, top right, as the phone's status bar
+# shows it: the bar's Nerd Font battery glyph at the level (the glyph carries
+# a bolt while charging, a plug when full, exactly as the bar's does; no
+# second bolt) and the percentage. On every omamobile device with a battery,
+# over the glance view and the PIN view alike; a device with no battery (a
+# desktop test box) shows nothing, never "No battery".
+#
+# Read from the kernel's power supplies with omamobile-update's rule
+# (LockBattery.js): a present Battery gives the percentage; charging is any
+# charger supply (Mains, USB, USB_C, USB_PD, Wireless) online, or a battery
+# whose status is Charging or Full. The charger's online flag is the signal
+# that holds: the fuel gauge says Discharging whenever the net current is
+# negative, even with the charger plugged in, and UPower's OnBattery follows
+# the battery's state, so the bar's `!UPower.onBattery` can miss it (and
+# Quickshell's UPower exposes no line-power Online to ask instead). One
+# bash process every 15 s while the display is lit, one at each wake, none
+# while it is dark. A reading that hangs is cut by timeout(1) and a 4 s
+# stale timer, and clears the state; the bolt is dropped when the display
+# goes dark so a wake never paints a stale one before its own reading.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014, 0023.
+diff --git i/shell/plugins/lock/LockBattery.js w/shell/plugins/lock/LockBattery.js
+new file mode 100644
+--- /dev/null
++++ w/shell/plugins/lock/LockBattery.js
+@@ -0,0 +1,51 @@
++// The lock's battery reading, from the kernel's power supplies
++// (/sys/class/power_supply), with omamobile-update's rule: a battery that
++// is present gives the percentage; charging is any charger supply (Mains,
++// USB, USB_C, USB_PD, Wireless) online, or a battery whose status is
++// Charging or Full. The charger's online flag is the truthful signal: a
++// fuel gauge reports Discharging whenever the net current is negative, even
++// with the charger plugged in.
++
++// One line per supply: type, present, capacity, status, online, tab-separated.
++var COMMAND = "shopt -s nullglob; for d in \"$1\"/*/; do t= p= c= s= o=; " +
++  "read -r t 2>/dev/null < \"$d/type\"; read -r p 2>/dev/null < \"$d/present\"; " +
++  "read -r c 2>/dev/null < \"$d/capacity\"; read -r s 2>/dev/null < \"$d/status\"; " +
++  "read -r o 2>/dev/null < \"$d/online\"; printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$t\" \"$p\" \"$c\" \"$s\" \"$o\"; done"
++
++var CHARGERS = ["Mains", "USB", "USB_C", "USB_PD", "Wireless"]
++
++function parse(text) {
++  var out = { present: false, percent: -1, charging: false, full: false }
++  var lines = String(text || "").split("\n")
++  for (var i = 0; i < lines.length; i++) {
++    var f = lines[i].split("\t")
++    if (f.length < 5) continue
++    var type = f[0], present = f[1], capacity = f[2], status = f[3], online = f[4]
++    if (type === "Battery" && present !== "0") {
++      if (!out.present && /^[0-9]+$/.test(capacity)) {
++        out.present = true
++        out.percent = Math.max(0, Math.min(100, parseInt(capacity, 10)))
++      }
++      if (status === "Charging" || status === "Full") out.charging = true
++      if (status === "Full") out.full = true
++    } else if (CHARGERS.indexOf(type) >= 0 && online === "1") {
++      out.charging = true
++    }
++  }
++  return out
++}
++
++// The status bar's glyphs (omamobile.bar StatusModel.batteryIcon): a battery
++// at the level, with a bolt while charging, a plug when full.
++function icon(percent, charging, full) {
++  if (percent < 0) return ""
++  if (full) return "󰂅"
++  var chargingIcons = ["󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"]
++  var defaultIcons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
++  var index = Math.max(0, Math.min(9, Math.floor(percent / 10)))
++  return charging ? chargingIcons[index] : defaultIcons[index]
++}
++
++if (typeof module !== "undefined") {
++  module.exports = { COMMAND: COMMAND, parse: parse, icon: icon }
++}
+diff --git i/shell/plugins/lock/LockBattery.qml w/shell/plugins/lock/LockBattery.qml
+new file mode 100644
+--- /dev/null
++++ w/shell/plugins/lock/LockBattery.qml
+@@ -0,0 +1,122 @@
++import QtQuick
++import Quickshell.Io
++import qs.Commons
++import qs.Commons as Commons
++import "LockBattery.js" as Battery
++
++// The battery on the lock, as the status bar shows it: the bar's battery
++// glyph (which carries the bolt while charging, the plug when full) and the
++// percentage. Read from the kernel's power supplies (LockBattery.js,
++// omamobile-update's rule) every 15 s while the display is lit, and at each
++// wake. Nothing at all without a battery.
++Item {
++  id: battery
++
++  // Polled while lit; a bump of wakeSerial reads at once.
++  property bool lit: true
++  property int wakeSerial: 0
++
++  property bool present: false
++  property int percent: -1
++  property bool charging: false
++  property bool full: false
++  readonly property bool low: present && percent <= 10 && !charging
++
++  visible: present
++  implicitWidth: row.implicitWidth
++  implicitHeight: row.implicitHeight
++
++  function refresh() {
++    if (supplies.running) return
++    supplies.running = true
++    stale.restart()
++  }
++
++  function clear() {
++    present = false
++    percent = -1
++    charging = false
++    full = false
++  }
++
++  onLitChanged: {
++    if (lit) {
++      refresh()
++    } else {
++      // Dark: the charger may go while nobody looks. Keep the level, drop
++      // the bolt, so the next wake never paints a stale one; the wake's
++      // reading puts it back if the charger is still there.
++      charging = false
++      full = false
++    }
++  }
++  onWakeSerialChanged: refresh()
++  Component.onCompleted: refresh()
++
++  Timer {
++    interval: 15000
++    repeat: true
++    running: battery.lit
++    onTriggered: battery.refresh()
++  }
++
++  // A reading that never comes back (a sysfs read that hangs) must not hold
++  // the last state up: after the deadline the process is stopped and the
++  // state cleared; the next tick or wake reads again.
++  Timer {
++    id: stale
++    interval: 4000
++    onTriggered: {
++      if (!supplies.running) return
++      supplies.running = false
++      battery.clear()
++    }
++  }
++
++  Process {
++    id: supplies
++    // timeout(1) ends a bash stuck on a sysfs read before the stale timer
++    // would; a failed or killed run clears the state as an empty one does.
++    command: ["timeout", "-k", "1", "3", "bash", "-c", Battery.COMMAND, "--", "/sys/class/power_supply"]
++    stdout: StdioCollector {
++      waitForEnd: true
++      onStreamFinished: {
++        stale.stop()
++        var s = Battery.parse(String(text || ""))
++        battery.present = s.present
++        battery.percent = s.percent
++        battery.charging = s.charging
++        battery.full = s.full
++      }
++    }
++    onExited: function(exitCode, exitStatus) {
++      stale.stop()
++      if (exitCode !== 0) battery.clear()
++    }
++  }
++
++  Row {
++    id: row
++    spacing: Style.space(6)
++
++    Text {
++      objectName: "lockBatteryIcon"
++      anchors.verticalCenter: parent.verticalCenter
++      textFormat: Text.PlainText
++      text: Battery.icon(battery.percent, battery.charging, battery.full)
++      color: battery.low ? Commons.Color.lock.textError : Commons.Color.lock.text
++      font.family: Style.font.family
++      font.pixelSize: Math.round(Style.font.title * 1.2)
++    }
++
++    Text {
++      objectName: "lockBatteryPercent"
++      anchors.verticalCenter: parent.verticalCenter
++      textFormat: Text.PlainText
++      text: battery.percent + "%"
++      color: battery.low ? Commons.Color.lock.textError : Commons.Color.lock.text
++      font.family: Style.font.family
++      font.pixelSize: Style.font.title
++    }
++  }
++}
+diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
+--- i/shell/plugins/lock/LockView.qml
++++ w/shell/plugins/lock/LockView.qml
+@@ -437,5 +437,16 @@ Item {
+       lock: root
+       pinTop: root.keypadClearsSensor ? keypadHint.y : inputField.y
+     }
++
++    // The battery, top right, over the glance and the PIN view alike; shown
++    // only on a device that has one.
++    LockBattery {
++      objectName: "lockBattery"
++      anchors.top: parent.top
++      anchors.right: parent.right
++      anchors.margins: Style.space(24)
++      lit: !root.displayDark
++      wakeSerial: root.wakeSerial
++    }
+   }
+ }
