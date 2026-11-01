@@ -37,6 +37,8 @@ install -Dm644 vendor/systemd/system/omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/omamobile-usb-rescue.service"
 ln -sfn ../omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service"
+install -Dm644 vendor/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf \
+  "$destination/usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \

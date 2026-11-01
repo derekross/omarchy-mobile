@@ -66,6 +66,7 @@ for f in usr/bin/reboot-to \
          usr/lib/modprobe.d/omamobile-max77759.conf \
          usr/bin/omamobile-usb-rescue \
          usr/lib/systemd/system/omamobile-usb-rescue.service \
+         usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-husky/version \
          usr/share/licenses/omamobile-device-husky/LICENSE \
@@ -126,6 +127,16 @@ grep -q '^ExecStart=/usr/bin/omamobile-usb-rescue$' vendor/systemd/system/omamob
   || fail "the USB rescue is enabled by a vendor wants link"
 grep -q 'i2c-tools' PKGBUILD || fail "the USB rescue needs i2cget and i2cset"
 pass "the USB replug rescue is installed, enabled by a wants link, and writes one register"
+splash=vendor/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf
+if [[ -f ../omamobile-device-raven/$splash ]]; then
+  [[ $(grep -v '^#' "$splash") == "$(grep -v '^#' "../omamobile-device-raven/$splash")" ]] \
+    || fail "the retain-splash drop-in drifted from the raven package"
+fi
+grep -qx 'ExecStart=' "$tmp/root/usr/lib/${splash#vendor/}" \
+  || fail "the drop-in must reset ExecStart= first, or the plain plymouth quit runs too"
+grep -qx 'ExecStart=-/usr/bin/plymouth quit --retain-splash' "$tmp/root/usr/lib/${splash#vendor/}" \
+  || fail "plymouth quit without --retain-splash hangs on gs-decon"
+pass "Plymouth quits with --retain-splash, as on raven"
 grep -q '^PACKAGE=omamobile-device-husky$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is husky"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
