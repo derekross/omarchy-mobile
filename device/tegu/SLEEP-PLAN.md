@@ -451,7 +451,7 @@ with the cable in.
   **A watchdog through s2idle, tried 2026-11-01 (same release): it breaks
   the sleep, so it can't catch the hang.** `s3c2410_wdt` stops both
   watchdogs in its suspend callback, so a hang in s2idle never resets the
-  palmtop. A bring-up module (`tegu-wdt-s2idle`, in the owner's logs)
+  palmtop. A bring-up module (`tegu-wdt-s2idle`, source in [e761ba793](https://github.com/W4HO-ham/linux-omarchy-mobile/commit/e761ba793) on the owner's kernel fork, not for merge)
   restarted the cluster 0 watchdog in the noirq phase with the PMU reset
   path unmasked and the counter enabled, as the driver's own enable does,
   and stopped it in resume_noirq. Armed, three sleeps of three ended in a
@@ -485,7 +485,7 @@ with the cable in.
   the kernel, never from userspace) at that wake, and check the 30-minute
   sleeps' records for their real length.
 
-  A bring-up module (`tegu-pmic-wakeread`) then read INT1-INT5 and their
+  A bring-up module (`tegu-pmic-wakeread`, [same commit](https://github.com/W4HO-ham/linux-omarchy-mobile/commit/e761ba793)) then read INT1-INT5 and their
   masks through the PMIC's regmap in suspend_noirq and resume_noirq
   (reads only; INT1-INT5 clear on read). Three sleeps, all woken about a
   second in:
