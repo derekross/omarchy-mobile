@@ -167,7 +167,7 @@ board_matches() {
   return 0
 }
 
-# Modules this image carries (the descriptor's INITRAMFS_MODULES), insmodded
+# Modules this image carries (the descriptor's INITRAMFS_MODULES), loaded
 # in the packed order before any other step: on raven the PMIC regulator
 # driver the simple-framebuffer waits for, and the MAX77759 nvmem that ABL
 # reads the reboot reason from. They were built for this image's board.
@@ -175,8 +175,10 @@ load_modules() {
   local m
   [ -s /lib/modules/omamobile/order ] || return 0
   board_matches "initramfs modules" || return 0
+  # BusyBox insmod may retry initialization after finit_module fails.
+  # These modules can already have touched hardware before returning an error.
   while read -r m; do
-    insmod "/lib/modules/omamobile/$m.ko" 2>/dev/null || say "insmod $m failed"
+    /usr/local/bin/module-load-once "/lib/modules/omamobile/$m.ko" 2>/dev/null || say "module-load-once $m failed"
   done < /lib/modules/omamobile/order
 }
 load_modules

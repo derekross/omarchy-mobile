@@ -40,3 +40,5 @@ fi
 
 echo "# tests/phone-ssh"
 tests/phone-ssh
+echo "# tests/module-load-once"
+tests/module-load-once
