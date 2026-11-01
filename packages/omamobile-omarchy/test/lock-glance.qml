@@ -714,6 +714,25 @@ Item {
       compare(one("lockBatteryPercent").text, "87%")
     }
 
+    // A paired controller's battery (scope Device, present, full, listed
+    // before the phone's gauge) is not the phone's: the gauge's level shows,
+    // and the controller being Full or Charging puts no bolt or plug on it.
+    function test_peripheral_battery_is_not_the_phones() {
+      harness.supplies = "Battery\t1\t100\tFull\t\tDevice\nBattery\t1\t64\tDischarging\t\t\nUSB\t\t\tNot charging\t0\t\n"
+      show()
+      tryCompare(one("lockBatteryPercent"), "text", "64%")
+      compare(one("lockBatteryIcon").text, "󰂀", "the gauge's level, no plug and no bolt")
+      harness.supplies = "Battery\t1\t40\tCharging\t\tDevice\nBattery\t1\t64\tDischarging\t\t\nUSB\t\t\tNot charging\t0\t\n"
+      one("lockBattery").refresh()
+      wait(500)
+      compare(one("lockBatteryIcon").text, "󰂀", "a charging controller is not the phone charging")
+      compare(one("lockBatteryPercent").text, "64%")
+      // Only the controller: no battery at all.
+      harness.supplies = "Battery\t1\t100\tFull\t\tDevice\n"
+      one("lockBattery").refresh()
+      tryCompare(one("lockBattery"), "visible", false)
+    }
+
     function test_no_battery_shows_nothing() {
       // a desktop with a wireless mouse: a Battery supply, not present
       harness.supplies = "Battery\t0\t50\t\t\n"

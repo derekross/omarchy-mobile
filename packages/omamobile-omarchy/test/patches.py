@@ -529,7 +529,7 @@ def lock_glance(root):
 
 
 # Power supplies as the kernel lists them: (name, type, present, capacity,
-# status, online); "" for an attribute the supply has not got.
+# status, online[, scope]); "" for an attribute the supply has not got.
 SUPPLIES = {
     # cheetah plugged in: the gauge says Discharging (net current negative), the USB charger is online
     "phone-plugged": [("battery", "Battery", "1", "87", "Discharging", ""), ("usb", "USB", "", "", "Charging", "1")],
@@ -549,6 +549,18 @@ SUPPLIES = {
     "wireless": [("battery", "Battery", "1", "52", "Discharging", ""), ("qi", "Wireless", "", "", "", "1")],
     # a charger that is there but offline
     "charger-offline": [("battery", "Battery", "1", "53", "Discharging", ""), ("usbc", "USB_C", "", "", "", "0")],
+    # the 7 Pro with a controller paired: its battery (scope Device, present,
+    # full) sorts before the gauge (max170xx_battery, no scope file), the
+    # charger is offline. The gauge's level, not charging, not full.
+    "phone-with-controller": [("hid-0005:054C:0CE6.0003-battery", "Battery", "1", "100", "Full", "", "Device"),
+                              ("max170xx_battery", "Battery", "1", "64", "Discharging", "", ""),
+                              ("usb", "USB", "", "", "Not charging", "0", "")],
+    # the controller charging over its own cable, the phone unplugged
+    "phone-controller-charging": [("hid-0005:054C:0CE6.0003-battery", "Battery", "1", "40", "Charging", "", "Device"),
+                                  ("max170xx_battery", "Battery", "1", "64", "Discharging", "", ""),
+                                  ("usb", "USB", "", "", "Not charging", "0", "")],
+    # a desktop with only a controller: a present Device-scope battery is no battery
+    "desktop-controller": [("ps-controller-battery-00:00:00:00:00:01", "Battery", "1", "100", "Full", "", "Device")],
 }
 WANT = {
     "phone-plugged": (True, 87, True, False), "phone-unplugged": (True, 87, False, False),
@@ -557,6 +569,8 @@ WANT = {
     "mains-no-online": (True, 42, False, False), "no-present-file": (True, 63, False, False),
     "usb-c": (True, 50, True, False), "usb-pd": (True, 51, True, False), "wireless": (True, 52, True, False),
     "charger-offline": (True, 53, False, False),
+    "phone-with-controller": (True, 64, False, False), "phone-controller-charging": (True, 64, False, False),
+    "desktop-controller": (False, -1, False, False),
 }
 
 
@@ -587,6 +601,8 @@ def lock_battery(t, root):
         return
     cmd = subprocess.run([node, "-e", "process.stdout.write(require(process.argv[1]).COMMAND)", js],
                          capture_output=True, text=True).stdout
+    ok(0 <= cmd.find("/scope") < cmd.find("/capacity"),
+       "real omarchy: the lock's supply command reads scope before capacity, which can wake a HID device (0026)")
     bad = []
     for name, supplies in SUPPLIES.items():
         d = os.path.join(t, "ps-" + name)
@@ -594,7 +610,7 @@ def lock_battery(t, root):
         for s in supplies:
             sd = os.path.join(d, s[0])
             os.makedirs(sd)
-            for attr, value in zip(("type", "present", "capacity", "status", "online"), s[1:]):
+            for attr, value in zip(("type", "present", "capacity", "status", "online", "scope"), s[1:]):
                 if value != "":
                     with open(os.path.join(sd, attr), "w") as f:
                         f.write(value + "\n")
@@ -605,10 +621,16 @@ def lock_battery(t, root):
                              capture_output=True, text=True).stdout
         want = list(WANT[name])
         got = json.loads(got) if got else None
-        if out.stderr or not got or got[:4] != want or (want[0] and not got[4]) or (not want[0] and got[4]):
-            bad.append((name, got, out.stderr.strip()[:80]))
+        # A Device-scope battery (a paired controller, keyboard or mouse) is
+        # skipped in bash, before its capacity is read: no line for it.
+        lines = [l for l in out.stdout.split("\n") if l]
+        peripherals = [s for s in supplies if len(s) > 6 and s[6] == "Device"]
+        skipped = len(lines) == len(supplies) - len(peripherals) and not any(p[3] in l.split("\t") for p in peripherals for l in lines)
+        if out.stderr or not got or got[:4] != want or (want[0] and not got[4]) or (not want[0] and got[4]) or not skipped:
+            bad.append((name, got, lines if not skipped else "", out.stderr.strip()[:80]))
     ok(not bad, "real omarchy: the lock's battery reads the supplies as omamobile-update does, a charger online is "
-       "charging, no battery is nothing (0026)%s" % (" " + repr(bad) if bad else ""))
+       "charging, a peripheral's Device-scope battery is skipped unread, no battery is nothing (0026)%s"
+       % (" " + repr(bad) if bad else ""))
     # A sysfs read that never returns (a FIFO nobody writes): the lock's argv
     # ends it through timeout(1), non-zero, and the output so far parses to
     # no battery.

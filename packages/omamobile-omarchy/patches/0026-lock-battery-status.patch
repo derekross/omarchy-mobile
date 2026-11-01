@@ -5,10 +5,14 @@
 # over the glance view and the PIN view alike; a device with no battery (a
 # desktop test box) shows nothing, never "No battery".
 #
-# Read from the kernel's power supplies with omamobile-update's rule
-# (LockBattery.js): a present Battery gives the percentage; charging is any
-# charger supply (Mains, USB, USB_C, USB_PD, Wireless) online, or a battery
-# whose status is Charging or Full. The charger's online flag is the signal
+# Read from the kernel's power supplies (LockBattery.js): the first present
+# Battery whose scope is not Device gives the percentage (a paired keyboard,
+# mouse or controller is a Battery too, hid-…-battery, scope Device, and
+# sorts before the phone's max170xx_battery; the gauges set no scope, so
+# they read as empty and count; scope is read before capacity, which can
+# wake a HID device); charging is any charger supply (Mains, USB, USB_C,
+# USB_PD, Wireless) online, or that same battery, no other, saying Charging
+# or Full. The charger's online flag is the signal
 # that holds: the fuel gauge says Discharging whenever the net current is
 # negative, even with the charger plugged in, and UPower's OnBattery follows
 # the battery's state, so the bar's `!UPower.onBattery` can miss it (and
@@ -23,20 +27,28 @@ diff --git i/shell/plugins/lock/LockBattery.js w/shell/plugins/lock/LockBattery.
 new file mode 100644
 --- /dev/null
 +++ w/shell/plugins/lock/LockBattery.js
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,61 @@
 +// The lock's battery reading, from the kernel's power supplies
-+// (/sys/class/power_supply), with omamobile-update's rule: a battery that
-+// is present gives the percentage; charging is any charger supply (Mains,
-+// USB, USB_C, USB_PD, Wireless) online, or a battery whose status is
-+// Charging or Full. The charger's online flag is the truthful signal: a
-+// fuel gauge reports Discharging whenever the net current is negative, even
-+// with the charger plugged in.
++// (/sys/class/power_supply). The first battery that is present and whose
++// scope is not Device gives the percentage: a paired keyboard, mouse or
++// game controller is a Battery supply too (hid-…-battery,
++// ps-controller-battery-…), present, with scope Device, and sorts before
++// the phone's gauge (max170xx_battery); the gauges set no scope, so it
++// reads as empty and they count. Charging is any charger supply (Mains,
++// USB, USB_C, USB_PD, Wireless) online, or that same battery, no other,
++// saying Charging or Full. The charger's online flag is the truthful
++// signal: a fuel gauge reports Discharging whenever the net current is
++// negative, even with the charger plugged in.
 +
-+// One line per supply: type, present, capacity, status, online, tab-separated.
-+var COMMAND = "shopt -s nullglob; for d in \"$1\"/*/; do t= p= c= s= o=; " +
-+  "read -r t 2>/dev/null < \"$d/type\"; read -r p 2>/dev/null < \"$d/present\"; " +
-+  "read -r c 2>/dev/null < \"$d/capacity\"; read -r s 2>/dev/null < \"$d/status\"; " +
-+  "read -r o 2>/dev/null < \"$d/online\"; printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$t\" \"$p\" \"$c\" \"$s\" \"$o\"; done"
++// One line per supply: type, present, capacity, status, online, scope,
++// tab-separated. Type and scope are read first, and a Device-scope battery
++// is skipped before its capacity is read (a read that can wake a HID device).
++var COMMAND = "shopt -s nullglob; for d in \"$1\"/*/; do t= sc= p= c= s= o=; " +
++  "read -r t 2>/dev/null < \"$d/type\"; read -r sc 2>/dev/null < \"$d/scope\"; " +
++  "[ \"$t\" = Battery ] && [ \"$sc\" = Device ] && continue; " +
++  "read -r p 2>/dev/null < \"$d/present\"; read -r c 2>/dev/null < \"$d/capacity\"; " +
++  "read -r s 2>/dev/null < \"$d/status\"; read -r o 2>/dev/null < \"$d/online\"; " +
++  "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$t\" \"$p\" \"$c\" \"$s\" \"$o\" \"$sc\"; done"
 +
 +var CHARGERS = ["Mains", "USB", "USB_C", "USB_PD", "Wireless"]
 +
@@ -46,14 +58,16 @@ new file mode 100644
 +  for (var i = 0; i < lines.length; i++) {
 +    var f = lines[i].split("\t")
 +    if (f.length < 5) continue
-+    var type = f[0], present = f[1], capacity = f[2], status = f[3], online = f[4]
-+    if (type === "Battery" && present !== "0") {
++    var type = f[0], present = f[1], capacity = f[2], status = f[3], online = f[4], scope = f[5] || ""
++    if (type === "Battery" && present !== "0" && scope !== "Device") {
++      // The first such battery is the one; its status alone says Charging or
++      // Full, a peripheral's never does.
 +      if (!out.present && /^[0-9]+$/.test(capacity)) {
 +        out.present = true
 +        out.percent = Math.max(0, Math.min(100, parseInt(capacity, 10)))
++        if (status === "Charging" || status === "Full") out.charging = true
++        if (status === "Full") out.full = true
 +      }
-+      if (status === "Charging" || status === "Full") out.charging = true
-+      if (status === "Full") out.full = true
 +    } else if (CHARGERS.indexOf(type) >= 0 && online === "1") {
 +      out.charging = true
 +    }
@@ -88,9 +102,9 @@ new file mode 100644
 +
 +// The battery on the lock, as the status bar shows it: the bar's battery
 +// glyph (which carries the bolt while charging, the plug when full) and the
-+// percentage. Read from the kernel's power supplies (LockBattery.js,
-+// omamobile-update's rule) every 15 s while the display is lit, and at each
-+// wake. Nothing at all without a battery.
++// percentage. Read from the kernel's power supplies (LockBattery.js; a
++// peripheral's Device-scope battery never counts) every 15 s while the
++// display is lit, and at each wake. Nothing at all without a battery.
 +Item {
 +  id: battery
 +
