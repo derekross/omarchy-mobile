@@ -1,14 +1,15 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Offscreen review shots of voice input (omamobile.voice): the listening
-# sheet, the check-and-send sheet (with the keyboard up, as when the
-# transcript is edited), the error, and the listening strip above the
-# keyboard, upright and on its side (TOUCH-PLAN 2.4), in a dark and a light
-# Omarchy theme, with checks that the card, its header, the agent chip and
-# every button stay on screen at 44 px or more. The real Voice.qml, its
-# layer-shell windows plain Items, each state set by hand (nothing runs
-# Voxtype here). Runs inside the OWL conformance container
-# (tests/owl/Dockerfile), never on a desktop:
+# Offscreen review shots of the voice bar (omamobile.voice) in each context
+# (an app with the keyboard up, an agent's terminal, the home screen with
+# the destination list open, the check before Ask, transcribing, an error)
+# and of the voice settings, upright and on its side (TOUCH-PLAN 2.4), in a
+# dark and a light Omarchy theme, with checks that the bar sits in the space
+# above the keyboard or the bottom bar and that its chip, its list and its
+# buttons are 44 px or more. The real Voice.qml, its layer-shell windows
+# plain Items, each state set by hand (nothing runs Voxtype here). Runs
+# inside the OWL conformance container (tests/owl/Dockerfile), never on a
+# desktop:
 #
 #   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
 #     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
@@ -33,22 +34,18 @@ find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
 for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
 cp -r "$plugins/omamobile.voice" "$h/omamobile.voice"
 cp -r "$plugins/omamobile.launcher" "$h/omamobile.launcher"
-# The agents' icons, where OMARCHY_PATH points on the phone.
-mkdir -p /tmp/voice-omarchy && ln -sfn /omarchy-shell /tmp/voice-omarchy/shell
-# The sheet and the strip are layer-shell windows on the phone; here plain
-# Items: the sheet fills the plugin's root, the strip sits at its bottom
-# (one per screen through Variants on the phone, one here). No idle
-# inhibitor without a compositor.
+# The bar and the settings sheet are layer-shell windows on the phone; here
+# plain Items: the bar at the bottom of the space it is given, the sheet
+# filling it. No idle inhibitor without a compositor.
 python3 -B - "$h/omamobile.voice/Voice.qml" <<'PY'
 import re, sys
 p = sys.argv[1]
 s = open(p).read()
 s = re.sub(r"\n\s*IdleInhibitor \{[^}]*\}\n", "\n", s)
-s = re.sub(r"(?m)^\s*(anchors \{ (top|bottom): true[^\n]*|exclusionMode:[^\n]*|WlrLayershell\.[^\n]*|color: \"transparent\"|screen: modelData|required property var modelData)\n", "", s)
-s = s.replace("  PanelWindow {\n    id: sheetWindow", "  Item { anchors.fill: parent\n    id: sheetWindow", 1)
-s = s.replace("  Variants {\n    model: Quickshell.screens\n\n    PanelWindow {\n      id: stripWindow",
-              "  Item {\n    anchors.fill: parent\n\n    Item {\n      anchors.bottom: parent.bottom\n      width: parent.width\n      height: implicitHeight\n      id: stripWindow", 1)
-s = re.sub(r"(?m)^\s*margins \{[^\n]*\}\n", "", s)
+s = re.sub(r"(?m)^\s*(screen: Quickshell\.screens[^\n]*|anchors \{ (top|bottom): true[^\n]*|margins \{[^\n]*\}|exclusionMode:[^\n]*|WlrLayershell\.[^\n]*|color: \"transparent\")\n", "", s)
+s = s.replace("  PanelWindow {\n    id: barWindow\n",
+              "  Item {\n    id: barWindow\n    anchors.bottom: parent.bottom\n    width: parent.width\n    height: implicitHeight\n", 1)
+s = s.replace("  PanelWindow {\n    id: sheetWindow\n", "  Item { anchors.fill: parent\n    id: sheetWindow\n", 1)
 assert "PanelWindow" not in s, "voice-render: a window left to stand in for"
 open(p, "w").write(s)
 PY
@@ -63,23 +60,24 @@ for theme in tokyo-night catppuccin-latte; do
   python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
 import json, sys
 out, theme = sys.argv[1:]
-def shot(name, w, h, state, keyboard=0, **extra):
-    s = {"name": name, "png": "%s/voice-%s-%s.png" % (out, name, theme), "w": w, "h": h, "state": state, "keyboard": keyboard}
+def shot(name, w, h, state, below, **extra):
+    s = {"name": name, "png": "%s/voice-%s-%s.png" % (out, name, theme), "w": w, "h": h, "state": state, "below": below}
     s.update(extra)
     return s
-print(json.dumps({"transcript": "Look at the speaker plan and tell me what's left before stock volume.", "shots": [
-    shot("listen", 480, 1040, "listen"),
-    shot("transcribing", 480, 1040, "transcribing"),
-    shot("review", 480, 1040, "review"),
-    shot("review-keyboard", 480, 1040, "review", keyboard=290),
-    shot("error", 480, 1040, "error"),
-    shot("strip", 480, 1040, "strip", keyboard=290),
-    shot("settings", 480, 1040, "settings"),
-    shot("landscape-listen", 1040, 480, "listen"),
-    shot("landscape-review", 1040, 480, "review"),
+# below: what sits under the bar (the keyboard and the strip, the strip, the dock)
+print(json.dumps({"transcript": "Check the battery drain from last night and tell me which service woke the phone most.", "shots": [
+    shot("app", 480, 1040, "type", 334),
+    shot("agent", 480, 1040, "agent", 44),
+    shot("home", 480, 1040, "home", 96),
+    shot("result", 480, 1040, "result", 96),
+    shot("transcribing", 480, 1040, "transcribing", 44),
+    shot("error", 480, 1040, "error", 96),
+    shot("settings", 480, 1040, "settings", 0),
+    shot("landscape-app", 1040, 480, "type", 44),
 ]}))
 PY
-  HOME=$home OMARCHY_PATH=/tmp/voice-omarchy QT_SCALE_FACTOR=3 VOICE_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/voice-render.qml" > "$h/log-$theme" 2>&1 || true
+  HOME=$home QT_SCALE_FACTOR=3 VOICE_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/voice-render.qml" > "$h/log-$theme" 2>&1 || true
+  cp "$h/log-$theme" "$out/voice-render-$theme.log"
   grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | grep -vE "hyprctl|delayed function evaluation" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/voice-render.txt" || true
   python3 - "$h/log-$theme" "$theme" <<'PY' || status=1
 import json, re, sys
@@ -90,51 +88,44 @@ geo = {}
 for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
     geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
-def below(a, b): return a["y"] >= b["y"] + b["h"]
-ok = not bad and len(geo) == 9
-if len(geo) != 9: print("not ok - %s: %d of 9 shots taken" % (theme, len(geo)))
+def below(a, b): return a["y"] >= b["y"] + b["h"] - 1
+ok = not bad and len(geo) == 8
+if len(geo) != 8: print("not ok - %s: %d of 8 shots taken" % (theme, len(geo)))
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):
     global ok
     print("%s - %s %s%s" % ("ok" if good else "not ok", theme, name, "" if good else ": " + why))
     ok = ok and good
-want = {"listen": ["Stop", "Cancel"], "transcribing": ["Stop", "Cancel"], "review": ["Send to Claude Code", "Cancel", "Copy", "Type into last app"],
-        "error": ["Say again", "Cancel"], "strip": ["Done · type it", "Cancel"], "settings": [], "agent": []}
+want = {"type": ["Done · type it", "Cancel"], "agent": ["Done · send", "Cancel"], "home": ["Done · ask", "Cancel"],
+        "result": ["Ask", "Again", "Discard"], "transcribing": ["Cancel"], "error": ["Try again", "Close"], "settings": []}
 for name, g in geo.items():
-    screen, parts, buttons, state = g["screen"], g["parts"], g["buttons"], g["state"]
-    area = g["area"]
+    parts, buttons, state, area = g["parts"], g["buttons"], g["state"], g["area"]
     labels = [b["label"] for b in buttons]
     check(name + ": the buttons show (%s)" % ", ".join(want[state]), all(l in labels for l in want[state]), json.dumps(labels))
     if state == "settings":
         card = parts.get("voiceCard")
         check(name + ": the settings card fills the space", bool(card) and inside(card, area, 1) and card["h"] >= area["h"] - 20, json.dumps(card))
-        check(name + ": a close button, no agent chip", "settingsClose" in parts and "agentChip" not in parts and parts["settingsClose"]["h"] >= 44)
-        rows = [parts.get("model-" + m) for m in ("tiny.en", "base.en", "small.en")]
-        check(name + ": the three models are rows of 44 px or more on the card", all(r and r["h"] >= 44 and inside(r, card, 1) for r in rows), json.dumps(rows))
-        sets = [parts.get("setting-" + k) for k in ("holdPill", "micKey", "agentMic", "powerVolumeUp")]
-        check(name + ": the triggers are 44 px rows", all(r and r["h"] >= 44 for r in sets), json.dumps(sets))
-        subs = [parts.get("submit-" + k) for k in ("auto", "say", "off")]
-        check(name + ": the agent's three ways to submit are 44 px rows", all(r and r["h"] >= 44 for r in subs), json.dumps(subs))
+        rows = [parts.get("model-" + m) for m in ("tiny.en", "base.en", "small.en")] + [parts.get("setting-" + k) for k in ("powerVolumeUp", "confirmSend")]
+        check(name + ": the models and the switches are rows of 44 px or more", all(r and r["h"] >= 44 and inside(r, card, 1) for r in rows), json.dumps(rows))
+        for gone in ("setting-holdPill", "setting-micKey", "setting-agentMic", "submit-auto"):
+            check(name + ": no %s" % gone, gone not in parts)
         continue
-    if state == "strip":
-        st = parts.get("listeningStrip")
-        check(name + ": the strip sits above the keyboard", bool(st) and inside(st, area, 1) and st["y"] + st["h"] >= area["h"] - 20, json.dumps(st))
+    bar = parts.get("voiceBar")
+    check(name + ": the bar sits right above what is under it", bool(bar) and inside(bar, area, 1) and abs(bar["y"] + bar["h"] - (area["y"] + area["h"])) <= 12, json.dumps([bar, area]))
+    chip = parts.get("destChip")
+    check(name + ": the destination chip is a 44 px target on the bar", bool(chip) and chip["h"] >= 44 and inside(chip, bar, 1), json.dumps(chip))
+    check(name + ": every button is on the bar, at least 44 px", all(inside(b, bar, 1) and b["h"] >= 44 for b in buttons), json.dumps(buttons))
+    if state in ("type", "agent", "home", "transcribing"):
         check(name + ": the level meter shows", "levelMeter" in parts)
-        check(name + ": its buttons are on the strip, at least 44 px", bool(st) and all(inside(b, st, 1) and b["h"] >= 44 for b in buttons), json.dumps(buttons))
-        continue
-    card = parts.get("voiceCard")
-    check(name + ": the card is in the space above the keyboard", bool(card) and inside(card, area, 1), json.dumps(card))
-    check(name + ": the header and the agent chip are on the card", "voiceHeader" in parts and "agentChip" in parts and card is not None and inside(parts["agentChip"], card) and parts["agentChip"]["h"] >= 44, json.dumps(parts.get("agentChip")))
-    check(name + ": every button is on the card, at least 44 px", card is not None and all(inside(b, card, 1) and b["h"] >= 44 for b in buttons), json.dumps([b for b in buttons if not (card and inside(b, card, 1) and b["h"] >= 44)][:3]))
-    if state in ("listen", "transcribing"):
-        mic = parts.get("micCircle")
-        check(name + ": the mic sits between the header and the buttons", bool(mic) and below(mic, parts["voiceHeader"]) and all(below(b, mic) for b in buttons), json.dumps(mic))
-    if state == "review":
-        t = parts.get("transcript")
-        check(name + ": the transcript is under the header, two lines or more", bool(t) and below(t, parts["voiceHeader"]) and t["h"] >= 60, json.dumps(t))
-        w = parts.get("permissionWarning")
-        check(name + ": the auto-permissions warning sits between the transcript and the buttons", bool(w) and bool(t) and below(w, t) and all(below(b, w) for b in buttons), json.dumps(w))
-        check(name + ": Say again is a touch target on the card", "sayAgain" in parts and inside(parts["sayAgain"], card) and parts["sayAgain"]["h"] >= 44, json.dumps(parts.get("sayAgain")))
+    if state == "agent":
+        check(name + ": the agent's hint line", g.get("hint") == "Types what you say into the prompt and presses Enter.", repr(g.get("hint")))
+    if state == "home":
+        rows = [parts.get("dest-" + d) for d in ("ask", "copy", "search")]
+        check(name + ": the list: Ask, Copy and Search, 44 px rows on the bar", all(r and r["h"] >= 44 and inside(r, bar, 1) for r in rows), json.dumps(rows))
+    if state == "result":
+        t, w = parts.get("transcript"), parts.get("permissionWarning")
+        check(name + ": the transcript under the chip, two lines or more", bool(t) and below(t, chip) and t["h"] >= 60, json.dumps(t))
+        check(name + ": the warning between the transcript and the buttons", bool(w) and bool(t) and below(w, t) and all(below(b, w) for b in buttons), json.dumps(w))
 sys.exit(0 if ok else 1)
 PY
 done

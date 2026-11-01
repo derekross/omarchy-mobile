@@ -117,7 +117,7 @@ hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
 hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 2 })
 
 -- The on-screen keyboard's own keys (squeekboard/keyboards/: the action row
--- Talk, Ask, Paste, Emoji and Hide). squeekboard can't run a command, so
+-- Mic, Paste, Emoji and Hide). squeekboard can't run a command, so
 -- each key sends an XF86 keysym and these binds act on it. squeekboard puts
 -- every key on a keycode of a keymap it generates, and Hyprland resolves a
 -- bind's keysym through kb_layout unless the device resolves binds by its
@@ -131,14 +131,13 @@ hl.device({ name = osk_device, resolve_binds_by_sym = true })
 local function voice(method)
   return "omarchy-shell shell call omamobile.voice " .. method .. " ''"
 end
--- Talk dictates into the focused app and Ask opens the agent's listening
--- sheet (omamobile.voice), both push-to-talk: squeekboard presses a keysym
--- key on touch-down and releases it on lift-off; a short tap keeps listening
--- hands free, as the strip's mic key and the home pill do.
-o.bind("XF86Dictate", "Keyboard: dictate", voice("dictatePress"), { device = osk_only })
-o.bind("XF86Dictate", "Keyboard: dictate released", voice("dictateRelease"), { device = osk_only, release = true })
-o.bind("XF86Assistant", "Keyboard: ask the agent", voice("askPress"), { device = osk_only })
-o.bind("XF86Assistant", "Keyboard: ask released", voice("askRelease"), { device = osk_only, release = true })
+-- Mic opens the voice bar (omamobile.voice), the same bar as a hold on the
+-- pill, with the destination from what is in front (the chip changes it).
+-- squeekboard presses a keysym key on touch-down and releases it on
+-- lift-off: held, it is push-to-talk; a short tap keeps listening hands free
+-- until Done, and a tap while it listens is Done.
+o.bind("XF86Dictate", "Keyboard: voice", voice("press"), { device = osk_only })
+o.bind("XF86Dictate", "Keyboard: voice released", voice("release"), { device = osk_only, release = true })
 -- Paste opens Omarchy's clipboard history (a tap pastes an entry), Emoji its
 -- emoji picker (a tap types one; its search needs typed letters), and Hide
 -- puts the keyboard away through omamobile.keyboard.

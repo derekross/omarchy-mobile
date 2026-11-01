@@ -73,6 +73,16 @@ test("staying in an app keeps a keyboard shown by hand", () => {
   assert.deepStrictEqual(p.calls, [true])
 })
 
+test("the double tap: shows when down, hides when up", () => {
+  const M = require(require("path").join(__dirname, "../plugins/omamobile.keyboard/KeyboardModel.js"))
+  assert.strictEqual(M.toggleTarget(false, null, 1e9), true)
+  assert.strictEqual(M.toggleTarget(true, null, 1e9), false, "a second double tap hides it")
+  assert.strictEqual(M.toggleTarget(false, true, 300), false, "a second double tap before the show is reported still hides")
+  assert.strictEqual(M.toggleTarget(true, false, 300), true, "and one before the hide is reported shows")
+  assert.strictEqual(M.toggleTarget(true, true, M.TOGGLE_SETTLE_MS + 1), false, "later, the reported state decides")
+  assert.strictEqual(M.toggleTarget(false, true, M.TOGGLE_SETTLE_MS + 1), true, "a keyboard that went away on its own shows again")
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - " + name) } catch (e) { failed++; console.log("not ok - " + name + "\n  " + e.message) }

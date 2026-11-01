@@ -162,13 +162,17 @@ done
 # ~/.config/gtk-3.0/gtk.css that makes squeekboard read it, and the
 # theme-set hook that rewrites it and restarts squeekboard on a theme
 # change. A user who removes either keeps it removed.
+# --restart: a squeekboard already running (setup run again by hand, or a
+# package update that changed the stylesheet) reads gtk.css only when it
+# starts, so it restarts when the @import or the stylesheet is new; at
+# login it isn't up yet, and nothing restarts.
 if command -v omamobile-keyboard-theme >/dev/null; then
   if omarchy-done ensure omamobile-keyboard-theme; then
-    omamobile-keyboard-theme --import || true
+    omamobile-keyboard-theme --import --restart || true
     mkdir -p "$config/hooks/theme-set.d"
     ln -sfn "$share/hooks/theme-set-keyboard" "$config/hooks/theme-set.d/50-omamobile-keyboard"
   else
-    omamobile-keyboard-theme || true
+    omamobile-keyboard-theme --restart || true
   fi
 fi
 

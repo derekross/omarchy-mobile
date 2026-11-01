@@ -28,9 +28,9 @@ moment if it was up.
 The look follows Omarchy's: square keys (Omarchy's default corners), the
 theme's monospace font, letters on the theme's lighter background, modifier and
 layout keys a step lighter, the accent on Enter and on a latched or locked
-modifier (Ctrl held), and the action row (Talk, Ask, Paste, Emoji, Hide)
-outlined: Talk in the theme's red (recording), Ask in its yellow (the
-agent), the rest in its muted colour.
+modifier (Ctrl held), and the action row (Mic, Paste, Emoji, Hide)
+outlined: Mic in the theme's red (recording, as the voice bar), the rest in
+its muted colour.
 """
 
 import os
@@ -116,8 +116,7 @@ def palette(colors):
         "accent": accent,
         "on_accent": bg,
         "accent_pressed": mix(accent, bg, 0.25),
-        "talk": pick("red", "bright_red", default=accent),
-        "ask": pick("yellow", "orange", "bright_yellow", default=accent),
+        "mic": pick("red", "bright_red", default=accent),
         "outline": pick("muted", "selection", default=mix(lighter, fg, 0.25)),
     }
     return p
@@ -208,29 +207,19 @@ def stylesheet(colors, font, theme_name=""):
     w("}")
     w("")
     w("/* The action row (terminal/us.yaml, us.yaml): outlined keys */")
-    w("sq_button.talk, sq_button.ask, sq_button.paste, sq_button.emoji, sq_button.hide {")
+    w("sq_button.mic, sq_button.paste, sq_button.emoji, sq_button.hide {")
     w("    background: %s;" % p["key"])
     w("    border: 2px solid %s;" % p["outline"])
     w("    color: %s;" % p["text"])
     w("}")
     w("")
-    w("sq_button.talk {")
-    w("    border-color: %s;" % p["talk"])
-    w("    color: %s;" % p["talk"])
+    w("sq_button.mic {")
+    w("    border-color: %s;" % p["mic"])
+    w("    color: %s;" % p["mic"])
     w("}")
     w("")
-    w("sq_button.ask {")
-    w("    border-color: %s;" % p["ask"])
-    w("    color: %s;" % p["ask"])
-    w("}")
-    w("")
-    w("sq_button.talk:active {")
-    w("    background: %s;" % p["talk"])
-    w("    color: %s;" % p["on_accent"])
-    w("}")
-    w("")
-    w("sq_button.ask:active {")
-    w("    background: %s;" % p["ask"])
+    w("sq_button.mic:active {")
+    w("    background: %s;" % p["mic"])
     w("    color: %s;" % p["on_accent"])
     w("}")
     w("")
@@ -239,12 +228,8 @@ def stylesheet(colors, font, theme_name=""):
     w("}")
     w("")
     w("/* The short rows' labels (squeekboard's small-row is 0.575em) */")
-    w("sq_button.term-key, sq_button.term-narrow, sq_button.talk, sq_button.ask, sq_button.paste {")
+    w("sq_button.term-key, sq_button.term-narrow, sq_button.mic, sq_button.paste, sq_button.emoji, sq_button.hide {")
     w("    font-size: 0.6em;")
-    w("}")
-    w("")
-    w("sq_button.emoji, sq_button.hide {")
-    w("    font-size: 0.8em;")
     w("}")
     return "\n".join(out) + "\n"
 
@@ -296,9 +281,15 @@ def restart_squeekboard():
         if subprocess.run(["pgrep", "-x", "squeekboard"], capture_output=True).returncode != 0:
             break
         subprocess.run(["sleep", "0.1"])
-    # As Omarchy's autostart starts it (o.launch_on_start: uwsm-app --)
-    argv = ["uwsm-app", "--", "squeekboard"] if shutil.which("uwsm-app") else ["squeekboard"]
-    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    # As Omarchy's autostart starts it (o.launch_on_start: uwsm-app --),
+    # and through Hyprland when it runs: started from here (an SSH session,
+    # setup at login) the keyboard didn't come back up, and only Hyprland's
+    # exec did (2026-10-31 on the Pixel 7 Pro).
+    cmd = "uwsm-app -- squeekboard" if shutil.which("uwsm-app") else "squeekboard"
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        subprocess.run(["hyprctl", "dispatch", 'hl.dsp.exec_cmd("%s")' % cmd], capture_output=True)
+        return True
+    subprocess.Popen(cmd.split(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
     return True
 

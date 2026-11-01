@@ -20,7 +20,7 @@ logical at scale 3).
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
 | `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts; draws nothing |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
-| `omamobile.voice` | `panel` (keepLoaded) | Voice input through Voxtype: hold the home pill to ask the agent, the keyboard strip's mic key to dictate |
+| `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
@@ -842,63 +842,31 @@ result; never the PIN).
 
 ## omamobile.voice
 
-Speech to text on the phone through Voxtype's user daemon
-(`voxtype.service`, Omarchy's Install > AI > Dictation). The design, the
-measured speeds and phase 2 are in
-[VOICE-PLAN.md](../../../docs/VOICE-PLAN.md).
+Voice input: one voice bar, through Voxtype's user daemon
+(`voxtype.service`, Omarchy's Install > AI > Dictation). The design and its
+history are in [VOICE-PLAN.md](../../../docs/VOICE-PLAN.md).
 
-* **Ask your agent:** tap the mic at the right end of the home screen's
-  search pill (hands free: Stop, or a tap on the sheet's mic, ends it; hold
-  it to talk), or hold the home pill (the dock's search pill on the
-  home screen, the strip over an app, half a second): a bottom sheet opens
-  and listens, with the time, a level meter and Stop/Cancel; letting go
-  stops (a press shorter than 0.7 s keeps listening until Stop). Voxtype
-  writes the transcript to `$XDG_RUNTIME_DIR/omamobile-voice.txt`; the
-  check-and-send page shows it in an editable field above the keyboard,
-  with the agent (a tap opens Omarchy's Setup > Default Agent), the
-  auto-permissions warning, Send to <agent> (the launcher's `promptArgv`),
-  Say again, Cancel, Copy (`wl-copy`) and Type into last app (`wtype`
-  after the sheet has gone). `omarchy-shell shell summon omamobile.voice
-  '{}'` opens it listening. A toast says so once, the first time the dock
-  shows ("Tap the mic, or hold the search bar, to ask by voice").
-* **Dictation:** the mic key at the left end of the keyboard's strip
-  (omamobile.launcher): hold to talk, or tap to start and tap (or Done) to
-  stop. Voxtype types into the focused app. While it listens, a strip above
-  the keyboard (top layer, its own exclusive zone, never the keyboard
-  focus) shows the level, the time (Voxtype stops at 60 s), Cancel and
-  Done. The Dictation tile in quick settings gets the same strip.
-* Every recording the shell starts passes `--no-osd` (Voxtype's overlay
-  sits over the dock). The model is the daemon's: `omamobile-setup-user`
-  sets `[whisper] model = "tiny.en"` in `~/.config/voxtype/config.toml`
-  once `~/.local/share/voxtype/models/ggml-tiny.en.bin` exists and the
-  config still has Omarchy's base.en (3.9 s for 10 s of speech on the
-  Pixel 7 Pro, against 8.8 s); a per-recording `--model` is ignored unless
-  Voxtype prepared it. Voxtype finds `wtype` and `wl-copy` with `which`,
-  so the package depends on it. The state comes
-  from `$XDG_RUNTIME_DIR/voxtype/state`, the level from
-  `voxtype-audio-bridge`; an idle inhibitor on the sheet or the strip keeps
-  the screen on meanwhile.
-* The launcher reaches it through `VoiceLink.js` (as the home screen
-  reaches the drawer through DrawerLink.js), so a release needs no process.
+* **Ways in:** hold the pill (over an app; the search pill on the home
+  screen), the keyboard's Mic key, Power + Volume Up (when turned on), the
+  Dictation tile, or `omamobile-voice [toggle|start|done|cancel|settings]`.
+  The bottom bar has no buttons: as on Android, a hold is voice and a
+  double tap the keyboard.
+* **The bar** rises above the keyboard (or the bottom bar): the destination
+  chip, the time, the level, Cancel and "Done · <verb>", in the recording
+  colour while it listens. The destination follows what is in front: Send
+  to the agent in its terminal (typed, then Enter), Type here in any other
+  app, Ask the agent on the home screen; the chip also offers Copy to
+  clipboard and Search apps.
+* **Ask** checks first: the transcript to edit in the theme's warning
+  colour, the full-permissions warning, Discard / Again / Ask.
+* Every recording is `voxtype record start --no-osd --file=<transcript>`,
+  delivered by the shell (wtype, wl-copy, the launcher). The model is the
+  daemon's (tiny.en once downloaded); the screen stays on while it
+  listens; a haptic tick at the start and end.
+* **Settings** (`~/.config/omamobile/voice.json`): the speech model, Power +
+  Volume Up, the check before Ask.
 
-* **Follow-up in an agent:** while an agent's terminal (`org.omarchy.agent`)
-  is in front and the keyboard is down, a mic at the right end of the home
-  strip (omamobile.launcher draws it; a floating one covered the agent's
-  prompt line): hold to talk, tap to toggle. Voxtype types into the agent
-  and presses Enter after it (`--auto-submit`), or only when you end with "submit" (Voxtype's fixed word),
-  or never, as the settings say.
-* **Power + Volume Up** (omamobile-keys): push-to-talk into the app in
-  front, or the agent sheet on the home screen; off until turned on in the
-  settings, never on the lock screen.
-* **Settings** (long-press the Dictation tile, Setup > Voice, or
-  `omarchy-shell shell summon omamobile.voice '{"page":"settings"}'`): the
-  speech model (Voxtype downloads and switches it), the triggers, how
-  talking to an agent submits, and "Ask before sending to an agent", in
-  `~/.config/omamobile/voice.json`.
-* A haptic tick at the start and end of listening (feedbackd's
-  `button-pressed`, so the feedback profile decides).
-
-IPC: `omarchy-shell shell call omamobile.voice <askPress|askRelease|askTap|dictatePress|dictateRelease|dictateTap|agentTap|keyPress|keyRelease|openSettings|stop|cancel|snapshot> ''`.
+IPC: `omarchy-shell shell call omamobile.voice <toggle|start|done|cancel|press|release|keyPress|keyRelease|openSettings|snapshot> ''`.
 
 ## omamobile.access
 

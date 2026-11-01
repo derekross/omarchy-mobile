@@ -34,6 +34,21 @@ function shouldHide(shownByHand, visible, home) {
   return !!(shownByHand && visible && home)
 }
 
+// The pill's double tap: show the keyboard when it is down, hide it when
+// it is up. Its visibility reaches the plugin a moment after a show or a
+// hide (omamobile-osk-watch, on the session bus), so a second double tap
+// soon after the first answered the old state and showed it again: within
+// TOGGLE_SETTLE_MS of the last request, the opposite of that request wins.
+var TOGGLE_SETTLE_MS = 1500
+
+function toggleTarget(visible, lastRequest, msSinceRequest) {
+  if (lastRequest === true || lastRequest === false) {
+    if (Number(msSinceRequest) >= 0 && Number(msSinceRequest) < TOGGLE_SETTLE_MS) return !lastRequest
+  }
+  return !visible
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { shownByHandAfter: shownByHandAfter, homeOnScreen: homeOnScreen, shouldHide: shouldHide }
+  module.exports = { shownByHandAfter: shownByHandAfter, homeOnScreen: homeOnScreen, shouldHide: shouldHide,
+                     TOGGLE_SETTLE_MS: TOGGLE_SETTLE_MS, toggleTarget: toggleTarget }
 }

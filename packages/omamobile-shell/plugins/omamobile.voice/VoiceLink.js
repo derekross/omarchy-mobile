@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: MIT
 .pragma library
 
-// Voice input, in reach of the home pill and the keyboard strip
-// (omamobile.launcher). Push-to-talk starts on a long press and stops when
-// the finger lets go, and a process per call (`omarchy-shell shell call
-// omamobile.voice ...`) is too slow to follow a finger. All plugins run in
-// the shell's one QML engine, and a `.pragma library` script has one
-// instance per engine for every file that imports it by the same URL (as
+// The voice bar, in reach of the pill (omamobile.launcher): a hold opens
+// it, and a call through a process (`omarchy-shell shell call
+// omamobile.voice ...`) is slower than the finger. All plugins run in the
+// shell's one QML engine, and a `.pragma library` script has one instance
+// per engine for every file that imports it by the same URL (as
 // omamobile.launcher's DrawerLink.js): Voice.qml publishes its root here,
 // and the launcher reaches it through VoiceLinkClient.qml, which sits
 // beside this file so the URL is the same.
 //
-// The voice service's calls: askPress(), askRelease(), dictatePress(),
-// dictateRelease(), dictateTap(), stop(), cancel(), and its `phase` and
-// `owner`.
+// The voice service's calls: start(), toggle(), press(), release(),
+// done(), cancel(), and its `phase` and `mine`.
 //
 // Nothing depends on it: without it the launcher falls back to the
 // plugin's IPC.

@@ -17,12 +17,11 @@ import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 // Voxtype's user daemon (voxtype.service, Omarchy's Install > AI >
 // Dictation). Speech is turned into text on the phone.
 //
-// One way in on screen, the mic at the right end of the bottom bar
-// (omamobile.launcher: the dock on the home screen, the home strip over an
-// app; tap to start, tap or Done to finish, hold to talk). Power + Volume
-// Up (omamobile-keys, when turned on), the Dictation tile in quick
-// settings and squeekboard's dictation key (`omamobile-voice toggle`) open
-// the same bar.
+// The ways in, as on Android: a hold on the pill (omamobile.launcher: the
+// pill over an app, the search pill on the home screen), the keyboard's
+// Mic key (squeekboard's XF86Dictate, bound in hypr/phone.lua), Power +
+// Volume Up (omamobile-keys, when turned on) and the Dictation tile in
+// quick settings (`omamobile-voice start`). All open the same bar.
 //
 // The bar rises above the keyboard when it is up, else above the bottom
 // bar: the destination chip (where the words go; a tap lists the others),
@@ -283,8 +282,8 @@ Item {
 
   // ---------------------------------------------------------------- calls (VoiceLink.js, IPC, omamobile-voice)
 
-  // The bottom bar's mic, the Dictation tile and squeekboard's dictation
-  // key: start, or finish what is under way (Done), or close a result.
+  // `omamobile-voice toggle`: start, or finish what is under way (Done), or
+  // close a result.
   function toggle() {
     if (busy) return done()
     if (phase === "result" || phase === "error") { reset(); return "closed" }
@@ -298,10 +297,11 @@ Item {
     return "listening"
   }
 
-  // Holding the mic: push-to-talk; letting go stops (a short press keeps
-  // listening, as a tap does).
+  // A held key (the keyboard's Mic, Power + Volume Up): push-to-talk;
+  // letting go stops, a short press keeps listening, and a press while the
+  // bar listens is Done.
   function press() {
-    if (busy) return "busy"
+    if (busy) return mine ? done() : "busy"
     listen(true)
     return "listening"
   }
@@ -595,7 +595,7 @@ Item {
             objectName: "destChip"
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: Math.min(implicitWidth, parent.width - timeRow.width - Style.spacing.lg)
+            maxWidth: parent.width - timeRow.width - Style.spacing.lg
             label: VoiceModel.destinationLabel(root.dest, root.agentName)
             glyph: root.dest === "type" ? "󰌌" : root.dest === "copy" ? "󰆏" : root.dest === "search" ? "󰍉" : "󰚩"
             tone: root.phase === "result" ? root.warning : root.foreground
@@ -935,7 +935,7 @@ Item {
             Text {
               width: parent.width
               textFormat: Text.PlainText
-              text: "Speech is turned into text on this phone. Nothing you say leaves it. Tap the mic at the right end of the bottom bar to talk."
+              text: "Speech is turned into text on this phone. Nothing you say leaves it. Hold the pill at the bottom of the screen to talk (double-tap it for the keyboard), or use the keyboard's Mic key or the Dictation tile."
               color: root.foreground
               opacity: 0.8
               font.family: Style.font.family
@@ -988,10 +988,12 @@ Item {
     property string glyph: ""
     property color tone: Commons.Color.popups.text
     property bool open: false
+    // The widest it may be (the caller's room); the label elides past it.
+    property real maxWidth: 1000
     signal tapped()
     readonly property int touchSize: Math.max(44, Style.space(48))
     height: chip.touchSize
-    implicitWidth: chipRow.implicitWidth + Style.spacing.controlPaddingX * 2
+    width: chipRow.implicitWidth + Style.spacing.controlPaddingX * 2
     radius: Style.cornerRadius
     color: chipTouch.pressed ? Style.pressedFillFor(chip.tone, Commons.Color.accent)
       : Style.normalFillFor(chip.tone, Commons.Color.accent)
@@ -1016,7 +1018,7 @@ Item {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.min(implicitWidth, chip.width - Style.spacing.controlPaddingX * 2 - Style.font.iconLarge * 2 - Style.spacing.md * 2)
+        width: Math.max(0, Math.min(implicitWidth, chip.maxWidth - Style.spacing.controlPaddingX * 2 - Style.font.iconLarge * 2 - Style.spacing.md * 3))
         textFormat: Text.PlainText
         text: chip.label
         color: chip.tone

@@ -214,8 +214,8 @@ for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
   [[ $(readlink "$H/.local/share/squeekboard/keyboards/$layout") == "/usr/share/omamobile/squeekboard/keyboards/$layout" ]] \
     || fail "the $layout layout is linked"
 done
-[[ $(grep -c '^omamobile-keyboard-theme --import$' "$H/calls") == 1 && $(grep -c '^omamobile-keyboard-theme $' "$H/calls") -ge 1 ]] \
-  || fail "the keyboard theme: --import at the first login, a plain rewrite after"
+[[ $(grep -c '^omamobile-keyboard-theme --import --restart$' "$H/calls") == 1 && $(grep -c '^omamobile-keyboard-theme --restart$' "$H/calls") -ge 1 ]] \
+  || fail "the keyboard theme: --import at the first login, a rewrite after; a running squeekboard restarts when either is new"
 [[ $(readlink "$H/.config/omarchy/hooks/theme-set.d/50-omamobile-keyboard") == "$pkg/hooks/theme-set-keyboard" ]] \
   || fail "the keyboard's theme-set hook is linked"
 pass "the keyboard: four layouts, the theme at each login, its import and hook once"

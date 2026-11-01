@@ -150,26 +150,29 @@ for need in ("root.appOnScreen", "!root.opened", "!root.fullscreenOnScreen", "!(
 assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
 assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
 assert strip.count("HomeSwipe {") == 1 and "HomePill" in strip, "one swipe logic"
-assert "HideKeyboardKey {" in strip and "visible: root.oskOpen" in strip, "the hide key, only with the keyboard"
-assert "ownTaps: [hideKey, stripVoice]" in strip and "VoiceKey {" in strip, "the hide and voice keys' taps are no double tap"
+assert "HideKeyboardKey" not in strip and "VoiceKey" not in strip and "KeyboardKey" not in strip, "the strip is just the pill, as on Android"
 assert re.search(r"readonly property bool keyboardStripShown: stripShown && oskOpen$", src, re.M)
 PY
-# The keyboard's controls on the pill, through omamobile.keyboard's IPC:
-# a double tap toggles it, the hide key hides it, a hint toast once.
+# The pill, as on Android: a double tap toggles the keyboard (through
+# omamobile.keyboard's IPC), a hold opens the voice bar with a tick, a hint
+# toast once.
 grep -c 'if (doubleTap.tapCount === 2 && !onOwn && !wasOwn) root.keyboardCall("toggleKeyboard")' "$l" >/dev/null || fail "a double tap on the pill toggles the keyboard"
-grep -c 'onTapped: root.keyboardCall("hideKeyboard")' "$l" >/dev/null || fail "the hide key hides the keyboard"
+awk '/id: doubleTap/,/onTapped/' "$l" | grep -c 'longPressThreshold: 0.45' >/dev/null &&
+  awk '/id: doubleTap/,/onTapped/' "$l" | grep -c 'root.voiceHold()' >/dev/null || fail "a hold on the pill opens the voice bar"
+grep -c 'onHeld: root.voiceHold()' "$l" >/dev/null || fail "a hold on the home screen's search pill opens the voice bar"
+awk '/function voiceHold/,/^  }/' "$l" | grep -c 'fbcli -E button-pressed' >/dev/null || fail "the hold ticks"
 grep -c '"call", "shell", "call", "omamobile.keyboard", method, ""' "$l" >/dev/null || fail "keyboard calls go through omamobile.keyboard's IPC"
 if grep -n 'gesturePolicy' "$l" | grep -v '^[0-9]*: *//' ; then fail "the pill's tap handlers grab passively, so swipes get through"; fi
-grep -c 'omarchy-done ensure omamobile-keyboard-pill-hint && exec omarchy-notification-send' "$l" >/dev/null || fail "the double-tap hint shows once"
-grep -c 'keyboardHintText: "Double-tap the bar to show or hide the keyboard"' "$l" >/dev/null || fail "the double-tap hint's text"
-grep -c 'onTriggered: if (root.keyboardStripShown) root.keyboardHint()' "$l" >/dev/null || fail "the hint waits for the strip to stay"
+grep -c 'omarchy-done ensure omamobile-pill-hint && exec omarchy-notification-send' "$l" >/dev/null || fail "the pill's hint shows once"
+grep -c 'pillHintText: "Hold the pill to talk · double-tap for the keyboard"' "$l" >/dev/null || fail "the pill's hint's text"
+grep -c 'onStripShownChanged: stripShown ? hintDelay.restart() : hintDelay.stop()' "$l" >/dev/null || fail "the hint waits for the strip to stay"
 rc=0; out=$(bash test/pill-touch 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
   pass "the home pill under touch # SKIP no qmltestrunner"
 elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the home pill under touch (test/pill-touch)"
 else
-  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip, the search pill, the voice key"
+  pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip, the search pill, the hold for voice"
 fi
 grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
@@ -397,14 +400,15 @@ grep -c 'readonly property bool homeOnScreen: KeyboardModel.homeOnScreen(Hyprlan
 grep -c 'if (!KeyboardModel.shouldHide(shownByHand, oskOpen, homeOnScreen)) return' "$k" >/dev/null || fail "the keyboard plugin hides by the model's rule"
 grep -c 'onHomeOnScreenChanged: checkHome()' "$k" >/dev/null && grep -c 'shownByHand = KeyboardModel.shownByHandAfter(shownByHand, oskOpen)' "$k" >/dev/null \
   || fail "the rule is checked when the home screen or the keyboard changes"
-grep -A1 'function setVisible(visible) {' "$k" | grep -c 'shownByHand = visible' >/dev/null || fail "showing by hand is remembered"
+grep -A3 'function setVisible(visible) {' "$k" | grep -c 'shownByHand = visible' >/dev/null || fail "showing by hand is remembered"
+grep -c 'var show = KeyboardModel.toggleTarget(oskOpen, lastRequest, Date.now() - lastRequestAt)' "$k" >/dev/null || fail "a second double tap hides the keyboard, even before the first show is reported"
 if command -v node >/dev/null; then
   node test/keyboard-model.js >/dev/null || { node test/keyboard-model.js; fail "keyboard model"; }
 fi
 pass "a keyboard shown by hand goes away on the home screen"
 
-# The keyboard in the Omarchy theme and its action row (Talk, Ask, Paste,
-# Emoji, Hide): the stylesheet from a sample theme, the layouts as
+# The keyboard in the Omarchy theme and its action row (Mic, Paste, Emoji,
+# Hide): the stylesheet from a sample theme, the layouts as
 # squeekboard parses them, and the binds (test/phone-rules.lua).
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-keyboard-theme || fail "omamobile-keyboard-theme parses"
 bash test/keyboard-theme.sh >/dev/null || fail "omamobile-keyboard-theme"
@@ -712,9 +716,9 @@ fi
 pass "update sheet"
 
 # Voice input (omamobile.voice, docs/VOICE-PLAN.md): one voice bar.
-# Enabled for new and existing users; one way in on screen (the voice key
-# at the bottom bar's right end), the rest open the same bar (Power + Volume
-# Up, the Dictation tile, squeekboard's mic key through omamobile-voice);
+# Enabled for new and existing users; every way in opens the same bar (a
+# hold on the pill, the keyboard's Mic key, Power + Volume Up, the
+# Dictation tile through omamobile-voice);
 # one recording mode (--no-osd to the transcript file), delivered where the
 # bar's destination says; Ask goes through the launcher's promptArgv.
 v=plugins/omamobile.voice/Voice.qml
@@ -747,14 +751,16 @@ grep -c 'VoiceLink.publish(root)' "$v" >/dev/null || fail "voice publishes itsel
 cmp -s plugins/omamobile.voice/VoiceLink.js plugins/omamobile.launcher/DrawerLink.js && fail "VoiceLink.js is its own script"
 grep -c 'source: Qt.resolvedUrl("../omamobile.voice/VoiceLinkClient.qml")' "$l" >/dev/null || fail "the launcher loads the voice link"
 grep -c '"call", "shell", "call", "omamobile.voice", method, ""' "$l" >/dev/null || fail "voice calls fall back to the plugin's IPC"
-# One voice key, at the right end of the dock and of the strip; nothing
-# else in the launcher starts voice.
-[[ $(grep -c '^        VoiceKey {$' "$l") == 2 ]] && grep -c 'onTapped: root.voiceCall("toggle")' "$l" >/dev/null ||
-  fail "the bottom bar's voice key, on the dock and the strip"
-if grep -nE 'askPress|askTap|dictate(Press|Tap)|agent(Press|Tap)|voiceSetting|component (MicKey|AgentMicKey)|pillMic' "$l"; then
-  fail "no other voice entry point in the launcher"
+# The hold on the pill is the launcher's only way into voice: no buttons.
+grep -c 'return voiceCall("start")' "$l" >/dev/null || fail "the hold starts the voice bar"
+if grep -nE 'askPress|askTap|dictate(Press|Tap)|agent(Press|Tap)|voiceSetting|component (MicKey|AgentMicKey|VoiceKey|KeyboardKey|HideKeyboardKey)|pillMic' "$l"; then
+  fail "no other voice entry point or bottom-bar button in the launcher"
 fi
-grep -c 'omarchy-done ensure omamobile-voice-bar-hint && exec omarchy-notification-send' "$l" >/dev/null || fail "the voice bar's tip shows once"
+# squeekboard's Mic key: the same bar, push-to-talk
+grep -c 'o.bind("XF86Dictate", "Keyboard: voice", voice("press"), { device = osk_only })' hypr/phone.lua >/dev/null &&
+  grep -c 'o.bind("XF86Dictate", "Keyboard: voice released", voice("release"), { device = osk_only, release = true })' hypr/phone.lua >/dev/null ||
+  fail "the keyboard's Mic key opens the voice bar"
+if grep -n 'XF86Assistant' hypr/phone.lua squeekboard/keyboards/*.yaml squeekboard/keyboards/*/*.yaml; then fail "no Ask key: Mic is the one"; fi
 # omamobile-voice: the one command for the tile, squeekboard and scripts.
 sh -n bin/omamobile-voice || fail "omamobile-voice parses"
 grep -c 'toggle | start | done | cancel | snapshot)' bin/omamobile-voice >/dev/null || fail "omamobile-voice's actions"
@@ -782,7 +788,7 @@ grep -c "jq -e '.powerVolumeUp == true'" bin/omamobile-keys >/dev/null || fail "
 if [[ -n ${OMAMOBILE_VOICE_RENDER:-} ]]; then
   bash test/voice-render "$OMAMOBILE_VOICE_RENDER" >/dev/null || fail "voice bar render"
 fi
-pass "voice input: one voice bar, one voice key, delivered where the chip says"
+pass "voice input: one voice bar, a hold on the pill, delivered where the chip says"
 
 # The permission sheet: the portal Access backend (its pure parts, then the
 # D-Bus service on a private bus against a fake omarchy-shell), the sheet's

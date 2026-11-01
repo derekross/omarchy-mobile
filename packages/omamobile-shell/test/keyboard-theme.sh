@@ -54,9 +54,9 @@ latched = block("sq_button.latched, sq_button.locked")
 assert latched["background"] == "#7aa2f7" and latched["color"] == "#1a1b26", latched
 ret = block("#Return")
 assert ret["background"] == "#7aa2f7" and ret["color"] == "#1a1b26", ret
-assert block("sq_button.talk")["border-color"] == "#f7768e"
-assert block("sq_button.ask")["border-color"] == "#e0af68"
-row = block("sq_button.talk, sq_button.ask, sq_button.paste, sq_button.emoji, sq_button.hide")
+assert block("sq_button.mic")["border-color"] == "#f7768e", "Mic in the recording colour"
+assert "sq_button.talk" not in css and "sq_button.ask" not in css, "no Talk or Ask any more"
+row = block("sq_button.mic, sq_button.paste, sq_button.emoji, sq_button.hide")
 assert row["border"] == "2px solid #414868", row
 special = [s for s in re.findall(r"(?m)^(sq_button\.special[^{]*) \{", css)][0]
 for cls in ("term-key", "term-narrow", "small-row", "change-view", "special-3", "emoji-group"):
@@ -83,6 +83,14 @@ rm -f "$t/calls"
 sed -i 's/^accent = .*/accent = "#00ff00"/' "$theme/colors.toml"
 run --restart
 [[ ! -e $t/calls ]] || fail "a squeekboard that isn't running isn't started"
+# Under Hyprland, through Hyprland's exec (from SSH or setup, a direct start
+# didn't bring the keyboard back)
+printf '#!/bin/bash\necho "hyprctl $*" >>%s/calls\n' "$t" >"$F/hyprctl"; chmod +x "$F/hyprctl"
+touch "$t/running"; rm -f "$t/calls"
+sed -i 's/^accent = .*/accent = "#0000ff"/' "$theme/colors.toml"
+env -i HOME="$H" PATH="$F:/usr/bin:/bin" HYPRLAND_INSTANCE_SIGNATURE=x python3 -I "$pkg/bin/omamobile-keyboard-theme" --restart
+[[ $(cat "$t/calls") == $'pkill -x squeekboard\nhyprctl dispatch hl.dsp.exec_cmd("uwsm-app -- squeekboard")' ]] || fail "under Hyprland, squeekboard restarts through its exec"
+rm -f "$F/hyprctl" "$t/calls"
 
 # Fallbacks: only Omarchy's three required colours
 printf 'background = "#ffffff"\nforeground = "#000000"\naccent = "#0055ff"\nmode = "light"\n' >"$theme/colors.toml"

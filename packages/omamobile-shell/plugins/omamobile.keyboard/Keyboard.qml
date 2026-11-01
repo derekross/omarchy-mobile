@@ -11,8 +11,8 @@ import "KeyboardModel.js" as KeyboardModel
 //
 // It draws nothing. The controls live on the home pill (omamobile.launcher):
 // while the keyboard is up over an app, the pill sits in a strip of its own
-// under the keyboard, with a keyboard-down key at the strip's right end, and
-// a double tap on the pill shows or hides the keyboard. The launcher reaches
+// under the keyboard, and a double tap on the pill shows or hides it (since
+// 0.2.61 the strip is just the pill, as on Android). The launcher reaches
 // these through IPC (`hideKeyboard`, `toggleKeyboard`), as plugins reach each
 // other here.
 //
@@ -25,7 +25,7 @@ import "KeyboardModel.js" as KeyboardModel
 // language; overriding them means carrying and updating copies of all of
 // them.) Since 0.2.61 the US English and terminal layouts we carry
 // (squeekboard/keyboards/) have a Hide key in their action row, which
-// hypr/phone.lua binds to hideKeyboard; other languages keep the strip's key.
+// hypr/phone.lua binds to hideKeyboard; other languages have the double tap.
 Item {
   id: root
 
@@ -51,9 +51,19 @@ Item {
   // for itself)
   function hideKeyboard() { setVisible(false); return "ok" }
   function showKeyboard() { setVisible(true); return "ok" }
-  function toggleKeyboard() { setVisible(!oskOpen); return oskOpen ? "hiding" : "showing" }
+  function toggleKeyboard() {
+    var show = KeyboardModel.toggleTarget(oskOpen, lastRequest, Date.now() - lastRequestAt)
+    setVisible(show)
+    return show ? "showing" : "hiding"
+  }
+
+  // The last show or hide asked for, and when (KeyboardModel.toggleTarget).
+  property var lastRequest: null
+  property real lastRequestAt: 0
 
   function setVisible(visible) {
+    lastRequest = visible
+    lastRequestAt = Date.now()
     shownByHand = visible
     Quickshell.execDetached(["busctl", "--user", "call", "sm.puri.OSK0", "/sm/puri/OSK0",
                              "sm.puri.OSK0", "SetVisible", "b", visible ? "true" : "false"])

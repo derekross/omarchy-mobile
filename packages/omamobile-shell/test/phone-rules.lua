@@ -124,12 +124,10 @@ local function one(keys, release, command)
   local f = find(keys, release)
   return #f == 1 and device_is(f[1], true) and f[1].dispatcher == command
 end
-check(one("XF86Dictate", false, "omarchy-shell shell call omamobile.voice dictatePress ''")
-  and one("XF86Dictate", true, "omarchy-shell shell call omamobile.voice dictateRelease ''"),
-  "Talk: press starts dictation, release stops it")
-check(one("XF86Assistant", false, "omarchy-shell shell call omamobile.voice askPress ''")
-  and one("XF86Assistant", true, "omarchy-shell shell call omamobile.voice askRelease ''"),
-  "Ask: press opens the listening sheet, release stops it")
+check(one("XF86Dictate", false, "omarchy-shell shell call omamobile.voice press ''")
+  and one("XF86Dictate", true, "omarchy-shell shell call omamobile.voice release ''"),
+  "Mic: press opens the voice bar (push-to-talk), release stops a hold")
+check(#find("XF86Assistant") == 0, "no Ask key any more: Mic is the one voice key")
 check(one("XF86Paste", false, "omarchy-menu-clipboard"), "Paste opens Omarchy's clipboard")
 check(one("XF86EmojiPicker", false, "omarchy-menu-emoji"), "Emoji opens Omarchy's emoji picker")
 check(one("XF86Keyboard", false, "omarchy-shell shell call omamobile.keyboard hideKeyboard ''"), "Hide hides the keyboard")
