@@ -2388,6 +2388,44 @@ never change, so reviews can cite them.
   sibling is compared with the sibling's current version. *From:* kernel
   #177, 2026-11-01.
 
+- **L-402. Before asking for a phone run of a DT node whose driver is a
+  module, check the device package's `modprobe.d` for a blacklist of that
+  driver or its provider;** a blacklisted provider leaves the consumer
+  deferred and the run passes without testing anything. *From:* kernel #176
+  (`nvmem_max77759` on cheetah), 2026-11-01.
+- **L-403. Wording we suggest on a companion PR is checked against what we
+  told the contributor on the kernel PR.** *From:* #262 with kernel #174,
+  2026-11-01.
+- **L-404. A branch whose version file equals main's merges without a
+  conflict;** treat an equal version as taken. Extends L-12. *From:* #267,
+  #124, 2026-11-01.
+- **L-405. A PR with a merge conflict gets no CI;** "no checks" means run
+  `git merge-tree` and the package tests yourself. Related to L-400.
+  *From:* #259, #268, 2026-11-01.
+- **L-406. A sleep hook that moves its check into the background can
+  overlap the next sleep;** ask what `pre` does while that unit is still
+  active. *From:* #275, 2026-11-01.
+- **L-407. A hook that stands aside for upstream's copy is checked against
+  the exact path upstream installs it to.** *From:* #269 (Omarchy's
+  `fprintd-resume`), 2026-11-01.
+- **L-408. A maintainer-added commit at landing is validated against
+  today's bindings at the landed head,** not the tested branch's: the PR's
+  CI never builds it. *From:* the kernel #104 landing (gs201 PMU clocks
+  against the split `google,gs101-pmu.yaml`), 2026-11-01.
+- **L-409. A rail list in a gotcha is checked against each rail's
+  `regulator-name` and consumers in the DT the phone runs.** *From:* #270,
+  2026-11-01.
+- **L-410. A package test must not read the running system's
+  `/sys/firmware/devicetree` (or any real hardware path):** on a phone build
+  it takes the real branch. Stub every such path. *From:* #114 (a 7 Pro
+  build ran the real `modprobe`), 2026-11-01.
+- **L-411. A runbook that turns a supply on from userspace says what holds
+  that state across a SoC reset and undoes it early in the next boot, and
+  its register sequence is checked against Google's GPL driver.** Extends
+  C-3. *From:* issue #272, 2026-11-01.
+- **L-412. For stock DT values, ask for Google's GPL board source before a
+  decompiled image.** *From:* #249, 2026-11-01.
+
 ## Corrections (where a review was wrong)
 
 - **C-1 (2026-10-22). We blamed the 30 s unused-regulator cleanup for the
