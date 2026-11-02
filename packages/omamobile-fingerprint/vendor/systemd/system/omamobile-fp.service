@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Google's fingerprint HAL, Trusty's storage proxy, KeyMint and Gatekeeper in
 # a minimal chroot, plus omamobile-fp-bridge, which fprintd's omamobile_udfps
-# driver talks to (device/cheetah/FINGERPRINT-PLAN.md). Not enabled by the
-# package: omamobile-firstboot enables it on a phone whose owner acknowledged
-# the secure-storage write at install time (/etc/omamobile/fingerprint.conf),
-# and the runner refuses a first storage start without that record.
+# driver talks to (device/cheetah/FINGERPRINT-PLAN.md). Enabled by the
+# package (a vendor wants link) and inert until tools/phone-provision has
+# pushed Google's files (the conditions below). Before storageproxyd the
+# runner makes read-only copies of mfg_data and persist:/ss and refuses to
+# start without the TDP copy or once it, or persist:/ss/0, changed.
 #
 # One start per boot. Trusty keeps its storage state until a reboot, and a
 # storage proxy stopped and started again in the same boot crashed Trusty's

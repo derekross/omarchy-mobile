@@ -6,10 +6,12 @@
 #
 #   omamobile-fp-chroot check            preconditions only; changes nothing
 #   omamobile-fp-chroot preflight        the safety checks a start runs before
-#                                        storageproxyd (consent, the read-only
-#                                        copies, the TDP guard, once per boot);
-#                                        on success it counts as this boot's
-#                                        start (start runs it itself)
+#                                        storageproxyd (the read-only copies,
+#                                        the TDP guard, once per boot). Not a
+#                                        dry check: it makes the copies, and on
+#                                        success it counts as this boot's start,
+#                                        so the service then refuses until a
+#                                        reboot (start runs it itself)
 #   omamobile-fp-chroot start [STAGE]    start the stack up to STAGE, in the
 #                                        foreground (systemd runs it), and
 #                                        supervise it until stopped
@@ -34,11 +36,6 @@
 # Safety before storageproxyd (preflight; FINGERPRINT-PLAN F19 and
 # section 4). Every start runs storageproxyd, and Trusty's storage writes
 # the RPMB, so:
-#   - consent: the storage stage runs only when /etc/omamobile/fingerprint.conf
-#     says CONSENT=yes (omamobile-firstboot writes it from the installer's
-#     acknowledgement; a missing file or key is no), or when this install's
-#     secure storage already exists (a phone whose first run had the human's
-#     go during bring-up);
 #   - the read-only copies (the 7 Pro): at the first start it copies
 #     mfg_data (dd) and persist:/ss/0 and /ss/nsp (debugfs, which reads the
 #     partition without mounting it) into $STATE and records their sha256 in
@@ -52,7 +49,17 @@
 #   - once per boot: Trusty keeps each store's state for the whole boot, and
 #     a storage proxy stopped and started again in the same boot crashed
 #     Trusty's storage app on 2026-11-02 (FINGERPRINT-PLAN F19). A marker in
-#     /run refuses a second start until a reboot.
+#     /run refuses a second start until a reboot, and the inner start
+#     (in the namespace) runs only with the token preflight wrote there;
+#   - a start that never got running: a marker in $STATE is set before
+#     storageproxyd and cleared once the stack runs. Found at the next boot,
+#     it means that start died on the way (Trusty halted, which also takes
+#     the AoC's sound and sensors with it), so that boot skips fingerprint
+#     once and the one after tries again.
+#
+# The overrides of the partitions' and markers' paths (OMAMOBILE_FP_RUN,
+# _SYSBLOCK, _DEVDIR, _MOUNTS, _BOOT_ID) are honoured only with
+# OMAMOBILE_FP_TEST=1, which the unit never sets (test/preflight).
 set -euo pipefail
 
 IMAGE=${OMAMOBILE_FP_IMAGE:-/usr/lib/omamobile-fp/root}
@@ -96,14 +103,23 @@ esac
 PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
 PROPS_DEVICE=${OMAMOBILE_FP_PROPS_DEVICE:-/usr/lib/omamobile-fp/props-$DEVICE.conf}
 STATE=${OMAMOBILE_FP_STATE:-/var/lib/omamobile-fp}
-RUN=${OMAMOBILE_FP_RUN:-/run/omamobile-fp}
-# The owner's install-time acknowledgement (omamobile-firstboot writes it).
-CONSENT=${OMAMOBILE_FP_CONSENT:-/etc/omamobile/fingerprint.conf}
-# Where the partitions are found (tests point these at a fake tree).
-SYSBLOCK=${OMAMOBILE_FP_SYSBLOCK:-/sys/class/block}
-DEVDIR=${OMAMOBILE_FP_DEVDIR:-/dev}
-MOUNTS=${OMAMOBILE_FP_MOUNTS:-/proc/mounts}
+RUN=/run/omamobile-fp
+# Where the partitions are found
+SYSBLOCK=/sys/class/block
+DEVDIR=/dev
+MOUNTS=/proc/mounts
+BOOT_ID_FILE=/proc/sys/kernel/random/boot_id
+# test/preflight points these at a fake tree; nothing else may
+if [[ ${OMAMOBILE_FP_TEST:-} == 1 ]]; then
+  RUN=${OMAMOBILE_FP_RUN:-$RUN}
+  SYSBLOCK=${OMAMOBILE_FP_SYSBLOCK:-$SYSBLOCK}
+  DEVDIR=${OMAMOBILE_FP_DEVDIR:-$DEVDIR}
+  MOUNTS=${OMAMOBILE_FP_MOUNTS:-$MOUNTS}
+  BOOT_ID_FILE=${OMAMOBILE_FP_BOOT_ID:-$BOOT_ID_FILE}
+fi
 PROVENANCE=$STATE/provenance
+# Set before storageproxyd, cleared once the stack runs (see the header).
+PENDING=$STATE/start-pending
 # Set once storageproxyd may have started this boot; /run goes with the
 # reboot, which is exactly when Trusty's state does.
 MARKER=$RUN/storageproxyd-started
@@ -134,10 +150,12 @@ die() { say "error: $*"; exit 1; }
 # env(1) would look chroot up in that.
 CHROOT_BIN=$(PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v chroot || true)
 
-# A supervised child still running (not gone, not a zombie)?
+# A supervised child still running (not gone, not a zombie)? PIDS[] holds
+# the namespace's PIDs, so this reads the namespace's procfs, which setup()
+# mounts at $ROOT/proc; the host's /proc would answer for another process.
 alive() {
   local st
-  st=$(sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null) || return 1
+  st=$(sed 's/^.*) //' "$ROOT/proc/$1/stat" 2>/dev/null) || return 1
   [[ -n $st && ${st%% *} != Z ]]
 }
 
@@ -222,27 +240,12 @@ check() {
     [[ -f $STATE/mfg_data.img ]] ||
       say "no $STATE/mfg_data.img yet: the first start copies it from mfg_data"
   fi
-  if consent_given; then say "consent: yes ($CONSENT)"
-  elif storage_exists; then say "consent: no record, but this install's secure storage already exists"
-  else say "consent: no (no CONSENT=yes in $CONSENT): the storage stage will refuse"; fi
-  [[ ! -e $MARKER ]] || say "storageproxyd already started this boot: a new start needs a reboot"
+  [[ -n ${OMAMOBILE_FP_IN_NS:-} || ! -e $MARKER ]] || say "storageproxyd already started this boot: a new start needs a reboot"
   ((ok)) || exit 1
   say "preconditions met"
 }
 
 # --- Safety before storageproxyd (see the header) ---------------------------
-
-# CONSENT=yes in the consent file. Data, never sourced; anything else is no.
-consent_given() {
-  [[ -f $CONSENT ]] && grep -qx 'CONSENT=yes' "$CONSENT"
-}
-
-# This install's TD already exists: storageproxyd ran here before (on the
-# bring-up phones, with the human's go), so the irreversible first run is
-# behind it.
-storage_exists() {
-  [[ -s $STATE/data/vendor/ss/0 || -L $STATE/data/vendor/ss/0 || -f $STATE/td.img ]]
-}
 
 # The block device name of a partition, by PARTNAME (the Arch root has no
 # /dev/disk/by-partlabel).
@@ -306,10 +309,16 @@ provision() {
     [[ ! -f $tmp/nsp ]] || mv "$tmp/nsp" "$STATE/persist-ss/nsp"
     say "copied persist:/ss read-only (debugfs; persist is never mounted)"
   fi
-  if [[ ! -s $STATE/mfg_data.img ]]; then
-    dd if="$DEVDIR/$m" of="$tmp/mfg_data.img" bs=1M status=none || die "can't read mfg_data"
-    [[ -s $tmp/mfg_data.img ]] || die "mfg_data read empty"
-    chmod 0600 "$tmp/mfg_data.img"
+  dd if="$DEVDIR/$m" of="$tmp/mfg_data.img" bs=1M status=none || die "can't read mfg_data"
+  [[ -s $tmp/mfg_data.img ]] || die "mfg_data read empty"
+  chmod 0600 "$tmp/mfg_data.img"
+  if [[ -s $STATE/mfg_data.img ]] && cmp -s "$tmp/mfg_data.img" "$STATE/mfg_data.img"; then
+    say "the existing mfg_data.img matches the partition: recording it"
+  else
+    if [[ -e $STATE/mfg_data.img ]]; then
+      mv -- "$STATE/mfg_data.img" "$STATE/mfg_data.img.before-provision.$(date +%Y%m%d%H%M%S)"
+      say "the existing mfg_data.img differs from the partition: moved aside, copied again"
+    fi
     mv "$tmp/mfg_data.img" "$STATE/mfg_data.img"
     say "copied mfg_data read-only (the factory calibration; the partition is never written)"
   fi
@@ -365,19 +374,24 @@ tdp_guard() {
 # on this boot's storage proxy counts as started, even if a later step fails.
 preflight() {
   if [[ -e $MARKER ]]; then
-    die "secure storage already ran this boot ($(cat "$MARKER" 2>/dev/null || true)): Trusty keeps its storage state until a reboot, and a second storage proxy in the same boot can crash it. Reboot to start fingerprint again"
+    die "secure storage already ran this boot ($(sed "s/ token .*//" "$MARKER" 2>/dev/null || true)): Trusty keeps its storage state until a reboot, and a second storage proxy in the same boot can crash it. Reboot to start fingerprint again"
   fi
-  if consent_given; then
-    say "consent: the owner's install-time acknowledgement ($CONSENT)"
-  elif storage_exists; then
-    say "no consent record in $CONSENT, but this install's secure storage already exists (its first run had the human's go)"
-  else
-    die "no consent for the first secure-storage write: $CONSENT has no CONSENT=yes (the installer's acknowledgement writes it). Nothing started"
+  local boot pending
+  boot=$(cat "$BOOT_ID_FILE" 2>/dev/null || echo unknown)
+  if [[ -f $PENDING ]]; then
+    pending=$(cat "$PENDING" 2>/dev/null || true)
+    if [[ ${pending%% *} != "$boot" ]]; then
+      rm -f "$PENDING"
+      die "the last start (${pending#* }) never got running: it may have halted Trusty, which also stops the AoC's sound and sensors. Skipping fingerprint this boot; the next boot tries again (journalctl -b -1 -u omamobile-fp)"
+    fi
   fi
   ((MAP_STORES)) || provision
   tdp_guard
   install -d -m 0755 "$RUN"
-  echo "$(date -Is 2>/dev/null || date) pid $$" > "$MARKER"
+  TOKEN=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  (umask 077; echo "$(date -Is 2>/dev/null || date) pid $$ token $TOKEN" > "$MARKER")
+  install -d -m 0700 "$STATE"
+  echo "$boot $(date -Is 2>/dev/null || date)" > "$PENDING"
 }
 
 # Bind $1 onto $2 (created as a file or directory to match), optionally ro.
@@ -579,6 +593,12 @@ declare -A PIDS=()
 start() {
   local stage=${1:-bridge} sg
   case $stage in storage|apploader|keys|hal|bridge) ;; *) die "unknown stage $stage" ;; esac
+  if [[ -n ${OMAMOBILE_FP_IN_NS:-} ]]; then
+    # Only after this boot's preflight: its marker carries the token it
+    # handed down, so OMAMOBILE_FP_IN_NS=1 alone can't skip the checks.
+    [[ -n ${OMAMOBILE_FP_TOKEN:-} && -f $MARKER && $(sed -n 's/.* token //p' "$MARKER") == "$OMAMOBILE_FP_TOKEN" ]] ||
+      die "the inner start runs only after this boot's preflight (omamobile-fp-chroot start)"
+  fi
   # Modules the stack needs, blacklisted from autoload (omamobile-device-
   # cheetah: omamobile-fingerprint.conf): load them by name, as needed.
   if [[ -z ${OMAMOBILE_FP_IN_NS:-} ]]; then
@@ -599,6 +619,7 @@ start() {
     # Consent, the read-only copies, the TDP guard, once per boot: every
     # stage starts storageproxyd.
     preflight
+    export OMAMOBILE_FP_TOKEN=$TOKEN
     # Re-exec in a private mount namespace (and PID namespace, so the
     # Android processes die with us). Not a network namespace: see above.
     # systemd signals only this process (KillMode=mixed); unshare hands
@@ -613,6 +634,9 @@ start() {
   # shared with the host until our mounts, so record the host PID for ns/run.
   awk '/^NSpid:/ {print $2}' /proc/self/status > "$NSPID"
   trap 'stop 0' TERM INT
+  # a die from here on (after the proxy may have started) still stops the
+  # stack in order
+  trap 'stop $?' EXIT
   setup "$sg"
 
   spawn servicemanager system /system/bin/servicemanager
@@ -671,6 +695,7 @@ start() {
   fi
 
   say "stage $stage running"
+  rm -f "$PENDING"
   # Supervise: any child exiting stops the whole stack, and it stays stopped
   # until a reboot (one storage proxy per boot; the unit has no Restart=).
   wait -n || true

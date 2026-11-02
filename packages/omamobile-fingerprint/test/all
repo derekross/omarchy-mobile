@@ -76,7 +76,50 @@ grep -c '^KillMode=mixed$' "$u" >/dev/null || fail "systemd signals only the run
 # Stop order: the bridge and the HAL, then KeyMint and Gatekeeper, the proxy last
 order=$(sed -n '/^stop() {/,/^}/p' lib/omamobile-fp-chroot | sed -n 's/^ *stop_children [0-9]* //p' | tr '\n' '|')
 [[ $order == "bridge fingerprint|gatekeeper keymint|storageproxyd|" ]] || fail "stop order: $order"
+grep -c 'ln -sfn ../omamobile-fp.service "$d/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service"' install >/dev/null ||
+  fail "the package enables omamobile-fp itself (so only this runner is ever enabled by default)"
 echo "ok - one start per boot, no restart loop, the storage proxy stopped last"
+
+# alive() and stop_children() in a real PID namespace (the runner's PIDS[]
+# are the namespace's PIDs): a child that exits on TERM is seen gone at once,
+# one that ignores TERM is waited for, and an exited child never reads as
+# running because the host has a process with that number.
+fns=$(sed -n '/^alive() {/,/^}/p; /^stop_children() {/,/^}/p' lib/omamobile-fp-chroot)
+[[ -n $fns ]] || fail "alive and stop_children not found"
+nsroot=$(mktemp -d)
+if unshare --user --map-root-user --mount --propagation private --pid --fork \
+     bash -c 'mkdir -p "$1/proc" && mount -t proc proc "$1/proc"' _ "$nsroot" 2>/dev/null; then
+  # As in the runner: /proc stays the host's, the namespace's procfs is
+  # mounted at $ROOT/proc
+  out=$(unshare --user --map-root-user --mount --propagation private --pid --fork bash -c '
+    set -euo pipefail
+    ROOT=$1
+    mount -t proc proc "$ROOT/proc"
+    say() { echo "say: $*"; }
+    '"$fns"'
+    declare -A PIDS=()
+    sleep 30 & PIDS[quick]=$!
+    bash -c "trap \"\" TERM; sleep 3" & PIDS[stubborn]=$!
+    sleep 0.2
+    s=$(date +%s%N); stop_children 50 quick; e=$(date +%s%N)
+    echo "quick_ms=$(( (e - s) / 1000000 ))"
+    alive "${PIDS[quick]}" && echo "quick=alive" || echo "quick=gone"
+    alive 2 && echo "pid2=alive" || echo "pid2=gone"
+    stop_children 10 stubborn
+    alive "${PIDS[stubborn]}" && echo "stubborn=alive" || echo "stubborn=gone"
+    kill -KILL "${PIDS[stubborn]}" 2>/dev/null || true
+  ' _ "$nsroot" 2>&1)
+  ms=$(sed -n 's/^quick_ms=//p' <<<"$out")
+  [[ -n $ms ]] && ((ms < 2000)) || fail "a child that exits on TERM is seen gone at once ($out)"
+  grep -qx 'quick=gone' <<<"$out" || fail "an exited child reads as gone ($out)"
+  grep -qx 'pid2=gone' <<<"$out" || fail "alive() reads the namespace's processes, not the host's ($out)"
+  grep -q 'say: still running after 1 s: stubborn' <<<"$out" && grep -qx 'stubborn=alive' <<<"$out" ||
+    fail "a child that ignores TERM is waited for and reported ($out)"
+  echo "ok - alive() and the ordered stop see the namespace's processes (stops take as long as the children)"
+else
+  echo "ok - alive() in a PID namespace # SKIP no unprivileged user namespaces here"
+fi
+rmdir "$nsroot/proc" 2>/dev/null; rmdir "$nsroot" 2>/dev/null || true
 
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
@@ -112,6 +155,9 @@ done
 [[ -z $(find "$stage" -path '*/root/*' -print -quit) ]] || fail "vendor files staged"
 # the modprobe file reached the stage
 [[ -f $stage/usr/lib/modprobe.d/omamobile-fingerprint-lhbm.conf ]] || fail "not staged: modprobe.d/omamobile-fingerprint-lhbm.conf"
+# on by default, with this runner: the package itself enables the unit
+[[ $(readlink "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service") == ../omamobile-fp.service ]] ||
+  fail "the package enables omamobile-fp (vendor wants link)"
 if command -v systemd-analyze >/dev/null; then
   out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-fp.service" 2>&1 || true)
   out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)

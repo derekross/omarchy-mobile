@@ -5,15 +5,18 @@
 # contents as plain files, debugfs replaced by a stub that "dumps" from a
 # directory standing in for persist's file system. Nothing real is read.
 #
-#   no consent              -> refused, nothing copied
-#   consent                 -> mfg_data and persist:/ss/{0,nsp} copied, hashed
+#   a first start           -> mfg_data and persist:/ss/{0,nsp} copied, hashed
+#   an existing mfg_data.img -> adopted only if it matches the partition
 #   a second start          -> refused until a reboot (the /run marker)
 #   the TDP copy missing    -> refused (and never quietly recreated)
 #   no /ss/0 in persist     -> refused
 #   the TDP copy changed    -> refused
 #   persist:/ss/0 changed   -> refused
 #   a writable partition    -> refused
-#   existing secure storage -> allowed without the record (bring-up phones)
+#   hand-made copies        -> the TDP copy checked against persist:/ss/0
+#   a start that never ran  -> the next boot skips once, the one after starts
+#   the path overrides      -> ignored without OMAMOBILE_FP_TEST=1
+#   the inner start         -> refused without this boot's preflight token
 #   the 9a without tdp.img  -> refused
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
@@ -37,6 +40,7 @@ phone() {
   head -c 65536 /dev/urandom > "$p/dev/sda6"
   head -c 4096 /dev/urandom > "$p/persistfs/ss/0"
   echo "nsp from stock" > "$p/persistfs/ss/nsp"
+  echo boot-1 > "$p/boot_id"
   : > "$p/mounts"
   # debugfs -R "dump -p SRC DST" DEV: copy from persistfs, and log the call
   cat > "$p/bin/debugfs" <<EOF
@@ -52,30 +56,21 @@ EOF
 }
 
 pf() {
-  PATH=$t/p/bin:$PATH \
+  PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=${TESTMODE-1} OMAMOBILE_FP_BOOT_ID=$t/p/boot_id \
   OMAMOBILE_FP_DEVICE=${DEV:-cheetah} OMAMOBILE_FP_STATE=$t/p/state \
-  OMAMOBILE_FP_CONSENT=$t/p/etc/fingerprint.conf OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp \
+  OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp \
   OMAMOBILE_FP_SYSBLOCK=$t/p/sys OMAMOBILE_FP_DEVDIR=$t/p/dev OMAMOBILE_FP_MOUNTS=$t/p/mounts \
     "$RUNNER" preflight > "$t/out" 2>&1
 }
-consent() { printf 'CONSENT=%s\nCONSENT_SOURCE=install-acknowledgement\nCONSENT_DATE=2026-11-02\n' "$1" > "$t/p/etc/fingerprint.conf"; }
+# A reboot: a new boot id, /run emptied, and the stack reached "running"
+# (which clears the pending marker)
+newboot() { rm -rf "$t/p/run"; mkdir -p "$t/p/run"; rm -f "$S/start-pending"; head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$t/p/boot_id"; }
 marker=$t/p/run/omamobile-fp/storageproxyd-started
 S=$t/p/state
 
-# No consent: no file, CONSENT=no, a key that only looks like it
 phone
-pf && fail "no consent file: refused"
-grep -c 'no consent' "$t/out" >/dev/null || { cat "$t/out"; fail "says why (no consent)"; }
-[[ ! -e $S/persist-ss/0 && ! -e $S/mfg_data.img && ! -e $marker ]] || fail "nothing is copied or marked without consent"
-consent no; pf && fail "CONSENT=no: refused"
-printf 'CONSENT=yes # later\n' > "$t/p/etc/fingerprint.conf"; pf && fail "only an exact CONSENT=yes counts"
-printf 'FINGERPRINT=yes\n' > "$t/p/etc/fingerprint.conf"; pf && fail "another key is not consent"
-[[ ! -e $marker && ! -e $t/p/debugfs.log ]] || fail "persist is not even read without consent"
-pass "no consent: refused, nothing read, copied or marked"
-
-# Consent: the copies are made, hashed and recorded; the marker is set
-consent yes
-pf || { cat "$t/out"; fail "consent: preflight passes"; }
+# A first start: the copies are made, hashed and recorded; the markers are set
+pf || { cat "$t/out"; fail "a first start passes preflight"; }
 cmp -s "$S/persist-ss/0" "$t/p/persistfs/ss/0" || fail "persist:/ss/0 copied"
 cmp -s "$S/persist-ss/nsp" "$t/p/persistfs/ss/nsp" || fail "persist:/ss/nsp copied"
 cmp -s "$S/mfg_data.img" "$t/p/dev/sda6" || fail "mfg_data copied"
@@ -87,70 +82,104 @@ done
 [[ -e $marker ]] || fail "the once-per-boot marker is set"
 grep -c 'dump -p /ss/0 ' "$t/p/debugfs.log" >/dev/null || fail "persist is read with debugfs"
 grep -v -c 'debugfs -R dump -p ' "$t/p/debugfs.log" >/dev/null && fail "debugfs only dumps (no -w, no other request)"
-pass "consent: mfg_data and persist:/ss copied read-only and their hashes recorded"
+grep -c ' token [0-9a-f]\{32\}$' "$marker" >/dev/null || fail "the marker carries the token for the inner start"
+[[ $(stat -c %a "$marker") == 600 ]] || fail "the marker (and its token) is root's only"
+[[ $(cut -d' ' -f1 "$S/start-pending") == boot-1 ]] || fail "the start is pending until it runs"
+pass "a first start: mfg_data and persist:/ss copied read-only and their hashes recorded"
 
 # A second start in the same boot
 pf && fail "a second start in the same boot is refused"
 grep -c 'Reboot' "$t/out" >/dev/null || { cat "$t/out"; fail "says to reboot"; }
-rm -f "$marker"                     # the reboot
+newboot
 pf || { cat "$t/out"; fail "after a reboot it starts again"; }
 pass "one storage proxy per boot: a second start is refused until a reboot"
 
 # The TDP copy removed by hand: refused, not recreated
-rm -f "$marker" "$S/persist-ss/0"
+newboot; rm -f "$S/persist-ss/0"
 pf && fail "a missing TDP copy is refused"
 grep -c 'no TDP copy' "$t/out" >/dev/null || { cat "$t/out"; fail "says the TDP copy is missing"; }
 [[ ! -e $S/persist-ss/0 && ! -e $marker ]] || fail "the TDP copy is never quietly recreated"
 pass "a missing TDP copy: refused, never recreated behind the record"
 
 # persist without /ss/0 on a new install
-phone; consent yes; rm -f "$t/p/persistfs/ss/0"
+phone; rm -f "$t/p/persistfs/ss/0"
 pf && fail "no /ss/0 in persist: refused"
 [[ ! -e $S/provenance && ! -e $marker ]] || fail "nothing recorded without a TDP copy"
 pass "persist without /ss/0: refused, no TDP copy, no storage start"
 
 # The TDP copy changed after the record (Linux wrote TDP)
-phone; consent yes; pf || fail "setup"
-rm -f "$marker"; echo x >> "$S/persist-ss/0"
+phone; pf || fail "setup"
+newboot; echo x >> "$S/persist-ss/0"
 pf && fail "a changed TDP copy is refused"
 grep -c 'TDP copy changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says the TDP copy changed"; }
 pass "the TDP copy changed since the record: refused"
 
 # persist:/ss/0 changed under the copy (a stock boot)
-phone; consent yes; pf || fail "setup"
-rm -f "$marker"; echo x >> "$t/p/persistfs/ss/0"
+phone; pf || fail "setup"
+newboot; echo x >> "$t/p/persistfs/ss/0"
 pf && fail "a changed persist:/ss/0 is refused"
 grep -c 'persist:/ss/0 changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says persist:/ss/0 changed"; }
 pass "persist:/ss/0 changed since the copy: refused"
 
 # The storage guard: a writable or read-write mounted partition
-phone; consent yes; echo 0 > "$t/p/sys/sda5/ro"
+phone; echo 0 > "$t/p/sys/sda5/ro"
 pf && fail "persist ro=0: refused"
 grep -c "not read-only" "$t/out" >/dev/null || { cat "$t/out"; fail "says persist is not read-only"; }
-phone; consent yes; echo 0 > "$t/p/sys/sda6/ro"
+phone; echo 0 > "$t/p/sys/sda6/ro"
 pf && fail "mfg_data ro=0: refused"
-phone; consent yes; echo "$t/p/dev/sda5 /mnt ext4 rw,relatime 0 0" > "$t/p/mounts"
+phone; echo "$t/p/dev/sda5 /mnt ext4 rw,relatime 0 0" > "$t/p/mounts"
 pf && fail "persist mounted read-write: refused"
 grep -c "mounted read-write" "$t/out" >/dev/null || { cat "$t/out"; fail "says persist is mounted read-write"; }
 [[ ! -e $S/mfg_data.img && ! -e $S/persist-ss/0 ]] || fail "nothing copied from an unguarded partition"
 pass "a writable or read-write mounted partition: refused, nothing copied"
 
-# A bring-up phone: secure storage already there, copies by hand, no record
+# Hand-made copies, no record: the TDP copy is checked, mfg_data compared
 phone
-mkdir -p "$S/data/vendor/ss" "$S/persist-ss"
-head -c 1024 /dev/urandom > "$S/data/vendor/ss/0"
+mkdir -p "$S/persist-ss"
 cp "$t/p/persistfs/ss/0" "$S/persist-ss/0"; cp "$t/p/dev/sda6" "$S/mfg_data.img"
-pf || { cat "$t/out"; fail "existing secure storage starts without a consent record"; }
-[[ -f $S/provenance ]] || fail "the hand-made TDP copy is checked and recorded"
+pf || { cat "$t/out"; fail "hand-made copies matching the partitions are adopted"; }
+grep -c 'existing mfg_data.img matches' "$t/out" >/dev/null || fail "a matching mfg_data.img is adopted"
 phone
-mkdir -p "$S/data/vendor/ss" "$S/persist-ss"
-head -c 1024 /dev/urandom > "$S/data/vendor/ss/0"
+mkdir -p "$S/persist-ss"
+cp "$t/p/persistfs/ss/0" "$S/persist-ss/0"; echo stale > "$S/mfg_data.img"
+pf || { cat "$t/out"; fail "a stale mfg_data.img doesn't stop the start"; }
+cmp -s "$S/mfg_data.img" "$t/p/dev/sda6" || fail "a stale mfg_data.img is copied again from the partition"
+ls "$S"/mfg_data.img.before-provision.* >/dev/null 2>&1 || fail "the stale one is moved aside, not deleted"
+phone
+mkdir -p "$S/persist-ss"
 echo other > "$S/persist-ss/0"
 pf && fail "a hand-made TDP copy that differs from persist:/ss/0 is refused"
-pass "bring-up phones: existing secure storage needs no record; the TDP copy is still checked"
+grep -c 'differs from persist:/ss/0' "$t/out" >/dev/null || { cat "$t/out"; fail "provision is the check that refuses it"; }
+pass "hand-made copies: TDP checked against persist:/ss/0, mfg_data adopted only if it matches"
+
+# A start that never got running (Trusty halted): the next boot skips once
+phone; pf || fail "setup"
+rm -rf "$t/p/run"; echo boot-2 > "$t/p/boot_id"     # a reboot; still pending
+pf && fail "the boot after a start that never ran skips fingerprint"
+grep -c 'never got running' "$t/out" >/dev/null || { cat "$t/out"; fail "says why it skips"; }
+[[ ! -e $marker ]] || fail "a skipped boot starts no proxy"
+pf || { cat "$t/out"; fail "the boot after it tries again (the pending marker went)"; }
+pass "a start that never got running: the next boot skips once, then it starts again"
+
+# The path overrides only count in the test mode
+phone
+TESTMODE=0 pf && fail "without OMAMOBILE_FP_TEST=1 the fake tree is ignored"
+[[ ! -e $marker && ! -e $S/provenance ]] || fail "the overrides redirected nothing outside the test mode"
+pass "the partitions' and markers' path overrides need OMAMOBILE_FP_TEST=1"
+
+# The inner start needs this boot's preflight token
+phone; pf || fail "setup"
+for tok in "" wrong none; do
+  if PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp OMAMOBILE_FP_STATE=$S \
+     OMAMOBILE_FP_IN_NS=1 OMAMOBILE_FP_TOKEN=$tok "$RUNNER" start storage > "$t/out" 2>&1; then
+    fail "the inner start with token '$tok' is refused"
+  fi
+  grep -c "only after this boot's preflight" "$t/out" >/dev/null || { cat "$t/out"; fail "says why (token '$tok')"; }
+done
+pass "OMAMOBILE_FP_IN_NS=1 can't skip preflight: the inner start needs its token"
 
 # The 9a (mapped stores): no tdp.img, no TDP
-phone; consent yes
+phone
 DEV=tegu pf && fail "tegu without tdp.img: refused"
 mkdir -p "$S"; head -c 512 /dev/urandom > "$S/tdp.img"
 DEV=tegu pf || { cat "$t/out"; fail "tegu with tdp.img passes"; }
