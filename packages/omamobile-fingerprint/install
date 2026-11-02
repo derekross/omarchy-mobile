@@ -24,6 +24,7 @@ install -Dm644 vendor/systemd/system/omamobile-fp.service "$d/usr/lib/systemd/sy
 install -Dm644 vendor/pam.d/omarchy-lock-fingerprint "$d/etc/pam.d/omarchy-lock-fingerprint"
 install -Dm644 vendor/systemd/system/fprintd.service.d/omamobile-udfps.conf \
   "$d/usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf"
+install -Dm755 vendor/systemd/system-sleep/omamobile-fprintd-resume "$d/usr/lib/systemd/system-sleep/omamobile-fprintd-resume"
 install -Dm644 vendor/modprobe.d/omamobile-fingerprint-lhbm.conf "$d/usr/lib/modprobe.d/omamobile-fingerprint-lhbm.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-fingerprint/LICENSE"
 install -Dm644 version "$d/usr/share/omamobile/fingerprint/version"
