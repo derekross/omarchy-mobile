@@ -4,7 +4,8 @@
 # writes for the lock screen (the shape LockGlance.js weatherLine reads),
 # its words for the weather codes against the home screen's
 # (HomeModel.weatherText, through node), the settings it reads, the city
-# lookup and its cache, and one try per run that leaves the old reading.
+# lookup and its cache, retries while the network is still coming back,
+# and a failure that leaves the old reading.
 import glob
 import importlib.machinery
 import importlib.util
@@ -216,10 +217,67 @@ geo.update(usable=False, answer=None)
 write(W.PLACE, {"cities": json.load(open(W.PLACE))["cities"]})
 W.run(fake({"api.open-meteo.com": {"current": {"temperature_2m": 3.2, "weather_code": 71}}}), lambda: 1790003600.0, us)
 before = open(W.READING).read()
-calls.clear()
-ok(W.run(fake({"api.open-meteo.com": OSError("timed out")}), lambda: 1790005400.0, us) == 1 and len(calls) == 1,
-   "a failed fetch: one try, and the run fails")
+
+
+class Clock:
+    """A monotonic clock that only the fake sleep moves."""
+    def __init__(self):
+        self.t, self.slept = 100.0, []
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.t += s
+
+
+def flaky(failures, error, answer):
+    """The network: `failures` tries fail with error, then it answers."""
+    left = [failures]
+
+    def fetch(url):
+        calls.append(url)
+        if left[0] > 0:
+            left[0] -= 1
+            raise error
+        return answer
+    return fetch
+
+
+import socket
+import urllib.error
+dns = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+good = {"current": {"temperature_2m": 5.0, "weather_code": 0}}
+# After a wake: no name resolution for the first three tries, then an answer.
+calls.clear(); clk = Clock()
+ok(W.run(flaky(3, dns, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 0 and len(calls) == 4,
+   "no network at first: tried again until it answers %s" % calls)
+ok(clk.slept == [5, 10, 15], "backoff 5, 10, 15 s %s" % clk.slept)
+r = json.load(open(W.READING))
+ok(r["temperature"] == 5 and r["text"] == "Clear" and r["at"] == 1790005400000, "the reading from the try that worked")
+with open(W.READING, "w") as f:
+    f.write(before)
+# A real outage: it gives up within the window, quietly, and keeps the reading.
+for error in (dns, OSError("timed out"), TimeoutError("timed out"), ConnectionRefusedError(111, "refused"),
+              urllib.error.URLError(OSError(101, "Network is unreachable"))):
+    calls.clear(); clk = Clock()
+    ok(W.run(flaky(99, error, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 0,
+       "no network at all (%r): the run gives up without failing" % error)
+    ok(len(calls) == 6 and clk.slept == [5, 10, 15, 20, 20] and sum(clk.slept) <= W.RETRY_FOR,
+       "a bounded number of tries inside the window: %d, %s" % (len(calls), clk.slept))
+    ok(open(W.READING).read() == before, "no network leaves the old reading")
+# A server that answers with an error isn't a missing network: one try, the run fails.
+calls.clear(); clk = Clock()
+http = urllib.error.HTTPError("https://api.open-meteo.com/", 503, "Service Unavailable", {}, None)
+ok(W.run(flaky(99, http, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 1 and len(calls) == 1
+   and clk.slept == [], "an HTTP error: one try, and the run fails")
 ok(open(W.READING).read() == before, "a failed fetch leaves the old reading")
+# The unit gives the retries room: GeoClue's 20 s, the window, and a last try of two 10 s requests.
+unit = open(os.path.join(ROOT, "systemd/user/omamobile-weather.service")).read()
+limit = [int(l.split("=", 1)[1]) for l in unit.splitlines() if l.startswith("TimeoutStartSec=")]
+ok(limit and limit[0] >= 20 + W.RETRY_FOR + 2 * W.TIMEOUT + 10, "TimeoutStartSec leaves room for the retries %s" % limit)
+print("ok - weather: no network after a wake is tried again with backoff for up to %d s, then given up without failing the unit" % W.RETRY_FOR)
 calls.clear()
 ok(W.run(fake({"api.open-meteo.com": {"error": True}}), lambda: 1790005400.0, us) == 1 and open(W.READING).read() == before,
    "an answer without a temperature leaves the old reading")
