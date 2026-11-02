@@ -662,7 +662,8 @@ def probe():
     set. No identifiers are printed; nothing is changed."""
     client = Sit()
     try:
-        sim = client.request(0x0200)
+        # The CP answered the first request 9.4 s after ONLINE on 2026-11-02.
+        sim = client.request(0x0200, timeout=20)
         if len(sim) >= 3 and sim[2] <= 8 and len(sim) >= 3 + sim[2] * 63:
             print('SIM card state', sim[0], 'applications',
                   [(sim[i], sim[i + 1]) for i in range(3, 3 + sim[2] * 63, 63)], flush=True)

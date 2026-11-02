@@ -19,6 +19,9 @@ class Modem:
         self.status = status
         self.fail_release = fail_release
 
+    def next_indication(self, timeout=1):
+        return None
+
     def request(self, ident, payload=b'', **kwargs):
         self.sent.append((ident, payload))
         if ident == 0x0701:
@@ -60,6 +63,29 @@ class LifecycleTests(unittest.TestCase):
             data_call.activate(modem, APN)
         self.assertEqual(modem.sent[-1][0], 0x0600)
         self.assertFalse({0x061a, 0x061b} & {i for i, _ in modem.sent})
+        self.assertFalse(self.state.exists())
+        self.assertFalse(self.response.exists())
+
+    def test_rejected_setup_keeps_the_record_and_listens(self):
+        # The refused record goes to a private file, and the modem's next
+        # messages are logged by name with a data-call list decoded to
+        # status, CID, active and PDP type.
+        modem = Modem(status=36)
+        record = bytearray(292)
+        struct.pack_into('<HBBB', record, 0, 36, 1, 0, 0)
+        indication = struct.pack('<BBHHxx', 2, 0, 0x0604, 8 + 1 + len(record)) + b'\1' + bytes(record)
+        queue = [indication, None]
+        modem.next_indication = lambda timeout=1: queue.pop(0) if queue else None
+        with patch('data_call.time.monotonic', side_effect=[0, 0, 1, 2, 10]), \
+                patch('builtins.print') as printed:
+            with self.assertRaises(RuntimeError):
+                data_call.activate(modem, APN)
+        failed = self.response.with_name('failed-setup-cid1.bin')
+        self.assertTrue(failed.exists())
+        self.assertEqual(len(failed.read_bytes()), 292)
+        lines = ' '.join(str(call.args[0]) for call in printed.call_args_list)
+        self.assertIn('IND_DATA_CALL_LIST_CHANGED', lines)
+        self.assertIn('[(36, 1, 0, 0)]', lines)
         self.assertFalse(self.state.exists())
         self.assertFalse(self.response.exists())
 

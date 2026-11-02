@@ -18,8 +18,10 @@ import os
 from pathlib import Path
 import re
 import struct
+import time
 
 from paths import RUN
+from sit_names import NAMES
 
 STATE = RUN / 'data-session.json'
 RESPONSE = RUN / 'data-call-response.bin'
@@ -142,6 +144,38 @@ def provision_default_profile(client, apn, ip_type='ipv4v6'):
     print('default data profile accepted', flush=True)
 
 
+
+def listen_after_failure(client, seconds=5):
+    """After a refused setup, keep the channel open a few seconds and log
+    what the modem sends next: on 2026-11-02 two or three messages arrived
+    about a second after each status 36 and were dropped because the channel
+    had already closed. Message names and lengths only; for a data-call list
+    change, the per-record status, CID, active and PDP type, nothing else."""
+    deadline = time.monotonic() + seconds
+    seen = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        packet = client.next_indication(min(1, remaining))
+        if packet is None:
+            continue
+        seen += 1
+        message, length = struct.unpack_from('<HH', packet, 2)
+        payload = packet[8:]
+        line = f'after the failure: {NAMES.get(message, hex(message))} ({length} bytes)'
+        if message == 0x0604 and payload and 1 <= payload[0] <= 15 and len(payload) > 1:
+            count = payload[0]
+            size = (len(payload) - 1) // count
+            records = []
+            for index in range(count):
+                record = payload[1 + index * size:1 + (index + 1) * size]
+                if len(record) >= 5:
+                    records.append(struct.unpack_from('<HBBB', record))
+            line += f' data calls {count}: status, CID, active, PDP type {records}'
+        print(line, flush=True)
+    print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
+
 def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
     requested_cid = 2 if ims else 1
     state_path, response_path = paths(requested_cid)
@@ -172,6 +206,12 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
             # Refused outright: nothing is held, so nothing stays owned.
             released = True
         if status or cid != requested_cid or raw_active not in (1, 2):
+            # The whole record, kept privately in RAM for the record (it may
+            # carry addresses or the APN), and the modem's next messages.
+            failed_path = response_path.with_name(f'failed-setup-cid{requested_cid}.bin')
+            private_write(failed_path, result)
+            print(f'failed setup response kept privately: {len(result)} bytes', flush=True)
+            listen_after_failure(client)
             raise RuntimeError('data call did not become active')
         private_write(response_path, result)
         print('owned data bearer active; private IP configuration retained in RAM', flush=True)
