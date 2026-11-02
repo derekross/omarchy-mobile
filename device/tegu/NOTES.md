@@ -13,6 +13,45 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-01, afternoon and evening: Wi-Fi from the package, the wake and the replug, storage idle, the panel ID
+
+Boots as in the next section (published-style kernels, pushed, checked,
+the daily kernel pushed back), plus fixes on the daily kernel. Details
+are on each pull request.
+
+- [V] **Wi-Fi from the package (omarchy-mobile #238, kernel #178 on
+  #156, `7.3.0-rc6-omamobile-push1-g5312a5be1ffe`):** with only
+  `tools/extract-vendor-firmware`'s files, `omamobile-device-tegu`
+  0.2.4's boot step loaded `phy_zuma_pcie`, `pcie_gs201` and brcmfmac,
+  the link trained at Gen2 x1 on the first try, and wlan0 joined a
+  network and passed traffic. An unbind and rebind of the host ran the
+  soft power reset and the oscillator step, and the link trained again.
+  With Bluetooth up, brcmfmac failed after the rebind ("FW failed to
+  initialize"); with kernel #178's FLR commit
+  (`7.3.0-rc6-omamobile-push1-gd60d217db5c6`) three rebinds with
+  Bluetooth up all brought wlan0 back and left Bluetooth powered.
+- [V] **The power-key wake (omarchy-mobile #268 and #275, the daily
+  kernel):** one press lights the lock screen. sleepd now reads the 9a's
+  `Power` interrupt as a power-key wake, and `user.slice` thaws 0.14 to
+  0.24 s after the resume, against 1.1 s while the Wi-Fi hook waited for
+  brcmfmac.
+- [V] **A replug the gadget didn't see (omarchy-mobile #280, the daily
+  kernel):** with the switch opened as the chip does on an unplug and
+  the gadget still `configured`, the rescue closed it 9 s later and USB
+  came back.
+- [V] **Storage idle (kernel #99, `7.3.0-rc6-omamobile-push1-g5894c5287770`):**
+  clock gating with the Hibern8 sequences, a cold read of 20000 files,
+  30 fsync'd writes read back identical, and an s2idle and power-key wake
+  with no UFS errors.
+- [V] **The panel ID (kernel #125, `7.3.0-rc6-omamobile-push1-g88a7314c6409`):**
+  `panel ID 04 80 00 2d`, then brightness, DPMS off and on, and 120 Hz
+  to 60 Hz and back.
+- [V] **The RTC without the PMIC interrupt (kernel #55,
+  `7.3.0-rc6-omamobile-push1-gc04142279ef4`):** rtc0 set the clock at
+  boot, and `hwclock -r` and `-w` worked.
+- [V] **A day of use with auto-sleep on:** seven real-use sleeps all
+  woke ([SLEEP-PLAN](SLEEP-PLAN.md), "A day of use with auto-sleep on").
+
 ## 2026-10-31 and 11-01: every testing row on a published-style kernel
 
 Each line is a boot of the named head on the palmtop, built with
