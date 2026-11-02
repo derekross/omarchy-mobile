@@ -1,0 +1,84 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# An unsigned development bundle, assembled to the end (no phone, nothing
+# signed): it carries the install guide and tools/phone-provision with
+# everything that tool runs (tools/phone-ssh and the extract-* tools), so a
+# user provisions from the bundle without the repository; those files are in
+# SHA256SUMS and in manifest.json like every other bundle file; README.txt
+# points to them; and the bundled phone-provision finds its tools inside the
+# bundle (its dry run, with a stand-in NV backup and factory image).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+SRC=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+command -v python3 >/dev/null || { echo "ok - # skip: no python3"; exit 0; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+r=$t/repo k=$t/kernel
+tools="phone-provision phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" "$r/out" \
+  "$k/include/config" "$k/images"
+cp tools/make-bundle tools/bundle-manifest tools/install-phone "$r/tools/"
+cp tools/lib/signing.sh "$r/tools/lib/"
+for f in $tools; do cp "tools/$f" "$r/tools/"; done
+cp docs/INSTALL.md "$r/docs/"
+printf 'CODENAME=testdev\nNAME="Test device"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\n' > "$r/device/testdev/device.conf"
+: > "$r/packages/omamobile-keyring/omamobile.gpg"
+git -C "$r" init -q && git -C "$r" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
+echo test-release > "$k/include/config/kernel.release"
+echo testdev > "$k/images/DEVICE"
+printf boot > "$k/images/boot.img"
+printf dtbo > "$k/images/dtbo.img"
+root=$r/out/omamobile-rootfs-testdev-2026.11.01-aarch64.img.zst
+printf root > "$root"
+(cd "$r/out" && sha256sum "$(basename "$root")" > "$(basename "$root").sha256")
+printf 'device: testdev\nkernel modules: test-release\nomamobile channel: development\n' > "${root%.img.zst}.MANIFEST"
+
+out=$(DEVICE=testdev KERNEL_OUT=$k KERNEL_DIR=$r "$r/tools/make-bundle" --unsigned --version 2026.11.01 --rootfs "$root" 2>&1) ||
+  fail "an unsigned bundle assembles: $out"
+b=$r/out/bundle/omamobile-testdev-2026.11.01
+[[ -f $b/install && -f $b/manifest.json && -f $b/SHA256SUMS && ! -e $b/SHA256SUMS.sig ]] || fail "the bundle has install, manifest.json and SHA256SUMS, no signature"
+pass "an unsigned development bundle assembles"
+
+for f in $tools; do
+  [[ -x $b/tools/$f ]] || fail "the bundle has an executable tools/$f"
+  cmp -s "$b/tools/$f" "tools/$f" || fail "tools/$f is the repository's"
+done
+cmp -s "$b/INSTALL.md" docs/INSTALL.md || fail "the bundle carries docs/INSTALL.md as INSTALL.md"
+pass "the bundle carries INSTALL.md and phone-provision with everything it runs"
+
+(cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS checks"
+for f in INSTALL.md $(printf 'tools/%s ' $tools); do
+  [[ $(grep -cE "^[0-9a-f]{64}  $f\$" "$b/SHA256SUMS") == 1 ]] || fail "SHA256SUMS covers $f once"
+done
+python3 -I - "$b" $tools <<'PY' || fail "manifest.json lists the provisioning tools and INSTALL.md with size and checksum"
+import hashlib, json, os, sys
+b, tools = sys.argv[1], sys.argv[2:]
+files = {f["path"]: f for f in json.load(open(os.path.join(b, "manifest.json")))["files"]}
+for p in ["INSTALL.md"] + ["tools/" + t for t in tools]:
+    data = open(os.path.join(b, p), "rb").read()
+    assert files[p]["size"] == len(data), p
+    assert files[p]["sha256"] == hashlib.sha256(data).hexdigest(), p
+PY
+pass "SHA256SUMS and manifest.json cover the new files"
+
+grep -c 'tools/phone-provision --nv-backup DIR FACTORY.zip' "$b/README.txt" >/dev/null || fail "README.txt gives the provisioning command"
+grep -c 'from this directory' "$b/README.txt" >/dev/null || fail "README.txt says to run it from the bundle"
+if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.txt no longer sends the user to the repository"; fi
+grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
+pass "README.txt points to INSTALL.md and the bundled phone-provision"
+
+# The bundled phone-provision runs from the bundle: its dry run (no phone)
+# names the bundle's own extract tools. HOME is a scratch directory, so no
+# real backup on this machine is found.
+nv=$t/nv
+mkdir -p "$nv" "$t/home"
+for p in modem_a modem_b efs efs_backup modem_userdata persist; do
+  printf '%064d  %s.img\n' 0 "$p" >> "$nv/SHA256SUMS"
+done
+: > "$t/factory.zip"
+out=$(cd "$t" && HOME=$t/home PHONE_SSH=false "$b/tools/phone-provision" --dry-run --work "$t/work" \
+  --nv-backup "$nv" "$t/factory.zip" 2>&1) || fail "the bundled phone-provision's dry run: $out"
+grep -c 'would run: tools/extract-vendor-firmware' <<<"$out" >/dev/null || fail "the dry run names the extract tools: $out"
+pass "the bundled phone-provision runs from the bundle"

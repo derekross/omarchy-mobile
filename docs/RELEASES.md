@@ -240,7 +240,7 @@ For a first install, or to recover a phone that won't boot. One bundle per devic
 | Growing the root | `initramfs/init` (`grow_root`) | `resize2fs` before mounting, only for a file system labelled `omamobile-root` smaller than its partition; `omamobile.noresize` skips it |
 | The installer | `tools/install-phone` (the bundle's `install`) | as described below, steps 1, 3-5; the factory-image step (2) is `tools/phone-provision` after the first boot instead |
 | The bundle | `tools/make-bundle` | `out/bundle/omamobile-<codename>-<date>/` as below, `SHA256SUMS.sig` from `keys/` |
-| Per-phone data | `tools/phone-provision` | the extract tools on the user's factory image, pushed over USB SSH, plus the phone's own backup (modem board id and NV checksums, camera data, settings, home screens, fingerprint state only with `--fingerprint`) |
+| Per-phone data | `tools/phone-provision` | the extract tools on the user's factory image, pushed over USB SSH, plus the phone's own backup (modem board id and NV checksums, camera data, settings, home screens, fingerprint state only with `--fingerprint`); the bundle carries it and its tools in `tools/` |
 
 Decisions taken in building it: the device packages are **installed** in the image, not only cached (a first boot without a package step has one less way to fail); the image's `[omarchy]` is Omarchy's **stable** channel (from 2026-10-20; before that edge was the only one with aarch64 builds of `omarchy`, `omarchy-settings` and `quickshell`, and edge then moved to 4.5.0rc1, which the phone's patches don't apply to); the image is per device (decided, §12.6; its `MANIFEST` names the device, and the installer refuses a mismatch).
 
@@ -251,7 +251,10 @@ The design:
 ```
 omamobile-<codename>-<version>/
   README.txt                        what it is, what it touches, how to go back to stock
+  INSTALL.md                        the install guide (docs/INSTALL.md)
   install                           the one-command installer (bash, laptop side)
+  tools/                            phone-provision and what it runs (phone-ssh, extract-*),
+                                    so provisioning needs no checkout of the repository
   device.conf                       the descriptor the images were built from
   images/boot.img init_boot.img vendor_boot.img vendor_kernel_boot.img dtbo.img
   MANIFEST                          kernel release, package versions, both repositories' commits

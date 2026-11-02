@@ -17,7 +17,7 @@ Sources:
 
 - **Bluejay boots the same two base DTBs as oriole and raven** [V] (G/ `Makefile`, `gs101_dtbs`): `gs101/gs101-a0.dtb` and `gs101/gs101-b0.dtb`, with the board as a dtbo overlay on top. So, as on oriole, our board DTS is the base DTB and ABL picks it by `soc_id`.
 - **`soc_id` A0 is `<0x09845000 0x0>`, B0 is `<0x09845001 0x0>`** [V] (S/ `gs101-a0.dts`, `gs101-b0.dts`, line 12 of each). This settles the label that O/ left [I]: `0x...001` is B0, as cheetah's `0x9855001` is. Which of the two a retail 6a has is still [I]; `bin/omamobile images` ships both.
-- **The first-light board DTS** (`gs101-bluejay.dts`, [kernel #179](https://github.com/derekross/linux-omarchy-mobile/pull/179), in review) is oriole's file with bluejay's model and compatible (`google,gs101-bluejay`, `google,gs101`), `soc_id` set to B0, `/chosen/bootargs` with `panic=10`, the 1080x2400 framebuffer and splash carve-out, and without the two LDOs described next. U/ `master` has no bluejay binding or DTS; the binding entry goes in the same pull request.
+- **The first-light board DTS** (`gs101-bluejay.dts`, [kernel #179](https://github.com/derekross/linux-omarchy-mobile/pull/179), merged 2026-11-02 without a boot, as oriole's first board was) is oriole's file with bluejay's model and compatible (`google,gs101-bluejay`, `google,gs101`), `soc_id` set to B0, `/chosen/bootargs` with `panic=10`, the 1080x2400 framebuffer and splash carve-out, and without the two LDOs described next. U/ `master` has no bluejay binding or DTS; the binding entry goes in the same pull request.
 
 ### Board dtbo
 
@@ -55,7 +55,7 @@ The descriptor carries no comments; this table is its provenance.
 | `CODENAME`, `NAME`, `SOC` | bluejay, Pixel 6a, gs101 | [V] | G/, the kernel binding |
 | `COMPATIBLE` | `google,gs101-bluejay` | [V] | the first-light DTS and its binding entry |
 | `PACKAGE` | `omamobile-device-bluejay` | the package doesn't exist yet; `bin/omamobile initramfs` falls back when its `omamobile-bootctl.c` is missing, as for oriole | |
-| `DTB` | `exynos/google/gs101-bluejay.dtb` | [V] | the Makefile line in [kernel #179](https://github.com/derekross/linux-omarchy-mobile/pull/179), in review; in no published kernel yet, so `DEVICE=bluejay bin/omamobile images` waits for it |
+| `DTB` | `exynos/google/gs101-bluejay.dtb` | [V] | the Makefile line in [kernel #179](https://github.com/derekross/linux-omarchy-mobile/pull/179), merged; `DEVICE=bluejay bin/omamobile images` builds from a kernel after it |
 | `SOC_IDS` | `b0:0x9845001 a0:0x9845000` | [V] | S/ `gs101-b0.dts`, `gs101-a0.dts` |
 | `DTBO_SOURCE`, `DTBO_BOARD_ID`, `DTBO_BOARD_REV` | the empty overlay, 0x20506, 0x10000 | [V] for the MP 1.0 entry, [I] that retail boots it | G/ `gs101-bluejay-mp1_0.dts` |
 | `VENDOR_CMDLINE` | oriole's line: `earlycon` at `0x10A00000`, the gs101 UART | [I] | O/ (stock oriole's bootargs); the 6a's stock `vendor_boot` confirms |
