@@ -6,8 +6,11 @@
 #
 #   - every commit has a human Signed-off-by, one of them the author's (the
 #     DCO), and none from an AI agent (an Assisted-by tag credits it);
-#   - no Co-Authored-By trailer: the kernel credits an AI with Assisted-by
-#     and a human co-author with Co-developed-by plus a sign-off;
+#   - a Co-Authored-By trailer is a warning, never a failure (the
+#     maintainer's decision, 2026-11-02): the kernel credits an AI with
+#     Assisted-by and a human co-author with Co-developed-by plus a sign-off,
+#     but what matters is the human sign-off above: AI may assist; a human
+#     tests, verifies and signs off;
 #   - every subject has a subsystem prefix ("clk: samsung: ...");
 #   - scripts/checkpatch.pl --strict on each commit, against that commit's
 #     bindings and MAINTAINERS: errors fail, warnings
@@ -40,9 +43,8 @@
 # --no-checkpatch skips checkpatch: tools/publish-kernel runs the commit and
 # policy checks this way, and leaves checkpatch to the full gate.
 #
-# A Co-Authored-By trailer is a warning on pull requests (contributors are
-# asked for Assisted-by) and a failure with --strict-trailers, which
-# tools/publish-kernel passes: nothing published carries one.
+# --strict-trailers is still accepted and changes nothing: until 2026-11-02
+# it made a Co-Authored-By trailer fail, and tools/publish-kernel passed it.
 set -uo pipefail
 # sort and comm must agree on the order, whatever the caller's locale.
 export LC_ALL=C
@@ -58,20 +60,19 @@ kernel=$KERNEL_BASE/linux
 out=""
 merge=0
 checkpatch=1
-strict_trailers=0
 while (($#)); do
   case $1 in
     -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
     --build) out=${2:?--build needs an output directory}; shift 2 ;;
     --merge) merge=1; shift ;;
     --no-checkpatch) checkpatch=0; shift ;;
-    --strict-trailers) strict_trailers=1; shift ;;
-    -h|--help) sed -n '3,45p' "$self"; exit 0 ;;
+    --strict-trailers) shift ;;   # no longer stricter; see above
+    -h|--help) sed -n '3,47p' "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
 done
-base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] [--strict-trailers] BASE [HEAD]}
+base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] BASE [HEAD]}
 head=${2:-HEAD}
 # -C may be relative to the caller's directory. This script changes into
 # the tree and then runs pr-check with the same path, so resolve it first.
@@ -155,11 +156,8 @@ ${sob_bad%$'\n'}"
 coauthor_msg="Co-Authored-By trailers (credit an AI with Assisted-by, a human co-author with Co-developed-by and a sign-off; coding-assistants.rst, submitting-patches.rst)"
 if [[ -z $coauthor_bad ]]; then
   pass "no Co-Authored-By trailers"
-elif ((strict_trailers)); then
-  fail "$coauthor_msg:
-${coauthor_bad%$'\n'}"
 else
-  pass "$coauthor_msg, to change before publishing # WARN
+  pass "$coauthor_msg # WARN
 ${coauthor_bad%$'\n'}"
 fi
 [[ -z $prefix_bad ]] && pass "subjects have subsystem prefixes" || fail "subjects without a subsystem prefix (see git log --oneline <file>):
