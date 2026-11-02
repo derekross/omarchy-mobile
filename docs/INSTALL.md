@@ -197,7 +197,7 @@ tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 
 After the restart, Wi-Fi, Bluetooth, sound, haptics, the sensors and the cameras work.
 
-**Fingerprint unlock works out of the box.** After this restart the phone offers "Add a fingerprint" (or find it later in Setup > Security > Fingerprint): touch the sensor under the bright circle until it's done, and the finger unlocks the phone alongside your PIN or password. As the installer's warning said, fingerprint's first start writes the phone's secure storage (Trusty's area in the UFS RPMB). That can't be undone, but it is the same kind of write Android makes at every factory reset. Before that first start the phone makes read-only copies of the data it needs from `persist` and the factory calibration (`mfg_data`); nothing is written to `persist`, `mfg_data`, the Titan M2 security chip or Android's slot A, and if those copies can't be made or later don't match, fingerprint stays off and the PIN unlocks. If fingerprint ever stops (after a crash, for example), restart the phone rather than restarting the service.
+**Fingerprint unlock works after this restart.** The phone offers "Add a fingerprint" (or find it later in Setup > Security > Fingerprint): touch the sensor under the bright circle until it's done, and the finger unlocks the phone alongside your PIN or password. Its first start writes the phone's secure storage (Trusty's area in the UFS RPMB), the same kind of write Android makes at a factory reset; before that it makes read-only copies of the data it needs from `persist` and the factory calibration (`mfg_data`), which it never writes. If those copies can't be made or later don't match, fingerprint stays off and the PIN unlocks. If fingerprint stops, restart the phone rather than the service.
 
 ## Getting updates
 
@@ -224,7 +224,7 @@ Stock Android is still on slot A.
    fastboot reboot
    ```
 
-3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone. Fingerprints you enrolled on Omarchy Mobile stay behind: enroll your fingers again on Android (and again after you come back, since reinstalling erases them; never restore an old fingerprint backup).
+3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone. Fingers enrolled on Omarchy Mobile don't carry over: enroll them again on Android, and again after you come back (reinstalling erases them).
 
 To remove Omarchy Mobile completely, flash Google's factory image for your phone with Google's own tools (the [Android Flash Tool](https://flash.android.com) or the `flash-all.sh` script in the factory image). Don't lock the bootloader afterwards unless you're sure both slots hold Google's images; if in doubt, ask in an issue first.
 

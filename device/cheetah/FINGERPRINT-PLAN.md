@@ -1,16 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Fingerprint plan (cheetah / gs201): fingerprint unlock on the lock screen
 
-Status (2026-11-02): **on by default for new installs, from
-omamobile-fingerprint 0.1.14 and omamobile-firstboot 0.1.4** (section 6,
-F19). The installer's wipe warning names the secure-storage write, typing
-the codename is the owner's consent, firstboot records it in
-`/etc/omamobile/fingerprint.conf` and enables `omamobile-fp`, and the runner
-makes the read-only copies of `mfg_data` and `persist:/ss` itself, refuses
-storageproxyd without the consent record or the TDP copy, and runs one
-storage proxy per boot. The reference phone was reinstalled on 2026-11-02
-and enrolled again by hand (F19 results, section 7). The fresh-install checks
-(F19.T1-T3) haven't run yet.
+Status (2026-11-02): **on by default, from omamobile-fingerprint 0.1.14**
+(section 6, F19). The package enables `omamobile-fp`; it is inert until
+`tools/phone-provision` has pushed Google's files and starts at the reboot
+after. Before storageproxyd the runner makes the read-only copies of
+`mfg_data` and `persist:/ss` itself, refuses to start without the TDP copy
+or once the copy or `persist:/ss/0` differs from its recorded hash, and runs
+one storage proxy per boot. The reference phone was reinstalled on
+2026-11-02 and enrolled again by hand (F19 results, section 7). The
+fresh-install checks (F19 T1-T3) haven't run yet.
 
 Earlier status (2026-10-19): **works, opt-in.** F3-F9 (the HAL) and the fprintd
 stages through F16b passed on the phone (section 7): the lock screen
@@ -169,16 +168,13 @@ surprises are in F6c (what the HAL waits on) and F7 (LHBM timing).
 
 ## 4. Rules for this subsystem
 
-- **Never write `persist` or the RPMB without the human's explicit say-so.**
-  The first `storageproxyd` run (F4) counts as an irreversible write. Since
-  2026-11-02 the owner's recorded install-time acknowledgement counts as
-  that say-so on their phone: the installer's warning names the write,
-  typing the codename acknowledges it, and `/etc/omamobile/fingerprint.conf`
-  (`CONSENT=yes`, written by firstboot) records it. The runner refuses the
-  first storage start without that record. Anywhere else (a phone set up
-  by hand, an agent's runbook), ask, and record the answer here. Every later
-  start of `omamobile-fp.service` or `omamobile-fp-chroot start` also runs
-  storageproxyd: after the first run that is normal operation.
+- **`omamobile-fp` starts by default** (from 0.1.14), so its first start,
+  which writes Trusty's TD superblock to the RPMB (the same kind of write as
+  an Android factory reset), happens on every new install after
+  provisioning. What keeps stock's persistent data safe is the runner's
+  guards: the read-only copies, the TDP refusal and one proxy per boot.
+  Starting the stack by hand on a phone where it isn't running yet (a stage
+  start, a runbook) is still the human's call.
 - `persist` is never written, and `mfg_data` neither: both are only read,
   and the TDP copy stays read-only (decision A, section 5). A TDP copy that
   changes, or a `persist:/ss/0` that no longer matches it, stops the runner
@@ -191,9 +187,10 @@ surprises are in F6c (what the HAL waits on) and F7 (LHBM timing).
   `Restart=`.
 - Never restore an old TD (`tools/phone-provision --restore-td`) unless no
   storageproxyd ran between taking the backup and restoring it.
-- `persist` and `mfg_data` are only ever read (read-only mount, `dd`
-  from the by-partlabel node). Never add them to the storage guard's
-  `UFS_RW` allowlist without the human's decision (section 5).
+- `persist` and `mfg_data` are only ever read: `debugfs` dumps from
+  `persist` without mounting it, and `dd` from `mfg_data`, both found by
+  `PARTNAME`. Never add them to the storage guard's `UFS_RW` allowlist
+  without the human's decision (section 5).
 - `sg` stays blacklisted from autoload. The runner loads it, binds only the
   RPMB LUN's node into the chroot, and `modprobe -r sg` removes the rest.
 - Check the partition backups before F3 (FB, as `MODEM-PLAN.md` M0.1).
@@ -373,6 +370,11 @@ copies and backups exist (sizes match the partitions). **Stop** if `persist`
 mounts read-write or the storage guard complains. Rollback: `modprobe -r sg`.
 
 ### F4: secure storage (IRREVERSIBLE: the first RPMB write from Linux)
+
+> Superseded for new runs by F19: one storage proxy per boot. The stage-by-stage
+> starts below (and in F5-F9) stop and start storageproxyd in one boot, which
+> crashed Trusty's storage app on 2026-11-02; run them only with a reboot
+> after each stop.
 
 **Ask the human; record the yes and the section 5 choice here first.**
 The staged runs use the transient unit `omamobile-fp-stage`. The package
@@ -1072,26 +1074,26 @@ before a wipe, with the service stopped (`systemctl stop omamobile-fp; tar
 -C /var/lib -cf - omamobile-fp | …` into `~/android/reference/`, mode 600),
 and restore it with `--restore-td`. Never restore an older one.
 
-#### F19 on a new install: what runs by itself (omamobile-fingerprint 0.1.14, omamobile-firstboot 0.1.4)
+#### F19 on a new install: what runs by itself (omamobile-fingerprint 0.1.14)
 
-1. `tools/install-phone` shows the warning with the fingerprint paragraph
-   before the codename; the typed codename is the acknowledgement, recorded
-   as `FINGERPRINT=yes` and `ACK_DATE` in `firstboot.conf`.
-2. Firstboot writes `/etc/omamobile/fingerprint.conf` (`CONSENT=yes`,
-   `CONSENT_SOURCE=install-acknowledgement`, `CONSENT_DATE`) and enables
-   `omamobile-fp`. The unit is skipped (`ConditionPathExists`) until
-   `tools/phone-provision` has pushed Google's tree.
-3. At the reboot after provisioning, the runner's preflight: consent present
-   (or this install's TD already exists), `persist` and `mfg_data` `ro=1`
-   and `persist` not mounted read-write, the F19.3 copies made and hashed
-   into `provenance`, the TDP copy and `persist:/ss/0` both still matching
-   the recorded hash, and no storageproxyd earlier in this boot. Any failure
-   refuses before storageproxyd and leaves the unit failed; the lock uses
-   the PIN.
-4. One session: storage, the TA, KeyMint, Gatekeeper, the HAL, the bridge.
-   On stop, the bridge and the HAL go first and storageproxyd last.
-5. Onboarding offers "Add a fingerprint" after the PIN once the sensor is
-   ready (or at the first login after it is), once.
+1. The package enables `omamobile-fp` (a vendor wants link), so only a
+   runner with these guards is ever enabled by default. The unit is skipped
+   (`ConditionPathExists`) until `tools/phone-provision` has pushed Google's
+   tree.
+2. At the reboot after provisioning, the runner's preflight: no start that
+   never got running at the last boot (else this boot skips once), `persist`
+   and `mfg_data` `ro=1` and `persist` not mounted read-write, the F19.3
+   copies made and hashed into `provenance` (an existing `mfg_data.img` only
+   if it matches the partition), the TDP copy and `persist:/ss/0` both still
+   matching the recorded hash, and no storageproxyd earlier in this boot.
+   Any failure refuses before storageproxyd and leaves the unit failed; the
+   lock uses the PIN.
+3. One session: storage, the TA, KeyMint, Gatekeeper, the HAL, the bridge.
+   On stop (or a failure inside the namespace), the bridge and the HAL go
+   first and storageproxyd last.
+4. Onboarding offers "Add a fingerprint" after the PIN once the sensor is
+   ready (or at the first login after it is), once; a failed unit is shown
+   as unavailable.
 
 A divergent TDP refuses the start instead of warning. Once Linux (or a
 stock boot after a slot A fallback) has written TDP, each further start
@@ -1102,18 +1104,17 @@ as it was found, and costs only fingerprint (the PIN unlocks).
 **Fresh-install checks before calling default-on done** (the test phone;
 wipes are fine there):
 
-- **T1, a new install.** The release bundle with these packages and the new
-  installer. Before `phone-provision`: `systemctl is-enabled omamobile-fp`
-  enabled, the unit skipped by its condition, `/etc/omamobile/fingerprint.conf`
-  present. After provisioning and the reboot: the runner's log shows the
+- **T1, a new install.** The release bundle with these packages. Before
+  `phone-provision`: `systemctl is-enabled omamobile-fp` reads enabled, and
+  the unit is skipped by its condition. After provisioning and the reboot: the runner's log shows the
   copies and the recorded hashes (`persist-ss/0` `e0e1990d…`), Trusty's log
   as in F19.4, enrollment from onboarding with the "write initial superblock"
-  lines, and unlocking works. Then `systemctl restart omamobile-fp`: refused
+  lines, and unlocking works. Then `systemctl stop omamobile-fp`: the
+  journal shows the bridge and HAL, then KeyMint and Gatekeeper, then
+  storageproxyd, in a few seconds; `systemctl start omamobile-fp`: refused
   with "reboot"; a reboot: it starts again. A day of use, three reboots and
-  sleep cycles: TDP still `e0e1990d…`, F19.0 `SAME`. Negative: with
-  `--no-fingerprint` the unit stays disabled and `omamobile-fp-chroot
-  preflight` refuses (no consent); with `persist-ss/0` removed by hand the
-  runner refuses storageproxyd.
+  sleep cycles: TDP still `e0e1990d…`, F19.0 `SAME`. Negative: with `persist-ss/0`
+  removed by hand the runner refuses storageproxyd and doesn't recreate it.
 - **T2, back to stock.** `fastboot --set-active=a`, recovery, "Factory data
   reset"; set up Android with a PIN, enroll a finger, unlock with it, reboot
   twice; make a TEE-backed key; `adb logcat -b all -d | grep -iE

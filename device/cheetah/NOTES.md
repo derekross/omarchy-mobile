@@ -23,14 +23,12 @@ the runbook and every step: [FINGERPRINT-PLAN](FINGERPRINT-PLAN.md) F19.
   After a reboot, one continuous session enrolled `right-index-finger`
   (17:15:25) and matched it (17:15:33), with the expected "write initial
   superblock" lines.
-- **Fingerprint is now on by default for new installs**, by the maintainer's
-  decision: the installer's warning names the secure-storage write and the
-  typed codename is the consent (firstboot records it in
-  `/etc/omamobile/fingerprint.conf`). The runner makes the read-only copies
-  itself, refuses storageproxyd without consent or the TDP copy or when TDP
-  changed, and runs one storage proxy per boot (no `Restart=`, a `/run`
-  marker, the proxy stopped last). The fresh-install checks T1-T3 are still
-  to run.
+- **Fingerprint is now on by default**, by the maintainer's decision
+  (omamobile-fingerprint 0.1.14 enables `omamobile-fp`; it starts after
+  provisioning). The runner makes the read-only copies itself, refuses
+  storageproxyd without the TDP copy or when TDP changed, and runs one
+  storage proxy per boot (no `Restart=`, a `/run` marker, the proxy stopped
+  last). The fresh-install checks T1-T3 are still to run.
 
 ## 2026-11-02: a kernel update through pacman, booted and rolled back
 
