@@ -1,0 +1,49 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/stage-boot-files --check, as tools/build-packages runs it before it
+# builds a device package that ships boot files: current files pass; stale,
+# tampered or SOURCES-less ones, or none, refuse. No kernel build needed.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "not ok - $*" >&2; exit 1; }
+pass() { echo "ok - $*"; }
+command -v git >/dev/null && git rev-parse --git-dir >/dev/null 2>&1 || { echo "ok - # SKIP not a git checkout"; exit 0; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+S=tools/stage-boot-files
+bf=$t/boot-files && mkdir -p "$bf"
+cp device/cheetah/device.conf "$bf/device.conf"
+echo dtbo > "$bf/dtbo.img"; echo initramfs > "$bf/initramfs.cpio.lz4"
+"$S" --sources cheetah > "$bf/SOURCES"
+sums() { (cd "$bf" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS); }
+sums
+for f in device/cheetah/device.conf device/cheetah/cheetah-m1-overlay.dts device/cheetah/overlays/aoc-core-test.dtso \
+         initramfs/init packages/omamobile-device-cheetah/src/reboot-to.c; do
+  grep -cE "  $f$" "$bf/SOURCES" >/dev/null || fail "SOURCES covers $f"
+done
+"$S" --check "$bf" > "$t/out" 2>&1 || { cat "$t/out"; fail "current boot files pass --check"; }
+pass "--sources lists the descriptor, the dtbo source, the overlays, initramfs/ and the package's src/; current files pass --check"
+
+refuses() { # what message
+  if "$S" --check "$bf" > "$t/out" 2>&1; then fail "--check refuses $1"; fi
+  grep -qF -- "$2" "$t/out" || { cat "$t/out"; fail "--check, $1: says '$2'"; }
+}
+sed -i 's|^[0-9a-f]*  initramfs/init$|0000000000000000000000000000000000000000000000000000000000000000  initramfs/init|' "$bf/SOURCES"; sums
+refuses "files staged from older sources" "is stale"
+grep -c 'initramfs/init' "$t/out" >/dev/null || fail "and names the changed source"
+"$S" --sources cheetah > "$bf/SOURCES"; sums
+echo tampered >> "$bf/dtbo.img"
+refuses "files that fail their checksums" "fails its checksums"
+echo dtbo > "$bf/dtbo.img"; rm "$bf/SOURCES"; sums
+refuses "files without SOURCES" "has no SOURCES"
+rm -rf "$bf"
+refuses "no boot files at all" "no boot files in"
+pass "--check refuses stale, tampered, SOURCES-less or missing boot files"
+
+grep -qE "grep -zE '/\(prebuilt\|boot-files\)/'" tools/repo-publish || fail "repo-publish --from-main carries boot-files/ into its clean tree"
+grep -qF 'tools/stage-boot-files --check "$d/boot-files"' tools/build-packages || fail "build-packages checks the boot files before building"
+grep -qF '"$d/stage" --verify "$d/prebuilt"' tools/build-packages || fail "build-packages verifies the staged kernel before building"
+grep -qE '^NAMED_ONLY=\(linux-omamobile\)$' tools/build-packages || fail "linux-omamobile is built only when named"
+grep -qF '[[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue' tools/build-packages || fail "and never by default or with --all"
+pass "repo-publish carries boot-files/; build-packages checks them, verifies the kernel, and builds linux-omamobile only when named"

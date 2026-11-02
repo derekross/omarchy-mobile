@@ -149,6 +149,9 @@ pass "images: omamobile-boot-images gives bin/omamobile images' bytes (gs201 wit
 mkdir -p "$R/tools" "$R/packages/omamobile-boot-update/lib"
 cp tools/stage-boot-files "$R/tools/"
 cp "$LIBDIR/descriptor.sh" "$R/packages/omamobile-boot-update/lib/"
+# SOURCES lists tracked files: the copy is a git checkout of its own
+mkdir -p "$R/initramfs" && echo '#!/bin/sh' > "$R/initramfs/init"
+git -C "$R" init -q && git -C "$R" add -A
 release_rd() { # extra file in the initramfs, or none
   rm -rf "$t/rd2" && mkdir -p "$t/rd2/etc" && echo x > "$t/rd2/init"
   echo "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" > "$t/rd2/etc/omamobile-ufs-rw"
@@ -163,6 +166,12 @@ cmp -s "$t/bf/dtbo.img" "$t/dtbo-twelve.img" || fail "stage-boot-files: the dtbo
 cmp -s "$t/bf/overlays/one.dtbo" "$t/ov/one.dtbo" && cmp -s "$t/bf/overlays/two.dtbo" "$t/ov/two.dtbo" || fail "stage-boot-files: the overlays, compiled as the builder takes them"
 cmp -s "$t/bf/initramfs.cpio.lz4" "$K/initramfs.cpio.lz4" || fail "stage-boot-files: the release initramfs"
 (cd "$t/bf" && sha256sum --quiet -c SHA256SUMS) || fail "stage-boot-files: checksums"
+grep -cE '  device/twelve/device\.conf$' "$t/bf/SOURCES" >/dev/null && grep -cE '  initramfs/init$' "$t/bf/SOURCES" >/dev/null \
+  || fail "stage-boot-files: SOURCES lists the tracked inputs"
+(cd "$R" && tools/stage-boot-files --check "$t/bf") >/dev/null 2>&1 || fail "stage-boot-files --check passes what it just staged"
+echo '# changed' >> "$R/initramfs/init"
+if (cd "$R" && tools/stage-boot-files --check "$t/bf") >/dev/null 2>&1; then fail "stage-boot-files --check finds a changed source"; fi
+git -C "$R" checkout -q -- initramfs/init 2>/dev/null || echo '#!/bin/sh' > "$R/initramfs/init"
 release_rd root/.ssh/authorized_keys
 if sbf; then fail "stage-boot-files refuses an initramfs with the builder's SSH keys"; fi
 release_rd etc/dropbear/dropbear_ed25519_host_key

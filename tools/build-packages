@@ -37,17 +37,23 @@
 # with --all, and only once per version, since out/repo keeps them.
 #
 # linux-omamobile packs a kernel build instead of compiling one
-# (docs/RELEASES.md §4): it is built only once its prebuilt/ is staged
-# (packages/linux-omamobile/stage KERNEL_OUT), when named or by default.
+# (docs/RELEASES.md §4). It is built only when named, never by default or
+# with --all (so a prebuilt/ staged for a test is never published as a side
+# effect), and only after `packages/linux-omamobile/stage --verify` confirms
+# the staged build is a kernel-<date> tag on the published omamobile branch.
+#
+# A device package that ships boot files (its install reads
+# OMAMOBILE_BOOT_FILES) refuses to build without its boot-files/; before it
+# is built here, tools/stage-boot-files --check must find them matching this
+# tree, or nothing is built.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
-# Packed from a staged kernel build: left out until packages/<name>/prebuilt has one
-STAGED=(linux-omamobile)
-staged_ready() { [[ -f packages/$1/prebuilt/kernel.release ]]; }
+# Packed from a staged kernel build: built only when named (see above)
+NAMED_ONLY=(linux-omamobile)
 repo=out/repo/aarch64
 all=0 force=0 nocheck=0 container_check=0 list=0 resign=0 imports=() dirs=() local_name=
 while (($#)); do
@@ -80,7 +86,7 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)) && ((resign == 0)); then
   for name in "${ORDER[@]}"; do
     [[ -d packages/$name ]] || continue
     ((all)) || [[ " ${SLOW[*]} " != *" $name "* ]] || continue
-    [[ " ${STAGED[*]} " != *" $name "* ]] || staged_ready "$name" || continue
+    [[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue
     dirs+=("packages/$name")
   done
   for d in packages/*/; do
@@ -140,9 +146,9 @@ if ((list)); then
     [[ " ${dirs[*]} " == *" packages/$name "* ]] && continue
     up_to_date "packages/$name" || echo "missing     packages/$name $(pkg_version "packages/$name") (slow: name it or use --all, or --import a build)"
   done
-  for name in "${STAGED[@]}"; do
-    [[ -d packages/$name ]] || continue
-    staged_ready "$name" || echo "not staged  packages/$name (packages/$name/stage KERNEL_OUT first)"
+  for name in "${NAMED_ONLY[@]}"; do
+    [[ -d packages/$name && " ${dirs[*]} " != *" packages/$name "* ]] || continue
+    echo "named only  packages/$name (stage a release with packages/$name/stage, then name it)"
   done
   exit 0
 fi
@@ -194,6 +200,18 @@ for d in "${dirs[@]}"; do
     echo "up to date: $d $(pkg_version "$d")"
   else
     build+=("$d")
+  fi
+done
+
+# Staged inputs, checked before anything is built: a release kernel from a
+# published tag, and boot files that match this tree
+for d in "${build[@]}"; do
+  name=$(basename "$d")
+  if [[ " ${NAMED_ONLY[*]} " == *" $name "* ]]; then
+    "$d/stage" --verify "$d/prebuilt" || alarm_die "$name: the staged kernel is not a published release; nothing built"
+  fi
+  if grep -c 'OMAMOBILE_BOOT_FILES' "$d/install" >/dev/null 2>&1; then
+    tools/stage-boot-files --check "$d/boot-files" || alarm_die "$name: its boot files are missing or stale; nothing built"
   fi
 done
 

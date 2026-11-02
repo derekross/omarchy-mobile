@@ -77,7 +77,7 @@ upgrade
 cmp -s "$tmp/ch/kept" "$tmp/ch/etc/omamobile-mirrorlist" || fail "a builder's development choice is kept"
 pass "the mirrorlist follows stable by default; a phone on its own repository or on development keeps its channel"
 
-./install "$tmp/root" "$tmp/build"
+OMAMOBILE_BOOT_FILES=none ./install "$tmp/root" "$tmp/build" 2>/dev/null
 for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success usr/bin/omamobile-setup-system \
          usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
@@ -119,20 +119,25 @@ grep -qx 'HandlePowerKeyLongPress=ignore' "$power" || fail "the long press stays
 pass "install stages the package"
 
 # The boot files (tools/stage-boot-files): installed where
-# omamobile-boot-update looks when staged and checked, left out otherwise
-[[ ! -e $tmp/root/usr/lib/omamobile/cheetah ]] || [[ -d boot-files ]] || fail "no boot files without boot-files/"
+# omamobile-boot-update looks when staged and checked; without them the
+# build fails, unless OMAMOBILE_BOOT_FILES=none asks for a development build
+[[ ! -e $tmp/root/usr/lib/omamobile/cheetah ]] || fail "OMAMOBILE_BOOT_FILES=none: no boot files"
+if OMAMOBILE_BOOT_FILES=$tmp/no-boot-files ./install "$tmp/root-none" "$tmp/build" 2>"$tmp/err"; then fail "install refuses without boot files"; fi
+grep -c 'tools/stage-boot-files' "$tmp/err" >/dev/null || fail "and says how to stage them"
+grep -c 'OMAMOBILE_BOOT_FILES' PKGBUILD >/dev/null && fail "the PKGBUILD never opts out of the boot files"
 bf=$tmp/boot-files && mkdir -p "$bf/overlays"
 cp ../../device/cheetah/device.conf "$bf/device.conf" 2>/dev/null || printf 'CODENAME=cheetah\n' > "$bf/device.conf"
 echo dtbo > "$bf/dtbo.img"; echo initramfs > "$bf/initramfs.cpio.lz4"; echo ov > "$bf/overlays/aoc-core-test.dtbo"
+echo "0000  device/cheetah/device.conf" > "$bf/SOURCES"
 (cd "$bf" && find . -type f | sed 's|^\./||' | sort | xargs sha256sum) > "$tmp/sums" && mv "$tmp/sums" "$bf/SHA256SUMS"
 OMAMOBILE_BOOT_FILES=$bf ./install "$tmp/root-bf" "$tmp/build" || fail "install takes staged boot files"
 for f in usr/share/omamobile/device.conf usr/lib/omamobile/cheetah/dtbo.img usr/lib/omamobile/cheetah/initramfs.cpio.lz4 \
-         usr/lib/omamobile/cheetah/overlays/aoc-core-test.dtbo; do
+         usr/lib/omamobile/cheetah/overlays/aoc-core-test.dtbo usr/share/omamobile/device-cheetah/boot-files.sources; do
   [[ -f $tmp/root-bf/$f ]] || fail "boot files: $f"
 done
 echo tampered >> "$bf/dtbo.img"
 if OMAMOBILE_BOOT_FILES=$bf ./install "$tmp/root-bf2" "$tmp/build" 2>/dev/null; then fail "install refuses boot files that fail their checksums"; fi
-pass "install ships the staged boot files for omamobile-boot-update, checked, and nothing when none are staged"
+pass "install ships the staged boot files for omamobile-boot-update, checked, and fails without them (OMAMOBILE_BOOT_FILES=none: development only)"
 
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (raven, 2026-10-28).

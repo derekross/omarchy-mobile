@@ -75,7 +75,12 @@ command -v bsdtar >/dev/null || die "needs bsdtar (libarchive)"
 if ((from_main)); then
   # A detached checkout of origin/main, so half-finished local changes are
   # never published. keys/ and out/ are this tree's; so are the gitignored
-  # prebuilt binaries some PKGBUILDs install (packages/*/…/prebuilt/).
+  # prebuilt binaries some PKGBUILDs install (packages/*/…/prebuilt/) and
+  # the device packages' staged boot files (packages/*/boot-files/, which
+  # tools/build-packages checks against origin/main before building; a
+  # device package refuses to build without them). linux-omamobile's
+  # prebuilt/ comes along but is never built here: build-packages builds it
+  # only when named.
   wt=$ROOT/out/publish-tree
   git fetch -q origin main
   [[ -e $wt/.git ]] || git worktree add -q --detach "$wt" origin/main
@@ -83,7 +88,7 @@ if ((from_main)); then
   git -C "$wt" clean -qfdx -e /keys -e /out
   ln -sfn "$ROOT/keys" "$wt/keys"
   ln -sfn "$ROOT/out" "$wt/out"
-  git ls-files -z --others --ignored --exclude-standard -- packages | grep -z '/prebuilt/' |
+  git ls-files -z --others --ignored --exclude-standard -- packages | grep -zE '/(prebuilt|boot-files)/' |
     rsync -a --from0 --files-from=- ./ "$wt/"
   say "Publishing from origin/main at $(git -C "$wt" rev-parse --short HEAD)"
   exec "$wt/tools/repo-publish" "${args[@]}"
