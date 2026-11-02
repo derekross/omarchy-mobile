@@ -79,8 +79,11 @@ echo "ok - --no-checkpatch skips checkpatch and still runs the rest"
 branch coauthor
 echo x >> drivers/a.c
 git commit -q -am "drivers: a: co-authored" -m "Signed-off-by: A Human <human@example.org>" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-run "a Co-Authored-By trailer" 1 "Co-Authored-By trailers"
-echo "ok - a Co-Authored-By trailer fails (the kernel wants Assisted-by)"
+run "a Co-Authored-By trailer" 0 "to change before publishing # WARN"
+st_status=0
+st_out=$("$here/tools/kernel-pr-check" --strict-trailers -C "$k" omamobile HEAD 2>&1) || st_status=$?
+[[ $st_status == 1 ]] && grep -c "^not ok - Co-Authored-By trailers" <<<"$st_out" >/dev/null || { echo "$st_out"; fail "--strict-trailers: a Co-Authored-By trailer fails"; }
+echo "ok - a Co-Authored-By trailer warns on a pull request and fails with --strict-trailers"
 
 # CI runs `kernel-pr-check -C linux` from the directory that contains the
 # kernel checkout. The path has to still work after the tool cds in.

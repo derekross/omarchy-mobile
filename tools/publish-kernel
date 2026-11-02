@@ -97,8 +97,8 @@ if ((n)); then
   merges=$(git rev-list --merges "$pub..$head")
   [[ -z $merges ]] || die "merge commits in $branch since the published tip; publish a linear series (rebase it):
 $(git log --no-walk --format='  %h %s' $merges)"
-  echo "# tools/kernel-pr-check --no-checkpatch on the $n commit(s) to publish"
-  "$repo/tools/kernel-pr-check" --no-checkpatch -C "$linux" "$pub" "$head" \
+  echo "# tools/kernel-pr-check --no-checkpatch --strict-trailers on the $n commit(s) to publish"
+  "$repo/tools/kernel-pr-check" --no-checkpatch --strict-trailers -C "$linux" "$pub" "$head" \
     || die "the commits to publish fail the checks above; nothing published"
 fi
 

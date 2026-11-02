@@ -39,6 +39,10 @@
 #
 # --no-checkpatch skips checkpatch: tools/publish-kernel runs the commit and
 # policy checks this way, and leaves checkpatch to the full gate.
+#
+# A Co-Authored-By trailer is a warning on pull requests (contributors are
+# asked for Assisted-by) and a failure with --strict-trailers, which
+# tools/publish-kernel passes: nothing published carries one.
 set -uo pipefail
 # sort and comm must agree on the order, whatever the caller's locale.
 export LC_ALL=C
@@ -54,18 +58,20 @@ kernel=$KERNEL_BASE/linux
 out=""
 merge=0
 checkpatch=1
+strict_trailers=0
 while (($#)); do
   case $1 in
     -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
     --build) out=${2:?--build needs an output directory}; shift 2 ;;
     --merge) merge=1; shift ;;
     --no-checkpatch) checkpatch=0; shift ;;
-    -h|--help) sed -n '3,41p' "$self"; exit 0 ;;
+    --strict-trailers) strict_trailers=1; shift ;;
+    -h|--help) sed -n '3,45p' "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
 done
-base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] BASE [HEAD]}
+base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] [--strict-trailers] BASE [HEAD]}
 head=${2:-HEAD}
 # -C may be relative to the caller's directory. This script changes into
 # the tree and then runs pr-check with the same path, so resolve it first.
@@ -146,8 +152,16 @@ done
 n=$(wc -w <<<"$commits")
 [[ -z $sob_bad ]] && pass "$n commits signed off by their authors, none by an AI" || fail "sign-offs (Documentation/process/submitting-patches.rst, coding-assistants.rst):
 ${sob_bad%$'\n'}"
-[[ -z $coauthor_bad ]] && pass "no Co-Authored-By trailers" || fail "Co-Authored-By trailers (credit an AI with Assisted-by, a human co-author with Co-developed-by and a sign-off; coding-assistants.rst, submitting-patches.rst):
+coauthor_msg="Co-Authored-By trailers (credit an AI with Assisted-by, a human co-author with Co-developed-by and a sign-off; coding-assistants.rst, submitting-patches.rst)"
+if [[ -z $coauthor_bad ]]; then
+  pass "no Co-Authored-By trailers"
+elif ((strict_trailers)); then
+  fail "$coauthor_msg:
 ${coauthor_bad%$'\n'}"
+else
+  pass "$coauthor_msg, to change before publishing # WARN
+${coauthor_bad%$'\n'}"
+fi
 [[ -z $prefix_bad ]] && pass "subjects have subsystem prefixes" || fail "subjects without a subsystem prefix (see git log --oneline <file>):
 ${prefix_bad%$'\n'}"
 
