@@ -515,8 +515,8 @@ st_test_install() {
   derek "# Before: stock on slot A boots, and the read-only backup of efs, efs_backup," \
         "# modem_userdata, persist and modem_a/b checks (MODEM-PLAN M0.1)." \
         "cd $ROOT/$dir" \
-        "./install --dry-run      # reads the phone, prints exactly what it would write" \
-        "./install                # type '$DEVICE' to confirm" \
+        "bash install --dry-run   # reads the phone, prints exactly what it would write" \
+        "bash install             # type '$DEVICE' to confirm" \
         "# After the first boot, over USB SSH:" \
         "uname -r                                   # $krel" \
         "systemctl is-failed omamobile-firstboot    # inactive (it ran and removed its file)" \

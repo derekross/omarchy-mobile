@@ -158,7 +158,7 @@ if run --version "$V" test-install --passed 7.3.0-rc6-omamobile-push1-gdeadbeef0
 if run --version "$V" test-install --passed "7.3.0-rc6-omamobile-g${commit:0:12}"; then fail "a test of an unsigned bundle is refused"; fi
 grep -q 'tested bundle is unsigned' "$t/log" || fail "says the tested bundle was unsigned"
 run --version "$V" --dry-run test-install || fail "the dry run prints the attended steps"
-grep -q './install --dry-run' "$t/log" || fail "the steps start with the installer's dry run"
+grep -q 'bash install --dry-run' "$t/log" || fail "the steps start with the installer's dry run"
 printf 'promote_done=x\nkernel_tag=kernel-2026.11.05\nidentifiers_done=clean\n' >> "$st"
 mkdir -p "$R/docs/release-notes"
 printf '# Omarchy Mobile 2026.MM.DD\nkernel-2026.11.05\n' > "$R/docs/release-notes/$V.md"
@@ -205,6 +205,16 @@ python3 -I "$R/tools/bundle-manifest" --bundle "$R/$B" --rootfs "$R/out/bundle/$
   fail "the fixture bundle's manifest.json"
 (cd "$R/$B" && find . -type f ! -name 'SHA256SUMS*' -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
 GNUPGHOME=$uk gpg --batch --yes --quiet --local-user "$ufpr" --detach-sign -o "$R/$B/SHA256SUMS.sig" "$R/$B/SHA256SUMS"
+# The one-file download beside the bundle, built and signed as make-bundle
+# does, where this checkout has it (tools/lib/bundle-tar.sh, PR #326):
+# release-upload then requires it
+if [[ -f tools/lib/bundle-tar.sh ]]; then
+  # shellcheck source=../tools/lib/bundle-tar.sh
+  source tools/lib/bundle-tar.sh
+  bundle_tar "$R/out/bundle" "omamobile-testdev-$V" "$rootname" "$V" || fail "the fixture's bundle tar"
+  GNUPGHOME=$uk gpg --batch --yes --quiet --local-user "$ufpr" --detach-sign \
+    -o "$R/out/bundle/omamobile-testdev-$V.tar.sha256.sig" "$R/out/bundle/omamobile-testdev-$V.tar.sha256"
+fi
 # Nothing may reach a server: ssh, rsync and curl only log
 mkdir -p "$t/stub"
 for c in ssh rsync curl; do printf '#!/bin/sh\necho "%s $*" >> %s/stub.log\nexit 1\n' "$c" "$t" > "$t/stub/$c"; done
