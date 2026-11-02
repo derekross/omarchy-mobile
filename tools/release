@@ -378,6 +378,12 @@ st_images() {
     die "the two image builds differ"
   }
   n=$(grep -c . "$rel/images.sha256.1")
+  # The device package's dtbo is the bundle's, as its initramfs is
+  if ((kept)) && ships_boot_files; then
+    cmp -s "$bf/dtbo.img" "$RELEASE_KERNEL_OUT/images/dtbo.img" ||
+      die "$bf/dtbo.img differs from the bundle's dtbo.img: the device package and the bundle would boot different dtbos (bump packages/$dpkg/version, then run this stage again)"
+    note "the bundle's dtbo.img is the device package's ($bf)"
+  fi
   # The release initramfs has no builder keys (make-bundle checks it again)
   if lz4 -dc "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4" | cpio -t --quiet 2>/dev/null |
        grep -cE '^(\./)?root/\.ssh(/|$)|^(\./)?etc/dropbear/dropbear_.*_host_key$' >/dev/null; then
