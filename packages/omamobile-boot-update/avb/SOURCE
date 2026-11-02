@@ -6,6 +6,7 @@ Mobile install is unlocked, and an unlocked bootloader accepts any key.
   file     testkey_rsa4096.pem
   from     https://android.googlesource.com/platform/external/avb/+/ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee/test/data/testkey_rsa4096.pem
            (AOSP platform/external/avb at ba2dec4b035b, android-17.0.0_r1;
-           the same file tools/toolchain.lock pins on branch pinned-toolchain)
+           the file tools/toolchain.lock pins for bin/omamobile images;
+           tests/boot-update-parity checks the two checksums agree)
   sha256   6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121
   licence  external/avb's LICENSE (MIT and Apache-2.0), copied as LICENSE

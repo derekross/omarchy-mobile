@@ -54,6 +54,13 @@ for b in 's/^UFS_RW=.*/UFS_RW="boot_b persist userdata"/' 's/^UFS_RW=.*/UFS_RW="
   fi
   if reader "$t/repo/device/zz/device.conf" >/dev/null 2>&1; then fail "the phone's reader refuses: $b"; fi
 done
+lock_key=$(awk '$2 == "avb/test/data/testkey_rsa4096.pem" {print $3}' tools/toolchain.lock 2>/dev/null || true)
+if [[ -n $lock_key ]]; then
+  [[ $(sha256sum < packages/omamobile-boot-update/avb/testkey_rsa4096.pem | cut -d' ' -f1) == "$lock_key" ]] \
+    || fail "omamobile-boot-update's AVB key is the one tools/toolchain.lock pins for bin/omamobile images"
+  grep -c "AOSP_TESTKEY_SHA256=$lock_key" packages/omamobile-boot-update/bin/omamobile-boot-update >/dev/null \
+    || fail "omamobile-boot-update checks the key against the pinned checksum"
+fi
 pass "descriptors: the phone's reader accepts the $n android-v4 descriptors bin/omamobile accepts, and refuses broken ones"
 
 # ---------------------------------------------------------------- 2. images

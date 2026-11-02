@@ -38,7 +38,15 @@ dtc=${DTC:-$KERNEL_OUT/scripts/dtc/dtc}
 [[ -n $dtc && -x $dtc ]] || die "no dtc (the kernel build's scripts/dtc/dtc, or DTC)"
 mkdtbo=${MKDTBOIMG:-}
 if [[ -z $mkdtbo ]]; then
-  if [[ -f ${SRC_DIR:-}/system/libufdt/utils/src/mkdtboimg.py ]]; then
+  # As bin/omamobile picks it: the pinned copy tools/fetch-toolchain
+  # verified (tools/toolchain.lock), else the Android checkout, else the
+  # distribution's android-tools
+  tc=${OMAMOBILE_TOOLCHAIN:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/toolchain}
+  lock_sum=$(awk '$2 == "libufdt/utils/src/mkdtboimg.py" {print $3}' "$ROOT/tools/toolchain.lock" 2>/dev/null || true)
+  if [[ -n $lock_sum && -f $tc/libufdt/utils/src/mkdtboimg.py \
+        && $(cat "$tc/.verified/libufdt_utils_src_mkdtboimg.py" 2>/dev/null) == "$lock_sum" ]]; then
+    mkdtbo="python3 -I $tc/libufdt/utils/src/mkdtboimg.py"
+  elif [[ -f ${SRC_DIR:-}/system/libufdt/utils/src/mkdtboimg.py ]]; then
     mkdtbo="python3 -I $SRC_DIR/system/libufdt/utils/src/mkdtboimg.py"
   elif command -v mkdtboimg >/dev/null; then
     mkdtbo=mkdtboimg

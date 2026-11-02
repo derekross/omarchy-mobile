@@ -25,6 +25,7 @@ Read-only steps first. Each step: commands, Expect, Pass, **Stop**, Rollback, ri
 ### L1. Build the release kernel from the tag (laptop, no phone; risk none)
 
 ```sh
+tools/fetch-toolchain                       # the pinned clang, mkbootimg, mkdtboimg, avbtool and test key (decision 2)
 git -C ~/omamobile-kernel/linux rev-parse 'kernel-2026.11.01^{commit}'   # expect 2219cc6cda77...
 git -C ~/omamobile-kernel/linux worktree add ~/omamobile-kernel/wt-pkgtest kernel-2026.11.01
 export KERNEL_DIR=~/omamobile-kernel/wt-pkgtest KERNEL_OUT=~/omamobile-kernel/out-pkgtest
@@ -33,7 +34,7 @@ cat $KERNEL_OUT/include/config/kernel.release
 diff <(grep -v LOCALVERSION ~/omamobile-kernel/out-release/.config) <(grep -v LOCALVERSION $KERNEL_OUT/.config)
 ```
 
-- Expect: the tag's commit is `2219cc6cda77` (the running kernel's); `kernel.release` is `7.3.0-rc6-omamobile-g2219cc6cda77`; the configuration diff is empty.
+- Expect: the tag's commit is `2219cc6cda77` (the running kernel's); `kernel.release` is `7.3.0-rc6-omamobile-g2219cc6cda77`; the configuration diff is empty; `$KERNEL_OUT/toolchain.txt` names the pinned clang (`clang-r596125`, the compiler of every phone kernel so far).
 - Pass: all three. **Stop:** another commit (then the test kernel is not the running one: ask Derek), `-dirty`, or a configuration difference beyond `LOCALVERSION`.
 - Rollback: `git -C ~/omamobile-kernel/linux worktree remove ~/omamobile-kernel/wt-pkgtest`.
 
