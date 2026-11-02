@@ -299,6 +299,26 @@ read-only. Nothing here writes to the phone. A section 4a backup from an
 earlier install will do instead while the phone's partitions still match
 it: V3's commands for this case, with `B` set to that backup, print `SAME`.
 
+`tools/nv-backup "$B"` (also in the release bundle's `tools/`) does N1 and
+N2 in one read-only run, with the partitions from the descriptor's
+`NV_PARTS` and `NV_BACKUP_EXTRA`: it stops before copying on any `none`,
+`ro=0`, mount or duplicate `PARTNAME`, copies with `dd`, compares each copy
+with a second read on the phone, and writes `SHA256SUMS`, `partitions.txt`
+and `NV-BACKUP` (directory 700, files 600). `tools/nv-backup --check "$B"`
+is the later check against the phone (`devinfo` may differ: its
+slot flags change after a flash, a fallback to slot A or the boot-success
+mark). The blocks below are the same
+steps by hand.
+
+**Result, 2026-11-02** (`7.3.0-rc6-omamobile-push1-g2219cc6cda77`): the
+first version (8eccbbcc), one `dd` stream per partition, failed in 5 of 5
+runs: each time one stream over the USB NCM link died partway (ssh exit
+255), on a different partition. The chunked version (3ab19983, 8 MiB
+chunks, each size-checked and retried) completed: all 7 partitions
+verified against the phone (`modem_b` needed 15 chunk retries), `--check`
+printed SAME for all, and `efs`, `efs_backup`, `modem_userdata` and
+`persist` are identical to the 2026-10-30 backup.
+
 ### N1. Find the partitions, read-only and unmounted (phone, read-only; risk none)
 
 ```sh

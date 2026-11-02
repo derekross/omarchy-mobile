@@ -2,8 +2,9 @@
 # OnePlus 13 (dodge): first light and install record
 
 Status (2026-10-29): boots native Arch / Omarchy on SM8750 from slot B's
-`boot` partition. Companion kernel under review:
-[linux-omarchy-mobile #115](https://github.com/derekross/linux-omarchy-mobile/pull/115).
+`boot` partition. Companion kernel in the contributor fork:
+[`mrlund/linux-omarchy-mobile` tag `dodge-v3-20261101`](https://github.com/mrlund/linux-omarchy-mobile/tree/dodge-v3-20261101)
+(`6cc4b65df980`; review history [kernel #115](https://github.com/derekross/linux-omarchy-mobile/pull/115), closed).
 This document is the CONTRIBUTING §5 / §6 first-light **record** of how this
 phone was installed. It is not a procedure for other owners: the guarded
 inactive-slot installer and firmware-match helper are deferred to a later PR.
@@ -12,9 +13,10 @@ inactive-slot installer and firmware-match helper are deferred to a later PR.
 
 - **Kernel base:** `omamobile` on
   [derekross/linux-omarchy-mobile](https://github.com/derekross/linux-omarchy-mobile).
-- **Board series:** subsystem-split commits on `dodge/pr-kernel-v2`
-  ([#115](https://github.com/derekross/linux-omarchy-mobile/pull/115)). Config
-  profile: `gpu2` (`CONFIG_QCOM_IPA=m`, MSM DRM).
+- **SoC / board series (fork):** tag [`dodge-v3-20261101`](https://github.com/mrlund/linux-omarchy-mobile/tree/dodge-v3-20261101) on
+  [mrlund/linux-omarchy-mobile](https://github.com/mrlund/linux-omarchy-mobile) (`6cc4b65df980`; subsystem-split; gpu2 + IPA).
+  Same model as Pixel 4 XL's companion sources. Closed review:
+  [kernel #115](https://github.com/derekross/linux-omarchy-mobile/pull/115).
 - **Device tree:** `arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dts`
   (`compatible = "oneplus,dodge", …`).
 - **Userspace:** `device/dodge/` and `packages/omamobile-device-dodge` in this

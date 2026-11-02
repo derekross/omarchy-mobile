@@ -141,7 +141,7 @@ pass "first install, dry run: the six NV lines and props.conf from the phone's b
 
 # Refusals, all before the phone is contacted (these runs aren't dry runs)
 if out=$(fresh --user alice "$t/factory.zip"); then fail "a first install without --nv-backup is refused"; fi
-grep -qF -- "no $H/android/reference/phone-backup-20261013/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions and give it with --nv-backup DIR" <<<"$out" ||
+grep -qF -- "no $H/android/reference/phone-backup-20261013/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6) and give it with --nv-backup DIR" <<<"$out" ||
   { echo "$out"; fail "says to give --nv-backup"; }
 for p in modem_a modem_b efs efs_backup modem_userdata persist; do
   grep -v "  $p\\.img\$" "$N/SHA256SUMS" > "$t/nv-short/SHA256SUMS"
