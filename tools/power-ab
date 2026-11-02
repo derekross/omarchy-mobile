@@ -28,6 +28,11 @@
 #   units       A = the --units system units and --user-units of --user
 #               stopped, B = started (units not active at the start are
 #               left alone)
+#   eas         A = energy-aware scheduling off (kernel.sched_energy_aware
+#               0), B = on (1). Only meaningful with a CPU energy model
+#               registered (/sys/kernel/debug/energy_model) and under a
+#               steady load, such as a video playing, since an idle phone
+#               barely schedules anything
 #
 # Options:
 #   --unplug SECS   wait before the first phase, to pull the cable (default 60)
@@ -72,7 +77,7 @@ while (($#)); do
     --user) uname="${2?}"; shift ;;
     --detach) detach=1 ;;
     -h|--help) usage ;;
-    baseline|c2|ufs-gate|ufs-delay|s2idle|units) test="$1" ;;
+    baseline|c2|ufs-gate|ufs-delay|s2idle|units|eas) test="$1" ;;
     *) usage 1 ;;
   esac
   shift
@@ -96,6 +101,7 @@ done
 [[ -n "$bat" ]] || { echo "power-ab: no battery with current_now (is max17042_battery loaded?)" >&2; exit 1; }
 
 ufs=$(ls -d /sys/bus/platform/devices/*.ufs 2>/dev/null | head -n1)
+eas=/proc/sys/kernel/sched_energy_aware
 idle_states=(/sys/devices/system/cpu/cpu[0-7]/cpuidle/state1/disable)
 
 case "$test" in
@@ -122,6 +128,8 @@ case "$test" in
       || { echo "power-ab: the gauge has neither charge_counter nor charge_now" >&2; exit 1; } ;;
   units)
     [[ -n "$units$user_units" ]] || { echo "power-ab: units needs --units or --user-units" >&2; exit 1; } ;;
+  eas)
+    [[ -w "$eas" ]] || { echo "power-ab: no writable $eas (kernel without EAS)" >&2; exit 1; } ;;
 esac
 
 # The units test touches only units that are active now
@@ -147,6 +155,7 @@ declare -A saved
 save() { [[ -r "$1" ]] && saved["$1"]=$(cat "$1"); }
 for f in "${idle_states[@]}"; do [[ -e "$f" ]] && save "$f"; done
 [[ -n "$ufs" ]] && { save "$ufs/clkgate_enable"; save "$ufs/clkgate_delay_ms"; }
+[[ $test == eas ]] && save "$eas"
 restore() {
   local f
   for f in "${!saved[@]}"; do echo "${saved[$f]}" > "$f" 2>/dev/null; done
@@ -171,6 +180,9 @@ set_cfg() { # A|B
       echo "$v" > "$ufs/clkgate_delay_ms" ;;
     units)
       if [[ $1 == A ]]; then units_stop; else units_start; fi > /dev/null 2>&1 ;;
+    eas)
+      [[ $1 == A ]] && v=0 || v=1
+      echo "$v" > "$eas" ;;
   esac
 }
 
