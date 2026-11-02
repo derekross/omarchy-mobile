@@ -14,7 +14,7 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear and the notification history; Wi-Fi picker and Bluetooth panel |
+| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
@@ -178,6 +178,39 @@ calls the notification service on this shell instance, `dismissAll` (the
 toasts on screen move into history) and then `clear` (history is emptied).
 The card takes the room left under the sheet and scrolls past that; it hides
 in edit mode, or when the sheet leaves no room for it.
+
+### Media card
+
+While a player plays or is paused, the shade starts with a media card, as
+on Android (`MediaCard.qml`, `MediaSource.qml`, rules in `MediaModel.js`,
+tests in `test/media-model.js` and `test/media-touch`). Source:
+Quickshell's MPRIS service (`Quickshell.Services.Mpris`), the one Omarchy's
+own media bar widget reads; a panel plugin can't reach the host's
+`omarchy.media` service (only full bars get first-party services), so the
+card picks its player itself, with Omarchy's rule that playerctld, a proxy,
+comes last.
+
+* **Which player:** one that plays or is paused and has a title (stopped,
+  or nothing to show: no card); playing before paused, then the one that
+  started playing or changed track most recently.
+* **What it shows:** the album art, else the app's icon from its desktop
+  entry, else Omarchy's media glyph; the app's name (MPRIS identity), the
+  title and the artist, each one line, elided; a seek bar with elapsed and
+  length when the player reports its position and length (drag or tap to
+  seek when it can; Quickshell's position is asked for once a second while
+  playing and the sheet is open); previous, play/pause and next, 48 px,
+  dimmed when the player can't.
+* **Art:** local files and `data:` images, and `https://`/`http://` covers
+  (Spotify's, a browser's: the player already fetched them). Nothing else
+  (`qrc:`, `image://`). The lock (omamobile-omarchy patch 0027) loads local
+  art only.
+* **A tap** on the card (not on a control) puts the sheet away and focuses
+  the player's window with `omarchy-hyprland-focus-app`, by desktop entry,
+  then identity, as a notification row's tap does; only when no window
+  matches is the player asked to raise itself (MPRIS Raise). Nothing is
+  started.
+* `shell call omamobile.quicksettings state` includes `media` (app, title,
+  playing).
 
 ### Wi-Fi picker
 

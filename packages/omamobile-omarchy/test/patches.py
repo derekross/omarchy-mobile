@@ -385,6 +385,7 @@ def real_package(t):
     qml_parse(root)
     lock_glance(root)
     lock_battery(t, root)
+    lock_media(root)
     app_icons_largest(root)
     lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
     launch = lib.split("  function launch(desktopId, name) {", 1)
@@ -647,6 +648,58 @@ def lock_battery(t, root):
     ok(out.returncode != 0 and took < 8 and got == "[false,false]",
        "real omarchy: a hung supply read ends through timeout(1) with no battery (0026: rc %s, %.1fs)"
        % (out.returncode, took))
+
+
+def lock_media(root):
+    """Patch 0027: media controls on the lock. Static checks that they only
+    play, pause and skip (no Raise, no seek, nothing started, no network),
+    that they reuse Omarchy's media model, then LockMedia.js's rules in
+    node. test/lock-glance drives them under touch."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    glance = read(root, lock + "LockGlance.qml")
+    media = read(root, lock + "LockMedia.qml") or ""
+    source = read(root, lock + "LockMediaSource.qml") or ""
+    js = os.path.join(root, lock, "LockMedia.js")
+    ok(os.path.isfile(js) and media and source and "LockMedia {\n            id: glanceMedia" in glance
+       and "LockMedia {\n    id: pinMedia" in glance and "glanceMedia.buttonAt(swipe, mouse.x, mouse.y)" in glance,
+       "real omarchy: the lock has media controls on the glance and the PIN view, the glance's taps reach them (0027)")
+    ok('import "../services/media/MediaModel.js" as MediaModel' in source and "MediaModel.isProxyPlayer" in source
+       and os.path.isfile(os.path.join(root, "usr/share/omarchy/shell/plugins/services/media/MediaModel.js")),
+       "real omarchy: the lock's media controls use Omarchy's media model (0027)")
+    code = media + source + (open(js).read() if os.path.isfile(js) else "")
+    ok(".raise()" not in code and "execDetached" not in code and "Process" not in code and "XMLHttpRequest" not in code
+       and ".position =" not in code and "PanelSlider" not in code and "openUri" not in code and ".quit()" not in code,
+       "real omarchy: the lock's media controls only play, pause and skip: no Raise, no seek, nothing started (0027)")
+    ok("fits && glance.progress < 1" in glance and "ticking: glance.active && !!glance.lock && !glance.lock.displayDark" in glance,
+       "real omarchy: the PIN view's row only where it fits, the position asked only while lit (0027)")
+    node = shutil.which("node")
+    if not node:
+        print("ok - real omarchy: the lock's media rules # SKIP no node")
+        return
+    check = r"""
+var M = require(process.argv[1]), assert = require("assert")
+assert.strictEqual(M.artSource("https://i.example/c.jpg"), "")
+assert.strictEqual(M.artSource("http://i.example/c.jpg"), "")
+assert.strictEqual(M.artSource("file:///tmp/c.png"), "file:///tmp/c.png")
+assert.strictEqual(M.artSource("/tmp/a b.png"), "file:///tmp/a%20b.png")
+assert.strictEqual(M.artSource("data:image/png;base64,AA"), "data:image/png;base64,AA")
+assert.strictEqual(M.artSource("qrc:/x.png"), "")
+var p = function(o) { return Object.assign({ dbusName: "x", trackTitle: "T", trackArtist: "A", identity: "Music", isPlaying: true, playbackState: 1 }, o) }
+var proxy = function(q) { return q.dbusName.indexOf("playerctld") >= 0 }
+assert.strictEqual(M.pick([], {}, proxy), null)
+assert.strictEqual(M.pick([p({ isPlaying: false, playbackState: 0 })], {}, proxy), null)
+var a = p({ dbusName: "a", isPlaying: false, playbackState: 2 }), b = p({ dbusName: "b", isPlaying: false, playbackState: 2 }), c = p({ dbusName: "c" })
+assert.strictEqual(M.pick([a, b], { a: 2, b: 1 }, proxy), a)
+assert.strictEqual(M.pick([a, b, c], { a: 2, b: 1 }, proxy), c)
+var pc = p({ dbusName: "org.mpris.MediaPlayer2.playerctld" })
+assert.strictEqual(M.pick([pc, a], { "org.mpris.MediaPlayer2.playerctld": 9 }, proxy), a)
+assert.deepStrictEqual(M.lines(p({}), true), { title: "Music", detail: "Playing" })
+assert.deepStrictEqual(M.lines(p({}), false), { title: "T", detail: "A" })
+assert.strictEqual(M.accessibleName(p({}), true).indexOf("T,"), -1)
+"""
+    r = subprocess.run([node, "-e", check, js], capture_output=True, text=True)
+    ok(r.returncode == 0, "real omarchy: the lock's media rules: local art only, playing then most recent, playerctld last, "
+       "hidden text hides the track (0027)%s" % (" " + r.stderr.strip()[-300:] if r.returncode else ""))
 
 
 def screensaver_launcher(t, launcher):
