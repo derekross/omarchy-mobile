@@ -67,21 +67,29 @@ o.launch_on_start(
 -- screen off (or wakes a locked phone), holding power opens Omarchy's system
 -- menu, and power + volume down takes a screenshot. omamobile-keys works out
 -- which gesture it was.
+--
+-- Only real keyboards may trigger these: squeekboard is a virtual keyboard
+-- whose key codes are its layout's own, numbered up from 9, and on a long
+-- layout one of them lands on 124, which Hyprland's keymap reads as
+-- XF86PowerOff. Its keys share Hyprland's held-key state with the buttons,
+-- so an OSK key could act as the power key or leave it looking held (SUSPEND-
+-- PLAN P5 h: the power key's bind stopped firing until a reload).
+local hw_keys = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
 hl.unbind("XF86PowerOff")
-o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true })
-o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true })
+o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true, device = hw_keys })
+o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true, device = hw_keys })
 -- Volume down is also half of the screenshot chord, so it can't lower the
 -- volume the moment it goes down: take over Omarchy's binding and let
 -- omamobile-keys decide (a short wait for power, as on Android).
 hl.unbind("XF86AudioLowerVolume")
-o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { locked = true, repeating = true })
+o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { locked = true, repeating = true, device = hw_keys })
 -- Volume up goes through omamobile-keys too, so both volume keys can take a
 -- photo while the Camera app is in front (and raise the volume otherwise).
 hl.unbind("XF86AudioRaiseVolume")
-o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true })
+o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true, device = hw_keys })
 -- Its release ends Power + Volume Up push-to-talk (voice input, off unless
 -- turned on in the voice settings); omamobile-keys ignores every other one.
-o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })
+o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true, device = hw_keys })
 
 -- A fresh phone (no name and email, or no PIN): a notification offers the
 -- onboarding that Omarchy's installer does on a computer.
