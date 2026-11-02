@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Kernel updates through pacman on the Pixel 7 Pro
 
-Status (2026-11-02): built and tested offline only (branch `kernel-update-path`: `packages/linux-omamobile`, `packages/omamobile-boot-update`, `omamobile-device-cheetah` 0.1.38 with its boot files, `omamobile-omarchy` 0.1.28, `omamobile-shell` 0.2.76, `tools/stage-boot-files`, `bin/omamobile kernel --release`). This plan is the first attended run on the reference phone: [RELEASES](../../docs/RELEASES.md) §12 decision 10 ("install, a package-hook kernel update, a reboot into it") and checklist step 6, plus a rollback. The design is RELEASES §4, §4.1, §5.3 and §5.5; the tool's own page is [packages/omamobile-boot-update/README.md](../../packages/omamobile-boot-update/README.md).
+Status (2026-11-02): **passed on the reference phone** (§4), merged as #320 ( `packages/linux-omamobile`, `packages/omamobile-boot-update`, `omamobile-device-cheetah` 0.1.38 with its boot files, `omamobile-omarchy` 0.1.28, `omamobile-shell` 0.2.76, `tools/stage-boot-files`, `bin/omamobile kernel --release`). This plan is the first attended run on the reference phone: [RELEASES](../../docs/RELEASES.md) §12 decision 10 ("install, a package-hook kernel update, a reboot into it") and checklist step 6, plus a rollback. The design is RELEASES §4, §4.1, §5.3 and §5.5; the tool's own page is [packages/omamobile-boot-update/README.md](../../packages/omamobile-boot-update/README.md).
 
 No kernel branch: the kernel is the published release tag `kernel-2026.11.01`, built in its own worktree and output directory (`~/omamobile-kernel/wt-pkgtest`, `~/omamobile-kernel/out-pkgtest`), so nobody else's build is touched.
 
@@ -167,4 +167,19 @@ tools/phone-ssh 'pacman -R --noconfirm linux-omamobile; omamobile-boot-update st
 
 ## 4. Results
 
-(Date, `uname -r`, each step's outcome and the lines that show it.)
+**2026-11-02, the reference 7 Pro, attended by Derek. Passed: decision 10 is met.** Release kernel `7.3.0-rc6-omamobile-g2219cc6cda77` from tag `kernel-2026.11.01`. Before and after: `7.3.0-rc6-omamobile-push1-g2219cc6cda77`. Packages from main at `048f9fb3`, built `--local` on the laptop: linux-omamobile `7.3.0rc6.r635.g2219cc6cda77-1`, omamobile-boot-update 0.1.0, device-cheetah 0.1.38, omarchy 0.1.28, shell 0.2.76.
+
+- **L1:** the tag peels to `2219cc6cda77`. `kernel.release` is `7.3.0-rc6-omamobile-g2219cc6cda77`. `toolchain.txt` names `clang-r596125`, pinned. The configuration diff without `LOCALVERSION` is empty.
+- **L2:** `stage-boot-files` staged `device.conf`, `dtbo.img`, the initramfs and 15 overlays. `stage` printed pkgver `7.3.0rc6.r635.g2219cc6cda77` (1815 modules, 8 DTBs). Five packages built, each `test/all` passing. Two `error: command failed to execute correctly` lines in the build log are pacman hooks inside the build container; the builds went on.
+- **R1:** slot `_b`, no `boot-update.conf`, root keys present, 89 GB free, battery 99%. Only the five slot B boot partitions and `userdata` are `ro=0`.
+- **R2:** slot B had changed since this plan was written: the morning's push of the reproducible-initramfs boot test (see #320's phone boot). So the fallback is `~/omamobile-kernel/known-good/2026-11-02b/images`, a copy of that push's set. All five checksums matched the phone.
+- **P1:** both `pacman -U` transactions ended with "Slot B left alone: AUTO_WRITE is not yes". The release has `vmlinuz`, depmod's files and `gs201-cheetah.dtb`. `/usr/share/omamobile/linux/kernel.release` names it. Slot B still matched R2 on all five images.
+- **P2:** `preflight` returned `{"auto_write": "no", "ok": true}`. The dry run planned `boot` and `vendor_kernel_boot` as write. `init_boot`, `vendor_boot` and `dtbo` were "already there": the phone builds the same bytes as `bin/omamobile images` on the laptop. Nothing was written. `/run/omamobile/boot-update.json` held only P1's "skipped" result.
+- **P3:** "Saving slot B (…push1-g2219cc6cda77)", then `boot_b` and `vendor_kernel_boot_b` "written and verified". The write counters (field 7) afterwards were sda20 131072 and sda23 13768, and 0 on the other three. `previous/` holds the push1 set, `BOOTED=yes`, and its modules. The laptop copy in `known-good/2026-11-02b/previous` passes `sha256sum -c`.
+  - The first copy of `dtbo.img` came back 32 KiB short over SSH and failed the check. Copying it again in 4 MiB pieces passed. This is the same USB NCM stream drop as nv-backup's (REINSTALL-RUNBOOK §4a).
+  - The saved images are whole partitions. Their leading bytes equal R2's set.
+- **P4:** booted `7.3.0-rc6-omamobile-g2219cc6cda77`, slot `_b`, no failed units, `renderD128` present. The slot B write counters read 0 after the reboot. phone-smoke: every required row ok, and display, GPU, touch, buttons, Wi-Fi, Bluetooth, battery, sound card, sensors and thermal ok. Two rows were not ok:
+  - `audio_playback0: ASoC: no backend DAIs` ×1, which is on every boot (#336);
+  - cameras at 22 s. libcamera listed all 4 at 41 s.
+- **P5:** with `boot-update.conf` removed, the dry run planned `boot` and `vendor_kernel_boot` only. `rollback --yes` wrote them and printed the `IgnorePkg` advice. The push1 modules were still in `/usr/lib/modules`. Slot B matched `known-good/2026-11-02b/images` on all five images.
+- **P6:** booted `7.3.0-rc6-omamobile-push1-g2219cc6cda77`, slot `_b`, no failed units. phone-smoke matched P4 (cameras: 4 at 43 s). `pacman -R linux-omamobile` ran only `depmod` and removed only its own module tree. `status` reads auto write no, slot B and previous both push1 (booted: yes). omamobile-boot-update 0.1.0 and device-cheetah 0.1.38 stay installed.
