@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Publish the signed [omamobile] repository to pkgs.omamobile.org
-# (docs/RELEASES.md §10). Maintainer only: it signs with keys/.
+# (docs/RELEASES.md §10). Maintainer only: it signs with the release key
+# (keys/gnupg.release, tools/lib/signing.sh), through tools/build-packages.
 #
 #   tools/repo-publish [options] [development|stable]
 #     development (the default)
@@ -24,8 +25,15 @@
 # It keeps the files of the current index and of the one before it, so a
 # phone can go back one version. Upload order: packages and signatures, then
 # the index, then the pruning, so a phone never sees an index that names a
-# file not there yet. Nothing is uploaded unless every package and the index
-# carry a good signature from a key omamobile-keyring trusts.
+# file not there yet. Nothing is uploaded unless every package the index lists
+# and the index itself carry a good signature from the release key
+# (keys/fingerprint.release), which omamobile-keyring trusts.
+#
+# Moving a repository signed with the original key (keys/gnupg) to the
+# release key, once:
+#   tools/build-packages --resign
+#   tools/repo-publish --no-build development
+#   tools/repo-publish stable          (when stable should carry it too)
 #
 # Server: OMAMOBILE_PKGS_HOST (raven@nostr01.derekross.me), port
 # OMAMOBILE_PKGS_PORT (1022), path OMAMOBILE_PKGS_PATH
@@ -56,7 +64,7 @@ while (($#)); do
     --dry-run) dry=1 ;;
     --yes) yes=1 ;;
     --remind) remind=1 ;;
-    -h|--help) sed -n '3,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
@@ -115,6 +123,11 @@ EOF
   exit 0
 fi
 
+# What is published must be the release key's: a phone trusts the original
+# key too, until omamobile-keyring revokes it, but nothing new is signed by it.
+source tools/lib/signing.sh
+signing_key_load "$ROOT" || exit 1
+release_key=$SIGNING_KEY
 # Signature check against omamobile-keyring's trusted, unrevoked keys only
 keyhome=$(mktemp -d /dev/shm/omamobile-verify.XXXXXX)
 trap 'GNUPGHOME=$keyhome gpgconf --kill gpg-agent 2>/dev/null; rm -rf -- "$keyhome"' EXIT
@@ -126,22 +139,23 @@ signed_ok() {
   local status signer
   status=$(GNUPGHOME=$keyhome gpg --batch --status-fd 1 --verify "$1.sig" "$1" 2>/dev/null) || return 1
   signer=$(awk '$2 == "VALIDSIG" { print $NF }' <<<"$status")
-  [[ -n $signer && " ${trusted[*]} " == *" $signer "* ]]
+  [[ -n $signer && " ${trusted[*]} " == *" $signer "* && $signer == "$release_key" ]]
 }
+resign_hint="sign it again with the release key: tools/build-packages --resign, then tools/repo-publish --no-build development"
 # Every file the index lists is there, matches its checksum and is signed,
 # and so is the index.
 verify() {
   local dir=$1 file sum n=0
   [[ -f $dir/$DB && -f $dir/$DB.sig ]] || die "$dir has no signed index"
-  signed_ok "$dir/$DB" || die "$dir/$DB: no good signature from a trusted key"
+  signed_ok "$dir/$DB" || die "$dir/$DB: no good signature from the release key $release_key ($resign_hint)"
   while read -r file sum; do
     [[ -f $dir/$file ]] || die "$dir: the index lists $file, which is missing"
     [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] || die "$dir/$file doesn't match the index"
-    [[ -f $dir/$file.sig ]] && signed_ok "$dir/$file" || die "$dir/$file: no good signature from a trusted key"
+    [[ -f $dir/$file.sig ]] && signed_ok "$dir/$file" || die "$dir/$file: no good signature from the release key $release_key ($resign_hint)"
     n=$((n + 1))
   done < <(db_sums "$dir")
   ((n)) || die "$dir: the index lists no packages"
-  echo "    $n packages and the index: checksums and signatures good"
+  echo "    $n packages and the index: checksums good, signed by the release key"
 }
 
 # Bring a channel directory to a new index: the new files, plus the ones the

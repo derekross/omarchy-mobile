@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Build Omarchy Mobile's packages for aarch64 on this laptop, without a phone:
 # makepkg in an Arch Linux ARM container (Docker + qemu-user, tools/lib/alarm.sh),
-# then sign them and the database with the key in keys/, into the
+# then sign them and the database with the release key (keys/gnupg.release,
+# tools/lib/signing.sh; docs/RELEASES.md §10), into the
 # [omamobile] repository at out/repo/aarch64 (as tools/repo-build does with
 # the phone as the builder). tools/build-rootfs puts that repository into the
 # root image; tools/repo-push still copies it to a running phone.
@@ -19,6 +20,10 @@
 #     --import DIR   copy prebuilt *.pkg.tar.{zst,xz} from DIR into the repository
 #                    (for example Mesa from an earlier build), then sign it
 #     --list         print what would be built and what is up to date
+#     --resign       build nothing: sign every package in out/repo and the
+#                    database again with the release key, replacing older
+#                    signatures (from the original key, keys/gnupg). Then
+#                    tools/repo-publish --no-build development publishes them
 #     --local NAME   a contributor's build for device NAME (review lesson L-7):
 #                    the repository is out/NAME/repo/aarch64, the signing key
 #                    keys/NAME (tools/local-key-init), and the build image also
@@ -37,7 +42,7 @@ source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
 repo=out/repo/aarch64
-all=0 force=0 nocheck=0 container_check=0 list=0 imports=() dirs=() local_name=
+all=0 force=0 nocheck=0 container_check=0 list=0 resign=0 imports=() dirs=() local_name=
 while (($#)); do
   case $1 in
     --all) all=1 ;;
@@ -45,9 +50,10 @@ while (($#)); do
     --nocheck) nocheck=1 ;;
     --check-in-container) container_check=1 ;;
     --list) list=1 ;;
+    --resign) resign=1 ;;
     --import) imports+=("${2:?--import needs a directory}"); shift ;;
     --local) local_name=${2:?--local needs a device codename}; shift ;;
-    -h|--help) sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) alarm_die "unknown option $1" ;;
     *) dirs+=("${1%/}") ;;
   esac
@@ -60,7 +66,10 @@ ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-
        omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-owl-widgets omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-mmd omamobile-speaker-tuning omamobile-waydroid
        omamobile-firstboot mesa hyprland libcamera)
-if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)); then
+if ((resign)) && ((${#dirs[@]} + ${#imports[@]} + list + force + all)); then
+  alarm_die "--resign builds, imports and lists nothing: use it alone"
+fi
+if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)) && ((resign == 0)); then
   for name in "${ORDER[@]}"; do
     [[ -d packages/$name ]] || continue
     ((all)) || [[ " ${SLOW[*]} " != *" $name "* ]] || continue
@@ -73,20 +82,26 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)); then
 fi
 for d in "${dirs[@]}"; do [[ -f $d/PKGBUILD ]] || alarm_die "no PKGBUILD in $d"; done
 
-keydir=keys
 if [[ -n $local_name ]]; then
+  # A contributor's own key, never the maintainer's (review lesson L-7)
   [[ $local_name =~ ^[a-z0-9]+$ && -f device/$local_name/device.conf ]] \
     || alarm_die "--local needs a device codename with a device/<codename>/device.conf"
+  ((resign == 0)) || alarm_die "--resign is for the maintainer's out/repo, not --local"
   repo=out/$local_name/repo/aarch64
   keydir=keys/$local_name
   [[ -f $keydir/fingerprint && -d $keydir/gnupg && -f $keydir/public.asc ]] \
     || alarm_die "no local key in $keydir (run: tools/local-key-init $local_name)"
   export ALARM_LOCAL_KEY=$ROOT/$keydir/public.asc
+  mkdir -p "$repo"
+  export GNUPGHOME=$ROOT/$keydir/gnupg
+  key=$(cat "$keydir/fingerprint")
+else
+  # The release key (docs/RELEASES.md §10), with a clear error without it
+  source tools/lib/signing.sh
+  signing_key_load "$ROOT" || exit 1
+  key=$SIGNING_KEY
+  mkdir -p "$repo"
 fi
-mkdir -p "$repo"
-export GNUPGHOME=$ROOT/$keydir/gnupg
-[[ -f $keydir/fingerprint && -d $GNUPGHOME ]] || alarm_die "no signing key in keys/ (maintainer only; see docs/RELEASES.md §10)"
-key=$(cat "$keydir/fingerprint")
 
 # The version makepkg will produce, from the PKGBUILD's own fields. Our
 # PKGBUILDs read pkgver from a version file through $startdir.
@@ -198,6 +213,23 @@ sign_and_index() {
       "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
   fi
 }
+
+if ((resign)); then
+  [[ -f $repo/omamobile.db ]] || alarm_die "$repo has no index to sign again"
+  alarm_say "Signing every package in $repo again with $key"
+  # New signatures beside the old ones first; the old ones are replaced only
+  # when every package has one, so a failure leaves the repository as it was.
+  for package in "$repo"/*.pkg.tar.*; do
+    [[ -e $package && $package != *.sig && $package != *.sig.new ]] || continue
+    gpg --batch --yes --local-user "$key" --detach-sign -o "$package.sig.new" "$package" \
+      || { rm -f "$repo"/*.sig.new; alarm_die "signing ${package##*/} failed; nothing was replaced"; }
+  done
+  for new in "$repo"/*.sig.new; do mv -f "$new" "${new%.new}"; done
+  command -v repo-add >/dev/null || alarm_fetch
+  sign_and_index
+  echo "    $(ls "$repo" | grep -c '\.pkg\.tar\.[a-z]*\.sig$') package signatures and the index, by $key"
+  exit 0
+fi
 
 for dir in "${build[@]}"; do
   name=$(basename "$dir")
