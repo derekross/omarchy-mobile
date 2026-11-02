@@ -22,3 +22,26 @@ install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mir
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE"
 install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-cheetah/LICENSE.Apache-2.0"
 install -Dm644 version "$destination/usr/share/omamobile/device-cheetah/version"
+
+# The boot files omamobile-boot-update builds slot B's images from
+# (docs/RELEASES.md §5.1): the descriptor, the board dtbo, the compiled DTB
+# overlays and the release initramfs, which tools/stage-boot-files puts in
+# boot-files/ (gitignored: built, never committed). A build without them
+# packages the rest, and on such a phone the boot hook refuses ("does not
+# ship its boot files yet"), so slot B is left to bin/omamobile push.
+boot=${OMAMOBILE_BOOT_FILES:-boot-files}
+if [[ -d $boot ]]; then
+  (cd "$boot" && sha256sum --quiet --strict -c SHA256SUMS) || { echo "$boot fails its checksums (run tools/stage-boot-files again)" >&2; exit 1; }
+  for f in device.conf dtbo.img initramfs.cpio.lz4; do
+    grep -cE "  $f$" "$boot/SHA256SUMS" >/dev/null || { echo "$boot/SHA256SUMS does not cover $f" >&2; exit 1; }
+  done
+  grep -cx 'CODENAME=cheetah' "$boot/device.conf" >/dev/null || { echo "$boot holds another device's boot files" >&2; exit 1; }
+  install -Dm644 "$boot/device.conf" "$destination/usr/share/omamobile/device.conf"
+  install -Dm644 "$boot/dtbo.img" "$destination/usr/lib/omamobile/cheetah/dtbo.img"
+  install -Dm644 "$boot/initramfs.cpio.lz4" "$destination/usr/lib/omamobile/cheetah/initramfs.cpio.lz4"
+  for f in "$boot"/overlays/*.dtbo; do
+    [[ -f $f ]] && install -Dm644 "$f" "$destination/usr/lib/omamobile/cheetah/overlays/${f##*/}"
+  done
+else
+  echo "omamobile-device-cheetah: no $boot/ (tools/stage-boot-files): packaged without the boot files, so omamobile-boot-update will refuse on this build" >&2
+fi

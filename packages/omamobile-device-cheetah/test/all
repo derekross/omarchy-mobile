@@ -118,6 +118,22 @@ grep -qx 'HandlePowerKey=ignore' "$power" || fail "a short press must not power 
 grep -qx 'HandlePowerKeyLongPress=ignore' "$power" || fail "the long press stays the PMIC reset"
 pass "install stages the package"
 
+# The boot files (tools/stage-boot-files): installed where
+# omamobile-boot-update looks when staged and checked, left out otherwise
+[[ ! -e $tmp/root/usr/lib/omamobile/cheetah ]] || [[ -d boot-files ]] || fail "no boot files without boot-files/"
+bf=$tmp/boot-files && mkdir -p "$bf/overlays"
+cp ../../device/cheetah/device.conf "$bf/device.conf" 2>/dev/null || printf 'CODENAME=cheetah\n' > "$bf/device.conf"
+echo dtbo > "$bf/dtbo.img"; echo initramfs > "$bf/initramfs.cpio.lz4"; echo ov > "$bf/overlays/aoc-core-test.dtbo"
+(cd "$bf" && find . -type f | sed 's|^\./||' | sort | xargs sha256sum) > "$tmp/sums" && mv "$tmp/sums" "$bf/SHA256SUMS"
+OMAMOBILE_BOOT_FILES=$bf ./install "$tmp/root-bf" "$tmp/build" || fail "install takes staged boot files"
+for f in usr/share/omamobile/device.conf usr/lib/omamobile/cheetah/dtbo.img usr/lib/omamobile/cheetah/initramfs.cpio.lz4 \
+         usr/lib/omamobile/cheetah/overlays/aoc-core-test.dtbo; do
+  [[ -f $tmp/root-bf/$f ]] || fail "boot files: $f"
+done
+echo tampered >> "$bf/dtbo.img"
+if OMAMOBILE_BOOT_FILES=$bf ./install "$tmp/root-bf2" "$tmp/build" 2>/dev/null; then fail "install refuses boot files that fail their checksums"; fi
+pass "install ships the staged boot files for omamobile-boot-update, checked, and nothing when none are staged"
+
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
