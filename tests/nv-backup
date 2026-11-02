@@ -86,10 +86,20 @@ tree_state() { (cd "$P" && find . -printf '%p %m %T@\n' | sort && find . -type f
 cat > "$t/phone-ssh" <<'EOF'
 #!/bin/bash
 # Runs the command here, as the phone would; CORRUPT=1 flips the first byte
-# of what dd sends (a copy that differs from the phone)
+# of what dd sends (a copy that differs from the phone); CHANGE_AFTER=N runs
+# CHANGE (a shell command that edits the stand-in tree) after the Nth
+# sha256sum, i.e. between the last verifying read and the re-probe
 printf '%s\n---\n' "$*" >> "$PHONE_LOG"
 if [[ ${CORRUPT:-0} == 1 && $* == dd\ * ]]; then
   bash -c "$*" | { printf 'X'; tail -c +2; }
+  exit
+fi
+if [[ -n ${CHANGE_AFTER:-} && $* == sha256sum\ * ]]; then
+  bash -c "$*"
+  echo x >> "$PHONE_LOG.sums"
+  if [[ $(wc -l < "$PHONE_LOG.sums") == "$CHANGE_AFTER" ]]; then
+    chmod -R u+w "$NV_PHONE_ROOT"; bash -c "$CHANGE"; chmod -R a-w "$NV_PHONE_ROOT"
+  fi
   exit
 fi
 exec bash -c "$*"
@@ -205,6 +215,25 @@ grep -c 'differs from the phone' <<<"$out" >/dev/null || fail "says the copy dif
 [[ ! -e $t/corrupt/SHA256SUMS ]] || fail "no SHA256SUMS for a backup that didn't verify"
 untouched "a copy that differs"
 pass "a copy that differs from the phone stops the backup, with no SHA256SUMS"
+
+# --- A partition that changes during the copy --------------------------------------
+# After the seventh (last) verifying read, one partition turns writable,
+# gets mounted, or changes size: the re-probe after the copy must refuse
+# the backup and leave no SHA256SUMS.
+changed() {  # changed WHAT PATTERN CHANGE
+  rm -f "$PHONE_LOG.sums"
+  if out=$(CHANGE_AFTER=7 CHANGE=$3 "$r/tools/nv-backup" -d testdev "$t/changed-$1" 2>&1); then
+    fail "refuses a backup when a partition $1 during the copy"
+  fi
+  grep -c -- "$2" <<<"$out" >/dev/null || fail "says why when a partition $1 during the copy ($2): $out"
+  [[ ! -e $t/changed-$1/SHA256SUMS ]] || fail "no SHA256SUMS when a partition $1 during the copy"
+  make_phone
+}
+changed "turns writable" "efs: /dev/$efs is writable" "echo 0 > '$P/sys/class/block/$efs/ro'"
+changed "gets mounted" "persist: /dev/$(dev_of persist) is mounted" "echo '/dev/$(dev_of persist) /mnt ext4 ro 0 0' >> '$P/proc/mounts'"
+changed "moves" "efs: not found by PARTNAME" "sed -i 's/^PARTNAME=efs\$/PARTNAME=gone/' '$P/sys/class/block/$efs/uevent'"
+before=$(tree_state)
+pass "the re-probe after the copy refuses a partition that turned writable, got mounted or vanished"
 
 # --- --check ---------------------------------------------------------------------------
 : > "$PHONE_LOG"

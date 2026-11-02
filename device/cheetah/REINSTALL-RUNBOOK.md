@@ -305,8 +305,9 @@ N2 in one read-only run, with the partitions from the descriptor's
 `ro=0`, mount or duplicate `PARTNAME`, copies with `dd`, compares each copy
 with a second read on the phone, and writes `SHA256SUMS`, `partitions.txt`
 and `NV-BACKUP` (directory 700, files 600). `tools/nv-backup --check "$B"`
-is the later check against the phone (`devinfo` may differ: the
-boot-success marker writes its slot flags). The blocks below are the same
+is the later check against the phone (`devinfo` may differ: its
+slot flags change after a flash, a fallback to slot A or the boot-success
+mark). The blocks below are the same
 steps by hand.
 
 ### N1. Find the partitions, read-only and unmounted (phone, read-only; risk none)

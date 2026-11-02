@@ -14,8 +14,8 @@
 # NV_PARTS (the radio's NV and calibration partitions, which nothing on
 # Linux may change: --check fails when one differs) and NV_BACKUP_EXTRA
 # (copied too, for a full way back, but expected to change: cheetah's
-# devinfo holds the bootloader's slot flags, which every good boot of slot B
-# updates; --check only reports them). In a release bundle the descriptor is
+# devinfo holds the bootloader's slot flags, which change after a flash, a
+# fallback to slot A or the boot-success mark; --check only reports them). In a release bundle the descriptor is
 # its device.conf; in the repository device/<codename>/device.conf (-d,
 # default cheetah).
 #
@@ -211,7 +211,7 @@ if [[ $mode == check ]]; then
       note "$p: DIFFERENT"
       differ+=("$p")
     else
-      note "$p: different, as expected (it changes on the phone; copied for a full way back only)"
+      note "$p: different, as expected (its slot flags change after a flash, a fallback or the boot-success mark; copied for a full way back only)"
     fi
   done
   if ((${#differ[@]})); then

@@ -33,8 +33,8 @@ It takes about an hour, most of it downloads and waiting. You type a few command
   ```
 
 - **The release,** from [omamobile.org/download](https://omamobile.org/download), in one of two ways:
-  - **one file** (the easy way): `omamobile-cheetah-<version>.tar` (about 2.8 GB) and its checksum file `omamobile-cheetah-<version>.tar.sha256`, downloaded into the same folder. Step 2 checks and unpacks it.
-  - **file by file:** the bundle (a folder named `omamobile-cheetah-<version>`) and the root image (`omamobile-rootfs-cheetah-<version>-aarch64.img.zst`), side by side in the same folder. Downloads often lose the files' execute permission, so run `chmod +x tools/*` once inside the bundle folder.
+  - **one file** (the easy way): `omamobile-cheetah-<version>.tar` (about 2.8 GB) and its checksum file `omamobile-cheetah-<version>.tar.sha256`, downloaded into the same folder (and `omamobile-cheetah-<version>.tar.sha256.sig` too, for step 2's optional signature check). Step 2 checks and unpacks it.
+  - **file by file:** the bundle (a folder named `omamobile-cheetah-<version>`) and the root image (`omamobile-rootfs-cheetah-<version>-aarch64.img.zst`), side by side in the same folder. Downloads often lose the files' execute permission, so run `chmod +x tools/*` once inside the bundle folder (`tools/phone-provision` runs the other tools there directly).
 - **Google's factory image for your phone,** from [Google's factory images page](https://developers.google.com/android/images#cheetah): the build your phone runs now (Settings > About phone > Build number). Check its SHA-256 against the one on Google's page (`sha256sum cheetah-*.zip`). Omarchy Mobile never ships Google's files: after the install, a tool copies the firmware your phone needs (Wi-Fi, Bluetooth, audio, haptics, the camera) out of this image, on your computer, and onto your phone.
 
 ## 1. Unlock the bootloader (this erases the phone)
@@ -154,14 +154,14 @@ From the bundle folder, run `tools/nv-backup` with a new folder for the backup:
 
 ```sh
 B=~/omamobile-backup/nv-backup-$(date +%Y%m%d-%H%M)
-tools/nv-backup "$B"
+bash tools/nv-backup "$B"
 ```
 
 It first finds the seven partitions (`efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`, `modem_b` and `devinfo`) and checks that each one is read-only and unused; if one isn't, it stops before copying anything. Then it copies each one (about 430 MB in all), reads it again on the phone and compares, and writes the checksums to `SHA256SUMS`. It never writes anything to the phone. The folder and its files are readable only by you.
 
 You should see `verified against the phone` for each partition, then `Backup done` and a reminder that the backup is private. **If it stops with an error about a partition (not found, writable or mounted), don't work around it: ask in an issue.** If a copy didn't match the phone, delete the folder and run it again; if that keeps happening, ask. Remember the folder's name (`echo $B` prints it): the next step needs it.
 
-Later, before anything that touches the radio, `tools/nv-backup --check "$B"` compares the phone with the backup again, read-only: it prints `SAME` for each partition (`devinfo` is allowed to differ: the bootloader updates it at every good start).
+Later, before anything that touches the radio, `bash tools/nv-backup --check "$B"` compares the phone with the backup again, read-only: it prints `SAME` for each partition (`devinfo` may differ: it holds the bootloader's slot flags, which change after a flash, a fallback to slot A or the boot-success mark).
 
 **If the phone ever starts Android again** (on purpose, or because it fell back to slot A), take a new backup into a new folder afterwards, and keep the old one too, because Android rewrites some of these partitions.
 
@@ -181,8 +181,8 @@ Without them everything else still works, but the cameras won't.
 From the bundle folder, do a dry run first (it unpacks nothing and doesn't contact the phone), then the real run. Replace the path with the factory image you downloaded:
 
 ```sh
-tools/phone-provision --dry-run --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
-tools/phone-provision --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+bash tools/phone-provision --dry-run --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+bash tools/phone-provision --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
 ```
 
 The real run takes several minutes. Each copy to the phone ends with `verified`. If it stops with an error, nothing half-done is left behind: fix the cause and run it again (it's safe to repeat).

@@ -73,7 +73,7 @@ grep -c 'tools/phone-provision --nv-backup DIR FACTORY.zip' "$b/README.txt" >/de
 grep -c 'from this directory' "$b/README.txt" >/dev/null || fail "README.txt says to run it from the bundle"
 if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.txt no longer sends the user to the repository"; fi
 grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
-grep -c '  tools/nv-backup DIR$' "$b/README.txt" >/dev/null || fail "README.txt gives the backup command"
+grep -c '  bash tools/nv-backup DIR$' "$b/README.txt" >/dev/null || fail "README.txt gives the backup command"
 grep -c 'run "bash install" from this directory' "$b/README.txt" >/dev/null || fail "README.txt says bash install"
 if grep -c '\./install' "$b/README.txt" >/dev/null; then fail "README.txt no longer says ./install"; fi
 grep -c 'sha256sum -c omamobile-testdev-2026.11.01.tar.sha256' "$b/README.txt" >/dev/null || fail "README.txt names the one-file download's check"

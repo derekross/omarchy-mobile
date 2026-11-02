@@ -12,7 +12,9 @@
 #                    without it those two are checked by size, and by their
 #                    SHA-256 on the server before they go live
 #     --verify-only  upload nothing: check an already published version over
-#                    HTTPS against this bundle
+#                    HTTPS against this bundle (it needs the bundle's local
+#                    .tar, .tar.sha256 and a good .tar.sha256.sig beside it,
+#                    so a version published before the .tar can't be checked)
 #     --latest       after a good upload (or --verify-only), point
 #                    releases/<codename>/latest.json at this version
 #     --allow-older  let --latest point at a version older than the current one
@@ -79,7 +81,7 @@ while (($#)); do
     --verify-only) verify_only=1 ;;
     --latest) latest=1 ;;
     --allow-older) allow_older=1 ;;
-    -h|--help) sed -n '3,59p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,61p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) [[ -z $bundle ]] || die "one bundle at a time"; bundle=$1 ;;
   esac
