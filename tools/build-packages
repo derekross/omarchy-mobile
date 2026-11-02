@@ -35,12 +35,19 @@
 # Mesa, Hyprland and libcamera are large C/C++ builds: under qemu-user on a
 # laptop they take hours (Mesa the longest). They're built only when named or
 # with --all, and only once per version, since out/repo keeps them.
+#
+# linux-omamobile packs a kernel build instead of compiling one
+# (docs/RELEASES.md §4): it is built only once its prebuilt/ is staged
+# (packages/linux-omamobile/stage KERNEL_OUT), when named or by default.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
+# Packed from a staged kernel build: left out until packages/<name>/prebuilt has one
+STAGED=(linux-omamobile)
+staged_ready() { [[ -f packages/$1/prebuilt/kernel.release ]]; }
 repo=out/repo/aarch64
 all=0 force=0 nocheck=0 container_check=0 list=0 resign=0 imports=() dirs=() local_name=
 while (($#)); do
@@ -65,7 +72,7 @@ done
 ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-lynx omamobile-device-raven omamobile-device-panther omamobile-audio
        omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-owl-widgets omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-mmd omamobile-speaker-tuning omamobile-waydroid
-       omamobile-firstboot mesa hyprland libcamera)
+       omamobile-firstboot omamobile-boot-update linux-omamobile mesa hyprland libcamera)
 if ((resign)) && ((${#dirs[@]} + ${#imports[@]} + list + force + all)); then
   alarm_die "--resign builds, imports and lists nothing: use it alone"
 fi
@@ -73,6 +80,7 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)) && ((resign == 0)); then
   for name in "${ORDER[@]}"; do
     [[ -d packages/$name ]] || continue
     ((all)) || [[ " ${SLOW[*]} " != *" $name "* ]] || continue
+    [[ " ${STAGED[*]} " != *" $name "* ]] || staged_ready "$name" || continue
     dirs+=("packages/$name")
   done
   for d in packages/*/; do
@@ -131,6 +139,10 @@ if ((list)); then
   for name in "${SLOW[@]}"; do
     [[ " ${dirs[*]} " == *" packages/$name "* ]] && continue
     up_to_date "packages/$name" || echo "missing     packages/$name $(pkg_version "packages/$name") (slow: name it or use --all, or --import a build)"
+  done
+  for name in "${STAGED[@]}"; do
+    [[ -d packages/$name ]] || continue
+    staged_ready "$name" || echo "not staged  packages/$name (packages/$name/stage KERNEL_OUT first)"
   done
   exit 0
 fi

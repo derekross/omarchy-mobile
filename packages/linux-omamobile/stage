@@ -1,0 +1,66 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copy a finished kernel build into this package's prebuilt/ directory, on
+# the build machine, so the PKGBUILD only packs files and never compiles
+# (docs/RELEASES.md §4; where the kernel itself is built is §12 decision 1,
+# and this works for either answer: anything that leaves a kernel output
+# directory with the files below).
+#
+#   packages/linux-omamobile/stage KERNEL_OUT [PREBUILT]
+#
+# KERNEL_OUT is what `bin/omamobile kernel` then `bin/omamobile modules`
+# leave (KERNEL_OUT=~/omamobile-kernel/out-<x>):
+#   include/config/kernel.release      the release, a release build's (lib/pkgver)
+#   arch/arm64/boot/Image              the uncompressed arm64 kernel
+#   arch/arm64/boot/dts/<dir>/*.dtb    every board DTB, for each DTB_DIRS entry
+#   modules-<release>.tar.zst          the stripped modules, <release>/... inside
+# PREBUILT defaults to prebuilt/ beside this script (gitignored; copied
+# into tools/build-packages' container with the rest of the package). Set
+# DTB_DIRS (default exynos/google) for other vendor directories, and
+# KERNEL_DIR to record the source commit in prebuilt/SOURCE.
+#
+# Then: tools/build-packages packages/linux-omamobile
+# (or, by hand: LINUX_OMAMOBILE_PREBUILT=<dir> makepkg -A in this directory).
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+out=${1:?usage: stage KERNEL_OUT [PREBUILT]}
+dest=${2:-$here/prebuilt}
+die() { printf 'stage: %s\n' "$*" >&2; exit 1; }
+
+[[ -f $out/include/config/kernel.release ]] || die "no kernel build in $out (include/config/kernel.release)"
+rel=$(cat "$out/include/config/kernel.release")
+pkgver=$("$here/lib/pkgver" "$rel") || exit 1
+image=$out/arch/arm64/boot/Image
+modules=$out/modules-$rel.tar.zst
+[[ -s $image ]] || die "no $image (bin/omamobile kernel)"
+# An arm64 Image carries "ARM\x64" at offset 0x38
+[[ $(od -An -tx1 -j56 -N4 "$image" | tr -d ' \n') == 41524d64 ]] || die "$image is not an arm64 Image"
+[[ -s $modules ]] || die "no $modules (KERNEL_OUT=$out bin/omamobile modules)"
+top=$(tar --zstd -tf "$modules" | sed 's|^\./||; s|/.*||' | sort -u)
+[[ $top == "$rel" ]] || die "$modules holds '$top', not $rel only (a stale tarball?)"
+tar --zstd -tf "$modules" | grep -cE "^(\./)?$rel/modules\.order$" >/dev/null || die "$modules has no modules.order"
+
+rm -rf "$dest.new"
+mkdir -p "$dest.new/dtbs"
+cp "$image" "$dest.new/Image"
+cp "$modules" "$dest.new/modules.tar.zst"
+printf '%s\n' "$rel" > "$dest.new/kernel.release"
+n=0
+for dir in ${DTB_DIRS:-exynos/google}; do
+  [[ $dir =~ ^[a-z0-9_-]+(/[a-z0-9_-]+)*$ ]] || die "DTB_DIRS: bad directory '$dir'"
+  for f in "$out/arch/arm64/boot/dts/$dir"/*.dtb; do
+    [[ -f $f && ! -L $f ]] || continue
+    mkdir -p "$dest.new/dtbs/$dir"
+    cp "$f" "$dest.new/dtbs/$dir/"
+    n=$((n + 1))
+  done
+done
+((n)) || die "no DTBs under $out/arch/arm64/boot/dts/{${DTB_DIRS:-exynos/google}}"
+if [[ -n ${KERNEL_DIR:-} ]] && git -C "$KERNEL_DIR" rev-parse HEAD >/dev/null 2>&1; then
+  { echo "commit $(git -C "$KERNEL_DIR" rev-parse HEAD)"
+    echo "describe $(git -C "$KERNEL_DIR" describe --tags --always 2>/dev/null || true)"; } > "$dest.new/SOURCE"
+fi
+(cd "$dest.new" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum) > "$dest.new/SHA256SUMS"
+rm -rf "$dest"
+mv "$dest.new" "$dest"
+echo "staged $rel (pkgver $pkgver): Image, $(tar --zstd -tf "$modules" | grep -c '\.ko') modules, $n DTBs in $dest"

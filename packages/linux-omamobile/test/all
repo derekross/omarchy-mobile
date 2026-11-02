@@ -1,0 +1,144 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for linux-omamobile, from a copy of this directory alone, against a
+# fake kernel build (a made-up arm64 Image header, made-up DTBs and a
+# modules tarball shaped like bin/omamobile modules' output): the release
+# to pkgver mapping and its sort order, the refusals of ./stage, the
+# package layout, and makepkg itself where it is installed.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+PKG=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+for f in stage install lib/pkgver test/all PKGBUILD; do bash -n "$f" || fail "$f parses"; done
+pass "scripts parse"
+command -v zstd >/dev/null || { pass "# SKIP no zstd"; exit 0; }
+
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+# ---------------------------------------------------------------- pkgver
+check_ver() { [[ $(lib/pkgver "$1" 2>/dev/null) == "$2" ]] || fail "pkgver $1 -> $2 (got $(lib/pkgver "$1" 2>&1))"; }
+check_ver 7.3.0-rc6-omamobile-00453-g0123456789ab 7.3.0rc6.r453.g0123456789ab
+check_ver 7.4.0-omamobile-00012-gabcdef012345 7.4.0.r12.gabcdef012345
+check_ver 7.4.0-omamobile 7.4.0.r0
+check_ver 7.4-omamobile-00001-gabcdef0 7.4.0.r1.gabcdef0
+for bad in 7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8 7.3.0-rc6-omandroid-push1-00058-g7b0f8b5d18f8 \
+           7.3.0-rc6-omamobile-00453-g0123456789ab-dirty 7.3.0-rc6 7.3.0-rc6-omamobile-00453 '7.3.0-omamobile-1-g$(id)' ''; do
+  if lib/pkgver "$bad" >/dev/null 2>&1; then fail "pkgver refuses '$bad'"; fi
+done
+{ lib/pkgver 7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8 2>&1 || true; } | grep -c 'development builds' >/dev/null || fail "pkgver says why a push build is refused"
+if command -v vercmp >/dev/null; then
+  order=(7.3.0rc5.r900.gaaaaaaa 7.3.0rc6.r12.gbbbbbbb 7.3.0rc6.r453.gccccccc 7.3.0rc6.r1000.gddddddd 7.3.0.r0 7.3.0.r5.geeeeeee 7.4.0rc1.r1.gfffffff)
+  for ((i = 1; i < ${#order[@]}; i++)); do
+    [[ $(vercmp "${order[i-1]}" "${order[i]}") == -1 ]] || fail "vercmp: ${order[i-1]} < ${order[i]}"
+  done
+  pass "pkgver folds the release, refuses development and dirty builds, and sorts upward (vercmp)"
+else
+  pass "pkgver folds the release and refuses development and dirty builds (vercmp # SKIP not installed)"
+fi
+
+# ---------------------------------------------------------------- a fake build
+rel=7.3.0-rc6-omamobile-00453-g0123456789ab
+K=$t/out
+mkimage() { # file: an Image with arm64's magic at 0x38
+  { head -c 56 /dev/zero; printf 'ARM\x64'; head -c 4000 /dev/urandom; } > "$1"
+}
+mkbuild() { # release
+  rm -rf "$K"
+  mkdir -p "$K/include/config" "$K/arch/arm64/boot/dts/exynos/google" "$K/arch/arm64/boot/dts/qcom" "$t/ms"
+  echo "$1" > "$K/include/config/kernel.release"
+  mkimage "$K/arch/arm64/boot/Image"
+  for b in gs201-cheetah gs201-panther gs101-raven zumapro-tegu; do head -c 300 /dev/urandom > "$K/arch/arm64/boot/dts/exynos/google/$b.dtb"; done
+  head -c 300 /dev/urandom > "$K/arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dtb"
+  rm -rf "$t/ms" && mkdir -p "$t/ms/$1/kernel/drivers/gpu"
+  head -c 999 /dev/urandom > "$t/ms/$1/kernel/drivers/gpu/panthor.ko"
+  printf 'kernel/drivers/gpu/panthor.ko\n' > "$t/ms/$1/modules.order"
+  : > "$t/ms/$1/modules.builtin"; : > "$t/ms/$1/modules.builtin.modinfo"
+  for f in modules.dep modules.dep.bin modules.alias modules.alias.bin modules.symbols modules.softdep; do echo x > "$t/ms/$1/$f"; done
+  ln -s /home/someone/kernel "$t/ms/$1/build"
+  tar -C "$t/ms" --owner=0 --group=0 --numeric-owner -cf - "$1" | zstd -q -f -o "$K/modules-$1.tar.zst"
+}
+mkbuild $rel
+
+# ---------------------------------------------------------------- stage
+P=$t/prebuilt
+./stage "$K" "$P" > "$t/log" 2>&1 || { cat "$t/log"; fail "stage copies a release build"; }
+for f in Image modules.tar.zst kernel.release SHA256SUMS dtbs/exynos/google/gs201-cheetah.dtb dtbs/exynos/google/zumapro-tegu.dtb; do
+  [[ -f $P/$f ]] || fail "stage: $f"
+done
+[[ ! -e $P/dtbs/qcom ]] || fail "stage: only DTB_DIRS (exynos/google by default)"
+(cd "$P" && sha256sum --quiet -c SHA256SUMS) || fail "stage: checksums"
+grep -c "pkgver 7.3.0rc6.r453.g0123456789ab" "$t/log" >/dev/null || fail "stage names the pkgver"
+DTB_DIRS="exynos/google qcom" ./stage "$K" "$t/p2" >/dev/null 2>&1 && [[ -f $t/p2/dtbs/qcom/sm8750-oneplus-dodge.dtb ]] || fail "stage: DTB_DIRS adds directories"
+pass "stage copies the Image, the modules tarball and the board DTBs, with checksums"
+
+stage_refuses() { # what message
+  if ./stage "$K" "$t/p3" > "$t/log" 2>&1; then fail "stage refuses $1"; fi
+  grep -qF -- "$2" "$t/log" || { cat "$t/log"; fail "stage, $1: says '$2'"; }
+  [[ ! -e $t/p3 ]] || fail "stage, $1: nothing staged"
+}
+mkbuild 7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8
+stage_refuses "a development kernel" "not a release kernel"
+mkbuild $rel-dirty
+stage_refuses "a dirty tree" "uncommitted changes"
+mkbuild $rel
+head -c 9000 /dev/urandom > "$K/arch/arm64/boot/Image"
+stage_refuses "something that is not an arm64 Image" "not an arm64 Image"
+mkbuild $rel
+rm "$K/modules-$rel.tar.zst"
+stage_refuses "a build without its modules" "bin/omamobile modules"
+mkbuild 7.3.0-rc6-omamobile-00452-gffffffffffff
+mv "$K/modules-7.3.0-rc6-omamobile-00452-gffffffffffff.tar.zst" "$t/stale.tar.zst"
+mkbuild $rel
+cp "$t/stale.tar.zst" "$K/modules-$rel.tar.zst"
+stage_refuses "another release's modules" "not $rel only"
+mkbuild $rel
+rm "$K"/arch/arm64/boot/dts/exynos/google/*.dtb
+stage_refuses "a build without DTBs" "no DTBs"
+mkbuild $rel
+pass "stage refuses development and dirty kernels, a non-Image, missing or stale modules, no DTBs"
+
+# ---------------------------------------------------------------- install
+./install "$t/root" "$P" > "$t/log" 2>&1 || { cat "$t/log"; fail "install stages the package"; }
+r=$t/root/usr/lib/modules/$rel
+for f in vmlinuz pkgbase modules.order modules.builtin kernel/drivers/gpu/panthor.ko dtbs/exynos/google/gs201-cheetah.dtb \
+         dtbs/exynos/google/gs101-raven.dtb dtbs/exynos/google/zumapro-tegu.dtb; do
+  [[ -f $r/$f ]] || fail "install: $f"
+done
+cmp -s "$r/vmlinuz" "$P/Image" || fail "vmlinuz is the staged Image, uncompressed"
+[[ $(cat "$r/pkgbase") == linux-omamobile ]] || fail "pkgbase names the package"
+for f in modules.dep modules.dep.bin modules.alias modules.symbols build; do
+  [[ ! -e $r/$f && ! -L $r/$f ]] || fail "install leaves out $f (depmod's, or a build link)"
+done
+[[ $(ls "$t/root/usr/lib/modules") == "$rel" ]] || fail "one release directory only"
+[[ ! -e $t/root/boot && ! -e $t/root/etc ]] || fail "no /boot, no /etc: no initramfs or boot image here"
+[[ -z $(find "$t/root" -perm -o+w ! -type l) ]] || fail "nothing world-writable"
+pass "install: vmlinuz, modules (without depmod's files), every DTB and pkgbase under /usr/lib/modules/<release>"
+echo tampered >> "$P/Image"
+if ./install "$t/root2" "$P" > "$t/log" 2>&1; then fail "install refuses a prebuilt/ that fails its checksums"; fi
+./stage "$K" "$P" >/dev/null
+
+# ---------------------------------------------------------------- PKGBUILD
+v=$( (startdir=$PKG LINUX_OMAMOBILE_PREBUILT=$P; source ./PKGBUILD; echo "$pkgname $pkgver-$pkgrel ${arch[*]} ${depends[*]}") )
+[[ $v == "linux-omamobile 7.3.0rc6.r453.g0123456789ab-$(cat version) aarch64 kmod omamobile-boot-update" ]] || fail "PKGBUILD fields (got $v)"
+v=$( (startdir=$PKG LINUX_OMAMOBILE_PREBUILT=$t/nowhere; source ./PKGBUILD; echo "$pkgver") )
+[[ $v == 0 ]] || fail "with nothing staged pkgver is 0 and package() refuses (got $v)"
+grep -qx 'options=(!strip !debug)' PKGBUILD || fail "makepkg must not strip the Image or the modules"
+pass "the PKGBUILD takes pkgver from the staged release and pkgrel from version"
+
+if command -v makepkg >/dev/null && command -v fakeroot >/dev/null && ((EUID != 0)) && [[ -z ${LINUX_OMAMOBILE_IN_MAKEPKG:-} ]]; then
+  mkdir -p "$t/mp" && cp -r PKGBUILD install stage version lib test "$t/mp/"
+  (cd "$t/mp" && LINUX_OMAMOBILE_IN_MAKEPKG=1 LINUX_OMAMOBILE_PREBUILT=$P BUILDDIR=$t/mpb PKGDEST=$t/pkgs SRCDEST=$t/src \
+    PKGEXT=.pkg.tar.zst makepkg -A -d -f --nocheck --nosign >"$t/mp.log" 2>&1) || { tail -20 "$t/mp.log"; fail "makepkg packs it"; }
+  pkgf=$(ls "$t"/pkgs/linux-omamobile-7.3.0rc6.r453.g0123456789ab-*.pkg.tar.zst)
+  list=$(tar --zstd -tf "$pkgf")
+  grep -cx "usr/lib/modules/$rel/vmlinuz" <<<"$list" >/dev/null || fail "the package holds vmlinuz"
+  grep -cx "usr/lib/modules/$rel/dtbs/exynos/google/gs201-cheetah.dtb" <<<"$list" >/dev/null || fail "the package holds the DTBs"
+  grep -cE '^(boot|etc)/' <<<"$list" >/dev/null && fail "the package has nothing in /boot or /etc"
+  tar --zstd -xOf "$pkgf" "usr/lib/modules/$rel/vmlinuz" | cmp -s - "$P/Image" || fail "makepkg left the Image as staged"
+  pass "makepkg -A packs the staged build unchanged"
+else
+  pass "makepkg # SKIP no makepkg or fakeroot, or running as root"
+fi
