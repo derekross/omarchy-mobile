@@ -50,13 +50,20 @@ depmod -b "$stage" "$KERNEL_RELEASE"
 # refuses a boot image that grows too large. Everything else belongs in the
 # root filesystem, not here. The pruner reads modules.dep and fails loudly
 # rather than silently emptying the tree.
+modules=qcom_wdt
+if grep -qF 'drivers/gpu/drm/panel/panel-samsung-ea8074.ko' \
+    "$stage/usr/lib/modules/$KERNEL_RELEASE/modules.builtin"; then
+  : > "$stage/etc/omamobile-panel-built-in"
+else
+  modules="$modules panel-samsung-ea8074"
+fi
 python3 /src/tools/dipper/prune-modules.py \
-  "$stage/usr/lib/modules/$KERNEL_RELEASE" qcom_wdt panel-samsung-ea8074
+  "$stage/usr/lib/modules/$KERNEL_RELEASE" $modules
 depmod -b "$stage" "$KERNEL_RELEASE"
 
 # The modules the init loads must exist AND match this kernel exactly, or the
 # phone boots to a black screen with no watchdog taken over.
-for module in qcom_wdt panel-samsung-ea8074; do
+for module in $modules; do
   path=$(modinfo -b "$stage" -k "$KERNEL_RELEASE" -n "$module")
   [ "$(modinfo -F vermagic "$path" | cut -d ' ' -f1)" = "$KERNEL_RELEASE" ] || {
     echo "module $module does not match $KERNEL_RELEASE" >&2; exit 1; }
@@ -76,7 +83,9 @@ modprobe qcom_wdt || echo "omamobile: qcom watchdog module failed" >/dev/kmsg
 if [ -c /dev/watchdog0 ]; then
   watchdog -t 5 -T 30 /dev/watchdog0
 fi
-modprobe panel-samsung-ea8074 || echo "omamobile: panel module failed" >/dev/kmsg
+if [ ! -e /etc/omamobile-panel-built-in ]; then
+  modprobe panel-samsung-ea8074 || echo "omamobile: panel module failed" >/dev/kmsg
+fi
 hostname omamobile
 ''')
 
