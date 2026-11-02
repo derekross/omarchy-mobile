@@ -129,6 +129,9 @@ test("the clock, and the 60 s cap near its end", () => {
   assert.strictEqual(M.elapsedText(49), "0:49")
   assert.strictEqual(M.elapsedText(50), "0:50 · stops at 1:00")
   assert.strictEqual(M.elapsedText(75), "1:00 · stops at 1:00")
+  assert.strictEqual(M.elapsedText(250, 300), "4:10")
+  assert.strictEqual(M.elapsedText(290, 300), "4:50 · stops at 5:00")
+  assert.strictEqual(M.elapsedText(55, 0), "0:55 · stops at 1:00")
   assert.strictEqual(M.statusText("listening"), "listening")
   assert.strictEqual(M.statusText("idle"), "")
   assert.strictEqual(M.modelShort("tiny.en"), "tiny")
@@ -178,6 +181,13 @@ test("settings: three switches, earlier keys dropped, the preview on unless turn
 test("models: the config's [whisper] model, what is downloaded, the rows", () => {
   assert.strictEqual(M.configModel('[audio]\nmodel = "x"\n[whisper]\nmodel = "tiny.en"\n'), "tiny.en")
   assert.strictEqual(M.configModel(""), "base.en")
+  assert.strictEqual(M.configMaxSeconds('[audio]\ndevice = "default"\nmax_duration_secs = 300\n[whisper]\nmodel = "base.en"\n'), 300)
+  assert.strictEqual(M.configMaxSeconds('[meeting]\nmax_duration_secs = 900\n'), 60)
+  assert.strictEqual(M.configMaxSeconds(""), 60)
+  assert.deepStrictEqual(M.durationRows(120).map(function(r) { return [r.seconds, r.name, r.chosen] }),
+    [[60, "1 minute", false], [120, "2 minutes", true], [300, "5 minutes", false], [600, "10 minutes", false]])
+  assert.deepStrictEqual(M.durationArgv(300).slice(-1), ["300"])
+  assert.ok(M.durationArgv(300)[2].indexOf("audio.max_duration_secs") >= 0)
   assert.deepStrictEqual(M.installedModels("ggml-tiny.en.bin\nggml-base.en.bin\nsilero.onnx\n"), ["tiny.en", "base.en"])
   const rows = M.modelRows("tiny.en", ["tiny.en", "base.en"])
   assert.deepStrictEqual(rows.map((r) => r.name), ["Fast", "Balanced", "Accurate"])
