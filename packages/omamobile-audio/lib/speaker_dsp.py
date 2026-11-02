@@ -218,6 +218,16 @@ class JsonCtl:
     def __init__(self, path):
         self.path = path
 
+    def _locked(self):
+        # The heartbeat read and write_bytes load, change and save the whole
+        # file, and test/fake-amixer does the same under the same lock.
+        # Without it a save here put back a value a test had just written (a
+        # coil temperature step lost, so the watchdog saw no jump).
+        import fcntl
+        f = open(f'{self.path}.lock', 'a')
+        fcntl.flock(f, fcntl.LOCK_EX)
+        return f
+
     def _load(self):
         try:
             with open(self.path) as f:
@@ -237,6 +247,10 @@ class JsonCtl:
         return list(self._load())
 
     def read(self, name):
+        with self._locked():
+            return self._read(name)
+
+    def _read(self, name):
         state = self._load()
         c = state.get(name)
         if c is None:
@@ -262,6 +276,10 @@ class JsonCtl:
         return bytes(c['v']) if c and c['type'] == 'BYTES' else None
 
     def write_bytes(self, name, data):
+        with self._locked():
+            return self._write_bytes(name, data)
+
+    def _write_bytes(self, name, data):
         state = self._load()
         c = state.get(name)
         if not c or c['type'] != 'BYTES' or len(c['v']) != len(data):
@@ -1201,6 +1219,23 @@ def cmd_watch(args):
             feedback.stop()
 
 
+def watch_hook():
+    """Tests only (test/all): OMAMOBILE_WATCH_HOOK is a command run with the
+    round number before each round, and the clock is then the round count
+    times the interval, so a test's event lands at a known round and the
+    grace, heartbeat and settle times count rounds, however slow the
+    machine. Honoured only with the tests' JSON control backend, so a stray
+    line in speaker.conf can never change the real watchdog's clock or run
+    a command as root: there it is ignored, and said so."""
+    hook = os.environ.get('OMAMOBILE_WATCH_HOOK')
+    if not hook:
+        return None
+    if not os.environ.get('OMAMOBILE_CTL_BACKEND', '').startswith('json:'):
+        log('watchdog: OMAMOBILE_WATCH_HOOK ignored: tests only (the JSON control backend)')
+        return None
+    return hook
+
+
 def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max, temp_jump,
                strict_hb, media_delta, feedback):
     since = None
@@ -1215,9 +1250,14 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
     failures = 0
     n = 0
     acked = None
+    hook = watch_hook()
     while args.iterations == 0 or n < args.iterations:
         n += 1
-        now = time.monotonic()
+        if hook:
+            subprocess.run([hook, str(n)], check=True)
+            now = n * args.interval
+        else:
+            now = time.monotonic()
         # The mode (C9k): taken at the start of a round and answered in the
         # ack file, which omamobile-speaker-protection waits for before it
         # changes anything the new mode allows and the old one does not.
@@ -1322,7 +1362,7 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                 if last is None or hb != last[0]:
                     beat[amp] = (hb, now)
                 elif strict and now - last[1] >= args.heartbeat_timeout:
-                    msg = f'{amp}: HALO_HEARTBEAT stuck at {hb} for {now - last[1]:.0f} s'
+                    msg = f'{amp}: HALO_HEARTBEAT stuck at {hb} for {now - last[1]:.1f} s'
                     if strict_hb:
                         problems.append(msg)
                     elif not warned:
