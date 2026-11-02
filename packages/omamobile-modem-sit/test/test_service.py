@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
 import env  # noqa: F401  (paths and sys.path first)
 import json
+import os
 from pathlib import Path
 import struct
+import socket
 import tempfile
 import unittest
 from unittest.mock import Mock, MagicMock, patch
@@ -62,6 +64,29 @@ class ServiceTests(unittest.TestCase):
         self.db.execute('INSERT INTO outgoing VALUES (?,?,?,?,?)',('a'*32,'digest','sending','',0)); self.db.commit()
         other=app_service.database(self.root/'db')
         self.assertEqual(other.execute('SELECT state FROM outgoing').fetchone()[0],'unknown'); other.close()
+
+    def test_failed_radio_off_still_requires_reboot_without_claiming_release(self):
+        self.client.request.side_effect = TimeoutError()
+        with patch.object(app_service, 'radio', side_effect=OSError()), \
+             patch.object(app_service.cp, 'state', side_effect=OSError()), \
+             patch('builtins.print') as printed:
+            with self.assertRaisesRegex(RuntimeError, 'attended reboot required'):
+                app_service.unconfirmed_release(self.client, 'hangup deadline expired')
+        log = ' '.join(' '.join(map(str, call.args)) for call in printed.call_args_list)
+        self.assertIn('hangup deadline expired', log)
+        self.assertIn('radio-off failed: OSError', log)
+        self.assertIn('radio unavailable (TimeoutError) CP unavailable', log)
+        self.assertIn('leaving the modem running', log)
+
+    def test_unconfirmed_release_during_socket_request_is_fatal(self):
+        mine, theirs = socket.socketpair()
+        self.addCleanup(mine.close)
+        self.addCleanup(theirs.close)
+        theirs.sendall(b'{"action":"status"}\n')
+        self.service.dispatch = Mock(side_effect=app_service.UnconfirmedRelease('attended reboot required'))
+        with self.assertRaises(app_service.UnconfirmedRelease):
+            app_service.serve_one(self.service, mine, {os.getuid()})
+        self.assertEqual(mine.fileno(), -1)
     def test_ring_does_not_autoanswer_and_release_restores_audio(self):
         n=b'+12025550123'; body=struct.pack('<HBH',1,7,len(n))+n
         packet=struct.pack('<BBHHH',2,0,0x0d01,8+len(body),0)+body
@@ -193,11 +218,16 @@ class ServiceTests(unittest.TestCase):
         self.service.event(struct.pack('<BBHH', 2, 0, 0x070e, 8))
         self.assertLessEqual(self.service.next_poll, time.monotonic() + 5)
 
-    def test_unconfirmed_release_stops_the_modem(self):
+    def test_unconfirmed_release_turns_radio_off_and_keeps_call_ownership(self):
         call=self.service.new_call('+12025550123','outgoing','active',7)
-        with patch.object(app_service.cp,'stop_modem') as stop:
+        self.client.request.return_value = struct.pack('<I', 1)
+        with patch.object(app_service, 'radio') as radio, \
+             patch.object(app_service.cp, 'state', return_value=app_service.cp.ONLINE):
             self.service.dispatch(dict(action='hangup',id=call['id']))
-            stop.assert_not_called()
+            radio.assert_not_called()
             self.service.hangup_deadline=0.001
-            with self.assertRaises(RuntimeError): self.service.pump()
-            stop.assert_called_once()
+            with self.assertRaises(app_service.UnconfirmedRelease): self.service.pump()
+            radio.assert_called_once_with(False)
+        self.assertTrue(self.service.release_unconfirmed)
+        self.assertEqual(self.service.live(), [call])
+        self.assertTrue(json.loads((self.root/'active.json').read_text()))
