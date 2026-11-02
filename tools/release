@@ -417,7 +417,7 @@ st_packages() {
       awk -v n="$dpkg" '/^%FILENAME%$/ { getline; f = $0 } /^%NAME%$/ { getline; if ($0 == n) print f }' | head -1)
     [[ -n $pf && -f out/repo/aarch64/$pf ]] || die "out/repo has no $dpkg package file"
     want_sum=$(awk '$2 == "initramfs.cpio.lz4" { print $1 }' "$bf")
-    got_sum=$(bsdtar -xOf "out/repo/aarch64/$pf" "usr/lib/omamobile/$DEVICE/initramfs.cpio.lz4" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    got_sum=$({ bsdtar -xOf "out/repo/aarch64/$pf" "usr/lib/omamobile/$DEVICE/initramfs.cpio.lz4" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)
     [[ -n $want_sum && $got_sum == "$want_sum" ]] || {
       derek "tools/build-packages packages/$dpkg    # after the images stage staged boot-files/"
       die "$pf does not carry the staged release initramfs (packages/$dpkg/boot-files): it was built before the images stage, or without boot files"
