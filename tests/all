@@ -30,7 +30,11 @@ for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/instal
   "$t"
 done
 echo "# tests/owl/conformance-test.js"
-node tests/owl/conformance-test.js
+if command -v node >/dev/null; then
+  node tests/owl/conformance-test.js
+else
+  echo "ok - # skip: no node"
+fi
 shopt -s nullglob
 latest=""
 for f in out/omamobile-rootfs-*-aarch64.img.zst; do latest=$f; done
