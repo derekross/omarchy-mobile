@@ -8,6 +8,11 @@
 #     device.conf    the descriptor the images were built from
 #     images/        the BOOT_IMAGES (boot init_boot vendor_boot vendor_kernel_boot dtbo)
 #     omamobile.gpg  the public key SHA256SUMS.sig is checked against
+#     INSTALL.md     docs/INSTALL.md, the install guide
+#     tools/         tools/phone-provision and what it runs (phone-ssh and the
+#                    extract-* tools), so a user provisions from the bundle
+#                    without the repository; they extract Google's files on
+#                    the user's machine, and none of those files ship here
 #     MANIFEST       kernel release, root image, both repositories' commits
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
 #                    file with size and SHA-256, the root image, the release
@@ -54,7 +59,7 @@ while (($#)); do
     --unsigned) unsigned=1 ;;
     --label) label=${2:?}; shift ;;
     --base-url) base_url=${2:?}; shift ;;
-    -h|--help) sed -n '3,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,39p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
@@ -73,6 +78,9 @@ if ((unsigned == 0)); then
 fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || die "no $conf"
+provision_tools="phone-provision phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
+[[ -f docs/INSTALL.md ]] || die "no docs/INSTALL.md"
 boot_images=$(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$conf")
 [[ -n $boot_images ]] || die "$conf has no BOOT_IMAGES"
 if [[ -z $rootfs ]]; then
@@ -117,6 +125,13 @@ say "Assembling $dir"
 install -m755 tools/install-phone "$dir/install"
 install -m644 "$conf" "$dir/device.conf"
 install -m644 packages/omamobile-keyring/omamobile.gpg "$dir/omamobile.gpg"
+install -m644 docs/INSTALL.md "$dir/INSTALL.md"
+# phone-provision runs from the directory above its own (cd "$(dirname)/.."),
+# so in the bundle it finds tools/phone-ssh and tools/extract-* beside it
+mkdir -p "$dir/tools"
+for f in $provision_tools; do
+  install -m755 "tools/$f" "$dir/tools/$f"
+done
 # bin/omamobile images records the device it built for
 built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
 [[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
@@ -153,12 +168,13 @@ Omarchy Mobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEV
 $(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')
 
 This is a $label: it installs and runs, but some hardware is still being
-worked on (see docs/DEVICES.md in the repository for what works on this
+worked on (https://omamobile.org/devices/$DEVICE lists what works on this
 phone), it needs fastboot and your own factory image, and installing erases
 the phone's data. Keep stock Android's way back (below) in mind.
 
 Native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on the phone,
 with a mainline kernel and no Android. https://github.com/derekross/omarchy-mobile
+INSTALL.md in this directory is the step-by-step guide; read it first.
 
 Install: put the phone in fastboot mode (bootloader unlocked), connect it, and
 run ./install from this directory. $rootname must be next to
@@ -171,9 +187,13 @@ What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b '
 userdata (the Arch root). That ERASES userdata. It never touches slot A,
 the bootloader, radio, persist, efs, modem, devinfo or vbmeta.
 
-After the first boot: run tools/phone-provision from the repository with your
-own factory image for $DEVICE (firmware for Wi-Fi, Bluetooth, haptics,
-speakers and the camera; nothing Google's ships in this bundle).
+After the first boot: take the read-only backup of the modem's partitions
+(INSTALL.md, "Back up"), then run tools/phone-provision from this directory
+with that backup and your own factory image for $DEVICE:
+  tools/phone-provision --nv-backup DIR FACTORY.zip
+It puts the firmware for Wi-Fi, Bluetooth, haptics, speakers and the camera
+on the phone, extracted on this computer; nothing Google's ships in this
+bundle.
 
 Updates: the phone follows the ${channel:-unknown} channel of the [omamobile]
 repository (https://pkgs.omamobile.org); "omarchy update" on the phone

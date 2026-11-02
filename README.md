@@ -20,6 +20,8 @@ Native Omarchy on mobile devices: Arch Linux ARM, Hyprland and Omarchy's own pac
 
 ## Quick start
 
+**Installing a release?** Follow [docs/INSTALL.md](docs/INSTALL.md): it installs a downloaded, signed release bundle, with no build and no checkout of this repository. The steps below build everything yourself.
+
 The installer is new: expect rough edges. You need a Pixel 7 Pro with an unlocked bootloader, an Omarchy (Arch) laptop with Docker, `android-tools` and `e2fsprogs`, and Google's factory image for the phone. Stock Android stays on slot A as the way back; installing erases `userdata`.
 
 ```sh

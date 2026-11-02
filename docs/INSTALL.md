@@ -1,0 +1,244 @@
+<!-- SPDX-License-Identifier: MIT -->
+# Installing Omarchy Mobile on a Pixel 7 Pro
+
+This guide installs a release of Omarchy Mobile on a Pixel 7 Pro (codename `cheetah`). Releases are developer previews, named by date (for example `2026.11.15`). Releases are listed at [omamobile.org/download](https://omamobile.org/download), and each phone's page lists what works and what doesn't yet ([Pixel 7 Pro](https://omamobile.org/devices/cheetah), from [DEVICES.md](https://github.com/derekross/omarchy-mobile/blob/main/docs/DEVICES.md)).
+
+Omarchy Mobile is a community project built on [Omarchy](https://omarchy.org). It isn't an official Omarchy or Basecamp product.
+
+It takes about an hour, most of it downloads and waiting. You type a few commands in a terminal on your computer; each step says what you should see.
+
+## Before you start: what happens to your phone
+
+- **Installing erases the phone's data.** Unlocking the bootloader erases it, and the installer replaces the user data partition (`userdata`) with Omarchy Mobile. Copy off anything you want to keep first: photos, messages, two-factor codes.
+- **Android stays on the phone as your way back.** A Pixel has two copies of its system, slot A and slot B. The installer writes only slot B and `userdata`. Stock Android stays on slot A, untouched, and [Going back to Android](#going-back-to-android) shows how to switch back.
+- **The installer never touches the bootloader, the radio, or the partitions that hold your phone's identity and calibration** (`persist`, `efs`, `modem`, `devinfo`, `vbmeta`). It checks the phone before writing anything, shows every command it will run, and waits for you to type the phone's codename.
+- **This is a developer preview.** Calls, SMS and mobile data don't work yet (the modem is still being brought up), and the phone doesn't yet go to sleep by itself when the screen turns off. Check the [device page](https://omamobile.org/devices/cheetah) for the current list.
+
+## What you need
+
+- **A Pixel 7 Pro** whose bootloader can be unlocked. Phones sold locked to a carrier often can't be. In Android, go to Settings > About phone and tap Build number seven times to turn on Developer options, then check that Settings > System > Developer options > **OEM unlocking** can be switched on. If it's greyed out, the phone can't be unlocked.
+- **A computer running Linux** (Omarchy, Arch Linux or another distribution), and a USB-C cable that carries data. The installer is a shell script for Linux; installing from a web page or a desktop app is planned.
+- **These programs on the computer:** `fastboot` and `adb` (Android platform tools), `e2fsprogs`, `zstd`, `openssl`, `gnupg`, `python3`, `unzip`, and `binutils`. On Omarchy or Arch Linux:
+
+  ```sh
+  sudo pacman -S --needed android-tools e2fsprogs zstd openssl gnupg python unzip binutils erofs-utils
+  ```
+
+  On other distributions, install the packages with the same names (Android's tools are often split into `fastboot`, `adb` and a "libsparse" package for `img2simg` and `simg2img`).
+- **Free disk space:** about 35 GB (the downloads, Google's factory image and a working copy of the system image while installing).
+- **An SSH key.** The installer puts your public key on the phone so your computer can reach it over USB later. If `~/.ssh/id_ed25519.pub` doesn't exist, make one:
+
+  ```sh
+  ssh-keygen -t ed25519
+  ```
+
+- **The release:** the bundle (a folder named `omamobile-cheetah-<version>`) and the root image (`omamobile-rootfs-cheetah-<version>-aarch64.img.zst`), from [omamobile.org/download](https://omamobile.org/download). Put both in the same folder, side by side.
+- **Google's factory image for your phone,** from [Google's factory images page](https://developers.google.com/android/images#cheetah): the build your phone runs now (Settings > About phone > Build number). Check its SHA-256 against the one on Google's page (`sha256sum cheetah-*.zip`). Omarchy Mobile never ships Google's files: after the install, a tool copies the firmware your phone needs (Wi-Fi, Bluetooth, audio, haptics, the camera) out of this image, on your computer, and onto your phone.
+
+## 1. Unlock the bootloader (this erases the phone)
+
+Skip this step if your bootloader is already unlocked.
+
+1. In Android, turn on **OEM unlocking** and **USB debugging** in Developer options.
+2. Connect the phone to your computer, allow USB debugging on the phone when it asks, and run:
+
+   ```sh
+   adb reboot bootloader
+   ```
+
+   The phone restarts into **Fastboot Mode** (a screen with an Android robot and "Fastboot Mode" in red).
+3. Unlock:
+
+   ```sh
+   fastboot flashing unlock
+   ```
+
+   On the phone, use the volume keys to choose "Unlock the bootloader" and press Power. The phone erases itself and starts Android again.
+
+From now on the phone shows a warning that its bootloader is unlocked each time it starts. That is normal. **Never lock the bootloader again** (`fastboot flashing lock`) while Omarchy Mobile is on the phone: a locked bootloader refuses to start anything that isn't Google's.
+
+## 2. Check the release
+
+The installer checks the release by itself before it touches the phone: the bundle's signature (Omarchy Mobile's release key, which it carries), every file's checksum, and that the root image is the one the signed bundle names. If anything doesn't match, it stops.
+
+If you want to check the downloads yourself first, compare their SHA-256 with the ones on the download page:
+
+```sh
+sha256sum omamobile-rootfs-cheetah-<version>-aarch64.img.zst
+```
+
+## 3. Install
+
+1. Put the phone in Fastboot Mode. Either run `adb reboot bootloader` while Android is running, or, with the phone off, hold **Volume Down**, then also hold **Power**, and keep both held until "Fastboot Mode" appears (up to about 20 seconds).
+2. Connect the phone and check that the computer sees it:
+
+   ```sh
+   fastboot devices
+   ```
+
+   You should see one line with a serial number and `fastboot`.
+3. Go into the bundle folder and do a **dry run** first. It reads the phone's details, asks its questions, prepares everything and prints every command it would run, but writes nothing to the phone:
+
+   ```sh
+   cd omamobile-cheetah-<version>
+   ./install --dry-run
+   ```
+
+   It asks for:
+   - **a user name** (lower case, for example `alex`);
+   - **a password or a PIN.** It unlocks the phone and is your password for `sudo`. Digits only gives you a PIN pad on the lock screen; anything else gives a password field;
+   - **a host name** (the phone's name on a network), a **time zone**, and optionally a name and email for `git`;
+   - **a Wi-Fi network and its password** (optional, but the first start finishes setting up faster with internet);
+   - **your SSH public key** (Enter takes `~/.ssh/id_ed25519.pub`).
+
+   Then it shows the plan: five `fastboot flash` lines, each for a partition ending in `_b`, one `fastboot flash userdata`, then `fastboot --set-active=b` and `fastboot reboot`. Nothing else. Type `cheetah` when it asks, and it prints the commands instead of running them.
+
+   **If it stops about the bootloader slots** (both slots must carry the same bootloader version, and on some phones the bootloader only reports one of them), don't work around it: [open an issue](https://github.com/derekross/omarchy-mobile/issues) and we'll help.
+4. Install for real:
+
+   ```sh
+   ./install
+   ```
+
+   Answer the same questions, read the plan, and type `cheetah`. Each image is written in a few seconds. The system (`userdata`) takes several minutes over USB. Then the phone restarts by itself.
+
+If a step fails, the installer stops and says why. The phone stays in Fastboot Mode, and Android on slot A is untouched. Read the message, fix the cause and run `./install` again. Don't run it over and over in a loop; if you're unsure, ask in an issue.
+
+## 4. The first start
+
+After the unlocked-bootloader warning, the first start does three things by itself, and takes a few minutes:
+
+1. It grows the system to fill the whole `userdata` partition (about 110 GB).
+2. It sets up your user account, the firewall and Omarchy.
+3. It shows the lock screen. Unlock it with the password or PIN you chose.
+
+Leave the phone connected and alone until the lock screen appears.
+
+## 5. Connect to the phone over USB
+
+The next two steps run from your computer and reach the phone over the USB cable, as a small network: the phone is `172.16.42.1`, and your computer needs the address `172.16.42.2`. With NetworkManager (Omarchy and most desktops use it), add a connection for the phone's USB network once:
+
+```sh
+nmcli connection add type ethernet con-name omamobile-phone match.driver cdc_ncm \
+  ipv4.method shared ipv4.addresses 172.16.42.2/24 ipv6.method disabled
+```
+
+Then, from the bundle folder, check that you can reach the phone:
+
+```sh
+tools/phone-ssh 'uname -r'
+```
+
+You should see the phone's kernel version (it contains `omamobile`). If it says it can't connect, unplug the cable, plug it back in, wait ten seconds and try again.
+
+## 6. Back up the phone's radio partitions
+
+Before the phone ever starts its modem, make a copy of the partitions that hold its radio calibration and identity (including the IMEI), and keep it. Nothing Omarchy Mobile does writes these partitions (they're read-only while it runs), but stock Android writes some of them, and this copy is what tells the phone later that they're still the ones it expects. This step only reads from the phone.
+
+**This backup is private.** It holds your phone's IMEI and serial numbers. Keep it on your own storage (a second copy elsewhere is a good idea), and never post, share or attach it, not even in a bug report.
+
+From the bundle folder, copy and paste these commands. The first finds the seven partitions and checks that each one is read-only and unused:
+
+```sh
+B=~/omamobile-backup/nv-backup-$(date +%Y%m%d-%H%M)
+mkdir -p ~/omamobile-backup && mkdir -m 700 "$B" &&
+tools/phone-ssh 'for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  echo "$p ${d:-none} ro=$(cat /sys/class/block/$d/ro 2>/dev/null) mounted=$(grep -c "^/dev/$d " /proc/mounts)"; done' | tee "$B/partitions.txt" &&
+grep -c ' ro=1 mounted=0$' "$B/partitions.txt"
+```
+
+You should see seven lines ending in `ro=1 mounted=0`, then the number `7`. **If you see `none`, `ro=0`, or a number other than 7, stop and ask in an issue.**
+
+The second copies each partition (about 430 MB in all) and checks every copy against the phone:
+
+```sh
+: > "$B/SHA256SUMS"
+for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
+  d=$(awk -v p="$p" '$1 == p && $3 == "ro=1" && $4 == "mounted=0" { print $2 }' "$B/partitions.txt")
+  [ -n "$d" ] || { echo "STOP: $p is not read-only and unmounted"; break; }
+  tools/phone-ssh "cat /dev/$d" > "$B/$p.img"
+  on_phone=$(tools/phone-ssh "sha256sum < /dev/$d" | cut -d' ' -f1)
+  copy=$(sha256sum < "$B/$p.img" | cut -d' ' -f1)
+  [ "$on_phone" = "$copy" ] || { echo "STOP: $p.img differs from the phone's $p"; break; }
+  echo "$copy  $p.img" >> "$B/SHA256SUMS"
+done
+chmod 600 "$B"/*
+(cd "$B" && wc -l < SHA256SUMS && sha256sum -c SHA256SUMS)
+```
+
+You should see no `STOP` line, then `7` and seven lines ending in `OK`. If you see `STOP`, run the second block again; if it keeps happening, ask in an issue. Remember the folder's name (`echo $B` prints it): the next step needs it.
+
+**If the phone ever starts Android again** (on purpose, or because it fell back to slot A), take a new backup the same way afterwards, because Android rewrites some of these partitions.
+
+## 7. Add your phone's firmware
+
+Now copy the firmware your phone needs out of Google's factory image. `tools/phone-provision` (in the bundle) unpacks the image on your computer and copies only what's needed onto your phone; nothing of Google's goes anywhere else. It also puts the backup's checksums on the phone, and reads the phone's board id on the phone itself (it is never shown or copied off).
+
+The camera's data needs two Python modules. Install them once, in a folder of their own:
+
+```sh
+python3 -m venv ~/.cache/omamobile-venv
+~/.cache/omamobile-venv/bin/pip install unicorn pyelftools
+```
+
+Without them everything else still works, but the cameras won't.
+
+From the bundle folder, do a dry run first (it unpacks nothing and doesn't contact the phone), then the real run. Replace the path with the factory image you downloaded:
+
+```sh
+tools/phone-provision --dry-run --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+tools/phone-provision --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+```
+
+The real run takes several minutes. Each copy to the phone ends with `verified`. If it stops with an error, nothing half-done is left behind: fix the cause and run it again (it's safe to repeat).
+
+Then restart the phone, from the phone's menu or with:
+
+```sh
+tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+```
+
+After the restart, Wi-Fi, Bluetooth, sound, haptics, the sensors and the cameras work.
+
+**Fingerprint unlock is off at first,** on purpose: the first time its service starts, it writes the phone's secure storage, and that can't be undone. If you want it, start the service once in a terminal on the phone with `sudo systemctl enable --now omamobile-fp`, then add a finger on the phone's fingerprint screen.
+
+## Getting updates
+
+The phone updates like Omarchy: run `omarchy update` in a terminal, or use the update notice and Update in the phone's menu. It updates Omarchy's packages and Omarchy Mobile's own, including the kernel, from the signed `[omamobile]` repository at `pkgs.omamobile.org`. It refuses to start on a low battery unless the phone is charging. When an update needs a restart, the phone tells you; it never restarts by itself.
+
+There are two channels:
+
+- **stable** (the default for a release install): what has been tested on the Pixel 7 Pro;
+- **development:** every day's build, first. For people who build and test.
+
+See which one the phone follows with `omamobile-update check`, and switch with `sudo omamobile-update channel development` (or `stable`).
+
+Use `omarchy update`, never `sudo pacman -Syu`, `omarchy-channel-set` or `omarchy-refresh-pacman` on the phone: those would replace the phone's own settings with a laptop's.
+
+## Going back to Android
+
+Stock Android is still on slot A.
+
+1. Put the phone in Fastboot Mode: hold **Volume Down** and **Power** until "Fastboot Mode" appears (up to about 20 seconds).
+2. On your computer:
+
+   ```sh
+   fastboot --set-active=a
+   fastboot reboot
+   ```
+
+3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone.
+
+To remove Omarchy Mobile completely, flash Google's factory image for your phone with Google's own tools (the [Android Flash Tool](https://flash.android.com) or the `flash-all.sh` script in the factory image). Don't lock the bootloader afterwards unless you're sure both slots hold Google's images; if in doubt, ask in an issue first.
+
+To come back to Omarchy Mobile later, run the installer again (step 3). Take a new radio backup (step 6) after the first start, because Android rewrote some of those partitions.
+
+## If something goes wrong
+
+- **The phone shows Android's recovery screen with "Try again" and "Factory data reset" while you expected Omarchy Mobile:** choose neither. Hold **Volume Down** and **Power** for about 20 seconds to reach Fastboot Mode, and ask in an issue.
+- **A restart seems stuck:** wait a minute; the phone resets itself. If it's still stuck, hold **Power** for about 30 seconds, then press it again.
+- **The phone doesn't answer at all:** hold **Volume Down** and **Power** for about 20 seconds to reach Fastboot Mode. From there you can run the installer again, or go back to Android.
+- **To ask for help,** [open an issue](https://github.com/derekross/omarchy-mobile/issues) with what you ran and what it printed. Remove serial numbers, your IMEI, your Wi-Fi network's name and MAC addresses before you post, and never attach the radio backup.
+
+The full developer runbook behind this guide, with every check, is [device/cheetah/REINSTALL-RUNBOOK.md](https://github.com/derekross/omarchy-mobile/blob/main/device/cheetah/REINSTALL-RUNBOOK.md).

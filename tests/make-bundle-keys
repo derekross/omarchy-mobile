@@ -13,11 +13,15 @@ done
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 r=$t/repo
-mkdir -p "$r/tools/lib" "$r/device/testdev" "$r/packages/omamobile-keyring" \
+mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" \
   "$r/out" "$t/kernel/include/config" "$t/ramdisk/root/.ssh"
 cp tools/make-bundle tools/bundle-manifest "$r/tools/"
 cp tools/lib/signing.sh "$r/tools/lib/"
 : > "$r/tools/install-phone"
+for f in phone-provision phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+  : > "$r/tools/$f"
+done
+: > "$r/docs/INSTALL.md"
 printf 'BOOT_IMAGES="boot"\nNAME="Test device"\n' > "$r/device/testdev/device.conf"
 : > "$r/packages/omamobile-keyring/omamobile.gpg"
 # A release key layout without key material: the refusals below all come
