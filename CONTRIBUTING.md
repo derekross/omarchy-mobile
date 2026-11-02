@@ -284,7 +284,7 @@ Findings that matter beyond one subsystem go into `device/<codename>/NOTES.md`, 
 - **New hardware is `disabled` by default.** A separate, later commit turns it on once it has passed on the phone. One exception: a board node whose pins, flags and driver are already proven on another phone with the same SoC (the Pixel Fold's volume keys, wired as the Pixel 7 Pro's) may be added enabled in one commit, once it has passed on your phone; say which phone's node it matches.
 - **Code imported from Google's GPL tree** keeps its copyright and is marked as such. Port it to upstream APIs and style before proposing it for `omamobile`.
 - **Sending upstream:** the published `omamobile` branch sits on one squashed commit that holds the tree of the upstream tag (see [`tools/publish-kernel`](tools/publish-kernel)). Rebase your commits onto the real tag (`git rebase --onto v7.3-rc6 <squashed base>`), run `scripts/get_maintainer.pl`, and follow `Documentation/process/submitting-patches.rst`.
-- **Sign-off and AI tools.** Upstream needs your own `Signed-off-by:` (the DCO). If an AI assistant helped, follow `Documentation/process/coding-assistants.rst`: the human signs off, the AI never does, and its help is credited with an `Assisted-by:` tag.
+- **Sign-off and AI tools.** Upstream needs your own `Signed-off-by:` (the DCO). If an AI assistant helped, follow `Documentation/process/coding-assistants.rst`: the human signs off, the AI never does, and its help is credited with an `Assisted-by:` tag. `tools/kernel-pr-check` and `tools/publish-kernel` fail a commit without its author's human sign-off, but a `Co-Authored-By:` trailer only draws a warning (the maintainer's decision, 2026-11-02): AI may assist; a human tests, verifies and signs off.
 
 ### 6.3 This repository
 

@@ -14,8 +14,8 @@
 #     published commit ids;
 #   - checks every commit it would publish with tools/kernel-pr-check's
 #     commit checks (the author's human Signed-off-by, none from an AI,
-#     Assisted-by rather than Co-Authored-By, subject prefixes, identifiers
-#     and blobs) and refuses merge commits; checkpatch and the builds are the
+#     subject prefixes, identifiers and blobs; a Co-Authored-By trailer is
+#     only a warning) and refuses merge commits; checkpatch and the builds are the
 #     full gate's (RELEASES section 11, step 2);
 #   - with --tag, creates an annotated release tag on the published commit
 #     and pushes it with the branch, atomically;
@@ -97,8 +97,8 @@ if ((n)); then
   merges=$(git rev-list --merges "$pub..$head")
   [[ -z $merges ]] || die "merge commits in $branch since the published tip; publish a linear series (rebase it):
 $(git log --no-walk --format='  %h %s' $merges)"
-  echo "# tools/kernel-pr-check --no-checkpatch --strict-trailers on the $n commit(s) to publish"
-  "$repo/tools/kernel-pr-check" --no-checkpatch --strict-trailers -C "$linux" "$pub" "$head" \
+  echo "# tools/kernel-pr-check --no-checkpatch on the $n commit(s) to publish"
+  "$repo/tools/kernel-pr-check" --no-checkpatch -C "$linux" "$pub" "$head" \
     || die "the commits to publish fail the checks above; nothing published"
 fi
 
