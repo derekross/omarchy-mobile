@@ -4,7 +4,8 @@
 # the device's own package (PACKAGE in device/<codename>/device.conf) and its
 # board-specific ones (ROOTFS_PACKAGES there: audio, sensors, GNSS,
 # fingerprint and modem are tuned to one phone).
-# Not here on purpose: omamobile-modem-sit and omamobile-mmd (no SIM run yet),
+# Not here on purpose: omamobile-modem-sit and omamobile-mmd (the modem comes
+# in a later release; Phone and Messages run without it, showing no modem),
 # omamobile-speaker-tuning (off by default; needs the user's extracted
 # Waves libraries), omamobile-waydroid (a later goal).
 omamobile-keyring
@@ -15,6 +16,12 @@ omamobile-shell
 omamobile-voice
 omacam
 omamobile-apps
+# Phone (with Contacts), Messages and the agent behind them; omamobile-apps
+# depends on them too, so phones installed earlier get them in an update.
+# Listed here so the build fails if [omamobile] lacks one.
+omaphone
+omamessages
+omatel-agent
 omamobile-mirror
 libfprint
 neard
