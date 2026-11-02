@@ -133,6 +133,7 @@ test("the clock, and the 60 s cap near its end", () => {
   assert.strictEqual(M.elapsedText(290, 300), "4:50 · stops at 5:00")
   assert.strictEqual(M.elapsedText(55, 0), "0:55 · stops at 1:00")
   assert.strictEqual(M.statusText("listening"), "listening")
+  assert.strictEqual(M.statusText("transcribing"), "transcribing")
   assert.strictEqual(M.statusText("idle"), "")
   assert.strictEqual(M.modelShort("tiny.en"), "tiny")
 })
