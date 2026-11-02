@@ -13,6 +13,7 @@ trap cleanup EXIT
 R=$t/repo
 mkdir -p "$R/tools/lib" "$R/tests" "$R/out/repo/aarch64" "$t/bin" "$t/kernel/include/config"
 cp tools/build-rootfs tools/make-bundle tools/install-phone tools/bundle-manifest "$R/tools/"
+cp tools/lib/bundle-tar.sh "$R/tools/lib/"
 touch "$R/out/repo/aarch64/omamobile.db" "$t/kernel/modules-fixture.tar.zst" "$t/alarm.tar"
 echo fixture > "$t/kernel/include/config/kernel.release"
 for device in first second; do
@@ -134,7 +135,7 @@ echo dtbo > "$t/kernel/images/dtbo.img"
 echo public-key > "$R/packages/omamobile-keyring/omamobile.gpg"
 # A bundle carries the install guide and phone-provision with its tools.
 mkdir -p "$R/docs"; echo guide > "$R/docs/INSTALL.md"
-for f in phone-provision phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+for f in phone-provision nv-backup phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
   printf '#!/bin/bash\n' > "$R/tools/$f"; chmod +x "$R/tools/$f"
 done
 bundle() { DEVICE=first "$R/tools/make-bundle" --unsigned --version fixture "$@"; }

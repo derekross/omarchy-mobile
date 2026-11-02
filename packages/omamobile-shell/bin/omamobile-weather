@@ -36,7 +36,15 @@ A city is looked up once with Open-Meteo's geocoding and kept, by name, in
 unit is the setting's, else the locale's (°F in the US). With no place at
 all, nothing is fetched. No IP geolocation.
 
-One try per run with short timeouts; on any failure the old reading stays.
+Short timeouts, and on any failure the old reading stays. A run at login or
+on resume (the timer's Persistent= catches up the half hour missed in sleep)
+often starts before Wi-Fi is back, so a failure to reach the network (a
+name that won't resolve, a connection refused or timed out) is tried again
+after 5, 10, 15 and then every 20 s, for up to 75 s; if the network still
+isn't there, the run gives up quietly (exit 0: a phone without Wi-Fi isn't a
+failed unit) and the next half hour tries again. Any other failure (an HTTP
+error, a TLS error, an answer without a temperature, a city not found) is
+one try and fails the run.
 Only coordinates rounded to about 1 km, or the city name, leave the phone.
 
   omamobile-weather                      fetch once and write the reading
@@ -47,10 +55,12 @@ import glob
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -66,6 +76,9 @@ WHERE_AM_I = os.environ.get("OMAMOBILE_WHERE_AM_I", "/usr/lib/geoclue-2.0/demos/
 GEOCLUE_AGENT = "omamobile-geoclue-agent.service"
 FIX_FRESH = 3 * 3600      # ask GeoClue at most this often
 FIX_KEEP = 24 * 3600      # a failed fix falls back to the last one this young
+GEOCLUE_FOR = 22          # where-am-i under timeout -k 2 20
+RETRY_FOR = 75            # no network: try again for this long (the unit allows 150 s)
+RETRY_DELAYS = (5, 10, 15, 20)   # then 20 s each
 
 # Open-Meteo's WMO weather codes -> words, as HomeModel.weatherText (the
 # test checks the two agree for every code).
@@ -223,7 +236,7 @@ def where_am_i():
     """(lat, lon) from GeoClue at city accuracy, or None; never longer than
     about 20 s, whatever GeoClue does."""
     try:
-        out = subprocess.run(["timeout", "-k", "2", "20", WHERE_AM_I, "-a", "4", "-t", "12"],
+        out = subprocess.run(["timeout", "-k", "2", str(GEOCLUE_FOR - 2), WHERE_AM_I, "-a", "4", "-t", "12"],
                              capture_output=True, text=True, env=dict(os.environ, LC_ALL="C")).stdout
     except OSError:
         return None
@@ -353,7 +366,22 @@ def coordinates(where, state, fetch=fetch_json):
     return place["latitude"], place["longitude"]
 
 
-def run(fetch=fetch_json, now=time.time, env=None):
+def no_network(error):
+    """A failure to reach the server at all (no name, no route, refused,
+    timed out), as when Wi-Fi is still reconnecting, as opposed to a server
+    that answered with an error."""
+    if isinstance(error, urllib.error.HTTPError):
+        return False
+    # A TLS failure (a certificate that won't verify, a broken handshake)
+    # isn't a missing network, and retrying it quietly would hide it for
+    # good: it fails the run, as before. urlopen wraps it in a URLError.
+    reason = getattr(error, "reason", None) if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, ssl.SSLError) or isinstance(error, ssl.SSLError):
+        return False
+    return isinstance(error, (urllib.error.URLError, OSError))
+
+
+def run(fetch=fetch_json, now=time.time, env=None, sleep=time.sleep, clock=time.monotonic):
     now_s = now()
     state = read_json(PLACE) or {}
     before = json.dumps(state, sort_keys=True)
@@ -362,12 +390,24 @@ def run(fetch=fetch_json, now=time.time, env=None):
         if not where:
             log("no place (Location off, no today widget city, no setting: omamobile-weather set CITY): nothing fetched")
             return 0
-        try:
-            lat, lon = coordinates(where, state, fetch)
-            value = reading(fetch(forecast_url(lat, lon, where["unit"])), where["unit"], now_s * 1000)
-        except Exception as e:  # one try; the old reading stays
-            log("weather unavailable: %s" % e)
-            return 1
+        start, tries = clock(), 0
+        while True:
+            tries += 1
+            try:
+                lat, lon = coordinates(where, state, fetch)
+                value = reading(fetch(forecast_url(lat, lon, where["unit"])), where["unit"], now_s * 1000)
+                break
+            except Exception as e:  # the old reading stays
+                if not no_network(e):
+                    log("weather unavailable: %s" % e)
+                    return 1
+                delay = RETRY_DELAYS[min(tries, len(RETRY_DELAYS)) - 1]
+                if clock() - start + delay > RETRY_FOR:
+                    log("weather unavailable: no network after %d tries in %d s (%s): the last reading stays"
+                        % (tries, clock() - start, e))
+                    return 0
+                log("no network yet (%s): trying again in %d s" % (e, delay))
+                sleep(delay)
         if not value:
             log("weather unavailable: no temperature in the answer")
             return 1

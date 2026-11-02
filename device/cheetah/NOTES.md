@@ -2,6 +2,16 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-02: a kernel update through pacman, booted and rolled back
+
+Release kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (tag `kernel-2026.11.01`), from the push1 build `7.3.0-rc6-omamobile-push1-g2219cc6cda77`; linux-omamobile `7.3.0rc6.r635.g2219cc6cda77-1`, omamobile-boot-update 0.1.0, device-cheetah 0.1.38 (#320).
+
+- **The release kernel booted** [V]: `7.3.0-rc6-omamobile-g2219cc6cda77` booted from slot B after linux-omamobile's pacman hook wrote `boot_b` and `vendor_kernel_boot_b`. phone-smoke's required rows were ok, and so were the GPU, Wi-Fi, Bluetooth, touch, sound, sensors and all 4 cameras.
+- **Rollback** [V]: `omamobile-boot-update rollback` restored slot B byte for byte to the saved set, and the push1 kernel booted again.
+- **The phone builds the laptop's bytes** [V]: `init_boot`, `vendor_boot` and `dtbo` built on the phone were identical to `bin/omamobile images` output.
+- **Write counters** [V]: `queue/iostats` is 1. Field 7 of each slot B partition's `stat` rises with a write and reads 0 after a reboot, which is what the hook's "booted" check relies on.
+- Details and every step's lines: [KERNEL-UPDATE-PLAN](KERNEL-UPDATE-PLAN.md) §4.
+
 ## 2026-10-30: the charger reads offline at Full, and slot B now needs its AVB footers
 
 Kernels `7.3.0-rc6-omamobile-push1-00566-g66497d0197dc` (10-29),
