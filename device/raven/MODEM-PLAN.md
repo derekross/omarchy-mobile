@@ -784,3 +784,104 @@ binary: a single-module `make` had rebuilt nothing):
 - **Next:** what kills the link (the crash record should now keep it);
   then recovery without a reboot (a CP power cycle that reaches ONLINE).
 
+
+## 11. The link dies at system suspend (2026-10-27, `g97f09c8cfada`)
+
+- **What happened:** the owner took the phone out unplugged and found no
+  modem. Boot 13:24: the CP came up clean (NV copies matching the
+  backup), sitd polled the SIM for 54 minutes (it never reported ready
+  that boot). At 14:18:45 `omamobile-sleepd` suspended (s2idle, "dark and
+  locked for 11 s", the first time that boot with no USB host). In the
+  suspend the PM core logged `pcieport 0001:00:00.0: Unable to change
+  power state from D0 to D3hot, device inaccessible`, then `D3cold to D0`
+  and `Data Link Layer Link Active not set in 100 msec`; UFS logged its
+  `dme-set: attr-id 0x4021 ... failed` in the same resume (the M2.5
+  pattern). After resume the link trained (`Gen3 x2`), but CPIF's
+  `s51xx_pcie_restore_state` couldn't set D0 and the doorbell read
+  `0xffff` (no bus mastering). At 14:18:58 the dead-link check (§10's
+  fix) forced the crash: `link down for 8968 ms and recovery did not
+  clear it`, reason 22, ONLINE to CRASH_EXIT. rfsd's NV validation came
+  out clean; the watcher recorded the crash (its notification sends no
+  log line, so the journal can't confirm it).
+  sitd died with a traceback (`EOFError: SIT channel closed`, from its
+  bring-up SIM poll). The owner rebooted at 15:11.
+- **Not a one-off:** the next boot (15:11) lost the CP the same way at
+  its first suspend, 54 s after boot (crash at 15:12:28, 5072 ms after
+  the failed resume), and the 21 suspends after it ran without a modem;
+  nobody noticed. Two suspends with the CP ONLINE, two crashes. §10's
+  93-minute link death may have been the same thing before the dead-link
+  check existed.
+- **Fixes:**
+  - omamobile-modem 0.1.11: a crash raises a notification ("Cellular
+    stopped") with the crash record's path;
+  - omamobile-modem-sit 0.3.5: when the CP is gone, sitd exits with one
+    line ("the modem went away ...") instead of a traceback.
+  - During bring-up the watcher also held a logind sleep inhibitor while
+    the CP was ONLINE. It isn't in the package: it would cost every
+    phone's battery for a raven kernel problem, and the kernel fixes
+    below make it unnecessary.
+- **Next:** CPIF's system suspend. The root port has to stay reachable
+  across s2idle, or CPIF has to take the link down itself first (what
+  its `s5100_pm_notifier` does on stock is still to read). Separately:
+  why the SIM never became ready at 13:24.
+
+**Suspend with the modem up, first fix (2026-10-28, `gdd5e1655ef91`).** The
+cause, from the kernel log and Google's raven `pcie-exynos-rc.c`: with the
+link idle, `cp_link_down()` leaves the CP PCIe controller unclocked and its
+PHY isolated, so the PCI core's save, D3hot and restore of the root port in
+a system sleep read all ones and leave it marked D3cold; nothing below it
+can then be brought to D0. Google's driver takes the PHY out of isolation
+in `prepare` and isolates it again in `complete`. `pcie-gs201-cp` now does
+the same (PHY inited, root port config allowed, PERST# asserted, endpoint
+closed); not published yet.
+
+- **S2 (one `rtcwake -m freeze -s 20`, modem ONLINE): passed.** No
+  "inaccessible" on the root port; the link came straight back; CP ONLINE
+  35 s later, SIM 2 on LTE with data, no UFS error handler, no crash. The
+  endpoint logged "Unable to change power state from D3hot to D0, device
+  inaccessible" at resume (its link was down) without harm.
+- **S3 (five cycles, 30 s awake between):** cycles 1 and 2 were woken by the
+  modem (`cp2ap_wakeup`) after 2 and 5 s, CP ONLINE after each. Cycle 3
+  slept **558 s** (the RTC alarm didn't fire; IRQ 111, the PMIC, woke it)
+  and the CP was still ONLINE at resume, but the first poweron after it got
+  `s51xx_pcie_restore_state: Can't set D0`, doorbells read `cmd reg 0xffff`,
+  and the dead-link check crashed the CP 21 s after resume. Cycles 4-5 ran
+  with the CP down. No UFS errors in any cycle.
+- **Next:** the endpoint. The PCI core also suspends and resumes it with the
+  link down, fails, and keeps a wrong power state; after a long sleep CPIF's
+  D0 restore trips over it. Read the PCI core's and CPIF's D0 paths, keep the
+  endpoint's bookkeeping sane across the sleep (or restore it before CPIF's
+  restore), then S2/S3 again with a long sleep.
+
+**Second fix and the soak (2026-10-28, `g378edcff3ed7`).** `pcie-gs201-cp`
+now also waits, on every poweron after the first, for the endpoint's Vendor
+ID (every 10 ms, up to 1 s) before its state is restored (not published
+yet), on the theory that after a long sleep the endpoint wasn't ready
+0.1 ms after the link came up (PCIe r6.0 sec 6.6.1).
+
+- Two 300 s sleeps, three of 20 s: all CP ONLINE 60 s later; the modem woke
+  the first after 77 s, the PMIC the second after 165 s.
+- Two 900 s sleeps asked: the modem woke the phone after 8 and 6 s.
+- **Soak, 30 min of back-to-back sleeps (5 s awake between): passed.** 18
+  sleeps in 2387 s, about 2234 s asleep, three of about 10 min (591, 591,
+  600 s); woken by the modem 14 times, the RTC 3, the power key once. CP
+  ONLINE after every wake, no crash, no UFS error handler, both SIMs
+  registered. The new wait never logged (the endpoint answered at once
+  every time), so the 558 s failure didn't recur but the wait is not proven
+  to be what prevents it; it stays as a guard.
+- **Trial in daily use from 2026-10-28 13:25:** suspend with the modem up
+  and no sleep inhibitor. Watch for "Cellular stopped" and
+  `/var/log/omamobile/modem-crashes.log`.
+
+**The trial's first crash, a race (2026-10-28 14:09, `gdcdd42db122d`).**
+During the drain baseline (17 suspends in 20 min, POWER-PLAN) the root
+port failed as before the hooks ("Unable to change power state from D0 to
+D3hot, device inaccessible"), right after a "PHY isolated": the link went
+down between prepare and the PCI core's suspend of the root port, and
+cp_link_down() isolated the PHY again. CPIF's restore then got "Can't set
+D0" and the dead-link check crashed the CP. The endpoint wait logged
+nothing (the endpoint answered at once), so the earlier "slow endpoint"
+theory is ruled out. The fix (not published yet): from prepare to complete,
+cp_link_down() takes the link down but keeps the PHY inited and the root
+port reachable; complete isolates it. On the phone as `g244c690c1fd1`, the
+trial continuing.
