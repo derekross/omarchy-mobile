@@ -43,8 +43,8 @@ name that won't resolve, a connection refused or timed out) is tried again
 after 5, 10, 15 and then every 20 s, for up to 75 s; if the network still
 isn't there, the run gives up quietly (exit 0: a phone without Wi-Fi isn't a
 failed unit) and the next half hour tries again. Any other failure (an HTTP
-error, an answer without a temperature, a city not found) is one try and
-fails the run.
+error, a TLS error, an answer without a temperature, a city not found) is
+one try and fails the run.
 Only coordinates rounded to about 1 km, or the city name, leave the phone.
 
   omamobile-weather                      fetch once and write the reading
@@ -55,6 +55,7 @@ import glob
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -75,6 +76,7 @@ WHERE_AM_I = os.environ.get("OMAMOBILE_WHERE_AM_I", "/usr/lib/geoclue-2.0/demos/
 GEOCLUE_AGENT = "omamobile-geoclue-agent.service"
 FIX_FRESH = 3 * 3600      # ask GeoClue at most this often
 FIX_KEEP = 24 * 3600      # a failed fix falls back to the last one this young
+GEOCLUE_FOR = 22          # where-am-i under timeout -k 2 20
 RETRY_FOR = 75            # no network: try again for this long (the unit allows 150 s)
 RETRY_DELAYS = (5, 10, 15, 20)   # then 20 s each
 
@@ -234,7 +236,7 @@ def where_am_i():
     """(lat, lon) from GeoClue at city accuracy, or None; never longer than
     about 20 s, whatever GeoClue does."""
     try:
-        out = subprocess.run(["timeout", "-k", "2", "20", WHERE_AM_I, "-a", "4", "-t", "12"],
+        out = subprocess.run(["timeout", "-k", "2", str(GEOCLUE_FOR - 2), WHERE_AM_I, "-a", "4", "-t", "12"],
                              capture_output=True, text=True, env=dict(os.environ, LC_ALL="C")).stdout
     except OSError:
         return None
@@ -369,6 +371,12 @@ def no_network(error):
     timed out), as when Wi-Fi is still reconnecting, as opposed to a server
     that answered with an error."""
     if isinstance(error, urllib.error.HTTPError):
+        return False
+    # A TLS failure (a certificate that won't verify, a broken handshake)
+    # isn't a missing network, and retrying it quietly would hide it for
+    # good: it fails the run, as before. urlopen wraps it in a URLError.
+    reason = getattr(error, "reason", None) if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, ssl.SSLError) or isinstance(error, ssl.SSLError):
         return False
     return isinstance(error, (urllib.error.URLError, OSError))
 

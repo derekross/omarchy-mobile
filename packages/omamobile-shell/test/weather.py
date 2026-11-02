@@ -273,10 +273,25 @@ http = urllib.error.HTTPError("https://api.open-meteo.com/", 503, "Service Unava
 ok(W.run(flaky(99, http, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 1 and len(calls) == 1
    and clk.slept == [], "an HTTP error: one try, and the run fails")
 ok(open(W.READING).read() == before, "a failed fetch leaves the old reading")
-# The unit gives the retries room: GeoClue's 20 s, the window, and a last try of two 10 s requests.
-unit = open(os.path.join(ROOT, "systemd/user/omamobile-weather.service")).read()
-limit = [int(l.split("=", 1)[1]) for l in unit.splitlines() if l.startswith("TimeoutStartSec=")]
-ok(limit and limit[0] >= 20 + W.RETRY_FOR + 2 * W.TIMEOUT + 10, "TimeoutStartSec leaves room for the retries %s" % limit)
+# A TLS failure isn't a missing network: one try, the run fails, wrapped by urlopen or not.
+import ssl
+for error in (urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),
+              urllib.error.URLError(ssl.SSLError(1, "handshake failure")), ssl.SSLError(1, "bad record mac")):
+    calls.clear(); clk = Clock()
+    ok(W.run(flaky(99, error, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 1 and len(calls) == 1
+       and clk.slept == [], "a TLS error (%r): one try, and the run fails" % error)
+    ok(open(W.READING).read() == before, "a TLS error leaves the old reading")
+# The unit gives the retries room: GeoClue (timeout -k 2 20), the window, and a last try of two 10 s requests.
+ok(W.GEOCLUE_FOR == 22, "GeoClue's budget is its timeout and kill delay")
+section, limit = None, []
+for line in open(os.path.join(ROOT, "systemd/user/omamobile-weather.service")).read().splitlines():
+    line = line.strip()
+    if line.startswith("["):
+        section = line
+    elif section == "[Service]" and line.startswith("TimeoutStartSec="):
+        limit.append(int(line.split("=", 1)[1]))
+ok(len(limit) == 1 and limit[0] >= W.GEOCLUE_FOR + W.RETRY_FOR + 2 * W.TIMEOUT + 10,
+   "[Service] TimeoutStartSec leaves room for the retries %s" % limit)
 print("ok - weather: no network after a wake is tried again with backoff for up to %d s, then given up without failing the unit" % W.RETRY_FOR)
 calls.clear()
 ok(W.run(fake({"api.open-meteo.com": {"error": True}}), lambda: 1790005400.0, us) == 1 and open(W.READING).read() == before,
