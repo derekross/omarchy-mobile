@@ -661,6 +661,10 @@ never change, so reviews can cite them.
   device repository for the board (not only the SoC's), and confirm the
   controller's USI block and the pin bank's block agree. *From:* kernel #151,
   2026-10-31.
+- **L-413. "Booted" or "known good" is a fact about the partitions since this boot, not a tool's record, and a guard that reads a tool's own state is walked through every other writer.** #320 first read `current/RELEASE`, which `bin/omamobile flash` (the documented recovery) and `push` never update, so after the recovery preflight refused every update. Its `save_previous` also treated slot B as booted with no record, a stale record or a record naming the running release; each can hold a set written in this boot (the hook's own same-release write, a half push), so the only recovery copy became a never-booted set marked `BOOTED=yes`. *Check:* list every way the thing can change after boot (the tool itself at the same version, fastboot, push, rollback's no-op branch, partial writes), run each in the package's fake root and then call preflight; prefer the kernel's evidence (`/sys/block/*/<part>/stat` write counters) over a record. Extends L-284 and L-363. *From:* #320, rounds 38 and 38b, 2026-11-02.
+- **L-414. A counter that proves "nothing happened" needs the mechanism that counts to be on.** #320's partition write counters stay 0 when `queue/iostats` is off, which turned the fail-safe back into the original bug. *Check:* for any "zero means unchanged" signal, find the switch that disables it and ask that "off" counts as "changed"; ask for one read on the phone that the counter rises after a known write and is zero after a fresh boot (C-1). *From:* #320, round 38c, 2026-11-02.
+- **L-415. Whether a check refuses or proceeds depends on where it runs relative to the irreversible step.** A refusal in a post-transaction hook (pacman has already removed the old modules) leaves a half-applied update; the same condition in the pre-transaction preflight costs only a restart. *Check:* when asking a hook to refuse, ask whether what it protects still exists at that point, and move the refusal to the earliest read-only gate when it doesn't. *From:* #320, round 38c, 2026-11-02.
+- **L-416. A packing change is a boot change.** #320's reproducible cpio dropped the `.` entry, so the initramfs root stayed at tmpfs's 1777 instead of 0755; the commit proved byte reproducibility and nothing about what the kernel unpacks. *Check:* diff both archives' listings with modes (`cpio -itv`), root entry included, and ask for one boot with `tools/phone-smoke`. *From:* #320, round 38b, 2026-11-02.
 
 ## Shell and scripts
 
@@ -739,6 +743,9 @@ never change, so reviews can cite them.
   *Check:* run the block with `sh -c 'exit 3'` and `kill -TERM $$` in place
   of the daemon; only `|| true` or `set +e` in the group survives. Extends
   L-14. *From:* #70, round 20.
+- **L-417. A tests-only switch added to shipped safety code is proved inert by comparing syntax trees, not by reading the diff.** On #327, main and head were parsed with `ast`, the hook removed and `if hook: ... else: X` replaced by `X`, and `ast.dump` compared (identical). *Check:* do that for any `os.environ.get(...)` switch in a watchdog or limit path; list every unit, `EnvironmentFile=` and drop-in that could set it, and what happens when the switch's command fails. *From:* #327, round 38, 2026-11-02.
+- **L-418. A flaky test moved onto a synthetic clock is checked for each case's end state, not its exit status.** "Doesn't mute" cases pass whenever the event never lands. *Check:* run the suite with its keep switch (`KEEP=1` on #327) and read the end state of every case whose timing changed. Extends L-346. *From:* #327, round 38, 2026-11-02.
+- **L-419. A "checked again afterwards" step in a safety tool is mutation-tested.** Removing `nv-backup`'s post-copy re-probe left its test green. *Check:* delete each safety re-check in turn and run the test; one no test notices needs a fixture that changes state between the two checks. Extends L-102. *From:* #326, round 38, 2026-11-02.
 
 ## Kernel (linux-omarchy-mobile)
 
@@ -1493,7 +1500,9 @@ never change, so reviews can cite them.
   first; `git grep` open PR heads for a compatible a failure names; give the
   merge order and the resolved hunk. Extends L-73, L-104, L-165 and L-196.
   *From:* kernel #87 with #86, #72, round 22.
-
+- **L-420. A per-package check that `alarm_die`s the whole build stops every phone's publish.** #320's `stage-boot-files --check` covers all of `initramfs/`, so any device-package bump after any shared init change would hold the development channel until the maintainer staged again. *Check:* for a new gate in `build-packages` or `repo-publish`, ask whether skipping that package (non-zero exit at the end) is as safe, and grep for versioned dependencies on it. Related to L-259. *From:* #320, round 38, 2026-11-02.
+- **L-421. A hard-coded list of another tool's outputs is re-checked against that tool at the same head, after every merge of main.** #324's identifiers stage named make-bundle's files; #317, merged between rounds, added `INSTALL.md` and `tools/*`, so the stage would refuse every real bundle, and its test set the stage's result by hand. *Check:* `git log origin/main --since=<proof date> -- <producing tool>`, then run the allowlist on a bundle from `tests/make-bundle`'s fixture. *From:* #324 (and seen on #326), round 38, 2026-11-02.
+- **L-422. A new signature or artifact is checked for a consumer before it is shipped.** #324 wrote `<rootfs>.sha256.sig`, but the installer trusts only the signed MANIFEST, release-upload doesn't upload it, and it sat next to a different copy of the image. *Check:* grep the installer, uploader and flasher for the new file; if nothing reads it, ask to drop it. *From:* #324, round 38, 2026-11-02.
 
 ## Reviews and merging
 
@@ -1847,6 +1856,8 @@ never change, so reviews can cite them.
   maintainer's merge was then rejected as non-fast-forward. *Check:* `git
   diff origin/main <head>` is not empty before reviewing or pushing on top.
   *From:* #99, 2026-10-31.
+- **L-423. Cross-PR interactions are re-checked on every round, including a PR's diff against another's tracked sources.** Round 38 said #324's `repo-publish` would auto-merge with #320; a follow-up then made them collide on one option line. #326 edits `device/cheetah/device.conf`, one of #320's boot-file sources, so merged after the staging it would make the nightly skip device-cheetah. *Check:* rerun `git merge-tree` for related PRs each round, intersect each diff with the other's source list (`tools/stage-boot-files --sources <codename>`), and order staging after both merge. Extends L-253. *From:* #320 with #324 and #326, rounds 38b-38c, 2026-11-02.
+- **L-424. A shared tool that gains a required input breaks every open PR whose test calls the real tool with its own fixture.** #326 made `release-upload` require the `.tar`; #324's `tests/release` builds a bundle by hand and runs the real tool, so the pair turns main red though each is green alone. *Check:* `git grep -n '<tool>' <each open PR head> -- tests/`, rebuild those fixtures against the new tool, and give the merge order in both reviews. Extends L-104 and L-214. *From:* #326 with #324, round 38, 2026-11-02.
 
 ## Claims and evidence
 
@@ -2425,6 +2436,7 @@ never change, so reviews can cite them.
   C-3. *From:* issue #272, 2026-11-01.
 - **L-412. For stock DT values, ask for Google's GPL board source before a
   decompiled image.** *From:* #249, 2026-11-01.
+- **L-425. Staging a non-reproducible artifact on two machines under one version makes two packages.** cheetah's boot-file initramfs (`find | cpio`, unpinned order and mtimes) would be staged by the nightly machine and again by #324's release `images` stage. *Check:* build any staged input twice and compare bytes; if they differ, name the one machine and step that produces it. Extends L-268 and L-310. *From:* #320 with #324, round 38, 2026-11-02.
 
 ## Corrections (where a review was wrong)
 
