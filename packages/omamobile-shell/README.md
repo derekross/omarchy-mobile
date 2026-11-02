@@ -16,7 +16,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | `plugins/omamobile.back` | The back gesture: swipe in from a side edge for Escape |
 | `plugins/omamobile.update` | The update sheet: Omarchy's update for a phone, through `omamobile-update` (package `omamobile-omarchy`) |
 | `plugins/omamobile.voice` | The voice bar, through Voxtype: hold the pill in an app or the search bar on the home screen (or the keyboard's Mic key, Power + Volume Up, the Dictation tile, whose chevron opens the settings); it types into the app, sends to the agent in its terminal, or asks it from the home screen (docs/VOICE-PLAN.md) |
-| `bin/omamobile-voice-preview` | The voice bar's live preview: a second capture of the microphone (in memory only), transcribed in chunks with tiny.en and Whisper's context cut to the chunk while Voxtype records, one JSON line per pass; the bar shows the words in the theme's muted colour until the daemon's final text replaces them. Voxtype 1.1.1 can't hand its own partial text over (docs/VOICE-PLAN.md, phase 3) |
+| `bin/omamobile-voice-preview` | The voice bar's live preview: a second capture of the microphone (in memory only), transcribed in chunks with tiny.en (base.en when tiny.en isn't downloaded) and Whisper's context cut to the chunk while Voxtype records, one JSON line per pass; the bar shows the words in the theme's muted colour until the daemon's final text replaces them. Voxtype 1.1.1 can't hand its own partial text over (docs/VOICE-PLAN.md, phase 3) |
 | `plugins/omamobile.access` | The permission sheet: "Allow Camera to use the camera?" with the app's icon and two large buttons, in place of xdg-desktop-portal-gtk's desktop dialog |
 | `plugins/omamobile.fingerprint` | The under-display fingerprint sensor: target during verification, enrollment screen |
 | `profile/shell.json` | The phone layout the setup seeds once |
@@ -49,6 +49,44 @@ Foot and `xdg-terminal-exec` already ship in Omarchy's base package list,
 which normal root images install. The explicit dependencies are a guard
 for hand-built or partial installations: both agent launch and installing
 a selection need Omarchy's terminal launcher.
+
+## Voice input
+
+Voice works out of the box on a fresh install: no Install > AI > Dictation
+step and no download. The root image installs Voxtype (`voxtype-bin` from
+[omarchy], in `rootfs/packages.base`) and Whisper's base.en speech model
+(`packages/omamobile-voice`, 141 MiB in `/usr/share/omamobile/voice/models`).
+The model counts twice in the image: the image also carries its own copy of
+the [omamobile] repository (`/var/lib/omamobile/repo`, for offline
+reinstalls), where the package archive is another 141 MiB that won't
+compress. With voxtype-bin (71 MB installed, its archive is in Omarchy's
+repository, not ours) the root image grows by about 370 MB unpacked and
+about 325 MB compressed (2.8 GB before).
+
+At the user's first setup `omamobile-setup-user` does what Omarchy's
+`omarchy-voxtype-install` does, minus the download: it copies Omarchy's
+Voxtype config, links the shipped model into
+`~/.local/share/voxtype/models` (the only place Voxtype looks), enables
+the packaged `voxtype.service` user daemon (it starts with the graphical
+session) and marks Omarchy's "Install Dictation" invitation done. The
+config and the link happen once per user, and a config or model the user
+already has stays; the enable is retried at each login until it works
+(firstboot may run without a user manager). The settings' Fast (tiny.en,
+75 MB) and Accurate (small.en) models still download on request; without
+tiny.en the live preview uses base.en, with a pass every 2.5 s instead of
+1.2 s. Phones installed before this keep their setup: `omamobile-voice` is
+an optional dependency, and Omarchy's own install works as before.
+
+To remove dictation completely: Remove > Dictation (Omarchy's
+`omarchy-voxtype-remove`) takes out voxtype-bin, the user's Voxtype config
+and the model link, and setup leaves it removed; the shipped model stays
+until `sudo pacman -R omamobile-voice` frees its 141 MiB. Installing
+Dictation again through Omarchy's menu then downloads base.en itself.
+
+Building `omamobile-voice` needs huggingface.co the first time on a build
+machine: the model comes from a pinned commit of whisper.cpp's model
+repository with a pinned sha256, and makepkg keeps it in its source cache
+afterwards.
 
 ## File dialogs
 
