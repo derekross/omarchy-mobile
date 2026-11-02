@@ -1,7 +1,18 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Fingerprint plan (cheetah / gs201): fingerprint unlock on the lock screen
 
-Status (2026-10-19): **works, opt-in.** F3-F9 (the HAL) and the fprintd
+Status (2026-11-02): **on by default for new installs, from
+omamobile-fingerprint 0.1.14 and omamobile-firstboot 0.1.4** (section 6,
+F19). The installer's wipe warning names the secure-storage write, typing
+the codename is the owner's consent, firstboot records it in
+`/etc/omamobile/fingerprint.conf` and enables `omamobile-fp`, and the runner
+makes the read-only copies of `mfg_data` and `persist:/ss` itself, refuses
+storageproxyd without the consent record or the TDP copy, and runs one
+storage proxy per boot. The reference phone was reinstalled on 2026-11-02
+and enrolled again by hand (F19 results, section 7). The fresh-install checks
+(F19.T1-T3) haven't run yet.
+
+Earlier status (2026-10-19): **works, opt-in.** F3-F9 (the HAL) and the fprintd
 stages through F16b passed on the phone (section 7): the lock screen
 unlocks with a finger alongside the PIN pad or password, and enrollment
 runs from the shell. libfprint 1.94.100-1.6 keeps a
@@ -159,10 +170,27 @@ surprises are in F6c (what the HAL waits on) and F7 (LHBM timing).
 ## 4. Rules for this subsystem
 
 - **Never write `persist` or the RPMB without the human's explicit say-so.**
-  The first `storageproxyd` run (F4) counts as an irreversible write: ask,
-  and record the answer here. Every later start of `omamobile-fp.service` or
-  `omamobile-fp-chroot start` also runs storageproxyd: after F4 that is
-  normal operation, before F4 it is F4.
+  The first `storageproxyd` run (F4) counts as an irreversible write. Since
+  2026-11-02 the owner's recorded install-time acknowledgement counts as
+  that say-so on their phone: the installer's warning names the write,
+  typing the codename acknowledges it, and `/etc/omamobile/fingerprint.conf`
+  (`CONSENT=yes`, written by firstboot) records it. The runner refuses the
+  first storage start without that record. Anywhere else (a phone set up
+  by hand, an agent's runbook), ask, and record the answer here. Every later
+  start of `omamobile-fp.service` or `omamobile-fp-chroot start` also runs
+  storageproxyd: after the first run that is normal operation.
+- `persist` is never written, and `mfg_data` neither: both are only read,
+  and the TDP copy stays read-only (decision A, section 5). A TDP copy that
+  changes, or a `persist:/ss/0` that no longer matches it, stops the runner
+  (F19).
+- **One storage proxy per boot.** Trusty keeps each store's state until a
+  reboot; stopping and starting storageproxyd in the same boot before TD's
+  first commit crashed Trusty's storage app on 2026-11-02 (F19). Never stop
+  and start `omamobile-fp`, `omamobile-fp-stage` or any storageproxyd in one
+  boot: reboot. The runner refuses a second start, and the unit has no
+  `Restart=`.
+- Never restore an old TD (`tools/phone-provision --restore-td`) unless no
+  storageproxyd ran between taking the backup and restoring it.
 - `persist` and `mfg_data` are only ever read (read-only mount, `dd`
   from the by-partlabel node). Never add them to the storage guard's
   `UFS_RW` allowlist without the human's decision (section 5).
@@ -907,6 +935,196 @@ Then lock: no keyboard; PIN on the pad unlocks (and a wrong one fails); the
 finger unlocks; ABC shows the keyboard, 123 folds it. **Stop** on any
 wrong-PIN for a correct one: restore `/root/LockView.qml.pre-f16b`.
 
+### F19: fingerprint after a reinstall, and on by default for new installs (2026-11-02)
+
+The reference phone was reinstalled on 2026-11-02: `userdata` wiped, the
+RPMB kept. TD's file half went with `userdata`, and the RPMB still anchored
+the last TD. Three facts decide the runbook:
+
+- **An empty TD is safe.** Trusty sees an empty TD file and clears it
+  ("fs td: clear requested, create empty"), writing a new TD superblock to
+  the RPMB, as every Android factory reset does. It costs the enrolled
+  fingers and Trusty Gatekeeper's failure records; TP (KeyMint, AVB), TDP,
+  `persist` and `mfg_data` are untouched. This is what F4 did on 10-13.
+- **An old TD is not.** The 10-13/10-14 backups' TD is older than the RPMB
+  anchor (every storageproxyd run since moved it on), so it would mount and
+  then not read. So no TD restore: `tools/phone-provision --fingerprint`
+  now copies only `mfg_data.img` and `persist-ss/`, and TD only with
+  `--restore-td`, which is valid only if no storageproxyd ran since the
+  backup.
+- **TDP must be served from a copy of `persist:/ss/0`.** An empty TDP gets
+  no clear (unlike TD); against stock's TDP anchor in the RPMB it reads as
+  corrupted but may stay writable, and a TA commit would then move the TDP
+  anchor past stock's real `persist:/ss/0` for good. Linux never wrote TDP:
+  `persist:/ss/0` hashed to `e0e1990d…` in the 10-12, 10-30 and 11-02
+  persist backups and in both fingerprint backup tars.
+
+Variables: `B=~/android/reference/cheetah-nv-backup-20261102`.
+
+**F19.0 Backups match (read-only; risk none).**
+
+```sh
+tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' > logs/f19-partitions.sha256
+grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' "$B/SHA256SUMS" | sort -k2 |
+  diff - <(sort -k2 logs/f19-partitions.sha256) && echo SAME
+```
+
+Pass: `SAME`. **Stop** on any difference: take a fresh read-only backup and
+find out why first.
+
+**F19.1 Nothing has run yet (read-only; risk none).** `uname -r`, the
+package versions, `systemctl is-enabled omamobile-fp` (disabled),
+`systemctl is-active omamobile-fp omamobile-fp-stage` (inactive), no
+`storageproxyd`, no `/var/lib/omamobile-fp/data/vendor/ss/0`, the vendor
+tree present (phone-provision ran), the sensor node `okay`. **Stop** if
+storageproxyd already ran on this install: TD is already fresh, go to
+F19.5. **Stop** if the vendor tree is missing: run `tools/phone-provision`.
+
+**F19.2 Trusty ports (read-only; risk low).** As F2: cloudripper, API 5,
+`allow_cpu_offline` `N`, `apploader keymint gatekeeper` open.
+
+**F19.3 Read-only copies of `mfg_data` and `persist:/ss` (writes only
+`userdata`; risk low).** `debugfs` reads without mounting, so no journal
+replay (never plain `-o ro`). From omamobile-fingerprint 0.1.14 the runner
+does exactly this at its first start (and records the hashes in
+`/var/lib/omamobile-fp/provenance`); by hand:
+
+```sh
+tools/phone-ssh 'set -e; part() { grep -lx "PARTNAME=$1" /sys/class/block/*/uevent | head -1 | cut -d/ -f5; }
+  P=$(part persist) M=$(part mfg_data); echo "persist ro=$(cat /sys/class/block/$P/ro) mfg_data ro=$(cat /sys/class/block/$M/ro)"
+  grep -c "^/dev/$P " /proc/mounts || true
+  install -d -m 0700 /var/lib/omamobile-fp /var/lib/omamobile-fp/persist-ss
+  dd if=/dev/$M of=/var/lib/omamobile-fp/mfg_data.img bs=1M status=none
+  cd /var/lib/omamobile-fp/persist-ss && debugfs -R "dump -p /ss/0 0" /dev/$P && debugfs -R "dump -p /ss/nsp nsp" /dev/$P
+  sha256sum /var/lib/omamobile-fp/persist-ss/0 /var/lib/omamobile-fp/persist-ss/nsp /var/lib/omamobile-fp/mfg_data.img | cut -c1-16'
+```
+
+Pass: both `ro=1`, `persist` not mounted; `persist-ss/0` `e0e1990d…`, `nsp`
+`078a4f9c…` (stock's, 10-11), `mfg_data.img` equal to the laptop's 10-13
+copy. **Stop** on `ro=0` or any other `persist-ss/0` hash (stock's TDP
+changed: don't start storage, ask). Rollback: `rm -rf /var/lib/omamobile-fp`.
+
+**F19.4 Secure storage, one proxy session from here to the enrollment
+(IRREVERSIBLE: an RPMB write; the human's go first).** Trusty clears TD,
+writing a new TD superblock to the RPMB. **Don't use the stage-by-stage
+starts** (`start storage`, then `start hal`) here: Trusty keeps TD's
+in-memory state (the pending "initial" superblock of the clear) for the
+whole boot, and a storage proxy stopped and started before TD's first
+commit is what crashed it (results below). One start of the service runs
+F19.4-F19.7 in one session:
+
+```sh
+# --- the irreversible step ---
+tools/phone-ssh 'systemctl enable --now omamobile-fp'
+tools/phone-ssh 'sleep 20; journalctl -u omamobile-fp -b --no-pager | tail -40;
+  grep -iE "fs (tp|td|tdp|nsp)|super|corrupt|probe|rpmb" /dev/trusty-log0 | tail -20'
+```
+
+Expect "secure storage ready" and Trusty's log: `tp` loaded, **`tdp`
+loaded**, `nsp` loaded, `td` "clear requested, create empty". No MAC or
+RPMB errors. **Stop at once** (reboot, don't restart the service) on
+"Backing file probe failed", "corrupted", "bad block count", `tdp` not
+loaded, or an RPMB authentication error, and take the logs to the
+maintainer: a TDP inconsistent with the RPMB is the one case where going on
+could break stock's persistent state. Rollback: none (the RPMB can't be
+rolled back); reboot to drop the proxy.
+
+**F19.5 TA, keys, HAL in the same session (read-only checks; risk low).**
+
+```sh
+tools/phone-ssh 'journalctl -u omamobile-fp -b --no-pager | grep -E "g7|\[fingerprint\]|\[keymint\]|\[gatekeeper\]|calibration|auth-token" | tail -30'
+```
+
+Expect "g7.app loaded", KeyMint and Gatekeeper up, "Initialization
+successful", the sensor at (717, 2360) r 121, no "without factory
+calibration", "auth-token key agreed" and "gatekeeper: enrolled" (a new
+secret). **Stop** on a HAL crash: the unit then stays failed (no
+`Restart=`); reboot, don't restart it. The general rule: Trusty keeps each
+store's state for the whole boot; a proxy restart doesn't reset it, a
+reboot does.
+
+**F19.6 Stop condition before enrolling.** If storageproxyd stopped or
+restarted in this boot after F19.4 (any `stop`, a crash, a unit restart),
+reboot first. From 0.1.14 the runner refuses a second start until a
+reboot anyway.
+
+**F19.7 Enroll (announce first: the bright LHBM circle).** Setup >
+Security > Fingerprint (polkit asks for the PIN), then
+`fprintd-list <user>`. Expect, at the first enrollment, in
+`/dev/trusty-log0`: "write initial superblock before block N" and "write
+initial superblock, version N -> N+1": the clear flushed by TD's first
+commit in the same session. **Stop** on "Assert fail" or "Unclean exit from
+critical app" (Trusty halts, and with it the AoC: no sound or sensors until
+a reboot). Reboot, check that TD came up (Trusty clears it again by itself
+at mount when the superblock is unusable), and enroll again. Lock and unlock
+with the finger; the PIN still unlocks.
+
+**F19.8 After-checks (read-only).** After the enrollment, a few unlocks and
+one reboot: `sha256sum /var/lib/omamobile-fp/persist-ss/0 | cut -c1-16`
+still `e0e1990d…`, then F19.0 again (`SAME`). If TDP changed, record it:
+going back to stock may then find TDP inconsistent.
+
+**F19.9 A backup that can restore (optional).** A TD backup is valid only
+if no storageproxyd runs between taking and restoring it: take it right
+before a wipe, with the service stopped (`systemctl stop omamobile-fp; tar
+-C /var/lib -cf - omamobile-fp | …` into `~/android/reference/`, mode 600),
+and restore it with `--restore-td`. Never restore an older one.
+
+#### F19 on a new install: what runs by itself (omamobile-fingerprint 0.1.14, omamobile-firstboot 0.1.4)
+
+1. `tools/install-phone` shows the warning with the fingerprint paragraph
+   before the codename; the typed codename is the acknowledgement, recorded
+   as `FINGERPRINT=yes` and `ACK_DATE` in `firstboot.conf`.
+2. Firstboot writes `/etc/omamobile/fingerprint.conf` (`CONSENT=yes`,
+   `CONSENT_SOURCE=install-acknowledgement`, `CONSENT_DATE`) and enables
+   `omamobile-fp`. The unit is skipped (`ConditionPathExists`) until
+   `tools/phone-provision` has pushed Google's tree.
+3. At the reboot after provisioning, the runner's preflight: consent present
+   (or this install's TD already exists), `persist` and `mfg_data` `ro=1`
+   and `persist` not mounted read-write, the F19.3 copies made and hashed
+   into `provenance`, the TDP copy and `persist:/ss/0` both still matching
+   the recorded hash, and no storageproxyd earlier in this boot. Any failure
+   refuses before storageproxyd and leaves the unit failed; the lock uses
+   the PIN.
+4. One session: storage, the TA, KeyMint, Gatekeeper, the HAL, the bridge.
+   On stop, the bridge and the HAL go first and storageproxyd last.
+5. Onboarding offers "Add a fingerprint" after the PIN once the sensor is
+   ready (or at the first login after it is), once.
+
+A divergent TDP refuses the start instead of warning. Once Linux (or a
+stock boot after a slot A fallback) has written TDP, each further start
+moves the RPMB anchor on from the copy stock would read, and only the
+maintainer can judge what is safe then. The refusal keeps the phone's state
+as it was found, and costs only fingerprint (the PIN unlocks).
+
+**Fresh-install checks before calling default-on done** (the test phone;
+wipes are fine there):
+
+- **T1, a new install.** The release bundle with these packages and the new
+  installer. Before `phone-provision`: `systemctl is-enabled omamobile-fp`
+  enabled, the unit skipped by its condition, `/etc/omamobile/fingerprint.conf`
+  present. After provisioning and the reboot: the runner's log shows the
+  copies and the recorded hashes (`persist-ss/0` `e0e1990d…`), Trusty's log
+  as in F19.4, enrollment from onboarding with the "write initial superblock"
+  lines, and unlocking works. Then `systemctl restart omamobile-fp`: refused
+  with "reboot"; a reboot: it starts again. A day of use, three reboots and
+  sleep cycles: TDP still `e0e1990d…`, F19.0 `SAME`. Negative: with
+  `--no-fingerprint` the unit stays disabled and `omamobile-fp-chroot
+  preflight` refuses (no consent); with `persist-ss/0` removed by hand the
+  runner refuses storageproxyd.
+- **T2, back to stock.** `fastboot --set-active=a`, recovery, "Factory data
+  reset"; set up Android with a PIN, enroll a finger, unlock with it, reboot
+  twice; make a TEE-backed key; `adb logcat -b all -d | grep -iE
+  "trusty|storage|tdp|corrupt|ss:"` and `adb shell dumpsys fingerprint`.
+  Pass: no storage errors, fingerprint and keystore work. Then a fresh NV
+  backup, and re-hash `persist:/ss/0` (did stock write TDP?).
+- **T3, a reinstall after stock.** `tools/install-phone` again: the first
+  start shows the same clean log (TD cleared again), the new copies equal
+  `persist:/ss` as stock left it, and enrollment works. If T2 changed
+  `persist:/ss/0`, the new install's copy is the new hash: that is correct.
+
 ## 7. Results
 
 | Step | Date | `uname -r` | Result |
@@ -922,6 +1140,11 @@ wrong-PIN for a correct one: restore `/root/LockView.qml.pre-f16b`.
 | F7 | 2026-10-13 | `…-00402` | **Passed** (the human ran it): a bright circle over the sensor, timed out by itself. `allow_lhbm` resets at boot: package 0.1.2+ sets it with a modprobe option |
 | F8 | 2026-10-13 | `7.3.0-rc6-omamobile-push1-00405-g3bc8d8565645` | First tries: Gatekeeper enroll failed with `UNEXPECTED_NULL` (the bridge sent null arrays; fixed to empty arrays in 0.1.2); the HAL couldn't open `mfg_data` read-write (now a per-run scratch copy); `allow_lhbm` off after a reboot (no circle). A cancel the HAL never answers leaves the bridge stuck; restarting the service then fails (Trusty keeps the old storage proxy) until a reboot. **Passed**: about 17 good touches, `PROGRESS` 34 → 0, `ENROLLED`. `ACQUIRED 11` (immobile) when the finger isn't moved between touches |
 | F9 (HAL) | 2026-10-13 | `…-00405` | **Passed**: enrolled finger → `MATCH`; another finger → `NOMATCH`. fprintd next |
+| F19.0-F19.3 | 2026-11-02 | `7.3.0-rc6-omamobile-g2219cc6cda77` | **Passed**: the six radio/persist partitions `SAME` as the 11-02 backup; Trusty ports open; copies made with `debugfs` (persist not mounted): `persist-ss/0` `e0e1990d…`, `nsp` `078a4f9c…`, `mfg_data.img` matching the 10-13 copy |
+| F19.4 | 2026-11-02 | `…-g2219cc6cda77` | **Passed** (the human's go): `tp`, `tdp`, `nsp` loaded; `td` "clear requested, create empty"; no RPMB errors |
+| F19.5-F19.7, first try | 2026-11-02 | `…-g2219cc6cda77` | **Trusty storage crash.** Run stage by stage (`start storage`, stop, `start hal`, stop, then the service), so storageproxyd was stopped twice between TD's clear and TD's first commit, once under a live g7 TA. At enrollment the first TD commit printed no "write initial superblock", and the next asserted in the storage app (`block_get_cleared_super`: a dirty superblock slot already pending), "Unclean exit from critical app", Trusty HALT. Trusty keeps a store's state across a proxy restart, and only a reboot resets it |
+| F19.5-F19.7, after a reboot | 2026-11-02 | `…-g2219cc6cda77` | **Passed**: one continuous storageproxyd session from boot. Trusty cleared TD again by itself at mount, and the first commit flushed it ("write initial superblock before block 5", "version 0 -> 1"). `right-index-finger` enrolled at 17:15:25 and matched at 17:15:33 |
+| F19.8 | 2026-11-02 | `…-g2219cc6cda77` | **Passed**: the TDP copy unchanged (`e0e1990d…`, mtime 2022-11-01); the radio partitions `SAME` |
 
 **F16b result (2026-10-13, phone LockView.qml 4c72b5be):** passed. The human
 confirmed: no keyboard over the lock until ABC, a correct PIN on the pad
