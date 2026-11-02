@@ -60,6 +60,14 @@ function overview(info) {
     title = "Up to date"
     body = "Omarchy " + (info.omarchy || "") + " and its packages are current."
   }
+  // The phone's kernel package (omamobile-omarchy 0.1.28 and later): its
+  // hook writes it to slot B, or a development phone leaves slot B alone
+  var k = info.kernel
+  if (k && k.version) {
+    body += k.boot_update === "write"
+      ? " Includes the kernel (" + k.version + "): it is written to the phone, and a restart boots it."
+      : " Includes the kernel package (" + k.version + "); this phone keeps the kernel it has."
+  }
   var blockers = (info.blockers || []).slice()
   return {
     title: title,

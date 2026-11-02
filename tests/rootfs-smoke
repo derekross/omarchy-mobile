@@ -77,6 +77,15 @@ release=$(sed -n 's/^kernel modules: \([^ ]*\) .*/\1/p' <<<"$manifest")
 [[ -n $release ]] && exists "/usr/lib/modules/$release/modules.dep" || fail "kernel modules for $release, with depmod run"
 grep -q '^omamobile-device-[a-z0-9]* .* omamobile$' <<<"$manifest" || fail "a device package from [omamobile] in the MANIFEST"
 pass "MANIFEST, device package, modules for $release"
+# A device whose package ships boot files: the kernel is linux-omamobile,
+# the release the boot images were built from, with its slot-B hook, and
+# no AUTO_WRITE in the image (install-phone writes it)
+if exists /usr/share/omamobile/linux/kernel.release; then
+  [[ $(cat_ /usr/share/omamobile/linux/kernel.release) == "$release" ]] || fail "linux-omamobile is the MANIFEST's release $release"
+  exists /usr/bin/omamobile-boot-update || fail "omamobile-boot-update comes with linux-omamobile"
+  exists /etc/omamobile/boot-update.conf && fail "no boot-update.conf in the image (the installer writes it)"
+  pass "kernel package linux-omamobile ($release) and omamobile-boot-update, hook off in the image"
+fi
 
 # Images from before omamobile-omarchy patched Omarchy in build-inside
 if exists /usr/bin/omamobile-omarchy-patches; then

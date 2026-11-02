@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Rebuild this phone's slot-B boot images after a transaction that changes
+# the kernel (linux-omamobile's vmlinuz or DTBs) or the device's boot files
+# (the descriptor, dtbo, initramfs, overlays), and write them when
+# /etc/omamobile/boot-update.conf says AUTO_WRITE=yes (docs/RELEASES.md
+# §5.3). Development phones leave it off and keep bin/omamobile push. It
+# never reboots. Named to run after 60-depmod.hook, so depmod has run for
+# the new release, and after kernel-modules-hook's 10-linux-modules-post,
+# so the running release's tree is back in place to be saved for rollback.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/modules/*/dtbs/*
+Target = usr/share/omamobile/device.conf
+Target = usr/lib/omamobile/*/dtbo.img
+Target = usr/lib/omamobile/*/initramfs.cpio.lz4
+Target = usr/lib/omamobile/*/overlays/*
+
+[Action]
+Description = Writing the kernel into slot B (omamobile-boot-update)...
+When = PostTransaction
+Exec = /usr/bin/omamobile-boot-update hook

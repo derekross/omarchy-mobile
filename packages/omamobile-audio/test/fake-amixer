@@ -8,6 +8,7 @@
 #   FAKE_DIGITAL_MAX    Digital PCM Volume max (817 with the kernel limit)
 #   FAKE_ANALOG_MAX     Analog PCM Volume max (10 with the kernel limit)
 #   FAKE_NO_DSP=1       the firmware does not load (no DSP controls)
+import fcntl
 import json
 import os
 import sys
@@ -117,6 +118,10 @@ def main(argv):
             print("amixer: Invalid card number ''.", file=sys.stderr)
             return 1
         args = args[2:]
+    # The watchdog's JSON backend changes this file too (the heartbeat):
+    # under the same lock, so neither puts back a value the other just wrote
+    lock = open(f'{state_path}.lock', 'a')
+    fcntl.flock(lock, fcntl.LOCK_EX)
     c = load()
     cmd = args[0]
     if cmd == 'controls':

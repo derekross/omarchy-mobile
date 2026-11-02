@@ -70,7 +70,11 @@ Usage: [DEVICE=<codename>] omamobile <command>
   initramfs-config <dir>
                    Write only the device's files for the shared init (storage-guard
                    allowlist, trigger, ...) into <dir>, to check what initramfs packs
-  kernel           Build the mainline kernel ($KERNEL_DIR) with our config fragment
+  kernel [--release]
+                   Build the mainline kernel ($KERNEL_DIR) with our config fragment.
+                   --release: the release LOCALVERSION (-omamobile, uname -r
+                   <version>-omamobile-g<sha12>) and no device fragment, for
+                   linux-omamobile (docs/RELEASES.md §4); needs a clean tree
   modules          Package the kernel's modules (stripped) as a tarball for the Arch
                    root: $KERNEL_OUT/modules-<release>.tar.zst, unpacked under
                    /usr/lib/modules on the phone
@@ -300,11 +304,28 @@ cmd_capture() {
 }
 
 cmd_kernel() {
+  local release=0
+  case ${1:-} in
+    '') ;;
+    --release) release=1 ;;
+    *) die "kernel: expected --release or no argument" ;;
+  esac
+  (($# <= 1)) || die "kernel: expected --release or no argument"
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
   [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
   # The codename goes into a path below, as in load_device
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
-  local fragment="$ROOT/device/$DEVICE/kernel.config"
+  local fragment="$ROOT/device/$DEVICE/kernel.config" localversion=""
+  if ((release)); then
+    # One kernel for every device: a device's bring-up fragment stays out,
+    # and a release names its commit exactly, so the tree must be clean
+    # (setlocalversion would add -dirty, which linux-omamobile refuses)
+    fragment=/nonexistent
+    localversion="scripts/config --file $KERNEL_OUT/.config --set-str LOCALVERSION -omamobile --enable LOCALVERSION_AUTO"
+    [[ -z $(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no 2>/dev/null) ]] \
+      || die "kernel --release: $KERNEL_DIR has uncommitted changes"
+    say "Release build: LOCALVERSION -omamobile, no device fragment"
+  fi
   say "Building $KERNEL_DIR into $KERNEL_OUT"
   mkdir -p "$KERNEL_OUT"
   in_container "
@@ -315,6 +336,7 @@ cmd_kernel() {
     if [ -f $fragment ]; then
       scripts/kconfig/merge_config.sh -m -O $KERNEL_OUT $KERNEL_OUT/.config $fragment
     fi
+    $localversion
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT olddefconfig
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT -j$JOBS Image.gz dtbs modules
     ls -lh $KERNEL_OUT/arch/arm64/boot/Image.gz
@@ -328,6 +350,14 @@ cmd_kernel() {
     echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
   } > "$KERNEL_OUT/toolchain.txt"
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
+  # The release string the tree gave: never -push1 or -dirty (RELEASES §4)
+  if ((release)); then
+    local rel
+    rel=$(kernel_release)
+    [[ $rel =~ -omamobile-g[0-9a-f]{12}$ ]] ||
+      die "release build $rel is not <version>-omamobile-g<sha12>: build from a clean checkout of the release tag (a -dirty or -push1 kernel is never released)"
+    say "Release kernel $rel"
+  fi
 }
 
 # Kernel release of the build in $KERNEL_OUT (what uname -r will print).
@@ -466,6 +496,10 @@ cmd_initramfs() {
     *) die "initramfs: expected --release or no argument" ;;
   esac
   (($# <= 1)) || die "initramfs: expected --release or no argument"
+  # Modes in the cpio come from the umask: the same on every builder
+  local old_umask
+  old_umask=$(umask)
+  umask 022
   load_device
   # A leading slash is repo-root relative, so devices share initramfs/init.
   # Anything else is relative to device/<codename>/.
@@ -559,7 +593,7 @@ cmd_initramfs() {
     cp "$SPLASH_BGRA_GZ" "$stage/splash.bgra.gz"
   elif [[ -f $logo ]] && command -v magick >/dev/null; then
     magick -size "$DEV_PANEL_SIZE" xc:'#1a1b26' "$logo" -gravity center -composite \
-      -alpha off -alpha on -depth 8 BGRA:- | gzip -9 > "$stage/splash.bgra.gz"
+      -alpha off -alpha on -depth 8 BGRA:- | gzip -9n > "$stage/splash.bgra.gz"
   else
     say "No Omarchy Plymouth logo or ImageMagick here: building without the early splash"
   fi
@@ -628,7 +662,12 @@ cmd_initramfs() {
     chmod 700 "$stage/root/.ssh" && chmod 600 "$stage/root/.ssh/authorized_keys"
   fi
 
-  (cd "$stage" && find . | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$KERNEL_OUT/initramfs.cpio.lz4"
+  # Reproducible: sorted names, fixed owner and mtimes, no inode numbers
+  # (tools/lib/initramfs-pack.sh), so two machines staging the same
+  # sources get the same bytes
+  source "$ROOT/tools/lib/initramfs-pack.sh"
+  initramfs_pack "$stage" "$KERNEL_OUT/initramfs.cpio.lz4" || die "packing the initramfs failed"
+  umask "$old_umask"
   ls -lh "$KERNEL_OUT/initramfs.cpio.lz4"
 }
 
@@ -1091,7 +1130,7 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   initramfs) shift; cmd_initramfs "$@" ;;
   initramfs-config) shift; cmd_initramfs_config "$@" ;;
-  kernel) cmd_kernel ;;
+  kernel) shift; cmd_kernel "$@" ;;
   modules) cmd_modules ;;
   modules-push) cmd_modules_push ;;
   images) cmd_images ;;

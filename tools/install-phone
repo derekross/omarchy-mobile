@@ -24,7 +24,10 @@
 # It asks for the user name, password, host name,
 # time zone, optional Wi-Fi and the SSH public key, writes them as
 # /etc/omamobile/firstboot.conf (and root's authorized_keys) into a LOCAL
-# COPY of the root image with debugfs (no root needed), shows exactly what it
+# COPY of the root image with debugfs (no root needed), with
+# /etc/omamobile/boot-update.conf (AUTO_WRITE=yes: kernel package updates
+# reach slot B through omamobile-boot-update, docs/RELEASES.md §5.3; a
+# development phone, set up by hand, has no such file), shows exactly what it
 # will run, and waits for the codename to be typed. The phone's first boot
 # (omamobile-firstboot) creates the user from that file and deletes it.
 #
@@ -472,8 +475,9 @@ work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 mkdir -p "$work"
 chmod 700 "$work"
 copy=$work/root.img sparse=$work/root.simg conf_file=$work/firstboot.conf keys_file=$work/authorized_keys
+boot_conf=$work/boot-update.conf
 # The copy holds the password hash (and any Wi-Fi password): never left behind
-cleanup() { rm -f "$conf_file" "$keys_file" "$copy" "$sparse"; }
+cleanup() { rm -f "$conf_file" "$keys_file" "$boot_conf" "$copy" "$sparse"; }
 trap cleanup EXIT
 (
   umask 077
@@ -493,6 +497,9 @@ trap cleanup EXIT
     fi
   } > "$conf_file"
   printf '%s\n' "$ssh_key" > "$keys_file"
+  printf '%s\n' "# Written by install-phone: a release install takes kernel updates through" \
+    "# omamobile-boot-update's pacman hook (docs/RELEASES.md §5.3). AUTO_WRITE=no stops it." \
+    "AUTO_WRITE=yes" > "$boot_conf"
 )
 unset wifi_psk
 
@@ -508,6 +515,11 @@ write $conf_file /etc/omamobile/firstboot.conf
 sif /etc/omamobile/firstboot.conf mode 0100600
 sif /etc/omamobile/firstboot.conf uid 0
 sif /etc/omamobile/firstboot.conf gid 0
+rm /etc/omamobile/boot-update.conf
+write $boot_conf /etc/omamobile/boot-update.conf
+sif /etc/omamobile/boot-update.conf mode 0100644
+sif /etc/omamobile/boot-update.conf uid 0
+sif /etc/omamobile/boot-update.conf gid 0
 mkdir /root/.ssh
 sif /root/.ssh mode 040700
 sif /root/.ssh uid 0
@@ -520,8 +532,9 @@ sif /root/.ssh/authorized_keys gid 0
 EOF
 cmp -s <(debugfs -R "cat /etc/omamobile/firstboot.conf" "$copy" 2>/dev/null) "$conf_file" || die "writing firstboot.conf into the image copy failed"
 cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$copy" 2>/dev/null) "$keys_file" || die "writing authorized_keys into the image copy failed"
+cmp -s <(debugfs -R "cat /etc/omamobile/boot-update.conf" "$copy" 2>/dev/null) "$boot_conf" || die "writing boot-update.conf into the image copy failed"
 e2fsck -fn "$copy" >/dev/null 2>&1 || die "the image copy doesn't check clean after the writes"
-note "firstboot.conf and root's authorized_keys written, file system checks clean"
+note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=yes) written, file system checks clean"
 userdata_image=$copy
 if command -v img2simg >/dev/null; then
   img2simg "$copy" "$sparse"

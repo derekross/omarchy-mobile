@@ -145,6 +145,9 @@ cp "$t/rootdir/etc/passwd" "$t/fbroot/etc/passwd"
 printf '%s\n' "$conf" > "$t/fb.conf"
 OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamobile-firstboot" --check "$t/fb.conf" >/dev/null ||
   fail "omamobile-firstboot accepts what install-phone writes"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
+  || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
+debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "boot-update.conf belongs to root"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
 refuse() {
