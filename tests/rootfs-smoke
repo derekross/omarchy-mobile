@@ -47,9 +47,20 @@ pass "keyrings: Arch Linux ARM, Omarchy, Omarchy Mobile"
 conf=$(cat_ /etc/pacman.conf)
 order=$(grep -o '^\[[a-z]*\]' <<<"$conf" | tr -d '[]' | tr '\n' ' ')
 [[ $order == "options omamobile omarchy core extra alarm aur " ]] || fail "pacman.conf repository order: $order"
-grep -q 'file:///var/lib/omamobile/repo/\$arch' <<<"$(cat_ /etc/pacman.d/omamobile-mirrorlist)" || fail "[omamobile] mirrorlist"
+servers=$(cat_ /etc/pacman.d/omamobile-mirrorlist | grep -E '^[[:space:]]*Server' || true)
+case $servers in
+  'Server = https://pkgs.omamobile.org/stable/$arch') channel=stable ;;
+  'Server = https://pkgs.omamobile.org/development/$arch') channel=development ;;
+  'Server = file:///var/lib/omamobile/repo/$arch') channel=local ;;
+  *) fail "[omamobile] mirrorlist: one Server line, for stable, development or local (has: ${servers:-none})" ;;
+esac
+recorded=$(cat_ /usr/share/omamobile/rootfs/MANIFEST | sed -n 's/^omamobile channel: //p')
+[[ -z $recorded || $recorded == "$channel" ]] || fail "the MANIFEST says channel $recorded, the mirrorlist $channel"
 exists /var/lib/omamobile/repo/aarch64/omamobile.db || fail "the [omamobile] repository is in the image"
-pass "[omamobile] first in pacman.conf, its repository in the image"
+if [[ $channel != local ]] && exists /var/lib/pacman/sync/omamobile.db; then
+  fail "no build-time [omamobile] index in an image that follows $channel"
+fi
+pass "[omamobile] first in pacman.conf, channel $channel, its repository in the image"
 
 exists /usr/bin/omamobile-firstboot || fail "omamobile-firstboot installed"
 exists /usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service || fail "the first-boot unit is enabled"

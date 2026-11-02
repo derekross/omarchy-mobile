@@ -32,6 +32,16 @@ grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x3
 cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
 pass "bootctl dry run plans one byte and writes nothing"
 
+if [[ -f ../omamobile-device-cheetah/etc/omamobile-mirrorlist ]]; then
+  cmp -s etc/omamobile-mirrorlist ../omamobile-device-cheetah/etc/omamobile-mirrorlist \
+    || fail "the mirrorlist drifted from the cheetah package"
+  pass "the mirrorlist matches the cheetah package"
+  cmp -s <(sed -n '/^# --- the \[omamobile\] channel/,$p' omamobile-device-raven.install) \
+    <(sed -n '/^# --- the \[omamobile\] channel/,$p' ../omamobile-device-cheetah/omamobile-device-cheetah.install) \
+    || fail "the install script's channel handling drifted from the cheetah package"
+  pass "the install script keeps the [omamobile] channel as the cheetah package does"
+fi
+
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success \
          usr/bin/omamobile-usb-rescue usr/bin/omamobile-wait-bluetooth \
