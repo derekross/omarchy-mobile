@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Prune old kernel module trees (keeps the running, next-boot and rollback ones)
+Documentation=file:///usr/lib/omamobile-omarchy/modules-cleanup
+ConditionPathIsDirectory=/usr/lib/modules
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/omamobile-omarchy/modules-cleanup
+# Started by its timer well after boot, at idle priority, and never for long
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=5min
+ProtectSystem=strict
+ReadWritePaths=/usr/lib/modules
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes

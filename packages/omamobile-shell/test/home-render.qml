@@ -93,7 +93,10 @@ ShellRoot {
         id: home
         y: 44
         width: screen.width
-        height: screen.height - 44 - 72
+        // The dock reserves nothing since 0.2.56: the home surface reaches
+        // under it and keeps its own dockInset free; the pages get the same
+        // room as when it ended above the 72 px stand-in.
+        height: screen.height - 44 - 72 + (home.dockInset || 0)
         shell: ({ appLibrary: harness.library })
         Component.onCompleted: home.owlHost = harness.fixtureHost
       }

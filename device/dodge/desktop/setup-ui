@@ -1,0 +1,69 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# dodge-setup-ui: the stock Omarchy Mobile display setup for the OnePlus 13,
+# plus the dodge overrides (shell.toml here). Run as the desktop user (not
+# root), from this directory or with it as $1. Idempotent.
+#
+# It does the display part of omamobile-setup-user (omamobile-shell): the
+# phone shell plugins, the phone bar profile and the scale-3 monitor, and
+# records the same omarchy-done markers, so a later full omamobile-setup-user
+# keeps them. The lock, power-key and keyboard steps are in setup-stock.
+# Backups: ~/.config/omarchy/shell.json.pre-dodge-ui,
+# ~/.config/hypr/monitors.lua.pre-dodge-ui. `--revert` puts them back.
+#
+# Sharp PNG app icons (workaround for Omarchy's shell, omarchy 4.0.4): its
+# AppLibrary icon index keeps the FIRST file `find` lists per icon name, SVGs
+# first, then PNGs in directory order. For PNG-only icons that is often
+# hicolor/16x16 or 48x48 (chromium.png: 16x16), which the home grid scales to
+# 52 px x scale 3 = 156 px: blurry. The index scans ~/.local/share/icons
+# before /usr/share/icons, so we link the largest hicolor PNG (512 or 256) of
+# every icon without an SVG there. Links listed in
+# ~/.local/state/dodge-setup-ui/icon-links; `--revert` removes them.
+set -euo pipefail
+if [[ ${1:-} == --revert ]]; then SRC=$(cd "$(dirname "$0")" && pwd)
+else SRC=$(cd "${1:-$(dirname "$0")}" && pwd); fi
+[[ $(id -u) != 0 ]] || { echo "run as the desktop user" >&2; exit 1; }
+share=/usr/share/omamobile/shell
+cfg=~/.config/omarchy
+mon=~/.config/hypr/monitors.lua
+links=~/.local/state/dodge-setup-ui/icon-links
+
+if [[ ${1:-} == --revert ]]; then
+  [[ -f $cfg/shell.json.pre-dodge-ui ]] && cp "$cfg/shell.json.pre-dodge-ui" "$cfg/shell.json"
+  [[ -f $mon.pre-dodge-ui ]] && cp "$mon.pre-dodge-ui" "$mon"
+  rm -f "$cfg/shell.toml"
+  if [[ -f $links ]]; then
+    while read -r l; do [[ -L $l ]] && rm -f "$l"; done < "$links"
+    rm -f "$links"
+  fi
+  echo "reverted; restart with: hyprctl reload; omarchy-restart-shell"; exit 0
+fi
+
+[[ -d $share/plugins ]] || { echo "omamobile-shell is not installed" >&2; exit 1; }
+[[ -f $cfg/shell.json.pre-dodge-ui ]] || cp "$cfg/shell.json" "$cfg/shell.json.pre-dodge-ui"
+[[ -f $mon.pre-dodge-ui ]] || cp "$mon" "$mon.pre-dodge-ui"
+
+mkdir -p "$cfg/plugins"
+for p in "$share"/plugins/omamobile.*; do ln -sfn "$p" "$cfg/plugins/$(basename "$p")"; done
+cp "$share/profile/shell.json" "$cfg/shell.json"
+sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' "$mon"
+install -m 644 "$SRC/shell.toml" "$cfg/shell.toml"
+# Large PNG icons first in the shell's icon index (see the top)
+declare -A svg=() have=()
+while read -r n; do svg[$n]=1; done < <(find ~/.icons ~/.local/share/icons /usr/local/share/icons /usr/share/icons \
+  \( -path '*/apps/*' -o -path '*/devices/*' \) -name '*.svg' -printf '%f\n' 2>/dev/null | sed 's/\.svg$//' | sort -u)
+mkdir -p "${links%/*}"; touch "$links"
+for sz in 512x512 256x256; do
+  for f in /usr/share/icons/hicolor/$sz/apps/*.png; do
+    [[ -f $f ]] || continue
+    n=$(basename "$f" .png)
+    [[ -n ${svg[$n]:-} || -n ${have[$n]:-} ]] && continue
+    have[$n]=1
+    l=~/.local/share/icons/hicolor/$sz/apps/$n.png
+    [[ -e $l ]] && continue
+    mkdir -p "${l%/*}"; ln -s "$f" "$l"; echo "$l" >> "$links"
+  done
+done
+omarchy-done mark omamobile-shell-profile
+omarchy-done mark omamobile-monitor-scale
+echo "done; apply with: hyprctl reload; omarchy-restart-shell"

@@ -517,7 +517,7 @@ tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -S --needed --noconfirm fp
 tools/phone-ssh 'U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); fprintd-list $U; fprintd-enroll -f right-thumb $U; fprintd-verify $U'
 ```
 
-Expect fprintd to list the device "Pixel 7 Pro under-display fingerprint
+Expect fprintd to list the device "Under-display fingerprint
 sensor (Omarchy Mobile)"; enroll with ~20 stages; verify-match. **Stop** if
 fprintd sees no device (the drop-in, `systemctl show fprintd -p Environment`)
 or Omarchy's `libfprint-git` replaced ours (`pacman -Q libfprint`).

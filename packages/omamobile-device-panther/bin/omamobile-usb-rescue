@@ -1,0 +1,40 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Keep the USB link working across unplugs. The MAX77759's Type-C side opens
+# its USB2 data switch (TCPC vendor register USBSW_CTRL, 0x93) on unplug, and
+# with no Type-C driver yet nothing closes it again, so the phone stays off
+# the bus after a replug until the bootloader runs at the next boot. While
+# VBUS is valid, put the switch back to 0x09 (D+/D- connected), as the
+# bootloader leaves it. Stands aside once a Type-C driver owns the chip
+# (USB-C-PLAN gate B4). Only ever reads two registers and writes that one.
+set -uo pipefail
+
+chg=0x69 tcpc=0x25
+log() { echo "omamobile-usb-rescue: $*"; }
+
+bus=
+for d in /sys/bus/i2c/devices/i2c-*; do
+  readlink -f "$d" | grep -q 10d60000.i2c && { bus=${d##*-}; break; }
+done
+[[ -n $bus ]] || { log "no I2C bus for 10d60000.i2c"; exit 0; }
+
+rd() { i2cget -f -y "$bus" "$1" "$2" 2>/dev/null; }
+# VBUS as the charger sees it: CHG_DETAILS_00.CHGIN_DTLS (bits 6:5) == 3.
+vbus_valid() { local v; v=$(rd $chg 0xb5) || return 1; (( ((v >> 5) & 3) == 3 )); }
+tcpm_owns() { [[ -e /sys/bus/i2c/devices/$bus-0025/driver ]]; }
+
+log "watching the USB data switch on I2C bus $bus"
+while :; do
+  if tcpm_owns; then
+    log "a Type-C driver owns the chip; nothing to do"
+    exit 0
+  fi
+  if vbus_valid; then
+    sw=$(rd $tcpc 0x93)
+    if [[ -n $sw && $sw != 0x09 ]]; then
+      log "VBUS valid, USBSW_CTRL $sw: closing the data switch"
+      i2cset -f -y "$bus" $tcpc 0x93 0x09
+    fi
+  fi
+  sleep 2
+done

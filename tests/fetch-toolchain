@@ -1,0 +1,135 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/fetch-toolchain against local fixtures (file:// URLs, no network):
+# what matches its lock entry lands with a stamp, what doesn't is refused
+# and leaves nothing behind, --verify catches a changed file, and the lock's
+# paths and URLs are checked. Then bin/omamobile kernel, with a stand-in
+# docker, picks the verified pinned clang, mounts it, passes the fixed build
+# identity, and records the clang in toolchain.txt.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for tool in curl tar gzip base64 python3 sha256sum; do
+  command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; [[ -f $t/log ]] && cat "$t/log" >&2; exit 1; }
+fetch() { tools/fetch-toolchain --dir "$t/cache" --lock "$t/lock" "$@" > "$t/log" 2>&1; }
+sha() { sha256sum < "$1" | cut -d' ' -f1; }
+
+# Fixtures: a clang-shaped tree (an executable, a plain file, a symlink), a
+# plain file and a base64-served file, as gitiles serves the scripts
+mkdir -p "$t/src/clang-r1/bin" "$t/src/clang-r1/lib" "$t/srv"
+printf '#!/bin/sh\necho "Test clang version 1.0 (fixture)"\n' > "$t/src/clang-r1/bin/clang"
+chmod 755 "$t/src/clang-r1/bin/clang"
+echo notice > "$t/src/clang-r1/NOTICE"
+ln -s clang "$t/src/clang-r1/bin/clang++"
+tar -C "$t/src/clang-r1" -czf "$t/srv/clang-r1.tar.gz" .
+tree_sum=$(tools/fetch-toolchain --digest "$t/src/clang-r1")
+[[ $tree_sum =~ ^[0-9a-f]{64}$ ]] || fail "--digest prints a SHA-256 ($tree_sum)"
+echo 'print("mkbootimg fixture")' > "$t/srv/mkbootimg.py"
+echo 'print("avbtool 9.9.9")' > "$t/src/avbtool.py"
+base64 < "$t/src/avbtool.py" > "$t/srv/avbtool.py.b64"
+lock() {
+  cat > "$t/lock" <<EOF
+# fixture lock
+tree clang-r1 ${1:-$tree_sum} file://$t/srv/clang-r1.tar.gz
+file mkbootimg/mkbootimg.py $(sha "$t/srv/mkbootimg.py") file://$t/srv/mkbootimg.py
+b64 avb/avbtool.py ${2:-$(sha "$t/src/avbtool.py")} file://$t/srv/avbtool.py.b64
+EOF
+}
+
+lock
+fetch || fail "fetch of matching fixtures"
+[[ -x $t/cache/clang-r1/bin/clang && -L $t/cache/clang-r1/bin/clang++ ]] || fail "the tree lands with its modes and symlink"
+cmp -s "$t/cache/avb/avbtool.py" "$t/src/avbtool.py" || fail "b64 entries are decoded"
+[[ $(cat "$t/cache/.verified/clang-r1") == "$tree_sum" && -f $t/cache/.verified/avb_avbtool.py ]] || fail "stamps record the verified SHA-256"
+[[ -z $(find "$t/cache" -maxdepth 1 -name '.fetch.*') ]] || fail "no temporary directory left behind"
+echo "ok - matching entries are fetched, decoded and stamped"
+
+rm "$t/srv/mkbootimg.py"
+fetch || fail "a second run needs no download"
+grep -c '3 verified, 0 fetched' "$t/log" >/dev/null || fail "a second run fetches nothing"
+echo 'print("mkbootimg fixture")' > "$t/srv/mkbootimg.py"
+echo "ok - stamped entries are not fetched again"
+
+echo tampered >> "$t/cache/mkbootimg/mkbootimg.py"
+fetch --verify || fail "--verify repairs a changed file"
+grep -c 'changed since it was fetched' "$t/log" >/dev/null || fail "--verify reports the changed file"
+cmp -s "$t/cache/mkbootimg/mkbootimg.py" "$t/srv/mkbootimg.py" || fail "--verify fetched the file again"
+echo "ok - --verify catches and replaces a changed file"
+
+# Wrong checksums: refused, and nothing is installed or stamped
+rm -rf "$t/cache"
+lock "$(printf '0%.0s' {1..64})"
+if fetch; then fail "a tree with the wrong digest is accepted"; fi
+grep -c 'clang-r1 does not match' "$t/log" >/dev/null || fail "the refusal names the tree"
+[[ ! -e $t/cache/clang-r1 && ! -e $t/cache/.verified/clang-r1 ]] || fail "a refused tree is not installed"
+[[ -z $(find "$t/cache" -maxdepth 1 -name '.fetch.*') ]] || fail "a refused download is removed"
+lock "" "$(sha "$t/srv/avbtool.py.b64")"
+if fetch; then fail "a b64 file checked before decoding is accepted"; fi
+[[ ! -e $t/cache/avb/avbtool.py ]] || fail "a refused file is not installed"
+echo "ok - a checksum mismatch is refused and leaves nothing behind"
+
+# The same tree with one executable bit changed has another digest
+cp -a "$t/src/clang-r1" "$t/src/clang-r1-x"
+chmod 644 "$t/src/clang-r1-x/bin/clang"
+[[ $(tools/fetch-toolchain --digest "$t/src/clang-r1-x") != "$tree_sum" ]] || fail "the tree digest covers the executable bit"
+ln -sfn NOTICE "$t/src/clang-r1-x/bin/clang++"
+chmod 755 "$t/src/clang-r1-x/bin/clang"
+[[ $(tools/fetch-toolchain --digest "$t/src/clang-r1-x") != "$tree_sum" ]] || fail "the tree digest covers symlink targets"
+echo "ok - the tree digest covers modes and symlinks"
+
+# Lock lines that would write outside the cache or fetch in the clear
+for bad in "file ../escape $tree_sum file://$t/srv/mkbootimg.py" \
+           "file /abs $tree_sum file://$t/srv/mkbootimg.py" \
+           "file a/./b $tree_sum file://$t/srv/mkbootimg.py" \
+           "file plain $tree_sum http://example.invalid/x" \
+           "zip plain $tree_sum file://$t/srv/mkbootimg.py" \
+           "file plain nothex file://$t/srv/mkbootimg.py"; do
+  printf '%s\n' "$bad" > "$t/lock"
+  if fetch; then fail "accepted lock line: $bad"; fi
+done
+[[ ! -e $t/escape ]] || fail "a lock path climbed out of the cache"
+echo "ok - bad lock paths, kinds, checksums and plain-http URLs are refused"
+
+# bin/omamobile picks the verified pinned clang over the Android checkout
+lock
+rm -rf "$t/cache"
+fetch || fail "fetch for bin/omamobile"
+r=$t/repo
+mkdir -p "$r/bin" "$r/tools" "$r/kernel/configs" "$r/device/testdev" "$t/bin" "$t/out" "$t/work"
+cp bin/omamobile "$r/bin/"
+cp "$t/lock" "$r/tools/toolchain.lock"
+: > "$r/kernel/configs/omamobile.config"
+printf 'DEVICE=${DEVICE:-testdev}\nSRC_DIR=%s\nIMAGE=test\nJOBS=1\n' "$t/no-checkout" > "$r/omamobile.conf"
+# shellcheck disable=SC2016 # the stand-in reads its own environment
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$DOCKER_ARGS"\n' > "$t/bin/docker"
+chmod +x "$t/bin/docker"
+mkdir -p "$t/kernel"
+git -C "$t/kernel" init -q
+GIT_COMMITTER_DATE='@1767225600 +0000' GIT_AUTHOR_DATE='@1767225600 +0000' \
+  git -C "$t/kernel" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m fixture
+run() {
+  env -u CLANG_DIR -u PYTHONHASHSEED -u SOURCE_DATE_EPOCH -u KBUILD_BUILD_TIMESTAMP -u KBUILD_BUILD_USER -u KBUILD_BUILD_HOST \
+    PATH="$t/bin:$PATH" DOCKER_ARGS="$t/args" OMAMOBILE_TOOLCHAIN="$t/cache" WORK="$t/work" \
+    KERNEL_BASE="$t" KERNEL_DIR="$t/kernel" KERNEL_OUT="$t/out" "$@" "$r/bin/omamobile" kernel > "$t/log" 2>&1
+}
+run || fail "omamobile kernel with a stand-in docker"
+grep -cxF "$t/cache/clang-r1:/opt/omamobile/clang:ro" "$t/args" >/dev/null || fail "the pinned clang is mounted read-only at the fixed path"
+grep -cxF "PATH=/opt/omamobile/clang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "$t/args" >/dev/null ||
+  fail "the clang is first on PATH"
+for want in SOURCE_DATE_EPOCH=1767225600 'KBUILD_BUILD_TIMESTAMP=Thu Jan  1 00:00:00 UTC 2026' \
+            KBUILD_BUILD_USER=omamobile KBUILD_BUILD_HOST=omamobile-build KBUILD_BUILD_VERSION=1 PYTHONHASHSEED=0; do
+  grep -cxF "$want" "$t/args" >/dev/null || fail "the container gets $want"
+done
+grep -cxF 'clang: Test clang version 1.0 (fixture)' "$t/out/toolchain.txt" >/dev/null || fail "toolchain.txt has the clang's version"
+grep -cxF 'clang source: pinned (tools/toolchain.lock), clang-r1' "$t/out/toolchain.txt" >/dev/null || fail "toolchain.txt names the pinned clang"
+grep -c "$HOME\|$t" "$t/out/toolchain.txt" >/dev/null && fail "toolchain.txt carries no paths"
+echo "ok - bin/omamobile uses the verified pinned clang and fixes the build's identity"
+
+# A stamp from another lock (a bumped digest) is not taken as verified
+sed -i "s/^tree clang-r1 $tree_sum/tree clang-r1 $(printf '1%.0s' {1..64})/" "$r/tools/toolchain.lock"
+if run; then fail "kernel ran without any clang"; fi
+grep -c 'no clang found' "$t/log" >/dev/null || fail "an unverified pinned clang is not used"
+echo "ok - a pinned clang whose stamp doesn't match the lock is not used"

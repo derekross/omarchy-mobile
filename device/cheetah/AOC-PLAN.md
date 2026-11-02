@@ -20,7 +20,15 @@ speakers are 8-11 dB louder and clean. The routing was verified again on
 the way: the earpiece is the top speaker, and it plays the full left
 channel as on stock. omamobile-audio 0.5.4 then made the speaker filter flat
 with 6 dB of limiter drive, the owner's choice by ear, and the owner now finds
-the speakers good (2026-10-27).
+the speakers good (2026-10-27). **C9k (offline, 2026-10-27,
+omamobile-audio 0.5.5, not run on the phone):** earpiece mode
+(`omamobile-speaker-protection earpiece on|off`, the top amplifier alone at
+657/6 with its DSP bypassed as stock's handset path, the bottom muted, the
+watchdog in earpiece mode) and a "Voice Call" UCM verb with an Earpiece
+sink; the gated runbook is C9k. A first look on the phone found the speaker
+filter following the default sink into the earpiece once Voice Call was
+active; its output now never falls back (`node.dont-fallback`,
+`node.linger`; C9k "The route").
 **Earlier plan (2026-10-13, before C9j):** the speakers sounded thin; the ranked plan and three
 runbooks follow C9d-6: C9g (omamobile-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
@@ -1842,6 +1850,107 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    Whatever the outcome, no step above 1 s at analog 17 until a burst
    reads plausibly, and the default stays stage media.
 
+   **C9d-8 results (2026-10-31, `7.3.0-rc6-omamobile-push1-gc32dd8e2d33e`,
+   omamobile-audio 0.5.6, boost converter off at 10 and on at 17).**
+   - Step 2 at 737/10 (-23 dBFS, 3 s): CLEAN. The impedance readout came
+     out near 2048 times a plausible ratio (2058.8 top, 1946.3 bottom, all
+     four samples identical, vmon low 1): at gain 10 the logger's word is
+     not in CAL_R's units, or it is a stale value. A clue, not a reading.
+   - Stage c9 first refused (`speaker_protection` read N; the bring-up file
+     `/etc/modprobe.d/omamobile-audio-c9-bringup.conf` was gone):
+     written again, one reboot, `Y`, analog limit 17. The C9a stamp still
+     matched the firmware.
+   - Step 3 at 817/17 (-30 dBFS, 1 s): **Z/CAL_R 1.032 top (1.029-1.032),
+     1.022 bottom**, as coil rises +8.1 C and +5.7 C; the top's estimate
+     went 25.0 -> 32.4 C and the burst tool's 5 C rule tripped. A 1 s tone
+     at -30 dBFS cannot heat a coil 8 C: the firmware measures the coil 2-3 %
+     high at gain 17. Much smaller than October's 25 C with the converter
+     off at 17.
+   - The register snapshot (both amplifiers, read below 0x10100, mid-tone
+     at 737/10 and at 817/17) differs only in `AMP_GAIN_CTRL` (0x6c04, 10 ->
+     17), `PWR_CTRL2` (0x2018, the boost enable), `AMP_DIG_VOL_CTRL`
+     (0x6000, the level and the watchdog's mute) and interrupt status
+     registers (0x10014, 0x10090-0x10098). No sense-path register differs.
+     (A slow read at 817/17 delayed the watchdog, which muted with "the
+     speaker watchdog stopped"; read one register range at a time next.)
+   - **Decision (the owner, 2026-10-31):** treat the offset as a known bias
+     in the safe direction (the firmware protects early) rather than boot
+     stock to compare. omamobile-audio 0.5.7 takes the jump rule's baseline
+     after a 2 s settle and bounds the offset inside it at 12 C; the
+     temperature backstop is unchanged. Next: C9d stepping (817/13, then
+     817/17) with `SETTLE=2` bursts, watching that the estimate stays flat
+     within each burst after the settle.
+   - **C9d stepping, step 1 (817/13, -20 dBFS multitone, 0.5.7):** the
+     watchdog muted about 1 s in: "Top: coil temperature rose 14.9 C (25.5
+     -> 40.4) in the first 2 s, above 12 C"; Z/CAL_R 1.049 top, 1.027
+     bottom; `vmon low 1` throughout, and the estimate then fell along a
+     smooth curve (the model cooling). **The offset grows with the signal**
+     (+7 C at -30 dBFS, +15 C at -20 dBFS), and with vmon low 1 the
+     firmware never senses the coil: it runs its open-loop model, whose
+     error scales with level. A settle window would only hide that, so 0.5.7
+     is not for merging as it stands. Stepping stopped. Next: offline, why
+     the firmware calls VMON too low at gain 13-17 (DSP input routing, VMON
+     scale or reference, the tuning's expected gain); if that finds
+     nothing, the same reading on stock (slot A).
+   - **The offline comparison (2026-10-31)** found no sense-path difference
+     from Google's driver: DSP RX3/RX4 are VMON/IMON in both, RX5 VPMON,
+     RX7 TEMPMON (RX6 the known difference); `VPVBST_FS_SEL` and
+     `VIMON_SPKMON_RESYNC` both 0; the OTP trim map identical; nothing
+     gain-dependent in Google's `set_pdata`. And the firmware's temperature
+     tracks its own measured Z (25 + (Z/CAL_R - 1)/0.0039) in every run, at
+     gain 13 too, where an estimate from the tuning's expected gain would be
+     about 58 % off: **the coil is measured, closed-loop.** `BDLOG_VMON_LOW_FLAG`
+     sits in the firmware's threshold logger with the max-hold and counter
+     fields; it reads None idle and 1 from a stream's first sample to its
+     end, so whether it latches is not settled.
+   - **The readings (same day):** battery 31 C (the only thermal zone); at
+     817/17, -30 dBFS 1 kHz, the top coil 33.4 C and the bottom 29.8 C from
+     Z. The coils are warm (the phone on USB, the top nearer the SoC) and
+     the firmware starts each stream at its 25 C reference: the "jump" is
+     the move to the measured value. At 737/10 the logger gives no
+     measurement at any of 400 Hz, 1 kHz or 4 kHz at -13 dBFS (codes
+     0xffffd4-0xffffdb; the tool's filter now drops 0xffff00 and above, the
+     "2058" ratios were these codes). At 817/17, -21 dBFS: 400 Hz measures
+     (top 1.060 -> 1.087 within the burst, bottom 1.032 -> 1.044), 1 kHz
+     measures once (1.091 / 1.045) and then not, 4 kHz not at all. So
+     whether Z depends on the gain cannot be read at 737/10, and the
+     firmware measures from low-frequency content.
+
+   **C9 with real music (2026-10-31, omamobile-audio 0.5.7 with the 20 C
+   jump above the estimate 2 s in, backstop 80 C; the owner listening,
+   phone on a table, YouTube Music).** At 817/13 a -20 dBFS multitone
+   raised the top coil 5.3 C above its measured value within 2 s (38.1 ->
+   43.4): real heating, so the 5 C rule was dropped for 20 C. At 817/17
+   with music, the top coil went 37 -> 55 -> 69 -> 81 C in about 4 s (the
+   bottom 31 -> 56 C) and the 80 C backstop muted; it cooled to 49 C within
+   2 s. The firmware's over-temperature count stayed 0, so its own limit
+   is above 80 C, and whether it attenuates before that limit is not known.
+   "Very loud and sounded good" (the owner) for the seconds it played.
+   **c9 is not a default until** the tuning's temperature limit and
+   attenuation behaviour are known (control names first, then a read-only
+   check during playback), or an intermediate stage (e.g. 817/13) is shown
+   to stay under the backstop with music. The backstop stays at 80 C.
+
+   **The firmware's thermal limits (offline, 2026-10-31).** Not readable
+   offline: each tuning's algorithm-0xcd block is 1404 unlabelled YM words
+   (Cirrus "Protect Lite"; the wmfw names no YM parameters, 443 words differ
+   top/bottom), and both tunings' metadata gives `amplifier_gain` 17.5.
+   There is no live attenuation readout: ATTENUATION, REDUCE_POWER,
+   CH_BAL, CAL_AMBIENT and CSPL_ENABLE are settings; the volatile controls
+   are the temperature, state, errorno, output power, CAL_R_SELECTED and
+   the BDLOG max/count fields, the RT logger (words 0 and 2 of stock's three
+   variables unidentified) and the event logger (alg 0xf20b). Read on the
+   phone: CSPL_ENABLE 1 on both, ATTENUATION 0x7fffff (1.0), REDUCE_POWER 0,
+   EVNTLG_ENABLED 0. No host-side thermal step is missing that we can see.
+   0.5.4's +6 dB limiter drive raises music's average power over stock's.
+   **Next:** music at 817/17 for 10 s with the drive at 0, logging at 2-4 Hz
+   the temperature, BDLOG fields, all 30 RT logger words and the phone
+   microphone's level (the only direct view of attenuation); the backstop
+   stays at 80 C. A plateau below 80 C or a falling mic level at a steady
+   input means the firmware protects; otherwise an intermediate stage, or
+   one stock capture (slot A: audiometrics speaker_temp with the same
+   controls during maximum-volume music, then fresh NV backups).
+
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
    amplifiers stay at stage media (737/10) in sections A-D, so every step
@@ -1945,7 +2054,8 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    the bottom muted, and mutes on anything else. Acoustic shock, as stock:
    the watchdog claims proximity from omamobile-sensor-proxy during speaker
    playback and mutes the top amplifier (34 ms ramp-down) while the phone
-   is at the ear.
+   is at the ear. **Built offline as C9k (omamobile-audio 0.5.5)**, without
+   the proximity mute yet.
 
    **C10-tuning (research, later):** drive the AoC's speaker processing
    as stock does: the tuning interface (`/dev/acd-audio_output_tuning`),
@@ -2168,6 +2278,150 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      open-loop estimates misbehave (the bottom on level drops
      at gain 10, both at gain 17 from the first sample, C9d-5/6). The
      balance by ear and the cover test are the listener's.
+
+   **C9k: earpiece mode (omamobile-audio 0.5.5; written offline
+   2026-10-27, not run on the phone yet).** The design above ("Earpiece
+   and calls"), on main's 0.5.4 and C9j's rules. Stock's `handset` path is
+   the top amplifier alone with its DSP bypassed at `AMP PCM Gain` 6 and
+   the init's Digital PCM Volume 817; ours is the same path 20 dB lower.
+   - **The request:** `omamobile-speaker-protection earpiece on|off|status`
+     holds the logic (it shares the service's control helpers, ceilings,
+     limits check, mute path and status file); `omamobile-earpiece@on|off.service`
+     is only the request path for PipeWire, which runs as the user: the
+     unit gives root and `speaker.conf`'s environment, and the polkit rule
+     `50-omamobile-earpiece.rules` lets the active local user start those
+     two instances and nothing else. Neither raises a level above the
+     stage's.
+   - **What `on` writes, in this order** (each read back; any failure
+     mutes both): Top and Bottom `Digital PCM Volume` 0 (mute); Top
+     `Analog PCM Volume` 6 (`OMAMOBILE_SPK_EARPIECE_ANALOG`, ceiling 6 in
+     every stage: AUDIO-PLAN section 4, the top amplifier as earpiece;
+     stock's in-call 7 with a 3.5 A boost peak stays out, and nothing here
+     touches the boost peak); then the mode file, and it waits until the
+     watchdog answers that it enforces earpiece mode; Top `PCM Source` ASP;
+     Top `DRE Switch` on (`OMAMOBILE_SPK_EARPIECE_DRE`, by default as
+     `OMAMOBILE_SPK_DRE`: stock's init leaves DRE on for the handset path
+     too); Top `Digital PCM Volume` 657 (`OMAMOBILE_SPK_EARPIECE_DIGITAL`;
+     ceiling 737, the media stage's, and never above the stage's own, so
+     657 in c8). 657 is AUDIO-PLAN section 4's first-sound level, 20 dB
+     under stock's handset gain: the earpiece is held at the ear, and unlike
+     stock nothing in front of it (no AoC handset processing) lowers the
+     signal. The bottom amplifier keeps `PCM Source` DSP, its analog gain,
+     DRE and gate; only its digital volume is 0. The DSPs' routing,
+     firmware and calibration are never touched.
+   - **What `off` writes:** both muted; Top `PCM Source` DSP; the mode file
+     removed and the watchdog's answer awaited; Top `Analog PCM Volume` and
+     `DRE Switch` back to the stage's values; a health check (held awake,
+     DSP controls present, no amplifier error in the kernel log since the
+     start); both `Digital PCM Volume` back to the stage's; then every
+     control start sets (PCM Source, DSP RX1/RX2 Source, DRE, noise gate,
+     analog, digital, both amplifiers) read back against the stage's
+     values. The status line is the speaker one again.
+   - **Refusals (nothing changes):** status not "ok:", a hang marker, no
+     card, a failed health check, configured levels that fail the limits
+     check, earpiece levels outside the ceilings, and a boost converter the
+     last start left on. The converter follows the earpiece's own analog
+     gain as it follows the speakers' (C9j): off at 10 and below, so off
+     for the earpiece; it is set when the amplifiers probe, so a start that
+     left it on (stage c9, `OMAMOBILE_SPK_BOOST=1`, a kernel without
+     `boost_en`) cannot serve the earpiece without a rebind, and earpiece
+     mode refuses unless `OMAMOBILE_SPK_BOOST=1` says the owner wants it on.
+     Both requests are idempotent (a repeat writes nothing and only checks
+     that the watchdog answers); a service start removes the mode and ends
+     in speaker mode, so a restart is the rollback.
+   - **The watchdog in earpiece mode:** the top amplifier through ASP (or
+     DSP while the mode changes) at digital ≤ 737 (and the stage's) and
+     analog ≤ 6; the bottom with `PCM Source` DSP, within the stage's analog
+     ceiling and at Digital PCM Volume 0; both held awake; the kernel log
+     rules. No DSP rule (coil estimate, the 5 C jump rule, heartbeat,
+     CSPL state, calibration status, the media delta): neither DSP is in an
+     audible path, as on stock's handset path, and the jump rule would be
+     off anyway at the earpiece's analog 6 (C9j). It reads the mode before
+     and after each reading and judges nothing taken across a change, and it
+     answers each mode in `/run/omamobile/speaker-watch-mode`, which `on`
+     and `off` wait for: without a live watchdog the amplifiers stay muted.
+     `verify` refuses in earpiece mode.
+   - **The route:** a "Voice Call" UCM verb (PipeWire ranks it below HiFi,
+     so it is never the default profile) with one device, `Earpiece`, on
+     the speaker's PCM (EP6). Its enable sequence starts
+     `omamobile-earpiece@on`, its disable sequence `omamobile-earpiece@off`;
+     a failed request fails the device. Its sink ("Built-in Audio
+     Earpiece", `alsa_output.…Voice_Call__Earpiece__sink`) is not the
+     speaker filter's smart-filter target, and while the profile is active
+     the HiFi sink (and the filter's target with it) is gone. That alone
+     did not keep the filter off the earpiece: on the phone (PipeWire
+     1.6.9, WirePlumber 0.5) `pw-link -l` showed
+     `effect_output.omamobile_speaker_loudness:output_FL/FR` linked into
+     the Earpiece sink once Voice Call was active. WirePlumber's
+     `linking/find-filter-target.lua` gets no target for a smart filter
+     whose `filter.smart.target` matches nothing and, unless the stream has
+     `node.dont-fallback`, leaves it to `find-default-target` and
+     `find-best-target`, which pick the default sink, now the earpiece's.
+     The filter's playback stream therefore has `node.dont-fallback = true`
+     and `node.linger = true` (with `dont-fallback` alone that hook
+     destroys the stream when the target is missing, which happens at
+     every PipeWire start, before the speaker sink exists); a
+     `stream.rules` entry in the same file sets both on a copy saved by an
+     older `omamobile-speaker-eq`. A live try of `target.object` with
+     `node.dont-fallback` and `node.dont-reconnect` left the filter
+     unlinked even in HiFi: `find-defined-target.lua` destroys a stream
+     whose defined target is missing (the filter-chain module went with
+     it), so music played unfiltered. Proven offline (2026-10-27) with a
+     private PipeWire 1.6.9 and WirePlumber 0.5.18 on null sinks named as
+     the phone's: the filter in front of the speaker sink in HiFi, linked
+     to nothing in Voice Call while a stream to the default went straight
+     to the Earpiece sink, and back in front of the speaker sink after the
+     switch back; the unchanged file reproduced the phone's link into the
+     earpiece, the tried fix the destroyed filter. Only the left
+     channel (TDM slot 0, the top amplifier) is heard: a mono stream plays
+     whole. HiFi is unchanged. Speakerphone, headset, the call microphone
+     and the proximity (acoustic-shock) mute are later T4 work.
+   - **Open, for the runbook to answer:** whether PipeWire's UCM runs the
+     device's sequences on the profile switch only or also around each
+     suspend (a repeated `on` is a no-op, an `off`/`on` pair a short
+     mute); whether polkit sees PipeWire's user service as local and active
+     (E4 says).
+
+   **C9k runbook** (risk **low**: the top speaker at 20 dB under stock's
+   handset gain, the bottom muted, a -30 dBFS tone for 1.5 s and a speech
+   clip under 30 s, AUDIO-PLAN section 4's limits for a path without
+   protection; nothing goes above the stage's ceilings and nothing touches
+   the boost peak current). Run by the main session with the human holding
+   the phone. **Announce** before each step that changes the sound: "the
+   speakers mute for a second while the mode changes; until I switch back,
+   media plays from the earpiece only", and before each sound "a quiet
+   1 kHz beep from the earpiece (the top speaker) for 1.5 s: hold the phone
+   at arm's length first". `omamobile-speaker-protection monitor` is not
+   needed (no DSP is in the path); `journalctl -fu omamobile-speaker-watch`
+   runs in a second terminal. **Stop** (any step): a watchdog mute, a
+   cs35l41 error in `dmesg`, sound from the bottom speaker in earpiece
+   mode, distortion, buzzing, or anything the listener dislikes. **Rollback**
+   (any step): `tools/phone-ssh 'systemctl restart omamobile-speaker-protection'`
+   (a rebind; announce "the speakers cut out for about 5 s"), then the HiFi
+   profile: `prof HiFi`.
+   ```sh
+   U='U=$(loginctl list-users --no-legend | awk "\$2 != \"root\" {print \$2; exit}"); I=$(id -u $U); as_user() { runuser -u $U -- env XDG_RUNTIME_DIR=/run/user/$I "$@"; }'
+   ctl() { tools/phone-ssh 'C=$(awk "/aoc-snd-card - /{print \$1; exit}" /proc/asound/cards); for p in Top Bottom; do for n in "PCM Source" "Analog PCM Volume" "Digital PCM Volume" "DRE Switch"; do printf "%s %s: " "$p" "$n"; amixer -c$C cget "name=$p $n" | sed -n "s/^ *: values=//p"; done; done; omamobile-speaker-protection earpiece status; omamobile-speaker-protection status | head -1'; }
+   prof() { tools/phone-ssh "$U"'; C=$(as_user pactl list short cards | awk "/sound-aoc/{print \$2}"); as_user pactl set-card-profile $C "'"$1"'"; as_user pactl list cards | grep -E "Active Profile|Voice Call"'; }
+   ear_play() { tools/phone-ssh "$U"'; S=$(as_user pactl list short sinks | awk "/Earpiece/{print \$2}"); as_user pactl set-sink-volume $S '"$2"'; as_user timeout 25 pw-play --target $S '"$1"'; journalctl -u omamobile-speaker-watch -n 3 --no-pager'; }
+   flinks() { tools/phone-ssh "$U"'; as_user pw-cli ls Node | grep -c "node.name = \"effect_.*omamobile_speaker_loudness\""; as_user pw-link -l | awk "/^[^ ]/{p=\$1} /\\|->/{print p, \$2}" | grep "^effect_output.omamobile_speaker_loudness" || echo "no link from the filter"'; }
+   ```
+   One register at a time only (`amixer cget` of single controls); never
+   the amplifiers' regmap `registers` file.
+
+   | Step | What | Risk | Expect / Pass | Stop / Rollback |
+   | --- | --- | --- | --- | --- |
+   | E0 | **Read-only, no sound:** `tools/phone-ssh 'uname -r; pacman -Q omamobile-audio; cat /sys/module/snd_soc_cs35l41/parameters/boost_en; systemctl is-active omamobile-speaker-protection omamobile-speaker-watch'; ctl` | none | 0.5.4 still; boost `N`; both `active`; "ok: stage media … Top 737/10, Bottom 737/10, boost converter off"; PCM Source 1 (DSP), 10, 737, on on both | the status not ok, the stage not media, boost `Y`: restore the default config and restart first |
+   | E1 | **Install 0.5.5, restart the user's PipeWire** (the human's go; announce: "sound stops for a few seconds"): `tools/phone-install-package packages/omamobile-audio`; then, announced ("the speakers cut out for about 5 s"), `tools/phone-ssh 'systemctl restart omamobile-speaker-protection'`, since the running watchdog is still the old one and doesn't answer the mode handshake (on the phone, `earpiece off` then muted both amplifiers until a restart); then `tools/phone-ssh "$U"'; as_user systemctl --user restart pipewire pipewire-pulse wireplumber; sleep 3; as_user pactl list cards \| grep -E "Active Profile\|Voice Call"'`; `ctl`; `flinks` | low | `omamobile-audio 0.5.5`; profiles list "Voice Call", active profile still HiFi; `ctl` as in E0 and "mode: speaker; the watchdog enforces: speaker"; `flinks`: `2`, then `output_FL` and `output_FR` of `effect_output.omamobile_speaker_loudness` each into `alsa_output.platform-sound-aoc.HiFi__Speaker__sink` | no Voice Call profile (the UCM did not parse: `as_user journalctl --user -u wireplumber -b \| tail`); `flinks` with fewer than 2 filter nodes or no link into the speaker sink (the filter is gone or bypassed: music would skip the limiters); rollback: reinstall 0.5.4 |
+   | E2 | **Earpiece on by hand, no stream** (announce the mode change): `tools/phone-ssh 'omamobile-speaker-protection earpiece on'; ctl; tools/phone-ssh 'journalctl -u omamobile-speaker-watch -n 3 --no-pager'` | low | "earpiece mode on"; Top: PCM Source 0 (ASP), analog 6, digital 657, DRE on; Bottom: PCM Source 1, analog 10, digital 0; "mode: earpiece; the watchdog enforces: earpiece"; the watchdog logs "earpiece mode: Top through ASP or DSP at digital <= 737, analog <= 6" | a refusal (record its reason; nothing changed); any other value; a mute. Rollback: restart |
+   | E3 | **Earpiece off by hand, no stream:** `tools/phone-ssh 'omamobile-speaker-protection earpiece off'; ctl` | low | "earpiece mode off"; every value as in E0; "mode: speaker; the watchdog enforces: speaker" | any value that differs from E0. Rollback: restart |
+   | E4 | **The Voice Call profile switches the mode itself (polkit), no stream:** `prof "Voice Call"; ctl; tools/phone-ssh 'journalctl -u "omamobile-earpiece@*" -n 5 --no-pager'`; `flinks` | low | active profile Voice Call; the earpiece state as in E2; the journal shows `omamobile-earpiece@on` ran as a unit; `as_user pactl list short sinks` shows only the Earpiece sink; `flinks`: `2` and "no link from the filter" (nothing from `effect_output.omamobile_speaker_loudness` into the Earpiece sink) | the profile does not switch, or the journal shows "Interactive authentication required" (polkit did not see the user's PipeWire as local and active: record it; the rule needs another subject test, a later version) and the amplifiers stay in speaker mode; **any** `flinks` line into `…Voice_Call__Earpiece__sink` (the filter's 6 dB drive at the ear: play nothing, `prof HiFi`). Rollback: `prof HiFi` |
+   | E5 | **The tone at the lowest level** (657/6), `tools/phone-ssh 'omamobile-speaker-protection signal tone /tmp/ear30.wav --level -30 --seconds 1.5 --channels left'`, then with the phone at arm's length `ear_play /tmp/ear30.wav 100%`, then with the phone at the ear the same | low | at arm's length a faint beep from the top edge, or nothing; at the ear a clear, quiet beep; the bottom speaker silent; no watchdog line but the mode's | sound from the bottom speaker, a beep too loud at arm's length, a buzz, a mute. Rollback: `prof HiFi`, restart |
+   | E6 | **Speech at the ear:** a mono speech recording under 30 s with no music bed, copied to `/tmp/speech.flac`; `ear_play /tmp/speech.flac 60%`, then `100%` | low | intelligible and comfortable, or quiet; record which at each volume. If too quiet at 100 %, record it: a higher earpiece level (up to the 737 ceiling) is its own step in a later session | distortion, buzz, a mute. Rollback: `prof HiFi`, restart |
+   | E7 | **Back to the speakers:** `prof HiFi; ctl; flinks`; then, announced, `tools/phone-ssh 'S=omamobile-speaker-protection; $S signal multitone /tmp/mtL.wav --level -20 --seconds 2 --channels left; $S signal multitone /tmp/mtR.wav --level -20 --seconds 2 --channels right'` and `tools/phone-ssh "$U"'; as_user wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.6; as_user pw-play /tmp/mtL.wav; as_user pw-play /tmp/mtR.wav'`, then 15 s of music the listener knows at their volume | low | the journal shows `omamobile-earpiece@off` ran; every value as in E0; `flinks` as in E1 (the filter back in front of the speaker sink); the left multitone from the top speaker, the right from the bottom; music on both through the filter as before | a value that differs, `flinks` not as in E1 (play nothing: the music would skip the filter), one speaker silent, a mute. Rollback: restart |
+   | E8 | **A restart in earpiece mode** (announce: speakers cut out for about 5 s): `tools/phone-ssh 'omamobile-speaker-protection earpiece on; systemctl restart omamobile-speaker-protection; sleep 2'; ctl` | low | every value as in E0, "mode: speaker" | earpiece values after the restart. Rollback: restart again |
+
+   Record the results here with the date and `uname -r`.
 
 ## 0. Top findings
 

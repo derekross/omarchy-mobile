@@ -6,6 +6,30 @@
 # markers, so the user's later changes are never overwritten.
 set -euo pipefail
 
+# --adopt: for a user set up by hand (a bring-up), not by firstboot. The
+# once-only steps that would overwrite or repeat what such a user already
+# has are marked done without running: the shell profile (shell.json), the
+# monitor scale, the cursor and on-screen keyboard lines appended to the
+# Hyprland files, the screensaver's branding files and Files' click
+# policy (a hand-set-up user may have chosen double-click). Every other step
+# runs as on a new user: most check the user's files first (the menu
+# entries, foot's touch lines, phone.lua, the idle block), and a few
+# change what is there (they add the missing phone plugins to shell.json,
+# replace Chromium's user agent and scale factor, and set the suspend and
+# lock toggles). A marked
+# step the user does want can be had by removing its marker from
+# ~/.local/state/omarchy/done/ before the next login.
+if [[ ${1:-} == --adopt ]]; then
+  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap "
+  omarchy-done() {
+    if [[ $1 == ensure && $adopt == *" $2 "* ]]; then
+      command omarchy-done check "$2" 2>/dev/null || { command omarchy-done mark "$2"; echo "omamobile-setup-user: adopted $2 (marked done, not run)"; }
+      return 1
+    fi
+    command omarchy-done "$@"
+  }
+fi
+
 # (test/setup-user.sh points both at the package's own tree and a scratch dir)
 share=${OMAMOBILE_SHELL_SHARE:-/usr/share/omamobile/shell}
 config=~/.config/omarchy
@@ -100,9 +124,13 @@ if omarchy-done ensure omamobile-credential-type; then
   fi
 fi
 
-# Phone scale: 1440x3120 at 3 is 480x1040 logical, seeded once
+# Phone scale, seeded once: the Pixel 7 Pro's 1440x3120 at 3 is 480x1040
+# logical; the Pixel 9a's 1080x2424 at 8/3 is 405x909, its owner's choice
+# (device/tegu NOTES, 2026-10-25). monitors.lua is Lua, so 8 / 3 is a value.
+scale=3
+tr -d '\0' < "${OMAMOBILE_DT:-/proc/device-tree}/compatible" 2>/dev/null | grep -c 'google,zumapro-tegu' >/dev/null && scale='8 \/ 3'
 if omarchy-done ensure omamobile-monitor-scale; then
-  sed -i 's/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/' ~/.config/hypr/monitors.lua
+  sed -i "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $scale/" ~/.config/hypr/monitors.lua
 fi
 # ...and GDK_SCALE to match (TOUCH-PLAN 2.8): at Omarchy's 2, X11 GTK apps
 # (xwayland force_zero_scaling) drew at two thirds of the size of the rest.
@@ -137,13 +165,54 @@ o.launch_on_start("squeekboard")
 LUA
 fi
 
+# Files (Nautilus) opens folders with one tap: a double tap is a mouse habit
+# (issue #261). Set once, so a user who goes back to double-click keeps it;
+# skipped when this Nautilus has no click-policy key, so a release that drops
+# it can't break the login setup.
+if gsettings list-keys org.gnome.nautilus.preferences 2>/dev/null | grep -cx click-policy >/dev/null \
+  && omarchy-done ensure omamobile-files-single-tap; then
+  gsettings set org.gnome.nautilus.preferences click-policy single
+fi
+
 # Terminals get squeekboard's terminal layout (Tab, Ctrl, Alt, arrows); ours
 # adds Esc to its top row, for vim and friends. squeekboard reads layouts only
 # from the user's data dir, so link ours there unless the user has their own.
-k=${XDG_DATA_HOME:-$HOME/.local/share}/squeekboard/keyboards/terminal
-if [[ ! -e $k/us.yaml && ! -L $k/us.yaml ]]; then
-  mkdir -p "$k"
-  ln -s /usr/share/omamobile/squeekboard/keyboards/terminal/us.yaml "$k/us.yaml"
+# Since 0.2.61 the US English text layout too, and both in landscape (_wide:
+# squeekboard would otherwise take its own built-in landscape layout before
+# our portrait one), each with an action row (Mic, Paste, Emoji, Hide) that
+# hypr/phone.lua binds. Since 0.2.63 every language squeekboard ships, made
+# by squeekboard/generate (OMAMOBILE_SQUEEKBOARD_SHARE points the tests at the
+# package's copy). Each file linked unless the user has their own.
+k=${XDG_DATA_HOME:-$HOME/.local/share}/squeekboard/keyboards
+layouts=${OMAMOBILE_SQUEEKBOARD_SHARE:-/usr/share/omamobile/squeekboard/keyboards}
+if [[ -d $layouts ]]; then
+  while IFS= read -r -d '' file; do
+    layout=${file#"$layouts"/}
+    if [[ ! -e $k/$layout && ! -L $k/$layout ]]; then
+      mkdir -p "$(dirname "$k/$layout")"
+      ln -s "/usr/share/omamobile/squeekboard/keyboards/$layout" "$k/$layout"
+    fi
+  done < <(find "$layouts" -type f -name '*.yaml' -print0)
+fi
+
+# The keyboard in the Omarchy theme (omamobile-keyboard-theme): its
+# stylesheet from the theme's colours at every login (cheap, and it catches
+# a theme changed while the hook wasn't there); once, the @import line in
+# ~/.config/gtk-3.0/gtk.css that makes squeekboard read it, and the
+# theme-set hook that rewrites it and restarts squeekboard on a theme
+# change. A user who removes either keeps it removed.
+# --restart: a squeekboard already running (setup run again by hand, or a
+# package update that changed the stylesheet) reads gtk.css only when it
+# starts, so it restarts when the @import or the stylesheet is new; at
+# login it isn't up yet, and nothing restarts.
+if command -v omamobile-keyboard-theme >/dev/null; then
+  if omarchy-done ensure omamobile-keyboard-theme; then
+    omamobile-keyboard-theme --import --restart || true
+    mkdir -p "$config/hooks/theme-set.d"
+    ln -sfn "$share/hooks/theme-set-keyboard" "$config/hooks/theme-set.d/50-omamobile-keyboard"
+  else
+    omamobile-keyboard-theme --restart || true
+  fi
 fi
 
 # squeekboard needs Hyprland's input-method slot, which Omarchy's fcitx5 (run
@@ -166,14 +235,25 @@ if omarchy-done ensure omamobile-suspend-off; then
   touch ~/.local/state/omarchy/toggles/suspend-off
 fi
 
-# Phone window rules (apps fill the screen instead of floating at desktop
-# sizes), loaded after Omarchy's defaults from the user's override file, once.
+# Phone window and layer rules (apps fill the screen instead of floating at
+# desktop sizes; the fingerprint target, the keyboard and the call card draw
+# above the lock), loaded after Omarchy's defaults from the user's override
+# file, once. Omarchy's hyprland.lua requires looknfeel.lua, so the dofile
+# goes there; a hyprland.lua of the user's own that never loads looknfeel.lua
+# (a bring-up gate, say) gets it appended directly, or the rules would never
+# run and the fingerprint target would sit under the lock, unseen.
 if omarchy-done ensure omamobile-phone-rules; then
-  cat >>~/.config/hypr/looknfeel.lua <<LUA
+  phone_rules_target=~/.config/hypr/looknfeel.lua
+  if [[ -f ~/.config/hypr/hyprland.lua ]] && ! grep -q 'looknfeel' ~/.config/hypr/hyprland.lua; then
+    phone_rules_target=~/.config/hypr/hyprland.lua
+  fi
+  if ! grep -qs 'hypr/phone\.lua' ~/.config/hypr/*.lua; then
+    cat >>"$phone_rules_target" <<LUA
 
 -- Omarchy Mobile: phone window rules
 dofile("$share/hypr/phone.lua")
 LUA
+  fi
 fi
 
 # Chromium's first-run dialogs are desktop-sized: their buttons land off a
@@ -320,6 +400,97 @@ fi
 # The back gesture (omamobile.back): swipe in from a side edge for Escape.
 if omarchy-done ensure omamobile-back-plugin; then
   add_plugin omamobile.back
+fi
+# Voice input (omamobile.voice): hold the home pill to ask the agent, the
+# keyboard strip's mic key to dictate, through Voxtype (in the root image,
+# set up below; or Install > AI > Dictation); without it the sheet says so.
+if omarchy-done ensure omamobile-voice-plugin; then
+  add_plugin omamobile.voice
+fi
+# Setup > Voice in Omarchy's menu opens the voice settings (omamobile.voice),
+# through the menu extension file. Added once.
+if omarchy-done ensure omamobile-menu-voice; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"setup.voice"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "setup.voice": {"icon":"\xf3\xb0\x8d\xac","label":"Voice","description":"Speech model and how voice input starts","action":"omarchy-shell shell summon omamobile.voice '"'"'{\\"page\\":\\"settings\\"}'"'"'"},/' "$extension"
+  fi
+fi
+# Voice out of the box: the root image ships voxtype-bin (rootfs/packages.base)
+# and Whisper's base.en (omamobile-voice, in /usr/share/omamobile/voice/models),
+# so a new user gets what Omarchy's Install > AI > Dictation
+# (omarchy-voxtype-install) sets up, without its 142 MB download: Omarchy's
+# Voxtype config, the model in Voxtype's models directory (a link to the
+# shipped file; Voxtype looks only in ~/.local/share/voxtype/models) and the
+# packaged user daemon enabled, so it starts with the graphical session.
+# Omarchy's "Install Dictation" invitation is marked done, as its install
+# would leave it. Only with both installed. The config, the link and the
+# invitation happen once per user: a config or a model the user already has
+# stays, and one they delete later isn't brought back. The enable has its
+# own marker, set only when it succeeds, so a failed one (firstboot carries
+# on without a user manager) is tried again at the next login. A user who
+# removes Dictation (Remove > Dictation takes voxtype-bin out) gets nothing.
+voxconf=~/.config/voxtype/config.toml
+voxmodels=${OMAMOBILE_VOICE_MODELS:-/usr/share/omamobile/voice/models}
+if command -v "${OMAMOBILE_VOXTYPE:-voxtype}" >/dev/null && [[ -f $voxmodels/ggml-base.en.bin ]]; then
+  if omarchy-done ensure omamobile-voxtype-setup; then
+    omarchy-done mark voxtype-install-invitation
+    voxdefault=${OMARCHY_PATH:-/usr/share/omarchy}/default/voxtype/config.toml
+    if [[ ! -f $voxconf && -f $voxdefault ]]; then
+      { mkdir -p "${voxconf%/*}" && cp "$voxdefault" "$voxconf"; } ||
+        echo "omamobile-setup-user: could not copy Omarchy's Voxtype config" >&2
+    fi
+    mkdir -p ~/.local/share/voxtype/models || true
+    for model in "$voxmodels"/ggml-*.bin; do
+      [[ -e ~/.local/share/voxtype/models/${model##*/} ]] ||
+        ln -sfn "$model" ~/.local/share/voxtype/models/"${model##*/}" ||
+        echo "omamobile-setup-user: could not link ${model##*/}" >&2
+    done
+  fi
+  if omarchy-done check omamobile-voxtype-setup && ! omarchy-done check omamobile-voxtype-enabled; then
+    if systemctl --user enable voxtype.service; then
+      omarchy-done mark omamobile-voxtype-enabled
+    else
+      echo "omamobile-setup-user: could not enable voxtype.service; trying again at the next login" >&2
+    fi
+  fi
+fi
+# Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
+# stays the model, with Whisper's audio context cut to the clip's length
+# (context_window_optimization, for clips under 22.5 s). On the Pixel 7 Pro
+# with CPU frequency scaling, 12 s of speech takes base.en about 2.2 s that
+# way (5.0 s with the full 30 s window) and tiny.en 1.0 s (2.3 s), so base.en
+# now costs what tiny.en did.
+#  - The setting goes under [whisper] once, unless the config already sets
+#    it (a user's own value stays; a user who removes it keeps it removed).
+#  - 0.2.58-0.2.62 switched the daemon to tiny.en (the omamobile-voxtype-tiny
+#    marker). That is undone once, when base.en is downloaded, the model is
+#    still tiny.en and the config hasn't changed since (not newer than the
+#    marker by more than a minute): a model the user chose since stays.
+# Voxtype ignores a per-recording `--model` it hasn't prepared, so this is
+# the daemon's own config; it restarts once, and only if it was running.
+voxdone=~/.local/state/omarchy/done
+if [[ -f $voxconf ]]; then
+  voxrestart=0
+  if [[ -f $voxdone/omamobile-voxtype-tiny && -f ~/.local/share/voxtype/models/ggml-base.en.bin ]] &&
+    (($(stat -c %Y "$voxconf") <= $(stat -c %Y "$voxdone/omamobile-voxtype-tiny") + 60)) &&
+    sed -n '/^\[whisper\]$/,/^\[/p' "$voxconf" | grep -c '^model = "tiny.en"$' >/dev/null &&
+    omarchy-done ensure omamobile-voxtype-base; then
+    sed -i '/^\[whisper\]$/,/^\[/s/^model = "tiny.en"$/model = "base.en"/' "$voxconf"
+    voxrestart=1
+  fi
+  if ! grep -c '^[[:space:]]*context_window_optimization[[:space:]]*=' "$voxconf" >/dev/null &&
+    omarchy-done ensure omamobile-voxtype-context; then
+    if grep -c '^\[whisper\]$' "$voxconf" >/dev/null; then
+      sed -i -e '/^\[whisper\]$/a # Omarchy Mobile: Whisper'"'"'s context cut to the clip, about twice as fast on a phone' \
+        -e '/^\[whisper\]$/a context_window_optimization = true' "$voxconf"
+    else
+      printf '\n[whisper]\ncontext_window_optimization = true\n' >>"$voxconf"
+    fi
+    voxrestart=1
+  fi
+  if ((voxrestart)); then
+    systemctl --user try-restart voxtype.service || true
+  fi
 fi
 if omarchy-done ensure omamobile-menu-update; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc

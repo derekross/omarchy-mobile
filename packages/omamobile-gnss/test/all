@@ -69,6 +69,24 @@ grep -c 'gnss-slsi/data/vendor/gps' vendor/systemd/system/omamobile-gnss-nmea.se
 # A running stack keeps the phone awake (SUSPEND-PLAN 6.1).
 grep -qx 'ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block "--who=Omarchy Mobile GNSS" "--why=A location session is running" /usr/lib/omamobile-vendor/omamobile-gnss-start' \
   vendor/systemd/system/omamobile-gnss.service || fail "the stack holds a sleep inhibitor while it runs"
+# One GeoClue agent, ours (2026-11-02): geoclue's XDG autostart of its demo
+# agent ran at login, our unit exited as a second instance and stayed
+# inactive. The mask must carry the generator's escaped name, and our unit
+# must stop an autostart agent a running session already has.
+mask='app-geoclue\x2ddemo\x2dagent@autostart.service'
+gen=/usr/lib/systemd/user-generators/systemd-xdg-autostart-generator
+if [[ -x $gen ]]; then
+  g=$(mktemp -d)
+  mkdir -p "$g/xdg/autostart" "$g/out"
+  printf '[Desktop Entry]\nName=Geoclue Demo agent\nExec=/bin/sh\nType=Application\n' > "$g/xdg/autostart/geoclue-demo-agent.desktop"
+  XDG_CONFIG_HOME=$g/home XDG_CONFIG_DIRS=$g/xdg "$gen" "$g/out" "$g/out" "$g/out" 2>/dev/null
+  [[ -f $g/out/$mask ]] || { ls "$g/out" >&2; rm -rf "$g"; fail "the autostart generator names the agent's unit differently"; }
+  rm -rf "$g"
+fi
+grep -qF "ln -sfn /dev/null \"\$d/usr/lib/systemd/user/$mask\"" install || fail "the autostart agent's unit must be masked"
+grep -qxF "ExecStartPre=-/usr/bin/systemctl --user stop ${mask//\\/\\\\}" vendor/systemd/user/omamobile-geoclue-agent.service ||
+  fail "the agent unit must stop an autostart agent first (escaped once more for systemd's C escapes)"
+
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
 if [[ ! -f bionic/prebuilt/omamobile-fp-shim.so ]]; then
@@ -102,6 +120,7 @@ for f in usr/bin/omamobile-gnss usr/lib/omamobile-vendor/omamobile-vendor-chroot
          etc/omamobile/gnss.conf; do
   [[ -e $stage/$f ]] || fail "not staged: $f"
 done
+[[ $(readlink "$stage/usr/lib/systemd/user/$mask") == /dev/null ]] || fail "the autostart agent's mask not staged"
 # Default-off: nothing is enabled by a wants link, and the stack itself has no [Install].
 [[ -z $(find "$stage" -path '*.wants/*') ]] || fail "something is enabled by default"
 grep -q '^\[Install\]' vendor/systemd/system/omamobile-gnss.service && fail "omamobile-gnss.service must not be installable"

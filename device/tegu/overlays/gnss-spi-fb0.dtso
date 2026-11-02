@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/*
+ * Pixel 9a bring-up only; in no device's default DTB_OVERLAYS
+ * (MODEM-PLAN G3, resolved; the palmtop's run kit applies it): the GNSS SPI with
+ * stock's feedback delay 0 instead of the ported node's 2. Upstream this is
+ * the GNSS node's controller-data once the GNSS driver is in. Applied to
+ * the palmtop's integration DTB (gn3), which has the spi21 label.
+ */
+&spi21 {
+	gnss@0 {
+		controller-data {
+			samsung,spi-feedback-delay = <0>;
+		};
+	};
+};

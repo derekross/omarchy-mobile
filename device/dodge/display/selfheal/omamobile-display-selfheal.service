@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# OPT-IN: not enabled by default. Reboots once if msm's first panel init
+# failed with -110 (see omamobile-display-selfheal).
+[Unit]
+Description=Reboot once if the msm panel init timed out (dodge display drop)
+After=omamobile-display-msm.service
+ConditionPathExists=/etc/omamobile/display-selfheal.enable
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/omamobile-display-selfheal
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

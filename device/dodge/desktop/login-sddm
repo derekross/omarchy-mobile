@@ -1,0 +1,101 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# dodge-login-sddm: start the desktop the stock Omarchy Mobile way, SDDM
+# autologin into Omarchy's session (omamobile-firstboot's s_login), instead of
+# dodge's omamobile-hyprland.service (uwsm on tty1 under PAM "login"). The
+# lock (lock-on-start, setup-stock) then asks for the PIN, as on stock.
+# Run as root:
+#
+#   login-sddm [USER]            stage SDDM autologin for the next boot
+#   login-sddm --revert [USER]   back to omamobile-hyprland.service on tty1
+#   login-sddm --status          show which path the next boot takes
+#
+# Never starts, stops or restarts sddm, getty or the running desktop: the
+# change takes effect at the next boot. Idempotent.
+#
+# What it changes (all undone by --revert):
+#  - /etc/sddm.conf.d/autologin.conf and /var/lib/sddm/state.conf, as
+#    firstboot writes them (Session=omarchy.desktop: uwsm + Hyprland).
+#  - sddm.service drop-in: after the msm panel and touch units, as
+#    omamobile-hyprland.service was (they order Before= that unit only).
+#  - (removed) /etc/xdg/uwsm/env.d/50-dodge-software-gl: formerly LIBGL_ALWAYS_SOFTWARE=1 for
+#    the session, which omamobile-hyprland.service set. Hyprland renders on
+#    the GPU either way (aquamarine/GBM ignores it); apps keep llvmpipe GL, so
+#    the login switch changes one thing only. Dropping it is a separate step.
+#  - omamobile-hyprland.service disabled (not stopped), sddm.service enabled,
+#    default target graphical.target (sddm is PartOf graphical.target; dodge
+#    booted to multi-user.target, which is why the enabled sddm never ran).
+# sddm.service Conflicts=getty@tty1.service, so the two never share the seat.
+set -euo pipefail
+mode=apply
+case ${1:-} in --revert) mode=revert; shift ;; --status) mode=status; shift ;; esac
+U=${1:-ml}
+st=/var/lib/dodge-login-sddm
+conf=/etc/sddm.conf.d/autologin.conf
+state=/var/lib/sddm/state.conf
+dropin=/etc/systemd/system/sddm.service.d/50-dodge.conf
+uenv=/etc/xdg/uwsm/env.d/50-dodge-software-gl
+[[ $(id -u) == 0 ]] || { echo "run as root" >&2; exit 1; }
+
+if [[ $mode == status ]]; then
+  echo "default target:        $(systemctl get-default)"
+  echo "sddm.service:          $(systemctl is-enabled sddm.service 2>&1)"
+  echo "omamobile-hyprland:    $(systemctl is-enabled omamobile-hyprland.service 2>&1)"
+  echo "autologin.conf:        $([[ -f $conf ]] && tr '\n' ' ' < "$conf" || echo none)"
+  exit 0
+fi
+
+if [[ $mode == revert ]]; then
+  [[ -d $st ]] || { echo "nothing staged by login-sddm ($st missing)" >&2; exit 1; }
+  [[ -f $st/created-autologin ]] && rm -f "$conf"
+  [[ -f $st/state.conf ]] && cp -p "$st/state.conf" "$state"
+  [[ -f $st/created-state ]] && rm -f "$state"
+  rm -f "$dropin" "$uenv"
+  rmdir "${dropin%/*}" "${uenv%/*}" "/etc/xdg/uwsm" 2>/dev/null || true
+  systemctl daemon-reload
+  [[ -f $st/sddm-was-disabled ]] && systemctl disable sddm.service
+  systemctl enable omamobile-hyprland.service
+  systemctl set-default "$(cat "$st/default.target")"
+  rm -rf "$st"
+  echo "reverted: next boot starts the desktop with omamobile-hyprland.service on tty1"
+  exit 0
+fi
+
+id "$U" >/dev/null
+command -v sddm >/dev/null || { echo "sddm is not installed" >&2; exit 1; }
+session=""
+for d in /usr/local/share/wayland-sessions /usr/share/wayland-sessions; do
+  [[ -f $d/omarchy.desktop ]] && { session=omarchy; break; }
+done
+[[ -n $session ]] || { echo "Omarchy's session (omarchy.desktop) is not installed" >&2; exit 1; }
+[[ -f /etc/pam.d/sddm-autologin ]] || { echo "/etc/pam.d/sddm-autologin missing" >&2; exit 1; }
+
+# What was there before, once (a second run must keep the first state)
+if [[ ! -d $st ]]; then
+  install -d -m 700 "$st"
+  systemctl get-default > "$st/default.target"
+  [[ -f $conf ]] || touch "$st/created-autologin"
+  if [[ -f $state ]]; then cp -p "$state" "$st/state.conf"; else touch "$st/created-state"; fi
+  systemctl is-enabled --quiet sddm.service || touch "$st/sddm-was-disabled"
+fi
+
+# omamobile-firstboot s_login, as is
+mkdir -p /etc/sddm.conf.d /var/lib/sddm
+printf '[Autologin]\nUser=%s\nSession=%s.desktop\n' "$U" "$session" > "$conf"
+printf '[Last]\nSession=%s.desktop\nUser=%s\n' "$session" "$U" > "$state"
+chown -R sddm:sddm /var/lib/sddm 2>/dev/null || true
+
+install -d "${dropin%/*}"
+cat > "$dropin" <<'UNIT'
+# dodge (login-sddm): the panel and touch first, as omamobile-hyprland.service had
+[Unit]
+After=omamobile-display-msm.service omamobile-touch.service
+UNIT
+# GPU works on 7.3 gpu1 (2026-10-25): no software-GL override any more.
+# Remove the one older runs of this script wrote.
+rm -f "$uenv"
+systemctl daemon-reload
+systemctl disable omamobile-hyprland.service
+systemctl enable sddm.service
+systemctl set-default graphical.target
+echo "staged: the next boot autologins $U with SDDM ($session.desktop); revert with: $0 --revert $U"

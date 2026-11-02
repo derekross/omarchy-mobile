@@ -1,6 +1,6 @@
 Subject: [PATCH] monitor: keep retrying a refused DPMS commit
 
-Against Hyprland v0.56.2 (src/output/Monitor.cpp).
+Against Hyprland v0.57.0 (src/output/Monitor.cpp).
 
 commitDPMSState() retries a refused commit once, two frames later, and then
 gives up. Hyprland already reports the new DPMS state, but the output stays
@@ -15,12 +15,11 @@ Keep retrying every two frames for up to a second, and damage the monitor
 when a retried DPMS-on commit succeeds, as the first try does.
 
 diff --git i/src/output/Monitor.cpp w/src/output/Monitor.cpp
-index e69d8dd..3d4ff70 100644
 --- i/src/output/Monitor.cpp
 +++ w/src/output/Monitor.cpp
-@@ -2346,23 +2346,31 @@ void CMonitor::commitDPMSState(bool state) {
+@@ -2253,12 +2253,14 @@
      if (!m_state.commit()) {
-         Log::logger->log(Log::ERR, "Couldn't commit output {} for DPMS = {}, will retry.", m_name, state);
+         LOG(Log::ERR, "Couldn't commit output {} for DPMS = {}, will retry.", m_name, state);
  
 -        // retry in 2 frames. This could happen when the DRM backend rejects our commit
 -        // because disable + enable were sent almost instantly
@@ -38,14 +37,15 @@ index e69d8dd..3d4ff70 100644
                  if (!self)
                      return;
  
-                 m_output->state->resetExplicitFences();
+@@ -2266,11 +2268,17 @@
                  m_output->state->setEnabled(m_dpmsStatus);
+ 
                  if (!m_state.commit()) {
 +                    if (++attempts * RETRY_MS < std::chrono::seconds(1)) {
 +                        s->updateTimeout(RETRY_MS);
 +                        return;
 +                    }
-                     Log::logger->log(Log::ERR, "Couldn't retry committing output {} for DPMS = {}", m_name, m_dpmsStatus);
+                     LOG(Log::ERR, "Couldn't retry committing output {} for DPMS = {}", m_name, m_dpmsStatus);
                      return;
                  }
  

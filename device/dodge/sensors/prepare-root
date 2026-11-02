@@ -1,0 +1,31 @@
+#!/bin/bash
+# Build /var/lib/omamobile/sensors/root for hexagonrpcd from the phone's own
+# partitions. Everything is read-only: persist and dsp are mounted ro,noload and
+# vendor/odm are copied out of super with dd (reads only). Writes from the DSP
+# are refused by hexagonfs; the copies stay on the phone, never in git.
+# SPDX-License-Identifier: MIT
+set -u
+B=/var/lib/omamobile/sensors; R=$B/root; X=$B/x; I=$B/imgs
+part() { local l=/dev/disk/by-partlabel/$1; [ -e $l ] && { echo $l; return; }; grep -l "^PARTNAME=$1$" /sys/class/block/*/uevent | head -1 | sed "s#/sys/class/block/\([^/]*\)/uevent#/dev/\1#"; }
+SUPER=$(part super); PERSIST=$(part persist)
+umask 077; mkdir -p $R/sensors/registry $R/sensors/config $R/dsp $R/socinfo $X $I /mnt/ro-persist /mnt/ro-dsp
+here=$(dirname "$(readlink -f "$0")")
+mountpoint -q /mnt/ro-persist || mount -o ro,noload $PERSIST /mnt/ro-persist
+mountpoint -q /mnt/ro-dsp || mount -o ro /dev/disk/by-partlabel/dsp_a /mnt/ro-dsp
+cp -a /mnt/ro-persist/sensors/registry/registry/. $R/sensors/registry/
+cp -a /mnt/ro-dsp/adsp $R/dsp/
+for p in vendor_a odm_a; do
+  python3 "$here/lp-extents.py" $SUPER | awk -v p=$p '$1==p{s=0; for(i=2;i<=NF;i++){split($i,a,":"); print s, a[1], a[3]; s+=a[1]}}' > $I/$p.table
+  : > $I/$p.img
+  while read s n off; do dd if=$SUPER of=$I/$p.img bs=512 skip=$off seek=$s count=$n conv=notrunc status=none; done < $I/$p.table
+  rm -rf "$X/$p"; fsck.erofs --extract="$X/$p" $I/$p.img >/dev/null
+done
+cp -a $X/vendor_a/etc/sensors/config/. $R/sensors/config/
+cp -a $X/odm_a/etc/sensor/config/. $R/sensors/config/
+sed 's#^file=config=/odm/etc/sensor/config#file=config=/vendor/etc/sensors/config#' $X/vendor_a/etc/sensors/sns_reg_config > $R/sensors/sns_reg.conf
+# No qcom-socinfo in this kernel: stock values for a retail SM8750 (soc_id 618, MTP per the odm JSON).
+printf MTP > $R/socinfo/hw_platform; printf 618 > $R/socinfo/soc_id
+printf 0 > $R/socinfo/platform_subtype; printf 0 > $R/socinfo/platform_subtype_id
+printf 65536 > $R/socinfo/platform_version; printf 1.0 > $R/socinfo/revision
+umount /mnt/ro-persist /mnt/ro-dsp
+echo "registry: $(ls $R/sensors/registry | wc -l) files, config: $(ls $R/sensors/config | wc -l) files"

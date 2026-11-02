@@ -12,7 +12,12 @@ SRC=$PWD
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 for tool in debugfs mkfs.ext4 zstd openssl; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
-t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+t=$(mktemp -d)
+cleanup() {
+  [[ ! -d $t/gnupg ]] || gpgconf --homedir "$t/gnupg" --kill gpg-agent 2>/dev/null || true
+  [[ -n ${KEEP:-} ]] || rm -rf "$t"
+}
+trap cleanup EXIT
 
 # A repository-shaped tree: the script, a descriptor, images, a tiny root image
 R=$t/repo
@@ -60,7 +65,7 @@ vars() {
   cat > "$t/vars" <<EOF
 product:${1:-testdev}
 unlocked:${2:-yes}
-current-slot:b
+current-slot:${CURRENT_SLOT:-a}
 version-bootloader:cloudripper-17.0-15199429
 partition-size:boot_b: 0x4000000
 partition-size:init_boot_b: ${INIT_BOOT_SIZE-0x800000}
@@ -98,6 +103,14 @@ grep -qF 'correct horse' "$t/out" && fail "the Wi-Fi password is never printed"
 [[ -z $(ls "$t/work") ]] || fail "the image copy (with the password hash) is removed"
 pass "dry run: exactly the allowed commands printed, only getvar sent"
 
+# An adjacent image for another device must not change the default selection.
+other=$R/out/omamobile-rootfs-zother-2099.01.01-aarch64.img.zst
+cp "$img" "$other"
+printf 'device: zother\n' > "${other%.img.zst}.MANIFEST"
+install --dry-run || { cat "$t/out"; fail "default root selection ignores another device"; }
+rm "$other" "${other%.img.zst}.MANIFEST"
+pass "default selection matches the device, including legacy filenames"
+
 install || { cat "$t/out"; fail "a full run succeeds"; }
 want="-s FAKE123 flash boot_b $t/images/boot.img
 -s FAKE123 flash init_boot_b $t/images/init_boot.img
@@ -132,6 +145,9 @@ cp "$t/rootdir/etc/passwd" "$t/fbroot/etc/passwd"
 printf '%s\n' "$conf" > "$t/fb.conf"
 OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamobile-firstboot" --check "$t/fb.conf" >/dev/null ||
   fail "omamobile-firstboot accepts what install-phone writes"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
+  || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
+debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "boot-update.conf belongs to root"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
 refuse() {
@@ -149,7 +165,13 @@ vars
 refuse "an unknown other slot"; grep -q -- '--bootloader-slots-match' "$t/out" || fail "says how to confirm the other slot"
 refuse "a wrong confirmed version" --bootloader-slots-match cloudripper-16.0-9
 install --dry-run --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a confirmed matching version passes"; }
-pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots"
+CURRENT_SLOT=b vars
+refuse "a phone running from slot b (stock there after a system update)" --bootloader-slots-match cloudripper-17.0-15199429
+grep -q -- '--reinstall' "$t/out" || fail "says how to confirm a reinstall"
+install --dry-run --reinstall --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a reinstall over Omarchy Mobile on slot b passes"; }
+grep -q 'slot b holds Omarchy Mobile' "$t/out" || fail "a reinstall says slot b will be replaced"
+vars
+pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots, and slot b without --reinstall"
 
 vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
 for name in root omamobile omarchy alarm omandroid; do
@@ -227,6 +249,14 @@ cp tools/install-phone "$BD/install"
 cp "$R/device/testdev/device.conf" "$BD/device.conf"
 for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do cp "$t/images/$p.img" "$BD/images/"; done
 cp "$img" "$img.sha256" "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST" "$t/bundle/"
+printf 'kernel release: 7.3.0-test-1\nroot image: %s (%s)\n' "$(basename "$img")" "$(cut -d' ' -f1 "$img.sha256")" > "$BD/MANIFEST"
+cp "$BD/install" "$t/install.orig"
+manifest() {  # the bundle's manifest.json, as tools/make-bundle writes it
+  rm -f "$BD/manifest.json"
+  python3 -I "$SRC/tools/bundle-manifest" --bundle "$BD" --rootfs "$img" --rootfs-sha256 "$(cut -d' ' -f1 "$img.sha256")" \
+    --version 2026.10.13 --kernel-release 7.3.0-test-1 --channel stable
+}
+manifest
 (cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
 binstall() {
   : > "$t/fastboot.log"
@@ -246,6 +276,89 @@ if command -v gpg >/dev/null; then
   gpg --homedir "$G" -q --batch --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
   if binstall --dry-run; then fail "refuses a bundle signed by another key"; fi
   grep -q 'not signed by the Omarchy Mobile key' "$t/out" || fail "says the signature is not the release key's"
+
+  # Trust only this ephemeral key in the copied installer. Sign and verify
+  # real bundle bytes with GPG; production's pinned keys stay unchanged.
+  signer=$(gpg --homedir "$G" --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
+  sed -i "s/^SIGNING_KEYS=.*/SIGNING_KEYS='$signer'/" "$BD/install"
+  seal() {
+    [[ ${1:-} == --keep-manifest ]] || manifest
+    (cd "$BD" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
+    gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
+  }
+  seal
+  binstall --dry-run || { cat "$t/out"; fail "a bundle signed by the pinned fixture key installs"; }
+  if binstall --dry-run --images "$t/images"; then fail "refuses images outside the signed bundle"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects unsigned boot images before contacting the phone"
+  grep -q 'a bundle uses its own images' "$t/out" || { cat "$t/out"; fail "names the external images refusal"; }
+  # The signed name wins over a newer neighbour, and --rootfs cannot rename it.
+  other=$t/bundle/omamobile-rootfs-zother-2099.01.01-aarch64.img.zst
+  cp "$img" "$other"
+  binstall --dry-run || { cat "$t/out"; fail "signed bundle selects exactly its named root image"; }
+  if binstall --dry-run --rootfs "$other"; then fail "refuses the right bytes under an unsigned name"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects an unsigned root name before contacting the phone"
+  rm "$other"
+  # Another matching-device image with its own valid checksum must not
+  # replace the root image named in the signed manifest.
+  cp "$t/root.img" "$t/changed.img"
+  printf 'substituted image\n' > "$t/changed.txt"
+  debugfs -w -R "write $t/changed.txt /etc/substituted" "$t/changed.img" >/dev/null 2>&1
+  zstd -q "$t/changed.img" -o "$t/changed.img.zst"
+  cp "$t/changed.img.zst" "$t/bundle/$(basename "$img")"
+  (cd "$t/bundle" && sha256sum "$(basename "$img")" > "$(basename "$img").sha256")
+  if binstall --dry-run; then fail "refuses a substituted root image with an updated checksum"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects substituted root before contacting the phone"
+  grep -q 'root image does not match the signed bundle' "$t/out" || { cat "$t/out"; fail "names the signed root mismatch"; }
+  cp "$img" "$img.sha256" "$t/bundle/"
+  # The manifest itself must be covered by the signed checksums.
+  sed -i '/  MANIFEST$/d' "$BD/SHA256SUMS"
+  gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
+  if binstall --dry-run; then fail "refuses a manifest outside the signed checksums"; fi
+  [[ ! -s $t/fastboot.log ]] || fail "rejects an unauthenticated manifest before contacting the phone"
+
+  # manifest.json: the install plan as data must match the descriptor and the
+  # installer's rules exactly. Each change below is signed again, so only the
+  # manifest check can refuse it.
+  seal
+  binstall --dry-run || { cat "$t/out"; fail "a signed bundle with its manifest.json installs"; }
+  grep -q 'manifest.json: Omarchy Mobile 2026.10.13 (developer preview), its plan matches the descriptor' "$t/out" \
+    || { cat "$t/out"; fail "says the manifest's plan matches"; }
+  mrefuse() {  # WHY PYTHON-EDIT EXPECTED-MESSAGE
+    manifest
+    python3 -I -c "import json, sys; p = sys.argv[1]; m = json.load(open(p)); $2; json.dump(m, open(p, 'w'))" "$BD/manifest.json"
+    seal --keep-manifest
+    if binstall --dry-run; then fail "refuses a manifest with $1"; fi
+    [[ ! -s $t/fastboot.log ]] || fail "contacts no phone for a manifest with $1"
+    grep -qF -- "$3" "$t/out" || { cat "$t/out"; fail "names the problem with $1"; }
+  }
+  mrefuse "another product" 'm["install"]["product"] = "cheetah"' "but the descriptor is testdev"
+  mrefuse "a locked bootloader allowed" 'm["install"]["require_unlocked_bootloader"] = False' "must require an unlocked bootloader"
+  mrefuse "unmatched bootloader slots allowed" 'm["install"]["require_matching_bootloader_slots"] = False' "both bootloader slots to match"
+  mrefuse "a string for true" 'm["install"]["require_unlocked_bootloader"] = "true"' "not a valid release manifest"
+  mrefuse "an extra write (vbmeta_b)" 'm["install"]["writes"].insert(1, {"partition": "vbmeta_b", "source": "images/boot.img", "size": 11})' "writes are not exactly slot B"
+  mrefuse "a slot A write" 'm["install"]["writes"][0]["partition"] = "boot_a"' "writes are not exactly slot B"
+  mrefuse "a missing userdata write" 'm["install"]["writes"].pop()' "writes are not exactly slot B"
+  mrefuse "a wrong partition size" 'm["install"]["writes"][0]["partition_size"] = 4096' "writes are not exactly slot B"
+  mrefuse "another step after the writes" 'm["install"]["after"].append("erase misc")' "set-active b and reboot, nothing else"
+  mrefuse "a wider allowlist" 'm["install"]["storage_guard_allowlist"].append("persist")' "storage-guard allowlist"
+  mrefuse "an unlisted bundle file" 'm["files"] = [f for f in m["files"] if f["path"] != "images/dtbo.img"]' "does not list exactly the bundle's files"
+  mrefuse "a wrong file checksum" 'm["files"][0]["sha256"] = "0" * 64' "does not match manifest.json"
+  mrefuse "a path out of the bundle" 'm["files"][0]["path"] = "../x"' "not a valid release manifest"
+  mrefuse "another root image" 'm["root_image"]["sha256"] = "1" * 64' "name different root images"
+  mrefuse "another kernel" 'm["kernel"]["release"] = "7.3.0-other"' "name different kernels"
+  mrefuse "a version that isn't a date" 'm["version"] = "latest"' "versioned by the calendar"
+  mrefuse "another format" 'm["format"] = 2' "reads format 1"
+  manifest; rm "$BD/manifest.json"; seal --keep-manifest
+  if binstall --dry-run; then fail "refuses a bundle without manifest.json"; fi
+  grep -q 'has no manifest.json' "$t/out" || fail "says manifest.json is missing"
+  seal
+  sed -i '/  manifest\.json$/d' "$BD/SHA256SUMS"
+  gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
+  if binstall --dry-run; then fail "refuses a manifest.json outside the signed checksums"; fi
+  grep -q 'must cover manifest.json exactly once' "$t/out" || fail "says manifest.json must be covered"
+  seal
+  binstall --dry-run || { cat "$t/out"; fail "the bundle installs again once sealed"; }
+  pass "manifest.json: the plan must match the descriptor and the installer's rules exactly, or nothing is written"
 fi
 [[ -z $(flashing_calls) ]] || fail "a refused bundle flashes nothing"
 pass "bundle mode: signature required (pinned key), checksums checked, its own images used"

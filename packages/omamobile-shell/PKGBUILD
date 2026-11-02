@@ -8,13 +8,16 @@ arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT GPL-3.0-or-later)  # GPL: the squeekboard layout
 depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' omamobile-owl-widgets bash squeekboard bluez wf-recorder python python-dbus python-gobject
+         which  # voice input: voxtype finds wtype and wl-copy with which
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative
          iproute2 jq  # omamobile-sleepd: ss for SSH sessions; jq also for omamobile-keys
          # Both are in Omarchy's base package list, which root images install.
          foot xdg-terminal-exec  # guard for hand-built/partial installations
          xdg-desktop-portal-gnome)  # the file chooser (portal/hyprland-portals.conf)
-optdepends=('fprintd: fingerprint setup and unlock (with omamobile-fingerprint)')
+optdepends=('fprintd: fingerprint setup and unlock (with omamobile-fingerprint)'
+            'omamobile-voice: the speech model for voice input, so Voxtype works with no download (the root image has it)'
+            'voxtype-bin: voice input (the root image has it; or Install > AI > Dictation)')
 backup=(etc/xdg/xdg-desktop-portal/hyprland-portals.conf)
 install=omamobile-shell.install
 

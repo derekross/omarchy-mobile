@@ -20,7 +20,8 @@
 #   data_status   the operator and technology, when registered
 #   dictation     voxtype: on while recording, busy while transcribing, off
 #                 when idle; down when its user service isn't running, none
-#                 without voxtype (it is an optional Omarchy install)
+#                 without voxtype (in the root image; Remove > Dictation
+#                 takes it out)
 
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }

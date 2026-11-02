@@ -67,18 +67,29 @@ o.launch_on_start(
 -- screen off (or wakes a locked phone), holding power opens Omarchy's system
 -- menu, and power + volume down takes a screenshot. omamobile-keys works out
 -- which gesture it was.
+--
+-- Only real keyboards may trigger these: squeekboard is a virtual keyboard
+-- whose key codes are its layout's own, numbered up from 9, and on a long
+-- layout one of them lands on 124, which Hyprland's keymap reads as
+-- XF86PowerOff. Its keys share Hyprland's held-key state with the buttons,
+-- so an OSK key could act as the power key or leave it looking held (SUSPEND-
+-- PLAN P5 h: the power key's bind stopped firing until a reload).
+local hw_keys = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
 hl.unbind("XF86PowerOff")
-o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true })
-o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true })
+o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true, device = hw_keys })
+o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true, device = hw_keys })
 -- Volume down is also half of the screenshot chord, so it can't lower the
 -- volume the moment it goes down: take over Omarchy's binding and let
 -- omamobile-keys decide (a short wait for power, as on Android).
 hl.unbind("XF86AudioLowerVolume")
-o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { locked = true, repeating = true })
+o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { locked = true, repeating = true, device = hw_keys })
 -- Volume up goes through omamobile-keys too, so both volume keys can take a
 -- photo while the Camera app is in front (and raise the volume otherwise).
 hl.unbind("XF86AudioRaiseVolume")
-o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true })
+o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true, device = hw_keys })
+-- Its release ends Power + Volume Up push-to-talk (voice input, off unless
+-- turned on in the voice settings); omamobile-keys ignores every other one.
+o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true, device = hw_keys })
 
 -- A fresh phone (no name and email, or no PIN): a notification offers the
 -- onboarding that Omarchy's installer does on a computer.
@@ -96,6 +107,13 @@ o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyb
 -- the release then turned it off again. Touch still wakes it.
 hl.config({ misc = { key_press_enables_dpms = false } })
 
+-- Hyprland 0.57 turned quirks:skip_non_kms_dmabuf_formats on by default: it
+-- offers clients only the formats a display plane can scan out. gs201's DECON
+-- planes take XRGB8888, with no alpha, so the shell's transparent layers (home,
+-- the back edges, the fingerprint target and guard) came out black. Composited
+-- by the GPU, any format works. pcall: older Hyprland may not know the option.
+pcall(hl.config, { quirks = { skip_non_kms_dmabuf_formats = false } })
+
 -- The fingerprint target (omamobile.fingerprint) is drawn above the lock
 -- screen too, where the lock runs its fingerprint conversation. 1, not 2: on
 -- the lock it needs no touches (the bridge reads the touchscreen itself),
@@ -112,3 +130,71 @@ hl.layer_rule({ match = { namespace = "^osk$" }, above_lock = 2 })
 -- call is answered from the lock screen, and the in-call controls stay
 -- reachable while it's locked. The card offers call actions only.
 hl.layer_rule({ match = { namespace = "^omamobile-call(-top)?$" }, above_lock = 2 })
+
+-- The on-screen keyboard's own keys (squeekboard/keyboards/: the action row
+-- Mic, Paste, Emoji and Hide, and the globe). squeekboard can't run a command, so
+-- each key sends an XF86 keysym and these binds act on it. squeekboard puts
+-- every key on a keycode of a keymap it generates, and Hyprland resolves a
+-- bind's keysym through kb_layout unless the device resolves binds by its
+-- own keymap, so its virtual keyboard (named after the process) does. The
+-- binds take keys from squeekboard only: a hardware keyboard's XF86Paste
+-- still pastes.
+local osk_device = "hl-virtual-keyboard-squeekboard"
+local osk_only = { inclusive = true, list = { osk_device } }
+local not_osk = { inclusive = false, list = { osk_device } }
+hl.device({ name = osk_device, resolve_binds_by_sym = true })
+local function voice(method)
+  return "omarchy-shell shell call omamobile.voice " .. method .. " ''"
+end
+-- Mic opens the voice bar (omamobile.voice), the same bar as a hold on the
+-- pill, with the destination from what is in front (the chip changes it).
+-- squeekboard presses a keysym key on touch-down and releases it on
+-- lift-off: held, it is push-to-talk; a short tap keeps listening hands free
+-- until Done, and a tap while it listens is Done.
+o.bind("XF86Dictate", "Keyboard: voice", voice("press"), { device = osk_only })
+o.bind("XF86Dictate", "Keyboard: voice released", voice("release"), { device = osk_only, release = true })
+-- Paste opens Omarchy's clipboard history (a tap pastes an entry), Emoji its
+-- emoji picker (a tap types one; its search needs typed letters), and Hide
+-- puts the keyboard away through omamobile.keyboard.
+o.bind("XF86Paste", "Keyboard: clipboard", "omarchy-menu-clipboard", { device = osk_only })
+o.bind("XF86EmojiPicker", "Keyboard: emoji", "omarchy-menu-emoji", { device = osk_only })
+o.bind("XF86Keyboard", "Keyboard: hide", "omarchy-shell shell call omamobile.keyboard hideKeyboard ''", { device = osk_only })
+-- The globe opens the language sheet (omamobile.keyboard) in place of
+-- squeekboard's own popover, which was mouse-sized, stuck out above the
+-- keyboard's surface where taps didn't land, and offered a GNOME settings
+-- panel the phone doesn't have. XF86MediaLanguageMenu is KEY_LANGUAGE's.
+o.bind("XF86MediaLanguageMenu", "Keyboard: languages", "omarchy-shell shell call omamobile.keyboard languages ''", { device = osk_only })
+-- Resolving squeekboard's binds by keysym also lets its Ctrl, Alt, Tab,
+-- Delete and F-keys reach Omarchy's own binds, which they never did: Ctrl +
+-- Alt + Delete would close every window, F9 would start Voxtype instead of
+-- reaching the terminal, Alt + Tab would switch windows. Those binds are
+-- taken back here and given again to every keyboard but squeekboard
+-- (Omarchy's default/hypr/bindings/tiling.lua and voxtype.lua). hl.unbind
+-- takes a key's every bind, so a user's own bind on one of these keys in
+-- bindings.lua goes too. squeekboard has no Super key, so SUPER binds are
+-- out of its reach.
+local function not_from_osk(keys, binds)
+  hl.unbind(keys)
+  for _, b in ipairs(binds) do
+    local opts = b[3] or {}
+    opts.device = not_osk
+    o.bind(keys, b[1], b[2], opts)
+  end
+end
+not_from_osk("CTRL + ALT + DELETE", { { "Close all windows", "omarchy-hyprland-window-close-all" } })
+not_from_osk("ALT + TAB", {
+  { "Focus on next window", hl.dsp.window.cycle_next() },
+  { "Reveal active window on top", hl.dsp.window.bring_to_top() },
+})
+not_from_osk("ALT + SHIFT + TAB", {
+  { "Focus on previous window", hl.dsp.window.cycle_next({ next = false }) },
+  { "Reveal active window on top", hl.dsp.window.bring_to_top() },
+})
+not_from_osk("CTRL + ALT + TAB", { { "Focus on next monitor", hl.dsp.focus({ monitor = "+1" }) } })
+not_from_osk("CTRL + ALT + SHIFT + TAB", { { "Focus on previous monitor", hl.dsp.focus({ monitor = "-1" }) } })
+if o.cmd_present("voxtype") then
+  not_from_osk("F9", {
+    { "Start dictation (push-to-talk)", "voxtype record start" },
+    { "Stop dictation (push-to-talk)", "voxtype record stop", { release = true } },
+  })
+end

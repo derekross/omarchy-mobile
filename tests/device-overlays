@@ -25,12 +25,21 @@ else
   echo "ok - ${#overlays[@]} overlays compile with dtc -@"
 fi
 
+# Descriptors are data, not shell: read them with bin/omamobile's rules
+# (load_device), so a pull request's descriptor never runs as code here.
+quoted='^([A-Z][A-Z0-9_]*)="([^"$`\\]*)"$' bare='^([A-Z][A-Z0-9_]*)=([^"$`\\'"'"'[:space:]]*)$'
 for conf in device/*/device.conf; do
   dev=$(basename "$(dirname "$conf")")
-  list=$(DTB_OVERLAYS="" && . "$conf" && echo "${DTB_OVERLAYS:-}")
+  list="" n=0
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    [[ $line =~ $quoted || $line =~ $bare ]] || fail "$conf:$n: not a KEY=value line"
+    [[ ${BASH_REMATCH[1]} == DTB_OVERLAYS ]] && list=${BASH_REMATCH[2]}
+  done < "$conf"
   for ov in $list; do
     [[ $ov =~ ^[a-z0-9-]+$ ]] || fail "$conf: bad overlay name '$ov'"
     [[ -f device/$dev/overlays/$ov.dtso ]] || fail "$conf lists $ov, but device/$dev/overlays/$ov.dtso doesn't exist"
   done
 done
-echo "ok - every DTB_OVERLAYS name is an overlay of its device"
+echo "ok - every descriptor parses, and every DTB_OVERLAYS name is an overlay of its device"

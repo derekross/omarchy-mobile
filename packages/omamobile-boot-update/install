@@ -1,0 +1,23 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage omamobile-boot-update into DESTDIR. Activates nothing by itself: the
+# pacman hook writes slot B only when /etc/omamobile/boot-update.conf says
+# AUTO_WRITE=yes, and the package does not ship that file.
+#   ./install DESTDIR
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omamobile-boot-update "$d/usr/bin/omamobile-boot-update"
+install -Dm755 lib/omamobile-boot-images "$d/usr/lib/omamobile-boot-update/omamobile-boot-images"
+install -Dm644 lib/descriptor.sh "$d/usr/lib/omamobile-boot-update/descriptor.sh"
+install -Dm644 libalpm/90-omamobile-boot.hook "$d/usr/share/libalpm/hooks/90-omamobile-boot.hook"
+# An example only: /etc/omamobile/boot-update.conf belongs to the owner (the
+# installer writes it on a release install), and its absence means AUTO_WRITE=no
+install -Dm644 etc/boot-update.conf "$d/usr/share/omamobile/boot-update/boot-update.conf.example"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-boot-update/LICENSE"
+# AOSP's public AVB test key, as bin/omamobile images signs with it (avb/SOURCE)
+install -Dm644 avb/testkey_rsa4096.pem "$d/usr/share/omamobile-boot-update/avb/testkey_rsa4096.pem"
+install -Dm644 avb/SOURCE "$d/usr/share/omamobile-boot-update/avb/SOURCE"
+install -Dm644 avb/LICENSE "$d/usr/share/licenses/omamobile-boot-update/LICENSE.avb"
+install -Dm644 version "$d/usr/share/omamobile/boot-update/version"

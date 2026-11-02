@@ -1,0 +1,131 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-modem rmtfs-mem|start|stop|efs-prepare|snapshot <label>|online:
+# helpers for the dodge modem units.
+# Only used when /etc/omamobile/modem-probe.enable exists (the units check it).
+# Never prints or logs identifiers (IMEI/IMSI/ICCID/AID/numbers).
+set -u
+KO=/usr/local/lib/omamobile/modem/qcom_rmtfs_mem.ko
+log() { echo "omamobile-modem: $*"; }
+EFS=/var/lib/omamobile/modem-efs
+SNAPS=/var/lib/omamobile/efs-snapshots   # automatic, rotated (auto-*)
+GOODDIR=/var/lib/omamobile/efs-good      # named good sets, never rotated or deleted here
+GOODCONF=/etc/omamobile/modem-efs-good   # one line: name of the good set under $GOODDIR
+KEEP=${OMAMOBILE_EFS_KEEP:-12}
+FILES="modem_fs1 modem_fs2 modem_fsc modem_fsg oem_dycnvbk oem_stanvbk"
+QMI="qmicli -p -d qrtr://0"
+ipa_up() {
+	# The modem asserts on its first LTE bearer without an IPA data path, and a
+	# crashed boot can leave the copies bad. No IPA node or no probe: no modem.
+	local dt=/sys/firmware/devicetree/base/soc@0/ipa@3f40000 k
+	[ -d "$dt" ] && [ "$(tr -d '\0' < "$dt/status" 2>/dev/null)" = okay ] || { log "no enabled IPA node in this DT"; return 1; }
+	k=/usr/lib/modules/$(uname -r).held/kernel/drivers/net
+	grep -q '^ipa ' /proc/modules || insmod "$k/ipa/ipa.ko" || return 1
+	for _ in $(seq 30); do [ -e /sys/bus/platform/devices/3f40000.ipa/driver ] && break; sleep 0.5; done
+	[ -e /sys/bus/platform/devices/3f40000.ipa/driver ] || { log "IPA did not probe"; return 1; }
+	grep -q '^rmnet ' /proc/modules || insmod "$k/ethernet/qualcomm/rmnet/rmnet.ko" || return 1
+	log "IPA up"
+}
+snapshot() {
+	# Consistent snapshot of the live copies: fs1/fs2 hashes equal before and after the tar.
+	local d i a b ok=""
+	install -d -m 700 "$SNAPS"
+	for i in 1 2 3; do
+		d=$SNAPS/auto-$(date +%Y%m%d-%H%M%S)-$1; mkdir -m 700 "$d" || return 1
+		a=$(cd "$EFS" && sha256sum modem_fs1 modem_fs2) &&
+			tar cf "$d/modem-efs.tar" -C "$(dirname "$EFS")" "$(basename "$EFS")" &&
+			{ [ ! -d /var/lib/tqftpserv ] || tar cf "$d/tqftpserv.tar" -C /var/lib tqftpserv; } &&
+			b=$(cd "$EFS" && sha256sum modem_fs1 modem_fs2) &&
+			( cd "$EFS" && sha256sum $FILES ) > "$d/files.sha256" &&
+			( cd "$d" && sha256sum ./*.tar > SHA256SUMS ) || {
+			log "snapshot $(basename "$d") failed"; rm -rf -- "$d"; return 1; }
+		chmod 400 "$d"/*
+		[ "$a" = "$b" ] && { log "snapshot $(basename "$d") consistent"; ok=1; break; }
+		log "snapshot $(basename "$d") changed during tar, retrying"; sleep 2
+	done
+	# Rotation: only auto-* in $SNAPS, newest $KEEP kept. Named good sets live elsewhere.
+	ls -1dt "$SNAPS"/auto-* 2>/dev/null | tail -n +"$((KEEP + 1))" | while read -r d; do rm -rf -- "$d"; done
+	[ -n "$ok" ]
+}
+modem_rproc() {
+	local r
+	for r in /sys/class/remoteproc/remoteproc*; do
+		[ "$(cat "$r/name" 2>/dev/null)" = modem ] && { echo "$r"; return 0; }
+	done
+	return 1
+}
+case "${1:-}" in
+rmtfs-mem)
+	# rmtfs falls back to /dev/mem without this device; never let it.
+	# The 6.16 overlay ships qcom_rmtfs_mem.ko; 7.x has rmtfs_mem.ko in its module tree.
+	if ! grep -qE '^(qcom_)?rmtfs_mem ' /proc/modules; then
+		K7=/usr/lib/modules/$(uname -r).held/kernel/drivers/soc/qcom/rmtfs_mem.ko
+		if [ -e "$KO" ]; then insmod "$KO" || exit 1; else insmod "$K7" || exit 1; fi
+	fi
+	for _ in $(seq 20); do [ -c /dev/qcom_rmtfs_mem1 ] && exit 0; sleep 0.5; done
+	log "no /dev/qcom_rmtfs_mem1"; exit 1 ;;
+start)
+	r=""
+	for _ in $(seq 40); do r=$(modem_rproc) && break; sleep 0.5; done
+	[ -n "$r" ] || { log "no modem remoteproc (PAS loaded with only_adsp=1, or mpss disabled in the DT)"; exit 1; }
+	# A modem crash with recovery on makes the kernel stop and restart the
+	# MPSS, and a stop resets the phone. Keep recovery off.
+	echo disabled > "$r/recovery" 2>/dev/null || log "couldn't disable recovery"
+	log "recovery $(cat "$r/recovery" 2>/dev/null)"
+	[ "$(cat "$r/state")" = running ] || echo start > "$r/state" || exit 1
+	for _ in $(seq 60); do
+		s=$(cat "$r/state")
+		[ "$s" = running ] && { log "modem running"; exit 0; }
+		[ "$s" = crashed ] && break
+		sleep 0.5
+	done
+	log "modem state $(cat "$r/state")"; exit 1 ;;
+efs-prepare)
+	# Before rmtfs: IPA check, snapshot the previous boot's end state, then
+	# restore the named good set to the copies (fallback A, 2026-10-27).
+	ipa_up || { log "not starting the modem on $(uname -r); copies untouched"; exit 1; }
+	systemctl -q is-active omamobile-rmtfs.service && { log "rmtfs already running; refusing to restore"; exit 1; }
+	[ -r "$GOODCONF" ] || { log "no $GOODCONF"; exit 1; }
+	g=$GOODDIR/$(tr -cd 'A-Za-z0-9._-' < "$GOODCONF")
+	[ -s "$g/modem-efs.tar" ] && ( cd "$g" && sha256sum -c --quiet SHA256SUMS ) || { log "good set $(basename "$g") missing or fails its SHA256SUMS"; exit 1; }
+	snapshot prev-end || { log "no consistent prev-end snapshot; copies untouched"; exit 1; }
+	t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+	tar xf "$g/modem-efs.tar" -C "$t" || exit 1
+	src=$(cd "$t/modem-efs" && sha256sum $FILES) || exit 1
+	for f in $FILES; do cp "$t/modem-efs/$f" "$EFS/$f.new" && mv "$EFS/$f.new" "$EFS/$f" || exit 1; done
+	sync
+	[ "$(cd "$EFS" && sha256sum $FILES)" = "$src" ] || { log "restore verify FAILED"; exit 1; }
+	log "restored good set $(basename "$g"): fs1 $(echo "$src" | awk '$2=="modem_fs1"{print substr($1,1,10)}') fs2 $(echo "$src" | awk '$2=="modem_fs2"{print substr($1,1,10)}')" ;;
+snapshot)
+	snapshot "${2:-manual}" ;;
+online)
+	# After the MPSS runs, before ModemManager (MM latches sim-missing if it
+	# starts first): slot-1 primary GW provisioning if not already bound, then
+	# online, then wait for registration (up to 90 s; MM starts either way).
+	for _ in $(seq 30); do $QMI --dms-get-operating-mode >/dev/null 2>&1 && break; sleep 1; done
+	sleep 4
+	for _ in $(seq 10); do
+		cs=$($QMI --uim-get-card-status 2>/dev/null)
+		aid=$(echo "$cs" | awk '/^Slot \[/{s=$2} s=="[1]:" && /Application type:/{u=($0~/usim/)} s=="[1]:" && u && f{gsub(/[ \t]/,""); print; exit} s=="[1]:" && u && /Application ID:/{f=1}')
+		[ -n "$aid" ] && break; sleep 3
+	done
+	if echo "$cs" | grep "Primary GW" | grep -qi "slot"; then log "provisioning: already bound"
+	elif [ -n "$aid" ]; then
+		$QMI --uim-change-provisioning-session="slot=1,activate=yes,session-type=primary-gw-provisioning,aid=$aid" >/dev/null 2>&1
+		log "provisioning: slot 1 rc=$?"
+	else log "provisioning: no USIM application on slot 1"; fi
+	unset aid cs; sleep 4
+	$QMI --dms-set-operating-mode=online >/dev/null 2>&1; log "online rc=$?"
+	for i in $(seq 45); do
+		$QMI --nas-get-serving-system 2>/dev/null | grep -q "Registration state: 'registered'" && { log "registered after $((i * 2)) s"; sleep 6; snapshot reg; exit 0; }
+		r=$(modem_rproc) && [ "$(cat "$r/state")" != running ] && { log "modem $(cat "$r/state")"; exit 1; }
+		sleep 2
+	done
+	log "not registered after 90 s"; exit 0 ;;
+stop)
+	# Never stop the MPSS: on 7.3 (gpu1, 2026-10-26) writing "stop" to its
+	# remoteproc hard-resets the whole phone with no kernel log. Reboot instead.
+	log "not stopping the modem (stopping it resets the phone); reboot to turn it off"
+	exit 0 ;;
+*) echo "usage: $0 rmtfs-mem|start|stop|efs-prepare|snapshot <label>|online" >&2; exit 2 ;;
+esac

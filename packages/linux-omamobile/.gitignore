@@ -1,0 +1,4 @@
+# The staged kernel build (./stage KERNEL_OUT): built on the build machine,
+# copied along with the package, never committed.
+prebuilt/
+prebuilt.new/

@@ -2153,6 +2153,12 @@ which our profile binds read-only). What was missing before M4.1h was the
 CDT id itself ("CDT property invalid", "cannot fetch cdt values"). The
 "rfid:0" line is cbd's log of the config-table value it didn't find.
 
+**`omamobile-modem` 0.1.10 and `modem check` as a health check:** the check
+refuses once the profile has started in this boot, so the line below is a
+post-install health check only before the modem is started, or after a
+reboot. It stays read-only, and its refusal ("the modem profile already
+started this boot") says the profile ran, not that the install is wrong.
+
 **`omamobile-modem` 0.1.4:** the board id is a required per-phone input.
 The profile's check (`omamobile-vendor-chroot modem check`, run by the
 unit before the hang marker) refuses to start without a non-empty

@@ -13,6 +13,7 @@ import qs.Ui
 import "TilesModel.js" as TilesModel
 import "NotificationsModel.js" as NotificationsModel
 import "Readable.js" as Readable
+import "MediaModel.js" as MediaModel
 
 // Pull-down quick settings for the phone. The sheet drops from the top edge
 // over the status bar, collapsed as on Android: a clock header, the first
@@ -25,6 +26,8 @@ import "Readable.js" as Readable
 // Under the sheet, a second card is the notification shade: Omarchy's
 // notification history, newest first, with Clear all (NotificationsModel.js);
 // a row swipes sideways to take that one notification away (NotificationRow).
+// At its top, while a player plays or is paused, the media card (MPRIS:
+// MediaSource.qml picks the player, MediaCard.qml draws it).
 // The gear in the header opens Omarchy's menu at its root (Settings).
 //
 // The pencil under the expanded grid enters edit mode: tap a tile to remove
@@ -111,7 +114,9 @@ Item {
       volume: audio.available ? Math.round(audio.volume * 100) : null,
       wifiPanel: wifiPicker.opened,
       bluetoothPanel: bluetoothPanelItem.opened,
-      notifications: notifications.length
+      notifications: notifications.length,
+      media: media.player ? { app: MediaModel.appName(media.player), title: String(media.player.trackTitle || ""),
+                              playing: MediaModel.playing(media.player) } : null
     })
   }
 
@@ -570,6 +575,14 @@ Item {
     readonly property string icon: enabled ? "󰍬" : "󰍭"
     readonly property string status: root.optimistic["dictation"] !== undefined
       ? (enabled ? "Listening" : "Off") : TilesModel.dictationStatus(probe)
+    // The chevron (and a long press, as on Wi-Fi and Bluetooth): the voice
+    // settings (omamobile.voice), through the CLI, since a plugin only
+    // summons its own panels. A tap on the body opens or finishes the bar.
+    readonly property bool details: true
+    function openDetails() {
+      root.dismiss()
+      Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.voice", "{\"page\":\"settings\"}"])
+    }
     function toggle() {
       if (!available || busy) return
       var start = !enabled
@@ -934,6 +947,44 @@ Item {
     if (!argv) return
     root.dismiss()
     Quickshell.execDetached(argv)
+  }
+
+  // ---------------------------------------------------------------- media
+
+  // The player the shade's media card shows; its position kept fresh while
+  // the sheet is open. `media.players` is every MPRIS player on the bus.
+  readonly property alias media: mediaSource
+  MediaSource {
+    id: mediaSource
+    ticking: root.opened && !root.editing
+  }
+
+  // A tap on the media card: the sheet goes, and the player's app comes up
+  // on its screen through Omarchy's focus helper (by its desktop entry, then
+  // its identity), as a tap on a notification row does. Only when no window
+  // matches is the player asked to raise itself (MPRIS Raise), which many
+  // can't do on Wayland. Nothing is started.
+  function openMediaApp(player) {
+    if (!player) return
+    root.dismiss()
+    var names = MediaModel.focusNames(player)
+    if (names.length === 0) {
+      if (player.canRaise) player.raise()
+      return
+    }
+    if (mediaFocusProc.running) return
+    mediaFocusProc.player = player
+    mediaFocusProc.command = ["sh", "-c", "for name; do omarchy-hyprland-focus-app \"$name\" && exit 0; done; exit 1", "sh"].concat(names)
+    mediaFocusProc.running = true
+  }
+
+  Process {
+    id: mediaFocusProc
+    property var player: null
+    onExited: function(exitCode, exitStatus) {
+      if (exitCode !== 0 && player && player.canRaise) player.raise()
+      player = null
+    }
   }
 
   // ---------------------------------------------------------------- stubs
@@ -1866,9 +1917,11 @@ Item {
       readonly property real room: window.height - shadeTop - Style.gapsOut
       readonly property real insets: shade.contentTopInset + shade.contentBottomInset
       readonly property real listHeight: root.notifications.length > 0 ? shadeList.contentHeight : shadeEmpty.implicitHeight
-      readonly property real natural: insets + shadeHeader.height + shadeColumn.spacing + listHeight
+      // The media card and the gap under it, when a player is up.
+      readonly property real mediaRoom: mediaCard.visible ? mediaCard.height + shadeColumn.spacing : 0
+      readonly property real natural: insets + mediaRoom + shadeHeader.height + shadeColumn.spacing + listHeight
 
-      visible: !root.editing && root.reveal > 0 && room >= insets + shadeHeader.height
+      visible: !root.editing && root.reveal > 0 && room >= insets + mediaRoom + shadeHeader.height
       x: root.wide ? sheet.x + sheet.width + Style.spacing.lg : sheet.x
       y: shadeTop
       width: root.wide ? window.width - Style.gapsOut - x : sheet.width
@@ -1890,6 +1943,17 @@ Item {
         anchors.bottomMargin: shade.contentBottomInset
         anchors.leftMargin: shade.contentLeftInset
         spacing: Style.spacing.md
+
+        // ---------- What is playing, above the notifications
+        MediaCard {
+          id: mediaCard
+          objectName: "mediaCard"
+          width: parent.width
+          height: implicitHeight
+          player: mediaSource.player
+          foreground: root.foreground
+          onOpened: root.openMediaApp(mediaSource.player)
+        }
 
         Item {
           id: shadeHeader
@@ -1939,7 +2003,7 @@ Item {
           id: shadeList
           visible: root.notifications.length > 0
           width: parent.width
-          height: Math.max(0, shade.height - shade.insets - shadeHeader.height - shadeColumn.spacing)
+          height: Math.max(0, shade.height - shade.insets - shade.mediaRoom - shadeHeader.height - shadeColumn.spacing)
           contentWidth: width
           contentHeight: shadeRows.implicitHeight
           boundsBehavior: Flickable.StopAtBounds

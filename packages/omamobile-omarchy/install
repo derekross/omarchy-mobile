@@ -1,7 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Stage omamobile-omarchy into DESTDIR. Activates nothing by itself: the pacman
-# hook applies the patch series after the package transaction.
+# Stage omamobile-omarchy into DESTDIR. The pacman hook applies the patch
+# series after the package transaction; the module-tree cleanup's timer is
+# enabled by the wants link staged here, and Arch's linux-modules-cleanup is
+# held off by a drop-in (lib/modules-cleanup says why).
 #   ./install DESTDIR
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -13,6 +15,14 @@ for f in lib/update-bin/*; do
   install -Dm755 "$f" "$d/usr/lib/omamobile-omarchy/update-bin/${f##*/}"
 done
 install -Dm755 lib/lock-pam "$d/usr/lib/omamobile-omarchy/lock-pam"
+install -Dm755 lib/modules-cleanup "$d/usr/lib/omamobile-omarchy/modules-cleanup"
+u=$d/usr/lib/systemd/system
+install -Dm644 systemd/omamobile-modules-cleanup.service "$u/omamobile-modules-cleanup.service"
+install -Dm644 systemd/omamobile-modules-cleanup.timer "$u/omamobile-modules-cleanup.timer"
+install -Dm644 systemd/linux-modules-cleanup.service.d/10-omamobile.conf \
+  "$u/linux-modules-cleanup.service.d/10-omamobile.conf"
+install -d "$u/timers.target.wants"
+ln -sfn ../omamobile-modules-cleanup.timer "$u/timers.target.wants/omamobile-modules-cleanup.timer"
 for f in patches/*.patch; do
   install -Dm644 "$f" "$d/usr/share/omamobile/omarchy/patches/${f##*/}"
 done

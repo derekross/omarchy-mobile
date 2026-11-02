@@ -1,0 +1,120 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for tools/phone-install-package against a stand-in phone (no phone,
+# no Docker): each command the tool sends runs in a local bash with stand-in
+# pacman, makepkg, su, loginctl, getent and chown first on PATH.
+# 1. Versioned runtime dependencies that are installed (omarchy>=4.0.6,
+#    omarchy<5) and a versioned check dependency that isn't (diffutils>=3.10):
+#    the missing one goes in before the build and out after it, each
+#    dependency reaches pacman as one argument, and nothing is redirected
+#    into or out of a file on the phone.
+# 2. A check dependency that is installed but older than its version asks
+#    for: the tool stops before it installs, builds or removes anything.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/bin" "$t/root" "$t/home/alice" "$t/installed" "$t/pkgs/fakepkg"
+echo '# made up for tests/phone-install-package' > "$t/pkgs/fakepkg/PKGBUILD"
+
+# The phone's root shell: the command runs in root's home, as over ssh
+cat > "$t/phone-ssh" <<EOF
+#!/bin/bash
+cd "$t/root" && PATH="$t/bin:\$PATH" exec bash -c "\$*"
+EOF
+cat > "$t/bin/loginctl" <<'EOF'
+#!/bin/bash
+echo '1000 alice'
+EOF
+cat > "$t/bin/getent" <<EOF
+#!/bin/bash
+echo "alice:x:1000:1000::$t/home/alice:/bin/bash"
+EOF
+cat > "$t/bin/su" <<'EOF'
+#!/bin/bash
+[[ $1 == - && $2 == alice && $3 == -c ]] || { echo "su: unexpected $*" >&2; exit 1; }
+exec bash -c "$4"
+EOF
+cat > "$t/bin/chown" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+# makepkg without -s, as the tool runs it: it refuses while a dependency is
+# missing. The case's .SRCINFO is in $t/srcinfo.
+cat > "$t/bin/makepkg" <<EOF
+#!/bin/bash
+[[ \$1 == --printsrcinfo ]] && exec cat "$t/srcinfo"
+echo "|makepkg|\$*|" >> "$t/pacman.calls"
+[[ -e $t/installed/diffutils ]] || { echo '==> ERROR: Could not resolve all dependencies.'; exit 8; }
+touch fakepkg-1-1-any.pkg.tar.zst
+echo '==> Finished making: fakepkg 1-1'
+EOF
+# pacman: every call logged with its arguments one per field. -T answers
+# from installed/ and from too-old (dependencies an installed package is
+# too old for), -Qq lists installed/, -S and -Rns add and remove there.
+cat > "$t/bin/pacman" <<EOF
+#!/bin/bash
+(IFS='|'; echo "|\$*|") >> "$t/pacman.calls"
+op=\$1; shift
+case \$op in
+  -T) rc=0
+      for d in "\$@"; do
+        if [[ ! -e $t/installed/\${d%%[<>=]*} ]] || grep -qx -- "\$d" "$t/too-old"; then echo "\$d"; rc=127; fi
+      done
+      exit \$rc ;;
+  -Qq) ls "$t/installed" ;;
+  -S) for d in "\$@"; do [[ \$d == -* ]] || touch "$t/installed/\${d%%[<>=]*}"; done ;;
+  -Rns) for d in "\$@"; do [[ \$d == -* ]] || rm -f "$t/installed/\$d"; done ;;
+  -U) echo 'installing fakepkg...' ;;
+  -Q) echo "\$1 1-1" ;;
+esac
+EOF
+chmod +x "$t/phone-ssh" "$t/bin/"*
+unset PHONE_USER
+run() { : > "$t/pacman.calls"
+        PHONE_SSH=$t/phone-ssh tools/phone-install-package "$t/pkgs/fakepkg" > "$t/out" 2>&1; }
+
+# --- 1. a missing versioned check dependency ---------------------------------
+touch "$t/installed/bash" "$t/installed/omarchy"
+: > "$t/too-old"
+printf 'pkgbase = fakepkg\n\tpkgver = 1\n\tpkgrel = 1\n\tcheckdepends = diffutils>=3.10\n\tdepends = omarchy>=4.0.6\n\tdepends = omarchy<5\n\tdepends = bash\n\npkgname = fakepkg\n' > "$t/srcinfo"
+# The tool's exit status alone doesn't show the build: makepkg's goes through tail
+run && grep -qx '==> Finished making: fakepkg 1-1' "$t/out" ||
+  { cat "$t/out"; fail "a build against the stand-in phone succeeds"; }
+pass "a build against the stand-in phone succeeds"
+
+t_call=$(grep '^|-T|' "$t/pacman.calls" || true)
+[[ $t_call == *'|omarchy>=4.0.6|'* && $t_call == *'|omarchy<5|'* && $t_call == *'|diffutils>=3.10|'* ]] ||
+  { cat "$t/pacman.calls"; fail "pacman -T gets each versioned dependency as one argument"; }
+pass "pacman -T gets each versioned dependency as one argument"
+
+[[ -z $(ls -A "$t/root") ]] || { ls -A "$t/root"; fail "nothing is redirected into a file in root's home"; }
+pass "nothing is redirected into a file in root's home"
+
+grep -qx '|-S|--needed|--noconfirm|--asdeps|diffutils>=3.10|' "$t/pacman.calls" &&
+  grep -q '^build dependencies: diffutils>=3.10 *$' "$t/out" ||
+  { cat "$t/out" "$t/pacman.calls"; fail "the missing check dependency is installed for the build"; }
+pass "the missing check dependency is installed for the build"
+
+grep -qx '|-Rns|--noconfirm|diffutils|' "$t/pacman.calls" && [[ ! -e $t/installed/diffutils ]] &&
+  grep -q '^removed build dependencies: diffutils *$' "$t/out" ||
+  { cat "$t/out" "$t/pacman.calls"; fail "it is removed again after the build"; }
+pass "it is removed again after the build"
+
+grep -q '^|-U|--noconfirm|.*/fakepkg-1-1-any.pkg.tar.zst|$' "$t/pacman.calls" && grep -qx 'fakepkg 1-1' "$t/out" ||
+  { cat "$t/out" "$t/pacman.calls"; fail "the built package is installed"; }
+pass "the built package is installed"
+
+# --- 2. an installed check dependency that is too old ------------------------
+touch "$t/installed/diffutils"
+echo 'diffutils>=3.10' > "$t/too-old"
+if run; then cat "$t/out"; fail "a dependency installed but too old stops the tool"; fi
+grep -qx "The phone's packages are older than diffutils>=3.10 asks for: update it (omarchy update), then run this again" "$t/out" ||
+  { cat "$t/out"; fail "a dependency installed but too old stops the tool"; }
+pass "a dependency installed but too old stops the tool"
+
+! grep -qE '^\|(-S|-Rns|-U|makepkg)\|' "$t/pacman.calls" && [[ -e $t/installed/diffutils ]] ||
+  { cat "$t/pacman.calls"; fail "and nothing is installed, built or removed"; }
+pass "and nothing is installed, built or removed"

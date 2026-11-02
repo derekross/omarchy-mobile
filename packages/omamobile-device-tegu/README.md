@@ -10,15 +10,16 @@ packaged yet. What is here is what runs on in-tree drivers.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
-| `bin/omamobile-tegu-graphics-start` + `vendor/systemd/system/omamobile-tegu-graphics.service` + `display-manager.service.d/10-omamobile-tegu.conf` | `/usr/bin`, `/usr/lib/systemd/system` (enabled by a vendor wants link) | Loads the GPU (panthor), the display controller (gs_decon), haptics (cs40l26_vibra), the torch (leds_lm3644), the battery gauge (max77779_battery) and the Bluetooth controller (hci_uart) at boot, in that order, after writing and syncing a marker. Each step keys on its own device node (`1f000000.gpu`, `19470000.display-controller`, the device-tree nodes of the rest), and the unit runs when the GPU or the display controller exists, so a DTB with the display but no GPU still gets its display. A load or bind that returns but fails (panthor without `mali_csffw.bin`, say) is logged and skipped, the rest still loads, and the marker is cleared; the unit then ends failed, and `--retry` tries the skipped steps again. Only a boot that hangs in a step leaves the marker: the next boot keeps all six off and says so, and `omamobile-tegu-graphics-start --retry` goes on from the step that failed (on the same boot too: the drivers already loaded stay as they are). Before `gs_decon`, and only when the command line says `exynos_drm.panel_name=google-tg4c`, it turns `gs_dsim_cmd.allow_tx` on, so the panel's DSI commands (brightness, sleep, 120 Hz; kernel #90) go to the panel the bring-up tested and no other: on another panel the display stays read-only at 60 Hz. The display manager waits for it. It also writes `/run/omamobile-tegu-display-card` (the display controller's DRM node by path, since the GPU may take card0) and, when the GPU came up, `/run/omamobile-tegu-gpu-ready.json` |
+| `bin/omamobile-tegu-graphics-start` + `vendor/systemd/system/omamobile-tegu-graphics.service` + `display-manager.service.d/10-omamobile-tegu.conf` | `/usr/bin`, `/usr/lib/systemd/system` (enabled by a vendor wants link) | Loads the GPU (panthor), the display controller (gs_decon), haptics (cs40l26_vibra), the torch (leds_lm3644), the battery gauge (max77779_battery), the Bluetooth controller (hci_uart), NFC (nxp_nci_i2c) and Wi-Fi (the PCIe host, `phy_zuma_pcie` and `pcie_gs201` on a node that says `google,zuma-pcie`, else `pcie_zumapro`, then `brcmfmac`, only with the host's node, the Wi-Fi DMA pool and the board's BCM4383 firmware, `updates/brcm/brcmfmac4383-pcie.google,zumapro-tegu.bin` as `tools/extract-vendor-firmware` installs it) at boot, in that order, after writing and syncing a marker. Each step keys on its own device node (`1f000000.gpu`, `19470000.display-controller`, the device-tree nodes of the rest), and the unit runs when the GPU or the display controller exists, so a DTB with the display but no GPU still gets its display. A load or bind that returns but fails (panthor without `mali_csffw.bin`, say) is logged and skipped, the rest still loads, and the marker is cleared; the unit then ends failed, and `--retry` tries the skipped steps again. Only a boot that hangs in a step leaves the marker, and there is one marker for every step: a hang in the last step, Wi-Fi, also keeps the GPU and the display off on the next boot, so a boot with no display after a Wi-Fi hang is this marker, not a display fault. The next boot keeps all of them off and says so, and `omamobile-tegu-graphics-start --retry` goes on from the step that failed (on the same boot too: the drivers already loaded stay as they are). Before `gs_decon`, and only when the command line says `exynos_drm.panel_name=google-tg4c`, it turns `gs_dsim_cmd.allow_tx` on, so the panel's DSI commands (brightness, sleep, 120 Hz; kernel #90) go to the panel the bring-up tested and no other: on another panel the display stays read-only at 60 Hz. The display manager waits for it. It also writes `/run/omamobile-tegu-display-card` (the display controller's DRM node by path, since the GPU may take card0) and, when the GPU came up, `/run/omamobile-tegu-gpu-ready.json` |
 | `uwsm/env.d/omamobile-tegu-graphics` | `/usr/share/uwsm/env.d` | The session's side of the graphics start, sourced by uwsm (it walks `XDG_DATA_DIRS` too; a user's `~/.config/uwsm/env` runs after it): the KMS device from `/run/omamobile-tegu-display-card`, hardware GL when `/run/omamobile-tegu-gpu-ready.json` exists and llvmpipe otherwise, so a phone whose GPU did not come up still gets a desktop |
 | `vendor/modprobe.d/omamobile-tegu-guards.conf` | `/usr/lib/modprobe.d` | Keeps those drivers (and the Wi-Fi, PCIe and NFC ones, for the day they are in tree) from autoloading ahead of the guard. No `install` lines: they would break the guard's own modprobe |
 | `vendor/modprobe.d/omamobile-tegu-display.conf`, `omamobile-tegu-clk-acpm.conf` | `/usr/lib/modprobe.d` | 120 Hz as the ceiling and the panel really off on DPMS (the DSI commands themselves are allowed by the graphics start, for google-tg4c only); the GPU DVFS ceiling at 890 MHz |
-| `bin/omamobile-tegu-aoc-start` + `vendor/systemd/system/omamobile-tegu-aoc.service` + `vendor/modprobe.d/omamobile-tegu-aoc.conf` | `/usr/bin`, `/usr/lib/systemd/system` (not enabled), `/usr/lib/modprobe.d` | Boots the AoC (audio and sensor DSP) hang-safe: Trusty, the GSA, the AoC drivers, `aoc-tegu.bin`, then waits for its 93 services. Ships disabled: see below |
+| `bin/omamobile-tegu-aoc-start` + `vendor/systemd/system/omamobile-tegu-aoc.service` + `vendor/modprobe.d/omamobile-tegu-aoc.conf` | `/usr/bin`, `/usr/lib/systemd/system` (enabled; also `omamobile-aoc.service`), `/usr/lib/modprobe.d` | Boots the AoC (audio and sensor DSP) hang-safe: Trusty, the GSA, the AoC drivers, `aoc-tegu.bin`, waits for its 93 services, then loads the TAS2572 amplifiers. See below |
 | `bin/omamobile-bt-addr` + `vendor/systemd/system/omamobile-bt-addr@.service` + `vendor/udev/rules.d/80-omamobile-bt-addr.rules` | `/usr/bin`, `/usr/lib/systemd/system`, `/usr/lib/udev/rules.d` | Gives the BCM4383 its real Bluetooth address from the bootloader's device tree when the controller appears, powering it on once first (set on a never-powered controller, the kernel withdraws the index for good). The Pixel 7 Pro's script, with the extra waits the 9a needed |
-| `bin/omamobile-tegu-usb-rescue` + `src/tegu-tcpc-switch.c` + `vendor/systemd/system/omamobile-tegu-usb-rescue.service` | `/usr/bin`, `/usr/lib/systemd/system` (enabled by a vendor wants link) | Closes the MAX77779's USB data switch after a cable replug while no Type-C driver owns the chip; with one loaded it exits. The helper reads the chip's identity and VBUS before its one write and never forces an address a driver holds |
-| `bin/omamobile-tegu-charge-limit` + `vendor/udev/rules.d/75-omamobile-tegu-charger.rules` | `/usr/bin`, `/usr/lib/udev/rules.d` | Applies `/etc/omamobile/charge-limit` (a percentage, say `80`) to the charger when it appears; charging stops there and starts again 5 below. No file: charge to 100 % |
-| `vendor/systemd/system-sleep/omamobile-tegu-wifi` | `/usr/lib/systemd/system-sleep` | Keeps Wi-Fi loaded across s2idle when `/etc/omamobile/wifi-keep-across-sleep` exists (the chip reloads its firmware on resume and iwd reconnects), otherwise unloads and reloads brcmfmac around the sleep; after a sleep that lost Wi-Fi it unloads for the rest of the boot. It reloads the in-tree `brcmfmac`; a phone still running an out-of-tree build of it keeps its own hook until the Wi-Fi series lands |
+| `bin/omamobile-tegu-usb-rescue` + `src/tegu-tcpc-switch.c` + `vendor/systemd/system/omamobile-tegu-usb-rescue.service` | `/usr/bin`, `/usr/lib/systemd/system` (enabled by a vendor wants link) | Closes the MAX77779's USB data switch after a cable replug while no Type-C driver owns the chip, also when the gadget still reads "configured" from before the unplug (dwc3 never hears of one without a Type-C driver, so the switch is read every 10 s while configured); with one loaded it exits. The helper reads the chip's identity and VBUS before its one write and never forces an address a driver holds |
+| `bin/omamobile-tegu-charge-limit` + `vendor/udev/rules.d/75-omamobile-tegu-charger.rules` | `/usr/bin`, `/usr/lib/udev/rules.d` | Applies `/etc/omamobile/charge-limit` (a percentage, say `80`): charging stops there and starts again 5 below. With the kernel's `max77779-charger` driver, which has charge inhibit and no end threshold, udev runs it on every battery change and it switches `charge_behaviour` between `inhibit-charge` and `auto` by the battery's capacity. No file: charge to 100 % |
+| `bin/omamobile-setup-system` | `/usr/bin` | System setup for Omarchy's lifecycle (omamobile-firstboot runs it): UTF-8 locale, timezone, NTP, and enables the sensor proxy and the NFC link opener (`omamobile-nfc-open`). Not the fingerprint service, speaker protection or the GNSS socket yet (see the script) |
+| `vendor/systemd/system-sleep/omamobile-tegu-wifi` | `/usr/lib/systemd/system-sleep` | Keeps Wi-Fi loaded across s2idle when `/etc/omamobile/wifi-keep-across-sleep` exists (the chip reloads its firmware on resume and iwd reconnects; the hook checks that from a transient unit, `omamobile-tegu-wifi-check`, so the lock screen doesn't wait for it), otherwise unloads and reloads brcmfmac around the sleep; after a sleep that lost Wi-Fi it unloads for the rest of the boot. It reloads the in-tree `brcmfmac`; a phone still running an out-of-tree build of it keeps its own hook until the Wi-Fi series lands |
 | `vendor/systemd/system-sleep/omamobile-tegu-nfc` | `/usr/lib/systemd/system-sleep` | Stops neard's poll loop before a sleep (polling through s2idle reset the palmtop; with it stopped, 35 of 35 cycles woke), reads `Polling` back and logs it, and starts the loop again after the wake if it was on. Powering the ST54L off as well, the workaround for a controller that did not answer on I2C after a wake (issue #132; fixed by linux-omarchy-mobile #131), runs only while `/etc/omamobile/nfc-power-off-across-sleep` exists: off by default, since its record is one wake that needed the power key and one that worked. Log: `/var/log/omamobile/nfc-sleep.log` |
 | `vendor/systemd/system/linux-modules-cleanup.service.d/10-omamobile-tegu.conf` | `/usr/lib/systemd/system` | Holds off Arch's old-module cleanup: our kernels come as module tarballs, not pacman packages, and the next-boot and rollback trees must stay |
 | `vendor/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf`, `sleep.conf.d/10-omamobile.conf` | `/usr/lib/systemd` | A hung shutdown resets the phone after a minute; suspend means s2idle (no SoC sleep sequence yet, and `deep` does not wake) |
@@ -38,8 +39,10 @@ runs the package tests in a scratch root (`OMAMOBILE_TEGU_ROOT`), with no
 phone and no hardware.
 
 The package does not mark the boot slot successful (Derek decides how that
-works on the 9a), does not start Wi-Fi, NFC, the modem, the charger driver
-or the cameras, and carries no vendor files and no per-phone data.
+works on the 9a) and does not start the modem. NFC and Wi-Fi come up from
+the graphics start when the device tree describes them, and the charger and
+the cameras load from the device tree on their own. It carries no vendor
+files and no per-phone data.
 
 ## What the kernel command line has to stop carrying
 
@@ -67,15 +70,17 @@ watchdog runs from boot, so a hung graphics start ends in a reset and the
 marker. The public tegu DTS carries `panic=10` but not that, so on it a
 hang that does not panic ends at the power key (held about 30 s).
 
-## The AoC start ships disabled
+## The AoC start at boot
 
 `omamobile-tegu-aoc-start` is the Pixel 7 Pro's AoC start with the 9a's
 names (`154b0000.aoc`, `aoc-tegu.bin`, 93 services, the sensors' USF
-channel through `aoc_channel_dev`). It needs a kernel whose device tree
-enables the AoC, GSA and Trusty nodes; today the bring-up turns them on
-with out-of-tree overlay modules, and so `omamobile-tegu-aoc.service` has
-no wants link. Once a kernel enables them, `systemctl enable
-omamobile-tegu-aoc.service` and reboot. A step that returns and fails is
+channel through `aoc_channel_dev`), plus the TAS2572 amplifiers once the
+AoC is online. It runs at every boot (a wants link) and answers to
+`omamobile-aoc.service`, the name the sensor proxy and the fingerprint
+service order themselves after. It needs a kernel whose device tree
+enables the AoC, GSA and Trusty nodes (the kernel branch `tegu-dt-aoc`);
+on a device tree without the AoC node the unit's condition skips it, so
+the bring-up's overlay boots are unaffected. A step that returns and fails is
 named in the journal and clears the marker (a load that came back is not a
 hang; `test/aoc-start` checks this). Only a boot that hangs in the start
 leaves the marker, and then the next boot leaves the AoC off until
@@ -88,7 +93,8 @@ Nothing here is in the package; `tools/extract-vendor-firmware` and
 
 - `aoc-tegu.bin` (the AoC), `Top-tas2572RCA1.bin` and
   `Bottom-tas2572RCA1.bin` (the speaker amplifiers);
-- `brcm/brcmfmac4383-pcie.bin`, `.clm_blob`, `.txcap_blob` and `.txt` (Wi-Fi);
+- `brcm/brcmfmac4383-pcie.google,zumapro-tegu.bin`, `.clm_blob`, `.txcap_blob`
+  and `.txt` (Wi-Fi, the board-suffixed names brcmfmac loads first);
 - `updates/brcm/BCM.google,zumapro-tegu.hcd` (Bluetooth);
 - `updates/cs40l26.wmfw` and `cs40l26.bin` (haptics);
 - `arm/mali/arch11.8/mali_csffw.bin` (the GPU's firmware, from Mesa's

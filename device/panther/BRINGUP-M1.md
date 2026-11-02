@@ -6,7 +6,9 @@ Hyprland and the Omarchy lock screen, on simpledrm over the bootloader's
 framebuffer. SSH answers at `172.16.42.1`, and `bin/omamobile push`
 rewrites slot B and reboots into it with no fastboot. The power and
 volume keys work (the power key wakes the screen); there was no touch yet:
-the FocalTech FT3658 on SPI0 had no mainline driver. Kernel 7.3.0-rc6,
+the FocalTech FT3658 on SPI0 never answered in boots 6 to 8, with the
+driver loaded, because its supplies were off; [TOUCH-PLAN.md](TOUCH-PLAN.md)
+switched them on, and touch works from its T4 on. Kernel 7.3.0-rc6,
 local branch `panther-first-light` on `omamobile-int`; the board file was
 merged into `omamobile` as
 [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as
@@ -89,7 +91,7 @@ Each step: commands, Expect/Pass, Stop, Rollback, risk.
    `omamobile.initramfs`, so the init hands over to Arch. Then, phone in
    fastboot, run by the owner (it asks for the user, password and SSH key):
    `tools/install-phone --device panther --images ~/android/mainline/out/images
-   --rootfs out/panther/omamobile-rootfs-<date>-aarch64.img.zst --dry-run`,
+   --rootfs out/panther/omamobile-rootfs-panther-<date>-aarch64.img.zst --dry-run`,
    and without `--dry-run` after reading every command.
    Expect: the initramfs grows the root to the partition, `arch: switching
    to Arch Linux on /dev/sda31`, `omamobile-firstboot` creates the user,

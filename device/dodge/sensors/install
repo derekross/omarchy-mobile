@@ -1,0 +1,25 @@
+#!/bin/bash
+# Install the dodge sensors stack. Needs:
+#  - /usr/local/bin/hexagonrpcd + /usr/local/lib/libhexagonrpc.so* (linux-msm
+#    hexagonrpc with 0001-*.patch), /usr/local/lib/libssc.so* (libssc), and
+#    iio-sensor-proxy built with -Dssc-support=enabled installed to /usr;
+#  - ./prepare-root run once (read-only copies of the phone's own registry/config).
+# hexagonrpcd is gated on /etc/omamobile/sensors.enable. Autorotate (raw ssccli accel, 75 deg hysteresis) is added to the session user's hypr/autostart.lua and is gated on the same flag.
+# SPDX-License-Identifier: MIT
+set -eu
+cd "$(dirname "$0")"
+echo /usr/local/lib > /etc/ld.so.conf.d/usr-local.conf; ldconfig
+install -m 644 omamobile-sensors.service /etc/systemd/system/
+install -m 644 81-omamobile-ssc.rules /etc/udev/rules.d/
+install -D -m 644 iio-sensor-proxy-omamobile.conf /etc/systemd/system/iio-sensor-proxy.service.d/omamobile.conf
+install -m 755 omamobile-autorotate /usr/local/bin/
+mkdir -p /etc/omamobile; touch /etc/omamobile/sensors.enable
+systemctl daemon-reload; udevadm control --reload
+udevadm trigger --action=change /dev/fastrpc-adsp-secure || true
+systemctl enable omamobile-sensors.service
+# Autorotate must run inside the Hyprland session (polkit sensor claim).
+U=$(systemctl show -p User --value omamobile-hyprland.service 2>/dev/null); U=${U:-ml}
+A=$(getent passwd "$U" | cut -d: -f6)/.config/hypr/autostart.lua
+if [ -f "$A" ] && ! grep -q omamobile-autorotate "$A"; then
+  printf '\n-- Omarchy Mobile dodge: rotate with the accelerometer (needs /etc/omamobile/sensors.enable)\nhl.exec_cmd("omamobile-autorotate")\n' >> "$A"
+fi

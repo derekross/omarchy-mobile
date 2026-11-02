@@ -37,6 +37,15 @@ test("overview: an Omarchy release", () => {
   assert.strictEqual(o.canUpdate, true)
 })
 
+test("overview: a kernel update says whether slot B is written", () => {
+  const base = { ok: true, omarchy: "4.0.4-2", omarchy_update: "", update_count: 2, blockers: [] }
+  const w = M.overview(Object.assign({ kernel: { version: "7.3.0rc6.r4521.g0123456789ab-1", boot_update: "write", problem: "" } }, base))
+  assert.ok(w.body.includes("7.3.0rc6.r4521") && w.body.includes("restart boots it"), w.body)
+  const s = M.overview(Object.assign({ kernel: { version: "7.3.0rc6.r4521.g0123456789ab-1", boot_update: "skip", problem: "" } }, base))
+  assert.ok(s.body.includes("keeps the kernel it has"), s.body)
+  assert.ok(!M.overview(Object.assign({ kernel: null }, base)).body.includes("kernel"))
+})
+
 test("overview: packages only, up to date, blocked, not checked yet", () => {
   assert.strictEqual(M.overview({ ok: true, omarchy: "4.0.4-2", update_count: 1, blockers: [] }).title, "1 package update")
   const current = M.overview({ ok: true, omarchy: "4.0.4-2", update_count: 0, blockers: [] })

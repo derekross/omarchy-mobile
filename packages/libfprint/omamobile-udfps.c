@@ -1,5 +1,5 @@
 /*
- * Omarchy Mobile under-display fingerprint sensor (Google Pixel 7 Pro)
+ * Omarchy Mobile under-display fingerprint sensor (Google Pixel 7 Pro and 9a)
  *
  * Copyright (C) 2026 Derek Ross <derekross@gmail.com>
  *
@@ -728,7 +728,7 @@ fpi_device_omamobile_udfps_class_init (FpiDeviceOmamobileUdfpsClass *klass)
   object_class->finalize = fpi_device_omamobile_udfps_finalize;
 
   dev_class->id = FP_COMPONENT;
-  dev_class->full_name = "Pixel 7 Pro under-display fingerprint sensor (Omarchy Mobile)";
+  dev_class->full_name = "Under-display fingerprint sensor (Omarchy Mobile)";
   dev_class->type = FP_DEVICE_TYPE_VIRTUAL;
   dev_class->id_table = id_table;
   dev_class->nr_enroll_stages = OMAMOBILE_UDFPS_ENROLL_STAGES;

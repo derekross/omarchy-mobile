@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Bluetooth on the WCN7860 (peach): stack, hci_uart and a public
+# address, once per boot. After the Wi-Fi units, which load the power
+# sequencer and rfkill.
+[Unit]
+Description=Bluetooth for the WCN7860 (peach), once per boot
+After=omamobile-wifi-pcie.service omamobile-wifi-ath12k.service local-fs.target omamobile-kmod-overlay.service
+Wants=omamobile-wifi-pcie.service
+Before=bluetooth.service
+ConditionPathExists=!/run/omamobile-bt.tried
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/omamobile-bt
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

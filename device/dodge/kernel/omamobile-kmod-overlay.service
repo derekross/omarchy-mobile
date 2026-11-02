@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Omarchy Mobile dodge: per-release module overlay for test kernels
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target omamobile-adsp-battery.service omamobile-display-msm.service omamobile-wifi-pcie.service omamobile-wifi-ath12k.service omamobile-bt.service omamobile-touch.service omamobile-dodge-audio.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/omamobile-kmod-overlay
+
+[Install]
+WantedBy=sysinit.target

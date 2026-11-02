@@ -1,0 +1,123 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Bring up the Pixel 8 Pro's display driver at boot, hang-safe. gs_decon is
+# blacklisted for autoload (modprobe.d/omamobile-husky-display.conf), so
+# this script is the only thing that loads it, after a marker has been
+# written and synced. A load or bind that returns but fails is logged and
+# the display stays on simple-framebuffer. Only a load that never comes back
+# keeps the marker: the next boot finds it, leaves gs_decon alone and says
+# so; after reading the previous boot's log, run
+# "omamobile-husky-display-start --retry".
+#
+# The panel's DSI commands (gs_dsim_cmd.allow_tx, for brightness and
+# 120 Hz) are allowed only when the bootloader names the google-hk3 panel on
+# the command line (exynos_drm.panel_name=google-hk3, with the panel's id
+# appended by the bootloader), and before gs_decon loads, since gs-decon
+# decides on 120 Hz at probe. As omamobile-tegu-graphics-start does for the
+# Pixel 9a's panel.
+#   omamobile-husky-display-start [--retry]
+# OMAMOBILE_HUSKY_ROOT: a scratch root for the package tests (fake /sys, /proc).
+set -uo pipefail
+
+root=${OMAMOBILE_HUSKY_ROOT:-}
+if [[ -n $root ]]; then
+  [[ $root == /* && $root != / && -d $root ]] || exit 2
+fi
+state=$root/var/lib/omamobile
+marker=$state/husky-display-started
+cmdline=$root/proc/cmdline
+decon=$root/sys/bus/platform/devices/19470000.display-controller
+allow_tx=$root/sys/module/gs_dsim_cmd/parameters/allow_tx
+
+log() { echo "omamobile-husky-display: $*"; }
+# systemd-backlight restores the saved brightness in sysinit, before this
+# start allows the panel's commands: the HK3 driver keeps that level and
+# sends it with the next write. Write it again now that the panel takes
+# commands. (Ordering systemd-backlight after this start instead would put
+# the start before sysinit.target, where a hung load would block the boot.)
+restore_brightness() {
+  local bl level
+  for bl in "$root"/sys/class/backlight/*; do
+    [[ -e $bl/brightness ]] || continue
+    level=$(cat "$bl/brightness" 2>/dev/null) || continue
+    echo "$level" > "$bl/brightness" 2>/dev/null \
+      && log "brightness of ${bl##*/}: level $level sent"
+  done
+}
+loaded() { [[ -d $root/sys/module/$1 ]]; }
+# Wait for a device to bind to a driver: device dir, driver name, quarter seconds.
+bound() {
+  local i
+  for ((i = 0; i < $3; i++)); do
+    [[ $(readlink -f "$1/driver" 2>/dev/null) == */$2 ]] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+# The panel the bootloader named on the kernel command line, or nothing.
+panel_name() {
+  local word
+  for word in $(cat "$cmdline" 2>/dev/null); do
+    [[ $word == exynos_drm.panel_name=* ]] && { echo "${word#*=}"; return 0; }
+  done
+  echo ""
+}
+
+case ${1:-} in
+  '') ;;
+  --retry) rm -f "$marker" ;;
+  *) log "usage: omamobile-husky-display-start [--retry]"; exit 2 ;;
+esac
+
+if [[ -e $marker ]]; then
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the display stays on simple-framebuffer this boot."
+  log "after checking the previous boot's log, retry with: omamobile-husky-display-start --retry"
+  exit 0
+fi
+if [[ ! -e $decon ]]; then
+  log "no display controller in this DTB; nothing to do"
+  exit 0
+fi
+# Once per boot: a loaded driver is never unloaded or retried.
+if [[ ${1:-} != --retry ]] && loaded gs_decon; then
+  log "already started this boot"
+  exit 0
+fi
+
+mkdir -p "$state"
+printf '%s display\n' "$(date -Is)" > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+# gs_dsim_cmd is not guarded: it autoloads from its node ahead of this start
+# and sends nothing until allow_tx is on. Loading it here (a no-op when it
+# already is) makes the parameter file exist before the write.
+modprobe gs_dsim_cmd 2>/dev/null || true
+panel=$(panel_name)
+# the bootloader appends the panel's id (google-hk3.20800a on the first phone)
+if [[ $panel == google-hk3 || $panel == google-hk3.* ]]; then
+  if echo 1 > "$allow_tx" 2>/dev/null; then
+    log "panel $panel: DSI commands allowed (gs_dsim_cmd.allow_tx=1)"
+    restore_brightness
+  else
+    log "panel $panel: could not write $allow_tx; the display stays read-only at 60 Hz"
+  fi
+else
+  log "panel ${panel:-unnamed}: DSI commands stay off; the display stays read-only at 60 Hz"
+fi
+
+status=0
+# stage=2 is the full driver (the lower stages are bring-up probes)
+if ! modprobe gs_decon stage=2 fbdev=0; then
+  log "gs_decon failed (see dmesg); the display stays on simple-framebuffer"
+  status=1
+elif ! bound "$decon" gs-decon 60; then
+  log "the display controller did not bind to gs-decon (see dmesg)"
+  status=1
+else
+  log "up: display"
+fi
+
+# The load returned, so the marker is clear; --retry tries it again.
+rm -f "$marker"
+sync -f "$state" 2>/dev/null || sync
+exit $status

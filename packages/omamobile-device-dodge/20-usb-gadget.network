@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The initramfs brings up the CDC NCM gadget. This gives usb0 an address
+# after switch_root. The laptop is 172.16.42.2.
+#
+# The laptop does not forward traffic, so its default route must lose to
+# Wi-Fi's (NetworkManager uses metric 600 for wlan). Metric 900 keeps a
+# fallback via the laptop without stealing the default route.
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+DNS=1.1.1.1
+ConfigureWithoutCarrier=yes
+
+[Route]
+Gateway=172.16.42.2
+Metric=900

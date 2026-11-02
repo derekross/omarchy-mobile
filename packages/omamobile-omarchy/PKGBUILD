@@ -3,7 +3,7 @@
 pkgname=omamobile-omarchy
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile's Omarchy patches, re-applied after every Omarchy upgrade, and omamobile-update, Omarchy's update for a phone"
+pkgdesc="Omarchy Mobile's Omarchy patches, re-applied after every Omarchy upgrade, omamobile-update, Omarchy's update for a phone, and a kernel module cleanup that keeps the next boot's modules"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)

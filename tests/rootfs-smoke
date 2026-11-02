@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Smoke test of a root image from tools/build-rootfs, read through debugfs
 # (no root, no loop mount, nothing written):
-#   tests/rootfs-smoke out/omamobile-rootfs-<version>-aarch64.img.zst   (or a raw .img)
+#   tests/rootfs-smoke out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   (or a raw .img)
 # Checks the label, that there is no account but a locked root, the keyrings,
 # the [omamobile] repository and its place in pacman.conf, the first-boot
 # unit, the kernel modules, the MANIFEST, and that no per-machine state,
@@ -47,9 +47,20 @@ pass "keyrings: Arch Linux ARM, Omarchy, Omarchy Mobile"
 conf=$(cat_ /etc/pacman.conf)
 order=$(grep -o '^\[[a-z]*\]' <<<"$conf" | tr -d '[]' | tr '\n' ' ')
 [[ $order == "options omamobile omarchy core extra alarm aur " ]] || fail "pacman.conf repository order: $order"
-grep -q 'file:///var/lib/omamobile/repo/\$arch' <<<"$(cat_ /etc/pacman.d/omamobile-mirrorlist)" || fail "[omamobile] mirrorlist"
+servers=$(cat_ /etc/pacman.d/omamobile-mirrorlist | grep -E '^[[:space:]]*Server' || true)
+case $servers in
+  'Server = https://pkgs.omamobile.org/stable/$arch') channel=stable ;;
+  'Server = https://pkgs.omamobile.org/development/$arch') channel=development ;;
+  'Server = file:///var/lib/omamobile/repo/$arch') channel=local ;;
+  *) fail "[omamobile] mirrorlist: one Server line, for stable, development or local (has: ${servers:-none})" ;;
+esac
+recorded=$(cat_ /usr/share/omamobile/rootfs/MANIFEST | sed -n 's/^omamobile channel: //p')
+[[ -z $recorded || $recorded == "$channel" ]] || fail "the MANIFEST says channel $recorded, the mirrorlist $channel"
 exists /var/lib/omamobile/repo/aarch64/omamobile.db || fail "the [omamobile] repository is in the image"
-pass "[omamobile] first in pacman.conf, its repository in the image"
+if [[ $channel != local ]] && exists /var/lib/pacman/sync/omamobile.db; then
+  fail "no build-time [omamobile] index in an image that follows $channel"
+fi
+pass "[omamobile] first in pacman.conf, channel $channel, its repository in the image"
 
 exists /usr/bin/omamobile-firstboot || fail "omamobile-firstboot installed"
 exists /usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service || fail "the first-boot unit is enabled"
@@ -66,6 +77,15 @@ release=$(sed -n 's/^kernel modules: \([^ ]*\) .*/\1/p' <<<"$manifest")
 [[ -n $release ]] && exists "/usr/lib/modules/$release/modules.dep" || fail "kernel modules for $release, with depmod run"
 grep -q '^omamobile-device-[a-z0-9]* .* omamobile$' <<<"$manifest" || fail "a device package from [omamobile] in the MANIFEST"
 pass "MANIFEST, device package, modules for $release"
+# A device whose package ships boot files: the kernel is linux-omamobile,
+# the release the boot images were built from, with its slot-B hook, and
+# no AUTO_WRITE in the image (install-phone writes it)
+if exists /usr/share/omamobile/linux/kernel.release; then
+  [[ $(cat_ /usr/share/omamobile/linux/kernel.release) == "$release" ]] || fail "linux-omamobile is the MANIFEST's release $release"
+  exists /usr/bin/omamobile-boot-update || fail "omamobile-boot-update comes with linux-omamobile"
+  exists /etc/omamobile/boot-update.conf && fail "no boot-update.conf in the image (the installer writes it)"
+  pass "kernel package linux-omamobile ($release) and omamobile-boot-update, hook off in the image"
+fi
 
 # Images from before omamobile-omarchy patched Omarchy in build-inside
 if exists /usr/bin/omamobile-omarchy-patches; then
@@ -80,6 +100,15 @@ fi
 if exists /usr/lib/omamobile-omarchy/lock-pam; then
   grep -q 'pam_unix.so' <<<"$(cat_ /etc/pam.d/omarchy-lock-password)" || fail "the lock's PAM file is in the image"
   pass "the lock's PAM file (omarchy-lock-password) is in the image"
+fi
+
+# Voice out of the box (images from before it have no omamobile-voice): the
+# engine, its user daemon and the speech model omamobile-setup-user links
+if grep -q '^omamobile-voice ' <<<"$manifest"; then
+  exists /usr/bin/voxtype || fail "voxtype is installed with omamobile-voice"
+  exists /usr/lib/systemd/user/voxtype.service || fail "Voxtype's user unit is installed"
+  exists /usr/share/omamobile/voice/models/ggml-base.en.bin || fail "the base.en speech model is in the image"
+  pass "voice out of the box: voxtype, its user unit and base.en"
 fi
 
 exists /etc/pacman.d/gnupg && fail "no pacman keyring (it holds a private key)"

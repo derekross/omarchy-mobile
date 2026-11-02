@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# Ten minutes after boot rather than at boot: nothing on the boot path waits
+# for it, it doesn't compete with the session for storage, and the boot it
+# runs in has already started its kernel. A phone that never stays up that
+# long only keeps a few more trees until one does. Enabled by the package's
+# own timers.target.wants link.
+[Unit]
+Description=Prune old kernel module trees after boot
+
+[Timer]
+OnBootSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

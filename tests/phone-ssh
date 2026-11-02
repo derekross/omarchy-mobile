@@ -14,7 +14,7 @@ SH
 chmod +x "$scratch/ssh"
 real_ssh=$(command -v ssh || true)
 export PATH="$scratch:$PATH"
-unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_SHARE
+unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_SHARE OMAMOBILE_SSH_HOST_KEY_ALIAS
 tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
 grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
 grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
@@ -39,6 +39,22 @@ grep -Fx ControlMaster=auto "$scratch/shared" >/dev/null
 grep -Fx -- "$OMAMOBILE_SSH_HOST" "$scratch/shared" >/dev/null
 shared=$(sed -n '/^ControlPath=/p' "$scratch/shared")
 [[ $shared =~ /omamobile-ssh-[0-9a-f]{12}-%C$ ]]
+# Native Linux and rescue can share the USB address but use separate pins.
+OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh true >"$scratch/native"
+OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-rescue tools/phone-ssh true >"$scratch/rescue"
+grep -Fx HostKeyAlias=phone-native "$scratch/native" >/dev/null
+native=$(sed -n '/^ControlPath=/p' "$scratch/native")
+[[ $native != "$shared" && $native != $(sed -n '/^ControlPath=/p' "$scratch/rescue") ]]
+OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native tools/phone-ssh --stop >"$scratch/native-stop"
+grep -Fx -- "$native" "$scratch/native-stop" >/dev/null
+OMAMOBILE_SSH_HOST_KEY_ALIAS=phone-native OMAMOBILE_SSH_SHARE=0 tools/phone-ssh true >"$scratch/native-fresh"
+grep -Fx ControlPath=none "$scratch/native-fresh" >/dev/null
+for bad in 'two names' $'name\nother' '-option'; do
+  if OMAMOBILE_SSH_HOST_KEY_ALIAS=$bad tools/phone-ssh true >"$scratch/bad-alias" 2>/dev/null; then
+    echo 'not ok - invalid host-key alias accepted'; exit 1
+  fi
+  [[ ! -s $scratch/bad-alias ]]
+done
 # OpenSSH appends a dot and 16 random characters while binding a master.
 # Cover a normal Linux runtime directory and the longest decimal UID path.
 for runtime in /run/user/1000 /run/user/4294967294; do
@@ -79,6 +95,19 @@ print('ok - OpenSSH keeps alias host/port changes on separate masters')
 PY
 else
   echo 'ok - # skip: no OpenSSH for alias host/port configuration check'
+fi
+# Ask OpenSSH itself which known-hosts name it will use; never connect.
+if [[ -n $real_ssh ]]; then
+  python3 - "$real_ssh" "$scratch/native" <<'PY'
+import subprocess, sys
+from pathlib import Path
+options = Path(sys.argv[2]).read_text().splitlines()
+result = subprocess.run([sys.argv[1], '-G', '-F', '/dev/null', *options],
+                        check=True, capture_output=True, text=True)
+assert 'hostkeyalias phone-native' in result.stdout.splitlines()
+assert 'stricthostkeychecking true' in result.stdout.splitlines()
+print('ok - OpenSSH uses the explicit alias with strict host-key checking')
+PY
 fi
 tools/phone-ssh --fresh 'uname -r' >"$scratch/fresh"
 grep -Fx ControlPath=none "$scratch/fresh" >/dev/null

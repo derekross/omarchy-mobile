@@ -1,0 +1,23 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Install the dodge idle screen-off (no lock). Run as root, from this
+# directory (copied to the phone), or with it as $1. Idempotent.
+# - /usr/share/omamobile/idle-off/shell.qml and the user unit
+#   /etc/systemd/user/omamobile-idle-off.service, enabled globally.
+# - Omarchy's screensaver is switched off for $IDLE_USER (its own toggle,
+#   omarchy-toggle-screensaver turns it back on): it ran llvmpipe at about
+#   650 % CPU and never turned the screen off.
+# Nothing touches the lock or PAM. Undo: systemctl --global disable
+# omamobile-idle-off.service and remove the toggle file.
+set -eu
+SRC=${1:-$(dirname "$0")}
+IDLE_USER=${IDLE_USER:-ml}
+log() { echo "dodge-idle-install: $*"; }
+[ "$(id -u)" = 0 ] || { log "run as root"; exit 1; }
+install -D -m 644 "$SRC/omamobile-idle-off/shell.qml" /usr/share/omamobile/idle-off/shell.qml
+install -D -m 644 "$SRC/omamobile-idle-off.service" /etc/systemd/user/omamobile-idle-off.service
+systemctl --global enable omamobile-idle-off.service
+home=$(getent passwd "$IDLE_USER" | cut -d: -f6)
+runuser -u "$IDLE_USER" -- mkdir -p "$home/.local/state/omarchy/toggles"
+runuser -u "$IDLE_USER" -- touch "$home/.local/state/omarchy/toggles/screensaver-off"
+log "done; starts with the next graphical session (or: systemctl --user start omamobile-idle-off as $IDLE_USER)"

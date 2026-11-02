@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# ModemManager needs a net port for a QMI modem; SM8750 has no IPA driver yet.
+# A tun device tagged by 78-omamobile-mm-fake-net.rules stands in, so MM can
+# create the modem for control (SIM, registration, voice/SMS). No data.
+[Unit]
+Description=dodge stand-in net port for ModemManager (no IPA yet)
+ConditionPathExists=/etc/omamobile/modem-probe.enable
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ip tuntap add mode tun name rmnet_mm0
+ExecStop=/usr/bin/ip tuntap del mode tun name rmnet_mm0
+
+[Install]
+WantedBy=multi-user.target

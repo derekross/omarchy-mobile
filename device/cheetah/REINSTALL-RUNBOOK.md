@@ -1,12 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Reinstall runbook (cheetah): a clean Omarchy Mobile install with the installer
 
-Status (2026-10-13): **written and tested offline, not run.** Phase 5 of the
-rename plan: wipe the hand-installed root on `userdata` and install the
-renamed system with `tools/install-phone`, then put the phone's own data back
-with `tools/phone-provision`. The human runs or approves every step. Nothing
-here writes anything but slot B and `userdata`; stock Android on slot A stays
-the way back.
+Status (2026-10-13; updated 2026-11-02): **the first clean reinstall passed** (section 10
+lists the steps that passed and what was fixed afterwards). That run was
+Phase 5 of the rename plan: wipe the hand-installed root on `userdata` and
+install the renamed system with `tools/install-phone`, then put the phone's
+own data back with `tools/phone-provision`. Section 4a and the install
+without a `phone-config.tar`, added on 2026-10-30, have no result in section
+10 yet. The human runs or approves every step. Nothing here writes anything
+but slot B and `userdata`; stock Android on slot A stays the way back.
 
 The tools, all offline-tested (`tests/all`):
 
@@ -14,14 +16,14 @@ The tools, all offline-tested (`tests/all`):
 | --- | --- | --- |
 | `tools/build-packages` | laptop (Arch Linux ARM container, qemu) | builds `packages/*` for aarch64, signs them, `out/repo/aarch64` |
 | `bin/omamobile kernel/modules/initramfs/images` | laptop (build container) | kernel, modules tarball, initramfs (now with `resize2fs`), slot B images |
-| `tools/build-rootfs` | laptop (Arch Linux ARM container) | `out/omamobile-rootfs-<date>-aarch64.img.zst` (+ `.sha256`, `.MANIFEST`) |
+| `tools/build-rootfs` | laptop (Arch Linux ARM container) | `out/omamobile-rootfs-<device>-<date>-aarch64.img.zst` (+ `.sha256`, `.MANIFEST`) |
 | `tools/install-phone` | laptop, phone in fastboot | checks, questions, `firstboot.conf` into a local image copy, then only `fastboot flash <img>_b`, `flash userdata`, `--set-active=b`, `reboot` |
 | `omamobile-firstboot` | phone, first boot | user, keys, firewall, Omarchy's setup, autologin and lock |
 | `tools/phone-provision` | laptop, over USB SSH | Google's firmware and vendor trees from the factory image; modem props, NV sums, camera data, home screens, fingerprint state from the backup (without a `phone-config.tar`: the NV sums from the owner's NV backup, the board id from the phone's bootconfig) |
 
 Each step lists its commands, what to expect, a **stop** condition, the
 rollback and a risk level. Read-only steps come first. Quote results (with
-`uname -r`) into section 7 when done; check every quote for identifiers
+`uname -r`) into section 10 when done; check every quote for identifiers
 (MAC addresses, serials, SSIDs) first.
 
 **Without a `phone-config.tar`.** Sections 1, 5 and 7 are written for a
@@ -152,7 +154,7 @@ RELEASES §5.2).
 ### B3. Root image (risk none; about 20 minutes)
 
 ```sh
-tools/build-rootfs                         # out/omamobile-rootfs-<date>-aarch64.img.zst, runs tests/rootfs-smoke
+tools/build-rootfs                         # out/omamobile-rootfs-<device>-<date>-aarch64.img.zst, runs tests/rootfs-smoke
 less out/omamobile-rootfs-*-aarch64.MANIFEST
 ```
 
@@ -209,7 +211,7 @@ version, stop and ask (CONTRIBUTING §3.1).
 ### I2. Dry run (risk none: reads variables, prepares a local copy, writes nothing)
 
 ```sh
-tools/install-phone --dry-run --bootloader-slots-match <version from I1>
+tools/install-phone --dry-run --reinstall --bootloader-slots-match <version from I1>
 ```
 
 Answer the questions (user name, PIN or password twice, host name, time
@@ -222,7 +224,7 @@ five `fastboot flash <image>_b`, `fastboot flash userdata <work>/root.simg`,
 ### I3. Install (risk HIGH: erases userdata; slot A untouched)
 
 ```sh
-tools/install-phone --bootloader-slots-match <version from I1>
+tools/install-phone --reinstall --bootloader-slots-match <version from I1>
 ```
 
 Same answers; type `cheetah`. Expect `OKAY` from fastboot for each image,
@@ -296,6 +298,26 @@ found by `PARTNAME` in `/sys/class/block/*/uevent` (the Arch root has no
 read-only. Nothing here writes to the phone. A section 4a backup from an
 earlier install will do instead while the phone's partitions still match
 it: V3's commands for this case, with `B` set to that backup, print `SAME`.
+
+`tools/nv-backup "$B"` (also in the release bundle's `tools/`) does N1 and
+N2 in one read-only run, with the partitions from the descriptor's
+`NV_PARTS` and `NV_BACKUP_EXTRA`: it stops before copying on any `none`,
+`ro=0`, mount or duplicate `PARTNAME`, copies with `dd`, compares each copy
+with a second read on the phone, and writes `SHA256SUMS`, `partitions.txt`
+and `NV-BACKUP` (directory 700, files 600). `tools/nv-backup --check "$B"`
+is the later check against the phone (`devinfo` may differ: its
+slot flags change after a flash, a fallback to slot A or the boot-success
+mark). The blocks below are the same
+steps by hand.
+
+**Result, 2026-11-02** (`7.3.0-rc6-omamobile-push1-g2219cc6cda77`): the
+first version (8eccbbcc), one `dd` stream per partition, failed in 5 of 5
+runs: each time one stream over the USB NCM link died partway (ssh exit
+255), on a different partition. The chunked version (3ab19983, 8 MiB
+chunks, each size-checked and retried) completed: all 7 partitions
+verified against the phone (`modem_b` needed 15 chunk retries), `--check`
+printed SAME for all, and `efs`, `efs_backup`, `modem_userdata` and
+`persist` are identical to the 2026-10-30 backup.
 
 ### N1. Find the partitions, read-only and unmounted (phone, read-only; risk none)
 
@@ -456,7 +478,7 @@ difference.
 | S11 | Shell | home screens, widgets, quick settings, one app per screen | the imported layout |
 | S12 | Update path | `omarchy update` in a terminal | finishes; `[omamobile]` first |
 
-Record each result in section 7.
+Record each result in section 10.
 
 ## 7. Fingerprint (needs the human's explicit go; IRREVERSIBLE)
 

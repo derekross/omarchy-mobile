@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Load ath12k once per boot, after the radio's power sequence and the
+# PCIe rescan. No restart: a second ath12k load on one boot oopses.
+[Unit]
+Description=ath12k for the WCN7860 (peach), loaded once
+After=omamobile-wifi-pcie.service local-fs.target
+Requires=omamobile-wifi-pcie.service
+ConditionPathExists=!/run/omamobile-ath12k.tried
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/omamobile-wifi-ath12k
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

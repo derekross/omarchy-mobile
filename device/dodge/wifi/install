@@ -1,0 +1,54 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Install the dodge Wi-Fi bring-up on the phone. Run as root, from this
+# directory (copied to the phone), or with the directory as $1.
+# Idempotent: re-running changes nothing that is already right.
+#
+# Installs omamobile-wifi-pcie and omamobile-wifi-ath12k (scripts and
+# units) and enables both units. It does not start them: ath12k must be
+# loaded at most once per boot, so the next boot loads it.
+#
+# It also links the WCN7860 firmware directory to the WCN7850 one.
+# ath12k with the QCC2072 datapath names peach (17cb:110e) "wcn7860
+# hw2.0" and looks in ath12k/WCN7860/hw2.0. The files are the same peach
+# firmware already in WCN7850/hw2.0, taken from the owner's own image.
+# No firmware is shipped or committed here. The ath12k.ko and the crypto
+# modules in /usr/local/lib/omamobile are installed separately.
+set -eu
+SRC=${1:-$(dirname "$0")}
+FW=/lib/firmware/ath12k
+
+log() { echo "dodge-wifi-install: $*"; }
+
+[ "$(id -u)" = 0 ] || { log "run as root"; exit 1; }
+
+for f in omamobile-wifi-pcie omamobile-wifi-ath12k; do
+	install -D -m 755 "$SRC/$f" "/usr/local/sbin/$f"
+	install -D -m 644 "$SRC/$f.service" "/etc/systemd/system/$f.service"
+done
+systemctl daemon-reload
+systemctl enable omamobile-wifi-pcie.service omamobile-wifi-ath12k.service
+
+# Firmware symlink: WCN7860/hw2.0 -> ../WCN7850/hw2.0
+if [ ! -d "$FW/WCN7850/hw2.0" ]; then
+	log "warning: $FW/WCN7850/hw2.0 missing; install the firmware first"
+elif [ -L "$FW/WCN7860/hw2.0" ]; then
+	[ "$(readlink "$FW/WCN7860/hw2.0")" = ../WCN7850/hw2.0 ] ||
+		ln -sfn ../WCN7850/hw2.0 "$FW/WCN7860/hw2.0"
+elif [ -e "$FW/WCN7860/hw2.0" ]; then
+	log "warning: $FW/WCN7860/hw2.0 is a real directory; left alone"
+else
+	mkdir -p "$FW/WCN7860"
+	ln -s ../WCN7850/hw2.0 "$FW/WCN7860/hw2.0"
+fi
+log "firmware: $FW/WCN7860/hw2.0 -> $(readlink "$FW/WCN7860/hw2.0" 2>/dev/null || echo '?')"
+# Regulatory country for set-wireless-regdom (udev runs it when cfg80211
+# loads). The packaged file sets none, so the helper exits 1. The owner is
+# in Denmark.
+RD=/etc/conf.d/wireless-regdom
+if [ -f "$RD" ] && ! grep -q '^WIRELESS_REGDOM="DK"' "$RD"; then
+	sed -i 's/^WIRELESS_REGDOM=.*/#&/' "$RD"
+	echo 'WIRELESS_REGDOM="DK"' >> "$RD"
+	log "$RD: WIRELESS_REGDOM=DK"
+fi
+log "done; the next boot loads ath12k"

@@ -1,0 +1,415 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# husky-deadman-phone: the phone half of tools/husky-deadman. Runs ONE charger
+# bring-up step on the Pixel 8 Pro detached from SSH, under a dead-man switch
+# and a battery guard. Ported from tools/usbc-deadman-phone (cheetah); the
+# Type-C / USB data-switch parts are left out on purpose: on husky the USB
+# gadget is built in and nothing here loads tcpci_maxim (that is M6).
+#
+#   1. refuse unless the preconditions hold (nothing is applied if not);
+#   2. arm the SoC watchdog (/dev/watchdog0 = 10060000.watchdog) with a feeder
+#      that stops feeding at a deadline; it stays armed through the soak;
+#   3. save the charger registers, apply the step, log everything to /dev/kmsg
+#      and /var/log/husky-deadman.log first;
+#   4. the guard reads the battery every 2 s and undoes the step on a breach;
+#   5. no confirmation (a NEW SSH login on the desktop): undo, wait --grace for a
+#      confirmation; still nothing, or the module will not unload: stop feeding
+#      the watchdog, so the phone resets and boots with the charger blocked.
+#
+# THE UNDO ENDS WITH CHARGING OFF. Unloading max77759_charger does not stop
+# charging (the driver has no .remove and leaves mode 0x5 on), so the undo
+# restores the saved current/voltage/input limits and then sets the mode to
+# 0x4 (BUCK_ON: the phone runs from USB, the battery is not charged), through
+# OFF. The mode that was saved is only logged. After an undo reboot before
+# another b3-charger: the MFD's register cache no longer matches the chip.
+#
+# Usage (normally started by tools/husky-deadman):
+#   husky-deadman-phone run STEP [--confirm S] [--grace S] [--ilim UA] [--soak S]
+#                       [--no-watchdog] [--allow-soc]
+#   husky-deadman-phone confirm | undo STEP | dump | status
+#
+# STEP: noop | b3-charger | wd-drill
+#   noop        applies nothing; exercises refuse/confirm/watchdog/undo.
+#   wd-drill    applies nothing and stops feeding the watchdog: the phone MUST
+#               reset by itself within ~15-20 s. Needs the user present.
+#   b3-charger  modprobe max77759_charger default_ilim_ua=UA temp_guard=1
+#               guard_psy=max170xx_battery.
+#
+# The only charger writes are in restore_charger (the undo path).
+set -u
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+D=/run/husky-deadman
+LOG=/var/log/husky-deadman.log
+CHG=0x69
+PSY=/sys/class/power_supply/max170xx_battery
+WD=/dev/watchdog0
+confirm_s=90 grace_s=60 ilim=500000 use_wd=1 soak_s=600 allow_soc=0
+gpid=
+
+# Guard limits (uV, uA, 0.1 C). The DT caps the float voltage at 4.2 V.
+V_TRIP=4300000 V_MIN=3000000 I_TRIP=1700000 T_MAX=450 T_MIN=50
+# Preconditions
+SOC_MIN=30 SOC_MAX=80 START_V_MAX=4150000 START_T_MIN=100 START_T_MAX=400
+ILIM_MAX=900000
+
+log() {
+  local m="husky-deadman: $*"
+  echo "$m" > /dev/kmsg 2>/dev/null
+  echo "$(date '+%F %T') $m" >> "$LOG" 2>/dev/null
+  echo "$m"
+}
+
+i2c_bus() {
+  local d
+  for d in /sys/bus/i2c/devices/i2c-*; do
+    if readlink -f "$d" | grep -q 10cb0000.i2c; then echo "${d##*-}"; return 0; fi
+  done
+  return 1
+}
+BUS=$(i2c_bus) || BUS=
+rd() { i2cget -f -y "$BUS" "$1" "$2" 2>/dev/null; }     # rd ADDR REG
+wr() { log "i2cset $1 reg $2 = $3"; i2cset -f -y "$BUS" "$1" "$2" "$3"; }
+hexok() { [[ ${1:-} =~ ^0x[0-9a-fA-F]{1,2}$ ]]; }
+
+psy() { cat "$PSY/$1" 2>/dev/null; }                  # psy FILE
+udc_state() { cat /sys/class/udc/*/state 2>/dev/null || echo none; }
+charger_loaded() { lsmod | grep -q '^max77759_charger '; }
+
+# ---- charger registers: saved before the step, written back by the undo ----
+# 0xbb CHG_CNFG_02 (fast-charge current), 0xbd CNFG_04 (float voltage),
+# 0xc2 CNFG_09 (input current limit): written back. 0xb9 CNFG_00 (mode): only
+# logged. 0xbf (CHGPROT), 0xc5 CNFG_12 and 0xcb CNFG_18 are also written by
+# the driver's probe but need the CHGPROT unlock; they are recorded, never
+# written, so a person can compare them (dump).
+SAVE_RESTORE="0xbb 0xbd 0xc2"
+SAVE_ONLY="0xb9 0xbf 0xc5 0xcb"
+save_charger() {
+  local r v
+  rm -f $D/charger.saved
+  for r in $SAVE_RESTORE $SAVE_ONLY; do
+    v=$(rd $CHG $r)
+    hexok "$v" || { log "cannot read charger register $r (got '$v')"; rm -f $D/charger.saved.tmp; return 1; }
+    echo "$r $v" >> $D/charger.saved.tmp
+  done
+  mv $D/charger.saved.tmp $D/charger.saved
+  log "saved charger registers: $(tr '\n' ' ' < $D/charger.saved)"
+}
+
+# limits first, then the mode through OFF to BUCK_ON (0x4): the system runs
+# from USB and the battery is not charged
+restore_charger() {
+  local r v cur
+  if [[ -f $D/charger.saved ]]; then
+    while read -r r v; do
+      case " $SAVE_RESTORE " in *" $r "*) hexok "$v" && wr $CHG "$r" "$v" ;; esac
+    done < $D/charger.saved
+    log "saved mode was $(awk '$1 == "0xb9" {print $2}' $D/charger.saved) (not restored: undo leaves charging off)"
+  else
+    log "no saved charger registers: only the mode is set"
+  fi
+  cur=$(rd $CHG 0xb9)
+  hexok "$cur" || { log "cannot read mode (got '$cur'); writing 0x04 blind"; cur=0x00; }
+  wr $CHG 0xb9 $(printf '0x%02x' $(( cur & 0xf0 )))
+  wr $CHG 0xb9 $(printf '0x%02x' $(( (cur & 0xf0) | 0x4 )))
+  cur=$(rd $CHG 0xb9)
+  log "charger mode now $cur (0x4 = system from USB, no charging)"
+  hexok "$cur" && (( (cur & 0xf) == 4 ))
+}
+
+# ---- preconditions: any failure means nothing is applied ----
+refuse() { log "refusing: $*"; echo "refused: $*" > $D/result; }
+
+preflight() {   # preflight STEP
+  local v t s
+  tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -qx 'google,zuma-husky' ||
+    { refuse "this is not a Pixel 8 Pro (device tree compatible is not google,zuma-husky)"; return 1; }
+  [[ -n "$BUS" ]] || { refuse "no i2c bus for 10cb0000.i2c"; return 1; }
+  command -v i2cget >/dev/null || { refuse "i2c-tools missing"; return 1; }
+  [[ -d $PSY ]] || { refuse "no battery power supply $PSY (load max17042_battery)"; return 1; }
+  [[ $(udc_state) == configured ]] || { refuse "USB gadget not configured ($(udc_state))"; return 1; }
+  [[ $ilim =~ ^[0-9]+$ ]] && (( ilim <= ILIM_MAX )) || { refuse "--ilim '$ilim' must be a number up to $ILIM_MAX"; return 1; }
+  charger_loaded && { refuse "max77759_charger is already loaded"; return 1; }
+  # the recovery boot depends on the charger being blocked at boot (the drill proves it)
+  if [[ $1 != noop ]]; then
+    grep -qsE '^(install|blacklist) max77759_charger( |$)' /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf ||
+      { refuse "max77759_charger is not blocked in modprobe.d (blacklist, or install ... /bin/false): a reset would not boot with the charger blocked"; return 1; }
+  fi
+  [[ $1 == noop || $1 == wd-drill ]] && return 0
+  lsmod | grep -q '^max77759 ' || { refuse "max77759 (MFD) not loaded"; return 1; }
+  lsmod | grep -qE '^(tcpci_maxim|tcpci|tcpm) ' && { refuse "a Type-C driver is loaded (that is M6)"; return 1; }
+  [[ -e $D/b3-done ]] && { refuse "b3-charger already ran in this boot: reboot first (the MFD register cache no longer matches the chip)"; return 1; }
+  v=$(psy voltage_now); t=$(psy temp); s=$(psy capacity)
+  [[ $v =~ ^[0-9]+$ && $t =~ ^-?[0-9]+$ && $s =~ ^[0-9]+$ ]] || { refuse "battery readings unreadable (v='$v' t='$t' soc='$s')"; return 1; }
+  (( v >= V_MIN && v <= V_TRIP )) || { refuse "voltage_now $v uV is not sane"; return 1; }
+  (( v <= START_V_MAX )) || { refuse "voltage_now $v uV is above $START_V_MAX uV: too full to start"; return 1; }
+  (( t >= START_T_MIN && t <= START_T_MAX )) || { refuse "temp $t (0.1 C) outside $START_T_MIN..$START_T_MAX"; return 1; }
+  # a sensor stuck at the 22.0 C default would let the temperature guard pass blind
+  if [[ $t == 220 && -z ${ALLOW_STUCK_TEMP:-} ]]; then
+    refuse "temp is exactly 22.0 C: treated as a stuck sensor (set ALLOW_STUCK_TEMP=1 to accept)"; return 1
+  fi
+  if ((!allow_soc)) && (( s < SOC_MIN || s > SOC_MAX )); then
+    refuse "capacity $s % outside $SOC_MIN..$SOC_MAX % (--allow-soc to override)"; return 1
+  fi
+  return 0
+}
+
+# ---- steps ----
+apply() {
+  case "$1" in
+    noop|wd-drill) log "step $1: nothing to apply" ;;
+    b3-charger)
+      save_charger || return 1
+      touch $D/b3-done
+      log "modprobe max77759_charger default_ilim_ua=$ilim temp_guard=1 guard_psy=max170xx_battery"
+      modprobe --ignore-install max77759_charger default_ilim_ua="$ilim" temp_guard=1 guard_psy=max170xx_battery || return 1
+      sleep 2
+      charger_loaded || return 1
+      [[ -d /sys/class/power_supply/max77759-charger ]] || { log "max77759_charger loaded but no max77759-charger power_supply: the probe failed"; return 1; } ;;
+    *) log "unknown step $1"; return 1 ;;
+  esac
+}
+
+# revert STEP; returns 1 if the module would not unload (caller must reset)
+revert() {
+  log "reverting step $1 (udc $(udc_state))"
+  case "$1" in
+    b3-charger)
+      log "modprobe -r max77759_charger"
+      modprobe -r max77759_charger
+      if charger_loaded; then
+        log "max77759_charger did NOT unload; forcing charging off anyway"
+        restore_charger
+        return 1
+      fi
+      restore_charger || { log "charging is NOT confirmed off (mode readback is not 0x4)"; return 1; } ;;
+  esac
+  return 0
+}
+
+# ---- guard: reads the battery every 2 s while the step is applied ----
+# A breach, or 3 failed reads in a row, writes $D/trip; the main loop undoes.
+guard() {
+  local bad=0 v t i
+  while :; do
+    v=$(psy voltage_now); t=$(psy temp); i=$(psy current_now)
+    if [[ $v =~ ^[0-9]+$ && $t =~ ^-?[0-9]+$ && $i =~ ^-?[0-9]+$ ]]; then
+      bad=0
+      if   (( v > V_TRIP ));  then echo "voltage $v uV > $V_TRIP" > $D/trip; return 1
+      elif (( v < V_MIN ));   then echo "voltage $v uV < $V_MIN (not sane)" > $D/trip; return 1
+      elif (( t > T_MAX ));   then echo "temp $t > $T_MAX (0.1 C)" > $D/trip; return 1
+      elif (( t < T_MIN ));   then echo "temp $t < $T_MIN (0.1 C)" > $D/trip; return 1
+      elif (( i > I_TRIP ));  then echo "charging current $i uA > $I_TRIP" > $D/trip; return 1
+      elif (( i < -I_TRIP )); then echo "discharge current $i uA < -$I_TRIP" > $D/trip; return 1
+      fi
+    else
+      bad=$((bad + 1))
+      if (( bad >= 3 )); then echo "battery unreadable 3 times (v='$v' t='$t' i='$i')" > $D/trip; return 1; fi
+    fi
+    echo "$(date +%T) v=$v t=$t i=$i" > $D/guard.last
+    sleep 2
+  done
+}
+
+# kill the guard so it can neither trip a later run nor outlive this one
+guard_kill() {
+  [[ -n "$gpid" ]] && { kill "$gpid" 2>/dev/null; wait "$gpid" 2>/dev/null; }
+  gpid=
+  if [[ -f $D/guard.pid ]]; then
+    kill "$(cat $D/guard.pid)" 2>/dev/null
+    rm -f $D/guard.pid
+  fi
+}
+
+# ---- watchdog (feeder as in usbc-deadman-phone) ----
+wd_arm() {
+  echo $(( $(date +%s) + confirm_s + 30 )) > $D/deadline
+  rm -f $D/disarm $D/wd
+  (
+    exec 3>$WD || exit 1
+    echo armed > $D/wd
+    said=0
+    while :; do
+      if [[ -e $D/disarm ]]; then printf V >&3; echo disarmed > $D/wd; exit 0; fi
+      if (( $(date +%s) >= $(cat $D/deadline 2>/dev/null || echo 0) )); then
+        if ((!said)); then
+          echo "husky-deadman: watchdog deadline passed, no longer feeding: reset in ~15 s" > /dev/kmsg
+          sync; said=1
+        fi
+        sleep 2; continue          # still looks for disarm, but does not feed
+      fi
+      said=0
+      printf k >&3
+      sleep 2
+    done
+  ) &
+  sleep 1
+  [[ $(cat $D/wd 2>/dev/null) == armed ]]
+}
+wd_extend() { ((use_wd)) && echo $(( $(date +%s) + $1 )) > $D/deadline; }
+wd_disarm() {   # waits (bounded) until the feeder wrote the magic close
+  ((use_wd)) || return 0
+  touch $D/disarm
+  local i
+  for i in $(seq 1 12); do
+    [[ $(cat $D/wd 2>/dev/null) == disarmed ]] && break
+    sleep 1
+  done
+  [[ $(cat $D/wd 2>/dev/null) == disarmed ]] && log "watchdog: disarmed" ||
+    log "WARNING: the watchdog feeder did not confirm the magic close (state '$(cat $D/wd 2>/dev/null)'); a reset may follow"
+}
+wd_holders() {
+  local f p out=
+  for f in /proc/[0-9]*/fd/*; do
+    [[ $(readlink "$f" 2>/dev/null) == /dev/watchdog* ]] || continue
+    p=${f#/proc/}; p=${p%%/*}
+    out+="$(cat /proc/$p/comm 2>/dev/null)[$p]; "
+  done
+  echo "${out:-nobody visible}"
+}
+
+final_reset() {
+  log "=== step $1: could not settle (udc $(udc_state), charger loaded: $(charger_loaded && echo yes || echo no)); resetting"
+  echo reset > $D/result
+  sync
+  if ((use_wd)); then wd_extend 0; sleep 40; fi
+  log "still alive: crashing (panic=10 reboots)"
+  sync
+  echo c > /proc/sysrq-trigger
+}
+
+wait_confirm() {   # wait_confirm SECS; 0 confirmed, 1 timeout, 2 guard trip
+  local end=$(( $(date +%s) + $1 ))
+  while (( $(date +%s) < end )); do
+    [[ -e $D/confirm ]] && return 0
+    [[ -e $D/trip ]] && return 2
+    if [[ -n "$gpid" ]] && ! kill -0 "$gpid" 2>/dev/null; then
+      echo "guard process died" > $D/trip; return 2
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# undo after a trip; always ends with a result and the watchdog settled
+trip_undo() {   # trip_undo STEP
+  local why
+  why=$(cat $D/trip 2>/dev/null)
+  log "GUARD TRIP: $why; undoing $1"
+  guard_kill
+  wd_extend $(( grace_s + 20 ))
+  if revert "$1"; then
+    echo "tripped: $why" > $D/result
+    wd_disarm
+    return 1
+  fi
+  final_reset "$1"
+  return 1
+}
+
+run() {
+  local step="$1" rc
+  mkdir -p $D
+  guard_kill
+  rm -f $D/confirm $D/result $D/trip $D/guard.last
+  log "=== step $step: confirm ${confirm_s}s, grace ${grace_s}s, soak ${soak_s}s, watchdog $use_wd, ilim $ilim; udc $(udc_state); battery v=$(psy voltage_now) t=$(psy temp) soc=$(psy capacity)"
+  preflight "$step" || return 1
+  if ((use_wd)); then
+    wd_arm || { refuse "cannot open $WD, held by: $(wd_holders) (stop that, or --no-watchdog)"; return 1; }
+    log "watchdog armed"
+  fi
+  if [[ $step == wd-drill ]]; then
+    log "wd-drill: no longer feeding the watchdog on purpose; the phone must reset in about 15-20 s"
+    echo drill > $D/result; sync; wd_extend 0; sleep 90
+    log "wd-drill: STILL ALIVE after 90 s, the watchdog did not reset the phone"
+    echo "failed: watchdog did not reset the phone" > $D/result
+    wd_extend 60; wd_disarm
+    return 1
+  fi
+  if ! apply "$step"; then
+    log "apply failed: reverting now"
+    wd_extend $(( grace_s + 20 ))
+    if revert "$step"; then
+      echo "failed: step $step did not apply and was undone; see $LOG" > $D/result
+      wd_disarm
+      return 1
+    fi
+    final_reset "$step"
+    return 1
+  fi
+  guard &
+  gpid=$!
+  echo "$gpid" > $D/guard.pid
+  wait_confirm "$confirm_s"; rc=$?
+  if (( rc == 2 )); then trip_undo "$step"; return 1; fi
+  if (( rc == 0 )); then
+    log "step $step confirmed; the guard and the watchdog keep running for ${soak_s}s"
+    echo confirmed > $D/result
+    local end=$(( $(date +%s) + soak_s ))
+    while (( $(date +%s) < end )); do
+      if [[ -e $D/trip ]]; then trip_undo "$step"; return 1; fi
+      if ! kill -0 "$gpid" 2>/dev/null; then
+        echo "guard process died" > $D/trip; trip_undo "$step"; return 1
+      fi
+      wd_extend 60          # the feeder only runs out if this loop dies
+      sleep 2
+    done
+    guard_kill
+    if [[ -e $D/trip ]]; then trip_undo "$step"; return 1; fi
+    wd_disarm
+    log "=== step $step SOAKED clean; left applied"
+    echo soaked > $D/result
+    return 0
+  fi
+  log "no confirmation within ${confirm_s}s"
+  guard_kill
+  wd_extend $(( grace_s + 20 ))
+  if ! revert "$step"; then final_reset "$step"; return 1; fi
+  if wait_confirm "$grace_s"; then
+    wd_disarm
+    log "=== step $step REVERTED, link back (udc $(udc_state))"
+    echo reverted > $D/result
+    return 1
+  fi
+  final_reset "$step"
+}
+
+dump() {
+  local r
+  echo "i2c bus ${BUS:-none}; udc $(udc_state); modules: $(lsmod | awk '/max77759|tcpci|tcpm|max17042/ {printf "%s ", $1}')"
+  echo "battery: v=$(psy voltage_now) uV i=$(psy current_now) uA t=$(psy temp) (0.1 C) soc=$(psy capacity) % status=$(psy status)"
+  [[ -f $D/guard.last ]] && echo "guard last: $(cat $D/guard.last)"
+  if [[ -n "$BUS" ]]; then
+    echo "charger 0x69 (read only):"
+    for r in 0xb5 0xb6 0xb9 0xbb 0xbd 0xbf 0xc2 0xc5 0xcb; do echo "  $r = $(rd $CHG $r)"; done
+  fi
+}
+
+cmd="${1:-}"; shift || true
+step=
+case "$cmd" in
+  run|undo) step="${1:?STEP}"; shift ;;
+esac
+while (($#)); do
+  case "$1" in
+    --confirm) confirm_s="${2:?}"; shift ;;
+    --grace) grace_s="${2:?}"; shift ;;
+    --ilim) ilim="${2:?}"; shift ;;
+    --soak) soak_s="${2:?}"; shift ;;
+    --no-watchdog) use_wd=0 ;;
+    --allow-soc) allow_soc=1 ;;
+    *) echo "unknown option $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+mkdir -p $D
+case "$cmd" in
+  run) run "$step" ;;
+  confirm) touch $D/confirm; echo "confirmed $(date +%T)" ;;
+  undo) revert "$step" ;;
+  dump) dump ;;
+  status) cat $D/result 2>/dev/null || echo none ;;
+  *) echo "usage: husky-deadman-phone run|confirm|undo|dump|status" >&2; exit 1 ;;
+esac

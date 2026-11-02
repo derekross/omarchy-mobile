@@ -2,6 +2,16 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-02: a kernel update through pacman, booted and rolled back
+
+Release kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (tag `kernel-2026.11.01`), from the push1 build `7.3.0-rc6-omamobile-push1-g2219cc6cda77`; linux-omamobile `7.3.0rc6.r635.g2219cc6cda77-1`, omamobile-boot-update 0.1.0, device-cheetah 0.1.38 (#320).
+
+- **The release kernel booted** [V]: `7.3.0-rc6-omamobile-g2219cc6cda77` booted from slot B after linux-omamobile's pacman hook wrote `boot_b` and `vendor_kernel_boot_b`. phone-smoke's required rows were ok, and so were the GPU, Wi-Fi, Bluetooth, touch, sound, sensors and all 4 cameras.
+- **Rollback** [V]: `omamobile-boot-update rollback` restored slot B byte for byte to the saved set, and the push1 kernel booted again.
+- **The phone builds the laptop's bytes** [V]: `init_boot`, `vendor_boot` and `dtbo` built on the phone were identical to `bin/omamobile images` output.
+- **Write counters** [V]: `queue/iostats` is 1. Field 7 of each slot B partition's `stat` rises with a write and reads 0 after a reboot, which is what the hook's "booted" check relies on.
+- Details and every step's lines: [KERNEL-UPDATE-PLAN](KERNEL-UPDATE-PLAN.md) §4.
+
 ## 2026-10-30: the charger reads offline at Full, and slot B now needs its AVB footers
 
 Kernels `7.3.0-rc6-omamobile-push1-00566-g66497d0197dc` (10-29),
@@ -165,6 +175,38 @@ A second Pixel 7 Pro (cheetah MP1.0 B0), installed with
   doesn't chain them, or has verification disabled, never reads them.
   Issue #11's phone booted after `fastboot oem disable-verification`,
   which by its name sets that flag [I].
+
+## 2026-10-27: earpiece mode, written offline (omamobile-audio 0.5.5)
+
+- **Not run on the phone yet; the runbook is AOC-PLAN C9k.**
+  `omamobile-speaker-protection earpiece on` puts the amplifiers on
+  stock's handset path at 20 dB under stock's gain: the top amplifier
+  alone, DSP bypassed, 657/6, the bottom at Digital PCM Volume 0, and the
+  watchdog in earpiece mode, which `on` waits for before it unmutes.
+  `off` restores and reads back every control. A "Voice Call" UCM verb
+  (never the default) has an Earpiece sink on the speaker's PCM that
+  switches the mode through `omamobile-earpiece@on|off.service` and a
+  polkit rule. Earpiece mode refuses while the boost converter is on,
+  because it follows the earpiece's analog gain of 6 (C9j). It never
+  touches the boost peak current: stock's in-call 3.5 A and gain 7 stay
+  out.
+- **A smart filter follows the default sink when its target is gone.** On
+  the phone, with the Voice Call profile active (the speaker sink gone, the
+  Earpiece sink the default), `pw-link -l` showed the speaker filter's
+  output (`effect_output.omamobile_speaker_loudness`) linked into the
+  Earpiece sink: its 6 dB of limiter drive at the ear. WirePlumber 0.5
+  hands a smart filter whose `filter.smart.target` matches nothing to the
+  default-target hooks unless the stream has `node.dont-fallback`; with
+  that alone it destroys the stream while the target is missing, which is
+  every PipeWire start, so `node.linger` too. A `target.object` with
+  `node.dont-reconnect` destroyed the filter even in HiFi (music
+  unfiltered). Fixed in the branch's 0.5.5; proven offline on null sinks;
+  C9k's E1, E4 and E7 check the links.
+- **Restart the protection service after installing 0.5.5.** The running
+  watchdog was 0.5.4's and didn't answer the new mode handshake, so
+  `earpiece off` muted both amplifiers until
+  `systemctl restart omamobile-speaker-protection` (harmless: muted is the
+  safe side). C9k E1 now restarts it.
 
 ## 2026-10-27: the muted speakers were the open-loop coil estimate, not sleep; the static was the boost converter; the earpiece is the top speaker
 

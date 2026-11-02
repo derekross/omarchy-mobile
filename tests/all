@@ -2,28 +2,37 @@
 # SPDX-License-Identifier: MIT
 # The installer's tests (no phone, nothing flashed): tools/install-phone
 # against a fake fastboot, tools/phone-provision against a synthetic backup
-# (and a container standing in for the phone, with Docker), the initramfs's
+# (and a container standing in for the phone, with Docker), tools/nv-backup
+# against a stand-in phone tree,
+# tools/phone-install-package against a stand-in phone, the initramfs's
 # first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
 # allowlist and the USB product string, bin/omamobile's boot-image layouts
+# (and omamobile-boot-update building the same bytes on the phone)
 # and flash against a fake fastboot, omamobile-firstboot's own tests, and the
 # smoke test of the newest root image in out/ if there is one, the felix,
 # lynx and panther device packages' own tests, tools/alarm-wake-test's
 # check, and a contributor's local builds (tools/local-key-init,
-# tools/fetch-published, --local).
+# tools/fetch-published, --local), tools/publish-kernel against a scratch
+# remote, tools/release's stages, the release key the maintainer signs with
+# (tools/lib/signing.sh, build-packages --resign, repo-publish),
+# tools/fetch-toolchain against local fixtures, tools/release-upload against
+# a scratch server, tools/extract-camera-data's adrp decoding, and
+# tools/phone-smoke's dmesg error classification.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
-         tools/local-key-init tools/fetch-published \
-         tools/lib/alarm.sh tools/lib/alarm-setup rootfs/build-inside tests/*; do
+for f in tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
+         tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/release-upload tools/server/releases-nginx.sh \
+         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh rootfs/build-inside tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
 done
+python3 -I -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" tools/bundle-manifest || { echo "not ok - tools/bundle-manifest parses" >&2; exit 1; }
 sh -n initramfs/init
 sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
-for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds; do
+for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/make-bundle-keys tests/make-bundle tests/release-signing tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release; do
   echo "# $t"
   "$t"
 done

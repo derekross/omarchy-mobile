@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# OnePlus 13 (dodge) overrides for the Omarchy shell, installed as
+# ~/.config/omarchy/shell.toml (user keys win over the theme's shell.toml).
+# Only what differs from the stock Omarchy Mobile phone profile.
+#
+# Panel: 1440x3168, 6.82 in, about 510 ppi (20.1 px/mm). At the stock phone
+# scale 3 one logical px is about 0.15 mm.
+
+[bar]
+# omamobile.bar is max(44, size-horizontal) tall: 44 is 6.6 mm here, 48 is
+# 7.2 mm, inside a 7-9 mm touch target.
+size-horizontal = 48
+
+[spacing]
+# The bar's left/right inset (stock 18 = 2.7 mm). 22 (3.3 mm) keeps the clock
+# and battery icon clear of the rounded corners: the panel radius isn't
+# published, but an arc of up to about 220 px leaves the icons' top edge
+# inside this inset.
+huge = 22

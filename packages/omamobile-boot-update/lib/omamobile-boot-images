@@ -1,0 +1,258 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Pack a device's slot-B boot images from a kernel release, on the phone,
+# with the commands bin/omamobile images runs on the laptop (docs/RELEASES.md
+# §5.3 step 3): the same descriptor checks, the same DTB overlays, soc_id
+# copies or /soc_compatible check, the same mkbootimg arguments for both
+# layouts (with or without init_boot and vendor_kernel_boot), and the same
+# AVB hash footers. Given the same inputs and the same tools it gives the
+# same bytes as bin/omamobile images (tests/boot-update-parity checks it).
+# It writes files into OUT only and never opens a block device.
+#
+#   omamobile-boot-images --descriptor FILE --kernel Image --dtbs DIR
+#       --dtbo dtbo.img --initramfs initramfs.cpio.lz4 --out DIR
+#       [--overlays DIR] [--modules DIR] [--authorized-keys FILE] [--avb-key FILE]
+#
+#   --kernel           the uncompressed arm64 Image (linux-omamobile's vmlinuz)
+#   --dtbs             the release's dtbs/ directory; the board DTB is
+#                      DIR/<DTB from the descriptor>
+#   --dtbo             the board dtbo.img the device package built
+#   --initramfs        the device package's release initramfs (lz4 legacy)
+#   --overlays         <name>.dtbo for each DTB_OVERLAYS entry, applied in
+#                      the descriptor's order (needed when it names any)
+#   --modules          the release's module tree, for INITRAMFS_MODULES
+#   --authorized-keys  the owner's keys, appended as /root/.ssh/authorized_keys
+#                      (§5.2), so SSH into the initramfs works for the owner
+#   --avb-key          the key for AVB_FOOTERS (an unlocked bootloader takes
+#                      any key; bin/omamobile uses AOSP's test key)
+#
+# Tools, each overridable: MKBOOTIMG (mkbootimg), AVBTOOL (avbtool), DTC
+# (dtc), FDTOVERLAY (fdtoverlay), LZ4 (lz4), CPIO (cpio). Arch's
+# android-tools ships mkbootimg and avbtool, dtc ships dtc and fdtoverlay.
+set -euo pipefail
+
+LIB=${OMAMOBILE_BOOT_UPDATE_LIB:-$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")}
+say() { printf '==> %s\n' "$*"; }
+die() { printf 'omamobile-boot-images: error: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=descriptor.sh
+source "$LIB/descriptor.sh"
+
+MKBOOTIMG=${MKBOOTIMG:-mkbootimg}
+AVBTOOL=${AVBTOOL:-avbtool}
+DTC=${DTC:-dtc}
+FDTOVERLAY=${FDTOVERLAY:-fdtoverlay}
+LZ4=${LZ4:-lz4}
+CPIO=${CPIO:-cpio}
+
+descriptor= kernel= dtbs= dtbo_in= initramfs= out= overlays= modules= keys= avb_key=
+while (($#)); do
+  case $1 in
+    --descriptor) descriptor=${2:?}; shift ;;
+    --kernel) kernel=${2:?}; shift ;;
+    --dtbs) dtbs=${2:?}; shift ;;
+    --dtbo) dtbo_in=${2:?}; shift ;;
+    --initramfs) initramfs=${2:?}; shift ;;
+    --out) out=${2:?}; shift ;;
+    --overlays) overlays=${2:?}; shift ;;
+    --modules) modules=${2:?}; shift ;;
+    --authorized-keys) keys=${2:?}; shift ;;
+    --avb-key) avb_key=${2:?}; shift ;;
+    -h|--help) sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument $1" ;;
+  esac
+  shift
+done
+for v in descriptor kernel dtbs dtbo_in initramfs out; do
+  [[ -n ${!v} ]] || die "--${v%_in} is required"
+done
+bu_load_descriptor "$descriptor"
+dtb=$dtbs/$DEV_DTB
+[[ -s $kernel ]] || die "no kernel Image at $kernel"
+[[ -s $dtb ]] || die "the release has no $DEV_DTB (looked in $dtbs)"
+[[ -s $dtbo_in ]] || die "no dtbo.img at $dtbo_in"
+[[ -s $initramfs ]] || die "no initramfs at $initramfs"
+if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
+  [[ -n $modules && -d $modules ]] || die "INITRAMFS_MODULES needs the release's module tree (--modules)"
+fi
+if [[ -n ${DEV_AVB_FOOTERS:-} ]]; then
+  [[ -n $avb_key && -s $avb_key ]] || die "AVB_FOOTERS needs a key (--avb-key)"
+fi
+for tool in "$MKBOOTIMG" "$DTC" "$LZ4"; do
+  command -v "$tool" >/dev/null || die "missing tool $tool"
+done
+
+# A fresh output directory: nothing left over from another build
+[[ $out == /* ]] || die "--out must be an absolute path"
+rm -rf "$out"
+mkdir -p "$out"
+img=$out
+
+# The descriptor's bring-up overlays, applied onto the release's DTB in
+# order, as bin/omamobile images applies them (compiled .dtbo files here:
+# the device package compiles device/<codename>/overlays at package time)
+if [[ -n ${DEV_DTB_OVERLAYS:-} ]]; then
+  [[ -n $overlays && -d $overlays ]] || die "DTB_OVERLAYS needs the device package's overlays (--overlays)"
+  command -v "$FDTOVERLAY" >/dev/null || die "missing tool $FDTOVERLAY"
+  ovs=()
+  say "DTB overlays: $DEV_DTB_OVERLAYS"
+  for ov in $DEV_DTB_OVERLAYS; do
+    [[ -s $overlays/$ov.dtbo ]] || die "no overlay $overlays/$ov.dtbo"
+    ovs+=("$overlays/$ov.dtbo")
+  done
+  "$FDTOVERLAY" -i "$dtb" -o "$img/$DEV_CODENAME-overlaid.dtb" "${ovs[@]}" || die "applying the overlays failed"
+  dtb=$img/$DEV_CODENAME-overlaid.dtb
+fi
+
+say "Kernel: Image.lz4"
+"$LZ4" -l -9 -f -q "$kernel" "$img/Image.lz4"
+
+dtbs_out=()
+if [[ -n ${DEV_SOC_COMPATIBLE:-} ]]; then
+  say "DTB: one copy, /soc_compatible $DEV_SOC_COMPATIBLE"
+  "$DTC" -q -I dtb -O dts "$dtb" | python3 -I -c '
+import re, sys
+want = {}
+for e in sys.argv[1].split():
+    label, pid, major, minor, pkg = e.split(":")
+    want[label.upper().replace("-", "_")] = (int(pid, 16), int(major), int(minor), int(pkg))
+lab = r"(?:[A-Za-z_][A-Za-z0-9_]*: )*"
+lines = sys.stdin.read().split("\n")
+start = [i for i, l in enumerate(lines) if re.fullmatch(r"\t" + lab + r"soc_compatible \{", l)]
+if not start:
+    sys.exit("no /soc_compatible node")
+got, cur = {}, None
+for l in lines[start[0] + 1:]:
+    if l == "\t};":
+        break
+    if cur is None and re.fullmatch(r"\t\tphandle = <0x[0-9a-f]+>;", l):
+        continue
+    if not l or (cur is not None and l.startswith("\t\t\t")):
+        m = re.fullmatch(r"\t\t\t(product_id|major|minor|pkg_mode) = <(0x[0-9a-f]+)>;", l)
+        if m:
+            vals[m.group(1)] = int(m.group(2), 16)
+        continue
+    m = re.fullmatch(r"\t\t" + lab + r"([^\s:{};]+) \{", l)
+    if m and cur is None:
+        cur, vals = m.group(1), {}
+        if cur in got:
+            sys.exit("/soc_compatible has %s twice" % cur)
+    elif l == "\t\t};" and cur is not None:
+        got[cur] = tuple(vals.get(k, -1) for k in ("product_id", "major", "minor", "pkg_mode"))
+        cur = None
+    else:
+        sys.exit("/soc_compatible: cannot parse %r" % l.strip())
+else:
+    sys.exit("/soc_compatible is not closed")
+if got != want:
+    sys.exit("/soc_compatible holds %s, the descriptor wants %s" % (sorted(got.items()), sorted(want.items())))
+' "$DEV_SOC_COMPATIBLE" || die "$DEV_DTB does not match SOC_COMPATIBLE"
+  cp "$dtb" "$img/$DEV_CODENAME.dtb"
+  dtbs_out+=("$img/$DEV_CODENAME.dtb")
+fi
+# One copy per SOC_IDS entry: the first is the value the DTB was built
+# with, the others are rewrites. grep -c, not -q (pipefail, AGENTS §4).
+[[ -n ${DEV_SOC_IDS:-} ]] && say "DTB: one copy per soc_id ($DEV_SOC_IDS)"
+base=""
+for entry in ${DEV_SOC_IDS:-}; do
+  label=${entry%%:*} id=${entry#*:}
+  o="$img/$DEV_CODENAME-$label.dtb"
+  if [[ -z $base ]]; then
+    base=$id
+    "$DTC" -q -I dtb -O dts "$dtb" | grep -c "soc_id = <$base " >/dev/null || die "$DEV_DTB is not built with soc_id $base"
+    cp "$dtb" "$o"
+  else
+    "$DTC" -q -I dtb -O dts "$dtb" | sed "s/soc_id = <$base /soc_id = <$id /" \
+      | "$DTC" -q -I dts -O dtb -o "$o" -
+    "$DTC" -q -I dtb -O dts "$o" | grep -c "soc_id = <$id " >/dev/null || die "soc_id rewrite to $id failed"
+  fi
+  dtbs_out+=("$o")
+done
+cat "${dtbs_out[@]}" > "$img/dtb.img"
+
+say "dtbo: $dtbo_in"
+cp "$dtbo_in" "$img/dtbo.img"
+
+# The ramdisk: the device package's release initramfs as it is, unless this
+# phone adds to it. Then one lz4 stream holds the shipped archive followed by
+# a small cpio (the kernel unpacks concatenated cpio archives in order, and
+# a later file replaces an earlier one): the owner's authorized_keys, and
+# the INITRAMFS_MODULES of the release being written, which only load into
+# the kernel they were built with.
+ramdisk=$initramfs
+extra=$img/extra
+if [[ -n $keys && -s $keys ]] || [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
+  command -v "$CPIO" >/dev/null || die "missing tool $CPIO"
+  rm -rf "$extra" && mkdir -p "$extra"
+  if [[ -n $keys && -s $keys ]]; then
+    install -d -m 700 "$extra/root/.ssh"
+    install -m 600 "$keys" "$extra/root/.ssh/authorized_keys"
+    say "Initramfs: the owner's authorized_keys appended"
+  fi
+  if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
+    install -d "$extra/lib/modules/omamobile"
+    : > "$extra/lib/modules/omamobile/order"
+    for m in $DEV_INITRAMFS_MODULES; do
+      ko=$(find "$modules" -name "$m.ko" | sort | head -1)
+      [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $modules"
+      install -m 644 "$ko" "$extra/lib/modules/omamobile/$m.ko"
+      echo "$m" >> "$extra/lib/modules/omamobile/order"
+    done
+    say "Initramfs modules ($(basename "$modules")): $DEV_INITRAMFS_MODULES"
+  fi
+  # Reproducible: fixed times, sorted names, owner root
+  find "$extra" -exec touch -h -d @0 {} +
+  reproducible=()
+  "$CPIO" --help 2>/dev/null | grep -c -- --reproducible >/dev/null && reproducible=(--reproducible)
+  (cd "$extra" && find . -mindepth 1 | LC_ALL=C sort | "$CPIO" -o -H newc --owner=0:0 --quiet "${reproducible[@]}") > "$img/extra.cpio"
+  { "$LZ4" -dc "$initramfs" || die "the initramfs is not lz4"; cat "$img/extra.cpio"; } | "$LZ4" -l -9 -q > "$img/initramfs.cpio.lz4"
+  ramdisk=$img/initramfs.cpio.lz4
+  rm -rf "$extra" "$img/extra.cpio"
+fi
+
+say "Boot images (header v4): $DEV_BOOT_IMAGES"
+: | "$CPIO" -o -H newc --quiet > "$img/empty.cpio"
+cmdline="$DEV_VENDOR_CMDLINE"
+if bu_has_image init_boot; then
+  "$MKBOOTIMG" --header_version 4 --kernel "$img/Image.lz4" --cmdline '' --output "$img/boot.img"
+  "$MKBOOTIMG" --header_version 4 --ramdisk "$img/empty.cpio" \
+    --os_version "$DEV_OS_VERSION" --os_patch_level "$DEV_OS_PATCH_LEVEL" --output "$img/init_boot.img"
+else
+  "$MKBOOTIMG" --header_version 4 --kernel "$img/Image.lz4" --ramdisk "$img/empty.cpio" --cmdline '' \
+    --os_version "$DEV_OS_VERSION" --os_patch_level "$DEV_OS_PATCH_LEVEL" --output "$img/boot.img"
+fi
+if bu_has_image vendor_kernel_boot; then
+  "$MKBOOTIMG" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline "$cmdline" \
+    --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$img/empty.cpio" --vendor_boot "$img/vendor_boot.img"
+  "$MKBOOTIMG" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline '' \
+    --dtb "$img/dtb.img" --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$ramdisk" \
+    --vendor_boot "$img/vendor_kernel_boot.img"
+else
+  "$MKBOOTIMG" --header_version 4 --pagesize "$DEV_VENDOR_PAGESIZE" --vendor_cmdline "$cmdline" \
+    --dtb "$img/dtb.img" --ramdisk_type 1 --ramdisk_name '' --vendor_ramdisk_fragment "$ramdisk" \
+    --vendor_boot "$img/vendor_boot.img"
+fi
+
+# AVB hash footers, as bin/omamobile's avb_footers adds them: padded to the
+# partition, the image's own hash as the salt, stock's rollback index and
+# security patch. An image without its footer is refused by ABL once slot B
+# has booted footer-carrying images (AGENTS.md §4, boot chain).
+if [[ -n ${DEV_AVB_FOOTERS:-} ]]; then
+  command -v "$AVBTOOL" >/dev/null || die "missing tool $AVBTOOL"
+  say "AVB footers: $("$AVBTOOL" version)"
+  for entry in $DEV_AVB_FOOTERS; do
+    name=${entry%%:*} size=$((${entry#*:}))
+    say "AVB footer: $name.img, padded to its $size-byte partition"
+    salt=$(sha256sum "$img/$name.img" | cut -d' ' -f1)
+    "$AVBTOOL" add_hash_footer --image "$img/$name.img" --partition_name "$name" \
+      --partition_size "$size" --algorithm SHA256_RSA4096 --key "$avb_key" --salt "$salt" \
+      --rollback_index "$DEV_AVB_ROLLBACK_INDEX" \
+      --prop "com.android.build.$name.os_version:${DEV_OS_VERSION%%.*}" \
+      --prop "com.android.build.$name.security_patch:$DEV_AVB_SECURITY_PATCH" \
+      || die "avbtool could not add $name's footer"
+    [[ $(stat -c %s "$img/$name.img") == "$size" ]] || die "$name.img is not padded to $size bytes"
+  done
+fi
+for p in $DEV_BOOT_IMAGES; do
+  [[ -s $img/$p.img ]] || die "no $p.img was built"
+done
+printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"

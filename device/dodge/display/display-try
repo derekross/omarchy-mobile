@@ -1,0 +1,29 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Hand-test of the msm display path on dodge (run as root, once per boot).
+# Arms a dead-man reboot first: a reboot always brings simpledrm back.
+set -u
+DM=${DM:-300}
+H=/lib/modules/$(uname -r).held/kernel
+[ -d "$H" ] || H=/lib/modules/$(uname -r)/kernel
+P=/usr/local/lib/omamobile/display
+systemd-run --quiet --unit=dm-display-$$ --on-active="$DM" systemctl reboot --force
+echo "dead-man reboot in ${DM}s (unit dm-display-$$)"
+[ "${DRMDBG:-0}" != 0 ] && echo "$DRMDBG" > /sys/module/drm/parameters/debug 2>/dev/null
+for k in \
+	$H/drivers/clk/qcom/dispcc-sm8750.ko \
+	$H/drivers/video/backlight/backlight.ko \
+	$H/drivers/gpu/drm/display/drm_display_helper.ko \
+	$H/drivers/gpu/drm/display/drm_dp_aux_bus.ko \
+	$H/drivers/gpu/drm/drm_exec.ko \
+	$H/drivers/gpu/drm/scheduler/gpu-sched.ko \
+	$H/drivers/soc/qcom/llcc-qcom.ko \
+	$H/drivers/soc/qcom/ocmem.ko \
+	$H/drivers/soc/qcom/mdt_loader.ko \
+	$P/panel-aa569-p-3-a0019-dsc.ko \
+	$( [ -f $P/msm.ko ] && echo $P/msm.ko || echo $H/drivers/gpu/drm/msm/msm.ko )
+do
+	n=$(basename "$k" .ko | tr - _)
+	if grep -q "^$n " /proc/modules; then echo "have $n"; continue; fi
+	insmod "$k" && echo "ok $n" || { echo "FAIL $n"; exit 1; }
+done

@@ -17,10 +17,17 @@
 # Before anything it checks: the phone answers in fastboot, its product is the
 # descriptor's CODENAME, the bootloader is unlocked, both bootloader slots
 # carry the same version, and each image fits its slot B partition (an
-# AVB_FOOTERS image exactly). It asks for the user name, password, host name,
+# AVB_FOOTERS image exactly). A bundle's manifest.json (tools/bundle-manifest)
+# states the same checks and writes as data, for this script, a web flasher
+# and a desktop installer alike; it is covered by the (signed) checksums and
+# must match the descriptor and these rules exactly, or nothing is written.
+# It asks for the user name, password, host name,
 # time zone, optional Wi-Fi and the SSH public key, writes them as
 # /etc/omamobile/firstboot.conf (and root's authorized_keys) into a LOCAL
-# COPY of the root image with debugfs (no root needed), shows exactly what it
+# COPY of the root image with debugfs (no root needed), with
+# /etc/omamobile/boot-update.conf (AUTO_WRITE=yes: kernel package updates
+# reach slot B through omamobile-boot-update, docs/RELEASES.md §5.3; a
+# development phone, set up by hand, has no such file), shows exactly what it
 # will run, and waits for the codename to be typed. The phone's first boot
 # (omamobile-firstboot) creates the user from that file and deletes it.
 #
@@ -30,17 +37,21 @@
 #                            instead of running it
 #     --device CODENAME      repository mode: device/CODENAME/device.conf (default
 #                            $DEVICE or cheetah); in a bundle, its device.conf
-#     --images DIR           the slot B images (repository default:
+#     --images DIR           repository mode: the slot B images (default:
 #                            $KERNEL_OUT/images, KERNEL_OUT=$KERNEL_BASE/out-int)
 #     --rootfs FILE          the root image (.img.zst; default: the newest
-#                            omamobile-rootfs-*-aarch64.img.zst in out/, or
-#                            beside a bundle)
+#                            image for this device in out/, or the exact
+#                            image named by a signed bundle's MANIFEST)
 #     --work DIR             where the local image copy goes (default
 #                            ~/.cache/omamobile-install; needs the image's size free)
 #     --bootloader-slots-match VERSION
 #                            when the bootloader reports no per-slot versions:
 #                            you checked the other slot carries VERSION too
 #                            (it must equal the current slot's)
+#     --reinstall            slot B is the current slot and holds Omarchy Mobile
+#                            (a reinstall); without it, a phone running from
+#                            slot B is refused, since that is where stock
+#                            Android runs after a system update
 #     --unsigned             accept a bundle without SHA256SUMS.sig (development)
 #
 # Answers are read from standard input, so they can be piped for tests.
@@ -60,7 +71,7 @@ say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
-dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0
+dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0 reinstall=0
 while (($#)); do
   case $1 in
     --dry-run) dry=1 ;;
@@ -69,8 +80,9 @@ while (($#)); do
     --rootfs) rootfs=${2:?}; shift ;;
     --work) work=${2:?}; shift ;;
     --bootloader-slots-match) slots_match=${2:?}; shift ;;
+    --reinstall) reinstall=1 ;;
     --unsigned) unsigned=1 ;;
-    -h|--help) sed -n '3,46p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (see --help)" ;;
   esac
   shift
@@ -80,10 +92,10 @@ done
 if [[ -f $here/device.conf && -d $here/images ]]; then
   mode=bundle
   conf=$here/device.conf
+  [[ -z $images || $(readlink -f "$images") == "$here/images" ]] ||
+    die "a bundle uses its own images; --images is only available in repository mode"
   images=${images:-$here/images}
-  if [[ -z $rootfs ]]; then
-    for f in "$here"/../omamobile-rootfs-*-aarch64.img.zst "$here"/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
-  fi
+  root_dirs=("$here/.." "$here")
 else
   mode=repository
   repo=$(cd -- "$here/.." && pwd)
@@ -96,9 +108,7 @@ else
     [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
   fi
   images=${images:-${KERNEL_OUT:-$KERNEL_BASE/out-int}/images}
-  if [[ -z $rootfs ]]; then
-    for f in "$repo"/out/omamobile-rootfs-*-aarch64.img.zst; do rootfs=$f; done
-  fi
+  root_dirs=("$repo/out")
 fi
 [[ -f $conf ]] || die "no device descriptor $conf"
 
@@ -136,7 +146,6 @@ if [[ $mode == repository ]]; then
   [[ $built_for == "$CODENAME" ]] \
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
-[[ -n $rootfs && -f $rootfs ]] || die "no root image (tools/build-rootfs makes one; or --rootfs FILE)"
 for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum; do
   command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"
 done
@@ -151,9 +160,21 @@ for p in $BOOT_IMAGES; do
   [[ " $UFS_RW " == *" ${p}_b "* ]] || die "$conf: ${p}_b is not on the storage-guard allowlist (UFS_RW)"
   [[ -f $images/$p.img ]] || die "missing $images/$p.img (bin/omamobile images)"
 done
+# An AVB_FOOTERS image is padded to the descriptor's partition size, and ABL
+# reads the footer from the end of the partition, so that size must be the
+# phone's exactly (checked against getvar below).
+declare -A avb_size=()
+for e in ${D[AVB_FOOTERS]:-}; do
+  [[ $e =~ ^([a-z_]+):(0x[0-9a-f]{1,10}|[1-9][0-9]{0,11})$ ]] || die "$conf: AVB_FOOTERS entries are image:partition_size, not $e"
+  avb_size[${BASH_REMATCH[1]}]=$((BASH_REMATCH[2]))
+done
+for p in "${!avb_size[@]}"; do
+  [[ " $BOOT_IMAGES " == *" $p "* ]] || die "$conf: AVB_FOOTERS names $p, which is not in BOOT_IMAGES"
+done
 
 # --- Integrity of what will be written ---------------------------------------
 say "Checking the files ($mode mode)"
+root_digest="" root_name=""
 if [[ $mode == bundle ]]; then
   [[ -f $here/SHA256SUMS ]] || die "the bundle has no SHA256SUMS"
   if [[ -f $here/SHA256SUMS.sig ]]; then
@@ -171,8 +192,169 @@ if [[ $mode == bundle ]]; then
   fi
   (cd "$here" && sha256sum -c --quiet SHA256SUMS) || die "a bundle file doesn't match SHA256SUMS"
   note "bundle checksums match"
+  if [[ -f $here/SHA256SUMS.sig ]]; then
+    # The root image sits beside the bundle, outside SHA256SUMS. Only the
+    # signed manifest can authorize its name and bytes; its .sha256 cannot.
+    [[ $(grep -Ec '^[0-9a-f]{64} [ *](\./)?MANIFEST$' "$here/SHA256SUMS") == 1 ]] ||
+      die "the signed checksums must cover MANIFEST exactly once"
+    root_record=$(sed -n 's/^root image: //p' "$here/MANIFEST")
+    root_pattern='^([A-Za-z0-9._-]+\.img\.zst) \(([0-9a-f]{64})\)$'
+    [[ $root_record =~ $root_pattern ]] || die "the signed MANIFEST must name one root image and its SHA256"
+    root_name=${BASH_REMATCH[1]} root_digest=${BASH_REMATCH[2]}
+  fi
+
+  # manifest.json (tools/bundle-manifest): the release and its install plan
+  # as data, the one a web flasher or a desktop installer follows too. It
+  # must agree exactly with the descriptor and with this script's own rules:
+  # it can confirm what is written, never widen it.
+  [[ -f $here/manifest.json ]] || die "the bundle has no manifest.json (tools/make-bundle writes it)"
+  [[ $(grep -Ec '^[0-9a-f]{64} [ *](\./)?manifest\.json$' "$here/SHA256SUMS") == 1 ]] ||
+    die "the checksums must cover manifest.json exactly once"
+  command -v python3 >/dev/null || die "python3 is needed to read the bundle's manifest.json"
+  # The parser checks types and characters only, and prints plain lines; the
+  # rules are checked below, in this script.
+  plan=$(python3 -I - "$here/manifest.json" <<'PY'
+import json, re, sys
+
+def bad(why):
+    print("manifest.json: " + why, file=sys.stderr)
+    sys.exit(1)
+
+def s(v, pattern, what):
+    if not isinstance(v, str) or not re.fullmatch(pattern, v):
+        bad("%s is not valid" % what)
+    return v
+
+def n(v, what):
+    if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+        bad("%s is not a size" % what)
+    return v
+
+def b(v, what):
+    if not isinstance(v, bool):
+        bad("%s is not true or false" % what)
+    return "true" if v else "false"
+
+try:
+    m = json.load(open(sys.argv[1]))
+except (OSError, ValueError) as e:
+    bad("not JSON (%s)" % e)
+if not isinstance(m, dict) or not isinstance(m.get("install"), dict):
+    bad("no install plan")
+NAME, HEX = r"[A-Za-z0-9._+-]+", r"[0-9a-f]{64}"
+out = ["format=%d" % n(m.get("format"), "format"),
+       "version=" + s(m.get("version"), NAME, "version"),
+       "label=" + s(m.get("label"), r"[A-Za-z0-9 ._-]+", "label"),
+       "codename=" + s((m.get("device") or {}).get("codename"), r"[a-z0-9]+", "device.codename"),
+       "kernel_release=" + s((m.get("kernel") or {}).get("release"), NAME, "kernel.release")]
+r = m.get("root_image") or {}
+out += ["root_name=" + s(r.get("name"), r"[A-Za-z0-9._-]+\.img\.zst", "root_image.name"),
+        "root_sha256=" + s(r.get("sha256"), HEX, "root_image.sha256")]
+i = m["install"]
+out += ["product=" + s(i.get("product"), r"[a-z0-9]+", "install.product"),
+        "require_unlocked_bootloader=" + b(i.get("require_unlocked_bootloader"), "install.require_unlocked_bootloader"),
+        "require_matching_bootloader_slots=" + b(i.get("require_matching_bootloader_slots"), "install.require_matching_bootloader_slots")]
+allow = i.get("storage_guard_allowlist")
+if not isinstance(allow, list):
+    bad("install.storage_guard_allowlist is not a list")
+out.append("allowlist=" + " ".join(s(p, r"[a-z_]+", "an allowlist entry") for p in allow))
+after = i.get("after")
+if not isinstance(after, list):
+    bad("install.after is not a list")
+out.append("after=" + ",".join(s(a, r"[a-z -]+", "an install.after step") for a in after))
+writes = i.get("writes")
+if not isinstance(writes, list):
+    bad("install.writes is not a list")
+for w in writes:
+    if not isinstance(w, dict):
+        bad("an install.writes entry is not an object")
+    part = s(w.get("partition"), r"[a-z_]+", "a write's partition")
+    src = s(w.get("source"), r"root_image|images/[a-z_]+\.img", "a write's source")
+    size = "-" if src == "root_image" else str(n(w.get("size"), "a write's size"))
+    psize = "-" if w.get("partition_size") is None else str(n(w.get("partition_size"), "a write's partition_size"))
+    erases = b(w.get("erases_userdata", False), "erases_userdata")
+    out.append("write %s %s %s %s %s" % (part, src, size, psize, erases))
+files = m.get("files")
+if not isinstance(files, list):
+    bad("files is not a list")
+for f in files:
+    if not isinstance(f, dict):
+        bad("a files entry is not an object")
+    path = s(f.get("path"), r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*", "a file's path")
+    if ".." in path.split("/"):
+        bad("a file's path leaves the bundle")
+    out.append("file %s %d %s" % (path, n(f.get("size"), "a file's size"), s(f.get("sha256"), HEX, "a file's sha256")))
+print("\n".join(out))
+PY
+  ) || die "the bundle's manifest.json is not a valid release manifest"
+  declare -A M=()
+  m_writes=() m_files=()
+  while IFS= read -r line; do
+    case $line in
+      "write "*) m_writes+=("${line#write }") ;;
+      "file "*) m_files+=("${line#file }") ;;
+      *=*) M[${line%%=*}]=${line#*=} ;;
+    esac
+  done <<<"$plan"
+  [[ ${M[format]} == 1 ]] || die "manifest.json has format ${M[format]}; this installer reads format 1"
+  [[ ${M[codename]} == "$CODENAME" && ${M[product]} == "$CODENAME" ]] ||
+    die "manifest.json is for ${M[codename]} (product ${M[product]}), but the descriptor is $CODENAME"
+  [[ ${M[require_unlocked_bootloader]} == true ]] || die "manifest.json must require an unlocked bootloader"
+  [[ ${M[require_matching_bootloader_slots]} == true ]] || die "manifest.json must require both bootloader slots to match"
+  read -ra allow <<<"$UFS_RW"
+  [[ ${M[allowlist]} == "${allow[*]}" ]] || die "manifest.json's storage-guard allowlist (${M[allowlist]}) is not the descriptor's ($UFS_RW)"
+  [[ ${M[after]} == "set-active b,reboot" ]] || die "manifest.json must end with set-active b and reboot, nothing else (has: ${M[after]})"
+  # Exactly the descriptor's slot B images, in its order, then userdata
+  want_writes=()
+  for p in $BOOT_IMAGES; do
+    want_writes+=("${p}_b images/$p.img $(stat -c %s "$here/images/$p.img") ${avb_size[$p]:--} false")
+  done
+  want_writes+=("userdata root_image - - true")
+  [[ $(printf '%s\n' "${m_writes[@]}") == "$(printf '%s\n' "${want_writes[@]}")" ]] ||
+    die "manifest.json's writes are not exactly slot B's images ($(for p in $BOOT_IMAGES; do printf '%s_b ' "$p"; done)) and userdata, with their sizes"
+  # Every file of the bundle is listed with its size and SHA-256, and nothing else
+  listed=() actual=()
+  for entry in "${m_files[@]}"; do
+    read -r path size sum <<<"$entry"
+    [[ -f $here/$path ]] || die "manifest.json lists $path, which is not in the bundle"
+    [[ $(stat -c %s "$here/$path") == "$size" ]] || die "$path is not the size manifest.json gives"
+    [[ $(sha256sum < "$here/$path" | cut -d' ' -f1) == "$sum" ]] || die "$path does not match manifest.json"
+    listed+=("$path")
+  done
+  mapfile -t actual < <(cd "$here" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig ! -name manifest.json -printf '%P\n' | sort)
+  [[ $(printf '%s\n' "${listed[@]}" | sort) == "$(printf '%s\n' "${actual[@]}")" ]] ||
+    die "manifest.json does not list exactly the bundle's files"
+  if [[ -f $here/SHA256SUMS.sig ]]; then
+    [[ ${M[version]} =~ ^20[0-9]{2}\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])(\.[1-9][0-9]*)?$ ]] ||
+      die "a signed release is versioned by the calendar (YYYY.MM.DD), not ${M[version]}"
+    [[ ${M[root_name]} == "$root_name" && ${M[root_sha256]} == "$root_digest" ]] ||
+      die "manifest.json and MANIFEST name different root images"
+    [[ ${M[kernel_release]} == "$(sed -n 's/^kernel release: //p' "$here/MANIFEST")" ]] ||
+      die "manifest.json and MANIFEST name different kernels"
+  fi
+  note "manifest.json: Omarchy Mobile ${M[version]} (${M[label]}), its plan matches the descriptor"
 fi
-if [[ -f $rootfs.sha256 ]]; then
+if [[ -z $rootfs ]]; then
+  if [[ -n $root_name ]]; then
+    for dir in "${root_dirs[@]}"; do
+      [[ ! -f $dir/$root_name ]] || rootfs=$dir/$root_name
+    done
+  else
+    # Read the device from the manifest, including images with legacy names.
+    for dir in "${root_dirs[@]}"; do
+      for f in "$dir"/omamobile-rootfs-*-aarch64.img.zst; do
+        built_for=$(sed -n 's/^device: \([a-z0-9]*\).*/\1/p' "${f%.img.zst}.MANIFEST" 2>/dev/null || true)
+        [[ $built_for != "$CODENAME" ]] || rootfs=$f
+      done
+    done
+  fi
+fi
+[[ -n $rootfs && -f $rootfs ]] || die "no root image for $CODENAME${root_name:+ ($root_name)} (tools/build-rootfs makes one; or --rootfs FILE)"
+if [[ -n $root_digest ]]; then
+  [[ ${rootfs##*/} == "$root_name" ]] || die "root image must be $root_name, as named by the signed bundle"
+  [[ $(sha256sum < "$rootfs" | cut -d' ' -f1) == "$root_digest" ]] || die "root image does not match the signed bundle"
+  note "root image matches the signed bundle"
+elif [[ -f $rootfs.sha256 ]]; then
   (cd "$(dirname "$rootfs")" && sha256sum -c --quiet "$(basename "$rootfs").sha256") || die "$rootfs doesn't match its .sha256"
   note "root image checksum matches"
 else
@@ -223,14 +405,16 @@ else
   die "the phone only reports slot ${current_slot:-?}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
 fi
 note "$CODENAME, unlocked, current slot ${current_slot:-?}"
-# Each image must fit its slot B partition. An AVB_FOOTERS image is padded to
-# the descriptor's partition size and ABL reads the footer from the end of the
-# partition, so that size must be the phone's exactly.
-declare -A avb_size=()
-for e in ${D[AVB_FOOTERS]:-}; do
-  [[ $e =~ ^([a-z_]+):(0x[0-9a-f]{1,10}|[1-9][0-9]{0,11})$ ]] || die "$conf: AVB_FOOTERS entries are image:partition_size, not $e"
-  avb_size[${BASH_REMATCH[1]}]=$((BASH_REMATCH[2]))
-done
+# Stock Android must be the one on slot A. An Android system update writes the
+# other slot and switches to it, so a phone that took one can run stock from
+# slot B, and writing slot B would overwrite the stock system in use. From
+# fastboot alone a reinstall (Omarchy Mobile on B) looks the same, so the
+# owner says which it is.
+if [[ $current_slot == b && $reinstall != 1 ]]; then
+  die "the phone runs from slot b. If stock Android is on slot b (after an Android system update), installing would overwrite it: make slot a active (fastboot --set-active=a), flash Google's factory image onto it, check Android starts, then rerun. If slot b holds Omarchy Mobile (a reinstall), rerun with --reinstall"
+fi
+[[ $current_slot == b ]] && note "slot b holds Omarchy Mobile (--reinstall): it will be replaced"
+# Each image must fit its slot B partition, an AVB_FOOTERS image exactly.
 for p in $BOOT_IMAGES; do
   psize=$(sed -nE "s/^partition-size:${p}_b:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
   [[ -n $psize ]] || die "the phone reports no partition-size for ${p}_b"
@@ -238,9 +422,6 @@ for p in $BOOT_IMAGES; do
   ((isize <= psize)) || die "$p.img is $isize bytes, larger than ${p}_b ($psize bytes)"
   [[ -z ${avb_size[$p]:-} ]] || ((avb_size[$p] == psize)) \
     || die "$conf: AVB_FOOTERS pads $p to ${avb_size[$p]} bytes, but ${p}_b is $psize: its footer would not be at the end of the partition"
-done
-for p in "${!avb_size[@]}"; do
-  [[ " $BOOT_IMAGES " == *" $p "* ]] || die "$conf: AVB_FOOTERS names $p, which is not in BOOT_IMAGES"
 done
 
 # --- The owner's answers -----------------------------------------------------
@@ -308,8 +489,9 @@ work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 mkdir -p "$work"
 chmod 700 "$work"
 copy=$work/root.img sparse=$work/root.simg conf_file=$work/firstboot.conf keys_file=$work/authorized_keys
+boot_conf=$work/boot-update.conf
 # The copy holds the password hash (and any Wi-Fi password): never left behind
-cleanup() { rm -f "$conf_file" "$keys_file" "$copy" "$sparse"; }
+cleanup() { rm -f "$conf_file" "$keys_file" "$boot_conf" "$copy" "$sparse"; }
 trap cleanup EXIT
 (
   umask 077
@@ -329,6 +511,9 @@ trap cleanup EXIT
     fi
   } > "$conf_file"
   printf '%s\n' "$ssh_key" > "$keys_file"
+  printf '%s\n' "# Written by install-phone: a release install takes kernel updates through" \
+    "# omamobile-boot-update's pacman hook (docs/RELEASES.md §5.3). AUTO_WRITE=no stops it." \
+    "AUTO_WRITE=yes" > "$boot_conf"
 )
 unset wifi_psk
 
@@ -344,6 +529,11 @@ write $conf_file /etc/omamobile/firstboot.conf
 sif /etc/omamobile/firstboot.conf mode 0100600
 sif /etc/omamobile/firstboot.conf uid 0
 sif /etc/omamobile/firstboot.conf gid 0
+rm /etc/omamobile/boot-update.conf
+write $boot_conf /etc/omamobile/boot-update.conf
+sif /etc/omamobile/boot-update.conf mode 0100644
+sif /etc/omamobile/boot-update.conf uid 0
+sif /etc/omamobile/boot-update.conf gid 0
 mkdir /root/.ssh
 sif /root/.ssh mode 040700
 sif /root/.ssh uid 0
@@ -356,8 +546,9 @@ sif /root/.ssh/authorized_keys gid 0
 EOF
 cmp -s <(debugfs -R "cat /etc/omamobile/firstboot.conf" "$copy" 2>/dev/null) "$conf_file" || die "writing firstboot.conf into the image copy failed"
 cmp -s <(debugfs -R "cat /root/.ssh/authorized_keys" "$copy" 2>/dev/null) "$keys_file" || die "writing authorized_keys into the image copy failed"
+cmp -s <(debugfs -R "cat /etc/omamobile/boot-update.conf" "$copy" 2>/dev/null) "$boot_conf" || die "writing boot-update.conf into the image copy failed"
 e2fsck -fn "$copy" >/dev/null 2>&1 || die "the image copy doesn't check clean after the writes"
-note "firstboot.conf and root's authorized_keys written, file system checks clean"
+note "firstboot.conf, root's authorized_keys and boot-update.conf (AUTO_WRITE=yes) written, file system checks clean"
 userdata_image=$copy
 if command -v img2simg >/dev/null; then
   img2simg "$copy" "$sparse"

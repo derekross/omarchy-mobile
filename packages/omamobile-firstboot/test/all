@@ -121,6 +121,15 @@ pass "values are data, never executed"
 # --- a whole run against fakes ------------------------------------------------
 F=$t/fakes; mkdir -p "$F"; CALLS=$t/calls; : > "$CALLS"
 fake() { printf '#!/bin/bash\n%s\n' "$2" > "$F/$1"; chmod +x "$F/$1"; }
+export REAL_DATE=$(command -v date) TEST_NOW=1
+fake date 'case "$*" in
+  "-u +%s") echo "$TEST_NOW" ;;
+  "-u -s "*) echo "clock-set ${3#@}" >> "$CALLS" ;;
+  *) "$REAL_DATE" "$@" ;;
+esac'
+mkdir -p "$R/usr/share/pacman/keyrings"
+touch -d @2000000000 "$R/usr/share/pacman/keyrings/archlinuxarm.gpg"
+touch -d @2000000060 "$R/usr/share/pacman/keyrings/omamobile.gpg"
 for cmd in pacman-key systemctl ufw chown hostname nmcli usermod omamobile-setup-system; do
   fake "$cmd" 'echo "$(basename "$0") $*" >> "$CALLS"'
 done
@@ -146,6 +155,9 @@ run() { OMAMOBILE_FIRSTBOOT_ROOT=$R OMARCHY_PATH=$O OMAMOBILE_LOCK_PAM=$F/lock-p
 
 good > "$R/etc/omamobile/firstboot.conf"
 run || { cat "$t/run.out"; fail "a run with a good conf succeeds"; }
+grep -qx 'clock-set 2000000060' "$CALLS" || fail "clock advances to the newest installed keyring"
+[[ $(head -1 "$CALLS") == 'clock-set 2000000060' ]] || fail "clock is seeded before pacman-key"
+pass "an offline clock is seeded before creating and importing keys"
 [[ ! -e $R/etc/omamobile/firstboot.conf ]] || fail "the conf is deleted after a run"
 [[ -f $R/var/lib/omamobile/firstboot/done ]] || fail "the run is recorded"
 grep -q '^useradd -m -G wheel,audio,video,input -s /bin/bash -c Alice Example alice$' "$CALLS" || fail "the user gets the groups and name"
@@ -181,10 +193,21 @@ pass "the lock's PAM file comes from lock-pam, not omarchy-apply-lock"
 run || fail "without a conf, nothing to do"
 [[ ! -s $CALLS ]] || fail "without a conf, nothing runs"
 good | sed '/^WIFI_/d' > "$R/etc/omamobile/firstboot.conf"
+export TEST_NOW=2000000100
 run || { cat "$t/run.out"; fail "a second run succeeds"; }
+grep -q '^clock-set' "$CALLS" && fail "an accurate clock is never moved backwards"
 grep -q '^usermod -aG wheel,audio,video,input' "$CALLS" || fail "a second run updates the user it made"
 [[ $(grep -cxF "$KEY" "$R/home/alice/.ssh/authorized_keys") == 1 ]] || fail "a second run doesn't duplicate the key"
 pass "running again is safe"
+
+: > "$CALLS"
+rm "$R/usr/share/pacman/keyrings/"*.gpg
+export TEST_NOW=1
+good > "$R/etc/omamobile/firstboot.conf"
+run || { cat "$t/run.out"; fail "a root without keyrings still runs"; }
+grep -q '^clock-set' "$CALLS" && fail "no keyrings means no clock adjustment"
+grep -q '^pacman-key --populate' "$CALLS" || fail "key setup still runs without a floor"
+pass "missing keyrings leave the clock alone"
 
 # An essential step failing keeps the conf (minus the Wi-Fi secret) for the next boot
 rm -f "$R/var/lib/omamobile/firstboot/user"

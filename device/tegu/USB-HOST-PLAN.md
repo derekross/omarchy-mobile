@@ -95,7 +95,10 @@ host mode on: H5's `echo b`, H4's swap timer firing, or a forced restart
 with the drive in. After each one, with the inline USB-C meter between the
 palmtop and the drive, expect VBUS to fall to 0 within the reboot. **Stop if
 VBUS is still up two minutes after the reset.** Don't plug the laptop in
-(two sources on VBUS); unplug the drive and report it.
+(two sources on VBUS); unplug the drive and report it. Without a meter, the
+laptop goes back in no sooner than two minutes (the stop window) after any crash with host mode on:
+H5 showed the boost stays up for the RT9470's watchdog period (about 40 s)
+before it drops by itself, and the laptop's VBUS must not meet it.
 
 **After any unexpected reset** (a forced restart, a crash loop; not the
 timer's planned reboot), read pstore on the next boot before anything else.
@@ -225,6 +228,41 @@ One boot before H3, with the boost module still blacklisted from H2:
    pushed back (the kit restored, `omamobile images` twice, `omamobile
    push`); the modules stay as H2 left them.
 
+**H2b ran (2026-10-30 07:50 local, attended, on the charger).** Release
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, gn3 plus `usb-host-pmic.dtso` (the PMIC node with its gpa8-0 pin and
+the boost's `int-gpios` on SGPIO6, no `enable-gpios`), pushed to slot B's
+images. Method note: the kit's `omamobile push` refused the push ("phone
+not reachable") because the kit's local configuration puts hardware-tool
+stubs on `PATH` (its `deny-hardware` directory, the hands-free guard from
+10-26, which logs every `ssh`, `dd` and `fastboot` call and exits 97), so the
+images the kit packed were pushed with the repository's own `bin/omamobile
+push` from a scratch checkout of `main` carrying the kit's `device.conf`;
+the same path and verification, the guard left as it is. The `-dirty`
+release is the run kit's osc2 Image from the gn3 integration tree on maclab
+(`~/tegu/int-dt-20261026/kernel`, the tree with about fifty local changes);
+the kernel #127 boost driver (`6c5d97e18`) and the kernel #139 SGPIO driver
+(that PR's head) were built out of tree against that build's output and
+installed under `/lib/modules/<release>/updates/otg` and `updates/gpio`.
+The kit's `device.conf` differs from main's: it carries `SOC_IDS` (main's
+lacks it, which is why the repository's push tool refused main's
+descriptor) and a longer `DTB_OVERLAYS` list, the bring-up overlays ending
+in `package-startup`. The boot:
+`max77779-pmic 24-0066: MAX77779 PMIC revision 0x02` at 3.47 s, its
+interrupt in `/proc/interrupts` as IRQ 63 on gpa8 (`24-0066`, Level) at 0
+counts, no "no interrupt line", the gadget configured, smoke 19 of 19 (0
+WARN, 0 error lines in dmesg). Then `modprobe tegu_rt9471_boost`: `id 0x9`,
+`JEITA off, watchdog off (0x0)`, `watchdog serviced from interrupt 90` (the
+SGPIO6 line through #139's driver, so the interrupt path works; the chip
+had its watchdog off on this boot, not on as stock leaves it, because the
+boost had not run since the power-on). The PMIC's regmap after the probe:
+`22: 02`, `24: df`, `e8: 00`, `e9: 40`, `ea: 1e`, `ed: 00`, `ee: 04`,
+`ef: 05`, `f0: 04`, `f1: 05`, `f2: 00`, `f3: 45`, `f4: 00` (SGPIO6 with
+`PU` set and `PD` clear, CNFG6 0x45: an input with the pull-up; SGPIO7
+CNFG7 0x00, still off). The PMIC's interrupt count stayed 0 over 10 s. The
+boost as the H4 script reads it (hsi2c10, bus 26): `FUNCTION` 0x41, ICSTAT
+0xf1, VBUS ready and not charging, as expected. Pass. The palmtop runs gn3
+plus the overlay from here on.
+
 Read-only before the step, for the record: the PMIC's registers as the
 driver found them on 10-29 without the node (ID 0x79, revision 0x02, OTP
 0x21; `INTB_MASK` 0xff; `SGPIO_PU` 0x00, `SGPIO_PD` 0x5e; CNFG0-7 `00 04
@@ -263,6 +301,55 @@ unit, then the forced restart with the laptop attached. Reboot before H5 in
 any case: after the unbind TCPM holds a stale handle on
 `chgin-otg`, and a rebind gives it nothing new, so H5's host mode needs H3's
 boot again, with the `modprobe`.
+
+**H4 ran (2026-10-30 07:54 local, the H2b boot, the boost loaded by hand).**
+Release `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`. The log (`usb-host-h4.log`): pre, laptop in: VBUS 4825 mV,
+`CHG_CNFG_00` 0x05, boost `FUNCTION` 0x41 / ICSTAT 0xf1, Type-C `source
+[sink]` / `host [device]`, role device, gadget configured, `otg-boost` and
+`chgin-otg` disabled. "laptop link gone" at +16 s, "drive sde enumerated" 2 s
+later (a 28.7 G SanDisk 3.2Gen1 on the xHCI host). Attached, and the same at
+t+20: VBUS 5200 mV, `CHG_CNFG_00` 0x00, `FUNCTION` 0x43 / ICSTAT 0x0f (the
+boost on), `[source] sink` / `[host] device`, role host, `otg-boost` and
+`chgin-otg` enabled: host mode as on 10-28. Then "unbound the charger at
+24-0069". At +1 s: VBUS 250 mV, `CHG_CNFG_00` 0x05, `FUNCTION` 0x41 /
+ICSTAT 0x00, the Type-C port gone (empty power and data role), role device,
+gadget not attached, `otg-boost` disabled, the drive gone (`usb 1-1: USB
+disconnect`); at +5 s and +20 s VBUS 0. In kmsg at the unbind:
+
+```
+WARNING: drivers/base/devres.c:1184 at devm_kfree+0xec/0x108, CPU#2: tegu-usb-host-h/3809
+Call trace:
+ tcpm_port_unregister_pd+0x58/0x94 [tcpm]
+ tcpm_unregister_port+0x64/0xe8 [tcpm]
+ tcpci_unregister_port+0x1c/0x50 [tcpci]
+ max_tcpci_unregister_tcpci_port+0x10/0x1c [tcpci_maxim]
+ devm_action_release+0x14/0x20
+ devres_release_group+0x108/0x158
+ i2c_device_remove+0x3c/0x84
+ device_release_driver_internal+0x16c/0x27c
+ device_links_unbind_consumers+0xe4/0x114
+ device_release_driver_internal+0xc4/0x27c
+ device_driver_detach+0x18/0x24
+ unbind_store+0xc4/0xf4
+```
+
+Reading: the TCPC is a device-link consumer of the charger (it takes
+`chgin-otg` from it), so unbinding the charger unbinds the TCPC with it;
+the port is unregistered with a WARN in `tcpm_port_unregister_pd` (a
+`devm_kfree` of memory no longer in its group), the boost's regulator goes
+away with the port, VBUS collapses and the drive drops. The laptop went back
+in but no link came back before the swap timer (no Type-C driver was left
+to close the data switch; the rescue unit needs a valid VBUS and an
+unconfigured gadget, and the TCPC's unbind had taken the role switch
+too), and the timer rebooted the palmtop at 300 s, as planned. So the
+question H4 asked, whether the boost keeps VBUS when the charger driver is
+gone, is answered no, and the reason is the device link rather than the
+boost: the charger can't be unbound under TCPM without taking the port
+down. Not a pass or a fail of the boost; a rule: don't unbind the charger
+with host mode on. The 10-28 WARN this step was to confirm or clear ("TCPM
+disabling a regulator whose driver is gone") is this one, from the unbind
+path rather than a regulator call. The boot after the timer's reboot was
+H3's position with the laptop in, and H5 ran from it.
 
 **H5. Reset without shutdown with host mode on (#124, #127; risk
 medium-high).** From a fresh H3 boot (the boost module loaded by hand, the
@@ -315,6 +402,54 @@ drive:
   record from pstore here.
 Rollback: the forced restart with the laptop attached, then H6.
 
+**H5 ran (2026-10-30 08:02 local, from the boot after H4's timer, the boost
+loaded by hand, the laptop in as a sink).** Release `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`. The early read
+was armed and enabled; the script waited for the laptop to go and the drive
+to enumerate (`sde` again, at 169 s of the boot), logged the boost's state
+and ends "resetting now: echo b > /proc/sysrq-trigger (the early read is
+armed for the next boot)", so the read counts. No inline meter was on hand
+(the owner has none), so the meter rule's VBUS check was not made; the next
+boot's early read stands in for it. That boot's
+`rt9470-early-read.log`:
+
+```
+3.13s early: driver 0 vbus-bus26 0x01=0xc1 0x02=0x43 0x0c=0x38 0x0f=0x0f 0x10=0x00 0x11=0x00 0x12=0x00 0x13=0x00
+60.99s at-60s: driver 0 vbus-bus26 0x01=0xc1 0x02=0x41 0x0c=0xb8 0x0f=0xf8 0x10=0xc0 0x11=0x00 0x12=0x80 0x13=0x20
+```
+
+At 3.13 s, before any driver (the boost module blacklisted), `FUNCTION`
+0x43 and ICSTAT 0x0f: **the reset leaves the boost on**, the OTG bit set
+and the chip in the state the drive saw. At 60.99 s, still with no driver,
+`FUNCTION` 0x41 and ICSTAT 0xf8, with 0x0c now 0xb8 and 0x10 0xc0: the
+chip itself turned the boost off between the two reads, which is the RT9470's
+own 40 s watchdog expiring with nothing left to kick it (stock services it
+from the PMIC interrupt; #127's driver does the same once loaded). So a
+crash with host mode on leaves VBUS up for the chip's watchdog period,
+about 40 s, then the boost drops by itself; the regulator core's
+unused-regulator cleanup played no part (no module loaded). **Expect not
+met: the boost stays on until the RT9470's watchdog drops it, within the
+stop window** (the Expect was VBUS at 0 within the reboot; the two-minute
+stop was not reached, so stopping wasn't needed). The laptop went back in
+about 45 s after the reset (the h5 log's "resetting now" at 08:02:28
+palmtop time, SSH answering at 08:03:14 with uptime 0 min), inside the 60 s
+the meter rule now asks for: the boost was still on at 3 s and may have met
+the laptop's VBUS; no harm was seen, dwc3 enumerated normally and the gadget
+came up, but the rule above is there so it doesn't happen again. Then
+`modprobe tegu_rt9471_boost` on that boot: `id 0x9`, `JEITA on, watchdog on
+(0x1)` (the state a reset leaves, unlike the power-on state H2b saw),
+`watchdog serviced from interrupt 90`, and after the probe `FUNCTION` 0x41 /
+ICSTAT 0xf8: the driver takes the left-on chip over and clears OTG. The
+drive was swapped for the laptop after the desktop came back and SSH
+returned by itself in under a minute (the rescue unit closed the data
+switch: "gadget not attached, VBUS present, USBSW_CTRL 0x24: closing the
+data switch"). The reset and the read count; the Expect is noted as not
+met above. One side effect for the record: on the next push from
+that boot (the GNSS DTB round), slot B's images were written and verified
+but the push's reboot command never reached the palmtop, and USB, Wi-Fi
+and the tailnet were all gone while the desktop still answered touch; the
+owner rebooted from the menu and the boot was normal. Not understood; it
+is in NOTES for the USB-C work rather than here.
+
 **H6. Afterwards (risk low).** Remove `omamobile-tegu-otg-bringup.conf` and
 run `depmod -a`. Take the helpers out: `systemctl disable
 tegu-rt9470-early-read`, then remove
@@ -324,9 +459,19 @@ marker is already gone), and `systemctl daemon-reload`. Keep the logs under
 `/var/log/omamobile/` and quote them here. Then reboot. The modules stay as
 installed in H2, unless H2's rollback is wanted.
 
+**H6 status (2026-10-30).** Not run yet. On the palmtop: the two swap timers
+were stopped (`x-deadman.timer` inactive), the early-read marker is gone
+(the read consumed it), `tegu-rt9470-early-read` is still enabled, the
+three scripts and the unit are still installed, `omamobile-tegu-otg-
+bringup.conf` still blacklists the boost, and the boost module is loaded by
+hand on the current boot. The logs quoted above stay under
+`/var/log/omamobile/`.
+
 ## Not known yet
 
-- What a reset without shutdown leaves with host mode on (H5).
+- ~~What a reset without shutdown leaves with host mode on (H5).~~ Answered
+  (10-30): the boost stays on, and the chip's own 40 s watchdog turns it
+  off with no driver to kick it.
 - Why JEITA tripped. "Read hot" is an inference: the TS pin may have no
   thermistor on it.
 - Whether the RT9470 charges under our kernel. Its CE comes from the

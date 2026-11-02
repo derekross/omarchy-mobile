@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# msm display path, loaded once per boot before Hyprland. Never blocks
+# the desktop: the script exits 0 on any failure, and Hyprland only
+# orders after this unit (no Requires), so a timeout here still lets it
+# start.
+[Unit]
+Description=msm display (DSI panel) for dodge, loaded once
+After=local-fs.target systemd-modules-load.service
+Before=omamobile-hyprland.service
+ConditionPathExists=!/etc/omamobile/display-msm.disable
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/omamobile-display-msm
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

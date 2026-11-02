@@ -1,0 +1,166 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Load the msm display path (dispcc, deps, AA569 panel, msm) once per
+# boot, before Hyprland. Needs the kernel fix that keeps MDSS_GDSC on
+# across runtime suspend, or the first screen off breaks the display.
+#
+# Off switch: touch /etc/omamobile/display-msm.disable (then reboot).
+# Fallback: if msm has not bound a DSI connector within $WAIT seconds,
+# it says so and exits 0; Hyprland starts anyway. As long as msm has not
+# bound, simpledrm is untouched (msm only takes the framebuffer over
+# once it binds).
+set -u
+WAIT=${WAIT:-20}
+DISABLE=/etc/omamobile/display-msm.disable
+STAMP=/run/omamobile-display-msm.tried
+if [ -n "${OMAMOBILE_MODULES_H:-}" ]; then
+	H=$OMAMOBILE_MODULES_H
+else
+	H=/lib/modules/$(uname -r).held/kernel
+	[ -d "$H" ] || H=/lib/modules/$(uname -r)/kernel
+fi
+P=/usr/local/lib/omamobile/display
+
+log() { echo "omamobile-display-msm: $*"; echo "omamobile-display-msm: $*" > /dev/kmsg 2>/dev/null; }
+
+[ -e "$DISABLE" ] && { log "disabled by $DISABLE, staying on simpledrm"; exit 0; }
+# Module present is not enough: udev can load msm.ko before dispcc, after which
+# msm-mdss fails -110 and leaves /sys/module/msm set with no DSI connector.
+# Dodge's panel shows up as card*-DSI-1 (not eDP/HDMI).
+for c in /sys/class/drm/card*-DSI-1; do
+	if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
+		log "msm already bound: $(basename "$c")"
+		exit 0
+	fi
+done
+[ -e "$STAMP" ] && { log "already tried this boot ($STAMP)"; exit 0; }
+
+# Do not stamp when the modules tree is missing. On a RAM-boot test Image
+# without $R.held, kmod-overlay fails and this unit runs too early; a later
+# tmpfs overlay on /lib/modules/$R (or installing $R.held) must be able to
+# retry. Stamping on a missing-.ko failure left tip boots on simpledrm after
+# msm-mdss -110 (dispcc never loaded before the deferred-probe timeout).
+DISPCC=$H/drivers/clk/qcom/dispcc-sm8750.ko
+if [ ! -f "$DISPCC" ] && ! grep -q '/dispcc-sm8750.ko$' "${H%/kernel}/modules.builtin" 2>/dev/null; then
+	log "no dispcc-sm8750 at $DISPCC (and not builtin); not stamping, staying on simpledrm"
+	exit 0
+fi
+: > "$STAMP"
+
+# Load what modules.dep lists for $1 first, last entry first. With the
+# 6.16 list below these are already loaded; a newer kernel's msm.ko
+# needs more (7.3: drm_gpuvm, ubwc_config, cec).
+load_deps() {
+	local d n dep=${H%/kernel}/modules.dep
+	[ -r "$dep" ] || return 0
+	for d in $(sed -n "s#^[^:]*/$(basename "$1"):##p" "$dep" | head -1 | tr ' ' '\n' | tac); do
+		n=$(basename "$d" .ko | tr - _)
+		grep -q "^$n " /proc/modules && continue
+		insmod "${H%/kernel}/$d" || return 1
+	done
+}
+
+# Prefer an out-of-tree .ko under $P only when its vermagic matches this
+# uname; otherwise a tip Image with a tmpfs modules overlay would insmod a
+# stale 6.16 panel/msm from userdata and give up (Invalid module format).
+ko_for() {
+	local p_ko=$1 h_ko=$2 v
+	if [ -f "$p_ko" ]; then
+		v=$(modinfo -F vermagic "$p_ko" 2>/dev/null || true)
+		case $v in
+			"$(uname -r) "*) echo "$p_ko"; return ;;
+		esac
+	fi
+	echo "$h_ko"
+}
+PANEL_KO=$(ko_for "$P/panel-aa569-p-3-a0019-dsc.ko" 	"$H/drivers/gpu/drm/panel/panel-aa569-p-3-a0019-dsc.ko")
+MSM_KO=$(ko_for "$P/msm.ko" "$H/drivers/gpu/drm/msm/msm.ko")
+
+# Only rebind when udev loaded msm before we had dispcc. Rebinding a
+# device we just insmod'd races the in-flight probe and can hang the
+# oneshot past TimeoutStartSec (no /dev/dri, load spikes).
+msm_preloaded=
+grep -q '^msm ' /proc/modules && msm_preloaded=1
+
+# dispcc first: msm-mdss otherwise fails -110 after the deferred-probe timeout.
+for k in \
+	$H/drivers/clk/qcom/dispcc-sm8750.ko \
+	$H/drivers/video/backlight/backlight.ko \
+	$H/drivers/gpu/drm/display/drm_display_helper.ko \
+	$H/drivers/gpu/drm/display/drm_dp_aux_bus.ko \
+	$H/drivers/gpu/drm/drm_exec.ko \
+	$H/drivers/gpu/drm/scheduler/gpu-sched.ko \
+	$H/drivers/soc/qcom/llcc-qcom.ko \
+	$H/drivers/soc/qcom/ocmem.ko \
+	$H/drivers/soc/qcom/mdt_loader.ko \
+	$PANEL_KO \
+	$MSM_KO
+do
+	n=$(basename "$k" .ko | tr - _)
+	grep -q "^$n " /proc/modules && continue
+	# Another kernel (via omamobile-kmod-overlay) may build this one in.
+	[ -f "$k" ] || ! grep -q "/$(basename "$k")\$" "${H%/kernel}/modules.builtin" 2>/dev/null || continue
+	load_deps "$k" || { log "a dependency of $n failed; staying on simpledrm"; exit 0; }
+	insmod "$k" || { log "insmod $n failed; staying on simpledrm"; exit 0; }
+done
+
+# If udev already loaded msm before dispcc, mdss probed with -110 and will
+# not retry on its own. After we have loaded dispcc, kick the platform device
+# so probe runs again with clocks available.
+# Wait briefly for panel attach: a just-loaded or preloaded msm can bind DSI
+# and register DRM before status=connected. Immediate rebind then destroys a
+# good probe (seen on a RAM boot: an early rebind tore down a probe that was about to connect).
+dsi_bound=
+i=0
+while [ $i -lt 6 ]; do
+	for c in /sys/class/drm/card*-DSI-1; do
+		if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
+			dsi_bound=1
+			break 2
+		fi
+	done
+	# Fixed grace: simpledrm already provides card0, so "any card" is not proof of msm progress; wait before deciding to rebind.
+	for c in /sys/class/drm/card[0-9]*; do
+		if [ -e "$c" ]; then
+			sleep 0.5
+			i=$((i + 1))
+			continue 2
+		fi
+	done
+	break
+done
+# Only rebind when msm was preloaded before dispcc AND there is still no DSI
+# connector node at all (classic mdss -110 / no DRM). Never unbind a
+# half-ready probe that already registered card*-DSI-1.
+if [ -n "$msm_preloaded" ] && [ -z "$dsi_bound" ] && grep -q '^msm ' /proc/modules; then
+	have_dsi_node=
+	for c in /sys/class/drm/card*-DSI-1; do
+		[ -e "$c" ] && have_dsi_node=1 && break
+	done
+	if [ -z "$have_dsi_node" ]; then
+		dev=ae00000.display-subsystem
+		drv=/sys/bus/platform/drivers/msm-mdss
+		if [ -d "$drv" ]; then
+			log "msm was preloaded with no DSI node; rebinding $dev after dispcc"
+			echo "$dev" > "$drv/unbind" 2>/dev/null || true
+			sleep 0.5
+			echo "$dev" > "$drv/bind" 2>/dev/null || true
+		fi
+	else
+		log "msm has DSI node but not connected yet; skipping rebind"
+	fi
+fi
+
+i=0
+while [ $i -lt $((WAIT * 2)) ]; do
+	for c in /sys/class/drm/card*-DSI-1; do
+		if [ -r "$c/status" ] && [ "$(cat "$c/status")" = connected ]; then
+			log "msm bound: $(basename "$c") after $((i / 2)) s"
+			exit 0
+		fi
+	done
+	sleep 0.5
+	i=$((i + 1))
+done
+log "msm did not bind a DSI connector within ${WAIT} s; Hyprland starts on whatever is there ($(ls /dev/dri 2>/dev/null | tr '\n' ' '))"
+exit 0

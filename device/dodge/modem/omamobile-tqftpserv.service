@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=dodge modem TFTP server (MCFG from /lib/firmware)
+ConditionPathExists=/etc/omamobile/modem-probe.enable
+After=omamobile-adsp-battery.service
+
+[Service]
+ExecStart=/usr/local/bin/tqftpserv
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

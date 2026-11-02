@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Rotate Hyprland's DSI-1 output and the touchscreen with the phone.
+
+Reads raw accelerometer samples from libssc via `ssccli` (there is no IIO
+sysfs on dodge; iio-sensor-proxy's D-Bus API exposes only orientation names,
+which flip at ~35 deg). Applies the same ACCEL_MOUNT_MATRIX as udev
+(-1,0,0; 0,-1,0; 0,0,1) so the frame matches iio-sensor-proxy:
+  normal (0): gravity reading ~ (0, -g, 0)
+  left-up (1): (+g, 0, 0)   bottom-up (2): (0, +g, 0)   right-up (3): (-g, 0, 0)
+
+Hysteresis is relative to the *current* orientation: rotate only after the
+XY gravity vector has moved OMAMOBILE_ROTATE_ANGLE_DEG (default 75) away
+from the current reference, same amount both directions. A candidate must
+also hold for OMAMOBILE_ROTATE_DEBOUNCE_MS (default 600). Near-flat
+(within OMAMOBILE_ROTATE_FLAT_DEG of face-up/down, default 30) is ignored.
+Live monitor scale is preserved on apply.
+
+Must run inside the Hyprland session (install adds it to autostart.lua).
+Gated on /etc/omamobile/sensors.enable. Logs to
+$XDG_RUNTIME_DIR/omamobile-autorotate.log.
+
+  omamobile-autorotate [--self-test]
+Env: OMAMOBILE_ROTATE_ANGLE_DEG=75 OMAMOBILE_ROTATE_DEBOUNCE_MS=600
+     OMAMOBILE_ROTATE_HZ=8 OMAMOBILE_ROTATE_FLAT_DEG=30
+     OMAMOBILE_ROTATE_OUTPUT=DSI-1 OMAMOBILE_ROTATE_SCALE=2
+"""
+from __future__ import annotations
+
+import fcntl
+import json
+import math
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+ANGLE_DEG = float(os.environ.get('OMAMOBILE_ROTATE_ANGLE_DEG', '75'))
+DEBOUNCE_MS = int(os.environ.get('OMAMOBILE_ROTATE_DEBOUNCE_MS', '600'))
+POLL_HZ = float(os.environ.get('OMAMOBILE_ROTATE_HZ', '8'))
+FLAT_DEG = float(os.environ.get('OMAMOBILE_ROTATE_FLAT_DEG', '30'))
+MON = os.environ.get('OMAMOBILE_ROTATE_OUTPUT', 'DSI-1')
+SCALE_FALLBACK = float(os.environ.get('OMAMOBILE_ROTATE_SCALE', '2'))
+
+# Unit XY references after mount matrix (accel reading, Android/iio convention).
+REFS = {
+    0: (0.0, -1.0),   # normal
+    1: (1.0, 0.0),    # left-up
+    2: (0.0, 1.0),    # bottom-up
+    3: (-1.0, 0.0),   # right-up
+}
+NAMES = {0: 'normal', 1: 'left-up', 2: 'bottom-up', 3: 'right-up'}
+
+ACCEL_RE = re.compile(
+    r'Accelerometer sensor measurement:\s*X=([-\d.]+)\s*Y=([-\d.]+)\s*Z=([-\d.]+)'
+)
+
+
+def log(msg: str) -> None:
+    print(f'{time.strftime("%H:%M:%S")} {msg}', flush=True)
+
+
+def mount_matrix(x: float, y: float, z: float) -> tuple[float, float, float]:
+    """Match udev ACCEL_MOUNT_MATRIX on fastrpc-adsp-secure."""
+    return (-x, -y, z)
+
+
+def decide(current: int | None, x: float, y: float, z: float,
+           angle_deg: float = ANGLE_DEG, flat_deg: float = FLAT_DEG) -> int | None:
+    """Return the candidate transform, current if still within hysteresis, or
+    None when the phone is near flat (caller should cancel any pending)."""
+    g = math.sqrt(x * x + y * y + z * z) or 1.0
+    # Angle from face-up/down plane: 0 = flat, 90 = vertical.
+    flat_angle = math.degrees(math.acos(min(1.0, abs(z) / g)))
+    if flat_angle < flat_deg:
+        return None
+    xy = math.sqrt(x * x + y * y) or 1.0
+    ax, ay = x / xy, y / xy
+    if current is None or current not in REFS:
+        return max(REFS, key=lambda k: REFS[k][0] * ax + REFS[k][1] * ay)
+    rx, ry = REFS[current]
+    dot = max(-1.0, min(1.0, rx * ax + ry * ay))
+    ang = math.degrees(math.acos(dot))
+    if ang < angle_deg:
+        return current
+    return max(REFS, key=lambda k: REFS[k][0] * ax + REFS[k][1] * ay)
+
+
+def vec_at(from_orient: int, degrees_toward: int, deg: float) -> tuple[float, float, float]:
+    """Unit XY vector `deg` degrees from from_orient toward degrees_toward (test helper)."""
+    fx, fy = REFS[from_orient]
+    tx, ty = REFS[degrees_toward]
+    # Rotate from `from` toward `to` by deg (both are 90 deg apart on the compass).
+    rad = math.radians(deg)
+    # 2D rotation of `from` in the direction of `to`.
+    cross = fx * ty - fy * tx  # +1 = CCW from from to to, -1 = CW
+    if cross == 0:
+        raise ValueError('need distinct orientations')
+    s = 1.0 if cross > 0 else -1.0
+    # Rotate (fx,fy) by s*deg
+    c, sn = math.cos(rad), math.sin(rad) * s
+    x = fx * c - fy * sn
+    y = fx * sn + fy * c
+    return (x * 9.8, y * 9.8, 0.0)
+
+
+def self_test() -> int:
+    fail = 0
+
+    def check(got, want, label):
+        nonlocal fail
+        if got == want:
+            print(f'PASS: {label}')
+        else:
+            print(f'FAIL: {label} (got {got!r} want {want!r})')
+            fail = 1
+
+    # 60 deg from normal toward left-up -> stay
+    x, y, z = vec_at(0, 1, 60)
+    check(decide(0, x, y, z, angle_deg=75), 0, '60 deg tilt does not rotate')
+    # 80 deg hold -> left-up
+    x, y, z = vec_at(0, 1, 80)
+    check(decide(0, x, y, z, angle_deg=75), 1, '80 deg hold rotates to left-up')
+    # symmetric other way
+    x, y, z = vec_at(0, 3, 80)
+    check(decide(0, x, y, z, angle_deg=75), 3, '80 deg other way rotates to right-up')
+    # from left-up, need 75 deg back toward normal (symmetric)
+    x, y, z = vec_at(1, 0, 60)
+    check(decide(1, x, y, z, angle_deg=75), 1, '60 deg back from left-up stays')
+    x, y, z = vec_at(1, 0, 80)
+    check(decide(1, x, y, z, angle_deg=75), 0, '80 deg back from left-up -> normal')
+    # wobble around 75: 70 / 80 / 70 without debounce commit -> decision flickers but
+    # state machine below must not flap; test the decide edges
+    check(decide(0, *vec_at(0, 1, 70), angle_deg=75), 0, '70 deg stays (below threshold)')
+    check(decide(0, *vec_at(0, 1, 75), angle_deg=75), 1, '75 deg crosses threshold')
+    # near flat
+    check(decide(0, 0.1, 0.2, 9.8, flat_deg=30), None, 'face-up is near-flat')
+    check(decide(0, 0.1, 0.2, -9.8, flat_deg=30), None, 'face-down is near-flat')
+    # debounce state machine: wobble around 75 must not apply
+    current = 0
+    pending = None
+    pending_ms = 0
+    applied = []
+
+    def step(t_ms, x, y, z):
+        nonlocal current, pending, pending_ms
+        cand = decide(current, x, y, z, angle_deg=75)
+        if cand is None or cand == current:
+            pending = None
+            return
+        if cand != pending:
+            pending = cand
+            pending_ms = t_ms
+        elif t_ms - pending_ms >= 600:
+            applied.append((cand, t_ms))
+            current = cand
+            pending = None
+
+    # cross 80 briefly then back to 60 within 600 ms
+    step(0, *vec_at(0, 1, 80))
+    step(200, *vec_at(0, 1, 60))
+    step(800, *vec_at(0, 1, 60))
+    check(current, 0, 'wobble around 75 does not flap')
+    check(applied, [], 'wobble applied nothing')
+    # clear 80 deg hold
+    applied.clear()
+    step(1000, *vec_at(0, 1, 80))
+    step(1600, *vec_at(0, 1, 80))
+    check(current, 1, '80 deg hold applies after debounce')
+    check(applied, [(1, 1600)], 'applied once at T+600')
+    # flat cancels
+    applied.clear()
+    current = 0
+    pending = None
+    step(2000, *vec_at(0, 1, 80))
+    step(2100, 0.0, 0.0, 9.8)  # flat cancels
+    step(2800, 0.0, 0.0, 9.8)
+    check(current, 0, 'flat -> no rotate')
+    check(applied, [], 'flat applied nothing')
+    return fail
+
+
+def backlight_on() -> bool:
+    base = '/sys/class/backlight'
+    try:
+        for name in os.listdir(base):
+            path = os.path.join(base, name, 'brightness')
+            try:
+                with open(path) as f:
+                    if int(f.read().strip() or '0') > 0:
+                        return True
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        return True
+    return False
+
+
+def live_scale() -> float:
+    try:
+        out = subprocess.check_output(['hyprctl', '-j', 'monitors'], text=True, timeout=2)
+        for m in json.loads(out or '[]'):
+            if m.get('name') == MON:
+                return float(m.get('scale', SCALE_FALLBACK))
+    except (subprocess.SubprocessError, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return SCALE_FALLBACK
+
+
+def apply(transform: int, current: int | None) -> None:
+    scale = live_scale()
+    lua_mon = (f'hl.monitor({{ output = "{MON}", mode = "preferred", position = "auto", '
+               f'scale = {scale:g}, transform = {transform} }})')
+    lua_touch = f'hl.config({{ input = {{ touchdevice = {{ transform = {transform} }} }} }})'
+    subprocess.run(['hyprctl', 'eval', lua_mon], capture_output=True, text=True)
+    subprocess.run(['hyprctl', 'eval', lua_touch], capture_output=True, text=True)
+    log(f'apply transform {transform} ({NAMES.get(transform, "?")}) scale {scale:g} '
+        f'(was {current if current is not None else "-"})')
+
+
+def run() -> int:
+    if not os.path.exists('/etc/omamobile/sensors.enable'):
+        return 0
+    runtime = os.environ.get('XDG_RUNTIME_DIR', '/tmp')
+    log_path = os.path.join(runtime, 'omamobile-autorotate.log')
+    lock_path = os.path.join(runtime, 'omamobile-autorotate.lock')
+    lock_fd = open(lock_path, 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
+    if not sys.stdout.isatty():
+        sys.stdout = open(log_path, 'a', buffering=1)
+        sys.stderr = sys.stdout
+
+    current: int | None = None
+    pending: int | None = None
+    pending_ms = 0.0
+    last_decide = 0.0
+    interval = 1.0 / max(POLL_HZ, 1.0)
+    stop = False
+
+    def handle_sig(signum, frame):
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, handle_sig)
+    signal.signal(signal.SIGINT, handle_sig)
+
+    log(f'start angle={ANGLE_DEG:g}deg debounce={DEBOUNCE_MS}ms hz={POLL_HZ:g} '
+        f'flat={FLAT_DEG:g}deg mon={MON} source=ssccli+mount_matrix')
+
+    while not stop:
+        if not backlight_on():
+            # Screen off: drop the accel stream and sleep; saves DSP samples.
+            time.sleep(1.0)
+            pending = None
+            continue
+        proc = subprocess.Popen(
+            ['ssccli', '--sensor', 'accelerometer', '--timeout', '3600'],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if stop:
+                    break
+                if not backlight_on():
+                    log('screen off; pausing accel')
+                    break
+                m = ACCEL_RE.search(line)
+                if not m:
+                    continue
+                now = time.monotonic()
+                if now - last_decide < interval:
+                    continue
+                last_decide = now
+                rx, ry, rz = float(m.group(1)), float(m.group(2)), float(m.group(3))
+                x, y, z = mount_matrix(rx, ry, rz)
+                cand = decide(current, x, y, z)
+                now_ms = time.time() * 1000.0
+                if cand is None:
+                    if pending is not None:
+                        log(f'cancel pending {pending} (near flat)')
+                    pending = None
+                    continue
+                if current is None:
+                    # First fix: adopt without waiting for a 75 deg swing.
+                    apply(cand, current)
+                    current = cand
+                    pending = None
+                    continue
+                if cand == current:
+                    if pending is not None:
+                        log(f'cancel pending {pending} (back within {ANGLE_DEG:g}deg of '
+                            f'{NAMES[current]})')
+                    pending = None
+                    continue
+                if cand != pending:
+                    pending = cand
+                    pending_ms = now_ms
+                    # angle from current for the log
+                    xy = math.sqrt(x * x + y * y) or 1.0
+                    ax, ay = x / xy, y / xy
+                    rx_, ry_ = REFS[current]
+                    ang = math.degrees(math.acos(max(-1.0, min(1.0, rx_ * ax + ry_ * ay))))
+                    log(f'pending {NAMES[pending]} ({pending}) at {ang:.0f}deg from '
+                        f'{NAMES[current]} (need {ANGLE_DEG:g}+, debounce {DEBOUNCE_MS}ms)')
+                    continue
+                if now_ms - pending_ms >= DEBOUNCE_MS:
+                    apply(pending, current)
+                    current = pending
+                    pending = None
+        finally:
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        if not stop:
+            time.sleep(0.5)  # brief pause before restarting ssccli
+    log('exit')
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == '--self-test':
+        return self_test()
+    return run()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

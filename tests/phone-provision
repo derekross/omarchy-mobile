@@ -85,16 +85,18 @@ grep -q 'first storageproxyd start' <<<"$out" || fail "warns that the first stor
 pass "dry run: old paths mapped to new names and the user's home, phone untouched, fingerprint warning"
 
 # Raven's run does none of cheetah's backup or fingerprint steps: each of
-# their options is refused before anything runs, not ignored
+# their options is refused before anything runs, not ignored. The fake
+# ssh records any call, so a call made before the refusal is caught even
+# if the tool ignores its failure
 : > "$t/factory.zip"
 for o in --fingerprint --import-home --restore-config --restore-wifi --with-waves --force "--backup $t"; do
   # shellcheck disable=SC2086 # the --backup case is two words on purpose
-  if out=$(PHONE_SSH=$t/phone-ssh tools/phone-provision -d raven --dry-run --work "$t/work" $o "$t/factory.zip" 2>&1); then
+  if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision -d raven --dry-run --work "$t/work" $o "$t/factory.zip" 2>&1); then
     fail "-d raven refuses $o"
   fi
   grep -qF -- "-d raven doesn't support ${o%% *}" <<<"$out" || { echo "$out"; fail "says it refuses $o"; }
+  [[ ! -e $t/ssh.calls ]] || { cat "$t/ssh.calls"; fail "-d raven refuses $o without contacting the phone"; }
 done
-[[ ! -e $t/ssh.calls ]] || fail "a refused raven run never contacts the phone"
 pass "-d raven refuses cheetah's backup and fingerprint options"
 
 out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --user alice 2>&1)
@@ -139,7 +141,7 @@ pass "first install, dry run: the six NV lines and props.conf from the phone's b
 
 # Refusals, all before the phone is contacted (these runs aren't dry runs)
 if out=$(fresh --user alice "$t/factory.zip"); then fail "a first install without --nv-backup is refused"; fi
-grep -qF -- "no $H/android/reference/phone-backup-20261013/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions and give it with --nv-backup DIR" <<<"$out" ||
+grep -qF -- "no $H/android/reference/phone-backup-20261013/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6) and give it with --nv-backup DIR" <<<"$out" ||
   { echo "$out"; fail "says to give --nv-backup"; }
 for p in modem_a modem_b efs efs_backup modem_userdata persist; do
   grep -v "  $p\\.img\$" "$N/SHA256SUMS" > "$t/nv-short/SHA256SUMS"

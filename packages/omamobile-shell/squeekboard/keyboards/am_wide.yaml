@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# squeekboard 1.43.1's am_wide.yaml (https://gitlab.gnome.org/World/Phosh/squeekboard,
+# tag v1.43.1, GPL-3.0-or-later), with two changes for Omarchy Mobile: the
+# action row (Mic, Paste, Emoji, Hide; XF86 keysyms that hypr/phone.lua
+# binds for squeekboard only) on top of every view, and the globe key
+# sending XF86MediaLanguageMenu (the shell's language sheet) instead of
+# opening squeekboard's popover. Made by
+# squeekboard/generate (change the generator, not this file). The row
+# sums to the widest row's 671.996: 2 x 201.599 + 2 x 134.399.
+# omamobile-setup-user links it into ~/.local/share/squeekboard/keyboards/.
+# Language: Armenian
+# Armenian layout based on work by Norayr Chilingarian
+# Yerevan
+# Oct 2021
+---
+outlines:
+    default:       { width: 51.692,  height: 42 }
+    change-view:   { width: 77.538,  height: 42 }
+    change-view-2: { width: 103.384, height: 42 }
+    placeholder:   { width: 51.692,  height: 42 }
+    spaceline:     { width: 361.844, height: 42 }
+    special:       { width: 51.692,  height: 42 }
+    special-2:     { width: 77.538,  height: 42 }
+    special-3:     { width: 103.384, height: 42 }
+    mic:           { width: 201.599, height: 32 }
+    paste:         { width: 201.599, height: 32 }
+    emoji:         { width: 134.399, height: 32 }
+    hide:          { width: 134.399, height: 32 }
+
+views:
+    base:
+        - "Mic Paste Emoji Hide"
+        - "՝ ֆ ձ ֊ , ։ ՞ ․ ՛ ) օ է ղ"
+        - "ճ փ բ ս մ ո ւ կ ը թ ծ ց »"
+        - "-- ջ վ գ ե ա ն ի տ հ պ ր --"
+        - "show_upper ժ դ չ յ զ լ ք խ շ ռ BackSpace"
+        - "show_numbers preferences space . Return"
+    upper:
+        - "Mic Paste Emoji Hide"
+        - "՜ Ֆ Ձ — $ … ՟ և ՚ ( Օ Է Ղ"
+        - "Ճ Փ Բ Ս Մ Ո Ւ Կ Ը Թ Ծ Ց «"
+        - "-- Ջ Վ Գ Ե Ա Ն Ի Տ Հ Պ Պ Ր"
+        - "show_upper Ժ Դ Չ Յ Զ Լ Ք Խ Շ Ռ BackSpace"
+        - "show_numbers preferences space . Return"
+    numbers:
+        - "Mic Paste Emoji Hide"
+        - "-- -- -- -- -- -- -- -- -- -- -- -- --"
+        - "-- -- -- ﬓ ﬔ ﬕ ﬖ ﬗ ՟ և -- -- --"
+        - "-- -- -- , \" ' : ; ! ? -- -- --"
+        - "show_symbols 1 2 3 4 5 6 7 8 9 0 BackSpace"
+        - "show_letters preferences space . Return"
+    symbols:
+        - "Mic Paste Emoji Hide"
+        - "-- -- * # \\ % < > = [ ] ² --"
+        - "-- -- © $ / & - _ + ( ) ³ --"
+        - "-- -- ® £ € ¥ ^ ° @ { } -- --"
+        - "show_numbers_from_symbols ~ ` | · √ π τ ÷ × ¶ BackSpace"
+        - "show_letters preferences space . Return"
+
+buttons:
+    show_upper:
+        action:
+            locking:
+                lock_view: "upper"
+                unlock_view: "base"
+        outline: "change-view"
+        icon: "key-shift"
+    BackSpace:
+        outline: "special-2"
+        icon: "edit-clear-symbolic"
+        action: "erase"
+    preferences:
+        keysym: "XF86MediaLanguageMenu"
+        outline: "special"
+        icon: "keyboard-mode-symbolic"
+    show_numbers:
+        action:
+            set_view: "numbers"
+        outline: "change-view-2"
+        label: "123"
+    show_numbers_from_symbols:
+        action:
+            set_view: "numbers"
+        outline: "change-view"
+        label: "123"
+    show_letters:
+        action:
+            set_view: "base"
+        outline: "change-view-2"
+        label: "ԱԲԳ"
+    show_symbols:
+        action:
+            set_view: "symbols"
+        outline: "change-view"
+        label: "*/="
+    space:
+        outline: "spaceline"
+        text: " "
+    Return:
+        outline: "special-3"
+        icon: "key-enter"
+        keysym: "Return"
+    --:
+        outline: "placeholder"
+        text: ""
+    # The action row (hypr/phone.lua binds the keysyms)
+    Mic:
+        outline: "mic"
+        keysym: "XF86Dictate"
+        label: "󰍬 Mic"
+    Paste:
+        outline: "paste"
+        keysym: "XF86Paste"
+        label: "󰆒 Paste"
+    Emoji:
+        outline: "emoji"
+        keysym: "XF86EmojiPicker"
+        label: "󰞅 Emoji"
+    Hide:
+        outline: "hide"
+        keysym: "XF86Keyboard"
+        label: "󰌏 Hide"
