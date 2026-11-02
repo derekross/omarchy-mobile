@@ -1,7 +1,15 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Publishing the kernel: candidate `omamobile-next` (cheetah / gs201)
 
-Status (2026-10-19): **published.** `omamobile` is on GitHub
+Status (2026-11-01): **process changed.** `omamobile` on GitHub is the one
+source of the release kernel; `tools/publish-kernel` now only fast-forwards
+it from a local release branch built on the published tip, checks sign-offs,
+and tags releases (`kernel-<YYYY.MM.DD>`). It no longer replays, squashes or
+force-pushes, and `omamobile-int` is no longer published. The commands
+below (the replay and force push in 5.4) are history; see
+[RELEASES](../../docs/RELEASES.md) §8.
+
+Earlier status (2026-10-19): **published.** `omamobile` is on GitHub
 (linux-omarchy-mobile, 146 commits on v7.3-rc6) and moves forward without
 rewriting published commits: `tools/publish-kernel` fast-forwards when the
 published tip's tree matches a local commit. Community kernel PRs are reviewed
