@@ -151,6 +151,61 @@ def provision_default_profile(client, apn, ip_type='ipv4v6'):
 
 
 
+
+# After the data permission is switched on, the modem is given time to say
+# what it does about it before the setup goes out: on 2026-11-02 every setup
+# was answered 36 within 150 ms and was followed within a second by three
+# IND_REG_FAILED and two IND_NTW_STATE_CHANGED, so the modem was re-attaching
+# around the request. The wait ends after SETTLE_QUIET seconds without an
+# indication, or at SETTLE_LIMIT.
+SETTLE_QUIET = 3
+SETTLE_LIMIT = 20
+
+
+def keep_packet(packet):
+    """Append a raw indication to a private file in RAM (it may carry the
+    PLMN or cell identity), length-prefixed, for decoding later."""
+    path = RESPONSE.with_name('indications.bin')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, struct.pack('<H', len(packet)) + packet)
+    finally:
+        os.close(fd)
+
+
+def describe(packet):
+    message, length = struct.unpack_from('<HH', packet, 2)
+    payload = packet[8:]
+    line = f'{NAMES.get(message, hex(message))} ({length} bytes)'
+    if message == 0x0604 and payload and 1 <= payload[0] <= 15 and len(payload) > 1:
+        count = payload[0]
+        size = (len(payload) - 1) // count
+        records = []
+        for index in range(count):
+            record = payload[1 + index * size:1 + (index + 1) * size]
+            if len(record) >= 5:
+                records.append(struct.unpack_from('<HBBB', record))
+        line += f' data calls {count}: status, CID, active, PDP type {records}'
+    return line
+
+
+def settle(client, label):
+    deadline = time.monotonic() + SETTLE_LIMIT
+    last = time.monotonic()
+    seen = 0
+    while True:
+        now = time.monotonic()
+        if now >= deadline or now - last >= SETTLE_QUIET:
+            break
+        packet = client.next_indication(min(.5, deadline - now))
+        if packet is None:
+            continue
+        seen += 1
+        last = time.monotonic()
+        keep_packet(packet)
+        print(f'{label}: {describe(packet)}', flush=True)
+    print(f'{label}: {seen} indication(s), then quiet' if seen else f'{label}: quiet', flush=True)
+
 def listen_after_failure(client, seconds=5):
     """After a refused setup, keep the channel open a few seconds and log
     what the modem sends next: on 2026-11-02 two or three messages arrived
@@ -167,19 +222,8 @@ def listen_after_failure(client, seconds=5):
         if packet is None:
             continue
         seen += 1
-        message, length = struct.unpack_from('<HH', packet, 2)
-        payload = packet[8:]
-        line = f'after the failure: {NAMES.get(message, hex(message))} ({length} bytes)'
-        if message == 0x0604 and payload and 1 <= payload[0] <= 15 and len(payload) > 1:
-            count = payload[0]
-            size = (len(payload) - 1) // count
-            records = []
-            for index in range(count):
-                record = payload[1 + index * size:1 + (index + 1) * size]
-                if len(record) >= 5:
-                    records.append(struct.unpack_from('<HBBB', record))
-            line += f' data calls {count}: status, CID, active, PDP type {records}'
-        print(line, flush=True)
+        keep_packet(packet)
+        print(f'after the failure: {describe(packet)}', flush=True)
     print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
 
 def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
@@ -193,6 +237,19 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
     if state_path.exists() or requested_cid in calls or calls != owned:
         raise RuntimeError('existing target or unresolved bearer ownership')
     allow_data(client)
+    settle(client, 'after allowing data')
+    # The registration as it stands now, not before the permission: the
+    # modem may have re-attached meanwhile.
+    for second in range(60):
+        state = client.request(0x0701)
+        if len(state) >= 4 and state[0] in (1, 5):
+            break
+        if second == 0:
+            print('registration lost after allowing data; waiting for it', flush=True)
+        time.sleep(1)
+    else:
+        raise RuntimeError('PS network is not registered after allowing data')
+    print('registration before the setup: PS state, reject, RAT', (state[0], state[1], state[3]), flush=True)
     # No ALLOC_PDU_SESSION on cellular (module docstring): session 0.
     session = 0
     # Persist ownership before setup. A timeout has an unknown outcome: the

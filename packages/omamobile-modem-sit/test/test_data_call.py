@@ -48,7 +48,9 @@ class LifecycleTests(unittest.TestCase):
         self.state = root / 'owned.json'
         self.response = root / 'response.bin'
         self.patches = [patch.object(data_call, 'STATE', self.state),
-                        patch.object(data_call, 'RESPONSE', self.response)]
+                        patch.object(data_call, 'RESPONSE', self.response),
+                        patch.object(data_call, 'SETTLE_QUIET', 0),
+                        patch.object(data_call, 'SETTLE_LIMIT', 0)]
         for item in self.patches:
             item.start()
 
@@ -76,7 +78,8 @@ class LifecycleTests(unittest.TestCase):
         indication = struct.pack('<BBHHxx', 2, 0, 0x0604, 8 + 1 + len(record)) + b'\1' + bytes(record)
         queue = [indication, None]
         modem.next_indication = lambda timeout=1: queue.pop(0) if queue else None
-        with patch('data_call.time.monotonic', side_effect=[0, 0, 1, 2, 10]), \
+        clock = iter([0, 0, 0, 0, 1, 2, 10] + [100] * 20)
+        with patch('data_call.time.monotonic', side_effect=lambda: next(clock)), \
                 patch('builtins.print') as printed:
             with self.assertRaises(RuntimeError):
                 data_call.activate(modem, APN)
@@ -86,6 +89,8 @@ class LifecycleTests(unittest.TestCase):
         lines = ' '.join(str(call.args[0]) for call in printed.call_args_list)
         self.assertIn('IND_DATA_CALL_LIST_CHANGED', lines)
         self.assertIn('[(36, 1, 0, 0)]', lines)
+        kept = self.response.with_name('indications.bin').read_bytes()
+        self.assertEqual(kept, struct.pack('<H', len(indication)) + indication)
         self.assertFalse(self.state.exists())
         self.assertFalse(self.response.exists())
 
@@ -109,6 +114,24 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(json.loads(self.state.read_text()), {'cid': 1, 'session': 0})
         self.assertEqual(json.loads(data_call.paths(2)[0].read_text()), {'cid': 2, 'session': 0})
         data_call.paths(2)[0].unlink()
+
+    def test_setup_waits_for_the_modem_to_go_quiet_and_rereads_registration(self):
+        # After the data permission, indications are drained and logged, the
+        # registration is read again, and only then does the setup go out.
+        modem = Modem()
+        packet = struct.pack('<BBHHxx', 2, 0, 0x0604, 8 + 1) + b'\0'
+        queue = [packet, None]
+        modem.next_indication = lambda timeout=1: queue.pop(0) if queue else None
+        with patch.object(data_call, 'SETTLE_QUIET', 5), patch.object(data_call, 'SETTLE_LIMIT', 5), \
+                patch('data_call.time.monotonic', side_effect=[0, 0, 0, 1, 1, 9, 9, 9, 9, 9]), \
+                patch('builtins.print') as printed:
+            data_call.activate(modem, APN)
+        lines = [str(call.args[0]) for call in printed.call_args_list]
+        self.assertTrue(any(line.startswith('after allowing data: IND_') for line in lines))
+        self.assertIn('registration before the setup: PS state, reject, RAT', ' '.join(lines))
+        idents = [i for i, _ in modem.sent]
+        self.assertLess(idents.index(0x0710), idents.index(0x0600))
+        self.assertEqual(idents.count(0x0701), 2)
 
     def test_existing_ownership_prevents_setup(self):
         self.state.write_text('{}')
