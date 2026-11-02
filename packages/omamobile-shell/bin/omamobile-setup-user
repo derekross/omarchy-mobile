@@ -402,8 +402,8 @@ if omarchy-done ensure omamobile-back-plugin; then
   add_plugin omamobile.back
 fi
 # Voice input (omamobile.voice): hold the home pill to ask the agent, the
-# keyboard strip's mic key to dictate, through Voxtype when it is
-# installed (Install > AI > Dictation); without it the sheet says so.
+# keyboard strip's mic key to dictate, through Voxtype (in the root image,
+# set up below; or Install > AI > Dictation); without it the sheet says so.
 if omarchy-done ensure omamobile-voice-plugin; then
   add_plugin omamobile.voice
 fi
@@ -414,6 +414,33 @@ if omarchy-done ensure omamobile-menu-voice; then
   if [[ -f $extension ]] && ! grep -q '"setup.voice"' "$extension"; then
     sed -i '0,/^{/s//{\n  "setup.voice": {"icon":"\xf3\xb0\x8d\xac","label":"Voice","description":"Speech model and how voice input starts","action":"omarchy-shell shell summon omamobile.voice '"'"'{\\"page\\":\\"settings\\"}'"'"'"},/' "$extension"
   fi
+fi
+# Voice out of the box: the root image ships voxtype-bin (rootfs/packages.base)
+# and Whisper's base.en (omamobile-voice, in /usr/share/omamobile/voice/models),
+# so a new user gets what Omarchy's Install > AI > Dictation
+# (omarchy-voxtype-install) sets up, without its 142 MB download: Omarchy's
+# Voxtype config, the model in Voxtype's models directory (a link to the
+# shipped file; Voxtype looks only in ~/.local/share/voxtype/models) and the
+# packaged user daemon enabled, so it starts with the graphical session.
+# Omarchy's "Install Dictation" invitation is marked done, as its install
+# would leave it. Once per user, and only with both installed: a config or a
+# model the user already has stays, and a user who later removes Dictation
+# (Remove > Dictation) doesn't get it back at the next login.
+voxconf=~/.config/voxtype/config.toml
+voxmodels=${OMAMOBILE_VOICE_MODELS:-/usr/share/omamobile/voice/models}
+if command -v "${OMAMOBILE_VOXTYPE:-voxtype}" >/dev/null && [[ -f $voxmodels/ggml-base.en.bin ]] &&
+  omarchy-done ensure omamobile-voxtype-setup; then
+  omarchy-done mark voxtype-install-invitation
+  voxdefault=${OMARCHY_PATH:-/usr/share/omarchy}/default/voxtype/config.toml
+  if [[ ! -f $voxconf && -f $voxdefault ]]; then
+    mkdir -p "${voxconf%/*}"
+    cp "$voxdefault" "$voxconf"
+  fi
+  mkdir -p ~/.local/share/voxtype/models
+  for model in "$voxmodels"/ggml-*.bin; do
+    [[ -e ~/.local/share/voxtype/models/${model##*/} ]] || ln -sfn "$model" ~/.local/share/voxtype/models/"${model##*/}"
+  done
+  systemctl --user enable voxtype.service || echo "omamobile-setup-user: could not enable voxtype.service" >&2
 fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
 # stays the model, with Whisper's audio context cut to the clip's length
@@ -429,7 +456,6 @@ fi
 #    marker by more than a minute): a model the user chose since stays.
 # Voxtype ignores a per-recording `--model` it hasn't prepared, so this is
 # the daemon's own config; it restarts once, and only if it was running.
-voxconf=~/.config/voxtype/config.toml
 voxdone=~/.local/state/omarchy/done
 if [[ -f $voxconf ]]; then
   voxrestart=0
