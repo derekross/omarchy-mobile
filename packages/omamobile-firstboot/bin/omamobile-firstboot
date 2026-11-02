@@ -24,7 +24,11 @@
 #      PIN or password exists, which it does here);
 #   9. Omarchy's user setup (omarchy-provision-user), then
 #      omamobile-setup-user, as the user;
-#  10. deletes firstboot.conf.
+#  10. fingerprint, when the owner acknowledged its secure-storage write at
+#      install time (FINGERPRINT=yes): /etc/omamobile/fingerprint.conf, the
+#      record omamobile-fp-chroot requires, and omamobile-fp enabled (it
+#      starts once tools/phone-provision has added Google's files);
+#  11. deletes firstboot.conf.
 #
 # Every step is idempotent, so a failed run can simply run again (the unit
 # reruns at the next boot while firstboot.conf exists). The log is
@@ -48,6 +52,12 @@
 #   WIFI_SSID       optional; WIFI_PSK with it (none for an open network)
 #   CREDENTIAL      pin or password: how the lock screen asks (default pin)
 #   FULL_NAME, EMAIL  optional; git identity, as Omarchy's installer asks
+#   FINGERPRINT     yes or no: yes records the installer's acknowledgement of
+#                   fingerprint's secure-storage write (typing the codename
+#                   after its warning). Missing (an older installer) is no,
+#                   never consent
+#   ACK_DATE        the acknowledgement's date, YYYY-MM-DD (UTC); required
+#                   with FINGERPRINT=yes
 set -euo pipefail
 
 # Tests run the whole thing against a scratch root and fake commands.
@@ -103,7 +113,7 @@ parse() {
     [[ $value != *[$'\x01'-$'\x1f\x7f']* ]] || die "$file:$n: $key has control characters"
     case $key in
       SSH_KEY) SSH_KEYS+=("$value") ;;
-      USERNAME|PASSWORD_HASH|HOSTNAME|TIMEZONE|WIFI_SSID|WIFI_PSK|CREDENTIAL|FULL_NAME|EMAIL)
+      USERNAME|PASSWORD_HASH|HOSTNAME|TIMEZONE|WIFI_SSID|WIFI_PSK|CREDENTIAL|FULL_NAME|EMAIL|FINGERPRINT|ACK_DATE)
         [[ -z ${C[$key]+x} ]] || die "$file:$n: $key given twice"
         C[$key]=$value ;;
       *) die "$file:$n: unknown key $key" ;;
@@ -150,6 +160,14 @@ validate() {
   [[ ${C[CREDENTIAL]} =~ ^(pin|password)$ ]] || die "CREDENTIAL must be pin or password"
   [[ ${C[FULL_NAME]:-} != *[:,]* ]] || die "FULL_NAME can't contain : or ,"
   [[ -z ${C[EMAIL]:-} || ${C[EMAIL]} =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]] || die "EMAIL '${C[EMAIL]}' is not an address"
+  # A missing FINGERPRINT is no: only an explicit acknowledgement is consent
+  C[FINGERPRINT]=${C[FINGERPRINT]:-no}
+  [[ ${C[FINGERPRINT]} =~ ^(yes|no)$ ]] || die "FINGERPRINT must be yes or no"
+  if [[ ${C[FINGERPRINT]} == yes ]]; then
+    [[ ${C[ACK_DATE]:-} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "FINGERPRINT=yes needs ACK_DATE=YYYY-MM-DD (the acknowledgement's date)"
+  elif [[ -n ${C[ACK_DATE]+x} ]]; then
+    die "ACK_DATE without FINGERPRINT=yes"
+  fi
 }
 
 summary() {
@@ -163,6 +181,11 @@ summary() {
     echo "wi-fi:     none"
   fi
   [[ -n ${C[FULL_NAME]:-}${C[EMAIL]:-} ]] && echo "git:       ${C[FULL_NAME]:-} <${C[EMAIL]:-}>"
+  if [[ ${C[FINGERPRINT]} == yes ]]; then
+    echo "fingerprint: on (secure-storage write acknowledged at install, ${C[ACK_DATE]})"
+  else
+    echo "fingerprint: off"
+  fi
   return 0
 }
 
@@ -190,8 +213,9 @@ U=${C[USERNAME]}
 WARNINGS=()
 FATAL=0
 # step NAME FUNCTION: run one step, log its result, keep going on failure.
-# Essential steps (the account, the password, SSH, the login) keep
-# firstboot.conf in place when they fail, so the next boot tries again.
+# Essential steps (the account, the password, SSH, the login, the
+# fingerprint record) keep firstboot.conf in place when they fail, so the
+# next boot tries again.
 step() {
   local name=$1 essential=$2 fn=$3 status
   echo "--- $name"
@@ -458,6 +482,31 @@ s_user_setup() {
   return $failed
 }
 
+# The owner acknowledged fingerprint's secure-storage write in the installer
+# (FINGERPRINT=yes): record it where omamobile-fp-chroot looks before its
+# first storage start, and enable the service. The unit stays inert until
+# tools/phone-provision has pushed Google's files (its ConditionPathExists),
+# then starts at the next boot. Nothing is started here.
+s_fingerprint() {
+  [[ ${C[FINGERPRINT]} == yes ]] || { echo "    off (no acknowledgement in firstboot.conf)"; return 0; }
+  mkdir -p "$ROOT/etc/omamobile"
+  {
+    echo "# Written by omamobile-firstboot from the installer's acknowledgement:"
+    echo "# the owner typed the codename after the warning that fingerprint's first"
+    echo "# start writes Trusty's secure storage. omamobile-fp-chroot requires it."
+    echo "CONSENT=yes"
+    echo "CONSENT_SOURCE=install-acknowledgement"
+    echo "CONSENT_DATE=${C[ACK_DATE]}"
+  } > "$ROOT/etc/omamobile/fingerprint.conf.new"
+  chmod 644 "$ROOT/etc/omamobile/fingerprint.conf.new"
+  mv -f "$ROOT/etc/omamobile/fingerprint.conf.new" "$ROOT/etc/omamobile/fingerprint.conf"
+  if [[ -f $ROOT/usr/lib/systemd/system/omamobile-fp.service ]]; then
+    systemctl enable omamobile-fp.service
+  else
+    echo "    recorded; omamobile-fp.service isn't installed, so nothing to enable"
+  fi
+}
+
 step "pacman keyring" optional s_keyring
 step "hostname, time zone, locale" optional s_identity
 step "user ${U}" essential s_user
@@ -468,6 +517,7 @@ step "services and firewall" essential s_services
 step "Wi-Fi" optional s_wifi
 step "login" essential s_login
 step "user setup" optional s_user_setup
+step "fingerprint" essential s_fingerprint
 
 if ((FATAL)); then
   echo "=== firstboot incomplete: ${WARNINGS[*]}; firstboot.conf kept, the next boot tries again ==="
