@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Reinstall runbook (cheetah): a clean Omarchy Mobile install with the installer
 
-Status (2026-10-13): **the first clean reinstall passed** (section 10
+Status (2026-10-13; updated 2026-11-02): **the first clean reinstall passed** (section 10
 lists the steps that passed and what was fixed afterwards). That run was
 Phase 5 of the rename plan: wipe the hand-installed root on `userdata` and
 install the renamed system with `tools/install-phone`, then put the phone's
