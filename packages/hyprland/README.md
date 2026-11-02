@@ -71,15 +71,27 @@ built there end in `.pkg.tar.xz`, not `.zst`. The commands below use a glob.
 `hyprpm` split is still built and published. pacman upgrades only installed
 packages, so publishing it changes nothing.
 
-## Building on the phone
+## Building
 
-Hyprland is C++ with heavy templates (glaze, hyprutils). Estimate for the phone (8 cores: 2× X1, 2× A78, 4× A55; about 12 GB RAM):
+**The default needs no phone:** `tools/build-packages packages/hyprland`
+builds in a clean Arch Linux ARM container on the laptop, updated to the
+current repositories, so the sonames come out right by construction. It
+runs under qemu-user and takes hours. The nightly `tools/repo-publish` also
+builds it (`--all` includes the slow packages whose version isn't in
+`out/repo` yet). If that build fails to link, refresh the base image
+(`ALARM_REFRESH=1`) before blaming the PKGBUILD.
 
-- **Time:** 30–60 min at -j4, longer if it throttles. Keep it on the
-  charger.
+**Faster, opt-in: a clean root on the phone.** Hyprland is C++ with heavy
+templates (glaze, hyprutils). On the phone (8 cores: 2× X1, 2× A78, 4× A55;
+about 12 GB RAM):
+
+- **Time:** about 24 min at `-j4` with the session running, measured on
+  2026-11-02 (0.57.0). Keep it on the charger.
 - **Memory:** up to about 1.1 GB per compiler process, so about 4.5 GB at
   -j4. -j8 (makepkg's `nproc` default in upstream's Makefile) leaves too
   little for a running session.
+- **Disk:** the root and the build need about 5 GB on `userdata`; check
+  `df -h /home` first.
 
 makepkg writes each soname dependency with the version of the library it
 found at build time. **Build against the libraries the repositories carry
@@ -88,34 +100,76 @@ aquamarine produces a package that depends on `libaquamarine.so=14` again.
 `tools/repo-build` builds in the phone's own system with `--nodeps`, so use
 it only when the phone's aquamarine, hyprgraphics, hyprutils, hyprlang,
 hyprwire and hyprcursor match `extra`'s (`pacman -Q` against `pacman -Si`).
-Otherwise build in a clean root, as on 2026-11-02 (as root on the phone; the
-directory is the phone user's, and nothing outside it changes):
+Otherwise use a clean root, as on 2026-11-02.
+
+The root comes from Arch Linux ARM's tarball, and `pacman-key --populate`
+inside it is only as trustworthy as that tarball. Use the copy
+`tools/lib/alarm.sh` has already checked: every `tools/build-packages` run
+verifies `~/.cache/omamobile-rootfs/ArchLinuxARM-aarch64-latest.tar.gz`
+(its MD5, and a signature by the pinned build key). To check it again by
+hand on the laptop:
 
 ```sh
-R=/home/<user>/build/hyprland-root
-mkdir -p $R && bsdtar -xpf ArchLinuxARM-aarch64-latest.tar.gz -C $R   # tarball verified as tools/lib/alarm.sh does
-N="systemd-nspawn -q --register=no --resolv-conf=replace-uplink -D $R"
-$N bash -c 'pacman-key --init && pacman-key --populate archlinuxarm &&
-  pacman -Syu --noconfirm --needed base-devel cmake glaze hyprland-protocols hyprwayland-scanner meson ninja xorgproto <depends...> &&
-  useradd -m builder'
-# copy packages/hyprland to $R/home/builder/hyprland, then
-$N su builder -c 'cd ~/hyprland && MAKEFLAGS=-j4 makepkg -f --noconfirm'
+cd ~/.cache/omamobile-rootfs
+md5sum -c ArchLinuxARM-aarch64-latest.tar.gz.md5
+G=$(mktemp -d); GNUPGHOME=$G gpg -q --batch --import alarm-builder.asc
+GNUPGHOME=$G gpg --batch --status-fd 1 --verify ArchLinuxARM-aarch64-latest.tar.gz.sig ArchLinuxARM-aarch64-latest.tar.gz 2>/dev/null |
+  grep -E '^\[GNUPG:\] VALIDSIG .* 68B3537F39A313B3E574D06777193F152BDBE6A6$'   # must print a line
+rm -rf "$G"
 ```
 
-Check the result before publishing it:
-`pacman -Qip hyprland-*.pkg.tar.* | grep -o 'lib\(aquamarine\|hyprgraphics\)\.so=[0-9]*'`
-must name the sonames `extra` provides. Then copy the `hyprland` and
-`hyprpm` files (not `-debug`) into `out/repo/aarch64` on the laptop, sign
-them with the release key and rebuild the database (`tools/repo-build`'s
-signing and database steps), and `tools/repo-push`. On the phone,
-`omarchy update`.
+Then, from the laptop (`U` is the account logged in on the phone's screen;
+nothing outside its `build/` directory changes on the phone):
 
-To try it on one phone without the repository, copy the `hyprland` file to
-the phone and `sudo OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U` it together
-with the new libraries (`pacman -S aquamarine hyprgraphics` in the same
-transaction, so Hyprland and its libraries move together). Then restart the
-session (`systemctl restart sddm`) and check `hyprctl version` and
-`pacman -Q hyprland` (expect `0.57.0-3.1`).
+```sh
+U=$(tools/phone-ssh "loginctl list-users --no-legend | awk '\$2 != \"root\" {print \$2; exit}'")
+R=/home/$U/build/hyprland-root
+N="systemd-nspawn -q --register=no --resolv-conf=replace-uplink -D $R"
+tools/phone-ssh "mkdir -p $R && bsdtar -xpf - -C $R" < ~/.cache/omamobile-rootfs/ArchLinuxARM-aarch64-latest.tar.gz
+tools/phone-ssh "$N bash -c 'pacman-key --init && pacman-key --populate archlinuxarm &&
+  pacman -Syu --noconfirm --needed base-devel cmake glaze hyprland-protocols hyprwayland-scanner meson ninja xorgproto <the PKGBUILD depends> &&
+  useradd -m builder'"
+tar cf - -C packages ./hyprland | tools/phone-ssh "tar xf - -C $R/home/builder --no-same-owner"
+tools/phone-ssh "$N chown -R builder: /home/builder/hyprland"
+tools/phone-ssh "systemd-run --unit=x-hyprland-build --collect $N su builder -c 'cd ~/hyprland && MAKEFLAGS=-j4 makepkg -f --noconfirm'"
+```
+
+The build runs as a transient unit, so a dropped SSH connection doesn't
+stop it (`systemctl status x-hyprland-build`, `journalctl -u
+x-hyprland-build`). Remove `$R` when done.
+
+**Publishing a build made outside `tools/build-packages`.** Check the
+sonames first:
+`bsdtar -xOf hyprland-*.pkg.tar.xz .PKGINFO | grep -o 'lib\(aquamarine\|hyprgraphics\)\.so=[0-9]*'`
+must name what `extra` provides. Copy the `hyprland` and `hyprpm` files
+(not `-debug`) into an empty directory on the laptop, then:
+
+```sh
+tools/build-packages --import <that directory>   # into out/repo, signed with the release key, indexed
+tools/repo-publish                               # to development
+```
+
+Import the build that was tested on a phone, before the nightly publish
+builds its own: otherwise the phone runs a different 0.57.0-3.1 from the
+published one under the same version. (`tools/repo-push` only copies
+`out/repo` to a connected phone; it doesn't publish.)
+
+To try a build on one phone first, copy the `hyprland` file there and
+install it in one transaction with the libraries it needs from `extra`:
+
+```sh
+# on the phone
+sudo OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Sy
+# pacman -Sp prints the libraries' download URLs, and pacman -U takes URLs
+sudo OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U ./hyprland-0.57.0-3.1-aarch64.pkg.tar.xz \
+  $(pacman -Sp aquamarine hyprgraphics hyprtoolkit hyprland-guiutils)
+```
+
+Add any other installed package that `pacman -U` reports as breaking
+(`hyprlock`, for example) to both lists. Then restart the session
+(`systemctl restart sddm`) and check `hyprctl version` and `pacman -Q
+hyprland` (expect `0.57.0-3.1`). After it's published, `omarchy update` is
+the path users take.
 
 ## Pinning
 
@@ -147,18 +201,37 @@ Drop the DPMS patch once upstream retries refused DPMS commits.
 ## Rolling back
 
 There is no older build that installs against today's libraries: 0.56.2
-(ours and Omarchy's) needs the aquamarine and hyprgraphics `extra` dropped.
-A phone that hasn't updated yet keeps 0.56.2-5.1 and its libraries until it
-does. After an update, the way back is the previous `hyprland`,
-`aquamarine` and `hyprgraphics` together from the pacman cache:
+(ours and Omarchy's) needs the aquamarine and hyprgraphics that `extra`
+dropped. A phone that hasn't updated yet keeps 0.56.2-5.1 and its libraries
+until it does.
+
+After an update, roll back every package the update moved onto the new
+libraries, all in one `pacman -U`: aquamarine, hyprgraphics, and every
+installed package that depends on `libaquamarine.so=15` or
+`libhyprgraphics.so=5` (hyprland, hyprtoolkit, hyprlock if installed, ...),
+plus hyprpm if installed. pacman refuses a partial set as a whole. Each
+older version comes from `/var/log/pacman.log` and its file from the pacman
+cache. Run as root on the phone (`bash rollback.sh`):
 
 ```sh
-# on the phone
+set -euo pipefail
 cd /var/cache/pacman/pkg
-sudo OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U $(ls hyprland-0.56.2-5.1-aarch64.pkg.tar.* \
-  aquamarine-0.15.1-*-aarch64.pkg.tar.* hyprgraphics-0.5.1-*-aarch64.pkg.tar.* | grep -v '\.sig$')
-systemctl restart sddm
+pkgs=$( { echo aquamarine; echo hyprgraphics; pacman -Qq hyprpm 2>/dev/null || true
+  pacman -Qi | awk '/^Name /{n=$3} /^[A-Z]/{f=$1}
+    f=="Depends" && /lib(aquamarine\.so=15|hyprgraphics\.so=5)-/{print n}'; } | sort -u)
+files=()
+for p in $pkgs; do
+  old=$(grep -E "\[ALPM\] upgraded $p \(" /var/log/pacman.log | tail -1 | sed -E 's/.*\((.*) -> .*/\1/')
+  f=$(ls "$p-$old"-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | head -1 || true)
+  [[ -n $old && -n $f ]] || { echo "no cached older $p (${old:-not in pacman.log}): stop" >&2; exit 1; }
+  files+=("$f")
+done
+printf '%s\n' "${files[@]}"
+OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U "${files[@]}"
+echo "IgnorePkg = $(echo $pkgs)"
 ```
 
-Hold it with `IgnorePkg = hyprland hyprpm aquamarine hyprgraphics` in
-`/etc/pacman.conf` until a fixed build is published.
+Check the list it prints before pacman's prompt, then put the printed
+`IgnorePkg` line in `/etc/pacman.conf` (all of those packages, or the next
+update moves them again) until a fixed build is published, and restart the
+session (`systemctl restart sddm`).
