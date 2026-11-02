@@ -56,7 +56,7 @@ Omarchy Mobile runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages
 
   This leaves other people's staged and unstaged changes alone.
 - **Moving a feature from bring-up into a package:** bump the package `version`, enable nothing that isn't hang-safe, and delete the bring-up files from `/etc/modprobe.d` on the phone (`omamobile-*-bringup.conf`, and any hand-copied package file). A file in `/etc/modprobe.d` replaces the package's `/usr/lib/modprobe.d` file of the same name, so a stale `omamobile-aoc.conf` there hid the package's new blacklist.
-- **Kernel releases change with every push** (`7.3.0-rc6-omamobile-push1-NNNNN-g<sha>`). `bin/omamobile push` runs `modules-push` when the tarball's checksum differs. Without its modules a new kernel boots without its drivers, the GPU among them.
+- **Kernel releases change with every push** (`7.3.0-rc6-omamobile-push1-NNNNN-g<sha>`). `bin/omamobile push` runs `modules-push` when the tarball's checksum differs. Without its modules a new kernel boots without its drivers, the GPU among them. `modules-push` replaces `/usr/lib/modules/<release>` as a whole, so modules installed there by hand (`updates/`, `extra/`, or a file swapped under `kernel/`) are gone after it runs; on the 9a that once took the panel driver with it, and the display stayed on the boot logo. Before pushing a release whose module folder carries hand-installed modules, keep a copy of the folder (`tar -C /usr/lib/modules -cf … <release>`).
 
 ## 3. How the tools fit together
 
