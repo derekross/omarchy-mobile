@@ -1905,7 +1905,8 @@ tools/phone-ssh 'omamobile-sit status; systemctl is-active omamobile-sitd; /usr/
 #     Not the PLMN, the carrier or any number.
 #   stop: the unit fails before "ready"; the journal names the step ("No ready USIM within 120 s", "Modem
 #     registration deadline exceeded": coverage, activation or the APN; "data call did not become active" with
-#     its status, 36 = APN refused; a CP crash). Record step and code, reboot before another try (SIM-5).
+#     its status (Android DataFailCause numbers: 36 is REGULAR_DEACTIVATION, not a refused APN, which is 27
+#     or 33); a CP crash). Record step and code, reboot before another try (SIM-5).
 #   rollback: omamobile-sit radio off (deregisters; the radio may not come back until a reboot), then
 #     systemctl stop omamobile-sitd; or the reboot
 
