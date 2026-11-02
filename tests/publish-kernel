@@ -1,0 +1,207 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/publish-kernel against a stand-in kernel clone and a bare repository
+# in a scratch folder as the published remote, never GitHub. The maintainer
+# runs this with push rights, so before anything runs: Git may speak only
+# the file protocol, ssh is a command that fails, the global and system
+# configs are replaced (the real GitHub URL is rewritten to a path that
+# doesn't exist), configs passed in the environment are dropped, and the
+# remote must resolve into the scratch folder. A git shim logs every push,
+# and the test fails if any of them forces.
+#
+# Covers: a dry run changes nothing and prints the push, a fast-forward
+# publishes, a branch that lacks the published tip is refused with the
+# rebase to run, a missing or AI sign-off and a Co-Authored-By are refused,
+# a merge commit is refused, a release tag is created and pushed (with a
+# branch, and alone on the published tip), an existing tag is refused, and
+# no code path forces a push.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+bail() { echo "Bail out! $*" >&2; exit 2; }
+
+# ------------------------------------------------------------- isolation
+unset GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+for v in $(compgen -v GIT_CONFIG_KEY_; compgen -v GIT_CONFIG_VALUE_); do unset "$v"; done
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$t/gitconfig GIT_ALLOW_PROTOCOL=file GIT_SSH_COMMAND=false GIT_TERMINAL_PROMPT=0
+github=$(sed -n 's/^remote=\${PUBLISH_KERNEL_REMOTE:-\(.*\)}$/\1/p' "$here/tools/publish-kernel")
+[[ -n $github ]] || bail "tools/publish-kernel doesn't take its remote from PUBLISH_KERNEL_REMOTE"
+cat > "$GIT_CONFIG_GLOBAL" <<EOF
+[user]
+	name = A Human
+	email = human@example.org
+[init]
+	defaultBranch = omamobile
+[url "$t/not-github.git"]
+	insteadOf = $github
+	pushInsteadOf = $github
+EOF
+r=$t/remote.git
+export PUBLISH_KERNEL_REMOTE=file://$r
+[[ $(git ls-remote --get-url "$github") == "$t/not-github.git" ]] || bail "the GitHub URL isn't rewritten into the scratch folder"
+[[ $(git ls-remote --get-url "$PUBLISH_KERNEL_REMOTE") == "file://$t/"* ]] || bail "the remote doesn't resolve into the scratch folder"
+[[ $(git ls-remote ssh://example.invalid/none 2>&1) == *"transport 'ssh' not allowed"* ]] || bail "Git protocols other than file are allowed"
+
+# The shim: log every push's arguments, then run the real git. With
+# RACE_FROM set, another publisher's push lands just before the tool's.
+realgit=$(command -v git)
+mkdir "$t/bin"
+cat > "$t/bin/git" <<EOF
+#!/bin/bash
+for a in "\$@"; do
+  [[ \$a == push ]] || continue
+  printf '%s\n' "\$*" >> "$t/pushes"
+  [[ -z \${RACE_FROM:-} ]] || "$realgit" -C "\$RACE_FROM" push -q "$t/remote.git" omamobile
+  break
+done
+exec "$realgit" "\$@"
+EOF
+chmod +x "$t/bin/git"
+: > "$t/pushes"
+export PATH=$t/bin:$PATH
+
+# ------------------------------------------------------------- fixture
+# The published branch: a squashed base and a community commit. The local
+# clone has a stand-in checkpatch for kernel-pr-check's tree check.
+sob="Signed-off-by: A Human <human@example.org>"
+git init -q --bare "$r"
+src=$t/community
+git init -q "$src"
+mkdir -p "$src/scripts" "$src/drivers"
+printf '#!/usr/bin/perl\n' > "$src/scripts/checkpatch.pl"; chmod +x "$src/scripts/checkpatch.pl"
+printf 'VERSION = 7\nPATCHLEVEL = 3\nSUBLEVEL = 0\nEXTRAVERSION = -rc6\n' > "$src/Makefile"
+echo base > "$src/drivers/a.c"
+git -C "$src" add -A && git -C "$src" commit -q -m "Linux 7.3-rc6"
+echo community > "$src/drivers/b.c"
+git -C "$src" add -A && git -C "$src" commit -q -m "drivers: b: a community change" -m "$sob"
+"$realgit" -C "$src" push -q "$r" omamobile
+k=$t/linux
+git clone -q "$r" "$k"
+export KERNEL_DIR=$k
+kgit() { git -C "$k" "$@"; }
+tip() { git -C "$r" rev-parse refs/heads/omamobile; }
+change() { # branch message...: a commit on a new local branch from the published tip
+  local b=$1; shift
+  kgit fetch -q origin
+  kgit checkout -q -B "$b" origin/omamobile
+  echo "$b" >> "$k/drivers/a.c"
+  local m=(); for x in "$@"; do m+=(-m "$x"); done
+  kgit commit -q -a "${m[@]}"
+}
+publish() { # ok|fail pattern args...: the run's exit and a line it must print
+  local want=$1 pattern=$2 status=0; shift 2
+  out=$("$here/tools/publish-kernel" "$@" 2>&1) || status=$?
+  [[ ($want == ok && $status == 0) || ($want == fail && $status != 0) ]] || { echo "$out" >&2; fail "publish-kernel $*: exit $status, expected $want"; }
+  [[ -z $pattern ]] || grep -c -- "$pattern" <<<"$out" >/dev/null || { echo "$out" >&2; fail "publish-kernel $*: doesn't say '$pattern'"; }
+}
+
+# ------------------------------------------------------------- cases
+p0=$(tip)
+change rel "drivers: a: curated work" "$sob" "Assisted-by: LLM"
+head=$(kgit rev-parse rel)
+publish ok "Dry run" --dry-run --tag kernel-2026.11.05 rel
+[[ $(tip) == "$p0" ]] || fail "a dry run moved the published branch"
+! kgit rev-parse -q --verify refs/tags/kernel-2026.11.05 >/dev/null || fail "a dry run created a tag"
+[[ ! -s $t/pushes ]] || fail "a dry run pushed"
+grep -cF "git push --atomic --no-follow-tags file://$r $head:refs/heads/omamobile refs/tags/kernel-2026.11.05" <<<"$out" >/dev/null || { echo "$out"; fail "a dry run doesn't print the exact push"; }
+grep -cF "uname -r 7.3.0-rc6-omamobile-g${head:0:12}" <<<"$out" >/dev/null || { echo "$out"; fail "a dry run doesn't name the release build's uname"; }
+echo "ok - a dry run prints the exact push and the release uname, and changes nothing"
+
+publish ok "fast-forward" rel
+[[ $(tip) == "$head" ]] || fail "the fast-forward didn't publish"
+[[ $(git -C "$r" rev-parse "$head^") == "$p0" ]] || fail "the published history changed"
+echo "ok - a release branch on the published tip is published as a fast-forward"
+
+# A community merge lands on GitHub while a stale release branch waits.
+p1=$(tip)
+git -C "$src" pull -q "$r" omamobile
+echo more > "$src/drivers/c.c"
+git -C "$src" add -A && git -C "$src" commit -q -m "drivers: c: merged on GitHub meanwhile" -m "$sob"
+"$realgit" -C "$src" push -q "$r" omamobile
+p2=$(tip)
+kgit checkout -q -B stale "$p1"
+echo stale >> "$k/drivers/a.c"
+kgit commit -q -a -m "drivers: a: built on an old tip" -m "$sob"
+publish fail "git rebase FETCH_HEAD stale" stale
+[[ $(tip) == "$p2" ]] || fail "a branch without the published tip was pushed"
+grep -c 'not be a fast-forward' <<<"$out" >/dev/null || { echo "$out"; fail "the refusal doesn't say why"; }
+kgit rebase -q FETCH_HEAD stale
+publish ok "fast-forward" stale
+[[ $(git -C "$r" rev-parse "$(tip)^") == "$p2" ]] || fail "the rebased branch didn't publish on the new tip"
+echo "ok - a branch that lacks the published tip is refused with the rebase to run, and publishes after it"
+
+p3=$(tip)
+change nosob "drivers: a: unsigned"
+publish fail "no human Signed-off-by" nosob
+change aisob "drivers: a: AI signs" "$sob" "Signed-off-by: Claude <noreply@anthropic.com>"
+publish fail "from an AI agent" aisob
+change coauthor "drivers: a: co-authored" "$sob" "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+publish fail "Co-Authored-By trailers" coauthor
+change coauthor-dry "drivers: a: co-authored" "$sob" "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+publish fail "Co-Authored-By trailers" --dry-run coauthor-dry
+[[ $(tip) == "$p3" ]] || fail "a commit that fails the checks was published"
+echo "ok - a missing or AI sign-off and a Co-Authored-By are refused, in a dry run too"
+
+change side "drivers: a: one side" "$sob"
+kgit checkout -q -b merged origin/omamobile
+echo other > "$k/drivers/d.c"; kgit add -A; kgit commit -q -m "drivers: d: other side" -m "$sob"
+kgit merge -q --no-edit side
+publish fail "merge commits" merged
+[[ $(tip) == "$p3" ]] || fail "a merge was published"
+echo "ok - a merge commit is refused"
+
+change tagged "drivers: a: release work" "$sob" "Assisted-by: LLM"
+publish ok "Tagged kernel-2026.11.05" --tag kernel-2026.11.05 tagged
+head=$(kgit rev-parse tagged)
+[[ $(tip) == "$head" ]] || fail "the branch didn't move with the tag"
+[[ $(git -C "$r" cat-file -t refs/tags/kernel-2026.11.05) == tag ]] || fail "the release tag isn't annotated"
+[[ $(git -C "$r" rev-parse 'refs/tags/kernel-2026.11.05^{commit}') == "$head" ]] || fail "the release tag isn't on the published commit"
+git -C "$r" cat-file tag refs/tags/kernel-2026.11.05 | grep -cF "uname -r 7.3.0-rc6-omamobile-g${head:0:12}" >/dev/null || fail "the tag doesn't name the release uname"
+publish fail "exists already" --tag kernel-2026.11.05 tagged
+kgit tag -d kernel-2026.11.05 >/dev/null
+publish fail "a respin takes the next" --tag kernel-2026.11.05 tagged
+publish fail "a release tag is kernel-YYYY.MM.DD" --tag v1.0 tagged
+echo "ok - a release tag is created on the published commit and pushed with it; an existing or misnamed tag is refused"
+
+# A community merge after the release: tag the published tip alone.
+git -C "$src" pull -q "$r" omamobile
+echo later > "$src/drivers/e.c"
+git -C "$src" add -A && git -C "$src" commit -q -m "drivers: e: merged after the release" -m "$sob"
+"$realgit" -C "$src" push -q "$r" omamobile
+p4=$(tip)
+publish ok "Nothing to publish"
+publish ok "Tagged kernel-2026.11.05.1" --tag kernel-2026.11.05.1
+[[ $(git -C "$r" rev-parse 'refs/tags/kernel-2026.11.05.1^{commit}') == "$p4" && $(tip) == "$p4" ]] || fail "the tag alone isn't on the published tip"
+echo "ok - with no branch, --tag tags the published tip and moves nothing"
+
+kgit checkout -q -B gone origin/omamobile
+mv "$r" "$r.gone"
+publish fail "can't read omamobile" gone
+mv "$r.gone" "$r"
+git -C "$r" branch -q -m omamobile renamed
+publish fail "has no omamobile branch" gone
+git -C "$r" branch -q -m renamed omamobile
+echo "ok - an unreadable remote or a missing branch stops before anything is pushed"
+
+# Another publisher moves the branch between the tool's fetch and its push:
+# git itself refuses the push, and the tag goes nowhere.
+git -C "$src" pull -q "$r" omamobile
+echo race > "$src/drivers/f.c"
+git -C "$src" add -A && git -C "$src" commit -q -m "drivers: f: merged during the run" -m "$sob"
+change racing "drivers: a: racing" "$sob"
+RACE_FROM=$src publish fail "the push was refused" --tag kernel-2026.11.06 racing
+[[ $(tip) == $(git -C "$src" rev-parse HEAD) ]] || fail "the other publisher's commit was overwritten"
+! git -C "$r" rev-parse -q --verify refs/tags/kernel-2026.11.06 >/dev/null || fail "the tag was pushed without its branch"
+! kgit rev-parse -q --verify refs/tags/kernel-2026.11.06 >/dev/null || fail "the local tag of a refused push stayed"
+echo "ok - a branch that moved during the run is not overwritten, and its tag isn't pushed"
+
+# ------------------------------------------------------------- no force
+[[ -s $t/pushes ]] || fail "the push log is empty: the shim didn't run"
+if grep -E -- '(^| )(-f|--force[^ ]*|--mirror|--delete|-d|--prune|\+[^ ]*)( |$)' "$t/pushes"; then
+  fail "a push above forced, deleted or mirrored"
+fi
+grep -E -- '--force|--mirror|--delete|push -f|[ "]\+refs|\+\$' "$here/tools/publish-kernel" && fail "tools/publish-kernel contains a forcing push"
+grep -c -- '--atomic --no-follow-tags' "$t/pushes" >/dev/null || fail "the pushes weren't the tool's"
+echo "ok - no push forced, deleted or mirrored ($(wc -l < "$t/pushes") pushes logged), and the tool has no forcing push"

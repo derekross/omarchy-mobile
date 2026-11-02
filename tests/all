@@ -10,7 +10,8 @@
 # smoke test of the newest root image in out/ if there is one, the felix,
 # lynx and panther device packages' own tests, tools/alarm-wake-test's
 # check, and a contributor's local builds (tools/local-key-init,
-# tools/fetch-published, --local).
+# tools/fetch-published, --local), and tools/publish-kernel against a
+# scratch remote.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
@@ -24,7 +25,7 @@ sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
-for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/make-bundle-keys tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package; do
+for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/make-bundle-keys tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel; do
   echo "# $t"
   "$t"
 done

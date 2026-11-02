@@ -6,6 +6,8 @@
 #
 #   - every commit has a human Signed-off-by, one of them the author's (the
 #     DCO), and none from an AI agent (an Assisted-by tag credits it);
+#   - no Co-Authored-By trailer: the kernel credits an AI with Assisted-by
+#     and a human co-author with Co-developed-by plus a sign-off;
 #   - every subject has a subsystem prefix ("clk: samsung: ...");
 #   - scripts/checkpatch.pl --strict on each commit, against that commit's
 #     bindings and MAINTAINERS: errors fail, warnings
@@ -22,7 +24,7 @@
 #     clang, ld.lld and, for the schema checks, dtschema (`pip install
 #     dtschema`); a missing tool skips its check and says so.
 #
-#   tools/kernel-pr-check [-C KERNEL] [--build OUT] [--merge] BASE [HEAD]
+#   tools/kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] BASE [HEAD]
 #
 # KERNEL defaults to $KERNEL_BASE/linux (~/omamobile-kernel/linux, or
 # ~/android/mainline/linux on older setups), HEAD to HEAD. It reads git and
@@ -34,6 +36,9 @@
 # still read only HEAD's own commits. Without it the builds compare HEAD
 # with its merge base, so a fix that reached BASE after the branch was cut
 # never shows (L-154). A merge that conflicts fails with "rebase needed".
+#
+# --no-checkpatch skips checkpatch: tools/publish-kernel runs the commit and
+# policy checks this way, and leaves checkpatch to the full gate.
 set -uo pipefail
 # sort and comm must agree on the order, whatever the caller's locale.
 export LC_ALL=C
@@ -48,17 +53,19 @@ fi
 kernel=$KERNEL_BASE/linux
 out=""
 merge=0
+checkpatch=1
 while (($#)); do
   case $1 in
     -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
     --build) out=${2:?--build needs an output directory}; shift 2 ;;
     --merge) merge=1; shift ;;
-    -h|--help) sed -n '3,35p' "$self"; exit 0 ;;
+    --no-checkpatch) checkpatch=0; shift ;;
+    -h|--help) sed -n '3,41p' "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
 done
-base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] BASE [HEAD]}
+base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] BASE [HEAD]}
 head=${2:-HEAD}
 # -C may be relative to the caller's directory. This script changes into
 # the tree and then runs pr-check with the same path, so resolve it first.
@@ -120,7 +127,7 @@ $(sed -n '2,/^$/p' <<<"$mtree" | sed '/^$/d; s/^/    /')"
 fi
 
 # ---------------------------------------------------------------- commits
-sob_bad="" prefix_bad=""
+sob_bad="" prefix_bad="" coauthor_bad=""
 for c in $commits; do
   short=$(git log -1 --format='%h %s' "$c")
   author=$(git log -1 --format='%ae' "$c")
@@ -132,17 +139,22 @@ for c in $commits; do
     sob_bad+="  $short: no Signed-off-by from the author <$author>"$'\n'
   fi
   grep -qiE "$ai" <<<"$sobs" && sob_bad+="  $short: a Signed-off-by from an AI agent"$'\n'
+  git log -1 --format=%B "$c" | grep -ciE '^Co-authored-by:' >/dev/null && coauthor_bad+="  $short"$'\n'
   subject=$(git log -1 --format=%s "$c")
   [[ $subject =~ ^[A-Za-z0-9_./,+-]+(:[[:space:]][A-Za-z0-9_./,+-]+)*:[[:space:]] ]] || prefix_bad+="  $short"$'\n'
 done
 n=$(wc -w <<<"$commits")
 [[ -z $sob_bad ]] && pass "$n commits signed off by their authors, none by an AI" || fail "sign-offs (Documentation/process/submitting-patches.rst, coding-assistants.rst):
 ${sob_bad%$'\n'}"
+[[ -z $coauthor_bad ]] && pass "no Co-Authored-By trailers" || fail "Co-Authored-By trailers (credit an AI with Assisted-by, a human co-author with Co-developed-by and a sign-off; coding-assistants.rst, submitting-patches.rst):
+${coauthor_bad%$'\n'}"
 [[ -z $prefix_bad ]] && pass "subjects have subsystem prefixes" || fail "subjects without a subsystem prefix (see git log --oneline <file>):
 ${prefix_bad%$'\n'}"
 
 # ---------------------------------------------------------------- checkpatch
 # checkpatch as the base has it: a pull request can't change its own checker.
+# (The section is not indented: its messages span lines.)
+if ((checkpatch)); then
 cpdir=$(mktemp -d)
 trap 'rm -rf "$cpdir" ${mdir:+"$mdir"}' EXIT
 mkdir -p "$cpdir/checker" "$cpdir/tree/Documentation"
@@ -179,6 +191,9 @@ done
 ${cp_errors%$'\n'}"
 # The warnings themselves, so a reviewer reads them without rerunning it.
 [[ -n $cp_warnings ]] && printf '%s' "$cp_warnings"
+else
+  skip "checkpatch: --no-checkpatch"
+fi
 
 # ---------------------------------------------------------------- policy
 policy=$("$repo/tools/pr-check" -C "$kernel" "$base" "$head" 2>&1); status=$?
