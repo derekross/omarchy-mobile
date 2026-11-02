@@ -220,7 +220,7 @@ while (( $(date +%s) < deadline )); do
       fi
     fi
     result=$(phone 'cat /run/husky-deadman/result 2>/dev/null' 2>/dev/null)
-    case "$result" in soaked|reverted|reset|refused*|failed*|tripped*|drill) break ;; esac
+    case "$result" in soaked*|reverted|reset|refused*|failed*|tripped*|drill) break ;; esac
     if [[ $result == confirmed ]]; then
       (( ++polls % 10 == 1 )) && { echo; say "soaking, guard: $(phone 'cat /run/husky-deadman/guard.last 2>/dev/null' 2>/dev/null)"; }
     fi
@@ -236,8 +236,9 @@ echo
 
 rc=1
 case "$result" in
-  soaked)
+  soaked*)
     rc=0
+    [[ $result == soaked:* ]] && warn "the phone says: ${result#soaked: } (the port is off; restore those registers by hand and remove that file before the next b5-host)"
     if [[ $step == b5-host ]]; then
       say "step b5-host CONFIRMED, soaked clean and UNDONE by the phone (stage (a) ends in the undo): the meter must read 0 V now, 0x92 0x00, gpio5 0, no marker. State:"
     else

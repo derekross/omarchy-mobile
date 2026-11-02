@@ -131,6 +131,7 @@ WIFI=wlp1s0
 RESCUE=omamobile-usb-rescue.service
 confirm_s=90 grace_s=60 ilim=500000 use_wd=1 soak_s=600 allow_soc=0 meter=0
 gpid=
+REGS_LEFT=0   # set by the b5-host undo when the port is cold but a register restore failed
 # b5-host: TCPC VBUS_VOLTAGE (mV) window while sourcing, the collapse level
 # (short/overload), the most VBUS allowed before the step (nothing sourcing),
 # and the discharge jump over the pre-step value that trips (a short).
@@ -343,10 +344,12 @@ restore_own_writes() {
   else log "0xcb $cur (saved $s): bit 3 not ours to clear, left as is"; fi
   s=$(awk '$1 == "0xc4" {print $2}' "$1"); cur=$(rd $CHG 0xc4)
   if ! hexok "$s"; then log "no saved 0xc4 in $1"; rc=1
+  elif ! hexok "$cur"; then log "cannot read 0xc4"; rc=1
   elif [[ $s != "$VBYP_5000" && $cur == "$VBYP_5000" ]]; then wr $CHG 0xc4 "$s" || rc=1
   else log "0xc4 $cur (saved $s): not our write to undo, left as is"; fi
   s=$(awk '$1 == "0xb9" {print $2}' "$1"); cur=$(rd $CHG 0xb9)
   if ! hexok "$s"; then log "no saved 0xb9 in $1"; rc=1
+  elif ! hexok "$cur"; then log "cannot read 0xb9"; rc=1
   elif [[ $cur == 0x00 && $s != 0x00 ]]; then log "restoring charger MODE 0xb9 to the saved $s"; wr $CHG 0xb9 "$s" || rc=1
   else log "MODE 0xb9 $cur (saved $s): not our 0x00, left as is"; fi
   log "bypass/mode now vs saved: 0xc4 $(rd $CHG 0xc4) / $(awk '$1 == "0xc4" {print $2}' "$1"), 0xcb $(rd $CHG 0xcb) / $(awk '$1 == "0xcb" {print $2}' "$1"), 0xb9 $(rd $CHG 0xb9) / $(awk '$1 == "0xb9" {print $2}' "$1")"
@@ -831,6 +834,8 @@ revert() {
       # costs a slot B try and must not happen for a register restore)
       local cold=1 regs=0 left
       left="$(dirname "$MARK")/registers-not-restored"
+      # from here on a signal must not start a second undo on top of this one
+      trap '' TERM INT HUP
       [[ $(extbst) == 0x00 && $(gpio5_get) == 0 ]] || cold=0
       if [[ -f $saved ]]; then
         restore_own_writes "$saved" || regs=1
@@ -841,7 +846,9 @@ revert() {
       log "undo done: port cold $cold, registers restored $(( !regs )); 0x92 $(extbst), gpio5 $(gpio5_get), CC $(cc_partner), role $(role_now), POWER_STATUS $(pwr_status), udc $(udc_state), wifi $(wifi_up && echo up || echo down)"
       if (( cold )); then
         if (( regs )); then
-          [[ -f $saved ]] && cp "$saved" "$left" 2>/dev/null
+          if [[ -f $saved ]]; then cp "$saved" "$left" 2>/dev/null
+          else echo "no saved values: 0xcb bit 3 could not be cleared at $(date '+%F %T'); read 0xcb/0xc4/0xb9 against the dump by hand" > "$left"; fi
+          REGS_LEFT=1
           log "port cold, but 0xcb/0xc4/0xb9 were NOT all restored: the saved values are in $left; restore them by hand and remove that file, b5-host refuses until then (no reset: the port is off)"
         fi
         undo_unit_remove
@@ -1050,7 +1057,7 @@ trip_undo() {   # trip_undo STEP
   guard_kill
   wd_extend $(( grace_s + 20 ))
   if revert "$1"; then
-    echo "tripped: $why" > $D/result
+    echo "tripped: $why$( ((REGS_LEFT)) && echo '; registers not restored, see registers-not-restored')" > $D/result
     wd_disarm
     return 1
   fi
@@ -1140,7 +1147,8 @@ run() {
       if ! revert "$step"; then final_reset "$step"; return 1; fi
       wd_disarm
       log "=== step $step SOAKED and UNDONE: VBUS off"
-      echo soaked > $D/result
+      if (( REGS_LEFT )); then echo "soaked: VBUS off, but 0xcb/0xc4/0xb9 were not all restored, see $(dirname "$MARK")/registers-not-restored" > $D/result
+      else echo soaked > $D/result; fi
       return 0
     fi
     wd_disarm
