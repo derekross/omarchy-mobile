@@ -129,7 +129,15 @@ case "$test" in
   units)
     [[ -n "$units$user_units" ]] || { echo "power-ab: units needs --units or --user-units" >&2; exit 1; } ;;
   eas)
-    [[ -w "$eas" ]] || { echo "power-ab: no writable $eas (kernel without EAS)" >&2; exit 1; } ;;
+    # as root [[ -w ]] only says the file exists; the sysctl takes 0 and 1
+    # whenever EAS is possible, even with no energy model to engage it
+    [[ -e "$eas" ]] || { echo "power-ab: no $eas (kernel without EAS)" >&2; exit 1; }
+    em_domains=()
+    for f in /sys/kernel/debug/energy_model/cpu*; do
+      [[ -d $f ]] && em_domains+=("${f##*/}")
+    done
+    (( ${#em_domains[@]} )) \
+      || { echo "power-ab: no CPU energy model in /sys/kernel/debug/energy_model: EAS can't engage" >&2; exit 1; } ;;
 esac
 
 # The units test touches only units that are active now
@@ -182,7 +190,7 @@ set_cfg() { # A|B
       if [[ $1 == A ]]; then units_stop; else units_start; fi > /dev/null 2>&1 ;;
     eas)
       [[ $1 == A ]] && v=0 || v=1
-      echo "$v" > "$eas" ;;
+      echo "$v" > "$eas" 2> /dev/null || echo "# eas: writing $v failed at $(date +%s)" >> "$csv" ;;
   esac
 }
 
@@ -195,6 +203,7 @@ csv="$out/$stamp-$test.csv" txt="$out/$stamp-$test.txt"
   echo "# power-ab $test: phase ${phase}s settle ${settle}s rounds $rounds unplug ${unplug}s delay_ms $delay_ms suspend $suspend"
   echo "# kernel $(uname -r); battery $bat; ufs ${ufs:-none}"
   [[ $test == units ]] && echo "# units: ${usys[*]}; user units ($uname): ${uusr[*]}"
+  [[ $test == eas ]] && echo "# eas: energy model ${em_domains[*]}"
   echo "time,phase,voltage_uv,current_ua,current_avg_ua,charge_counter_uah,charge_now_uah"
 } > "$csv"
 
