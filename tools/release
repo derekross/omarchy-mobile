@@ -27,8 +27,9 @@
 #                 --release: uname -r <version>-omamobile-g<sha12>), then
 #                 staged into packages/linux-omamobile
 #   images        [4] the release initramfs, then the boot images twice:
-#                 every checksum equal; then the device package's boot files
-#                 (tools/stage-boot-files)
+#                 every checksum equal; the device package's boot files kept
+#                 when `tools/stage-boot-files --check` finds them current,
+#                 restaged only for a new device-package version
 #   packages      [5] every package's tests; out/repo signed by the release
 #                 key, holding every package the image installs at this
 #                 checkout's version; development publishes exactly it.
@@ -326,9 +327,30 @@ st_images() {
   KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
   ((dry)) || (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.1"
   KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
-  # §5: the device package's boot files, from the same release initramfs
+  # §5: the device package's boot files. Current ones are kept: the device
+  # package in out/repo was built from them, and a version is one package,
+  # so restaging at the same version would only make out/repo disagree.
+  # Stale (or missing) ones need a new device-package version first.
   if have_boot_update; then
-    KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run tools/stage-boot-files
+    local dpkg bf want_v have_v=""
+    dpkg=$(desc PACKAGE)
+    bf=packages/$dpkg/boot-files
+    if tools/stage-boot-files --check "$bf" > "$rel/boot-files-check.log" 2>&1; then
+      note "$bf is current for this tree: kept, not restaged"
+    else
+      sed 's/^/    /' "$rel/boot-files-check.log" >&2
+      want_v=$(pkg_info "$dpkg" | cut -d' ' -f1)
+      [[ ! -f out/repo/aarch64/omamobile.db.tar.gz ]] ||
+        have_v=$(db_versions out/repo/aarch64/omamobile.db.tar.gz | awk -v n="$dpkg" '$1 == n { print $2 }')
+      if [[ $have_v == "$want_v" ]]; then
+        derek "# bump packages/$dpkg/version (a new version for new boot files), commit it, then:" \
+              "KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE tools/stage-boot-files" \
+              "tools/build-packages packages/$dpkg"
+        die "$bf is stale or missing and out/repo already has $dpkg $want_v: a device-package version bump is needed"
+      fi
+      KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run tools/stage-boot-files
+      note "staged for $dpkg $want_v (out/repo: ${have_v:-none}); next: tools/build-packages packages/$dpkg"
+    fi
   else
     note "skipped: no tools/stage-boot-files in this checkout (PR #320). The release can't pass test-install without it (§12 decision 10)"
   fi
@@ -404,7 +426,11 @@ st_packages() {
   done
   if ((${#stale[@]})); then
     printf '    %s\n' "${stale[@]}" >&2
-    derek "tools/build-packages --all    # builds and signs what changed, with the release key"
+    local hints=("tools/build-packages --all    # builds and signs what changed, with the release key")
+    # --all leaves linux-omamobile out (it builds only when named, #320)
+    [[ " ${stale[*]}" != *" linux-omamobile ("* ]] ||
+      hints+=("tools/build-packages packages/linux-omamobile    # only built when named")
+    derek "${hints[@]}"
     die "out/repo is behind this checkout for the packages above"
   fi
   note "every image package is at this checkout's version"
@@ -412,15 +438,17 @@ st_packages() {
   # staged from this release's initramfs, not an older build's
   if have_boot_update; then
     local bf=packages/$dpkg/boot-files/SHA256SUMS pf want_sum got_sum
-    [[ -f $bf ]] || die "no $bf: run the images stage (tools/stage-boot-files), then tools/build-packages packages/$dpkg"
+    [[ -f $bf ]] || die "no $bf: run the images stage first"
     pf=$(bsdtar -xOf "$db" --include='*/desc' |
       awk -v n="$dpkg" '/^%FILENAME%$/ { getline; f = $0 } /^%NAME%$/ { getline; if ($0 == n) print f }' | head -1)
     [[ -n $pf && -f out/repo/aarch64/$pf ]] || die "out/repo has no $dpkg package file"
     want_sum=$(awk '$2 == "initramfs.cpio.lz4" { print $1 }' "$bf")
     got_sum=$({ bsdtar -xOf "out/repo/aarch64/$pf" "usr/lib/omamobile/$DEVICE/initramfs.cpio.lz4" 2>/dev/null || true; } | sha256sum | cut -d' ' -f1)
     [[ -n $want_sum && $got_sum == "$want_sum" ]] || {
-      derek "tools/build-packages packages/$dpkg    # after the images stage staged boot-files/"
-      die "$pf does not carry the staged release initramfs (packages/$dpkg/boot-files): it was built before the images stage, or without boot files"
+      derek "# bump packages/$dpkg/version (same version, other boot files), commit it, then:" \
+            "tools/release --version $version images    # restages the boot files" \
+            "tools/build-packages packages/$dpkg"
+      die "$pf does not carry the staged release initramfs (packages/$dpkg/boot-files): it was built from other boot files at the same version"
     }
     note "$pf carries this release's initramfs (boot-files/SHA256SUMS)"
   else
