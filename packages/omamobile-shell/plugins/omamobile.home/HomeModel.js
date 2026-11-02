@@ -192,7 +192,7 @@ function portPlacements(raw) {
 // What a fresh home gets, before the user changes anything: a clock and the
 // first of these apps that are installed along the bottom row.
 var DEFAULT_APPS = ["chromium", "Alacritty", "org.gnome.Nautilus", "omarchy-menu", "org.omarchy.settings",
-                    "foot", "org.gnome.Calculator", "btop", "nvim", "localsend"]
+                    "foot", "org.gnome.Calculator", "omawrite", "nvim", "localsend"]
 
 function clampInt(value, lo, hi, fallback) {
   var n = Math.round(Number(value))
