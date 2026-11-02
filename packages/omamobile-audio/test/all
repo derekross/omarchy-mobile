@@ -507,7 +507,9 @@ c9settle() {  # name settle steps...: steps are delay_s:temp_bytes, applied in o
   ( for _ in $(seq 1 100); do grep -c 'watchdog: watching' "$r/watch.out" >/dev/null 2>&1 && break; sleep 0.05; done
     for s in "${steps[@]}"; do sleep "${s%%:*}"; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" "${s#*:}" >/dev/null; done ) &
   wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=$st OMAMOBILE_SPK_TEMP_JUMP=${JUMP:-5})
-  WATCH_N=80 watchrun; wait
+  # 200 polls (10 s at 0.05 s): on a slow CI runner the steps above arrive
+  # seconds late, and 80 polls let the watchdog finish before the rise came.
+  WATCH_N=200 watchrun; wait
 }
 c9settle c9-step 1.5 0.2:0x00,0x0a,0x00,0x00    # 25 -> 40 C: the measured value, a step
 ((rc == 0)) && ! muted && grep -c 's into a stream' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 the step from the reference to the measured coil does not mute"; }
