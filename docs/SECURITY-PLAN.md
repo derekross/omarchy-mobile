@@ -555,9 +555,12 @@ and can ship on their own. S4-S7 are the verified boot chain.
   only, no Google file in the bundle), or something else.
 - **D8. Rollback indexes of our own.** Raise them only for security fixes
   (recommended), every release, or never.
-- **D9. Test phone.** S7 on the reference phone (its Linux root is erased by
-  the lock; it needs a full backup and a reinstall; stock boots are likely)
-  or on a spare Pixel 7 Pro first. Recommended: a spare.
+- **D9. Test phone.** Decided (2026-11-02): the reference Pixel 7 Pro. It is a
+  test phone, not anyone's daily phone, so a wipe from locking or unlocking
+  costs a reinstall and nothing more. Before S7: back up the home folder and
+  settings, confirm OEM unlocking is on in stock Android, and have a fresh
+  install ready. The calibration partitions (`efs`, `persist`, the modem's)
+  are untouched by an unlock and stay under AGENTS' rules.
 - **D10. Development mode encryption.** Offered by `install-phone
   --encrypt` (recommended), or plain ext4 only.
 
@@ -677,7 +680,7 @@ L6, by R2's values); **H3** which partitions the locked bootloader requires
 - **The first locked boot depends on facts we can't read unlocked** (H3).
   If `vbmeta_b` lacks a descriptor the bootloader needs, the boot fails and
   the phone falls back to stock (if B is unmarked) or stops in fastboot.
-  Mitigation: L3 with B unmarked, on a spare phone (D9).
+  Mitigation: L3 with B unmarked, with the backup and fresh install of D9 ready.
 - **Rollback indexes can lock stock out of slot A** if any of ours lands at
   a location stock uses with a higher value (§3.3). Mitigation: R2 first;
   `vbmeta_b` at stock's index; our partitions at unused locations; tests
