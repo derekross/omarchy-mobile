@@ -345,7 +345,7 @@ watchrun() {  # run the watchdog briefly on a healthy started tree, with the eve
 wprep=()
 # An event during a watch: `at ROUND COMMAND` runs COMMAND (amx, kmsg, any
 # shell) just before the watchdog's round ROUND, inside the watchdog's own
-# loop (OMAMOBILE_WATCH_HOOK), and the watchdog's clock is then ROUND times
+# loop (OMAMOBILE_WATCH_HOOK, honoured with the JSON backend sp() sets), and the watchdog's clock is then ROUND times
 # the interval. So "after the stream's baseline" or "before the settle time"
 # is a round number, not a sleep that a slow CI runner outran: the stream
 # starts in round 1 (time 0), round k is (k-1) x 0.05 s into it.
@@ -384,7 +384,7 @@ startok w-hb8-log; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; 
 startok w-hb-freeze; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 at 10 'touch "$r/freeze"'    # the heartbeat stops 0.45 s into the stream, after the grace
 wprep=(FAKE_HB_FREEZE_FILE=$r/freeze); WATCH_N=40 watchrun
-((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: a heartbeat that stops mid-stream mutes"; }
+((rc == 1)) && muted && grep -c "HALO_HEARTBEAT stuck" "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: a heartbeat that stops mid-stream mutes"; }
 startok w-hb9-off; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_HEARTBEAT=0); watchrun
 ((rc == 1)) && muted || fail "watchdog: the heartbeat cannot be switched off in stage c9"
 startok w-hb9; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMAMOBILE_SPK_STAGE=c9); watchrun
@@ -393,12 +393,27 @@ startok w-hb9; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wpre
 startok w-kmsg
 at 8 "kmsg 1.0 'cs35l41 spi6.1: Wake failed, re-enter hibernate: -42'"
 WATCH_N=40 watchrun
-((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: a failed wake in the kernel log mutes"; }
+((rc == 1)) && muted && grep -c "Wake failed" "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: a failed wake in the kernel log mutes"; }
 startok w-kmsg-warn
 at 8 "kmsg 1.0 'cs35l41 spi6.0: Failed to set mailbox cmd 1 (status 0)'"
 WATCH_N=20 watchrun
 ((rc == 0)) && ! muted && grep -c 'watchdog: note: .*mailbox cmd 1' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: an unacknowledged pause is logged only"; }
 pass "watchdog: mutes on DSP errors, bypass, levels, runtime PM, a stuck heartbeat (c9) and kernel log failures"
+
+# the test hook is honoured only with the JSON control backend: on the phone
+# (alsa-lib, no OMAMOBILE_CTL_BACKEND) a stray OMAMOBILE_WATCH_HOOK in
+# speaker.conf neither runs nor changes the clock. Unit level: the real
+# backend needs a card, so watch_loop's own selection is called directly.
+printf '#!/bin/sh\ntouch "%s"\n' "$tmp/hook-ran" > "$tmp/hook-probe"; chmod +x "$tmp/hook-probe"
+out=$(env -u OMAMOBILE_CTL_BACKEND OMAMOBILE_WATCH_HOOK="$tmp/hook-probe" python3 -I -c '
+import sys; sys.path.insert(0, sys.argv[1]); import speaker_dsp as d
+print("real:", d.watch_hook())
+import os; os.environ["OMAMOBILE_CTL_BACKEND"] = "alsa"; print("alsa:", d.watch_hook())
+os.environ["OMAMOBILE_CTL_BACKEND"] = "json:/x"; print("json:", d.watch_hook() == os.environ["OMAMOBILE_WATCH_HOOK"])
+' "$here/lib")
+[[ $out == *"real: None"*"alsa: None"*"json: True"* && $(grep -c 'OMAMOBILE_WATCH_HOOK ignored' <<<"$out") == 2 && ! -e $tmp/hook-ran ]] ||
+  { echo "$out" >&2; fail "watchdog: the test hook is ignored, and said so, without the JSON backend"; }
+pass "watchdog: the test hook only with the tests' JSON control backend"
 
 # C9j: the coil-estimate jump rule is for analog above 10. At the everyday level the
 # firmware's estimate is open-loop and the bottom amplifier's jumps 10-15 C on any
