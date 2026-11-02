@@ -70,7 +70,11 @@ Usage: [DEVICE=<codename>] omamobile <command>
   initramfs-config <dir>
                    Write only the device's files for the shared init (storage-guard
                    allowlist, trigger, ...) into <dir>, to check what initramfs packs
-  kernel           Build the mainline kernel ($KERNEL_DIR) with our config fragment
+  kernel [--release]
+                   Build the mainline kernel ($KERNEL_DIR) with our config fragment.
+                   --release: the release LOCALVERSION (-omamobile, uname -r
+                   <version>-omamobile-g<sha12>) and no device fragment, for
+                   linux-omamobile (docs/RELEASES.md §4); needs a clean tree
   modules          Package the kernel's modules (stripped) as a tarball for the Arch
                    root: $KERNEL_OUT/modules-<release>.tar.zst, unpacked under
                    /usr/lib/modules on the phone
@@ -300,11 +304,27 @@ cmd_capture() {
 }
 
 cmd_kernel() {
+  local release=0
+  case ${1:-} in
+    '') ;;
+    --release) release=1 ;;
+    *) die "kernel: expected --release or no argument" ;;
+  esac
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
   [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
   # The codename goes into a path below, as in load_device
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
-  local fragment="$ROOT/device/$DEVICE/kernel.config"
+  local fragment="$ROOT/device/$DEVICE/kernel.config" localversion=""
+  if ((release)); then
+    # One kernel for every device: a device's bring-up fragment stays out,
+    # and a release names its commit exactly, so the tree must be clean
+    # (setlocalversion would add -dirty, which linux-omamobile refuses)
+    fragment=/nonexistent
+    localversion="scripts/config --file $KERNEL_OUT/.config --set-str LOCALVERSION -omamobile --enable LOCALVERSION_AUTO"
+    [[ -z $(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no 2>/dev/null) ]] \
+      || die "kernel --release: $KERNEL_DIR has uncommitted changes"
+    say "Release build: LOCALVERSION -omamobile, no device fragment"
+  fi
   say "Building $KERNEL_DIR into $KERNEL_OUT"
   mkdir -p "$KERNEL_OUT"
   in_container "
@@ -315,6 +335,7 @@ cmd_kernel() {
     if [ -f $fragment ]; then
       scripts/kconfig/merge_config.sh -m -O $KERNEL_OUT $KERNEL_OUT/.config $fragment
     fi
+    $localversion
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT olddefconfig
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT -j$JOBS Image.gz dtbs modules
     ls -lh $KERNEL_OUT/arch/arm64/boot/Image.gz
@@ -1091,7 +1112,7 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   initramfs) shift; cmd_initramfs "$@" ;;
   initramfs-config) shift; cmd_initramfs_config "$@" ;;
-  kernel) cmd_kernel ;;
+  kernel) shift; cmd_kernel "$@" ;;
   modules) cmd_modules ;;
   modules-push) cmd_modules_push ;;
   images) cmd_images ;;

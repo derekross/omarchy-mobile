@@ -19,16 +19,23 @@ t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 
 # ---------------------------------------------------------------- pkgver
-check_ver() { [[ $(lib/pkgver "$1" 2>/dev/null) == "$2" ]] || fail "pkgver $1 -> $2 (got $(lib/pkgver "$1" 2>&1))"; }
+check_ver() { # release [commits] expected
+  local want=${*: -1} args=("${@:1:$#-1}")
+  [[ $(lib/pkgver "${args[@]}" 2>/dev/null) == "$want" ]] || fail "pkgver ${args[*]} -> $want (got $(lib/pkgver "${args[@]}" 2>&1))"
+}
+check_ver 7.3.0-rc6-omamobile-g0123456789ab 4521 7.3.0rc6.r4521.g0123456789ab
 check_ver 7.3.0-rc6-omamobile-00453-g0123456789ab 7.3.0rc6.r453.g0123456789ab
-check_ver 7.4.0-omamobile-00012-gabcdef012345 7.4.0.r12.gabcdef012345
-check_ver 7.4.0-omamobile 7.4.0.r0
+check_ver 7.3.0-rc6-omamobile-00453-g0123456789ab 453 7.3.0rc6.r453.g0123456789ab
+check_ver 7.4.0-omamobile-gabcdef012345 12 7.4.0.r12.gabcdef012345
 check_ver 7.4-omamobile-00001-gabcdef0 7.4.0.r1.gabcdef0
-for bad in 7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8 7.3.0-rc6-omandroid-push1-00058-g7b0f8b5d18f8 \
-           7.3.0-rc6-omamobile-00453-g0123456789ab-dirty 7.3.0-rc6 7.3.0-rc6-omamobile-00453 '7.3.0-omamobile-1-g$(id)' ''; do
-  if lib/pkgver "$bad" >/dev/null 2>&1; then fail "pkgver refuses '$bad'"; fi
+for bad in 7.3.0-rc6-omamobile-push1-g2219cc6cda77 7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8 \
+           7.3.0-rc6-omandroid-push1-00058-g7b0f8b5d18f8 7.3.0-rc6-omamobile-g0123456789ab-dirty 7.3.0-rc6 \
+           7.3.0-rc6-omamobile 7.3.0-rc6-omamobile-00453 '7.3.0-omamobile-1-g$(id)' ''; do
+  if lib/pkgver "$bad" 12 >/dev/null 2>&1; then fail "pkgver refuses '$bad'"; fi
 done
-{ lib/pkgver 7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8 2>&1 || true; } | grep -c 'development builds' >/dev/null || fail "pkgver says why a push build is refused"
+if lib/pkgver 7.3.0-rc6-omamobile-g0123456789ab >/dev/null 2>&1; then fail "pkgver needs the commit count for a -g<sha> release"; fi
+if lib/pkgver 7.3.0-rc6-omamobile-00453-g0123456789ab 454 >/dev/null 2>&1; then fail "pkgver refuses a count that contradicts the release"; fi
+{ lib/pkgver 7.3.0-rc6-omamobile-push1-g2219cc6cda77 12 2>&1 || true; } | grep -c 'development builds' >/dev/null || fail "pkgver says why a push build is refused"
 if command -v vercmp >/dev/null; then
   order=(7.3.0rc5.r900.gaaaaaaa 7.3.0rc6.r12.gbbbbbbb 7.3.0rc6.r453.gccccccc 7.3.0rc6.r1000.gddddddd 7.3.0.r0 7.3.0.r5.geeeeeee 7.4.0rc1.r1.gfffffff)
   for ((i = 1; i < ${#order[@]}; i++)); do
@@ -40,7 +47,8 @@ else
 fi
 
 # ---------------------------------------------------------------- a fake build
-rel=7.3.0-rc6-omamobile-00453-g0123456789ab
+rel=7.3.0-rc6-omamobile-g0123456789ab
+export KERNEL_COMMITS=4521
 K=$t/out
 mkimage() { # file: an Image with arm64's magic at 0x38
   { head -c 56 /dev/zero; printf 'ARM\x64'; head -c 4000 /dev/urandom; } > "$1"
@@ -70,7 +78,7 @@ for f in Image modules.tar.zst kernel.release SHA256SUMS dtbs/exynos/google/gs20
 done
 [[ ! -e $P/dtbs/qcom ]] || fail "stage: only DTB_DIRS (exynos/google by default)"
 (cd "$P" && sha256sum --quiet -c SHA256SUMS) || fail "stage: checksums"
-grep -c "pkgver 7.3.0rc6.r453.g0123456789ab" "$t/log" >/dev/null || fail "stage names the pkgver"
+grep -c "pkgver 7.3.0rc6.r4521.g0123456789ab" "$t/log" >/dev/null || fail "stage names the pkgver"
 DTB_DIRS="exynos/google qcom" ./stage "$K" "$t/p2" >/dev/null 2>&1 && [[ -f $t/p2/dtbs/qcom/sm8750-oneplus-dodge.dtb ]] || fail "stage: DTB_DIRS adds directories"
 pass "stage copies the Image, the modules tarball and the board DTBs, with checksums"
 
@@ -79,7 +87,7 @@ stage_refuses() { # what message
   grep -qF -- "$2" "$t/log" || { cat "$t/log"; fail "stage, $1: says '$2'"; }
   [[ ! -e $t/p3 ]] || fail "stage, $1: nothing staged"
 }
-mkbuild 7.3.0-rc6-omamobile-push1-00058-g7b0f8b5d18f8
+mkbuild 7.3.0-rc6-omamobile-push1-g2219cc6cda77
 stage_refuses "a development kernel" "not a release kernel"
 mkbuild $rel-dirty
 stage_refuses "a dirty tree" "uncommitted changes"
@@ -89,8 +97,8 @@ stage_refuses "something that is not an arm64 Image" "not an arm64 Image"
 mkbuild $rel
 rm "$K/modules-$rel.tar.zst"
 stage_refuses "a build without its modules" "bin/omamobile modules"
-mkbuild 7.3.0-rc6-omamobile-00452-gffffffffffff
-mv "$K/modules-7.3.0-rc6-omamobile-00452-gffffffffffff.tar.zst" "$t/stale.tar.zst"
+mkbuild 7.3.0-rc6-omamobile-gffffffffffff
+mv "$K/modules-7.3.0-rc6-omamobile-gffffffffffff.tar.zst" "$t/stale.tar.zst"
 mkbuild $rel
 cp "$t/stale.tar.zst" "$K/modules-$rel.tar.zst"
 stage_refuses "another release's modules" "not $rel only"
@@ -99,6 +107,27 @@ rm "$K"/arch/arm64/boot/dts/exynos/google/*.dtb
 stage_refuses "a build without DTBs" "no DTBs"
 mkbuild $rel
 pass "stage refuses development and dirty kernels, a non-Image, missing or stale modules, no DTBs"
+
+# The commit count from the source tree: HEAD must be the release's commit
+if command -v git >/dev/null; then
+  src=$t/src && mkdir -p "$src"
+  ( cd "$src" && git init -q && for i in 1 2 3; do echo $i > f; git add f; git -c user.name=t -c user.email=t@example.invalid commit -qm "c$i"; done )
+  head12=$(cd "$src" && git rev-parse --short=12 HEAD)
+  mkbuild "7.3.0-rc6-omamobile-g$head12"
+  env -u KERNEL_COMMITS KERNEL_DIR=$src ./stage "$K" "$t/p4" > "$t/log" 2>&1 || { cat "$t/log"; fail "stage counts the commits in KERNEL_DIR"; }
+  [[ $(cat "$t/p4/kernel.commits") == 3 ]] && grep -c "pkgver 7.3.0rc6.r3.g$head12" "$t/log" >/dev/null || fail "pkgver takes KERNEL_DIR's count"
+  grep -cx "commits 3" "$t/p4/SOURCE" >/dev/null || fail "SOURCE records the commit and the count"
+  (cd "$src" && git -c user.name=t -c user.email=t@example.invalid commit -qm c4 --allow-empty)
+  if env -u KERNEL_COMMITS KERNEL_DIR=$src ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses a KERNEL_DIR at another commit"; fi
+  (cd "$src" && git reset -q --hard HEAD~1 && echo changed > f)
+  if env -u KERNEL_COMMITS KERNEL_DIR=$src ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses a KERNEL_DIR with uncommitted changes"; fi
+  grep -c "uncommitted" "$t/log" >/dev/null || fail "and says why"
+  if env -u KERNEL_COMMITS ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses without a commit count"; fi
+  mkbuild $rel
+  pass "stage takes the commit count from the clean checkout of the release's commit, or refuses"
+else
+  pass "stage with KERNEL_DIR # SKIP no git"
+fi
 
 # ---------------------------------------------------------------- install
 ./install "$t/root" "$P" > "$t/log" 2>&1 || { cat "$t/log"; fail "install stages the package"; }
@@ -122,7 +151,7 @@ if ./install "$t/root2" "$P" > "$t/log" 2>&1; then fail "install refuses a prebu
 
 # ---------------------------------------------------------------- PKGBUILD
 v=$( (startdir=$PKG LINUX_OMAMOBILE_PREBUILT=$P; source ./PKGBUILD; echo "$pkgname $pkgver-$pkgrel ${arch[*]} ${depends[*]}") )
-[[ $v == "linux-omamobile 7.3.0rc6.r453.g0123456789ab-$(cat version) aarch64 kmod omamobile-boot-update" ]] || fail "PKGBUILD fields (got $v)"
+[[ $v == "linux-omamobile 7.3.0rc6.r4521.g0123456789ab-$(cat version) aarch64 kmod omamobile-boot-update" ]] || fail "PKGBUILD fields (got $v)"
 v=$( (startdir=$PKG LINUX_OMAMOBILE_PREBUILT=$t/nowhere; source ./PKGBUILD; echo "$pkgver") )
 [[ $v == 0 ]] || fail "with nothing staged pkgver is 0 and package() refuses (got $v)"
 grep -qx 'options=(!strip !debug)' PKGBUILD || fail "makepkg must not strip the Image or the modules"
@@ -132,7 +161,7 @@ if command -v makepkg >/dev/null && command -v fakeroot >/dev/null && ((EUID != 
   mkdir -p "$t/mp" && cp -r PKGBUILD install stage version lib test "$t/mp/"
   (cd "$t/mp" && LINUX_OMAMOBILE_IN_MAKEPKG=1 LINUX_OMAMOBILE_PREBUILT=$P BUILDDIR=$t/mpb PKGDEST=$t/pkgs SRCDEST=$t/src \
     PKGEXT=.pkg.tar.zst makepkg -A -d -f --nocheck --nosign >"$t/mp.log" 2>&1) || { tail -20 "$t/mp.log"; fail "makepkg packs it"; }
-  pkgf=$(ls "$t"/pkgs/linux-omamobile-7.3.0rc6.r453.g0123456789ab-*.pkg.tar.zst)
+  pkgf=$(ls "$t"/pkgs/linux-omamobile-7.3.0rc6.r4521.g0123456789ab-*.pkg.tar.zst)
   list=$(tar --zstd -tf "$pkgf")
   grep -cx "usr/lib/modules/$rel/vmlinuz" <<<"$list" >/dev/null || fail "the package holds vmlinuz"
   grep -cx "usr/lib/modules/$rel/dtbs/exynos/google/gs201-cheetah.dtb" <<<"$list" >/dev/null || fail "the package holds the DTBs"

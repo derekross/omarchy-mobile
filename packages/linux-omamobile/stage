@@ -16,8 +16,14 @@
 #   modules-<release>.tar.zst          the stripped modules, <release>/... inside
 # PREBUILT defaults to prebuilt/ beside this script (gitignored; copied
 # into tools/build-packages' container with the rest of the package). Set
-# DTB_DIRS (default exynos/google) for other vendor directories, and
-# KERNEL_DIR to record the source commit in prebuilt/SOURCE.
+# DTB_DIRS (default exynos/google) for other vendor directories.
+#
+# The commit count for pkgver (lib/pkgver): a release build's uname -r is
+# <version>-omamobile-g<sha12>, so the count comes from the source tree.
+# KERNEL_DIR, the clean checkout of the tag the build came from: its HEAD
+# must be the release's commit, and `git rev-list --count HEAD` is the
+# count (recorded with the commit in prebuilt/SOURCE). Or KERNEL_COMMITS=<n>
+# when the source tree isn't at hand.
 #
 # Then: tools/build-packages packages/linux-omamobile
 # (or, by hand: LINUX_OMAMOBILE_PREBUILT=<dir> makepkg -A in this directory).
@@ -29,7 +35,20 @@ die() { printf 'stage: %s\n' "$*" >&2; exit 1; }
 
 [[ -f $out/include/config/kernel.release ]] || die "no kernel build in $out (include/config/kernel.release)"
 rel=$(cat "$out/include/config/kernel.release")
-pkgver=$("$here/lib/pkgver" "$rel") || exit 1
+# The commit count, from the source tree that built it (or KERNEL_COMMITS)
+count=${KERNEL_COMMITS:-}
+commit=
+if [[ -n ${KERNEL_DIR:-} ]]; then
+  git -C "$KERNEL_DIR" rev-parse HEAD >/dev/null 2>&1 || die "KERNEL_DIR=$KERNEL_DIR is not a git checkout"
+  commit=$(git -C "$KERNEL_DIR" rev-parse HEAD)
+  [[ $rel =~ -g([0-9a-f]+)$ && $commit == "${BASH_REMATCH[1]}"* ]] \
+    || die "$KERNEL_DIR is at ${commit:0:12}, but $out was built from ${rel##*-g}"
+  [[ -z $(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no) ]] || die "$KERNEL_DIR has uncommitted changes"
+  n=$(git -C "$KERNEL_DIR" rev-list --count HEAD)
+  [[ -z $count || $count == "$n" ]] || die "KERNEL_COMMITS=$count, but $KERNEL_DIR counts $n"
+  count=$n
+fi
+pkgver=$("$here/lib/pkgver" "$rel" $count) || exit 1
 image=$out/arch/arm64/boot/Image
 modules=$out/modules-$rel.tar.zst
 [[ -s $image ]] || die "no $image (bin/omamobile kernel)"
@@ -45,6 +64,7 @@ mkdir -p "$dest.new/dtbs"
 cp "$image" "$dest.new/Image"
 cp "$modules" "$dest.new/modules.tar.zst"
 printf '%s\n' "$rel" > "$dest.new/kernel.release"
+[[ -z $count ]] || printf '%s\n' "$count" > "$dest.new/kernel.commits"
 n=0
 for dir in ${DTB_DIRS:-exynos/google}; do
   [[ $dir =~ ^[a-z0-9_-]+(/[a-z0-9_-]+)*$ ]] || die "DTB_DIRS: bad directory '$dir'"
@@ -56,8 +76,9 @@ for dir in ${DTB_DIRS:-exynos/google}; do
   done
 done
 ((n)) || die "no DTBs under $out/arch/arm64/boot/dts/{${DTB_DIRS:-exynos/google}}"
-if [[ -n ${KERNEL_DIR:-} ]] && git -C "$KERNEL_DIR" rev-parse HEAD >/dev/null 2>&1; then
-  { echo "commit $(git -C "$KERNEL_DIR" rev-parse HEAD)"
+if [[ -n $commit ]]; then
+  { echo "commit $commit"
+    echo "commits $count"
     echo "describe $(git -C "$KERNEL_DIR" describe --tags --always 2>/dev/null || true)"; } > "$dest.new/SOURCE"
 fi
 (cd "$dest.new" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum) > "$dest.new/SHA256SUMS"

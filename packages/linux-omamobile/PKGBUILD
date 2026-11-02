@@ -12,7 +12,7 @@
 # images; nothing here writes a partition.
 _prebuilt=${LINUX_OMAMOBILE_PREBUILT:-${startdir:-.}/prebuilt}
 pkgname=linux-omamobile
-pkgver=$("${startdir:-.}/lib/pkgver" "$(cat "$_prebuilt/kernel.release" 2>/dev/null)" 2>/dev/null || echo 0)
+pkgver=$("${startdir:-.}/lib/pkgver" "$(cat "$_prebuilt/kernel.release" 2>/dev/null)" $(cat "$_prebuilt/kernel.commits" 2>/dev/null) 2>/dev/null || echo 0)
 pkgrel=$(cat "${startdir:-.}/version")
 pkgdesc="The Omarchy Mobile kernel: arm64 Image, modules and the Google boards' DTBs (no boot images: omamobile-boot-update makes them)"
 arch=(aarch64)

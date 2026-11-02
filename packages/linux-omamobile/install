@@ -28,7 +28,8 @@ for f in Image modules.tar.zst kernel.release; do
   grep -cE "  $f$" "$pre/SHA256SUMS" >/dev/null || die "$pre/SHA256SUMS does not cover $f"
 done
 rel=$(cat "$pre/kernel.release")
-./lib/pkgver "$rel" >/dev/null || exit 1
+count=$(cat "$pre/kernel.commits" 2>/dev/null || true)
+./lib/pkgver "$rel" $count >/dev/null || exit 1
 [[ $(od -An -tx1 -j56 -N4 "$pre/Image" | tr -d ' \n') == 41524d64 ]] || die "$pre/Image is not an arm64 Image"
 
 m=$d/usr/lib/modules
