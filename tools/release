@@ -28,8 +28,9 @@
 #                 staged into packages/linux-omamobile
 #   images        [4] the release initramfs, then the boot images twice:
 #                 every checksum equal; the device package's boot files kept
-#                 when `tools/stage-boot-files --check` finds them current,
-#                 restaged only for a new device-package version
+#                 when `tools/stage-boot-files --check` finds them current
+#                 (and the images built from their initramfs), restaged only
+#                 for a new device-package version
 #   packages      [5] every package's tests; out/repo signed by the release
 #                 key, holding every package the image installs at this
 #                 checkout's version; development publishes exactly it.
@@ -168,6 +169,9 @@ is_release_string() { [[ $1 =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-rc[0-9]+)?-omamobile-
 # The kernel update path (§12 decision 10), once PR #320's files are here
 have_kernel_pkg() { [[ -x packages/linux-omamobile/stage && -f packages/linux-omamobile/PKGBUILD ]]; }
 have_boot_update() { [[ -f packages/omamobile-boot-update/PKGBUILD && -x tools/stage-boot-files ]]; }
+# The device's package ships boot files (as tools/build-packages and
+# tools/build-rootfs decide it: its install handles OMAMOBILE_BOOT_FILES)
+ships_boot_files() { have_boot_update && grep -c OMAMOBILE_BOOT_FILES "packages/$(desc PACKAGE)/install" >/dev/null 2>&1; }
 
 # A clean temporary keyring holding only omamobile-keyring's public keys;
 # verify_sig SIG FILE succeeds only for a good signature by RELEASE_KEY
@@ -318,25 +322,22 @@ st_build() {
 }
 
 st_images() {
-  local krel n=0
+  local krel n=0 dpkg bf want_v have_v="" kept=0
   krel=$(need kernel_release build)
   say "§11.4: release initramfs and $DEVICE's boot images, twice"
   [[ $(cat "$RELEASE_KERNEL_OUT/include/config/kernel.release" 2>/dev/null) == "$krel" ]] ||
     die "$RELEASE_KERNEL_OUT no longer holds $krel; run the build stage again"
   KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile initramfs --release
-  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
-  ((dry)) || (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.1"
-  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
   # §5: the device package's boot files. Current ones are kept: the device
   # package in out/repo was built from them, and a version is one package,
   # so restaging at the same version would only make out/repo disagree.
   # Stale (or missing) ones need a new device-package version first.
-  if have_boot_update; then
-    local dpkg bf want_v have_v=""
+  if ships_boot_files; then
     dpkg=$(desc PACKAGE)
     bf=packages/$dpkg/boot-files
     if tools/stage-boot-files --check "$bf" > "$rel/boot-files-check.log" 2>&1; then
       note "$bf is current for this tree: kept, not restaged"
+      kept=1
     else
       sed 's/^/    /' "$rel/boot-files-check.log" >&2
       want_v=$(pkg_info "$dpkg" | cut -d' ' -f1)
@@ -344,16 +345,32 @@ st_images() {
         have_v=$(db_versions out/repo/aarch64/omamobile.db.tar.gz | awk -v n="$dpkg" '$1 == n { print $2 }')
       if [[ $have_v == "$want_v" ]]; then
         derek "# bump packages/$dpkg/version (a new version for new boot files), commit it, then:" \
-              "KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE tools/stage-boot-files" \
+              "tools/release --version $version images     # stages them" \
               "tools/build-packages packages/$dpkg"
         die "$bf is stale or missing and out/repo already has $dpkg $want_v: a device-package version bump is needed"
       fi
       KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run tools/stage-boot-files
       note "staged for $dpkg $want_v (out/repo: ${have_v:-none}); next: tools/build-packages packages/$dpkg"
     fi
+    # The bundle's slot B images carry the initramfs the device package
+    # carries, so the release boots the bytes every phone's hook writes later
+    # (and the identifiers stage scans those bytes)
+    if ((kept)); then
+      if ((dry)); then
+        note "would build the images with $bf/initramfs.cpio.lz4 (the device package's)"
+      elif ! cmp -s "$bf/initramfs.cpio.lz4" "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4"; then
+        cp "$bf/initramfs.cpio.lz4" "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4"
+        note "the fresh initramfs differs from the staged one: the images use the staged one (the device package's)"
+      fi
+    fi
+  elif have_boot_update; then
+    note "skipped: packages/$(desc PACKAGE)/install ships no boot files (OMAMOBILE_BOOT_FILES), so $DEVICE has no kernel update path yet"
   else
     note "skipped: no tools/stage-boot-files in this checkout (PR #320). The release can't pass test-install without it (§12 decision 10)"
   fi
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
+  ((dry)) || (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.1"
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
   ((dry)) && return 0
   (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.2"
   cmp -s "$rel/images.sha256.1" "$rel/images.sha256.2" || {
@@ -396,8 +413,9 @@ st_packages() {
   say "out/repo holds what this checkout builds, for every package the image installs"
   dpkg=$(desc PACKAGE)
   image_pkgs="$(grep -v '^#' rootfs/packages.omamobile | xargs) $dpkg $(desc ROOTFS_PACKAGES)"
-  # Decision 10: the kernel package and its hook ship in the image
-  if have_kernel_pkg; then
+  # Decision 10: the kernel package and its hook ship in the image (for a
+  # device whose package ships boot files, as tools/build-rootfs decides it)
+  if have_kernel_pkg && ships_boot_files; then
     local p
     for p in linux-omamobile omamobile-boot-update; do
       [[ " $image_pkgs " == *" $p "* ]] || image_pkgs+=" $p"
@@ -436,7 +454,7 @@ st_packages() {
   note "every image package is at this checkout's version"
   # Decision 10: the device package carries the boot files the images stage
   # staged from this release's initramfs, not an older build's
-  if have_boot_update; then
+  if ships_boot_files; then
     local bf=packages/$dpkg/boot-files/SHA256SUMS pf want_sum got_sum
     [[ -f $bf ]] || die "no $bf: run the images stage first"
     pf=$(bsdtar -xOf "$db" --include='*/desc' |
@@ -483,7 +501,7 @@ st_rootfs() {
   grep -q "^kernel modules: $krel " "out/$name.MANIFEST" || die "$img does not carry $krel's modules"
   grep -q '^omamobile packages missing (allowed): none$' "out/$name.MANIFEST" || die "$img lacks some of our packages"
   # Decision 10: the image carries the kernel package and its hook
-  if have_kernel_pkg; then
+  if have_kernel_pkg && ships_boot_files; then
     local p
     for p in linux-omamobile omamobile-boot-update; do
       grep -qE "(^|[[:space:]])$p([[:space:]]|$)" "out/$name.MANIFEST" ||

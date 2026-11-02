@@ -178,7 +178,13 @@ printf 'pkgname=omamobile-device-testdev\npkgver=0.1.5\npkgrel=1\n' > "$R/packag
 printf '#!/bin/bash\n[[ $1 == --check && -e %s/bf-current ]] && { echo current; exit 0; }\necho "stale" >&2; exit 1\n' "$t" > "$R/tools/stage-boot-files"
 chmod +x "$R/tools/stage-boot-files"
 touch "$t/bf-current"
+# a device package that ships no boot files has no boot-files flow
+run --version "$V" --dry-run images || fail "the images dry run for a device package without boot files"
+grep -q 'ships no boot files' "$t/log" || fail "a device package without OMAMOBILE_BOOT_FILES skips the boot files"
+printf '#!/bin/bash\nboot=${OMAMOBILE_BOOT_FILES:-boot-files}\n' > "$R/packages/omamobile-device-testdev/install"
 run --version "$V" --dry-run images || fail "the images dry run with current boot files"
+grep -q 'would build the images with packages/omamobile-device-testdev/boot-files/initramfs.cpio.lz4' "$t/log" ||
+  fail "the images use the staged initramfs when the boot files are kept"
 grep -q 'boot-files is current for this tree: kept, not restaged' "$t/log" || fail "current boot files are kept"
 if grep -q 'would run: tools/stage-boot-files' "$t/log"; then fail "current boot files are not restaged"; fi
 rm "$t/bf-current"
@@ -198,7 +204,7 @@ grep -q 'would run: tools/stage-boot-files' "$t/log" || fail "stages the boot fi
 grep -q 'next: tools/build-packages packages/omamobile-device-testdev' "$t/log" || fail "names the device package to build next"
 rm -rf "$R/out/repo" && mv "$t/repo.saved" "$R/out/repo"
 rm -rf "$R/packages/omamobile-boot-update" "$R/packages/omamobile-device-testdev" "$R/tools/stage-boot-files" "$RELEASE_KERNEL_OUT"
-pass "images keeps current boot files, and asks for a device-package version bump before restaging stale ones"
+pass "images keeps current boot files and builds from their initramfs, and asks for a device-package version bump before restaging stale ones"
 
 # --- upload: the real tools/release-upload --dry-run on a signed bundle ---
 for tool in rsync sha256sum; do
