@@ -5,8 +5,8 @@ Native Omarchy on mobile devices: Arch Linux ARM, Hyprland and Omarchy's own pac
 <p align="center">
   <img src="docs/screenshots/home.png" width="22%" alt="The home screen, with widgets and a dock">
   <img src="docs/screenshots/quick-settings.png" width="22%" alt="Quick settings">
-  <img src="docs/screenshots/apps.png" width="22%" alt="The app list with the on-screen keyboard and its Mic, Paste and Emoji row">
-  <img src="docs/screenshots/terminal.png" width="22%" alt="Voice dictation into an AI agent running in the terminal">
+  <img src="docs/screenshots/apps-keyboard.png" width="22%" alt="The app list with the on-screen keyboard and its Mic, Paste and Emoji row">
+  <img src="docs/screenshots/terminal-voice.png" width="22%" alt="Voice dictation into an AI agent running in the terminal">
 </p>
 
 What works on each phone, and the notes behind it: [docs/DEVICES.md](docs/DEVICES.md). What's next: [docs/ROADMAP.md](docs/ROADMAP.md).
