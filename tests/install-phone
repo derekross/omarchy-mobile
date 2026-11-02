@@ -241,6 +241,13 @@ cp "$R/device/testdev/device.conf" "$BD/device.conf"
 for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do cp "$t/images/$p.img" "$BD/images/"; done
 cp "$img" "$img.sha256" "$R/out/omamobile-rootfs-2026.10.13-aarch64.MANIFEST" "$t/bundle/"
 printf 'kernel release: 7.3.0-test-1\nroot image: %s (%s)\n' "$(basename "$img")" "$(cut -d' ' -f1 "$img.sha256")" > "$BD/MANIFEST"
+cp "$BD/install" "$t/install.orig"
+manifest() {  # the bundle's manifest.json, as tools/make-bundle writes it
+  rm -f "$BD/manifest.json"
+  python3 -I "$SRC/tools/bundle-manifest" --bundle "$BD" --rootfs "$img" --rootfs-sha256 "$(cut -d' ' -f1 "$img.sha256")" \
+    --version 2026.10.13 --kernel-release 7.3.0-test-1 --channel stable
+}
+manifest
 (cd "$BD" && find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
 binstall() {
   : > "$t/fastboot.log"
@@ -266,6 +273,7 @@ if command -v gpg >/dev/null; then
   signer=$(gpg --homedir "$G" --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
   sed -i "s/^SIGNING_KEYS=.*/SIGNING_KEYS='$signer'/" "$BD/install"
   seal() {
+    [[ ${1:-} == --keep-manifest ]] || manifest
     (cd "$BD" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS)
     gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
   }
@@ -298,6 +306,50 @@ if command -v gpg >/dev/null; then
   gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
   if binstall --dry-run; then fail "refuses a manifest outside the signed checksums"; fi
   [[ ! -s $t/fastboot.log ]] || fail "rejects an unauthenticated manifest before contacting the phone"
+
+  # manifest.json: the install plan as data must match the descriptor and the
+  # installer's rules exactly. Each change below is signed again, so only the
+  # manifest check can refuse it.
+  seal
+  binstall --dry-run || { cat "$t/out"; fail "a signed bundle with its manifest.json installs"; }
+  grep -q 'manifest.json: Omarchy Mobile 2026.10.13 (developer preview), its plan matches the descriptor' "$t/out" \
+    || { cat "$t/out"; fail "says the manifest's plan matches"; }
+  mrefuse() {  # WHY PYTHON-EDIT EXPECTED-MESSAGE
+    manifest
+    python3 -I -c "import json, sys; p = sys.argv[1]; m = json.load(open(p)); $2; json.dump(m, open(p, 'w'))" "$BD/manifest.json"
+    seal --keep-manifest
+    if binstall --dry-run; then fail "refuses a manifest with $1"; fi
+    [[ ! -s $t/fastboot.log ]] || fail "contacts no phone for a manifest with $1"
+    grep -qF -- "$3" "$t/out" || { cat "$t/out"; fail "names the problem with $1"; }
+  }
+  mrefuse "another product" 'm["install"]["product"] = "cheetah"' "but the descriptor is testdev"
+  mrefuse "a locked bootloader allowed" 'm["install"]["require_unlocked_bootloader"] = False' "must require an unlocked bootloader"
+  mrefuse "unmatched bootloader slots allowed" 'm["install"]["require_matching_bootloader_slots"] = False' "both bootloader slots to match"
+  mrefuse "a string for true" 'm["install"]["require_unlocked_bootloader"] = "true"' "not a valid release manifest"
+  mrefuse "an extra write (vbmeta_b)" 'm["install"]["writes"].insert(1, {"partition": "vbmeta_b", "source": "images/boot.img", "size": 11})' "writes are not exactly slot B"
+  mrefuse "a slot A write" 'm["install"]["writes"][0]["partition"] = "boot_a"' "writes are not exactly slot B"
+  mrefuse "a missing userdata write" 'm["install"]["writes"].pop()' "writes are not exactly slot B"
+  mrefuse "a wrong partition size" 'm["install"]["writes"][0]["partition_size"] = 4096' "writes are not exactly slot B"
+  mrefuse "another step after the writes" 'm["install"]["after"].append("erase misc")' "set-active b and reboot, nothing else"
+  mrefuse "a wider allowlist" 'm["install"]["storage_guard_allowlist"].append("persist")' "storage-guard allowlist"
+  mrefuse "an unlisted bundle file" 'm["files"] = [f for f in m["files"] if f["path"] != "images/dtbo.img"]' "does not list exactly the bundle's files"
+  mrefuse "a wrong file checksum" 'm["files"][0]["sha256"] = "0" * 64' "does not match manifest.json"
+  mrefuse "a path out of the bundle" 'm["files"][0]["path"] = "../x"' "not a valid release manifest"
+  mrefuse "another root image" 'm["root_image"]["sha256"] = "1" * 64' "name different root images"
+  mrefuse "another kernel" 'm["kernel"]["release"] = "7.3.0-other"' "name different kernels"
+  mrefuse "a version that isn't a date" 'm["version"] = "latest"' "versioned by the calendar"
+  mrefuse "another format" 'm["format"] = 2' "reads format 1"
+  manifest; rm "$BD/manifest.json"; seal --keep-manifest
+  if binstall --dry-run; then fail "refuses a bundle without manifest.json"; fi
+  grep -q 'has no manifest.json' "$t/out" || fail "says manifest.json is missing"
+  seal
+  sed -i '/  manifest\.json$/d' "$BD/SHA256SUMS"
+  gpg --homedir "$G" -q --batch --yes --detach-sign -o "$BD/SHA256SUMS.sig" "$BD/SHA256SUMS"
+  if binstall --dry-run; then fail "refuses a manifest.json outside the signed checksums"; fi
+  grep -q 'must cover manifest.json exactly once' "$t/out" || fail "says manifest.json must be covered"
+  seal
+  binstall --dry-run || { cat "$t/out"; fail "the bundle installs again once sealed"; }
+  pass "manifest.json: the plan must match the descriptor and the installer's rules exactly, or nothing is written"
 fi
 [[ -z $(flashing_calls) ]] || fail "a refused bundle flashes nothing"
 pass "bundle mode: signature required (pinned key), checksums checked, its own images used"

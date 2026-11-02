@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Write a release bundle's machine-readable manifest (docs/RELEASES.md §6).
+
+  tools/bundle-manifest --bundle DIR --rootfs FILE --rootfs-sha256 HEX
+                        --version V --kernel-release R [--kernel-commit C]
+                        [--commit C] [--channel stable|development|local]
+                        [--label TEXT] [--base-url URL]
+
+DIR/manifest.json gets, as data: every file of the bundle with its size and
+SHA-256 (all but SHA256SUMS, SHA256SUMS.sig and manifest.json itself), the
+root image beside the bundle (name, size, SHA-256), the device, the release
+version, the kernel release and both commits, and the install plan: the
+fastboot product the phone must report, an unlocked bootloader and matching
+bootloader slots required, and exactly what is written (each BOOT_IMAGES
+entry of DIR/device.conf to <image>_b, with the exact partition size an
+AVB_FOOTERS image was padded to, then userdata with the root image, then
+"set-active b" and "reboot"), plus the storage-guard allowlist the writes are
+checked against. Nothing else is ever written.
+
+tools/make-bundle runs this before computing SHA256SUMS, so the signed
+checksums cover manifest.json; tools/install-phone reads it back and refuses
+an install that differs from the descriptor or from its own rules. A web
+flasher or a desktop installer reads the same file.
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+
+FORMAT = 1
+NEVER = ["slot A (any *_a partition)", "an unsuffixed partition name", "bootloader", "radio", "persist", "efs",
+         "modem", "devinfo", "vbmeta", "fastboot -w", "fastboot --slot", "fastboot flashing", "fastboot erase",
+         "fastboot format", "fastboot oem"]
+
+
+def die(msg):
+    print("bundle-manifest: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def descriptor(path):
+    """The device descriptor is data (RELEASES §3): KEY="value" or KEY=value lines, never sourced."""
+    d = {}
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.rstrip("\n")
+            if re.match(r"^\s*(#.*)?$", line):
+                continue
+            m = re.match(r'^([A-Z][A-Z0-9_]*)="([^"$`\\]*)"$', line) or \
+                re.match(r"^([A-Z][A-Z0-9_]*)=([^\"$`\\'\s]*)$", line)
+            if not m:
+                die("%s:%d: not a KEY=value line" % (path, n))
+            d[m.group(1)] = m.group(2)
+    return d
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--bundle", required=True)
+    ap.add_argument("--rootfs", required=True)
+    ap.add_argument("--rootfs-sha256", required=True)
+    ap.add_argument("--version", required=True)
+    ap.add_argument("--kernel-release", required=True)
+    ap.add_argument("--kernel-commit", default="unknown")
+    ap.add_argument("--commit", default="unknown")
+    ap.add_argument("--channel", default="unknown")
+    ap.add_argument("--label", default="developer preview")
+    ap.add_argument("--base-url", default="")
+    a = ap.parse_args()
+
+    bundle = os.path.abspath(a.bundle)
+    d = descriptor(os.path.join(bundle, "device.conf"))
+    codename = d.get("CODENAME", "")
+    if not re.match(r"^[a-z0-9]+$", codename):
+        die("device.conf has no CODENAME")
+    boot_images = d.get("BOOT_IMAGES", "").split()
+    allow = d.get("UFS_RW", "").split()
+    if not boot_images or not allow:
+        die("device.conf needs BOOT_IMAGES and UFS_RW")
+    avb = {}
+    for e in d.get("AVB_FOOTERS", "").split():
+        m = re.match(r"^([a-z_]+):(0x[0-9a-f]{1,10}|[1-9][0-9]{0,11})$", e)
+        if not m:
+            die("AVB_FOOTERS entries are image:partition_size, not %s" % e)
+        avb[m.group(1)] = int(m.group(2), 0)
+    if not re.match(r"^[0-9a-f]{64}$", a.rootfs_sha256):
+        die("--rootfs-sha256 is a SHA-256 in hex")
+    root_name = os.path.basename(a.rootfs)
+    if not re.match(r"^[A-Za-z0-9._-]+\.img\.zst$", root_name):
+        die("the root image needs a plain filename ending in .img.zst")
+
+    files = []
+    for top, dirs, names in os.walk(bundle):
+        dirs.sort()
+        for name in sorted(names):
+            path = os.path.join(top, name)
+            rel = os.path.relpath(path, bundle)
+            if rel in ("SHA256SUMS", "SHA256SUMS.sig", "manifest.json"):
+                continue
+            files.append({"path": rel, "size": os.path.getsize(path), "sha256": sha256(path)})
+    files.sort(key=lambda f: f["path"])
+    sizes = {f["path"]: f["size"] for f in files}
+
+    writes = []
+    for p in boot_images:
+        if not re.match(r"^[a-z_]+$", p):
+            die("bad image name %s" % p)
+        if p + "_b" not in allow:
+            die("%s_b is not on the storage-guard allowlist (UFS_RW)" % p)
+        src = "images/%s.img" % p
+        if src not in sizes:
+            die("the bundle has no %s" % src)
+        writes.append({"partition": p + "_b", "source": src, "size": sizes[src],
+                       "partition_size": avb.get(p)})
+    if "userdata" not in allow:
+        die("userdata is not on the storage-guard allowlist (UFS_RW)")
+    writes.append({"partition": "userdata", "source": "root_image", "erases_userdata": True})
+
+    manifest = {
+        "format": FORMAT,
+        "name": "Omarchy Mobile",
+        "label": a.label,
+        "version": a.version,
+        "device": {"codename": codename, "name": d.get("NAME", "")},
+        "kernel": {"release": a.kernel_release, "commit": a.kernel_commit},
+        "commits": {"omarchy-mobile": a.commit, "linux-omarchy-mobile": a.kernel_commit},
+        "omamobile_channel": a.channel,
+        "base_url": a.base_url,
+        "files": files,
+        "root_image": {"name": root_name, "location": "beside the bundle directory",
+                       "size": os.path.getsize(a.rootfs), "sha256": a.rootfs_sha256,
+                       "compression": "zstd", "filesystem": "ext4", "label": "omamobile-root"},
+        "install": {
+            "tool": "fastboot",
+            "product": codename,
+            "require_unlocked_bootloader": True,
+            "require_matching_bootloader_slots": True,
+            "storage_guard_allowlist": allow,
+            "writes": writes,
+            "after": ["set-active b", "reboot"],
+            "never": NEVER,
+        },
+    }
+    out = os.path.join(bundle, "manifest.json")
+    with open(out + ".new", "w") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(out + ".new", out)
+
+
+if __name__ == "__main__":
+    main()

@@ -9,7 +9,8 @@
 #   /out      where the raw image and the MANIFEST go
 # Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES and
 # ALLOW_MISSING (both space-separated), KERNEL_RELEASE, MODULES_SHA256,
-# GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL.
+# GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, CHANNEL ([omamobile]: stable,
+# development or local).
 set -euo pipefail
 
 T=/target
@@ -74,8 +75,35 @@ install -Dm644 /etc/pacman.d/mirrorlist "$T/etc/pacman.d/mirrorlist"
 mkdir -p "$T/var/lib/omamobile/repo/aarch64"
 cp -a /repo/aarch64/. "$T/var/lib/omamobile/repo/aarch64/"
 chown -R 0:0 "$T/var/lib/omamobile/repo"
-# The image's sync databases match its pacman.conf ([omamobile] from file://)
+# The channel the phone follows: the device package's mirrorlist (stable on)
+# with CHANNEL's Server line on and the others commented out, as
+# omamobile-update channel does on the phone. The image keeps its copy of the
+# repository either way (offline reinstalls, omamobile-update channel local).
+ml=$T/etc/pacman.d/omamobile-mirrorlist
+[[ -f $ml ]] || die "the device package installed no /etc/pacman.d/omamobile-mirrorlist"
+case $CHANNEL in
+  stable|development) server="https://pkgs.omamobile.org/$CHANNEL/\$arch" ;;
+  local) server='file:///var/lib/omamobile/repo/$arch' ;;
+  *) die "CHANNEL must be stable, development or local, not '$CHANNEL'" ;;
+esac
+awk -v want="Server = $server" '
+  { line = $0; bare = line; sub(/^#+[[:space:]]*/, "", bare) }
+  bare ~ /^Server[[:space:]]*=/ {
+    if (bare == want && !done) { print want; done = 1; next }
+    if (line !~ /^[[:space:]]*#/) line = "#" line
+  }
+  { print line }
+  END { if (!done) print want }' "$ml" > "$ml.new"
+mv "$ml.new" "$ml" && chmod 644 "$ml"
+[[ $(grep -c '^[[:space:]]*Server' "$ml") == 1 ]] && grep -qxF "Server = $server" "$ml" ||
+  die "could not set the [omamobile] channel to $CHANNEL in the mirrorlist"
+echo "    [omamobile] channel: $CHANNEL ($server)"
+# The image's sync databases match its pacman.conf. [omamobile]'s index is
+# the build's own, from file://: kept for the local channel; otherwise
+# dropped, since pacman's If-Modified-Since refresh would keep it while it is
+# newer than the channel's, and the first refresh fetches the real one.
 cp /var/lib/pacman/sync/*.db "$T/var/lib/pacman/sync/" 2>/dev/null || true
+[[ $CHANNEL == local ]] || rm -f "$T"/var/lib/pacman/sync/omamobile.*
 
 say "Kernel modules $KERNEL_RELEASE"
 mkdir -p "$T/usr/lib/modules"
@@ -151,6 +179,7 @@ say "MANIFEST"
   echo "repository commit: $GIT_COMMIT"
   echo "arch linux arm tarball sha256: $ALARM_SHA256"
   echo "omarchy channel: $OMARCHY_CHANNEL"
+  echo "omamobile channel: $CHANNEL"
   echo "kernel modules: $KERNEL_RELEASE (tarball sha256 $MODULES_SHA256)"
   echo "omarchy patches applied: ${applied[*]:-none}"
   echo "omarchy patches already in omarchy: ${upstream[*]:-none}"
