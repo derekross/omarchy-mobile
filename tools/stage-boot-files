@@ -114,6 +114,12 @@ grep -cx 'root/\.ssh/authorized_keys' <<<"$list" >/dev/null && die "$initramfs c
 grep -cE '^etc/dropbear/dropbear_.*_host_key$' <<<"$list" >/dev/null && die "$initramfs carries dropbear host keys: build it with --release"
 rw=$(lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout etc/omamobile-ufs-rw ./etc/omamobile-ufs-rw 2>/dev/null || true)
 [[ $rw == "$(read -ra a <<<"$DEV_UFS_RW"; echo "${a[*]}")" ]] || die "$initramfs packs allowlist '$rw', not $DEVICE's UFS_RW (built for another device?)"
+# The initramfs must come from this tree: its init is INITRAMFS_INIT's, so
+# SOURCES (this tree at staging time) also says what built it
+if [[ $DEV_INITRAMFS_INIT == /* ]]; then init_src=$ROOT$DEV_INITRAMFS_INIT; else init_src=$ROOT/device/$DEVICE/$DEV_INITRAMFS_INIT; fi
+[[ -f $init_src ]] || die "no $init_src (INITRAMFS_INIT)"
+lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout init ./init 2>/dev/null | cmp -s - "$init_src" \
+  || die "$initramfs's init is not this tree's ${init_src#"$ROOT"/}: build the initramfs from this checkout (DEVICE=$DEVICE KERNEL_OUT=$KERNEL_OUT bin/omamobile initramfs --release)"
 
 src=$ROOT/device/$DEVICE/$DEV_DTBO_SOURCE
 grep -c "board_id = <$DEV_DTBO_BOARD_ID>;" "$src" >/dev/null || die "$src: board_id is not $DEV_DTBO_BOARD_ID"

@@ -47,3 +47,64 @@ grep -qF '"$d/stage" --verify "$d/prebuilt"' tools/build-packages || fail "build
 grep -qE '^NAMED_ONLY=\(linux-omamobile\)$' tools/build-packages || fail "linux-omamobile is built only when named"
 grep -qF '[[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue' tools/build-packages || fail "and never by default or with --all"
 pass "repo-publish carries boot-files/; build-packages checks them, verifies the kernel, and builds linux-omamobile only when named"
+
+# build-packages with a device package whose boot files are missing: that
+# package is skipped, the rest is built and signed, and the run exits 3
+# (repo-publish publishes the rest, then fails). No Docker, no network: a
+# copy of the repository with stand-ins for the container and repo-add, and
+# a throwaway local key.
+if command -v gpg >/dev/null && command -v zstd >/dev/null; then
+  R=$t/repo && mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin"
+  cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
+  mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
+  printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
+  cat > "$R/tools/lib/alarm.sh" <<'A'
+alarm_die() { echo "error: $*" >&2; exit 1; }
+alarm_say() { echo "==> $*"; }
+alarm_fetch() { :; }
+alarm_build_image() { echo fixture; }
+alarm_base_image() { echo fixture; }
+ALARM_CACHE=$ALARM_TEST_CACHE ALARM_KEYSERVER=none
+A
+  for p in plain omamobile-device-testdev; do
+    mkdir -p "$R/packages/$p"
+    echo 1 > "$R/packages/$p/version"
+    printf 'pkgname=%s\npkgver=$(cat "${startdir:-.}/version")\npkgrel=1\narch=(any)\n' "$p" > "$R/packages/$p/PKGBUILD"
+  done
+  printf '#!/bin/bash\nboot=${OMAMOBILE_BOOT_FILES:-boot-files}\n' > "$R/packages/omamobile-device-testdev/install"
+  # The container: makepkg's result, a package with its .PKGINFO
+  cat > "$t/bin/docker" <<'D'
+#!/bin/bash
+[[ $1 == run ]] || exit 0
+work="" name=""
+while (($#)); do
+  case $1 in -v) [[ $2 != *:/work ]] || work=${2%:/work}; shift ;; -e) [[ $2 != NAME=* ]] || name=${2#NAME=}; shift ;; esac
+  shift
+done
+[[ -n $work && -n $name ]] || exit 0
+d=$(mktemp -d); printf 'pkgname = %s\npkgver = 1-1\narch = any\n' "$name" > "$d/.PKGINFO"
+tar --zstd -cf "$work/out/$name-1-1-any.pkg.tar.zst" -C "$d" .PKGINFO
+echo "$name" >> "$BUILT_LOG"
+D
+  printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do [[ $1 == --key ]] && shift; shift; done\ntouch "$1"; ln -sf "$1" omamobile.db\n' > "$t/bin/repo-add"
+  chmod +x "$t/bin/"*
+  kd=$R/keys/testdev && mkdir -p -m 700 "$kd/gnupg"
+  GNUPGHOME=$kd/gnupg gpg --batch --quiet --passphrase '' --quick-generate-key "test <t@invalid>" ed25519 sign never 2>/dev/null
+  GNUPGHOME=$kd/gnupg gpg --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}' > "$kd/fingerprint"
+  GNUPGHOME=$kd/gnupg gpg --batch --armor --export > "$kd/public.asc"
+  ( cd "$R" && git init -q && git add -A )
+  rc=0
+  (cd "$R" && PATH=$t/bin:$PATH ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built tools/build-packages --nocheck --local testdev \
+     packages/plain packages/omamobile-device-testdev) > "$t/bp.log" 2>&1 || rc=$?
+  gpgconf --homedir "$kd/gnupg" --kill gpg-agent 2>/dev/null || true
+  [[ $rc == 3 ]] || { cat "$t/bp.log"; fail "build-packages exits 3 when a device package's boot files are missing (got $rc)"; }
+  [[ $(cat "$t/built") == plain ]] || { cat "$t/bp.log"; fail "the other package is built, the device package is not"; }
+  [[ -f $R/out/testdev/repo/aarch64/plain-1-1-any.pkg.tar.zst.sig ]] || { cat "$t/bp.log"; fail "and the other package is signed into the repository"; }
+  grep -c 'SKIPPED: omamobile-device-testdev' "$t/bp.log" >/dev/null && grep -c 'not built, boot files missing or stale: omamobile-device-testdev' "$t/bp.log" >/dev/null \
+    || { cat "$t/bp.log"; fail "the skip is named, before the build and at the end"; }
+  grep -qF '((rc == 0 || rc == 3)) || exit "$rc"' tools/repo-publish && grep -qF '((skipped_build == 0)) || die' tools/repo-publish \
+    || fail "repo-publish publishes the rest on exit 3, then fails"
+  pass "build-packages skips only the device package without boot files, builds and signs the rest, exits 3; repo-publish then publishes and fails"
+else
+  pass "build-packages skip # SKIP no gpg or zstd"
+fi

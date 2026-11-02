@@ -153,7 +153,7 @@ cp "$LIBDIR/descriptor.sh" "$R/packages/omamobile-boot-update/lib/"
 mkdir -p "$R/initramfs" && echo '#!/bin/sh' > "$R/initramfs/init"
 git -C "$R" init -q && git -C "$R" add -A
 release_rd() { # extra file in the initramfs, or none
-  rm -rf "$t/rd2" && mkdir -p "$t/rd2/etc" && echo x > "$t/rd2/init"
+  rm -rf "$t/rd2" && mkdir -p "$t/rd2/etc" && cp "$R/initramfs/init" "$t/rd2/init"
   echo "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" > "$t/rd2/etc/omamobile-ufs-rw"
   if [[ -n ${1:-} ]]; then mkdir -p "$t/rd2/${1%/*}"; echo k > "$t/rd2/$1"; fi
   (cd "$t/rd2" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q -f - "$K/initramfs.cpio.lz4"
@@ -178,4 +178,8 @@ release_rd etc/dropbear/dropbear_ed25519_host_key
 if sbf; then fail "stage-boot-files refuses an initramfs with dropbear host keys"; fi
 (cd "$t/rd" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q -f - "$K/initramfs.cpio.lz4"
 if sbf; then fail "stage-boot-files refuses an initramfs without the device's allowlist"; fi
+release_rd && echo '# another checkout' >> "$R/initramfs/init"
+if sbf; then fail "stage-boot-files refuses an initramfs whose init is not this tree's"; fi
+grep -c "is not this tree's" "$t/sbf.log" >/dev/null || { cat "$t/sbf.log"; fail "and says so"; }
+git -C "$R" checkout -q -- initramfs/init
 pass "stage-boot-files: the descriptor, the same dtbo, the overlays and a release initramfs, or a refusal"

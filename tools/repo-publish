@@ -54,7 +54,7 @@ DB=omamobile.db.tar.gz
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 die() { echo "repo-publish: $*" >&2; exit 1; }
 
-channel=development build=1 dry=0 yes=0 remind=0 from_main=0 args=()
+channel=development build=1 dry=0 yes=0 remind=0 from_main=0 skipped_build=0 args=()
 while (($#)); do
   [[ $1 == --from-main ]] || args+=("$1")
   case $1 in
@@ -246,7 +246,11 @@ upload() {
 if [[ $channel == development ]]; then
   if ((build)); then
     say "Building what changed"
-    tools/build-packages --all
+    # 3: a device package was skipped (its boot files are missing or stale)
+    # and everything else built: publish that, then fail the run
+    rc=0; tools/build-packages --all || rc=$?
+    ((rc == 0 || rc == 3)) || exit "$rc"
+    ((rc == 0)) || skipped_build=1
   fi
   [[ -f out/repo/$ARCH/$DB ]] || die "out/repo has no index; run tools/build-packages"
   say "Checking out/repo"
@@ -280,3 +284,4 @@ else
   [[ $code == 200 ]] || die "$URL/$channel/$ARCH/omamobile.db answers $code"
 fi
 say "Done: $URL/$channel/$ARCH"
+((skipped_build == 0)) || die "published without the device package(s) tools/build-packages skipped (boot files missing or stale): stage them and publish again"
