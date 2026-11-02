@@ -1,0 +1,159 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The runner's safety before storageproxyd (omamobile-fp-chroot preflight),
+# against a fake tree: partitions found by PARTNAME in a fake sysfs, their
+# contents as plain files, debugfs replaced by a stub that "dumps" from a
+# directory standing in for persist's file system. Nothing real is read.
+#
+#   no consent              -> refused, nothing copied
+#   consent                 -> mfg_data and persist:/ss/{0,nsp} copied, hashed
+#   a second start          -> refused until a reboot (the /run marker)
+#   the TDP copy missing    -> refused (and never quietly recreated)
+#   no /ss/0 in persist     -> refused
+#   the TDP copy changed    -> refused
+#   persist:/ss/0 changed   -> refused
+#   a writable partition    -> refused
+#   existing secure storage -> allowed without the record (bring-up phones)
+#   the 9a without tdp.img  -> refused
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+RUNNER=$PWD/lib/omamobile-fp-chroot
+fail() { echo "not ok - $*" >&2; exit 1; }
+pass() { echo "ok - $*"; }
+
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+# A fresh fake phone in $t/p: persist (sda5) and mfg_data (sda6), read-only.
+phone() {
+  local p=$t/p
+  rm -rf "$p"
+  mkdir -p "$p/sys/sda5" "$p/sys/sda6" "$p/sys/sda7" "$p/dev" "$p/persistfs/ss" "$p/bin" "$p/etc" "$p/run"
+  printf 'MAJOR=8\nMINOR=5\nDEVNAME=sda5\nDEVTYPE=partition\nPARTNAME=persist\n' > "$p/sys/sda5/uevent"
+  printf 'MAJOR=8\nMINOR=6\nDEVNAME=sda6\nDEVTYPE=partition\nPARTNAME=mfg_data\n' > "$p/sys/sda6/uevent"
+  printf 'MAJOR=8\nMINOR=7\nDEVNAME=sda7\nDEVTYPE=partition\nPARTNAME=persist_b\n' > "$p/sys/sda7/uevent"
+  echo 1 > "$p/sys/sda5/ro"; echo 1 > "$p/sys/sda6/ro"; echo 1 > "$p/sys/sda7/ro"
+  echo "persist image" > "$p/dev/sda5"
+  head -c 65536 /dev/urandom > "$p/dev/sda6"
+  head -c 4096 /dev/urandom > "$p/persistfs/ss/0"
+  echo "nsp from stock" > "$p/persistfs/ss/nsp"
+  : > "$p/mounts"
+  # debugfs -R "dump -p SRC DST" DEV: copy from persistfs, and log the call
+  cat > "$p/bin/debugfs" <<EOF
+#!/bin/bash
+echo "debugfs \$*" >> "$p/debugfs.log"
+[[ \$1 == -R ]] || exit 1
+read -r cmd flag src dst <<<"\$2"
+[[ \$cmd == dump && \$flag == -p && \$3 == "$p/dev/sda5" ]] || exit 1
+[[ -f "$p/persistfs\$src" ]] && cp "$p/persistfs\$src" "\$dst"
+exit 0
+EOF
+  chmod +x "$p/bin/debugfs"
+}
+
+pf() {
+  PATH=$t/p/bin:$PATH \
+  OMAMOBILE_FP_DEVICE=${DEV:-cheetah} OMAMOBILE_FP_STATE=$t/p/state \
+  OMAMOBILE_FP_CONSENT=$t/p/etc/fingerprint.conf OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp \
+  OMAMOBILE_FP_SYSBLOCK=$t/p/sys OMAMOBILE_FP_DEVDIR=$t/p/dev OMAMOBILE_FP_MOUNTS=$t/p/mounts \
+    "$RUNNER" preflight > "$t/out" 2>&1
+}
+consent() { printf 'CONSENT=%s\nCONSENT_SOURCE=install-acknowledgement\nCONSENT_DATE=2026-11-02\n' "$1" > "$t/p/etc/fingerprint.conf"; }
+marker=$t/p/run/omamobile-fp/storageproxyd-started
+S=$t/p/state
+
+# No consent: no file, CONSENT=no, a key that only looks like it
+phone
+pf && fail "no consent file: refused"
+grep -c 'no consent' "$t/out" >/dev/null || { cat "$t/out"; fail "says why (no consent)"; }
+[[ ! -e $S/persist-ss/0 && ! -e $S/mfg_data.img && ! -e $marker ]] || fail "nothing is copied or marked without consent"
+consent no; pf && fail "CONSENT=no: refused"
+printf 'CONSENT=yes # later\n' > "$t/p/etc/fingerprint.conf"; pf && fail "only an exact CONSENT=yes counts"
+printf 'FINGERPRINT=yes\n' > "$t/p/etc/fingerprint.conf"; pf && fail "another key is not consent"
+[[ ! -e $marker && ! -e $t/p/debugfs.log ]] || fail "persist is not even read without consent"
+pass "no consent: refused, nothing read, copied or marked"
+
+# Consent: the copies are made, hashed and recorded; the marker is set
+consent yes
+pf || { cat "$t/out"; fail "consent: preflight passes"; }
+cmp -s "$S/persist-ss/0" "$t/p/persistfs/ss/0" || fail "persist:/ss/0 copied"
+cmp -s "$S/persist-ss/nsp" "$t/p/persistfs/ss/nsp" || fail "persist:/ss/nsp copied"
+cmp -s "$S/mfg_data.img" "$t/p/dev/sda6" || fail "mfg_data copied"
+for f in persist-ss/0 persist-ss/nsp mfg_data.img; do
+  [[ $(awk -v n="$f" '$2 == n {print $1}' "$S/provenance") == "$(sha256sum < "$S/$f" | cut -d' ' -f1)" ]] ||
+    fail "provenance records the sha256 of $f"
+done
+[[ $(stat -c %a "$S/provenance") == 600 && $(stat -c %a "$S/mfg_data.img") == 600 ]] || fail "the copies are private"
+[[ -e $marker ]] || fail "the once-per-boot marker is set"
+grep -c 'dump -p /ss/0 ' "$t/p/debugfs.log" >/dev/null || fail "persist is read with debugfs"
+grep -v -c 'debugfs -R dump -p ' "$t/p/debugfs.log" >/dev/null && fail "debugfs only dumps (no -w, no other request)"
+pass "consent: mfg_data and persist:/ss copied read-only and their hashes recorded"
+
+# A second start in the same boot
+pf && fail "a second start in the same boot is refused"
+grep -c 'Reboot' "$t/out" >/dev/null || { cat "$t/out"; fail "says to reboot"; }
+rm -f "$marker"                     # the reboot
+pf || { cat "$t/out"; fail "after a reboot it starts again"; }
+pass "one storage proxy per boot: a second start is refused until a reboot"
+
+# The TDP copy removed by hand: refused, not recreated
+rm -f "$marker" "$S/persist-ss/0"
+pf && fail "a missing TDP copy is refused"
+grep -c 'no TDP copy' "$t/out" >/dev/null || { cat "$t/out"; fail "says the TDP copy is missing"; }
+[[ ! -e $S/persist-ss/0 && ! -e $marker ]] || fail "the TDP copy is never quietly recreated"
+pass "a missing TDP copy: refused, never recreated behind the record"
+
+# persist without /ss/0 on a new install
+phone; consent yes; rm -f "$t/p/persistfs/ss/0"
+pf && fail "no /ss/0 in persist: refused"
+[[ ! -e $S/provenance && ! -e $marker ]] || fail "nothing recorded without a TDP copy"
+pass "persist without /ss/0: refused, no TDP copy, no storage start"
+
+# The TDP copy changed after the record (Linux wrote TDP)
+phone; consent yes; pf || fail "setup"
+rm -f "$marker"; echo x >> "$S/persist-ss/0"
+pf && fail "a changed TDP copy is refused"
+grep -c 'TDP copy changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says the TDP copy changed"; }
+pass "the TDP copy changed since the record: refused"
+
+# persist:/ss/0 changed under the copy (a stock boot)
+phone; consent yes; pf || fail "setup"
+rm -f "$marker"; echo x >> "$t/p/persistfs/ss/0"
+pf && fail "a changed persist:/ss/0 is refused"
+grep -c 'persist:/ss/0 changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says persist:/ss/0 changed"; }
+pass "persist:/ss/0 changed since the copy: refused"
+
+# The storage guard: a writable or read-write mounted partition
+phone; consent yes; echo 0 > "$t/p/sys/sda5/ro"
+pf && fail "persist ro=0: refused"
+grep -c "not read-only" "$t/out" >/dev/null || { cat "$t/out"; fail "says persist is not read-only"; }
+phone; consent yes; echo 0 > "$t/p/sys/sda6/ro"
+pf && fail "mfg_data ro=0: refused"
+phone; consent yes; echo "$t/p/dev/sda5 /mnt ext4 rw,relatime 0 0" > "$t/p/mounts"
+pf && fail "persist mounted read-write: refused"
+grep -c "mounted read-write" "$t/out" >/dev/null || { cat "$t/out"; fail "says persist is mounted read-write"; }
+[[ ! -e $S/mfg_data.img && ! -e $S/persist-ss/0 ]] || fail "nothing copied from an unguarded partition"
+pass "a writable or read-write mounted partition: refused, nothing copied"
+
+# A bring-up phone: secure storage already there, copies by hand, no record
+phone
+mkdir -p "$S/data/vendor/ss" "$S/persist-ss"
+head -c 1024 /dev/urandom > "$S/data/vendor/ss/0"
+cp "$t/p/persistfs/ss/0" "$S/persist-ss/0"; cp "$t/p/dev/sda6" "$S/mfg_data.img"
+pf || { cat "$t/out"; fail "existing secure storage starts without a consent record"; }
+[[ -f $S/provenance ]] || fail "the hand-made TDP copy is checked and recorded"
+phone
+mkdir -p "$S/data/vendor/ss" "$S/persist-ss"
+head -c 1024 /dev/urandom > "$S/data/vendor/ss/0"
+echo other > "$S/persist-ss/0"
+pf && fail "a hand-made TDP copy that differs from persist:/ss/0 is refused"
+pass "bring-up phones: existing secure storage needs no record; the TDP copy is still checked"
+
+# The 9a (mapped stores): no tdp.img, no TDP
+phone; consent yes
+DEV=tegu pf && fail "tegu without tdp.img: refused"
+mkdir -p "$S"; head -c 512 /dev/urandom > "$S/tdp.img"
+DEV=tegu pf || { cat "$t/out"; fail "tegu with tdp.img passes"; }
+pass "the 9a: refused without its TDP image"
+
+echo "omamobile-fingerprint preflight: ok"

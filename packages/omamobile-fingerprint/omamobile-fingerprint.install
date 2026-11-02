@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
 post_install() {
-  echo "omamobile-fingerprint: nothing enabled. Needs the vendor files in /usr/lib/omamobile-fp/root"
-  echo "  (tools/extract-fingerprint-vendor on your computer), the fingerprint DT overlays,"
-  echo "  and the staged bring-up in device/cheetah/FINGERPRINT-PLAN.md before"
-  echo "  systemctl enable --now omamobile-fp (its first run writes Trusty's secure storage)."
+  echo "omamobile-fingerprint: nothing enabled by the package. On a release install,"
+  echo "  omamobile-firstboot enables omamobile-fp from the owner's install-time"
+  echo "  acknowledgement (/etc/omamobile/fingerprint.conf); it starts once Google's"
+  echo "  files are in /usr/lib/omamobile-fp/root (tools/phone-provision). Its first"
+  echo "  start copies persist:/ss and mfg_data read-only and writes Trusty's secure"
+  echo "  storage; without the acknowledgement it refuses (FINGERPRINT-PLAN F19)."
 }
 post_upgrade() {
   systemctl daemon-reload 2>/dev/null || true

@@ -62,6 +62,22 @@ PATH=$r/bin:$PATH OMAMOBILE_FP_ROOT=$r bash "$h" post
 rm -rf "$r"
 echo "ok - fprintd is restarted after a wake, unless Omarchy's own hook does it"
 
+# The safety before storageproxyd: consent, the read-only copies, the TDP
+# guard, one storage proxy per boot (test/preflight, a fake tree).
+bash -n test/preflight || fail "syntax: test/preflight"
+test/preflight || fail "the runner's preflight"
+# start runs it before the namespace, for every stage
+sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot | grep -c '^    preflight$' >/dev/null || fail "start runs preflight"
+# One start per boot: no automatic restart, the runner signalled alone
+u=vendor/systemd/system/omamobile-fp.service
+grep -c '^Restart=no$' "$u" >/dev/null || fail "the unit never restarts the stack"
+grep -c -e '^Restart=on' -e '^Restart=always' -e '^StartLimitBurst' "$u" >/dev/null && fail "no restart loop in the unit"
+grep -c '^KillMode=mixed$' "$u" >/dev/null || fail "systemd signals only the runner, which stops the stack in order"
+# Stop order: the bridge and the HAL, then KeyMint and Gatekeeper, the proxy last
+order=$(sed -n '/^stop() {/,/^}/p' lib/omamobile-fp-chroot | sed -n 's/^ *stop_children [0-9]* //p' | tr '\n' '|')
+[[ $order == "bridge fingerprint|gatekeeper keymint|storageproxyd|" ]] || fail "stop order: $order"
+echo "ok - one start per boot, no restart loop, the storage proxy stopped last"
+
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
   exit 0
