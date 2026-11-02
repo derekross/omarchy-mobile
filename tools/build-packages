@@ -58,6 +58,13 @@ SLOW=(mesa hyprland libcamera)
 # Packed from a staged kernel build: built only when named (see above)
 NAMED_ONLY=(linux-omamobile)
 repo=out/repo/aarch64
+# Exit 3 means exactly "built and signed everything but the skipped device
+# packages", which <repo>/../.skipped then lists: any other exit with 3 (a
+# gpg, tar or repo-add that happened to return it) becomes 1. Set before
+# anything can fail; the old list goes once the repository is known
+# (--local moves it, and never touches out/repo).
+skipfile=$(dirname "$repo")/.skipped
+trap 'rc=$?; if ((rc == 3)) && [[ ! -s $skipfile ]]; then exit 1; fi' EXIT
 all=0 force=0 nocheck=0 container_check=0 list=0 resign=0 imports=() dirs=() local_name=
 while (($#)); do
   case $1 in
@@ -105,6 +112,7 @@ if [[ -n $local_name ]]; then
     || alarm_die "--local needs a device codename with a device/<codename>/device.conf"
   ((resign == 0)) || alarm_die "--resign is for the maintainer's out/repo, not --local"
   repo=out/$local_name/repo/aarch64
+  skipfile=$(dirname "$repo")/.skipped
   keydir=keys/$local_name
   [[ -f $keydir/fingerprint && -d $keydir/gnupg && -f $keydir/public.asc ]] \
     || alarm_die "no local key in $keydir (run: tools/local-key-init $local_name)"
@@ -119,13 +127,7 @@ else
   key=$SIGNING_KEY
   mkdir -p "$repo"
 fi
-
-# Exit 3 means exactly "built and signed everything but the skipped device
-# packages", which out/.../repo/.skipped then lists: any other exit with 3
-# (a gpg, tar or repo-add that happened to return it) becomes 1
-skipfile=$(dirname "$repo")/.skipped
 rm -f "$skipfile"
-trap 'rc=$?; if ((rc == 3)) && [[ ! -s $skipfile ]]; then exit 1; fi' EXIT
 
 # The version makepkg will produce, from the PKGBUILD's own fields. Our
 # PKGBUILDs read pkgver from a version file through $startdir.
