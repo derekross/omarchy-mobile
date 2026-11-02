@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Kernel updates through pacman on the Pixel 7 Pro
 
-Status (2026-11-01): built and tested offline only (branch `kernel-update-path`: `packages/linux-omamobile`, `packages/omamobile-boot-update`, `omamobile-device-cheetah` 0.1.38 with its boot files, `omamobile-omarchy` 0.1.28, `omamobile-shell` 0.2.76, `tools/stage-boot-files`, `bin/omamobile kernel --release`). This plan is the first attended run on the reference phone: [RELEASES](../../docs/RELEASES.md) §12 decision 10 ("install, a package-hook kernel update, a reboot into it") and checklist step 6, plus a rollback. The design is RELEASES §4, §4.1, §5.3 and §5.5; the tool's own page is [packages/omamobile-boot-update/README.md](../../packages/omamobile-boot-update/README.md).
+Status (2026-11-02): built and tested offline only (branch `kernel-update-path`: `packages/linux-omamobile`, `packages/omamobile-boot-update`, `omamobile-device-cheetah` 0.1.38 with its boot files, `omamobile-omarchy` 0.1.28, `omamobile-shell` 0.2.76, `tools/stage-boot-files`, `bin/omamobile kernel --release`). This plan is the first attended run on the reference phone: [RELEASES](../../docs/RELEASES.md) §12 decision 10 ("install, a package-hook kernel update, a reboot into it") and checklist step 6, plus a rollback. The design is RELEASES §4, §4.1, §5.3 and §5.5; the tool's own page is [packages/omamobile-boot-update/README.md](../../packages/omamobile-boot-update/README.md).
 
 No kernel branch: the kernel is the published release tag `kernel-2026.11.01`, built in its own worktree and output directory (`~/omamobile-kernel/wt-pkgtest`, `~/omamobile-kernel/out-pkgtest`), so nobody else's build is touched.
 
@@ -12,7 +12,7 @@ No kernel branch: the kernel is the published release tag `kernel-2026.11.01`, b
 - Before each write it saves slot B's five partitions, whole, and the running release's modules in `/var/lib/omamobile/boot/previous/` (about 220 MB on cheetah plus one module tree); `omamobile-boot-update rollback` writes them back.
 - It never reboots, never touches slot A, `vbmeta`, `devinfo` or the bootloader, never changes the storage guard.
 
-**Recovery when slot B doesn't boot.** `omamobile-boot-success` marks slot B successful at every good boot, so ABL does **not** fall back to slot A after a bad write: the phone stops in fastboot or keeps resetting. Then: Power held about 30 s, then Volume Down + Power about 20 s for fastboot, and on the laptop `KERNEL_OUT=~/omamobile-kernel/out-release bin/omamobile flash` (step R2 checks that `out-release/images` is exactly what slot B holds today). On the recovery screen of a stock boot choose neither option (AGENTS §4); a stock boot means a fresh read-only backup of `efs`, `persist` and `modem_userdata` afterwards.
+**Recovery when slot B doesn't boot.** `omamobile-boot-success` marks slot B successful at every good boot, so ABL does **not** fall back to slot A after a bad write: the phone stops in fastboot or keeps resetting, and `previous/` on `userdata` is out of reach. So the fallback lives on the laptop: step R2 copies the set slot B holds today into `~/omamobile-kernel/known-good/2026-11-02/images/` (with its `DEVICE` file) and checks the copy against the phone, and P3 also copies `previous/` off the phone before any reboot. Never flash from `~/omamobile-kernel/out-release`: other tools build into it (`tools/release build` writes the release kernel there). Then: Power held about 30 s, then Volume Down + Power about 20 s for fastboot, and on the laptop `KERNEL_OUT=~/omamobile-kernel/known-good/2026-11-02 bin/omamobile flash`. On the recovery screen of a stock boot choose neither option (AGENTS §4); a stock boot means a fresh read-only backup of `efs`, `persist` and `modem_userdata` afterwards.
 
 ## 2. Why the running kernel can't be packaged as it is
 
@@ -53,34 +53,39 @@ ls out/cheetah/repo/aarch64/
 - Expect: `stage-boot-files` lists `device.conf`, `dtbo.img`, `initramfs.cpio.lz4` and the 15 overlays of `DTB_OVERLAYS`; `stage` prints `pkgver 7.3.0rc6.r<n>.g2219cc6cda77`; five packages built, each `test/all` passing.
 - Pass: as expected. **Stop:** any refusal (keys in the initramfs, another allowlist, a test failing).
 - Rollback: nothing on the phone; `rm -rf packages/*/prebuilt packages/*/boot-files out/cheetah`.
+- `stage` takes only a published release tag on `omamobile` (it checks GitHub), and `tools/build-packages` builds `linux-omamobile` only when named, so the staged `prebuilt/` never reaches the daily publish. `boot-files/` does: once this branch is on `main`, `tools/repo-publish --from-main` builds `omamobile-device-cheetah` 0.1.38 from the `boot-files/` of the checkout it runs in (after `tools/stage-boot-files --check` against `main`), and refuses to build it without them. Stage them in that checkout before the first daily publish after the merge.
 - The `--local` repository is signed with the local key only and is never published; the phone takes the files with `pacman -U` (`LocalFileSigLevel = Optional`).
 
 ### R1. The phone as it is (read-only; risk none)
 
 ```sh
-tools/phone-ssh 'uname -r; cat /proc/cmdline | tr " " "\n" | grep slot_suffix; pacman -Q omamobile-device-cheetah omamobile-omarchy omamobile-shell
+tools/phone-ssh 'uname -r; grep slot_suffix /proc/bootconfig; cat /proc/cmdline | tr " " "\n" | grep slot_suffix; pacman -Q omamobile-device-cheetah omamobile-omarchy omamobile-shell
   ls /etc/omamobile/boot-update.conf 2>&1; test -s /root/.ssh/authorized_keys && echo root-keys-ok
   df -h /var | tail -1; cat /sys/class/power_supply/*/capacity 2>/dev/null | head -1
   for s in /sys/block/sda/sda*; do n=$(sed -n "s/^PARTNAME=//p" $s/uevent); case $n in *_b|userdata) echo "$n ${s##*/} ro=$(cat $s/ro) $(( $(cat $s/size) * 512 ))";; esac; done'
 ```
 
-- Expect: the push1 release; slot `_b` (or no slot suffix line); no `boot-update.conf`; `root-keys-ok` (the hook appends these keys to the release initramfs, so SSH into the initramfs keeps working); at least 1 GB free in `/var`; battery 30% or more, or the charger in; the five `_b` partitions and `userdata` with `ro=0`, every other `_b` partition `ro=1`.
-- Pass: all of it. **Stop:** no root keys (add Derek's key first, or the initramfs has no SSH), less space, `ro=0` anywhere else.
+- Expect: the push1 release; `androidboot.slot_suffix = "_b"` in `/proc/bootconfig` (or `_b` on the command line: the tool refuses a boot that names no slot); no `boot-update.conf`; `root-keys-ok` (the hook appends these keys to the release initramfs, so SSH into the initramfs keeps working); at least 1 GB free in `/var`; battery 30% or more, or the charger in; the five `_b` partitions and `userdata` with `ro=0`, every other `_b` partition `ro=1`.
+- Pass: all of it. **Stop:** no slot named in either place (the hook would refuse; find out why first), no root keys (add Derek's key first, or the initramfs has no SSH), less space, `ro=0` anywhere else.
 - Rollback: none.
 
-### R2. Slot B today, and the laptop's copy of it (read-only; risk none)
+### R2. Slot B today, and the laptop's known-good copy of it (read-only on the phone; risk none)
 
 ```sh
+KG=~/omamobile-kernel/known-good/2026-11-02
+mkdir -p $KG/images && cp ~/omamobile-kernel/out-release/images/{boot,init_boot,vendor_boot,vendor_kernel_boot,dtbo}.img ~/omamobile-kernel/out-release/images/DEVICE $KG/images/
+(cd $KG/images && sha256sum *.img > SHA256SUMS)
 tools/phone-ssh 'for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do s=$(for s in /sys/block/sda/sda*; do grep -qx PARTNAME=${p}_b $s/uevent && echo ${s##*/}; done); echo "$p $s"; done' > logs/kernel-update-slotb.txt
 for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
-  f=~/omamobile-kernel/out-release/images/$p.img; n=$(awk -v p=$p '$1 == p {print $2}' logs/kernel-update-slotb.txt)
+  f=$KG/images/$p.img; n=$(awk -v p=$p '$1 == p {print $2}' logs/kernel-update-slotb.txt)
   echo "$p laptop $(sha256sum < $f | cut -c1-16) phone $(tools/phone-ssh "head -c $(stat -c %s $f) /dev/$n | sha256sum" | cut -c1-16)"
 done
+cat $KG/images/DEVICE
 ```
 
-- Expect: each pair of checksums equal: `out-release/images` is exactly slot B, the fallback for `bin/omamobile flash`.
+- Expect: each pair of checksums equal: `$KG/images` is exactly slot B, the fallback for `KERNEL_OUT=$KG bin/omamobile flash`; `DEVICE` says `cheetah`. The copy stays put whatever is built into `out-release` later; every later step's fastboot route flashes from `$KG`.
 - Pass: five equal pairs. **Stop:** any difference: find or rebuild the set slot B holds before going on (without it there is no known-good set to flash by fastboot).
-- Rollback: none.
+- Rollback: none (the copy is kept as the fallback; it can be removed after P6).
 
 ### P1. Install the packages, hook off (affects the phone: root file system only; risk low)
 
@@ -116,12 +121,14 @@ Battery 30% or more, or the charger in. R2's fallback set confirmed.
 tools/phone-ssh 'printf "AUTO_WRITE=yes\n" > /etc/omamobile/boot-update.conf
   pacman -U --noconfirm /var/cache/omamobile-test/linux-omamobile-*.pkg.tar.zst'
 tools/phone-ssh 'omamobile-boot-update status; cat /var/lib/omamobile/boot/current/SHA256SUMS; ls /var/lib/omamobile/boot/previous; cat /run/omamobile/boot-update.json'
+scp -r root@172.16.42.1:/var/lib/omamobile/boot/previous ~/omamobile-kernel/known-good/2026-11-02/previous
+(cd ~/omamobile-kernel/known-good/2026-11-02/previous && sha256sum -c SHA256SUMS)
 ```
 
 - Expect: the reinstall runs the hook: plan, "Saving slot B (7.3.0-rc6-omamobile-push1-g2219cc6cda77)", `boot_b` and `vendor_kernel_boot_b` "written and verified", "Restart the phone to boot it"; `previous/` holds five images, `RELEASE` the push1 release, `BOOTED` yes and its modules; the result is `written`.
-- Pass: as expected, and the partitions' leading bytes match `current/SHA256SUMS` (the tool checked; re-check with `head -c | sha256sum` for `boot_b`).
-- **Stop:** any error. Do **not** reboot; `sudo omamobile-boot-update rollback --dry-run`, then `rollback`, then R2 again (slot B must equal `out-release` before any reboot).
-- Rollback: `sudo omamobile-boot-update rollback` (P5), or R2's set by fastboot.
+- Pass: as expected, the partitions' leading bytes match `current/SHA256SUMS` (the tool checked; re-check with `head -c | sha256sum` for `boot_b`), and the laptop's copy of `previous/` passes its checksums (its images are R2's set, now also on the laptop; `previous/` on the phone is out of reach if the phone doesn't boot).
+- **Stop:** any error. Do **not** reboot; `sudo omamobile-boot-update rollback --dry-run`, then `rollback`, then R2's comparison again (slot B must equal `known-good/2026-11-02/images` before any reboot).
+- Rollback: `sudo omamobile-boot-update rollback` (P5), or R2's set by fastboot (`KERNEL_OUT=~/omamobile-kernel/known-good/2026-11-02 bin/omamobile flash`).
 
 ### P4. Reboot into the packaged kernel (affects the phone: reboot; risk medium)
 
@@ -133,7 +140,7 @@ tools/phone-smoke
 ```
 
 - Expect: `7.3.0-rc6-omamobile-g2219cc6cda77`; the lock screen as usual; GPU (`/dev/dri/renderD128`), Wi-Fi, touch, audio and sensors as before (`tools/phone-smoke`); no new failed units. SSH into the initramfs (if it ever stays there) answers with Derek's key and a new host key.
-- Pass: as expected. **Stop:** no SSH after 3 minutes: ask Derek to look at the screen; fastboot by the buttons and R2's set with `KERNEL_OUT=~/omamobile-kernel/out-release bin/omamobile flash`.
+- Pass: as expected. **Stop:** no SSH after 3 minutes: ask Derek to look at the screen; fastboot by the buttons and R2's set with `KERNEL_OUT=~/omamobile-kernel/known-good/2026-11-02 bin/omamobile flash`.
 - Rollback: P5.
 
 ### P5. Roll back (affects slot B; risk medium)
@@ -143,8 +150,8 @@ tools/phone-ssh 'rm /etc/omamobile/boot-update.conf; sudo omamobile-boot-update 
 tools/phone-ssh 'sudo omamobile-boot-update rollback --yes'
 ```
 
-- Expect: the dry run plans `boot_b` and `vendor_kernel_boot_b` (and nothing else) back to the saved set; the rollback writes and verifies them, finds the push1 modules still in `/usr/lib/modules` (kernel-modules-hook kept them) or restores them, and prints the `IgnorePkg` line. R2 afterwards: slot B equals `out-release/images` again.
-- Pass: R2's five equal pairs. **Stop:** any error or difference: no reboot; fastboot route if slot B can't be made equal to `out-release`.
+- Expect: the dry run plans `boot_b` and `vendor_kernel_boot_b` (and nothing else) back to the saved set; the rollback writes and verifies them, finds the push1 modules still in `/usr/lib/modules` (kernel-modules-hook kept them) or restores them, and prints the `IgnorePkg` line. R2's comparison afterwards: slot B equals `known-good/2026-11-02/images` again.
+- Pass: R2's five equal pairs. **Stop:** any error or difference: no reboot; fastboot route (`KERNEL_OUT=~/omamobile-kernel/known-good/2026-11-02 bin/omamobile flash`) if slot B can't be made equal to R2's set.
 - Rollback: write P3 again (`pacman -U` with `AUTO_WRITE=yes`) if the packaged kernel is wanted back.
 
 ### P6. Reboot into the push1 kernel, and tidy up (affects the phone: reboot; risk low)
