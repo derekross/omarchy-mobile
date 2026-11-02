@@ -22,13 +22,13 @@ fake omamobile-set-pin 'case $1 in --type) echo PIN ;; --inner) touch "$T/pin" ;
 fake omamobile-fp-enroll '[[ -e $T/listing ]] && cat "$T/listing"; true'
 fake omarchy-shell 'echo "shell $*" >>"$T/log"'
 fake omarchy-notification-send 'echo "notify $*" >>"$T/log"'
-fake systemctl '[[ $* == "is-enabled --quiet omamobile-fp.service" && -e $T/enabled ]]'
+fake systemctl '[[ $* == "is-failed --quiet omamobile-fp.service" && -e $T/failed ]]'
 fake timeout 'shift; "$@"'
 ob() {
-  env -u XDG_STATE_HOME T="$t" HOME="$t/home" USER=alice OMARCHY_PATH="$t/none" OMAMOBILE_FP_RUNNER="$t/runner" \
+  env -u XDG_STATE_HOME T="$t" HOME="$t/home" USER=alice OMARCHY_PATH="$t/none" OMAMOBILE_FP_RUNNER="$t/runner" OMAMOBILE_FP_IMAGE="$t/image" \
     PATH="$F:/usr/bin:/bin" bash bin/omamobile-onboarding "$@" >"$t/out" 2>&1
 }
-reset() { rm -f "$t/pin" "$t/yes" "$t/listing" "$t/enabled" "$t/log"; rm -rf "$t/home/.local"; : >"$t/log"; }
+reset() { rm -rf "$t/pin" "$t/yes" "$t/listing" "$t/failed" "$t/image" "$t/log"; rm -rf "$t/home/.local"; : >"$t/log"; }
 ready() { printf '{"event": "fingers", "fingers": [%s], "stages": 12, "device": "Omarchy Mobile UDFPS"}\n' "${1:-}" >"$t/listing"; }
 
 # Setup: the PIN is set, then the fingerprint is offered and taken
@@ -46,9 +46,15 @@ grep -c 'Skipped' "$t/out" >/dev/null || fail "skip says where to add one later"
 grep -c 'summon' "$t/log" >/dev/null && fail "skip opens nothing"
 reset; ready '"right-index-finger"'
 ob --inner; grep -c 'confirm' "$t/log" >/dev/null && fail "a finger already enrolled: no offer"
-reset; touch "$t/enabled"
+reset
 ob --inner; grep -c 'confirm' "$t/log" >/dev/null && fail "a sensor not ready: no offer"
-grep -c 'ready once your phone' "$t/out" >/dev/null || fail "a sensor not ready yet: setup says it comes later"
+grep -c 'ready once your phone' "$t/out" >/dev/null || fail "not provisioned yet: setup says it comes after the firmware"
+reset; mkdir "$t/image"; touch "$t/failed"
+ob --inner; grep -c 'unavailable on this boot' "$t/out" >/dev/null || fail "a refused or failed unit: setup says unavailable, not 'after the firmware'"
+grep -c 'ready once your phone' "$t/out" >/dev/null && fail "a failed unit isn't blamed on missing firmware"
+reset; mkdir "$t/image"
+ob --inner; grep -c 'still starting' "$t/out" >/dev/null || fail "provisioned but not up yet: offered at the next login"
+reset
 [[ ! -e $t/home/.local/state/omamobile/fingerprint-offered ]] || fail "not ready: the offer waits for a later login"
 reset; ready; rm -f "$t/runner"
 ob --inner; grep -c 'confirm' "$t/log" >/dev/null && fail "no fingerprint stack: no offer"
