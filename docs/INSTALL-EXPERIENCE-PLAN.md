@@ -51,8 +51,30 @@ What the person does:
    options and OEM unlocking, allow the computer, confirm the unlock on the
    phone with the volume keys. This is the only part done on the phone
    itself.
-4. Reads what will happen (the phone is erased, Android stays on the phone
-   as the way back, Google's terms for the firmware) and accepts.
+4. Reads one clear warning, shown once before anything is written, and
+   acknowledges it (Google's terms for the firmware are a separate
+   checkbox, §6.3). The warning says:
+   - the phone is wiped, and everything on it is lost;
+   - Omarchy Mobile replaces Android as the phone's operating system, and
+     what that means day to day: no Google apps or Play Store, Android apps
+     only through the container later, and the features this release lacks
+     (from the release notes, for example calls and SMS while the modem is
+     still being brought up);
+   - how to go back: reflash Google's factory image with Google's own
+     tools; until then stock Android stays on slot A as a quick way back
+     (§7);
+   - which features are on by default and write the phone's secure storage,
+     by name (fingerprint unlock: its first start writes Trusty's secure
+     storage, which can't be undone).
+
+   That one acknowledgement covers all of it, the secure-storage features
+   included. The people installing know they are starting over with a new
+   operating system: the project looks after them through clear defaults
+   and a way back, not repeated questions, so nothing nags again after this
+   screen. (Today `omamobile-fp.service` ships disabled because of that
+   write; turning it on by default after this acknowledgement is a change to
+   the device package and to the rule in AGENTS §4, for the maintainer to
+   make there.)
 5. Chooses a user name, a PIN or password, the phone's name, the time zone
    and optionally a Wi-Fi network, in the installer window.
 6. Waits. The installer downloads the release and the phone's own firmware,
@@ -625,7 +647,10 @@ real users.
 
 - **What:** the bundle's `install` grows into one command that runs the
   whole install with today's tools: preflight, unlock guidance from the
-  phone's state (§4.2), the build index lookup and the factory image
+  phone's state (§4.2), the one warning of §1 step 4 (wipe, new operating
+  system and what it means day to day, the way back, the secure-storage
+  features by name) acknowledged once before any write and recorded with
+  the install's state, with no further prompts about it, the build index lookup and the factory image
   download from Google after the terms prompt (§6), the checks and writes
   (`install-phone`), the USB network connection set up with the user's
   consent (a NetworkManager profile for `cdc_ncm`, shown before it is
