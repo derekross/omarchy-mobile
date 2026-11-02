@@ -16,4 +16,8 @@ install -Dm644 libalpm/90-omamobile-boot.hook "$d/usr/share/libalpm/hooks/90-oma
 # installer writes it on a release install), and its absence means AUTO_WRITE=no
 install -Dm644 etc/boot-update.conf "$d/usr/share/omamobile/boot-update/boot-update.conf.example"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-boot-update/LICENSE"
+# AOSP's public AVB test key, as bin/omamobile images signs with it (avb/SOURCE)
+install -Dm644 avb/testkey_rsa4096.pem "$d/usr/share/omamobile-boot-update/avb/testkey_rsa4096.pem"
+install -Dm644 avb/SOURCE "$d/usr/share/omamobile-boot-update/avb/SOURCE"
+install -Dm644 avb/LICENSE "$d/usr/share/licenses/omamobile-boot-update/LICENSE.avb"
 install -Dm644 version "$d/usr/share/omamobile/boot-update/version"

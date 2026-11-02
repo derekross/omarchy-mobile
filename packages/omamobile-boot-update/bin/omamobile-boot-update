@@ -80,7 +80,7 @@ KEYS=$R/root/.ssh/authorized_keys
 MIN_BATTERY=30
 UNAME_R=${OMAMOBILE_BOOT_UNAME_R:-$(uname -r)}
 DEPMOD=${DEPMOD:-depmod}
-OPENSSL=${OPENSSL:-openssl}
+AVB_TESTKEY=${OMAMOBILE_BOOT_AVB_TESTKEY:-/usr/share/omamobile-boot-update/avb/testkey_rsa4096.pem}
 LZ4=${LZ4:-lz4}
 CPIO=${CPIO:-cpio}
 
@@ -297,20 +297,19 @@ battery_blocker() {
 
 # ---------------------------------------------------------------- build
 
+# The AVB footers' key: AOSP's public RSA-4096 test key, the one
+# bin/omamobile images signs with, so the phone's images are the laptop's
+# byte for byte. An unlocked bootloader (every install) accepts any key on a
+# chained partition's footer and refuses only a missing footer, so a key of
+# the phone's own would add nothing. AVB_KEY= in the config overrides it.
+AOSP_TESTKEY_SHA256=6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121
 avb_key() {
-  local key=${AVB_KEY:-$STATE/avb/key.pem} tmp=$1
+  local key=${AVB_KEY:-$AVB_TESTKEY}
   [[ -n ${DEV_AVB_FOOTERS:-} ]] || return 0
-  if [[ -s $key ]]; then echo "$key"; return 0; fi
-  command -v "$OPENSSL" >/dev/null || refuse "AVB_FOOTERS need a key and there is no $OPENSSL to make one"
-  # An unlocked bootloader accepts any key on a chained partition's footer;
-  # it refuses only a missing footer. A dry run makes a throwaway key.
-  if ((DRY_RUN)) || [[ -n $AVB_KEY ]]; then
-    [[ -z $AVB_KEY ]] || refuse "AVB_KEY=$AVB_KEY does not exist"
-    key=$tmp/avb-key.pem
-  else
-    install -d -m 700 "${key%/*}"
+  [[ -s $key ]] || refuse "no AVB key at $key"
+  if [[ -z $AVB_KEY ]]; then
+    [[ $(sha_file "$key") == "$AOSP_TESTKEY_SHA256" ]] || refuse "$key is not AOSP's test key (sha256 $AOSP_TESTKEY_SHA256)"
   fi
-  (umask 077; "$OPENSSL" genrsa -out "$key" 4096 >/dev/null 2>&1) || refuse "could not make an AVB key"
   echo "$key"
 }
 
@@ -318,7 +317,7 @@ avb_key() {
 build_images() {
   local out=$1 tmp=$2 d key args=()
   d=$(device_dir)
-  key=$(avb_key "$tmp")
+  key=$(avb_key)
   args=(--descriptor "$DESCRIPTOR" --kernel "$MODULES/$RELEASE/vmlinuz" --dtbs "$MODULES/$RELEASE/dtbs"
         --dtbo "$d/dtbo.img" --initramfs "$d/initramfs.cpio.lz4" --out "$out" --modules "$MODULES/$RELEASE")
   [[ -z ${DEV_DTB_OVERLAYS:-} ]] || args+=(--overlays "$d/overlays")
@@ -491,6 +490,27 @@ do_write() {
   sync
   record written "slot B now holds ${RELEASE:-the previous images}; restart to boot it"
   say "Slot B holds ${RELEASE:-the previous images}. Restart the phone to boot it (nothing restarts by itself)."
+  [[ $mode == rollback ]] && rollback_hold_note
+  return 0
+}
+
+# After a rollback the newer linux-omamobile is still installed, and the
+# next transaction that touches a kernel or boot file would write it again.
+# pacman.conf has no Include in [options] to hang an IgnorePkg drop-in on,
+# and this tool never edits /etc/pacman.conf, so the owner holds it by hand.
+rollback_hold_note() {
+  cat <<EOF
+
+    Rolled back. The newer kernel package is still installed: the next update
+    that changes a kernel or boot file writes it to slot B again. To hold it
+    until a fixed kernel is out, add it to IgnorePkg in /etc/pacman.conf:
+
+      sudo sed -i '/^\[options\]/a IgnorePkg = linux-omamobile' /etc/pacman.conf
+
+    and remove that line again to take kernel updates. Or install the older
+    package from the cache (sudo pacman -U /var/cache/pacman/pkg/linux-omamobile-<version>-aarch64.pkg.tar.zst),
+    which writes it to slot B through this hook and leaves nothing to hold.
+EOF
 }
 
 finish_current() {

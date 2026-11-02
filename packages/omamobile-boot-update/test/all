@@ -25,12 +25,17 @@ trap 'rm -rf "$t"' EXIT
 for f in usr/bin/omamobile-boot-update usr/lib/omamobile-boot-update/omamobile-boot-images \
          usr/lib/omamobile-boot-update/descriptor.sh usr/share/libalpm/hooks/90-omamobile-boot.hook \
          usr/share/omamobile/boot-update/boot-update.conf.example usr/share/licenses/omamobile-boot-update/LICENSE \
-         usr/share/omamobile/boot-update/version; do
+         usr/share/omamobile/boot-update/version usr/share/omamobile-boot-update/avb/testkey_rsa4096.pem \
+         usr/share/omamobile-boot-update/avb/SOURCE usr/share/licenses/omamobile-boot-update/LICENSE.avb; do
   [[ -e $t/stage/$f ]] || fail "not staged: $f"
 done
 [[ ! -e $t/stage/etc/omamobile/boot-update.conf ]] || fail "the package never ships /etc/omamobile/boot-update.conf (absent means AUTO_WRITE=no)"
 grep -qx 'AUTO_WRITE=no' etc/boot-update.conf || fail "the example says AUTO_WRITE=no"
-pass "install stages the tool, its library and the hook, and no config that would turn it on"
+[[ $(sha256sum < avb/testkey_rsa4096.pem | cut -d' ' -f1) == 6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121 ]] \
+  || fail "the AVB key is AOSP's test key, as avb/SOURCE names it"
+grep -c 6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121 avb/SOURCE bin/omamobile-boot-update | grep -c ':0$' >/dev/null \
+  && fail "avb/SOURCE and the tool name the key's checksum"
+pass "install stages the tool, its library, the hook and AOSP's test key, and no config that would turn it on"
 
 hook=libalpm/90-omamobile-boot.hook
 for want in 'Operation = Install' 'Operation = Upgrade' 'Type = Path' 'Target = usr/lib/modules/*/vmlinuz' \
@@ -210,7 +215,7 @@ if [[ -n $DTC_BIN ]]; then
   mkinitramfs "$K/dev/initramfs.cpio.lz4" "$RW5"
   head -c 2000 /dev/urandom > "$K/modules/kernel/drivers/pmic-one.ko"
   head -c 2000 /dev/urandom > "$K/modules/kernel/drivers/pmic-two.ko"
-  "$OPENSSL" genrsa -out "$K/key.pem" 4096 >/dev/null 2>&1
+  cp avb/testkey_rsa4096.pem "$K/key.pem"
   bi() { "$PKG/lib/omamobile-boot-images" --kernel "$K/Image" --dtbs "$K/dtbs" --dtbo "$K/dev/dtbo.img" \
            --initramfs "$K/dev/initramfs.cpio.lz4" --avb-key "$K/key.pem" "$@" > "$t/bi.log" 2>&1; }
   ls_imgs() { (cd "$1" && ls *.img | tr '\n' ' '); }
@@ -301,7 +306,7 @@ done
 echo "$DEV_CODENAME" > "$o/DEVICE"
 EOF
 chmod +x "$stub/omamobile-boot-images"
-export OMAMOBILE_BOOT_UPDATE_LIB=$stub
+export OMAMOBILE_BOOT_UPDATE_LIB=$stub OMAMOBILE_BOOT_AVB_TESTKEY=$PKG/avb/testkey_rsa4096.pem
 U=$PKG/bin/omamobile-boot-update
 
 PARTS="boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b vbmeta_b devinfo persist efs userdata"
@@ -474,8 +479,7 @@ done
 [[ ! -e $S/incomplete && ! -e $S/next ]] || fail "no incomplete marker, next/ cleared"
 grep -c '"result": "written"' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the result is recorded for omamobile-update"
 grep -c -- "--authorized-keys $R/root/.ssh/authorized_keys" "$stub/calls" >/dev/null || fail "the owner's keys go to the builder"
-grep -c -- "--avb-key $S/avb/key.pem" "$stub/calls" >/dev/null || fail "AVB footers use the phone's key"
-[[ $(stat -c %a "$S/avb/key.pem") == 600 ]] || fail "the AVB key is private"
+grep -c -- "--avb-key $PKG/avb/testkey_rsa4096.pem" "$stub/calls" >/dev/null || fail "AVB footers use AOSP's test key, as bin/omamobile images does"
 pass "the hook writes slot B's five images, verifies them, keeps slot A and every other partition, saves the old set and its modules"
 
 # Again: nothing to write
@@ -484,6 +488,16 @@ run hook || fail "a second run succeeds"
 grep -c 'nothing to write' "$t/out" >/dev/null || fail "a second run finds slot B up to date"
 [[ $(sums "$R") == "$written" ]] || fail "and writes nothing"
 pass "identical images are not written again"
+
+# The test key is checked; AVB_KEY= in the config replaces it
+cp "$PKG/avb/testkey_rsa4096.pem" "$t/notkey.pem"; echo x >> "$t/notkey.pem"
+OMAMOBILE_BOOT_AVB_TESTKEY=$t/notkey.pem refused "a test key that isn't AOSP's" "is not AOSP's test key" write --dry-run
+printf 'AUTO_WRITE=yes\nAVB_KEY=%s\n' "$t/notkey.pem" > "$R/etc/omamobile/boot-update.conf"
+: > "$stub/calls"
+run write --dry-run || { cat "$t/out"; fail "AVB_KEY= overrides the key"; }
+grep -c -- "--avb-key $t/notkey.pem" "$stub/calls" >/dev/null || fail "the configured key reaches the builder"
+echo 'AUTO_WRITE=yes' > "$R/etc/omamobile/boot-update.conf"
+pass "AVB footers: AOSP's test key, checked by checksum, or the configured AVB_KEY"
 
 # A newer release while the last one never booted: previous keeps the set
 # that did boot
@@ -532,6 +546,9 @@ done
 [[ $(cat "$R/usr/lib/modules/7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb/kernel/x.ko") == old-module ]] || fail "rollback restores the modules"
 [[ $(cat "$R/usr/lib/modules/.omamobile-next") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "the module cleanup is told to keep them"
 grep -c 'depmod -a 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb' "$t/depmod.calls" >/dev/null || fail "depmod runs for them"
+grep -c "IgnorePkg = linux-omamobile" "$t/out" >/dev/null || fail "rollback prints how to hold the newer kernel package"
+grep -c "pacman.conf" "$R/var/lib/omamobile/boot/previous/SHA256SUMS" >/dev/null && fail "never"
+[[ ! -e $R/etc/pacman.conf ]] || fail "rollback never edits pacman.conf"
 echo corrupt >> "$S/previous/dtbo.img"
 refused "a saved set that fails its checksums" "fails its checksums" rollback --yes
 pass "rollback writes the saved partitions back (dry run first) and restores their modules"
@@ -558,7 +575,7 @@ if [[ -n $DTC_BIN ]]; then
   OMAMOBILE_BOOT_UPDATE_LIB=$PKG/lib "$PKG/lib/omamobile-boot-images" --descriptor "$R/usr/share/omamobile/device.conf" \
     --kernel "$R/usr/lib/modules/$rel/vmlinuz" --dtbs "$R/usr/lib/modules/$rel/dtbs" --dtbo "$R/usr/lib/omamobile/twelve/dtbo.img" \
     --initramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" --modules "$R/usr/lib/modules/$rel" \
-    --authorized-keys "$R/root/.ssh/authorized_keys" --avb-key "$R/var/lib/omamobile/boot/avb/key.pem" --out "$t/e2e" >/dev/null 2>&1 \
+    --authorized-keys "$R/root/.ssh/authorized_keys" --avb-key "$PKG/avb/testkey_rsa4096.pem" --out "$t/e2e" >/dev/null 2>&1 \
     || fail "end to end: the same build by hand"
   for img in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
     cmp -s -n "$(stat -c %s "$t/e2e/$img.img")" "$t/e2e/$img.img" "$(part "$R" ${img}_b)" || fail "end to end: ${img}_b holds $img.img"

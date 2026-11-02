@@ -108,6 +108,12 @@ mkdir -p "$t/rd/etc" && echo x > "$t/rd/init"
 printf '#!/bin/sh\nexec python3 %s "$@"\n' "$mk" > "$t/bin/mkbootimg"
 printf '#!/bin/sh\nexec python3 %s "$@"\n' "$avb" > "$t/bin/avbtool"
 chmod +x "$t/bin"/*
+# The phone side runs the distribution's android-tools (what the phone installs)
+# where this machine has them, so the check also covers the packaged tools;
+# otherwise the same AOSP scripts as the laptop side
+phone_mkbootimg=$(command -v mkbootimg || echo "$t/bin/mkbootimg")
+phone_avbtool=$(command -v avbtool || echo "$t/bin/avbtool")
+echo "# phone side: $phone_mkbootimg, $phone_avbtool"
 
 for dev in twelve six; do
   (cd "$R" && KERNEL_OUT=$K DEVICE=$dev bin/omamobile images) > "$t/laptop.log" 2>&1 || { cat "$t/laptop.log"; fail "bin/omamobile images ($dev)"; }
@@ -119,7 +125,7 @@ for dev in twelve six; do
     for o in one two; do "$dtc" -q -@ -I dts -O dtb -o "$t/ov/$o.dtbo" "$R/device/twelve/overlays/$o.dtso"; done
     args=(--overlays "$t/ov" --avb-key "$key")
   fi
-  MKBOOTIMG=$t/bin/mkbootimg AVBTOOL=$t/bin/avbtool DTC=$dtc FDTOVERLAY=$fdto \
+  MKBOOTIMG=$phone_mkbootimg AVBTOOL=$phone_avbtool DTC=$dtc FDTOVERLAY=$fdto \
     "$LIBDIR/omamobile-boot-images" --descriptor "$R/device/$dev/device.conf" --kernel "$K/arch/arm64/boot/Image" \
     --dtbs "$K/arch/arm64/boot/dts" --dtbo "$laptop/dtbo.img" --initramfs "$K/initramfs.cpio.lz4" \
     --out "$t/phone-$dev" "${args[@]}" > "$t/phone.log" 2>&1 || { cat "$t/phone.log"; fail "omamobile-boot-images ($dev)"; }

@@ -6,9 +6,9 @@ pkgrel=1
 pkgdesc="Omarchy Mobile: rebuild a phone's slot-B boot images from linux-omamobile and write them, guarded and verified (pacman hook, opt-in)"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
-license=(MIT)
+license=(MIT Apache-2.0)
 # mkbootimg and avbtool from android-tools; dtc and fdtoverlay from dtc
-depends=(bash coreutils util-linux grep sed gawk findutils python lz4 cpio dtc android-tools openssl)
+depends=(bash coreutils util-linux grep sed gawk findutils python lz4 cpio dtc android-tools)
 checkdepends=(cpio lz4 python)
 
 check() {
