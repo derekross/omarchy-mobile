@@ -1595,6 +1595,37 @@ passed on 10-26). Two notes for the current shell:
 - **Pass:** all of S-1 and b-i; then P6 starts with the toggle left on.
 - **Rollback:** the toggle off (next poll, no restart).
 
+**P5 resumed, results (2026-11-01, `7.3.0-rc6-omamobile-push1-gde2f7b69334d`,
+omamobile-shell 0.2.73, omamobile-audio 0.5.8, omamobile-device-cheetah
+0.1.36; toggle on from 19:56):** 11 suspends, 0 failures, no UFS line after
+any wake.
+
+- **S-1, the speakers:** the silent baseline wasn't about 25 C: the coils
+  read 60.7 and 62.9 C after the owner's music, because with no signal
+  (`vmon low 1`) the protection firmware keeps its last estimate and lets it
+  cool. So the check became before against after each sleep: three sleeps
+  (8 s, 95 s, 99 s) with music before and after; the readings carried on
+  cooling across each sleep (36.4/41.2 C before and after the first, 25.1/26.0
+  C at the end), music played normally after every wake, and the watchdog
+  never muted. The 10-26 finding doesn't reproduce.
+- **a-e, g, i:** pass. c and d logged "not sleeping: audio is playing" and
+  "an SSH session is open", then slept once they ended; e (`alarm-wake-test`,
+  90 s) woke on the PMIC's RTC interrupt 1 s after the due time and slept
+  again 6 s later ("dark resume, 5 s grace"); every wake's fingerprint
+  matched on the first try (i).
+- **b:** pass: "sleeping (screen off and locked for 30 s)" after an idle lock.
+- **h: the behaviour passed, but afterwards Hyprland ran neither power-key bind**
+  (the kernel saw every press; `omamobile-keys`' last-press stopped at the
+  second press) until `hyprctl reload`. A user would have no Power until a
+  reboot. Being traced in Hyprland's bind handling.
+- **g** logged no "Stay awake is on" line on the power-key request; the
+  behaviour was right.
+- **Wi-Fi drops for each sleep:** the driver stays loaded (the keep flag),
+  but NetworkManager deactivates `wlp1s0` on logind's sleep signal and
+  reconnects about 5 s after the wake. Tier 1's "Wi-Fi stays associated"
+  isn't met yet.
+- **f** (a GNSS client holding it awake) wasn't run; it moves into P6.
+
 #### P6: a day of use with the toggle on (risk: medium, perception; human)
 
 The human uses the phone normally for a day, with the toggle on, and
