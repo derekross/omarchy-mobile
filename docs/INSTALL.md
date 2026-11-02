@@ -197,7 +197,7 @@ tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 
 After the restart, Wi-Fi, Bluetooth, sound, haptics, the sensors and the cameras work.
 
-**Fingerprint unlock is off at first,** on purpose: the first time its service starts, it writes the phone's secure storage, and that can't be undone. If you want it, start the service once in a terminal on the phone with `sudo systemctl enable --now omamobile-fp`, then add a finger on the phone's fingerprint screen.
+**Fingerprint unlock isn't available on a new install yet.** Its service writes the phone's secure storage, and before its first start it needs read-only copies of data that stock Android keeps in the phone's `persist` partition. Nothing on a new install makes those copies yet, and starting the service without them could damage that stock storage for good. **Don't start `omamobile-fp` by hand.** A coming release turns fingerprint on safely as part of the install.
 
 ## Getting updates
 
