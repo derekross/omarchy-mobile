@@ -13,7 +13,7 @@
 #                    extract-* tools), so a user provisions from the bundle
 #                    without the repository; they extract Google's files on
 #                    the user's machine, and none of those files ship here
-#     MANIFEST       kernel release, root image, both repositories' commits
+#     MANIFEST       kernel release, root image, both repositories' commits, toolchain
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
 #                    file with size and SHA-256, the root image, the release
 #                    version and label, and the install plan and its checks,
@@ -159,6 +159,12 @@ kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12
   echo "omarchy-mobile commit: $(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)"
   echo "root image: $rootname ($root_digest)"
   echo "omamobile channel: ${channel:-unknown}"
+  # bin/omamobile images records the clang and the image scripts it used
+  if [[ -f $KERNEL_OUT/images/TOOLCHAIN ]]; then
+    echo
+    echo "# toolchain"
+    cat "$KERNEL_OUT/images/TOOLCHAIN"
+  fi
   echo
   echo "# boot images"
   (cd "$dir/images" && sha256sum -- *.img)
