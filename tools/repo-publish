@@ -59,7 +59,7 @@ DB=omamobile.db.tar.gz
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 die() { echo "repo-publish: $*" >&2; exit 1; }
 
-channel=development build=1 dry=0 yes=0 remind=0 from_main=0 expect_index="" args=()
+channel=development build=1 dry=0 yes=0 remind=0 from_main=0 expect_index="" skipped_build=0 args=()
 while (($#)); do
   [[ $1 == --from-main ]] || args+=("$1")
   case $1 in
@@ -85,7 +85,12 @@ fi
 if ((from_main)); then
   # A detached checkout of origin/main, so half-finished local changes are
   # never published. keys/ and out/ are this tree's; so are the gitignored
-  # prebuilt binaries some PKGBUILDs install (packages/*/…/prebuilt/).
+  # prebuilt binaries some PKGBUILDs install (packages/*/…/prebuilt/) and
+  # the device packages' staged boot files (packages/*/boot-files/, which
+  # tools/build-packages checks against origin/main before building; a
+  # device package refuses to build without them). linux-omamobile's
+  # prebuilt/ comes along but is never built here: build-packages builds it
+  # only when named.
   wt=$ROOT/out/publish-tree
   git fetch -q origin main
   [[ -e $wt/.git ]] || git worktree add -q --detach "$wt" origin/main
@@ -93,7 +98,7 @@ if ((from_main)); then
   git -C "$wt" clean -qfdx -e /keys -e /out
   ln -sfn "$ROOT/keys" "$wt/keys"
   ln -sfn "$ROOT/out" "$wt/out"
-  git ls-files -z --others --ignored --exclude-standard -- packages | grep -z '/prebuilt/' |
+  git ls-files -z --others --ignored --exclude-standard -- packages | grep -zE '/(prebuilt|boot-files)/' |
     rsync -a --from0 --files-from=- ./ "$wt/"
   say "Publishing from origin/main at $(git -C "$wt" rev-parse --short HEAD)"
   exec "$wt/tools/repo-publish" "${args[@]}"
@@ -251,7 +256,16 @@ upload() {
 if [[ $channel == development ]]; then
   if ((build)); then
     say "Building what changed"
-    tools/build-packages --all
+    # 3: a device package was skipped (its boot files are missing or stale)
+    # and everything else built: publish that, then fail the run
+    rc=0; tools/build-packages --all || rc=$?
+    # 3 with its list in out/repo/.skipped, and nothing else, is a skip
+    if ((rc == 3)) && [[ -s out/repo/.skipped ]]; then
+      skipped_build=1
+      echo "    skipped, publishing the rest: $(tr '\n' ' ' < out/repo/.skipped)"
+    elif ((rc != 0)); then
+      exit "$rc"
+    fi
   fi
   [[ -f out/repo/$ARCH/$DB ]] || die "out/repo has no index; run tools/build-packages"
   say "Checking out/repo"
@@ -291,3 +305,4 @@ else
   [[ $code == 200 ]] || die "$URL/$channel/$ARCH/omamobile.db answers $code"
 fi
 say "Done: $URL/$channel/$ARCH"
+((skipped_build == 0)) || die "published without the device package(s) tools/build-packages skipped (boot files missing or stale): stage them and publish again"
