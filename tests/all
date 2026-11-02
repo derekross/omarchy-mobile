@@ -14,6 +14,9 @@
 # remote, the release key the maintainer signs with (tools/lib/signing.sh,
 # build-packages --resign, repo-publish), tools/fetch-toolchain against
 # local fixtures, and tools/release-upload against a scratch server.
+# check, a contributor's local builds (tools/local-key-init,
+# tools/fetch-published, --local) and tools/extract-camera-data's adrp
+# decoding.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/build-rootfs tools/build-packages tools/make-bundle \
@@ -28,7 +31,7 @@ sh -n device/flame/initramfs/init
 sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
-for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/make-bundle-keys tests/make-bundle tests/release-signing tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload; do
+for t in tests/pr-check tests/kernel-pr-check tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/initramfs-grow tests/images-layout tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/make-bundle-keys tests/make-bundle tests/release-signing tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data; do
   echo "# $t"
   "$t"
 done
