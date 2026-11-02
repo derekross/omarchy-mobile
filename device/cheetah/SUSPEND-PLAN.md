@@ -1,13 +1,20 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Suspend plan: s2idle first, then SYS_SLEEP (cheetah / gs201)
 
-Status (2026-10-26): **tier 1 userspace on the phone; P0-P3 passed, and
-P5 is stopped on a speaker finding.** Auto-sleep works: Power sleeps and
-wakes, there is no lock flash, the fingerprint works after a wake, Wi-Fi
-stays up, and alarms wake the phone; 13 cycles, 0 failures. But the first
-sound after the sleeps found the bottom CS35L41 with a false coil
-temperature, which only a power-off cleared (NOTES 2026-10-26). **The
-toggle stays off until the amplifiers resume cleanly.** The kernel side of s2idle is done (S0-S7 below; last tested on
+Status (2026-11-01): **tier 1 userspace on the phone; P0-P4 passed, P5 is
+ready to resume.** Auto-sleep works: Power sleeps and wakes, there is no
+lock flash, the fingerprint works after a wake, Wi-Fi stays up, and alarms
+wake the phone; 13 cycles, 0 failures (2026-10-26). P5 stopped that day on
+a false coil temperature from the bottom CS35L41, but the next day showed
+it wasn't sleep: it repeated 2.5 min into a cold boot with no suspend, and
+came from the amplifier's open-loop protection model at analog gain 10
+(NOTES 2026-10-27). The speaker work since (AOC-PLAN C9, omamobile-audio
+0.5.3-0.5.8: DRE off at low gain, the boost converter off below 17, the
+protection firmware measuring the coils) replaced that model, so the
+speaker no longer blocks sleep. **Next: "P5 resumed (2026-11-01)" below,
+attended, then P6-P8.** The Suspend cell in DEVICES moves to "works" only
+after P6 (a day of use) and a release that turns auto-sleep on by default,
+both the human's call. The kernel side of s2idle is done (S0-S7 below; last tested on
 7.3.0-rc6-omamobile-push1-00558-gcbd727f42785, `omamobile-int` @
 `cbd727f42`). Branch `suspend-tier1` in this repository adds:
 - `omamobile-sleepd` (omamobile-shell 0.2.29): sleep once the screen has
@@ -1537,6 +1544,56 @@ and run each test; between tests, read the watcher's journal
 - **New stop condition for P5 and later:** the speaker watchdog trips,
   or `omamobile-speaker-protection status` shows a temperature away from
   about 25 °C while silent after a resume.
+
+#### P5 resumed (2026-11-01): the speaker check, then tests b-i
+
+Written for the phone as it is on 11-01: test kernel
+`7.3.0-rc6-omamobile-push1-gde2f7b69334d` (the integration kernel with the
+AoC doorbell fix and the gauge changes) or the next one, omamobile-shell
+0.2.73, omamobile-audio 0.5.8, omamobile-device-cheetah 0.1.36. Record
+`uname -r` and `pacman -Q omamobile-shell omamobile-audio
+omamobile-device-cheetah` first; the toggle should read off
+(`runuser -u "$(id -nu 1000)" -- omarchy-toggle-enabled omamobile-sleep; echo $?`
+gives 1).
+
+Ground rules as above: announce each sleep, the human presses the keys,
+read back with `tools/phone-ssh --fresh`, and after every wake:
+
+```sh
+tools/phone-ssh --fresh 'dmesg | grep -E "ufshcd_err_handler|hibern8|I/O error"; cat /sys/power/suspend_stats/fail
+  omamobile-speaker-protection status; journalctl _SYSTEMD_USER_UNIT=omamobile-sleepd.service -o cat | tail -3'
+```
+
+**S-1, the speaker across sleep (new; attended, a listener):**
+
+1. Silent, before any sleep: `omamobile-speaker-protection status`. Note
+   both coil temperatures (about 25 °C at room temperature).
+2. Play music through the speakers for 30 s at the everyday level, then
+   stop it, and read the status again.
+3. With the human's go, turn the toggle on
+   (`runuser -u "$(id -nu 1000)" -- omarchy-toggle omamobile-sleep on`),
+   press Power, `tools/phone-ssh --stop`, and wait 60 s. Wake with Power.
+4. Read the status (silent), then play the same music for 30 s and read
+   it again. Repeat steps 3-4 twice more (three sleeps).
+
+- **Pass:** after every wake both coils read within about 3 °C of step 1
+  while silent; no "coil temperature jumped" or mute from the speaker
+  watchdog (`journalctl -u omamobile-speaker-watch -u omamobile-speaker-protection -o cat | tail`);
+  the music sounds the same before and after (the listener).
+- **Stop:** a coil away from step 1 by more than 5 °C while silent, a
+  watchdog mute, or distorted sound: toggle off, and
+  `systemctl restart omamobile-speaker-protection`; report with the status
+  lines. AGENTS: never read the amplifiers' whole regmap during playback.
+
+**Then tests b-i of the P5 table above,** with the toggle still on (a
+passed on 10-26). Two notes for the current shell:
+- e uses `tools/alarm-wake-test` as before;
+- i is the case #269 fixed on the 9a (omamobile-fingerprint 0.1.13 restarts
+  fprintd after a wake); on the 7 Pro it passed once on 11-01 with that hook,
+  so i also confirms the released package.
+
+- **Pass:** all of S-1 and b-i; then P6 starts with the toggle left on.
+- **Rollback:** the toggle off (next poll, no restart).
 
 #### P6: a day of use with the toggle on (risk: medium, perception; human)
 
