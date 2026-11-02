@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: MIT
 # run-desktop: run the Omarchy phone profile in a phone-sized nested Hyprland window.
 #
+# The window is as large as the focused monitor allows, up to 600x1300.
+# PHONE_DEV_N=<n>, a multiple of 10 from 40 to 100, forces a 6n x 13n
+# window instead (100 is 600x1300), to compare screenshots across machines
+# or keep the big window on a small screen. On a desktop scaled above 1 the
+# text is a little soft: the nested output renders at the window's logical
+# size, and the desktop scales it up.
+#
 # Nothing in your real ~/.config is touched: the shell runs with its own home
 # directory under ~/android/phone-dev/home, which links in your current theme
 # and this repo's phone plugins.
@@ -23,6 +30,41 @@ if [[ ! -f $OMARCHY_SRC/shell/shell.qml ]]; then
   echo "run-desktop: no Omarchy shell in $OMARCHY_SRC" >&2
   exit 1
 fi
+
+# Size the window to the screen: the largest 6n x 13n (the phone's 13:6
+# shape) that fits the focused monitor beside its bars, with n a multiple of
+# 10 up to 100. The nested monitor's scale n/80 keeps 480x1040 logical
+# pixels like the real phone. With n a multiple of 10 the scale is a multiple
+# of 1/8, exact in floating point, so Hyprland finds the logical size whole
+# and keeps the scale; at other n it can come out a hair off, and Hyprland
+# then picks another scale. n = 100 is 600x1300 at scale 1.25. Below n = 40
+# (240x520) the shell is too small to use, so the harness stops instead.
+if [[ -n ${PHONE_DEV_N:-} ]]; then
+  if [[ ! $PHONE_DEV_N =~ ^(40|50|60|70|80|90|100)$ ]]; then
+    echo "run-desktop: PHONE_DEV_N must be a multiple of 10 from 40 to 100" >&2
+    exit 1
+  fi
+  n=$PHONE_DEV_N
+else
+  n=$(hyprctl monitors -j 2>/dev/null | python3 -I -c 'import json,sys
+try:
+    m = next(x for x in json.load(sys.stdin) if x["focused"])
+    w, h = m["width"] / m["scale"], m["height"] / m["scale"]
+    if m["transform"] % 2:  # turned a quarter: width and height swap
+        w, h = h, w
+    l, t, r, b = m["reserved"]
+except Exception:
+    sys.exit("run-desktop: could not read the focused monitor from hyprctl; set PHONE_DEV_N to choose the window size")
+# 24 leaves room for the border and a little space around the window
+w, h = int(w - l - r - 24), int(h - t - b - 24)
+n = min(100, w // 6, h // 13) // 10 * 10
+if n < 40:
+    sys.exit(f"run-desktop: the focused monitor has room for {w}x{h}, and the phone window needs at least 240x520; set PHONE_DEV_N to open it anyway")
+print(n)')
+fi
+W=$((6 * n)) H=$((13 * n))
+SCALE=$(python3 -I -c "print($n / 80)")
+export PHONE_DEV_MODE="${W}x$H" PHONE_DEV_SCALE="$SCALE"
 
 # The nested session's own Omarchy tree. Its shell is a private copy, which
 # gives it its own config path, so IPC calls can't reach the desktop's
@@ -59,8 +101,8 @@ with open(sys.argv[2], "w") as f:
     f.write("\n")
 EOF
 
-# Once the nested window appears on the desktop, float it at the phone's
-# 13:6 aspect. Uses the desktop compositor's own dispatchers; no config changes.
+# Once the nested window appears on the desktop, float it at the size above.
+# Uses the desktop compositor's own dispatchers; no config changes.
 (
   for _ in $(seq 1 50); do
     addr=$(hyprctl clients -j 2>/dev/null | python3 -I -c 'import json,sys
@@ -69,7 +111,7 @@ print(c[-1]["address"] if c else "")')
     if [[ -n "$addr" ]]; then
       w="address:$addr"
       hyprctl dispatch "hl.dsp.window.float({ window = \"$w\", action = \"enable\" })" >/dev/null
-      hyprctl dispatch "hl.dsp.window.resize({ window = \"$w\", x = 600, y = 1300 })" >/dev/null
+      hyprctl dispatch "hl.dsp.window.resize({ window = \"$w\", x = $W, y = $H })" >/dev/null
       hyprctl dispatch "hl.dsp.window.center({ window = \"$w\" })" >/dev/null 2>&1 || true
       break
     fi
