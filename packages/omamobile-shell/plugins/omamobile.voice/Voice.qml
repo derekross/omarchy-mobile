@@ -188,8 +188,34 @@ Item {
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
-    onLoaded: root.modelId = VoiceModel.configModel(text())
-    onLoadFailed: root.modelId = "base.en"
+    onLoaded: {
+      root.modelId = VoiceModel.configModel(text())
+      root.maxSeconds = VoiceModel.configMaxSeconds(text())
+    }
+    onLoadFailed: {
+      root.modelId = "base.en"
+      root.maxSeconds = VoiceModel.MAX_SECONDS
+    }
+  }
+
+  // The longest recording: Voxtype's [audio] max_duration_secs.
+  property int maxSeconds: VoiceModel.MAX_SECONDS
+  property string durationError: ""
+  readonly property var durationRows: VoiceModel.durationRows(maxSeconds)
+
+  function chooseDuration(seconds) {
+    if (seconds === maxSeconds || phase !== "idle") return
+    durationError = ""
+    maxSeconds = seconds
+    durationProc.command = VoiceModel.durationArgv(seconds)
+    durationProc.running = true
+  }
+
+  Process {
+    id: durationProc
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.durationError = "Voxtype didn't take the new length (exit " + exitCode + ")."
+    }
   }
 
   Process {
@@ -676,7 +702,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: root.phase === "result" ? VoiceModel.clock(root.spoke) + " · " + VoiceModel.modelShort(root.modelId)
-                : root.busy ? VoiceModel.elapsedText(root.elapsed) : ""
+                : root.busy ? VoiceModel.elapsedText(root.elapsed, root.maxSeconds) : ""
               color: root.listening ? root.recording : root.foreground
               opacity: root.listening ? 1 : 0.7
               font.family: Style.font.family
@@ -1030,6 +1056,31 @@ Item {
               visible: root.modelError !== ""
               glyph: "󰀦"
               text: root.modelError
+              urgent: true
+            }
+
+            SectionLabel { text: "Longest recording" }
+
+            Repeater {
+              model: root.durationRows
+              delegate: ModelRow {
+                required property var modelData
+                width: settingsColumn.width
+                objectName: "duration-" + modelData.seconds
+                title: modelData.name
+                line: modelData.line
+                chosen: modelData.chosen
+                badge: modelData.chosen ? "In use" : ""
+                enabled: root.phase === "idle"
+                onTapped: root.chooseDuration(modelData.seconds)
+              }
+            }
+
+            InfoRow {
+              width: parent.width
+              visible: root.durationError !== ""
+              glyph: "󰀦"
+              text: root.durationError
               urgent: true
             }
 
