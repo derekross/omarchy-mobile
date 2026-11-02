@@ -1,0 +1,421 @@
+widget "red panda" {
+  meta { owl: 5; description: "A pixel red panda living in a tree. Pet it, tickle it, scritch it, feed it bamboo, shake its leaves; it naps draped over its branch and holds a leaf over its head when it rains (the phone's own weather reading, from Open-Meteo, CC BY 4.0)"; version: "1.1.1"; license: "MIT"; category: "fun" }
+  size: 3x3
+  minSize: 2x2
+  padding: 0
+
+  // A red panda in theme colors, drawn from `time` and a little state. It
+  // needs no shell: the clock says when it's night, and taps and drags do the
+  // rest. It dozes on its branch at night (22 to 7) and after five minutes
+  // without company; a tap then only makes it peek, a second tap wakes it.
+  // Awake, a tap on it is a pet, another tap right after a tickle, a drag a scritch
+  // behind the ears, a tap on the bamboo a meal, a tap in the leaves a shake,
+  // and a tap anywhere else makes it look there. When it rains where you are
+  // (the phone's weather reading says) it shelters under a leaf; a tap on the trunk makes it rain anyway, or never.
+  //
+  // Cheap when idle: the breath, blink, tail, stars and z's step on the 1 s clock
+  // (`now`), so the tile redraws once a second. The frame clock (`time`) is only
+  // read for a few seconds after a tap or drag, and while it rains, so the
+  // launcher only animates every frame then.
+  source now = clock every 1s
+  // Real rain, where the phone is: Omarchy Mobile's copy reads the phone's own weather reading
+  // (omamobile-weather: Open-Meteo, open-meteo.com, CC BY 4.0, at the phone's location or set city)
+  // instead of asking a web service by IP. No reading, or one over 3 hours old, just means no rain.
+  source wx = file("~/.local/state/omamobile/weather.json") json optional
+
+  state born = 0 persist             // Unix seconds of the first tap
+  state fed = 0 persist              // Unix seconds
+  state pets = 0 persist
+  state lastTap = 0 persist          // last time someone played with it
+  state wakeUntil = 0 persist        // woken by a double tap until then
+  state rainMode = "auto" persist     // auto (with the weather), on or off; tap the trunk to cycle
+  // The last tap: in Canvas `time`, in Unix seconds, where, and what it did.
+  state tapAt = -100
+  state tapNow = 0
+  state tapX = 0
+  state tapY = 0
+  state tapKind = ""
+  // Scritching: a drag, with how far it has gone sideways.
+  state dragAt = -100
+  state dragNow = 0
+  state dragX = 0
+
+  let hour = num(fmtTime(now, "H"))
+  let night = hour != null && (hour >= 22 || hour < 7)   // not night while the clock is still loading
+  let idle = now - lastTap > 5 * 60
+  let asleep = (night || idle) && now >= wakeUntil
+  let hungry = fed > 0 && now - fed > 6 * 3600
+  let day = born > 0 ? floor((now - born) / 86400) + 1 : 1
+  let sky = wx != null && now - num(wx.at, 0) / 1000 < 3 * 3600 ? lower(wx.text ?? "") : ""
+  let realRain = contains(sky, "rain") || contains(sky, "drizzle") || contains(sky, "shower") || contains(sky, "sleet")
+  let raining = rainMode == "on" || rainMode == "auto" && realRain
+
+  // Geometry from the tile's size, so the tap handler knows what was tapped.
+  // One art pixel, in dp: the tree, the panda and its tail, and the bamboo.
+  let W = tileWidth ?? 300
+  let H = tileHeight ?? 300
+  let p = clamp(floor(min(W / 30, H / 27)), 2, 9)
+  let s = p + 0.5
+  let textH = 16
+  // The branch stays near the canopy in a tall tile; the trunk just goes on below it.
+  let branchY = floor(min(H - textH - 6 * p, 27 * p) / p) * p
+  let bx = floor((W / 2 - 9 * p) / p) * p    // the panda's left edge
+  let by = branchY - 16 * p                   // its top, feet on the branch
+  let bambooX = W - 6 * p
+
+  // Sprites: one letter per art pixel, "." is empty, colored by a palette.
+  // Sitting up and looking at you. Eyes are drawn on, so they can move.
+  let pandaArt = [
+    ".rrr........rrr.",
+    "rwwrr......rrwwr",
+    "rwwwrrrrrrrrwwwr",
+    ".rrrrrrrrrrrrrr.",
+    ".rrwwwrrrrwwwrr.",
+    ".rwwwwwrrwwwwwr.",
+    ".rwwwwwwrwwwwwwr",
+    ".rwrwwwrrrwwwrwr",
+    ".rwwwwwrkkrwwwwr",
+    "..rwwwwwwwwwwwr.",
+    "...rwwwwwwwwwr..",
+    "....ddddddddd...",
+    "...ddddddddddd..",
+    "..ddddddddddddd.",
+    "..ddddddddddddd.",
+    "..ff.ff...ff.ff."
+  ]
+  // The tail, ringed, curling up beside the body.
+  let tailArt = [
+    ".rrr.",
+    "rrrrr",
+    "rtttr",
+    "rrrrr",
+    "tttrr",
+    "rrrr.",
+    "rttr.",
+    "rrr.."
+  ]
+  // Asleep: draped over the branch, head on its paws. The part above the branch...
+  let dozeArt = [
+    ".rr.............",
+    "rwrrrrrrrrrr....",
+    "rrrrrrrrrrrrrr..",
+    "rwwrrrrrrrrrrrr.",
+    "rwwwwrrrrrrrrrrr",
+    "rwwwwrrrrrrrrrrr",
+    ".rrwrrrrrrrrrrr."
+  ]
+  // ...and the legs and tail hanging down in front of it.
+  let dangleArt = [
+    "..dd..dd....dd.rr",
+    "..dd..dd....dd.tt",
+    "...............rr",
+    "...............tt",
+    "...............rr",
+    "...............tt",
+    "................r"
+  ]
+  let heartArt = [".h.h.", "hhhhh", "hhhhh", ".hhh.", "..h.."]
+  let bambooArt = ["gg", "gg", "GG", "gg", "gg", "GG", "gg", "gg"]
+  let leafArt = ["lll", "lLl", "lll"]
+  // A big leaf, held up as an umbrella.
+  let brollyArt = [
+    "...llllll...",
+    ".llLLLLLLll.",
+    "lLLLLLLLLLLl",
+    "......s....."
+  ]
+
+  // The fur keeps its own colors, whatever the theme: a grey red panda is just a raccoon.
+  let rust = #c75a1e
+  let cream = #f6ead6
+  let dark = #3a2316
+  let ink = #1a1008
+  let leaf = mix(green, background, 0.2)
+  let leafLight = mix(green, foreground, 0.25)
+  let leafDark = mix(green, background, 0.45)
+  let bark = mix(orange, background, 0.6)
+  let barkDark = mix(orange, background, 0.75)
+  let pal = {
+    r: rust, w: cream, d: dark, f: dark, k: ink, t: #e8b57c,
+    h: #e8506a, g: leaf, G: leafDark, l: leafLight, L: leaf, s: leafDark
+  }
+  let bodyPal = {r: rust, w: cream, d: dark, k: ink, t: pal.t}
+  let feetPal = {f: dark}
+
+  Canvas {
+    onTap: {
+      // What this tap does, decided before any state changes.
+      tapKind = x < 4 * p ? "rain"
+        : asleep ? (now - tapNow <= 3 && tapKind == "peek" ? "wake" : "peek")
+        : x >= bx - p && x < bx + 20 * p && y >= by - 2 * p && y <= branchY + p ? (now - tapNow <= 2 && (tapKind == "pet" || tapKind == "tickle") ? "tickle" : "pet")
+        : x >= bambooX - 2 * p && y >= branchY - 12 * p ? "feed"
+        : y < by + 4 * p ? "shake" : "look"
+      pets = tapKind == "pet" || tapKind == "tickle" ? pets + 1 : pets
+      fed = tapKind == "feed" ? now : fed
+      wakeUntil = tapKind == "wake" ? now + 120 : wakeUntil
+      rainMode = tapKind != "rain" ? rainMode : rainMode == "auto" ? "on" : rainMode == "on" ? "off" : "auto"
+      lastTap = tapKind == "peek" || tapKind == "rain" ? lastTap : now
+      born = born > 0 ? born : now
+      tapAt = time
+      tapNow = now
+      tapX = x
+      tapY = y
+    }
+    onDrag: {
+      dragX = clamp((time - dragAt < 0.5 ? dragX : 0) + dx, -60, 60)
+      dragAt = time
+      dragNow = now
+      lastTap = asleep ? lastTap : now
+    }
+
+    // Seconds since the last tap. The wall clock is checked first, so `time` is
+    // only read while a tap is fresh; and since `time` restarts with the frame
+    // clock (say, after the page was off screen), an old tap could look recent
+    // again, so the wall clock has the final say.
+    let since = now - tapNow < 6 && time >= tapAt ? time - tapAt : 1000
+    let scritch = !asleep && now - dragNow < 3 && time >= dragAt && time - dragAt < 0.7 ? 1 - max(time - dragAt - 0.3, 0) / 0.4 : 0
+
+    // Night sky: a crescent moon and a few twinkling stars.
+    if night {
+      for c in range(25) {
+        let i = c % 5 - 2
+        let j = floor(c / 5) - 2
+        if i * i + j * j <= 5 && (i + 1) * (i + 1) + (j + 1) * (j + 1) > 4 {
+          rect(W - 8 * p + i * p, 9 * p + j * p, s, s, fill: yellow)
+        }
+      }
+      for k in range(5) {
+        let sx = floor(W * (0.2 + 0.15 * k) / p) * p
+        let sy = (7 + (k * 7) % 5) * p
+        rect(sx, sy, p, p, fill: alpha(foreground, 0.3 + 0.5 * abs(sin(now * 0.8 + k * 1.9))))
+      }
+    }
+
+    // The tree: a trunk up the left edge, a branch across, leaves along the top.
+    rect(0, 0, 4 * p, H - textH, fill: bark)
+    rect(p, 0, p, H - textH, fill: barkDark)
+    rect(3 * p, 0, p, H - textH, fill: mix(bark, foreground, 0.1))
+    rect(0, branchY, W - 4 * p, 2 * p, fill: bark)
+    rect(0, branchY + p, W - 4 * p, p, fill: barkDark)
+    rect(W - 4 * p, branchY, 2 * p, p, fill: bark)
+    // Leaf clusters, placed by a little arithmetic so they look scattered.
+    for k in range(14) {
+      let lx = floor((W * ((k * 37) % 23) / 23) / p) * p
+      let ly = ((k * 5) % 4) * p - p
+      let big = k % 3 == 0
+      rect(lx, ly, (big ? 4 : 3) * p, (big ? 3 : 2) * p, radius: p, fill: k % 2 == 0 ? leaf : leafDark)
+      rect(lx + p, ly, p, p, fill: leafLight)
+    }
+    // A few leaves hanging from the branch.
+    for k in range(4) {
+      let lx = floor((W * (0.15 + 0.2 * k)) / p) * p
+      rect(lx, branchY + 2 * p, 2 * p, p, fill: k % 2 == 0 ? leaf : leafDark)
+    }
+
+    // Bamboo growing in the bottom-right corner, swaying a little.
+    let sway = round(sin(now * 0.9)) * p
+    sprite(bambooArt, bambooX + 2 * p, H - textH - 8 * p, p, palette: pal)
+    rect(bambooX + sway, H - textH - 9 * p, 3 * p, p, radius: p, fill: leafLight)
+    rect(bambooX + 4 * p - sway, H - textH - 7 * p, 3 * p, p, radius: p, fill: leaf)
+    rect(bambooX + 4 * p + sway, H - textH - 5 * p, 2 * p, p, radius: p, fill: leafLight)
+
+    // Falling leaves after a shake.
+    if tapKind == "shake" && since < 2.4 {
+      for k in range(7) {
+        let t = since - k * 0.12
+        if t > 0 && t < 2 {
+          let lx = floor((W * (0.12 + 0.13 * k) + sin(t * 5 + k) * 2 * p) / p) * p
+          let ly = floor((2 * p + t * t * 16 * p + t * 10 * p) / p) * p
+          layer(1 - t / 2) { sprite(leafArt, lx, min(ly, H - textH - 3 * p), p, palette: k % 2 == 0 ? {l: leaf, L: leafLight} : {l: leafDark, L: leaf}) }
+        }
+      }
+    }
+
+    // Rain: streaks falling in their own columns, and splashes on the branch.
+    if raining {
+      let wet = alpha(mix(blue, foreground, 0.3), 0.55)
+      for k in range(26) {
+        let t = (time * (1.1 + (k % 3) * 0.25) + k * 0.37) % 1
+        let rx = floor(W * ((k * 53) % 29) / 29 / p) * p
+        rect(rx, floor(t * (H - textH) / p) * p, s, 3 * p, fill: wet)
+      }
+      for k in range(7) {
+        let rx = floor(W * ((k * 31) % 17) / 17 / p) * p
+        if (time * 2.5 + k * 0.6) % 1 < 0.3 { rect(rx, branchY - p, p, p, fill: alpha(foreground, 0.5)) }
+      }
+    }
+
+    if asleep {
+      // Draped over the branch. The body breathes; the legs swing gently.
+      let breath = (floor(now / 2) % 2) * p
+      let swing = (floor(now / 3) % 2) * p
+      let dx = floor((W / 2 - 8 * p) / p) * p
+      let peek = tapKind == "peek" && since < 2.5
+      sprite(dozeArt, dx, branchY - 7 * p + breath, p, palette: bodyPal)
+      sprite(dangleArt, dx + swing, branchY, p, palette: bodyPal)
+      if raining { sprite(brollyArt.take(3), dx + 4 * p, branchY - 9 * p + breath, p, palette: pal) }
+      // The ear, drawn on top so the breath doesn't leave it behind.
+      if peek {
+        // One eye opens a crack, then it dozes off again.
+        let open = since < 1.8 ? 2 : 1
+        rect(dx + 2 * p, branchY - 3 * p + breath, s, open * p, fill: ink)
+      } else {
+        rect(dx + 2 * p, branchY - 3 * p + breath, 2 * p, s, fill: ink)
+      }
+      if !peek {
+        for k in range(3) {
+          let t = ((now + k * 2) % 6) / 6
+          text("z", dx + 6 * p + t * 4 * p, branchY - 9 * p - t * 8 * p, size: (2 + t * 2) * p, bold: true, color: alpha(foreground, 1 - t))
+        }
+      }
+    } else {
+      let petting = since < 2.5 && tapKind == "pet"
+      let tickling = since < 2.2 && tapKind == "tickle"
+      let eating = since < 2.6 && tapKind == "feed"
+      let startled = since < 1.6 && tapKind == "shake"
+      let looking = since < 2.5 && tapKind == "look"
+      let waking = since < 2.2 && tapKind == "wake"
+      let chomping = eating && since > 0.7
+      let happy = petting || scritch > 0 || chomping
+      // A hop when petted; otherwise a one-pixel breath. Feet stay on the branch.
+      let hop = petting ? round(abs(sin(since * 7)) * 2 * max(1.4 - since, 0)) * p : 0
+      let breath = (now % 2) * p
+      // Tickled, it wriggles side to side; scritched, it leans into the hand. Whole pixels, so no seams.
+      let shimmy = tickling ? [0, 1, 0, -1][floor(since * 12) % 4] * p : scritch > 0 ? sign(dragX) * p : 0
+      let bodyX = bx + shimmy
+      let bodyY = by - hop
+
+      // The tail tip flicks, faster when it's pleased.
+      let flick = (petting || scritch > 0 ? [0, 1, 1, 0, -1, -1][floor(since * 10) % 6] : [0, 1, 1, 0, -1, -1][now % 6]) * p
+      sprite(tailArt.take(4), bodyX + 14 * p + flick, bodyY + 8 * p + breath, p, palette: pal)
+      sprite(tailArt.drop(4), bodyX + 14 * p, bodyY + 12 * p + breath, p, palette: pal)
+      if raining {
+        sprite(brollyArt, bodyX + 2 * p, bodyY - 4 * p + breath, p, palette: pal)
+        rect(bodyX + 8 * p, bodyY + breath, p, 11 * p, fill: leafDark)
+      }
+      sprite(pandaArt, bodyX, bodyY + breath, p, palette: bodyPal)
+      sprite(pandaArt, bodyX, bodyY, p, palette: feetPal)
+      // An ear twitches now and then.
+      if now % 7 == 0 { rect(bodyX + 12 * p, bodyY + breath - p, 3 * p, p, fill: rust) }
+
+      // Eyes, in the white patches: columns 3-5 and 10-12, rows 5-6.
+      let ey = bodyY + breath
+      let blink = now % 7 == 3
+      if waking {
+        // A yawn: eyes squeezed shut, mouth wide open.
+        for e in [3, 10] { rect(bodyX + e * p, ey + 6 * p, 3 * p, s, fill: ink) }
+        rect(bodyX + 7 * p, ey + 9 * p, 2 * p, 2 * p, radius: p, fill: ink)
+      } else if tickling {
+        // Squeezed shut (x x) and giggling.
+        for e in [3, 10] {
+          rect(bodyX + e * p, ey + 5 * p, s, s, fill: ink)
+          rect(bodyX + (e + 2) * p, ey + 5 * p, s, s, fill: ink)
+          rect(bodyX + (e + 1) * p, ey + 6 * p, s, s, fill: ink)
+          rect(bodyX + e * p, ey + 7 * p, s, s, fill: ink)
+          rect(bodyX + (e + 2) * p, ey + 7 * p, s, s, fill: ink)
+        }
+        if floor(since * 8) % 2 == 0 { rect(bodyX + 7 * p, ey + 9 * p, 2 * p, s, fill: ink) }
+      } else if happy {
+        // Content: eyes closed in two little arcs, cheeks blushing.
+        for e in [3, 10] {
+          rect(bodyX + e * p, ey + 6 * p, s, s, fill: ink)
+          rect(bodyX + (e + 1) * p, ey + 5 * p, s, s, fill: ink)
+          rect(bodyX + (e + 2) * p, ey + 6 * p, s, s, fill: ink)
+        }
+        rect(bodyX + 2 * p, ey + 8 * p, 2 * p, p, fill: alpha(#ff7a88, 0.5))
+        rect(bodyX + 12 * p, ey + 8 * p, 2 * p, p, fill: alpha(#ff7a88, 0.5))
+      } else if startled {
+        // Wide eyes and a start.
+        for e in [3, 10] {
+          rect(bodyX + e * p, ey + 4 * p, 3 * p, 3 * p, fill: ink)
+          rect(bodyX + (e + 1) * p, ey + 5 * p, s, s, fill: cream)
+        }
+        text("!", bodyX + 8 * p, bodyY - 3 * p, size: 4 * p, bold: true, color: #ffd45a, align: center)
+      } else if blink {
+        for e in [3, 10] { rect(bodyX + e * p, ey + 6 * p, 3 * p, s, fill: ink) }
+      } else {
+        // Looking around, or at the last tap, or up at a bamboo thought.
+        let lx = looking ? sign(tapX - (bodyX + 8 * p)) : hungry ? 1 : [0, 1, 0, -1][floor(now / 3) % 4]
+        let ly = looking ? (tapY < ey + 5 * p ? -1 : tapY > ey + 12 * p ? 1 : 0) : hungry ? -1 : 0
+        for e in [3, 10] {
+          rect(bodyX + (e + (lx + 1) / 2) * p, ey + (5 + (ly + 1) / 2) * p, 2 * p, 2 * p, fill: ink)
+          rect(bodyX + (e + (lx + 1) / 2 + 1) * p, ey + (5 + (ly + 1) / 2) * p, s, s, fill: alpha(cream, 0.7))
+        }
+      }
+
+      // Munching bamboo: the mouth opens and shuts, bits fall.
+      if chomping {
+        if floor(since * 6) % 2 == 0 { rect(bodyX + 7 * p, ey + 9 * p, 2 * p, s, fill: ink) }
+        rect(bodyX + 6 * p, ey + 9 * p, p, 4 * p, fill: leaf)
+        rect(bodyX + 5 * p, ey + 12 * p, 3 * p, p, fill: dark)
+        for k in range(3) {
+          let f = since - 0.7
+          rect(bodyX + (6 + k * 2) * p + (k - 1) * f * 6 * p, ey + 10 * p + f * f * 20 * p, p, p, fill: leafLight)
+        }
+      }
+
+      // A stalk flies over from the bamboo and lands in its paws.
+      if eating && since <= 0.7 {
+        let t = since / 0.7
+        let fx = lerp(bambooX + 2 * p, bx + 4 * p, t)
+        let fy = lerp(H - textH - 8 * p, by + 8 * p, t) - sin(rad(t * 180)) * 6 * p
+        rect(fx, fy, p, 4 * p, fill: leaf)
+      }
+
+      // Hearts float up when petted.
+      if petting {
+        for k in range(3) {
+          let t = since - k * 0.35
+          if t > 0 && t < 1.8 {
+            layer(1 - t / 1.8) {
+              sprite(heartArt, floor((bx + [-2, 6, 13][k] * p + sin(t * 5 + k) * p) / p) * p, floor((by - t * 6 * p) / p) * p, p, palette: pal)
+            }
+          }
+        }
+      }
+      // Giggles when tickled.
+      if tickling {
+        for k in range(2) {
+          let t = (since * 0.7 + k / 2) % 1
+          text("hihi", bx + (k == 0 ? -2 : 15) * p, by + 4 * p - t * 6 * p, size: 2 * p, bold: true, color: alpha(foreground, 1 - t))
+        }
+      }
+      // Sparkles while it's scritched.
+      if scritch > 0 {
+        for k in range(4) {
+          let t = (time * 1.5 + k / 4) % 1
+          let ang = k * 90 + time * 60
+          rect(floor((bx + 8 * p + cos(rad(ang)) * 10 * p) / p) * p, floor((by + 5 * p + sin(rad(ang)) * 7 * p) / p) * p, p, p, fill: alpha(#ffd45a, (1 - t) * scritch))
+        }
+      }
+      // Wondering what that was.
+      if looking {
+        text("?", bx + 8 * p, by - 3 * p, size: 3 * p, bold: true, color: alpha(foreground, 1 - since / 2.5), align: center)
+      }
+      // Hungry: a thought bubble with bamboo.
+      if hungry && !eating {
+        let cloud = mix(background, foreground, 0.22)
+        let tx = bx + 16 * p
+        let ty = by
+        rect(tx - p, ty + 6 * p, p, p, fill: cloud)
+        rect(tx, ty + 5 * p, p, p, fill: cloud)
+        rect(tx + p, ty - 3 * p, 5 * p, 7 * p, radius: p, fill: cloud)
+        sprite(bambooArt.take(5), tx + 3 * p, ty - 2 * p, p, palette: {g: leafLight, G: leaf})
+      }
+    }
+
+    // What it's up to, along the bottom.
+    let status = since < 2.5 && tapKind == "rain" ? "rain ${rainMode == "auto" ? "with the weather" : rainMode}"
+      : asleep ? (night ? "zzz · asleep in the tree" : "napping · tap twice to wake")
+      : since < 2.5 && tapKind == "pet" ? "happy · ♥︎${pets}"
+      : since < 2.5 && tapKind == "tickle" ? "hihihi"
+      : since < 2.5 && tapKind == "feed" ? "nom nom bamboo"
+      : since < 2.5 && tapKind == "shake" ? "who shook the tree?!"
+      : since < 2.5 && tapKind == "wake" ? "yawn… good morning"
+      : scritch > 0 ? "scritches · bliss"
+      : hungry ? "hungry · tap the bamboo"
+      : raining ? "day ${day} · ♥︎${pets} · rain"
+      : "day ${day} · ♥︎${pets}"
+    text(status, W / 2, H - textH / 2, size: 11, align: center, color: muted)
+  }
+}

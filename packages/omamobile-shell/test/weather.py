@@ -60,6 +60,15 @@ if shutil.which("node"):
     diff = {k: (mine[k], theirs[k]) for k in theirs if mine.get(k) != theirs[k]}
     ok(not diff, "the words for each code are the home screen widget's %s" % diff)
     print("ok - weather: the words for every code are the home screen widget's (HomeModel.weatherText)")
+    # The unit the OWL weather widgets get (HomeModel.localeUnit) is this one.
+    envs = [{"LANG": "en_US.UTF-8"}, {"LANG": "de_DE.UTF-8"}, {"LANG": "C.UTF-8"}, {}, {"LANG": "en_LR"},
+            {"LC_ALL": "de_DE.UTF-8", "LANG": "en_US.UTF-8"}, {"LC_MEASUREMENT": "en_US.UTF-8", "LANG": "de_DE.UTF-8"},
+            {"LANG": "en_PR.UTF-8@euro"}, {"LC_ALL": "", "LANG": "es_US"}]
+    js = "const M = require(process.argv[1]); console.log(JSON.stringify(JSON.parse(process.argv[2]).map(M.localeUnit)))"
+    theirs = json.loads(subprocess.run(["node", "-e", js, os.path.join(ROOT, "plugins/omamobile.home/HomeModel.js"), json.dumps(envs)],
+                                       check=True, capture_output=True, text=True).stdout)
+    ok(theirs == [W.locale_unit(e) for e in envs], "HomeModel.localeUnit agrees with locale_unit %s" % theirs)
+    print("ok - weather: the OWL widgets' unit is the one this service uses (HomeModel.localeUnit)")
 else:
     print("ok - weather: the words match the home screen widget's # SKIP no node")
 

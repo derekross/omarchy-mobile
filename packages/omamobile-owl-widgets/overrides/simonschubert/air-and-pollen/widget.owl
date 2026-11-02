@@ -1,0 +1,234 @@
+widget "air and pollen" {
+  meta { description: "Air quality and today's pollen where you are, from Open-Meteo (Copernicus), at your location or a city you type (place lookup too: Open-Meteo, CC BY 4.0). Tap it for the next 24 hours, pollutants and every pollen type"; version: "1.1.1"; license: "MIT"; category: "world"; owl: 5 }
+  size: 3x2
+  minSize: 3x2
+
+  source now = clock every 1m
+  // Omarchy Mobile's copy: the place from Open-Meteo's geocoding (open-meteo.com, CC BY 4.0) or the phone's location.
+  state city = "" persist
+  // The phone's temperature unit, "C" or "F", put in by the home screen; empty elsewhere.
+  state phoneUnit = ""
+  // The place: "lat,lon" (the phone's location, as the home screen puts it in) goes straight in;
+  // a name ("Town" or "Town, Region") is looked up with Open-Meteo's geocoding. Open-Meteo has no IP location.
+  let ll = match(trim(city), "^(-?[0-9.]+) *, *(-?[0-9.]+)$")
+  let town = trim(split(city, ",")[0])
+  let region = lower(trim(join(drop(split(city, ","), 1), ",")))
+  let named = ll == null && len(town) >= 2
+  // The town, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
+  let q = town.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+  source geo = http("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=${named ? q : ""}") every 24h timeout 10s json status
+  let results = named && geo != null && geo.ok ? geo.out.results ?? [] : []
+  // The first result whose region, country or country code matches what follows the comma; else the first.
+  let found = find(results, r => region != "" && contains([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], region)) ?? first(results)
+  let lat = ll != null ? round(num(ll[0]), 2) : found != null ? round(found.latitude, 2) : null
+  let lon = ll != null ? round(num(ll[1]), 2) : found != null ? round(found.longitude, 2) : null
+  let placeName = ll != null ? "your location" : found != null ? found.name : town
+  let placeLine = ll != null ? "your location" : found != null ? "${lower(found.name)}, ${lower(found.country ?? "")}" : lower(town)
+  // The US index there (or, at the phone's location, on a phone set to °F), Europe's everywhere else.
+  let us = ll != null ? phoneUnit == "F" : found != null && found.country_code == "US"
+  source air = http("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=european_aqi,us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,uv_index&hourly=european_aqi,us_aqi,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen&forecast_days=2&timezone=auto&timeformat=unixtime") every 30m timeout 15s json status
+  // The first request goes out before the location is known; ask again once it is.
+  when lat != null { refresh() }
+  // And again when a new city moves it.
+  on lat { refresh() }
+
+  let cur = air.ok ? air.out.current : null
+  let hourly = air.ok ? air.out.hourly : null
+  let index = us ? "us_aqi" : "european_aqi"
+  let aqi = get(cur, index)
+  let steps = us ? [50, 100, 150, 200, 300] : [20, 40, 60, 80, 100]
+  let names = us ? ["good", "moderate", "unhealthy for some", "unhealthy", "very unhealthy", "hazardous"] : ["good", "fair", "moderate", "poor", "very poor", "extremely poor"]
+  let tints = us ? [green, yellow, orange, red, magenta, magenta] : [green, cyan, yellow, orange, red, magenta]
+  let advice = ["ideal for being outside", "fine for your usual outdoor plans", "sensitive people may want to take it easy outside", "consider less intense activity outside", "cut down on activity outside", "avoid activity outside"]
+  let level = aqi == null ? null : count(steps, s => aqi > s)
+  let tint = level == null ? muted : tints[level]
+  // The next 24 hours, from the current one on.
+  let start = max(count(hourly.time ?? [], t => t <= now) - 1, 0)
+  let hours = take(drop(hourly.time ?? [], start), 24)
+  let aqis = take(drop(get(hourly, index) ?? [], start), 24)
+  // Pollen in grains/m³, rated none, low, moderate or high. Europe only: elsewhere it's null.
+  let kinds = [
+    {key: "birch", t: [1, 15, 90]}, {key: "alder", t: [1, 15, 90]}, {key: "olive", t: [1, 15, 90]},
+    {key: "grass", t: [1, 20, 50]}, {key: "mugwort", t: [1, 10, 50]}, {key: "ragweed", t: [1, 5, 20]}
+  ]
+  let pollen = kinds.map(k => {
+    name: k.key,
+    values: take(drop(get(hourly, k.key + "_pollen") ?? [], start), 24),
+    peak: max(take(drop(get(hourly, k.key + "_pollen") ?? [], start), 24).filter(v => v != null)),
+    t: k.t
+  }).map(p => {name: p.name, values: p.values, peak: p.peak, level: p.peak == null ? 0 : count(p.t, x => p.peak >= x)})
+  let hasPollen = any(pollen, p => p.peak != null)
+  let flying = pollen.filter(p => p.level > 0).sortBy(p => -p.peak)
+  let pollenWords = ["none", "low", "moderate", "high"]
+  let pollenTints = [muted, green, yellow, red]
+  let problem = ll == null && !named ? "set a city or turn on Location" : (named && geo == null) || (lat != null && air == null) ? "…" : lat == null ? "city not found" : !air.ok ? "open-meteo offline" : null
+
+  onTap: screen()
+
+  component Dots(n, c) {
+    Row {
+      gap: 2
+      for i in range(3) { Box { width: 8; height: 4; radius: 2; background: i < n ? c : alpha(muted, 0.25) } }
+    }
+  }
+
+  component Gauge(big = false) {
+    Box {
+      align: center
+      Ring { value: aqi ?? 0; max: steps[4]; color: tint; track: alpha(muted, 0.2); thickness: big ? 10 : 6; start: 225; sweep: 270; fill: true; animate value: spring() }
+      Column {
+        gap: 0
+        align: center
+        Text { text: aqi == null ? "…" : round(aqi); fontSize: big ? 40 : 20; bold: true; color: tint; align: center }
+        Text { text: us ? "us aqi" : "eu aqi"; style: label; color: muted; align: center }
+      }
+    }
+  }
+
+  component PollenRow(p, size = 11) {
+    Row {
+      gap: 6
+      align: center
+      Text { text: p.name; fontSize: size; weight: 1; maxLines: 1 }
+      Dots { n: p.level; c: pollenTints[p.level] }
+      Text { text: pollenWords[p.level]; fontSize: size; color: pollenTints[p.level]; width: size * 5.5; align: end; maxLines: 1 }
+    }
+  }
+
+  Column {
+    gap: 4
+    Row {
+      Text { text: "air"; style: muted; weight: 1 }
+      Text { text: lower(placeName); fontSize: 10; color: muted; maxLines: 1; width: 96; align: end }
+    }
+    if problem != null {
+      Text { text: problem; style: small; color: muted }
+    } else {
+      Row {
+        gap: 10
+        align: center
+        weight: rows >= 3 ? 0 : 1
+        Gauge { size: 64 }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: names[level]; style: body; bold: true; color: tint; maxLines: 2 }
+          Text { text: "pm2.5 ${round(cur.pm2_5)} µg/m³"; style: small; color: muted; maxLines: 1 }
+          if rows >= 3 || !hasPollen {
+            Text { text: "uv ${round(cur.uv_index)}"; style: small; color: muted; maxLines: 1 }
+          } else {
+            // Too short for the pollen list: the worst one, or none.
+            Text { text: len(flying) == 0 ? "no pollen" : "${flying[0].name} pollen ${pollenWords[flying[0].level]}"; style: small; color: len(flying) == 0 ? green : pollenTints[flying[0].level]; maxLines: 1 }
+          }
+        }
+      }
+      if rows >= 3 {
+        Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+        Text { text: "pollen · next 24 h"; style: label; color: muted }
+        Column {
+          gap: 3
+          weight: 1
+          if !hasPollen {
+            Text { text: "no pollen forecast here (europe only)"; style: small; color: muted }
+          } else if len(flying) == 0 {
+            Text { text: "none in the air"; style: small; color: green }
+          } else {
+            for p in take(flying, rows >= 4 ? 5 : 3) key p.name { PollenRow { p: p } }
+          }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "air and pollen"
+    Input {
+      text: city
+      placeholder: "city · empty = your location"
+      onSubmit: { city = trim(value); refresh() }
+    }
+    if problem != null {
+      Text { text: problem; style: body; color: muted }
+    } else {
+      Column {
+        scroll: true
+        gap: 14
+        Row {
+          gap: 16
+          align: center
+          Gauge { big: true; size: 132 }
+          Column {
+            gap: 2
+            weight: 1
+            Text { text: names[level]; style: title; color: tint }
+            Text { text: advice[level]; style: small }
+            Text { text: placeLine; style: small; color: muted; maxLines: 1 }
+          }
+        }
+
+        Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+        Text { text: "next 24 hours"; style: label; color: accent }
+        Canvas {
+          height: 110
+          fill: width
+          let n = max(len(aqis), 1)
+          let top = max(max(aqis.filter(v => v != null)) ?? 0, steps[2])
+          let w = width / n
+          // The category lines, faint, so a bar's height reads as good, fair, ...
+          for s, i in take(steps, 4) {
+            if s < top {
+              line(0, 92 - s / top * 84, width, 92 - s / top * 84, stroke: alpha(tints[i + 1], 0.3), width: 1)
+            }
+          }
+          for v, i in aqis {
+            if v != null {
+              rect(i * w + 1, 92 - v / top * 84, max(w - 2, 1), max(v / top * 84, 1), radius: 2, fill: tints[count(steps, s => v > s)])
+            }
+            if i % 6 == 0 {
+              text(i == 0 ? "now" : fmtTime(hours[i], "HH:mm"), i * w + w / 2, 104, size: 10, align: center, color: muted)
+            }
+          }
+        }
+
+        Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+        Text { text: "pollutants now · µg/m³"; style: label; color: accent }
+        Grid {
+          columns: 3
+          gap: 8
+          for p in [["pm2.5", cur.pm2_5, 25], ["pm10", cur.pm10, 50], ["ozone", cur.ozone, 120], ["no₂", cur.nitrogen_dioxide, 40], ["uv index", cur.uv_index, 6]] {
+            Column {
+              gap: 0
+              padding: [10, 8]
+              border: 1
+              borderColor: alpha(muted, 0.3)
+              Text { text: p[0]; style: label; color: muted }
+              Text { text: p[1] == null ? "…" : round(p[1], 1); style: title; color: p[1] > p[2] ? orange : foreground }
+            }
+          }
+        }
+
+        Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+        Text { text: "pollen · next 24 hours"; style: label; color: accent }
+        if !hasPollen {
+          Text { text: "open-meteo only forecasts pollen in europe."; style: small; color: muted }
+        } else {
+          for p in pollen.sortBy(p => -(p.peak ?? 0)) key p.name {
+            Column {
+              gap: 2
+              PollenRow { p: p; size: 14 }
+              if p.level > 0 {
+                Row {
+                  gap: 6
+                  align: center
+                  Sparkline { values: p.values.map(v => v ?? 0); min: 0; max: max(p.peak ?? 0, 1); color: pollenTints[p.level]; area: true; height: 24; weight: 1 }
+                  Text { text: p.peak == null ? "" : "peak ${round(p.peak)}"; style: label; color: muted; width: 72; align: end }
+                }
+              }
+            }
+          }
+        }
+        Text { text: "data: copernicus atmosphere monitoring service via open-meteo.com (cc by 4.0)"; style: label; color: muted }
+      }
+    }
+  }
+}

@@ -1,0 +1,184 @@
+widget "planes overhead" {
+  meta { description: "Aircraft around you on a live radar, from the OpenSky Network, at your location or a city you type (place lookup: Open-Meteo, CC BY 4.0). Tap it for every flight's altitude, speed and distance"; version: "1.1.1"; license: "MIT"; category: "world"; owl: 5 }
+  size: 3x3
+  minSize: 2x2
+
+  source now = clock every 1s
+  // Omarchy Mobile's copy: the place from Open-Meteo's geocoding (open-meteo.com, CC BY 4.0) or the phone's location.
+  state city = "" persist
+  // The phone's temperature unit, "C" or "F", put in by the home screen; empty elsewhere. "F" also means miles.
+  state phoneUnit = ""
+  // The place: "lat,lon" (the phone's location, as the home screen puts it in) goes straight in;
+  // a name ("Town" or "Town, Region") is looked up with Open-Meteo's geocoding. Open-Meteo has no IP location.
+  let ll = match(trim(city), "^(-?[0-9.]+) *, *(-?[0-9.]+)$")
+  let town = trim(split(city, ",")[0])
+  let region = lower(trim(join(drop(split(city, ","), 1), ",")))
+  let named = ll == null && len(town) >= 2
+  // The town, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
+  let q = town.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+  source geo = http("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=${named ? q : ""}") every 24h timeout 10s json status
+  let results = named && geo != null && geo.ok ? geo.out.results ?? [] : []
+  // The first result whose region, country or country code matches what follows the comma; else the first.
+  let found = find(results, r => region != "" && contains([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], region)) ?? first(results)
+  let lat = ll != null ? num(ll[0]) : found != null ? found.latitude : null
+  let lon = ll != null ? num(ll[1]) : found != null ? found.longitude : null
+  let placeName = ll != null ? "your location" : found != null ? found.name : town
+  let imperial = phoneUnit != "" ? phoneUnit == "F" : found != null && ll == null && contains(["US", "LR", "MM"], found.country_code)
+  // 45 km, or 30 miles, in three rings.
+  let km = imperial ? 48.28 : 45
+  let range = imperial ? "30 mi" : "45 km"
+  // A box a little larger than the radar (0.5° is 55 km); longitude degrees shrink toward the poles.
+  let dLat = 0.5
+  let dLon = 0.5 / max(cos(rad(lat)), 0.2)
+  // Anonymous OpenSky allows 400 requests a day; this runs only while its page is on screen.
+  source sky = http("https://opensky-network.org/api/states/all?lamin=${fixed(lat - dLat, 3)}&lomin=${fixed(lon - dLon, 3)}&lamax=${fixed(lat + dLat, 3)}&lomax=${fixed(lon + dLon, 3)}") every 2m timeout 15s json status
+  // The first request goes out before the location is known; ask again once it is.
+  when lat != null { refresh() }
+  // And again when a new city moves it.
+  on lat { refresh() }
+
+  // OpenSky's state vectors: [icao24, callsign, country, time_position, last_contact, lon, lat,
+  // baro_altitude, on_ground, velocity, true_track, vertical_rate, sensors, geo_altitude, ...].
+  // Positions are carried forward along each plane's track, so the radar moves between requests.
+  let planes = (sky.ok ? sky.out.states ?? [] : [])
+    .filter(s => !s[8] && s[5] != null && s[6] != null)
+    .map(s => {
+      id: s[0],
+      call: trim(s[1] ?? "") == "" ? upper(s[0]) : trim(s[1]),
+      country: s[2],
+      alt: s[7] ?? s[13] ?? 0,
+      speed: s[9] ?? 0,
+      track: s[10] ?? 0,
+      climb: s[11] ?? 0,
+      x: (s[5] - lon) * 111.32 * cos(rad(lat)) + sin(rad(s[10] ?? 0)) * (s[9] ?? 0) * clamp(now - s[3], 0, 180) / 1000,
+      y: (s[6] - lat) * 110.57 + cos(rad(s[10] ?? 0)) * (s[9] ?? 0) * clamp(now - s[3], 0, 180) / 1000
+    })
+  let flights = planes.filter(p => p.x * p.x + p.y * p.y <= km * km).sortBy(p => p.x * p.x + p.y * p.y)
+  let nearest = first(flights)
+  let problem = ll == null && !named ? "set a city or turn on Location" : named && geo == null ? "locating…" : lat == null ? "city not found" : sky == null ? "listening…" : sky.code == 429 ? "opensky's daily limit is used up" : !sky.ok ? "opensky offline" : null
+
+  onTap: screen()
+
+  // Low planes are warm, cruising ones cool.
+  component Plane(alt, track, s = 6) {
+    Canvas {
+      size: s * 2 + 4
+      let c = s + 2
+      rotate(track, c, c) {
+        path([[c, c - s], [c + s * 0.7, c + s * 0.7], [c, c + s * 0.3], [c - s * 0.7, c + s * 0.7]], closed: true, fill: alt < 3000 ? orange : alt < 8000 ? yellow : cyan)
+      }
+    }
+  }
+
+  component Radar(list, labels = false) {
+    Canvas {
+      let cx = width / 2
+      let cy = height / 2
+      let r = min(width, height) / 2 - 2
+      let s = r / km
+      let p = max(r / 20, 3.5)
+      circle(cx, cy, r, fill: alpha(surface, 0.4), stroke: border, width: 1)
+      circle(cx, cy, r * 2 / 3, stroke: alpha(muted, 0.3), width: 1)
+      circle(cx, cy, r / 3, stroke: alpha(muted, 0.3), width: 1)
+      line(cx - r, cy, cx + r, cy, stroke: alpha(muted, 0.2), width: 1)
+      line(cx, cy - r, cx, cy + r, stroke: alpha(muted, 0.2), width: 1)
+      // The sweep, once every four seconds.
+      rotate(time * 90 % 360, cx, cy) {
+        arc(cx, cy, r, -45, 45, fill: alpha(accent, 0.12))
+        line(cx, cy, cx, cy - r, stroke: alpha(accent, 0.7), width: 1.5)
+      }
+      if labels {
+        text(imperial ? "10 mi" : "15 km", cx + 4, cy - r / 3 - 7, size: 10, color: muted)
+        text(imperial ? "20 mi" : "30 km", cx + 4, cy - r * 2 / 3 - 7, size: 10, color: muted)
+        text("N", cx, cy - r + 9, size: 10, align: center, color: muted)
+      }
+      for f in list {
+        rotate(f.track, cx + f.x * s, cy - f.y * s) {
+          let px = cx + f.x * s
+          let py = cy - f.y * s
+          path([[px, py - p], [px + p * 0.7, py + p * 0.7], [px, py + p * 0.3], [px - p * 0.7, py + p * 0.7]], closed: true, fill: f.alt < 3000 ? orange : f.alt < 8000 ? yellow : cyan)
+        }
+        if labels {
+          text(f.call, cx + f.x * s + p + 3, cy - f.y * s, size: 10, color: foreground)
+        }
+      }
+      circle(cx, cy, 3, fill: foreground)
+    }
+  }
+
+  Column {
+    gap: 4
+    Row {
+      Text { text: "planes overhead"; style: muted; weight: 1; maxLines: 1 }
+      Text { text: problem == null ? len(flights) : ""; style: muted; width: 32; align: end }
+    }
+    Box {
+      weight: 1
+      fill: width
+      Radar { list: flights; labels: cols >= 4 && rows >= 4; fill: true }
+      if problem != null {
+        Text { text: problem; style: small; color: muted; align: center }
+      }
+    }
+    if rows >= 3 {
+      Text {
+        text: problem != null ? "" : nearest == null ? "clear skies within ${range}" : "${nearest.call} · ${imperial ? "${round(sqrt(nearest.x * nearest.x + nearest.y * nearest.y) / 1.609)} mi" : "${round(sqrt(nearest.x * nearest.x + nearest.y * nearest.y))} km"} away"
+        style: small
+        maxLines: 1
+      }
+    }
+  }
+
+  screen {
+    title: "planes overhead"
+    Input {
+      text: city
+      placeholder: "city · empty = your location"
+      onSubmit: { city = trim(value); refresh() }
+    }
+    Column {
+      scroll: true
+      gap: 10
+      Radar { list: flights; labels: true; height: min(screenWidth - 32, screenHeight * 0.55); fill: width }
+      Text {
+        text: problem ?? "${len(flights)} ${len(flights) == 1 ? "flight" : "flights"} within ${range} of ${lower(placeName)}"
+        style: small
+        color: muted
+      }
+      Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+      for f in flights key f.id {
+        Row {
+          gap: 10
+          align: center
+          onTap: url("https://globe.adsbexchange.com/?icao=${f.id}")
+          Plane { alt: f.alt; track: f.track; s: 8 }
+          Column {
+            gap: 0
+            weight: 1
+            Text { text: f.call; font: mono; bold: true; maxLines: 1 }
+            Text { text: lower(f.country); style: small; color: muted; maxLines: 1 }
+          }
+          Column {
+            gap: 0
+            width: 96
+            Text { text: "${imperial ? "${round(f.alt * 3.281 / 100) * 100} ft" : "${round(f.alt / 10) * 10} m"} ${f.climb > 1 ? "↑" : f.climb < -1 ? "↓" : ""}"; style: small; align: end; maxLines: 1 }
+            Text { text: imperial ? "${round(f.speed * 2.237)} mph" : "${round(f.speed * 3.6)} km/h"; style: small; color: muted; align: end; maxLines: 1 }
+          }
+          Text {
+            text: imperial ? "${round(sqrt(f.x * f.x + f.y * f.y) / 1.609)} mi" : "${round(sqrt(f.x * f.x + f.y * f.y))} km"
+            style: small
+            color: accent
+            width: 48
+            align: end
+          }
+        }
+      }
+      Row {
+        gap: 8
+        align: center
+        Text { text: "data: the opensky network · place: open-meteo.com (cc by 4.0)"; style: label; color: muted; weight: 1; maxLines: 2 }
+        Button { text: "live map ↗"; color: muted; onTap: url("https://globe.adsbexchange.com/?lat=${lat}&lon=${lon}&zoom=9") }
+      }
+    }
+  }
+}

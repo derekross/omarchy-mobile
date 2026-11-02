@@ -1,0 +1,107 @@
+widget "sun and moon" {
+  meta { description: "Sunrise, sunset, daylight left and tonight's moon phase, from your location or a city you type (sun: Open-Meteo, CC BY 4.0; the moon is worked out from the date)"; version: "1.2.1"; license: "MIT"; category: "world"; owl: 5 }
+  size: 3x3
+  minSize: 3x3
+
+  // Omarchy Mobile's copy: sunrise and sunset from Open-Meteo (open-meteo.com, CC BY 4.0), with no commands.
+  // Open-Meteo has no moon phase, so the widget works it out from the date.
+  state city = "" persist
+  // The place: "lat,lon" (the phone's location, as the home screen puts it in) goes straight in;
+  // a name ("Town" or "Town, Region") is looked up with Open-Meteo's geocoding. Open-Meteo has no IP location.
+  let ll = match(trim(city), "^(-?[0-9.]+) *, *(-?[0-9.]+)$")
+  let town = trim(split(city, ",")[0])
+  let region = lower(trim(join(drop(split(city, ","), 1), ",")))
+  let named = ll == null && len(town) >= 2
+  // The town, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
+  let q = town.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+  source geo = http("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=${named ? q : ""}") every 24h timeout 10s json status
+  let results = named && geo != null && geo.ok ? geo.out.results ?? [] : []
+  // The first result whose region, country or country code matches what follows the comma; else the first.
+  let found = find(results, r => region != "" && contains([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], region)) ?? first(results)
+  let lat = ll != null ? round(num(ll[0]), 2) : found != null ? round(found.latitude, 2) : null
+  let lon = ll != null ? round(num(ll[1]), 2) : found != null ? round(found.longitude, 2) : null
+  // Today's and tomorrow's sunrise and sunset, in Unix time.
+  source sun = http("https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&forecast_days=2&timezone=auto&timeformat=unixtime") every 1h timeout 10s json status
+  // The first request goes out before a typed city is looked up; ask again once it is, and when the place changes.
+  let ask = lat == null ? "" : "${lat},${lon}"
+  on ask { refresh() }
+  let problem = ll == null && !named ? "set a city or turn on Location" : named && geo != null && geo.ok && found == null ? "city not found" : null
+  source now = clock every 60s
+  // The moon: days since a known new moon (2000-01-06 18:14 UTC), in a 29.53-day month.
+  let moonAge = ((now - 947182440) / 86400 % 29.530589 + 29.530589) % 29.530589
+  let phases = ["New Moon", "Waxing Crescent", "First Quarter", "Waxing Gibbous", "Full Moon", "Waning Gibbous", "Last Quarter", "Waning Crescent"]
+  let daily = sun != null && sun.ok && lat != null ? sun.out.daily : null
+  let sky = daily == null ? null : {
+    place: ll != null ? "your location" : found != null ? found.name : town,
+    rise: daily.sunrise[0],
+    set: daily.sunset[0],
+    next: daily.sunrise[1],
+    phase: phases[int(floor(moonAge / 29.530589 * 8 + 0.5)) % 8],
+    illum: round((1 - cos(moonAge / 29.530589 * 6.2831853)) / 2 * 100)
+  }
+  let day = now >= sky.rise && now < sky.set
+  let p = clamp((now - sky.rise) / (sky.set - sky.rise), 0, 1)
+  let waxing = contains(sky.phase, "Waxing") || contains(sky.phase, "First")
+
+  onTap: screen()
+
+  Column {
+    gap: 4
+    Row {
+      Text { text: "sun & moon"; style: muted; weight: 1 }
+      Text { text: sky.place; fontSize: 10; color: muted; maxLines: 1; width: 72; align: end }
+    }
+    if sky == null {
+      Text { text: problem ?? (sun == null || (named && geo == null) ? "…" : "offline"); style: small; color: muted; maxLines: 2 }
+      Spacer { weight: 1 }
+    } else {
+      // The day as an arc from sunrise (left) to sunset (right).
+      Canvas {
+        weight: 1
+        fill: width
+        let cx = width / 2
+        let cy = height - 4
+        let r = min(width / 2 - 8, height - 12)
+        let a = rad(-90 + 180 * p)
+        line(4, cy, width - 4, cy, stroke: border, width: 1)
+        arc(cx, cy, r, -90, 180, stroke: border, width: 2, cap: round)
+        if day { arc(cx, cy, r, -90, 180 * p, stroke: yellow, width: 3, cap: round) }
+        circle(cx + r * sin(a), cy - r * cos(a), day ? 7 : 5, fill: day ? yellow : muted)
+      }
+      Row {
+        Text { text: "↑ ${fmtTime(now < sky.set ? sky.rise : sky.next, "HH:mm")}"; fontSize: 12; weight: 1 }
+        Text { text: "↓ ${fmtTime(sky.set, "HH:mm")}"; fontSize: 12; width: 56; align: end }
+      }
+      Text {
+        text: now < sky.rise ? "sunrise in ${fmtDuration(sky.rise - now)}" : day ? "${fmtDuration(sky.set - now)} of daylight left" : "sunrise in ${fmtDuration(sky.next - now)}"
+        style: small; color: muted; maxLines: 1
+      }
+      Row {
+        align: center
+        // Lit part of the moon: the limb on one side, the terminator (an ellipse) on the other.
+        Canvas {
+          size: 22
+          let r = 10
+          let c = 11
+          let s = waxing ? 1 : -1
+          let f = num(sky.illum, 0) / 100
+          let ys = range(21).map(i => -r + 2 * r * i / 20)
+          circle(c, c, r, fill: surface, stroke: border, width: 1)
+          path(ys.map(y => [c + s * sqrt(max(r * r - y * y, 0)), c + y]) + reverse(ys).map(y => [c + s * sqrt(max(r * r - y * y, 0)) * (1 - 2 * f), c + y]), closed: true, fill: foreground)
+        }
+        Text { text: "${lower(sky.phase)} · ${sky.illum}%"; fontSize: 11; maxLines: 1; weight: 1 }
+      }
+    }
+  }
+
+  screen {
+    title: "sun and moon"
+    Input {
+      text: city
+      placeholder: "city · empty = your location"
+      onSubmit: { city = trim(value); refresh() }
+    }
+    Text { text: problem ?? (sky == null ? "…" : lower(sky.place)); style: small; color: muted }
+    Text { text: "sunrise and sunset: open-meteo.com (cc by 4.0) · the moon from the date"; style: label; color: muted }
+  }
+}

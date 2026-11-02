@@ -1,0 +1,314 @@
+widget "today" {
+  page: 1
+  order: 1
+  size: 3x3
+  minSize: 3x2
+  meta { description: "The date and the weather where you are, from your location or a city you type (weather: Open-Meteo, CC BY 4.0). Tap it for the next 24 hours, three days, wind, UV, sun and moon"; version: "1.1.1"; license: "MIT"; category: "world"; owl: 5 }
+
+  // Omarchy Mobile's copy: the weather from Open-Meteo (open-meteo.com, CC BY 4.0).
+  source now = clock every 1m
+  state city = "" persist
+  // The phone's temperature unit, "C" or "F", put in by the home screen; empty elsewhere.
+  state phoneUnit = ""
+  // The place: "lat,lon" (the phone's location, as the home screen puts it in) goes straight to the forecast;
+  // a name ("Town" or "Town, Region") is looked up with Open-Meteo's geocoding. Open-Meteo has no IP location.
+  let ll = match(trim(city), "^(-?[0-9.]+) *, *(-?[0-9.]+)$")
+  let town = trim(split(city, ",")[0])
+  let region = lower(trim(join(drop(split(city, ","), 1), ",")))
+  let named = ll == null && len(town) >= 2
+  // The town, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
+  let q = town.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+  source geo = http("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=${named ? q : ""}") every 24h timeout 10s json status
+  let results = named && geo != null && geo.ok ? geo.out.results ?? [] : []
+  // The first result whose region, country or country code matches what follows the comma; else the first.
+  let found = find(results, r => region != "" && contains([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], region)) ?? first(results)
+  let lat = ll != null ? round(num(ll[0]), 2) : found != null ? round(found.latitude, 2) : null
+  let lon = ll != null ? round(num(ll[1]), 2) : found != null ? round(found.longitude, 2) : null
+  let placeName = ll != null ? "your location" : found != null ? found.name : town
+  let countryName = found != null && ll == null ? found.country ?? "" : ""
+  let imperial = phoneUnit != "" ? phoneUnit == "F" : found != null && ll == null && contains(["US", "LR", "MM"], found.country_code)
+  let unit = imperial ? "F" : "C"
+  // One forecast request: now, 3 days of hours (for the next 24) and 3 days.
+  source wx = http("https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,is_day,weather_code,precipitation,pressure_msl,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation_probability,weather_code,is_day,uv_index,visibility&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_probability_max,precipitation_sum&forecast_days=3&timezone=auto&timeformat=unixtime&temperature_unit=${imperial ? "fahrenheit" : "celsius"}&wind_speed_unit=${imperial ? "mph" : "kmh"}&precipitation_unit=${imperial ? "inch" : "mm"}") every 30m timeout 10s json status
+  // The first forecast goes out before a typed city is looked up; ask again once it is, and when the place or unit changes.
+  let ask = lat == null ? "" : "${lat},${lon},${unit}"
+  on ask { refresh() }
+  let problem = ll == null && !named ? "set a city or turn on Location" : named && geo != null && geo.ok && found == null ? "city not found" : null
+  let om = wx != null && wx.ok && lat != null ? wx.out : null
+  let now0 = om.current
+  let hourly = om.hourly
+  let daily = om.daily
+  let at = max(count(hourly.time ?? [], t => t <= now) - 1, 0)
+  // Open-Meteo's WMO weather codes as the older codes weatherIcon() takes, and in the words the phone's weather service uses.
+  let wmoIcon = {"0": 113, "1": 116, "2": 116, "3": 122, "45": 248, "48": 248, "51": 266, "53": 266, "55": 266, "56": 281, "57": 281, "61": 296, "63": 302, "65": 308, "66": 311, "67": 314, "71": 329, "73": 332, "75": 338, "77": 338, "80": 353, "81": 356, "82": 359, "85": 368, "86": 371, "95": 389, "96": 389, "99": 389}
+  let wmoText = {"0": "clear", "1": "mostly clear", "2": "partly cloudy", "3": "overcast", "45": "fog", "48": "fog", "51": "drizzle", "53": "drizzle", "55": "drizzle", "56": "drizzle", "57": "drizzle", "61": "rain", "63": "rain", "65": "rain", "66": "rain", "67": "rain", "71": "snow", "73": "snow", "75": "snow", "77": "snow", "80": "rain", "81": "rain", "82": "rain", "85": "snow", "86": "snow", "95": "thunderstorm", "96": "thunderstorm", "99": "thunderstorm"}
+  let compass = ["n", "nne", "ne", "ene", "e", "ese", "se", "sse", "s", "ssw", "sw", "wsw", "w", "wnw", "nw", "nnw"]
+  // The current reading, in the shape the tile and screen below draw.
+  let cur = now0 == null ? null : {
+    temp: round(now0.temperature_2m),
+    feels: round(now0.apparent_temperature),
+    code: get(wmoIcon, str(now0.weather_code), 119),
+    desc: get(wmoText, str(now0.weather_code), ""),
+    humidity: round(now0.relative_humidity_2m),
+    wind: "${round(now0.wind_speed_10m)} ${imperial ? "mph" : "km/h"}",
+    windDir: compass[int(round(num(now0.wind_direction_10m, 0) / 22.5)) % 16],
+    precip: "${round(num(now0.precipitation, 0), imperial ? 2 : 1)} ${imperial ? "in" : "mm"}",
+    pressure: imperial ? "${round(num(now0.pressure_msl, 0) * 0.02953, 2)} inHg" : "${round(now0.pressure_msl)} hPa",
+    visibility: imperial ? "${round(num(hourly.visibility[at], 0) / 1609.34)} mi" : "${round(num(hourly.visibility[at], 0) / 1000)} km",
+    uv: round(num(hourly.uv_index[at], 0))
+  }
+  let night = now0 != null && now0.is_day == 0
+  // The three days: date, icon, low and high, rain chance.
+  let days = range(len(daily.time ?? [])).map(i => {
+    date: daily.time[i],
+    code: get(wmoIcon, str(daily.weather_code[i]), 119),
+    lo: round(daily.temperature_2m_min[i]),
+    hi: round(daily.temperature_2m_max[i]),
+    rain: round(num(daily.precipitation_probability_max[i], 0))
+  })
+  let day = first(days)
+  // Clear or partly cloudy gets a warm sun or a cool moon; everything else stays neutral.
+  let sky = cur != null && contains([113, 116], cur.code) ? (night ? blue : yellow) : foreground
+  // Sunrise and sunset, Unix time from Open-Meteo, shown in the phone's clock.
+  let sun = om == null ? ["", ""] : [fmtTime(daily.sunrise[0], "HH:mm"), fmtTime(daily.sunset[0], "HH:mm")]
+  let sunHours = sun.map(s => num(sub(s, 0, 2)))
+  let hourNow = num(fmtTime(now, "H"))
+  // The next 24 hours in 3-hour steps, from the current hour on.
+  let steps = range(8).map(k => at + k * 3).filter(i => i < len(hourly.time ?? [])).map(i => {
+    hr: hourNow + (hourly.time[i] - hourly.time[at]) / 3600,
+    t: round(hourly.temperature_2m[i]),
+    rain: round(num(hourly.precipitation_probability[i], 0)),
+    code: get(wmoIcon, str(hourly.weather_code[i]), 119),
+    night: hourly.is_day[i] == 0
+  })
+  // The three days' range, so their bars share one scale.
+  let lowest = min(days.map(d => d.lo))
+  let highest = max(days.map(d => d.hi))
+  // The moon from the date: Open-Meteo has no moon phase. Days since a known new moon (2000-01-06 18:14 UTC), in a 29.53-day month.
+  let moonAge = ((now - 947182440) / 86400 % 29.530589 + 29.530589) % 29.530589
+  let moonLit = round((1 - cos(moonAge / 29.530589 * 6.2831853)) / 2 * 100)
+  let moonPhase = ["New Moon", "Waxing Crescent", "First Quarter", "Waxing Gibbous", "Full Moon", "Waning Gibbous", "Last Quarter", "Waning Crescent"][int(floor(moonAge / 29.530589 * 8 + 0.5)) % 8]
+  let moonIcons = {
+    "New Moon": "", "Waxing Crescent": "", "First Quarter": "", "Waxing Gibbous": "",
+    "Full Moon": "", "Waning Gibbous": "", "Last Quarter": "", "Waning Crescent": ""
+  }
+  let uv = cur.uv
+
+  onTap: screen()
+
+  component Rule() {
+    Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+  }
+
+  component Stat(glyph, label, value, tint = foreground) {
+    Row {
+      gap: 10
+      align: center
+      padding: [10, 8]
+      border: 1
+      borderColor: alpha(muted, 0.3)
+      Text { text: glyph; font: icon; fontSize: 22; color: tint; width: 28; align: center }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: label; style: label; color: muted; maxLines: 1 }
+        Text { text: value; style: body; maxLines: 1 }
+      }
+    }
+  }
+
+  Column {
+    gap: 0
+    Row {
+      gap: 10
+      align: center
+      Text { text: fmtTime(now, "d"); style: huge; width: 60 }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; maxLines: 1 }
+        Text { text: lower(fmtTime(now, "MMMM yyyy")); style: small; color: muted; maxLines: 1 }
+      }
+    }
+    Spacer { weight: 1 }
+    Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+    Spacer { height: 8 }
+    if cur != null {
+      Row {
+        gap: 6
+        align: bottom
+        Text { text: weatherIcon(cur.code, night); font: icon; fontSize: 32; color: sky; width: 26; padding: [0, 0, 0, 3] }
+        Text { text: "${cur.temp}°"; fontSize: 28; color: cyan; width: 68; maxLines: 1 }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: cur.desc; style: small; align: end; maxLines: 1 }
+          Text { text: "↑${day.hi}° ↓${day.lo}°"; style: small; color: muted; align: end; maxLines: 1; padding: [0, 0, 0, 5] }
+        }
+      }
+      Text { text: "feels ${cur.feels}° · ${lower(placeName)}"; style: small; color: muted; maxLines: 1 }
+      Spacer { weight: 1 }
+      Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+      Spacer { height: 8 }
+      // The next two days (icon from the noon reading), then sunrise and sunset.
+      Row {
+        gap: 4
+        align: center
+        for d, i in drop(days, 1) key d.date {
+          Column {
+            gap: 0
+            weight: 1
+            align: center
+            Text { text: lower(fmtTime(now + 86400 * (i + 1), "EEE")); style: label; color: muted; align: center }
+            Text { text: weatherIcon(d.code, false); font: icon; fontSize: 18; align: center }
+            Text { text: "${d.hi}° ${d.lo}°"; style: small; align: center; maxLines: 1 }
+          }
+        }
+        Column {
+          gap: 4
+          weight: 1.2
+          Row {
+            gap: 4
+            align: center
+            Text { text: ""; font: icon; fontSize: 14; color: yellow; width: 20 }
+            Text { text: sun[0]; style: small; maxLines: 1; weight: 1 }
+          }
+          Row {
+            gap: 4
+            align: center
+            Text { text: ""; font: icon; fontSize: 14; color: orange; width: 20 }
+            Text { text: sun[1]; style: small; maxLines: 1; weight: 1 }
+          }
+        }
+      }
+    } else {
+      Text { text: problem ?? (wx == null || (named && geo == null) ? "weather…" : "weather offline"); style: small; color: muted; maxLines: 2 }
+    }
+  }
+
+  screen {
+    title: "weather"
+    Input {
+      text: city
+      placeholder: "city · empty = your location"
+      onSubmit: { city = trim(value); refresh() }
+    }
+    if cur == null {
+      Text { text: problem ?? (wx == null || (named && geo == null) ? "weather…" : "weather offline"); style: body; color: muted }
+    } else {
+      Column {
+        scroll: true
+        gap: 14
+        // Now.
+        Row {
+          gap: 16
+          align: center
+          Text { text: weatherIcon(cur.code, night); font: icon; fontSize: 64; color: sky; width: 80; align: center }
+          Column {
+            gap: 0
+            weight: 1
+            Text { text: "${cur.temp}°${unit}"; fontSize: 44; color: cyan; maxLines: 1 }
+            Text { text: cur.desc; style: body; maxLines: 2 }
+          }
+        }
+        Text {
+          text: "feels ${cur.feels}° · ↑${day.hi}° ↓${day.lo}° · ${lower(placeName)}${countryName != "" ? ", " + lower(countryName) : ""}"
+          style: small
+          color: muted
+        }
+        Rule { }
+        Grid {
+          columns: 2
+          gap: 8
+          Stat { glyph: ""; label: "wind ${cur.windDir}"; value: cur.wind; tint: cyan }
+          Stat { glyph: ""; label: "humidity"; value: "${cur.humidity}%"; tint: blue }
+          Stat { glyph: ""; label: "rain today"; value: "${day.rain}% · ${cur.precip}"; tint: blue }
+          Stat { glyph: ""; label: "uv index"; value: "${uv} ${uv >= 8 ? "very high" : uv >= 6 ? "high" : uv >= 3 ? "moderate" : "low"}"; tint: uv >= 6 ? red : uv >= 3 ? yellow : green }
+          Stat { glyph: ""; label: "pressure"; value: cur.pressure }
+          Stat { glyph: ""; label: "visibility"; value: cur.visibility }
+        }
+        Rule { }
+        // The next 24 hours: time, icon and rain chance per step, with the temperature curve under them.
+        Text { text: "next 24 hours"; style: label; color: accent }
+        Column {
+          gap: 4
+          Row {
+            gap: 0
+            for s in steps key s.hr {
+              Column {
+                gap: 2
+                weight: 1
+                align: center
+                Text { text: s.hr == hourNow ? "now" : pad(s.hr % 24, 2, "0"); style: label; color: muted; align: center }
+                Text { text: weatherIcon(s.code, s.night); font: icon; fontSize: 20; align: center }
+              }
+            }
+          }
+          Canvas {
+            height: 84
+            fill: width
+            let n = max(len(steps), 1)
+            let temps = steps.map(s => s.t)
+            let lo = min(temps)
+            let hi = max(temps)
+            let ys = temps.map(t => 22 + (hi - t) / max(hi - lo, 1) * 26)
+            let xs = range(n).map(i => (i + 0.5) * width / n)
+            path(range(n).map(i => [xs[i], ys[i]]), stroke: accent, width: 2)
+            for s, i in steps {
+              circle(xs[i], ys[i], 3, fill: accent)
+              text("${s.t}°", xs[i], ys[i] - 13, size: 12, align: center, color: foreground)
+              rect(xs[i] - 10, height - 12, 20, 4, radius: 2, fill: alpha(muted, 0.2))
+              rect(xs[i] - 10, height - 12, 20 * s.rain / 100, 4, radius: 2, fill: blue)
+              text("${s.rain}%", xs[i], height - 24, size: 10, align: center, color: s.rain >= 30 ? blue : muted)
+            }
+          }
+        }
+        Rule { }
+        // Three days: icon, rain chance and the day's low to high on a shared scale.
+        Text { text: "3 days"; style: label; color: accent }
+        for d, i in days key d.date {
+          let lo = d.lo
+          let hi = d.hi
+          Row {
+            gap: 8
+            align: center
+            Text { text: i == 0 ? "today" : lower(fmtTime(now + 86400 * i, "EEE")); style: body; width: 52; maxLines: 1 }
+            Text { text: weatherIcon(d.code, false); font: icon; fontSize: 20; width: 26; align: center }
+            Text { text: "${d.rain}%"; style: small; color: blue; width: 40; align: end; maxLines: 1 }
+            Text { text: "${lo}°"; style: small; color: muted; width: 36; align: end; maxLines: 1 }
+            Canvas {
+              height: 6
+              weight: 1
+              let span = max(highest - lowest, 1)
+              let x0 = (lo - lowest) / span * width
+              let x1 = (hi - lowest) / span * width
+              rect(0, 0, width, height, radius: 3, fill: alpha(muted, 0.2))
+              rect(x0, 0, max(x1 - x0, 6), height, radius: 3, fill: linear(0, 0, width, 0, [cyan, orange]))
+            }
+            Text { text: "${hi}°"; style: small; width: 36; maxLines: 1 }
+          }
+        }
+        Rule { }
+        // Sun and moon.
+        Row {
+          gap: 8
+          Stat { glyph: ""; label: "sunrise"; value: sun[0]; tint: yellow; weight: 1 }
+          Stat { glyph: ""; label: "sunset"; value: sun[1]; tint: orange; weight: 1 }
+        }
+        Stat {
+          glyph: get(moonIcons, moonPhase, "")
+          label: "moon"
+          value: "${lower(moonPhase)} · ${moonLit}% lit"
+          tint: foreground
+        }
+        // The source, as Open-Meteo's terms ask, and yr.no (Norwegian Meteorological Institute): ad-free and worldwide, opened at the same coordinates.
+        Row {
+          justify: end
+          align: center
+          Text { text: "weather: open-meteo.com (cc by 4.0) · moon from the date"; style: label; color: muted; weight: 1; maxLines: 2 }
+          Button { text: "open yr.no ↗"; color: muted; onTap: url("https://www.yr.no/en/forecast/daily-table/${lat},${lon}") }
+        }
+      }
+    }
+  }
+}
