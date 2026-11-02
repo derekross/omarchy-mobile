@@ -94,6 +94,15 @@ if [[ ${CORRUPT:-0} == 1 && $* == dd\ * ]]; then
   bash -c "$*" | { printf 'X'; tail -c +2; }
   exit
 fi
+# FAIL_DD=N: the Nth dd sends half its chunk and exits 255, as the USB link
+# did on the 7 Pro; FAIL_DD=all: every dd does
+if [[ -n ${FAIL_DD:-} && $* == dd\ * ]]; then
+  echo x >> "$PHONE_LOG.dds"
+  if [[ $FAIL_DD == all || $(wc -l < "$PHONE_LOG.dds") == "$FAIL_DD" ]]; then
+    bash -c "$*" | head -c 300
+    exit 255
+  fi
+fi
 if [[ -n ${CHANGE_AFTER:-} && $* == sha256sum\ * ]]; then
   bash -c "$*"
   echo x >> "$PHONE_LOG.sums"
@@ -106,6 +115,9 @@ exec bash -c "$*"
 EOF
 chmod +x "$t/phone-ssh"
 export PHONE_SSH=$t/phone-ssh NV_PHONE_ROOT=$P PHONE_LOG=$t/phone.log
+# 1 KiB chunks, so every stand-in partition (1.5-4.5 KiB) takes several,
+# the last one short; no waiting between tries
+export NV_CHUNK_BS=512 NV_CHUNK_BLOCKS=2 NV_RETRY_DELAY=0
 make_phone
 before=$(tree_state)
 untouched() {
@@ -140,7 +152,8 @@ grep -c 'verified against the phone' <<<"$out" >/dev/null || fail "each copy is 
 # Each partition read with dd and read again with sha256sum on the phone
 for p in $parts; do
   d=$(dev_of "$p")
-  grep -cx "dd if=$P/dev/$d bs=1M status=none" "$PHONE_LOG" >/dev/null || fail "$p is read with dd from its device"
+  grep -cx "dd if=$P/dev/$d bs=512 skip=0 count=2 iflag=fullblock status=none" "$PHONE_LOG" >/dev/null || fail "$p is read with dd from its device, in chunks"
+  grep -cx "dd if=$P/dev/$d bs=512 skip=2 count=2 iflag=fullblock status=none" "$PHONE_LOG" >/dev/null || fail "$p's second chunk is read"
   grep -cx "sha256sum < $P/dev/$d" "$PHONE_LOG" >/dev/null || fail "$p is read again on the phone"
 done
 if grep -c 'userdata\b' <(grep -v PARTNAME "$PHONE_LOG" | grep -E 'dd|sha256') >/dev/null; then
@@ -212,9 +225,29 @@ pass "refuses before copying: a partition missing, writable, mounted or found tw
 : > "$PHONE_LOG"
 if out=$(CORRUPT=1 "$r/tools/nv-backup" -d testdev "$t/corrupt" 2>&1); then fail "refuses a copy that differs from the phone"; fi
 grep -c 'differs from the phone' <<<"$out" >/dev/null || fail "says the copy differs: $out"
-[[ ! -e $t/corrupt/SHA256SUMS ]] || fail "no SHA256SUMS for a backup that didn't verify"
+[[ ! -e $t/corrupt ]] || fail "a failed backup removes the directory it made"
 untouched "a copy that differs"
 pass "a copy that differs from the phone stops the backup, with no SHA256SUMS"
+
+# --- A chunk read that fails -------------------------------------------------------
+rm -f "$PHONE_LOG.dds"; : > "$PHONE_LOG"
+out=$(FAIL_DD=5 "$r/tools/nv-backup" -d testdev "$t/flaky" 2>&1) || fail "a chunk that fails once is read again: $out"
+(cd "$t/flaky" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the backup after a failed chunk checks"
+for p in $parts; do cmp -s "$t/flaky/$p.img" "$P/dev/$(dev_of "$p")" || fail "$p.img is the phone's $p after a failed chunk"; done
+grep -c 'chunk read(s) failed and were read again' <<<"$out" >/dev/null || fail "the run says a chunk was read again: $out"
+[[ ! -e $t/flaky/.chunk ]] || fail "no chunk file is left"
+untouched "a failed chunk"
+rm -f "$PHONE_LOG.dds"
+if out=$(FAIL_DD=all "$r/tools/nv-backup" -d testdev "$t/dead" 2>&1); then fail "refuses when every chunk read fails"; fi
+grep -c 'failed 5 times' <<<"$out" >/dev/null || fail "says the reads failed 5 times: $out"
+[[ ! -e $t/dead ]] || fail "a failed backup leaves no directory and no SHA256SUMS"
+mkdir "$t/empty"
+rm -f "$PHONE_LOG.dds"
+if FAIL_DD=all "$r/tools/nv-backup" -d testdev "$t/empty" >/dev/null 2>&1; then fail "refuses when every chunk read fails (given directory)"; fi
+[[ -d $t/empty && -z $(ls -A "$t/empty") ]] || fail "a failed backup into a given empty directory leaves it empty"
+out=$("$r/tools/nv-backup" -d testdev "$t/empty" 2>&1) || fail "running again after a failure works: $out"
+[[ $(wc -l < "$t/empty/SHA256SUMS") == 7 ]] || fail "the rerun copies all seven"
+pass "a chunk that fails once is read again and the backup verifies; failing every time refuses, leaves nothing, and a rerun works"
 
 # --- A partition that changes during the copy --------------------------------------
 # After the seventh (last) verifying read, one partition turns writable,

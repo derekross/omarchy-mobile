@@ -157,9 +157,9 @@ B=~/omamobile-backup/nv-backup-$(date +%Y%m%d-%H%M)
 bash tools/nv-backup "$B"
 ```
 
-It first finds the seven partitions (`efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`, `modem_b` and `devinfo`) and checks that each one is read-only and unused; if one isn't, it stops before copying anything. Then it copies each one (about 430 MB in all), reads it again on the phone and compares, and writes the checksums to `SHA256SUMS`. It never writes anything to the phone. The folder and its files are readable only by you.
+It first finds the seven partitions (`efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`, `modem_b` and `devinfo`) and checks that each one is read-only and unused; if one isn't, it stops before copying anything. Then it copies each one (about 430 MB in all) in small pieces, reading a piece again if the USB connection drops it, reads the whole partition again on the phone and compares, and writes the checksums to `SHA256SUMS`. It never writes anything to the phone. The folder and its files are readable only by you.
 
-You should see `verified against the phone` for each partition, then `Backup done` and a reminder that the backup is private. **If it stops with an error about a partition (not found, writable or mounted), don't work around it: ask in an issue.** If a copy didn't match the phone, delete the folder and run it again; if that keeps happening, ask. Remember the folder's name (`echo $B` prints it): the next step needs it.
+You should see `verified against the phone` for each partition, then `Backup done` and a reminder that the backup is private. **If it stops with an error about a partition (not found, writable or mounted), don't work around it: ask in an issue.** If it stops for any other reason (a USB hiccup, a copy that didn't match the phone), it removes what it had copied, so running the same command again is safe: it only ever reads the phone. If that keeps happening, ask. Remember the folder's name (`echo $B` prints it): the next step needs it.
 
 Later, before anything that touches the radio, `bash tools/nv-backup --check "$B"` compares the phone with the backup again, read-only: it prints `SAME` for each partition (`devinfo` may differ: it holds the bootloader's slot flags, which change after a flash, a fallback to slot A or the boot-success mark).
 

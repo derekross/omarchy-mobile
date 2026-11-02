@@ -28,15 +28,21 @@
 #     storage guard holds) and is not mounted;
 #  3. copies each with dd from the read-only block device (dd opens its
 #     input read-only; nothing on the phone is opened for writing, and
-#     nothing there is written), checks the copy's size, then reads the
-#     partition again on the phone and compares that SHA-256 with the copy's;
+#     nothing there is written), in 8 MiB chunks over one shared SSH
+#     connection: one long stream over the USB link died partway on the 7 Pro
+#     (ssh exit 255), so each chunk's size is checked and a failed chunk is
+#     read again, up to 5 times, on a new connection. Then it checks the
+#     copy's size, reads the whole partition again on the phone and compares
+#     that SHA-256 with the copy's;
 #  4. finds the partitions again and refuses a backup if anything changed
 #     meanwhile (a partition writable, mounted or moved);
 #  5. writes SHA256SUMS ("<sha256>  NAME.img", the format tools/phone-provision
 #     --nv-backup reads), partitions.txt and NV-BACKUP (codename, date, which
 #     partitions are checked), the directory mode 700 and every file 600.
-# DIR must not exist yet, or be empty. The backup holds the phone's IMEI,
-# serial numbers and calibration: keep it, never share it.
+# DIR must not exist yet, or be empty. A run that fails removes what it
+# wrote into DIR (and DIR, if it made it), so running it again is safe.
+# The backup holds the phone's IMEI, serial numbers and calibration: keep
+# it, never share it.
 #
 # --check DIR re-verifies a backup later (the AGENTS.md checksum check):
 # the local copies against SHA256SUMS (those present), then every NV_PARTS
@@ -46,9 +52,12 @@
 # modem_userdata): take a fresh backup into a new directory and keep both.
 #
 # Test seams: PHONE_SSH, the command that runs a shell command on the phone
-# (default tools/phone-ssh), and NV_PHONE_ROOT, a directory prefixed to every
-# path read on the phone (default none; a fake /sys, /proc and /dev tree in
-# tests, whose stand-in partitions are regular files).
+# (default tools/phone-ssh, with OMAMOBILE_SSH_SHARE=1 unless set), and
+# NV_PHONE_ROOT, a directory prefixed to every path read on the phone
+# (default none; a fake /sys, /proc and /dev tree in tests, whose stand-in
+# partitions are regular files); NV_CHUNK_BS and NV_CHUNK_BLOCKS, dd's block
+# size and blocks per chunk (default 1048576 and 8); NV_RETRY_DELAY, seconds
+# between tries (default 2).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
@@ -76,9 +85,20 @@ done
 PHONE_SSH=${PHONE_SSH:-}
 R=${NV_PHONE_ROOT:-}
 [[ -z $R || $R =~ ^/[A-Za-z0-9_./-]+$ ]] || die "NV_PHONE_ROOT must be an absolute path of letters, digits and _ . / -"
+# One shared connection (ControlMaster) for the many chunk reads, so a key
+# that needs a touch asks once; a failed read drops it (phone_reset) and the
+# next try opens a new one.
+[[ -n $PHONE_SSH ]] || export OMAMOBILE_SSH_SHARE=${OMAMOBILE_SSH_SHARE:-1}
 phone() {
   if [[ -n $PHONE_SSH ]]; then "$PHONE_SSH" "$@"; else bash "$ROOT/tools/phone-ssh" "$@"; fi
 }
+phone_reset() {
+  [[ -n $PHONE_SSH ]] || bash "$ROOT/tools/phone-ssh" --stop >/dev/null 2>&1 || true
+}
+chunk_bs=${NV_CHUNK_BS:-1048576} chunk_blocks=${NV_CHUNK_BLOCKS:-8} retry_delay=${NV_RETRY_DELAY:-2} tries=5
+[[ $chunk_bs =~ ^[1-9][0-9]*$ && $((chunk_bs % 512)) == 0 && $chunk_blocks =~ ^[1-9][0-9]*$ ]] ||
+  die "NV_CHUNK_BS is a multiple of 512 and NV_CHUNK_BLOCKS a positive number"
+[[ $retry_delay =~ ^[0-9]+$ ]] || die "NV_RETRY_DELAY is a number of seconds"
 
 # --- The descriptor: data, never sourced (docs/RELEASES.md section 3) --------
 if [[ -f $ROOT/device.conf && ! -d $ROOT/device ]]; then
@@ -167,7 +187,7 @@ check_probe() {
   done
   if ((${#bad[@]})); then
     printf '    %s\n' "${bad[@]}" >&2
-    die "not every partition is found, read-only and unmounted; nothing was copied. Don't work around this: ask in an issue"
+    die "not every partition is found, read-only and unmounted; nothing is kept. Don't work around this: ask in an issue"
   fi
 }
 
@@ -178,7 +198,17 @@ for p in "${parts[@]}"; do
   note "$p: /dev/${DEV[$p]}, read-only, not mounted, $(( (SIZE[$p] + 1048575) / 1048576 )) MiB"
 done
 
-phone_sha() { phone "sha256sum < $R/dev/$1" | cut -d' ' -f1; }
+# The phone's own SHA-256 of a whole partition, read on the phone (small
+# output; retried like a chunk)
+phone_sha() {
+  local n out
+  for ((n = 1; n <= tries; n++)); do
+    out=$(phone "sha256sum < $R/dev/$1" | cut -d' ' -f1) || out=""
+    [[ $out =~ ^[0-9a-f]{64}$ ]] && { echo "$out"; return 0; }
+    phone_reset; sleep "$retry_delay"
+  done
+  return 1
+}
 
 # --- --check ---------------------------------------------------------------------
 if [[ $mode == check ]]; then
@@ -224,38 +254,68 @@ fi
 # --- A new backup ----------------------------------------------------------------
 if [[ -e $dir ]]; then
   [[ -d $dir && -z $(ls -A -- "$dir") ]] || die "$dir exists and isn't empty: give a new directory (an old backup is never overwritten)"
+  existed=1
 else
   mkdir -p -- "$(dirname -- "$dir")"
   mkdir -m 700 -- "$dir"
+  existed=0
 fi
 chmod 700 -- "$dir"
 umask 077
+# A failed run removes only what it wrote (and the directory, if it made
+# it), so running it again with the same DIR is safe
+made_dir=$((1 - existed))
+written=()
+cleanup_failed() {
+  local f
+  for f in "${written[@]}"; do rm -f -- "$f"; done
+  ((made_dir == 0)) || rmdir -- "$dir" 2>/dev/null || true
+}
+trap 'rc=$?; ((rc == 0)) || cleanup_failed' EXIT
 total=0
 for p in "${parts[@]}"; do total=$((total + SIZE[$p])); done
 say "Copying ${#parts[@]} partitions ($(( (total + 1048575) / 1048576 )) MiB) into $dir"
 sums=()
 for p in "${parts[@]}"; do
-  d=${DEV[$p]} img=$dir/$p.img
-  # dd opens if= read-only; the copy streams to this computer
-  phone "dd if=$R/dev/$d bs=1M status=none" > "$img" || die "copying $p failed; $dir is incomplete: remove it and run again"
+  d=${DEV[$p]} img=$dir/$p.img part=$dir/.chunk
+  written+=("$img" "$part")
+  : > "$img"
+  chunk=$((chunk_bs * chunk_blocks)) size=${SIZE[$p]} retried=0
+  for ((off = 0; off < size; off += chunk)); do
+    want=$((size - off < chunk ? size - off : chunk))
+    for ((n = 1; ; n++)); do
+      # dd opens if= read-only; one chunk streams to this computer
+      if phone "dd if=$R/dev/$d bs=$chunk_bs skip=$((off / chunk_bs)) count=$chunk_blocks iflag=fullblock status=none" > "$part" &&
+         [[ $(stat -c %s -- "$part") == "$want" ]]; then
+        break
+      fi
+      ((n < tries)) || die "reading $p at byte $off failed $tries times; nothing is kept. Check the USB cable and run again; if it keeps happening, ask"
+      retried=$((retried + 1))
+      phone_reset; sleep "$retry_delay"
+    done
+    cat -- "$part" >> "$img"
+  done
+  rm -f -- "$part"
+  ((retried == 0)) || note "$p: $retried chunk read(s) failed and were read again"
   got=$(stat -c %s -- "$img")
-  [[ $got == "${SIZE[$p]}" ]] || die "$p.img is $got bytes, the partition ${SIZE[$p]}: remove $dir and run again"
+  [[ $got == "$size" ]] || die "$p.img is $got bytes, the partition $size; nothing is kept: run again"
   copy=$(sha256sum < "$img" | cut -d' ' -f1)
-  on_phone=$(phone_sha "$d") || on_phone=""
-  [[ $on_phone == "$copy" ]] || die "$p.img differs from the phone's $p (read again on the phone): remove $dir and run again; if it keeps happening, ask"
+  on_phone=$(phone_sha "$d") || die "can't read $p's SHA-256 on the phone; nothing is kept: run again"
+  [[ $on_phone == "$copy" ]] || die "$p.img differs from the phone's $p (read again on the phone); nothing is kept: run again; if it keeps happening, ask"
   sums+=("$copy  $p.img")
   note "$p.img: copied, verified against the phone"
 done
 
 # The same partitions, still read-only and unmounted, after the copy
-again=$(probe) || die "can't reach the phone after the copy; $dir is incomplete: remove it and run again"
+again=$(probe) || die "can't reach the phone after the copy; nothing is kept: run again"
 declare -A before=()
 for p in "${parts[@]}"; do before[$p]=${DEV[$p]}; done
 check_probe "$again"
 for p in "${parts[@]}"; do
-  [[ ${DEV[$p]} == "${before[$p]}" ]] || die "$p moved from /dev/${before[$p]} to /dev/${DEV[$p]} during the copy: remove $dir and run again"
+  [[ ${DEV[$p]} == "${before[$p]}" ]] || die "$p moved from /dev/${before[$p]} to /dev/${DEV[$p]} during the copy; nothing is kept: run again"
 done
 
+written+=("$dir/SHA256SUMS" "$dir/partitions.txt" "$dir/NV-BACKUP")
 printf '%s\n' "${sums[@]}" > "$dir/SHA256SUMS"
 {
   for p in "${parts[@]}"; do echo "$p ${DEV[$p]} ro=1 mounted=0 ${SIZE[$p]}"; done
