@@ -40,9 +40,9 @@
 # a later reinstall counts too) has no backup to restore from, so
 # --nv-backup DIR is required, as on raven:
 # the owner's read-only backup of the modem's partitions, taken and stored
-# off the repository by the owner (device/cheetah/REINSTALL-RUNBOOK.md
-# section 4a). Its SHA256SUMS must hold one "<sha256>  NAME.img" line for
-# each of modem_a, modem_b, efs, efs_backup, modem_userdata and persist;
+# off the repository by the owner with tools/nv-backup (docs/INSTALL.md
+# step 6; device/cheetah/REINSTALL-RUNBOOK.md section 4a). Its SHA256SUMS
+# must hold one "<sha256>  NAME.img" line for each of modem_a, modem_b, efs, efs_backup, modem_userdata and persist;
 # those six lines become /etc/omamobile/modem-nv.sha256. The board id is
 # androidboot.cdt_hwid in the phone's /proc/bootconfig (Android's init sets
 # ro.boot.cdt_hwid from it), read and written on the phone into
@@ -181,7 +181,7 @@ first_install=0
 nv_images=(modem_a modem_b efs efs_backup modem_userdata persist)
 if [[ $device == cheetah && ! -f $backup/phone-config.tar ]]; then
   [[ -n $nv_backup ]] ||
-    die "no $backup/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions and give it with --nv-backup DIR (device/cheetah/REINSTALL-RUNBOOK.md section 4a)"
+    die "no $backup/phone-config.tar. Without one (a first install, or a reinstall with no such backup), take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6) and give it with --nv-backup DIR"
   first_install=1
   unsupported=()
   ((fingerprint)) && unsupported+=(--fingerprint)

@@ -299,6 +299,16 @@ read-only. Nothing here writes to the phone. A section 4a backup from an
 earlier install will do instead while the phone's partitions still match
 it: V3's commands for this case, with `B` set to that backup, print `SAME`.
 
+`tools/nv-backup "$B"` (also in the release bundle's `tools/`) does N1 and
+N2 in one read-only run, with the partitions from the descriptor's
+`NV_PARTS` and `NV_BACKUP_EXTRA`: it stops before copying on any `none`,
+`ro=0`, mount or duplicate `PARTNAME`, copies with `dd`, compares each copy
+with a second read on the phone, and writes `SHA256SUMS`, `partitions.txt`
+and `NV-BACKUP` (directory 700, files 600). `tools/nv-backup --check "$B"`
+is the later check against the phone (`devinfo` may differ: the
+boot-success marker writes its slot flags). The blocks below are the same
+steps by hand.
+
 ### N1. Find the partitions, read-only and unmounted (phone, read-only; risk none)
 
 ```sh
