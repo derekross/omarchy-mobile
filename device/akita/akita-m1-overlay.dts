@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Empty board overlay for the Pixel 8a bootloader (ABL).
+ *
+ * ABL picks a dtbo entry by board_id/board_rev and applies it on top of
+ * our base DTB. The stock overlay references Google labels that do not
+ * exist in the mainline DTB, so we ship one that changes nothing.
+ * board_id/board_rev are the entry a retail Pixel 8a boots: entry 18 of
+ * the stock dtbo.img (androidboot.dtbo_idx = 18), Google's MP board
+ * overlay zuma-akita-mp.dts (NOTES.md).
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	board_id = <0x40406>;
+	board_rev = <0x10000>;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+		};
+	};
+};
