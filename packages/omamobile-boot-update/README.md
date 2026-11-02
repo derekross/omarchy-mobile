@@ -29,7 +29,7 @@ name slot B.
 
 | Command | What it does |
 | --- | --- |
-| `omamobile-boot-update status` | the device, `AUTO_WRITE`, the release slot B holds, the saved set, the partitions |
+| `omamobile-boot-update status` | the device, `AUTO_WRITE`, the release slot B holds (or that slot B changed outside the tool, after `bin/omamobile flash` or `push`), the saved set, the partitions |
 | `omamobile-boot-update preflight [--json]` | read-only: would a write be allowed now? (`omamobile-update` asks before a kernel update; also refuses while slot B holds a set that never booted, and without room for the new and saved images) |
 | `omamobile-boot-update write --dry-run` | builds the images in a temporary directory and prints the plan; writes nothing |
 | `sudo omamobile-boot-update write` | builds, checks, saves slot B, writes and verifies (asks for the codename) |

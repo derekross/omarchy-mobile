@@ -614,6 +614,30 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] 
 OMAMOBILE_BOOT_UNAME_R=7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa "$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "preflight passes once that set has booted"; }
 pass "preflight answers in JSON and changes nothing; refuses without space, and while slot B holds a set that never booted"
 
+# The documented recovery: the new set doesn't boot, the owner flashes a
+# copy of previous/ by fastboot (here: written onto the _b files, as
+# bin/omamobile flash would) and is back on the running release. current/
+# no longer describes slot B, so it must not block the next kernel update.
+mkroot "$R"
+run hook || { cat "$t/out"; fail "recovery scenario: write K2 while running K1"; }
+for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
+  dd if="$S/previous/$p.img" of="$(part "$R" ${p}_b)" conv=notrunc status=none
+done
+"$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "after a flash of the saved set, preflight passes (the record is stale)"; }
+"$U" status > "$t/st" 2>&1
+grep -c '^slot B: *changed outside omamobile-boot-update' "$t/st" >/dev/null || { cat "$t/st"; fail "status says slot B changed outside the tool"; }
+run rollback --yes || { cat "$t/out"; fail "rollback after the flash"; }
+grep -c 'already holds these images' "$t/out" >/dev/null || fail "the rollback finds the saved set in place"
+[[ $(cat "$S/current/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "and records it as slot B's set"
+"$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "preflight passes after the no-op rollback"; }
+"$U" status > "$t/st" 2>&1
+grep -c '^slot B: *7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb$' "$t/st" >/dev/null || { cat "$t/st"; fail "status names the saved release on slot B"; }
+# The next write saves slot B as the set that booted
+addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
+run hook || { cat "$t/out"; fail "the fixed kernel is written after the recovery"; }
+[[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb && $(cat "$S/previous/BOOTED") == yes ]] || fail "previous is the running set"
+pass "after the fastboot recovery (or push) a stale record blocks nothing; a no-op rollback records slot B; status says which"
+
 # End to end with the real builder (the tools above), when dtc is there:
 # slot B ends up holding exactly what omamobile-boot-images makes
 if [[ -n $DTC_BIN ]]; then

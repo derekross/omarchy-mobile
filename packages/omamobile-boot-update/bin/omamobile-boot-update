@@ -381,9 +381,13 @@ confirm() {
 save_previous() {
   local img dev bytes rel booted=yes need avail new=$STATE/previous.new
   rel=$UNAME_R
-  if [[ -f $STATE/current/RELEASE ]]; then
+  # current/ only counts while slot B still holds it; after a flash or push
+  # outside this tool slot B holds what booted, as with no record at all
+  if [[ $(current_state) == yes ]]; then
     rel=$(cat "$STATE/current/RELEASE")
     [[ $rel == "$UNAME_R" ]] || booted=no
+  elif [[ -f $STATE/current/RELEASE ]]; then
+    note "slot B changed outside omamobile-boot-update since it last wrote $(cat "$STATE/current/RELEASE"): taking it as the running $UNAME_R"
   fi
   if [[ -e $STATE/incomplete ]]; then
     if [[ -d $STATE/previous ]]; then
@@ -485,7 +489,10 @@ do_write() {
     say "Slot B already holds these images: nothing to write"
     if ((!DRY_RUN)); then
       rm -f "$STATE/incomplete"
-      [[ $mode != write ]] || finish_current "$src"
+      # Also after a rollback: slot B holds the saved set now, whoever put
+      # it there (bin/omamobile flash from a copy of previous/, say)
+      [[ $mode != rollback ]] || restore_modules
+      finish_current "$src"
       record identical "slot B already holds ${RELEASE:-these images}"
     fi
     return 0
@@ -543,9 +550,10 @@ EOF
 }
 
 finish_current() {
-  local src=$1
+  local src=$1 img
   rm -rf "$STATE/current.new" && mkdir -p "$STATE/current.new"
   cp "$src/SHA256SUMS" "$STATE/current.new/SHA256SUMS"
+  for img in $DEV_BOOT_IMAGES; do printf '%s %s\n' "$img" "$(stat -c %s "$src/$img.img")"; done > "$STATE/current.new/SIZES"
   printf '%s\n' "$DEV_CODENAME" > "$STATE/current.new/DEVICE"
   printf '%s\n' "${RELEASE:-unknown}" > "$STATE/current.new/RELEASE"
   rm -rf "$STATE/current"
@@ -570,14 +578,38 @@ restore_modules() {
 
 # ---------------------------------------------------------------- commands
 
+# Does slot B still hold what current/ records? Only this tool updates
+# current/; bin/omamobile flash (the documented recovery) and push rewrite
+# slot B without it. Prints "yes", "stale" (slot B changed outside this
+# tool: the record says nothing about it) or "none" (no record). Needs
+# find_partition for every image first.
+current_state() {
+  local img size want
+  [[ -f $STATE/current/RELEASE ]] || { echo none; return 0; }
+  [[ -f $STATE/current/SIZES && -f $STATE/current/SHA256SUMS ]] || { echo stale; return 0; }
+  for img in $DEV_BOOT_IMAGES; do
+    size=$(awk -v i="$img" '$1 == i {print $2}' "$STATE/current/SIZES")
+    want=$(awk -v f="$img.img" '$2 == f {print $1}' "$STATE/current/SHA256SUMS")
+    [[ $size =~ ^[0-9]+$ && -n $want && -n ${PART_DEV[$img]:-} ]] || { echo stale; return 0; }
+    [[ $(sha_head "${PART_DEV[$img]}" "$size") == "$want" ]] || { echo stale; return 0; }
+  done
+  echo yes
+}
+
 cmd_status() {
-  local img
+  local img slot
   load_conf
   bu_load_descriptor "$DESCRIPTOR"
   echo "device:      $DEV_CODENAME ($DEV_COMPATIBLE)"
   echo "auto write:  $AUTO_WRITE ($CONF)"
   echo "running:     $UNAME_R"
-  echo "slot B:      $(cat "$STATE/current/RELEASE" 2>/dev/null || echo "not written by this tool")"
+  slot=$( (for img in $DEV_BOOT_IMAGES; do find_partition "$img" >/dev/null 2>&1 || exit 1; done
+           case $(current_state) in
+             yes) cat "$STATE/current/RELEASE" ;;
+             stale) echo "changed outside omamobile-boot-update (last written here: $(cat "$STATE/current/RELEASE"))" ;;
+             *) echo "not written by this tool" ;;
+           esac) 2>/dev/null) || slot="unknown (partitions not readable)"
+  echo "slot B:      $slot"
   echo "previous:    $(cat "$STATE/previous/RELEASE" 2>/dev/null || echo none)"
   [[ ! -e $STATE/incomplete ]] || echo "INCOMPLETE:  $(cat "$STATE/incomplete") (omamobile-boot-update rollback, or write again)"
   [[ ! -f $RUN/boot-update.json ]] || echo "last result: $(cat "$RUN/boot-update.json")"
@@ -594,22 +626,29 @@ cmd_status() {
 # kernel-modules-hook keeps only the running release's: restart into it first.
 check_booted() {
   local cur
-  [[ -f $STATE/current/RELEASE ]] || return 0
+  # A record slot B no longer matches (flash, push) says nothing: pass
+  [[ $(current_state) == yes ]] || return 0
   cur=$(cat "$STATE/current/RELEASE")
   [[ $cur == "$UNAME_R" ]] \
     || refuse "slot B holds $cur, written but not booted yet (running $UNAME_R): restart into it before the next kernel update"
 }
 
 # preflight only: room for the new images (next/), the saved partitions
-# (previous/) and the running release's modules, before pacman has replaced
-# anything (the write checks again, but only once the package is in).
+# (previous/), the running release's modules (saved in previous/) and the
+# incoming release's, before pacman has installed anything (the write checks
+# again, but only once the package is in). The incoming tree is taken to be
+# the running one's size: releases differ little, and preflight runs before
+# the package is downloaded.
 check_space() {
-  local img need=0 avail
+  local img need=0 avail mods
   for img in $DEV_BOOT_IMAGES; do need=$((need + 2 * PART_BYTES[$img])); done
-  [[ -d $MODULES/$UNAME_R ]] && need=$((need + $(du -sb "$MODULES/$UNAME_R" | cut -f1)))
+  if [[ -d $MODULES/$UNAME_R ]]; then
+    mods=$(du -sb "$MODULES/$UNAME_R" | cut -f1)
+    need=$((need + 2 * mods))
+  fi
   avail=$(free_bytes "$STATE")
   ((avail > need + SPACE_MARGIN)) \
-    || refuse "not enough space in ${STATE%/boot} for the new images and the saved set ($((need / 1048576)) MiB needed, $((avail / 1048576)) MiB free)"
+    || refuse "not enough space in ${STATE%/boot} for the new images, the saved set and both releases' modules ($((need / 1048576)) MiB needed, $((avail / 1048576)) MiB free)"
 }
 
 # Read-only: everything a write checks before building, for omamobile-update.
