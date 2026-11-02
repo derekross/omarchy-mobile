@@ -115,6 +115,19 @@ for id in org.gnome.DiskUtility org.gnome.Evince org.gnome.Snapshot fcitx5-confi
   fi
 done
 
+# Images open in Loupe on a phone (omamobile-apps makes it the default): it
+# takes touch (pinch and double-tap to zoom, swipe between images), and imv,
+# Omarchy's viewer, reads no touchscreen input at all. Loupe's entry is named
+# "Image Viewer", and so is Omarchy's imv entry, which Omarchy's skeleton put
+# in the user's own applications. Hidden once, while Loupe is installed, so
+# the drawer lists one Image Viewer; imv stays installed and runnable, and a
+# user who takes the line out keeps it.
+if [[ -f $sysapps/org.gnome.Loupe.desktop && -f $apps/imv.desktop ]] && omarchy-done ensure omamobile-hide-imv; then
+  if ! grep -c '^NoDisplay=true$' "$apps/imv.desktop" >/dev/null; then
+    sed -i -e '/^NoDisplay=/d' -e '/^\[Desktop Entry\]/a NoDisplay=true' "$apps/imv.desktop"
+  fi
+fi
+
 # PIN or password (omamobile-set-pin records it): phones set up before the
 # choice existed used a PIN with the lock's number pad, so record that, once.
 if omarchy-done ensure omamobile-credential-type; then

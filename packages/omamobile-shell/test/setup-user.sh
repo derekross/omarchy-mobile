@@ -108,6 +108,20 @@ run
 grep -qx 'NoDisplay=true' "$U/foot-server.desktop" || fail "an app installed later is hidden"
 pass "desktop and admin apps are hidden once each, when installed, and a user's choice is kept"
 
+# Omarchy's "Image Viewer" (imv, the skeleton's copy in the user's
+# applications) gives way to Loupe's, once, and only while Loupe is installed
+printf '[Desktop Entry]\nName=Image Viewer\nExec=imv %%F\nType=Application\n' >"$U/imv.desktop"
+run
+grep -c '^NoDisplay' "$U/imv.desktop" >/dev/null && fail "imv stays in the drawer without Loupe"
+printf '[Desktop Entry]\nType=Application\nName=Image Viewer\nExec=loupe %%U\n' >"$A/org.gnome.Loupe.desktop"
+run
+[[ $(sed -n 2p "$U/imv.desktop") == NoDisplay=true ]] && grep -qx 'Exec=imv %F' "$U/imv.desktop" \
+  || fail "imv's entry is hidden once Loupe is installed, the rest kept"
+sed -i '/^NoDisplay=true$/d' "$U/imv.desktop"
+run
+grep -c '^NoDisplay' "$U/imv.desktop" >/dev/null && fail "a user who shows imv again keeps it"
+pass "imv's Image Viewer gives way to Loupe's, once"
+
 # Idle: a new user gets the profile's block and the screensaver toggle
 idle() { python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("idle")))' "$1/.config/omarchy/shell.json"; }
 toggle() { [[ -e $1/.local/state/omarchy/toggles/screensaver-off ]]; }
