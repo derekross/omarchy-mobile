@@ -4,7 +4,14 @@ owned bearer lifecycle: CID 1 (internet, rmnet0) and CID 2 (IMS, rmnet1).
 
 The APN comes from /etc/omamobile/modem-sit.conf. Ownership is recorded in
 RAM before a setup is sent: a setup or release with an unknown outcome
-keeps its record and its PDU session, and nothing is retried blindly.
+keeps its record, and nothing is retried blindly.
+
+A cellular setup carries no PDU session ID (0), as stock's does: Android's
+data stack reserves one (ALLOC_PDU_SESSION) only for a bearer carried over
+Wi-Fi (IWLAN), and stock's builder copies the framework's value into the
+request unchanged, so on LTE and NR the modem picks the ID itself. Records
+from 0.3.4 and earlier hold an allocated ID, which deactivate() still
+releases.
 """
 import json
 import os
@@ -62,7 +69,8 @@ def owned_ids():
         state, _ = paths(cid)
         if state.exists():
             owned = json.loads(state.read_text())
-            if owned.get('cid') != cid or not 1 <= owned.get('session', 0) <= 15:
+            # session 0: no PDU session ID was sent (the modem chose one).
+            if owned.get('cid') != cid or not 0 <= owned.get('session', -1) <= 15:
                 raise RuntimeError('invalid bearer ownership record')
             result.add(cid)
     return result
@@ -88,8 +96,11 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     full[0xda] = IP_TYPES['ipv6'] if ims else IP_TYPES[ip_type]
     full[0xdb] = 2 if ims else 0  # IPv6 P-CSCF request
     # No handover addresses, roaming override or slice.
-    # MTU at 0xf1 stays zero (network/default choice).
+    # 0xf1 (u32) is not an MTU: stock's builder writes the APN-type bitmap
+    # there (the field ApnSetting::CanHandleType tests). It stays zero, as
+    # the stack this was ported from sent it.
     full[0xf5] = 2  # stock caller selects the v3/983-byte form
+    # 0 on cellular: no PDU session ID, the modem picks one (module docstring).
     struct.pack_into('<i', full, 0xf6, pdu_session)
     # No requested network slice: SST 0, SD -1, mapped SST 0, mapped SD -1.
     struct.pack_into('<i', full, 0xfc, -1)
@@ -142,26 +153,15 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
     if state_path.exists() or requested_cid in calls or calls != owned:
         raise RuntimeError('existing target or unresolved bearer ownership')
     allow_data(client)
-    allocated = client.request(0x061a)
-    if len(allocated) != 4:
-        raise RuntimeError('unexpected PDU-session response')
-    session = struct.unpack('<i', allocated)[0]
-    if not 1 <= session <= 15:
-        raise RuntimeError('invalid PDU session')
-    if any(json.loads(paths(cid)[0].read_text())['session'] == session for cid in owned):
-        # Never release a duplicate allocation belonging to the other bearer.
-        raise RuntimeError('modem reused an owned PDU session')
-    # Persist ownership before setup. A timeout has an unknown outcome; do
-    # not recycle its PDU session while the modem may still be activating it.
-    try:
-        private_write(state_path, json.dumps({'cid': requested_cid, 'session': session}).encode())
-    except OSError:
-        client.request(0x061b, struct.pack('<i', session))
-        raise
+    # No ALLOC_PDU_SESSION on cellular (module docstring): session 0.
+    session = 0
+    # Persist ownership before setup. A timeout has an unknown outcome: the
+    # record stays while the modem may still be activating the bearer.
+    private_write(state_path, json.dumps({'cid': requested_cid, 'session': session}).encode())
     released = False
     try:
         rat = 14 if lte_access else state[3]
-        print('data setup access RAT', rat, 'registered RAT', state[3], flush=True)
+        print('data setup access RAT', rat, 'registered RAT', state[3], 'PDU session ID', session, flush=True)
         result = client.request(0x0600, setup_payload(requested_cid, rat, session, apn,
                                                       ims=ims, ip_type=ip_type), timeout=45)
         if len(result) < 132:
@@ -169,7 +169,7 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
         status, cid, raw_active, pdp = struct.unpack_from('<HBBB', result)
         print('data-call status', status, 'CID', cid, 'active raw', raw_active, 'PDP type', pdp, flush=True)
         if cid == requested_cid and raw_active == 0:
-            client.request(0x061b, struct.pack('<i', session))
+            # Refused outright: nothing is held, so nothing stays owned.
             released = True
         if status or cid != requested_cid or raw_active not in (1, 2):
             raise RuntimeError('data call did not become active')
@@ -192,7 +192,7 @@ def deactivate(client, cid=1):
     if cid == 2 and state_path.with_name('ims-registration.json').exists():
         raise RuntimeError('unregister IMS before releasing its bearer')
     owned = json.loads(state_path.read_text())
-    if owned.get('cid') != cid or not 1 <= owned.get('session', 0) <= 15:
+    if owned.get('cid') != cid or not 0 <= owned.get('session', -1) <= 15:
         raise RuntimeError('invalid bearer ownership record')
     flags = int(Path(f"/sys/class/net/rmnet{owned['cid'] - 1}/flags").read_text(), 16)
     if flags & 1:
@@ -202,9 +202,11 @@ def deactivate(client, cid=1):
     calls = call_ids(client.request(0x0602))
     if cid in calls:
         raise RuntimeError('deactivated bearer still listed; retaining reservation')
-    client.request(0x061b, struct.pack('<i', owned['session']))
+    if owned['session']:
+        # Only a record from 0.3.4 or earlier holds an allocated ID.
+        client.request(0x061b, struct.pack('<i', owned['session']))
     state_path.unlink()
     response_path.unlink(missing_ok=True)
     if calls != owned_ids():
         raise RuntimeError('unexpected remaining data-call ownership')
-    print('owned data bearer deactivated; PDU session released', flush=True)
+    print('owned data bearer deactivated', flush=True)

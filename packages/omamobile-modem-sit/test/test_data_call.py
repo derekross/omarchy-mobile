@@ -54,13 +54,35 @@ class LifecycleTests(unittest.TestCase):
             item.stop()
         self.directory.cleanup()
 
-    def test_rejected_setup_releases_pdu_without_creating_ownership(self):
+    def test_rejected_setup_leaves_no_ownership(self):
         modem = Modem(status=36)
         with self.assertRaises(RuntimeError):
             data_call.activate(modem, APN)
-        self.assertEqual(modem.sent[-1], (0x061b, struct.pack('<i', 3)))
+        self.assertEqual(modem.sent[-1][0], 0x0600)
+        self.assertFalse({0x061a, 0x061b} & {i for i, _ in modem.sent})
         self.assertFalse(self.state.exists())
         self.assertFalse(self.response.exists())
+
+    def test_cellular_setups_carry_no_pdu_session_id(self):
+        # Stock leaves the PDU session ID unset (0) on cellular and never
+        # sends ALLOC_PDU_SESSION for it: the modem picks the ID.
+        modem = Modem()
+        request = modem.request
+        def listed(ident, payload=b'', **kwargs):
+            if ident == 0x0602 and self.state.exists():
+                record = bytearray(292)
+                record[2:4] = bytes([1, 1])
+                return bytes([1]) + record
+            return request(ident, payload, **kwargs)
+        modem.request = listed
+        data_call.activate(modem, APN)
+        data_call.activate(modem, 'ims', ims=True)
+        setups = [p for i, p in modem.sent if i == 0x0600]
+        self.assertEqual([(p[0], struct.unpack_from('<i', p, 0xf6 - 12)[0]) for p in setups], [(1, 0), (2, 0)])
+        self.assertFalse({0x061a, 0x061b} & {i for i, _ in modem.sent})
+        self.assertEqual(json.loads(self.state.read_text()), {'cid': 1, 'session': 0})
+        self.assertEqual(json.loads(data_call.paths(2)[0].read_text()), {'cid': 2, 'session': 0})
+        data_call.paths(2)[0].unlink()
 
     def test_existing_ownership_prevents_setup(self):
         self.state.write_text('{}')
@@ -69,7 +91,7 @@ class LifecycleTests(unittest.TestCase):
             data_call.activate(modem, APN)
         self.assertNotIn(0x0600, [i for i, _ in modem.sent])
 
-    def test_setup_timeout_keeps_pdu_reserved_for_recovery(self):
+    def test_setup_timeout_keeps_the_ownership_record(self):
         modem = Modem()
         request = modem.request
         def timeout(ident, payload=b'', **kwargs):
@@ -79,7 +101,7 @@ class LifecycleTests(unittest.TestCase):
         modem.request = timeout
         with self.assertRaises(TimeoutError):
             data_call.activate(modem, APN)
-        self.assertEqual(json.loads(self.state.read_text()), {'cid': 1, 'session': 3})
+        self.assertEqual(json.loads(self.state.read_text()), {'cid': 1, 'session': 0})
         self.assertNotIn(0x061b, [i for i, _ in modem.sent])
 
     def test_failed_deactivation_retains_recovery_record(self):
@@ -114,24 +136,24 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(json.loads(self.state.read_text()), {'cid': 1, 'session': 2})
         self.assertEqual(self.response.read_bytes(), b'existing private internet configuration')
         self.assertFalse(data_call.paths(2)[0].exists())
-        self.assertEqual(modem.sent[-1], (0x061b, struct.pack('<i', 3)))
-
-    def test_duplicate_pdu_allocation_does_not_release_existing_bearer(self):
-        self.state.write_text(json.dumps({'cid': 1, 'session': 3}))
-        modem = Modem()
-        request = modem.request
-        def existing(ident, payload=b'', **kwargs):
-            if ident == 0x0602:
-                record = bytearray(292)
-                record[2:4] = bytes([1, 1])
-                return bytes([1]) + record
-            return request(ident, payload, **kwargs)
-        modem.request = existing
-        with self.assertRaises(RuntimeError):
-            data_call.activate(modem, 'ims', ims=True)
+        self.assertEqual(modem.sent[-1][0], 0x0600)
         self.assertNotIn(0x061b, [i for i, _ in modem.sent])
-        self.assertFalse(data_call.paths(2)[0].exists())
-        self.assertEqual(json.loads(self.state.read_text()), {'cid': 1, 'session': 3})
+
+    def test_deactivation_releases_only_an_allocated_pdu_session(self):
+        original = Path.read_text
+        def read(path, *args, **kwargs):
+            if str(path) == '/sys/class/net/rmnet0/flags':
+                return '0x0'
+            return original(path, *args, **kwargs)
+        # session 0 (this version) and 3 (a record from 0.3.4 or earlier)
+        for session, sent in ((0, [(0x0601, b'\1\0'), (0x0602, b'')]),
+                              (3, [(0x0601, b'\1\0'), (0x0602, b''), (0x061b, struct.pack('<i', 3))])):
+            self.state.write_text(json.dumps({'cid': 1, 'session': session}))
+            modem = Modem()
+            with patch.object(Path, 'read_text', read):
+                data_call.deactivate(modem)
+            self.assertEqual(modem.sent, sent)
+            self.assertFalse(self.state.exists())
 
     def test_unowned_bearer_blocks_additional_setup(self):
         modem = Modem()
