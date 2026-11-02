@@ -102,8 +102,20 @@ D
   [[ -f $R/out/testdev/repo/aarch64/plain-1-1-any.pkg.tar.zst.sig ]] || { cat "$t/bp.log"; fail "and the other package is signed into the repository"; }
   grep -c 'SKIPPED: omamobile-device-testdev' "$t/bp.log" >/dev/null && grep -c 'not built, boot files missing or stale: omamobile-device-testdev' "$t/bp.log" >/dev/null \
     || { cat "$t/bp.log"; fail "the skip is named, before the build and at the end"; }
-  grep -qF '((rc == 0 || rc == 3)) || exit "$rc"' tools/repo-publish && grep -qF '((skipped_build == 0)) || die' tools/repo-publish \
-    || fail "repo-publish publishes the rest on exit 3, then fails"
+  [[ $(cat "$R/out/testdev/repo/.skipped") == omamobile-device-testdev ]] || fail "the skip list is in repo/.skipped"
+  # Exit 3 from anything else is 1: a repo-add that returns 3
+  printf '#!/bin/bash\nexit 3\n' > "$t/bin/repo-add"
+  rm -rf "$R/out/testdev/repo/aarch64"/*
+  rc=0
+  (cd "$R" && PATH=$t/bin:$PATH ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built2 tools/build-packages --nocheck --local testdev packages/plain) > "$t/bp2.log" 2>&1 || rc=$?
+  gpgconf --homedir "$kd/gnupg" --kill gpg-agent 2>/dev/null || true
+  [[ $rc == 1 ]] || { cat "$t/bp2.log"; fail "an exit 3 that is no skip becomes 1 (got $rc)"; }
+  [[ ! -e $R/out/testdev/repo/.skipped ]] || fail "and leaves no skip list"
+  grep -qF 'if ((rc == 3)) && [[ -s out/repo/.skipped ]]; then' tools/repo-publish && grep -qF '((skipped_build == 0)) || die' tools/repo-publish \
+    || fail "repo-publish publishes the rest only on exit 3 with a skip list, then fails"
+  grep -qx 'ExecStart=-%h/Projects/omarchy-mobile/tools/repo-publish --remind' tools/systemd/omamobile-publish.service \
+    && [[ $(grep -n 'remind' tools/systemd/omamobile-publish.service | grep ExecStart | cut -d: -f1) -lt $(grep -n 'from-main' tools/systemd/omamobile-publish.service | grep ExecStart | cut -d: -f1) ]] \
+    || fail "the timer's reminder runs first and its failure is ignored, so it runs on a failed publish day"
   pass "build-packages skips only the device package without boot files, builds and signs the rest, exits 3; repo-publish then publishes and fails"
 else
   pass "build-packages skip # SKIP no gpg or zstd"
