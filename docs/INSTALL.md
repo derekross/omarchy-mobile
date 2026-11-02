@@ -80,7 +80,7 @@ sha256sum omamobile-rootfs-cheetah-<version>-aarch64.img.zst
 
 ## 3. Install
 
-Stock Android must be running from slot A, because Omarchy Mobile goes on slot B and stock stays on A as your way back. An Android system update can leave stock running from slot B; the installer refuses such a phone and says so. Then, in Fastboot Mode, make slot A active (`fastboot --set-active=a`), flash Google's factory image for your phone onto it with Google's own `flash-all` script, check that Android starts, and come back to this step. Reinstalling over an earlier Omarchy Mobile install, which runs from slot B, is the one case for `bash install --reinstall`.
+Stock Android must be running from slot A, because Omarchy Mobile goes on slot B and stock stays on A as your way back. An Android system update can leave stock running from slot B; the installer refuses such a phone and says so. Then, in Fastboot Mode, make slot A active (`fastboot --set-active=a`), flash Google's factory image for your phone onto it with Google's own `flash-all` script (it erases Android's data: back up anything you want to keep first), check that Android starts, and come back to this step. The installer then may ask you to confirm the other slot's bootloader version with `--bootloader-slots-match`, as it explains. Reinstalling over an earlier Omarchy Mobile install, which runs from slot B, is the one case for `bash install --reinstall`.
 
 1. Put the phone in Fastboot Mode. Either run `adb reboot bootloader` while Android is running, or, with the phone off, hold **Volume Down**, then also hold **Power**, and keep both held until "Fastboot Mode" appears (up to about 20 seconds).
 2. Connect the phone and check that the computer sees it:
