@@ -13,6 +13,10 @@ bash -n build || fail "build parses"
 bash -n install || fail "install parses"
 pass "scripts parse"
 
+grep -q '^depends=.*bluez-utils' PKGBUILD \
+  || fail "the identity service needs bluez-utils for btmgmt"
+pass "the Bluetooth identity helper has btmgmt installed"
+
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
 pass "build and install stay inside the package directory"
 
