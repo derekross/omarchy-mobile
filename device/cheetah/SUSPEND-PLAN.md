@@ -1617,7 +1617,11 @@ any wake.
 - **h: the behaviour passed, but afterwards Hyprland ran neither power-key bind**
   (the kernel saw every press; `omamobile-keys`' last-press stopped at the
   second press) until `hyprctl reload`. A user would have no Power until a
-  reboot. Being traced in Hyprland's bind handling.
+  reboot. **Fixed (2026-11-01, omamobile-shell 0.2.75, #312):** the
+  on-screen keyboard's virtual keyboard reached the hardware-key binds; they
+  now exclude it. Derek installed #312 on the phone and re-ran the case
+  attended: the power key still works after a double press ("all tests
+  passed").
 - **g** logged no "Stay awake is on" line on the power-key request; the
   behaviour was right.
 - **Wi-Fi drops for each sleep:** the driver stays loaded (the keep flag),
