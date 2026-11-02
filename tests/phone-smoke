@@ -40,13 +40,28 @@ run "${ufs/0x4021/0x1561}"
 has '0 known, 1 new' && has 'new dmesg errors' || fail "a dme-set of another attribute is new"
 pass "a dme-set of another attribute is new"
 
-for dead in 'exynos-ufshc 14700000.ufs: ufshcd_link_startup: link startup failed 1' \
+# The kernel's own formats: ufshcd.c's dev_err "link startup failed %d" and
+# "%s: Host init failed %d", blk-mq.c's "%s error, dev %s, sector ...",
+# buffer.c's "Buffer I/O error on dev %pg, ...".
+for dead in 'exynos-ufshc 14700000.ufs: link startup failed 1' \
             'exynos-ufshc 14700000.ufs: ufshcd_host_reset_and_restore: Host init failed 1' \
-            'I/O error, dev sda, sector 123456 op 0x0:(READ) flags 0x80700 phys_seg 1 prio class 2'; do
+            'I/O error, dev sda, sector 123456 op 0x0:(READ) flags 0x80700 phys_seg 1 prio class 2' \
+            'Buffer I/O error on dev sda34, logical block 0, async page read'; do
   run "$ufs" "$dead"
   has 'not ok|1|kernel health|UFS didn'"'"'t come back (1 link startup' || fail "UFS that doesn't come back fails: $dead"
 done
-pass "a UFS link startup, host init or I/O error fails kernel health beside the known dme-set"
+pass "a UFS link startup, host init or sd I/O error fails kernel health beside the known dme-set"
+
+# Not UFS: the chroots' loop devices and the PCIe core stay ordinary new errors.
+for other in 'I/O error, dev loop3, sector 2048 op 0x0:(READ) flags 0x0 phys_seg 1 prio class 2' \
+             'Buffer I/O error on dev loop2, logical block 0, async page read' \
+             'F2FS-fs (loop4): I/O error' \
+             'gs201-pcie 11920000.pcie: Host init failed: -110'; do
+  run "$other"
+  has 'ok|1|kernel health|' && ! has "didn't come back" && has '0 known, 1 new' && has 'new dmesg errors' \
+    || fail "a line that isn't UFS stays an ordinary new error: $other"
+done
+pass "loop-device and PCIe errors stay ordinary new errors, not a dead UFS"
 
 run "$dais" "$ufs" "$ufs" 'some driver: something new broke'
 has 'of them ASoC no backend DAIs (PipeWire probe) x1, UFS dme-set 0x4021 (s2idle) x2, 1 new)' \

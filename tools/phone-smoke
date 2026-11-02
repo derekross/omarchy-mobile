@@ -150,13 +150,18 @@ counted_errors=(
   # message, which repeats at every playback, so a second one is new.
   '1|ASoC no backend DAIs (PipeWire probe)|audio_playback[0-9]+: ASoC: no backend DAIs enabled for audio_playback[0-9]+'
   # A UFS DME set that fails around s2idle and recovers, with no I/O errors
-  # (7 and 14 per boot in the 2026-11 reports; device/cheetah/SUSPEND-PLAN.md).
-  # Storage that really doesn't come back is ufs_dead below, never known.
+  # (on every 7 Pro boot in the 2026-11-02 phone-smoke reports; the same set
+  # shows in the 9a's resumes, device/tegu/SLEEP-PLAN.md S1). Storage that
+  # really doesn't come back is ufs_dead below, never known.
   '|UFS dme-set 0x4021 (s2idle)|exynos-ufshc [0-9a-f]+\.ufs: dme-set: attr-id 0x4021 val 0x[0-9a-f]+ failed [0-9]+ retries'
 )
 # A UFS link that doesn't come back from a sleep (device/tegu/SLEEP-PLAN.md
-# S1): any match fails kernel health, whatever the lists above say.
-ufs_dead='link startup failed|Host init failed|I/O error'
+# S1): any match fails kernel health, whatever the lists above say. Anchored
+# to the UFS host and the SCSI disks: I/O errors on the modem and fingerprint
+# chroots' loop devices, and the PCIe core's own "Host init failed", stay
+# ordinary new errors. A USB disk (sd[b-z]) would match too; no phone of ours
+# has a working host port yet.
+ufs_dead='\.ufs: .*(link startup failed|Host init failed)|I/O error,? (on )?dev sd[a-z]'
 mask_ids() {
   sed -E -e 's/[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}/<MAC>/g' \
     -e "s/\"[^\"]*\"/\"…\"/g; s/'[^']*'/'…'/g" \
@@ -183,7 +188,10 @@ classify_errors() {
   newerrs=$(grep -c . <<<"$newlog" || true)
 }
 if [[ -n $errors_from ]]; then
-  # tests/phone-smoke: a saved log stands in for this boot's dmesg
+  # tests/phone-smoke: a saved error-level log stands in for this boot's
+  # dmesg, so ufs_dead is counted over that log alone, where live it is
+  # counted over all of dmesg. Its messages are all dev_err/KERN_ERR, so
+  # both see the same lines; keep it that way.
   errlog=$(sed -E 's/^\[[ 0-9.]+\] //' "$errors_from")
   ufsdead=$(grep -cE "$ufs_dead" <<<"$errlog" || true)
   oops=0 warns=0 results=()
