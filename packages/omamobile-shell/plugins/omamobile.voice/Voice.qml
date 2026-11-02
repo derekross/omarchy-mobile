@@ -855,7 +855,7 @@ Item {
           SheetAction {
             objectName: "done"
             width: (parent.width - parent.spacing) * 2 / 3
-            label: root.phase === "transcribing" ? "Turning it into text..." : "Done · " + VoiceModel.doneVerb(root.dest)
+            label: root.phase === "transcribing" ? "Transcribing…" : "Done · " + VoiceModel.doneVerb(root.dest)
             primary: true
             tone: root.recording
             enabled: root.phase === "listening" || root.phase === "starting"
