@@ -4,8 +4,9 @@
 # The Omarchy Mobile kernel for every device (docs/RELEASES.md §4): one arm64
 # Image, its modules and every board's DTB, packed from a finished kernel
 # build. Nothing compiles here: `./stage KERNEL_OUT` first copies the build
-# output (bin/omamobile kernel and modules, from a tagged omamobile-int
-# snapshot with the release LOCALVERSION) into prebuilt/, or point
+# output (bin/omamobile kernel --release and modules, from a clean checkout
+# of a kernel-<date> release tag on the published omamobile branch, §8;
+# ./stage refuses anything else) into prebuilt/, or point
 # LINUX_OMAMOBILE_PREBUILT at a directory ./stage filled. pkgver comes from
 # the staged release (lib/pkgver), pkgrel from the version file (packaging
 # changes only). The device's omamobile-boot-update hook turns it into boot
@@ -20,7 +21,7 @@ url="https://github.com/derekross/linux-omarchy-mobile"
 license=(GPL-2.0-only)
 depends=(kmod omamobile-boot-update)
 makedepends=(zstd)
-checkdepends=(zstd)
+checkdepends=(zstd git)
 # The Image is not ELF and the modules are stripped already (and must stay
 # as built); no debug package
 options=(!strip !debug)

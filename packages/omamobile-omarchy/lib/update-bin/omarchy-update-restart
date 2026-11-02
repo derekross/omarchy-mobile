@@ -29,13 +29,20 @@ except (OSError, ValueError):
 if int(d.get("time", 0)) < int(sys.argv[2] or 0):
     sys.exit(0)
 msg = str(d.get("message", "")).replace("\n", " ").replace("\t", " ")
-print("%s\x1f%s\x1f%s" % (d.get("result", ""), d.get("release", ""), msg))
+print("%s\x1f%s\x1f%s\x1f%s" % (d.get("result", ""), d.get("release", ""), "yes" if d.get("kernel_changed") else "no", msg))
 PY
   ) || boot=""
   # A unit separator: tab is IFS white space, and an empty release would vanish
-  IFS=$'\x1f' read -r boot_result boot_release boot_message <<<"$boot" || true
+  IFS=$'\x1f' read -r boot_result boot_release boot_kernel boot_message <<<"$boot" || true
   case ${boot_result:-} in
-    written) reasons+=("The kernel was updated (slot B now holds ${boot_release:-the new kernel})") ;;
+    # kernel_changed: slot B now holds another release than the running
+    # one; otherwise only the initramfs or the device tree changed
+    written)
+      if [[ ${boot_kernel:-} == yes ]]; then
+        reasons+=("The kernel was updated (slot B now holds ${boot_release:-the new kernel})")
+      else
+        reasons+=("The boot images were updated (initramfs or device tree, kernel ${boot_release:-unchanged})")
+      fi ;;
     refused|failed)
       warnings+=("The kernel package changed but slot B was not written (${boot_message:-see the pacman output}); fix that, then: sudo omamobile-boot-update write") ;;
   esac

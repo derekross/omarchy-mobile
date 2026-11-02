@@ -32,11 +32,15 @@
 #   2. The descriptor must be valid (the same rules as bin/omamobile's
 #      load_device, lib/descriptor.sh), and /proc/device-tree/compatible
 #      must start with its COMPATIBLE: one Pixel's package never writes
-#      another's slot B. A boot from slot A (androidboot.slot_suffix=_a)
-#      is refused.
-#   3. The newest /usr/lib/modules/<release> that linux-omamobile owns
-#      (pkgbase) with a vmlinuz, and depmod's modules.dep and .bin for it:
-#      a kernel without its modules boots without its GPU.
+#      another's slot B. The boot must name slot B
+#      (androidboot.slot_suffix=_b in /proc/bootconfig or /proc/cmdline);
+#      slot A, or no slot named at all, is refused.
+#   3. The release the installed linux-omamobile names in
+#      /usr/share/omamobile/linux/kernel.release (never the newest-looking
+#      directory: release names end in a commit hash, and kernel-modules-hook
+#      leaves a full copy of the running release beside the new one), its
+#      vmlinuz and pkgbase, and depmod's modules.dep and .bin for it: a
+#      kernel without its modules boots without its GPU.
 #   4. The device package's files (/usr/lib/omamobile/<codename>/: dtbo.img,
 #      initramfs.cpio.lz4, overlays/<name>.dtbo) must be there; the
 #      initramfs must carry exactly the descriptor's allowlist, and no
@@ -77,9 +81,12 @@ SYS=$R/sys
 DEV=$R/dev
 PROC=$R/proc
 KEYS=$R/root/.ssh/authorized_keys
+# What the installed linux-omamobile is: its install writes the release here
+KERNEL_MARKER=$R/usr/share/omamobile/linux/kernel.release
 MIN_BATTERY=30
 UNAME_R=${OMAMOBILE_BOOT_UNAME_R:-$(uname -r)}
 DEPMOD=${DEPMOD:-depmod}
+DF=${DF:-df}
 AVB_TESTKEY=${OMAMOBILE_BOOT_AVB_TESTKEY:-/usr/share/omamobile-boot-update/avb/testkey_rsa4096.pem}
 LZ4=${LZ4:-lz4}
 CPIO=${CPIO:-cpio}
@@ -99,13 +106,17 @@ record() {
   [[ $COMMAND == write || $COMMAND == rollback || $COMMAND == hook ]] || return 0
   [[ ${DRY_RUN:-0} == 0 ]] || return 0
   mkdir -p "$RUN" 2>/dev/null || return 0
-  python3 -I - "$RUN/boot-update.json" "$1" "$2" "$COMMAND" "$RELEASE" <<'PY' 2>/dev/null || true
+  # kernel_changed: the release slot B now holds is not the running one, so
+  # the next restart changes the kernel (not only the initramfs or dtbo)
+  local changed=false
+  [[ -z $RELEASE || $RELEASE == "$UNAME_R" ]] || changed=true
+  python3 -I - "$RUN/boot-update.json" "$1" "$2" "$COMMAND" "$RELEASE" "$changed" <<'PY' 2>/dev/null || true
 import json, os, sys, time
-path, result, message, command, release = sys.argv[1:]
+path, result, message, command, release, changed = sys.argv[1:]
 tmp = path + ".new"
 with open(tmp, "w") as f:
     json.dump({"result": result, "message": message, "command": command, "release": release,
-               "time": int(time.time())}, f, sort_keys=True)
+               "kernel_changed": changed == "true", "time": int(time.time())}, f, sort_keys=True)
     f.write("\n")
 os.replace(tmp, path)
 PY
@@ -147,15 +158,18 @@ check_board() {
     || refuse "this board is '$got', but the installed descriptor is for $DEV_CODENAME ('$DEV_COMPATIBLE')"
 }
 
-# Linux runs from slot B. A kernel that says otherwise is not ours to update.
+# Linux runs from slot B, and the bootloader must say so: slot A, or a boot
+# that names no slot, is not ours to update.
 check_slot() {
-  local f
+  local f b=0
   for f in "$PROC/cmdline" "$PROC/bootconfig"; do
     [[ -r $f ]] || continue
     if grep -E 'androidboot\.slot_suffix *= *"?_a' "$f" >/dev/null; then
       refuse "the bootloader says this boot is from slot A ($f)"
     fi
+    grep -E 'androidboot\.slot_suffix *= *"?_b' "$f" >/dev/null && b=1
   done
+  ((b)) || refuse "neither $PROC/bootconfig nor $PROC/cmdline says this boot is from slot B (androidboot.slot_suffix=_b)"
 }
 
 device_dir() { echo "$R/usr/lib/omamobile/$DEV_CODENAME"; }
@@ -183,19 +197,24 @@ check_device_files() {
   [[ $keyfiles == 0 ]] || refuse "the device package's initramfs carries developer SSH keys (not a release initramfs)"
 }
 
-# The newest release linux-omamobile installed, with depmod's output.
+# The release the installed linux-omamobile owns, with depmod's output. Not
+# the newest-looking directory: release names end in a commit hash
+# (-omamobile-g<sha12>), so sort -V orders two releases by their hashes, and
+# kernel-modules-hook leaves a full copy of the running release (vmlinuz and
+# pkgbase included) beside the new one after every upgrade.
 pick_release() {
-  local d rel candidates=()
+  local d rel others=()
+  [[ -s $KERNEL_MARKER ]] || refuse "no kernel package release: $KERNEL_MARKER is missing (is linux-omamobile installed?)"
+  rel=$(head -1 "$KERNEL_MARKER")
+  [[ $rel =~ ^[A-Za-z0-9._+-]+$ ]] || refuse "odd release name '$rel' in $KERNEL_MARKER"
+  [[ -f $MODULES/$rel/vmlinuz ]] || refuse "linux-omamobile names $rel, but there is no $MODULES/$rel/vmlinuz"
+  [[ $(cat "$MODULES/$rel/pkgbase" 2>/dev/null) == linux-omamobile ]] \
+    || refuse "no kernel package release: $MODULES/$rel/pkgbase does not say linux-omamobile"
   for d in "$MODULES"/*/; do
     d=${d%/}
-    [[ -f $d/vmlinuz && -f $d/pkgbase ]] || continue
-    [[ $(cat "$d/pkgbase") == linux-omamobile ]] || continue
-    candidates+=("${d##*/}")
+    [[ ${d##*/} != "$rel" && -f $d/vmlinuz ]] && others+=("${d##*/}")
   done
-  ((${#candidates[@]})) || refuse "no kernel package release in $MODULES (no <release>/vmlinuz with pkgbase linux-omamobile)"
-  rel=$(printf '%s\n' "${candidates[@]}" | sort -V | tail -1)
-  [[ $rel =~ ^[A-Za-z0-9._+-]+$ ]] || refuse "odd release name '$rel'"
-  ((${#candidates[@]} == 1)) || note "several kernel releases installed (${candidates[*]}); using the newest, $rel"
+  ((${#others[@]} == 0)) || note "using $rel, the release linux-omamobile installed (also in $MODULES, left alone: ${others[*]})"
   [[ -s $MODULES/$rel/modules.dep && -s $MODULES/$rel/modules.dep.bin ]] \
     || refuse "depmod has not run for $rel (no modules.dep): the kernel would boot without its modules"
   [[ -s $MODULES/$rel/dtbs/$DEV_DTB ]] || refuse "$rel has no dtbs/$DEV_DTB"
@@ -247,6 +266,16 @@ check_writable() {
   fi
   [[ $(cat "$(sysfs_part "$name")/ro" 2>/dev/null) == 0 ]] \
     || refuse "$dev ($want) is read-only: the storage guard did not leave it writable"
+}
+
+# Free bytes on the file system that holds PATH (or its nearest parent)
+SPACE_MARGIN=$((64 * 1024 * 1024))
+free_bytes() {
+  local d=$1 n
+  while [[ ! -d $d ]]; do d=$(dirname "$d"); done
+  n=$("$DF" -P -B1 "$d" | awk 'NR == 2 {print $4}')
+  [[ $n =~ ^[0-9]+$ ]] || refuse "cannot read the free space of $d"
+  echo "$n"
 }
 
 sha_head() { head -c "$2" "$1" | sha256sum | cut -d' ' -f1; }
@@ -370,8 +399,8 @@ save_previous() {
   need=0
   for img in $DEV_BOOT_IMAGES; do need=$((need + PART_BYTES[$img])); done
   [[ -d $MODULES/$rel ]] && need=$((need + $(du -sb "$MODULES/$rel" | cut -f1)))
-  avail=$(($(df -P -B1 "$STATE" | awk 'NR == 2 {print $4}')))
-  ((avail > need + 64 * 1024 * 1024)) || refuse "not enough space in $STATE to keep the previous images ($need bytes needed)"
+  avail=$(free_bytes "$STATE")
+  ((avail > need + SPACE_MARGIN)) || refuse "not enough space in $STATE to keep the previous images ($need bytes needed)"
   say "Saving slot B ($rel) to $STATE/previous"
   rm -rf "$new" && mkdir -p "$new"
   for img in $DEV_BOOT_IMAGES; do
@@ -558,6 +587,31 @@ cmd_status() {
   done
 }
 
+# preflight only: slot B must hold the running kernel's set (or one this tool
+# never wrote). A set written but never booted is not refused by the hook
+# itself (previous/ keeps the last set that booted), but a kernel upgrade on
+# top of it would have pacman remove that release's modules, and
+# kernel-modules-hook keeps only the running release's: restart into it first.
+check_booted() {
+  local cur
+  [[ -f $STATE/current/RELEASE ]] || return 0
+  cur=$(cat "$STATE/current/RELEASE")
+  [[ $cur == "$UNAME_R" ]] \
+    || refuse "slot B holds $cur, written but not booted yet (running $UNAME_R): restart into it before the next kernel update"
+}
+
+# preflight only: room for the new images (next/), the saved partitions
+# (previous/) and the running release's modules, before pacman has replaced
+# anything (the write checks again, but only once the package is in).
+check_space() {
+  local img need=0 avail
+  for img in $DEV_BOOT_IMAGES; do need=$((need + 2 * PART_BYTES[$img])); done
+  [[ -d $MODULES/$UNAME_R ]] && need=$((need + $(du -sb "$MODULES/$UNAME_R" | cut -f1)))
+  avail=$(free_bytes "$STATE")
+  ((avail > need + SPACE_MARGIN)) \
+    || refuse "not enough space in ${STATE%/boot} for the new images and the saved set ($((need / 1048576)) MiB needed, $((avail / 1048576)) MiB free)"
+}
+
 # Read-only: everything a write checks before building, for omamobile-update.
 cmd_preflight() {
   local json=0 problems=() out
@@ -569,6 +623,8 @@ cmd_preflight() {
     check_slot
     check_device_files
     for img in $DEV_BOOT_IMAGES; do find_partition "$img"; done
+    check_booted
+    check_space
     echo "auto_write=$AUTO_WRITE"
   ) 2>&1) || problems+=("$(grep -m1 '^error:' <<<"$out" | sed 's/^error: omamobile-boot-update: //; s/^not writing slot B: //')")
   local auto

@@ -316,9 +316,12 @@ printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
 # The restart step reads the boot-update hook's result from this update only
 rs() { rm -rf "$t/rs"; OMAMOBILE_UPDATE_DIR=$t/rs OMAMOBILE_BOOT_UPDATE_STATUS=$t/bu.json OMAMOBILE_UPDATE_STARTED=$1 bash lib/update-bin/omarchy-update-restart >/dev/null 2>&1; cat "$t/rs/restart.json"; }
 now=$(date +%s)
-printf '{"result": "written", "release": "7.3.0-rc6-omamobile-00453-g0123456789ab", "message": "x", "time": %d}\n' "$now" >"$t/bu.json"
+printf '{"result": "written", "release": "7.3.0-rc6-omamobile-g0123456789ab", "kernel_changed": true, "message": "x", "time": %d}\n' "$now" >"$t/bu.json"
 out=$(rs $((now - 5)))
-ok "restart: slot B written during the update asks for a restart" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"needs_reboot\"] and \"7.3.0-rc6-omamobile-00453\" in d[\"reasons\"][0], d" "$out"'
+ok "restart: slot B written during the update asks for a restart" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"needs_reboot\"] and \"kernel was updated\" in d[\"reasons\"][0] and \"7.3.0-rc6-omamobile-g0123456789ab\" in d[\"reasons\"][0], d" "$out"'
+printf '{"result": "written", "release": "7.3.0-rc6-omamobile-g0123456789ab", "kernel_changed": false, "message": "x", "time": %d}\n' "$now" >"$t/bu.json"
+out=$(rs $((now - 5)))
+ok "restart: a rewrite of the running kernel's set says boot images, not kernel" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"needs_reboot\"] and \"boot images were updated\" in d[\"reasons\"][0] and not any(\"kernel was updated\" in r for r in d[\"reasons\"]), d" "$out"'
 out=$(rs $((now + 60)))
 ok "restart: a result from before this update is ignored" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"needs_reboot\"], d" "$out"'
 printf '{"result": "refused", "release": "", "message": "battery at 12%%", "time": %d}\n' "$now" >"$t/bu.json"

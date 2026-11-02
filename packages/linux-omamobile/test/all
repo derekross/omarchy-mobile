@@ -14,6 +14,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 for f in stage install lib/pkgver test/all PKGBUILD; do bash -n "$f" || fail "$f parses"; done
 pass "scripts parse"
 command -v zstd >/dev/null || { pass "# SKIP no zstd"; exit 0; }
+command -v git >/dev/null || { pass "# SKIP no git"; exit 0; }
 
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
@@ -46,9 +47,18 @@ else
   pass "pkgver folds the release and refuses development and dirty builds (vercmp # SKIP not installed)"
 fi
 
-# ---------------------------------------------------------------- a fake build
-rel=7.3.0-rc6-omamobile-g0123456789ab
-export KERNEL_COMMITS=4521
+# ---------------------------------------------------------------- a fake release
+# The kernel source: three commits on omamobile, the last tagged
+# kernel-2026.11.01 and published (a bare repository stands in for GitHub)
+gitc() { git -c user.name=t -c user.email=t@example.invalid -c init.defaultBranch=omamobile "$@"; }
+src=$t/src && mkdir -p "$src"
+( cd "$src" && gitc init -q && for i in 1 2 3; do echo $i > f; git add f; gitc commit -qm "c$i"; done
+  gitc tag -a kernel-2026.11.01 -m "Omarchy Mobile kernel 2026.11.01" )
+gitc clone -q --bare "$src" "$t/published.git"
+export KERNEL_DIR=$src LINUX_OMAMOBILE_REMOTE=$t/published.git
+unset KERNEL_COMMITS
+head12=$(git -C "$src" rev-parse --short=12 HEAD)
+rel=7.3.0-rc6-omamobile-g$head12
 K=$t/out
 mkimage() { # file: an Image with arm64's magic at 0x38
   { head -c 56 /dev/zero; printf 'ARM\x64'; head -c 4000 /dev/urandom; } > "$1"
@@ -78,9 +88,12 @@ for f in Image modules.tar.zst kernel.release SHA256SUMS dtbs/exynos/google/gs20
 done
 [[ ! -e $P/dtbs/qcom ]] || fail "stage: only DTB_DIRS (exynos/google by default)"
 (cd "$P" && sha256sum --quiet -c SHA256SUMS) || fail "stage: checksums"
-grep -c "pkgver 7.3.0rc6.r4521.g0123456789ab" "$t/log" >/dev/null || fail "stage names the pkgver"
+grep -c "pkgver 7.3.0rc6.r3.g$head12" "$t/log" >/dev/null || fail "stage names the pkgver"
+[[ $(cat "$P/kernel.commits") == 3 ]] || fail "the commit count is KERNEL_DIR's"
+grep -cx "tag kernel-2026.11.01" "$P/SOURCE" >/dev/null && grep -cx "commits 3" "$P/SOURCE" >/dev/null \
+  && grep -cx "commit $(git -C "$src" rev-parse HEAD)" "$P/SOURCE" >/dev/null || fail "SOURCE records the tag, the commit and the count"
 DTB_DIRS="exynos/google qcom" ./stage "$K" "$t/p2" >/dev/null 2>&1 && [[ -f $t/p2/dtbs/qcom/sm8750-oneplus-dodge.dtb ]] || fail "stage: DTB_DIRS adds directories"
-pass "stage copies the Image, the modules tarball and the board DTBs, with checksums"
+pass "stage copies the Image, the modules tarball and the board DTBs of a published release, with checksums"
 
 stage_refuses() { # what message
   if ./stage "$K" "$t/p3" > "$t/log" 2>&1; then fail "stage refuses $1"; fi
@@ -98,6 +111,7 @@ mkbuild $rel
 rm "$K/modules-$rel.tar.zst"
 stage_refuses "a build without its modules" "bin/omamobile modules"
 mkbuild 7.3.0-rc6-omamobile-gffffffffffff
+stage_refuses "a build from another commit than KERNEL_DIR's" "but $K was built from ffffffffffff"
 mv "$K/modules-7.3.0-rc6-omamobile-gffffffffffff.tar.zst" "$t/stale.tar.zst"
 mkbuild $rel
 cp "$t/stale.tar.zst" "$K/modules-$rel.tar.zst"
@@ -108,26 +122,46 @@ stage_refuses "a build without DTBs" "no DTBs"
 mkbuild $rel
 pass "stage refuses development and dirty kernels, a non-Image, missing or stale modules, no DTBs"
 
-# The commit count from the source tree: HEAD must be the release's commit
-if command -v git >/dev/null; then
-  src=$t/src && mkdir -p "$src"
-  ( cd "$src" && git init -q && for i in 1 2 3; do echo $i > f; git add f; git -c user.name=t -c user.email=t@example.invalid commit -qm "c$i"; done )
-  head12=$(cd "$src" && git rev-parse --short=12 HEAD)
-  mkbuild "7.3.0-rc6-omamobile-g$head12"
-  env -u KERNEL_COMMITS KERNEL_DIR=$src ./stage "$K" "$t/p4" > "$t/log" 2>&1 || { cat "$t/log"; fail "stage counts the commits in KERNEL_DIR"; }
-  [[ $(cat "$t/p4/kernel.commits") == 3 ]] && grep -c "pkgver 7.3.0rc6.r3.g$head12" "$t/log" >/dev/null || fail "pkgver takes KERNEL_DIR's count"
-  grep -cx "commits 3" "$t/p4/SOURCE" >/dev/null || fail "SOURCE records the commit and the count"
-  (cd "$src" && git -c user.name=t -c user.email=t@example.invalid commit -qm c4 --allow-empty)
-  if env -u KERNEL_COMMITS KERNEL_DIR=$src ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses a KERNEL_DIR at another commit"; fi
-  (cd "$src" && git reset -q --hard HEAD~1 && echo changed > f)
-  if env -u KERNEL_COMMITS KERNEL_DIR=$src ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses a KERNEL_DIR with uncommitted changes"; fi
-  grep -c "uncommitted" "$t/log" >/dev/null || fail "and says why"
-  if env -u KERNEL_COMMITS ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses without a commit count"; fi
-  mkbuild $rel
-  pass "stage takes the commit count from the clean checkout of the release's commit, or refuses"
-else
-  pass "stage with KERNEL_DIR # SKIP no git"
-fi
+# Only a published release tag: no KERNEL_DIR, an untagged commit, a tag
+# the published repository doesn't have, a tag off its omamobile branch,
+# uncommitted changes, a count that disagrees
+if env -u KERNEL_DIR ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses without KERNEL_DIR"; fi
+grep -c "set KERNEL_DIR" "$t/log" >/dev/null || fail "and says to set KERNEL_DIR"
+if KERNEL_COMMITS=4521 ./stage "$K" "$t/p5" > "$t/log" 2>&1; then fail "stage refuses a KERNEL_COMMITS that disagrees"; fi
+(cd "$src" && gitc commit -qm c4 --allow-empty)
+mkbuild "7.3.0-rc6-omamobile-g$(git -C "$src" rev-parse --short=12 HEAD)"
+stage_refuses "an untagged commit (a test build)" "carries no release tag"
+(cd "$src" && gitc tag -a kernel-2026.11.02 -m local)
+stage_refuses "a tag only in the local tree" "is not a tag on $t/published.git"
+(cd "$src" && git push -q "$t/published.git" refs/tags/kernel-2026.11.02)
+stage_refuses "a published tag whose commit is not on omamobile there" "is not on omamobile"
+(cd "$src" && git push -q "$t/published.git" HEAD:refs/heads/omamobile)
+./stage "$K" "$t/p6" > "$t/log" 2>&1 || { cat "$t/log"; fail "stage takes a published tag on omamobile"; }
+grep -cx "tag kernel-2026.11.02" "$t/p6/SOURCE" >/dev/null || fail "SOURCE names that tag"
+echo changed > "$src/f"
+stage_refuses "a KERNEL_DIR with uncommitted changes" "uncommitted changes"
+(cd "$src" && git checkout -q f && git checkout -q kernel-2026.11.01)
+mkbuild $rel
+pass "stage packages only a published kernel-<date> tag on omamobile, from its clean checkout"
+
+# --verify: build-packages' check of a staged prebuilt/, on the build machine
+packages_verify() { ./stage --verify "$1" > "$t/log" 2>&1; }
+packages_verify "$P" || { cat "$t/log"; fail "--verify passes a staged release"; }
+cp -r "$P" "$t/pv"
+sed -i 's/^tag .*/tag kernel-2026.12.24/' "$t/pv/SOURCE"
+(cd "$t/pv" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+if packages_verify "$t/pv"; then fail "--verify refuses a SOURCE whose tag isn't published"; fi
+sed -i 's/^tag .*/tag omamobile-int-snapshot/' "$t/pv/SOURCE"
+(cd "$t/pv" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+if packages_verify "$t/pv"; then fail "--verify refuses a SOURCE without a release tag"; fi
+if ./install "$t/rootv" "$t/pv" > "$t/log" 2>&1; then fail "install refuses a SOURCE without a release tag"; fi
+rm "$t/pv/SOURCE"; (cd "$t/pv" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+if packages_verify "$t/pv"; then fail "--verify refuses a prebuilt/ without SOURCE"; fi
+if ./install "$t/rootv" "$t/pv" > "$t/log" 2>&1; then fail "install refuses a prebuilt/ without SOURCE"; fi
+echo tampered >> "$P/Image"
+if packages_verify "$P"; then fail "--verify refuses a prebuilt/ that fails its checksums"; fi
+./stage "$K" "$P" >/dev/null
+pass "--verify re-checks the checksums and the published tag; install needs SOURCE with a release tag"
 
 # ---------------------------------------------------------------- install
 ./install "$t/root" "$P" > "$t/log" 2>&1 || { cat "$t/log"; fail "install stages the package"; }
@@ -138,20 +172,22 @@ for f in vmlinuz pkgbase modules.order modules.builtin kernel/drivers/gpu/pantho
 done
 cmp -s "$r/vmlinuz" "$P/Image" || fail "vmlinuz is the staged Image, uncompressed"
 [[ $(cat "$r/pkgbase") == linux-omamobile ]] || fail "pkgbase names the package"
+[[ $(cat "$t/root/usr/share/omamobile/linux/kernel.release") == "$rel" ]] || fail "kernel.release names the release, for omamobile-boot-update"
+grep -cx "tag kernel-2026.11.01" "$t/root/usr/share/omamobile/linux/SOURCE" >/dev/null || fail "SOURCE ships with the package"
 for f in modules.dep modules.dep.bin modules.alias modules.symbols build; do
   [[ ! -e $r/$f && ! -L $r/$f ]] || fail "install leaves out $f (depmod's, or a build link)"
 done
 [[ $(ls "$t/root/usr/lib/modules") == "$rel" ]] || fail "one release directory only"
 [[ ! -e $t/root/boot && ! -e $t/root/etc ]] || fail "no /boot, no /etc: no initramfs or boot image here"
 [[ -z $(find "$t/root" -perm -o+w ! -type l) ]] || fail "nothing world-writable"
-pass "install: vmlinuz, modules (without depmod's files), every DTB and pkgbase under /usr/lib/modules/<release>"
+pass "install: vmlinuz, modules (without depmod's files), every DTB and pkgbase under /usr/lib/modules/<release>, and the release it is"
 echo tampered >> "$P/Image"
 if ./install "$t/root2" "$P" > "$t/log" 2>&1; then fail "install refuses a prebuilt/ that fails its checksums"; fi
 ./stage "$K" "$P" >/dev/null
 
 # ---------------------------------------------------------------- PKGBUILD
 v=$( (startdir=$PKG LINUX_OMAMOBILE_PREBUILT=$P; source ./PKGBUILD; echo "$pkgname $pkgver-$pkgrel ${arch[*]} ${depends[*]}") )
-[[ $v == "linux-omamobile 7.3.0rc6.r4521.g0123456789ab-$(cat version) aarch64 kmod omamobile-boot-update" ]] || fail "PKGBUILD fields (got $v)"
+[[ $v == "linux-omamobile 7.3.0rc6.r3.g$head12-$(cat version) aarch64 kmod omamobile-boot-update" ]] || fail "PKGBUILD fields (got $v)"
 v=$( (startdir=$PKG LINUX_OMAMOBILE_PREBUILT=$t/nowhere; source ./PKGBUILD; echo "$pkgver") )
 [[ $v == 0 ]] || fail "with nothing staged pkgver is 0 and package() refuses (got $v)"
 grep -qx 'options=(!strip !debug)' PKGBUILD || fail "makepkg must not strip the Image or the modules"
@@ -161,10 +197,11 @@ if command -v makepkg >/dev/null && command -v fakeroot >/dev/null && ((EUID != 
   mkdir -p "$t/mp" && cp -r PKGBUILD install stage version lib test "$t/mp/"
   (cd "$t/mp" && LINUX_OMAMOBILE_IN_MAKEPKG=1 LINUX_OMAMOBILE_PREBUILT=$P BUILDDIR=$t/mpb PKGDEST=$t/pkgs SRCDEST=$t/src \
     PKGEXT=.pkg.tar.zst makepkg -A -d -f --nocheck --nosign >"$t/mp.log" 2>&1) || { tail -20 "$t/mp.log"; fail "makepkg packs it"; }
-  pkgf=$(ls "$t"/pkgs/linux-omamobile-7.3.0rc6.r4521.g0123456789ab-*.pkg.tar.zst)
+  pkgf=$(ls "$t"/pkgs/linux-omamobile-7.3.0rc6.r3.g$head12-*.pkg.tar.zst)
   list=$(tar --zstd -tf "$pkgf")
   grep -cx "usr/lib/modules/$rel/vmlinuz" <<<"$list" >/dev/null || fail "the package holds vmlinuz"
   grep -cx "usr/lib/modules/$rel/dtbs/exynos/google/gs201-cheetah.dtb" <<<"$list" >/dev/null || fail "the package holds the DTBs"
+  grep -cx "usr/share/omamobile/linux/kernel.release" <<<"$list" >/dev/null || fail "the package holds kernel.release"
   grep -cE '^(boot|etc)/' <<<"$list" >/dev/null && fail "the package has nothing in /boot or /etc"
   tar --zstd -xOf "$pkgf" "usr/lib/modules/$rel/vmlinuz" | cmp -s - "$P/Image" || fail "makepkg left the Image as staged"
   pass "makepkg -A packs the staged build unchanged"

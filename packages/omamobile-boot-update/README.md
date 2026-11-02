@@ -18,14 +18,19 @@ no such file, and `bin/omamobile push` stays slot B's only writer there.
 
 It writes only `<image>_b` for the descriptor's `BOOT_IMAGES`, found by GPT
 name on the main UFS LUN, on the storage guard's allowlist and left writable
-by the guard, and reads every image back. It never reboots.
+by the guard, and reads every image back. It never reboots. The kernel it
+builds from is the release the installed `linux-omamobile` names
+(`/usr/share/omamobile/linux/kernel.release`), never the newest-looking
+directory in `/usr/lib/modules` (kernel-modules-hook leaves a copy of the
+running release there after every upgrade). It refuses a boot that doesn't
+name slot B.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `omamobile-boot-update status` | the device, `AUTO_WRITE`, the release slot B holds, the saved set, the partitions |
-| `omamobile-boot-update preflight [--json]` | read-only: would a write be allowed now? (`omamobile-update` asks before a kernel update) |
+| `omamobile-boot-update preflight [--json]` | read-only: would a write be allowed now? (`omamobile-update` asks before a kernel update; also refuses while slot B holds a set that never booted, and without room for the new and saved images) |
 | `omamobile-boot-update write --dry-run` | builds the images in a temporary directory and prints the plan; writes nothing |
 | `sudo omamobile-boot-update write` | builds, checks, saves slot B, writes and verifies (asks for the codename) |
 | `omamobile-boot-update rollback --dry-run` | what a rollback would write |
@@ -51,11 +56,31 @@ Delete that line again to take kernel updates. Installing the older package
 from the cache (`sudo pacman -U /var/cache/pacman/pkg/linux-omamobile-<version>-aarch64.pkg.tar.zst`)
 instead writes that kernel through the hook and leaves nothing to hold.
 
-If the phone doesn't boot the new images at all, ABL falls back to stock
-Android on slot A after its tries (on a phone whose slot B is not marked
-successful), or stops in fastboot: hold Volume Down + Power about 20 s and
-flash the saved images in `/var/lib/omamobile/boot/previous/` with
-`bin/omamobile flash`'s path, or the release bundle's installer.
+If the phone doesn't boot the new images at all, it can't run this tool,
+and the saved set in `/var/lib/omamobile/boot/previous/` is on `userdata`,
+out of reach. A phone whose slot B is marked successful (cheetah marks it at
+every good boot) does not fall back to stock Android on slot A either: it
+stops in fastboot or keeps resetting. So the way back has to be on the
+computer before the restart. After a kernel update writes slot B, and before
+restarting, copy the saved set off the phone:
+
+```sh
+scp -r root@172.16.42.1:/var/lib/omamobile/boot/previous ./boot-previous
+(cd boot-previous && sha256sum -c SHA256SUMS)
+```
+
+or keep the release bundle you installed from (its `images/` are a
+known-good set). If the phone then doesn't boot: hold Volume Down + Power
+about 20 s for fastboot and flash that set from the computer with
+`bin/omamobile flash`, which takes a directory with `images/` and its
+`DEVICE` file:
+
+```sh
+mkdir -p recovery/images && cp boot-previous/*.img boot-previous/DEVICE recovery/images/
+KERNEL_OUT=$PWD/recovery bin/omamobile flash
+```
+
+(or run the bundle's installer again, which also rewrites `userdata`).
 
 ## AVB footers
 

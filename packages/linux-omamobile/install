@@ -8,6 +8,11 @@
 #   /usr/lib/modules/<release>/modules.order, modules.builtin*
 #   /usr/lib/modules/<release>/dtbs/<dir>/*.dtb   every board DTB
 #   /usr/lib/modules/<release>/pkgbase            linux-omamobile
+#   /usr/share/omamobile/linux/kernel.release     <release>: which release
+#       this package is, for omamobile-boot-update (kernel-modules-hook
+#       leaves a copy of the running release beside it, and release names
+#       end in a hash, so the newest-looking directory is not the answer)
+#   /usr/share/omamobile/linux/SOURCE             the release tag and commit
 #
 # depmod's files (modules.dep, .alias, .symbols, ...) are left out, as Arch's
 # kernels leave them out: kmod's 60-depmod hook makes them on the phone, and
@@ -24,10 +29,17 @@ die() { printf 'linux-omamobile install: %s\n' "$*" >&2; exit 1; }
 [[ -f $pre/kernel.release && -f $pre/SHA256SUMS ]] \
   || die "no staged kernel in $pre (run: packages/linux-omamobile/stage KERNEL_OUT)"
 (cd "$pre" && sha256sum --quiet --strict -c SHA256SUMS) || die "$pre fails its checksums"
-for f in Image modules.tar.zst kernel.release; do
+for f in Image modules.tar.zst kernel.release SOURCE; do
   grep -cE "  $f$" "$pre/SHA256SUMS" >/dev/null || die "$pre/SHA256SUMS does not cover $f"
 done
 rel=$(cat "$pre/kernel.release")
+# A published release only (./stage checked the tag on the published
+# repository; tools/build-packages checks it again with ./stage --verify)
+commit=$(sed -n 's/^commit \([0-9a-f]\{40\}\)$/\1/p' "$pre/SOURCE")
+[[ -n $commit && $rel =~ -g([0-9a-f]+)$ && $commit == "${BASH_REMATCH[1]}"* ]] \
+  || die "$pre/SOURCE does not name the commit $rel was built from"
+grep -cE '^tag kernel-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$' "$pre/SOURCE" >/dev/null \
+  || die "$pre/SOURCE names no release tag: only a published release is packaged (./stage from the tag's checkout)"
 count=$(cat "$pre/kernel.commits" 2>/dev/null || true)
 ./lib/pkgver "$rel" $count >/dev/null || exit 1
 [[ $(od -An -tx1 -j56 -N4 "$pre/Image" | tr -d ' \n') == 41524d64 ]] || die "$pre/Image is not an arm64 Image"
@@ -54,5 +66,7 @@ done
 find "$r/dtbs" -name '*.dtb' -print -quit 2>/dev/null | grep -c . >/dev/null || die "no DTBs in $pre/dtbs"
 echo linux-omamobile > "$r/pkgbase"
 chmod -R u+rwX,go+rX,go-w "$r"
-if [[ -f $pre/SOURCE ]]; then install -Dm644 "$pre/SOURCE" "$d/usr/share/omamobile/linux/SOURCE"; fi
+install -Dm644 "$pre/SOURCE" "$d/usr/share/omamobile/linux/SOURCE"
+printf '%s\n' "$rel" > "$d/usr/share/omamobile/linux/kernel.release"
+chmod 644 "$d/usr/share/omamobile/linux/kernel.release"
 install -Dm644 version "$d/usr/share/omamobile/linux/version"

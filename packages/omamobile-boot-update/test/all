@@ -348,6 +348,9 @@ addrel() { # R release
   echo linux-omamobile > "$m/pkgbase"
   echo dep > "$m/modules.dep"; echo bin > "$m/modules.dep.bin"
   echo dtb > "$m/dtbs/exynos/google/gs201-twelve.dtb"
+  # linux-omamobile's install names the release it installed
+  mkdir -p "$1/usr/share/omamobile/linux"
+  echo "$2" > "$1/usr/share/omamobile/linux/kernel.release"
 }
 battery() { # R percent status online
   rm -rf "$1/sys/class/power_supply"
@@ -405,6 +408,11 @@ refused "another board" "this board is 'google,gs201-other'" hook
 printf 'google,gs201-twelve\0google,gs201\0' > "$R/proc/device-tree/compatible"
 echo 'androidboot.slot_suffix=_a' > "$R/proc/cmdline"
 refused "a boot from slot A" "slot A" hook
+echo 'console=null panic=10' > "$R/proc/cmdline"
+refused "a boot that names no slot" "says this boot is from slot B" hook
+printf 'androidboot.slot_suffix = "_b"\n' > "$R/proc/bootconfig"
+run write --dry-run || { cat "$t/out"; fail "slot B named in /proc/bootconfig (as on cheetah) is enough"; }
+rm "$R/proc/bootconfig"
 echo 'androidboot.slot_suffix=_b' > "$R/proc/cmdline"
 vb=$(part "$R" vendor_boot_b); echo 1 > "$R/sys/block/sda/${vb##*/}/ro"
 refused "a read-only partition" "(vendor_boot_b) is read-only" hook
@@ -442,6 +450,11 @@ echo dep > "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa/modules.d
 echo linux-other > "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa/pkgbase"
 refused "no linux-omamobile release" "no kernel package release" hook
 echo linux-omamobile > "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa/pkgbase"
+mv "$R/usr/share/omamobile/linux/kernel.release" "$t/marker.keep"
+refused "no linux-omamobile installed (no release marker)" "kernel.release is missing" hook
+echo 7.3.0-rc6-omamobile-g999999999999 > "$R/usr/share/omamobile/linux/kernel.release"
+refused "a marker naming a release that isn't there" "there is no $R/usr/lib/modules/7.3.0-rc6-omamobile-g999999999999/vmlinuz" hook
+mv "$t/marker.keep" "$R/usr/share/omamobile/linux/kernel.release"
 battery "$R" 12 Discharging 0
 refused "a low battery" "battery at 12%" hook
 battery "$R" 64 Discharging 0
@@ -450,7 +463,7 @@ refused "unknown arguments" "unknown argument --slot=a" write --slot=a
 mkdir -p "$R/var/lib/omamobile/boot"
 ( flock -n 9; refused "a second run at the same time" "another omamobile-boot-update is running" hook ) 9> "$R/var/lib/omamobile/boot/.lock"
 [[ ! -e $R/var/lib/omamobile/boot/previous ]] || fail "no refusal saved anything"
-pass "refusals before any write: board, slot A, read-only, missing or doubled partitions, sizes, AVB size, symlinks, allowlist, initramfs, release, depmod, battery, confirmation, lock"
+pass "refusals before any write: board, slot A or no slot named, read-only, missing or doubled partitions, sizes, AVB size, symlinks, allowlist, initramfs, release, depmod, battery, confirmation, lock"
 
 # The write
 battery "$R" 12 Discharging 1   # low, but charging: allowed
@@ -505,7 +518,7 @@ addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
 run hook || { cat "$t/out"; fail "a newer release is written"; }
 grep -c 'never booted' "$t/out" >/dev/null || fail "it says slot B's set never booted"
 [[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "previous still holds the release that booted"
-[[ $(cat "$S/current/RELEASE") == 7.3.0-rc6-omamobile-00460-gcccccccccccc ]] || fail "the newest release (sort -V) is written"
+[[ $(cat "$S/current/RELEASE") == 7.3.0-rc6-omamobile-00460-gcccccccccccc ]] || fail "the release linux-omamobile names is written"
 pass "an unbooted set never replaces the saved set that booted"
 
 # An interrupted write: a dd that corrupts the second image. The hook stops,
@@ -553,6 +566,29 @@ echo corrupt >> "$S/previous/dtbo.img"
 refused "a saved set that fails its checksums" "fails its checksums" rollback --yes
 pass "rollback writes the saved partitions back (dry run first) and restores their modules"
 
+# Hash-only release names (a release build's uname -r) after an upgrade:
+# kernel-modules-hook has put back a full copy of the running release,
+# vmlinuz and pkgbase included, and here the old one sorts higher. The hook
+# writes the release the package names.
+mkroot "$R"
+rm -rf "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa"
+old_rel=7.3.0-rc6-omamobile-gf0f0f0f0f0f0 new_rel=7.3.0-rc6-omamobile-g1a2b3c4d5e6f
+addrel "$R" "$old_rel"   # kernel-modules-hook's copy of the running release
+addrel "$R" "$new_rel"   # the upgrade, whose install writes the marker last
+[[ $(printf '%s\n' "$new_rel" "$old_rel" | sort -V | tail -1) == "$old_rel" ]] || fail "test premise: the old release sorts higher"
+OMAMOBILE_BOOT_UNAME_R=$old_rel run hook || { cat "$t/out"; fail "hash-only releases: the hook writes"; }
+[[ $(cat "$R/var/lib/omamobile/boot/current/RELEASE") == "$new_rel" ]] \
+  || { cat "$t/out"; fail "the release linux-omamobile names is written, not the one sort -V puts last"; }
+grep -c "left alone: $old_rel" "$t/out" >/dev/null || { cat "$t/out"; fail "the other release is named and left alone"; }
+[[ $(cat "$R/var/lib/omamobile/boot/previous/RELEASE") == "$old_rel" ]] || fail "previous holds the running release"
+grep -c '"kernel_changed": true' "$R/run/omamobile/boot-update.json" >/dev/null || fail "a new release is recorded as a kernel change"
+# Booted into it, a device package changes the initramfs: a rewrite of the
+# same release is recorded as boot images only
+OMAMOBILE_BOOT_UNAME_R=$new_rel STUB_EXTRA=new-initramfs run hook || { cat "$t/out"; fail "a rewrite of the running release"; }
+grep -c '"result": "written"' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the rewrite is written"
+grep -c '"kernel_changed": false' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the same release is not recorded as a kernel change"
+pass "hash-only releases: the hook writes the release the package names, never the one that sorts last (kernel-modules-hook's copy)"
+
 # preflight: read-only, for omamobile-update
 mkroot "$R"
 before=$(sums "$R")
@@ -561,8 +597,22 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["ok"] and 
 echo 1 > "$R/sys/block/sda/${vb##*/}/ro"
 if "$U" preflight --json > "$t/pf"; then fail "preflight fails on a read-only partition"; fi
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "read-only" in d["problem"], d' "$t/pf" || fail "preflight names the problem"
+echo 0 > "$R/sys/block/sda/${vb##*/}/ro"
 [[ $(sums "$R") == "$before" && ! -e $R/var/lib/omamobile/boot && ! -e $R/run/omamobile ]] || fail "preflight changes nothing"
-pass "preflight answers in JSON and changes nothing"
+# Not enough space: preflight says so before pacman replaces anything, and
+# the write itself refuses before touching a partition
+printf '#!/bin/sh\necho "Filesystem 1-blocks Used Available Capacity Mounted on"\necho "fake 2000000000 1999000000 1000000 100%% /"\n' > "$fake/df-small"
+chmod +x "$fake/df-small"
+if DF=$fake/df-small "$U" preflight --json > "$t/pf"; then fail "preflight fails without space"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "not enough space" in d["problem"], d' "$t/pf" || fail "preflight names the space problem"
+DF=$fake/df-small refused "a write without room for the saved set" "not enough space in" hook
+[[ ! -e $R/var/lib/omamobile/boot/previous ]] || fail "nothing saved without space"
+# A set written but never booted: no kernel update on top of it
+run hook || { cat "$t/out"; fail "a write for the next check"; }
+if "$U" preflight --json > "$t/pf"; then fail "preflight fails while slot B holds a set that never booted"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "not booted yet" in d["problem"], d' "$t/pf" || fail "preflight says to restart first"
+OMAMOBILE_BOOT_UNAME_R=7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa "$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "preflight passes once that set has booted"; }
+pass "preflight answers in JSON and changes nothing; refuses without space, and while slot B holds a set that never booted"
 
 # End to end with the real builder (the tools above), when dtc is there:
 # slot B ends up holding exactly what omamobile-boot-images makes
