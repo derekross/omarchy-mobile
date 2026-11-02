@@ -317,3 +317,38 @@ ok(W.where_am_i() is None, "no answer: none")
 W.WHERE_AM_I = os.path.join(home, "missing")
 ok(W.geoclue_usable() is False, "no where-am-i: GeoClue isn't usable")
 print("ok - weather: GeoClue's where-am-i is read at city accuracy, and missing means not usable")
+
+# Which agent counts (2026-11-02: geoclue's own XDG autostart ran the demo
+# agent, so omamobile-gnss's unit exited as a second instance and weather
+# took Location for off). Any demo agent of this user's counts; the
+# Location switch off means no, whatever agent runs.
+W.WHERE_AM_I = fake_wai
+W.GEOCLUE_AGENT_BIN = "/usr/lib/geoclue-2.0/demos/agent"
+proc = os.path.join(home, "proc")
+
+
+def fake_proc(*cmdlines):
+    shutil.rmtree(proc, ignore_errors=True)
+    os.makedirs(os.path.join(proc, "self"))
+    for i, argv in enumerate(cmdlines, 100):
+        os.makedirs(os.path.join(proc, str(i)))
+        with open(os.path.join(proc, str(i), "cmdline"), "wb") as f:
+            f.write(b"\0".join(a.encode() for a in argv) + b"\0")
+
+
+W.PROC = proc
+fake_proc(["/usr/bin/bash"], ["/usr/lib/geoclue-2.0/demos/where-am-i", "-a", "4"])
+ok(W.agent_process() is False, "no demo agent process: none")
+fake_proc(["/usr/bin/bash"], ["/usr/lib/geoclue-2.0/demos/agent"])
+ok(W.agent_process() is True, "the demo agent run by this user counts")
+ok(W.agent_process(uid=os.getuid() + 1) is False, "another user's demo agent doesn't")
+ok(W.agent_process(proc=os.path.join(home, "no-proc")) is False, "no /proc: none")
+cases = [  # the Location switch, our unit, a demo agent process -> usable
+    (True, True, False, True), (True, False, True, True), (None, False, True, True),
+    (True, False, False, False), (False, True, True, False), (None, False, False, False)]
+for switch, unit, process, want in cases:
+    W.location_switch = lambda s=switch: s
+    W.agent_unit_active = lambda u=unit: u
+    W.agent_process = lambda p=process: p
+    ok(W.geoclue_usable() is want, "switch %s, our unit %s, a demo agent %s: usable %s" % (switch, unit, process, want))
+print("ok - weather: any GeoClue demo agent of this user's counts, and Location off means no")
