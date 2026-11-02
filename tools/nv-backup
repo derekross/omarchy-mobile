@@ -62,8 +62,12 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 
-say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
-note() { printf '    %s\n' "$*"; }
+# Progress goes to stdout, and a closed stdout (| head, a tee that died)
+# must not stop a copy halfway: SIGPIPE is ignored and progress lines that
+# can't be written are dropped. The run stops only on its own checks.
+trap '' PIPE
+say() { printf '\e[1m==> %s\e[0m\n' "$*" 2>/dev/null || true; }
+note() { printf '    %s\n' "$*" 2>/dev/null || true; }
 die() { printf '\e[31mnv-backup:\e[0m %s\n' "$*" >&2; exit 1; }
 
 device="" mode=backup dir=""
@@ -330,6 +334,9 @@ printf '%s\n' "${sums[@]}" > "$dir/SHA256SUMS"
 chmod 700 -- "$dir"
 chmod 600 -- "$dir"/*
 (cd "$dir" && sha256sum -c --quiet --strict SHA256SUMS) || die "$dir doesn't check against its own SHA256SUMS"
+# Verified: from here on nothing may remove it (a closed stdout during the
+# banner below must not take a good backup with it)
+trap - EXIT
 
 say "Backup done: $dir"
 note "$(wc -l < "$dir/SHA256SUMS") partitions, each verified against the phone; SHA256SUMS, partitions.txt, NV-BACKUP"

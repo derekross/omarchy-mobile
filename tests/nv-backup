@@ -103,6 +103,15 @@ if [[ -n ${FAIL_DD:-} && $* == dd\ * ]]; then
     exit 255
   fi
 fi
+# SHORT_DD=N: the Nth dd sends 300 bytes of its chunk and exits 0 (only the
+# size check can catch it); SHORT_DD=all: every dd does
+if [[ -n ${SHORT_DD:-} && $* == dd\ * ]]; then
+  echo x >> "$PHONE_LOG.short"
+  if [[ $SHORT_DD == all || $(wc -l < "$PHONE_LOG.short") == "$SHORT_DD" ]]; then
+    bash -c "$*" | head -c 300
+    exit 0
+  fi
+fi
 if [[ -n ${CHANGE_AFTER:-} && $* == sha256sum\ * ]]; then
   bash -c "$*"
   echo x >> "$PHONE_LOG.sums"
@@ -248,6 +257,23 @@ if FAIL_DD=all "$r/tools/nv-backup" -d testdev "$t/empty" >/dev/null 2>&1; then 
 out=$("$r/tools/nv-backup" -d testdev "$t/empty" 2>&1) || fail "running again after a failure works: $out"
 [[ $(wc -l < "$t/empty/SHA256SUMS") == 7 ]] || fail "the rerun copies all seven"
 pass "a chunk that fails once is read again and the backup verifies; failing every time refuses, leaves nothing, and a rerun works"
+
+# A chunk that comes back short with exit status 0: only the size check sees it
+rm -f "$PHONE_LOG.short"
+out=$(SHORT_DD=5 "$r/tools/nv-backup" -d testdev "$t/short" 2>&1) || fail "a short chunk with status 0 is read again: $out"
+(cd "$t/short" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the backup after a short chunk checks"
+grep -c 'chunk read(s) failed and were read again' <<<"$out" >/dev/null || fail "the run says the short chunk was read again: $out"
+rm -f "$PHONE_LOG.short"
+if out=$(SHORT_DD=all "$r/tools/nv-backup" -d testdev "$t/short-all" 2>&1); then fail "refuses when every chunk comes back short"; fi
+grep -c 'failed 5 times' <<<"$out" >/dev/null || fail "says the short reads failed 5 times: $out"
+[[ ! -e $t/short-all ]] || fail "nothing is left when every chunk comes back short"
+pass "a chunk that comes back short with status 0 is caught by its size check and read again"
+
+# A closed stdout during the closing banner never removes a verified backup
+"$r/tools/nv-backup" -d testdev "$t/closed" 2>/dev/null | head -c 10 >/dev/null || true
+[[ -f $t/closed/SHA256SUMS && $(wc -l < "$t/closed/SHA256SUMS") == 7 ]] || fail "a verified backup survives a closed stdout"
+(cd "$t/closed" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the backup behind a closed stdout checks"
+pass "a verified backup survives a closed stdout (| head) during the banner"
 
 # --- A partition that changes during the copy --------------------------------------
 # After the seventh (last) verifying read, one partition turns writable,
