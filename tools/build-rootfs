@@ -17,7 +17,14 @@
 #                              (PACKAGE and ROOTFS_PACKAGES in device.conf)
 # then adds the [omamobile] repository itself (a copy in
 # /var/lib/omamobile/repo), sets the [omamobile] channel the phone follows
-# (--channel), and the kernel modules from the current kernel build. Omarchy's pending
+# (--channel), and the kernel modules from the current kernel build. A
+# device whose package ships boot files (its install reads
+# OMAMOBILE_BOOT_FILES; cheetah) gets linux-omamobile and
+# omamobile-boot-update from out/repo too, so a release install can take
+# its kernel updates through pacman (RELEASES §5.3, §12 decision 10): the
+# package's modules replace the tarball, and its release must be
+# KERNEL_OUT's, since the bundle's boot images come from KERNEL_OUT
+# (--allow-missing linux-omamobile falls back to the tarball). Omarchy's pending
 # patches come with omamobile-omarchy, whose pacman hook applies them as it
 # does after every Omarchy upgrade on a phone (build-inside checks that they
 # are in place). Device packages are installed, not just cached:
@@ -102,6 +109,9 @@ conf=device/$DEVICE/device.conf
 DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
 [[ -n $DEVICE_PACKAGE ]] || alarm_die "$conf has no PACKAGE"
 ROOTFS_PACKAGES=$(sed -n 's/^ROOTFS_PACKAGES="\(.*\)"$/\1/p' "$conf")
+# Boot files in the device package: the kernel comes as a package
+KERNEL_PACKAGE=0
+grep -c 'OMAMOBILE_BOOT_FILES' "packages/$DEVICE_PACKAGE/install" >/dev/null 2>&1 && KERNEL_PACKAGE=1
 [[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
 
 repo=$outrel/repo/aarch64
@@ -139,7 +149,7 @@ docker run --rm --privileged --platform linux/arm64 \
   -v "$ROOT:/src:ro" -v "$ROOT/$outrel/repo:/repo:ro" -v "$modules:/modules:ro" \
   -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
   -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
-  -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" \
+  -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" -e KERNEL_PACKAGE="$KERNEL_PACKAGE" \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e CHANNEL="$CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \

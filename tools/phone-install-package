@@ -64,5 +64,13 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
-"$ssh" "su - '$phone_user' -c 'cd $build/$name && makepkg -f --noconfirm' 2>&1 | tail -2"
+# A device package that ships boot files (tools/stage-boot-files) refuses to
+# build without them; here, on a development phone, it builds without them
+# when none are staged (bin/omamobile push stays slot B's writer)
+optout=""
+if grep -c 'OMAMOBILE_BOOT_FILES' "$dir/install" >/dev/null 2>&1 && [[ ! -d $dir/boot-files ]]; then
+  echo "no $dir/boot-files: a development build without the boot files (omamobile-boot-update will refuse on it)"
+  optout="OMAMOBILE_BOOT_FILES=none "
+fi
+"$ssh" "su - '$phone_user' -c 'cd $build/$name && ${optout}makepkg -f --noconfirm' 2>&1 | tail -2"
 "$ssh" "OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm $build/$name/$name-*.pkg.tar.* 2>&1 | grep -E '^error|installing|upgrading|reinstalling' ; pacman -Q $name"

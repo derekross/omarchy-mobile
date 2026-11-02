@@ -1,0 +1,786 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Turn the installed kernel package into this phone's slot-B boot images and
+# write them, on the phone (docs/RELEASES.md §5.3). What bin/omamobile images
+# and push do from the laptop, with the same descriptor, the same commands
+# and the same guarded, verified write.
+#
+#   omamobile-boot-update status            what is installed, built and on slot B
+#   omamobile-boot-update preflight [--json]
+#                                           read-only: would a write be allowed now?
+#                                           (omamobile-update asks before a kernel update)
+#   omamobile-boot-update build             build the images into /var/lib/omamobile/boot/next
+#   omamobile-boot-update write [--dry-run] [--yes] [--ignore-battery]
+#                                           build, check, save slot B, write, verify
+#   omamobile-boot-update rollback [--dry-run] [--yes] [--ignore-battery]
+#                                           write the saved previous images back
+#   omamobile-boot-update hook              the pacman hook (90-omamobile-boot.hook)
+#
+# What it writes, and only that: each BOOT_IMAGES entry of the installed
+# descriptor (/usr/share/omamobile/device.conf) to the partition whose GPT
+# name is <image>_b on the main UFS LUN, when that name is on the
+# descriptor's storage-guard allowlist (UFS_RW) and the kernel says the
+# partition is writable (ro 0: the initramfs guard decides, this never
+# changes it). Never slot A, userdata, bootloader, vbmeta, devinfo, or any
+# other partition; never a whole disk; never blockdev --setrw. It never
+# reboots: the next restart boots the new images.
+#
+# Steps of a write:
+#   1. /etc/omamobile/boot-update.conf is data (KEY=value, never sourced);
+#      the hook does nothing unless it says AUTO_WRITE=yes (development
+#      phones keep bin/omamobile push as slot B's only writer).
+#   2. The descriptor must be valid (the same rules as bin/omamobile's
+#      load_device, lib/descriptor.sh), and /proc/device-tree/compatible
+#      must start with its COMPATIBLE: one Pixel's package never writes
+#      another's slot B. The boot must name slot B
+#      (androidboot.slot_suffix=_b in /proc/bootconfig or /proc/cmdline);
+#      slot A, or no slot named at all, is refused.
+#   3. The release the installed linux-omamobile names in
+#      /usr/share/omamobile/linux/kernel.release (never the newest-looking
+#      directory: release names end in a commit hash, and kernel-modules-hook
+#      leaves a full copy of the running release beside the new one), its
+#      vmlinuz and pkgbase, and depmod's modules.dep and .bin for it: a
+#      kernel without its modules boots without its GPU.
+#   4. The device package's files (/usr/lib/omamobile/<codename>/: dtbo.img,
+#      initramfs.cpio.lz4, overlays/<name>.dtbo) must be there; the
+#      initramfs must carry exactly the descriptor's allowlist, and no
+#      developer SSH keys.
+#   5. lib/omamobile-boot-images packs the images (bin/omamobile images'
+#      commands, AVB footers included) into /var/lib/omamobile/boot/next.
+#   6. Each image must fit its partition, and an AVB_FOOTERS image must be
+#      the partition's exact size. Partitions that already hold their image
+#      are left alone; when all do, nothing is written.
+#   7. The battery must be at 30% or more, or charging.
+#   8. Slot B's current contents (whole partitions) and that release's
+#      module tree go to /var/lib/omamobile/boot/previous, unless slot B
+#      was written since this boot (the kernel's write counters in
+#      /sys/block/<lun>/<part>/stat: this tool, push, a rollback; a fastboot
+#      flash comes before the boot and counts as booted) or a write was
+#      left incomplete: then previous keeps the last set that did boot.
+#   9. Each image: dd conv=fsync, the kernel's buffers dropped, then the
+#      partition's leading bytes read back and compared by sha256. Any
+#      failure stops here and leaves previous for `rollback`.
+#
+# State: /var/lib/omamobile/boot/{next,previous,current,incomplete}; the last
+# result in /run/omamobile/boot-update.json (omamobile-update's restart step
+# reads it). --dry-run builds into a temporary directory, reads the
+# partitions and prints the plan; it writes no partition and no state.
+#
+# OMAMOBILE_BOOT_ROOT (tests only) prefixes every path, /sys, /dev and /proc
+# included; only then may a "partition" be a regular file.
+set -euo pipefail
+shopt -s extglob
+
+R=${OMAMOBILE_BOOT_ROOT:-}
+[[ $R == / ]] && R=
+LIB=${OMAMOBILE_BOOT_UPDATE_LIB:-/usr/lib/omamobile-boot-update}
+DESCRIPTOR=$R/usr/share/omamobile/device.conf
+CONF=$R/etc/omamobile/boot-update.conf
+MODULES=$R/usr/lib/modules
+STATE=$R/var/lib/omamobile/boot
+RUN=$R/run/omamobile
+SYS=$R/sys
+DEV=$R/dev
+PROC=$R/proc
+KEYS=$R/root/.ssh/authorized_keys
+# What the installed linux-omamobile is: its install writes the release here
+KERNEL_MARKER=$R/usr/share/omamobile/linux/kernel.release
+MIN_BATTERY=30
+UNAME_R=${OMAMOBILE_BOOT_UNAME_R:-$(uname -r)}
+DEPMOD=${DEPMOD:-depmod}
+DF=${DF:-df}
+AVB_TESTKEY=${OMAMOBILE_BOOT_AVB_TESTKEY:-/usr/share/omamobile-boot-update/avb/testkey_rsa4096.pem}
+LZ4=${LZ4:-lz4}
+CPIO=${CPIO:-cpio}
+
+say() { printf '==> %s\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die() { printf 'error: omamobile-boot-update: %s\n' "$*" >&2; record failed "$*"; exit 1; }
+refuse() { printf 'error: omamobile-boot-update: not writing slot B: %s\n' "$*" >&2; record refused "$*"; exit 1; }
+# shellcheck source=../lib/descriptor.sh
+source "$LIB/descriptor.sh"
+
+COMMAND=
+RELEASE=
+# The last result, for omamobile-update's restart step and `status`. Only
+# commands that may write record; a dry run or a preflight records nothing.
+record() {
+  [[ $COMMAND == write || $COMMAND == rollback || $COMMAND == hook ]] || return 0
+  [[ ${DRY_RUN:-0} == 0 ]] || return 0
+  mkdir -p "$RUN" 2>/dev/null || return 0
+  # kernel_changed: the release slot B now holds is not the running one, so
+  # the next restart changes the kernel (not only the initramfs or dtbo)
+  local changed=false
+  [[ -z $RELEASE || $RELEASE == "$UNAME_R" ]] || changed=true
+  python3 -I - "$RUN/boot-update.json" "$1" "$2" "$COMMAND" "$RELEASE" "$changed" <<'PY' 2>/dev/null || true
+import json, os, sys, time
+path, result, message, command, release, changed = sys.argv[1:]
+tmp = path + ".new"
+with open(tmp, "w") as f:
+    json.dump({"result": result, "message": message, "command": command, "release": release,
+               "kernel_changed": changed == "true", "time": int(time.time())}, f, sort_keys=True)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+real_root() { [[ -z $R ]]; }
+
+# ---------------------------------------------------------------- inputs
+
+# /etc/omamobile/boot-update.conf: AUTO_WRITE=yes|no (default no) and an
+# optional AVB_KEY=/absolute/path. Data, never sourced; anything else in it
+# is an error, so a typo can't turn the hook on or off by accident.
+AUTO_WRITE=no
+AVB_KEY=
+load_conf() {
+  local line n=0
+  AUTO_WRITE=no AVB_KEY=
+  [[ -f $CONF ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    if [[ $line =~ ^AUTO_WRITE=\"?(yes|no)\"?$ ]]; then
+      AUTO_WRITE=${BASH_REMATCH[1]}
+    elif [[ $line =~ ^AVB_KEY=\"?(/[A-Za-z0-9_./-]+)\"?$ && $line != *..* ]]; then
+      AVB_KEY=${BASH_REMATCH[1]}
+    else
+      refuse "$CONF:$n: expected AUTO_WRITE=yes|no or AVB_KEY=/path, got '$line'"
+    fi
+  done < "$CONF"
+}
+
+# The board must be the descriptor's: the first string of the root
+# compatible, as the initramfs compares it.
+check_board() {
+  local got=""
+  [[ -r $PROC/device-tree/compatible ]] || refuse "cannot read $PROC/device-tree/compatible"
+  got=$(tr '\0' '\n' < "$PROC/device-tree/compatible" | head -1)
+  [[ $got == "$DEV_COMPATIBLE" ]] \
+    || refuse "this board is '$got', but the installed descriptor is for $DEV_CODENAME ('$DEV_COMPATIBLE')"
+}
+
+# Linux runs from slot B, and the bootloader must say so: slot A, or a boot
+# that names no slot, is not ours to update.
+check_slot() {
+  local f b=0
+  for f in "$PROC/cmdline" "$PROC/bootconfig"; do
+    [[ -r $f ]] || continue
+    if grep -E 'androidboot\.slot_suffix *= *"?_a' "$f" >/dev/null; then
+      refuse "the bootloader says this boot is from slot A ($f)"
+    fi
+    grep -E 'androidboot\.slot_suffix *= *"?_b' "$f" >/dev/null && b=1
+  done
+  ((b)) || refuse "neither $PROC/bootconfig nor $PROC/cmdline says this boot is from slot B (androidboot.slot_suffix=_b)"
+}
+
+device_dir() { echo "$R/usr/lib/omamobile/$DEV_CODENAME"; }
+
+# The device package's files, and what the release initramfs packs.
+check_device_files() {
+  local d ov allow keyfiles
+  d=$(device_dir)
+  [[ -s $d/dtbo.img ]] || refuse "no $d/dtbo.img: $DEV_PACKAGE does not ship its boot files yet"
+  [[ -s $d/initramfs.cpio.lz4 ]] || refuse "no $d/initramfs.cpio.lz4: $DEV_PACKAGE does not ship its boot files yet"
+  for ov in ${DEV_DTB_OVERLAYS:-}; do
+    [[ -s $d/overlays/$ov.dtbo ]] || refuse "no $d/overlays/$ov.dtbo (DTB_OVERLAYS names it)"
+  done
+  command -v "$CPIO" >/dev/null || refuse "missing tool $CPIO"
+  command -v "$LZ4" >/dev/null || refuse "missing tool $LZ4"
+  # The new images' storage guard is this initramfs's: it must leave
+  # writable exactly what the descriptor says, or a later write could find
+  # its partition read-only, or worse, another one writable.
+  allow=$("$LZ4" -dc "$d/initramfs.cpio.lz4" 2>/dev/null \
+    | "$CPIO" -i --quiet --to-stdout 'etc/omamobile-ufs-rw' './etc/omamobile-ufs-rw' 2>/dev/null || true)
+  [[ $allow == "$(read -ra a <<<"$DEV_UFS_RW"; echo "${a[*]}")" ]] \
+    || refuse "the device package's initramfs allowlist ('$allow') is not the descriptor's UFS_RW ('$DEV_UFS_RW')"
+  keyfiles=$("$LZ4" -dc "$d/initramfs.cpio.lz4" 2>/dev/null | "$CPIO" -it --quiet 2>/dev/null \
+    | grep -cE '^(\./)?root/\.ssh/authorized_keys$' || true)
+  [[ $keyfiles == 0 ]] || refuse "the device package's initramfs carries developer SSH keys (not a release initramfs)"
+}
+
+# The release the installed linux-omamobile owns, with depmod's output. Not
+# the newest-looking directory: release names end in a commit hash
+# (-omamobile-g<sha12>), so sort -V orders two releases by their hashes, and
+# kernel-modules-hook leaves a full copy of the running release (vmlinuz and
+# pkgbase included) beside the new one after every upgrade.
+pick_release() {
+  local d rel others=()
+  [[ -s $KERNEL_MARKER ]] || refuse "no kernel package release: $KERNEL_MARKER is missing (is linux-omamobile installed?)"
+  rel=$(head -1 "$KERNEL_MARKER")
+  [[ $rel =~ ^[A-Za-z0-9._+-]+$ ]] || refuse "odd release name '$rel' in $KERNEL_MARKER"
+  [[ -f $MODULES/$rel/vmlinuz ]] || refuse "linux-omamobile names $rel, but there is no $MODULES/$rel/vmlinuz"
+  [[ $(cat "$MODULES/$rel/pkgbase" 2>/dev/null) == linux-omamobile ]] \
+    || refuse "no kernel package release: $MODULES/$rel/pkgbase does not say linux-omamobile"
+  for d in "$MODULES"/*/; do
+    d=${d%/}
+    [[ ${d##*/} != "$rel" && -f $d/vmlinuz ]] && others+=("${d##*/}")
+  done
+  ((${#others[@]} == 0)) || note "using $rel, the release linux-omamobile installed (also in $MODULES, left alone: ${others[*]})"
+  [[ -s $MODULES/$rel/modules.dep && -s $MODULES/$rel/modules.dep.bin ]] \
+    || refuse "depmod has not run for $rel (no modules.dep): the kernel would boot without its modules"
+  [[ -s $MODULES/$rel/dtbs/$DEV_DTB ]] || refuse "$rel has no dtbs/$DEV_DTB"
+  RELEASE=$rel
+}
+
+# ---------------------------------------------------------------- partitions
+
+declare -A PART_DEV=() PART_BYTES=()
+
+sysfs_part() { echo "$SYS/block/$DEV_MAIN_LUN/$1"; }
+
+# Find <image>_b on the main LUN by GPT name: exactly one partition, on the
+# allowlist, writable, of a readable size.
+find_partition() {
+  local img=$1 want s name found=() bytes sectors
+  want=${img}_b
+  [[ " $BU_IMAGES_ALLOWED " == *" $img "* ]] || refuse "$img is not a boot image"
+  [[ " $DEV_UFS_RW " == *" $want "* ]] || refuse "$want is not on the storage guard's allowlist (UFS_RW)"
+  for s in "$SYS/block/$DEV_MAIN_LUN/$DEV_MAIN_LUN"*; do
+    [[ -f $s/uevent ]] || continue
+    grep -cx "PARTNAME=$want" "$s/uevent" >/dev/null && found+=("${s##*/}")
+  done
+  ((${#found[@]})) || refuse "$want not found on $DEV_MAIN_LUN"
+  ((${#found[@]} == 1)) || refuse "$want appears ${#found[@]} times on $DEV_MAIN_LUN (${found[*]})"
+  name=${found[0]}
+  [[ $name =~ ^${DEV_MAIN_LUN}[0-9]+$ ]] || refuse "$want is $name, not a partition of $DEV_MAIN_LUN"
+  sectors=$(cat "$(sysfs_part "$name")/size" 2>/dev/null || true)
+  [[ $sectors =~ ^[0-9]{1,15}$ ]] && ((sectors > 0)) || refuse "cannot read the size of $name ($want)"
+  bytes=$((sectors * 512))
+  PART_DEV[$img]=$DEV/$name
+  PART_BYTES[$img]=$bytes
+  check_writable "$img"
+}
+
+# Re-checked right before every write: the node is the partition we found,
+# the name is still <image>_b on the allowlist, the guard left it writable.
+check_writable() {
+  local img=$1 dev name want
+  dev=${PART_DEV[$img]} name=${dev##*/} want=${img}_b
+  [[ $want =~ ^(boot|init_boot|vendor_boot|vendor_kernel_boot|dtbo)_b$ ]] || refuse "refusing to write $want"
+  [[ " $DEV_UFS_RW " == *" $want "* && " $BU_UFS_RW_ALLOWED " == *" $want "* ]] || refuse "$want is not allowed"
+  [[ $dev == "$DEV/$DEV_MAIN_LUN"[0-9]* ]] || refuse "$dev is not a partition of $DEV_MAIN_LUN"
+  grep -cx "PARTNAME=$want" "$(sysfs_part "$name")/uevent" >/dev/null 2>&1 || refuse "$dev is no longer $want"
+  if real_root; then
+    [[ -b $dev ]] || refuse "$dev is not a block device"
+  else
+    [[ -f $dev && ! -L $dev ]] || refuse "$dev (test tree) is not a regular file"
+  fi
+  [[ $(cat "$(sysfs_part "$name")/ro" 2>/dev/null) == 0 ]] \
+    || refuse "$dev ($want) is read-only: the storage guard did not leave it writable"
+}
+
+# Free bytes on the file system that holds PATH (or its nearest parent)
+SPACE_MARGIN=$((64 * 1024 * 1024))
+free_bytes() {
+  local d=$1 n
+  while [[ ! -d $d ]]; do d=$(dirname "$d"); done
+  n=$("$DF" -P -B1 "$d" | awk 'NR == 2 {print $4}')
+  [[ $n =~ ^[0-9]+$ ]] || refuse "cannot read the free space of $d"
+  echo "$n"
+}
+
+sha_head() { head -c "$2" "$1" | sha256sum | cut -d' ' -f1; }
+sha_file() { sha256sum < "$1" | cut -d' ' -f1; }
+
+# Every image fits; an AVB image (and a whole-partition dump) fills its
+# partition exactly, so its footer sits at the partition's end.
+check_sizes() {
+  local dir=$1 exact=$2 img size bytes avb
+  for img in $DEV_BOOT_IMAGES; do
+    [[ -s $dir/$img.img ]] || refuse "missing $dir/$img.img"
+    size=$(stat -c %s "$dir/$img.img") bytes=${PART_BYTES[$img]}
+    ((size <= bytes)) || refuse "$img.img ($size bytes) is larger than ${img}_b ($bytes bytes)"
+    avb=$(bu_avb_size "$img")
+    if [[ -n $avb ]]; then
+      ((avb == bytes)) || refuse "AVB_FOOTERS pads $img to $avb bytes, but ${img}_b is $bytes: its footer would not be at the end"
+      ((size == bytes)) || refuse "$img.img is $size bytes; with its AVB footer it must be $bytes"
+    fi
+    if ((exact)); then
+      ((size == bytes)) || refuse "$img.img is $size bytes, ${img}_b is $bytes: not a dump of that partition"
+    fi
+  done
+}
+
+# ---------------------------------------------------------------- battery
+
+battery_blocker() {
+  local d kind present=0 percent=-1 charging=0 cap
+  for d in "$SYS"/class/power_supply/*; do
+    [[ -d $d ]] || continue
+    kind=$(cat "$d/type" 2>/dev/null || true)
+    if [[ $kind == Battery ]]; then
+      [[ $(cat "$d/scope" 2>/dev/null || true) == Device ]] && continue
+      [[ $(cat "$d/present" 2>/dev/null || echo 1) == 0 ]] && continue
+      ((present)) && continue
+      cap=$(cat "$d/capacity" 2>/dev/null || true)
+      [[ $cap =~ ^[0-9]+$ ]] || continue
+      present=1 percent=$cap
+      [[ $(cat "$d/status" 2>/dev/null || true) == @(Charging|Full) ]] && charging=1
+    elif [[ $kind == @(Mains|USB|USB_C|USB_PD|Wireless) && $(cat "$d/online" 2>/dev/null || true) == 1 ]]; then
+      charging=1
+    fi
+  done
+  if ((present && !charging && percent < MIN_BATTERY)); then
+    echo "battery at $percent%: charge to $MIN_BATTERY% or plug in the charger first"
+  fi
+}
+
+# ---------------------------------------------------------------- build
+
+# The AVB footers' key: AOSP's public RSA-4096 test key, the one
+# bin/omamobile images signs with, so the phone's images are the laptop's
+# byte for byte. An unlocked bootloader (every install) accepts any key on a
+# chained partition's footer and refuses only a missing footer, so a key of
+# the phone's own would add nothing. AVB_KEY= in the config overrides it.
+AOSP_TESTKEY_SHA256=6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121
+avb_key() {
+  local key=${AVB_KEY:-$AVB_TESTKEY}
+  [[ -n ${DEV_AVB_FOOTERS:-} ]] || return 0
+  [[ -s $key ]] || refuse "no AVB key at $key"
+  if [[ -z $AVB_KEY ]]; then
+    [[ $(sha_file "$key") == "$AOSP_TESTKEY_SHA256" ]] || refuse "$key is not AOSP's test key (sha256 $AOSP_TESTKEY_SHA256)"
+  fi
+  echo "$key"
+}
+
+# build OUT TMP: pack the images for RELEASE into OUT.
+build_images() {
+  local out=$1 tmp=$2 d key args=()
+  d=$(device_dir)
+  key=$(avb_key)
+  args=(--descriptor "$DESCRIPTOR" --kernel "$MODULES/$RELEASE/vmlinuz" --dtbs "$MODULES/$RELEASE/dtbs"
+        --dtbo "$d/dtbo.img" --initramfs "$d/initramfs.cpio.lz4" --out "$out" --modules "$MODULES/$RELEASE")
+  [[ -z ${DEV_DTB_OVERLAYS:-} ]] || args+=(--overlays "$d/overlays")
+  [[ -z $key ]] || args+=(--avb-key "$key")
+  [[ -s $KEYS ]] && args+=(--authorized-keys "$KEYS")
+  say "Building $DEV_CODENAME's boot images for $RELEASE"
+  "$LIB/omamobile-boot-images" "${args[@]}" | sed 's/^/    /' || refuse "building the images failed"
+  echo "$RELEASE" > "$out/RELEASE"
+  (cd "$out" && for img in $DEV_BOOT_IMAGES; do sha256sum "$img.img"; done) > "$out/SHA256SUMS"
+}
+
+# ---------------------------------------------------------------- the write
+
+LOCK_FD=
+take_lock() {
+  mkdir -p "$STATE"
+  exec {LOCK_FD}>"$STATE/.lock"
+  flock -n "$LOCK_FD" || refuse "another omamobile-boot-update is running"
+}
+
+confirm() {
+  local what=$1 answer
+  ((YES)) && return 0
+  [[ -t 0 ]] || refuse "$what needs --yes when not run in a terminal"
+  printf 'This writes %s to slot B of this %s. Type the codename (%s) to go on: ' "$what" "${DEV_NAME:-phone}" "$DEV_CODENAME"
+  read -r answer
+  [[ $answer == "$DEV_CODENAME" ]] || refuse "not confirmed"
+}
+
+# Slot B's whole partitions and the release that booted from them, into
+# previous/, swapped in only once complete.
+# The slot B images written since this boot, from the kernel's own write
+# counters (field 7 of /sys/block/<lun>/<part>/stat, sectors written). A set
+# that booted from slot B is still there exactly when none was written: a
+# fastboot flash (the documented recovery) happens before the boot and is
+# not counted; this tool's own writes, bin/omamobile push and a rollback in
+# the same boot are. An unreadable counter counts as written, and so does
+# every image when the disk's I/O accounting is off (queue/iostats not 1:
+# the counters would stay 0). Field 7 counts writes through the partition's
+# block device (dd, as this tool and push write); discards, SG_IO
+# passthrough and writes to the whole disk are not counted there, which no
+# writer of ours does (the storage guard removes the main LUN's disk node).
+written_since_boot() {
+  local img name f n out=()
+  if [[ $(cat "$SYS/block/$DEV_MAIN_LUN/queue/iostats" 2>/dev/null) != 1 ]]; then
+    for img in $DEV_BOOT_IMAGES; do out+=("${img}_b"); done
+    echo "${out[*]} (I/O accounting off)"
+    return 0
+  fi
+  for img in $DEV_BOOT_IMAGES; do
+    name=${PART_DEV[$img]##*/}
+    f=$(sysfs_part "$name")/stat
+    n=$(awk '{print $7}' "$f" 2>/dev/null || true)
+    [[ $n == 0 ]] || out+=("${img}_b")
+  done
+  echo "${out[*]}"
+}
+
+# Test roots only: what the kernel's counter does on a real write
+fake_count_write() {
+  local f
+  real_root && return 0
+  f=$(sysfs_part "${1##*/}")/stat
+  [[ -f $f ]] || return 0
+  awk -v s="$(( ($2 + 511) / 512 ))" '{ $7 += s; print }' "$f" > "$f.new" && mv "$f.new" "$f"
+}
+
+save_previous() {
+  local img dev bytes rel booted=yes need avail written new=$STATE/previous.new
+  # Booted means slot B unwritten since this boot, whatever any record says:
+  # then it holds the running kernel's set
+  rel=$UNAME_R
+  written=$(written_since_boot)
+  if [[ -n $written ]]; then
+    booted=no
+    rel=unknown
+    [[ $(current_state) != yes ]] || rel=$(cat "$STATE/current/RELEASE")
+  fi
+  if [[ -e $STATE/incomplete ]]; then
+    if [[ -d $STATE/previous ]]; then
+      note "an earlier write did not finish: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), the last complete set"
+      return 0
+    fi
+    booted=no
+    note "an earlier write did not finish and nothing was saved before it: saving slot B as it is, for what it is worth"
+  elif [[ $booted == no && -d $STATE/previous ]]; then
+    if [[ $(cat "$STATE/previous/BOOTED" 2>/dev/null) == no ]]; then
+      note "slot B was written since this boot ($written; it holds $rel) and has not booted: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), which never booted either"
+    else
+      note "slot B was written since this boot ($written; it holds $rel) and has not booted: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), the last set that booted"
+    fi
+    return 0
+  elif [[ $booted == no ]]; then
+    note "slot B was written since this boot ($written) and nothing was saved before: saving it as it is, marked not booted"
+  fi
+  need=0
+  for img in $DEV_BOOT_IMAGES; do need=$((need + PART_BYTES[$img])); done
+  [[ -d $MODULES/$rel ]] && need=$((need + $(du -sb "$MODULES/$rel" | cut -f1)))
+  avail=$(free_bytes "$STATE")
+  ((avail > need + SPACE_MARGIN)) || refuse "not enough space in $STATE to keep the previous images ($need bytes needed)"
+  say "Saving slot B ($rel) to $STATE/previous"
+  rm -rf "$new" && mkdir -p "$new"
+  for img in $DEV_BOOT_IMAGES; do
+    dev=${PART_DEV[$img]} bytes=${PART_BYTES[$img]}
+    head -c "$bytes" "$dev" > "$new/$img.img" || refuse "could not read ${img}_b"
+    [[ $(stat -c %s "$new/$img.img") == "$bytes" ]] || refuse "short read of ${img}_b"
+  done
+  (cd "$new" && for img in $DEV_BOOT_IMAGES; do sha256sum "$img.img"; done) > "$new/SHA256SUMS"
+  printf '%s\n' "$DEV_CODENAME" > "$new/DEVICE"
+  printf '%s\n' "$rel" > "$new/RELEASE"
+  printf '%s\n' "$booted" > "$new/BOOTED"
+  if [[ -d $MODULES/$rel ]]; then
+    mkdir -p "$new/modules"
+    cp -a "$MODULES/$rel" "$new/modules/$rel" || refuse "could not save the modules of $rel"
+  else
+    note "no module tree for $rel in $MODULES: previous/ holds the images only"
+  fi
+  rm -rf "$STATE/previous.old"
+  [[ ! -d $STATE/previous ]] || mv "$STATE/previous" "$STATE/previous.old"
+  mv "$new" "$STATE/previous"
+  rm -rf "$STATE/previous.old"
+  sync
+}
+
+# write_one IMG FILE: the guarded write and its read-back.
+write_one() {
+  local img=$1 file=$2 dev size want got
+  check_writable "$img"
+  dev=${PART_DEV[$img]}
+  size=$(stat -c %s "$file")
+  want=$(sha_file "$file")
+  dd if="$file" of="$dev" bs=1M conv=fsync,notrunc status=none || die "writing ${img}_b ($dev) failed: slot B is incomplete; omamobile-boot-update rollback restores the saved set"
+  fake_count_write "$dev" "$size"
+  # Drop the kernel's cached copy so the read-back comes from the device
+  if real_root; then blockdev --flushbufs "$dev" || true; fi
+  got=$(sha_head "$dev" "$size")
+  [[ $want == "$got" ]] || die "verify failed for ${img}_b ($dev): slot B is incomplete; omamobile-boot-update rollback restores the saved set"
+  say "${img}_b ($dev) written and verified"
+}
+
+# do_write MODE: MODE is write (the new release) or rollback (previous/).
+do_write() {
+  local mode=$1 src tmp img changed=() same=() why
+  load_conf
+  bu_load_descriptor "$DESCRIPTOR"
+  check_board
+  check_slot
+  ((DRY_RUN)) || take_lock
+  tmp=$(mktemp -d)
+  # shellcheck disable=SC2064 # expand now
+  trap "rm -rf '$tmp'" EXIT
+  for img in $DEV_BOOT_IMAGES; do find_partition "$img"; done
+  if [[ $mode == write ]]; then
+    check_device_files
+    pick_release
+    if ((DRY_RUN)); then src=$tmp/images; else src=$STATE/next; fi
+    build_images "$src" "$tmp"
+    check_sizes "$src" 0
+  else
+    src=$STATE/previous
+    [[ -d $src ]] || refuse "no saved images in $src"
+    [[ $(cat "$src/DEVICE" 2>/dev/null) == "$DEV_CODENAME" ]] || refuse "$src holds images for another device"
+    (cd "$src" && sha256sum --quiet -c SHA256SUMS) || refuse "$src fails its checksums"
+    for img in $DEV_BOOT_IMAGES; do
+      grep -cE "  $img\.img$" "$src/SHA256SUMS" >/dev/null || refuse "$src/SHA256SUMS does not cover $img.img"
+    done
+    RELEASE=$(cat "$src/RELEASE" 2>/dev/null || true)
+    [[ $(cat "$src/BOOTED" 2>/dev/null) != no ]] \
+      || note "the saved set was written in a boot that never restarted into it (BOOTED=no): it may not boot either"
+    check_sizes "$src" 1
+  fi
+  for img in $DEV_BOOT_IMAGES; do
+    if [[ $(sha_head "${PART_DEV[$img]}" "$(stat -c %s "$src/$img.img")") == "$(sha_file "$src/$img.img")" ]]; then
+      same+=("$img")
+    else
+      changed+=("$img")
+    fi
+  done
+  say "Plan ($mode${RELEASE:+, $RELEASE}):"
+  for img in $DEV_BOOT_IMAGES; do
+    if [[ " ${changed[*]} " == *" $img "* ]]; then why=write; else why="already there"; fi
+    note "$(printf '%-20s -> %-22s %10s bytes  %s' "$img.img" "${img}_b (${PART_DEV[$img]##*/})" "$(stat -c %s "$src/$img.img")" "$why")"
+  done
+  if ((${#changed[@]} == 0)); then
+    say "Slot B already holds these images: nothing to write"
+    if ((!DRY_RUN)); then
+      rm -f "$STATE/incomplete"
+      # Also after a rollback: slot B holds the saved set now, whoever put
+      # it there (bin/omamobile flash from a copy of previous/, say)
+      [[ $mode != rollback ]] || restore_modules
+      finish_current "$src"
+      record identical "slot B already holds ${RELEASE:-these images}"
+    fi
+    return 0
+  fi
+  if ((DRY_RUN)); then
+    say "Dry run: nothing written"
+    return 0
+  fi
+  if ((!IGNORE_BATTERY)); then
+    why=$(battery_blocker)
+    [[ -z $why ]] || refuse "$why"
+  fi
+  confirm "${changed[*]}"
+  [[ $mode != write ]] || save_previous
+  printf '%s %s\n' "$mode" "${RELEASE:-?}" > "$STATE/incomplete"
+  sync
+  for img in "${changed[@]}"; do write_one "$img" "$src/$img.img"; done
+  # Every image of the set, including those left alone, must read back
+  for img in $DEV_BOOT_IMAGES; do
+    [[ $(sha_head "${PART_DEV[$img]}" "$(stat -c %s "$src/$img.img")") == "$(sha_file "$src/$img.img")" ]] \
+      || die "${img}_b does not hold its image after the write: slot B is incomplete"
+  done
+  rm -f "$STATE/incomplete"
+  if [[ $mode == write ]]; then
+    finish_current "$src"
+    rm -rf "$STATE/next"
+  else
+    restore_modules
+    finish_current "$src"
+  fi
+  sync
+  record written "slot B now holds ${RELEASE:-the previous images}; restart to boot it"
+  say "Slot B holds ${RELEASE:-the previous images}. Restart the phone to boot it (nothing restarts by itself)."
+  [[ $mode == rollback ]] && rollback_hold_note
+  return 0
+}
+
+# After a rollback the newer linux-omamobile is still installed, and the
+# next transaction that touches a kernel or boot file would write it again.
+# pacman.conf has no Include in [options] to hang an IgnorePkg drop-in on,
+# and this tool never edits /etc/pacman.conf, so the owner holds it by hand.
+rollback_hold_note() {
+  cat <<EOF
+
+    Rolled back. The newer kernel package is still installed: the next update
+    that changes a kernel or boot file writes it to slot B again. To hold it
+    until a fixed kernel is out, add it to IgnorePkg in /etc/pacman.conf:
+
+      sudo sed -i '/^\[options\]/a IgnorePkg = linux-omamobile' /etc/pacman.conf
+
+    and remove that line again to take kernel updates. Or install the older
+    package from the cache (sudo pacman -U /var/cache/pacman/pkg/linux-omamobile-<version>-aarch64.pkg.tar.zst),
+    which writes it to slot B through this hook and leaves nothing to hold.
+EOF
+}
+
+finish_current() {
+  local src=$1 img
+  rm -rf "$STATE/current.new" && mkdir -p "$STATE/current.new"
+  cp "$src/SHA256SUMS" "$STATE/current.new/SHA256SUMS"
+  for img in $DEV_BOOT_IMAGES; do printf '%s %s\n' "$img" "$(stat -c %s "$src/$img.img")"; done > "$STATE/current.new/SIZES"
+  printf '%s\n' "$DEV_CODENAME" > "$STATE/current.new/DEVICE"
+  printf '%s\n' "${RELEASE:-unknown}" > "$STATE/current.new/RELEASE"
+  rm -rf "$STATE/current"
+  mv "$STATE/current.new" "$STATE/current"
+}
+
+# After a rollback the saved release's modules go back into place (pacman
+# removed them with the old package), named in .omamobile-next so the
+# module cleanup (omamobile-omarchy) keeps them.
+restore_modules() {
+  local rel=$RELEASE
+  [[ -n $rel && -d $STATE/previous/modules/$rel ]] || { note "no saved modules to restore"; return 0; }
+  if [[ -d $MODULES/$rel ]]; then
+    note "$MODULES/$rel is still there"
+  else
+    cp -a "$STATE/previous/modules/$rel" "$MODULES/$rel"
+    "$DEPMOD" -a "$rel" || note "depmod -a $rel failed; run it before restarting"
+    say "Modules of $rel restored"
+  fi
+  printf '%s\n' "$rel" > "$MODULES/.omamobile-next"
+}
+
+# ---------------------------------------------------------------- commands
+
+# Does slot B still hold what current/ records? Only this tool updates
+# current/; bin/omamobile flash (the documented recovery) and push rewrite
+# slot B without it. Prints "yes", "stale" (slot B changed outside this
+# tool: the record says nothing about it) or "none" (no record). Needs
+# find_partition for every image first.
+current_state() {
+  local img size want
+  [[ -f $STATE/current/RELEASE ]] || { echo none; return 0; }
+  [[ -f $STATE/current/SIZES && -f $STATE/current/SHA256SUMS ]] || { echo stale; return 0; }
+  for img in $DEV_BOOT_IMAGES; do
+    size=$(awk -v i="$img" '$1 == i {print $2}' "$STATE/current/SIZES")
+    want=$(awk -v f="$img.img" '$2 == f {print $1}' "$STATE/current/SHA256SUMS")
+    [[ $size =~ ^[0-9]+$ && -n $want && -n ${PART_DEV[$img]:-} ]] || { echo stale; return 0; }
+    [[ $(sha_head "${PART_DEV[$img]}" "$size") == "$want" ]] || { echo stale; return 0; }
+  done
+  echo yes
+}
+
+cmd_status() {
+  local img slot
+  load_conf
+  bu_load_descriptor "$DESCRIPTOR"
+  echo "device:      $DEV_CODENAME ($DEV_COMPATIBLE)"
+  echo "auto write:  $AUTO_WRITE ($CONF)"
+  echo "running:     $UNAME_R"
+  slot=$( (for img in $DEV_BOOT_IMAGES; do find_partition "$img" >/dev/null 2>&1 || exit 1; done
+           case $(current_state) in
+             yes) cat "$STATE/current/RELEASE" ;;
+             stale) echo "changed outside omamobile-boot-update (last written here: $(cat "$STATE/current/RELEASE"))" ;;
+             *) echo "not written by this tool" ;;
+           esac) 2>/dev/null) || slot="unknown (partitions not readable)"
+  echo "slot B:      $slot"
+  echo "previous:    $(cat "$STATE/previous/RELEASE" 2>/dev/null || echo none)$([[ -d $STATE/previous ]] && echo " (booted: $(cat "$STATE/previous/BOOTED" 2>/dev/null || echo unknown))")"
+  [[ ! -e $STATE/incomplete ]] || echo "INCOMPLETE:  $(cat "$STATE/incomplete") (omamobile-boot-update rollback, or write again)"
+  [[ ! -f $RUN/boot-update.json ]] || echo "last result: $(cat "$RUN/boot-update.json")"
+  for img in $DEV_BOOT_IMAGES; do
+    ( find_partition "$img" 2>/dev/null && echo "partition:   ${img}_b ${PART_DEV[$img]##*/} ${PART_BYTES[$img]} bytes, writable" ) \
+      || echo "partition:   ${img}_b NOT writable or not found"
+  done
+}
+
+# preflight only: slot B must hold the running kernel's set (or one this tool
+# never wrote). A set written but never booted is not refused by the hook
+# itself (previous/ keeps the last set that booted), but a kernel upgrade on
+# top of it would have pacman remove that release's modules, and
+# kernel-modules-hook keeps only the running release's: restart into it first.
+check_booted() {
+  local cur written
+  # Slot B written since this boot with no booted set saved (none, or one
+  # marked BOOTED=no): a kernel update now would leave nothing that is known
+  # to boot. The hook itself still writes; only preflight stops here.
+  written=$(written_since_boot)
+  if [[ -n $written && ( ! -d $STATE/previous || $(cat "$STATE/previous/BOOTED" 2>/dev/null) == no ) ]]; then
+    refuse "slot B was written since this boot ($written) and no set that booted is saved: restart into it before the next kernel update"
+  fi
+  # A record slot B no longer matches (flash, push) says nothing: pass
+  [[ $(current_state) == yes ]] || return 0
+  cur=$(cat "$STATE/current/RELEASE")
+  [[ $cur == "$UNAME_R" ]] \
+    || refuse "slot B holds $cur, written but not booted yet (running $UNAME_R): restart into it before the next kernel update"
+}
+
+# preflight only: room for the new images (next/), the saved partitions
+# (previous/), the running release's modules (saved in previous/) and the
+# incoming release's, before pacman has installed anything (the write checks
+# again, but only once the package is in). The incoming tree is taken to be
+# the running one's size: releases differ little, and preflight runs before
+# the package is downloaded.
+check_space() {
+  local img need=0 avail mods
+  for img in $DEV_BOOT_IMAGES; do need=$((need + 2 * PART_BYTES[$img])); done
+  if [[ -d $MODULES/$UNAME_R ]]; then
+    mods=$(du -sb "$MODULES/$UNAME_R" | cut -f1)
+    need=$((need + 2 * mods))
+  fi
+  avail=$(free_bytes "$STATE")
+  ((avail > need + SPACE_MARGIN)) \
+    || refuse "not enough space in ${STATE%/boot} for the new images, the saved set and both releases' modules ($((need / 1048576)) MiB needed, $((avail / 1048576)) MiB free)"
+}
+
+# Read-only: everything a write checks before building, for omamobile-update.
+cmd_preflight() {
+  local json=0 problems=() out
+  [[ ${1:-} == --json ]] && json=1
+  out=$( (
+    load_conf
+    bu_load_descriptor "$DESCRIPTOR"
+    check_board
+    check_slot
+    check_device_files
+    for img in $DEV_BOOT_IMAGES; do find_partition "$img"; done
+    check_booted
+    check_space
+    echo "auto_write=$AUTO_WRITE"
+  ) 2>&1) || problems+=("$(grep -m1 '^error:' <<<"$out" | sed 's/^error: omamobile-boot-update: //; s/^not writing slot B: //')")
+  local auto
+  auto=$(sed -n 's/^auto_write=//p' <<<"$out")
+  [[ -n $auto ]] || auto=$( (load_conf >/dev/null 2>&1 && echo "$AUTO_WRITE") || echo unknown)
+  if ((json)); then
+    python3 -I -c 'import json, sys; print(json.dumps({"ok": not sys.argv[2], "auto_write": sys.argv[1], "problem": sys.argv[2]}, sort_keys=True))' \
+      "$auto" "${problems[0]:-}"
+  else
+    echo "auto write: $auto"
+    if ((${#problems[@]})); then echo "not ready: ${problems[0]}"; else echo "ready: a write would be allowed"; fi
+  fi
+  ((${#problems[@]} == 0))
+}
+
+cmd_build() {
+  local tmp
+  load_conf
+  bu_load_descriptor "$DESCRIPTOR"
+  check_board
+  check_device_files
+  pick_release
+  take_lock
+  tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  build_images "$STATE/next" "$tmp"
+  cat "$STATE/next/SHA256SUMS"
+}
+
+cmd_hook() {
+  load_conf
+  if [[ $AUTO_WRITE != yes ]]; then
+    say "Slot B left alone: AUTO_WRITE is not yes in $CONF (bin/omamobile push stays the writer)"
+    record skipped "AUTO_WRITE is off"
+    return 0
+  fi
+  YES=1
+  do_write write
+}
+
+DRY_RUN=0 YES=0 IGNORE_BATTERY=0
+main() {
+  COMMAND=${1:-}
+  (($#)) && shift
+  local a rest=()
+  for a in "$@"; do
+    case $a in
+      --dry-run) DRY_RUN=1 ;;
+      --yes) YES=1 ;;
+      --ignore-battery) IGNORE_BATTERY=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  case $COMMAND in
+    status) cmd_status ;;
+    preflight) cmd_preflight "${rest[@]}" ;;
+    build) cmd_build ;;
+    write) ((${#rest[@]} == 0)) || refuse "unknown argument ${rest[0]}"; do_write write ;;
+    rollback) ((${#rest[@]} == 0)) || refuse "unknown argument ${rest[0]}"; do_write rollback ;;
+    hook) ((DRY_RUN == 0 && ${#rest[@]} == 0)) || refuse "hook takes no arguments"; cmd_hook ;;
+    -h|--help|help) sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  esac
+}
+main "$@"
