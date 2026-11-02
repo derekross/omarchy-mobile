@@ -121,6 +121,7 @@ grep -qF 'ours+=(omamobile-boot-update linux-omamobile)' "$inside" || fail "buil
 grep -qF '[[ $pkg_release == "$KERNEL_RELEASE" ]]' "$inside" || fail "build-inside checks the package's release is the boot images' (KERNEL_OUT's)"
 awk '/linux-omamobile "\* \]\]; then/ {pkg = 1} pkg && /^else/ {exit} pkg && /zstd -dc \/modules/ {bad = 1} END {exit bad}' "$inside" \
   || fail "with the kernel package installed the tarball is not unpacked over its modules"
+grep -qF '[[ $p == omamobile-boot-update ]] || kept+=("$p")' "$inside" || fail "without linux-omamobile (allowed missing) the hook is left out too"
 grep -qF 'echo "kernel modules: $modules_line"' "$inside" || fail "the MANIFEST still names the release (make-bundle, install-phone, rootfs-smoke read it)"
 grep -q 'OMAMOBILE_BOOT_FILES' packages/omamobile-device-cheetah/install || fail "cheetah's package ships boot files, so its image gets the kernel package"
 echo 'ok - a device with boot files gets linux-omamobile and omamobile-boot-update (the package modules replace the tarball); others keep the tarball'

@@ -57,6 +57,15 @@ for p in "${ours[@]}"; do
   fi
 done
 ((${#missing[@]} == 0)) || die "not in out/repo: ${missing[*]} (build them: tools/build-packages; or allow: --allow-missing)"
+# Without the kernel package (allowed missing) the hook would refuse every
+# later device-package update ("no kernel package release"): leave it out
+if [[ ${KERNEL_PACKAGE:-0} == 1 && " ${ours_present[*]} " != *" linux-omamobile "* ]]; then
+  kept=()
+  for p in "${ours_present[@]}"; do [[ $p == omamobile-boot-update ]] || kept+=("$p"); done
+  ours_present=("${kept[@]}")
+  skipped_ours+=(omamobile-boot-update)
+  echo "    linux-omamobile is missing (allowed): omamobile-boot-update left out too"
+fi
 
 say "Base system and Omarchy (${#base[@]} packages)"
 pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
