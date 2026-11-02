@@ -11,6 +11,7 @@
 #                                        (defaults: omamobile v7.3-rc6)
 # --rebuild allows replacing a published branch whose tip matches no commit
 # on the local branch (local history was rewritten); without it that stops.
+# PUBLISH_REMOTE overrides the destination (for an offline test or a fork).
 set -euo pipefail
 rebuild=
 [[ ${1:-} != --rebuild ]] || { rebuild=1; shift; }
@@ -24,7 +25,7 @@ fi
 linux=${KERNEL_DIR:-$KERNEL_BASE/linux}
 branch=${1:-omamobile}
 tag=${2:-v7.3-rc6}
-remote=git@github.com:derekross/linux-omarchy-mobile.git
+remote=${PUBLISH_REMOTE:-git@github.com:derekross/linux-omarchy-mobile.git}
 
 cd "$linux"
 [[ -z $(git status --porcelain --untracked-files=no) ]] || { echo "$linux has uncommitted changes" >&2; exit 1; }

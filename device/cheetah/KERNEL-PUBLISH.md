@@ -3,9 +3,10 @@
 
 Status (2026-10-19): **published.** `omamobile` is on GitHub
 (linux-omarchy-mobile, 146 commits on v7.3-rc6) and moves forward without
-rewriting published commits: `tools/publish-kernel` fast-forwards when the
-published tip's tree matches a local commit, and otherwise stops unless
-given `--rebuild`; it always stops when it can't read the published tip.
+rewriting published commits: `tools/publish-kernel` (since 2026-11-01)
+fast-forwards when the published tip's tree matches a local commit, and
+otherwise stops unless given `--rebuild`; it always stops when it can't read
+the published tip.
 Community kernel PRs are reviewed against it (felix's board file and UFS
 are merged). First patch sent upstream: "power: supply: max17042_battery:
 infer the status when no supplier is described" (linux-pm, 2026-10-19),

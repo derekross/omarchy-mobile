@@ -1,8 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # tools/publish-kernel against a stand-in kernel tree and a bare repository
-# in a scratch folder, never GitHub: the publisher's remote URL is rewritten
-# to the local repository, every Git protocol but file is refused, and the
+# in a scratch folder, never GitHub: PUBLISH_REMOTE names the local
+# repository, every Git protocol but file is refused, and the
 # test stops before running anything unless the URL resolves into the
 # scratch folder. A shim in front of git fails a fetch, or moves a branch
 # just before the push, to stand in for a network error or a second
@@ -11,8 +11,7 @@ set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
-url=$(sed -n 's/^remote=//p' "$here/tools/publish-kernel")
-[[ -n $url ]] || { echo "not ok - tools/publish-kernel names its remote" >&2; exit 1; }
+unset GIT_ALLOW_PROTOCOL GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$t/gitconfig GIT_SSH_COMMAND=false
 
 realgit=$(command -v git)
@@ -30,10 +29,10 @@ chmod +x "$t/bin/git"
 fail() { echo "# $*" >&2; exit 1; }
 fixture() { # name: a kernel tree (tag v1.0, two commits on omamobile) and an empty remote
   k=$t/$1/linux r=$t/$1/remote.git
-  printf '[user]\n\tname = A Human\n\temail = human@example.org\n[protocol]\n\tallow = never\n[protocol "file"]\n\tallow = always\n[url "%s"]\n\tinsteadOf = %s\n' \
-    "$r" "$url" > "$GIT_CONFIG_GLOBAL"
-  [[ $r == "$t"/* && $(git ls-remote --get-url "$url") == "$r" ]] || {
-    echo "Bail out! $url does not resolve to the scratch remote" >&2; exit 2; }
+  export PUBLISH_REMOTE=$r
+  printf '[user]\n\tname = A Human\n\temail = human@example.org\n[protocol]\n\tallow = never\n[protocol "file"]\n\tallow = always\n' > "$GIT_CONFIG_GLOBAL"
+  [[ $PUBLISH_REMOTE == "$t"/* && $(git ls-remote --get-url "$PUBLISH_REMOTE") == "$r" ]] || {
+    echo "Bail out! PUBLISH_REMOTE does not resolve to the scratch remote" >&2; exit 2; }
   [[ $(git ls-remote ssh://example.invalid/none 2>&1) == *"transport 'ssh' not allowed"* ]] || {
     echo "Bail out! Git protocols other than file are allowed" >&2; exit 2; }
   git init -q --bare "$r"
