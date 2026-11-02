@@ -43,7 +43,7 @@ hl.window_rule({
 -- bar and the on-screen keyboard, like a phone sheet. After the modal rule,
 -- so a modal chooser is a sheet too. Nautilus's own windows tile anyway.
 hl.window_rule({ match = { class = "^org.gnome.Nautilus$" }, float = false, maximize = true })
--- Tensaku, the screenshot editor (the screenshot toast's tap): Omarchy floats
+-- Tensaku, the screenshot editor (Open With, or the toast without Loupe): Omarchy floats
 -- it by class (default/hypr/apps/system.lua), not through the floating-window
 -- tag the first rule drops, so it opened as a desktop-sized float (814x936 on
 -- a 480 px wide screen) with the screenshot cut off. Tiled and maximized, the

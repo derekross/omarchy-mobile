@@ -122,6 +122,16 @@ run
 grep -c '^NoDisplay' "$U/imv.desktop" >/dev/null && fail "a user who shows imv again keeps it"
 pass "imv's Image Viewer gives way to Loupe's, once"
 
+# Tensaku's entry (drawer, Open With) runs without the on-screen keyboard, once
+printf '[Desktop Entry]\nName=Tensaku\nTryExec=tensaku\nExec=tensaku %%f\nType=Application\n' >"$A/dev.tensaku.Tensaku.desktop"
+run
+grep -qx 'Exec=env GTK_IM_MODULE=gtk-im-context-simple tensaku %f' "$U/dev.tensaku.Tensaku.desktop" &&
+  grep -qx 'TryExec=tensaku' "$U/dev.tensaku.Tensaku.desktop" || fail "Tensaku's entry gets GTK's simple input context"
+rm "$U/dev.tensaku.Tensaku.desktop"
+run
+[[ ! -e $U/dev.tensaku.Tensaku.desktop ]] || fail "a user who removes the Tensaku override keeps Tensaku's own entry"
+pass "Tensaku's entry opens without the on-screen keyboard, once"
+
 # Idle: a new user gets the profile's block and the screensaver toggle
 idle() { python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("idle")))' "$1/.config/omarchy/shell.json"; }
 toggle() { [[ -e $1/.local/state/omarchy/toggles/screensaver-off ]]; }

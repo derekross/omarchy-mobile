@@ -957,20 +957,27 @@ grep -cx 'GTK_USE_PORTAL=1' "$env_d" >/dev/null || fail "GTK 3 file choosers use
 grep -cx 'GDK_DEBUG=portals' "$env_d" >/dev/null || fail "GTK 4 file choosers use the portal"
 pass "session environment"
 
-# Screenshots: the toast's "Tap to edit" opens Tensaku through our wrapper,
-# which runs Omarchy's own tensaku-edit with GTK's simple input-method
-# context, so the on-screen keyboard doesn't come up over the screenshot.
+# Screenshots: the toast's tap ("Tap to view") opens the screenshot in Loupe
+# through omamobile-screenshot-open, and in Tensaku only without Loupe, then
+# through omamobile-screenshot-edit: Omarchy's own tensaku-edit with GTK's
+# simple input-method context, so the on-screen keyboard stays down.
 shot_d=environment.d/30-omamobile-screenshot.conf
 if grep -nE '^[A-Za-z_][A-Za-z0-9_]*=$' "$shot_d"; then fail "$shot_d sets no empty values"; fi
-grep -cx 'OMARCHY_SCREENSHOT_EDITOR=omamobile-screenshot-edit' "$shot_d" >/dev/null || fail "Omarchy's screenshot editor is the phone's wrapper"
+grep -cx 'OMARCHY_SCREENSHOT_EDITOR=omamobile-screenshot-open' "$shot_d" >/dev/null || fail "Omarchy's screenshot editor is the phone's viewer wrapper"
+bash -n bin/omamobile-screenshot-open || fail "omamobile-screenshot-open parses"
 bash -n bin/omamobile-screenshot-edit || fail "omamobile-screenshot-edit parses"
 shot=$(mktemp -d)
-printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$GTK_IM_MODULE" "$*"\n' >"$shot/tensaku-edit"
-chmod +x "$shot/tensaku-edit"
-[[ $(GTK_IM_MODULE=wayland PATH="$shot:$PATH" bash bin/omamobile-screenshot-edit "/p/shot one.png") == "gtk-im-context-simple|/p/shot one.png" ]] \
-  || fail "the wrapper runs tensaku-edit with the path and GTK's simple input context"
+mkdir "$shot/with" "$shot/without"
+printf '#!/bin/sh\nprintf "tensaku-edit|%%s|%%s\\n" "$GTK_IM_MODULE" "$*"\n' >"$shot/without/tensaku-edit"
+printf '#!/bin/sh\nprintf "loupe|%%s\\n" "$*"\n' >"$shot/with/loupe"
+cp bin/omamobile-screenshot-edit "$shot/without/"
+chmod +x "$shot"/with/* "$shot"/without/*
+[[ $(PATH="$shot/with:$shot/without" "$BASH" bin/omamobile-screenshot-open "/p/shot one.png") == "loupe|/p/shot one.png" ]] \
+  || fail "the toast's tap opens the screenshot in Loupe"
+[[ $(GTK_IM_MODULE=wayland PATH="$shot/without" "$BASH" bin/omamobile-screenshot-open "/p/shot one.png") == "tensaku-edit|gtk-im-context-simple|/p/shot one.png" ]] \
+  || fail "without Loupe, Tensaku opens with GTK's simple input context"
 rm -rf "$shot"
-pass "screenshot editor: Tensaku without the on-screen keyboard"
+pass "screenshot toast: Loupe, or Tensaku without the on-screen keyboard"
 
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
@@ -1017,7 +1024,7 @@ if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$u" || fail "Updates desktop entry validates"
 fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
-[[ -x $tmp/root/usr/bin/omamobile-screenshot-edit && -f $tmp/root/usr/lib/environment.d/30-omamobile-screenshot.conf ]] \
+[[ -x $tmp/root/usr/bin/omamobile-screenshot-open && -x $tmp/root/usr/bin/omamobile-screenshot-edit && -f $tmp/root/usr/lib/environment.d/30-omamobile-screenshot.conf ]] \
   || fail "install stages the screenshot editor and its session variable"
 for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
   [[ -f $tmp/root/usr/share/omamobile/squeekboard/keyboards/$layout ]] || fail "install stages the $layout layout"

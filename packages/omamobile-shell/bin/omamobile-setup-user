@@ -128,6 +128,19 @@ if [[ -f $sysapps/org.gnome.Loupe.desktop && -f $apps/imv.desktop ]] && omarchy-
   fi
 fi
 
+# Tensaku opened from its entry (the drawer, or Loupe's Open With) runs with
+# GTK's simple input-method context, as omamobile-screenshot-edit runs it, so
+# the on-screen keyboard doesn't come up over the image. A copy of the entry
+# in the user's applications, once, when Tensaku is installed; a user who
+# removes it gets Tensaku's own entry back.
+if [[ -f $sysapps/dev.tensaku.Tensaku.desktop && ! -e $apps/dev.tensaku.Tensaku.desktop ]] &&
+   omarchy-done ensure omamobile-tensaku-no-osk; then
+  mkdir -p "$apps"
+  sed -e 's/^Exec=tensaku /Exec=env GTK_IM_MODULE=gtk-im-context-simple tensaku /' \
+      -e 's/^Exec=tensaku$/Exec=env GTK_IM_MODULE=gtk-im-context-simple tensaku/' \
+      "$sysapps/dev.tensaku.Tensaku.desktop" >"$apps/dev.tensaku.Tensaku.desktop"
+fi
+
 # PIN or password (omamobile-set-pin records it): phones set up before the
 # choice existed used a PIN with the lock's number pad, so record that, once.
 if omarchy-done ensure omamobile-credential-type; then
