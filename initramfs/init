@@ -92,6 +92,32 @@ ufs_rw_load() {
 ufs_rw_load
 mkdir -p /run/ufs-ro
 ufs_partname() { sed -n 's/^PARTNAME=//p' "$1/uevent" 2>/dev/null; }
+ufs_dipper_partlabel_links() {
+  local s name part link target old
+  tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null | grep -qx 'xiaomi,dipper' || return 0
+  mkdir -p /dev/disk/by-partlabel
+  for s in /sys/block/sd* /sys/block/sd*/sd*; do
+    [ -r "$s/ro" ] || continue
+    name=${s##*/}
+    [ -b "/dev/$name" ] || continue
+    part=$(ufs_partname "$s")
+    case "$part" in persist|fsg|fsc|modemst1|modemst2) ;; *) continue ;; esac
+    [ "$(cat "$s/ro")" = 1 ] || continue
+    link=/dev/disk/by-partlabel/$part
+    target=/dev/$name
+    [ -e "/run/ufs-ro/ambiguous-$part" ] && continue
+    if [ -L "$link" ]; then
+      old=$(readlink "$link")
+      [ "$old" = "$target" ] && continue
+      rm -f "$link"
+      : > "/run/ufs-ro/ambiguous-$part"
+      ufs_ro_log "duplicate PARTNAME $part; refusing by-partlabel link"
+      continue
+    fi
+    [ ! -e "$link" ] || continue
+    ln -s "$target" "$link" && ufs_ro_log "$link -> $target"
+  done
+}
 ufs_ro_pass() {
   local s ro name part disk
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
@@ -123,6 +149,7 @@ ufs_ro_pass() {
       echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
     fi
   done
+  ufs_dipper_partlabel_links
 }
 # Prints every disk or partition that is writable but not on the allowlist
 # (sda itself excepted: its node is removed). Empty means the guard holds.
@@ -408,6 +435,41 @@ grow_root() {
 # Hand over to Arch on userdata, unless omamobile.initramfs is on the command
 # line. Everything is checked before the irreversible exec; if anything is
 # missing we stay here in the initramfs shell.
+# Boot the Arch root from NFS instead of the UFS, for bring-up: nothing on the
+# phone is written and the stock OS is left alone, so a root filesystem can be
+# tried before anyone decides to install it. Enabled only by the presence of
+# /etc/omamobile-nfsroot, holding one line, "<host>:<path>" -- no file, no change.
+# The USB gadget and its address are already up by the time this runs, and the
+# kernel keeps them across the switch, so the mount survives switch_root.
+boot_nfs() {
+  local spec
+  [ -r /etc/omamobile-nfsroot ] || return 1
+  spec=$(cat /etc/omamobile-nfsroot)
+  [ -n "$spec" ] || return 1
+  say "nfsroot: trying $spec"
+  mkdir -p /newroot
+  # busybox mount cannot work out the server address on its own here, so pass it.
+  # Retry: the phone boots faster than the host brings its usb0 end up, so the
+  # first mount can race the link coming up. ~30s covers a late host.
+  local i=0
+  until mount -t nfs -o "nolock,vers=3,addr=${spec%%:*}" "$spec" /newroot 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -ge 15 ] && {
+      say "nfsroot: cannot mount $spec (staying in the initramfs)"; return 1; }
+    sleep 2
+  done
+  if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
+    say "nfsroot: no systemd on $spec"; umount /newroot; return 1
+  fi
+  say "nfsroot: switching to Arch Linux on $spec"
+  kill -9 -1 2>/dev/null
+  sleep 1
+  for m in /dev /proc /sys /run; do
+    mkdir -p "/newroot$m" && mount --move "$m" "/newroot$m"
+  done
+  exec switch_root /newroot /usr/lib/systemd/systemd
+}
+
 boot_arch() {
   grep -q omamobile.initramfs /proc/cmdline && return 1
   local dev="" s
@@ -445,6 +507,7 @@ boot_arch() {
   done
   exec switch_root /newroot /usr/lib/systemd/systemd
 }
+boot_nfs
 boot_arch
 
 # PID 1 must never exit: if it does the kernel panics and freezes (silently,

@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Build dipper's deployable artefacts: initramfs (in an aarch64 container),
+# then the Android v1 boot image with the DTB appended to the kernel.
+#
+# Needs: the kernel already built in $KERNEL_SRC (Image.gz, the dipper DTB and
+# modules), docker with arm64 emulation registered, zopfli, and SSH_PUBKEY.
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+
+KERNEL_SRC=${KERNEL_SRC:-$repo/../linux}
+# BRINGUP=1 builds the diagnostic image instead: it mirrors the kernel log into
+# the unused `logdump` partition, so a first boot with no cable attached can be
+# read back from Android. It goes into its own output directory so the two can
+# never be confused, and it must never be written to `boot`.
+if [[ ${BRINGUP:-0} == 1 ]]; then
+  OUT=${OUT:-$repo/../out/dipper-bringup}
+  export DIPPER_BRINGUP=1
+else
+  OUT=${OUT:-$repo/../out/dipper}
+fi
+: "${SSH_PUBKEY:?set SSH_PUBKEY to your authorized public key}"
+ALPINE=${ALPINE:-alpine:3.22}
+
+die() { echo "error: $*" >&2; exit 1; }
+
+[[ -d $KERNEL_SRC ]] || die "no kernel tree at $KERNEL_SRC (set KERNEL_SRC)"
+image=$KERNEL_SRC/arch/arm64/boot/Image.gz
+dtb=$KERNEL_SRC/arch/arm64/boot/dts/qcom/sdm845-xiaomi-dipper.dtb
+[[ -f $image ]] || die "no $image -- build the kernel first"
+[[ -f $dtb ]] || die "no $dtb -- build qcom/sdm845-xiaomi-dipper.dtb first"
+[[ -r $SSH_PUBKEY ]] || die "no SSH public key at $SSH_PUBKEY (set SSH_PUBKEY)"
+grep -q '^ssh-' "$SSH_PUBKEY" || die "$SSH_PUBKEY is not an OpenSSH public key"
+command -v docker >/dev/null || die "docker is needed for the aarch64 initramfs"
+
+release=$(cat "$KERNEL_SRC/include/config/kernel.release")
+echo "kernel release: $release"
+
+umask 077
+mkdir -p "$OUT"; chmod 700 "$OUT"
+mods=$OUT/modules
+echo "installing modules into $mods"
+rm -rf "$mods/lib/modules/$release"
+make -C "$KERNEL_SRC" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+     INSTALL_MOD_PATH="$mods" INSTALL_MOD_STRIP=1 modules_install >/dev/null
+mkdir -p "$OUT/include/config"
+cp "$KERNEL_SRC/include/config/kernel.release" "$OUT/include/config/kernel.release"
+tar -C "$mods/lib/modules" --owner=0 --group=0 --numeric-owner -cf - "$release" \
+  | zstd -q -19 -T0 -f -o "$OUT/modules-$release.tar.zst"
+
+echo "building the initramfs in $ALPINE (linux/arm64)"
+docker run --rm --platform linux/arm64 \
+  -v "$repo:/src:ro" -v "$mods:/modules:ro" -v "$SSH_PUBKEY:/input/key.pub:ro" \
+  -v "$OUT:/out" \
+  -e "KERNEL_RELEASE=$release" -e "OUT_UID=$(id -u)" -e "OUT_GID=$(id -g)" \
+  -e "DIPPER_BRINGUP=${DIPPER_BRINGUP:-0}" \
+  -e "DIPPER_NFSROOT=${DIPPER_NFSROOT:-}" \
+  "$ALPINE" sh /src/tools/dipper/initramfs-inside.sh
+
+# Pack a copy of the DTB so nothing we do can dirty the kernel tree.
+packdtb=$OUT/sdm845-xiaomi-dipper.dtb
+cp "$dtb" "$packdtb"
+# By default the image stays generic: it carries no device identifier and works
+# on any Mi 8, because omamobile-dipper-identity reads this phone's own WLAN and
+# Bluetooth addresses out of `persist` at boot. Baking the Bluetooth address into
+# the DTB is opt-in, for someone who wants a single-device image and a BD address
+# set before userspace runs.
+if [[ ${DIPPER_BAKE_IDENTITY:-0} == 1 ]]; then
+  "$here/apply-identity" "$packdtb"
+else
+  echo "generic image: Bluetooth address left at the placeholder, applied at boot from persist"
+fi
+
+kernel_image=$image
+if command -v zopfli >/dev/null; then
+  echo "compressing the kernel with zopfli for dipper's ABL size limit"
+  zopfli -c --i1 "$KERNEL_SRC/arch/arm64/boot/Image" > "$OUT/Image.gz"
+  kernel_image=$OUT/Image.gz
+fi
+# A failed size check must not leave an older boot.img under the current name.
+rm -f "$OUT/images/boot.img" "$OUT/images/BOOT-MANIFEST.json"
+"$here/build-boot.py" --kernel "$kernel_image" --dtb "$packdtb" \
+  --ramdisk "$OUT/initramfs.cpio.gz" --out "$OUT/images"
+
+# Firmware and the Wi-Fi fix-ups are not part of the boot image; they go into the
+# root filesystem. Collect them beside it so one directory holds everything.
+fw=${FIRMWARE_DIR:-$HOME/android/reference/dipper-stock/firmware}
+if [[ -d $fw ]]; then
+  mkdir -p "$OUT/firmware"
+  # The blobs come off the phone mode 400, so a plain cp cannot overwrite them
+  # on a rebuild. Copy without preserving the mode and make them readable.
+  for d in qcom ath10k; do
+    [[ -d $fw/$d ]] || continue
+    rm -rf "$OUT/firmware/$d"
+    cp -r --no-preserve=mode "$fw/$d" "$OUT/firmware/"
+  done
+  chmod -R u+rwX "$OUT/firmware"
+  # The boot-time identity service, which makes the image device-agnostic.
+  mkdir -p "$OUT/identity"
+  cp "$here/identity/omamobile-dipper-identity" "$here/identity/omamobile-dipper-identity.service" \
+     "$OUT/identity/"
+  echo "firmware and Wi-Fi files staged in $OUT/firmware"
+else
+  echo "note: no firmware at $fw (run tools/dipper/extract-firmware); GPU and Wi-Fi will not come up"
+fi
+
+echo
+echo "artefacts in $OUT/images:"
+ls -l "$OUT/images"
+cat <<'NOTE'
+
+To try it WITHOUT writing anything to the phone (nothing persists, a reboot
+returns to stock):
+
+    fastboot boot boot.img
+
+Only flash it once that has booted, and only with a verified stock backup in
+hand: dipper has no second slot to fall back to.
+NOTE
+if [[ ${DIPPER_BRINGUP:-0} == 1 ]]; then
+  cat <<'NOTE2'
+THIS IS THE DIAGNOSTIC IMAGE. It mirrors the kernel log into `logdump` and runs
+with a widened storage guard. Write it to `recovery` only -- never to `boot` --
+so stock Android stays bootable, and enter it with Volume Up + Power.
+NOTE2
+fi

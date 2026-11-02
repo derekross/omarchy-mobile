@@ -1,0 +1,84 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Apply this phone's own WLAN and Bluetooth addresses, read at boot from its
+# `persist` partition. Nothing device-specific is baked into the image, so the
+# same image works on any Xiaomi Mi 8.
+#
+# Generic WCN3990 board data carries no per-unit MAC, so without this the
+# interface comes up with an address ath10k invents, different on every boot.
+set -eu
+
+PERSIST=${PERSIST:-/dev/disk/by-partlabel/persist}
+MNT=${MNT:-/run/omamobile-persist}
+LINK=${LINK:-/etc/systemd/network/10-dipper-wlan.link}
+log() { echo "omamobile-identity: $*"; }
+
+mac_from() {   # 6 raw bytes -> aa:bb:cc:dd:ee:ff, or nothing if not a station MAC
+    [ -s "$1" ] || return 1
+    # POSIX awk only: and() and strtonum() are gawk extensions that neither the
+    # phone's awk nor busybox awk has. Running this on the phone is how that
+    # was found, so do not "simplify" it back.
+    od -An -tx1 -N6 "$1" | tr -d ' \n' | awk '
+        length($0) != 12 { exit 1 }
+        {
+            for (i = 1; i <= 11; i += 2) b[++n] = substr($0, i, 2)
+            all = b[1] b[2] b[3] b[4] b[5] b[6]
+            if (all == "000000000000") exit 1                 # unset
+            if (all == "ffffffffffff") exit 1                 # broadcast
+            # The multicast bit is the low bit of the first byte, i.e. its
+            # second hex digit is odd.
+            if (index("13579bdfBDF", substr(b[1], 2, 1)) > 0) exit 1
+            printf "%s:%s:%s:%s:%s:%s", b[1], b[2], b[3], b[4], b[5], b[6]
+        }'
+}
+
+[ -e "$PERSIST" ] || { log "no persist partition at $PERSIST"; exit 0; }
+mkdir -p "$MNT"
+mounted=0
+# NOMOUNT lets the test drive this script against a plain directory of files.
+if [ "${NOMOUNT:-0}" != 1 ] && ! mountpoint -q "$MNT"; then
+    mount -o ro,nosuid,nodev,noexec "$PERSIST" "$MNT" || { log "cannot mount persist read-only"; exit 0; }
+    mounted=1
+fi
+cleanup() { [ "$mounted" = 1 ] && umount "$MNT" 2>/dev/null || true; }
+trap cleanup EXIT
+
+wlan=$(mac_from "$MNT/wlan_bt/wlan.mac" || true)
+bt=$(mac_from "$MNT/wlan_bt/bt.mac" || true)
+
+if [ -n "${wlan:-}" ]; then
+    # A udev .link file is applied whoever manages the interface later,
+    # NetworkManager included. Rewrite it only when it would change.
+    want="[Match]
+OriginalName=wlan0
+
+[Link]
+MACAddress=$wlan"
+    if [ ! -f "$LINK" ] || [ "$(cat "$LINK")" != "$want" ]; then
+        mkdir -p "$(dirname "$LINK")"
+        printf '%s\n' "$want" > "$LINK"
+        log "wrote $LINK"
+    fi
+    # Apply now as well, in case wlan0 already exists this boot.
+    if [ -d /sys/class/net/wlan0 ]; then
+        ip link set dev wlan0 down 2>/dev/null || true
+        ip link set dev wlan0 address "$wlan" 2>/dev/null \
+            && log "wlan0 address set from persist" \
+            || log "could not set wlan0 address now; the link file covers the next boot"
+        ip link set dev wlan0 up 2>/dev/null || true
+    fi
+else
+    log "no usable WLAN address in persist; leaving the interface alone"
+fi
+
+if [ -n "${bt:-}" ]; then
+    if [ -d /sys/class/bluetooth/hci0 ] && command -v btmgmt >/dev/null; then
+        btmgmt --index 0 public-addr "$bt" >/dev/null 2>&1 \
+            && log "bluetooth public address set from persist" \
+            || log "btmgmt refused the public address (controller may not support it)"
+    else
+        log "no hci0 or no btmgmt yet; bluetooth keeps the firmware default address"
+    fi
+else
+    log "no usable Bluetooth address in persist"
+fi
