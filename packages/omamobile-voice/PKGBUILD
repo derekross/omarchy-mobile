@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# Voice dictation out of the box: Whisper's base.en speech model, the one
+# Omarchy's Install > AI > Dictation downloads for Voxtype, fetched at build
+# time from a pinned commit of whisper.cpp's model repository and checked
+# against its sha256 (nothing binary is committed here). The root image
+# installs this next to voxtype-bin (rootfs/packages.base), and
+# omamobile-setup-user (omamobile-shell) links the model into each user's
+# ~/.local/share/voxtype/models, the only place Voxtype looks, and enables
+# the daemon. The weights are OpenAI's Whisper (MIT), converted to ggml by
+# whisper.cpp (MIT).
+pkgname=omamobile-voice
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+_commit=5359861c739e955e79d9a303bcbc70fb988958b1
+_model=ggml-base.en.bin
+pkgdesc="Omarchy Mobile: Whisper's base.en speech model for Voxtype, so voice input works with no download"
+arch=(any)
+url="https://huggingface.co/ggerganov/whisper.cpp"
+license=(MIT)
+# Not a hard dependency: Omarchy's Remove > Dictation removes voxtype-bin
+# with pacman -Rns, and this package must not refuse that.
+optdepends=('voxtype-bin: the dictation engine that uses this model (in the root image)')
+source=("$_model-$_commit::https://huggingface.co/ggerganov/whisper.cpp/resolve/$_commit/$_model"
+        LICENSE.whisper)
+noextract=("$_model-$_commit")
+sha256sums=('a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002'
+            SKIP)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  install -Dm644 "$srcdir/$_model-$_commit" "$pkgdir/usr/share/omamobile/voice/models/$_model"
+  install -Dm644 "$srcdir/LICENSE.whisper" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.whisper"
+}

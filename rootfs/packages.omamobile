@@ -11,6 +11,8 @@ omamobile-keyring
 omamobile-firstboot
 omamobile-omarchy
 omamobile-shell
+# Whisper's base.en for Voxtype, so voice works with no download
+omamobile-voice
 omacam
 omamobile-apps
 omamobile-mirror
