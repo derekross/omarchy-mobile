@@ -20,8 +20,12 @@ SoC within minutes. Kept on
 (<https://github.com/derekross/linux-omarchy-mobile/pull/172>), five
 sessions ran with no reset, the longest 30 minutes and 3759 link cycles
 (G3-L1).
-Left: the GNSS and CPIF drivers aren't in the published kernel, and GNSS
-still starts by hand. Next: the SIM.
+**The SIM (2026-11-02): registered on LTE, mobile data up, texts both
+ways** on the owner's kernel, with `omamobile-modem-sit` 0.3.8 (its first
+five data requests were refused with status 36 until the RIL let the
+modem settle after the data permission; "SIM test results" below).
+Left: the GNSS and CPIF drivers aren't in the published kernel, GNSS and
+the modem still start by hand, and calls have no audio route.
 The staged plan (sections F, K, U and runbooks M0.2-M6, G1-G4) is below,
 with each step's results under it. Kernel branches `omamobile-tegu-modem` and `omamobile-tegu-gnssif`
 (section K).
@@ -1951,6 +1955,76 @@ tools/phone-ssh 'systemctl reboot'
 tools/phone-ssh 'test -d /sys/module/cpif && echo cpif-loaded || echo cpif-not-loaded; dmesg | grep -c ufshcd_err_handler'
 #   pass: cpif-not-loaded; the SIM can stay in the tray
 ```
+
+#### SIM test results (2026-11-02, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+
+The prepaid nano-SIM arrived a day early and the test ran the same
+afternoon, six CP starts over six boots, all attended on the charger, with
+`omamobile-modem` 0.1.10 (installed with `pacman -U -dd`: the package
+depends on `omamobile-device-cheetah`, which conflicts with
+`omamobile-device-tegu`; the `omamobile-modem-policy` virtual planned in
+raven's plan is the fix) and the carrier's published APN, IPv4v6, no
+authentication, `ims = yes`, `nr = off`. No identifiers here: the carrier
+is a US MVNO on a large LTE network.
+
+- **SIM-0 to SIM-4 passed.** The NV partitions matched the 2026-10-28
+  backup and read `ro=1`, unmounted, before and after every boot.
+- **SIM-5 passed six times:** CP ONLINE in about 9 s, UFS error handler 0.
+- **SIM-6:** the first probe timed out on GET_SIM_STATUS and the CP
+  answered it 9.4 s later, so the probe's first request now waits 20 s
+  (0.3.6). Then: card state 1, applications (2, 5) and (5, 5) (a USIM and an
+  ISIM, both ready), radio state 10, SMSC present.
+- **SIM-7 failed five times the same way, then passed.** Each time: PS
+  registration state 1, reject 0, RAT 14 (LTE, at home) within a few
+  seconds; `SET_INITIAL_ATTACH_APN` and `SET_DATA_PROFILE` error 0; NR mode
+  set to 0; then `SETUP_DATA_CALL` answered within 150 ms with status 36
+  (Android's REGULAR_DEACTIVATION, not "APN refused"), CID 1, active 0,
+  and `GET_DATA_CALL_LIST` empty before and after. Three changes were
+  tried one at a time, each on its own boot:
+  1. 0.3.5: no PDU session ID on cellular bearers (stock sends 0; sitd
+     reserved one). Still 36.
+  2. 0.3.7: the APN-type bitmap at 0xf1 of the setup request (stock sends
+     the APN's types; sitd sent 0, taken for an MTU). Still 36.
+  3. 0.3.8: the recording build (0.3.6) had shown that about a second
+     after every refusal the modem sent three IND_REG_FAILED, two
+     IND_NTW_STATE_CHANGED and an empty data-call list, and that it was
+     quiet before the data permission: it re-attaches when
+     SET_MOBILE_DATA_STATE and SET_PS_SERVICE are written, and the setup
+     always landed inside that. The RIL now waits until the modem has
+     been quiet for 3 s after the permission (at most 20 s), reads the
+     registration again, and then sends the setup. On its first run the
+     six indications came and went in the wait, the registration read 1,
+     0, 14 again, and the setup answered status 0, CID 1, active 1, PDP
+     type 3 (IPv4v6). The IMS bearer followed (status 0, CID 2, PDP type
+     2), AIMS registration came back "LTE, IMS voice and SMS registered",
+     and the RIL reported "Calls and SMS service ready".
+  The first two changes stay in: they match stock's requests, and the
+  9a's stock libraries (verified against the owner's `vendor_a.img`) write
+  both fields that way.
+- **SIM-8 passed:** `omamobile-sit data on` brought `rmnet0` up with an
+  address and the default route at metric 700; three pings over it to
+  9.9.9.9 answered (78 ms average); an HTTPS GET over it returned 200.
+- **SIM-9 passed:** the carrier's welcome text had already arrived during
+  SIM-7 ("SMS stored and acknowledged"), the owner's text from another
+  phone arrived within seconds, and a text sent from the palmtop
+  (`omamobile-sit sms send`) reached the owner's phone. A text sent to
+  the palmtop's own number was accepted ("sent") and never came back,
+  which is common on this network.
+- **SIM-10:** no call; the 9a has no audio route.
+- **SIM-11 passed:** radio off, the RIL stopped, an attended reboot
+  (the unit's stop powered the CP off during shutdown), then M0.1: the
+  six partitions unchanged, `cpif` not loaded, UFS error handler 0.
+
+The run kept the full refused record (292 bytes: status 36, CID 1, the
+IPC extension version at 132-133, the suggested retry time at 235-242 as
+an s64) and the raw indications of the passing run in
+`logs/tegu-sim-20261102/private/` (off the repository). The one open
+question is what the modem's re-attach after the data permission is
+about: the IND_REG_FAILED causes are in that file, decodable with the
+layout from the stock library (domain at 0x0e, main cause 0x0f,
+additional cause 0x10). Stock sends the data permission at radio-on, long
+before any setup, so the better fix may be to move those two requests
+earlier and keep the wait as a safety net.
 
 **Unqualified after a passing run:** suspend with the modem on (the
 inhibitor stays; M6, two reboots with the CP up: this runbook's attended
