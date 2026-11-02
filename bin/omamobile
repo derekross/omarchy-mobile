@@ -72,9 +72,9 @@ Usage: [DEVICE=<codename>] omamobile <command>
                    allowlist, trigger, ...) into <dir>, to check what initramfs packs
   kernel [--release]
                    Build the mainline kernel ($KERNEL_DIR) with our config fragment.
-                   --release names it as a release kernel (docs/RELEASES.md §4):
-                   LOCALVERSION -omamobile instead of -omamobile-push1, so uname -r
-                   is <version>-omamobile-g<sha12>; it refuses a -dirty result
+                   --release: the release LOCALVERSION (-omamobile, uname -r
+                   <version>-omamobile-g<sha12>) and no device fragment, for
+                   linux-omamobile (docs/RELEASES.md §4); needs a clean tree
   modules          Package the kernel's modules (stripped) as a tarball for the Arch
                    root: $KERNEL_OUT/modules-<release>.tar.zst, unpacked under
                    /usr/lib/modules on the phone
@@ -304,23 +304,28 @@ cmd_capture() {
 }
 
 cmd_kernel() {
-  local release=0 localversion=""
+  local release=0
   case ${1:-} in
     '') ;;
     --release) release=1 ;;
     *) die "kernel: expected --release or no argument" ;;
   esac
   (($# <= 1)) || die "kernel: expected --release or no argument"
-  # A release build is named -omamobile-g<sha12> (RELEASES §4): the -push1
-  # in the config fragment marks development builds, so a development kernel
-  # is never mistaken for a packaged one. A defconfig run starts every build,
-  # so the switch holds both ways in a reused KERNEL_OUT.
-  ((release == 0)) || localversion="scripts/config --file $KERNEL_OUT/.config --set-str LOCALVERSION -omamobile --enable LOCALVERSION_AUTO"
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
   [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
   # The codename goes into a path below, as in load_device
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
-  local fragment="$ROOT/device/$DEVICE/kernel.config"
+  local fragment="$ROOT/device/$DEVICE/kernel.config" localversion=""
+  if ((release)); then
+    # One kernel for every device: a device's bring-up fragment stays out,
+    # and a release names its commit exactly, so the tree must be clean
+    # (setlocalversion would add -dirty, which linux-omamobile refuses)
+    fragment=/nonexistent
+    localversion="scripts/config --file $KERNEL_OUT/.config --set-str LOCALVERSION -omamobile --enable LOCALVERSION_AUTO"
+    [[ -z $(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no 2>/dev/null) ]] \
+      || die "kernel --release: $KERNEL_DIR has uncommitted changes"
+    say "Release build: LOCALVERSION -omamobile, no device fragment"
+  fi
   say "Building $KERNEL_DIR into $KERNEL_OUT"
   mkdir -p "$KERNEL_OUT"
   in_container "
@@ -345,6 +350,7 @@ cmd_kernel() {
     echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
   } > "$KERNEL_OUT/toolchain.txt"
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
+  # The release string the tree gave: never -push1 or -dirty (RELEASES §4)
   if ((release)); then
     local rel
     rel=$(kernel_release)

@@ -19,13 +19,16 @@
 # Stages (RELEASES §11 step in brackets):
 #   status        what is recorded for this release, and the next stage
 #   kernel        [1-2] the tag exists on GitHub's omamobile, the release
-#                 worktree is that commit and clean, and the device's NOTES
-#                 record a boot of it
+#                 worktree is that commit and clean, and the device's NOTES.md
+#                 records a boot of exactly its release string
+#                 (<version>-omamobile-g<sha12>)
 #   build         [3] the release kernel and its modules from that worktree,
 #                 into the fixed output directory (bin/omamobile kernel
-#                 --release: uname -r <version>-omamobile-g<sha12>)
+#                 --release: uname -r <version>-omamobile-g<sha12>), then
+#                 staged into packages/linux-omamobile
 #   images        [4] the release initramfs, then the boot images twice:
-#                 every checksum equal
+#                 every checksum equal; then the device package's boot files
+#                 (tools/stage-boot-files)
 #   packages      [5] every package's tests; out/repo signed by the release
 #                 key, holding every package the image installs at this
 #                 checkout's version; development publishes exactly it.
@@ -43,7 +46,8 @@
 #                 file outside the repository, one per line
 #   sign          [8] the root image's checksum signed with the release key;
 #                 every signature of the release verified from a clean keyring
-#   upload        [8] tools/release-upload, when it exists (Derek: server)
+#   upload        [8] tools/release-upload --dry-run of the bundle; the real
+#                 upload is Derek's (server), then `upload --done`
 #   promote       [8] the pinned development index to stable, unchanged
 #                 (Derek: tools/repo-publish stable --expect-index)
 #   tag           [9] the release notes are final; release-V tagged here
@@ -53,8 +57,15 @@
 #
 # The release tree is out/release/V/ (state, checksums, logs). The kernel is
 # built from RELEASE_KERNEL_DIR ($KERNEL_BASE/wt-release) into
-# RELEASE_KERNEL_OUT ($KERNEL_BASE/out-release): fixed paths, because the
-# kernel's debug info records them and byte-identical builds need the same.
+# RELEASE_KERNEL_OUT ($KERNEL_BASE/out-kernel-release): fixed paths, because
+# the kernel's debug info records them and byte-identical builds need the
+# same. That directory is the release's own: a build into it is refused when
+# it holds anything but a release build (a development kernel, say).
+#
+# The kernel package (linux-omamobile), the boot-image hook
+# (omamobile-boot-update) and tools/stage-boot-files are §12 decision 10's
+# kernel update path. Where this checkout doesn't have them yet, the stages
+# that use them say so and skip; test-install can't pass without them.
 #
 # Never from here: a phone, a flash, a push, an upload or a promotion. Those
 # stages stop and print the exact command for the maintainer to run.
@@ -72,7 +83,7 @@ if [[ -z ${KERNEL_BASE:-} ]]; then
   [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
 fi
 RELEASE_KERNEL_DIR=${RELEASE_KERNEL_DIR:-$KERNEL_BASE/wt-release}
-RELEASE_KERNEL_OUT=${RELEASE_KERNEL_OUT:-$KERNEL_BASE/out-release}
+RELEASE_KERNEL_OUT=${RELEASE_KERNEL_OUT:-$KERNEL_BASE/out-kernel-release}
 DEVICE=${DEVICE:-cheetah}
 
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
@@ -139,6 +150,18 @@ recorded_kernel_tag() {
   printf '%s' "${t:-${kernel_tag:-kernel-$version}}"
 }
 desc() { sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$conf"; }
+# The release string of the release worktree at COMMIT:
+# <version>-omamobile-g<sha12>, what uname -r prints for a release build
+release_string() {
+  local kver
+  kver=$(make -s -C "$RELEASE_KERNEL_DIR" kernelversion 2>/dev/null) && [[ -n $kver ]] ||
+    die "can't read the kernel version from $RELEASE_KERNEL_DIR"
+  printf '%s-omamobile-g%s' "$kver" "${1:0:12}"
+}
+is_release_string() { [[ $1 =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-rc[0-9]+)?-omamobile-g[0-9a-f]{12}$ ]]; }
+# The kernel update path (§12 decision 10), once PR #320's files are here
+have_kernel_pkg() { [[ -x packages/linux-omamobile/stage && -f packages/linux-omamobile/PKGBUILD ]]; }
+have_boot_update() { [[ -f packages/omamobile-boot-update/PKGBUILD && -x tools/stage-boot-files ]]; }
 
 # A clean temporary keyring holding only omamobile-keyring's public keys;
 # verify_sig SIG FILE succeeds only for a good signature by RELEASE_KEY
@@ -195,7 +218,7 @@ st_status() {
 }
 
 st_kernel() {
-  local tag commit peeled published head
+  local tag commit peeled published head refs
   tag=$(recorded_kernel_tag)
   [[ $tag =~ ^kernel-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] || die "a kernel release tag is kernel-YYYY.MM.DD, not $tag"
   say "§11.1-2: $tag on $KERNEL_REMOTE"
@@ -228,28 +251,43 @@ st_kernel() {
   [[ -z $(git -C "$RELEASE_KERNEL_DIR" status --porcelain --untracked-files=no) ]] ||
     die "$RELEASE_KERNEL_DIR has local changes: the release kernel is built from the clean tag (its uname -r would say -dirty)"
   note "$RELEASE_KERNEL_DIR is $tag, clean"
-  # §11.1: a boot of this commit on the device, written down
-  local hit
-  hit=$(grep -rlF "g${commit:0:12}" "device/$DEVICE/"*.md 2>/dev/null | head -1 || true)
+  # §11.1: a boot of this exact release build on the device, written down
+  # in its NOTES.md (a plan's Expect line names the commit too, and a -push1
+  # build of it is not the release kernel, so neither counts)
+  local want notes=device/$DEVICE/NOTES.md hit
+  want=$(release_string "$commit")
+  hit=$(grep -nE "(^|[^A-Za-z0-9._-])${want//./\\.}([^A-Za-z0-9_-]|\$)" "$notes" 2>/dev/null | head -1 || true)
   if [[ -z $hit ]]; then
-    die "device/$DEVICE has no note of a boot of g${commit:0:12} (§11.1: boot it, then record uname -r and the result in device/$DEVICE/NOTES.md)"
+    die "$notes has no boot of $want (§11.1: boot the release build, then record its uname -r and the result in $notes)"
   fi
-  note "booted and recorded: $hit"
+  note "booted and recorded in $notes: line ${hit%%:*}"
   put kernel_tag "$tag"
   put kernel_commit "$commit"
   put kernel_done "$tag ${commit:0:12}"
 }
 
 st_build() {
-  local commit want got kver
+  local commit want got old
   commit=$(need kernel_commit kernel)
-  kver=$(make -s -C "$RELEASE_KERNEL_DIR" kernelversion 2>/dev/null) || die "can't read the kernel version from $RELEASE_KERNEL_DIR"
-  want="$kver-omamobile-g${commit:0:12}"
+  # The release output directory holds release builds only: never build over
+  # a development kernel someone else uses (a phone's push set, a fallback)
+  if [[ -f $RELEASE_KERNEL_OUT/include/config/kernel.release ]]; then
+    old=$(cat "$RELEASE_KERNEL_OUT/include/config/kernel.release")
+    is_release_string "$old" ||
+      die "$RELEASE_KERNEL_OUT holds $old, not a release build: it is someone else's; choose another RELEASE_KERNEL_OUT"
+  elif [[ -d $RELEASE_KERNEL_OUT && -n $(ls -A "$RELEASE_KERNEL_OUT" 2>/dev/null) ]]; then
+    die "$RELEASE_KERNEL_OUT is not empty and holds no kernel build: it is someone else's; choose another RELEASE_KERNEL_OUT"
+  fi
+  want=$(release_string "$commit")
   say "§11.3: release kernel $want into $RELEASE_KERNEL_OUT"
   [[ $(git -C "$RELEASE_KERNEL_DIR" rev-parse HEAD) == "$commit" ]] || die "$RELEASE_KERNEL_DIR moved off ${commit:0:12}; run the kernel stage again"
   KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile kernel --release
   KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile modules
-  ((dry)) && return 0
+  if ((dry)); then
+    if have_kernel_pkg; then KERNEL_DIR=$RELEASE_KERNEL_DIR run packages/linux-omamobile/stage "$RELEASE_KERNEL_OUT"
+    else note "would skip linux-omamobile: no packages/linux-omamobile in this checkout (PR #320)"; fi
+    return 0
+  fi
   got=$(cat "$RELEASE_KERNEL_OUT/include/config/kernel.release")
   [[ $got == "$want" ]] || die "the build reports $got, not $want"
   [[ -f $RELEASE_KERNEL_OUT/modules-$got.tar.zst ]] || die "no modules-$got.tar.zst"
@@ -260,7 +298,15 @@ st_build() {
   }
   note "$(head -1 "$RELEASE_KERNEL_OUT/toolchain.txt")"
   note "uname -r $got, modules-$got.tar.zst"
-  note "linux-omamobile: packing it is RELEASES §4; until that package exists, the boot images carry this kernel"
+  # §4: the kernel package, from this build and the tag's worktree
+  if have_kernel_pkg; then
+    KERNEL_DIR=$RELEASE_KERNEL_DIR run packages/linux-omamobile/stage "$RELEASE_KERNEL_OUT"
+    [[ $(cat packages/linux-omamobile/prebuilt/kernel.release 2>/dev/null) == "$got" ]] ||
+      die "packages/linux-omamobile/prebuilt does not hold $got after staging"
+    note "linux-omamobile staged from $got (tools/build-packages packs it in the packages stage)"
+  else
+    note "skipped: no packages/linux-omamobile in this checkout (PR #320). The release can't pass test-install without it (§12 decision 10)"
+  fi
   put kernel_release "$got"
   put build_done "$got"
 }
@@ -275,6 +321,12 @@ st_images() {
   KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
   ((dry)) || (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.1"
   KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
+  # §5: the device package's boot files, from the same release initramfs
+  if have_boot_update; then
+    KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run tools/stage-boot-files
+  else
+    note "skipped: no tools/stage-boot-files in this checkout (PR #320). The release can't pass test-install without it (§12 decision 10)"
+  fi
   ((dry)) && return 0
   (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.2"
   cmp -s "$rel/images.sha256.1" "$rel/images.sha256.2" || {
@@ -317,6 +369,19 @@ st_packages() {
   say "out/repo holds what this checkout builds, for every package the image installs"
   dpkg=$(desc PACKAGE)
   image_pkgs="$(grep -v '^#' rootfs/packages.omamobile | xargs) $dpkg $(desc ROOTFS_PACKAGES)"
+  # Decision 10: the kernel package and its hook ship in the image
+  if have_kernel_pkg; then
+    local p
+    for p in linux-omamobile omamobile-boot-update; do
+      [[ " $image_pkgs " == *" $p "* ]] || image_pkgs+=" $p"
+    done
+    local krel
+    krel=$(need kernel_release build)
+    [[ $(cat packages/linux-omamobile/prebuilt/kernel.release 2>/dev/null) == "$krel" ]] ||
+      die "packages/linux-omamobile/prebuilt is not $krel: run the build stage again"
+  else
+    note "skipped: linux-omamobile and omamobile-boot-update are not in this checkout (PR #320)"
+  fi
   local versions built="" d
   versions=$(db_versions "$db")
   # "name version dir" for every package this checkout builds (split
@@ -366,6 +431,17 @@ st_rootfs() {
   grep -qx "omamobile channel: stable" "out/$name.MANIFEST" || die "$img does not follow stable"
   grep -q "^kernel modules: $krel " "out/$name.MANIFEST" || die "$img does not carry $krel's modules"
   grep -q '^omamobile packages missing (allowed): none$' "out/$name.MANIFEST" || die "$img lacks some of our packages"
+  # Decision 10: the image carries the kernel package and its hook
+  if have_kernel_pkg; then
+    local p
+    for p in linux-omamobile omamobile-boot-update; do
+      grep -qE "(^|[[:space:]])$p([[:space:]]|$)" "out/$name.MANIFEST" ||
+        die "$img does not carry $p: add it to rootfs/packages.omamobile (§12 decision 10)"
+    done
+    note "the image carries linux-omamobile and omamobile-boot-update"
+  else
+    note "skipped: no linux-omamobile in this checkout (PR #320), so the image has no kernel update path yet"
+  fi
   [[ $(sha256sum < out/repo/aarch64/omamobile.db.tar.gz | cut -d' ' -f1) == "$index" ]] ||
     die "out/repo changed during the build"
   note "$img ($(du -h "$img" | cut -f1)), $(cut -c1-12 "$img.sha256")"
@@ -423,7 +499,8 @@ st_test_install() {
         "systemctl is-failed omamobile-firstboot    # inactive (it ran and removed its file)" \
         "pacman -Q $(desc PACKAGE)" \
         "omarchy update                             # clean, from stable" \
-        "# Then the package-hook kernel update and a reboot into it (§12.10), and:" \
+        "# Then the package-hook kernel update and a reboot into it (§12.10;" \
+        "# device/cheetah/KERNEL-UPDATE-PLAN.md has the steps), and:" \
         "tools/release --version $version test-install --passed \"\$(tools/phone-ssh uname -r)\""
   ((dry)) || die "waiting for the attended install"
 }
@@ -581,27 +658,25 @@ st_sign() {
 }
 
 st_upload() {
-  local dir img
+  local dir
   need sign_done sign >/dev/null
   dir=$(need bundle bundle)
-  img=$(need rootfs rootfs)
   say "§11.8: upload to pkgs.omamobile.org/releases/$DEVICE/$version/ (files before the index)"
-  if [[ -x tools/release-upload ]]; then
-    run tools/release-upload --dry-run --version "$version" --device "$DEVICE"
-    derek "tools/release-upload --version $version --device $DEVICE"
-  else
-    note "tools/release-upload is not in this checkout yet (branch release-hosting). It must upload:"
-    note "  $dir/ (every file)"
-    note "  $img, $img.sha256, $img.sha256.sig, ${img%.img.zst}.MANIFEST"
-    note "  then the per-device latest-stable index, last"
-    derek "tools/release-upload --version $version --device $DEVICE    # once release-hosting has landed"
+  [[ $(basename "$dir") == "omamobile-$DEVICE-$version" ]] || die "$dir is not this release's bundle"
+  if [[ ${1:-} != --done ]]; then
+    # Checks the bundle's signature, files and root image, and prints the
+    # ssh and rsync commands; uploads nothing
+    run tools/release-upload --dry-run "$dir" || die "tools/release-upload --dry-run refuses $dir (above)"
+    derek "tools/release-upload --full --latest $dir"
   fi
   ((dry)) && return 0
   if [[ ${1:-} == --done ]]; then
+    # What the server serves, read back over HTTPS against the bundle
+    tools/release-upload --verify-only "$dir" || die "the published $version does not match $dir (above)"
     put upload_done "$(date -u +%Y-%m-%d)"
     return 0
   fi
-  die "then record it: tools/release --version $version upload --done"
+  die "then record it: tools/release --version $version upload --done   (checks the published files over HTTPS)"
 }
 
 st_promote() {

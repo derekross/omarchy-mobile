@@ -4,11 +4,16 @@
 # with a scratch kernel remote: no network, no Docker, no phone, no key; the
 # real out/, keys/ and kernel trees are never touched. The version check, the
 # stage order, the kernel stage's refusals (no tag, a lightweight tag, a
-# worktree off the tag or dirty, no boot recorded) and its record, the
-# identifier scan (real MACs, serial records, the builder's home and listed
-# identifiers found; made-up MACs and example paths not), the packages stage refusing an index
-# the release key didn't sign, the test-install record, and the tag stage
-# refusing notes with placeholders.
+# worktree off the tag or dirty, no boot of the exact release in NOTES.md: a
+# plan naming the commit, a -push1 or -dirty build don't count) and its
+# record, the build stage refusing an output directory that holds a
+# development kernel, the identifier scan (real MACs, serial records, the
+# builder's home and listed identifiers found; made-up MACs and example paths
+# not), the packages stage refusing an index the release key didn't sign,
+# the test-install record, the tag stage refusing notes with placeholders,
+# and the upload stage running the real tools/release-upload --dry-run on a
+# signed fixture bundle (throwaway key; ssh, rsync and curl are stubs that
+# must not be called).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; [[ ! -f ${t:-}/log ]] || cat "$t/log" >&2; exit 1; }
@@ -25,13 +30,13 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 R=$t/repo
 mkdir -p "$R/tools" "$R/device/testdev" "$R/packages/omamobile-keyring" "$R/rootfs" "$R/tests" "$R/out/repo/aarch64"
-cp tools/release "$R/tools/"
+cp tools/release tools/release-upload tools/bundle-manifest "$R/tools/"
 cp tests/packages "$R/tests/"
 cp packages/omamobile-keyring/omamobile.gpg "$R/packages/omamobile-keyring/"
 printf 'CODENAME=testdev\nNAME="Test Phone"\nPACKAGE=omamobile-device-testdev\n' > "$R/device/testdev/device.conf"
 echo "# Test phone notes" > "$R/device/testdev/NOTES.md"
 printf 'omamobile-keyring\n' > "$R/rootfs/packages.omamobile"
-export DEVICE=testdev KERNEL_BASE=$t/kbase RELEASE_KERNEL_DIR=$t/kbase/wt-release RELEASE_KERNEL_OUT=$t/kbase/out-release
+export DEVICE=testdev KERNEL_BASE=$t/kbase RELEASE_KERNEL_DIR=$t/kbase/wt-release RELEASE_KERNEL_OUT=$t/kbase/out-kernel-release
 run() { (cd "$R" && tools/release "$@") > "$t/log" 2>&1; }
 V=2026.11.05
 
@@ -49,7 +54,9 @@ pass "calendar versions only, and each stage needs the ones before it"
 K=$t/kernel.git
 git init -q --bare "$K"
 git init -q "$t/ksrc"
-git -C "$t/ksrc" commit -q --allow-empty -m "base"
+printf 'kernelversion:\n\t@echo 7.3.0-rc6\n' > "$t/ksrc/Makefile"
+git -C "$t/ksrc" add Makefile
+git -C "$t/ksrc" commit -q -m "base"
 git -C "$t/ksrc" commit -q --allow-empty -m "release"
 commit=$(git -C "$t/ksrc" rev-parse HEAD)
 git -C "$t/ksrc" push -q "$K" HEAD:refs/heads/omamobile
@@ -73,12 +80,41 @@ if run --version "$V" kernel; then fail "a dirty worktree is refused"; fi
 grep -q 'local changes' "$t/log" || fail "says the worktree has changes"
 git -C "$RELEASE_KERNEL_DIR" reset -q --hard
 if run --version "$V" kernel; then fail "a kernel with no recorded boot is refused"; fi
-grep -q "no note of a boot of g${commit:0:12}" "$t/log" || fail "asks for the boot record"
-echo "Booted 7.3.0-rc6-omamobile-g${commit:0:12}: display, touch, Wi-Fi fine." >> "$R/device/testdev/NOTES.md"
+krel=7.3.0-rc6-omamobile-g${commit:0:12}
+grep -q "NOTES.md has no boot of $krel" "$t/log" || fail "asks for the boot record of the exact release"
+# A plan's Expect line names the commit and even the release: not a result
+printf '## Runbook\nExpect: uname -r is %s (g%s)\n' "$krel" "${commit:0:12}" > "$R/device/testdev/KERNEL-UPDATE-PLAN.md"
+if run --version "$V" kernel; then fail "a plan naming the commit is not a recorded boot"; fi
+grep -q "NOTES.md has no boot of $krel" "$t/log" || fail "a plan file is refused for want of a boot record"
+# A development or dirty build of the same commit is not the release kernel
+for other in "7.3.0-rc6-omamobile-push1-g${commit:0:12}" "7.3.0-rc6-omamobile-push1-00012-g${commit:0:12}" "$krel-dirty"; do
+  cp "$R/device/testdev/NOTES.md" "$t/notes.saved"
+  echo "Booted $other: display, touch, Wi-Fi fine." >> "$R/device/testdev/NOTES.md"
+  if run --version "$V" kernel; then fail "a boot of $other does not count"; fi
+  grep -q "NOTES.md has no boot of $krel" "$t/log" || fail "$other is refused for want of the release's boot"
+  cp "$t/notes.saved" "$R/device/testdev/NOTES.md"
+done
+echo "Booted $krel: display, touch, Wi-Fi fine." >> "$R/device/testdev/NOTES.md"
 run --version "$V" kernel || fail "the kernel stage passes with the tag, a clean worktree and a recorded boot"
+grep -q 'booted and recorded in device/testdev/NOTES.md' "$t/log" || fail "names NOTES.md as the record"
 grep -qx "kernel_commit=$commit" "$R/out/release/$V/state" || fail "records the tag's commit"
 if run --version "$V" --kernel-tag kernel-2026.11.04 status; then fail "another kernel tag for a recorded release is refused"; fi
-pass "the kernel stage refuses a missing or lightweight tag, a worktree off it or dirty, and an unrecorded boot"
+pass "the kernel stage refuses a missing or lightweight tag, a worktree off it or dirty, and a boot not recorded in NOTES.md as the exact release"
+
+# --- build: the output directory is the release's own ---
+O=$RELEASE_KERNEL_OUT
+mkdir -p "$O/include/config"
+echo "7.3.0-rc6-omamobile-push1-g${commit:0:12}" > "$O/include/config/kernel.release"
+if run --version "$V" --dry-run build; then fail "an output directory holding a development kernel is refused"; fi
+grep -q 'not a release build' "$t/log" || fail "says the directory holds a development kernel"
+rm -rf "$O" && mkdir -p "$O" && echo x > "$O/something"
+if run --version "$V" --dry-run build; then fail "a non-empty output directory without a kernel build is refused"; fi
+rm -rf "$O" && mkdir -p "$O/include/config" && echo "$krel" > "$O/include/config/kernel.release"
+run --version "$V" --dry-run build || fail "a previous release build in the output directory is fine"
+grep -q 'would run: bin/omamobile kernel --release' "$t/log" || fail "the build runs bin/omamobile kernel --release"
+grep -q 'linux-omamobile' "$t/log" || fail "the build says what happens to linux-omamobile"
+rm -rf "$O"
+pass "the build stage refuses an output directory that isn't a release build's"
 
 # --- the identifier scan ---
 mkdir -p "$t/scan"
@@ -127,3 +163,52 @@ printf '# Omarchy Mobile 2026.MM.DD\nkernel-2026.11.05\n' > "$R/docs/release-not
 if run --version "$V" tag; then fail "notes with placeholders are refused"; fi
 grep -q 'placeholders' "$t/log" || fail "says the notes have placeholders"
 pass "test-install records only the release kernel on a signed bundle; tag refuses unfinished notes"
+
+# --- upload: the real tools/release-upload --dry-run on a signed bundle ---
+for tool in rsync sha256sum; do
+  command -v "$tool" >/dev/null || { pass "# skip upload: no $tool"; exit 0; }
+done
+uk=$t/release-key
+mkdir -m 700 "$uk"
+GNUPGHOME=$uk gpg --batch --quiet --passphrase '' --quick-generate-key "release <r@invalid>" ed25519 sign never 2>/dev/null
+ufpr=$(GNUPGHOME=$uk gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+mkdir -p "$R/keys"
+echo "$ufpr" > "$R/keys/fingerprint.release"
+kr=$R/packages/omamobile-keyring
+GNUPGHOME=$uk gpg --batch --export "$ufpr" > "$kr/omamobile.gpg"
+printf '%s:4:\n' "$ufpr" > "$kr/omamobile-trusted"
+: > "$kr/omamobile-revoked"
+B=out/bundle/omamobile-testdev-$V
+rootname=omamobile-rootfs-testdev-$V-aarch64.img.zst
+mkdir -p "$R/$B/images"
+printf 'CODENAME=testdev\nNAME="Test Phone"\nBOOT_IMAGES="boot"\nUFS_RW="boot_b userdata"\n' > "$R/$B/device.conf"
+head -c 4096 /dev/urandom > "$R/$B/images/boot.img"
+printf '#!/bin/bash\necho install\n' > "$R/$B/install"
+cp "$kr/omamobile.gpg" "$R/$B/omamobile.gpg"
+head -c 50000 /dev/urandom > "$R/out/bundle/$rootname"
+(cd "$R/out/bundle" && sha256sum "$rootname" > "$rootname.sha256")
+printf 'device: testdev\n' > "$R/out/bundle/${rootname%.img.zst}.MANIFEST"
+digest=$(sha256sum < "$R/out/bundle/$rootname" | cut -d' ' -f1)
+printf 'version: %s\nroot image: %s (%s)\n' "$V" "$rootname" "$digest" > "$R/$B/MANIFEST"
+python3 -I "$R/tools/bundle-manifest" --bundle "$R/$B" --rootfs "$R/out/bundle/$rootname" --rootfs-sha256 "$digest" \
+  --version "$V" --kernel-release "$krel" --base-url "https://pkgs.omamobile.org/releases/testdev/$V/" >/dev/null ||
+  fail "the fixture bundle's manifest.json"
+(cd "$R/$B" && find . -type f ! -name 'SHA256SUMS*' -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
+GNUPGHOME=$uk gpg --batch --yes --quiet --local-user "$ufpr" --detach-sign -o "$R/$B/SHA256SUMS.sig" "$R/$B/SHA256SUMS"
+# Nothing may reach a server: ssh, rsync and curl only log
+mkdir -p "$t/stub"
+for c in ssh rsync curl; do printf '#!/bin/sh\necho "%s $*" >> %s/stub.log\nexit 1\n' "$c" "$t" > "$t/stub/$c"; done
+chmod +x "$t/stub/"*
+printf 'sign_done=verified\nbundle=%s\n' "$B" >> "$st"
+urun() { (cd "$R" && PATH="$t/stub:$PATH" tools/release "$@") > "$t/log" 2>&1; }
+if urun --version "$V" upload; then fail "the upload stage stops for the maintainer"; fi
+grep -q "release-upload --dry-run $B" "$t/log" || fail "runs tools/release-upload --dry-run on the bundle directory"
+grep -q 'SHA256SUMS signed by the release key' "$t/log" || fail "release-upload checked the bundle's signature"
+grep -q 'dry run, nothing uploaded' "$t/log" || fail "release-upload finished its dry run"
+grep -q "tools/release-upload --full --latest $B" "$t/log" || fail "prints the real upload for the maintainer"
+grep -q 'upload --done' "$t/log" || fail "says how to record the upload"
+[[ ! -s $t/stub.log ]] || fail "the dry run called a network tool: $(cat "$t/stub.log")"
+echo tampered >> "$R/$B/install"
+if urun --version "$V" upload; then fail "a bundle changed after signing is refused"; fi
+grep -q "release-upload --dry-run refuses" "$t/log" || fail "says release-upload refused the bundle"
+pass "the upload stage runs the real release-upload --dry-run on the bundle and prints the --full --latest upload"
