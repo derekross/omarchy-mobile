@@ -82,6 +82,8 @@ sha256sum omamobile-rootfs-cheetah-<version>-aarch64.img.zst
 
 ## 3. Install
 
+Stock Android must be running from slot A, because Omarchy Mobile goes on slot B and stock stays on A as your way back. An Android system update can leave stock running from slot B; the installer refuses such a phone and says so. Then, in Fastboot Mode, make slot A active (`fastboot --set-active=a`), flash Google's factory image for your phone onto it with Google's own `flash-all` script (it erases Android's data: back up anything you want to keep first), check that Android starts, and come back to this step. The installer then may ask you to confirm the other slot's bootloader version with `--bootloader-slots-match`, as it explains. Reinstalling over an earlier Omarchy Mobile install, which runs from slot B, is the one case for `bash install --reinstall`.
+
 1. Put the phone in Fastboot Mode. Either run `adb reboot bootloader` while Android is running, or, with the phone off, hold **Volume Down**, then also hold **Power**, and keep both held until "Fastboot Mode" appears (up to about 20 seconds).
 2. Connect the phone and check that the computer sees it:
 
@@ -197,7 +199,7 @@ tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 
 After the restart, Wi-Fi, Bluetooth, sound, haptics, the sensors and the cameras work.
 
-**Fingerprint unlock is off at first,** on purpose: the first time its service starts, it writes the phone's secure storage, and that can't be undone. If you want it, start the service once in a terminal on the phone with `sudo systemctl enable --now omamobile-fp`, then add a finger on the phone's fingerprint screen.
+**Fingerprint unlock isn't available on a new install yet.** Its service writes the phone's secure storage, and before its first start it needs read-only copies of data that stock Android keeps in the phone's `persist` partition. Nothing on a new install makes those copies yet, and starting the service without them could damage that stock storage for good. **Don't start `omamobile-fp` by hand.** A coming release turns fingerprint on safely as part of the install.
 
 ## Getting updates
 

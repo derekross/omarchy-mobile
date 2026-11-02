@@ -26,3 +26,7 @@ archlinuxarm-keyring
 omarchy-keyring
 omarchy
 omarchy-settings
+# Voice dictation out of the box (packages/omamobile-shell README, Voice
+# input): Voxtype from [omarchy], what Install > AI > Dictation adds. Here,
+# not in packages.omamobile, which takes [omamobile] packages only.
+voxtype-bin

@@ -102,6 +102,15 @@ if exists /usr/lib/omamobile-omarchy/lock-pam; then
   pass "the lock's PAM file (omarchy-lock-password) is in the image"
 fi
 
+# Voice out of the box (images from before it have no omamobile-voice): the
+# engine, its user daemon and the speech model omamobile-setup-user links
+if grep -q '^omamobile-voice ' <<<"$manifest"; then
+  exists /usr/bin/voxtype || fail "voxtype is installed with omamobile-voice"
+  exists /usr/lib/systemd/user/voxtype.service || fail "Voxtype's user unit is installed"
+  exists /usr/share/omamobile/voice/models/ggml-base.en.bin || fail "the base.en speech model is in the image"
+  pass "voice out of the box: voxtype, its user unit and base.en"
+fi
+
 exists /etc/pacman.d/gnupg && fail "no pacman keyring (it holds a private key)"
 d "ls /etc/ssh" | grep -q ssh_host_ && fail "no SSH host keys"
 [[ $(cat_ /etc/machine-id) == uninitialized ]] || fail "machine id uninitialized"
