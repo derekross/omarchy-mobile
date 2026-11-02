@@ -11,6 +11,11 @@
 #                  signature and checksum, and publish to development
 #     stable       promote: copy development's index and the signed files it
 #                  lists, as they are, to stable (asks first unless --yes)
+#     --expect-index SHA256
+#                  with stable: promote only if development's index is exactly
+#                  this one (its omamobile.db.tar.gz SHA-256), the one a
+#                  release was built and tested from (tools/release promote);
+#                  if development moved since, nothing is promoted
 #     --no-build   publish out/repo as it is
 #     --dry-run    everything except the upload
 #     --yes        don't ask before promoting
@@ -54,7 +59,7 @@ DB=omamobile.db.tar.gz
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 die() { echo "repo-publish: $*" >&2; exit 1; }
 
-channel=development build=1 dry=0 yes=0 remind=0 from_main=0 skipped_build=0 args=()
+channel=development build=1 dry=0 yes=0 remind=0 from_main=0 expect_index="" skipped_build=0 args=()
 while (($#)); do
   [[ $1 == --from-main ]] || args+=("$1")
   case $1 in
@@ -63,14 +68,19 @@ while (($#)); do
     --no-build) build=0 ;;
     --dry-run) dry=1 ;;
     --yes) yes=1 ;;
+    --expect-index) expect_index=${2:?--expect-index needs a SHA-256}; args+=("$expect_index"); shift ;;
     --remind) remind=1 ;;
-    -h|--help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
 done
 
 command -v bsdtar >/dev/null || die "needs bsdtar (libarchive)"
+if [[ -n $expect_index ]]; then
+  [[ $expect_index =~ ^[0-9a-f]{64}$ ]] || die "--expect-index is a SHA-256 in hex"
+  [[ $channel == stable ]] || die "--expect-index goes with stable (a promotion)"
+fi
 
 if ((from_main)); then
   # A detached checkout of origin/main, so half-finished local changes are
@@ -267,6 +277,12 @@ if [[ $channel == development ]]; then
 else
   [[ -f $dev/$DB ]] || die "nothing in development to promote"
   verify "$dev"
+  if [[ -n $expect_index ]]; then
+    got=$(sha256sum < "$dev/$DB" | cut -d' ' -f1)
+    [[ $got == "$expect_index" ]] ||
+      die "development's index is $got, not the expected $expect_index: it moved since the release was built; nothing promoted"
+    echo "    development's index is the expected ${expect_index:0:12}"
+  fi
   echo "Promoting to stable:"
   comm -23 <(db_files "$dev") <(db_files "$stb" 2>/dev/null || true) | sed 's/^/    /'
   if ((yes == 0 && dry == 0)); then

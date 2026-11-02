@@ -310,6 +310,7 @@ cmd_kernel() {
     --release) release=1 ;;
     *) die "kernel: expected --release or no argument" ;;
   esac
+  (($# <= 1)) || die "kernel: expected --release or no argument"
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
   [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
   # The codename goes into a path below, as in load_device
@@ -349,6 +350,14 @@ cmd_kernel() {
     echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
   } > "$KERNEL_OUT/toolchain.txt"
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
+  # The release string the tree gave: never -push1 or -dirty (RELEASES §4)
+  if ((release)); then
+    local rel
+    rel=$(kernel_release)
+    [[ $rel =~ -omamobile-g[0-9a-f]{12}$ ]] ||
+      die "release build $rel is not <version>-omamobile-g<sha12>: build from a clean checkout of the release tag (a -dirty or -push1 kernel is never released)"
+    say "Release kernel $rel"
+  fi
 }
 
 # Kernel release of the build in $KERNEL_OUT (what uname -r will print).
