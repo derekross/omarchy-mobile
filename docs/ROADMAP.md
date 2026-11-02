@@ -161,6 +161,10 @@ The kernel package, the update path for slot B and the installer are designed to
 
 Alongside every release, **keep linux-omarchy-mobile honest**: the release kernel is a tag on the published `omamobile` branch, so a curation pass moves what has passed on the phone out of the local `omamobile-int` into a release branch on `omamobile` before each release ([RELEASES](RELEASES.md) §8), and the gap between the phone's test kernel and the release shrinks release by release.
 
+### 3.9 Secure by default: an encrypted disk and a verified boot chain, with a development mode
+
+After the first developer-preview release ([RELEASES](RELEASES.md) §12.12). [SECURITY-PLAN](SECURITY-PLAN.md): today the root on `userdata` is plain ext4 and the bootloader is unlocked. A release phone gets the root in LUKS2, unlocked with a PIN or passphrase on the touchscreen at boot as Omarchy laptops unlock theirs, and a locked bootloader that boots only images signed with Omarchy Mobile's own key (`avb_custom_key`, the yellow boot state), delivered pre-signed by the Updater. Development mode stays as it is: `fastboot flashing unlock` (which wipes `userdata`), the public test key, `push` and slot B experiments. Builders can lock with their own key instead. Encryption comes first and works on unlocked phones too; the locked chain needs the maintainer's decisions on writing `vbmeta_b` and locking, and a first locked boot on a test phone. Design only so far.
+
 ## 4. How to help
 
 - **Start with [CONTRIBUTING.md](../CONTRIBUTING.md).** It has the safety model, the build and flash loop and how to submit changes. AI coding agents also read [AGENTS.md](../AGENTS.md).
