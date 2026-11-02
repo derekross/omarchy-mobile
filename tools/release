@@ -44,8 +44,10 @@
 #                 from a factory image. Literal identifiers (serials, SSIDs,
 #                 account names) come from RELEASE_IDENTIFIERS, a private
 #                 file outside the repository, one per line
-#   sign          [8] the root image's checksum signed with the release key;
-#                 every signature of the release verified from a clean keyring
+#   verify        [8] the bundle's signature from a clean keyring, its
+#                 checksums, and the signed MANIFEST naming this root image
+#                 (needs no key: the bundle stage signed it; the root image
+#                 is authorised by that MANIFEST and manifest.json alone)
 #   upload        [8] tools/release-upload --dry-run of the bundle; the real
 #                 upload is Derek's (server), then `upload --done`
 #   promote       [8] the pinned development index to stable, unchanged
@@ -54,6 +56,9 @@
 #                 (Derek pushes it and opens the GitHub release)
 #   scan PATH...  the identifiers stage's scan alone, on any files or
 #                 directories (the notes while they are written, say)
+#   check-bundle DIR
+#                 the identifiers stage's bundle check alone: DIR holds only
+#                 the files tools/make-bundle puts there
 #
 # The release tree is out/release/V/ (state, checksums, logs). The kernel is
 # built from RELEASE_KERNEL_DIR ($KERNEL_BASE/wt-release) into
@@ -206,7 +211,7 @@ db_sums() {
 st_status() {
   say "Omarchy Mobile $version for $DEVICE ($rel)"
   local s k v next=""
-  for s in kernel build images packages rootfs bundle test-install identifiers sign upload promote tag; do
+  for s in kernel build images packages rootfs bundle test-install identifiers verify upload promote tag; do
     k=${s//-/_}_done
     v=$(get "$k")
     printf '    %-13s %s\n' "$s" "${v:-not yet}"
@@ -403,6 +408,24 @@ st_packages() {
     die "out/repo is behind this checkout for the packages above"
   fi
   note "every image package is at this checkout's version"
+  # Decision 10: the device package carries the boot files the images stage
+  # staged from this release's initramfs, not an older build's
+  if have_boot_update; then
+    local bf=packages/$dpkg/boot-files/SHA256SUMS pf want_sum got_sum
+    [[ -f $bf ]] || die "no $bf: run the images stage (tools/stage-boot-files), then tools/build-packages packages/$dpkg"
+    pf=$(bsdtar -xOf "$db" --include='*/desc' |
+      awk -v n="$dpkg" '/^%FILENAME%$/ { getline; f = $0 } /^%NAME%$/ { getline; if ($0 == n) print f }' | head -1)
+    [[ -n $pf && -f out/repo/aarch64/$pf ]] || die "out/repo has no $dpkg package file"
+    want_sum=$(awk '$2 == "initramfs.cpio.lz4" { print $1 }' "$bf")
+    got_sum=$(bsdtar -xOf "out/repo/aarch64/$pf" "usr/lib/omamobile/$DEVICE/initramfs.cpio.lz4" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [[ -n $want_sum && $got_sum == "$want_sum" ]] || {
+      derek "tools/build-packages packages/$dpkg    # after the images stage staged boot-files/"
+      die "$pf does not carry the staged release initramfs (packages/$dpkg/boot-files): it was built before the images stage, or without boot files"
+    }
+    note "$pf carries this release's initramfs (boot-files/SHA256SUMS)"
+  else
+    note "skipped: no tools/stage-boot-files in this checkout (PR #320), so no boot files to compare"
+  fi
   say "development publishes exactly out/repo"
   if [[ ! -f $dev ]] || ! cmp -s "$db" "$dev"; then
     derek "tools/repo-publish --no-build development"
@@ -585,6 +608,19 @@ if found:
 PY
 }
 
+# Files in bundle DIR that tools/make-bundle doesn't put there, one per line.
+# The tools under tools/ are make-bundle's own provision_tools list, read
+# from it as data, so a tool it adds is allowed here without a change.
+bundle_extra_files() {
+  local tools t args=()
+  tools=$(sed -n 's/^provision_tools="\([a-z0-9 -]*\)"$/\1/p' tools/make-bundle)
+  [[ -n $tools ]] || die "can't read provision_tools from tools/make-bundle"
+  for t in $tools; do args+=(! -path "./tools/$t"); done
+  (cd "$1" && find . \( -type f -o -type l \) ! -path './images/*.img' ! -path ./README.txt ! -path ./INSTALL.md \
+    ! -path ./MANIFEST ! -path ./manifest.json ! -path ./SHA256SUMS ! -path ./SHA256SUMS.sig ! -path ./install \
+    ! -path ./device.conf ! -path ./omamobile.gpg "${args[@]}" | LC_ALL=C sort)
+}
+
 st_identifiers() {
   local dir img manifest notes t f list=()
   dir=$(need bundle bundle)
@@ -620,46 +656,33 @@ st_identifiers() {
   f=$(grep -E '^/usr/lib/firmware/(updates|omamobile/camera)(/|$)|^/usr/lib/omamobile-(fp|vendor/[a-z]+)/root/|/(aoc\.bin|cs40l26[^/]*\.(bin|wmfw)|cs35l41-dsp1-spk-prot[^/]*|BCM\.[^/]*\.hcd|fw_bcmdhd\.bin)$|^/var/lib/omamobile-fp/' \
       "$rel/rootfs-files.txt" || true)
   [[ -z $f ]] || { echo "$f" | head -20 >&2; die "files from a factory image in the root image (above)"; }
-  f=$(cd "$dir" && find . -type f ! -path './images/*.img' ! -name README.txt ! -name MANIFEST ! -name manifest.json \
-      ! -name 'SHA256SUMS*' ! -name install ! -name device.conf ! -name omamobile.gpg)
+  f=$(bundle_extra_files "$dir")
   [[ -z $f ]] || { echo "$f" >&2; die "files in the bundle that make-bundle does not put there (above)"; }
   note "no factory-image file in the root image; the bundle holds only make-bundle's files"
   put identifiers_done "clean ($(date -u +%Y-%m-%dT%H:%MZ)$([[ -f $notes ]] || echo ', notes not yet scanned'))"
 }
 
-st_sign() {
+st_verify() {
   local img dir
   img=$(need rootfs rootfs)
   dir=$(need bundle bundle)
   need test_install_done test-install >/dev/null
   need identifiers_done identifiers >/dev/null
-  say "§11.8: signatures"
+  say "§11.8: the release's signature, checked from a clean keyring"
   [[ $(get bundle_signed) == 1 ]] || die "$dir is unsigned; build the release bundle (bundle stage without --unsigned)"
-  if [[ ! -f $img.sha256.sig ]]; then
-    have_keys || {
-      derek "tools/release --version $version sign     # on the build machine, with keys/gnupg.release"
-      die "no release signing key here"
-    }
-    (
-      source tools/lib/signing.sh
-      signing_key_load "$ROOT" || exit 1
-      run gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$img.sha256.sig" "$img.sha256"
-    ) || die "signing $img.sha256 failed"
-  fi
-  ((dry)) && return 0
-  (cd "$(dirname "$img")" && sha256sum -c --quiet "$(basename "$img").sha256") || die "$img does not match its .sha256"
-  verify_sig "$img.sha256.sig" "$img.sha256" || die "$img.sha256.sig is not a good release-key signature"
+  ((dry)) && { note "would check $dir/SHA256SUMS.sig, the bundle's checksums and the root image the signed MANIFEST names"; return 0; }
   verify_sig "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS" || die "$dir/SHA256SUMS.sig is not a good release-key signature"
   (cd "$dir" && sha256sum -c --quiet SHA256SUMS) || die "$dir does not match SHA256SUMS"
+  (cd "$(dirname "$img")" && sha256sum -c --quiet "$(basename "$img").sha256") || die "$img does not match its .sha256"
   grep -qF "root image: $(basename "$img") ($(cut -d' ' -f1 "$img.sha256"))" "$dir/MANIFEST" ||
     die "the signed MANIFEST does not name this root image"
-  note "the bundle, the root image and its checksum: signed by $RELEASE_KEY, checked from a clean keyring"
-  put sign_done "verified"
+  note "SHA256SUMS signed by $RELEASE_KEY; the bundle and the root image its signed MANIFEST names match"
+  put verify_done "verified"
 }
 
 st_upload() {
   local dir
-  need sign_done sign >/dev/null
+  need verify_done verify >/dev/null
   dir=$(need bundle bundle)
   say "§11.8: upload to pkgs.omamobile.org/releases/$DEVICE/$version/ (files before the index)"
   [[ $(basename "$dir") == "omamobile-$DEVICE-$version" ]] || die "$dir is not this release's bundle"
@@ -741,10 +764,16 @@ case $stage in
   bundle) st_bundle "$@" ;;
   test-install) st_test_install "$@" ;;
   identifiers) st_identifiers ;;
-  sign) st_sign ;;
+  verify) st_verify ;;
   upload) st_upload "$@" ;;
   promote) st_promote "$@" ;;
   tag) st_tag ;;
+  check-bundle)
+    [[ -d ${1:-} ]] || die "check-bundle needs a bundle directory"
+    f=$(bundle_extra_files "$1")
+    [[ -z $f ]] || { echo "$f" >&2; die "files in $1 that make-bundle does not put there (above)"; }
+    note "$1 holds only make-bundle's files"
+    ;;
   scan)
     (($#)) || die "scan needs files or directories"
     ids=${RELEASE_IDENTIFIERS:-$HOME/.config/omamobile/release-identifiers}

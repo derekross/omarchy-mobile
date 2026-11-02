@@ -11,7 +11,9 @@
 # builder's home and listed identifiers found; made-up MACs and example paths
 # not), the packages stage refusing an index the release key didn't sign,
 # the test-install record, the tag stage refusing notes with placeholders,
-# and the upload stage running the real tools/release-upload --dry-run on a
+# the bundle check against a bundle laid out as make-bundle builds it
+# (INSTALL.md and make-bundle's provision tools allowed, nothing else), and
+# the upload stage running the real tools/release-upload --dry-run on a
 # signed fixture bundle (throwaway key; ssh, rsync and curl are stubs that
 # must not be called).
 set -euo pipefail
@@ -30,7 +32,7 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 R=$t/repo
 mkdir -p "$R/tools" "$R/device/testdev" "$R/packages/omamobile-keyring" "$R/rootfs" "$R/tests" "$R/out/repo/aarch64"
-cp tools/release tools/release-upload tools/bundle-manifest "$R/tools/"
+cp tools/release tools/release-upload tools/bundle-manifest tools/make-bundle "$R/tools/"
 cp tests/packages "$R/tests/"
 cp packages/omamobile-keyring/omamobile.gpg "$R/packages/omamobile-keyring/"
 printf 'CODENAME=testdev\nNAME="Test Phone"\nPACKAGE=omamobile-device-testdev\n' > "$R/device/testdev/device.conf"
@@ -185,6 +187,14 @@ printf 'CODENAME=testdev\nNAME="Test Phone"\nBOOT_IMAGES="boot"\nUFS_RW="boot_b 
 head -c 4096 /dev/urandom > "$R/$B/images/boot.img"
 printf '#!/bin/bash\necho install\n' > "$R/$B/install"
 cp "$kr/omamobile.gpg" "$R/$B/omamobile.gpg"
+# Laid out as tools/make-bundle lays it out: the guide, the README and
+# phone-provision with its helpers under tools/ (make-bundle's own list)
+echo guide > "$R/$B/INSTALL.md"
+echo readme > "$R/$B/README.txt"
+mkdir -p "$R/$B/tools"
+ptools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle)
+[[ -n $ptools ]] || fail "read make-bundle's provision_tools"
+for f in $ptools; do printf '#!/bin/bash\n' > "$R/$B/tools/$f"; done
 head -c 50000 /dev/urandom > "$R/out/bundle/$rootname"
 (cd "$R/out/bundle" && sha256sum "$rootname" > "$rootname.sha256")
 printf 'device: testdev\n' > "$R/out/bundle/${rootname%.img.zst}.MANIFEST"
@@ -199,7 +209,17 @@ GNUPGHOME=$uk gpg --batch --yes --quiet --local-user "$ufpr" --detach-sign -o "$
 mkdir -p "$t/stub"
 for c in ssh rsync curl; do printf '#!/bin/sh\necho "%s $*" >> %s/stub.log\nexit 1\n' "$c" "$t" > "$t/stub/$c"; done
 chmod +x "$t/stub/"*
-printf 'sign_done=verified\nbundle=%s\n' "$B" >> "$st"
+printf 'verify_done=verified\nbundle=%s\n' "$B" >> "$st"
+# The identifiers stage's bundle check on that layout
+run check-bundle "$R/$B" || fail "a bundle laid out as make-bundle builds it passes the bundle check"
+echo x > "$R/$B/tools/extra-tool"
+if run check-bundle "$R/$B"; then fail "a file make-bundle doesn't put in the bundle is refused"; fi
+grep -q './tools/extra-tool' "$t/log" || fail "names the extra file"
+rm "$R/$B/tools/extra-tool"
+echo x > "$R/$B/images/notes.txt"
+if run check-bundle "$R/$B"; then fail "a non-image file under images/ is refused"; fi
+rm "$R/$B/images/notes.txt"
+pass "the bundle check allows exactly make-bundle's files, INSTALL.md and its provision tools included"
 urun() { (cd "$R" && PATH="$t/stub:$PATH" tools/release "$@") > "$t/log" 2>&1; }
 if urun --version "$V" upload; then fail "the upload stage stops for the maintainer"; fi
 grep -q "release-upload --dry-run $B" "$t/log" || fail "runs tools/release-upload --dry-run on the bundle directory"
