@@ -144,7 +144,7 @@ One package for every device, in `[omamobile]`.
 - **No initramfs, no boot images.** Those are per device and come from the device package's hook (§5).
 - **Release string:** `CONFIG_LOCALVERSION` becomes `-omamobile` for release builds and `CONFIG_LOCALVERSION_AUTO` stays on. The published branch starts from a squashed commit, so no upstream tag is in its history and `setlocalversion` appends only the commit: `uname -r` is `7.3.0-rc6-omamobile-g<sha12>` (`-dirty` if the checkout isn't clean), which names the tagged commit exactly. `tools/publish-kernel` prints it, and the tag's message records it. The `-push1` suffix stays for development builds, so a development kernel can never be mistaken for a packaged one.
 - **pkgver:** the version without its `-` (pacman forbids `-`), then the number of commits in the tag's history and the commit: `7.3.0rc6.r<n>.g<sha12>` (`n` from `git rev-list --count kernel-<date>`). `omamobile` only moves forward, so `n` grows from release to release and pkgver sorts upward. `pkgrel` counts packaging-only changes.
-- **Build:** cross-compiled in the existing docker environment on x86 (`bin/omamobile kernel` and `modules`, unchanged), then packed by a `PKGBUILD` that only copies the build output (`arch=(aarch64)`, no compile step), so it can run on the laptop under `makepkg --config` with `CARCH=aarch64`. Building the kernel on the phone is possible but slow; the decision is §11.
+- **Build:** cross-compiled in the existing docker environment on x86 (`bin/omamobile kernel` and `modules`, unchanged), then packed by a `PKGBUILD` that only copies the build output (`arch=(aarch64)`, no compile step), so it can run on the build machine under `makepkg --config` with `CARCH=aarch64` (decided, §12.1). The compiler is the standalone AOSP clang prebuilt at a pinned revision, with pinned copies of the AOSP image scripts (`mkbootimg`, `mkdtboimg.py`, `avbtool`) (decided, §12.2).
 - **Headers** (`linux-omamobile-headers`) can follow when something needs out-of-tree modules (DKMS); nothing does today.
 - **Old modules:** a pacman upgrade removes the previous release's modules. The hook therefore keeps one copy of the previous `/usr/lib/modules/<release>` in `/var/lib/omamobile/boot/previous/` together with the previous slot-B images, so a rollback restores both (§5.3).
 
@@ -242,7 +242,7 @@ For a first install, or to recover a phone that won't boot. One bundle per devic
 | The bundle | `tools/make-bundle` | `out/bundle/omamobile-<codename>-<date>/` as below, `SHA256SUMS.sig` from `keys/` |
 | Per-phone data | `tools/phone-provision` | the extract tools on the user's factory image, pushed over USB SSH, plus the phone's own backup (modem board id and NV checksums, camera data, settings, home screens, fingerprint state only with `--fingerprint`) |
 
-Decisions taken in building it: the device packages are **installed** in the image, not only cached (one device so far; a first boot without a package step has one less way to fail; §12 decision 6 stays open for the second device); the image's `[omarchy]` is Omarchy's **stable** channel (from 2026-10-20; before that edge was the only one with aarch64 builds of `omarchy`, `omarchy-settings` and `quickshell`, and edge then moved to 4.5.0rc1, which the phone's patches don't apply to); the image is per device (its `MANIFEST` names the device, and the installer refuses a mismatch).
+Decisions taken in building it: the device packages are **installed** in the image, not only cached (a first boot without a package step has one less way to fail); the image's `[omarchy]` is Omarchy's **stable** channel (from 2026-10-20; before that edge was the only one with aarch64 builds of `omarchy`, `omarchy-settings` and `quickshell`, and edge then moved to 4.5.0rc1, which the phone's patches don't apply to); the image is per device (decided, §12.6; its `MANIFEST` names the device, and the installer refuses a mismatch).
 
 Root image filenames include the device so two devices can share a version without overwriting each other. Builds use separate temporary directories and refuse a concurrent build of the same device/version in the same output directory. Compression and smoke checks finish before replacing the published files. `--local NAME` still uses `out/NAME/repo` and writes images under `out/NAME/`; use `--rootfs` to select one there. Independent package snapshots also need separate `ALARM_CACHE` directories (§10). Repository-mode installation and bundling select only images whose root `MANIFEST` matches the device, including older filenames.
 
@@ -255,7 +255,8 @@ omamobile-<codename>-<version>/
   device.conf                       the descriptor the images were built from
   images/boot.img init_boot.img vendor_boot.img vendor_kernel_boot.img dtbo.img
   MANIFEST                          kernel release, package versions, both repositories' commits
-  SHA256SUMS  SHA256SUMS.sig        checksums of everything above, signed
+  manifest.json                     the same as data, with the install checks (below)
+  SHA256SUMS  SHA256SUMS.sig        checksums of everything above, signed with the release key
 omamobile-rootfs-<codename>-<version>-aarch64.img.zst
   .sha256 .MANIFEST
 ```
@@ -275,6 +276,10 @@ The bundle's signed `SHA256SUMS` covers its `MANIFEST`, which names the exact ro
 
 `bin/omamobile flash` stays the developer's tool; `install` is for everyone else and is deliberately narrower.
 
+**Ready for a web flasher and a desktop installer** (decided, §12.7; to build before the first release). The bundle carries `manifest.json`, covered by the signed `SHA256SUMS`: format version, release version, codename, product name, every file with its path, size and SHA-256, the kernel release and both commits, the release's URLs, and the install checks as data (the expected `fastboot getvar product`, unlocked bootloader, both bootloader slots on the same version, each `BOOT_IMAGES` entry flashed only to `<image>_b` with its expected size, `userdata` with the root image, then `--set-active=b` and reboot, and nothing else). `install` reads those checks too, so every installer enforces one set of rules.
+
+**Hosting** (decided, §12.7): bundles and root images live on our own server next to `[omamobile]` (`pkgs.omamobile.org/releases/<codename>/<version>/`, with a per-device "latest stable" index and CORS headers), because a root image (about 2.7 GB) is over GitHub's per-file limit; the GitHub Release for `release-<date>` carries the notes and the links. No Google firmware is ever hosted, in a bundle or anywhere else: every installer extracts it from the user's own factory image on the user's machine.
+
 ## 7. Versions and tags
 
 | Thing | Version | Where it is recorded |
@@ -284,7 +289,7 @@ The bundle's signed `SHA256SUMS` covers its `MANIFEST`, which names the exact ro
 | Descriptor | none of its own; a change to it is a device-package change and bumps that package | `omamobile-device-<codename>` |
 | Bundle | calendar version `<YYYY.MM.DD>`, with `.1`, `.2` for a respin the same day | tag `release-<YYYY.MM.DD>` in this repository, covering every device released that day; `MANIFEST` pins the kernel tag, every package version and both commits |
 
-A release never contains a kernel or package that isn't in `[omamobile]` at the same moment, so a bundle install and `omarchy update` meet at the same versions.
+A release never contains a kernel or package that isn't in `[omamobile]` at the same moment, so a bundle install and `omarchy update` meet at the same versions. The first release is `2026.MM.DD`, labelled "developer preview", for the Pixel 7 Pro only (§12.12).
 
 ## 8. The kernel branches
 
@@ -305,7 +310,7 @@ A release never contains a kernel or package that isn't in `[omamobile]` at the 
 - Set `KBUILD_BUILD_TIMESTAMP`, `KBUILD_BUILD_USER`, `KBUILD_BUILD_HOST` and `SOURCE_DATE_EPOCH` from the tagged commit.
 - Pack the initramfs with fixed mtimes, a sorted list and `cpio --reproducible`, and without `authorized_keys` (§5.2).
 - Pin the Alpine minirootfs and APKs by checksum (the minirootfs is already pinned; `alpine-fetch.py` should pin the APKs too).
-- The clang comes from a 400 GB LineageOS checkout today. A release build should use the AOSP clang prebuilt alone, or the distro's LLVM in the container; either changes the kernel's bytes once, so it's a decision (§11), made before the first release.
+- The clang comes from a 400 GB LineageOS checkout today; release builds use the pinned AOSP clang prebuilt instead (decided, §12.2), which changes the kernel's bytes once, so one cheetah boot from it comes before the release kernel is built.
 
 **CI** (GitHub Actions, or any runner with docker):
 
@@ -323,6 +328,8 @@ CI never holds the signing key and never sees a factory image. The maintainer do
 
 - **The release key** (2026-10-26, `20567593566EEEE2DD8864608632C8075EB94673`) is an ed25519 primary that only certifies, with an ed25519 signing subkey that expires 2028-10-26. `tools/release-key-init` made it once, on a tmpfs: the primary's secret (passphrase-protected), its revocation certificate and the public key are kept offline by the maintainer, in a password manager, and the passphrase separately. The build machine holds only the signing subkey, without a passphrase, in `keys/gnupg.release` (with `keys/fingerprint.release`), so a scheduled publish can sign unattended. Phones trust the primary, so a lost build machine costs a subkey: revoke it and certify a new one from the offline primary, and phones keep working.
 - **Renew the subkey before 2028-10-26** (`--quick-set-expire` from the offline primary, then re-export the public key into `omamobile-keyring`). An expired subkey's signatures stop verifying.
+- **Releases sign with the release key** (decided, §12.4): before the first bundle, `tools/build-packages`, `tools/make-bundle` and the publish switch from `keys/gnupg` to `keys/gnupg.release`.
+- **Users follow `stable`, builders and testers `development`** (decided, §12.9). Release images point `[omamobile]` at `stable` on `pkgs.omamobile.org`: the device package's `omamobile-mirrorlist` becomes that URL instead of a local `file://` path.
 - **The move from the original key.** The original package key (2026-10-12, `6C84FE3D240709E70E27CC94B301F5EA62B249FE`, `keys/gnupg`) still signs packages, the database and bundles. `omamobile-keyring` 20261026 trusts both keys and is itself signed by the original, so phones accept the release key with an ordinary update. Then: switch the build tools to the release key (`keys/gnupg.release`), and once published phones have that keyring, move the original key to `omamobile-revoked`. `tools/install-phone` accepts either key's signature on a bundle until then.
 - Rotation and revocation go through `omamobile-keyring`'s `omamobile-trusted` and `omamobile-revoked`, as Arch's keyring does.
 - **Publishing** (`tools/repo-publish`): `pkgs.omamobile.org` has two channels, `development/aarch64` and `stable/aarch64`. `repo-publish development` builds what changed (`build-packages --all`), checks every package's checksum and signature against `omamobile-keyring`'s trusted keys, and uploads packages first, then the index, then the pruning; each channel keeps the current and the previous index's files. `repo-publish stable` promotes development's signed files unchanged, after asking. The maintainer's laptop runs it daily from a clean `origin/main` checkout (`--from-main`, `tools/systemd/omamobile-publish.timer`), and `--remind` opens a "Ready for stable" issue when development has differed from stable for three days. Experimental phones' device packages are published to development only. The server account needs the `deployers` group.
@@ -347,18 +354,24 @@ Per release, in order. Stop at any failed step.
 3. **Build** the kernel from the tag in the pinned container, release `LOCALVERSION`; pack `linux-omamobile`.
 4. **Images** for every device: `DEVICE=<codename> bin/omamobile initramfs --release`, then `DEVICE=<codename> bin/omamobile images`, twice, checksums equal.
 5. **Packages:** every changed package has a bumped `version`, its `test/all` passes, `tools/build-packages` builds and signs them and the database on the laptop (`tools/repo-build` on a phone only as an opt-in shortcut).
-6. **Test install** on each released device, attended: the bundle's `install` on a phone whose stock slot A and backups are known good; first boot, device package installed, `omarchy update` clean, then a package-hook kernel update and a reboot into it.
+6. **Test install** on each released device, attended (this gates the release, §12.10): the bundle's `install` on a phone whose stock slot A and backups are known good; first boot, device package installed, `omarchy update` clean, then a package-hook kernel update and a reboot into it.
 7. **Identifiers:** grep the bundle, the root image's file list, `MANIFEST` and the release notes for MAC addresses (`[0-9a-f]{2}(:[0-9a-f]{2}){5}`), serial numbers, SSIDs and account names; confirm no file from a factory image is in any artifact.
-8. **Sign** the bundles and the root image; verify the signatures from a clean keyring.
+8. **Sign** the bundles and the root image with the release key; verify the signatures from a clean keyring; upload them to `pkgs.omamobile.org/releases/` (§6), files before the index; promote the release's packages to `stable`.
 9. **Tag** `release-<date>` in this repository; publish the repository, the bundles and the notes (what changed, the kernel tag and its `uname -r`, known issues, how to go back to stock).
 
-## 12. Decisions for the human
+## 12. Decisions (2026-11-01)
 
-1. **Where the kernel package is built:** cross-compiled in the x86 container and packed on the laptop (fast, matches today's builds), or natively on an aarch64 builder.
-2. **Toolchain for releases:** keep the LineageOS clang, switch to the standalone AOSP clang prebuilt, or the distro's LLVM in the container.
-3. **The package hook on development phones:** opt-in by `AUTO_WRITE=yes` (proposed), or on by default with `bin/omamobile push` turning it off.
-4. **Signing key:** keep the one key for bundles too, or create a release key (or subkeys) before the repository is public.
-5. **CI host** for aarch64 packages: GitHub's arm64 runners, another arm64 machine, or the phone as today.
-6. **Root image:** device packages in the cache and installed on first boot, or one root image per device. The first build (§6) installs them, so its image is per device; revisit with the second device.
-7. **Bundle hosting:** GitHub Releases on this repository, or next to the `[omamobile]` repository.
-8. **Second device:** which Pixel proves the model (a gs201 sibling such as panther needs mostly a DTS; a gs101 phone also tests the different boot image set).
+Decided by the maintainer for the first release; the reasoning is in the release decisions brief.
+
+1. **Kernel package build:** cross-compiled in the x86 container and packed on the build machine (the desktop that runs the daily publish), from a release tag (§4).
+2. **Release toolchain:** the standalone AOSP clang prebuilt at a pinned revision, plus pinned copies of the AOSP image scripts; the container pinned by digest (§4, §9).
+3. **Boot hook on development phones:** opt-in. Only `tools/install-phone` writes `AUTO_WRITE=yes`; `bin/omamobile push` stays the development path (§5.3).
+4. **Signing key:** the release key (2026-10-26); every tool switches to it before the first bundle, then the original key is retired (§10).
+5. **CI host for aarch64 packages:** the desktop for the first release; GitHub's arm64 runners later, for unsigned rebuild-and-compare (§9).
+6. **Root image:** one per device, as built (§6).
+7. **Bundle hosting:** our own server next to `[omamobile]`; the GitHub Release carries the notes and links. The bundle's signed JSON manifest carries every file's size and hash and the install checks as data, ready for a web flasher and a desktop installer. No Google firmware is ever hosted (§6).
+8. **Second device:** panther, after the first release.
+9. **Channels:** users on `stable`, builders and testers on `development`; the device package's `omamobile-mirrorlist` becomes the server URL (§10).
+10. **Kernel updates:** the release waits until `linux-omamobile` and `omamobile-boot-update` pass checklist step 6 on the Pixel 7 Pro (install, a package-hook kernel update, a reboot into it).
+11. **Kernel source:** the release kernel is a tag on the published `omamobile` branch, after the curated commits land there by fast-forward, so the source is public before any kernel binary ships (§8).
+12. **Name, version and gates:** calendar version `2026.MM.DD` (§7), labelled "developer preview", Pixel 7 Pro only. Modem ships as a known issue; Suspend gates the release only if the shell's auto-sleep ships on.
