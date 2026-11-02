@@ -38,6 +38,13 @@ OMAMOBILE_ROOT=$root "$here/omamobile-snapshot-name"
 ok "override removed with Snapshot"
 bash -n "$here/PKGBUILD" && ok "PKGBUILD parses"
 grep -q 'omacam' "$here/PKGBUILD" && ok "omacam is a dependency"
+# Phone and Messages are defaults (they pull in omatel-agent); the modem
+# stack is device-specific and never a dependency of this package.
+deps=$(startdir=$here bash -c 'source "$1"; printf "%s\n" "${depends[@]}"' _ "$here/PKGBUILD")
+grep -qx omaphone <<<"$deps" && grep -qx omamessages <<<"$deps" || fail "omaphone and omamessages are dependencies"
+ok "omaphone and omamessages are dependencies"
+! grep -qxE 'omamobile-(mmd|modem|modem-sit)' <<<"$deps" || fail "no modem package in depends"
+ok "no modem package in depends"
 grep -qE '^ +loupe +#' "$here/PKGBUILD" && ok "Loupe is a dependency"
 m=$here/mimeapps.list
 for type in png jpeg gif webp bmp tiff; do
