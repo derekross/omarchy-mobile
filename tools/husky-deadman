@@ -118,7 +118,7 @@ install_phone() {
 }
 
 cmd="${1:-}"; shift || true
-step= confirm= grace=60 soak= ilim=500000 nowd= noconfirm=0 allowsoc= meter=
+step='' confirm='' grace=60 soak='' ilim=500000 nowd='' noconfirm=0 allowsoc='' meter=''
 case "$cmd" in
   ''|-h|--help) usage ;;
   install) install_phone; say "installed /usr/local/bin/husky-deadman-phone"; exit 0 ;;

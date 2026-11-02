@@ -103,6 +103,7 @@ stub i2cset <<'EOF'
 # i2cset -f -y BUS ADDR REG VALUE
 addr=$4 reg=$5 val=$(printf '0x%02x' "$6")
 echo "i2cset $addr $reg $val" >> "$HDT_STATE/writes"
+[[ $reg == 0xcb && -e $HDT_STATE/cb-stuck ]] && exit 0     # 0xcb never takes a write
 # cb-locked: 0xcb takes a write only while CHGPROT (0xbf bits 3:2) is 11
 if [[ $reg == 0xcb && -e $HDT_STATE/cb-locked ]]; then
   prot=$(awk '$1=="0x69" && $2=="0xbf" {print $3}' "$HDT_STATE/regs")
@@ -125,7 +126,9 @@ v=$(cat "$HDT_STATE/gpio5"); echo "\"GPIO5\"=$([[ $v == 1 ]] && echo active || e
 EOF
 stub lsmod <<'EOF'
 #!/bin/bash
-printf 'Module Size Used by\nmax77759 16384 0\ngpio_max77759 16384 0\ntcpci_maxim 16384 0\ntcpci 16384 1\ntcpm 16384 1\nmax17042_battery 16384 0\n'
+printf 'Module Size Used by\n'
+[[ -e $HDT_STATE/no-mfd ]] || printf 'max77759 16384 0\n'
+printf 'gpio_max77759 16384 0\ntcpci_maxim 16384 0\ntcpci 16384 1\ntcpm 16384 1\nmax17042_battery 16384 0\n'
 [[ -e $HDT_STATE/charger-loaded ]] && echo "max77759_charger 16384 0"
 exit 0
 EOF
@@ -135,7 +138,9 @@ echo "systemctl $*" >> "$HDT_STATE/writes"; exit 0
 EOF
 stub modprobe <<'EOF'
 #!/bin/bash
-echo "modprobe $*" >> "$HDT_STATE/writes"; exit 0
+echo "modprobe $*" >> "$HDT_STATE/writes"
+[[ $1 == max77759 && -e $HDT_STATE/mfd-loads ]] && rm -f "$HDT_STATE/no-mfd"
+exit 0
 EOF
 stub ip <<'EOF'
 #!/bin/bash
@@ -171,7 +176,7 @@ pass "b5-host refuses without a baseline of this boot, nothing written, no unit"
 : > "$HDT_STATE/writes"
 "$tool" baseline > "$t/base.out" 2>&1 || { cat "$t/base.out"; fail "baseline"; }
 [[ ! -s "$HDT_STATE/writes" ]] || fail "baseline wrote: $(cat "$HDT_STATE/writes")"
-grep -q '^boot boot-1$' $D/baseline && grep -q '^0xb6 0xb1$' $D/baseline || { cat $D/baseline; fail "baseline file"; }
+{ grep -q '^boot boot-1$' $D/baseline && grep -q '^0xb6 0xb1$' $D/baseline; } || { cat $D/baseline; fail "baseline file"; }
 pass "baseline is read-only and records 0xb6 0xb1 for this boot"
 
 sed -i 's/^0x25 0x1d .*/0x25 0x1d 0x11/' "$HDT_STATE/regs"    # Rp default on CC1
@@ -200,7 +205,7 @@ grep -q 'VBUS up: 5000 mV' $LOG || fail "VBUS read 5000 mV from the stub"
 grep -q 'bst_on high for [0-9]* ms before 0x92' $LOG || fail "the bst_on-to-0x92 time is logged"
 [[ $(reg 0x69 0xcb) == 0xc0 && $(reg 0x69 0xc4) == 0x00 && $(reg 0x69 0xb9) == 0x05 && $(reg 0x25 0x92) == 0x00 && $(cat "$HDT_STATE/gpio5") == 0 ]] || fail "registers after the soak's undo"
 [[ ! -e $UNIT && ! -e $MARK ]] || fail "unit or marker left after a clean soak"
-grep -q 'k' "$t/wd" && grep -q 'V' "$t/wd" || fail "the watchdog was fed and closed with the magic character"
+{ grep -q 'k' "$t/wd" && grep -q 'V' "$t/wd"; } || fail "the watchdog was fed and closed with the magic character"
 pass "clean run: unit enabled before the first write, Google's order, soak ends in the undo, registers back, unit and marker gone, watchdog fed then closed"
 
 # ---- 3. the unit's content, caught mid-soak ----
@@ -211,8 +216,8 @@ sleep 2; "$tool" confirm > /dev/null; sleep 2
 [[ -e $UNIT && -e $MARK ]] || fail "unit or marker missing during the soak"
 grep -q "^ConditionPathExists=$MARK$" $UNIT || { cat $UNIT; fail "unit is conditioned on the marker"; }
 grep -q '^ExecStart=/usr/local/bin/husky-deadman-phone boot-undo$' $UNIT || fail "unit runs boot-undo"
-grep -q '^Type=oneshot$' $UNIT && grep -q '^TimeoutStartSec=180$' $UNIT && grep -q "^RequiresMountsFor=$(dirname $MARK) /usr/local/bin$" $UNIT || { cat $UNIT; fail "unit: oneshot, TimeoutStartSec, RequiresMountsFor"; }
-grep -q '^0xcb 0xc0$' $MARK && grep -q '^0xc4 0x00$' $MARK && grep -q '^0xb9 0x05$' $MARK || { cat $MARK; fail "marker carries the saved 0xcb/0xc4/0xb9"; }
+{ grep -q '^Type=oneshot$' $UNIT && grep -q '^TimeoutStartSec=180$' $UNIT && grep -q "^RequiresMountsFor=$(dirname $MARK) /usr/local/bin$" $UNIT; } || { cat $UNIT; fail "unit: oneshot, TimeoutStartSec, RequiresMountsFor"; }
+{ grep -q '^0xcb 0xc0$' $MARK && grep -q '^0xc4 0x00$' $MARK && grep -q '^0xb9 0x05$' $MARK; } || { cat $MARK; fail "marker carries the saved 0xcb/0xc4/0xb9"; }
 [[ $(reg 0x25 0x92) == 0x01 && $(cat "$HDT_STATE/gpio5") == 1 ]] || fail "sourcing during the soak"
 pass "mid-soak: unit (oneshot, ConditionPathExists= marker, TimeoutStartSec, RequiresMountsFor) and marker with the saved registers are armed"
 # "a reset": the tool dies without a word, the PMIC keeps GPIO5 and 0x92, /run is gone
@@ -249,12 +254,12 @@ touch "$HDT_STATE/charger-loaded"; : > "$HDT_STATE/writes"
 grep -q '^i2cset 0x69' "$HDT_STATE/writes" && fail "a charger write with the charger loaded"
 [[ ! -e $UNIT && ! -e $MARK ]] || fail "marker or unit kept although the port is cold"
 left=$(dirname $MARK)/registers-not-restored
-[[ -e $left ]] && grep -q '^0xcb 0xc0$' $left || fail "the saved registers are left in $left"
+{ [[ -e "$left" ]] && grep -q '^0xcb 0xc0$' "$left"; } || fail "the saved registers are left in "$left""
 rm -f "$HDT_STATE/charger-loaded"
 pass "boot-undo with the charger loaded: port cold, unit and marker removed, charger registers left in registers-not-restored"
 mkdir -p /run/husky-deadman; touch /run/husky-deadman/b4-done; "$tool" baseline > /dev/null 2>&1 || fail "baseline (boot 3)"
 r=$(run_b5 --meter); [[ $r == "refused: $left exists"* ]] || { cat "$t/run.out"; fail "registers-not-restored refuses (got '$r')"; }
-rm -f $left; sed -i -e 's/^0x69 0xcb .*/0x69 0xcb 0xc0/' -e 's/^0x69 0xb9 .*/0x69 0xb9 0x05/' "$HDT_STATE/regs"   # the person restores them by hand
+rm -f "$left"; sed -i -e 's/^0x69 0xcb .*/0x69 0xcb 0xc0/' -e 's/^0x69 0xb9 .*/0x69 0xb9 0x05/' "$HDT_STATE/regs"   # the person restores them by hand
 pass "a leftover registers-not-restored file refuses b5-host"
 
 # ---- 6. a marker from an unfinished undo blocks the next run ----
@@ -292,6 +297,76 @@ want='i2cset 0x69 0xcb 0xc8;i2cset 0x69 0xbf 0x0c;i2cset 0x69 0xcb 0xc8;i2cset 0
 [[ $(reg 0x69 0xbf) == 0x00 && $(reg 0x69 0xcb) == 0xc0 ]] || fail "0xbf relocked and 0xcb restored"
 rm -f "$HDT_STATE/cb-locked"; rm -f $D/b5-done
 pass "0xcb needing CHGPROT: unlocked, written, relocked, on the set and on the clear"
+
+# ---- 9b. the register restore fails but the port is cold: no reset, registers-not-restored, next run refused ----
+touch "$HDT_STATE/cb-stuck"; : > "$HDT_STATE/writes"
+r=$(run_b5 --meter); [[ $r == "failed: step b5-host did not apply"* ]] || { cat "$t/run.out"; tail -20 $LOG; fail "cb-stuck apply (got '$r')"; }
+# the apply itself fails at the 0xcb set (readback), so the undo runs with nothing to clear: that is the cold path
+[[ $(reg 0x25 0x92) == 0x00 && $(cat "$HDT_STATE/gpio5") == 0 && ! -e $UNIT && ! -e $MARK ]] || fail "cold undo after a 0xcb set failure"
+grep -q 'resetting' $LOG && fail "a register failure reset the phone"
+rm -f "$HDT_STATE/cb-stuck"; rm -f $D/b5-done
+pass "0xcb refusing the set: the apply fails, the undo runs, no reset"
+# a restore failure after a good run: 0xcb takes the set, then refuses the clear
+: > "$HDT_STATE/writes"
+"$tool" run b5-host --meter --confirm 6 --grace 3 --soak 4 > "$t/run.out" 2>&1 &
+pid=$!; sleep 2; "$tool" confirm > /dev/null; sleep 1; touch "$HDT_STATE/cb-stuck"
+wait $pid || true
+r=$(result); [[ $r == soaked ]] || { cat "$t/run.out"; tail -20 $LOG; fail "cb-stuck at the undo (got '$r')"; }
+[[ $(reg 0x25 0x92) == 0x00 && $(cat "$HDT_STATE/gpio5") == 0 && $(reg 0x69 0xcb) == 0xc8 && $(reg 0x69 0xb9) == 0x05 ]] || fail "state after the stuck restore"
+[[ ! -e $UNIT && ! -e $MARK && -e $left ]] || fail "unit/marker removed and registers-not-restored written"
+grep -q 'resetting' $LOG && fail "a register restore failure reset the phone"
+grep -q 'port cold, but 0xcb/0xc4/0xb9 were NOT all restored' $LOG || fail "the restore failure is logged"
+rm -f "$HDT_STATE/cb-stuck" "$left" $D/b5-done; sed -i 's/^0x69 0xcb .*/0x69 0xcb 0xc0/' "$HDT_STATE/regs"
+pass "0xcb refusing the clear after a clean soak: port cold, no reset, saved values left in registers-not-restored"
+
+# ---- 9c. boot-undo writes back only b5-host's own writes ----
+rm -f $D/b5-done; : > "$HDT_STATE/writes"
+"$tool" run b5-host --meter --confirm 6 --grace 3 --soak 20 > "$t/run.out" 2>&1 &
+pid=$!; sleep 2; "$tool" confirm > /dev/null; sleep 2
+kill -9 $pid; wait $pid 2>/dev/null || true; pkill -9 -f 'husky-deadman-phone' 2>/dev/null || true; pkill -9 -x gpioset 2>/dev/null || true; sleep 1
+rm -rf $D; echo "boot-4" > /proc/sys/kernel/random/boot_id
+# "the bootloader of the new boot" set MODE 0x05 and 0xc4 0x02 itself; 0xcb bit 3 still ours
+sed -i -e 's/^0x69 0xb9 .*/0x69 0xb9 0x05/' -e 's/^0x69 0xc4 .*/0x69 0xc4 0x02/' "$HDT_STATE/regs"
+: > "$HDT_STATE/writes"
+"$tool" boot-undo > "$t/bu.out" 2>&1 || { cat "$t/bu.out"; fail "boot-undo (own writes)"; }
+seq=$(grep -E '^i2cset 0x69' "$HDT_STATE/writes" | tr '\n' ';')
+[[ $seq == 'i2cset 0x69 0xcb 0xc0;' ]] || { echo "$seq"; fail "boot-undo wrote more than its own 0xcb bit"; }
+[[ $(reg 0x69 0xb9) == 0x05 && $(reg 0x69 0xc4) == 0x02 && ! -e $MARK && ! -e $UNIT ]] || fail "boot-undo left the bootloader's MODE and 0xc4 alone"
+grep -q 'MODE 0xb9 0x05 (saved 0x05): not our 0x00, left as is' $LOG || fail "the left-alone MODE is logged"
+sed -i 's/^0x69 0xc4 .*/0x69 0xc4 0x00/' "$HDT_STATE/regs"
+pass "boot-undo: MODE not 0x00 and a 0xc4 that is not ours stay as the bootloader left them, only the OTG_V_PGM bit is cleared"
+
+# ---- 9d. boot-undo with the MFD not up: loads it, or keeps the marker ----
+mkdir -p /run/husky-deadman; touch /run/husky-deadman/b4-done; "$tool" baseline > /dev/null 2>&1 || fail "baseline (boot 4)"
+rm -f $D/b5-done
+"$tool" run b5-host --meter --confirm 6 --grace 3 --soak 20 > "$t/run.out" 2>&1 &
+pid=$!; sleep 2; "$tool" confirm > /dev/null; sleep 2
+kill -9 $pid; wait $pid 2>/dev/null || true; pkill -9 -f 'husky-deadman-phone' 2>/dev/null || true; pkill -9 -x gpioset 2>/dev/null || true; sleep 1
+rm -rf $D; echo "boot-5" > /proc/sys/kernel/random/boot_id
+touch "$HDT_STATE/no-mfd"; : > "$HDT_STATE/writes"
+"$tool" boot-undo > "$t/bu.out" 2>&1 && fail "boot-undo without the MFD must fail"
+grep -q '^modprobe max77759$' "$HDT_STATE/writes" || fail "boot-undo tried modprobe max77759"
+grep -q '^i2cset' "$HDT_STATE/writes" && fail "boot-undo wrote registers without the MFD"
+[[ -e $MARK && -e $UNIT && $(reg 0x25 0x92) == 0x01 ]] || fail "marker kept while the MFD is missing"
+pass "boot-undo with max77759 missing: modprobe tried, nothing written, marker kept"
+touch "$HDT_STATE/mfd-loads"; : > "$HDT_STATE/writes"
+"$tool" boot-undo > "$t/bu.out" 2>&1 || { cat "$t/bu.out"; fail "boot-undo once modprobe max77759 works"; }
+[[ $(reg 0x25 0x92) == 0x00 && $(cat "$HDT_STATE/gpio5") == 0 && ! -e $MARK && ! -e $UNIT ]] || fail "boot-undo after loading the MFD"
+rm -f "$HDT_STATE/no-mfd" "$HDT_STATE/mfd-loads"
+pass "boot-undo loads max77759 itself when it can, then switches the port off"
+
+# ---- 9e. TERM during the soak: the undo runs, nothing stays hot ----
+mkdir -p /run/husky-deadman; touch /run/husky-deadman/b4-done; "$tool" baseline > /dev/null 2>&1 || fail "baseline (boot 5)"
+rm -f $D/b5-done; : > "$HDT_STATE/writes"
+"$tool" run b5-host --meter --confirm 6 --grace 3 --soak 20 > "$t/run.out" 2>&1 &
+pid=$!; sleep 2; "$tool" confirm > /dev/null; sleep 2
+kill -TERM $pid; wait $pid 2>/dev/null || true
+r=$(result); [[ $r == "interrupted: undone on a signal" ]] || { cat "$t/run.out"; tail -20 $LOG; fail "TERM mid-soak (got '$r')"; }
+[[ $(reg 0x25 0x92) == 0x00 && $(cat "$HDT_STATE/gpio5") == 0 && $(reg 0x69 0xcb) == 0xc0 && $(reg 0x69 0xb9) == 0x05 && ! -e $MARK && ! -e $UNIT ]] || fail "state after TERM"
+grep -q 'V' "$t/wd" || fail "the watchdog was closed after the signal undo"
+pkill -9 -f 'husky-deadman-phone' 2>/dev/null || true
+rm -f $D/b5-done
+pass "TERM during the soak: undo, registers back, unit and marker removed, watchdog closed"
 
 # ---- 10. a source plugged in mid-soak trips the undo ----
 : > "$HDT_STATE/writes"
