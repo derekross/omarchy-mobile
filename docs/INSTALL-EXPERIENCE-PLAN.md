@@ -62,19 +62,14 @@ What the person does:
      still being brought up);
    - how to go back: reflash Google's factory image with Google's own
      tools; until then stock Android stays on slot A as a quick way back
-     (§7);
-   - which features are on by default and write the phone's secure storage,
-     by name (fingerprint unlock: its first start writes Trusty's secure
-     storage, which can't be undone).
+     (§7).
 
-   That one acknowledgement covers all of it, the secure-storage features
-   included. The people installing know they are starting over with a new
+   That one acknowledgement covers all of it. The people installing know they are starting over with a new
    operating system: the project looks after them through clear defaults
    and a way back, not repeated questions, so nothing nags again after this
-   screen. (Today `omamobile-fp.service` ships disabled because of that
-   write; turning it on by default after this acknowledgement is a change to
-   the device package and to the rule in AGENTS §4, for the maintainer to
-   make there.)
+   screen. Fingerprint unlock is on by default, with no separate question;
+   the runner's data guards (read-only copies, the TDP refusal, one proxy
+   per boot) keep stock's data safe.
 5. Chooses a user name, a PIN or password, the phone's name, the time zone
    and optionally a Wi-Fi network, in the installer window.
 6. Waits. The installer downloads the release and the phone's own firmware,
@@ -203,9 +198,10 @@ Today: `tools/install-phone`, "Checking the phone" **[V]**.
 
 The same checks, read from `manifest.json` as data: one phone, product
 equals the bundle's codename, unlocked, each image fits its `_b` partition
-(an AVB footer image exactly). Two checks need work before they can be
-automated without the user's help: the bootloader slots (gap G4, §10) and
-which slot stock Android lives on (gap G5).
+(an AVB footer image exactly). One check needs work before it can be
+automated without the user's help: the bootloader slots (gap G4, §10).
+Which slot stock Android lives on is already checked: `install-phone`
+refuses a phone running from slot B unless `--reinstall` is given (#352).
 
 ### 4.4 The owner's answers
 
@@ -282,6 +278,10 @@ ufw, runs Omarchy's setup and our user setup, and deletes the file **[V]**.
 Unchanged in substance. The installer shows the phone's progress (growing
 the root, creating the user, setting up Omarchy) from the install link
 (§5.3) instead of the user watching a dark screen.
+
+Voice dictation ships in the root image (`omamobile-voice`, #355) and the
+weather comes from Open-Meteo, so neither needs an extra download or a key
+at install.
 
 ### 4.10 The health check
 
@@ -409,8 +409,10 @@ order:
    Allowed only for builds the index marks tested with that pair.
 3. **Otherwise:** the installer stops and explains that stock Android needs
    updating first (Settings > System > System update in Android, then come
-   back), and why. Gap G5 matters here: an Android update moves stock to the
-   other slot.
+   back), and why. An Android update moves stock to slot B, and the
+   installer now refuses a phone running from slot B unless `--reinstall`
+   is given (G5, #352), so the user then has to bring stock back to slot A
+   first.
 
 Which builds count as tested, and how many combinations the project tests,
 is an open question (D3).
@@ -619,15 +621,17 @@ else.
   (c) it reads both versions from Android before the reboot to fastboot, if
   Android exposes the other slot's **[I]**. Option (a) is the only one that
   measures.
-- **G5. Found while writing this plan, not in the test install: no check
-  that stock lives on slot A.** `install-phone` reads `current-slot` and
-  prints it but doesn't refuse slot B **[V]**. After an Android system
-  update stock runs from slot B, so an install would overwrite the running
-  stock, and slot A would hold the older build. On a reinstall slot B is
-  ours and current, which is fine. The installer has to tell the two apart
-  (asking the user, `slot-successful` and `slot-unbootable` hints, the
-  install's own record on the computer) and, when stock is on B, guide the
-  user to put it on slot A first.
+- **G5. Done (#352).** Found while writing this plan, not in the test
+  install: **no check that stock lives on slot A.** `install-phone` read
+  `current-slot` and printed it but didn't refuse slot B. After an Android
+  system update stock runs from slot B, so an install would have
+  overwritten the running stock, leaving the older build on slot A. Now
+  `install-phone` refuses a phone running from slot B unless `--reinstall`
+  is given (on a reinstall slot B is ours and current). The guided
+  installer still has to tell the two cases apart for the user (its own
+  record of the install on the computer, `slot-successful` and
+  `slot-unbootable` hints) and, when stock is on B, guide the user to put
+  it on slot A first.
 
 ## 11. Milestones
 
@@ -636,7 +640,7 @@ real users.
 
 ### M0. Fix the test install's gaps
 
-- **What:** G1-G3 and G5's refusal; G4's option chosen (D4) and built into
+- **What:** G1-G3; G4's option chosen (D4) and built into
   `install-phone`.
 - **Needs:** small changes to `tools/phone-provision`, `tools/release`,
   `omamobile-update`, the root image and `tools/install-phone`, with tests
@@ -648,8 +652,7 @@ real users.
 - **What:** the bundle's `install` grows into one command that runs the
   whole install with today's tools: preflight, unlock guidance from the
   phone's state (§4.2), the one warning of §1 step 4 (wipe, new operating
-  system and what it means day to day, the way back, the secure-storage
-  features by name) acknowledged once before any write and recorded with
+  system and what it means day to day, the way back) acknowledged once before any write and recorded with
   the install's state, with no further prompts about it, the build index lookup and the factory image
   download from Google after the terms prompt (§6), the checks and writes
   (`install-phone`), the USB network connection set up with the user's
