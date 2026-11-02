@@ -36,7 +36,16 @@ Item {
     anchors.bottom: parent.verticalCenter
     anchors.bottomMargin: -Math.round(width * 0.18)
     // Phone-sized, like a home-screen icon on iOS: most of the cell's width.
-    width: Math.min(64, Math.max(40, Math.min(tile.width, tile.height) * 0.62))
+    // Up to 128 px of cell width (the 7 Pro's and the 9a's default grids,
+    // about 120 px) it is exactly as before, capped at 64. A wider cell
+    // (scale 2, or the 3-column grid) follows the cell with no cap; there the
+    // height limit keeps the icon's top in the cell and room for its name.
+    // It takes the larger of the two, so a wide but short cell (the 7 Pro
+    // on its side) keeps its old size: this only ever grows an icon.
+    width: tile.width > 128
+           ? Math.max(Math.min(64, Math.max(40, Math.min(tile.width, tile.height) * 0.62)),
+                      Math.min(tile.width * 0.62, tile.height * 0.6))
+           : Math.min(64, Math.max(40, Math.min(tile.width, tile.height) * 0.62))
     height: width
     fillMode: Image.PreserveAspectFit
     asynchronous: true
