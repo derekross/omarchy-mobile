@@ -150,43 +150,6 @@ OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamob
 debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "boot-update.conf belongs to root"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
-# Fingerprint: the warning before the codename names the secure-storage
-# write, and the typed codename is recorded as the acknowledgement
-flashed_conf() {
-  local f=$t/userdata.flashed
-  if command -v simg2img >/dev/null && [[ $(head -c4 "$f" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
-    simg2img "$f" "$t/flashed.img"; f=$t/flashed.img
-  fi
-  debugfs -R 'cat /etc/omamobile/firstboot.conf' "$f" 2>/dev/null
-}
-grep -q '^FINGERPRINT=\|^ACK_DATE=' <<<"$conf" && fail "a device without omamobile-fingerprint gets no FINGERPRINT line"
-grep -q 'secure storage' "$t/out" && fail "a device without omamobile-fingerprint shows no fingerprint warning"
-{ descriptor; echo 'ROOTFS_PACKAGES="omamobile-audio omamobile-fingerprint omamobile-modem"'; } > "$R/device/testdev/device.conf"
-install || { cat "$t/out"; fail "a full run with fingerprint succeeds"; }
-conf=$(flashed_conf)
-grep -qx 'FINGERPRINT=yes' <<<"$conf" || fail "the acknowledgement is recorded as FINGERPRINT=yes"
-grep -qx "ACK_DATE=$(date -u +%Y-%m-%d)" <<<"$conf" || fail "and dated (UTC)"
-warn=$(grep -n 'writes the$' "$t/out" | head -1 | cut -d: -f1)
-prompt=$(grep -n "Type the phone's codename" "$t/out" | head -1 | cut -d: -f1)
-[[ -n $warn && -n $prompt ]] && ((warn < prompt)) || fail "the fingerprint warning comes before the codename is typed"
-for words in "secure storage" "can't be undone" "factory reset" "persist" "mfg_data" "Titan M2" "enroll your fingers again"; do
-  grep -qF "$words" "$t/out" || fail "the fingerprint warning says: $words"
-done
-grep -q 'fingerprint: on' "$t/out" || fail "the plan shows fingerprint on"
-printf '%s\n' "$conf" > "$t/fb.conf"
-OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamobile-firstboot" --check "$t/fb.conf" > "$t/fb.out" ||
-  fail "omamobile-firstboot accepts the acknowledgement"
-grep -q '^fingerprint: on' "$t/fb.out" || fail "firstboot reads the acknowledgement"
-install --no-fingerprint || { cat "$t/out"; fail "--no-fingerprint runs"; }
-conf=$(flashed_conf)
-grep -qx 'FINGERPRINT=no' <<<"$conf" || fail "--no-fingerprint records FINGERPRINT=no"
-grep -q '^ACK_DATE=' <<<"$conf" && fail "--no-fingerprint records no acknowledgement"
-grep -q 'secure storage' "$t/out" && fail "--no-fingerprint shows no fingerprint warning"
-CONFIRM=cheetah install && fail "a wrong confirmation is refused with fingerprint on"
-[[ -z $(flashing_calls) ]] || fail "nothing is flashed (and no acknowledgement leaves the laptop) without the codename"
-descriptor > "$R/device/testdev/device.conf"
-pass "fingerprint: the warning names the secure-storage write before the codename; the codename is recorded as FINGERPRINT=yes and ACK_DATE"
-
 refuse() {
   local why=$1; shift
   if install "$@"; then cat "$t/out"; fail "refuses $why"; fi

@@ -53,17 +53,6 @@
 #                            slot B is refused, since that is where stock
 #                            Android runs after a system update
 #     --unsigned             accept a bundle without SHA256SUMS.sig (development)
-#     --no-fingerprint       developers: leave fingerprint off (FINGERPRINT=no);
-#                            the phone's runner then refuses to write Trusty's
-#                            secure storage
-#
-# Fingerprint (a device whose ROOTFS_PACKAGES has omamobile-fingerprint): the
-# warning before the codename names the secure-storage write that its first
-# start makes, and typing the codename acknowledges it with the wipe. That
-# acknowledgement is recorded as FINGERPRINT=yes and ACK_DATE (UTC) in
-# firstboot.conf; omamobile-firstboot turns it into
-# /etc/omamobile/fingerprint.conf and enables the service
-# (device/cheetah/FINGERPRINT-PLAN.md F19).
 #
 # Answers are read from standard input, so they can be piped for tests.
 set -euo pipefail
@@ -82,11 +71,10 @@ say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
-dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0 reinstall=0 no_fingerprint=0
+dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0 reinstall=0
 while (($#)); do
   case $1 in
     --dry-run) dry=1 ;;
-    --no-fingerprint) no_fingerprint=1 ;;
     --device) device=${2:?}; shift ;;
     --images) images=${2:?}; shift ;;
     --rootfs) rootfs=${2:?}; shift ;;
@@ -94,7 +82,7 @@ while (($#)); do
     --bootloader-slots-match) slots_match=${2:?}; shift ;;
     --reinstall) reinstall=1 ;;
     --unsigned) unsigned=1 ;;
-    -h|--help) sed -n '3,/^# Answers are read/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (see --help)" ;;
   esac
   shift
@@ -496,16 +484,6 @@ while true; do
 done
 ssh_key=$(head -1 "$key_file")
 
-# Fingerprint: on for a device that ships it, unless --no-fingerprint. The
-# acknowledgement is the codename typed after the warning below; the file
-# carrying it reaches the phone only after that.
-fingerprint=""
-if [[ " ${D[ROOTFS_PACKAGES]:-} " == *" omamobile-fingerprint "* ]]; then
-  fingerprint=yes
-  ((no_fingerprint)) && fingerprint=no
-fi
-ack_date=$(date -u +%Y-%m-%d)
-
 # --- A local copy of the root image, with the owner's first-boot file -------
 work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 mkdir -p "$work"
@@ -531,11 +509,6 @@ trap cleanup EXIT
       echo "WIFI_SSID=$wifi_ssid"
       [[ -n $wifi_psk ]] && echo "WIFI_PSK=$wifi_psk"
     fi
-    if [[ -n $fingerprint ]]; then
-      echo "FINGERPRINT=$fingerprint"
-      [[ $fingerprint == yes ]] && echo "ACK_DATE=$ack_date"
-    fi
-    true
   } > "$conf_file"
   printf '%s\n' "$ssh_key" > "$keys_file"
   printf '%s\n' "# Written by install-phone: a release install takes kernel updates through" \
@@ -609,10 +582,6 @@ note "user:      $username ($credential), host $hostname, time zone $timezone"
 note "Wi-Fi:     ${wifi_ssid:-none}"
 note "SSH key:   ${ssh_key:0:40}... (root and $username)"
 note "root image: $(basename "$rootfs")"
-case $fingerprint in
-  yes) note "fingerprint: on from the first start (see below)" ;;
-  no) note "fingerprint: off (--no-fingerprint)" ;;
-esac
 echo
 echo "These commands, and only these, will run:"
 for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_b $images/$p.img"; done
@@ -624,16 +593,6 @@ echo "userdata will be ERASED: stock Android's data is lost, and stock Android o
 echo "slot A will need a factory reset if you ever boot it again. Slot A itself,"
 echo "the bootloader, radio, persist, efs, modem and devinfo are not touched."
 echo
-if [[ $fingerprint == yes ]]; then
-  echo "Fingerprint unlock is on from the first start. Its first start writes the"
-  echo "phone's secure storage (Trusty's area in the UFS RPMB). That can't be undone,"
-  echo "but it is the same kind of write Android makes at every factory reset."
-  echo "Nothing is written to persist, the factory calibration (mfg_data), the"
-  echo "Titan M2 security chip or Android's slot A. Going back to Android works as"
-  echo "usual: Android starts like a new phone after its factory reset, and you"
-  echo "enroll your fingers again there."
-  echo
-fi
 answer=$(ask "Type the phone's codename ($CODENAME) to go ahead")
 [[ $answer == "$CODENAME" ]] || die "not confirmed; nothing was written"
 

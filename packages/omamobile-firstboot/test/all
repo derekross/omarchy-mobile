@@ -109,17 +109,7 @@ good | sed 's/^FULL_NAME=.*/FULL_NAME=a:b/' | refuse "a colon in the full name"
 { good; echo 'USERNAME=bob'; } | refuse "a key given twice"
 { good; echo 'not a line'; } | refuse "a line that isn't KEY=value"
 { good; printf 'EMAIL=a@b\x07c\n'; } | sed '/^EMAIL=alice/d' | refuse "a control character"
-good | sed 's/^CREDENTIAL=.*/&\nFINGERPRINT=maybe/' | refuse "FINGERPRINT that is neither yes nor no"
-good | sed 's/^CREDENTIAL=.*/&\nFINGERPRINT=yes/' | refuse "FINGERPRINT=yes without ACK_DATE"
-good | sed 's/^CREDENTIAL=.*/&\nFINGERPRINT=yes\nACK_DATE=yesterday/' | refuse "an ACK_DATE that isn't a date"
-good | sed 's/^CREDENTIAL=.*/&\nACK_DATE=2026-11-02/' | refuse "ACK_DATE without FINGERPRINT=yes"
 pass "--check refuses bad confs"
-out=$(check "$t/good.conf")
-grep -qx 'fingerprint: off' <<<"$out" || fail "no FINGERPRINT key means fingerprint off"
-good | sed 's/^CREDENTIAL=.*/&\nFINGERPRINT=yes\nACK_DATE=2026-11-02/' > "$t/fp.conf"
-out=$(check "$t/fp.conf") || fail "FINGERPRINT=yes with ACK_DATE passes: $out"
-grep -q '^fingerprint: on .*2026-11-02' <<<"$out" || fail "--check reports the acknowledgement"
-pass "--check: fingerprint only with an explicit, dated acknowledgement"
 
 # A value is data: a $(...) in it is never run
 mark=$t/ran
@@ -218,28 +208,6 @@ run || { cat "$t/run.out"; fail "a root without keyrings still runs"; }
 grep -q '^clock-set' "$CALLS" && fail "no keyrings means no clock adjustment"
 grep -q '^pacman-key --populate' "$CALLS" || fail "key setup still runs without a floor"
 pass "missing keyrings leave the clock alone"
-
-# Fingerprint: no key, no record and nothing enabled; the acknowledgement
-# writes the consent record and enables the unit (inert until provisioned)
-[[ ! -e $R/etc/omamobile/fingerprint.conf ]] || fail "no FINGERPRINT key: no consent record"
-grep -q 'omamobile-fp' "$CALLS" && fail "no FINGERPRINT key: omamobile-fp isn't enabled"
-mkdir -p "$R/usr/lib/systemd/system"; : > "$R/usr/lib/systemd/system/omamobile-fp.service"
-: > "$CALLS"
-good | sed 's/^CREDENTIAL=.*/&\nFINGERPRINT=no/' > "$R/etc/omamobile/firstboot.conf"
-run || { cat "$t/run.out"; fail "FINGERPRINT=no runs"; }
-[[ ! -e $R/etc/omamobile/fingerprint.conf ]] || fail "FINGERPRINT=no: no consent record"
-grep -q 'omamobile-fp' "$CALLS" && fail "FINGERPRINT=no: omamobile-fp isn't enabled"
-: > "$CALLS"
-good | sed 's/^CREDENTIAL=.*/&\nFINGERPRINT=yes\nACK_DATE=2026-11-02/' > "$R/etc/omamobile/firstboot.conf"
-run || { cat "$t/run.out"; fail "FINGERPRINT=yes runs"; }
-printf '%s\n' CONSENT=yes CONSENT_SOURCE=install-acknowledgement CONSENT_DATE=2026-11-02 |
-  cmp -s - <(grep -v '^#' "$R/etc/omamobile/fingerprint.conf") || fail "the consent record"
-[[ $(stat -c %a "$R/etc/omamobile/fingerprint.conf") == 644 ]] || fail "the consent record is readable (nothing secret in it)"
-grep -qx 'systemctl enable omamobile-fp.service' "$CALLS" || fail "the acknowledgement enables omamobile-fp"
-grep -q 'systemctl \(start\|restart\) omamobile-fp' "$CALLS" && fail "firstboot never starts omamobile-fp"
-[[ ! -e $R/etc/omamobile/firstboot.conf ]] || fail "the conf is deleted after the run"
-rm -f "$R/etc/omamobile/fingerprint.conf" "$R/usr/lib/systemd/system/omamobile-fp.service"
-pass "fingerprint: the acknowledgement becomes the consent record and an enabled (not started) unit; none without it"
 
 # An essential step failing keeps the conf (minus the Wi-Fi secret) for the next boot
 rm -f "$R/var/lib/omamobile/firstboot/user"
