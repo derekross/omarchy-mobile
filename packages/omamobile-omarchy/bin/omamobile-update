@@ -16,6 +16,10 @@
   omamobile-update notify-check  toast once per new Omarchy release (the shell
                                  runs this every few hours)
   omamobile-update run-migration NAME   run one migration the update held
+  omamobile-update channel [stable|development|local] [--json]
+                                 which [omamobile] channel the phone follows,
+                                 or switch it (as root: sudo omamobile-update
+                                 channel development)
 
 What runs is Omarchy's own omarchy-update, with -y, unchanged, with a
 directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
@@ -44,8 +48,17 @@ The sheet's run: progress events in $XDG_RUNTIME_DIR/omamobile-update/events
 full output in ~/.local/state/omamobile/update/update.log, the result in
 ~/.local/state/omamobile/update/last.json; Omarchy's own transcript stays in
 /tmp/omarchy-update.log.
+
+Channels: /etc/pacman.d/omamobile-mirrorlist (a backup= file of the device
+package, so pacman keeps a changed copy) names where [omamobile] comes from:
+stable (https://pkgs.omamobile.org/stable, what installed phones follow),
+development (every day's build, for builders) or local (the repository on the
+phone, /var/lib/omamobile/repo, filled by tools/repo-push). "channel NAME"
+turns that one Server line on and the others off, and drops pacman's copy of
+the old channel's index, which may be newer than the new channel's.
 """
 import datetime
+import glob
 import json
 import os
 import re
@@ -72,6 +85,10 @@ CHECKUPDATES = os.environ.get("OMAMOBILE_CHECKUPDATES", "checkupdates")
 PACMAN = os.environ.get("OMAMOBILE_PACMAN", "pacman")
 PACMAN_CONF = os.environ.get("OMAMOBILE_PACMAN_CONF", "/etc/pacman.conf")
 POWER = os.environ.get("OMAMOBILE_POWER_SUPPLY", "/sys/class/power_supply")
+MIRRORLIST = os.environ.get("OMAMOBILE_MIRRORLIST", "/etc/pacman.d/omamobile-mirrorlist")
+LOCAL_REPO = os.environ.get("OMAMOBILE_LOCAL_REPO", "/var/lib/omamobile/repo")
+PACMAN_SYNC = os.environ.get("OMAMOBILE_PACMAN_SYNC", "/var/lib/pacman/sync")
+CHECKUP_DBS = os.environ.get("OMAMOBILE_CHECKUP_DBS", "/tmp/checkup-db-*")
 PATCH_STATUS = os.environ.get("OMAMOBILE_PATCH_STATUS", "/var/lib/omamobile/omarchy-patches/status.json")
 NOTIFY = os.environ.get("OMAMOBILE_NOTIFY", "omarchy-notification-send")
 OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
@@ -81,6 +98,14 @@ UNIT = "omamobile-update"
 RELEASE_NOTES = "https://github.com/basecamp/omarchy/releases/latest"
 OMARCHY_LOG = os.environ.get("OMAMOBILE_OMARCHY_LOG", "/tmp/omarchy-update.log")
 MARK = "@@omamobile "
+
+# The [omamobile] channels, and the Server line each one is in the mirrorlist
+CHANNELS = {
+    "stable": "Server = https://pkgs.omamobile.org/stable/$arch",
+    "development": "Server = https://pkgs.omamobile.org/development/$arch",
+    "local": "Server = file:///var/lib/omamobile/repo/$arch",
+}
+SERVER_LINE = re.compile(r"^\s*Server\s*=\s*(\S+)\s*$")
 
 # Packages a phone update must not install: kernels and boot-image tools
 # (the phone boots from boot_b, which bin/omamobile push writes), bootloaders,
@@ -192,6 +217,95 @@ def repository_order(path=PACMAN_CONF):
     return ""
 
 
+def channel_info(path=None):
+    """{"name", "server", "error"}: the channel the mirrorlist's first active Server line names."""
+    path = path or MIRRORLIST
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        return {"name": "unknown", "server": "", "error": "cannot read %s: %s" % (path, e.strerror)}
+    servers = [m.group(1) for m in (SERVER_LINE.match(l) for l in lines) if m]
+    if not servers:
+        return {"name": "none", "server": "", "error": "%s has no Server line: [omamobile] has nowhere to come from" % path}
+    name = next((n for n, line in CHANNELS.items() if line.split("= ", 1)[1] == servers[0]), "custom")
+    return {"name": name, "server": servers[0], "error": ""}
+
+
+def set_channel(name, path=None):
+    """Make CHANNELS[name] the mirrorlist's one active Server line: "" or an error.
+
+    Every other Server line is commented out, a custom one too, so the file
+    stays readable and a switch back finds its line. Switching to stable on
+    the packaged file gives the packaged file again, which pacman then treats
+    as unchanged (and updates with the package)."""
+    path = path or MIRRORLIST
+    want = CHANNELS[name]
+    if name == "local" and not os.path.isfile(os.path.join(LOCAL_REPO, "aarch64", "omamobile.db")):
+        return ("there is no repository at %s/aarch64: push one from a build machine first "
+                "(tools/repo-push), or pick stable or development" % LOCAL_REPO)
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        lines, mode = ["# Where pacman gets Omarchy Mobile's packages ([omamobile] in /etc/pacman.conf)."], 0o644
+    except OSError as e:
+        return "cannot read %s: %s" % (path, e.strerror)
+    out, found = [], False
+    for line in lines:
+        bare = line.lstrip("#").strip()
+        if not SERVER_LINE.match(bare):
+            out.append(line)
+        elif bare == want and not found:
+            out.append(want)
+            found = True
+        elif line.lstrip().startswith("#"):
+            out.append(line)
+        else:
+            out.append("#" + line.strip())
+    if not found:
+        out.append(want)
+    tmp = path + ".omamobile-new"
+    try:
+        with open(tmp, "w") as f:
+            f.write("\n".join(out) + "\n")
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError as e:
+        return "cannot write %s: %s" % (path, e.strerror)
+    # The old channel's index may be newer than the new one's, and pacman's
+    # If-Modified-Since refresh would keep it.
+    for d in [PACMAN_SYNC] + [os.path.join(x, "sync") for x in glob.glob(CHECKUP_DBS)]:
+        for f in ("omamobile.db", "omamobile.db.sig", "omamobile.files", "omamobile.files.sig"):
+            try:
+                os.remove(os.path.join(d, f))
+            except OSError:
+                pass
+    return ""
+
+
+def channel_cmd(args):
+    names = [a for a in args if not a.startswith("-")]
+    if len(names) > 1 or (names and names[0] not in CHANNELS):
+        print("omamobile-update: channel takes one of %s" % ", ".join(CHANNELS), file=sys.stderr)
+        return 2
+    if names:
+        err = set_channel(names[0])
+        if err:
+            hint = " (run it with sudo)" if os.geteuid() != 0 and "ermission" in err else ""
+            print("omamobile-update: " + err + hint, file=sys.stderr)
+            return 1
+    info = channel_info()
+    if "--json" in args:
+        print(json.dumps(info, sort_keys=True))
+    else:
+        print("Channel: %s (%s)" % (info["name"], info["server"] or info["error"]))
+        if names:
+            print("Next: omarchy update fetches the %s index" % info["name"])
+    return 0 if not info["error"] else 1
+
+
 def free_bytes(path="/"):
     try:
         s = os.statvfs(path)
@@ -281,6 +395,9 @@ def check(offline=False, allow_boot=False):
     order = repository_order()
     if order:
         blockers.append(order)
+    chan = channel_info()
+    if chan["error"]:
+        blockers.append(chan["error"])
     free = free_bytes()
     if 0 <= free < MIN_FREE:
         blockers.append("Only %.1f GiB free; Omarchy's update needs 10 GiB" % (free / 1024 ** 3))
@@ -297,7 +414,7 @@ def check(offline=False, allow_boot=False):
         blockers.append("An update is already running")
     return {
         "battery": bat, "min_battery": MIN_BATTERY, "battery_ok": not battery_blocker(bat),
-        "repositories_ok": not order, "repositories": order,
+        "repositories_ok": not order, "repositories": order, "channel": chan,
         "free_gib": round(free / 1024 ** 3, 1) if free >= 0 else None,
         "omarchy": installed_version("omarchy") or installed_version("omarchy-dev"),
         "omarchy_update": omarchy_line, "updates": lines, "update_count": len(targets) or len(lines),
@@ -704,6 +821,8 @@ def main(argv):
                                                              (": " + result["omarchy_update"]) if result["omarchy_update"] else ""))
             bat = result["battery"]
             print("Battery: %s" % ("%d%%%s" % (bat["percent"], ", charging" if bat["charging"] else "") if bat["present"] else "none"))
+            chan = result["channel"]
+            print("Channel: %s%s" % (chan["name"], " (%s)" % chan["server"] if chan["server"] else ""))
             print("Phone patches: %s" % result["patches"]["result"])
             for b in result["blockers"]:
                 print("Blocked: " + b)
@@ -722,6 +841,8 @@ def main(argv):
         return notify_check(args)
     if cmd == "run-migration":
         return run_migration(args)
+    if cmd == "channel":
+        return channel_cmd(args)
     print("omamobile-update: unknown command %s (see --help)" % cmd, file=sys.stderr)
     return 2
 

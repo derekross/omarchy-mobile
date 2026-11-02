@@ -20,6 +20,13 @@ export OMAMOBILE_CHECKUPDATES=$fake/checkupdates OMAMOBILE_PACMAN=$fake/pacman O
 export OMAMOBILE_PACMAN_CONF=$t/pacman.conf OMAMOBILE_POWER_SUPPLY=$t/power OMAMOBILE_PATCH_STATUS=$t/patch-status.json
 export OMAMOBILE_REAL_BIN=$t/real OMAMOBILE_MODULES_DIR=$t/modules OMAMOBILE_NOTIFY=$fake/notify
 export OMARCHY_PATH=$t/omarchy CHECKUPDATES_DB=$t/checkup-db
+export OMAMOBILE_MIRRORLIST=$t/omamobile-mirrorlist OMAMOBILE_LOCAL_REPO=$t/localrepo
+export OMAMOBILE_PACMAN_SYNC=$t/sync OMAMOBILE_CHECKUP_DBS="$t/checkup-db*"
+# The device packages' mirrorlist, as shipped (stable on)
+packaged_mirrorlist() {
+  printf '# Where pacman gets packages\nServer = https://pkgs.omamobile.org/stable/$arch\n#Server = https://pkgs.omamobile.org/development/$arch\n#Server = file:///var/lib/omamobile/repo/$arch\n'
+}
+packaged_mirrorlist >"$OMAMOBILE_MIRRORLIST"
 export PATH=$fake:/usr/bin:/bin
 calls=$t/calls
 
@@ -127,6 +134,35 @@ printf '[options]\n[omamobile]\nInclude = x\nServer = https://pkgs.omarchy.org/e
 out=$(python3 -I "$U" check --json --offline)
 ok "channel: stable passes, whatever another section points at" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"repositories_ok\"]" "$out"'
 good_conf
+
+# The [omamobile] channel: reported by check, switched by "channel"
+out=$(python3 -I "$U" check --json --offline)
+ok "channel: check reports stable" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"channel\"][\"name\"] == \"stable\" and d[\"channel\"][\"server\"] == \"https://pkgs.omamobile.org/stable/\$arch\"" "$out"'
+ok "channel: check prints it" 'python3 -I "$U" check --offline | grep -cx "Channel: stable (https://pkgs.omamobile.org/stable/\$arch)" >/dev/null'
+mkdir -p "$t/sync" "$t/checkup-db/sync"
+touch "$t/sync/omamobile.db" "$t/sync/omamobile.db.sig" "$t/sync/omarchy.db" "$t/checkup-db/sync/omamobile.db"
+python3 -I "$U" channel development >/dev/null
+ok "channel: development turns its line on and stable off" '[[ $(grep "^Server" "$OMAMOBILE_MIRRORLIST") == "Server = https://pkgs.omamobile.org/development/\$arch" ]] && grep -cx "#Server = https://pkgs.omamobile.org/stable/\$arch" "$OMAMOBILE_MIRRORLIST" >/dev/null'
+ok "channel: the old channel's index is dropped, other repositories' kept" '[[ ! -e $t/sync/omamobile.db && ! -e $t/sync/omamobile.db.sig && ! -e $t/checkup-db/sync/omamobile.db && -e $t/sync/omarchy.db ]]'
+ok "channel: with no name it reports" '[[ $(python3 -I "$U" channel --json) == "{\"error\": \"\", \"name\": \"development\", \"server\": \"https://pkgs.omamobile.org/development/\$arch\"}" ]]'
+rc=0; python3 -I "$U" channel local 2>"$t/err" || rc=$?
+ok "channel: local needs a repository on the phone" '[[ $rc == 1 ]] && grep -c "tools/repo-push" "$t/err" >/dev/null && grep -c "^Server = https://pkgs.omamobile.org/development/" "$OMAMOBILE_MIRRORLIST" >/dev/null'
+mkdir -p "$t/localrepo/aarch64" && touch "$t/localrepo/aarch64/omamobile.db"
+python3 -I "$U" channel local >/dev/null
+ok "channel: local, once there is a repository" '[[ $(python3 -I "$U" check --json --offline | python3 -c "import json,sys; print(json.load(sys.stdin)[\"channel\"][\"name\"])") == local ]]'
+python3 -I "$U" channel stable >/dev/null
+ok "channel: back to stable gives the packaged file again (pacman then sees it unchanged)" 'cmp -s "$OMAMOBILE_MIRRORLIST" <(packaged_mirrorlist)'
+rc=0; python3 -I "$U" channel edge 2>/dev/null || rc=$?
+ok "channel: only stable, development or local" '[[ $rc == 2 ]] && cmp -s "$OMAMOBILE_MIRRORLIST" <(packaged_mirrorlist)'
+printf '# Where pacman gets packages\nServer = file:///var/lib/omamobile/repo/$arch\n' >"$OMAMOBILE_MIRRORLIST"
+python3 -I "$U" channel development >/dev/null
+ok "channel: an old-style file gains the line, the old one commented" '[[ $(grep -c "^Server" "$OMAMOBILE_MIRRORLIST") == 1 ]] && grep -cx "Server = https://pkgs.omamobile.org/development/\$arch" "$OMAMOBILE_MIRRORLIST" >/dev/null && grep -cx "#Server = file:///var/lib/omamobile/repo/\$arch" "$OMAMOBILE_MIRRORLIST" >/dev/null'
+printf 'Server = https://mirror.example/omamobile/$arch\n' >"$OMAMOBILE_MIRRORLIST"
+ok "channel: a custom server is reported as custom" '[[ $(python3 -I "$U" channel --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"name\"])") == custom ]]'
+printf '# nothing\n' >"$OMAMOBILE_MIRRORLIST"
+out=$(python3 -I "$U" check --json --offline)
+ok "channel: a mirrorlist without a Server line blocks the update" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and d[\"channel\"][\"name\"] == \"none\"" "$out"'
+packaged_mirrorlist >"$OMAMOBILE_MIRRORLIST"
 
 battery 20 Discharging 0
 out=$(python3 -I "$U" check --json --offline)
