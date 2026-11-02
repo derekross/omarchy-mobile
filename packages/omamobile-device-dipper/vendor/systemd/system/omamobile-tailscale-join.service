@@ -1,0 +1,17 @@
+[Unit]
+Description=Join the tailnet once from a pre-seeded auth key
+# NetworkManager-wait-online is masked by omamobile-firstboot, so don't wait on it:
+# tailscaled retries by itself until Wi-Fi or usb0 is up.
+Wants=tailscaled.service
+After=tailscaled.service
+ConditionPathExists=/etc/omamobile/tailscale.authkey
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/local/bin/omamobile-tailscale-join
+# A single-use key is a credential: don't let a failure loop retry it forever.
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

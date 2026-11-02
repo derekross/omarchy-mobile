@@ -1,0 +1,18 @@
+# /etc/omamobile/tailscale.conf -- how the phone joins the tailnet.
+# KEY=value lines only; anything else is ignored with a warning. Every setting
+# has a default, so you can delete this file entirely and nothing breaks.
+
+# Where the auth key is read from. Delete the key file (or leave it empty) and
+# the join is skipped: do `tailscale up` by hand instead.
+#TS_AUTHKEY_FILE=/etc/omamobile/tailscale.authkey
+
+# The name the node takes in the tailnet. Defaults to the phone's hostname.
+#TS_HOSTNAME=mi8
+
+# Extra flags for `tailscale up`. Defaults to --accept-dns=false.
+# Examples: "--accept-routes --advertise-tags=tag:phone"
+#TS_UP_ARGS=--accept-dns=false
+
+# Single-use keys are deleted after a successful join. Set to 1 for a reusable
+# key you want to keep on the phone.
+#TS_KEEP_KEY=0
