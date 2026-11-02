@@ -202,6 +202,17 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual((payload[0xda - 12], payload[0xf5 - 12]), (3, 2))
         ims = data_call.setup_payload(2, 14, 4, 'ims', ims=True)
         self.assertEqual((ims[3], ims[0xda - 12], ims[0xdb - 12]), (1, 2, 2))
+        # The APN-type bitmap at 0xf1: DEFAULT for the internet bearer, IMS
+        # for the IMS one; the attach request carries none and keeps its
+        # length and roaming type.
+        self.assertEqual(struct.unpack_from('<I', payload, 0xf1 - 12)[0], 1)
+        self.assertEqual(struct.unpack_from('<I', ims, 0xf1 - 12)[0], 0x40)
+        modem = Modem()
+        data_call.initial_attach(modem, APN)
+        ident, attach = modem.sent[-1]
+        self.assertEqual((ident, len(attach)), (0x0603, 251 - 12))
+        self.assertEqual(attach[0xf1 - 12:0xf5 - 12], bytes(4))
+        self.assertEqual((attach[0xda - 12], attach[0xf8 - 12]), (3, 3))
         for bad in ('', 'a b', 'x' * 100, 'apn;rm', '.lead'):
             with self.assertRaises(ValueError):
                 data_call.setup_payload(1, 14, 3, bad)

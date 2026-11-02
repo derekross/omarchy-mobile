@@ -98,9 +98,13 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     full[0xda] = IP_TYPES['ipv6'] if ims else IP_TYPES[ip_type]
     full[0xdb] = 2 if ims else 0  # IPv6 P-CSCF request
     # No handover addresses, roaming override or slice.
-    # 0xf1 (u32) is not an MTU: stock's builder writes the APN-type bitmap
-    # there (the field ApnSetting::CanHandleType tests). It stays zero, as
-    # the stack this was ported from sent it.
+    # 0xf1 (u32): the APN-type bitmap, as stock's builder copies it from
+    # ApnSetting's supported types (vendor.radio.base
+    # ApnSetting::SetSupportedTypesBitmask, member +0x160; the 983-byte
+    # builder writes it at 0xf1). DEFAULT for the internet bearer, IMS for
+    # the IMS one. Until 0.3.6 this was sent as 0 (taken for an MTU), and
+    # the 9a's modem answered every internet setup with status 36.
+    struct.pack_into('<I', full, 0xf1, 0x40 if ims else 1)
     full[0xf5] = 2  # stock caller selects the v3/983-byte form
     # 0 on cellular: no PDU session ID, the modem picks one (module docstring).
     struct.pack_into('<i', full, 0xf6, pdu_session)
@@ -115,8 +119,10 @@ def initial_attach(client, apn, ip_type='ipv4v6'):
     """SET_INITIAL_ATTACH_APN (251 bytes). Without it, setup requests on this
     phone returned status 36 and no bearer."""
     attach = bytearray(251)
-    attach[12:245] = setup_payload(1, 14, 1, apn, ip_type=ip_type)[:233]
-    attach[0xf8] = 3
+    attach[12:245] = setup_payload(1, 14, 0, apn, ip_type=ip_type)[:233]
+    # Stock's attach builder leaves 0xf1-0xf4 zero: no APN-type bitmap here.
+    attach[0xf1:0xf5] = bytes(4)
+    attach[0xf8] = 3  # the roaming PDP type, IPv4v6 (the home type is 0xda)
     client.request(0x0603, bytes(attach[12:]), timeout=30)
 
 
