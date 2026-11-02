@@ -70,7 +70,11 @@ Usage: [DEVICE=<codename>] omamobile <command>
   initramfs-config <dir>
                    Write only the device's files for the shared init (storage-guard
                    allowlist, trigger, ...) into <dir>, to check what initramfs packs
-  kernel           Build the mainline kernel ($KERNEL_DIR) with our config fragment
+  kernel [--release]
+                   Build the mainline kernel ($KERNEL_DIR) with our config fragment.
+                   --release names it as a release kernel (docs/RELEASES.md §4):
+                   LOCALVERSION -omamobile instead of -omamobile-push1, so uname -r
+                   is <version>-omamobile-g<sha12>; it refuses a -dirty result
   modules          Package the kernel's modules (stripped) as a tarball for the Arch
                    root: $KERNEL_OUT/modules-<release>.tar.zst, unpacked under
                    /usr/lib/modules on the phone
@@ -300,6 +304,18 @@ cmd_capture() {
 }
 
 cmd_kernel() {
+  local release=0 localversion=""
+  case ${1:-} in
+    '') ;;
+    --release) release=1 ;;
+    *) die "kernel: expected --release or no argument" ;;
+  esac
+  (($# <= 1)) || die "kernel: expected --release or no argument"
+  # A release build is named -omamobile-g<sha12> (RELEASES §4): the -push1
+  # in the config fragment marks development builds, so a development kernel
+  # is never mistaken for a packaged one. A defconfig run starts every build,
+  # so the switch holds both ways in a reused KERNEL_OUT.
+  ((release == 0)) || localversion="scripts/config --file $KERNEL_OUT/.config --set-str LOCALVERSION -omamobile --enable LOCALVERSION_AUTO"
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
   [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
   # The codename goes into a path below, as in load_device
@@ -315,6 +331,7 @@ cmd_kernel() {
     if [ -f $fragment ]; then
       scripts/kconfig/merge_config.sh -m -O $KERNEL_OUT $KERNEL_OUT/.config $fragment
     fi
+    $localversion
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT olddefconfig
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT -j$JOBS Image.gz dtbs modules
     ls -lh $KERNEL_OUT/arch/arm64/boot/Image.gz
@@ -328,6 +345,13 @@ cmd_kernel() {
     echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
   } > "$KERNEL_OUT/toolchain.txt"
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
+  if ((release)); then
+    local rel
+    rel=$(kernel_release)
+    [[ $rel =~ -omamobile-g[0-9a-f]{12}$ ]] ||
+      die "release build $rel is not <version>-omamobile-g<sha12>: build from a clean checkout of the release tag (a -dirty or -push1 kernel is never released)"
+    say "Release kernel $rel"
+  fi
 }
 
 # Kernel release of the build in $KERNEL_OUT (what uname -r will print).
@@ -1091,7 +1115,7 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   initramfs) shift; cmd_initramfs "$@" ;;
   initramfs-config) shift; cmd_initramfs_config "$@" ;;
-  kernel) cmd_kernel ;;
+  kernel) shift; cmd_kernel "$@" ;;
   modules) cmd_modules ;;
   modules-push) cmd_modules_push ;;
   images) cmd_images ;;

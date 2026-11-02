@@ -1,0 +1,681 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Cut an Omarchy Mobile release: docs/RELEASES.md §11 as one guided
+# procedure, one stage per step, run in order. Each stage checks what the
+# stages before it recorded, stops at the first failure, and with --dry-run
+# only reads and prints what it would run. RELEASES §11 lists the stages
+# beside the steps they run.
+#
+#   tools/release [--dry-run] [--version V] [--kernel-tag T] STAGE [ARGS]
+#     --version V      the release, by the calendar: YYYY.MM.DD (.1, .2 for a
+#                      respin the same day; default today)
+#     --kernel-tag T   the kernel release tag on linux-omarchy-mobile's
+#                      omamobile (default kernel-V; recorded by `kernel`)
+#     --dry-run        read-only: check, and print the commands a stage
+#                      would run
+#     DEVICE           device/<codename> (default cheetah; the first release
+#                      is the Pixel 7 Pro only, RELEASES §12.12)
+#
+# Stages (RELEASES §11 step in brackets):
+#   status        what is recorded for this release, and the next stage
+#   kernel        [1-2] the tag exists on GitHub's omamobile, the release
+#                 worktree is that commit and clean, and the device's NOTES
+#                 record a boot of it
+#   build         [3] the release kernel and its modules from that worktree,
+#                 into the fixed output directory (bin/omamobile kernel
+#                 --release: uname -r <version>-omamobile-g<sha12>)
+#   images        [4] the release initramfs, then the boot images twice:
+#                 every checksum equal
+#   packages      [5] every package's tests; out/repo signed by the release
+#                 key, holding every package the image installs at this
+#                 checkout's version; development publishes exactly it.
+#                 Pins its index for `rootfs` and `promote`
+#   rootfs        the root image, stable channel, from the pinned repository
+#   bundle        the bundle, signed with the release key (ARGS: --unsigned
+#                 for a development proof; such a bundle is never released)
+#   test-install  [6] the attended install (Derek). Prints the steps; then
+#                 `test-install --passed "UNAME"` records the result
+#   identifiers   [7] MAC addresses, serials, SSIDs, account names and home
+#                 paths over the bundle, the root image's file list and
+#                 configuration, the MANIFESTs and the release notes; no file
+#                 from a factory image. Literal identifiers (serials, SSIDs,
+#                 account names) come from RELEASE_IDENTIFIERS, a private
+#                 file outside the repository, one per line
+#   sign          [8] the root image's checksum signed with the release key;
+#                 every signature of the release verified from a clean keyring
+#   upload        [8] tools/release-upload, when it exists (Derek: server)
+#   promote       [8] the pinned development index to stable, unchanged
+#                 (Derek: tools/repo-publish stable --expect-index)
+#   tag           [9] the release notes are final; release-V tagged here
+#                 (Derek pushes it and opens the GitHub release)
+#   scan PATH...  the identifiers stage's scan alone, on any files or
+#                 directories (the notes while they are written, say)
+#
+# The release tree is out/release/V/ (state, checksums, logs). The kernel is
+# built from RELEASE_KERNEL_DIR ($KERNEL_BASE/wt-release) into
+# RELEASE_KERNEL_OUT ($KERNEL_BASE/out-release): fixed paths, because the
+# kernel's debug info records them and byte-identical builds need the same.
+#
+# Never from here: a phone, a flash, a push, an upload or a promotion. Those
+# stages stop and print the exact command for the maintainer to run.
+set -euo pipefail
+export LC_ALL=C
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+
+# The release key's primary (docs/RELEASES.md §10): what every release
+# signature must come from. tools/install-phone matches the same fingerprint.
+RELEASE_KEY=20567593566EEEE2DD8864608632C8075EB94673
+KERNEL_REMOTE=${PUBLISH_KERNEL_REMOTE:-https://github.com/derekross/linux-omarchy-mobile.git}
+if [[ -z ${KERNEL_BASE:-} ]]; then
+  KERNEL_BASE=$HOME/omamobile-kernel
+  [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
+fi
+RELEASE_KERNEL_DIR=${RELEASE_KERNEL_DIR:-$KERNEL_BASE/wt-release}
+RELEASE_KERNEL_OUT=${RELEASE_KERNEL_OUT:-$KERNEL_BASE/out-release}
+DEVICE=${DEVICE:-cheetah}
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die() { printf '\e[31mrelease: %s\e[0m\n' "$*" >&2; exit 1; }
+cleanup=()
+# debugfs rdump keeps the image's read-only modes, so make them writable first
+trap '((${#cleanup[@]} == 0)) || { chmod -R u+rwX -- "${cleanup[@]}" 2>/dev/null; rm -rf -- "${cleanup[@]}"; }' EXIT
+# A step for the maintainer: printed, never run from here
+derek() {
+  printf '\e[33m==> For Derek to run:\e[0m\n'
+  local line
+  for line in "$@"; do printf '    %s\n' "$line"; done
+}
+run() {
+  if ((dry)); then printf '    would run: %s\n' "$*"; else printf '    $ %s\n' "$*"; "$@"; fi
+}
+
+dry=0 version=$(date +%Y.%m.%d) kernel_tag=""
+while (($#)); do
+  case $1 in
+    --dry-run|-n) dry=1 ;;
+    --version) version=${2:?--version needs a value}; shift ;;
+    --kernel-tag) kernel_tag=${2:?--kernel-tag needs a value}; shift ;;
+    -h|--help) sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown option $1 (see --help)" ;;
+    *) break ;;
+  esac
+  shift
+done
+stage=${1:-status}
+(($#)) && shift
+[[ $version =~ ^20[0-9]{2}\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])(\.[1-9][0-9]*)?$ ]] ||
+  die "a release is versioned by the calendar (YYYY.MM.DD, .1 for a respin), not '$version'"
+[[ $DEVICE =~ ^[a-z0-9]+$ && -f device/$DEVICE/device.conf ]] || die "no device/$DEVICE/device.conf"
+conf=device/$DEVICE/device.conf
+
+rel=out/release/$version
+state=$rel/state
+mkdir -p "$rel"
+# The state is data: KEY=value lines this tool wrote, read back without
+# sourcing them
+get() { [[ ! -f $state ]] || sed -n "s/^$1=//p" "$state" | tail -1; }
+put() {
+  ((dry)) && return 0
+  local tmp
+  tmp=$(mktemp "$rel/.state.XXXXXX")
+  { [[ -f $state ]] && grep -v "^$1=" "$state" || true; printf '%s=%s\n' "$1" "$2"; } > "$tmp"
+  mv "$tmp" "$state"
+}
+# One release, one kernel: a recorded tag is never swapped under it
+if [[ -n $kernel_tag && -n $(get kernel_tag) && $kernel_tag != "$(get kernel_tag)" ]]; then
+  die "$version records $(get kernel_tag); --kernel-tag $kernel_tag differs (another kernel is another version, .1 for a respin)"
+fi
+need() {
+  local v
+  v=$(get "$1")
+  [[ -n $v ]] || die "stage $2 has not passed for $version yet (tools/release --version $version $2)"
+  printf '%s' "$v"
+}
+recorded_kernel_tag() {
+  local t
+  t=$(get kernel_tag)
+  printf '%s' "${t:-${kernel_tag:-kernel-$version}}"
+}
+desc() { sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$conf"; }
+
+# A clean temporary keyring holding only omamobile-keyring's public keys;
+# verify_sig SIG FILE succeeds only for a good signature by RELEASE_KEY
+# (a subkey's VALIDSIG names its primary last).
+keyring=""
+verify_sig() {
+  if [[ -z $keyring ]]; then
+    keyring=$(mktemp -d)
+    cleanup+=("$keyring")
+    chmod 700 "$keyring"
+    gpg --homedir "$keyring" -q --batch --no-default-keyring --keyring "$keyring/k.kbx" \
+      --import packages/omamobile-keyring/omamobile.gpg 2>/dev/null || die "cannot read packages/omamobile-keyring/omamobile.gpg"
+  fi
+  local primary
+  primary=$(gpgv --keyring "$keyring/k.kbx" --status-fd 1 "$1" "$2" 2>/dev/null |
+    awk '$2 == "VALIDSIG" { print $NF }' | tail -1) || true
+  [[ $primary == "$RELEASE_KEY" ]]
+}
+have_keys() { [[ -d keys/gnupg.release && -f keys/fingerprint.release ]]; }
+
+# The package names and version (epoch:pkgver-pkgrel) a PKGBUILD makes
+pkg_info() {
+  (
+    cd "packages/$1"
+    startdir=$PWD
+    # shellcheck disable=SC1091
+    source ./PKGBUILD >/dev/null 2>&1
+    echo "${epoch:+$epoch:}$pkgver-$pkgrel ${pkgname[*]}"
+  )
+}
+# "name version" for every package an index lists
+db_versions() {
+  bsdtar -xOf "$1" --include='*/desc' |
+    awk '/^%NAME%$/ { getline; n = $0 } /^%VERSION%$/ { getline; print n, $0 }' | sort
+}
+db_sums() {
+  bsdtar -xOf "$1" --include='*/desc' |
+    awk '/^%FILENAME%$/ { getline; f = $0 } /^%SHA256SUM%$/ { getline; print f, $0 }'
+}
+
+# ------------------------------------------------------------------ stages
+st_status() {
+  say "Omarchy Mobile $version for $DEVICE ($rel)"
+  local s k v next=""
+  for s in kernel build images packages rootfs bundle test-install identifiers sign upload promote tag; do
+    k=${s//-/_}_done
+    v=$(get "$k")
+    printf '    %-13s %s\n' "$s" "${v:-not yet}"
+    [[ -n $v || -n $next ]] || next=$s
+  done
+  [[ ! -f $state ]] || { echo; sed 's/^/    /' "$state" | grep -v '_done=' || true; }
+  echo
+  [[ -n $next ]] && echo "Next: tools/release --version $version $next" || echo "All stages done."
+}
+
+st_kernel() {
+  local tag commit peeled published head
+  tag=$(recorded_kernel_tag)
+  [[ $tag =~ ^kernel-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] || die "a kernel release tag is kernel-YYYY.MM.DD, not $tag"
+  say "§11.1-2: $tag on $KERNEL_REMOTE"
+  refs=$(git ls-remote "$KERNEL_REMOTE" "refs/tags/$tag" "refs/tags/$tag^{}" "refs/heads/omamobile") ||
+    die "can't read $KERNEL_REMOTE"
+  peeled=$(awk -v r="refs/tags/$tag^{}" '$2 == r { print $1 }' <<<"$refs")
+  commit=${peeled:-$(awk -v r="refs/tags/$tag" '$2 == r { print $1 }' <<<"$refs")}
+  published=$(awk '$2 == "refs/heads/omamobile" { print $1 }' <<<"$refs")
+  if [[ -z $commit ]]; then
+    derek "tools/publish-kernel --dry-run --tag $tag <release-branch>   # read what it would push" \
+          "tools/publish-kernel --tag $tag <release-branch>"
+    die "$tag is not on $KERNEL_REMOTE yet (§11.2)"
+  fi
+  [[ -n $peeled ]] || die "$tag is a lightweight tag; release tags are annotated (tools/publish-kernel --tag)"
+  note "$tag is ${commit:0:12}; omamobile is at ${published:0:12}"
+  [[ -d $RELEASE_KERNEL_DIR ]] || {
+    derek "git -C $KERNEL_BASE/linux fetch $KERNEL_REMOTE tag $tag" \
+          "git -C $KERNEL_BASE/linux worktree add --detach $RELEASE_KERNEL_DIR $tag"
+    die "no release worktree $RELEASE_KERNEL_DIR"
+  }
+  git -C "$RELEASE_KERNEL_DIR" fetch -q "$KERNEL_REMOTE" "refs/heads/omamobile" 2>/dev/null ||
+    die "can't fetch omamobile into $RELEASE_KERNEL_DIR"
+  git -C "$RELEASE_KERNEL_DIR" merge-base --is-ancestor "$commit" FETCH_HEAD ||
+    die "$tag (${commit:0:12}) is not on the published omamobile: a release kernel comes from it (§8)"
+  head=$(git -C "$RELEASE_KERNEL_DIR" rev-parse HEAD)
+  [[ $head == "$commit" ]] || {
+    derek "git -C $RELEASE_KERNEL_DIR checkout --detach $commit   # if nobody else works in it"
+    die "$RELEASE_KERNEL_DIR is at ${head:0:12}, not $tag (${commit:0:12})"
+  }
+  [[ -z $(git -C "$RELEASE_KERNEL_DIR" status --porcelain --untracked-files=no) ]] ||
+    die "$RELEASE_KERNEL_DIR has local changes: the release kernel is built from the clean tag (its uname -r would say -dirty)"
+  note "$RELEASE_KERNEL_DIR is $tag, clean"
+  # §11.1: a boot of this commit on the device, written down
+  local hit
+  hit=$(grep -rlF "g${commit:0:12}" "device/$DEVICE/"*.md 2>/dev/null | head -1 || true)
+  if [[ -z $hit ]]; then
+    die "device/$DEVICE has no note of a boot of g${commit:0:12} (§11.1: boot it, then record uname -r and the result in device/$DEVICE/NOTES.md)"
+  fi
+  note "booted and recorded: $hit"
+  put kernel_tag "$tag"
+  put kernel_commit "$commit"
+  put kernel_done "$tag ${commit:0:12}"
+}
+
+st_build() {
+  local commit want got kver
+  commit=$(need kernel_commit kernel)
+  kver=$(make -s -C "$RELEASE_KERNEL_DIR" kernelversion 2>/dev/null) || die "can't read the kernel version from $RELEASE_KERNEL_DIR"
+  want="$kver-omamobile-g${commit:0:12}"
+  say "§11.3: release kernel $want into $RELEASE_KERNEL_OUT"
+  [[ $(git -C "$RELEASE_KERNEL_DIR" rev-parse HEAD) == "$commit" ]] || die "$RELEASE_KERNEL_DIR moved off ${commit:0:12}; run the kernel stage again"
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile kernel --release
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile modules
+  ((dry)) && return 0
+  got=$(cat "$RELEASE_KERNEL_OUT/include/config/kernel.release")
+  [[ $got == "$want" ]] || die "the build reports $got, not $want"
+  [[ -f $RELEASE_KERNEL_OUT/modules-$got.tar.zst ]] || die "no modules-$got.tar.zst"
+  # Decision 2: the release compiler is the pinned one (tools/fetch-toolchain)
+  grep -q '^clang source: pinned' "$RELEASE_KERNEL_OUT/toolchain.txt" 2>/dev/null || {
+    derek "tools/fetch-toolchain && unset CLANG_DIR && tools/release --version $version build"
+    die "the kernel was not built with the pinned clang (tools/toolchain.lock): $(sed -n 's/^clang source: //p' "$RELEASE_KERNEL_OUT/toolchain.txt" 2>/dev/null || echo unrecorded)"
+  }
+  note "$(head -1 "$RELEASE_KERNEL_OUT/toolchain.txt")"
+  note "uname -r $got, modules-$got.tar.zst"
+  note "linux-omamobile: packing it is RELEASES §4; until that package exists, the boot images carry this kernel"
+  put kernel_release "$got"
+  put build_done "$got"
+}
+
+st_images() {
+  local krel n=0
+  krel=$(need kernel_release build)
+  say "§11.4: release initramfs and $DEVICE's boot images, twice"
+  [[ $(cat "$RELEASE_KERNEL_OUT/include/config/kernel.release" 2>/dev/null) == "$krel" ]] ||
+    die "$RELEASE_KERNEL_OUT no longer holds $krel; run the build stage again"
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile initramfs --release
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
+  ((dry)) || (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.1"
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run bin/omamobile images
+  ((dry)) && return 0
+  (cd "$RELEASE_KERNEL_OUT/images" && sha256sum -- *.img) > "$rel/images.sha256.2"
+  cmp -s "$rel/images.sha256.1" "$rel/images.sha256.2" || {
+    diff "$rel/images.sha256.1" "$rel/images.sha256.2" >&2 || true
+    die "the two image builds differ"
+  }
+  n=$(grep -c . "$rel/images.sha256.1")
+  # The release initramfs has no builder keys (make-bundle checks it again)
+  if lz4 -dc "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4" | cpio -t --quiet 2>/dev/null |
+       grep -cE '^(\./)?root/\.ssh(/|$)|^(\./)?etc/dropbear/dropbear_.*_host_key$' >/dev/null; then
+    die "the initramfs holds SSH keys: it is not a release initramfs"
+  fi
+  sed 's/^/    /' "$rel/images.sha256.1"
+  note "$n images, identical in both builds; the initramfs holds no SSH keys"
+  put images_done "$n images reproducible"
+}
+
+st_packages() {
+  local db=out/repo/aarch64/omamobile.db.tar.gz dev=out/publish/development/aarch64/omamobile.db.tar.gz
+  local file sum n=0 want names name pkg v stale=() image_pkgs dpkg _
+  say "§11.5: package tests"
+  if ((dry)); then note "would run: tests/packages"; else tests/packages > "$rel/packages-tests.log" 2>&1 ||
+    die "a package's tests fail: $rel/packages-tests.log"; note "every package's test/all passes ($rel/packages-tests.log)"; fi
+  say "out/repo: signed by the release key"
+  [[ -f $db && -f $db.sig ]] || {
+    derek "tools/build-packages --all"
+    die "no signed out/repo index"
+  }
+  verify_sig "$db.sig" "$db" || {
+    derek "tools/build-packages --resign"
+    die "out/repo's index is not signed by the release key $RELEASE_KEY"
+  }
+  while read -r file sum; do
+    [[ -f out/repo/aarch64/$file && -f out/repo/aarch64/$file.sig ]] || die "the index lists $file, which is missing or unsigned"
+    [[ $(sha256sum < "out/repo/aarch64/$file" | cut -d' ' -f1) == "$sum" ]] || die "$file does not match the index"
+    verify_sig "out/repo/aarch64/$file.sig" "out/repo/aarch64/$file" || die "$file is not signed by the release key"
+    n=$((n + 1))
+  done < <(db_sums "$db")
+  note "$n packages and the index: checksums good, signed by $RELEASE_KEY"
+  say "out/repo holds what this checkout builds, for every package the image installs"
+  dpkg=$(desc PACKAGE)
+  image_pkgs="$(grep -v '^#' rootfs/packages.omamobile | xargs) $dpkg $(desc ROOTFS_PACKAGES)"
+  local versions built="" d
+  versions=$(db_versions "$db")
+  # "name version dir" for every package this checkout builds (split
+  # packages such as Mesa's vulkan-panfrost under their PKGBUILD's directory)
+  for d in packages/*/PKGBUILD; do
+    d=${d%/PKGBUILD}; d=${d#packages/}
+    read -r want names <<<"$(pkg_info "$d")"
+    for pkg in $names; do built+="$pkg $want $d"$'\n'; done
+  done
+  for name in $image_pkgs; do
+    read -r _ want d <<<"$(awk -v n="$name" '$1 == n' <<<"$built")"
+    [[ -n ${d:-} ]] || die "the image installs $name, which no PKGBUILD under packages/ builds"
+    v=$(awk -v n="$name" '$1 == n { print $2 }' <<<"$versions")
+    [[ $v == "$want" ]] || stale+=("$name (packages/$d: $want, out/repo: ${v:-none})")
+  done
+  if ((${#stale[@]})); then
+    printf '    %s\n' "${stale[@]}" >&2
+    derek "tools/build-packages --all    # builds and signs what changed, with the release key"
+    die "out/repo is behind this checkout for the packages above"
+  fi
+  note "every image package is at this checkout's version"
+  say "development publishes exactly out/repo"
+  if [[ ! -f $dev ]] || ! cmp -s "$db" "$dev"; then
+    derek "tools/repo-publish --no-build development"
+    ((dry)) && { note "(dry run: development differs from out/repo)"; return 0; }
+    die "development (out/publish) is not out/repo's index: publish it first, so phones and the image meet at the same versions (§7)"
+  fi
+  sum=$(sha256sum < "$db" | cut -d' ' -f1)
+  cp -p "$db" "$rel/omamobile.db.tar.gz"
+  note "pinned index $sum"
+  put repo_index "$sum"
+  put packages_done "$n packages, index ${sum:0:12}"
+}
+
+st_rootfs() {
+  local krel index name img
+  krel=$(need kernel_release build)
+  index=$(need repo_index packages)
+  say "Root image $version for $DEVICE, stable channel, from index ${index:0:12}"
+  [[ $(sha256sum < out/repo/aarch64/omamobile.db.tar.gz | cut -d' ' -f1) == "$index" ]] ||
+    die "out/repo changed since the packages stage pinned it; run the packages stage again"
+  KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE run tools/build-rootfs --version "$version" --channel stable
+  ((dry)) && return 0
+  name=omamobile-rootfs-$DEVICE-$version-aarch64
+  img=out/$name.img.zst
+  [[ -f $img && -f $img.sha256 && -f out/$name.MANIFEST ]] || die "no $img"
+  grep -qx "omamobile channel: stable" "out/$name.MANIFEST" || die "$img does not follow stable"
+  grep -q "^kernel modules: $krel " "out/$name.MANIFEST" || die "$img does not carry $krel's modules"
+  grep -q '^omamobile packages missing (allowed): none$' "out/$name.MANIFEST" || die "$img lacks some of our packages"
+  [[ $(sha256sum < out/repo/aarch64/omamobile.db.tar.gz | cut -d' ' -f1) == "$index" ]] ||
+    die "out/repo changed during the build"
+  note "$img ($(du -h "$img" | cut -f1)), $(cut -c1-12 "$img.sha256")"
+  put rootfs "$img"
+  put rootfs_done "$(basename "$img")"
+}
+
+st_bundle() {
+  local img krel unsigned=0 args=() dir
+  [[ ${1:-} != --unsigned ]] || unsigned=1
+  img=$(need rootfs rootfs)
+  krel=$(need kernel_release build)
+  need images_done images >/dev/null
+  dir=out/bundle/omamobile-$DEVICE-$version
+  say "Bundle $dir$( ((unsigned)) && echo ' (unsigned: a development proof, never released)')"
+  if ((unsigned)); then args+=(--unsigned); elif ! have_keys; then
+    derek "tools/release --version $version bundle     # on the build machine, with keys/gnupg.release"
+    die "no release signing key here (keys/gnupg.release)"
+  fi
+  KERNEL_DIR=$RELEASE_KERNEL_DIR KERNEL_OUT=$RELEASE_KERNEL_OUT DEVICE=$DEVICE \
+    run tools/make-bundle --version "$version" --rootfs "$img" "${args[@]}"
+  ((dry)) && return 0
+  grep -qx "kernel release: $krel" "$dir/MANIFEST" || die "$dir/MANIFEST does not name $krel"
+  (cd "$dir" && sha256sum -c --quiet SHA256SUMS) || die "$dir does not match its SHA256SUMS"
+  if ((unsigned == 0)); then
+    verify_sig "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS" || die "$dir/SHA256SUMS.sig is not a good release-key signature"
+    note "SHA256SUMS signed by $RELEASE_KEY, checked from a clean keyring"
+  fi
+  note "$(du -sh "$dir" | cut -f1) in $dir"
+  put bundle "$dir"
+  put bundle_signed "$((1 - unsigned))"
+  put bundle_done "$(basename "$dir")$( ((unsigned)) && echo ' (unsigned)')"
+}
+
+st_test_install() {
+  local dir krel
+  dir=$(need bundle bundle)
+  krel=$(need kernel_release build)
+  if [[ ${1:-} == --passed ]]; then
+    local got=${2:?--passed needs the uname -r the phone printed}
+    [[ $got == "$krel" ]] || die "the phone ran $got, not the release kernel $krel"
+    [[ $(get bundle_signed) == 1 ]] || die "the tested bundle is unsigned; a release is tested as users get it (bundle stage without --unsigned)"
+    put test_install_done "passed on $DEVICE, uname -r $got, $(date -u +%Y-%m-%d)"
+    note "recorded; write the result in device/$DEVICE/NOTES.md too (§11.6)"
+    return 0
+  fi
+  say "§11.6: the attended test install (this gates the release, §12.10)"
+  derek "# Before: stock on slot A boots, and the read-only backup of efs, efs_backup," \
+        "# modem_userdata, persist and modem_a/b checks (MODEM-PLAN M0.1)." \
+        "cd $ROOT/$dir" \
+        "./install --dry-run      # reads the phone, prints exactly what it would write" \
+        "./install                # type '$DEVICE' to confirm" \
+        "# After the first boot, over USB SSH:" \
+        "uname -r                                   # $krel" \
+        "systemctl is-failed omamobile-firstboot    # inactive (it ran and removed its file)" \
+        "pacman -Q $(desc PACKAGE)" \
+        "omarchy update                             # clean, from stable" \
+        "# Then the package-hook kernel update and a reboot into it (§12.10), and:" \
+        "tools/release --version $version test-install --passed \"\$(tools/phone-ssh uname -r)\""
+  ((dry)) || die "waiting for the attended install"
+}
+
+# File list of an ext4 image, one path per line, read with debugfs (no root,
+# no mount): one debugfs run per directory level
+ext4_list() {
+  python3 -I - "$1" <<'PY'
+import subprocess, sys
+img = sys.argv[1]
+level, out = ["/"], []
+while level:
+    cmds = "".join('ls -p "%s"\n' % d for d in level)
+    r = subprocess.run(["debugfs", "-f", "-", img], input=cmds, capture_output=True, text=True)
+    nxt, cur = [], None
+    for line in r.stdout.splitlines():
+        if line.startswith("debugfs:"):
+            cur = line.split('"')[1] if '"' in line else None
+            continue
+        f = line.split("/")
+        if cur is None or len(f) < 7 or f[5] in (".", ".."):
+            continue
+        path = cur.rstrip("/") + "/" + f[5]
+        out.append(path)
+        if f[2].startswith("04"):
+            nxt.append(path)
+    level = nxt
+print("\n".join(sorted(out)))
+PY
+}
+
+# Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
+# binary alike: universally administered MAC addresses (locally administered
+# ones, x2/x6/xA/xE, and all zeros or all ones are made up), serial and IMEI
+# records, this machine's home directory (/home/<builder>: a build path that
+# leaked; other /home/<name> paths are upstream examples and build hosts, as
+# in Neovim plugins and Alpine's libc), and each literal of the identifiers
+# file as a whole word. Prints each finding; fails when there is one.
+scan_identifiers() {
+  python3 -I - "$(id -un)" "$@" <<'PY'
+import os, re, sys
+builder, ids_file, paths = sys.argv[1], sys.argv[2], sys.argv[3:]
+lits = [l.strip() for l in open(ids_file, encoding="utf-8") if l.strip() and not l.lstrip().startswith("#")]
+mac = re.compile(rb"(?<![0-9A-Fa-f:])([0-9A-Fa-f]{2})((?::[0-9A-Fa-f]{2}){5})(?![0-9A-Fa-f:])")
+rules = [("serial record", re.compile(rb"(?i)(ro\.serialno|androidboot\.serialno)[^\n]{0,40}")),
+         ("IMEI", re.compile(rb"(?i)\bIMEI\b[=: ]+[0-9]{15}\b")),
+         ("builder's home", re.compile(rb"/home/" + re.escape(builder.encode()) + rb"(?![A-Za-z0-9_-])"))]
+rules += [("listed identifier", re.compile(rb"(?<![A-Za-z0-9_])" + re.escape(l.encode()) + rb"(?![A-Za-z0-9_])")) for l in lits]
+found = 0
+def report(path, what, text):
+    global found
+    found += 1
+    if found <= 40:
+        print("    %s: %s: %s" % (path, what, text.decode("utf-8", "replace")[:120]))
+def scan(path):
+    try:
+        data = open(path, "rb").read()
+    except OSError:
+        return
+    for m in mac.finditer(data):
+        first = int(m.group(1), 16)
+        whole = (m.group(1) + m.group(2)).lower()
+        if first & 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+            continue
+        report(path, "MAC address", whole)
+    for what, rx in rules:
+        for m in rx.finditer(data):
+            report(path, what, m.group(0))
+            break
+for p in paths:
+    if os.path.isdir(p):
+        for top, dirs, names in os.walk(p):
+            for n in names:
+                f = os.path.join(top, n)
+                if os.path.isfile(f) and not os.path.islink(f):
+                    scan(f)
+    elif os.path.isfile(p):
+        scan(p)
+if found:
+    print("    %d finding(s)" % found)
+    sys.exit(1)
+PY
+}
+
+st_identifiers() {
+  local dir img manifest notes t f list=()
+  dir=$(need bundle bundle)
+  img=$(need rootfs rootfs)
+  manifest=${img%.img.zst}.MANIFEST
+  notes=docs/release-notes/$version.md
+  say "§11.7: identifiers and factory-image files"
+  local ids=${RELEASE_IDENTIFIERS:-$HOME/.config/omamobile/release-identifiers}
+  [[ -f $ids ]] || die "no $ids: list the phone serials, IMEIs, SSIDs and account names to look for, one per line (private; never in the repository), or set RELEASE_IDENTIFIERS"
+  [[ $(grep -vc '^[[:space:]]*\(#\|$\)' "$ids") -gt 0 ]] || die "$ids lists nothing"
+  ((dry)) && { note "would list $img, dump its configuration and the initramfs, and scan them with $ids"; return 0; }
+  t=$(mktemp -d "$rel/.identifiers.XXXXXX")
+  cleanup+=("$t")
+  say "Reading the root image"
+  zstd -q -d --sparse -f "$img" -o "$t/root.img"
+  ext4_list "$t/root.img" > "$rel/rootfs-files.txt"
+  note "$(wc -l < "$rel/rootfs-files.txt") paths ($rel/rootfs-files.txt)"
+  # What the build wrote rather than a package: configuration and our files
+  mkdir -p "$t/rootfs"
+  printf 'rdump /etc %s\nrdump /root %s\nrdump /usr/share/omamobile %s\nrdump /var/lib/omamobile %s\n' \
+    "$t/rootfs" "$t/rootfs" "$t/rootfs" "$t/rootfs" | debugfs -f - "$t/root.img" >/dev/null 2>&1 || true
+  rm -f "$t/root.img"
+  # The release initramfs the boot images carry
+  mkdir -p "$t/initramfs"
+  lz4 -dc "$RELEASE_KERNEL_OUT/initramfs.cpio.lz4" | (cd "$t/initramfs" && cpio -id --quiet --no-absolute-filenames 2>/dev/null) || true
+  list=("$dir" "$rel/rootfs-files.txt" "$t/rootfs" "$t/initramfs" "$manifest")
+  if [[ -f $notes ]]; then list+=("$notes"); else note "no $notes yet: run this stage again once it is written (the tag stage needs it)"; fi
+  say "Scanning the bundle, the root image's file list and configuration, the initramfs, the MANIFESTs$([[ -f $notes ]] && echo ', the notes')"
+  scan_identifiers "$ids" "${list[@]}" || die "identifiers found (above); nothing ships until they are gone"
+  note "no MAC address, serial, IMEI, builder's home path or listed identifier"
+  # No file from a factory image: tools/extract-vendor-firmware's targets,
+  # the vendor chroots, Trusty state
+  f=$(grep -E '^/usr/lib/firmware/(updates|omamobile/camera)(/|$)|^/usr/lib/omamobile-(fp|vendor/[a-z]+)/root/|/(aoc\.bin|cs40l26[^/]*\.(bin|wmfw)|cs35l41-dsp1-spk-prot[^/]*|BCM\.[^/]*\.hcd|fw_bcmdhd\.bin)$|^/var/lib/omamobile-fp/' \
+      "$rel/rootfs-files.txt" || true)
+  [[ -z $f ]] || { echo "$f" | head -20 >&2; die "files from a factory image in the root image (above)"; }
+  f=$(cd "$dir" && find . -type f ! -path './images/*.img' ! -name README.txt ! -name MANIFEST ! -name manifest.json \
+      ! -name 'SHA256SUMS*' ! -name install ! -name device.conf ! -name omamobile.gpg)
+  [[ -z $f ]] || { echo "$f" >&2; die "files in the bundle that make-bundle does not put there (above)"; }
+  note "no factory-image file in the root image; the bundle holds only make-bundle's files"
+  put identifiers_done "clean ($(date -u +%Y-%m-%dT%H:%MZ)$([[ -f $notes ]] || echo ', notes not yet scanned'))"
+}
+
+st_sign() {
+  local img dir
+  img=$(need rootfs rootfs)
+  dir=$(need bundle bundle)
+  need test_install_done test-install >/dev/null
+  need identifiers_done identifiers >/dev/null
+  say "§11.8: signatures"
+  [[ $(get bundle_signed) == 1 ]] || die "$dir is unsigned; build the release bundle (bundle stage without --unsigned)"
+  if [[ ! -f $img.sha256.sig ]]; then
+    have_keys || {
+      derek "tools/release --version $version sign     # on the build machine, with keys/gnupg.release"
+      die "no release signing key here"
+    }
+    (
+      source tools/lib/signing.sh
+      signing_key_load "$ROOT" || exit 1
+      run gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$img.sha256.sig" "$img.sha256"
+    ) || die "signing $img.sha256 failed"
+  fi
+  ((dry)) && return 0
+  (cd "$(dirname "$img")" && sha256sum -c --quiet "$(basename "$img").sha256") || die "$img does not match its .sha256"
+  verify_sig "$img.sha256.sig" "$img.sha256" || die "$img.sha256.sig is not a good release-key signature"
+  verify_sig "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS" || die "$dir/SHA256SUMS.sig is not a good release-key signature"
+  (cd "$dir" && sha256sum -c --quiet SHA256SUMS) || die "$dir does not match SHA256SUMS"
+  grep -qF "root image: $(basename "$img") ($(cut -d' ' -f1 "$img.sha256"))" "$dir/MANIFEST" ||
+    die "the signed MANIFEST does not name this root image"
+  note "the bundle, the root image and its checksum: signed by $RELEASE_KEY, checked from a clean keyring"
+  put sign_done "verified"
+}
+
+st_upload() {
+  local dir img
+  need sign_done sign >/dev/null
+  dir=$(need bundle bundle)
+  img=$(need rootfs rootfs)
+  say "§11.8: upload to pkgs.omamobile.org/releases/$DEVICE/$version/ (files before the index)"
+  if [[ -x tools/release-upload ]]; then
+    run tools/release-upload --dry-run --version "$version" --device "$DEVICE"
+    derek "tools/release-upload --version $version --device $DEVICE"
+  else
+    note "tools/release-upload is not in this checkout yet (branch release-hosting). It must upload:"
+    note "  $dir/ (every file)"
+    note "  $img, $img.sha256, $img.sha256.sig, ${img%.img.zst}.MANIFEST"
+    note "  then the per-device latest-stable index, last"
+    derek "tools/release-upload --version $version --device $DEVICE    # once release-hosting has landed"
+  fi
+  ((dry)) && return 0
+  if [[ ${1:-} == --done ]]; then
+    put upload_done "$(date -u +%Y-%m-%d)"
+    return 0
+  fi
+  die "then record it: tools/release --version $version upload --done"
+}
+
+st_promote() {
+  local index
+  index=$(need repo_index packages)
+  need upload_done upload >/dev/null
+  say "§11.8: promote index ${index:0:12} to stable, unchanged, signatures included"
+  if [[ -f out/publish/development/aarch64/omamobile.db.tar.gz ]] &&
+     [[ $(sha256sum < out/publish/development/aarch64/omamobile.db.tar.gz | cut -d' ' -f1) != "$index" ]]; then
+    die "development moved past the tested index ${index:0:12}: promote nothing; cut a respin (.1) from the new index, or republish the tested one"
+  fi
+  derek "tools/repo-publish --dry-run stable --expect-index $index" \
+        "tools/repo-publish stable --expect-index $index"
+  ((dry)) && return 0
+  if [[ ${1:-} == --done ]]; then
+    local url=https://pkgs.omamobile.org/stable/aarch64/omamobile.db got
+    got=$(curl -fsS "$url" | sha256sum | cut -d' ' -f1) || die "can't read $url"
+    [[ $got == "$index" ]] || die "$url is $got, not the tested index $index"
+    put promote_done "stable = ${index:0:12}"
+    return 0
+  fi
+  die "then record it: tools/release --version $version promote --done   (checks $index on the server)"
+}
+
+st_tag() {
+  local notes krel ktag tag=release-$version head
+  need promote_done promote >/dev/null
+  krel=$(need kernel_release build)
+  ktag=$(need kernel_tag kernel)
+  notes=docs/release-notes/$version.md
+  say "§11.9: notes and the release-$version tag"
+  [[ -f $notes ]] || die "no $notes (start from docs/release-notes/*-DRAFT.md)"
+  ! grep -nE 'DRAFT|MM\.DD|TODO|XXX|<[a-z][a-z ._-]*>' "$notes" >&2 || die "$notes still has placeholders (above)"
+  grep -qF "$ktag" "$notes" && grep -qF "$krel" "$notes" || die "$notes must name $ktag and uname -r $krel"
+  [[ $(get identifiers_done) != *"notes not yet scanned"* ]] || die "the identifiers stage ran before $notes existed: run it again"
+  git fetch -q origin main
+  head=$(git rev-parse HEAD)
+  [[ $head == "$(git rev-parse origin/main)" ]] || die "tag from origin/main: this checkout is ${head:0:12}, origin/main is $(git rev-parse --short=12 origin/main)"
+  [[ -z $(git status --porcelain --untracked-files=no) ]] || die "this checkout has local changes"
+  git ls-files --error-unmatch "$notes" >/dev/null 2>&1 || die "$notes is not committed on main"
+  if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+    [[ $(git rev-parse "$tag^{commit}") == "$head" ]] || die "$tag exists on another commit; a respin is release-$version.1"
+  else
+    run git tag -a "$tag" -m "Omarchy Mobile $version (developer preview)
+
+Kernel: $ktag, uname -r $krel
+Packages: [omamobile] stable index $(get repo_index)
+Root image: $(basename "$(get rootfs)")" "$head"
+  fi
+  derek "git push origin $tag" \
+        "gh release create $tag -R derekross/omarchy-mobile --title 'Omarchy Mobile $version (developer preview)' --notes-file $notes"
+  put tag_done "$tag on ${head:0:12} (local; push it)"
+}
+
+case $stage in
+  status) st_status ;;
+  kernel) st_kernel ;;
+  build) st_build ;;
+  images) st_images ;;
+  packages) st_packages ;;
+  rootfs) st_rootfs ;;
+  bundle) st_bundle "$@" ;;
+  test-install) st_test_install "$@" ;;
+  identifiers) st_identifiers ;;
+  sign) st_sign ;;
+  upload) st_upload "$@" ;;
+  promote) st_promote "$@" ;;
+  tag) st_tag ;;
+  scan)
+    (($#)) || die "scan needs files or directories"
+    ids=${RELEASE_IDENTIFIERS:-$HOME/.config/omamobile/release-identifiers}
+    [[ -f $ids ]] || die "no $ids (or set RELEASE_IDENTIFIERS)"
+    scan_identifiers "$ids" "$@" || die "identifiers found (above)"
+    note "no MAC address, serial, IMEI, builder's home path or listed identifier in $*"
+    ;;
+  *) die "unknown stage $stage (see --help)" ;;
+esac

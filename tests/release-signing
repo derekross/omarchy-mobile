@@ -128,3 +128,18 @@ grep -q 'signed by the release key' "$t/log" || { cat "$t/log"; fail "says it ch
 [[ ! -e $t/ssh.log ]] || fail "a dry run never opens ssh"
 grep -c -- ' -n -v ' "$t/rsync.log" >/dev/null || fail "a dry run's rsync is -n"
 pass "repo-publish stages a repository the release key signed (dry run)"
+
+# --- promotion of exactly the tested index (tools/release promote) ---
+dev_index=$(sha256sum < "$R/out/publish/development/aarch64/omamobile.db.tar.gz" | cut -d' ' -f1)
+if run tools/repo-publish --dry-run stable --expect-index "$(printf '0%.0s' {1..64})"; then
+  fail "repo-publish stable refuses a development index other than the expected one"
+fi
+grep -q 'nothing promoted' "$t/log" || { cat "$t/log"; fail "says nothing was promoted"; }
+[[ ! -e $R/out/publish/stable ]] || fail "a refused promotion stages nothing"
+if run tools/repo-publish --dry-run development --expect-index "$dev_index"; then fail "--expect-index goes with stable only"; fi
+run tools/repo-publish --dry-run stable --expect-index "$dev_index" || { cat "$t/log"; fail "repo-publish promotes the expected index"; }
+cmp -s "$R/out/publish/development/aarch64/omamobile.db.tar.gz" "$R/out/publish/stable/aarch64/omamobile.db.tar.gz" ||
+  fail "stable's index is development's, byte for byte"
+cmp -s "$R/out/publish/development/aarch64/foo-1-1-any.pkg.tar.zst.sig" "$R/out/publish/stable/aarch64/foo-1-1-any.pkg.tar.zst.sig" ||
+  fail "the packages' signatures are promoted unchanged"
+pass "repo-publish stable --expect-index promotes only the tested index, unchanged (dry run)"
