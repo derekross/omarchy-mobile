@@ -603,7 +603,7 @@ isc9 && grep -c 'stage c9 chosen by the verified firmware list' "$r/out" >/dev/n
 [[ ! -e $r/state/speaker-protection-verified ]] || fail "list hit: no stamp is written by a start"
 autolist list-miss "cheetah $otherd another firmware"; autostart
 ismedia || { cat "$r/out" >&2; fail "list miss: media at 737/10"; }
-autolist list-empty; autostart; ismedia || fail "an empty list (the shipped one): media"
+autolist list-empty; autostart; ismedia || fail "an empty list: media"
 autolist list-other-system "raven ${fwd#cheetah } another system's line"; autostart
 ismedia || fail "a digest listed for another system: media"
 autolist list-short "cheetah ${fwd:8:40} a cut digest"; autostart; ismedia || fail "a cut digest matches nothing: media"

@@ -1967,9 +1967,9 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    the wmfw and both tunings, as `tools/extract-vendor-firmware` installs
    them from the owner's factory image). Stage auto picks c9 with
    `speaker_protection=1` and either this phone's own stamp or a listed
-   digest, and logs which. **The reference phone's digest was not recorded
-   in this plan, so the shipped list is empty and no phone gets c9 from it
-   yet.** To fill it (read-only, no sound):
+   digest, and logs which. The reference phone's digest was not recorded
+   in this plan until the verify below. To read a phone's digest
+   (read-only, no sound):
    `tools/phone-ssh 'omamobile-speaker-protection digest; sed -n "s/^firmware //p" /var/lib/omamobile/speaker-protection-verified'`.
    Expect `cheetah <64 hex digits>` and the same digits from the stamp; add
    that line to `packages/omamobile-audio/verified-firmware` with a note
@@ -1978,6 +1978,16 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    The same digest on the laptop, from a factory image extraction:
    `OMAMOBILE_FW_DIRS=<out>/usr/lib/firmware/updates packages/omamobile-audio/bin/omamobile-speaker-protection digest`;
    a factory build whose three files give the same digest needs no new line.
+
+   **C9a verify for the list (2026-11-02 18:54 EST,
+   `7.3.0-rc6-omamobile-g2219cc6cda77`, firmware from factory image
+   cheetah-cp2a.260705.006; the maintainer, during playback):** "verified:
+   both DSPs run the protection firmware with the calibration applied,
+   heartbeat moving, coil temperatures Top 26.02 C, Bottom 25.58 C". The
+   stamp's firmware digest, now the list's first line:
+   `cheetah 5d457a3db82d1f72e4c938368d3c04dcf9b974aff08347c2d595dc88928b347c`
+   (reference 7 Pro, factory image cp2a.260705.006, C9a verify 2026-11-02,
+   c9 levels 2026-10-31).
 
    Why a listed digest is enough for another 7 Pro, and what is still
    checked per phone: the digest says the firmware and both tunings are

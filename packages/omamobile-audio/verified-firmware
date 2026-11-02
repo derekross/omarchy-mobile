@@ -25,7 +25,5 @@
 #
 # Format: SYSTEM DIGEST NOTE   (64 lowercase hex digits; '#' starts a comment)
 #
-# TODO(maintainer): the reference 7 Pro's digest was not recorded in
-# AOC-PLAN; add its line from `omamobile-speaker-protection digest` on that
-# phone, e.g. "cheetah <64 hex digits> reference 7 Pro, C9a 2026-10-12,
-# c9 levels 2026-10-31". Until then no phone gets c9 from this list.
+
+cheetah 5d457a3db82d1f72e4c938368d3c04dcf9b974aff08347c2d595dc88928b347c reference 7 Pro, factory image cp2a.260705.006, C9a verify 2026-11-02, c9 levels 2026-10-31
