@@ -7,6 +7,8 @@ Omarchy Mobile is a community project built on [Omarchy](https://omarchy.org). I
 
 It takes about an hour, most of it downloads and waiting. You type a few commands in a terminal on your computer; each step says what you should see.
 
+Today these steps are manual. Where the install is going, one guided step from a web page or a desktop app with the phone's firmware fetched for you, is in the [install experience plan](https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-EXPERIENCE-PLAN.md).
+
 ## Before you start: what happens to your phone
 
 - **Installing erases the phone's data.** Unlocking the bootloader erases it, and the installer replaces the user data partition (`userdata`) with Omarchy Mobile. Copy off anything you want to keep first: photos, messages, two-factor codes.
