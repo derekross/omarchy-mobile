@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Read-only backup of dipper's stock partitions, with checksums verified on both
+# ends. Nothing is written to the phone.
+#
+# This is not optional on dipper: the OS partitions are single-copy (one `boot`,
+# no slot B), so a bad image has no known-good slot to fall back to. The only
+# way back is fastboot over USB with these files.
+#
+# Needs: SSH to the phone with root available (SimpleSSHD + Magisk, or adb).
+set -euo pipefail
+
+HOST=${HOST:-mi8}
+SU=${SU:-/debug_ramdisk/su}
+OUT=${OUT:-$HOME/android/reference/dipper-stock/backup}
+
+# Everything we could overwrite, plus the per-device data that cannot be
+# regenerated from any download. `modem` and `dsp` are firmware and the largest
+# items; pass --with-firmware to include them.
+PARTS=(boot recovery dtbo vbmeta persist persistbak modemst1 modemst2 fsg fsc devinfo misc frp logo splash)
+FIRMWARE=(modem dsp)
+
+[[ ${1:-} == --with-firmware ]] && PARTS+=("${FIRMWARE[@]}")
+
+umask 077
+mkdir -p "$OUT"; chmod 700 "$OUT"
+sums=$OUT/sha256sums.txt
+: > "$sums"
+
+# adb needs no SimpleSSHD or Tailscale and `adb root` already gives uid=0, so it
+# is the default when a device is attached. exec-out keeps the dd pipe binary.
+if [[ ${TRANSPORT:-auto} == adb ]] || { [[ ${TRANSPORT:-auto} == auto ]] && adb get-state &>/dev/null; }; then
+  remote() { adb exec-out "$1"; }
+  via="adb"
+else
+  remote() { ssh "$HOST" "$SU -c '$1'"; }
+  via="ssh $HOST"
+fi
+
+[[ $(remote 'id -u' | tr -d '\r\n') == 0 ]] || { echo "no root over $via" >&2; exit 1; }
+
+total=0 failed=0
+for p in "${PARTS[@]}"; do
+  dev=$(remote "readlink -f /dev/block/by-name/$p" | tr -d '\r\n')
+  [[ -n $dev ]] || { echo "SKIP $p (no such partition)"; continue; }
+  size=$(remote "blockdev --getsize64 $dev" | tr -d '\r\n')
+  want=$(remote "sha256sum $dev" | awk '{print $1}')
+  printf '%-12s %10s bytes ... ' "$p" "$size"
+  # dd straight down the ssh pipe: no temp file on the phone, nothing written.
+  remote "dd if=$dev bs=1M 2>/dev/null" > "$OUT/$p.img"
+  got=$(sha256sum "$OUT/$p.img" | awk '{print $1}')
+  local_size=$(stat -c%s "$OUT/$p.img")
+  if [[ $got == "$want" && $local_size == "$size" ]]; then
+    echo "ok"
+    printf '%s  %s.img\n' "$got" "$p" >> "$sums"
+    total=$((total + local_size))
+  else
+    echo "MISMATCH (phone $want/$size, here $got/$local_size)"
+    rm -f "$OUT/$p.img"
+    failed=$((failed + 1))
+  fi
+done
+
+printf '\n%s bytes backed up into %s\n' "$total" "$OUT"
+if (( failed )); then
+  echo "$failed partition(s) FAILED to verify -- do not treat this backup as usable" >&2
+  exit 1
+fi
+echo "every partition verified by sha256 on the phone and here."
+echo "Restore (phone in fastboot, USB): fastboot flash <name> <name>.img"

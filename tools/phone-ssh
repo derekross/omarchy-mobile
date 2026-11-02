@@ -69,7 +69,8 @@ PYCONTEXT
   # short policy hash leaves room for OpenSSH's temporary 17-byte suffix.
   path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
 fi
-opts=(-o LogLevel=ERROR -o ConnectTimeout=6)
+# NFS-root package writes can delay USB SSH's TCP handshake.
+opts=(-o LogLevel=ERROR -o ConnectTimeout=20)
 if [[ -n $known ]]; then
   # This -o value is parsed again as ssh_config: protect spaces and quotes.
   quoted=${known//\\/\\\\}

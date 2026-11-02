@@ -1,0 +1,46 @@
+#!/bin/sh
+# Join the tailnet unattended, then destroy the key. Idempotent: a no-op once
+# logged in, so every later boot just rejoins from tailscaled's own state.
+#
+# Nothing here is hardcoded. Everything comes from the config file, and every
+# value has a default, so an empty or missing config is a quiet no-op.
+set -eu
+
+# Overridable only so this script can be tested as-is; production leaves these.
+CONF=${OMAMOBILE_TS_CONF:-/etc/omamobile/tailscale.conf}
+
+# Defaults. The config file may override any of them.
+TS_AUTHKEY_FILE=/etc/omamobile/tailscale.authkey
+TS_HOSTNAME=$(hostname 2>/dev/null || echo omamobile)
+TS_UP_ARGS=--accept-dns=false
+TS_KEEP_KEY=0
+
+# The config is data: KEY=value lines only, no shell, so a typo cannot run code.
+if [ -r "$CONF" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case $line in
+            ''|\#*) continue ;;
+            TS_AUTHKEY_FILE=*|TS_HOSTNAME=*|TS_UP_ARGS=*|TS_KEEP_KEY=*) ;;
+            *) echo "omamobile-tailscale: ignoring unknown setting: ${line%%=*}" >&2; continue ;;
+        esac
+        key=${line%%=*}
+        value=${line#*=}
+        # strip one layer of surrounding quotes, if present
+        case $value in \"*\") value=${value#\"}; value=${value%\"} ;; esac
+        eval "$key=\$value"
+    done < "$CONF"
+fi
+KEY=${OMAMOBILE_TS_KEY:-$TS_AUTHKEY_FILE}
+
+# Already joined? tailscaled persists its node state, so every later boot lands here.
+if tailscale status --json 2>/dev/null | grep -q '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then
+    exit 0
+fi
+[ -s "$KEY" ] || exit 0
+
+# file: keeps the key out of the command line and the journal (tailscale >= 1.38).
+# shellcheck disable=SC2086
+tailscale up --auth-key="file:$KEY" --hostname="$TS_HOSTNAME" $TS_UP_ARGS
+
+# A single-use key must not survive on disk. TS_KEEP_KEY=1 is for a reusable key.
+[ "$TS_KEEP_KEY" = 1 ] || rm -f "$KEY"
