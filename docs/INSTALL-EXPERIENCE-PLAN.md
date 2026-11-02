@@ -414,6 +414,34 @@ flasher uses 6.3's fallback (the user saves the zip, the page reads it from
 disk with the File System Access API or a file input). A proxy of ours is
 not an option (§2). The desktop app has no such limit.
 
+### 6.5 Shipping Google's files ourselves
+
+This is our reading of Google's published terms, not legal advice.
+
+Google's [factory images page](https://developers.google.com/android/images)
+says the images "are for use only on your personal Nexus or Pixel devices"
+and "may not be disassembled, decompiled, reverse engineered, modified or
+redistributed by you", and that downloading them is subject to Google's
+Terms of Service **[D]**.
+
+- **So the design stays as it is:** the user's own machine (or the user's
+  own phone, §9) downloads the factory image from Google, for that user's
+  own Pixel, and the files the phone needs are extracted locally. That is
+  the most defensible reading of those terms we have. It isn't spotless:
+  "modified" makes any extraction a grey area, one that every system other
+  than Google's running on a Pixel shares.
+- **Bundling or hosting Google's vendor files ourselves is out**, in a
+  bundle, a package or anywhere on our servers, unless Google gives written
+  permission, or a lawyer's opinion says otherwise. The maintainer may ask
+  Google (D7).
+- **If permission came,** the provisioning step shrinks: the release would
+  carry the device's firmware and vendor files itself (a firmware package
+  per device in `[omamobile]`, installed in the root image), so the install
+  needs no factory image, no terms screen, no build index and no extraction,
+  and the first start has everything. M5 then becomes ordinary package
+  updates through the Updater. The per-phone data (the radio backup, the
+  board id, the NV checksums) would still come from the phone itself.
+
 ## 7. Recovery and going back to stock
 
 In the same installer, as first-class screens:
@@ -709,3 +737,8 @@ never offered: that write stays a manual, named exception.
 - **D6. The build index's home:** beside `latest.json` on our server,
   inside a package in `[omamobile]`, or both; signed by the release key
   either way.
+- **D7. Shipping Google's files ourselves (§6.5):** keep fetching from
+  Google and extracting locally (the plan's design), and optionally ask
+  Google for written permission to redistribute the vendor files, or get a
+  lawyer's opinion first. Nothing is bundled or hosted unless one of those
+  says it may be.
