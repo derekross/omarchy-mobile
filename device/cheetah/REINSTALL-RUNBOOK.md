@@ -211,7 +211,7 @@ version, stop and ask (CONTRIBUTING §3.1).
 ### I2. Dry run (risk none: reads variables, prepares a local copy, writes nothing)
 
 ```sh
-tools/install-phone --dry-run --bootloader-slots-match <version from I1>
+tools/install-phone --dry-run --reinstall --bootloader-slots-match <version from I1>
 ```
 
 Answer the questions (user name, PIN or password twice, host name, time
@@ -224,7 +224,7 @@ five `fastboot flash <image>_b`, `fastboot flash userdata <work>/root.simg`,
 ### I3. Install (risk HIGH: erases userdata; slot A untouched)
 
 ```sh
-tools/install-phone --bootloader-slots-match <version from I1>
+tools/install-phone --reinstall --bootloader-slots-match <version from I1>
 ```
 
 Same answers; type `cheetah`. Expect `OKAY` from fastboot for each image,

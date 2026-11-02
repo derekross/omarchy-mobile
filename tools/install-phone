@@ -48,6 +48,10 @@
 #                            when the bootloader reports no per-slot versions:
 #                            you checked the other slot carries VERSION too
 #                            (it must equal the current slot's)
+#     --reinstall            slot B is the current slot and holds Omarchy Mobile
+#                            (a reinstall); without it, a phone running from
+#                            slot B is refused, since that is where stock
+#                            Android runs after a system update
 #     --unsigned             accept a bundle without SHA256SUMS.sig (development)
 #
 # Answers are read from standard input, so they can be piped for tests.
@@ -67,7 +71,7 @@ say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
 
-dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0
+dry=0 device="" images="" rootfs="" work="" slots_match="" unsigned=0 reinstall=0
 while (($#)); do
   case $1 in
     --dry-run) dry=1 ;;
@@ -76,6 +80,7 @@ while (($#)); do
     --rootfs) rootfs=${2:?}; shift ;;
     --work) work=${2:?}; shift ;;
     --bootloader-slots-match) slots_match=${2:?}; shift ;;
+    --reinstall) reinstall=1 ;;
     --unsigned) unsigned=1 ;;
     -h|--help) sed -n '3,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (see --help)" ;;
@@ -400,6 +405,15 @@ else
   die "the phone only reports slot ${current_slot:-?}'s bootloader ($current_bl). Setting slot B active runs slot B's bootloader, so both must match. Check the other slot (fastboot getvar version-bootloader while it is current), then rerun with --bootloader-slots-match $current_bl"
 fi
 note "$CODENAME, unlocked, current slot ${current_slot:-?}"
+# Stock Android must be the one on slot A. An Android system update writes the
+# other slot and switches to it, so a phone that took one can run stock from
+# slot B, and writing slot B would overwrite the stock system in use. From
+# fastboot alone a reinstall (Omarchy Mobile on B) looks the same, so the
+# owner says which it is.
+if [[ $current_slot == b && $reinstall != 1 ]]; then
+  die "the phone runs from slot b. If stock Android is on slot b (after an Android system update), installing would overwrite it: make slot a active (fastboot --set-active=a), flash Google's factory image onto it, check Android starts, then rerun. If slot b holds Omarchy Mobile (a reinstall), rerun with --reinstall"
+fi
+[[ $current_slot == b ]] && note "slot b holds Omarchy Mobile (--reinstall): it will be replaced"
 # Each image must fit its slot B partition, an AVB_FOOTERS image exactly.
 for p in $BOOT_IMAGES; do
   psize=$(sed -nE "s/^partition-size:${p}_b:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
