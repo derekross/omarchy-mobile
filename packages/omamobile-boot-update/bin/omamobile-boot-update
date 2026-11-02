@@ -53,8 +53,10 @@
 #   7. The battery must be at 30% or more, or charging.
 #   8. Slot B's current contents (whole partitions) and that release's
 #      module tree go to /var/lib/omamobile/boot/previous, unless slot B
-#      holds a set that never booted or a write was left incomplete: then
-#      previous keeps the last set that did boot.
+#      was written since this boot (the kernel's write counters in
+#      /sys/block/<lun>/<part>/stat: this tool, push, a rollback; a fastboot
+#      flash comes before the boot and counts as booted) or a write was
+#      left incomplete: then previous keeps the last set that did boot.
 #   9. Each image: dd conv=fsync, the kernel's buffers dropped, then the
 #      partition's leading bytes read back and compared by sha256. Any
 #      failure stops here and leaves previous for `rollback`.
@@ -378,16 +380,42 @@ confirm() {
 
 # Slot B's whole partitions and the release that booted from them, into
 # previous/, swapped in only once complete.
+# The slot B images written since this boot, from the kernel's own write
+# counters (field 7 of /sys/block/<lun>/<part>/stat, sectors written). A set
+# that booted from slot B is still there exactly when none was written: a
+# fastboot flash (the documented recovery) happens before the boot and is
+# not counted; this tool's own writes, bin/omamobile push and a rollback in
+# the same boot are. An unreadable counter counts as written.
+written_since_boot() {
+  local img name f n out=()
+  for img in $DEV_BOOT_IMAGES; do
+    name=${PART_DEV[$img]##*/}
+    f=$(sysfs_part "$name")/stat
+    n=$(awk '{print $7}' "$f" 2>/dev/null || true)
+    [[ $n == 0 ]] || out+=("${img}_b")
+  done
+  echo "${out[*]}"
+}
+
+# Test roots only: what the kernel's counter does on a real write
+fake_count_write() {
+  local f
+  real_root && return 0
+  f=$(sysfs_part "${1##*/}")/stat
+  [[ -f $f ]] || return 0
+  awk -v s="$(( ($2 + 511) / 512 ))" '{ $7 += s; print }' "$f" > "$f.new" && mv "$f.new" "$f"
+}
+
 save_previous() {
-  local img dev bytes rel booted=yes need avail new=$STATE/previous.new
+  local img dev bytes rel booted=yes need avail written new=$STATE/previous.new
+  # Booted means slot B unwritten since this boot, whatever any record says:
+  # then it holds the running kernel's set
   rel=$UNAME_R
-  # current/ only counts while slot B still holds it; after a flash or push
-  # outside this tool slot B holds what booted, as with no record at all
-  if [[ $(current_state) == yes ]]; then
-    rel=$(cat "$STATE/current/RELEASE")
-    [[ $rel == "$UNAME_R" ]] || booted=no
-  elif [[ -f $STATE/current/RELEASE ]]; then
-    note "slot B changed outside omamobile-boot-update since it last wrote $(cat "$STATE/current/RELEASE"): taking it as the running $UNAME_R"
+  written=$(written_since_boot)
+  if [[ -n $written ]]; then
+    booted=no
+    rel=unknown
+    [[ $(current_state) != yes ]] || rel=$(cat "$STATE/current/RELEASE")
   fi
   if [[ -e $STATE/incomplete ]]; then
     if [[ -d $STATE/previous ]]; then
@@ -397,8 +425,10 @@ save_previous() {
     booted=no
     note "an earlier write did not finish and nothing was saved before it: saving slot B as it is, for what it is worth"
   elif [[ $booted == no && -d $STATE/previous ]]; then
-    note "slot B holds $rel, written but never booted: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), the last set that booted"
+    note "slot B was written since this boot ($written; it holds $rel) and has not booted: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), the last set that booted"
     return 0
+  elif [[ $booted == no ]]; then
+    note "slot B was written since this boot ($written) and nothing was saved before: saving it as it is, marked not booted"
   fi
   need=0
   for img in $DEV_BOOT_IMAGES; do need=$((need + PART_BYTES[$img])); done
@@ -437,6 +467,7 @@ write_one() {
   size=$(stat -c %s "$file")
   want=$(sha_file "$file")
   dd if="$file" of="$dev" bs=1M conv=fsync,notrunc status=none || die "writing ${img}_b ($dev) failed: slot B is incomplete; omamobile-boot-update rollback restores the saved set"
+  fake_count_write "$dev" "$size"
   # Drop the kernel's cached copy so the read-back comes from the device
   if real_root; then blockdev --flushbufs "$dev" || true; fi
   got=$(sha_head "$dev" "$size")
@@ -471,6 +502,8 @@ do_write() {
       grep -cE "  $img\.img$" "$src/SHA256SUMS" >/dev/null || refuse "$src/SHA256SUMS does not cover $img.img"
     done
     RELEASE=$(cat "$src/RELEASE" 2>/dev/null || true)
+    [[ $(cat "$src/BOOTED" 2>/dev/null) != no ]] \
+      || note "the saved set was written in a boot that never restarted into it (BOOTED=no): it may not boot either"
     check_sizes "$src" 1
   fi
   for img in $DEV_BOOT_IMAGES; do

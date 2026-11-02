@@ -326,6 +326,7 @@ mkroot() { # R
     case $p in boot_b|init_boot_b|vendor_boot_b|vendor_kernel_boot_b|dtbo_b|userdata) echo 0 ;; *) echo 1 ;; esac > "$R/sys/block/sda/sda$i/ro"
     case $p in boot_*) s=0x40000 ;; init_boot_*) s=0x20000 ;; *) s=0x10000 ;; esac
     echo $((s / 512)) > "$R/sys/block/sda/sda$i/size"
+    echo '0 0 0 0 0 0 0 0 0 0 0' > "$R/sys/block/sda/sda$i/stat"
     # Old contents: every partition distinct, so any stray write shows
     { printf "OLD %s\n" "$p"; head -c $((s)) /dev/zero | tr "\0" o; } | head -c $((s)) > "$R/dev/sda$i"
   done
@@ -360,6 +361,14 @@ battery() { # R percent status online
   echo USB > "$1/sys/class/power_supply/usb/type"; echo "$4" > "$1/sys/class/power_supply/usb/online"
 }
 sums() { (cd "$1/dev" && sha256sum sd*); }
+# A restart: the kernel's write counters start at 0 again
+reboot_counters() { local f; for f in "$1"/sys/block/sda/sda*/stat; do echo '0 0 0 0 0 0 0 0 0 0 0' > "$f"; done; }
+# Another writer (push, a hand dd) since this boot: the bytes and the counter
+outside_write() { # R partname text
+  local p; p=$(part "$1" "$2")
+  printf '%s\n' "$3" | dd of="$p" conv=notrunc status=none
+  awk '{ $7 += 8; print }' "$1/sys/block/sda/${p##*/}/stat" > "$t/stat.new" && mv "$t/stat.new" "$1/sys/block/sda/${p##*/}/stat"
+}
 part() { local s; for s in "$1"/sys/block/sda/sda*; do grep -qx "PARTNAME=$2" "$s/uevent" && { echo "$1/dev/${s##*/}"; return; }; done; }
 img_on() { # R partname: the partition starts with an image line
   head -c 4 "$(part "$1" "$2")"
@@ -516,7 +525,7 @@ pass "AVB footers: AOSP's test key, checked by checksum, or the configured AVB_K
 # that did boot
 addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
 run hook || { cat "$t/out"; fail "a newer release is written"; }
-grep -c 'never booted' "$t/out" >/dev/null || fail "it says slot B's set never booted"
+grep -c 'has not booted' "$t/out" >/dev/null || fail "it says slot B's set never booted"
 [[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "previous still holds the release that booted"
 [[ $(cat "$S/current/RELEASE") == 7.3.0-rc6-omamobile-00460-gcccccccccccc ]] || fail "the release linux-omamobile names is written"
 pass "an unbooted set never replaces the saved set that booted"
@@ -623,6 +632,7 @@ run hook || { cat "$t/out"; fail "recovery scenario: write K2 while running K1";
 for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
   dd if="$S/previous/$p.img" of="$(part "$R" ${p}_b)" conv=notrunc status=none
 done
+reboot_counters "$R"   # fastboot writes before the boot: nothing counted
 "$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "after a flash of the saved set, preflight passes (the record is stale)"; }
 "$U" status > "$t/st" 2>&1
 grep -c '^slot B: *changed outside omamobile-boot-update' "$t/st" >/dev/null || { cat "$t/st"; fail "status says slot B changed outside the tool"; }
@@ -637,6 +647,35 @@ addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
 run hook || { cat "$t/out"; fail "the fixed kernel is written after the recovery"; }
 [[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb && $(cat "$S/previous/BOOTED") == yes ]] || fail "previous is the running set"
 pass "after the fastboot recovery (or push) a stale record blocks nothing; a no-op rollback records slot B; status says which"
+
+# "Booted" comes from the kernel's write counters, not from a release name
+# S1: running K1, a device-package update rewrites K1's initramfs; with no
+# restart a second update runs the hook: previous keeps the set that booted
+mkroot "$R"
+k1=7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa
+OMAMOBILE_BOOT_UNAME_R=$k1 run hook || { cat "$t/out"; fail "S1: the first same-release write"; }
+[[ $(head -c 10 "$S/previous/boot.img") == "OLD boot_b" ]] || fail "S1: previous holds the set that booted"
+OMAMOBILE_BOOT_UNAME_R=$k1 STUB_EXTRA=second run hook || { cat "$t/out"; fail "S1: the second write"; }
+grep -c 'written since this boot' "$t/out" >/dev/null || { cat "$t/out"; fail "S1: it says slot B was written since this boot"; }
+[[ $(head -c 10 "$S/previous/boot.img") == "OLD boot_b" && $(cat "$S/previous/BOOTED") == yes ]] || fail "S1: previous still holds the set that booted"
+# S2: the hook wrote K2; a push dies after boot_b; an update to K3: the
+# booted K1 set stays saved, not the half-pushed slot B
+mkroot "$R"
+run hook || { cat "$t/out"; fail "S2: K2 written"; }
+outside_write "$R" boot_b HALF-PUSHED
+addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
+run hook || { cat "$t/out"; fail "S2: K3 written"; }
+[[ $(head -c 10 "$S/previous/boot.img") == "OLD boot_b" && $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] \
+  || fail "S2: previous keeps the K1 set that booted, not the half-pushed slot B"
+# S3: no record; a push writes slot B and the restart doesn't happen; an
+# update: what is saved is marked not booted, and a rollback says so
+mkroot "$R"
+for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b; do outside_write "$R" $p PUSHED; done
+run hook || { cat "$t/out"; fail "S3: the write"; }
+[[ $(cat "$S/previous/BOOTED") == no && $(head -c 6 "$S/previous/boot.img") == PUSHED ]] || fail "S3: the pushed, unbooted set is saved as BOOTED=no"
+run rollback --dry-run || { cat "$t/out"; fail "S3: rollback dry run"; }
+grep -c 'BOOTED=no' "$t/out" >/dev/null || { cat "$t/out"; fail "S3: a rollback says the saved set never booted"; }
+pass "booted means slot B unwritten since this boot (write counters): a same-release rewrite, a half push and an unbooted push never replace the set that booted"
 
 # End to end with the real builder (the tools above), when dtc is there:
 # slot B ends up holding exactly what omamobile-boot-images makes
