@@ -330,6 +330,7 @@ mkroot() { # R
     # Old contents: every partition distinct, so any stray write shows
     { printf "OLD %s\n" "$p"; head -c $((s)) /dev/zero | tr "\0" o; } | head -c $((s)) > "$R/dev/sda$i"
   done
+  mkdir -p "$R/sys/block/sda/queue" && echo 1 > "$R/sys/block/sda/queue/iostats"
   printf 'MAJOR=8\nPARTNAME=bootloader_b\n' > "$R/sys/block/sdb/sdb1/uevent"; echo 1 > "$R/sys/block/sdb/sdb1/ro"; echo 128 > "$R/sys/block/sdb/sdb1/size"
   echo BOOTLOADER > "$R/dev/sdb1"
   head -c 5000 /dev/urandom > "$R/usr/lib/omamobile/twelve/dtbo.img"
@@ -675,6 +676,23 @@ run hook || { cat "$t/out"; fail "S3: the write"; }
 [[ $(cat "$S/previous/BOOTED") == no && $(head -c 6 "$S/previous/boot.img") == PUSHED ]] || fail "S3: the pushed, unbooted set is saved as BOOTED=no"
 run rollback --dry-run || { cat "$t/out"; fail "S3: rollback dry run"; }
 grep -c 'BOOTED=no' "$t/out" >/dev/null || { cat "$t/out"; fail "S3: a rollback says the saved set never booted"; }
+# I/O accounting off: the counters say nothing, so slot B counts as written
+mkroot "$R"
+echo 0 > "$R/sys/block/sda/queue/iostats"
+run hook || { cat "$t/out"; fail "iostats off: the write"; }
+[[ $(cat "$S/previous/BOOTED") == no ]] || fail "iostats off: slot B is not taken as booted"
+grep -c 'I/O accounting off' "$t/out" >/dev/null || { cat "$t/out"; fail "iostats off: and it says why"; }
+# preflight: slot B written since this boot with no booted set saved
+mkroot "$R"
+for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b; do outside_write "$R" $p PUSHED; done
+if "$U" preflight --json > "$t/pf"; then fail "preflight refuses after a push with no booted set saved"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "no set that booted is saved" in d["problem"], d' "$t/pf" || fail "preflight says restart first"
+run hook || { cat "$t/out"; fail "the hook itself still writes"; }
+if "$U" preflight --json > "$t/pf"; then fail "preflight still refuses with previous/ BOOTED=no"; fi
+"$U" status > "$t/st" 2>&1; grep -c '^previous: .*(booted: no)' "$t/st" >/dev/null || { cat "$t/st"; fail "status shows BOOTED"; }
+reboot_counters "$R"
+"$U" preflight --json > "$t/pf" || true
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "no set that booted" not in d["problem"], d' "$t/pf" || fail "after a restart that refusal is gone"
 pass "booted means slot B unwritten since this boot (write counters): a same-release rewrite, a half push and an unbooted push never replace the set that booted"
 
 # End to end with the real builder (the tools above), when dtc is there:

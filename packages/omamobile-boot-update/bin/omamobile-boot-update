@@ -385,9 +385,19 @@ confirm() {
 # that booted from slot B is still there exactly when none was written: a
 # fastboot flash (the documented recovery) happens before the boot and is
 # not counted; this tool's own writes, bin/omamobile push and a rollback in
-# the same boot are. An unreadable counter counts as written.
+# the same boot are. An unreadable counter counts as written, and so does
+# every image when the disk's I/O accounting is off (queue/iostats not 1:
+# the counters would stay 0). Field 7 counts writes through the partition's
+# block device (dd, as this tool and push write); discards, SG_IO
+# passthrough and writes to the whole disk are not counted there, which no
+# writer of ours does (the storage guard removes the main LUN's disk node).
 written_since_boot() {
   local img name f n out=()
+  if [[ $(cat "$SYS/block/$DEV_MAIN_LUN/queue/iostats" 2>/dev/null) != 1 ]]; then
+    for img in $DEV_BOOT_IMAGES; do out+=("${img}_b"); done
+    echo "${out[*]} (I/O accounting off)"
+    return 0
+  fi
   for img in $DEV_BOOT_IMAGES; do
     name=${PART_DEV[$img]##*/}
     f=$(sysfs_part "$name")/stat
@@ -425,7 +435,11 @@ save_previous() {
     booted=no
     note "an earlier write did not finish and nothing was saved before it: saving slot B as it is, for what it is worth"
   elif [[ $booted == no && -d $STATE/previous ]]; then
-    note "slot B was written since this boot ($written; it holds $rel) and has not booted: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), the last set that booted"
+    if [[ $(cat "$STATE/previous/BOOTED" 2>/dev/null) == no ]]; then
+      note "slot B was written since this boot ($written; it holds $rel) and has not booted: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), which never booted either"
+    else
+      note "slot B was written since this boot ($written; it holds $rel) and has not booted: keeping previous/ ($(cat "$STATE/previous/RELEASE" 2>/dev/null)), the last set that booted"
+    fi
     return 0
   elif [[ $booted == no ]]; then
     note "slot B was written since this boot ($written) and nothing was saved before: saving it as it is, marked not booted"
@@ -643,7 +657,7 @@ cmd_status() {
              *) echo "not written by this tool" ;;
            esac) 2>/dev/null) || slot="unknown (partitions not readable)"
   echo "slot B:      $slot"
-  echo "previous:    $(cat "$STATE/previous/RELEASE" 2>/dev/null || echo none)"
+  echo "previous:    $(cat "$STATE/previous/RELEASE" 2>/dev/null || echo none)$([[ -d $STATE/previous ]] && echo " (booted: $(cat "$STATE/previous/BOOTED" 2>/dev/null || echo unknown))")"
   [[ ! -e $STATE/incomplete ]] || echo "INCOMPLETE:  $(cat "$STATE/incomplete") (omamobile-boot-update rollback, or write again)"
   [[ ! -f $RUN/boot-update.json ]] || echo "last result: $(cat "$RUN/boot-update.json")"
   for img in $DEV_BOOT_IMAGES; do
@@ -658,7 +672,14 @@ cmd_status() {
 # top of it would have pacman remove that release's modules, and
 # kernel-modules-hook keeps only the running release's: restart into it first.
 check_booted() {
-  local cur
+  local cur written
+  # Slot B written since this boot with no booted set saved (none, or one
+  # marked BOOTED=no): a kernel update now would leave nothing that is known
+  # to boot. The hook itself still writes; only preflight stops here.
+  written=$(written_since_boot)
+  if [[ -n $written && ( ! -d $STATE/previous || $(cat "$STATE/previous/BOOTED" 2>/dev/null) == no ) ]]; then
+    refuse "slot B was written since this boot ($written) and no set that booted is saved: restart into it before the next kernel update"
+  fi
   # A record slot B no longer matches (flash, push) says nothing: pass
   [[ $(current_state) == yes ]] || return 0
   cur=$(cat "$STATE/current/RELEASE")
