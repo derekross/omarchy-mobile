@@ -1,11 +1,14 @@
 The speech model in this package is OpenAI's Whisper base.en, converted to
 the ggml format by the whisper.cpp project
 (https://huggingface.co/ggerganov/whisper.cpp). Both are under the MIT
-license. Whisper's license (https://github.com/openai/whisper):
+license, and both notices follow: Whisper's (https://github.com/openai/whisper)
+for the weights, whisper.cpp's (https://github.com/ggml-org/whisper.cpp) for
+the ggml conversion.
 
 MIT License
 
 Copyright (c) 2022 OpenAI
+Copyright (c) 2023-2026 The ggml authors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

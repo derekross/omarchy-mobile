@@ -25,7 +25,8 @@ fake gsettings 'echo "gsettings $*" >>"$HOME/calls"
 if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
   printf "default-folder-viewer\n"; [[ -n ${GSETTINGS_NO_CLICK_POLICY:-} ]] || printf "click-policy\n"
 fi'
-fake systemctl 'echo "systemctl $*" >>"$HOME/calls"'
+# systemctl: logs calls; fails while $HOME/systemctl-fails exists (no user manager)
+fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]]'
 fake chromium 'echo "Chromium 153.0.0.0"'
 fake omamobile-keyboard-theme 'echo "omamobile-keyboard-theme $*" >>"$HOME/calls"'
 for f in monitors looknfeel autostart; do echo "-- $f" >"$H/.config/hypr/$f.lua"; done
@@ -266,6 +267,26 @@ printf '[whisper]\nmodel = "tiny.en"\n' >"$ho/.config/voxtype/config.toml"
 RUN_HOME=$ho RUN_VOICE_MODELS=$VM run
 [[ ! -L $ho/.local/share/voxtype/models/ggml-base.en.bin && $(cat "$ho/.local/share/voxtype/models/ggml-base.en.bin") == own ]] || fail "a downloaded model stays"
 vc "$ho" | grep -cx 'model = "tiny.en"' >/dev/null || fail "the user's Voxtype config stays"
+# A failed enable (firstboot without a user manager) is tried again at the
+# next login, and only until it works; the once-only parts don't repeat
+hr=$t/voice-retry; vhome "$hr"; rm -rf "$hr/.config/voxtype" "$hr/.local/share/voxtype"; touch "$hr/systemctl-fails"
+RUN_HOME=$hr RUN_VOICE_MODELS=$VM run
+[[ -L $hr/.local/share/voxtype/models/ggml-base.en.bin && -f $hr/.config/voxtype/config.toml ]] || fail "a failed enable still leaves the config and the link"
+[[ ! -e $hr/.local/state/omarchy/done/omamobile-voxtype-enabled ]] || fail "a failed enable isn't marked done"
+rm "$hr/systemctl-fails" "$hr/.config/voxtype/config.toml"
+RUN_HOME=$hr RUN_VOICE_MODELS=$VM run
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hr/calls") == 2 ]] || fail "the enable is tried again at the next login"
+[[ -e $hr/.local/state/omarchy/done/omamobile-voxtype-enabled ]] || fail "a working enable is marked done"
+[[ ! -e $hr/.config/voxtype/config.toml ]] || fail "the retry doesn't copy the config again"
+RUN_HOME=$hr RUN_VOICE_MODELS=$VM run
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hr/calls") == 2 ]] || fail "no enable after it worked"
+# Dictation removed (voxtype gone) before an enable worked: nothing is retried
+hd=$t/voice-removed; vhome "$hd"; rm -rf "$hd/.config/voxtype" "$hd/.local/share/voxtype"; touch "$hd/systemctl-fails"
+RUN_HOME=$hd RUN_VOICE_MODELS=$VM run
+rm -f "$hd/systemctl-fails"; rm -rf "$hd/.config/voxtype" "$hd/.local/share/voxtype"
+RUN_HOME=$hd RUN_VOICE_MODELS=$VM RUN_VOXTYPE=$t/no-voxtype run
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hd/calls") == 1 ]] || fail "without voxtype the enable isn't retried"
+[[ ! -e $hd/.local/share/voxtype && ! -e $hd/.config/voxtype ]] || fail "a user who removed Dictation gets nothing back"
 # Without voxtype, or without the model package: nothing, and no marker
 for case in novox nomodel; do
   hx=$t/voice-$case; vhome "$hx"; rm -rf "$hx/.config/voxtype" "$hx/.local/share/voxtype"
@@ -275,7 +296,7 @@ for case in novox nomodel; do
   if grep -c 'enable voxtype' "$hx/calls" >/dev/null 2>&1; then fail "$case: voxtype.service isn't enabled"; fi
 done
 rm "$F/voxtype"
-pass "voice out of the box: Omarchy's config, the shipped base.en linked, the daemon enabled, once"
+pass "voice out of the box: Omarchy's config and the shipped base.en once, the daemon enabled until it works, a removal kept"
 
 # The keyboard: every layout the package carries linked (the terminal's, and
 # each language's from squeekboard/generate), the theme written at every

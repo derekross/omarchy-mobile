@@ -423,24 +423,36 @@ fi
 # shipped file; Voxtype looks only in ~/.local/share/voxtype/models) and the
 # packaged user daemon enabled, so it starts with the graphical session.
 # Omarchy's "Install Dictation" invitation is marked done, as its install
-# would leave it. Once per user, and only with both installed: a config or a
-# model the user already has stays, and a user who later removes Dictation
-# (Remove > Dictation) doesn't get it back at the next login.
+# would leave it. Only with both installed. The config, the link and the
+# invitation happen once per user: a config or a model the user already has
+# stays, and one they delete later isn't brought back. The enable has its
+# own marker, set only when it succeeds, so a failed one (firstboot carries
+# on without a user manager) is tried again at the next login. A user who
+# removes Dictation (Remove > Dictation takes voxtype-bin out) gets nothing.
 voxconf=~/.config/voxtype/config.toml
 voxmodels=${OMAMOBILE_VOICE_MODELS:-/usr/share/omamobile/voice/models}
-if command -v "${OMAMOBILE_VOXTYPE:-voxtype}" >/dev/null && [[ -f $voxmodels/ggml-base.en.bin ]] &&
-  omarchy-done ensure omamobile-voxtype-setup; then
-  omarchy-done mark voxtype-install-invitation
-  voxdefault=${OMARCHY_PATH:-/usr/share/omarchy}/default/voxtype/config.toml
-  if [[ ! -f $voxconf && -f $voxdefault ]]; then
-    mkdir -p "${voxconf%/*}"
-    cp "$voxdefault" "$voxconf"
+if command -v "${OMAMOBILE_VOXTYPE:-voxtype}" >/dev/null && [[ -f $voxmodels/ggml-base.en.bin ]]; then
+  if omarchy-done ensure omamobile-voxtype-setup; then
+    omarchy-done mark voxtype-install-invitation
+    voxdefault=${OMARCHY_PATH:-/usr/share/omarchy}/default/voxtype/config.toml
+    if [[ ! -f $voxconf && -f $voxdefault ]]; then
+      { mkdir -p "${voxconf%/*}" && cp "$voxdefault" "$voxconf"; } ||
+        echo "omamobile-setup-user: could not copy Omarchy's Voxtype config" >&2
+    fi
+    mkdir -p ~/.local/share/voxtype/models || true
+    for model in "$voxmodels"/ggml-*.bin; do
+      [[ -e ~/.local/share/voxtype/models/${model##*/} ]] ||
+        ln -sfn "$model" ~/.local/share/voxtype/models/"${model##*/}" ||
+        echo "omamobile-setup-user: could not link ${model##*/}" >&2
+    done
   fi
-  mkdir -p ~/.local/share/voxtype/models
-  for model in "$voxmodels"/ggml-*.bin; do
-    [[ -e ~/.local/share/voxtype/models/${model##*/} ]] || ln -sfn "$model" ~/.local/share/voxtype/models/"${model##*/}"
-  done
-  systemctl --user enable voxtype.service || echo "omamobile-setup-user: could not enable voxtype.service" >&2
+  if omarchy-done check omamobile-voxtype-setup && ! omarchy-done check omamobile-voxtype-enabled; then
+    if systemctl --user enable voxtype.service; then
+      omarchy-done mark omamobile-voxtype-enabled
+    else
+      echo "omamobile-setup-user: could not enable voxtype.service; trying again at the next login" >&2
+    fi
+  fi
 fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
 # stays the model, with Whisper's audio context cut to the clip's length

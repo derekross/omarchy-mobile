@@ -56,19 +56,37 @@ Voice works out of the box on a fresh install: no Install > AI > Dictation
 step and no download. The root image installs Voxtype (`voxtype-bin` from
 [omarchy], in `rootfs/packages.base`) and Whisper's base.en speech model
 (`packages/omamobile-voice`, 141 MiB in `/usr/share/omamobile/voice/models`).
+The model counts twice in the image: the image also carries its own copy of
+the [omamobile] repository (`/var/lib/omamobile/repo`, for offline
+reinstalls), where the package archive is another 141 MiB that won't
+compress. With voxtype-bin (71 MB installed, its archive is in Omarchy's
+repository, not ours) the root image grows by about 370 MB unpacked and
+about 325 MB compressed (2.8 GB before).
+
 At the user's first setup `omamobile-setup-user` does what Omarchy's
 `omarchy-voxtype-install` does, minus the download: it copies Omarchy's
 Voxtype config, links the shipped model into
 `~/.local/share/voxtype/models` (the only place Voxtype looks), enables
 the packaged `voxtype.service` user daemon (it starts with the graphical
-session) and marks Omarchy's "Install Dictation" invitation done. It runs
-once per user and keeps a config or model the user already has; a user who
-removes Dictation (Remove > Dictation) doesn't get it back. The settings'
-Fast (tiny.en, 75 MB) and Accurate (small.en) models still download on
-request; without tiny.en the live preview uses base.en, with a pass every
-2.5 s instead of 1.2 s. Phones installed before this keep their setup:
-`omamobile-voice` is an optional dependency, and Omarchy's own install
-works as before.
+session) and marks Omarchy's "Install Dictation" invitation done. The
+config and the link happen once per user, and a config or model the user
+already has stays; the enable is retried at each login until it works
+(firstboot may run without a user manager). The settings' Fast (tiny.en,
+75 MB) and Accurate (small.en) models still download on request; without
+tiny.en the live preview uses base.en, with a pass every 2.5 s instead of
+1.2 s. Phones installed before this keep their setup: `omamobile-voice` is
+an optional dependency, and Omarchy's own install works as before.
+
+To remove dictation completely: Remove > Dictation (Omarchy's
+`omarchy-voxtype-remove`) takes out voxtype-bin, the user's Voxtype config
+and the model link, and setup leaves it removed; the shipped model stays
+until `sudo pacman -R omamobile-voice` frees its 141 MiB. Installing
+Dictation again through Omarchy's menu then downloads base.en itself.
+
+Building `omamobile-voice` needs huggingface.co the first time on a build
+machine: the model comes from a pinned commit of whisper.cpp's model
+repository with a pinned sha256, and makepkg keeps it in its source cache
+afterwards.
 
 ## File dialogs
 

@@ -10,6 +10,12 @@
 # ~/.local/share/voxtype/models, the only place Voxtype looks, and enables
 # the daemon. The weights are OpenAI's Whisper (MIT), converted to ggml by
 # whisper.cpp (MIT).
+# The build needs huggingface.co the first time: makepkg keeps the file in
+# SRCDEST (tools/build-packages: $ALARM_CACHE/src) under a commit-named file,
+# so later builds and version bumps don't fetch it again, but a new build
+# machine or a cleared cache does, and an outage there stops the build.
+# makepkg has no fallback for one source; a copy on our own server would
+# replace this URL (same file name, same sha256).
 pkgname=omamobile-voice
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
