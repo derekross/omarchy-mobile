@@ -107,6 +107,13 @@ o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyb
 -- the release then turned it off again. Touch still wakes it.
 hl.config({ misc = { key_press_enables_dpms = false } })
 
+-- Hyprland 0.57 turned quirks:skip_non_kms_dmabuf_formats on by default: it
+-- offers clients only the formats a display plane can scan out. gs201's DECON
+-- planes take XRGB8888, with no alpha, so the shell's transparent layers (home,
+-- the back edges, the fingerprint target and guard) came out black. Composited
+-- by the GPU, any format works. pcall: older Hyprland may not know the option.
+pcall(hl.config, { quirks = { skip_non_kms_dmabuf_formats = false } })
+
 -- The fingerprint target (omamobile.fingerprint) is drawn above the lock
 -- screen too, where the lock runs its fingerprint conversation. 1, not 2: on
 -- the lock it needs no touches (the bridge reads the touchscreen itself),
