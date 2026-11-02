@@ -1987,10 +1987,13 @@ is a US MVNO on a large LTE network.
      the APN's types; sitd sent 0, taken for an MTU). Still 36.
   3. 0.3.8: the recording build (0.3.6) had shown that about a second
      after every refusal the modem sent three IND_REG_FAILED, two
-     IND_NTW_STATE_CHANGED and an empty data-call list, and that it was
-     quiet before the data permission: it re-attaches when
-     SET_MOBILE_DATA_STATE and SET_PS_SERVICE are written, and the setup
-     always landed inside that. The RIL now waits until the modem has
+     IND_NTW_STATE_CHANGED and an empty data-call list. With 0.3.8 the
+     same indications arrived after the data permission
+     (SET_MOBILE_DATA_STATE, SET_PS_SERVICE) and before the setup; the
+     three IND_REG_FAILED read domain CS+PS, PS, PS, each with LTE cause
+     10 (implicitly detached) and additional cause 0 (decoded with the
+     stock library's layout). Whether the permission writes trigger the
+     detach isn't proven; the setup succeeds once it is over. The RIL now waits until the modem has
      been quiet for 3 s after the permission (at most 20 s), reads the
      registration again, and then sends the setup. On its first run the
      six indications came and went in the wait, the registration read 1,
@@ -2016,15 +2019,14 @@ is a US MVNO on a large LTE network.
   six partitions unchanged, `cpif` not loaded, UFS error handler 0.
 
 The run kept the full refused record (292 bytes: status 36, CID 1, the
-IPC extension version at 132-133, the suggested retry time at 235-242 as
-an s64) and the raw indications of the passing run in
-`logs/tegu-sim-20261102/private/` (off the repository). The one open
-question is what the modem's re-attach after the data permission is
-about: the IND_REG_FAILED causes are in that file, decodable with the
-layout from the stock library (domain at 0x0e, main cause 0x0f,
-additional cause 0x10). Stock sends the data permission at radio-on, long
-before any setup, so the better fix may be to move those two requests
-earlier and keep the wait as a safety net.
+IPC extension version at 132, an unidentified extension byte at 133, the
+suggested retry time at 235-242 as an s64) and the raw indications of the passing run in
+`logs/tegu-sim-20261102/private/` (off the repository). The open
+question is what triggers the implicit detach. Stock's handlers send the
+two permission requests separately (SET_PS_SERVICE's success path then
+sleeps 500 ms) and its setup path doesn't send them; the libraries don't
+show when Android's callers do. Sending them earlier, before the last
+registration check, is a reasonable next try, with the wait kept.
 
 **Unqualified after a passing run:** suspend with the modem on (the
 inhibitor stays; M6, two reboots with the CP up: this runbook's attended

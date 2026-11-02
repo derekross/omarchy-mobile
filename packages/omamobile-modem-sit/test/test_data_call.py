@@ -133,6 +133,33 @@ class LifecycleTests(unittest.TestCase):
         self.assertLess(idents.index(0x0710), idents.index(0x0600))
         self.assertEqual(idents.count(0x0701), 2)
 
+    def test_indications_during_the_wait_reach_the_service(self):
+        # An SMS that arrives while the setup waits (or after a refusal) is
+        # handed to the service, which stores and acknowledges it, not only
+        # recorded.
+        sms = struct.pack('<BBHHxx', 2, 0, 0x0d1e, 8 + 4) + b'sms!'
+        for status in (0, 36):
+            modem = Modem(status=status)
+            queue = [sms, None] if status == 0 else [None]
+            after = [sms, None]
+            def next_indication(timeout=1, queue=queue, after=after, modem=modem):
+                if any(i == 0x0600 for i, _ in modem.sent):
+                    return after.pop(0) if after else None
+                return queue.pop(0) if queue else None
+            modem.next_indication = next_indication
+            handled = []
+            ticks = iter(range(10 ** 6))
+            with patch.object(data_call, 'SETTLE_QUIET', 5), patch.object(data_call, 'SETTLE_LIMIT', 5), \
+                    patch('data_call.time.monotonic', side_effect=lambda: next(ticks)), patch('builtins.print'):
+                if status:
+                    with self.assertRaises(RuntimeError):
+                        data_call.activate(modem, APN, on_event=handled.append)
+                else:
+                    data_call.activate(modem, APN, on_event=handled.append)
+                    self.state.unlink()
+                    self.response.unlink(missing_ok=True)
+            self.assertEqual(handled, [sms], f'status {status}')
+
     def test_existing_ownership_prevents_setup(self):
         self.state.write_text('{}')
         modem = Modem()

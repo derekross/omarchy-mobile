@@ -152,11 +152,11 @@ def provision_default_profile(client, apn, ip_type='ipv4v6'):
 
 
 
-# After the data permission is switched on, the modem is given time to say
-# what it does about it before the setup goes out: on 2026-11-02 every setup
-# was answered 36 within 150 ms and was followed within a second by three
-# IND_REG_FAILED and two IND_NTW_STATE_CHANGED, so the modem was re-attaching
-# around the request. The wait ends after SETTLE_QUIET seconds without an
+# After the data permission is switched on, the modem is given time to settle
+# before the setup goes out: on 2026-11-02 every setup was answered 36 within
+# 150 ms and was followed within a second by three IND_REG_FAILED (LTE cause
+# 10, implicitly detached) and two IND_NTW_STATE_CHANGED; with this wait the
+# same indications came and went before the setup, and it succeeded. The wait ends after SETTLE_QUIET seconds without an
 # indication, or at SETTLE_LIMIT.
 SETTLE_QUIET = 3
 SETTLE_LIMIT = 20
@@ -189,7 +189,7 @@ def describe(packet):
     return line
 
 
-def settle(client, label):
+def settle(client, label, on_event=None):
     deadline = time.monotonic() + SETTLE_LIMIT
     last = time.monotonic()
     seen = 0
@@ -204,9 +204,13 @@ def settle(client, label):
         last = time.monotonic()
         keep_packet(packet)
         print(f'{label}: {describe(packet)}', flush=True)
+        if on_event:
+            # Handled as the service handles any indication (an SMS arriving
+            # now is stored and acknowledged), not only recorded.
+            on_event(packet)
     print(f'{label}: {seen} indication(s), then quiet' if seen else f'{label}: quiet', flush=True)
 
-def listen_after_failure(client, seconds=5):
+def listen_after_failure(client, seconds=5, on_event=None):
     """After a refused setup, keep the channel open a few seconds and log
     what the modem sends next: on 2026-11-02 two or three messages arrived
     about a second after each status 36 and were dropped because the channel
@@ -224,9 +228,11 @@ def listen_after_failure(client, seconds=5):
         seen += 1
         keep_packet(packet)
         print(f'after the failure: {describe(packet)}', flush=True)
+        if on_event:
+            on_event(packet)
     print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
 
-def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
+def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False, on_event=None):
     requested_cid = 2 if ims else 1
     state_path, response_path = paths(requested_cid)
     state = client.request(0x0701)
@@ -237,7 +243,7 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
     if state_path.exists() or requested_cid in calls or calls != owned:
         raise RuntimeError('existing target or unresolved bearer ownership')
     allow_data(client)
-    settle(client, 'after allowing data')
+    settle(client, 'after allowing data', on_event)
     # The registration as it stands now, not before the permission: the
     # modem may have re-attached meanwhile.
     for second in range(60):
@@ -274,7 +280,7 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
             failed_path = response_path.with_name(f'failed-setup-cid{requested_cid}.bin')
             private_write(failed_path, result)
             print(f'failed setup response kept privately: {len(result)} bytes', flush=True)
-            listen_after_failure(client)
+            listen_after_failure(client, on_event=on_event)
             raise RuntimeError('data call did not become active')
         private_write(response_path, result)
         print('owned data bearer active; private IP configuration retained in RAM', flush=True)

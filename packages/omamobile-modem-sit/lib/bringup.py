@@ -160,7 +160,7 @@ def start(service, settings, stopped=lambda: False):
         wait_for(service, lambda: packet_registered(client.request(0x0701), lte=True), 120, stopped)
         data_snapshot(client, 'after the NR change')
     service.stage('data')
-    activate(client, apn, ip_type=ip_type)
+    activate(client, apn, ip_type=ip_type, on_event=service.event)
     service.pump()
     if not net.getboolean('ims', True):
         service.ims_state = 'off'
@@ -170,7 +170,7 @@ def start(service, settings, stopped=lambda: False):
     service.stage('ims')
     try:
         start_stack(client)
-        activate(client, net.get('ims_apn', 'ims'), ims=True)
+        activate(client, net.get('ims_apn', 'ims'), ims=True, on_event=service.event)
         register(client)
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and
