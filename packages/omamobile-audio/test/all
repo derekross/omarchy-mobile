@@ -132,7 +132,11 @@ cat > "$fake/debugfs" <<'SH'
 [[ $2 == "cat /audio/speaker.cal" ]] || exit 1
 cat "$FAKE_CAL"
 SH
-chmod +x "$fake/modprobe" "$fake/debugfs"
+cat > "$fake/systemctl" <<'SH'
+#!/bin/bash
+echo "$*" >> "${FAKE_SYSTEMCTL_LOG:-/dev/null}"
+SH
+chmod +x "$fake/modprobe" "$fake/debugfs" "$fake/systemctl"
 
 # Synthetic calibration: two records of six u32 (R, status, checksum, ambient, gain, volume)
 mkcal() {
@@ -188,6 +192,7 @@ sp() {  # run the script against $r
       OMAMOBILE_SPIDEVS="$r/spi" OMAMOBILE_SPIDRV="$r/spidrv" OMAMOBILE_SYSMODULE="$r/module" \
       OMAMOBILE_KMSG="$r/kmsg" OMAMOBILE_AUDIO_LIB="$here/lib" OMAMOBILE_CTL_BACKEND="json:$r/amixer.json" \
       OMAMOBILE_CARD_WAIT=1 OMAMOBILE_CTL_WAIT=1 OMAMOBILE_SPK_STAGE=c8 OMAMOBILE_PCM_BACKEND=fake \
+      OMAMOBILE_SPK_VERIFIED_LIST="$r/verified-firmware" FAKE_SYSTEMCTL_LOG="$r/systemctl.log" \
       "${prep[@]}" bin/omamobile-speaker-protection "$@"
 }
 run() {
@@ -569,6 +574,111 @@ prep=(OMAMOBILE_SPK_ANALOG=11); mktree c8-param; echo Y > "$r/module/aoc_alsa_de
 rc=0; prep=(OMAMOBILE_SPK_ANALOG=11 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
 check_refused_early "c8 keeps analog at 10 even with speaker_protection=1"
 pass "stage c9: stock levels only with speaker_protection=1 and a stamp for this firmware"
+
+# --- the verified firmware list (c9 on a fresh install without a stamp) ---------------
+# The shipped list: comments, or "SYSTEM DIGEST NOTE" lines with a real digest
+bad=$(grep -vE '^[[:space:]]*(#|$)' verified-firmware | grep -vE '^[a-z0-9]+ [0-9a-f]{64}( .*)?$' || true)
+[[ -z $bad ]] || { echo "$bad" >&2; fail "verified-firmware: every entry is SYSTEM DIGEST NOTE"; }
+grep -c '^install -Dm644 verified-firmware "$d/usr/share/omamobile-audio/verified-firmware"$' install >/dev/null || fail "the list is installed"
+mktree digest; fwd=$(sp digest)
+[[ $fwd =~ ^cheetah\ [0-9a-f]{64}$ ]] || fail "digest prints the system and the firmware digest ($fwd)"
+[[ ${fwd#cheetah } == "$(sed -n 's/^firmware //p' "$tmp/stamp")" ]] || fail "digest is the value a stamp records"
+pass "the shipped list is well-formed; digest prints a list line, the stamp's value"
+otherd=$(printf x | sha256sum | cut -c1-64)
+# list SCENARIO-NAME [lines...]: a tree with speaker_protection=1, no stamp, the list's lines
+autolist() {
+  local n=$1; shift
+  mktree "$n"; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+  printf '# a comment\n' > "$r/verified-firmware"; local l; for l in "$@"; do echo "$l" >> "$r/verified-firmware"; done
+}
+spa() { local rc0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); sp "$@"; rc0=$?; prep=(); return $rc0; }
+autostart() { rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 "$@"); sp start > "$r/out" 2>&1 || rc=$?; prep=(); }
+isc9() { ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 817 && $(val "Top Analog PCM Volume") == 11 && $(val "Bottom Analog PCM Volume") == 14 ]]; }
+ismedia() { ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] && grep -c "stage media" "$r/out" >/dev/null; }
+autolist list-hit "$otherd other build" "$fwd verified on the reference phone"; autostart
+isc9 && grep -c 'stage c9 chosen by the verified firmware list' "$r/out" >/dev/null &&
+  [[ $(cat "$r/run/speaker-protection") == "ok: stage c9,"*", from the verified firmware list" ]] &&
+  spa status 2>/dev/null | grep -c 'stage c9 from the verified firmware list; first-stream check: not yet' >/dev/null ||
+  { cat "$r/out" >&2; fail "list hit: c9 at 817/11 top, 817/14 bottom, without a stamp, and says the list chose it"; }
+[[ ! -e $r/state/speaker-protection-verified ]] || fail "list hit: no stamp is written by a start"
+autolist list-miss "cheetah $otherd another firmware"; autostart
+ismedia || { cat "$r/out" >&2; fail "list miss: media at 737/10"; }
+autolist list-empty; autostart; ismedia || fail "an empty list (the shipped one): media"
+autolist list-other-system "raven ${fwd#cheetah } another system's line"; autostart
+ismedia || fail "a digest listed for another system: media"
+autolist list-short "cheetah ${fwd:8:40} a cut digest"; autostart; ismedia || fail "a cut digest matches nothing: media"
+autolist list-noparam "$fwd"; echo N > "$r/module/aoc_alsa_dev/parameters/speaker_protection"; autostart FAKE_ANALOG_MAX=10
+ismedia || fail "list hit without speaker_protection=1: media"
+autolist list-stamp "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart
+isc9 && grep -c "stage c9 chosen by this phone's stamp" "$r/out" >/dev/null &&
+  [[ $(cat "$r/run/speaker-protection") == *", from this phone's stamp" ]] || { cat "$r/out" >&2; fail "stamp and list: the phone's own stamp is the reason"; }
+autolist stamp-only; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart
+isc9 && grep -c "chosen by this phone's stamp" "$r/out" >/dev/null || fail "stamp, empty list: c9 from the stamp, as before"
+autolist list-refused "$fwd"; printf 'date x\nfirmware %s\nreason test\n' "${fwd#cheetah }" > "$r/state/speaker-protection-c9-refused"; autostart
+ismedia || { cat "$r/out" >&2; fail "list hit refused on this phone for this firmware: media"; }
+autolist list-refused-old "$fwd"; printf 'date x\nfirmware %s\nreason test\n' "$otherd" > "$r/state/speaker-protection-c9-refused"; autostart
+isc9 || fail "a refusal for other firmware doesn't hold"
+autolist stamp-refused "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"
+printf 'date x\nfirmware %s\nreason test\n' "${fwd#cheetah }" > "$r/state/speaker-protection-c9-refused"; autostart
+isc9 || fail "the phone's own stamp wins over a refusal of the list"
+# explicit c9 (bring-up) takes the list as well, and still refuses without either
+autolist c9-list "$fwd"; rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 17 ]] || { cat "$r/out" >&2; fail "stage c9 with the firmware in the list"; }
+autolist c9-list-miss "cheetah $otherd"; rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+check_refused_early "c9 with neither a stamp nor a listed digest"
+grep -c 'not in the verified list' "$r/out" >/dev/null || fail "c9 refused: says the firmware is not in the list"
+pass "auto: c9 from the verified firmware list or this phone's stamp, with speaker_protection=1; media on a miss, a refusal or no option"
+
+# The first-stream check (c9 from the list only), at a fixed clock: round k
+# is (k-1) x 0.05 s into the stream; grace 0.1 s, the check 0.2 s after it
+calr() {  # the firmware selects the resistance we wrote, as on the phone
+  local p; for p in Top Bottom; do
+    amx cset "name=$p DSP1 Protection cd CAL_R_SELECTED" "$(val "$p DSP1 Protection cd CAL_R")" >/dev/null
+  done
+}
+firstwatch() {  # extra prep for the watchdog
+  echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+  at 1 true
+  wprep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_FIRST_CHECK=0.2 "$@"); WATCH_N=20 watchrun
+}
+autolist first-ok "$fwd"; autostart; isc9 || fail "first-ok: start"; calr; firstwatch
+((rc == 0)) && ! muted && grep -c 'this phone is checked at its first speaker stream' "$r/watch.out" >/dev/null &&
+  grep -c '^passed .*CSPL_ENABLE 1.*coils Top 25.0 C, Bottom 25.0 C$' "$r/run/speaker-protection-c9-check" >/dev/null &&
+  [[ ! -e $r/state/speaker-protection-c9-refused && ! -s $r/systemctl.log ]] ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a healthy phone passes and keeps c9"; }
+spa status 2>/dev/null | grep -c 'first-stream check: passed' >/dev/null || fail "status: the check passed"
+if grep -E '0x20|8192|8448' "$r/watch.out" "$r/run/speaker-protection-c9-check"; then fail "the check logs no calibration values"; fi
+firstfail() {  # name, what to break (a command on the started tree), the reason expected
+  autolist "$1" "$fwd"; autostart; isc9 || fail "$1: start"; calr; eval "$2"; firstwatch
+  ((rc == 1)) && muted && grep -c "^reason first-stream check failed: .*$3" "$r/state/speaker-protection-c9-refused" >/dev/null &&
+    grep -c "^firmware ${fwd#cheetah }$" "$r/state/speaker-protection-c9-refused" >/dev/null &&
+    grep -c '^--no-block restart omamobile-speaker-protection.service$' "$r/systemctl.log" >/dev/null &&
+    [[ $(cat "$r/run/speaker-protection") == "muted: c9 refused on this phone"* ]] ||
+    { cat "$r/watch.out" "$r/state/speaker-protection-c9-refused" >&2; fail "first-stream check: $1 mutes, refuses c9 for this firmware, restarts"; }
+  # the restart then picks media
+  autostart; ismedia || { cat "$r/out" >&2; fail "first-stream check: after $1 the next start is media"; }
+  spa status 2>/dev/null | grep -c '^c9 refused on this phone: ' >/dev/null || fail "status: names the refusal ($1)"
+}
+firstfail first-rsel 'amx cset "name=Bottom DSP1 Protection cd CAL_R_SELECTED" 0x00,0x00,0x00,0x01 >/dev/null' 'Bottom: the model does not use the calibration'
+firstfail first-enable 'amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null' 'Top: CSPL_ENABLE 0'
+firstfail first-cold 'amx cset "name=Top DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x01,0x40,0x00 >/dev/null' 'Top: coil temperature 5.0 C outside 10-65 C'
+firstfail first-hot 'amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x11,0x80,0x00 >/dev/null' 'Bottom: coil temperature 70.0 C outside 10-65 C'
+# the heartbeat case needs the stand-in's stuck heartbeat, which the watch rule catches as well
+autolist first-hb2 "$fwd"; autostart; calr; firstwatch FAKE_HB_STUCK=1 OMAMOBILE_WATCH_HB_TIMEOUT=10
+((rc == 1)) && muted && grep -c 'HALO_HEARTBEAT did not move' "$r/state/speaker-protection-c9-refused" >/dev/null ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a heartbeat that doesn't move refuses c9"; }
+# a stream shorter than the check: nothing judged yet, nothing refused
+autolist first-short "$fwd"; autostart; calr; amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; at 1 true; at 4 "echo closed > $r/asound/card0/pcm5p/sub0/status"
+wprep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_FIRST_CHECK=0.2); WATCH_N=20 watchrun
+((rc == 0)) && ! muted && [[ ! -e $r/state/speaker-protection-c9-refused && ! -e $r/run/speaker-protection-c9-check ]] ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a stream that ends before the check judges nothing"; }
+# c9 from this phone's stamp: no first-stream check (C9a ran on this phone)
+autolist first-stamp "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart; isc9 || fail "first-stamp: start"
+amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null; firstwatch
+((rc == 0)) && ! muted && ! grep -c 'first speaker stream' "$r/watch.out" >/dev/null && [[ ! -e $r/state/speaker-protection-c9-refused ]] ||
+  { cat "$r/watch.out" >&2; fail "c9 from this phone's stamp: no first-stream check"; }
+pass "first-stream check (c9 from the list): passes a healthy phone; CAL_R_SELECTED, CSPL_ENABLE, the coil range or a still heartbeat mute, refuse c9 and restart at media"
 
 # --- earpiece mode (AOC-PLAN C9k) -------------------------------------------------
 # The controls each mode sets, as "name=value" lines (enumerated by item index:

@@ -23,7 +23,8 @@
 #      every bind; this checks it.
 #   4. Check that the kernel's volume limits are in force and the configured
 #      levels are within this stage's ceilings (stage c9 also needs the kernel's
-#      speaker_protection=1 and a verification stamp for this firmware), that
+#      speaker_protection=1 and this firmware verified: this phone's own stamp,
+#      or the firmware's digest in the package's verified list), that
 #      the protection firmware and both tunings are installed, and read the
 #      factory calibration from persist with debugfs (read-only).
 #   5. Load the firmware into both DSPs, write the calibration into their CAL_*
@@ -41,6 +42,8 @@
 #   omamobile-speaker-protection watch              (omamobile-speaker-watch.service)
 #   omamobile-speaker-protection status | monitor [SECONDS] | health
 #   omamobile-speaker-protection verify             (during playback; C9a)
+#   omamobile-speaker-protection digest             the installed firmware's digest,
+#                           as a line of the verified list ("SYSTEM DIGEST")
 #   omamobile-speaker-protection earpiece on|off|status
 #                           (AOC-PLAN.md C9k; omamobile-earpiece@on|off.service
 #                           runs it for the "Voice Call" UCM verb's Earpiece)
@@ -88,8 +91,8 @@ KERNEL_DIGITAL_MAX=817
 
 # auto (the default): c9 at the everyday loud levels below when the phone
 # has what c9 needs (aoc_alsa_dev speaker_protection=1, which device-cheetah
-# sets, and a verification stamp for this firmware: AOC-PLAN.md C9a), media
-# otherwise. Resolved once the helpers are defined (resolve_stage, below).
+# sets, and this firmware verified: c9_source, below), media otherwise.
+# Resolved once the helpers are defined (resolve_stage, below).
 STAGE=${OMAMOBILE_SPK_STAGE:-auto}
 set_stage() {
 case $STAGE in
@@ -181,6 +184,14 @@ fi
 
 marker=$STATE/speaker-protection-started
 stamp=$STATE/speaker-protection-verified
+# The firmware digests verified on the reference phone with the attended
+# C9a procedure (verified-firmware in the package). The stamp above lives on
+# userdata, so every install loses it; the list doesn't.
+verified_list=${OMAMOBILE_SPK_VERIFIED_LIST:-/usr/share/omamobile-audio/verified-firmware}
+# Written when c9 from the list failed this phone's first-stream check (the
+# watchdog): c9 from the list stays off here for that firmware
+refused=$STATE/speaker-protection-c9-refused
+c9_check_file=$RUN/speaker-protection-c9-check
 status_file=$RUN/speaker-protection
 # the boost converter's state from the last start ("boost converter on ..."
 # or "... off ..."): the module parameter only applies when the amplifiers
@@ -287,6 +298,48 @@ fw_files() {
 # what a verification stamp covers: the firmware and both tunings
 fw_digest() { local f; f=$(fw_files) || return 1; sha256sum $f | awk '{print $1}' | sha256sum | cut -c1-64; }
 
+# in_verified_list DIGEST: the package's list names DIGEST for this system.
+# Lines are "SYSTEM DIGEST [note]"; anything else (comments) matches nothing.
+in_verified_list() {
+  [[ $1 =~ ^[0-9a-f]{64}$ && -r $verified_list ]] || return 1
+  awk -v s="$SYSTEM" -v d="$1" '$1 == s && $2 == d { f = 1 } END { exit !f }' "$verified_list"
+}
+
+# What lets this phone run stage c9 with the installed firmware. Sets
+# C9_SOURCE to "stamp" (this phone's own C9a stamp: the attended
+# verification, which wins) or "list" (the firmware's digest is in the
+# package's verified list: the same firmware and tunings, byte for byte, as
+# the reference phone verified; the watchdog then checks this phone at its
+# first stream) and returns 0. Otherwise C9_SOURCE is empty, C9_WHY says why,
+# and it returns 1.
+c9_source() {
+  local digest
+  C9_SOURCE='' C9_WHY=''
+  digest=$(fw_digest 2>/dev/null) || { C9_WHY="the protection firmware or a tuning is missing"; return 1; }
+  if [[ -r $stamp && $(sed -n 's/^firmware //p' "$stamp") == "$digest" ]]; then
+    C9_SOURCE=stamp; return 0
+  fi
+  if in_verified_list "$digest"; then
+    if [[ -r $refused && $(sed -n 's/^firmware //p' "$refused") == "$digest" ]]; then
+      C9_WHY="this firmware is in the verified list, but it failed this phone's first-stream check ($(sed -n 's/^reason //p' "$refused"); $refused)"
+      return 1
+    fi
+    C9_SOURCE=list; return 0
+  fi
+  if [[ -r $stamp ]]; then
+    C9_WHY="the verification stamp is for other firmware or tunings, and this firmware is not in the verified list: verify again (C9a)"
+  else
+    C9_WHY="no verification stamp (AOC-PLAN.md C9a: omamobile-speaker-protection verify), and this firmware is not in the verified list ($verified_list)"
+  fi
+  return 1
+}
+c9_source_text() {
+  case ${C9_SOURCE:-} in
+    stamp) echo "this phone's stamp" ;;
+    list) echo "the verified firmware list" ;;
+  esac
+}
+
 # Copy persist's speaker.cal to $cal and check both records. Sets the arrays
 # cal_r, cal_status, cal_checksum, cal_ambient. Logs no values.
 read_calibration() {
@@ -338,9 +391,7 @@ check_limits() {
   [[ $prot == Y ]] && kmax=17 || kmax=10
   if [[ $STAGE == c9 ]]; then
     [[ $prot == Y ]] || { log "stage c9 needs aoc_alsa_dev speaker_protection=1 (it reads '${prot:-missing}')"; return 1; }
-    [[ -r $stamp ]] || { log "stage c9 needs a verification stamp (AOC-PLAN.md C9a: omamobile-speaker-protection verify)"; return 1; }
-    [[ $(sed -n 's/^firmware //p' "$stamp") == "$(fw_digest)" ]] ||
-      { log "the verification stamp is for other firmware or tunings: verify again (C9a)"; return 1; }
+    c9_source || { log "stage c9 needs this firmware verified: $C9_WHY"; return 1; }
   fi
   for p in "${AMPS[@]}"; do
     for v in DIGITAL ANALOG; do
@@ -472,6 +523,13 @@ start() {
 
   # 4. Checks
   check_limits || fail "stopped at the limits check"
+  if [[ $STAGE == c9 ]]; then
+    if [[ $C9_SOURCE == list ]]; then
+      log "stage c9 chosen by the verified firmware list: the watchdog checks this phone at its first speaker stream"
+    else
+      log "stage c9 chosen by this phone's stamp"
+    fi
+  fi
   check_firmware || fail "stopped at the firmware check"
   read_calibration || fail "stopped at the calibration check"
 
@@ -542,17 +600,20 @@ start() {
     [[ $v =~ ^[0-9]+$ ]] && ((v <= DIGITAL_CEIL)) || fail "$p Digital PCM Volume reads ${v:-nothing}"
   done
 
+  rm -f "$c9_check_file"
   set_status_ok
-  log "speaker protection on (stage $STAGE): both amplifiers through the DSP, digital/analog $(levels_text)"
+  log "speaker protection on (stage $STAGE$(stage_from)): both amplifiers through the DSP, digital/analog $(levels_text)"
   finish
 }
+
+stage_from() { [[ $STAGE == c9 && -n ${C9_SOURCE:-} ]] && echo ", from $(c9_source_text)"; }
 
 dre_value() { [[ ${OMAMOBILE_SPK_DRE:-1} == 1 ]] && echo on || echo off; }
 levels_text() { echo "Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(level Bottom DIGITAL)/$(level Bottom ANALOG)"; }
 # The status line in speaker mode. omamobile-sitd's call audio reads its
 # "ok: stage <stage>," start, so keep that.
 set_status_ok() {
-  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)"
+  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
 }
 
 # Read-only report. Prints the DSP state but never the calibration values.
@@ -561,6 +622,16 @@ status() {
   cat "$status_file" 2>/dev/null || echo "no state ($status_file)"
   [[ -e $marker ]] && echo "marker present: $(cat "$marker" 2>/dev/null) (a start never finished)"
   [[ -r $stamp ]] && echo "verified: $(sed -n 's/^date //p' "$stamp") ($(sed -n 's/^firmware //p' "$stamp" | cut -c1-12)…, current firmware $(fw_digest | cut -c1-12)…)"
+  local fd
+  fd=$(fw_digest 2>/dev/null) && echo "firmware $SYSTEM $fd: $(in_verified_list "$fd" && echo 'in the verified firmware list' || echo 'not in the verified firmware list')"
+  [[ -r $refused ]] && echo "c9 refused on this phone: $(sed -n 's/^date //p' "$refused"), $(sed -n 's/^reason //p' "$refused") (firmware $(sed -n 's/^firmware //p' "$refused" | cut -c1-12)…)"
+  if [[ $STAGE == c9 ]]; then
+    if [[ $C9_SOURCE == list ]]; then
+      echo "stage c9 from the verified firmware list; first-stream check: $(cat "$c9_check_file" 2>/dev/null || echo 'not yet (no speaker stream since the start)')"
+    else
+      echo "stage c9 from this phone's stamp"
+    fi
+  fi
   echo "mode: $(cur_mode) (the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported'))"
   find_card || { echo "no AoC sound card"; return 1; }
   local have_cal=0
@@ -593,6 +664,23 @@ verify() {
   printf 'date %s\nkernel %s\nfirmware %s\n' "$(date -Is)" "$(uname -r)" "$digest" > "$stamp"
   sync -f "$stamp" 2>/dev/null || sync
   echo "stamp written: $stamp"
+}
+
+# The watchdog's first-stream check failed with c9 from the verified list:
+# mute, remember it for this firmware (c9_source then refuses the list on
+# this phone), and restart the service, which then picks stage media.
+refuse_c9() {
+  local reason=${1:-unspecified} digest
+  mute || log "c9 refused on this phone and MUTING FAILED"
+  digest=$(fw_digest 2>/dev/null) || digest=unknown
+  mkdir -p "$STATE"
+  printf 'date %s\nkernel %s\nfirmware %s\nreason %s\n' "$(date -Is)" "$(uname -r)" "$digest" "$reason" > "$refused"
+  sync -f "$refused" 2>/dev/null || sync
+  set_status "muted: c9 refused on this phone ($reason): restarting at stage media"
+  log "stage c9 from the verified firmware list refused on this phone: $reason"
+  log "both amplifiers muted; restarting at stage media (an attended C9a verify, or removing $refused, allows c9 again)"
+  systemctl --no-block restart omamobile-speaker-protection.service ||
+    log "the restart failed: systemctl restart omamobile-speaker-protection"
 }
 
 # --- earpiece mode (AOC-PLAN.md C9k) ---------------------------------------------
@@ -758,7 +846,7 @@ resolve_stage() {
   [[ $STAGE == auto ]] || return 0
   local prot
   prot=$(cat "$SYSMODULE/aoc_alsa_dev/parameters/speaker_protection" 2>/dev/null)
-  if [[ $prot == Y && -r $stamp && $(sed -n 's/^firmware //p' "$stamp") == "$(fw_digest 2>/dev/null)" ]]; then
+  if [[ $prot == Y ]] && c9_source; then
     STAGE=c9
   else
     STAGE=media
@@ -767,6 +855,11 @@ resolve_stage() {
   export OMAMOBILE_SPK_STAGE=$STAGE
 }
 resolve_stage
+# Which way c9 is allowed, for the log, the status and the watchdog (its
+# first-stream check runs with "list" only); empty in every other stage
+C9_SOURCE=''
+[[ $STAGE != c9 ]] || c9_source || true
+export OMAMOBILE_SPK_C9_SOURCE=$C9_SOURCE
 
 case ${1:-} in
   start|restart|recover)
@@ -778,6 +871,12 @@ case ${1:-} in
   health) dsp health ;;
   monitor) dsp monitor --duration "${2:-10}" --interval "${3:-1}" ;;
   verify) shift; verify "$@" ;;
+  digest)
+    d=$(fw_digest) || { echo "no protection firmware or tunings for $SYSTEM (in $FW_DIRS)" >&2; exit 1; }
+    echo "$SYSTEM $d" ;;
+  refuse-c9)
+    [[ ${2:-} == --reason ]] || { echo "Usage: omamobile-speaker-protection refuse-c9 --reason TEXT   (the watchdog)" >&2; exit 2; }
+    refuse_c9 "${3:-}" ;;
   signal) shift; dsp signal "$@" ;;
   impedance) shift; find_card || { echo "no AoC sound card"; exit 1; }; dsp --card "$card" impedance "$@" ;;
   feedback) shift; find_card || { echo "no AoC sound card"; exit 1; }; dsp --card "$card" feedback "$@" ;;
@@ -794,6 +893,7 @@ case ${1:-} in
   *)
     echo "Usage: omamobile-speaker-protection start [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
     echo "       | earpiece on|off|status   (the top amplifier alone as the earpiece, AOC-PLAN C9k)" >&2
+    echo "       | digest   (the installed firmware's digest, as a line of the verified list)" >&2
     echo "       | verify | signal tone|multitone FILE [--level DBFS --seconds S --channels both|left|right] | mute [--reason TEXT]" >&2
     echo "       | impedance [--rounds N] [--no-arm]   (during playback: the firmware's measured coil impedance / CAL_R)" >&2
     echo "       | feedback start [--seconds S]|stop|status   (the amplifiers' V/I stream to the AoC, AOC-PLAN C9d-7)" >&2
