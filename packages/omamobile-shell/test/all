@@ -327,6 +327,7 @@ if command -v node >/dev/null; then
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
+  node test/media-model.js >/dev/null || { node test/media-model.js; fail "the shade's media card model"; }
   node test/home-model.js || fail "home screen model"
   node test/back-model.js || fail "back gesture model"
   node test/switcher-model.js || fail "recent apps' app names"
@@ -678,6 +679,25 @@ elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the shade under touch (test/shade-touch)"
 else
   pass "the shade under touch: a swipe forgets one, a short one springs back, a tap taps, a drag scrolls"
+fi
+# The shade's media card (MPRIS): which player shows, what each control
+# calls, the seek bar, the card's tap. test/media-touch drives it; the art
+# rule and the order are in test/media-model.js; test/quicksettings-render
+# draws it on the shade.
+qs=plugins/omamobile.quicksettings/QuickSettings.qml
+grep -c 'player: mediaSource.player' "$qs" >/dev/null || fail "the shade's media card shows MediaSource's player"
+grep -c 'ticking: root.opened && !root.editing' "$qs" >/dev/null || fail "the media card's position ticks only while the sheet is open"
+grep -c 'omarchy-hyprland-focus-app' "$qs" >/dev/null || fail "a tap on the media card focuses the player's app"
+if grep -nE 'trackArtUrl' plugins/omamobile.quicksettings/MediaCard.qml | grep -v 'MediaModel.artSource'; then
+  fail "the media card loads art only through MediaModel.artSource"
+fi
+rc=0; out=$(bash test/media-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the media card under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the media card under touch (test/media-touch)"
+else
+  pass "the media card under touch: the playing or most recent player, transport, seek, a tap opens the app"
 fi
 # The home screen's long press (issue #147): a TapHandler over the pager
 # took mouse presses from the tiles, so it takes touch alone and a mouse

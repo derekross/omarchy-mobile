@@ -29,4 +29,7 @@ QtObject {
   property color normalFill: "transparent"
   function space(px) { return Math.round(px) }
   function pressedFillFor(foreground, accent, urgent) { return Qt.rgba(1, 1, 1, 0.2) }
+  function normalFillFor(foreground, accent, urgent) { return Qt.rgba(1, 1, 1, 0.04) }
+  function selectedFillFor(foreground, accent, urgent) { return Qt.rgba(1, 1, 1, 0.18) }
+  property real selectedFillAlpha: 0.18
 }
