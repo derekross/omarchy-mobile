@@ -9,6 +9,8 @@ Tracking: https://github.com/derekross/omarchy-mobile/pull/231
 - device.conf has partition sizes, AVB values, and confirmed board id/rev
 - Critical calibration partitions backed up off-device with SHA-256 checksums  
   (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata).  
+  Taken from OrangeFox recovery (read-only `dd` of the by-name nodes, pulled off-device).  
+  Images and SHA256SUMS live in a local `kodiak-critical/` directory (not in the repository).  
   No classic efs*/modem_userdata nodes exist on this device.
 
 ## Still needed
