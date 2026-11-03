@@ -12,6 +12,7 @@ A second Pixel 7 (issue #342), with stock CP3A.261005.002.A1 sideloaded as a ful
 - **What stock chains** [V]: the factory image's `vbmeta.img` (`avbtool info_image`) chains `boot` (rollback index location 2) and `init_boot` (location 4), as cheetah's does. Its `boot.img` and `init_boot.img` footers carry rollback index 1791158400 and security patch 2026-10-05, padded to 64 and 8 MiB, which are `getvar partition-size:boot_b` and `init_boot_b`.
 - **Why the first unit booted without footers** [I]: it ran LineageOS before the port. Its stock install wrote the bootloader and radio to slot B, but not `vbmeta_b`, so slot B kept a vbmeta that doesn't chain them. The guard keeps `vbmeta_b` read-only and outside `/dev/disk/by-partlabel`, so it wasn't read back.
 - **The descriptor** now has `AVB_FOOTERS`, `AVB_ROLLBACK_INDEX` and `AVB_SECURITY_PATCH`, as cheetah's does. Rebuilt from the same kernel output, `vendor_boot`, `vendor_kernel_boot`, `dtbo` and `dtb.img` are byte for byte the same, and `boot` and `init_boot` match up to their padding and footer.
+- **On the first unit** [V]: those images, flashed with `bin/omamobile flash`, booted as before (the same kernel, `systemctl is-system-running` running, one retry spent). So footers don't hurt a phone whose `vbmeta_b` doesn't chain them.
 
 ## 2026-10-31: the battery
 
