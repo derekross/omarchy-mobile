@@ -49,10 +49,13 @@ done
 
 phone_up() {
   ((phone)) || return 0
-  systemctl start omamobile-sitd.service
-  say "phone service started"
+  # Queued, not waited for: sitd is ready only once it has registered, which
+  # can take longer than the boot unit's timeout, and the bridge would never
+  # be started. The bridge is ordered after sitd.
+  systemctl start --no-block omamobile-sitd.service
+  say "phone service starting"
   if systemctl cat omamobile-mmd.service >/dev/null 2>&1; then
-    systemctl start omamobile-mmd.service && say "Phone and Messages bridge started"
+    systemctl start --no-block omamobile-mmd.service && say "Phone and Messages bridge starting after it"
   fi
 }
 

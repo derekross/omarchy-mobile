@@ -58,15 +58,15 @@ n_check=$(grep -n '^chroot modem check' "$c" | cut -d: -f1)
 (( n_inhibit < n_driver && n_driver < n_check )) || fail "the sleep inhibitor, then the drivers, then the profile check (it needs CPIF loaded)"
 [[ -e $t/k2/latch ]] || fail "the latch stays past ONLINE"
 grep -q 'ExecStopPost=.*SERVICE_RESULT.*rm -f .*latch' "$c" || fail "the profile's clean stop removes the latch"
-grep -qx 'systemctl start omamobile-sitd.service' "$c" || fail "--phone starts the phone service"
-grep -qx 'systemctl start omamobile-mmd.service' "$c" || fail "--phone starts the bridge when it's installed"
+grep -qx 'systemctl start --no-block omamobile-sitd.service' "$c" || fail "--phone starts the phone service"
+grep -qx 'systemctl start --no-block omamobile-mmd.service' "$c" || fail "--phone starts the bridge when it's installed"
 printf 'ok - %s\n' "modem-up: the kernel's drivers, the order, the latch kept for a clean stop, the phone service and the bridge"
 
 # The bring-up modules when the kernel lacks the drivers; no bridge without it
 run b || { cat "$t/b/out"; fail "a start with the bring-up modules succeeds"; }
 grep -q '^insmod .*/tegu-pcie0-cp.ko allow_hw=1 latch=yes$' "$t/b/calls" || fail "the bring-up link driver is loaded, after the latch"
 grep -q '^modprobe' "$t/b/calls" && fail "no kernel driver is modprobed without the kernel's drivers"
-grep -qx 'systemctl start omamobile-mmd.service' "$t/b/calls" && fail "no bridge start when it isn't installed"
+grep -qx 'systemctl start --no-block omamobile-mmd.service' "$t/b/calls" && fail "no bridge start when it isn't installed"
 printf 'ok - %s\n' "modem-up: the bring-up modules otherwise, and no bridge when it isn't installed"
 
 # Refusals: CPIF already loaded this boot, and the latch of a start that never reached ONLINE
