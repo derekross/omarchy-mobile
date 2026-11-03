@@ -169,6 +169,13 @@ grep -q '^\[Unit\]' "$d" && ! grep -q '^\[Service\]' "$d" || fail "the sit-data 
 for n in omamobile-modem.service omamobile-modem-inhibit.service omamobile-sitd.service omamobile-sit-data.service omamobile-mmd.service; do
   [[ -z $(find "$tmp/root/usr/lib/systemd" -name "$n" -path '*.wants/*' -o -name "$n" -path '*.requires/*') ]] || fail "no wants link for $n is shipped (the target is the switch)"
 done
+# Call audio (0.1.44): the 7 Pro's defaults for omamobile-modem-sit route
+# calls through the AoC card in the earpiece mode; modem-sit's packaged
+# /etc file leaves the card unset, so this is what a fresh install gets.
+d=$tmp/root/usr/lib/omamobile/modem-sit.conf.d/50-cheetah.conf
+[[ -f $d ]] || fail "the modem-sit defaults are staged"
+python3 -I -c 'import configparser,sys; p=configparser.ConfigParser(interpolation=None); p.read(sys.argv[1]); sys.exit(p.get("audio","card")!="auto")' "$d" \
+  || fail "the 7 Pro's call audio default is card = auto"
 if [[ -f ../omamobile-modem/systemd/omamobile-modem-boot.target ]]; then
   grep -qx 'WantedBy=multi-user.target' ../omamobile-modem/systemd/omamobile-modem-boot.target || fail "the link matches the target's own [Install]"
   grep -qx 'ConditionPathExists=/usr/lib/omamobile-vendor/modem/root' ../omamobile-modem/systemd/omamobile-modem.service \

@@ -20,6 +20,13 @@ post_upgrade() {
     echo "  setup: no attach APN, IMS first on CID 2, the internet on CID 3, stock's profiles);"
     echo "  values you typed keep working. New: [data] roaming (.pacnew)."
   fi
+  if [[ $(vercmp "$2" 0.3.30) -lt 0 ]] \
+     && grep -Eq '^[[:space:]]*card[[:space:]]*=[[:space:]]*none[[:space:]]*$' /etc/omamobile/modem-sit.conf 2>/dev/null; then
+    echo "omamobile-modem-sit 0.3.30: [audio] card now comes from the device package when"
+    echo "  /etc/omamobile/modem-sit.conf leaves it unset. Your edited file keeps its"
+    echo "  \"card = none\" line: on a Pixel 7 Pro, delete that line for call audio through"
+    echo "  the earpiece, then restart the phone. On other phones, leave it."
+  fi
 }
 pre_remove() {
   systemctl disable --now omamobile-sit-data.service omamobile-sitd.service 2>/dev/null || true
