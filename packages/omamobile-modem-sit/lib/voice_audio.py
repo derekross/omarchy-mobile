@@ -292,6 +292,9 @@ class VoiceAudio:
                 raise AudioRefused('tegu earpiece requires the full amplifier profile 0')
         if aec:
             route.insert(1, ('FT AEC Reference Source', 'SPEAKER'))
+            # The output DSP stays in Ambient unless told otherwise, and the
+            # uploaded tuning is for its APMg3 telephony mode.
+            route.insert(2, ('Audio DSP Mode', 'Telephony_APMG3'))
         names = [name for name, _ in route] + list(TEGU_GAINS)
         try:
             saved = [(name, self.mixer_value(name)) for name in names]
