@@ -272,7 +272,7 @@ pass "set-aside copies bounded"
 #     the CP power-off; the CLI's commands; the units.
 conf=profiles/modem.conf
 setup=$(sed -n '/^profile_setup() {$/,/^}$/p' $conf)
-m=$(grep -n 'mount -t f2fs -o noatime "$l" "$mnt/$p"' <<<"$setup" | cut -d: -f1); a=$(grep -n 'MODEM_NV_OVERLAY" apply' <<<"$setup" | cut -d: -f1); c=$(grep -n 'MODEM_CP" nv-check' <<<"$setup" | cut -d: -f1)
+m=$(grep -n 'mount -t "$t" -o noatime "$l" "$mnt/$p"' <<<"$setup" | cut -d: -f1); a=$(grep -n 'MODEM_NV_OVERLAY" apply' <<<"$setup" | cut -d: -f1); c=$(grep -n 'MODEM_CP" nv-check' <<<"$setup" | cut -d: -f1)
 [[ -n $m && -n $a && -n $c && $m -lt $a && $a -lt $c ]] || fail "apply runs after the f2fs mounts and before nv-check (mount=$m apply=$a check=$c)"
 grep -q 'modem_copy "\$p"; done' <<<"$setup" || fail "the base copies are still read and checked first"
 stop=$(sed -n '/^profile_stop() {$/,/^}$/p' $conf)
