@@ -219,6 +219,7 @@ boost_file=$RUN/speaker-protection-boost
 mode_file=$RUN/speaker-mode
 ack_file=$RUN/speaker-watch-mode
 cal=$RUN/speaker.cal
+default_cal=0
 card=
 
 export OMAMOBILE_SPK_STAGE=$STAGE OMAMOBILE_SPK_SCRIPT=${OMAMOBILE_SPK_SCRIPT:-$0}
@@ -374,6 +375,16 @@ read_calibration() {
   (umask 077 && debugfs -R "cat $CAL_PATH" "$dev" > "$cal" 2>/dev/null)
   if (($(stat -c %s "$cal" 2>/dev/null || echo 0) < ${#AMPS[@]} * CAL_WORDS * 4)); then
     log "persist:$CAL_PATH is missing or short"
+    if [[ ${OMAMOBILE_SPK_DEFAULT_CAL:-0} == 1 && ! -s $cal ]]; then
+      # As stock's audio_spk_35l41.so does on a phone with no speaker.cal:
+      # load the protection firmware without writing CAL_*, so it runs on the
+      # tuning's default calibration. CAL_SET_STATUS only reads during
+      # playback, so start just logs it; the watchdog then accepts 1 ("Use
+      # default calibration data") as well as 2. A short file still stops.
+      log "OMAMOBILE_SPK_DEFAULT_CAL=1: using the protection firmware's default calibration, as stock without speaker.cal"
+      default_cal=1
+      return 0
+    fi
     return 1
   fi
   mapfile -t w < <(od -An -tu4 -v -N $((${#AMPS[@]} * CAL_WORDS * 4)) "$cal" | tr -s ' ' '\n' | sed '/^$/d')
@@ -565,6 +576,7 @@ start() {
     dsp_ctl "$p" CAL_R >/dev/null || fail "$p: no CAL_R control after ${CTL_WAIT} s (protection firmware not loaded; see dmesg)"
   done
   for i in "${!AMPS[@]}"; do
+    ((default_cal)) && break
     p=${AMPS[i]}
     # the order mainline cs-amp-lib writes them in; OMAMOBILE_SPK_CAL_ORDER=stock
     # writes them in the stock HAL's order, ambient last (AOC-PLAN C9d-8,
@@ -581,7 +593,15 @@ start() {
       [[ $v == "$want" ]] || fail "$p: ${f%%:*} did not read back"
     done
   done
-  log "calibration written to both DSPs and read back"
+  if ((default_cal)); then
+    for p in "${AMPS[@]}"; do
+      c=$(dsp_ctl "$p" CAL_SET_STATUS) || fail "$p: no CAL_SET_STATUS control (default calibration needs it)"
+      v=$(ctl_values "$c")
+      log "$p CAL_SET_STATUS: $v"
+    done
+  else
+    log "calibration written to both DSPs and read back"
+  fi
 
   # 6. DAC through the DSP, analog gain
   for p in "${AMPS[@]}"; do
@@ -634,7 +654,9 @@ levels_text() { echo "Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(lev
 # The status line in speaker mode. omamobile-sitd's call audio reads its
 # "ok: stage <stage>," start, so keep that.
 set_status_ok() {
-  set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
+  local c="factory calibration"
+  [[ -s $cal ]] || c="the firmware's default calibration"  # OMAMOBILE_SPK_DEFAULT_CAL=1
+  set_status "ok: stage $STAGE, protection firmware with $c, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
 }
 
 # Read-only report. Prints the DSP state but never the calibration values.
@@ -659,7 +681,7 @@ status() {
   echo "mode: $(cur_mode) (the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported'))"
   find_card || { echo "no AoC sound card"; return 1; }
   local have_cal=0
-  read_calibration >/dev/null 2>&1 && have_cal=1
+  read_calibration >/dev/null 2>&1 && ((!default_cal)) && have_cal=1
   for i in "${!AMPS[@]}"; do
     p=${AMPS[i]}
     d=$(amp_dev "$i")
