@@ -36,7 +36,7 @@ DEFAULTS = {
     'profiles': {},
     'data': {'route': 'yes', 'metric': '700'},
     'control': {'group': 'wheel'},
-    'audio': {'card': 'none', 'mic_boost_db': '6'},
+    'audio': {'card': 'none', 'mic_boost_db': '6', 'tegu_route': 'speaker', 'tegu_aec': 'no'},
 }
 
 

@@ -207,6 +207,9 @@ On gs201 the voice path never passes through the application processor. **The Ao
 
 Beyond the mixer paths, the working stack on this phone model sets `Voice Call Audio Enable`, `Voice Call Mic Source` 1, `Incall Sink Mute` 0, `AoC Modem Downlink ASRC Mode` 1 and a mic gain of 130 cB plus 6 dB. It opens **PCM 4 playback (EP5)** and **PCM 11 capture (EP4)** (MODEM-PLAN 6.1). Our card numbers its PCMs as stock does (AGENTS.md), so those numbers hold. `omamobile-sitd`'s `voice_audio.py` does exactly this and restores every control after the call. Our sound card already describes the back ends these paths need: `BT_RX`/`BT_TX`, `USB_RX`/`USB_TX` and `INCALL_RX`/`INCALL_TX` (`device/cheetah/overlays/aoc-sound-test.dtso`).
 
+The 9a's opt-in AEC upload and conservative earpiece route have a separate
+[offline implementation and qualification note](../device/tegu/CALL-AUDIO-TUNING.md).
+
 ### 2.2 The work, per audio route
 
 | Route | What's needed | Depends on | Effort |
