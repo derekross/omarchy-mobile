@@ -47,13 +47,19 @@ grep -c 'PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST
 grep -c -- '--lhbm-first "\$LHBM_FIRST"' lib/omamobile-fp-chroot >/dev/null || fail "the runner passes the circle order"
 # Under set -u, each phone's case sets every value the spawn line uses.
 cases=$(sed -n '/^case \$DEVICE in/,/^esac/p' lib/omamobile-fp-chroot)
-for d in cheetah tegu; do
-  DEVICE=$d bash -uc "$cases"'
-    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST ]]' ||
+for d in cheetah tegu panther; do
+  DEVICE=$d TOUCH_NAME=x bash -uc "$cases"'
+    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST && -n $TOUCH_NAME ]]' ||
     fail "$d: the case leaves a panel value unset"
 done
 grep -c '^ro.hardware=tegu$' lib/props-tegu.conf >/dev/null || fail "props-tegu.conf"
 grep -c '^ro.hardware=cheetah$' lib/props-cheetah.conf >/dev/null || fail "props-cheetah.conf"
+grep -c '^ro.hardware=panther$' lib/props-panther.conf >/dev/null || fail "props-panther.conf"
+# The Pixel 7: found by its board, the 7 Pro's TA, its own panel and touchscreen.
+grep -c '\*google,gs201-panther\*) echo panther' lib/omamobile-fp-chroot >/dev/null || fail "panther not detected"
+DEVICE=panther bash -uc "$cases"'
+  [[ $TA == g7.app && $PANEL == 1080x2400 && $PANEL_NAME == sdc-s6e3fc3-p10 && $TOUCH_NAME == "FocalTech FT3658" && $MAP_STORES == 0 ]]' ||
+  fail "panther's TA, panel and touchscreen"
 grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a phone's ro.hardware"
 for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
@@ -172,6 +178,7 @@ for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile
          usr/lib/omamobile-fp/omamobile-fp-ctl \
          usr/lib/omamobile-fp/props.conf usr/lib/omamobile-fp/omamobile-fp-shim.so \
          usr/lib/omamobile-fp/props-cheetah.conf usr/lib/omamobile-fp/props-tegu.conf \
+         usr/lib/omamobile-fp/props-panther.conf \
          usr/lib/omamobile-fp/omamobile-fp-bridge usr/lib/systemd/system/omamobile-fp.service \
          usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf; do
   [[ -e $stage/$f ]] || fail "not staged: $f"
