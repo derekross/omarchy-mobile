@@ -37,6 +37,7 @@ import signal
 import socket
 import sqlite3
 import struct
+import subprocess
 import time
 
 import cp
@@ -177,6 +178,7 @@ class Service:
         self.settings = settings or paths.config()
         self.calls = {}
         self.audio = None
+        self.audio_error = ''
         self.muted = False
         self.pending = None
         self.hangup_deadline = None
@@ -225,13 +227,20 @@ class Service:
             if card is None:
                 print('Call audio routing is off ([audio] card = none)', flush=True)
                 return
-            self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
-                                    earpiece=audio.getboolean('earpiece', True))
+            # A refused route (protection not running, levels above the
+            # earpiece ceilings, earpiece mode refused) never stops the
+            # call: it goes on without audio, the reason in the log and
+            # in the status's audio error, as with [audio] card = none.
             try:
+                self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
+                                        earpiece=audio.getboolean('earpiece', True))
                 self.audio.__enter__()
-            except BaseException:
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 self.audio = None
-                raise
+                self.audio_error = str(error)
+                print('Call audio refused, the call goes on without audio:', error, flush=True)
+                return
+            self.audio_error = ''
             self.muted = False
 
     def audio_stop(self):
@@ -521,7 +530,7 @@ class Service:
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
-                               speaker=False, speaker_available=False, error=''))
+                               speaker=False, speaker_available=False, error=self.audio_error))
 
     def subscribe(self, connection):
         """Keep an authorised connection for status events; refuse beyond
