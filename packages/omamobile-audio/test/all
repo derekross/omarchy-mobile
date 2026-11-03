@@ -365,6 +365,8 @@ grep -qx 'ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamo
 grep -qx 'ConditionPathExists=!/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once a device package enables protection"
 grep -qx 'Before=omamobile-speaker-protection.service' $u || fail "the mics unit's mute on stop finishes before protection starts"
 grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $u && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $u || fail "the mics unit runs on gs101 and gs201 AoCs"
+p=systemd/omamobile-speaker-protection.service
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $p && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $p || fail "speaker protection runs on gs101 and gs201 AoCs"
 grep -qx 'ExecStart=/usr/bin/omamobile-speaker-protection mics' $u || fail "the mics unit runs mics"
 pass "the mics unit: never with protection, on both AoCs"
 
@@ -595,6 +597,23 @@ rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 "${c9prep[@]}"); sp star
   { cat "$r/out" >&2; fail "auto: without a verification stamp, media at 737/10"; }
 pass "auto: c9 at the everyday loud levels only with speaker_protection=1 and a stamp, media otherwise"
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
+# c9 only on a system with c9 levels of its own: raven, with speaker_protection=1
+# and a stamp for its own firmware, stays at media, and an explicit c9 is refused
+mktree raven-c9; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+prep=(OMAMOBILE_SPK_SYSTEM=raven); d=$(sp digest | awk '{print $2}'); prep=()
+[[ -n $d ]] || fail "raven: a digest of its own firmware"
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] && grep -c "stage media" "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "auto on raven with speaker_protection=1 and a matching stamp: media at 737/10, never c9"; }
+mktree raven-c9x; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=c9 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+check_refused_early "c9 on raven"
+grep -c 'no levels measured for raven' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "c9 on raven: says why"; }
+pass "stage c9 only on a system with c9 levels of its own (raven stays at media)"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
 mktree tmpfw; c9prep=(OMAMOBILE_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"
 for f in "$r"/fw/cirrus/*; do echo changed > "$tmp/otherfw/cirrus/${f##*/}"; done
@@ -804,6 +823,10 @@ mktree e-w-c8; rc=0; sp start > "$r/out" 2>&1 || rc=$?; earset 658 6 0; watchrun
 media; run e-w-spk; amx cset "name=Top PCM Source" ASP >/dev/null; amx cset "name=Top Analog PCM Volume" 6 >/dev/null; ewatch
 ((rc == 1)) && muted || fail "earpiece watchdog: the bypass without earpiece mode still mutes"
 pass "earpiece watchdog: the top within 737/6 through ASP, the bottom muted, no DSP rule; mutes on anything else, an unknown mode included"
+media; run e-raven; : > "$r/cset.log"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_SYSTEM=raven); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -s $r/cset.log ]] && grep -c 'no earpiece check for raven' "$r/ear.out" >/dev/null || { cat "$r/ear.out" >&2; fail "earpiece on is refused on raven (no C9k there yet), nothing written"; }
+pass "earpiece on only where C9k passed (cheetah)"
 
 # omamobile-speaker-protection earpiece on|off with a live watchdog
 bgwatch() {

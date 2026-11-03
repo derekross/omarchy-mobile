@@ -93,6 +93,14 @@ set -uo pipefail
 
 KERNEL_DIGITAL_MAX=817
 
+# The systems whose c9 levels below were measured under protection (AOC-PLAN
+# C9). On any other phone c9 is refused, whatever its stamp or the list says:
+# raven's firmware misreads its coil at these levels (raven AUDIO-PLAN R6).
+C9_SYSTEMS="cheetah"
+# The systems whose top amplifier passed the earpiece check (AOC-PLAN C9k);
+# earpiece on is refused on any other.
+EAR_SYSTEMS="cheetah"
+
 # auto (the default): c9 at the everyday loud levels below when the phone
 # has what c9 needs (aoc_alsa_dev speaker_protection=1, which device-cheetah
 # sets, and this firmware verified: c9_source, below), media otherwise.
@@ -336,6 +344,8 @@ in_verified_list() {
 c9_source() {
   local digest
   C9_SOURCE='' C9_WHY=''
+  [[ " $C9_SYSTEMS " == *" $SYSTEM "* ]] || {
+    C9_WHY="stage c9 has no levels measured for $SYSTEM (only for: $C9_SYSTEMS)"; return 1; }
   digest=$(fw_digest 2>/dev/null) || { C9_WHY="the protection firmware or a tuning is missing"; return 1; }
   if [[ -r $stamp && $(sed -n 's/^firmware //p' "$stamp") == "$digest" ]]; then
     C9_SOURCE=stamp; return 0
@@ -845,6 +855,10 @@ earpiece() {
     status) echo "mode: $(cur_mode); the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported')"; return 0 ;;
     *) echo "Usage: omamobile-speaker-protection earpiece on|off|status" >&2; exit 2 ;;
   esac
+  # Only where the top amplifier is known to be the earpiece and C9k's check
+  # passed; off has to work everywhere.
+  [[ $want == off || " $EAR_SYSTEMS " == *" $SYSTEM "* ]] ||
+    ear_refuse on "no earpiece check for $SYSTEM yet (AOC-PLAN C9k ran on: $EAR_SYSTEMS)"
   mkdir -p "$RUN"
   # one change at a time (the UCM's disable and enable sequences can ask for
   # both in quick succession)

@@ -95,14 +95,16 @@ grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep || fa
 grep -q 'wifi_pci=0000:01:00.0' bin/omamobile-sleep || fail "a Wi-Fi D3 failure falls back to unload mode"
 pass "sleep policy"
 
-[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-audio-mics.service") == ../omamobile-audio-mics.service ]] \
-  || fail "the microphones unit (omamobile-audio 0.5.14) is enabled by a vendor wants link"
-[ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service ] \
-  || fail "speaker protection is not enabled on raven (its limits are cheetah's)"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service") == ../omamobile-speaker-protection.service ]] \
+  || fail "speaker protection (omamobile-audio 0.5.15) is enabled by a vendor wants link"
+[ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-audio-mics.service ] \
+  || fail "the microphones-only unit is not enabled with it (the two conflict)"
 grep -qx 'blacklist snd_soc_cs35l41_spi' vendor/modprobe.d/omamobile-raven.conf \
   || fail "the amplifier driver never autoloads (device-raven's own blacklist)"
-grep -q "'omamobile-audio>=0.5.14'" PKGBUILD || fail "device-raven depends on omamobile-audio>=0.5.14 (the microphones unit)"
-pass "the microphones come up with the speakers muted; protection stays off"
+grep -q "'omamobile-audio>=0.5.15'" PKGBUILD || fail "device-raven depends on omamobile-audio>=0.5.15 (protection on gs101)"
+! grep -rq 'speaker_protection' vendor/modprobe.d \
+  || fail "raven never sets aoc_alsa_dev speaker_protection (it would allow stage c9)"
+pass "speakers through protection at stage media, the microphones with them"
 
 # Policy that keeps the phone safe at boot
 for m in tcpci_maxim gpio_max77759; do
