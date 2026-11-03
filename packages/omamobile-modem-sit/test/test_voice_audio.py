@@ -247,6 +247,7 @@ class TeguAudioTests(unittest.TestCase):
         controls.update({'BUILDIN MIC ID CAPTURE LIST': '0,1,-1,-1',
                          'Top Speaker Digital Volume': '220',
                          'Bottom Speaker Digital Volume': '210', 'FT AEC Reference Source': '0',
+                         'Audio DSP Mode': '0',
                          'Top Speaker Profile Id': '0', 'Bottom Speaker Profile Id': '0'})
         original = dict(controls)
         events = []
@@ -386,6 +387,9 @@ class TeguAudioTests(unittest.TestCase):
             tuning.return_value.close.side_effect = lambda: events.append(('aec-close',))
             with audio:
                 self.assertEqual(controls['FT AEC Reference Source'], 'SPEAKER')
+                self.assertEqual(controls['Audio DSP Mode'], 'Telephony_APMG3')
+                self.assertLess(events.index(('cset', 'Audio DSP Mode', 'Telephony_APMG3')),
+                                events.index(('aec-start',)))
                 self.assertLess(events.index(('aec-start',)), events.index(('start', 1)))
             tuning.assert_called_once_with('speaker')
             tuning.return_value.start.assert_called_once()
@@ -394,6 +398,8 @@ class TeguAudioTests(unittest.TestCase):
         self.assertLess(events.index(('close', 1)), events.index(('aec-close',)))
         self.assertLess(events.index(('aec-close',)),
                         events.index(('cset', 'FT AEC Reference Source', '0')))
+        self.assertLess(events.index(('aec-close',)),
+                        events.index(('cset', 'Audio DSP Mode', '0')))
 
     def test_earpiece_attenuates_top_and_bottom_after_profile_start_before_unmute(self):
         audio, events, controls, original = self.fixture(route='earpiece', aec=True)
