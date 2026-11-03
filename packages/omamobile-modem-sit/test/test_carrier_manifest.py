@@ -124,7 +124,7 @@ class StackStartTests(unittest.TestCase):
              patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
              patch.object(bringup, 'radio_state', return_value=0), \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
-             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'activate'), patch.object(bringup, 'find_attach_bearer', return_value=None), \
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), patch.object(bringup, 'activate'), patch.object(bringup, 'find_attach_bearer', return_value=None), \
              patch.object(bringup, 'start_stack', side_effect=lambda c: order.append('stack')), \
              patch.object(bringup, 'register', side_effect=RuntimeError('stop here')), \
              patch('builtins.print') as out:

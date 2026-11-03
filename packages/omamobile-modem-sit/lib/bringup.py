@@ -47,10 +47,11 @@ import time
 from at import radio, radio_state
 import carrier_apn
 from data_call import APN_TYPES, activate, attach_bearer, configured_profiles, entries, initial_attach
-from data_call import clear_stale, owned_ids, provision_profiles, record_modem_owned, summary
+from data_call import call_ids, clear_stale, deactivate, modem_owned_ids, owned_ids, provision_profiles
+from data_call import record_modem_owned, summary
 import data_call
 from data_call import paths as bearer_paths
-from ims import REGISTRATION, register, start_stack, withdraw_stale
+from ims import REGISTRATION, register, start_stack, unregister, withdraw_stale
 from isim import bearer_dns, ipv6_pcscf, resolve_on_bearer, resolve_system
 from radio_settings import SAVED_NR, nr_mode
 from sit import ModemError
@@ -336,6 +337,29 @@ def wait_for(service, predicate, seconds, stopped):
     raise TimeoutError('Modem registration deadline exceeded')
 
 
+def release_owned(client):
+    """A second start-up with the radio left on: the modem still lists the
+    earlier start's bearers (a start-up no longer cycles a radio that is on).
+    When it lists exactly the bearers our confirmed records own, release them,
+    IMS first (DelPdnInfo, then its bearer), and set up again. Anything else,
+    an unconfirmed record or a bearer we don't own, is left for activate() to
+    refuse. A release that fails stops the start-up: attended reboot."""
+    owned = owned_ids()
+    listed = call_ids(client.request(0x0602)) - modem_owned_ids()
+    if not owned or listed != owned:
+        return False
+    if any(not bearer_paths(cid)[1].exists() for cid in owned):
+        return False
+    if data_call.IMS_CID in owned:
+        if REGISTRATION.exists():
+            unregister(client)
+        deactivate(client, data_call.IMS_CID)
+    for cid in sorted(owned - {data_call.IMS_CID}):
+        deactivate(client, cid)
+    print("released the earlier start-up's bearers", flush=True)
+    return True
+
+
 def start(service, settings, stopped=lambda: False):
     client = service.client
     net = settings['network']
@@ -482,9 +506,11 @@ def start(service, settings, stopped=lambda: False):
     # A second start-up in the same boot: clear what an earlier sitd left
     # (only when the modem lists no bearer), and withdraw its IMS PDN.
     stale_ims = REGISTRATION.exists()
-    clear_stale(client)
-    if stale_ims and not REGISTRATION.exists():
-        withdraw_stale(client)
+    if clear_stale(client):
+        if stale_ims and not REGISTRATION.exists():
+            withdraw_stale(client)
+    else:
+        release_owned(client)
     attach = None
     if attach_none:
         # Before sitd sets up anything: every bearer listed now is the
