@@ -202,3 +202,23 @@ the owner's iPhone, which the owner answered:
 
 So the uploads and the DSP mode take effect, but the cancellation doesn't
 hold yet. The earpiece route hasn't been tried.
+
+## Next for the echo
+
+From our kernel's AoC driver and the owner's stock configuration
+(`vendor/etc/audio_platform_configuration.xml`, `mixer_paths_aidl.xml`):
+
+- `FT AEC Reference Source` doesn't reach the AoC when set; it goes out
+  with the modem microphone's start (`CMD_AUDIO_INPUT_MODEM_INPUT_START_2`,
+  `ref_input_source`). With the built-in microphone, `SPEAKER` and `Default`
+  both send index 0, so this control changes nothing for our calls.
+- `AoC Modem Mixer ASP Mode` (block 19, component 15, the block the tuning
+  goes to) read `ASP_OFF` during our calls. Stock's mixer file doesn't set
+  it, so stock's HAL sets it in code if at all. `ASP_ON` during the call is
+  the next thing to try, with the tuning and the DSP mode.
+- Stock's telephony tuner applies the wideband tuning to narrowband voice
+  (`APPLY_WB_TUNING_FOR_NB_VOICE`), so which section of the tuning applies
+  may depend on the call's codec band.
+- Stock also runs a telephony speaker compensation tuner with
+  `compens_spk_l.conf` and `compens_spk_r.conf` (text tables of value
+  pairs in the factory image's `/vendor/etc`), which we don't apply.
