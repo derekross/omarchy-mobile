@@ -17,7 +17,8 @@ ln -sfn ../omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service"
 install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
   "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
-for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules; do
+for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules \
+             70-omamobile-dma-heap.rules; do
   install -Dm644 "vendor/udev/rules.d/$rules" "$destination/usr/lib/udev/rules.d/$rules"
 done
 install -Dm644 vendor/systemd/network/20-usb-gadget.network \
