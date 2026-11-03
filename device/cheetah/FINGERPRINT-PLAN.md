@@ -9,7 +9,7 @@ after. Before storageproxyd the runner makes the read-only copies of
 or once the copy or `persist:/ss/0` differs from its recorded hash, and runs
 one storage proxy per boot. The reference phone was reinstalled on
 2026-11-02 and enrolled again by hand (F19 results, section 7). The
-fresh-install checks (F19 T1-T3) haven't run yet.
+fresh-install checks (F19 T1-T3) ran on 2026-11-03: a fresh 2026.11.02 install (`7.3.0-rc6-omamobile-g2219cc6cda77`), `tools/phone-provision` from the owner's factory image and a fresh NV backup, omamobile-fingerprint 0.1.15 (after #379's `diffutils` fix; 0.1.13 in the image refused with a false "differs" because `cmp` was missing) started on its own at boot, setup offered "Add a fingerprint", the owner enrolled one and the lock screen unlocks with it.
 
 Earlier status (2026-10-19): **works, opt-in.** F3-F9 (the HAL) and the fprintd
 stages through F16b passed on the phone (section 7): the lock screen
