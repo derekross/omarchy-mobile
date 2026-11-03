@@ -45,4 +45,7 @@ if command -v systemd-analyze >/dev/null; then
         -e 'omamobile-sitd.service' -e '^$' && fail "$u verify" || true
   done
 fi
+! grep -qx 'Requires=omamobile-modem.service' systemd/omamobile-sitd.service \
+  || fail "the base unit must use the device's sitd policy"
+grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the RIL needs an installed device sitd policy"
 pass "staged layout, config and units"

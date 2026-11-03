@@ -1,6 +1,30 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a: connect Phone and Messages to sitd
 
+First-step implementation (2026-11-03), offline: branch `tegu-mmd-attach`
+builds on this plan and the dependency fix (#363), with the existing SIM,
+safe-release and opt-in tegu audio work retained. The optional
+`omamobile-telephony-tegu` package installs mmd, the agent, an active-RIL
+bridge policy and `omamobile-tegu-mmd-attach --check|--attach`. It enables
+nothing. The canonical sitd unit now gets its modem dependency from a
+device-owned drop-in: tegu uses Requisite on its already running starter,
+while cheetah and raven retain Requires on their modem unit. A new
+`omamobile-sitd-policy` dependency ensures these drop-ins accompany a RIL
+upgrade. [Package/runbook](../../packages/omamobile-telephony-tegu/README.md).
+No phone contact or hardware qualification was performed for this change.
+The seven affected/dependency package suites passed; mmd and the attach
+package were rerun after final ownership/recovery changes. The attach
+package has 21 offline tests, including systemd verification of all three
+device policies. One bridge API comparison skips missing reference XML.
+The architecture-independent attach package also built offline with
+makepkg (dependency installation and signing disabled). No rootfs or ARM
+modem package was built by that native package check.
+
+
+The investigation below records the older base and its missing pieces;
+the first-step package implements bridge attachment, not modem boot or
+cold-login qualification.
+
 Status (2026-11-03): offline investigation on `origin/main` at `31fbcf9`.
 The owner reports texts both ways and calls through `omamobile-sit` on the
 palmtop. No phone contact in this investigation. This is an integration

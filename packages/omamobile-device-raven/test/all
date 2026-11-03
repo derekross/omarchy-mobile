@@ -70,6 +70,10 @@ done
   || fail "the sleep hook is linked into system-sleep"
 [[ $(readlink "$tmp/root/usr/lib/systemd/user/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
   || fail "the sleep watcher is enabled by a vendor wants link"
+# The canonical sitd unit gets its modem dependency from this device policy.
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/10-device-modem.conf ]] \
+  || fail "the device sitd policy is staged"
+grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "install stages the package"
 
 # omamobile-wlan-mac only ever sets a unicast, globally administered address
