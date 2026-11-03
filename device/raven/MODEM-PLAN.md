@@ -812,10 +812,11 @@ binary: a single-module `make` had rebuilt nothing):
   93-minute link death may have been the same thing before the dead-link
   check existed.
 - **Fixes:**
-  - omamobile-modem 0.1.11: a crash raises a notification ("Cellular
+  - omamobile-modem 0.1.14: a crash raises a notification ("Cellular
     stopped") with the crash record's path;
-  - omamobile-modem-sit 0.3.5: when the CP is gone, sitd exits with one
-    line ("the modem went away ...") instead of a traceback.
+  - omamobile-modem-sit, in the release #389 lands in: when the CP is
+    gone, sitd exits with one line ("the modem went away ...") instead of
+    a traceback.
   - During bring-up the watcher also held a logind sleep inhibitor while
     the CP was ONLINE. It isn't in the package: it would cost every
     phone's battery for a raven kernel problem, and the kernel fixes
