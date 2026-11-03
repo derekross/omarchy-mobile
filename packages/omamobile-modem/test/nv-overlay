@@ -1,0 +1,280 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offline tests for the NV overlay (lib/omamobile-modem-nv-overlay) on made-up
+# NV-like files in a scratch directory: layering, the identity and
+# calibration refusal, a corrupt overlay falling back, invalidation by a new
+# backup, atomic writes, reset, and the profile's order (apply before the
+# stock checksum, capture after the CP power-off). No real NV, no partition,
+# no /dev, no root.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+export PYTHONDONTWRITEBYTECODE=1
+tool=$PWD/lib/omamobile-modem-nv-overlay
+cli=$PWD/bin/omamobile-modem
+
+python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$tool" || fail "$tool parses"
+bash -n "$cli" || fail "$cli parses"
+if command -v shellcheck >/dev/null; then shellcheck -S warning "$cli" || fail "shellcheck $cli"; fi
+pass "overlay scripts parse"
+
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+export OMAMOBILE_MODEM_NV_OVERLAY=$t/var/modem-nv-overlay
+export OMAMOBILE_MODEM_NV_OVERLAY_ENABLE=$t/enable
+export OMAMOBILE_MODEM_NV_OVERLAY_RESET_MARK=$t/runmark/nv-overlay-reset
+export OMAMOBILE_MODEM_NV_OVERLAY_LOCK=$t/runmark/nv-overlay.lock
+mkdir -p "$t/var"
+: > "$t/enable"
+ov() { python3 "$tool" "$@"; }
+
+# Synthetic NV filesystems: made-up bytes of the stock sizes' shape (small
+# here), each NV file with the stock salted MD5 beside it.
+python3 - "$t/base" <<'PY'
+import hashlib, os, sys
+root = sys.argv[1]
+def nv(path, fill):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = bytes([fill]) * 4096
+    open(path, 'wb').write(data)
+    open(path + '.md5', 'wb').write(hashlib.md5(data + b'Samsung_SIT_RIL').hexdigest().encode())
+nv(f'{root}/efs/nv_normal.bin', 0x11)
+nv(f'{root}/efs/nv_protected.bin', 0x22)
+nv(f'{root}/efs_backup/nv_protected.bak', 0x22)
+os.makedirs(f'{root}/modem_userdata/state', exist_ok=True)
+open(f'{root}/modem_userdata/state/made-up.dat', 'wb').write(b'x' * 100)
+PY
+sums() { # $1 file, $2 a word that changes every digest
+  for i in efs efs_backup modem_a modem_userdata persist; do
+    printf '%s  %s.img\n' "$(printf '%s-%s' "$2" "$i" | sha256sum | cut -d' ' -f1)" "$i"
+  done > "$1"
+}
+sums "$t/sums" backup-1
+# A "boot": a fresh RAM copy of the base, a fresh /run.
+boot() { rm -rf "$t/root" "$t/run" "$t/runmark"; cp -a "$t/base" "$t/root"; }
+# What the modem does: rewrite nv_normal.bin (and its salted MD5), the
+# protected registry, and a file in modem_userdata.
+modem_writes() { # $1 fill byte for nv_normal
+  python3 - "$t/root" "$1" <<'PY'
+import hashlib, sys
+root, fill = sys.argv[1], int(sys.argv[2], 0)
+def nv(path, fill):
+    data = bytes([fill]) * 4096
+    open(path, 'wb').write(data)
+    open(path + '.md5', 'wb').write(hashlib.md5(data + b'Samsung_SIT_RIL').hexdigest().encode())
+nv(f'{root}/efs/nv_normal.bin', fill)
+nv(f'{root}/efs/nv_protected.bin', 0x99)
+open(f'{root}/modem_userdata/state/made-up.dat', 'wb').write(b'y' * 100)
+PY
+}
+same() { cmp -s "$1" "$2"; }
+
+# 1. No overlay yet: apply records the base and changes nothing.
+boot
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) || fail "apply without an overlay: $out"
+[[ $out == *"no overlay yet"* ]] || fail "apply says there is no overlay: $out"
+diff -r "$t/base" "$t/root" >/dev/null || fail "apply without an overlay leaves the copy alone"
+[[ $(stat -c %a "$t/run") == 700 && $(stat -c %a "$t/run/base.json") == 600 ]] || fail "the run state is private"
+pass "no overlay: the base alone"
+
+# 2. Capture: only the allowed group is kept; the protected registry and the
+#    file off the allow-list are logged and dropped.
+modem_writes 0x33
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" --reason stop 2>&1) || fail "capture: $out"
+[[ $out == *"kept 2 file(s) at stop: efs/nv_normal.bin, efs/nv_normal.bin.md5"* ]] || fail "capture keeps nv_normal and its checksum: $out"
+[[ $out == *"changed efs/nv_protected.bin: never kept: identity or calibration"* ]] || fail "the protected registry is refused: $out"
+[[ $out == *"changed modem_userdata/state/made-up.dat: not kept: not on the allow-list"* ]] || fail "a file off the allow-list is dropped: $out"
+s=$OMAMOBILE_MODEM_NV_OVERLAY
+[[ $(stat -c %a "$s") == 700 && $(stat -c %a "$s/objects") == 700 && $(stat -c %a "$s/MANIFEST") == 600 ]] || fail "the store is root-only (0700/0600)"
+[[ $(find "$s/objects" -type f | wc -l) -eq 2 ]] || fail "two objects stored"
+grep -q 'nv_protected' "$s/MANIFEST" && fail "nothing protected in the MANIFEST"
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" --reason timer 2>&1)
+[[ $out == *"unchanged (2 file(s)); nothing written"* && $out != *"never kept"* ]] || fail "a second capture writes nothing and logs each refusal once: $out"
+pass "capture keeps only the allowed group"
+
+# 3. The next boot: the overlay is laid over a fresh base copy; protected
+#    files and everything else come from the base.
+cp "$t/root/efs/nv_normal.bin" "$t/expect-normal"
+boot
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) || fail "apply: $out"
+[[ $out == *"overlay applied: 2 file(s)"* ]] || fail "apply lays the overlay: $out"
+same "$t/root/efs/nv_normal.bin" "$t/expect-normal" || fail "nv_normal.bin comes from the overlay"
+same "$t/root/efs/nv_protected.bin" "$t/base/efs/nv_protected.bin" || fail "nv_protected.bin comes from the base"
+same "$t/root/modem_userdata/state/made-up.dat" "$t/base/modem_userdata/state/made-up.dat" || fail "modem_userdata comes from the base"
+ls "$t/root/efs" | grep -q omamobile-nv-tmp && fail "no temporary files left in the copy"
+python3 lib/omamobile-modem-cp nv-check "$t/root/efs" "$t/root/efs_backup" 2>/dev/null || fail "the layered copy passes the stock checksum check"
+pass "layering: the overlay over the base, protected files from the base"
+
+# 4. An overlay entry for a protected file (a hand edit with a correct
+#    MANIFEST checksum) is refused: the overlay is set aside, base alone.
+cp -a "$s" "$t/good-store"
+python3 - "$s" "$t/base/efs/nv_protected.bin" <<'PY'
+import hashlib, os, shutil, sys
+store, protected = sys.argv[1:]
+data = open(protected, 'rb').read()
+digest = hashlib.sha256(data).hexdigest()
+shutil.copy(protected, f'{store}/objects/{digest}'); os.chmod(f'{store}/objects/{digest}', 0o600)
+lines = open(f'{store}/MANIFEST').read().splitlines()[:-1]
+lines.append(f'file efs/nv_protected.bin {digest} {len(data)}')
+body = '\n'.join(lines) + '\n'
+open(f'{store}/MANIFEST', 'w').write(body + 'sum ' + hashlib.sha256(body.encode()).hexdigest() + '\n')
+PY
+boot
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) || fail "apply with a protected entry: $out"
+[[ $out == *"set aside (not valid: efs/nv_protected.bin is protected"* ]] || fail "a protected entry sets the overlay aside: $out"
+diff -r "$t/base" "$t/root" >/dev/null || fail "after a refusal the copy is the base"
+[[ ! -e $s && $(ls -d "$s".set-aside-* | wc -l) -eq 1 ]] || fail "the refused overlay is kept aside"
+python3 -c '
+import sys; g = {"__name__": "t"}; exec(open(sys.argv[1]).read(), g)
+assert not any(g["protected"](p) for p in g["ALLOW_PATHS"])
+for p in ("efs/nv_protected.bin", "efs/nv_protected.bin.md5", "efs_backup/nv_protected.bak", "modem_userdata/imei", "efs/rf_cal.dat"):
+    assert g["protected"](p), p
+    assert g["verdict"](p).startswith("never kept"), p
+' "$tool" || fail "the allow-list and the protected list never overlap"
+pass "identity and calibration files are never taken from the overlay"
+
+# 5. A corrupt overlay (one byte of a stored object) falls back to the base.
+rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
+obj=$(find "$s/objects" -type f -size +1k | head -1)
+printf '\x00' | dd of="$obj" bs=1 seek=10 conv=notrunc status=none
+boot
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) || fail "apply with a corrupt overlay: $out"
+[[ $out == *"set aside (not valid: efs/nv_normal.bin"*"does not match its checksum"*"the modem starts from the backup alone"* ]] || fail "a corrupt object sets the overlay aside: $out"
+diff -r "$t/base" "$t/root" >/dev/null || fail "a corrupt overlay leaves the base"
+# a MANIFEST edited without its checksum, a world-readable store, a symlinked
+# object: each set aside
+for breakage in manifest mode symlink; do
+  rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
+  case $breakage in
+    manifest) sed -i 's/ stop$/ timer/' "$s/MANIFEST" ;;
+    mode) chmod 0755 "$s" ;;
+    symlink) obj=$(find "$s/objects" -type f | head -1); mv "$obj" "$t/elsewhere"; ln -s "$t/elsewhere" "$obj" ;;
+  esac
+  boot
+  out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) || fail "apply ($breakage): $out"
+  [[ $out == *"set aside (not valid"* ]] || fail "a broken store ($breakage) is set aside: $out"
+  diff -r "$t/base" "$t/root" >/dev/null || fail "a broken store ($breakage) leaves the base"
+done
+# an object whose salted MD5 pair doesn't match (both stored copies intact)
+rm -rf "$s" "$s".set-aside-*
+boot; ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>/dev/null
+printf '0%.0s' {1..32} > "$t/root/efs/nv_normal.bin.md5"   # a wrong MD5, right size
+python3 - "$t/root" <<'PY'
+import sys; open(sys.argv[1] + '/efs/nv_normal.bin', 'wb').write(b'\x44' * 4096)
+PY
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" --reason stop 2>&1)
+[[ $out == *"the stock salted checksum does not match"*"the overlay stays as it was"* && ! -e $s ]] || fail "an inconsistent pair is never kept: $out"
+pass "a corrupt or broken overlay falls back to the base"
+
+# 6. A new NV backup (new checksums) invalidates the overlay.
+rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
+sums "$t/sums2" backup-2
+boot
+out=$(ov apply --sums "$t/sums2" --root "$t/root" --run "$t/run" 2>&1) || fail "apply on a new backup: $out"
+[[ $out == *"set aside (made on another NV backup"* ]] || fail "a new backup sets the overlay aside: $out"
+diff -r "$t/base" "$t/root" >/dev/null || fail "a new backup starts from the base"
+rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
+out=$(ov status --sums "$t/sums2" 2>&1)
+[[ $out == *"ANOTHER backup"* ]] || fail "status names a binding to another backup: $out"
+# and capture refuses when the checksums changed under a running profile
+boot; ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>/dev/null
+out=$(ov capture --sums "$t/sums2" --root "$t/root" --run "$t/run" 2>&1) && fail "capture after the checksums changed fails"
+[[ $out == *"checksums changed since this start"* ]] || fail "capture names the changed checksums: $out"
+pass "a new backup invalidates the overlay"
+
+# 7. Atomic writes: a failure before the MANIFEST rename leaves the old
+#    overlay whole; leftovers from a crash don't break loading.
+rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
+boot; ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>/dev/null
+modem_writes 0x55
+before=$(sha256sum "$s/MANIFEST")
+for point in object rename; do
+  out=$(OMAMOBILE_MODEM_NV_OVERLAY_FAIL_AT=$point ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) && fail "an injected failure ($point) fails the capture"
+  [[ $(sha256sum "$s/MANIFEST") == "$before" ]] || fail "the old MANIFEST survives a failure at $point"
+  ov status --sums "$t/sums" | grep -q '^state: valid, 2 file' || fail "the old overlay still loads after a failure at $point"
+done
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1) || fail "capture after the failures: $out"
+[[ ! -e $s/MANIFEST.tmp && $(find "$s/objects" -type f | wc -l) -eq 2 ]] || fail "the next capture cleans leftovers and old objects"
+grep -q "^file efs/nv_normal.bin $(sha256sum "$t/root/efs/nv_normal.bin" | cut -d' ' -f1) " "$s/MANIFEST" || fail "the new MANIFEST holds the new contents"
+grep -q 'fsync' "$tool" && grep -q 'os.replace(tmp, store / .MANIFEST.)' "$tool" || fail "MANIFEST is written by fsync and rename"
+pass "atomic writes"
+
+# 8. A missing allowed file or a size change keeps the old overlay.
+before=$(sha256sum "$s/MANIFEST")
+mv "$t/root/efs/nv_normal.bin" "$t/moved"
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1)
+[[ $out == *"missing: the overlay stays as it was"* && $(sha256sum "$s/MANIFEST") == "$before" ]] || fail "a deleted NV file never empties the overlay: $out"
+python3 - "$t/root" <<'PY'
+import hashlib, sys
+data = b'\x66' * 8192
+open(sys.argv[1] + '/efs/nv_normal.bin', 'wb').write(data)
+open(sys.argv[1] + '/efs/nv_normal.bin.md5', 'wb').write(hashlib.md5(data + b'Samsung_SIT_RIL').hexdigest().encode())
+PY
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1)
+[[ $out == *"changed size against the base copy"* && $(sha256sum "$s/MANIFEST") == "$before" ]] || fail "a size change is never kept: $out"
+pass "missing or resized files keep the old overlay"
+
+# 9. diff is read-only and names what a capture keeps.
+before=$(find "$t/root" "$s" -type f -exec sha256sum {} + | sort)
+out=$(ov diff --root "$t/root" --run "$t/run")
+[[ $out == *"changed  efs/nv_protected.bin (4096 bytes): never kept: identity or calibration"* && $out == *"efs/nv_normal.bin (8192 bytes): kept"* ]] || fail "diff lists the changes and verdicts: $out"
+[[ $(find "$t/root" "$s" -type f -exec sha256sum {} + | sort) == "$before" ]] || fail "diff writes nothing"
+pass "diff is read-only"
+
+# 10. Off: without the enable file nothing is laid over and nothing kept.
+rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
+rm "$t/enable"
+boot
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1)
+[[ $out == *"off ("* ]] && diff -r "$t/base" "$t/root" >/dev/null || fail "off: apply lays nothing: $out"
+modem_writes 0x77
+before=$(sha256sum "$s/MANIFEST")
+ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" 2>/dev/null
+[[ $(sha256sum "$s/MANIFEST") == "$before" ]] || fail "off: capture keeps nothing"
+: > "$t/enable"
+pass "off unless enabled"
+
+# 11. Reset: the overlay goes, captures do nothing until the reboot, and the
+#     next boot runs from the base alone.
+boot; ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>/dev/null
+mkdir -p "$s.set-aside-20990101T000000"
+out=$(ov reset)
+[[ $out == *"removed: $s"* && ! -e $s && -e $s.set-aside-20990101T000000 ]] || fail "reset removes the overlay, not the set-aside copies: $out"
+modem_writes 0x88
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" --reason stop 2>&1)
+[[ $out == *"reset in this boot"* && ! -e $s ]] || fail "after a reset the stop's capture keeps nothing: $out"
+ov status --sums "$t/sums" | grep -q '^state: none' || fail "status after a reset: none"
+ov reset --all >/dev/null
+[[ ! -e $s.set-aside-20990101T000000 ]] || fail "reset --all removes the set-aside copies"
+boot
+out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1)
+[[ $out == *"no overlay yet"* ]] && diff -r "$t/base" "$t/root" >/dev/null || fail "after a reset the next boot uses the base: $out"
+pass "reset"
+
+# 12. Set-aside copies are bounded.
+for i in 1 2 3 4 5; do
+  rm -rf "$s"; cp -a "$t/good-store" "$s"; printf x >> "$s/MANIFEST"
+  boot; ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>/dev/null
+done
+[[ $(ls -d "$s".set-aside-* | wc -l) -eq 3 ]] || fail "at most three set-aside copies"
+pass "set-aside copies bounded"
+
+# 13. The profile's order: apply after the RAM copies are mounted and before
+#     the stock checksum check and any daemon; capture in profile_stop after
+#     the CP power-off; the CLI's commands; the units.
+conf=profiles/modem.conf
+setup=$(sed -n '/^profile_setup() {$/,/^}$/p' $conf)
+m=$(grep -n 'mount -t f2fs -o noatime "$l" "$mnt/$p"' <<<"$setup" | cut -d: -f1); a=$(grep -n 'MODEM_NV_OVERLAY" apply' <<<"$setup" | cut -d: -f1); c=$(grep -n 'MODEM_CP" nv-check' <<<"$setup" | cut -d: -f1)
+[[ -n $m && -n $a && -n $c && $m -lt $a && $a -lt $c ]] || fail "apply runs after the f2fs mounts and before nv-check (mount=$m apply=$a check=$c)"
+grep -q 'modem_copy "\$p"; done' <<<"$setup" || fail "the base copies are still read and checked first"
+stop=$(sed -n '/^profile_stop() {$/,/^}$/p' $conf)
+p=$(grep -n 'power-off' <<<"$stop" | cut -d: -f1); k=$(grep -n 'modem_nv_capture stop' <<<"$stop" | cut -d: -f1)
+[[ -n $p && -n $k && $p -lt $k ]] || fail "the stop captures after the CP power-off (power-off=$p capture=$k)"
+grep -q 'nsenter --target "\$pid" --mount -- "\$MODEM_NV_OVERLAY" capture' $conf || fail "the stop's capture enters the profile's mount namespace"
+grep -q 'ro=1\|/ro) != 1' $conf || fail "the ro=1 refusal is still in profile_check"
+grep -qx 'Wants=omamobile-modem-nv-overlay.timer' systemd/omamobile-modem.service || fail "the modem unit pulls in the timer"
+grep -qx 'PartOf=omamobile-modem.service' systemd/omamobile-modem-nv-overlay.timer || fail "the timer stops with the modem"
+grep -qx 'Requisite=omamobile-modem.service' systemd/omamobile-modem-nv-overlay.service || fail "the capture needs the modem running"
+out=$("$cli" nv-overlay bogus 2>&1) && fail "the CLI refuses an unknown command"
+[[ $out == *usage* ]] || fail "the CLI prints its usage: $out"
+pass "profile order, units and CLI"

@@ -1,0 +1,650 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-modem-nv-overlay: the modem's own NV writes, kept per phone on userdata.
+
+  apply   --sums FILE --root DIR --run DIR
+          At the profile's start, inside its namespace, after the RAM copies of
+          efs, efs_backup and modem_userdata are mounted at DIR/{efs,...} and
+          before any daemon runs: record the base copy's files, then lay the
+          overlay over them if it is valid and made on this backup.
+  capture --sums FILE --root DIR --run DIR [--reason stop|timer|manual]
+          Keep the modem's writes to allowed files: compare the RAM copies with
+          the base recorded by apply and write the overlay atomically.
+  diff    --root DIR --run DIR
+          Read-only: every file the modem changed since the start, and whether
+          a capture would keep it. Names and sizes only.
+  status  [--sums FILE]
+          Read-only: whether the overlay is on, valid, bound to this backup.
+  reset   [--all]
+          Delete the overlay (--all: its set-aside copies too). The next boot
+          runs from the backup alone; captures do nothing until that reboot.
+
+The rule (device/cheetah/MODEM-PLAN.md, "NV overlay"): Linux never writes the
+modem's NV partitions. The modem's own writes persist only here, under
+/var/lib/omamobile/modem-nv-overlay (root, 0700), and only for the files in
+ALLOW: never for identity or calibration files. The base is still the RAM copy
+of the partitions, checked against the off-repo backup's checksums before
+anything here runs; the overlay is bound to those checksums, so a new backup
+sets it aside.
+
+Granularity: whole files. rfsd keeps the modem's NV as files in the three f2fs
+filesystems (nv_normal.bin and nv_protected.bin, each with a salted MD5 beside
+it), not as raw blocks, so a file is the unit that can be allowed or refused.
+
+Store layout (written only by capture):
+  MANIFEST            header, binding, entries, its own checksum (0600)
+  objects/<sha256>    the files' contents, named by their SHA-256 (0600)
+A capture writes the objects first, then MANIFEST.tmp, fsyncs, renames it over
+MANIFEST and fsyncs the directory, then removes unreferenced objects: a crash
+at any point leaves the old or the new MANIFEST, each with all its objects.
+"""
+import argparse
+import datetime
+import errno
+import fcntl
+import fnmatch
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import sys
+
+STORE = Path(os.environ.get('OMAMOBILE_MODEM_NV_OVERLAY', '/var/lib/omamobile/modem-nv-overlay'))
+# Off until the first hardware test passes (MODEM-PLAN, NV overlay runbook):
+# the human creates this file. Without it apply lays nothing over the base
+# and capture keeps nothing; status and reset work either way.
+ENABLE = Path(os.environ.get('OMAMOBILE_MODEM_NV_OVERLAY_ENABLE', '/etc/omamobile/modem-nv-overlay-enable'))
+# Written by reset: captures in this boot do nothing, so the running profile's
+# stop can't recreate a deleted overlay. /run goes with the reboot.
+RESET_MARK = Path(os.environ.get('OMAMOBILE_MODEM_NV_OVERLAY_RESET_MARK', '/run/omamobile-modem/nv-overlay-reset'))
+LOCK = Path(os.environ.get('OMAMOBILE_MODEM_NV_OVERLAY_LOCK', '/run/omamobile-modem/nv-overlay.lock'))
+# Test hook only: raise at a named point of the store write.
+FAIL_AT = os.environ.get('OMAMOBILE_MODEM_NV_OVERLAY_FAIL_AT', '')
+
+FORMAT = 'omamobile-modem-nv-overlay 1'
+# The filesystems the chroot gets read-write (RAM copies), as DIR/<name>.
+PARTS = ('efs', 'efs_backup', 'modem_userdata')
+# The checksum lines the overlay is bound to: every image the profile copies.
+IMAGES = ('efs.img', 'efs_backup.img', 'modem_a.img', 'modem_userdata.img', 'persist.img')
+NV_SALT = b'Samsung_SIT_RIL'
+
+# What may come from the overlay: groups of files kept together, each with
+# the check that must pass on the group's contents. Only nv_normal.bin, the
+# modem's "normal registry": the carrier profile applied through 0x4600, its
+# network and acquisition data and its IMS settings are NV items there
+# (MODEM-PROVIDER-PROFILES). The first hardware test confirms which files
+# the modem writes (`diff`); adding a group needs the maintainer's say-so,
+# as an addition to the storage guard's allowlist does (AGENTS.md section 1).
+ALLOW = (
+    ('efs/nv_normal.bin', 'efs/nv_normal.bin.md5'),
+)
+# Never from the overlay, whatever ALLOW says (checked at import and at
+# every load): the protected registry with the RF calibration and the
+# factory items, its backup partition, and anything named like an identity.
+# The IMEIs themselves are not in these filesystems (cbd reads them from
+# the bootloader's /chosen/config), but a name that looks like one is
+# refused anyway.
+PROTECTED = (
+    'efs/nv_protected.bin', 'efs/nv_protected.bin.md5', 'efs/nv_protected*',
+    'efs_backup/*', '*imei*', '*IMEI*', '*cal*', '*Cal*', '*CAL*', '*factory*',
+    '*serial*', '*mac*', '*bt_addr*', '*wifi*',
+)
+# Bounds: the NV files are 512 KiB each in this firmware.
+MAX_FILE = 4 << 20
+MAX_TOTAL = 16 << 20
+SET_ASIDE_KEEP = 3
+
+ALLOW_PATHS = {path: group for group in ALLOW for path in group}
+
+
+def protected(path):
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in PROTECTED)
+
+
+for _path in ALLOW_PATHS:
+    if protected(_path):
+        raise SystemExit(f'omamobile-modem-nv-overlay: {_path} is both allowed and protected')
+
+
+class Invalid(Exception):
+    pass
+
+
+def say(*args):
+    print('omamobile-modem-nv-overlay:', *args, file=sys.stderr, flush=True)
+
+
+def show(path):
+    """A path for the log: long digit runs masked (in case a file is ever
+    named after a number), anything unusual replaced."""
+    path = re.sub(r'[^A-Za-z0-9._/+-]', '?', path)
+    return re.sub(r'\d{6,}', '<digits>', path)
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def enabled():
+    return ENABLE.exists()
+
+
+# -- the base and the binding ------------------------------------------------
+
+def binding(sums):
+    """SHA-256 of this backup's lines for IMAGES, normalised and sorted."""
+    found = {}
+    for line in Path(sums).read_text().splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        name = fields[1].lstrip('*')
+        if name in IMAGES:
+            if not re.fullmatch(r'[0-9a-fA-F]{64}', fields[0]):
+                raise Invalid(f'{sums}: a malformed line for {name}')
+            found[name] = fields[0].lower()
+    missing = [name for name in IMAGES if name not in found]
+    if missing:
+        raise Invalid(f'{sums} has no line for {", ".join(missing)}')
+    return sha256(''.join(f'{found[name]}  {name}\n' for name in sorted(IMAGES)).encode())
+
+
+def scan(root):
+    """Every file in the three filesystems: {path: [sha256, size]}; anything
+    that isn't a regular file is recorded with its type."""
+    tree = {}
+    for part in PARTS:
+        top = Path(root) / part
+        if not top.is_dir():
+            raise Invalid(f'no {top}')
+        for directory, dirs, files in os.walk(top):
+            dirs.sort()
+            for name in sorted(files) + [d for d in dirs if os.path.islink(os.path.join(directory, d))]:
+                full = os.path.join(directory, name)
+                rel = os.path.relpath(full, root)
+                st = os.lstat(full)
+                if stat.S_ISREG(st.st_mode):
+                    with open(full, 'rb') as f:
+                        tree[rel] = [sha256(f.read()), st.st_size]
+                else:
+                    tree[rel] = ['type:%o' % stat.S_IFMT(st.st_mode), 0]
+    return tree
+
+
+def write_private(path, data):
+    path = Path(path)
+    tmp = path.with_name(path.name + '.tmp')
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def run_dir(run):
+    run = Path(run)
+    run.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(run, 0o700)
+    return run
+
+
+def read_run(run, name):
+    try:
+        return json.loads((Path(run) / name).read_text())
+    except (OSError, ValueError) as error:
+        raise Invalid(f'no {name} from this start ({error}): was apply run?')
+
+
+# -- group checks --------------------------------------------------------------
+
+def check_group(group, contents):
+    """The check a group must pass on its contents (path -> bytes)."""
+    if group == ('efs/nv_normal.bin', 'efs/nv_normal.bin.md5'):
+        data, stored = contents[group[0]], contents[group[1]].strip()
+        if hashlib.md5(data + NV_SALT).hexdigest().encode() != stored:
+            raise Invalid(f'{group[0]}: the stock salted checksum does not match its .md5')
+        return
+    raise Invalid(f'no check for {group}')
+
+
+# -- the store -----------------------------------------------------------------
+
+def check_private(path, kind):
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode):
+        raise Invalid(f'{path} is a symlink')
+    if kind == 'dir' and not stat.S_ISDIR(st.st_mode) or kind == 'file' and not stat.S_ISREG(st.st_mode):
+        raise Invalid(f'{path} is not a {kind}')
+    if st.st_uid != os.geteuid():
+        raise Invalid(f'{path} is not owned by uid {os.geteuid()}')
+    if st.st_mode & 0o077:
+        raise Invalid(f'{path} is readable by others (mode {stat.S_IMODE(st.st_mode):o})')
+
+
+def manifest_text(bound, written, reason, entries):
+    lines = [FORMAT, f'base {bound}', f'written {written} {reason}']
+    lines += [f'file {path} {digest} {size}' for path, (digest, size) in sorted(entries.items())]
+    body = '\n'.join(lines) + '\n'
+    return body + f'sum {sha256(body.encode())}\n'
+
+
+def load(store=None):
+    """The valid store as {'base', 'written', 'reason', 'entries', 'contents'};
+    None if there is none; Invalid with the reason otherwise."""
+    store = Path(store or STORE)
+    if not os.path.lexists(store):
+        return None
+    check_private(store, 'dir')
+    manifest = store / 'MANIFEST'
+    if not os.path.lexists(manifest):
+        raise Invalid('no MANIFEST')
+    check_private(manifest, 'file')
+    check_private(store / 'objects', 'dir')
+    text = manifest.read_text(errors='strict')
+    lines = text.splitlines()
+    if len(lines) < 4 or lines[0] != FORMAT:
+        raise Invalid('not an overlay MANIFEST of this format')
+    body = '\n'.join(lines[:-1]) + '\n'
+    if lines[-1] != f'sum {sha256(body.encode())}':
+        raise Invalid('MANIFEST checksum does not match')
+    head = lines[1].split()
+    written = lines[2].split()
+    if len(head) != 2 or head[0] != 'base' or len(written) != 3 or written[0] != 'written':
+        raise Invalid('MANIFEST header malformed')
+    entries, contents, total = {}, {}, 0
+    for line in lines[3:-1]:
+        fields = line.split()
+        if len(fields) != 4 or fields[0] != 'file' or not re.fullmatch(r'[0-9a-f]{64}', fields[2]):
+            raise Invalid('MANIFEST entry malformed')
+        path, digest, size = fields[1], fields[2], int(fields[3])
+        if protected(path):
+            raise Invalid(f'{show(path)} is protected (identity or calibration): never taken from the overlay')
+        if path not in ALLOW_PATHS:
+            raise Invalid(f'{show(path)} is not on the allow-list')
+        if path in entries:
+            raise Invalid(f'{show(path)} listed twice')
+        if size > MAX_FILE:
+            raise Invalid(f'{show(path)} is larger than {MAX_FILE} bytes')
+        total += size
+        obj = store / 'objects' / digest
+        check_private(obj, 'file')
+        data = obj.read_bytes()
+        if len(data) != size or sha256(data) != digest:
+            raise Invalid(f'{show(path)}: the stored copy does not match its checksum')
+        entries[path] = (digest, size)
+        contents[path] = data
+    if total > MAX_TOTAL:
+        raise Invalid(f'more than {MAX_TOTAL} bytes in all')
+    for group in {ALLOW_PATHS[path] for path in entries}:
+        if any(path not in entries for path in group):
+            raise Invalid(f'{show(group[0])}: an incomplete group')
+        check_group(group, contents)
+    return {'base': head[1], 'written': written[1], 'reason': written[2],
+            'entries': entries, 'contents': contents}
+
+
+def set_aside(reason, store=None):
+    """Move the store out of the way (kept for a look, root-only) and log why."""
+    store = Path(store or STORE)
+    if not os.path.lexists(store):
+        return
+    stamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
+    target = store.with_name(f'{store.name}.set-aside-{stamp}')
+    n = 0
+    while os.path.lexists(target):
+        n += 1
+        target = store.with_name(f'{store.name}.set-aside-{stamp}-{n}')
+    os.rename(store, target)
+    fsync_dir(store.parent)
+    say(f'overlay set aside ({reason}): the modem starts from the backup alone; '
+        f'kept as {target} (omamobile-modem nv-overlay reset --all removes it)')
+    old = sorted(set_aside_copies(store))
+    for path in old[:-SET_ASIDE_KEEP]:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def set_aside_copies(store=None):
+    store = Path(store or STORE)
+    return [p for p in store.parent.glob(f'{store.name}.set-aside-*')] if store.parent.is_dir() else []
+
+
+def fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def fail_point(name):
+    if FAIL_AT == name:
+        raise OSError(errno.EIO, f'injected failure at {name}')
+
+
+def write_store(bound, reason, entries, contents, store=None):
+    """Objects first, then MANIFEST by rename, then remove what it doesn't use."""
+    store = Path(store or STORE)
+    old = os.umask(0o077)
+    try:
+        store.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        if not os.path.lexists(store):
+            os.mkdir(store, 0o700)
+            fsync_dir(store.parent)
+        objects = store / 'objects'
+        if not os.path.lexists(objects):
+            os.mkdir(objects, 0o700)
+        os.chmod(store, 0o700)
+        os.chmod(objects, 0o700)
+        for path, (digest, size) in entries.items():
+            obj = objects / digest
+            if os.path.lexists(obj):
+                try:
+                    check_private(obj, 'file')
+                    if sha256(obj.read_bytes()) == digest:
+                        continue
+                except Invalid:
+                    pass
+            write_private(obj, contents[path])
+            fail_point('object')
+        fsync_dir(objects)
+        written = datetime.datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z')
+        text = manifest_text(bound, written, reason, entries)
+        tmp = store / 'MANIFEST.tmp'
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        fail_point('rename')
+        os.replace(tmp, store / 'MANIFEST')
+        fsync_dir(store)
+        keep = {digest for digest, _ in entries.values()}
+        for obj in objects.iterdir():
+            if obj.name not in keep:
+                obj.unlink()
+        fsync_dir(objects)
+    finally:
+        os.umask(old)
+
+
+class Lock:
+    def __enter__(self):
+        LOCK.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        self.fd = os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        os.close(self.fd)
+
+
+# -- commands ------------------------------------------------------------------
+
+def apply(sums, root, run):
+    run = run_dir(run)
+    root = Path(root)
+    bound = binding(sums)
+    base = scan(root)
+    write_private(run / 'base.json', json.dumps({'binding': bound, 'files': base}).encode())
+    write_private(run / 'start.json', json.dumps({'files': base}).encode())
+    if not enabled():
+        say(f'off ({ENABLE} absent): the modem runs from the backup alone and its writes are not kept')
+        return 0
+    with Lock():
+        try:
+            overlay = load()
+        except (Invalid, OSError, UnicodeError, ValueError) as error:
+            set_aside(f'not valid: {error}')
+            return 0
+        if overlay is None:
+            say('no overlay yet: the modem starts from the backup alone')
+            return 0
+        if overlay['base'] != bound:
+            set_aside('made on another NV backup (the checksums changed)')
+            return 0
+        for path, (_, size) in overlay['entries'].items():
+            if base.get(path, [None, None])[1] != size:
+                set_aside(f'{show(path)} is not in the base copy at that size')
+                return 0
+        # every file to a temporary name first, then the renames: a failed
+        # write leaves the base copy untouched
+        tmps = []
+        try:
+            for path, data in overlay['contents'].items():
+                tmp = root / (path + '.omamobile-nv-tmp')
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                tmps.append((tmp, root / path))
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                shutil.copymode(root / path, tmp)
+                fail_point('apply-write')
+        except OSError as error:
+            for tmp, _ in tmps:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+            set_aside(f'could not be written into the RAM copy: {error}')
+            return 0
+        try:
+            for tmp, target in tmps:
+                os.replace(tmp, target)
+        except OSError as error:
+            set_aside(f'half applied: {error}')
+            say('the RAM copies are now mixed: refusing to start the modem (reboot; it starts from the backup)')
+            return 1
+        for part in PARTS:
+            fsync_dir(root / part)
+        write_private(run / 'start.json', json.dumps({'files': scan(root)}).encode())
+        say(f'overlay applied: {len(overlay["entries"])} file(s) '
+            f'({", ".join(show(p) for p in sorted(overlay["entries"]))}), '
+            f'kept {overlay["written"]} at {overlay["reason"]}')
+    return 0
+
+
+def changes(before, after):
+    out = {}
+    for path in sorted(set(before) | set(after)):
+        if path.endswith('.omamobile-nv-tmp'):
+            continue
+        if path not in after:
+            out[path] = 'deleted'
+        elif path not in before:
+            out[path] = 'new'
+        elif before[path] != after[path]:
+            out[path] = 'changed'
+    return out
+
+
+def verdict(path):
+    if protected(path):
+        return 'never kept: identity or calibration'
+    if path in ALLOW_PATHS:
+        return 'kept'
+    return 'not kept: not on the allow-list'
+
+
+def read_group(root, group):
+    contents = {}
+    for path in group:
+        full = Path(root) / path
+        st = os.lstat(full)
+        if not stat.S_ISREG(st.st_mode):
+            raise Invalid(f'{show(path)} is not a regular file')
+        if st.st_size > MAX_FILE:
+            raise Invalid(f'{show(path)} is larger than {MAX_FILE} bytes')
+        with open(full, 'rb') as f:
+            contents[path] = f.read()
+    return contents
+
+
+def capture(sums, root, run, reason):
+    if not enabled():
+        say(f'off ({ENABLE} absent): nothing kept')
+        return 0
+    if RESET_MARK.exists():
+        say('reset in this boot: nothing is kept until the reboot')
+        return 0
+    if reason not in ('stop', 'timer', 'manual'):
+        raise Invalid(f'unknown reason {reason}')
+    base_info = read_run(run, 'base.json')
+    start = read_run(run, 'start.json')['files']
+    base = base_info['files']
+    bound = binding(sums)
+    if base_info['binding'] != bound:
+        raise Invalid('the checksums changed since this start: nothing kept (reboot)')
+    with Lock():
+        if RESET_MARK.exists():
+            say('reset in this boot: nothing is kept until the reboot')
+            return 0
+        now = scan(root)
+        logged = Path(run) / 'refused.json'
+        try:
+            seen = set(json.loads(logged.read_text()))
+        except (OSError, ValueError):
+            seen = set()
+        for path, how in changes(start, now).items():
+            if verdict(path) != 'kept' and path not in seen:
+                say(f'the modem {how} {show(path)}: {verdict(path)}; it is dropped at the reboot')
+                seen.add(path)
+        write_private(logged, json.dumps(sorted(seen)).encode())
+        entries, contents = {}, {}
+        for group in ALLOW:
+            try:
+                first = read_group(root, group)
+                check_group(group, first)
+                if read_group(root, group) != first:
+                    raise Invalid('changed while being read')
+            except FileNotFoundError:
+                say(f'{show(group[0])} or its pair is missing: the overlay stays as it was')
+                return 0
+            except (Invalid, OSError) as error:
+                say(f'{show(group[0])}: {error}: the overlay stays as it was (mid-write? the next capture tries again)')
+                return 0
+            for path in group:
+                if base.get(path, [None, None])[1] != len(first[path]):
+                    say(f'{show(path)} changed size against the base copy: the overlay stays as it was')
+                    return 0
+            if any(sha256(first[path]) != base[path][0] for path in group):
+                for path in group:
+                    entries[path] = (sha256(first[path]), len(first[path]))
+                    contents[path] = first[path]
+        try:
+            current = load()
+        except (Invalid, OSError, UnicodeError, ValueError) as error:
+            set_aside(f'not valid: {error}')
+            current = None
+        if current is not None and current['base'] == bound and current['entries'] == entries:
+            say(f'unchanged ({len(entries)} file(s)); nothing written')
+            return 0
+        write_store(bound, reason, entries, contents)
+        say(f'kept {len(entries)} file(s) at {reason}'
+            + (f': {", ".join(show(p) for p in sorted(entries))}' if entries else ' (the modem changed no allowed file)'))
+    return 0
+
+
+def diff(root, run):
+    start = read_run(run, 'start.json')['files']
+    base = read_run(run, 'base.json')['files']
+    now = scan(root)
+    found = changes(start, now)
+    print(f'since this start: {len(found)} change(s)')
+    for path, how in found.items():
+        size = now.get(path, [None, 0])[1]
+        print(f'  {how:8} {show(path)} ({size} bytes): {verdict(path)}')
+    from_overlay = changes(base, start)
+    print(f'laid over the base at this start: {len(from_overlay)} file(s)')
+    for path in from_overlay:
+        print(f'  {show(path)}')
+    return 0
+
+
+def status(sums):
+    print(f'overlay: {STORE}')
+    print(f'enabled: {"yes" if enabled() else f"no ({ENABLE} absent)"}')
+    if RESET_MARK.exists():
+        print('reset in this boot: yes (nothing is kept until the reboot)')
+    rc = 0
+    try:
+        overlay = load()
+    except (Invalid, OSError, UnicodeError, ValueError) as error:
+        print(f'state: not valid ({error}); the next start sets it aside')
+        overlay, rc = None, 1
+    else:
+        if overlay is None:
+            print('state: none (the modem starts from the backup alone)')
+    if overlay is not None:
+        print(f'state: valid, {len(overlay["entries"])} file(s), kept {overlay["written"]} at {overlay["reason"]}')
+        for path, (_, size) in sorted(overlay['entries'].items()):
+            print(f'  {show(path)} ({size} bytes)')
+        try:
+            same = overlay['base'] == binding(sums)
+            print('backup: ' + ('the one in ' + str(sums) if same else
+                                'ANOTHER backup than ' + str(sums) + ': the next start sets it aside'))
+        except (Invalid, OSError) as error:
+            print(f'backup: cannot compare ({error})')
+    copies = sorted(set_aside_copies())
+    if copies:
+        print(f'set aside: {len(copies)} ({", ".join(p.name for p in copies)})')
+    return rc
+
+
+def reset(everything):
+    with Lock():
+        RESET_MARK.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        RESET_MARK.write_text(datetime.datetime.now().astimezone().isoformat() + '\n')
+        removed = []
+        if os.path.lexists(STORE):
+            shutil.rmtree(STORE)
+            removed.append(str(STORE))
+        if everything:
+            for path in set_aside_copies():
+                shutil.rmtree(path)
+                removed.append(str(path))
+        if STORE.parent.is_dir():
+            fsync_dir(STORE.parent)
+    print('removed: ' + (', '.join(removed) if removed else 'nothing (there was no overlay)'))
+    print('the next boot runs the modem from the backup alone; until then nothing is kept')
+    return 0
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog='omamobile-modem-nv-overlay', description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest='cmd', required=True)
+    for name in ('apply', 'capture', 'diff'):
+        p = sub.add_parser(name)
+        if name != 'diff':
+            p.add_argument('--sums', required=True)
+        p.add_argument('--root', required=True)
+        p.add_argument('--run', required=True)
+        if name == 'capture':
+            p.add_argument('--reason', default='manual')
+    p = sub.add_parser('status')
+    p.add_argument('--sums', default=os.environ.get('OMAMOBILE_MODEM_NV_SUMS', '/etc/omamobile/modem-nv.sha256'))
+    p = sub.add_parser('reset')
+    p.add_argument('--all', action='store_true')
+    args = parser.parse_args(argv)
+    try:
+        if args.cmd == 'apply':
+            return apply(args.sums, args.root, args.run)
+        if args.cmd == 'capture':
+            return capture(args.sums, args.root, args.run, args.reason)
+        if args.cmd == 'diff':
+            return diff(args.root, args.run)
+        if args.cmd == 'status':
+            return status(args.sums)
+        return reset(args.all)
+    except (Invalid, OSError) as error:
+        say(f'error: {error}')
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

@@ -86,7 +86,9 @@ stage=$t/stage
 ./install "$stage"
 for f in usr/lib/omamobile-vendor/omamobile-modem-start usr/lib/omamobile-vendor/omamobile-modem-cp \
          usr/lib/omamobile-vendor/profiles/modem.conf usr/lib/omamobile-vendor/modem/props.conf \
-         usr/lib/systemd/system/omamobile-modem.service usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules; do
+         usr/lib/systemd/system/omamobile-modem.service usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules \
+         usr/lib/omamobile-vendor/omamobile-modem-nv-overlay usr/bin/omamobile-modem \
+         usr/lib/systemd/system/omamobile-modem-nv-overlay.service usr/lib/systemd/system/omamobile-modem-nv-overlay.timer; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done
 grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
@@ -166,3 +168,6 @@ printf 'ro.boot.cdt_hwid=TESTID\npersist.vendor.modem.cdt_hwid=TESTID\n' > "$t/p
 printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist copy is optional"
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
+
+# The NV overlay: its own tests (synthetic NV-like files only).
+test/nv-overlay

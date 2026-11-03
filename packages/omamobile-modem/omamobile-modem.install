@@ -6,6 +6,8 @@ post_install() {
   echo "  modem-cpif-test overlay, and this phone's board id (ro.boot.cdt_hwid from its"
   echo "  stock getprop) in /var/lib/omamobile-vendor/modem/props.conf. Follow"
   echo "  device/cheetah/MODEM-PLAN.md M3.4 and M4.1h."
+  echo "  The NV overlay (the modem's own NV writes kept on userdata) is off until"
+  echo "  /etc/omamobile/modem-nv-overlay-enable exists: MODEM-PLAN \"NV overlay\"."
   udevadm control --reload 2>/dev/null || true
 }
 post_upgrade() {
