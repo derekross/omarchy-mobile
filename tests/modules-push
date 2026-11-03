@@ -1,0 +1,154 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Run the real CLI and its remote installer in a scratch tree, never over SSH.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+mkdir -p "$t/repo/bin" "$t/repo/tools" "$t/repo/device" "$t/bin" "$t/out/include/config" "$t/out/images" "$t/modules" "$t/archive"
+cp bin/omamobile "$t/repo/bin/"
+mkdir -p "$t/repo/device/cheetah"
+cp device/cheetah/device.conf "$t/repo/device/cheetah/"
+printf 'DEVICE=cheetah\nSRC_DIR=/unused\n' > "$t/repo/omamobile.conf"
+printf 'cheetah\n' > "$t/out/images/DEVICE"
+rel=7.3.0-test
+printf '%s\n' "$rel" > "$t/out/include/config/kernel.release"
+mkdir -p "$t/archive/$rel/kernel"
+printf 'packaged module\n' > "$t/archive/$rel/kernel/a.ko"
+# Fake SSH rewrites only the remote module root, then executes the actual
+# command (including bash -c's staged installer) locally in the fixture.
+cat > "$t/repo/tools/phone-ssh" <<'SH'
+#!/bin/bash
+set -euo pipefail
+cmd=${*//\/usr\/lib\/modules/$MODULE_ROOT}
+printf '%s\n' "$cmd" >> "$CALLS"
+case $cmd in
+  true) exit 0 ;;
+  'uname -r') echo 7.3.0-running; exit 0 ;;
+  'cat /proc/sys/kernel/random/boot_id') echo fixture-boot; exit 0 ;;
+  *'command -v reboot-to'*) exit 0 ;;
+  'if test -e '*'.omamobile-tarball'*)
+    if [[ ${MARKER_FAIL:-0} == 1 ]]; then echo 'fixture marker read failed'; exit 23; fi ;;
+  *'for s in /sys/block/'*) echo 'fixture stops before image writes' >&2; exit 90 ;;
+esac
+exec bash -c "$cmd"
+SH
+cat > "$t/bin/depmod" <<'SH'
+#!/bin/bash
+printf 'generated index\n' > "$MODULE_ROOT/${@: -1}/modules.dep"
+echo depmod >> "$EFFECTS"
+SH
+cat > "$t/bin/sync" <<'SH'
+#!/bin/sh
+echo sync >> "$EFFECTS"
+SH
+# Any accidental use of real transport or block writers is a test failure.
+for cmd in ssh fastboot dd; do
+  printf '#!/bin/sh\necho forbidden-command >&2\nexit 99\n' > "$t/bin/$cmd"
+done
+chmod +x "$t/repo/tools/phone-ssh" "$t/bin/"*
+export PATH="$t/bin:$PATH" MODULE_ROOT="$t/modules" CALLS="$t/calls" EFFECTS="$t/effects" KERNEL_OUT="$t/out" CLANG_DIR=/unused
+unset OMAMOBILE_MODULES_REPLACE MARKER_FAIL
+archive=$t/out/modules-$rel.tar.zst
+tar -C "$t/archive" -cf - "$rel" | zstd -q -o "$archive"
+checksum=$(sha256sum < "$archive" | cut -d' ' -f1)
+for image in boot init_boot vendor_boot vendor_kernel_boot dtbo; do : > "$t/out/images/$image.img"; done
+fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
+pass() { echo "ok - $*"; }
+reset_tree() {
+  rm -rf "$MODULE_ROOT"; mkdir -p "$MODULE_ROOT"
+  cp -a "$t/archive/$rel" "$MODULE_ROOT/"
+  printf 'old marker\n' > "$MODULE_ROOT/$rel/.omamobile-tarball"
+  printf 'old index\n' > "$MODULE_ROOT/$rel/modules.dep"
+  printf 'old-next\n' > "$MODULE_ROOT/.omamobile-next"
+  : > "$CALLS"; : > "$EFFECTS"
+}
+snapshot() { tar -C "$MODULE_ROOT" --sort=name -cf - "$rel" .omamobile-next | sha256sum; }
+refuse() {
+  local before
+  before=$(snapshot)
+  if "$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1; then fail 'conflicting installation accepted'; fi
+  [[ $(snapshot) == "$before" ]] || fail 'refusal changed the installed tree or left staging files'
+  [[ ! -s $EFFECTS ]] || fail 'refusal ran depmod or sync'
+  [[ -z $(find "$MODULE_ROOT" -maxdepth 1 -name ".*.new.*" -print) ]] || fail 'refusal left staging files'
+}
+reset_tree
+mkdir -p "$MODULE_ROOT/$rel/extra" "$MODULE_ROOT/$rel/updates/panel"
+printf 'custom\n' > "$MODULE_ROOT/$rel/extra/custom driver.ko"
+printf 'custom compressed\n' > "$MODULE_ROOT/$rel/updates/panel/custom.ko.zst"
+refuse
+grep -qF 'extra/custom driver.ko' "$t/log" || fail 'extra module not listed'
+grep -qF 'updates/panel/custom.ko.zst' "$t/log" || fail 'compressed module not listed'
+pass 'extra and updates modules are listed; refusal leaves the whole installed tree untouched'
+
+reset_tree
+printf 'hand replacement\n' > "$MODULE_ROOT/$rel/kernel/a.ko"
+refuse
+grep -qF 'kernel/a.ko' "$t/log" || fail 'changed in-tree module not listed'
+pass 'a changed module under kernel is refused'
+
+mkdir -p "$MODULE_ROOT/$rel/extra"
+printf 'custom\n' > "$MODULE_ROOT/$rel/extra/custom.ko"
+OMAMOBILE_MODULES_REPLACE=1 "$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1 || fail 'explicit replacement failed'
+cmp "$MODULE_ROOT/$rel/kernel/a.ko" "$t/archive/$rel/kernel/a.ko" || fail 'override did not install archive contents'
+[[ $(cat "$MODULE_ROOT/$rel/.omamobile-tarball") == "$checksum" ]] || fail 'wrong marker'
+[[ $(cat "$MODULE_ROOT/.omamobile-next") == "$rel" ]] || fail 'wrong next-release marker'
+[[ ! -e $MODULE_ROOT/$rel/extra/custom.ko ]] || fail 'override retained a module absent from the archive'
+pass 'OMAMOBILE_MODULES_REPLACE=1 permits replacement and updates both markers'
+
+reset_tree
+printf 'custom\n' > "$MODULE_ROOT/$rel/kernel/a.ko"
+if OMAMOBILE_MODULES_REPLACE=yes "$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1; then fail 'non-1 override accepted'; fi
+pass 'only the exact override value 1 authorizes replacement'
+
+reset_tree
+"$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1 || fail 'identical modules rejected because of generated indexes'
+pass 'identical modules permit installation despite differing depmod indexes and marker'
+
+rm -rf "$MODULE_ROOT/$rel"
+"$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1 || fail 'new release installation failed'
+pass 'a new release installs normally'
+
+reset_tree
+cp "$archive" "$t/good.tar.zst"
+printf 'broken archive\n' > "$archive"
+refuse
+mv "$t/good.tar.zst" "$archive"
+pass 'archive extraction failure leaves the installed tree untouched'
+
+reset_tree
+mv "$archive" "$t/good.tar.zst"
+mkdir -p "$t/wrong/7.3.0-wrong"
+tar -C "$t/wrong" -cf - 7.3.0-wrong | zstd -q -o "$archive"
+refuse
+mv "$t/good.tar.zst" "$archive"
+pass 'an archive for a different release is refused before replacement'
+
+reset_tree
+printf '%s\n' "$checksum" > "$MODULE_ROOT/$rel/.omamobile-tarball"
+before=$(snapshot)
+if MARKER_FAIL=1 "$t/repo/bin/omamobile" push > "$t/log" 2>&1; then fail 'push accepted marker read failure'; fi
+for expected in "$rel" "$checksum" 'read exited 23' 'fixture marker read failed'; do
+  grep -qF "$expected" "$t/log" || fail "missing marker diagnostic: $expected"
+done
+[[ $(snapshot) == "$before" && ! -s $EFFECTS ]] || fail 'marker failure mutated modules'
+grep -qF 'for s in /sys/block/' "$CALLS" && fail 'marker failure reached image writes'
+pass 'failed marker read stops push with release, expected checksum and returned output'
+
+reset_tree
+printf '%s\n' "$checksum" > "$MODULE_ROOT/$rel/.omamobile-tarball"
+if "$t/repo/bin/omamobile" push > "$t/log" 2>&1; then fail 'fixture should stop at partition lookup'; fi
+[[ ! -s $EFFECTS ]] || fail 'matching marker reinstalled modules'
+grep -qF 'for s in /sys/block/' "$CALLS" || fail 'matching marker did not reach image preflight'
+pass 'a matching marker skips installation'
+
+reset_tree
+rm "$MODULE_ROOT/$rel/.omamobile-tarball"
+mkdir -p "$MODULE_ROOT/$rel/extra"
+printf 'custom\n' > "$MODULE_ROOT/$rel/extra/custom.ko"
+before=$(snapshot)
+if "$t/repo/bin/omamobile" push > "$t/log" 2>&1; then fail 'push accepted unmarked custom tree'; fi
+grep -qF 'read returned <missing>' "$t/log" || fail 'missing marker not distinguished from read failure'
+grep -qF 'extra/custom.ko' "$t/log" || fail 'push bypassed replacement guard'
+[[ $(snapshot) == "$before" && ! -s $EFFECTS ]] || fail 'unmarked custom tree was changed'
+grep -qF 'for s in /sys/block/' "$CALLS" && fail 'replacement refusal reached image writes'
+pass 'a genuinely missing marker invokes the guard and preserves custom modules'

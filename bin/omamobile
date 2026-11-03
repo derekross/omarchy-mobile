@@ -383,22 +383,64 @@ cmd_modules() {
 }
 
 cmd_modules_push() {
-  local rel tarball ssh="$ROOT/tools/phone-ssh" running
+  local rel tarball ssh="$ROOT/tools/phone-ssh" running checksum install command replace
   rel=$(kernel_release)
+  [[ $rel =~ ^[0-9]+(\.[0-9]+)+[[:alnum:]_.+-]*$ ]] || die "invalid kernel release: $rel"
   tarball="$KERNEL_OUT/modules-$rel.tar.zst"
   [[ -f "$tarball" ]] || die "missing $tarball (run: omamobile modules)"
+  checksum=$(sha256sum < "$tarball" | cut -d' ' -f1)
+  replace=0
+  [[ ${OMAMOBILE_MODULES_REPLACE:-0} != 1 ]] || replace=1
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   "$ssh" 'test -d /usr/lib/modules && command -v depmod >/dev/null' || die "phone is not in the Arch root (no /usr/lib/modules or depmod)"
   running=$("$ssh" 'uname -r')
   [[ "$running" == "$rel" ]] || echo "  note: phone runs $running; installing $rel for the next boot"
-  say "Unpacking modules into /usr/lib/modules/$rel on the phone"
-  # Replace the whole tree so modules dropped from the config don't linger
-  "$ssh" "set -e; rm -rf /usr/lib/modules/.$rel.new; mkdir -p /usr/lib/modules/.$rel.new
-    zstd -dc | tar -C /usr/lib/modules/.$rel.new -xf -
-    rm -rf /usr/lib/modules/$rel; mv /usr/lib/modules/.$rel.new/$rel /usr/lib/modules/$rel
-    rmdir /usr/lib/modules/.$rel.new; depmod -a $rel
-    echo $(sha256sum < "$tarball" | cut -d' ' -f1) > /usr/lib/modules/$rel/.omamobile-tarball
-    echo $rel > /usr/lib/modules/.omamobile-next; sync" < "$tarball"
+  say "Staging modules for /usr/lib/modules/$rel on the phone"
+  # This script runs in bash on the Arch phone; stdin carries the archive.
+  # Compare module contents, not depmod's generated indexes or our markers.
+  install=$(cat <<'SH'
+set -euo pipefail
+rel=$1 checksum=$2 replace=$3
+root=/usr/lib/modules
+stage=$(mktemp -d "$root/.$rel.new.XXXXXX")
+trap 'rm -rf -- "$stage"' EXIT
+zstd -dc | tar -C "$stage" -xf -
+incoming=$stage/$rel
+installed=$root/$rel
+[[ -d $incoming && ! -L $incoming ]] || { echo "archive has no module tree for $rel" >&2; exit 1; }
+if [[ -L $installed || ( -e $installed && ! -d $installed ) ]]; then
+  echo "refusing non-directory module tree: $installed" >&2
+  exit 1
+fi
+if [[ -d $installed ]]; then
+  find "$installed" \( -type f -o -type l \) \( -name '*.ko' -o -name '*.ko.*' \) -print0 > "$stage/installed-modules"
+  conflicts=0
+  while IFS= read -r -d '' file; do
+    path=${file#"$installed/"}
+    if [[ ! -f $incoming/$path ]] || ! cmp -s -- "$file" "$incoming/$path"; then
+      printf 'module absent or different in incoming archive: %s\n' "$path" >&2
+      conflicts=1
+    fi
+  done < "$stage/installed-modules"
+  if (( conflicts )); then
+    if [[ $replace != 1 ]]; then
+      echo "refusing to replace $rel; installed tree untouched (OMAMOBILE_MODULES_REPLACE=1 permits replacement)" >&2
+      exit 1
+    fi
+    echo "OMAMOBILE_MODULES_REPLACE=1: replacing conflicting modules for $rel" >&2
+  fi
+fi
+# Only replace after extraction and every comparison succeeded.
+rm -rf -- "$installed"
+mv -- "$incoming" "$installed"
+depmod -a "$rel"
+printf '%s\n' "$checksum" > "$installed/.omamobile-tarball"
+printf '%s\n' "$rel" > "$root/.omamobile-next"
+sync
+SH
+)
+  printf -v command '%q ' bash -c "$install" -- "$rel" "$checksum" "$replace"
+  "$ssh" "$command" < "$tarball"
   "$ssh" "find /usr/lib/modules/$rel -name '*.ko*' | wc -l; ls /usr/lib/modules/$rel/modules.dep"
 }
 
@@ -1080,8 +1122,19 @@ cmd_push() {
   # among them): install them first. A config change can keep the release
   # name, so compare the tarball's checksum, not just the directory.
   rel=$(kernel_release)
+  [[ $rel =~ ^[0-9]+(\.[0-9]+)+[[:alnum:]_.+-]*$ ]] || die "invalid kernel release: $rel"
   want=$(sha256sum < "$KERNEL_OUT/modules-$rel.tar.zst" | cut -d' ' -f1)
-  [[ "$("$ssh" "cat /usr/lib/modules/$rel/.omamobile-tarball 2>/dev/null")" == "$want" ]] || cmd_modules_push
+  local marker_status marker=/usr/lib/modules/$rel/.omamobile-tarball
+  # A missing marker needs an install; a failed read must never authorize one.
+  if got=$("$ssh" "if test -e '$marker' || test -L '$marker'; then cat -- '$marker'; else printf '%s\\n' '<missing>'; fi" 2>&1); then
+    if [[ $got != "$want" ]]; then
+      say "Module marker for $rel: expected $want; read returned ${got:-<empty>}"
+      cmd_modules_push
+    fi
+  else
+    marker_status=$?
+    die "cannot read module marker for $rel: expected $want; read exited $marker_status, returned ${got:-<empty>}"
+  fi
   # Check every image before writing any. Each must fit its partition, and an
   # AVB_FOOTERS image is padded to the descriptor's partition size, with its
   # footer at the end, so that size must be the partition's exactly.
