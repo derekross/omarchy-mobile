@@ -519,6 +519,9 @@ def lock_glance(root):
     ok("XMLHttpRequest" not in glance and "curl" not in glance and "execDetached" not in glance
        and "call notifications forget" in glance and "invokeAction" not in glance,
        "real omarchy: the glance asks no network and runs no notification action, only the forget call (0023)")
+    ok("function darkTapWakes()" in view and "if (root.displayDark && !root.darkTapWakes()) return" in view
+       and "if (lock.darkTapWakes()) {" in read(root, lock + "LockGlance.qml"),
+       "real omarchy: a dark touch-only lock wakes on a double tap (0029)")
     p = subprocess.run(["bash", os.path.join(HERE, "lock-glance"), os.path.join(root, "usr/share/omarchy/shell")],
                        capture_output=True, text=True)
     if p.returncode == 77:
