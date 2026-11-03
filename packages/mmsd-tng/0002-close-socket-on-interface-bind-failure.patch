@@ -1,0 +1,17 @@
+From: W4HO <87742609+W4HO-ham@users.noreply.github.com>
+Subject: [PATCH] MMS: fail closed if the bearer interface cannot be bound
+
+--- a/src/service.c
++++ b/src/service.c
+@@ -3735,7 +3735,10 @@
+       if (return_code == 0)
+         DBG ("Socket is bound to %s", request->service->interface);
+       else
+-        DBG ("Socket could not be bound! Error: %d", return_code);
++        {
++          g_warning ("MMS interface binding failed; closing socket");
++          g_socket_close (msg_socket, NULL);
++        }
+ 
+       g_signal_handler_disconnect (msg,
+                                    request->soupmessage_network_event_signal_id);

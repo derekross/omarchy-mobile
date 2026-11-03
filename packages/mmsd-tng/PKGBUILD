@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: W4HO <87742609+W4HO-ham@users.noreply.github.com>
+pkgname=mmsd-tng
+pkgver=2.6.4
+pkgrel=1
+pkgdesc="MMS daemon using ModemManager, with an opt-in user service"
+arch=(aarch64)
+url="https://gitlab.com/kop316/mmsd"
+license=('GPL-2.0-only')
+depends=(c-ares mobile-broadband-provider-info 'libmm-glib>=1.24' libsoup3 libphonenumber glib2 glibc gcc-libs protobuf abseil-cpp)
+makedepends=(meson ninja pkgconf)
+provides=(mmsd)
+conflicts=(mmsd mmsd-tng-git)
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/-/archive/$pkgver/mmsd-$pkgver.tar.gz"
+        '0001-use-configured-number-with-empty-own-numbers.patch'
+        '0002-close-socket-on-interface-bind-failure.patch'
+        '0004-link-modern-libphonenumber-dependencies.patch'
+        '0005-accept-international-own-number-with-redacted-IMSI.patch')
+sha256sums=('5772d4d1830664404d8f6ed96d9c35f6e7a53c60b1ac5571cd2a6183c7e633ed'
+            '2bddbd5812356656162920a8cf145a69a529f6e33a2109633de6b508aee99d8e'
+            '4c0a0997edfb936c50807459c51b97b55be6a404faf51bbcf7c993faf5041add'
+            '9875223ed387fc778d05e1624237fc94732822a09f9e847c52ce8be26a427008'
+            '6f1aedf09714b94415a608e591aefaa72e7539823b580ac493ce19022a5c7896')
+
+prepare() {
+  cd "mmsd-$pkgver"
+  patch -Np1 -i "$srcdir/0001-use-configured-number-with-empty-own-numbers.patch"
+  patch -Np1 -i "$srcdir/0002-close-socket-on-interface-bind-failure.patch"
+  patch -Np1 -i "$srcdir/0004-link-modern-libphonenumber-dependencies.patch"
+  patch -Np1 -i "$srcdir/0005-accept-international-own-number-with-redacted-IMSI.patch"
+}
+
+build() {
+  arch-meson "mmsd-$pkgver" build -Dbuild-mmsctl=false
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --print-errorlogs
+  "$startdir/test/all"
+}
+
+package() {
+  DESTDIR="$pkgdir" meson install -C build
+  install -Dm644 "$startdir/systemd/mmsd-tng.service" "$pkgdir/usr/lib/systemd/user/mmsd-tng.service"
+  install -Dm644 "$startdir/config/mms.example" "$pkgdir/usr/share/mmsd-tng/mms.example"
+  install -Dm644 "$startdir/README.md" "$pkgdir/usr/share/doc/mmsd-tng/README.md"
+}

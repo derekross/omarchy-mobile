@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=MMS transport for the current user
+After=dbus.service
+
+[Service]
+ExecStart=/usr/bin/mmsdtng
+Restart=no
+UMask=0077
+
+[Install]
+WantedBy=default.target
