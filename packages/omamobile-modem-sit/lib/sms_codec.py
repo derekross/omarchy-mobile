@@ -125,7 +125,7 @@ def deliver(pdu):
     elif alphabet==2:
         if length>len(data) or length<header: raise ValueError('Truncated Unicode SMS')
         text=data[header:length].decode('utf-16-be',errors='replace')
-    elif port==WAP_PUSH:
+    elif alphabet==1 and (port==WAP_PUSH or (concat and port is None)) and not (dcs&0xc0==0 and dcs&0x20):
         if length>len(data) or length<header: raise ValueError('Truncated WAP push')
         return dict(number=sender,text='',timestamp=timestamp,concat=concat,port=port,data=bytes(data[header:length]))
     else: text='Received a multimedia or binary message that this phone cannot display yet.'

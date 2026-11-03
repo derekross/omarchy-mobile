@@ -21,6 +21,40 @@ class ServiceTests(unittest.TestCase):
         self.service.ready=Mock()
     def tearDown(self):
         self.db.close(); self.paths.stop(); self.temp.cleanup()
+    def test_wap_port_only_in_first_part_arriving_last(self):
+        inbox = self.root/'inbox'; inbox.mkdir()
+        for seq, body in ((2, b'\x00\xffsecond'), (1, b'\x01\x06first')):
+            header = (bytes.fromhex('0b05040b8423f00003090201') if seq == 1
+                      else bytes.fromhex('050003090202'))
+            ud = header + body
+            tpdu = bytes.fromhex('440b912120550521f3000462909221436500') + bytes([len(ud)]) + ud
+            data = b'\0' + tpdu
+            path = inbox/f'{seq}.sit'
+            path.write_bytes(bytes(2)+struct.pack('<H',0x0d1e)+bytes(5)+bytes([len(data)])+data)
+            self.service.ingest(path)
+            if seq == 2:
+                self.assertEqual(self.service.dispatch(dict(action='sms-list')), [])
+        rows = self.service.dispatch(dict(action='sms-list'))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['text'], '')
+        self.assertEqual(bytes.fromhex(rows[0]['data']), b'\x01\x06first\x00\xffsecond')
+        self.service.ingest(path)
+        self.assertEqual(len(self.service.dispatch(dict(action='sms-list'))), 1)
+
+    def test_old_partial_wap_record_keeps_port_during_database_upgrade(self):
+        import sqlite3
+        path = self.root/'old.db'
+        old = sqlite3.connect(path)
+        old.executescript("CREATE TABLE parts (id TEXT PRIMARY KEY, sender TEXT, reference INTEGER, total INTEGER, seq INTEGER, text TEXT, timestamp TEXT, received REAL, data TEXT NOT NULL DEFAULT '');")
+        old.execute('INSERT INTO parts VALUES (?,?,?,?,?,?,?,?,?)',
+                    ('fragment', '+12025550123', 9, 2, 1, '', '', 0, '0106'))
+        old.commit(); old.close()
+        upgraded = app_service.database(path)
+        try:
+            self.assertEqual(upgraded.execute('SELECT port FROM parts').fetchone()[0], 2948)
+        finally:
+            upgraded.close()
+
     def test_phone_reset_indication_logs_its_first_bytes_raw(self):
         packet = struct.pack('<BBHHH', 2, 0, 0x0804, 8 + 6, 0) + bytes([0x08, 0x02, 0x00, 0x00, 0xaa, 0xbb])
         with patch('builtins.print') as out:
@@ -284,3 +318,25 @@ class RefusedAudioTests(unittest.TestCase):
         self.assertIsNone(svc.audio)
         self.assertFalse(svc.muted)
         self.assertIn('earpiece mode off', svc.audio_error)
+
+
+class InternetConfig(unittest.TestCase):
+    def test_the_found_device_address_and_dns_only_once_on_a_device(self):
+        import data_call
+        result = bytearray(132)
+        struct.pack_into('<HBBB', result, 0, 0, data_call.INTERNET_CID, 1, 1)
+        result[5:9] = bytes([192, 0, 2, 7])
+        result[0x1a:0x1e] = bytes([192, 0, 2, 53])
+        with tempfile.TemporaryDirectory() as directory:
+            response = Path(directory)/'data-call-response.bin'
+            response.write_bytes(bytes(result))
+            run = Path(directory)/'run'
+            run.mkdir()
+            with patch.object(app_service, 'bearer_paths', return_value=(Path(directory)/'s', response)), \
+                 patch.object(app_service.paths, 'RUN', run):
+                self.assertEqual(app_service.internet_config(), {})        # not on a device yet
+                (run/'data-interface').write_text('rmnet5\n')
+                self.assertEqual(app_service.internet_config(),
+                                 dict(interface='rmnet5', address='192.0.2.7', dns=['192.0.2.53']))
+                response.unlink()
+                self.assertEqual(app_service.internet_config(), {})

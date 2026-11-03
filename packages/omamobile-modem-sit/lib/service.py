@@ -46,6 +46,7 @@ from at import radio
 from calls import call_status, dial_payload, ring
 import data_call
 from data_call import paths as bearer_paths
+from data_network import configuration as internet_addresses
 from ims import REGISTRATION, record_registration
 from inbox import persist_sms
 from sit import Sit, ModemError
@@ -90,6 +91,24 @@ APP_STATES = {0: 'unknown', 1: 'detected', 2: 'pin', 3: 'puk', 4: 'network-locke
 EMERGENCY = ('112', '911')
 EMERGENCY_NO_SIM = ('000', '08', '110', '118', '119', '999')
 SUBSCRIBERS = 8
+
+
+def internet_config():
+    """The internet bearer's device, address and the carrier's DNS, for the
+    bridge's copy of the bearer (MMS goes over it where the MMS APN is the
+    internet APN). The device is the one omamobile-sit-data found carrying
+    it; none recorded means the data network isn't up yet. It goes in the
+    status for authorised clients only, not in state.json; the bridge then
+    publishes it in the bearer's Ip4Config, which, as ModemManager's, any
+    client on the system bus can read."""
+    try:
+        address, dns = internet_addresses(bearer_paths(data_call.INTERNET_CID)[1].read_bytes())
+        interface = (paths.RUN / 'data-interface').read_text().strip()
+    except (OSError, ValueError):
+        return {}
+    if not interface:
+        return {}
+    return dict(interface=interface, address=address, dns=dns)
 
 
 class UnconfirmedRelease(RuntimeError):
@@ -163,6 +182,11 @@ def database(path):
     for table in ('received', 'parts'):
         if 'data' not in {c[1] for c in db.execute(f'PRAGMA table_info({table})')}:
             db.execute(f"ALTER TABLE {table} ADD COLUMN data TEXT NOT NULL DEFAULT ''")
+    if 'port' not in {c[1] for c in db.execute('PRAGMA table_info(parts)')}:
+        db.execute('ALTER TABLE parts ADD COLUMN port INTEGER')
+        # Before this migration, only recognised WAP fragments had Data.
+        # Preserve a first fragment received before upgrading the daemon.
+        db.execute("UPDATE parts SET port=2948 WHERE data<>''")
     # A request interrupted by a process restart must never be retried blindly.
     db.execute("UPDATE outgoing SET state='unknown', error='Delivery uncertain after service restart; check with the recipient' WHERE state='sending'")
     db.commit()
@@ -330,17 +354,22 @@ class Service:
                 return
             concat = sms.pop('concat')
             data = sms.pop('data').hex()
-            sms.pop('port')
+            port = sms.pop('port')
             if concat:
                 ref, total, seq = concat
-                self.db.execute('INSERT OR IGNORE INTO parts(id,sender,reference,total,seq,text,timestamp,received,data) VALUES (?,?,?,?,?,?,?,?,?)',
-                                (key, sms['number'], ref, total, seq, sms['text'], sms['timestamp'], time.time(), data))
+                self.db.execute('INSERT OR IGNORE INTO parts(id,sender,reference,total,seq,text,timestamp,received,data,port) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                (key, sms['number'], ref, total, seq, sms['text'], sms['timestamp'], time.time(), data, port))
                 parts = self.db.execute('SELECT * FROM parts WHERE sender=? AND reference=? AND total=? AND received>? ORDER BY received',
                                         (sms['number'], ref, total, time.time()-86400)).fetchall()
                 by_seq = {p['seq']: p for p in parts}
                 if len(by_seq) == total:
                     sms['text'] = ''.join(by_seq[i]['text'] for i in range(1, total+1))
                     data = ''.join(by_seq[i]['data'] for i in range(1, total+1))
+                    # Only the first fragment of a WAP push carries the port.
+                    ports = {p['port'] for p in by_seq.values() if p['port'] is not None}
+                    if data and ports != {2948}:
+                        data = ''
+                        sms['text'] = 'Received an unsupported binary message.'
                     sms['timestamp'] = by_seq[1]['timestamp']
                     self.db.execute('INSERT OR IGNORE INTO received(id,number,text,timestamp,data) VALUES (?,?,?,?,?)',
                                     (key, sms['number'], sms['text'], sms['timestamp'], data))
@@ -579,6 +608,7 @@ class Service:
             return dict(modem=modem, calls=calls, sms=dict(unread=unread), updated=int(time.time()))
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
+                    internet=internet_config() if data else {},
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
                                speaker=getattr(self.audio, 'tegu', False) is True, speaker_available=False, error=self.audio_error))
 
