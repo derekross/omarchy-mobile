@@ -92,6 +92,37 @@ EMERGENCY_NO_SIM = ('000', '08', '110', '118', '119', '999')
 SUBSCRIBERS = 8
 
 
+class UnconfirmedRelease(RuntimeError):
+    """Fatal call ownership failure; never turn this into a socket reply."""
+
+
+def unconfirmed_release(client, reason):
+    """Stop serving an uncertain call without power-cycling the CP.
+
+    In-place modem stops have reset tegu. Radio-off is best effort: even
+    an accepted command does not establish that the call was released.
+    Keep call ownership and the modem/NV server for an attended reboot.
+    """
+    print('Call release not confirmed:', reason, flush=True)
+    try:
+        radio(False)
+        print('Recovery radio-off command accepted', flush=True)
+    except (OSError, RuntimeError, ValueError) as error:
+        print('Recovery radio-off failed:', type(error).__name__, flush=True)
+    try:
+        payload = client.request(0x0801, timeout=5)
+        state = RADIO.get(struct.unpack('<I', payload)[0], 'unknown') if len(payload) == 4 else 'unexpected'
+    except (OSError, RuntimeError, ValueError) as error:
+        state = 'unavailable (' + type(error).__name__ + ')'
+    try:
+        modem = cp.STATES.get(cp.state(), 'unknown')
+    except OSError:
+        modem = 'unavailable'
+    print('Unconfirmed release recovery: radio', state, 'CP', modem,
+          '; leaving the modem running for an attended reboot', flush=True)
+    raise UnconfirmedRelease('Call release was not confirmed; stopping sitd; attended reboot required')
+
+
 def sim_status(payload):
     """GET_SIM_STATUS without identifiers: the card state, and the USIM's
     (else the first application's) state and PIN/PUK retries. AIDs and
@@ -182,6 +213,7 @@ class Service:
         self.muted = False
         self.pending = None
         self.hangup_deadline = None
+        self.release_unconfirmed = False
         self.screen_on = None
         self.indication_counts = {}
         self.net = dict(reg='unknown', rat='', operator='', plmn='')
@@ -462,8 +494,8 @@ class Service:
                 break
             self.event(packet)
         if self.hangup_deadline and time.monotonic() > self.hangup_deadline:
-            cp.stop_modem('a call release was not confirmed')
-            raise RuntimeError('Call release was not confirmed; modem stopped')
+            self.release_unconfirmed = True
+            unconfirmed_release(self.client, 'hangup deadline expired')
 
     def send_sms(self, request):
         key = request.get('request_id', '')
@@ -783,6 +815,9 @@ def serve_one(service, connection, clients):
             return True
         result = service.dispatch(request)
         response = dict(ok=True, result=result)
+    except UnconfirmedRelease:
+        connection.close()
+        raise
     except (ValueError, KeyError, TypeError, RuntimeError, OSError) as error:
         # Errors from wire data must never expose raw values.
         response = dict(ok=False, error=str(error) if isinstance(error, RuntimeError)
@@ -856,8 +891,7 @@ def main():
     try:
         marker = paths.RUN / 'active.json'
         if marker.exists() and json.loads(marker.read_text()):
-            cp.stop_modem('a call from the previous service run was never released')
-            raise RuntimeError('Previous call ownership unresolved; modem stopped')
+            unconfirmed_release(client, 'a call from the previous service run was never released')
         service = Service(client, database(paths.STATE / 'apps.db'), settings)
         service.publish()
         for sms in paths.INBOX.glob('*.sit'):
@@ -904,7 +938,7 @@ def main():
             service.broadcast()
     finally:
         try:
-            if service and service.live():
+            if service and service.live() and not service.release_unconfirmed:
                 for call in service.live():
                     if call['modem_id'] is not None:
                         try:
@@ -917,17 +951,20 @@ def main():
                     if packet:
                         service.event(packet)
                 if service.live():
-                    cp.stop_modem('a call release was not confirmed at service stop')
-            if service:
-                service.audio_stop()
+                    service.release_unconfirmed = True
+                    unconfirmed_release(client, 'a call release was not confirmed at service stop')
         finally:
-            if service:
-                for connection in list(service.subscribers):
-                    service.drop(connection)
-            client.close()
-            server.close()
-            SOCKET.unlink(missing_ok=True)
-            (paths.RUN / 'state.json').unlink(missing_ok=True)
+            try:
+                if service:
+                    service.audio_stop()
+            finally:
+                if service:
+                    for connection in list(service.subscribers):
+                        service.drop(connection)
+                client.close()
+                server.close()
+                SOCKET.unlink(missing_ok=True)
+                (paths.RUN / 'state.json').unlink(missing_ok=True)
 
 
 if __name__ == '__main__':

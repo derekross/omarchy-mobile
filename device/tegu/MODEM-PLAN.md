@@ -1935,9 +1935,10 @@ tools/phone-ssh 'omamobile-sit sms send <NUMBER> "omamobile test"'
 
 # SIM-10 calls: NOT in this test. No audio route exists on the 9a (table above). A signalling-only call
 #   (ring, answer, hang up, silence both ways, as cheetah's S10) is its own later step, after this runbook passes.
-#   Nobody calls the palmtop's number during the test: an incoming call that sitd can't release makes its
-#   safety stop target omamobile-modem.service, which is masked on the 9a, so it would only time out. If the
-#   journal says a call release wasn't confirmed ("call release not confirmed" or the stop timing out): don't
+#   Nobody calls the palmtop's number during the test: an incoming call that sitd can't release makes it
+#   turn the radio off and exit for an attended reboot (since #364; before it, its safety stop targeted
+#   omamobile-modem.service, masked on the 9a). If the journal says "Call release not confirmed" or
+#   "attended reboot required": don't
 #   stop anything by hand; "omamobile-sit radio off", record the journal lines (states and codes), and end
 #   the session with SIM-11's attended reboot.
 

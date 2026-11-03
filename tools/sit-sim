@@ -24,10 +24,12 @@ fictional 555-01xx ones, addresses are from the documentation ranges.
 
   tools/sit-sim --ipc PATH --router PATH [--transcript FILE] [--search-polls N]
                 [--incoming-sms] [--no-sim] [--reject-setup CAUSE]
-                [--no-ims-registration] [--control PATH]
+                [--no-ims-registration] [--unconfirmed-hangup] [--control PATH]
 
 --no-ims-registration accepts ADD_PDN_INFO but never registers IMS (a
-carrier whose IMS values differ). --control PATH is a datagram socket for tests: "ring" (an incoming IMS call),
+carrier whose IMS values differ). --unconfirmed-hangup acknowledges hangup
+requests but leaves the call active and never sends a release indication.
+--control PATH is a datagram socket for tests: "ring" (an incoming IMS call),
 "remote-hangup" (the far end ends the current call), "sms" (one text
 message), "wap-push" (one MMS notification: an 8-bit SMS to port 2948).
 
@@ -268,6 +270,8 @@ class Sim:
         self.after(0.2, lambda: self.call_status(call_id, 0))
 
     def r_0d03(self, mid, token, p):            # AIMS_HANGUP
+        if self.a.unconfirmed_hangup:
+            return self.respond(mid, token)
         self.calls.pop(p[0], None)
         self.respond(mid, token)
         self.after(0.05, lambda: self.call_status(p[0], 6, 16))
@@ -340,6 +344,7 @@ def main():
     p.add_argument('--no-sim', action='store_true')
     p.add_argument('--reject-setup', type=int, default=0)
     p.add_argument('--no-ims-registration', action='store_true')
+    p.add_argument('--unconfirmed-hangup', action='store_true')
     p.add_argument('--control')
     p.add_argument('-v', '--verbose', action='store_true')
     a = p.parse_args()
