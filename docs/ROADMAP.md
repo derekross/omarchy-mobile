@@ -126,6 +126,7 @@ The phone's own software, all offline-heavy and parallel to the hardware tracks.
 4. **Settings for a phone**: display (scale, font size, refresh rate), sound (volume steps per stream, ringtone), battery, mobile network and SIM, about phone; mostly front ends to what Omarchy already has.
 5. **Accessibility**: scaling and font size first, then Orca with touch exploration, high contrast, and a pass over our plugins' touch targets and labels.
 6. **System dialogs, screensaver, first run**: keyring, polkit and portal dialogs sized and styled for the phone; a portrait screensaver; Omarchy's whole user install at first boot, with phone-specific first-run steps (Wi-Fi, PIN, fingerprint).
+7. **Installing and removing by touch**: shell screens (Settings toggles and sheets) for the common Omarchy install and remove actions, such as turning dictation on or off, with Omarchy's terminal installers kept as the fallback for everything else. First step: those terminals fit the phone (they fill the screen above the keyboard, and their logo fits its width; `omamobile-shell` 0.2.92, `omamobile-omarchy` 0.1.31).
 
 ### 3.6 Android apps (Waydroid)
 
