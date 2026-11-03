@@ -78,12 +78,16 @@ fp_device() {
   c=$(tr '\0' '\n' < /proc/device-tree/compatible 2>/dev/null || true)
   case $c in
     *google,zumapro-tegu*) echo tegu ;;
+    *google,gs201-panther*) echo panther ;;
     *) echo cheetah ;;
   esac
 }
 # From the board's compatible string; only test/preflight may override it
 DEVICE=$(fp_device)
 [[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && DEVICE=${OMAMOBILE_FP_DEVICE:-$DEVICE}
+# Our touchscreen driver's input device name (synaptics_tcm); panther's
+# case replaces it.
+TOUCH_NAME="Synaptics TouchComm Touchscreen"
 case $DEVICE in
   cheetah)
     TA=g7.app
@@ -102,7 +106,16 @@ case $DEVICE in
     # ("On: WxH@Hz") and captures at pointer down, so the circle comes first
     PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST=1
     PANEL_NAME=google-tg4c MAP_STORES=1 ;;
-  *) echo "omamobile-fp: unknown device '$DEVICE' (cheetah, tegu)" >&2; exit 1 ;;
+  panther)
+    # the Pixel 7: the 7 Pro's TA and HALs (its vendor image ships the same
+    # files), its own panel (ABL's exynos_drm.panel_name) and touchscreen
+    # (focaltech_ft3658); device/panther/FINGERPRINT-PLAN.md.
+    TA=g7.app
+    KEYMINT=/vendor/bin/hw/android.hardware.security.keymint-service.trusty
+    PANEL=1080x2400 PANEL_HZ=60 PANEL_STATE=on LHBM_FIRST=0
+    PANEL_NAME=sdc-s6e3fc3-p10 MAP_STORES=0
+    TOUCH_NAME="FocalTech FT3658" ;;
+  *) echo "omamobile-fp: unknown device '$DEVICE' (cheetah, tegu, panther)" >&2; exit 1 ;;
 esac
 PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
 PROPS_DEVICE=${OMAMOBILE_FP_PROPS_DEVICE:-/usr/lib/omamobile-fp/props-$DEVICE.conf}
@@ -133,8 +146,6 @@ NSPID=$RUN/ns.pid
 
 # The UFS RPMB well-known LUN (stock storageproxyd: -r /dev/sg1).
 RPMB_LUN=49476
-# Our touchscreen driver's input device name (synaptics_tcm).
-TOUCH_NAME="Synaptics TouchComm Touchscreen"
 # The bridge's socket directory on the host (root only); in the chroot it
 # is /dev/socket/omamobile-fp.
 SOCKDIR=$RUN/sock
