@@ -8,12 +8,14 @@ recording or SRAM mapping. Amplifier protection, calibration and gain stay
 with omamobile-audio: the downlink plays through TDM 0, so it needs the
 amplifiers set up (stock's TDM 0 format, protection service running).
 
-TDM 0 feeds both amplifiers, and the top one is the earpiece. Until the
-protection service has an earpiece mode (TELEPHONY-APPS-PLAN T4), routing is
-refused unless the protection service reports itself running at stage
-media or c8 and the amplifiers are at or below the earpiece ceiling (top
-analog <= 6, AUDIO-PLAN.md section 4) and the media stage's (digital <= 737,
-analog <= 10, AGENTS.md). The default config routes no call audio at all.
+TDM 0 feeds both amplifiers, and the top one is the earpiece. With the
+protection service's earpiece mode (AOC-PLAN.md C9k) each call runs in that
+mode; without it, routing is refused unless the protection service reports
+itself running at stage media or c8 and the amplifiers are at or below the
+earpiece ceiling (top analog <= 6, AUDIO-PLAN.md section 4) and the media
+stage's (digital <= 737, analog <= 10, AGENTS.md). The built-in default
+routes no call audio; a device package whose route is verified sets
+[audio] card = auto in its defaults (paths.DEVICE_DEFAULTS).
 """
 import ctypes as C
 import os

@@ -22,7 +22,10 @@ the same Verizon-network SIM as the entry below. The runbook:
   read the SIM once, chose Verizon's values from its overrides (APN
   VZWINTERNET, attach none, IMS first on CID 2, the internet on CID 3,
   profiles 0/2/3/4) and registered IMS and data, with nothing typed into
-  `modem-sit.conf`.
+  `modem-sit.conf`. Call audio ran on one hand edit there, `[audio] card =
+  auto`: a fresh install had `card = none` (calls connect silent) until
+  `omamobile-modem-sit` 0.3.30 with `omamobile-device-cheetah` 0.1.44, whose
+  defaults file sets `auto` on this phone.
 - **The earpiece at the loud stage** [V]: stage `c9` with the boost converter
   on (657/6 through ASP, the bottom amplifier muted,
   `omamobile-earpiece@on.service`) was clean by ear on a VoLTE call, so
