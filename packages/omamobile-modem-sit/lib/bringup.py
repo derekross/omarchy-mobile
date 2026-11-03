@@ -40,6 +40,7 @@ import time
 from at import radio, radio_state
 from data_call import APN_TYPES, activate, attach_bearer, configured_profiles, entries, initial_attach
 from data_call import owned_ids, provision_profiles, record_modem_owned, summary
+import data_call
 from data_call import paths as bearer_paths
 from ims import register, start_stack
 from isim import bearer_dns, ipv6_pcscf, resolve_on_bearer, resolve_system
@@ -74,7 +75,7 @@ def resolve_default_network(name):
     without Wi-Fi): the internet bearer's own DNS servers from its setup
     response, then the host resolver, which may be another link."""
     found = []
-    response = bearer_paths(1)[1]
+    response = bearer_paths(data_call.INTERNET_CID)[1]
     if response.exists():
         bearer = response.read_bytes()
         if len(bearer) >= 132 and any(bearer[9:25]):
@@ -229,6 +230,10 @@ def wait_for(service, predicate, seconds, stopped):
 def start(service, settings, stopped=lambda: False):
     client = service.client
     net = settings['network']
+    cid = net.getint('internet_cid', 1)
+    if not 1 <= cid <= 15 or cid == data_call.IMS_CID:
+        raise ValueError('[network] internet_cid must be 1..15 and not 2 (IMS)')
+    data_call.INTERNET_CID = cid
     apn, ip_type = net.get('apn', ''), net.get('ip_type', 'ipv4v6')
     if not apn:
         raise RuntimeError('No APN configured: set [network] apn in /etc/omamobile/modem-sit.conf')
@@ -362,15 +367,30 @@ def start(service, settings, stopped=lambda: False):
         # for the attach bearer with its P-CSCF.
         wait = ATTACH_BEARER_WAIT if net.getboolean('ims', True) else 0
         attach = find_attach_bearer(service, registered_at + wait, stopped, adopt_unknown=True)
-    service.stage('data')
-    activate(client, apn, ip_type=ip_type, on_event=service.event)
-    service.pump()
+    ims_first = net.getboolean('ims', True) and net.getboolean('ims_first', False)
+    if not ims_first:
+        service.stage('data')
+        activate(client, apn, ip_type=ip_type, on_event=service.event)
+        service.pump()
     if not net.getboolean('ims', True):
         service.ims_state = 'off'
         print('Startup: registered with data; IMS off ([network] ims = no)', flush=True)
         return
     service.ims_state = 'pending'
     service.stage('ims')
+    internet_up = not ims_first
+
+    def internet():
+        # With ims_first (stock's order: IMS bearer and ADD_PDN before any
+        # other bearer), the internet comes up after the IMS setup, whether
+        # that succeeded or not.
+        nonlocal internet_up
+        if internet_up:
+            return
+        service.stage('data')
+        activate(client, apn, ip_type=ip_type, on_event=service.event)
+        service.pump()
+        internet_up = True
     try:
         if net.get('carrier_manifest', '').strip():
             # As stock's IMS service: no stack start while the modem applies
@@ -406,11 +426,17 @@ def start(service, settings, stopped=lambda: False):
                                   resolve_host=resolve_default_network)
         register(client, pcscf_required=net.getboolean('ims_pcscf_required', True),
                  pcscf_fallback=fallback, attach=attach)
+        internet()
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and
                  service.registration().get('features', 0) & 3 == 3,
                  net.getint('ims_timeout', 120), stopped)
     except (RuntimeError, TimeoutError, ValueError) as error:
+        if not internet_up:
+            # IMS failed before the internet: bring the internet up first,
+            # so data is served whatever happens to IMS (its own failure
+            # ends start-up as before).
+            internet()
         # The internet bearer is up and owned: keep serving it. Nothing about
         # IMS is retried (an uncertain IMS bearer or ADD_PDN is never sent
         # twice); a registration the modem completes later still shows up

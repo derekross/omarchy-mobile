@@ -43,6 +43,7 @@ import cp
 import paths
 from at import radio
 from calls import call_status, dial_payload, ring
+import data_call
 from data_call import paths as bearer_paths
 from ims import REGISTRATION, record_registration
 from inbox import persist_sms
@@ -499,7 +500,7 @@ class Service:
         reg = self.registration()
         voice = reg.get('state') == 2 and reg.get('features', 0) & 1 != 0
         sms = reg.get('state') == 2 and reg.get('features', 0) & 2 != 0
-        data = bearer_paths(1)[0].exists()
+        data = bearer_paths(data_call.INTERNET_CID)[0].exists()
         modem = dict(present=True, stage=self.current_stage, ready=voice,
                      state='registered' if self.net['reg'] in ('home', 'roaming') else 'searching',
                      registration=self.net['reg'], tech=self.net['rat'],

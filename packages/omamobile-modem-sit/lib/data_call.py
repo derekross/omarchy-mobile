@@ -36,11 +36,23 @@ RESPONSE = RUN / 'data-call-response.bin'
 IP_TYPES = {'ipv4': 1, 'ipv6': 2, 'ipv4v6': 3}
 
 
+# sitd's own bearers: IMS on CID 2 (stock's IMS CID), the internet on
+# INTERNET_CID, 1 unless [network] internet_cid says otherwise (bringup sets
+# it). Stock keeps CID 1 for the modem's attach context and never sets a
+# bearer up on it; on a network that attaches on the IMS APN, an internet
+# setup on CID 1 replaced the attach PDN (2026-11-03).
+IMS_CID = 2
+INTERNET_CID = 1
+
+
 def paths(cid):
-    if cid == 1:
-        return STATE, RESPONSE
-    if cid == 2:
+    """The ownership record and setup response of a sitd-owned bearer: CID 2
+    is IMS, any other valid CID is the internet bearer (so a process without
+    the configuration, omamobile-sit-data, resolves the files too)."""
+    if cid == IMS_CID:
         return STATE.with_name('ims-session.json'), RESPONSE.with_name('ims-response.bin')
+    if 1 <= cid <= 15:
+        return STATE, RESPONSE
     raise ValueError('unsupported bearer CID')
 
 
@@ -163,12 +175,16 @@ def attach_bearer(items, owned=None):
 
 def owned_ids():
     result = set()
-    for cid in (1, 2):
-        state, _ = paths(cid)
+    for expected in (INTERNET_CID, IMS_CID):
+        state, _ = paths(expected)
         if state.exists():
             owned = json.loads(state.read_text())
+            cid = owned.get('cid')
             # session 0: no PDU session ID was sent (the modem chose one).
-            if owned.get('cid') != cid or not 0 <= owned.get('session', -1) <= 15:
+            # The internet record names whatever CID it was set up on (the
+            # configured one may differ from this process's default).
+            ok = cid == IMS_CID if expected == IMS_CID else isinstance(cid, int) and 1 <= cid <= 15 and cid != IMS_CID
+            if not ok or not 0 <= owned.get('session', -1) <= 15:
                 raise RuntimeError('invalid bearer ownership record')
             result.add(cid)
     return result
@@ -472,7 +488,7 @@ def listen_after_failure(client, seconds=5, on_event=None):
     print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
 
 def activate(client, apn, *, ims=False, ip_type=None, apn_types=None, lte_access=False, on_event=None):
-    requested_cid = 2 if ims else 1
+    requested_cid = IMS_CID if ims else INTERNET_CID
     state_path, response_path = paths(requested_cid)
     state = client.request(0x0701)
     if len(state) < 4 or state[0] not in (1, 5):
@@ -541,7 +557,9 @@ def activate(client, apn, *, ims=False, ip_type=None, apn_types=None, lte_access
             response_path.unlink(missing_ok=True)
 
 
-def deactivate(client, cid=1):
+def deactivate(client, cid=None):
+    if cid is None:
+        cid = INTERNET_CID
     if cid in modem_owned_ids():
         raise RuntimeError(f'bearer CID {cid} is modem-owned; sitd never releases it')
     state_path, response_path = paths(cid)
@@ -554,7 +572,7 @@ def deactivate(client, cid=1):
     # (data_network.find_device), while that configuration exists.
     devices = {f"rmnet{owned['cid'] - 1}"}
     recorded = RUN / 'data-interface'
-    if cid == 1 and recorded.exists():
+    if cid != IMS_CID and recorded.exists():
         devices.add(recorded.read_text().strip())
     for dev in devices:
         flags = Path(f'/sys/class/net/{dev}/flags')

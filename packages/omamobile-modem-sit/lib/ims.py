@@ -11,7 +11,7 @@ import json
 import struct
 import time
 
-from data_call import paths, call_ids, entries, ims_capable, modem_owned_ids, pcscf_addresses, private_write
+from data_call import paths, call_ids, entries, ims_capable, modem_owned_ids, pcscf_addresses, private_write, summary
 from paths import RUN
 
 REGISTRATION = RUN / 'ims-registration.json'
@@ -171,9 +171,19 @@ def register(client, *, pcscf_required=True, pcscf_fallback=None, attach=None):
         owned = json.loads(state_path.read_text())
         if owned.get('cid') != 2 or not 0 <= owned.get('session', -1) <= 15:
             raise RuntimeError('IMS bearer ownership missing')
-        if 2 not in call_ids(client.request(0x0602)):
+        listed = client.request(0x0602)
+        if 2 not in call_ids(listed):
             raise RuntimeError('IMS bearer no longer listed')
         response, cid = response_path.read_bytes(), 2
+        if not any(pcscf_addresses(response)):
+            # The setup reply for a bearer the modem already had (the carrier
+            # profile's attach on the same APN) can leave the PCO out; stock
+            # read the P-CSCF from the data-call list entry instead.
+            item = next((i for i in entries(listed) if i[2] == 2), None)
+            if item is not None:
+                print('IMS bearer in the data-call list:', summary(item), flush=True)
+                if any(pcscf_addresses(item)) and item[9:25] == response[9:25]:
+                    response = item
     fallback = ()
     if pcscf_fallback is not None and len(response) >= 132 and not any(pcscf_addresses(response)):
         print('IMS bearer PCO carries no P-CSCF; reading the ISIM\'s EF_PCSCF', flush=True)
