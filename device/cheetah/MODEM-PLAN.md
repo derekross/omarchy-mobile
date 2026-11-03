@@ -2717,9 +2717,10 @@ What the packages now do, opt-in and nothing enabled by them:
   sitd; `sit-data` and `mmd` restart themselves only (routes and a D-Bus
   bridge).
 
-The next release enables the target by default once the carrier
-configuration is automatic (#373): today the carrier files in the chroot
-and the `modem-sit.conf` keys (IMS-SHANNON.md section 12) are set by hand.
+Superseded on 2026-11-03 by M4.6b below: the target is on by default,
+before the carrier configuration is automatic (#373); today the carrier
+files in the chroot and the `modem-sit.conf` keys (IMS-SHANNON.md section
+12) are set by hand.
 
 Preconditions: the stack registered by hand on this boot's packages
 (IMS, an SMS); the charger in (no sleep, and upower's critical action
@@ -2814,6 +2815,147 @@ the RAT, the bearer's PDP type, IMS registered or the step it failed
 at, the time from `systemctl start omamobile-sitd` to "ready", the UFS
 handler count at each step, CP crashes. Not the carrier, the APN, the
 PLMN or any number (TELEPHONY-APPS-PLAN Q8).
+
+### M4.6b: on by default (`omamobile-modem` 0.1.16, device-cheetah 0.1.43, omamobile-shell 0.2.98; written 2026-11-03)
+
+The maintainer's decision of 2026-11-03: the next release ships the
+modem working out of the box, so the switch of M4.6 is on by default on
+this phone. M4.6 (three reboots on 2026-11-03) is the evidence it rests
+on; what changes is how the stack is turned on, and what a boot does when
+it can't or shouldn't start the modem.
+
+- **On by default:** `omamobile-device-cheetah` 0.1.43 ships a vendor
+  wants link, `multi-user.target.wants/omamobile-modem-boot.target`, as it
+  does for the AoC and Wi-Fi units. `omamobile-modem` still enables
+  nothing (its test holds it to that), and neither does tegu's or raven's
+  device package. Off: `systemctl mask omamobile-modem-boot.target` (a
+  vendor link survives `disable`), on again with `unmask`. The stack's
+  packages (`omamobile-modem-sit`, `omamobile-mmd`) are in cheetah's
+  `ROOTFS_PACKAGES`, so the release image carries them.
+- **A phone that isn't provisioned costs nothing.** `omamobile-modem.service`
+  and `omamobile-modem-inhibit.service` carry three
+  `ConditionPathExists=`: the chroot (`/usr/lib/omamobile-vendor/modem/root`),
+  the NV checksums (`/etc/omamobile/modem-nv.sha256`) and the board id
+  (`/var/lib/omamobile-vendor/modem/props.conf`), the three things
+  `tools/phone-provision` puts there. Without them both units are skipped
+  (not failed: nothing to restart, and the inhibitor isn't held, so the
+  phone keeps sleeping; the inhibitor needs its own copy because the modem
+  unit's `Requires=` pulls it in even when that unit's conditions skip
+  it), sitd and sit-data are skipped by their own conditions on
+  `/dev/umts_ipc0` (sit-data's is this device's new drop-in
+  `omamobile-sit-data.service.d/20-cp-online.conf`: without it a sitd
+  skipped by its condition counted as started for sit-data's `Requires=`,
+  and the fallback would have failed after 60 s and restarted every 10 s
+  all boot), and only `omamobile-mmd` runs, logging once that sitd isn't
+  reachable and retrying quietly. The start script checks the same three
+  paths first, for a start by hand or `--retry`.
+- **The modem-up guard clears itself after one refused boot.** A boot
+  that finds a stale `modem-up` still refuses (the previous boot ended
+  with the modem up and no clean stop: a hang or a reset), logs
+  `journalctl -b -1 -u omamobile-modem` and `journalctl -b -1 -k` as
+  where to look, and moves the marker to `modem-up.refused-<time>-<pid>`
+  (the last three kept), so the boot after it starts the modem again. A
+  phone that hangs with the modem up every time therefore loses the modem
+  on every other boot at most, never for good. The old hard stop is the
+  owner's choice: `touch /etc/omamobile/modem-hold`, and the marker stays
+  until `omamobile-modem-start --retry` (which still clears both markers)
+  or `rm` and `systemctl start omamobile-modem`. The bring-up latch
+  (`modem-bringup-started`) keeps its hard stop: a hang in the bring-up
+  itself is the one case nothing should repeat on its own.
+- **The tile says why.** Each refusal leaves one short line in
+  `/run/omamobile/modem-refused` ("Off after a hang or reset", "Off: last
+  bring-up hung", "Off: not provisioned", "Off: the start check refused",
+  "Off: no sleep inhibitor", "Off: reboot needed"); a start that gets past
+  the refusals removes it, and the reboot clears `/run`. The shell's
+  Mobile data tile (`tile-state.sh`, omamobile-shell 0.2.98) shows that
+  line under its name instead of "No modem" while it has no sitd state.
+  No new notification path: the journal has the rest.
+
+Risks: none new to the hardware (the same units, in the same order, as
+M4.6); what is new is that every boot of a provisioned phone powers the
+modem on without a hand, so the UFS pass per reboot (M2.5) and no sleep
+are now the default on this phone, as the release notes say.
+
+Preconditions: M4.6 passed on this phone (B0-B4); the carrier settings
+in place from 2026-11-03; the charger in; the human at the phone.
+
+```sh
+# B6 install and look (read-only apart from pacman; risk: low). The three packages from this branch;
+# the device package without staged boot files is a development build (OMAMOBILE_BOOT_FILES=none).
+tools/phone-install-package packages/omamobile-modem
+tools/phone-install-package packages/omamobile-device-cheetah
+tools/phone-install-package packages/omamobile-shell
+tools/phone-ssh 'pacman -Q omamobile-modem omamobile-device-cheetah omamobile-shell omamobile-modem-sit omamobile-mmd;
+  systemctl is-enabled omamobile-modem-boot.target; systemctl disable omamobile-modem-boot.target; systemctl is-enabled omamobile-modem-boot.target;
+  ls -l /usr/lib/systemd/system/multi-user.target.wants/omamobile-modem-boot.target /etc/systemd/system/multi-user.target.wants/omamobile-modem-boot.target 2>&1;
+  systemctl cat omamobile-sit-data | grep -A1 20-cp-online; systemctl show -p ConditionPathExists omamobile-modem omamobile-modem-inhibit;
+  ls /var/lib/omamobile/modem-* /run/omamobile/modem-refused 2>&1'
+#   pass: 0.1.16, 0.1.43, 0.2.98; "enabled" before and after the disable (B1's hand enable is gone from /etc,
+#     the vendor link in /usr/lib stays); the drop-in's ConditionPathExists line; three paths on both units;
+#     only this boot's modem-up (the stack is up from M4.6's enable)
+#   stop: "disabled" after the disable (the vendor link isn't there: the package's install); a marker from
+#     an earlier boot
+#   rollback: none needed (nothing on the phone changed but the packages)
+
+# B7 the first default boot (asks the human; risk: medium: one UFS pass, as every reboot with the modem up)
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+tools/phone-ssh 'sleep 240; systemctl list-units --no-pager "omamobile-modem*" omamobile-sitd omamobile-sit-data omamobile-mmd;
+  systemd-inhibit --list --no-legend | grep omamobile-modem; journalctl -b -u omamobile-modem -o cat | grep -E "ONLINE|refus|marker|provision";
+  omamobile-sit status | head -3; ls -l /var/lib/omamobile/modem-* 2>&1; ls /run/omamobile/modem-refused 2>&1; dmesg | grep -c ufshcd_err_handler'
+#   pass: as M4.6 B2 (the target, the inhibitor and the four units active, one lock, "CP ONLINE", registered)
+#     with nothing enabled by hand; only this boot's modem-up; no modem-refused; err_handler 0
+#   stop: as B2; the target inactive (the vendor link: B6)
+#   rollback: systemctl mask omamobile-modem-boot.target; reboot
+
+# B8 the refused-boot drill (asks the human; risk: medium: two reboots, one of them with the modem off).
+# Overwrite this boot's modem-up with another boot's id while the modem is up: the reboot's clean stop
+# keeps a marker that isn't this boot's (--stopped), so the next boot finds a stale one, refuses once,
+# moves it aside, and the boot after starts the modem again. No forced reset needed.
+tools/phone-ssh 'cat /var/lib/omamobile/modem-up; printf "%s boot %s\n" "$(date -Is)" 00000000-0000-0000-0000-000000000000 > /var/lib/omamobile/modem-up; sync; cat /var/lib/omamobile/modem-up'
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+tools/phone-ssh 'sleep 120; journalctl -b -1 -u omamobile-modem -o cat | tail -3; systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd;
+  journalctl -b -u omamobile-modem -o cat; ls -l /var/lib/omamobile/modem-* 2>&1; cat /run/omamobile/modem-refused;
+  systemd-inhibit --list --no-legend | grep -c omamobile-modem; dmesg | grep -c ufshcd_err_handler'
+#   pass: the previous boot ends with "is another boot's ... kept"; failed, inactive x3 (sitd and sit-data not
+#     started: they require the modem unit; mmd active, waiting); this boot's journal: "ended without a clean
+#     stop", the journalctl pointers, "moved to .../modem-up.refused-<time>-<pid>: the next boot starts the
+#     modem again"; no modem-up, one modem-up.refused-*; the reason reads "Off after a hang or reset" and the
+#     Mobile data tile in the quick-settings sheet shows it under its name (open the sheet; a screenshot
+#     with tools/phone-mirror is fine, no identifier on it); 1 lock (the inhibitor runs on a refused boot:
+#     it is required before the script decides; the phone doesn't sleep on this boot either); err_handler 0
+#   stop: the modem started (the stop hook removed the planted marker: the boot id check; record -1's
+#     journal); the refused marker missing (the mv or the sync); the tile still says "No modem"
+#     (tile-state.sh: run it by hand as the user, look for data_status=)
+#   rollback: rm -f /var/lib/omamobile/modem-up*; systemctl start omamobile-modem omamobile-sitd omamobile-sit-data
+#     omamobile-mmd (the hand sequence, once) or the reboot of B9
+
+# B9 the boot after (asks the human; risk: medium: one UFS pass): the modem starts with no hand
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+tools/phone-ssh 'sleep 240; systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; omamobile-sit status | head -3;
+  journalctl -b -u omamobile-modem -o cat | grep -E "ONLINE|refus"; ls -l /var/lib/omamobile/modem-* 2>&1; ls /run/omamobile/modem-refused 2>&1;
+  dmesg | grep -c ufshcd_err_handler'
+#   pass: active x4, registered, "CP ONLINE", no "refus" line; this boot's modem-up and the one refused copy;
+#     no modem-refused; err_handler 0
+#   stop: refused again ("ended without a clean stop": the refused copy was named modem-up, or B8's boot
+#     ended without the stop hook: its -1 journal)
+#   rollback: systemctl mask omamobile-modem-boot.target; reboot
+
+# B10 optional: the hold flag, once (asks the human; risk: medium: two reboots, one with the modem off)
+tools/phone-ssh 'touch /etc/omamobile/modem-hold; printf "%s boot %s\n" "$(date -Is)" 00000000-0000-0000-0000-000000000000 > /var/lib/omamobile/modem-up; sync'
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+tools/phone-ssh 'sleep 120; systemctl is-active omamobile-modem; journalctl -b -u omamobile-modem -o cat | grep -E "stays off|moved"; ls -l /var/lib/omamobile/modem-up; cat /run/omamobile/modem-refused'
+#   pass: failed; "stays off until omamobile-modem-start --retry"; the marker still in place; "(held)"
+#   then: rm -f /etc/omamobile/modem-hold /var/lib/omamobile/modem-up; reboot; the modem starts (as B9)
+#   stop: "moved" (the flag wasn't read: its path, /etc/omamobile/modem-hold)
+#   rollback: as B8
+
+# M4.7 M3.5 again (read-only): the six partitions unchanged
+```
+
+**Record** here, per step: the date, `uname -r`, the three package
+versions, pass/fail, the modem unit's journal lines (states only), the
+tile's text in B8, the UFS handler count. Not the carrier, the number or
+any identifier.
 
 ## 4. Risks
 

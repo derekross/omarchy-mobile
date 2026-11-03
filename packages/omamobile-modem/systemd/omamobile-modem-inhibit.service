@@ -7,11 +7,17 @@
 # it but the reboot: stopping the modem unit by hand leaves it (Requires=
 # is one way), and a manual stop is refused. A phone with the modem at boot
 # therefore never sleeps; the shell's auto-sleep and upower's critical
-# action are told so by logind ("Operation inhibited").
+# action are told so by logind ("Operation inhibited"). The modem unit's
+# Requires= pulls this in even when that unit's own conditions skip it, so
+# the same three conditions are here: a phone that isn't provisioned (no
+# modem files, checksums or board id) keeps sleeping.
 [Unit]
 Description=Omarchy Mobile modem: block system sleep until the reboot
 Before=omamobile-modem.service
 RefuseManualStop=yes
+ConditionPathExists=/usr/lib/omamobile-vendor/modem/root
+ConditionPathExists=/etc/omamobile/modem-nv.sha256
+ConditionPathExists=/var/lib/omamobile-vendor/modem/props.conf
 
 [Service]
 ExecStart=/usr/bin/systemd-inhibit --what=sleep:idle --who=omamobile-modem --why="suspend with the modem up is not qualified on this phone (MODEM-PLAN 6.3)" --mode=block /usr/bin/sleep infinity

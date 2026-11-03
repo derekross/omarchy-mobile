@@ -992,7 +992,9 @@ Item {
   // Mobile data over omamobile-modem-sit: the tile is the cellular bearer
   // (omamobile-sit data on|off, which starts or stops
   // omamobile-sit-data.service through polkit). "No modem" until
-  // omamobile-sitd publishes its state.
+  // omamobile-sitd publishes its state, unless the modem's start script
+  // refused this boot and left its reason (tile-state.sh's data_status
+  // with data=none): then the tile says why.
   QtObject {
     id: mobileData
     readonly property bool available: root.probedHas("data")
@@ -1000,7 +1002,7 @@ Item {
     // Bars from the signal sitd reports; crossed out with no modem, data
     // off, or no network (TilesModel.dataIcon).
     readonly property string icon: TilesModel.dataIcon(available, enabled, root.probed.data_signal)
-    readonly property string status: !available ? "No modem"
+    readonly property string status: !available ? (root.probed.data_status || "No modem")
       : !enabled ? "Off" : (root.probed.data_status || "On")
     function toggle() { if (available) root.runTileAction("mobile-data", !enabled) }
   }

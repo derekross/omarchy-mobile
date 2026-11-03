@@ -18,7 +18,11 @@
 #   data          on while omamobile-sit-data.service is active; none
 #                 without omamobile-sitd running
 #   data_status   the operator's name (never a bare network code) and the
-#                 technology when registered, else "No signal"
+#                 technology when registered, else "No signal"; with no
+#                 modem, the one line omamobile-modem-start left in
+#                 /run/omamobile/modem-refused when it refused to start
+#                 the modem this boot (a stale marker from a hang, a phone
+#                 not yet provisioned), so the tile can say why
 #   data_signal   the signal, 0-100, while registered; -1 otherwise
 #   dictation     voxtype: on while recording, busy while transcribing, off
 #                 when idle; down when its user service isn't running, none
@@ -135,4 +139,9 @@ print("data_status=" + " ".join(words))
 ' "$state"
 else
   echo "data=none"
+  refused=${OMAMOBILE_MODEM_REFUSED:-/run/omamobile/modem-refused}
+  if [ -r "$refused" ]; then
+    why=$(head -n1 "$refused" 2>/dev/null | head -c 48)
+    if [ -n "$why" ]; then echo "data_status=$why"; fi
+  fi
 fi
