@@ -4,7 +4,9 @@
 # store at the pinned commit: the widgets index.json lets ship (status ok or
 # partial; it is built by update-index.js with our compiler and committed
 # here), each checked against the index's sha256, the store's order, its
-# licence and the index. Needs nothing but bash, python3 and sha256sum, so
+# licence and the index. A widget we keep our own copy of in overrides/
+# (it diverges from the store: README.md) ships that copy instead, checked
+# the same way. Needs nothing but bash, python3 and sha256sum, so
 # the package builds on its own. Never activates anything.
 #   ./install DESTDIR STORE_CHECKOUT [INDEX]
 set -euo pipefail
@@ -22,6 +24,7 @@ for w in json.load(open(sys.argv[1]))["widgets"]:
         print(w["id"], w["sha256"])' "$index" |
 while read -r id sum; do
   file=$store/widgets/$id/widget.owl
+  [[ -f $here/overrides/$id/widget.owl ]] && file=$here/overrides/$id/widget.owl
   [[ -f $file ]] || { echo "the store has no $id" >&2; exit 1; }
   [[ $(sha256sum < "$file" | cut -d" " -f1) == "$sum" ]] || { echo "$id doesn't match the index (wrong store commit?)" >&2; exit 1; }
   install -Dm644 "$file" "$share/widgets/$id/widget.owl"

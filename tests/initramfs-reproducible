@@ -1,0 +1,47 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# bin/omamobile initramfs packs through tools/lib/initramfs-pack.sh: the same
+# staged tree gives the same bytes whatever order its files were made in,
+# when, and on which machine (a release initramfs staged twice must be one
+# file: RELEASES §5.2, §5.5). Two whole builds on the build machine gave
+# identical bytes too (2026-11-02, DEVICE=cheetah, --release); this test
+# needs no download.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "not ok - $*" >&2; exit 1; }
+for tool in cpio lz4; do command -v "$tool" >/dev/null || { echo "ok - # SKIP no $tool"; exit 0; }; done
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+source tools/lib/initramfs-pack.sh
+
+stage() { # dir order(fwd|rev) mtime
+  local d=$1 f list=(etc/omamobile-ufs-rw init usr/local/bin/reboot-to lib/x.so)
+  umask 022
+  mkdir -p "$d"
+  [[ $2 == rev ]] && list=(lib/x.so usr/local/bin/reboot-to init etc/omamobile-ufs-rw)
+  for f in "${list[@]}"; do mkdir -p "$d/$(dirname "$f")"; echo "$f" > "$d/$f"; done
+  chmod 755 "$d/init" "$d/usr/local/bin/reboot-to"
+  ln -s x.so "$d/lib/libx.so"
+  find "$d" -exec touch -h -d "$3" {} +
+}
+stage "$t/a" fwd "2020-01-01 00:00"
+stage "$t/b" rev "2026-11-02 12:34"
+initramfs_pack "$t/a" "$t/a.lz4"
+initramfs_pack "$t/b" "$t/b.lz4"
+cmp -s "$t/a.lz4" "$t/b.lz4" || fail "two trees made in another order at another time pack to the same bytes"
+SOURCE_DATE_EPOCH=1762000000 initramfs_pack "$t/a" "$t/c.lz4"
+cmp -s "$t/a.lz4" "$t/c.lz4" && fail "SOURCE_DATE_EPOCH sets the mtimes"
+list=$(lz4 -dc "$t/a.lz4" | cpio -itv --quiet)
+[[ $(lz4 -dc "$t/a.lz4" | cpio -it --quiet | tr '\n' ' ') == ". etc etc/omamobile-ufs-rw init lib lib/libx.so lib/x.so usr usr/local usr/local/bin usr/local/bin/reboot-to " ]] \
+  || fail "names sorted, the root entry . first"
+# What the kernel unpacks is what the old packing gave: the same entries
+# with the same modes, owners and sizes (the root entry's 0755 included,
+# which the kernel applies to /), only the order and mtimes differ
+listing() { lz4 -dc "$1" | cpio -itv --quiet | awk '{ n = ""; for (i = 9; i <= NF; i++) n = n " " $i; print $1, $3, $4, $5, n }' | LC_ALL=C sort; }
+(cd "$t/b" && find . | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$t/old.lz4"
+diff <(listing "$t/old.lz4") <(listing "$t/a.lz4") || fail "the cpio -itv listing (modes, owners, sizes, names) matches the old packing's"
+listing "$t/a.lz4" | grep -qE '^drwxr-xr-x root root [0-9]+  \.$' || fail "the root entry is a 0755 directory owned by root"
+awk '{print $3, $4}' <<<"$list" | sort -u | grep -qvx 'root root' && fail "every entry owned by 0:0"
+grep -qF 'initramfs_pack "$stage" "$KERNEL_OUT/initramfs.cpio.lz4"' bin/omamobile || fail "bin/omamobile initramfs packs with initramfs_pack"
+grep -qF 'umask 022' bin/omamobile || fail "bin/omamobile initramfs stages under umask 022"
+echo "ok - the initramfs packs reproducibly (sorted names, owner 0:0, fixed mtimes, no inode numbers), with the same entries and modes as before, / at 0755"

@@ -1,0 +1,145 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The maintainer's builds sign with the release key (docs/RELEASES.md §10,
+# tools/lib/signing.sh), in a copy of the repository with throwaway keys (no
+# network, no Docker, no phone; the real keys/ and out/ are never touched):
+# build-packages and repo-publish refuse without keys/gnupg.release, never
+# fall back to the original keys/gnupg, and refuse a key omamobile-keyring
+# doesn't trust; build-packages --resign moves a repository signed with the
+# original key to the release key, package bytes unchanged; repo-publish
+# publishes only what the release key signed (a dry run, with rsync faked).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in gpg repo-add bsdtar zstd; do
+  command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d)
+export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
+R=$t/repo
+cleanup() {
+  for h in "$GNUPGHOME" "$R/keys/gnupg" "$R/keys/gnupg.release" "$R/keys/gnupg.moved" "$t/other"; do
+    [[ -d $h ]] && gpgconf --homedir "$h" --kill gpg-agent 2>/dev/null || true
+  done
+  rm -rf "$t"
+}
+trap cleanup EXIT
+
+mkdir -p "$R/tools/lib" "$R/packages/omamobile-keyring" "$R/keys" "$R/out/repo/aarch64" "$t/bin"
+cp tools/build-packages tools/repo-publish "$R/tools/"
+cp tools/lib/alarm.sh tools/lib/signing.sh "$R/tools/lib/"
+run() { (cd "$R" && PATH="$t/bin:$PATH" "$@") > "$t/log" 2>&1; }
+
+# The original key: one signing key. The release key as tools/release-key-init
+# makes it: a certify-only primary, a signing subkey, and a build keyring
+# holding the primary's public half and the subkey (here with its primary's
+# secret too, which signing never touches).
+newkey() {  # newkey HOME UID: prints the primary's fingerprint
+  mkdir -m 700 -p "$1"
+  GNUPGHOME=$1 gpg --batch --quiet --passphrase '' --quick-generate-key "$2" ed25519 cert never 2>/dev/null
+  local fpr
+  fpr=$(GNUPGHOME=$1 gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
+  GNUPGHOME=$1 gpg --batch --quiet --passphrase '' --quick-add-key "$fpr" ed25519 sign 2y 2>/dev/null
+  echo "$fpr"
+}
+original=$(newkey "$R/keys/gnupg" "original <o@invalid>")
+release=$(newkey "$R/keys/gnupg.release" "release <r@invalid>")
+other=$(newkey "$t/other" "someone else <x@invalid>")
+echo "$original" > "$R/keys/fingerprint"
+echo "$release" > "$R/keys/fingerprint.release"
+kr=$R/packages/omamobile-keyring
+{ GNUPGHOME=$R/keys/gnupg gpg --batch --export "$original"; GNUPGHOME=$R/keys/gnupg.release gpg --batch --export "$release"; } > "$kr/omamobile.gpg"
+printf '%s:4:\n%s:4:\n' "$original" "$release" > "$kr/omamobile-trusted"
+: > "$kr/omamobile-revoked"
+
+# A repository as it is today: two packages and the index, all signed with
+# the original key.
+repo=$R/out/repo/aarch64
+for name in foo bar; do
+  mkdir -p "$t/pkg/$name"
+  printf 'pkgname = %s\npkgbase = %s\npkgver = 1-1\npkgdesc = test\narch = any\nsize = 1\n' "$name" "$name" > "$t/pkg/$name/.PKGINFO"
+  (cd "$t/pkg/$name" && bsdtar --zstd -cf "$repo/$name-1-1-any.pkg.tar.zst" .PKGINFO)
+  GNUPGHOME=$R/keys/gnupg gpg --batch --quiet --local-user "$original" --detach-sign "$repo/$name-1-1-any.pkg.tar.zst"
+done
+(cd "$repo" && GNUPGHOME=$R/keys/gnupg repo-add --quiet --sign --key "$original" omamobile.db.tar.gz foo-1-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.zst) >/dev/null 2>&1
+[[ -f $repo/omamobile.db.tar.gz.sig ]] || fail "fixture: the index is signed"
+sums_before=$(cd "$repo" && sha256sum ./*.pkg.tar.zst)
+signer_of() {  # the primary fingerprint that made FILE.sig
+  gpg --batch --status-fd 1 --keyring "$kr/omamobile.gpg" --no-default-keyring --verify "$1.sig" "$1" 2>/dev/null |
+    awk '$2 == "VALIDSIG" { print $NF }'
+}
+[[ $(signer_of "$repo/foo-1-1-any.pkg.tar.zst") == "$original" ]] || fail "fixture: foo is signed by the original key"
+
+# The fake server side: rsync and ssh only record (repo-publish's dry run
+# never runs ssh; it must never reach the network here).
+printf '#!/bin/bash\necho "rsync $*" >> "%s/rsync.log"\n' "$t" > "$t/bin/rsync"
+printf '#!/bin/bash\necho "ssh $*" >> "%s/ssh.log"\nexit 1\n' "$t" > "$t/bin/ssh"
+printf '#!/bin/bash\necho 000\n' > "$t/bin/curl"
+chmod +x "$t/bin/"*
+
+# --- without the release key ---
+mv "$R/keys/gnupg.release" "$R/keys/gnupg.moved"
+if run tools/build-packages --resign; then fail "build-packages refuses without keys/gnupg.release"; fi
+grep -q 'no release signing key' "$t/log" || { cat "$t/log"; fail "says the release key is missing"; }
+if run tools/repo-publish --no-build --dry-run development; then fail "repo-publish refuses without keys/gnupg.release"; fi
+grep -q 'no release signing key' "$t/log" || { cat "$t/log"; fail "repo-publish says the release key is missing"; }
+[[ $(signer_of "$repo/foo-1-1-any.pkg.tar.zst") == "$original" ]] || fail "nothing was signed with the original key instead"
+mv "$R/keys/gnupg.moved" "$R/keys/gnupg.release"
+pass "without keys/gnupg.release, build-packages and repo-publish refuse and never use keys/gnupg"
+
+echo "$other" > "$R/keys/fingerprint.release"
+if run tools/build-packages --resign; then fail "refuses a key omamobile-keyring doesn't trust"; fi
+grep -q 'does not trust' "$t/log" || { cat "$t/log"; fail "says the key is not trusted"; }
+echo "$release" > "$R/keys/fingerprint.release"
+echo "$release:4:" > "$kr/omamobile-revoked"
+if run tools/build-packages --resign; then fail "refuses a revoked key"; fi
+grep -q 'is revoked' "$t/log" || { cat "$t/log"; fail "says the key is revoked"; }
+: > "$kr/omamobile-revoked"
+pass "the release key must be trusted and not revoked in omamobile-keyring"
+
+if run tools/build-packages --resign packages/foo; then fail "--resign builds nothing"; fi
+grep -q 'use it alone' "$t/log" || { cat "$t/log"; fail "says --resign stands alone"; }
+mkdir -p "$R/device/panther" && echo 'CODENAME=panther' > "$R/device/panther/device.conf"
+if run tools/build-packages --local panther --resign; then fail "--resign is not for --local"; fi
+pass "--resign stands alone and is never a contributor's"
+
+# --- publishing refuses what the original key signed ---
+if run tools/repo-publish --no-build --dry-run development; then fail "repo-publish refuses an index the original key signed"; fi
+grep -q 'no good signature from the release key' "$t/log" || { cat "$t/log"; fail "names the release key"; }
+grep -q 'tools/build-packages --resign' "$t/log" || { cat "$t/log"; fail "says how to sign it again"; }
+[[ ! -e $t/rsync.log && ! -e $t/ssh.log ]] || fail "nothing is uploaded"
+pass "repo-publish refuses a repository the original key signed, and says how to fix it"
+
+# --- re-signing ---
+run tools/build-packages --resign || { cat "$t/log"; fail "build-packages --resign"; }
+for f in foo-1-1-any.pkg.tar.zst bar-1-1-any.pkg.tar.zst omamobile.db.tar.gz; do
+  [[ $(signer_of "$repo/$f") == "$release" ]] || fail "$f is signed by the release key"
+done
+[[ $(cd "$repo" && sha256sum ./*.pkg.tar.zst) == "$sums_before" ]] || fail "the packages' bytes are unchanged"
+ls "$repo" | grep -c '\.new$' >/dev/null && fail "no half-done signatures are left"
+pass "build-packages --resign signs every package and the index with the release key, bytes unchanged"
+
+# --- and publishing takes it ---
+run tools/repo-publish --no-build --dry-run development || { cat "$t/log"; fail "repo-publish takes the re-signed repository"; }
+grep -q 'signed by the release key' "$t/log" || { cat "$t/log"; fail "says it checked the release key"; }
+[[ -f $R/out/publish/development/aarch64/omamobile.db && -f $R/out/publish/development/aarch64/foo-1-1-any.pkg.tar.zst.sig ]] \
+  || fail "development is staged"
+[[ ! -e $t/ssh.log ]] || fail "a dry run never opens ssh"
+grep -c -- ' -n -v ' "$t/rsync.log" >/dev/null || fail "a dry run's rsync is -n"
+pass "repo-publish stages a repository the release key signed (dry run)"
+
+# --- promotion of exactly the tested index (tools/release promote) ---
+dev_index=$(sha256sum < "$R/out/publish/development/aarch64/omamobile.db.tar.gz" | cut -d' ' -f1)
+if run tools/repo-publish --dry-run stable --expect-index "$(printf '0%.0s' {1..64})"; then
+  fail "repo-publish stable refuses a development index other than the expected one"
+fi
+grep -q 'nothing promoted' "$t/log" || { cat "$t/log"; fail "says nothing was promoted"; }
+[[ ! -e $R/out/publish/stable ]] || fail "a refused promotion stages nothing"
+if run tools/repo-publish --dry-run development --expect-index "$dev_index"; then fail "--expect-index goes with stable only"; fi
+run tools/repo-publish --dry-run stable --expect-index "$dev_index" || { cat "$t/log"; fail "repo-publish promotes the expected index"; }
+cmp -s "$R/out/publish/development/aarch64/omamobile.db.tar.gz" "$R/out/publish/stable/aarch64/omamobile.db.tar.gz" ||
+  fail "stable's index is development's, byte for byte"
+cmp -s "$R/out/publish/development/aarch64/foo-1-1-any.pkg.tar.zst.sig" "$R/out/publish/stable/aarch64/foo-1-1-any.pkg.tar.zst.sig" ||
+  fail "the packages' signatures are promoted unchanged"
+pass "repo-publish stable --expect-index promotes only the tested index, unchanged (dry run)"

@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""The Mobile network page's backend (omamobile.mobilenetwork) and setup's
+SIM line (omamobile-onboarding).
+
+  omamobile-mobile-network status          one JSON object (below)
+  omamobile-mobile-network data on|off     mobile data (omamobile-sit data)
+  omamobile-mobile-network roaming on|off  data while roaming
+  omamobile-mobile-network apn auto|APN    the internet APN (applies after a restart)
+  omamobile-mobile-network attach-apn auto|APN  the APN the modem registers with (after a restart)
+
+Reads omamobile-sitd's world-readable status (/run/omamobile-sit/state.json),
+its settings (/etc/omamobile/modem-sit.conf, 0644) and, when it runs,
+ModemManager's API (omamobile-mmd on these phones) for the signal. Changes
+go through omamobile-sit-config under pkexec (polkit: the active user); it
+restarts nothing. Prints no number, IMSI or ICCID: the status has none.
+
+status:
+  {"installed": true, "running": true, "stage": "running",
+   "carrier": "Example", "registration": "home", "tech": "LTE", "signal": -1,
+   "sim": {"state": "ready", "pin_lock": "off"},
+   "data": {"enabled": true, "up": true, "available": true},
+   "roaming": {"now": false, "allowed": true},
+   "apn": {"in_use": "...", "source": "carrier-database", "configured": "auto",
+           "attach_in_use": "...", "attach_source": "same", "attach_configured": "auto"},
+   "voice": true, "sms": true}
+
+installed: the modem stack (omamobile-modem-sit) is on this phone; without
+it the page shows "No modem". signal is 0-100, or -1 when not reported.
+"""
+import configparser
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+RUN = os.environ.get('OMAMOBILE_SIT_RUN', '/run/omamobile-sit')
+CONFIG = os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.conf')
+HELPER = os.environ.get('OMAMOBILE_SIT_CONFIG_HELPER', '/usr/lib/omamobile-sit/omamobile-sit-config')
+
+
+def settings(path=CONFIG):
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(path)
+    except (OSError, configparser.Error):
+        pass
+    apn = parser.get('network', 'apn', fallback='').strip() or 'auto'
+    attach = parser.get('network', 'attach_apn', fallback='').strip() or 'auto'
+    roaming = parser.get('data', 'roaming', fallback='yes').strip().lower() not in ('no', 'off', 'false', '0')
+    return dict(apn=apn, attach_apn=attach, roaming=roaming)
+
+
+def describe(installed, state, conf, data_active, mm=None):
+    """The page's view from sitd's public state (or None), its settings,
+    whether the data service runs and ModemManager's modem (or None)."""
+    modem = (state or {}).get('modem') or {}
+    sim = modem.get('sim') or {}
+    apn = modem.get('apn') or {}
+    registration = modem.get('registration') or ('unknown' if state else '')
+    signal = -1
+    carrier = modem.get('operator_name') or modem.get('operator') or ''
+    if mm:
+        quality = mm.get('SignalQuality') or (0, False)
+        try:
+            if bool(quality[1]):
+                signal = max(0, min(100, int(quality[0])))
+        except (TypeError, ValueError, IndexError):
+            pass
+        carrier = carrier or mm.get('OperatorName') or ''
+    return dict(
+        installed=bool(installed),
+        running=state is not None,
+        stage=modem.get('stage', ''),
+        carrier=carrier if registration in ('home', 'roaming') else '',
+        registration=registration,
+        tech=modem.get('tech', '') if registration in ('home', 'roaming') else '',
+        signal=signal,
+        sim=dict(state=sim.get('state', 'unknown' if state else ''), pin_lock=sim.get('pin_lock', 'unknown')),
+        data=dict(enabled=bool(data_active), up=bool(modem.get('data')),
+                  available=modem.get('data_available', True) is not False),
+        roaming=dict(now=registration == 'roaming', allowed=conf['roaming']),
+        apn=dict(in_use=apn.get('value', '') if isinstance(apn, dict) else '',
+                 source=apn.get('source', '') if isinstance(apn, dict) else '',
+                 configured=conf['apn'],
+                 attach_in_use=apn.get('attach', '') if isinstance(apn, dict) else '',
+                 attach_source=apn.get('attach_source', '') if isinstance(apn, dict) else '',
+                 attach_configured=conf.get('attach_apn', 'auto')),
+        voice=bool(modem.get('voice')), sms=bool(modem.get('sms')),
+    )
+
+
+def public_state():
+    try:
+        with open(os.path.join(RUN, 'state.json')) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def installed():
+    return os.path.exists(HELPER) or shutil.which('omamobile-sitd') is not None
+
+
+def data_active():
+    try:
+        return subprocess.run(['systemctl', 'is-active', '--quiet', 'omamobile-sit-data.service'],
+                              timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def modemmanager():
+    """The first modem's Modem properties over D-Bus, or None (no python-dbus,
+    no ModemManager, no modem). OMAMOBILE_MM=none skips it (tests)."""
+    if os.environ.get('OMAMOBILE_MM') == 'none':
+        return None
+    try:
+        import dbus
+        bus = dbus.SystemBus()
+        name = 'org.freedesktop.ModemManager1'
+        if not bus.name_has_owner(name):
+            return None
+        objects = bus.get_object(name, '/org/freedesktop/ModemManager1', introspect=False).GetManagedObjects(
+            dbus_interface='org.freedesktop.DBus.ObjectManager', timeout=5)
+        for path in sorted(objects):
+            ifaces = objects[path]
+            if name + '.Modem' in ifaces:
+                props = dict(ifaces[name + '.Modem'])
+                props['OperatorName'] = str(dict(ifaces.get(name + '.Modem.Modem3gpp', {})).get('OperatorName', ''))
+                return props
+    except Exception:  # noqa: BLE001  any D-Bus trouble: no signal shown
+        return None
+    return None
+
+
+def configure(key, value):
+    helper = [HELPER, 'set', key, value]
+    command = helper if os.geteuid() == 0 else ['pkexec'] + helper
+    return subprocess.run(command).returncode
+
+
+def main(argv):
+    if argv == ['status']:
+        state = public_state()
+        print(json.dumps(describe(installed(), state, settings(), data_active(),
+                                  modemmanager() if state is not None else None)))
+        return 0
+    if len(argv) == 2 and argv[0] == 'data' and argv[1] in ('on', 'off'):
+        return subprocess.run(['omamobile-sit', 'data', argv[1]]).returncode
+    if len(argv) == 2 and argv[0] == 'roaming' and argv[1] in ('on', 'off'):
+        return configure('roaming', argv[1])
+    if len(argv) == 2 and argv[0] == 'apn':
+        return configure('apn', argv[1].strip())
+    if len(argv) == 2 and argv[0] == 'attach-apn':
+        return configure('attach_apn', argv[1].strip())
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

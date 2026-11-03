@@ -1,41 +1,118 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Generate device/husky/overlays/gauge-model.dtso from Google's stock husky devicetree.
+"""Generate device/husky/overlays/gauge-model*.dtso from Google's husky battery devicetree.
 
-Usage: gen-gauge-overlay.py STOCK.dts NODE OUT.dtso
-  STOCK.dts  the husky MP stock overlay source (ov8: dtc -I dtb -O dts of the factory image's dtbo; not the Pixel 8's ov16, its models differ), the one
-             with the "maxim,<NODE> { maxim,fg-model ... maxim,fg-params ... }" nodes
-  NODE       the model node, e.g. default-a1-0k (Google's fallback for an unknown pack),
-             atl-a1-1k, cos-a1-2k, lsn-a1-3k, default-fake-batt
+Usage: gen-gauge-overlay.py SOURCE NODE OUT.dtso
+       gen-gauge-overlay.py --compare SOURCE OVERLAY.dtso...
 
-Writes maxim,fg-model (48 u16 from the 24 stock u32 cells, high halfword first) and
-maxim,fg-params (u16 from the stock big-endian byte pairs, in the order of
+  SOURCE   Google's public, GPL-2.0-only dts/zuma-husky-battery-data.dtsi (kernel/devices/
+           google/shusky, branch android-gs-shusky-6.1-android16), the file with the
+           "maxim,<NODE> { maxim,fg-model ... maxim,fg-params ... }" nodes. A decompiled
+           stock overlay (dtc -I dtb -O dts of the factory dtbo, the husky ov8) still works:
+           there the table is 24 u32 cells and the parameters a byte list.
+  NODE     the model node, e.g. default-a1-0k (Google's fallback for an unknown pack),
+           atl-a1-1k, cos-a1-2k
+  OVERLAY  an overlay this tool wrote. --compare reads each model node of SOURCE and says,
+           per overlay, how many of the 48 table words and of the parameter words differ.
+
+Writes maxim,fg-model (48 u16) and maxim,fg-params (u16, in the order of
 struct max77759_fg_params). Nothing is typed by hand."""
 import re, sys
-src, node, out = sys.argv[1], sys.argv[2], sys.argv[3]
-text = open(src).read()
-m = re.search(r'maxim,' + re.escape(node) + r' \{(.*?)\n\t*\};', text, re.S)
-body = m.group(1)
-cells = re.search(r'maxim,fg-model = <([^>]*)>', body).group(1).split()
-params = re.search(r'maxim,fg-params = \[([^\]]*)\]', body).group(1).split()
-model = []
-for c in cells:
-    v = int(c, 16)
-    model += [(v >> 16) & 0xffff, v & 0xffff]
-pw = [(int(params[i], 16) << 8) | int(params[i + 1], 16) for i in range(0, len(params), 2)]
-assert len(model) == 48, len(model)
-assert len(pw) in (27, 28), len(pw)
-def fmt(ws): return "\n".join("\t\t\t" + " ".join("0x%04x" % w for w in ws[i:i + 8]) for i in range(0, len(ws), 8))
-open(out, "w").write(f"""// SPDX-License-Identifier: GPL-2.0-only
+
+PARAM_NAMES = ["IAvgEmpty", "RelaxCFG", "LearnCFG", "Config", "Config2", "FullSOCthr",
+               "FullCAPRep", "DesignCap", "dPacc", "dQacc", "FullCAPNom", "V_empty",
+               "QResidual00", "QResidual10", "QResidual20", "QResidual30", "RCOMP0", "TempCo",
+               "ICHGTerm", "TGain", "TOff", "Curve", "MiscCFG", "AtRate", "convgcfg",
+               "FilterCFG", "TaskPeriod", "RSense"]
+
+
+def strip_comments(text):
+    text = re.sub(r'/\*.*?\*/', ' ', text, flags=re.S)
+    return re.sub(r'//[^\n]*', '', text)
+
+
+def config_block(text):
+    """The body of the maxim,config block (the model nodes live in it); the whole text when
+    there is none, as in a decompiled overlay. Limit: the block is taken to end at the first
+    line that is only '};' at its own indentation, which holds for Google's files."""
+    m = re.search(r'maxim,config\s*\{(.*?)\n\};', text, re.S)
+    return m.group(1) if m else text
+
+
+def node_names(text):
+    """The model nodes: every 'maxim,<name> {' in the maxim,config block."""
+    return re.findall(r'maxim,([\w-]+)\s*\{', config_block(strip_comments(text)))
+
+
+def words(prop, body):
+    """The u16 words of one property: /bits/ 16 <...> as written; <...> without /bits/ taken
+    as u32 cells, each split into two u16 (high half first); [...] bytes paired big-endian."""
+    m = re.search(r'maxim,' + prop + r'\s*=\s*(/bits/\s*16\s*)?(<([^>]*)>|\[([^\]]*)\])', body)
+    if not m:
+        sys.exit(f"no maxim,{prop} in the node")
+    if m.group(4) is not None:
+        b = [int(x, 16) for x in m.group(4).split()]
+        if len(b) % 2:
+            sys.exit(f"maxim,{prop}: odd byte list ({len(b)} bytes)")
+        return [(b[i] << 8) | b[i + 1] for i in range(0, len(b), 2)]
+    cells = [int(x, 16) for x in m.group(3).split()]
+    if m.group(1):
+        return cells
+    out = []
+    for v in cells:
+        out += [(v >> 16) & 0xffff, v & 0xffff]
+    return out
+
+
+def read_node(text, node):
+    text = strip_comments(text)
+    # Limit: the node body ends at the first line holding only '};' (no nested nodes).
+    m = re.search(r'maxim,' + re.escape(node) + r'\s*\{(.*?)\n\s*\};', text, re.S)
+    if not m:
+        sys.exit(f"no maxim,{node} node in the source")
+    model, params = words("fg-model", m.group(1)), words("fg-params", m.group(1))
+    if len(model) != 48:
+        sys.exit(f"{node}: maxim,fg-model has {len(model)} words, expected 48")
+    if len(params) not in (27, 28):
+        sys.exit(f"{node}: maxim,fg-params has {len(params)} words, expected 27 or 28 (struct max77759_fg_params)")
+    return model, params
+
+
+def ranges(idx):
+    """0 1 32-47 for [0, 1, 32, ..., 47]."""
+    out, i = [], 0
+    while i < len(idx):
+        j = i
+        while j + 1 < len(idx) and idx[j + 1] == idx[j] + 1:
+            j += 1
+        out.append(str(idx[i]) if i == j else f"{idx[i]}-{idx[j]}")
+        i = j + 1
+    return " ".join(out) or "none"
+
+
+def read_overlay(text):
+    text = strip_comments(text)
+    return words("fg-model", text), words("fg-params", text)
+
+
+def fmt(ws):
+    return "\n".join("\t\t\t" + " ".join("0x%04x" % w for w in ws[i:i + 8]) for i in range(0, len(ws), 8))
+
+
+def render(node, model, pw):
+    return f"""// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Bring-up overlay, never default (BATTERY-NOTES.md M4c and 5.6): load Google's
  * ModelGauge m5 model "{node}" into the husky fuel gauge. The node is picked by the
  * pack's ID, byte 0x17 of its EEPROM: 0 default-a1-0k (what Google falls back to for
- * an unknown pack), 1 atl-a1-1k, 2 cos-a1-2k, 3 lsn-a1-3k. Generated from the husky
- * stock overlay by tools/gen-gauge-overlay.py: maxim,fg-model = the 24 stock u32 cells
- * split into 48 u16 (high half first), maxim,fg-params = the stock byte list as
- * big-endian u16 words, in the order of struct max77759_fg_params. The driver loads it
- * only while the gauge reports power-on reset (Status bit 1), then clears that bit.
+ * an unknown pack), 1 atl-a1-1k, 2 cos-a1-2k. Generated by tools/gen-gauge-overlay.py
+ * from Google's public, GPL-2.0-only dts/zuma-husky-battery-data.dtsi (kernel/devices/
+ * google/shusky, branch android-gs-shusky-6.1-android16,
+ * https://android.googlesource.com/kernel/devices/google/shusky/+/refs/heads/android-gs-shusky-6.1-android16/dts/zuma-husky-battery-data.dtsi):
+ * maxim,fg-model = that node's 48 u16 table words, maxim,fg-params = its parameter
+ * words in the order of struct max77759_fg_params. The driver loads it only while the
+ * gauge reports power-on reset (Status bit 1), then clears that bit.
+ * The table and the parameters are Copyright 2022 Google LLC, from that file.
  */
 /dts-v1/;
 /plugin/;
@@ -50,5 +127,44 @@ open(out, "w").write(f"""// SPDX-License-Identifier: GPL-2.0-only
 	>;
 	}};
 }};
-""")
+"""
+
+
+def compare(src, overlays):
+    text = open(src).read()
+    nodes = node_names(text)
+    print("nodes in", src + ":", " ".join(nodes))
+    for node in nodes:
+        model, params = read_node(text, node)
+        print(f"{node}: DesignCap {params[7]:#06x}, table words 0-1 {model[0]:#06x} {model[1]:#06x},"
+              f" words 32-47 {' '.join(f'{w:#06x}' for w in sorted(set(model[32:])))}")
+    for ov in overlays:
+        omodel, oparams = read_overlay(open(ov).read())
+        for node in nodes:
+            model, params = read_node(text, node)
+            if len(omodel) != len(model) or len(oparams) != len(params):
+                print(f"{ov} vs {node}: different, lengths differ (overlay {len(omodel)} table and"
+                      f" {len(oparams)} parameter words, node {len(model)} and {len(params)})")
+                continue
+            eq = [i for i, (a, b) in enumerate(zip(model, omodel)) if a == b]
+            dm = len(model) - len(eq)
+            dp = [PARAM_NAMES[i] for i in range(max(len(params), len(oparams)))
+                  if i >= len(params) or i >= len(oparams) or params[i] != oparams[i]]
+            verdict = "identical" if not dm and not dp else "different"
+            line = f"{ov} vs {node}: {verdict}, model {dm}/{len(model)} words differ, params {len(dp)}/{len(params)}"
+            if dp:
+                line += " (" + " ".join(dp) + ")"
+            if dm:
+                line += f"; equal table words: {ranges(eq)}"
+            print(line)
+
+
+if len(sys.argv) >= 3 and sys.argv[1] == "--compare":
+    compare(sys.argv[2], sys.argv[3:])
+    sys.exit(0)
+if len(sys.argv) != 4:
+    sys.exit(__doc__)
+src, node, out = sys.argv[1], sys.argv[2], sys.argv[3]
+model, pw = read_node(open(src).read(), node)
+open(out, "w").write(render(node, model, pw))
 print("model words", len(model), "param words", len(pw), "design cap word", hex(pw[7]), "config", hex(pw[3]), "tgain/toff", hex(pw[19]), hex(pw[20]))

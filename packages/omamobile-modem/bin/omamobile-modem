@@ -1,0 +1,52 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-modem: the modem runtime's commands for people.
+#
+#   omamobile-modem nv-overlay status          read-only
+#   omamobile-modem nv-overlay diff            read-only: what the modem changed
+#                                              in its NV since this start (names,
+#                                              sizes) and what a capture keeps
+#   omamobile-modem nv-overlay capture         keep the modem's allowed writes now
+#   omamobile-modem nv-overlay reset [--all]   delete the overlay: the next boot
+#                                              runs the modem from the backup alone
+#
+# The overlay: device/cheetah/MODEM-PLAN.md, "NV overlay". diff and capture
+# read the running profile's RAM copies, which live in its private mount
+# namespace: they enter it (nsenter, mount namespace only) and only read there.
+set -euo pipefail
+
+LIB=${OMAMOBILE_VENDOR_LIB:-/usr/lib/omamobile-vendor}
+TOOL=$LIB/omamobile-modem-nv-overlay
+RUN=/run/omamobile-vendor/modem
+SUMS=${OMAMOBILE_MODEM_NV_SUMS:-/etc/omamobile/modem-nv.sha256}
+
+usage() {
+  echo "usage: omamobile-modem nv-overlay status | diff | capture | reset [--all]" >&2
+  exit 2
+}
+
+in_profile() {
+  local pid
+  pid=$(cat "$RUN/ns.pid" 2>/dev/null || true)
+  [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null ||
+    { echo "omamobile-modem: the modem profile isn't running" >&2; exit 1; }
+  exec nsenter --target "$pid" --mount -- "$TOOL" "$@"
+}
+
+[[ ${1:-} == nv-overlay ]] || usage
+shift
+cmd=${1:-}
+[[ -n $cmd ]] || usage
+shift
+case $cmd in status | reset | diff | capture) ;; *) usage ;; esac
+[[ $EUID -eq 0 ]] || { echo "omamobile-modem: run as root (the overlay is root-only)" >&2; exit 1; }
+case $cmd in
+  status) [[ $# -eq 0 ]] || usage; exec "$TOOL" status --sums "$SUMS" ;;
+  reset) [[ $# -eq 0 || ( $# -eq 1 && $1 == --all ) ]] || usage; exec "$TOOL" reset "$@" ;;
+  diff) [[ $# -eq 0 ]] || usage; in_profile diff --root "$RUN/root/mnt/vendor" --run "$RUN/nv-overlay" ;;
+  capture)
+    reason=manual
+    if [[ $# -eq 2 && $1 == --reason ]]; then reason=$2; elif [[ $# -ne 0 ]]; then usage; fi
+    in_profile capture --sums "$SUMS" --root "$RUN/root/mnt/vendor" --run "$RUN/nv-overlay" --reason "$reason" ;;
+  *) usage ;;
+esac

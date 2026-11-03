@@ -5,6 +5,14 @@
 # /etc/geoclue/conf.d/90-omamobile-gnss.conf are let through without a
 # question; others get a notification. Enabled for all users by
 # "omamobile-gnss on" (systemctl --global), disabled by "off".
+#
+# geoclue ships an XDG autostart of the same agent (geoclue-demo-agent.desktop),
+# which the session would run at every login whatever the Location switch says.
+# This package masks its generated unit (app-geoclue\x2ddemo\x2dagent@autostart
+# .service, in /usr/lib/systemd/user), so this unit is the one agent. A session
+# that started the autostart one before the mask (an upgrade from before 0.2.6,
+# without a new login) still runs it, and a second agent only finds the
+# first one and exits: stop that one first, so this unit takes over.
 [Unit]
 Description=GeoClue agent (location authorization)
 After=graphical-session.target
@@ -12,6 +20,7 @@ PartOf=graphical-session.target
 ConditionPathExists=/usr/lib/geoclue-2.0/demos/agent
 
 [Service]
+ExecStartPre=-/usr/bin/systemctl --user stop app-geoclue\\x2ddemo\\x2dagent@autostart.service
 ExecStart=/usr/lib/geoclue-2.0/demos/agent
 Restart=on-failure
 RestartSec=5

@@ -91,7 +91,7 @@ pass "fetch-published refuses a revoked key"
 mv "$R/keys/panther" "$t/panther-key"
 if run tools/build-packages --local panther packages/omamobile-device-panther; then fail "build-packages --local refuses without the local key"; fi
 grep -q 'no local key in keys/panther' "$t/log" || { cat "$t/log"; fail "says the local key is missing"; }
-mkdir -p "$R/keys/gnupg" && echo "$signer" > "$R/keys/fingerprint"
+mkdir -p "$R/keys/gnupg" "$R/keys/gnupg.release" && echo "$signer" > "$R/keys/fingerprint" && echo "$signer" > "$R/keys/fingerprint.release"
 if run tools/build-packages --local panther packages/omamobile-device-panther; then fail "build-packages --local never falls back to keys/"; fi
 if run tools/build-packages --local nosuch packages/omamobile-device-panther; then fail "build-packages --local refuses an unknown codename"; fi
 [[ ! -e $R/out/repo ]] || fail "build-packages --local made nothing in out/repo"

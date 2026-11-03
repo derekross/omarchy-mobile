@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Fixed AT commands on CPIF's router channel (/dev/umts_router).
 
-Only radio power goes this way: the start-up sequence that registered on
-this phone switched the radio with AT+CFUN, and SIT radio power and AT CFUN
-were seen to disagree. No arbitrary command can be sent from here.
+Only radio power goes this way (and its read-only query): the start-up
+sequence that registered on this phone switched the radio with AT+CFUN, and
+SIT radio power and AT CFUN were seen to disagree. No arbitrary command can be sent from here.
 """
 import os
 import re
@@ -47,3 +47,17 @@ def radio(enabled):
             raise RuntimeError('Radio command was not accepted')
     finally:
         os.close(fd)
+
+
+def radio_state():
+    """AT+CFUN?: the functionality level (0 minimum, 1 full, 4 flight), or
+    None when the answer can't be read. Read-only."""
+    fd = open_channel(ROUTER)
+    try:
+        response = exchange(fd, COMMANDS['radio-state'], 10)
+    finally:
+        os.close(fd)
+    found = re.search(r'\+CFUN:\s*(\d+)', response)
+    if not found or not re.search(r'(?:^|[\r\n])OK(?:[\r\n]|$)', response):
+        return None
+    return int(found.group(1))

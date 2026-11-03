@@ -112,7 +112,8 @@ for its own rails). This branch adds S2MPG13 to `sec-acpm` and `s2mps11`
 the upstream way, deliberately narrow:
 
 - writes reach only LDO control registers (regmap `wr_table`);
-- only LDO9S-11S are in the DT, at stock's ranges (0.725-1.3 V,
+- at G1 only LDO9S-11S were in the DT (LDO12S, camera I/O, and LDO15S, the
+  fingerprint sensor, came later with their own consumers), at stock's ranges (0.725-1.3 V,
   1.6-1.95 V, 1.6-1.95 V), so registering them writes nothing;
 - the other 25 LDOs exist without constraints and are never touched;
 - no interrupt (stock: gpa0-1), no meter, no bucks.
