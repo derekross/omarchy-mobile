@@ -23,10 +23,11 @@
 #    ROM, so a boot that loaded CPIF refuses (reboot to start again);
 #  - never stop the modem by hand: the attended reboot's shutdown stops it;
 #  - a latch (/var/lib/omamobile/modem-bringup-started) is written before any
-#    driver loads and removed only when the modem profile's unit stops
-#    cleanly at shutdown: a start that never reached ONLINE, or a boot that
-#    hung or reset with the modem up, leaves it, and later boots refuse until
-#    a human removes it (TELEPHONY-PLAN section 2.4);
+#    driver loads and removed when the modem profile's unit stops (its
+#    ExecStopPost runs --stopped, at a shutdown) after the start had reached
+#    ONLINE, whatever the stop's result: a start that never reached ONLINE,
+#    or a boot that hung or reset with the modem up, leaves it, and later
+#    boots refuse until a human removes it (TELEPHONY-PLAN section 2.4);
 #  - no system suspend once the CP is up: a sleep inhibitor, its own unit, is
 #    taken before any driver loads and lasts until the reboot.
 set -euo pipefail
@@ -176,5 +177,5 @@ if ! $CP_STATE wait-online 60 >/dev/null 2>&1; then
   exit 1
 fi
 echo online >> "$LATCH"; sync "$LATCH" 2>/dev/null || sync
-say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log); the latch stays until a clean shutdown"
+say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log); the latch stays until the profile unit stops at shutdown"
 phone_up

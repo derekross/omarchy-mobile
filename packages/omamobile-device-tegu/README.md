@@ -167,12 +167,20 @@ In order, it:
 6. with `--phone`, starts `omamobile-sitd` and, when installed,
    `omamobile-mmd` for Phone and Messages.
 
-The latch stays from step 2 until the profile's unit stops cleanly at
-shutdown. A start that never reached ONLINE, or a boot that hung or reset
+The latch stays from step 2 until the profile's unit stops at shutdown:
+its ExecStopPost (`omamobile-tegu-modem-up --stopped`) removes this boot's
+latch once the start had reached ONLINE, whatever the stop's result (the
+CP's power-off can end rfsd before systemd's SIGINT, so the result is often
+not "success"). A start that never reached ONLINE, or a boot that hung or reset
 with the modem up, leaves it, and every later start refuses until you've
 read `/var/log/omamobile/modem.log` and the last boot's journal and removed
 it. It also refuses a second start in a boot that already loaded CPIF.
 Never stop the modem by hand; the reboot's shutdown stops it.
+
+With #403, a `reboot-to` (and so `bin/omamobile push`) with the CP ONLINE
+notes the boot it ends, and the next boot clears that boot's latch and
+starts the modem on its own, after a reboot that didn't power the CP off
+through the profile. That path is still under test on the 9a.
 
 The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`) hasn't
 run through this script yet; the in-tree drivers have run from the
@@ -180,8 +188,8 @@ bring-up runners.
 
 ### Starting it at boot
 
-`omamobile-tegu-modem-boot.service` runs `omamobile-tegu-modem-up --phone`
-at boot. The package installs it disabled. Before enabling it:
+`omamobile-tegu-modem-boot.service` runs `omamobile-tegu-modem-up --phone
+--gnss` at boot. The package installs it disabled. Before enabling it:
 
 - **Slot B marked successful.** Otherwise every reset spends one of ABL's
   three tries, and at zero it boots stock on slot A, which has overwritten
