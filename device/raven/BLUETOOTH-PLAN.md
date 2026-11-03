@@ -4,8 +4,8 @@
 Status (2026-11-03): **pairing and A2DP audio work** (B4): a speaker paired
 from the phone's menu played clean, crackling only while Wi-Fi carried
 traffic at the same time, and reconnected after reboots; the chip came up
-silent after one of seven clean reboots, the one that followed heavy Wi-Fi and
-Bluetooth use (#77), and a forced restart recovered it.
+silent after one of seven clean reboots, about the rate seen since B1
+(#77), and a forced restart recovered it.
 Earlier status (2026-10-27): **Bluetooth works**, at every boot since kernel #6 v2's
 CMU_APM mux fix (POWER-PLAN R4b, `g1de37d2bef30` and later; linux #6, merged).
 The B3 outage below followed kernels whose `assigned-clock-parents` override
@@ -406,8 +406,9 @@ driver has no shutdown hook, so nothing in the kernel touches BT_REG_ON at
 a reboot, and bluetoothd only unregistered its media endpoints as it
 stopped; every one of the seven clean shutdowns also ended with
 `omamobile-modem` killed after its stop timeout, so that isn't the trigger
-either. One silent chip in seven clean reboots, not reproduced on demand;
-the one difference left is Wi-Fi and Bluetooth both busy before the
-shutdown. Next: reboot right after streaming over Wi-Fi to the speaker,
-and if it reproduces, B3's longer BT_REG_ON hold (100 ms) and a boot-time
-power-cycle retry. Issue #77.
+either. One silent chip in seven clean reboots, not reproduced on demand. That
+fits the rate seen since B1 (about one boot in five), on reboots with no
+Bluetooth audio at all (B1, B3, the 10-27 push), so what ran before the
+shutdown isn't the cause: the chip sometimes stays silent across a warm
+reset. Next: B3's longer BT_REG_ON hold (100 ms, as stock's driver does)
+over a run of clean reboots, then a boot-time power-cycle retry. Issue #77.
