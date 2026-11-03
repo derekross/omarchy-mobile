@@ -6,7 +6,8 @@ post_install() {
   echo "  tools/phone-provision has put Google's modem files, the NV checksums"
   echo "  (/etc/omamobile/modem-nv.sha256) and this phone's board id"
   echo "  (/var/lib/omamobile-vendor/modem/props.conf) on the phone. To keep the stack"
-  echo "  off: systemctl mask omamobile-modem-boot.target. device/cheetah/MODEM-PLAN.md M4.6."
+  echo "  off: systemctl mask omamobile-modem-boot.target (disable doesn't remove a vendor"
+  echo "  link, and is-enabled reads 'disabled' for one). device/cheetah/MODEM-PLAN.md M4.6."
   udevadm control --reload 2>/dev/null || true
 }
 post_upgrade() {

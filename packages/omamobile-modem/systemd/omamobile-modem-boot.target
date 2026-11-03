@@ -15,9 +15,14 @@
 # Pro). On a phone that isn't provisioned the modem and inhibit units'
 # conditions skip them, sitd's and sit-data's skip those, and only the
 # D-Bus bridge runs, waiting for sitd. To keep the stack off on a phone
-# that is provisioned (a vendor link survives systemctl disable):
+# that is provisioned:
 #   systemctl mask omamobile-modem-boot.target       then reboot
-# and systemctl unmask to have it back. Until the carrier configuration is
+# and systemctl unmask to have it back. A vendor link survives systemctl
+# disable, and `systemctl is-enabled` reads "disabled" for a unit started
+# by a vendor link alone (it reports links under /etc and /run only), so
+# that answer doesn't mean the stack is off: the link itself (ls -l
+# /usr/lib/systemd/system/multi-user.target.wants/) or `systemctl
+# list-dependencies --plain multi-user.target` says. Until the carrier configuration is
 # automatic (#373) the SIM's APNs and modem-sit.conf are set by hand, and a
 # phone without them boots the modem but registers nothing.
 #

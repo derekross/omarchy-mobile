@@ -231,16 +231,26 @@ out=$(start) && fail "the next boot gets past the refusals (and stops at the inh
 [[ $out == *"no sleep inhibitor"* && $out != *"ended without a clean stop"* ]] || fail "the boot after a refused one starts the modem again: $out"
 [[ $(cat "$m/run/refused") == "Off: no sleep inhibitor" ]] || fail "a later refusal replaces the reason: $(cat "$m/run/refused")"
 [[ ! -e $m/latch ]] || fail "the inhibitor refusal comes before the latch"
-# Two unclean boots in a row refuse every other boot, never for good; the
-# last three refused markers are kept.
-for i in 1 2 3 4; do
-  stale; sleep 1
-  out=$(start) && fail "unclean boot $i is refused"
-  [[ $out == *"ended without a clean stop"* ]] || fail "unclean boot $i: $out"
-  out=$(start) && fail "the boot after unclean boot $i stops at the inhibitor"
-  [[ $out == *"no sleep inhibitor"* ]] || fail "the boot after unclean boot $i starts again: $out"
-done
-[[ $(ls "$m"/up.refused-* | wc -l) -eq 3 ]] || fail "the last three refused markers are kept: $(ls "$m")"
+# The second refusal holds: the retry's boot ended unclean too (a stale
+# marker with the refused copy still beside it), so the marker stays, no
+# second copy is made, and every boot refuses until --retry. A clean stop of
+# this boot's marker (--stopped) removes the copies, and the streak starts
+# over: the next stale marker is again refused once.
+stale
+out=$(start) && fail "the second unclean boot in a row is refused"
+[[ $out == *"ended without a clean stop"* && $out == *"no clean stop since the last refusal"* && $out == *"--retry"* ]] ||
+  fail "the second refusal says the retry is used up and how to clear it: $out"
+[[ -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "the second refusal keeps the marker and makes no second copy: $(ls "$m")"
+[[ $(cat "$m/run/refused") == "Off after a hang or reset (held)" ]] || fail "the held reason for the tile: $(cat "$m/run/refused")"
+out=$(start) && fail "the held marker refuses the boot after too"
+[[ $out == *"no clean stop since the last refusal"* && -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "held: the marker and the one copy stay: $out"
+printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$m/up"
+out=$(SERVICE_RESULT=success bash $s --stopped 2>&1) || fail "--stopped exits 0"
+[[ ! -e $m/up && -z $(ls "$m"/up.refused-* 2>/dev/null) ]] || fail "a clean stop of this boot's marker removes the refused copies: $(ls "$m")"
+stale
+out=$(start) && fail "after a clean stop a stale marker is refused once again"
+[[ $out == *"the next boot starts the modem again"* && ! -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
+  fail "the streak starts over after a clean stop: $out $(ls "$m")"
 rm -f "$m"/up.refused-*
 # The owner's hard stop: with the hold flag the marker stays, and every
 # boot refuses until --retry.
@@ -252,23 +262,26 @@ out=$(start) && fail "with the hold flag the next boot refuses too"
 [[ $(cat "$m/run/refused") == "Off after a hang or reset (held)" ]] || fail "the held reason for the tile: $(cat "$m/run/refused")"
 rm -f "$m/hold"
 # --stopped (ExecStopPost) removes only this boot's modem-up marker: another
-# boot's (the one a refusal was about) stays, so a refused start can't clear
-# the guard it refused on.
+# boot's (the one a refusal was about) stays, and so does the refused copy
+# beside it, so a refused start can't clear the guard it refused on.
+: > "$m/up.refused-x"
 out=$(SERVICE_RESULT=exit-code bash $s --stopped 2>&1) || fail "--stopped exits 0 on another boot's marker"
-[[ -e $m/up && $out == *"another boot"* ]] || fail "another boot's modem-up marker is kept by --stopped: $out"
+[[ -e $m/up && -e $m/up.refused-x && $out == *"another boot"* ]] || fail "another boot's modem-up marker and the copy are kept by --stopped: $out"
 printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$m/up"
 out=$(SERVICE_RESULT=success bash $s --stopped 2>&1) || fail "--stopped exits 0"
-[[ ! -e $m/up && $out == *"modem stopped (success)"* ]] || fail "this boot's modem-up marker is removed by a clean stop: $out"
+[[ ! -e $m/up && ! -e $m/up.refused-x && $out == *"modem stopped (success)"* ]] || fail "this boot's modem-up marker and the copies are removed by a clean stop: $out"
 bash $s --stopped >/dev/null 2>&1 || fail "--stopped with no marker exits 0"
-# --retry clears both (it then goes on to start; the inhibitor check refuses
-# that here, with no modem-inhibit unit on this machine, before any modprobe)
-printf 'x\n' > "$m/latch"; printf 'x\n' > "$m/up"; : > "$m/hold"
+# --retry clears both markers and the refused copies (it then goes on to
+# start; the inhibitor check refuses that here, with no modem-inhibit unit
+# on this machine, before any modprobe)
+printf 'x\n' > "$m/latch"; printf 'x\n' > "$m/up"; : > "$m/up.refused-x"; : > "$m/hold"
 out=$(start --retry) && fail "--retry on this machine is refused at the inhibitor"
-[[ ! -e $m/latch && ! -e $m/up && $out == *"no sleep inhibitor"* ]] || fail "--retry clears both markers and stops at the inhibitor check: $out ($(ls "$m"))"
+[[ ! -e $m/latch && ! -e $m/up && ! -e $m/up.refused-x && $out == *"no sleep inhibitor"* ]] ||
+  fail "--retry clears both markers and the copies and stops at the inhibitor check: $out ($(ls "$m"))"
 rm -f "$m/hold"
 rc=0; bash $s --bogus >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] || fail "an unknown option exits 2"
 unset OMAMOBILE_MODEM_LATCH OMAMOBILE_MODEM_UP_MARK OMAMOBILE_MODEM_HOLD OMAMOBILE_MODEM_REFUSED OMAMOBILE_MODEM_CHROOT OMAMOBILE_MODEM_NV_SUMS OMAMOBILE_MODEM_PROPS
-pass "refusals: unprovisioned, the latch, a stale modem-up marker once (held with the flag), --stopped and --retry"
+pass "refusals: unprovisioned, the latch, a stale modem-up marker once then held (a clean stop resets; held at once with the flag), --stopped and --retry"
 
 # The units: the inhibitor is required and ordered before the modem, held
 # until the reboot (a manual stop is refused); the modem unit is Type=notify

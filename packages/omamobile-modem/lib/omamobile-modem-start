@@ -5,9 +5,11 @@
 # omamobile-modem.service. device/cheetah/MODEM-PLAN.md M3.4 and M4.6.
 #
 #   omamobile-modem-start            the unit's ExecStart
-#   omamobile-modem-start --retry    the same after clearing both markers below
+#   omamobile-modem-start --retry    the same after clearing both markers
+#                                    below and the refused copies
 #   omamobile-modem-start --stopped  the unit's ExecStopPost: a clean stop
-#                                    removes this boot's modem-up marker
+#                                    removes this boot's modem-up marker and
+#                                    the refused copies
 #
 # Two markers, both under /var/lib/omamobile, keep a hang from becoming a
 # reset loop (CONTRIBUTING.md 3.4; the 9a's starter does the same):
@@ -24,11 +26,17 @@
 #    the unit stops (the reboot's shutdown, or a stop by hand) and the
 #    marker is this boot's. A boot that ends with the modem up and no stop,
 #    a hang or a reset, leaves it, and the next boot refuses once: it moves
-#    the marker aside (modem-up.refused-<time>, the last three kept) and
-#    the boot after that starts the modem again. A phone that hangs with
-#    the modem up every time therefore loses the modem on every other boot
-#    at most, never for good, and each refused boot's journal says so. An
-#    owner who wants the old hard stop (the modem off until --retry) makes
+#    the marker aside (modem-up.refused-<time>-<pid>) and the boot after
+#    that starts the modem again. One automatic retry, then the hold: the
+#    refused copy is the counter. If that retry's boot ends unclean too,
+#    the next boot finds the stale marker with a copy beside it (no clean
+#    stop since the last refusal), keeps the marker and refuses "(held)",
+#    and every boot refuses until a human has looked (--retry). A clean
+#    stop of this boot's marker removes the copies: the streak is over. So
+#    a flat battery or one forced reset costs one boot's modem; a phone
+#    that hangs or resets because the modem is up stops after the second,
+#    and each refused boot's journal says so. An owner who wants the hard
+#    stop from the first unclean end (the modem off until --retry) makes
 #    /etc/omamobile/modem-hold.
 #
 # Either way the recovery is the same once a human has looked at the last
@@ -47,7 +55,6 @@ MARK=${OMAMOBILE_MODEM_LATCH:-/var/lib/omamobile/modem-bringup-started}
 UP=${OMAMOBILE_MODEM_UP_MARK:-/var/lib/omamobile/modem-up}
 HOLD=${OMAMOBILE_MODEM_HOLD:-/etc/omamobile/modem-hold}
 REFUSED=${OMAMOBILE_MODEM_REFUSED:-/run/omamobile/modem-refused}
-KEEP_REFUSED=3
 LIB=/usr/lib/omamobile-vendor
 # What tools/phone-provision puts on the phone (the unit's conditions name
 # the same three): without them the modem can't start, so nothing is
@@ -69,41 +76,48 @@ refuse() {
   exit 1
 }
 
+# The refused copies a stale marker leaves (the retry counter), as words.
+refused_copies() { local c; c=$(compgen -G "$UP.refused-*" 2>/dev/null) || true; printf '%s' "${c//$'\n'/ }"; }
+
 # ExecStopPost. SERVICE_RESULT is systemd's; it is only logged: what keeps
-# the marker is a boot that ends without this running at all.
+# the marker is a boot that ends without this running at all. A clean stop
+# of this boot's marker ends the streak: the refused copies go with it.
 stopped() {
   [[ -e $UP ]] || return 0
   if ! grep -q "boot $(boot_id)\$" "$UP"; then
     say "$UP is another boot's ($(cat "$UP")): not a stop of this boot's modem, kept"
     return 0
   fi
-  rm -f "$UP"
+  rm -f "$UP" "$UP".refused-*
   sync
   say "modem stopped (${SERVICE_RESULT:-result unknown}): $UP removed"
 }
 
-# The stale modem-up marker: refuse this boot, keep the evidence beside the
-# marker's place, and let the next boot start again, unless the owner asked
-# for the hard stop.
+# The stale modem-up marker: refuse this boot. The first time, move the
+# marker aside and let the next boot start again; with a refused copy
+# already there (that retry's boot ended unclean too), or with the owner's
+# hold flag, keep the marker and hold until a human has looked.
 refuse_unclean() {
-  local refused old
+  local refused
   say "the last boot with the modem up ($(cat "$UP")) ended without a clean stop: a hang or a reset; skipping the modem on this boot."
   say "Read that boot's journal first: journalctl -b -1 -u omamobile-modem, and its kernel log, journalctl -b -1 -k"
   if [[ -e $HOLD ]]; then
     say "$HOLD exists: the modem stays off until omamobile-modem-start --retry, or rm $UP and systemctl start omamobile-modem"
     refuse "Off after a hang or reset (held)"
   fi
+  if [[ -n $(refused_copies) ]]; then
+    say "no clean stop since the last refusal ($(refused_copies)): the one automatic retry is used up, the modem stays off until omamobile-modem-start --retry, or rm $UP $UP.refused-* and systemctl start omamobile-modem"
+    refuse "Off after a hang or reset (held)"
+  fi
   refused=$UP.refused-$(date +%Y%m%dT%H%M%S)-$$
   mv -f "$UP" "$refused"
-  # the last few refusals only (sorted by name: the time is in it)
-  while IFS= read -r old; do rm -f "$old"; done < <(ls -1 "$UP".refused-* 2>/dev/null | sort | head -n -"$KEEP_REFUSED")
   sync
-  say "$UP moved to $refused: the next boot starts the modem again (for the old hard stop, touch $HOLD)"
+  say "$UP moved to $refused: the next boot starts the modem again, once (a second unclean end holds; for the hard stop from the first, touch $HOLD)"
   refuse "Off after a hang or reset"
 }
 
 case ${1:-} in
-  --retry) rm -f "$MARK" "$UP" ;;
+  --retry) rm -f "$MARK" "$UP" "$UP".refused-* ;;
   --stopped) stopped; exit 0 ;;
   '') ;;
   *) say "usage: omamobile-modem-start [--retry | --stopped]"; exit 2 ;;
