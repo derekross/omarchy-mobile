@@ -2014,6 +2014,20 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    level relies on the firmware's own limit and the 80 C backstop, as the
    reference phone does.
 
+   **After review (round 40):** c9 from the list is capped at what was
+   verified with music: digital 817, analog top 11, bottom 14 (limiter
+   drive as #236). An explicit c9 or a configured level above that is
+   lowered to it, with a log line, and the watchdog holds the same
+   ceilings; stock's 17 stays for a phone with its own stamp. A refusal
+   for a coil estimate outside 10-65 C alone is recorded for the current
+   boot only (`/run/omamobile/speaker-protection-c9-refused`): a restart
+   right after loud music (67 C peaks) or a cold phone can give it with
+   nothing wrong. CSPL_ENABLE, CAL_R_SELECTED and heartbeat failures are
+   persisted. If `/var/lib` can't be written the refusal goes to `/run`;
+   if neither can, the amplifiers stay muted and the service isn't
+   restarted. The list's path and the check's band can only be changed
+   under the tests' control backend, not from `speaker.conf`.
+
    Phone checks once 0.5.10 and a filled list are installed (read-only
    except where noted): (1) on the reference phone, `omamobile-speaker-protection
    status | head -6` says "from this phone's stamp" (the stamp wins).
