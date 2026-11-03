@@ -57,7 +57,7 @@ n_driver=$(grep -n '^modprobe pcie_gs201_cp' "$c" | cut -d: -f1)
 n_check=$(grep -n '^chroot modem check' "$c" | cut -d: -f1)
 (( n_inhibit < n_driver && n_driver < n_check )) || fail "the sleep inhibitor, then the drivers, then the profile check (it needs CPIF loaded)"
 [[ -e $t/k2/latch ]] || fail "the latch stays past ONLINE"
-grep -q 'ExecStopPost=.*SERVICE_RESULT.*rm -f .*latch' "$c" || fail "the profile's clean stop removes the latch"
+grep -q 'ExecStopPost=.*omamobile-tegu-modem-up --stopped' "$c" || fail "the profile's stop runs --stopped, which removes the latch"
 grep -qx 'systemctl start --no-block omamobile-sitd.service' "$c" || fail "--phone starts the phone service"
 grep -qx 'systemctl start --no-block omamobile-mmd.service' "$c" || fail "--phone starts the bridge when it's installed"
 printf 'ok - %s\n' "modem-up: the kernel's drivers, the order, the latch kept for a clean stop, the phone service and the bridge"
@@ -121,3 +121,27 @@ grep -q 'never reached ONLINE' "$t/n2/out" || fail "the refusal names the latch"
 note_case n3 "2026-11-03T00:00:00+00:00 boot $old\nonline\n" 33333333-3333-3333-3333-333333333333 && fail "a note naming another boot clears nothing"
 [[ -e $t/n3/latch && -e $t/n3/note ]] || fail "the latch and the note stay"
 printf 'ok - %s\n' "modem-up: reboot-to's note clears an ONLINE latch of the boot it names, nothing else"
+
+# --stopped (the profile unit's ExecStopPost): this boot's latch goes once it
+# reached ONLINE, whatever the unit's result (a shutdown's is exit-code: the
+# CP's power-off ends a daemon before SIGINT); another boot's latch, or one
+# that never reached ONLINE, stays.
+stop_case() { # NAME LATCH-LINES RESULT
+  local r=$t/$1; rm -rf "$r"; mkdir -p "$r"
+  printf '%b' "$2" > "$r/latch"; echo 22222222-2222-2222-2222-222222222222 > "$r/boot_id"
+  env -i PATH="$F:/usr/bin:/bin" OMAMOBILE_MODEM_TEST=1 SERVICE_RESULT="$3" \
+    OMAMOBILE_MODEM_LATCH="$r/latch" OMAMOBILE_BOOT_ID="$r/boot_id" \
+    bash bin/omamobile-tegu-modem-up --stopped > "$r/out" 2>&1
+}
+this=22222222-2222-2222-2222-222222222222
+stop_case s1 "2026-11-03T00:00:00+00:00 boot $this\nonline\n" exit-code || fail "--stopped succeeds"
+[[ ! -e $t/s1/latch ]] || fail "a stop after ONLINE removes this boot's latch, even with the result exit-code"
+grep -q 'modem stopped (exit-code)' "$t/s1/out" || fail "the removal is logged with the unit's result"
+stop_case s2 "2026-11-03T00:00:00+00:00 boot $this\n" success
+[[ -e $t/s2/latch ]] || fail "a start that never reached ONLINE keeps its latch"
+stop_case s3 "2026-11-03T00:00:00+00:00 boot 11111111-1111-1111-1111-111111111111\nonline\n" success
+[[ -e $t/s3/latch ]] || fail "another boot's latch is kept"
+rm -rf "$t/s4"; mkdir -p "$t/s4"
+env -i PATH="$F:/usr/bin:/bin" OMAMOBILE_MODEM_TEST=1 OMAMOBILE_MODEM_LATCH="$t/s4/latch" \
+  bash bin/omamobile-tegu-modem-up --stopped > "$t/s4/out" 2>&1 || fail "--stopped with no latch succeeds"
+printf 'ok - %s\n' "modem-up: --stopped removes this boot's ONLINE latch whatever the result, and keeps the others"

@@ -9,6 +9,8 @@
 #     --phone  after CP ONLINE, start omamobile-sitd, and omamobile-mmd when
 #              it's installed (Phone and Messages); omamobile-tegu-modem.service
 #              runs it this way at boot when the owner has enabled it
+#   omamobile-tegu-modem-up --stopped
+#              the profile unit's ExecStopPost: removes this boot's latch
 #
 # The CP drivers come from the running kernel when it carries them (cpif and
 # pcie_gs201_cp, with the device tree's cpif node: the published kernel), else
@@ -40,15 +42,37 @@ SYS=${OMAMOBILE_SYS:-/sys}
 DT=${OMAMOBILE_DT:-/proc/device-tree}
 LOG=${OMAMOBILE_MODEM_LOG:-/var/log/omamobile}
 say() { printf 'omamobile-tegu-modem-up: %s\n' "$*"; }
-gnss=0 phone=0
+gnss=0 phone=0 stopped=0
 for a in "$@"; do
   case $a in
     --gnss) gnss=1 ;;
     --phone) phone=1 ;;
-    *) say "usage: omamobile-tegu-modem-up [--gnss] [--phone]"; exit 2 ;;
+    --stopped) stopped=1 ;;
+    *) say "usage: omamobile-tegu-modem-up [--gnss] [--phone] | --stopped"; exit 2 ;;
   esac
 done
 [[ $EUID -eq 0 || -n ${OMAMOBILE_MODEM_TEST:-} ]] || { say "run as root"; exit 1; }
+
+# --stopped: the modem profile unit's ExecStopPost. Reaching it at all means
+# the unit stopped (a hang or a reset never gets here), so this boot's latch
+# goes once the start had reached ONLINE, whatever the unit's result: at a
+# shutdown the CP's power-off ends rfsd or cbd before systemd's SIGINT, and
+# the profile's supervisor then exits 1, so the result is never "success"
+# (the omamobile-modem-start --stopped rule on the Pixel 7 Pro). A start that
+# never reached ONLINE, or another boot's latch, is kept.
+if ((stopped)); then
+  [[ -e $LATCH ]] || exit 0
+  id=$(cat "${OMAMOBILE_BOOT_ID:-/proc/sys/kernel/random/boot_id}")
+  if ! grep -q "boot $id\$" "$LATCH"; then
+    say "$LATCH is another boot's ($(head -1 "$LATCH")): kept"
+  elif ! grep -qx online "$LATCH"; then
+    say "this boot's start never reached ONLINE: $LATCH kept"
+  else
+    rm -f "$LATCH"; sync
+    say "modem stopped (${SERVICE_RESULT:-result unknown}): $LATCH removed"
+  fi
+  exit 0
+fi
 
 phone_up() {
   ((phone)) || return 0
@@ -139,11 +163,11 @@ echo performance > $SYS/module/pcie_aspm/parameters/policy 2>/dev/null || true
 # comes after the drivers. A refusal keeps the latch: a human looks first.
 $CHROOT modem check
 
-# A clean stop of the profile's unit (the reboot's shutdown) is the only
-# thing that removes the latch; a failed or killed profile leaves it.
+# A stop of the profile's unit (the reboot's shutdown) is the only thing
+# that removes the latch (--stopped above); a hang or a reset leaves it.
 systemd-run -q --unit=omamobile-tegu-modem -p KillSignal=SIGINT -p TimeoutStopSec=60 \
   -p "ExecStop=$CHROOT modem stop" \
-  -p "ExecStopPost=/bin/sh -c '[ \"\$\$SERVICE_RESULT\" = success ] && rm -f $LATCH && sync'" \
+  -p "ExecStopPost=${OMAMOBILE_MODEM_UP_SELF:-/usr/bin/omamobile-tegu-modem-up} --stopped" \
   --setenv=OMAMOBILE_MODEM_GNSS=$gnss \
   bash -c "exec $CHROOT modem start >> $LOG/modem.log 2>&1"
 if ! $CP_STATE wait-online 60 >/dev/null 2>&1; then
