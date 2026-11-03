@@ -54,7 +54,10 @@ fresh read-only backup before the first Linux modem session stay as below.
 
 As cheetah's MODEM-PLAN: Linux never writes the modem's NV (`efs`,
 `efs_backup`, `modem_userdata`, `persist`); the chroot works on
-checksum-verified RAM copies. Check the partitions against the off-repo
+checksum-verified RAM copies. The NV overlay of `omamobile-modem` 0.1.15
+(cheetah MODEM-PLAN, "NV overlay": the modem's own writes to
+`nv_normal.bin`, kept on userdata) runs the same profile here, off until
+`/etc/omamobile/modem-nv-overlay-enable` exists; it hasn't run on the 9a. Check the partitions against the off-repo
 backup before every modem session, and take a fresh read-only backup after
 any stock Android boot (stock's modem stack writes them).
 

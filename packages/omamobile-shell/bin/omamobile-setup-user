@@ -636,3 +636,13 @@ if omarchy-done ensure omamobile-lock-after-screensaver; then
   mkdir -p ~/.local/state/omarchy/toggles
   touch ~/.local/state/omarchy/toggles/lock-after-screensaver
 fi
+
+# Omarchy's installer gives each user an unencrypted default keyring (no
+# password, never locked)
+# (install/user/default-keyring.sh), so apps that keep secrets, Chromium
+# among them, don't ask for a keyring password that the phone's autologin
+# never types (on the Pixel 9a, Chromium's first start opened a "Choose
+# password for new keyring" prompt). A phone user is made without that
+# installer, so run Omarchy's own script: it creates only what is missing.
+keyring=${OMARCHY_PATH:-/usr/share/omarchy}/install/user/default-keyring.sh
+if [[ -f $keyring ]]; then bash "$keyring"; fi
