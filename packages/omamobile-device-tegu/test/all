@@ -109,6 +109,8 @@ done
 [[ -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-modem-boot.service ]] \
   && fail "the modem's boot start is enabled by the package (it must be opt-in)"
 grep -q 'omamobile-tegu-modem-boot' omamobile-device-tegu.install && fail "the install scriptlet must not enable the modem's boot start"
+grep -qx 'ExecStart=/usr/bin/omamobile-tegu-modem-up --phone --gnss' vendor/systemd/system/omamobile-tegu-modem-boot.service \
+  || fail "the boot start brings gnssd up with the modem, for the Location switch"
 # The AoC start runs at every boot (its condition skips a DTB without the
 # node), and answers to omamobile-aoc.service for the sensor and fp units.
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-aoc.service") == ../omamobile-tegu-aoc.service ]] \
