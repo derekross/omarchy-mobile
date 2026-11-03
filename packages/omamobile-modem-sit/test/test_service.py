@@ -222,3 +222,18 @@ class RefusedAudioTests(unittest.TestCase):
             svc.audio_start()   # must not raise
         self.assertIsNone(svc.audio)
         self.assertIn('earpiece mode on failed', svc.audio_error)
+
+
+    def test_a_failed_audio_cleanup_does_not_stop_the_service(self):
+        import service as service_module
+        svc = service_module.Service.__new__(service_module.Service)
+        svc.audio_error = ''
+        svc.muted = True
+        class Broken:
+            def __exit__(self, *a):
+                raise RuntimeError('voice cleanup failed: earpiece mode off')
+        svc.audio = Broken()
+        svc.audio_stop()   # must not raise
+        self.assertIsNone(svc.audio)
+        self.assertFalse(svc.muted)
+        self.assertIn('earpiece mode off', svc.audio_error)

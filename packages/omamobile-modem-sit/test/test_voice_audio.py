@@ -129,10 +129,11 @@ class CallAudioCeilingTests(AudioCleanupTests):
     def test_earpiece_mode_switched_on_before_the_route_and_off_after(self):
         calls = []
         def run(args, **kwargs):
-            calls.append(args[1:])
+            mode = args[-1].replace('omamobile-earpiece@', '').replace('.service', '')
+            calls.append(['earpiece', mode])
             with open(STATUS, 'w') as f:
                 f.write('ok: stage media, mode earpiece: Top 657/6; Bottom muted (Digital PCM Volume 0); x\n'
-                        if args[2] == 'on' else 'ok: stage media, protection firmware\n')
+                        if mode == 'on' else 'ok: stage media, protection firmware\n')
             class R:
                 returncode = 0
                 stdout = stderr = ''
@@ -148,9 +149,10 @@ class CallAudioCeilingTests(AudioCleanupTests):
     def test_earpiece_mode_refused_switches_it_back_off(self):
         calls = []
         def run(args, **kwargs):
-            calls.append(args[1:])
+            mode = args[-1].replace('omamobile-earpiece@', '').replace('.service', '')
+            calls.append(['earpiece', mode])
             class R:
-                returncode = 1 if args[2] == 'on' else 0
+                returncode = 1 if mode == 'on' else 0
                 stdout = 'omamobile-speaker: refused: protection not running\n'
                 stderr = ''
             return R()
@@ -178,3 +180,14 @@ class CallAudioDefaultTests(unittest.TestCase):
         with patch.object(voice_audio, 'Path') as fake:
             fake.return_value.read_text.return_value = ' 0 [Headset        ]: USB-Audio - Headset\n'
             self.assertIsNone(voice_audio.aoc_card('auto'))
+
+
+class EarpieceUnitTests(unittest.TestCase):
+    def test_the_mode_goes_through_the_units_when_installed(self):
+        audio = VoiceAudio.__new__(VoiceAudio)
+        audio.earpiece_cmd = '/usr/bin/omamobile-speaker-protection'
+        with patch.object(voice_audio.os.path, 'exists', return_value=True):
+            self.assertEqual(audio.earpiece_argv(True), ['systemctl', 'start', 'omamobile-earpiece@on.service'])
+            self.assertEqual(audio.earpiece_argv(False), ['systemctl', 'start', 'omamobile-earpiece@off.service'])
+        with patch.object(voice_audio.os.path, 'exists', return_value=False):
+            self.assertEqual(audio.earpiece_argv(True), [audio.earpiece_cmd, 'earpiece', 'on'])

@@ -246,7 +246,15 @@ class Service:
     def audio_stop(self):
         if self.audio is not None:
             audio, self.audio = self.audio, None
-            audio.__exit__(None, None, None)
+            try:
+                audio.__exit__(None, None, None)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                # A cleanup that failed (a control that wouldn't restore,
+                # earpiece mode off refused) is logged, never fatal: the
+                # service and its calls go on, and the protection service's
+                # watchdog keeps the amplifiers safe.
+                self.audio_error = str(error)
+                print('Call audio cleanup failed (the service goes on):', error, flush=True)
         self.muted = False
 
     def live(self):

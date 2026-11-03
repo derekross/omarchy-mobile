@@ -36,6 +36,11 @@ CEILINGS = (('Top Analog PCM Volume', 6), ('Bottom Analog PCM Volume', 10),
 EARPIECE_CEILINGS = (('Top Analog PCM Volume', 6), ('Top Digital PCM Volume', 737),
                      ('Bottom Digital PCM Volume', 0))
 EARPIECE_COMMAND = 'omamobile-speaker-protection'
+# The mode is switched through omamobile-earpiece@on|off.service, which run
+# the command with /etc/omamobile/speaker.conf's environment (the stage):
+# run bare from sitd, "earpiece off" restored another stage's levels and
+# the watchdog stopped, muting the speakers (2026-11-03).
+EARPIECE_UNIT = '/usr/lib/systemd/system/omamobile-earpiece@.service'
 
 
 def aoc_card(setting='auto'):
@@ -93,11 +98,16 @@ class VoiceAudio:
         if code < 0:
             raise RuntimeError('voice PCM '+operation+' failed: '+str(code))
 
+    def earpiece_argv(self, on):
+        mode = 'on' if on else 'off'
+        if os.path.exists(EARPIECE_UNIT):
+            return ['systemctl', 'start', f'omamobile-earpiece@{mode}.service']
+        return [self.earpiece_cmd, 'earpiece', mode]
+
     def earpiece(self, on):
         """The protection service's earpiece mode around the route: on
         before the levels are checked, off after the route is restored."""
-        result = subprocess.run([self.earpiece_cmd, 'earpiece', 'on' if on else 'off'],
-                                capture_output=True, text=True, timeout=90)
+        result = subprocess.run(self.earpiece_argv(on), capture_output=True, text=True, timeout=90)
         if result.returncode:
             raise RuntimeError('earpiece mode ' + ('on' if on else 'off') + ' failed: '
                                + (result.stdout + result.stderr).strip().splitlines()[-1:][0]
