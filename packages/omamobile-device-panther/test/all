@@ -11,7 +11,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 bash -n build || fail "build parses"
 bash -n install || fail "install parses"
-bash -n bin/omamobile-usb-rescue || fail "omamobile-usb-rescue parses"
+for script in bin/*; do bash -n "$script" || fail "$script parses"; done
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -55,6 +55,14 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/vendor/systemd/system/omamobile-usb-rescue.service \
     || fail "the usb-rescue unit drifted from the cheetah package"
   pass "omamobile-usb-rescue and its unit match the cheetah package"
+  # Wi-Fi is the 7 Pro's: same chip (BCM4389), same PCIe
+  # controller, same bootloader-written MAC address.
+  for f in bin/omamobile-wifi-start bin/omamobile-wlan-mac \
+           vendor/modprobe.d/omamobile-wifi.conf vendor/systemd/system/omamobile-wifi.service \
+           vendor/udev/rules.d/80-omamobile-wlan-mac.rules; do
+    cmp -s "$f" "../omamobile-device-cheetah/$f" || fail "$f drifted from the cheetah package"
+  done
+  pass "the Wi-Fi files match the cheetah package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-panther.install$' PKGBUILD \
@@ -87,6 +95,9 @@ for f in usr/bin/reboot-to \
          usr/share/licenses/omamobile-device-panther/LICENSE \
          usr/bin/omamobile-usb-rescue \
          usr/lib/systemd/system/omamobile-usb-rescue.service \
+         usr/bin/omamobile-wifi-start usr/lib/systemd/system/omamobile-wifi.service \
+         usr/lib/modprobe.d/omamobile-wifi.conf \
+         usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
@@ -115,17 +126,40 @@ grep -qx 'options gs_dsim_cmd allow_tx=1' "$tmp/root/usr/lib/modprobe.d/omamobil
 [[ -x $tmp/root/usr/bin/omamobile-usb-rescue ]] || fail "omamobile-usb-rescue is executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
   || fail "omamobile-usb-rescue starts at boot"
+for tool in omamobile-wifi-start omamobile-wlan-mac; do
+  [[ -x $tmp/root/usr/bin/$tool ]] || fail "$tool is executable"
+done
+# Wi-Fi is the one radio started at boot, and only through its guard: the
+# modules are blacklisted for autoload, the script writes a hang marker
+# before it loads them, and it never loads the SysMMU firewall.
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-wifi.service") == ../omamobile-wifi.service ]] \
+  || fail "omamobile-wifi.service starts at boot"
+grep -qx 'blacklist pcie_gs201' "$tmp/root/usr/lib/modprobe.d/omamobile-wifi.conf" \
+  || fail "pcie_gs201 only loads through the guarded service"
+grep -qx 'blacklist brcmfmac' "$tmp/root/usr/lib/modprobe.d/omamobile-wifi.conf" \
+  || fail "brcmfmac only loads through the guarded service"
+grep -q 'marker=' bin/omamobile-wifi-start || fail "omamobile-wifi-start keeps a hang marker"
+grep -q 'mode=' bin/omamobile-wifi-start && fail "omamobile-wifi-start never loads the SysMMU firewall"
+grep -q '^ConditionPathExists=/sys/bus/platform/devices/14520000.pcie$' \
+  "$tmp/root/usr/lib/systemd/system/omamobile-wifi.service" \
+  || fail "omamobile-wifi.service needs the PCIe controller in the DTB"
 grep -q 'i2c-tools' PKGBUILD || fail "omamobile-usb-rescue needs i2c-tools"
 grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is panther"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/lib/systemd/system/omamobile-boot-success.service \
-              usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
+              usr/bin/omamobile-charge-guard usr/bin/omamobile-aoc-start \
               usr/bin/omamobile-camera-start \
               usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rules, the USB link and its rescue, and the mirrorlist, and nothing that marks a slot or starts hardware"
+for wants in "$tmp"/root/usr/lib/systemd/system/*.wants/*; do
+  case ${wants##*/} in
+    omamobile-usb-rescue.service|omamobile-wifi.service) ;;
+    *) fail "install enables ${wants#$tmp/root/}" ;;
+  esac
+done
+pass "install stages the udev rules, the USB link and its rescue, Wi-Fi, and the mirrorlist; it starts only the USB rescue and guarded Wi-Fi, and nothing that marks a slot or starts the modem, the charger or a camera"
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
