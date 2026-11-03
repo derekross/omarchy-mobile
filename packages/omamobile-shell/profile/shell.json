@@ -50,6 +50,9 @@
     },
     {
       "id": "omamobile.voice"
+    },
+    {
+      "id": "omamobile.mobilenetwork"
     }
   ]
 }

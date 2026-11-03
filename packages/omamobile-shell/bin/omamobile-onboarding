@@ -7,6 +7,8 @@
 # and the sensor is ready (the fingerprint screen, omamobile.fingerprint).
 # Then Omarchy's own invitation to pick a default AI agent (Setup > Default
 # Agent): Omarchy shows it after the first update, a phone at first login.
+# With a SIM and the modem stack running, setup names the carrier and says
+# mobile data is set up automatically (nothing to type).
 #
 #   omamobile-onboarding               open a terminal and run it
 #   omamobile-onboarding --nudge       at login: if anything is missing, say so
@@ -101,6 +103,39 @@ offer_fingerprint() {
   fp_mark_offered
 }
 
+# The SIM, when the modem stack runs: the carrier, and that mobile data is
+# set up on its own (sitd picks the APN from the SIM). Nothing to type; the
+# rare SIM without an APN is pointed at Setup > Mobile network. Silent with
+# no modem stack (the release image has none yet) or before it has started.
+mobile_network_line() {
+  command -v omamobile-mobile-network >/dev/null || return 0
+  timeout 10 omamobile-mobile-network status 2>/dev/null | python3 -c '
+import json, sys
+try:
+    s = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if not s.get("installed") or not s.get("running"):
+    sys.exit(0)
+sim = (s.get("sim") or {}).get("state")
+apn = (s.get("apn") or {}).get("source", "")
+Q = chr(39)
+carrier = s.get("carrier") or ""
+if sim == "absent":
+    print("No SIM card. Put one in and restart the phone for calls, texts and mobile data.")
+elif sim in ("pin", "puk", "network-locked"):
+    print("Your SIM is locked, and this phone cannot unlock it yet: turn the SIM PIN off in another phone, then restart.")
+elif sim == "ready":
+    head = "Mobile network: " + carrier + "." if carrier else "Your SIM is ready."
+    if apn == "none":
+        print(head + " Calls and texts work. Mobile data needs your carrier" + Q + "s APN: Setup > Mobile network.")
+    elif apn == "manual":
+        print(head + " Mobile data uses the APN set in Setup > Mobile network.")
+    else:
+        print(head + " Mobile data is set up automatically from your SIM; there" + Q + "s nothing to type.")
+' 2>/dev/null || true
+}
+
 case "${1:-}" in
   --nudge)
     # one nudge at a time: the agent waits until the phone itself is set up
@@ -137,6 +172,11 @@ case "${1:-}" in
       echo "Your phone already has a $(omamobile-set-pin --type) (change it, or switch between a PIN and a password, in System > PIN)."
     else
       omamobile-set-pin --inner
+    fi
+    line=$(mobile_network_line)
+    if [[ -n $line ]]; then
+      echo
+      echo "$line"
     fi
     offer_fingerprint
     invite_agent
