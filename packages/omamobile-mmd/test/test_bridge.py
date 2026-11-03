@@ -489,5 +489,25 @@ class Polkit(BridgeTests):
         self.assertEqual(self.sitd.actions(), [], 'nothing reached sitd without authorisation')
 
 
+class InternetBearer(BridgeTests):
+    """The internet bearer's device, address and DNS from sitd, which
+    mmsd-tng fetches MMS through where the MMS APN is the internet APN."""
+    status = staticmethod(lambda: registered_status(data=True))
+
+    def before_mmd(self):
+        self.sitd.status['internet'] = dict(interface='rmnet5', address='192.0.2.7',
+                                            dns=['192.0.2.53', '192.0.2.54'])
+
+    def test_the_found_device_address_and_dns(self):
+        bearer = self.client.call(MODEM0, mm.MODEM, 'ListBearers')[0][0]
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Interface'), 'rmnet5')
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip4Config'),
+                         dict(method=2, address='192.0.2.7', prefix=32, dns1='192.0.2.53', dns2='192.0.2.54'))
+        self.sitd.status['modem']['data'] = False
+        self.push()
+        wait_until(lambda: not self.client.prop(bearer, mm.BEARER, 'Connected'), 5, 'bearer down')
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip4Config'), {})
+
+
 if __name__ == '__main__':
     unittest.main()
