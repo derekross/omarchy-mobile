@@ -801,6 +801,20 @@ set (0x13020710, bits 0 and 1). Read on 2026-11-03 after a boot with no
 sleep: 0x13. Whether they survive a wake is not known yet; both series
 scripts now log the value after every wake, so the next series answers it.
 
+**A hang at screen-on after a wake (2026-11-03 15:28, the daily kernel as
+it ships: `spm_lvl` 5, core power-down on).** The IO-coherency series'
+first wake was clean (`iocc 0x13`, the bits still set). On the second, the
+palmtop woke ("PM: suspend exit"), brcmfmac re-probed, and 17 s later the
+script's DPMS enable switched the display controller to 120 Hz (`gs-decon
+… 120 Hz`); the console ends on that line, with no oops or panic, and the
+SoC watchdog, running again after the wake, reset the palmtop about a
+minute later, so ramoops kept it all. After the first wake the same
+screen-on worked. So a third failure shape, besides the dead-storage wake
+and the silent no-wake: a hang while awake, at the first screen-on after a
+wake. Whether some of the silent no-wakes were this (with the buttons'
+reset losing the console) isn't known. Log:
+`logs/tegu-ufs-iocc-20261103/reset-1529-console.txt`.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
