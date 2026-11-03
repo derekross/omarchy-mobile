@@ -132,6 +132,34 @@ successful, a kernel with linux-omarchy-mobile#172, an off-repo NV backup.
 Record each run here with the date, `uname -r`, the package versions, the
 phone-smoke report and the UFS count.
 
+**2026-11-03, the palmtop** (the daily kernel
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`; slot B marked
+successful on 2026-10-31 with no fastboot write since; the kernel keeps the
+PERIC0 GPIO bus clock critical, as #172
+does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
+0.3.36, `omamobile-mmd` 0.1.4 and `omamobile-gnss` 0.2.7, all from this
+stack):
+
+1. Read-only: `tools/nv-backup -d tegu --check` against the 2026-10-28
+   backup (#407): every NV partition the same. Passed.
+2. Enabled `omamobile-tegu-modem-boot`. Passed.
+3. `systemctl reboot` with the unit enabled: "modem OK: CP ONLINE", the
+   phone service and the bridge queued, IMS registered with nothing started
+   by hand, gnssd running, the latch reading `boot <id>` and `online`, the
+   inhibitor held. A GNSS session through the Location socket had 133 of 135
+   GGA sentences fixed (first fix 48 s). Passed.
+4. A second `systemctl reboot` with the CP up: the profile's unit stopped
+   cleanly, the latch was removed and the next boot wrote its own; no
+   `ufshcd_err_handler` pass in the boot that shut down. Passed.
+
+`tools/phone-smoke` on the second boot: every required check ok (boot, the
+storage guard, root, kernel health, USB, session), and display, GPU, lock,
+touch, buttons, Wi-Fi, Bluetooth, battery, sound card, sensors, cameras and
+thermal ok. It flagged a stale bring-up unit in `/etc/systemd/system` from
+2026-10-28 (`omamobile-tegu-audio.service`, failing), now moved aside, and
+new dmesg lines from NFC (an unknown notification opcode) and CPIF (packets
+for a channel nobody has opened); neither came with a fault.
+
 Qualification, attended and on the charger: boot to ONLINE, data and texts;
 the inhibitor; NV and UFS unchanged; then shutdown and reboot on their own.
 Suspend with the CP on needs its own tests, with NFC polling stopped, and
