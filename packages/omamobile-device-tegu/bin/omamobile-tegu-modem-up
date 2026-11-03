@@ -77,9 +77,6 @@ else
   done
 fi
 
-# The NV checks (read-only) before anything touches the modem
-$CHROOT modem check
-
 # No system suspend while the CP has been up this boot: a suspend with it
 # ONLINE never woke (2026-10-27). Taken before the drivers load, kept until
 # the reboot; systemctl suspend and logind's suspend then refuse.
@@ -110,6 +107,11 @@ else
   insmod $B/gnssif.ko
 fi
 echo performance > $SYS/module/pcie_aspm/parameters/policy 2>/dev/null || true
+
+# The profile's preconditions (read-only): the NV partitions read-only,
+# unmounted and matching their checksums, and CPIF's ports present, so this
+# comes after the drivers. A refusal keeps the latch: a human looks first.
+$CHROOT modem check
 
 systemd-run -q --unit=omamobile-tegu-modem -p KillSignal=SIGINT -p TimeoutStopSec=60 \
   -p "ExecStop=$CHROOT modem stop" \
