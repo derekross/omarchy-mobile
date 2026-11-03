@@ -20,6 +20,7 @@ while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omamobile/shell/widget-${file#widgets/}"
 done < <(find widgets/template widgets/examples -type f -print0)
 install -Dm644 environment.d/20-omamobile-osk.conf "$destination/usr/lib/environment.d/20-omamobile-osk.conf"
+install -Dm644 environment.d/30-omamobile-screenshot.conf "$destination/usr/lib/environment.d/30-omamobile-screenshot.conf"
 # squeekboard's layouts with our action row (GPL-3.0-or-later, from
 # squeekboard): the terminal layout by hand, every language's made by
 # squeekboard/generate; omamobile-setup-user links them into the user's data

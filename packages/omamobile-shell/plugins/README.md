@@ -14,7 +14,7 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear and the notification history; Wi-Fi picker and Bluetooth panel |
+| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
@@ -23,6 +23,7 @@ logical at scale 3).
 | `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
+| `omamobile.mobilenetwork` | `panel` (keepLoaded) | The Mobile network page: carrier, signal, mobile data, data roaming, the APN and (under Advanced) the attach APN, the SIM PIN lock; Setup > Mobile network or the Mobile data tile's chevron. "No modem" without the modem stack (docs/TELEPHONY-APPS-PLAN.md 7.6) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -122,7 +123,7 @@ existed finds them under "Add tiles" too.
 | --- | --- |
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
-| Mobile data | `omamobile-sit data on/off` (omamobile-modem-sit), which starts or stops `omamobile-sit-data.service` through polkit; on while that unit is active, with the operator and technology from `/run/omamobile-sit/state.json`. "No modem" until omamobile-sitd publishes that file |
+| Mobile data | `omamobile-sit data on/off` (omamobile-modem-sit), which starts or stops `omamobile-sit-data.service` through polkit; on while that unit is active, with the operator's name and technology from `/run/omamobile-sit/state.json` (just the technology when sitd has no name: a bare network code never shows) and "No signal" while unregistered. Its icon is the status bar's signal bars from that file's `signal`, crossed out only with no modem, mobile data off or no network. "No modem" until omamobile-sitd publishes that file, unless `omamobile-modem-start` refused to start the modem this boot and left why in `/run/omamobile/modem-refused` ("Off after a hang or reset", "Off: not provisioned"): then that line is the status, and `journalctl -b -u omamobile-modem` has the rest |
 | Airplane mode | Wi-Fi, Bluetooth and WWAN rfkill switches together; on when all are soft-blocked. Turning it off unblocks only the ones that were on (`~/.local/state/omamobile/airplane-restore`). NFC keeps its own tile, and the modem's radio (`omamobile-sit radio`) is not touched, since turning that back on needs a reboot today |
 | Hotspot | `nmcli device wifi hotspot con-name Hotspot` (NetworkManager makes the SSID and password; the Wi-Fi client link drops while it runs) and `nmcli connection down Hotspot`. Long-press opens the Wi-Fi picker |
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
@@ -178,6 +179,39 @@ calls the notification service on this shell instance, `dismissAll` (the
 toasts on screen move into history) and then `clear` (history is emptied).
 The card takes the room left under the sheet and scrolls past that; it hides
 in edit mode, or when the sheet leaves no room for it.
+
+### Media card
+
+While a player plays or is paused, the shade starts with a media card, as
+on Android (`MediaCard.qml`, `MediaSource.qml`, rules in `MediaModel.js`,
+tests in `test/media-model.js` and `test/media-touch`). Source:
+Quickshell's MPRIS service (`Quickshell.Services.Mpris`), the one Omarchy's
+own media bar widget reads; a panel plugin can't reach the host's
+`omarchy.media` service (only full bars get first-party services), so the
+card picks its player itself, with Omarchy's rule that playerctld, a proxy,
+comes last.
+
+* **Which player:** one that plays or is paused and has a title (stopped,
+  or nothing to show: no card); playing before paused, then the one that
+  started playing or changed track most recently.
+* **What it shows:** the album art, else the app's icon from its desktop
+  entry, else Omarchy's media glyph; the app's name (MPRIS identity), the
+  title and the artist, each one line, elided; a seek bar with elapsed and
+  length when the player reports its position and length (drag or tap to
+  seek when it can; Quickshell's position is asked for once a second while
+  playing and the sheet is open); previous, play/pause and next, 48 px,
+  dimmed when the player can't.
+* **Art:** local files and `data:` images, and `https://`/`http://` covers
+  (Spotify's, a browser's: the player already fetched them). Nothing else
+  (`qrc:`, `image://`). The lock (omamobile-omarchy patch 0027) loads local
+  art only.
+* **A tap** on the card (not on a control) puts the sheet away and focuses
+  the player's window with `omarchy-hyprland-focus-app`, by desktop entry,
+  then identity, as a notification row's tap does; only when no window
+  matches is the player asked to raise itself (MPRIS Raise). Nothing is
+  started.
+* `shell call omamobile.quicksettings state` includes `media` (app, title,
+  playing).
 
 ### Wi-Fi picker
 
@@ -997,6 +1031,11 @@ the Pixel 7 Pro), as bars and the network type ("LTE", "5G", "R" when
 roaming), "No SIM", "SIM locked", the airplane when the radio is off, and
 nothing without a modem. Signal strength shows as empty bars until the
 modem reports a reading (SIT signal strength is TELEPHONY-APPS-PLAN T8).
+The watcher re-reads every property from ModemManager's ObjectManager on any
+PropertiesChanged, InterfacesAdded or InterfacesRemoved from the service, when
+its name changes owner (then again 1, 3 and 10 s later, since a restarted
+service may export its modem, or fix a first wrong state, without a signal),
+and every 20 s; a failed read is logged and never stops it.
 
 **Emergency call:** the lock screen's "Emergency call" button (Omarchy patch
 0014, under the number pad on touch-only devices) calls `omarchy-shell shell

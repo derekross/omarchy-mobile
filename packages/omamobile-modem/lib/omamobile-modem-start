@@ -2,25 +2,153 @@
 # SPDX-License-Identifier: MIT
 # omamobile-modem-start: load the modem's kernel modules, then run the modem
 # vendor-chroot profile (rfsd, then a one-shot cbd) in the foreground for
-# omamobile-modem.service. device/cheetah/MODEM-PLAN.md M3.4.
+# omamobile-modem.service. device/cheetah/MODEM-PLAN.md M3.4 and M4.6.
 #
-# Hang marker, as omamobile-gnss-start: written and synced before the modules
-# load, removed by the profile's watcher once the CP is ONLINE. If the phone
-# hung or reset in between, the next boot finds the marker and skips the
-# modem until someone runs this with --retry (or removes the marker). An end
-# after ONLINE (a CP crash, about one warm start in twenty on this phone
-# while registering) leaves no marker: the next boot starts it again.
+#   omamobile-modem-start            the unit's ExecStart
+#   omamobile-modem-start --retry    the same after clearing both markers
+#                                    below and the refused copies
+#   omamobile-modem-start --stopped  the unit's ExecStopPost: a clean stop
+#                                    removes this boot's modem-up marker and
+#                                    the refused copies
+#
+# Two markers, both under /var/lib/omamobile, keep a hang from becoming a
+# reset loop (CONTRIBUTING.md 3.4; the 9a's starter does the same):
+#
+#  - modem-bringup-started: written and synced before any driver loads,
+#    removed by the profile's watcher once the CP is ONLINE. If the phone
+#    hung or reset in between, the next boot finds it and skips the modem,
+#    and keeps skipping it until a human has looked (--retry): a hang in
+#    the bring-up itself is the one case nothing should repeat on its own.
+#    A profile check that refuses (read-only, after the drivers) removes it
+#    again: a refusal is not a hang, and must not cost the next boot its
+#    modem. A cbd that never reaches ONLINE leaves it: look first.
+#  - modem-up: written by the watcher at ONLINE, removed by --stopped when
+#    the unit stops (the reboot's shutdown, or a stop by hand) and the
+#    marker is this boot's. A boot that ends with the modem up and no stop,
+#    a hang or a reset, leaves it, and the next boot refuses once: it moves
+#    the marker aside (modem-up.refused-<time>-<pid>) and the boot after
+#    that starts the modem again. One automatic retry, then the hold: the
+#    refused copy is the counter. If that retry's boot ends unclean too,
+#    the next boot finds the stale marker with a copy beside it (no clean
+#    stop since the last refusal), keeps the marker and refuses "(held)",
+#    and every boot refuses until a human has looked (--retry). A clean
+#    stop of this boot's marker removes the copies: the streak is over. So
+#    a flat battery or one forced reset costs one boot's modem; a phone
+#    that hangs or resets because the modem is up stops after the second,
+#    and each refused boot's journal says so. An owner who wants the hard
+#    stop from the first unclean end (the modem off until --retry) makes
+#    /etc/omamobile/modem-hold.
+#
+# Either way the recovery is the same once a human has looked at the last
+# boot's journal: --retry, or remove the marker and start the unit. An end
+# after ONLINE with the host alive (a CP crash, about one warm start in
+# twenty on this phone while registering) keeps the unit running and ends
+# in a normal stop at the reboot: the next boot starts the modem again.
+#
+# Every refusal leaves its reason in one line at /run/omamobile/modem-refused
+# (gone at the reboot, removed when a later start gets past the refusals),
+# which the shell's Mobile data tile shows under its name instead of
+# "No modem".
+#
+# Test only: with OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 the script exits 0
+# right after the marker decision above, before anything that depends on the
+# machine it runs on (the link driver's sysfs, the sleep inhibitor, the
+# drivers, the profile), so packages/omamobile-modem/test/all can run the
+# decision for real on any machine, the phone included. No unit sets it.
 set -euo pipefail
 
-MARK=/var/lib/omamobile/modem-bringup-started
+MARK=${OMAMOBILE_MODEM_LATCH:-/var/lib/omamobile/modem-bringup-started}
+UP=${OMAMOBILE_MODEM_UP_MARK:-/var/lib/omamobile/modem-up}
+HOLD=${OMAMOBILE_MODEM_HOLD:-/etc/omamobile/modem-hold}
+REFUSED=${OMAMOBILE_MODEM_REFUSED:-/run/omamobile/modem-refused}
 LIB=/usr/lib/omamobile-vendor
+# What tools/phone-provision puts on the phone (the unit's conditions name
+# the same three): without them the modem can't start, so nothing is
+# loaded and nothing is written.
+CHROOT=${OMAMOBILE_MODEM_CHROOT:-$LIB/modem/root}
+NV_SUMS=${OMAMOBILE_MODEM_NV_SUMS:-/etc/omamobile/modem-nv.sha256}
+PROPS=${OMAMOBILE_MODEM_PROPS:-/var/lib/omamobile-vendor/modem/props.conf}
+# What omamobile-modem-inhibit.service holds (its --who); the drivers wait
+# for it. Suspend with the modem on has never run on this phone (MODEM-PLAN
+# section 6.3), so nothing may sleep once they are loaded.
+INHIBITOR=omamobile-modem
 say() { printf 'omamobile-modem: %s\n' "$*" >&2; }
+boot_id() { cat /proc/sys/kernel/random/boot_id; }
 
-if [[ ${1:-} == --retry ]]; then
-  rm -f "$MARK"
-elif [[ -e $MARK ]]; then
-  say "the last bring-up ($(cat "$MARK")) never reached ONLINE; skipping the modem (omamobile-modem-start --retry)"
+# A refusal's one-line reason for the shell (short: it is a tile's status
+# line), then exit 1. Nothing else is written by a refusal.
+refuse() {
+  mkdir -p "$(dirname "$REFUSED")" 2>/dev/null && printf '%s\n' "$1" > "$REFUSED" 2>/dev/null || true
   exit 1
+}
+
+# The refused copies a stale marker leaves (the retry counter), as words.
+refused_copies() { local c; c=$(compgen -G "$UP.refused-*" 2>/dev/null) || true; printf '%s' "${c//$'\n'/ }"; }
+
+# ExecStopPost. SERVICE_RESULT is systemd's; it is only logged: what keeps
+# the marker is a boot that ends without this running at all. A clean stop
+# of this boot's marker ends the streak: the refused copies go with it.
+stopped() {
+  [[ -e $UP ]] || return 0
+  if ! grep -q "boot $(boot_id)\$" "$UP"; then
+    say "$UP is another boot's ($(cat "$UP")): not a stop of this boot's modem, kept"
+    return 0
+  fi
+  rm -f "$UP" "$UP".refused-*
+  sync
+  say "modem stopped (${SERVICE_RESULT:-result unknown}): $UP removed"
+}
+
+# The stale modem-up marker: refuse this boot. The first time, move the
+# marker aside and let the next boot start again; with a refused copy
+# already there (that retry's boot ended unclean too), or with the owner's
+# hold flag, keep the marker and hold until a human has looked.
+refuse_unclean() {
+  local refused
+  say "the last boot with the modem up ($(cat "$UP")) ended without a clean stop: a hang or a reset; skipping the modem on this boot."
+  say "Read that boot's journal first: journalctl -b -1 -u omamobile-modem, and its kernel log, journalctl -b -1 -k"
+  if [[ -e $HOLD ]]; then
+    say "$HOLD exists: the modem stays off until omamobile-modem-start --retry, or rm $UP and systemctl start omamobile-modem"
+    refuse "Off after a hang or reset (held)"
+  fi
+  if [[ -n $(refused_copies) ]]; then
+    say "no clean stop since the last refusal ($(refused_copies)): the one automatic retry is used up, the modem stays off until omamobile-modem-start --retry, or rm $UP $UP.refused-* and systemctl start omamobile-modem"
+    refuse "Off after a hang or reset (held)"
+  fi
+  refused=$UP.refused-$(date +%Y%m%dT%H%M%S)-$$
+  mv -f "$UP" "$refused"
+  sync
+  say "$UP moved to $refused: the next boot starts the modem again, once (a second unclean end holds; for the hard stop from the first, touch $HOLD)"
+  refuse "Off after a hang or reset"
+}
+
+case ${1:-} in
+  --retry) rm -f "$MARK" "$UP" "$UP".refused-* ;;
+  --stopped) stopped; exit 0 ;;
+  '') ;;
+  *) say "usage: omamobile-modem-start [--retry | --stopped]"; exit 2 ;;
+esac
+
+# Not provisioned (a fresh install before tools/phone-provision): one line,
+# nothing loaded, no marker. The unit's ConditionPathExists= lines skip it
+# before this runs; this is for a start by hand or --retry.
+for f in "$CHROOT" "$NV_SUMS" "$PROPS"; do
+  [[ -e $f ]] || { say "no $f: the modem isn't provisioned on this phone (tools/phone-provision); not starting it"; refuse "Off: not provisioned"; }
+done
+
+if [[ -e $MARK ]]; then
+  say "the last bring-up ($(cat "$MARK")) never reached ONLINE; skipping the modem (omamobile-modem-start --retry)"
+  refuse "Off: last bring-up hung"
+fi
+[[ -e $UP ]] && refuse_unclean
+
+# Past the marker decision. The test's stop point (see the header): nothing
+# below is hermetic, so the test ends here with the markers as they are. The
+# reason file stays: it is removed only past every refusal, and the checks
+# below are refusals too.
+if [[ ${OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS:-} == 1 ]]; then
+  say "OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1: past the marker checks, stopping here (test only)"
+  exit 0
 fi
 
 # The link driver must allow hardware access, or cbd's power-on is refused
@@ -28,10 +156,28 @@ fi
 # hand, M3.3-B) needs a reboot.
 if [[ -d /sys/module/pcie_gs201_cp ]]; then
   [[ $(cat /sys/module/pcie_gs201_cp/parameters/allow_hw) == Y ]] ||
-    { say "pcie_gs201_cp is loaded without allow_hw=1: reboot first"; exit 1; }
+    { say "pcie_gs201_cp is loaded without allow_hw=1: reboot first"; refuse "Off: reboot needed"; }
 fi
-# CPIF and the regions are blacklisted (omamobile-device-cheetah): only this
-# loads them. Never unload cpif (it is permanent by design).
+
+# The sleep inhibitor before the drivers: the unit requires and orders after
+# omamobile-modem-inhibit.service, but a Type=simple unit is "started" at
+# its fork, so give the lock a moment to appear, and refuse without it.
+for _ in $(seq 25); do
+  systemd-inhibit --list --no-legend 2>/dev/null | grep -c "^$INHIBITOR " >/dev/null && break
+  sleep 0.2
+done
+systemd-inhibit --list --no-legend 2>/dev/null | grep -c "^$INHIBITOR " >/dev/null ||
+  { say "no sleep inhibitor held by $INHIBITOR (systemctl start omamobile-modem-inhibit): not loading the modem's drivers"; refuse "Off: no sleep inhibitor"; }
+
+# Past every refusal: an earlier one's reason no longer describes this boot.
+rm -f "$REFUSED"
+mkdir -p "$(dirname "$MARK")"
+printf '%s boot %s\n' "$(date -Is)" "$(boot_id)" > "$MARK"
+sync
+
+# CPIF and the regions are blacklisted by the device's modem policy (the
+# package providing omamobile-modem-policy): only this loads them. Never
+# unload cpif (it is permanent by design).
 modprobe pcie-gs201-cp allow_hw=1
 modprobe shm_ipc
 modprobe cpif
@@ -41,8 +187,21 @@ modprobe cpif
 echo performance > /sys/module/pcie_aspm/parameters/policy 2>/dev/null ||
   say "cannot set the ASPM policy (continuing)"
 
-"$LIB/omamobile-vendor-chroot" modem check
-mkdir -p "$(dirname "$MARK")"
-printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$MARK"
-sync
-OMAMOBILE_MODEM_MARK=$MARK exec "$LIB/omamobile-vendor-chroot" modem start
+# Read-only: the NV partitions read-only and unmounted, the checksums, the
+# board id, CPIF's ports (so it comes after the drivers). A refusal means
+# nothing powered the CP on: the marker goes, the next boot tries again.
+if ! "$LIB/omamobile-vendor-chroot" modem check; then
+  rm -f "$MARK"
+  sync
+  say "the profile's check refused: nothing started, $MARK removed"
+  refuse "Off: the start check refused"
+fi
+# READY for the units ordered after this one (omamobile-sitd): CPIF's ports
+# exist now. The CP itself comes up in the profile, 10-30 s later; sitd waits
+# for ONLINE in its own ExecStartPre (omamobile-modem-cp wait-online).
+systemd-notify --ready 2>/dev/null || say "systemd-notify failed (not under systemd?); continuing"
+# The modem-up marker only under the unit (INVOCATION_ID is systemd's):
+# nothing but the unit's stop hook removes it, so a start by hand (--retry
+# in a shell, which AGENTS.md discourages) would leave it for the next boot.
+[[ -n ${INVOCATION_ID:-} ]] || say "not under omamobile-modem.service: no modem-up marker for this start"
+OMAMOBILE_MODEM_MARK=$MARK OMAMOBILE_MODEM_UP_MARK=${INVOCATION_ID:+$UP} exec "$LIB/omamobile-vendor-chroot" modem start

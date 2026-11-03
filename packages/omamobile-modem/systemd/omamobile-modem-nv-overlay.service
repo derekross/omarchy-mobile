@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# The NV overlay's periodic capture (device/cheetah/MODEM-PLAN.md, "NV
+# overlay"): keeps the modem's writes to allowed NV files (nv_normal.bin and
+# its checksum) on userdata while the modem runs, so a crash or a power loss
+# costs at most one interval. The capture at the modem's stop is the modem
+# unit's own (profile_stop). Reads the RAM copies only; never touches a
+# partition or the modem. Does nothing unless
+# /etc/omamobile/modem-nv-overlay-enable exists.
+[Unit]
+Description=Omarchy Mobile modem: keep the modem's NV writes (overlay capture)
+Requisite=omamobile-modem.service
+After=omamobile-modem.service
+ConditionPathExists=/etc/omamobile/modem-nv-overlay-enable
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-modem nv-overlay capture --reason timer
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=60

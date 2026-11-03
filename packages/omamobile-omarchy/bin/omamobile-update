@@ -16,6 +16,10 @@
   omamobile-update notify-check  toast once per new Omarchy release (the shell
                                  runs this every few hours)
   omamobile-update run-migration NAME   run one migration the update held
+  omamobile-update channel [stable|development|local] [--json]
+                                 which [omamobile] channel the phone follows,
+                                 or switch it (as root: sudo omamobile-update
+                                 channel development)
 
 What runs is Omarchy's own omarchy-update, with -y, unchanged, with a
 directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
@@ -28,24 +32,46 @@ directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
              confirmation), omarchy-snapshot (no Snapper on the phone's ext4
              root), omarchy-update-aur-pkgs (no AUR builds on the phone),
              omarchy-update-orphan-pkgs (listed, never removed),
-             omarchy-update-restart (no gum, no false "kernel updated": the
-             phone's kernel is not a package), omarchy-migrate (boot-related
-             migrations held), sudo (non-interactive from the sheet)
+             omarchy-update-restart (no gum, no false "kernel updated":
+             a restart is asked for when omamobile-boot-update wrote slot B),
+             omarchy-migrate (boot-related migrations held), sudo
+             (non-interactive from the sheet)
 
 Before anything is downloaded it refuses: below 30% battery unless charging,
 when /etc/pacman.conf doesn't list [omamobile] first and [omarchy] before
 Arch Linux ARM's repositories, when [omarchy] isn't Omarchy's stable
-channel, and when the update would install a kernel,
-bootloader or boot-image tool (--allow-boot-packages overrides). The kernel
-itself still goes to the phone through bin/omamobile push.
+channel, and when the update would install another distribution's kernel,
+a bootloader or a boot-image tool (--allow-boot-packages overrides).
+
+The phone's own kernel package, linux-omamobile, is allowed: its pacman hook
+(omamobile-boot-update, docs/RELEASES.md §5.3) rebuilds slot B's images and
+writes them, guarded and verified, when /etc/omamobile/boot-update.conf says
+AUTO_WRITE=yes. Before anything is downloaded, an update that brings it asks
+`omamobile-boot-update preflight` (read-only) and refuses when the hook would
+refuse the write (another board, a partition the storage guard keeps
+read-only, the device package's boot files missing, ...), so the phone never
+holds a kernel package its slot B doesn't match. With AUTO_WRITE off (a
+development phone) the package installs and slot B is left to
+bin/omamobile push. The battery rule above covers the write too, and the
+hook checks the battery again itself. Nothing reboots: the result asks for
+a restart when slot B was written.
 
 The sheet's run: progress events in $XDG_RUNTIME_DIR/omamobile-update/events
 (kind<TAB>text lines: step, line, progress, auth, held, result, state), the
 full output in ~/.local/state/omamobile/update/update.log, the result in
 ~/.local/state/omamobile/update/last.json; Omarchy's own transcript stays in
 /tmp/omarchy-update.log.
+
+Channels: /etc/pacman.d/omamobile-mirrorlist (a backup= file of the device
+package, so pacman keeps a changed copy) names where [omamobile] comes from:
+stable (https://pkgs.omamobile.org/stable, what installed phones follow),
+development (every day's build, for builders) or local (the repository on the
+phone, /var/lib/omamobile/repo, filled by tools/repo-push). "channel NAME"
+turns that one Server line on and the others off, and drops pacman's copy of
+the old channel's index, which may be newer than the new channel's.
 """
 import datetime
+import glob
 import json
 import os
 import re
@@ -72,6 +98,10 @@ CHECKUPDATES = os.environ.get("OMAMOBILE_CHECKUPDATES", "checkupdates")
 PACMAN = os.environ.get("OMAMOBILE_PACMAN", "pacman")
 PACMAN_CONF = os.environ.get("OMAMOBILE_PACMAN_CONF", "/etc/pacman.conf")
 POWER = os.environ.get("OMAMOBILE_POWER_SUPPLY", "/sys/class/power_supply")
+MIRRORLIST = os.environ.get("OMAMOBILE_MIRRORLIST", "/etc/pacman.d/omamobile-mirrorlist")
+LOCAL_REPO = os.environ.get("OMAMOBILE_LOCAL_REPO", "/var/lib/omamobile/repo")
+PACMAN_SYNC = os.environ.get("OMAMOBILE_PACMAN_SYNC", "/var/lib/pacman/sync")
+CHECKUP_DBS = os.environ.get("OMAMOBILE_CHECKUP_DBS", "/tmp/checkup-db-*")
 PATCH_STATUS = os.environ.get("OMAMOBILE_PATCH_STATUS", "/var/lib/omamobile/omarchy-patches/status.json")
 NOTIFY = os.environ.get("OMAMOBILE_NOTIFY", "omarchy-notification-send")
 OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
@@ -82,9 +112,21 @@ RELEASE_NOTES = "https://github.com/basecamp/omarchy/releases/latest"
 OMARCHY_LOG = os.environ.get("OMAMOBILE_OMARCHY_LOG", "/tmp/omarchy-update.log")
 MARK = "@@omamobile "
 
-# Packages a phone update must not install: kernels and boot-image tools
-# (the phone boots from boot_b, which bin/omamobile push writes), bootloaders,
-# Snapper, fwupd. linux-firmware*, linux-api-headers and the like are fine.
+# The [omamobile] channels, and the Server line each one is in the mirrorlist
+CHANNELS = {
+    "stable": "Server = https://pkgs.omamobile.org/stable/$arch",
+    "development": "Server = https://pkgs.omamobile.org/development/$arch",
+    "local": "Server = file:///var/lib/omamobile/repo/$arch",
+}
+SERVER_LINE = re.compile(r"^\s*Server\s*=\s*(\S+)\s*$")
+
+# Packages a phone update must not install: other kernels and boot-image
+# tools (the phone boots from boot_b, which linux-omamobile's hook or
+# bin/omamobile push writes), bootloaders, Snapper, fwupd. linux-firmware*,
+# linux-api-headers and linux-omamobile itself (kernel_update below) are fine.
+KERNEL_PACKAGE = "linux-omamobile"
+BOOT_UPDATE = os.environ.get("OMAMOBILE_BOOT_UPDATE", "omamobile-boot-update")
+BOOT_UPDATE_CONF = os.environ.get("OMAMOBILE_BOOT_UPDATE_CONF", "/etc/omamobile/boot-update.conf")
 BOOT_PACKAGES = re.compile(
     r"^(linux|linux-(aarch64|lts|zen|hardened|rt|omarchy.*|rpi.*|t2.*)(-headers)?|limine(-.*)?|grub|"
     r"efibootmgr|sbctl|snapper|snap-pac|mkinitcpio|dracut|booster|ukify|systemd-ukify|fwupd)$")
@@ -192,6 +234,95 @@ def repository_order(path=PACMAN_CONF):
     return ""
 
 
+def channel_info(path=None):
+    """{"name", "server", "error"}: the channel the mirrorlist's first active Server line names."""
+    path = path or MIRRORLIST
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        return {"name": "unknown", "server": "", "error": "cannot read %s: %s" % (path, e.strerror)}
+    servers = [m.group(1) for m in (SERVER_LINE.match(l) for l in lines) if m]
+    if not servers:
+        return {"name": "none", "server": "", "error": "%s has no Server line: [omamobile] has nowhere to come from" % path}
+    name = next((n for n, line in CHANNELS.items() if line.split("= ", 1)[1] == servers[0]), "custom")
+    return {"name": name, "server": servers[0], "error": ""}
+
+
+def set_channel(name, path=None):
+    """Make CHANNELS[name] the mirrorlist's one active Server line: "" or an error.
+
+    Every other Server line is commented out, a custom one too, so the file
+    stays readable and a switch back finds its line. Switching to stable on
+    the packaged file gives the packaged file again, which pacman then treats
+    as unchanged (and updates with the package)."""
+    path = path or MIRRORLIST
+    want = CHANNELS[name]
+    if name == "local" and not os.path.isfile(os.path.join(LOCAL_REPO, "aarch64", "omamobile.db")):
+        return ("there is no repository at %s/aarch64: push one from a build machine first "
+                "(tools/repo-push), or pick stable or development" % LOCAL_REPO)
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        lines, mode = ["# Where pacman gets Omarchy Mobile's packages ([omamobile] in /etc/pacman.conf)."], 0o644
+    except OSError as e:
+        return "cannot read %s: %s" % (path, e.strerror)
+    out, found = [], False
+    for line in lines:
+        bare = line.lstrip("#").strip()
+        if not SERVER_LINE.match(bare):
+            out.append(line)
+        elif bare == want and not found:
+            out.append(want)
+            found = True
+        elif line.lstrip().startswith("#"):
+            out.append(line)
+        else:
+            out.append("#" + line.strip())
+    if not found:
+        out.append(want)
+    tmp = path + ".omamobile-new"
+    try:
+        with open(tmp, "w") as f:
+            f.write("\n".join(out) + "\n")
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError as e:
+        return "cannot write %s: %s" % (path, e.strerror)
+    # The old channel's index may be newer than the new one's, and pacman's
+    # If-Modified-Since refresh would keep it.
+    for d in [PACMAN_SYNC] + [os.path.join(x, "sync") for x in glob.glob(CHECKUP_DBS)]:
+        for f in ("omamobile.db", "omamobile.db.sig", "omamobile.files", "omamobile.files.sig"):
+            try:
+                os.remove(os.path.join(d, f))
+            except OSError:
+                pass
+    return ""
+
+
+def channel_cmd(args):
+    names = [a for a in args if not a.startswith("-")]
+    if len(names) > 1 or (names and names[0] not in CHANNELS):
+        print("omamobile-update: channel takes one of %s" % ", ".join(CHANNELS), file=sys.stderr)
+        return 2
+    if names:
+        err = set_channel(names[0])
+        if err:
+            hint = " (run it with sudo)" if os.geteuid() != 0 and "ermission" in err else ""
+            print("omamobile-update: " + err + hint, file=sys.stderr)
+            return 1
+    info = channel_info()
+    if "--json" in args:
+        print(json.dumps(info, sort_keys=True))
+    else:
+        print("Channel: %s (%s)" % (info["name"], info["server"] or info["error"]))
+        if names:
+            print("Next: omarchy update fetches the %s index" % info["name"])
+    return 0 if not info["error"] else 1
+
+
 def free_bytes(path="/"):
     try:
         s = os.statvfs(path)
@@ -203,6 +334,69 @@ def free_bytes(path="/"):
 def installed_version(name):
     out = subprocess.run([PACMAN, "-Q", name], capture_output=True, text=True)
     return out.stdout.split()[1] if out.returncode == 0 and len(out.stdout.split()) > 1 else ""
+
+
+def auto_write_conf(path=None):
+    """AUTO_WRITE from boot-update.conf as omamobile-boot-update reads it: "yes", "no" (also when absent), or "" when unreadable."""
+    try:
+        with open(path or BOOT_UPDATE_CONF) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return "no"
+    except OSError:
+        return ""
+    value = "no"
+    for line in lines:
+        if re.match(r"^\s*(#.*)?$", line):
+            continue
+        m = re.match(r'^AUTO_WRITE="?(yes|no)"?$', line)
+        if m:
+            value = m.group(1)
+        elif not re.match(r'^AVB_KEY="?/[A-Za-z0-9_./-]+"?$', line) or ".." in line:
+            return ""
+    return value
+
+
+def kernel_update(targets):
+    """What an update bringing linux-omamobile does to slot B, and whether it may run.
+
+    {"version", "boot_update": "write" | "skip", "problem"}, or None when the
+    update has no kernel. A problem blocks the update before anything is
+    downloaded: the hook would refuse to write, and the phone would hold a
+    kernel package that slot B doesn't match."""
+    version = next((v for n, v in targets if n == KERNEL_PACKAGE), None)
+    if version is None:
+        return None
+    info = {"version": version, "boot_update": "skip", "problem": ""}
+    try:
+        out = subprocess.run([BOOT_UPDATE, "preflight", "--json"], capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        # First kernel package: omamobile-boot-update comes in the same
+        # transaction (linux-omamobile depends on it), so it can't be asked yet
+        auto = auto_write_conf()
+        if auto == "no":
+            return info
+        info["problem"] = ("This update brings the kernel (%s), and %s says AUTO_WRITE=yes, but omamobile-boot-update "
+                           "isn't installed to check slot B first; ask on the project before updating" % (version, BOOT_UPDATE_CONF)
+                           if auto else "%s can't be read; fix it before a kernel update" % BOOT_UPDATE_CONF)
+        return info
+    except (OSError, subprocess.TimeoutExpired) as e:
+        info["problem"] = "omamobile-boot-update preflight failed: %s" % e
+        return info
+    try:
+        pre = json.loads(out.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        info["problem"] = "omamobile-boot-update preflight gave no answer: %s" % (out.stderr.strip()[-200:] or out.returncode)
+        return info
+    if pre.get("auto_write") != "yes":
+        if pre.get("auto_write") not in ("no",):
+            info["problem"] = "Slot B can't be checked for the kernel update: %s" % (pre.get("problem") or "boot-update.conf unreadable")
+        return info
+    info["boot_update"] = "write"
+    if not pre.get("ok"):
+        info["problem"] = ("This update brings the kernel (%s), but slot B can't take it: %s. Not updating."
+                           % (version, pre.get("problem") or "omamobile-boot-update preflight failed"))
+    return info
 
 
 def pending_updates(offline=False):
@@ -281,14 +475,20 @@ def check(offline=False, allow_boot=False):
     order = repository_order()
     if order:
         blockers.append(order)
+    chan = channel_info()
+    if chan["error"]:
+        blockers.append(chan["error"])
     free = free_bytes()
     if 0 <= free < MIN_FREE:
         blockers.append("Only %.1f GiB free; Omarchy's update needs 10 GiB" % (free / 1024 ** 3))
     lines, targets, err = pending_updates(offline)
     boot = sorted({n for n, _ in targets if BOOT_PACKAGES.match(n)})
     if boot and not allow_boot:
-        blockers.append("This update would install %s, which the phone doesn't use (its kernel goes through "
-                        "bin/omamobile push); ask on the project before updating" % ", ".join(boot))
+        blockers.append("This update would install %s, which the phone doesn't use (its kernel is linux-omamobile, "
+                        "written to slot B by omamobile-boot-update); ask on the project before updating" % ", ".join(boot))
+    kernel = kernel_update(targets)
+    if kernel and kernel["problem"]:
+        blockers.append(kernel["problem"])
     if err:
         blockers.append(err)
     omarchy_line = next((l for l in lines if l.split()[0] in ("omarchy", "omarchy-dev")), "")
@@ -297,11 +497,11 @@ def check(offline=False, allow_boot=False):
         blockers.append("An update is already running")
     return {
         "battery": bat, "min_battery": MIN_BATTERY, "battery_ok": not battery_blocker(bat),
-        "repositories_ok": not order, "repositories": order,
+        "repositories_ok": not order, "repositories": order, "channel": chan,
         "free_gib": round(free / 1024 ** 3, 1) if free >= 0 else None,
         "omarchy": installed_version("omarchy") or installed_version("omarchy-dev"),
         "omarchy_update": omarchy_line, "updates": lines, "update_count": len(targets) or len(lines),
-        "boot_packages": boot, "running": is_running, "credential": credential(),
+        "boot_packages": boot, "kernel": kernel, "running": is_running, "credential": credential(),
         "patches": patch_summary(), "release_notes": RELEASE_NOTES, "checked_offline": offline,
         "blockers": blockers, "ok": not blockers,
     }
@@ -544,8 +744,16 @@ def inner(args):
         if err:
             refusal = err
         elif boot and not allow_boot:
-            refusal = ("This update would install %s, which the phone doesn't use (its kernel goes through "
-                       "bin/omamobile push). Not updating." % ", ".join(boot))
+            refusal = ("This update would install %s, which the phone doesn't use (its kernel is linux-omamobile, "
+                       "written to slot B by omamobile-boot-update). Not updating." % ", ".join(boot))
+        kernel = None if refusal else kernel_update(targets)
+        if kernel and kernel["problem"]:
+            refusal = kernel["problem"]
+        elif kernel:
+            print("The kernel (%s) is part of this update: %s" % (
+                kernel["version"], "its pacman hook writes it to slot B; restart afterwards to boot it"
+                if kernel["boot_update"] == "write" else
+                "slot B is left alone (AUTO_WRITE is off; bin/omamobile push stays the writer)"), flush=True)
         if refusal:
             print(refusal, flush=True)
             with open(os.path.join(RUNTIME, "refused"), "w") as f:
@@ -555,7 +763,7 @@ def inner(args):
         print("%d package(s) to update%s" % (len(targets) or len(lines), "; " + omarchy_line if omarchy_line else ""),
               flush=True)
         env.update(PATH=SHIMS + ":" + env.get("PATH", "/usr/bin"), OMARCHY_UPDATE_LOGGED="1", OMAMOBILE_UPDATE="1",
-                   OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO)
+                   OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO, OMAMOBILE_UPDATE_STARTED=str(int(time.time())))
         return subprocess.run([OMARCHY_UPDATE, "-y"], env=env).returncode
     finally:
         stop.set()
@@ -704,6 +912,8 @@ def main(argv):
                                                              (": " + result["omarchy_update"]) if result["omarchy_update"] else ""))
             bat = result["battery"]
             print("Battery: %s" % ("%d%%%s" % (bat["percent"], ", charging" if bat["charging"] else "") if bat["present"] else "none"))
+            chan = result["channel"]
+            print("Channel: %s%s" % (chan["name"], " (%s)" % chan["server"] if chan["server"] else ""))
             print("Phone patches: %s" % result["patches"]["result"])
             for b in result["blockers"]:
                 print("Blocked: " + b)
@@ -722,6 +932,8 @@ def main(argv):
         return notify_check(args)
     if cmd == "run-migration":
         return run_migration(args)
+    if cmd == "channel":
+        return channel_cmd(args)
     print("omamobile-update: unknown command %s (see --help)" % cmd, file=sys.stderr)
     return 2
 

@@ -11,7 +11,9 @@ its own repository, [omaphone](https://github.com/derekross/omaphone)
   fetches them from git in `prepare()`.
 - Up to 0.1.1 the package was built from omatel. The name is unchanged, so
   a plain upgrade replaces it.
-- `omamobile-apps` doesn't pull it in yet.
+- `omamobile-apps` depends on it since 0.2.1, so every image and every
+  updated phone has it. Without a modem it opens and keeps its data; the
+  agent reports `ModemState` "no-modem".
 
 ## Releases
 

@@ -43,6 +43,27 @@ hl.window_rule({
 -- bar and the on-screen keyboard, like a phone sheet. After the modal rule,
 -- so a modal chooser is a sheet too. Nautilus's own windows tile anyway.
 hl.window_rule({ match = { class = "^org.gnome.Nautilus$" }, float = false, maximize = true })
+-- Omarchy's own terminals: the install and setup screens (Install > AI >
+-- Dictation and the rest open omarchy-launch-floating-terminal-with-
+-- presentation, app-id org.omarchy.terminal, title Omarchy), btop, its bash
+-- and TUI windows. Omarchy floats each at 875x600 through the floating-window
+-- tag, wider than the whole screen. Dropping the tag above already lets the
+-- maximize rule take them; this says so for these by name, after Omarchy's
+-- float rule, so an install screen can't float off the side whatever
+-- happens to the tag. Maximized, they fill the space between the bar and the
+-- on-screen keyboard, and the logo they open with fits that width (the
+-- Omarchy patch 0028 in omamobile-omarchy).
+hl.window_rule({
+  match = { class = "^(org\\.omarchy\\.(terminal|bash|btop)|TUI\\.float)$" },
+  float = false,
+  maximize = true,
+})
+-- Tensaku, the screenshot editor (Open With, or the toast without Loupe): Omarchy floats
+-- it by class (default/hypr/apps/system.lua), not through the floating-window
+-- tag the first rule drops, so it opened as a desktop-sized float (814x936 on
+-- a 480 px wide screen) with the screenshot cut off. Tiled and maximized, the
+-- canvas gets the screen and fits the image to it.
+hl.window_rule({ match = { class = "^dev.tensaku.Tensaku$" }, float = false, maximize = true })
 
 -- Picture-in-picture (TOUCH-PLAN 3.5): Omarchy floats it, pinned, at 600x338,
 -- wider than the screen, and the maximize rule above made it fill the
@@ -67,21 +88,29 @@ o.launch_on_start(
 -- screen off (or wakes a locked phone), holding power opens Omarchy's system
 -- menu, and power + volume down takes a screenshot. omamobile-keys works out
 -- which gesture it was.
+--
+-- Only real keyboards may trigger these: squeekboard is a virtual keyboard
+-- whose key codes are its layout's own, numbered up from 9, and on a long
+-- layout one of them lands on 124, which Hyprland's keymap reads as
+-- XF86PowerOff. Its keys share Hyprland's held-key state with the buttons,
+-- so an OSK key could act as the power key or leave it looking held (SUSPEND-
+-- PLAN P5 h: the power key's bind stopped firing until a reload).
+local hw_keys = { inclusive = false, list = { "hl-virtual-keyboard-squeekboard" } }
 hl.unbind("XF86PowerOff")
-o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true })
-o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true })
+o.bind("XF86PowerOff", "Power key", "omamobile-keys power-down", { locked = true, device = hw_keys })
+o.bind("XF86PowerOff", "System menu", "omamobile-keys power-up", { locked = true, release = true, device = hw_keys })
 -- Volume down is also half of the screenshot chord, so it can't lower the
 -- volume the moment it goes down: take over Omarchy's binding and let
 -- omamobile-keys decide (a short wait for power, as on Android).
 hl.unbind("XF86AudioLowerVolume")
-o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { locked = true, repeating = true })
+o.bind("XF86AudioLowerVolume", "Volume down", "omamobile-keys volume-down", { locked = true, repeating = true, device = hw_keys })
 -- Volume up goes through omamobile-keys too, so both volume keys can take a
 -- photo while the Camera app is in front (and raise the volume otherwise).
 hl.unbind("XF86AudioRaiseVolume")
-o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true })
+o.bind("XF86AudioRaiseVolume", "Volume up", "omamobile-keys volume-up", { locked = true, repeating = true, device = hw_keys })
 -- Its release ends Power + Volume Up push-to-talk (voice input, off unless
 -- turned on in the voice settings); omamobile-keys ignores every other one.
-o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })
+o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true, device = hw_keys })
 
 -- A fresh phone (no name and email, or no PIN): a notification offers the
 -- onboarding that Omarchy's installer does on a computer.
@@ -98,6 +127,13 @@ o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyb
 -- With Omarchy's key_press_enables_dpms, the press itself lit the screen and
 -- the release then turned it off again. Touch still wakes it.
 hl.config({ misc = { key_press_enables_dpms = false } })
+
+-- Hyprland 0.57 turned quirks:skip_non_kms_dmabuf_formats on by default: it
+-- offers clients only the formats a display plane can scan out. gs201's DECON
+-- planes take XRGB8888, with no alpha, so the shell's transparent layers (home,
+-- the back edges, the fingerprint target and guard) came out black. Composited
+-- by the GPU, any format works. pcall: older Hyprland may not know the option.
+pcall(hl.config, { quirks = { skip_non_kms_dmabuf_formats = false } })
 
 -- The fingerprint target (omamobile.fingerprint) is drawn above the lock
 -- screen too, where the lock runs its fingerprint conversation. 1, not 2: on

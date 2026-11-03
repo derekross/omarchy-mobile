@@ -1,0 +1,147 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage a device's boot files for its device package (docs/RELEASES.md
+# §5.1), on the build machine: what omamobile-boot-update needs on the phone
+# besides the kernel package. Nothing here touches a phone.
+#
+#   DEVICE=<codename> KERNEL_OUT=<build> tools/stage-boot-files [DEST]
+#   tools/stage-boot-files --check DIR       are DIR's boot files current?
+#   tools/stage-boot-files --sources <codename>
+#
+# DEST (default packages/<PACKAGE>/boot-files, gitignored like other prebuilt
+# files) receives, for the package to install as shown:
+#   device.conf              -> /usr/share/omamobile/device.conf (verbatim)
+#   dtbo.img                 -> /usr/lib/omamobile/<codename>/dtbo.img
+#   initramfs.cpio.lz4       -> /usr/lib/omamobile/<codename>/initramfs.cpio.lz4
+#   overlays/<name>.dtbo     -> /usr/lib/omamobile/<codename>/overlays/ (DTB_OVERLAYS)
+#   SOURCES                  the sha256 of every tracked file they come from
+#   SHA256SUMS
+# The dtbo is built as bin/omamobile images builds it (dtc -@, then AOSP's
+# mkdtboimg with the descriptor's board id and revision), the overlays are
+# compiled with the kernel build's dtc, and the initramfs is KERNEL_OUT's,
+# which must be a release one (`bin/omamobile initramfs --release`): no SSH
+# keys of the builder, no dropbear host keys, and the descriptor's storage
+# guard allowlist packed in it. A device whose initramfs carries kernel
+# modules (INITRAMFS_MODULES) is refused: its initramfs belongs to one
+# kernel release, not to the device package.
+#
+# The device package refuses to build without these files (its version
+# would otherwise mean two different packages), and tools/build-packages
+# runs --check before it builds it: SOURCES must match the tree being
+# built (the descriptor, the dtbo source, the overlays, initramfs/ and the
+# package's src/ that the initramfs links), or the files are stale and must
+# be staged again. tools/repo-publish --from-main carries boot-files/ into
+# its clean tree with the other gitignored prebuilt files. --sources prints
+# that list for a device, for the tests.
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$ROOT/omamobile.conf"
+[[ -f $ROOT/omamobile.local.conf ]] && source "$ROOT/omamobile.local.conf"
+die() { printf 'stage-boot-files: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=../packages/omamobile-boot-update/lib/descriptor.sh
+source "$ROOT/packages/omamobile-boot-update/lib/descriptor.sh"
+
+# The tracked files a device's boot files are made from, "sha256  path"
+# (the working tree's contents), sorted. Needs the descriptor loaded.
+boot_sources() {
+  local f files=()
+  files=("device/$DEV_CODENAME/device.conf" "device/$DEV_CODENAME/$DEV_DTBO_SOURCE")
+  for f in ${DEV_DTB_OVERLAYS:-}; do files+=("device/$DEV_CODENAME/overlays/$f.dtso"); done
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || die "$ROOT is not a git checkout"
+  while IFS= read -r f; do files+=("$f"); done < <(git -C "$ROOT" ls-files -- initramfs "packages/$DEV_PACKAGE/src")
+  for f in "${files[@]}"; do [[ -f $ROOT/$f ]] || die "no $f"; done
+  (cd "$ROOT" && printf '%s\n' "${files[@]}" | LC_ALL=C sort -u | xargs -d '\n' sha256sum)
+}
+
+case ${1:-} in
+  --sources)
+    [[ ${2:-} =~ ^[a-z0-9]+$ ]] || die "--sources needs a codename"
+    bu_load_descriptor "$ROOT/device/$2/device.conf"
+    boot_sources
+    exit 0 ;;
+  --check)
+    dir=${2:?--check needs the boot-files directory}
+    [[ -f $dir/SHA256SUMS && -f $dir/device.conf ]] || die "no boot files in $dir (DEVICE=<codename> KERNEL_OUT=<build> tools/stage-boot-files)"
+    (cd "$dir" && sha256sum --quiet --strict -c SHA256SUMS) || die "$dir fails its checksums: stage it again"
+    grep -cE '  SOURCES$' "$dir/SHA256SUMS" >/dev/null || die "$dir has no SOURCES (staged by an older tools/stage-boot-files): stage it again"
+    code=$(sed -n 's/^CODENAME=\([a-z0-9]*\)$/\1/p' "$dir/device.conf")
+    [[ -n $code && -f $ROOT/device/$code/device.conf ]] || die "$dir/device.conf names no known device"
+    bu_load_descriptor "$ROOT/device/$code/device.conf"
+    if ! diff -u "$dir/SOURCES" <(boot_sources) > /dev/null; then
+      echo "stage-boot-files: $dir is stale: these sources changed since it was staged:" >&2
+      diff <(sort -k2 "$dir/SOURCES") <(boot_sources | sort -k2) | sed -n 's/^[<>] [0-9a-f]*  /    /p' | sort -u >&2
+      die "stage $code's boot files again (DEVICE=$code KERNEL_OUT=<build> tools/stage-boot-files)"
+    fi
+    echo "$dir: $code's boot files match this tree"
+    exit 0 ;;
+  -*) die "unknown option $1" ;;
+esac
+
+[[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename"
+[[ -n ${KERNEL_OUT:-} ]] || die "set KERNEL_OUT to the kernel build (bin/omamobile initramfs --release ran there)"
+conf=$ROOT/device/$DEVICE/device.conf
+bu_load_descriptor "$conf"
+[[ $DEV_CODENAME == "$DEVICE" ]] || die "$conf: CODENAME=$DEV_CODENAME, expected $DEVICE"
+[[ -z ${DEV_INITRAMFS_MODULES:-} ]] \
+  || die "$DEVICE's initramfs carries kernel modules (INITRAMFS_MODULES): it belongs to one kernel release, not to the device package"
+dest=${1:-$ROOT/packages/$DEV_PACKAGE/boot-files}
+
+dtc=${DTC:-$KERNEL_OUT/scripts/dtc/dtc}
+[[ -x $dtc ]] || dtc=$(command -v dtc || true)
+[[ -n $dtc && -x $dtc ]] || die "no dtc (the kernel build's scripts/dtc/dtc, or DTC)"
+mkdtbo=${MKDTBOIMG:-}
+if [[ -z $mkdtbo ]]; then
+  # As bin/omamobile picks it: the pinned copy tools/fetch-toolchain
+  # verified (tools/toolchain.lock), else the Android checkout, else the
+  # distribution's android-tools
+  tc=${OMAMOBILE_TOOLCHAIN:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/toolchain}
+  lock_sum=$(awk '$2 == "libufdt/utils/src/mkdtboimg.py" {print $3}' "$ROOT/tools/toolchain.lock" 2>/dev/null || true)
+  if [[ -n $lock_sum && -f $tc/libufdt/utils/src/mkdtboimg.py \
+        && $(cat "$tc/.verified/libufdt_utils_src_mkdtboimg.py" 2>/dev/null) == "$lock_sum" ]]; then
+    mkdtbo="python3 -I $tc/libufdt/utils/src/mkdtboimg.py"
+  elif [[ -f ${SRC_DIR:-}/system/libufdt/utils/src/mkdtboimg.py ]]; then
+    mkdtbo="python3 -I $SRC_DIR/system/libufdt/utils/src/mkdtboimg.py"
+  elif command -v mkdtboimg >/dev/null; then
+    mkdtbo=mkdtboimg
+  else
+    die "no mkdtboimg (AOSP's under SRC_DIR, android-tools', or MKDTBOIMG)"
+  fi
+fi
+initramfs=$KERNEL_OUT/initramfs.cpio.lz4
+[[ -s $initramfs ]] || die "no $initramfs (DEVICE=$DEVICE KERNEL_OUT=$KERNEL_OUT bin/omamobile initramfs --release)"
+list=$(lz4 -dc "$initramfs" | cpio -it --quiet 2>/dev/null | sed 's|^\./||') || die "$initramfs is not an lz4 cpio"
+grep -cx 'root/\.ssh/authorized_keys' <<<"$list" >/dev/null && die "$initramfs carries the builder's SSH keys: build it with --release"
+grep -cE '^etc/dropbear/dropbear_.*_host_key$' <<<"$list" >/dev/null && die "$initramfs carries dropbear host keys: build it with --release"
+rw=$(lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout etc/omamobile-ufs-rw ./etc/omamobile-ufs-rw 2>/dev/null || true)
+[[ $rw == "$(read -ra a <<<"$DEV_UFS_RW"; echo "${a[*]}")" ]] || die "$initramfs packs allowlist '$rw', not $DEVICE's UFS_RW (built for another device?)"
+# The initramfs must come from this tree: its init is INITRAMFS_INIT's, so
+# SOURCES (this tree at staging time) also says what built it
+if [[ $DEV_INITRAMFS_INIT == /* ]]; then init_src=$ROOT$DEV_INITRAMFS_INIT; else init_src=$ROOT/device/$DEVICE/$DEV_INITRAMFS_INIT; fi
+[[ -f $init_src ]] || die "no $init_src (INITRAMFS_INIT)"
+lz4 -dc "$initramfs" | cpio -i --quiet --to-stdout init ./init 2>/dev/null | cmp -s - "$init_src" \
+  || die "$initramfs's init is not this tree's ${init_src#"$ROOT"/}: build the initramfs from this checkout (DEVICE=$DEVICE KERNEL_OUT=$KERNEL_OUT bin/omamobile initramfs --release)"
+
+src=$ROOT/device/$DEVICE/$DEV_DTBO_SOURCE
+grep -c "board_id = <$DEV_DTBO_BOARD_ID>;" "$src" >/dev/null || die "$src: board_id is not $DEV_DTBO_BOARD_ID"
+grep -c "board_rev = <$DEV_DTBO_BOARD_REV>;" "$src" >/dev/null || die "$src: board_rev is not $DEV_DTBO_BOARD_REV"
+
+rm -rf "$dest.new"
+mkdir -p "$dest.new"
+cp "$conf" "$dest.new/device.conf"
+"$dtc" -q -@ -I dts -O dtb -o "$dest.new/board.dtbo" "$src"
+# shellcheck disable=SC2086 # mkdtbo may be "python3 -I path"
+$mkdtbo create "$dest.new/dtbo.img" --page_size=4096 --id="$DEV_DTBO_BOARD_ID" --rev="$DEV_DTBO_BOARD_REV" "$dest.new/board.dtbo"
+rm "$dest.new/board.dtbo"
+for ov in ${DEV_DTB_OVERLAYS:-}; do
+  [[ -f $ROOT/device/$DEVICE/overlays/$ov.dtso ]] || die "no overlay device/$DEVICE/overlays/$ov.dtso"
+  mkdir -p "$dest.new/overlays"
+  "$dtc" -q -@ -I dts -O dtb -o "$dest.new/overlays/$ov.dtbo" "$ROOT/device/$DEVICE/overlays/$ov.dtso" || die "overlay $ov does not compile"
+done
+cp "$initramfs" "$dest.new/initramfs.cpio.lz4"
+boot_sources > "$dest.new/SOURCES"
+sums=$(cd "$dest.new" && find . -type f | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum)
+printf '%s\n' "$sums" > "$dest.new/SHA256SUMS"
+rm -rf "$dest"
+mv "$dest.new" "$dest"
+echo "staged $DEVICE's boot files in $dest:"
+(cd "$dest" && find . -type f | sed 's|^\./|  |' | LC_ALL=C sort)

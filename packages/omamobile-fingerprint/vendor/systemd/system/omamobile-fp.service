@@ -1,9 +1,17 @@
 # SPDX-License-Identifier: MIT
 # Google's fingerprint HAL, Trusty's storage proxy, KeyMint and Gatekeeper in
 # a minimal chroot, plus omamobile-fp-bridge, which fprintd's omamobile_udfps
-# driver talks to (device/cheetah/FINGERPRINT-PLAN.md). Not enabled by the
-# package: the first run writes Trusty's secure storage (the RPMB), which
-# the plan gates on the user's say-so (F4).
+# driver talks to (device/cheetah/FINGERPRINT-PLAN.md). Enabled by the
+# package (a vendor wants link) and inert until tools/phone-provision has
+# pushed Google's files (the conditions below). Before storageproxyd the
+# runner makes read-only copies of mfg_data and persist:/ss and refuses to
+# start without the TDP copy or once it, or persist:/ss/0, changed.
+#
+# One start per boot. Trusty keeps its storage state until a reboot, and a
+# storage proxy stopped and started again in the same boot crashed Trusty's
+# storage app on 2026-11-02 (FINGERPRINT-PLAN F19). So there is no Restart=,
+# the runner refuses a second start until a reboot, and a failed unit stays
+# failed: the lock screen uses the PIN, and a reboot starts it again.
 [Unit]
 Description=Omarchy Mobile fingerprint (vendor HAL and bridge)
 Documentation=file:///usr/share/doc/omamobile/FINGERPRINT-PLAN.md
@@ -11,9 +19,6 @@ Documentation=file:///usr/share/doc/omamobile/FINGERPRINT-PLAN.md
 After=omamobile-aoc.service systemd-modules-load.service
 ConditionPathExists=/usr/lib/omamobile-fp/root
 ConditionPathExists=/dev/trusty-ipc-dev0
-# a HAL that keeps dying must not loop forever against the TA
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 [Service]
 # The sensor's rail is on pmic-2 (S2MPG13, bound through sec_acpm) and its
@@ -24,9 +29,11 @@ StartLimitBurst=5
 ExecStartPre=/usr/bin/modprobe sec_acpm
 ExecStartPre=/usr/bin/modprobe goodix_fp
 ExecStart=/usr/lib/omamobile-fp/omamobile-fp-chroot start bridge
-KillMode=control-group
-Restart=on-failure
-RestartSec=10
+# TERM to the runner only: it stops the bridge and the HALs first and the
+# storage proxy last; whatever is left after the timeout gets KILL.
+KillMode=mixed
+TimeoutStopSec=30
+Restart=no
 # The desktop's fingerprint target follows this file; a stack killed
 # outright cannot remove it itself.
 ExecStopPost=-/usr/bin/rm -f /run/omamobile-fp-ui/state.json

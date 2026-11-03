@@ -1,12 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Reinstall runbook (cheetah): a clean Omarchy Mobile install with the installer
 
-Status (2026-10-13): **written and tested offline, not run.** Phase 5 of the
-rename plan: wipe the hand-installed root on `userdata` and install the
-renamed system with `tools/install-phone`, then put the phone's own data back
-with `tools/phone-provision`. The human runs or approves every step. Nothing
-here writes anything but slot B and `userdata`; stock Android on slot A stays
-the way back.
+Status (2026-10-13; updated 2026-11-02): **the first clean reinstall passed** (section 10
+lists the steps that passed and what was fixed afterwards). That run was
+Phase 5 of the rename plan: wipe the hand-installed root on `userdata` and
+install the renamed system with `tools/install-phone`, then put the phone's
+own data back with `tools/phone-provision`. Section 4a and the install
+without a `phone-config.tar`, added on 2026-10-30, have no result in section
+10 yet. The human runs or approves every step. Nothing here writes anything
+but slot B and `userdata`; stock Android on slot A stays the way back.
 
 The tools, all offline-tested (`tests/all`):
 
@@ -21,7 +23,7 @@ The tools, all offline-tested (`tests/all`):
 
 Each step lists its commands, what to expect, a **stop** condition, the
 rollback and a risk level. Read-only steps come first. Quote results (with
-`uname -r`) into section 7 when done; check every quote for identifiers
+`uname -r`) into section 10 when done; check every quote for identifiers
 (MAC addresses, serials, SSIDs) first.
 
 **Without a `phone-config.tar`.** Sections 1, 5 and 7 are written for a
@@ -198,8 +200,10 @@ Expect `product: cheetah`, `unlocked: yes`. Coming from our Linux, the
 current slot is `b`: `version-bootloader` is slot B's. Compare it with slot
 A's from the stock capture (`~/android/reference/cheetah-stock-cp2a/fastboot-getvar-all.txt`,
 taken with slot A current). **Stop** if they differ: setting slot B active
-runs slot B's bootloader; flash the same factory bootloader to both from
-stock first. If equal, that value is the `--bootloader-slots-match` below.
+runs slot B's bootloader. Never flash a bootloader partition by hand
+(CONTRIBUTING §3.1); from stock, sideload the full OTA twice so each slot
+gets the same build, or ask in an issue. If equal, that value is the
+`--bootloader-slots-match` below.
 On a first install the phone comes from stock Android: slot `a` is current,
 so `version-bootloader` is slot A's, and there is no stock capture to
 compare it with. I2's dry run checks the slots, and when the phone reports
@@ -209,7 +213,7 @@ version, stop and ask (CONTRIBUTING §3.1).
 ### I2. Dry run (risk none: reads variables, prepares a local copy, writes nothing)
 
 ```sh
-tools/install-phone --dry-run --bootloader-slots-match <version from I1>
+tools/install-phone --dry-run --reinstall --bootloader-slots-match <version from I1>
 ```
 
 Answer the questions (user name, PIN or password twice, host name, time
@@ -222,7 +226,7 @@ five `fastboot flash <image>_b`, `fastboot flash userdata <work>/root.simg`,
 ### I3. Install (risk HIGH: erases userdata; slot A untouched)
 
 ```sh
-tools/install-phone --bootloader-slots-match <version from I1>
+tools/install-phone --reinstall --bootloader-slots-match <version from I1>
 ```
 
 Same answers; type `cheetah`. Expect `OKAY` from fastboot for each image,
@@ -296,6 +300,26 @@ found by `PARTNAME` in `/sys/class/block/*/uevent` (the Arch root has no
 read-only. Nothing here writes to the phone. A section 4a backup from an
 earlier install will do instead while the phone's partitions still match
 it: V3's commands for this case, with `B` set to that backup, print `SAME`.
+
+`tools/nv-backup "$B"` (also in the release bundle's `tools/`) does N1 and
+N2 in one read-only run, with the partitions from the descriptor's
+`NV_PARTS` and `NV_BACKUP_EXTRA`: it stops before copying on any `none`,
+`ro=0`, mount or duplicate `PARTNAME`, copies with `dd`, compares each copy
+with a second read on the phone, and writes `SHA256SUMS`, `partitions.txt`
+and `NV-BACKUP` (directory 700, files 600). `tools/nv-backup --check "$B"`
+is the later check against the phone (`devinfo` may differ: its
+slot flags change after a flash, a fallback to slot A or the boot-success
+mark). The blocks below are the same
+steps by hand.
+
+**Result, 2026-11-02** (`7.3.0-rc6-omamobile-push1-g2219cc6cda77`): the
+first version (8eccbbcc), one `dd` stream per partition, failed in 5 of 5
+runs: each time one stream over the USB NCM link died partway (ssh exit
+255), on a different partition. The chunked version (3ab19983, 8 MiB
+chunks, each size-checked and retried) completed: all 7 partitions
+verified against the phone (`modem_b` needed 15 chunk retries), `--check`
+printed SAME for all, and `efs`, `efs_backup`, `modem_userdata` and
+`persist` are identical to the 2026-10-30 backup.
 
 ### N1. Find the partitions, read-only and unmounted (phone, read-only; risk none)
 
@@ -456,7 +480,7 @@ difference.
 | S11 | Shell | home screens, widgets, quick settings, one app per screen | the imported layout |
 | S12 | Update path | `omarchy update` in a terminal | finishes; `[omamobile]` first |
 
-Record each result in section 7.
+Record each result in section 10.
 
 ## 7. Fingerprint (needs the human's explicit go; IRREVERSIBLE)
 

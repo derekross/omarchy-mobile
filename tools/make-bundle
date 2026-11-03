@@ -8,14 +8,41 @@
 #     device.conf    the descriptor the images were built from
 #     images/        the BOOT_IMAGES (boot init_boot vendor_boot vendor_kernel_boot dtbo)
 #     omamobile.gpg  the public key SHA256SUMS.sig is checked against
-#     MANIFEST       kernel release, root image, both repositories' commits
+#     INSTALL.md     docs/INSTALL.md, the install guide
+#     tools/         tools/phone-provision and what it runs (phone-ssh and the
+#                    extract-* tools), so a user provisions from the bundle
+#                    without the repository; they extract Google's files on
+#                    the user's machine, and none of those files ship here;
+#                    and tools/nv-backup, the read-only radio backup it needs
+#     MANIFEST       kernel release, root image, both repositories' commits, toolchain
+#     manifest.json  the same and more as data (tools/bundle-manifest): every
+#                    file with size and SHA-256, the root image, the release
+#                    version and label, and the install plan and its checks,
+#                    which tools/install-phone (and later a web flasher) enforce
 #     SHA256SUMS     checksums of everything above
-#     SHA256SUMS.sig signed with the key in keys/ (maintainer only; --unsigned skips)
+#     SHA256SUMS.sig signed with the release key (keys/gnupg.release,
+#                    tools/lib/signing.sh; maintainer only; --unsigned skips)
 #   out/bundle/omamobile-rootfs-<codename>-<version>-aarch64.img.zst (+ .sha256, .MANIFEST)
+#   out/bundle/omamobile-<codename>-<version>.tar
+#                  the one-file download: the bundle directory and the root
+#                  image's three files, unpacked side by side (deterministic,
+#                  uncompressed; tools/lib/bundle-tar.sh)
+#   out/bundle/omamobile-<codename>-<version>.tar.sha256 (+ .sig)
+#                  its SHA-256, signed with the release key like SHA256SUMS
+#                  (the tar holds SHA256SUMS.sig, so SHA256SUMS can't list it)
 #
-#   tools/make-bundle [--version V] [--rootfs FILE] [--unsigned]
+#   tools/make-bundle [--version V] [--rootfs FILE] [--unsigned] [--label TEXT]
+#                     [--base-url URL]
 #     DEVICE (default cheetah), KERNEL_OUT (default $KERNEL_BASE/out-int,
 #     with images from bin/omamobile images)
+#     --version   the release version, by the calendar: YYYY.MM.DD, with .1,
+#                 .2 for a respin the same day (default today; a signed bundle
+#                 refuses anything else, RELEASES §7)
+#     --label     the release label (default "developer preview")
+#     --base-url  where the release's files will be downloaded from (default
+#                 https://pkgs.omamobile.org/releases/<codename>/<version>/)
+# A signed bundle also needs a root image that follows the stable channel
+# (tools/build-rootfs --channel stable, the default).
 # Nothing in a bundle comes from a factory image: tools/phone-provision
 # extracts Google's files on the user's machine after the install.
 set -euo pipefail
@@ -32,20 +59,37 @@ if [[ -z ${KERNEL_BASE:-} ]]; then
   [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
 fi
 KERNEL_OUT=${KERNEL_OUT:-$KERNEL_BASE/out-int}
-version=$(date +%Y.%m.%d) rootfs="" unsigned=0
+version=$(date +%Y.%m.%d) rootfs="" unsigned=0 label="developer preview" base_url=""
 while (($#)); do
   case $1 in
     --version) version=${2:?}; shift ;;
     --rootfs) rootfs=${2:?}; shift ;;
     --unsigned) unsigned=1 ;;
-    -h|--help) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --label) label=${2:?}; shift ;;
+    --base-url) base_url=${2:?}; shift ;;
+    -h|--help) sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
 done
 [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename"
+[[ $version =~ ^[0-9A-Za-z._-]+$ ]] || die "bad version '$version'"
+[[ $label =~ ^[A-Za-z0-9\ ._-]+$ ]] || die "the label is letters, digits, spaces, dots and dashes"
+base_url=${base_url:-https://pkgs.omamobile.org/releases/$DEVICE/$version/}
+[[ $base_url =~ ^https://[A-Za-z0-9./_-]+/$ ]] || die "--base-url is an https:// URL ending in /"
+if ((unsigned == 0)); then
+  # The key first, so a missing one is said before any work
+  source tools/lib/signing.sh
+  signing_key_load "$ROOT" || exit 1
+  [[ $version =~ ^20[0-9]{2}\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])(\.[1-9][0-9]*)?$ ]] ||
+    die "a signed release is versioned by the calendar (YYYY.MM.DD, or .1, .2 for a respin), not '$version'"
+fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || die "no $conf"
+provision_tools="phone-provision nv-backup phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
+[[ -f docs/INSTALL.md ]] || die "no docs/INSTALL.md"
+[[ -f tools/lib/bundle-tar.sh ]] || die "no tools/lib/bundle-tar.sh"
 boot_images=$(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$conf")
 [[ -n $boot_images ]] || die "$conf has no BOOT_IMAGES"
 if [[ -z $rootfs ]]; then
@@ -66,6 +110,10 @@ built_for=$(sed -n 's/^device: \([a-z0-9]*\).*/\1/p' "$manifest")
 modules_release=$(sed -n 's/^kernel modules: \([^ ]*\).*/\1/p' "$manifest")
 [[ -z $modules_release || $modules_release == "$release" ]] ||
   die "the root image has modules for $modules_release, but the boot images are $release: rebuild one to match"
+channel=$(sed -n 's/^omamobile channel: \([a-z]*\)$/\1/p' "$manifest")
+if ((unsigned == 0)) && [[ $channel != stable ]]; then
+  die "the root image follows the '${channel:-local (built before channels)}' channel; a signed release follows stable (tools/build-rootfs --channel stable)"
+fi
 root_digest=$(sha256sum < "$rootfs" | cut -d' ' -f1)
 [[ $(cut -d' ' -f1 "$rootfs.sha256") == "$root_digest" ]] || die "$rootfs doesn't match its .sha256"
 if ((unsigned == 0)); then
@@ -86,6 +134,13 @@ say "Assembling $dir"
 install -m755 tools/install-phone "$dir/install"
 install -m644 "$conf" "$dir/device.conf"
 install -m644 packages/omamobile-keyring/omamobile.gpg "$dir/omamobile.gpg"
+install -m644 docs/INSTALL.md "$dir/INSTALL.md"
+# phone-provision runs from the directory above its own (cd "$(dirname)/.."),
+# so in the bundle it finds tools/phone-ssh and tools/extract-* beside it
+mkdir -p "$dir/tools"
+for f in $provision_tools; do
+  install -m755 "tools/$f" "$dir/tools/$f"
+done
 # bin/omamobile images records the device it built for
 built_for=$(cat "$KERNEL_OUT/images/DEVICE" 2>/dev/null || true)
 [[ $built_for == "$DEVICE" ]] || die "$KERNEL_OUT/images holds images for '${built_for:-an unknown device}', not $DEVICE"
@@ -104,26 +159,46 @@ for f in "$rootfs" "$rootfs.sha256" "${rootfs%.img.zst}.MANIFEST"; do
 done
 kernel_commit=$(git -C "${KERNEL_DIR:-$KERNEL_BASE/wt-int}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 {
-  echo "# Omarchy Mobile $version for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
+  echo "# Omarchy Mobile $version ($label) for $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)"
   echo "version: $version"
+  echo "label: $label"
   echo "device: $DEVICE"
   echo "kernel release: $release"
   echo "kernel commit (linux-omarchy-mobile): $kernel_commit"
   echo "omarchy-mobile commit: $(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)"
   echo "root image: $rootname ($root_digest)"
+  echo "omamobile channel: ${channel:-unknown}"
+  # bin/omamobile images records the clang and the image scripts it used
+  if [[ -f $KERNEL_OUT/images/TOOLCHAIN ]]; then
+    echo
+    echo "# toolchain"
+    cat "$KERNEL_OUT/images/TOOLCHAIN"
+  fi
   echo
   echo "# boot images"
   (cd "$dir/images" && sha256sum -- *.img)
 } > "$dir/MANIFEST"
 cat > "$dir/README.txt" <<EOF
 Omarchy Mobile $version for the $(sed -n 's/^NAME="\(.*\)"$/\1/p' "$conf") ($DEVICE)
+$(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')
+
+This is a $label: it installs and runs, but some hardware is still being
+worked on (https://omamobile.org/devices/$DEVICE lists what works on this
+phone), it needs fastboot and your own factory image, and installing erases
+the phone's data. Keep stock Android's way back (below) in mind.
 
 Native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages) on the phone,
 with a mainline kernel and no Android. https://github.com/derekross/omarchy-mobile
+INSTALL.md in this directory is the step-by-step guide; read it first.
 
 Install: put the phone in fastboot mode (bootloader unlocked), connect it, and
-run ./install from this directory. $rootname must be next to
-this directory. The installer checks the phone first, asks for your user
+run "bash install" from this directory ("bash install" works even when a
+download lost the file's execute bit). $rootname must be next to
+this directory: unpacking $name.tar (the one-file download, checked
+with "sha256sum -c $name.tar.sha256") puts both side by side. If
+you downloaded this directory file by file, run "chmod +x tools/*" in it
+once. It needs fastboot (android-tools), e2fsprogs, zstd, openssl,
+gpg and python3 on this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".
 
@@ -131,20 +206,49 @@ What it writes: slot B's boot images ($(for p in $boot_images; do printf '%s_b '
 userdata (the Arch root). That ERASES userdata. It never touches slot A,
 the bootloader, radio, persist, efs, modem, devinfo or vbmeta.
 
-After the first boot: run tools/phone-provision from the repository with your
-own factory image for $DEVICE (firmware for Wi-Fi, Bluetooth, haptics,
-speakers and the camera; nothing Google's ships in this bundle).
+After the first boot: take the read-only backup of the modem's partitions
+into a new directory DIR with tools/nv-backup (INSTALL.md, "Back up"), then
+run tools/phone-provision from this directory with that backup and your own
+factory image for $DEVICE:
+  bash tools/nv-backup DIR
+  bash tools/phone-provision --nv-backup DIR FACTORY.zip
+The backup holds this phone's IMEI and calibration: keep it, never share
+it. phone-provision puts the firmware for Wi-Fi, Bluetooth, haptics,
+speakers and the camera on the phone, extracted on this computer; nothing
+Google's ships in this bundle.
+
+Updates: the phone follows the ${channel:-unknown} channel of the [omamobile]
+repository (https://pkgs.omamobile.org); "omarchy update" on the phone
+installs what is new there.
+
+manifest.json: this release as data (files, sizes, checksums, the install
+plan and its checks), covered by SHA256SUMS and its signature.
 
 Going back to stock: stock Android is still on slot A. In fastboot,
 "fastboot --set-active=a" and reboot, then factory-reset Android (its data
 was erased). Or flash Google's factory image for $DEVICE.
 EOF
+python3 -I tools/bundle-manifest --bundle "$dir" --rootfs "$rootfs" --rootfs-sha256 "$root_digest" \
+  --version "$version" --kernel-release "$release" --kernel-commit "$kernel_commit" \
+  --commit "$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD || echo -dirty)" \
+  --channel "${channel:-unknown}" --label "$label" --base-url "$base_url" || die "writing manifest.json failed"
 (cd "$dir" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
 if ((unsigned)); then
   say "Unsigned bundle (--unsigned): install needs --unsigned too"
 else
-  [[ -f keys/fingerprint && -d keys/gnupg ]] || die "no signing key in keys/ (maintainer only), or --unsigned"
-  GNUPGHOME=$ROOT/keys/gnupg gpg --batch --yes --local-user "$(cat keys/fingerprint)" --detach-sign -o "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS"
-  say "Signed SHA256SUMS with $(cat keys/fingerprint)"
+  gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS"
+  say "Signed SHA256SUMS with the release key $SIGNING_KEY"
+fi
+# The one-file download: the finished bundle and the root image beside it in
+# one deterministic tar (tools/lib/bundle-tar.sh). It holds SHA256SUMS.sig,
+# so no checksum inside the bundle can cover it: its .sha256 gets its own
+# signature by the same key instead.
+say "Writing $out/$name.tar (the bundle and the root image, one download)"
+source tools/lib/bundle-tar.sh
+rm -f "$out/$name.tar.sha256.sig"
+bundle_tar "$out" "$name" "$rootname" "$version" || die "writing $out/$name.tar failed"
+if ((unsigned == 0)); then
+  gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$out/$name.tar.sha256.sig" "$out/$name.tar.sha256"
+  say "Signed $name.tar.sha256 with the release key $SIGNING_KEY"
 fi
 ls -l "$dir" "$out"

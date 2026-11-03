@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Publish the signed [omamobile] repository to pkgs.omamobile.org
-# (docs/RELEASES.md §10). Maintainer only: it signs with keys/.
+# (docs/RELEASES.md §10). Maintainer only: it signs with the release key
+# (keys/gnupg.release, tools/lib/signing.sh), through tools/build-packages.
 #
 #   tools/repo-publish [options] [development|stable]
 #     development (the default)
@@ -10,6 +11,11 @@
 #                  signature and checksum, and publish to development
 #     stable       promote: copy development's index and the signed files it
 #                  lists, as they are, to stable (asks first unless --yes)
+#     --expect-index SHA256
+#                  with stable: promote only if development's index is exactly
+#                  this one (its omamobile.db.tar.gz SHA-256), the one a
+#                  release was built and tested from (tools/release promote);
+#                  if development moved since, nothing is promoted
 #     --no-build   publish out/repo as it is
 #     --dry-run    everything except the upload
 #     --yes        don't ask before promoting
@@ -24,8 +30,15 @@
 # It keeps the files of the current index and of the one before it, so a
 # phone can go back one version. Upload order: packages and signatures, then
 # the index, then the pruning, so a phone never sees an index that names a
-# file not there yet. Nothing is uploaded unless every package and the index
-# carry a good signature from a key omamobile-keyring trusts.
+# file not there yet. Nothing is uploaded unless every package the index lists
+# and the index itself carry a good signature from the release key
+# (keys/fingerprint.release), which omamobile-keyring trusts.
+#
+# Moving a repository signed with the original key (keys/gnupg) to the
+# release key, once:
+#   tools/build-packages --resign
+#   tools/repo-publish --no-build development
+#   tools/repo-publish stable          (when stable should carry it too)
 #
 # Server: OMAMOBILE_PKGS_HOST (raven@nostr01.derekross.me), port
 # OMAMOBILE_PKGS_PORT (1022), path OMAMOBILE_PKGS_PATH
@@ -46,7 +59,7 @@ DB=omamobile.db.tar.gz
 say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
 die() { echo "repo-publish: $*" >&2; exit 1; }
 
-channel=development build=1 dry=0 yes=0 remind=0 from_main=0 args=()
+channel=development build=1 dry=0 yes=0 remind=0 from_main=0 expect_index="" skipped_build=0 args=()
 while (($#)); do
   [[ $1 == --from-main ]] || args+=("$1")
   case $1 in
@@ -55,19 +68,29 @@ while (($#)); do
     --no-build) build=0 ;;
     --dry-run) dry=1 ;;
     --yes) yes=1 ;;
+    --expect-index) expect_index=${2:?--expect-index needs a SHA-256}; args+=("$expect_index"); shift ;;
     --remind) remind=1 ;;
-    -h|--help) sed -n '3,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
 done
 
 command -v bsdtar >/dev/null || die "needs bsdtar (libarchive)"
+if [[ -n $expect_index ]]; then
+  [[ $expect_index =~ ^[0-9a-f]{64}$ ]] || die "--expect-index is a SHA-256 in hex"
+  [[ $channel == stable ]] || die "--expect-index goes with stable (a promotion)"
+fi
 
 if ((from_main)); then
   # A detached checkout of origin/main, so half-finished local changes are
   # never published. keys/ and out/ are this tree's; so are the gitignored
-  # prebuilt binaries some PKGBUILDs install (packages/*/…/prebuilt/).
+  # prebuilt binaries some PKGBUILDs install (packages/*/…/prebuilt/) and
+  # the device packages' staged boot files (packages/*/boot-files/, which
+  # tools/build-packages checks against origin/main before building; a
+  # device package refuses to build without them). linux-omamobile's
+  # prebuilt/ comes along but is never built here: build-packages builds it
+  # only when named.
   wt=$ROOT/out/publish-tree
   git fetch -q origin main
   [[ -e $wt/.git ]] || git worktree add -q --detach "$wt" origin/main
@@ -75,7 +98,7 @@ if ((from_main)); then
   git -C "$wt" clean -qfdx -e /keys -e /out
   ln -sfn "$ROOT/keys" "$wt/keys"
   ln -sfn "$ROOT/out" "$wt/out"
-  git ls-files -z --others --ignored --exclude-standard -- packages | grep -z '/prebuilt/' |
+  git ls-files -z --others --ignored --exclude-standard -- packages | grep -zE '/(prebuilt|boot-files)/' |
     rsync -a --from0 --files-from=- ./ "$wt/"
   say "Publishing from origin/main at $(git -C "$wt" rev-parse --short HEAD)"
   exec "$wt/tools/repo-publish" "${args[@]}"
@@ -115,6 +138,11 @@ EOF
   exit 0
 fi
 
+# What is published must be the release key's: a phone trusts the original
+# key too, until omamobile-keyring revokes it, but nothing new is signed by it.
+source tools/lib/signing.sh
+signing_key_load "$ROOT" || exit 1
+release_key=$SIGNING_KEY
 # Signature check against omamobile-keyring's trusted, unrevoked keys only
 keyhome=$(mktemp -d /dev/shm/omamobile-verify.XXXXXX)
 trap 'GNUPGHOME=$keyhome gpgconf --kill gpg-agent 2>/dev/null; rm -rf -- "$keyhome"' EXIT
@@ -126,22 +154,23 @@ signed_ok() {
   local status signer
   status=$(GNUPGHOME=$keyhome gpg --batch --status-fd 1 --verify "$1.sig" "$1" 2>/dev/null) || return 1
   signer=$(awk '$2 == "VALIDSIG" { print $NF }' <<<"$status")
-  [[ -n $signer && " ${trusted[*]} " == *" $signer "* ]]
+  [[ -n $signer && " ${trusted[*]} " == *" $signer "* && $signer == "$release_key" ]]
 }
+resign_hint="sign it again with the release key: tools/build-packages --resign, then tools/repo-publish --no-build development"
 # Every file the index lists is there, matches its checksum and is signed,
 # and so is the index.
 verify() {
   local dir=$1 file sum n=0
   [[ -f $dir/$DB && -f $dir/$DB.sig ]] || die "$dir has no signed index"
-  signed_ok "$dir/$DB" || die "$dir/$DB: no good signature from a trusted key"
+  signed_ok "$dir/$DB" || die "$dir/$DB: no good signature from the release key $release_key ($resign_hint)"
   while read -r file sum; do
     [[ -f $dir/$file ]] || die "$dir: the index lists $file, which is missing"
     [[ $(sha256sum < "$dir/$file" | cut -d' ' -f1) == "$sum" ]] || die "$dir/$file doesn't match the index"
-    [[ -f $dir/$file.sig ]] && signed_ok "$dir/$file" || die "$dir/$file: no good signature from a trusted key"
+    [[ -f $dir/$file.sig ]] && signed_ok "$dir/$file" || die "$dir/$file: no good signature from the release key $release_key ($resign_hint)"
     n=$((n + 1))
   done < <(db_sums "$dir")
   ((n)) || die "$dir: the index lists no packages"
-  echo "    $n packages and the index: checksums and signatures good"
+  echo "    $n packages and the index: checksums good, signed by the release key"
 }
 
 # Bring a channel directory to a new index: the new files, plus the ones the
@@ -227,7 +256,16 @@ upload() {
 if [[ $channel == development ]]; then
   if ((build)); then
     say "Building what changed"
-    tools/build-packages --all
+    # 3: a device package was skipped (its boot files are missing or stale)
+    # and everything else built: publish that, then fail the run
+    rc=0; tools/build-packages --all || rc=$?
+    # 3 with its list in out/repo/.skipped, and nothing else, is a skip
+    if ((rc == 3)) && [[ -s out/repo/.skipped ]]; then
+      skipped_build=1
+      echo "    skipped, publishing the rest: $(tr '\n' ' ' < out/repo/.skipped)"
+    elif ((rc != 0)); then
+      exit "$rc"
+    fi
   fi
   [[ -f out/repo/$ARCH/$DB ]] || die "out/repo has no index; run tools/build-packages"
   say "Checking out/repo"
@@ -239,6 +277,12 @@ if [[ $channel == development ]]; then
 else
   [[ -f $dev/$DB ]] || die "nothing in development to promote"
   verify "$dev"
+  if [[ -n $expect_index ]]; then
+    got=$(sha256sum < "$dev/$DB" | cut -d' ' -f1)
+    [[ $got == "$expect_index" ]] ||
+      die "development's index is $got, not the expected $expect_index: it moved since the release was built; nothing promoted"
+    echo "    development's index is the expected ${expect_index:0:12}"
+  fi
   echo "Promoting to stable:"
   comm -23 <(db_files "$dev") <(db_files "$stb" 2>/dev/null || true) | sed 's/^/    /'
   if ((yes == 0 && dry == 0)); then
@@ -261,3 +305,4 @@ else
   [[ $code == 200 ]] || die "$URL/$channel/$ARCH/omamobile.db answers $code"
 fi
 say "Done: $URL/$channel/$ARCH"
+((skipped_build == 0)) || die "published without the device package(s) tools/build-packages skipped (boot files missing or stale): stage them and publish again"

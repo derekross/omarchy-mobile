@@ -1,0 +1,122 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/stage-boot-files --check, as tools/build-packages runs it before it
+# builds a device package that ships boot files: current files pass; stale,
+# tampered or SOURCES-less ones, or none, refuse. No kernel build needed.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "not ok - $*" >&2; exit 1; }
+pass() { echo "ok - $*"; }
+command -v git >/dev/null && git rev-parse --git-dir >/dev/null 2>&1 || { echo "ok - # SKIP not a git checkout"; exit 0; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+S=tools/stage-boot-files
+bf=$t/boot-files && mkdir -p "$bf"
+cp device/cheetah/device.conf "$bf/device.conf"
+echo dtbo > "$bf/dtbo.img"; echo initramfs > "$bf/initramfs.cpio.lz4"
+"$S" --sources cheetah > "$bf/SOURCES"
+sums() { (cd "$bf" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS); }
+sums
+for f in device/cheetah/device.conf device/cheetah/cheetah-m1-overlay.dts device/cheetah/overlays/aoc-core-test.dtso \
+         initramfs/init packages/omamobile-device-cheetah/src/reboot-to.c; do
+  grep -cE "  $f$" "$bf/SOURCES" >/dev/null || fail "SOURCES covers $f"
+done
+"$S" --check "$bf" > "$t/out" 2>&1 || { cat "$t/out"; fail "current boot files pass --check"; }
+pass "--sources lists the descriptor, the dtbo source, the overlays, initramfs/ and the package's src/; current files pass --check"
+
+refuses() { # what message
+  if "$S" --check "$bf" > "$t/out" 2>&1; then fail "--check refuses $1"; fi
+  grep -qF -- "$2" "$t/out" || { cat "$t/out"; fail "--check, $1: says '$2'"; }
+}
+sed -i 's|^[0-9a-f]*  initramfs/init$|0000000000000000000000000000000000000000000000000000000000000000  initramfs/init|' "$bf/SOURCES"; sums
+refuses "files staged from older sources" "is stale"
+grep -c 'initramfs/init' "$t/out" >/dev/null || fail "and names the changed source"
+"$S" --sources cheetah > "$bf/SOURCES"; sums
+echo tampered >> "$bf/dtbo.img"
+refuses "files that fail their checksums" "fails its checksums"
+echo dtbo > "$bf/dtbo.img"; rm "$bf/SOURCES"; sums
+refuses "files without SOURCES" "has no SOURCES"
+rm -rf "$bf"
+refuses "no boot files at all" "no boot files in"
+pass "--check refuses stale, tampered, SOURCES-less or missing boot files"
+
+grep -qE "grep -zE '/\(prebuilt\|boot-files\)/'" tools/repo-publish || fail "repo-publish --from-main carries boot-files/ into its clean tree"
+grep -qF 'tools/stage-boot-files --check "$d/boot-files"' tools/build-packages || fail "build-packages checks the boot files before building"
+grep -qF '"$d/stage" --verify "$d/prebuilt"' tools/build-packages || fail "build-packages verifies the staged kernel before building"
+grep -qE '^NAMED_ONLY=\(linux-omamobile\)$' tools/build-packages || fail "linux-omamobile is built only when named"
+grep -qF '[[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue' tools/build-packages || fail "and never by default or with --all"
+pass "repo-publish carries boot-files/; build-packages checks them, verifies the kernel, and builds linux-omamobile only when named"
+
+# build-packages with a device package whose boot files are missing: that
+# package is skipped, the rest is built and signed, and the run exits 3
+# (repo-publish publishes the rest, then fails). No Docker, no network: a
+# copy of the repository with stand-ins for the container and repo-add, and
+# a throwaway local key.
+if command -v gpg >/dev/null && command -v zstd >/dev/null; then
+  R=$t/repo && mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin"
+  cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
+  mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
+  printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
+  cat > "$R/tools/lib/alarm.sh" <<'A'
+alarm_die() { echo "error: $*" >&2; exit 1; }
+alarm_say() { echo "==> $*"; }
+alarm_fetch() { :; }
+alarm_build_image() { echo fixture; }
+alarm_base_image() { echo fixture; }
+ALARM_CACHE=$ALARM_TEST_CACHE ALARM_KEYSERVER=none
+A
+  for p in plain omamobile-device-testdev; do
+    mkdir -p "$R/packages/$p"
+    echo 1 > "$R/packages/$p/version"
+    printf 'pkgname=%s\npkgver=$(cat "${startdir:-.}/version")\npkgrel=1\narch=(any)\n' "$p" > "$R/packages/$p/PKGBUILD"
+  done
+  printf '#!/bin/bash\nboot=${OMAMOBILE_BOOT_FILES:-boot-files}\n' > "$R/packages/omamobile-device-testdev/install"
+  # The container: makepkg's result, a package with its .PKGINFO
+  cat > "$t/bin/docker" <<'D'
+#!/bin/bash
+[[ $1 == run ]] || exit 0
+work="" name=""
+while (($#)); do
+  case $1 in -v) [[ $2 != *:/work ]] || work=${2%:/work}; shift ;; -e) [[ $2 != NAME=* ]] || name=${2#NAME=}; shift ;; esac
+  shift
+done
+[[ -n $work && -n $name ]] || exit 0
+d=$(mktemp -d); printf 'pkgname = %s\npkgver = 1-1\narch = any\n' "$name" > "$d/.PKGINFO"
+tar --zstd -cf "$work/out/$name-1-1-any.pkg.tar.zst" -C "$d" .PKGINFO
+echo "$name" >> "$BUILT_LOG"
+D
+  printf '#!/bin/bash\nwhile [[ $1 == -* ]]; do [[ $1 == --key ]] && shift; shift; done\ntouch "$1"; ln -sf "$1" omamobile.db\n' > "$t/bin/repo-add"
+  chmod +x "$t/bin/"*
+  kd=$R/keys/testdev && mkdir -p -m 700 "$kd/gnupg"
+  GNUPGHOME=$kd/gnupg gpg --batch --quiet --passphrase '' --quick-generate-key "test <t@invalid>" ed25519 sign never 2>/dev/null
+  GNUPGHOME=$kd/gnupg gpg --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}' > "$kd/fingerprint"
+  GNUPGHOME=$kd/gnupg gpg --batch --armor --export > "$kd/public.asc"
+  ( cd "$R" && git init -q && git add -A )
+  rc=0
+  (cd "$R" && PATH=$t/bin:$PATH ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built tools/build-packages --nocheck --local testdev \
+     packages/plain packages/omamobile-device-testdev) > "$t/bp.log" 2>&1 || rc=$?
+  gpgconf --homedir "$kd/gnupg" --kill gpg-agent 2>/dev/null || true
+  [[ $rc == 3 ]] || { cat "$t/bp.log"; fail "build-packages exits 3 when a device package's boot files are missing (got $rc)"; }
+  [[ $(cat "$t/built") == plain ]] || { cat "$t/bp.log"; fail "the other package is built, the device package is not"; }
+  [[ -f $R/out/testdev/repo/aarch64/plain-1-1-any.pkg.tar.zst.sig ]] || { cat "$t/bp.log"; fail "and the other package is signed into the repository"; }
+  grep -c 'SKIPPED: omamobile-device-testdev' "$t/bp.log" >/dev/null && grep -c 'not built, boot files missing or stale: omamobile-device-testdev' "$t/bp.log" >/dev/null \
+    || { cat "$t/bp.log"; fail "the skip is named, before the build and at the end"; }
+  [[ $(cat "$R/out/testdev/repo/.skipped") == omamobile-device-testdev ]] || fail "the skip list is in repo/.skipped"
+  # Exit 3 from anything else is 1: a repo-add that returns 3
+  printf '#!/bin/bash\nexit 3\n' > "$t/bin/repo-add"
+  rm -rf "$R/out/testdev/repo/aarch64"/*
+  rc=0
+  (cd "$R" && PATH=$t/bin:$PATH ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built2 tools/build-packages --nocheck --local testdev packages/plain) > "$t/bp2.log" 2>&1 || rc=$?
+  gpgconf --homedir "$kd/gnupg" --kill gpg-agent 2>/dev/null || true
+  [[ $rc == 1 ]] || { cat "$t/bp2.log"; fail "an exit 3 that is no skip becomes 1 (got $rc)"; }
+  [[ ! -e $R/out/testdev/repo/.skipped ]] || fail "and leaves no skip list"
+  grep -qF 'if ((rc == 3)) && [[ -s out/repo/.skipped ]]; then' tools/repo-publish && grep -qF '((skipped_build == 0)) || die' tools/repo-publish \
+    || fail "repo-publish publishes the rest only on exit 3 with a skip list, then fails"
+  grep -qx 'ExecStart=-%h/Projects/omarchy-mobile/tools/repo-publish --remind' tools/systemd/omamobile-publish.service \
+    && [[ $(grep -n 'remind' tools/systemd/omamobile-publish.service | grep ExecStart | cut -d: -f1) -lt $(grep -n 'from-main' tools/systemd/omamobile-publish.service | grep ExecStart | cut -d: -f1) ]] \
+    || fail "the timer's reminder runs first and its failure is ignored, so it runs on a failed publish day"
+  pass "build-packages skips only the device package without boot files, builds and signs the rest, exits 3; repo-publish then publishes and fails"
+else
+  pass "build-packages skip # SKIP no gpg or zstd"
+fi

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+#
+# The Omarchy Mobile kernel for every device (docs/RELEASES.md §4): one arm64
+# Image, its modules and every board's DTB, packed from a finished kernel
+# build. Nothing compiles here: `./stage KERNEL_OUT` first copies the build
+# output (bin/omamobile kernel --release and modules, from a clean checkout
+# of a kernel-<date> release tag on the published omamobile branch, §8;
+# ./stage refuses anything else) into prebuilt/, or point
+# LINUX_OMAMOBILE_PREBUILT at a directory ./stage filled. pkgver comes from
+# the staged release (lib/pkgver), pkgrel from the version file (packaging
+# changes only). The device's omamobile-boot-update hook turns it into boot
+# images; nothing here writes a partition.
+_prebuilt=${LINUX_OMAMOBILE_PREBUILT:-${startdir:-.}/prebuilt}
+pkgname=linux-omamobile
+pkgver=$("${startdir:-.}/lib/pkgver" "$(cat "$_prebuilt/kernel.release" 2>/dev/null)" $(cat "$_prebuilt/kernel.commits" 2>/dev/null) 2>/dev/null || echo 0)
+pkgrel=$(cat "${startdir:-.}/version")
+pkgdesc="The Omarchy Mobile kernel: arm64 Image, modules and the Google boards' DTBs (no boot images: omamobile-boot-update makes them)"
+arch=(aarch64)
+url="https://github.com/derekross/linux-omarchy-mobile"
+license=(GPL-2.0-only)
+depends=(kmod omamobile-boot-update)
+makedepends=(zstd)
+checkdepends=(zstd git)
+# The Image is not ELF and the modules are stripped already (and must stay
+# as built); no debug package
+options=(!strip !debug)
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  [[ $pkgver != 0 ]] || { echo "no staged release kernel in $_prebuilt (run ./stage KERNEL_OUT)" >&2; return 1; }
+  "$startdir/install" "$pkgdir" "$_prebuilt"
+}
