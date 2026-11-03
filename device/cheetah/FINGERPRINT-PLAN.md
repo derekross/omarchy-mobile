@@ -565,7 +565,7 @@ tools/phone-ssh 'systemctl enable omamobile-fp.service'
 reader and installs `libfprint-git`.) Lock, wake the screen, touch the
 circle: unlocks. The PIN still unlocks; with the service stopped the lock
 falls back to the PIN. Rollback: `rm /etc/pam.d/omarchy-lock-fingerprint`,
-`systemctl disable --now omamobile-fp`.
+`systemctl mask --now omamobile-fp` (from 0.1.14 the package's vendor wants link survives `disable`).
 
 ### F11: later
 
