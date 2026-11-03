@@ -2,20 +2,33 @@
 # The modem: CPIF's modules, then Samsung's rfsd and a one-shot cbd in the
 # modem vendor chroot on RAM copies of the NV and firmware partitions
 # (device/cheetah/MODEM-PLAN.md M3.4). Not enabled by the package: the
-# first boots follow the plan's gated runbook. Once enabled it starts the
-# modem at every boot, after the audio stack (the AoC carries call audio).
+# first boots follow the plan's gated runbook, and at boot the whole stack
+# comes from omamobile-modem-boot.target (M4.6). It starts the modem after
+# the audio stack (the AoC carries call audio) and behind the sleep
+# inhibitor (omamobile-modem-inhibit.service), which stays until the reboot.
+#
+# Type=notify: ready once CPIF's ports exist and the profile's read-only
+# check has passed, before the CP is powered on, so a unit ordered after
+# this one sees the ports; the CP's ONLINE is waited for by omamobile-sitd's
+# ExecStartPre (omamobile-modem-cp wait-online). The start script keeps two
+# markers so a hang in the bring-up or with the modem up never repeats at
+# the next boot; a clean stop removes the second (ExecStopPost).
 #
 # The CP stays on while this runs. Stopping it (and so every reboot)
 # powers the CP off before rfsd goes: one recovered UFS error-handler pass.
 # Never restart it: that is a CP power cycle on a CP that was already up.
 [Unit]
 Description=Omarchy Mobile modem (S5300: rfsd and cbd on RAM copies of NV)
-After=systemd-modules-load.service omamobile-aoc.service omamobile-audio.service
+Requires=omamobile-modem-inhibit.service
+After=omamobile-modem-inhibit.service systemd-modules-load.service omamobile-aoc.service omamobile-audio.service
 ConditionPathExists=/usr/lib/omamobile-vendor/modem/root
 
 [Service]
+Type=notify
+NotifyAccess=all
 ExecStart=/usr/lib/omamobile-vendor/omamobile-modem-start
 ExecStop=/usr/lib/omamobile-vendor/omamobile-vendor-chroot modem stop
+ExecStopPost=/usr/lib/omamobile-vendor/omamobile-modem-start --stopped
 Restart=no
 TimeoutStartSec=5min
 TimeoutStopSec=40
