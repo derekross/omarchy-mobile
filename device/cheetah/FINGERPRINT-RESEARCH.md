@@ -631,7 +631,7 @@ Rollback: `fprintd-delete $USER`.
 Enable `omamobile-fp.service` and fprintd. Lock, wake the screen, touch the
 target: unlocks. The password still unlocks; with the service stopped the
 lock falls back to the password.
-Rollback: `systemctl disable --now omamobile-fp`.
+Rollback: `systemctl mask --now omamobile-fp` (from 0.1.14 the package's vendor wants link survives `disable`).
 
 ---
 

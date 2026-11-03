@@ -1,0 +1,961 @@
+// Modified from omarchy-widgets widgets/setiapam/omaprayer/widget.owl@b63886b (MIT, Simon Schubert and contributors; see overrides/LICENSE) for Omarchy Mobile: no location by IP; "auto" asks for a city.
+widget "omaprayer" {
+  size: 3x3
+  minSize: 3x2
+
+  meta {
+    description: "Prayer times timetable and Horizon day strip with Aladhan & Kemenag RI methods, Madhab Asr, ihtiyat tuning, city search, and 7-day schedule"
+    version: "1.2.1"
+    license: "MIT"
+    category: "productivity"
+    owl: 5
+  }
+
+  requires {
+    pacman: []
+  }
+
+  // Persistent user preferences
+  state city = "auto" persist
+  state typedCity = ""
+  state method = "20" persist
+  state school = "0" persist
+  state tuneMin = 0 persist
+  state lang = "id" persist
+  state showSettings = false
+
+  source now = clock every 10s
+
+  // Escape user-typed query for Open-Meteo URL
+  let q = replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
+    trim(city), "%", "%25"), " ", "%20"), "&", "%26"), "#", "%23"), "?", "%3F"), "+", "%2B"), "/", "%2F"),
+    "ä", "%C3%A4"), "ö", "%C3%B6"), "ü", "%C3%BC"), "Ä", "%C3%84"), "Ö", "%C3%96"), "Ü", "%C3%9C"), "ß", "%C3%9F"),
+    "é", "%C3%A9"), "è", "%C3%A8"), "à", "%C3%A0"), "ç", "%C3%A7"), "ñ", "%C3%B1"), "ø", "%C3%B8")
+
+  // Omarchy Mobile's copy: no location by IP address (the original asked a weather service for one).
+  // "auto" now asks for a city instead of guessing one: prayer times for the wrong place are worse than none.
+  let ipArea = null
+
+  // Geocoding via Open-Meteo when city is specified
+  source geo = http(city == "auto" || len(trim(city)) < 2 ? "" : "https://geocoding-api.open-meteo.com/v1/search?name=${q}&count=1") every 1h timeout 10s json status
+  let geoFound = city == "auto" || (geo != null && geo.ok && geo.out.results != null && len(geo.out.results) > 0)
+  let geoResult = city != "auto" && geoFound && geo.out.results != null ? geo.out.results.0 : null
+  let needsCity = city == "auto"
+  let notFound = needsCity || city != "auto" && geo != null && geo.ok && (geo.out.results == null || len(geo.out.results) == 0)
+
+  let isJakarta = lower(trim(city)) == "jakarta"
+
+  // Resolved coordinates & display location
+  let lat = isJakarta ? (city == "auto" && ipArea != null ? ipArea.latitude : -6.2146) : (geoResult != null ? geoResult.latitude : null)
+  let lon = isJakarta ? (city == "auto" && ipArea != null ? ipArea.longitude : 106.8451) : (geoResult != null ? geoResult.longitude : null)
+  let placeName = city == "auto" ? (ipArea != null ? ipArea.areaName.0.value : "Auto") : (geoResult != null ? geoResult.name : city)
+  let countryName = city == "auto" ? (ipArea != null ? ipArea.country.0.value : "") : (geoResult != null ? (geoResult.country ?? "") : "")
+
+  // Timezone & local clock via Open-Meteo
+  source tz = http(lat == null ? "" : "https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=is_day&timezone=auto") every 1h timeout 10s json status
+  let tzOffset = tz != null && tz.ok && tz.out.utc_offset_seconds != null ? tz.out.utc_offset_seconds : (isJakarta ? 25200 : 0)
+  let tzName = tz != null && tz.ok && tz.out.timezone != null ? tz.out.timezone : (isJakarta ? "Asia/Jakarta" : "UTC")
+
+  // Local time in target city's timezone
+  let localSec = now + tzOffset
+  let curMin = floor(((localSec % 86400) + 86400) % 86400 / 60)
+  let curH = floor(curMin / 60)
+  let curM = curMin % 60
+  let curHStr = curH < 10 ? "0${curH}" : "${curH}"
+  let curMStr = curM < 10 ? "0${curM}" : "${curM}"
+  let curTimeStr = "${curHStr}:${curMStr}"
+  let dayFrac = clamp(curMin / 1440, 0, 1)
+
+  // Calendar dates in target city's timezone
+  let isoDate = tz != null && tz.ok && tz.out.current != null && tz.out.current.time != null ? tz.out.current.time : ""
+  let localDay = len(isoDate) >= 10 ? floor(num(sub(isoDate, 8, 10))) : floor(num(fmtTime(now + tzOffset, "d")))
+  let localMonth = len(isoDate) >= 10 ? floor(num(sub(isoDate, 5, 7))) : floor(num(fmtTime(now + tzOffset, "M")))
+  let localYear = len(isoDate) >= 10 ? floor(num(sub(isoDate, 0, 4))) : floor(num(fmtTime(now + tzOffset, "yyyy")))
+
+  let nextMonth = localMonth == 12 ? 1 : localMonth + 1
+  let nextYear = localMonth == 12 ? localYear + 1 : localYear
+
+  // Aladhan tune parameter: imsak,fajr,sunrise,dhuhr,asr,maghrib,sunset,isha,midnight
+  let tuneStr = "0,${tuneMin},0,${tuneMin},${tuneMin},${tuneMin},0,${tuneMin},0"
+
+  // Current and next month calendar from Aladhan (canonical URL without 302 redirect)
+  source cal = http(lat == null ? "" : "https://api.aladhan.com/v1/calendar/${localYear}/${localMonth}?latitude=${lat}&longitude=${lon}&method=${method}&school=${school}&tune=${tuneStr}") every 1h timeout 15s json status
+  source nextCal = http(lat == null || localDay < 25 ? "" : "https://api.aladhan.com/v1/calendar/${nextYear}/${nextMonth}?latitude=${lat}&longitude=${lon}&method=${method}&school=${school}&tune=${tuneStr}") every 1h timeout 15s json status
+
+  let calList = cal != null && cal.ok && cal.out.data != null ? cal.out.data : []
+  let nextCalList = nextCal != null && nextCal.ok && nextCal.out.data != null ? nextCal.out.data : []
+  let allDays = calList + nextCalList
+
+  let todayItem = allDays.find(d => floor(num(d.date.gregorian.day)) == localDay && floor(num(d.date.gregorian.month.number)) == localMonth)
+  let todayIdx = allDays.indexOf(todayItem)
+  let weekDays = todayIdx >= 0 ? take(drop(allDays, todayIdx), 7) : take(allDays, 7)
+
+  // Timings from todayItem
+  let rawTimings = todayItem != null ? todayItem.timings : null
+  let tFajr = rawTimings != null ? sub(rawTimings.Fajr, 0, 5) : (isJakarta ? "04:15" : null)
+  let tSunrise = rawTimings != null ? sub(rawTimings.Sunrise, 0, 5) : (isJakarta ? "05:33" : null)
+  let tDhuhr = rawTimings != null ? sub(rawTimings.Dhuhr, 0, 5) : (isJakarta ? "11:39" : null)
+  let tAsr = rawTimings != null ? sub(rawTimings.Asr, 0, 5) : (isJakarta ? "14:43" : null)
+  let tMaghrib = rawTimings != null ? sub(rawTimings.Maghrib, 0, 5) : (isJakarta ? "17:46" : null)
+  let tIsha = rawTimings != null ? sub(rawTimings.Isha, 0, 5) : (isJakarta ? "18:56" : null)
+  let tImsak = rawTimings != null ? sub(rawTimings.Imsak, 0, 5) : (isJakarta ? "04:05" : null)
+  let tSunset = rawTimings != null ? sub(rawTimings.Sunset, 0, 5) : (isJakarta ? "17:46" : null)
+  let tMidnight = rawTimings != null ? sub(rawTimings.Midnight, 0, 5) : (isJakarta ? "23:39" : null)
+
+  // Milestones in minutes from midnight
+  let fMin = tFajr != null ? floor(num(sub(tFajr, 0, 2))) * 60 + floor(num(sub(tFajr, 3, 5))) : 255
+  let sMin = tSunrise != null ? floor(num(sub(tSunrise, 0, 2))) * 60 + floor(num(sub(tSunrise, 3, 5))) : 333
+  let dMin = tDhuhr != null ? floor(num(sub(tDhuhr, 0, 2))) * 60 + floor(num(sub(tDhuhr, 3, 5))) : 699
+  let aMin = tAsr != null ? floor(num(sub(tAsr, 0, 2))) * 60 + floor(num(sub(tAsr, 3, 5))) : 883
+  let mgMin = tMaghrib != null ? floor(num(sub(tMaghrib, 0, 2))) * 60 + floor(num(sub(tMaghrib, 3, 5))) : 1066
+  let iMin = tIsha != null ? floor(num(sub(tIsha, 0, 2))) * 60 + floor(num(sub(tIsha, 3, 5))) : 1136
+  let imsakMin = tImsak != null ? floor(num(sub(tImsak, 0, 2))) * 60 + floor(num(sub(tImsak, 3, 5))) : 245
+  let sunsetMin = tSunset != null ? floor(num(sub(tSunset, 0, 2))) * 60 + floor(num(sub(tSunset, 3, 5))) : 1066
+  let midnightMin = tMidnight != null ? floor(num(sub(tMidnight, 0, 2))) * 60 + floor(num(sub(tMidnight, 3, 5))) : 1420
+
+  let activeId = curMin < fMin ? "night" :
+    curMin < sMin ? "fajr" :
+    curMin < dMin ? "sunrise" :
+    curMin < aMin ? "dhuhr" :
+    curMin < mgMin ? "asr" :
+    curMin < iMin ? "maghrib" :
+    "isha"
+
+  let nextId = curMin < fMin ? "fajr" :
+    curMin < sMin ? "sunrise" :
+    curMin < dMin ? "dhuhr" :
+    curMin < aMin ? "asr" :
+    curMin < mgMin ? "maghrib" :
+    curMin < iMin ? "isha" :
+    "fajr"
+
+  let isTomorrow = curMin >= iMin && nextId == "fajr"
+
+  let nextNameId = nextId == "fajr" ? "Subuh" :
+    nextId == "sunrise" ? "Terbit" :
+    nextId == "dhuhr" ? "Dzuhur" :
+    nextId == "asr" ? "Ashar" :
+    nextId == "maghrib" ? "Maghrib" :
+    "Isya"
+
+  let nextNameEn = nextId == "fajr" ? "Fajr" :
+    nextId == "sunrise" ? "Sunrise" :
+    nextId == "dhuhr" ? "Dhuhr" :
+    nextId == "asr" ? "Asr" :
+    nextId == "maghrib" ? "Maghrib" :
+    "Isha"
+
+  let nextAr = nextId == "fajr" ? "الفجر" :
+    nextId == "sunrise" ? "الشروق" :
+    nextId == "dhuhr" ? "الظهر" :
+    nextId == "asr" ? "العصر" :
+    nextId == "maghrib" ? "المغرب" :
+    "العشاء"
+
+  let nextName = lang == "ar" ? nextAr : lang == "en" ? nextNameEn : nextNameId
+  let nextTimeRaw = nextId == "fajr" ? tFajr :
+    nextId == "sunrise" ? tSunrise :
+    nextId == "dhuhr" ? tDhuhr :
+    nextId == "asr" ? tAsr :
+    nextId == "maghrib" ? tMaghrib :
+    tIsha
+
+  let nextMin = nextId == "fajr" ? fMin :
+    nextId == "sunrise" ? sMin :
+    nextId == "dhuhr" ? dMin :
+    nextId == "asr" ? aMin :
+    nextId == "maghrib" ? mgMin :
+    iMin
+
+  let minLeft = curMin >= iMin ? (1440 - curMin + fMin) : max(nextMin - curMin, 0)
+  let hLeft = floor(minLeft / 60)
+  let mLeft = minLeft % 60
+  let countdownStr = lang == "en" ? (hLeft > 0 ? "${hLeft}h ${mLeft}m" : "${mLeft}m") :
+    lang == "ar" ? (hLeft > 0 ? "${hLeft}س ${mLeft}د" : "${mLeft}د") :
+    (hLeft > 0 ? "${hLeft}j ${mLeft}m" : "${mLeft}m")
+  let prayerSoon = minLeft <= 15
+
+  let hijriInfo = todayItem != null && todayItem.date != null ? todayItem.date.hijri : null
+  let hijriDisplay = hijriInfo != null ? (lang == "ar" ? "${hijriInfo.day} ${hijriInfo.month.ar} ${hijriInfo.year}" : "${hijriInfo.day} ${hijriInfo.month.en} ${hijriInfo.year} H") : ""
+  let gregDisplay = todayItem != null && todayItem.date != null ? "${todayItem.date.gregorian.day} ${todayItem.date.gregorian.month.en} ${todayItem.date.gregorian.year}" : fmtTime(now + tzOffset, "d MMMM yyyy")
+  let methodName = todayItem != null && todayItem.meta != null && todayItem.meta.method != null ? todayItem.meta.method.name : "Kementerian Agama RI"
+  let schoolName = lang == "en" ? (school == "1" ? "Hanafi" : "Shafi'i") : (school == "1" ? "Hanafi" : "Syafi'i")
+
+  // Prayer list for the tile grid
+  let tilePrayers = [
+    { id: "fajr", name: lang == "ar" ? "الفجر" : lang == "en" ? "Fajr" : "Subuh", time: tFajr, targetMin: fMin },
+    { id: "sunrise", name: lang == "ar" ? "الشروق" : lang == "en" ? "Sunrise" : "Terbit", time: tSunrise, targetMin: sMin },
+    { id: "dhuhr", name: lang == "ar" ? "الظهر" : lang == "en" ? "Dhuhr" : "Dzuhur", time: tDhuhr, targetMin: dMin },
+    { id: "asr", name: lang == "ar" ? "العصر" : lang == "en" ? "Asr" : "Ashar", time: tAsr, targetMin: aMin },
+    { id: "maghrib", name: lang == "ar" ? "المغرب" : "Maghrib", time: tMaghrib, targetMin: mgMin },
+    { id: "isha", name: lang == "ar" ? "العشاء" : lang == "en" ? "Isha" : "Isya", time: tIsha, targetMin: iMin }
+  ]
+
+  // Full timetable for the screen view
+  let screenPrayers = [
+    { id: "imsak", name: "Imsak", ar: "الإمساك", time: tImsak, isNext: false, isCurrent: curMin < fMin && curMin >= imsakMin },
+    { id: "fajr", name: lang == "ar" ? "الفجر" : lang == "en" ? "Fajr" : "Subuh", ar: "الفجر", time: tFajr, isNext: nextId == "fajr", isCurrent: activeId == "fajr" },
+    { id: "sunrise", name: lang == "ar" ? "الشروق" : lang == "en" ? "Sunrise" : "Terbit (Syuruq)", ar: "الشروق", time: tSunrise, isNext: nextId == "sunrise", isCurrent: activeId == "sunrise" },
+    { id: "dhuhr", name: lang == "ar" ? "الظهر" : lang == "en" ? "Dhuhr" : "Dzuhur", ar: "الظهر", time: tDhuhr, isNext: nextId == "dhuhr", isCurrent: activeId == "dhuhr" },
+    { id: "asr", name: lang == "ar" ? "العصر" : lang == "en" ? "Asr" : "Ashar", ar: "العصر", time: tAsr, isNext: nextId == "asr", isCurrent: activeId == "asr" },
+    { id: "sunset", name: lang == "en" ? "Sunset" : lang == "ar" ? "الغروب" : "Terbenam Matahari", ar: "الغروب", time: tSunset, isNext: false, isCurrent: false },
+    { id: "maghrib", name: lang == "ar" ? "المغرب" : "Maghrib", ar: "المغرب", time: tMaghrib, isNext: nextId == "maghrib", isCurrent: activeId == "maghrib" },
+    { id: "isha", name: lang == "en" ? "Isha" : lang == "ar" ? "العشاء" : "Isya", ar: "العشاء", time: tIsha, isNext: nextId == "isha", isCurrent: activeId == "isha" },
+    { id: "midnight", name: lang == "en" ? "Midnight" : lang == "ar" ? "منتصف الليل" : "Tengah Malam (Nisfu Lail)", ar: "منتصف الليل", time: tMidnight, isNext: false, isCurrent: false }
+  ]
+
+  onTap: {
+    showSettings = false
+    screen()
+  }
+
+  // Unified reusable chip styling
+  component BaseChip(label, selected) {
+    Row {
+      fill: width
+      justify: center
+      align: center
+      padding: [4, 7]
+      background: selected ? accent : alpha(surface, 0.9)
+      border: 1
+      borderColor: selected ? accent : alpha(muted, 0.6)
+      Text {
+        text: label
+        style: small
+        bold: selected
+        color: selected ? background : foreground
+        align: center
+        maxLines: 1
+      }
+    }
+  }
+
+  component CityChip(label, val) {
+    Row {
+      fill: width
+      onTap: { city = val; refresh() }
+      BaseChip { label: label; selected: city == val }
+    }
+  }
+
+  component MethodChip(label, val) {
+    Row {
+      fill: width
+      onTap: { method = val; refresh() }
+      BaseChip { label: label; selected: method == val }
+    }
+  }
+
+  component SchoolChip(label, val) {
+    Row {
+      fill: width
+      onTap: { school = val; refresh() }
+      BaseChip { label: label; selected: school == val }
+    }
+  }
+
+  component TuneChip(label, val) {
+    Row {
+      fill: width
+      onTap: { tuneMin = val; refresh() }
+      BaseChip { label: label; selected: tuneMin == val }
+    }
+  }
+
+  component LangChip(label, val) {
+    Row {
+      fill: width
+      onTap: { lang = val }
+      BaseChip { label: label; selected: lang == val }
+    }
+  }
+
+  component PrayerCard(p) {
+    let isCurrent = p.id == activeId
+    let isNext = p.id == nextId
+    let isPast = p.targetMin <= curMin && !isCurrent
+
+    Column {
+      gap: 1
+      align: center
+      padding: [3, 4]
+      background: isCurrent ? alpha(accent, 0.22) : alpha(surface, 0.45)
+      border: 1
+      borderColor: isCurrent ? accent : rgb(0, 0, 0, 0)
+
+      Text {
+        text: p.name
+        fontSize: 10
+        bold: isCurrent
+        color: isCurrent ? accent : isPast ? muted : foreground
+        align: center
+        maxLines: 1
+      }
+      Text {
+        text: p.time ?? "—:—"
+        fontSize: 11
+        bold: isCurrent
+        color: isCurrent ? accent : isPast ? muted : foreground
+        align: center
+        maxLines: 1
+      }
+    }
+  }
+
+  component ScreenRow(row) {
+    Row {
+      gap: 10
+      align: center
+      padding: [10, 8]
+      background: row.isCurrent ? alpha(accent, 0.15) : alpha(surface, 0.3)
+      border: 1
+      borderColor: row.isCurrent ? accent : rgb(0, 0, 0, 0)
+
+      Text {
+        text: row.isCurrent ? "●" : "○"
+        color: row.isCurrent ? accent : muted
+        fontSize: 12
+        width: 16
+        align: center
+      }
+      Column {
+        gap: 0
+        weight: 1
+        Text {
+          text: row.isNext ? "${row.name}  (${countdownStr})" : row.name
+          style: body
+          bold: row.isCurrent
+          color: row.isCurrent ? accent : row.isNext ? (prayerSoon ? red : accent) : foreground
+          maxLines: 1
+        }
+        Text {
+          text: row.ar
+          style: small
+          color: muted
+        }
+      }
+      Text {
+        text: row.time ?? "—:—"
+        style: body
+        bold: row.isCurrent
+        color: row.isCurrent ? accent : foreground
+        width: 65
+        align: end
+      }
+    }
+  }
+
+  Column {
+    gap: 6
+    padding: 0
+
+    // Header: City and Date
+    Row {
+      gap: 6
+      align: center
+      Text {
+        text: needsCity ? "📍 SET A CITY" : notFound ? "⚠️ CITY NOT FOUND" : "🕌 " + upper(placeName)
+        style: label
+        color: notFound ? red : accent
+        bold: true
+        weight: 1
+        maxLines: 1
+      }
+      Text {
+        text: fmtTime(now, "EEE, d MMM")
+        style: small
+        color: muted
+        width: 85
+        align: end
+        maxLines: 1
+      }
+    }
+
+    if notFound {
+      Text {
+        text: needsCity ? (lang == "en" ? "Set a city: tap to choose one." : "Atur kota: klik untuk memilih.") : lang == "en" ? "Location '${city}' not found. Tap to change." : "Kota '${city}' tidak ditemukan. Klik untuk ubah."
+        style: small
+        color: red
+        maxLines: 1
+      }
+    } else {
+      Text {
+        text: hijriDisplay != "" ? hijriDisplay : gregDisplay
+        style: small
+        color: muted
+        maxLines: 1
+      }
+    }
+
+    // Hero Next Prayer Countdown Card
+    Row {
+      gap: 8
+      align: center
+      padding: [8, 6]
+      background: alpha(accent, 0.12)
+      border: 1
+      borderColor: alpha(accent, 0.35)
+
+      Column {
+        gap: 1
+        weight: 1
+        Row {
+          gap: 4
+          align: center
+          Text {
+            text: upper(nextName)
+            fontSize: 16
+            bold: true
+            color: foreground
+            maxLines: 1
+          }
+          if isTomorrow {
+            Text {
+              text: lang == "en" ? "(tmrw)" : lang == "ar" ? "(غداً)" : "(besok)"
+              fontSize: 10
+              color: muted
+              maxLines: 1
+            }
+          }
+        }
+        Text {
+          text: nextTimeRaw ?? "—:—"
+          fontSize: 13
+          color: muted
+          maxLines: 1
+        }
+      }
+
+      Column {
+        width: 82
+        gap: 0
+        align: end
+        Text {
+          text: countdownStr
+          fontSize: 16
+          bold: true
+          color: prayerSoon ? red : accent
+          align: end
+          maxLines: 1
+        }
+        Text {
+          text: prayerSoon ? (lang == "en" ? "prayer time!" : lang == "ar" ? "وقت الصلاة!" : "waktu shalat!") : (lang == "en" ? "remaining" : lang == "ar" ? "متبقي" : "tersisa")
+          style: small
+          color: prayerSoon ? red : muted
+          align: end
+          maxLines: 1
+        }
+      }
+    }
+
+    // Horizon Day Strip
+    Column {
+      gap: 2
+      Row {
+        fill: width
+        align: center
+        Text {
+          text: tzName != "Asia/Jakarta" && tzName != "UTC" && city != "auto" ? "HORIZON · " + tzName : "HORIZON"
+          style: label
+          color: muted
+          fontSize: 9
+          weight: 1
+        }
+        Text {
+          text: curTimeStr
+          style: label
+          color: accent
+          fontSize: 10
+          width: 40
+          align: end
+        }
+      }
+      Canvas {
+        height: 8
+        fill: width
+        rect(0, 0, width, height, radius: 4, fill: alpha(muted, 0.2))
+
+        let xF = clamp((fMin / 1440) * width, 0, width)
+        let xS = clamp((sMin / 1440) * width, 0, width)
+        let xD = clamp((dMin / 1440) * width, 0, width)
+        let xA = clamp((aMin / 1440) * width, 0, width)
+        let xM = clamp((mgMin / 1440) * width, 0, width)
+        let xI = clamp((iMin / 1440) * width, 0, width)
+
+        rect(xF, 0, max(xS - xF, 2), height, fill: alpha(cyan, 0.7))
+        rect(xS, 0, max(xD - xS, 2), height, fill: alpha(surface, 0.4))
+        rect(xD, 0, max(xA - xD, 2), height, fill: alpha(yellow, 0.7))
+        rect(xA, 0, max(xM - xA, 2), height, fill: alpha(orange, 0.7))
+        rect(xM, 0, max(xI - xM, 2), height, fill: alpha(red, 0.7))
+        rect(xI, 0, max(width - xI, 2), height, fill: alpha(blue, 0.7))
+
+        let curX = clamp((curMin / 1440) * width, 0, width)
+        rect(max(curX - 2, 0), 0, 4, height, radius: 2, fill: accent)
+        circle(curX, height / 2, 4, fill: accent)
+      }
+    }
+
+    // Ruled Timetable: 6 prayers
+    Grid {
+      columns: cols < 6 ? 3 : 6
+      gap: 4
+      fill: width
+
+      for p in tilePrayers key p.id {
+        PrayerCard { p: p }
+      }
+    }
+  }
+
+  // Full screen view
+  screen {
+    title: lang == "en" ? "Prayer Times" : lang == "ar" ? "مواقيت الصلاة" : "Jadwal Shalat"
+
+    Column {
+      scroll: true
+      gap: 12
+      padding: [4, 8]
+
+      // Screen Header
+      Row {
+        gap: 10
+        align: center
+        Column {
+          gap: 2
+          weight: 1
+          Text {
+            text: "🕌 " + placeName + (len(countryName) > 0 ? ", " + countryName : "")
+            fontSize: 20
+            bold: true
+            color: foreground
+          }
+          Text {
+            text: gregDisplay + (hijriDisplay != "" ? " · " + hijriDisplay : "")
+            style: small
+            color: muted
+          }
+          Text {
+            text: methodName + " · " + (lang == "en" ? "School: " : lang == "ar" ? "المذهب: " : "Madzhab: ") + schoolName + (tuneMin > 0 ? " · +" + tuneMin + "m" : "")
+            style: label
+            color: accent
+          }
+        }
+        Row {
+          width: 90
+          justify: center
+          align: center
+          padding: [6, 8]
+          background: accent
+          border: 1
+          borderColor: accent
+          onTap: refresh()
+          Text {
+            text: lang == "en" ? "🔄 Refresh" : lang == "ar" ? "🔄 تحديث" : "🔄 Refresh"
+            style: small
+            bold: true
+            color: background
+            align: center
+          }
+        }
+      }
+
+      // View Navigation Tabs
+      Row {
+        gap: 8
+        fill: width
+        Row {
+          weight: 1
+          justify: center
+          align: center
+          padding: [8, 8]
+          background: !showSettings ? accent : alpha(surface, 0.7)
+          border: 1
+          borderColor: !showSettings ? accent : alpha(muted, 0.4)
+          onTap: {
+            showSettings = false
+          }
+          Text {
+            text: lang == "en" ? "📅 Schedule Details" : lang == "ar" ? "📅 تفاصيل الجدول" : "📅 Jadwal Shalat"
+            style: small
+            bold: !showSettings
+            color: !showSettings ? background : foreground
+            align: center
+          }
+        }
+        Row {
+          weight: 1
+          justify: center
+          align: center
+          padding: [8, 8]
+          background: showSettings ? accent : alpha(surface, 0.7)
+          border: 1
+          borderColor: showSettings ? accent : alpha(muted, 0.4)
+          onTap: {
+            showSettings = true
+          }
+          Text {
+            text: lang == "en" ? "⚙️ Settings" : lang == "ar" ? "⚙️ الإعدادات" : "⚙️ Pengaturan"
+            style: small
+            bold: showSettings
+            color: showSettings ? background : foreground
+            align: center
+          }
+        }
+      }
+
+      // PRIMARY VIEW
+      if !showSettings {
+        // Next Prayer Detailed Card
+        Row {
+          gap: 16
+          align: center
+          padding: [14, 12]
+          background: alpha(accent, 0.15)
+          border: 1
+          borderColor: alpha(accent, 0.4)
+
+          Box {
+            width: 72
+            height: 72
+            align: center
+            Ring {
+              fill: true
+              thickness: 7
+              value: clamp(1 - (minLeft / 360), 0.1, 1)
+              color: prayerSoon ? red : accent
+              track: alpha(muted, 0.25)
+            }
+            Column {
+              gap: 0
+              align: center
+              Text {
+                text: nextAr
+                fontSize: 12
+                color: accent
+                align: center
+              }
+              Text {
+                text: nextTimeRaw ?? "—:—"
+                fontSize: 13
+                bold: true
+                align: center
+              }
+            }
+          }
+
+          Column {
+            gap: 2
+            weight: 1
+            Text {
+              text: lang == "en" ? "NEXT PRAYER" : lang == "ar" ? "الصلاة القادمة" : "SHALAT BERIKUTNYA"
+              style: label
+              color: muted
+            }
+            Text {
+              text: upper(nextName)
+              fontSize: 24
+              bold: true
+              color: foreground
+            }
+            Text {
+              text: (lang == "en" ? "Remaining: " : lang == "ar" ? "المتبقي: " : "Tersisa: ") + countdownStr + " (" + (nextTimeRaw ?? "—:—") + ")"
+              style: body
+              color: prayerSoon ? red : accent
+              bold: true
+            }
+          }
+        }
+
+        Text {
+          text: lang == "en" ? "TODAY'S SCHEDULE" : lang == "ar" ? "جدول مواقيت اليوم" : "JADWAL SHALAT HARI INI"
+          style: label
+          color: accent
+        }
+
+        // Full Schedule Rows
+        Column {
+          gap: 4
+          for row in screenPrayers key row.id {
+            ScreenRow { row: row }
+          }
+        }
+
+        // 7-Day Forecast Section
+        if len(weekDays) > 0 {
+          Spacer { height: 4 }
+          Text {
+            text: lang == "en" ? "7-DAY UPCOMING SCHEDULE" : lang == "ar" ? "جدول الـ 7 أيام القادمة" : "JADWAL 7 HARI KE DEPAN"
+            style: label
+            color: accent
+          }
+
+          Column {
+            gap: 4
+            Row {
+              gap: 4
+              padding: [4, 6]
+              Text { text: lang == "en" ? "DAY" : lang == "ar" ? "اليوم" : "HARI"; style: label; color: muted; width: 62 }
+              Text { text: "HIJRI"; style: label; color: muted; weight: 1 }
+              Text { text: lang == "en" ? "FAJR" : lang == "ar" ? "فجر" : "SUBUH"; style: label; color: muted; width: 44; align: center }
+              Text { text: lang == "en" ? "DHUHR" : lang == "ar" ? "ظهر" : "DZUHUR"; style: label; color: muted; width: 44; align: center }
+              Text { text: lang == "en" ? "ASR" : lang == "ar" ? "عصر" : "ASHAR"; style: label; color: muted; width: 44; align: center }
+              Text { text: lang == "ar" ? "مغرب" : "MAGHRIB"; style: label; color: muted; width: 44; align: center }
+              Text { text: lang == "en" ? "ISHA" : lang == "ar" ? "عشاء" : "ISYA"; style: label; color: muted; width: 44; align: center }
+            }
+            for d, idx in weekDays key d.date.gregorian.date {
+              Row {
+                gap: 4
+                padding: [4, 6]
+                background: idx == 0 ? alpha(accent, 0.12) : alpha(surface, 0.3)
+                border: 1
+                borderColor: idx == 0 ? alpha(accent, 0.3) : rgb(0, 0, 0, 0)
+                Text {
+                  text: d.date.gregorian.day + " " + (d.date.gregorian.month.en != null ? sub(d.date.gregorian.month.en, 0, 3) : "")
+                  style: small
+                  bold: idx == 0
+                  color: idx == 0 ? accent : foreground
+                  width: 62
+                }
+                Text {
+                  text: d.date.hijri.day + " " + d.date.hijri.month.en
+                  style: small
+                  color: muted
+                  weight: 1
+                  maxLines: 1
+                }
+                Text { text: sub(d.timings.Fajr, 0, 5); style: small; width: 44; align: center; color: idx == 0 ? accent : foreground }
+                Text { text: sub(d.timings.Dhuhr, 0, 5); style: small; width: 44; align: center }
+                Text { text: sub(d.timings.Asr, 0, 5); style: small; width: 44; align: center }
+                Text { text: sub(d.timings.Maghrib, 0, 5); style: small; width: 44; align: center }
+                Text { text: sub(d.timings.Isha, 0, 5); style: small; width: 44; align: center }
+              }
+            }
+          }
+        }
+
+        // Quick Settings Button
+        Row {
+          fill: width
+          justify: center
+          align: center
+          padding: [8, 10]
+          background: alpha(surface, 0.7)
+          border: 1
+          borderColor: alpha(muted, 0.4)
+          onTap: {
+            showSettings = true
+          }
+          Text {
+            text: lang == "en" ? "⚙️ Change Location, Method or Language" : lang == "ar" ? "⚙️ تغيير الموقع أو الطريقة أو اللغة" : "⚙️ Ubah Lokasi, Metode atau Bahasa"
+            style: small
+            color: accent
+            align: center
+          }
+        }
+      }
+
+      // SETTINGS VIEW
+      if showSettings {
+        Row {
+          fill: width
+          align: center
+          padding: [8, 10]
+          background: alpha(accent, 0.15)
+          border: 1
+          borderColor: alpha(accent, 0.5)
+          onTap: {
+            showSettings = false
+          }
+          Text {
+            text: lang == "en" ? "← Back to Schedule Details" : lang == "ar" ? "← العودة إلى تفاصيل الجدول" : "← Kembali ke Jadwal Shalat"
+            style: small
+            bold: true
+            color: accent
+          }
+        }
+
+        // 1. Location Settings
+        Column {
+          gap: 6
+          padding: [10, 10]
+          background: alpha(surface, 0.4)
+          border: 1
+          borderColor: alpha(border, 0.5)
+
+          Text {
+            text: lang == "en" ? "📍 CITY / LOCATION SETTINGS" : lang == "ar" ? "📍 إعدادات المدينة / الموقع" : "📍 PENGATURAN KOTA / LOKASI"
+            style: label
+            color: accent
+          }
+          Text {
+            text: lang == "en" ? "Type city name and press Search / Enter, or pick below:" : lang == "ar" ? "اكتب اسم المدينة واضغط بحث أو اختر من القائمة أدناه:" : "Ketik nama kota lalu tekan Cari / Enter, atau klik pilihan di bawah:"
+            style: small
+            color: muted
+          }
+
+          Row {
+            gap: 6
+            align: center
+            Input {
+              weight: 1
+              placeholder: lang == "en" ? "Type city (e.g. Jakarta, London)..." : lang == "ar" ? "اكتب اسم المدينة (مثال: مكة)..." : "Ketik kota (mis: Jakarta, Bandung)..."
+              clear: false
+              onChange: {
+                typedCity = value
+              }
+              onSubmit: {
+                city = len(value) > 0 ? value : city
+                refresh()
+              }
+            }
+            Row {
+              width: 65
+              justify: center
+              align: center
+              padding: [7, 8]
+              background: accent
+              border: 1
+              borderColor: accent
+              onTap: {
+                city = len(typedCity) > 0 ? typedCity : city
+                refresh()
+              }
+              Text {
+                text: lang == "en" ? "Search" : lang == "ar" ? "بحث" : "Cari"
+                style: small
+                bold: true
+                color: background
+                align: center
+              }
+            }
+          }
+
+          Grid {
+            columns: 4
+            gap: 6
+            CityChip { label: "Jakarta"; val: "Jakarta" }
+            CityChip { label: "Bandung"; val: "Bandung" }
+            CityChip { label: "Surabaya"; val: "Surabaya" }
+            CityChip { label: "Yogya"; val: "Yogyakarta" }
+            CityChip { label: "Medan"; val: "Medan" }
+            CityChip { label: "Makassar"; val: "Makassar" }
+            CityChip { label: lang == "ar" ? "مكة" : "Makkah"; val: "Mecca" }
+            CityChip { label: "📍 Auto"; val: "auto" }
+          }
+        }
+
+        // 2. Calculation Method & Madzhab
+        Column {
+          gap: 6
+          padding: [10, 10]
+          background: alpha(surface, 0.4)
+          border: 1
+          borderColor: alpha(border, 0.5)
+
+          Text {
+            text: lang == "en" ? "📐 CALCULATION METHOD" : lang == "ar" ? "📐 طريقة الحساب" : "📐 METODE PERHITUNGAN"
+            style: label
+            color: accent
+          }
+          Grid {
+            columns: 2
+            gap: 6
+            MethodChip { label: lang == "en" ? "Kemenag RI (Indonesia)" : "Kemenag RI"; val: "20" }
+            MethodChip { label: lang == "en" ? "Muslim World League" : "MWL (Rabitah)"; val: "3" }
+            MethodChip { label: lang == "en" ? "Umm al-Qura Mecca" : "Umm al-Qura Makkah"; val: "4" }
+            MethodChip { label: lang == "en" ? "Egyptian Authority" : "Mesir (EGAS)"; val: "5" }
+            MethodChip { label: lang == "en" ? "Singapore (MUIS)" : "Singapura (MUIS)"; val: "11" }
+            MethodChip { label: lang == "en" ? "ISNA (North America)" : "ISNA (Amerika)"; val: "2" }
+          }
+
+          Spacer { height: 4 }
+          Text {
+            text: lang == "en" ? "⚖️ ASR JURISTIC METHOD (MADHAB)" : lang == "ar" ? "⚖️ مذهب وقت العصر" : "⚖️ MADZHAB WAKTU ASHAR"
+            style: label
+            color: accent
+          }
+          Grid {
+            columns: 2
+            gap: 6
+            SchoolChip { label: lang == "en" ? "Shafi'i (Standard)" : "Syafi'i (Standar)"; val: "0" }
+            SchoolChip { label: lang == "en" ? "Hanafi (Later Asr)" : "Hanafi (Bayangan 2x)"; val: "1" }
+          }
+
+          Spacer { height: 4 }
+          Text {
+            text: lang == "en" ? "⏱️ IHTIYAT SAFETY MARGIN (MINS)" : lang == "ar" ? "⏱️ تصحيح الاحتياط (دقائق)" : "⏱️ KOREKSI IHTIYAT (MENIT)"
+            style: label
+            color: accent
+          }
+          Grid {
+            columns: 4
+            gap: 6
+            TuneChip { label: "0m"; val: 0 }
+            TuneChip { label: "+1m"; val: 1 }
+            TuneChip { label: lang == "en" ? "+2m (Default RI)" : "+2m (RI)"; val: 2 }
+            TuneChip { label: "+3m"; val: 3 }
+          }
+
+          Spacer { height: 4 }
+          Text {
+            text: lang == "en" ? "🌐 LANGUAGE" : lang == "ar" ? "🌐 اللغة" : "🌐 BAHASA / LANGUAGE"
+            style: label
+            color: accent
+          }
+          Grid {
+            columns: 3
+            gap: 6
+            LangChip { label: "Indonesia"; val: "id" }
+            LangChip { label: "English"; val: "en" }
+            LangChip { label: "العربية"; val: "ar" }
+          }
+        }
+
+        // Done button
+        Row {
+          fill: width
+          justify: center
+          align: center
+          padding: [9, 10]
+          background: accent
+          border: 1
+          borderColor: accent
+          onTap: {
+            showSettings = false
+          }
+          Text {
+            text: lang == "en" ? "✓ Done / Back to Schedule" : lang == "ar" ? "✓ تم / العودة إلى الجدول" : "✓ Selesai / Kembali ke Jadwal"
+            style: small
+            bold: true
+            color: background
+            align: center
+          }
+        }
+      }
+
+      // Footer
+      Spacer { height: 6 }
+      Row {
+        justify: spaceBetween
+        align: center
+        Text {
+          text: (lang == "en" ? "Timezone: " : lang == "ar" ? "المنطقة الزمنية: " : "Zona Waktu: ") + tzName
+          style: small
+          color: muted
+        }
+        Row {
+          padding: [8, 6]
+          background: alpha(surface, 0.9)
+          border: 1
+          borderColor: alpha(muted, 0.6)
+          onTap: close()
+          Text {
+            text: lang == "en" ? "✕ Close" : lang == "ar" ? "✕ إغلاق" : "✕ Tutup"
+            style: small
+            color: foreground
+          }
+        }
+      }
+    }
+  }
+}

@@ -5,6 +5,14 @@
 # bring-up runbook in FINGERPRINT-PLAN.md).
 #
 #   omamobile-fp-chroot check            preconditions only; changes nothing
+#   omamobile-fp-chroot paths            the device and paths in use; read-only
+#   omamobile-fp-chroot preflight        the safety checks a start runs before
+#                                        storageproxyd (the read-only copies,
+#                                        the TDP guard, once per boot). Not a
+#                                        dry check: it makes the copies, and on
+#                                        success it counts as this boot's start,
+#                                        so the service then refuses until a
+#                                        reboot (start runs it itself)
 #   omamobile-fp-chroot start [STAGE]    start the stack up to STAGE, in the
 #                                        foreground (systemd runs it), and
 #                                        supervise it until stopped
@@ -25,6 +33,35 @@
 # read-only, and only $STATE (Trusty's secure storage files, the HAL's data)
 # persists. It shares the host's network namespace on purpose: the sensor
 # driver's netlink socket exists only in the initial one.
+#
+# Safety before storageproxyd (preflight; FINGERPRINT-PLAN F19 and
+# section 4). Every start runs storageproxyd, and Trusty's storage writes
+# the RPMB, so:
+#   - the read-only copies (the 7 Pro): at the first start it copies
+#     mfg_data (dd) and persist:/ss/0 and /ss/nsp (debugfs, which reads the
+#     partition without mounting it) into $STATE and records their sha256 in
+#     $STATE/provenance. Both partitions must read ro=1 (the storage guard)
+#     and persist must not be mounted read-write;
+#   - the TDP guard: no storageproxyd without the TDP copy (an empty TDP
+#     against stock's RPMB anchor could break stock's persistent store for
+#     good), and none once the copy, or persist:/ss/0 itself, no longer
+#     matches the recorded hash: Linux or a stock boot changed TDP, and going
+#     on would bury that under more writes (FINGERPRINT-PLAN F19);
+#   - once per boot: Trusty keeps each store's state for the whole boot, and
+#     a storage proxy stopped and started again in the same boot crashed
+#     Trusty's storage app on 2026-11-02 (FINGERPRINT-PLAN F19). A marker in
+#     /run refuses a second start until a reboot, and the inner start
+#     (in the namespace) runs only with the token preflight wrote there;
+#   - a start that never got running: a marker in $STATE is set before
+#     storageproxyd and cleared once the stack runs. Found at the next boot,
+#     it means that start died on the way (Trusty halted, which also takes
+#     the AoC's sound and sensors with it), so that boot skips fingerprint
+#     once and the one after tries again.
+#
+# The overrides of the device, the state and the partitions' and markers'
+# paths (OMAMOBILE_FP_DEVICE, _STATE, _RUN, _SYSBLOCK, _DEVDIR, _MOUNTS,
+# _BOOT_ID, _UIDIR) are honoured only with
+# OMAMOBILE_FP_TEST=1, which the unit never sets (test/preflight).
 set -euo pipefail
 
 IMAGE=${OMAMOBILE_FP_IMAGE:-/usr/lib/omamobile-fp/root}
@@ -44,7 +81,9 @@ fp_device() {
     *) echo cheetah ;;
   esac
 }
-DEVICE=${OMAMOBILE_FP_DEVICE:-$(fp_device)}
+# From the board's compatible string; only test/preflight may override it
+DEVICE=$(fp_device)
+[[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && DEVICE=${OMAMOBILE_FP_DEVICE:-$DEVICE}
 case $DEVICE in
   cheetah)
     TA=g7.app
@@ -67,8 +106,28 @@ case $DEVICE in
 esac
 PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
 PROPS_DEVICE=${OMAMOBILE_FP_PROPS_DEVICE:-/usr/lib/omamobile-fp/props-$DEVICE.conf}
-STATE=${OMAMOBILE_FP_STATE:-/var/lib/omamobile-fp}
+STATE=/var/lib/omamobile-fp
+[[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && STATE=${OMAMOBILE_FP_STATE:-$STATE}
 RUN=/run/omamobile-fp
+# Where the partitions are found
+SYSBLOCK=/sys/class/block
+DEVDIR=/dev
+MOUNTS=/proc/mounts
+BOOT_ID_FILE=/proc/sys/kernel/random/boot_id
+# test/preflight points these at a fake tree; nothing else may
+if [[ ${OMAMOBILE_FP_TEST:-} == 1 ]]; then
+  RUN=${OMAMOBILE_FP_RUN:-$RUN}
+  SYSBLOCK=${OMAMOBILE_FP_SYSBLOCK:-$SYSBLOCK}
+  DEVDIR=${OMAMOBILE_FP_DEVDIR:-$DEVDIR}
+  MOUNTS=${OMAMOBILE_FP_MOUNTS:-$MOUNTS}
+  BOOT_ID_FILE=${OMAMOBILE_FP_BOOT_ID:-$BOOT_ID_FILE}
+fi
+PROVENANCE=$STATE/provenance
+# Set before storageproxyd, cleared once the stack runs (see the header).
+PENDING=$STATE/start-pending
+# Set once storageproxyd may have started this boot; /run goes with the
+# reboot, which is exactly when Trusty's state does.
+MARKER=$RUN/storageproxyd-started
 ROOT=$RUN/root
 NSPID=$RUN/ns.pid
 
@@ -83,6 +142,7 @@ SOCKDIR=$RUN/sock
 # world-readable, unlike everything else here. In the chroot it is
 # /dev/socket/omamobile-fp-ui.
 UIDIR=/run/omamobile-fp-ui
+[[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && UIDIR=${OMAMOBILE_FP_UIDIR:-$UIDIR}
 # The shell keeps a file fresh in here while the on-screen keyboard is up
 # (its keys can cover the sensor); the bridge then ignores touches on the
 # sensor. Sticky and world-writable like /tmp: a user can only turn
@@ -91,23 +151,64 @@ INHIBITDIR=$UIDIR/inhibit
 
 say() { printf 'omamobile-fp: %s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
+# A refusal of the data checks: unlike a failed start it recurs at every
+# boot until someone acts, so the desktop is told why (world-readable, like
+# the bridge's state file; onboarding reads it).
+refuse() {
+  install -d -m 0755 "$UIDIR" 2>/dev/null && echo data-check > "$UIDIR/off-reason" 2>/dev/null || true
+  die "$*"
+}
 
 # Host tools, resolved now: the Android processes get an Android PATH, and
 # env(1) would look chroot up in that.
 CHROOT_BIN=$(PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v chroot || true)
 
+# A supervised child still running (not gone, not a zombie)? PIDS[] holds
+# the namespace's PIDs, so this reads the namespace's procfs, which setup()
+# mounts at $ROOT/proc; the host's /proc would answer for another process.
+alive() {
+  local st
+  st=$(sed 's/^.*) //' "$ROOT/proc/$1/stat" 2>/dev/null) || return 1
+  [[ -n $st && ${st%% *} != Z ]]
+}
+
+# TERM the named children, then wait up to $1 tenths of a second for them.
+stop_children() {
+  local tenths=$1 n p i any; shift
+  for n in "$@"; do
+    p=${PIDS[$n]:-}
+    [[ -n $p ]] && kill -TERM "$p" 2>/dev/null || true
+  done
+  for ((i = 0; i < tenths; i++)); do
+    any=0
+    for n in "$@"; do
+      p=${PIDS[$n]:-}
+      [[ -n $p ]] && alive "$p" && any=1
+    done
+    ((any)) || return 0
+    sleep 0.1
+  done
+  say "still running after $((tenths / 10)) s: $*"
+}
+
 # Stop everything once: ignore further TERM/INT first, so the group-wide
-# kill below cannot re-enter this handler, then signal the process group
-# and exit. As the namespace's PID 1, exiting also ends every process left.
+# kill below cannot re-enter this handler. The bridge and the HALs go first,
+# and storageproxyd last, so no trusted-app commit is in flight when the
+# proxy disappears (a proxy killed under a live TA left Trusty's storage
+# inconsistent on 2026-11-02, FINGERPRINT-PLAN F19). Then the process group,
+# and exit: as the namespace's PID 1, exiting also ends every process left.
 STOPPING=
 stop() {
   local code=${1:-0}
   [[ -n $STOPPING ]] && exit "$code"
   STOPPING=1
   trap '' TERM INT
-  say "stopping"
+  say "stopping: the bridge and the HALs first, the storage proxy last"
   # no capture runs any more: the desktop drops its target
   rm -f "$UIDIR/state.json" "$UIDIR/state.json.new"
+  stop_children 100 bridge fingerprint
+  stop_children 50 gatekeeper keymint
+  stop_children 50 storageproxyd
   kill -TERM 0 2>/dev/null || true
   exit "$code"
 }
@@ -145,10 +246,169 @@ check() {
   sg=$(rpmb_sg)
   [[ -n $sg ]] || { say "no SCSI generic node for the RPMB LUN $RPMB_LUN (modprobe sg)"; ok=0; }
   [[ -n $sg ]] && say "RPMB: /dev/$sg"
-  [[ -f $STATE/mfg_data.img ]] ||
-    say "no $STATE/mfg_data.img: the HAL will run without factory calibration"
+  if ((MAP_STORES)); then
+    [[ -f $STATE/mfg_data.img ]] ||
+      say "no $STATE/mfg_data.img: the HAL will run without factory calibration"
+  else
+    [[ -f $STATE/mfg_data.img ]] ||
+      say "no $STATE/mfg_data.img yet: the first start copies it from mfg_data"
+  fi
+  [[ -n ${OMAMOBILE_FP_IN_NS:-} || ! -e $MARKER ]] || say "storageproxyd already started this boot: a new start needs a reboot"
   ((ok)) || exit 1
   say "preconditions met"
+}
+
+# --- Safety before storageproxyd (see the header) ---------------------------
+
+# The block device name of a partition, by PARTNAME (the Arch root has no
+# /dev/disk/by-partlabel).
+part_dev() {
+  local f
+  for f in "$SYSBLOCK"/*/uevent; do
+    grep -qx "PARTNAME=$1" "$f" 2>/dev/null && { basename "$(dirname "$f")"; return 0; }
+  done
+  return 1
+}
+
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+recorded() { [[ ! -f $PROVENANCE ]] || awk -v n="$1" '$2 == n {print $1; exit}' "$PROVENANCE"; }
+
+# A partition fit to be read: found, read-only (the storage guard), and not
+# mounted read-write. Prints its device name.
+ro_part() {
+  local d
+  d=$(part_dev "$1") || die "no $1 partition (PARTNAME=$1 in $SYSBLOCK/*/uevent)"
+  [[ $(cat "$SYSBLOCK/$d/ro" 2>/dev/null) == 1 ]] ||
+    refuse "$1 ($d) is not read-only: the storage guard must keep it ro=1. Nothing copied, nothing started"
+  if awk -v d="$DEVDIR/$d" '$1 == d && $4 ~ /(^|,)rw(,|$)/ {f = 1} END {exit !f}' "$MOUNTS" 2>/dev/null; then
+    refuse "$1 ($d) is mounted read-write. Nothing copied, nothing started"
+  fi
+  printf '%s\n' "$d"
+}
+
+# Read one file out of persist's ext4 with debugfs: no mount, no journal
+# replay, nothing written to the partition. Fails on an empty result.
+persist_dump() { # $1 path in persist, $2 output, $3 the partition's device
+  rm -f "$2"
+  debugfs -R "dump -p $1 $2" "$DEVDIR/$3" >/dev/null 2>&1 || true
+  [[ -s $2 ]]
+}
+
+# The 7 Pro's read-only copies, once (FINGERPRINT-PLAN F19.3, done by the
+# runner): mfg_data and persist:/ss/{0,nsp} into $STATE, their sha256
+# recorded in $STATE/provenance. A phone set up by hand (copies there, no
+# provenance) has its TDP copy checked against persist:/ss/0 and adopted.
+provision() {
+  local p m tmp
+  [[ -f $PROVENANCE ]] && return 0
+  p=$(ro_part persist)
+  m=$(ro_part mfg_data)
+  command -v debugfs >/dev/null || die "no debugfs (e2fsprogs): can't read persist without mounting it"
+  install -d -m 0700 "$STATE" "$STATE/persist-ss"
+  tmp=$STATE/.provision
+  rm -rf "$tmp"
+  install -d -m 0700 "$tmp"
+  if [[ -e $STATE/persist-ss/0 ]]; then
+    persist_dump /ss/0 "$tmp/0" "$p" || die "can't read persist:/ss/0 to check the existing TDP copy"
+    cmp -s "$tmp/0" "$STATE/persist-ss/0" ||
+      refuse "$STATE/persist-ss/0 differs from persist:/ss/0: Linux's TDP copy and stock's no longer agree. Not starting: ask (FINGERPRINT-PLAN F19)"
+    say "the existing TDP copy matches persist:/ss/0: recording it"
+  else
+    persist_dump /ss/0 "$tmp/0" "$p" ||
+      refuse "persist has no /ss/0 (or it can't be read): without a TDP copy storageproxyd won't start"
+    persist_dump /ss/nsp "$tmp/nsp" "$p" ||
+      say "persist has no /ss/nsp: Trusty starts an empty one (it has no rollback check)"
+    mv "$tmp/0" "$STATE/persist-ss/0"
+    [[ ! -f $tmp/nsp ]] || mv "$tmp/nsp" "$STATE/persist-ss/nsp"
+    say "copied persist:/ss read-only (debugfs; persist is never mounted)"
+  fi
+  dd if="$DEVDIR/$m" of="$tmp/mfg_data.img" bs=1M status=none || die "can't read mfg_data"
+  [[ -s $tmp/mfg_data.img ]] || die "mfg_data read empty"
+  chmod 0600 "$tmp/mfg_data.img"
+  if [[ -s $STATE/mfg_data.img ]] && cmp -s "$tmp/mfg_data.img" "$STATE/mfg_data.img"; then
+    say "the existing mfg_data.img matches the partition: recording it"
+  else
+    if [[ -e $STATE/mfg_data.img ]]; then
+      mv -- "$STATE/mfg_data.img" "$STATE/mfg_data.img.before-provision.$(date +%Y%m%d%H%M%S)"
+      say "the existing mfg_data.img differs from the partition: moved aside, copied again"
+    fi
+    mv "$tmp/mfg_data.img" "$STATE/mfg_data.img"
+    say "copied mfg_data read-only (the factory calibration; the partition is never written)"
+  fi
+  rm -rf "$tmp"
+  {
+    echo "# omamobile-fp-chroot: read-only copies, $(date -Is 2>/dev/null || date). Never edit."
+    echo "$(sha "$STATE/persist-ss/0")  persist-ss/0"
+    [[ ! -f $STATE/persist-ss/nsp ]] || echo "$(sha "$STATE/persist-ss/nsp")  persist-ss/nsp"
+    echo "$(sha "$STATE/mfg_data.img")  mfg_data.img"
+  } > "$PROVENANCE.new"
+  chmod 0600 "$PROVENANCE.new"
+  mv "$PROVENANCE.new" "$PROVENANCE"
+  say "recorded in $PROVENANCE: $(awk '!/^#/ {printf "%s %.16s  ", $2, $1}' "$PROVENANCE")"
+}
+
+# No storageproxyd without a TDP copy that still matches its recorded hash,
+# and a persist:/ss/0 that still matches it too. A difference refuses the
+# start rather than warning: once Linux has written TDP (or stock has, after
+# a slot A boot), every further start moves the RPMB anchor on from the
+# copy stock would read, and only the maintainer can decide what is safe.
+tdp_guard() {
+  local want got p tmp
+  if ((MAP_STORES)); then
+    # the 9a: TDP is tdp.img, the F3 copy of trusty_persist (before the
+    # first mapped run, that copy as persist-ss/0)
+    [[ -f $STATE/tdp.img || ( -f $STATE/persist-ss/0 && ! -L $STATE/persist-ss/0 && -s $STATE/persist-ss/0 ) ]] ||
+      refuse "no TDP copy ($STATE/tdp.img): storageproxyd won't start without it (device/tegu/FINGERPRINT-PLAN.md F4b)"
+    return 0
+  fi
+  [[ -s $STATE/persist-ss/0 ]] ||
+    refuse "no TDP copy ($STATE/persist-ss/0, recorded in $PROVENANCE): storageproxyd won't start without it. Don't recreate it by hand: ask (FINGERPRINT-PLAN F19)"
+  want=$(recorded persist-ss/0)
+  [[ -n $want ]] || die "$PROVENANCE has no persist-ss/0 line"
+  got=$(sha "$STATE/persist-ss/0")
+  [[ $got == "$want" ]] ||
+    refuse "the TDP copy changed (sha256 ${got:0:16}, recorded ${want:0:16}): Linux wrote Trusty's persistent store, so stock's persist:/ss/0 no longer matches the RPMB. Refusing to start: report it (FINGERPRINT-PLAN F19)"
+  p=$(ro_part persist)
+  install -d -m 0755 "$RUN"
+  tmp=$RUN/persist-ss0.check
+  persist_dump /ss/0 "$tmp" "$p" || die "can't read persist:/ss/0 to check it against the copy"
+  got=$(sha "$tmp")
+  rm -f "$tmp"
+  [[ $got == "$want" ]] ||
+    refuse "persist:/ss/0 changed since the copy was made (sha256 ${got:0:16}, recorded ${want:0:16}; did stock Android run?): the copy no longer matches the RPMB. Refusing to start: ask (FINGERPRINT-PLAN F19)"
+  want=$(recorded mfg_data.img)
+  if [[ -n $want && -f $STATE/mfg_data.img && $(sha "$STATE/mfg_data.img") != "$want" ]]; then
+    say "warning: $STATE/mfg_data.img differs from its recorded copy (the partition itself is never written)"
+  fi
+  return 0
+}
+
+# Everything before storageproxyd. On success the marker is set: from here
+# on this boot's storage proxy counts as started, even if a later step fails.
+preflight() {
+  if [[ -e $MARKER ]]; then
+    die "secure storage already ran this boot ($(sed "s/ token .*//" "$MARKER" 2>/dev/null || true)): Trusty keeps its storage state until a reboot, and a second storage proxy in the same boot can crash it. Reboot to start fingerprint again"
+  fi
+  local boot pending
+  boot=$(cat "$BOOT_ID_FILE" 2>/dev/null || echo unknown)
+  if [[ -f $PENDING ]]; then
+    pending=$(cat "$PENDING" 2>/dev/null || true)
+    if [[ ${pending%% *} != "$boot" ]]; then
+      rm -f "$PENDING"
+      die "the last start (${pending#* }) never got running: it may have halted Trusty, which also stops the AoC's sound and sensors. Skipping fingerprint this boot; the next boot tries again (journalctl -b -1 -u omamobile-fp)"
+    fi
+  fi
+  ((MAP_STORES)) || provision
+  tdp_guard
+  rm -f "$UIDIR/off-reason" 2>/dev/null || true
+  install -d -m 0755 "$RUN"
+  TOKEN=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  # noclobber opens with O_EXCL: of two starts racing past the check above,
+  # only one gets the marker
+  (set -o noclobber; umask 077; echo "$(date -Is 2>/dev/null || date) pid $$ token $TOKEN" > "$MARKER") 2>/dev/null ||
+    die "secure storage already ran this boot (another start got there first). Reboot to start fingerprint again"
+  install -d -m 0700 "$STATE"
+  echo "$boot $(date -Is 2>/dev/null || date)" > "$PENDING"
 }
 
 # Bind $1 onto $2 (created as a file or directory to match), optionally ro.
@@ -325,12 +585,14 @@ spawn() {
   local libs=$LIBS_VENDOR
   [[ $kind == system ]] && libs=$LIBS_SYSTEM
   say "starting $name"
+  # The log prefix runs in a process substitution, so $! is the program
+  # itself (env and chroot exec it), which stop() signals by name.
   env -i PATH=/system/bin:/vendor/bin \
     LD_LIBRARY_PATH="$libs" LD_PRELOAD=/omamobile/omamobile-fp-shim.so \
     OMAMOBILE_FP_PROPS=/dev/__omamobile_props__ \
     OMAMOBILE_FP_LOGLEVEL="${OMAMOBILE_FP_LOGLEVEL:-3}" \
     ANDROID_ROOT=/system ANDROID_DATA=/data \
-    "$CHROOT_BIN" "$ROOT" "$@" 2>&1 | sed -u "s/^/[$name] /" &
+    "$CHROOT_BIN" "$ROOT" "$@" > >(sed -u "s/^/[$name] /") 2>&1 &
   PIDS[$name]=$!
 }
 
@@ -348,6 +610,12 @@ declare -A PIDS=()
 start() {
   local stage=${1:-bridge} sg
   case $stage in storage|apploader|keys|hal|bridge) ;; *) die "unknown stage $stage" ;; esac
+  if [[ -n ${OMAMOBILE_FP_IN_NS:-} ]]; then
+    # Only after this boot's preflight: its marker carries the token it
+    # handed down, so OMAMOBILE_FP_IN_NS=1 alone can't skip the checks.
+    [[ ${OMAMOBILE_FP_TOKEN:-} =~ ^[0-9a-f]{32}$ && -f $MARKER && $(sed -n 's/.* token //p' "$MARKER") == "$OMAMOBILE_FP_TOKEN" ]] ||
+      die "the inner start runs only after this boot's preflight (omamobile-fp-chroot start)"
+  fi
   # Modules the stack needs, blacklisted from autoload (omamobile-device-
   # cheetah: omamobile-fingerprint.conf): load them by name, as needed.
   if [[ -z ${OMAMOBILE_FP_IN_NS:-} ]]; then
@@ -365,16 +633,27 @@ start() {
   [[ $stage == bridge && -z $(touch_event) ]] && die "no touchscreen ($TOUCH_NAME)"
   mkdir -p "$RUN"
   if [[ -z ${OMAMOBILE_FP_IN_NS:-} ]]; then
+    # Consent, the read-only copies, the TDP guard, once per boot: every
+    # stage starts storageproxyd.
+    preflight
+    export OMAMOBILE_FP_TOKEN=$TOKEN
     # Re-exec in a private mount namespace (and PID namespace, so the
     # Android processes die with us). Not a network namespace: see above.
+    # systemd signals only this process (KillMode=mixed); unshare hands
+    # TERM on to our PID 1, whose stop() takes the stack down in order.
     rm -f "$NSPID"
-    exec unshare --mount --propagation private --pid --fork --kill-child \
+    local fwd=()
+    unshare --help 2>/dev/null | grep -c -- '--forward-signals' >/dev/null && fwd=(--forward-signals)
+    exec unshare --mount --propagation private --pid --fork --kill-child "${fwd[@]}" \
       env OMAMOBILE_FP_IN_NS=1 "$0" start "$stage"
   fi
   # unshare's child: PID 1 inside, its parent is unshare outside. /run is
   # shared with the host until our mounts, so record the host PID for ns/run.
   awk '/^NSpid:/ {print $2}' /proc/self/status > "$NSPID"
   trap 'stop 0' TERM INT
+  # a die from here on (after the proxy may have started) still stops the
+  # stack in order
+  trap 'stop $?' EXIT
   setup "$sg"
 
   spawn servicemanager system /system/bin/servicemanager
@@ -433,7 +712,9 @@ start() {
   fi
 
   say "stage $stage running"
-  # Supervise: any child exiting stops the whole stack (systemd restarts it).
+  rm -f "$PENDING"
+  # Supervise: any child exiting stops the whole stack, and it stays stopped
+  # until a reboot (one storage proxy per boot; the unit has no Restart=).
   wait -n || true
   # wait also returns when TERM/INT arrives; then the trap is already stopping
   [[ -n $STOPPING ]] || say "a service exited"
@@ -461,9 +742,12 @@ run() {
 
 case ${1:-} in
   check) check ;;
+  preflight) preflight ;;
+  paths) printf '%s\n' "device=$DEVICE" "state=$STATE" "run=$RUN" "sysblock=$SYSBLOCK" "devdir=$DEVDIR" \
+           "mounts=$MOUNTS" "boot_id=$BOOT_ID_FILE" "uidir=$UIDIR" ;;
   start) start "${2:-bridge}" ;;
   ns) shift; ns "$@" ;;
   run) shift; run "$@" ;;
-  *) echo "usage: omamobile-fp-chroot check | start [storage|apploader|keys|hal|bridge] | ns CMD... | run CMD..." >&2
+  *) echo "usage: omamobile-fp-chroot check | paths | preflight | start [storage|apploader|keys|hal|bridge] | ns CMD... | run CMD..." >&2
      exit 2 ;;
 esac

@@ -102,6 +102,9 @@ check(effect(omarchy_terms, "maximize") == true and effect(omarchy_terms, "float
   "Omarchy's install terminal and its other floating terminals are maximized, not floated")
 check(effect(omarchy_terms, "size") == nil, "no fixed size for Omarchy's terminals")
 check(index(omarchy_terms, "float") > index(modal, "float"), "the terminals' rule comes after the modal one")
+local tensaku = { class = "^dev.tensaku.Tensaku$" }
+check(effect(tensaku, "maximize") == true and effect(tensaku, "float") == false,
+  "Tensaku (the screenshot editor) is tiled and maximized, not Omarchy's float")
 
 local pip = { tag = "pip" }
 local size, move = effect(pip, "size"), effect(pip, "move")

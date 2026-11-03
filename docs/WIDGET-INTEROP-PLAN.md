@@ -107,7 +107,7 @@ A user widget is a folder `~/.config/omamobile/widgets/<id>/` with an Omarchy-st
 | A capability declaration, refused when missing | Commands are listed, not declared | Approval stores a capability set derived from the list (§3) |
 | Network ports off until turned on | Network runs at once | The same opt-in for OWL widgets that use the network (§3) |
 | `host.timeFormat`, the system's 12/24-hour setting | `fmtTime(now, "HH:mm")` with a fixed pattern | Propose a `timeFormat` tile variable (Q5). Not overridden by us: that would change rendering against the reference |
-| Location from GeoClue, rounded to about 1 km (`useLocation` in 7 ports) | IP location through wttr.in, or a typed city | Propose a coarse `location` source (Q6). Keep those ports until it exists |
+| Location from GeoClue, rounded to about 1 km (`useLocation` in 7 ports) | IP location through wttr.in, or a typed city (our copies since 2026-11-02: Open-Meteo, from a typed city or the phone's position) | Propose a coarse `location` source (Q6). Keep those ports until it exists |
 | Commands as argv with no shell | `bash -c` strings, with values safe only through `sh()` | Accept `bash -c` for OWL, since the commands are static and listed, and refuse store-rule violations (§3.2) |
 | A crash guard per widget (`widget-guard.json`) | "Errors never take the home screen down" (evaluator level) | Our runtime isolates errors and reuses the guard (§2.7) |
 | Cache that survives layout edits (`host.cached`) | Not needed | Our runtime instances outlive cell rebuilds (§2.7) |
