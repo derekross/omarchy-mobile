@@ -8,7 +8,8 @@ both ways through Phone and Messages (omatel-agent through
 in stock's order (IMS first on CID 2, the internet on CID 3; #384) and no
 carrier manifest, the APNs and the bearer order chosen from the SIM
 (`omamobile-modem-sit` 0.3.29, #373), the earpiece at every speaker stage
-(`omamobile-audio` 0.5.13, #402), and `omamobile-modem-boot.target` on by
+(`omamobile-audio` 0.5.13, #402) and on by default on a fresh install
+(`omamobile-modem-sit` 0.3.30, `omamobile-device-cheetah` 0.1.44), and `omamobile-modem-boot.target` on by
 default from `omamobile-device-cheetah` 0.1.43 (M4.6b, B6-B9b passed,
 #398). Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, the release kernel.
 Open: suspend with the modem up (section 6.3; the stack holds a sleep

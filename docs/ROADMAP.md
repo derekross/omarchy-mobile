@@ -87,7 +87,7 @@ M2.5, M3.1, M3.3-B, M3.4 CP ONLINE, M4.1 SIT IPC and clean reboots (passed) ─>
 | IMS (VoLTE) registration | Part of M4.2's start-up; its values are proven on one network only (a T-Mobile-network MVNO). Since 0.3.2 a failure keeps data | The SIM test; another network may need its own IMS values |
 | Front end | Done offline: `omamobile-mmd` serves ModemManager's API and passed on the phone without a SIM (T1, 2026-10-14) | T2: GNOME Calls, Chatty, omaphone and omamessages against the real modem (runbook S11) |
 | Calls and messages UI | omatel (Phone, Messages, their agent) and the shell's call card and lock-screen calls are built and tested offline | After T2; MMS is T3 |
-| M5: calls with audio | 14-25 days (TELEPHONY-APPS-PLAN T4): the earpiece mode under speaker protection, a Voice Call UCM verb, speakerphone, Bluetooth | Design only; until then calls connect silent (`[audio] card = none`) |
+| M5: calls with audio | 14-25 days (TELEPHONY-APPS-PLAN T4): the earpiece mode under speaker protection, a Voice Call UCM verb, speakerphone, Bluetooth | The earpiece is done on the Pixel 7 Pro and on by default (#402, `omamobile-modem-sit` 0.3.30 with `omamobile-device-cheetah` 0.1.44); speakerphone and Bluetooth are open |
 | M6: suspend with the modem online | after S8 and M4 | Design only |
 
 The modem's NV is never written from Linux: the chroot works on checksum-verified RAM copies.
