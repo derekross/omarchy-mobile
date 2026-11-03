@@ -10,7 +10,7 @@
 pkgname=omamobile-apps
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile's default mobile apps (camera, phone, messages, contacts, maps and location, NFC tags)"
+pkgdesc="Omarchy Mobile's default mobile apps (camera, phone, messages, contacts, images, maps and location, NFC tags)"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
@@ -22,6 +22,7 @@ depends=(
   pipewire-libcamera  # the cameras for browsers and video calls, through the camera portal
   omaphone     # "Phone" and "Contacts": dialpad, call log, favorites, contacts (docs/TELEPHONY-APPS-PLAN.md T6)
   omamessages  # "Messages": SMS conversations (T7); both pull in omatel-agent and work without a modem
+  loupe        # "Image Viewer": touch zoom and swipe; the default for images (mimeapps.list)
 )
 optdepends=(
   'snapshot: a second camera app (GNOME Snapshot, shown as "Snapshot"), with video, until omacam records video'
@@ -29,11 +30,13 @@ optdepends=(
   'gnome-calls: another calls app, for the same ModemManager API as Phone'
   'chatty: another SMS app, for the same ModemManager API as Messages'
 )
+backup=(etc/xdg/mimeapps.list)
 install=omamobile-apps.install
-source=(omamobile-snapshot-name omamobile-snapshot-name.hook)
-sha256sums=(SKIP SKIP)
+source=(omamobile-snapshot-name omamobile-snapshot-name.hook mimeapps.list)
+sha256sums=(SKIP SKIP SKIP)
 
 package() {
   install -Dm755 omamobile-snapshot-name "$pkgdir/usr/lib/omamobile/omamobile-snapshot-name"
   install -Dm644 omamobile-snapshot-name.hook "$pkgdir/usr/share/libalpm/hooks/omamobile-snapshot-name.hook"
+  install -Dm644 mimeapps.list "$pkgdir/etc/xdg/mimeapps.list"
 }
