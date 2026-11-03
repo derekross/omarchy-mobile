@@ -100,7 +100,8 @@ Opt-in and attended at first, with sleep blocked for the boot.
    never refreshed automatically.
 4. **Two guards:** *Partly in #372:* a boot that has loaded CPIF refuses a
    second start, and the latch is written and synced before any driver and
-   kept from ONLINE until a clean shutdown. *Target:* an atomic per-boot
+   kept from ONLINE until the profile's unit stops at a shutdown (its
+   ExecStopPost, whatever the stop's result). *Target:* an atomic per-boot
    "attempted" marker, never cleared in that boot, and the failure latch
    kept through the whole phone-service start while this is being
    qualified. No automatic CP or sitd restart, module unload, power
@@ -125,7 +126,7 @@ successful, a kernel with linux-omarchy-mobile#172, an off-repo NV backup.
 | --- | --- | --- | --- | --- |
 | 1. Read-only / none | `uname -r`; `pacman -Q omamobile-device-tegu omamobile-modem omamobile-modem-sit omamobile-mmd`; `tools/nv-backup --check "$NV_BACKUP"` (laptop); `ls /var/lib/omamobile/modem-bringup-started` | The kernel and packages recorded, NV matches, no latch | NV mismatch, a latch present, B not marked | None |
 | 2. Enable / low | `systemctl enable omamobile-tegu-modem-boot` | A wants link, nothing started | Anything starts | `systemctl disable omamobile-tegu-modem-boot` |
-| 3. Cold boot / medium (the CP starts at boot, sleep blocked) | Power off, then on; after login: `journalctl -b -u omamobile-tegu-modem-boot`; `omamobile-sit status`; `systemd-inhibit --list`; `tools/phone-smoke` (laptop) | "modem OK: CP ONLINE", sitd running and registered, the inhibitor held, the latch present (it stays until a clean shutdown), phone-smoke clean | No ONLINE, a reset, a UFS or NV error, no inhibitor | `systemctl disable omamobile-tegu-modem-boot`, reboot; after a reset the latch keeps the next boot from starting the modem |
+| 3. Cold boot / medium (the CP starts at boot, sleep blocked) | Power off, then on; after login: `journalctl -b -u omamobile-tegu-modem-boot`; `omamobile-sit status`; `systemd-inhibit --list`; `tools/phone-smoke` (laptop) | "modem OK: CP ONLINE", sitd running and registered, the inhibitor held, the latch present (it stays until the profile's unit stops at shutdown), phone-smoke clean | No ONLINE, a reset, a UFS or NV error, no inhibitor | `systemctl disable omamobile-tegu-modem-boot`, reboot; after a reset the latch keeps the next boot from starting the modem |
 | 4. Clean shutdown / medium (one UFS handler pass expected on the 7 Pro's pattern) | `systemctl reboot`; after login: `journalctl -b -1 -k \| grep -c ufshcd_err_handler`; `ls /var/lib/omamobile/modem-bringup-started`; `tools/nv-backup --check` | The latch gone (clean stop), the CP up again at this boot, the UFS count recorded, NV matches | The latch still there after a clean reboot, I/O errors, NV mismatch | As step 3 |
 | 5. A day's use / low | Calls, texts and data as usual | No reset, no latch left over | A reset or hang | As step 3 |
 
@@ -137,8 +138,8 @@ phone-smoke report and the UFS count.
 successful on 2026-10-31 with no fastboot write since; the kernel keeps the
 PERIC0 GPIO bus clock critical, as #172
 does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
-0.3.36, `omamobile-mmd` 0.1.4 and `omamobile-gnss` 0.2.7, all from this
-stack):
+0.3.36 and `omamobile-mmd` 0.1.4 from the pull requests above this one
+(#376 to #380), `omamobile-gnss` 0.2.7 from main):
 
 1. Read-only: `tools/nv-backup -d tegu --check` against the 2026-10-28
    backup (#407): every NV partition the same. Passed.
@@ -151,6 +152,18 @@ stack):
 4. A second `systemctl reboot` with the CP up: the profile's unit stopped
    cleanly, the latch was removed and the next boot wrote its own; no
    `ufshcd_err_handler` pass in the boot that shut down. Passed.
+5. Later the same day (10:03), a `systemctl reboot` with the CP up left the
+   latch: the CP's power-off in ExecStop ended rfsd before systemd's
+   SIGINT, the profile's supervisor exited 1 ("CP OFFLINE", then
+   `Control process exited, status=1`), and the old ExecStopPost removed
+   the latch only on `SERVICE_RESULT=success`. The next boot (10:33)
+   refused the modem. Failed; fixed in this pull request's last commit
+   (ExecStopPost runs `omamobile-tegu-modem-up --stopped`, which removes
+   this boot's latch after ONLINE whatever the result). Re-run with the
+   fixed script: modem started and ONLINE, `systemctl reboot` at 10:43
+   ("modem stopped (success): … removed"), the next boot ONLINE on its own,
+   and a second reboot at 10:47 removed that boot's latch too. Passed.
+   `tools/nv-backup --check` after these reboots is still to come.
 
 `tools/phone-smoke` on the second boot: every required check ok (boot, the
 storage guard, root, kernel health, USB, session), and display, GPU, lock,
