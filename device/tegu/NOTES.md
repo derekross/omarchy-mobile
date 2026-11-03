@@ -13,6 +13,44 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-02, evening: calls, Phone and Messages, echo, a restart and MMS
+
+All on the daily kernel (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+with the modem started at boot by `omamobile-tegu-modem-boot` (#372).
+
+- [V] **Calls and texts from the apps:** Phone and Messages through
+  `omamobile-mmd` (#371) placed and answered calls with speakerphone audio
+  both ways and sent and received texts. Messages showed "service isn't
+  running" until the user's `omatel-agent` unit was started and enabled.
+- [V] **Signal and the airplane icon:** the modem sends its signal reports
+  only after it is told the screen is on, and radio state 10 means on;
+  with both in `omamobile-modem-sit` 0.3.15 and the bridge 0.1.2, the bar
+  shows signal and no airplane.
+- [V] **A sitd restart in the same boot (#376):** it failed at once on
+  leftovers in `/run/omamobile-sit` (the LTE-only setting's saved original,
+  then the bearer records), though the modem had dropped the bearers when
+  sitd stopped. With 0.3.18 a restart gets data and signal back, but IMS
+  doesn't register again (no registration indication after the PDN
+  information is accepted), so calls and texts need a reboot after a
+  restart. [I] The modem's IMS stack is never told the old session ended.
+- [V] **Echo cancellation (#374, #378):** the owner's tuning files from
+  the factory image upload with the AoC's status 0. The AoC's reply
+  rewrites the second header byte (0x01 sent, 0x3e back), which the first
+  check took for an unknown outcome, so that call was silent (fixed in
+  0.3.19). With the tuning alone the far end still heard its own voice;
+  with `Audio DSP Mode` set to `Telephony_APMG3` (0.3.20) it heard no echo
+  for the first few seconds and a new low hiss, then the echo again with
+  the hiss. [I] The echo reference or the order of the setup is wrong.
+- [V] **MMS (#380):** with the carrier's MMS APN equal to its internet APN,
+  setting up the separate MMS bearer (CID 3) took the IMS bearer down:
+  afterwards the modem listed bearers 1 and 3, not 2. sitd held the
+  reservation as uncertain, as designed, and a reboot cleared it. 0.3.22
+  sends MMS over the internet bearer instead; not yet tried.
+- [V] **Wi-Fi after a sleep with the keep flag:** after the shell's
+  auto-sleep with `/etc/omamobile/wifi-keep-across-sleep` in place,
+  brcmfmac didn't attach to the chip again; a reload, a bind and a PCI
+  remove and rescan all left no interface. A reboot brought it back.
+
 ## 2026-11-02: the SIM, the in-tree modem stack with GNSS, and a pruned module tree
 
 Boots as before: test kernels pushed, checked, and the daily kernel pushed
