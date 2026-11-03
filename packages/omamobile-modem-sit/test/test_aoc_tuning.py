@@ -38,11 +38,14 @@ class Services:
         self.written.append((fd, data))
         if fd == 10:
             reply = bytearray(data)
+            # As the palmtop's AoC does: the second header byte comes back
+            # rewritten, the rest of the header as sent.
+            reply[1] = 0x3e
             if self.refuse:
                 struct.pack_into('<h', reply, 6, -3)
                 self.refuse = False
             if self.bad_reply:
-                reply[1] ^= 1
+                reply[4] ^= 1
             self.reply = bytes(reply)
         return len(data) - 1 if fd == self.short_fd else len(data)
 

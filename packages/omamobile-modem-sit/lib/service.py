@@ -280,8 +280,10 @@ class Service:
                 self.audio.__enter__()
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 self.audio = None
-                self.audio_error = str(error)
-                print('Call audio refused, the call goes on without audio:', error, flush=True)
+                # The cause says why (an AoC tuning reply, a gain read-back).
+                cause = f' ({error.__cause__})' if error.__cause__ else ''
+                self.audio_error = f'{error}{cause}'
+                print('Call audio refused, the call goes on without audio:', self.audio_error, flush=True)
                 return
             self.audio_error = ''
             self.muted = False

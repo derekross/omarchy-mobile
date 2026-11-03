@@ -76,7 +76,10 @@ class VoiceTuning:
         if not select.select([self.command_fd], [], [], 1)[0]:
             raise TuningError('AoC tuning acknowledgement deadline exceeded')
         reply = os.read(self.command_fd, 4096)
-        if len(reply) != len(command) or reply[:6] != command[:6]:
+        # The AoC answers with the command's size and ID; it rewrites the
+        # second header byte (sent 0x01, came back 0x3e on the palmtop,
+        # 2026-11-02), so that byte isn't compared.
+        if len(reply) != len(command) or reply[0] != command[0] or reply[2:6] != command[2:6]:
             raise TuningError('Unexpected AoC tuning acknowledgement')
         self.uncertain = False
         UNCERTAIN.unlink()
