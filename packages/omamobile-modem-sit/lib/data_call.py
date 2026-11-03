@@ -132,8 +132,10 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     # ApnSetting's supported types (vendor.radio.base
     # ApnSetting::SetSupportedTypesBitmask, member +0x160; the 983-byte
     # builder writes it at 0xf1). DEFAULT for the internet bearer, IMS for
-    # the IMS one. Until 0.3.6 this was sent as 0 (taken for an MTU), and
-    # the 9a's modem answered every internet setup with status 36.
+    # the IMS one. Until 0.3.6 this was sent as 0 (taken for an MTU). It
+    # wasn't the cause of the 9a's status 36: 0.3.7 sent the bitmap and
+    # still got 36, and 0.3.8's wait after the data permission fixed it
+    # (device/tegu MODEM-PLAN, "SIM test results").
     struct.pack_into('<I', full, 0xf1, 0x40 if ims else 1)
     full[0xf5] = 2  # stock caller selects the v3/983-byte form
     # 0 on cellular: no PDU session ID, the modem picks one (module docstring).
