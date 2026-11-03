@@ -16,7 +16,7 @@ networkd activation are also external prerequisites. USB has fallback metric
 All four sleep modes are disabled. UPower selects PowerOff on critical
 battery. Coldplug blocks alias and explicit modprobe for clk_acpm,
 max77759_charger, gpio_max77759, arm_dsu_pmu, at24 and max17042_battery.
-A read-only coldplug audit found matching unbound devices and confirmed that
+The [coldplug audit](../../device/oriole/NOTES.md) found matching unbound devices and confirmed that
 modprobe dry runs refused these modules; it did not load them or establish
 their behavior. This package does not qualify the underlying hardware.
 Built-in drivers are outside modprobe policy.

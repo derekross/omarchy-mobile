@@ -1,13 +1,19 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 (oriole) bring-up notes
 
-Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). Nothing has been flashed or booted yet: the phone facts come from read-only adb and fastboot queries of a stock phone.
+Findings for the Pixel 6 port, newest first. The port is a community effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2); the 6 Pro (raven) and 6a (bluejay) share it. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone). The earlier stock-phone facts come from read-only adb and fastboot queries; later entries identify separate Linux bring-up observations.
 
 Sources:
 
 - `F/`: Google's public factory image `oriole-cp3a.261005.002.a1` ([developers.google.com/android/images](https://developers.google.com/android/images#oriole)), read with HTTP range requests; facts only, no files kept in the repository.
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
+
+## 2026-10-17: coldplug audit on the first-light kernel
+
+[V] On `7.3.0-rc6-omamobile-oriole-firstlight-g4bd35d34abb9-dirty`, a read-only audit of unbound platform, I2C and SPI devices found module matches for `clk_acpm`, `max77759_charger`, `gpio_max77759`, `arm_dsu_pmu`, `at24` and `max17042_battery`. The local device policy blocked both alias autoload and direct modprobe; dry runs confirmed the refusals. The audit did not load any of these modules, so it does not establish what each would do when loaded. These blocks are conservative bring-up policy, not proof of individual driver failure.
+
+[V] The local native integration later used a separate experimental read-only `oriole-battery-readonly` provider, publishing `omamobile-battery`, to report battery telemetry; it did not use `max17042_battery`. Its kernel charging status remained Unknown. UPower inference and a separate charger-status observation do not establish charging control or prove that the upstream charger driver is safe. The public package contains neither that experimental provider nor its startup service; battery reporting is not guaranteed by this policy package.
 
 ## 2026-10-16: stage 0, part 2: a retail Pixel 6 (stock, bootloader locked)
 
