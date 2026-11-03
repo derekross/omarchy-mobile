@@ -13,6 +13,9 @@ hy() { runuser -u mobile -- env XDG_RUNTIME_DIR=/run/user/$uid HYPRLAND_INSTANCE
 echo N > /sys/module/printk/parameters/console_suspend
 pgrep -f omamobile-modem-start >/dev/null && { echo "the modem is up: stop" >> $L; exit 1; }
 [ -e /usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ] && { echo "the withdrawn hook is installed" >> $L; exit 1; }
+# UFS IO coherency in the HSI2 sysreg (0x13020000 + 0x710; bits 0-1 set with
+# dma-coherent): stock re-applies it at every resume, ours only at probe.
+iocc() { python3 -c 'import mmap,os,struct;fd=os.open("/dev/mem",os.O_RDONLY|os.O_SYNC);m=mmap.mmap(fd,4096,mmap.MAP_SHARED,mmap.PROT_READ,offset=0x13020000);print(hex(struct.unpack("<I",m[0x710:0x714])[0]))'; }
 restore() {
   for f in /sys/devices/system/cpu/cpu*/cpuidle/state1/disable; do echo 0 > $f; done
   systemctl enable omamobile-tegu-modem-boot.service >/dev/null 2>&1
@@ -30,7 +33,7 @@ for c in $(seq 1 $N); do
   sleep 20
   hy enable
   en=$(dmesg | grep -m1 "PM: suspend entry" | sed -E "s/^\[ *([0-9.]+)\].*/\1/"); ex=$(dmesg | grep -m1 "PM: suspend exit" | sed -E "s/^\[ *([0-9.]+)\].*/\1/")
-  echo "cycle $c $(date +%T): rtc $(( $(cat /sys/class/rtc/rtc0/since_epoch) - r0 - 20 )) s, dmesg $(awk -v a=$en -v b=$ex 'BEGIN{printf "%.1f", b-a}') s, wake irq $(cat /sys/power/pm_wakeup_irq 2>/dev/null), ufs $(dmesg | grep -cE "link startup failed|Host init failed|I/O error"), acpm $(dmesg | grep -c "Timeout! ch"), oops $(dmesg | grep -c "Internal error"), state1 $(cat /sys/devices/system/cpu/cpu*/cpuidle/state1/disable | tr -d '\n'), ok $(cat /sys/power/suspend_stats/success) fail $(cat /sys/power/suspend_stats/fail)" >> $L
+  echo "cycle $c $(date +%T): rtc $(( $(cat /sys/class/rtc/rtc0/since_epoch) - r0 - 20 )) s, dmesg $(awk -v a=$en -v b=$ex 'BEGIN{printf "%.1f", b-a}') s, wake irq $(cat /sys/power/pm_wakeup_irq 2>/dev/null), ufs $(dmesg | grep -cE "link startup failed|Host init failed|I/O error"), acpm $(dmesg | grep -c "Timeout! ch"), oops $(dmesg | grep -c "Internal error"), iocc $(iocc), state1 $(cat /sys/devices/system/cpu/cpu*/cpuidle/state1/disable | tr -d '\n'), ok $(cat /sys/power/suspend_stats/success) fail $(cat /sys/power/suspend_stats/fail)" >> $L
   sync
   [ "$(dmesg | grep -cE "link startup failed|Host init failed|I/O error")" = 0 ] || { echo "UFS errors: stop" >> $L; break; }
   [ "$(dmesg | grep -c "Internal error")" = 0 ] || { echo "kernel oops: stop" >> $L; dmesg | grep -A30 "Internal error" >> $L; break; }

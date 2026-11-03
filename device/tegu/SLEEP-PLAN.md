@@ -793,6 +793,14 @@ host: the zumapro host clocks after the CMU gates (the zumapro
 ungate-after-enable change already moved there once), and UniPro's own
 reset state. The daily Image went back the same afternoon.
 
+**A gap against stock: IO coherency after resume.** Google's driver
+re-applies the UFS IO-coherency bits in the HSI2 sysreg
+(`exynos_ufs_config_externals()`, at every resume); ours sets them once, in
+`exynos_ufs_shareability()` at probe. With `dma-coherent` they must read
+set (0x13020710, bits 0 and 1). Read on 2026-11-03 after a boot with no
+sleep: 0x13. Whether they survive a wake is not known yet; both series
+scripts now log the value after every wake, so the next series answers it.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
