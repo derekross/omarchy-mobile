@@ -21,7 +21,7 @@ and differ from the store's:
 | `simonschubert/air-and-pollen` | 1.1 | 1.1.1 | Already used Open-Meteo's air-quality API; the place now comes from Open-Meteo's geocoding or the phone's location instead of wttr.in |
 | `simonschubert/planes-overhead` | 1.1 | 1.1.1 | The place from Open-Meteo's geocoding or the phone's location instead of wttr.in |
 | `ssalentin/red-panda` | 1.1 | 1.1.1 | Rain from the phone's own weather reading (`~/.local/state/omamobile/weather.json`, written by `omamobile-weather` from Open-Meteo) instead of wttr.in by IP; `file()` with `optional` needs `owl: 5` |
-| `setiapam/omaprayer` | 1.2 | 1.2.1 | No location by IP (it asked wttr.in): "auto" uses the widget's own default city, Jakarta, as it already did when that lookup failed |
+| `setiapam/omaprayer` | 1.2 | 1.2.1 | No location by IP (it asked wttr.in): "auto" now shows "set a city" instead of prayer times for a place it guessed; a typed city (Jakarta included) works as before |
 
 Why: wttr.in stopped answering (2026-11-02, refused from the laptop and the phone, so the Today
 widget showed only the date), and the phone's own weather service (`omamobile-weather` in
@@ -34,19 +34,31 @@ How the weather copies find the place, the same in each:
 * `city` is "lat,lon" (the home screen puts the phone's position there, rounded to about 1 km,
   when "Use my location" is on): it goes straight to Open-Meteo, with no lookup;
 * `city` is a name ("Town" or "Town, Region"): Open-Meteo's geocoding looks the town up, and the
-  first result whose region, country or country code matches what follows the comma wins, else
-  the first result;
+  first result whose region, county, country or country code matches one of the parts after a
+  comma wins (a US state code also reads as its state: "Springfield, IL" is Illinois), else the
+  first result. This is `omamobile-weather`'s `pick_place` rule, and `test/open-meteo.js` checks
+  the two agree, because the lock screen reads Today's city too;
 * neither: Open-Meteo has no IP location, so the widget says "set a city or turn on Location".
 
 Units: a `phoneUnit` state ("C" or "F") that the home screen fills from the phone's locale
 (`HomeModel.localeUnit`, °F in the US, as `omamobile-weather`), else the found place's country
 (°F in the US, Liberia and Myanmar), else °C. WMO weather codes become the words
-`omamobile-weather` uses and the glyphs `weatherIcon()` draws.
+`omamobile-weather` uses and the glyphs `weatherIcon()` draws. Today converts visibility from the
+unit Open-Meteo reports (`hourly_units`: feet when `precipitation_unit=inch`, else metres); the
+other converted fields come in the units asked for (wind, rain) or always in hPa (pressure).
 
 Versions are bumped one step past the store's (1.1 to 1.1.1), so the Store tab doesn't offer the
 store's same version as an update over ours, while a newer store release still shows as one.
-**Their hosts changed, so an approval given before asks again** (an approval holds for one exact
-list of commands, URLs and files).
+**Which copies ask for approval again.** An approval holds for one exact list of commands, URLs
+and files, as the compiler prints it, and a URL built from widget values is listed without its host.
+Today, forecast, sun and moon, red panda and omaprayer changed their lists, so they ask again. Air
+and pollen and planes overhead kept theirs (two built URLs each), so an approval given before still
+holds and they move from wttr.in to Open-Meteo's place lookup without asking: a typed city name
+goes to it, as it went to wttr.in; the phone's position never does. Putting the hosts into the
+approval is a change of its own.
+
+The top line of each copy names the store file and commit it was modified from; `overrides/LICENSE`
+is the store's MIT licence.
 
 These changes are meant to go upstream: once the store takes them (or its own fix for wttr.in), pin
 that commit and delete the copies here.

@@ -171,7 +171,7 @@
     "geocoding-api.open-meteo.com",
     "api.open-meteo.com"
    ],
-   "sha256": "81f796690cfb0cd5f5a72b622c20647f15e787be32a95d1af7046fa8d7a3c04a"
+   "sha256": "f6e3f94914f33ed8476237d326e4388e3d8fd214719e24fb03773e898edc3008"
   },
   {
    "id": "simonschubert/todo",
@@ -362,7 +362,7 @@
     "geocoding-api.open-meteo.com",
     "air-quality-api.open-meteo.com"
    ],
-   "sha256": "e81277a4f841ebe1e90a7547249cb1f01169dc17839a6497a4583a4642c9d164"
+   "sha256": "62bfdb79439d5c804849a2d8072027f63bf5a259cbf2d991685ca6e4310a0164"
   },
   {
    "id": "cbarland/asset-ticker",
@@ -1385,7 +1385,7 @@
     "geocoding-api.open-meteo.com",
     "api.open-meteo.com"
    ],
-   "sha256": "41b41a445cfacf40bfa0c61b6cfaae9e9cea7afb6c373e3d2f43c8f1bedd25e6"
+   "sha256": "b91de9ef2545f891b11fba0e9db1106a71a4bf52fe3bc94057bdc8996900e44f"
   },
   {
    "id": "simonschubert/free-games",
@@ -2352,7 +2352,7 @@
     "network"
    ],
    "hosts": [],
-   "sha256": "804a92b0cc8258d074f10ddbc9198fa252527b26e711643f6feae487ad9cb462"
+   "sha256": "8d40610edadb28df94bc431696e950531d18bbd8c55cf08e33c943af874ab751"
   },
   {
    "id": "daileng/omarcharium",
@@ -2541,7 +2541,7 @@
     "geocoding-api.open-meteo.com",
     "opensky-network.org"
    ],
-   "sha256": "03823870d269c753449c6092e09a394bdb6809eec2bce5e271dc3dfa7181d6ad"
+   "sha256": "b91176f446909875f9f51f7df56cb369c917fcb310759ecdc0e206549e172a14"
   },
   {
    "id": "tusshar2000/ppt-maker",
@@ -2657,7 +2657,7 @@
     "files"
    ],
    "hosts": [],
-   "sha256": "0fe530ad2d3fcd476dd77e7a1bc3ace863bbb8f0a9901422af60e4705e12b61b"
+   "sha256": "78340f977ccfe42ae53ae87eaf7d3df6fc61d1083e2807bea963ed464c9bc082"
   },
   {
    "id": "simonschubert/releases",
@@ -3054,7 +3054,7 @@
     "geocoding-api.open-meteo.com",
     "api.open-meteo.com"
    ],
-   "sha256": "921085e959de5248c258071eb2e445bc834c1f3693d11ea8c03d9572c6d692d7"
+   "sha256": "ce169879c0f6313905e171306f0ec028d763cf3ba061a47c71f9bbdf49229a1e"
   },
   {
    "id": "simonschubert/uptime",

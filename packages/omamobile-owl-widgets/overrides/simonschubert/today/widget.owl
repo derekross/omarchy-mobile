@@ -1,3 +1,4 @@
+// Modified from omarchy-widgets widgets/simonschubert/today/widget.owl@b63886b (MIT, Simon Schubert and contributors; see overrides/LICENSE) for Omarchy Mobile: weather from Open-Meteo.
 widget "today" {
   page: 1
   order: 1
@@ -14,14 +15,20 @@ widget "today" {
   // a name ("Town" or "Town, Region") is looked up with Open-Meteo's geocoding. Open-Meteo has no IP location.
   let ll = match(trim(city), "^(-?[0-9.]+) *, *(-?[0-9.]+)$")
   let town = trim(split(city, ",")[0])
-  let region = lower(trim(join(drop(split(city, ","), 1), ",")))
+  // What follows the town, each part lower-case; a US state code also reads as its state, as omamobile-weather's
+  // pick_place does (the lock screen reads this widget's city too, so the two pick the same place).
+  let qualifiers = drop(split(city, ","), 1).map(x => lower(trim(x))).filter(x => x != "")
+  let usStates = {"al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas", "ca": "california", "co": "colorado", "ct": "connecticut", "de": "delaware", "dc": "district of columbia", "fl": "florida", "ga": "georgia", "hi": "hawaii", "id": "idaho", "il": "illinois", "in": "indiana", "ia": "iowa", "ks": "kansas", "ky": "kentucky", "la": "louisiana", "me": "maine", "md": "maryland", "ma": "massachusetts", "mi": "michigan", "mn": "minnesota", "ms": "mississippi", "mo": "missouri", "mt": "montana", "ne": "nebraska", "nv": "nevada", "nh": "new hampshire", "nj": "new jersey", "nm": "new mexico", "ny": "new york", "nc": "north carolina", "nd": "north dakota", "oh": "ohio", "ok": "oklahoma", "or": "oregon", "pa": "pennsylvania", "ri": "rhode island", "sc": "south carolina", "sd": "south dakota", "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont", "va": "virginia", "wa": "washington", "wv": "west virginia", "wi": "wisconsin", "wy": "wyoming"}
+  let wanted = flatten(qualifiers.map(x => [x, get(usStates, x, x)]))
   let named = ll == null && len(town) >= 2
   // The town, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
   let q = town.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+  // The URLs always start with their host, so the approval sheet can name it: with "lat,lon" the lookup still goes out
+  // with an empty name (an empty answer), and before a city is found the forecast goes out without a place (an error answer).
   source geo = http("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=${named ? q : ""}") every 24h timeout 10s json status
   let results = named && geo != null && geo.ok ? geo.out.results ?? [] : []
-  // The first result whose region, country or country code matches what follows the comma; else the first.
-  let found = find(results, r => region != "" && contains([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], region)) ?? first(results)
+  // The first result whose region, county, country or country code matches one of them; else the first.
+  let found = find(results, r => any([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], f => f != "" && contains(wanted, f))) ?? first(results)
   let lat = ll != null ? round(num(ll[0]), 2) : found != null ? round(found.latitude, 2) : null
   let lon = ll != null ? round(num(ll[1]), 2) : found != null ? round(found.longitude, 2) : null
   let placeName = ll != null ? "your location" : found != null ? found.name : town
@@ -42,6 +49,8 @@ widget "today" {
   // Open-Meteo's WMO weather codes as the older codes weatherIcon() takes, and in the words the phone's weather service uses.
   let wmoIcon = {"0": 113, "1": 116, "2": 116, "3": 122, "45": 248, "48": 248, "51": 266, "53": 266, "55": 266, "56": 281, "57": 281, "61": 296, "63": 302, "65": 308, "66": 311, "67": 314, "71": 329, "73": 332, "75": 338, "77": 338, "80": 353, "81": 356, "82": 359, "85": 368, "86": 371, "95": 389, "96": 389, "99": 389}
   let wmoText = {"0": "clear", "1": "mostly clear", "2": "partly cloudy", "3": "overcast", "45": "fog", "48": "fog", "51": "drizzle", "53": "drizzle", "55": "drizzle", "56": "drizzle", "57": "drizzle", "61": "rain", "63": "rain", "65": "rain", "66": "rain", "67": "rain", "71": "snow", "73": "snow", "75": "snow", "77": "snow", "80": "rain", "81": "rain", "82": "rain", "85": "snow", "86": "snow", "95": "thunderstorm", "96": "thunderstorm", "99": "thunderstorm"}
+  // Visibility in metres, from whatever unit Open-Meteo answers in: with precipitation_unit=inch it gives feet (hourly_units).
+  let visMetres = num(hourly.visibility[at], 0) * (om.hourly_units.visibility == "ft" ? 0.3048 : 1)
   let compass = ["n", "nne", "ne", "ene", "e", "ese", "se", "sse", "s", "ssw", "sw", "wsw", "w", "wnw", "nw", "nnw"]
   // The current reading, in the shape the tile and screen below draw.
   let cur = now0 == null ? null : {
@@ -54,7 +63,7 @@ widget "today" {
     windDir: compass[int(round(num(now0.wind_direction_10m, 0) / 22.5)) % 16],
     precip: "${round(num(now0.precipitation, 0), imperial ? 2 : 1)} ${imperial ? "in" : "mm"}",
     pressure: imperial ? "${round(num(now0.pressure_msl, 0) * 0.02953, 2)} inHg" : "${round(now0.pressure_msl)} hPa",
-    visibility: imperial ? "${round(num(hourly.visibility[at], 0) / 1609.34)} mi" : "${round(num(hourly.visibility[at], 0) / 1000)} km",
+    visibility: imperial ? "${round(visMetres / 1609.34)} mi" : "${round(visMetres / 1000)} km",
     uv: round(num(hourly.uv_index[at], 0))
   }
   let night = now0 != null && now0.is_day == 0

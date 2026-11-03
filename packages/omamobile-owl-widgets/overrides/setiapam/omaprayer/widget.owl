@@ -1,3 +1,4 @@
+// Modified from omarchy-widgets widgets/setiapam/omaprayer/widget.owl@b63886b (MIT, Simon Schubert and contributors; see overrides/LICENSE) for Omarchy Mobile: no location by IP; "auto" asks for a city.
 widget "omaprayer" {
   size: 3x3
   minSize: 3x2
@@ -32,21 +33,22 @@ widget "omaprayer" {
     "é", "%C3%A9"), "è", "%C3%A8"), "à", "%C3%A0"), "ç", "%C3%A7"), "ñ", "%C3%B1"), "ø", "%C3%B8")
 
   // Omarchy Mobile's copy: no location by IP address (the original asked a weather service for one).
-  // "auto" uses the widget's own default, Jakarta, as it did when that lookup failed; type a city for another.
+  // "auto" now asks for a city instead of guessing one: prayer times for the wrong place are worse than none.
   let ipArea = null
 
   // Geocoding via Open-Meteo when city is specified
   source geo = http(city == "auto" || len(trim(city)) < 2 ? "" : "https://geocoding-api.open-meteo.com/v1/search?name=${q}&count=1") every 1h timeout 10s json status
   let geoFound = city == "auto" || (geo != null && geo.ok && geo.out.results != null && len(geo.out.results) > 0)
   let geoResult = city != "auto" && geoFound && geo.out.results != null ? geo.out.results.0 : null
-  let notFound = city != "auto" && geo != null && geo.ok && (geo.out.results == null || len(geo.out.results) == 0)
+  let needsCity = city == "auto"
+  let notFound = needsCity || city != "auto" && geo != null && geo.ok && (geo.out.results == null || len(geo.out.results) == 0)
 
-  let isJakarta = city == "auto" || lower(trim(city)) == "jakarta"
+  let isJakarta = lower(trim(city)) == "jakarta"
 
   // Resolved coordinates & display location
   let lat = isJakarta ? (city == "auto" && ipArea != null ? ipArea.latitude : -6.2146) : (geoResult != null ? geoResult.latitude : null)
   let lon = isJakarta ? (city == "auto" && ipArea != null ? ipArea.longitude : 106.8451) : (geoResult != null ? geoResult.longitude : null)
-  let placeName = city == "auto" ? (ipArea != null ? ipArea.areaName.0.value : "Jakarta") : (geoResult != null ? geoResult.name : city)
+  let placeName = city == "auto" ? (ipArea != null ? ipArea.areaName.0.value : "Auto") : (geoResult != null ? geoResult.name : city)
   let countryName = city == "auto" ? (ipArea != null ? ipArea.country.0.value : "") : (geoResult != null ? (geoResult.country ?? "") : "")
 
   // Timezone & local clock via Open-Meteo
@@ -352,7 +354,7 @@ widget "omaprayer" {
       gap: 6
       align: center
       Text {
-        text: notFound ? "⚠️ CITY NOT FOUND" : "🕌 " + upper(placeName)
+        text: needsCity ? "📍 SET A CITY" : notFound ? "⚠️ CITY NOT FOUND" : "🕌 " + upper(placeName)
         style: label
         color: notFound ? red : accent
         bold: true
@@ -371,7 +373,7 @@ widget "omaprayer" {
 
     if notFound {
       Text {
-        text: lang == "en" ? "Location '${city}' not found. Tap to change." : "Kota '${city}' tidak ditemukan. Klik untuk ubah."
+        text: needsCity ? (lang == "en" ? "Set a city: tap to choose one." : "Atur kota: klik untuk memilih.") : lang == "en" ? "Location '${city}' not found. Tap to change." : "Kota '${city}' tidak ditemukan. Klik untuk ubah."
         style: small
         color: red
         maxLines: 1

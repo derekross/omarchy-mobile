@@ -1,3 +1,4 @@
+// Modified from omarchy-widgets widgets/ssalentin/red-panda/widget.owl@b63886b (MIT, Simon Schubert and contributors; see overrides/LICENSE) for Omarchy Mobile: rain from the phone's own Open-Meteo reading.
 widget "red panda" {
   meta { owl: 5; description: "A pixel red panda living in a tree. Pet it, tickle it, scritch it, feed it bamboo, shake its leaves; it naps draped over its branch and holds a leaf over its head when it rains (the phone's own weather reading, from Open-Meteo, CC BY 4.0)"; version: "1.1.1"; license: "MIT"; category: "fun" }
   size: 3x3

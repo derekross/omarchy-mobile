@@ -50,7 +50,7 @@ pass "a file that doesn't match the index is refused"
 python3 - <<'PY' || fail "every override is indexed as our copy"
 import hashlib, json, os
 idx = {w["id"]: w for w in json.load(open("index.json"))["widgets"]}
-for author in sorted(os.listdir("overrides")):
+for author in sorted(a for a in os.listdir("overrides") if os.path.isdir(os.path.join("overrides", a))):
     for name in sorted(os.listdir(os.path.join("overrides", author))):
         wid, f = author + "/" + name, os.path.join("overrides", author, name, "widget.owl")
         assert wid in idx and idx[wid]["status"] in ("ok", "partial"), wid

@@ -83,7 +83,11 @@ const air = { current: { european_aqi: 32, us_aqi: 41, pm2_5: 6.1, pm10: 11, ozo
 
 // The hosts each copy may name: Open-Meteo's, and the services the widget is about.
 const OM_HOSTS = ["geocoding-api.open-meteo.com", "api.open-meteo.com", "air-quality-api.open-meteo.com", "opensky-network.org"]
-const widgets = fs.readdirSync(path.join(here, "overrides")).flatMap((a) => fs.readdirSync(path.join(here, "overrides", a)).map((n) => a + "/" + n))
+const widgets = fs.readdirSync(path.join(here, "overrides")).filter((a) => fs.statSync(path.join(here, "overrides", a)).isDirectory())
+  .flatMap((a) => fs.readdirSync(path.join(here, "overrides", a)).map((n) => a + "/" + n))
+for (const id of widgets)
+  check(fs.readFileSync(path.join(here, "overrides", id, "widget.owl"), "utf8").startsWith("// Modified from omarchy-widgets widgets/" + id + "/widget.owl@"), id + " says what it was modified from")
+check(/Simon Schubert and contributors/.test(fs.readFileSync(path.join(here, "overrides", "LICENSE"), "utf8")), "overrides/ carries the store's licence")
 for (const id of widgets) {
   const r = run(id, {}, {})
   const text = fs.readFileSync(path.join(here, "overrides", id, "widget.owl"), "utf8")
@@ -101,6 +105,13 @@ for (const id of widgets) {
         && /wind_speed_unit=mph/.test(r.urls.wx), "today asks for the found place, rounded, in °F: " + r.urls.wx)
   check(r.texts.includes("14°") && r.texts.includes("partly cloudy") && r.all.includes("sample town, united states"), "today shows the reading, the words and the place")
   check(r.all.includes("wind w") && r.all.includes("70%") && r.all.includes("1016 hPa") === false && r.all.includes("30.01 inHg"), "today maps wind, humidity and pressure in imperial units")
+  // Metric answer read with imperial units would be wrong; Open-Meteo answers visibility in feet with precipitation_unit=inch.
+  const feet = JSON.parse(JSON.stringify(forecast)); feet.hourly_units = { visibility: "ft" }; feet.hourly.visibility = feet.hourly.visibility.map(() => 132000)
+  r = run(id, { city: "Sample Town, Pennsylvania" }, { geo: ok(geocode), wx: ok(feet) })
+  check(r.all.includes("25 mi"), "today reads visibility in feet as miles: " + r.texts.filter((t) => / mi$/.test(t)).join())
+  const metres = JSON.parse(JSON.stringify(forecast)); metres.hourly_units = { visibility: "m" }
+  r = run(id, { city: "Sample Town, England" }, { geo: ok(geocode), wx: ok(metres) })
+  check(r.all.includes("24 km"), "today reads visibility in metres as kilometres")
   check(r.all.includes("80%") && r.all.includes("60%"), "today's days get their rain chances")
   check(r.all.includes("open-meteo.com (cc by 4.0)"), "today credits Open-Meteo")
   check(/% lit/.test(r.all) && !/ERROR/.test(r.all), "today works out the moon from the date, without errors")
@@ -118,6 +129,38 @@ for (const id of widgets) {
   check(r.all.includes("set a city or turn on Location"), "today asks for a city or Location without either")
   r = run(id, { city: "Nowhere" }, { geo: ok({}) })
   check(r.all.includes("city not found"), "today says a city wasn't found")
+}
+
+// "Town, Region" picks as omamobile-weather's pick_place does (the lock screen reads Today's city):
+// each part after a comma, a US state code read as its state, else the first result.
+{
+  const springfield = { results: [
+    { name: "Springfield", latitude: 37.215, longitude: -93.298, country: "United States", country_code: "US", admin1: "Missouri", admin2: "Greene" },
+    { name: "Springfield", latitude: 39.802, longitude: -89.644, country: "United States", country_code: "US", admin1: "Illinois", admin2: "Sangamon" },
+    { name: "Springfield", latitude: 44.046, longitude: -123.022, country: "United States", country_code: "US", admin1: "Oregon", admin2: "Lane" }] }
+  const picks = [["Springfield, IL", "39.8"], ["Springfield, Illinois", "39.8"], ["Springfield, OR, US", "37.22"], ["Springfield, Lane", "44.05"],
+                 ["Springfield, US", "37.22"], ["Springfield", "37.22"], ["Springfield, Nowhere", "37.22"]]
+  const urlOf = { "simonschubert/today": "wx", "simonschubert/forecast": "w", "simonschubert/sun-and-moon": "sun",
+                  "simonschubert/air-and-pollen": "air", "simonschubert/planes-overhead": null }
+  for (const id of Object.keys(urlOf)) {
+    const wrong = picks.filter(([city, lat]) => {
+      const r = run(id, { city, phoneUnit: "C" }, { geo: ok(springfield) })
+      return urlOf[id] ? !new RegExp("latitude=" + lat.replace(".", "\\.") + "&").test(r.urls[urlOf[id]]) : Math.abs(r.value("lat") - Number(lat)) > 0.01
+    })
+    check(!wrong.length, id + " picks the place as the lock screen does" + (wrong.length ? ": wrong for " + wrong.map((w) => w[0]).join("; ") : ""))
+  }
+  // The same answers from omamobile-weather's own pick_place, when python3 and the shell are beside this package.
+  const weather = path.resolve(here, "../omamobile-shell/bin/omamobile-weather")
+  if (fs.existsSync(weather)) {
+    const py = "import importlib.machinery, importlib.util, json, sys\n" +
+      "l = importlib.machinery.SourceFileLoader('w', sys.argv[1]); s = importlib.util.spec_from_loader('w', l); w = importlib.util.module_from_spec(s); l.exec_module(w)\n" +
+      "print(json.dumps([round(w.pick_place(c, json.loads(sys.argv[2]))['latitude'], 2) for c in json.loads(sys.argv[3])]))"
+    const out = require("child_process").execFileSync("python3", ["-B", "-c", py, weather, JSON.stringify(springfield), JSON.stringify(picks.map((p) => p[0]))], { encoding: "utf8" })
+    const theirs = JSON.parse(out)
+    check(picks.every((p, i) => Math.abs(theirs[i] - Number(p[1])) < 0.01), "omamobile-weather's pick_place agrees: " + theirs.join(", "))
+  }
+  const r = run("simonschubert/today", { city: "Springfield, IL" }, {})
+  check(/name=Springfield$/.test(r.urls.geo), "only the town goes to the lookup")
 }
 
 // forecast: the curve and the days, from the same answers.
@@ -177,7 +220,8 @@ for (const id of widgets) {
 // omaprayer: no IP location; "auto" uses its own default city.
 {
   const r = run("setiapam/omaprayer", { city: "auto" }, {})
-  check(r.all.includes("JAKARTA") && !/ERROR/.test(r.all), "omaprayer's auto is its default city: " + r.texts.slice(0, 3).join(" | "))
+  check(r.all.includes("SET A CITY") && !r.all.includes("JAKARTA") && !/ERROR/.test(r.all), "omaprayer's auto asks for a city: " + r.texts.slice(0, 3).join(" | "))
+  check(/latitude=-6\.2146/.test(run("setiapam/omaprayer", { city: "Jakarta" }, {}).urls.tz), "omaprayer still knows Jakarta when it is typed")
 }
 
 if (failures) { console.log(failures + " failed"); process.exit(1) }

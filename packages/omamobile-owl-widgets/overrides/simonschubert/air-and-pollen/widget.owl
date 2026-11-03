@@ -1,3 +1,4 @@
+// Modified from omarchy-widgets widgets/simonschubert/air-and-pollen/widget.owl@b63886b (MIT, Simon Schubert and contributors; see overrides/LICENSE) for Omarchy Mobile: weather from Open-Meteo.
 widget "air and pollen" {
   meta { description: "Air quality and today's pollen where you are, from Open-Meteo (Copernicus), at your location or a city you type (place lookup too: Open-Meteo, CC BY 4.0). Tap it for the next 24 hours, pollutants and every pollen type"; version: "1.1.1"; license: "MIT"; category: "world"; owl: 5 }
   size: 3x2
@@ -12,14 +13,20 @@ widget "air and pollen" {
   // a name ("Town" or "Town, Region") is looked up with Open-Meteo's geocoding. Open-Meteo has no IP location.
   let ll = match(trim(city), "^(-?[0-9.]+) *, *(-?[0-9.]+)$")
   let town = trim(split(city, ",")[0])
-  let region = lower(trim(join(drop(split(city, ","), 1), ",")))
+  // What follows the town, each part lower-case; a US state code also reads as its state, as omamobile-weather's
+  // pick_place does (the lock screen reads this widget's city too, so the two pick the same place).
+  let qualifiers = drop(split(city, ","), 1).map(x => lower(trim(x))).filter(x => x != "")
+  let usStates = {"al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas", "ca": "california", "co": "colorado", "ct": "connecticut", "de": "delaware", "dc": "district of columbia", "fl": "florida", "ga": "georgia", "hi": "hawaii", "id": "idaho", "il": "illinois", "in": "indiana", "ia": "iowa", "ks": "kansas", "ky": "kentucky", "la": "louisiana", "me": "maine", "md": "maryland", "ma": "massachusetts", "mi": "michigan", "mn": "minnesota", "ms": "mississippi", "mo": "missouri", "mt": "montana", "ne": "nebraska", "nv": "nevada", "nh": "new hampshire", "nj": "new jersey", "nm": "new mexico", "ny": "new york", "nc": "north carolina", "nd": "north dakota", "oh": "ohio", "ok": "oklahoma", "or": "oregon", "pa": "pennsylvania", "ri": "rhode island", "sc": "south carolina", "sd": "south dakota", "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont", "va": "virginia", "wa": "washington", "wv": "west virginia", "wi": "wisconsin", "wy": "wyoming"}
+  let wanted = flatten(qualifiers.map(x => [x, get(usStates, x, x)]))
   let named = ll == null && len(town) >= 2
   // The town, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
   let q = town.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+  // The URLs always start with their host, so the approval sheet can name it: with "lat,lon" the lookup still goes out
+  // with an empty name (an empty answer), and before a city is found the forecast goes out without a place (an error answer).
   source geo = http("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=${named ? q : ""}") every 24h timeout 10s json status
   let results = named && geo != null && geo.ok ? geo.out.results ?? [] : []
-  // The first result whose region, country or country code matches what follows the comma; else the first.
-  let found = find(results, r => region != "" && contains([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], region)) ?? first(results)
+  // The first result whose region, county, country or country code matches one of them; else the first.
+  let found = find(results, r => any([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], f => f != "" && contains(wanted, f))) ?? first(results)
   let lat = ll != null ? round(num(ll[0]), 2) : found != null ? round(found.latitude, 2) : null
   let lon = ll != null ? round(num(ll[1]), 2) : found != null ? round(found.longitude, 2) : null
   let placeName = ll != null ? "your location" : found != null ? found.name : town
