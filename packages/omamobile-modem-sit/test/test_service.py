@@ -201,3 +201,39 @@ class ServiceTests(unittest.TestCase):
             self.service.hangup_deadline=0.001
             with self.assertRaises(RuntimeError): self.service.pump()
             stop.assert_called_once()
+
+
+class RefusedAudioTests(unittest.TestCase):
+    def test_a_refused_audio_route_does_not_stop_the_call(self):
+        import service as service_module
+        svc = service_module.Service.__new__(service_module.Service)
+        svc.audio = None
+        svc.audio_error = ''
+        svc.muted = False
+        svc.settings = {'audio': {'card': 'auto', 'mic_boost_db': '6', 'earpiece': 'yes'}}
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read_dict(svc.settings)
+        svc.settings = cfg
+        with patch.object(service_module, 'aoc_card', return_value=0), \
+             patch.object(service_module.VoiceAudio, '__init__', return_value=None), \
+             patch.object(service_module.VoiceAudio, '__enter__',
+                          side_effect=RuntimeError('earpiece mode on failed: refused')):
+            svc.audio_start()   # must not raise
+        self.assertIsNone(svc.audio)
+        self.assertIn('earpiece mode on failed', svc.audio_error)
+
+
+    def test_a_failed_audio_cleanup_does_not_stop_the_service(self):
+        import service as service_module
+        svc = service_module.Service.__new__(service_module.Service)
+        svc.audio_error = ''
+        svc.muted = True
+        class Broken:
+            def __exit__(self, *a):
+                raise RuntimeError('voice cleanup failed: earpiece mode off')
+        svc.audio = Broken()
+        svc.audio_stop()   # must not raise
+        self.assertIsNone(svc.audio)
+        self.assertFalse(svc.muted)
+        self.assertIn('earpiece mode off', svc.audio_error)
