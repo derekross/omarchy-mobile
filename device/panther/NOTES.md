@@ -13,6 +13,7 @@ A second Pixel 7 (issue #342), with stock CP3A.261005.002.A1 sideloaded as a ful
 - **Why the first unit booted without footers** [I]: it ran LineageOS before the port. Its stock install wrote the bootloader and radio to slot B, but not `vbmeta_b`, so slot B kept a vbmeta that doesn't chain them. The guard keeps `vbmeta_b` read-only and outside `/dev/disk/by-partlabel`, so it wasn't read back.
 - **The descriptor** now has `AVB_FOOTERS`, `AVB_ROLLBACK_INDEX` and `AVB_SECURITY_PATCH`, as cheetah's does. Rebuilt from the same kernel output, `vendor_boot`, `vendor_kernel_boot`, `dtbo` and `dtb.img` are byte for byte the same, and `boot` and `init_boot` match up to their padding and footer.
 - **On the first unit** [V]: those images, flashed with `bin/omamobile flash`, booted as before (the same kernel, `systemctl is-system-running` running, one retry spent). So footers don't hurt a phone whose `vbmeta_b` doesn't chain them.
+- **On the second unit** [V, issue #342]: its tree with this change on top, the same kernel as its failed attempts, `bin/omamobile images` (both footer lines printed) and `bin/omamobile flash`. 24 s after fastboot dropped off, the USB gadget (`1d6b:0104`) appeared and stayed, bound as `cdc_ncm` on the host. Before the footers, nothing reached USB in 72 s.
 
 ## 2026-10-31: the battery
 
