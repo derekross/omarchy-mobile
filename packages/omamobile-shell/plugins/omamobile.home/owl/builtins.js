@@ -154,7 +154,8 @@ function timeField(d, letter, n) {
   throw new V.RuntimeError("bad time pattern")
 }
 
-// Omarchy's weather glyphs (Nerd Font) for wttr.in's weatherCode.
+// Omarchy's weather glyphs (Nerd Font) for World Weather Online's weatherCode
+// (the codes wttr.in served; our Open-Meteo copies map WMO codes onto them).
 function weatherGlyph(code, night) {
   var groups = [
     [[113], "", ""],

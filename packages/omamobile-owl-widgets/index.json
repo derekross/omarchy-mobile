@@ -146,9 +146,9 @@
    "status": "ok",
    "note": "L1-L5 checked",
    "name": "sun and moon",
-   "description": "Sunrise, sunset, daylight left and tonight's moon phase, located by IP or a city you type, via wttr.in",
+   "description": "Sunrise, sunset, daylight left and tonight's moon phase, from your location or a city you type (sun: Open-Meteo, CC BY 4.0; the moon is worked out from the date)",
    "category": "world",
-   "version": "1.2",
+   "version": "1.2.1",
    "license": "MIT",
    "owl": 5,
    "size": [
@@ -159,21 +159,19 @@
     3,
     3
    ],
-   "requires": [
-    "curl",
-    "jq"
-   ],
+   "requires": [],
    "commands": [
-    "IFS=$'\\t' read -r place rise set next phase illum < <(curl -fsm 12 'https://wttr.in/${q}?format=j1' | jq -r '[\n  .nearest_area[0].areaName[0].value, (.weather[0].astronomy[0] | .sunrise, .sunset),\n  .weather[1].astronomy[0].sunrise, (.weather[0].astronomy[0] | .moon_phase, .moon_illumination)\n] | @tsv') || exit\njq -nc --arg place \"$place\" --arg phase \"$phase\" \\\n  --argjson rise \"$(date -d \"today $rise\" +%s)\" --argjson set \"$(date -d \"today $set\" +%s)\" \\\n  --argjson next \"$(date -d \"tomorrow $next\" +%s)\" --argjson illum \"$illum\" \\\n  '{place: $place, rise: $rise, set: $set, next: $next, phase: $phase, illum: $illum}'"
+    "http GET (a URL built from widget values)",
+    "http GET (a URL built from widget values)"
    ],
    "capabilities": [
-    "commands",
     "network"
    ],
    "hosts": [
-    "wttr.in"
+    "geocoding-api.open-meteo.com",
+    "api.open-meteo.com"
    ],
-   "sha256": "019190af4ce2e7ada5d26069abbdf538778f4b280f03fb9fa9828af6ce999d54"
+   "sha256": "f6e3f94914f33ed8476237d326e4388e3d8fd214719e24fb03773e898edc3008"
   },
   {
    "id": "simonschubert/todo",
@@ -339,9 +337,9 @@
    "status": "ok",
    "note": "L1-L5 checked",
    "name": "air and pollen",
-   "description": "Air quality and today's pollen where you are, from Open-Meteo (Copernicus), located by IP or a city you type, via wttr.in. Tap it for the next 24 hours, pollutants and every pollen type",
+   "description": "Air quality and today's pollen where you are, from Open-Meteo (Copernicus), at your location or a city you type (place lookup too: Open-Meteo, CC BY 4.0). Tap it for the next 24 hours, pollutants and every pollen type",
    "category": "world",
-   "version": "1.1",
+   "version": "1.1.1",
    "license": "MIT",
    "owl": 5,
    "size": [
@@ -361,10 +359,10 @@
     "network"
    ],
    "hosts": [
-    "wttr.in",
+    "geocoding-api.open-meteo.com",
     "air-quality-api.open-meteo.com"
    ],
-   "sha256": "3ecd16cd679e83cee81eccc267abea59db26fb17e50e6f82d6d24ac522e6a737"
+   "sha256": "62bfdb79439d5c804849a2d8072027f63bf5a259cbf2d991685ca6e4310a0164"
   },
   {
    "id": "cbarland/asset-ticker",
@@ -1362,9 +1360,9 @@
    "status": "ok",
    "note": "L1-L5 checked",
    "name": "forecast",
-   "description": "Three-day weather forecast with an hourly temperature curve, located by IP or a city you type, via wttr.in",
+   "description": "Three-day weather forecast with an hourly temperature curve, from your location or a city you type (weather: Open-Meteo, CC BY 4.0)",
    "category": "world",
-   "version": "1.2",
+   "version": "1.2.1",
    "license": "MIT",
    "owl": 5,
    "size": [
@@ -1375,21 +1373,19 @@
     4,
     3
    ],
-   "requires": [
-    "curl",
-    "jq"
-   ],
+   "requires": [],
    "commands": [
-    "curl -fsm 12 'https://wttr.in/${q}?format=j1' | jq -c '{\n  place: .nearest_area[0].areaName[0].value,\n  now: .current_condition[0] | {temp: .temp_C, desc: .weatherDesc[0].value},\n  days: [.weather[] | {date, day: (.date | strptime(\"%Y-%m-%d\") | strftime(\"%a\")), max: .maxtempC, min: .mintempC, hours: [.hourly[].tempC | tonumber]}]\n}'"
+    "http GET (a URL built from widget values)",
+    "http GET (a URL built from widget values)"
    ],
    "capabilities": [
-    "commands",
     "network"
    ],
    "hosts": [
-    "wttr.in"
+    "geocoding-api.open-meteo.com",
+    "api.open-meteo.com"
    ],
-   "sha256": "240f4fd9f4f2875037a35a9f7810edfcc15d1e7f160c7ce6bcd8c7668bcdea80"
+   "sha256": "b91de9ef2545f891b11fba0e9db1106a71a4bf52fe3bc94057bdc8996900e44f"
   },
   {
    "id": "simonschubert/free-games",
@@ -2334,7 +2330,7 @@
    "name": "omaprayer",
    "description": "Prayer times timetable and Horizon day strip with Aladhan & Kemenag RI methods, Madhab Asr, ihtiyat tuning, city search, and 7-day schedule",
    "category": "productivity",
-   "version": "1.2",
+   "version": "1.2.1",
    "license": "MIT",
    "owl": 5,
    "size": [
@@ -2350,14 +2346,13 @@
     "http GET (a URL built from widget values)",
     "http GET (a URL built from widget values)",
     "http GET (a URL built from widget values)",
-    "http GET (a URL built from widget values)",
     "http GET (a URL built from widget values)"
    ],
    "capabilities": [
     "network"
    ],
    "hosts": [],
-   "sha256": "13b19e0b2dc64f7e0b25e12cca2f8739ff714b8ad6ad798230d540fbfe19a001"
+   "sha256": "8d40610edadb28df94bc431696e950531d18bbd8c55cf08e33c943af874ab751"
   },
   {
    "id": "daileng/omarcharium",
@@ -2521,9 +2516,9 @@
    "status": "ok",
    "note": "L1-L5 checked",
    "name": "planes overhead",
-   "description": "Aircraft around you on a live radar, from the OpenSky Network, located by IP or a city you type, via wttr.in. Tap it for every flight's altitude, speed and distance",
+   "description": "Aircraft around you on a live radar, from the OpenSky Network, at your location or a city you type (place lookup: Open-Meteo, CC BY 4.0). Tap it for every flight's altitude, speed and distance",
    "category": "world",
-   "version": "1.1",
+   "version": "1.1.1",
    "license": "MIT",
    "owl": 5,
    "size": [
@@ -2543,10 +2538,10 @@
     "network"
    ],
    "hosts": [
-    "wttr.in",
+    "geocoding-api.open-meteo.com",
     "opensky-network.org"
    ],
-   "sha256": "08f8b1447bfd67e87139a812e580479789a5079b5acd3eae77f917e42277d0ec"
+   "sha256": "b91176f446909875f9f51f7df56cb369c917fcb310759ecdc0e206549e172a14"
   },
   {
    "id": "tusshar2000/ppt-maker",
@@ -2641,11 +2636,11 @@
    "status": "ok",
    "note": "L1-L5 checked",
    "name": "red panda",
-   "description": "A pixel red panda living in a tree. Pet it, tickle it, scritch it, feed it bamboo, shake its leaves; it naps draped over its branch and holds a leaf over its head when it rains (weather from wttr.in)",
+   "description": "A pixel red panda living in a tree. Pet it, tickle it, scritch it, feed it bamboo, shake its leaves; it naps draped over its branch and holds a leaf over its head when it rains (the phone's own weather reading, from Open-Meteo, CC BY 4.0)",
    "category": "fun",
-   "version": "1.1",
+   "version": "1.1.1",
    "license": "MIT",
-   "owl": 3,
+   "owl": 5,
    "size": [
     3,
     3
@@ -2656,15 +2651,13 @@
    ],
    "requires": [],
    "commands": [
-    "http GET https://wttr.in/?format=j1"
+    "if Linux is installed: read file ~/.local/state/omamobile/weather.json"
    ],
    "capabilities": [
-    "network"
+    "files"
    ],
-   "hosts": [
-    "wttr.in"
-   ],
-   "sha256": "ea4c7b9f7facc2579799b7304ddf9903846b245d67b9c7da6010f0064ea7f90c"
+   "hosts": [],
+   "sha256": "78340f977ccfe42ae53ae87eaf7d3df6fc61d1083e2807bea963ed464c9bc082"
   },
   {
    "id": "simonschubert/releases",
@@ -3036,9 +3029,9 @@
    "status": "ok",
    "note": "L1-L5 checked",
    "name": "today",
-   "description": "The date and the weather where you are, by IP or a city you type. Tap it for the next 24 hours, three days, wind, UV, sun and moon",
+   "description": "The date and the weather where you are, from your location or a city you type (weather: Open-Meteo, CC BY 4.0). Tap it for the next 24 hours, three days, wind, UV, sun and moon",
    "category": "world",
-   "version": "1.1",
+   "version": "1.1.1",
    "license": "MIT",
    "owl": 5,
    "size": [
@@ -3051,15 +3044,17 @@
    ],
    "requires": [],
    "commands": [
+    "http GET (a URL built from widget values)",
     "http GET (a URL built from widget values)"
    ],
    "capabilities": [
     "network"
    ],
    "hosts": [
-    "wttr.in"
+    "geocoding-api.open-meteo.com",
+    "api.open-meteo.com"
    ],
-   "sha256": "b49b3feae2ab85937eb6f064c71ebda38cd5f9a9987b1ef722942e748a902999"
+   "sha256": "ce169879c0f6313905e171306f0ec028d763cf3ba061a47c71f9bbdf49229a1e"
   },
   {
    "id": "simonschubert/uptime",
