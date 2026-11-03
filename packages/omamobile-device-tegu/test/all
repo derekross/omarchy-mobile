@@ -104,6 +104,11 @@ for unit in omamobile-tegu-graphics omamobile-tegu-usb-rescue; do
   [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/$unit.service") == ../$unit.service ]] \
     || fail "$unit is enabled by a vendor wants link"
 done
+# The modem's boot start is opt-in: installed, never enabled by the package
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-tegu-modem-boot.service ]] || fail "install stages the modem's boot start"
+[[ -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-modem-boot.service ]] \
+  && fail "the modem's boot start is enabled by the package (it must be opt-in)"
+grep -q 'omamobile-tegu-modem-boot' omamobile-device-tegu.install && fail "the install scriptlet must not enable the modem's boot start"
 # The AoC start runs at every boot (its condition skips a DTB without the
 # node), and answers to omamobile-aoc.service for the sensor and fp units.
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-aoc.service") == ../omamobile-tegu-aoc.service ]] \
@@ -192,7 +197,7 @@ pass "the Bluetooth address is read at run time"
 
 grep -c '^for unit in omamobile-sensor-proxy.service omamobile-nfc-open.service; do$' bin/omamobile-setup-system >/dev/null || fail "setup-system enables the sensor proxy and the NFC opener"
 grep -qE 'omamobile-(fp|gnss-nmea|speaker-protection)' <(grep '^for unit' bin/omamobile-setup-system) && fail "setup-system must not enable fingerprint, GNSS or speaker protection on the 9a"
-for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/charge-limit; do
+for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks test/charge-limit test/modem-up; do
   "$t" || fail "$t"
 done
 pass "the scripts behave in a scratch root"
