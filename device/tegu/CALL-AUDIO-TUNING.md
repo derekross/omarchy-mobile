@@ -1,62 +1,61 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a: call tuning and the first earpiece route
 
-Status, 2026-11-03: **implemented and tested offline, no phone trial**.
-Branch `tegu-call-audio-aec-earpiece` builds on `sitd-tegu-call-audio`
-(`d826388`); omamobile-modem-sit 0.3.13. AEC is off by default and call
-audio still defaults to `card = none`. The earpiece mode below is a
-conservative top-speaker route, not a reproduction of every stock codec
-profile setting. This note records the remaining distinction explicitly.
+Status, 2026-11-03: tried on the palmtop. On 2026-11-02 (the daily kernel
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, speakerphone
+calls to the owner's iPhone, results at the end) the AoC accepted both
+uploads, but the far end still heard its own voice. AEC is off by default,
+and call audio still defaults to `card = none`. The earpiece mode below is
+a conservative top-speaker route, not a reproduction of every stock codec
+profile setting.
 
 ## Sources and the tuning transport
 
-Read the owner's saved 9a audio HAL, its AoC utility library, mixer paths,
-platform configuration and factory-image `/vendor/etc/aoc` files as data.
-No vendor program was run or copied into the repository. Compare the
-functional interface with our GPL kernel at
-[`253ddb231a89792ea845549c55fb0f04536c9317`](https://github.com/derekross/linux-omarchy-mobile/tree/253ddb231a89792ea845549c55fb0f04536c9317):
-`drivers/soc/google/aoc/aoc-interface-gs201.h`, `aoc_char_dev.c`,
-`alsa/aoc_alsa_ctl.c`, `alsa/aoc_alsa_hw.c`, and
-`sound/soc/codecs/tas2781-{i2c,fmwlib}.c` / `include/sound/tas2x20-tlv.h`.
-The kernel worktree is `~/android/mainline/wt-call-test`.
+The command and its fields come from our GPL kernel on `omamobile`:
+`struct CMD_AUDIO_OUTPUT_SET_PARAMETER_BULK` (ID 210) and `struct CMD_HDR`
+in `drivers/soc/google/aoc/aoc-interface-gs201.h`, the character services
+in `aoc_char_dev.c`, and the `Audio DSP Mode` and `FT AEC Reference Source`
+controls in `alsa/aoc_alsa_ctl.c`. The tuning files themselves are the
+owner's, copied unchanged from the factory image's `/vendor/etc/aoc`; no
+vendor program is run or copied into the repository.
 
-Stock uses the `fmapmg3hybrid` telephony tuner. Its APMg3 adapter wraps
-an unchanged protobuf with this **12-byte little-endian envelope**:
+Each protobuf goes to the AoC wrapped in a 12-byte little-endian envelope,
+the form stock's telephony tuning sends and the palmtop's AoC accepts
+(status 0):
 
-| Offset | Type | Meaning used by the adapter |
+| Offset | Type | Meaning |
 | --- | --- | --- |
-| 0 | u16 | 2 (envelope tag; its semantic name is not established here) |
+| 0 | u16 | 2 (a tag; its name isn't known) |
 | 2 | u16 | Total envelope plus protobuf length |
 | 4 | u32 | 19 for uplink tuning, 20 for downlink tuning |
 | 8 | u32 | Protobuf length |
-| 12 | bytes | Original protobuf |
+| 12 | bytes | The protobuf, unchanged |
 
-Both operations use AoC address **block 19, component 24, address type 0**.
-In `AocTuningCommands::SetParameterBulk`, type 0 selects
-**`audio_output_tuning`**, not `audio_input_tuning`: block/component names
-do not select the character channel. Write the envelope padded to a full
+Both operations use AoC **block 19, component 24** on the output tuning
+service (`audio_output_tuning`), not the input one. Write the envelope padded to a full
 **16384-byte block** to `/dev/acd-audio_bulk_tx`, then send a **22-byte**
 CMD_AUDIO_OUTPUT_SET_PARAMETER_BULK (ID 210 / `0x00d2`) record on
 `/dev/acd-audio_output_tuning`:
 
 | Bytes | Field |
 | --- | --- |
-| 0, 1 | CMD type 0, counter |
+| 0, 1 | `CONTAINER_HDR` type 0, counter (the AoC rewrites the counter in its reply) |
 | 2–3 | u16 length 22 |
 | 4–5, 6–7 | u16 command ID 210, signed i16 reply initially 0 |
 | 8, 9 | u8 block 19, component 24 |
 | 10–13, 14–17 | u32 TX offset 0, TX address 0 |
-| 18–21 | u32 envelope length, not the padding length |
+| 18–21 | u32 `tx_size`: the envelope length, not the padding length |
 
-Stock's utility has a separate type-1 family using `audio_input_tuning`,
-`audio_input_bulk_tx/rx`, ID 234 and a 5120-byte staging buffer. That is
-not the APMg3 upload described above. Stock opens the output bulk RX service
-as part of its generic descriptor set; this write-only implementation
-needs no bulk RX read. The tuning reply comes back on the tuning service.
+The input side has its own command, `CMD_AUDIO_INPUT_SET_PARAMETER_BULK`
+(ID 234), on `audio_input_tuning`; it isn't used here. This upload needs no
+bulk RX read: the reply comes back on the tuning service.
 
 `aoc_tuning.py` implements only the two uplink/downlink operations, with
 bounded nonblocking writes, one-second readiness/acknowledgement deadlines,
-exact record lengths, command/counter matching and a zero reply required.
+exact record lengths, and a reply that matches the command's type, length
+and ID with a zero status. The second header byte, the counter, isn't
+compared: the AoC answers with its own (0x01 sent, 0x3e back on the
+palmtop), which the first version took for an unknown outcome (0.3.19).
 It never resumes a short record, retries an unknown command, maps SRAM or
 opens the CP/AoC shared voice window. `aoc_char_dev` makes the service
 opens exclusive. An uncertain write/reply leaves the private RAM marker
@@ -183,4 +182,23 @@ unexpected gain, feedback, missing bottom attenuation or unconfirmed
 cleanup. Hang up and retain the mute/uncertainty state. Never retry or reset
 the running CP in place. Rollback is the previous package/config on an
 attended fresh boot; no automatic unit restart, warm modem restart or
-manual marker deletion. Hardware results: **not run**.
+manual marker deletion.
+
+## Results on the palmtop, 2026-11-02
+
+The daily kernel, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`,
+the six files from the owner's factory image (BP3A.250905.014, matching the
+palmtop's AoC firmware), `tegu_aec = yes`, `tegu_route = speaker`, calls to
+the owner's iPhone, which the owner answered:
+
+1. sitd 0.3.18 (before the counter fix): the uplink upload was accepted
+   with status 0, but the reply's counter byte differed, sitd took it for an
+   unknown outcome and kept the call silent, as designed.
+2. 0.3.19: both uploads confirmed, audio both ways. The far end heard its
+   own voice come back, as without the tuning.
+3. 0.3.20, with `Audio DSP Mode` set to `Telephony_APMG3` before the
+   uploads: the far end heard no echo for the first few seconds and a new
+   low hiss, then the echo came back with the hiss still there.
+
+So the uploads and the DSP mode take effect, but the cancellation doesn't
+hold yet. The earpiece route hasn't been tried.
