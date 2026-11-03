@@ -701,6 +701,35 @@ silent hangs had an oops in its journal, so that is a second failure, not
 the hang. The series now stops on any oops, and runs again from
 2026-11-03 10:49.
 
+**S1-W result (2026-11-03, same release): 80 woke, the 81st woke with UFS
+dead.** The run from 10:49 (the AoC, Trusty and Wi-Fi up, every CPU on WFI
+alone) had 80 clean sleeps: wake IRQ 56 each, no UFS, ACPM or oops lines,
+Wi-Fi re-probed after every wake. The 81st (12:19) woke on its alarm, but
+UFS didn't come back: `resume-trace: wl resume begins (pm_op 1, link 0,
+dev 3)`, then `link startup failed 1` and `Host init failed 1` five times
+within 20 ms, then I/O errors and ext4 `emergency_ro`, the 10-30 afternoon
+shape. A good resume shows a first link attempt that fails in
+`zumapro_ufs_pre_link()` on `dme-set: attr-id 0x4021` (T_PeerDeviceID) and
+a retry that works; the bad one has no such line, and the link startup
+command itself failed on every try. brcmfmac's re-probe over PCIe ran at
+the same moment as on every other wake. `echo b > /proc/sysrq-trigger`
+brought the palmtop back, and the next boot mounted the root read-write.
+So WFI alone doesn't prevent the dead-storage wake: that failure is in the
+UFS resume from `spm_lvl` 5 (device powered down, link off), which runs a
+full link startup at every wake. No silent hang in 102 WFI-only sleeps
+today (22 + 80), which against one in 10 to one in 127 says little.
+
+**S1-U. UFS at `spm_lvl` 3 for system sleep (risk low; unattended, cable
+in).** At runtime this palmtop's UFS idles at `rpm_lvl` 3 (device sleep,
+link in hibern8) many times an hour without an error (kernel #99), and a
+resume from it is a hibern8 exit, not a link startup. At `spm_lvl` 3 system
+sleep uses the same states. The 7 Pro needed 5 because its first hibern8
+exit after a freeze failed once at 3 (S1-S3 of its SUSPEND-PLAN), so this
+is the 9a's own question. The same series as S1-W with `spm_lvl` 3 and the
+CPUs' idle states left as they ship (core power-down on), so it is the
+setup the package would ship; the script puts 5 back on EXIT. A UFS error
+line stops it (then `echo b > /proc/sysrq-trigger`), as does an oops.
+
 Pass: 300 of 300 woke. Then the drain on WFI alone against core power-down
 (S1's buck-off coulomb counts, 240 s sleeps each way) decides whether the
 device package should sleep on WFI. Fail: a hang on WFI alone retires core
