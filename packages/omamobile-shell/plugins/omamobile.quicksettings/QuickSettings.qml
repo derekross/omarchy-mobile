@@ -1005,6 +1005,14 @@ Item {
     readonly property string status: !available ? (root.probed.data_status || "No modem")
       : !enabled ? "Off" : (root.probed.data_status || "On")
     function toggle() { if (available) root.runTileAction("mobile-data", !enabled) }
+    // The chevron (and a long press): the Mobile network page
+    // (omamobile.mobilenetwork), through the CLI, since a plugin only
+    // summons its own panels. Shown with a modem only.
+    readonly property bool details: available
+    function openDetails() {
+      root.dismiss()
+      Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.mobilenetwork", "{}"])
+    }
   }
 
   // Rotation lock over omamobile-autorotate (omamobile-sensors): it rotates

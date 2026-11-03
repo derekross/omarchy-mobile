@@ -354,22 +354,28 @@ def parse_profile(key, value):
     return Profile(ident, apn, types, **options)
 
 
-def configured_profiles(settings):
-    """The profiles to send, in profile ID order: [profiles] as written, and
-    profile 0 from [network] apn unless [profiles] has its own 0. Raises
-    ValueError on any bad line (start-up then stops before the radio)."""
+def configured_profiles(settings, apn=None, extra=()):
+    """The profiles to send, in profile ID order: [profiles] as written when
+    it has any line, else extra (a carrier override's (ID, line) pairs, from
+    carrier_apn), and profile 0 from the internet APN (apn, else [network]
+    apn) unless the set has its own 0. No APN and no 0: no profile 0, as a
+    SIM with no known APN gets no internet bearer either. Raises ValueError
+    on any bad line (start-up then stops before the radio)."""
     net = settings['network']
-    found = {}
+    if apn is None:
+        apn = net.get('apn', '')
+    lines = []
     if settings.has_section('profiles'):
-        for key, value in settings.items('profiles', raw=True):
-            if key in settings.defaults():
-                continue
-            profile = parse_profile(key, value)
-            if profile.ident in found:
-                raise ValueError(f'profile {profile.ident} given twice')
-            found[profile.ident] = profile
-    if 0 not in found:
-        found[0] = default_profile(net.get('apn', ''), net.get('ip_type', 'ipv4v6'))
+        lines = [(key, value) for key, value in settings.items('profiles', raw=True)
+                 if key not in settings.defaults()]
+    found = {}
+    for key, value in lines or list(extra):
+        profile = parse_profile(key, value)
+        if profile.ident in found:
+            raise ValueError(f'profile {profile.ident} given twice')
+        found[profile.ident] = profile
+    if 0 not in found and apn:
+        found[0] = default_profile(apn, net.get('ip_type', 'ipv4v6'))
     return [found[i] for i in sorted(found)]
 
 

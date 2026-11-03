@@ -23,6 +23,7 @@ logical at scale 3).
 | `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
+| `omamobile.mobilenetwork` | `panel` (keepLoaded) | The Mobile network page: carrier, signal, mobile data, data roaming, the APN and (under Advanced) the attach APN, the SIM PIN lock; Setup > Mobile network or the Mobile data tile's chevron. "No modem" without the modem stack (docs/TELEPHONY-APPS-PLAN.md 7.6) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling

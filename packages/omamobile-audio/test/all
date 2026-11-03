@@ -835,14 +835,34 @@ eprep=(OMAMOBILE_SPK_EARPIECE_ANALOG=7); ear on; refused "analog above 6"
 eprep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=6x); ear on; refused "a level that is no number"
 eprep=(OMAMOBILE_SPK_EARPIECE_DRE=yes); ear on; refused "a DRE that is not 0 or 1"
 eprep=(OMAMOBILE_SPK_DIGITAL=800); ear on; refused "speaker levels above the stage's"
-eprep=(OMAMOBILE_SPK_BOOST=1); ear on; refused "OMAMOBILE_SPK_BOOST=1 with the converter off"
 ear sideways; ((rc == 2)) || fail "earpiece: an unknown request"
+# OMAMOBILE_SPK_BOOST is the start's: with the converter off it changes nothing for the earpiece
+: > "$r/cset.log"; eprep=(OMAMOBILE_SPK_BOOST=1); ear on
+((rc == 0)) && [[ $(val "Top PCM Source") == 0 && $(cat "$r/run/speaker-protection") == *"mode earpiece"*"boost converter off"* ]] || { cat "$r/ear.out" >&2; fail "earpiece: OMAMOBILE_SPK_BOOST=1 with the converter off is accepted (the variable is the start's)"; }
+ear off; ((rc == 0)) || { cat "$r/ear.out" >&2; fail "earpiece off after that"; }
 stopwatch
+# the converter left on by the start (stage media forced, or stage c9): the earpiece takes it as it is (C9k, 2026-11-03)
 prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_BOOST=1); run e-boost; bgwatch; : > "$r/cset.log"
-ear on; refused "the boost converter left on (needs a rebind)"
-grep -c 'needs the boost converter off' "$r/ear.out" >/dev/null || fail "earpiece: says why the boost refuses"
-eprep=(OMAMOBILE_SPK_BOOST=1); ear on; ((rc == 0)) && [[ $(val "Top PCM Source") == 0 ]] || { cat "$r/ear.out" >&2; fail "earpiece: OMAMOBILE_SPK_BOOST=1 accepts the converter on"; }
+ear on
+((rc == 0)) && [[ $(val "Top PCM Source") == 0 && $(val "Top Digital PCM Volume") == 657 && $(val "Top Analog PCM Volume") == 6 && $(val "Bottom Digital PCM Volume") == 0 &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y &&
+  $(cat "$r/run/speaker-protection") == "ok: stage media, mode earpiece: Top 657/6 through PCM Source ASP"*"Bottom muted"*"boost converter on"* ]] || { cat "$r/ear.out" "$r/run/speaker-protection" >&2; fail "earpiece on with the boost converter left on: accepted, the status says the converter is on"; }
+grep -c 'boost converter' "$r/ear.out" >/dev/null && fail "earpiece: no boost refusal any more"
+ear off; ((rc == 0)) && [[ $(val "Top PCM Source") == 1 && $(val "Top Digital PCM Volume") == 737 ]] || { cat "$r/ear.out" >&2; fail "earpiece off with the converter on"; }
 stopwatch
+c9 e-c9; ((rc == 0)) || { cat "$r/out" >&2; fail "earpiece: a stage c9 start"; }
+ampstate > "$r/speaker-state"
+wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); bgwatch; : > "$r/cset.log"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_ACK_WAIT=2); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top PCM Source") == 0 && $(val "Top Digital PCM Volume") == 657 && $(val "Top Analog PCM Volume") == 6 && $(val "Bottom Digital PCM Volume") == 0 && $(val "Bottom Analog PCM Volume") == 17 &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y &&
+  $(cat "$r/run/speaker-protection") == "ok: stage c9, mode earpiece: Top 657/6 through PCM Source ASP"*"Bottom muted"*"boost converter on"* ]] || { cat "$r/ear.out" "$r/run/speaker-protection" "$r/bgwatch.out" >&2; fail "earpiece on at stage c9 (the boost converter on): the top at 657/6 through ASP, the bottom muted at its analog 17"; }
+sleep 0.3; [[ $(val "Top Digital PCM Volume") == 657 ]] || { cat "$r/bgwatch.out" >&2; fail "earpiece on at stage c9: the watchdog accepts it"; }
+rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_ACK_WAIT=2); sp earpiece off > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(ampstate) == "$(cat "$r/speaker-state")" && $(val "Top Digital PCM Volume") == 817 && $(val "Bottom Analog PCM Volume") == 17 &&
+  $(cat "$r/run/speaker-protection") == "ok: stage c9, protection firmware"*"boost converter on"* ]] || { diff <(ampstate) "$r/speaker-state" >&2; cat "$r/ear.out" "$r/run/speaker-protection" >&2; fail "earpiece off at stage c9: every control back at the stage's value (817, top 11 / bottom 17), the converter still on"; }
+stopwatch
+pass "earpiece at the louder stage: the boost converter left on by the start is taken as it is (stage c9, or OMAMOBILE_SPK_BOOST=1 at media), the status line says so, off restores the stage (C9k, 2026-11-03)"
 prep=(OMAMOBILE_SPK_STAGE=c8 OMAMOBILE_SPK_EARPIECE_DIGITAL=658); run e-c8; : > "$r/cset.log"
 rc=0; prep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=658); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
 refused "stage c8: digital above 657"
@@ -853,7 +873,7 @@ grep -c 'CSPL Error Detected' "$r/ear.out" >/dev/null || fail "earpiece: names t
 media; run e-off-muted; sp mute >/dev/null; : > "$r/cset.log"; ear off; refused "off after a mute"
 media; run e-nowatch; : > "$r/cset.log"; ear on
 ((rc == 1)) && muted && [[ $(cat "$r/run/speaker-protection") == "muted: earpiece: the watchdog did not take earpiece mode"* && $(val "Top PCM Source") == 1 ]] || { cat "$r/ear.out" >&2; fail "earpiece on without a watchdog: both muted, the DSP never bypassed"; }
-pass "earpiece: refuses levels above the ceilings, a boost converter left on, a stopped, unhealthy or half-started protection; without a watchdog both stay muted"
+pass "earpiece: refuses levels above the ceilings, a stopped, unhealthy or half-started protection; without a watchdog both stay muted"
 
 # status, health and mute
 r=$tmp/run.ok

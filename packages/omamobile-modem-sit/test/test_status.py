@@ -32,7 +32,11 @@ class SimStatusTests(unittest.TestCase):
         self.assertEqual(app_service.sim_status(sim_payload(2)), dict(state='error'))
         self.assertEqual(app_service.sim_status(sim_payload(1)), dict(state='detected'))
         self.assertEqual(app_service.sim_status(sim_payload(1, [(2, 5, 3, 10)])),
-                         dict(state='ready', pin_retries=3, puk_retries=10))
+                         dict(state='ready', pin_retries=3, puk_retries=10, pin_lock='unknown'))
+        locked = bytearray(sim_payload(1, [(2, 5, 3, 10)]))
+        for pin1, lock in ((3, 'off'), (2, 'on'), (1, 'on'), (0, 'unknown')):
+            locked[3 + 57] = pin1
+            self.assertEqual(app_service.sim_status(bytes(locked))['pin_lock'], lock)
         self.assertEqual(app_service.sim_status(sim_payload(1, [(2, 2, 2, 10)]))['state'], 'pin')
         self.assertEqual(app_service.sim_status(sim_payload(1, [(2, 3, 0, 9)]))['state'], 'puk')
         # The USIM wins over an ISIM listed first.
@@ -46,7 +50,7 @@ class SimStatusTests(unittest.TestCase):
     def test_no_identifiers(self):
         status = app_service.sim_status(sim_payload(1, [(2, 5, 3, 10)]))
         self.assertNotIn('USIM', json.dumps(status))
-        self.assertEqual(set(status), {'state', 'pin_retries', 'puk_retries'})
+        self.assertEqual(set(status), {'state', 'pin_retries', 'puk_retries', 'pin_lock'})
 
 
 class StatusAndSubscriptionTests(unittest.TestCase):

@@ -1005,6 +1005,45 @@ fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
 bash -n bin/omamobile-onboarding || fail "omamobile-onboarding parses"
 bash test/onboarding-fingerprint.sh || fail "omamobile-onboarding's fingerprint offer"
+bash test/onboarding-mobile.sh || fail "omamobile-onboarding's SIM line"
+
+# The Mobile network page (omamobile.mobilenetwork): on for new and existing
+# users, Setup > Mobile network only where the modem stack is, the Mobile
+# data tile's chevron opens it, and its backend and model behave.
+m=plugins/omamobile.mobilenetwork/MobileNetwork.qml
+python3 -c 'import json; assert {"id": "omamobile.mobilenetwork"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "new users get the Mobile network page"
+grep -c 'add_plugin omamobile.mobilenetwork' bin/omamobile-setup-user >/dev/null || fail "existing users get the Mobile network page"
+grep -c '"setup.mobile-network".*"when":"test -x \\/usr\\/lib\\/omamobile-sit\\/omamobile-sit-config".*summon omamobile.mobilenetwork' bin/omamobile-setup-user >/dev/null ||
+  fail "Setup > Mobile network opens the page, only with the modem stack"
+grep -c '"omarchy-shell", "shell", "summon", "omamobile.mobilenetwork", "{}"' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null ||
+  fail "the Mobile data tile's chevron opens the page"
+grep -c 'exclusionMode: ExclusionMode.Normal' $m >/dev/null || fail "the APN field stays above the on-screen keyboard"
+if grep -nE 'execDetached\(\[.*(pkexec|omamobile-sit-config)' $m; then fail "the page changes settings only through omamobile-mobile-network"; fi
+if grep -nE 'systemctl.*(restart|stop).*omamobile-(modem|sitd)' $m bin/omamobile-mobile-network; then fail "the page never restarts the modem services"; fi
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-mobile-network || fail "omamobile-mobile-network parses"
+python3 -B test/mobile-network.py >/dev/null 2>&1 || { python3 -B test/mobile-network.py; fail "omamobile-mobile-network"; }
+if command -v node >/dev/null; then
+  node test/mobile-network-model.js >/dev/null || { node test/mobile-network-model.js; fail "Mobile network page model"; }
+fi
+grep -c 'Model.attachArgv(v)' $m >/dev/null && grep -c 'id: attachField' $m >/dev/null ||
+  fail "the attach APN has its own field under Advanced"
+python3 -B - <<'PY' || fail "the Mobile network page lints clean"
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
+spec = importlib.util.spec_from_loader("omamobile_widget", loader)
+tool = importlib.util.module_from_spec(spec)
+loader.exec_module(tool)
+if not tool.qmllint_path() or not os.path.isdir(os.path.join(tool.OMARCHY_PATH, "shell")):
+    sys.exit(0)
+lint = tool.run_qmllint([os.path.abspath("plugins/omamobile.mobilenetwork/MobileNetwork.qml")])
+noise = ("is not creatable", "QProcess::ExitStatus")
+bad = lint["errors"] + [w for w in lint["warnings"] if not any(n in w for n in noise)]
+for line in bad:
+    print("  " + line)
+sys.exit(1 if bad else 0)
+PY
+pass "Mobile network page"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"

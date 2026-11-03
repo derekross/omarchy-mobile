@@ -25,6 +25,10 @@ fictional 555-01xx ones, addresses are from the documentation ranges.
   tools/sit-sim --ipc PATH --router PATH [--transcript FILE] [--search-polls N]
                 [--incoming-sms] [--no-sim] [--reject-setup CAUSE]
                 [--no-ims-registration] [--unconfirmed-hangup] [--control PATH]
+                [--imsi-plmn MCCMNC] [--no-imsi]
+
+GET_IMSI answers a home network code (--imsi-plmn, default the test
+network 00101) and a made-up subscriber part; --no-imsi refuses it.
 
 --no-ims-registration accepts ADD_PDN_INFO but never registers IMS (a
 carrier whose IMS values differ). --unconfirmed-hangup acknowledges hangup
@@ -54,6 +58,10 @@ TEST_SENDER = '+12025550123'        # fictional
 # identity the registration indication carries.
 TEST_AID = bytes.fromhex('a0000000871002ff') + b'8901260000000000017'[:8]
 TEST_LABEL = b'SIMSIM-LABEL'
+# GET_IMSI's default answer: the test network 001/01 (in no carrier
+# database) and a made-up subscriber part. --imsi-plmn gives another home
+# network code (a carrier's public MCC/MNC) with the same made-up tail.
+TEST_MSIN = '000000017'
 TEST_IMS_URI = b'sip:001010000000017@ims.mnc001.mcc001.3gppnetwork.org;tel:+12025550100'
 # The do-not-send list (MODEM-SIT-RESEARCH section 5), by ID.
 DENIED = {0x0947, 0x0937, 0x0948, 0x0907, 0x0908, 0x0910, 0x093A, 0x0942, 0x0940, 0x0406,
@@ -63,7 +71,7 @@ DENIED_FAMILIES = (0x0E, 0x13)
 # Expected request lengths (the stock builders').
 LENGTHS = {0x0600: 983, 0x0603: 251, 0x0613: 246, 0x0d00: 12 + 679, 0x0d1b: 272,
            0x0d08: 12 + 679, 0x0102: 21, 0x0d1d: 21, 0x0748: 13, 0x0710: 13, 0x0625: 14,
-           0x061b: 16, 0x0d39: 14, 0x0d03: 15, 0x0d02: 18, 0x0d0a: 15, 0x0902: 16, 0x0928: 16}
+           0x061b: 16, 0x0d39: 14, 0x0d03: 15, 0x0d02: 18, 0x0d0a: 15, 0x0902: 16, 0x0928: 16, 0x0400: 29}
 
 
 def addr(text):
@@ -148,7 +156,11 @@ class Sim:
     def ok(self, mid, token, p):
         self.respond(mid, token)
 
-    r_0603 = r_0613 = r_0625 = r_0d39 = r_0d07 = r_0d1d = r_0102 = r_0902 = r_0928 = ok
+    r_0613 = r_0625 = r_0d39 = r_0d07 = r_0d1d = r_0102 = r_0902 = r_0928 = ok
+
+    def r_0603(self, mid, token, p):            # SET_INITIAL_ATTACH_APN
+        self.log(event='initial_attach', apn=p[4:0xd9 - 12].split(b'\0')[0].decode('ascii', 'replace'))
+        self.respond(mid, token)
 
     def r_0200(self, mid, token, p):            # GET_SIM_STATUS
         if self.a.no_sim:
@@ -157,8 +169,19 @@ class Sim:
         app[0], app[1] = 2, 5                    # USIM, READY
         app[3], app[4:4 + len(TEST_AID)] = len(TEST_AID), TEST_AID
         app[20], app[21:21 + len(TEST_LABEL)] = len(TEST_LABEL), TEST_LABEL
+        app[57] = 3                              # PIN1 disabled (no PIN lock)
         app[59], app[60] = 3, 10                 # PIN and PUK tries left
         self.respond(mid, token, 0, bytes([1, 0, 1]) + bytes(app))
+
+    def r_0400(self, mid, token, p):            # GET_IMSI
+        aid = p[1:1 + p[0]] if p and p[0] <= 16 else b''
+        if aid != TEST_AID:
+            self.log(violation='GET_IMSI without the USIM AID')
+            return self.respond(mid, token, 2)
+        if self.a.no_imsi:
+            return self.respond(mid, token, 2)
+        imsi = (self.a.imsi_plmn + TEST_MSIN)[:15].encode()
+        self.respond(mid, token, 0, bytes([len(imsi)]) + imsi.ljust(15, b'\0'))
 
     def registered(self):
         return self.radio == 1 and self.polls > self.a.search_polls and not self.a.no_sim
@@ -346,6 +369,8 @@ def main():
     p.add_argument('--no-ims-registration', action='store_true')
     p.add_argument('--unconfirmed-hangup', action='store_true')
     p.add_argument('--control')
+    p.add_argument('--imsi-plmn', default='00101')
+    p.add_argument('--no-imsi', action='store_true')
     p.add_argument('-v', '--verbose', action='store_true')
     a = p.parse_args()
     ipc = listen(a.ipc, socket.SOCK_SEQPACKET)
