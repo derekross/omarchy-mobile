@@ -52,7 +52,7 @@ grep -q 'drivers: the running kernel' "$t/k2/out" || fail "the start says which 
 n_inhibit=$(grep -n 'unit=omamobile-tegu-modem-nosleep' "$c" | cut -d: -f1)
 n_driver=$(grep -n '^modprobe pcie_gs201_cp' "$c" | cut -d: -f1)
 n_check=$(grep -n '^chroot modem check' "$c" | cut -d: -f1)
-(( n_check < n_inhibit && n_inhibit < n_driver )) || fail "the NV check, then the sleep inhibitor, then the drivers"
+(( n_inhibit < n_driver && n_driver < n_check )) || fail "the sleep inhibitor, then the drivers, then the profile check (it needs CPIF loaded)"
 [[ ! -e $t/k2/latch ]] || fail "the latch is cleared once the CP is ONLINE"
 grep -qx 'systemctl start omamobile-sitd.service' "$c" || fail "--phone starts the phone service"
 grep -qx 'systemctl start omamobile-mmd.service' "$c" || fail "--phone starts the bridge when it's installed"

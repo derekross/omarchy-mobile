@@ -155,10 +155,9 @@ Licence: MIT.
 `omamobile-tegu-modem-up` starts the CP once per boot: the kernel's own
 drivers when it carries them (`cpif`, `pcie_gs201_cp` and the device tree's
 `cpif` node), else the bring-up modules in `/var/lib/omamobile-tegu/modem`.
-It runs the read-only NV check, takes a sleep inhibitor before any driver
-loads (suspend with the CP up isn't qualified on the 9a, so nothing sleeps
-until the reboot), writes a latch before the drivers load and clears it at
-CP ONLINE, and with `--phone` starts `omamobile-sitd` and, when installed,
+It takes a sleep inhibitor before any driver loads (suspend with the CP up isn't qualified on the 9a, so nothing sleeps
+until the reboot), writes a latch before the drivers load, runs the modem
+profile's read-only NV check once CPIF is loaded, clears the latch at CP ONLINE, and with `--phone` starts `omamobile-sitd` and, when installed,
 `omamobile-mmd` for Phone and Messages. It refuses a second start in a boot
 that already loaded CPIF, and any start while the latch from a failed one is
 there (`/var/lib/omamobile/modem-bringup-started`: read
