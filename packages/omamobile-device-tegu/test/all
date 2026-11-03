@@ -156,6 +156,10 @@ done
 [[ -f $tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/10-device-modem.conf ]] \
   || fail "the device sitd policy is staged"
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
+grep -qx 'Environment=OMAMOBILE_SIT_SCREEN_ON_AT_START=1' vendor/systemd/system/omamobile-sitd.service.d/10-device-modem.conf \
+  || fail "the 9a's sitd tells its modem the screen is on at start-up (signal reports)"
+! grep -rq OMAMOBILE_SIT_SCREEN_ON_AT_START ../omamobile-device-cheetah ../omamobile-device-raven \
+  || fail "only the 9a sets the start-up screen-on"
 pass "install stages the package, enables only the guards, and nothing that marks a slot"
 
 for m in cpif shm_ipc pcie_gs201_cp; do

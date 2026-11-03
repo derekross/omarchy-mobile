@@ -1,9 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # omamobile-tegu-modem-up in a scratch root with fake commands: no phone, no
-# modem. The refusals (CPIF already loaded, the failure latch), the choice of
-# the kernel's drivers over the bring-up modules, the latch written before
-# any driver and cleared at ONLINE, the sleep inhibitor taken before the
+# modem. The refusals (CPIF already loaded, the latch, a link driver loaded
+# without allow_hw), the choice of the kernel's drivers over the bring-up
+# modules, the latch written before any driver and kept past ONLINE for the
+# profile's clean stop to remove, the sleep inhibitor taken before the
 # drivers, and --phone starting sitd and the bridge.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
@@ -21,10 +22,11 @@ case "$*" in
 esac'
 fake systemd-run 'echo "systemd-run $*" >> "$T/calls"; [[ "$*" == *"--unit=omamobile-tegu-modem "* ]] && touch "$T/profile"; true'
 fake modinfo 'echo "modinfo $*" >> "$T/calls"; [[ -n ${IN_TREE:-} ]]'
-fake modprobe 'echo "modprobe $*" >> "$T/calls"'
-fake insmod 'echo "insmod $*" >> "$T/calls"'
+# The drivers record whether the latch was already on disk when they loaded
+fake modprobe 'echo "modprobe $* latch=$([[ -e $OMAMOBILE_MODEM_LATCH ]] && echo yes || echo no)" >> "$T/calls"'
+fake insmod 'echo "insmod $* latch=$([[ -e $OMAMOBILE_MODEM_LATCH ]] && echo yes || echo no)" >> "$T/calls"'
 fake sync 'true'
-printf '#!/bin/bash\n[[ -e $T/profile && -z ${NEVER:-} ]] && echo ONLINE || echo OFFLINE\n' > "$t/cp"; chmod +x "$t/cp"
+printf '#!/bin/bash\nif [[ -e $T/profile && -z ${NEVER:-} ]]; then echo ONLINE; else echo OFFLINE; [[ $1 == wait-online ]] && exit 1; fi; exit 0\n' > "$t/cp"; chmod +x "$t/cp"
 printf '#!/bin/bash\necho "chroot $*" >> "$T/calls"\n' > "$t/chroot"; chmod +x "$t/chroot"
 
 run() { # NAME [env...]: a fresh scratch root, then the script
@@ -46,21 +48,23 @@ run_tree() { local r=$t/$1; shift; rm -rf "$r"; mkdir -p "$r/sys/bus/platform/de
     bash bin/omamobile-tegu-modem-up --phone > "$r/out" 2>&1; }
 run_tree k2 IN_TREE=1 MMD=1 || { cat "$t/k2/out"; fail "a start with the kernel's drivers succeeds"; }
 c=$t/k2/calls
-grep -qx 'modprobe pcie_gs201_cp allow_hw=1' "$c" || fail "the kernel's link driver is loaded with its hardware steps allowed"
+grep -qx 'modprobe pcie_gs201_cp allow_hw=1 latch=yes' "$c" || fail "the kernel's link driver is loaded with its hardware steps allowed, after the latch is on disk"
+grep -q 'latch=no' "$c" && fail "no driver loads before the latch is written"
 grep -q '^insmod' "$c" && fail "no bring-up module is loaded when the kernel has the drivers"
 grep -q 'drivers: the running kernel' "$t/k2/out" || fail "the start says which drivers it used"
 n_inhibit=$(grep -n 'unit=omamobile-tegu-modem-nosleep' "$c" | cut -d: -f1)
 n_driver=$(grep -n '^modprobe pcie_gs201_cp' "$c" | cut -d: -f1)
 n_check=$(grep -n '^chroot modem check' "$c" | cut -d: -f1)
 (( n_inhibit < n_driver && n_driver < n_check )) || fail "the sleep inhibitor, then the drivers, then the profile check (it needs CPIF loaded)"
-[[ ! -e $t/k2/latch ]] || fail "the latch is cleared once the CP is ONLINE"
+[[ -e $t/k2/latch ]] || fail "the latch stays past ONLINE"
+grep -q 'ExecStopPost=.*SERVICE_RESULT.*rm -f .*latch' "$c" || fail "the profile's clean stop removes the latch"
 grep -qx 'systemctl start omamobile-sitd.service' "$c" || fail "--phone starts the phone service"
 grep -qx 'systemctl start omamobile-mmd.service' "$c" || fail "--phone starts the bridge when it's installed"
-printf 'ok - %s\n' "modem-up: the kernel's drivers, the order, the latch cleared, the phone service and the bridge"
+printf 'ok - %s\n' "modem-up: the kernel's drivers, the order, the latch kept for a clean stop, the phone service and the bridge"
 
 # The bring-up modules when the kernel lacks the drivers; no bridge without it
 run b || { cat "$t/b/out"; fail "a start with the bring-up modules succeeds"; }
-grep -q '^insmod .*/tegu-pcie0-cp.ko allow_hw=1$' "$t/b/calls" || fail "the bring-up link driver is loaded"
+grep -q '^insmod .*/tegu-pcie0-cp.ko allow_hw=1 latch=yes$' "$t/b/calls" || fail "the bring-up link driver is loaded, after the latch"
 grep -q '^modprobe' "$t/b/calls" && fail "no kernel driver is modprobed without the kernel's drivers"
 grep -qx 'systemctl start omamobile-mmd.service' "$t/b/calls" && fail "no bridge start when it isn't installed"
 printf 'ok - %s\n' "modem-up: the bring-up modules otherwise, and no bridge when it isn't installed"
@@ -85,3 +89,13 @@ run_l && fail "a start with the latch set is refused"
 grep -q 'never reached ONLINE' "$t/l/out" || fail "the refusal names the latch"
 grep -qE '^(modprobe|insmod|systemd-run)' "$t/l/calls" && fail "nothing starts while the latch is set"
 printf 'ok - %s\n' "modem-up: refuses a second start and a latched boot, and keeps the latch when ONLINE never comes"
+
+# A link driver already loaded without allow_hw: refuse before loading anything
+r=$t/hw; mkdir -p "$r/sys/bus/platform/devices/154e0000.pinctrl" "$r/sys/module/pcie_gs201_cp/parameters" "$r/dt/cpif" "$r/log"
+echo N > "$r/sys/module/pcie_gs201_cp/parameters/allow_hw"; : > "$r/calls"
+env -i PATH="$F:/usr/bin:/bin" T="$r" OMAMOBILE_MODEM_TEST=1 OMAMOBILE_SYS="$r/sys" OMAMOBILE_DT="$r/dt" \
+  OMAMOBILE_MODEM_LATCH="$r/latch" OMAMOBILE_MODEM_CP="$t/cp" OMAMOBILE_VENDOR_CHROOT="$t/chroot" OMAMOBILE_MODEM_LOG="$r/log" \
+  IN_TREE=1 bash bin/omamobile-tegu-modem-up --phone > "$r/out" 2>&1 && fail "a link driver loaded without allow_hw is refused"
+grep -q 'without allow_hw=1: reboot first' "$r/out" || fail "the refusal says to reboot"
+grep -qE '^(modprobe|insmod)' "$r/calls" && fail "nothing loads after the allow_hw refusal"
+printf 'ok - %s\n' "modem-up: refuses a link driver loaded without allow_hw"

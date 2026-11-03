@@ -6,6 +6,12 @@
 # and, when installed, the Phone and Messages bridge. With it on the palmtop
 # doesn't suspend (the modem blocks sleep until suspend with the CP up is
 # qualified), so the battery drains as if awake.
+#
+# Before enabling it (README, "Starting it at boot"): slot B marked
+# successful, a kernel with linux-omarchy-mobile#172, and the charger in for
+# the first boots. Rollback: systemctl disable omamobile-tegu-modem-boot and
+# reboot; after a reset with the modem up, the latch keeps the next boot
+# from starting it.
 [Unit]
 Description=Start the Pixel 9a's modem and phone service (opt-in)
 Documentation=file:///usr/share/doc/omamobile-device-tegu/README.md

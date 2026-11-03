@@ -20,8 +20,11 @@
 #  - one CP start per boot: a second start in the same boot stalled in the
 #    ROM, so a boot that loaded CPIF refuses (reboot to start again);
 #  - never stop the modem by hand: the attended reboot's shutdown stops it;
-#  - a start that never reached ONLINE leaves a latch, and later boots refuse
-#    until a human removes it (/var/lib/omamobile/modem-bringup-started);
+#  - a latch (/var/lib/omamobile/modem-bringup-started) is written before any
+#    driver loads and removed only when the modem profile's unit stops
+#    cleanly at shutdown: a start that never reached ONLINE, or a boot that
+#    hung or reset with the modem up, leaves it, and later boots refuse until
+#    a human removes it (TELEPHONY-PLAN section 2.4);
 #  - no system suspend once the CP is up: a sleep inhibitor, its own unit, is
 #    taken before any driver loads and lasts until the reboot.
 set -euo pipefail
@@ -62,7 +65,7 @@ if [[ -d $SYS/module/cpif ]]; then
   say "CPIF was loaded earlier this boot; reboot before starting the modem again"; exit 1
 fi
 if [[ -e $LATCH ]]; then
-  say "an earlier start never reached ONLINE ($LATCH): look at /var/log/omamobile/modem.log, then remove it to try again"
+  say "an earlier start never reached ONLINE, or its boot didn't shut down cleanly ($LATCH, $(cat "$LATCH" 2>/dev/null)): look at /var/log/omamobile/modem.log and the last boot's journal, then remove it to try again"
   exit 1
 fi
 [[ -e $SYS/bus/platform/devices/154e0000.pinctrl ]] || { say "no FAR_ALIVE pinctrl (old device tree)"; exit 1; }
@@ -90,6 +93,12 @@ date -Is > "$LATCH"; sync "$LATCH" 2>/dev/null || sync
 
 if ((in_tree)); then
   say "drivers: the running kernel's"
+  # allow_hw is fixed at load time: a copy loaded without it refuses the
+  # CP's power-on, so it needs a reboot (as omamobile-modem-start checks).
+  if [[ -d $SYS/module/pcie_gs201_cp ]]; then
+    [[ $(cat "$SYS/module/pcie_gs201_cp/parameters/allow_hw" 2>/dev/null) == Y ]] ||
+      { say "pcie_gs201_cp is loaded without allow_hw=1: reboot first"; exit 1; }
+  fi
   modprobe pcie_gs201_cp allow_hw=1
   modprobe shm_ipc
   modprobe cpif
@@ -113,21 +122,17 @@ echo performance > $SYS/module/pcie_aspm/parameters/policy 2>/dev/null || true
 # comes after the drivers. A refusal keeps the latch: a human looks first.
 $CHROOT modem check
 
+# A clean stop of the profile's unit (the reboot's shutdown) is the only
+# thing that removes the latch; a failed or killed profile leaves it.
 systemd-run -q --unit=omamobile-tegu-modem -p KillSignal=SIGINT -p TimeoutStopSec=60 \
   -p "ExecStop=$CHROOT modem stop" \
+  -p "ExecStopPost=/bin/sh -c '[ \"\$\$SERVICE_RESULT\" = success ] && rm -f $LATCH && sync'" \
   --setenv=OMAMOBILE_MODEM_GNSS=$gnss \
   bash -c "exec $CHROOT modem start >> $LOG/modem.log 2>&1"
-for _ in $(seq 1 60); do
-  s=$($CP_STATE state 2>/dev/null || true)
-  [[ $s == ONLINE ]] && break
-  systemctl is-active -q omamobile-tegu-modem || break
-  sleep ${OMAMOBILE_MODEM_POLL:-1}
-done
-s=$($CP_STATE state 2>/dev/null || echo unknown)
-if [[ $s != ONLINE ]]; then
+if ! $CP_STATE wait-online 60 >/dev/null 2>&1; then
+  s=$($CP_STATE state 2>/dev/null || echo unknown)
   say "modem not ONLINE ($s); see /var/log/omamobile/modem.log. The latch stays: reboot, read the log, then remove $LATCH"
   exit 1
 fi
-rm -f "$LATCH"; sync
-say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log)"
+say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log); the latch stays until a clean shutdown"
 phone_up
