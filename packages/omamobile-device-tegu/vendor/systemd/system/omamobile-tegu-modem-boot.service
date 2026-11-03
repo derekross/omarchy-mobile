@@ -3,7 +3,8 @@
 # turns it on with `systemctl enable omamobile-tegu-modem-boot`. It starts the
 # CP once (omamobile-tegu-modem-up keeps the once-per-boot rule, the NV
 # checks, the failure latch and the sleep inhibitor), then the phone service
-# and, when installed, the Phone and Messages bridge. With it on the palmtop
+# and, when installed, the Phone and Messages bridge, with gnssd in the
+# modem profile so Omarchy's Location switch gets fixes (omamobile-gnss). With it on the palmtop
 # doesn't suspend (the modem blocks sleep until suspend with the CP up is
 # qualified), so the battery drains as if awake.
 #
@@ -22,7 +23,7 @@ ConditionPathExists=/usr/lib/omamobile-vendor/omamobile-vendor-chroot
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/omamobile-tegu-modem-up --phone
+ExecStart=/usr/bin/omamobile-tegu-modem-up --phone --gnss
 TimeoutStartSec=300
 
 [Install]
