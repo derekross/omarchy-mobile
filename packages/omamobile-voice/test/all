@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-voice without the network: the model's source is pinned (a commit
+# and a sha256, never a moving branch), it lands where omamobile-setup-user
+# looks for it, and the root image installs both it and Voxtype.
+# OMAMOBILE_VOICE_FETCH=1 also asks the server that the pinned file is still
+# the one the sha256 names (a HEAD request, no download).
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")/.." && pwd)
+repo=$(cd -- "$here/../.." && pwd)
+n=0
+ok() { n=$((n + 1)); echo "ok $n - $1"; }
+fail() { echo "not ok - $1" >&2; exit 1; }
+list() { sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'; }
+
+bash -n "$here/PKGBUILD" || fail "PKGBUILD parses"
+# shellcheck disable=SC1091
+eval "$(startdir=$here bash -c 'source "$startdir/PKGBUILD"
+  printf "pkgname=%q pkgver=%q commit=%q model=%q url0=%q sum0=%q\n" "$pkgname" "$pkgver" "$_commit" "$_model" "${source[0]}" "${sha256sums[0]}"
+  printf "deps=%q\n" "${depends[*]:-}"')"
+[[ $pkgname == omamobile-voice && $pkgver == "$(cat "$here/version")" ]] || fail "name and version"
+ok "PKGBUILD parses, version from ./version"
+
+[[ $commit =~ ^[0-9a-f]{40}$ ]] || fail "the source is pinned to a full commit, not a branch: $commit"
+[[ $url0 == "$model-$commit::https://huggingface.co/ggerganov/whisper.cpp/resolve/$commit/$model" ]] || fail "the model's URL names the pinned commit: $url0"
+[[ $sum0 =~ ^[0-9a-f]{64}$ ]] || fail "the model has a real sha256, not SKIP"
+[[ $model == ggml-base.en.bin ]] || fail "base.en, Omarchy's and the shell's default model"
+ok "the model is pinned: commit ${commit:0:12}, sha256 ${sum0:0:12}"
+
+[[ " $deps " != *" voxtype-bin "* ]] || fail "voxtype-bin is not a hard dependency (Remove > Dictation must work)"
+ok "voxtype-bin is optional, so Omarchy's Remove > Dictation can remove it"
+
+grep -c 'pkgdir/usr/share/omamobile/voice/models/\$_model' "$here/PKGBUILD" >/dev/null || fail "installed to /usr/share/omamobile/voice/models"
+# The rest needs the repository around the package (makepkg's check() in
+# the build container has only the package's own directory)
+if [[ ! -f $repo/rootfs/packages.base ]]; then
+  ok "# skip: the root image's lists and omamobile-shell (no repository here)"
+  exit 0
+fi
+grep -c 'OMAMOBILE_VOICE_MODELS:-/usr/share/omamobile/voice/models}' "$repo/packages/omamobile-shell/bin/omamobile-setup-user" >/dev/null ||
+  fail "omamobile-setup-user looks in the same directory"
+ok "the model's directory is the one omamobile-setup-user links from"
+
+list "$repo/rootfs/packages.omamobile" | grep -cx omamobile-voice >/dev/null || fail "the root image installs omamobile-voice"
+list "$repo/rootfs/packages.base" | grep -cx voxtype-bin >/dev/null || fail "the root image installs voxtype-bin"
+for p in voxtype-bin wtype; do
+  if list "$repo/rootfs/packages.omarchy-skip" | grep -cx "$p" >/dev/null; then fail "packages.omarchy-skip leaves out $p"; fi
+done
+ok "the root image installs Voxtype and the model; wtype (Omarchy's list) isn't skipped"
+
+if [[ ${OMAMOBILE_VOICE_FETCH:-0} == 1 ]]; then
+  etag=$(curl -sfIL "${url0#*::}" | tr -d '\r' | sed -n 's/^x-linked-etag: "\(.*\)"$/\1/Ip' | head -1)
+  [[ $etag == "$sum0" ]] || fail "the server's file is the pinned sha256 (got: ${etag:-nothing})"
+  ok "the server's file matches the pinned sha256"
+fi

@@ -25,7 +25,8 @@ fake gsettings 'echo "gsettings $*" >>"$HOME/calls"
 if [[ $1 == list-keys && $2 == org.gnome.nautilus.preferences ]]; then
   printf "default-folder-viewer\n"; [[ -n ${GSETTINGS_NO_CLICK_POLICY:-} ]] || printf "click-policy\n"
 fi'
-fake systemctl 'echo "systemctl $*" >>"$HOME/calls"'
+# systemctl: logs calls; fails while $HOME/systemctl-fails exists (no user manager)
+fake systemctl 'echo "systemctl $*" >>"$HOME/calls"; [[ ! -e $HOME/systemctl-fails ]]'
 fake chromium 'echo "Chromium 153.0.0.0"'
 fake omamobile-keyboard-theme 'echo "omamobile-keyboard-theme $*" >>"$HOME/calls"'
 for f in monitors looknfeel autostart; do echo "-- $f" >"$H/.config/hypr/$f.lua"; done
@@ -56,6 +57,8 @@ run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
     OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
     GSETTINGS_NO_CLICK_POLICY="${GSETTINGS_NO_CLICK_POLICY:-}" \
+    OMAMOBILE_VOICE_MODELS="${RUN_VOICE_MODELS:-$t/no-voice-models}" OMAMOBILE_VOXTYPE="${RUN_VOXTYPE:-voxtype}" \
+    OMARCHY_PATH="${RUN_OMARCHY_PATH:-$t/omarchy}" \
     bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -104,6 +107,30 @@ run
 [[ ! -e $U/org.gnome.DiskUtility.desktop ]] || fail "an override the user removed stays removed"
 grep -qx 'NoDisplay=true' "$U/foot-server.desktop" || fail "an app installed later is hidden"
 pass "desktop and admin apps are hidden once each, when installed, and a user's choice is kept"
+
+# Omarchy's "Image Viewer" (imv, the skeleton's copy in the user's
+# applications) gives way to Loupe's, once, and only while Loupe is installed
+printf '[Desktop Entry]\nName=Image Viewer\nExec=imv %%F\nType=Application\n' >"$U/imv.desktop"
+run
+grep -c '^NoDisplay' "$U/imv.desktop" >/dev/null && fail "imv stays in the drawer without Loupe"
+printf '[Desktop Entry]\nType=Application\nName=Image Viewer\nExec=loupe %%U\n' >"$A/org.gnome.Loupe.desktop"
+run
+[[ $(sed -n 2p "$U/imv.desktop") == NoDisplay=true ]] && grep -qx 'Exec=imv %F' "$U/imv.desktop" \
+  || fail "imv's entry is hidden once Loupe is installed, the rest kept"
+sed -i '/^NoDisplay=true$/d' "$U/imv.desktop"
+run
+grep -c '^NoDisplay' "$U/imv.desktop" >/dev/null && fail "a user who shows imv again keeps it"
+pass "imv's Image Viewer gives way to Loupe's, once"
+
+# Tensaku's entry (drawer, Open With) runs without the on-screen keyboard, once
+printf '[Desktop Entry]\nName=Tensaku\nTryExec=tensaku\nExec=tensaku %%f\nType=Application\n' >"$A/dev.tensaku.Tensaku.desktop"
+run
+grep -qx 'Exec=env GTK_IM_MODULE=gtk-im-context-simple tensaku %f' "$U/dev.tensaku.Tensaku.desktop" &&
+  grep -qx 'TryExec=tensaku' "$U/dev.tensaku.Tensaku.desktop" || fail "Tensaku's entry gets GTK's simple input context"
+rm "$U/dev.tensaku.Tensaku.desktop"
+run
+[[ ! -e $U/dev.tensaku.Tensaku.desktop ]] || fail "a user who removes the Tensaku override keeps Tensaku's own entry"
+pass "Tensaku's entry opens without the on-screen keyboard, once"
 
 # Idle: a new user gets the profile's block and the screensaver toggle
 idle() { python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("idle")))' "$1/.config/omarchy/shell.json"; }
@@ -237,6 +264,63 @@ assert voice["action"] == "omarchy-shell shell summon omamobile.voice '{\"page\"
 assert voice["label"] == "Voice" and voice["icon"] == "\U000f036c", voice
 PY
 pass "voxtype: base.en with the context cut, 0.2.62's tiny.en undone once, a user's choices kept"
+
+# Voice out of the box (omamobile-voice): with voxtype and the shipped
+# base.en, a new user gets Omarchy's config, a link to the model and the
+# daemon enabled, once, and Omarchy's install invitation marked done; a
+# user's own config and model stay; nothing without voxtype or the model.
+VM=$t/voice-models; mkdir -p "$VM" "$t/omarchy/default/voxtype"
+echo model >"$VM/ggml-base.en.bin"
+printf 'state_file = "auto"\n\n[whisper]\nmodel = "base.en"\nlanguage = "en"\n' >"$t/omarchy/default/voxtype/config.toml"
+fake voxtype 'echo "voxtype $*" >>"$HOME/calls"'
+hn=$t/voice-new; vhome "$hn"; rm -rf "$hn/.config/voxtype" "$hn/.local/share/voxtype"
+RUN_HOME=$hn RUN_VOICE_MODELS=$VM run
+[[ $(readlink "$hn/.local/share/voxtype/models/ggml-base.en.bin") == "$VM/ggml-base.en.bin" ]] || fail "the shipped base.en is linked into Voxtype's models directory"
+vc "$hn" | grep -cx 'model = "base.en"' >/dev/null || fail "Omarchy's Voxtype config is copied for a new user"
+vc "$hn" | grep -cx 'context_window_optimization = true' >/dev/null || fail "the new config gets the context cut too"
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hn/calls") == 1 ]] || fail "voxtype.service is enabled once"
+[[ -e $hn/.local/state/omarchy/done/voxtype-install-invitation ]] || fail "Omarchy's Install Dictation invitation is marked done"
+if grep -c '^voxtype ' "$hn/calls" >/dev/null 2>&1; then fail "nothing is downloaded (no voxtype setup)"; fi
+rm "$hn/.local/share/voxtype/models/ggml-base.en.bin"
+RUN_HOME=$hn RUN_VOICE_MODELS=$VM run
+[[ ! -e $hn/.local/share/voxtype/models/ggml-base.en.bin ]] || fail "a model the user removed stays removed (once)"
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hn/calls") == 1 ]] || fail "voxtype.service is enabled only once"
+# A user with Voxtype set up already: config and downloaded model stay
+ho=$t/voice-own; vhome "$ho"; echo own >"$ho/.local/share/voxtype/models/ggml-base.en.bin"
+printf '[whisper]\nmodel = "tiny.en"\n' >"$ho/.config/voxtype/config.toml"
+RUN_HOME=$ho RUN_VOICE_MODELS=$VM run
+[[ ! -L $ho/.local/share/voxtype/models/ggml-base.en.bin && $(cat "$ho/.local/share/voxtype/models/ggml-base.en.bin") == own ]] || fail "a downloaded model stays"
+vc "$ho" | grep -cx 'model = "tiny.en"' >/dev/null || fail "the user's Voxtype config stays"
+# A failed enable (firstboot without a user manager) is tried again at the
+# next login, and only until it works; the once-only parts don't repeat
+hr=$t/voice-retry; vhome "$hr"; rm -rf "$hr/.config/voxtype" "$hr/.local/share/voxtype"; touch "$hr/systemctl-fails"
+RUN_HOME=$hr RUN_VOICE_MODELS=$VM run
+[[ -L $hr/.local/share/voxtype/models/ggml-base.en.bin && -f $hr/.config/voxtype/config.toml ]] || fail "a failed enable still leaves the config and the link"
+[[ ! -e $hr/.local/state/omarchy/done/omamobile-voxtype-enabled ]] || fail "a failed enable isn't marked done"
+rm "$hr/systemctl-fails" "$hr/.config/voxtype/config.toml"
+RUN_HOME=$hr RUN_VOICE_MODELS=$VM run
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hr/calls") == 2 ]] || fail "the enable is tried again at the next login"
+[[ -e $hr/.local/state/omarchy/done/omamobile-voxtype-enabled ]] || fail "a working enable is marked done"
+[[ ! -e $hr/.config/voxtype/config.toml ]] || fail "the retry doesn't copy the config again"
+RUN_HOME=$hr RUN_VOICE_MODELS=$VM run
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hr/calls") == 2 ]] || fail "no enable after it worked"
+# Dictation removed (voxtype gone) before an enable worked: nothing is retried
+hd=$t/voice-removed; vhome "$hd"; rm -rf "$hd/.config/voxtype" "$hd/.local/share/voxtype"; touch "$hd/systemctl-fails"
+RUN_HOME=$hd RUN_VOICE_MODELS=$VM run
+rm -f "$hd/systemctl-fails"; rm -rf "$hd/.config/voxtype" "$hd/.local/share/voxtype"
+RUN_HOME=$hd RUN_VOICE_MODELS=$VM RUN_VOXTYPE=$t/no-voxtype run
+[[ $(grep -cx 'systemctl --user enable voxtype.service' "$hd/calls") == 1 ]] || fail "without voxtype the enable isn't retried"
+[[ ! -e $hd/.local/share/voxtype && ! -e $hd/.config/voxtype ]] || fail "a user who removed Dictation gets nothing back"
+# Without voxtype, or without the model package: nothing, and no marker
+for case in novox nomodel; do
+  hx=$t/voice-$case; vhome "$hx"; rm -rf "$hx/.config/voxtype" "$hx/.local/share/voxtype"
+  if [[ $case == novox ]]; then RUN_HOME=$hx RUN_VOICE_MODELS=$VM RUN_VOXTYPE=$t/no-voxtype run; else RUN_HOME=$hx run; fi
+  [[ ! -e $hx/.local/share/voxtype && ! -e $hx/.config/voxtype && ! -e $hx/.local/state/omarchy/done/omamobile-voxtype-setup ]] ||
+    fail "$case: Voxtype is left alone"
+  if grep -c 'enable voxtype' "$hx/calls" >/dev/null 2>&1; then fail "$case: voxtype.service isn't enabled"; fi
+done
+rm "$F/voxtype"
+pass "voice out of the box: Omarchy's config and the shipped base.en once, the daemon enabled until it works, a removal kept"
 
 # The keyboard: every layout the package carries linked (the terminal's, and
 # each language's from squeekboard/generate), the theme written at every

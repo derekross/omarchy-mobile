@@ -399,6 +399,7 @@ def real_package(t):
            "real omarchy: %s refuses on a phone before it touches pacman (0016)" % name)
         ok("RELEASES.md section 5.4" in text, "real omarchy: %s points at RELEASES 5.4" % name)
     screensaver_launcher(t, os.path.join(root, "usr/bin/omarchy-launch-screensaver"))
+    show_logo(t, root)
     notification_phrasing(t, os.path.join(root, "usr/bin/omarchy-notification-send"),
                           os.path.join(ex, "usr/bin/omarchy-notification-send"))
     lock_fingerprint_probe(t, root)
@@ -761,10 +762,44 @@ def screensaver_launcher(t, launcher):
     ok(osk() == "true" and not os.path.exists(marker), "0006: a launcher stopped by a signal turns the keyboard back on")
 
 
+def show_logo(t, root):
+    """Patch 0028: omarchy-show-logo in terminals of several widths (script(1)
+    gives it one): the wide logo where it fits, the stacked one where only
+    that fits, none below, and the wide one with no terminal at all.
+    logo.txt is omarchy-settings', so an 81-column stand-in here."""
+    narrow = os.path.join(root, "usr/share/omarchy/logo-narrow.txt")
+    ok(os.path.isfile(narrow), "0028: logo-narrow.txt is created")
+    widest = max(len(l) for l in open(narrow, encoding="utf-8").read().splitlines())
+    ok(widest == 48, "0028: the stacked logo is 48 columns (%d)" % widest)
+    if not shutil.which("script"):
+        print("ok - 0028: the logo by terminal width # SKIP no script(1)")
+        return
+    path = os.path.join(t, "logo-path")
+    os.makedirs(path)
+    shutil.copy(narrow, path)
+    with open(os.path.join(path, "logo.txt"), "w", encoding="utf-8") as f:
+        f.write(("█" * 81 + "\n") * 9)
+    show = os.path.join(root, "usr/bin/omarchy-show-logo")
+
+    def lines(cols):
+        cmd = "stty cols %d rows 40; bash %s" % (cols, show)
+        out = subprocess.run(["script", "-qec", cmd, "/dev/null"], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path,
+                             "TERM": "xterm"}, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
+        rows = [l for l in out.decode("utf-8", "replace").replace("\r", "").split("\n") if "█" in l]
+        return len(rows), max((len(l.strip("\x1b[0m32")) for l in rows), default=0)
+
+    ok(lines(120) == (9, 81) and lines(81) == (9, 81), "0028: a terminal as wide as the logo shows it as before")
+    ok(lines(80)[0] == 17 and lines(66)[0] == 17 and lines(48)[0] == 17, "0028: a narrower one shows it stacked")
+    ok(lines(47)[0] == 0, "0028: one too narrow for that shows none, not a wrapped one")
+    out = subprocess.run(["setsid", "-w", "bash", show], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path},
+                         stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
+    ok(out.decode("utf-8", "replace").count("█" * 81) == 9, "0028: no terminal: the wide logo, as before")
+
+
 # Omarchy 4.0.6's notification texts (headline, body) and what a phone shows
 # for each (patch 0020); None leaves the text as it is.
 PHRASINGS = [
-    (("Screenshot saved to clipboard and file", "Edit with Super + Alt + , (or click this)"), "Tap to edit"),
+    (("Screenshot saved to clipboard and file", "Edit with Super + Alt + , (or click this)"), "Tap to view"),
     (("Screen recording saved", "Open with Super + Alt + , (or click this)"), "Tap to open"),
     (("Update System", "Click to update the system."), "Tap to update the system."),
     (("Setup Wi-Fi", "Click to configure the wireless network."), "Tap to configure the wireless network."),

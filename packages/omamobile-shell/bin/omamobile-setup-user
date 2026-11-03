@@ -115,6 +115,32 @@ for id in org.gnome.DiskUtility org.gnome.Evince org.gnome.Snapshot fcitx5-confi
   fi
 done
 
+# Images open in Loupe on a phone (omamobile-apps makes it the default): it
+# takes touch (pinch and double-tap to zoom, swipe between images), and imv,
+# Omarchy's viewer, reads no touchscreen input at all. Loupe's entry is named
+# "Image Viewer", and so is Omarchy's imv entry, which Omarchy's skeleton put
+# in the user's own applications. Hidden once, while Loupe is installed, so
+# the drawer lists one Image Viewer; imv stays installed and runnable, and a
+# user who takes the line out keeps it.
+if [[ -f $sysapps/org.gnome.Loupe.desktop && -f $apps/imv.desktop ]] && omarchy-done ensure omamobile-hide-imv; then
+  if ! grep -c '^NoDisplay=true$' "$apps/imv.desktop" >/dev/null; then
+    sed -i -e '/^NoDisplay=/d' -e '/^\[Desktop Entry\]/a NoDisplay=true' "$apps/imv.desktop"
+  fi
+fi
+
+# Tensaku opened from its entry (the drawer, or Loupe's Open With) runs with
+# GTK's simple input-method context, as omamobile-screenshot-edit runs it, so
+# the on-screen keyboard doesn't come up over the image. A copy of the entry
+# in the user's applications, once, when Tensaku is installed; a user who
+# removes it gets Tensaku's own entry back.
+if [[ -f $sysapps/dev.tensaku.Tensaku.desktop && ! -e $apps/dev.tensaku.Tensaku.desktop ]] &&
+   omarchy-done ensure omamobile-tensaku-no-osk; then
+  mkdir -p "$apps"
+  sed -e 's/^Exec=tensaku /Exec=env GTK_IM_MODULE=gtk-im-context-simple tensaku /' \
+      -e 's/^Exec=tensaku$/Exec=env GTK_IM_MODULE=gtk-im-context-simple tensaku/' \
+      "$sysapps/dev.tensaku.Tensaku.desktop" >"$apps/dev.tensaku.Tensaku.desktop"
+fi
+
 # PIN or password (omamobile-set-pin records it): phones set up before the
 # choice existed used a PIN with the lock's number pad, so record that, once.
 if omarchy-done ensure omamobile-credential-type; then
@@ -402,8 +428,8 @@ if omarchy-done ensure omamobile-back-plugin; then
   add_plugin omamobile.back
 fi
 # Voice input (omamobile.voice): hold the home pill to ask the agent, the
-# keyboard strip's mic key to dictate, through Voxtype when it is
-# installed (Install > AI > Dictation); without it the sheet says so.
+# keyboard strip's mic key to dictate, through Voxtype (in the root image,
+# set up below; or Install > AI > Dictation); without it the sheet says so.
 if omarchy-done ensure omamobile-voice-plugin; then
   add_plugin omamobile.voice
 fi
@@ -413,6 +439,45 @@ if omarchy-done ensure omamobile-menu-voice; then
   extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
   if [[ -f $extension ]] && ! grep -q '"setup.voice"' "$extension"; then
     sed -i '0,/^{/s//{\n  "setup.voice": {"icon":"\xf3\xb0\x8d\xac","label":"Voice","description":"Speech model and how voice input starts","action":"omarchy-shell shell summon omamobile.voice '"'"'{\\"page\\":\\"settings\\"}'"'"'"},/' "$extension"
+  fi
+fi
+# Voice out of the box: the root image ships voxtype-bin (rootfs/packages.base)
+# and Whisper's base.en (omamobile-voice, in /usr/share/omamobile/voice/models),
+# so a new user gets what Omarchy's Install > AI > Dictation
+# (omarchy-voxtype-install) sets up, without its 142 MB download: Omarchy's
+# Voxtype config, the model in Voxtype's models directory (a link to the
+# shipped file; Voxtype looks only in ~/.local/share/voxtype/models) and the
+# packaged user daemon enabled, so it starts with the graphical session.
+# Omarchy's "Install Dictation" invitation is marked done, as its install
+# would leave it. Only with both installed. The config, the link and the
+# invitation happen once per user: a config or a model the user already has
+# stays, and one they delete later isn't brought back. The enable has its
+# own marker, set only when it succeeds, so a failed one (firstboot carries
+# on without a user manager) is tried again at the next login. A user who
+# removes Dictation (Remove > Dictation takes voxtype-bin out) gets nothing.
+voxconf=~/.config/voxtype/config.toml
+voxmodels=${OMAMOBILE_VOICE_MODELS:-/usr/share/omamobile/voice/models}
+if command -v "${OMAMOBILE_VOXTYPE:-voxtype}" >/dev/null && [[ -f $voxmodels/ggml-base.en.bin ]]; then
+  if omarchy-done ensure omamobile-voxtype-setup; then
+    omarchy-done mark voxtype-install-invitation
+    voxdefault=${OMARCHY_PATH:-/usr/share/omarchy}/default/voxtype/config.toml
+    if [[ ! -f $voxconf && -f $voxdefault ]]; then
+      { mkdir -p "${voxconf%/*}" && cp "$voxdefault" "$voxconf"; } ||
+        echo "omamobile-setup-user: could not copy Omarchy's Voxtype config" >&2
+    fi
+    mkdir -p ~/.local/share/voxtype/models || true
+    for model in "$voxmodels"/ggml-*.bin; do
+      [[ -e ~/.local/share/voxtype/models/${model##*/} ]] ||
+        ln -sfn "$model" ~/.local/share/voxtype/models/"${model##*/}" ||
+        echo "omamobile-setup-user: could not link ${model##*/}" >&2
+    done
+  fi
+  if omarchy-done check omamobile-voxtype-setup && ! omarchy-done check omamobile-voxtype-enabled; then
+    if systemctl --user enable voxtype.service; then
+      omarchy-done mark omamobile-voxtype-enabled
+    else
+      echo "omamobile-setup-user: could not enable voxtype.service; trying again at the next login" >&2
+    fi
   fi
 fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
@@ -429,7 +494,6 @@ fi
 #    marker by more than a minute): a model the user chose since stays.
 # Voxtype ignores a per-recording `--model` it hasn't prepared, so this is
 # the daemon's own config; it restarts once, and only if it was running.
-voxconf=~/.config/voxtype/config.toml
 voxdone=~/.local/state/omarchy/done
 if [[ -f $voxconf ]]; then
   voxrestart=0

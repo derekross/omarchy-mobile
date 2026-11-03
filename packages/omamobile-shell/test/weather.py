@@ -60,6 +60,15 @@ if shutil.which("node"):
     diff = {k: (mine[k], theirs[k]) for k in theirs if mine.get(k) != theirs[k]}
     ok(not diff, "the words for each code are the home screen widget's %s" % diff)
     print("ok - weather: the words for every code are the home screen widget's (HomeModel.weatherText)")
+    # The unit the OWL weather widgets get (HomeModel.localeUnit) is this one.
+    envs = [{"LANG": "en_US.UTF-8"}, {"LANG": "de_DE.UTF-8"}, {"LANG": "C.UTF-8"}, {}, {"LANG": "en_LR"},
+            {"LC_ALL": "de_DE.UTF-8", "LANG": "en_US.UTF-8"}, {"LC_MEASUREMENT": "en_US.UTF-8", "LANG": "de_DE.UTF-8"},
+            {"LANG": "en_PR.UTF-8@euro"}, {"LC_ALL": "", "LANG": "es_US"}]
+    js = "const M = require(process.argv[1]); console.log(JSON.stringify(JSON.parse(process.argv[2]).map(M.localeUnit)))"
+    theirs = json.loads(subprocess.run(["node", "-e", js, os.path.join(ROOT, "plugins/omamobile.home/HomeModel.js"), json.dumps(envs)],
+                                       check=True, capture_output=True, text=True).stdout)
+    ok(theirs == [W.locale_unit(e) for e in envs], "HomeModel.localeUnit agrees with locale_unit %s" % theirs)
+    print("ok - weather: the OWL widgets' unit is the one this service uses (HomeModel.localeUnit)")
 else:
     print("ok - weather: the words match the home screen widget's # SKIP no node")
 
@@ -317,3 +326,38 @@ ok(W.where_am_i() is None, "no answer: none")
 W.WHERE_AM_I = os.path.join(home, "missing")
 ok(W.geoclue_usable() is False, "no where-am-i: GeoClue isn't usable")
 print("ok - weather: GeoClue's where-am-i is read at city accuracy, and missing means not usable")
+
+# Which agent counts (2026-11-02: geoclue's own XDG autostart ran the demo
+# agent, so omamobile-gnss's unit exited as a second instance and weather
+# took Location for off). Any demo agent of this user's counts; the
+# Location switch off means no, whatever agent runs.
+W.WHERE_AM_I = fake_wai
+W.GEOCLUE_AGENT_BIN = "/usr/lib/geoclue-2.0/demos/agent"
+proc = os.path.join(home, "proc")
+
+
+def fake_proc(*cmdlines):
+    shutil.rmtree(proc, ignore_errors=True)
+    os.makedirs(os.path.join(proc, "self"))
+    for i, argv in enumerate(cmdlines, 100):
+        os.makedirs(os.path.join(proc, str(i)))
+        with open(os.path.join(proc, str(i), "cmdline"), "wb") as f:
+            f.write(b"\0".join(a.encode() for a in argv) + b"\0")
+
+
+W.PROC = proc
+fake_proc(["/usr/bin/bash"], ["/usr/lib/geoclue-2.0/demos/where-am-i", "-a", "4"])
+ok(W.agent_process() is False, "no demo agent process: none")
+fake_proc(["/usr/bin/bash"], ["/usr/lib/geoclue-2.0/demos/agent"])
+ok(W.agent_process() is True, "the demo agent run by this user counts")
+ok(W.agent_process(uid=os.getuid() + 1) is False, "another user's demo agent doesn't")
+ok(W.agent_process(proc=os.path.join(home, "no-proc")) is False, "no /proc: none")
+cases = [  # the Location switch, our unit, a demo agent process -> usable
+    (True, True, False, True), (True, False, True, True), (None, False, True, True),
+    (True, False, False, False), (False, True, True, False), (None, False, False, False)]
+for switch, unit, process, want in cases:
+    W.location_switch = lambda s=switch: s
+    W.agent_unit_active = lambda u=unit: u
+    W.agent_process = lambda p=process: p
+    ok(W.geoclue_usable() is want, "switch %s, our unit %s, a demo agent %s: usable %s" % (switch, unit, process, want))
+print("ok - weather: any GeoClue demo agent of this user's counts, and Location off means no")

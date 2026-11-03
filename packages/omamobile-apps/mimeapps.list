@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Omarchy Mobile: images open in Loupe, which takes touch (pinch and
+# double-tap to zoom, swipe between the images in a folder) and fits each
+# image to the screen. Omarchy's viewer, imv, reads no touchscreen input, so
+# on a phone an image it opened could be neither zoomed nor paged. Installed
+# as /etc/xdg/mimeapps.list, which is read before Omarchy's
+# /usr/share/applications/mimeapps.list (the same six types) and after the
+# user's own ~/.config lists, so a user's choice still wins. imv follows
+# Loupe in each list, so images still open while Loupe is missing.
+[Default Applications]
+image/png=org.gnome.Loupe.desktop;imv.desktop;
+image/jpeg=org.gnome.Loupe.desktop;imv.desktop;
+image/gif=org.gnome.Loupe.desktop;imv.desktop;
+image/webp=org.gnome.Loupe.desktop;imv.desktop;
+image/bmp=org.gnome.Loupe.desktop;imv.desktop;
+image/tiff=org.gnome.Loupe.desktop;imv.desktop;

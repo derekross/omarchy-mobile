@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Stage omamobile-fingerprint into DESTDIR. Enables nothing. Google's Android
+# Stage omamobile-fingerprint into DESTDIR. Google's Android
 # files are not part of the package: tools/extract-fingerprint-vendor makes
 # them from the user's own factory image (/usr/lib/omamobile-fp/root,
 # MANIFEST, SOURCE). The bionic programs are built on the computer first:
@@ -21,6 +21,11 @@ install -Dm644 lib/props-tegu.conf "$l/props-tegu.conf"
 install -Dm644 prebuilt/omamobile-fp-shim.so "$l/omamobile-fp-shim.so"
 install -Dm755 prebuilt/omamobile-fp-bridge "$l/omamobile-fp-bridge"
 install -Dm644 vendor/systemd/system/omamobile-fp.service "$d/usr/lib/systemd/system/omamobile-fp.service"
+# Enabled by a vendor wants link: fingerprint starts by default, and only
+# with this runner (its copies, TDP guard and one proxy per boot). The unit is
+# inert until tools/phone-provision has pushed Google's files.
+install -d "$d/usr/lib/systemd/system/multi-user.target.wants"
+ln -sfn ../omamobile-fp.service "$d/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service"
 install -Dm644 vendor/pam.d/omarchy-lock-fingerprint "$d/etc/pam.d/omarchy-lock-fingerprint"
 install -Dm644 vendor/systemd/system/fprintd.service.d/omamobile-udfps.conf \
   "$d/usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf"

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import "UserWidgets.js" as UserWidgets
@@ -113,7 +114,8 @@ Item {
   // ---------- location, for the weather built-ins
 
   // The ports used the phone's position (GeoClue, about 1 km); their OWL
-  // originals take a place as `city`, and wttr.in reads "lat,lon" as one.
+  // originals take a place as `city`, and our copies of them (in
+  // omamobile-owl-widgets) send a "lat,lon" city straight to Open-Meteo.
   // The coordinates go in while the city is empty or still the last ones put
   // in, so a city the user types wins. Needs its internet allowed.
   readonly property bool wantsLocation: owlCell.running && owlCell.shown && owlCell.config.useLocation === true
@@ -121,7 +123,18 @@ Item {
   GeoLocation { id: geo; active: owlCell.wantsLocation }
   onLocationTextChanged: owlCell.fillLocation()
   readonly property string locationText: geo.fix ? Number(geo.fix.lat).toFixed(2) + "," + Number(geo.fix.lon).toFixed(2) : ""
-  Connections { target: owl; function onInstanceChanged() { owlCell.fillLocation() } }
+  Connections { target: owl; function onInstanceChanged() { owlCell.fillLocation(); owlCell.fillUnit() } }
+  // The phone's temperature unit from its locale ("F" in the US, as
+  // omamobile-weather), for a widget with a `phoneUnit` state: our weather
+  // copies use it before the place's country. Not persisted, so it follows
+  // a change of locale.
+  readonly property string phoneUnit: HomeModel.localeUnit({ LC_ALL: Quickshell.env("LC_ALL") || "",
+    LC_MEASUREMENT: Quickshell.env("LC_MEASUREMENT") || "", LANG: Quickshell.env("LANG") || "" })
+  function fillUnit() {
+    if (!owl.instance) return
+    const unit = owl.stateValue("phoneUnit")
+    if (unit !== undefined && unit !== owlCell.phoneUnit) owl.setStateValue("phoneUnit", owlCell.phoneUnit)
+  }
   function fillLocation() {
     if (!owlCell.wantsLocation || !owlCell.locationText || !owl.instance) return
     const city = owl.stateValue("city")

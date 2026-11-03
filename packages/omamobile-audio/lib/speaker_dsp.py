@@ -67,6 +67,9 @@ DSP_KEYS = ('HALO_STATE', 'HALO_HEARTBEAT', 'CSPL_STATE', 'CSPL_ERRORNO', 'CAL_S
 AMP_KEYS = ('PCM Source', 'Digital PCM Volume', 'Analog PCM Volume')
 DELTA_KEYS = ('CSPL_UPDATE_PARAMS_CONFIG', 'CSPL_COMMAND')
 RTLOG_KEYS = ('RTLOG_ENABLE', 'RTLOG_VARIABLE', 'RTLOG_COUNT', 'RTLOG_STATE', 'RTLOG_DATA')
+# host-written settings the first-stream check reads (CSPL_ENABLE: the
+# protection algorithm on; 1 on both amplifiers on the reference phone)
+SETTING_KEYS = ('CSPL_ENABLE',)
 CSPL_CMD_UPDATE_PARAM = 8
 CSPL_STATES = {0: 'running', 1: 'error', 2: 'muted', 3: 'reiniting', 6: 'diagnosing'}
 HALO_RUN = 2
@@ -336,7 +339,7 @@ class Amps:
         names = self.ctl.names()
         self.names = {}
         for amp in AMPS:
-            for key in DSP_KEYS + DELTA_KEYS + RTLOG_KEYS:
+            for key in DSP_KEYS + DELTA_KEYS + RTLOG_KEYS + SETTING_KEYS:
                 self.names[amp, key] = resolve(names, amp, key)
             for key in AMP_KEYS:
                 self.names[amp, key] = f'{amp} {key}'
@@ -569,11 +572,76 @@ def ceilings():
     unmutes: digital, then analog per amplifier (c8: the top drives the
     earpiece, AUDIO-PLAN.md section 4; c9: stock's 817 and 17 on both)."""
     stage = os.environ.get('OMAMOBILE_SPK_STAGE') or 'media'
+    if stage == 'c9' and os.environ.get('OMAMOBILE_SPK_C9_SOURCE') == 'list':
+        # c9 from the verified firmware list: the levels verified with music
+        # ("C9 with real music"); 17 needs this phone's own stamp
+        return 817, {'Top': 11, 'Bottom': 14}
     if stage == 'c9':
         return 817, {'Top': 17, 'Bottom': 17}
     if stage == 'media':
         return 737, {'Top': 10, 'Bottom': 10}
     return 657, {'Top': 6, 'Bottom': 10}
+
+
+def first_stream_check():
+    """The per-phone check that stage c9 from the verified firmware list
+    (not from this phone's own C9a stamp) passes at its first speaker
+    stream after each start: (delay after the grace time, low C, high C),
+    or None when it doesn't apply. The list proves the firmware and both
+    tunings are the reference phone's, byte for byte; what can still differ
+    on another unit is the phone itself (its calibration, its amplifiers'
+    sense path), which C9a checked on the reference phone."""
+    if os.environ.get('OMAMOBILE_SPK_STAGE') != 'c9' or os.environ.get('OMAMOBILE_SPK_C9_SOURCE') != 'list':
+        return None
+    # the OMAMOBILE_SPK_FIRST_* overrides are for the tests only (the JSON
+    # control backend), as the watch hook: speaker.conf can't widen the band
+    testing = os.environ.get('OMAMOBILE_CTL_BACKEND', '').startswith('json:')
+    env = (lambda k, d: os.environ.get(k, d)) if testing else (lambda k, d: d)
+    return (float(env('OMAMOBILE_SPK_FIRST_CHECK', '') or 1.0),
+            float(env('OMAMOBILE_SPK_FIRST_TEMP_LOW', '') or 10.0),
+            float(env('OMAMOBILE_SPK_FIRST_TEMP_HIGH', '') or 65.0))
+
+
+def first_stream_problems(v, settings, hb0, low, high):
+    """Problems with this phone at its first c9 stream (empty if none):
+    the protection algorithm enabled (CSPL_ENABLE 1), the model using the
+    resistance we wrote from this phone's persist (CAL_R_SELECTED equals
+    CAL_R; neither value printed), the heartbeat moving since the stream
+    started, and the coil estimates plausible: within low..high C a few
+    seconds into a stream (verify's 10 C floor; the ceiling under the 80 C
+    backstop and above what music at the c9 levels reaches in those seconds,
+    "C9 with real music"). The watch rules (DSP running, calibration
+    applied, levels, the backstop) are checked in the same round as always."""
+    problems = []
+    for amp in AMPS:
+        g = lambda k: v.get((amp, k))
+        if settings.get((amp, 'CSPL_ENABLE')) != 1:
+            problems.append(f'{amp}: CSPL_ENABLE {settings.get((amp, "CSPL_ENABLE"))}, not 1 (protection algorithm off)')
+        r, rs = g('CAL_R'), g('CAL_R_SELECTED')
+        if r is None or rs is None:
+            problems.append(f'{amp}: CAL_R or CAL_R_SELECTED None (unreadable)')
+        elif r != rs:
+            problems.append(f'{amp}: the model does not use the calibration written from persist (CAL_R_SELECTED != CAL_R)')
+        hb = g('HALO_HEARTBEAT')
+        if hb is None:
+            problems.append(f'{amp}: HALO_HEARTBEAT None (unreadable)')
+        elif hb == hb0.get(amp):
+            problems.append(f'{amp}: HALO_HEARTBEAT did not move since the stream started')
+        t = q(g('CSPL_TEMPERATURE'), 14)
+        if t is None or not low <= t <= high:
+            problems.append(f'{amp}: coil temperature {t if t is None else round(t, 1)} C outside {low:g}-{high:g} C '
+                            '(calibration or sense wrong?)')
+    return problems
+
+
+def refuse_c9(reason, boot_only=False):
+    """Mute, record the refusal for this firmware (for this boot only with
+    boot_only) and restart the service at stage media
+    (omamobile-speaker-protection refuse-c9)."""
+    script = os.environ.get('OMAMOBILE_SPK_SCRIPT', '/usr/bin/omamobile-speaker-protection')
+    r = subprocess.run([script, 'refuse-c9', '--reason', reason] + (['--boot'] if boot_only else []), check=False)
+    if r.returncode not in (0, 3):     # 3: muted, the refusal not recorded (said so)
+        mute(reason)
 
 
 def check(v, digital_ceil, analog_ceil, temp_max, strict=True, mode='speaker'):
@@ -1209,11 +1277,16 @@ def cmd_watch(args):
             mute(reason)
             return 1
     log(f'watchdog: V/I feedback stream {"with every speaker stream" if feedback else "off"}')
+    first = first_stream_check()
+    if first:
+        log(f'watchdog: stage c9 from the verified firmware list: this phone is checked at its first speaker '
+            f'stream, {args.grace + first[0]:g} s in (CSPL_ENABLE 1, the model on the calibration from persist, '
+            f'heartbeat moving, coil estimates within {first[1]:g}-{first[2]:g} C); on a failure, stage media')
     import signal as sig
     sig.signal(sig.SIGTERM, lambda *_: sys.exit(0))   # run the finally below on a stop
     try:
         return watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max, temp_jump,
-                          strict_hb, media_delta, feedback)
+                          strict_hb, media_delta, feedback, first)
     finally:
         if feedback:
             feedback.stop()
@@ -1237,9 +1310,12 @@ def watch_hook():
 
 
 def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max, temp_jump,
-               strict_hb, media_delta, feedback):
+               strict_hb, media_delta, feedback, first=None):
     since = None
     beat = {}
+    hb0 = {}               # each amplifier's heartbeat at the stream's first reading
+    first_done = first is None
+    first_unread = 0       # first-stream checks put off by a failed read
     start_temp = {}
     first_temp = {}
     settle = jump_settle()
@@ -1310,6 +1386,7 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
             if since is None:
                 since = now
                 beat = {}
+                hb0 = {}
                 start_temp = {}
                 first_temp = {}
                 applied = False
@@ -1336,6 +1413,38 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                 continue
             problems = (check(v, digital_ceil, analog_ceil, temp_max, strict=strict, mode=mode)
                         + problems_delta + problems_fb)
+            # c9 from the verified firmware list: this phone's own check, at
+            # the first speaker stream that plays long enough
+            if not first_done and mode == 'speaker':
+                if not hb0:
+                    hb0 = {a: v.get((a, 'HALO_HEARTBEAT')) for a in AMPS}
+                elif strict and now - since >= args.grace + first[0] and not problems:
+                    fp = first_stream_problems(v, amps.read(SETTING_KEYS), hb0, first[1], first[2])
+                    if fp and all(' None' in p for p in fp) and first_unread < 2:
+                        first_unread += 1      # a read failed: judge at the next round
+                        fp = None
+                    if fp is None:
+                        pass
+                    elif fp:
+                        reason = 'first-stream check failed: ' + '; '.join(fp)
+                        log(f'watchdog: stage c9 from the verified firmware list: {reason}; '
+                            'muting and falling back to stage media')
+                        # a coil estimate out of the band alone is refused for
+                        # this boot only: right after loud music (67 C peaks)
+                        # or on a cold phone it can be out with nothing wrong
+                        refuse_c9(reason, boot_only=all(' coil temperature ' in p for p in fp))
+                        return 1
+                    else:
+                        first_done = True
+                        temps = ', '.join(f'{a} {q(v.get((a, "CSPL_TEMPERATURE")), 14):.1f} C' for a in AMPS)
+                        msg = (f'passed {time.strftime("%Y-%m-%dT%H:%M:%S%z")}: CSPL_ENABLE 1, the model on the '
+                               f'calibration from persist, heartbeat moving, coils {temps}')
+                        log(f'watchdog: stage c9 from the verified firmware list: first-stream check {msg}')
+                        try:
+                            with open(os.path.join(run_dir(), 'speaker-protection-c9-check'), 'w') as f:
+                                f.write(msg + '\n')
+                        except OSError:
+                            pass
             # In earpiece mode neither DSP is in an audible path: no coil or
             # heartbeat rule (the levels, the bypass and the mute are checked)
             for amp in AMPS if mode == 'speaker' else ():

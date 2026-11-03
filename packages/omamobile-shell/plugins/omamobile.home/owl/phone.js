@@ -162,7 +162,7 @@ function capabilities(program) {
     if (text.indexOf("http GET ") === 0) {
       out.network = true
       // A URL built while it runs still has a fixed host when its text
-      // starts with one (https://wttr.in/${q}): the compiler keeps that prefix.
+      // starts with one (https://api.open-meteo.com/...${q}): the compiler keeps that prefix.
       var known = text.slice(9).indexOf("(a URL built") === 0 ? (program.httpPrefixes || [])[httpIndex] || "" : text.slice(9)
       httpIndex++
       var h = hostOf(known)

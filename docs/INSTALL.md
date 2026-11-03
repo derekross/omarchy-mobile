@@ -7,6 +7,8 @@ Omarchy Mobile is a community project built on [Omarchy](https://omarchy.org). I
 
 It takes about an hour, most of it downloads and waiting. You type a few commands in a terminal on your computer; each step says what you should see.
 
+Today these steps are manual. Where the install is going, one guided step from a web page or a desktop app with the phone's firmware fetched for you, is in the [install experience plan](https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-EXPERIENCE-PLAN.md).
+
 ## Before you start: what happens to your phone
 
 - **Installing erases the phone's data.** Unlocking the bootloader erases it, and the installer replaces the user data partition (`userdata`) with Omarchy Mobile. Copy off anything you want to keep first: photos, messages, two-factor codes.
@@ -197,7 +199,7 @@ tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 
 After the restart, Wi-Fi, Bluetooth, sound, haptics, the sensors and the cameras work.
 
-**Fingerprint unlock is off at first,** on purpose: the first time its service starts, it writes the phone's secure storage, and that can't be undone. If you want it, start the service once in a terminal on the phone with `sudo systemctl enable --now omamobile-fp`, then add a finger on the phone's fingerprint screen.
+**Fingerprint unlock starts automatically after this restart.** The phone offers "Add a fingerprint" (or find it later in Setup > Security > Fingerprint): touch the sensor under the bright circle until it's done, and the finger unlocks the phone alongside your PIN or password. Its first start writes the phone's secure storage (Trusty's area in the UFS RPMB), the same kind of write Android makes at a factory reset; before that it makes read-only copies of the data it needs from `persist` and the factory calibration (`mfg_data`), which it never writes. If those copies can't be made or later don't match, fingerprint stays off and the PIN unlocks. If fingerprint stops, restart the phone rather than the service. To keep fingerprint off, run `sudo systemctl mask omamobile-fp` before this restart (`disable` isn't enough).
 
 ## Getting updates
 
@@ -224,7 +226,7 @@ Stock Android is still on slot A.
    fastboot reboot
    ```
 
-3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone.
+3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone. Fingers enrolled on Omarchy Mobile don't carry over: Android's setup asks for fingerprints as usual, and after you come back you enroll them again (reinstalling erases them).
 
 To remove Omarchy Mobile completely, flash Google's factory image for your phone with Google's own tools (the [Android Flash Tool](https://flash.android.com) or the `flash-all.sh` script in the factory image). Don't lock the bootloader afterwards unless you're sure both slots hold Google's images; if in doubt, ask in an issue first.
 

@@ -17,10 +17,13 @@
 #   record        on while omamobile-screenrecord (wf-recorder) records
 #   data          on while omamobile-sit-data.service is active; none
 #                 without omamobile-sitd running
-#   data_status   the operator and technology, when registered
+#   data_status   the operator's name (never a bare network code) and the
+#                 technology when registered, else "No signal"
+#   data_signal   the signal, 0-100, while registered; -1 otherwise
 #   dictation     voxtype: on while recording, busy while transcribing, off
 #                 when idle; down when its user service isn't running, none
-#                 without voxtype (it is an optional Omarchy install)
+#                 without voxtype (in the root image; Remove > Dictation
+#                 takes it out)
 
 t() { timeout 3 "$@" 2>/dev/null; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -101,7 +104,10 @@ fi
 
 # data: the daemon's public state is world-readable; the bearer service's
 # state is what "data on|off" switches.
-state=/run/omamobile-sit/state.json
+# The status names the operator only by name: sitd's "operator" falls back
+# to the numeric network code, which reads as noise, so a bare code is left
+# out and the technology stands alone.
+state=${OMAMOBILE_SIT_STATE:-/run/omamobile-sit/state.json}
 if have omamobile-sit && [ -r "$state" ] && have python3; then
   if systemctl is-active --quiet omamobile-sit-data.service 2>/dev/null; then echo "data=on"; else echo "data=off"; fi
   python3 -I -c '
@@ -110,7 +116,21 @@ try:
     m = json.load(open(sys.argv[1])).get("modem") or {}
 except (OSError, ValueError):
     sys.exit(0)
-words = [str(m.get(k)) for k in ("operator", "tech") if m.get(k)]
+if not isinstance(m, dict):
+    sys.exit(0)
+if m.get("state") != "registered":
+    print("data_signal=-1")
+    print("data_status=No signal")
+    sys.exit(0)
+try:
+    signal = max(0, min(100, int(m.get("signal") or 0)))
+except (TypeError, ValueError):
+    signal = 0
+print("data_signal=%d" % signal)
+name = str(m.get("operator_name", m.get("operator")) or "").strip()
+if name.replace(" ", "").isdigit():
+    name = ""
+words = [w for w in (name, str(m.get("tech") or "").strip()) if w]
 print("data_status=" + " ".join(words))
 ' "$state"
 else

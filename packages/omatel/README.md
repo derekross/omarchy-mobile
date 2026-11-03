@@ -14,11 +14,14 @@ package builds a pinned release from it.
 - **Up to 0.1.1** this one PKGBUILD built all three packages. **Since 0.2.0**
   the apps have repositories and PKGBUILDs of their own. The package names
   stay the same, so a plain upgrade replaces the 0.1.1 packages.
-- `omamobile-apps` doesn't pull these packages in yet; that waits for the
-  phone tests in the plan's runbook.
-- The agent's user unit ships disabled. Enable it per user with
-  `systemctl --user enable --now omatel-agent`; D-Bus activation also starts
-  it when an app needs it.
+- `omamobile-apps` depends on `omaphone` and `omamessages` since 0.2.1, and
+  they pull this package in. Without ModemManager's API on the system bus
+  (no modem stack installed, as in the first release's image) the agent
+  waits for the name without polling and reports `ModemState` "no-modem";
+  a dial is refused with `NoModem` and a sent SMS is marked failed.
+- The agent's user unit ships disabled, and that is the design: D-Bus
+  activation starts it when Phone or Messages opens. 0.2.4-2 changes only
+  the install message, which used to tell users to enable it.
 
 **Emergency calls are not supported.** The agent refuses emergency numbers
 until the plan's §3.3 tests pass.

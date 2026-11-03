@@ -102,6 +102,36 @@ if exists /usr/lib/omamobile-omarchy/lock-pam; then
   pass "the lock's PAM file (omarchy-lock-password) is in the image"
 fi
 
+# Voice out of the box (images from before it have no omamobile-voice): the
+# engine, its user daemon and the speech model omamobile-setup-user links
+if grep -q '^omamobile-voice ' <<<"$manifest"; then
+  exists /usr/bin/voxtype || fail "voxtype is installed with omamobile-voice"
+  exists /usr/lib/systemd/user/voxtype.service || fail "Voxtype's user unit is installed"
+  exists /usr/share/omamobile/voice/models/ggml-base.en.bin || fail "the base.en speech model is in the image"
+  pass "voice out of the box: voxtype, its user unit and base.en"
+fi
+
+# Phone, Contacts and Messages (images from before omamobile-apps 0.2.1 have
+# none): the apps, their launchers and the agent, which D-Bus activation
+# starts when an app needs it; its user unit isn't enabled in the image.
+if grep -q '^omaphone ' <<<"$manifest"; then
+  for f in /usr/bin/omaphone /usr/bin/omamessages /usr/bin/omatel-agent \
+           /usr/share/applications/org.omamobile.Phone.desktop /usr/share/applications/org.omamobile.Contacts.desktop \
+           /usr/share/applications/org.omamobile.Messages.desktop /usr/share/dbus-1/services/org.omamobile.Phone1.service; do
+    exists "$f" || fail "telephony apps: $f"
+  done
+  exists /etc/systemd/user/default.target.wants/omatel-agent.service && fail "omatel-agent is not enabled in the image"
+  pass "Phone, Contacts, Messages and omatel-agent (D-Bus activated)"
+fi
+# Nothing in the image starts the modem or its RIL at boot: enabling them is
+# MODEM-PLAN M4.6's step (each boot powers the modem, each reboot costs one
+# recovered UFS error-handler pass), never the image's.
+for unit in omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; do
+  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -q "$unit\.service" && fail "$unit is not enabled in the image"
+  d "ls -l /etc/systemd/system/omamobile-sitd.service.wants" | grep -q "$unit\.service" && fail "$unit is not enabled in the image"
+done
+pass "no modem unit enabled at boot"
+
 exists /etc/pacman.d/gnupg && fail "no pacman keyring (it holds a private key)"
 d "ls /etc/ssh" | grep -q ssh_host_ && fail "no SSH host keys"
 [[ $(cat_ /etc/machine-id) == uninitialized ]] || fail "machine id uninitialized"

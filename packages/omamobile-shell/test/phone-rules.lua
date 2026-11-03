@@ -94,6 +94,18 @@ local nautilus = { class = "^org.gnome.Nautilus$" }
 check(effect(nautilus, "maximize") == true and effect(nautilus, "float") == false
   and index(nautilus, "maximize") > index(modal, "maximize"), "the portal's file chooser is still a full sheet")
 
+-- Omarchy's install and setup terminals (omarchy-launch-floating-terminal-
+-- with-presentation: app-id org.omarchy.terminal) and its other floating
+-- terminals fill the screen, never Omarchy's 875x600 float.
+local omarchy_terms = { class = "^(org\\.omarchy\\.(terminal|bash|btop)|TUI\\.float)$" }
+check(effect(omarchy_terms, "maximize") == true and effect(omarchy_terms, "float") == false,
+  "Omarchy's install terminal and its other floating terminals are maximized, not floated")
+check(effect(omarchy_terms, "size") == nil, "no fixed size for Omarchy's terminals")
+check(index(omarchy_terms, "float") > index(modal, "float"), "the terminals' rule comes after the modal one")
+local tensaku = { class = "^dev.tensaku.Tensaku$" }
+check(effect(tensaku, "maximize") == true and effect(tensaku, "float") == false,
+  "Tensaku (the screenshot editor) is tiled and maximized, not Omarchy's float")
+
 local pip = { tag = "pip" }
 local size, move = effect(pip, "size"), effect(pip, "move")
 check(effect(pip, "maximize") == false and type(size) == "table" and size[1] == 300 and size[2] == 169,

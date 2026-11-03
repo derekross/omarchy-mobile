@@ -49,8 +49,9 @@ tar -C "$S" -cf "$B/phone-config.tar" var/lib/omandroid-vendor/modem/props.conf 
   etc/NetworkManager/system-connections home/omandroid/.config/omandroid home/omandroid/.config/omarchy/shell.json
 (cd "$B" && sha256sum phone-config.tar > phone-config.tar.sha256)
 F=$t/fp/omandroid-fp
-mkdir -p "$F/persist-ss" "$F/data/vendor/omandroid-fp"
+mkdir -p "$F/persist-ss" "$F/data/vendor/omandroid-fp" "$F/data/vendor/ss"
 echo 'secure storage' > "$F/persist-ss/0"
+echo 'tamper-detect' > "$F/data/vendor/ss/0"
 echo 'calibration' > "$F/mfg_data.img"
 echo 'secret' > "$F/data/vendor/omandroid-fp/secret"
 tar -C "$t/fp" --numeric-owner --owner=0 --group=0 -cf "$B/var-lib-omandroid-fp.tar" omandroid-fp/mfg_data.img omandroid-fp/data
@@ -75,21 +76,31 @@ for line in \
   "etc/NetworkManager/system-connections/test.nmconnection -> /etc/NetworkManager/system-connections/test.nmconnection" \
   "home/omandroid/.config/omandroid/home.json -> /home/alice/.config/omamobile/home.json" \
   "home/omandroid/.config/omandroid/widgets -> /home/alice/.config/omamobile/widgets" \
-  "/var/lib/omandroid-fp/data/vendor/omandroid-fp/secret -> /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret" \
+  "/var/lib/omandroid-fp/mfg_data.img -> /var/lib/omamobile-fp/mfg_data.img" \
+  "/var/lib/omandroid-fp/persist-ss/0 -> /var/lib/omamobile-fp/persist-ss/0" \
   "would stop omamobile-fp.service"; do
   grep -qF -- "$line" <<<"$out" || { echo "$out"; fail "maps: $line"; }
 done
 grep -q 'pacnew' <<<"$out" && fail "never restores .pacnew files"
-grep -q 'first storageproxyd start' <<<"$out" || fail "warns that the first storageproxyd start needs the human's go"
+grep -q 'never starts omamobile-fp' <<<"$out" || fail "says it never starts the fingerprint service"
+grep -q 'data/vendor' <<<"$out" && fail "without --restore-td, no TD or Gatekeeper secret is restored"
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" \
+      --user alice --fingerprint --restore-td 2>&1) || { echo "$out"; fail "the --restore-td dry run succeeds"; }
+grep -qF "/var/lib/omandroid-fp/data/vendor/omandroid-fp/secret -> /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret" <<<"$out" ||
+  fail "--restore-td restores the Gatekeeper secret"
+grep -qF "/var/lib/omandroid-fp/data/vendor/ss/0 -> /var/lib/omamobile-fp/data/vendor/ss/0" <<<"$out" || fail "--restore-td restores TD"
+grep -q 'no storageproxyd ran' <<<"$out" || fail "--restore-td states the no-run-in-between rule"
+out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --dry-run --skip-extract --backup "$B" --work "$t/work" --restore-td 2>&1) &&
+  fail "--restore-td without --fingerprint is refused"
 [[ -z $(ls -A "$t/work") ]] || fail "the staging (per-phone data) is removed"
-pass "dry run: old paths mapped to new names and the user's home, phone untouched, fingerprint warning"
+pass "dry run: old paths mapped to new names and the user's home, phone untouched; fingerprint: calibration and persist:/ss only, TD only with --restore-td"
 
 # Raven's run does none of cheetah's backup or fingerprint steps: each of
 # their options is refused before anything runs, not ignored. The fake
 # ssh records any call, so a call made before the refusal is caught even
 # if the tool ignores its failure
 : > "$t/factory.zip"
-for o in --fingerprint --import-home --restore-config --restore-wifi --with-waves --force "--backup $t"; do
+for o in --fingerprint "--fingerprint --restore-td" --import-home --restore-config --restore-wifi --with-waves --force "--backup $t"; do
   # shellcheck disable=SC2086 # the --backup case is two words on purpose
   if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision -d raven --dry-run --work "$t/work" $o "$t/factory.zip" 2>&1); then
     fail "-d raven refuses $o"
@@ -279,7 +290,8 @@ on 'test ! -e /etc/omandroid && test ! -e /var/lib/omandroid-vendor && test ! -e
 on 'grep -q omamobile.home /home/alice/.config/omamobile/home.json && grep -q qs.Omamobile /home/alice/.config/omamobile/widgets/my.test-widget/Widget.qml' ||
   fail "ids in the imported files are renamed"
 [[ $(on 'stat -c %u:%g /var/lib/omamobile-fp/persist-ss/0') == 1000:1000 ]] || fail "the fingerprint secure storage keeps its Android owner"
-[[ $(on 'stat -c %u:%g /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret') == 0:0 ]] || fail "the fingerprint secret stays root's"
+on 'test ! -e /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret && test ! -e /var/lib/omamobile-fp/data/vendor/ss/0' ||
+  fail "without --restore-td, neither TD nor the Gatekeeper secret is restored"
 [[ $(on 'stat -c %a /var/lib/omamobile-fp') == 700 ]] || fail "the fingerprint state is private"
 pass "a real run: new names, root-owned system files, user-owned home files, Android owners for the fingerprint state"
 
@@ -290,6 +302,14 @@ prov --fingerprint && fail "differing fingerprint state is never replaced withou
 grep -q -- '--force' "$t/out" || fail "says how to replace it"
 [[ $(on 'cat /var/lib/omamobile-fp/persist-ss/0') == enrolled-since ]] || fail "the phone's newer state is untouched"
 pass "differing fingerprint state is kept unless --force"
+on 'echo secure storage > /var/lib/omamobile-fp/persist-ss/0'
+prov --fingerprint --restore-td || { cat "$t/out"; fail "--restore-td runs"; }
+[[ $(on 'stat -c %u:%g /var/lib/omamobile-fp/data/vendor/omamobile-fp/secret') == 0:0 ]] || fail "the fingerprint secret stays root's"
+[[ $(on 'cat /var/lib/omamobile-fp/data/vendor/ss/0') == tamper-detect ]] || fail "--restore-td restores TD"
+on 'echo newer > /var/lib/omamobile-fp/data/vendor/ss/0'
+prov --fingerprint --restore-td && fail "a TD already on the phone is never replaced without --force"
+[[ $(on 'cat /var/lib/omamobile-fp/data/vendor/ss/0') == newer ]] || fail "the phone's TD is untouched"
+pass "--restore-td restores TD and the secret, and never over a TD already there without --force"
 
 # A first install against the stand-in phone: the board id from a stand-in
 # bootconfig (PHONE_BOOTCONFIG), the NV checksums from the stand-in backup.

@@ -30,11 +30,20 @@
 #   --restore-wifi    saved NetworkManager connections
 #   --import-home     home screens, quick settings and widgets into the user's
 #                     ~/.config/omamobile (ids renamed omandroid -> omamobile)
-#   --fingerprint     the fingerprint state (Trusty secure storage, factory
-#                     calibration, enrolment) -> /var/lib/omamobile-fp, with the
-#                     fingerprint service stopped. It never starts the service:
-#                     the first storageproxyd start needs the human's go
-#                     (FINGERPRINT-PLAN F4)
+#   --fingerprint     the safe part of the fingerprint state: the factory
+#                     calibration copy (mfg_data.img) and the read-only copy of
+#                     persist:/ss (persist-ss/) -> /var/lib/omamobile-fp, with
+#                     the fingerprint service stopped. It never starts the
+#                     service. Not needed on a new install: the runner makes
+#                     both copies itself from the partitions at its first start
+#                     (FINGERPRINT-PLAN F19)
+#   --restore-td      with --fingerprint: also the backup's TD (Trusty's
+#                     tamper-detect store, data/vendor/ss) and the bridge's
+#                     Gatekeeper secret, i.e. the enrolled fingers. Only valid
+#                     if no storageproxyd ran on the phone between taking the
+#                     backup and now: Trusty's RPMB anchors TD, so an older TD
+#                     mounts but its files can't be read (FINGERPRINT-PLAN F19,
+#                     the 2026-11-02 reinstall). Never restore an old one
 # A first install (cheetah with no phone-config.tar in the backup directory;
 # nothing here makes one, only the backup taken before the rename has it, so
 # a later reinstall counts too) has no backup to restore from, so
@@ -60,6 +69,7 @@
 #   --work DIR     local staging (default ~/.cache/omamobile-provision; it holds
 #                  Google's files and per-phone data, removed afterwards unless --keep)
 #   --force        replace fingerprint state that differs from the backup
+#                  (with --restore-td, also a TD already on the phone)
 #   --dry-run      stage locally and print every extraction and push; touch
 #                  nothing on the phone
 #   -d DEV         cheetah (default) or raven. Raven (device/raven): the
@@ -90,7 +100,7 @@ backup=$HOME/android/reference/phone-backup-20261013
 work=${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-provision
 getprop=$HOME/android/reference/raven-stock/getprop.txt
 nv_backup=""
-dry=0 skip_extract=0 fingerprint=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0 backup_given=0
+dry=0 skip_extract=0 fingerprint=0 restore_td=0 import_home=0 restore_config=0 restore_wifi=0 waves=0 keep=0 force=0 backup_given=0
 user="" factory="" device=cheetah
 PHONE_SSH=${PHONE_SSH:-$ROOT/tools/phone-ssh}
 bootconfig=${PHONE_BOOTCONFIG:-/proc/bootconfig}
@@ -99,6 +109,7 @@ while (($#)); do
     --dry-run) dry=1 ;;
     --skip-extract) skip_extract=1 ;;
     --fingerprint) fingerprint=1 ;;
+    --restore-td) restore_td=1 ;;
     --import-home) import_home=1 ;;
     --restore-config) restore_config=1 ;;
     --restore-wifi) restore_wifi=1 ;;
@@ -119,6 +130,7 @@ while (($#)); do
 done
 ((skip_extract)) || [[ -n $factory ]] || die "give the factory image (FACTORY.zip), or --skip-extract"
 [[ -z $factory || -f $factory ]] || die "no $factory"
+((restore_td == 0 || fingerprint)) || die "--restore-td goes with --fingerprint"
 [[ -n $factory ]] && factory=$(readlink -f "$factory")
 [[ $device == cheetah || $device == raven ]] || die "unknown device $device (cheetah or raven)"
 [[ $device == cheetah ]] || ((skip_extract == 0)) || die "-d $device needs the factory image"
@@ -127,6 +139,7 @@ done
 if [[ $device == raven ]]; then
   unsupported=()
   ((fingerprint)) && unsupported+=(--fingerprint)
+  ((restore_td)) && unsupported+=(--restore-td)
   ((import_home)) && unsupported+=(--import-home)
   ((restore_config)) && unsupported+=(--restore-config)
   ((restore_wifi)) && unsupported+=(--restore-wifi)
@@ -185,6 +198,7 @@ if [[ $device == cheetah && ! -f $backup/phone-config.tar ]]; then
   first_install=1
   unsupported=()
   ((fingerprint)) && unsupported+=(--fingerprint)
+  ((restore_td)) && unsupported+=(--restore-td)
   ((import_home)) && unsupported+=(--import-home)
   ((restore_config)) && unsupported+=(--restore-config)
   ((restore_wifi)) && unsupported+=(--restore-wifi)
@@ -490,18 +504,26 @@ fi
 if ((fingerprint)); then
   say "Fingerprint state"
   cat <<'WARN'
-    !! The fingerprint state is Trusty's secure storage for this phone. This
-    !! tool only copies it to /var/lib/omamobile-fp with the service stopped;
-    !! it never starts omamobile-fp. The first storageproxyd start on it writes
-    !! the phone's RPMB and is irreversible: it needs the human's explicit go
-    !! (device/cheetah/FINGERPRINT-PLAN.md F4).
+    !! This copies the fingerprint state to /var/lib/omamobile-fp with the
+    !! service stopped; it never starts omamobile-fp. Without --restore-td it
+    !! copies only the factory calibration copy and the read-only copy of
+    !! persist:/ss, never Trusty's TD or the enrolled fingers: a TD older than
+    !! the phone's RPMB can't be read (device/cheetah/FINGERPRINT-PLAN.md F19).
 WARN
+  if ((restore_td)); then
+    cat <<'WARN'
+    !! --restore-td: the backup's TD and Gatekeeper secret too. Only valid if
+    !! no storageproxyd ran on this phone since the backup was taken.
+WARN
+  fi
   mkdir -p "$W/fp"
   tar -C "$W/fp" -xf "$fp_tar" --no-same-owner
   [[ -d $W/fp/omandroid-fp ]] || die "$fp_tar has no omandroid-fp/"
   # Ownership is Android's (storageproxyd runs as AID_SYSTEM, 1000), so this
   # one tree keeps the backup's numeric owners, renamed paths and all.
-  fp_list=$(tar -tf "$fp_tar" | sed 's|^omandroid-fp/||' | grep . || true)
+  # Without --restore-td only mfg_data.img and persist-ss/ are restored
+  fp_keep() { ((restore_td)) && return 0; [[ $1 == mfg_data.img || $1 == persist-ss || $1 == persist-ss/* ]]; }
+  fp_list=$(tar -tf "$fp_tar" | sed 's|^omandroid-fp/||; s|/$||' | grep . | while read -r f; do fp_keep "$f" && echo "$f"; done || true)
   while read -r f; do note "/var/lib/omandroid-fp/$f -> /var/lib/omamobile-fp/$(map_path "$f")"; done <<<"$fp_list"
   if ((dry)); then
     note "would stop omamobile-fp.service, then restore $(wc -l <<<"$fp_list") entries to /var/lib/omamobile-fp"
@@ -514,25 +536,36 @@ WARN
         die "/var/lib/omamobile-fp already holds different secure storage: not replacing it (--force)"
       fi
     fi
+    if ((restore_td && force == 0)) && phone 'test -e /var/lib/omamobile-fp/data/vendor/ss/0'; then
+      die "/var/lib/omamobile-fp already holds a TD (storageproxyd has run here): not replacing it with the backup's (--force, and only if no storageproxyd ran since the backup)"
+    fi
     phone 'systemctl stop omamobile-fp.service 2>/dev/null; systemctl is-active --quiet omamobile-fp.service && exit 1; true' ||
       die "omamobile-fp.service won't stop"
     # Rename the inner directory too, then stream with numeric owners kept
-    python3 -I - "$fp_tar" "$W/fp.tar" <<'PY'
+    python3 -I - "$fp_tar" "$W/fp.tar" "$restore_td" <<'PY'
 import sys, tarfile
-src, dst = sys.argv[1], sys.argv[2]
+src, dst, restore_td = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+def keep(name):
+    return restore_td or name in (".", "mfg_data.img", "persist-ss") or name.startswith("persist-ss/")
 with tarfile.open(src) as i, tarfile.open(dst, "w") as o:
     for m in i.getmembers():
         name = m.name
         if not name.startswith("omandroid-fp"):
             sys.exit(f"unexpected member {name}")
-        name = name[len("omandroid-fp"):].lstrip("/") or "."
+        name = name[len("omandroid-fp"):].strip("/") or "."
+        if not keep(name):
+            continue
         m.name = name.replace("omandroid", "omamobile")
         o.addfile(m, i.extractfile(m) if m.isfile() else None)
 PY
     phone 'set -e; mkdir -p /var/lib/omamobile-fp; tar -C /var/lib/omamobile-fp -xpf - --numeric-owner --same-owner' < "$W/fp.tar"
     phone 'chmod 0700 /var/lib/omamobile-fp; ls -ln /var/lib/omamobile-fp/persist-ss'
     note "restored; omamobile-fp.service stays stopped"
-    DID+=("restored the fingerprint state (service stopped, not started)")
+    if ((restore_td)); then
+      DID+=("restored the fingerprint state with TD and the enrolled fingers (service stopped, not started)")
+    else
+      DID+=("restored the fingerprint calibration and persist:/ss copies, not TD (service stopped, not started)")
+    fi
   fi
 fi
 

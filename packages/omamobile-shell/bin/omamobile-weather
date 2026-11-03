@@ -16,9 +16,10 @@ this order:
 
   1. location: the phone's position from GeoClue at city accuracy (no GNSS
      power-up), asked at most every 3 h, and only while the Location switch
-     has GeoClue's agent running (omamobile-geoclue-agent.service, from
-     omamobile-gnss); the client is GeoClue's where-am-i, which GeoClue lets
-     through without asking, so a timer never raises a prompt. A fix that
+     is on and GeoClue has an agent for this user (omamobile-gnss's
+     omamobile-geoclue-agent.service, or any other instance of GeoClue's
+     demo agent this user runs); the client is GeoClue's where-am-i, which
+     GeoClue lets through without asking, so a timer never raises a prompt. A fix that
      fails or times out falls back to the last one, up to a day old.
   2. widget: the city the home screen's "today" widget is set to (the newest
      ~/.local/state/omamobile/owl/owl_simonschubert.today_*.json), or else
@@ -74,6 +75,9 @@ PLACE = os.path.join(STATE_DIR, "weather-place.json")
 OWL_TODAY = os.path.join(STATE_DIR, "owl", "owl_simonschubert.today_*.json")
 WHERE_AM_I = os.environ.get("OMAMOBILE_WHERE_AM_I", "/usr/lib/geoclue-2.0/demos/where-am-i")
 GEOCLUE_AGENT = "omamobile-geoclue-agent.service"
+GEOCLUE_AGENT_BIN = os.environ.get("OMAMOBILE_GEOCLUE_AGENT", "/usr/lib/geoclue-2.0/demos/agent")
+LOCATION_SOCKET = "omamobile-gnss-nmea.socket"
+PROC = "/proc"
 FIX_FRESH = 3 * 3600      # ask GeoClue at most this often
 FIX_KEEP = 24 * 3600      # a failed fix falls back to the last one this young
 GEOCLUE_FOR = 22          # where-am-i under timeout -k 2 20
@@ -223,13 +227,59 @@ def home_widget_place(layout):
     return None
 
 
+def location_switch():
+    """The Location switch (omamobile-gnss): True on, False off, None
+    without omamobile-gnss (no such socket unit)."""
+    try:
+        out = subprocess.run(["systemctl", "is-enabled", LOCATION_SOCKET], capture_output=True,
+                             text=True, env=dict(os.environ, LC_ALL="C")).stdout.strip()
+    except OSError:
+        return None
+    return None if not out else out == "enabled"
+
+
+def agent_unit_active():
+    """omamobile-gnss's agent unit runs for this user."""
+    try:
+        return subprocess.run(["systemctl", "--user", "--quiet", "is-active", GEOCLUE_AGENT],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    except OSError:
+        return False
+
+
+def agent_process(proc=None, uid=None):
+    """GeoClue's demo agent runs as this user, from whatever started it (an
+    XDG autostart of geoclue's own, before omamobile-gnss 0.2.6 hid it)."""
+    proc = proc or PROC
+    uid = os.getuid() if uid is None else uid
+    try:
+        pids = [p for p in os.listdir(proc) if p.isdigit()]
+    except OSError:
+        return False
+    for pid in pids:
+        try:
+            if os.stat(os.path.join(proc, pid)).st_uid != uid:
+                continue
+            with open(os.path.join(proc, pid, "cmdline"), "rb") as f:
+                argv0 = f.read().split(b"\0")[0]
+        except OSError:
+            continue
+        if argv0.decode("utf-8", "replace") == GEOCLUE_AGENT_BIN:
+            return True
+    return False
+
+
 def geoclue_usable():
-    """GeoClue answers this user only while its agent runs (the Location
-    switch); without it a request queues for ever, so it isn't made."""
+    """GeoClue answers this user only while an agent is registered for the
+    user; without one a request queues for ever, so it isn't made. The agent
+    is omamobile-gnss's unit (the Location switch) or any other instance of
+    GeoClue's demo agent run by this user. With the Location switch off,
+    GeoClue isn't asked whatever agent runs."""
     if not os.access(WHERE_AM_I, os.X_OK):
         return False
-    return subprocess.run(["systemctl", "--user", "--quiet", "is-active", GEOCLUE_AGENT],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    if location_switch() is False:
+        return False
+    return agent_unit_active() or agent_process()
 
 
 def where_am_i():
