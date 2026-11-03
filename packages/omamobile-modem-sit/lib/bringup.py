@@ -58,6 +58,23 @@ def sim_lock(payload):
     return LOCKS.get(app[1])
 
 
+
+def data_snapshot(client, label):
+    """Registration and the data-call list, as the modem reports them, before
+    and after the NR change: whether a bearer is ever listed before the
+    setup, and whether the change makes one appear or disappear. States,
+    codes and counts only."""
+    try:
+        reg = client.request(0x0701)
+        calls = client.request(0x0602)
+    except (TimeoutError, RuntimeError) as error:
+        print(f'{label}: snapshot unavailable: {error}', flush=True)
+        return
+    state = (reg[0], reg[1], reg[3]) if len(reg) >= 4 else tuple(reg[:4])
+    print(f'{label}: PS state, reject, RAT {state}; data calls listed {calls[0] if calls else "none"}',
+          flush=True)
+
+
 def packet_registered(payload, *, lte=False):
     return len(payload) >= 4 and payload[0] in (1, 5) and (not lte or payload[3] == 14)
 
@@ -137,11 +154,13 @@ def start(service, settings, stopped=lambda: False):
     print('Startup: waiting for packet registration', flush=True)
     timeout = net.getint('register_timeout', 180)
     wait_for(service, lambda: packet_registered(client.request(0x0701)), timeout, stopped)
+    data_snapshot(client, 'before the NR change')
     if net.get('nr', 'off') == 'off':
         nr_mode(client)
         wait_for(service, lambda: packet_registered(client.request(0x0701), lte=True), 120, stopped)
+        data_snapshot(client, 'after the NR change')
     service.stage('data')
-    activate(client, apn, ip_type=ip_type)
+    activate(client, apn, ip_type=ip_type, on_event=service.event)
     service.pump()
     if not net.getboolean('ims', True):
         service.ims_state = 'off'
@@ -151,7 +170,7 @@ def start(service, settings, stopped=lambda: False):
     service.stage('ims')
     try:
         start_stack(client)
-        activate(client, net.get('ims_apn', 'ims'), ims=True)
+        activate(client, net.get('ims_apn', 'ims'), ims=True, on_event=service.event)
         register(client)
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and

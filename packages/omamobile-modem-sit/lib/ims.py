@@ -80,7 +80,7 @@ def start_stack(client):
 def register(client):
     state_path, response_path = paths(2)
     owned = json.loads(state_path.read_text())
-    if owned.get('cid') != 2 or not 1 <= owned.get('session', 0) <= 15:
+    if owned.get('cid') != 2 or not 0 <= owned.get('session', -1) <= 15:
         raise RuntimeError('IMS bearer ownership missing')
     if 2 not in call_ids(client.request(0x0602)):
         raise RuntimeError('IMS bearer no longer listed')

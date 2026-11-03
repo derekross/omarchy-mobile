@@ -146,6 +146,10 @@ class SimulatorTests(unittest.TestCase):
         setups = [e for e in entries if e.get('event') == 'setup_data_call']
         self.assertEqual([(s['cid'], s['apn'], s['ip']) for s in setups],
                          [(1, 'internet.example', 3), (2, 'ims', 2)])
+        # Both bearers as stock sets them up on cellular: no PDU session ID
+        # (the modem picks it), and no ALLOC_PDU_SESSION or REL_PDU_SESSION.
+        self.assertEqual([s['psi'] for s in setups], [0, 0])
+        self.assertFalse({0x061a, 0x061b} & set(ids))
         log = (self.dir / 'daemon.log').read_text()
         for secret in ('2025550123', '2025550199', 'hello', 'omamobile test'):
             self.assertNotIn(secret, log)

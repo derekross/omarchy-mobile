@@ -4,15 +4,24 @@ owned bearer lifecycle: CID 1 (internet, rmnet0) and CID 2 (IMS, rmnet1).
 
 The APN comes from /etc/omamobile/modem-sit.conf. Ownership is recorded in
 RAM before a setup is sent: a setup or release with an unknown outcome
-keeps its record and its PDU session, and nothing is retried blindly.
+keeps its record, and nothing is retried blindly.
+
+A cellular setup carries no PDU session ID (0), as stock's does: Android's
+data stack reserves one (ALLOC_PDU_SESSION) only for a bearer carried over
+Wi-Fi (IWLAN), and stock's builder copies the framework's value into the
+request unchanged, so on LTE and NR the modem picks the ID itself. Records
+from 0.3.4 and earlier hold an allocated ID, which deactivate() still
+releases.
 """
 import json
 import os
 from pathlib import Path
 import re
 import struct
+import time
 
 from paths import RUN
+from sit_names import NAMES
 
 STATE = RUN / 'data-session.json'
 RESPONSE = RUN / 'data-call-response.bin'
@@ -62,7 +71,8 @@ def owned_ids():
         state, _ = paths(cid)
         if state.exists():
             owned = json.loads(state.read_text())
-            if owned.get('cid') != cid or not 1 <= owned.get('session', 0) <= 15:
+            # session 0: no PDU session ID was sent (the modem chose one).
+            if owned.get('cid') != cid or not 0 <= owned.get('session', -1) <= 15:
                 raise RuntimeError('invalid bearer ownership record')
             result.add(cid)
     return result
@@ -88,8 +98,15 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     full[0xda] = IP_TYPES['ipv6'] if ims else IP_TYPES[ip_type]
     full[0xdb] = 2 if ims else 0  # IPv6 P-CSCF request
     # No handover addresses, roaming override or slice.
-    # MTU at 0xf1 stays zero (network/default choice).
+    # 0xf1 (u32): the APN-type bitmap, as stock's builder copies it from
+    # ApnSetting's supported types (vendor.radio.base
+    # ApnSetting::SetSupportedTypesBitmask, member +0x160; the 983-byte
+    # builder writes it at 0xf1). DEFAULT for the internet bearer, IMS for
+    # the IMS one. Until 0.3.6 this was sent as 0 (taken for an MTU), and
+    # the 9a's modem answered every internet setup with status 36.
+    struct.pack_into('<I', full, 0xf1, 0x40 if ims else 1)
     full[0xf5] = 2  # stock caller selects the v3/983-byte form
+    # 0 on cellular: no PDU session ID, the modem picks one (module docstring).
     struct.pack_into('<i', full, 0xf6, pdu_session)
     # No requested network slice: SST 0, SD -1, mapped SST 0, mapped SD -1.
     struct.pack_into('<i', full, 0xfc, -1)
@@ -102,8 +119,10 @@ def initial_attach(client, apn, ip_type='ipv4v6'):
     """SET_INITIAL_ATTACH_APN (251 bytes). Without it, setup requests on this
     phone returned status 36 and no bearer."""
     attach = bytearray(251)
-    attach[12:245] = setup_payload(1, 14, 1, apn, ip_type=ip_type)[:233]
-    attach[0xf8] = 3
+    attach[12:245] = setup_payload(1, 14, 0, apn, ip_type=ip_type)[:233]
+    # Stock's attach builder leaves 0xf1-0xf4 zero: no APN-type bitmap here.
+    attach[0xf1:0xf5] = bytes(4)
+    attach[0xf8] = 3  # the roaming PDP type, IPv4v6 (the home type is 0xda)
     client.request(0x0603, bytes(attach[12:]), timeout=30)
 
 
@@ -131,7 +150,89 @@ def provision_default_profile(client, apn, ip_type='ipv4v6'):
     print('default data profile accepted', flush=True)
 
 
-def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
+
+
+# After the data permission is switched on, the modem is given time to settle
+# before the setup goes out: on 2026-11-02 every setup was answered 36 within
+# 150 ms and was followed within a second by three IND_REG_FAILED (LTE cause
+# 10, implicitly detached) and two IND_NTW_STATE_CHANGED; with this wait the
+# same indications came and went before the setup, and it succeeded. The wait ends after SETTLE_QUIET seconds without an
+# indication, or at SETTLE_LIMIT.
+SETTLE_QUIET = 3
+SETTLE_LIMIT = 20
+
+
+def keep_packet(packet):
+    """Append a raw indication to a private file in RAM (it may carry the
+    PLMN or cell identity), length-prefixed, for decoding later."""
+    path = RESPONSE.with_name('indications.bin')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, struct.pack('<H', len(packet)) + packet)
+    finally:
+        os.close(fd)
+
+
+def describe(packet):
+    message, length = struct.unpack_from('<HH', packet, 2)
+    payload = packet[8:]
+    line = f'{NAMES.get(message, hex(message))} ({length} bytes)'
+    if message == 0x0604 and payload and 1 <= payload[0] <= 15 and len(payload) > 1:
+        count = payload[0]
+        size = (len(payload) - 1) // count
+        records = []
+        for index in range(count):
+            record = payload[1 + index * size:1 + (index + 1) * size]
+            if len(record) >= 5:
+                records.append(struct.unpack_from('<HBBB', record))
+        line += f' data calls {count}: status, CID, active, PDP type {records}'
+    return line
+
+
+def settle(client, label, on_event=None):
+    deadline = time.monotonic() + SETTLE_LIMIT
+    last = time.monotonic()
+    seen = 0
+    while True:
+        now = time.monotonic()
+        if now >= deadline or now - last >= SETTLE_QUIET:
+            break
+        packet = client.next_indication(min(.5, deadline - now))
+        if packet is None:
+            continue
+        seen += 1
+        last = time.monotonic()
+        keep_packet(packet)
+        print(f'{label}: {describe(packet)}', flush=True)
+        if on_event:
+            # Handled as the service handles any indication (an SMS arriving
+            # now is stored and acknowledged), not only recorded.
+            on_event(packet)
+    print(f'{label}: {seen} indication(s), then quiet' if seen else f'{label}: quiet', flush=True)
+
+def listen_after_failure(client, seconds=5, on_event=None):
+    """After a refused setup, keep the channel open a few seconds and log
+    what the modem sends next: on 2026-11-02 two or three messages arrived
+    about a second after each status 36 and were dropped because the channel
+    had already closed. Message names and lengths only; for a data-call list
+    change, the per-record status, CID, active and PDP type, nothing else."""
+    deadline = time.monotonic() + seconds
+    seen = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        packet = client.next_indication(min(1, remaining))
+        if packet is None:
+            continue
+        seen += 1
+        keep_packet(packet)
+        print(f'after the failure: {describe(packet)}', flush=True)
+        if on_event:
+            on_event(packet)
+    print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
+
+def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False, on_event=None):
     requested_cid = 2 if ims else 1
     state_path, response_path = paths(requested_cid)
     state = client.request(0x0701)
@@ -142,26 +243,28 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
     if state_path.exists() or requested_cid in calls or calls != owned:
         raise RuntimeError('existing target or unresolved bearer ownership')
     allow_data(client)
-    allocated = client.request(0x061a)
-    if len(allocated) != 4:
-        raise RuntimeError('unexpected PDU-session response')
-    session = struct.unpack('<i', allocated)[0]
-    if not 1 <= session <= 15:
-        raise RuntimeError('invalid PDU session')
-    if any(json.loads(paths(cid)[0].read_text())['session'] == session for cid in owned):
-        # Never release a duplicate allocation belonging to the other bearer.
-        raise RuntimeError('modem reused an owned PDU session')
-    # Persist ownership before setup. A timeout has an unknown outcome; do
-    # not recycle its PDU session while the modem may still be activating it.
-    try:
-        private_write(state_path, json.dumps({'cid': requested_cid, 'session': session}).encode())
-    except OSError:
-        client.request(0x061b, struct.pack('<i', session))
-        raise
+    settle(client, 'after allowing data', on_event)
+    # The registration as it stands now, not before the permission: the
+    # modem may have re-attached meanwhile.
+    for second in range(60):
+        state = client.request(0x0701)
+        if len(state) >= 4 and state[0] in (1, 5):
+            break
+        if second == 0:
+            print('registration lost after allowing data; waiting for it', flush=True)
+        time.sleep(1)
+    else:
+        raise RuntimeError('PS network is not registered after allowing data')
+    print('registration before the setup: PS state, reject, RAT', (state[0], state[1], state[3]), flush=True)
+    # No ALLOC_PDU_SESSION on cellular (module docstring): session 0.
+    session = 0
+    # Persist ownership before setup. A timeout has an unknown outcome: the
+    # record stays while the modem may still be activating the bearer.
+    private_write(state_path, json.dumps({'cid': requested_cid, 'session': session}).encode())
     released = False
     try:
         rat = 14 if lte_access else state[3]
-        print('data setup access RAT', rat, 'registered RAT', state[3], flush=True)
+        print('data setup access RAT', rat, 'registered RAT', state[3], 'PDU session ID', session, flush=True)
         result = client.request(0x0600, setup_payload(requested_cid, rat, session, apn,
                                                       ims=ims, ip_type=ip_type), timeout=45)
         if len(result) < 132:
@@ -169,9 +272,15 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False):
         status, cid, raw_active, pdp = struct.unpack_from('<HBBB', result)
         print('data-call status', status, 'CID', cid, 'active raw', raw_active, 'PDP type', pdp, flush=True)
         if cid == requested_cid and raw_active == 0:
-            client.request(0x061b, struct.pack('<i', session))
+            # Refused outright: nothing is held, so nothing stays owned.
             released = True
         if status or cid != requested_cid or raw_active not in (1, 2):
+            # The whole record, kept privately in RAM for the record (it may
+            # carry addresses or the APN), and the modem's next messages.
+            failed_path = response_path.with_name(f'failed-setup-cid{requested_cid}.bin')
+            private_write(failed_path, result)
+            print(f'failed setup response kept privately: {len(result)} bytes', flush=True)
+            listen_after_failure(client, on_event=on_event)
             raise RuntimeError('data call did not become active')
         private_write(response_path, result)
         print('owned data bearer active; private IP configuration retained in RAM', flush=True)
@@ -192,7 +301,7 @@ def deactivate(client, cid=1):
     if cid == 2 and state_path.with_name('ims-registration.json').exists():
         raise RuntimeError('unregister IMS before releasing its bearer')
     owned = json.loads(state_path.read_text())
-    if owned.get('cid') != cid or not 1 <= owned.get('session', 0) <= 15:
+    if owned.get('cid') != cid or not 0 <= owned.get('session', -1) <= 15:
         raise RuntimeError('invalid bearer ownership record')
     flags = int(Path(f"/sys/class/net/rmnet{owned['cid'] - 1}/flags").read_text(), 16)
     if flags & 1:
@@ -202,9 +311,11 @@ def deactivate(client, cid=1):
     calls = call_ids(client.request(0x0602))
     if cid in calls:
         raise RuntimeError('deactivated bearer still listed; retaining reservation')
-    client.request(0x061b, struct.pack('<i', owned['session']))
+    if owned['session']:
+        # Only a record from 0.3.4 or earlier holds an allocated ID.
+        client.request(0x061b, struct.pack('<i', owned['session']))
     state_path.unlink()
     response_path.unlink(missing_ok=True)
     if calls != owned_ids():
         raise RuntimeError('unexpected remaining data-call ownership')
-    print('owned data bearer deactivated; PDU session released', flush=True)
+    print('owned data bearer deactivated', flush=True)

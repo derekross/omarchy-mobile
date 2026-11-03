@@ -52,6 +52,7 @@ class BringupTests(unittest.TestCase):
         with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
              patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_default_profile'), \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate', side_effect=TimeoutError), \
+             patch.object(bringup, 'data_snapshot'), \
              patch.object(bringup, 'start_stack') as stack, patch.object(bringup, 'register') as register:
             with self.assertRaises(TimeoutError):
                 bringup.start(service, SETTINGS)
