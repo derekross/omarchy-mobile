@@ -138,6 +138,9 @@ analog_ceil() { [[ $1 == Top ]] && echo "$ANALOG_CEIL_TOP" || echo "$ANALOG_CEIL
 # The default 657 is 20 dB under stock's handset gain, AUDIO-PLAN section 4's
 # first-sound level: the earpiece is held at the ear, and unlike stock's path
 # nothing in front of it (no AoC handset processing) lowers the signal.
+# The boost converter stays as the last start left it (on at stage c9, off at
+# media): the earpiece works either way, as stock's handset path does with it
+# on (clean by ear on a VoLTE call at stage c9, 2026-11-03; C9k).
 EAR_DIGITAL=${OMAMOBILE_SPK_EARPIECE_DIGITAL:-657}
 EAR_ANALOG=${OMAMOBILE_SPK_EARPIECE_ANALOG:-6}
 # DRE as in speaker mode unless set: stock runs it on the handset path too
@@ -819,18 +822,17 @@ earpiece() {
       ear_refuse on "earpiece digital level $EAR_DIGITAL is outside 1..$EAR_DIGITAL_CEIL (stage $STAGE)"
     ((EAR_ANALOG <= EAR_ANALOG_CEIL)) || ear_refuse on "earpiece analog level $EAR_ANALOG is above $EAR_ANALOG_CEIL"
     [[ $EAR_DRE == [01] ]] || ear_refuse on "OMAMOBILE_SPK_EARPIECE_DRE=$EAR_DRE: 1 (on) or 0 (off)"
-    # The boost converter follows the earpiece's own analog gain, as start
-    # makes it follow the speakers' (C9j): off at 10 and below, so off for
-    # the earpiece unless OMAMOBILE_SPK_BOOST forces it. It is set when the
-    # amplifiers probe, so a start that left it on (stage c9, or a kernel
-    # without boost_en) cannot serve the earpiece without a rebind: refuse.
+    # The boost converter stays as the last start left it: it is a
+    # module-wide parameter set when the amplifiers probe (off at analog 10
+    # and below, on at stage c9 or under OMAMOBILE_SPK_BOOST=1, which only
+    # start reads: C9j), and the earpiece works either way. C9j's light-load
+    # distortion was measured under music on the speakers; stock's handset
+    # path runs the top amplifier with the converter on (analog 7), and on
+    # 2026-11-03 the earpiece at 657/6 with it on was clean by ear on a
+    # VoLTE call at stage c9 (AOC-PLAN C9k). Until 0.5.13 this refused
+    # with the converter on, which left every call at stage c9 silent.
     b=$(cat "$boost_file" 2>/dev/null)
-    if [[ ${OMAMOBILE_SPK_BOOST:-0} == 1 ]]; then
-      [[ $b == "boost converter on"* ]] || ear_refuse on "OMAMOBILE_SPK_BOOST=1 but the last start left: ${b:-nothing recorded}"
-    else
-      [[ $b == "boost converter off"* ]] ||
-        ear_refuse on "the earpiece (analog $EAR_ANALOG) needs the boost converter off (AOC-PLAN C9j), and the last start left: ${b:-nothing recorded} (stage $STAGE)"
-    fi
+    b=${b:-boost converter state not recorded by the last start}
     if [[ $(cur_mode) == earpiece ]] && earpiece_state >/dev/null; then
       rm -f "$ack_file"
       wait_ack earpiece || ear_fail "the watchdog did not answer within ${OMAMOBILE_SPK_ACK_WAIT:-5} s (omamobile-speaker-watch running?)"

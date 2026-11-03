@@ -28,7 +28,10 @@ watchdog in earpiece mode) and a "Voice Call" UCM verb with an Earpiece
 sink; the gated runbook is C9k. A first look on the phone found the speaker
 filter following the default sink into the earpiece once Voice Call was
 active; its output now never falls back (`node.dont-fallback`,
-`node.linger`; C9k "The route").
+`node.linger`; C9k "The route"). **2026-11-03 (omamobile-audio 0.5.13):**
+earpiece mode works at every stage: with the boost converter on, as the
+louder stage c9 leaves it, the earpiece at 657/6 was clean by ear on a VoLTE
+call, so `on` no longer refuses it (C9k "Refusals").
 **Earlier plan (2026-10-13, before C9j):** the speakers sounded thin; the ranked plan and three
 runbooks follow C9d-6: C9g (omamobile-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
@@ -2308,7 +2311,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      listener: "so much better and much louder and much more clear
      without static". Reading: at the everyday level the converter sits in
      its light-load regime, where it droops and distorts; stock's 817/17
-     never runs it there. Its registers (peak 2.5 A as stock's speaker
+     never runs it there. (2026-11-03: this finding was under music on the
+     speakers and doesn't apply to the voice path: the earpiece at 657/6
+     with the boost on was clean by ear on a VoLTE call at stage c9, as
+     stock's handset path runs it; C9k.) Its registers (peak 2.5 A as stock's speaker
      path, coefficients, DCM, class-H 0x000b0405, WKFET 0x111, VCTRL1 0 as
      the chip default, VCTRL2 class-H) match Google's driver, which also
      never writes the boost target unless the DT gives one (stock's does
@@ -2412,13 +2418,23 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      values. The status line is the speaker one again.
    - **Refusals (nothing changes):** status not "ok:", a hang marker, no
      card, a failed health check, configured levels that fail the limits
-     check, earpiece levels outside the ceilings, and a boost converter the
-     last start left on. The converter follows the earpiece's own analog
-     gain as it follows the speakers' (C9j): off at 10 and below, so off
-     for the earpiece; it is set when the amplifiers probe, so a start that
-     left it on (stage c9, `OMAMOBILE_SPK_BOOST=1`, a kernel without
-     `boost_en`) cannot serve the earpiece without a rebind, and earpiece
-     mode refuses unless `OMAMOBILE_SPK_BOOST=1` says the owner wants it on.
+     check, and earpiece levels outside the ceilings. The boost converter
+     stays as the last start left it: it is set when the amplifiers probe
+     (C9j: off when every speaker analog gain is 10 or below, on at stage
+     c9, under `OMAMOBILE_SPK_BOOST=1` or on a kernel without `boost_en`),
+     and the earpiece works either way. Until omamobile-audio 0.5.13 `on`
+     refused with the converter on (the earpiece's analog 6 is in C9j's
+     light-load range), which left every call at stage c9, the louder
+     default on verified firmware since 0.5.8, with no earpiece audio.
+     **2026-11-03: earpiece at 657/6 with the boost on, verified clean by
+     ear on a VoLTE call at stage c9** (`OMAMOBILE_SPK_BOOST=1`, earpiece
+     on through `omamobile-earpiece@on.service`: Top 657/6 through ASP, the
+     bottom muted; no static, no hum); **C9j's light-load finding was under
+     music on the speakers and doesn't apply to the voice path.** Stock's
+     own handset path runs the top amplifier with the boost on too
+     (`mixer_paths.xml` handset: analog 7). So 0.5.13 accepts the converter
+     on and records its state in the status line; `OMAMOBILE_SPK_BOOST`
+     stays the start's, for the speakers.
      Both requests are idempotent (a repeat writes nothing and only checks
      that the watchdog answers); a service start removes the mode and ends
      in speaker mode, so a restart is the rollback.
