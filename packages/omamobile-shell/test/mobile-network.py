@@ -82,7 +82,7 @@ class Cli(unittest.TestCase):
         (d / 'modem-sit.conf').write_text('[network]\napn = internet.example\n[data]\nroaming = no\n')
         self.env = dict(os.environ, OMAMOBILE_SIT_RUN=str(d / 'run'), OMAMOBILE_SIT_CONFIG=str(d / 'modem-sit.conf'),
                         OMAMOBILE_SIT_CONFIG_HELPER=str(self.helper), OMAMOBILE_MM='none',
-                        PATH=str(d / 'bin') + ':/usr/bin:/bin')
+                        PATH=str(d / 'bin'))
         self.d = d
 
     def tearDown(self):
