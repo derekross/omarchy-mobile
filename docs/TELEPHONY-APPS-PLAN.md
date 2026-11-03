@@ -163,12 +163,26 @@ Today `omamobile-sit-data` puts `rmnet0` behind Wi-Fi with metric 700, and Netwo
 
 | Need | How | Ready? |
 | --- | --- | --- |
-| WAP push (the MMS notification) arrives as a binary SMS | sitd passes the PDU's user data through; the bridge exports an `Sms` with `Data` set and `Text` empty, which mmsd-tng picks up | No: the codec keeps the bytes but nothing passes them on (T0, T3) |
-| An APN that carries MMS | mmsd-tng's `MMS_APN` must match the connected bearer's APN. mmsd-tng supports no separate MMS bearer ("limitations of Modem Manager", its README), so the carrier must allow MMS on the internet APN. Many US carriers do; check ours (Q8) | Our config has one APN (`[network] apn`) |
+| WAP push (the MMS notification) arrives as a binary SMS | sitd passes the PDU's user data through; the bridge exports an `Sms` with `Data` set and `Text` empty, which mmsd-tng picks up | Yes for the 9a's stack (#380): sitd keeps each part's WAP port and delivers a joined push as data; the bridge exports it with `Data` |
+| An APN that carries MMS | mmsd-tng's `MMS_APN` must match the connected bearer's APN. mmsd-tng supports no separate MMS bearer ("limitations of Modem Manager", its README), so the carrier must allow MMS on the internet APN. Many US carriers do; check ours (Q8) | On the palmtop's carrier the MMS APN is the internet APN. A second bearer on it took the IMS bearer down (2026-11-02), so sitd sets up none |
 | Fetch from the MMSC over mobile data, even with Wi-Fi up | mmsd-tng binds HTTP to the bearer's interface (`SO_BINDTODEVICE`, `src/service.c:3720-3732`) and resolves through that interface's DNS (c-ares or systemd-resolved with the ifindex). Needs `CarrierMMSC`, `CarrierMMSProxy`, or `http://mms.invalid` to look them up in mobile-broadband-provider-info | **Depends on M4.3:** rmnet0 is configured IPv4 only (MODEM-CLIENT §1.3). If the carrier's bearer is IPv6-only (common on T-Mobile's network [I]), MMS needs IPv6 on rmnet0 first. The packet processor (MODEM-PLAN 6.3) is built but untested on hardware; the legacy buffers carry data meanwhile |
 | Sending MMS | mmsd-tng posts the M-Send.req to the MMSC the same way | as above |
-| Storage and UI | mmsd-tng stores messages and serves `org.ofono.mms` on the session bus; Chatty and our app are its clients | install `mmsd-tng` (T3) |
+| Storage and UI | mmsd-tng stores messages and serves `org.ofono.mms` on the session bus; Chatty and our app are its clients | `packages/mmsd-tng` (2.6.4, #380), not enabled; Messages' side is in the omatel apps (T3) |
 | Group MMS | MMS with several recipients; mmsd-tng handles the PDUs | with the above |
+
+**The bearer for mmsd-tng (#380):** sitd reports the internet bearer's device (the one omamobile-sit-data found), address and DNS in its private status, and the bridge publishes them on the bearer (`Interface`, `Ip4Config`). mmsd-tng binds to that device and resolves the MMSC through those servers, so MMS goes over cellular with Wi-Fi up, without touching the system's routes or DNS.
+
+**Attended runbook, receive first (9a, not yet run):**
+
+| Step / risk | Commands or action | Expect / pass | Stop condition | Rollback |
+| --- | --- | --- | --- | --- |
+| 1. Read-only / none | `uname -r`; `pacman -Q omamobile-modem-sit omamobile-mmd mmsd-tng`; `omamobile-sit status`; `busctl --system get-property org.freedesktop.ModemManager1 <bearer> org.freedesktop.ModemManager1.Bearer Interface Ip4Config` | Registered with data; the bearer's Interface is the found device and Ip4Config has an address and DNS | No address or DNS, no data | None |
+| 2. Settings / low | As the session user, `~/.mms/modemmanager/mms` (mode 0600) from `/usr/share/mmsd-tng/mms.example`: the carrier's MMSC, the APN (the internet APN), the proxy or `NULL`, the palmtop's number; `ForceCAres=true` | A private file, nothing started | Credentials or an IPv6-only MMS bearer needed | Remove the file |
+| 3. Daemon / low | `systemctl --user start mmsd-tng.service` (never `-d`) | `org.ofono.mms` on the session bus | Startup errors | `systemctl --user stop mmsd-tng.service` |
+| 4. Receive / medium | The owner sends one small picture to the palmtop, Wi-Fi up | One WAP push, one downloaded message in mmsd-tng's store, calls and texts unchanged | A download or routing failure, a second WAP consumer | Stop the daemon; keep its store |
+| 5. Send / medium (after the apps' T3 changes) | One small picture from Messages to the owner | One copy received | An uncertain send: don't press Send again | Stop the daemon |
+
+Never publish the MMSC, the APN, numbers, message URLs, WAP bytes or attachments, or mmsd-tng's debug output.
 
 **What our data path still lacks for MMS** (MODEM-PLAN 6.3 and MODEM-CLIENT §1.3): M4.3 passing on the phone, IPv6 on `rmnet0` (or proof that the carrier gives IPv4), and the bearer exported as a Bearer object. Throughput isn't an issue for MMS (messages are a few hundred kB), so the packet processor isn't a prerequisite.
 

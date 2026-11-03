@@ -1,0 +1,27 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+bash -n PKGBUILD
+python3 - <<'PY'
+import configparser
+import hashlib
+from pathlib import Path
+import re
+text = Path('PKGBUILD').read_text()
+assert 'arch=(aarch64)' in text
+assert 'meson test -C build --print-errorlogs' in text
+assert 'arch-meson "mmsd-$pkgver" build' in text
+assert 'SKIP' not in text
+for path in Path('.').glob('*.patch'):
+    assert hashlib.sha256(path.read_bytes()).hexdigest() in text, path
+unit = Path('systemd/mmsd-tng.service').read_text()
+assert 'ExecStart=/usr/bin/mmsdtng\n' in unit and 'Restart=no' in unit
+assert not re.search(r'^(Requires|Wants|BindsTo|ExecStartPre|ExecStartPost)=', unit, re.M)
+config = configparser.ConfigParser(interpolation=None)
+config.read('config/mms.example')
+assert config['Modem Manager']['CarrierMMSC'] == '<MMSC>'
+assert config['Modem Manager']['MMS_APN'] == '<APN>'
+assert config['Settings'].getboolean('ForceCAres')
+print('ok - pinned source, patches, aarch64 recipe and opt-in configuration')
+PY

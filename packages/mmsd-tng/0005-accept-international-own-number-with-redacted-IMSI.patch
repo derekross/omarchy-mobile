@@ -1,0 +1,42 @@
+From: W4HO <87742609+W4HO-ham@users.noreply.github.com>
+Subject: [PATCH] MMS: accept an international own number with a redacted IMSI
+
+--- a/src/service.c
++++ b/src/service.c
+@@ -3159,6 +3159,10 @@
+       g_warning ("mms_service_set_own_number(): Number is NULL!");
+       return FALSE;
+     }
++  /* A redacted IMSI supplies no region. An international own number
++   * can still be parsed without guessing a country for national numbers. */
++  if (service->country_code == NULL && own_number[0] == '+')
++    service->country_code = g_strdup ("ZZ");
+   if (service->country_code == NULL)
+     {
+       g_warning ("Country Code is NULL!");
+--- a/unit/test-phone-utils.c
++++ b/unit/test-phone-utils.c
+@@ -113,6 +113,15 @@
+   g_assert_cmpstr (output, ==, carrer_vvm_test3);
+ }
+ 
++static void
++international_number_without_imsi (void)
++{
++  g_autofree char *number = phone_utils_format_number_e164 ("+12025550123", "ZZ", FALSE);
++  g_autofree char *national = phone_utils_format_number_e164 ("2025550123", "ZZ", FALSE);
++  g_assert_cmpstr (number, ==, "+12025550123");
++  g_assert_null (national);
++}
++
+ int
+ main (int    argc,
+       char **argv)
+@@ -123,5 +132,7 @@
+                         NULL, test_number_decode);
+ 
+ 
++  g_test_add_func ("/mmsutil/international-number-without-imsi",
++                   international_number_without_imsi);
+   return g_test_run ();
+ }
