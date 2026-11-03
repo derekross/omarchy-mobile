@@ -214,7 +214,8 @@ class Sim:
         cid, apn = p[0], p[4:0xd9 - 12].split(b'\0')[0].decode()
         # psi: the PDU session ID at 0xf6, 0 when the modem is to pick it.
         self.log(event='setup_data_call', cid=cid, apn=apn, ip=p[0xda - 12],
-                 psi=struct.unpack_from('<i', p, 0xf6 - 12)[0])
+                 psi=struct.unpack_from('<i', p, 0xf6 - 12)[0],
+                 apn_types=struct.unpack_from('<I', p, 0xf1 - 12)[0], profile=p[3])
         if not self.registered():
             return self.respond(mid, token, 9)
         r = bytearray(292)

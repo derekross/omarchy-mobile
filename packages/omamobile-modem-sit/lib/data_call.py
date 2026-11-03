@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 """Data-call layouts (the stock 983-byte version-2 setup request) and an
-owned bearer lifecycle: CID 1 (internet) and CID 2 (IMS). Stock names a
-bearer's device rmnet<CID - 1>; data_network.find_device checks which device
-really carries the internet bearer (it differed when the attach bearer was on
-another APN).
+owned bearer lifecycle: CID 1 (internet), CID 2 (IMS) and opt-in CID 3
+(MMS). Stock names a bearer's device rmnet<CID - 1>; data_network.find_device
+checks which device really carries the internet bearer (it differed when the
+attach bearer was on another APN). MMS is a library primitive only: start-up
+does not request it and no socket method exposes it yet.
 
 The APN comes from /etc/omamobile/modem-sit.conf. Ownership is recorded in
 RAM before a setup is sent: a setup or release with an unknown outcome
@@ -35,8 +36,9 @@ IP_TYPES = {'ipv4': 1, 'ipv6': 2, 'ipv4v6': 3}
 def paths(cid):
     if cid == 1:
         return STATE, RESPONSE
-    if cid == 2:
-        return STATE.with_name('ims-session.json'), RESPONSE.with_name('ims-response.bin')
+    if cid in (2, 3):
+        name = 'ims' if cid == 2 else 'mms'
+        return STATE.with_name(name + '-session.json'), RESPONSE.with_name(name + '-response.bin')
     raise ValueError('unsupported bearer CID')
 
 
@@ -71,7 +73,7 @@ def check_apn(apn):
     return apn
 
 
-def call_ids(payload):
+def call_ids(payload, *, active_only=False):
     # Stock DataCallUtil::DetermineDCTypeBySize. Reject variable
     # traffic-descriptor records until their full framing is implemented.
     if not payload or payload[0] > 15:
@@ -87,12 +89,16 @@ def call_ids(payload):
     cids = [payload[1 + index * size + 2] for index in range(count)]
     if len(set(cids)) != count or any(not 1 <= cid <= 15 for cid in cids):
         raise RuntimeError('invalid or duplicate data-call CID')
+    if active_only:
+        return {cid for index, cid in enumerate(cids)
+                if struct.unpack_from('<H', payload, 1 + index * size)[0] == 0
+                and payload[1 + index * size + 3] in (1, 2)}
     return set(cids)
 
 
 def owned_ids():
     result = set()
-    for cid in (1, 2):
+    for cid in (1, 2, 3):
         state, _ = paths(cid)
         if state.exists():
             owned = json.loads(state.read_text())
@@ -109,11 +115,13 @@ def private_write(path, data):
         out.write(data)
 
 
-def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type=None):
+def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, mms=False, ip_type=None):
     # Absolute request offsets below include the 12-byte request header.
     # ip_type None: IPv6 for IMS (what every IMS setup used until 0.3.19),
     # IPv4v6 otherwise. For IMS, stock takes the PDP type from the IMS APN's
     # protocol and the P-CSCF request from it (GetPcscfReqType).
+    if ims and mms:
+        raise ValueError('A bearer cannot be both IMS and MMS')
     if ip_type is None:
         ip_type = 'ipv6' if ims else 'ipv4v6'
     check_apn(apn)
@@ -131,12 +139,13 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     # 0xf1 (u32): the APN-type bitmap, as stock's builder copies it from
     # ApnSetting's supported types (vendor.radio.base
     # ApnSetting::SetSupportedTypesBitmask, member +0x160; the 983-byte
-    # builder writes it at 0xf1). DEFAULT for the internet bearer, IMS for
-    # the IMS one. Until 0.3.6 this was sent as 0 (taken for an MTU). It
-    # wasn't the cause of the 9a's status 36: 0.3.7 sent the bitmap and
+    # builder writes it at 0xf1). DEFAULT=1, MMS=2, IMS=0x40; MMS keeps the
+    # legacy selector at 0, since that field distinguishes IMS/emergency, not
+    # the supported types. Until 0.3.6 this was sent as 0 (taken for an MTU).
+    # It wasn't the cause of the 9a's status 36: 0.3.7 sent the bitmap and
     # still got 36, and 0.3.8's wait after the data permission fixed it
     # (device/tegu MODEM-PLAN, "SIM test results").
-    struct.pack_into('<I', full, 0xf1, 0x40 if ims else 1)
+    struct.pack_into('<I', full, 0xf1, 0x40 if ims else 0x02 if mms else 1)
     full[0xf5] = 2  # stock caller selects the v3/983-byte form
     # 0 on cellular: no PDU session ID, the modem picks one (module docstring).
     struct.pack_into('<i', full, 0xf6, pdu_session)
@@ -395,18 +404,38 @@ def listen_after_failure(client, seconds=5, on_event=None):
             on_event(packet)
     print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
 
-def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event=None):
-    requested_cid = 2 if ims else 1
+def activate(client, apn, *, ims=False, mms=False, ip_type=None, lte_access=False, on_event=None):
+    if ims and mms:
+        raise ValueError('A bearer cannot be both IMS and MMS')
+    check_apn(apn)
+    if ip_type is not None and ip_type not in IP_TYPES:
+        raise ValueError('Unsupported bearer IP type')
+    requested_cid = 3 if mms else 2 if ims else 1
     state_path, response_path = paths(requested_cid)
     state = client.request(0x0701)
     if len(state) < 4 or state[0] not in (1, 5):
         raise RuntimeError('PS network is not registered')
-    calls = call_ids(client.request(0x0602))
+    listed = client.request(0x0602)
+    calls = call_ids(listed)
     owned = owned_ids()
     if state_path.exists() or requested_cid in calls or calls != owned:
         raise RuntimeError('existing target or unresolved bearer ownership')
-    allow_data(client)
-    settle(client, 'after allowing data', on_event)
+    if mms:
+        # Rewriting the global permissions can re-attach the modem and
+        # disrupt internet/IMS. MMS may only reuse permission already on
+        # with a confirmed, owned internet bearer. A reservation alone is
+        # not evidence of a successful setup. No attach/profile writes.
+        internet_response = paths(1)[1]
+        if 1 not in call_ids(listed, active_only=True) or not internet_response.exists():
+            raise RuntimeError('MMS needs an active owned internet bearer')
+        internet = internet_response.read_bytes()
+        if len(internet) < 132 or struct.unpack_from('<HBB', internet) not in ((0, 1, 1), (0, 1, 2)):
+            raise RuntimeError('MMS needs a confirmed internet bearer response')
+        if client.request(0x0711) != b'\x01':
+            raise RuntimeError('MMS requires PS service permission already enabled')
+    else:
+        allow_data(client)
+        settle(client, 'after allowing data', on_event)
     # The registration as it stands now, not before the permission: the
     # modem may have re-attached meanwhile.
     for second in range(60):
@@ -429,7 +458,7 @@ def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event
         rat = 14 if lte_access else state[3]
         print('data setup access RAT', rat, 'registered RAT', state[3], 'PDU session ID', session, flush=True)
         result = client.request(0x0600, setup_payload(requested_cid, rat, session, apn,
-                                                      ims=ims, ip_type=ip_type), timeout=45)
+                                                      ims=ims, mms=mms, ip_type=ip_type), timeout=45)
         if len(result) < 132:
             raise RuntimeError('unexpected data-call layout')
         status, cid, raw_active, pdp = struct.unpack_from('<HBBB', result)

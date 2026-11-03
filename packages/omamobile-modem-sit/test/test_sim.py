@@ -286,6 +286,54 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(dtmf, ['1', '#'])
         self.assertFalse([e for e in self.transcript_entries() if 'violation' in e])
 
+    def test_separate_mms_bearer_reuses_permission_and_releases_only_itself(self):
+        self.start('--search-polls', '0', daemon=False)
+        # One IPC0 owner in a child process, pointed only at the simulator.
+        # Never start a second owner alongside a running sitd.
+        script = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from unittest.mock import patch
+import at
+import data_call
+from sit import Sit
+client = Sit()
+try:
+    at.radio(True)
+    client.request(0x0748, b'\\0')
+    data_call.initial_attach(client, 'internet.example')
+    data_call.provision_default_profile(client, 'internet.example')
+    data_call.activate(client, 'internet.example')
+    data_call.activate(client, 'ims', ims=True)
+    before = {p: p.read_bytes() for cid in (1, 2) for p in data_call.paths(cid)}
+    data_call.activate(client, 'mms.example', mms=True)
+    assert data_call.call_ids(client.request(0x0602)) == {1, 2, 3}
+    assert data_call.owned_ids() == {1, 2, 3}
+    original = Path.read_text
+    def read(path, *args, **kwargs):
+        return '0x0' if str(path) == '/sys/class/net/rmnet2/flags' else original(path, *args, **kwargs)
+    with patch.object(Path, 'read_text', read):
+        data_call.deactivate(client, 3)
+    assert data_call.call_ids(client.request(0x0602)) == {1, 2}
+    assert data_call.owned_ids() == {1, 2}
+    assert all(p.read_bytes() == content for p, content in before.items())
+finally:
+    client.close()
+"""
+        result = subprocess.run([sys.executable, '-c', script, str(HERE.parent / 'lib')],
+                                env=self.env, capture_output=True, text=True, timeout=40)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        entries = self.transcript_entries()
+        setups = [e for e in entries if e.get('event') == 'setup_data_call']
+        self.assertEqual([(e['cid'], e['apn_types'], e['profile'], e['psi']) for e in setups],
+                         [(1, 1, 0, 0), (2, 0x40, 1, 0), (3, 2, 0, 0)])
+        requests = [e['id'] for e in entries if e.get('type') == 'req']
+        setup_indices = [i for i, ident in enumerate(requests) if ident == 0x0600]
+        self.assertFalse({0x0603, 0x0613, 0x0625, 0x0710, 0x061a, 0x061b} &
+                         set(requests[setup_indices[1] + 1:]))
+        self.assertFalse([e for e in entries if 'violation' in e])
+
     def test_probe_is_read_only(self):
         self.start(daemon=False)
         probe = subprocess.run([sys.executable, str(BIN / 'omamobile-sitd'), '--probe'], env=self.env,

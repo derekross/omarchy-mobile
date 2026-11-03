@@ -163,14 +163,207 @@ Today `omamobile-sit-data` puts `rmnet0` behind Wi-Fi with metric 700, and Netwo
 
 | Need | How | Ready? |
 | --- | --- | --- |
-| WAP push (the MMS notification) arrives as a binary SMS | sitd passes the PDU's user data through; the bridge exports an `Sms` with `Data` set and `Text` empty, which mmsd-tng picks up | No: the codec keeps the bytes but nothing passes them on (T0, T3) |
-| An APN that carries MMS | mmsd-tng's `MMS_APN` must match the connected bearer's APN. mmsd-tng supports no separate MMS bearer ("limitations of Modem Manager", its README), so the carrier must allow MMS on the internet APN. Many US carriers do; check ours (Q8) | Our config has one APN (`[network] apn`) |
+| WAP push (the MMS notification) arrives as a binary SMS | sitd passes the PDU's user data through; the bridge exports an `Sms` with `Data` set and `Text` empty, which mmsd-tng picks up | Implemented in T0/T1: binary WAP bytes reach Sms.Data; mmsd-tng integration remains T3 |
+| An APN that carries MMS | mmsd-tng's `MMS_APN` must match the connected bearer's APN. mmsd-tng does not create a separate MMS bearer. Source review shows it can select an already connected second APN; see §1.7a for the 9a design and the remaining qualification (Q8) | Our config has one APN (`[network] apn`) |
 | Fetch from the MMSC over mobile data, even with Wi-Fi up | mmsd-tng binds HTTP to the bearer's interface (`SO_BINDTODEVICE`, `src/service.c:3720-3732`) and resolves through that interface's DNS (c-ares or systemd-resolved with the ifindex). Needs `CarrierMMSC`, `CarrierMMSProxy`, or `http://mms.invalid` to look them up in mobile-broadband-provider-info | **Depends on M4.3:** rmnet0 is configured IPv4 only (MODEM-CLIENT §1.3). If the carrier's bearer is IPv6-only (common on T-Mobile's network [I]), MMS needs IPv6 on rmnet0 first. The packet processor (MODEM-PLAN 6.3) is built but untested on hardware; the legacy buffers carry data meanwhile |
 | Sending MMS | mmsd-tng posts the M-Send.req to the MMSC the same way | as above |
 | Storage and UI | mmsd-tng stores messages and serves `org.ofono.mms` on the session bus; Chatty and our app are its clients | install `mmsd-tng` (T3) |
 | Group MMS | MMS with several recipients; mmsd-tng handles the PDUs | with the above |
 
 **What our data path still lacks for MMS** (MODEM-PLAN 6.3 and MODEM-CLIENT §1.3): M4.3 passing on the phone, IPv6 on `rmnet0` (or proof that the carrier gives IPv4), and the bearer exported as a Bearer object. Throughput isn't an issue for MMS (messages are a few hundred kB), so the packet processor isn't a prerequisite.
+
+### 1.7a T3 on the Pixel 9a: a separate MMS bearer (2026-11-03)
+
+**Status: offline design, with the first sitd primitive implemented in
+omamobile-modem-sit 0.3.13. MMS in Messages is not implemented or tested on a
+phone.** This follows T3; it does not require changing the working internet
+or IMS APN. Carrier settings belong in private configuration, never here.
+
+**Source check.** Read mmsd-tng **2.6.4**, upstream commit
+[`341117141f8d30949fb1294cc71ee44af9b4c90f`](https://gitlab.com/kop316/mmsd/-/tree/341117141f8d30949fb1294cc71ee44af9b4c90f),
+as data only (no upstream scripts or build run). Its GPL-2.0
+[`plugins/modemmanager.c`](https://gitlab.com/kop316/mmsd/-/blob/341117141f8d30949fb1294cc71ee44af9b4c90f/plugins/modemmanager.c)
+provides a narrower result than the README's “no multiple APNs” warning:
+`set_context()` (lines 1406–1532) **iterates all listed bearers** and selects
+one whose `Properties.apn` matches `MMS_APN`, case-insensitively, whose
+`Connected` is true, and whose modem has state `CONNECTED`. It takes that
+bearer's interface and IPv4/IPv6 DNS. It **never creates or connects a
+missing MMS bearer**; that branch is a stub. Thus an already connected
+second APN supplied by our stack is a viable design, not an upstream or
+hardware qualification. Only one MMS context is used at a time.
+
+#### The SIT bearer
+
+The saved stock library check identified MMS as supported-types bit
+**`0x00000002`**, alongside default `0x01` and IMS `0x40`. The implementation
+uses the existing setup builder; no vendor bytes or disassembly are copied
+into this repository. The 983-byte request carries that little-endian
+bitmap at **full-request offset `0xf1`** (payload `0xe5`). Its separate,
+legacy APN selector at full offset `0x0f` stays **0**, not 2: that selector
+distinguishes default/IMS/emergency. The APN, IP family and credentials are
+separate fields. Current code supports unauthenticated APNs only; a carrier
+requiring PAP/CHAP needs a separate, tested extension.
+
+Reserve **CID 3 / rmnet2** for MMS, leaving CID 1 / rmnet0 for internet and
+CID 2 / rmnet1 for IMS. This is the driver's existing CID-to-interface
+convention; confirm rmnet2 exists and carries CID 3 in the attended phase.
+“Second bearer” means the second application data bearer; IMS may also be
+active. Leave the cellular PDU session ID at **0**, as for internet and IMS.
+Do not send ALLOC_PDU_SESSION. Do not rewrite SET_INITIAL_ATTACH_APN,
+SET_DATA_PROFILE, SET_MOBILE_DATA_STATE or SET_PS_SERVICE for MMS. Those
+permission writes have caused re-attachment in the SIM investigation.
+`bringup.py` continues to provision only the internet attach/default profile
+and IMS; this change does not move its existing permission writes.
+
+**Implemented here:** `data_call.activate(client, mms_apn, mms=True,
+ip_type=...)` and `deactivate(client, 3)`. MMS requires registration, an
+owned and currently active internet bearer with a successful saved response,
+already enabled PS permission, and exact agreement between listed and owned
+CIDs. It refuses an occupied or uncertain target and unknown bearers. Private
+RAM files `mms-session.json` and `mms-response.bin` keep its ownership and
+response apart from internet/IMS. An outright refusal clears only the MMS
+reservation; a timeout keeps it and blocks a blind retry. Release requires
+rmnet2 down, confirms CID 3 is absent, and preserves other bearer records.
+Existing internet/IMS activation remains unchanged. MMS is deliberately a
+**library entry point**, not a new socket command, boot request, CLI or host
+network route. Its caller must remain sitd's sole IPC0 owner.
+
+**Next sitd work is larger than a payload flag:** add a bounded MMS lifecycle
+request to the authenticated socket, driven by explicitly configured
+`[mms] apn` and `ip_type`, disabled by default. Do not accept arbitrary APNs,
+CIDs or raw SIT from an app. Schedule the operation in the IPC0 owner while
+continuing call/SMS handling; a 45-second setup cannot simply block
+`Service.dispatch()`, and a bridge worker must not open another IPC0 channel.
+Serialize setup/release, distinguish reserved/active/host-configured/unknown,
+and handle IND_DATA_CALL_LIST_CHANGED plus a confirming list query. Publish
+per-bearer changes, not just the current `modem.data` flag (which is inferred
+from an ownership file and is insufficient proof of connectivity). Expose
+addresses/DNS only on the authorized socket; the public state file gets
+states/counts, not addresses, APNs or identifiers. An MMS failure never
+releases internet/IMS, retries an unknown setup, stops the CP or restarts sitd.
+
+If the carrier supports MMS on the internet APN, **reuse the configured
+internet bearer** instead of manufacturing a second connection to the same
+APN. Do not assume APN equality alone proves carrier permission. A separate
+MMS APN uses CID 3; carrier allowance of simultaneous contexts remains to be
+qualified. Keep an existing voice call responsive throughout either path.
+
+#### The bridge, host network and MMS proxy
+
+| Component | Present on this branch | T3 change |
+| --- | --- | --- |
+| `Modem.Bearers`, `ListBearers`, ObjectManager | One rmnet0 object; maximum one bearer | Export stable per-bearer objects for internet and MMS, matching APNs, `Connected`, interface and real supported capacity; emit object/property changes on setup, loss and release. IMS stays internal. Do not advertise unqualified hardware capacity as established fact |
+| `Bearer.Ip4Config`, `Ip6Config` | Empty defaults; configured APN/IP type only | Export actual address, prefix, DNS and supported MTU from validated private setup responses. A reservation is not a connected bearer; do not publish `Connected` until host configuration succeeds |
+| Bearer control | `CreateBearer`, `DeleteBearer`, `Connect`, `Disconnect` and `Simple.Connect/Disconnect` unsupported | First expose a prepared MMS bearer; a bounded agent-to-bridge request may prepare it. A later MM connection implementation must map only allowed profiles to sitd's lifecycle and return MM errors without altering the internet bearer. mmsd-tng itself needs **ListBearers**, not CreateBearer |
+| `Modem.Messaging` and `Sms` | List/Messages, Added/Deleted, Delete and binary `Data` already implemented | Retain `PduType=DELIVER`, `State=RECEIVED`, **empty Text and nonempty Data** for complete WAP pushes, including joined multipart messages. Codec/bridge tests already cover this. Let mmsd-tng consume and delete them; omatel's SMS handler already leaves them alone |
+| Modem state | CONNECTED derived from the internet reservation flag | Derive connectivity from confirmed, host-configured application bearers. MMS must be discoverable even if internet routing is disabled; SIM/radio/registration state still takes precedence |
+| Host networking | `data_network.py` owns only rmnet0, IPv4 /32, fallback default route and DNS | Own rmnet2 separately, with returned IPv4 and/or IPv6 configuration and per-interface DNS. Do not call rmnet0's helper for MMS or change the system default route/resolver. Add routes or an output-interface policy table for MMSC/proxy **and DNS**, so interface-bound sockets have a route even while Wi-Fi is preferred. Revert only resources created for MMS |
+
+The **carrier MMS proxy is not another ModemManager interface**. mmsd-tng
+owns it: `CarrierMMSC`, `CarrierMMSProxy` (`host:port` or `NULL`) and
+`MMS_APN` live in its per-user settings at `~/.mms/modemmanager/mms`.
+`org.ofono.mms.ModemManager` on the **session bus**, object `/org/ofono/mms`,
+provides `ViewSettings`, `ChangeSettings(s,v)`, `ChangeAllSettings(a{sv})`
+and `ProcessMessageQueue()`. Use the source's introspection signatures,
+not the older prose signature for ChangeSettings. Once the MMS bearer is
+ready, the agent calls ProcessMessageQueue: adding a bearer need not change
+the modem from CONNECTED to CONNECTED, so a Modem.StateChanged hook alone
+cannot wake the queue. mmd owns the **system-bus** MM service; omatel gets a
+separate session-bus MMS proxy and coordinates preparation through the bridge.
+
+[`src/service.c`](https://gitlab.com/kop316/mmsd/-/blob/341117141f8d30949fb1294cc71ee44af9b4c90f/src/service.c)
+binds HTTP to the selected interface (`SO_BINDTODEVICE`, lines 3720–3742),
+uses the bearer's DNS through c-ares or resolved's link index, and configures
+the HTTP proxy in `mms_service_bearer_notify()`. It configures neither IP
+addresses nor routes. Its socket-bind failure only logs and continues;
+package/integration work must make a failed bind fail the transfer and test
+that MMSC/proxy traffic cannot escape over Wi-Fi. Check the actual target
+kernel's bind permissions before choosing packaging; do not run the session
+daemon as root to hide a permission failure.
+
+Start mmsd-tng as the same session user as omatel, with no modem-start side
+effect. Set `AutoProcessSMSWAP` for mmsd-tng to be the one WAP consumer and
+`AutoProcessOnConnection` as desired; the agent must not also PushNotify the
+same SMS. The plugin looks up SIM IMSI and own numbers, currently redacted
+by mmd: test empty values and explicitly configured MMSC/APN/E.164 own
+number, rather than exposing identifiers or relying on provider lookup.
+The examined code's own-number fallback is inside the OwnNumbers loop;
+an empty array needs a regression test and possibly a small upstream fix.
+This matters for stripping oneself from group recipients. Do not log MMS
+URLs, phone numbers, settings, WAP bytes or attachments (upstream debug
+output includes these).
+
+#### Messages and omatel
+
+Messages 0.2.1 has a disabled attachment button and an MMS settings
+placeholder; accepting an `mms:` URI is not a transport. The locally cached
+omatel 0.2.1 source has `transport`, `mms_path` and a `parts` table, but only
+SMS ingestion/sending. The package pins omatel-agent 0.2.4; recheck that tag
+before implementation rather than treating the older cached source as a
+current release audit.
+
+Add typed session-bus proxies for mmsd-tng's **Manager, Service and Message**
+APIs, following
+[`src/dbus.h`](https://gitlab.com/kop316/mmsd/-/blob/341117141f8d30949fb1294cc71ee44af9b4c90f/src/dbus.h)
+and [`doc/message-api.txt`](https://gitlab.com/kop316/mmsd/-/blob/341117141f8d30949fb1294cc71ee44af9b4c90f/doc/message-api.txt).
+Discover services with GetServices/ServiceAdded; reconcile existing messages
+with GetMessages, then follow MessageAdded, MessageRemoved and each
+Message.PropertyChanged. Reconcile again after a daemon restart. Keep
+mmsd-tng's store authoritative for the transfer, with durable, deduplicated
+omatel references and `transport=mms`. Incoming attachments name a PDU file
+**plus offset and length**, not necessarily standalone image files. Validate
+bounds, materialize private parts as needed, and keep MMS deletion/read
+state coordinated with Message.Delete/MarkRead.
+
+Sending calls `Service.SendMessage(as recipients, v options, a(sss)
+attachments) -> o path`: options may contain Subject/DeliveryReport/SMIL;
+attachments contain content ID, MIME type and an absolute filename readable
+by the session daemon. Text is a text attachment, not a normal SMS Send.
+Persist the returned MMS path and follow its state; a timeout must reconcile
+rather than blindly submit again. Add an attachment chooser, previews and
+bounded decoding, carrier size/count checks, incoming text/image bubbles,
+download/failure state, retry behavior, notifications and persistent
+multi-recipient threads. Obtain size/count limits from Service.GetProperties;
+never silently send a group message to only its first recipient. Enable the
+attach control only when this backend exists. Stop/restart either app or
+agent without losing or duplicating an MMS.
+
+#### Offline tests and attended acceptance
+
+| Layer | Test, with fictional payloads only |
+| --- | --- |
+| Implemented sitd primitive | Stock-sized MMS request with bit 2/selector 0 and each IP family; separate CID ownership; refusal/unknown setup/unknown release; unknown bearer, inactive internet, permission off and host-link-up guards; internet/IMS records remain byte-identical |
+| Implemented sit-sim integration | One IPC0 owner creates internet, IMS and MMS, lists all three, then releases only MMS. Transcript asserts CID/bitmap/selector/session and absence of permission/attach/profile/PDU allocation writes after the IMS setup |
+| Next sitd/bridge tests | Slow or timed-out MMS setup while incoming call/SMS remains responsive; bearer-list loss, stale responses and daemon/bridge restart; libmm-glib sees both APNs, addresses/DNS and correct signals; a prepared second bearer is selected without CreateBearer. Cover MMS added while modem remains CONNECTED |
+| Next mmsd integration | On private buses, use a packaged test binary (do not run fetched source scripts). WAP on port 2948, multipart/out-of-order/duplicate pushes; empty IMSI/OwnNumbers; one deleting consumer; matching second APN behind an unrelated first bearer; ProcessMessageQueue after prepare; queue survives mmd/mmsd restart |
+| Next HTTP/UI tests | Fake MMSC and HTTP proxy in an isolated laptop network namespace, separate simulated Wi-Fi/MMS interfaces and DNS, IPv4/IPv6. Assert GET/POST and DNS leave through MMS, bind failure fails closed, group recipients and image parts round-trip; store/import limits and app/agent restarts preserve messages |
+
+Current laptop commands (risk **low**, no phone or upstream scripts):
+
+```sh
+packages/omamobile-modem-sit/test/all
+tests/packages omamobile-modem-sit
+tools/pr-check sitd-tegu-call-audio
+```
+
+Expect: all touched-package tests and the PR gate pass. Stop on a failure;
+rollback is the parent branch or removal of this isolated worktree. These
+checks validate protocol/lifecycle behavior only, not carrier acceptance,
+rmnet2 mapping, MTU, simultaneous contexts or actual HTTP routing.
+
+**Future phone gate, not authorized or run here:** after the full bridge,
+network and app pieces pass offline, write a separately reviewed runbook
+with the actual commands and kernel release. First read-only NV checksum,
+CP/registration, existing bearers and rmnet links; retain the existing sleep
+inhibitor and attended modem restrictions. Then one authorized MMS setup
+with a laptop log stream/watchdog, confirming internet/IMS/call state and
+partitions unchanged, followed by one image received/sent while Wi-Fi is up
+and one group exchange. Risk **medium**: a new PDN may disturb registration.
+Stop on re-attachment, call/SMS regression, unknown setup/release, interface
+mismatch or any NV/UFS error; do not retry automatically. Roll back only
+owned MMS host resources, then confirmed CID 3 release if safe. An uncertain
+outcome remains owned for an attended reboot; never stop/reset the running
+CP in place. No startup unit or automatic retries until qualification.
 
 ### 1.8 Requirements against MODEM-PLAN
 
