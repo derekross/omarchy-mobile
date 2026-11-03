@@ -93,22 +93,57 @@ class Manager(dbus.service.Object):
         elif what == "remove":
             self.present = False
             self.InterfacesRemoved(dbus.ObjectPath(PATH), [MODEM, GPP]); return
+        elif what == "bad":
+            # A broken property, without a signal: the watcher must keep going.
+            self.modem["State"] = dbus.String("bogus"); return
+        elif what.startswith("quiet-"):
+            # Registered on LTE at this strength, without a signal.
+            self.registered(int(what[6:])); return
         self.PropertiesChanged(MODEM, {}, [])
+    def registered(self, strength):
+        self.modem.update(State=dbus.Int32(8), StateFailedReason=dbus.UInt32(0),
+                          AccessTechnologies=dbus.UInt32(1 << 14),
+                          SignalQuality=dbus.Struct((dbus.UInt32(strength), True), signature="ub"))
+        self.gpp["RegistrationState"] = dbus.UInt32(1)
+import sys
+mode = sys.argv[1] if len(sys.argv) > 1 else "nosim"
 bus = dbus.SessionBus()
 name = dbus.service.BusName(MM, bus)
 m = Manager(bus)
+if mode == "offfix":
+    # As omamobile-mmd once did: power off / disabled at first, fixed a
+    # moment later with no PropertiesChanged and no InterfacesAdded.
+    m.modem.update(State=dbus.Int32(3), StateFailedReason=dbus.UInt32(0))
+    GLib.timeout_add(1500, lambda: (m.registered(58), False)[1])
+elif mode == "lte":
+    m.registered(80)
 print("ready", flush=True)
 GLib.MainLoop().run()
 '''
-    watcher = subprocess.Popen([sys.executable, "-B", TOOL, "--session"], stdout=subprocess.PIPE, text=True)
+    def start_watcher(interval):
+        # A long interval leaves the signals and the owner-change re-reads
+        # alone to keep the line right; a short one tests the safety net.
+        env = dict(os.environ, OMAMOBILE_CELL_WATCH_INTERVAL=str(interval))
+        return subprocess.Popen([sys.executable, "-B", TOOL, "--session"], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, env=env)
 
-    def until(pred, timeout=5):
+    def start_mm(mode="nosim"):
+        mm = subprocess.Popen([sys.executable, "-c", fake, mode], stdout=subprocess.PIPE, text=True)
+        assert mm.stdout.readline().strip() == "ready"
+        return mm
+
+    def stop(proc):
+        proc.terminate()
+        proc.wait(timeout=5)
+
+    def until(pred, timeout=5, w=None):
+        w = w or watcher
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            r, _, _ = select.select([watcher.stdout], [], [], max(0, deadline - time.monotonic()))
+            r, _, _ = select.select([w.stdout], [], [], max(0, deadline - time.monotonic()))
             if not r:
                 return None
-            v = json.loads(watcher.stdout.readline())
+            v = json.loads(w.stdout.readline())
             if pred(v):
                 return v
         return None
@@ -117,10 +152,10 @@ GLib.MainLoop().run()
         dbus.SessionBus().get_object("org.freedesktop.ModemManager1", "/org/freedesktop/ModemManager1").Do(
             what, dbus_interface="org.test.Control")
 
+    watcher = start_watcher(600)
     try:
         check("on a bus: starts with no modem", until(lambda v: v["state"] == "none") is not None)
-        mm = subprocess.Popen([sys.executable, "-c", fake], stdout=subprocess.PIPE, text=True)
-        assert mm.stdout.readline().strip() == "ready"
+        mm = start_mm()
         try:
             check("on a bus: a modem with no SIM", until(lambda v: v["state"] == "no-sim") is not None)
             do("search")
@@ -135,11 +170,39 @@ GLib.MainLoop().run()
             do("remove")
             check("on a bus: the modem goes away", until(lambda v: v["state"] == "none") is not None)
         finally:
-            mm.terminate()
-            mm.wait(timeout=5)
+            stop(mm)
+
+        # The service starts again, exports "off" first and fixes it a
+        # moment later without a signal: the owner change's re-reads catch it.
+        mm = start_mm("offfix")
+        try:
+            v = until(lambda v: v["state"] == "registered", timeout=8)
+            check("on a bus: a new owner's silent fix is read", v is not None and v["strength"] == 58 and v["tech"] == "LTE", v)
+        finally:
+            stop(mm)
+        check("on a bus: the service stops", until(lambda v: v["state"] == "none") is not None)
+        mm = start_mm("lte")
+        try:
+            v = until(lambda v: v["state"] == "registered")
+            check("on a bus: the service starts again, registered", v is not None and v["strength"] == 80, v)
+
+            # The periodic re-read: survives a broken property and picks up
+            # a change that came with no signal.
+            quick = start_watcher(1)
+            try:
+                check("on a bus: a second watcher reads the modem",
+                      until(lambda v: v["state"] == "registered", w=quick) is not None)
+                do("bad")
+                time.sleep(2.5)
+                do("quiet-33")
+                v = until(lambda v: v["strength"] == 33, timeout=5, w=quick)
+                check("on a bus: the periodic re-read outlives a bad read and sees a silent change", v is not None, v)
+            finally:
+                stop(quick)
+        finally:
+            stop(mm)
     finally:
-        watcher.terminate()
-        watcher.wait(timeout=5)
+        stop(watcher)
 
 
 if os.environ.get("DBUS_SESSION_BUS_ADDRESS"):

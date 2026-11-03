@@ -96,6 +96,31 @@ if run "$dir/tile-action.sh" wifi on 2>/dev/null; then fail "unknown tiles are r
 if run "$dir/tile-action.sh" airplane maybe 2>/dev/null; then fail "only on and off are accepted"; fi
 pass "tile-action.sh refuses unknown tiles and states"
 
+# Mobile data: the signal and the status from sitd's public state. A bare
+# network code never reaches the status; an operator name does.
+ln -sf "$(command -v python3)" "$basic/python3"
+sit_state() { printf '%s\n' "$1" >"$tmp/state/sit.json"; env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" \
+  OMAMOBILE_SIT_STATE="$tmp/state/sit.json" PATH="$fake:$basic" sh "$dir/tile-state.sh"; }
+expect() { # output line description
+  grep -cxF "$2" <<<"$1" >/dev/null || fail "$3 (got: $(tr '\n' ' ' <<<"$1"))"
+}
+out=$(sit_state '{"modem":{"state":"registered","tech":"LTE","operator":"00101","plmn":"00101","operator_name":"","signal":0}}')
+expect "$out" "data=off" "mobile data is off while the bearer unit isn't active"
+expect "$out" "data_status=LTE" "a numeric network code stays out of the status"
+expect "$out" "data_signal=0" "registered with no reading is signal 0"
+out=$(sit_state '{"modem":{"state":"registered","tech":"LTE","operator":"Example","plmn":"00101","operator_name":"Example","signal":72}}')
+expect "$out" "data_status=Example LTE" "an operator name leads the status"
+expect "$out" "data_signal=72" "the signal comes from sitd's state"
+out=$(sit_state '{"modem":{"state":"registered","tech":"LTE","operator":"00101","signal":140}}')
+expect "$out" "data_status=LTE" "an older sitd's code-only operator stays out too"
+expect "$out" "data_signal=100" "the signal is capped at 100"
+out=$(sit_state '{"modem":{"state":"searching","tech":"","operator":"","signal":0}}')
+expect "$out" "data_signal=-1" "no network is signal -1"
+expect "$out" "data_status=No signal" "no network says so"
+out=$(sit_state 'not json')
+grep -c '^data' <<<"$out" | grep -cx 1 >/dev/null || fail "an unreadable state prints only data= (got: $(tr '\n' ' ' <<<"$out"))"
+pass "tile-state.sh reports mobile data's signal and a status without network codes"
+
 # Dictation: voxtype is an optional install, so no voxtype is "none", a
 # stopped user service "down" (whatever its stale state file says), and the
 # daemon's own state file otherwise.

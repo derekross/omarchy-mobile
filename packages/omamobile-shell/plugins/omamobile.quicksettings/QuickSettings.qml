@@ -997,7 +997,9 @@ Item {
     id: mobileData
     readonly property bool available: root.probedHas("data")
     readonly property bool enabled: available && root.probedOn("mobile-data", "data")
-    readonly property string icon: "󰞃"
+    // Bars from the signal sitd reports; crossed out with no modem, data
+    // off, or no network (TilesModel.dataIcon).
+    readonly property string icon: TilesModel.dataIcon(available, enabled, root.probed.data_signal)
     readonly property string status: !available ? "No modem"
       : !enabled ? "Off" : (root.probed.data_status || "On")
     function toggle() { if (available) root.runTileAction("mobile-data", !enabled) }
