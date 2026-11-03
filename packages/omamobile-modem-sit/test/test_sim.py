@@ -132,9 +132,9 @@ class SimulatorTests(unittest.TestCase):
         entries = self.transcript_entries()
         self.assertFalse([e for e in entries if 'violation' in e])
         ids = [e['id'] for e in entries if e.get('type') == 'req']
-        # The verified order: SIM, attach APN and profile, registration, NR
-        # off, internet bearer, IMS stack, IMS bearer, ADD_PDN.
-        order = [0x0200, 0x0603, 0x0613, 0x0701, 0x0748, 0x0600, 0x0d39, 0x0600, 0x0d08]
+        # Stock's order: SIM, attach APN, profile, NR off (all before radio
+        # on), registration, internet bearer, IMS stack, IMS bearer, ADD_PDN.
+        order = [0x0200, 0x0603, 0x0613, 0x0748, 0x0701, 0x0600, 0x0d39, 0x0600, 0x0d08]
         positions = []
         start = 0
         for ident in order:
@@ -142,10 +142,20 @@ class SimulatorTests(unittest.TestCase):
             positions.append(start)
         self.assertEqual(positions, sorted(positions))
         at = [e['cmd'] for e in entries if e.get('type') == 'at']
-        self.assertEqual(at, ['AT+CFUN=0', 'AT+CFUN=1'])
+        # The radio state read, then on once: no AT+CFUN=0 cycle.
+        self.assertEqual(at, ['AT+CFUN?', 'AT+CFUN=1'])
+        radio_on = next(i for i, e in enumerate(entries) if e.get('cmd') == 'AT+CFUN=1')
+        nr_set = next(i for i, e in enumerate(entries) if e.get('id') == 0x0748)
+        self.assertLess(nr_set, radio_on)
+        self.assertRegex((self.dir / 'daemon.log').read_text(),
+                         r'Registration: packet registered \d+\.\d s after radio on, RAT 14')
         setups = [e for e in entries if e.get('event') == 'setup_data_call']
         self.assertEqual([(s['cid'], s['apn'], s['ip']) for s in setups],
                          [(1, 'internet.example', 3), (2, 'ims', 2)])
+        # Both bearers as stock sets them up on cellular: no PDU session ID
+        # (the modem picks it), and no ALLOC_PDU_SESSION or REL_PDU_SESSION.
+        self.assertEqual([s['psi'] for s in setups], [0, 0])
+        self.assertFalse({0x061a, 0x061b} & set(ids))
         log = (self.dir / 'daemon.log').read_text()
         for secret in ('2025550123', '2025550199', 'hello', 'omamobile test'):
             self.assertNotIn(secret, log)

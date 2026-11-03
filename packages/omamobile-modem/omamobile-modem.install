@@ -5,7 +5,8 @@ post_install() {
   echo "  NV checksums in /etc/omamobile/modem-nv.sha256, a kernel with CPIF and the"
   echo "  modem-cpif-test overlay, and this phone's board id (ro.boot.cdt_hwid from its"
   echo "  stock getprop) in /var/lib/omamobile-vendor/modem/props.conf. Follow"
-  echo "  device/cheetah/MODEM-PLAN.md M3.4 and M4.1h."
+  echo "  device/cheetah/MODEM-PLAN.md M3.4 and M4.1h. The whole stack at boot, once the"
+  echo "  SIM registers by hand: systemctl enable omamobile-modem-boot.target (M4.6)."
   echo "  The NV overlay (the modem's own NV writes kept on userdata) is off until"
   echo "  /etc/omamobile/modem-nv-overlay-enable exists: MODEM-PLAN \"NV overlay\"."
   udevadm control --reload 2>/dev/null || true
@@ -17,5 +18,5 @@ post_upgrade() {
   udevadm control --reload 2>/dev/null || true
 }
 pre_remove() {
-  systemctl disable omamobile-modem.service 2>/dev/null || true
+  systemctl disable omamobile-modem-boot.target omamobile-modem.service 2>/dev/null || true
 }

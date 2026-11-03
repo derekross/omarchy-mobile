@@ -96,8 +96,9 @@ grep -qx 'persist.vendor.modem.efs.clear.action=none' modem/props.conf ||
 grep -qx 'vendor.modem.bin.path=/mnt/vendor/modem_img/images/default/modem.bin' modem/props.conf ||
   fail "rfsd reads its TOC from the firmware file (vendor.modem.bin.path)"
 if command -v systemd-analyze >/dev/null; then
-  systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-modem.service" 2>&1 |
-    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' -e '^$' &&
+  systemd-analyze verify --man=no "$stage"/usr/lib/systemd/system/omamobile-modem{.service,-inhibit.service,-boot.target} 2>&1 |
+    grep -v -e 'not executable' -e 'No such file' -e 'omamobile-aoc.service' -e 'omamobile-audio.service' \
+      -e 'omamobile-sitd.service' -e 'omamobile-sit-data.service' -e 'omamobile-mmd.service' -e '^$' &&
     fail "unit verify" || true
 fi
 pass "staged layout, props and unit"
@@ -148,15 +149,94 @@ r=$(grep -n 'MODEM_STAGE == rfsd' <<<"$body" | cut -d: -f1); m=$(grep -n '^  mod
 [[ -n $r && -n $m && -n $c && $r -lt $m && $m -lt $c ]] || fail "the marker is written after the rfsd-stage return and before cbd (rfsd=$r mark=$m cbd=$c)"
 [[ $(grep -n '^  modem_once_mark$' <<<"$body" | wc -l) -eq 1 ]] || fail "one marker write in profile_start"
 grep -q '^  modem_once_check$' <<<"$body" || fail "profile_start checks the marker itself too"
-s=lib/omamobile-modem-start
-sc=$(grep -n 'omamobile-vendor-chroot" modem check' $s | cut -d: -f1); sm=$(grep -n '> "\$MARK"' $s | cut -d: -f1)
-[[ -n $sc && -n $sm && $sc -lt $sm ]] || fail "the start script checks before it writes its persistent marker (check=$sc mark=$sm)"
 out=$(OMAMOBILE_MODEM_BOOT_MARK=$once/profile-started bash -c '
   die() { echo "die: $*"; exit 7; }
   eval "$(sed -n "/^modem_once_check() {$/,/^}$/p" profiles/modem.conf)"
   modem_once_check; echo "rc=$?"; echo "would write the persistent marker"' 2>&1) || true
 [[ $out == *"die: "* && $out != *"would write the persistent marker"* ]] || fail "a refused check stops before the persistent marker: $out"
 pass "a refused start leaves the persistent marker as it was"
+
+# The start script's order (M4.6, CONTRIBUTING 3.4): both refusals and the
+# sleep-inhibitor check before anything else, the bring-up latch written and
+# synced before the first modprobe, the profile's check after the drivers
+# (it needs CPIF's ports) with the latch removed on a refusal, READY after
+# the check, and the profile last.
+s=lib/omamobile-modem-start
+lineof() { grep -n "$1" $s | head -1 | cut -d: -f1; }
+l_mark_refuse=$(lineof 'never reached ONLINE; skipping'); l_up_refuse=$(lineof 'ended without a clean stop')
+l_inhibit=$(lineof 'no sleep inhibitor held'); l_latch=$(lineof '> "\$MARK"'); l_latch_sync=$(awk -v n="$l_latch" 'NR == n + 1' $s)
+l_modprobe=$(lineof '^modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
+l_ready=$(lineof 'systemd-notify --ready'); l_exec=$(lineof 'exec "\$LIB/omamobile-vendor-chroot" modem start')
+for v in l_mark_refuse l_up_refuse l_inhibit l_latch l_modprobe l_check l_rm l_ready l_exec; do
+  [[ -n ${!v} ]] || fail "start script: no line for $v"
+done
+[[ $l_latch_sync == sync ]] || fail "the latch is synced right after it is written"
+[[ $l_mark_refuse -lt $l_inhibit && $l_up_refuse -lt $l_inhibit && $l_inhibit -lt $l_latch && $l_latch -lt $l_modprobe &&
+   $l_modprobe -lt $l_check && $l_check -lt $l_rm && $l_rm -lt $l_ready && $l_ready -lt $l_exec ]] ||
+  fail "start script order: refuse($l_mark_refuse,$l_up_refuse) inhibit($l_inhibit) latch($l_latch) modprobe($l_modprobe) check($l_check) rm($l_rm) ready($l_ready) exec($l_exec)"
+[[ $(grep -c '^modprobe ' $s) -eq 3 && $(grep -c 'modprobe' <(sed -n "1,${l_latch}p" $s) ) -eq 0 ]] ||
+  fail "no modprobe before the latch"
+grep -q 'OMAMOBILE_MODEM_MARK=\$MARK OMAMOBILE_MODEM_UP_MARK=\${INVOCATION_ID:+\$UP} exec' $s || fail "both markers go to the profile's watcher (the modem-up one only under the unit)"
+grep -q "OMAMOBILE_MODEM_UP_MARK" $cp || fail "the watcher writes the modem-up marker"
+pass "start script: markers before the drivers, the check after them, READY before the profile"
+
+# Both refusals run for real (nothing is touched before them): a bring-up
+# latch or a modem-up marker from an earlier boot, and the script exits 1
+# before the inhibitor check, so no driver or marker write is reached.
+m=$t/markers; mkdir -p "$m"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/latch"
+out=$(OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up bash $s 2>&1) && fail "a bring-up latch is refused"
+[[ $out == *"never reached ONLINE"* ]] || fail "the latch refusal names the latch: $out"
+rm -f "$m/latch"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/up"
+out=$(OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up bash $s 2>&1) && fail "a modem-up marker is refused"
+[[ $out == *"ended without a clean stop"* && $out == *"journalctl -b -1"* ]] || fail "the modem-up refusal says where to look: $out"
+[[ -e $m/up && ! -e $m/latch ]] || fail "a refusal writes nothing"
+# --stopped (ExecStopPost) removes only this boot's modem-up marker: another
+# boot's (the one a refusal was about) stays, so a refused start can't clear
+# the guard it refused on.
+out=$(SERVICE_RESULT=exit-code OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up bash $s --stopped 2>&1) || fail "--stopped exits 0 on another boot's marker"
+[[ -e $m/up && $out == *"another boot"* ]] || fail "another boot's modem-up marker is kept by --stopped: $out"
+printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "$m/up"
+out=$(SERVICE_RESULT=success OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up bash $s --stopped 2>&1) || fail "--stopped exits 0"
+[[ ! -e $m/up && $out == *"modem stopped (success)"* ]] || fail "this boot's modem-up marker is removed by a clean stop: $out"
+OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up bash $s --stopped >/dev/null 2>&1 || fail "--stopped with no marker exits 0"
+# --retry clears both (it then goes on to start; the inhibitor check refuses
+# that here, with no modem-inhibit unit on this machine, before any modprobe)
+printf 'x\n' > "$m/latch"; printf 'x\n' > "$m/up"
+out=$(OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up timeout 20 bash $s --retry 2>&1) && fail "--retry on this machine is refused at the inhibitor"
+[[ ! -e $m/latch && ! -e $m/up && $out == *"no sleep inhibitor"* ]] || fail "--retry clears both markers and stops at the inhibitor check: $out ($(ls "$m"))"
+rc=0; bash $s --bogus >/dev/null 2>&1 || rc=$?; [[ $rc -eq 2 ]] || fail "an unknown option exits 2"
+pass "refusals, --stopped and --retry"
+
+# The units: the inhibitor is required and ordered before the modem, held
+# until the reboot (a manual stop is refused); the modem unit is Type=notify
+# with its stop hook; the opt-in target wants the four units and is enabled
+# by nobody: no wants link of any kind is shipped.
+u=$stage/usr/lib/systemd/system
+for f in omamobile-modem-inhibit.service omamobile-modem-boot.target; do [[ -e $u/$f ]] || fail "staged $f"; done
+grep -qx 'Requires=omamobile-modem-inhibit.service' systemd/omamobile-modem.service || fail "the modem unit requires the inhibitor"
+grep -E '^After=' systemd/omamobile-modem.service | grep -q 'omamobile-modem-inhibit.service' || fail "the modem unit starts after the inhibitor"
+grep -qx 'Type=notify' systemd/omamobile-modem.service && grep -qx 'NotifyAccess=all' systemd/omamobile-modem.service ||
+  fail "the modem unit is Type=notify (READY from the start script)"
+grep -qx 'ExecStopPost=/usr/lib/omamobile-vendor/omamobile-modem-start --stopped' systemd/omamobile-modem.service || fail "the stop hook"
+grep -qx 'Restart=no' systemd/omamobile-modem.service || fail "the modem unit never restarts"
+grep -qx 'RefuseManualStop=yes' systemd/omamobile-modem-inhibit.service || fail "the inhibitor refuses a manual stop"
+grep -q -- '--what=sleep:idle' systemd/omamobile-modem-inhibit.service && grep -q -- '--mode=block' systemd/omamobile-modem-inhibit.service ||
+  fail "the inhibitor blocks sleep and idle"
+grep -q -- '--who=omamobile-modem ' systemd/omamobile-modem-inhibit.service || fail "the inhibitor's --who is what the start script looks for"
+grep -q '^INHIBITOR=omamobile-modem$' $s || fail "the start script looks for the unit's --who"
+! grep -q '^\[Install\]' systemd/omamobile-modem-inhibit.service || fail "the inhibitor is pulled in by the modem unit, not enabled"
+w=$(sed -n 's/^Wants=//p' systemd/omamobile-modem-boot.target)
+for n in omamobile-modem.service omamobile-sitd.service omamobile-sit-data.service omamobile-mmd.service; do
+  [[ " $w " == *" $n "* ]] || fail "the boot target wants $n"
+done
+grep -qx 'DefaultDependencies=no' systemd/omamobile-modem-boot.target || fail "the boot target doesn't delay multi-user.target"
+grep -qx 'WantedBy=multi-user.target' systemd/omamobile-modem-boot.target || fail "the boot target is enabled with systemctl enable"
+! grep -q '^Requires=' systemd/omamobile-modem-boot.target || fail "the boot target only wants (a missing unit is fine)"
+[[ -z $(find "$stage" -name '*.wants' -o -name '*.requires' | head -1) ]] || fail "no wants or requires link is shipped: $(find "$stage" -name '*.wants' -o -name '*.requires')"
+! grep -rq 'systemctl enable' install || fail "the install script enables nothing"
+pass "the inhibitor, the modem unit and the opt-in target"
 
 # The board id is required (M4.1g/h): the check refuses a missing or empty
 # ro.boot.cdt_hwid and a persist copy that differs. Made-up values only.

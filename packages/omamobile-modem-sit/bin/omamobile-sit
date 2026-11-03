@@ -12,7 +12,7 @@
   omamobile-sit sms send NUMBER TEXT   one SMS (several parts if needed)
   omamobile-sit sms list [--json]      received, not yet deleted
   omamobile-sit sms delete ID
-  omamobile-sit data on|off            the cellular fallback route (rmnet0)
+  omamobile-sit data on|off            the cellular fallback route (rmnet)
   omamobile-sit radio on|off           AT+CFUN 1/0 (registration and bearers go
                                        with "off"; a restart needs a reboot)
 

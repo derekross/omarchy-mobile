@@ -9,9 +9,12 @@
   record-crash             append CPIF's crash reason, the modem's boot log
                            request and the last CPIF kernel lines to
                            /var/log/omamobile/modem-crashes.log (0600)
-  watch [MARKER]           remove MARKER once the CP is ONLINE; when it leaves
-                           ONLINE afterwards, record the crash once and keep
-                           running (nothing restarts or powers off the CP)
+  watch [MARKER]           remove MARKER once the CP is ONLINE (and write the
+                           modem-up marker named by OMAMOBILE_MODEM_UP_MARK,
+                           date and boot id, which the unit's clean stop
+                           removes); when it leaves ONLINE afterwards, record
+                           the crash once and keep running (nothing restarts
+                           or powers off the CP)
   baseband-version FILE    the firmware version in a modem.bin's TOC
   nv-check EFS EFS_BACKUP  the stock salted MD5 of the three NV files in the
                            RAM copies; exit 1 on a mismatch
@@ -180,8 +183,17 @@ def watch(marker=None):
         if now == ONLINE and not was_online:
             was_online = True
             say('CP ONLINE')
+            # The modem-up marker (OMAMOBILE_MODEM_UP_MARK) first, then the
+            # bring-up latch goes: never a moment with neither, so a hang
+            # right here still refuses the next boot (omamobile-modem-start).
+            up = os.environ.get('OMAMOBILE_MODEM_UP_MARK')
+            if up:
+                boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+                Path(up).parent.mkdir(parents=True, exist_ok=True)
+                Path(up).write_text(f'{time.strftime("%FT%T%z")} boot {boot_id}\n')
             if marker:
                 Path(marker).unlink(missing_ok=True)
+            if up or marker:
                 os.sync()
         elif was_online and now != ONLINE and not crashed:
             crashed = True

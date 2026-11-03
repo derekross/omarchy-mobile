@@ -7,7 +7,7 @@ pkgdesc="Omarchy Mobile modem runtime for the Pixel 7 Pro: stock rfsd and cbd in
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(bash python util-linux coreutils kmod systemd omamobile-gnss omamobile-device-cheetah)
+depends=(bash python util-linux coreutils kmod systemd omamobile-gnss omamobile-modem-policy)
 install=omamobile-modem.install
 
 check() {

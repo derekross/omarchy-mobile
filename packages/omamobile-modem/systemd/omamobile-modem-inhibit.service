@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# No system sleep while the modem's drivers are loaded: suspend with the
+# modem on has never run on the Pixel 7 Pro (device/cheetah/MODEM-PLAN.md
+# 6.3), and the one 9a try with the CP up never woke. omamobile-modem.service
+# requires this and starts after it, and its start script refuses to load
+# a driver until the lock shows in `systemd-inhibit --list`. Nothing stops
+# it but the reboot: stopping the modem unit by hand leaves it (Requires=
+# is one way), and a manual stop is refused. A phone with the modem at boot
+# therefore never sleeps; the shell's auto-sleep and upower's critical
+# action are told so by logind ("Operation inhibited").
+[Unit]
+Description=Omarchy Mobile modem: block system sleep until the reboot
+Before=omamobile-modem.service
+RefuseManualStop=yes
+
+[Service]
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:idle --who=omamobile-modem --why="suspend with the modem up is not qualified on this phone (MODEM-PLAN 6.3)" --mode=block /usr/bin/sleep infinity
+Restart=no
