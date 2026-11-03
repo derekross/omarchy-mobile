@@ -16,7 +16,7 @@ import select
 import struct
 import time
 
-from paths import IPC, RUN, open_channel, private_dir
+from paths import IPC, RUN, open_channel, run_dir
 from sit_names import NAMES
 
 # Data/radio/IMS lifecycle, display state, read-only status, and incoming SMS
@@ -55,7 +55,15 @@ class ModemError(RuntimeError):
         self.payload = payload  # private; never include payload in str/repr
 
 
-def check(ident, *, sms=False, calls=False):
+# OEM_SET_CARRIER_CONFIG_MANIFEST stays on the do-not-send list; the one
+# exception is the reply to the modem's own request, sent by an owner opened
+# with a manifest configured (carrier_manifest.py).
+MANIFEST = 0x4600
+
+
+def check(ident, *, sms=False, calls=False, manifest=False):
+    if manifest and ident == MANIFEST:
+        return
     if ident in DENIED or (ident >> 8) in DENIED_FAMILIES:
         raise ValueError('request on the do-not-send list')
     if not (ident in ALLOWED or (sms and ident in SMS) or (calls and ident in CALLS)):
@@ -63,10 +71,11 @@ def check(ident, *, sms=False, calls=False):
 
 
 class Sit:
-    def __init__(self, *, allow_sms=False, allow_calls=False, device=None):
+    def __init__(self, *, allow_sms=False, allow_calls=False, allow_manifest=False, device=None):
         self.allow_sms = allow_sms
         self.allow_calls = allow_calls
-        private_dir(RUN)
+        self.allow_manifest = allow_manifest
+        run_dir()
         self.lock = os.open(RUN / 'ipc0.lock', os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
         try:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -109,9 +118,10 @@ class Sit:
             if len(self.buffer) > 65536:
                 raise RuntimeError('SIT receive limit exceeded')
 
-    def request(self, ident, payload=b'', timeout=8):
+    def request(self, ident, payload=b'', timeout=8, *, manifest_reply=False):
         check(ident, sms=getattr(self, 'allow_sms', False),
-              calls=getattr(self, 'allow_calls', False))
+              calls=getattr(self, 'allow_calls', False),
+              manifest=manifest_reply and getattr(self, 'allow_manifest', False))
         self.token = (self.token + 1) & 0xffffffff
         data = struct.pack('<BBHHIBB', 0, 0, ident, 12 + len(payload), self.token, 0, 0) + payload
         if os.write(self.fd, data) != len(data):

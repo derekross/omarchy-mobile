@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Data-call layouts (the stock 983-byte version-2 setup request) and an
-owned bearer lifecycle: CID 1 (internet, rmnet0) and CID 2 (IMS, rmnet1).
+owned bearer lifecycle: CID 1 (internet) and CID 2 (IMS). Stock names a
+bearer's device rmnet<CID - 1>; data_network.find_device checks which device
+really carries the internet bearer (it differed when the attach bearer was on
+another APN).
 
 The APN comes from /etc/omamobile/modem-sit.conf. Ownership is recorded in
 RAM before a setup is sent: a setup or release with an unknown outcome
@@ -35,6 +38,28 @@ def paths(cid):
     if cid == 2:
         return STATE.with_name('ims-session.json'), RESPONSE.with_name('ims-response.bin')
     raise ValueError('unsupported bearer CID')
+
+
+def pcscf_addresses(response):
+    """The P-CSCF addresses of a setup response or data-call item, as stock's
+    ProtocolPsSetupDataCallAdapter reads them: the base item's family byte at
+    0x42 (1 IPv4, 2 IPv6, 3 both), three IPv4 at 0x43 and three IPv6 at 0x4f;
+    then, when the item is longer than the 132-byte base and its extension
+    version byte at 0x84 is 2 or more, five IPv4 at 0x86 and five IPv6 at
+    0x9a (the 234-byte item). Empty slots are skipped, duplicates dropped.
+    Returns (IPv4 list, IPv6 list) of raw addresses; never log the values."""
+    v4, v6 = [], []
+    if len(response) >= 132:
+        family = response[0x42]
+        if family in (1, 3):
+            v4 += [bytes(response[i:i + 4]) for i in (0x43, 0x47, 0x4b)]
+        if family in (2, 3):
+            v6 += [bytes(response[i:i + 16]) for i in (0x4f, 0x5f, 0x6f)]
+    if len(response) >= 0xea and response[0x84] >= 2:
+        v4 += [bytes(response[i:i + 4]) for i in range(0x86, 0x9a, 4)]
+        v6 += [bytes(response[i:i + 16]) for i in range(0x9a, 0xea, 16)]
+    return ([a for a in dict.fromkeys(v4) if any(a)],
+            [a for a in dict.fromkeys(v6) if any(a)])
 
 
 def check_apn(apn):
@@ -115,14 +140,28 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     return bytes(full[12:])
 
 
-def initial_attach(client, apn, ip_type='ipv4v6'):
+# The P-CSCF request type, as stock's GetPcscfReqType maps the APN protocol:
+# IP 1, IPV6 2, IPV4V6 3.
+PCSCF_REQUEST = {'ipv4': 1, 'ipv6': 2, 'ipv4v6': 3}
+
+
+def initial_attach(client, apn, ip_type='ipv4v6', *, ims=False):
     """SET_INITIAL_ATTACH_APN (251 bytes). Without it, setup requests on this
-    phone returned status 36 and no bearer."""
+    phone returned status 36 and no bearer.
+
+    ims: the attach APN is the IMS APN (a network that attaches only there).
+    Stock's builder then writes the APN type at 0x0f and asks for the P-CSCF
+    at 0xdb (home) and 0xf9 (roaming) with GetPcscfReqType, so the network
+    returns its P-CSCF addresses in the attach bearer's PCO; without the
+    request, IMS on that bearer has none."""
     attach = bytearray(251)
     attach[12:245] = setup_payload(1, 14, 0, apn, ip_type=ip_type)[:233]
     # Stock's attach builder leaves 0xf1-0xf4 zero: no APN-type bitmap here.
     attach[0xf1:0xf5] = bytes(4)
-    attach[0xf8] = 3  # the roaming PDP type, IPv4v6 (the home type is 0xda)
+    attach[0xf8] = IP_TYPES[ip_type]  # the roaming PDP type (the home type is 0xda)
+    if ims:
+        attach[0x0f] = 1  # IMS APN type, as in the IMS setup request
+        attach[0xdb] = attach[0xf9] = PCSCF_REQUEST[ip_type]
     client.request(0x0603, bytes(attach[12:]), timeout=30)
 
 
@@ -136,20 +175,137 @@ def allow_data(client):
     print('PS service permission enabled', flush=True)
 
 
-def provision_default_profile(client, apn, ip_type='ipv4v6'):
-    # Stock BuildSetDataProfile, 246-byte request. This configures the
-    # network APN profile, not a SIM subscription or UICC operation.
-    encoded = check_apn(apn).encode('ascii')
+# SET_DATA_PROFILE's APN-type bitmask (Android's ApnSetting TYPE_*_BITMASK).
+APN_TYPES = {'default': 1, 'mms': 2, 'supl': 4, 'dun': 8, 'hipri': 16, 'fota': 32,
+             'ims': 64, 'cbs': 128, 'ia': 256, 'emergency': 512, 'mcx': 1024, 'xcap': 2048}
+# Android's profile IDs: 0 default (internet), 1 tethered, 2 IMS, 3 FOTA,
+# 4 CBS; OEM profiles start at 1000.
+PROFILE_IDS = 'a profile ID 0-4, or 1000 and up'
+PROFILE_KEYS = ('types', 'ip', 'roaming_ip')
+
+
+class Profile:
+    """One modem-managed data profile, as stock's BuildSetDataProfile sends it.
+    The defaults are stock's: 20 connections in 300 s, no wait, enabled, any
+    bearer, no authentication."""
+
+    def __init__(self, ident, apn, types, ip='ipv4v6', roaming_ip=None, *,
+                 max_conns=20, max_conns_time=300, wait_time=0):
+        if not (0 <= ident <= 4 or 1000 <= ident <= 0x7fffffff):
+            raise ValueError(f'profile ID {ident}: not {PROFILE_IDS}')
+        if not types or types & ~sum(APN_TYPES.values()):
+            raise ValueError(f'profile {ident}: invalid APN types')
+        roaming_ip = roaming_ip or ip
+        for value in (ip, roaming_ip):
+            if value not in IP_TYPES:
+                raise ValueError(f'profile {ident}: IP type {value!r} is not ipv4, ipv6 or ipv4v6')
+        self.ident, self.apn, self.types = ident, check_apn(apn), types
+        self.ip, self.roaming_ip = ip, roaming_ip
+        self.max_conns, self.max_conns_time, self.wait_time = max_conns, max_conns_time, wait_time
+
+    def __eq__(self, other):
+        return isinstance(other, Profile) and vars(self) == vars(other)
+
+    def __repr__(self):
+        return f'Profile({self.ident}, {self.apn!r}, types=0x{self.types:x})'
+
+    def type_names(self):
+        return ','.join(n for n, bit in APN_TYPES.items() if self.types & bit)
+
+
+def default_profile(apn, ip_type='ipv4v6'):
+    """Profile 0 from [network] apn, byte for byte what 0.3.14 and earlier
+    sent (the connection limits and wait left 0): the default profile that
+    registered and carried data on both phones."""
+    return Profile(0, apn, APN_TYPES['default'], ip_type, max_conns=0, max_conns_time=0)
+
+
+def parse_profile(key, value):
+    """A [profiles] line: "ID = APN; types=a,b; ip=TYPE; roaming_ip=TYPE".
+    types is required; ip defaults to ipv4v6 and roaming_ip to ip."""
+    try:
+        ident = int(key.strip(), 10)
+    except ValueError:
+        raise ValueError(f'profile {key!r}: the key must be {PROFILE_IDS}') from None
+    apn, *fields = [part.strip() for part in value.split(';')]
+    options = {}
+    for field in fields:
+        name, sep, item = (x.strip() for x in field.partition('='))
+        name = name.lower()
+        if not sep or name not in PROFILE_KEYS or not item:
+            raise ValueError(f'profile {ident}: {field!r} is not one of '
+                             + ', '.join(k + '=...' for k in PROFILE_KEYS))
+        if name in options:
+            raise ValueError(f'profile {ident}: {name} given twice')
+        options[name] = item.lower()
+    if 'types' not in options:
+        raise ValueError(f'profile {ident}: types=... is required')
+    types = 0
+    for name in options.pop('types').split(','):
+        name = name.strip()
+        if name not in APN_TYPES:
+            raise ValueError(f'profile {ident}: unknown APN type {name!r}')
+        types |= APN_TYPES[name]
+    try:
+        check_apn(apn)
+    except ValueError:
+        raise ValueError(f'profile {ident}: the APN is missing or not a plain carrier APN') from None
+    return Profile(ident, apn, types, **options)
+
+
+def configured_profiles(settings):
+    """The profiles to send, in profile ID order: [profiles] as written, and
+    profile 0 from [network] apn unless [profiles] has its own 0. Raises
+    ValueError on any bad line (start-up then stops before the radio)."""
+    net = settings['network']
+    found = {}
+    if settings.has_section('profiles'):
+        for key, value in settings.items('profiles', raw=True):
+            if key in settings.defaults():
+                continue
+            profile = parse_profile(key, value)
+            if profile.ident in found:
+                raise ValueError(f'profile {profile.ident} given twice')
+            found[profile.ident] = profile
+    if 0 not in found:
+        found[0] = default_profile(net.get('apn', ''), net.get('ip_type', 'ipv4v6'))
+    return [found[i] for i in sorted(found)]
+
+
+def profile_payload(profile):
+    """Stock BuildSetDataProfile (V2_0), the 246-byte request. Offsets below
+    include the 12-byte request header. This configures a network APN
+    profile, not a SIM subscription or UICC operation."""
     full = bytearray(246)
-    struct.pack_into('<I', full, 12, 0)  # Android default profile ID
-    full[16:16 + len(encoded)] = encoded
-    full[0x75] = full[0x76] = IP_TYPES[ip_type]  # home/roaming IP type
-    full[0xe9] = 1  # enabled
-    struct.pack_into('<I', full, 0xea, 1)  # default APN-type bitmap
-    client.request(0x0613, bytes(full[12:]), timeout=30)
-    print('default data profile accepted', flush=True)
+    struct.pack_into('<I', full, 0x0c, profile.ident)
+    encoded = profile.apn.encode('ascii')
+    full[0x10:0x10 + len(encoded)] = encoded                       # 100 bytes
+    full[0x75] = IP_TYPES[profile.ip]                              # home PDP type
+    full[0x76] = IP_TYPES[profile.roaming_ip]                      # roaming PDP type
+    full[0x77] = 0                                                 # no authentication
+    # 0x78 user and 0xaa password (49 bytes each): empty.
+    struct.pack_into('<I', full, 0xdd, profile.max_conns_time)
+    struct.pack_into('<I', full, 0xe1, profile.max_conns)
+    struct.pack_into('<I', full, 0xe5, profile.wait_time)
+    full[0xe9] = 1                                                 # enabled
+    struct.pack_into('<I', full, 0xea, profile.types)              # APN-type bitmask
+    struct.pack_into('<I', full, 0xee, 0)                          # any bearer
+    return bytes(full[12:])
 
 
+def provision_profile(client, profile):
+    client.request(0x0613, profile_payload(profile), timeout=30)
+    print(f'data profile {profile.ident} accepted (types {profile.type_names()}, '
+          f'IP {profile.ip}/{profile.roaming_ip})', flush=True)
+
+
+def provision_profiles(client, profiles):
+    for profile in profiles:
+        provision_profile(client, profile)
+
+
+def provision_default_profile(client, apn, ip_type='ipv4v6'):
+    provision_profile(client, default_profile(apn, ip_type))
 
 
 # After the data permission is switched on, the modem is given time to settle
@@ -287,9 +443,10 @@ def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False, on_e
         if ims:
             # Base response layout: family then 3 v4 and 3 v6 P-CSCF
             # addresses. Report presence only, never their values.
-            print('IMS IPv6 present', any(result[9:25]),
-                  'P-CSCF family', result[0x42],
-                  'base IPv6 P-CSCF count', sum(bool(any(result[i:i+16])) for i in (0x4f, 0x5f, 0x6f)), flush=True)
+            v4, v6 = pcscf_addresses(result)
+            print('IMS IPv6 present', any(result[9:25]), 'PDP type', pdp, 'response length', len(result),
+                  'P-CSCF family', result[0x42], 'extension version', result[0x84] if len(result) > 0x84 else None,
+                  'P-CSCF count IPv4', len(v4), 'IPv6', len(v6), flush=True)
     finally:
         if released:
             state_path.unlink(missing_ok=True)
@@ -303,9 +460,16 @@ def deactivate(client, cid=1):
     owned = json.loads(state_path.read_text())
     if owned.get('cid') != cid or not 0 <= owned.get('session', -1) <= 15:
         raise RuntimeError('invalid bearer ownership record')
-    flags = int(Path(f"/sys/class/net/rmnet{owned['cid'] - 1}/flags").read_text(), 16)
-    if flags & 1:
-        raise RuntimeError('remove host data configuration first')
+    # rmnet<CID - 1>, and the device omamobile-sit-data found carrying it
+    # (data_network.find_device), while that configuration exists.
+    devices = {f"rmnet{owned['cid'] - 1}"}
+    recorded = RUN / 'data-interface'
+    if cid == 1 and recorded.exists():
+        devices.add(recorded.read_text().strip())
+    for dev in devices:
+        flags = Path(f'/sys/class/net/{dev}/flags')
+        if flags.exists() and int(flags.read_text(), 16) & 1:
+            raise RuntimeError('remove host data configuration first')
     # Stock BuildDeactDataCall: CID and normal-release reason.
     client.request(0x0601, bytes([owned['cid'], 0]), timeout=30)
     calls = call_ids(client.request(0x0602))

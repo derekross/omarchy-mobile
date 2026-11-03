@@ -263,6 +263,15 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual((ident, len(attach)), (0x0603, 251 - 12))
         self.assertEqual(attach[0xf1 - 12:0xf5 - 12], bytes(4))
         self.assertEqual((attach[0xda - 12], attach[0xf8 - 12]), (3, 3))
+        # An internet-APN attach asks for no P-CSCF and has the default type.
+        self.assertEqual((attach[0x0f - 12], attach[0xdb - 12], attach[0xf9 - 12]), (0, 0, 0))
+        # An attach on the IMS APN marks the IMS type and asks for the
+        # P-CSCF (home and roaming) by the IP type, as stock's builder does.
+        for ip_type, request in (('ipv4v6', 3), ('ipv6', 2), ('ipv4', 1)):
+            data_call.initial_attach(modem, 'ims', ip_type, ims=True)
+            attach = modem.sent[-1][1]
+            self.assertEqual((attach[0x0f - 12], attach[0xdb - 12], attach[0xf9 - 12]), (1, request, request))
+            self.assertEqual(attach[0xda - 12], attach[0xf8 - 12])
         for bad in ('', 'a b', 'x' * 100, 'apn;rm', '.lead'):
             with self.assertRaises(ValueError):
                 data_call.setup_payload(1, 14, 3, bad)
@@ -274,6 +283,117 @@ class LifecycleTests(unittest.TestCase):
         record[2] = 1
         with self.assertRaises(RuntimeError):
             data_call.call_ids(bytes([2]) + record + record)
+
+
+
+class ProfileTests(unittest.TestCase):
+    """SET_DATA_PROFILE (0x0613) in stock's 246-byte layout, and the
+    [profiles] lines. Example APNs only."""
+
+    def full(self, profile):
+        # The request as on the wire, header included, so offsets match stock's.
+        payload = data_call.profile_payload(profile)
+        self.assertEqual(len(payload), 246 - 12)
+        return bytes(12) + payload
+
+    def test_offsets(self):
+        profile = data_call.parse_profile('2', 'ims.example; types=ia,ims; ip=ipv4v6; roaming_ip=ipv6')
+        full = self.full(profile)
+        self.assertEqual(struct.unpack_from('<I', full, 0x0c)[0], 2)
+        self.assertEqual(full[0x10:0x10 + 100].rstrip(b'\0'), b'ims.example')
+        self.assertEqual((full[0x75], full[0x76], full[0x77]), (3, 2, 0))
+        self.assertEqual(full[0x78:0xdb], bytes(0xdb - 0x78))       # no user or password
+        self.assertEqual(struct.unpack_from('<IIIBII', full, 0xdd), (300, 20, 0, 1, 64 | 256, 0))
+        self.assertEqual(full[0xf2:], bytes(4))
+
+    def test_bitmask_and_ids(self):
+        cases = {'default': 1, 'mms': 2, 'supl': 4, 'dun': 8, 'fota': 32, 'ims': 64, 'cbs': 128, 'ia': 256}
+        for name, bit in cases.items():
+            self.assertEqual(data_call.parse_profile('0', f'apn.example; types={name}').types, bit)
+        self.assertEqual(data_call.parse_profile('0', 'a.example; types=default,supl,dun').types, 13)
+        self.assertEqual(data_call.parse_profile('4', 'a.example; types=cbs,mms').types, 130)
+        for ident in (0, 2, 3, 4, 1000):
+            full = self.full(data_call.parse_profile(str(ident), 'a.example; types=default'))
+            self.assertEqual(struct.unpack_from('<I', full, 0x0c)[0], ident)
+
+    def test_pdp_types(self):
+        for name, value in data_call.IP_TYPES.items():
+            full = self.full(data_call.parse_profile('3', f'a.example; types=fota; ip={name}'))
+            self.assertEqual((full[0x75], full[0x76]), (value, value))   # roaming follows home
+        full = self.full(data_call.parse_profile('3', 'a.example; types=fota; ip=ipv4; roaming_ip=ipv6'))
+        self.assertEqual((full[0x75], full[0x76]), (1, 2))
+        self.assertEqual(data_call.parse_profile('3', 'a.example; types=fota').ip, 'ipv4v6')
+
+    def test_default_profile_is_unchanged_from_0_3_14(self):
+        # 0.3.14's encoder, kept here as the reference.
+        old = bytearray(246)
+        old[16:16 + len(APN)] = APN.encode()
+        old[0x75] = old[0x76] = 3
+        old[0xe9] = 1
+        struct.pack_into('<I', old, 0xea, 1)
+        self.assertEqual(data_call.profile_payload(data_call.default_profile(APN)), bytes(old[12:]))
+        modem = Modem()
+        data_call.provision_default_profile(modem, APN)
+        self.assertEqual(modem.sent, [(0x0613, bytes(old[12:]))])
+
+    def test_good_lines_tolerate_spacing_and_case(self):
+        profile = data_call.parse_profile(' 2 ', '  ims.example ;types = IA, ims ;  IP=IPv4v6;roaming_ip= ipv6 ')
+        self.assertEqual((profile.ident, profile.apn, profile.types, profile.ip, profile.roaming_ip),
+                         (2, 'ims.example', 320, 'ipv4v6', 'ipv6'))
+
+    def test_bad_lines(self):
+        bad = [('x', 'a.example; types=ims'),                   # not a number
+               ('7', 'a.example; types=ims'),                   # not an Android profile ID
+               ('-1', 'a.example; types=ims'),
+               ('2', 'a.example'),                              # no types
+               ('2', 'a.example; types='),
+               ('2', 'a.example; types=ims,voice'),             # unknown type
+               ('2', '; types=ims'),                            # no APN
+               ('2', 'bad apn!; types=ims'),
+               ('2', 'a.example; types=ims; ip=ipv5'),
+               ('2', 'a.example; types=ims; roaming_ip=x'),
+               ('2', 'a.example; types=ims; mtu=1400'),         # unknown field
+               ('2', 'a.example; types=ims; ip'),               # no value
+               ('2', 'a.example; types=ims; types=ia')]         # twice
+        for key, value in bad:
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                data_call.parse_profile(key, value)
+
+    def settings(self, profiles=''):
+        import paths
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = APN
+        settings.read_string('[profiles]\n' + profiles)
+        return settings
+
+    def test_empty_profiles_send_only_the_default(self):
+        self.assertEqual(data_call.configured_profiles(self.settings()), [data_call.default_profile(APN)])
+
+    def test_profiles_in_id_order_and_profile_0_replaced(self):
+        found = data_call.configured_profiles(self.settings(
+            '4 = cbs.example; types=cbs,mms\n'
+            '2 = ims.example; types=ia,ims; roaming_ip=ipv6\n'
+            '0 = internet.example; types=default,supl,dun\n'))
+        self.assertEqual([p.ident for p in found], [0, 2, 4])
+        self.assertEqual(found[0].types, 13)
+        self.assertEqual(found[0].max_conns, 20)                      # stock's, not the legacy 0
+        found = data_call.configured_profiles(self.settings('3 = fota.example; types=fota\n'))
+        self.assertEqual([p.ident for p in found], [0, 3])
+        self.assertEqual(found[0], data_call.default_profile(APN))
+
+    def test_a_bad_line_fails_the_whole_set(self):
+        with self.assertRaises(ValueError):
+            data_call.configured_profiles(self.settings('2 = ims.example; types=ims\n3 = x; types=nope\n'))
+        with self.assertRaises(ValueError):                           # 2 and 02 are one ID
+            data_call.configured_profiles(self.settings('2 = a.example; types=ims\n02 = b.example; types=ims\n'))
+
+    def test_shipped_config_has_no_profiles(self):
+        import paths
+        conf = Path(__file__).resolve().parent.parent / 'etc/omamobile/modem-sit.conf'
+        settings = paths.config(str(conf))
+        settings['network']['apn'] = APN
+        self.assertEqual(settings.items('profiles', raw=True), [])
+        self.assertEqual(data_call.configured_profiles(settings), [data_call.default_profile(APN)])
 
 
 if __name__ == '__main__':

@@ -10,7 +10,7 @@ import json
 import struct
 import time
 
-from data_call import paths, call_ids, private_write
+from data_call import paths, call_ids, pcscf_addresses, private_write
 from paths import RUN
 
 REGISTRATION = RUN / 'ims-registration.json'
@@ -45,17 +45,25 @@ def hidden_menu():
     return struct.pack('<BH', 0, len(items)) + items
 
 
-def add_pdn_payload(response):
+def add_pdn_payload(response, *, pcscf_required=True):
     if len(response) < 132:
         raise ValueError('short IMS bearer response')
     status, cid, active, pdp = struct.unpack_from('<HBBB', response)
-    if status or cid != 2 or active not in (1, 2) or pdp != 2 or not any(response[9:25]):
+    # IPv6 (2) or IPv4v6 (3) with an IPv6 address: the registration below
+    # announces the IPv6 address only.
+    if status or cid != 2 or active not in (1, 2) or pdp not in (2, 3) or not any(response[9:25]):
         raise ValueError('active IPv6 IMS bearer required')
-    if response[0x42] not in (2, 3):
-        raise ValueError('IPv6 P-CSCF configuration required')
-    pcscf = list(dict.fromkeys(bytes(response[i:i+16]) for i in (0x4f, 0x5f, 0x6f)
-                              if any(response[i:i+16])))
-    if not pcscf:
+    # The base item's three slots, then the 234-byte item's extension (five
+    # more): some networks deliver theirs only there. At most three are
+    # announced, the count the registration has carried so far.
+    pcscf = pcscf_addresses(response)[1][:3]
+    # Some networks put no P-CSCF in the bearer's PCO (cheetah, 2026-11-02:
+    # none in the base slots or the extension, also with the P-CSCF asked
+    # for in the attach). Stock's IMS service then takes it from the ISIM
+    # (addPcscfFromSim) and doesn't block the PDN on that carrier
+    # (BLOCK_PDN_BY_INVALID_PCSCF 0). pcscf_required = no sends ADD_PDN with
+    # an empty list and leaves discovery to the modem's IMS stack.
+    if not pcscf and pcscf_required:
         raise ValueError('missing IPv6 P-CSCF')
     # PDN category IMS=2; IP type IPv6=2. Native CP uses its own SIM stack.
     body = bytes([2, 2]) + bytes(4) + bytes(response[9:25])
@@ -77,14 +85,14 @@ def start_stack(client):
     client.request(0x0d39, b'\x01\x01', timeout=30)
 
 
-def register(client):
+def register(client, *, pcscf_required=True):
     state_path, response_path = paths(2)
     owned = json.loads(state_path.read_text())
     if owned.get('cid') != 2 or not 0 <= owned.get('session', -1) <= 15:
         raise RuntimeError('IMS bearer ownership missing')
     if 2 not in call_ids(client.request(0x0602)):
         raise RuntimeError('IMS bearer no longer listed')
-    body = add_pdn_payload(response_path.read_bytes())
+    body = add_pdn_payload(response_path.read_bytes(), pcscf_required=pcscf_required)
     if REGISTRATION.exists():
         raise RuntimeError('IMS registration already attempted; inspect before retry')
     client.request(0x0d07, hidden_menu(), timeout=30)

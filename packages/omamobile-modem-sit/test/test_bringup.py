@@ -50,7 +50,8 @@ class BringupTests(unittest.TestCase):
     def test_failed_data_setup_never_attempts_ims(self):
         service = Mock()
         with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
-             patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_default_profile'), \
+             patch.object(bringup, 'radio_state', return_value=0), \
+             patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate', side_effect=TimeoutError), \
              patch.object(bringup, 'data_snapshot'), \
              patch.object(bringup, 'start_stack') as stack, patch.object(bringup, 'register') as register:
@@ -60,11 +61,52 @@ class BringupTests(unittest.TestCase):
             register.assert_not_called()
             service.client.request.assert_not_called()
 
+    def attach_run(self, attach_apn):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        settings['network']['attach_apn'] = attach_apn
+        service = Mock()
+        with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
+             patch.object(bringup, 'radio_state', return_value=0), \
+             patch.object(bringup, 'initial_attach') as attach, \
+             patch.object(bringup, 'provision_profiles') as profile, \
+             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
+             patch.object(bringup, 'activate', side_effect=TimeoutError) as activate:
+            with self.assertRaises(TimeoutError):
+                bringup.start(service, settings)
+        return attach, profile, activate
+
+    def test_attach_apn_is_used_only_for_the_initial_attach(self):
+        attach, profile, activate = self.attach_run('ims.example')
+        self.assertEqual(attach.call_args.args[1], 'ims.example')
+        self.assertEqual([p.apn for p in profile.call_args.args[1]], ['internet.example'])
+        self.assertEqual(activate.call_args.args[1], 'internet.example')
+        self.assertNotIn('ims', activate.call_args.kwargs)
+
+    def test_attach_on_the_ims_apn_requests_the_pcscf(self):
+        attach, _, _ = self.attach_run('ims')          # ims_apn defaults to "ims"
+        self.assertEqual(attach.call_args.kwargs, {'ims': True})
+        attach, _, _ = self.attach_run('other.example')
+        self.assertEqual(attach.call_args.kwargs, {'ims': False})
+        attach, _, _ = self.attach_run('')
+        self.assertEqual(attach.call_args.kwargs, {'ims': False})
+
+    def test_empty_attach_apn_attaches_on_the_internet_apn(self):
+        for value in ('', '  '):
+            attach, profile, _ = self.attach_run(value)
+            self.assertEqual(attach.call_args.args[1], 'internet.example')
+            self.assertEqual([p.apn for p in profile.call_args.args[1]], ['internet.example'])
+
+    def test_attach_apn_defaults_to_empty(self):
+        self.assertEqual(paths.config('/nonexistent')['network']['attach_apn'], '')
+
     def test_no_apn_stops_before_the_radio(self):
         settings = paths.config('/nonexistent')
-        with patch.object(bringup, 'radio') as radio, self.assertRaises(RuntimeError):
+        with patch.object(bringup, 'radio') as radio, patch.object(bringup, 'radio_state') as state, \
+             self.assertRaises(RuntimeError):
             bringup.start(Mock(), settings)
         radio.assert_not_called()
+        state.assert_not_called()
 
     def test_wait_keeps_handling_incoming_sms(self):
         service = Mock()
@@ -80,16 +122,134 @@ class BringupTests(unittest.TestCase):
             bringup.wait_for(service, Mock(side_effect=[TimeoutError(), True]), 10, lambda: False)
 
 
+
+class OrderTests(unittest.TestCase):
+    """Stock's order: attach APN, profiles and NR mode before radio on, the
+    radio switched on once (never off when it is already on), and one line
+    with the time to the first packet registration."""
+
+    def run_start(self, level, settings=None, registrations=(bytes([1, 0, 0, 14]),), times=None):
+        settings = settings or SETTINGS
+        order = []
+        service = Mock()
+        service.client.request.side_effect = lambda ident, *a, **k: (
+            order.append('reg') or registrations[min(order.count('reg'), len(registrations)) - 1])
+
+        def wait(svc, predicate, seconds, stopped):
+            # The SIM wait passes at once; the registration wait polls its
+            # predicate until it holds, as wait_for does.
+            if seconds == settings['network'].getint('sim_timeout'):
+                return
+            while not predicate():
+                pass
+
+        def note(name):
+            return lambda *a, **k: order.append(name)
+        patches = [patch.object(bringup, 'wait_for', wait),
+                   patch.object(bringup, 'radio_state', side_effect=lambda: order.append('state') or level),
+                   patch.object(bringup, 'radio', side_effect=lambda on: order.append('on' if on else 'off')),
+                   patch.object(bringup, 'initial_attach', side_effect=note('attach')),
+                   patch.object(bringup, 'provision_profiles', side_effect=note('profiles')),
+                   patch.object(bringup, 'nr_mode', side_effect=note('nr')),
+                   patch.object(bringup, 'data_snapshot'),
+                   patch.object(bringup, 'activate', side_effect=TimeoutError('stop here'))]
+        printer = patch('builtins.print')
+        if times:
+            patches.append(patch.object(bringup.time, 'monotonic', side_effect=times))
+        for item in patches:
+            item.start()
+        out = printer.start()
+        patches.append(printer)
+        try:
+            with self.assertRaises(TimeoutError):
+                bringup.start(service, settings)
+            lines = [' '.join(str(a) for a in c.args) for c in out.call_args_list]
+        finally:
+            for item in reversed(patches):
+                item.stop()
+        return order, lines
+
+    def test_radio_off_settings_then_radio_on_once(self):
+        order, _ = self.run_start(0)
+        self.assertEqual(order[:6], ['state', 'attach', 'profiles', 'nr', 'on', 'reg'])
+        self.assertNotIn('off', order)
+        self.assertEqual(order.count('on'), 1)
+
+    def test_radio_already_on_is_never_switched(self):
+        order, lines = self.run_start(1)
+        self.assertEqual(order[:5], ['state', 'attach', 'profiles', 'nr', 'reg'])
+        self.assertNotIn('off', order)
+        self.assertNotIn('on', order)
+        self.assertTrue(any('no radio cycle' in l for l in lines))
+
+    def test_flight_mode_counts_as_off(self):
+        order, _ = self.run_start(4)
+        self.assertEqual(order[:5], ['state', 'attach', 'profiles', 'nr', 'on'])
+
+    def test_unreadable_state_falls_back_to_the_old_cycle(self):
+        order, lines = self.run_start(None)
+        self.assertEqual(order[:6], ['state', 'off', 'attach', 'profiles', 'nr', 'on'])
+        self.assertTrue(any('radio state unreadable' in l for l in lines))
+
+    def test_nr_on_leaves_the_nr_mode_alone(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        settings['network']['nr'] = 'on'
+        order, _ = self.run_start(0, settings, registrations=(bytes([1, 0, 0, 21]),))
+        self.assertEqual(order[:4], ['state', 'attach', 'profiles', 'on'])
+        self.assertNotIn('nr', order)
+
+    def test_nr_off_waits_for_lte_after_the_first_registration(self):
+        order, lines = self.run_start(0, registrations=(bytes(4), bytes([1, 0, 0, 21]), bytes([1, 0, 0, 14])))
+        self.assertEqual(order.count('reg'), 3)
+        self.assertEqual(len([l for l in lines if l.startswith('Registration:')]), 1)
+
+    def test_profiles_are_sent_from_the_config(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        settings.read_string('[profiles]\n2 = ims.example; types=ia,ims; roaming_ip=ipv6\n')
+        with patch.object(bringup, 'provision_profiles') as sent, patch.object(bringup, 'radio_state', return_value=0), \
+             patch.object(bringup, 'radio'), patch.object(bringup, 'initial_attach'), patch.object(bringup, 'nr_mode'), \
+             patch.object(bringup, 'wait_for', side_effect=[None, InterruptedError]):
+            with self.assertRaises(InterruptedError):
+                bringup.start(Mock(), settings)
+        self.assertEqual([(p.ident, p.apn) for p in sent.call_args.args[1]],
+                         [(0, 'internet.example'), (2, 'ims.example')])
+
+    def test_a_bad_profile_stops_before_the_radio(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        settings.read_string('[profiles]\n2 = ims.example; types=voice\n')
+        with patch.object(bringup, 'radio') as radio, patch.object(bringup, 'radio_state') as state, \
+             self.assertRaises(RuntimeError) as raised:
+            bringup.start(Mock(), settings)
+        radio.assert_not_called()
+        state.assert_not_called()
+        self.assertIn('Bad data profile', str(raised.exception))
+
+    def test_registration_time_from_radio_on(self):
+        # start() begins at 100; radio on at 110; registered at 152.5.
+        _, lines = self.run_start(0, times=[100, 110, 152.5] + [200] * 20)
+        self.assertIn('Registration: packet registered 42.5 s after radio on, RAT 14', lines)
+
+    def test_registration_time_from_start_when_already_on(self):
+        _, lines = self.run_start(1, times=[100, 134.0] + [200] * 20)
+        self.assertIn('Registration: packet registered 34.0 s after start-up began '
+                      '(the radio was already on), RAT 14', lines)
+
+
 class SimStageTests(unittest.TestCase):
     def run_sim_stage(self, payload):
         service = Mock()
         service.client.request.return_value = payload
         service.client.next_indication.return_value = None
         with patch.object(bringup.time, 'monotonic', side_effect=clock()), \
-             patch.object(bringup, 'radio') as radio, patch.object(bringup, 'initial_attach') as attach:
+             patch.object(bringup, 'radio') as radio, patch.object(bringup, 'radio_state') as state, \
+             patch.object(bringup, 'initial_attach') as attach:
             with self.assertRaises((RuntimeError, TimeoutError)) as raised:
                 bringup.start(service, SETTINGS)
         radio.assert_not_called()
+        state.assert_not_called()
         attach.assert_not_called()
         return str(raised.exception)
 
@@ -116,6 +276,6 @@ class SimStageTests(unittest.TestCase):
         service.client.request.side_effect = [sim(1, (2, 2)), sim(1, (2, 5))]
         service.client.next_indication.return_value = None
         with patch.object(bringup.time, 'monotonic', side_effect=clock()), \
-             patch.object(bringup, 'radio', side_effect=InterruptedError):
+             patch.object(bringup, 'radio_state', side_effect=InterruptedError):
             with self.assertRaises(InterruptedError):
                 bringup.start(service, SETTINGS)

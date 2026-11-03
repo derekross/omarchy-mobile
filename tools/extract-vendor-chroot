@@ -52,6 +52,7 @@ RUNTIME_FILES=(bin/linker64 lib64/bionic/libc.so lib64/bionic/libm.so
 # are libraries something of ours dlopen()s: copied with their closure.
 profile_lists() {
   VENDOR_LIBS=()
+  VENDOR_OPT_DIRS=()
   case $1 in
     gnss)
       VENDOR_BINS=(bin/hw/lhd bin/hw/gpsd)
@@ -71,6 +72,12 @@ profile_lists() {
       if [[ $DEVICE == raven ]]; then MODEM_FSTAB=etc/fstab.gs101; else MODEM_FSTAB=etc/fstab.modem; fi
       VENDOR_FILES=(etc/init/cbd.rc etc/init/rfsd.rc "$MODEM_FSTAB" build.prop)
       VENDOR_DIRS=()
+      # The modem's carrier profiles: cfg.db (omamobile-sitd picks the SIM's
+      # manifest there when [network] carrier_manifest = yes) and the
+      # manifests and configuration sequences the CP reads through rfsd.
+      # Google's files from the owner's image: never committed. Copied when
+      # the image has them.
+      VENDOR_OPT_DIRS=(firmware/carrierconfig)
       SYSTEM_BINS=(system/bin/sh system/bin/toybox)
       SYSTEM_FILES=(system/build.prop)
       SYSTEM_DIRS=()
@@ -387,6 +394,10 @@ put() { # $1 source on disk, $2 path in chroot
 }
 for b in "${VENDOR_BINS[@]}" "${VENDOR_LIBS[@]}" "${VENDOR_FILES[@]}"; do put "$WORK/v/$b" "vendor/$b"; done
 for d in "${VENDOR_DIRS[@]}"; do mkdir -p "$root/vendor/$d"; cp -a "$WORK/v/$d/." "$root/vendor/$d/"; done
+for d in "${VENDOR_OPT_DIRS[@]}"; do
+  if [[ -d "$WORK/v/$d" ]]; then mkdir -p "$root/vendor/$d"; cp -a "$WORK/v/$d/." "$root/vendor/$d/"
+  else echo "note: /vendor/$d is not in this image; skipped" >&2; fi
+done
 for b in "${SYSTEM_BINS[@]}" "${SYSTEM_FILES[@]}"; do put "$WORK/s/$b" "$b"; done
 for d in "${SYSTEM_DIRS[@]}"; do mkdir -p "$root/$d"; cp -a "$WORK/s/$d/." "$root/$d/"; done
 for f in "${RUNTIME_FILES[@]}"; do put "$WORK/r/$f" "apex/com.android.runtime/$f"; done

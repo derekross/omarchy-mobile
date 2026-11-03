@@ -4,12 +4,18 @@ owner. This order registered on LTE with IMS voice and SMS on this phone:
 
   1. wait for the USIM application to be READY (type 2, state 5); a PIN,
      PUK or network lock ends start-up at once (no PIN entry here);
-  2. radio off (AT+CFUN=0), initial attach APN, the default data profile;
-  3. radio on (AT+CFUN=1), wait for packet registration;
-  4. NR mode 0 ([network] nr = off): stay on LTE (NR registered, but
-     carried no traffic on this phone), wait for LTE registration;
-  5. the internet bearer (CID 1, rmnet0);
-  6. IMS: stack start, the IMS bearer (CID 2, IPv6), ADD_PDN_INFO, then wait
+  2. read the radio state (AT+CFUN?); then, with the radio as found, the
+     initial attach APN ([network] attach_apn, else apn), every data
+     profile (profile 0 from apn unless [profiles] has its own, then the
+     rest of [profiles]) and NR mode 0 ([network] nr = off: stay on LTE; NR
+     registered but carried no traffic on this phone);
+  3. radio on (AT+CFUN=1) once, unless it was already on: stock's order,
+     with no radio cycle (device/cheetah/MODEM-PROVIDER-PROFILES.md
+     section 2). An unreadable radio state falls back to 0.3.14's cycle
+     (AT+CFUN=0 first). Then wait for packet registration (on LTE with
+     nr = off) and log how long it took;
+  4. the internet bearer (CID 1; its rmnet device is found by omamobile-sit-data);
+  5. IMS: stack start, the IMS bearer (CID 2, IPv6), ADD_PDN_INFO, then wait
      for an IMS registration with voice and SMS.
 
 No retransmission of SMS/calls and no warm CP restart. A failed or uncertain
@@ -19,10 +25,11 @@ running with data only, unless [network] ims_required = yes.
 """
 import time
 
-from at import radio
-from data_call import activate, initial_attach, provision_default_profile
+from at import radio, radio_state
+from data_call import activate, configured_profiles, initial_attach, provision_profiles
 from ims import register, start_stack
-from radio_settings import nr_mode
+from radio_settings import SAVED_NR, nr_mode
+from sit import ModemError
 
 
 def sim_ready(payload):
@@ -60,9 +67,8 @@ def sim_lock(payload):
 
 
 def data_snapshot(client, label):
-    """Registration and the data-call list, as the modem reports them, before
-    and after the NR change: whether a bearer is ever listed before the
-    setup, and whether the change makes one appear or disappear. States,
+    """Registration and the data-call list, as the modem reports them at
+    registration: whether a bearer is ever listed before the setup. States,
     codes and counts only."""
     try:
         reg = client.request(0x0701)
@@ -112,6 +118,16 @@ def start(service, settings, stopped=lambda: False):
     apn, ip_type = net.get('apn', ''), net.get('ip_type', 'ipv4v6')
     if not apn:
         raise RuntimeError('No APN configured: set [network] apn in /etc/omamobile/modem-sit.conf')
+    # Some networks attach only on their IMS APN (2026-11-02, cheetah: with
+    # the internet APN as the attach APN the modem searched for 13 minutes
+    # with no reject; with the IMS APN it registered on LTE in 34 s). The
+    # data profile and the internet bearer keep apn. Empty: the same as apn.
+    attach_apn = net.get('attach_apn', '').strip() or apn
+    try:
+        profiles = configured_profiles(settings)
+    except ValueError as error:
+        raise RuntimeError(f'Bad data profile in /etc/omamobile/modem-sit.conf: {error}') from None
+    began = time.monotonic()
     previous = None
     locked = None
 
@@ -145,20 +161,64 @@ def start(service, settings, stopped=lambda: False):
                 2: 'card error'}.get(previous[0] if previous else None, 'unknown card state')
         raise TimeoutError(f'No ready USIM within {timeout} s ({card})') from None
     service.stage('attach')
-    radio(False)
-    initial_attach(client, apn, ip_type)
-    provision_default_profile(client, apn, ip_type)
+    level = radio_state()
+    if level is None:
+        # Unknown: 0.3.14's known-good cycle rather than a guess.
+        print('Startup: radio state unreadable; switching it off before the attach settings', flush=True)
+        radio(False)
+        already_on = False
+    else:
+        already_on = level == 1
+        print(f'Startup: radio state {level} ({"on: no radio cycle" if already_on else "off"})', flush=True)
+    # Attaching on the IMS APN: ask for the P-CSCF in the attach, as stock does
+    # for an IMS APN, since that bearer is the one IMS then uses.
+    ims_attach = (attach_apn != apn and net.getboolean('ims', True)
+                  and attach_apn == net.get('ims_apn', 'ims'))
+    if attach_apn != apn:
+        print('initial attach on attach_apn, not the internet APN'
+              + (' (the IMS APN: P-CSCF requested)' if ims_attach else ''), flush=True)
+    initial_attach(client, attach_apn, ip_type, ims=ims_attach)
+    if profiles[0].ident == 0 and profiles[0].apn != apn:
+        print('data profile 0 from [profiles], with another APN than [network] apn '
+              '(the internet bearer uses apn)', flush=True)
+    provision_profiles(client, profiles)
+    lte = net.get('nr', 'off') == 'off'
+    nr_after_radio = False
+    if lte:
+        # Before radio on, as stock sets its network type: changed after
+        # registration it made the CP register again. This modem refuses
+        # SET_NR_MODE with the radio off (error 2, 2026-11-02), so then it is
+        # set right after radio on, still before registration.
+        try:
+            nr_mode(client)
+        except ModemError as error:
+            if already_on:
+                raise
+            SAVED_NR.unlink(missing_ok=True)
+            nr_after_radio = True
+            print(f'NR mode refused with the radio off ({error}); setting it after radio on', flush=True)
     service.pump()
-    radio(True)
+    if not already_on:
+        radio(True)
+        began = time.monotonic()
+        if nr_after_radio:
+            nr_mode(client)
     service.stage('registering')
-    print('Startup: waiting for packet registration', flush=True)
+    print('Startup: waiting for packet registration' + (' on LTE' if lte else ''), flush=True)
     timeout = net.getint('register_timeout', 180)
-    wait_for(service, lambda: packet_registered(client.request(0x0701)), timeout, stopped)
-    data_snapshot(client, 'before the NR change')
-    if net.get('nr', 'off') == 'off':
-        nr_mode(client)
-        wait_for(service, lambda: packet_registered(client.request(0x0701), lte=True), 120, stopped)
-        data_snapshot(client, 'after the NR change')
+    first = None
+
+    def registered():
+        nonlocal first
+        state = client.request(0x0701)
+        if first is None and packet_registered(state):
+            first = time.monotonic()
+            print(f'Registration: packet registered {first - began:.1f} s after '
+                  + ('start-up began (the radio was already on)' if already_on else 'radio on')
+                  + f', RAT {state[3]}', flush=True)
+        return packet_registered(state, lte=lte)
+    wait_for(service, registered, timeout, stopped)
+    data_snapshot(client, 'at registration')
     service.stage('data')
     activate(client, apn, ip_type=ip_type, on_event=service.event)
     service.pump()
@@ -169,9 +229,22 @@ def start(service, settings, stopped=lambda: False):
     service.ims_state = 'pending'
     service.stage('ims')
     try:
+        if net.get('carrier_manifest', '').strip():
+            # As stock's IMS service: no stack start while the modem applies
+            # its carrier profile. The modem's 0x4602 arrives on its own after
+            # the SIM loads; service.event answers it and records the 0x4601.
+            limit = net.getint('carrier_manifest_timeout', 60)
+            try:
+                wait_for(service, lambda: service.carrier_status is not None, limit, stopped)
+                print('IMS stack start released (after carrier config: status',
+                      service.carrier_status[0], 'cause', service.carrier_status[1], ')', flush=True)
+            except TimeoutError:
+                print('IMS stack start released (timeout: no carrier config status in', limit, 's;',
+                      'manifest sent' if service.manifest_sent else 'no request from the modem seen', ')',
+                      flush=True)
         start_stack(client)
         activate(client, net.get('ims_apn', 'ims'), ims=True, on_event=service.event)
-        register(client)
+        register(client, pcscf_required=net.getboolean('ims_pcscf_required', True))
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and
                  service.registration().get('features', 0) & 3 == 3,

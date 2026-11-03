@@ -92,6 +92,8 @@ def derive(status):
         plmn=m.get('plmn', '') if registered else '',
         operator_name=m.get('operator_name', '') if registered else '',
         home=reg == 'home',
+        # sitd's LTE RSRP as 0-100 while registered; "recent" while it has one.
+        signal=max(0, min(100, int(m.get('signal') or 0))) if registered else 0,
         emergency_numbers=list(m.get('emergency_numbers') or ('112', '911')),
     )
     return d
@@ -215,7 +217,7 @@ class Bridge:
                 CurrentCapabilities=mm.CAP_GSM_UMTS | mm.CAP_LTE, MaxBearers=1, MaxActiveBearers=1,
                 SupportedModes=[(mm.MODE_4G, mm.MODE_NONE)], CurrentModes=(mm.MODE_4G, mm.MODE_NONE),
                 SupportedBands=[mm.BAND_UNKNOWN], CurrentBands=[mm.BAND_UNKNOWN],
-                SupportedIpFamilies=mm.IP_V4 | mm.IP_V6 | mm.IP_V4V6, SignalQuality=(0, False))
+                SupportedIpFamilies=mm.IP_V4 | mm.IP_V6 | mm.IP_V4V6)
         if name == mm.MODEM_3GPP:
             apn, ip_type = self.settings.get('apn', ''), self.settings.get('ip_type', 'ipv4v6')
             settings = {'apn': GLib.Variant('s', apn),
@@ -232,7 +234,7 @@ class Bridge:
             return dict(Sim=self.sim or '/', Bearers=[self.bearer] if self.bearer else [],
                         State=d['state'], StateFailedReason=d['failed'], UnlockRequired=d['unlock'],
                         UnlockRetries=d['retries'], PowerState=d['power'],
-                        AccessTechnologies=d['access'])
+                        AccessTechnologies=d['access'], SignalQuality=(d['signal'], d['signal'] > 0))
         if name == mm.MODEM_3GPP:
             return dict(RegistrationState=d['registration'], OperatorCode=d['plmn'],
                         OperatorName=d['operator_name'], PacketServiceState=d['packet'])

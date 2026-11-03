@@ -19,6 +19,21 @@ class ServiceTests(unittest.TestCase):
         self.service.ready=Mock()
     def tearDown(self):
         self.db.close(); self.paths.stop(); self.temp.cleanup()
+    def test_phone_reset_indication_logs_its_first_bytes_raw(self):
+        packet = struct.pack('<BBHHH', 2, 0, 0x0804, 8 + 6, 0) + bytes([0x08, 0x02, 0x00, 0x00, 0xaa, 0xbb])
+        with patch('builtins.print') as out:
+            self.service.event(packet)
+        line = ' '.join(str(a) for a in out.call_args.args)
+        self.assertEqual(line, 'Modem reset indication (IND_PHONE_RESET, 6 payload bytes): '
+                         'bytes 0x08..0x0b = 08 02 00 00 (reset type and cause somewhere here, '
+                         'offsets unconfirmed); not acted on')
+        self.assertNotIn('aa', line)                     # only the first four bytes
+        self.client.request.assert_not_called()          # logged, never answered
+        self.assertEqual(self.service.indication_counts['0804'], 1)
+    def test_short_phone_reset_indication(self):
+        self.assertIn('bytes 0x08..0x09 = 01 07',
+                      app_service.reset_indication(struct.pack('<BBHHH', 2, 0, 0x0804, 10, 0) + b'\x01\x07'))
+        self.assertIn('no payload', app_service.reset_indication(struct.pack('<BBHHH', 2, 0, 0x0804, 8, 0)))
     def test_send_idempotency_after_success_and_unknown_response(self):
         for i,reply in enumerate((bytes(253),TimeoutError())):
             self.client.request.side_effect=[bytes([1])+bytes(12),reply]
@@ -110,6 +125,73 @@ class ServiceTests(unittest.TestCase):
         payload=bytearray(0x77-12); payload[:6]=b'00101#'; payload[6:10]=b'Test'
         self.assertEqual(app_service.operator_name(bytes(payload)),dict(plmn='00101',name='Test'))
         self.assertEqual(app_service.operator_name(bytes(8)),dict(plmn='',name=''))
+
+    def reg_failed(self, domain, cause, additional):
+        packet = bytearray(0x11 + 8)
+        struct.pack_into('<BBHH', packet, 0, 2, 0, 0x074a, len(packet))
+        packet[8:14] = b'00101#'
+        packet[0x0e:0x11] = bytes([domain, cause, additional])
+        packet[0x11:] = b'\x12\x34\x56\x78\x9a\xbc\xde\xf0'   # cell identity: never shown
+        return bytes(packet)
+
+    def test_registration_failure_is_logged_with_codes_only(self):
+        self.assertEqual(app_service.registration_failure(self.reg_failed(1, 10, 0xff)), ('CS+PS', 10, None))
+        self.assertEqual(app_service.registration_failure(self.reg_failed(3, 0xff, 0)), ('PS', None, 0))
+        with patch('builtins.print') as out:
+            self.service.event(self.reg_failed(3, 7, 0))
+        line = ' '.join(str(a) for a in out.call_args.args)
+        self.assertEqual(line, 'Registration failed: domain PS cause 7 additional cause 0')
+        self.assertEqual(self.service.next_poll, 0)
+        with self.assertRaises(ValueError):
+            app_service.registration_failure(bytes(0x10))
+
+    def test_registration_changes_are_logged_once_each(self):
+        replies = {0x0200: bytes(3), 0x0801: struct.pack('<I', 2), 0x0702: bytes(0x77 - 12)}
+        states = [bytes([1, 0, 0, 14]), bytes([1, 0, 0, 14]), bytes([0, 0, 0, 14]), bytes([3, 7, 0, 14])]
+        lines = []
+        for ps in states:
+            replies[0x0701] = ps
+            self.client.request.side_effect = lambda ident, *a, **k: replies[ident]
+            self.service.next_poll = 0
+            with patch('builtins.print') as out:
+                self.service.poll()
+            lines += [' '.join(str(x) for x in c.args) for c in out.call_args_list
+                      if c.args and c.args[0] == 'Packet registration:']
+        self.assertEqual(lines, ['Packet registration: home (state 1), reject 0, RAT 14',
+                                 'Packet registration: not-registered (state 0), reject 0, RAT 14',
+                                 'Packet registration: denied (state 3), reject 7, RAT 14'])
+
+    def signal_packet(self, mask, rsrp):
+        payload = bytearray(2 + 0xc4)
+        struct.pack_into('<H', payload, 0, mask)
+        struct.pack_into('<I', payload, 2 + 0x3c, 13)        # LTE signal strength
+        struct.pack_into('<I', payload, 2 + 0x40, rsrp)
+        return struct.pack('<BBHH', 2, 0, 0x0906, 8 + len(payload)) + bytes(2) + bytes(payload)
+
+    def test_radio_state_10_is_on(self):
+        self.assertEqual(app_service.RADIO[10], 'on')
+
+    def test_lte_rsrp_and_signal_percent(self):
+        self.assertEqual(app_service.lte_rsrp(self.signal_packet(4, 109)[8:]), -109)
+        self.assertIsNone(app_service.lte_rsrp(self.signal_packet(0, 109)[8:]))       # no LTE bit
+        self.assertIsNone(app_service.lte_rsrp(self.signal_packet(4, 0)[8:]))         # not measured
+        self.assertIsNone(app_service.lte_rsrp(self.signal_packet(4, 0x7fffffff)[8:]))
+        self.assertIsNone(app_service.lte_rsrp(bytes(20)))
+        self.assertEqual([app_service.signal_percent(r) for r in (-140, -109, -92, -44, -30, None)],
+                         [0, 32, 50, 100, 100, 0])
+
+    def test_signal_indication_reaches_status_while_registered(self):
+        self.service.net['reg'] = 'home'
+        self.service.event(self.signal_packet(4, 92))
+        self.assertEqual(self.service.status()['modem']['signal'], 50)
+        self.service.net['reg'] = 'not-registered'
+        self.assertEqual(self.service.status()['modem']['signal'], 0)
+
+    def test_network_state_indication_brings_the_poll_forward(self):
+        import time
+        self.service.next_poll = time.monotonic() + 30
+        self.service.event(struct.pack('<BBHH', 2, 0, 0x070e, 8))
+        self.assertLessEqual(self.service.next_poll, time.monotonic() + 5)
 
     def test_unconfirmed_release_stops_the_modem(self):
         call=self.service.new_call('+12025550123','outgoing','active',7)
