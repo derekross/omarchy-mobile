@@ -47,10 +47,10 @@ import time
 from at import radio, radio_state
 import carrier_apn
 from data_call import APN_TYPES, activate, attach_bearer, configured_profiles, entries, initial_attach
-from data_call import owned_ids, provision_profiles, record_modem_owned, summary
+from data_call import clear_stale, owned_ids, provision_profiles, record_modem_owned, summary
 import data_call
 from data_call import paths as bearer_paths
-from ims import register, start_stack
+from ims import REGISTRATION, register, start_stack, withdraw_stale
 from isim import bearer_dns, ipv6_pcscf, resolve_on_bearer, resolve_system
 from radio_settings import SAVED_NR, nr_mode
 from sit import ModemError
@@ -479,6 +479,12 @@ def start(service, settings, stopped=lambda: False):
     wait_for(service, registered, timeout, stopped)
     registered_at = time.monotonic()
     data_snapshot(client, 'at registration')
+    # A second start-up in the same boot: clear what an earlier sitd left
+    # (only when the modem lists no bearer), and withdraw its IMS PDN.
+    stale_ims = REGISTRATION.exists()
+    clear_stale(client)
+    if stale_ims and not REGISTRATION.exists():
+        withdraw_stale(client)
     attach = None
     if attach_none:
         # Before sitd sets up anything: every bearer listed now is the

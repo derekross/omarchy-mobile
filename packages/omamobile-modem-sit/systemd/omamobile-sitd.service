@@ -3,7 +3,9 @@
 # bearer, IMS) and then serves calls and SMS on /run/omamobile-sit/socket.
 # Not enabled by the package: MODEM-PLAN.md M4 enables it after the gated
 # first runs. It needs the modem unit's CP ONLINE and never restarts on its
-# own: a second start-up on the same CP is not supported (reboot instead).
+# own. A second start-up on the same CP after a clean stop clears the earlier
+# start's confirmed bearer records, withdraws its IMS PDN and sets up again
+# (MODEM-CLIENT); after a failed start-up, reboot instead.
 [Unit]
 Description=Omarchy Mobile SIT RIL (S5300 calls, SMS, registration)
 # The device modem-policy package supplies its modem dependency as a drop-in.

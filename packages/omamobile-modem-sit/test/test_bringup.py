@@ -67,7 +67,7 @@ class BringupTests(unittest.TestCase):
         with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
              patch.object(bringup, 'radio_state', return_value=0), \
              patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
-             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate', side_effect=TimeoutError), \
+             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'activate', side_effect=TimeoutError), \
              patch.object(bringup, 'data_snapshot'), \
              patch.object(bringup, 'start_stack') as stack, patch.object(bringup, 'register') as register:
             with self.assertRaises(TimeoutError):
@@ -244,10 +244,32 @@ class BringupTests(unittest.TestCase):
              patch.object(bringup, 'initial_attach') as attach, \
              patch.object(bringup, 'provision_profiles') as profile, \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
-             patch.object(bringup, 'activate', side_effect=TimeoutError) as activate:
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'activate', side_effect=TimeoutError) as activate:
             with self.assertRaises(TimeoutError):
                 bringup.start(service, settings)
         return attach, profile, activate
+
+    def withdraw_case(self, *, registered, cleared):
+        service = Mock()
+        registration = Mock()
+        registration.exists.side_effect = [registered, registered and not cleared]
+        with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
+             patch.object(bringup, 'radio_state', return_value=0), \
+             patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
+             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
+             patch.object(bringup, 'REGISTRATION', registration), \
+             patch.object(bringup, 'clear_stale', return_value=cleared), \
+             patch.object(bringup, 'withdraw_stale') as withdraw, \
+             patch.object(bringup, 'activate', side_effect=TimeoutError):
+            with self.assertRaises(TimeoutError):
+                bringup.start(service, SETTINGS)
+        return withdraw
+
+    def test_a_stale_ims_registration_is_withdrawn_before_the_bearers(self):
+        self.withdraw_case(registered=True, cleared=5).assert_called_once()
+        self.withdraw_case(registered=False, cleared=4).assert_not_called()
+        # The modem still lists a bearer: nothing cleared, nothing withdrawn.
+        self.withdraw_case(registered=True, cleared=0).assert_not_called()
 
     def test_attach_apn_is_used_only_for_the_initial_attach(self):
         attach, profile, activate = self.attach_run('ims.example')
@@ -319,7 +341,7 @@ class OrderTests(unittest.TestCase):
                    patch.object(bringup, 'provision_profiles', side_effect=note('profiles')),
                    patch.object(bringup, 'nr_mode', side_effect=note('nr')),
                    patch.object(bringup, 'data_snapshot'),
-                   patch.object(bringup, 'activate', side_effect=TimeoutError('stop here'))]
+                   patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'activate', side_effect=TimeoutError('stop here'))]
         printer = patch('builtins.print')
         if times:
             patches.append(patch.object(bringup.time, 'monotonic', side_effect=times))
@@ -459,7 +481,7 @@ class IsimFallbackWiringTests(unittest.TestCase):
              patch.object(bringup, 'radio_state', return_value=0), \
              patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
-             patch.object(bringup, 'activate'), patch.object(bringup, 'start_stack'), \
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'activate'), patch.object(bringup, 'start_stack'), \
              patch.object(bringup, 'find_attach_bearer', return_value=None), \
              patch.object(bringup, 'ipv6_pcscf', return_value=['x']) as read, \
              patch.object(bringup, 'register', side_effect=RuntimeError('stop')) as register, \
