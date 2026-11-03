@@ -140,12 +140,18 @@ class CarrierApnTests(unittest.TestCase):
             '[310/260]\nlike = 310/410\n'
             '[310/150]\nlike = 999/99\n')
         a = self.look('311', '480', path)
+        # internet_cid 2 is the IMS bearer's: refused by the override itself,
+        # named as the override's, so start() never blames [network] for it.
         self.assertEqual((a['apn'], a['attach_apn'], a['ims_first'], a['internet_cid'], a['profiles']),
-                         ('a.example', 'none', None, 2, [('2', 'ims.example; types=ims')]))
+                         ('a.example', 'none', None, None, [('2', 'ims.example; types=ims')]))
+        self.assertEqual(a['refused'], ['ims_first', 'internet_cid (1..15, not 2: the IMS bearer)'])
         b = self.look('310', '410', path)
         # The section's own keys win over the liked section's; a bad value is left out.
         self.assertEqual((b['apn'], b['attach_apn'], b['ims_first'], b['internet_cid'], b['carrier']),
                          ('b.example', 'none', True, None, 'A'))
+        self.assertEqual(b['refused'], ['internet_cid (1..15, not 2: the IMS bearer)'])
+        # c likes b, whose internet_cid = 16 it inherits, refused there too.
+        self.assertEqual(self.look('310', '260', path)['refused'], ['internet_cid (1..15, not 2: the IMS bearer)'])
         # One hop only: a section liking a "like" section gets that section's
         # own keys (its apn), not its target's (the attach APN).
         c = self.look('310', '260', path)

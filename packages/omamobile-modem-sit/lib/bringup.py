@@ -217,6 +217,9 @@ def choose_apn(client, net, sim_payload):
     if attach_source in labels:
         print(f'Startup: attach APN chosen from {labels[attach_source]}'
               + (' (none: not sent)' if attach.lower() == 'none' else ''), flush=True)
+    if found.get('refused'):
+        print("Startup: the project's carrier override for this SIM has values that don't check, "
+              'left out: ' + ', '.join(found['refused']), flush=True)
     if found.get('source') == 'override' and (found.get('profiles') or found.get('ims_first') is not None
                                               or found.get('internet_cid')):
         print(f"Startup: bearer order and data profiles from {labels['override']}"

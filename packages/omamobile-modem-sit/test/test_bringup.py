@@ -2,6 +2,7 @@
 import env  # noqa: F401  (paths and sys.path first)
 import contextlib
 import io
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
@@ -75,7 +76,7 @@ class BringupTests(unittest.TestCase):
             register.assert_not_called()
             service.client.request.assert_not_called()
 
-    def run_start(self, settings, imsi_reply):
+    def run_start(self, settings, imsi_reply, overrides=OVERRIDES):
         """start() past the SIM stage with every modem step mocked; GET_IMSI
         answers imsi_reply (bytes, or an exception to raise)."""
         service = Mock()
@@ -102,7 +103,7 @@ class BringupTests(unittest.TestCase):
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate') as activate, \
              patch.object(bringup, 'data_snapshot'), patch.object(bringup, 'find_attach_bearer', return_value=None), \
              patch.object(bringup, 'start_stack'), patch.object(bringup, 'register'), \
-             patch.object(bringup.carrier_apn, 'OVERRIDES', OVERRIDES), \
+             patch.object(bringup.carrier_apn, 'OVERRIDES', overrides), \
              patch.object(bringup.carrier_apn, 'DATABASE', '/nonexistent.xml'), \
              contextlib.redirect_stdout(out):
             bringup.start(service, settings)
@@ -205,6 +206,21 @@ class BringupTests(unittest.TestCase):
             settings['network'][key] = value
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 self.run_start(settings, bytes([15]) + b'001010000000000')
+
+    def test_an_overrides_ims_cid_is_refused_by_the_override_not_the_config(self):
+        """internet_cid = 2 in an override is left out there (CID 1 stays),
+        and the log names the override: never "[network] internet_cid"."""
+        with tempfile.NamedTemporaryFile('w', suffix='.conf', delete=False) as f:
+            f.write('[001/01]\nname = Test\napn = internet.example\ninternet_cid = 2\n')
+        try:
+            settings = paths.config('/nonexistent')
+            _, log, _, _, _, _ = self.run_start(settings, bytes([15]) + b'001010000000000', overrides=f.name)
+        finally:
+            Path(f.name).unlink()
+        self.assertEqual(bringup.data_call.INTERNET_CID, 1)
+        self.assertIn("carrier override for this SIM has values that don't check, left out: "
+                      'internet_cid (1..15, not 2: the IMS bearer)', log)
+        self.assertNotIn('[network]', log)
 
     def test_imsi_layout_is_checked(self):
         client = Mock()

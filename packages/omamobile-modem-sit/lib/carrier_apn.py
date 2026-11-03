@@ -68,18 +68,29 @@ def plain_apn(value):
 YES_NO = {'yes': True, 'no': False, 'true': True, 'false': False, 'on': True, 'off': False}
 
 
+IMS_CID = 2
+
+
 def override_values(section):
     """One override section's values, checked: apn (required), attach_apn
     (an APN, "none", or '' for the internet APN), ims_apn, ims_first
-    (yes/no or None), internet_cid (1..15 or None) and profiles, the
-    profile_<ID> lines as (ID, line) pairs for data_call.parse_profile. A
-    value that doesn't check is left out, never guessed."""
+    (yes/no or None), internet_cid (1..15 but not 2, the IMS bearer's, or
+    None) and profiles, the profile_<ID> lines as (ID, line) pairs for
+    data_call.parse_profile. A value that doesn't check is left out, never
+    guessed, and its key is listed in 'refused' so the caller can say that
+    the override, not the config, had it."""
     apn = plain_apn(section.get('apn'))
     if not apn:
         return None
-    ims_first = YES_NO.get((section.get('ims_first') or '').strip().lower())
+    refused = []
+    ims_first_text = (section.get('ims_first') or '').strip()
+    ims_first = YES_NO.get(ims_first_text.lower())
+    if ims_first_text and ims_first is None:
+        refused.append('ims_first')
     cid = (section.get('internet_cid') or '').strip()
-    internet_cid = int(cid) if cid.isdigit() and 1 <= int(cid) <= 15 else None
+    internet_cid = int(cid) if cid.isdigit() and 1 <= int(cid) <= 15 and int(cid) != IMS_CID else None
+    if cid and internet_cid is None:
+        refused.append('internet_cid (1..15, not 2: the IMS bearer)')
     profiles = []
     for key in section:
         if key.startswith('profile_') and key[8:].isdigit():
@@ -87,7 +98,7 @@ def override_values(section):
     return dict(apn=apn, attach_apn=plain_apn(section.get('attach_apn')),
                 ims_apn=plain_apn(section.get('ims_apn')), ims_first=ims_first,
                 internet_cid=internet_cid, profiles=sorted(profiles, key=lambda p: int(p[0])),
-                carrier=section.get('name', '').strip(), source='override')
+                carrier=section.get('name', '').strip(), source='override', refused=refused)
 
 
 def from_overrides(mcc, mncs, path=None):
