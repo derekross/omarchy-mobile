@@ -45,3 +45,11 @@ grep -qx omaphone <<<"$deps" && grep -qx omamessages <<<"$deps" || fail "omaphon
 ok "omaphone and omamessages are dependencies"
 ! grep -qxE 'omamobile-(mmd|modem|modem-sit)' <<<"$deps" || fail "no modem package in depends"
 ok "no modem package in depends"
+grep -qE '^ +loupe +#' "$here/PKGBUILD" && ok "Loupe is a dependency"
+m=$here/mimeapps.list
+for type in png jpeg gif webp bmp tiff; do
+  grep -qx "image/$type=org.gnome.Loupe.desktop;imv.desktop;" "$m" || fail "image/$type opens in Loupe, then imv"
+done
+ok "images open in Loupe, with imv behind it"
+grep -q 'install -Dm644 mimeapps.list "$pkgdir/etc/xdg/mimeapps.list"' "$here/PKGBUILD" || fail "the defaults go to /etc/xdg"
+ok "the defaults are installed to /etc/xdg/mimeapps.list"

@@ -94,6 +94,10 @@ local nautilus = { class = "^org.gnome.Nautilus$" }
 check(effect(nautilus, "maximize") == true and effect(nautilus, "float") == false
   and index(nautilus, "maximize") > index(modal, "maximize"), "the portal's file chooser is still a full sheet")
 
+local tensaku = { class = "^dev.tensaku.Tensaku$" }
+check(effect(tensaku, "maximize") == true and effect(tensaku, "float") == false,
+  "Tensaku (the screenshot editor) is tiled and maximized, not Omarchy's float")
+
 local pip = { tag = "pip" }
 local size, move = effect(pip, "size"), effect(pip, "move")
 check(effect(pip, "maximize") == false and type(size) == "table" and size[1] == 300 and size[2] == 169,
