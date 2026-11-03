@@ -683,6 +683,24 @@ tools/phone-ssh 'tail -3 /var/log/omamobile/sleep-wfi-20261103.log'
 # (sysfs), and the unit is enabled again by hand: systemctl enable omamobile-tegu-modem-boot.service
 ```
 
+**S1-W, first runs (2026-11-03, same release).** The first start had
+none of the AoC, Trusty or Wi-Fi up: on the palmtop the modem boot unit
+(#372) now runs `omamobile-tegu-audio-up`, and with that unit off for the
+series nothing else did. Its 22 sleeps all woke (wake IRQ 56, no UFS or
+ACPM lines), but it isn't the hung runs' setup, so the series restarted
+after `omamobile-tegu-audio-up` by hand. That boot reset itself on its
+third sleep, and for the first time pstore kept the console, because the
+watchdog, not the buttons, reset it: brcmfmac's escan timeout worker had
+oopsed a minute earlier on a NULL channel (a BSS on 5 GHz channel 177,
+which the band table lacks; kernel #191), inside cfg80211's RCU read-side
+section. The next suspend couldn't freeze khugepaged (stuck in
+`lru_add_drain_all()`), ACPM's DVFS and thermal channels timed out
+(`Timeout! ch:0`, `ch:9`, then `RX front can not keep up with TX front`),
+the suspend was retried, and the watchdog reset the SoC. None of the
+silent hangs had an oops in its journal, so that is a second failure, not
+the hang. The series now stops on any oops, and runs again from
+2026-11-03 10:49.
+
 Pass: 300 of 300 woke. Then the drain on WFI alone against core power-down
 (S1's buck-off coulomb counts, 240 s sleeps each way) decides whether the
 device package should sleep on WFI. Fail: a hang on WFI alone retires core
