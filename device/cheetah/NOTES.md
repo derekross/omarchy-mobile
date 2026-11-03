@@ -2,6 +2,38 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-03: IMS registered and an SMS sent on a Verizon-network SIM, once the bearers took stock's CIDs
+
+Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, `omamobile-modem-sit` 0.3.24 (#384),
+a Tracfone (Verizon-network) SIM. Details and the request layouts:
+[IMS-SHANNON.md](IMS-SHANNON.md), [MODEM-PROVIDER-PROFILES.md](MODEM-PROVIDER-PROFILES.md).
+
+- **IMS registered at 02:00:07** [V]: `IND_AIMS_REGISTRATION` state 2 (VoLTE
+  registered), features 3 (voice and SMS), status 0; `AIMS_SEND_SMS` accepted
+  an SMS to another phone at 02:00:57. The first IMS registration on this phone.
+- **What it took** [V]: stock's bearer order. Stock's RIL keeps CID 1 for the
+  modem's attach context and never sets a bearer up on it, sets the IMS bearer
+  up first on CID 2, and the internet on CID 3. sitd set the internet up on
+  CID 1 first: on this network the attach is on the IMS APN, so that setup
+  replaced the attach PDN (the three "Registration failed: domain PS cause 10",
+  implicitly detached, seen at the data step on 11-02 fit), and the IMS bearer
+  set up afterwards carried no P-CSCF. With `ims_first = yes` and
+  `internet_cid = 3` the IMS setup response carries three IPv6 P-CSCFs.
+- **What didn't matter** [V], each tried on its own on 11-02 and 11-03 and
+  recorded in the plans: the attach APN (`vzwims`, `IMS`, none), the IMS
+  bearer's IP type, the P-CSCF request bytes, the Tracfone-VZW carrier manifest
+  (needed for registration order but not for the P-CSCF), the ISIM's EF_PCSCF
+  name (an FQDN that resolves only on the carrier's IMS DNS), stock's data
+  profiles and APN-type bits. Registration time fell from 53 s-10 min to 3.3 s
+  once the attach APN, profiles and NR mode went before a single radio on
+  (0.3.16), unrelated to IMS.
+- **Stock's log for this SIM** [V], from one stock boot on slot A on 11-03
+  (calls worked there; a fresh read-only NV backup followed): its IMS bearer on
+  CID 2 listed three P-CSCFs; stock never used CID 1. The log lives off-repo.
+- **Still by hand**: the modem units are disabled; the carrier files in the
+  chroot and the modem-sit.conf values (section 12 of IMS-SHANNON.md) were
+  set by hand. #373 (automatic APNs) needs the two new keys.
+
 ## 2026-11-02: fingerprint after the reinstall, a Trusty storage crash, and fingerprint on by default
 
 Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`; Trusty "cloudripper". Details,
