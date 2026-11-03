@@ -3,15 +3,29 @@
 # First-run setup for a phone, the part Omarchy's installer asks on a computer:
 # your name and email (git identity and XCompose, through Omarchy's own
 # install/user/git.sh and xcompose.sh), then a PIN or password if there isn't
-# one (omamobile-set-pin asks which). Then Omarchy's own invitation to pick a
-# default AI agent (Setup > Default Agent): Omarchy shows it after the first
-# update, a phone at first login.
+# one (omamobile-set-pin asks which), then a fingerprint once the PIN exists
+# and the sensor is ready (the fingerprint screen, omamobile.fingerprint).
+# Then Omarchy's own invitation to pick a default AI agent (Setup > Default
+# Agent): Omarchy shows it after the first update, a phone at first login.
+# With a SIM and the modem stack running, setup names the carrier and says
+# mobile data is set up automatically (nothing to type).
 #
-#   omamobile-onboarding           open a terminal and run it
-#   omamobile-onboarding --nudge   at login: if anything is missing, say so
+#   omamobile-onboarding               open a terminal and run it
+#   omamobile-onboarding --nudge       at login: if anything is missing, say so
+#   omamobile-onboarding --fingerprint open the fingerprint screen's enrollment
+#
+# Fingerprint is offered once (setup, or the first login after the sensor
+# is ready, which on a new install is after tools/phone-provision and its
+# restart), never again after an answer: Setup > Security > Fingerprint
+# stays the place to add or remove fingers.
 set -u
 
 omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
+fp_runner=${OMAMOBILE_FP_RUNNER:-/usr/lib/omamobile-fp/omamobile-fp-chroot}
+fp_image=${OMAMOBILE_FP_IMAGE:-/usr/lib/omamobile-fp/root}
+# the runner says here why it refused (off-reason: data-check recurs every boot)
+fp_uidir=${OMAMOBILE_FP_UIDIR:-/run/omamobile-fp-ui}
+fp_offered=${XDG_STATE_HOME:-$HOME/.local/state}/omamobile/fingerprint-offered
 
 has_identity() {
   [[ -n $(git config --global user.name) && -n $(git config --global user.email) ]]
@@ -27,10 +41,112 @@ invite_agent() {
   [[ -f $hook ]] && bash "$hook" || true
 }
 
+# This user's enrolled fingers, through fprintd, or nothing when the sensor
+# isn't ready (no fingerprint stack, the service not running yet, no device).
+fp_count() {
+  [[ -x $fp_runner ]] || return 0
+  timeout 15 omamobile-fp-enroll list 2>/dev/null | python3 -c '
+import json, sys
+for line in sys.stdin:
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue
+    if e.get("event") == "fingers" and e.get("device"):
+        print(len(e.get("fingers") or []))
+        break
+' 2>/dev/null || true
+}
+
+# Offer a fingerprint when the sensor is ready and none is enrolled, once.
+fp_wanted() {
+  [[ -x $fp_runner && ! -e $fp_offered ]] && has_pin && [[ $(fp_count) == 0 ]]
+}
+
+fp_mark_offered() {
+  mkdir -p "${fp_offered%/*}" && date -Is > "$fp_offered" 2>/dev/null || true
+}
+
+fp_enroll() {
+  omarchy-shell shell summon omamobile.fingerprint '{"page":"enroll"}'
+}
+
+offer_fingerprint() {
+  [[ -x $fp_runner ]] || return 0
+  if ! has_pin; then
+    return 0
+  fi
+  local n
+  n=$(fp_count)
+  if [[ -z $n ]]; then
+    echo
+    if [[ $(cat "$fp_uidir/off-reason" 2>/dev/null) == data-check ]]; then
+      echo "Fingerprint unlock is off: its check of stock Android's data failed, and it stays off until that is looked at (journalctl -u omamobile-fp; FINGERPRINT-PLAN F19). Your PIN or password unlocks the phone."
+    elif systemctl is-failed --quiet omamobile-fp.service 2>/dev/null; then
+      echo "Fingerprint unlock is unavailable on this boot (see journalctl -u omamobile-fp). Your PIN or password unlocks the phone."
+    elif [[ ! -d $fp_image ]]; then
+      echo "Fingerprint unlock will be ready once your phone's firmware is added and it restarts. The phone offers it then."
+    else
+      echo "Fingerprint unlock is still starting. The phone offers it at your next login."
+    fi
+    return 0
+  fi
+  ((n == 0)) || return 0
+  [[ ! -e $fp_offered ]] || return 0
+  echo
+  if gum confirm "Add a fingerprint? It unlocks the phone alongside your PIN or password." \
+      --affirmative "Add a fingerprint" --negative "Skip"; then
+    fp_enroll || echo "Open Setup > Security > Fingerprint to add one."
+  else
+    echo "Skipped. Add one any time in Setup > Security > Fingerprint."
+  fi
+  fp_mark_offered
+}
+
+# The SIM, when the modem stack runs: the carrier, and that mobile data is
+# set up on its own (sitd picks the APN from the SIM). Nothing to type; the
+# rare SIM without an APN is pointed at Setup > Mobile network. Silent with
+# no modem stack (the release image has none yet) or before it has started.
+mobile_network_line() {
+  command -v omamobile-mobile-network >/dev/null || return 0
+  timeout 10 omamobile-mobile-network status 2>/dev/null | python3 -c '
+import json, sys
+try:
+    s = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if not s.get("installed") or not s.get("running"):
+    sys.exit(0)
+sim = (s.get("sim") or {}).get("state")
+apn = (s.get("apn") or {}).get("source", "")
+Q = chr(39)
+carrier = s.get("carrier") or ""
+if sim == "absent":
+    print("No SIM card. Put one in and restart the phone for calls, texts and mobile data.")
+elif sim in ("pin", "puk", "network-locked"):
+    print("Your SIM is locked, and this phone cannot unlock it yet: turn the SIM PIN off in another phone, then restart.")
+elif sim == "ready":
+    head = "Mobile network: " + carrier + "." if carrier else "Your SIM is ready."
+    if apn == "none":
+        print(head + " Calls and texts work. Mobile data needs your carrier" + Q + "s APN: Setup > Mobile network.")
+    elif apn == "manual":
+        print(head + " Mobile data uses the APN set in Setup > Mobile network.")
+    else:
+        print(head + " Mobile data is set up automatically from your SIM; there" + Q + "s nothing to type.")
+' 2>/dev/null || true
+}
+
 case "${1:-}" in
   --nudge)
     # one nudge at a time: the agent waits until the phone itself is set up
     if has_identity && has_pin; then
+      if fp_wanted; then
+        fp_mark_offered
+        omarchy-notification-send "Add a fingerprint" \
+          "Unlock your phone with a finger as well as your PIN. Tap to add one." \
+          --exec "omamobile-onboarding --fingerprint"
+        exit 0
+      fi
       invite_agent
       exit 0
     fi
@@ -38,8 +154,11 @@ case "${1:-}" in
       "Add your name and email, and a PIN or password to lock it. Tap to start." \
       --exec omamobile-onboarding
     ;;
+  --fingerprint)
+    fp_enroll
+    ;;
   --inner)
-    echo "Welcome to Omarchy Mobile. Two quick steps."
+    echo "Welcome to Omarchy Mobile. A few quick steps."
     echo
     name=$(gum input --header "Your name" --placeholder "Ada Lovelace" --value "$(git config --global user.name)")
     email=$(gum input --header "Your email" --placeholder "ada@example.com" --value "$(git config --global user.email)")
@@ -54,13 +173,19 @@ case "${1:-}" in
     else
       omamobile-set-pin --inner
     fi
+    line=$(mobile_network_line)
+    if [[ -n $line ]]; then
+      echo
+      echo "$line"
+    fi
+    offer_fingerprint
     invite_agent
     ;;
   "")
     exec omarchy-launch-floating-terminal-with-presentation "omamobile-onboarding --inner"
     ;;
   *)
-    echo "Usage: omamobile-onboarding [--nudge]" >&2
+    echo "Usage: omamobile-onboarding [--nudge | --fingerprint]" >&2
     exit 1
     ;;
 esac

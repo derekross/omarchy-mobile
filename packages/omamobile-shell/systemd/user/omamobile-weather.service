@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: MIT
 # The current weather for the lock screen (~/.local/state/omamobile/weather.json),
 # one fetch per run, started by omamobile-weather.timer. Fetches nothing
-# until a place is set: omamobile-weather set CITY [F|C].
+# until a place is set: omamobile-weather set CITY [F|C]. A run at login or
+# on resume waits for the network for up to 75 s (GeoClue's fix can take
+# 20 s before that, and a try up to 20 s after), and gives up without
+# failing the unit when it doesn't come.
 [Unit]
 Description=Omarchy Mobile weather for the lock screen
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/omamobile-weather
-TimeoutStartSec=60
+TimeoutStartSec=150

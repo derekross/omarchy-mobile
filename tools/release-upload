@@ -1,0 +1,389 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Upload a finished, signed release bundle and its root image to
+# pkgs.omamobile.org/releases/<codename>/<version>/ (docs/RELEASES.md §6,
+# §11 step 8, §12.7). Maintainer only.
+#
+#   tools/release-upload [options] out/bundle/omamobile-<codename>-<version>
+#     --dry-run      check the bundle, then print the ssh and rsync commands
+#                    instead of running them
+#     --full         also download the root image (about 2.7 GB) and the
+#                    one-file .tar (about 2.8 GB) over HTTPS and hash them;
+#                    without it those two are checked by size, and by their
+#                    SHA-256 on the server before they go live
+#     --verify-only  upload nothing: check an already published version over
+#                    HTTPS against this bundle (it needs the bundle's local
+#                    .tar, .tar.sha256 and a good .tar.sha256.sig beside it,
+#                    so a version published before the .tar can't be checked)
+#     --latest       after a good upload (or --verify-only), point
+#                    releases/<codename>/latest.json at this version
+#     --allow-older  let --latest point at a version older than the current one
+#
+# What it does, in order; any failure stops it:
+#  1. Locally: SHA256SUMS.sig is a good signature by the release key
+#     (keys/fingerprint.release, which omamobile-keyring must trust and not
+#     revoke; checked against the keyring's public keys in this repository,
+#     never the bundle's own omamobile.gpg), every file matches SHA256SUMS,
+#     manifest.json is covered by it, lists exactly the bundle's files with
+#     their sizes and SHA-256, names this codename and version, gives
+#     https://pkgs.omamobile.org/releases/<codename>/<version>/ as its
+#     base_url, and names the root image beside the bundle (its .sha256 and
+#     .MANIFEST next to it), whose size and SHA-256 match. The one-file
+#     download beside it, omamobile-<codename>-<version>.tar: its .tar.sha256
+#     is one sha256sum line with a good signature by the release key
+#     (.tar.sha256.sig), the tar matches it, and (unless --verify-only) holds
+#     exactly the bundle directory and the root image's three files, each
+#     member byte for byte the file it stands for.
+#  2. On the server: refuses if releases/<codename>/<version> exists.
+#     Uploads the bundle's files, the root image's three files and the .tar
+#     with its .tar.sha256 and .tar.sha256.sig into one
+#     staging directory, releases/<codename>/.<version>.partial (an
+#     interrupted upload resumes there on the next run), checks them there
+#     with sha256sum (the .tar against its .tar.sha256 too), then renames it
+#     to <version> in one step, so a version
+#     directory is never seen half-written.
+#  3. Over HTTPS: every file manifest.json lists, the root image, its .sha256
+#     and .MANIFEST, manifest.json, SHA256SUMS, SHA256SUMS.sig and the .tar
+#     with its two files answer 200 with the right Content-Length (HEAD);
+#     every one but the root image and the .tar is downloaded and hashed
+#     (those two only with --full). Missing CORS
+#     headers are reported (tools/server/releases-nginx.sh adds them).
+#  4. With --latest: writes latest.json (codename, version, label, base_url,
+#     manifest.json's URL and SHA-256, the .tar's URL, size and SHA-256) to a
+#     temporary name and renames it
+#     into place, after the files it names are verified (files before the
+#     index).
+#
+# Server settings are tools/repo-publish's: OMAMOBILE_PKGS_HOST
+# (raven@nostr01.derekross.me), OMAMOBILE_PKGS_PORT (1022),
+# OMAMOBILE_PKGS_PATH (/var/www/html/pkgs.omamobile.org); the account must be
+# in `deployers`. OMAMOBILE_PKGS_URL (https://pkgs.omamobile.org) is where
+# it is read back.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+
+HOST=${OMAMOBILE_PKGS_HOST:-raven@nostr01.derekross.me}
+PORT=${OMAMOBILE_PKGS_PORT:-1022}
+DEST=${OMAMOBILE_PKGS_PATH:-/var/www/html/pkgs.omamobile.org}
+URL=${OMAMOBILE_PKGS_URL:-https://pkgs.omamobile.org}
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+warn() { printf '    \e[33mwarning:\e[0m %s\n' "$*" >&2; }
+die() { echo "release-upload: $*" >&2; exit 1; }
+
+dry=0 full=0 verify_only=0 latest=0 allow_older=0 bundle=""
+while (($#)); do
+  case $1 in
+    --dry-run) dry=1 ;;
+    --full) full=1 ;;
+    --verify-only) verify_only=1 ;;
+    --latest) latest=1 ;;
+    --allow-older) allow_older=1 ;;
+    -h|--help) sed -n '3,61p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) [[ -z $bundle ]] || die "one bundle at a time"; bundle=$1 ;;
+  esac
+  shift
+done
+[[ -n $bundle ]] || die "usage: tools/release-upload [--dry-run] [--full] [--verify-only] [--latest] out/bundle/omamobile-<codename>-<version>"
+for tool in gpg python3 sha256sum curl rsync ssh; do
+  command -v "$tool" >/dev/null || die "needs $tool"
+done
+bundle=${bundle%/}
+[[ -d $bundle ]] || die "no bundle directory $bundle"
+bundle=$(cd -- "$bundle" && pwd)
+out=$(dirname -- "$bundle")
+name=$(basename -- "$bundle")
+[[ $name =~ ^omamobile-([a-z0-9]+)-(20[0-9]{2}\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])(\.[1-9][0-9]*)?)$ ]] ||
+  die "$name is not a release bundle (omamobile-<codename>-<YYYY.MM.DD[.N]>, tools/make-bundle)"
+codename=${BASH_REMATCH[1]} version=${BASH_REMATCH[2]}
+base_url=$URL/releases/$codename/$version/
+
+# --- 1. The bundle, locally --------------------------------------------------
+say "Checking $name"
+for f in manifest.json SHA256SUMS SHA256SUMS.sig MANIFEST; do
+  [[ -f $bundle/$f ]] || die "the bundle has no $f"
+done
+
+fpr_file=$ROOT/keys/fingerprint.release
+keyring=$ROOT/packages/omamobile-keyring
+[[ -f $fpr_file ]] || die "no keys/fingerprint.release: only the maintainer's release key signs releases (RELEASES §10)"
+fpr=$(tr -d '[:space:]' < "$fpr_file")
+[[ $fpr =~ ^[0-9A-F]{40}$ ]] || die "keys/fingerprint.release does not hold a 40-digit fingerprint"
+cut -d: -f1 "$keyring/omamobile-trusted" | grep -cxF "$fpr" >/dev/null || die "omamobile-keyring does not trust the release key $fpr"
+if cut -d: -f1 "$keyring/omamobile-revoked" 2>/dev/null | grep -cxF "$fpr" >/dev/null; then
+  die "the release key $fpr is revoked in omamobile-keyring"
+fi
+tmp=$(mktemp -d)
+cleanup() { gpgconf --homedir "$tmp/gnupg" --kill gpg-agent 2>/dev/null || true; rm -rf "$tmp"; }
+trap cleanup EXIT
+mkdir -m 700 "$tmp/gnupg"
+gpg --homedir "$tmp/gnupg" -q --batch --import "$keyring/omamobile.gpg" 2>/dev/null || die "can't read $keyring/omamobile.gpg"
+status=$(gpg --homedir "$tmp/gnupg" --batch --status-fd 1 --verify "$bundle/SHA256SUMS.sig" "$bundle/SHA256SUMS" 2>/dev/null || true)
+grep -Eq "^\[GNUPG:\] VALIDSIG .* $fpr\$" <<<"$status" || die "SHA256SUMS.sig is not a good signature by the release key $fpr"
+note "SHA256SUMS signed by the release key $fpr"
+(cd "$bundle" && sha256sum -c --quiet --strict SHA256SUMS) || die "a bundle file doesn't match SHA256SUMS"
+grep -Eq '^[0-9a-f]{64} [ *](\./)?manifest\.json$' "$bundle/SHA256SUMS" || die "SHA256SUMS does not cover manifest.json"
+note "every file matches SHA256SUMS, manifest.json included"
+
+# manifest.json against the bundle, the name and the server; prints the root
+# image's name, size and SHA-256, then "path size sha256" for every file to
+# check over HTTPS.
+python3 -I - "$bundle" "$codename" "$version" "$base_url" > "$tmp/files" <<'PY' || die "manifest.json doesn't match the bundle"
+import hashlib, json, os, re, sys
+bundle, codename, version, base_url = sys.argv[1:5]
+def fail(msg):
+    print("    manifest.json: " + msg, file=sys.stderr)
+    sys.exit(1)
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+with open(os.path.join(bundle, "manifest.json")) as f:
+    m = json.load(f)
+if m.get("format") != 1:
+    fail("format %r, not 1" % m.get("format"))
+if m.get("device", {}).get("codename") != codename:
+    fail("is for %r, not %s" % (m.get("device", {}).get("codename"), codename))
+if m.get("version") != version:
+    fail("is version %r, not %s" % (m.get("version"), version))
+if m.get("base_url") != base_url:
+    fail("base_url is %r, not %s (tools/make-bundle --base-url)" % (m.get("base_url"), base_url))
+listed = {}
+for e in m.get("files", []):
+    p = e.get("path", "")
+    if not re.match(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", p) or p.startswith(".") or "/." in p:
+        fail("bad path %r" % p)
+    listed[p] = e
+actual = set()
+for top, dirs, names in os.walk(bundle):
+    for n in names:
+        rel = os.path.relpath(os.path.join(top, n), bundle)
+        if rel not in ("SHA256SUMS", "SHA256SUMS.sig", "manifest.json"):
+            actual.add(rel)
+if set(listed) != actual:
+    fail("lists %s, the bundle has %s" % (sorted(set(listed) - actual) or "nothing extra",
+                                          sorted(actual - set(listed)) or "nothing extra"))
+for p, e in sorted(listed.items()):
+    full = os.path.join(bundle, p)
+    if os.path.getsize(full) != e.get("size") or sha256(full) != e.get("sha256"):
+        fail("%s doesn't match its size and SHA-256" % p)
+r = m.get("root_image", {})
+rn = r.get("name", "")
+if not re.match(r"^omamobile-rootfs-[A-Za-z0-9._-]+-aarch64\.img\.zst$", rn) or codename not in rn:
+    fail("bad root image name %r" % rn)
+if rn in listed or rn.replace(".img.zst", ".MANIFEST") in listed or rn + ".sha256" in listed:
+    fail("the root image's names collide with a bundle file")
+if not isinstance(r.get("size"), int) or not re.match(r"^[0-9a-f]{64}$", r.get("sha256", "")):
+    fail("the root image has no size and SHA-256")
+print(rn, r["size"], r["sha256"])
+for p, e in sorted(listed.items()):
+    print(p, e["size"], e["sha256"])
+PY
+read -r root_name root_size root_sha < "$tmp/files"
+sed -i 1d "$tmp/files"
+note "manifest.json lists exactly the bundle's $(wc -l < "$tmp/files") files, for $codename $version at $base_url"
+root=$out/$root_name
+root_manifest=${root%.img.zst}.MANIFEST
+for f in "$root" "$root.sha256" "$root_manifest"; do
+  [[ -f $f ]] || die "no $f beside the bundle (tools/make-bundle puts it there)"
+done
+[[ $(stat -c %s "$root") == "$root_size" ]] || die "$root_name is not the size manifest.json gives"
+[[ $(cut -d' ' -f1 "$root.sha256") == "$root_sha" ]] || die "$root_name.sha256 doesn't give the SHA-256 manifest.json gives"
+grep -qxF "root image: $root_name ($root_sha)" "$bundle/MANIFEST" || die "the signed MANIFEST names a different root image"
+if ((verify_only == 0)); then
+  note "hashing $root_name ($((root_size / 1048576)) MiB)"
+  [[ $(sha256sum < "$root" | cut -d' ' -f1) == "$root_sha" ]] || die "$root_name doesn't match manifest.json"
+fi
+note "$root_name, .sha256 and .MANIFEST match"
+
+# The one-file download. It holds SHA256SUMS.sig, so SHA256SUMS can't list
+# it: its .tar.sha256 carries its own signature by the release key.
+tarname=$name.tar
+tarball=$out/$tarname
+for f in "$tarball" "$tarball.sha256" "$tarball.sha256.sig"; do
+  [[ -f $f ]] || die "no $f beside the bundle (tools/make-bundle writes it)"
+done
+status=$(gpg --homedir "$tmp/gnupg" --batch --status-fd 1 --verify "$tarball.sha256.sig" "$tarball.sha256" 2>/dev/null || true)
+grep -Eq "^\[GNUPG:\] VALIDSIG .* $fpr\$" <<<"$status" || die "$tarname.sha256.sig is not a good signature by the release key $fpr"
+tar_re=${tarname//./\\.}
+tar_pattern="^([0-9a-f]{64})  $tar_re\$"
+[[ $(wc -l < "$tarball.sha256") == 1 && $(cat "$tarball.sha256") =~ $tar_pattern ]] ||
+  die "$tarname.sha256 is not one '<sha256>  $tarname' line"
+tar_sha=${BASH_REMATCH[1]} tar_size=$(stat -c %s "$tarball")
+if grep -Ec "^$tar_re(\.sha256(\.sig)?)? " "$tmp/files" >/dev/null; then
+  die "a bundle file's name collides with $tarname or its checksum files"
+fi
+if ((verify_only == 0)); then
+  note "hashing $tarname ($((tar_size / 1048576)) MiB) and reading its members"
+  [[ $(sha256sum < "$tarball" | cut -d' ' -f1) == "$tar_sha" ]] || die "$tarname doesn't match its .tar.sha256"
+  # Every member is the file it stands for: the bundle's files (hashed here),
+  # the root image (its SHA-256 from manifest.json, checked above), its
+  # .sha256 and .MANIFEST; directories only the bundle's; nothing else.
+  python3 -I - "$tarball" "$bundle" "$name" "$root" "$root_sha" <<'PY' || die "$tarname doesn't hold exactly this bundle and its root image"
+import hashlib, os, sys, tarfile
+tarpath, bundle, name, root, root_sha = sys.argv[1:6]
+out = os.path.dirname(bundle)
+def fail(msg):
+    print("    " + os.path.basename(tarpath) + ": " + msg, file=sys.stderr)
+    sys.exit(1)
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+want, dirs = {}, {name}
+for top, ds, fs in os.walk(bundle):
+    for d in ds:
+        dirs.add(name + "/" + os.path.relpath(os.path.join(top, d), bundle))
+    for f in fs:
+        path = os.path.join(top, f)
+        want[name + "/" + os.path.relpath(path, bundle)] = sha256(path)
+rn = os.path.basename(root)
+want[rn] = root_sha
+for extra in (rn + ".sha256", rn[:-len(".img.zst")] + ".MANIFEST"):
+    want[extra] = sha256(os.path.join(out, extra))
+seen = set()
+with tarfile.open(tarpath, "r|") as t:
+    for m in t:
+        n = m.name[:-1] if m.name.endswith("/") else m.name
+        if n in seen:
+            fail("%s is in it twice" % n)
+        seen.add(n)
+        if m.isdir():
+            if n not in dirs:
+                fail("unexpected directory %s" % n)
+        elif m.isreg():
+            if n not in want:
+                fail("unexpected file %s" % n)
+            h = hashlib.sha256()
+            f = t.extractfile(m)
+            for b in iter(lambda: f.read(1 << 20), b""):
+                h.update(b)
+            if h.hexdigest() != want[n]:
+                fail("%s differs from the file it stands for" % n)
+        else:
+            fail("%s is not a plain file or directory" % n)
+missing = sorted((set(want) | dirs) - seen)
+if missing:
+    fail("lacks %s" % ", ".join(missing))
+PY
+  note "$tarname: signed .tar.sha256, and exactly the bundle and the root image's three files"
+else
+  note "$tarname.sha256 signed by the release key"
+fi
+# Everything checked over HTTPS: "path size sha256 local-file"
+{
+  while read -r p s h; do echo "$p $s $h $bundle/$p"; done < "$tmp/files"
+  for f in manifest.json SHA256SUMS SHA256SUMS.sig; do
+    echo "$f $(stat -c %s "$bundle/$f") $(sha256sum < "$bundle/$f" | cut -d' ' -f1) $bundle/$f"
+  done
+  for f in "$root.sha256" "$root_manifest"; do
+    echo "${f##*/} $(stat -c %s "$f") $(sha256sum < "$f" | cut -d' ' -f1) $f"
+  done
+  for f in "$tarball.sha256" "$tarball.sha256.sig"; do
+    echo "${f##*/} $(stat -c %s "$f") $(sha256sum < "$f" | cut -d' ' -f1) $f"
+  done
+  echo "$root_name $root_size $root_sha $root"
+  echo "$tarname $tar_size $tar_sha $tarball"
+} > "$tmp/check"
+
+# --- 2. The upload -------------------------------------------------------------
+q() { printf '%q' "$1"; }
+rel=releases/$codename
+remote_dir=$DEST/$rel
+final=$remote_dir/$version
+staging=$remote_dir/.$version.partial
+ssh_cmd=(ssh -p "$PORT" "$HOST")
+show() {  # print a command as it would be typed (no argument here holds a single quote)
+  local a line=""
+  for a in "$@"; do
+    if [[ $a =~ ^[A-Za-z0-9_./:=,@+%-]+$ ]]; then line+=" $a"; else line+=" '$a'"; fi
+  done
+  printf '   %s\n' "$line"
+}
+remote() {  # remote SHELL-COMMAND: run on the server, or print it in a dry run
+  if ((dry)); then show "${ssh_cmd[@]}" "$1"; else "${ssh_cmd[@]}" "$1"; fi
+}
+
+if ((verify_only == 0)); then
+  say "Uploading to $HOST:$final$( ((dry)) && echo ' (dry run: printing the commands)')"
+  remote "set -e; test ! -e $(q "$final") || { echo \"release-upload: $final exists; a published version is never overwritten\" >&2; exit 3; }; mkdir -p $(q "$staging") && test -w $(q "$staging")" ||
+    die "refusing: $final exists on the server, or $remote_dir is not writable (is the account in deployers?)"
+  # One rsync, so --delete keeps exactly these files in the staging directory
+  # (an interrupted upload resumes with --partial on the next run).
+  rs=(rsync -rt --omit-dir-times --chmod=D2775,F664 --partial --delete -e "ssh -p $PORT"
+      "$bundle/" "$root" "$root.sha256" "$root_manifest" "$tarball" "$tarball.sha256" "$tarball.sha256.sig"
+      "$HOST:$staging/")
+  if ((dry)); then show "${rs[@]}"; else "${rs[@]}" || die "rsync failed; run again to resume into $staging"; fi
+  # Check on the server, then make it visible in one rename
+  remote "set -e; cd $(q "$staging"); sha256sum -c --quiet --strict SHA256SUMS; sha256sum -c --quiet --strict $(q "$root_name.sha256"); grep -c ^$root_sha $(q "$root_name.sha256") >/dev/null; sha256sum -c --quiet --strict $(q "$tarname.sha256"); grep -c ^$tar_sha $(q "$tarname.sha256") >/dev/null; cd ..; test ! -e $(q "$version"); mv -T $(q ".$version.partial") $(q "$version")" ||
+    die "the upload didn't check out on the server (or $version appeared meanwhile); nothing was published. Staging is left in $staging"
+  ((dry)) || note "checked on the server and renamed into place"
+fi
+
+# --- 3. Over HTTPS ---------------------------------------------------------------
+head_of() { curl -sSfI --max-time 60 -H "Origin: https://omamobile.org" "$1" | tr -d '\r'; }
+header() { awk -v h="$1" 'tolower($1) == tolower(h) ":" { sub(/^[^:]*: */, ""); v = $0 } END { print v }'; }
+if ((dry)); then
+  say "Would check over HTTPS: $(wc -l < "$tmp/check") files under $base_url (HEAD for every size, a full hash for all but the root image and the .tar$( ((full)) && echo ', and those two too'))"
+else
+  say "Checking $base_url over HTTPS"
+  bad=0 cors=1
+  while read -r p s h f; do
+    hdr=$(head_of "$base_url$p") || { echo "    $p: not served" >&2; bad=1; continue; }
+    len=$(header content-length <<<"$hdr")
+    [[ $len == "$s" ]] || { echo "    $p: Content-Length ${len:-missing}, expected $s" >&2; bad=1; continue; }
+    [[ $(header access-control-allow-origin <<<"$hdr") == "*" ]] || cors=0
+    if [[ $p != "$root_name" && $p != "$tarname" ]] || ((full)); then
+      got=$(curl -sSf --max-time 0 "$base_url$p" | sha256sum | cut -d' ' -f1) || got=""
+      [[ $got == "$h" ]] || { echo "    $p: downloads with SHA-256 ${got:-none}, expected $h" >&2; bad=1; continue; }
+    fi
+  done < "$tmp/check"
+  ((bad == 0)) || die "the published files don't match; to withdraw this version: ssh -p $PORT $HOST rm -rf $(q "$final")"
+  note "$(wc -l < "$tmp/check") files served with the right sizes; all hashed$( ((full)) || echo " but $root_name and $tarname (--full hashes them)")"
+  ((cors)) || warn "no Access-Control-Allow-Origin: * on /releases/: a browser installer can't read these yet (tools/server/releases-nginx.sh)"
+fi
+
+# --- 4. latest.json ----------------------------------------------------------------
+if ((latest)); then
+  say "Pointing $URL/$rel/latest.json at $version"
+  label=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["label"])' "$bundle/manifest.json")
+  current=""
+  if ((dry == 0)); then
+    current=$(curl -sSf --max-time 60 "$URL/$rel/latest.json" 2>/dev/null |
+      python3 -I -c 'import json, sys; print(json.load(sys.stdin)["version"])' 2>/dev/null || true)
+  fi
+  if [[ -n $current && $current != "$version" ]] && ((allow_older == 0)) &&
+     [[ $(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1) == "$current" ]]; then
+    die "latest.json names $current, newer than $version (--allow-older to go back)"
+  fi
+  python3 -I - "$codename" "$version" "$label" "$base_url" "$(sha256sum < "$bundle/manifest.json" | cut -d' ' -f1)" \
+    "$tarname" "$tar_size" "$tar_sha" > "$tmp/latest.json" <<'PY'
+import json, sys
+codename, version, label, base_url, msum, tarname, tar_size, tar_sha = sys.argv[1:9]
+# The .tar, like everything here, is only a pointer: a download is checked
+# against the signed .tar.sha256, and the installer checks the signed
+# SHA256SUMS inside it
+json.dump({"format": 1, "codename": codename, "version": version, "label": label, "base_url": base_url,
+           "manifest": base_url + "manifest.json", "manifest_sha256": msum,
+           "bundle_tar": base_url + tarname, "bundle_tar_size": int(tar_size), "bundle_tar_sha256": tar_sha},
+          sys.stdout, indent=2, sort_keys=True)
+print()
+PY
+  rs=(rsync -t --chmod=F664 -e "ssh -p $PORT" "$tmp/latest.json" "$HOST:$remote_dir/.latest.json.new")
+  if ((dry)); then show "${rs[@]}"; else "${rs[@]}" || die "uploading latest.json failed"; fi
+  remote "set -e; test -d $(q "$final"); mv -f $(q "$remote_dir/.latest.json.new") $(q "$remote_dir/latest.json")" ||
+    die "renaming latest.json into place failed"
+  if ((dry == 0)); then
+    got=$(curl -sSf --max-time 60 "$URL/$rel/latest.json" | sha256sum | cut -d' ' -f1) || got=""
+    [[ $got == "$(sha256sum < "$tmp/latest.json" | cut -d' ' -f1)" ]] || die "$URL/$rel/latest.json doesn't serve what was uploaded"
+    note "latest.json: ${current:-nothing} -> $version"
+  fi
+fi
+say "Done: $base_url$( ((dry)) && echo ' (dry run, nothing uploaded)')"

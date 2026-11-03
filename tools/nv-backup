@@ -1,0 +1,353 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# nv-backup: a read-only backup of the phone's radio and calibration
+# partitions, from the running phone over USB SSH (tools/phone-ssh), into a
+# directory on this computer (AGENTS.md section 1, MODEM-PLAN M0.1,
+# docs/INSTALL.md "Back up the phone's radio partitions").
+#
+#   tools/nv-backup [-d CODENAME] DIR          take a new backup into DIR
+#   tools/nv-backup [-d CODENAME] --check DIR  compare the phone with a backup
+#   tools/nv-backup [-d CODENAME] --list       the partitions, from the
+#                                              descriptor (no phone)
+#
+# The partitions come from the device descriptor, never from this script:
+# NV_PARTS (the radio's NV and calibration partitions, which nothing on
+# Linux may change: --check fails when one differs) and NV_BACKUP_EXTRA
+# (copied too, for a full way back, but expected to change: cheetah's
+# devinfo holds the bootloader's slot flags, which change after a flash, a
+# fallback to slot A or the boot-success mark; --check only reports them). In a release bundle the descriptor is
+# its device.conf; in the repository device/<codename>/device.conf (-d,
+# default cheetah).
+#
+# A backup:
+#  1. reads the phone's /proc/device-tree/compatible and refuses a phone
+#     whose first string isn't the descriptor's COMPATIBLE;
+#  2. finds each partition by PARTNAME in /sys/class/block/*/uevent (the
+#     Arch root has no /dev/disk/by-partlabel) and refuses to start unless
+#     every one is found exactly once, is a block device, reads ro=1 (the
+#     storage guard holds) and is not mounted;
+#  3. copies each with dd from the read-only block device (dd opens its
+#     input read-only; nothing on the phone is opened for writing, and
+#     nothing there is written), in 8 MiB chunks over one shared SSH
+#     connection: one long stream over the USB link died partway on the 7 Pro
+#     (ssh exit 255), so each chunk's size is checked and a failed chunk is
+#     read again, up to 5 times, on a new connection. Then it checks the
+#     copy's size, reads the whole partition again on the phone and compares
+#     that SHA-256 with the copy's;
+#  4. finds the partitions again and refuses a backup if anything changed
+#     meanwhile (a partition writable, mounted or moved);
+#  5. writes SHA256SUMS ("<sha256>  NAME.img", the format tools/phone-provision
+#     --nv-backup reads), partitions.txt and NV-BACKUP (codename, date, which
+#     partitions are checked), the directory mode 700 and every file 600.
+# DIR must not exist yet, or be empty. A run that fails removes what it
+# wrote into DIR (and DIR, if it made it), so running it again is safe.
+# The backup holds the phone's IMEI, serial numbers and calibration: keep
+# it, never share it.
+#
+# --check DIR re-verifies a backup later (the AGENTS.md checksum check):
+# the local copies against SHA256SUMS (those present), then every NV_PARTS
+# partition on the phone against SHA256SUMS. It prints SAME or DIFFERENT for
+# each and exits 1 if any NV partition differs or can't be read. After a
+# stock Android boot they differ (stock's modem stack writes efs, persist and
+# modem_userdata): take a fresh backup into a new directory and keep both.
+#
+# Test seams: PHONE_SSH, the command that runs a shell command on the phone
+# (default tools/phone-ssh, with OMAMOBILE_SSH_SHARE=1 unless set), and
+# NV_PHONE_ROOT, a directory prefixed to every path read on the phone
+# (default none; a fake /sys, /proc and /dev tree in tests, whose stand-in
+# partitions are regular files); NV_CHUNK_BS and NV_CHUNK_BLOCKS, dd's block
+# size and blocks per chunk (default 1048576 and 8); NV_RETRY_DELAY, seconds
+# between tries (default 2).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+
+# Progress goes to stdout, and a closed stdout (| head, a tee that died)
+# must not stop a copy halfway: SIGPIPE is ignored and progress lines that
+# can't be written are dropped. The run stops only on its own checks.
+trap '' PIPE
+say() { printf '\e[1m==> %s\e[0m\n' "$*" 2>/dev/null || true; }
+note() { printf '    %s\n' "$*" 2>/dev/null || true; }
+die() { printf '\e[31mnv-backup:\e[0m %s\n' "$*" >&2; exit 1; }
+
+device="" mode=backup dir=""
+while (($#)); do
+  case $1 in
+    -d) device=${2:?}; shift ;;
+    --check) mode=check; dir=${2:?--check needs the backup directory}; shift ;;
+    --list) mode=list ;;
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "$ROOT/tools/nv-backup"; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) [[ -z $dir && $mode == backup ]] || die "one directory only"; dir=$1 ;;
+  esac
+  shift
+done
+[[ $mode == list || -n $dir ]] || die "usage: tools/nv-backup [-d CODENAME] DIR | --check DIR | --list"
+
+# The default runs through bash, so a bundle whose files lost their
+# execute bit in a download still works
+PHONE_SSH=${PHONE_SSH:-}
+R=${NV_PHONE_ROOT:-}
+[[ -z $R || $R =~ ^/[A-Za-z0-9_./-]+$ ]] || die "NV_PHONE_ROOT must be an absolute path of letters, digits and _ . / -"
+# One shared connection (ControlMaster) for the many chunk reads, so a key
+# that needs a touch asks once; a failed read drops it (phone_reset) and the
+# next try opens a new one.
+[[ -n $PHONE_SSH ]] || export OMAMOBILE_SSH_SHARE=${OMAMOBILE_SSH_SHARE:-1}
+phone() {
+  if [[ -n $PHONE_SSH ]]; then "$PHONE_SSH" "$@"; else bash "$ROOT/tools/phone-ssh" "$@"; fi
+}
+phone_reset() {
+  [[ -n $PHONE_SSH ]] || bash "$ROOT/tools/phone-ssh" --stop >/dev/null 2>&1 || true
+}
+chunk_bs=${NV_CHUNK_BS:-1048576} chunk_blocks=${NV_CHUNK_BLOCKS:-8} retry_delay=${NV_RETRY_DELAY:-2} tries=5
+[[ $chunk_bs =~ ^[1-9][0-9]*$ && $((chunk_bs % 512)) == 0 && $chunk_blocks =~ ^[1-9][0-9]*$ ]] ||
+  die "NV_CHUNK_BS is a multiple of 512 and NV_CHUNK_BLOCKS a positive number"
+[[ $retry_delay =~ ^[0-9]+$ ]] || die "NV_RETRY_DELAY is a number of seconds"
+
+# --- The descriptor: data, never sourced (docs/RELEASES.md section 3) --------
+if [[ -f $ROOT/device.conf && ! -d $ROOT/device ]]; then
+  conf=$ROOT/device.conf   # a release bundle: tools/ sits beside its device.conf
+else
+  conf=$ROOT/device/${device:-cheetah}/device.conf
+fi
+[[ -f $conf ]] || die "no device descriptor $conf"
+declare -A D=()
+quoted='^([A-Z][A-Z0-9_]*)="([^"$`\\]*)"$' bare='^([A-Z][A-Z0-9_]*)=([^"$`\\'"'"'[:space:]]*)$'
+n=0
+while IFS= read -r line || [[ -n $line ]]; do
+  n=$((n + 1))
+  [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+  [[ $line =~ $quoted || $line =~ $bare ]] || die "$conf:$n: not a KEY=value line"
+  D[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+done < "$conf"
+codename=${D[CODENAME]:-}
+[[ $codename =~ ^[a-z0-9]+$ ]] || die "$conf has no CODENAME"
+[[ -z $device || $device == "$codename" ]] || die "$conf is for $codename, not $device"
+nv_parts=${D[NV_PARTS]:-} extra_parts=${D[NV_BACKUP_EXTRA]:-}
+[[ -n $nv_parts ]] || die "$conf names no NV_PARTS: the radio partitions of $codename aren't known yet, so there is nothing to back up"
+compatible=${D[COMPATIBLE]:-}
+[[ -n $compatible ]] || die "$conf has no COMPATIBLE, so the phone can't be checked"
+[[ $compatible =~ ^[a-z0-9,._-]+$ ]] || die "$conf: COMPATIBLE is not a plain compatible string"
+parts=() seen=" "
+for p in $nv_parts $extra_parts; do
+  [[ $p =~ ^[a-z0-9_]+$ ]] || die "$conf: NV_PARTS and NV_BACKUP_EXTRA hold partition names ([a-z0-9_]), not $p"
+  [[ $seen != *" $p "* ]] || die "$conf: $p is named twice in NV_PARTS and NV_BACKUP_EXTRA"
+  # A partition the storage guard leaves writable is never radio data
+  [[ $p != userdata && " ${D[UFS_RW]:-} " != *" $p "* ]] ||
+    die "$conf: $p is on the storage guard's allowlist (UFS_RW); it can't be in NV_PARTS or NV_BACKUP_EXTRA"
+  seen+="$p "
+  parts+=("$p")
+done
+is_nv() { [[ " $nv_parts " == *" $1 "* ]]; }
+
+if [[ $mode == list ]]; then
+  echo "device: $codename ($conf)"
+  echo "checked (NV_PARTS): $nv_parts"
+  echo "copied, may change (NV_BACKUP_EXTRA): ${extra_parts:-none}"
+  exit 0
+fi
+
+# --- On the phone: find the partitions ----------------------------------------
+# One read-only shell command: the first string of the board's compatible,
+# then "name device type ro mounted bytes" for each partition (device none
+# when PARTNAME isn't found, many when it is found more than once). Every
+# name is [a-z0-9_] and R is checked above, so nothing here needs quoting.
+probe() {
+  phone "c=\$(tr '\\0' '\\n' < $R/proc/device-tree/compatible 2>/dev/null | head -1)
+echo \"compatible \${c:-none}\"
+for p in ${parts[*]}; do
+  m=\$(grep -lx \"PARTNAME=\$p\" $R/sys/class/block/*/uevent 2>/dev/null)
+  k=\$(printf '%s\\n' \"\$m\" | grep -c /)
+  if [ \"\$k\" = 0 ]; then echo \"\$p none - - - -\"; continue; fi
+  if [ \"\$k\" != 1 ]; then echo \"\$p many - - - -\"; continue; fi
+  d=\${m%/uevent}; d=\${d##*/}
+  t=other; if [ -b $R/dev/\$d ]; then t=block; elif [ -f $R/dev/\$d ]; then t=file; fi
+  s=\$(cat $R/sys/class/block/\$d/size 2>/dev/null)
+  echo \"\$p \$d \$t \$(cat $R/sys/class/block/\$d/ro 2>/dev/null || echo -) \$(grep -c \"^/dev/\$d \" $R/proc/mounts) \$((\${s:-0} * 512))\"
+done"
+}
+
+# Checks a probe's output; fills DEV[] and SIZE[]. Stops on any doubt.
+declare -A DEV=() SIZE=()
+check_probe() {
+  local out=$1 bad=() p d t ro mounted bytes want_type=block got
+  # Stand-in partitions under NV_PHONE_ROOT are regular files (tests)
+  [[ -z $R ]] || want_type=file
+  got=$(sed -n 's/^compatible //p' <<<"$out")
+  [[ $got == "$compatible" ]] ||
+    die "the phone is '${got:-unknown}', not $codename ($compatible): connect the $codename this backup is for"
+  for p in "${parts[@]}"; do
+    d="" t="" ro="" mounted="" bytes=""
+    read -r d t ro mounted bytes < <(awk -v p="$p" '$1 == p { print $2, $3, $4, $5, $6; exit }' <<<"$out") || true
+    if [[ -z ${d:-} || $d == none ]]; then bad+=("$p: not found by PARTNAME")
+    elif [[ $d == many ]]; then bad+=("$p: more than one partition has this PARTNAME")
+    elif [[ ! $d =~ ^[a-z0-9]+$ ]]; then bad+=("$p: unexpected device name $d")
+    elif [[ $t != "$want_type" ]]; then bad+=("$p: /dev/$d is not a block device")
+    elif [[ $ro != 1 ]]; then bad+=("$p: /dev/$d is writable (ro=$ro): the storage guard isn't holding")
+    elif [[ $mounted != 0 ]]; then bad+=("$p: /dev/$d is mounted")
+    elif [[ ! $bytes =~ ^[1-9][0-9]*$ ]]; then bad+=("$p: /dev/$d has no size")
+    else DEV[$p]=$d SIZE[$p]=$bytes
+    fi
+  done
+  if ((${#bad[@]})); then
+    printf '    %s\n' "${bad[@]}" >&2
+    die "not every partition is found, read-only and unmounted; nothing is kept. Don't work around this: ask in an issue"
+  fi
+}
+
+say "Finding the partitions on the phone ($codename)"
+probe_out=$(probe) || die "can't reach the phone over USB SSH (tools/phone-ssh 'uname -r' should answer)"
+check_probe "$probe_out"
+for p in "${parts[@]}"; do
+  note "$p: /dev/${DEV[$p]}, read-only, not mounted, $(( (SIZE[$p] + 1048575) / 1048576 )) MiB"
+done
+
+# The phone's own SHA-256 of a whole partition, read on the phone (small
+# output; retried like a chunk)
+phone_sha() {
+  local n out
+  for ((n = 1; n <= tries; n++)); do
+    out=$(phone "sha256sum < $R/dev/$1" | cut -d' ' -f1) || out=""
+    [[ $out =~ ^[0-9a-f]{64}$ ]] && { echo "$out"; return 0; }
+    phone_reset; sleep "$retry_delay"
+  done
+  return 1
+}
+
+# --- --check ---------------------------------------------------------------------
+if [[ $mode == check ]]; then
+  [[ -f $dir/SHA256SUMS ]] || die "no $dir/SHA256SUMS: is $dir a backup made by tools/nv-backup?"
+  if [[ -f $dir/NV-BACKUP ]]; then
+    made_for=$(sed -n 's/^device: //p' "$dir/NV-BACKUP")
+    [[ $made_for == "$codename" ]] || die "$dir is a backup of a ${made_for:-unknown device}, not $codename"
+  fi
+  say "Checking the copies in $dir"
+  for p in "${parts[@]}"; do
+    [[ -f $dir/$p.img ]] || continue
+    want=$(awk -v f="$p.img" '$2 == f { print $1 }' "$dir/SHA256SUMS")
+    [[ $(sha256sum < "$dir/$p.img" | cut -d' ' -f1) == "$want" ]] ||
+      die "$dir/$p.img doesn't match SHA256SUMS: this copy is damaged; take a new backup into a new directory"
+    note "$p.img matches SHA256SUMS"
+  done
+  say "Comparing the phone with $dir/SHA256SUMS"
+  differ=()
+  for p in "${parts[@]}"; do
+    want=$(grep -E "^[0-9a-f]{64}  $p\\.img\$" "$dir/SHA256SUMS" | cut -d' ' -f1 || true)
+    if [[ $(wc -w <<<"$want") != 1 ]]; then
+      is_nv "$p" || { note "$p: not in this backup (copied, may change)"; continue; }
+      die "$dir/SHA256SUMS needs one '<sha256>  $p.img' line"
+    fi
+    got=$(phone_sha "${DEV[$p]}") || got=""
+    [[ $got =~ ^[0-9a-f]{64}$ ]] || die "can't read $p on the phone"
+    if [[ $got == "$want" ]]; then
+      note "$p: SAME"
+    elif is_nv "$p"; then
+      note "$p: DIFFERENT"
+      differ+=("$p")
+    else
+      note "$p: different, as expected (its slot flags change after a flash, a fallback or the boot-success mark; copied for a full way back only)"
+    fi
+  done
+  if ((${#differ[@]})); then
+    die "${differ[*]} differ from the backup. After a stock Android boot (a fallback to slot A counts) that is expected: take a fresh backup into a new directory and keep both. Otherwise stop all radio work and ask"
+  fi
+  say "The phone's NV partitions match $dir"
+  exit 0
+fi
+
+# --- A new backup ----------------------------------------------------------------
+if [[ -e $dir ]]; then
+  [[ -d $dir && -z $(ls -A -- "$dir") ]] || die "$dir exists and isn't empty: give a new directory (an old backup is never overwritten)"
+  existed=1
+else
+  mkdir -p -- "$(dirname -- "$dir")"
+  mkdir -m 700 -- "$dir"
+  existed=0
+fi
+chmod 700 -- "$dir"
+umask 077
+# A failed run removes only what it wrote (and the directory, if it made
+# it), so running it again with the same DIR is safe
+made_dir=$((1 - existed))
+written=()
+cleanup_failed() {
+  local f
+  for f in "${written[@]}"; do rm -f -- "$f"; done
+  ((made_dir == 0)) || rmdir -- "$dir" 2>/dev/null || true
+}
+trap 'rc=$?; ((rc == 0)) || cleanup_failed' EXIT
+total=0
+for p in "${parts[@]}"; do total=$((total + SIZE[$p])); done
+say "Copying ${#parts[@]} partitions ($(( (total + 1048575) / 1048576 )) MiB) into $dir"
+sums=()
+for p in "${parts[@]}"; do
+  d=${DEV[$p]} img=$dir/$p.img part=$dir/.chunk
+  written+=("$img" "$part")
+  : > "$img"
+  chunk=$((chunk_bs * chunk_blocks)) size=${SIZE[$p]} retried=0
+  for ((off = 0; off < size; off += chunk)); do
+    want=$((size - off < chunk ? size - off : chunk))
+    for ((n = 1; ; n++)); do
+      # dd opens if= read-only; one chunk streams to this computer
+      if phone "dd if=$R/dev/$d bs=$chunk_bs skip=$((off / chunk_bs)) count=$chunk_blocks iflag=fullblock status=none" > "$part" &&
+         [[ $(stat -c %s -- "$part") == "$want" ]]; then
+        break
+      fi
+      ((n < tries)) || die "reading $p at byte $off failed $tries times; nothing is kept. Check the USB cable and run again; if it keeps happening, ask"
+      retried=$((retried + 1))
+      phone_reset; sleep "$retry_delay"
+    done
+    cat -- "$part" >> "$img"
+  done
+  rm -f -- "$part"
+  ((retried == 0)) || note "$p: $retried chunk read(s) failed and were read again"
+  got=$(stat -c %s -- "$img")
+  [[ $got == "$size" ]] || die "$p.img is $got bytes, the partition $size; nothing is kept: run again"
+  copy=$(sha256sum < "$img" | cut -d' ' -f1)
+  on_phone=$(phone_sha "$d") || die "can't read $p's SHA-256 on the phone; nothing is kept: run again"
+  [[ $on_phone == "$copy" ]] || die "$p.img differs from the phone's $p (read again on the phone); nothing is kept: run again; if it keeps happening, ask"
+  sums+=("$copy  $p.img")
+  note "$p.img: copied, verified against the phone"
+done
+
+# The same partitions, still read-only and unmounted, after the copy
+again=$(probe) || die "can't reach the phone after the copy; nothing is kept: run again"
+declare -A before=()
+for p in "${parts[@]}"; do before[$p]=${DEV[$p]}; done
+check_probe "$again"
+for p in "${parts[@]}"; do
+  [[ ${DEV[$p]} == "${before[$p]}" ]] || die "$p moved from /dev/${before[$p]} to /dev/${DEV[$p]} during the copy; nothing is kept: run again"
+done
+
+written+=("$dir/SHA256SUMS" "$dir/partitions.txt" "$dir/NV-BACKUP")
+printf '%s\n' "${sums[@]}" > "$dir/SHA256SUMS"
+{
+  for p in "${parts[@]}"; do echo "$p ${DEV[$p]} ro=1 mounted=0 ${SIZE[$p]}"; done
+} > "$dir/partitions.txt"
+{
+  echo "# tools/nv-backup: a read-only copy of the phone's radio and calibration partitions"
+  echo "device: $codename"
+  echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "checked: $nv_parts"
+  echo "copied, may change: ${extra_parts:-none}"
+} > "$dir/NV-BACKUP"
+chmod 700 -- "$dir"
+chmod 600 -- "$dir"/*
+(cd "$dir" && sha256sum -c --quiet --strict SHA256SUMS) || die "$dir doesn't check against its own SHA256SUMS"
+# Verified: from here on nothing may remove it (a closed stdout during the
+# banner below must not take a good backup with it)
+trap - EXIT
+
+say "Backup done: $dir"
+note "$(wc -l < "$dir/SHA256SUMS") partitions, each verified against the phone; SHA256SUMS, partitions.txt, NV-BACKUP"
+cat <<EOF
+
+  $(printf '\e[1;31mThis backup is private.\e[0m') It holds this phone's IMEI, serial numbers and
+  radio calibration, which can't be replaced. Keep it on storage only you
+  control (a second copy there is a good idea), and never share, post,
+  upload or attach it, not even in a bug report.
+
+  Next: tools/phone-provision --nv-backup $dir FACTORY.zip
+  Later: tools/nv-backup --check $dir compares the phone with it.
+  After any stock Android boot, take a new backup into a new directory.
+EOF

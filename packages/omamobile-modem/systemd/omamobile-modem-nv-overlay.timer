@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# Pulled in by omamobile-modem.service (Wants=) and stopped with it: the NV
+# overlay's capture every 30 minutes while the modem runs, the first one 10
+# minutes after the modem starts (after registration, when a carrier profile
+# has been applied). The capture at the modem's stop doesn't wait for this.
+[Unit]
+Description=Omarchy Mobile modem: periodic NV overlay capture
+PartOf=omamobile-modem.service
+
+[Timer]
+OnActiveSec=10min
+OnUnitActiveSec=30min
+AccuracySec=1min

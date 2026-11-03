@@ -92,6 +92,8 @@ def derive(status):
         plmn=m.get('plmn', '') if registered else '',
         operator_name=m.get('operator_name', '') if registered else '',
         home=reg == 'home',
+        # sitd's LTE RSRP as 0-100 while registered; "recent" while it has one.
+        signal=max(0, min(100, int(m.get('signal') or 0))) if registered else 0,
         emergency_numbers=list(m.get('emergency_numbers') or ('112', '911')),
     )
     return d
@@ -215,9 +217,9 @@ class Bridge:
                 CurrentCapabilities=mm.CAP_GSM_UMTS | mm.CAP_LTE, MaxBearers=1, MaxActiveBearers=1,
                 SupportedModes=[(mm.MODE_4G, mm.MODE_NONE)], CurrentModes=(mm.MODE_4G, mm.MODE_NONE),
                 SupportedBands=[mm.BAND_UNKNOWN], CurrentBands=[mm.BAND_UNKNOWN],
-                SupportedIpFamilies=mm.IP_V4 | mm.IP_V6 | mm.IP_V4V6, SignalQuality=(0, False))
+                SupportedIpFamilies=mm.IP_V4 | mm.IP_V6 | mm.IP_V4V6)
         if name == mm.MODEM_3GPP:
-            apn, ip_type = self.settings.get('apn', ''), self.settings.get('ip_type', 'ipv4v6')
+            apn, ip_type = self.apn_settings(attach=True)
             settings = {'apn': GLib.Variant('s', apn),
                         'ip-type': GLib.Variant('u', IP_TYPES.get(ip_type, mm.IP_V4V6))} if apn else {}
             return dict(InitialEpsBearerSettings=settings)
@@ -232,7 +234,7 @@ class Bridge:
             return dict(Sim=self.sim or '/', Bearers=[self.bearer] if self.bearer else [],
                         State=d['state'], StateFailedReason=d['failed'], UnlockRequired=d['unlock'],
                         UnlockRetries=d['retries'], PowerState=d['power'],
-                        AccessTechnologies=d['access'])
+                        AccessTechnologies=d['access'], SignalQuality=(d['signal'], d['signal'] > 0))
         if name == mm.MODEM_3GPP:
             return dict(RegistrationState=d['registration'], OperatorCode=d['plmn'],
                         OperatorName=d['operator_name'], PacketServiceState=d['packet'])
@@ -248,6 +250,27 @@ class Bridge:
             return dict(self.signal)
         return {}
 
+    def apn_settings(self, attach=False):
+        """The APN sitd's start-up used (sitd 0.3.29 reports it: typed, or
+        chosen from the SIM), else the config's value; "auto" is no APN.
+        attach: the initial attach APN (InitialEpsBearerSettings) instead of
+        the internet APN; the config's attach_apn, when empty, is the APN,
+        and "none" (no attach APN sent) leaves the settings empty."""
+        used = ((self.status or {}).get('modem') or {}).get('apn') or {}
+        known = isinstance(used, dict) and bool(used.get('source'))
+        if known:
+            apn = used.get('attach', '') if attach and 'attach' in used else used.get('value', '')
+        else:
+            apn = self.settings.get('apn', '')
+            if attach:
+                typed = self.settings.get('attach_apn', '')
+                apn = typed if typed and typed.lower() != 'auto' else apn
+        # "auto" is chosen from the SIM (no APN until sitd reports it);
+        # "none" (sitd 0.3.24+) means no initial attach APN is sent at all.
+        if apn.lower() in ('auto', 'none'):
+            apn = ''
+        return apn, self.settings.get('ip_type', 'ipv4v6')
+
     def create_sim(self, d):
         self.sim = self.path('SIM')
         self.x.add(self.sim, {mm.SIM: dict(Active=True, SimType=mm.SIM_TYPE_PHYSICAL,
@@ -262,7 +285,7 @@ class Bridge:
 
     def create_bearer(self, d):
         self.bearer = self.path('Bearer')
-        apn, ip_type = self.settings.get('apn', ''), self.settings.get('ip_type', 'ipv4v6')
+        apn, ip_type = self.apn_settings()
         self.x.add(self.bearer, {mm.BEARER: dict(
             Interface='rmnet0', Connected=d['data'], IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
             ProfileId=-1, Properties={'apn': GLib.Variant('s', apn),

@@ -1,9 +1,12 @@
 -- SPDX-License-Identifier: MIT
 -- Nested Hyprland that imitates the Pixel 7 Pro screen on a desktop.
--- 1440x3120 at scale 3 is 480x1040 logical; this window is 600x1300 at
--- scale 1.25, the same logical size, so layouts match the real phone.
+-- 1440x3120 at scale 3 is 480x1040 logical. run-desktop sizes this window
+-- to the screen, 6n x 13n at scale n/80 (600x1300 at 1.25 where it fits),
+-- the same logical size, so layouts match the real phone.
 
-hl.monitor({ output = "WAYLAND-1", mode = "600x1300", position = "0x0", scale = 1.25 })
+local mode = os.getenv("PHONE_DEV_MODE") or "600x1300"
+local scale = tonumber(os.getenv("PHONE_DEV_SCALE")) or 1.25
+hl.monitor({ output = "WAYLAND-1", mode = mode, position = "0x0", scale = scale })
 hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })
 
 -- Omarchy's theme colours for borders

@@ -16,7 +16,7 @@
 # cross-compiles instead (omatel's bin/cross).
 pkgname=omatel-agent
 pkgver=0.2.4
-pkgrel=1
+pkgrel=2
 pkgdesc="Phone and Messages background service: rings, call log, SMS storage, notifications"
 arch=(aarch64)
 url="https://github.com/derekross/omatel"

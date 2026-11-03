@@ -31,7 +31,9 @@ SIT_CONFIG = os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.co
 
 def sit_settings(path):
     """The APN and IP type from sitd's own config, for
-    Modem3gpp.InitialEpsBearerSettings and the bearer's properties."""
+    Modem3gpp.InitialEpsBearerSettings and the bearer's properties, until
+    sitd's status names the APN its start-up used ("auto" is chosen from
+    the SIM, so it is no APN here)."""
     parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read(path)
@@ -40,6 +42,7 @@ def sit_settings(path):
     if not parser.has_section('network'):
         return {}
     return dict(apn=parser['network'].get('apn', '').strip(),
+                attach_apn=parser['network'].get('attach_apn', '').strip(),
                 ip_type=parser['network'].get('ip_type', 'ipv4v6').strip())
 
 

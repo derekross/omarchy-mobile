@@ -12,9 +12,12 @@
 // bottom bar, and the bar draws its own.
 
 var VOXTYPE = "voxtype"
-// Voxtype stops a recording itself at max_duration_secs (Omarchy's config:
-// 60); the bar counts down to it.
+// Voxtype stops a recording itself at [audio] max_duration_secs (Omarchy's
+// config: 60); the bar counts down to it. Voice settings offers longer caps
+// (DURATIONS); the wait after Done grows with the recording, about a sixth
+// of its length with base.en on the 7 Pro.
 var MAX_SECONDS = 60
+var DURATIONS = [60, 120, 300, 600]
 // The model is the daemon's ([whisper] model): Voxtype ignores a
 // per-recording --model it hasn't prepared ("not in available models").
 // Since 0.2.63 that is Omarchy's base.en, with omamobile-setup-user cutting
@@ -264,10 +267,12 @@ function clock(seconds) {
   return m + ":" + (r < 10 ? "0" : "") + r
 }
 
-// The time at the top right: elapsed, and the cap once it is near.
-function elapsedText(seconds) {
+// The time at the top right: elapsed, and the cap (max, in seconds) once it
+// is near.
+function elapsedText(seconds, max) {
+  var cap = Math.max(1, Math.floor(Number(max) || MAX_SECONDS))
   var s = Math.max(0, Math.floor(Number(seconds) || 0))
-  if (s >= MAX_SECONDS - 10) return clock(Math.min(s, MAX_SECONDS)) + " · stops at " + clock(MAX_SECONDS)
+  if (s >= cap - 10) return clock(Math.min(s, cap)) + " · stops at " + clock(cap)
   return clock(s)
 }
 
@@ -276,7 +281,7 @@ function statusText(phase) {
   switch (phase) {
   case "starting": return "starting"
   case "listening": return "listening"
-  case "transcribing": return "turning it into text"
+  case "transcribing": return "transcribing"
   default: return ""
   }
 }
@@ -410,6 +415,39 @@ function configModel(text) {
   return "base.en"
 }
 
+// The recording cap from the user's voxtype config.toml: [audio]'s
+// `max_duration_secs = N`, or Omarchy's 60.
+function configMaxSeconds(text) {
+  var lines = String(text || "").split("\n")
+  var section = ""
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim()
+    var sec = line.match(/^\[([^\]]+)\]$/)
+    if (sec) { section = sec[1].trim(); continue }
+    if (section !== "audio") continue
+    var m = line.match(/^max_duration_secs\s*=\s*(\d+)/)
+    if (m) return Number(m[1])
+  }
+  return MAX_SECONDS
+}
+
+// The rows of "Longest recording": each cap, its words, and whether it is
+// the one in use.
+function durationRows(current) {
+  return DURATIONS.map(function(s) {
+    var min = s / 60
+    return { seconds: s, name: min + (min === 1 ? " minute" : " minutes"),
+             line: s === MAX_SECONDS ? "Omarchy's default" : "a longer wait for the text after Done",
+             chosen: s === current }
+  })
+}
+
+// Sets the cap in the user's voxtype config; the daemon reads it at start.
+function durationArgv(seconds) {
+  return ["sh", "-c", 'voxtype config set audio.max_duration_secs "$1" && exec systemctl --user try-restart voxtype.service',
+          "sh", String(Math.floor(Number(seconds) || MAX_SECONDS))]
+}
+
 // The model files present in Voxtype's models directory (one name a line).
 function installedModels(listing) {
   var out = []
@@ -470,7 +508,7 @@ function ticks(was, now) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    VOXTYPE: VOXTYPE, MAX_SECONDS: MAX_SECONDS, TRANSCRIPT_NAME: TRANSCRIPT_NAME, HOLD_MS: HOLD_MS,
+    VOXTYPE: VOXTYPE, MAX_SECONDS: MAX_SECONDS, DURATIONS: DURATIONS, TRANSCRIPT_NAME: TRANSCRIPT_NAME, HOLD_MS: HOLD_MS,
     LEVEL_BARS: LEVEL_BARS, STOP_ARGV: STOP_ARGV, CANCEL_ARGV: CANCEL_ARGV, NOTHING_HEARD: NOTHING_HEARD,
     startArgv: startArgv, transcriptPath: transcriptPath, voxState: voxState, step: step,
     cleanTranscript: cleanTranscript, releaseStops: releaseStops,
@@ -482,7 +520,8 @@ if (typeof module !== "undefined") {
     themeWarning: themeWarning, SETTINGS_VERSION: SETTINGS_VERSION, DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     SETTING_KEYS: SETTING_KEYS, defaultSettings: defaultSettings, parseSettings: parseSettings,
     withSetting: withSetting, serializeSettings: serializeSettings, MODELS: MODELS, modelFile: modelFile,
-    configModel: configModel, installedModels: installedModels, modelRows: modelRows,
+    configModel: configModel, configMaxSeconds: configMaxSeconds, durationRows: durationRows,
+    durationArgv: durationArgv, installedModels: installedModels, modelRows: modelRows,
     downloadArgv: downloadArgv, switchArgv: switchArgv, parseProgress: parseProgress,
     HAPTIC_ARGV: HAPTIC_ARGV, ticks: ticks, DELIVERED_MS: DELIVERED_MS, PREVIEW_ARGV: PREVIEW_ARGV,
     parsePartial: parsePartial, partialTail: partialTail, previewRuns: previewRuns, liveLine: liveLine
