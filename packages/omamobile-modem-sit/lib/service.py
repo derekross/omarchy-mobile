@@ -274,7 +274,9 @@ class Service:
             # in the status's audio error, as with [audio] card = none.
             try:
                 self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
-                                        earpiece=audio.getboolean('earpiece', True))
+                                        earpiece=audio.getboolean('earpiece', True),
+                                        tegu_route=audio.get('tegu_route', 'speaker'),
+                                        tegu_aec=audio.getboolean('tegu_aec', False))
                 self.audio.__enter__()
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 self.audio = None
