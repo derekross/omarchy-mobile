@@ -1,23 +1,63 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Every package's own tests (packages/*/test/all), one after another, with a
-# summary at the end; CI runs it on every pull request. Each suite skips
-# what its machine can't run (no qmllint, no Docker, no phone) by itself.
+# Every package's own tests (packages/*/test/all), with a summary at the
+# end; CI runs it on every pull request. Each suite skips what its machine
+# can't run (no qmllint, no Docker, no phone) by itself.
+#
+# The suites run side by side, up to OMAMOBILE_TEST_JOBS at once (default:
+# the CPUs, at most 8; 1 runs them one after another as before), the slow
+# ones first, since three of them (audio, shell, modem-sit) took three
+# quarters of CI's time when run in a row. Each suite's output is kept
+# together and printed when it ends, with its ok or not ok line.
 #
 #   tests/packages [NAME...]     (default: every package with test/all)
 set -uo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 if (($#)); then names=("$@"); else
+  # The slowest first, so the run isn't left waiting on one at the end.
   names=()
-  for t in packages/*/test/all; do names+=("$(basename "$(dirname "$(dirname "$t")")")"); done
+  for n in omamobile-audio omamobile-shell omamobile-modem-sit; do
+    [[ -x packages/$n/test/all ]] && names+=("$n")
+  done
+  for t in packages/*/test/all; do
+    n=$(basename "$(dirname "$(dirname "$t")")")
+    [[ " ${names[*]} " == *" $n "* ]] || names+=("$n")
+  done
 fi
+jobs=${OMAMOBILE_TEST_JOBS:-$(nproc 2>/dev/null || echo 1)}
+((jobs > 8)) && jobs=8
+((jobs < 1)) && jobs=1
+out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 failed=()
+
+# One suite, its output to $out/NAME.log and its result to $out/NAME.rc.
+run() {
+  local n=$1 t=packages/$1/test/all
+  if [[ ! -x $t ]]; then echo "not ok - $n has no test/all" > "$out/$n.log"; echo 1 > "$out/$n.rc"; return; fi
+  { echo "# $n"; "$t"; } > "$out/$n.log" 2>&1
+  echo $? > "$out/$n.rc"
+}
+# Print the suites that have ended, each in one piece.
+report() {
+  local f n rc
+  for f in "$out"/*.rc; do
+    [[ -e $f ]] || continue
+    n=$(basename "$f" .rc); rc=$(<"$f")
+    cat "$out/$n.log"
+    if [[ $rc == 0 ]]; then echo "ok - $n"; else echo "not ok - $n"; failed+=("$n"); fi
+    rm -f "$f" "$out/$n.log"
+  done
+}
+
+running=0
 for n in "${names[@]}"; do
-  t=packages/$n/test/all
-  [[ -x $t ]] || { echo "not ok - $n has no test/all"; failed+=("$n"); continue; }
-  echo "# $n"
-  if "$t"; then echo "ok - $n"; else echo "not ok - $n"; failed+=("$n"); fi
+  if ((running >= jobs)); then wait -n; running=$((running - 1)); report; fi
+  run "$n" &
+  running=$((running + 1))
 done
+wait
+report
+
 if ((${#failed[@]})); then
   echo "failed: ${failed[*]}" >&2
   exit 1
