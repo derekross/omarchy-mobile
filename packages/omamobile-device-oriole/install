@@ -6,7 +6,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
 build=${2:-build}
 [[ $destination == /* && $destination != / ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
-for tool in omamobile-bootctl reboot-to; do
+for tool in reboot-to; do
   install -Dm755 "$build/$tool" "$destination/usr/bin/$tool"
 done
 for tool in omamobile-setup-system; do
@@ -18,7 +18,8 @@ done < <(find vendor -type f -print0)
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/etc/${file#config/}"
 done < <(find config -type f -print0)
-for file in LICENSE LICENSE.Apache-2.0; do
+install -Dm644 etc/omamobile-mirrorlist "$destination/etc/pacman.d/omamobile-mirrorlist"
+for file in LICENSE; do
   install -Dm644 "$file" "$destination/usr/share/licenses/omamobile-device-oriole/$file"
 done
 install -Dm644 version "$destination/usr/share/omamobile/device-oriole/version"

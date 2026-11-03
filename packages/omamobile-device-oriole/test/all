@@ -5,32 +5,17 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 ./build "$t/build"
-python3 - "$t/devinfo" <<'PY'
-import struct, sys
-data = bytearray(8192)
-data[:4] = b'DEVI'
-struct.pack_into('<HH', data, 4, 3, 15)
-data[0x30:0x34] = bytes([2, 0x0a, 0, 0])
-data[0x34:0x38] = bytes([1, 0x04, 0, 0])
-open(sys.argv[1], 'wb').write(data)
-PY
-cp "$t/devinfo" "$t/original"
-"$t/build/omamobile-bootctl" dump "$t/devinfo" > "$t/dump"
-grep -q 'version: 3.15' "$t/dump"
-"$t/build/omamobile-bootctl" mark-successful "$t/devinfo" b > "$t/plan" 2>&1 || true
-grep -q '0x35: 04 -> 06' "$t/plan"
-cmp "$t/devinfo" "$t/original"
-echo 'ok - helpers compile; boot-control dry run leaves the synthetic partition unchanged'
+echo 'ok - reboot helper compiles'
 ./install "$t/root" "$t/build"
-for file in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-setup-system \
+for file in usr/bin/reboot-to usr/bin/omamobile-setup-system \
   usr/lib/udev/rules.d/10-omamobile-storage.rules \
   usr/lib/systemd/network/20-usb-gadget.network \
   usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
   usr/lib/systemd/sleep.conf.d/20-omamobile-unqualified-sleep.conf \
   etc/UPower/UPower.conf.d/20-omamobile-critical-power.conf \
   usr/lib/modprobe.d/omamobile-oriole-bringup.conf \
-  usr/share/licenses/omamobile-device-oriole/LICENSE \
-  usr/share/licenses/omamobile-device-oriole/LICENSE.Apache-2.0; do
+  etc/pacman.d/omamobile-mirrorlist \
+  usr/share/licenses/omamobile-device-oriole/LICENSE; do
   test -f "$t/root/$file"
 done
 test ! -d "$t/root/usr/lib/systemd/system/multi-user.target.wants"
@@ -66,3 +51,11 @@ for mode in ('Suspend', 'Hibernation', 'SuspendThenHibernate', 'HybridSleep'):
 assert not list(root.rglob('*.service'))
 print('ok - coldplug refusals, disabled sleep modes and no service units')
 PY_POLICY
+
+# Copied policy and helper must track the source package when present.
+for file in src/reboot-to.c vendor/udev/rules.d/10-omamobile-storage.rules vendor/NetworkManager/conf.d/10-omamobile-usb.conf; do
+  if [[ -f ../omamobile-device-cheetah/$file ]]; then
+    cmp "$file" "../omamobile-device-cheetah/$file"
+  fi
+done
+test ! -e "$t/root/usr/bin/omamobile-bootctl"

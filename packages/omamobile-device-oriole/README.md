@@ -16,15 +16,20 @@ networkd activation are also external prerequisites. USB has fallback metric
 All four sleep modes are disabled. UPower selects PowerOff on critical
 battery. Coldplug blocks alias and explicit modprobe for clk_acpm,
 max77759_charger, gpio_max77759, arm_dsu_pmu, at24 and max17042_battery.
-These six names follow the recovered Oriole ROOTFS-PLAN coldplug audit;
-this package makes no claim that the underlying hardware is qualified.
+A read-only coldplug audit found matching unbound devices and confirmed that
+modprobe dry runs refused these modules; it did not load them or establish
+their behavior. This package does not qualify the underlying hardware.
 Built-in drivers are outside modprobe policy.
 
 No battery startup, staged boot checker, automatic boot-success, radio,
-charging or GS201 hardware services are included. Boot-control writes require
-an explicit flag and separate human authorization. No phone testing was
+charging or GS201 hardware services are included. Boot-control tooling is omitted while slot marking remains on hold. No phone testing was
 performed for this package; exact-branch boot remains unqualified.
 
-Run test/all for a native helper build, synthetic boot-control dry run and
-staged installation checks. Do not install on a phone without a separate
-device-specific, watchdog-protected qualification gate and rollback.
+The PowerOff action has not been qualified for oriole; Linux power-off on other
+Pixels can restart instead.
+
+Run test/all for a native helper build and
+staged installation checks. The local integration package 0.1.9-2 is newer, so pacman will not
+automatically upgrade it to this package. That integration package carries
+boot and battery safeguards absent here. Replacing it requires a separately
+qualified migration and rollback; do not remove it as a routine upgrade.
