@@ -60,7 +60,18 @@ Every rule here exists because breaking it either bricks a phone or loses data n
 - **Qualcomm A/B phones (Pixel 4 family) store the slot flags in the partition table** (GPT attributes), and flashing `boot_b` clears `slot-successful:b`. Marking slot B bootable means writing four GPT sectors on the boot LUN, which the storage guard can't block. It is allowed only as a narrow, per-device exception, written into this section before it is used: the device, the LUN, the sectors (LBAs 1, 2, last-1 and last), the attribute bit and the CRCs it rewrites. The device's plan records the slot flags before and after, the rollback for a corrupted GPT, and the way back (stock restored on slot A first, or the owner's written acceptance of buttons-only recovery). It runs by hand, once per install of slot B's boot image, never from a service or at boot. No device has an entry yet.
 - **Never relock the bootloader** (`fastboot flashing lock`) while any non-stock image is on the phone.
 - **Never flash a factory image older than the one installed.** Pixels enforce bootloader anti-rollback.
-- Before your first flash, check that both slots carry the same bootloader version (`fastboot getvar all`). If they don't, stop and ask in an issue.
+- Before your first flash, check that both slots carry the same bootloader version (`fastboot getvar all`). If they don't, never flash a bootloader partition to fix it: from stock Android, sideload the full OTA for your build twice, so each slot gets the same build. If that doesn't make them match, stop and ask in an issue.
+
+#### Phones without A/B slots
+
+Keeping stock on slot A is how we avoid bricking phones during development, not a requirement for every phone. A phone with a single set of boot partitions (no `_a`/`_b` names) can become a supported device. With no second slot, a failed boot can't fall back to stock, so these rules replace the slot B rules above for that phone:
+
+- **The device's entry comes first.** Before any flash, the port adds its phone here: the codename, the boot partitions the installer writes (normally `boot` alone, plus `dtbo` or `vendor_boot` where the phone needs them), and how to reach fastboot or the vendor's download mode by the buttons. A device PR never writes its own exception into AGENTS.md or this file.
+- **We write only the boot partitions the entry names, and `userdata`.** Through `bin/omamobile flash`/`push` and `tools/install-phone`, with the serial pinned, the codename typed, the allowlist checked and a dry run first. No tool may write a partition named on its command line, and nothing is written from a rooted stock Android, where the storage guard doesn't run.
+- **A full read-only backup before the first flash,** of every partition except `userdata` and `super`, checked against checksums taken on the phone, stored outside the repository (§3.3). It includes stock's boot partitions, which are the way back: the device's notes say how to write them back by the buttons, step by step, and the owner reads that before the first flash.
+- **The storage guard works the same way:** every other partition read-only from the first moment, the allowlist by name. Partitions that hold calibration or identity (`persist`, `modemst*`, `fsg`, `efs` or the phone's equivalents) are never mounted. Read the files you need with `debugfs` or from the backup.
+- **The initramfs's no-USB-host panic needs a review for the phone.** On an A/B phone it hands over to stock on slot A; on a single-slot phone it would restart into the same image. The device's descriptor and plan say what happens instead (stay up with the screen lit, or reboot into fastboot) before the first boot.
+- **Everything else in this section still applies:** never relock with a non-stock image, never flash an older factory image, the backup rules, the hang safety nets.
 
 ### 3.2 The read-only storage guard
 
