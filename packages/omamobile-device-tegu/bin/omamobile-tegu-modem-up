@@ -31,6 +31,9 @@ set -euo pipefail
 # The overrides are for test/modem-up's scratch root only.
 B=${OMAMOBILE_MODEM_MODULES:-/var/lib/omamobile-tegu/modem}
 LATCH=${OMAMOBILE_MODEM_LATCH:-/var/lib/omamobile/modem-bringup-started}
+# reboot-to notes the boot it ends here (#403): it skips systemd's shutdown,
+# and so the clean stop that removes the latch.
+NOTE=${OMAMOBILE_DELIBERATE_RESTART:-/var/lib/omamobile/deliberate-restart}
 CP_STATE=${OMAMOBILE_MODEM_CP:-/usr/lib/omamobile-vendor/omamobile-modem-cp}
 CHROOT=${OMAMOBILE_VENDOR_CHROOT:-/usr/lib/omamobile-vendor/omamobile-vendor-chroot}
 SYS=${OMAMOBILE_SYS:-/sys}
@@ -67,6 +70,17 @@ fi
 if [[ -d $SYS/module/cpif ]]; then
   say "CPIF was loaded earlier this boot; reboot before starting the modem again"; exit 1
 fi
+boot_id() { cat "${OMAMOBILE_BOOT_ID:-/proc/sys/kernel/random/boot_id}"; }
+# A latch from a boot that reached ONLINE and then ended with reboot-to (a
+# push, a reboot to the bootloader) ended on purpose, not in a hang or a
+# reset: clear it with the note. A start that never reached ONLINE, or a
+# note naming another boot, still refuses.
+if [[ -e $LATCH && -s $NOTE ]] && grep -qx "online" "$LATCH" &&
+   grep -q "boot $(head -c 64 "$NOTE" | tr -d '\n')\$" "$LATCH"; then
+  say "the last boot with the modem up ended with reboot-to: $LATCH removed"
+  rm -f "$LATCH" "$NOTE"
+  sync
+fi
 if [[ -e $LATCH ]]; then
   say "an earlier start never reached ONLINE, or its boot didn't shut down cleanly ($LATCH, $(cat "$LATCH" 2>/dev/null)): look at /var/log/omamobile/modem.log and the last boot's journal, then remove it to try again"
   exit 1
@@ -92,7 +106,7 @@ systemctl is-active -q omamobile-tegu-modem-nosleep ||
     --why="suspend with the modem up isn't qualified on the Pixel 9a" --mode=block sleep infinity
 
 mkdir -p "$(dirname "$LATCH")" "$LOG"
-date -Is > "$LATCH"; sync "$LATCH" 2>/dev/null || sync
+printf '%s boot %s\n' "$(date -Is)" "$(boot_id)" > "$LATCH"; sync "$LATCH" 2>/dev/null || sync
 
 if ((in_tree)); then
   say "drivers: the running kernel's"
@@ -137,5 +151,6 @@ if ! $CP_STATE wait-online 60 >/dev/null 2>&1; then
   say "modem not ONLINE ($s); see /var/log/omamobile/modem.log. The latch stays: reboot, read the log, then remove $LATCH"
   exit 1
 fi
+echo online >> "$LATCH"; sync "$LATCH" 2>/dev/null || sync
 say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log); the latch stays until a clean shutdown"
 phone_up
