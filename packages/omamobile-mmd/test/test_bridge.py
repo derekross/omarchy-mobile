@@ -40,6 +40,12 @@ class Derive(unittest.TestCase):
             d = bridge.derive(status)
             self.assertEqual((d['state'], d['failed']), (state, failed), status['modem']['sim'])
 
+    def test_signal_only_while_registered_and_clamped(self):
+        self.assertEqual(bridge.derive(registered_status(signal=32))['signal'], 32)
+        self.assertEqual(bridge.derive(registered_status(signal=250))['signal'], 100)
+        self.assertEqual(bridge.derive(registered_status(signal=None))['signal'], 0)
+        self.assertEqual(bridge.derive(blank_status(sim='ready', radio='on', signal=40))['signal'], 0)
+
     def test_details(self):
         d = bridge.derive(blank_status(sim='pin'))
         self.assertEqual((d['unlock'], d['emergency_only'], d['sim_object'], d['interfaces']),

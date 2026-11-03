@@ -22,6 +22,11 @@ def nr_mode(client, restore=False):
             raise RuntimeError('invalid saved NR mode')
     else:
         if SAVED_NR.exists():
+            # An earlier start-up on this CP (sitd started again in the same
+            # boot) already set mode 0 and kept the original: nothing to do.
+            if current == b'\0':
+                print('verified NR mode 0 (set by an earlier start-up this boot)', flush=True)
+                return
             raise RuntimeError('NR experiment already active')
         private_write(SAVED_NR, current)
         target = b'\0'
