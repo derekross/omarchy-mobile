@@ -1,7 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): Bluetooth
 
-Status (2026-10-27): **Bluetooth works**, at every boot since kernel #6 v2's
+Status (2026-11-03): **pairing and A2DP audio work** (B4): a speaker paired
+from the phone's menu played clean, crackling only while Wi-Fi carried
+traffic at the same time, and reconnected after reboots; the chip came up
+silent after one of seven clean reboots, the one that followed heavy Wi-Fi and
+Bluetooth use (#77), and a forced restart recovered it.
+Earlier status (2026-10-27): **Bluetooth works**, at every boot since kernel #6 v2's
 CMU_APM mux fix (POWER-PLAN R4b, `g1de37d2bef30` and later; linux #6, merged).
 The B3 outage below followed kernels whose `assigned-clock-parents` override
 set a reserved bit in the always-on CMU_APM; GrapheneOS's Bluetooth came up
@@ -372,3 +377,37 @@ points at the reset sequence rather than at one bad register: next, hold
 BT_REG_ON low longer before power-up (hci_bcm's `power_on_delay_ms` is
 30 ms for the BCM4389; stock's "big hammer" is 100 ms), and a boot-time
 retry that power-cycles the controller as Android does.
+
+**B4: pairing, audio and clean reboots (2026-11-03, `ge1e6adb69bbf`,
+device-raven 0.1.30, BlueZ and PipeWire from the root image).** A speaker
+paired from the phone's own Bluetooth menu (paired, bonded, trusted),
+connected as an A2DP sink (SBC) and became the default output; tones and
+music played. Music from a local file played clean. While Wi-Fi carried a
+stream at the same time (internet radio), the sound crackled in bursts,
+and a 4x larger PipeWire buffer (`clock.force-quantum` 4096) didn't help;
+Wi-Fi was on 5 GHz (channel 40, 160 MHz), so this points at the shared
+BCM4389 dividing its time between Wi-Fi and Bluetooth rather than at the
+UART (3 Mbaud, `max-speed`). PipeWire logged "Missing completion reports
+for packet: Bluetooth adapter firmware bug?" during those runs.
+
+Clean reboots (`systemctl reboot`) that day:
+
+| Before the reboot | Bluetooth after it |
+| --- | --- |
+| 28 min up, music streamed over Wi-Fi (crackling) | silent: `0xfc18` timed out, `BCM: Reset failed (-110)`, twice |
+| Bluetooth on, idle (3 reboots) | up on the first command, speaker reconnected |
+| a minute of music from a local file (3 reboots) | up on the first command, speaker reconnected |
+
+Four `reboot-to` restarts earlier the same day (no shutdown) all brought
+it up. The silent chip came back after a forced restart (Power about 30 s:
+the first `0xfc18` timed out, the driver's retry after a reset answered),
+and the paired speaker reconnected on its own. The serdev `hci_bcm`
+driver has no shutdown hook, so nothing in the kernel touches BT_REG_ON at
+a reboot, and bluetoothd only unregistered its media endpoints as it
+stopped; every one of the seven clean shutdowns also ended with
+`omamobile-modem` killed after its stop timeout, so that isn't the trigger
+either. One silent chip in seven clean reboots, not reproduced on demand;
+the one difference left is Wi-Fi and Bluetooth both busy before the
+shutdown. Next: reboot right after streaming over Wi-Fi to the speaker,
+and if it reproduces, B3's longer BT_REG_ON hold (100 ms) and a boot-time
+power-cycle retry. Issue #77.
