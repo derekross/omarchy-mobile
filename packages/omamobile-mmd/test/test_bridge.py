@@ -22,6 +22,30 @@ def call(sid, state, direction='incoming', number=SENDER, reason=''):
                 multiparty=False, since=0)
 
 
+class ApnSettings(unittest.TestCase):
+    """The APN shown on the bearer: the one sitd's start-up used, else the
+    config's; "auto" (chosen from the SIM) is never shown as an APN."""
+    def apn(self, settings, used=None, attach=False):
+        b = bridge.Bridge(None, None, settings)
+        b.status = dict(modem=dict(apn=used)) if used is not None else None
+        return b.apn_settings(attach=attach)[0]
+
+    def test_attach(self):
+        used = dict(value='vzwinternet', source='override', attach='ims', attach_source='override')
+        self.assertEqual(self.apn(dict(apn='auto'), used, attach=True), 'ims')
+        self.assertEqual(self.apn(dict(apn='auto'), used), 'vzwinternet')
+        self.assertEqual(self.apn(dict(apn='internet.example', attach_apn='auto'), attach=True), 'internet.example')
+        self.assertEqual(self.apn(dict(apn='internet.example', attach_apn='ims'), attach=True), 'ims')
+
+    def test_sources(self):
+        self.assertEqual(self.apn(dict(apn='internet.example')), 'internet.example')
+        self.assertEqual(self.apn(dict(apn='auto')), '')
+        self.assertEqual(self.apn(dict(apn='auto'), dict(value='vzwinternet', source='override')), 'vzwinternet')
+        self.assertEqual(self.apn(dict(apn='auto'), dict(value='', source='none')), '')
+        # Before start-up has chosen (source empty), the config's value.
+        self.assertEqual(self.apn(dict(apn='internet.example'), dict(value='', source='')), 'internet.example')
+
+
 class Derive(unittest.TestCase):
     def test_states(self):
         cases = [

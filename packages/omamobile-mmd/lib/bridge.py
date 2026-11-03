@@ -217,7 +217,7 @@ class Bridge:
                 SupportedBands=[mm.BAND_UNKNOWN], CurrentBands=[mm.BAND_UNKNOWN],
                 SupportedIpFamilies=mm.IP_V4 | mm.IP_V6 | mm.IP_V4V6, SignalQuality=(0, False))
         if name == mm.MODEM_3GPP:
-            apn, ip_type = self.settings.get('apn', ''), self.settings.get('ip_type', 'ipv4v6')
+            apn, ip_type = self.apn_settings(attach=True)
             settings = {'apn': GLib.Variant('s', apn),
                         'ip-type': GLib.Variant('u', IP_TYPES.get(ip_type, mm.IP_V4V6))} if apn else {}
             return dict(InitialEpsBearerSettings=settings)
@@ -248,6 +248,24 @@ class Bridge:
             return dict(self.signal)
         return {}
 
+    def apn_settings(self, attach=False):
+        """The APN sitd's start-up used (sitd 0.3.12 reports it: typed, or
+        chosen from the SIM), else the config's value; "auto" is no APN.
+        attach: the initial attach APN (InitialEpsBearerSettings) instead of
+        the internet APN; the config's attach_apn, when empty, is the APN."""
+        used = ((self.status or {}).get('modem') or {}).get('apn') or {}
+        known = isinstance(used, dict) and bool(used.get('source'))
+        if known:
+            apn = used.get('attach', '') if attach and 'attach' in used else used.get('value', '')
+        else:
+            apn = self.settings.get('apn', '')
+            if attach:
+                typed = self.settings.get('attach_apn', '')
+                apn = typed if typed and typed.lower() != 'auto' else apn
+        if apn.lower() == 'auto':
+            apn = ''
+        return apn, self.settings.get('ip_type', 'ipv4v6')
+
     def create_sim(self, d):
         self.sim = self.path('SIM')
         self.x.add(self.sim, {mm.SIM: dict(Active=True, SimType=mm.SIM_TYPE_PHYSICAL,
@@ -262,7 +280,7 @@ class Bridge:
 
     def create_bearer(self, d):
         self.bearer = self.path('Bearer')
-        apn, ip_type = self.settings.get('apn', ''), self.settings.get('ip_type', 'ipv4v6')
+        apn, ip_type = self.apn_settings()
         self.x.add(self.bearer, {mm.BEARER: dict(
             Interface='rmnet0', Connected=d['data'], IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
             ProfileId=-1, Properties={'apn': GLib.Variant('s', apn),
