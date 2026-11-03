@@ -8,8 +8,10 @@ seven sleeps have never woken: two direct freezes, one 30-minute systemd
 sleep with `tegu-mif-sleep` loaded, the sixth 30-second cycle of a boot
 on 10-30 (it left the USB bus and needed a forced restart), the 21st of
 11-01's thirty cycles, the overnight series' 127th, and the tenth of
-11-02 evening's series with Wi-Fi unloaded around each sleep; one more woke with UFS dead (`link startup failed` x5,
-then I/O errors and `emergency_ro`, 10-30 afternoon). The drain in sleep is
+11-02 evening's series with Wi-Fi unloaded around each sleep. Two more
+woke with UFS dead (`link startup failed` x5, then I/O errors and
+`emergency_ro`: 10-30 afternoon, and S1-W's 81st on 11-03), and one boot
+reset after a brcmfmac oops (S1-W, 11-03). The drain in sleep is
 high. Sleep tests are attended. The shell's auto-sleep (the `omamobile-sleep`
 toggle, which the package ships off) has been on on the palmtop since
 2026-11-01 by the owner's choice, and every sleep it took that day woke
@@ -655,7 +657,7 @@ is the point of the measurement. FINGERPRINT-PLAN's Risks table names this excep
 Rollback: push the running DTB's image back (the before/after check of
 step 2 in reverse).
 
-**S1-W. WFI only, a long series (risk low; unattended, cable in).** Core
+**S1-W. WFI only, a long series (risk low; attended, cable in).** Core
 power-down saves nothing measurable in sleep (302 mA asleep against 311 mA
 awake with the screen off, S1 result), so if the hang lives in the PSCI
 core power-down path, sleeping on WFI alone would cost nothing and avoid
@@ -664,24 +666,33 @@ tick isn't frozen), not that it hangs or doesn't; twenty such sleeps woke
 that day, too few against a rate between one in 10 and one in 127. So:
 300 sleeps of 60 s with every CPU's `cpuidle/state1/disable` at 1 for the
 whole run, everything else as the overnight series. At one hang in 40,
-300 clean sleeps would happen by chance about one time in 2000.
+300 clean sleeps would happen by chance about one time in 2000; at the
+overnight rate of one in 127, about one time in 11. The script is
+`device/tegu/bringup/sleep-series-wfi`.
 
 ```sh
 # Before: the modem must not run this boot (its inhibitor blocks suspend, and suspend with the modem up is unqualified).
+# omamobile-tegu-modem-boot is #372's unit (not on main yet; on the palmtop from that branch): with it off, start the
+# AoC, Trusty and Wi-Fi by hand after the boot (systemd-run /usr/local/bin/omamobile-tegu-audio-up), as the hung runs had them.
 tools/phone-ssh 'systemctl disable omamobile-tegu-modem-boot.service && systemctl reboot'
 # After the boot: auto-sleep off, the modem not started, the hook from #255 absent.
 tools/phone-ssh 'pgrep -f omamobile-modem-start; ls /usr/lib/systemd/system-sleep/'
 #   Expect: no modem process, no omamobile-tegu-cpuidle
-tools/phone-ssh 'cat > /root/sleep-wfi.sh' < logs/tegu-sleep-wfi-20261103/series.sh
+tools/phone-ssh 'cat > /root/sleep-wfi.sh' < device/tegu/bringup/sleep-series-wfi
 tools/phone-ssh 'systemd-run --unit=x-sleep-wfi bash /root/sleep-wfi.sh'
 # Each check (read-only):
 tools/phone-ssh 'tail -3 /var/log/omamobile/sleep-wfi-20261103.log'
-#   Expect: one line per cycle, rtc about 60 s, wake irq 56, ufs 0, acpm 0, state1 all 1, fail 0
-#   Stop: UFS errors (the script stops itself; then echo b > /proc/sysrq-trigger), or no SSH 3 minutes past a cycle's alarm
+#   Expect: one line per cycle, rtc about 60 s, wake irq 56, ufs 0, acpm 0, oops 0, state1 all 1, fail 0
+#   Stop: UFS errors or an oops (the script stops itself; after UFS errors, echo b > /proc/sysrq-trigger), or no SSH 3 minutes past a cycle's alarm
 #   (a hang: Power + Volume Up by the owner, then the journal of that boot)
 # Rollback: the script's EXIT puts state1 back and re-enables the modem boot unit; after a hang, a reboot puts state1 back
 # (sysfs), and the unit is enabled again by hand: systemctl enable omamobile-tegu-modem-boot.service
 ```
+
+Pass: 300 of 300 woke. Then the drain on WFI alone against core power-down
+(S1's buck-off coulomb counts, 240 s sleeps each way) decides whether the
+device package should sleep on WFI. Fail: a hang on WFI alone retires core
+power-down as the cause.
 
 **S1-W, first runs (2026-11-03, same release).** The first start had
 none of the AoC, Trusty or Wi-Fi up: on the palmtop the modem boot unit
@@ -719,7 +730,7 @@ UFS resume from `spm_lvl` 5 (device powered down, link off), which runs a
 full link startup at every wake. No silent hang in 102 WFI-only sleeps
 today (22 + 80), which against one in 10 to one in 127 says little.
 
-**S1-U. UFS at `spm_lvl` 3 for system sleep (risk low; unattended, cable
+**S1-U. UFS at `spm_lvl` 3 for system sleep (risk medium; attended, cable
 in).** At runtime this palmtop's UFS idles at `rpm_lvl` 3 (device sleep,
 link in hibern8) many times an hour without an error (kernel #99), and a
 resume from it is a hibern8 exit, not a link startup. At `spm_lvl` 3 system
@@ -727,13 +738,32 @@ sleep uses the same states. The 7 Pro needed 5 because its first hibern8
 exit after a freeze failed once at 3 (S1-S3 of its SUSPEND-PLAN), so this
 is the 9a's own question. The same series as S1-W with `spm_lvl` 3 and the
 CPUs' idle states left as they ship (core power-down on), so it is the
-setup the package would ship; the script puts 5 back on EXIT. A UFS error
-line stops it (then `echo b > /proc/sysrq-trigger`), as does an oops.
+setup the package would ship; the script puts 5 back on EXIT. Medium, not
+low: on the 7 Pro, `spm_lvl` 3 needed a host reset on its first resume. The
+script is `device/tegu/bringup/sleep-series-spm3`.
 
-Pass: 300 of 300 woke. Then the drain on WFI alone against core power-down
-(S1's buck-off coulomb counts, 240 s sleeps each way) decides whether the
-device package should sleep on WFI. Fail: a hang on WFI alone retires core
-power-down as the cause.
+```sh
+# Before: as S1-W (the modem boot unit off for the boot, the AoC, Trusty and Wi-Fi by hand). Read the levels:
+tools/phone-ssh 'u=/sys/devices/platform/soc/13200000.ufs; cat $u/spm_lvl $u/rpm_lvl'
+#   Expect: 5 and 3
+tools/phone-ssh 'cat > /root/sleep-spm3.sh' < device/tegu/bringup/sleep-series-spm3
+tools/phone-ssh 'systemd-run --unit=x-sleep-spm3 bash /root/sleep-spm3.sh'
+tools/phone-ssh 'head -1 /var/log/omamobile/sleep-spm3-20261103.log'
+#   Expect: spm_lvl 3 (SLEEP/HIBERN8), state1 disable all 0
+# Each check (read-only):
+tools/phone-ssh 'tail -3 /var/log/omamobile/sleep-spm3-20261103.log; dmesg | grep -c ufshcd_err_handler'
+#   Expect: one line per cycle, rtc about 60 s, wake irq 56, ufs 0, acpm 0, oops 0, spm 3, fail 0; the error-handler
+#   count recorded (a recovered hibern8-exit error is a finding, not a stop)
+#   Stop: UFS errors or an oops (the script stops itself; after UFS errors, echo b > /proc/sysrq-trigger), or no SSH
+#   3 minutes past a cycle's alarm (a hang: Power + Volume Up by the owner, then the journal of that boot)
+# Rollback: the script's EXIT writes spm_lvl 5 and re-enables the modem boot unit. spm_lvl doesn't persist, so after a hang
+# or a sysrq reboot the boot comes up at 5; enable the unit by hand as in S1-W.
+```
+
+Pass: 300 of 300 woke at `spm_lvl` 3 with no UFS errors. Then `spm_lvl` 3 for
+system sleep goes into the device package (a udev rule or the sleep hook)
+for a longer run in daily use. Fail: a dead-storage wake at 3 too moves the
+question into the hibern8 path itself.
 
 ## Not known yet
 
