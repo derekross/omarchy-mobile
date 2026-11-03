@@ -82,39 +82,39 @@ Opt-in and attended at first, with sleep blocked for the boot.
    policy. `-dd` is never the install method.
 2. **One modem service.** *Partly in #372:* `omamobile-tegu-modem-up` is
    packaged, with the explicit CP ONLINE check and an opt-in boot unit, and
-   #371 replaces the copied sitd unit with device drop-ins. *Target:* the
-   transient unit. Give it tegu's start (today the bring-up script
-   `/usr/local/bin/omamobile-tegu-modem-up` and its transient unit) with the
-   AoC's ordering, and drop the copied `/etc/systemd/system/omamobile-sitd.service`
-   and the transient-unit workaround. sitd starts only after an explicit
+   #371 replaces the copied sitd unit with device drop-ins. *Target:* tegu's
+   start as one modem service with the AoC's ordering, in place of the
+   transient unit `omamobile-tegu-modem-up` runs the profile in, and no
+   copied `/etc/systemd/system/omamobile-sitd.service` or transient-unit
+   workaround on any palmtop. sitd starts only after an explicit
    "CP ONLINE" check: a unit being active isn't enough.
 3. **Preflight before any hardware access:** *Target.* #372 runs the
    profile's own check (NV read-only, unmounted, checksums of its RAM
    copies), after the drivers load because it needs CPIF's ports; the
-   up-front NV-only check and the gaps below are still to do. the kernel, DT, firmware,
-   private provisioning and board properties present; the six NV and
-   firmware partitions found by `PARTNAME`, read-only, unmounted and
-   matching the checksums. Today's profile hashes five RAM copies, doesn't
+   up-front NV-only check and the gaps below are still to do: the kernel,
+   DT, firmware, private provisioning and board properties present, and the
+   six NV and firmware partitions found by `PARTNAME`, read-only, unmounted
+   and matching the checksums. Today's profile hashes five RAM copies, doesn't
    hash `modem_b`, and exempts `persist` from its read-only check: the boot
    preflight closes those gaps. A mismatch stops the start; the baseline is
    never refreshed automatically.
 4. **Two guards:** *Partly in #372:* a boot that has loaded CPIF refuses a
-   second start, and the latch is written and synced before any driver. *Target:*
-   keeping it from ONLINE until a clean shutdown. an atomic per-boot "attempted" marker, never cleared in
-   that boot, and a persistent failure latch written and synced before any
-   driver loads, kept through the whole phone-service start while this is
-   being qualified. No automatic CP or sitd restart, module unload, power
+   second start, and the latch is written and synced before any driver and
+   kept from ONLINE until a clean shutdown. *Target:* an atomic per-boot
+   "attempted" marker, never cleared in that boot, and the failure latch
+   kept through the whole phone-service start while this is being
+   qualified. No automatic CP or sitd restart, module unload, power
    cycle or latch clearing.
-5. **Sleep:** *Done in #372*, before the drivers and until the reboot. take and confirm the sleep inhibitor before the modem drivers
-   load, and hold it past sitd and the profile, until shutdown. Keep the
+5. **Sleep:** *Done in #372:* the sleep inhibitor is taken and confirmed
+   before the modem drivers load, and held past sitd and the profile until
+   the reboot. Keep the
    owner's auto-sleep setting as it is; the inhibitor blocks the sleep and
    says why. No suspend hook that stops and restarts the modem. Low-battery
    actions must not force an unqualified suspend.
 6. **Failure stays visible:** *Partly in #372:* the stage is reported and
-   the latch stays after a failed start, with no retry. *Target:* the shutdown
-   order through one modem service. the failed stage reported, diagnostics left in
-   place, no retry. At shutdown, the established order: the phone service's
-   cleanup, the CP off, then rfsd.
+   the latch stays after a failed start, with no retry. *Target:*
+   diagnostics left in place, and the shutdown order through one modem
+   service: the phone service's cleanup, the CP off, then rfsd.
 
 ### 2.7 Enabling the boot start (gated runbook, #372)
 
