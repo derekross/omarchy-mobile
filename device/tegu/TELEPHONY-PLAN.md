@@ -116,6 +116,22 @@ Opt-in and attended at first, with sleep blocked for the boot.
    place, no retry. At shutdown, the established order: the phone service's
    cleanup, the CP off, then rfsd.
 
+### 2.7 Enabling the boot start (gated runbook, #372)
+
+Attended, on the charger, one step per boot. Preconditions: slot B marked
+successful, a kernel with linux-omarchy-mobile#172, an off-repo NV backup.
+
+| Step / risk | Commands | Expect / pass | Stop condition | Rollback |
+| --- | --- | --- | --- | --- |
+| 1. Read-only / none | `uname -r`; `pacman -Q omamobile-device-tegu omamobile-modem omamobile-modem-sit omamobile-mmd`; `tools/nv-backup --check "$NV_BACKUP"` (laptop); `ls /var/lib/omamobile/modem-bringup-started` | The kernel and packages recorded, NV matches, no latch | NV mismatch, a latch present, B not marked | None |
+| 2. Enable / low | `systemctl enable omamobile-tegu-modem-boot` | A wants link, nothing started | Anything starts | `systemctl disable omamobile-tegu-modem-boot` |
+| 3. Cold boot / medium (the CP starts at boot, sleep blocked) | Power off, then on; after login: `journalctl -b -u omamobile-tegu-modem-boot`; `omamobile-sit status`; `systemd-inhibit --list`; `tools/phone-smoke` (laptop) | "modem OK: CP ONLINE", sitd running and registered, the inhibitor held, the latch present (it stays until a clean shutdown), phone-smoke clean | No ONLINE, a reset, a UFS or NV error, no inhibitor | `systemctl disable omamobile-tegu-modem-boot`, reboot; after a reset the latch keeps the next boot from starting the modem |
+| 4. Clean shutdown / medium (one UFS handler pass expected on the 7 Pro's pattern) | `systemctl reboot`; after login: `journalctl -b -1 -k \| grep -c ufshcd_err_handler`; `ls /var/lib/omamobile/modem-bringup-started`; `tools/nv-backup --check` | The latch gone (clean stop), the CP up again at this boot, the UFS count recorded, NV matches | The latch still there after a clean reboot, I/O errors, NV mismatch | As step 3 |
+| 5. A day's use / low | Calls, texts and data as usual | No reset, no latch left over | A reset or hang | As step 3 |
+
+Record each run here with the date, `uname -r`, the package versions, the
+phone-smoke report and the UFS count.
+
 Qualification, attended and on the charger: boot to ONLINE, data and texts;
 the inhibitor; NV and UFS unchanged; then shutdown and reboot on their own.
 Suspend with the CP on needs its own tests, with NFC polling stopped, and
