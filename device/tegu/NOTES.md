@@ -26,7 +26,9 @@ with the modem started at boot by `omamobile-tegu-modem-boot` (#372).
   only after it is told the screen is on, and radio state 10 means on;
   with both in `omamobile-modem-sit` 0.3.15 and the bridge 0.1.2, the bar
   shows signal and no airplane.
-- [V] **A sitd restart in the same boot (#376):** it failed at once on
+- [V] **A sitd restart in the same boot (#376), a deliberate test:** sitd's
+  unit says a second start-up isn't supported, and this checked what
+  happens. It failed at once on
   leftovers in `/run/omamobile-sit` (the LTE-only setting's saved original,
   then the bearer records), though the modem had dropped the bearers when
   sitd stopped. With 0.3.18 a restart gets data and signal back, but IMS
@@ -46,8 +48,10 @@ with the modem started at boot by `omamobile-tegu-modem-boot` (#372).
   afterwards the modem listed bearers 1 and 3, not 2. sitd held the
   reservation as uncertain, as designed, and a reboot cleared it. 0.3.22
   sends MMS over the internet bearer instead; not yet tried.
-- [V] **Wi-Fi after a sleep with the keep flag:** after the shell's
-  auto-sleep with `/etc/omamobile/wifi-keep-across-sleep` in place,
+- [V] **Wi-Fi after a sleep with the keep flag:** in a boot with the
+  modem's boot start disabled and the CP never started (checked before the
+  sleep test), after the shell's auto-sleep with
+  `/etc/omamobile/wifi-keep-across-sleep` in place,
   brcmfmac didn't attach to the chip again; a reload, a bind and a PCI
   remove and rescan all left no interface. A reboot brought it back.
 
