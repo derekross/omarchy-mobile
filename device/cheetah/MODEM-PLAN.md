@@ -2902,8 +2902,10 @@ does.
   binding, and the next start sets the overlay aside.
 - **Start (`apply`, in `profile_setup`).** After the RAM copies are read,
   verified and mounted, before the stock checksum check and before any
-  daemon: record every file of the base copy (to `/run`), then load the
-  overlay. It is laid over the copy only if the store is root-only with no
+  daemon: with the enable file absent, return at once, before any read or
+  write (off is a no-op; an enable file created later takes effect at the
+  next start). Otherwise record every file of the base copy (to `/run`),
+  then load the overlay. It is laid over the copy only if the store is root-only with no
   symlinks, the MANIFEST and every object match their checksums, every
   path is on the allow-list and none is protected, each group is complete
   and passes its salted MD5, it is bound to these checksums, and each file
@@ -2971,8 +2973,11 @@ since the last timer capture are lost (the overlay itself stays valid).
 **Runbook (the first hardware test).** Before (laptop, risk: none):
 `packages/omamobile-modem/test/all`, `tests/all` and `tools/pr-check`
 pass; `tools/build-packages packages/omamobile-modem` (0.1.15), and
-`omamobile-modem-sit` 0.3.14 or later from the `modem-sit-attach-apn`
-branch, which sends the carrier manifest (`[network] carrier_manifest`).
+`omamobile-modem-sit` 0.3.28 or later from main, which sends the carrier
+manifest (`[network] carrier_manifest`, typed by the owner), with the
+APNs, the attach APN and the bearer order typed as in the SIM test or,
+with #373 (0.3.29, TELEPHONY-APPS-PLAN 7.6), chosen from the SIM by the
+automatic path.
 The SIM test's setup holds (section "M4.2-M4.7": the SIM in, the APNs
 set, the phone on the charger, logs grepped for identifiers before any
 quote). Never quote the manifest ID beyond the 8 characters sitd logs,

@@ -54,8 +54,11 @@ import sys
 
 STORE = Path(os.environ.get('OMAMOBILE_MODEM_NV_OVERLAY', '/var/lib/omamobile/modem-nv-overlay'))
 # Off until the first hardware test passes (MODEM-PLAN, NV overlay runbook):
-# the human creates this file. Without it apply lays nothing over the base
-# and capture keeps nothing; status and reset work either way.
+# the human creates this file. Without it apply reads and writes nothing (no
+# base record under /run, nothing laid over the base) and capture keeps
+# nothing; status and reset work either way. Created after the modem
+# started, it takes effect at the next start: that boot has no base record,
+# so its captures keep nothing.
 ENABLE = Path(os.environ.get('OMAMOBILE_MODEM_NV_OVERLAY_ENABLE', '/etc/omamobile/modem-nv-overlay-enable'))
 # Written by reset: captures in this boot do nothing, so the running profile's
 # stop can't recreate a deleted overlay. /run goes with the reboot.
@@ -190,6 +193,13 @@ def run_dir(run):
     run.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(run, 0o700)
     return run
+
+
+def base_recorded(run):
+    """Whether apply recorded the base at this start: it does only with the
+    overlay on, so an enable file created after the modem started gives a
+    boot with nothing to compare against."""
+    return (Path(run) / 'base.json').exists()
 
 
 def read_run(run, name):
@@ -385,15 +395,17 @@ class Lock:
 # -- commands ------------------------------------------------------------------
 
 def apply(sums, root, run):
+    # Off is a no-op: nothing is read and nothing is written, not even the
+    # base record under /run, before the enable file is checked.
+    if not enabled():
+        say(f'off ({ENABLE} absent): the modem runs from the backup alone and its writes are not kept')
+        return 0
     run = run_dir(run)
     root = Path(root)
     bound = binding(sums)
     base = scan(root)
     write_private(run / 'base.json', json.dumps({'binding': bound, 'files': base}).encode())
     write_private(run / 'start.json', json.dumps({'files': base}).encode())
-    if not enabled():
-        say(f'off ({ENABLE} absent): the modem runs from the backup alone and its writes are not kept')
-        return 0
     with Lock():
         try:
             overlay = load()
@@ -493,6 +505,10 @@ def capture(sums, root, run, reason):
         return 0
     if reason not in ('stop', 'timer', 'manual'):
         raise Invalid(f'unknown reason {reason}')
+    if not base_recorded(run):
+        say('no base recorded at this start (the overlay was off when the modem started): '
+            'nothing is kept until the reboot')
+        return 0
     base_info = read_run(run, 'base.json')
     start = read_run(run, 'start.json')['files']
     base = base_info['files']
@@ -550,6 +566,9 @@ def capture(sums, root, run, reason):
 
 
 def diff(root, run):
+    if not base_recorded(run):
+        print('no base recorded at this start: the overlay was off when the modem started')
+        return 0
     start = read_run(run, 'start.json')['files']
     base = read_run(run, 'base.json')['files']
     now = scan(root)

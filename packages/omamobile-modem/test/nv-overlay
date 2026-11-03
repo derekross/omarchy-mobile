@@ -221,18 +221,26 @@ out=$(ov diff --root "$t/root" --run "$t/run")
 [[ $(find "$t/root" "$s" -type f -exec sha256sum {} + | sort) == "$before" ]] || fail "diff writes nothing"
 pass "diff is read-only"
 
-# 10. Off: without the enable file nothing is laid over and nothing kept.
+# 10. Off: without the enable file nothing is laid over and nothing kept, and
+#     apply touches nothing under /run (no base record, no run directory):
+#     off is a no-op before any read or write. An enable file created after
+#     the start finds no base record: that boot's captures keep nothing.
 rm -rf "$s" "$s".set-aside-*; cp -a "$t/good-store" "$s"
 rm "$t/enable"
 boot
 out=$(ov apply --sums "$t/sums" --root "$t/root" --run "$t/run" 2>&1)
 [[ $out == *"off ("* ]] && diff -r "$t/base" "$t/root" >/dev/null || fail "off: apply lays nothing: $out"
+[[ ! -e $t/run && ! -e $t/runmark ]] || fail "off: apply touches nothing under /run: $(find "$t/run" "$t/runmark" 2>/dev/null)"
 modem_writes 0x77
 before=$(sha256sum "$s/MANIFEST")
 ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" 2>/dev/null
-[[ $(sha256sum "$s/MANIFEST") == "$before" ]] || fail "off: capture keeps nothing"
+[[ $(sha256sum "$s/MANIFEST") == "$before" && ! -e $t/run ]] || fail "off: capture keeps nothing and touches nothing under /run"
 : > "$t/enable"
-pass "off unless enabled"
+out=$(ov capture --sums "$t/sums" --root "$t/root" --run "$t/run" --reason timer 2>&1) || fail "turned on after the start: capture exits 0: $out"
+[[ $out == *"no base recorded"* && $(sha256sum "$s/MANIFEST") == "$before" ]] || fail "turned on after the start: nothing kept: $out"
+out=$(ov diff --root "$t/root" --run "$t/run" 2>&1) || fail "turned on after the start: diff exits 0: $out"
+[[ $out == *"no base recorded"* ]] || fail "turned on after the start: diff says so: $out"
+pass "off unless enabled, and a no-op then"
 
 # 11. Reset: the overlay goes, captures do nothing until the reboot, and the
 #     next boot runs from the base alone.
