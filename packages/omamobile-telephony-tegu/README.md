@@ -65,7 +65,7 @@ mobile-data bearer is not required just to attach. The unit's separate
 bridge can recover without dropping call visibility. The attended initial
 attachment keeps the stricter no-live-call and registered-SIM checks.
 
-Mmd 0.1.1 removes the service-level `Conflicts=ModemManager.service`: a
+Mmd 0.1.3 (#371) removes the service-level `Conflicts=ModemManager.service`: a
 bridge start must not stop another modem daemon. Package conflicts and
 exclusive D-Bus name ownership still prevent two managers from serving the
 same API; tegu's preflight refuses another owner before starting mmd.
