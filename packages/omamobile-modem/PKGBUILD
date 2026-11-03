@@ -3,7 +3,7 @@
 pkgname=omamobile-modem
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile modem runtime for the Pixel 7 Pro: stock rfsd and cbd in a vendor chroot on RAM copies of NV, with a per-phone overlay for the modem's own NV writes"
+pkgdesc="Omarchy Mobile modem runtime for the Pixel 7 Pro and 6 Pro: stock rfsd and cbd in a vendor chroot on RAM copies of NV, with a per-phone overlay for the modem's own NV writes"
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
