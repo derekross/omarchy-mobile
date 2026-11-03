@@ -49,6 +49,12 @@
 # (gone at the reboot, removed when a later start gets past the refusals),
 # which the shell's Mobile data tile shows under its name instead of
 # "No modem".
+#
+# Test only: with OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 the script exits 0
+# right after the marker decision above, before anything that depends on the
+# machine it runs on (the link driver's sysfs, the sleep inhibitor, the
+# drivers, the profile), so packages/omamobile-modem/test/all can run the
+# decision for real on any machine, the phone included. No unit sets it.
 set -euo pipefail
 
 MARK=${OMAMOBILE_MODEM_LATCH:-/var/lib/omamobile/modem-bringup-started}
@@ -135,6 +141,15 @@ if [[ -e $MARK ]]; then
   refuse "Off: last bring-up hung"
 fi
 [[ -e $UP ]] && refuse_unclean
+
+# Past the marker decision. The test's stop point (see the header): nothing
+# below is hermetic, so the test ends here with the markers as they are. The
+# reason file stays: it is removed only past every refusal, and the checks
+# below are refusals too.
+if [[ ${OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS:-} == 1 ]]; then
+  say "OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1: past the marker checks, stopping here (test only)"
+  exit 0
+fi
 
 # The link driver must allow hardware access, or cbd's power-on is refused
 # (-EPERM). allow_hw is fixed at load time: a copy loaded without it (by
