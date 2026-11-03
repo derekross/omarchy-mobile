@@ -146,3 +146,18 @@ net=vendor/systemd/network/20-usb-gadget.network
 metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
 [[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
 pass "USB is the last gateway"
+
+# The modem stack at boot (MODEM-PLAN M4.6): this device's sitd drop-in
+# waits for the CP's ONLINE before sitd runs (the modem unit is ready at
+# CPIF's ports, before cbd has booted the CP), with the profile's own cbd
+# timeout. Nothing here enables the stack: the opt-in is
+# omamobile-modem-boot.target (omamobile-modem), and no wants link for it,
+# the modem, sitd or the bridge is shipped.
+d=$tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/20-cp-online.conf
+[[ -f $d ]] || fail "the sitd CP-online drop-in is staged"
+grep -qx 'ExecStartPre=/usr/lib/omamobile-vendor/omamobile-modem-cp wait-online 120' "$d" || fail "sitd waits for CP ONLINE with the cbd timeout"
+grep -q '^\[Service\]' "$d" && ! grep -q '^\[Unit\]' "$d" || fail "the drop-in only adds to [Service]"
+for n in omamobile-modem-boot.target omamobile-modem.service omamobile-sitd.service omamobile-sit-data.service omamobile-mmd.service; do
+  [[ -z $(find "$tmp/root/usr/lib/systemd" -name "$n" -path '*.wants/*' -o -name "$n" -path '*.requires/*') ]] || fail "no wants link for $n is shipped"
+done
+pass "sitd waits for the CP; the modem at boot stays opt-in"
