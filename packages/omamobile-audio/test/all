@@ -622,8 +622,37 @@ autolist stamp-refused "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-veri
 printf 'date x\nfirmware %s\nreason test\n' "${fwd#cheetah }" > "$r/state/speaker-protection-c9-refused"; autostart
 isc9 || fail "the phone's own stamp wins over a refusal of the list"
 # explicit c9 (bring-up) takes the list as well, and still refuses without either
+# c9 from the list is capped at the levels verified with music (817, top 11,
+# bottom 14): an explicit c9 at 17, or auto with analog 17, is clamped and
+# logged; 17 stays for a phone with its own stamp (c9-ok above)
 autolist c9-list "$fwd"; rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
-((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 17 ]] || { cat "$r/out" >&2; fail "stage c9 with the firmware in the list"; }
+((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 14 && $(val "Top Analog PCM Volume") == 11 && $(val "Top Digital PCM Volume") == 817 ]] &&
+  grep -c 'capped at the levels verified with music.*clamped Bottom analog 17 -> 14' "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "stage c9 from the list: analog 17 clamped to top 11, bottom 14, and logged"; }
+autolist list-clamp "$fwd"; autostart OMAMOBILE_SPK_ANALOG=17 OMAMOBILE_SPK_TOP_ANALOG=16
+isc9 && grep -c 'clamped Top analog 16 -> 11 Bottom analog 17 -> 14' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "auto c9 from the list: overrides above the verified levels clamped"; }
+autolist list-lower "$fwd"; autostart OMAMOBILE_SPK_BOTTOM_ANALOG=12
+((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 12 && $(val "Top Analog PCM Volume") == 11 ]] && ! grep -c 'clamped' "$r/out" >/dev/null ||
+  fail "auto c9 from the list: a lower override stays as set"
+autolist stamp-17 "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart OMAMOBILE_SPK_ANALOG=17 OMAMOBILE_SPK_TOP_ANALOG=17
+((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 17 && $(val "Top Analog PCM Volume") == 17 ]] && ! grep -c 'clamped' "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "c9 from this phone's stamp: 17 as configured, nothing clamped"; }
+# the watchdog holds c9 from the list to the same ceilings
+autolist list-watch-ceil "$fwd"; autostart; isc9 || fail "list-watch-ceil: start"
+amx cset "name=Top Analog PCM Volume" 12 >/dev/null; wprep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); watchrun
+((rc == 1)) && muted && grep -c 'Top: Analog PCM Volume 12 above 11' "$r/run/speaker-protection" >/dev/null ||
+  { cat "$r/watch.out" >&2; fail "watchdog: c9 from the list mutes a level above the verified ones"; }
+# the list's path is a test switch: without the tests' control backend the package's list is read
+autolist list-switch "$fwd"
+prep=(OMAMOBILE_SPK_STAGE=auto OMAMOBILE_CTL_BACKEND= OMAMOBILE_ASOUND="$r/none"); out=$(sp status 2>&1 || true); prep=()
+grep -c 'not in the verified firmware list' <<<"$out" >/dev/null && ! grep -c 'stage c9' <<<"$out" >/dev/null ||
+  { echo "$out" >&2; fail "OMAMOBILE_SPK_VERIFIED_LIST only with the tests' control backend"; }
+out=$(env -u OMAMOBILE_CTL_BACKEND OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_C9_SOURCE=list OMAMOBILE_SPK_FIRST_TEMP_HIGH=99 OMAMOBILE_SPK_FIRST_CHECK=9 \
+  python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import speaker_dsp; print(speaker_dsp.first_stream_check())' "$here/lib")
+[[ $out == "(1.0, 10.0, 65.0)" ]] || fail "the OMAMOBILE_SPK_FIRST_* overrides only with the tests' control backend ($out)"
+out=$(env OMAMOBILE_CTL_BACKEND=json:/nonexistent OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_C9_SOURCE=list OMAMOBILE_SPK_FIRST_TEMP_HIGH=99 \
+  python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import speaker_dsp; print(speaker_dsp.first_stream_check())' "$here/lib")
+[[ $out == "(1.0, 10.0, 99.0)" ]] || fail "the OMAMOBILE_SPK_FIRST_* overrides with the tests' control backend ($out)"
 autolist c9-list-miss "cheetah $otherd"; rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
 check_refused_early "c9 with neither a stamp nor a listed digest"
 grep -c 'not in the verified list' "$r/out" >/dev/null || fail "c9 refused: says the firmware is not in the list"
@@ -648,21 +677,42 @@ autolist first-ok "$fwd"; autostart; isc9 || fail "first-ok: start"; calr; first
   { cat "$r/watch.out" >&2; fail "first-stream check: a healthy phone passes and keeps c9"; }
 spa status 2>/dev/null | grep -c 'first-stream check: passed' >/dev/null || fail "status: the check passed"
 if grep -E '0x20|8192|8448' "$r/watch.out" "$r/run/speaker-protection-c9-check"; then fail "the check logs no calibration values"; fi
-firstfail() {  # name, what to break (a command on the started tree), the reason expected
+firstfail() {  # name, what to break (a command on the started tree), the reason expected, state|boot (where it is recorded)
+  local f
   autolist "$1" "$fwd"; autostart; isc9 || fail "$1: start"; calr; eval "$2"; firstwatch
-  ((rc == 1)) && muted && grep -c "^reason first-stream check failed: .*$3" "$r/state/speaker-protection-c9-refused" >/dev/null &&
-    grep -c "^firmware ${fwd#cheetah }$" "$r/state/speaker-protection-c9-refused" >/dev/null &&
+  [[ ${4:-state} == state ]] && f=$r/state/speaker-protection-c9-refused || f=$r/run/speaker-protection-c9-refused
+  ((rc == 1)) && muted && grep -c "^reason first-stream check failed: .*$3" "$f" >/dev/null &&
+    grep -c "^firmware ${fwd#cheetah }$" "$f" >/dev/null &&
     grep -c '^--no-block restart omamobile-speaker-protection.service$' "$r/systemctl.log" >/dev/null &&
     [[ $(cat "$r/run/speaker-protection") == "muted: c9 refused on this phone"* ]] ||
-    { cat "$r/watch.out" "$r/state/speaker-protection-c9-refused" >&2; fail "first-stream check: $1 mutes, refuses c9 for this firmware, restarts"; }
+    { cat "$r/watch.out" "$f" >&2; fail "first-stream check: $1 mutes, refuses c9 for this firmware, restarts"; }
+  if [[ ${4:-state} == boot ]]; then
+    [[ ! -e $r/state/speaker-protection-c9-refused ]] || fail "first-stream check: $1 (a coil estimate) is refused for this boot only"
+  fi
   # the restart then picks media
   autostart; ismedia || { cat "$r/out" >&2; fail "first-stream check: after $1 the next start is media"; }
-  spa status 2>/dev/null | grep -c '^c9 refused on this phone: ' >/dev/null || fail "status: names the refusal ($1)"
+  spa status 2>/dev/null | grep -c '^c9 refused on this phone' >/dev/null || fail "status: names the refusal ($1)"
 }
 firstfail first-rsel 'amx cset "name=Bottom DSP1 Protection cd CAL_R_SELECTED" 0x00,0x00,0x00,0x01 >/dev/null' 'Bottom: the model does not use the calibration'
 firstfail first-enable 'amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null' 'Top: CSPL_ENABLE 0'
-firstfail first-cold 'amx cset "name=Top DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x01,0x40,0x00 >/dev/null' 'Top: coil temperature 5.0 C outside 10-65 C'
-firstfail first-hot 'amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x11,0x80,0x00 >/dev/null' 'Bottom: coil temperature 70.0 C outside 10-65 C'
+firstfail first-cold 'amx cset "name=Top DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x01,0x40,0x00 >/dev/null' 'Top: coil temperature 5.0 C outside 10-65 C' boot
+firstfail first-hot 'amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x11,0x80,0x00 >/dev/null' 'Bottom: coil temperature 70.0 C outside 10-65 C' boot
+# a refusal for this boot ends with the boot: the next boot (a fresh /run) tries c9 again
+rm -f "$r/run/speaker-protection-c9-refused"; autostart; isc9 || { cat "$r/out" >&2; fail "after a reboot a coil-estimate refusal no longer holds"; }
+# a temperature and a firmware-state failure together: persisted
+firstfail first-both 'amx cset "name=Top DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x01,0x40,0x00 >/dev/null; amx cset "name=Bottom DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null' 'Bottom: CSPL_ENABLE 0'
+# the refusal can't be written to /var/lib: recorded for this boot, the restart picks media
+autolist first-nostate2 "$fwd"; autostart; calr; mkdir "$r/state/speaker-protection-c9-refused"
+amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null; firstwatch
+((rc == 1)) && muted && grep -c 'CSPL_ENABLE 0' "$r/run/speaker-protection-c9-refused" >/dev/null &&
+  grep -c 'recorded for this boot only' "$r/watch.out" >/dev/null && [[ -s $r/systemctl.log ]] ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: /var/lib not writable, the refusal goes to /run and the restart follows"; }
+autostart; ismedia || { cat "$r/out" >&2; fail "first-stream check: with the refusal in /run only, the next start is media"; }
+# neither can be written: muted, no restart
+autolist first-nowrite "$fwd"; autostart; calr; mkdir "$r/state/speaker-protection-c9-refused" "$r/run/speaker-protection-c9-refused"
+amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null; firstwatch
+((rc == 1)) && muted && [[ ! -s $r/systemctl.log ]] && grep -c 'could not be recorded: staying muted' "$r/run/speaker-protection" >/dev/null ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a refusal that can't be recorded stays muted, without a restart"; }
 # the heartbeat case needs the stand-in's stuck heartbeat, which the watch rule catches as well
 autolist first-hb2 "$fwd"; autostart; calr; firstwatch FAKE_HB_STUCK=1 OMAMOBILE_WATCH_HB_TIMEOUT=10
 ((rc == 1)) && muted && grep -c 'HALO_HEARTBEAT did not move' "$r/state/speaker-protection-c9-refused" >/dev/null ||

@@ -572,6 +572,10 @@ def ceilings():
     unmutes: digital, then analog per amplifier (c8: the top drives the
     earpiece, AUDIO-PLAN.md section 4; c9: stock's 817 and 17 on both)."""
     stage = os.environ.get('OMAMOBILE_SPK_STAGE') or 'media'
+    if stage == 'c9' and os.environ.get('OMAMOBILE_SPK_C9_SOURCE') == 'list':
+        # c9 from the verified firmware list: the levels verified with music
+        # ("C9 with real music"); 17 needs this phone's own stamp
+        return 817, {'Top': 11, 'Bottom': 14}
     if stage == 'c9':
         return 817, {'Top': 17, 'Bottom': 17}
     if stage == 'media':
@@ -589,7 +593,10 @@ def first_stream_check():
     sense path), which C9a checked on the reference phone."""
     if os.environ.get('OMAMOBILE_SPK_STAGE') != 'c9' or os.environ.get('OMAMOBILE_SPK_C9_SOURCE') != 'list':
         return None
-    env = os.environ.get
+    # the OMAMOBILE_SPK_FIRST_* overrides are for the tests only (the JSON
+    # control backend), as the watch hook: speaker.conf can't widen the band
+    testing = os.environ.get('OMAMOBILE_CTL_BACKEND', '').startswith('json:')
+    env = (lambda k, d: os.environ.get(k, d)) if testing else (lambda k, d: d)
     return (float(env('OMAMOBILE_SPK_FIRST_CHECK', '') or 1.0),
             float(env('OMAMOBILE_SPK_FIRST_TEMP_LOW', '') or 10.0),
             float(env('OMAMOBILE_SPK_FIRST_TEMP_HIGH', '') or 65.0))
@@ -627,12 +634,13 @@ def first_stream_problems(v, settings, hb0, low, high):
     return problems
 
 
-def refuse_c9(reason):
-    """Mute, record the refusal for this firmware and restart the service at
-    stage media (omamobile-speaker-protection refuse-c9)."""
+def refuse_c9(reason, boot_only=False):
+    """Mute, record the refusal for this firmware (for this boot only with
+    boot_only) and restart the service at stage media
+    (omamobile-speaker-protection refuse-c9)."""
     script = os.environ.get('OMAMOBILE_SPK_SCRIPT', '/usr/bin/omamobile-speaker-protection')
-    r = subprocess.run([script, 'refuse-c9', '--reason', reason], check=False)
-    if r.returncode != 0:
+    r = subprocess.run([script, 'refuse-c9', '--reason', reason] + (['--boot'] if boot_only else []), check=False)
+    if r.returncode not in (0, 3):     # 3: muted, the refusal not recorded (said so)
         mute(reason)
 
 
@@ -1421,7 +1429,10 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                         reason = 'first-stream check failed: ' + '; '.join(fp)
                         log(f'watchdog: stage c9 from the verified firmware list: {reason}; '
                             'muting and falling back to stage media')
-                        refuse_c9(reason)
+                        # a coil estimate out of the band alone is refused for
+                        # this boot only: right after loud music (67 C peaks)
+                        # or on a cold phone it can be out with nothing wrong
+                        refuse_c9(reason, boot_only=all(' coil temperature ' in p for p in fp))
                         return 1
                     else:
                         first_done = True
