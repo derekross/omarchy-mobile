@@ -6,6 +6,22 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "FAIL: $*" >&2; exit 1; }
 for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; done
+# The copy checks: a missing or failing cmp stops the start with its own
+# reason, never a false "differs"; only cmp's 1 means different.
+grep -c 'diffutils' PKGBUILD >/dev/null || fail "depends lacks diffutils (cmp)"
+grep -c 'cmp -s "' lib/omamobile-fp-chroot >/dev/null && fail "a bare cmp -s outside same_file"
+fn=$(sed -n '/^say() {/p;/^die() {/p;/^same_file() {/,/^}/p' lib/omamobile-fp-chroot)
+c=$(mktemp -d); printf a >"$c/a"; printf a >"$c/b"; printf b >"$c/x"
+mkdir "$c/nocmp"
+bash -c "$fn"'; same_file "$1" "$2"' _ "$c/a" "$c/b" 2>/dev/null || fail "same_file: equal files"
+rc=0; bash -c "$fn"'; same_file "$1" "$2"' _ "$c/a" "$c/x" 2>/dev/null || rc=$?
+[[ $rc == 1 ]] || fail "same_file: different files give 1 (got $rc)"
+out=$(PATH=$c/nocmp "$BASH" -c "$fn"'; same_file "$1" "$2"; echo reached' _ "$c/a" "$c/b" 2>&1 || true)
+[[ $out == *"cmp (diffutils) missing"* && $out != *reached* && $out != *differs* ]] || fail "same_file without cmp: $out"
+mkdir "$c/badcmp"; printf '#!/bin/sh\nexit 2\n' >"$c/badcmp/cmp"; chmod +x "$c/badcmp/cmp"
+out=$(PATH=$c/badcmp:$PATH bash -c "$fn"'; same_file "$1" "$2"; echo reached' _ "$c/a" "$c/b" 2>&1 || true)
+[[ $out == *"cmp failed"* && $out != *reached* ]] || fail "same_file on a cmp error: $out"
+rm -rf "$c"
 # Each phone: its trusted app, its KeyMint HAL and its bootloader properties.
 grep -c 'TA=g7.app' lib/omamobile-fp-chroot >/dev/null || fail "cheetah loads g7.app"
 grep -c 'TA=g7a.app' lib/omamobile-fp-chroot >/dev/null || fail "tegu loads g7a.app"
