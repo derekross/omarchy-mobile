@@ -53,6 +53,12 @@ printf '[Desktop Entry]\nType=Application\nName=Papers\nExec=papers\n' >"$A/org.
 for b in gs201-cheetah:gs201 zumapro-tegu:zumapro; do
   mkdir -p "$t/dt-${b%%:*}"; printf 'google,%s\0google,%s\0' "${b%%:*}" "${b#*:}" >"$t/dt-${b%%:*}/compatible"
 done
+# Omarchy's default-keyring step, as Omarchy ships it (only what's missing)
+mkdir -p "$t/omarchy/install/user"
+cat >"$t/omarchy/install/user/default-keyring.sh" <<'KR'
+d="$HOME/.local/share/keyrings"; mkdir -p "$d"
+[[ -f $d/default ]] || echo Default_keyring >"$d/default"
+KR
 run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
     OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
@@ -403,3 +409,18 @@ RUN_HOME=$hn GSETTINGS_NO_CLICK_POLICY=1 run
 grep -q '^gsettings set org.gnome.nautilus.preferences' "$hn/calls" && fail "nothing is set on a Nautilus without click-policy"
 [[ ! -e $hn/.local/state/omarchy/done/omamobile-files-single-tap ]] || fail "the step isn't marked done when the key is missing"
 pass "Files: one tap opens a folder, set once, skipped on a Nautilus without the key"
+
+# The default keyring: Omarchy's own step runs, and a user's keyring is kept
+hk=$t/keyring; mkdir -p "$hk/.config/hypr"; cp "$H"/.config/hypr/*.lua "$hk/.config/hypr/"
+RUN_HOME=$hk run
+[[ $(cat "$hk/.local/share/keyrings/default" 2>/dev/null) == Default_keyring ]] || fail "a new user gets Omarchy's default keyring"
+echo mine >"$hk/.local/share/keyrings/default"
+RUN_HOME=$hk run
+[[ $(cat "$hk/.local/share/keyrings/default") == mine ]] || fail "a user's own default keyring is kept"
+pass "the default keyring: Omarchy's step runs, and a user's own keyring is kept"
+
+# Without Omarchy's step (a later Omarchy may move it), the setup still succeeds
+he=$t/no-keyring-step; mkdir -p "$he/.config/hypr" "$t/empty-omarchy"; cp "$H"/.config/hypr/*.lua "$he/.config/hypr/"
+RUN_HOME=$he RUN_OMARCHY_PATH=$t/empty-omarchy run
+[[ ! -e $he/.local/share/keyrings/default ]] || fail "no keyring is made without Omarchy's step"
+pass "without Omarchy's keyring step the setup still succeeds"

@@ -35,11 +35,17 @@ the touched files).
 Everything new is disabled by default. RADIOS-CAMERA-PLAN.md section 1 is
 the survey this follows.
 
-**Hard rule, unchanged:** the modem's NV and firmware partitions (`efs`,
+**Hard rule:** the modem's NV and firmware partitions (`efs`,
 `efs_backup`, `modem_userdata`, `persist`, `modem_a`, `modem_b`) are never
 written from Linux. `cbd` and `rfsd` will only ever see RAM copies made from
 verified images (M3). Nothing in M0-M2 touches them; M0 adds a udev rule
-that makes the first five read-only at the block layer.
+that makes the first five read-only at the block layer. **From
+`omamobile-modem` 0.1.15 the modem's own NV writes may persist, only in
+the per-phone overlay on userdata, only for the files on its allow-list
+(`efs/nv_normal.bin` and its checksum), never for identity or calibration
+files, and deleting the overlay (`omamobile-modem nv-overlay reset`, then
+a reboot) returns to the backup alone** (section 3, "NV overlay"; off
+until `/etc/omamobile/modem-nv-overlay-enable` exists).
 
 Path abbreviations:
 
@@ -789,7 +795,8 @@ options in `G/devices/google/pantah/pantah_defconfig:2-11`):**
   Then `rfsd` (no arguments) alone for 2 s, then **`cbd -t s5100sit -P
   by-name/modem_a -s 2 -o r` once, in the foreground**: without `-d` cbd
   boots the CP and exits; `-o r` keeps it uid 0 in the chroot. rfsd stays.
-  Whatever the modem writes to NV is lost at stop.
+  Whatever the modem writes to NV is lost at stop (from 0.1.15, with the NV
+  overlay on, section 3, except its writes to `nv_normal.bin`).
 - Properties (`modem/props.conf`): slot `_a`, `ro.bootmode=normal`,
   **`persist.vendor.modem.efs.clear.action=none`** (an empty value makes
   rfsd treat the start as a factory reset and clear the NV copy: the 0.0
@@ -2998,6 +3005,268 @@ tools/phone-ssh 'sleep 120; systemctl is-active omamobile-modem; journalctl -b -
 versions, pass/fail, the modem unit's journal lines (states only), the
 tile's text in B8, the UFS handler count. Not the carrier, the number or
 any identifier.
+### NV overlay: the modem's own NV writes kept per phone (`omamobile-modem` 0.1.15, built offline 2026-11-02)
+
+**Why.** Until 0.1.11 the modem ran on RAM copies of the backup and lost
+every NV write at stop. On a network that needs its carrier profile that
+is fatal for IMS: the CP keeps the profile it applies from the AP's
+OEM_SET_CARRIER_CONFIG_MANIFEST (0x4600, sent after its own 0x4602) in
+NV, asks for a reset to load it (IND_PHONE_RESET, 0x0804), and a reboot,
+the only reset we have, threw the profile away again. Its cell and band
+memory and its IMS state are NV too, so every boot was a cold first boot
+with the backup's carrier ([MODEM-PROVIDER-PROFILES](MODEM-PROVIDER-PROFILES.md)
+sections 3, 4 and 6, 2026-11-02).
+Seeding NV from a stock boot (that file's option a) is ruled out: users
+never boot stock to make Linux work, and NV is per phone (IMEI,
+calibration), so nothing can be shipped.
+
+**What 2026-11-03 changed about the why.** IMS registered and carried an
+SMS on this phone without any NV persistence ([NOTES](NOTES.md)
+2026-11-03, [IMS-SHANNON](IMS-SHANNON.md) sections 11 and 12): what it
+took was stock's bearer order (`ims_first = yes`, `internet_cid = 3`,
+`attach_apn = none`, `omamobile-modem-sit` 0.3.24+), and the carrier
+manifest mattered for the registration order, not for the P-CSCF. So the
+overlay is no longer what IMS hinges on at each boot. What it still
+buys, and what N2-N6 measure: no IND_PHONE_RESET and no reapplied
+profile at every boot, and the CP's cell, band and IMS memory across
+reboots (registration from a cold NV versus a warm one). N3's read-only
+`diff` is also the first look at what the CP writes at all. The runbook
+stands, with the modem-sit settings of IMS-SHANNON section 12 in place.
+
+**The rule.** Linux never writes the modem's NV partitions. The modem's
+own writes persist only in a per-phone overlay on userdata, only for the
+files on the overlay's allow-list, never for identity or calibration
+files, and `omamobile-modem nv-overlay reset` (then a reboot) returns the
+modem to the backup alone. What stays exactly as it was: the `ro=1` and
+unmounted refusal in `profile_check`, the RAM copies read from the
+partitions and checked against `/etc/omamobile/modem-nv.sha256` before
+anything else, the stock salted checksum check before rfsd, the
+baseband-version guard, and M3.5 after every run.
+
+**Granularity: whole files.** rfsd keeps the modem's NV as files in the
+three f2fs filesystems (`nv_normal.bin` and `nv_protected.bin` in `efs`,
+`nv_protected.bak` in `efs_backup`, each with a salted MD5 beside it;
+"What rfsd does at start" above), not as raw blocks. A block-level
+overlay of the images would carry f2fs metadata and every file at once:
+it couldn't refuse the protected registry while keeping the normal one,
+and couldn't be checked file by file. A file is the unit rfsd writes, the
+unit the stock checksum covers, and the unit that can be allowed or
+refused.
+
+**What may persist (the allow-list) and what never does.**
+
+| Files | From the overlay | Why |
+|---|---|---|
+| `efs/nv_normal.bin` with `efs/nv_normal.bin.md5`, as one group | yes | rfsd's "normal registry": the NV items the CP changes in use. The carrier profile (MODEM-PROVIDER-PROFILES 1: hashed NV item IDs and values), acquisition data and IMS settings are NV items, and this is the registry rfsd syncs them to. Kept only together, only if the stock salted MD5 matches, only at the base file's size |
+| `efs/nv_protected.bin`, `.md5`; everything in `efs_backup` | never | the protected registry and its backup: the RF calibration and the factory items. A change by the modem is logged ("never kept: identity or calibration") and dropped at the reboot |
+| any path naming an identity or calibration (`*imei*`, `*cal*`, `*factory*`, `*serial*`, `*mac*`, ...) | never | refused even if someone adds it to the allow-list (the tool refuses to load with an overlap; its test checks it) |
+| everything else in `efs` and `modem_userdata` | no | not on the allow-list: logged once per boot ("not kept: not on the allow-list") and dropped, as before |
+
+The IMEIs are not in these filesystems at all: cbd reads them from the
+bootloader's `/chosen/config` (section 6.1), bound read-only. Whether the
+CP writes the carrier profile and its acquisition data to
+`nv_normal.bin`, or partly to files in `modem_userdata`, has not been
+seen on hardware: N3 below is a read-only look (`nv-overlay diff`) that
+decides it before anything is kept. Adding a file to the allow-list needs
+the maintainer's say-so, as an addition to the storage guard's allowlist
+does.
+
+**How it runs** (`lib/omamobile-modem-nv-overlay`, `bin/omamobile-modem`,
+`profiles/modem.conf`):
+
+- **Store.** `/var/lib/omamobile/modem-nv-overlay/` (root, 0700): a
+  `MANIFEST` (0600: format, the binding, when and why it was written,
+  one line per file with its SHA-256 and size, then the SHA-256 of all of
+  that) and `objects/<sha256>` (0600). Never committed, never copied to
+  another phone: it is that phone's NV.
+- **Binding.** The MANIFEST's `base` is the SHA-256 of the five checksum
+  lines the profile verifies (`efs`, `efs_backup`, `modem_a`,
+  `modem_userdata`, `persist`). A new backup, a new
+  `modem-nv.sha256`, or new modem firmware (`modem_a`) gives another
+  binding, and the next start sets the overlay aside.
+- **Start (`apply`, in `profile_setup`).** After the RAM copies are read,
+  verified and mounted, before the stock checksum check and before any
+  daemon: with the enable file absent, return at once, before any read or
+  write (off is a no-op; an enable file created later takes effect at the
+  next start). Otherwise record every file of the base copy (to `/run`),
+  then load the overlay. It is laid over the copy only if the store is root-only with no
+  symlinks, the MANIFEST and every object match their checksums, every
+  path is on the allow-list and none is protected, each group is complete
+  and passes its salted MD5, it is bound to these checksums, and each file
+  exists in the base at the same size. All files go to temporary names
+  first, then are renamed over the base files. Anything else: the overlay
+  is moved to `modem-nv-overlay.set-aside-<time>` (the newest three are
+  kept) with a journal line, and the modem starts from the backup alone.
+  The stock checksum check then runs on what rfsd will serve.
+- **Capture.** At the unit's stop, in `profile_stop` after the CP power-off
+  (so the CP's last writes are in the copies and nothing writes during the
+  read) and before the namespace and the copies go; and every 30 minutes
+  from `omamobile-modem-nv-overlay.timer`, which the modem unit pulls in
+  (first one 10 minutes after the start), so a crash or a power loss costs
+  one interval at most. Both enter the profile's mount namespace and only
+  read there. A group is kept only if both files are present, the salted
+  MD5 matches, the size is the base's, and a second read gives the same
+  bytes (a write in flight is skipped until the next capture). Files equal
+  to the base are left out. The store is written atomically: objects
+  (written, fsynced, renamed), then `MANIFEST.tmp`, fsync, rename over
+  `MANIFEST`, fsync of the directory, then old objects removed. A missing
+  `nv_normal.bin` (rfsd's "clear EFS" path) never empties the overlay: the
+  old one stays. A lock keeps the timer's capture and the stop's apart.
+- **Reset.** `omamobile-modem nv-overlay reset` deletes the store (`--all`
+  also the set-aside copies) and marks the boot (`/run/omamobile-modem/`)
+  so that no capture recreates it, the stop's included. The next boot runs
+  from the backup alone.
+- **Status and diff.** `omamobile-modem nv-overlay status` (read-only):
+  on or off, valid or why not, bound to this backup or not, the files, the
+  set-aside copies. `omamobile-modem nv-overlay diff` (read-only, the
+  modem running): what the modem changed since the start, names and sizes
+  only, and the verdict for each.
+- **Off by default in 0.1.15.** Nothing is laid over the copies and nothing
+  kept unless `/etc/omamobile/modem-nv-overlay-enable` exists; status,
+  diff and reset work either way. The runbook below turns it on. A later
+  version turns it on by default once N5-N7 have passed on two boots.
+- **Shared with the other Tensor phones.** The 9a and the 6 Pro run the
+  same profile, so they get the same overlay, off until the file exists
+  there too. Their `efs` layout is expected to be the same (rfsd and the
+  two registries), unconfirmed.
+
+**`reboot-to` skips the stop's capture.** `reboot-to` is a raw reboot
+syscall (section 4): no unit stops, so neither the profile's power-off nor
+its capture runs. `systemctl reboot` stops the unit (CP off, then the
+capture). Before a `reboot-to` or a `bin/omamobile push` with the overlay
+on, run `omamobile-modem nv-overlay capture` by hand; otherwise the writes
+since the last timer capture are lost (the overlay itself stays valid).
+
+**Not known offline:**
+1. Which files the CP writes when it applies a carrier profile, and whether
+   its acquisition and IMS data go to `nv_normal.bin` (N3 decides; if part
+   is in `modem_userdata`, extending the allow-list is a separate,
+   maintainer-approved change).
+2. Whether the CP flushes everything to rfsd before IND_PHONE_RESET, or
+   keeps some of it until a power-off: N3 looks before the reboot, N4's
+   capture and the stop's capture after the CP is off cover both.
+3. Whether `nv_normal.bin` and `nv_protected.bin` must change together
+   (a counter or cross-check between the registries). If the CP changes
+   the protected one when it applies a profile, N3 shows it, the overlay
+   drops that change, and N5 tells whether the CP accepts the mix (rfsd
+   "Verified" for both, no "Create"/"Expand", the CP ONLINE). If not, stop:
+   the design needs the maintainer's decision.
+4. Whether rfsd rewrites `nv_normal.bin` at every start even with nothing
+   to change (it would only rewrite the overlay with the same bytes).
+
+**Runbook (the first hardware test).** Before (laptop, risk: none):
+`packages/omamobile-modem/test/all`, `tests/all` and `tools/pr-check`
+pass; `tools/build-packages packages/omamobile-modem` (0.1.15), and
+`omamobile-modem-sit` 0.3.28 or later from main, which sends the carrier
+manifest (`[network] carrier_manifest`, typed by the owner), with the
+APNs, the attach APN and the bearer order typed as in the SIM test or,
+with #373 (0.3.29, TELEPHONY-APPS-PLAN 7.6), chosen from the SIM by the
+automatic path.
+The SIM test's setup holds (section "M4.2-M4.7": the SIM in, the APNs
+set, the phone on the charger, logs grepped for identifiers before any
+quote). Never quote the manifest ID beyond the 8 characters sitd logs,
+the carrier, the PLMN or any number.
+
+```sh
+# N0 the partitions against the newest backup (read-only; risk: none). M3.5, as in M3.4.0
+tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1); d=${d%/uevent}; d=${d##*/}
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' > logs/nv-n0.sha256
+grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' <newest backup>/SHA256SUMS | sort -k2 |
+  diff - <(sort -k2 logs/nv-n0.sha256) && echo same
+#   expect/pass: same
+#   stop: any difference: a stock boot changed NV. Fresh read-only backup first (AGENTS.md section 1),
+#     new /etc/omamobile/modem-nv.sha256 (M3.4 "Before" 5.), then N0 again
+#   rollback: nothing changed
+
+# N1 install 0.1.15 with the overlay off (asks the human: installs; risk: none)
+tools/phone-ssh 'cat > /tmp/m.pkg.tar.zst' < out/repo/aarch64/omamobile-modem-0.1.15-1-aarch64.pkg.tar.zst
+tools/phone-ssh 'OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -U --noconfirm /tmp/m.pkg.tar.zst; pacman -Q omamobile-modem;
+  ls /etc/omamobile/modem-nv-overlay-enable 2>&1; omamobile-modem nv-overlay status'
+#   expect/pass: 0.1.15; "No such file"; "enabled: no", "state: none"
+#   stop: the package's check fails, or a state other than none (nothing should exist yet)
+#   rollback: pacman -U the previous omamobile-modem from the pacman cache
+
+# N2 the modem and sitd up as in the SIM test, overlay still off (asks the human: reboot first if the
+# modem already ran this boot; announce: the modem powers on, the radio transmits; risk: medium, as S4-S6)
+tools/phone-ssh 'systemctl start omamobile-modem; journalctl -u omamobile-modem -b -o cat |
+  grep -E "nv-overlay|RAM copy matches|stock checksum|CP ONLINE"'
+#   expect: "off (/etc/omamobile/modem-nv-overlay-enable absent)", the five "RAM copy matches the backup",
+#     the three "stock checksum matches", "CP ONLINE"
+#   stop: as M3.4.5b (not ONLINE, a crash file, UFS beyond expectation); any "set aside"
+#   rollback: reboot (one UFS pass)
+tools/phone-ssh 'grep -E "^carrier_manifest" /etc/omamobile/modem-sit.conf | sed "s/= .\{8\}.*/= <set>/";
+  systemctl start omamobile-sitd; sleep 120; journalctl -u omamobile-sitd -b -o cat |
+  grep -E "carrier config|Carrier manifest|IND_PHONE_RESET|ready|IMS" | cut -c1-120'
+#   expect: "carrier_manifest = <set>"; "Carrier manifest <8 hex> sent in answer to the modem";
+#     "Carrier config status from the modem: <s> cause <c>"; "Modem reset indication (IND_PHONE_RESET, ...)"
+#   record: the status and cause, whether IND_PHONE_RESET came and how long after the manifest
+#   stop: no 0x4602 within the wait ("asked for a carrier config" never logged): the CP isn't asking,
+#     nothing to persist; stop and look offline. A CP crash
+
+# N3 what the modem wrote (read-only; risk: none). The gate for everything after it
+tools/phone-ssh 'omamobile-modem nv-overlay diff'
+#   expect/pass: "changed  efs/nv_normal.bin (524288 bytes): kept" and "changed  efs/nv_normal.bin.md5 ...: kept"
+#   record: every line (names and sizes only; check them for identifiers before quoting)
+#   stop, keep nothing and decide offline: nv_normal.bin unchanged after IND_PHONE_RESET (the profile
+#     isn't there, or the CP hasn't flushed it); or any "never kept" line for efs/nv_protected.* or
+#     efs_backup (the CP changed the protected registry: unknown 3 above); or "not kept" lines for
+#     modem_userdata files that look like the profile (unknown 1). Rollback: reboot (nothing kept)
+
+# N4 turn the overlay on and keep the writes now (asks the human: writes /etc and /var/lib only; risk: low)
+tools/phone-ssh 'touch /etc/omamobile/modem-nv-overlay-enable; omamobile-modem nv-overlay capture;
+  omamobile-modem nv-overlay status; stat -c "%a %U %n" /var/lib/omamobile/modem-nv-overlay \
+  /var/lib/omamobile/modem-nv-overlay/MANIFEST'
+#   expect/pass: "kept 2 file(s) at manual: efs/nv_normal.bin, efs/nv_normal.bin.md5"; status "enabled: yes",
+#     "state: valid, 2 file(s)", "backup: the one in /etc/omamobile/modem-nv.sha256"; "700 root", "600 root"
+#   stop: anything else; rollback: omamobile-modem nv-overlay reset; rm /etc/omamobile/modem-nv-overlay-enable
+
+# N5 the reboot through systemd, so the unit's stop powers the CP off and captures again (asks the human:
+# reboot; announce; risk: medium: one modem power-off, one UFS pass)
+tools/phone-ssh 'systemctl stop omamobile-sitd omamobile-sit-data omamobile-mmd 2>/dev/null; systemctl reboot'
+# after it: the stop of the previous boot, then this boot's start (start the modem as in N2 if it isn't enabled)
+tools/phone-ssh 'journalctl -b -1 -u omamobile-modem -o cat | grep -E "CP OFFLINE|nv-overlay" | tail -3;
+  systemctl start omamobile-modem; journalctl -u omamobile-modem -b -o cat |
+  grep -E "nv-overlay|stock checksum|CP ONLINE|RfsService|Going to clear|Expand|Create" | cut -c1-120'
+#   expect: previous boot "CP OFFLINE", then "kept 2 file(s) at stop" or "unchanged (2 file(s))";
+#     this boot "overlay applied: 2 file(s) (efs/nv_normal.bin, efs/nv_normal.bin.md5), kept ... at stop",
+#     "nv_normal.bin: stock checksum matches" (and the other two), rfsd "[RfsService::Nv] ... Verified" for
+#     both registries, "CP ONLINE"
+#   pass: all of that, and no "Going to clear EFS", "Expand", "Create", "set aside"
+#   stop: "set aside" (record the reason); an rfsd clear line; the CP not ONLINE or a crash
+#   rollback: omamobile-modem nv-overlay reset, then systemctl reboot: the next start uses the backup alone
+
+# N6 the profile survived and IMS registers (announce: the radio transmits; risk: medium, as N2)
+tools/phone-ssh 'systemctl start omamobile-sitd; sleep 120; journalctl -u omamobile-sitd -b -o cat |
+  grep -E "carrier config|Carrier manifest|IND_PHONE_RESET|registered|ready|IMS" | cut -c1-120;
+  omamobile-sit status | grep -E "IMS|network"'
+#   expect: "Carrier config status from the modem: <s> cause <c>" naming the profile as already applied
+#     (record both codes against N2's), and NO "Modem reset indication" this boot; IMS registered:
+#     "IMS voice: yes, SMS: yes"; the time from the start to "ready" (record it against N2's)
+#   pass: no reset indication and IMS registered
+#   stop: IND_PHONE_RESET again (the CP did not find its profile: the overlay doesn't hold it, record
+#     N3's list); IMS not registered with the profile applied (record the step, then decide offline)
+#   rollback: omamobile-sit radio off; systemctl stop omamobile-sitd; or reboot
+
+# N7 the partitions are untouched (read-only; risk: none): N0 again
+#   pass: same. stop: any difference: all modem work stops; NV was written from Linux
+
+# N8 the timer (read-only; risk: none), 10 minutes after the modem started
+tools/phone-ssh 'systemctl list-timers omamobile-modem-nv-overlay.timer --no-pager;
+  journalctl -u omamobile-modem-nv-overlay -b -o cat | tail -3'
+#   pass: the timer listed; "unchanged (2 file(s)); nothing written" or "kept 2 file(s) at timer"
+
+# N9 OPTIONAL, on the human's go: reset proves the overlay was what kept the profile (a reboot; risk: medium)
+tools/phone-ssh 'omamobile-modem nv-overlay reset; omamobile-modem nv-overlay status; systemctl reboot'
+#   after it: the stop said "reset in this boot"; the start says "no overlay yet"; with the manifest sent,
+#   IND_PHONE_RESET comes back as in N2. Then N4-N6 again to keep it
+```
+
+**Record** here, per run: the date, `uname -r`, the package versions, N2's
+and N6's carrier-config status and cause, whether IND_PHONE_RESET came,
+the time to "ready" on both boots, N3's list (names and sizes), the UFS
+handler count at each reboot. Not the carrier, the manifest ID, the PLMN
+or any number.
 
 ## 4. Risks
 
@@ -3042,7 +3311,10 @@ any identifier.
 - **NV.** From M3.4 the daemons run; they only ever see RAM copies (the
   modem profile), and M3.5 re-checks the real partitions after each run.
   The copies must also pass the stock NV checksum before rfsd starts, and
-  `efs.clear.action` is pinned to `none` (empty clears the NV copy).
+  `efs.clear.action` is pinned to `none` (empty clears the NV copy). From
+  0.1.15 the NV overlay lays the modem's kept writes to `nv_normal.bin`
+  over the verified copy: a bad overlay is set aside, never repaired, and
+  the protected registry is never taken from it (section 3, "NV overlay").
 - **CP crashes.** About one fresh start in twenty crashed the CP during
   registration on this phone model (section 6.1). Nothing restarts it here:
   the watcher records the crash, and a reboot recovers (one UFS pass).

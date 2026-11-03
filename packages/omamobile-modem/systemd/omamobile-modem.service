@@ -24,10 +24,16 @@
 # The CP stays on while this runs. Stopping it (and so every reboot)
 # powers the CP off before rfsd goes: one recovered UFS error-handler pass.
 # Never restart it: that is a CP power cycle on a CP that was already up.
+#
+# The NV overlay (MODEM-PLAN "NV overlay"): the stop captures the modem's
+# allowed NV writes after the CP is off, and the timer pulled in here
+# captures them every 30 minutes; both do nothing without
+# /etc/omamobile/modem-nv-overlay-enable.
 [Unit]
 Description=Omarchy Mobile modem (S5300: rfsd and cbd on RAM copies of NV)
 Requires=omamobile-modem-inhibit.service
 After=omamobile-modem-inhibit.service systemd-modules-load.service omamobile-aoc.service omamobile-audio.service
+Wants=omamobile-modem-nv-overlay.timer
 ConditionPathExists=/usr/lib/omamobile-vendor/modem/root
 ConditionPathExists=/etc/omamobile/modem-nv.sha256
 ConditionPathExists=/var/lib/omamobile-vendor/modem/props.conf

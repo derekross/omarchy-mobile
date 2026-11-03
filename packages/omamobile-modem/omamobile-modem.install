@@ -8,6 +8,8 @@ post_install() {
   echo "  (/var/lib/omamobile-vendor/modem/props.conf) on the phone. To keep the stack"
   echo "  off: systemctl mask omamobile-modem-boot.target (disable doesn't remove a vendor"
   echo "  link, and is-enabled reads 'disabled' for one). device/cheetah/MODEM-PLAN.md M4.6."
+  echo "  The NV overlay (the modem's own NV writes kept on userdata) is off until"
+  echo "  /etc/omamobile/modem-nv-overlay-enable exists: MODEM-PLAN \"NV overlay\"."
   udevadm control --reload 2>/dev/null || true
 }
 post_upgrade() {
