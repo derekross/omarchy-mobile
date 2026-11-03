@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 post_install() {
   echo "omamobile-modem-sit: omamobile-sitd is installed but not enabled. It needs the"
-  echo "  modem ONLINE first (omamobile-modem.service, MODEM-PLAN M3.4) and the"
-  echo "  carrier's APN in /etc/omamobile/modem-sit.conf; then MODEM-PLAN M4."
+  echo "  modem ONLINE first (omamobile-modem.service, MODEM-PLAN M3.4); then MODEM-PLAN M4."
+  echo "  The APN is chosen from the SIM (apn = auto in /etc/omamobile/modem-sit.conf)."
 }
 post_upgrade() {
   systemctl daemon-reload 2>/dev/null || true
@@ -13,6 +13,10 @@ post_upgrade() {
     echo "omamobile-modem-sit 0.3.3: calls route no audio by default ([audio] card = none) until the"
     echo "  earpiece mode exists; with a card, audio is refused above the earpiece ceiling."
     echo "  New settings: [network] ims_required, ims_timeout. Check modem-sit.conf.pacnew if listed."
+  fi
+  if [[ $(vercmp "$2" 0.3.12) -lt 0 ]]; then
+    echo "omamobile-modem-sit 0.3.12: an empty or \"auto\" [network] apn is chosen from the SIM;"
+    echo "  an APN you typed keeps working. New: [network] attach_apn, [data] roaming (.pacnew)."
   fi
 }
 pre_remove() {

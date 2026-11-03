@@ -137,6 +137,22 @@ def resolver_for(servers):
     return Resolver(RESOLVER)
 
 
+def roaming_blocked(config=None, state=None):
+    """Data roaming is off ([data] roaming = no) and the network says the
+    phone is roaming: then rmnet0 gets no default route. Read on every pass,
+    so the Mobile network page's switch applies without a restart."""
+    try:
+        if paths.config(config)['data'].getboolean('roaming', True):
+            return False
+    except (ValueError, OSError):
+        return False
+    try:
+        status = json.loads(Path(state or paths.RUN / 'state.json').read_text())
+    except (OSError, ValueError):
+        return False
+    return (status.get('modem') or {}).get('registration') == 'roaming'
+
+
 def wait_for_bearer(seconds):
     deadline = time.monotonic() + seconds
     while not RESPONSE.exists():
@@ -167,7 +183,8 @@ def main():
         run('ip', 'link', 'set', 'dev', 'rmnet0', 'up')
         run('ip', 'addr', 'add', address + '/32', 'dev', 'rmnet0')
         addressed = True
-        run('ip', 'route', 'add', 'default', 'dev', 'rmnet0', 'src', address, 'metric', '700')
+        if not roaming_blocked():
+            run('ip', 'route', 'add', 'default', 'dev', 'rmnet0', 'src', address, 'metric', '700')
         print('Cellular fallback ready; Wi-Fi remains preferred', flush=True)
         last = None
         seen = counters(json.loads(run('ip', '-j', '-s', 'link', 'show', 'dev', 'rmnet0')))
@@ -178,6 +195,13 @@ def main():
             routes = json.loads(run('ip', '-j', 'route', 'show', 'default'))
             routed = any(r.get('dev') == 'rmnet0' for r in routes)
             others = [r for r in routes if r.get('dev') != 'rmnet0']
+            if roaming_blocked():
+                if routed:
+                    run('ip', 'route', 'del', 'default', 'dev', 'rmnet0', 'metric', '700')
+                    print('Roaming with data roaming off; the cellular default route is removed', flush=True)
+                resolver.update(False, dns)
+                last = None
+                return
             # With Wi-Fi up but rated limited, the carrier's DNS would keep
             # NetworkManager's own check failing and Wi-Fi penalised.
             cellular = routed and not others

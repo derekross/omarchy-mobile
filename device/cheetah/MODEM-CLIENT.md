@@ -103,8 +103,12 @@ registration indication), unless `ims_required = yes`.
 - **No NV writes from Linux, by construction.** The RIL speaks only SIT on
   `umts_ipc0` and fixed AT on `umts_router`; there is no raw-request path.
   NV lives in rfsd's RAM copies (MODEM-PLAN M3).
-- **No identity reads.** GET_IMEI/IMSI/SIM I/O, PIN and APDU requests are
-  not on the allow-list; GET_IMEI/IMEISV are on the do-not-send list too.
+- **No identity reads, but one.** GET_IMEI, SIM I/O, PIN and APDU requests
+  are not on the allow-list; GET_IMEI/IMEISV are on the do-not-send list too.
+  From 0.3.12 GET_IMSI is, sent once at start-up when `[network] apn` or
+  `attach_apn` is `auto`: only its MCC/MNC is used, to choose the APNs
+  (`carrier_apn.py`, TELEPHONY-APPS-PLAN 7.6); the IMSI is never logged,
+  stored or published, and the simulator tests fail if it reaches the log.
 - **Logs.** Requests by name and status code; SIM card/app state; data-call
   status/CID/type; IMS registration state/features. Never numbers, message
   text, addresses or the IMSI. The simulator tests fail if a number or a

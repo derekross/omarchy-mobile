@@ -272,11 +272,45 @@ class SimulatorTests(unittest.TestCase):
         self.start('--no-ims-registration')
         self.assertNotEqual(self.daemon.wait(40), 0)
 
-    def test_no_apn_never_switches_the_radio(self):
-        (self.dir / 'modem-sit.conf').write_text('[audio]\ncard = none\n')
-        self.start()
-        self.assertNotEqual(self.daemon.wait(30), 0)
-        self.assertFalse([e for e in self.transcript_entries() if e.get('type') == 'at'])
+    def auto_apn_env(self):
+        (self.dir / 'modem-sit.conf').write_text(
+            '[network]\napn = auto\nsim_timeout = 20\nregister_timeout = 30\n[audio]\ncard = none\n')
+        self.env.update(OMAMOBILE_SIT_PROVIDERS=str(self.dir / 'no-database.xml'),
+                        OMAMOBILE_SIT_APN_OVERRIDES=str(HERE.parent / 'share' / 'apn-overrides.conf'))
+
+    def test_auto_apn_from_the_sim_and_nothing_identifying_logged(self):
+        self.auto_apn_env()
+        self.start('--imsi-plmn', '311480')
+        self.wait_ready()
+        modem = json.loads(self.cli('status', '--json'))['modem']
+        self.assertEqual(modem['apn'], dict(value='vzwinternet', source='override', attach='ims',
+                                            attach_source='override'))
+        attaches = [e['apn'] for e in self.transcript_entries() if e.get('event') == 'initial_attach']
+        self.assertEqual(attaches, ['ims'])
+        self.assertEqual((modem['data'], modem['data_available'], modem['sim']['pin_lock']), (True, True, 'off'))
+        setups = [e for e in self.transcript_entries() if e.get('event') == 'setup_data_call']
+        self.assertEqual([(e['cid'], e['apn']) for e in setups], [(1, 'vzwinternet'), (2, 'ims')])
+        self.assertFalse([e for e in self.transcript_entries() if 'violation' in e])
+        log = (self.dir / 'daemon.log').read_text()
+        self.assertIn('APN chosen from', log)
+        for secret in ('000000017', '311480', 'vzwinternet'):
+            self.assertNotIn(secret, log)
+        self.assertNotIn('000000017', (self.dir / 'run' / 'state.json').read_text())
+
+    def test_no_apn_registers_for_calls_and_sms_without_data(self):
+        self.auto_apn_env()
+        self.start('--no-imsi')
+        self.wait_ready()
+        modem = json.loads(self.cli('status', '--json'))['modem']
+        self.assertEqual((modem['voice'], modem['sms'], modem['data'], modem['data_available']),
+                         (True, True, False, False))
+        self.assertEqual(modem['apn'], dict(value='', source='none', attach='', attach_source='same'))
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertNotIn(0x0603, ids)                # no attach APN
+        self.assertNotIn(0x0613, ids)                # no data profile
+        setups = [e for e in self.transcript_entries() if e.get('event') == 'setup_data_call']
+        self.assertEqual([e['cid'] for e in setups], [2])   # the IMS bearer only
+        self.assertIn('without mobile data', (self.dir / 'daemon.log').read_text())
 
 
 if __name__ == '__main__':
