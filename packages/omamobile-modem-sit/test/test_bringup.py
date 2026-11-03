@@ -1,12 +1,27 @@
 # SPDX-License-Identifier: MIT
 import env  # noqa: F401  (paths and sys.path first)
+import contextlib
+import io
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 import bringup
 import paths
+from sit import ModemError
 
 SETTINGS = paths.config('/nonexistent')
 SETTINGS['network']['apn'] = 'internet.example'
+SETTINGS['network']['attach_apn'] = 'internet.example'
+OVERRIDES = str(Path(__file__).resolve().parent.parent / 'share' / 'apn-overrides.conf')
+
+
+def sim_with_aid():
+    """A READY USIM with a made-up 8-byte AID."""
+    record = bytearray(63)
+    record[0], record[1], record[3] = 2, 5, 8
+    record[4:12] = bytes(range(0xa0, 0xa8))
+    return bytes([1, 0, 1]) + bytes(record)
 
 
 def sim(card, *apps):
@@ -61,6 +76,164 @@ class BringupTests(unittest.TestCase):
             register.assert_not_called()
             service.client.request.assert_not_called()
 
+    def run_start(self, settings, imsi_reply, overrides=OVERRIDES):
+        """start() past the SIM stage with every modem step mocked; GET_IMSI
+        answers imsi_reply (bytes, or an exception to raise)."""
+        service = Mock()
+        sim_payload = sim_with_aid()
+
+        def request(ident, payload=b'', timeout=8):
+            if ident == 0x0400:
+                self.assertEqual(payload[0], 8)
+                self.assertEqual(len(payload), 17)
+                if isinstance(imsi_reply, Exception):
+                    raise imsi_reply
+                return imsi_reply
+            return sim_payload
+        service.client.request.side_effect = request
+        out = io.StringIO()
+
+        def fake_wait(service_, predicate, seconds, stopped):
+            if seconds == settings['network'].getint('sim_timeout', 120):
+                predicate()
+        with patch.object(bringup, 'wait_for', side_effect=fake_wait), patch.object(bringup, 'radio') as radio, \
+             patch.object(bringup, 'radio_state', return_value=0), \
+             patch.object(bringup, 'initial_attach') as attach, \
+             patch.object(bringup, 'provision_profiles') as profiles, \
+             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate') as activate, \
+             patch.object(bringup, 'data_snapshot'), patch.object(bringup, 'find_attach_bearer', return_value=None), \
+             patch.object(bringup, 'start_stack'), patch.object(bringup, 'register'), \
+             patch.object(bringup.carrier_apn, 'OVERRIDES', overrides), \
+             patch.object(bringup.carrier_apn, 'DATABASE', '/nonexistent.xml'), \
+             contextlib.redirect_stdout(out):
+            bringup.start(service, settings)
+        return service, out.getvalue(), radio, attach, profiles, activate
+
+    def tearDown(self):
+        bringup.data_call.INTERNET_CID = 1
+
+    def test_auto_apn_comes_from_the_sims_home_network(self):
+        """A Verizon-network SIM: what registered IMS and carried calls and
+        texts on the 7 Pro on 2026-11-03 (NOTES, IMS-SHANNON 11-12): no
+        attach APN, stock's four profiles, IMS first on CID 2, the internet
+        on CID 3."""
+        settings = paths.config('/nonexistent')
+        fake = '311480' + '0' * 9
+        service, log, radio, attach, profiles, activate = self.run_start(
+            settings, bytes([15]) + fake.encode())
+        attach.assert_not_called()
+        sent = profiles.call_args.args[1]
+        self.assertEqual([(p.ident, p.apn, p.type_names(), p.ip, p.roaming_ip) for p in sent],
+                         [(0, 'VZWINTERNET', 'default,supl,dun', 'ipv4v6', 'ipv4v6'),
+                          (2, 'IMS', 'ims,ia', 'ipv4v6', 'ipv6'),
+                          (3, 'VZWADMIN', 'fota', 'ipv4v6', 'ipv4v6'),
+                          (4, 'VZWAPP', 'mms,cbs', 'ipv4v6', 'ipv4v6')])
+        # IMS first (CID 2, the IMS profile's types), then the internet on CID 3.
+        self.assertEqual([(c.args[1], c.kwargs.get('ims', False)) for c in activate.call_args_list],
+                         [('IMS', True), ('VZWINTERNET', False)])
+        self.assertEqual(activate.call_args_list[0].kwargs['apn_types'], 0x140)
+        self.assertEqual(bringup.data_call.INTERNET_CID, 3)
+        self.assertEqual(service.apn, dict(value='VZWINTERNET', source='override',
+                                           attach='none', attach_source='override'))
+        self.assertIn('APN chosen from', log)
+        self.assertIn('attach APN chosen from', log)
+        self.assertIn('not sent (attach_apn = none)', log)
+        self.assertIn('bearer order and data profiles from', log)
+        for secret in (fake, '311', '480', 'vzwinternet', 'vzwadmin', 'vzwapp'):
+            self.assertNotIn(secret, log.lower())
+
+    def test_typed_values_win_and_the_imsi_is_never_read(self):
+        settings = paths.config('/nonexistent')
+        settings['network'].update(apn='internet.example', attach_apn='internet.example', ims_apn='ims',
+                                   ims_first='no', internet_cid='1')
+        service, _, _, attach, profiles, activate = self.run_start(settings, AssertionError('GET_IMSI sent'))
+        attach.assert_called_once_with(service.client, 'internet.example', 'ipv4v6', ims=False)
+        self.assertEqual([p.apn for p in profiles.call_args.args[1]], ['internet.example'])
+        self.assertEqual([c.args[1] for c in activate.call_args_list], ['internet.example', 'ims'])
+        self.assertEqual((service.apn['source'], service.apn['attach_source']), ('manual', 'manual'))
+
+    def test_a_typed_apn_still_takes_the_carriers_attach_and_bearer_order(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'vzwinternet'
+        service, log, _, attach, profiles, activate = self.run_start(settings, bytes([15]) + b'311480000000000')
+        attach.assert_not_called()
+        # The typed internet APN is the internet bearer's; the carrier's
+        # profiles (profile 0 included) and its bearer order still apply.
+        self.assertEqual([(p.ident, p.apn) for p in profiles.call_args.args[1]],
+                         [(0, 'VZWINTERNET'), (2, 'IMS'), (3, 'VZWADMIN'), (4, 'VZWAPP')])
+        self.assertEqual([c.args[1] for c in activate.call_args_list], ['IMS', 'vzwinternet'])
+        self.assertEqual(bringup.data_call.INTERNET_CID, 3)
+        self.assertEqual((service.apn['source'], service.apn['attach_source']), ('manual', 'override'))
+        self.assertIn('typed values kept', log)
+
+    def test_typed_profiles_replace_the_carriers(self):
+        settings = paths.config('/nonexistent')
+        settings.read_string('[profiles]\n3 = fota.example; types=fota\n')
+        _, _, _, _, profiles, _ = self.run_start(settings, bytes([15]) + b'311480000000000')
+        self.assertEqual([(p.ident, p.apn) for p in profiles.call_args.args[1]],
+                         [(0, 'VZWINTERNET'), (3, 'fota.example')])
+
+    def test_without_a_carrier_attach_apn_the_internet_apn_attaches(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        service, _, _, attach, _, activate = self.run_start(settings, bytes([15]) + b'001010000000000')
+        attach.assert_called_once_with(service.client, 'internet.example', 'ipv4v6', ims=False)
+        self.assertEqual(service.apn['attach_source'], 'same')
+        self.assertEqual([c.args[1] for c in activate.call_args_list], ['internet.example', 'ims'])
+        self.assertEqual(bringup.data_call.INTERNET_CID, 1)
+
+    def test_no_apn_found_registers_for_calls_and_sms_without_data(self):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = ''
+        service, log, radio, attach, profiles, activate = self.run_start(settings, ModemError(2, b''))
+        radio.assert_any_call(True)
+        attach.assert_not_called()
+        profiles.assert_not_called()
+        # Only the IMS bearer: no internet bearer without an APN.
+        self.assertEqual([c.kwargs.get('ims') for c in activate.call_args_list], [True])
+        self.assertEqual(service.apn, dict(value='', source='none', attach='', attach_source='same'))
+        self.assertIn('without mobile data', log)
+
+    def test_unknown_network_code_is_no_apn(self):
+        settings = paths.config('/nonexistent')
+        _, _, _, attach, _, _ = self.run_start(settings, bytes([15]) + b'001010000000000')
+        attach.assert_not_called()
+
+    def test_bad_typed_bearer_keys_stop_startup(self):
+        for key, value in (('ims_first', 'maybe'), ('internet_cid', '2'), ('internet_cid', 'x'), ('internet_cid', '16')):
+            settings = paths.config('/nonexistent')
+            settings['network'].update(apn='internet.example', attach_apn='internet.example')
+            settings['network'][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                self.run_start(settings, bytes([15]) + b'001010000000000')
+
+    def test_an_overrides_ims_cid_is_refused_by_the_override_not_the_config(self):
+        """internet_cid = 2 in an override is left out there (CID 1 stays),
+        and the log names the override: never "[network] internet_cid"."""
+        with tempfile.NamedTemporaryFile('w', suffix='.conf', delete=False) as f:
+            f.write('[001/01]\nname = Test\napn = internet.example\ninternet_cid = 2\n')
+        try:
+            settings = paths.config('/nonexistent')
+            _, log, _, _, _, _ = self.run_start(settings, bytes([15]) + b'001010000000000', overrides=f.name)
+        finally:
+            Path(f.name).unlink()
+        self.assertEqual(bringup.data_call.INTERNET_CID, 1)
+        self.assertIn("carrier override for this SIM has values that don't check, left out: "
+                      'internet_cid (1..15, not 2: the IMS bearer)', log)
+        self.assertNotIn('[network]', log)
+
+    def test_imsi_layout_is_checked(self):
+        client = Mock()
+        for reply in (b'', bytes([20]) + b'1' * 20, bytes([15]) + b'31148000000000x', bytes([15]) + b'1'):
+            client.request.return_value = reply
+            with self.assertRaises(ValueError):
+                bringup.read_imsi(client, b'\xa0' * 8)
+
+    def test_usim_aid_only_from_a_ready_usim(self):
+        self.assertEqual(bringup.usim_aid(sim_with_aid()), bytes(range(0xa0, 0xa8)))
+        self.assertIsNone(bringup.usim_aid(sim(1, (2, 2))))
+        self.assertIsNone(bringup.usim_aid(b''))
+
     def attach_run(self, attach_apn):
         settings = paths.config('/nonexistent')
         settings['network']['apn'] = 'internet.example'
@@ -84,7 +257,7 @@ class BringupTests(unittest.TestCase):
         self.assertNotIn('ims', activate.call_args.kwargs)
 
     def test_attach_on_the_ims_apn_requests_the_pcscf(self):
-        attach, _, _ = self.attach_run('ims')          # ims_apn defaults to "ims"
+        attach, _, _ = self.attach_run('ims')          # ims_apn auto: "ims" without an override
         self.assertEqual(attach.call_args.kwargs, {'ims': True})
         attach, _, _ = self.attach_run('other.example')
         self.assertEqual(attach.call_args.kwargs, {'ims': False})
@@ -92,21 +265,15 @@ class BringupTests(unittest.TestCase):
         self.assertEqual(attach.call_args.kwargs, {'ims': False})
 
     def test_empty_attach_apn_attaches_on_the_internet_apn(self):
-        for value in ('', '  '):
+        for value in ('', '  ', 'auto'):
             attach, profile, _ = self.attach_run(value)
             self.assertEqual(attach.call_args.args[1], 'internet.example')
             self.assertEqual([p.apn for p in profile.call_args.args[1]], ['internet.example'])
 
-    def test_attach_apn_defaults_to_empty(self):
-        self.assertEqual(paths.config('/nonexistent')['network']['attach_apn'], '')
-
-    def test_no_apn_stops_before_the_radio(self):
-        settings = paths.config('/nonexistent')
-        with patch.object(bringup, 'radio') as radio, patch.object(bringup, 'radio_state') as state, \
-             self.assertRaises(RuntimeError):
-            bringup.start(Mock(), settings)
-        radio.assert_not_called()
-        state.assert_not_called()
+    def test_apns_default_to_auto(self):
+        net = paths.config('/nonexistent')['network']
+        self.assertEqual((net['apn'], net['attach_apn'], net['ims_apn'], net['ims_first'], net['internet_cid']),
+                         ('auto', 'auto', 'auto', 'auto', 'auto'))
 
     def test_wait_keeps_handling_incoming_sms(self):
         service = Mock()

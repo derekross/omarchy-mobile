@@ -398,6 +398,25 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):                           # 2 and 02 are one ID
             data_call.configured_profiles(self.settings('2 = a.example; types=ims\n02 = b.example; types=ims\n'))
 
+    def test_the_chosen_apn_and_a_carriers_profiles(self):
+        # The APN chosen at start-up (not [network] apn) makes profile 0.
+        found = data_call.configured_profiles(self.settings(), 'chosen.example')
+        self.assertEqual(found, [data_call.default_profile('chosen.example')])
+        # A carrier override's lines, when [profiles] is empty.
+        extra = [('2', 'ims.example; types=ia,ims; roaming_ip=ipv6'), ('4', 'cbs.example; types=cbs,mms')]
+        found = data_call.configured_profiles(self.settings(), 'chosen.example', extra)
+        self.assertEqual([(p.ident, p.apn) for p in found], [(0, 'chosen.example'), (2, 'ims.example'), (4, 'cbs.example')])
+        found = data_call.configured_profiles(self.settings(), 'chosen.example', [('0', 'own.example; types=default')])
+        self.assertEqual([(p.ident, p.apn) for p in found], [(0, 'own.example')])
+        # [profiles] with any line replaces the override's set.
+        found = data_call.configured_profiles(self.settings('3 = fota.example; types=fota\n'), 'chosen.example', extra)
+        self.assertEqual([p.ident for p in found], [0, 3])
+        # No APN known and no profile 0: nothing for the internet.
+        self.assertEqual(data_call.configured_profiles(self.settings(), ''), [])
+        self.assertEqual([p.ident for p in data_call.configured_profiles(self.settings(), '', extra)], [2, 4])
+        with self.assertRaises(ValueError):
+            data_call.configured_profiles(self.settings(), 'chosen.example', [('2', 'x; types=nope')])
+
     def test_shipped_config_has_no_profiles(self):
         import paths
         conf = Path(__file__).resolve().parent.parent / 'etc/omamobile/modem-sit.conf'

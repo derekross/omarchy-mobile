@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "omamobile.mobilenetwork",
+  "name": "Mobile network",
+  "version": "0.1.0",
+  "author": "Omarchy Mobile",
+  "license": "MIT",
+  "description": "The phone's Mobile network page: carrier, signal and registration, mobile data and data roaming, the APN in use with a field to type one, and the SIM PIN lock. Reads and changes them through omamobile-mobile-network; says \"No modem\" without the modem stack.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "MobileNetwork.qml"
+  }
+}

@@ -433,6 +433,18 @@ fi
 if omarchy-done ensure omamobile-voice-plugin; then
   add_plugin omamobile.voice
 fi
+# The Mobile network page (omamobile.mobilenetwork): carrier, mobile data,
+# roaming, the APN and the SIM PIN lock; and Setup > Mobile network in
+# Omarchy's menu, shown only where the modem stack is installed. Once each.
+if omarchy-done ensure omamobile-mobilenetwork-plugin; then
+  add_plugin omamobile.mobilenetwork
+fi
+if omarchy-done ensure omamobile-menu-mobilenetwork; then
+  extension=~/.config/omarchy/extensions/omarchy-menu.jsonc
+  if [[ -f $extension ]] && ! grep -q '"setup.mobile-network"' "$extension"; then
+    sed -i '0,/^{/s//{\n  "setup.mobile-network": {"icon":"\xf3\xb0\x9e\x83","label":"Mobile network","description":"Carrier, mobile data, roaming and the APN","when":"test -x \/usr\/lib\/omamobile-sit\/omamobile-sit-config","action":"omarchy-shell shell summon omamobile.mobilenetwork '"'"'{}'"'"'"},/' "$extension"
+  fi
+fi
 # Setup > Voice in Omarchy's menu opens the voice settings (omamobile.voice),
 # through the menu extension file. Added once.
 if omarchy-done ensure omamobile-menu-voice; then

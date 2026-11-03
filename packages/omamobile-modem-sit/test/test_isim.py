@@ -122,7 +122,8 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sit.check(0x020c, isim_pcscf=True)        # TRANSMIT_SIM_APDU_BASIC
         with self.assertRaises(ValueError):
-            sit.check(0x0400, isim_pcscf=True)        # GET_IMSI
+            sit.check(0x0401, isim_pcscf=True)        # GET_IMEI
+        sit.check(0x0400, isim_pcscf=True)            # GET_IMSI: once at start-up, for the APNs (0.3.12)
         sit.check(0x0200, isim_pcscf=True)
 
 

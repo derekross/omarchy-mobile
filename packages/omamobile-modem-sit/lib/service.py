@@ -140,7 +140,11 @@ def sim_status(payload):
         return dict(state='detected')
     status = dict(state=APP_STATES.get(app[1], 'unknown'))
     if status['state'] in ('pin', 'puk', 'ready'):
-        status.update(pin_retries=app[59], puk_retries=app[60])
+        # PIN1 state (+57, AOSP RIL_PinState): whether the SIM asks for its
+        # PIN at power-on. The RIL has no PIN entry, so "on" means the SIM
+        # works here only once the lock is turned off in another phone.
+        status.update(pin_retries=app[59], puk_retries=app[60],
+                      pin_lock={1: 'on', 2: 'on', 3: 'off', 4: 'on', 5: 'on'}.get(app[57], 'unknown'))
     return status
 
 
@@ -232,6 +236,11 @@ class Service:
         self.current_stage = 'starting'
         # IMS as start-up left it: unknown (no start-up), off, pending, failed, registered.
         self.ims_state = 'unknown'
+        # The internet APN start-up used and where it came from (manual,
+        # override, carrier-database or none), and the attach APN (attach;
+        # attach_source "same" when it is the internet APN). Empty before
+        # start-up.
+        self.apn = dict(value='', source='', attach='', attach_source='')
         self.next_poll = 0
         self.published = None
         self.subscribers = []
@@ -560,6 +569,7 @@ class Service:
                      signal=self.signal if self.net['reg'] in ('home', 'roaming') else 0, audio=True,
                      radio=self.radio, sim=dict(self.sim),
                      ims='registered' if voice or sms else self.ims_state,
+                     apn=dict(self.apn), data_available=self.apn.get('source') != 'none',
                      emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
         calls = [{k: v for k, v in c.items() if k != 'modem_id'} for c in self.calls.values()]
         if public:

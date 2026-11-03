@@ -36,6 +36,8 @@ Two packages:
 | `sit.py` | ported | The single-owner IPC0 transport: framing, token matching, indication queue (signal and physical-channel snapshots coalesced so telemetry can't crowd out an SMS reply). Two guards: the allow-list of requests this stack sends, and our do-not-send list (NV, identity, carrier lock, AT forwarding, VSIM, satellite) checked first, so an edit to the allow-list can't let one through. Dial and SMS sends need the owner's flags |
 | `sit_names.py` | ours | The 602 message names, for logs |
 | `bringup.py` | ported, carrier values moved to the config | The start-up order (section 1.1) |
+| `carrier_apn.py` | ours | The SIM's carrier settings from its home network code (GET_IMSI's MCC/MNC, the rest dropped): the package's `apn-overrides.conf` first, then mobile-broadband-provider-info's `serviceproviders.xml`; the internet and attach APNs, `ims_apn`, `ims_first`, `internet_cid` and the data profiles, each only where `[network]` leaves it `auto` or empty (0.3.29, TELEPHONY-APPS-PLAN 7.6) |
+| `omamobile-sit-config` | ours | The pkexec helper behind the shell's Mobile network page (polkit action `org.omamobile.modem-sit.configure`): `set apn\|attach_apn\|roaming` and `get`, nothing else in `modem-sit.conf`; an APN must be a plain carrier APN, and the file is rewritten atomically with its comments kept |
 | `data_call.py` | ported, APN from the config | Setup (983 bytes; no PDU session ID on cellular, as stock), initial attach (251), data profile (246); bearer ownership recorded in RAM before each setup, never retried blindly |
 | `ims.py` | ported (identity strings ours) | IMS stack start, hidden-menu configuration, ADD_PDN_INFO from the IMS bearer, the registration indication |
 | `radio_settings.py` | ported | NR mode byte (3 -> 0 keeps LTE; the original kept in RAM) |
@@ -103,8 +105,16 @@ registration indication), unless `ims_required = yes`.
 - **No NV writes from Linux, by construction.** The RIL speaks only SIT on
   `umts_ipc0` and fixed AT on `umts_router`; there is no raw-request path.
   NV lives in rfsd's RAM copies (MODEM-PLAN M3).
-- **No identity reads.** GET_IMEI/IMSI/SIM I/O, PIN and APDU requests are
-  not on the allow-list; GET_IMEI/IMEISV are on the do-not-send list too.
+- **No identity reads, but one.** GET_IMEI, SIM I/O, PIN and APDU requests
+  are not on the allow-list; GET_IMEI/IMEISV are on the do-not-send list too.
+  From 0.3.29 GET_IMSI is, sent once at start-up when any of `[network]`
+  `apn`, `attach_apn`, `ims_apn`, `ims_first` or `internet_cid` is `auto`
+  or empty. Those are the shipped defaults, so by default it is sent at
+  every boot, and typing `apn` and `attach_apn` alone still sends it (for
+  the bearer order); only typing all five reads no IMSI. Only its MCC/MNC
+  is used, to choose the APNs, the bearer order and the data profiles
+  (`carrier_apn.py`, TELEPHONY-APPS-PLAN 7.6); the IMSI is never logged,
+  stored or published, and the simulator tests fail if it reaches the log.
 - **Logs.** Requests by name and status code; SIM card/app state; data-call
   status/CID/type; IMS registration state/features. Never numbers, message
   text, addresses or the IMSI. The simulator tests fail if a number or a
