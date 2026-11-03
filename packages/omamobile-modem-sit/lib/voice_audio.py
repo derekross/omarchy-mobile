@@ -295,6 +295,9 @@ class VoiceAudio:
             # The output DSP stays in Ambient unless told otherwise, and the
             # uploaded tuning is for its APMg3 telephony mode.
             route.insert(2, ('Audio DSP Mode', 'Telephony_APMG3'))
+            # The modem mixer's signal processing (block 19, where the tuning
+            # goes) read ASP_OFF during our calls, with the echo coming back.
+            route.insert(3, ('AoC Modem Mixer ASP Mode', 'ASP_ON'))
         names = [name for name, _ in route] + list(TEGU_GAINS)
         try:
             saved = [(name, self.mixer_value(name)) for name in names]
