@@ -200,8 +200,10 @@ Expect `product: cheetah`, `unlocked: yes`. Coming from our Linux, the
 current slot is `b`: `version-bootloader` is slot B's. Compare it with slot
 A's from the stock capture (`~/android/reference/cheetah-stock-cp2a/fastboot-getvar-all.txt`,
 taken with slot A current). **Stop** if they differ: setting slot B active
-runs slot B's bootloader; flash the same factory bootloader to both from
-stock first. If equal, that value is the `--bootloader-slots-match` below.
+runs slot B's bootloader. Never flash a bootloader partition by hand
+(CONTRIBUTING §3.1); from stock, sideload the full OTA twice so each slot
+gets the same build, or ask in an issue. If equal, that value is the
+`--bootloader-slots-match` below.
 On a first install the phone comes from stock Android: slot `a` is current,
 so `version-bootloader` is slot A's, and there is no stock capture to
 compare it with. I2's dry run checks the slots, and when the phone reports
