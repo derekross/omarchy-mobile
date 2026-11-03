@@ -412,16 +412,38 @@ if [[ -L $installed || ( -e $installed && ! -d $installed ) ]]; then
   echo "refusing non-directory module tree: $installed" >&2
   exit 1
 fi
+# Every module's sha256, NUL-separated "sum<TAB>path" records relative to the tree.
+module_sums() {
+  (cd "$1" && find . \( -type f -o -type l \) \( -name '*.ko' -o -name '*.ko.*' \) -print0 | sort -z |
+    while IFS= read -r -d '' f; do printf '%s\t%s\0' "$(sha256sum < "$f" | cut -d' ' -f1)" "${f#./}"; done)
+}
 if [[ -d $installed ]]; then
-  find "$installed" \( -type f -o -type l \) \( -name '*.ko' -o -name '*.ko.*' \) -print0 > "$stage/installed-modules"
+  manifest=$installed/.omamobile-modules.sha256
   conflicts=0
-  while IFS= read -r -d '' file; do
-    path=${file#"$installed/"}
-    if [[ ! -f $incoming/$path ]] || ! cmp -s -- "$file" "$incoming/$path"; then
-      printf 'module absent or different in incoming archive: %s\n' "$path" >&2
-      conflicts=1
-    fi
-  done < "$stage/installed-modules"
+  declare -A pushed=() incoming_sums=()
+  if [[ -f $manifest && ! -L $manifest ]]; then
+    # What the last push installed: a rebuilt module under the same release
+    # name is fine, a module added or swapped since by hand is not.
+    while IFS= read -r -d '' rec; do pushed[${rec#*$'\t'}]=${rec%%$'\t'*}; done < "$manifest"
+    while IFS= read -r -d '' rec; do
+      path=${rec#*$'\t'} sum=${rec%%$'\t'*}
+      if [[ -z ${pushed[$path]+x} ]]; then
+        printf 'module added by hand since the last push: %s\n' "$path" >&2; conflicts=1
+      elif [[ ${pushed[$path]} != "$sum" ]]; then
+        printf 'module changed by hand since the last push: %s\n' "$path" >&2; conflicts=1
+      fi
+    done < <(module_sums "$installed")
+  else
+    # A tree from before the manifest: every installed module must be in the
+    # archive unchanged (checksums, so no cmp: the release root has no diffutils).
+    while IFS= read -r -d '' rec; do incoming_sums[${rec#*$'\t'}]=${rec%%$'\t'*}; done < <(module_sums "$incoming")
+    while IFS= read -r -d '' rec; do
+      path=${rec#*$'\t'} sum=${rec%%$'\t'*}
+      if [[ ${incoming_sums[$path]:-} != "$sum" ]]; then
+        printf 'module absent or different in incoming archive: %s\n' "$path" >&2; conflicts=1
+      fi
+    done < <(module_sums "$installed")
+  fi
   if (( conflicts )); then
     if [[ $replace != 1 ]]; then
       echo "refusing to replace $rel; installed tree untouched (OMAMOBILE_MODULES_REPLACE=1 permits replacement)" >&2
@@ -434,6 +456,7 @@ fi
 rm -rf -- "$installed"
 mv -- "$incoming" "$installed"
 depmod -a "$rel"
+module_sums "$installed" > "$installed/.omamobile-modules.sha256"
 printf '%s\n' "$checksum" > "$installed/.omamobile-tarball"
 printf '%s\n' "$rel" > "$root/.omamobile-next"
 sync
@@ -1126,13 +1149,19 @@ cmd_push() {
   want=$(sha256sum < "$KERNEL_OUT/modules-$rel.tar.zst" | cut -d' ' -f1)
   local marker_status marker=/usr/lib/modules/$rel/.omamobile-tarball
   # A missing marker needs an install; a failed read must never authorize one.
-  if got=$("$ssh" "if test -e '$marker' || test -L '$marker'; then cat -- '$marker'; else printf '%s\\n' '<missing>'; fi" 2>&1); then
+  # Only stdout is the marker: an SSH warning on stderr isn't a mismatch.
+  local marker_err
+  marker_err=$(mktemp)
+  if got=$("$ssh" "if test -e '$marker' || test -L '$marker'; then cat -- '$marker'; else printf '%s\\n' '<missing>'; fi" 2>"$marker_err"); then
+    rm -f -- "$marker_err"
     if [[ $got != "$want" ]]; then
       say "Module marker for $rel: expected $want; read returned ${got:-<empty>}"
       cmd_modules_push
     fi
   else
     marker_status=$?
+    got="$got$(cat -- "$marker_err")"
+    rm -f -- "$marker_err"
     die "cannot read module marker for $rel: expected $want; read exited $marker_status, returned ${got:-<empty>}"
   fi
   # Check every image before writing any. Each must fit its partition, and an

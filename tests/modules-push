@@ -27,7 +27,8 @@ case $cmd in
   'cat /proc/sys/kernel/random/boot_id') echo fixture-boot; exit 0 ;;
   *'command -v reboot-to'*) exit 0 ;;
   'if test -e '*'.omamobile-tarball'*)
-    if [[ ${MARKER_FAIL:-0} == 1 ]]; then echo 'fixture marker read failed'; exit 23; fi ;;
+    if [[ ${MARKER_FAIL:-0} == 1 ]]; then echo 'fixture marker read failed'; exit 23; fi
+    if [[ ${MARKER_WARN:-0} == 1 ]]; then echo 'Warning: fixture SSH notice' >&2; fi ;;
   *'for s in /sys/block/'*) echo 'fixture stops before image writes' >&2; exit 90 ;;
 esac
 exec bash -c "$cmd"
@@ -42,12 +43,13 @@ cat > "$t/bin/sync" <<'SH'
 echo sync >> "$EFFECTS"
 SH
 # Any accidental use of real transport or block writers is a test failure.
-for cmd in ssh fastboot dd; do
+# cmp too: the release root has no diffutils, so the installer must not need it.
+for cmd in ssh fastboot dd cmp; do
   printf '#!/bin/sh\necho forbidden-command >&2\nexit 99\n' > "$t/bin/$cmd"
 done
 chmod +x "$t/repo/tools/phone-ssh" "$t/bin/"*
 export PATH="$t/bin:$PATH" MODULE_ROOT="$t/modules" CALLS="$t/calls" EFFECTS="$t/effects" KERNEL_OUT="$t/out" CLANG_DIR=/unused
-unset OMAMOBILE_MODULES_REPLACE MARKER_FAIL
+unset OMAMOBILE_MODULES_REPLACE MARKER_FAIL MARKER_WARN
 archive=$t/out/modules-$rel.tar.zst
 tar -C "$t/archive" -cf - "$rel" | zstd -q -o "$archive"
 checksum=$(sha256sum < "$archive" | cut -d' ' -f1)
@@ -89,7 +91,8 @@ pass 'a changed module under kernel is refused'
 mkdir -p "$MODULE_ROOT/$rel/extra"
 printf 'custom\n' > "$MODULE_ROOT/$rel/extra/custom.ko"
 OMAMOBILE_MODULES_REPLACE=1 "$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1 || fail 'explicit replacement failed'
-cmp "$MODULE_ROOT/$rel/kernel/a.ko" "$t/archive/$rel/kernel/a.ko" || fail 'override did not install archive contents'
+same() { [[ $(sha256sum < "$1") == $(sha256sum < "$2") ]]; }
+same "$MODULE_ROOT/$rel/kernel/a.ko" "$t/archive/$rel/kernel/a.ko" || fail 'override did not install archive contents'
 [[ $(cat "$MODULE_ROOT/$rel/.omamobile-tarball") == "$checksum" ]] || fail 'wrong marker'
 [[ $(cat "$MODULE_ROOT/.omamobile-next") == "$rel" ]] || fail 'wrong next-release marker'
 [[ ! -e $MODULE_ROOT/$rel/extra/custom.ko ]] || fail 'override retained a module absent from the archive'
@@ -142,6 +145,12 @@ grep -qF 'for s in /sys/block/' "$CALLS" || fail 'matching marker did not reach 
 pass 'a matching marker skips installation'
 
 reset_tree
+printf '%s\n' "$checksum" > "$MODULE_ROOT/$rel/.omamobile-tarball"
+if MARKER_WARN=1 "$t/repo/bin/omamobile" push > "$t/log" 2>&1; then fail 'fixture should stop at partition lookup'; fi
+[[ ! -s $EFFECTS ]] || fail 'an SSH warning on stderr was taken for a marker mismatch'
+pass 'an SSH warning on stderr is not a marker mismatch'
+
+reset_tree
 rm "$MODULE_ROOT/$rel/.omamobile-tarball"
 mkdir -p "$MODULE_ROOT/$rel/extra"
 printf 'custom\n' > "$MODULE_ROOT/$rel/extra/custom.ko"
@@ -152,3 +161,26 @@ grep -qF 'extra/custom.ko' "$t/log" || fail 'push bypassed replacement guard'
 [[ $(snapshot) == "$before" && ! -s $EFFECTS ]] || fail 'unmarked custom tree was changed'
 grep -qF 'for s in /sys/block/' "$CALLS" && fail 'replacement refusal reached image writes'
 pass 'a genuinely missing marker invokes the guard and preserves custom modules'
+
+# A tree this tool installed carries a manifest of what it installed.
+rebuild() { printf '%s\n' "$1" > "$t/archive/$rel/kernel/a.ko"; tar -C "$t/archive" -cf - "$rel" | zstd -q -f -o "$archive"; }
+rm -rf "$MODULE_ROOT/$rel"; : > "$EFFECTS"
+"$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1 || fail 'first install failed'
+[[ -s $MODULE_ROOT/$rel/.omamobile-modules.sha256 ]] || fail 'no module manifest written'
+rebuild 'rebuilt module, same release'
+"$t/repo/bin/omamobile" modules-push > "$t/log" 2>&1 || fail 'a rebuilt module under the same release was refused'
+grep -qx 'rebuilt module, same release' "$MODULE_ROOT/$rel/kernel/a.ko" || fail 'the rebuilt module was not installed'
+pass 'same release, rebuilt module, nothing hand-installed: installs'
+
+mkdir -p "$MODULE_ROOT/$rel/updates"
+printf 'hand-added\n' > "$MODULE_ROOT/$rel/updates/panel driver.ko"
+: > "$EFFECTS"; refuse
+grep -qF 'module added by hand since the last push: updates/panel driver.ko' "$t/log" || fail 'hand-added module not named'
+rm -rf "$MODULE_ROOT/$rel/updates"
+pass 'after a push, a module added by hand is refused'
+
+printf 'hand swap\n' > "$MODULE_ROOT/$rel/kernel/a.ko"
+: > "$EFFECTS"; refuse
+grep -qF 'module changed by hand since the last push: kernel/a.ko' "$t/log" || fail 'hand-swapped module not named'
+pass 'after a push, a module swapped by hand is refused'
+rebuild 'packaged module'
