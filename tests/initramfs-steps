@@ -116,3 +116,23 @@ pass "the USB switch writes only 0x09, only when open, only on its own board"
 
 grep -q 'if \[ -f /etc/omamobile-fb-wait \]; then' "$init" || fail "the splash waits for fb0 only with the marker"
 pass "the fb0 wait follows its marker"
+
+# Pack time, INITRAMFS_MODULES: a .ko is packed in order, a module the
+# kernel has built in is left out (nothing to load), a missing one stops.
+pack() {
+  ( die() { echo "die: $*"; exit 1; }
+    say() { echo "say: $*"; }
+    eval "$(sed -n '/^pack_initramfs_modules() {$/,/^}$/p' bin/omamobile)"
+    pack_initramfs_modules "$@" )
+}
+m=$t/mods
+mkdir -p "$m/kernel/drivers/mfd"
+: > "$m/kernel/drivers/mfd/max77759.ko"
+printf 'kernel/drivers/mfd/sec-acpm.ko\nkernel/drivers/mailbox/exynos-mailbox.ko\n' > "$m/modules.builtin"
+pack "$t/packed" "$m" exynos-mailbox sec-acpm max77759 > "$t/log" 2>&1 || { cat "$t/log"; fail "built-in modules are skipped"; }
+[[ $(cat "$t/packed/order") == max77759 && -e $t/packed/max77759.ko && ! -e $t/packed/sec-acpm.ko ]] \
+  || fail "only the .ko is packed and listed"
+grep -q 'say: INITRAMFS_MODULES: sec-acpm is built in' "$t/log" || fail "a built-in module is reported"
+pack "$t/packed2" "$m" max77759 nvmem-max77759 > "$t/log" 2>&1 && fail "a missing module stops the build"
+grep -q "die: INITRAMFS_MODULES: no nvmem-max77759.ko" "$t/log" || fail "a missing module is named"
+pass "INITRAMFS_MODULES: a built-in module is left out, a missing one stops the build"
