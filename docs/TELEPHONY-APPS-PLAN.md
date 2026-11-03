@@ -172,7 +172,9 @@ Today `omamobile-sit-data` puts `rmnet0` behind Wi-Fi with metric 700, and Netwo
 
 **The bearer for mmsd-tng (#380):** sitd reports the internet bearer's device (the one omamobile-sit-data found), address and DNS in its private status, and the bridge publishes them on the bearer (`Interface`, `Ip4Config`). mmsd-tng binds to that device and resolves the MMSC through those servers, so MMS goes over cellular with Wi-Fi up, without touching the system's routes or DNS.
 
-**Attended runbook, receive first (9a, not yet run):**
+**Received on 2026-11-03** (the palmtop, the daily kernel `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`, this stack): one picture from the owner's iPhone. The WAP push arrived as a binary SMS during a call, sitd stored it, the bridge exported it with the internet bearer's device and DNS, and mmsd-tng, started afterwards, fetched the 708 KB message over `rmnet0` with Wi-Fi up (state `received`, a PNG inside). It logged one complaint, an IP config without a method, fixed in the bridge since. Messages doesn't show it yet (T3 in the apps).
+
+**Attended runbook, receive first (9a; steps 1 to 4 passed on 2026-11-03):**
 
 | Step / risk | Commands or action | Expect / pass | Stop condition | Rollback |
 | --- | --- | --- | --- | --- |

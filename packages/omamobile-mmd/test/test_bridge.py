@@ -506,7 +506,8 @@ class InternetBearer(BridgeTests):
         self.sitd.status['modem']['data'] = False
         self.push()
         wait_until(lambda: not self.client.prop(bearer, mm.BEARER, 'Connected'), 5, 'bearer down')
-        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip4Config'), {})
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip4Config'), dict(method=0))
+        self.assertEqual(self.client.prop(bearer, mm.BEARER, 'Ip6Config'), dict(method=0))
 
 
 if __name__ == '__main__':
