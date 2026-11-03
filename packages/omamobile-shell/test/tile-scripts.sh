@@ -121,6 +121,29 @@ out=$(sit_state 'not json')
 grep -c '^data' <<<"$out" | grep -cx 1 >/dev/null || fail "an unreadable state prints only data= (got: $(tr '\n' ' ' <<<"$out"))"
 pass "tile-state.sh reports mobile data's signal and a status without network codes"
 
+# No modem: with no state file the tile has no backend (data=none), and the
+# one line omamobile-modem-start leaves when it refuses to start the modem
+# (/run/omamobile/modem-refused) becomes the status, cut to a tile's width;
+# nothing else is printed without that file.
+no_modem() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" OMAMOBILE_SIT_STATE="$tmp/state/missing.json" \
+  OMAMOBILE_MODEM_REFUSED="$tmp/state/refused" PATH="$fake:$basic" sh "$dir/tile-state.sh"; }
+rm -f "$tmp/state/refused"
+out=$(no_modem)
+expect "$out" "data=none" "no sitd state is no modem"
+[[ $(grep -c '^data_' <<<"$out") -eq 0 ]] || fail "no reason file: no data_status (got: $(tr '\n' ' ' <<<"$out"))"
+printf 'Off after a hang or reset\nsecond line ignored\n' > "$tmp/state/refused"
+out=$(no_modem)
+expect "$out" "data=none" "a refused start is still no modem (the tile stays dimmed)"
+expect "$out" "data_status=Off after a hang or reset" "the start script's reason is the status"
+printf '%s\n' "$(printf 'x%.0s' $(seq 60))" > "$tmp/state/refused"
+out=$(no_modem)
+expect "$out" "data_status=$(printf 'x%.0s' $(seq 48))" "the reason is cut to 48 characters"
+: > "$tmp/state/refused"
+out=$(no_modem)
+[[ $(grep -c '^data_' <<<"$out") -eq 0 ]] || fail "an empty reason file prints no status (got: $(tr '\n' ' ' <<<"$out"))"
+rm -f "$tmp/state/refused"
+pass "tile-state.sh shows why the modem didn't start when there is no modem"
+
 # Dictation: voxtype is an optional install, so no voxtype is "none", a
 # stopped user service "down" (whatever its stale state file says), and the
 # daemon's own state file otherwise.

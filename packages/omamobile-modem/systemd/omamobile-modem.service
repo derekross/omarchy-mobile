@@ -1,11 +1,18 @@
 # SPDX-License-Identifier: MIT
 # The modem: CPIF's modules, then Samsung's rfsd and a one-shot cbd in the
 # modem vendor chroot on RAM copies of the NV and firmware partitions
-# (device/cheetah/MODEM-PLAN.md M3.4). Not enabled by the package: the
-# first boots follow the plan's gated runbook, and at boot the whole stack
-# comes from omamobile-modem-boot.target (M4.6). It starts the modem after
-# the audio stack (the AoC carries call audio) and behind the sleep
-# inhibitor (omamobile-modem-inhibit.service), which stays until the reboot.
+# (device/cheetah/MODEM-PLAN.md M3.4). Not enabled by this package: at
+# boot the whole stack comes from omamobile-modem-boot.target (M4.6), which
+# the Pixel 7 Pro's device package enables. It starts the modem after the
+# audio stack (the AoC carries call audio) and behind the sleep inhibitor
+# (omamobile-modem-inhibit.service), which stays until the reboot.
+#
+# The three conditions are what tools/phone-provision puts on the phone:
+# Google's modem files, the NV checksums from the owner's backup and the
+# board id. A fresh install has none of them, and the unit is then skipped,
+# not failed (the inhibitor carries the same three, so a phone without a
+# modem keeps sleeping); the start script refuses on the same three for a
+# start by hand.
 #
 # Type=notify: ready once CPIF's ports exist and the profile's read-only
 # check has passed, before the CP is powered on, so a unit ordered after
@@ -28,6 +35,8 @@ Requires=omamobile-modem-inhibit.service
 After=omamobile-modem-inhibit.service systemd-modules-load.service omamobile-aoc.service omamobile-audio.service
 Wants=omamobile-modem-nv-overlay.timer
 ConditionPathExists=/usr/lib/omamobile-vendor/modem/root
+ConditionPathExists=/etc/omamobile/modem-nv.sha256
+ConditionPathExists=/var/lib/omamobile-vendor/modem/props.conf
 
 [Service]
 Type=notify

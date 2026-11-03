@@ -14,7 +14,7 @@ Today these steps are manual. Where the install is going, one guided step from a
 - **Installing erases the phone's data.** Unlocking the bootloader erases it, and the installer replaces the user data partition (`userdata`) with Omarchy Mobile. Copy off anything you want to keep first: photos, messages, two-factor codes.
 - **Android stays on the phone as your way back.** A Pixel has two copies of its system, slot A and slot B. The installer writes only slot B and `userdata`. Stock Android stays on slot A, untouched, and [Going back to Android](#going-back-to-android) shows how to switch back.
 - **The installer never touches the bootloader, the radio, or the partitions that hold your phone's identity and calibration** (`persist`, `efs`, `modem`, `devinfo`, `vbmeta`). It checks the phone before writing anything, shows every command it will run, and waits for you to type the phone's codename.
-- **This is a developer preview.** Calls, SMS and mobile data don't work yet (the modem is still being brought up), and the phone doesn't yet go to sleep by itself when the screen turns off. Check the [device page](https://omamobile.org/devices/cheetah) for the current list.
+- **This is a developer preview.** Calls, SMS and mobile data work on the one network tested so far (a Verizon-network SIM), with the carrier's APNs set by hand after the install (the release notes say how), and the phone doesn't yet go to sleep by itself when the screen turns off. Check the [device page](https://omamobile.org/devices/cheetah) for the current list.
 
 ## What you need
 
