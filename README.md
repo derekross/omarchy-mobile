@@ -45,7 +45,7 @@ The kernel and boot images come from `bin/omamobile kernel`, `modules`, `initram
 | `device/<codename>/` | The other devices' descriptors, notes and bring-up plans (`felix`, `oriole`, `flame`, `husky`, `tegu`) |
 | `omamobile.conf` | Shared settings (source dir, jobs, container image). Override in `omamobile.local.conf` |
 | `docker/` | Ubuntu 24.04 build environment |
-| `docs/DEVICES.md` | Supported-devices matrix |
+| `docs/DEVICES.md` | Supported-devices matrix; a change to it on `main` (or to a device's `NOTES.md` or the release notes) asks omamobile.org to rebuild its device pages at once (`.github/workflows/website.yml`, which needs the `WEBSITE_DEPLOY_TOKEN` secret) |
 | `docs/ROADMAP.md` | Where things stand and the plan to a working phone |
 | `docs/DEMO.md` | Fictional demo data, screenshots and screen recordings for the website and videos (`tools/phone-demo`) |
 | `docs/RELEASES.md` | How builds and releases work for several devices: device descriptors, the kernel package, release bundles |
