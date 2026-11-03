@@ -101,9 +101,9 @@ The descriptor carries no comments; this table is its provenance.
 | Key | Value | Mark | Source |
 | --- | --- | --- | --- |
 | `CODENAME`, `NAME`, `SOC` | akita, Pixel 8a, zuma | [V] | R/ `ro.product.device`, `ro.product.model`, `ro.boot.hardware.platform` |
-| `COMPATIBLE` | `google,zuma-akita` | [I] | husky's upstream style (H/); the binding entry comes with the board DTS |
+| `COMPATIBLE` | `google,zuma-akita` | [V] | husky's upstream style (H/); the board DTS's first compatible, with its binding entry, in [linux-omarchy-mobile#192](https://github.com/derekross/linux-omarchy-mobile/pull/192) |
 | `PACKAGE` | `omamobile-device-akita` | | the package doesn't exist yet; `bin/omamobile initramfs` builds the freestanding helpers when a package has no `omamobile-bootctl.c`, as for husky |
-| `DTB` | `exynos/google/zuma-akita.dtb` | | the board DTS isn't written yet, so `DEVICE=akita bin/omamobile images` waits for it |
+| `DTB` | `exynos/google/zuma-akita.dtb` | [V] | built from the board DTS in [linux-omarchy-mobile#192](https://github.com/derekross/linux-omarchy-mobile/pull/192); `bin/omamobile images` packs it ([BRINGUP-M1](BRINGUP-M1.md) M1.1) |
 | `SOC_COMPATIBLE` | `b0-ipop:0x9865:1:0:1 b1-ipop:0x9865:1:1:1` | [V] | R/ live DT `/soc_compatible`; S/ `zuma-b0-ipop.dts` |
 | `AVB_FOOTERS`, `AVB_ROLLBACK_INDEX`, `AVB_SECURITY_PATCH` | `boot:0x4000000 init_boot:0x800000`, 1791158400, 2026-10-05 | [V] | F/ `vbmeta.img` chain descriptors and the stock footers; R/ `getvar partition-size` |
 | `DTBO_SOURCE`, `DTBO_BOARD_ID`, `DTBO_BOARD_REV` | the empty overlay, 0x40406, 0x10000 | [V] | F/ `dtbo.img` entry 18; R/ `androidboot.dtbo_idx`; G/ `zuma-akita-mp.dts` |
