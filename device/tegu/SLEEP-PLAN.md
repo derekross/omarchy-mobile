@@ -1,13 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a sleep: why s2idle drains so much
 
-Status (2026-11-02): s2idle usually works (RTC and power-key wakes; ten of
+Status (2026-11-03): s2idle usually works (RTC and power-key wakes; ten of
 ten 30-second cycles on 10-31 with the console kept through the freeze;
 126 of 127 120-second sleeps overnight on 11-01 to 11-02), but not always:
-six sleeps have never woken: two direct freezes, one 30-minute systemd
+seven sleeps have never woken: two direct freezes, one 30-minute systemd
 sleep with `tegu-mif-sleep` loaded, the sixth 30-second cycle of a boot
 on 10-30 (it left the USB bus and needed a forced restart), the 21st of
-11-01's thirty cycles, and the overnight series' 127th; one more woke with UFS dead (`link startup failed` x5,
+11-01's thirty cycles, the overnight series' 127th, and the tenth of
+11-02 evening's series with Wi-Fi unloaded around each sleep; one more woke with UFS dead (`link startup failed` x5,
 then I/O errors and `emergency_ro`, 10-30 afternoon). The drain in sleep is
 high. Sleep tests are attended. The shell's auto-sleep (the `omamobile-sleep`
 toggle, which the package ships off) has been on on the palmtop since
@@ -549,6 +550,25 @@ with the cable in.
   11-01 and about one in 40 before; the rate varies too much to compare
   conditions with short runs. Logs: `logs/tegu-sleep-overnight-20261102/`
   (the series script, `after-hang.txt`).
+
+  **Wi-Fi unloaded around each sleep, 2026-11-02 evening (same release).**
+  The one change from the night before: the Wi-Fi keep flag moved aside
+  for the run, so the sleep hook unloaded brcmfmac before each sleep and
+  loaded it after, instead of keeping it loaded through a re-probe at every
+  wake. Otherwise the same series: 90 s RTC-woken `systemctl suspend`
+  sleeps, screen off through Hyprland's DPMS, the console kept through the
+  freeze, auto-sleep off, cable in, modem never loaded, NFC polling stopped
+  by its hook, core power-down on (every `state1/disable` read 0 after the
+  wake). Nine woke: 94-95 s by the RTC each, wake IRQ 56, no UFS or ACPM
+  lines, `suspend_stats` success 9 and fail 0. The tenth didn't (entered
+  20:30:33 by the palmtop's clock): its journal ends at
+  `PM: suspend entry (s2idle)`, and the palmtop stayed off the bus until
+  the owner's Power + Volume Up the next morning. Again nothing was kept:
+  the only pstore record since is the console of a later clean reboot
+  (with ABL's own log after it), which confirms that a warm reboot keeps
+  ramoops and the buttons' reset doesn't. So the hang is not brcmfmac's
+  re-probe either; with 11-02's one in 127, that is one in 10 here.
+  Logs: `logs/tegu-sleep-overnight-20261103/`.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
@@ -634,6 +654,39 @@ is the point of the measurement. FINGERPRINT-PLAN's Risks table names this excep
 
 Rollback: push the running DTB's image back (the before/after check of
 step 2 in reverse).
+
+**S1-W. WFI only, a long series (risk low; unattended, cable in).** Core
+power-down saves nothing measurable in sleep (302 mA asleep against 311 mA
+awake with the screen off, S1 result), so if the hang lives in the PSCI
+core power-down path, sleeping on WFI alone would cost nothing and avoid
+it. The 11-01 correction above showed a WFI-only sleep is shallower (the
+tick isn't frozen), not that it hangs or doesn't; twenty such sleeps woke
+that day, too few against a rate between one in 10 and one in 127. So:
+300 sleeps of 60 s with every CPU's `cpuidle/state1/disable` at 1 for the
+whole run, everything else as the overnight series. At one hang in 40,
+300 clean sleeps would happen by chance about one time in 2000.
+
+```sh
+# Before: the modem must not run this boot (its inhibitor blocks suspend, and suspend with the modem up is unqualified).
+tools/phone-ssh 'systemctl disable omamobile-tegu-modem-boot.service && systemctl reboot'
+# After the boot: auto-sleep off, the modem not started, the hook from #255 absent.
+tools/phone-ssh 'pgrep -f omamobile-modem-start; ls /usr/lib/systemd/system-sleep/'
+#   Expect: no modem process, no omamobile-tegu-cpuidle
+tools/phone-ssh 'cat > /root/sleep-wfi.sh' < logs/tegu-sleep-wfi-20261103/series.sh
+tools/phone-ssh 'systemd-run --unit=x-sleep-wfi bash /root/sleep-wfi.sh'
+# Each check (read-only):
+tools/phone-ssh 'tail -3 /var/log/omamobile/sleep-wfi-20261103.log'
+#   Expect: one line per cycle, rtc about 60 s, wake irq 56, ufs 0, acpm 0, state1 all 1, fail 0
+#   Stop: UFS errors (the script stops itself; then echo b > /proc/sysrq-trigger), or no SSH 3 minutes past a cycle's alarm
+#   (a hang: Power + Volume Up by the owner, then the journal of that boot)
+# Rollback: the script's EXIT puts state1 back and re-enables the modem boot unit; after a hang, a reboot puts state1 back
+# (sysfs), and the unit is enabled again by hand: systemctl enable omamobile-tegu-modem-boot.service
+```
+
+Pass: 300 of 300 woke. Then the drain on WFI alone against core power-down
+(S1's buck-off coulomb counts, 240 s sleeps each way) decides whether the
+device package should sleep on WFI. Fail: a hang on WFI alone retires core
+power-down as the cause.
 
 ## Not known yet
 
