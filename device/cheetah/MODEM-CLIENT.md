@@ -61,7 +61,8 @@ Units (`systemd/`), none enabled by the package:
 Config: `/etc/omamobile/modem-sit.conf` (`[network] apn` is required; `ims`,
 `ims_apn`, `ims_required` (default no: an IMS failure keeps data, 0.3.2),
 `nr`, timeouts including `ims_timeout`; `[control] group`; `[audio] card`
-(default `none` since 0.3.3: calls route no audio until M5),
+(built-in default `none`; from 0.3.30 a device package's `[audio]` defaults in
+`/usr/lib/omamobile/modem-sit.conf.d/*.conf` come first and `/etc` wins over them),
 `mic_boost_db`).
 
 Tests: `packages/omamobile-modem-sit/test/all` (about 10 s): 53 unit tests
@@ -138,7 +139,7 @@ registration indication), unless `ims_required = yes`.
 
 | Gap | Effect |
 |---|---|
-| Call audio | Off by default (`[audio] card = none`, 0.3.3): calls connect silent. TDM 0 feeds both amplifiers and the top one is the earpiece; until an earpiece mode exists (TELEPHONY-APPS-PLAN T4, MODEM-PLAN M5) a configured card is refused unless speaker protection runs at stage media or c8, the top amplifier is at analog 6 or less (AUDIO-PLAN section 4) and both are within the media stage |
+| Call audio | On by default on the Pixel 7 Pro from `omamobile-modem-sit` 0.3.30 with `omamobile-device-cheetah` 0.1.44 (its `/usr/lib/omamobile/modem-sit.conf.d/50-cheetah.conf` sets `card = auto`), each call in the protection service's earpiece mode and refused without it (the call goes on silent); `none` on phones whose device package sets nothing (from 0.3.3 to 0.3.29 the default was `none` everywhere) |
 | Speakerphone | Not routed; calls use the stock voice path (EP5 to TDM 0) |
 | Call waiting, conference, emergency and short codes, MMS download | Refused or not implemented (emergency numbers are refused by the dialer check: **this phone cannot call emergency services under Linux**) |
 | Signal strength | Reported as 0 |

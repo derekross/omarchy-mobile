@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
-import env  # noqa: F401  (paths and sys.path first)
+import env  # (paths and sys.path first; env.TMP for scratch files)
 import os
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -170,11 +171,55 @@ class CallAudioCeilingTests(AudioCleanupTests):
 
 
 class CallAudioDefaultTests(unittest.TestCase):
+    PACKAGED = os.path.join(os.path.dirname(__file__), '..', 'etc', 'omamobile', 'modem-sit.conf')
+
+    def device_defaults(self, text):
+        directory = tempfile.mkdtemp(dir=env.TMP)
+        if text is not None:
+            with open(os.path.join(directory, '50-device.conf'), 'w') as f:
+                f.write(text)
+        return patch.object(paths, 'DEVICE_DEFAULTS', paths.Path(directory))
+
     def test_no_call_audio_by_default(self):
-        self.assertEqual(paths.config('/nonexistent')['audio']['card'], 'none')
-        packaged = paths.config(os.path.join(os.path.dirname(__file__), '..', 'etc', 'omamobile', 'modem-sit.conf'))
-        self.assertEqual(packaged['audio']['card'], 'none')
+        # No device package defaults (any phone but a verified one): no route.
+        with self.device_defaults(None):
+            self.assertEqual(paths.config('/nonexistent')['audio']['card'], 'none')
+            self.assertEqual(paths.config(self.PACKAGED)['audio']['card'], 'none')
         self.assertIsNone(voice_audio.aoc_card('none'))
+
+    def test_the_packaged_config_leaves_the_card_to_the_device(self):
+        # A fresh install's /etc file must not override the device package's
+        # default: an explicit "card = none" there gave the 7 Pro silent calls.
+        with self.device_defaults('[audio]\ncard = auto\n'):
+            self.assertEqual(paths.config(self.PACKAGED)['audio']['card'], 'auto')
+
+    def test_a_broken_device_file_is_skipped(self):
+        for text in ('[audio\ncard = auto\n', 'card = auto\n'):
+            with self.device_defaults(text):
+                self.assertEqual(paths.config(self.PACKAGED)['audio']['card'], 'none')
+
+    def test_device_defaults_set_only_audio(self):
+        with self.device_defaults('[network]\napn = example\n[audio]\ncard = auto\n'):
+            settings = paths.config(self.PACKAGED)
+            self.assertEqual(settings['audio']['card'], 'auto')
+            self.assertEqual(settings['network']['apn'], 'auto')
+
+    def test_a_typed_card_wins_over_the_device_default(self):
+        conf = os.path.join(tempfile.mkdtemp(dir=env.TMP), 'modem-sit.conf')
+        with open(conf, 'w') as f:
+            f.write('[audio]\ncard = none\n')
+        with self.device_defaults('[audio]\ncard = auto\n'):
+            self.assertEqual(paths.config(conf)['audio']['card'], 'none')
+
+    def test_the_7_pro_ships_auto(self):
+        shipped = os.path.join(os.path.dirname(__file__), '..', '..', 'omamobile-device-cheetah', 'vendor',
+                               'omamobile', 'modem-sit.conf.d', '50-cheetah.conf')
+        if not os.path.exists(shipped):
+            self.skipTest('not in the repository (a copy of this package alone)')
+        directory = tempfile.mkdtemp(dir=env.TMP)
+        shutil.copy(shipped, directory)
+        with patch.object(paths, 'DEVICE_DEFAULTS', paths.Path(directory)):
+            self.assertEqual(paths.config(self.PACKAGED)['audio']['card'], 'auto')
 
     def test_no_aoc_card_routes_nothing(self):
         with patch.object(voice_audio, 'Path') as fake:

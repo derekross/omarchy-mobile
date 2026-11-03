@@ -19,6 +19,14 @@ RUN = Path(os.environ.get('OMAMOBILE_SIT_RUN', '/run/omamobile-sit'))
 STATE = Path(os.environ.get('OMAMOBILE_SIT_STATE', '/var/lib/omamobile-sit'))
 INBOX = STATE / 'inbox'
 CONFIG = Path(os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.conf'))
+# A device package's defaults (*.conf, read in name order before CONFIG, so
+# a value set in CONFIG wins): the settings that hold only on that phone,
+# such as the call audio route its owner has verified ([audio] card = auto
+# from omamobile-device-cheetah). Without one, DEFAULTS hold. Only their
+# [audio] section is read: omamobile-mmd and the shell read [network] and
+# [data] from CONFIG themselves and would never see a device default there.
+# A file that can't be read or parsed is skipped (the safe side: no route).
+DEVICE_DEFAULTS = Path(os.environ.get('OMAMOBILE_SIT_DEFAULTS', '/usr/lib/omamobile/modem-sit.conf.d'))
 
 # CPIF's character devices. "unix:PATH" is a SOCK_SEQPACKET socket (the
 # simulator); "none" for BOOT means "no CP state ioctl: assume ONLINE".
@@ -43,6 +51,18 @@ DEFAULTS = {
 def config(path=None):
     parser = configparser.ConfigParser(interpolation=None)
     parser.read_dict(DEFAULTS)
+    try:
+        files = sorted(f for f in DEVICE_DEFAULTS.glob('*.conf') if f.is_file())
+    except OSError:
+        files = []
+    for f in files:
+        device = configparser.ConfigParser(interpolation=None)
+        try:
+            device.read_string(f.read_text(), str(f))
+        except (OSError, UnicodeDecodeError, configparser.Error):
+            continue
+        if device.has_section('audio'):
+            parser.read_dict({'audio': dict(device['audio'])})
     parser.read(path or CONFIG)
     return parser
 

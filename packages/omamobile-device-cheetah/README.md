@@ -11,6 +11,7 @@ Omarchy Mobile's system support for the Google Pixel 7 Pro (codename cheetah, Te
 | `src/reboot-to.c` | `/usr/bin/reboot-to` | Reboot with a reason the bootloader understands. One source, inside this package, also linked into every initramfs |
 | `bin/omamobile-setup-system` | `/usr/bin` | System setup: UTF-8 locale, timezone, NTP (Omarchy lifecycle `setup-system`) |
 | `vendor/udev/rules.d/10-omamobile-storage.rules` | `/usr/lib/udev/rules.d` | Continues the initramfs storage guard: Android partitions stay hidden and the whole-disk node unusable |
+| `vendor/omamobile/modem-sit.conf.d/50-cheetah.conf` | `/usr/lib/omamobile/modem-sit.conf.d` | omamobile-modem-sit's defaults for this phone: call audio through the AoC card in the protection service's earpiece mode (`card = auto`); a value in `/etc/omamobile/modem-sit.conf` wins |
 | `vendor/systemd/network/20-usb-gadget.network` | `/usr/lib/systemd/network` | USB networking to a host (172.16.42.1) |
 | `vendor/NetworkManager/conf.d/10-omamobile-usb.conf` | `/usr/lib/NetworkManager/conf.d` | Keeps NetworkManager off the USB link |
 | `vendor/systemd/logind.conf.d/10-omamobile-power-key.conf` | `/usr/lib/systemd/logind.conf.d` | A short power press opens the system menu instead of powering off |
