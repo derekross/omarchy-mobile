@@ -1,34 +1,32 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a: connect Phone and Messages to sitd
 
-First-step implementation (2026-11-03), offline: branch `tegu-mmd-attach`
-builds on this plan and the dependency fix (#363), with the existing SIM,
-safe-release and opt-in tegu audio work retained. The optional
+Status (2026-11-03): Phone and Messages ran on the palmtop on 2026-11-02
+through this path (results at the end). The optional
 `omamobile-telephony-tegu` package installs mmd, the agent, an active-RIL
-bridge policy and `omamobile-tegu-mmd-attach --check|--attach`. It enables
-nothing. The canonical sitd unit now gets its modem dependency from a
-device-owned drop-in: tegu uses Requisite on its already running starter,
-while cheetah and raven retain Requires on their modem unit. A new
-`omamobile-sitd-policy` dependency ensures these drop-ins accompany a RIL
-upgrade. [Package/runbook](../../packages/omamobile-telephony-tegu/README.md).
-No phone contact or hardware qualification was performed for this change.
-The seven affected/dependency package suites passed; mmd and the attach
-package were rerun after final ownership/recovery changes. The attach
-package has 21 offline tests, including systemd verification of all three
-device policies. One bridge API comparison skips missing reference XML.
-The architecture-independent attach package also built offline with
-makepkg (dependency installation and signing disabled). No rootfs or ARM
-modem package was built by that native package check.
+bridge policy and `omamobile-tegu-mmd-attach --check|--attach`, and enables
+nothing. sitd's unit gets its modem dependency from a device-owned drop-in:
+tegu uses Requisite on its already running starter, while cheetah and raven
+keep Requires on their modem unit, and the virtual `omamobile-sitd-policy`
+makes the drop-ins come along with a RIL upgrade. It builds on #363 (the
+device modem policy). [Package/runbook](../../packages/omamobile-telephony-tegu/README.md).
 
+Two ways start the bridge, each for its own case: at boot, #372's opt-in
+`omamobile-tegu-modem-boot` starts the modem, sitd and mmd once the CP is
+ONLINE (daily use); and `omamobile-tegu-mmd-attach --attach` attaches mmd
+and the agent to a modem and sitd already started by hand (bring-up and
+tests, where nothing should start the modem for you). The helper refuses
+when sitd isn't running and never starts the modem itself.
 
-The investigation below records the older base and its missing pieces;
-the first-step package implements bridge attachment, not modem boot or
-cold-login qualification.
+Offline: the seven affected package suites pass, the attach package has 21
+tests (including systemd verification of all three device policies), and
+the architecture-independent package builds with makepkg. One bridge API
+comparison skips when ModemManager's reference XML is missing.
 
-Status (2026-11-03): offline investigation on `origin/main` at `31fbcf9`.
-The owner reports texts both ways and calls through `omamobile-sit` on the
-palmtop. No phone contact in this investigation. This is an integration
-plan, not a record of app or call-audio qualification on hardware.
+The sections below are the investigation this started from, on `origin/main`
+at `31fbcf9`, before #363 and the attach package. The owner then had texts
+both ways and calls through `omamobile-sit`; this was the plan for the apps
+on top.
 
 The app protocol already exists. The immediate missing layer in the
 recorded tegu setup is `omamobile-mmd`, installed and running. A normal
@@ -55,7 +53,7 @@ modem
 | Layer | What the repository already supplies |
 | --- | --- |
 | Apps | `omamobile-apps` depends on `omaphone` and `omamessages`; both pull in `omatel-agent`. Contacts is supplied with Phone and does not need a modem. #361 puts all three packages in the image. |
-| Agent | `packages/omatel` packages the agent, its user unit and both session-bus activation files. Opening an app activates it. The disabled user unit is intentional; no root agent and no generic enablement change are needed. |
+| Agent | `packages/omatel` packages the agent, its user unit and both session-bus activation files. Its session-bus activation files are meant to start it when an app opens; on the palmtop that didn't happen (results below), and the user unit had to be started and enabled. The disabled user unit is intentional; no root agent and no generic enablement change are needed. |
 | Bridge | `packages/omamobile-mmd` owns the system-bus name normally used by ModemManager, exports modem/call/SMS objects, and checks polkit for operations. It conflicts with the real `modemmanager`; installing both is not the solution. |
 | Commands | `Voice.CreateCall` plus `Call.Start` maps to sitd `dial`; `Accept`, `Hangup` and `SendDtmf` map to sitd requests. `Messaging.Create` plus `Sms.Send` maps to `sms-send` with a durable request ID. |
 | Incoming events | The bridge subscribes to sitd, exports calls, reads `sms-list`, and maps deletion to `sms-delete`. The agent stores SMS before deleting them from the bridge and handles notifications and call history. |
@@ -66,8 +64,7 @@ Sources: [app package](../../packages/omamobile-apps/PKGBUILD),
 [bridge mappings](../../packages/omamobile-mmd/lib/bridge.py),
 [socket subscription](../../packages/omamobile-mmd/lib/sitd_link.py), and
 [the shared telephony plan](../../docs/TELEPHONY-APPS-PLAN.md), especially
-sections 1.5 and 10.1b. The requested old cheetah plan path has moved to
-`docs/TELEPHONY-APPS-PLAN.md`.
+sections 1.5 and 10.1b.
 
 Contacts uses the shared local vCard address book; it does not need a modem
 or an additional cellular service.
@@ -77,9 +74,8 @@ or an additional cellular service.
 1. **A dependency-correct install.** `omamobile-mmd` depends on
    `omamobile-modem-sit`, which depends on `omamobile-modem`, which still
    depends on `omamobile-device-cheetah`. That conflicts with tegu's device
-   package. The existing `modem-policy-virtual` change replaces that last
-   dependency with `omamobile-modem-policy` and adds tegu's provider. It is
-   not in this base. Land/build that prerequisite first.
+   package. #363 (merged) replaces that last dependency with the virtual
+   `omamobile-modem-policy` and adds tegu's provider.
 2. **The bridge package and its start.** The common rootfs list deliberately
    omits mmd and modem-sit. Tegu's `ROOTFS_PACKAGES` does not include them.
    `omamobile-mmd.service` ships disabled, has no D-Bus activation file,
@@ -130,14 +126,13 @@ For the already running palmtop, the manual steps below are enough once
 package dependencies are correct. The durable boot/image changes are not
 prerequisites for that test.
 
-## Attended first test (proposed, not executed)
+## Attended first test (ran on 2026-11-02)
 
 Keep the existing modem sleep inhibitor throughout; suspend with the CP on
 is not qualified by this work. Keep the existing once-per-boot start and
 NV checks. No step below starts, stops or restarts the CP or sitd.
 Run user commands in the existing graphical user's terminal, root commands
-in the attended administrative session. These commands are a runbook for
-the human, not authorization to contact the phone in this task.
+in the attended administrative session.
 
 | Step / risk | Commands or action | Expect / pass | Stop condition | Rollback |
 | --- | --- | --- | --- | --- |
@@ -166,7 +161,7 @@ A successful dial through mmd does not prove those controls affect tegu's
 route. MMS and mobile-data control through ModemManager are outside this
 SMS/basic-call integration; keep the existing sitd data ownership.
 
-## Offline evidence from this investigation
+## Offline evidence
 
 `packages/omamobile-mmd/test/all` passed on this base with private D-Bus
 and local simulator sockets. This covers API/bridge/libmm clients, the
@@ -182,3 +177,26 @@ This does not run the packaged Rust agent or either GUI, does not test
 tegu hardware or the current private carrier configuration, and does not
 qualify polkit for the actual graphical session. The earlier full agent
 chain result is recorded in the shared plan; it was not rerun here.
+
+## Results on the palmtop, 2026-11-02
+
+The daily kernel (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`),
+the modem started by hand and sitd running (built from this stack, 0.3.12
+at the time), `omamobile-mmd` 0.1.0 started with `systemctl start`.
+
+- Steps 1 to 3 passed: the bridge owned `org.freedesktop.ModemManager1`
+  and exported the modem with the SIM ready; sitd and the CP stayed the
+  same running instances.
+- Step 4: opening Messages did *not* start the agent, and it showed
+  "service isn't running" until `systemctl --user enable --now
+  omatel-agent`. After that both apps saw the modem. Cold-session
+  activation stays open, as above.
+- Step 5: texts both ways from Messages, with no duplicate.
+- Step 6: calls out from Phone and in, with speakerphone audio (#367),
+  released cleanly.
+- The status bar showed airplane mode until sitd mapped radio state 10 to
+  on (now on main with #381).
+
+A `tools/phone-smoke` report from the palmtop is still to come, with the
+next run.
+
