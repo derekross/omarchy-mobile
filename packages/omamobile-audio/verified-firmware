@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Speaker protection firmware verified on the reference phone
+# (/usr/share/omamobile-audio/verified-firmware; device/cheetah/AOC-PLAN.md,
+# "C9 for every phone with verified firmware").
+#
+# One line per verified firmware: the system (the DT's cirrus,subsystem-id),
+# the digest omamobile-speaker-protection computes over Google's protection
+# firmware and both speaker tunings (fw_digest: cs35l41-dsp1-spk-prot-<system>
+# .wmfw, -top.bin and -bottom.bin, as tools/extract-vendor-firmware installs
+# them from the owner's factory image), then a note: where and when it was
+# verified. Stage auto runs c9 (817, analog 14 bottom / 11 top) on a phone
+# with aoc_alsa_dev speaker_protection=1 whose installed firmware has a digest
+# listed here, or with its own C9a stamp; media otherwise. The digest is
+# Google's files' and the same on every phone extracted from the same files;
+# it identifies no phone, and no file is shipped.
+#
+# A digest goes here only after the attended C9a procedure passed with
+# exactly those files on the reference phone (`omamobile-speaker-protection
+# verify` wrote a stamp for it), and the c9 levels were heard and watched
+# with music ("C9 with real music"). Read it on that phone with
+#   omamobile-speaker-protection digest
+# (or `sed -n 's/^firmware //p' /var/lib/omamobile/speaker-protection-verified`,
+# which is the stamp's own copy). Never type one from memory or from another
+# phone's files that weren't verified.
+#
+# Format: SYSTEM DIGEST NOTE   (64 lowercase hex digits; '#' starts a comment)
+#
+
+cheetah 5d457a3db82d1f72e4c938368d3c04dcf9b974aff08347c2d595dc88928b347c reference 7 Pro, factory image cp2a.260705.006, C9a verify 2026-11-02, c9 levels 2026-10-31

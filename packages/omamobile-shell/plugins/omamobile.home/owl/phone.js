@@ -162,7 +162,7 @@ function capabilities(program) {
     if (text.indexOf("http GET ") === 0) {
       out.network = true
       // A URL built while it runs still has a fixed host when its text
-      // starts with one (https://wttr.in/${q}): the compiler keeps that prefix.
+      // starts with one (https://api.open-meteo.com/...${q}): the compiler keeps that prefix.
       var known = text.slice(9).indexOf("(a URL built") === 0 ? (program.httpPrefixes || [])[httpIndex] || "" : text.slice(9)
       httpIndex++
       var h = hostOf(known)
@@ -313,7 +313,8 @@ var DEVICE_COMMAND = "tr -d '\\0' < /proc/device-tree/model 2>/dev/null; echo; e
 // rate it runs at now).
 var BOARDS = {
   cheetah: { model: "Pixel 7 Pro", soc: "gs201", display: { width: 1440, height: 3120, hz: 120, dpi: 512 } },
-  tegu: { model: "Pixel 9a", soc: "zumapro", display: { width: 1080, height: 2424, hz: 120, dpi: 422 } }
+  tegu: { model: "Pixel 9a", soc: "zumapro", display: { width: 1080, height: 2424, hz: 120, dpi: 422 } },
+  husky: { model: "Pixel 8 Pro", soc: "zuma", display: { width: 1344, height: 2992, hz: 120, dpi: 489 } }
 }
 // "google,gs201-cheetah" or "google,zumapro-tegu" -> codename and SoC.
 function boardFrom(text) {

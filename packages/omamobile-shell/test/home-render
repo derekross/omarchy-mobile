@@ -38,19 +38,28 @@ find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
   -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
 for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
 cp -r "$plugin" "$h/home"
+# The drawer's link (the swipe up), beside it as the plugins are installed;
+# no drawer publishes itself here.
+mkdir -p "$h/omamobile.launcher"
+cp "$here/../plugins/omamobile.launcher/"{DrawerLink.js,DrawerLinkClient.qml} "$h/omamobile.launcher/"
 # The surface is a layer-shell window on the phone; here a plain Item that
 # fills the plugin's root. The OWL host is swapped for one that answers
 # from fixtures (the plugin's own property since 0.2.30; a before tree's
 # is made writable the same way).
 sed -i -E \
-  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent")/d' \
+  -e '/^    (screen: Quickshell\.screens|anchors \{ top: true|exclusionMode:|WlrLayershell\.|color: "transparent"|mask: Region)/d' \
   -e 's/^  PanelWindow \{$/  Item { anchors.fill: parent/' \
   -e 's/^  readonly property var owlHost: owlHostObject$/  property var owlHost: owlHostObject/' \
   "$h/home/Home.qml"
 grep -c '^  Item { anchors.fill: parent$' "$h/home/Home.qml" >/dev/null || { echo "home-render: no PanelWindow to stand in for" >&2; exit 1; }
 cp "$here/home-render.qml" "$h/"
-# The two store widgets, laid out as the omamobile-owl-widgets package ships them.
-for w in today fetch; do install -Dm644 "$store/simonschubert/$w/widget.owl" "$h/store/widgets/simonschubert/$w/widget.owl"; done
+# The two store widgets, laid out as the omamobile-owl-widgets package ships them
+# (today is our own copy, overrides/, weather from Open-Meteo).
+for w in today fetch; do
+  src=$store/simonschubert/$w/widget.owl
+  [[ -f $here/../../omamobile-owl-widgets/overrides/simonschubert/$w/widget.owl ]] && src=$here/../../omamobile-owl-widgets/overrides/simonschubert/$w/widget.owl
+  install -Dm644 "$src" "$h/store/widgets/simonschubert/$w/widget.owl"
+done
 # App icons: three plain tiles, drawn here.
 magick -size 112x112 xc:none -fill '#3584e4' -draw 'roundrectangle 4,4 108,108 26,26' "$h/icon-browser.png"
 magick -size 112x112 xc:none -fill '#e5a50a' -draw 'roundrectangle 4,4 108,108 26,26' "$h/icon-files.png"
@@ -96,16 +105,22 @@ fs.mkdirSync(path.join(home, ".config/omamobile"), { recursive: true })
 fs.writeFileSync(path.join(home, ".config/omamobile/home.json"), JSON.stringify(layout, null, 1) + "\n")
 fs.writeFileSync(path.join(home, ".config/omamobile/features.json"), JSON.stringify({ owlWidgets: true }) + "\n")
 fs.writeFileSync(path.join(home, ".config/omamobile/widget-approvals.json"), JSON.stringify(approvals, null, 1) + "\n")
-// Made-up data, never a real feed: a wttr.in j1 answer and the phone's facts.
-const hours = (base) => [0, 300, 600, 900, 1200, 1500, 1800, 2100].map((t, i) => ({ time: String(t), tempC: String(base + [0, -1, -1, 2, 5, 6, 3, 1][i]), tempF: String(Math.round((base + [0, -1, -1, 2, 5, 6, 3, 1][i]) * 1.8 + 32)), weatherCode: "116", chanceofrain: "10", FeelsLikeC: String(base), windspeedKmph: "11", uvIndex: "2" }))
-const wttr = {
-  current_condition: [{ temp_C: "14", temp_F: "57", FeelsLikeC: "12", FeelsLikeF: "54", weatherCode: "116", weatherIconUrl: [{ value: "" }], weatherDesc: [{ value: "Partly cloudy" }], humidity: "70", windspeedKmph: "11", windspeedMiles: "7", winddir16Point: "W", uvIndex: "2", precipMM: "0.0", precipInches: "0.0", pressure: "1016", pressureInches: "30", visibility: "10", visibilityMiles: "6" }],
-  nearest_area: [{ areaName: [{ value: "Sample Town" }], country: [{ value: "Example" }], latitude: "52.52", longitude: "13.40" }],
-  weather: ["2026-10-13", "2026-10-14", "2026-10-15"].map((d, i) => ({ date: d, maxtempC: String(16 - i), mintempC: String(9 - i), maxtempF: String(61 - i * 2), mintempF: String(48 - i * 2), avgtempC: "12",
-    astronomy: [{ sunrise: "07:26 AM", sunset: "06:18 PM", moonrise: "03:02 AM", moonset: "05:10 PM", moon_phase: "Waning Crescent", moon_illumination: "40" }], hourly: hours(9 - i) }))
+// Made-up data, never a real feed: Open-Meteo geocoding and forecast answers, and the phone's facts.
+const geo = { results: [{ name: "Sample Town", latitude: 52.52, longitude: 13.4, country: "Example", country_code: "EX", admin1: "Region" }] }
+const day0 = T - (T % 86400)
+const hourTimes = Array.from({ length: 72 }, (_, i) => day0 + i * 3600)
+const meteo = {
+  current: { time: T, temperature_2m: 14.2, apparent_temperature: 12.1, relative_humidity_2m: 70, is_day: 1, weather_code: 2, precipitation: 0,
+             pressure_msl: 1016, wind_speed_10m: 11, wind_direction_10m: 270 },
+  hourly: { time: hourTimes, temperature_2m: hourTimes.map((t, i) => 9 - Math.floor(i / 24) + [0, -1, -1, 2, 5, 6, 3, 1][Math.floor((i % 24) / 3)]),
+            precipitation_probability: hourTimes.map(() => 10), weather_code: hourTimes.map(() => 2), is_day: hourTimes.map((t, i) => (i % 24) >= 7 && (i % 24) < 18 ? 1 : 0),
+            uv_index: hourTimes.map(() => 2), visibility: hourTimes.map(() => 10000) },
+  daily: { time: [0, 1, 2].map((i) => day0 + i * 86400), weather_code: [2, 3, 61], temperature_2m_max: [16, 15, 14], temperature_2m_min: [9, 8, 7],
+           sunrise: [0, 1, 2].map((i) => day0 + i * 86400 + 5 * 3600 + 26 * 60), sunset: [0, 1, 2].map((i) => day0 + i * 86400 + 16 * 3600 + 18 * 60),
+           precipitation_probability_max: [10, 20, 60], precipitation_sum: [0, 0.4, 3] }
 }
 const widgets = {}
-widgets[today] = { sources: { now: { value: T }, wx: { text: JSON.stringify(wttr) } }, android: {} }
+widgets[today] = { sources: { now: { value: T }, geo: { text: JSON.stringify(geo) }, wx: { text: JSON.stringify(meteo) } }, android: {} }
 widgets[fetch] = {
   sources: { lxCmd: { text: JSON.stringify({ os: "Arch Linux ARM", pkgs: 1234, explicit: 210, shell: "bash 5.3", upgraded: "2026-10-12" }) } },
   android: {

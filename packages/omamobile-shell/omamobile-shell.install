@@ -3,6 +3,27 @@ post_install() {
   echo "Run 'omamobile-setup-user' as each phone user (Omarchy Mobile's first run does this)."
 }
 
+# Hyprland reads hypr/phone.lua (the phone's key binds and layer rules) when
+# it starts and on `hyprctl reload`, not when the file changes: after the
+# 0.2.61 upgrade the running session kept binds for calls the package had
+# removed (the keyboard's Mic key did nothing) until a reload by hand. So
+# every running Hyprland is reloaded, as its own user. A reload re-reads the
+# config; windows and the shell stay as they are.
+reload_hyprland() {
+  command -v hyprctl >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1 || return 0
+  local root=${OMAMOBILE_RUNTIME_ROOT:-/run/user} dir uid user sig
+  for dir in "$root"/*/hypr/*/; do
+    [ -S "${dir}.socket.sock" ] || continue
+    uid=$(stat -c %u "$dir") || continue
+    user=$(id -nu "$uid" 2>/dev/null) || continue
+    sig=$(basename "$dir")
+    runuser -u "$user" -- env XDG_RUNTIME_DIR="$root/$uid" HYPRLAND_INSTANCE_SIGNATURE="$sig" \
+      hyprctl reload >/dev/null 2>&1 || true
+  done
+  return 0
+}
+
 post_upgrade() {
+  reload_hyprland
   echo "New phone shell plugins and settings reach each user at their next login (omamobile-setup-user.service), or now with 'omamobile-setup-user'."
 }

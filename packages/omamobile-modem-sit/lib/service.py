@@ -37,17 +37,20 @@ import signal
 import socket
 import sqlite3
 import struct
+import subprocess
 import time
 
 import cp
 import paths
 from at import radio
 from calls import call_status, dial_payload, ring
+import data_call
 from data_call import paths as bearer_paths
 from ims import REGISTRATION, record_registration
 from inbox import persist_sms
 from sit import Sit, ModemError
 from sms_codec import submit, received_pdu, number
+import carrier_manifest
 from voice_audio import VoiceAudio, aoc_card
 
 STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in', 5: 'waiting',
@@ -57,8 +60,29 @@ RATS = {0: '', 1: 'GPRS', 2: 'EDGE', 3: 'UMTS', 9: 'HSDPA', 10: 'HSUPA', 11: 'HS
 SOCKET = paths.RUN / 'socket'
 # GET_RADIO_POWER / IND_RADIO_STATE_CHANGED (MODEM-SIT-RESEARCH 3.1):
 # INITIALIZED and STOP_NETWORK are off, START_NETWORK on, POWER_OFF is the
-# state without a SIM (M4.1i), RESET is unavailable.
-RADIO = {0: 'off', 1: 'off', 2: 'on', 3: 'off', 4: 'unavailable'}
+# state without a SIM (M4.1i), RESET is unavailable. GET_RADIO_POWER answers
+# 10 with the radio on (cheetah and tegu, 2026-11-02): Android's RadioState
+# ON (OFF 0, UNAVAILABLE 1, ON 10).
+RADIO = {0: 'off', 1: 'off', 2: 'on', 3: 'off', 4: 'unavailable', 10: 'on'}
+
+
+def lte_rsrp(payload):
+    """LTE RSRP in dBm from a GET_SIGNAL_STRENGTH or IND_SIGNAL_STRENGTH
+    payload, or None. Stock's SignalStrengthParserV4: a u16 RAT mask (bit 2
+    LTE), then a 196-byte block whose LTE part starts at +0x3c (signal
+    strength, RSRP, RSRQ, RSSNR as u32); RSRP is positive (110 is -110 dBm),
+    valid 44-140, INT_MAX when unknown."""
+    if len(payload) < 2 + 0xc4 or not struct.unpack_from('<H', payload)[0] & 4:
+        return None
+    rsrp = struct.unpack_from('<I', payload, 2 + 0x40)[0]
+    return -rsrp if 44 <= rsrp <= 140 else None
+
+
+def signal_percent(rsrp):
+    """-140..-44 dBm onto 0..100 (ModemManager's SignalQuality), 0 unknown."""
+    if rsrp is None:
+        return 0
+    return max(0, min(100, round((rsrp + 140) * 100 / 96)))
 # GET_SIM_STATUS application states, as AOSP's RIL_AppState (the bring-up's
 # "(2, 5)" is a USIM, READY; "state 2" is PIN, M4.1).
 APP_STATES = {0: 'unknown', 1: 'detected', 2: 'pin', 3: 'puk', 4: 'network-locked', 5: 'ready'}
@@ -66,6 +90,37 @@ APP_STATES = {0: 'unknown', 1: 'detected', 2: 'pin', 3: 'puk', 4: 'network-locke
 EMERGENCY = ('112', '911')
 EMERGENCY_NO_SIM = ('000', '08', '110', '118', '119', '999')
 SUBSCRIBERS = 8
+
+
+class UnconfirmedRelease(RuntimeError):
+    """Fatal call ownership failure; never turn this into a socket reply."""
+
+
+def unconfirmed_release(client, reason):
+    """Stop serving an uncertain call without power-cycling the CP.
+
+    In-place modem stops have reset tegu. Radio-off is best effort: even
+    an accepted command does not establish that the call was released.
+    Keep call ownership and the modem/NV server for an attended reboot.
+    """
+    print('Call release not confirmed:', reason, flush=True)
+    try:
+        radio(False)
+        print('Recovery radio-off command accepted', flush=True)
+    except (OSError, RuntimeError, ValueError) as error:
+        print('Recovery radio-off failed:', type(error).__name__, flush=True)
+    try:
+        payload = client.request(0x0801, timeout=5)
+        state = RADIO.get(struct.unpack('<I', payload)[0], 'unknown') if len(payload) == 4 else 'unexpected'
+    except (OSError, RuntimeError, ValueError) as error:
+        state = 'unavailable (' + type(error).__name__ + ')'
+    try:
+        modem = cp.STATES.get(cp.state(), 'unknown')
+    except OSError:
+        modem = 'unavailable'
+    print('Unconfirmed release recovery: radio', state, 'CP', modem,
+          '; leaving the modem running for an attended reboot', flush=True)
+    raise UnconfirmedRelease('Call release was not confirmed; stopping sitd; attended reboot required')
 
 
 def sim_status(payload):
@@ -85,7 +140,11 @@ def sim_status(payload):
         return dict(state='detected')
     status = dict(state=APP_STATES.get(app[1], 'unknown'))
     if status['state'] in ('pin', 'puk', 'ready'):
-        status.update(pin_retries=app[59], puk_retries=app[60])
+        # PIN1 state (+57, AOSP RIL_PinState): whether the SIM asks for its
+        # PIN at power-on. The RIL has no PIN entry, so "on" means the SIM
+        # works here only once the lock is turned off in another phone.
+        status.update(pin_retries=app[59], puk_retries=app[60],
+                      pin_lock={1: 'on', 2: 'on', 3: 'off', 4: 'on', 5: 'on'}.get(app[57], 'unknown'))
     return status
 
 
@@ -110,6 +169,21 @@ def database(path):
     return db
 
 
+# IND_REG_FAILED (stock ProtocolRegistrationFailedAdapter): 0x08 PLMN (6
+# bytes, never logged), 0x0e domain (SIT 1 CS+PS, 2 CS, 3 PS), 0x0f cause and
+# 0x10 additional cause (0xff: none), then the cell identity (never logged).
+REG_FAILED_DOMAINS = {1: 'CS+PS', 2: 'CS', 3: 'PS'}
+
+
+def registration_failure(packet):
+    """(domain, cause, additional cause) of an IND_REG_FAILED, codes only."""
+    if len(packet) < 0x11:
+        raise ValueError('short IND_REG_FAILED')
+    domain = REG_FAILED_DOMAINS.get(packet[0x0e], f'unknown {packet[0x0e]}')
+    cause, additional = (None if b == 0xff else b for b in packet[0x0f:0x11])
+    return domain, cause, additional
+
+
 def operator_name(payload):
     """GET_OPERATOR, best effort for display only (layout from the research
     note, not yet seen on hardware): PLMN digits, then short and long names."""
@@ -120,6 +194,18 @@ def operator_name(payload):
     return dict(plmn=plmn if plmn.isdigit() else '', name=good[0] if good else '')
 
 
+def reset_indication(packet):
+    """The log line for IND_PHONE_RESET (0x0804): the payload length and the
+    first four payload bytes (packet offsets 0x08-0x0b) in hex. Stock's
+    PhoneResetHandler reads a reset type and cause from the payload; which
+    of these bytes they are isn't confirmed, so they are shown raw (reset
+    codes, no identifiers)."""
+    raw = packet[8:12]
+    span = f'bytes 0x08..0x{7 + len(raw):02x} = ' + ' '.join(f'{b:02x}' for b in raw) if raw else 'no payload'
+    return (f'Modem reset indication (IND_PHONE_RESET, {max(len(packet) - 8, 0)} payload bytes): '
+            f'{span} (reset type and cause somewhere here, offsets unconfirmed); not acted on')
+
+
 class Service:
     def __init__(self, client, db, settings=None):
         self.client = client
@@ -127,17 +213,34 @@ class Service:
         self.settings = settings or paths.config()
         self.calls = {}
         self.audio = None
+        self.audio_error = ''
         self.muted = False
         self.pending = None
         self.hangup_deadline = None
+        self.release_unconfirmed = False
         self.screen_on = None
         self.indication_counts = {}
         self.net = dict(reg='unknown', rat='', operator='', plmn='')
+        self.last_registration = None
+        self.signal = 0
+        # The carrier profile: the configured manifest ID ('' off), whether
+        # the one reply went out, and the modem's 0x4601 (status, cause).
+        self.manifest_setting = self.settings['network'].get('carrier_manifest', '').strip()
+        self.manifest_sent = False
+        self.carrier_status = None
+        # The payload of the latest IND_DATA_CALL_LIST_CHANGED (the modem's
+        # own attach bearer shows up there); read by start-up, never logged raw.
+        self.data_call_list = None
         self.sim = dict(state='unknown')
         self.radio = 'unknown'
         self.current_stage = 'starting'
         # IMS as start-up left it: unknown (no start-up), off, pending, failed, registered.
         self.ims_state = 'unknown'
+        # The internet APN start-up used and where it came from (manual,
+        # override, carrier-database or none), and the attach APN (attach;
+        # attach_source "same" when it is the internet APN). Empty before
+        # start-up.
+        self.apn = dict(value='', source='', attach='', attach_source='')
         self.next_poll = 0
         self.published = None
         self.subscribers = []
@@ -165,18 +268,34 @@ class Service:
             if card is None:
                 print('Call audio routing is off ([audio] card = none)', flush=True)
                 return
-            self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card)
+            # A refused route (protection not running, levels above the
+            # earpiece ceilings, earpiece mode refused) never stops the
+            # call: it goes on without audio, the reason in the log and
+            # in the status's audio error, as with [audio] card = none.
             try:
+                self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
+                                        earpiece=audio.getboolean('earpiece', True))
                 self.audio.__enter__()
-            except BaseException:
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 self.audio = None
-                raise
+                self.audio_error = str(error)
+                print('Call audio refused, the call goes on without audio:', error, flush=True)
+                return
+            self.audio_error = ''
             self.muted = False
 
     def audio_stop(self):
         if self.audio is not None:
             audio, self.audio = self.audio, None
-            audio.__exit__(None, None, None)
+            try:
+                audio.__exit__(None, None, None)
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+                # A cleanup that failed (a control that wouldn't restore,
+                # earpiece mode off refused) is logged, never fatal: the
+                # service and its calls go on, and the protection service's
+                # watchdog keeps the amplifiers safe.
+                self.audio_error = str(error)
+                print('Call audio cleanup failed (the service goes on):', error, flush=True)
         self.muted = False
 
     def live(self):
@@ -252,8 +371,41 @@ class Service:
                 self.radio = RADIO.get(struct.unpack_from('<I', packet, 8)[0], 'unknown')
             self.next_poll = 0
             self.publish()
+        elif ident == 0x0804:
+            # IND_PHONE_RESET: the CP asks for a reset (after a carrier
+            # profile changed its NV, among stock's reasons). Logged only;
+            # nothing resets the CP in place.
+            print(reset_indication(packet), flush=True)
         elif ident == 0x0210:
             # IND_SIM_STATUS_CHANGED carries nothing we read: poll again.
+            self.next_poll = 0
+        elif ident == 0x0906:
+            # IND_SIGNAL_STRENGTH, every second or two: publish on a change only.
+            signal = signal_percent(lte_rsrp(packet[8:]))
+            if signal != self.signal:
+                self.signal = signal
+                self.publish()
+        elif ident == 0x4601:
+            # OEM_IND_CARRIER_CONFIG_STATUS: codes only.
+            self.carrier_status = carrier_manifest.status(packet)
+            print('Carrier config status from the modem:', self.carrier_status[0],
+                  'cause', self.carrier_status[1], flush=True)
+        elif ident == 0x4602:
+            # OEM_IND_CARRIER_CONFIG_SIM_INFO: the modem asks for a carrier
+            # manifest. Only a trigger: its payload (SIM identities) is never read.
+            self.answer_carrier_request()
+        elif ident == 0x0604:
+            # IND_DATA_CALL_LIST_CHANGED: kept for start-up's search for the
+            # modem's attach bearer (bringup.find_attach_bearer).
+            self.data_call_list = bytes(packet[8:])
+        elif ident == 0x070e:
+            # IND_NTW_STATE_CHANGED: read the registration again soon (it
+            # can come every second or two while the modem searches).
+            self.next_poll = min(self.next_poll, time.monotonic() + 5)
+        elif ident == 0x074a:
+            domain, cause, additional = registration_failure(packet)
+            print('Registration failed: domain', domain, 'cause', cause,
+                  'additional cause', additional, flush=True)
             self.next_poll = 0
         elif ident == 0x0d01:
             if len(packet) < 13:
@@ -287,6 +439,27 @@ class Service:
                     self.hangup_deadline = None
             self.save_calls()
 
+    def answer_carrier_request(self):
+        if not self.manifest_setting:
+            print('The modem asked for a carrier config; not answered (carrier_manifest is empty)', flush=True)
+            return
+        if self.manifest_sent:
+            print('The modem asked for a carrier config again; answered once already', flush=True)
+            return
+        try:
+            ident = carrier_manifest.manifest_id(self.manifest_setting)
+        except ValueError as error:
+            print('The modem asked for a carrier config; not answered:', error, flush=True)
+            return
+        self.manifest_sent = True
+        try:
+            self.client.request(0x4600, carrier_manifest.request_payload(ident), timeout=10,
+                                manifest_reply=True)
+            print('Carrier manifest', ident.hex()[:8], 'sent in answer to the modem', flush=True)
+        except (ModemError, TimeoutError) as error:
+            # Not resent: the modem's own status (0x4601) or a reboot decides.
+            print('Carrier manifest not accepted:', error, flush=True)
+
     def poll(self):
         """Read-only network status every 30 s (and at once after a change)."""
         if time.monotonic() < self.next_poll:
@@ -309,6 +482,11 @@ class Service:
                 self.net['reg'] = {0: 'not-registered', 1: 'home', 2: 'searching', 3: 'denied',
                                    5: 'roaming'}.get(ps[0], 'unknown')
                 self.net['rat'] = RATS.get(ps[3], str(ps[3]))
+                # Each change of state, reject cause or RAT, codes only.
+                if (ps[0], ps[1], ps[3]) != self.last_registration:
+                    self.last_registration = (ps[0], ps[1], ps[3])
+                    print('Packet registration:', f"{self.net['reg']} (state {ps[0]}), reject {ps[1]}, RAT {ps[3]}",
+                          flush=True)
             if ps and ps[0] in (1, 5):
                 self.net.update(operator_name(self.client.request(0x0702, timeout=5)))
             elif len(ps) >= 4:
@@ -325,8 +503,8 @@ class Service:
                 break
             self.event(packet)
         if self.hangup_deadline and time.monotonic() > self.hangup_deadline:
-            cp.stop_modem('a call release was not confirmed')
-            raise RuntimeError('Call release was not confirmed; modem stopped')
+            self.release_unconfirmed = True
+            unconfirmed_release(self.client, 'hangup deadline expired')
 
     def send_sms(self, request):
         key = request.get('request_id', '')
@@ -381,15 +559,17 @@ class Service:
         reg = self.registration()
         voice = reg.get('state') == 2 and reg.get('features', 0) & 1 != 0
         sms = reg.get('state') == 2 and reg.get('features', 0) & 2 != 0
-        data = bearer_paths(1)[0].exists()
+        data = bearer_paths(data_call.INTERNET_CID)[0].exists()
         modem = dict(present=True, stage=self.current_stage, ready=voice,
                      state='registered' if self.net['reg'] in ('home', 'roaming') else 'searching',
                      registration=self.net['reg'], tech=self.net['rat'],
                      operator=self.net['operator'] or self.net['plmn'],
                      plmn=self.net['plmn'], operator_name=self.net['operator'],
-                     voice=voice, sms=sms, data=data, signal=0, audio=True,
+                     voice=voice, sms=sms, data=data,
+                     signal=self.signal if self.net['reg'] in ('home', 'roaming') else 0, audio=True,
                      radio=self.radio, sim=dict(self.sim),
                      ims='registered' if voice or sms else self.ims_state,
+                     apn=dict(self.apn), data_available=self.apn.get('source') != 'none',
                      emergency_numbers=list(EMERGENCY + (EMERGENCY_NO_SIM if self.sim['state'] == 'absent' else ())))
         calls = [{k: v for k, v in c.items() if k != 'modem_id'} for c in self.calls.values()]
         if public:
@@ -400,7 +580,7 @@ class Service:
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
-                               speaker=False, speaker_available=False, error=''))
+                               speaker=False, speaker_available=False, error=self.audio_error))
 
     def subscribe(self, connection):
         """Keep an authorised connection for status events; refuse beyond
@@ -645,6 +825,9 @@ def serve_one(service, connection, clients):
             return True
         result = service.dispatch(request)
         response = dict(ok=True, result=result)
+    except UnconfirmedRelease:
+        connection.close()
+        raise
     except (ValueError, KeyError, TypeError, RuntimeError, OSError) as error:
         # Errors from wire data must never expose raw values.
         response = dict(ok=False, error=str(error) if isinstance(error, RuntimeError)
@@ -662,7 +845,8 @@ def probe():
     set. No identifiers are printed; nothing is changed."""
     client = Sit()
     try:
-        sim = client.request(0x0200)
+        # The CP answered the first request 9.4 s after ONLINE on 2026-11-02.
+        sim = client.request(0x0200, timeout=20)
         if len(sim) >= 3 and sim[2] <= 8 and len(sim) >= 3 + sim[2] * 63:
             print('SIM card state', sim[0], 'applications',
                   [(sim[i], sim[i + 1]) for i in range(3, 3 + sim[2] * 63, 63)], flush=True)
@@ -702,7 +886,9 @@ def main():
         raise SystemExit('CP is not ONLINE: start omamobile-modem.service first')
     if args.probe:
         return probe()
-    client = Sit(allow_sms=True, allow_calls=True)
+    client = Sit(allow_sms=True, allow_calls=True,
+                 allow_manifest=bool(settings['network'].get('carrier_manifest', '').strip()),
+                 allow_isim_pcscf=settings['network'].getboolean('ims_pcscf_from_isim', True))
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     service = None
     stopping = False
@@ -715,8 +901,7 @@ def main():
     try:
         marker = paths.RUN / 'active.json'
         if marker.exists() and json.loads(marker.read_text()):
-            cp.stop_modem('a call from the previous service run was never released')
-            raise RuntimeError('Previous call ownership unresolved; modem stopped')
+            unconfirmed_release(client, 'a call from the previous service run was never released')
         service = Service(client, database(paths.STATE / 'apps.db'), settings)
         service.publish()
         for sms in paths.INBOX.glob('*.sit'):
@@ -763,7 +948,7 @@ def main():
             service.broadcast()
     finally:
         try:
-            if service and service.live():
+            if service and service.live() and not service.release_unconfirmed:
                 for call in service.live():
                     if call['modem_id'] is not None:
                         try:
@@ -776,17 +961,20 @@ def main():
                     if packet:
                         service.event(packet)
                 if service.live():
-                    cp.stop_modem('a call release was not confirmed at service stop')
-            if service:
-                service.audio_stop()
+                    service.release_unconfirmed = True
+                    unconfirmed_release(client, 'a call release was not confirmed at service stop')
         finally:
-            if service:
-                for connection in list(service.subscribers):
-                    service.drop(connection)
-            client.close()
-            server.close()
-            SOCKET.unlink(missing_ok=True)
-            (paths.RUN / 'state.json').unlink(missing_ok=True)
+            try:
+                if service:
+                    service.audio_stop()
+            finally:
+                if service:
+                    for connection in list(service.subscribers):
+                        service.drop(connection)
+                client.close()
+                server.close()
+                SOCKET.unlink(missing_ok=True)
+                (paths.RUN / 'state.json').unlink(missing_ok=True)
 
 
 if __name__ == '__main__':

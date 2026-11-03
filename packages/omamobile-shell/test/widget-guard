@@ -1,0 +1,79 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The home screen's widget crash guard, run for real: the guard block cut
+# out of Home.qml into a bare Quickshell scope, driven start by start with a
+# scratch config directory. A shell that dies in the same boot holds the
+# widget back; a widget still loading when the system went down loads once
+# more as a suspect and is held back after a second unclean end in a row; a
+# clean run clears a suspect; a new hash starts over; a guard file from
+# before the boot id keeps the strict rule; `quickshell kill` (a deliberate
+# quit) clears what was still loading. Offscreen. Exits 77 without
+# quickshell.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+command -v quickshell >/dev/null || { echo "widget-guard: no quickshell" >&2; exit 77; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+python3 - "$here/../plugins/omamobile.home/Home.qml" "$work/shell.qml" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+a = s.index('  // Crash guard.')
+b = s.index('\n  }\n', s.index('  function guardEnd(')) + 4
+open(sys.argv[2], 'w').write('''import QtQuick
+import Quickshell
+import Quickshell.Io
+Scope {
+  id: root
+  readonly property string configDir: Quickshell.env("GUARD_DIR")
+''' + s[a:b] + '''
+  Timer {
+    running: true; interval: 500
+    onTriggered: (Quickshell.env("GUARD_ACT") || "").split(",").forEach(function(a) {
+      var p = a.split(":")
+      if (p[0] === "begin") root.guardBegin(p[1], p[2])
+      if (p[0] === "end") root.guardEnd(p[1], true)
+    })
+  }
+}
+''')
+PY
+
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+# Quickshell needs a runtime directory (for its instance files); a CI job
+# or an SSH login may have none.
+if [[ -z ${XDG_RUNTIME_DIR:-} || ! -w ${XDG_RUNTIME_DIR:-/nonexistent} ]]; then
+  export XDG_RUNTIME_DIR=$work/run
+  mkdir -m 700 -p "$XDG_RUNTIME_DIR"
+fi
+n=0 rc=0
+dir=
+fresh() { n=$((n + 1)); dir=$work/c$n; mkdir -p "$dir"; }
+start() { GUARD_DIR=$dir GUARD_ACT=${1:-} timeout 2.5 quickshell -n -p "$work/shell.qml" >/dev/null 2>&1 || true; }
+reboot() { python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["boot"]="another-boot"; json.dump(d, open(p, "w"))' "$dir/widget-guard.json"; }
+expect() {
+  local got
+  got=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps([d.get("loading"), d.get("crashed"), d.get("suspect")], sort_keys=True))' "$dir/widget-guard.json")
+  [[ $got == "$2" ]] && echo "ok - $1" || { echo "not ok - $1: [loading, crashed, suspect] $got, want $2" >&2; rc=1; }
+}
+
+fresh; start begin:w:h1; start
+expect "a shell death in the same boot holds the widget back" '[{}, {"w": "h1"}, {}]'
+fresh; start begin:w:h1; reboot; start
+expect "loading when the system went down: a suspect, not a crash" '[{}, {}, {"w": "h1"}]'
+start begin:w:h1; reboot; start
+expect "a suspect still loading after a second unclean end is held back" '[{}, {"w": "h1"}, {}]'
+fresh; start begin:w:h1; reboot; start begin:w:h1,end:w
+expect "a clean run clears a suspect" '[{}, {}, {}]'
+fresh; start begin:w:h1; reboot; start begin:w:h2; reboot; start
+expect "a widget with new files starts over as a suspect" '[{}, {}, {"w": "h2"}]'
+fresh; echo '{"loading": {"w": "h1"}, "crashed": {}}' > "$dir/widget-guard.json"; start
+expect "a guard file without a boot id keeps the strict rule" '[{}, {"w": "h1"}, {}]'
+fresh
+GUARD_DIR=$dir GUARD_ACT=begin:w:h1 quickshell -n -p "$work/shell.qml" >/dev/null 2>&1 &
+qs=$!
+for _ in $(seq 1 40); do grep -c '"w"' "$dir/widget-guard.json" >/dev/null 2>&1 && break; sleep 0.1; done
+quickshell kill --pid "$qs" >/dev/null 2>&1 || kill "$qs"
+wait "$qs" 2>/dev/null || true
+expect "a deliberate quit clears what was still loading" '[{}, {}, {}]'
+exit $rc

@@ -14,14 +14,16 @@ logical at scale 3).
 | Plugin | Kind | What it is |
 | --- | --- | --- |
 | `omamobile.bar` | `bar` | Status bar: clock, connectivity, battery; tap or pull down for quick settings |
-| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear and the notification history; Wi-Fi picker and Bluetooth panel |
+| `omamobile.quicksettings` | `panel` (keepLoaded) | Pull-down sheet: up to 21 tiles the user arranges, brightness and volume, a Settings gear, media controls and the notification history; Wi-Fi picker and Bluetooth panel |
 | `omamobile.launcher` | `panel` (keepLoaded) | Home bar: app search, app grid and coding-agent prompt in one input |
 | `omamobile.home` | `panel` (keepLoaded) | Home screens: pages of apps and widgets on the wallpaper, with an edit mode |
 | `omamobile.fingerprint` | `panel` (keepLoaded) | Fingerprint target over the sensor during verification, desktop guard, and the enrollment screen |
-| `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts; draws nothing |
+| `omamobile.keyboard` | `panel` (keepLoaded) | The on-screen keyboard's show and hide calls (IPC) for the home pill and scripts, and the language sheet for the keyboard's globe key |
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
+| `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
 | `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
+| `omamobile.mobilenetwork` | `panel` (keepLoaded) | The Mobile network page: carrier, signal, mobile data, data roaming, the APN and (under Advanced) the attach APN, the SIM PIN lock; Setup > Mobile network or the Mobile data tile's chevron. "No modem" without the modem stack (docs/TELEPHONY-APPS-PLAN.md 7.6) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
 ## Enabling
@@ -121,7 +123,7 @@ existed finds them under "Add tiles" too.
 | --- | --- |
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
-| Mobile data | `omamobile-sit data on/off` (omamobile-modem-sit), which starts or stops `omamobile-sit-data.service` through polkit; on while that unit is active, with the operator and technology from `/run/omamobile-sit/state.json`. "No modem" until omamobile-sitd publishes that file |
+| Mobile data | `omamobile-sit data on/off` (omamobile-modem-sit), which starts or stops `omamobile-sit-data.service` through polkit; on while that unit is active, with the operator's name and technology from `/run/omamobile-sit/state.json` (just the technology when sitd has no name: a bare network code never shows) and "No signal" while unregistered. Its icon is the status bar's signal bars from that file's `signal`, crossed out only with no modem, mobile data off or no network. "No modem" until omamobile-sitd publishes that file, unless `omamobile-modem-start` refused to start the modem this boot and left why in `/run/omamobile/modem-refused` ("Off after a hang or reset", "Off: not provisioned"): then that line is the status, and `journalctl -b -u omamobile-modem` has the rest |
 | Airplane mode | Wi-Fi, Bluetooth and WWAN rfkill switches together; on when all are soft-blocked. Turning it off unblocks only the ones that were on (`~/.local/state/omamobile/airplane-restore`). NFC keeps its own tile, and the modem's radio (`omamobile-sit radio`) is not touched, since turning that back on needs a reboot today |
 | Hotspot | `nmcli device wifi hotspot con-name Hotspot` (NetworkManager makes the SSID and password; the Wi-Fi client link drops while it runs) and `nmcli connection down Hotspot`. Long-press opens the Wi-Fi picker |
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
@@ -137,7 +139,7 @@ existed finds them under "Add tiles" too.
 | Torch | The rear flash LED in torch mode (`brightnessctl --device=white:torch`); "No flash LED" without it |
 | Do not disturb | The notification service's `notifications` IPC target on this shell instance |
 | Clipboard | Puts the sheet away and opens Omarchy's clipboard history (`omarchy-shell shell summon omarchy.clipboard`, Super+Ctrl+V on the desktop); a pick pastes into the app underneath |
-| Dictation | voxtype (`voxtype record start`, a second tap `record stop`); a start puts the sheet away so the words land in the app underneath. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
+| Dictation | The voice bar (omamobile.voice: `omamobile-voice start`, a second tap `omamobile-voice done`); a start puts the sheet away so the words land in the app underneath. Its chevron (and a long press) opens the voice settings, as Wi-Fi's and Bluetooth's open their pages. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
 | Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omamobile.fingerprint`); the status counts this user's fingerprints through fprintd (`omamobile-fp-enroll list`); "No sensor" without fprintd or its device |
 | Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
@@ -177,6 +179,39 @@ calls the notification service on this shell instance, `dismissAll` (the
 toasts on screen move into history) and then `clear` (history is emptied).
 The card takes the room left under the sheet and scrolls past that; it hides
 in edit mode, or when the sheet leaves no room for it.
+
+### Media card
+
+While a player plays or is paused, the shade starts with a media card, as
+on Android (`MediaCard.qml`, `MediaSource.qml`, rules in `MediaModel.js`,
+tests in `test/media-model.js` and `test/media-touch`). Source:
+Quickshell's MPRIS service (`Quickshell.Services.Mpris`), the one Omarchy's
+own media bar widget reads; a panel plugin can't reach the host's
+`omarchy.media` service (only full bars get first-party services), so the
+card picks its player itself, with Omarchy's rule that playerctld, a proxy,
+comes last.
+
+* **Which player:** one that plays or is paused and has a title (stopped,
+  or nothing to show: no card); playing before paused, then the one that
+  started playing or changed track most recently.
+* **What it shows:** the album art, else the app's icon from its desktop
+  entry, else Omarchy's media glyph; the app's name (MPRIS identity), the
+  title and the artist, each one line, elided; a seek bar with elapsed and
+  length when the player reports its position and length (drag or tap to
+  seek when it can; Quickshell's position is asked for once a second while
+  playing and the sheet is open); previous, play/pause and next, 48 px,
+  dimmed when the player can't.
+* **Art:** local files and `data:` images, and `https://`/`http://` covers
+  (Spotify's, a browser's: the player already fetched them). Nothing else
+  (`qrc:`, `image://`). The lock (omamobile-omarchy patch 0027) loads local
+  art only.
+* **A tap** on the card (not on a control) puts the sheet away and focuses
+  the player's window with `omarchy-hyprland-focus-app`, by desktop entry,
+  then identity, as a notification row's tap does; only when no window
+  matches is the player asked to raise itself (MPRIS Raise). Nothing is
+  started.
+* `shell call omamobile.quicksettings state` includes `media` (app, title,
+  playing).
 
 ### Wi-Fi picker
 
@@ -296,7 +331,9 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
   the very bottom, the Phone app's Favorites, Recents, Contacts and Keypad
   tabs among them. 44 px, a whole touch target (TOUCH-PLAN 2.5), is all an
   app gives up. The zone goes with the strip: nothing is reserved for it on
-  the home screen (the dock reserves its own height there), with the drawer
+  the home screen (where the dock reserves nothing since 0.2.56: the home
+  screen keeps its height free, so the drawer opening over it resizes no
+  window), with the drawer
   open, under the lock screen's keyboard, or for a real fullscreen window
   (video, the screensaver), which keeps the whole screen. Under the lock it
   isn't drawn (no `above_lock` rule), and the lock covers the whole screen
@@ -352,9 +389,25 @@ The home surface, after Omalauncher: one bar along the bottom of the screen.
 * **Drawer.** The app grid (4 columns of 44 px icons with names) under the
   status bar, with the one input at the bottom, focused. Typing filters the
   grid; while searching, results stack upward from the input so the best match
-  sits by your thumb, highlighted. Pull the header down, or the grid when it
-  is scrolled to its top, past about 80 px to close it (the drawer follows the
-  finger); the chevron at the top right still closes it too.
+  sits by your thumb, highlighted. **Swipe up anywhere on the home screen** to
+  open it: the drawer rises with the finger and opens on an upward flick or
+  past a quarter of the way, else falls back (only on the home screen: not
+  over an app, in edit mode or under a sheet; a widget that scrolls keeps its
+  own swipe). Opened that way, no keyboard comes up until the field is
+  tapped; typing on a hardware keyboard still searches. To close it, tap the
+  **handle** (the pill centred at the top, a 44 px target), or drag it, the
+  header, empty space or the grid at its top down: the drawer follows the
+  finger both ways and closes on a downward flick or past a tenth of the
+  way, else springs back. A grid scrolled down scrolls first; the pull takes
+  over where it reaches the top. Settling is one Easing.OutCubic slide of
+  120-260 ms that starts at the finger's speed; the home screen dims under
+  the theme's menu scrim as the drawer rises (opacity only: a scale of the
+  home made its widgets snap between pixels). The drawer's surface stays
+  mapped for the life of the shell, drawing nothing and taking no touch while
+  closed: mapped on each open, its first frames drew at the wrong scale. The home
+  screen reaches the drawer in-process through `DrawerLink.js` (a
+  `.pragma library` script both plugins import from the launcher's folder);
+  without it the swipe still opens the drawer through the host on release.
 * **Ask the agent.** Any text also offers an "Ask Claude" row above the input.
   Text that reads as a prompt (3+ words, ends in `?`, `.` or `!`, or matches no
   app) makes that row the primary action: it is highlighted, the input glyph
@@ -458,7 +511,11 @@ wallpaper, swiped sideways, with page dots above the dock.
 ![Home screens](../../../phone/screenshots/home-screens.png)
 ![Edit mode](../../../phone/screenshots/home-screens-edit.png)
 
-* **Pages.** Swipe sideways; tap a dot to jump. The home page (Home in recent
+* **Pages.** Swipe sideways; tap a dot to jump. The page follows the finger
+  1:1 (the ListView's own drag); a flick of 300 px/s turns the page even on
+  a short swipe, a slower release settles on the nearer page, with one
+  Easing.OutCubic slide of 120-250 ms that starts at the finger's speed
+  (`HomePager.qml`, rules in `HomeModel.js`). Swipe up for the app drawer. The home page (Home in recent
   apps goes back to it) is marked in the Pages sheet.
 * **Grid.** 4 columns by 6 rows by default (3-6 by 4-8, set in Pages). Apps
   take one cell, widgets a span within their own limits.
@@ -757,6 +814,28 @@ folds the keyboard on demand (showing closes the sheet).
 IPC: `omarchy-shell shell call omamobile.keyboard showKeyboard|hideKeyboard|toggleKeyboard|state ''`
 (not `show`/`hide`: the IPC command line takes `show` for itself).
 
+**The language sheet** (0.2.65): the one thing it draws, and only when
+asked. squeekboard's globe key opened its own GTK popover, drawn at mouse
+size, sticking out above the keyboard's surface where taps didn't land, with
+a Keyboard Settings item for a GNOME panel the phone doesn't have. Every
+layout we carry now sends `XF86MediaLanguageMenu` from the globe
+(`squeekboard/generate`), and `hypr/phone.lua` binds it, for squeekboard
+only, to `languages`: a bottom sheet over the keyboard (`LanguageWindow.qml`
+on the overlay layer, `LanguageSheet.qml`) with a 56 px row per language in
+`org.gnome.desktop.input-sources` `sources` (xkeyboard-config's names, as
+squeekboard shows them), the current one checked, a remove target on the
+others, and "Add a language", a scrolling list of the layouts the keyboard
+has. A tap switches and closes; a tap outside or a swipe down closes. One
+language still opens the sheet, so people find it. `bin/omamobile-keyboard-languages`
+lists and switches: it moves the chosen layout to the front of `sources`,
+exactly as squeekboard's popover does, and squeekboard follows that key.
+squeekboard's Emoji and Terminal overlays aren't offered: they are internal
+to squeekboard and nothing outside it can select them (docs/VOICE-PLAN.md,
+"The language sheet"). The Emoji key opens Omarchy's emoji picker, and the
+terminal layout comes up on its own in a terminal.
+
+IPC: `languages|closeLanguages ''`, `pickLanguage|removeLanguage '<layout>'`.
+
 ## omamobile.back
 
 The back gesture, as on Android: swipe in from the left or right edge and let
@@ -816,6 +895,35 @@ Omarchy's update).
 
 IPC: `omarchy-shell shell call omamobile.update snapshot ''` (page, step,
 result; never the PIN).
+
+## omamobile.voice
+
+Voice input: one voice bar, through Voxtype's user daemon
+(`voxtype.service`, Omarchy's Install > AI > Dictation). The design and its
+history are in [VOICE-PLAN.md](../../../docs/VOICE-PLAN.md).
+
+* **Ways in:** hold the pill in an app, or the search bar on the home
+  screen; the keyboard's Mic key; Power + Volume Up (when turned on); the
+  Dictation tile (its chevron opens the settings); or
+  `omamobile-voice [toggle|start|done|cancel|settings]`.
+  The bottom bar has no buttons: as on Android, a hold is voice and a
+  double tap the keyboard.
+* **The bar** rises above the keyboard (or the bottom bar): the destination
+  chip, the time, the level, Cancel and "Done · <verb>", in the recording
+  colour while it listens. The destination follows what is in front: Send
+  to the agent in its terminal (typed, then Enter), Type here in any other
+  app, Ask the agent on the home screen; the chip also offers Copy to
+  clipboard and Search apps.
+* **Ask** checks first: the transcript to edit in the theme's warning
+  colour, the full-permissions warning, Discard / Again / Ask.
+* Every recording is `voxtype record start --no-osd --file=<transcript>`,
+  delivered by the shell (wtype, wl-copy, the launcher). The model is the
+  daemon's (tiny.en once downloaded); the screen stays on while it
+  listens; a haptic tick at the start and end.
+* **Settings** (`~/.config/omamobile/voice.json`): the speech model, Power +
+  Volume Up, the check before Ask.
+
+IPC: `omarchy-shell shell call omamobile.voice <toggle|start|done|cancel|press|release|keyPress|keyRelease|openSettings|snapshot> ''`.
 
 ## omamobile.access
 
@@ -923,6 +1031,11 @@ the Pixel 7 Pro), as bars and the network type ("LTE", "5G", "R" when
 roaming), "No SIM", "SIM locked", the airplane when the radio is off, and
 nothing without a modem. Signal strength shows as empty bars until the
 modem reports a reading (SIT signal strength is TELEPHONY-APPS-PLAN T8).
+The watcher re-reads every property from ModemManager's ObjectManager on any
+PropertiesChanged, InterfacesAdded or InterfacesRemoved from the service, when
+its name changes owner (then again 1, 3 and 10 s later, since a restarted
+service may export its modem, or fix a first wrong state, without a signal),
+and every 20 s; a failed read is logged and never stops it.
 
 **Emergency call:** the lock screen's "Emergency call" button (Omarchy patch
 0014, under the number pad on touch-only devices) calls `omarchy-shell shell

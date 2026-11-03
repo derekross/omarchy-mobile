@@ -132,9 +132,9 @@ class SimulatorTests(unittest.TestCase):
         entries = self.transcript_entries()
         self.assertFalse([e for e in entries if 'violation' in e])
         ids = [e['id'] for e in entries if e.get('type') == 'req']
-        # The verified order: SIM, attach APN and profile, registration, NR
-        # off, internet bearer, IMS stack, IMS bearer, ADD_PDN.
-        order = [0x0200, 0x0603, 0x0613, 0x0701, 0x0748, 0x0600, 0x0d39, 0x0600, 0x0d08]
+        # Stock's order: SIM, attach APN, profile, NR off (all before radio
+        # on), registration, internet bearer, IMS stack, IMS bearer, ADD_PDN.
+        order = [0x0200, 0x0603, 0x0613, 0x0748, 0x0701, 0x0600, 0x0d39, 0x0600, 0x0d08]
         positions = []
         start = 0
         for ident in order:
@@ -142,10 +142,20 @@ class SimulatorTests(unittest.TestCase):
             positions.append(start)
         self.assertEqual(positions, sorted(positions))
         at = [e['cmd'] for e in entries if e.get('type') == 'at']
-        self.assertEqual(at, ['AT+CFUN=0', 'AT+CFUN=1'])
+        # The radio state read, then on once: no AT+CFUN=0 cycle.
+        self.assertEqual(at, ['AT+CFUN?', 'AT+CFUN=1'])
+        radio_on = next(i for i, e in enumerate(entries) if e.get('cmd') == 'AT+CFUN=1')
+        nr_set = next(i for i, e in enumerate(entries) if e.get('id') == 0x0748)
+        self.assertLess(nr_set, radio_on)
+        self.assertRegex((self.dir / 'daemon.log').read_text(),
+                         r'Registration: packet registered \d+\.\d s after radio on, RAT 14')
         setups = [e for e in entries if e.get('event') == 'setup_data_call']
         self.assertEqual([(s['cid'], s['apn'], s['ip']) for s in setups],
                          [(1, 'internet.example', 3), (2, 'ims', 2)])
+        # Both bearers as stock sets them up on cellular: no PDU session ID
+        # (the modem picks it), and no ALLOC_PDU_SESSION or REL_PDU_SESSION.
+        self.assertEqual([s['psi'] for s in setups], [0, 0])
+        self.assertFalse({0x061a, 0x061b} & set(ids))
         log = (self.dir / 'daemon.log').read_text()
         for secret in ('2025550123', '2025550199', 'hello', 'omamobile test'):
             self.assertNotIn(secret, log)
@@ -168,6 +178,56 @@ class SimulatorTests(unittest.TestCase):
     def control(self, command):
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
             sock.sendto(command.encode(), str(self.dir / 'control'))
+
+    def active_call(self):
+        call = self.cli('dial', '+12025550199').strip()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            calls = json.loads(self.cli('status', '--json'))['calls']
+            if calls and calls[0]['state'] == 'active':
+                return call
+            time.sleep(.1)
+        self.fail('call did not become active')
+
+    def assert_release_recovery(self, reason, hangups):
+        self.assertNotEqual(self.daemon.wait(25), 0)
+        # Radio-off and sitd exit leave the simulated CP and call ownership
+        # intact. A subsequent service start must not silently reuse it.
+        self.assertIsNone(self.procs[0].poll())
+        self.assertTrue(json.loads((self.dir / 'run' / 'active.json').read_text()))
+        self.assertFalse((self.dir / 'run' / 'socket').exists())
+        self.assertFalse((self.dir / 'run' / 'state.json').exists())
+        entries = self.transcript_entries()
+        self.assertFalse([e for e in entries if 'violation' in e])
+        self.assertEqual([e['cmd'] for e in entries if e.get('type') == 'at'][-1], 'AT+CFUN=0')
+        ids = [e['id'] for e in entries if e.get('type') == 'req']
+        self.assertEqual(ids.count(0x0d03), hangups)
+        self.assertEqual(ids[-1], 0x0801)
+        log = (self.dir / 'daemon.log').read_text()
+        self.assertIn(reason, log)
+        self.assertIn('radio off CP online', log)
+        self.assertIn('attended reboot required', log)
+        self.assertNotIn('Stopping the modem', log)
+        self.assertNotIn('2025550', log)
+
+    def test_unconfirmed_hangup_turns_radio_off_and_exits_without_stopping_modem(self):
+        self.start('--unconfirmed-hangup')
+        self.wait_ready()
+        self.active_call()
+        self.cli('hangup')
+        self.assert_release_recovery('hangup deadline expired', 1)
+
+    def test_unconfirmed_release_at_service_stop_leaves_modem_for_reboot(self):
+        self.start('--unconfirmed-hangup')
+        self.wait_ready()
+        self.active_call()
+        self.daemon.send_signal(signal.SIGTERM)
+        self.assert_release_recovery('a call release was not confirmed at service stop', 1)
+
+    def test_unresolved_previous_call_turns_radio_off_before_exiting(self):
+        (self.dir / 'run' / 'active.json').write_text('[{}]')
+        self.start(bringup=False)
+        self.assert_release_recovery('a call from the previous service run was never released', 0)
 
     def subscribe(self):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -272,11 +332,48 @@ class SimulatorTests(unittest.TestCase):
         self.start('--no-ims-registration')
         self.assertNotEqual(self.daemon.wait(40), 0)
 
-    def test_no_apn_never_switches_the_radio(self):
-        (self.dir / 'modem-sit.conf').write_text('[audio]\ncard = none\n')
-        self.start()
-        self.assertNotEqual(self.daemon.wait(30), 0)
-        self.assertFalse([e for e in self.transcript_entries() if e.get('type') == 'at'])
+    def auto_apn_env(self):
+        (self.dir / 'modem-sit.conf').write_text(
+            '[network]\napn = auto\nsim_timeout = 20\nregister_timeout = 30\n[audio]\ncard = none\n')
+        self.env.update(OMAMOBILE_SIT_PROVIDERS=str(self.dir / 'no-database.xml'),
+                        OMAMOBILE_SIT_APN_OVERRIDES=str(HERE.parent / 'share' / 'apn-overrides.conf'))
+
+    def test_auto_apn_from_the_sim_and_nothing_identifying_logged(self):
+        self.auto_apn_env()
+        self.start('--imsi-plmn', '311480')
+        self.wait_ready()
+        modem = json.loads(self.cli('status', '--json'))['modem']
+        # Verizon's codes: stock's setup (no attach APN, IMS first on CID 2,
+        # the internet on CID 3, four profiles), as on the 7 Pro on 2026-11-03.
+        self.assertEqual(modem['apn'], dict(value='VZWINTERNET', source='override', attach='none',
+                                            attach_source='override'))
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertNotIn(0x0603, ids)                # no attach APN
+        self.assertEqual(ids.count(0x0613), 4)       # stock's four data profiles
+        self.assertEqual((modem['data'], modem['data_available'], modem['sim']['pin_lock']), (True, True, 'off'))
+        setups = [e for e in self.transcript_entries() if e.get('event') == 'setup_data_call']
+        self.assertEqual([(e['cid'], e['apn']) for e in setups], [(2, 'IMS'), (3, 'VZWINTERNET')])
+        self.assertFalse([e for e in self.transcript_entries() if 'violation' in e])
+        log = (self.dir / 'daemon.log').read_text()
+        self.assertIn('APN chosen from', log)
+        for secret in ('000000017', '311480', 'vzwinternet', 'vzwadmin'):
+            self.assertNotIn(secret, log.lower())
+        self.assertNotIn('000000017', (self.dir / 'run' / 'state.json').read_text())
+
+    def test_no_apn_registers_for_calls_and_sms_without_data(self):
+        self.auto_apn_env()
+        self.start('--no-imsi')
+        self.wait_ready()
+        modem = json.loads(self.cli('status', '--json'))['modem']
+        self.assertEqual((modem['voice'], modem['sms'], modem['data'], modem['data_available']),
+                         (True, True, False, False))
+        self.assertEqual(modem['apn'], dict(value='', source='none', attach='', attach_source='same'))
+        ids = [e['id'] for e in self.transcript_entries() if e.get('type') == 'req']
+        self.assertNotIn(0x0603, ids)                # no attach APN
+        self.assertNotIn(0x0613, ids)                # no data profile
+        setups = [e for e in self.transcript_entries() if e.get('event') == 'setup_data_call']
+        self.assertEqual([e['cid'] for e in setups], [2])   # the IMS bearer only
+        self.assertIn('without mobile data', (self.dir / 'daemon.log').read_text())
 
 
 if __name__ == '__main__':

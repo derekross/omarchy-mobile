@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: MIT
 # Omarchy Mobile (on PATH only during omamobile-update): Omarchy's restart
 # step without its questions. Omarchy decides "kernel updated" when no
-# pacman-owned vmlinuz matches the running kernel; the phone's kernel isn't a
-# pacman package (bin/omamobile push writes boot_b), so that test would always
-# fire. The phone needs a restart when Omarchy asked for one or Hyprland was
-# replaced; services Omarchy marked are restarted and the shell too, as on a
+# pacman-owned vmlinuz matches the running kernel; on the phone that test
+# would always fire (a pushed kernel isn't a package, and a packaged one only
+# runs once slot B holds it). The phone needs a restart when Omarchy asked for
+# one, Hyprland was replaced, or linux-omamobile's hook (omamobile-boot-update)
+# wrote slot B during this update; a kernel package it could not write is a
+# warning. Services Omarchy marked are restarted and the shell too, as on a
 # desktop. Nothing reboots here: the update sheet offers the restart.
 out=${OMAMOBILE_UPDATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/omamobile-update}/restart.json
 reasons=() warnings=()
@@ -14,6 +16,37 @@ modules=${OMAMOBILE_MODULES_DIR:-/usr/lib/modules}/$(uname -r)
 [[ -d $modules ]] || warnings+=("No modules for the running kernel in $modules")
 
 [[ -f $HOME/.local/state/omarchy/reboot-required ]] && reasons+=("Omarchy asked for a restart")
+
+# The boot-update hook's result, when it ran during this update
+boot_status=${OMAMOBILE_BOOT_UPDATE_STATUS:-/run/omamobile/boot-update.json}
+if [[ -f $boot_status ]]; then
+  boot=$(python3 -I - "$boot_status" "${OMAMOBILE_UPDATE_STARTED:-0}" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    sys.exit(0)
+if int(d.get("time", 0)) < int(sys.argv[2] or 0):
+    sys.exit(0)
+msg = str(d.get("message", "")).replace("\n", " ").replace("\t", " ")
+print("%s\x1f%s\x1f%s\x1f%s" % (d.get("result", ""), d.get("release", ""), "yes" if d.get("kernel_changed") else "no", msg))
+PY
+  ) || boot=""
+  # A unit separator: tab is IFS white space, and an empty release would vanish
+  IFS=$'\x1f' read -r boot_result boot_release boot_kernel boot_message <<<"$boot" || true
+  case ${boot_result:-} in
+    # kernel_changed: slot B now holds another release than the running
+    # one; otherwise only the initramfs or the device tree changed
+    written)
+      if [[ ${boot_kernel:-} == yes ]]; then
+        reasons+=("The kernel was updated (slot B now holds ${boot_release:-the new kernel})")
+      else
+        reasons+=("The boot images were updated (initramfs or device tree, kernel ${boot_release:-unchanged})")
+      fi ;;
+    refused|failed)
+      warnings+=("The kernel package changed but slot B was not written (${boot_message:-see the pacman output}); fix that, then: sudo omamobile-boot-update write") ;;
+  esac
+fi
 
 pid=$(pgrep -x Hyprland | head -1)
 if [[ -n $pid ]] && [[ $(readlink "/proc/$pid/exe" 2>/dev/null) == *"(deleted)"* ]]; then

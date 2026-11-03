@@ -45,6 +45,8 @@ for qml in "$h"/quicksettings/*.qml; do
 done
 grep -c '^  Item { anchors.fill: parent$' "$h/quicksettings/QuickSettings.qml" >/dev/null || { echo "quicksettings-render: no PanelWindow to stand in for" >&2; exit 1; }
 cp "$here/quicksettings-render.qml" "$h/"
+# Album art for the media card's shots: a square of our own.
+magick -size 512x512 gradient:'#7aa2f7-#bb9af7' "$h/art.png" 2>/dev/null || convert -size 512x512 gradient:'#7aa2f7-#bb9af7' "$h/art.png"
 
 status=0
 for theme in tokyo-night catppuccin-latte; do
@@ -66,6 +68,12 @@ PY
   python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
 import json, sys
 out, theme = sys.argv[1:]
+# The media card: a long title (elided), local art and a timeline; then
+# paused, with no art and no position (the app's glyph, no seek bar).
+song = {"trackTitle": "A very long song title that cannot possibly fit on one line of the card", "trackArtist": "The Example Band",
+        "trackArtUrl": "file:///tmp/quicksettings-harness/art.png", "identity": "Music"}
+paused = {"trackTitle": "Morning podcast", "trackArtist": "Episode 12", "isPlaying": False, "playbackState": 2,
+          "positionSupported": False, "lengthSupported": False, "identity": "Podcasts", "desktopEntry": ""}
 def shot(name, w, h, **extra):
     s = {"name": name, "png": "%s/quicksettings-%s-%s.png" % (out, name, theme), "w": w, "h": h}
     s.update(extra)
@@ -73,6 +81,8 @@ def shot(name, w, h, **extra):
 print(json.dumps({"shots": [
     shot("portrait", 480, 1040), shot("portrait-expanded", 480, 1040, expanded=True),
     shot("landscape", 1040, 480), shot("landscape-expanded", 1040, 480, expanded=True), shot("landscape-edit", 1040, 480, edit=True),
+    shot("portrait-media", 480, 1040, media=song), shot("portrait-media-expanded", 480, 1040, expanded=True, media=song),
+    shot("portrait-media-paused", 480, 1040, media=paused), shot("landscape-media", 1040, 480, media=song),
 ]}))
 PY
   HOME=$home QT_SCALE_FACTOR=3 QS_JOB="$h/job-$theme.json" timeout 300 quickshell -p "$h/quicksettings-render.qml" > "$h/log-$theme" 2>&1 || true
@@ -87,8 +97,9 @@ for n, w, h, g in re.findall(r"geometry (\S+) (\d+)x(\d+) (\{.*\})", text):
     geo[n] = dict(json.loads(g), screen={"x": 0, "y": 0, "w": int(w), "h": int(h)})
 def inside(a, b, tol=0): return a["x"] >= b["x"] - tol and a["y"] >= b["y"] - tol and a["x"] + a["w"] <= b["x"] + b["w"] + tol and a["y"] + a["h"] <= b["y"] + b["h"] + tol
 def apart(a, b, tol=0): return a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol or a["y"] + a["h"] <= b["y"] + tol or b["y"] + b["h"] <= a["y"] + tol
-ok = not bad and len(geo) == 5
-if len(geo) != 5: print("not ok - %s: %d of 5 shots taken" % (theme, len(geo)))
+SHOTS = 9
+ok = not bad and len(geo) == SHOTS
+if len(geo) != SHOTS: print("not ok - %s: %d of %d shots taken" % (theme, len(geo), SHOTS))
 for l in bad: print("  " + l[:200])
 def check(name, good, why=""):
     global ok
@@ -116,6 +127,30 @@ for name, g in geo.items():
             check(name + ": the shade is %s the sheet" % ("beside" if landscape else "under"), beside and apart(parts["sheet"], parts["shade"]))
             check(name + ": Clear all is on the shade", "clearNotifications" in parts and inside(parts["clearNotifications"], parts["shade"], 1) and parts["clearNotifications"]["h"] >= 44)
     check(name + ": columns follow the width", g["columns"] == (3 if landscape else 2), str(g["columns"]))
+    # The media card: on the shade, above its header, every control a
+    # touch target, none over another; hidden with no player.
+    card = parts.get("mediaCard")
+    if not g["media"]:
+        check(name + ": no media card without a player", card is None, json.dumps(card))
+        continue
+    shade = parts.get("shade")
+    check(name + ": the media card is on the shade, above the notifications", card is not None and shade is not None
+          and inside(card, shade, 1) and "clearNotifications" in parts and card["y"] + card["h"] <= parts["clearNotifications"]["y"],
+          json.dumps([card, shade, parts.get("clearNotifications")]))
+    buttons = [parts.get(k) for k in ("mediaPrevious", "mediaPlayPause", "mediaNext")]
+    check(name + ": previous, play/pause and next are on the card, at least 44 px, apart", card is not None and all(buttons)
+          and all(inside(b, card, 1) and b["h"] >= 44 and b["w"] >= 44 for b in buttons)
+          and all(apart(a, b) for i, a in enumerate(buttons) for b in buttons[i + 1:]), json.dumps(buttons))
+    texts = [parts.get(k) for k in ("mediaTitle", "mediaArt") if parts.get(k)]
+    check(name + ": the title and the art sit on the card, clear of the controls", len(texts) == 2 and card is not None
+          and all(inside(t, card, 1) for t in texts) and all(apart(t, b) for t in texts for b in buttons if b), json.dumps(texts))
+    if name.endswith("paused"):
+        check(name + ": no seek bar without a position", "mediaSeek" not in parts, json.dumps(parts.get("mediaSeek")))
+    else:
+        check(name + ": the seek bar is on the card, a touch target tall, clear of the controls", "mediaSeek" in parts and card is not None
+              and inside(parts["mediaSeek"], card, 1) and parts["mediaSeek"]["h"] >= 44 and all(apart(parts["mediaSeek"], b) for b in buttons if b),
+              json.dumps(parts.get("mediaSeek")))
+        check(name + ": a long title is elided", g["titleElided"] is True, str(g["titleElided"]))
 sys.exit(0 if ok else 1)
 PY
 done

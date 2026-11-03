@@ -10,6 +10,7 @@ function = source[source.index('sample() {'):source.index('\nfreeze_phase()')]
 with tempfile.TemporaryDirectory() as tmp:
     battery = Path(tmp)
     def sample(voltage, current, average=None):
+        (battery / 'restored').unlink(missing_ok=True)
         for name, value in [('voltage_now', voltage), ('current_now', current),
                             ('current_avg', average)]:
             path = battery / name
@@ -31,14 +32,25 @@ with tempfile.TemporaryDirectory() as tmp:
         for voltage, current in [(bad, '-120000'), ('4000000', bad)]:
             result = sample(voltage, current)
             assert result.returncode != 0, (voltage, current)
-            assert result.stdout == '', result.stdout
+            assert result.stdout.startswith('# power-ab: invalid or unavailable ') and 'after retry; stopping' in result.stdout, result.stdout
             assert (battery / 'restored').read_text() == 'restored\n'
+    # Simulate one stale sysfs read followed by a good reading.
+    (battery / 'voltage_now').write_text('4000000')
+    (battery / 'current_now').write_text('-120000')
+    for required in ['voltage_now', 'current_now']:
+        (battery / 'attempt').unlink(missing_ok=True)
+        retry = subprocess.run(['bash', '-uc', function + "\nbat=$1; target=$2; csv=/dev/stdout; "
+                                'date() { echo 42; }; '
+                                'cat() { if [[ $1 == "$bat/$target" && ! -e $bat/attempt ]]; then '
+                                'touch "$bat/attempt"; return 1; fi; command cat "$@"; }; sample A',
+                                'test', tmp, required], capture_output=True, text=True)
+        assert retry.returncode == 0 and retry.stdout == '42,A,4000000,-120000,,,\n'
     result = sample('4000000', '-120000', 'invalid')
-    assert result.returncode != 0 and result.stdout == ''
+    assert result.returncode == 0 and result.stdout == '42,A,4000000,-120000,,,\n'
     for name in ['charge_counter', 'charge_now']:
         path = battery / name
         path.write_text('bad')
         result = sample('4000000', '-120000')
-        assert result.returncode != 0 and result.stdout == ''
+        assert result.returncode == 0 and result.stdout == '42,A,4000000,-120000,,,\n'
         path.unlink()
 print('ok - signed/zero current, optional average, failed and malformed required reads')

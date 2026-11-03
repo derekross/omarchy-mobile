@@ -1,0 +1,246 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# husky-deadman: run one MAX77759 charger bring-up step on the Pixel 8 Pro
+# under a dead-man switch and a battery guard (device/husky/BATTERY-NOTES.md, M5). Ported from
+# tools/usbc-deadman (cheetah). The step runs DETACHED on the phone
+# (tools/husky-deadman-phone, started with systemd-run) and undoes itself
+# unless this script gets back in over a NEW SSH login and confirms, or when
+# the guard sees the battery leave its limits. If even that does not settle,
+# the SoC watchdog resets the phone, which boots with the charger blocked.
+#
+# Usage:
+#   tools/husky-deadman install          copy the phone half to /usr/local/bin
+#   tools/husky-deadman dump             read-only battery / charger dump
+#   tools/husky-deadman STEP [options]   run STEP under the dead-man switch
+#   tools/husky-deadman undo STEP        revert a confirmed STEP by hand
+#   tools/husky-deadman log              the phone's /var/log/husky-deadman.log
+#
+# STEP: noop | wd-drill | b3-charger
+#
+# Options:
+#   --confirm SECS   phone waits this long for our confirmation (default 90)
+#   --grace SECS     after its undo, wait this long again (default 60)
+#   --soak SECS      keep guarding after the confirmation (default 600)
+#   --ilim UA        b3-charger: default_ilim_ua (default 500000, max 900000)
+#                    (the confirmation is only 'SSH still works': the soak is the gate)
+#   --allow-soc      run b3-charger outside 30..80 % battery
+#   --no-watchdog    phone falls back to a crash (panic=10) instead of the
+#                    watchdog if the undo fails too
+#   --no-confirm     do not confirm until the phone has undone the step
+#
+# Exit codes: 0 confirmed (or undone on purpose with --no-confirm),
+# 3 undone (no confirmation in time), 4 no answer from the phone,
+# 5 refused before applying anything (reason printed), 6 apply failed, undone,
+# 7 the guard tripped and the step was undone, 8 wd-drill failed. 4 also means
+# the soak never finished or the phone did not come back after wd-drill.
+
+set -uo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SSH="$ROOT/tools/phone-ssh"
+LOGDIR="$ROOT/logs"
+
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+warn() { printf '\e[33m==> %s\e[0m\n' "$*"; }
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '/^# Usage:/,/^# 5 refused/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+# Every call gets its own stdin and a hard time limit, so a stuck SSH can
+# neither eat our terminal nor hang the loop.
+# --fresh: a shared connection (OMAMOBILE_SSH_SHARE) would outlive the very
+# loss of new logins this tool must notice.
+phone() { timeout 30 "$SSH" --fresh "$@" < /dev/null; }
+phone_in() { timeout 30 "$SSH" --fresh "$@"; }   # with our stdin (file uploads)
+
+recovery() {
+  cat <<'TXT'
+Physical recovery, in order:
+  1. Wait 2 minutes: the phone undoes the step, then its watchdog resets it
+     (the screen goes black and the boot logo returns). Linux on slot B boots
+     with max77759_charger blocked in modprobe.d.
+  2. Unplug the cable. Force a restart: hold Power + Volume Up for 15 to 30 s
+     (Power alone does nothing on the 8 Pro under our kernel). It boots slot B
+     again. EVERY reset spends one of slot B's three boot tries; at zero the
+     bootloader falls back to slot A and its first boot wipes userdata. Count
+     the boots since your last "bin/omamobile flash" (it gives B three again),
+     and when one is left, flash your known-good image set instead of resetting.
+  3. Whether a reset puts the charger registers back is NOT known for husky:
+     keep the phone on a cable only while you watch it, and check the
+     battery temperature by hand.
+  4. Fastboot by hand: force a restart as in 2, then Power + Volume Down until
+     "Fastboot Mode"; flash your known-good image set.
+TXT
+}
+
+install_phone() {
+  phone 'command -v i2cget >/dev/null' ||
+    die "i2c-tools missing on the phone: tools/phone-ssh 'pacman -S --needed --noconfirm i2c-tools'"
+  phone_in 'cat > /usr/local/bin/husky-deadman-phone && chmod 755 /usr/local/bin/husky-deadman-phone' \
+    < "$ROOT/tools/husky-deadman-phone" || die "could not install the phone half"
+}
+
+cmd="${1:-}"; shift || true
+step= confirm= grace=60 soak=600 ilim=500000 nowd= noconfirm=0 allowsoc=
+case "$cmd" in
+  ''|-h|--help) usage ;;
+  install) install_phone; say "installed /usr/local/bin/husky-deadman-phone"; exit 0 ;;
+  dump) install_phone; phone 'husky-deadman-phone dump'; exit $? ;;
+  log) phone 'cat /var/log/husky-deadman.log'; exit $? ;;
+  undo) install_phone; phone "husky-deadman-phone undo ${1:?STEP}"; rc=$?
+        if ((rc)); then warn "the undo did not finish cleanly (charger may still be loaded, with charging forced off): reboot the phone"; recovery; fi
+        exit $rc ;;
+  noop|wd-drill|b3-charger) step="$cmd" ;;
+  *) usage 1 ;;
+esac
+while (($#)); do
+  case "$1" in
+    --confirm) confirm="${2:?}"; shift ;;
+    --grace) grace="${2:?}"; shift ;;
+    --ilim) ilim="${2:?}"; shift ;;
+    --soak) soak="${2:?}"; shift ;;
+    --allow-soc) allowsoc=--allow-soc ;;
+    --no-watchdog) nowd=--no-watchdog ;;
+    --no-confirm) noconfirm=1 ;;
+    *) usage 1 ;;
+  esac
+  shift
+done
+[[ -n "$confirm" ]] || confirm=90
+[[ $ilim =~ ^[0-9]+$ ]] && (( ilim <= 900000 )) || die "--ilim must be a number up to 900000 (the driver clamps there)"
+
+phone true || die "phone not reachable at 172.16.42.1: nothing started"
+install_phone
+if [[ $step == wd-drill ]]; then
+  warn "wd-drill RESETS the phone and spends one of slot B's three boot tries (at zero the bootloader falls back to slot A, whose first boot wipes userdata; count the boots since your last bin/omamobile flash)"
+fi
+mkdir -p "$LOGDIR"
+stamp=$(date +%Y%m%d-%H%M%S)
+log="$LOGDIR/husky-$step-$stamp.log"
+
+# Kernel log on the desktop while the link lasts; reconnects after a drop.
+# Its own session (setsid), with every fd pointed at the log, so stopping it
+# kills the whole group (loop, ssh, reader) and nothing keeps our stdout or
+# stderr open after we exit.
+say "streaming the phone's kernel log to $log"
+export SSH
+setsid bash -c '
+  while :; do
+    "$SSH" --fresh -T -o ServerAliveInterval=1 -o ServerAliveCountMax=3 \
+      "exec cat /dev/kmsg" |
+      while IFS= read -r line; do printf "%s %s\n" "$(date +%T.%3N)" "$line"; done
+    echo "# $(date +%T.%3N) log stream ended"; sleep 2
+  done' < /dev/null >> "$log" 2>&1 &
+logger=$!
+stop_logger() { kill -- -"$logger" 2>/dev/null || kill "$logger" 2>/dev/null; }
+trap stop_logger EXIT
+sleep 2
+
+unit="husky-deadman-$step-$stamp"
+args="run $step --confirm $confirm --grace $grace --soak $soak --ilim $ilim $nowd $allowsoc"
+say "starting $step on the phone, detached (unit $unit): husky-deadman-phone $args"
+phone "if command -v systemd-run >/dev/null; then
+         systemd-run --quiet --collect --unit=$unit /usr/local/bin/husky-deadman-phone $args
+       else
+         setsid nohup /usr/local/bin/husky-deadman-phone $args >/dev/null 2>&1 < /dev/null &
+       fi" || die "could not start the step (nothing applied)"
+
+if ((noconfirm)); then
+  warn "--no-confirm: not confirming for ${confirm}s, so the phone undoes the step; confirming after that"
+fi
+
+start=$(date +%s)
+deadline=$(( start + confirm + grace + soak + 90 ))
+dropped=0 confirmed=0 result= polls=0
+sleep 5
+while (( $(date +%s) < deadline )); do
+  if phone true 2>/dev/null; then
+    if ((!confirmed)) && { ((!noconfirm)) || (( $(date +%s) > start + confirm + 10 )); }; then
+      if out=$(phone 'husky-deadman-phone confirm' 2>/dev/null); then
+        confirmed=1
+        echo; say "confirmed over a new SSH login after $(( $(date +%s) - start ))s ($out)"
+      fi
+    fi
+    result=$(phone 'cat /run/husky-deadman/result 2>/dev/null' 2>/dev/null)
+    case "$result" in soaked|reverted|reset|refused*|failed*|tripped*|drill) break ;; esac
+    if [[ $result == confirmed ]]; then
+      (( ++polls % 10 == 1 )) && { echo; say "soaking, guard: $(phone 'cat /run/husky-deadman/guard.last 2>/dev/null' 2>/dev/null)"; }
+    fi
+  else
+    if [[ $step == wd-drill ]]; then result=drill; break; fi
+    ((dropped)) || { echo; warn "link down (not expected for these steps); waiting"; }
+    dropped=1
+  fi
+  printf '.'
+  sleep 2
+done
+echo
+
+rc=1
+case "$result" in
+  soaked)
+    rc=0
+    say "step $step CONFIRMED and the soak finished clean; it stays applied. NOTHING guards it now (no watchdog, no guard): read the dump, then 'tools/husky-deadman undo $step' or watch the gauge by hand; reboot before another b3-charger. State:"
+    phone 'husky-deadman-phone dump; dmesg | grep -iE "max77759|max17042|charger|guard" | tail -25'
+    ;;
+  confirmed)
+    rc=4
+    warn "the phone still says 'confirmed' but never finished the soak (deadline passed); check by hand"
+    phone 'husky-deadman-phone dump' || recovery
+    ;;
+  reverted)
+    rc=$(( noconfirm ? 0 : 3 ))
+    warn "step $step was UNDONE by the phone (no confirmation in time); the link is back"
+    phone 'tail -20 /var/log/husky-deadman.log'
+    ;;
+  refused*)
+    rc=5
+    warn "the phone REFUSED to start $step, nothing was applied: ${result#refused: }"
+    ;;
+  tripped*)
+    rc=7
+    warn "the GUARD tripped and the phone undid $step: ${result#tripped: }"
+    phone 'tail -20 /var/log/husky-deadman.log'
+    ;;
+  drill)
+    # the phone stopped feeding the watchdog: it must drop off and come back by itself
+    warn "wd-drill: waiting for the phone to go down (about 15 to 20 s)"
+    down=0
+    t0=$(date +%s); while (( $(date +%s) < t0 + 120 )); do phone true 2>/dev/null || { down=1; break; }; sleep 2; done
+    if ((!down)); then
+      rc=8; warn "wd-drill FAILED: the phone never went down, the watchdog did not reset it"
+    else
+      say "the phone went down; waiting for it to come back"
+      up=0
+      t0=$(date +%s); while (( $(date +%s) < t0 + 180 )); do phone true 2>/dev/null && { up=1; break; }; sleep 2; done
+      if ((!up)); then rc=4; warn "the phone did not come back in 3 minutes"; recovery
+      else
+        sleep 20
+        say "back. uptime and modules:"
+        phone 'cut -d" " -f1 /proc/uptime; lsmod | grep -E "max77759|max17042" ; husky-deadman-phone dump'
+        upt=$(phone 'cut -d. -f1 /proc/uptime' 2>/dev/null)
+        if phone 'lsmod | grep -q "^max77759_charger "'; then rc=8; warn "max77759_charger is loaded after the reset"
+        elif ! [[ $upt =~ ^[0-9]+$ ]] || (( upt > 300 )); then rc=8; warn "uptime '$upt' s: the phone did not reboot, the link only dropped"
+        else rc=0; say "wd-drill OK: the watchdog reset the phone (uptime $upt s) and the charger stayed unloaded"; fi
+      fi
+    fi
+    ;;
+  reset)
+    rc=4
+    warn "the phone is resetting itself (undo did not settle). Wait 2 minutes:"
+    recovery
+    ;;
+  failed*)
+    rc=6
+    warn "step $step FAILED to apply on the phone and was undone; the link is fine"
+    phone 'tail -20 /var/log/husky-deadman.log'
+    ;;
+  *)
+    rc=4
+    warn "no result from the phone (result='${result}'). If it does not answer within 2 minutes:"
+    recovery
+    ;;
+esac
+stop_logger
+trap - EXIT
+say "kernel log: $log"
+exit $rc

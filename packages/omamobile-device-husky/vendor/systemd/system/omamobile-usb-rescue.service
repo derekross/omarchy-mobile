@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Close the USB data switch after each replug (omamobile-usb-rescue).
+[Unit]
+Description=Reconnect USB after a replug (MAX77759 data switch)
+After=systemd-modules-load.service
+
+[Service]
+ExecStartPre=-/usr/bin/modprobe i2c-dev
+ExecStart=/usr/bin/omamobile-usb-rescue
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,3 +1,5 @@
 *.pkg.tar.*
 src/
 pkg/
+# A device's boot files, staged by tools/stage-boot-files (built, never committed)
+boot-files/
