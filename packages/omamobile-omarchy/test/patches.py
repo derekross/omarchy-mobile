@@ -764,7 +764,7 @@ def screensaver_launcher(t, launcher):
 # Omarchy 4.0.6's notification texts (headline, body) and what a phone shows
 # for each (patch 0020); None leaves the text as it is.
 PHRASINGS = [
-    (("Screenshot saved to clipboard and file", "Edit with Super + Alt + , (or click this)"), "Tap to edit"),
+    (("Screenshot saved to clipboard and file", "Edit with Super + Alt + , (or click this)"), "Tap to view"),
     (("Screen recording saved", "Open with Super + Alt + , (or click this)"), "Tap to open"),
     (("Update System", "Click to update the system."), "Tap to update the system."),
     (("Setup Wi-Fi", "Click to configure the wireless network."), "Tap to configure the wireless network."),
