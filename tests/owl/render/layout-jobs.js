@@ -15,13 +15,19 @@ const owner = require("./owner-layout.json")
 const cases = require("../cases.json")
 const T = cases.time
 
-// A wttr.in j1 answer, made up.
-const hours = (base) => [0, 300, 600, 900, 1200, 1500, 1800, 2100].map((t, i) => ({ time: String(t), tempC: String(base + [0, -1, -1, 2, 5, 6, 3, 1][i]), weatherCode: "116", chanceofrain: "10", FeelsLikeC: String(base), windspeedKmph: "11", uvIndex: "2" }))
-const wttr = {
-  current_condition: [{ temp_C: "14", FeelsLikeC: "12", weatherCode: "116", weatherDesc: [{ value: "Partly cloudy" }], humidity: "70", windspeedKmph: "11", winddir16Point: "W", uvIndex: "2", precipMM: "0.0", localObsDateTime: "2026-10-13 01:27 PM" }],
-  nearest_area: [{ areaName: [{ value: "Sample Town" }], country: [{ value: "Example" }], latitude: "52.52", longitude: "13.40" }],
-  weather: ["2026-10-13", "2026-10-14", "2026-10-15"].map((d, i) => ({ date: d, maxtempC: String(16 - i), mintempC: String(9 - i), avgtempC: "12",
-    astronomy: [{ sunrise: "07:26 AM", sunset: "06:18 PM", moonrise: "03:02 AM", moonset: "05:10 PM", moon_phase: "Waning Crescent", moon_illumination: "40" }], hourly: hours(9 - i) }))
+// Open-Meteo geocoding and forecast answers, made up (our copies of today and forecast use them).
+const geo = { results: [{ name: "Sample Town", latitude: 52.52, longitude: 13.4, country: "Example", country_code: "EX" }] }
+const day0 = T - (T % 86400)
+const hourTimes = Array.from({ length: 72 }, (_, i) => day0 + i * 3600)
+const meteo = {
+  current: { time: T, temperature_2m: 14.2, apparent_temperature: 12.1, relative_humidity_2m: 70, is_day: 1, weather_code: 2, precipitation: 0,
+             pressure_msl: 1016, wind_speed_10m: 11, wind_direction_10m: 270 },
+  hourly: { time: hourTimes, temperature_2m: hourTimes.map((t, i) => 9 - Math.floor(i / 24) + [0, -1, -1, 2, 5, 6, 3, 1][Math.floor((i % 24) / 3)]),
+            precipitation_probability: hourTimes.map(() => 10), weather_code: hourTimes.map(() => 2), is_day: hourTimes.map((t, i) => (i % 24) >= 7 && (i % 24) < 18 ? 1 : 0),
+            uv_index: hourTimes.map(() => 2), visibility: hourTimes.map(() => 10000) },
+  daily: { time: [0, 1, 2].map((i) => day0 + i * 86400), weather_code: [2, 3, 61], temperature_2m_max: [16, 15, 14], temperature_2m_min: [9, 8, 7],
+           sunrise: [0, 1, 2].map((i) => day0 + i * 86400 + 5 * 3600 + 26 * 60), sunset: [0, 1, 2].map((i) => day0 + i * 86400 + 16 * 3600 + 18 * 60),
+           precipitation_probability_max: [10, 20, 60], precipitation_sum: [0, 0.4, 3] }
 }
 const prices = Array.from({ length: 42 }, (_, i) => 61000 + i * 80 + Math.round(Math.sin(i / 3) * 400))
 const fixtures = {
@@ -29,9 +35,8 @@ const fixtures = {
     price_change_percentage_1h_in_currency: 0.21, price_change_percentage_24h_in_currency: 1.42, price_change_percentage_7d_in_currency: 3.1,
     market_cap: 1265000000000, total_volume: 31200000000, circulating_supply: 19750000, max_supply: 21000000, ath: 73700, ath_date: "2024-03-14T07:10:36Z",
     sparkline_in_7d: { price: prices } }]) } },
-  "owl:simonschubert.today": { now: { value: T }, wx: { text: JSON.stringify(wttr) } },
-  "owl:simonschubert.forecast": { w: { text: JSON.stringify({ place: "Berlin (sample)", now: { temp: "14", desc: "Partly cloudy" },
-    days: wttr.weather.map((d) => ({ date: d.date, day: ["Tue", "Wed", "Thu"][wttr.weather.indexOf(d)], max: d.maxtempC, min: d.mintempC, hours: d.hourly.map((h) => Number(h.tempC)) })) }) } },
+  "owl:simonschubert.today": { now: { value: T }, geo: { text: JSON.stringify(geo) }, wx: { text: JSON.stringify(meteo) } },
+  "owl:simonschubert.forecast": { geo: { text: JSON.stringify(geo) }, w: { text: JSON.stringify(meteo) } },
   "owl:simonschubert.earthquakes": cases.widgets.find((c) => c.id === "simonschubert/earthquakes").sources,
   "owl:simonschubert.habits": cases.widgets.find((c) => c.id === "simonschubert/habits").sources
 }
@@ -40,7 +45,9 @@ const layout = side === "after" ? H.parse(JSON.stringify(owner), {}) : owner
 const widgets = [], approvals = {}
 if (side === "after") {
   for (const p of H.portPlacements(owner)) {
-    const text = fs.readFileSync(path.join(storeDir, H.owlStoreId(p.to), "widget.owl"), "utf8")
+    // What omamobile-owl-widgets ships: our own copy (overrides/) where it keeps one.
+    const ours = path.resolve(__dirname, "../../../packages/omamobile-owl-widgets/overrides", H.owlStoreId(p.to), "widget.owl")
+    const text = fs.readFileSync(fs.existsSync(ours) ? ours : path.join(storeDir, H.owlStoreId(p.to), "widget.owl"), "utf8")
     widgets.push({ id: p.to, text, fixture: { sources: fixtures[p.to] || {} } })
     const v = K.portApproval(H.portCapabilities(p.from), K.describe(p.to, text, H.GRID, 908 / 6, 480 / 6 / 69), p.internet)
     if (v.approve) approvals[p.to] = v.approve

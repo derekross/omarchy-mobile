@@ -2,6 +2,8 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
+import "KeyboardModel.js" as KeyboardModel
 
 // The on-screen keyboard's show and hide calls, for the rest of the shell:
 // squeekboard's sm.puri.OSK0 SetVisible, with its visibility from
@@ -9,8 +11,8 @@ import Quickshell.Io
 //
 // It draws nothing. The controls live on the home pill (omamobile.launcher):
 // while the keyboard is up over an app, the pill sits in a strip of its own
-// under the keyboard, with a keyboard-down key at the strip's right end, and
-// a double tap on the pill shows or hides the keyboard. The launcher reaches
+// under the keyboard, and a double tap on the pill shows or hides it (since
+// 0.2.61 the strip is just the pill, as on Android). The launcher reaches
 // these through IPC (`hideKeyboard`, `toggleKeyboard`), as plugins reach each
 // other here.
 //
@@ -21,7 +23,18 @@ import Quickshell.Io
 // keyboard covers nothing. (A hide key inside squeekboard's layouts would
 // cover nothing either, but the text layouts are squeekboard's own, one per
 // language; overriding them means carrying and updating copies of all of
-// them.)
+// them.) Since 0.2.61 the US English and terminal layouts we carry
+// (squeekboard/keyboards/) have a Hide key in their action row, which
+// hypr/phone.lua binds to hideKeyboard; other languages have the double tap.
+//
+// The one thing it draws, only when asked: the language sheet (since 0.2.65).
+// squeekboard's globe key opened squeekboard's own GTK popover, mouse-sized,
+// sticking out above the keyboard's surface where taps didn't land. Every
+// layout we carry now sends XF86MediaLanguageMenu from the globe instead
+// (squeekboard/generate), and hypr/phone.lua binds it to `languages` here: a
+// bottom sheet (LanguageWindow.qml, LanguageSheet.qml) with a row per
+// language. bin/omamobile-keyboard-languages lists and switches them through
+// org.gnome.desktop.input-sources, as squeekboard's popover does.
 Item {
   id: root
 
@@ -39,7 +52,87 @@ Item {
 
   // `shell call omamobile.keyboard state ''`
   function state() {
-    return JSON.stringify({ keyboard: oskOpen, watcher: oskWatch.running })
+    return JSON.stringify({ keyboard: oskOpen, watcher: oskWatch.running, shownByHand: shownByHand, home: homeOnScreen,
+                            languages: languagesOpen, listing: listing })
+  }
+
+  // ------------------------------------------------------- the language sheet
+
+  // `shell call omamobile.keyboard languages ''`: the keyboard's globe key
+  // (hypr/phone.lua). Opens once the list is read, so the sheet comes up
+  // with its rows; a second call while it is open closes it.
+  function languages() {
+    if (languagesOpen) { closeLanguages(); return "closing" }
+    languagesWanted = true
+    refreshLanguages()
+    return "opening"
+  }
+  // `shell call omamobile.keyboard closeLanguages ''`
+  function closeLanguages() {
+    languagesWanted = false
+    languagesOpen = false
+    return "ok"
+  }
+  // `shell call omamobile.keyboard pickLanguage 'de'`: switch (adding it when
+  // it isn't on the list) and close.
+  function pickLanguage(name) {
+    var n = String(name || "")
+    if (n === "") return "no layout"
+    change(["set", n], false)
+    closeLanguages()
+    return "ok"
+  }
+  // `shell call omamobile.keyboard removeLanguage 'de'`: take it off the
+  // list; the sheet stays open with the new list.
+  function removeLanguage(name) {
+    var n = String(name || "")
+    if (n === "") return "no layout"
+    change(["remove", n], true)
+    return "ok"
+  }
+
+  property bool languagesWanted: false
+  property bool languagesOpen: false
+  property var listing: null
+  property bool relistAfterChange: false
+
+  function refreshLanguages() {
+    if (!languagesList.running) languagesList.running = true
+  }
+  function change(args, relist) {
+    if (languagesChange.running) return
+    relistAfterChange = relist
+    languagesChange.command = ["omamobile-keyboard-languages"].concat(args)
+    languagesChange.running = true
+  }
+
+  Process {
+    id: languagesList
+    command: ["omamobile-keyboard-languages", "list"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.listing = KeyboardModel.parseListing(text)
+        if (!root.listing) console.warn("omamobile.keyboard: omamobile-keyboard-languages list gave no listing")
+        if (root.languagesWanted) root.languagesOpen = true
+      }
+    }
+  }
+
+  Process {
+    id: languagesChange
+    onExited: function(code) {
+      if (code !== 0) console.warn("omamobile.keyboard: " + languagesChange.command.join(" ") + " failed (" + code + ")")
+      if (root.relistAfterChange && root.languagesOpen) root.refreshLanguages()
+    }
+  }
+
+  LanguageWindow {
+    opened: root.languagesOpen
+    listing: root.listing
+    onPicked: function(name) { root.pickLanguage(name) }
+    onRemoved: function(name) { root.removeLanguage(name) }
+    onDismissed: root.closeLanguages()
   }
 
   // `shell call omamobile.keyboard hideKeyboard ''` / `showKeyboard ''` /
@@ -47,14 +140,40 @@ Item {
   // for itself)
   function hideKeyboard() { setVisible(false); return "ok" }
   function showKeyboard() { setVisible(true); return "ok" }
-  function toggleKeyboard() { setVisible(!oskOpen); return oskOpen ? "hiding" : "showing" }
+  function toggleKeyboard() {
+    var show = KeyboardModel.toggleTarget(oskOpen, lastRequest, Date.now() - lastRequestAt)
+    setVisible(show)
+    return show ? "showing" : "hiding"
+  }
+
+  // The last show or hide asked for, and when (KeyboardModel.toggleTarget).
+  property var lastRequest: null
+  property real lastRequestAt: 0
 
   function setVisible(visible) {
+    lastRequest = visible
+    lastRequestAt = Date.now()
+    shownByHand = visible
     Quickshell.execDetached(["busctl", "--user", "call", "sm.puri.OSK0", "/sm/puri/OSK0",
                              "sm.puri.OSK0", "SetVisible", "b", visible ? "true" : "false"])
   }
 
   property bool oskOpen: false
+
+  // A keyboard this plugin showed (KeyboardModel.js has why it matters) is
+  // put away when the home screen comes up, as a text field's keyboard is.
+  property bool shownByHand: false
+  readonly property bool homeOnScreen: KeyboardModel.homeOnScreen(Hyprland.focusedWorkspace)
+  function checkHome() {
+    if (!KeyboardModel.shouldHide(shownByHand, oskOpen, homeOnScreen)) return
+    console.log("omamobile.keyboard: home screen up, hiding the keyboard shown by hand")
+    setVisible(false)
+  }
+  onOskOpenChanged: {
+    shownByHand = KeyboardModel.shownByHandAfter(shownByHand, oskOpen)
+    checkHome()
+  }
+  onHomeOnScreenChanged: checkHome()
 
   Process {
     id: oskWatch

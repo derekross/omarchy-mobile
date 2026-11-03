@@ -13,7 +13,7 @@ pass() { printf 'ok - %s\n' "$1"; }
 export PYTHONDONTWRITEBYTECODE=1
 
 bash -n install || fail "install parses"
-for f in bin/* lib/*.py test/*.py; do
+for f in bin/* lib/*.py lib/omamobile-sit-config test/*.py; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || fail "$f parses"
 done
 pass "scripts parse"
@@ -30,6 +30,9 @@ for f in usr/bin/omamobile-sitd usr/bin/omamobile-sit usr/bin/omamobile-sit-data
          usr/lib/omamobile-sit/service.py usr/lib/omamobile-sit/sit.py usr/lib/omamobile-sit/sit_names.py \
          usr/lib/systemd/system/omamobile-sitd.service usr/lib/systemd/system/omamobile-sit-data.service \
          usr/lib/NetworkManager/conf.d/90-omamobile-rmnet.conf etc/omamobile/modem-sit.conf \
+         usr/lib/omamobile-sit/omamobile-sit-config usr/lib/omamobile-sit/carrier_apn.py \
+         usr/share/polkit-1/actions/org.omamobile.modem-sit.policy \
+         usr/share/omamobile/modem-sit/apn-overrides.conf \
          usr/share/licenses/omamobile-modem-sit/LICENSE; do
   [[ -e $stage/$f ]] || fail "staged $f"
 done

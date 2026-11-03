@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 # The AoC (audio and sensor DSP) at boot, through the hang-safe
-# omamobile-tegu-aoc-start. Not enabled by the package: the Pixel 9a kernel
-# does not yet enable the AoC, GSA and Trusty nodes in its device tree (they
-# are turned on by out-of-tree overlay modules in the bring-up), so the
-# script would find nothing to do. Once a kernel enables them:
-#   systemctl enable omamobile-tegu-aoc.service
-# The AoC modules are blacklisted for autoload (modprobe.d/omamobile-tegu-aoc.conf).
+# omamobile-tegu-aoc-start, at every boot (the package's wants link) once the
+# device tree has the AoC node; without it the condition skips the unit. It
+# is also omamobile-aoc.service (a link beside it), the name the sensor proxy
+# and the fingerprint service order themselves after. The AoC, Trusty and
+# amplifier modules are blacklisted for autoload
+# (modprobe.d/omamobile-tegu-aoc.conf) so only the script loads them.
 [Unit]
 Description=Boot the Pixel 9a AoC audio and sensor DSP (hang-safe)
 After=local-fs.target systemd-modules-load.service

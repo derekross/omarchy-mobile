@@ -1,8 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-device-tegu into DESTDIR. Never activates anything: the
-# graphics start and the USB rescue are enabled by vendor wants links, as
-# omarchy-mac does; the AoC start ships with no link (see README.md).
+# graphics start, the USB rescue and the AoC start are enabled by vendor
+# wants links, as omarchy-mac does (see README.md).
 #   ./install DESTDIR [BUILDDIR]   (BUILDDIR holds the compiled C tools)
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"

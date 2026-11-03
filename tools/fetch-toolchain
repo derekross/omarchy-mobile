@@ -1,0 +1,140 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Fetch the pinned release toolchain (docs/RELEASES.md §9): the standalone
+# Android clang prebuilt and the Android image scripts bin/omamobile packs
+# boot images with (mkbootimg, libufdt's mkdtboimg.py, avbtool and the test
+# key it signs AVB footers with), each at the commit tools/toolchain.lock
+# names and each checked against the SHA-256 recorded there. A builder needs
+# about 3.5 GB for this instead of the ~400 GB Android checkout.
+#
+#   tools/fetch-toolchain [--dir DIR] [--lock FILE] [--verify]
+#   tools/fetch-toolchain --digest DIR     print a tree's digest (for the lock)
+#
+# DIR defaults to $OMAMOBILE_TOOLCHAIN, else ~/.cache/omamobile/toolchain
+# (outside the repository: nothing here is committed). bin/omamobile uses
+# what this fetched when it is present and verified, and the Android
+# checkout under SRC_DIR otherwise.
+#
+# Lock entries, one per line: KIND PATH SHA256 URL
+#   file  a file, verified by its SHA-256
+#   b64   a file served base64-encoded (gitiles ?format=TEXT), verified
+#         after decoding
+#   tree  a .tar.gz of a directory, verified by its tree digest (--digest):
+#         SHA-256 over every file's path, executable bit and SHA-256 and
+#         every symlink's path and target, in byte order. Gitiles builds its
+#         archives on the fly, so the archive's own bytes are not pinned;
+#         what lands in DIR is.
+# Nothing downloaded is run or kept before it matches. A verified entry gets
+# a stamp in DIR/.verified/; --verify hashes everything again anyway.
+#
+# Licences: the scripts and the key are Apache-2.0 (AOSP); the clang
+# prebuilt is Google's redistributable toolchain (its NOTICE is in the tree).
+set -euo pipefail
+self=$(readlink -f "${BASH_SOURCE[0]}")
+ROOT=$(cd -- "$(dirname -- "$self")/.." && pwd)
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+say() { printf '\e[1m==> %s\e[0m\n' "$*"; }
+
+dir=${OMAMOBILE_TOOLCHAIN:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/toolchain}
+lock=$ROOT/tools/toolchain.lock
+verify=0
+
+# The tree digest described above, of directory $1.
+tree_digest() {
+  python3 -I - "$1" <<'PY'
+import hashlib, os, stat, sys
+root = sys.argv[1]
+if not os.path.isdir(root):
+    sys.exit("not a directory: " + root)
+entries = []
+for d, dirs, files in os.walk(root):
+    for n in dirs + files:
+        p = os.path.join(d, n)
+        rel = os.path.relpath(p, root).encode("utf-8", "surrogateescape")
+        st = os.lstat(p)
+        if stat.S_ISLNK(st.st_mode):
+            entries.append((rel, b"l " + os.readlink(p).encode("utf-8", "surrogateescape")))
+        elif stat.S_ISREG(st.st_mode):
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            x = b"x" if st.st_mode & 0o111 else b"-"
+            entries.append((rel, b"f " + x + b" " + h.hexdigest().encode()))
+        elif not stat.S_ISDIR(st.st_mode):
+            sys.exit("unexpected file type: " + p)
+top = hashlib.sha256()
+for rel, desc in sorted(entries):
+    top.update(desc + b" " + rel + b"\0")
+print(top.hexdigest())
+PY
+}
+
+while (($#)); do
+  case $1 in
+    --dir) dir=${2:?--dir needs a directory}; shift ;;
+    --lock) lock=${2:?--lock needs a file}; shift ;;
+    --verify) verify=1 ;;
+    --digest) tree_digest "${2:?--digest needs a directory}"; exit ;;
+    -h|--help) sed -n '3,33p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument $1" ;;
+  esac
+  shift
+done
+[[ -f $lock ]] || die "no lock file $lock"
+command -v curl >/dev/null || die "curl is needed"
+mkdir -p "$dir/.verified"
+dir=$(cd -- "$dir" && pwd)
+
+stamp() { printf '%s/.verified/%s' "$dir" "${1//\//_}"; }
+fetched=0 ok=0
+while read -r kind path sum url extra; do
+  [[ -z $kind || $kind == \#* ]] && continue
+  [[ -z $extra && -n $url ]] || die "$lock: bad line for '$path' (KIND PATH SHA256 URL)"
+  [[ $kind == file || $kind == b64 || $kind == tree ]] || die "$lock: unknown kind '$kind' for $path"
+  [[ $sum =~ ^[0-9a-f]{64}$ ]] || die "$lock: $path: not a SHA-256: $sum"
+  # A relative path inside DIR, nothing that climbs out of it
+  [[ $path =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ && /$path/ != */../* && /$path/ != */./* ]] ||
+    die "$lock: bad path '$path'"
+  [[ $url =~ ^(https|file):// ]] || die "$lock: $path: only https:// (or file:// in tests) URLs"
+  dest=$dir/$path
+  if [[ -e $dest && $(cat "$(stamp "$path")" 2>/dev/null) == "$sum" ]]; then
+    if ((verify == 0)); then
+      ok=$((ok + 1)); continue
+    fi
+    if [[ $kind == tree ]]; then have=$(tree_digest "$dest"); else have=$(sha256sum < "$dest" | cut -d' ' -f1); fi
+    if [[ $have == "$sum" ]]; then
+      echo "ok - $path"; ok=$((ok + 1)); continue
+    fi
+    echo "not ok - $path changed since it was fetched ($have); fetching it again" >&2
+  fi
+  rm -f -- "$(stamp "$path")"
+  tmp=$(mktemp -d "$dir/.fetch.XXXXXX")
+  # shellcheck disable=SC2064 # expand now: tmp changes per entry
+  trap "rm -rf -- '$tmp'" EXIT
+  say "Fetching $path"
+  progress=(-sS)
+  [[ -t 2 ]] && progress=(-#)
+  curl -fL "${progress[@]}" --retry 3 --proto '=https,file' -o "$tmp/download" "$url" || die "download of $path failed: $url"
+  case $kind in
+    file) mv "$tmp/download" "$tmp/item" ;;
+    b64) base64 -d < "$tmp/download" > "$tmp/item" || die "$path: not base64" ;;
+    tree)
+      mkdir "$tmp/item"
+      # GNU tar refuses absolute names and .. by default; never as root's owners
+      tar -xzf "$tmp/download" -C "$tmp/item" --no-same-owner || die "$path: not a .tar.gz"
+      ;;
+  esac
+  rm -f "$tmp/download"
+  if [[ $kind == tree ]]; then have=$(tree_digest "$tmp/item"); else have=$(sha256sum < "$tmp/item" | cut -d' ' -f1); fi
+  [[ $have == "$sum" ]] || die "$path does not match tools/toolchain.lock: got $have, want $sum ($url)"
+  mkdir -p "$(dirname -- "$dest")"
+  rm -rf -- "$dest"
+  mv -- "$tmp/item" "$dest"
+  printf '%s\n' "$sum" > "$(stamp "$path")"
+  rm -rf -- "$tmp"
+  trap - EXIT
+  echo "ok - $path ($sum)"
+  fetched=$((fetched + 1)) ok=$((ok + 1))
+done < "$lock"
+say "Toolchain in $dir: $ok verified, $fetched fetched now"

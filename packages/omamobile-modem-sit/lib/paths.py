@@ -27,12 +27,16 @@ ROUTER = os.environ.get('OMAMOBILE_SIT_ROUTER', '/dev/umts_router')
 BOOT = os.environ.get('OMAMOBILE_SIT_BOOT', '/dev/umts_boot0')
 
 DEFAULTS = {
-    'network': {'apn': '', 'ip_type': 'ipv4v6', 'ims': 'yes', 'ims_apn': 'ims',
-                'ims_required': 'no', 'ims_timeout': '120',
+    'network': {'apn': 'auto', 'attach_apn': 'auto', 'ip_type': 'ipv4v6', 'ims': 'yes', 'ims_apn': 'auto',
+                'ims_required': 'no', 'ims_pcscf_required': 'yes',
+                'ims_pcscf_from_isim': 'yes', 'ims_first': 'auto', 'internet_cid': 'auto',
+                'carrier_manifest': '', 'carrier_manifest_timeout': '60', 'ims_timeout': '120',
                 'nr': 'off', 'sim_timeout': '120', 'register_timeout': '180'},
-    'data': {'route': 'yes', 'metric': '700'},
+    # Extra modem-managed data profiles, one per line (data_call.parse_profile).
+    'profiles': {},
+    'data': {'route': 'yes', 'metric': '700', 'roaming': 'yes'},
     'control': {'group': 'wheel'},
-    'audio': {'card': 'none', 'mic_boost_db': '6'},
+    'audio': {'card': 'none', 'mic_boost_db': '6', 'earpiece': 'yes'},
 }
 
 
@@ -58,3 +62,16 @@ def private_dir(path):
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.chmod(0o700)
     return path
+
+
+def run_dir():
+    """RUN for a client of sitd's directory (a SIT client, omamobile-sit-data):
+    created private if missing, else only narrowed to at most 0710. sitd sets
+    it 0710 root:<control group> so the group reaches state.json and the
+    socket; a client that reset it to 0700 hid the modem from the shell."""
+    if not RUN.exists():
+        return private_dir(RUN)
+    mode = RUN.stat().st_mode & 0o777
+    if mode & ~0o710:
+        RUN.chmod(mode & 0o710)
+    return RUN

@@ -17,7 +17,43 @@ fi
 KERNEL_DIR="${KERNEL_DIR:-$KERNEL_BASE/linux}"
 KERNEL_OUT="${KERNEL_OUT:-$KERNEL_BASE/out}"
 REFERENCE_DIR="${REFERENCE_DIR:-$WORK/reference}"
-CLANG_DIR="${CLANG_DIR:-$(ls -d "$SRC_DIR"/prebuilts/clang/host/linux-x86/clang-r* 2>/dev/null | sort | tail -1 || true)}"
+# The toolchain: the pinned one tools/fetch-toolchain verified into
+# OMAMOBILE_TOOLCHAIN (tools/toolchain.lock) when it is there, else the
+# Android checkout under SRC_DIR. CLANG_DIR, MKBOOTIMG_DIR, MKDTBOIMG,
+# AVBTOOL and AVB_KEY each override one piece.
+TOOLCHAIN_DIR="${OMAMOBILE_TOOLCHAIN:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/toolchain}"
+TOOLCHAIN_LOCK="$ROOT/tools/toolchain.lock"
+# True when every lock entry under $1 was fetched and verified at the lock's
+# current SHA-256 (the stamps tools/fetch-toolchain writes).
+pinned() {
+  local kind path sum rest n=0
+  [[ -f $TOOLCHAIN_LOCK ]] || return 1
+  while read -r kind path sum rest; do
+    [[ $kind == file || $kind == b64 || $kind == tree ]] || continue
+    [[ $path == "$1" || $path == "$1"/* ]] || continue
+    [[ -e $TOOLCHAIN_DIR/$path && $(cat "$TOOLCHAIN_DIR/.verified/${path//\//_}" 2>/dev/null) == "$sum" ]] || return 1
+    n=$((n + 1))
+  done < "$TOOLCHAIN_LOCK"
+  ((n > 0))
+}
+PINNED_CLANG=$(awk '$1 == "tree" && $2 ~ /^clang-r/ { print $2; exit }' "$TOOLCHAIN_LOCK" 2>/dev/null || true)
+if [[ -n ${CLANG_DIR:-} ]]; then
+  CLANG_SOURCE="CLANG_DIR"
+elif [[ -n $PINNED_CLANG ]] && pinned "$PINNED_CLANG"; then
+  CLANG_DIR=$TOOLCHAIN_DIR/$PINNED_CLANG CLANG_SOURCE="pinned (tools/toolchain.lock)"
+else
+  CLANG_DIR="$(ls -d "$SRC_DIR"/prebuilts/clang/host/linux-x86/clang-r* 2>/dev/null | sort | tail -1 || true)"
+  CLANG_SOURCE="Android checkout"
+fi
+pinned mkbootimg && : "${MKBOOTIMG_DIR:=$TOOLCHAIN_DIR/mkbootimg}"
+MKBOOTIMG_DIR="${MKBOOTIMG_DIR:-$SRC_DIR/system/tools/mkbootimg}"
+pinned libufdt && : "${MKDTBOIMG:=$TOOLCHAIN_DIR/libufdt/utils/src/mkdtboimg.py}"
+MKDTBOIMG="${MKDTBOIMG:-$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py}"
+if pinned avb; then
+  : "${AVBTOOL:=$TOOLCHAIN_DIR/avb/avbtool.py}" "${AVB_KEY:=$TOOLCHAIN_DIR/avb/test/data/testkey_rsa4096.pem}"
+fi
+AVBTOOL="${AVBTOOL:-$SRC_DIR/external/avb/avbtool.py}"
+AVB_KEY="${AVB_KEY:-$SRC_DIR/external/avb/test/data/testkey_rsa4096.pem}"
 
 usage() {
   cat <<USAGE
@@ -28,11 +64,17 @@ Usage: [DEVICE=<codename>] omamobile <command>
 
   capture [name]   Save what the connected phone exposes (Android over adb, or fastboot)
                    into $REFERENCE_DIR/<name>
-  initramfs        Build the M1 initramfs (Alpine + dropbear + our init) into $KERNEL_OUT
+  initramfs [--release]
+                   Build the M1 initramfs into $KERNEL_OUT. --release omits
+                   the builder's SSH keys from distributable boot images
   initramfs-config <dir>
                    Write only the device's files for the shared init (storage-guard
                    allowlist, trigger, ...) into <dir>, to check what initramfs packs
-  kernel           Build the mainline kernel ($KERNEL_DIR) with our config fragment
+  kernel [--release]
+                   Build the mainline kernel ($KERNEL_DIR) with our config fragment.
+                   --release: the release LOCALVERSION (-omamobile, uname -r
+                   <version>-omamobile-g<sha12>) and no device fragment, for
+                   linux-omamobile (docs/RELEASES.md §4); needs a clean tree
   modules          Package the kernel's modules (stripped) as a tarball for the Arch
                    root: $KERNEL_OUT/modules-<release>.tar.zst, unpacked under
                    /usr/lib/modules on the phone
@@ -188,17 +230,45 @@ slot_b_allowed() { [[ " $DEV_UFS_RW " == *" ${1}_b "* ]]; }
 # vendor_kernel_boot.
 has_image() { [[ " $DEV_BOOT_IMAGES " == *" $1 "* ]]; }
 
-# Run a command in the build container with the work tree, the kernel tree
-# and this repo mounted.
+# The build's fixed identity (docs/RELEASES.md §9), so the same commit and
+# toolchain give the same Image: the time is the kernel commit's (a tag
+# names the same commit), and user, host and build number are constants.
+# PYTHONHASHSEED fixes Python's set order: msm's gen_header.py writes
+# a6xx.xml.h in set order, so msm.ko changed from build to build without it.
+# Each value set in the environment wins.
+reproducible_env() {
+  local epoch=${SOURCE_DATE_EPOCH:-}
+  [[ -n $epoch ]] || epoch=$(git -C "$KERNEL_DIR" log -1 --format=%ct 2>/dev/null || true)
+  REPRO_ENV=(-e KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-omamobile}"
+    -e KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-omamobile-build}"
+    -e KBUILD_BUILD_VERSION="${KBUILD_BUILD_VERSION:-1}"
+    -e PYTHONHASHSEED="${PYTHONHASHSEED:-0}")
+  if [[ $epoch =~ ^[0-9]+$ ]]; then
+    REPRO_ENV+=(-e SOURCE_DATE_EPOCH="$epoch"
+      -e KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(LC_ALL=C date -u -d "@$epoch")}")
+  else
+    echo "  note: $KERNEL_DIR has no commit time; set SOURCE_DATE_EPOCH for a reproducible build" >&2
+  fi
+}
+
+# Inside the container the clang is always here, wherever the host keeps it:
+# its include directory lands in the debug info of the compat vDSO, whose
+# build ID is in the Image, so the clang's host path would change the Image.
+CONTAINER_CLANG=/opt/omamobile/clang
+
+# Run a command in the build container with the work tree, the kernel tree,
+# this repo and the clang (read-only, at CONTAINER_CLANG) mounted.
 in_container() {
-  local tty=() kernel=()
+  local tty=() kernel=() clang=() REPRO_ENV=()
   [[ -t 0 && -t 1 ]] && tty=(-it)
   [[ $KERNEL_BASE == "$WORK" || $KERNEL_BASE == "$WORK"/* || ! -d $KERNEL_BASE ]] ||
     kernel=(-v "$KERNEL_BASE:$KERNEL_BASE")
+  [[ -z $CLANG_DIR || ! -d $CLANG_DIR ]] || clang=(-v "$CLANG_DIR:$CONTAINER_CLANG:ro")
+  reproducible_env
   docker run --rm "${tty[@]}" \
     --hostname omamobile-build \
-    -v "$WORK:$WORK" -v "$ROOT:$ROOT" "${kernel[@]}" \
-    -e PATH="$CLANG_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    -v "$WORK:$WORK" -v "$ROOT:$ROOT" "${kernel[@]}" "${clang[@]}" "${REPRO_ENV[@]}" \
+    -e PATH="$CONTAINER_CLANG/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     -w "$KERNEL_DIR" \
     "$IMAGE" bash -c "$1"
 }
@@ -234,11 +304,28 @@ cmd_capture() {
 }
 
 cmd_kernel() {
+  local release=0
+  case ${1:-} in
+    '') ;;
+    --release) release=1 ;;
+    *) die "kernel: expected --release or no argument" ;;
+  esac
+  (($# <= 1)) || die "kernel: expected --release or no argument"
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
-  [[ -n "$CLANG_DIR" ]] || die "no clang found; run 'lineage-ref sync' first or set CLANG_DIR"
+  [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
   # The codename goes into a path below, as in load_device
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
-  local fragment="$ROOT/device/$DEVICE/kernel.config"
+  local fragment="$ROOT/device/$DEVICE/kernel.config" localversion=""
+  if ((release)); then
+    # One kernel for every device: a device's bring-up fragment stays out,
+    # and a release names its commit exactly, so the tree must be clean
+    # (setlocalversion would add -dirty, which linux-omamobile refuses)
+    fragment=/nonexistent
+    localversion="scripts/config --file $KERNEL_OUT/.config --set-str LOCALVERSION -omamobile --enable LOCALVERSION_AUTO"
+    [[ -z $(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no 2>/dev/null) ]] \
+      || die "kernel --release: $KERNEL_DIR has uncommitted changes"
+    say "Release build: LOCALVERSION -omamobile, no device fragment"
+  fi
   say "Building $KERNEL_DIR into $KERNEL_OUT"
   mkdir -p "$KERNEL_OUT"
   in_container "
@@ -249,11 +336,28 @@ cmd_kernel() {
     if [ -f $fragment ]; then
       scripts/kconfig/merge_config.sh -m -O $KERNEL_OUT $KERNEL_OUT/.config $fragment
     fi
+    $localversion
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT olddefconfig
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT -j$JOBS Image.gz dtbs modules
     ls -lh $KERNEL_OUT/arch/arm64/boot/Image.gz
     ls $KERNEL_OUT/arch/arm64/boot/dts/exynos/google/
   "
+  # The compiler this build used, for images' TOOLCHAIN and the bundle's
+  # MANIFEST: clang's own version line (the Android build and llvm-project
+  # commit) and the directory's name, never a path (MANIFEST is published)
+  {
+    echo "clang: $("$CLANG_DIR/bin/clang" --version | head -1)"
+    echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
+  } > "$KERNEL_OUT/toolchain.txt"
+  say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
+  # The release string the tree gave: never -push1 or -dirty (RELEASES §4)
+  if ((release)); then
+    local rel
+    rel=$(kernel_release)
+    [[ $rel =~ -omamobile-g[0-9a-f]{12}$ ]] ||
+      die "release build $rel is not <version>-omamobile-g<sha12>: build from a clean checkout of the release tag (a -dirty or -push1 kernel is never released)"
+    say "Release kernel $rel"
+  fi
 }
 
 # Kernel release of the build in $KERNEL_OUT (what uname -r will print).
@@ -383,8 +487,41 @@ cmd_initramfs_config() {
   ls -l "$1"
 }
 
+# INITRAMFS_MODULES into the initramfs: each module's .ko from this build's
+# modules directory $2 into $1, its name in $1/order (load order). A module
+# the kernel has built in (listed in $2/modules.builtin, as sec_acpm and its
+# mailbox are since #227) has nothing to load and is left out; a module that
+# is neither is an error. $3...: the module names.
+pack_initramfs_modules() {
+  local dest=$1 mdir=$2 m ko
+  shift 2
+  mkdir -p "$dest"
+  for m in "$@"; do
+    [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
+    ko=$(find "$mdir" -name "$m.ko" | head -1)
+    if [[ -z $ko ]] && grep -q "/$m\.ko\$" "$mdir/modules.builtin" 2>/dev/null; then
+      say "INITRAMFS_MODULES: $m is built in"
+      continue
+    fi
+    [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $mdir"
+    cp "$ko" "$dest/"
+    echo "$m" >> "$dest/order"
+  done
+}
+
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
+  local release=0
+  case ${1:-} in
+    '') ;;
+    --release) release=1 ;;
+    *) die "initramfs: expected --release or no argument" ;;
+  esac
+  (($# <= 1)) || die "initramfs: expected --release or no argument"
+  # Modes in the cpio come from the umask: the same on every builder
+  local old_umask
+  old_umask=$(umask)
+  umask 022
   load_device
   # A leading slash is repo-root relative, so devices share initramfs/init.
   # Anything else is relative to device/<codename>/.
@@ -442,20 +579,14 @@ cmd_initramfs() {
   # Modules the init loads before anything else (INITRAMFS_MODULES, in load
   # order), from this kernel build's modules_install: the directory of this
   # build's release, never an older one left in modules-staging
-  local m ko mdir rel
+  local mdir rel
   if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
     rel=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) ||
       die "INITRAMFS_MODULES needs a kernel build: omamobile kernel"
     mdir=$KERNEL_OUT/modules-staging/lib/modules/$rel
     [[ -d $mdir ]] || die "INITRAMFS_MODULES needs this build's modules ($rel): omamobile modules"
-    mkdir -p "$stage/lib/modules/omamobile"
-    for m in $DEV_INITRAMFS_MODULES; do
-      [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
-      ko=$(find "$mdir" -name "$m.ko" | head -1)
-      [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $mdir"
-      cp "$ko" "$stage/lib/modules/omamobile/"
-      echo "$m" >> "$stage/lib/modules/omamobile/order"
-    done
+    # shellcheck disable=SC2086  # a list of plain module names, checked there
+    pack_initramfs_modules "$stage/lib/modules/omamobile" "$mdir" $DEV_INITRAMFS_MODULES
     echo "$rel" > "$KERNEL_OUT/initramfs.release"
     say "Initramfs modules ($rel): $DEV_INITRAMFS_MODULES"
   fi
@@ -478,7 +609,7 @@ cmd_initramfs() {
     cp "$SPLASH_BGRA_GZ" "$stage/splash.bgra.gz"
   elif [[ -f $logo ]] && command -v magick >/dev/null; then
     magick -size "$DEV_PANEL_SIZE" xc:'#1a1b26' "$logo" -gravity center -composite \
-      -alpha off -alpha on -depth 8 BGRA:- | gzip -9 > "$stage/splash.bgra.gz"
+      -alpha off -alpha on -depth 8 BGRA:- | gzip -9n > "$stage/splash.bgra.gz"
   else
     say "No Omarchy Plymouth logo or ImageMagick here: building without the early splash"
   fi
@@ -505,7 +636,7 @@ cmd_initramfs() {
   [[ -f $reboot_src ]] || die "missing $reboot_src"
   mkdir -p "$stage/usr/local/bin"
   if [[ -f $ROOT/packages/$DEV_PACKAGE/src/omamobile-bootctl.c ]]; then
-    [[ -n ${CLANG_DIR:-} && -d $CLANG_DIR ]] || die "no clang found; run 'lineage-ref sync' first or set CLANG_DIR"
+    [[ -n ${CLANG_DIR:-} && -d $CLANG_DIR ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
     sysroot=$(alpine_sysroot)
     builtins=$(find "$CLANG_DIR/lib/clang" -name 'libclang_rt.builtins-aarch64-android.a' | head -1)
     "$CLANG_DIR/bin/clang" --target=aarch64-linux-musl --sysroot="$sysroot" -fuse-ld=lld -static -nostdlib -O2 \
@@ -537,19 +668,31 @@ cmd_initramfs() {
       || die "reboot-to failed to link"
     say "No $DEV_PACKAGE bootctl; built freestanding devmem and musl reboot-to"
   fi
-  mkdir -p "$stage/root/.ssh"
-  cat "$HOME"/.ssh/*.pub > "$stage/root/.ssh/authorized_keys"
-  chmod 700 "$stage/root/.ssh" && chmod 600 "$stage/root/.ssh/authorized_keys"
+  rm -rf "$stage/root/.ssh"
+  if ((release)); then
+    rm -f "$stage/etc/dropbear"/dropbear_*_host_key
+    say "Release initramfs: no builder SSH keys"
+  else
+    mkdir -p "$stage/root/.ssh"
+    cat "$HOME"/.ssh/*.pub > "$stage/root/.ssh/authorized_keys"
+    chmod 700 "$stage/root/.ssh" && chmod 600 "$stage/root/.ssh/authorized_keys"
+  fi
 
-  (cd "$stage" && find . | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$KERNEL_OUT/initramfs.cpio.lz4"
+  # Reproducible: sorted names, fixed owner and mtimes, no inode numbers
+  # (tools/lib/initramfs-pack.sh), so two machines staging the same
+  # sources get the same bytes
+  source "$ROOT/tools/lib/initramfs-pack.sh"
+  initramfs_pack "$stage" "$KERNEL_OUT/initramfs.cpio.lz4" || die "packing the initramfs failed"
+  umask "$old_umask"
   ls -lh "$KERNEL_OUT/initramfs.cpio.lz4"
 }
 
 cmd_images() {
   load_device
   local img="$KERNEL_OUT/images"
-  # Pixel path matches main: SRC_DIR only. Tree-local mkbootimg is for qcom-abl.
-  local tools="$SRC_DIR/system/tools/mkbootimg"
+  # Pixels: the pinned mkbootimg or the checkout's (MKBOOTIMG_DIR).
+  # Tree-local mkbootimg is for qcom-abl.
+  local tools="$MKBOOTIMG_DIR"
   if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
     tools="$ROOT/system/tools/mkbootimg"
     [[ -f $tools/mkbootimg.py ]] || tools="$SRC_DIR/system/tools/mkbootimg"
@@ -569,6 +712,12 @@ cmd_images() {
   if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
     [[ $(cat "$KERNEL_OUT/initramfs.release" 2>/dev/null) == "$(cat "$KERNEL_OUT/include/config/kernel.release")" ]] ||
       die "the initramfs modules are not from this kernel build: omamobile modules && omamobile initramfs"
+  fi
+  if [[ $DEV_BOOT_METHOD != qcom-abl ]]; then
+    [[ -f $tools/mkbootimg.py ]] ||
+      die "no mkbootimg.py in $tools: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKBOOTIMG_DIR)"
+    [[ -f $MKDTBOIMG ]] ||
+      die "no mkdtboimg.py at $MKDTBOIMG: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKDTBOIMG)"
   fi
   mkdir -p "$img" && rm -rf "$img"/*
 
@@ -718,7 +867,7 @@ if got != want:
   grep -c "board_rev = <$DEV_DTBO_BOARD_REV>;" "$dtbo_src" >/dev/null || die "$dtbo_src: board_rev is not $DEV_DTBO_BOARD_REV"
   say "dtbo: empty board overlay"
   "$dtc" -q -@ -I dts -O dtb -o "$dtbo" "$dtbo_src"
-  python3 -I "$SRC_DIR/system/libufdt/utils/src/mkdtboimg.py" create "$img/dtbo.img" \
+  python3 -I "$MKDTBOIMG" create "$img/dtbo.img" \
     --page_size=4096 --id="$DEV_DTBO_BOARD_ID" --rev="$DEV_DTBO_BOARD_REV" "$dtbo"
 
   # Two layouts, picked by BOOT_IMAGES. With vendor_kernel_boot (cheetah), it
@@ -753,6 +902,15 @@ if got != want:
   fi
   [[ -n ${DEV_AVB_FOOTERS:-} ]] && avb_footers "$img"
   printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
+  # What packed these bytes (tools/make-bundle copies it into MANIFEST)
+  {
+    cat "$KERNEL_OUT/toolchain.txt" 2>/dev/null || echo "clang: not recorded (the kernel build predates toolchain.txt)"
+    echo "mkbootimg.py: sha256 $(sha256sum < "$tools/mkbootimg.py" | cut -d' ' -f1)"
+    echo "mkdtboimg.py: sha256 $(sha256sum < "$MKDTBOIMG" | cut -d' ' -f1)"
+    if [[ -n ${DEV_AVB_FOOTERS:-} ]]; then
+      echo "avbtool.py: $(python3 -I "$AVBTOOL" version), sha256 $(sha256sum < "$AVBTOOL" | cut -d' ' -f1)"
+    fi
+  } > "$img/TOOLCHAIN"
   ls -lh "$img"/*.img
 }
 
@@ -762,7 +920,7 @@ if got != want:
 # does. The rollback index and the security patch are stock's, and the salt
 # is the image's own hash, so the same input gives the same bytes.
 avb_footers() {
-  local img=$1 avbtool=${AVBTOOL:-$SRC_DIR/external/avb/avbtool.py} key=${AVB_KEY:-$SRC_DIR/external/avb/test/data/testkey_rsa4096.pem}
+  local img=$1 avbtool=$AVBTOOL key=$AVB_KEY
   local entry name size salt
   [[ -f $avbtool ]] || die "no avbtool at $avbtool (AOSP platform/external/avb under SRC_DIR, or set AVBTOOL); $DEV_CODENAME's AVB_FOOTERS need it"
   [[ -f $key ]] || die "no AVB key at $key (set AVB_KEY)"
@@ -986,9 +1144,9 @@ cmd_kernel_shell() {
 
 case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
-  initramfs) cmd_initramfs ;;
+  initramfs) shift; cmd_initramfs "$@" ;;
   initramfs-config) shift; cmd_initramfs_config "$@" ;;
-  kernel) cmd_kernel ;;
+  kernel) shift; cmd_kernel "$@" ;;
   modules) cmd_modules ;;
   modules-push) cmd_modules_push ;;
   images) cmd_images ;;

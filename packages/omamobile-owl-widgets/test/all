@@ -45,6 +45,29 @@ echo "// changed" >> "$tmp/changed/widgets/alice/hello/widget.owl"
 if ./install "$tmp/root2" "$tmp/changed" test/fake-store/index.json 2>/dev/null; then fail "a file that doesn't match the index is refused"; fi
 pass "a file that doesn't match the index is refused"
 
+# Our own copies (overrides/): each one is in the index with its own sha256,
+# and install ships it in place of the store's file.
+python3 - <<'PY' || fail "every override is indexed as our copy"
+import hashlib, json, os
+idx = {w["id"]: w for w in json.load(open("index.json"))["widgets"]}
+for author in sorted(a for a in os.listdir("overrides") if os.path.isdir(os.path.join("overrides", a))):
+    for name in sorted(os.listdir(os.path.join("overrides", author))):
+        wid, f = author + "/" + name, os.path.join("overrides", author, name, "widget.owl")
+        assert wid in idx and idx[wid]["status"] in ("ok", "partial"), wid
+        assert idx[wid]["sha256"] == hashlib.sha256(open(f, "rb").read()).hexdigest(), wid + " (node update-index.js <store> > index.json)"
+        assert not any("wttr" in c for c in idx[wid]["commands"]) and "wttr.in" not in idx[wid]["hosts"], wid
+PY
+mkdir -p "$tmp/ostore/widgets/simonschubert/today"
+echo 'widget "the store'"'"'s" { Text { text: "x" } }' > "$tmp/ostore/widgets/simonschubert/today/widget.owl"
+cp test/fake-store/LICENSE "$tmp/ostore/"
+python3 -c '
+import json, sys
+w = [x for x in json.load(open("index.json"))["widgets"] if x["id"] == "simonschubert/today"]
+json.dump({"version": 1, "widgets": w}, open(sys.argv[1], "w"))' "$tmp/oindex.json"
+./install "$tmp/oroot" "$tmp/ostore" "$tmp/oindex.json" || fail "install ships an override"
+cmp -s overrides/simonschubert/today/widget.owl "$tmp/oroot/usr/share/omamobile/owl-widgets/widgets/simonschubert/today/widget.owl" || fail "install ships our copy, not the store's"
+pass "our copies are indexed and ship in place of the store's"
+
 # Beside omamobile-shell (the repository): the committed indexes are what
 # its compiler builds now, and every built-in of the home screen ships.
 shell=../omamobile-shell/plugins/omamobile.home
@@ -56,6 +79,8 @@ const H = require(process.argv[1]); const st = require(process.argv[2]).widgets
 const missing = H.OWL_ORDER.map(H.owlStoreId).filter((id) => !st[id] || !["ok", "partial"].includes(st[id].status))
 if (missing.length) { console.error(missing.join(" ")); process.exit(1) }' "$(realpath "$shell/HomeModel.js")" "$(realpath status.json)" || fail "every built-in ships"
   pass "the fake store's index is current, and every OWL built-in of the home screen ships"
+  node test/open-meteo.js ../omamobile-shell/test >/dev/null || { node test/open-meteo.js ../omamobile-shell/test | grep -v '^ok'; fail "our weather copies against made-up Open-Meteo answers"; }
+  pass "our weather copies parse, use Open-Meteo and map its answers"
 else
   pass "beside omamobile-shell # SKIP built on its own"
 fi

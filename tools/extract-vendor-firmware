@@ -3,7 +3,8 @@
 # extract-vendor-firmware: copy the Wi-Fi, Bluetooth, haptics and speaker
 # amplifier firmware the Pixel 7 Pro (cheetah) needs out of a Google factory
 # image, on the user's own machine. The Pixel 7 (panther), the Pixel 6 Pro
-# (raven) and the Pixel 9a (tegu) are options (-d).
+# (raven), the Pixel 9a (tegu) and the Pixel 8 Pro (husky, Wi-Fi only) are
+# options (-d).
 #
 # Google's firmware is not ours to redistribute, so Omarchy Mobile never ships it.
 # Like LineageOS's extract-files, this pulls it from an image the user already
@@ -65,6 +66,25 @@
 # is in another format, device/tegu/AUDIO-PLAN.md). The modem's and GNSS's
 # files are tools/extract-vendor-chroot's.
 #
+# The Pixel 8 Pro (-d husky; <board> is "google,zuma-husky"), Wi-Fi only:
+#
+#   vendor/firmware/fw_bcmdhd.bin_4398_d0     -> brcm/brcmfmac4398d0-pcie.<board>.bin         (brcmfmac)
+#   vendor/firmware/bcmdhd.cal_<region>       -> brcm/brcmfmac4398d0-pcie.<board>.txt         (NVRAM)
+#   vendor/firmware/bcmdhd_clm.blob_4398_d0   -> brcm/brcmfmac4398d0-pcie.<board>.clm_blob    (regulatory)
+#   vendor/firmware/bcmdhd_txcap.blob_4398_d0 -> brcm/brcmfmac4398d0-pcie.<board>.txcap_blob  (TX capabilities)
+#
+# The radio is a BCM4398 D0. Stock picks the CLM and TX capability files by
+# chip revision (_4398_d0), but the NVRAM by the phone's hardware SKU
+# (androidboot.hardware.sku): Google's bcmdhd (dhd_custom_google.c) maps it to
+# a region and loads bcmdhd.cal_<region> when there is one. -s SKU does the
+# same: MMW, ROW or NA, else, as on stock, the module's own NVRAM
+# (bcmdhd.cal_USI_G5SN_9957_V17, the same bytes as _ROW). The regions differ
+# only in their energy-detect thresholds. Read the SKU with
+# `grep hardware.sku /proc/bootconfig` on the phone, or
+# `adb shell getprop ro.boot.hardware.sku` on Android. Bluetooth and the
+# other files wait for drivers (device/husky/ROADMAP.md). An OTA's vendor.img
+# (from its payload.bin) works as SOURCE as well as a factory image.
+#
 # Output is a tree rooted at /, under usr/lib/firmware/updates (searched before
 # linux-firmware's files, and not owned by any package). Nothing touches the phone.
 #
@@ -110,7 +130,8 @@ Usage: extract-vendor-firmware [-o OUTDIR] [-w WORKDIR] [-f] SOURCE
            inside it, or a raw/sparse vendor.img
   -o DIR   staging root to write into (default: ./out/vendor-firmware)
   -w DIR   scratch directory for the ~1 GB vendor.img (default: a temp dir in \$TMPDIR)
-  -d DEV   cheetah (default), panther, raven or tegu
+  -d DEV   cheetah (default), panther, raven, tegu or husky
+  -s SKU   husky: the hardware SKU (androidboot.hardware.sku), which picks the NVRAM
   -f       skip the android-info.txt board=$DEVICE check
   -c FILE  also copy the camera HAL APEX (/vendor/apex/com.google.pixel.camera.hal.apex)
            to FILE, for tools/extract-camera-data --apex (tools/phone-provision uses it)
@@ -125,10 +146,12 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not found ($2)"; }
 
 OUT="./out/vendor-firmware" WORK="" FORCE="" CAMERA_APEX="" DEVICE_OPT=cheetah
-while getopts "o:w:c:d:fh" opt; do
+SKU=""
+while getopts "o:w:c:d:s:fh" opt; do
   case $opt in
     o) OUT=$OPTARG ;;
     d) DEVICE_OPT=$OPTARG ;;
+    s) SKU=$OPTARG ;;
     c) CAMERA_APEX=$(realpath -m -- "$OPTARG") ;;
     w) WORK=$OPTARG ;;
     f) FORCE=1 ;;
@@ -193,8 +216,31 @@ case $DEVICE_OPT in
       "firmware/cs40l26-dvl.bin|cs40l26-dvl.bin"
       "firmware/cs40l26-calib.wmfw|cs40l26-calib.wmfw"
     ) ;;
-  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven or tegu)" ;;
+  husky)
+    # Pixel 8 Pro: Wi-Fi (BCM4398 D0) only, with the NVRAM for the SKU's
+    # region (the header).
+    BOARD="google,zuma-husky"
+    DEVICE="husky"
+    FW_BASE="brcmfmac4398d0-pcie"
+    WIFI_CHIP="4398d0"
+    BT_CHIP=""
+    # Google's SKU table (dhd_custom_google.c); husky's vendor has NVRAMs for
+    # MMW, ROW and NA only, so the others take the module's default, as on stock
+    case $SKU in
+      G9S9B|G8V0U|GFQM1|GB62Z|GE2AE|GQML3|GKWS6|G1MNW) nvram=bcmdhd.cal_MMW ;;
+      GB7N6|GLU0G|GNA8F|GX7AS|GP4BC|GVU6C|GPJ41|GC3VE) nvram=bcmdhd.cal_ROW ;;
+      G9BQD) nvram=bcmdhd.cal_NA ;;
+      *) nvram=bcmdhd.cal_USI_G5SN_9957_V17 ;;
+    esac
+    MAP=(
+      "firmware/fw_bcmdhd.bin_4398_d0|brcm/$FW_BASE.$BOARD.bin"
+      "firmware/$nvram|brcm/$FW_BASE.$BOARD.txt"
+      "firmware/bcmdhd_clm.blob_4398_d0|brcm/$FW_BASE.$BOARD.clm_blob"
+      "firmware/bcmdhd_txcap.blob_4398_d0|brcm/$FW_BASE.$BOARD.txcap_blob"
+    ) ;;
+  *) die "unknown device $DEVICE_OPT (cheetah, panther, raven, tegu or husky)" ;;
 esac
+[[ $DEVICE == husky || -z $SKU ]] || die "-s is for husky only"
 # The camera data flow (tools/extract-camera-data) exists for cheetah only
 [[ $DEVICE == cheetah || -z $CAMERA_APEX ]] || die "-c is cheetah's (no camera support for $DEVICE yet)"
 SRC=$(readlink -f "$1")
@@ -305,10 +351,13 @@ done
 
 # The AoC's sensor registry (which sensors this board has, their buses and
 # settings), read by omamobile-sensor-proxy; without it only virtual sensors.
-reg="$OUT/usr/share/omamobile/sensors"
-get_dir etc/sensors/registry "$reg" || die "/vendor/etc/sensors/registry is missing from this image"
-chmod -R u=rwX,go=rX "$reg"
-printf '  /vendor/%-28s -> /%s\n' "etc/sensors/registry/" "usr/share/omamobile/sensors/registry/"
+# husky has no AoC driver yet, so it skips the registry.
+if [[ $DEVICE != husky ]]; then
+  reg="$OUT/usr/share/omamobile/sensors"
+  get_dir etc/sensors/registry "$reg" || die "/vendor/etc/sensors/registry is missing from this image"
+  chmod -R u=rwX,go=rX "$reg"
+  printf '  /vendor/%-28s -> /%s\n' "etc/sensors/registry/" "usr/share/omamobile/sensors/registry/"
+fi
 
 if [[ -n $CAMERA_APEX ]]; then
   get_file apex/com.google.pixel.camera.hal.apex "$CAMERA_APEX" ||
@@ -320,7 +369,7 @@ fi
 brcm="$dest/brcm"
 grep -aq "$WIFI_CHIP-roml" "$brcm/$FW_BASE.$BOARD.bin" ||
   die "fw_bcmdhd.bin is not a $WIFI_CHIP PCIe firmware"
-grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
+[[ -z $BT_CHIP ]] || grep -aq "$BT_CHIP" "$brcm/BCM.$BOARD.hcd" ||
   die "BCM.hcd is not a $BT_CHIP Bluetooth patch"
 grep -aq '^NVRAMRev=' "$brcm/$FW_BASE.$BOARD.txt" ||
   die "bcmdhd.cal does not look like a Broadcom text NVRAM"
@@ -366,10 +415,15 @@ if [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]]; then
 fi
 
 ver=$(grep -ao 'Version=[0-9.]* ([^)]*)' "$brcm/$FW_BASE.$BOARD.bin" | head -1)
-bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
+bt=""
+[[ -z $BT_CHIP ]] || bt=$(grep -ao "$BT_CHIP [^[]*" "$brcm/BCM.$BOARD.hcd" | head -1)
 (cd "$dest" && find . -type f -printf '%P\n' | sort | xargs sha256sum -- > "$OUT/vendor-firmware.sha256")
 say "Wi-Fi firmware: ${ver:-unknown version}"
-say "Bluetooth patch: ${bt:-unknown version}"
+if [[ $DEVICE == husky ]]; then
+  say "NVRAM: /vendor/firmware/$nvram${SKU:+ (SKU $SKU)}"
+  [[ -n $SKU ]] || say "No -s SKU: stock's default NVRAM; pass the phone's SKU for its region's"
+fi
+[[ -z $BT_CHIP ]] || say "Bluetooth patch: ${bt:-unknown version}"
 [[ $DEVICE == cheetah || $DEVICE == panther || $DEVICE == tegu ]] &&
   say "Haptics firmware: cs40l26.wmfw ($(stat -c %s "$dest/cs40l26.wmfw") bytes) and its wavetable"
 [[ $DEVICE == tegu ]] &&

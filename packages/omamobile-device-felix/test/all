@@ -27,6 +27,10 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   cmp -s etc/omamobile-mirrorlist ../omamobile-device-cheetah/etc/omamobile-mirrorlist \
     || fail "the mirrorlist drifted from the cheetah package"
   pass "the mirrorlist matches the cheetah package"
+  cmp -s <(sed -n '/^# --- the \[omamobile\] channel/,$p' omamobile-device-felix.install) \
+    <(sed -n '/^# --- the \[omamobile\] channel/,$p' ../omamobile-device-cheetah/omamobile-device-cheetah.install) \
+    || fail "the install script's channel handling drifted from the cheetah package"
+  pass "the install script keeps the [omamobile] channel as the cheetah package does"
   cmp -s vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     ../omamobile-device-cheetah/vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     || fail "the power-key drop-in drifted from the cheetah package"

@@ -1,9 +1,9 @@
 post_install() {
-  echo "==> Start the Phone and Messages service for your user:"
-  echo "    systemctl --user enable --now omatel-agent"
+  echo "==> omatel-agent starts on its own when Phone or Messages opens (D-Bus activation);"
+  echo "    there is nothing to enable."
 }
 
 post_upgrade() {
-  echo "==> Restart the service to use the new version:"
-  echo "    systemctl --user restart omatel-agent"
+  echo "==> omatel-agent: a running agent keeps the old version until you log out again,"
+  echo "    or until: systemctl --user restart omatel-agent"
 }

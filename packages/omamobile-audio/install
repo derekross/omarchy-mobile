@@ -14,6 +14,7 @@ install -Dm644 systemd/omamobile-earpiece@.service "$d/usr/lib/systemd/system/om
 install -Dm644 polkit/50-omamobile-earpiece.rules "$d/usr/share/polkit-1/rules.d/50-omamobile-earpiece.rules"
 install -Dm644 lib/speaker_dsp.py "$d/usr/lib/omamobile-audio/speaker_dsp.py"
 install -Dm644 lib/speaker_response.py "$d/usr/lib/omamobile-audio/speaker_response.py"
+install -Dm644 verified-firmware "$d/usr/share/omamobile-audio/verified-firmware"
 install -Dm755 bin/omamobile-speaker-eq "$d/usr/bin/omamobile-speaker-eq"
 install -Dm644 systemd/omamobile-speaker-orient.service "$d/usr/lib/systemd/user/omamobile-speaker-orient.service"
 install -Dm644 udev.rules "$d/usr/lib/udev/rules.d/70-omamobile-cs35l41.rules"

@@ -17,7 +17,8 @@
 #                           power the BCM4389 BT core (BT_DEV_WAKE high, then
 #                           BT_REG_ON high), send HCI_Reset, Read Local Version
 #                           and Broadcom Read Verbose Config, print the answers,
-#                           then BT_REG_ON low again. Proves the pins, the baud
+#                           then BT_REG_ON low again. Failed identity reads are FAIL.
+#                           Proves the pins, the baud
 #                           clock (115200 is the chip's power-on rate) and RTS/CTS.
 #                           --wake: BT_DEV_WAKE's bank and line; by default
 #                           the board's own, from its compatible (cheetah
@@ -279,25 +280,29 @@ def cmd_hci(tty, baud, on_ms, wake):
     if baud not in BAUD or on_ms < 0:
         die("unsupported baud or negative power-on delay")
     with contextlib.ExitStack() as cleanup:
-        def request(bank, offsets):
+        def request(bank, offsets, descriptions):
             chip_fd, path, _ = find_chip(bank)
             if chip_fd is None:
-                die(f"no gpiochip labelled {bank}")
+                die(f"no gpiochip labelled {bank}" + (": is the PERIC0 pin controller enabled?" if bank == BT_BANK else ""))
             cleanup.callback(os.close, chip_fd)
+            say(f"{bank} is {path}; request lines {descriptions} as outputs, low")
             lines = Lines(chip_fd, offsets, "bt-uart-test")
             cleanup.callback(lines.close)
             return lines
 
         if wake_bank == BT_BANK:
-            lines = request(BT_BANK, [BT_REG_ON, wake_line])
+            lines = request(BT_BANK, [BT_REG_ON, wake_line],
+                            f"{BT_REG_ON} (BT_REG_ON) and {wake_line} (BT_DEV_WAKE)")
             dev_wake = WakeLine(lines, None, wake_line)
         else:
-            lines = request(BT_BANK, [BT_REG_ON])
-            dev_wake = WakeLine(lines, request(wake_bank, [wake_line]), wake_line)
+            lines = request(BT_BANK, [BT_REG_ON], f"{BT_REG_ON} (BT_REG_ON)")
+            dev_wake = WakeLine(lines, request(wake_bank, [wake_line],
+                                              f"{wake_line} (BT_DEV_WAKE)"), wake_line)
         fd = open_tty(tty, baud, rtscts=True)
         cleanup.callback(os.close, fd)
         cleanup.callback(dev_wake.set, 0)
         cleanup.callback(lines.set, BT_REG_ON, 0)
+        cleanup.callback(say, "BT_REG_ON low, BT_DEV_WAKE low")
         rc = hci_exchange(fd, lines, dev_wake, on_ms)
     say("hci " + ("PASS" if rc == 0 else "FAIL"))
     return rc
@@ -325,18 +330,16 @@ def hci_exchange(fd, lines, dev_wake, on_ms):
     if not ver or len(ver) < 9:
         say("Read Local Version FAIL")
         return 1
-    if ver and len(ver) >= 9:
-        hci_ver, hci_rev, lmp_ver, manuf, subver = struct.unpack_from("<BHBHH", ver, 1)
-        say(f"version: HCI {hci_ver} rev 0x{hci_rev:04x} LMP {lmp_ver} "
-            f"manufacturer {manuf} LMP subversion 0x{subver:04x} "
-            f"({(subver >> 13) & 7}.{(subver >> 8) & 0x1f}.{subver & 0xff})")
+    hci_ver, hci_rev, lmp_ver, manuf, subver = struct.unpack_from("<BHBHH", ver, 1)
+    say(f"version: HCI {hci_ver} rev 0x{hci_rev:04x} LMP {lmp_ver} "
+        f"manufacturer {manuf} LMP subversion 0x{subver:04x} "
+        f"({(subver >> 13) & 7}.{(subver >> 8) & 0x1f}.{subver & 0xff})")
 
     cfg = hci_cmd(fd, 0xfc79)                    # BCM Read Verbose Config
     if not cfg or len(cfg) < 2:
         say("Read Verbose Config FAIL")
         return 1
-    if cfg and len(cfg) >= 2:
-        say(f"BCM chip id {cfg[1]} (btbcm prints this as 'BCM: chip id')")
+    say(f"BCM chip id {cfg[1]} (btbcm prints this as 'BCM: chip id')")
     rc = 0
     return rc
 

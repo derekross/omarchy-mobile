@@ -1,0 +1,69 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/phone-smoke's dmesg error classification, against saved error logs
+# (--errors-from; no phone): known lines, counted lines with and without a
+# ceiling, and a UFS link that doesn't come back failing kernel health.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+fail() { printf 'not ok - %s\n' "$1" >&2; printf '%s\n' "$out" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+run() { printf '%s\n' "$@" >"$t/log"; out=$(tools/phone-smoke --errors-from "$t/log"); }
+has() { [[ $out == *"$1"* ]]; }
+
+dais='[    9.123456] audio_playback0: ASoC: no backend DAIs enabled for audio_playback0, possibly missing ALSA mixer-based routing or UCM profile'
+ufs='[  812.000001] exynos-ufshc 14700000.ufs: dme-set: attr-id 0x4021 val 0x1 failed 0 retries'
+
+run 'Bluetooth: hci0: Failed to read codec capabilities (-56)'
+has 'ok|1|kernel health|' && has '1 error lines in dmesg (1 known, 0 new)' && ! has 'new dmesg errors' \
+  || fail "a known line is known"
+pass "a known line is known"
+
+run "$dais"
+has 'ok|1|kernel health|' && has '(1 known, of them ASoC no backend DAIs (PipeWire probe) x1, 0 new)' \
+  && ! has 'new dmesg errors' || fail "one no-backend-DAIs line (PipeWire's probe) is known and counted"
+pass "one no-backend-DAIs line (PipeWire's probe) is known and counted"
+
+run "$dais" "$dais" "$dais"
+has 'ASoC no backend DAIs (PipeWire probe) x3' && has '(1 known' && has '2 new)' \
+  && has 'not ok|0|new dmesg errors|N: ASoC: no backend DAIs enabled for N' && has ' x2' \
+  || fail "no-backend-DAIs lines past the first are new (a broken UCM route)"
+pass "no-backend-DAIs lines past the first are new (a broken UCM route)"
+
+lines=(); for _ in $(seq 14); do lines+=("$ufs"); done
+run "${lines[@]}"
+has 'ok|1|kernel health|' && has '(14 known, of them UFS dme-set 0x4021 (s2idle) x14, 0 new)' \
+  && ! has 'new dmesg errors' || fail "the s2idle UFS dme-set lines are known and stay counted"
+pass "the s2idle UFS dme-set lines are known and stay counted"
+
+run "${ufs/0x4021/0x1561}"
+has '0 known, 1 new' && has 'new dmesg errors' || fail "a dme-set of another attribute is new"
+pass "a dme-set of another attribute is new"
+
+# The kernel's own formats: ufshcd.c's dev_err "link startup failed %d" and
+# "%s: Host init failed %d", blk-mq.c's "%s error, dev %s, sector ...",
+# buffer.c's "Buffer I/O error on dev %pg, ...".
+for dead in 'exynos-ufshc 14700000.ufs: link startup failed 1' \
+            'exynos-ufshc 14700000.ufs: ufshcd_host_reset_and_restore: Host init failed 1' \
+            'I/O error, dev sda, sector 123456 op 0x0:(READ) flags 0x80700 phys_seg 1 prio class 2' \
+            'Buffer I/O error on dev sda34, logical block 0, async page read'; do
+  run "$ufs" "$dead"
+  has 'not ok|1|kernel health|UFS didn'"'"'t come back (1 link startup' || fail "UFS that doesn't come back fails: $dead"
+done
+pass "a UFS link startup, host init or sd I/O error fails kernel health beside the known dme-set"
+
+# Not UFS: the chroots' loop devices and the PCIe core stay ordinary new errors.
+for other in 'I/O error, dev loop3, sector 2048 op 0x0:(READ) flags 0x0 phys_seg 1 prio class 2' \
+             'Buffer I/O error on dev loop2, logical block 0, async page read' \
+             'F2FS-fs (loop4): I/O error' \
+             'gs201-pcie 11920000.pcie: Host init failed: -110'; do
+  run "$other"
+  has 'ok|1|kernel health|' && ! has "didn't come back" && has '0 known, 1 new' && has 'new dmesg errors' \
+    || fail "a line that isn't UFS stays an ordinary new error: $other"
+done
+pass "loop-device and PCIe errors stay ordinary new errors, not a dead UFS"
+
+run "$dais" "$ufs" "$ufs" 'some driver: something new broke'
+has 'of them ASoC no backend DAIs (PipeWire probe) x1, UFS dme-set 0x4021 (s2idle) x2, 1 new)' \
+  && has 'new dmesg errors|some driver: something new broke x1' || fail "counted and new lines together"
+pass "counted and new lines together"

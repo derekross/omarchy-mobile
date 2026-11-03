@@ -1,0 +1,100 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# A signed bundle must refuse a development initramfs that grants its
+# builder SSH access, while an unsigned development bundle may use it. It
+# signs only with the release key (keys/gnupg.release, which omamobile-keyring
+# trusts), carries a calendar version, and holds a root image that follows
+# the stable channel. Nothing here signs: every case stops before that.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for tool in cpio lz4 sha256sum; do
+  command -v "$tool" >/dev/null || { echo "ok - # skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+r=$t/repo
+mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" \
+  "$r/out" "$t/kernel/include/config" "$t/ramdisk/root/.ssh"
+cp tools/make-bundle tools/bundle-manifest "$r/tools/"
+cp tools/lib/signing.sh tools/lib/bundle-tar.sh "$r/tools/lib/"
+: > "$r/tools/install-phone"
+for f in phone-provision nv-backup phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+  : > "$r/tools/$f"
+done
+: > "$r/docs/INSTALL.md"
+printf 'BOOT_IMAGES="boot"\nNAME="Test device"\n' > "$r/device/testdev/device.conf"
+: > "$r/packages/omamobile-keyring/omamobile.gpg"
+# A release key layout without key material: the refusals below all come
+# before anything is signed.
+fpr=0123456789ABCDEF0123456789ABCDEF01234567
+echo "$fpr:4:" > "$r/packages/omamobile-keyring/omamobile-trusted"
+: > "$r/packages/omamobile-keyring/omamobile-revoked"
+mkdir -m 700 -p "$r/keys/gnupg.release"
+echo "$fpr" > "$r/keys/fingerprint.release"
+echo test-release > "$t/kernel/include/config/kernel.release"
+printf x > "$r/out/omamobile-rootfs-test-aarch64.img.zst"
+sha256sum "$r/out/omamobile-rootfs-test-aarch64.img.zst" > \
+  "$r/out/omamobile-rootfs-test-aarch64.img.zst.sha256"
+printf 'device: testdev\nkernel modules: test-release\nomamobile channel: stable\n' > \
+  "$r/out/omamobile-rootfs-test-aarch64.MANIFEST"
+archive=$t/kernel/initramfs.cpio.lz4
+pack() {
+  (cd "$t/ramdisk" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$archive"
+}
+run() {
+  DEVICE=testdev KERNEL_OUT="$t/kernel" "$r/tools/make-bundle" --version "${VERSION:-2026.11.01}" \
+    --rootfs "$r/out/omamobile-rootfs-test-aarch64.img.zst" "$@" 2>&1
+}
+expect_refusal() {
+  local output
+  output=$(run "${@:2}") && { echo "not ok - accepted $1" >&2; exit 1; }
+  grep -cF "$1" <<<"$output" >/dev/null || {
+    echo "not ok - wrong refusal: $output" >&2; exit 1;
+  }
+}
+
+printf 'developer key\n' > "$t/ramdisk/root/.ssh/authorized_keys"
+pack
+expect_refusal 'initramfs contains SSH credentials'
+echo 'ok - signed bundle refuses the builder SSH key'
+expect_refusal 'holds images for' --unsigned
+echo 'ok - unsigned development bundle may pass the key guard'
+
+rm -rf "$t/ramdisk/root/.ssh"
+pack
+expect_refusal 'holds images for'
+echo 'ok - release initramfs passes the key guard'
+
+printf corrupt > "$archive"
+expect_refusal 'not a valid initramfs archive'
+echo 'ok - signed bundle refuses a corrupt initramfs'
+
+pack
+mv "$r/keys/gnupg.release" "$r/keys/gnupg.moved"
+mkdir -p "$r/keys/gnupg" && echo "$fpr" > "$r/keys/fingerprint"
+expect_refusal 'no release signing key'
+echo 'ok - a signed bundle needs the release key; the original keys/gnupg is never used'
+expect_refusal 'holds images for' --unsigned
+echo 'ok - an unsigned development bundle needs no key'
+mv "$r/keys/gnupg.moved" "$r/keys/gnupg.release"
+
+echo "FEDCBA9876543210FEDCBA9876543210FEDCBA98" > "$r/keys/fingerprint.release"
+expect_refusal 'does not trust'
+echo "$fpr" > "$r/keys/fingerprint.release"
+echo "$fpr" > "$r/packages/omamobile-keyring/omamobile-revoked"
+expect_refusal 'is revoked'
+: > "$r/packages/omamobile-keyring/omamobile-revoked"
+echo 'ok - the release key must be trusted and not revoked in omamobile-keyring'
+
+VERSION=test expect_refusal 'versioned by the calendar'
+VERSION=2026.13.01 expect_refusal 'versioned by the calendar'
+VERSION=2026.11.01.1 expect_refusal 'holds images for'
+VERSION=test expect_refusal 'holds images for' --unsigned
+echo 'ok - a signed release is versioned YYYY.MM.DD (.N for a respin); development bundles may use any'
+
+sed -i 's/^omamobile channel: .*/omamobile channel: development/' "$r/out/omamobile-rootfs-test-aarch64.MANIFEST"
+expect_refusal "follows the 'development' channel"
+sed -i '/^omamobile channel:/d' "$r/out/omamobile-rootfs-test-aarch64.MANIFEST"
+expect_refusal 'built before channels'
+expect_refusal 'holds images for' --unsigned
+echo 'ok - a signed release needs a root image on the stable channel'

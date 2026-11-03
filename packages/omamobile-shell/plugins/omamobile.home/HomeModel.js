@@ -51,7 +51,7 @@ var WIDGET_ORDER = ["clock", "weather", "battery", "media", "agenda", "notes", "
 // that ran commands) and which of its settings become the OWL widget's
 // state. `credit` is the original.
 var PORTED = {
-  airAndPollen: {"name": "Air and pollen", "icon": "󰵃", "min": [2, 1], "max": [4, 4], "size": [2, 1], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: wttr.in guesses from your address"}], "source": "wttr.in, air-quality-api.open-meteo.com", "credit": "simonschubert/air-and-pollen"},
+  airAndPollen: {"name": "Air and pollen", "icon": "󰵃", "min": [2, 1], "max": [4, 4], "size": [2, 1], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: set a city here or turn on Location"}], "source": "geocoding-api.open-meteo.com, air-quality-api.open-meteo.com", "credit": "simonschubert/air-and-pollen"},
   analogClock: {"name": "Analog clock", "icon": "󰅐", "min": [1, 1], "max": [4, 4], "size": [2, 2], "network": false, "config": {"seconds": true}, "schema": [{"key": "seconds", "type": "boolean", "label": "Second hand", "defaultValue": true}], "credit": "simonschubert/analog-clock"},
   bundesliga: {"name": "Bundesliga", "icon": "󰒸", "min": [3, 2], "max": [4, 6], "size": [4, 3], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "espn.com, espncdn.com", "credit": "simonschubert/bundesliga"},
   calendar: {"name": "Month", "icon": "󰃭", "min": [2, 2], "max": [4, 4], "size": [2, 2], "network": false, "config": {"firstDay": "Monday"}, "schema": [{"key": "firstDay", "type": "enum", "label": "Weeks start on", "options": ["Monday", "Sunday"], "defaultValue": "Monday"}], "credit": "simonschubert/calendar"},
@@ -64,7 +64,7 @@ var PORTED = {
   feeds: {"name": "Feeds", "icon": "󰑫", "min": [3, 2], "max": [4, 6], "size": [4, 3], "network": true, "config": {"enabled": false, "feeds": "https://archlinux.org/feeds/news/, https://github.com/omacom/omarchy/releases.atom", "interval": 30}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "feeds", "type": "string", "label": "Feeds (URLs, comma-separated)", "defaultValue": "https://archlinux.org/feeds/news/, https://github.com/omacom/omarchy/releases.atom"}, {"key": "interval", "type": "integer", "label": "Refresh every (minutes)", "min": 10, "max": 1440, "defaultValue": 30}], "source": "the feeds you list", "credit": "simonschubert/feeds"},
   fetch: {"name": "Fetch", "icon": "󰣇", "min": [2, 2], "max": [4, 4], "size": [3, 2], "network": false, "config": {}, "credit": "simonschubert/fetch"},
   focus: {"name": "Focus", "icon": "󰔛", "min": [2, 2], "max": [4, 4], "size": [2, 2], "network": false, "config": {"minutes": 25}, "schema": [{"key": "minutes", "type": "integer", "label": "Session length (minutes)", "min": 5, "max": 60, "defaultValue": 25}], "credit": "simonschubert/focus"},
-  forecast: {"name": "Forecast", "icon": "󰖕", "min": [3, 2], "max": [4, 4], "size": [4, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: wttr.in guesses from your address"}], "source": "wttr.in", "credit": "simonschubert/forecast"},
+  forecast: {"name": "Forecast", "icon": "󰖕", "min": [3, 2], "max": [4, 4], "size": [4, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: set a city here or turn on Location"}], "source": "geocoding-api.open-meteo.com, api.open-meteo.com", "credit": "simonschubert/forecast"},
   freeGames: {"name": "Free games", "icon": "󰊗", "min": [3, 2], "max": [4, 4], "size": [4, 2], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "store.epicgames.com, store-site-backend-static.ak.epicgames.com", "credit": "simonschubert/free-games"},
   github: {"name": "GitHub", "icon": "", "min": [3, 2], "max": [4, 6], "size": [4, 3], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "github.com", "credit": "simonschubert/github"},
   githubTrending: {"name": "GitHub trending", "icon": "󰊤", "min": [3, 2], "max": [4, 6], "size": [4, 3], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "github.com", "credit": "simonschubert/github-trending"},
@@ -86,12 +86,12 @@ var PORTED = {
   omarchyCommits: {"name": "Omarchy commits", "icon": "󰜘", "min": [3, 2], "max": [4, 6], "size": [3, 3], "network": true, "config": {"enabled": false, "repo": "omacom/omarchy", "branch": "quattro"}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "repo", "type": "string", "label": "Repository (owner/name)", "defaultValue": "omacom/omarchy"}, {"key": "branch", "type": "string", "label": "Branch", "defaultValue": "quattro"}], "source": "github.com", "credit": "simonschubert/omarchy-commits"},
   owl: {"name": "Owl", "icon": "󰈺", "min": [1, 1], "max": [4, 4], "size": [2, 2], "network": false, "config": {"born": 0, "fed": 0, "pets": 0}, "credit": "simonschubert/owl"},
   pictureOfTheDay: {"name": "Picture of the day", "icon": "󰋩", "min": [2, 2], "max": [4, 6], "size": [4, 2], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "wikimedia.org, commons.wikimedia.org", "credit": "simonschubert/picture-of-the-day"},
-  planesOverhead: {"name": "Planes overhead", "icon": "󰀝", "min": [1, 1], "max": [4, 5], "size": [2, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: wttr.in guesses from your address"}], "source": "wttr.in, opensky-network.org, globe.adsbexchange.com", "credit": "simonschubert/planes-overhead"},
+  planesOverhead: {"name": "Planes overhead", "icon": "󰀝", "min": [1, 1], "max": [4, 5], "size": [2, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: set a city here or turn on Location"}], "source": "geocoding-api.open-meteo.com, opensky-network.org, globe.adsbexchange.com", "credit": "simonschubert/planes-overhead"},
   premierLeague: {"name": "Premier League", "icon": "󰒸", "min": [3, 2], "max": [4, 6], "size": [4, 3], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "espn.com, espncdn.com", "credit": "simonschubert/premier-league"},
   releases: {"name": "Releases", "icon": "󰏗", "min": [3, 2], "max": [4, 6], "size": [4, 2], "network": true, "config": {"enabled": false, "repos": "omacom/omarchy, neovim/neovim, hyprwm/Hyprland, jesseduffield/lazygit, sxyazi/yazi"}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "repos", "type": "string", "label": "Repositories (owner/name, comma-separated)", "defaultValue": "omacom/omarchy, neovim/neovim, hyprwm/Hyprland, jesseduffield/lazygit, sxyazi/yazi"}], "source": "github.com", "credit": "simonschubert/releases"},
   serieA: {"name": "Serie A", "icon": "󰒸", "min": [3, 2], "max": [4, 6], "size": [4, 3], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "espn.com, espncdn.com", "credit": "simonschubert/serie-a"},
-  sunAndMoon: {"name": "Sun and moon", "icon": "󰖜", "min": [2, 2], "max": [4, 3], "size": [2, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: wttr.in guesses from your address"}], "source": "wttr.in", "credit": "simonschubert/sun-and-moon"},
-  today: {"name": "Today", "icon": "󰖐", "min": [2, 1], "max": [4, 4], "size": [2, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: wttr.in guesses from your address"}], "source": "wttr.in, yr.no", "credit": "simonschubert/today"},
+  sunAndMoon: {"name": "Sun and moon", "icon": "󰖜", "min": [2, 2], "max": [4, 3], "size": [2, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: set a city here or turn on Location"}], "source": "geocoding-api.open-meteo.com, api.open-meteo.com", "credit": "simonschubert/sun-and-moon"},
+  today: {"name": "Today", "icon": "󰖐", "min": [2, 1], "max": [4, 4], "size": [2, 2], "network": true, "config": {"enabled": false, "useLocation": true, "city": ""}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "useLocation", "type": "boolean", "label": "Use my location", "description": "The phone's position (Location), rounded to about 1 km", "defaultValue": true}, {"key": "city", "type": "string", "label": "City when there is no location", "defaultValue": "", "description": "Empty: set a city here or turn on Location"}], "source": "geocoding-api.open-meteo.com, api.open-meteo.com, yr.no", "credit": "simonschubert/today"},
   todo: {"name": "Todo", "icon": "󰝖", "min": [2, 2], "max": [4, 6], "size": [2, 3], "network": false, "config": {"path": "~/notes/todo.md"}, "schema": [{"key": "path", "type": "path", "label": "Checklist file", "defaultValue": "~/notes/todo.md"}], "credit": "simonschubert/todo"},
   uptime: {"name": "Uptime", "icon": "󰓅", "min": [3, 2], "max": [4, 6], "size": [4, 2], "network": true, "config": {"enabled": false, "sites": "https://archlinux.org, https://github.com", "interval": 5}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}, {"key": "sites", "type": "string", "label": "Sites (URLs, comma-separated)", "defaultValue": "https://archlinux.org, https://github.com"}, {"key": "interval", "type": "integer", "label": "Check every (minutes)", "min": 2, "max": 240, "defaultValue": 5}], "source": "the sites you list", "credit": "simonschubert/uptime"},
   wikipedia: {"name": "Wikipedia", "icon": "󰖬", "min": [3, 2], "max": [4, 6], "size": [4, 3], "network": true, "config": {"enabled": false}, "schema": [{"key": "enabled", "type": "boolean", "label": "Use the internet", "description": "Off until you turn it on"}], "source": "wikimedia.org, en.m.wikipedia.org", "credit": "simonschubert/wikipedia"},
@@ -192,7 +192,7 @@ function portPlacements(raw) {
 // What a fresh home gets, before the user changes anything: a clock and the
 // first of these apps that are installed along the bottom row.
 var DEFAULT_APPS = ["chromium", "Alacritty", "org.gnome.Nautilus", "omarchy-menu", "org.omarchy.settings",
-                    "foot", "org.gnome.Calculator", "btop", "nvim", "localsend"]
+                    "foot", "org.gnome.Calculator", "omawrite", "nvim", "localsend"]
 
 function clampInt(value, lo, hi, fallback) {
   var n = Math.round(Number(value))
@@ -799,6 +799,26 @@ function geocodeUrl(place) {
   return "https://geocoding-api.open-meteo.com/v1/search?count=1&format=json&name=" + encodeURIComponent(String(place || "").trim())
 }
 
+// The phone's temperature unit from its locale, "F" or "C", as
+// omamobile-weather's locale_unit (test/weather.py checks the two agree):
+// the first of LC_ALL, LC_MEASUREMENT and LANG that is set; °F where the
+// territory measures in it. The OWL weather built-ins get it as their
+// `phoneUnit` state (OwlCell.qml).
+var FAHRENHEIT_TERRITORIES = ["US", "LR", "MM", "BS", "BZ", "KY", "PW", "FM", "MH", "PR", "GU", "VI", "AS", "MP", "UM"]
+function localeUnit(env) {
+  var e = env || {}
+  var names = ["LC_ALL", "LC_MEASUREMENT", "LANG"]
+  for (var i = 0; i < names.length; i++) {
+    var value = String(e[names[i]] || "")
+    if (!value) continue
+    var base = value.split(".")[0].split("@")[0]
+    var cut = base.indexOf("_")
+    var territory = cut < 0 ? "" : base.slice(cut + 1).toUpperCase()
+    return FAHRENHEIT_TERRITORIES.indexOf(territory) >= 0 ? "F" : "C"
+  }
+  return "C"
+}
+
 function forecastUrl(latitude, longitude, units) {
   var lat = Math.round(Number(latitude) * 100) / 100
   var lon = Math.round(Number(longitude) * 100) / 100
@@ -871,6 +891,15 @@ function commandText(output, maxLines) {
 // widget's host.launch, a text widget's tap) and links as argv.
 var LAUNCH = "omamobile-launch"
 
+// A desktop entry that runs omarchy-shell opens a shell surface (the
+// Updates entry summons the update sheet), never a window, so Omarchy's
+// launch toast would wait for a toplevel that doesn't come and sit over the
+// sheet until it times out: no toast for it.
+function opensShellSurface(entry) {
+  var command = entry && entry.command ? entry.command : []
+  return command.length > 0 && String(command[0]).replace(/^.*\//, "") === "omarchy-shell"
+}
+
 function appLaunchArgv(desktopId) {
   return [LAUNCH, "app", String(desktopId || "")]
 }
@@ -886,11 +915,14 @@ function urlLaunchArgv(url) {
 // ---------------------------------------------------------------- who can see it
 
 // Shell surfaces that cover the whole home screen while they are mapped:
-// the app drawer, recent apps and the full-screen call card. Hyprland says
+// recent apps and the full-screen call card. The app drawer isn't here: its
+// surface stays mapped for the life of the shell (a new layer surface's
+// first frames draw at the wrong scale), so Home.qml asks it how far open
+// it is instead (DrawerLink.js). Hyprland says
 // when a layer surface maps and unmaps (openlayer>>NAMESPACE,
 // closelayer>>NAMESPACE); the quick-settings shade isn't here, since it
 // covers only part of the screen.
-var COVERING_LAYERS = ["omamobile-launcher", "omamobile-switcher", "omamobile-call"]
+var COVERING_LAYERS = ["omamobile-switcher", "omamobile-call"]
 
 // The covering surfaces mapped after one Hyprland event: { namespace: count }
 // (a surface per screen counts once each). Anything else returns `open`.
@@ -925,8 +957,92 @@ function overdue(lastMs, periodMs, nowMs) {
   return !(lastMs > 0) || nowMs - lastMs >= periodMs
 }
 
+// ---------------------------------------------------------------- gestures
+//
+// Paging: the pager's own drag moves the pages 1:1 under the finger; on
+// release HomePager.qml settles on the page these choose, with a short
+// ease that starts at the finger's speed.
+
+// A release at least this fast (logical px/s) turns the page its way even
+// after a short swipe; slower, the nearer page wins (past half the width).
+var PAGE_FLING = 300
+// A fling that moved less than this (px) is a tap's jitter, not a swipe.
+var PAGE_FLING_MIN = 8
+
+// The page to settle on: offset is the pages' scroll (px from page 0),
+// width a page's width, speed the scroll's speed (px/s, positive toward
+// the next page). Never more than one page from the page the swipe left.
+function pageAfterSwipe(offset, width, count, speed) {
+  var n = Math.max(1, Math.floor(Number(count) || 1))
+  var w = Number(width) || 0
+  if (!(w > 0)) return 0
+  var pos = (Number(offset) || 0) / w
+  var eps = PAGE_FLING_MIN / w
+  var v = Number(speed) || 0
+  var page
+  if (v >= PAGE_FLING) page = Math.ceil(pos - eps)
+  else if (v <= -PAGE_FLING) page = Math.floor(pos + eps)
+  else page = Math.round(pos)
+  return Math.max(0, Math.min(n - 1, page))
+}
+
+// How long a settle takes (ms) for `distance` px of a `span` px travel:
+// 120 ms plus up to 130 ms with the distance (a whole page 250 ms, half a
+// page about 185 ms), and no slower than the finger was moving, so a flick
+// carries on at its own speed (Easing.OutCubic starts at three times its
+// average speed). The drawer's settle (LauncherModel.settleMs) is the same
+// curve over its own travel.
+function settleMs(distance, span, speed) {
+  var d = Math.abs(Number(distance) || 0)
+  if (d < 0.5) return 0
+  var byDistance = 120 + 130 * Math.min(1, d / Math.max(1, Number(span) || 1))
+  var v = Math.abs(Number(speed) || 0)
+  var bySpeed = v > 0 ? 3 * d / v * 1000 : Infinity
+  return Math.round(Math.max(120, Math.min(byDistance, bySpeed)))
+}
+
+// A finger's speed from its recent positions, as LauncherModel's: samples
+// are { t (ms), pos (px) }, newest last; only the last 100 ms count, so a
+// finger that stopped before letting go has no speed.
+var SAMPLE_WINDOW_MS = 100
+function addSample(samples, t, pos) {
+  var out = []
+  for (var i = 0; i < (samples || []).length; i++)
+    if (t - samples[i].t <= SAMPLE_WINDOW_MS * 2) out.push(samples[i])
+  out.push({ t: t, pos: pos })
+  return out
+}
+function speedOf(samples, now) {
+  var recent = []
+  for (var i = 0; i < (samples || []).length; i++)
+    if (now - samples[i].t <= SAMPLE_WINDOW_MS) recent.push(samples[i])
+  if (recent.length < 2) return 0
+  var a = recent[0], b = recent[recent.length - 1]
+  var dt = b.t - a.t
+  return dt >= 8 ? (b.pos - a.pos) / dt * 1000 : 0
+}
+
+// The swipe up to the app drawer (DrawerSwipe.qml) is the home screen's
+// only while nothing is over it: no app on the workspace, not editing (no
+// widget being dragged either), no sheet open.
+function drawerSwipeAllowed(appOnScreen, editing, sheet) {
+  return !appOnScreen && !editing && !sheet
+}
+
+// Without the drawer in reach (DrawerLink.js missing), a swipe up opens it
+// through the host when the finger lets go: a fling up, or 80 px up.
+var DRAWER_FALLBACK_PX = 80
+var DRAWER_FALLBACK_FLING = 350
+function drawerFallbackOpens(travel, speed) {
+  var v = Number(speed) || 0
+  if (v >= DRAWER_FALLBACK_FLING) return false
+  return v <= -DRAWER_FALLBACK_FLING || (Number(travel) || 0) >= DRAWER_FALLBACK_PX
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
+    PAGE_FLING: PAGE_FLING, PAGE_FLING_MIN: PAGE_FLING_MIN, pageAfterSwipe: pageAfterSwipe, settleMs: settleMs,
+    addSample: addSample, speedOf: speedOf, drawerSwipeAllowed: drawerSwipeAllowed, drawerFallbackOpens: drawerFallbackOpens,
     LAUNCH: LAUNCH, appLaunchArgv: appLaunchArgv, commandLaunchArgv: commandLaunchArgv, urlLaunchArgv: urlLaunchArgv,
     VERSION: VERSION, GRID: GRID, LIMITS: LIMITS, REGISTRY: REGISTRY, DEFAULT_APPS: DEFAULT_APPS,
     WIDGET_ORDER: WIDGET_ORDER, PORTED: PORTED, PORTED_ORDER: PORTED_ORDER,
@@ -944,9 +1060,9 @@ if (typeof module !== "undefined") {
     placeOn: placeOn, addWidget: addWidget, addApp: addApp, removeItem: removeItem, restoreItem: restoreItem,
     moveItem: moveItem, resizeItem: resizeItem, setConfig: setConfig,
     addPage: addPage, removePage: removePage, movePage: movePage, setHome: setHome, setGrid: setGrid, transposeLayout: transposeLayout,
-    weatherText: weatherText, geocodeUrl: geocodeUrl, forecastUrl: forecastUrl,
+    weatherText: weatherText, localeUnit: localeUnit, geocodeUrl: geocodeUrl, forecastUrl: forecastUrl,
     parseGeocode: parseGeocode, parseForecast: parseForecast, parseAgenda: parseAgenda, AGENDA_ARGV: AGENDA_ARGV,
-    monthGrid: monthGrid, commandText: commandText,
+    monthGrid: monthGrid, commandText: commandText, opensShellSurface: opensShellSurface,
     COVERING_LAYERS: COVERING_LAYERS, layersAfter: layersAfter, homeShown: homeShown, pageShown: pageShown, overdue: overdue
   }
 }

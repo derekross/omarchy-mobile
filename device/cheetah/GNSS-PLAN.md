@@ -112,7 +112,8 @@ for its own rails). This branch adds S2MPG13 to `sec-acpm` and `s2mps11`
 the upstream way, deliberately narrow:
 
 - writes reach only LDO control registers (regmap `wr_table`);
-- only LDO9S-11S are in the DT, at stock's ranges (0.725-1.3 V,
+- at G1 only LDO9S-11S were in the DT (LDO12S, camera I/O, and LDO15S, the
+  fingerprint sensor, came later with their own consumers), at stock's ranges (0.725-1.3 V,
   1.6-1.95 V, 1.6-1.95 V), so registering them writes nothing;
 - the other 25 LDOs exist without constraints and are never touched;
 - no interrupt (stock: gpa0-1), no meter, no bucks.
@@ -122,6 +123,15 @@ have constraints about 30 s after late init. LDO9S-11S are GNSS-only
 (`L9S_GNSS_CORE`, `L10S_GNSS_RF`, `L11S_GNSS_AUX`, `R/live.dts:14072-14104`
 and the ODPM rail names), so that is harmless. G1 avoids it anyway by
 loading `sec_acpm` after the 30 s.
+
+**Since #227 (2026-11-01) `sec_acpm` is built in** (`CONFIG_MFD_SEC_ACPM=y`
+in the shared fragment, for the Pixel 9a's USB PHY), so on a kernel built
+from it the S2MPG13 registers at boot, before the 30 s cleanup, as above
+harmlessly. The G1 blacklist (`omamobile-g1.conf`) then does nothing, the
+start script's `modprobe sec_acpm` succeeds without loading anything, and
+`omamobile-gnss status` always finds the `vdd_gnss_core` regulator: "chip
+powered" still reads the rail's state, but "not loaded yet" no longer
+occurs. The 7 Pro boot of #227's config passed phone-smoke.
 
 ## 3. Userspace (omamobile repo)
 

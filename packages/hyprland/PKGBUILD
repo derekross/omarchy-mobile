@@ -2,16 +2,20 @@
 #
 # Omarchy Mobile build of Hyprland for the Pixel 7 Pro.
 #
-# Derived from Omarchy's aarch64 hyprland PKGBUILD, 0.56.2-5
+# Derived from Omarchy's hyprland PKGBUILD, 0.57.0-2
 # (https://github.com/omacom-io/omarchy-pkgs, pkgbuilds/hyprland at
-# 3a0d01876fc9), itself Arch Linux's hyprland PKGBUILD split into hyprland
-# and hyprpm and carrying software-renderer.patch. Omarchy Mobile changes:
+# 347f3d791489), itself Arch Linux's hyprland PKGBUILD carrying Omarchy's
+# nvidia-egl-teardown, wl-output-global-grace and monitor-rule-vrr patches
+# (unchanged here). Omarchy Mobile changes:
 #  - 0001-dpms-keep-retrying-a-refused-dpms-commit.patch: Hyprland retried a
 #    refused DPMS commit once, so DPMS off was lost whenever a client kept
 #    a page flip in flight (device/cheetah/DISPLAY-PLAN.md, D3b-1). Drop it
 #    once upstream retries.
-#  - pkgrel 5.1, so it sorts above Omarchy's 0.56.2-5; [omamobile] comes
-#    before [omarchy] in pacman.conf, so pacman takes this build either way.
+#  - pkgrel 3.1: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+#    (0.57.0-3) release plus .1, so it sorts above both; [omamobile] comes
+#    before [omarchy] and [extra] in pacman.conf, so pacman takes this build
+#    either way.
+#  - arch=(aarch64) only.
 #  - build() runs the two cmake steps of `make release` itself, with
 #    CMAKE_SKIP_RPATH (Arch's Makefile sed) and the job count from MAKEFLAGS
 #    instead of nproc: a full -j8 can run the phone out of memory.
@@ -20,46 +24,49 @@
 # ThatOneCalculator, Brenno Lemos, Gabriel Fox.
 
 pkgname=(hyprland hyprpm)
-pkgver=0.56.2
-pkgrel=5.1
+pkgver=0.57.0
+pkgrel=3.1
 pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omarchy Mobile: DPMS retry)'
 arch=(aarch64)
 url="https://github.com/hyprwm/Hyprland"
 license=(BSD-3-Clause)
 depends=(cairo # libcairo.so
-         aquamarine libaquamarine.so
+         aquamarine
          libgcc # libgcc_s.so
          'libstdc++' # libstdc++.so
          glibc # libc.so libm.so
-         glib2 libgio-2.0.so libgobject-2.0.so
+         glib2
          glslang # libglslang-default-resource-limits.so libglslang.so
-         hyprcursor libhyprcursor.so
-         hyprgraphics libhyprgraphics.so
+         hyprcursor
+         hyprgraphics
          hyprland-guiutils
-         hyprlang libhyprlang.so
-         hyprutils libhyprutils.so
-         hyprwire libhyprwire.so
-         lcms2 liblcms2.so
+         hyprlang
+         hyprutils
+         hyprwire
+         lcms2
+         libcanberra
          libdrm # libdrm.so
-         libglvnd libEGL.so libGLESv2.so
+         libei
+         libglvnd
          libinput # libinput.so
          libx11
          libxcb # libxcb-dri3.so libxcb-present.so libxcb-render.so libxcb-res.so libxcb-shm.so libxcb.so libxcb-xfixes.so libxcb-xinput.so
          libxcomposite # libxcb-composite.so
          libxcursor # libXcursor.so
          libxfixes
-         libxkbcommon libxkbcommon.so
+         libxkbcommon
          libxrender
          lua # liblua.so
          mesa # libgbm.so
          muparser # libmuparser.so
          opengl-driver
-         pango libpango-1.0.so libpangocairo-1.0.so
-         pixman libpixman-1.so
-         re2 libre2.so
-         tomlplusplus libtomlplusplus.so
-         util-linux-libs libuuid.so
-         wayland libwayland-server.so
+         pango
+         pixman
+         re2
+         sdbus-cpp
+         tomlplusplus
+         util-linux-libs
+         wayland
          wayland-protocols
          xcb-proto
          xcb-util
@@ -82,17 +89,25 @@ optdepends=('hyprpm: build and install plugins'
 provides=(wayland-compositor)
 _archive="Hyprland-$pkgver"
 source=("$_archive.tar.gz::$url/releases/download/v$pkgver/source-v$pkgver.tar.gz"
-        software-renderer.patch
+        nvidia-egl-teardown.patch
+        wl-output-global-grace.patch
+        monitor-rule-vrr.patch
         0001-dpms-keep-retrying-a-refused-dpms-commit.patch)
-sha256sums=('03ad3f5ef152ff44116ffd56fcf808486211ecabf4f0ba567108ee746ba5cd2e'
-            '380bb6d61c36d6c68bcccf242131f5b259734e8570ea39b3bc519b9ed137eddd'
-            '6d73c17e1a41cf9e1719c617db8c84ea4841b09445bfdf53e19f8383678a0c64')
+sha256sums=('82d006ba9264fe67266c7d583c16f1a6c64d51424dbdc472c3e9c9d5ddfcd559'
+            '26d62139b8ae55e286bcdff1838a6bc01a021d8f1039b40b8fa523df83f61610'
+            '8fa0f57dc1b3246ab4e30ae81419150f4af7767fb31e739e36c824c6d99fab73'
+            'c14fb0ec02d97100bcfa4e5c8daaf524972fa5c665e04960619744ba01c73c39'
+            'a5670d9a6cdee3f3990a81cdecfd5e1f95771ebd1d7b1e2622ac7187684b8836')
 
 prepare() {
 	ln -sf hyprland-source "$_archive"
 	cd "$_archive"
-	# Backport of hyprwm/Hyprland#16343 (Omarchy's); drop once the packaged release includes it
-	patch -Np1 --fuzz=0 -i "$srcdir/software-renderer.patch"
+	# Omarchy's: release the EGL context before teardown; NVIDIA's EGL crashes on exit otherwise
+	patch -Np1 --fuzz=0 -i "$srcdir/nvidia-egl-teardown.patch"
+	# Omarchy's: wait before destroying a wl_output global that clients may still be binding
+	patch -Np1 --fuzz=0 -i "$srcdir/wl-output-global-grace.patch"
+	# Omarchy's: a reload ignored a monitor rule's vrr unless something else about the rule changed
+	patch -Np1 --fuzz=0 -i "$srcdir/monitor-rule-vrr.patch"
 	# Omarchy Mobile: retry a refused DPMS commit for up to a second
 	patch -Np1 --fuzz=0 -i "$srcdir/0001-dpms-keep-retrying-a-refused-dpms-commit.patch"
 	sed -i -e '/find_package.glaze/s/7...<8 //' {.,hyprpm,start}/CMakeLists.txt
@@ -109,6 +124,29 @@ build() {
 }
 
 package_hyprland() {
+	depends+=(libEGL.so
+	          libGLESv2.so
+	          libaquamarine.so
+	          libcanberra.so
+	          libeis.so
+	          libgio-2.0.so
+	          libgobject-2.0.so
+	          libhyprcursor.so
+	          libhyprgraphics.so
+	          libhyprlang.so
+	          libhyprutils.so
+	          libhyprwire.so
+	          liblcms2.so
+	          libpango-1.0.so
+	          libpangocairo-1.0.so
+	          libpixman-1.so
+	          libre2.so
+	          libreadline.so
+	          libsdbus-c++.so
+	          libtomlplusplus.so
+	          libuuid.so
+	          libwayland-server.so
+	          libxkbcommon.so)
 	cd "$_archive"
 	make DESTDIR="$pkgdir" install
 	rm -fv "$pkgdir/usr/include/hyprland/src/version.h.in"
