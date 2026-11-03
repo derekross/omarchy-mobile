@@ -150,6 +150,26 @@ blacklists both and starts neither.
 
 Licence: MIT.
 
+## The modem at boot (opt-in)
+
+`omamobile-tegu-modem-up` starts the CP once per boot: the kernel's own
+drivers when it carries them (`cpif`, `pcie_gs201_cp` and the device tree's
+`cpif` node), else the bring-up modules in `/var/lib/omamobile-tegu/modem`.
+It runs the read-only NV check, takes a sleep inhibitor before any driver
+loads (suspend with the CP up isn't qualified on the 9a, so nothing sleeps
+until the reboot), writes a latch before the drivers load and clears it at
+CP ONLINE, and with `--phone` starts `omamobile-sitd` and, when installed,
+`omamobile-mmd` for Phone and Messages. It refuses a second start in a boot
+that already loaded CPIF, and any start while the latch from a failed one is
+there (`/var/lib/omamobile/modem-bringup-started`: read
+`/var/log/omamobile/modem.log`, then remove it). Never stop the modem by
+hand; the reboot's shutdown stops it.
+
+`omamobile-tegu-modem-boot.service` runs `omamobile-tegu-modem-up --phone`
+at boot. The package installs it disabled; to have the palmtop come up as a
+phone, `systemctl enable omamobile-tegu-modem-boot`. With it on the battery
+drains as if awake, since the palmtop no longer suspends.
+
 ## Optional Phone and Messages attachment
 
 `omamobile-telephony-tegu` is an opt-in companion package; it installs the
