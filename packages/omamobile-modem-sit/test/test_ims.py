@@ -5,7 +5,7 @@ import ipaddress
 import struct
 import unittest
 from data_call import pcscf_addresses
-from ims import add_pdn_payload, hidden_menu
+from ims import REG_STATUS, add_pdn_payload, hidden_menu, oma_dm_menu
 
 
 class ImsPayloadTests(unittest.TestCase):
@@ -73,6 +73,46 @@ class ImsPayloadTests(unittest.TestCase):
         result[0x4f:0x7f] = bytes(48)
         with self.assertRaises(ValueError):
             add_pdn_payload(result)
+
+    def test_ipv4v6_pdn_announces_both_families(self):
+        # Verizon's IMS APN is IPv4v6 at home: stock's IP type is the bits of
+        # the addresses the bearer has, with both P-CSCF lists and DNS.
+        result = self.response()
+        result[4] = 3
+        result[5:9] = ipaddress.IPv4Address('192.0.2.2').packed
+        result[0x1a:0x1e] = ipaddress.IPv4Address('192.0.2.53').packed
+        result[0x1e:0x2e] = ipaddress.IPv6Address('2001:db8::53').packed
+        result[0x42] = 3
+        result[0x43:0x47] = ipaddress.IPv4Address('192.0.2.10').packed
+        body = add_pdn_payload(result)
+        self.assertEqual(body[:6], bytes([2, 3]) + ipaddress.IPv4Address('192.0.2.2').packed)
+        self.assertEqual(body[6:22], ipaddress.IPv6Address('2001:db8::2').packed)
+        self.assertEqual(body[39], 1)
+        self.assertEqual(body[40:44], ipaddress.IPv4Address('192.0.2.10').packed)
+        self.assertEqual(body[44], 1)
+        self.assertEqual(body[45:61], ipaddress.IPv6Address('2001:db8::1').packed)
+        self.assertEqual(body[61:65], ipaddress.IPv4Address('192.0.2.53').packed)
+        self.assertEqual(body[65:81], ipaddress.IPv6Address('2001:db8::53').packed)
+        self.assertEqual(len(body), 679 + 4)
+        # Only an IPv4 P-CSCF: still a P-CSCF, no ISIM fallback needed.
+        result[0x4f:0x7f] = bytes(48)
+        body = add_pdn_payload(result, fallback=[ipaddress.IPv6Address('2001:db8::9').packed])
+        self.assertEqual((body[39], body[44]), (1, 0))
+
+    def test_ipv6_bearer_ignores_ipv4_fields(self):
+        # An IPv6 bearer (IPv4 address empty) stays byte for byte as before,
+        # even with an IPv4 P-CSCF slot filled.
+        result = self.response()
+        result[4] = 3
+        result[0x42] = 3
+        result[0x43:0x47] = ipaddress.IPv4Address('192.0.2.10').packed
+        self.assertEqual(add_pdn_payload(result), add_pdn_payload(self.response()))
+
+    def test_oma_dm_menu_is_stock_tag_777(self):
+        self.assertEqual(oma_dm_menu(), struct.pack('<BHHI', 0, 6, 777, 1))
+
+    def test_status_5_is_named(self):
+        self.assertEqual(REG_STATUS[5], 'registration failed')
 
     def test_configuration_segment_length_and_complete_flag(self):
         packet = hidden_menu()

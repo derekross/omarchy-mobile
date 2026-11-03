@@ -15,10 +15,13 @@ owner. This order registered on LTE with IMS voice and SMS on this phone:
      (AT+CFUN=0 first). Then wait for packet registration (on LTE with
      nr = off) and log how long it took;
   4. the internet bearer (CID 1; its rmnet device is found by omamobile-sit-data);
-  5. IMS: stack start, the IMS bearer (CID 2, IPv6), ADD_PDN_INFO (its
-     P-CSCF from the bearer's PCO, else from the ISIM's EF_PCSCF with
-     [network] ims_pcscf_from_isim = yes), then wait for an IMS
-     registration with voice and SMS.
+  5. IMS: stack start, the IMS bearer (CID 2; IPv6, or the IMS profile's
+     home IP type, as stock takes it from the IMS APN), the hidden menu and
+     the OMA-DM menu, ADD_PDN_INFO (its P-CSCF from the bearer's PCO, else
+     from the ISIM's EF_PCSCF with [network] ims_pcscf_from_isim = yes, a
+     name resolved over the IMS bearer, the internet bearer's DNS or the
+     host resolver), then wait for an IMS registration with voice and SMS.
+     The stock IMS service and its requests: device/cheetah/IMS-SHANNON.md.
 
 No retransmission of SMS/calls and no warm CP restart. A failed or uncertain
 step up to the internet bearer ends start-up; the service exits and the
@@ -28,11 +31,42 @@ running with data only, unless [network] ims_required = yes.
 import time
 
 from at import radio, radio_state
-from data_call import activate, configured_profiles, initial_attach, provision_profiles
+from data_call import APN_TYPES, activate, configured_profiles, initial_attach, provision_profiles
+from data_call import paths as bearer_paths
 from ims import register, start_stack
-from isim import ipv6_pcscf
+from isim import bearer_dns, ipv6_pcscf, resolve_on_bearer, resolve_system
 from radio_settings import SAVED_NR, nr_mode
 from sit import ModemError
+
+
+def ims_ip_type(profiles, ims_apn):
+    """The IMS bearer's PDP type: the home protocol of the [profiles] entry
+    with the ims type for ims_apn, as stock takes it from the IMS APN
+    (Verizon's IMS APN is IPv4v6 at home), else IPv6 (unchanged from 0.3.19)."""
+    for profile in profiles:
+        if profile.types & APN_TYPES['ims'] and profile.apn.lower() == ims_apn.lower():
+            return profile.ip
+    return 'ipv6'
+
+
+def resolve_default_network(name):
+    """AAAA as stock's IMS service resolves an ISIM P-CSCF name
+    (InetAddress.getByName on the default network: the internet bearer
+    without Wi-Fi): the internet bearer's own DNS servers from its setup
+    response, then the host resolver, which may be another link."""
+    found = []
+    response = bearer_paths(1)[1]
+    if response.exists():
+        bearer = response.read_bytes()
+        if len(bearer) >= 132 and any(bearer[9:25]):
+            source, servers = bearer_dns(bearer)
+            try:
+                found = resolve_on_bearer(name, source, servers) if servers else []
+            except (OSError, ValueError):
+                found = []
+            if found:
+                print(f'P-CSCF from ISIM: {name} resolved through the internet bearer\'s DNS', flush=True)
+    return found or resolve_system(name)
 
 
 def sim_ready(payload):
@@ -259,12 +293,16 @@ def start(service, settings, stopped=lambda: False):
                       'manifest sent' if service.manifest_sent else 'no request from the modem seen', ')',
                       flush=True)
         start_stack(client)
-        activate(client, net.get('ims_apn', 'ims'), ims=True, on_event=service.event)
+        ims_apn = net.get('ims_apn', 'ims')
+        ims_ip = ims_ip_type(profiles, ims_apn)
+        print('IMS bearer PDP type', ims_ip, '(from the IMS profile)' if ims_ip != 'ipv6' else '', flush=True)
+        activate(client, ims_apn, ims=True, ip_type=ims_ip, on_event=service.event)
         fallback = None
         if net.getboolean('ims_pcscf_from_isim', True):
             # The ISIM's EF_PCSCF when the PCO has none (one read-only file).
             def fallback(bearer):
-                return ipv6_pcscf(client, client.request(0x0200), bearer)
+                return ipv6_pcscf(client, client.request(0x0200), bearer,
+                                  resolve_host=resolve_default_network)
         register(client, pcscf_required=net.getboolean('ims_pcscf_required', True),
                  pcscf_fallback=fallback)
         print('Startup: waiting for IMS voice and SMS registration', flush=True)

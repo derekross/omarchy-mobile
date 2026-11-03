@@ -306,3 +306,30 @@ class IsimFallbackWiringTests(unittest.TestCase):
     def test_on_by_default_and_off_by_setting(self):
         self.assertIsNotNone(self.run_ims(None))
         self.assertIsNone(self.run_ims('no'))
+
+    def test_ims_bearer_ip_type_follows_the_ims_profile(self):
+        from data_call import Profile, APN_TYPES
+        ims = Profile(2, 'IMS', APN_TYPES['ia'] | APN_TYPES['ims'], 'ipv4v6', 'ipv6')
+        internet = Profile(0, 'internet.example', APN_TYPES['default'])
+        self.assertEqual(bringup.ims_ip_type([internet, ims], 'ims'), 'ipv4v6')
+        self.assertEqual(bringup.ims_ip_type([internet], 'ims'), 'ipv6')
+        self.assertEqual(bringup.ims_ip_type([internet, ims], 'vzwims'), 'ipv6')
+
+    def test_isim_names_try_the_internet_bearers_dns_first(self):
+        import ipaddress, tempfile, pathlib
+        bearer = bytearray(132)
+        bearer[9:25] = ipaddress.IPv6Address('2001:db8::2').packed
+        bearer[0x1e:0x2e] = ipaddress.IPv6Address('2001:db8::53').packed
+        with tempfile.TemporaryDirectory() as tmp:
+            response = pathlib.Path(tmp, 'r.bin')
+            response.write_bytes(bytes(bearer))
+            with patch.object(bringup, 'bearer_paths', return_value=(None, response)), \
+                 patch.object(bringup, 'resolve_on_bearer', return_value=[b'a' * 16]) as on, \
+                 patch.object(bringup, 'resolve_system', side_effect=AssertionError), \
+                 patch('builtins.print'):
+                self.assertEqual(bringup.resolve_default_network('p.example'), [b'a' * 16])
+                self.assertEqual(on.call_args.args, ('p.example', '2001:db8::2', ['2001:db8::53']))
+            with patch.object(bringup, 'bearer_paths', return_value=(None, response)), \
+                 patch.object(bringup, 'resolve_on_bearer', return_value=[]), \
+                 patch.object(bringup, 'resolve_system', return_value=[b'b' * 16]):
+                self.assertEqual(bringup.resolve_default_network('p.example'), [b'b' * 16])

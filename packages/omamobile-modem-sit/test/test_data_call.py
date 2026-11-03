@@ -252,6 +252,9 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual((payload[0xda - 12], payload[0xf5 - 12]), (3, 2))
         ims = data_call.setup_payload(2, 14, 4, 'ims', ims=True)
         self.assertEqual((ims[3], ims[0xda - 12], ims[0xdb - 12]), (1, 2, 2))
+        # An IPv4v6 IMS APN (stock: the APN's protocol, GetPcscfReqType).
+        both = data_call.setup_payload(2, 14, 0, 'ims', ims=True, ip_type='ipv4v6')
+        self.assertEqual((both[0xda - 12], both[0xdb - 12]), (3, 3))
         # The APN-type bitmap at 0xf1: DEFAULT for the internet bearer, IMS
         # for the IMS one; the attach request carries none and keeps its
         # length and roaming type.

@@ -109,8 +109,13 @@ def private_write(path, data):
         out.write(data)
 
 
-def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type='ipv4v6'):
+def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type=None):
     # Absolute request offsets below include the 12-byte request header.
+    # ip_type None: IPv6 for IMS (what every IMS setup used until 0.3.19),
+    # IPv4v6 otherwise. For IMS, stock takes the PDP type from the IMS APN's
+    # protocol and the P-CSCF request from it (GetPcscfReqType).
+    if ip_type is None:
+        ip_type = 'ipv6' if ims else 'ipv4v6'
     check_apn(apn)
     full = bytearray(983)
     full[12] = cid
@@ -120,8 +125,8 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     encoded = apn.encode('ascii')
     full[16:16 + len(encoded)] = encoded
     full[0xd9] = 0  # no authentication
-    full[0xda] = IP_TYPES['ipv6'] if ims else IP_TYPES[ip_type]
-    full[0xdb] = 2 if ims else 0  # IPv6 P-CSCF request
+    full[0xda] = IP_TYPES[ip_type]
+    full[0xdb] = PCSCF_REQUEST[ip_type] if ims else 0  # P-CSCF request (IPv6 2, both 3)
     # No handover addresses, roaming override or slice.
     # 0xf1 (u32): the APN-type bitmap, as stock's builder copies it from
     # ApnSetting's supported types (vendor.radio.base
@@ -388,7 +393,7 @@ def listen_after_failure(client, seconds=5, on_event=None):
             on_event(packet)
     print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
 
-def activate(client, apn, *, ims=False, ip_type='ipv4v6', lte_access=False, on_event=None):
+def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event=None):
     requested_cid = 2 if ims else 1
     state_path, response_path = paths(requested_cid)
     state = client.request(0x0701)
