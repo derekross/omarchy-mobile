@@ -180,7 +180,7 @@ def private_write(path, data):
         out.write(data)
 
 
-def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type=None):
+def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type=None, apn_types=None):
     # Absolute request offsets below include the 12-byte request header.
     # ip_type None: IPv6 for IMS (what every IMS setup used until 0.3.19),
     # IPv4v6 otherwise. For IMS, stock takes the PDP type from the IMS APN's
@@ -205,7 +205,14 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     # builder writes it at 0xf1). DEFAULT for the internet bearer, IMS for
     # the IMS one. Until 0.3.6 this was sent as 0 (taken for an MTU), and
     # the 9a's modem answered every internet setup with status 36.
-    struct.pack_into('<I', full, 0xf1, 0x40 if ims else 1)
+    # apn_types: the whole bitmask of the APN's data profile, as stock's
+    # builder copies it (ApnSetting +0x160 -> 0xf1); Verizon's IMS APN is
+    # ims|ia (0x140), which stock's IMS setup carries.
+    if apn_types is None:
+        apn_types = 0x40 if ims else 1
+    if not apn_types or apn_types & ~sum(APN_TYPES.values()):
+        raise ValueError('invalid APN-type bitmask')
+    struct.pack_into('<I', full, 0xf1, apn_types)
     full[0xf5] = 2  # stock caller selects the v3/983-byte form
     # 0 on cellular: no PDU session ID, the modem picks one (module docstring).
     struct.pack_into('<i', full, 0xf6, pdu_session)
@@ -464,7 +471,7 @@ def listen_after_failure(client, seconds=5, on_event=None):
             on_event(packet)
     print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
 
-def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event=None):
+def activate(client, apn, *, ims=False, ip_type=None, apn_types=None, lte_access=False, on_event=None):
     requested_cid = 2 if ims else 1
     state_path, response_path = paths(requested_cid)
     state = client.request(0x0701)
@@ -500,8 +507,10 @@ def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event
     try:
         rat = 14 if lte_access else state[3]
         print('data setup access RAT', rat, 'registered RAT', state[3], 'PDU session ID', session, flush=True)
-        result = client.request(0x0600, setup_payload(requested_cid, rat, session, apn,
-                                                      ims=ims, ip_type=ip_type), timeout=45)
+        if apn_types is not None:
+            print(f'data setup APN types 0x{apn_types:x} (from the data profile)', flush=True)
+        result = client.request(0x0600, setup_payload(requested_cid, rat, session, apn, ims=ims,
+                                                      ip_type=ip_type, apn_types=apn_types), timeout=45)
         if len(result) < 132:
             raise RuntimeError('unexpected data-call layout')
         status, cid, raw_active, pdp = struct.unpack_from('<HBBB', result)

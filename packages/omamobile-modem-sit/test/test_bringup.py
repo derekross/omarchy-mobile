@@ -316,6 +316,15 @@ class IsimFallbackWiringTests(unittest.TestCase):
         self.assertEqual(bringup.ims_ip_type([internet], 'ims'), 'ipv6')
         self.assertEqual(bringup.ims_ip_type([internet, ims], 'vzwims'), 'ipv6')
 
+    def test_ims_setup_apn_types_follow_the_ims_profile(self):
+        from data_call import Profile, APN_TYPES
+        ims = Profile(2, 'IMS', APN_TYPES['ia'] | APN_TYPES['ims'], 'ipv4v6', 'ipv6')
+        internet = Profile(0, 'internet.example', APN_TYPES['default'])
+        # Stock's builder copies the APN's whole bitmask: ims|ia on Verizon.
+        self.assertEqual(bringup.ims_apn_types([internet, ims], 'ims'), 0x140)
+        self.assertIsNone(bringup.ims_apn_types([internet], 'ims'))
+        self.assertIsNone(bringup.ims_apn_types([internet, ims], 'vzwims'))
+
     def test_isim_names_try_the_internet_bearers_dns_first(self):
         import ipaddress, tempfile, pathlib
         bearer = bytearray(132)

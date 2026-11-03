@@ -57,6 +57,17 @@ def ims_ip_type(profiles, ims_apn):
     return 'ipv6'
 
 
+def ims_apn_types(profiles, ims_apn):
+    """The IMS setup's APN-type bitmask (request offset 0xf1): the whole
+    bitmask of the [profiles] entry with the ims type for ims_apn, as stock's
+    builder copies the APN's supported types (Verizon's IMS APN: ims|ia,
+    0x140), else None (IMS alone, 0x40, unchanged from 0.3.22)."""
+    for profile in profiles:
+        if profile.types & APN_TYPES['ims'] and profile.apn.lower() == ims_apn.lower():
+            return profile.types
+    return None
+
+
 def resolve_default_network(name):
     """AAAA as stock's IMS service resolves an ISIM P-CSCF name
     (InetAddress.getByName on the default network: the internet bearer
@@ -386,7 +397,8 @@ def start(service, settings, stopped=lambda: False):
             ims_apn = net.get('ims_apn', 'ims')
             ims_ip = ims_ip_type(profiles, ims_apn)
             print('IMS bearer PDP type', ims_ip, '(from the IMS profile)' if ims_ip != 'ipv6' else '', flush=True)
-            activate(client, ims_apn, ims=True, ip_type=ims_ip, on_event=service.event)
+            activate(client, ims_apn, ims=True, ip_type=ims_ip,
+                     apn_types=ims_apn_types(profiles, ims_apn), on_event=service.event)
         if attach is None and net.getboolean('ims_pcscf_from_isim', True):
             # The ISIM's EF_PCSCF when the PCO has none (one read-only file).
             def fallback(bearer):
