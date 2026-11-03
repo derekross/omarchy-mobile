@@ -101,6 +101,7 @@ class BringupTests(unittest.TestCase):
              patch.object(bringup, 'initial_attach') as attach, \
              patch.object(bringup, 'provision_profiles') as profiles, \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate') as activate, \
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), \
              patch.object(bringup, 'data_snapshot'), patch.object(bringup, 'find_attach_bearer', return_value=None), \
              patch.object(bringup, 'start_stack'), patch.object(bringup, 'register'), \
              patch.object(bringup.carrier_apn, 'OVERRIDES', overrides), \
