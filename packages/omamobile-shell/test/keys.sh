@@ -109,6 +109,28 @@ echo false >"$t/locked"
 press; grep -q "omarchy-system-lock" "$log" || fail "an unanswered screen state reads as lit: the press locks"
 echo "ok - power key: lock, screen off, and wake by lock and screen state"
 
+# A double tap on the touchscreen (omamobile-doubletap): a dark screen wakes
+# as a short press wakes it, locked or not; a lit one is left alone.
+cat >"$t/bin/hyprctl" <<STUB
+#!/bin/bash
+if [[ \$1 == monitors ]]; then printf '[{"dpmsStatus": %s}]\n' "\$(cat "$t/dpms")"; exit 0; fi
+printf '{"class": "%s"}\n' "\$(cat "$t/class")"
+STUB
+tap2() { reset; keys double-tap; }
+echo true >"$t/locked"; echo false >"$t/dpms"
+tap2; grep -q "omarchy-shell lock wake" "$log" && grep -q "omarchy-brightness-display on" "$log" \
+  || fail "double tap, locked and dark: wakes the lock screen and lights it"
+echo false >"$t/locked"; echo false >"$t/dpms"
+tap2; grep -q "omarchy-brightness-display on" "$log" || fail "double tap, unlocked and dark: lights the screen"
+grep -q "omarchy-shell lock wake" "$log" && fail "double tap, unlocked and dark: no lock wake"
+for locked in true false; do
+  echo $locked >"$t/locked"; echo true >"$t/dpms"
+  tap2; [[ ! -s $log ]] || fail "double tap on a lit screen (locked $locked) does nothing"
+done
+grep -qE "omarchy-system-lock|lock dark|omamobile-sleepd" "$log" && fail "a double tap never locks or sleeps"
+[[ ! -e $t/run/omamobile-keys/power-wake ]] || fail "a double tap doesn't swallow the next power press"
+echo "ok - double tap: wakes a dark screen, locked or not, and leaves a lit one alone"
+
 # A lock slower than the long-press timer (it takes about a second on the
 # phone) must not turn the short press into a long one that wakes the lock.
 cat >"$t/bin/hyprctl" <<STUB

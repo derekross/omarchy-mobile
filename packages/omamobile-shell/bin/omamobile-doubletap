@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Double tap to wake, as on Android: two short taps close together, in time
+and place, on the touchscreen of a dark phone wake it as a short press of
+the power key does (omamobile-keys double-tap, which leaves a lit screen
+alone). A single touch no longer lights the screen: hypr/phone.lua turns
+Hyprland's misc:mouse_move_enables_dpms off, and the lock wakes on a double
+tap itself (patches/omarchy/0029).
+
+Runs for every user's graphical session (omamobile-doubletap.service); the
+user is in the input group, so it reads the touchscreen's evdev node
+without grabbing it (the shell and the fingerprint bridge keep reading it).
+The touchscreen is the first input device with INPUT_PROP_DIRECT, BTN_TOUCH
+and ABS_MT_POSITION_X, whatever its driver; with none it waits for one.
+"""
+
+import fcntl
+import glob
+import os
+import struct
+import subprocess
+import sys
+import time
+
+TAP_MAX = 0.30     # s, a finger down to up for a tap
+GAP_MAX = 0.40     # s, the first tap's lift to the second's touch
+DIST_MAX = 0.14    # of the touchscreen's width between the taps (150 px of 1080)
+WAIT = 5           # s between looks for a touchscreen
+
+EV_KEY, EV_ABS = 0x01, 0x03
+BTN_TOUCH = 0x14a
+ABS_MT_POSITION_X, ABS_MT_POSITION_Y = 0x35, 0x36
+INPUT_PROP_DIRECT = 0x01
+EVENT = struct.Struct("llHHi")   # struct input_event: timeval, type, code, value
+LONG_BITS = struct.calcsize("l") * 8
+
+
+def bitmask(text):
+    """A sysfs capability bitmask (hex words, the most significant first)."""
+    value = 0
+    for word in text.split():
+        value = (value << LONG_BITS) | int(word, 16)
+    return value
+
+
+def has(mask, bit):
+    return bool(mask >> bit & 1)
+
+
+def find_touchscreen(sysfs="/sys"):
+    """The /dev/input node of the first direct (on-screen) multi-touch
+    device, or None."""
+    def number(path):
+        return int(path.rsplit("event", 1)[1])
+    for event in sorted(glob.glob(sysfs + "/class/input/event*"), key=number):
+        caps = event + "/device/"
+        try:
+            props = bitmask(open(caps + "properties").read())
+            keys = bitmask(open(caps + "capabilities/key").read())
+            abs_ = bitmask(open(caps + "capabilities/abs").read())
+        except (OSError, ValueError):
+            continue
+        if has(props, INPUT_PROP_DIRECT) and has(keys, BTN_TOUCH) and has(abs_, ABS_MT_POSITION_X):
+            return "/dev/input/" + os.path.basename(event)
+    return None
+
+
+def x_range(fd):
+    """The touchscreen's X span (EVIOCGABS(ABS_MT_POSITION_X)), or 1080."""
+    try:
+        size = struct.calcsize("6i")
+        request = (2 << 30) | (size << 16) | (ord("E") << 8) | (0x40 + ABS_MT_POSITION_X)
+        _, low, high, _, _, _ = struct.unpack("6i", fcntl.ioctl(fd, request, bytes(size)))
+        return high - low if high > low else 1080
+    except OSError:
+        return 1080
+
+
+class DoubleTap:
+    """Fed input events; feed() answers True on the second tap of a double
+    tap. Coordinates are the slot's last reported ones (pointer emulation
+    reports BTN_TOUCH for the first finger down and the last one up)."""
+
+    def __init__(self, dist_max):
+        self.dist_max = dist_max
+        self.x = self.y = 0
+        self.down_at = None
+        self.down_xy = (0, 0)
+        self.last_tap = None    # (lifted at, where)
+
+    def feed(self, t, type_, code, value):
+        if type_ == EV_ABS and code == ABS_MT_POSITION_X:
+            self.x = value
+        elif type_ == EV_ABS and code == ABS_MT_POSITION_Y:
+            self.y = value
+        elif type_ == EV_KEY and code == BTN_TOUCH:
+            if value == 1:
+                self.down_at, self.down_xy = t, (self.x, self.y)
+            elif self.down_at is not None:
+                down_at, self.down_at = self.down_at, None
+                if t - down_at > TAP_MAX:
+                    self.last_tap = None
+                    return False
+                last, self.last_tap = self.last_tap, (t, self.down_xy)
+                if last and down_at - last[0] <= GAP_MAX and \
+                        abs(self.down_xy[0] - last[1][0]) + abs(self.down_xy[1] - last[1][1]) <= self.dist_max:
+                    self.last_tap = None
+                    return True
+        return False
+
+
+def wake():
+    subprocess.run(["omamobile-keys", "double-tap"], check=False)
+
+
+def watch(fd):
+    try:
+        taps = DoubleTap(DIST_MAX * x_range(fd))
+        while True:
+            data = os.read(fd, EVENT.size * 64)
+            if not data:
+                return
+            for i in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                sec, usec, type_, code, value = EVENT.unpack_from(data, i)
+                if taps.feed(sec + usec / 1e6, type_, code, value):
+                    wake()
+    finally:
+        os.close(fd)
+
+
+def main():
+    said = ""
+
+    def say(text):
+        # Once per change, not every WAIT seconds into the journal.
+        nonlocal said
+        if text != said:
+            print("omamobile-doubletap: " + text, flush=True)
+            said = text
+
+    while True:
+        path = find_touchscreen()
+        if not path:
+            say("no touchscreen yet")
+            time.sleep(WAIT)
+            continue
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError as e:
+            # Not readable (the user isn't in the input group) or just gone.
+            say("%s: %s" % (path, e))
+            time.sleep(WAIT)
+            continue
+        say("watching " + path)
+        try:
+            watch(fd)
+        except OSError as e:
+            # Gone (the driver reloaded): look again.
+            say("%s: %s" % (path, e))
+        time.sleep(WAIT)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)
