@@ -172,13 +172,13 @@ board_matches() {
 # driver the simple-framebuffer waits for, and the MAX77759 nvmem that ABL
 # reads the reboot reason from. They were built for this image's board.
 load_modules() {
-  local m
+  local m error
   [ -s /lib/modules/omamobile/order ] || return 0
   board_matches "initramfs modules" || return 0
   # BusyBox insmod may retry initialization after finit_module fails.
   # These modules can already have touched hardware before returning an error.
   while read -r m; do
-    /usr/local/bin/module-load-once "/lib/modules/omamobile/$m.ko" 2>/dev/null || say "module-load-once $m failed"
+    error=$(/usr/local/bin/module-load-once "/lib/modules/omamobile/$m.ko" 2>&1) || say "module-load-once $m failed: $error"
   done < /lib/modules/omamobile/order
 }
 load_modules
