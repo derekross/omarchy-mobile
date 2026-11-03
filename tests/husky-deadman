@@ -385,6 +385,15 @@ for sig in INT HUP; do
   pass "$sig during the soak: undo, registers back, unit and marker removed"
 done
 
+# ---- 9e2. a signal before b5-host saved anything: no saved file, no marker, nothing to put back ----
+rm -f $D/host.saved $MARK $D/b5-done "$left"; sed -i 's/^0x69 0xcb .*/0x69 0xcb 0xc8/' "$HDT_STATE/regs"; : > "$HDT_STATE/writes"
+"$tool" undo b5-host --meter > "$t/u.out" 2>&1 || { cat "$t/u.out"; tail -20 $LOG; fail "undo with nothing saved exits 0"; }
+grep -qE '^i2cset 0x69 0x(cb|c4|b9) ' "$HDT_STATE/writes" && { cat "$HDT_STATE/writes"; fail "undo with nothing saved wrote a charger register"; }
+[[ $(reg 0x69 0xcb) == 0xc8 && ! -e "$left" ]] || fail "0xcb bit 3 (the bootloader's) must stay, and no registers-not-restored"
+grep -q 'no saved registers anywhere' $LOG || fail "the nothing-saved case is logged"
+sed -i 's/^0x69 0xcb .*/0x69 0xcb 0xc0/' "$HDT_STATE/regs"
+pass "a signal before the registers were saved: the undo writes no charger register and leaves 0xcb bit 3 alone"
+
 # ---- 9f. a register that cannot be read at the restore counts as not restored ----
 rm -f $D/b5-done; : > "$HDT_STATE/writes"
 "$tool" run b5-host --meter --confirm 6 --grace 3 --soak 4 > "$t/run.out" 2>&1 &

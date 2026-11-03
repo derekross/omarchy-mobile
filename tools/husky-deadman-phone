@@ -840,14 +840,15 @@ revert() {
       if [[ -f $saved ]]; then
         restore_own_writes "$saved" || regs=1
       else
-        log "no saved registers anywhere: 0xcb bit 3 cleared if set, 0xc4 and 0xb9 left as they are"
-        otg_v_pgm 0 || regs=1
+        # neither host.saved nor the marker: the signal came before b5-host saved
+        # anything, so it has written nothing; bit 3 of 0xcb, if set, is the
+        # bootloader's (rule 4 of the boot undo), and 0xc4 and 0xb9 stay too
+        log "no saved registers anywhere: b5-host had written none of 0xcb/0xc4/0xb9, all left as they are"
       fi
       log "undo done: port cold $cold, registers restored $(( !regs )); 0x92 $(extbst), gpio5 $(gpio5_get), CC $(cc_partner), role $(role_now), POWER_STATUS $(pwr_status), udc $(udc_state), wifi $(wifi_up && echo up || echo down)"
       if (( cold )); then
         if (( regs )); then
-          if [[ -f $saved ]]; then cp "$saved" "$left" 2>/dev/null
-          else echo "no saved values: 0xcb bit 3 could not be cleared at $(date '+%F %T'); read 0xcb/0xc4/0xb9 against the dump by hand" > "$left"; fi
+          cp "$saved" "$left" 2>/dev/null   # regs is only set from a saved file
           REGS_LEFT=1
           log "port cold, but 0xcb/0xc4/0xb9 were NOT all restored: the saved values are in $left; restore them by hand and remove that file, b5-host refuses until then (no reset: the port is off)"
         fi
