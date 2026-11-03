@@ -1,11 +1,14 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a telephony: call audio and starting the modem at boot
 
-Status (2026-11-02): the SIM test passed on the owner's kernel (MODEM-PLAN,
-"SIM test results"): LTE registration, mobile data and texts both ways,
-with the modem and the RIL started by hand. Two things stand between that
-and a phone that works on its own: calls have no audio route, and nothing
-starts the modem at boot. Both are planned here; nothing below has run.
+Status (2026-11-03): the SIM test passed on the owner's kernel (MODEM-PLAN,
+"SIM test results"), and both parts of this plan have since run on the
+palmtop on 2026-11-02 (the daily kernel,
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`): speakerphone
+calls with audio both ways through section 1's route (#367), and a cold
+boot that started the modem and the phone service on its own through
+#372's opt-in unit. Section 2 marks which items #363 and #372 do and which
+remain targets.
 Sources: the 9a's stock vendor image (`vendor_a.img` from the owner's
 factory capture, read-only: the audio HAL's configuration and the AoC ALSA
 driver), `packages/omamobile-modem*`, MODEM-PLAN and AGENTS.md section 4.
@@ -71,35 +74,45 @@ stop in place.
 
 Opt-in and attended at first, with sleep blocked for the boot.
 
-1. **Packaging first.** `omamobile-modem` depends on
+1. **Packaging first.** *Done in #363.* `omamobile-modem` depends on
    `omamobile-device-cheetah`, which conflicts with `omamobile-device-tegu`,
    so the 9a's install used `pacman -U -dd`. Replace the dependency with the
    virtual `omamobile-modem-policy` (already provided by device-raven), have
    each supported device package provide it, and give tegu its own start
    policy. `-dd` is never the install method.
-2. **One modem service.** Give it tegu's start (today the bring-up script
+2. **One modem service.** *Partly in #372:* `omamobile-tegu-modem-up` is
+   packaged, with the explicit CP ONLINE check and an opt-in boot unit, and
+   #371 replaces the copied sitd unit with device drop-ins. *Target:* the
+   transient unit. Give it tegu's start (today the bring-up script
    `/usr/local/bin/omamobile-tegu-modem-up` and its transient unit) with the
    AoC's ordering, and drop the copied `/etc/systemd/system/omamobile-sitd.service`
    and the transient-unit workaround. sitd starts only after an explicit
    "CP ONLINE" check: a unit being active isn't enough.
-3. **Preflight before any hardware access:** the kernel, DT, firmware,
+3. **Preflight before any hardware access:** *Target.* #372 runs the
+   profile's own check (NV read-only, unmounted, checksums of its RAM
+   copies), after the drivers load because it needs CPIF's ports; the
+   up-front NV-only check and the gaps below are still to do. the kernel, DT, firmware,
    private provisioning and board properties present; the six NV and
    firmware partitions found by `PARTNAME`, read-only, unmounted and
    matching the checksums. Today's profile hashes five RAM copies, doesn't
    hash `modem_b`, and exempts `persist` from its read-only check: the boot
    preflight closes those gaps. A mismatch stops the start; the baseline is
    never refreshed automatically.
-4. **Two guards:** an atomic per-boot "attempted" marker, never cleared in
+4. **Two guards:** *Partly in #372:* a boot that has loaded CPIF refuses a
+   second start, and the latch is written and synced before any driver. *Target:*
+   keeping it from ONLINE until a clean shutdown. an atomic per-boot "attempted" marker, never cleared in
    that boot, and a persistent failure latch written and synced before any
    driver loads, kept through the whole phone-service start while this is
    being qualified. No automatic CP or sitd restart, module unload, power
    cycle or latch clearing.
-5. **Sleep:** take and confirm the sleep inhibitor before the modem drivers
+5. **Sleep:** *Done in #372*, before the drivers and until the reboot. take and confirm the sleep inhibitor before the modem drivers
    load, and hold it past sitd and the profile, until shutdown. Keep the
    owner's auto-sleep setting as it is; the inhibitor blocks the sleep and
    says why. No suspend hook that stops and restarts the modem. Low-battery
    actions must not force an unqualified suspend.
-6. **Failure stays visible:** the failed stage reported, diagnostics left in
+6. **Failure stays visible:** *Partly in #372:* the stage is reported and
+   the latch stays after a failed start, with no retry. *Target:* the shutdown
+   order through one modem service. the failed stage reported, diagnostics left in
    place, no retry. At shutdown, the established order: the phone service's
    cleanup, the CP off, then rfsd.
 
