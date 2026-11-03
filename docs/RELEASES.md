@@ -42,7 +42,7 @@ The audit behind this design (2026-10-13). "Step" names the roadmap step that re
 | `tools/display-hz` | DECON register addresses (gs201) | bring-up tool, per plan |
 | `tools/repo-build` | the default package list names `omamobile-device-cheetah` | 3 |
 | `CONTRIBUTING.md` §4 `ov` helper | `gs201-cheetah.dtb`, `device/cheetah/overlays` | 2 (`bin/omamobile overlay`) |
-| `packages/omamobile-modem` | `depends=(… omamobile-device-cheetah)`; only cheetah's image installs it (`ROOTFS_PACKAGES`) | 3 (depend on a virtual `omamobile-device` once another phone's modem runs) |
+| `packages/omamobile-modem` | `depends=(… omamobile-modem-policy)`, the virtual each device package with a modem provides (cheetah, raven, tegu, #363); only cheetah's image installs it (`ROOTFS_PACKAGES`) | 3 (done in #363 for the dependency; the images still to follow) |
 | `packages/omamobile-gnss`, `-modem` | `ro.hardware=cheetah` in the chroot props | per device, with its chroot map |
 | `packages/omamobile-audio` | the UCM profile `Google/cheetah/HiFi.conf`, the speaker stages | per device (audio is board tuning) |
 | `packages/omamobile-device-cheetah` | `gs201_aoc_rails`, `pcie_gs201`, modprobe and udev policy | stays per device: this is what the package is for |

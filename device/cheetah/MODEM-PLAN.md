@@ -1527,7 +1527,8 @@ tools/phone-ssh 'omamobile-sit hangup; sleep 2; omamobile-sit status;
 #   "AoC call routes restored". Then the human calls the phone: `omamobile-sit answer`, talk, hangup
 #   stop: no audio either way (record the journal: "voice PCM ... failed" means the AoC card; check that
 #     PipeWire does not hold PCM 4/11), distorted or loud audio (hang up at once), a release that is
-#     never confirmed (the RIL stops the modem unit by design after 12 s: one UFS pass; reboot after)
+#     never confirmed (after 12 s the RIL turns the radio off and exits: "Call release not confirmed",
+#     "attended reboot required"; reboot, which powers the CP off: one UFS pass)
 #   rollback: omamobile-sit hangup
 
 # M4.6 at boot: superseded by "M4.6: the modem stack at boot" at the end of section 3 (one switch,
@@ -2638,8 +2639,8 @@ tools/phone-ssh 'omamobile-sit answer; sleep 10; omamobile-sit status | grep -E 
 #   outgoing, to the human's other phone (international form); answer it there, hang up there after ~10 s:
 tools/phone-ssh 'omamobile-sit dial <NUMBER>; sleep 30; omamobile-sit status | grep -E "^call"'
 #   pass: the other phone rings and connects (silent), then "terminated" after the remote hang-up
-#   stop: "Call release was not confirmed; modem stopped" (the RIL powered the CP off by design: one UFS
-#     pass; reboot before anything else); a CP crash; any sound from the phone's speakers (stop at once:
+#   stop: "Call release not confirmed" and "attended reboot required" (the RIL turned the radio off and
+#     exited, leaving the CP on; reboot before anything else, one UFS pass on the way down); a CP crash; any sound from the phone's speakers (stop at once:
 #     nothing should route audio: record `amixer -c <aoc card> cget name="TDM_0_RX Mixer EP5"`)
 #   rollback: omamobile-sit hangup
 #   Never dial an emergency number to test (refused anyway; TELEPHONY-APPS-PLAN 3.3)

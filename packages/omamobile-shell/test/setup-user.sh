@@ -59,6 +59,7 @@ run() {
     GSETTINGS_NO_CLICK_POLICY="${GSETTINGS_NO_CLICK_POLICY:-}" \
     OMAMOBILE_VOICE_MODELS="${RUN_VOICE_MODELS:-$t/no-voice-models}" OMAMOBILE_VOXTYPE="${RUN_VOXTYPE:-voxtype}" \
     OMARCHY_PATH="${RUN_OMARCHY_PATH:-$t/omarchy}" \
+    OMAMOBILE_USER_UNITS="${RUN_USER_UNITS:-$t/no-user-units}" \
     bash bin/omamobile-setup-user "$@" >"$t/out" 2>&1 || { cat "$t/out"; fail "omamobile-setup-user runs"; }
 }
 run
@@ -346,6 +347,23 @@ RUN_HOME=$hk run
   || fail "a layout the user wrote stays"
 [[ -L $hk/.local/share/squeekboard/keyboards/fr.yaml ]] || fail "the others are linked beside it"
 pass "the keyboard: a layout of the user's own stays"
+
+# The Phone and Messages agent: enabled and started at every login where its
+# user unit is installed (not once: a preset the session never applied left
+# it disabled on a fresh install), nothing without the unit, and a login with
+# no user manager (the enable fails) doesn't fail the setup
+U=$t/user-units; mkdir -p "$U"; touch "$U/omatel-agent.service"
+hm=$t/home-agent; mkdir -p "$hm/.config/hypr" "$hm/.config/omarchy/extensions"
+cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hm/.config/hypr/"
+RUN_HOME=$hm RUN_USER_UNITS=$U run
+RUN_HOME=$hm RUN_USER_UNITS=$U run
+[[ $(grep -cx 'systemctl --user enable --now omatel-agent.service' "$hm/calls") == 2 ]] || fail "omatel-agent.service is enabled and started at every login"
+touch "$hm/systemctl-fails"
+RUN_HOME=$hm RUN_USER_UNITS=$U run
+grep -c 'could not enable omatel-agent.service' "$t/out" >/dev/null || fail "a failed enable is reported, not fatal"
+rm "$hm/systemctl-fails"
+if grep -c 'omatel-agent' "$H/calls" >/dev/null 2>&1; then fail "nothing is enabled without the agent's unit"; fi
+pass "the Phone and Messages agent is enabled and started at each login where its unit is installed"
 
 # --adopt: a user set up by hand, with no markers, keeps the files the
 # overwriting steps would change (shell.json, the scale, the cursor and

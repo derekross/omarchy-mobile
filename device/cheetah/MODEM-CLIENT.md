@@ -116,10 +116,15 @@ registration indication), unless `ims_required = yes`.
 - **Outgoing SMS** carry a durable 32-hex request id; an interrupted or
   uncertain send is marked `unknown`, never repeated automatically.
 - **Calls**: a hangup whose release isn't confirmed within 12 s, or a call
-  left over from a previous run, stops the modem unit (CP off, then rfsd):
-  the only way to be sure the radio isn't still carrying a call. That is a
-  CP power-off (one UFS handler pass) and is the one place the RIL powers
-  the modem off.
+  left over from a previous run, turns the radio off (best effort, AT+CFUN=0)
+  and stops sitd with the call still recorded as its own, for an attended
+  reboot. The journal says "Call release not confirmed: <reason>", the radio
+  and CP states, and "attended reboot required". The RIL no longer stops the
+  modem unit or powers the CP off: an in-place power-off reset the 9a once,
+  and on the 7 Pro every power-off costs a UFS error-handler pass. The unit
+  has `Restart=no`, so a manual restart in the same boot finds the recorded
+  call, turns the radio off again and exits. This path has run only in the
+  simulator.
 - **Storage**: received SMS in `/var/lib/omamobile-sit` (0700, files 0600):
   numbers and text, never to be copied into the repository.
 

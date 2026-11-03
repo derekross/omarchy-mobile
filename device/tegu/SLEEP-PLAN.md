@@ -1,12 +1,13 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a sleep: why s2idle drains so much
 
-Status (2026-11-01): s2idle usually works (RTC and power-key wakes; ten of
-ten 30-second cycles on 10-31 with the console kept through the freeze),
-but not always: four sleeps have never woken (two direct freezes, one
-30-minute systemd sleep with `tegu-mif-sleep` loaded, and the sixth
-30-second cycle of a boot on 10-30, which left the USB bus and needed a
-forced restart), and one more woke with UFS dead (`link startup failed` x5,
+Status (2026-11-02): s2idle usually works (RTC and power-key wakes; ten of
+ten 30-second cycles on 10-31 with the console kept through the freeze;
+126 of 127 120-second sleeps overnight on 11-01 to 11-02), but not always:
+six sleeps have never woken: two direct freezes, one 30-minute systemd
+sleep with `tegu-mif-sleep` loaded, the sixth 30-second cycle of a boot
+on 10-30 (it left the USB bus and needed a forced restart), the 21st of
+11-01's thirty cycles, and the overnight series' 127th; one more woke with UFS dead (`link startup failed` x5,
 then I/O errors and `emergency_ro`, 10-30 afternoon). The drain in sleep is
 high. Sleep tests are attended. The shell's auto-sleep (the `omamobile-sleep`
 toggle, which the package ships off) has been on on the palmtop since
@@ -527,6 +528,27 @@ with the cable in.
   1.2 s to about 0.25 s; before that, a second press often looked
   necessary. So none of the day's sleeps hung. This adds to the evidence
   but doesn't retire the hang of 10-28 to 10-30 either.
+
+  **An overnight series, 2026-11-01 to 11-02 (same release, unattended
+  through the night).** Two hundred 120 s sleeps were planned through
+  `systemctl suspend` with an RTC alarm, auto-sleep off for the run, the
+  console kept through the freeze (`printk.console_suspend=N`), cable in,
+  modem never loaded, NFC polling stopped by the sleep hook, Wi-Fi kept
+  loaded. 126 sleeps woke: `suspend_stats` success 126 and fail 0, wake IRQ
+  56 every time, no UFS or ACPM lines, and Wi-Fi came back after each
+  (brcmfmac re-probes after every wake: "device lost its state in sleep").
+  The 127th didn't wake (about 22:42 by the palmtop's clock): no SSH over
+  USB or Tailscale for nine hours, and the owner's Power + Volume Up in the
+  morning restarted it. It entered that sleep like the 126 before it, with
+  the same NFC notifications, hooks and timings, and the journal stops at
+  `Reached target Sleep` and the user slice's freeze. Nothing was kept:
+  `/var/lib/systemd/pstore` held only an older entry, so with the console
+  kept through the freeze, a Power + Volume Up reset doesn't keep the
+  ramoops region either (the console never reached it, or the reset
+  cleared it). That makes it one hang in 127 here, against one in 21 on
+  11-01 and about one in 40 before; the rate varies too much to compare
+  conditions with short runs. Logs: `logs/tegu-sleep-overnight-20261102/`
+  (the series script, `after-hang.txt`).
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or

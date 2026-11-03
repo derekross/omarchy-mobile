@@ -492,6 +492,22 @@ if command -v "${OMAMOBILE_VOXTYPE:-voxtype}" >/dev/null && [[ -f $voxmodels/ggm
     fi
   fi
 fi
+# The Phone and Messages agent (omatel-agent, pulled in by omamobile-apps)
+# runs from login, so an incoming call or text notifies with no app open.
+# Its user unit is preset enabled (WantedBy=default.target), but a preset
+# reaches a session only when something applies it, and on a fresh install
+# of the Pixel 7 Pro (2026-11-03) it never was: Messages opened to "service
+# isn't running" until the unit was started by hand. So enable it, and
+# start it now, at every login: idempotent (systemd keeps an enabled unit
+# enabled and a running one running), only where the unit is installed, and
+# never a failure of this script (firstboot runs without a user manager, and
+# the next login does it). The apps also activate the agent over D-Bus when
+# they open; this is for the notifications between their openings.
+units=${OMAMOBILE_USER_UNITS:-/usr/lib/systemd/user}
+if [[ -f $units/omatel-agent.service ]]; then
+  systemctl --user enable --now omatel-agent.service ||
+    echo "omamobile-setup-user: could not enable omatel-agent.service; trying again at the next login" >&2
+fi
 # Voxtype on the phone (docs/VOICE-PLAN.md, phase 3): Omarchy's base.en
 # stays the model, with Whisper's audio context cut to the clip's length
 # (context_window_optimization, for clips under 22.5 s). On the Pixel 7 Pro
