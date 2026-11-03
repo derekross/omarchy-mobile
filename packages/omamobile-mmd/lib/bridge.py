@@ -103,6 +103,9 @@ def is_emergency(number, d):
     return re.sub(r'[\s().-]', '', number) in d['emergency_numbers']
 
 
+# MM_BEARER_IP_METHOD_UNKNOWN: a bearer IP config with nothing in it.
+NO_IP_CONFIG = {'method': GLib.Variant('u', 0)}
+
 class Bridge:
     def __init__(self, exporter, link, settings):
         self.x = exporter
@@ -190,7 +193,7 @@ class Bridge:
             self.create_bearer(d)
         if self.bearer:
             self.x.set(self.bearer, mm.BEARER, Connected=d['data'], Interface=self.internet_interface(),
-                       Ip4Config=self.internet_ipv4(d))
+                       Ip4Config=self.internet_ipv4(d), Ip6Config=NO_IP_CONFIG)
         for name in d['interfaces']:
             if not self.x.has(self.modem, name):
                 self.x.add_interface(self.modem, name, self.interface_props(name, d))
@@ -296,7 +299,9 @@ class Bridge:
         # resolves the MMSC through these where MMS goes over this bearer.
         net = (self.status or {}).get('internet') or {}
         if not d['data'] or not net.get('address'):
-            return {}
+            # libmm-glib rejects an IP config without a method (mmsd-tng
+            # logged "method not given"): unknown, as MM reports no config.
+            return NO_IP_CONFIG
         return {'method': GLib.Variant('u', 2), 'address': GLib.Variant('s', net['address']),
                 'prefix': GLib.Variant('u', 32),
                 **{'dns' + str(i): GLib.Variant('s', value) for i, value in enumerate(net.get('dns', [])[:3], 1)}}
@@ -306,6 +311,7 @@ class Bridge:
         apn, ip_type = self.apn_settings()
         self.x.add(self.bearer, {mm.BEARER: dict(
             Interface=self.internet_interface(), Connected=d['data'], Ip4Config=self.internet_ipv4(d),
+            Ip6Config=NO_IP_CONFIG,
             IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
             ProfileId=-1, Properties={'apn': GLib.Variant('s', apn),
                                       'ip-type': GLib.Variant('u', IP_TYPES.get(ip_type, mm.IP_V4V6))})},
