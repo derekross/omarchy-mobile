@@ -4,10 +4,15 @@ home network code, so that a SIM works without anyone typing an APN.
 
 The attach APN is the one the modem registers with (SET_INITIAL_ATTACH_APN).
 It comes from an override's attach_apn, else from a database APN typed "ia";
-empty means "the internet APN", the usual case. Some carriers register only
-with another one: on 2026-11-02 a SIM on Verizon's network never registered
-with the internet APN (vzwinternet) as attach APN and registered with vzwims
-as attach APN (our captures on the Pixel 7 Pro, 20:26 and 20:35).
+empty means "the internet APN", the usual case, and "none" means that no
+attach APN is sent at all: the modem attaches with its own carrier profile,
+as stock's RIL does on a Verizon network (device/cheetah/IMS-SHANNON.md
+sections 11 and 12, 2026-11-03).
+
+An override can carry the rest of what a carrier needs beyond its APNs, with
+the same meaning as the keys in modem-sit.conf: ims_apn, ims_first,
+internet_cid and the modem-managed data profiles (profile_<ID> = the
+[profiles] line). A value typed in the config always wins over an override.
 
 The SIM's home network (MCC and MNC) is the start of its IMSI. It is looked
 up first in the project's overrides (apn-overrides.conf: carriers the
@@ -60,8 +65,33 @@ def plain_apn(value):
     return value if APN.fullmatch(value) and len(value) <= 99 else ''
 
 
+YES_NO = {'yes': True, 'no': False, 'true': True, 'false': False, 'on': True, 'off': False}
+
+
+def override_values(section):
+    """One override section's values, checked: apn (required), attach_apn
+    (an APN, "none", or '' for the internet APN), ims_apn, ims_first
+    (yes/no or None), internet_cid (1..15 or None) and profiles, the
+    profile_<ID> lines as (ID, line) pairs for data_call.parse_profile. A
+    value that doesn't check is left out, never guessed."""
+    apn = plain_apn(section.get('apn'))
+    if not apn:
+        return None
+    ims_first = YES_NO.get((section.get('ims_first') or '').strip().lower())
+    cid = (section.get('internet_cid') or '').strip()
+    internet_cid = int(cid) if cid.isdigit() and 1 <= int(cid) <= 15 else None
+    profiles = []
+    for key in section:
+        if key.startswith('profile_') and key[8:].isdigit():
+            profiles.append((key[8:], section[key].strip()))
+    return dict(apn=apn, attach_apn=plain_apn(section.get('attach_apn')),
+                ims_apn=plain_apn(section.get('ims_apn')), ims_first=ims_first,
+                internet_cid=internet_cid, profiles=sorted(profiles, key=lambda p: int(p[0])),
+                carrier=section.get('name', '').strip(), source='override')
+
+
 def from_overrides(mcc, mncs, path=None):
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = configparser.ConfigParser(interpolation=None, default_section='-no-defaults-')
     try:
         if not parser.read(path or OVERRIDES):
             return None
@@ -69,13 +99,18 @@ def from_overrides(mcc, mncs, path=None):
         return None
     for mnc in mncs:
         key = f'{mcc}/{mnc}'
-        if parser.has_section(key):
-            section = parser[key]
-            apn = plain_apn(section.get('apn'))
-            if apn:
-                return dict(apn=apn, attach_apn=plain_apn(section.get('attach_apn')),
-                            ims_apn=plain_apn(section.get('ims_apn')),
-                            carrier=section.get('name', '').strip(), source='override')
+        if not parser.has_section(key):
+            continue
+        section = dict(parser[key])
+        # "like = MCC/MNC": the same as another section (one hop; the
+        # section's own keys win), so a carrier's codes are listed once.
+        like = section.pop('like', '').strip()
+        if like and parser.has_section(like):
+            section = {**dict(parser[like]), **section}
+            section.pop('like', None)
+        found = override_values(section)
+        if found:
+            return found
     return None
 
 
@@ -129,15 +164,17 @@ def from_database(mcc, mncs, path=None):
                 found.append((provider_rank(provider, nets), index, provider, apn))
         if found:
             _, _, provider, apn = min(found, key=lambda f: f[:2])
-            return dict(apn=apn, attach_apn=attach_apn(provider), ims_apn='',
+            return dict(apn=apn, attach_apn=attach_apn(provider), ims_apn='', ims_first=None,
+                        internet_cid=None, profiles=[],
                         carrier=(provider.findtext('name') or '').strip(), source='carrier-database')
     return None
 
 
 def lookup(imsi, database=None, overrides=None):
-    """The internet APN, the attach APN ('' for the internet APN) and the
-    IMS APN when an override names one, for the SIM with this IMSI, or None.
-    The result holds no part of the IMSI."""
+    """The internet APN, the attach APN ('' for the internet APN, "none" for
+    no attach APN at all), and, when an override names them, the IMS APN,
+    ims_first, internet_cid and the data profiles, for the SIM with this
+    IMSI, or None. The result holds no part of the IMSI."""
     try:
         mcc, mncs = home_plmn(imsi)
     except ValueError:

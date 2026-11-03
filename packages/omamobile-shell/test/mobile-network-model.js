@@ -63,6 +63,11 @@ test("APN field: auto, plain APNs, nothing else", () => {
   assert.deepStrictEqual(M.roamingArgv(false), ["omamobile-mobile-network", "roaming", "off"])
   assert.ok(M.apnSavedText("auto").indexOf("restart") >= 0)
   assert.ok(M.apnSavedText("ims", true).indexOf("attach APN") >= 0)
+  // attach_apn = none: no attach APN is sent (Verizon's network).
+  assert.equal(M.attachText({ in_use: "VZWINTERNET", source: "override", attach_in_use: "none", attach_source: "override" }),
+               "Not sent: the carrier profile's own  \u00b7  Chosen from your SIM")
+  assert.equal(M.attachText({ in_use: "a.example", attach_in_use: "ims.example", attach_source: "manual" }),
+               "ims.example  \u00b7  Typed in settings")
   assert.deepStrictEqual(M.attachArgv("ims"), ["omamobile-mobile-network", "attach-apn", "ims"])
 })
 

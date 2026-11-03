@@ -149,6 +149,12 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
 done
 pass "install stages the package, enables only the guards, and nothing that marks a slot"
 
+for m in cpif shm_ipc pcie_gs201_cp; do
+  grep -qx "blacklist $m" "$tmp/root/usr/lib/modprobe.d/omamobile-tegu-guards.conf" \
+    || fail "the modem policy must prevent $m from autoloading"
+done
+pass "the modem drivers stay behind their guarded startup"
+
 # Every driver the graphics guard loads is kept from autoloading (gs_dsim_cmd
 # aside: it autoloads from its node and sends nothing until allow_tx is on,
 # which only the guard sets), and nothing in modprobe.d would break the

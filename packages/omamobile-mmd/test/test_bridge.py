@@ -36,6 +36,11 @@ class ApnSettings(unittest.TestCase):
         self.assertEqual(self.apn(dict(apn='auto'), used), 'vzwinternet')
         self.assertEqual(self.apn(dict(apn='internet.example', attach_apn='auto'), attach=True), 'internet.example')
         self.assertEqual(self.apn(dict(apn='internet.example', attach_apn='ims'), attach=True), 'ims')
+        # attach_apn = none (sitd 0.3.24+): no initial attach APN is sent.
+        used = dict(value='VZWINTERNET', source='override', attach='none', attach_source='override')
+        self.assertEqual(self.apn(dict(apn='auto'), used, attach=True), '')
+        self.assertEqual(self.apn(dict(apn='auto'), used), 'VZWINTERNET')
+        self.assertEqual(self.apn(dict(apn='internet.example', attach_apn='none'), attach=True), '')
 
     def test_sources(self):
         self.assertEqual(self.apn(dict(apn='internet.example')), 'internet.example')
@@ -63,6 +68,12 @@ class Derive(unittest.TestCase):
         for status, state, failed in cases:
             d = bridge.derive(status)
             self.assertEqual((d['state'], d['failed']), (state, failed), status['modem']['sim'])
+
+    def test_signal_only_while_registered_and_clamped(self):
+        self.assertEqual(bridge.derive(registered_status(signal=32))['signal'], 32)
+        self.assertEqual(bridge.derive(registered_status(signal=250))['signal'], 100)
+        self.assertEqual(bridge.derive(registered_status(signal=None))['signal'], 0)
+        self.assertEqual(bridge.derive(blank_status(sim='ready', radio='on', signal=40))['signal'], 0)
 
     def test_details(self):
         d = bridge.derive(blank_status(sim='pin'))

@@ -294,6 +294,20 @@ persist_dump() { # $1 path in persist, $2 output, $3 the partition's device
   [[ -s $2 ]]
 }
 
+# Two files the same? cmp(1) (diffutils) answers 0 same, 1 different and
+# anything else for trouble (127: not installed). Trouble is never "differs":
+# it stops the start with its own reason, so the guard stays closed and honest.
+same_file() { # $1 $2
+  local rc=0
+  command -v cmp >/dev/null || die "cmp (diffutils) missing: can't compare the read-only copies with their source. Not starting: install diffutils"
+  cmp -s -- "$1" "$2" || rc=$?
+  case $rc in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) die "cmp failed comparing $1 with $2 (exit $rc). Not starting" ;;
+  esac
+}
+
 # The 7 Pro's read-only copies, once (FINGERPRINT-PLAN F19.3, done by the
 # runner): mfg_data and persist:/ss/{0,nsp} into $STATE, their sha256
 # recorded in $STATE/provenance. A phone set up by hand (copies there, no
@@ -304,13 +318,14 @@ provision() {
   p=$(ro_part persist)
   m=$(ro_part mfg_data)
   command -v debugfs >/dev/null || die "no debugfs (e2fsprogs): can't read persist without mounting it"
+  command -v cmp >/dev/null || die "cmp (diffutils) missing: can't check the read-only copies. Not starting: install diffutils"
   install -d -m 0700 "$STATE" "$STATE/persist-ss"
   tmp=$STATE/.provision
   rm -rf "$tmp"
   install -d -m 0700 "$tmp"
   if [[ -e $STATE/persist-ss/0 ]]; then
     persist_dump /ss/0 "$tmp/0" "$p" || die "can't read persist:/ss/0 to check the existing TDP copy"
-    cmp -s "$tmp/0" "$STATE/persist-ss/0" ||
+    same_file "$tmp/0" "$STATE/persist-ss/0" ||
       refuse "$STATE/persist-ss/0 differs from persist:/ss/0: Linux's TDP copy and stock's no longer agree. Not starting: ask (FINGERPRINT-PLAN F19)"
     say "the existing TDP copy matches persist:/ss/0: recording it"
   else
@@ -325,7 +340,7 @@ provision() {
   dd if="$DEVDIR/$m" of="$tmp/mfg_data.img" bs=1M status=none || die "can't read mfg_data"
   [[ -s $tmp/mfg_data.img ]] || die "mfg_data read empty"
   chmod 0600 "$tmp/mfg_data.img"
-  if [[ -s $STATE/mfg_data.img ]] && cmp -s "$tmp/mfg_data.img" "$STATE/mfg_data.img"; then
+  if [[ -s $STATE/mfg_data.img ]] && same_file "$tmp/mfg_data.img" "$STATE/mfg_data.img"; then
     say "the existing mfg_data.img matches the partition: recording it"
   else
     if [[ -e $STATE/mfg_data.img ]]; then

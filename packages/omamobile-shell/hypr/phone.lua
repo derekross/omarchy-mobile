@@ -43,6 +43,21 @@ hl.window_rule({
 -- bar and the on-screen keyboard, like a phone sheet. After the modal rule,
 -- so a modal chooser is a sheet too. Nautilus's own windows tile anyway.
 hl.window_rule({ match = { class = "^org.gnome.Nautilus$" }, float = false, maximize = true })
+-- Omarchy's own terminals: the install and setup screens (Install > AI >
+-- Dictation and the rest open omarchy-launch-floating-terminal-with-
+-- presentation, app-id org.omarchy.terminal, title Omarchy), btop, its bash
+-- and TUI windows. Omarchy floats each at 875x600 through the floating-window
+-- tag, wider than the whole screen. Dropping the tag above already lets the
+-- maximize rule take them; this says so for these by name, after Omarchy's
+-- float rule, so an install screen can't float off the side whatever
+-- happens to the tag. Maximized, they fill the space between the bar and the
+-- on-screen keyboard, and the logo they open with fits that width (the
+-- Omarchy patch 0028 in omamobile-omarchy).
+hl.window_rule({
+  match = { class = "^(org\\.omarchy\\.(terminal|bash|btop)|TUI\\.float)$" },
+  float = false,
+  maximize = true,
+})
 -- Tensaku, the screenshot editor (Open With, or the toast without Loupe): Omarchy floats
 -- it by class (default/hypr/apps/system.lua), not through the floating-window
 -- tag the first rule drops, so it opened as a desktop-sized float (814x936 on

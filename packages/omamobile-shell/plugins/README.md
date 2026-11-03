@@ -123,7 +123,7 @@ existed finds them under "Add tiles" too.
 | --- | --- |
 | Wi-Fi | `Networking.wifiEnabled` (NetworkManager); status shows the SSID. The chevron or a long-press opens the Wi-Fi picker (below) |
 | Bluetooth | `omarchy-bluetooth-power on/off`, the same rfkill path as Omarchy's Bluetooth panel. The chevron or a long-press opens the Bluetooth panel (below) |
-| Mobile data | `omamobile-sit data on/off` (omamobile-modem-sit), which starts or stops `omamobile-sit-data.service` through polkit; on while that unit is active, with the operator and technology from `/run/omamobile-sit/state.json`. "No modem" until omamobile-sitd publishes that file |
+| Mobile data | `omamobile-sit data on/off` (omamobile-modem-sit), which starts or stops `omamobile-sit-data.service` through polkit; on while that unit is active, with the operator's name and technology from `/run/omamobile-sit/state.json` (just the technology when sitd has no name: a bare network code never shows) and "No signal" while unregistered. Its icon is the status bar's signal bars from that file's `signal`, crossed out only with no modem, mobile data off or no network. "No modem" until omamobile-sitd publishes that file |
 | Airplane mode | Wi-Fi, Bluetooth and WWAN rfkill switches together; on when all are soft-blocked. Turning it off unblocks only the ones that were on (`~/.local/state/omamobile/airplane-restore`). NFC keeps its own tile, and the modem's radio (`omamobile-sit radio`) is not touched, since turning that back on needs a reboot today |
 | Hotspot | `nmcli device wifi hotspot con-name Hotspot` (NetworkManager makes the SSID and password; the Wi-Fi client link drops while it runs) and `nmcli connection down Hotspot`. Long-press opens the Wi-Fi picker |
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
@@ -1031,6 +1031,11 @@ the Pixel 7 Pro), as bars and the network type ("LTE", "5G", "R" when
 roaming), "No SIM", "SIM locked", the airplane when the radio is off, and
 nothing without a modem. Signal strength shows as empty bars until the
 modem reports a reading (SIT signal strength is TELEPHONY-APPS-PLAN T8).
+The watcher re-reads every property from ModemManager's ObjectManager on any
+PropertiesChanged, InterfacesAdded or InterfacesRemoved from the service, when
+its name changes owner (then again 1, 3 and 10 s later, since a restarted
+service may export its modem, or fix a first wrong state, without a signal),
+and every 20 s; a failed read is logged and never stops it.
 
 **Emergency call:** the lock screen's "Emergency call" button (Omarchy patch
 0014, under the number pad on touch-only devices) calls `omarchy-shell shell

@@ -4,19 +4,38 @@ owner. This order registered on LTE with IMS voice and SMS on this phone:
 
   1. wait for the USIM application to be READY (type 2, state 5); a PIN,
      PUK or network lock ends start-up at once (no PIN entry here);
-  2. the APNs: [network] apn and attach_apn when typed, else the SIM's own
-     (GET_IMSI's home network code looked up in the carrier overrides and
-     database, carrier_apn.py); radio off (AT+CFUN=0), the initial attach
-     APN (the carrier's attach APN, else the internet APN), the default
-     data profile (the internet APN; skipped when none is known);
-  3. radio on (AT+CFUN=1), wait for packet registration;
-  4. NR mode 0 ([network] nr = off): stay on LTE (NR registered, but
-     carried no traffic on this phone), wait for LTE registration;
-  5. the internet bearer (CID 1, rmnet0), when an APN is known: without
-     one the phone registers for calls and SMS and reports mobile data
-     unavailable;
-  6. IMS: stack start, the IMS bearer (CID 2, IPv6), ADD_PDN_INFO, then wait
-     for an IMS registration with voice and SMS.
+  2. the carrier's settings: [network] apn, attach_apn, ims_apn, ims_first
+     and internet_cid when typed, else the SIM's own (GET_IMSI's home
+     network code looked up in the carrier overrides and database,
+     carrier_apn.py; the overrides also carry a carrier's data profiles).
+     Then read the radio state (AT+CFUN?) and, with the radio as found, send
+     the initial attach APN (attach_apn, else apn; none: not sent, the
+     modem attaches with its carrier profile, as stock's RIL did on a
+     Verizon network; no APN known: not sent either), every data profile
+     (profile 0 from apn unless [profiles], or the override, has its own,
+     then the rest; none without an APN) and NR mode 0 ([network] nr = off:
+     stay on LTE; NR registered but carried no traffic on this phone);
+  3. radio on (AT+CFUN=1) once, unless it was already on: stock's order,
+     with no radio cycle (device/cheetah/MODEM-PROVIDER-PROFILES.md
+     section 2). An unreadable radio state falls back to 0.3.14's cycle
+     (AT+CFUN=0 first). Then wait for packet registration (on LTE with
+     nr = off) and log how long it took;
+     With attach_apn = none, wait up to ATTACH_BEARER_WAIT s for the modem's
+     own attach bearer (listed with its P-CSCF; every bearer listed then is
+     recorded as modem-owned and never released);
+  4. the internet bearer (internet_cid, 1 unless the carrier attaches on
+     its IMS APN; its rmnet device is found by omamobile-sit-data), when an
+     APN is known: without one the phone registers for calls and SMS and
+     reports mobile data unavailable;
+  5. IMS: stack start, then ADD_PDN_INFO for the modem's attach bearer when
+     one with a P-CSCF is listed (no IMS setup of our own, as stock); else
+     the IMS bearer (CID 2; IPv6, or the IMS profile's
+     home IP type, as stock takes it from the IMS APN), the hidden menu and
+     the OMA-DM menu, ADD_PDN_INFO (its P-CSCF from the bearer's PCO, else
+     from the ISIM's EF_PCSCF with [network] ims_pcscf_from_isim = yes, a
+     name resolved over the IMS bearer, the internet bearer's DNS or the
+     host resolver), then wait for an IMS registration with voice and SMS.
+     The stock IMS service and its requests: device/cheetah/IMS-SHANNON.md.
 
 No retransmission of SMS/calls and no warm CP restart. A failed or uncertain
 step up to the internet bearer ends start-up; the service exits and the
@@ -25,12 +44,57 @@ running with data only, unless [network] ims_required = yes.
 """
 import time
 
-from at import radio
+from at import radio, radio_state
 import carrier_apn
-from data_call import activate, initial_attach, provision_default_profile
+from data_call import APN_TYPES, activate, attach_bearer, configured_profiles, entries, initial_attach
+from data_call import owned_ids, provision_profiles, record_modem_owned, summary
+import data_call
+from data_call import paths as bearer_paths
 from ims import register, start_stack
-from radio_settings import nr_mode
+from isim import bearer_dns, ipv6_pcscf, resolve_on_bearer, resolve_system
+from radio_settings import SAVED_NR, nr_mode
 from sit import ModemError
+
+
+def ims_ip_type(profiles, ims_apn):
+    """The IMS bearer's PDP type: the home protocol of the [profiles] entry
+    with the ims type for ims_apn, as stock takes it from the IMS APN
+    (Verizon's IMS APN is IPv4v6 at home), else IPv6 (unchanged from 0.3.19)."""
+    for profile in profiles:
+        if profile.types & APN_TYPES['ims'] and profile.apn.lower() == ims_apn.lower():
+            return profile.ip
+    return 'ipv6'
+
+
+def ims_apn_types(profiles, ims_apn):
+    """The IMS setup's APN-type bitmask (request offset 0xf1): the whole
+    bitmask of the [profiles] entry with the ims type for ims_apn, as stock's
+    builder copies the APN's supported types (Verizon's IMS APN: ims|ia,
+    0x140), else None (IMS alone, 0x40, unchanged from 0.3.22)."""
+    for profile in profiles:
+        if profile.types & APN_TYPES['ims'] and profile.apn.lower() == ims_apn.lower():
+            return profile.types
+    return None
+
+
+def resolve_default_network(name):
+    """AAAA as stock's IMS service resolves an ISIM P-CSCF name
+    (InetAddress.getByName on the default network: the internet bearer
+    without Wi-Fi): the internet bearer's own DNS servers from its setup
+    response, then the host resolver, which may be another link."""
+    found = []
+    response = bearer_paths(data_call.INTERNET_CID)[1]
+    if response.exists():
+        bearer = response.read_bytes()
+        if len(bearer) >= 132 and any(bearer[9:25]):
+            source, servers = bearer_dns(bearer)
+            try:
+                found = resolve_on_bearer(name, source, servers) if servers else []
+            except (OSError, ValueError):
+                found = []
+            if found:
+                print(f'P-CSCF from ISIM: {name} resolved through the internet bearer\'s DNS', flush=True)
+    return found or resolve_system(name)
 
 
 def sim_ready(payload):
@@ -97,22 +161,34 @@ def typed(net, key):
     return '' if value.lower() == 'auto' else value
 
 
+def yes_no(value, key):
+    value = value.strip().lower()
+    if value in ('yes', 'true', 'on', '1'):
+        return True
+    if value in ('no', 'false', 'off', '0'):
+        return False
+    raise ValueError(f'[network] {key} must be yes, no or auto')
+
+
 def choose_apn(client, net, sim_payload):
-    """The APNs for this start-up and where they came from.
+    """The carrier settings for this start-up and where they came from.
 
     apn: the internet APN ('' when none is known: no internet bearer);
     attach_apn: the APN the modem registers with ('' means the internet
-    APN); ims_apn. source and attach_source: 'manual' ([network] apn,
-    attach_apn), 'override' or 'carrier-database' (the SIM's home network
-    code), 'none' (no internet APN) or 'same' (attach with the internet APN).
+    APN, "none" means that no attach APN is sent); ims_apn; ims_first and
+    internet_cid (the [network] keys' meaning); profiles: a carrier
+    override's data profile lines, for data_call.configured_profiles.
+    source and attach_source: 'manual' ([network] apn, attach_apn),
+    'override' or 'carrier-database' (the SIM's home network code), 'none'
+    (no internet APN) or 'same' (attach with the internet APN).
 
-    A typed value always wins. The SIM is read only for what isn't typed: a
-    typed internet APN with attach_apn auto still takes the carrier's attach
-    APN. Logs sources only: never the IMSI, the network code or an APN (an
-    APN can tell which carrier a phone uses)."""
-    manual_apn, manual_attach, manual_ims = typed(net, 'apn'), typed(net, 'attach_apn'), typed(net, 'ims_apn')
+    A typed value always wins. The SIM is read for whatever isn't typed: a
+    typed internet APN still takes the carrier's attach APN, bearer order
+    and profiles. Logs sources only: never the IMSI, the network code or an
+    APN (an APN can tell which carrier a phone uses)."""
+    manual = {key: typed(net, key) for key in ('apn', 'attach_apn', 'ims_apn', 'ims_first', 'internet_cid')}
     found = None
-    if not (manual_apn and manual_attach):
+    if not all(manual.values()):
         aid = usim_aid(sim_payload)
         try:
             if aid is None:
@@ -122,19 +198,108 @@ def choose_apn(client, net, sim_payload):
             print("Startup: the SIM's home network could not be read (" + type(error).__name__ + ')', flush=True)
     found = found or {}
     labels = {'override': "the project's carrier overrides", 'carrier-database': 'the carrier database'}
-    apn = manual_apn or found.get('apn', '')
-    source = 'manual' if manual_apn else (found['source'] if apn else 'none')
-    attach = manual_attach or found.get('attach_apn', '')
-    attach_source = 'manual' if manual_attach else (found['source'] if attach else 'same')
+    apn = manual['apn'] or found.get('apn', '')
+    source = 'manual' if manual['apn'] else (found['source'] if apn else 'none')
+    attach = manual['attach_apn'] or found.get('attach_apn', '')
+    attach_source = 'manual' if manual['attach_apn'] else (found['source'] if attach else 'same')
+    if manual['ims_first']:
+        ims_first = yes_no(manual['ims_first'], 'ims_first')
+    else:
+        ims_first = found.get('ims_first') is True
+    if manual['internet_cid']:
+        if not manual['internet_cid'].isdigit():
+            raise ValueError('[network] internet_cid must be 1..15 and not 2 (IMS), or auto')
+        internet_cid = int(manual['internet_cid'])
+    else:
+        internet_cid = found.get('internet_cid') or 1
     if source in labels:
         print(f'Startup: APN chosen from {labels[source]}', flush=True)
     if attach_source in labels:
-        print(f'Startup: attach APN chosen from {labels[attach_source]}', flush=True)
+        print(f'Startup: attach APN chosen from {labels[attach_source]}'
+              + (' (none: not sent)' if attach.lower() == 'none' else ''), flush=True)
+    if found.get('source') == 'override' and (found.get('profiles') or found.get('ims_first') is not None
+                                              or found.get('internet_cid')):
+        print(f"Startup: bearer order and data profiles from {labels['override']}"
+              + (' (typed values kept)' if any(manual.values()) else ''), flush=True)
     if not apn:
         print('Startup: no APN for this SIM in the carrier database; registering for calls and SMS '
               'without mobile data (set [network] apn in /etc/omamobile/modem-sit.conf)', flush=True)
-    return dict(apn=apn, attach_apn=attach, ims_apn=manual_ims or found.get('ims_apn') or 'ims',
+    return dict(apn=apn, attach_apn=attach, ims_apn=manual['ims_apn'] or found.get('ims_apn') or 'ims',
+                ims_first=ims_first, internet_cid=internet_cid, profiles=list(found.get('profiles') or []),
                 source=source, attach_source=attach_source)
+
+
+def data_snapshot(client, label):
+    """Registration and the data-call list, as the modem reports them at
+    registration: whether a bearer is ever listed before the setup. States,
+    codes and counts only."""
+    try:
+        reg = client.request(0x0701)
+        calls = client.request(0x0602)
+    except (TimeoutError, RuntimeError) as error:
+        print(f'{label}: snapshot unavailable: {error}', flush=True)
+        return
+    state = (reg[0], reg[1], reg[3]) if len(reg) >= 4 else tuple(reg[:4])
+    print(f'{label}: PS state, reject, RAT {state}; data calls listed {calls[0] if calls else "none"}',
+          flush=True)
+
+
+# With attach_apn = none, how long after packet registration start-up waits
+# for the modem's own attach bearer to be listed with a P-CSCF. On stock
+# (Verizon network, 2026-11-02) it arrived unsolicited with the attach.
+ATTACH_BEARER_WAIT = 20
+
+
+def find_attach_bearer(service, deadline, stopped, *, adopt_unknown):
+    """The data-call item of an IMS-capable bearer the modem brought up on
+    its own (data_call.attach_bearer: active, IPv6 or IPv4v6, with a P-CSCF,
+    not one sitd owns), from GET_DATA_CALL_LIST and the latest
+    IND_DATA_CALL_LIST_CHANGED, polled until deadline (monotonic); or None.
+    Each list is logged when it changes, as CID, type, active, P-CSCF and
+    DNS counts: never an address. The bearer found is recorded as
+    modem-owned. adopt_unknown: also record every other listed bearer sitd
+    doesn't own (only before sitd has set up any of its own)."""
+    client = service.client
+    logged = {}
+    found = None
+
+    def check():
+        nonlocal found
+        for source, payload in (('list', client.request(0x0602)),
+                                ('indication', service.data_call_list)):
+            if payload is None:
+                continue
+            try:
+                items = entries(payload)
+            except RuntimeError as error:
+                line = f'not decoded ({error}, {len(payload)} bytes)'
+                items = []
+            else:
+                line = f'{len(items)} item(s)' + ''.join(f'; {summary(i)}' for i in items)
+            if logged.get(source) != line:
+                print(f'data-call {source}: {line}', flush=True)
+                logged[source] = line
+            owned = owned_ids()
+            if adopt_unknown:
+                unknown = {i[2] for i in items} - owned
+                if unknown:
+                    record_modem_owned(unknown)
+            found = attach_bearer(items, owned)
+            if found is not None:
+                return True
+        return False
+
+    try:
+        if not check() and deadline > time.monotonic():
+            wait_for(service, check, deadline - time.monotonic(), stopped)
+    except TimeoutError:
+        pass
+    if found is None:
+        print('no modem-owned attach bearer with a P-CSCF listed', flush=True)
+        return None
+    record_modem_owned({found[2]})
+    print(f'modem-owned attach bearer for IMS: {summary(found)}', flush=True)
+    return found
 
 
 def packet_registered(payload, *, lte=False):
@@ -172,6 +337,12 @@ def start(service, settings, stopped=lambda: False):
     client = service.client
     net = settings['network']
     ip_type = net.get('ip_type', 'ipv4v6')
+    # A bad [profiles] line stops here, before the SIM and the radio; the
+    # set is built again below with the APN chosen for this SIM.
+    try:
+        configured_profiles(settings, '')
+    except ValueError as error:
+        raise RuntimeError(f'Bad data profile in /etc/omamobile/modem-sit.conf: {error}') from None
     previous = None
     locked = None
     last = b''
@@ -207,31 +378,115 @@ def start(service, settings, stopped=lambda: False):
                 2: 'card error'}.get(previous[0] if previous else None, 'unknown card state')
         raise TimeoutError(f'No ready USIM within {timeout} s ({card})') from None
     chosen = choose_apn(client, net, last)
-    apn = chosen['apn']
+    apn, ims_apn = chosen['apn'], chosen['ims_apn']
     # The APN the modem registers with: the carrier's attach APN when it has
-    # one (Verizon's network registered only with "vzwims", 2026-11-02), else
-    # the internet APN. Without either, the modem keeps its own.
-    attach = chosen['attach_apn'] or apn
-    service.apn = dict(value=apn, source=chosen['source'], attach=attach,
+    # one, else the internet APN; "none" sends no SET_INITIAL_ATTACH_APN at
+    # all, as stock's RIL on a Verizon network (2026-11-02): the modem
+    # attaches with its carrier profile's settings, and its attach bearer
+    # (with the P-CSCF) carries IMS. Without any APN, the modem keeps its own.
+    attach_apn = chosen['attach_apn'] or apn
+    attach_none = attach_apn.lower() == 'none'
+    cid = chosen['internet_cid']
+    if not 1 <= cid <= 15 or cid == data_call.IMS_CID:
+        raise ValueError('[network] internet_cid must be 1..15 and not 2 (IMS)')
+    data_call.INTERNET_CID = cid
+    try:
+        profiles = configured_profiles(settings, apn, chosen['profiles'])
+    except ValueError as error:
+        raise RuntimeError(f'Bad data profile (/etc/omamobile/modem-sit.conf [profiles], or the carrier '
+                           f'overrides): {error}') from None
+    service.apn = dict(value=apn, source=chosen['source'], attach=attach_apn,
                        attach_source=chosen['attach_source'] if chosen['attach_apn'] else 'same')
+    began = time.monotonic()
     service.stage('attach')
-    radio(False)
-    if attach:
-        initial_attach(client, attach, ip_type)
-    if apn:
-        provision_default_profile(client, apn, ip_type)
+    level = radio_state()
+    if level is None:
+        # Unknown: 0.3.14's known-good cycle rather than a guess.
+        print('Startup: radio state unreadable; switching it off before the attach settings', flush=True)
+        radio(False)
+        already_on = False
+    else:
+        already_on = level == 1
+        print(f'Startup: radio state {level} ({"on: no radio cycle" if already_on else "off"})', flush=True)
+    # Attaching on the IMS APN: ask for the P-CSCF in the attach, as stock does
+    # for an IMS APN, since that bearer is the one IMS then uses.
+    if attach_none:
+        print('initial attach APN not sent (attach_apn = none): the modem attaches '
+              'with its carrier profile', flush=True)
+    elif attach_apn:
+        ims_attach = (attach_apn != apn and net.getboolean('ims', True)
+                      and attach_apn.lower() == ims_apn.lower())
+        if attach_apn != apn:
+            print('initial attach on attach_apn, not the internet APN'
+                  + (' (the IMS APN: P-CSCF requested)' if ims_attach else ''), flush=True)
+        initial_attach(client, attach_apn, ip_type, ims=ims_attach)
+    if profiles and profiles[0].ident == 0 and profiles[0].apn != apn:
+        print('data profile 0 from the profile lines, with another APN than the internet APN '
+              '(the internet bearer uses the internet APN)', flush=True)
+    if profiles:
+        provision_profiles(client, profiles)
+    lte = net.get('nr', 'off') == 'off'
+    nr_after_radio = False
+    if lte:
+        # Before radio on, as stock sets its network type: changed after
+        # registration it made the CP register again. This modem refuses
+        # SET_NR_MODE with the radio off (error 2, 2026-11-02), so then it is
+        # set right after radio on, still before registration.
+        try:
+            nr_mode(client)
+        except ModemError as error:
+            if already_on:
+                raise
+            SAVED_NR.unlink(missing_ok=True)
+            nr_after_radio = True
+            print(f'NR mode refused with the radio off ({error}); setting it after radio on', flush=True)
     service.pump()
-    radio(True)
+    if not already_on and net.get('carrier_manifest', '').strip():
+        # Stock applies the carrier profile before the radio comes on; with
+        # the radio switched on first (2026-11-02) the modem confirmed the
+        # profile 11 s later and then stopped searching. Wait for its status
+        # here, so registration starts with the profile in place.
+        limit = net.getint('carrier_manifest_timeout', 60)
+        try:
+            wait_for(service, lambda: service.carrier_status is not None, limit, stopped)
+            print('Radio on after carrier config: status', service.carrier_status[0],
+                  'cause', service.carrier_status[1], flush=True)
+        except TimeoutError:
+            print('Radio on without carrier config status after', limit, 's;',
+                  'manifest sent' if service.manifest_sent else 'no request from the modem seen', flush=True)
+    if not already_on:
+        radio(True)
+        began = time.monotonic()
+        if nr_after_radio:
+            nr_mode(client)
     service.stage('registering')
-    print('Startup: waiting for packet registration', flush=True)
+    print('Startup: waiting for packet registration' + (' on LTE' if lte else ''), flush=True)
     timeout = net.getint('register_timeout', 180)
-    wait_for(service, lambda: packet_registered(client.request(0x0701)), timeout, stopped)
-    if net.get('nr', 'off') == 'off':
-        nr_mode(client)
-        wait_for(service, lambda: packet_registered(client.request(0x0701), lte=True), 120, stopped)
-    if apn:
+    first = None
+
+    def registered():
+        nonlocal first
+        state = client.request(0x0701)
+        if first is None and packet_registered(state):
+            first = time.monotonic()
+            print(f'Registration: packet registered {first - began:.1f} s after '
+                  + ('start-up began (the radio was already on)' if already_on else 'radio on')
+                  + f', RAT {state[3]}', flush=True)
+        return packet_registered(state, lte=lte)
+    wait_for(service, registered, timeout, stopped)
+    registered_at = time.monotonic()
+    data_snapshot(client, 'at registration')
+    attach = None
+    if attach_none:
+        # Before sitd sets up anything: every bearer listed now is the
+        # modem's own and is recorded so (never released). With IMS on, wait
+        # for the attach bearer with its P-CSCF.
+        wait = ATTACH_BEARER_WAIT if net.getboolean('ims', True) else 0
+        attach = find_attach_bearer(service, registered_at + wait, stopped, adopt_unknown=True)
+    ims_first = net.getboolean('ims', True) and chosen['ims_first']
+    if not ims_first and apn:
         service.stage('data')
-        activate(client, apn, ip_type=ip_type)
+        activate(client, apn, ip_type=ip_type, on_event=service.event)
         service.pump()
     if not net.getboolean('ims', True):
         service.ims_state = 'off'
@@ -240,15 +495,64 @@ def start(service, settings, stopped=lambda: False):
         return
     service.ims_state = 'pending'
     service.stage('ims')
+    internet_up = not ims_first
+
+    def internet():
+        # With ims_first (stock's order: IMS bearer and ADD_PDN before any
+        # other bearer), the internet comes up after the IMS setup, whether
+        # that succeeded or not.
+        nonlocal internet_up
+        if internet_up or not apn:
+            return
+        service.stage('data')
+        activate(client, apn, ip_type=ip_type, on_event=service.event)
+        service.pump()
+        internet_up = True
     try:
+        if net.get('carrier_manifest', '').strip():
+            # As stock's IMS service: no stack start while the modem applies
+            # its carrier profile. The modem's 0x4602 arrives on its own after
+            # the SIM loads; service.event answers it and records the 0x4601.
+            limit = net.getint('carrier_manifest_timeout', 60)
+            try:
+                wait_for(service, lambda: service.carrier_status is not None, limit, stopped)
+                print('IMS stack start released (after carrier config: status',
+                      service.carrier_status[0], 'cause', service.carrier_status[1], ')', flush=True)
+            except TimeoutError:
+                print('IMS stack start released (timeout: no carrier config status in', limit, 's;',
+                      'manifest sent' if service.manifest_sent else 'no request from the modem seen', ')',
+                      flush=True)
         start_stack(client)
-        activate(client, chosen['ims_apn'], ims=True)
-        register(client)
+        if attach is None:
+            # One more look (no wait): an attach bearer listed by now with
+            # its P-CSCF is used as stock uses it; only that one is recorded.
+            attach = find_attach_bearer(service, 0, stopped, adopt_unknown=False)
+        fallback = None
+        # With the modem's attach bearer, no IMS setup of our own: it carries
+        # IMS. Otherwise sitd's own IMS bearer on CID 2, as before.
+        if attach is None:
+            ims_ip = ims_ip_type(profiles, ims_apn)
+            print('IMS bearer PDP type', ims_ip, '(from the IMS profile)' if ims_ip != 'ipv6' else '', flush=True)
+            activate(client, ims_apn, ims=True, ip_type=ims_ip,
+                     apn_types=ims_apn_types(profiles, ims_apn), on_event=service.event)
+        if attach is None and net.getboolean('ims_pcscf_from_isim', True):
+            # The ISIM's EF_PCSCF when the PCO has none (one read-only file).
+            def fallback(bearer):
+                return ipv6_pcscf(client, client.request(0x0200), bearer,
+                                  resolve_host=resolve_default_network)
+        register(client, pcscf_required=net.getboolean('ims_pcscf_required', True),
+                 pcscf_fallback=fallback, attach=attach)
+        internet()
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and
                  service.registration().get('features', 0) & 3 == 3,
                  net.getint('ims_timeout', 120), stopped)
     except (RuntimeError, TimeoutError, ValueError) as error:
+        if not internet_up:
+            # IMS failed before the internet: bring the internet up first,
+            # so data is served whatever happens to IMS (its own failure
+            # ends start-up as before).
+            internet()
         # The internet bearer is up and owned: keep serving it. Nothing about
         # IMS is retried (an uncertain IMS bearer or ADD_PDN is never sent
         # twice); a registration the modem completes later still shows up

@@ -233,7 +233,9 @@ class Sim:
 
     def r_0600(self, mid, token, p):            # SETUP_DATA_CALL
         cid, apn = p[0], p[4:0xd9 - 12].split(b'\0')[0].decode()
-        self.log(event='setup_data_call', cid=cid, apn=apn, ip=p[0xda - 12])
+        # psi: the PDU session ID at 0xf6, 0 when the modem is to pick it.
+        self.log(event='setup_data_call', cid=cid, apn=apn, ip=p[0xda - 12],
+                 psi=struct.unpack_from('<i', p, 0xf6 - 12)[0])
         if not self.registered():
             return self.respond(mid, token, 9)
         r = bytearray(292)

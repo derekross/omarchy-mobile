@@ -18,6 +18,7 @@ It names no operator, number, IMEI or SIM. It exits when stdout closes.
 """
 
 import json
+import os
 import sys
 
 MM = "org.freedesktop.ModemManager1"
@@ -39,6 +40,18 @@ ROAMING = {5, 7, 10}
 TECH = [(1 << 15, "5G"), ((1 << 14) | (1 << 16) | (1 << 17), "LTE"), (1 << 9, "H+"),
         ((1 << 6) | (1 << 7) | (1 << 8), "H"), (1 << 5, "3G"), (1 << 4, "E"), (1 << 3, "G"),
         ((1 << 1) | (1 << 2), "2G")]
+
+
+# Re-reads after the service's name gets a new owner, in milliseconds.
+FOLLOW_UP = (1000, 3000, 10000)
+
+
+def interval():
+    """Seconds between the periodic re-reads (OMAMOBILE_CELL_WATCH_INTERVAL for tests)."""
+    try:
+        return max(1, int(os.environ.get("OMAMOBILE_CELL_WATCH_INTERVAL", "20")))
+    except ValueError:
+        return 20
 
 
 def tech_label(bits):
@@ -94,8 +107,16 @@ def main(argv):
                 return dict(ifaces[MODEM]), dict(ifaces.get(MODEM3GPP, {}))
         return None, None
 
-    def emit(*_args):
-        line = json.dumps(describe(*first_modem()), separators=(",", ":"))
+    def emit():
+        # Every trigger re-reads every property from GetManagedObjects, so
+        # no signal's payload can leave a stale state behind. Nothing here
+        # may raise: an exception in a GLib callback drops its source, and
+        # a dropped periodic read is how a stale "off" stayed on the bar.
+        try:
+            line = json.dumps(describe(*first_modem()), separators=(",", ":"))
+        except Exception as e:  # noqa: BLE001 - keep watching whatever the service sent
+            print("omamobile-cell-watch: read failed: %s" % e, file=sys.stderr, flush=True)
+            return
         if line == last[0]:
             return
         last[0] = line
@@ -105,12 +126,39 @@ def main(argv):
         except (BrokenPipeError, OSError):
             loop.quit()
 
-    bus.add_signal_receiver(emit, signal_name="PropertiesChanged", dbus_interface=PROPS, bus_name=MM)
-    bus.add_signal_receiver(emit, signal_name="InterfacesAdded", dbus_interface=OM, bus_name=MM)
-    bus.add_signal_receiver(emit, signal_name="InterfacesRemoved", dbus_interface=OM, bus_name=MM)
-    bus.add_signal_receiver(emit, signal_name="NameOwnerChanged", dbus_interface="org.freedesktop.DBus", arg0=MM)
-    # Signal quality can change without a signal on some modems; read again now and then.
-    GLib.timeout_add_seconds(20, lambda: (emit(), True)[1])
+    pending = [False]
+
+    def flush():
+        pending[0] = False
+        emit()
+        return False
+
+    def reread(*_args, **_kwargs):
+        # A burst of signals (a service exporting a modem) costs one read.
+        if not pending[0]:
+            pending[0] = True
+            GLib.idle_add(flush)
+
+    def owner_changed(_name, _old, new):
+        # A new owner may take the name before it exports its modem, and
+        # need not announce it with InterfacesAdded (or fix a first wrong
+        # state with PropertiesChanged): read now and again shortly after.
+        reread()
+        if new:
+            for delay in FOLLOW_UP:
+                GLib.timeout_add(delay, lambda: (reread(), False)[1])
+
+    # Any change on ModemManager's objects (State, SignalQuality,
+    # AccessTechnologies, PowerState, the 3GPP RegistrationState) and any
+    # modem added or removed.
+    bus.add_signal_receiver(reread, signal_name="PropertiesChanged", dbus_interface=PROPS, bus_name=MM)
+    bus.add_signal_receiver(reread, signal_name="InterfacesAdded", dbus_interface=OM, bus_name=MM)
+    bus.add_signal_receiver(reread, signal_name="InterfacesRemoved", dbus_interface=OM, bus_name=MM)
+    bus.add_signal_receiver(owner_changed, signal_name="NameOwnerChanged", dbus_interface="org.freedesktop.DBus",
+                            bus_name="org.freedesktop.DBus", arg0=MM)
+    # The safety net: signal quality can change without a signal on some
+    # modems, and a missed signal must not last. One local D-Bus call.
+    GLib.timeout_add_seconds(interval(), lambda: (reread(), True)[1])
     emit()
     loop.run()
     return 0

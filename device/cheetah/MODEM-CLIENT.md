@@ -36,7 +36,7 @@ Two packages:
 | `sit.py` | ported | The single-owner IPC0 transport: framing, token matching, indication queue (signal and physical-channel snapshots coalesced so telemetry can't crowd out an SMS reply). Two guards: the allow-list of requests this stack sends, and our do-not-send list (NV, identity, carrier lock, AT forwarding, VSIM, satellite) checked first, so an edit to the allow-list can't let one through. Dial and SMS sends need the owner's flags |
 | `sit_names.py` | ours | The 602 message names, for logs |
 | `bringup.py` | ported, carrier values moved to the config | The start-up order (section 1.1) |
-| `data_call.py` | ported, APN from the config | Setup (983 bytes), initial attach (251), data profile (246), PDU sessions; bearer ownership recorded in RAM before each setup, never retried blindly |
+| `data_call.py` | ported, APN from the config | Setup (983 bytes; no PDU session ID on cellular, as stock), initial attach (251), data profile (246); bearer ownership recorded in RAM before each setup, never retried blindly |
 | `ims.py` | ported (identity strings ours) | IMS stack start, hidden-menu configuration, ADD_PDN_INFO from the IMS bearer, the registration indication |
 | `radio_settings.py` | ported | NR mode byte (3 -> 0 keeps LTE; the original kept in RAM) |
 | `sms_codec.py` | ported | GSM 7-bit / UCS-2 SMS-SUBMIT with concatenation, SMS-DELIVER with the SMSC prefix the modem adds, WAP push kept as bytes |

@@ -1530,16 +1530,9 @@ tools/phone-ssh 'omamobile-sit hangup; sleep 2; omamobile-sit status;
 #     never confirmed (the RIL stops the modem unit by design after 12 s: one UFS pass; reboot after)
 #   rollback: omamobile-sit hangup
 
-# M4.6 at boot (asks the human: reboots; risk: medium: from now on every boot powers the modem on,
-# and every reboot off: one UFS pass per reboot, as now with the modem unit)
-tools/phone-ssh 'systemctl enable omamobile-modem omamobile-sitd omamobile-sit-data'
-tools/phone-ssh 'reboot-to omamobile'
-tools/phone-ssh 'sleep 240; systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data; omamobile-sit status;
-  ls /var/lib/omamobile/modem-bringup-started 2>&1; dmesg | grep -c ufshcd_err_handler'
-#   pass: active x3; registered with IMS voice and SMS; no marker; err_handler 0 (power-on only)
-#   stop: the unit skipped with "never reached ONLINE": a previous boot hung during bring-up; look
-#     before `omamobile-modem-start --retry`
-#   rollback: systemctl disable omamobile-modem omamobile-sitd omamobile-sit-data; reboot
+# M4.6 at boot: superseded by "M4.6: the modem stack at boot" at the end of section 3 (one switch,
+# omamobile-modem-boot.target, `omamobile-modem` 0.1.13 and device-cheetah 0.1.41). The old form,
+# enabling the three units one by one, started sitd before the CP was ONLINE (2026-11-03).
 
 # M4.7 M3.5 again (read-only): the six partitions unchanged
 ```
@@ -2605,7 +2598,8 @@ tools/phone-ssh 'omamobile-sit status; systemctl is-active omamobile-sitd; /usr/
 #   stop: the unit fails before "ready". The journal names the step: "SIM not usable: ..." (S1);
 #     "No ready USIM within 120 s (...)"; "Modem registration deadline exceeded" (no service, the APN, or
 #     the SIM not activated: check coverage and activation in the other phone); "data call did not become
-#     active" with its status (36 = APN refused: check the APN); a CP crash (the watcher writes
+#     active" with its status (Android DataFailCause numbers: 27 or 33 is a refused APN, 36
+#     REGULAR_DEACTIVATION); a CP crash (the watcher writes
 #     /var/log/omamobile/modem-crashes.log). Record step and status, then reboot before another try
 #   rollback: `omamobile-sit radio off` (AT+CFUN=0: deregisters; on again may stall until a reboot), then
 #     `systemctl stop omamobile-sitd`; or reboot (one UFS pass)
@@ -2668,9 +2662,149 @@ tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 #   the SIM can stay in the tray; nothing starts the modem at boot (units disabled)
 ```
 
-**M4.6 (the modem and sitd at boot) waits** until S5-S11 have passed on
-two separate boots: enabling it means every boot powers the modem and
-every reboot costs one UFS pass; the M4 section's M4.6 steps apply then.
+### M4.6: the modem stack at boot (`omamobile-modem` 0.1.13, device-cheetah 0.1.41; written 2026-11-03)
+
+Until 2026-11-03 the stack was started by hand every boot, in this order:
+`systemctl start omamobile-modem` (the chroot: cbd, rfsd, "CP ONLINE" in
+its journal), `omamobile-sitd`, `omamobile-sit data on` (the
+`omamobile-sit-data` unit) and `omamobile-mmd`. IMS registered on the
+Verizon-network SIM that night and an SMS went out at 02:00 (NOTES
+2026-11-03), which was the condition for starting it at boot. Enabling
+the three units one by one (the old M4.6 step above) doesn't work: sitd
+`Requires`/`After` the modem unit, which was `Type=simple`, so sitd ran
+while the CP was still booting and exited ("CP is not ONLINE").
+
+What the packages now do, opt-in and nothing enabled by them:
+
+- **`omamobile-modem-boot.target`** (`omamobile-modem`) is the one switch:
+  it wants `omamobile-modem`, `omamobile-sitd`, `omamobile-sit-data` and
+  `omamobile-mmd`; each unit's own `After=` keeps the order above, and a
+  missing unit (no `omamobile-mmd` installed) is simply not started. No
+  package ships a wants link (each `test/all` holds it to that). The
+  target has `DefaultDependencies=no`, so `multi-user.target` (and
+  `omamobile-boot-success`, which runs after it) doesn't wait for a
+  registration that can take minutes.
+- **`omamobile-modem-inhibit.service`**: a `systemd-inhibit
+  --what=sleep:idle --mode=block` lock, required by and ordered before the
+  modem unit, refused a manual stop, so it lasts until the reboot (suspend
+  with the modem on has never run on this phone, 6.3). The start script
+  refuses to load a driver until the lock shows in `systemd-inhibit
+  --list`. With the stack at boot the phone never sleeps.
+- **`omamobile-modem.service` is `Type=notify`**: ready once CPIF's ports
+  exist and the profile's read-only check has passed, before the CP is
+  powered on. The device's sitd drop-in
+  (`omamobile-sitd.service.d/20-cp-online.conf`) then waits for ONLINE
+  with `ExecStartPre=omamobile-modem-cp wait-online 120` (the profile's
+  cbd timeout). A CP that never comes up fails sitd, and sit-data and mmd
+  stay down.
+- **Two markers under `/var/lib/omamobile`** (CONTRIBUTING 3.4), both
+  refusing the next boot's start until a human has looked:
+  `modem-bringup-started`, written and synced *before* the first
+  `modprobe` (it was written after the drivers and the check until 0.1.12)
+  and removed by the watcher at ONLINE; a check that refuses removes it
+  again (nothing powered the CP on). And `modem-up`, written by the
+  watcher at ONLINE (date and boot id) and removed by the unit's
+  `ExecStopPost` (`omamobile-modem-start --stopped`) when it is this boot's:
+  a boot that ends with the modem up and no stop, a hang or a reset,
+  leaves it, so a hang after ONLINE can't become a reset loop. A CP crash
+  with the host alive keeps the unit running (the watcher records it) and
+  ends in a normal stop at the reboot: the next boot starts again.
+  Recovery after a refusal: read the last boot's journal, then
+  `omamobile-modem-start --retry` (clears both and starts, outside the
+  unit) or `rm` the marker and `systemctl start omamobile-modem`.
+- Nothing restarts the modem in place: `Restart=no` on the modem unit and
+  sitd; `sit-data` and `mmd` restart themselves only (routes and a D-Bus
+  bridge).
+
+The next release enables the target by default once the carrier
+configuration is automatic (#373): today the carrier files in the chroot
+and the `modem-sit.conf` keys (IMS-SHANNON.md section 12) are set by hand.
+
+Preconditions: the stack registered by hand on this boot's packages
+(IMS, an SMS); the charger in (no sleep, and upower's critical action
+must not suspend mid-test); the human at the phone for the reboots. Each
+reboot with the modem up costs one recovered UFS error-handler pass
+(M2.5), as every hand-started boot did.
+
+```sh
+# B0 install and look, read-only apart from pacman (risk: low)
+tools/phone-install-package packages/omamobile-modem
+tools/phone-install-package packages/omamobile-device-cheetah
+tools/phone-ssh 'pacman -Q omamobile-modem omamobile-device-cheetah omamobile-modem-sit;
+  systemctl is-enabled omamobile-modem-boot.target omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd;
+  systemctl cat omamobile-sitd | grep -A1 20-cp-online; ls /var/lib/omamobile/modem-* 2>&1'
+#   pass: 0.1.13, 0.1.41, 0.3.24 or newer; "disabled" x5 (a unit enabled by hand earlier: disable it, the
+#     target is the switch now); the drop-in's ExecStartPre line; no modem-* marker
+#   stop: a marker from an earlier boot (look at that boot's journal before B1)
+#   rollback: none needed
+
+# B1 enable and reboot (asks the human; risk: medium: from this boot on every boot powers the modem
+# on, the phone no longer sleeps, and every reboot costs one UFS pass)
+tools/phone-ssh 'systemctl enable omamobile-modem-boot.target; systemctl is-enabled omamobile-modem-boot.target'
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+#   pass: "enabled"; the phone comes back on USB within ~60 s
+#   stop: no USB after 3 minutes: hold Power ~30 s, then boot; B1 counts as a hang with the modem up
+#     (B4's marker check will say which marker is set)
+#   rollback: systemctl disable omamobile-modem-boot.target; reboot
+
+# B2 the chain, in order (read-only; give it 4 minutes)
+tools/phone-ssh 'sleep 240; systemctl list-units --no-pager "omamobile-modem*" omamobile-sitd omamobile-sit-data omamobile-mmd;
+  systemd-inhibit --list --no-legend | grep omamobile-modem; journalctl -b -u omamobile-modem -o cat | grep -E "ONLINE|refus|marker|inhibit";
+  journalctl -b -u omamobile-sitd -o cat | grep -E "wait-online|not ONLINE|ready|registered|IMS" | head;
+  omamobile-sit status; ls -l /var/lib/omamobile/modem-* 2>&1; dmesg | grep -c ufshcd_err_handler'
+#   pass: omamobile-modem-inhibit active, omamobile-modem active, omamobile-sitd active, omamobile-sit-data
+#     active, omamobile-mmd active, the target active; one "omamobile-modem ... sleep:idle ... block" lock;
+#     "CP ONLINE" in the modem's journal; sitd's journal with no "not ONLINE" line; status registered,
+#     IMS registered (voice and SMS); only modem-up present (this boot's id); err_handler 0 (power-on only)
+#   stop: sitd "CP is not ONLINE" (the drop-in isn't in effect: B0's `systemctl cat`); the modem unit
+#     refused ("no sleep inhibitor": the inhibit unit's journal); the modem-bringup-started marker present
+#     with the unit active (the watcher didn't reach ONLINE: cbd's lines in the journal); anything
+#     registering that didn't by hand on 11-03 (then the boot order is the suspect: compare the journal's
+#     order with the hand sequence)
+#   rollback: systemctl disable omamobile-modem-boot.target; reboot (the modem stays up until then)
+
+# B3 data and the bridge (read-only)
+tools/phone-ssh 'ip -4 addr show rmnet0 | grep -c inet; ip route | grep -E "metric 700"; systemctl is-active omamobile-sit-data omamobile-mmd;
+  busctl --system tree org.freedesktop.ModemManager1 | grep -c Modem'
+tools/phone-ssh 'nmcli -f DEVICE,TYPE,STATE device | grep -c gsm; omamobile-sit sms send <NUMBER> "boot test"'
+#   pass: one inet on rmnet0, a metric-700 default route, both active, one Modem object; one gsm device;
+#     the SMS arrives on the other phone (the number stays off the repo)
+#   stop: no route (sit-data's journal: it started before the bearer? it is After sitd's READY, which comes
+#     after the bearer; record the order); no Modem object (mmd started before sitd's socket: its journal)
+#   rollback: as B2
+
+# B4 the second reboot: the clean stop clears the modem-up marker, and the next boot starts again
+# (asks the human; risk: medium: one UFS pass)
+tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+tools/phone-ssh 'sleep 240; journalctl -b -1 -u omamobile-modem -o cat | grep -E "CP OFFLINE|stopped|removed|kept" | tail -3;
+  systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; omamobile-sit status | head -3;
+  ls -l /var/lib/omamobile/modem-* 2>&1; dmesg | grep -c ufshcd_err_handler'
+#   pass: the previous boot's journal ends with "CP OFFLINE" and "modem stopped (success): ... modem-up
+#     removed"; active x4 and registered again; only this boot's modem-up; err_handler 0 on this boot
+#   stop: the modem unit refused with "ended without a clean stop" (the stop hook didn't run or ran on
+#     another boot's marker: the -1 journal says which; the fix is in the package, not on the phone:
+#     `systemctl disable omamobile-modem-boot.target`, remove the marker, and reboot); "never reached
+#     ONLINE" (the latch stayed: the previous boot hung in the bring-up; read its journal first)
+#   rollback: systemctl disable omamobile-modem-boot.target; rm -f /var/lib/omamobile/modem-up; reboot
+
+# B5 the guard itself, once, optional (asks the human; risk: medium: a forced reset with the modem up,
+# then one refused boot): with the stack up, Power held ~30 s, then boot
+tools/phone-ssh 'sleep 120; systemctl is-active omamobile-modem; journalctl -b -u omamobile-modem -o cat | head -3;
+  cat /var/lib/omamobile/modem-up'
+#   pass: "failed"; "ended without a clean stop ... skipping the modem"; the marker holds the previous
+#     boot's id. Then: rm -f /var/lib/omamobile/modem-up; systemctl start omamobile-modem omamobile-sitd
+#     omamobile-sit-data omamobile-mmd (the hand sequence, once), or reboot and let the target do it
+#   stop: the modem started on that boot (the marker was missing: the watcher's write; record the -1 journal)
+#   rollback: as B4
+
+# M4.7 M3.5 again (read-only): the six partitions unchanged
+```
+
+**Record** here, per step: the date, `uname -r`, the three package
+versions, pass/fail, the boot's unit order from `journalctl -b -o
+short-monotonic` (states only), the time from the modem unit's "CP
+ONLINE" to sitd's "ready", the UFS handler count. Not the carrier, the
+number or any identifier.
 
 **Record** here, one block per run: the date, `uname -r`, the three
 package versions; per step pass/fail, the failing step's journal line

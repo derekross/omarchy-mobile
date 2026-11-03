@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# The modem stack at boot, opt-in (device/cheetah/MODEM-PLAN.md M4.6): the
+# one switch for what the maintainer started by hand every boot until
+# 2026-11-03: omamobile-modem (the chroot: cbd, rfsd, CP ONLINE), then
+# omamobile-sitd (registration, IMS), the cellular data fallback
+# (omamobile-sit-data, what `omamobile-sit data on` starts) and the Phone
+# and Messages bridge (omamobile-mmd). Wants= tolerates a unit that isn't
+# installed; each unit's own After= puts it behind the one before, and the
+# device's sitd drop-in waits for the CP's ONLINE. Nothing here restarts
+# the modem: a step that fails stays failed until the reboot.
+#
+# Not enabled by any package (test/all holds every package to that):
+#   systemctl enable omamobile-modem-boot.target     then reboot
+# Rollback: systemctl disable omamobile-modem-boot.target, and reboot. The
+# next release enables it by default once the carrier configuration is
+# automatic (#373): until then the SIM's APNs and modem-sit.conf are set by
+# hand, and a phone without them registers nothing.
+#
+# DefaultDependencies=no keeps multi-user.target from ordering itself after
+# this target (a target's wants are complemented with After= unless the
+# wanted unit says no): omamobile-boot-success runs after multi-user.target
+# and must not wait for a registration that can take minutes.
+[Unit]
+Description=Omarchy Mobile modem, phone service and data at boot (opt-in)
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+Wants=omamobile-modem.service omamobile-sitd.service omamobile-sit-data.service omamobile-mmd.service
+
+[Install]
+WantedBy=multi-user.target

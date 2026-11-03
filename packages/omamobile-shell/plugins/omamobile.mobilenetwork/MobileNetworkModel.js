@@ -88,11 +88,15 @@ function view(s) {
 }
 
 // The attach APN (the one the modem registers with), for the Advanced part.
+// "none" (sitd's attach_apn = none): no attach APN is sent, and the modem
+// attaches with its carrier profile, as on Verizon's network.
 function attachText(apn) {
   if (apn.attach_source === "same" || (!apn.attach_source && apn.attach_in_use && apn.attach_in_use === apn.in_use))
     return "Same as the internet APN"
   if (!apn.attach_in_use) return apn.source === "none" ? "The modem's own" : "Not chosen yet"
-  return apn.attach_in_use + (SOURCES[apn.attach_source] ? "  ·  " + SOURCES[apn.attach_source] : "")
+  var source = SOURCES[apn.attach_source] ? "  ·  " + SOURCES[apn.attach_source] : ""
+  if (String(apn.attach_in_use).toLowerCase() === "none") return "Not sent: the carrier profile's own" + source
+  return apn.attach_in_use + source
 }
 
 function signalText(signal, registered) {

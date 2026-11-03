@@ -111,12 +111,51 @@ class CarrierApnTests(unittest.TestCase):
         found = carrier_apn.lookup(subscriber, self.db, self.none)
         self.assertNotIn('987654321', repr(found))
 
-    def test_shipped_overrides_send_verizon_codes_to_vzwinternet(self):
-        for mcc, mnc in (('311', '480'), ('310', '012')):
-            found = carrier_apn.lookup(imsi(mcc, mnc), self.db, str(OVERRIDES))
-            self.assertEqual((found['apn'], found['attach_apn'], found['source']), ('vzwinternet', 'vzwims', 'override'))
+    def test_shipped_overrides_give_verizon_codes_stocks_setup(self):
+        """What registered IMS and carried calls and texts on the 7 Pro on
+        2026-11-03: no attach APN, IMS first on CID 2, the internet on CID 3,
+        stock's four profiles. Every Verizon code, the "like" ones included."""
+        codes = [('310', m) for m in ('010', '011', '012')] + [('311', '48' + d) for d in '0123456789']
+        for mcc, mnc in codes:
+            with self.subTest(mcc=mcc, mnc=mnc):
+                found = carrier_apn.lookup(imsi(mcc, mnc), self.db, str(OVERRIDES))
+                self.assertEqual((found['apn'], found['attach_apn'], found['ims_apn'], found['ims_first'],
+                                  found['internet_cid'], found['carrier'], found['source']),
+                                 ('VZWINTERNET', 'none', 'IMS', True, 3, 'Verizon', 'override'))
+                self.assertEqual(found['profiles'], [
+                    ('0', 'VZWINTERNET; types=default,supl,dun; ip=ipv4v6'),
+                    ('2', 'IMS; types=ia,ims; ip=ipv4v6; roaming_ip=ipv6'),
+                    ('3', 'VZWADMIN; types=fota'),
+                    ('4', 'VZWAPP; types=cbs,mms')])
         text = OVERRIDES.read_text()
         self.assertIn('https://www.verizon.com/support/', text)
+        self.assertNotIn('attach_apn = vzwims', text)
+
+    def test_override_keys_are_checked_and_like_is_one_hop(self):
+        path = os.path.join(self.dir, 'overrides.conf')
+        Path(path).write_text(
+            '[311/480]\nname = A\napn = a.example\nattach_apn = none\nims_first = maybe\ninternet_cid = 2\n'
+            'profile_2 = ims.example; types=ims\nprofile_x = junk\n'
+            '[310/410]\nlike = 311/480\napn = b.example\nims_first = yes\ninternet_cid = 16\n'
+            '[310/260]\nlike = 310/410\n'
+            '[310/150]\nlike = 999/99\n')
+        a = self.look('311', '480', path)
+        self.assertEqual((a['apn'], a['attach_apn'], a['ims_first'], a['internet_cid'], a['profiles']),
+                         ('a.example', 'none', None, 2, [('2', 'ims.example; types=ims')]))
+        b = self.look('310', '410', path)
+        # The section's own keys win over the liked section's; a bad value is left out.
+        self.assertEqual((b['apn'], b['attach_apn'], b['ims_first'], b['internet_cid'], b['carrier']),
+                         ('b.example', 'none', True, None, 'A'))
+        # One hop only: a section liking a "like" section gets that section's
+        # own keys (its apn), not its target's (the attach APN).
+        c = self.look('310', '260', path)
+        self.assertEqual((c['apn'], c['attach_apn'], c['ims_first']), ('b.example', '', True))
+        # A dangling "like" falls through to the section's own keys (none: the database).
+        self.assertEqual(self.look('310', '150', path)['source'], 'carrier-database')
+
+    def test_database_entries_carry_no_bearer_order(self):
+        found = self.look('310', '410')
+        self.assertEqual((found['ims_first'], found['internet_cid'], found['profiles']), (None, None, []))
 
 
 @unittest.skipUnless(SYSTEM_DB.exists(), 'mobile-broadband-provider-info is not installed')
@@ -127,7 +166,7 @@ class SystemDatabaseTests(unittest.TestCase):
         return carrier_apn.lookup(imsi(mcc, mnc), str(SYSTEM_DB), str(OVERRIDES))
 
     def test_verizon_and_its_resellers(self):
-        self.assertEqual(self.look('311', '480')['apn'], 'vzwinternet')
+        self.assertEqual(self.look('311', '480')['apn'], 'VZWINTERNET')
 
     def test_t_mobile(self):
         self.assertEqual(self.look('310', '260')['apn'], 'fast.t-mobile.com')
