@@ -114,7 +114,7 @@ class CarrierApnTests(unittest.TestCase):
     def test_shipped_overrides_send_verizon_codes_to_vzwinternet(self):
         for mcc, mnc in (('311', '480'), ('310', '012')):
             found = carrier_apn.lookup(imsi(mcc, mnc), self.db, str(OVERRIDES))
-            self.assertEqual((found['apn'], found['attach_apn'], found['source']), ('vzwinternet', 'ims', 'override'))
+            self.assertEqual((found['apn'], found['attach_apn'], found['source']), ('vzwinternet', 'vzwims', 'override'))
         text = OVERRIDES.read_text()
         self.assertIn('https://www.verizon.com/support/', text)
 

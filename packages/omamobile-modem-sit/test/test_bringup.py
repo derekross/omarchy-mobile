@@ -109,13 +109,13 @@ class BringupTests(unittest.TestCase):
         fake = '311480' + '0' * 9
         service, log, radio, attach, profile, activate = self.run_start(
             settings, bytes([15]) + fake.encode())
-        # Verizon's network registers only with the IMS APN as attach APN.
-        attach.assert_called_once_with(service.client, 'ims', 'ipv4v6')
+        # Verizon's network registers only with vzwims as attach APN.
+        attach.assert_called_once_with(service.client, 'vzwims', 'ipv4v6')
         profile.assert_called_once_with(service.client, 'vzwinternet', 'ipv4v6')
         self.assertEqual(activate.call_args_list[0].args[1], 'vzwinternet')
         self.assertEqual(activate.call_args_list[1].args[1], 'ims')
         self.assertEqual(service.apn, dict(value='vzwinternet', source='override',
-                                           attach='ims', attach_source='override'))
+                                           attach='vzwims', attach_source='override'))
         self.assertIn('APN chosen from', log)
         self.assertIn('attach APN chosen from', log)
         for secret in (fake, '311', '480', 'vzwinternet'):
@@ -130,7 +130,7 @@ class BringupTests(unittest.TestCase):
         settings = paths.config('/nonexistent')
         settings['network']['apn'] = 'vzwinternet'
         service, _, _, attach, profile, _ = self.run_start(settings, bytes([15]) + b'311480000000000')
-        attach.assert_called_once_with(service.client, 'ims', 'ipv4v6')
+        attach.assert_called_once_with(service.client, 'vzwims', 'ipv4v6')
         profile.assert_called_once_with(service.client, 'vzwinternet', 'ipv4v6')
         self.assertEqual((service.apn['source'], service.apn['attach_source']), ('manual', 'override'))
 

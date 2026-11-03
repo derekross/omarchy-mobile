@@ -69,8 +69,8 @@ test("APN field: auto, plain APNs, nothing else", () => {
 test("attach APN: same as internet, or the carrier's", () => {
   assert.strictEqual(M.view(ready()).attachText, "Same as the internet APN")
   const v = M.view(ready({ apn: { in_use: "vzwinternet", source: "override", configured: "auto",
-                                  attach_in_use: "ims", attach_source: "override", attach_configured: "auto" } }))
-  assert.strictEqual(v.attachText, "ims  ·  Chosen from your SIM")
+                                  attach_in_use: "vzwims", attach_source: "override", attach_configured: "auto" } }))
+  assert.strictEqual(v.attachText, "vzwims  ·  Chosen from your SIM")
   assert.strictEqual(v.attachConfigured, "")
   assert.strictEqual(M.view(ready({ apn: { attach_configured: "ims", attach_in_use: "ims", attach_source: "manual" } })).attachConfigured, "ims")
 })

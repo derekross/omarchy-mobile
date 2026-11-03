@@ -283,10 +283,10 @@ class SimulatorTests(unittest.TestCase):
         self.start('--imsi-plmn', '311480')
         self.wait_ready()
         modem = json.loads(self.cli('status', '--json'))['modem']
-        self.assertEqual(modem['apn'], dict(value='vzwinternet', source='override', attach='ims',
+        self.assertEqual(modem['apn'], dict(value='vzwinternet', source='override', attach='vzwims',
                                             attach_source='override'))
         attaches = [e['apn'] for e in self.transcript_entries() if e.get('event') == 'initial_attach']
-        self.assertEqual(attaches, ['ims'])
+        self.assertEqual(attaches, ['vzwims'])
         self.assertEqual((modem['data'], modem['data_available'], modem['sim']['pin_lock']), (True, True, 'off'))
         setups = [e for e in self.transcript_entries() if e.get('event') == 'setup_data_call']
         self.assertEqual([(e['cid'], e['apn']) for e in setups], [(1, 'vzwinternet'), (2, 'ims')])

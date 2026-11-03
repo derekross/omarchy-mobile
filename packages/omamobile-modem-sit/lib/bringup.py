@@ -209,7 +209,7 @@ def start(service, settings, stopped=lambda: False):
     chosen = choose_apn(client, net, last)
     apn = chosen['apn']
     # The APN the modem registers with: the carrier's attach APN when it has
-    # one (Verizon's network registered only with "ims", 2026-11-02), else
+    # one (Verizon's network registered only with "vzwims", 2026-11-02), else
     # the internet APN. Without either, the modem keeps its own.
     attach = chosen['attach_apn'] or apn
     service.apn = dict(value=apn, source=chosen['source'], attach=attach,

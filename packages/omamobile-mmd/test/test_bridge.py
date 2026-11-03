@@ -31,8 +31,8 @@ class ApnSettings(unittest.TestCase):
         return b.apn_settings(attach=attach)[0]
 
     def test_attach(self):
-        used = dict(value='vzwinternet', source='override', attach='ims', attach_source='override')
-        self.assertEqual(self.apn(dict(apn='auto'), used, attach=True), 'ims')
+        used = dict(value='vzwinternet', source='override', attach='vzwims', attach_source='override')
+        self.assertEqual(self.apn(dict(apn='auto'), used, attach=True), 'vzwims')
         self.assertEqual(self.apn(dict(apn='auto'), used), 'vzwinternet')
         self.assertEqual(self.apn(dict(apn='internet.example', attach_apn='auto'), attach=True), 'internet.example')
         self.assertEqual(self.apn(dict(apn='internet.example', attach_apn='ims'), attach=True), 'ims')

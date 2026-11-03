@@ -6,8 +6,8 @@ The attach APN is the one the modem registers with (SET_INITIAL_ATTACH_APN).
 It comes from an override's attach_apn, else from a database APN typed "ia";
 empty means "the internet APN", the usual case. Some carriers register only
 with another one: on 2026-11-02 a SIM on Verizon's network never registered
-with the internet APN as attach APN and registered within 34 s with the IMS
-APN (our capture on the Pixel 7 Pro).
+with the internet APN (vzwinternet) as attach APN and registered with vzwims
+as attach APN (our captures on the Pixel 7 Pro, 20:26 and 20:35).
 
 The SIM's home network (MCC and MNC) is the start of its IMSI. It is looked
 up first in the project's overrides (apn-overrides.conf: carriers the
