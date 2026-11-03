@@ -5,6 +5,10 @@ bearer's device rmnet<CID - 1>; data_network.find_device checks which device
 really carries the internet bearer (it differed when the attach bearer was on
 another APN).
 
+A bearer the modem brings up on its own (the attach bearer, with attach_apn
+= none) is recorded in MODEM_OWNED only: sitd never sets up, claims or
+releases its CID.
+
 The APN comes from /etc/omamobile/modem-sit.conf. Ownership is recorded in
 RAM before a setup is sent: a setup or release with an unknown outcome
 keeps its record, and nothing is retried blindly.
@@ -32,11 +36,23 @@ RESPONSE = RUN / 'data-call-response.bin'
 IP_TYPES = {'ipv4': 1, 'ipv6': 2, 'ipv4v6': 3}
 
 
+# sitd's own bearers: IMS on CID 2 (stock's IMS CID), the internet on
+# INTERNET_CID, 1 unless [network] internet_cid says otherwise (bringup sets
+# it). Stock keeps CID 1 for the modem's attach context and never sets a
+# bearer up on it; on a network that attaches on the IMS APN, an internet
+# setup on CID 1 replaced the attach PDN (2026-11-03).
+IMS_CID = 2
+INTERNET_CID = 1
+
+
 def paths(cid):
-    if cid == 1:
-        return STATE, RESPONSE
-    if cid == 2:
+    """The ownership record and setup response of a sitd-owned bearer: CID 2
+    is IMS, any other valid CID is the internet bearer (so a process without
+    the configuration, omamobile-sit-data, resolves the files too)."""
+    if cid == IMS_CID:
         return STATE.with_name('ims-session.json'), RESPONSE.with_name('ims-response.bin')
+    if 1 <= cid <= 15:
+        return STATE, RESPONSE
     raise ValueError('unsupported bearer CID')
 
 
@@ -71,33 +87,104 @@ def check_apn(apn):
     return apn
 
 
-def call_ids(payload):
-    # Stock DataCallUtil::DetermineDCTypeBySize. Reject variable
-    # traffic-descriptor records until their full framing is implemented.
+def entries(payload):
+    """The items of a GET_DATA_CALL_LIST response or IND_DATA_CALL_LIST_CHANGED
+    payload: a count byte, then that many items of one size, each laid out as
+    a SETUP_DATA_CALL response (status u16, CID, active, PDP type, addresses,
+    DNS, P-CSCF; pcscf_addresses). Stock DataCallUtil::DetermineDCTypeBySize.
+    Reject variable traffic-descriptor records until their full framing is
+    implemented."""
     if not payload or payload[0] > 15:
         raise RuntimeError('invalid data-call list')
     count = payload[0]
     if count == 0:
         if len(payload) != 1:
             raise RuntimeError('unexpected empty data-call list')
-        return set()
+        return []
     size, remainder = divmod(len(payload) - 1, count)
     if remainder or size not in (132, 234, 239, 246, 280, 292):
         raise RuntimeError('unsupported data-call list layout')
-    cids = [payload[1 + index * size + 2] for index in range(count)]
+    items = [bytes(payload[1 + index * size:1 + (index + 1) * size]) for index in range(count)]
+    cids = [item[2] for item in items]
     if len(set(cids)) != count or any(not 1 <= cid <= 15 for cid in cids):
         raise RuntimeError('invalid or duplicate data-call CID')
+    return items
+
+
+def call_ids(payload):
+    return {item[2] for item in entries(payload)}
+
+
+def dns_count(item):
+    """The DNS servers an item carries (IPv4 at 0x1a and 0x2e, IPv6 at 0x1e
+    and 0x32): a count only, for the log."""
+    return sum(1 for at, size in ((0x1a, 4), (0x2e, 4), (0x1e, 16), (0x32, 16))
+               if any(item[at:at + size]))
+
+
+def summary(item):
+    """One data-call item for the log: CID, PDP type, active, P-CSCF and DNS
+    counts. Never an address."""
+    v4, v6 = pcscf_addresses(item)
+    pdp = {1: 'IPv4', 2: 'IPv6', 3: 'IPv4v6'}.get(item[4], f'type {item[4]}')
+    return (f'CID {item[2]} {pdp} status {struct.unpack_from("<H", item)[0]} active {item[3]} '
+            f'P-CSCF {len(v4) + len(v6)} DNS {dns_count(item)}')
+
+
+# The bearers the modem brought up on its own (the attach bearer with the
+# carrier profile's settings): recorded so that sitd's ownership checks know
+# them, and never deactivated or claimed (no ownership record, no release).
+MODEM_OWNED = RUN / 'modem-owned-bearers.json'
+
+
+def modem_owned_ids():
+    if not MODEM_OWNED.exists():
+        return set()
+    cids = json.loads(MODEM_OWNED.read_text()).get('modem-owned', [])
+    if not isinstance(cids, list) or any(not isinstance(c, int) or not 1 <= c <= 15 for c in cids):
+        raise RuntimeError('invalid modem-owned bearer record')
     return set(cids)
+
+
+def record_modem_owned(cids):
+    """Add CIDs to the modem-owned record. A CID sitd owns is refused."""
+    cids = set(cids)
+    if cids & owned_ids():
+        raise RuntimeError('a bearer sitd owns cannot be recorded as modem-owned')
+    known = modem_owned_ids()
+    if cids - known:
+        private_write(MODEM_OWNED, json.dumps({'modem-owned': sorted(known | cids)}).encode())
+        for cid in sorted(cids - known):
+            print(f'data bearer CID {cid} recorded as modem-owned (never released by sitd)', flush=True)
+
+
+def ims_capable(item):
+    """An active IPv6 or IPv4v6 bearer with its IPv6 address and at least one
+    P-CSCF address: what stock's IMS service announced from the attach bearer."""
+    status, _, active, pdp = struct.unpack_from('<HBBB', item)
+    return (not status and active in (1, 2) and pdp in (2, 3) and any(item[9:25])
+            and any(pcscf_addresses(item)))
+
+
+def attach_bearer(items, owned=None):
+    """The first IMS-capable item sitd didn't set up (its CID has no
+    ownership record), or None."""
+    owned = owned_ids() if owned is None else owned
+    return next((item for item in items if item[2] not in owned and ims_capable(item)), None)
 
 
 def owned_ids():
     result = set()
-    for cid in (1, 2):
-        state, _ = paths(cid)
+    for expected in (INTERNET_CID, IMS_CID):
+        state, _ = paths(expected)
         if state.exists():
             owned = json.loads(state.read_text())
+            cid = owned.get('cid')
             # session 0: no PDU session ID was sent (the modem chose one).
-            if owned.get('cid') != cid or not 0 <= owned.get('session', -1) <= 15:
+            # The internet record names whatever CID it was set up on (the
+            # configured one may differ from this process's default).
+            ok = cid == IMS_CID if expected == IMS_CID else isinstance(cid, int) and 1 <= cid <= 15 and cid != IMS_CID
+            if not ok or not 0 <= owned.get('session', -1) <= 15:
                 raise RuntimeError('invalid bearer ownership record')
             result.add(cid)
     return result
@@ -109,7 +196,7 @@ def private_write(path, data):
         out.write(data)
 
 
-def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type=None):
+def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type=None, apn_types=None):
     # Absolute request offsets below include the 12-byte request header.
     # ip_type None: IPv6 for IMS (what every IMS setup used until 0.3.19),
     # IPv4v6 otherwise. For IMS, stock takes the PDP type from the IMS APN's
@@ -134,7 +221,14 @@ def setup_payload(cid, radio_technology, pdu_session, apn, *, ims=False, ip_type
     # builder writes it at 0xf1). DEFAULT for the internet bearer, IMS for
     # the IMS one. Until 0.3.6 this was sent as 0 (taken for an MTU), and
     # the 9a's modem answered every internet setup with status 36.
-    struct.pack_into('<I', full, 0xf1, 0x40 if ims else 1)
+    # apn_types: the whole bitmask of the APN's data profile, as stock's
+    # builder copies it (ApnSetting +0x160 -> 0xf1); Verizon's IMS APN is
+    # ims|ia (0x140), which stock's IMS setup carries.
+    if apn_types is None:
+        apn_types = 0x40 if ims else 1
+    if not apn_types or apn_types & ~sum(APN_TYPES.values()):
+        raise ValueError('invalid APN-type bitmask')
+    struct.pack_into('<I', full, 0xf1, apn_types)
     full[0xf5] = 2  # stock caller selects the v3/983-byte form
     # 0 on cellular: no PDU session ID, the modem picks one (module docstring).
     struct.pack_into('<i', full, 0xf6, pdu_session)
@@ -393,15 +487,18 @@ def listen_after_failure(client, seconds=5, on_event=None):
             on_event(packet)
     print(f'after the failure: {seen} indication(s) in {seconds} s', flush=True)
 
-def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event=None):
-    requested_cid = 2 if ims else 1
+def activate(client, apn, *, ims=False, ip_type=None, apn_types=None, lte_access=False, on_event=None):
+    requested_cid = IMS_CID if ims else INTERNET_CID
     state_path, response_path = paths(requested_cid)
     state = client.request(0x0701)
     if len(state) < 4 or state[0] not in (1, 5):
         raise RuntimeError('PS network is not registered')
     calls = call_ids(client.request(0x0602))
     owned = owned_ids()
-    if state_path.exists() or requested_cid in calls or calls != owned:
+    # Bearers recorded as modem-owned are the modem's, not unresolved; a CID
+    # they hold (or held) is never set up or claimed.
+    modem = modem_owned_ids()
+    if state_path.exists() or requested_cid in calls | modem or calls - modem != owned:
         raise RuntimeError('existing target or unresolved bearer ownership')
     allow_data(client)
     settle(client, 'after allowing data', on_event)
@@ -426,8 +523,10 @@ def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event
     try:
         rat = 14 if lte_access else state[3]
         print('data setup access RAT', rat, 'registered RAT', state[3], 'PDU session ID', session, flush=True)
-        result = client.request(0x0600, setup_payload(requested_cid, rat, session, apn,
-                                                      ims=ims, ip_type=ip_type), timeout=45)
+        if apn_types is not None:
+            print(f'data setup APN types 0x{apn_types:x} (from the data profile)', flush=True)
+        result = client.request(0x0600, setup_payload(requested_cid, rat, session, apn, ims=ims,
+                                                      ip_type=ip_type, apn_types=apn_types), timeout=45)
         if len(result) < 132:
             raise RuntimeError('unexpected data-call layout')
         status, cid, raw_active, pdp = struct.unpack_from('<HBBB', result)
@@ -458,7 +557,11 @@ def activate(client, apn, *, ims=False, ip_type=None, lte_access=False, on_event
             response_path.unlink(missing_ok=True)
 
 
-def deactivate(client, cid=1):
+def deactivate(client, cid=None):
+    if cid is None:
+        cid = INTERNET_CID
+    if cid in modem_owned_ids():
+        raise RuntimeError(f'bearer CID {cid} is modem-owned; sitd never releases it')
     state_path, response_path = paths(cid)
     if cid == 2 and state_path.with_name('ims-registration.json').exists():
         raise RuntimeError('unregister IMS before releasing its bearer')
@@ -469,7 +572,7 @@ def deactivate(client, cid=1):
     # (data_network.find_device), while that configuration exists.
     devices = {f"rmnet{owned['cid'] - 1}"}
     recorded = RUN / 'data-interface'
-    if cid == 1 and recorded.exists():
+    if cid != IMS_CID and recorded.exists():
         devices.add(recorded.read_text().strip())
     for dev in devices:
         flags = Path(f'/sys/class/net/{dev}/flags')
@@ -485,6 +588,6 @@ def deactivate(client, cid=1):
         client.request(0x061b, struct.pack('<i', owned['session']))
     state_path.unlink()
     response_path.unlink(missing_ok=True)
-    if calls != owned_ids():
+    if calls - modem_owned_ids() != owned_ids():
         raise RuntimeError('unexpected remaining data-call ownership')
     print('owned data bearer deactivated', flush=True)

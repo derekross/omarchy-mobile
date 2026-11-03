@@ -29,7 +29,7 @@ BOOT = os.environ.get('OMAMOBILE_SIT_BOOT', '/dev/umts_boot0')
 DEFAULTS = {
     'network': {'apn': '', 'attach_apn': '', 'ip_type': 'ipv4v6', 'ims': 'yes', 'ims_apn': 'ims',
                 'ims_required': 'no', 'ims_pcscf_required': 'yes',
-                'ims_pcscf_from_isim': 'yes',
+                'ims_pcscf_from_isim': 'yes', 'ims_first': 'no', 'internet_cid': '1',
                 'carrier_manifest': '', 'carrier_manifest_timeout': '60', 'ims_timeout': '120',
                 'nr': 'off', 'sim_timeout': '120', 'register_timeout': '180'},
     # Extra modem-managed data profiles, one per line (data_call.parse_profile).

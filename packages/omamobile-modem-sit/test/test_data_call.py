@@ -260,6 +260,14 @@ class LifecycleTests(unittest.TestCase):
         # length and roaming type.
         self.assertEqual(struct.unpack_from('<I', payload, 0xf1 - 12)[0], 1)
         self.assertEqual(struct.unpack_from('<I', ims, 0xf1 - 12)[0], 0x40)
+        # The IMS profile's whole bitmask when given (stock: ApnSetting's
+        # supported types, ims|ia on Verizon); nothing else changes.
+        ia = data_call.setup_payload(2, 14, 0, 'ims', ims=True, ip_type='ipv4v6', apn_types=0x140)
+        self.assertEqual(struct.unpack_from('<I', ia, 0xf1 - 12)[0], 0x140)
+        self.assertEqual(ia[:0xf1 - 12] + ia[0xf5 - 12:], both[:0xf1 - 12] + both[0xf5 - 12:])
+        for bad in (0, 0x1000, -1):
+            with self.assertRaises(ValueError):
+                data_call.setup_payload(2, 14, 0, 'ims', ims=True, apn_types=bad)
         modem = Modem()
         data_call.initial_attach(modem, APN)
         ident, attach = modem.sent[-1]

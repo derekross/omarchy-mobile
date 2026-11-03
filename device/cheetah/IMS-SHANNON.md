@@ -375,3 +375,231 @@ beyond restarting the service, which the phone's owner should know about):
    (ADD_PDN is then not sent; no status 5). Rollback: reinstall 0.3.19.
    Risk: medium (new IMS bearer request; internet bearer untouched).
 3. If counts stay 0: change 5 (logging), then step 0.
+
+## 11. omamobile-modem-sit 0.3.21: stock's attach on a Verizon network
+
+What stock did with a Verizon-network SIM (logcat, 2026-11-02, VoLTE
+working): its RIL sent **no SET_INITIAL_ATTACH_APN for the SIM's slot** (the
+only one was `null`, for the empty second slot), only SET_DATA_PROFILE; the
+carrier manifest was applied; the modem attached with the manifest's settings
+and listed the **attach bearer unsolicited** in IND_DATA_CALL_LIST_CHANGED
+(CID 2, IPv6, QCI 5, three IPv6 P-CSCF, two IPv6 DNS); ShannonIms sent
+ADD_PDN_INFO for it (IP type IPv6, its address and P-CSCFs) and registered.
+0.3.20 sends an explicit attach APN, runs its own IMS setup (CID 2, no
+P-CSCF) and saw no attach bearer listed: most likely our attach APN replaces
+the manifest's attach and its P-CSCF request.
+
+0.3.21 (tested offline):
+
+- `[network] attach_apn = none`: no 0x0603; profiles and the internet bearer
+  as before.
+- After registration (attach_apn = none, IMS on): up to 20 s for an active
+  IPv6/IPv4v6 bearer sitd didn't set up with a P-CSCF, from
+  GET_DATA_CALL_LIST and the latest IND_DATA_CALL_LIST_CHANGED; each list is
+  logged as CID, type, status, active, P-CSCF and DNS counts. Every bearer
+  listed then is recorded as **modem-owned** (`modem-owned-bearers.json` in
+  the run directory): `activate()` accepts it beside its own, never sets up
+  its CID, and `deactivate()` refuses it.
+- Found: no IMS setup of ours; ADD_PDN_INFO from the attach bearer's item
+  (checked against a fresh list right before: still listed, active, same
+  IPv6 address). Not found: one more look after the stack start, then
+  0.3.20's path (own IMS bearer, ISIM fallback). With an explicit
+  attach_apn the one look happens too, without recording unknown bearers.
+- Not confirmed: that GET_DATA_CALL_LIST items carry the P-CSCF at the same
+  offsets as the setup response (stock's `FillDataCallListFromModemPayload`
+  reads both with one item decoder, per MODEM-SIT-RESEARCH §3.5, confidence
+  low for the v11 item); that the 239-292-byte items keep the 234-byte
+  item's extension at 0x84; and that the modem lists the attach bearer at
+  all when no attach APN is sent. If the list item has no P-CSCF but the
+  indication's has, the indication's item is used.
+
+Runbook (human approves each step; changing the config needs a fresh CP, so
+a reboot, which is the owner's call):
+
+1. Read-only: `grep -E '^(apn|attach_apn|ims_apn|carrier_manifest) ='
+   /etc/omamobile/modem-sit.conf`. Pass: carrier_manifest set, IMS profile
+   present. Stop: no manifest (none without it is untested).
+2. Install 0.3.21, set `attach_apn = none`, `ims_apn = IMS`, reboot.
+   Expect: "initial attach APN not sent", "Radio on after carrier config",
+   "data-call list: 1 item(s); CID 2 IPv6 ... P-CSCF 3 ...", "modem-owned
+   attach bearer for IMS", internet "data-call status 0 CID 1", "IMS on the
+   modem-owned attach bearer CID 2", IND_AIMS_REGISTRATION state 2.
+   Pass: IMS registered with voice and SMS. Stop: no registration in
+   `register_timeout`, or every internet setup answered 36. Rollback:
+   `attach_apn = IMS` (0.3.20's setting) and reboot. Risk: medium (changes
+   the attach; the internet bearer and NV untouched).
+
+
+## 12. The attach requests, byte for byte, and 0.3.23
+
+Status: offline, 2026-11-03. Sources: the cheetah vendor tree's
+`libsitril.so` (`PsInitialAttachApnHandler`, `SetDataProfileHandler`,
+`PsService::InitPdpContext`, `PdpContextManager::GetAvailablePdpContext`),
+`vendor.radio.protocol.sit.stream.so` (`ProtocolPsBuilder`),
+`libril_sitril.so` (`convertHalDataProfileToRil`), disassembled on the
+laptop, and stock's logcat of 2026-11-03 (factory reset, Verizon-network
+SIM). Offsets below include the 12-byte request header, as in
+`lib/data_call.py`.
+
+### 12.1 Stock sends no SET_INITIAL_ATTACH_APN for this SIM
+
+`PsInitialAttachApnHandler::DoRefreshInitialAttachApn` checks the
+framework's attach profile before it builds anything: an emergency-only
+profile is refused; with `modemCognitive` true (Verizon's `IMS` APN, ims|ia,
+is) it logs "modem cognitive is true, skip initial attach", only records the
+APN in its own attach context (`ConfigureAttachPdpContext`, which notes
+"Attach data profile to IMS" and then sets the context's profile to 0) and
+answers the framework with success. **No 0x0603 goes to the CP.** The
+modem attaches with what it already has: the modem-cognitive profiles from
+SET_DATA_PROFILE (the ia bit marks the attach APN) and its carrier profile.
+Only a non-cognitive attach profile reaches `RequestSetInitialAttachApn` and
+the builder. So `attach_apn = none` is stock's mode for this SIM; an explicit
+attach APN is not.
+
+### 12.2 SET_INITIAL_ATTACH_APN (0x0603, 251 bytes) when it is sent
+
+`ProtocolPsBuilder::BuildSetInitialAttachApn(PdpContext*, esmFlagZero,
+clear)`. `clear` (the framework's 0xabcd "null profile") sends the header
+and 239 zero bytes. Otherwise:
+
+| Offset | Size | Field | Stock | Ours (`initial_attach`) |
+| --- | --- | --- | --- | --- |
+| 0x0c | 1 | CID: the RIL's attach context (slot 0: 1) | 1 | 1 |
+| 0x0d | 1 | RAT: 14, or 22 when either PDP type is non-IP | 14 | 14 |
+| 0x0e | 1 | 1 if the context's profile is 1 (tethered) | 0 | 0 |
+| 0x0f | 1 | APN class, `GetProtocolApnType` (below) | 1 for ims\|ia | 1 with `ims` |
+| 0x10 | 100 | APN; empty for an "ESM flag zero" operator | APN | APN |
+| 0x75 | 49 | user | empty | empty |
+| 0xa7 | 49 | password | empty | empty |
+| 0xd9 | 1 | auth (1-3 kept, else 0) | 0 | 0 |
+| 0xda | 1 | home PDP type, `GetPdpType(protocol)` | 3 (IPV4V6) | from `ip_type` |
+| 0xdb | 1 | home P-CSCF request, `GetPcscfReqType` | 3 | 3 with `ims` |
+| 0xdc-0xf7 | | zero (0xf0 written 0) | 0 | 0 |
+| 0xf8 | 1 | roaming PDP type, from the roaming protocol | 2 (IPV6) | same as 0xda |
+| 0xf9 | 1 | roaming P-CSCF request | 2 | same as 0xdb |
+| 0xfa | 1 | zero | 0 | 0 |
+
+No APN-type bitmap, profile ID, persistent flag, bearer bitmap or MTU is in
+the request. Ours matches at home; only 0xf8/0xf9 differ (they matter only
+when roaming), and stock wouldn't send the request at all (12.1).
+
+`GetPdpType`: empty or `IP` 1, `IPV6` 2, `IPV4V6` 3, anything else 5.
+`GetProtocolApnType(profile, apn)`: emergency 2, IMS 1, default 0; when the
+APN carries two or more of default, IMS and emergency, 1 if the profile is
+2, else 0. `GetPcscfReqType(apn, protocol, carrier)`: an empty APN 3; an APN
+with the IMS or emergency type, or a carrier that wants the P-CSCF on its
+default PDN (`isPcscfRequiredForDefaultPDN`), by protocol: empty or `IP` 1,
+`IPV6` 2, `IPV4V6` 3, other 1; else 0. The null-APN variant (ESM flag zero)
+skips the type check.
+
+### 12.3 SET_DATA_PROFILE (0x0613, 246 bytes): one request per profile
+
+`SetDataProfileHandler::OnRequest` clears its table and sends one 0x0613 per
+profile in the framework's list (no count field), each built by
+`BuildSetDataProfile(V2_0)`:
+
+| Offset | Size | Field (HAL DataProfileInfo) |
+| --- | --- | --- |
+| 0x0c | 4 | profileId |
+| 0x10 | 100 | apn |
+| 0x75 | 1 | protocol (1 IP, 2 IPV6, 3 IPV4V6) |
+| 0x76 | 1 | roamingProtocol |
+| 0x77 | 1 | authType |
+| 0x78 / 0xaa | 49 each | user / password |
+| 0xdd | 4 | maxConnsTime |
+| 0xe1 | 4 | maxConns |
+| 0xe5 | 4 | waitTime |
+| 0xe9 | 1 | enabled |
+| 0xea | 4 | supportedApnTypesBitmap |
+| 0xee | 4 | bearerBitmap |
+| 0xf2-0xf5 | | zero |
+
+The HAL's `type`, `mtuV4`, `mtuV6`, `preferred` and `persistent` are not
+sent (`libril_sitril`'s converter fills them at struct offsets the builder
+never reads). The framework sends only persistent (modem-cognitive)
+profiles, so the flag is implicit. `profile_payload` has the same layout.
+What stock fills differently: **bearerBitmap**, from each APN's network
+types (Verizon's IMS: LTE, IWLAN, LTE_CA, NR; the others list 2G-NR), where
+ours is 0 ("any" in the HAL); and the **roaming protocol** of the Verizon
+internet, FOTA and MMS APNs, `IP` where our example has ipv4v6.
+
+### 12.4 The attach bearer in the list, and the CIDs stock uses
+
+The listing question rests on a misreading of stock's log. Stock's IMS
+data network (DN-100) was already connected at 00:46:49, before the radio
+log starts (it wrapped; the first RIL line is 00:46:47). Android never
+adopts a bearer it didn't request, so the framework had sent SETUP_DATA_CALL
+for IMS; the CID 2 entry at 00:46:57 is that bearer, and nothing in the log
+shows the modem listing a bearer on its own. Our modem listing 0 bearers at
+registration is consistent with that.
+
+What libsitril does for that setup: `PsService::InitPdpContext` builds the
+attach context with CID = interface base + 1 (slot 0: CID 1, `rmnet0`) and
+the regular contexts from the same CID up. `GetAvailablePdpContext` first
+reuses a context whose profile and APN match (the attach context, unless the
+cognitive path set its profile to 0, which it did here) and otherwise takes
+the first free one, skipping the attach context. Stock's log has CIDs 2
+(IMS, `rmnet1`), 3, 4 and 5 (internet) and **never CID 1**: with a cognitive
+attach, CID 1 stays reserved for the attach context and is never set up from
+the AP. Our RIL sets up its internet bearer on CID 1.
+
+No list filter or "report the attach bearer" switch was found: the list
+decoders (`DataCallUtil::FillDataCallListFromModemPayload`) don't look at
+the attach CID, and no boot request in libsitril enables reporting.
+`PsService::DoOemSetInternalIA` is an early attach from the profile stored
+for the ICCID, skipped for some carriers; it was not traced further.
+
+### 12.5 Where stock's P-CSCF comes from
+
+With a cognitive attach, no AP field asks for the attach PDN's P-CSCF: the
+CP's own profile and carrier configuration decide. For the IMS setup, stock's
+`BuildSetupDataCall` writes 0xdb from `GetPcscfReqType` (3 for Verizon's
+IPV4V6 IMS APN) and 0xda from the home protocol (3), as ours does with the
+IMS profile's `ip=ipv4v6`, and **0xf1 from the APN's whole supported-type
+bitmask: ims|ia, 0x140**. Ours sent 0x40 (IMS alone). The modem matches a
+setup against its profiles (an empty bitmap was answered with status 36 on
+the 9a, 0.3.6), and the ia bit is what marks Verizon's IMS profile as the
+attach APN, so this byte is the one setup difference left.
+
+### 12.6 omamobile-modem-sit 0.3.23 (tested offline)
+
+The IMS setup's APN-type bitmap (0xf1) is the whole bitmask of the
+`[profiles]` entry with the ims type for `ims_apn` (`bringup.ims_apn_types`;
+0x140 for `2 = IMS; types=ia,ims`), and the log says "data setup APN types
+0x140 (from the data profile)". Without such a profile nothing changes
+(0x40). The internet setup keeps 1. `packages/omamobile-modem-sit/test/all`
+passes, sit-sim included.
+
+### 12.7 Ranked changes
+
+1. **IMS setup 0xf1 = the IMS profile's bitmask (0x140).** Done in 0.3.23.
+   Risk low: one field, stock's value, only with a configured IMS profile.
+2. **Leave CID 1 alone; set up IMS before the internet bearer.** Stock's
+   bearers start at CID 2 in request order (IMS first) and CID 1 is its
+   attach context. Move the internet bearer off CID 1 (CID 3, `rmnet2`,
+   touching `paths()`, `owned_ids()`, `data_network.find_device`, the
+   NetworkManager unmanaged list and the ownership records), and with
+   `attach_apn = none` bring IMS up on CID 2 first. Risk medium: the
+   internet bearer works on CID 1 today, and every data path names its CID.
+3. **SET_DATA_PROFILE 0xee bearer bitmap from the profile's network types.**
+   Needs a `[profiles]` key and the RAT-family encoding confirmed against a
+   stock capture; 0 should mean "any". Risk low, expected effect small.
+4. **SET_INITIAL_ATTACH_APN 0xf8/0xf9 from the IMS profile's roaming type**
+   (2 and 2 for Verizon), for setups that still send an attach APN. Risk
+   low; it matters only when roaming. With `attach_apn = none` (stock's
+   mode, 12.1) it is never sent.
+5. **Example config: roaming `ip` for the Verizon internet, FOTA and MMS
+   profiles** (stock: IP). Config only; no effect at home.
+
+### 12.8 Runbook (human approves each step)
+
+1. Read-only: `grep -E '^(attach_apn|ims_apn|2) *=' /etc/omamobile/modem-sit.conf`.
+   Pass: `attach_apn = none`, `ims_apn = IMS`, an IMS profile with
+   `types=ia,ims`. Stop: no IMS profile (0.3.23 then changes nothing).
+2. Install 0.3.23 and reboot (the owner's call; the CP needs a fresh start).
+   Expect: "data setup APN types 0x140 (from the data profile)" before the
+   IMS setup, then the IMS line with "P-CSCF count". Pass: P-CSCF count
+   above 0 and IND_AIMS_REGISTRATION state 2. Stop: the IMS setup refused,
+   or still no P-CSCF (then change 2). Rollback: the 0.3.22 package and a
+   reboot. Risk: low (one byte of the IMS setup; attach, internet bearer and
+   NV untouched).

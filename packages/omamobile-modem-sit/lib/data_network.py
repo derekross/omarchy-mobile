@@ -55,7 +55,7 @@ def configuration(data):
     if len(data) < 132:
         raise ValueError('Short internet bearer response')
     status, cid, active, pdp = struct.unpack_from('<HBBB', data)
-    if status or cid != 1 or active not in (1, 2) or pdp not in (1, 3):
+    if status or cid == 2 or not 1 <= cid <= 15 or active not in (1, 2) or pdp not in (1, 3):
         raise ValueError('An active IPv4 internet bearer is required')
     addr = ipaddress.IPv4Address(data[5:9])
     dns = list(dict.fromkeys(str(ipaddress.IPv4Address(data[i:i+4])) for i in (0x1a, 0x2e) if any(data[i:i+4])))
