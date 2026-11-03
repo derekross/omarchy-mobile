@@ -40,11 +40,11 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/vendor/systemd/sleep.conf.d/10-omamobile.conf \
     || fail "the sleep drop-in drifted from the cheetah package"
   pass "the sleep drop-in matches the cheetah package"
-  for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules; do
+  for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules 70-omamobile-dma-heap.rules; do
     cmp -s "vendor/udev/rules.d/$rules" "../omamobile-device-cheetah/vendor/udev/rules.d/$rules" \
       || fail "$rules drifted from the cheetah package"
   done
-  pass "the GPU and feedbackd rules match the cheetah package"
+  pass "the GPU, feedbackd and DMA heap rules match the cheetah package"
   cmp -s omamobile-device-panther.install \
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
@@ -77,6 +77,7 @@ for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
          usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
+         usr/lib/udev/rules.d/70-omamobile-dma-heap.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
