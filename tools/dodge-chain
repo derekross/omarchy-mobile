@@ -77,10 +77,12 @@ stage1_in_toolchain() {
     [[ -t 0 && -t 1 ]] && tty=(-it)
     local kb="${KERNEL_BASE:-$(dirname "$KERNEL_DIR")}"
     [[ $kb == "$WORK" || $kb == "$WORK"/* || ! -d $kb ]] || kernel=(-v "$kb:$kb")
+    # The clang at the same fixed path as bin/omamobile's in_container (the
+    # pinned one lives outside WORK, in ~/.cache/omamobile/toolchain)
     docker run --rm "${tty[@]}" \
       --hostname omamobile-build \
-      -v "$WORK:$WORK" -v "$ROOT:$ROOT" "${kernel[@]}" \
-      -e PATH="$CLANG_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      -v "$WORK:$WORK" -v "$ROOT:$ROOT" "${kernel[@]}" -v "$CLANG_DIR:/opt/omamobile/clang:ro" \
+      -e PATH="/opt/omamobile/clang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
       -w "$KERNEL_DIR" \
       "$IMAGE" bash -c "$script"
   else

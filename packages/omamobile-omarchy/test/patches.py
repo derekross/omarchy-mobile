@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.dirname(HERE)
@@ -383,6 +384,8 @@ def real_package(t):
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
     qml_parse(root)
     lock_glance(root)
+    lock_battery(t, root)
+    lock_media(root)
     app_icons_largest(root)
     lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
     launch = lib.split("  function launch(desktopId, name) {", 1)
@@ -396,6 +399,7 @@ def real_package(t):
            "real omarchy: %s refuses on a phone before it touches pacman (0016)" % name)
         ok("RELEASES.md section 5.4" in text, "real omarchy: %s points at RELEASES 5.4" % name)
     screensaver_launcher(t, os.path.join(root, "usr/bin/omarchy-launch-screensaver"))
+    show_logo(t, root)
     notification_phrasing(t, os.path.join(root, "usr/bin/omarchy-notification-send"),
                           os.path.join(ex, "usr/bin/omarchy-notification-send"))
     lock_fingerprint_probe(t, root)
@@ -526,6 +530,179 @@ def lock_glance(root):
         print("\n".join(l for l in out.splitlines() if l.startswith(("FAIL", "   ", "QWARN")))[:4000])
 
 
+# Power supplies as the kernel lists them: (name, type, present, capacity,
+# status, online[, scope]); "" for an attribute the supply has not got.
+SUPPLIES = {
+    # cheetah plugged in: the gauge says Discharging (net current negative), the USB charger is online
+    "phone-plugged": [("battery", "Battery", "1", "87", "Discharging", ""), ("usb", "USB", "", "", "Charging", "1")],
+    "phone-unplugged": [("battery", "Battery", "1", "87", "Discharging", ""), ("usb", "USB", "", "", "Not charging", "0")],
+    "phone-full": [("battery", "Battery", "1", "100", "Full", ""), ("usb", "USB", "", "", "", "1")],
+    "laptop": [("AC", "Mains", "", "", "", "0"), ("BAT0", "Battery", "1", "9", "Discharging", "")],
+    # a desktop: only a wireless mouse's battery, not present
+    "desktop": [("hidpp_battery_0", "Battery", "0", "50", "", "")],
+    "none": [],
+    # the odd shapes: a Mains supply with no online file says nothing about charging
+    "mains-no-online": [("AC", "Mains", "", "", "", ""), ("BAT0", "Battery", "1", "42", "Discharging", "")],
+    # a battery with no present file counts as present (omamobile-update's rule)
+    "no-present-file": [("battery", "Battery", "", "63", "Discharging", "")],
+    # the other charger types online, the gauge still saying Discharging
+    "usb-c": [("battery", "Battery", "1", "50", "Discharging", ""), ("usbc", "USB_C", "", "", "", "1")],
+    "usb-pd": [("battery", "Battery", "1", "51", "Discharging", ""), ("pd", "USB_PD", "", "", "", "1")],
+    "wireless": [("battery", "Battery", "1", "52", "Discharging", ""), ("qi", "Wireless", "", "", "", "1")],
+    # a charger that is there but offline
+    "charger-offline": [("battery", "Battery", "1", "53", "Discharging", ""), ("usbc", "USB_C", "", "", "", "0")],
+    # the 7 Pro with a controller paired: its battery (scope Device, present,
+    # full) sorts before the gauge (max170xx_battery, no scope file), the
+    # charger is offline. The gauge's level, not charging, not full.
+    "phone-with-controller": [("hid-0005:054C:0CE6.0003-battery", "Battery", "1", "100", "Full", "", "Device"),
+                              ("max170xx_battery", "Battery", "1", "64", "Discharging", "", ""),
+                              ("usb", "USB", "", "", "Not charging", "0", "")],
+    # the controller charging over its own cable, the phone unplugged
+    "phone-controller-charging": [("hid-0005:054C:0CE6.0003-battery", "Battery", "1", "40", "Charging", "", "Device"),
+                                  ("max170xx_battery", "Battery", "1", "64", "Discharging", "", ""),
+                                  ("usb", "USB", "", "", "Not charging", "0", "")],
+    # a desktop with only a controller: a present Device-scope battery is no battery
+    "desktop-controller": [("ps-controller-battery-02:00:00:00:00:01", "Battery", "1", "100", "Full", "", "Device")],
+}
+WANT = {
+    "phone-plugged": (True, 87, True, False), "phone-unplugged": (True, 87, False, False),
+    "phone-full": (True, 100, True, True), "laptop": (True, 9, False, False),
+    "desktop": (False, -1, False, False), "none": (False, -1, False, False),
+    "mains-no-online": (True, 42, False, False), "no-present-file": (True, 63, False, False),
+    "usb-c": (True, 50, True, False), "usb-pd": (True, 51, True, False), "wireless": (True, 52, True, False),
+    "charger-offline": (True, 53, False, False),
+    "phone-with-controller": (True, 64, False, False), "phone-controller-charging": (True, 64, False, False),
+    "desktop-controller": (False, -1, False, False),
+}
+
+
+def lock_battery(t, root):
+    """Patch 0026: the battery on the lock. Static checks, then the supply
+    command run against fake /sys/class/power_supply trees and its output
+    through LockBattery.parse in node: omamobile-update's rule."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    view = read(root, lock + "LockView.qml")
+    qml = read(root, lock + "LockBattery.qml") or ""
+    js = os.path.join(root, lock, "LockBattery.js")
+    ok(os.path.isfile(js) and qml and 'LockBattery {\n      objectName: "lockBattery"' in view
+       and "lit: !root.displayDark" in view and "wakeSerial: root.wakeSerial" in view,
+       "real omarchy: the lock has a battery indicator, polled only while lit (0026)")
+    ok("visible: present" in qml and "No battery" not in qml and '"/sys/class/power_supply"' in qml
+       and "running: battery.lit" in qml.split("Timer {", 1)[1].split("}", 1)[0]
+       and "UPower" not in qml and "XMLHttpRequest" not in qml,
+       "real omarchy: nothing shows without a battery, and the lock asks the kernel, not UPower (0026)")
+    argv_prefix = '["timeout", "-k", "1", "3", "bash", "-c", Battery.COMMAND, "--", "/sys/class/power_supply"]'
+    dark = qml.split("onLitChanged:", 1)[1].split("onWakeSerialChanged", 1)[0] if "onLitChanged:" in qml else ""
+    ok(argv_prefix in qml and "id: stale" in qml and "battery.clear()" in qml and "stale.restart()" in qml
+       and "charging = false" in dark and "full = false" in dark and "lockBatteryBolt" not in qml,
+       "real omarchy: a hung reading is cut and cleared, a blank drops the bolt, and the bar's glyph carries the "
+       "only bolt (0026)")
+    node = shutil.which("node")
+    if not node:
+        print("ok - real omarchy: the lock's battery rule # SKIP no node")
+        return
+    cmd = subprocess.run([node, "-e", "process.stdout.write(require(process.argv[1]).COMMAND)", js],
+                         capture_output=True, text=True).stdout
+    ok(0 <= cmd.find("/scope") < cmd.find("/capacity"),
+       "real omarchy: the lock's supply command reads scope before capacity, which can wake a HID device (0026)")
+    bad = []
+    for name, supplies in SUPPLIES.items():
+        d = os.path.join(t, "ps-" + name)
+        os.makedirs(d)
+        for s in supplies:
+            sd = os.path.join(d, s[0])
+            os.makedirs(sd)
+            for attr, value in zip(("type", "present", "capacity", "status", "online", "scope"), s[1:]):
+                if value != "":
+                    with open(os.path.join(sd, attr), "w") as f:
+                        f.write(value + "\n")
+        out = subprocess.run(["bash", "-c", cmd, "--", d], capture_output=True, text=True)
+        got = subprocess.run([node, "-e", "var m = require(process.argv[1]); var s = m.parse(process.argv[2]);"
+                              "process.stdout.write(JSON.stringify([s.present, s.percent, s.charging, s.full, "
+                              "m.icon(s.percent, s.charging, s.full)]))", js, out.stdout],
+                             capture_output=True, text=True).stdout
+        want = list(WANT[name])
+        got = json.loads(got) if got else None
+        # A Device-scope battery (a paired controller, keyboard or mouse) is
+        # skipped in bash, before its capacity is read: no line for it.
+        lines = [l for l in out.stdout.split("\n") if l]
+        peripherals = [s for s in supplies if len(s) > 6 and s[6] == "Device"]
+        skipped = len(lines) == len(supplies) - len(peripherals) and not any(p[3] in l.split("\t") for p in peripherals for l in lines)
+        if out.stderr or not got or got[:4] != want or (want[0] and not got[4]) or (not want[0] and got[4]) or not skipped:
+            bad.append((name, got, lines if not skipped else "", out.stderr.strip()[:80]))
+    ok(not bad, "real omarchy: the lock's battery reads the supplies as omamobile-update does, a charger online is "
+       "charging, a peripheral's Device-scope battery is skipped unread, no battery is nothing (0026)%s"
+       % (" " + repr(bad) if bad else ""))
+    # A sysfs read that never returns (a FIFO nobody writes): the lock's argv
+    # ends it through timeout(1), non-zero, and the output so far parses to
+    # no battery.
+    d = os.path.join(t, "ps-hang", "battery")
+    os.makedirs(d)
+    os.mkfifo(os.path.join(d, "type"))
+    started = time.monotonic()
+    out = subprocess.run(["timeout", "-k", "1", "3", "bash", "-c", cmd, "--", os.path.dirname(d)],
+                         capture_output=True, text=True, timeout=20)
+    took = time.monotonic() - started
+    got = subprocess.run([node, "-e", "var s = require(process.argv[1]).parse(process.argv[2]);"
+                          "process.stdout.write(JSON.stringify([s.present, s.charging]))", js, out.stdout],
+                         capture_output=True, text=True).stdout
+    ok(out.returncode != 0 and took < 8 and got == "[false,false]",
+       "real omarchy: a hung supply read ends through timeout(1) with no battery (0026: rc %s, %.1fs)"
+       % (out.returncode, took))
+
+
+def lock_media(root):
+    """Patch 0027: media controls on the lock. Static checks that they only
+    play, pause and skip (no Raise, no seek, nothing started, no network),
+    that they reuse Omarchy's media model, then LockMedia.js's rules in
+    node. test/lock-glance drives them under touch."""
+    lock = "usr/share/omarchy/shell/plugins/lock/"
+    glance = read(root, lock + "LockGlance.qml")
+    media = read(root, lock + "LockMedia.qml") or ""
+    source = read(root, lock + "LockMediaSource.qml") or ""
+    js = os.path.join(root, lock, "LockMedia.js")
+    ok(os.path.isfile(js) and media and source and "LockMedia {\n            id: glanceMedia" in glance
+       and "LockMedia {\n    id: pinMedia" in glance and "glanceMedia.buttonAt(swipe, mouse.x, mouse.y)" in glance,
+       "real omarchy: the lock has media controls on the glance and the PIN view, the glance's taps reach them (0027)")
+    ok('import "../services/media/MediaModel.js" as MediaModel' in source and "MediaModel.isProxyPlayer" in source
+       and os.path.isfile(os.path.join(root, "usr/share/omarchy/shell/plugins/services/media/MediaModel.js")),
+       "real omarchy: the lock's media controls use Omarchy's media model (0027)")
+    code = media + source + (open(js).read() if os.path.isfile(js) else "")
+    ok(".raise()" not in code and "execDetached" not in code and "Process" not in code and "XMLHttpRequest" not in code
+       and ".position =" not in code and "PanelSlider" not in code and "openUri" not in code and ".quit()" not in code,
+       "real omarchy: the lock's media controls only play, pause and skip: no Raise, no seek, nothing started (0027)")
+    ok("fits && glance.progress < 1" in glance and "ticking: glance.active && !!glance.lock && !glance.lock.displayDark" in glance,
+       "real omarchy: the PIN view's row only where it fits, the position asked only while lit (0027)")
+    node = shutil.which("node")
+    if not node:
+        print("ok - real omarchy: the lock's media rules # SKIP no node")
+        return
+    check = r"""
+var M = require(process.argv[1]), assert = require("assert")
+assert.strictEqual(M.artSource("https://i.example/c.jpg"), "")
+assert.strictEqual(M.artSource("http://i.example/c.jpg"), "")
+assert.strictEqual(M.artSource("file:///tmp/c.png"), "file:///tmp/c.png")
+assert.strictEqual(M.artSource("/tmp/a b.png"), "file:///tmp/a%20b.png")
+assert.strictEqual(M.artSource("data:image/png;base64,AA"), "data:image/png;base64,AA")
+assert.strictEqual(M.artSource("qrc:/x.png"), "")
+var p = function(o) { return Object.assign({ dbusName: "x", trackTitle: "T", trackArtist: "A", identity: "Music", isPlaying: true, playbackState: 1 }, o) }
+var proxy = function(q) { return q.dbusName.indexOf("playerctld") >= 0 }
+assert.strictEqual(M.pick([], {}, proxy), null)
+assert.strictEqual(M.pick([p({ isPlaying: false, playbackState: 0 })], {}, proxy), null)
+var a = p({ dbusName: "a", isPlaying: false, playbackState: 2 }), b = p({ dbusName: "b", isPlaying: false, playbackState: 2 }), c = p({ dbusName: "c" })
+assert.strictEqual(M.pick([a, b], { a: 2, b: 1 }, proxy), a)
+assert.strictEqual(M.pick([a, b, c], { a: 2, b: 1 }, proxy), c)
+var pc = p({ dbusName: "org.mpris.MediaPlayer2.playerctld" })
+assert.strictEqual(M.pick([pc, a], { "org.mpris.MediaPlayer2.playerctld": 9 }, proxy), a)
+assert.deepStrictEqual(M.lines(p({}), true), { title: "Music", detail: "Playing" })
+assert.deepStrictEqual(M.lines(p({}), false), { title: "T", detail: "A" })
+assert.strictEqual(M.accessibleName(p({}), true).indexOf("T,"), -1)
+"""
+    r = subprocess.run([node, "-e", check, js], capture_output=True, text=True)
+    ok(r.returncode == 0, "real omarchy: the lock's media rules: local art only, playing then most recent, playerctld last, "
+       "hidden text hides the track (0027)%s" % (" " + r.stderr.strip()[-300:] if r.returncode else ""))
+
+
 def screensaver_launcher(t, launcher):
     """Patch 0006's launcher against fake commands: every way out of it puts
     the on-screen keyboard back unless a screensaver runs (TOUCH-PLAN 0.5)."""
@@ -585,10 +762,44 @@ def screensaver_launcher(t, launcher):
     ok(osk() == "true" and not os.path.exists(marker), "0006: a launcher stopped by a signal turns the keyboard back on")
 
 
+def show_logo(t, root):
+    """Patch 0028: omarchy-show-logo in terminals of several widths (script(1)
+    gives it one): the wide logo where it fits, the stacked one where only
+    that fits, none below, and the wide one with no terminal at all.
+    logo.txt is omarchy-settings', so an 81-column stand-in here."""
+    narrow = os.path.join(root, "usr/share/omarchy/logo-narrow.txt")
+    ok(os.path.isfile(narrow), "0028: logo-narrow.txt is created")
+    widest = max(len(l) for l in open(narrow, encoding="utf-8").read().splitlines())
+    ok(widest == 48, "0028: the stacked logo is 48 columns (%d)" % widest)
+    if not shutil.which("script"):
+        print("ok - 0028: the logo by terminal width # SKIP no script(1)")
+        return
+    path = os.path.join(t, "logo-path")
+    os.makedirs(path)
+    shutil.copy(narrow, path)
+    with open(os.path.join(path, "logo.txt"), "w", encoding="utf-8") as f:
+        f.write(("█" * 81 + "\n") * 9)
+    show = os.path.join(root, "usr/bin/omarchy-show-logo")
+
+    def lines(cols):
+        cmd = "stty cols %d rows 40; bash %s" % (cols, show)
+        out = subprocess.run(["script", "-qec", cmd, "/dev/null"], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path,
+                             "TERM": "xterm"}, stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
+        rows = [l for l in out.decode("utf-8", "replace").replace("\r", "").split("\n") if "█" in l]
+        return len(rows), max((len(l.strip("\x1b[0m32")) for l in rows), default=0)
+
+    ok(lines(120) == (9, 81) and lines(81) == (9, 81), "0028: a terminal as wide as the logo shows it as before")
+    ok(lines(80)[0] == 17 and lines(66)[0] == 17 and lines(48)[0] == 17, "0028: a narrower one shows it stacked")
+    ok(lines(47)[0] == 0, "0028: one too narrow for that shows none, not a wrapped one")
+    out = subprocess.run(["setsid", "-w", "bash", show], env={"PATH": "/usr/bin:/bin", "OMARCHY_PATH": path},
+                         stdin=subprocess.DEVNULL, capture_output=True, timeout=20).stdout
+    ok(out.decode("utf-8", "replace").count("█" * 81) == 9, "0028: no terminal: the wide logo, as before")
+
+
 # Omarchy 4.0.6's notification texts (headline, body) and what a phone shows
 # for each (patch 0020); None leaves the text as it is.
 PHRASINGS = [
-    (("Screenshot saved to clipboard and file", "Edit with Super + Alt + , (or click this)"), "Tap to edit"),
+    (("Screenshot saved to clipboard and file", "Edit with Super + Alt + , (or click this)"), "Tap to view"),
     (("Screen recording saved", "Open with Super + Alt + , (or click this)"), "Tap to open"),
     (("Update System", "Click to update the system."), "Tap to update the system."),
     (("Setup Wi-Fi", "Click to configure the wireless network."), "Tap to configure the wireless network."),

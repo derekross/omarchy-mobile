@@ -8,6 +8,21 @@ import radio_settings
 
 
 class NrModeTests(unittest.TestCase):
+    def test_a_second_start_up_this_boot_accepts_mode_0_already_set(self):
+        class Client:
+            sent = []
+            def request(self, ident, payload=b'', **kwargs):
+                self.sent.append(ident)
+                return b'\0' if ident == 0x0749 else b''
+        with tempfile.TemporaryDirectory() as directory:
+            saved = Path(directory)/'nr'
+            saved.write_bytes(b'\3')
+            with patch.object(radio_settings, 'SAVED_NR', saved):
+                client = Client()
+                radio_settings.nr_mode(client)
+                self.assertEqual(client.sent, [0x0749])     # read only, no SET_NR_MODE
+                self.assertEqual(saved.read_bytes(), b'\3')  # the original is kept
+
     def test_saved_original_survives_failure_and_restores_exactly(self):
         class Client:
             value = b'\3'

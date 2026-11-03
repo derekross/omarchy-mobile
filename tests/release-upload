@@ -1,0 +1,256 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/release-upload (docs/RELEASES.md §6) in a copy of the repository with
+# throwaway keys, against a scratch "server" directory: ssh runs its command
+# locally, rsync copies locally, curl reads the scratch directory as if it
+# were https://pkgs.omamobile.org (no network, nothing real uploaded). A dry
+# run touches nothing; an upload lands complete under releases/<codename>/
+# <version>/ with no staging left; a second upload of that version, a file
+# changed after signing, a signature by another key, a wrong base_url and a
+# root image that doesn't match are all refused before anything is sent;
+# --verify-only catches a file corrupted on the server; --latest writes
+# latest.json (with the .tar's URL, size and SHA-256) and won't go back
+# without --allow-older. The one-file .tar (tools/lib/bundle-tar.sh) is
+# uploaded with its signed .tar.sha256, and refused when it is missing,
+# signed by another key, doesn't match its checksum, or holds anything but
+# the bundle and its root image byte for byte.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; [[ -f ${t:-}/log ]] && sed 's/^/# /' "$t/log" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in gpg rsync python3 sha256sum; do
+  command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
+done
+real_rsync=$(command -v rsync)
+t=$(mktemp -d)
+export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
+R=$t/repo S=$t/server
+cleanup() {
+  for h in "$GNUPGHOME" "$R/keys/gnupg.release" "$t/other"; do
+    [[ -d $h ]] && gpgconf --homedir "$h" --kill gpg-agent 2>/dev/null || true
+  done
+  rm -rf "$t"
+}
+trap cleanup EXIT
+mkdir -p "$R/tools" "$R/packages/omamobile-keyring" "$R/keys" "$t/bin" "$S"
+cp tools/release-upload tools/bundle-manifest "$R/tools/"
+source tools/lib/bundle-tar.sh
+
+newkey() {  # newkey HOME UID: prints the primary's fingerprint
+  mkdir -m 700 -p "$1"
+  GNUPGHOME=$1 gpg --batch --quiet --passphrase '' --quick-generate-key "$2" ed25519 cert never 2>/dev/null
+  local fpr
+  fpr=$(GNUPGHOME=$1 gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
+  GNUPGHOME=$1 gpg --batch --quiet --passphrase '' --quick-add-key "$fpr" ed25519 sign 2y 2>/dev/null
+  echo "$fpr"
+}
+release=$(newkey "$R/keys/gnupg.release" "release <r@invalid>")
+other=$(newkey "$t/other" "someone else <x@invalid>")
+echo "$release" > "$R/keys/fingerprint.release"
+kr=$R/packages/omamobile-keyring
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --export "$release" > "$kr/omamobile.gpg"
+printf '%s:4:\n' "$release" > "$kr/omamobile-trusted"
+: > "$kr/omamobile-revoked"
+
+# A bundle as tools/make-bundle leaves it, small
+V=2026.11.01
+mkbundle() {  # mkbundle VERSION [SIGNING_HOME FPR]: out/bundle/omamobile-cheetah-VERSION
+  local v=$1 home=${2:-$R/keys/gnupg.release} key=${3:-$release}
+  local out=$R/out/bundle dir=$R/out/bundle/omamobile-cheetah-$v
+  local rootname=omamobile-rootfs-cheetah-$v-aarch64.img.zst
+  rm -rf "$dir" && mkdir -p "$dir/images"
+  printf 'CODENAME=cheetah\nNAME="Pixel 7 Pro"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\n' > "$dir/device.conf"
+  head -c 300000 /dev/urandom > "$dir/images/boot.img"
+  head -c 4096 /dev/urandom > "$dir/images/dtbo.img"
+  printf '#!/bin/bash\necho install\n' > "$dir/install"
+  echo readme > "$dir/README.txt"
+  cp "$kr/omamobile.gpg" "$dir/omamobile.gpg"
+  head -c 500000 /dev/urandom > "$out/$rootname"
+  (cd "$out" && sha256sum "$rootname" > "$rootname.sha256")
+  printf 'device: cheetah\n' > "$out/${rootname%.img.zst}.MANIFEST"
+  local digest
+  digest=$(sha256sum < "$out/$rootname" | cut -d' ' -f1)
+  printf 'version: %s\nroot image: %s (%s)\n' "$v" "$rootname" "$digest" > "$dir/MANIFEST"
+  python3 -I "$R/tools/bundle-manifest" --bundle "$dir" --rootfs "$out/$rootname" --rootfs-sha256 "$digest" \
+    --version "$v" --kernel-release 7.3.0-test --base-url "${BASE_URL:-https://pkgs.omamobile.org/releases/cheetah/$v/}"
+  (cd "$dir" && find . -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
+  GNUPGHOME=$home gpg --batch --yes --quiet --local-user "$key" --detach-sign -o "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS"
+  # the one-file download, as make-bundle writes and signs it
+  bundle_tar "$out" "omamobile-cheetah-$v" "$rootname" "$v"
+  signtar "$v" "$home" "$key"
+}
+signtar() {  # signtar VERSION [SIGNING_HOME FPR]: sign the .tar.sha256 again
+  local tar=$R/out/bundle/omamobile-cheetah-$1.tar
+  GNUPGHOME=${2:-$R/keys/gnupg.release} gpg --batch --yes --quiet --local-user "${3:-$release}" --detach-sign \
+    -o "$tar.sha256.sig" "$tar.sha256"
+}
+
+# The fake server. ssh: drop the options and the host, run the command here.
+cat > "$t/bin/ssh" <<EOF
+#!/bin/bash
+echo "ssh \$*" >> "$t/ssh.log"
+while [[ \$1 == -* ]]; do case \$1 in -p|-o) shift 2 ;; *) shift ;; esac; done
+shift   # the host
+exec bash -c "\$*"
+EOF
+# rsync: drop -e and the host: prefix, copy locally
+cat > "$t/bin/rsync" <<EOF
+#!/bin/bash
+echo "rsync \$*" >> "$t/rsync.log"
+a=()
+while ((\$#)); do
+  case \$1 in -e) shift ;; *@*:*) a+=("\${1#*:}") ;; *) a+=("\$1") ;; esac
+  shift
+done
+exec "$real_rsync" "\${a[@]}"
+EOF
+# curl: https://pkgs.omamobile.org/X is $S/X; -I prints headers (with CORS
+# unless $t/no-cors exists), otherwise the body; 404 fails like curl -f
+cat > "$t/bin/curl" <<EOF
+#!/bin/bash
+echo "curl \$*" >> "$t/curl.log"
+head=0 url=""
+while ((\$#)); do
+  case \$1 in -I|-sSfI) head=1 ;; -H|--max-time|-o|-w) shift ;; https://*) url=\$1 ;; esac
+  shift
+done
+f=$S/\${url#https://pkgs.omamobile.org/}
+[[ -f \$f && \$f != */ && \$f != */.* ]] || { echo "curl: (22) 404" >&2; exit 22; }
+if ((head)); then
+  printf 'HTTP/2 200\r\ncontent-length: %s\r\n' "\$(stat -c %s "\$f")"
+  [[ -e $t/no-cors ]] || printf 'access-control-allow-origin: *\r\n'
+  printf '\r\n'
+else
+  cat "\$f"
+fi
+EOF
+chmod +x "$t/bin/"*
+export OMAMOBILE_PKGS_PATH=$S
+run() { (cd "$R" && PATH="$t/bin:$PATH" tools/release-upload "$@") > "$t/log" 2>&1; }
+pub=$S/releases/cheetah
+
+mkbundle "$V"
+B=out/bundle/omamobile-cheetah-$V
+run --dry-run "$B" || fail "a dry run of a good bundle passes"
+[[ -z $(ls -A "$S") && ! -e $t/rsync.log ]] || fail "a dry run uploads nothing"
+grep -c "rsync -rt --omit-dir-times --chmod=D2775,F664 --partial --delete -e 'ssh -p 1022' .*$B/ .*omamobile-rootfs-cheetah-$V-aarch64.img.zst" "$t/log" >/dev/null ||
+  fail "a dry run prints the rsync command, with repo-publish's flags and port"
+grep -c 'ssh -p 1022 raven@nostr01.derekross.me' "$t/log" >/dev/null || fail "a dry run prints the ssh commands for the server repo-publish uses"
+pass "--dry-run checks the bundle and prints the ssh and rsync commands, touching nothing"
+
+run "$B" || fail "a good bundle uploads"
+for f in manifest.json SHA256SUMS SHA256SUMS.sig MANIFEST install images/boot.img images/dtbo.img \
+         omamobile-rootfs-cheetah-$V-aarch64.img.zst omamobile-rootfs-cheetah-$V-aarch64.img.zst.sha256 \
+         omamobile-rootfs-cheetah-$V-aarch64.MANIFEST omamobile-cheetah-$V.tar omamobile-cheetah-$V.tar.sha256 \
+         omamobile-cheetah-$V.tar.sha256.sig; do
+  [[ -f $pub/$V/$f ]] || fail "$f is published"
+done
+[[ ! -e $pub/.$V.partial ]] || fail "no staging directory is left"
+cmp -s "$R/$B/images/boot.img" "$pub/$V/images/boot.img" || fail "the files arrive unchanged"
+cmp -s "$R/out/bundle/omamobile-cheetah-$V.tar" "$pub/$V/omamobile-cheetah-$V.tar" || fail "the .tar arrives unchanged"
+[[ $(stat -c %A "$pub/$V/install") == -rw?r--r-- ]] || fail "published files are world-readable and not executable"
+grep -c "files served with the right sizes; all hashed but omamobile-rootfs-cheetah-$V-aarch64.img.zst and omamobile-cheetah-$V.tar" "$t/log" >/dev/null ||
+  fail "the HTTPS check runs, root image and .tar by size only"
+grep -c "^curl -sSf --max-time 0 .*omamobile-rootfs-cheetah-$V-aarch64.img.zst$" "$t/curl.log" >/dev/null && fail "without --full the root image isn't downloaded"
+grep -c "^curl -sSf --max-time 0 .*omamobile-cheetah-$V.tar$" "$t/curl.log" >/dev/null && fail "without --full the .tar isn't downloaded"
+grep -c "^curl -sSf --max-time 0 .*omamobile-cheetah-$V.tar.sha256.sig$" "$t/curl.log" >/dev/null || fail "the .tar's signature is downloaded and hashed"
+grep -c "omamobile-cheetah-$V.tar: signed .tar.sha256, and exactly the bundle" "$t/log" >/dev/null || fail "the .tar's members are checked before upload"
+pass "a signed bundle, its root image and the one-file .tar land in releases/cheetah/$V/, checked over HTTPS"
+
+rsyncs=$(wc -l < "$t/rsync.log")
+run "$B" && fail "uploading the same version again is refused"
+grep -c "exists" "$t/log" >/dev/null || fail "the refusal says the version exists"
+[[ $(wc -l < "$t/rsync.log") == "$rsyncs" ]] || fail "nothing is sent for an existing version"
+pass "a published version is never overwritten"
+
+run --verify-only --full "$B" || fail "--verify-only --full passes on a good upload"
+grep -c "^curl -sSf --max-time 0 .*omamobile-rootfs-cheetah-$V-aarch64.img.zst$" "$t/curl.log" >/dev/null || fail "--full downloads the root image"
+printf 'x' >> "$pub/$V/README.txt"
+run --verify-only "$B" && fail "--verify-only catches a file changed on the server"
+grep -c "README.txt: Content-Length" "$t/log" >/dev/null || fail "it names the file"
+truncate -s -1 "$pub/$V/README.txt"
+printf 'y' | dd of="$pub/$V/README.txt" bs=1 seek=0 conv=notrunc 2>/dev/null
+run --verify-only "$B" && fail "--verify-only catches a same-size change"
+grep -c "README.txt: downloads with SHA-256" "$t/log" >/dev/null || fail "it names the file and the hash"
+cp "$R/$B/README.txt" "$pub/$V/README.txt"
+touch "$t/no-cors"
+run --verify-only "$B" || fail "missing CORS headers are not fatal"
+grep -c "no Access-Control-Allow-Origin" "$t/log" >/dev/null || fail "missing CORS headers are reported"
+rm "$t/no-cors"
+pass "--verify-only checks sizes and hashes over HTTPS (--full: the root image too) and reports missing CORS"
+
+# Refusals before anything is sent
+V2=2026.11.02 B2=out/bundle/omamobile-cheetah-$V2
+refused() {  # refused WHAT PATTERN
+  local before
+  before=$(wc -l < "$t/rsync.log")
+  run "$B2" && fail "$1 is refused"
+  grep -cE "$2" "$t/log" >/dev/null || fail "$1: the refusal says why"
+  [[ $(wc -l < "$t/rsync.log") == "$before" && ! -e $pub/.$V2.partial && ! -e $pub/$V2 ]] || fail "$1: nothing is sent"
+}
+mkbundle "$V2"
+echo changed >> "$R/$B2/README.txt"
+refused "a file changed after signing" "doesn't match SHA256SUMS"
+mkbundle "$V2" "$t/other" "$other"
+refused "a bundle signed by another key" "not a good signature by the release key"
+BASE_URL=https://example.invalid/releases/cheetah/$V2/ mkbundle "$V2"
+refused "a manifest with another base_url" "base_url"
+mkbundle "$V2"
+head -c 10 /dev/urandom >> "$R/out/bundle/omamobile-rootfs-cheetah-$V2-aarch64.img.zst"
+refused "a root image that doesn't match the manifest" "not the size manifest.json gives"
+mkbundle "$V2"
+echo stray > "$R/$B2/extra"
+(cd "$R/$B2" && sha256sum extra >> SHA256SUMS)
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --yes --quiet --local-user "$release" --detach-sign -o "$R/$B2/SHA256SUMS.sig" "$R/$B2/SHA256SUMS"
+refused "a file manifest.json doesn't list" "lists"
+mv "$R/keys/fingerprint.release" "$t/fpr"
+mkbundle "$V2"
+refused "an upload without keys/fingerprint.release" "fingerprint.release"
+mv "$t/fpr" "$R/keys/fingerprint.release"
+pass "a changed file, another key, a wrong base_url, a mismatched root image or an unlisted file are refused before upload"
+
+# The one-file download's refusals, before anything is sent
+T2=$R/out/bundle/omamobile-cheetah-$V2.tar
+mkbundle "$V2"
+rm "$T2"
+refused "a bundle without its .tar" "no .*omamobile-cheetah-$V2.tar beside the bundle"
+mkbundle "$V2"
+signtar "$V2" "$t/other" "$other"
+refused "a .tar.sha256 signed by another key" "tar.sha256.sig is not a good signature by the release key"
+mkbundle "$V2"
+printf 'x' >> "$T2"
+refused "a .tar that doesn't match its .tar.sha256" "doesn't match its .tar.sha256"
+# a tar with a stray member, its .tar.sha256 and signature redone to match
+mkbundle "$V2"
+echo stray > "$R/out/bundle/stray"
+tar -C "$R/out/bundle" -rf "$T2" stray
+(cd "$R/out/bundle" && sha256sum "${T2##*/}" > "${T2##*/}.sha256")
+signtar "$V2"
+refused "a .tar with a member that isn't the bundle's" "unexpected file stray"
+# a tar whose README differs from the bundle's
+mkbundle "$V2"
+cp -a "$R/$B2" "$t/saved" && echo changed > "$R/$B2/README.txt"
+bundle_tar "$R/out/bundle" "omamobile-cheetah-$V2" "omamobile-rootfs-cheetah-$V2-aarch64.img.zst" "$V2"
+signtar "$V2"
+rm -rf "$R/$B2" && mv "$t/saved" "$R/$B2"
+refused "a .tar whose files differ from the bundle's" "README.txt differs from the file it stands for"
+pass "a missing .tar, one signed by another key, one that doesn't match its checksum, or holds anything but the bundle are refused"
+
+# A resumed upload: a stale staging directory with junk is cleaned up
+mkbundle "$V2"
+mkdir -p "$pub/.$V2.partial" && echo junk > "$pub/.$V2.partial/junk"
+run --latest "$B2" || fail "an upload over a stale staging directory passes"
+[[ ! -e $pub/$V2/junk && ! -e $pub/.$V2.partial ]] || fail "the staging directory's leftovers aren't published"
+python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); assert m["version"] == sys.argv[2] and m["manifest"].endswith("/releases/cheetah/" + sys.argv[2] + "/manifest.json")' \
+  "$pub/latest.json" "$V2" || fail "--latest writes latest.json for $V2"
+python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); assert m["bundle_tar"] == "https://pkgs.omamobile.org/releases/cheetah/%s/omamobile-cheetah-%s.tar" % (sys.argv[2], sys.argv[2]) and m["bundle_tar_sha256"] == open(sys.argv[3]).read().split()[0] and m["bundle_tar_size"] > 0' \
+  "$pub/latest.json" "$V2" "$R/out/bundle/omamobile-cheetah-$V2.tar.sha256" || fail "latest.json names the .tar, its size and SHA-256"
+[[ ! -e $pub/.latest.json.new ]] || fail "latest.json is renamed into place"
+pass "an interrupted upload resumes cleanly, and --latest points latest.json at it"
+
+run --verify-only --latest "$B" && fail "--latest refuses to go back"
+grep -c "newer than $V" "$t/log" >/dev/null || fail "the refusal names the newer version"
+run --verify-only --latest --allow-older "$B" || fail "--allow-older goes back"
+python3 -I -c 'import json, sys; assert json.load(open(sys.argv[1]))["version"] == sys.argv[2]' "$pub/latest.json" "$V" ||
+  fail "latest.json now names $V"
+pass "--latest won't point at an older version without --allow-older"

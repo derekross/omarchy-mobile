@@ -11,7 +11,10 @@ OnFailure=omamobile-publish-failed.service
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Projects/omarchy-mobile
+# The reminder first, its failure ignored ("-"), so it still runs on a day
+# the publish fails (a device package skipped for stale boot files, say),
+# and a failing reminder never holds the publish back
+ExecStart=-%h/Projects/omarchy-mobile/tools/repo-publish --remind
 ExecStart=%h/Projects/omarchy-mobile/tools/repo-publish --from-main development
-ExecStart=%h/Projects/omarchy-mobile/tools/repo-publish --remind
 TimeoutStartSec=infinity
 Nice=10

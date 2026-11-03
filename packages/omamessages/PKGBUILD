@@ -13,7 +13,7 @@
 # (README.md). Build: cargo fetches the crates, omatel's from git at the
 # pinned tag, in prepare(), and builds offline.
 pkgname=omamessages
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc="Messages: SMS conversations with search, drafts, delivery reports and blocking"
 arch=(aarch64)
@@ -24,7 +24,7 @@ makedepends=(cargo git pkgconf gtk4 libadwaita sqlite)
 install=omamessages.install
 options=('!debug' '!lto')
 source=("omamessages-$pkgver.tar.gz::https://github.com/derekross/omamessages/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('74d0a37cc4bf92520b684dfabfad1d49f8499c7bb4d65581bc93a6f5317fd9f4')
+sha256sums=('063786445c822b8e915ea9097fbaa53986e9f02633fa3681e90206f865d8a0ee')
 
 prepare() {
   cd "omamessages-$pkgver"

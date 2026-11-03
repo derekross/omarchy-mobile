@@ -11,7 +11,8 @@ import "quicksettings" as QS
 // its side at 1040x480, over an app stand-in, each shot in $QS_JOB
 // (collapsed, expanded, editing) saved as a PNG with the geometry of the
 // sheet, the tiles, the handle and the shade printed for the checks. Then
-// it quits.
+// it quits. A shot with "media" hands the sheet a made-up MPRIS player
+// (no session bus here), with the job's art file, to show the media card.
 ShellRoot {
   id: shell
 
@@ -57,11 +58,53 @@ ShellRoot {
     return out
   }
 
+  // A player as Quickshell's MprisPlayer looks to the card.
+  component FakePlayer: QtObject {
+    property string identity: "Music"
+    property string desktopEntry: "org.example.Music"
+    property string dbusName: "org.mpris.MediaPlayer2.music"
+    property string trackTitle: ""
+    property string trackArtist: ""
+    property var trackArtists: []
+    property string trackAlbum: ""
+    property string trackArtUrl: ""
+    property bool isPlaying: true
+    property int playbackState: 1
+    property bool canPlay: true
+    property bool canPause: true
+    property bool canTogglePlaying: true
+    property bool canGoNext: true
+    property bool canGoPrevious: true
+    property bool canSeek: true
+    property bool canRaise: false
+    property bool positionSupported: true
+    property bool lengthSupported: true
+    property real position: 83
+    property real length: 247
+    signal trackChanged()
+    function play() {}
+    function pause() {}
+    function togglePlaying() {}
+    function next() {}
+    function previous() {}
+    function raise() {}
+  }
+  Component { id: fakePlayer; FakePlayer {} }
+
+  // Whether a named Text is cut short (its full text wider than it is).
+  function elided(item, name) {
+    if (!item) return false
+    if (item.objectName === name) return item.implicitWidth > item.width + 1
+    for (var i = 0; i < item.children.length; i++) if (shell.elided(item.children[i], name)) return true
+    return false
+  }
+
   function next() {
     shell.index++
     if (shell.index >= shell.job.shots.length) { Qt.quit(); return }
     var s = shell.shot
     qs.close()
+    qs.media.players = s.media ? [fakePlayer.createObject(shell, s.media)] : []
     Qt.callLater(function() {
       qs.open(JSON.stringify({ expanded: s.expanded === true, page: s.edit ? "edit" : "" }))
       settle.restart()
@@ -74,7 +117,8 @@ ShellRoot {
     var s = shell.shot
     var parts = shell.describe(qs, {})
     console.log("geometry " + s.name + " " + screen.width + "x" + screen.height
-                + " " + JSON.stringify({ parts: parts, columns: qs.tileColumns, expanded: qs.expanded, edit: qs.editing, notifications: qs.notifications.length }))
+                + " " + JSON.stringify({ parts: parts, columns: qs.tileColumns, expanded: qs.expanded, edit: qs.editing, notifications: qs.notifications.length,
+                                     media: !!s.media, titleElided: shell.elided(qs, "mediaTitle") }))
     screen.grabToImage(function(result) {
       result.saveToFile(s.png)
       console.log("shot " + s.png)

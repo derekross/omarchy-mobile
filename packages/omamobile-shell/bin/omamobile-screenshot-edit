@@ -1,0 +1,20 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tensaku, as Omarchy opens a screenshot in it (tensaku-edit), without the
+# on-screen keyboard: the fallback of omamobile-screenshot-open when Loupe
+# isn't installed.
+#
+# Tensaku's window takes keyboard focus for its shortcuts and its text tool
+# through a GTK input-method context, and with the session's
+# GTK_IM_MODULE=wayland that focus asks for text input at once, so
+# squeekboard came up over the screenshot with nothing to type. GTK's
+# built-in simple context never talks to the text-input protocol, so the
+# keyboard stays down; keys still arrive as key events, so a text annotation
+# is typed with the keyboard shown by hand (double-tap the home pill, or the
+# Keyboard tile). Tensaku opened from its launcher entry or an app's Open
+# With gets the same context from omamobile-setup-user's override of that
+# entry.
+#
+# The window itself is tiled and maximized by hypr/phone.lua.
+export GTK_IM_MODULE=gtk-im-context-simple
+exec tensaku-edit "$@"

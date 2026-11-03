@@ -14,7 +14,8 @@ import "Readable.js" as Readable
 import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 
 // Voice input for the phone (docs/VOICE-PLAN.md): one voice bar, through
-// Voxtype's user daemon (voxtype.service, Omarchy's Install > AI >
+// Voxtype's user daemon (voxtype.service; in the root image, set up by
+// omamobile-setup-user with the shipped base.en; or Omarchy's Install > AI >
 // Dictation). Speech is turned into text on the phone.
 //
 // The ways in, as on Android: a hold on the pill in an app, or on the
@@ -188,8 +189,34 @@ Item {
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
-    onLoaded: root.modelId = VoiceModel.configModel(text())
-    onLoadFailed: root.modelId = "base.en"
+    onLoaded: {
+      root.modelId = VoiceModel.configModel(text())
+      root.maxSeconds = VoiceModel.configMaxSeconds(text())
+    }
+    onLoadFailed: {
+      root.modelId = "base.en"
+      root.maxSeconds = VoiceModel.MAX_SECONDS
+    }
+  }
+
+  // The longest recording: Voxtype's [audio] max_duration_secs.
+  property int maxSeconds: VoiceModel.MAX_SECONDS
+  property string durationError: ""
+  readonly property var durationRows: VoiceModel.durationRows(maxSeconds)
+
+  function chooseDuration(seconds) {
+    if (seconds === maxSeconds || phase !== "idle") return
+    durationError = ""
+    maxSeconds = seconds
+    durationProc.command = VoiceModel.durationArgv(seconds)
+    durationProc.running = true
+  }
+
+  Process {
+    id: durationProc
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.durationError = "Voxtype didn't take the new length (exit " + exitCode + ")."
+    }
   }
 
   Process {
@@ -499,7 +526,7 @@ Item {
     id: startProc
     onExited: function(exitCode) {
       if (exitCode !== 0 && root.phase === "starting")
-        root.fail("Voxtype isn't running. Install it with Install > AI > Dictation, or start voxtype.service.")
+        root.fail("Voxtype isn't running. Start voxtype.service, or install it with Install > AI > Dictation.")
     }
   }
 
@@ -676,7 +703,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: root.phase === "result" ? VoiceModel.clock(root.spoke) + " · " + VoiceModel.modelShort(root.modelId)
-                : root.busy ? VoiceModel.elapsedText(root.elapsed) : ""
+                : root.busy ? VoiceModel.elapsedText(root.elapsed, root.maxSeconds) : ""
               color: root.listening ? root.recording : root.foreground
               opacity: root.listening ? 1 : 0.7
               font.family: Style.font.family
@@ -829,7 +856,7 @@ Item {
           SheetAction {
             objectName: "done"
             width: (parent.width - parent.spacing) * 2 / 3
-            label: root.phase === "transcribing" ? "Turning it into text..." : "Done · " + VoiceModel.doneVerb(root.dest)
+            label: root.phase === "transcribing" ? "Transcribing…" : "Done · " + VoiceModel.doneVerb(root.dest)
             primary: true
             tone: root.recording
             enabled: root.phase === "listening" || root.phase === "starting"
@@ -1030,6 +1057,31 @@ Item {
               visible: root.modelError !== ""
               glyph: "󰀦"
               text: root.modelError
+              urgent: true
+            }
+
+            SectionLabel { text: "Longest recording" }
+
+            Repeater {
+              model: root.durationRows
+              delegate: ModelRow {
+                required property var modelData
+                width: settingsColumn.width
+                objectName: "duration-" + modelData.seconds
+                title: modelData.name
+                line: modelData.line
+                chosen: modelData.chosen
+                badge: modelData.chosen ? "In use" : ""
+                enabled: root.phase === "idle"
+                onTapped: root.chooseDuration(modelData.seconds)
+              }
+            }
+
+            InfoRow {
+              width: parent.width
+              visible: root.durationError !== ""
+              glyph: "󰀦"
+              text: root.durationError
               urgent: true
             }
 

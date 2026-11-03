@@ -1,0 +1,131 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copy a finished kernel build into this package's prebuilt/ directory, on
+# the build machine, so the PKGBUILD only packs files and never compiles
+# (docs/RELEASES.md §4; where the kernel itself is built is §12 decision 1,
+# and this works for either answer: anything that leaves a kernel output
+# directory with the files below).
+#
+#   KERNEL_DIR=<tag checkout> packages/linux-omamobile/stage KERNEL_OUT [PREBUILT]
+#   packages/linux-omamobile/stage --verify [PREBUILT]
+#
+# KERNEL_OUT is what `bin/omamobile kernel` then `bin/omamobile modules`
+# leave (KERNEL_OUT=~/omamobile-kernel/out-<x>):
+#   include/config/kernel.release      the release, a release build's (lib/pkgver)
+#   arch/arm64/boot/Image              the uncompressed arm64 kernel
+#   arch/arm64/boot/dts/<dir>/*.dtb    every board DTB, for each DTB_DIRS entry
+#   modules-<release>.tar.zst          the stripped modules, <release>/... inside
+# PREBUILT defaults to prebuilt/ beside this script (gitignored; copied
+# into tools/build-packages' container with the rest of the package). Set
+# DTB_DIRS (default exynos/google) for other vendor directories.
+#
+# Only a published release is packaged (docs/RELEASES.md §4, §8): KERNEL_DIR
+# is the clean checkout of a release tag, kernel-YYYY.MM.DD[.N], whose HEAD
+# is the release's commit; the tag must be on the published repository
+# (LINUX_OMAMOBILE_REMOTE, default GitHub's linux-omarchy-mobile) pointing at
+# that commit, and the commit must be on its omamobile branch. A test build,
+# an omamobile-int snapshot or a local tag is refused, so a staged prebuilt/
+# can never become a published package by accident. `git rev-list --count
+# HEAD` is the commit count for pkgver (lib/pkgver: a release build's uname
+# -r is <version>-omamobile-g<sha12>); the commit, the count and the tag go
+# in prebuilt/SOURCE, which ./install requires. KERNEL_COMMITS=<n>, if set,
+# must agree with the count.
+#
+# --verify re-checks a staged prebuilt/ on the build machine (its
+# checksums, its SOURCE, and the tag on the published repository again);
+# tools/build-packages runs it before it packs linux-omamobile, which it
+# builds only when named. Then: tools/build-packages packages/linux-omamobile
+# (or, by hand: LINUX_OMAMOBILE_PREBUILT=<dir> makepkg -A in this directory).
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+die() { printf 'stage: %s\n' "$*" >&2; exit 1; }
+REMOTE=${LINUX_OMAMOBILE_REMOTE:-https://github.com/derekross/linux-omarchy-mobile.git}
+TAG_RE='^kernel-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$'
+
+# published TAG COMMIT: the published repository has TAG, pointing at COMMIT
+published() {
+  local refs got
+  refs=$(git ls-remote "$REMOTE" "refs/tags/$1" "refs/tags/$1^{}" 2>/dev/null) \
+    || die "can't read the tags of $REMOTE (git ls-remote failed)"
+  got=$(awk -v t="refs/tags/$1^{}" '$2 == t {print $1}' <<<"$refs")
+  [[ -n $got ]] || got=$(awk -v t="refs/tags/$1" '$2 == t {print $1}' <<<"$refs")
+  [[ -n $got ]] || die "$1 is not a tag on $REMOTE: only a published release is packaged (tools/publish-kernel --tag)"
+  [[ $got == "$2" ]] || die "$1 on $REMOTE is ${got:0:12}, not ${2:0:12}"
+}
+
+if [[ ${1:-} == --verify ]]; then
+  pre=${2:-$here/prebuilt}
+  [[ -f $pre/kernel.release && -f $pre/SHA256SUMS ]] || die "no staged kernel in $pre"
+  (cd "$pre" && sha256sum --quiet --strict -c SHA256SUMS) || die "$pre fails its checksums"
+  grep -cE '  SOURCE$' "$pre/SHA256SUMS" >/dev/null || die "$pre has no SOURCE (stage it again from a release tag's checkout)"
+  rel=$(cat "$pre/kernel.release")
+  commit=$(sed -n 's/^commit \([0-9a-f]\{40\}\)$/\1/p' "$pre/SOURCE")
+  tag=$(sed -n 's/^tag //p' "$pre/SOURCE")
+  [[ -n $commit && $rel =~ -g([0-9a-f]+)$ && $commit == "${BASH_REMATCH[1]}"* ]] || die "$pre/SOURCE does not name the commit $rel was built from"
+  [[ $tag =~ $TAG_RE ]] || die "$pre/SOURCE names no release tag (kernel-YYYY.MM.DD)"
+  published "$tag" "$commit"
+  echo "verified: $rel is $tag (${commit:0:12}) on $REMOTE"
+  exit 0
+fi
+
+out=${1:?usage: stage KERNEL_OUT [PREBUILT], or stage --verify [PREBUILT]}
+dest=${2:-$here/prebuilt}
+[[ -f $out/include/config/kernel.release ]] || die "no kernel build in $out (include/config/kernel.release)"
+rel=$(cat "$out/include/config/kernel.release")
+# A release kernel's name first (lib/pkgver says why not), the count later
+fmt=1
+[[ $rel =~ -omamobile-([0-9]+)-g ]] && fmt=${BASH_REMATCH[1]}
+"$here/lib/pkgver" "$rel" "$fmt" >/dev/null || exit 1
+# The source: the clean checkout of a published release tag
+[[ -n ${KERNEL_DIR:-} ]] || die "set KERNEL_DIR to the clean checkout of the release tag the build came from"
+git -C "$KERNEL_DIR" rev-parse HEAD >/dev/null 2>&1 || die "KERNEL_DIR=$KERNEL_DIR is not a git checkout"
+commit=$(git -C "$KERNEL_DIR" rev-parse HEAD)
+[[ $rel =~ -g([0-9a-f]+)$ && $commit == "${BASH_REMATCH[1]}"* ]] \
+  || die "$KERNEL_DIR is at ${commit:0:12}, but $out was built from ${rel##*-g}"
+[[ -z $(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no) ]] || die "$KERNEL_DIR has uncommitted changes"
+tag=$(git -C "$KERNEL_DIR" tag --points-at HEAD | grep -E "$TAG_RE" | LC_ALL=C sort | head -1 || true)
+[[ -n $tag ]] || die "$KERNEL_DIR's HEAD (${commit:0:12}) carries no release tag (kernel-YYYY.MM.DD): only a published release is packaged"
+published "$tag" "$commit"
+git -C "$KERNEL_DIR" fetch -q --no-tags "$REMOTE" refs/heads/omamobile 2>/dev/null || die "can't fetch omamobile from $REMOTE"
+git -C "$KERNEL_DIR" merge-base --is-ancestor "$commit" FETCH_HEAD || die "$tag (${commit:0:12}) is not on omamobile at $REMOTE"
+count=${KERNEL_COMMITS:-}
+n=$(git -C "$KERNEL_DIR" rev-list --count HEAD)
+[[ -z $count || $count == "$n" ]] || die "KERNEL_COMMITS=$count, but $KERNEL_DIR counts $n"
+count=$n
+pkgver=$("$here/lib/pkgver" "$rel" "$count") || exit 1
+image=$out/arch/arm64/boot/Image
+modules=$out/modules-$rel.tar.zst
+[[ -s $image ]] || die "no $image (bin/omamobile kernel)"
+# An arm64 Image carries "ARM\x64" at offset 0x38
+[[ $(od -An -tx1 -j56 -N4 "$image" | tr -d ' \n') == 41524d64 ]] || die "$image is not an arm64 Image"
+[[ -s $modules ]] || die "no $modules (KERNEL_OUT=$out bin/omamobile modules)"
+top=$(tar --zstd -tf "$modules" | sed 's|^\./||; s|/.*||' | sort -u)
+[[ $top == "$rel" ]] || die "$modules holds '$top', not $rel only (a stale tarball?)"
+tar --zstd -tf "$modules" | grep -cE "^(\./)?$rel/modules\.order$" >/dev/null || die "$modules has no modules.order"
+
+rm -rf "$dest.new"
+mkdir -p "$dest.new/dtbs"
+cp "$image" "$dest.new/Image"
+cp "$modules" "$dest.new/modules.tar.zst"
+printf '%s\n' "$rel" > "$dest.new/kernel.release"
+printf '%s\n' "$count" > "$dest.new/kernel.commits"
+n=0
+for dir in ${DTB_DIRS:-exynos/google}; do
+  [[ $dir =~ ^[a-z0-9_-]+(/[a-z0-9_-]+)*$ ]] || die "DTB_DIRS: bad directory '$dir'"
+  for f in "$out/arch/arm64/boot/dts/$dir"/*.dtb; do
+    [[ -f $f && ! -L $f ]] || continue
+    mkdir -p "$dest.new/dtbs/$dir"
+    cp "$f" "$dest.new/dtbs/$dir/"
+    n=$((n + 1))
+  done
+done
+((n)) || die "no DTBs under $out/arch/arm64/boot/dts/{${DTB_DIRS:-exynos/google}}"
+{ echo "commit $commit"
+  echo "commits $count"
+  echo "tag $tag"
+  echo "remote $REMOTE"; } > "$dest.new/SOURCE"
+
+(cd "$dest.new" && find . -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum) > "$dest.new/SHA256SUMS"
+rm -rf "$dest"
+mv "$dest.new" "$dest"
+echo "staged $rel, $tag (pkgver $pkgver): Image, $(tar --zstd -tf "$modules" | grep -c '\.ko') modules, $n DTBs in $dest"

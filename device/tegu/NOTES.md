@@ -13,6 +13,136 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-02, evening: calls, Phone and Messages, echo, a restart and MMS
+
+All on the daily kernel (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+with the modem started at boot by `omamobile-tegu-modem-boot` (#372).
+
+- [V] **Calls and texts from the apps:** Phone and Messages through
+  `omamobile-mmd` (#371) placed and answered calls with speakerphone audio
+  both ways and sent and received texts. Messages showed "service isn't
+  running" until the user's `omatel-agent` unit was started and enabled.
+- [V] **Signal and the airplane icon:** the modem sends its signal reports
+  only after it is told the screen is on, and radio state 10 means on;
+  with both in `omamobile-modem-sit` 0.3.15 and the bridge 0.1.2, the bar
+  shows signal and no airplane.
+- [V] **A sitd restart in the same boot (#376), a deliberate test:** sitd's
+  unit says a second start-up isn't supported, and this checked what
+  happens. It failed at once on
+  leftovers in `/run/omamobile-sit` (the LTE-only setting's saved original,
+  then the bearer records), though the modem had dropped the bearers when
+  sitd stopped. With 0.3.18 a restart gets data and signal back, but IMS
+  doesn't register again (no registration indication after the PDN
+  information is accepted), so calls and texts need a reboot after a
+  restart. [I] The modem's IMS stack is never told the old session ended.
+- [V] **Echo cancellation (#374, #378):** the owner's tuning files from
+  the factory image upload with the AoC's status 0. The AoC's reply
+  rewrites the second header byte (0x01 sent, 0x3e back), which the first
+  check took for an unknown outcome, so that call was silent (fixed in
+  0.3.19). With the tuning alone the far end still heard its own voice;
+  with `Audio DSP Mode` set to `Telephony_APMG3` (0.3.20) it heard no echo
+  for the first few seconds and a new low hiss, then the echo again with
+  the hiss. [I] The echo reference or the order of the setup is wrong.
+- [V] **MMS (#380):** with the carrier's MMS APN equal to its internet APN,
+  setting up the separate MMS bearer (CID 3) took the IMS bearer down:
+  afterwards the modem listed bearers 1 and 3, not 2. sitd held the
+  reservation as uncertain, as designed, and a reboot cleared it. 0.3.22
+  sends MMS over the internet bearer instead; not yet tried.
+- [V] **Wi-Fi after a sleep with the keep flag:** in a boot with the
+  modem's boot start disabled and the CP never started (checked before the
+  sleep test), after the shell's auto-sleep with
+  `/etc/omamobile/wifi-keep-across-sleep` in place,
+  brcmfmac didn't attach to the chip again; a reload, a bind and a PCI
+  remove and rescan all left no interface. A reboot brought it back.
+
+## 2026-11-02: the SIM, the in-tree modem stack with GNSS, and a pruned module tree
+
+Boots as before: test kernels pushed, checked, and the daily kernel pushed
+back. Details are on each pull request.
+
+- [V] **The SIM (omarchy-mobile #356, the daily kernel):** LTE
+  registration, mobile data over `rmnet0` and texts both ways, after five
+  data setups refused with status 36 and a wait after the data permission
+  in `omamobile-modem-sit` 0.3.8. The record is in
+  [MODEM-PLAN](MODEM-PLAN.md), "SIM test results".
+- [V] **GNSS driver first boot (kernel #185, G1,
+  `7.3.0-rc6-omamobile-push1-g30e9d94b4a91`):** `gnss_spi` and `gnssif`
+  bound with the modem off, `/dev/gnss_ipc` appeared, no request
+  interrupts, wakeup armed only while the device was open, and an unload
+  and reload were clean. Then a 10-minute session on the daily kernel with
+  #185's modules built for it: 538 of 556 GGA sentences fixed.
+- [V] **The modem's two-lane PHY (kernel #186, bench, the modem off):**
+  the first bench locked every PLL on one cycle and then hung the SoC at
+  the next cycle's first ELBI write: power-off left the controller on the
+  PHY's stopped clock. With the clock parked on the oscillator first, as
+  stock does, five cycles over two boots locked every time
+  (`7.3.0-rc6-omamobile-push1-g909c8c8121bb`, which also showed both HSI2
+  GPIO bus clocks held on with kernel #172's second commit).
+- [V] **The in-tree modem stack (kernel #187):** the gs201-cp host with
+  zumapro's channel 0 through #186's PHY linked to the modem's ROM three
+  times at Gen1 x1 (`7.3.0-rc6-omamobile-push1-g1b270b5cc447`); then, with
+  a cpif fix for an uncached link without IO coherency, CPIF booted the CP
+  to ONLINE and a 10-minute GNSS session through #185 gave 543 of 549 GGA
+  fixed, 1343 link power cycles, no reset (`7.3.0-rc6-omamobile-push1-gbaf1b52d1de5`).
+  The first try's cpif probe had failed ("PCIe IOCC config and dt are
+  inconsistent").
+- [V] **A pruned daily module tree:** after six test kernels in one day,
+  the push back to the daily kernel replaced its module tree with the
+  kit's archive, without the hand-installed `extra/` and `updates/`
+  modules, and the next boot stopped at the boot logo (display driver
+  missing). The cause: `omamobile-modules-cleanup` keeps the running tree,
+  the next boot's and the two newest others, so during a test boot it
+  removed the older daily tree; the push back then found no marker and
+  sent the archive. Restored from the backup in `/var/lib/omamobile-tegu/`;
+  on the palmtop the cleanup now keeps 50 trees (a local drop-in) until a
+  pin for named releases ships. Until then, check `ls
+  /usr/lib/modules/$(uname -r)/extra` after any push back to the daily
+  kernel.
+- [I] **A leftover bring-up unit:** `/etc/systemd/system/omamobile-tegu-audio.service`
+  (2026-10-28, before `omamobile-device-tegu` took over its steps) now
+  fails at every boot: its script loads NFC's module by hand after the
+  package already has. The package's units bring up the same hardware, so
+  it should go, as AGENTS.md asks for bring-up files a package replaces.
+
+## 2026-11-01, afternoon and evening: Wi-Fi from the package, the wake and the replug, storage idle, the panel ID
+
+Boots as in the next section (published-style kernels, pushed, checked,
+the daily kernel pushed back), plus fixes on the daily kernel. Details
+are on each pull request.
+
+- [V] **Wi-Fi from the package (omarchy-mobile #238, kernel #178 on
+  #156, `7.3.0-rc6-omamobile-push1-g5312a5be1ffe`):** with only
+  `tools/extract-vendor-firmware`'s files, `omamobile-device-tegu`
+  0.2.4's boot step loaded `phy_zuma_pcie`, `pcie_gs201` and brcmfmac,
+  the link trained at Gen2 x1 on the first try, and wlan0 joined a
+  network and passed traffic. An unbind and rebind of the host ran the
+  soft power reset and the oscillator step, and the link trained again.
+  With Bluetooth up, brcmfmac failed after the rebind ("FW failed to
+  initialize"); with kernel #178's FLR commit
+  (`7.3.0-rc6-omamobile-push1-gd60d217db5c6`) three rebinds with
+  Bluetooth up all brought wlan0 back and left Bluetooth powered.
+- [V] **The power-key wake (omarchy-mobile #268 and #275, the daily
+  kernel):** one press lights the lock screen. sleepd now reads the 9a's
+  `Power` interrupt as a power-key wake, and `user.slice` thaws 0.14 to
+  0.24 s after the resume, against 1.1 s while the Wi-Fi hook waited for
+  brcmfmac.
+- [V] **A replug the gadget didn't see (omarchy-mobile #280, the daily
+  kernel):** with the switch opened as the chip does on an unplug and
+  the gadget still `configured`, the rescue closed it 9 s later and USB
+  came back.
+- [V] **Storage idle (kernel #99, `7.3.0-rc6-omamobile-push1-g5894c5287770`):**
+  clock gating with the Hibern8 sequences, a cold read of 20000 files,
+  30 fsync'd writes read back identical, and an s2idle and power-key wake
+  with no UFS errors.
+- [V] **The panel ID (kernel #125, `7.3.0-rc6-omamobile-push1-g88a7314c6409`):**
+  `panel ID 04 80 00 2d`, then brightness, DPMS off and on, and 120 Hz
+  to 60 Hz and back.
+- [V] **The RTC without the PMIC interrupt (kernel #55,
+  `7.3.0-rc6-omamobile-push1-gc04142279ef4`):** rtc0 set the clock at
+  boot, and `hwclock -r` and `-w` worked.
+- [V] **A day of use with auto-sleep on:** seven real-use sleeps all
+  woke ([SLEEP-PLAN](SLEEP-PLAN.md), "A day of use with auto-sleep on").
+
 ## 2026-10-31 and 11-01: every testing row on a published-style kernel
 
 Each line is a boot of the named head on the palmtop, built with
@@ -115,6 +245,23 @@ only byte that changed, slot A's bytes are unchanged, and both read-only
 flags read 1 afterwards. No other backup was taken first. Until the
 maintainer decides how B is marked on the 9a, there are no more `devinfo`
 writes: with B unmarked, reboots stay few and images are tried with `push`.
+
+## 2026-10-30, evening: GNSS gets a fix
+
+The receiver gets a position fix on the owner's kernel: up to 13 satellites
+used, HDOP 0.8-1.2, GPS, Galileo, BeiDou and GLONASS tracked, CHPP clean
+for about a minute per boot. One fix did it: spi-s3c64xx
+turned the channels off after clearing the packet count, which lost a few
+bits per transfer on a streaming slave (linux-omarchy-mobile#150). A pin
+drive change (linux-omarchy-mobile#151) was credited too and withdrawn on 10-31: at the
+bootloader's drive 0 with linux-omarchy-mobile#150 alone, 50 of 53 fixed and every frame at bit
+offset 0 with a valid CRC. What ends the fix is
+the CP link under GNSS traffic: held up it crashes the CP 103-108 s after
+ONLINE (six boots of six), left to cycle it hung the SoC 170 s to about 26 minutes
+after ONLINE. That hang was the PERIC0 GPIO bus clock gate (found
+2026-11-01, linux-omarchy-mobile#172); with the gate kept on and the link
+left to cycle, a 30-minute session through the Location switch ran clean. Details, the configuration and the sweep in
+[MODEM-PLAN](MODEM-PLAN.md) "G3, GNSS gets a fix" and G3-L1.
 
 ## 2026-10-30: the hands-on morning (fingerprint, card, USB-C host, GNSS)
 
@@ -276,8 +423,10 @@ list below:
 - **Speakers:** the -10 dB ceiling recorded below, by hand with the AoC.
 - **GNSS, 2026-10-30 evening:** a position fix on a bring-up kernel (the gn3
   tree with the spi-s3c64xx swap-mode change and the flush-order fix of
-  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, drive 3, mode
-  0, 32-bit words, feedback delay 0, automatic chip select, 64-byte reads):
+  linux-omarchy-mobile#137, the GNSS SPI's pins at function 2, mode 0,
+  32-bit words, feedback delay 0, automatic chip select, 64-byte reads; that boot also
+  raised the pins' drive to 3, which the 10-31 check at drive 0 showed was
+  not needed, linux-omarchy-mobile#151 closed):
   in a 3-minute session by a window, 23 of 25 GGA sentences with fix quality
   1, up to 13 satellites used, HDOP 0.8, every CHPP read at bit 0 with a
   valid CRC; started by hand through the modem bring-up, not by a package.
