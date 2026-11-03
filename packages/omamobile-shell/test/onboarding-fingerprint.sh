@@ -25,10 +25,10 @@ fake omarchy-notification-send 'echo "notify $*" >>"$T/log"'
 fake systemctl '[[ $* == "is-failed --quiet omamobile-fp.service" && -e $T/failed ]]'
 fake timeout 'shift; "$@"'
 ob() {
-  env -u XDG_STATE_HOME T="$t" HOME="$t/home" USER=alice OMARCHY_PATH="$t/none" OMAMOBILE_FP_RUNNER="$t/runner" OMAMOBILE_FP_IMAGE="$t/image" \
+  env -u XDG_STATE_HOME T="$t" HOME="$t/home" USER=alice OMARCHY_PATH="$t/none" OMAMOBILE_FP_RUNNER="$t/runner" OMAMOBILE_FP_IMAGE="$t/image" OMAMOBILE_FP_UIDIR="$t/ui" \
     PATH="$F:/usr/bin:/bin" bash bin/omamobile-onboarding "$@" >"$t/out" 2>&1
 }
-reset() { rm -rf "$t/pin" "$t/yes" "$t/listing" "$t/failed" "$t/image" "$t/log"; rm -rf "$t/home/.local"; : >"$t/log"; }
+reset() { rm -rf "$t/pin" "$t/yes" "$t/listing" "$t/failed" "$t/image" "$t/ui" "$t/log"; rm -rf "$t/home/.local"; : >"$t/log"; }
 ready() { printf '{"event": "fingers", "fingers": [%s], "stages": 12, "device": "Omarchy Mobile UDFPS"}\n' "${1:-}" >"$t/listing"; }
 
 # Setup: the PIN is set, then the fingerprint is offered and taken
@@ -52,6 +52,9 @@ grep -c 'ready once your phone' "$t/out" >/dev/null || fail "not provisioned yet
 reset; mkdir "$t/image"; touch "$t/failed"
 ob --inner; grep -c 'unavailable on this boot' "$t/out" >/dev/null || fail "a refused or failed unit: setup says unavailable, not 'after the firmware'"
 grep -c 'ready once your phone' "$t/out" >/dev/null && fail "a failed unit isn't blamed on missing firmware"
+reset; mkdir "$t/image" "$t/ui"; touch "$t/failed"; echo data-check > "$t/ui/off-reason"
+ob --inner; grep -c "check of stock Android's data failed" "$t/out" >/dev/null || fail "a data-check refusal says so (it recurs every boot)"
+grep -c 'unavailable on this boot' "$t/out" >/dev/null && fail "a data-check refusal isn't shown as a one-boot failure"
 reset; mkdir "$t/image"
 ob --inner; grep -c 'still starting' "$t/out" >/dev/null || fail "provisioned but not up yet: offered at the next login"
 reset

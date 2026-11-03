@@ -21,6 +21,8 @@ set -u
 omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
 fp_runner=${OMAMOBILE_FP_RUNNER:-/usr/lib/omamobile-fp/omamobile-fp-chroot}
 fp_image=${OMAMOBILE_FP_IMAGE:-/usr/lib/omamobile-fp/root}
+# the runner says here why it refused (off-reason: data-check recurs every boot)
+fp_uidir=${OMAMOBILE_FP_UIDIR:-/run/omamobile-fp-ui}
 fp_offered=${XDG_STATE_HOME:-$HOME/.local/state}/omamobile/fingerprint-offered
 
 has_identity() {
@@ -76,7 +78,9 @@ offer_fingerprint() {
   n=$(fp_count)
   if [[ -z $n ]]; then
     echo
-    if systemctl is-failed --quiet omamobile-fp.service 2>/dev/null; then
+    if [[ $(cat "$fp_uidir/off-reason" 2>/dev/null) == data-check ]]; then
+      echo "Fingerprint unlock is off: its check of stock Android's data failed, and it stays off until that is looked at (journalctl -u omamobile-fp; FINGERPRINT-PLAN F19). Your PIN or password unlocks the phone."
+    elif systemctl is-failed --quiet omamobile-fp.service 2>/dev/null; then
       echo "Fingerprint unlock is unavailable on this boot (see journalctl -u omamobile-fp). Your PIN or password unlocks the phone."
     elif [[ ! -d $fp_image ]]; then
       echo "Fingerprint unlock will be ready once your phone's firmware is added and it restarts. The phone offers it then."
