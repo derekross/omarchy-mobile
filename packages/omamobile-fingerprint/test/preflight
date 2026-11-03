@@ -58,7 +58,7 @@ EOF
 pf() {
   PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=${TESTMODE-1} OMAMOBILE_FP_BOOT_ID=$t/p/boot_id \
   OMAMOBILE_FP_DEVICE=${DEV:-cheetah} OMAMOBILE_FP_STATE=$t/p/state \
-  OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp \
+  OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp OMAMOBILE_FP_UIDIR=$t/p/ui \
   OMAMOBILE_FP_SYSBLOCK=$t/p/sys OMAMOBILE_FP_DEVDIR=$t/p/dev OMAMOBILE_FP_MOUNTS=$t/p/mounts \
     "$RUNNER" preflight > "$t/out" 2>&1
 }
@@ -85,6 +85,7 @@ grep -v -c 'debugfs -R dump -p ' "$t/p/debugfs.log" >/dev/null && fail "debugfs 
 grep -c ' token [0-9a-f]\{32\}$' "$marker" >/dev/null || fail "the marker carries the token for the inner start"
 [[ $(stat -c %a "$marker") == 600 ]] || fail "the marker (and its token) is root's only"
 [[ $(cut -d' ' -f1 "$S/start-pending") == boot-1 ]] || fail "the start is pending until it runs"
+[[ ! -e $t/p/ui/off-reason ]] || fail "a passing preflight leaves no off-reason"
 pass "a first start: mfg_data and persist:/ss copied read-only and their hashes recorded"
 
 # A second start in the same boot
@@ -112,6 +113,7 @@ phone; pf || fail "setup"
 newboot; echo x >> "$S/persist-ss/0"
 pf && fail "a changed TDP copy is refused"
 grep -c 'TDP copy changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says the TDP copy changed"; }
+[[ $(cat "$t/p/ui/off-reason" 2>/dev/null) == data-check ]] || fail "a data-check refusal tells the desktop why (off-reason)"
 pass "the TDP copy changed since the record: refused"
 
 # persist:/ss/0 changed under the copy (a stock boot)
@@ -161,15 +163,24 @@ grep -c 'never got running' "$t/out" >/dev/null || { cat "$t/out"; fail "says wh
 pf || { cat "$t/out"; fail "the boot after it tries again (the pending marker went)"; }
 pass "a start that never got running: the next boot skips once, then it starts again"
 
-# The path overrides only count in the test mode
-phone
-TESTMODE=0 pf && fail "without OMAMOBILE_FP_TEST=1 the fake tree is ignored"
-[[ ! -e $marker && ! -e $S/provenance ]] || fail "the overrides redirected nothing outside the test mode"
-pass "the partitions' and markers' path overrides need OMAMOBILE_FP_TEST=1"
+# The overrides only count in the test mode (read-only: the paths subcommand)
+ov() { env OMAMOBILE_FP_TEST="$1" OMAMOBILE_FP_DEVICE=tegu OMAMOBILE_FP_STATE=/x/state OMAMOBILE_FP_RUN=/x/run \
+  OMAMOBILE_FP_SYSBLOCK=/x/sys OMAMOBILE_FP_DEVDIR=/x/dev OMAMOBILE_FP_MOUNTS=/x/mounts OMAMOBILE_FP_BOOT_ID=/x/boot \
+  OMAMOBILE_FP_UIDIR=/x/ui "$RUNNER" paths; }
+real=$(ov 0) fake=$(ov 1)
+for l in state=/var/lib/omamobile-fp run=/run/omamobile-fp sysblock=/sys/class/block devdir=/dev mounts=/proc/mounts \
+         boot_id=/proc/sys/kernel/random/boot_id uidir=/run/omamobile-fp-ui; do
+  grep -qx "$l" <<<"$real" || fail "without OMAMOBILE_FP_TEST=1: $l ($real)"
+done
+grep -qx 'device=tegu' <<<"$real" && fail "without OMAMOBILE_FP_TEST=1 the device comes from the board, not OMAMOBILE_FP_DEVICE"
+for l in device=tegu state=/x/state run=/x/run sysblock=/x/sys devdir=/x/dev mounts=/x/mounts boot_id=/x/boot uidir=/x/ui; do
+  grep -qx "$l" <<<"$fake" || fail "with OMAMOBILE_FP_TEST=1: $l"
+done
+pass "the device, state and path overrides need OMAMOBILE_FP_TEST=1"
 
 # The inner start needs this boot's preflight token
 phone; pf || fail "setup"
-for tok in "" wrong none; do
+for tok in "" wrong none 0123456789abcdef0123456789abcdef; do
   if PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp OMAMOBILE_FP_STATE=$S \
      OMAMOBILE_FP_IN_NS=1 OMAMOBILE_FP_TOKEN=$tok "$RUNNER" start storage > "$t/out" 2>&1; then
     fail "the inner start with token '$tok' is refused"
@@ -184,5 +195,25 @@ DEV=tegu pf && fail "tegu without tdp.img: refused"
 mkdir -p "$S"; head -c 512 /dev/urandom > "$S/tdp.img"
 DEV=tegu pf || { cat "$t/out"; fail "tegu with tdp.img passes"; }
 pass "the 9a: refused without its TDP image"
+
+# post_upgrade: an older runner's proxy still running sets a marker that
+# blocks a second proxy and that no token can pass
+phone
+mkdir -p "$t/p/stub"; printf '#!/bin/bash\nexit 0\n' > "$t/p/stub/pgrep"; printf '#!/bin/bash\nexit 0\n' > "$t/p/stub/systemctl"
+chmod +x "$t/p/stub/pgrep" "$t/p/stub/systemctl"
+sed "s|/run/omamobile-fp|$t/p/run/omamobile-fp|g" omamobile-fingerprint.install > "$t/scriptlet"
+( PATH=$t/p/stub:$PATH; source "$t/scriptlet"; post_upgrade ) > /dev/null
+[[ -e $marker ]] || fail "post_upgrade marks a proxy started by an older runner"
+pf && fail "after that marker, a start in the upgrade boot is refused"
+for tok in "" none "$(sed -n 's/.* token //p' "$marker")"; do
+  if PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp OMAMOBILE_FP_STATE=$S \
+     OMAMOBILE_FP_IN_NS=1 OMAMOBILE_FP_TOKEN=$tok "$RUNNER" start storage > "$t/out" 2>&1; then
+    fail "the inner start passes post_upgrade's marker with token '$tok'"
+  fi
+done
+rm -f "$marker"; printf '#!/bin/bash\nexit 1\n' > "$t/p/stub/pgrep"
+( PATH=$t/p/stub:$PATH; source "$t/scriptlet"; post_upgrade ) > /dev/null
+[[ ! -e $marker ]] || fail "post_upgrade sets no marker when no proxy runs"
+pass "post_upgrade: an older runner's running proxy blocks a second one, and its marker passes no token"
 
 echo "omamobile-fingerprint preflight: ok"

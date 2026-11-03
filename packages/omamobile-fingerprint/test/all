@@ -78,6 +78,15 @@ order=$(sed -n '/^stop() {/,/^}/p' lib/omamobile-fp-chroot | sed -n 's/^ *stop_c
 [[ $order == "bridge fingerprint|gatekeeper keymint|storageproxyd|" ]] || fail "stop order: $order"
 grep -c 'ln -sfn ../omamobile-fp.service "$d/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service"' install >/dev/null ||
   fail "the package enables omamobile-fp itself (so only this runner is ever enabled by default)"
+# A good start clears its pending marker (else every other boot would skip),
+# a die in the namespace still stops in order, and the marker is taken
+# atomically
+st=$(sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot)
+grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -qx '  rm -f "\$PENDING"' ||
+  fail "start clears start-pending right after the stack runs"
+grep -qx "  trap 'stop \$?' EXIT" <<<"$st" || fail "the namespace's EXIT trap keeps the stop order on a die"
+grep -c 'set -o noclobber; umask 077; echo .* > "\$MARKER"' lib/omamobile-fp-chroot >/dev/null ||
+  fail "the once-per-boot marker is created with O_EXCL (noclobber)"
 echo "ok - one start per boot, no restart loop, the storage proxy stopped last"
 
 # alive() and stop_children() in a real PID namespace (the runner's PIDS[]
@@ -119,7 +128,7 @@ if unshare --user --map-root-user --mount --propagation private --pid --fork \
 else
   echo "ok - alive() in a PID namespace # SKIP no unprivileged user namespaces here"
 fi
-rmdir "$nsroot/proc" 2>/dev/null; rmdir "$nsroot" 2>/dev/null || true
+rm -rf "$nsroot"
 
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"

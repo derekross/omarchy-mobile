@@ -10,9 +10,9 @@ post_upgrade() {
   # so the new runner refuses a second proxy until the reboot.
   if pgrep -x storageproxyd >/dev/null 2>&1 && [[ ! -e /run/omamobile-fp/storageproxyd-started ]]; then
     mkdir -p /run/omamobile-fp
-    (umask 077; echo "$(date -Is) started before the upgrade token none" > /run/omamobile-fp/storageproxyd-started)
+    (umask 077; echo "$(date -Is) started before the upgrade (no token)" > /run/omamobile-fp/storageproxyd-started)
   fi
-  echo "omamobile-fingerprint: fingerprint starts again at the next boot (one storage proxy per boot)"
+  echo "omamobile-fingerprint: reboot soon: fingerprint starts again at the next boot (one storage proxy per boot)"
 }
 pre_remove() {
   systemctl disable --now omamobile-fp.service 2>/dev/null || true

@@ -5,6 +5,7 @@
 # bring-up runbook in FINGERPRINT-PLAN.md).
 #
 #   omamobile-fp-chroot check            preconditions only; changes nothing
+#   omamobile-fp-chroot paths            the device and paths in use; read-only
 #   omamobile-fp-chroot preflight        the safety checks a start runs before
 #                                        storageproxyd (the read-only copies,
 #                                        the TDP guard, once per boot). Not a
@@ -57,8 +58,9 @@
 #     the AoC's sound and sensors with it), so that boot skips fingerprint
 #     once and the one after tries again.
 #
-# The overrides of the partitions' and markers' paths (OMAMOBILE_FP_RUN,
-# _SYSBLOCK, _DEVDIR, _MOUNTS, _BOOT_ID) are honoured only with
+# The overrides of the device, the state and the partitions' and markers'
+# paths (OMAMOBILE_FP_DEVICE, _STATE, _RUN, _SYSBLOCK, _DEVDIR, _MOUNTS,
+# _BOOT_ID, _UIDIR) are honoured only with
 # OMAMOBILE_FP_TEST=1, which the unit never sets (test/preflight).
 set -euo pipefail
 
@@ -79,7 +81,9 @@ fp_device() {
     *) echo cheetah ;;
   esac
 }
-DEVICE=${OMAMOBILE_FP_DEVICE:-$(fp_device)}
+# From the board's compatible string; only test/preflight may override it
+DEVICE=$(fp_device)
+[[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && DEVICE=${OMAMOBILE_FP_DEVICE:-$DEVICE}
 case $DEVICE in
   cheetah)
     TA=g7.app
@@ -102,7 +106,8 @@ case $DEVICE in
 esac
 PANEL_NAME=${OMAMOBILE_FP_PANEL_NAME:-$PANEL_NAME}
 PROPS_DEVICE=${OMAMOBILE_FP_PROPS_DEVICE:-/usr/lib/omamobile-fp/props-$DEVICE.conf}
-STATE=${OMAMOBILE_FP_STATE:-/var/lib/omamobile-fp}
+STATE=/var/lib/omamobile-fp
+[[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && STATE=${OMAMOBILE_FP_STATE:-$STATE}
 RUN=/run/omamobile-fp
 # Where the partitions are found
 SYSBLOCK=/sys/class/block
@@ -137,6 +142,7 @@ SOCKDIR=$RUN/sock
 # world-readable, unlike everything else here. In the chroot it is
 # /dev/socket/omamobile-fp-ui.
 UIDIR=/run/omamobile-fp-ui
+[[ ${OMAMOBILE_FP_TEST:-} == 1 ]] && UIDIR=${OMAMOBILE_FP_UIDIR:-$UIDIR}
 # The shell keeps a file fresh in here while the on-screen keyboard is up
 # (its keys can cover the sensor); the bridge then ignores touches on the
 # sensor. Sticky and world-writable like /tmp: a user can only turn
@@ -145,6 +151,13 @@ INHIBITDIR=$UIDIR/inhibit
 
 say() { printf 'omamobile-fp: %s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
+# A refusal of the data checks: unlike a failed start it recurs at every
+# boot until someone acts, so the desktop is told why (world-readable, like
+# the bridge's state file; onboarding reads it).
+refuse() {
+  install -d -m 0755 "$UIDIR" 2>/dev/null && echo data-check > "$UIDIR/off-reason" 2>/dev/null || true
+  die "$*"
+}
 
 # Host tools, resolved now: the Android processes get an Android PATH, and
 # env(1) would look chroot up in that.
@@ -266,9 +279,9 @@ ro_part() {
   local d
   d=$(part_dev "$1") || die "no $1 partition (PARTNAME=$1 in $SYSBLOCK/*/uevent)"
   [[ $(cat "$SYSBLOCK/$d/ro" 2>/dev/null) == 1 ]] ||
-    die "$1 ($d) is not read-only: the storage guard must keep it ro=1. Nothing copied, nothing started"
+    refuse "$1 ($d) is not read-only: the storage guard must keep it ro=1. Nothing copied, nothing started"
   if awk -v d="$DEVDIR/$d" '$1 == d && $4 ~ /(^|,)rw(,|$)/ {f = 1} END {exit !f}' "$MOUNTS" 2>/dev/null; then
-    die "$1 ($d) is mounted read-write. Nothing copied, nothing started"
+    refuse "$1 ($d) is mounted read-write. Nothing copied, nothing started"
   fi
   printf '%s\n' "$d"
 }
@@ -298,11 +311,11 @@ provision() {
   if [[ -e $STATE/persist-ss/0 ]]; then
     persist_dump /ss/0 "$tmp/0" "$p" || die "can't read persist:/ss/0 to check the existing TDP copy"
     cmp -s "$tmp/0" "$STATE/persist-ss/0" ||
-      die "$STATE/persist-ss/0 differs from persist:/ss/0: Linux's TDP copy and stock's no longer agree. Not starting: ask (FINGERPRINT-PLAN F19)"
+      refuse "$STATE/persist-ss/0 differs from persist:/ss/0: Linux's TDP copy and stock's no longer agree. Not starting: ask (FINGERPRINT-PLAN F19)"
     say "the existing TDP copy matches persist:/ss/0: recording it"
   else
     persist_dump /ss/0 "$tmp/0" "$p" ||
-      die "persist has no /ss/0 (or it can't be read): without a TDP copy storageproxyd won't start"
+      refuse "persist has no /ss/0 (or it can't be read): without a TDP copy storageproxyd won't start"
     persist_dump /ss/nsp "$tmp/nsp" "$p" ||
       say "persist has no /ss/nsp: Trusty starts an empty one (it has no rollback check)"
     mv "$tmp/0" "$STATE/persist-ss/0"
@@ -345,16 +358,16 @@ tdp_guard() {
     # the 9a: TDP is tdp.img, the F3 copy of trusty_persist (before the
     # first mapped run, that copy as persist-ss/0)
     [[ -f $STATE/tdp.img || ( -f $STATE/persist-ss/0 && ! -L $STATE/persist-ss/0 && -s $STATE/persist-ss/0 ) ]] ||
-      die "no TDP copy ($STATE/tdp.img): storageproxyd won't start without it (device/tegu/FINGERPRINT-PLAN.md F4b)"
+      refuse "no TDP copy ($STATE/tdp.img): storageproxyd won't start without it (device/tegu/FINGERPRINT-PLAN.md F4b)"
     return 0
   fi
   [[ -s $STATE/persist-ss/0 ]] ||
-    die "no TDP copy ($STATE/persist-ss/0, recorded in $PROVENANCE): storageproxyd won't start without it. Don't recreate it by hand: ask (FINGERPRINT-PLAN F19)"
+    refuse "no TDP copy ($STATE/persist-ss/0, recorded in $PROVENANCE): storageproxyd won't start without it. Don't recreate it by hand: ask (FINGERPRINT-PLAN F19)"
   want=$(recorded persist-ss/0)
   [[ -n $want ]] || die "$PROVENANCE has no persist-ss/0 line"
   got=$(sha "$STATE/persist-ss/0")
   [[ $got == "$want" ]] ||
-    die "the TDP copy changed (sha256 ${got:0:16}, recorded ${want:0:16}): Linux wrote Trusty's persistent store, so stock's persist:/ss/0 no longer matches the RPMB. Refusing to start: report it (FINGERPRINT-PLAN F19)"
+    refuse "the TDP copy changed (sha256 ${got:0:16}, recorded ${want:0:16}): Linux wrote Trusty's persistent store, so stock's persist:/ss/0 no longer matches the RPMB. Refusing to start: report it (FINGERPRINT-PLAN F19)"
   p=$(ro_part persist)
   install -d -m 0755 "$RUN"
   tmp=$RUN/persist-ss0.check
@@ -362,7 +375,7 @@ tdp_guard() {
   got=$(sha "$tmp")
   rm -f "$tmp"
   [[ $got == "$want" ]] ||
-    die "persist:/ss/0 changed since the copy was made (sha256 ${got:0:16}, recorded ${want:0:16}; did stock Android run?): the copy no longer matches the RPMB. Refusing to start: ask (FINGERPRINT-PLAN F19)"
+    refuse "persist:/ss/0 changed since the copy was made (sha256 ${got:0:16}, recorded ${want:0:16}; did stock Android run?): the copy no longer matches the RPMB. Refusing to start: ask (FINGERPRINT-PLAN F19)"
   want=$(recorded mfg_data.img)
   if [[ -n $want && -f $STATE/mfg_data.img && $(sha "$STATE/mfg_data.img") != "$want" ]]; then
     say "warning: $STATE/mfg_data.img differs from its recorded copy (the partition itself is never written)"
@@ -387,9 +400,13 @@ preflight() {
   fi
   ((MAP_STORES)) || provision
   tdp_guard
+  rm -f "$UIDIR/off-reason" 2>/dev/null || true
   install -d -m 0755 "$RUN"
   TOKEN=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-  (umask 077; echo "$(date -Is 2>/dev/null || date) pid $$ token $TOKEN" > "$MARKER")
+  # noclobber opens with O_EXCL: of two starts racing past the check above,
+  # only one gets the marker
+  (set -o noclobber; umask 077; echo "$(date -Is 2>/dev/null || date) pid $$ token $TOKEN" > "$MARKER") 2>/dev/null ||
+    die "secure storage already ran this boot (another start got there first). Reboot to start fingerprint again"
   install -d -m 0700 "$STATE"
   echo "$boot $(date -Is 2>/dev/null || date)" > "$PENDING"
 }
@@ -596,7 +613,7 @@ start() {
   if [[ -n ${OMAMOBILE_FP_IN_NS:-} ]]; then
     # Only after this boot's preflight: its marker carries the token it
     # handed down, so OMAMOBILE_FP_IN_NS=1 alone can't skip the checks.
-    [[ -n ${OMAMOBILE_FP_TOKEN:-} && -f $MARKER && $(sed -n 's/.* token //p' "$MARKER") == "$OMAMOBILE_FP_TOKEN" ]] ||
+    [[ ${OMAMOBILE_FP_TOKEN:-} =~ ^[0-9a-f]{32}$ && -f $MARKER && $(sed -n 's/.* token //p' "$MARKER") == "$OMAMOBILE_FP_TOKEN" ]] ||
       die "the inner start runs only after this boot's preflight (omamobile-fp-chroot start)"
   fi
   # Modules the stack needs, blacklisted from autoload (omamobile-device-
@@ -726,9 +743,11 @@ run() {
 case ${1:-} in
   check) check ;;
   preflight) preflight ;;
+  paths) printf '%s\n' "device=$DEVICE" "state=$STATE" "run=$RUN" "sysblock=$SYSBLOCK" "devdir=$DEVDIR" \
+           "mounts=$MOUNTS" "boot_id=$BOOT_ID_FILE" "uidir=$UIDIR" ;;
   start) start "${2:-bridge}" ;;
   ns) shift; ns "$@" ;;
   run) shift; run "$@" ;;
-  *) echo "usage: omamobile-fp-chroot check | preflight | start [storage|apploader|keys|hal|bridge] | ns CMD... | run CMD..." >&2
+  *) echo "usage: omamobile-fp-chroot check | paths | preflight | start [storage|apploader|keys|hal|bridge] | ns CMD... | run CMD..." >&2
      exit 2 ;;
 esac
