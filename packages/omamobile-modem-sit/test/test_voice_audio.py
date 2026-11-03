@@ -380,7 +380,7 @@ class TeguAudioTests(unittest.TestCase):
         self.assertEqual(events[-1], ('cset', 'Incall Sink Mute', '0'))
         self.assertFalse(audio.saved or audio.pcms)
 
-    def test_aec_starts_before_pcms_and_stops_before_restoring_echo_reference(self):
+    def test_aec_starts_after_the_streams_and_stops_before_restoring_echo_reference(self):
         audio, events, controls, original = self.fixture(aec=True)
         with patch.object(voice_audio, 'VoiceTuning') as tuning:
             tuning.return_value.start.side_effect = lambda: events.append(('aec-start',))
@@ -393,7 +393,9 @@ class TeguAudioTests(unittest.TestCase):
                                 events.index(('aec-start',)))
                 self.assertLess(events.index(('cset', 'Audio DSP Mode', 'Telephony_APMG3')),
                                 events.index(('aec-start',)))
-                self.assertLess(events.index(('aec-start',)), events.index(('start', 1)))
+                # The tuning goes up after both streams have started, before unmute
+                self.assertLess(events.index(('start', 2)), events.index(('aec-start',)))
+                self.assertLess(events.index(('aec-start',)), events.index(('cset', 'Incall Sink Mute', '0')))
             tuning.assert_called_once_with('speaker')
             tuning.return_value.start.assert_called_once()
             tuning.return_value.close.assert_called_once()
@@ -452,7 +454,9 @@ class TeguAudioTests(unittest.TestCase):
                 self.assertRaises(voice_audio.AudioRefused):
             audio.__enter__()
         self.assertEqual(controls, original)
-        self.assertFalse([e for e in events if e[0] == 'open'])
+        # The streams started before the tuning; every one is closed again
+        self.assertEqual(sorted(audio.alsa.closed), [1, 2])
+        self.assertFalse(audio.pcms)
 
     def test_uncertain_tuning_leaves_sink_muted_but_restores_other_controls(self):
         audio, events, controls, original = self.fixture(aec=True)
@@ -464,7 +468,7 @@ class TeguAudioTests(unittest.TestCase):
         self.assertEqual(controls['Incall Sink Mute'], '1')
         self.assertEqual({n: v for n, v in controls.items() if n != 'Incall Sink Mute'},
                          {n: v for n, v in original.items() if n != 'Incall Sink Mute'})
-        self.assertFalse([e for e in events if e[0] in ('open', 'start')])
+        self.assertEqual(sorted(audio.alsa.closed), [1, 2])
         self.assertNotIn(('cset', 'Incall Sink Mute', '0'), events)
 
     def test_partial_pcm_or_mixer_failure_restores_saved_state(self):

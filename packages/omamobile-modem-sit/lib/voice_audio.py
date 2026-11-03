@@ -309,12 +309,6 @@ class VoiceAudio:
                 self.mixer('cset', name, value)
                 if name == 'Incall Sink Mute' and self.mixer_value(name) not in ('1', 'on'):
                     raise AudioRefused('tegu call audio refused: sink mute read-back mismatch')
-            if aec:
-                try:
-                    self.tuning = VoiceTuning(self.tegu_route)
-                    self.tuning.start()
-                except (OSError, TuningError) as error:
-                    raise AudioRefused('tegu call audio refused: AoC tuning unavailable or unconfirmed') from error
             # Capture is ready before playback prepare starts the modem.
             for device, direction in ((11, 1), (4, 0)):
                 pcm = C.c_void_p()
@@ -323,6 +317,16 @@ class VoiceAudio:
                 self.pcms.append(pcm)
                 self.tegu_params(pcm)
                 self.check(self.alsa.snd_pcm_start(pcm), 'start')
+            # The tuning goes up once the call's streams have started: the
+            # AoC starts its voice path at the playback start ("Start voice
+            # call"), and with the tuning sent before that the echo was gone
+            # for 2-3 s only (2026-11-03). The sink is still muted here.
+            if aec:
+                try:
+                    self.tuning = VoiceTuning(self.tegu_route)
+                    self.tuning.start()
+                except (OSError, TuningError) as error:
+                    raise AudioRefused('tegu call audio refused: AoC tuning unavailable or unconfirmed') from error
             # The codec profile resets gain at playback start. These must
             # happen afterwards, while the modem downlink remains muted.
             gains = ((TEGU_GAINS[1], '0'), (TEGU_GAINS[0], TEGU_EARPIECE_GAIN)) if earpiece else tuple(
