@@ -487,6 +487,28 @@ cmd_initramfs_config() {
   ls -l "$1"
 }
 
+# INITRAMFS_MODULES into the initramfs: each module's .ko from this build's
+# modules directory $2 into $1, its name in $1/order (load order). A module
+# the kernel has built in (listed in $2/modules.builtin, as sec_acpm and its
+# mailbox are since #227) has nothing to load and is left out; a module that
+# is neither is an error. $3...: the module names.
+pack_initramfs_modules() {
+  local dest=$1 mdir=$2 m ko
+  shift 2
+  mkdir -p "$dest"
+  for m in "$@"; do
+    [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
+    ko=$(find "$mdir" -name "$m.ko" | head -1)
+    if [[ -z $ko ]] && grep -q "/$m\.ko\$" "$mdir/modules.builtin" 2>/dev/null; then
+      say "INITRAMFS_MODULES: $m is built in"
+      continue
+    fi
+    [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $mdir"
+    cp "$ko" "$dest/"
+    echo "$m" >> "$dest/order"
+  done
+}
+
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
   local release=0
@@ -557,20 +579,14 @@ cmd_initramfs() {
   # Modules the init loads before anything else (INITRAMFS_MODULES, in load
   # order), from this kernel build's modules_install: the directory of this
   # build's release, never an older one left in modules-staging
-  local m ko mdir rel
+  local mdir rel
   if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
     rel=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) ||
       die "INITRAMFS_MODULES needs a kernel build: omamobile kernel"
     mdir=$KERNEL_OUT/modules-staging/lib/modules/$rel
     [[ -d $mdir ]] || die "INITRAMFS_MODULES needs this build's modules ($rel): omamobile modules"
-    mkdir -p "$stage/lib/modules/omamobile"
-    for m in $DEV_INITRAMFS_MODULES; do
-      [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
-      ko=$(find "$mdir" -name "$m.ko" | head -1)
-      [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $mdir"
-      cp "$ko" "$stage/lib/modules/omamobile/"
-      echo "$m" >> "$stage/lib/modules/omamobile/order"
-    done
+    # shellcheck disable=SC2086  # a list of plain module names, checked there
+    pack_initramfs_modules "$stage/lib/modules/omamobile" "$mdir" $DEV_INITRAMFS_MODULES
     echo "$rel" > "$KERNEL_OUT/initramfs.release"
     say "Initramfs modules ($rel): $DEV_INITRAMFS_MODULES"
   fi
