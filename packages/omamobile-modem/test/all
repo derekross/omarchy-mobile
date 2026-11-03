@@ -343,6 +343,25 @@ printf 'ro.boot.cdt_hwid=TESTID\n' > "$t/p4"; cdt "$t/p4" || fail "the persist c
 cdt "$t/missing" && fail "a missing props file is refused"
 pass "board id required"
 
+# The board the daemons are told about: on a gs101 phone, props.conf names
+# that board (from google,gs101-<board>); other SoCs aren't checked here
+dev() { bash -c 'say() { :; }; eval "$(sed -n "/^modem_device_check() {/,/^}/p" profiles/modem.conf)"; modem_device_check "$1"' _ "$1"; }
+compat() { printf '%s\0' "$@" > "$t/compat"; }
+export MODEM_DT_COMPATIBLE=$t/compat
+printf 'ro.hardware=raven\nro.boot.hardware.platform=gs101\n' > "$t/raven.props"
+printf 'ro.hardware=oriole\nro.boot.hardware.platform=gs101\n' > "$t/oriole.props"
+compat google,gs101-raven google,gs101; dev "$t/raven.props" || fail "raven with raven's props passes"
+dev "$t/oriole.props" && fail "raven with oriole's props is refused"
+compat google,gs101-oriole google,gs101; dev "$t/oriole.props" || fail "oriole with oriole's props passes"
+dev "$t/raven.props" && fail "oriole with raven's props is refused"
+printf 'ro.hardware=bluejay\nro.boot.hardware.platform=gs101\n' > "$t/bluejay.props"
+compat google,gs101-bluejay google,gs101; dev "$t/bluejay.props" || fail "bluejay with bluejay's props passes"
+printf 'ro.hardware=raven\nro.boot.hardware.platform=gs201\n' > "$t/badplat.props"
+compat google,gs101-raven google,gs101; dev "$t/badplat.props" && fail "a gs101 board with another platform is refused"
+compat google,gs201-cheetah google,gs201; dev "$t/missing" || fail "cheetah (gs201) isn't checked here"
+unset MODEM_DT_COMPATIBLE
+pass "a gs101 board's props name that board"
+
 # The crash record's kernel lines: the modem's lines only, without this
 # tool's own umts_boot0 opens, and a flood folded into one line and a count
 python3 - "$cp" <<'PY' || fail "crash record folds a repeated kernel line"
