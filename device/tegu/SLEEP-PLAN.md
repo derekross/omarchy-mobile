@@ -797,23 +797,22 @@ reset state. The daily Image went back the same afternoon.
 re-applies the UFS IO-coherency bits in the HSI2 sysreg
 (`exynos_ufs_config_externals()`, at every resume); ours sets them once, in
 `exynos_ufs_shareability()` at probe. With `dma-coherent` they must read
-set (0x13020710, bits 0 and 1). Read on 2026-11-03 after a boot with no
-sleep: 0x13. Whether they survive a wake is not known yet; both series
-scripts now log the value after every wake, so the next series answers it.
+set (0x13020710, bits 0 and 1): 0x13 after a boot with no sleep, and 0x13
+after one wake. Reading the register from userspace isn't safe after a wake
+(below), so the test is a kernel that sets them again at resume, as stock
+does (`ufs-exynos-iocc-resume` on the owner's fork), and a long series on it.
 
-**A hang at screen-on after a wake (2026-11-03 15:28, the daily kernel as
-it ships: `spm_lvl` 5, core power-down on).** The IO-coherency series'
-first wake was clean (`iocc 0x13`, the bits still set). On the second, the
-palmtop woke ("PM: suspend exit"), brcmfmac re-probed, and 17 s later the
-script's DPMS enable switched the display controller to 120 Hz (`gs-decon
-… 120 Hz`); the console ends on that line, with no oops or panic, and the
-SoC watchdog, running again after the wake, reset the palmtop about a
-minute later, so ramoops kept it all. After the first wake the same
-screen-on worked. So a third failure shape, besides the dead-storage wake
-and the silent no-wake: a hang while awake, at the first screen-on after a
-wake. Whether some of the silent no-wakes were this (with the buttons'
-reset losing the console) isn't known. Log:
-`logs/tegu-ufs-iocc-20261103/reset-1529-console.txt`.
+**Two resets at screen-on after a wake, caused by the test itself
+(2026-11-03 15:28 and 15:34).** For the coherency question the series read
+0x13020710 through `/dev/mem` after every wake. Twice, after the second and
+then the first wake, the palmtop woke cleanly, the script's DPMS enable
+switched the display to 120 Hz, the console ended there with no oops or
+panic, and the SoC watchdog reset the palmtop a minute later (ramoops kept
+it). The read comes right after that DPMS enable, and the 114 earlier wakes
+of the day, without it, never hung there. The HSI2 sysreg's clock can be
+gated after a wake, and AGENTS.md forbids reading a block that isn't known
+powered and clocked: these resets are the read's, not sleep failures. The
+read is out of the scripts. Logs: `logs/tegu-ufs-iocc-20261103/`.
 
 ## Not known yet
 
