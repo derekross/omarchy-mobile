@@ -1003,6 +1003,8 @@ else
   pass "widget crash guard: same-boot death held back, one retry after a system going down, clean run and quit clear"
 fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-onboarding || fail "omamobile-onboarding parses"
+bash test/onboarding-fingerprint.sh || fail "omamobile-onboarding's fingerprint offer"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"

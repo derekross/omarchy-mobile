@@ -2,6 +2,34 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-02: fingerprint after the reinstall, a Trusty storage crash, and fingerprint on by default
+
+Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`; Trusty "cloudripper". Details,
+the runbook and every step: [FINGERPRINT-PLAN](FINGERPRINT-PLAN.md) F19.
+
+- **The reinstall's TD was not restored** [V]: the backups' TD (10-13, 10-14)
+  was older than the RPMB anchor, which every storageproxyd run moves on,
+  so it would have mounted and not read. Trusty cleared an empty TD instead
+  ("clear requested, create empty"), as at a factory reset.
+- **Linux never wrote TDP** [V]: `persist:/ss/0` hashed `e0e1990d…` in the
+  10-12, 10-30 and 11-02 persist backups, in both fingerprint backups and
+  in the fresh `debugfs` copy, and was unchanged after the enrollment.
+- **A storage proxy restarted in the same boot crashed Trusty's storage
+  app** [V]: run stage by stage, storageproxyd was stopped twice between
+  TD's clear and TD's first commit (once under a live g7 TA). At
+  enrollment the storage app asserted in `block_get_cleared_super` (a
+  superblock slot already dirty) and Trusty halted. Trusty keeps each
+  store's in-memory state across a proxy restart; only a reboot resets it.
+  After a reboot, one continuous session enrolled `right-index-finger`
+  (17:15:25) and matched it (17:15:33), with the expected "write initial
+  superblock" lines.
+- **Fingerprint is now on by default**, by the maintainer's decision
+  (omamobile-fingerprint 0.1.14 enables `omamobile-fp`; it starts after
+  provisioning). The runner makes the read-only copies itself, refuses
+  storageproxyd without the TDP copy or when TDP changed, and runs one
+  storage proxy per boot (no `Restart=`, a `/run` marker, the proxy stopped
+  last). The fresh-install checks T1-T3 are still to run.
+
 ## 2026-11-02: a kernel update through pacman, booted and rolled back
 
 Release kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (tag `kernel-2026.11.01`), from the push1 build `7.3.0-rc6-omamobile-push1-g2219cc6cda77`; linux-omamobile `7.3.0rc6.r635.g2219cc6cda77-1`, omamobile-boot-update 0.1.0, device-cheetah 0.1.38 (#320).
