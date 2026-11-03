@@ -2,6 +2,47 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-03: calls and texts through the apps, the SIM configures itself, the earpiece at the loud stage, the stack on by default
+
+Kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (the release kernel);
+`omamobile-modem-sit` 0.3.29 (#373), `omamobile-modem` 0.1.16 and
+`omamobile-device-cheetah` 0.1.43 (#398), `omamobile-audio` 0.5.13 (#402);
+the same Verizon-network SIM as the entry below. The runbook:
+[MODEM-PLAN](MODEM-PLAN.md) M4.6b.
+
+- **Calls and texts through the apps** [V]: incoming and outgoing calls and
+  texts worked through Phone and Messages (omatel-agent through
+  `omamobile-mmd`), among them the first text from one Omarchy Mobile phone to
+  another: this 7 Pro to a Pixel 9a.
+- **IMS registers with no carrier manifest** [V]: `carrier_manifest` empty,
+  the modem's 0x4602 unanswered, and IMS registered all the same. The
+  manifest isn't needed; the entry below still counted it among the things
+  tried.
+- **The SIM configures itself** [V]: sitd 0.3.29 with every key on `auto`
+  read the SIM once, chose Verizon's values from its overrides (APN
+  VZWINTERNET, attach none, IMS first on CID 2, the internet on CID 3,
+  profiles 0/2/3/4) and registered IMS and data, with nothing typed into
+  `modem-sit.conf`.
+- **The earpiece at the loud stage** [V]: stage `c9` with the boost converter
+  on (657/6 through ASP, the bottom amplifier muted,
+  `omamobile-earpiece@on.service`) was clean by ear on a VoLTE call, so
+  `omamobile-audio` 0.5.13 (#402) dropped the refusal that kept the earpiece
+  off at that stage.
+- **The stack on by default** [V]: #398's runbook B6-B9b passed. The vendor
+  wants link alone turns `omamobile-modem-boot.target` on (`omamobile-modem`
+  enables nothing); the chain came up at boot; a planted stale marker was
+  refused once and cleared at the next clean stop; a second unclean end held
+  ("held" in the tile) and was cleared by hand. No `ufshcd_err_handler` pass
+  in any of those reboots.
+- **The Messages agent wasn't enabled on a fresh install.** Fixed: #394
+  enables it at login (`omamobile-shell` 0.2.97), and omamessages 0.2.2 and
+  omaphone 0.2.3 (#399) activate it over D-Bus.
+- **Open:** the smoke report shows cpif `oem_ipc0` "is not opened" lines
+  minutes after sitd starts: the modem's OEM IPC channel, which nothing
+  opens. A follow-up.
+- **Gotcha:** `omamobile-update` over ssh as root needs
+  `OMARCHY_PATH=/usr/share/omarchy` in its environment.
+
 ## 2026-11-03: IMS registered and an SMS sent on a Verizon-network SIM, once the bearers took stock's CIDs
 
 Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, `omamobile-modem-sit` 0.3.24 (#384),

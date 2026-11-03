@@ -1,7 +1,23 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Modem plan (cheetah / gs201): S5300 on PCIe GEN4A_0
 
-Status (2026-10-13): **IPC works: the CP serves SIT (M4.1h passed).**
+Status (2026-11-03): **The modem works on the tested network, and the
+stack is on by default.** On a Verizon-network SIM: VoLTE calls and texts
+both ways through Phone and Messages (omatel-agent through
+`omamobile-mmd`), mobile data behind Wi-Fi, IMS registered with the bearers
+in stock's order (IMS first on CID 2, the internet on CID 3; #384) and no
+carrier manifest, the APNs and the bearer order chosen from the SIM
+(`omamobile-modem-sit` 0.3.29, #373), the earpiece at every speaker stage
+(`omamobile-audio` 0.5.13, #402), and `omamobile-modem-boot.target` on by
+default from `omamobile-device-cheetah` 0.1.43 (M4.6b, B6-B9b passed,
+#398). Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, the release kernel.
+Open: suspend with the modem up (section 6.3; the stack holds a sleep
+inhibitor), other networks, cpif's `oem_ipc0` "is not opened" lines after
+sitd starts (nothing opens the OEM IPC channel), and the UFS error-handler
+pass at a modem power-off (M2.6). The day's evidence: [NOTES](NOTES.md),
+2026-11-03.
+
+Earlier status (2026-10-13): **IPC works: the CP serves SIT (M4.1h passed).**
 The modem boots to ONLINE (M3.4.5b, M3.4.6) and, since M4.1h, answers
 SIT requests (no SIM: "SIM card state 0 applications []", radio state 3
 = POWER_OFF) and cycles its idle link as stock does, with no UFS handler
@@ -3005,6 +3021,18 @@ tools/phone-ssh 'sleep 120; systemctl is-active omamobile-modem; journalctl -b -
 versions, pass/fail, the modem unit's journal lines (states only), the
 tile's text in B8, the UFS handler count. Not the carrier, the number or
 any identifier.
+
+**B6-B9b passed (2026-11-03, `7.3.0-rc6-omamobile-g2219cc6cda77`,
+`omamobile-modem` 0.1.16, `omamobile-device-cheetah` 0.1.43,
+`omamobile-shell` 0.2.100):** the target on through the vendor wants link
+only, `omamobile-modem` enabling nothing (B6); the chain up at boot with
+no hand (B9: active x4, "CP ONLINE"); a planted stale marker refused once
+("ended without a clean stop", the tile "Off after a hang or reset") and
+its copy cleared at the next clean stop (B8, B9); a second unclean end
+held ("the one automatic retry is used up", "(held)"), cleared by hand,
+and the modem up on the boot after (B9b). `ufshcd_err_handler` count 0
+in every one of those reboots. B10 and M4.7 aren't recorded here.
+
 ### NV overlay: the modem's own NV writes kept per phone (`omamobile-modem` 0.1.15, built offline 2026-11-02)
 
 **Why.** Until 0.1.11 the modem ran on RAM copies of the backup and lost
