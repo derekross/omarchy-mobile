@@ -14,6 +14,7 @@
 # this instead, from omamobile-modules-cleanup.timer, well after boot.
 #
 # It keeps, in /usr/lib/modules:
+#   - releases listed one per line in /usr/lib/modules/.omamobile-pinned;
 #   - the running release (uname -r);
 #   - every tree that arrived during this boot: its marker's mtime, or the
 #     tree's mtime or ctime (a rename sets it), is after the boot time
@@ -30,8 +31,9 @@
 # and removes the others with rm -rf. Only direct children named like a
 # release ([0-9]*) are candidates; symlinks, dot-directories (.old, the
 # .<release>.new of a push in progress) and plain files are never touched.
-# A removed tree is recoverable: `bin/omamobile push` re-sends a tree whose
-# marker is missing. When pacman can't answer, nothing is removed.
+# A push can re-send packaged modules whose marker is missing, but cannot
+# recover hand-installed modules: pin their release. When pacman can't
+# answer, nothing is removed.
 #
 #   modules-cleanup [--dry-run]
 # Environment:
@@ -63,6 +65,16 @@ next=""
 if [[ -f $root/.omamobile-next && ! -L $root/.omamobile-next ]]; then
   read -r next < "$root/.omamobile-next" || true
 fi
+# Pins are exact release names, never paths, patterns or shell input.
+# Ignore a symlink rather than following a file outside the module root.
+pinned=()
+if [[ -f $root/.omamobile-pinned && ! -L $root/.omamobile-pinned ]]; then
+  while IFS= read -r pin || [[ -n $pin ]]; do
+    if [[ $pin =~ ^[0-9]+(\.[0-9]+)+[[:alnum:]_.+-]*$ ]]; then
+      pinned+=("$pin")
+    fi
+  done < "$root/.omamobile-pinned"
+fi
 floor=1767225600   # 2026-01-01 UTC
 btime=$(awk '$1 == "btime" { print $2; exit }' "${OMAMOBILE_PROC_STAT:-/proc/stat}")
 [[ $btime =~ ^[0-9]+$ ]] || { log "no boot time in ${OMAMOBILE_PROC_STAT:-/proc/stat}; nothing removed"; exit 1; }
@@ -92,6 +104,14 @@ for tree in "$root"/[0-9]*; do
   name=${tree##*/}
   if [[ -L $tree || ! -d $tree ]]; then
     log "skip $name: not a directory"
+    continue
+  fi
+  is_pinned=0
+  for pin in "${pinned[@]}"; do
+    [[ $name != "$pin" ]] || { is_pinned=1; break; }
+  done
+  if (( is_pinned )); then
+    log "keep $name: pinned"
     continue
   fi
   if [[ $name == "$running" ]]; then
