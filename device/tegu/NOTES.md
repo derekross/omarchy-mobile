@@ -13,6 +13,97 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-02, evening: calls, Phone and Messages, echo, a restart and MMS
+
+All on the daily kernel (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)
+with the modem started at boot by `omamobile-tegu-modem-boot` (#372).
+
+- [V] **Calls and texts from the apps:** Phone and Messages through
+  `omamobile-mmd` (#371) placed and answered calls with speakerphone audio
+  both ways and sent and received texts. Messages showed "service isn't
+  running" until the user's `omatel-agent` unit was started and enabled.
+- [V] **Signal and the airplane icon:** the modem sends its signal reports
+  only after it is told the screen is on, and radio state 10 means on;
+  with both in `omamobile-modem-sit` 0.3.15 and the bridge 0.1.2, the bar
+  shows signal and no airplane.
+- [V] **A sitd restart in the same boot (#376), a deliberate test:** sitd's
+  unit says a second start-up isn't supported, and this checked what
+  happens. It failed at once on
+  leftovers in `/run/omamobile-sit` (the LTE-only setting's saved original,
+  then the bearer records), though the modem had dropped the bearers when
+  sitd stopped. With 0.3.18 a restart gets data and signal back, but IMS
+  doesn't register again (no registration indication after the PDN
+  information is accepted), so calls and texts need a reboot after a
+  restart. [I] The modem's IMS stack is never told the old session ended.
+- [V] **Echo cancellation (#374, #378):** the owner's tuning files from
+  the factory image upload with the AoC's status 0. The AoC's reply
+  rewrites the second header byte (0x01 sent, 0x3e back), which the first
+  check took for an unknown outcome, so that call was silent (fixed in
+  0.3.19). With the tuning alone the far end still heard its own voice;
+  with `Audio DSP Mode` set to `Telephony_APMG3` (0.3.20) it heard no echo
+  for the first few seconds and a new low hiss, then the echo again with
+  the hiss. [I] The echo reference or the order of the setup is wrong.
+- [V] **MMS (#380):** with the carrier's MMS APN equal to its internet APN,
+  setting up the separate MMS bearer (CID 3) took the IMS bearer down:
+  afterwards the modem listed bearers 1 and 3, not 2. sitd held the
+  reservation as uncertain, as designed, and a reboot cleared it. 0.3.22
+  sends MMS over the internet bearer instead; not yet tried.
+- [V] **Wi-Fi after a sleep with the keep flag:** in a boot with the
+  modem's boot start disabled and the CP never started (checked before the
+  sleep test), after the shell's auto-sleep with
+  `/etc/omamobile/wifi-keep-across-sleep` in place,
+  brcmfmac didn't attach to the chip again; a reload, a bind and a PCI
+  remove and rescan all left no interface. A reboot brought it back.
+
+## 2026-11-02: the SIM, the in-tree modem stack with GNSS, and a pruned module tree
+
+Boots as before: test kernels pushed, checked, and the daily kernel pushed
+back. Details are on each pull request.
+
+- [V] **The SIM (omarchy-mobile #356, the daily kernel):** LTE
+  registration, mobile data over `rmnet0` and texts both ways, after five
+  data setups refused with status 36 and a wait after the data permission
+  in `omamobile-modem-sit` 0.3.8. The record is in
+  [MODEM-PLAN](MODEM-PLAN.md), "SIM test results".
+- [V] **GNSS driver first boot (kernel #185, G1,
+  `7.3.0-rc6-omamobile-push1-g30e9d94b4a91`):** `gnss_spi` and `gnssif`
+  bound with the modem off, `/dev/gnss_ipc` appeared, no request
+  interrupts, wakeup armed only while the device was open, and an unload
+  and reload were clean. Then a 10-minute session on the daily kernel with
+  #185's modules built for it: 538 of 556 GGA sentences fixed.
+- [V] **The modem's two-lane PHY (kernel #186, bench, the modem off):**
+  the first bench locked every PLL on one cycle and then hung the SoC at
+  the next cycle's first ELBI write: power-off left the controller on the
+  PHY's stopped clock. With the clock parked on the oscillator first, as
+  stock does, five cycles over two boots locked every time
+  (`7.3.0-rc6-omamobile-push1-g909c8c8121bb`, which also showed both HSI2
+  GPIO bus clocks held on with kernel #172's second commit).
+- [V] **The in-tree modem stack (kernel #187):** the gs201-cp host with
+  zumapro's channel 0 through #186's PHY linked to the modem's ROM three
+  times at Gen1 x1 (`7.3.0-rc6-omamobile-push1-g1b270b5cc447`); then, with
+  a cpif fix for an uncached link without IO coherency, CPIF booted the CP
+  to ONLINE and a 10-minute GNSS session through #185 gave 543 of 549 GGA
+  fixed, 1343 link power cycles, no reset (`7.3.0-rc6-omamobile-push1-gbaf1b52d1de5`).
+  The first try's cpif probe had failed ("PCIe IOCC config and dt are
+  inconsistent").
+- [V] **A pruned daily module tree:** after six test kernels in one day,
+  the push back to the daily kernel replaced its module tree with the
+  kit's archive, without the hand-installed `extra/` and `updates/`
+  modules, and the next boot stopped at the boot logo (display driver
+  missing). The cause: `omamobile-modules-cleanup` keeps the running tree,
+  the next boot's and the two newest others, so during a test boot it
+  removed the older daily tree; the push back then found no marker and
+  sent the archive. Restored from the backup in `/var/lib/omamobile-tegu/`;
+  on the palmtop the cleanup now keeps 50 trees (a local drop-in) until a
+  pin for named releases ships. Until then, check `ls
+  /usr/lib/modules/$(uname -r)/extra` after any push back to the daily
+  kernel.
+- [I] **A leftover bring-up unit:** `/etc/systemd/system/omamobile-tegu-audio.service`
+  (2026-10-28, before `omamobile-device-tegu` took over its steps) now
+  fails at every boot: its script loads NFC's module by hand after the
+  package already has. The package's units bring up the same hardware, so
+  it should go, as AGENTS.md asks for bring-up files a package replaces.
+
 ## 2026-11-01, afternoon and evening: Wi-Fi from the package, the wake and the replug, storage idle, the panel ID
 
 Boots as in the next section (published-style kernels, pushed, checked,
