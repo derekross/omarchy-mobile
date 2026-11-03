@@ -189,7 +189,8 @@ class Bridge:
         if d['data'] and not self.bearer:
             self.create_bearer(d)
         if self.bearer:
-            self.x.set(self.bearer, mm.BEARER, Connected=d['data'])
+            self.x.set(self.bearer, mm.BEARER, Connected=d['data'], Interface=self.internet_interface(),
+                       Ip4Config=self.internet_ipv4(d))
         for name in d['interfaces']:
             if not self.x.has(self.modem, name):
                 self.x.add_interface(self.modem, name, self.interface_props(name, d))
@@ -285,11 +286,27 @@ class Bridge:
                     OperatorIdentifier=d['plmn'] if d['home'] else '',
                     OperatorName=d['operator_name'] if d['home'] else '')
 
+    def internet_interface(self):
+        # The device omamobile-sit-data found carrying the internet bearer,
+        # which isn't always rmnet<CID - 1>; rmnet0 until sitd knows.
+        return ((self.status or {}).get('internet') or {}).get('interface') or 'rmnet0'
+
+    def internet_ipv4(self, d):
+        # The address and the carrier's DNS, as MM gives them: mmsd-tng
+        # resolves the MMSC through these where MMS goes over this bearer.
+        net = (self.status or {}).get('internet') or {}
+        if not d['data'] or not net.get('address'):
+            return {}
+        return {'method': GLib.Variant('u', 2), 'address': GLib.Variant('s', net['address']),
+                'prefix': GLib.Variant('u', 32),
+                **{'dns' + str(i): GLib.Variant('s', value) for i, value in enumerate(net.get('dns', [])[:3], 1)}}
+
     def create_bearer(self, d):
         self.bearer = self.path('Bearer')
         apn, ip_type = self.apn_settings()
         self.x.add(self.bearer, {mm.BEARER: dict(
-            Interface='rmnet0', Connected=d['data'], IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
+            Interface=self.internet_interface(), Connected=d['data'], Ip4Config=self.internet_ipv4(d),
+            IpTimeout=20, BearerType=mm.BEARER_DEFAULT,
             ProfileId=-1, Properties={'apn': GLib.Variant('s', apn),
                                       'ip-type': GLib.Variant('u', IP_TYPES.get(ip_type, mm.IP_V4V6))})},
             self.handle_bearer)
