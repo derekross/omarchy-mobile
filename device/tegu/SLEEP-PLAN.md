@@ -765,6 +765,34 @@ system sleep goes into the device package (a udev rule or the sleep hook)
 for a longer run in daily use. Fail: a dead-storage wake at 3 too moves the
 question into the hibern8 path itself.
 
+**S1-U result (2026-11-03, same release): 34 woke, the 35th woke with UFS
+dead.** At `spm_lvl` 3 every one of the 35 wakes logged `pwr ctrl cmd 0x18
+… failed, host upmcrs:0x5`: the hibern8 exit never worked, and the error
+handler's host reset (a device reset and a full link startup) recovered 34
+of them. `exynos_ufs_suspend()` powers the UFS PHY off whenever the link
+isn't active, hibern8 included, and `gs101_ufs_suspend()` holds the
+device's reset line low through the sleep, so a hibern8 exit has nothing
+to come back to. The 35th wake's link startup in that reset failed, as at
+5. So `spm_lvl` 3 isn't a fix on this driver: every wake ends in the same
+full link startup.
+
+**A good wake's first link attempt fails too.** In S1-W's boot all 80 good
+wakes logged `dme-set: attr-id 0x4021 val 0x1 failed 0 retries`
+(T_PeerDeviceID, written in `zumapro_ufs_pre_link()`), and the core's
+retry then worked. The dead wakes are the ones where every retry failed.
+T_PeerDeviceID is the host's own UniPro attribute, so the first write
+failing points at the host side not being ready, not the device.
+
+**S1-R, a wait after the device reset (2026-11-03, attended by the
+operator, not the owner; risk low).** The test: the daily kernel with
+`usleep_range(10000, 11000)` after `exynos_ufs_dev_hw_reset()` releases
+RST_n (Image only, same release), ten 60 s sleeps at `spm_lvl` 5. Result:
+`dme-set 0x4021` failed on all ten wakes, as without the wait. So the
+device's readiness after reset isn't it; the next candidates are on the
+host: the zumapro host clocks after the CMU gates (the zumapro
+ungate-after-enable change already moved there once), and UniPro's own
+reset state. The daily Image went back the same afternoon.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
