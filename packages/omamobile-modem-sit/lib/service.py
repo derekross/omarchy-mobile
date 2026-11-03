@@ -225,7 +225,8 @@ class Service:
             if card is None:
                 print('Call audio routing is off ([audio] card = none)', flush=True)
                 return
-            self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card)
+            self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
+                                    earpiece=audio.getboolean('earpiece', True))
             try:
                 self.audio.__enter__()
             except BaseException:

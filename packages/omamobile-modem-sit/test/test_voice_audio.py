@@ -109,6 +109,59 @@ class CallAudioCeilingTests(AudioCleanupTests):
         audio, changed = self.fixture()
         self.refused(audio, changed, 'speaker protection is not running')
 
+    def test_earpiece_mode_is_accepted_in_any_stage(self):
+        with open(STATUS, 'w') as f:
+            f.write('ok: stage c9, mode earpiece: Top 657/6 through PCM Source ASP, DRE on; Bottom muted (Digital PCM Volume 0); x\n')
+        audio, changed = self.fixture(levels={'Top Analog PCM Volume': '6', 'Top Digital PCM Volume': '657',
+                                              'Bottom Digital PCM Volume': '0', 'Bottom Analog PCM Volume': '17'})
+        audio.check_levels()          # the bottom's analog gain doesn't matter: it is muted
+
+    def test_earpiece_mode_needs_the_bottom_muted_and_the_top_at_the_earpiece_level(self):
+        for name, value in (('Bottom Digital PCM Volume', '1'), ('Top Analog PCM Volume', '7'),
+                            ('Top Digital PCM Volume', '738')):
+            with open(STATUS, 'w') as f:
+                f.write('ok: stage media, mode earpiece: Top 657/6 ...; Bottom muted (Digital PCM Volume 0); x\n')
+            levels = {'Top Analog PCM Volume': '6', 'Top Digital PCM Volume': '657', 'Bottom Digital PCM Volume': '0'}
+            levels[name] = value
+            audio, changed = self.fixture(levels=levels)
+            self.refused(audio, changed, name + ' is above')
+
+    def test_earpiece_mode_switched_on_before_the_route_and_off_after(self):
+        calls = []
+        def run(args, **kwargs):
+            calls.append(args[1:])
+            with open(STATUS, 'w') as f:
+                f.write('ok: stage media, mode earpiece: Top 657/6; Bottom muted (Digital PCM Volume 0); x\n'
+                        if args[2] == 'on' else 'ok: stage media, protection firmware\n')
+            class R:
+                returncode = 0
+                stdout = stderr = ''
+            return R()
+        audio, changed = self.fixture(levels={'Top Analog PCM Volume': '6', 'Top Digital PCM Volume': '657',
+                                              'Bottom Digital PCM Volume': '0'})
+        audio.earpiece_cmd = '/usr/bin/omamobile-speaker-protection'
+        with patch.object(voice_audio.subprocess, 'run', run):
+            with audio:
+                self.assertEqual(calls, [['earpiece', 'on']])
+        self.assertEqual(calls, [['earpiece', 'on'], ['earpiece', 'off']])
+
+    def test_earpiece_mode_refused_switches_it_back_off(self):
+        calls = []
+        def run(args, **kwargs):
+            calls.append(args[1:])
+            class R:
+                returncode = 1 if args[2] == 'on' else 0
+                stdout = 'omamobile-speaker: refused: protection not running\n'
+                stderr = ''
+            return R()
+        audio, changed = self.fixture()
+        audio.earpiece_cmd = '/usr/bin/omamobile-speaker-protection'
+        with patch.object(voice_audio.subprocess, 'run', run):
+            with self.assertRaisesRegex(RuntimeError, 'earpiece mode on failed'):
+                audio.__enter__()
+        self.assertEqual(changed, [])
+        self.assertEqual(audio.alsa.opened, 0)
+
     def test_unreadable_level_refuses(self):
         audio, changed = self.fixture(levels={'Top Analog PCM Volume': ''})
         self.refused(audio, changed, 'cannot read')
