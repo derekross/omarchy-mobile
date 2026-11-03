@@ -134,12 +134,15 @@ class StackStartTests(unittest.TestCase):
 
     def test_stack_start_waits_for_the_carrier_status(self):
         order, lines = self.run_start(FAKE, None)
-        self.assertEqual(order[:2], ['wait-carrier', 'stack'])
+        # Once before radio on (stock's order), once before the stack start.
+        self.assertEqual(order[:3], ['wait-carrier', 'wait-carrier', 'stack'])
+        self.assertTrue(any(l.startswith('Radio on after carrier config') for l in lines))
         self.assertTrue(any(l.startswith('IMS stack start released (after carrier config') for l in lines))
 
     def test_timeout_releases_it_too(self):
         order, lines = self.run_start(FAKE, TimeoutError)
-        self.assertEqual(order[:2], ['wait-carrier', 'stack'])
+        self.assertEqual(order[:3], ['wait-carrier', 'wait-carrier', 'stack'])
+        self.assertTrue(any(l.startswith('Radio on without carrier config status') for l in lines))
         self.assertTrue(any(l.startswith('IMS stack start released (timeout') for l in lines))
 
     def test_no_setting_no_wait(self):

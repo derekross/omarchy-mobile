@@ -6,6 +6,7 @@ builder and ADD_PDN_INFO request. No host SIM authentication or APDUs: the
 modem's own IMS stack registers. This announces ordinary voice/SMS
 capability; it does not originate a call.
 """
+import re
 import json
 import struct
 import time
@@ -22,6 +23,12 @@ def record_registration(packet):
     state, features, mask, status, uri_len, reason_len = struct.unpack_from('<BBIHHH', packet, 8)
     if uri_len > 1000 or reason_len > 256 or len(packet) < 20 + uri_len + reason_len:
         raise ValueError('truncated IMS registration indication')
+    # The reason is the IMS stack's own words (a SIP or stack failure); the
+    # URI before it is the subscriber's identity and is never logged.
+    reason = packet[20 + uri_len:20 + uri_len + reason_len].decode('ascii', 'replace').strip('\0 ')
+    reason = re.sub(r'\d{7,}', '<n>', re.sub(r'(sip|tel):\S+', '<uri>', reason))
+    print(f'IMS registration indication: state {state}, features {features}, status {status}'
+          + (f', reason "{reason}"' if reason else ''), flush=True)
     if REGISTRATION.exists():
         private_write(REGISTRATION, json.dumps({'state': state, 'features': features,
                       'feature_mask': mask, 'status': status}).encode())
@@ -45,7 +52,7 @@ def hidden_menu():
     return struct.pack('<BH', 0, len(items)) + items
 
 
-def add_pdn_payload(response, *, pcscf_required=True):
+def add_pdn_payload(response, *, pcscf_required=True, fallback=()):
     if len(response) < 132:
         raise ValueError('short IMS bearer response')
     status, cid, active, pdp = struct.unpack_from('<HBBB', response)
@@ -57,6 +64,10 @@ def add_pdn_payload(response, *, pcscf_required=True):
     # more): some networks deliver theirs only there. At most three are
     # announced, the count the registration has carried so far.
     pcscf = pcscf_addresses(response)[1][:3]
+    # None in the PCO: the ISIM's EF_PCSCF (IPv6, resolved), as stock's
+    # addPcscfFromSim. Only used when the PCO has none.
+    if not pcscf:
+        pcscf = [bytes(a) for a in dict.fromkeys(fallback) if len(a) == 16 and any(a)][:3]
     # Some networks put no P-CSCF in the bearer's PCO (cheetah, 2026-11-02:
     # none in the base slots or the extension, also with the P-CSCF asked
     # for in the attach). Stock's IMS service then takes it from the ISIM
@@ -85,14 +96,25 @@ def start_stack(client):
     client.request(0x0d39, b'\x01\x01', timeout=30)
 
 
-def register(client, *, pcscf_required=True):
+def register(client, *, pcscf_required=True, pcscf_fallback=None):
+    """pcscf_fallback(bearer response) -> IPv6 P-CSCF addresses, called only
+    when the bearer's PCO has none (isim.ipv6_pcscf)."""
     state_path, response_path = paths(2)
     owned = json.loads(state_path.read_text())
     if owned.get('cid') != 2 or not 0 <= owned.get('session', -1) <= 15:
         raise RuntimeError('IMS bearer ownership missing')
     if 2 not in call_ids(client.request(0x0602)):
         raise RuntimeError('IMS bearer no longer listed')
-    body = add_pdn_payload(response_path.read_bytes(), pcscf_required=pcscf_required)
+    response = response_path.read_bytes()
+    fallback = ()
+    if pcscf_fallback is not None and len(response) >= 132 and not pcscf_addresses(response)[1]:
+        print('IMS bearer PCO carries no IPv6 P-CSCF; reading the ISIM\'s EF_PCSCF', flush=True)
+        try:
+            fallback = pcscf_fallback(response)
+        except (RuntimeError, TimeoutError, ValueError) as error:
+            # ModemError is a RuntimeError: a card that refuses the read.
+            print('P-CSCF from ISIM unavailable:', type(error).__name__, error, flush=True)
+    body = add_pdn_payload(response, pcscf_required=pcscf_required, fallback=fallback)
     if REGISTRATION.exists():
         raise RuntimeError('IMS registration already attempted; inspect before retry')
     client.request(0x0d07, hidden_menu(), timeout=30)

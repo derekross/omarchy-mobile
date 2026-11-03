@@ -816,7 +816,8 @@ def main():
     if args.probe:
         return probe()
     client = Sit(allow_sms=True, allow_calls=True,
-                 allow_manifest=bool(settings['network'].get('carrier_manifest', '').strip()))
+                 allow_manifest=bool(settings['network'].get('carrier_manifest', '').strip()),
+                 allow_isim_pcscf=settings['network'].getboolean('ims_pcscf_from_isim', True))
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     service = None
     stopping = False

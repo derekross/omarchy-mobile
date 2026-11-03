@@ -15,8 +15,10 @@ owner. This order registered on LTE with IMS voice and SMS on this phone:
      (AT+CFUN=0 first). Then wait for packet registration (on LTE with
      nr = off) and log how long it took;
   4. the internet bearer (CID 1; its rmnet device is found by omamobile-sit-data);
-  5. IMS: stack start, the IMS bearer (CID 2, IPv6), ADD_PDN_INFO, then wait
-     for an IMS registration with voice and SMS.
+  5. IMS: stack start, the IMS bearer (CID 2, IPv6), ADD_PDN_INFO (its
+     P-CSCF from the bearer's PCO, else from the ISIM's EF_PCSCF with
+     [network] ims_pcscf_from_isim = yes), then wait for an IMS
+     registration with voice and SMS.
 
 No retransmission of SMS/calls and no warm CP restart. A failed or uncertain
 step up to the internet bearer ends start-up; the service exits and the
@@ -28,6 +30,7 @@ import time
 from at import radio, radio_state
 from data_call import activate, configured_profiles, initial_attach, provision_profiles
 from ims import register, start_stack
+from isim import ipv6_pcscf
 from radio_settings import SAVED_NR, nr_mode
 from sit import ModemError
 
@@ -198,6 +201,19 @@ def start(service, settings, stopped=lambda: False):
             nr_after_radio = True
             print(f'NR mode refused with the radio off ({error}); setting it after radio on', flush=True)
     service.pump()
+    if not already_on and net.get('carrier_manifest', '').strip():
+        # Stock applies the carrier profile before the radio comes on; with
+        # the radio switched on first (2026-11-02) the modem confirmed the
+        # profile 11 s later and then stopped searching. Wait for its status
+        # here, so registration starts with the profile in place.
+        limit = net.getint('carrier_manifest_timeout', 60)
+        try:
+            wait_for(service, lambda: service.carrier_status is not None, limit, stopped)
+            print('Radio on after carrier config: status', service.carrier_status[0],
+                  'cause', service.carrier_status[1], flush=True)
+        except TimeoutError:
+            print('Radio on without carrier config status after', limit, 's;',
+                  'manifest sent' if service.manifest_sent else 'no request from the modem seen', flush=True)
     if not already_on:
         radio(True)
         began = time.monotonic()
@@ -244,7 +260,13 @@ def start(service, settings, stopped=lambda: False):
                       flush=True)
         start_stack(client)
         activate(client, net.get('ims_apn', 'ims'), ims=True, on_event=service.event)
-        register(client, pcscf_required=net.getboolean('ims_pcscf_required', True))
+        fallback = None
+        if net.getboolean('ims_pcscf_from_isim', True):
+            # The ISIM's EF_PCSCF when the PCO has none (one read-only file).
+            def fallback(bearer):
+                return ipv6_pcscf(client, client.request(0x0200), bearer)
+        register(client, pcscf_required=net.getboolean('ims_pcscf_required', True),
+                 pcscf_fallback=fallback)
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and
                  service.registration().get('features', 0) & 3 == 3,

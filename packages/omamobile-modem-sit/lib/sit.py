@@ -7,7 +7,8 @@ this stack sends (each one used on this phone with its stock layout), and
 the do-not-send list of device/cheetah/MODEM-SIT-RESEARCH.md section 5 (NV,
 identity, carrier lock, AT forwarding, VSIM and satellite), so an edit to
 the allow-list can't let one of those through. Dial and outgoing SMS are
-refused unless the owner was opened for them.
+refused unless the owner was opened for them. SIM_IO is refused too,
+except the read-only ISIM EF_PCSCF read of isim.py, checked byte by byte.
 """
 from collections import deque
 import fcntl
@@ -16,11 +17,12 @@ import select
 import struct
 import time
 
+from isim import SIM_IO, check_request as check_sim_io
 from paths import IPC, RUN, open_channel, run_dir
 from sit_names import NAMES
 
 # Data/radio/IMS lifecycle, display state, read-only status, and incoming SMS
-# ACK. No SIM I/O, PIN, subscription, APDU or vendor NV requests.
+# ACK. No SIM I/O (but the one ISIM file below), PIN, subscription, APDU or vendor NV requests.
 ALLOWED = {0x0000, 0x0102, 0x0108, 0x0200, 0x0600, 0x0601, 0x0602, 0x0603, 0x0613,
            0x061a, 0x061b, 0x0625, 0x0700, 0x0701, 0x0702, 0x0703, 0x0704, 0x070a,
            0x070b, 0x0710, 0x0711, 0x0800, 0x0801, 0x0748, 0x0749, 0x0750, 0x0902,
@@ -61,8 +63,16 @@ class ModemError(RuntimeError):
 MANIFEST = 0x4600
 
 
-def check(ident, *, sms=False, calls=False, manifest=False):
+def check(ident, *, sms=False, calls=False, manifest=False, isim_pcscf=False, payload=b''):
     if manifest and ident == MANIFEST:
+        return
+    # SIM_IO (0x0208) is outside the allow-list; the one exception, for an
+    # owner opened for it, is GET RESPONSE / READ RECORD on the ISIM's
+    # EF_PCSCF (isim.check_request raises for anything else).
+    if ident == SIM_IO:
+        if not isim_pcscf:
+            raise ValueError('request outside the allow-list')
+        check_sim_io(payload)
         return
     if ident in DENIED or (ident >> 8) in DENIED_FAMILIES:
         raise ValueError('request on the do-not-send list')
@@ -71,10 +81,12 @@ def check(ident, *, sms=False, calls=False, manifest=False):
 
 
 class Sit:
-    def __init__(self, *, allow_sms=False, allow_calls=False, allow_manifest=False, device=None):
+    def __init__(self, *, allow_sms=False, allow_calls=False, allow_manifest=False,
+                 allow_isim_pcscf=False, device=None):
         self.allow_sms = allow_sms
         self.allow_calls = allow_calls
         self.allow_manifest = allow_manifest
+        self.allow_isim_pcscf = allow_isim_pcscf
         run_dir()
         self.lock = os.open(RUN / 'ipc0.lock', os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
         try:
@@ -121,7 +133,8 @@ class Sit:
     def request(self, ident, payload=b'', timeout=8, *, manifest_reply=False):
         check(ident, sms=getattr(self, 'allow_sms', False),
               calls=getattr(self, 'allow_calls', False),
-              manifest=manifest_reply and getattr(self, 'allow_manifest', False))
+              manifest=manifest_reply and getattr(self, 'allow_manifest', False),
+              isim_pcscf=getattr(self, 'allow_isim_pcscf', False), payload=payload)
         self.token = (self.token + 1) & 0xffffffff
         data = struct.pack('<BBHHIBB', 0, 0, ident, 12 + len(payload), self.token, 0, 0) + payload
         if os.write(self.fd, data) != len(data):

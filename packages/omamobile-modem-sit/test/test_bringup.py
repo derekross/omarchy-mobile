@@ -279,3 +279,30 @@ class SimStageTests(unittest.TestCase):
              patch.object(bringup, 'radio_state', side_effect=InterruptedError):
             with self.assertRaises(InterruptedError):
                 bringup.start(service, SETTINGS)
+
+
+class IsimFallbackWiringTests(unittest.TestCase):
+    def run_ims(self, value):
+        settings = paths.config('/nonexistent')
+        settings['network']['apn'] = 'internet.example'
+        if value is not None:
+            settings['network']['ims_pcscf_from_isim'] = value
+        service = Mock()
+        with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
+             patch.object(bringup, 'radio_state', return_value=0), \
+             patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
+             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
+             patch.object(bringup, 'activate'), patch.object(bringup, 'start_stack'), \
+             patch.object(bringup, 'ipv6_pcscf', return_value=['x']) as read, \
+             patch.object(bringup, 'register', side_effect=RuntimeError('stop')) as register, \
+             patch('builtins.print'):
+            bringup.start(service, settings)
+            fallback = register.call_args.kwargs['pcscf_fallback']
+            if fallback is not None:
+                self.assertEqual(fallback(b'bearer'), ['x'])
+                self.assertEqual(read.call_args.args[2], b'bearer')
+        return fallback
+
+    def test_on_by_default_and_off_by_setting(self):
+        self.assertIsNotNone(self.run_ims(None))
+        self.assertIsNone(self.run_ims('no'))
