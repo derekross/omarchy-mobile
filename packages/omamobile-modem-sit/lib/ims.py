@@ -11,7 +11,7 @@ import json
 import struct
 import time
 
-from data_call import paths, call_ids, pcscf_addresses, private_write
+from data_call import paths, call_ids, entries, ims_capable, modem_owned_ids, pcscf_addresses, private_write
 from paths import RUN
 
 REGISTRATION = RUN / 'ims-registration.json'
@@ -80,16 +80,18 @@ def oma_dm_menu():
     return struct.pack('<BH', 0, len(items)) + items
 
 
-def add_pdn_payload(response, *, pcscf_required=True, fallback=()):
+def add_pdn_payload(response, *, pcscf_required=True, fallback=(), cid=2):
+    """cid: the bearer's CID, 2 for sitd's own IMS bearer, else the CID of the
+    modem-owned attach bearer it announces."""
     if len(response) < 132:
         raise ValueError('short IMS bearer response')
-    status, cid, active, pdp = struct.unpack_from('<HBBB', response)
+    status, bearer_cid, active, pdp = struct.unpack_from('<HBBB', response)
     v4_addr, v6_addr = bytes(response[5:9]), bytes(response[9:25])
     # Stock's ApnEntity.getIpType: IPv4 (1) and IPv6 (2) bits for the
     # addresses the bearer has, so an IPv4v6 bearer (Verizon's IMS APN is
     # IPv4v6 at home) is announced with both. An IPv6 bearer gives 2, as before.
     ip_type = (1 if pdp in (1, 3) and any(v4_addr) else 0) | (2 if pdp in (2, 3) and any(v6_addr) else 0)
-    if status or cid != 2 or active not in (1, 2) or pdp not in (1, 2, 3) or not ip_type:
+    if status or bearer_cid != cid or active not in (1, 2) or pdp not in (1, 2, 3) or not ip_type:
         raise ValueError('active IMS bearer with an address required')
     # The base item's three slots, then the 234-byte item's extension (five
     # more): some networks deliver theirs only there. At most three per
@@ -137,16 +139,41 @@ def start_stack(client):
     client.request(0x0d39, b'\x01\x01', timeout=30)
 
 
-def register(client, *, pcscf_required=True, pcscf_fallback=None):
+def attach_bearer_item(client, found):
+    """The modem-owned attach bearer found by start-up, checked against the
+    data-call list right before ADD_PDN_INFO: still listed, active and with
+    the same IPv6 address. The listed item is used when it carries the
+    P-CSCF itself, else the one found (an IND_DATA_CALL_LIST_CHANGED item).
+    Nothing about the bearer is claimed."""
+    cid = found[2]
+    if cid not in modem_owned_ids():
+        raise RuntimeError('the attach bearer is not recorded as modem-owned')
+    item = next((i for i in entries(client.request(0x0602)) if i[2] == cid), None)
+    if item is None or item[3] not in (1, 2) or item[9:25] != found[9:25]:
+        raise RuntimeError('the modem-owned attach bearer is no longer listed as found')
+    return item if ims_capable(item) else found
+
+
+def register(client, *, pcscf_required=True, pcscf_fallback=None, attach=None):
     """pcscf_fallback(bearer response) -> IPv6 P-CSCF addresses, called only
-    when the bearer's PCO has none (isim.ipv6_pcscf)."""
-    state_path, response_path = paths(2)
-    owned = json.loads(state_path.read_text())
-    if owned.get('cid') != 2 or not 0 <= owned.get('session', -1) <= 15:
-        raise RuntimeError('IMS bearer ownership missing')
-    if 2 not in call_ids(client.request(0x0602)):
-        raise RuntimeError('IMS bearer no longer listed')
-    response = response_path.read_bytes()
+    when the bearer's PCO has none (isim.ipv6_pcscf).
+
+    attach: the data-call item of the modem-owned attach bearer
+    (bringup.find_attach_bearer), announced instead of sitd's own CID 2, as
+    stock's IMS service announced the attach bearer the carrier profile
+    brought up. It is checked against the data-call list first."""
+    if attach is not None:
+        response = attach_bearer_item(client, attach)
+        cid = response[2]
+        print('IMS on the modem-owned attach bearer CID', cid, flush=True)
+    else:
+        state_path, response_path = paths(2)
+        owned = json.loads(state_path.read_text())
+        if owned.get('cid') != 2 or not 0 <= owned.get('session', -1) <= 15:
+            raise RuntimeError('IMS bearer ownership missing')
+        if 2 not in call_ids(client.request(0x0602)):
+            raise RuntimeError('IMS bearer no longer listed')
+        response, cid = response_path.read_bytes(), 2
     fallback = ()
     if pcscf_fallback is not None and len(response) >= 132 and not any(pcscf_addresses(response)):
         print('IMS bearer PCO carries no P-CSCF; reading the ISIM\'s EF_PCSCF', flush=True)
@@ -155,7 +182,7 @@ def register(client, *, pcscf_required=True, pcscf_fallback=None):
         except (RuntimeError, TimeoutError, ValueError) as error:
             # ModemError is a RuntimeError: a card that refuses the read.
             print('P-CSCF from ISIM unavailable:', type(error).__name__, error, flush=True)
-    body = add_pdn_payload(response, pcscf_required=pcscf_required, fallback=fallback)
+    body = add_pdn_payload(response, pcscf_required=pcscf_required, fallback=fallback, cid=cid)
     if REGISTRATION.exists():
         raise RuntimeError('IMS registration already attempted; inspect before retry')
     client.request(0x0d07, hidden_menu(), timeout=30)

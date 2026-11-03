@@ -5,7 +5,9 @@ owner. This order registered on LTE with IMS voice and SMS on this phone:
   1. wait for the USIM application to be READY (type 2, state 5); a PIN,
      PUK or network lock ends start-up at once (no PIN entry here);
   2. read the radio state (AT+CFUN?); then, with the radio as found, the
-     initial attach APN ([network] attach_apn, else apn), every data
+     initial attach APN ([network] attach_apn, else apn; none: not sent, the
+     modem attaches with its carrier profile, as stock's RIL did on a
+     Verizon network), every data
      profile (profile 0 from apn unless [profiles] has its own, then the
      rest of [profiles]) and NR mode 0 ([network] nr = off: stay on LTE; NR
      registered but carried no traffic on this phone);
@@ -14,8 +16,13 @@ owner. This order registered on LTE with IMS voice and SMS on this phone:
      section 2). An unreadable radio state falls back to 0.3.14's cycle
      (AT+CFUN=0 first). Then wait for packet registration (on LTE with
      nr = off) and log how long it took;
+     With attach_apn = none, wait up to ATTACH_BEARER_WAIT s for the modem's
+     own attach bearer (listed with its P-CSCF; every bearer listed then is
+     recorded as modem-owned and never released);
   4. the internet bearer (CID 1; its rmnet device is found by omamobile-sit-data);
-  5. IMS: stack start, the IMS bearer (CID 2; IPv6, or the IMS profile's
+  5. IMS: stack start, then ADD_PDN_INFO for the modem's attach bearer when
+     one with a P-CSCF is listed (no IMS setup of our own, as stock); else
+     the IMS bearer (CID 2; IPv6, or the IMS profile's
      home IP type, as stock takes it from the IMS APN), the hidden menu and
      the OMA-DM menu, ADD_PDN_INFO (its P-CSCF from the bearer's PCO, else
      from the ISIM's EF_PCSCF with [network] ims_pcscf_from_isim = yes, a
@@ -31,7 +38,8 @@ running with data only, unless [network] ims_required = yes.
 import time
 
 from at import radio, radio_state
-from data_call import APN_TYPES, activate, configured_profiles, initial_attach, provision_profiles
+from data_call import APN_TYPES, activate, attach_bearer, configured_profiles, entries, initial_attach
+from data_call import owned_ids, provision_profiles, record_modem_owned, summary
 from data_call import paths as bearer_paths
 from ims import register, start_stack
 from isim import bearer_dns, ipv6_pcscf, resolve_on_bearer, resolve_system
@@ -118,6 +126,64 @@ def data_snapshot(client, label):
           flush=True)
 
 
+# With attach_apn = none, how long after packet registration start-up waits
+# for the modem's own attach bearer to be listed with a P-CSCF. On stock
+# (Verizon network, 2026-11-02) it arrived unsolicited with the attach.
+ATTACH_BEARER_WAIT = 20
+
+
+def find_attach_bearer(service, deadline, stopped, *, adopt_unknown):
+    """The data-call item of an IMS-capable bearer the modem brought up on
+    its own (data_call.attach_bearer: active, IPv6 or IPv4v6, with a P-CSCF,
+    not one sitd owns), from GET_DATA_CALL_LIST and the latest
+    IND_DATA_CALL_LIST_CHANGED, polled until deadline (monotonic); or None.
+    Each list is logged when it changes, as CID, type, active, P-CSCF and
+    DNS counts: never an address. The bearer found is recorded as
+    modem-owned. adopt_unknown: also record every other listed bearer sitd
+    doesn't own (only before sitd has set up any of its own)."""
+    client = service.client
+    logged = {}
+    found = None
+
+    def check():
+        nonlocal found
+        for source, payload in (('list', client.request(0x0602)),
+                                ('indication', service.data_call_list)):
+            if payload is None:
+                continue
+            try:
+                items = entries(payload)
+            except RuntimeError as error:
+                line = f'not decoded ({error}, {len(payload)} bytes)'
+                items = []
+            else:
+                line = f'{len(items)} item(s)' + ''.join(f'; {summary(i)}' for i in items)
+            if logged.get(source) != line:
+                print(f'data-call {source}: {line}', flush=True)
+                logged[source] = line
+            owned = owned_ids()
+            if adopt_unknown:
+                unknown = {i[2] for i in items} - owned
+                if unknown:
+                    record_modem_owned(unknown)
+            found = attach_bearer(items, owned)
+            if found is not None:
+                return True
+        return False
+
+    try:
+        if not check() and deadline > time.monotonic():
+            wait_for(service, check, deadline - time.monotonic(), stopped)
+    except TimeoutError:
+        pass
+    if found is None:
+        print('no modem-owned attach bearer with a P-CSCF listed', flush=True)
+        return None
+    record_modem_owned({found[2]})
+    print(f'modem-owned attach bearer for IMS: {summary(found)}', flush=True)
+    return found
+
+
 def packet_registered(payload, *, lte=False):
     return len(payload) >= 4 and payload[0] in (1, 5) and (not lte or payload[3] == 14)
 
@@ -160,6 +226,10 @@ def start(service, settings, stopped=lambda: False):
     # with no reject; with the IMS APN it registered on LTE in 34 s). The
     # data profile and the internet bearer keep apn. Empty: the same as apn.
     attach_apn = net.get('attach_apn', '').strip() or apn
+    # none: no SET_INITIAL_ATTACH_APN at all, as stock's RIL on a Verizon
+    # network (2026-11-02): the modem attaches with its carrier profile's
+    # settings, and its attach bearer (with the P-CSCF) carries IMS.
+    attach_none = attach_apn.lower() == 'none'
     try:
         profiles = configured_profiles(settings)
     except ValueError as error:
@@ -209,12 +279,16 @@ def start(service, settings, stopped=lambda: False):
         print(f'Startup: radio state {level} ({"on: no radio cycle" if already_on else "off"})', flush=True)
     # Attaching on the IMS APN: ask for the P-CSCF in the attach, as stock does
     # for an IMS APN, since that bearer is the one IMS then uses.
-    ims_attach = (attach_apn != apn and net.getboolean('ims', True)
-                  and attach_apn == net.get('ims_apn', 'ims'))
-    if attach_apn != apn:
-        print('initial attach on attach_apn, not the internet APN'
-              + (' (the IMS APN: P-CSCF requested)' if ims_attach else ''), flush=True)
-    initial_attach(client, attach_apn, ip_type, ims=ims_attach)
+    if attach_none:
+        print('initial attach APN not sent (attach_apn = none): the modem attaches '
+              'with its carrier profile', flush=True)
+    else:
+        ims_attach = (attach_apn != apn and net.getboolean('ims', True)
+                      and attach_apn == net.get('ims_apn', 'ims'))
+        if attach_apn != apn:
+            print('initial attach on attach_apn, not the internet APN'
+                  + (' (the IMS APN: P-CSCF requested)' if ims_attach else ''), flush=True)
+        initial_attach(client, attach_apn, ip_type, ims=ims_attach)
     if profiles[0].ident == 0 and profiles[0].apn != apn:
         print('data profile 0 from [profiles], with another APN than [network] apn '
               '(the internet bearer uses apn)', flush=True)
@@ -268,7 +342,15 @@ def start(service, settings, stopped=lambda: False):
                   + f', RAT {state[3]}', flush=True)
         return packet_registered(state, lte=lte)
     wait_for(service, registered, timeout, stopped)
+    registered_at = time.monotonic()
     data_snapshot(client, 'at registration')
+    attach = None
+    if attach_none:
+        # Before sitd sets up anything: every bearer listed now is the
+        # modem's own and is recorded so (never released). With IMS on, wait
+        # for the attach bearer with its P-CSCF.
+        wait = ATTACH_BEARER_WAIT if net.getboolean('ims', True) else 0
+        attach = find_attach_bearer(service, registered_at + wait, stopped, adopt_unknown=True)
     service.stage('data')
     activate(client, apn, ip_type=ip_type, on_event=service.event)
     service.pump()
@@ -293,18 +375,25 @@ def start(service, settings, stopped=lambda: False):
                       'manifest sent' if service.manifest_sent else 'no request from the modem seen', ')',
                       flush=True)
         start_stack(client)
-        ims_apn = net.get('ims_apn', 'ims')
-        ims_ip = ims_ip_type(profiles, ims_apn)
-        print('IMS bearer PDP type', ims_ip, '(from the IMS profile)' if ims_ip != 'ipv6' else '', flush=True)
-        activate(client, ims_apn, ims=True, ip_type=ims_ip, on_event=service.event)
+        if attach is None:
+            # One more look (no wait): an attach bearer listed by now with
+            # its P-CSCF is used as stock uses it; only that one is recorded.
+            attach = find_attach_bearer(service, 0, stopped, adopt_unknown=False)
         fallback = None
-        if net.getboolean('ims_pcscf_from_isim', True):
+        # With the modem's attach bearer, no IMS setup of our own: it carries
+        # IMS. Otherwise sitd's own IMS bearer on CID 2, as before.
+        if attach is None:
+            ims_apn = net.get('ims_apn', 'ims')
+            ims_ip = ims_ip_type(profiles, ims_apn)
+            print('IMS bearer PDP type', ims_ip, '(from the IMS profile)' if ims_ip != 'ipv6' else '', flush=True)
+            activate(client, ims_apn, ims=True, ip_type=ims_ip, on_event=service.event)
+        if attach is None and net.getboolean('ims_pcscf_from_isim', True):
             # The ISIM's EF_PCSCF when the PCO has none (one read-only file).
             def fallback(bearer):
                 return ipv6_pcscf(client, client.request(0x0200), bearer,
                                   resolve_host=resolve_default_network)
         register(client, pcscf_required=net.getboolean('ims_pcscf_required', True),
-                 pcscf_fallback=fallback)
+                 pcscf_fallback=fallback, attach=attach)
         print('Startup: waiting for IMS voice and SMS registration', flush=True)
         wait_for(service, lambda: service.registration().get('state') == 2 and
                  service.registration().get('features', 0) & 3 == 3,

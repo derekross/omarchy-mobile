@@ -189,6 +189,9 @@ class Service:
         self.manifest_setting = self.settings['network'].get('carrier_manifest', '').strip()
         self.manifest_sent = False
         self.carrier_status = None
+        # The payload of the latest IND_DATA_CALL_LIST_CHANGED (the modem's
+        # own attach bearer shows up there); read by start-up, never logged raw.
+        self.data_call_list = None
         self.sim = dict(state='unknown')
         self.radio = 'unknown'
         self.current_stage = 'starting'
@@ -331,6 +334,10 @@ class Service:
             # OEM_IND_CARRIER_CONFIG_SIM_INFO: the modem asks for a carrier
             # manifest. Only a trigger: its payload (SIM identities) is never read.
             self.answer_carrier_request()
+        elif ident == 0x0604:
+            # IND_DATA_CALL_LIST_CHANGED: kept for start-up's search for the
+            # modem's attach bearer (bringup.find_attach_bearer).
+            self.data_call_list = bytes(packet[8:])
         elif ident == 0x070e:
             # IND_NTW_STATE_CHANGED: read the registration again soon (it
             # can come every second or two while the modem searches).

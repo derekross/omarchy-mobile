@@ -375,3 +375,57 @@ beyond restarting the service, which the phone's owner should know about):
    (ADD_PDN is then not sent; no status 5). Rollback: reinstall 0.3.19.
    Risk: medium (new IMS bearer request; internet bearer untouched).
 3. If counts stay 0: change 5 (logging), then step 0.
+
+## 11. omamobile-modem-sit 0.3.21: stock's attach on a Verizon network
+
+What stock did with a Verizon-network SIM (logcat, 2026-11-02, VoLTE
+working): its RIL sent **no SET_INITIAL_ATTACH_APN for the SIM's slot** (the
+only one was `null`, for the empty second slot), only SET_DATA_PROFILE; the
+carrier manifest was applied; the modem attached with the manifest's settings
+and listed the **attach bearer unsolicited** in IND_DATA_CALL_LIST_CHANGED
+(CID 2, IPv6, QCI 5, three IPv6 P-CSCF, two IPv6 DNS); ShannonIms sent
+ADD_PDN_INFO for it (IP type IPv6, its address and P-CSCFs) and registered.
+0.3.20 sends an explicit attach APN, runs its own IMS setup (CID 2, no
+P-CSCF) and saw no attach bearer listed: most likely our attach APN replaces
+the manifest's attach and its P-CSCF request.
+
+0.3.21 (tested offline):
+
+- `[network] attach_apn = none`: no 0x0603; profiles and the internet bearer
+  as before.
+- After registration (attach_apn = none, IMS on): up to 20 s for an active
+  IPv6/IPv4v6 bearer sitd didn't set up with a P-CSCF, from
+  GET_DATA_CALL_LIST and the latest IND_DATA_CALL_LIST_CHANGED; each list is
+  logged as CID, type, status, active, P-CSCF and DNS counts. Every bearer
+  listed then is recorded as **modem-owned** (`modem-owned-bearers.json` in
+  the run directory): `activate()` accepts it beside its own, never sets up
+  its CID, and `deactivate()` refuses it.
+- Found: no IMS setup of ours; ADD_PDN_INFO from the attach bearer's item
+  (checked against a fresh list right before: still listed, active, same
+  IPv6 address). Not found: one more look after the stack start, then
+  0.3.20's path (own IMS bearer, ISIM fallback). With an explicit
+  attach_apn the one look happens too, without recording unknown bearers.
+- Not confirmed: that GET_DATA_CALL_LIST items carry the P-CSCF at the same
+  offsets as the setup response (stock's `FillDataCallListFromModemPayload`
+  reads both with one item decoder, per MODEM-SIT-RESEARCH §3.5, confidence
+  low for the v11 item); that the 239-292-byte items keep the 234-byte
+  item's extension at 0x84; and that the modem lists the attach bearer at
+  all when no attach APN is sent. If the list item has no P-CSCF but the
+  indication's has, the indication's item is used.
+
+Runbook (human approves each step; changing the config needs a fresh CP, so
+a reboot, which is the owner's call):
+
+1. Read-only: `grep -E '^(apn|attach_apn|ims_apn|carrier_manifest) ='
+   /etc/omamobile/modem-sit.conf`. Pass: carrier_manifest set, IMS profile
+   present. Stop: no manifest (none without it is untested).
+2. Install 0.3.21, set `attach_apn = none`, `ims_apn = IMS`, reboot.
+   Expect: "initial attach APN not sent", "Radio on after carrier config",
+   "data-call list: 1 item(s); CID 2 IPv6 ... P-CSCF 3 ...", "modem-owned
+   attach bearer for IMS", internet "data-call status 0 CID 1", "IMS on the
+   modem-owned attach bearer CID 2", IND_AIMS_REGISTRATION state 2.
+   Pass: IMS registered with voice and SMS. Stop: no registration in
+   `register_timeout`, or every internet setup answered 36. Rollback:
+   `attach_apn = IMS` (0.3.20's setting) and reboot. Risk: medium (changes
+   the attach; the internet bearer and NV untouched).
+

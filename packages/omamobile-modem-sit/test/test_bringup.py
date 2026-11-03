@@ -293,6 +293,7 @@ class IsimFallbackWiringTests(unittest.TestCase):
              patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
              patch.object(bringup, 'activate'), patch.object(bringup, 'start_stack'), \
+             patch.object(bringup, 'find_attach_bearer', return_value=None), \
              patch.object(bringup, 'ipv6_pcscf', return_value=['x']) as read, \
              patch.object(bringup, 'register', side_effect=RuntimeError('stop')) as register, \
              patch('builtins.print'):
