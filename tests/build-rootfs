@@ -176,3 +176,13 @@ echo bad-checksum > "$R/out/$image.sha256"
 if bundle > "$t/bundle.log" 2>&1; then fail "bundling refuses stale image checksum"; fi
 grep -q "doesn't match its .sha256" "$t/bundle.log" || { cat "$t/bundle.log"; fail "bundling identifies the stale checksum"; }
 echo 'ok - bundles select matching-device images and record verified bytes'
+
+# Every image has Phone (with Contacts), Messages and their agent. The modem
+# stack (omamobile-modem-sit, omamobile-mmd) is one phone's and never in the
+# shared list; it comes with the modem through that device's ROOTFS_PACKAGES.
+list=$(grep -v '^#' rootfs/packages.omamobile)
+for p in omamobile-apps omaphone omamessages omatel-agent; do
+  grep -qx "$p" <<<"$list" || fail "rootfs/packages.omamobile lists $p"
+done
+grep -qxE 'omamobile-(modem|modem-sit|mmd)' <<<"$list" && fail "no modem package in the shared rootfs/packages.omamobile"
+echo 'ok - every image lists Phone, Messages and omatel-agent; no modem package in the shared list'
