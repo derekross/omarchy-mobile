@@ -1,0 +1,185 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The phone builds its boot images the way the laptop does (docs/RELEASES.md
+# §5.3 step 3). Two checks, no phone and nothing flashed:
+#
+#   1. Descriptors: every device/*/device.conf that bin/omamobile accepts
+#      with BOOT_METHOD android-v4 is accepted by omamobile-boot-update's
+#      reader (packages/omamobile-boot-update/lib/descriptor.sh), and the
+#      others are refused by it; a set of broken descriptors is refused by
+#      both.
+#   2. Images: bin/omamobile images and omamobile-boot-images, given the same
+#      stub kernel build, initramfs, overlays, dtbo and tools (AOSP's
+#      mkbootimg, avbtool and test key from SRC_DIR, the kernel build's dtc
+#      and fdtoverlay), give byte-identical boot.img, init_boot.img,
+#      vendor_boot.img, vendor_kernel_boot.img, dtbo.img and dtb.img, for a
+#      gs201 layout with overlays and AVB footers and a gs101 layout.
+#
+# Part 2 skips without AOSP's tools under SRC_DIR or a dtc (as
+# tests/images-layout does).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+ROOT=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+LIBDIR=$ROOT/packages/omamobile-boot-update/lib
+reader() { bash -c 'die() { echo "$*" >&2; exit 1; }; source "$1/descriptor.sh"; bu_load_descriptor "$2"' _ "$LIBDIR" "$1"; }
+
+# ---------------------------------------------------------------- 1. descriptors
+n=0
+for conf in device/*/device.conf; do
+  dev=$(basename "$(dirname "$conf")")
+  method=$(sed -n 's/^BOOT_METHOD=//p' "$conf"); method=${method:-android-v4}
+  laptop=0; DEVICE=$dev bin/omamobile initramfs-config "$t/cfg-$dev" >/dev/null 2>&1 && laptop=1
+  phone=0; reader "$conf" >/dev/null 2>&1 && phone=1
+  if [[ $method == android-v4 && $laptop == 1 ]]; then
+    ((phone)) || { reader "$conf" || true; fail "$dev: bin/omamobile accepts it, the phone's reader must too"; }
+    n=$((n + 1))
+  else
+    ((phone == 0)) || fail "$dev ($method): the phone's reader must refuse what has no slot-B update path"
+  fi
+done
+((n >= 1)) || fail "at least one android-v4 descriptor in device/"
+mkdir -p "$t/repo/bin" "$t/repo/device/zz"
+cp bin/omamobile "$t/repo/bin/"
+printf 'DEVICE="${DEVICE:-zz}"\n' > "$t/repo/omamobile.conf"
+sed 's/^CODENAME=.*/CODENAME=zz/' device/cheetah/device.conf > "$t/zz.conf"
+for b in 's/^UFS_RW=.*/UFS_RW="boot_b persist userdata"/' 's/^UFS_RW=.*/UFS_RW="boot_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"/' \
+         's/ userdata"$/"/' 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot"/' 's/^NAME=.*/NAME="$(id)"/' \
+         's/^AVB_ROLLBACK_INDEX=.*//' 's/^AVB_FOOTERS=.*/AVB_FOOTERS="boot:1000"/' '$a BOOT_METHOD=qcom-abl'; do
+  sed "$b" "$t/zz.conf" > "$t/repo/device/zz/device.conf"
+  if (cd "$t/repo" && bin/omamobile initramfs-config "$t/cfg-zz") >/dev/null 2>&1 && [[ $b != *qcom-abl* ]]; then
+    fail "bin/omamobile refuses: $b"
+  fi
+  if reader "$t/repo/device/zz/device.conf" >/dev/null 2>&1; then fail "the phone's reader refuses: $b"; fi
+done
+lock_key=$(awk '$2 == "avb/test/data/testkey_rsa4096.pem" {print $3}' tools/toolchain.lock 2>/dev/null || true)
+if [[ -n $lock_key ]]; then
+  [[ $(sha256sum < packages/omamobile-boot-update/avb/testkey_rsa4096.pem | cut -d' ' -f1) == "$lock_key" ]] \
+    || fail "omamobile-boot-update's AVB key is the one tools/toolchain.lock pins for bin/omamobile images"
+  grep -c "AOSP_TESTKEY_SHA256=$lock_key" packages/omamobile-boot-update/bin/omamobile-boot-update >/dev/null \
+    || fail "omamobile-boot-update checks the key against the pinned checksum"
+fi
+pass "descriptors: the phone's reader accepts the $n android-v4 descriptors bin/omamobile accepts, and refuses broken ones"
+
+# ---------------------------------------------------------------- 2. images
+skip() { printf 'ok - # skip: %s\n' "$1"; exit 0; }
+if [[ -z ${SRC_DIR:-} ]]; then
+  SRC_DIR=$(source ./omamobile.conf; [[ -f omamobile.local.conf ]] && source ./omamobile.local.conf; echo "$SRC_DIR")
+fi
+mk=$SRC_DIR/system/tools/mkbootimg/mkbootimg.py
+avb=$SRC_DIR/external/avb/avbtool.py
+key=$SRC_DIR/external/avb/test/data/testkey_rsa4096.pem
+[[ -f $mk && -f $SRC_DIR/system/libufdt/utils/src/mkdtboimg.py ]] || skip "no AOSP mkbootimg/mkdtboimg under SRC_DIR=$SRC_DIR"
+[[ -f $avb && -f $key ]] || skip "no AOSP avbtool and test key under SRC_DIR=$SRC_DIR"
+for tool in lz4 cpio python3 openssl; do command -v $tool >/dev/null || skip "no $tool"; done
+dtc=${DTC:-}
+fdto=${FDTOVERLAY:-}
+if [[ -z $dtc ]]; then
+  for d in ${KERNEL_OUT:+"$KERNEL_OUT"} "$HOME"/omamobile-kernel/out* "$HOME"/android/mainline/out*; do
+    [[ -x $d/scripts/dtc/dtc && -x $d/scripts/dtc/fdtoverlay ]] && { dtc=$d/scripts/dtc/dtc fdto=$d/scripts/dtc/fdtoverlay; break; }
+  done
+fi
+[[ -n $dtc && -x $dtc && -n $fdto && -x $fdto ]] || skip "no dtc and fdtoverlay (set DTC and FDTOVERLAY, or KERNEL_OUT)"
+dtc=$(readlink -f "$dtc") fdto=$(readlink -f "$fdto")
+
+R=$t/r K=$t/out
+mkdir -p "$R/bin" "$R/device/twelve/overlays" "$R/device/six" "$K/scripts/dtc" "$K/arch/arm64/boot/dts/exynos/google" "$t/bin"
+cp bin/omamobile "$R/bin/"
+printf 'DEVICE="${DEVICE:-twelve}"\nSRC_DIR=%s\n' "$SRC_DIR" > "$R/omamobile.conf"
+ln -s "$dtc" "$K/scripts/dtc/dtc"; ln -s "$fdto" "$K/scripts/dtc/fdtoverlay"
+desc() { # codename soc soc_ids board_id boot_images ufs_rw
+  printf 'CODENAME=%s\nNAME="Test %s"\nSOC=%s\nCOMPATIBLE="google,%s-%s"\nPACKAGE=omamobile-device-%s\nDTB=exynos/google/%s-%s.dtb\nSOC_IDS="%s"\nDTBO_SOURCE=%s-overlay.dts\nDTBO_BOARD_ID=%s\nDTBO_BOARD_REV=0x10000\nVENDOR_CMDLINE="console=tty0 earlycon=exynos4210,0x10A00000 clk_ignore_unused"\nVENDOR_PAGESIZE=0x800\nOS_VERSION=17.0.0\nOS_PATCH_LEVEL=2026-07\nBOOT_IMAGES="%s"\nUFS_RW="%s"\nINITRAMFS_INIT=/initramfs/init\nPANEL_SIZE=1080x2400\n' \
+    "$1" "$1" "$2" "$2" "$1" "$1" "$2" "$1" "$3" "$1" "$4" "$5" "$6"
+}
+desc twelve gs201 "b0:0x9855001 a0:0x9855000" 0x30306 "boot init_boot vendor_boot vendor_kernel_boot dtbo" \
+  "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" > "$R/device/twelve/device.conf"
+printf 'DTB_OVERLAYS="one two"\nAVB_FOOTERS="boot:0x4000000 init_boot:0x800000"\nAVB_ROLLBACK_INDEX=1783209600\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$R/device/twelve/device.conf"
+desc six gs101 "b0:0x9845001 a0:0x9845000" 0x20304 "boot vendor_boot dtbo" "boot_b vendor_boot_b dtbo_b userdata" > "$R/device/six/device.conf"
+for d in "twelve 0x30306" "six 0x20304"; do
+  set -- $d
+  printf '/dts-v1/;\n/plugin/;\n/ {\n\tboard_id = <%s>;\n\tboard_rev = <0x10000>;\n\tfragment@0 {\n\t\ttarget-path = "/";\n\t\t__overlay__ {\n\t\t};\n\t};\n};\n' "$2" > "$R/device/$1/$1-overlay.dts"
+done
+printf '/dts-v1/;\n/plugin/;\n&{/chosen} {\n\tomamobile-one = "1";\n};\n' > "$R/device/twelve/overlays/one.dtso"
+printf '/dts-v1/;\n/plugin/;\n&{/chosen} {\n\tomamobile-two = "2";\n};\n' > "$R/device/twelve/overlays/two.dtso"
+dts=$K/arch/arm64/boot/dts/exynos/google
+for d in "gs201-twelve 0x9855001" "gs101-six 0x9845001"; do
+  set -- $d
+  printf '/dts-v1/;\n/ {\n\tsoc_id = <%s 0x00>;\n\tcompatible = "google,%s";\n\t#address-cells = <2>;\n\t#size-cells = <1>;\n\tect { };\n\tchosen { bootargs = ""; };\n};\n' "$2" "$1" \
+    | "$dtc" -q -@ -I dts -O dtb -o "$dts/$1.dtb" -
+done
+head -c 400000 /dev/urandom > "$K/arch/arm64/boot/Image"
+mkdir -p "$t/rd/etc" && echo x > "$t/rd/init"
+(cd "$t/rd" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$K/initramfs.cpio.lz4"
+printf '#!/bin/sh\nexec python3 %s "$@"\n' "$mk" > "$t/bin/mkbootimg"
+printf '#!/bin/sh\nexec python3 %s "$@"\n' "$avb" > "$t/bin/avbtool"
+chmod +x "$t/bin"/*
+# The phone side runs the distribution's android-tools (what the phone installs)
+# where this machine has them, so the check also covers the packaged tools;
+# otherwise the same AOSP scripts as the laptop side
+phone_mkbootimg=$(command -v mkbootimg || echo "$t/bin/mkbootimg")
+phone_avbtool=$(command -v avbtool || echo "$t/bin/avbtool")
+echo "# phone side: $phone_mkbootimg, $phone_avbtool"
+
+for dev in twelve six; do
+  (cd "$R" && KERNEL_OUT=$K DEVICE=$dev bin/omamobile images) > "$t/laptop.log" 2>&1 || { cat "$t/laptop.log"; fail "bin/omamobile images ($dev)"; }
+  laptop=$K/images
+  cp "$laptop/dtbo.img" "$t/dtbo-$dev.img"
+  args=()
+  if [[ $dev == twelve ]]; then
+    mkdir -p "$t/ov"
+    for o in one two; do "$dtc" -q -@ -I dts -O dtb -o "$t/ov/$o.dtbo" "$R/device/twelve/overlays/$o.dtso"; done
+    args=(--overlays "$t/ov" --avb-key "$key")
+  fi
+  MKBOOTIMG=$phone_mkbootimg AVBTOOL=$phone_avbtool DTC=$dtc FDTOVERLAY=$fdto \
+    "$LIBDIR/omamobile-boot-images" --descriptor "$R/device/$dev/device.conf" --kernel "$K/arch/arm64/boot/Image" \
+    --dtbs "$K/arch/arm64/boot/dts" --dtbo "$laptop/dtbo.img" --initramfs "$K/initramfs.cpio.lz4" \
+    --out "$t/phone-$dev" "${args[@]}" > "$t/phone.log" 2>&1 || { cat "$t/phone.log"; fail "omamobile-boot-images ($dev)"; }
+  for f in $(cd "$laptop" && ls *.img); do
+    cmp -s "$laptop/$f" "$t/phone-$dev/$f" || fail "$dev: $f differs between bin/omamobile images and omamobile-boot-images"
+  done
+  [[ $(cd "$laptop" && ls *.img | tr '\n' ' ') == "$(cd "$t/phone-$dev" && ls *.img | tr '\n' ' ')" ]] || fail "$dev: the same set of images"
+done
+pass "images: omamobile-boot-images gives bin/omamobile images' bytes (gs201 with overlays and AVB footers, gs101)"
+
+# ---------------------------------------------------------------- 3. stage-boot-files
+# The device package's half: the same dtbo, the compiled overlays, a release
+# initramfs with the device's allowlist, the descriptor verbatim
+mkdir -p "$R/tools" "$R/packages/omamobile-boot-update/lib"
+cp tools/stage-boot-files "$R/tools/"
+cp "$LIBDIR/descriptor.sh" "$R/packages/omamobile-boot-update/lib/"
+# SOURCES lists tracked files: the copy is a git checkout of its own
+mkdir -p "$R/initramfs" && echo '#!/bin/sh' > "$R/initramfs/init"
+git -C "$R" init -q && git -C "$R" add -A
+release_rd() { # extra file in the initramfs, or none
+  rm -rf "$t/rd2" && mkdir -p "$t/rd2/etc" && cp "$R/initramfs/init" "$t/rd2/init"
+  echo "boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata" > "$t/rd2/etc/omamobile-ufs-rw"
+  if [[ -n ${1:-} ]]; then mkdir -p "$t/rd2/${1%/*}"; echo k > "$t/rd2/$1"; fi
+  (cd "$t/rd2" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q -f - "$K/initramfs.cpio.lz4"
+}
+sbf() { (cd "$R" && DEVICE=twelve KERNEL_OUT=$K DTC=$dtc tools/stage-boot-files "$t/bf") > "$t/sbf.log" 2>&1; }
+release_rd
+sbf || { cat "$t/sbf.log"; fail "stage-boot-files stages twelve"; }
+cmp -s "$t/bf/device.conf" "$R/device/twelve/device.conf" || fail "stage-boot-files: the descriptor verbatim"
+cmp -s "$t/bf/dtbo.img" "$t/dtbo-twelve.img" || fail "stage-boot-files: the dtbo bin/omamobile images builds"
+cmp -s "$t/bf/overlays/one.dtbo" "$t/ov/one.dtbo" && cmp -s "$t/bf/overlays/two.dtbo" "$t/ov/two.dtbo" || fail "stage-boot-files: the overlays, compiled as the builder takes them"
+cmp -s "$t/bf/initramfs.cpio.lz4" "$K/initramfs.cpio.lz4" || fail "stage-boot-files: the release initramfs"
+(cd "$t/bf" && sha256sum --quiet -c SHA256SUMS) || fail "stage-boot-files: checksums"
+grep -cE '  device/twelve/device\.conf$' "$t/bf/SOURCES" >/dev/null && grep -cE '  initramfs/init$' "$t/bf/SOURCES" >/dev/null \
+  || fail "stage-boot-files: SOURCES lists the tracked inputs"
+(cd "$R" && tools/stage-boot-files --check "$t/bf") >/dev/null 2>&1 || fail "stage-boot-files --check passes what it just staged"
+echo '# changed' >> "$R/initramfs/init"
+if (cd "$R" && tools/stage-boot-files --check "$t/bf") >/dev/null 2>&1; then fail "stage-boot-files --check finds a changed source"; fi
+git -C "$R" checkout -q -- initramfs/init 2>/dev/null || echo '#!/bin/sh' > "$R/initramfs/init"
+release_rd root/.ssh/authorized_keys
+if sbf; then fail "stage-boot-files refuses an initramfs with the builder's SSH keys"; fi
+release_rd etc/dropbear/dropbear_ed25519_host_key
+if sbf; then fail "stage-boot-files refuses an initramfs with dropbear host keys"; fi
+(cd "$t/rd" && find . | cpio -o -H newc --quiet) | lz4 -l -9 -q -f - "$K/initramfs.cpio.lz4"
+if sbf; then fail "stage-boot-files refuses an initramfs without the device's allowlist"; fi
+release_rd && echo '# another checkout' >> "$R/initramfs/init"
+if sbf; then fail "stage-boot-files refuses an initramfs whose init is not this tree's"; fi
+grep -c "is not this tree's" "$t/sbf.log" >/dev/null || { cat "$t/sbf.log"; fail "and says so"; }
+git -C "$R" checkout -q -- initramfs/init
+pass "stage-boot-files: the descriptor, the same dtbo, the overlays and a release initramfs, or a refusal"

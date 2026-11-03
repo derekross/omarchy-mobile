@@ -7,6 +7,7 @@
 import QtQuick
 import QtTest
 import Quickshell
+import Quickshell.Services.Mpris
 import "plugins/lock"
 import "plugins/lock/LockGlance.js" as Glance
 import "TestEnv.js" as TestEnv
@@ -21,6 +22,48 @@ Item {
   property int wakes: 0
   property string notificationsRaw: ""
   property var view: null
+  // The kernel's power supplies as the lock's LockBattery command lists
+  // them (patch 0026): by default the phone plugged in, its gauge still
+  // saying Discharging.
+  property string supplies: "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
+  // A supply read that never comes back: the responder gives no answer.
+  property bool suppliesHang: false
+
+  // An MPRIS player as Quickshell's MprisPlayer looks to the lock (patch
+  // 0027); it records what it is asked.
+  component FakePlayer: QtObject {
+    property string identity: "Music"
+    property string desktopEntry: ""
+    property string dbusName: "org.mpris.MediaPlayer2.music"
+    property string trackTitle: "Song"
+    property string trackArtist: "Band"
+    property var trackArtists: []
+    property string trackArtUrl: ""
+    property bool isPlaying: true
+    property int playbackState: isPlaying ? 1 : 2
+    property bool canPlay: true
+    property bool canPause: true
+    property bool canTogglePlaying: true
+    property bool canGoNext: true
+    property bool canGoPrevious: true
+    property bool canSeek: true
+    property bool canRaise: true
+    property bool positionSupported: true
+    property bool lengthSupported: true
+    property real position: 50
+    property real length: 200
+    property var calls: []
+    signal trackChanged()
+    function note(name) { calls = calls.concat([name]) }
+    function play() { note("play"); isPlaying = true }
+    function pause() { note("pause"); isPlaying = false }
+    function togglePlaying() { note("toggle"); isPlaying = !isPlaying }
+    function next() { note("next") }
+    function previous() { note("previous") }
+    function raise() { note("raise") }
+    function quit() { note("quit") }
+  }
+  Component { id: playerComponent; FakePlayer {} }
 
   readonly property string home: TestEnv.HOME
   readonly property double minute: 60 * 1000
@@ -120,6 +163,9 @@ Item {
       harness.submitted = []
       harness.wakes = 0
       harness.notificationsRaw = ""
+      harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
+      harness.suppliesHang = false
+      Mpris.players.values = []
       Quickshell.vars = { HOME: harness.home }
       Quickshell.started = []
       Quickshell.responder = function(argv) {
@@ -134,6 +180,7 @@ Item {
           }).join("\n") + "\n"
           return ""
         }
+        if (cmd.indexOf("/sys/class/power_supply") >= 0) return harness.suppliesHang ? null : harness.supplies
         return cmd.indexOf("/.local/state/omarchy/notifications/") >= 0 ? harness.notificationsRaw : null
       }
       writeFile(".local/state/omarchy/toggles/lock-hide-notification-text", "")
@@ -651,6 +698,276 @@ Item {
       compare(one("lockPinClock").visible, false)
       compare(one("lockEmergencyCall").visible, false)
       verify(findAll(harness.view, function(i) { return i.visible && String(i.text) === "Enter Password" }).length > 0)
+    }
+
+    // Patch 0026: the battery, top right, over the glance and the PIN view
+    // alike. A charger online is charging, whatever the gauge says; the bar's
+    // glyph carries the bolt (87%: 󰂋 charging, 󰂂 not), there is no second one.
+    function test_battery_on_both_views() {
+      var battery = one("lockBattery")
+      tryVerify(function() { return battery.visible }, 2000)
+      compare(one("lockBatteryPercent").text, "87%")
+      compare(one("lockBatteryIcon").text, "󰂋", "the glyph's bolt follows the charger, not the gauge")
+      compare(byName("lockBatteryBolt").length, 0, "no second bolt beside the glyph, as the bar")
+      verify(battery.x > harness.width / 2 && battery.x + battery.width <= harness.width, "top right")
+      verify(battery.y >= 0 && battery.y + battery.height <= one("lockGlanceTime").mapToItem(harness.view, 0, 0).y,
+             "above the glance's clock")
+      toPin()
+      verify(battery.visible)
+      blank()
+      // Dark: the bolt goes at once, the level stays, so a wake never paints a stale bolt.
+      compare(one("lockBatteryIcon").text, "󰂂")
+      compare(one("lockBatteryPercent").text, "87%")
+      harness.supplies = "Battery\t1\t86\tDischarging\t\nUSB\t\t\tNot charging\t0\n"
+      show()
+      tryCompare(one("lockBatteryPercent"), "text", "86%")
+      compare(one("lockBatteryIcon").text, "󰂂")
+    }
+
+    // Unplugged while the display stays lit: the next reading drops the bolt.
+    function test_unplug_while_lit() {
+      tryCompare(one("lockBatteryIcon"), "text", "󰂋")
+      harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tNot charging\t0\n"
+      one("lockBattery").refresh()
+      tryCompare(one("lockBatteryIcon"), "text", "󰂂")
+      compare(one("lockBatteryPercent").text, "87%")
+      harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
+      one("lockBattery").refresh()
+      tryCompare(one("lockBatteryIcon"), "text", "󰂋")
+    }
+
+    // A reading that never comes back is not left up: the stale timer clears
+    // it, and the next reading that does answer brings it back.
+    function test_hung_reading_clears() {
+      var battery = one("lockBattery")
+      tryVerify(function() { return battery.visible }, 2000)
+      harness.suppliesHang = true
+      battery.refresh()
+      wait(1000)
+      verify(battery.visible, "the last reading stays up for a while")
+      tryCompare(battery, "visible", false, 6000)
+      harness.suppliesHang = false
+      battery.refresh()
+      tryVerify(function() { return battery.visible }, 2000)
+      compare(one("lockBatteryPercent").text, "87%")
+    }
+
+    // A paired controller's battery (scope Device, present, full, listed
+    // before the phone's gauge) is not the phone's: the gauge's level shows,
+    // and the controller being Full or Charging puts no bolt or plug on it.
+    function test_peripheral_battery_is_not_the_phones() {
+      harness.supplies = "Battery\t1\t100\tFull\t\tDevice\nBattery\t1\t64\tDischarging\t\t\nUSB\t\t\tNot charging\t0\t\n"
+      show()
+      tryCompare(one("lockBatteryPercent"), "text", "64%")
+      compare(one("lockBatteryIcon").text, "󰂀", "the gauge's level, no plug and no bolt")
+      harness.supplies = "Battery\t1\t40\tCharging\t\tDevice\nBattery\t1\t64\tDischarging\t\t\nUSB\t\t\tNot charging\t0\t\n"
+      one("lockBattery").refresh()
+      wait(500)
+      compare(one("lockBatteryIcon").text, "󰂀", "a charging controller is not the phone charging")
+      compare(one("lockBatteryPercent").text, "64%")
+      // Only the controller: no battery at all.
+      harness.supplies = "Battery\t1\t100\tFull\t\tDevice\n"
+      one("lockBattery").refresh()
+      tryCompare(one("lockBattery"), "visible", false)
+    }
+
+    function test_no_battery_shows_nothing() {
+      // a desktop with a wireless mouse: a Battery supply, not present
+      harness.supplies = "Battery\t0\t50\t\t\n"
+      show()
+      tryCompare(one("lockBattery"), "visible", false)
+      compare(findAll(harness.view, function(i) { return i.visible && String(i.text) === "No battery" }).length, 0)
+      harness.view.keypad = false
+      settle()
+      compare(one("lockBattery").visible, false)
+    }
+
+    // ------------------------------------------------ patch 0027: media
+
+    function player(props) { return playerComponent.createObject(harness, props || {}) }
+    function rectIn(item) { var p = item.mapToItem(harness.view, 0, 0); return { x: p.x, y: p.y, w: item.width, h: item.height } }
+    function apart(a, b) { return a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y }
+    function tapOn(item) { var c = item.mapToItem(harness.view, item.width / 2, item.height / 2); mouseClick(harness.view, c.x, c.y) }
+
+    function test_no_player_no_media() {
+      show()
+      compare(one("lockGlanceMedia").visible, false)
+      compare(one("lockPinMedia").visible, false)
+      Mpris.players.values = [player({ isPlaying: false, playbackState: 0 })]
+      settle()
+      compare(one("lockGlanceMedia").visible, false, "a stopped player shows nothing")
+    }
+
+    function test_media_on_the_glance_above_the_cards() {
+      harness.notificationsRaw = [
+        entry("Messages", 1 * minute, 1, "Sam", "One"),
+        entry("Mail", 2 * minute, 2, "Invoice", "Two"),
+        entry("GitHub", 3 * minute, 3, "Review", "Three"),
+        entry("Calendar", 4 * minute, 4, "Standup", "Four")
+      ].join("\n") + "\n"
+      Mpris.players.values = [player({ trackTitle: "A very long song title that goes on and on past the edge of the card" })]
+      show()
+      var media = one("lockGlanceMedia")
+      verify(media.visible)
+      compare(one("lockMediaTitle").elide, Text.ElideRight)
+      verify(one("lockMediaTitle").implicitWidth > one("lockMediaTitle").width, "a long title is cut short")
+      var m = rectIn(media)
+      var time = rectIn(one("lockGlanceWeather").visible ? one("lockGlanceWeather") : one("lockGlanceDate"))
+      verify(m.y >= time.y + time.h, "under the clock and date")
+      var cards = visibleCards()
+      verify(cards.length >= 1, "cards still show under it")
+      verify(rectIn(cards[0]).y >= m.y + m.h, "the cards are under the media card")
+      var hint = rectIn(one("lockGlanceHint"))
+      var last = cards[cards.length - 1]
+      var bottom = one("lockGlanceMore").visible ? rectIn(one("lockGlanceMore")) : rectIn(last)
+      verify(bottom.y + bottom.h <= hint.y, "everything stays above the hint")
+      verify(one("lockGlanceMore").visible, "the cards that no longer fit fold into the more line")
+      verify(apart(m, rectIn(one("lockBattery"))), "clear of the battery")
+      var buttons = ["lockMediaPrevious", "lockMediaPlayPause", "lockMediaNext"].map(function(n) {
+        return byName(n).filter(function(b) { return b.parent && b.parent.parent === media })[0]
+      })
+      for (var i = 0; i < 3; i++) verify(buttons[i].height >= 44 && buttons[i].width >= 44, "touch-sized")
+    }
+
+    function glanceButton(name) {
+      var media = one("lockGlanceMedia")
+      return byName(name).filter(function(b) { return b.parent && b.parent.parent === media })[0]
+    }
+
+    function test_transport_from_the_glance_and_nothing_else() {
+      var p = player({ canRaise: true })
+      Mpris.players.values = [p]
+      show()
+      Quickshell.executed = []
+      tapOn(glanceButton("lockMediaPlayPause"))
+      compare(p.calls, ["pause"])
+      compare(glance().showing, true, "a control's tap doesn't show the PIN view")
+      compare(one("lockGlanceMedia").visible, true, "paused stays on the lock")
+      tapOn(glanceButton("lockMediaPlayPause"))
+      tapOn(glanceButton("lockMediaNext"))
+      tapOn(glanceButton("lockMediaPrevious"))
+      compare(p.calls, ["pause", "play", "next", "previous"])
+      // A tap on the art or the title does nothing: no raise, nothing run.
+      tapOn(one("lockMediaArt"))
+      tapOn(one("lockMediaTitle"))
+      settle()
+      compare(p.calls.indexOf("raise"), -1, "never raised from the lock")
+      compare(Quickshell.executed.filter(function(a) { return a[0] !== "busctl" }), [], "nothing started")
+      compare(glance().showing, true)
+      // A swipe up from the media card still goes to the PIN view.
+      var c = one("lockGlanceMedia").mapToItem(harness.view, 40, 20)
+      swipeUp(harness.view, c.x, c.y)
+      settle()
+      compare(glance().showing, false)
+    }
+
+    function test_a_tap_that_wakes_only_wakes() {
+      var p = player({})
+      Mpris.players.values = [p]
+      show()
+      blank()
+      tapOn(glanceButton("lockMediaPlayPause"))
+      settle()
+      compare(p.calls, [], "the tap that lit the screen pressed nothing")
+      compare(harness.view.displayDark, false)
+    }
+
+    function test_what_it_cannot_do_does_nothing() {
+      var p = player({ canGoNext: false, canGoPrevious: false })
+      Mpris.players.values = [p]
+      show()
+      tapOn(glanceButton("lockMediaNext"))
+      tapOn(glanceButton("lockMediaPrevious"))
+      compare(p.calls, [])
+      verify(glanceButton("lockMediaNext").opacity < 1)
+    }
+
+    function test_playing_before_paused_then_most_recent() {
+      var a = player({ dbusName: "a", trackTitle: "A", isPlaying: false })
+      var b = player({ dbusName: "b", trackTitle: "B", isPlaying: false })
+      var proxy = player({ dbusName: "org.mpris.MediaPlayer2.playerctld", trackTitle: "A" })
+      Mpris.players.values = [proxy, a, b]
+      show()
+      b.trackChanged()
+      a.trackChanged()
+      settle()
+      compare(one("lockMediaTitle").text, "A", "the paused one that changed track last; playerctld only repeats")
+      b.isPlaying = true
+      settle()
+      compare(one("lockMediaTitle").text, "B", "one that plays wins")
+    }
+
+    function test_local_art_only() {
+      var p = player({ trackArtUrl: "https://example.invalid/cover.jpg" })
+      Mpris.players.values = [p]
+      show()
+      compare(one("lockGlanceMedia").artUrl, "", "no request to the network from the lock")
+      p.trackArtUrl = "file:///nonexistent/cover.png"
+      compare(one("lockGlanceMedia").artUrl, "file:///nonexistent/cover.png")
+    }
+
+    function test_hidden_text_hides_the_track() {
+      writeFile(".local/state/omarchy/toggles/lock-hide-notification-text", "1\n")
+      Mpris.players.values = [player({ trackArtUrl: "file:///nonexistent/cover.png" })]
+      show()
+      compare(one("lockMediaTitle").text, "Music")
+      compare(one("lockMediaDetail").text, "Playing")
+      compare(one("lockGlanceMedia").artUrl, "")
+      verify(one("lockGlanceMedia").Accessible.name.indexOf("Song") < 0)
+      writeFile(".local/state/omarchy/toggles/lock-hide-notification-text", "")
+    }
+
+    // With fingerprints the pad keeps the sensor's third clear and fills the
+    // screen up to the small clock: no room for media there, so none.
+    function test_no_media_row_on_a_full_pin_view() {
+      Mpris.players.values = [player({})]
+      show()
+      toPin()
+      compare(one("lockPinMedia").visible, false, "the PIN pad is never crowded")
+      compare(one("lockPinMedia").fits, false)
+    }
+
+    // Without fingerprints the pad sits lower, and a row fits above the clock.
+    function test_media_on_the_pin_view() {
+      var p = player({})
+      Mpris.players.values = [p]
+      harness.view.fingerprintConfigured = false
+      show()
+      compare(one("lockPinMedia").visible, false, "not under the glance")
+      toPin()
+      var pin = one("lockPinMedia")
+      verify(pin.visible, "a row on the PIN view: " + JSON.stringify([pin.y, pin.implicitHeight, one("lockPinClock").y]))
+      var r = rectIn(pin)
+      verify(apart(r, rectIn(one("lockBattery"))), "clear of the battery")
+      verify(r.y + r.h <= rectIn(one("lockPinClock")).y, "above the small clock")
+      var play = byName("lockMediaPlayPause").filter(function(b) { return b.parent && b.parent.parent === pin })[0]
+      verify(play.height >= 44)
+      mouseClick(play, play.width / 2, play.height / 2)
+      compare(p.calls, ["pause"])
+      compare(harness.password, "", "no digit typed")
+      compare(glance().showing, false)
+    }
+
+    function test_position_asked_only_while_lit() {
+      var p = player({})
+      var ticks = 0
+      p.positionChanged.connect(function() { ticks += 1 })
+      Mpris.players.values = [p]
+      show()
+      wait(2300)
+      verify(ticks >= 2, "asked each second while lit: " + ticks)
+      harness.view.displayDark = true
+      var before = ticks
+      wait(1300)
+      compare(ticks, before, "nothing while dark")
+    }
+
+    function test_computer_lock_has_no_media() {
+      Mpris.players.values = [player({})]
+      harness.view.keypad = false
+      settle()
+      compare(one("lockGlanceMedia").visible, false)
+      compare(one("lockPinMedia").visible, false)
     }
   }
 }

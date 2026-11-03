@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up probe, never default (BATTERY-NOTES.md M3): switches on CMU_PERIC1,
+ * its sysreg, USI11 and hsi2c_11, the bus of the MAX77759 gauge, charger,
+ * Type-C controller and PMIC. The charger and Type-C drivers are blacklisted by the husky package
+ * (omamobile-max77759.conf), so nothing talks to those chips until a step
+ * loads them by hand. The Type-C controller node stays disabled in the board file.
+ */
+/dts-v1/;
+/plugin/;
+
+&cmu_peric1 {
+	status = "okay";
+};
+
+&sysreg_peric1 {
+	status = "okay";
+};
+
+&usi11 {
+	status = "okay";
+};
+
+&hsi2c_11 {
+	status = "okay";
+};

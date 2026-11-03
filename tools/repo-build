@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Opt-in shortcut: build [omamobile] packages natively on a connected phone,
-# into out/repo/aarch64, each signed with the Omarchy Mobile key in keys/,
+# into out/repo/aarch64, each signed with the release key (keys/gnupg.release),
 # plus a signed omamobile.db. The default build needs no phone:
 # tools/build-packages (an Arch Linux ARM container on the laptop). Use this
 # only to save hours on big packages (Mesa, Hyprland, libcamera).
@@ -11,8 +11,10 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
-export GNUPGHOME=$PWD/keys/gnupg
-key=$(cat keys/fingerprint)
+# The release key (docs/RELEASES.md §10), with a clear error without it
+source tools/lib/signing.sh
+signing_key_load "$PWD" || exit 1
+key=$SIGNING_KEY
 repo=out/repo/aarch64
 ssh=tools/phone-ssh
 # The phone's account: whoever is logged in on its screen (as tools/acpm-stage

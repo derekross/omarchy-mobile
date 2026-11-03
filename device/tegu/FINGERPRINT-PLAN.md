@@ -392,7 +392,7 @@ match and a non-match, then libfprint and fprintd, then the PAM file and
 `omamobile-fp.service` enabled. Tune the LHBM settle time for tg4c's two-frame
 delay at 120 Hz. **Stop** on auth-token refusals, lockouts or TOO_DARK on
 every capture (then the overdrive brightness sets, section 3).
-Rollback: delete the enrolled id, remove the PAM file, disable the service.
+Rollback: delete the enrolled id, remove the PAM file, `systemctl mask --now omamobile-fp` (from 0.1.14 the package's vendor wants link survives `disable`).
 
 ### F11: shell and polish
 

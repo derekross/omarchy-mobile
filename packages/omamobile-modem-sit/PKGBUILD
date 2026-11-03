@@ -7,7 +7,11 @@ pkgdesc="Omarchy Mobile SIT RIL for the Pixel 7 Pro's S5300: LTE registration, I
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(python iproute2 iputils systemd alsa-lib alsa-utils omamobile-modem)
+# mobile-broadband-provider-info: the carrier database the automatic APN
+# reads (GNOME, CC-PDDC; arch "any", NetworkManager already pulls it in).
+# polkit: the Mobile network page's helper runs through pkexec.
+depends=(python iproute2 iputils systemd alsa-lib alsa-utils omamobile-modem
+         mobile-broadband-provider-info polkit)
 backup=(etc/omamobile/modem-sit.conf)
 install=omamobile-modem-sit.install
 

@@ -8,6 +8,7 @@
 #   FAKE_DIGITAL_MAX    Digital PCM Volume max (817 with the kernel limit)
 #   FAKE_ANALOG_MAX     Analog PCM Volume max (10 with the kernel limit)
 #   FAKE_NO_DSP=1       the firmware does not load (no DSP controls)
+import fcntl
 import json
 import os
 import sys
@@ -60,6 +61,8 @@ def dsp_controls(c, p):
         c.setdefault(wm_adsp_name(p, alg, n), {'type': 'BYTES', 'v': list(v.to_bytes(4, 'big'))})
     c.setdefault(wm_adsp_name(p, 'cd', 'CSPL_UPDATE_PARAMS_CONFIG'), {'type': 'BYTES', 'v': [0] * 64})
     c.setdefault(wm_adsp_name(p, 'cd', 'CSPL_COMMAND'), {'type': 'BYTES', 'v': [0] * 4})
+    # a host-written setting: the tuning's value, 1 (the protection algorithm on)
+    c.setdefault(wm_adsp_name(p, 'cd', 'CSPL_ENABLE'), {'type': 'BYTES', 'v': [0, 0, 0, 1]})
     for n, size in (('RTLOG_ENABLE', 4), ('RTLOG_VARIABLE', 16), ('RTLOG_COUNT', 4), ('RTLOG_STATE', 4),
                     ('RTLOG_DATA', 128)):
         c.setdefault(wm_adsp_name(p, 'cd', n), {'type': 'BYTES', 'v': [0] * size})
@@ -117,6 +120,10 @@ def main(argv):
             print("amixer: Invalid card number ''.", file=sys.stderr)
             return 1
         args = args[2:]
+    # The watchdog's JSON backend changes this file too (the heartbeat):
+    # under the same lock, so neither puts back a value the other just wrote
+    lock = open(f'{state_path}.lock', 'a')
+    fcntl.flock(lock, fcntl.LOCK_EX)
     c = load()
     cmd = args[0]
     if cmd == 'controls':

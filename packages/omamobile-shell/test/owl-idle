@@ -18,6 +18,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cp -r "$plugin/owl" "$work/owl"
 cp "$here/owl-idle.qml" "$work/tst_owl_idle.qml"
+cp "$here/owl-lifecycle.qml" "$work/tst_owl_lifecycle.qml"
 
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
-exec "$runner" -input "$work/tst_owl_idle.qml"
+"$runner" -input "$work"

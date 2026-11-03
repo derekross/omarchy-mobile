@@ -1,0 +1,194 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/extract-camera-data's AArch64 'adrp' decoding (no phone, no HAL, no
+# unicorn or pyelftools needed): the page displacement is a signed 21-bit
+# page count, so a reference to a lower page must not land 8 GiB too high.
+# Synthetic instruction words in a stand-in image go through the tool's own
+# PLT-stub, settings-provider, virtual-table and string-reference finders,
+# with negative, zero and positive displacements and both limits.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+python3 -I -B - tools/extract-camera-data <<'PY'
+import importlib.machinery
+import importlib.util
+import struct
+import sys
+import types
+
+# The tool only needs unicorn and pyelftools to load and run a HAL; the
+# finders tested here read bytes. Stand in for them when they're missing.
+try:
+    import unicorn  # noqa: F401
+    import elftools.elf.elffile  # noqa: F401
+except ImportError:
+    uc = types.ModuleType("unicorn")
+    uc.UcError = type("UcError", (Exception,), {})
+    uc.arm64_const = types.ModuleType("unicorn.arm64_const")
+    elf = types.ModuleType("elftools.elf.elffile")
+    elf.ELFFile = object
+    sys.modules.update({"unicorn": uc, "unicorn.arm64_const": uc.arm64_const,
+                        "elftools": types.ModuleType("elftools"),
+                        "elftools.elf": types.ModuleType("elftools.elf"),
+                        "elftools.elf.elffile": elf})
+
+loader = importlib.machinery.SourceFileLoader("extract_camera_data", sys.argv[1])
+tool = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(tool)
+
+
+def adrp(rd, pages):
+    imm = pages & 0x1FFFFF
+    return 0x90000000 | (imm & 3) << 29 | (imm >> 2) << 5 | rd
+
+
+def add(rd, rn, imm):
+    return 0x91000000 | imm << 10 | rn << 5 | rd
+
+
+def bl(pc, target):
+    return 0x94000000 | ((target - pc) // 4) & 0x3FFFFFF
+
+
+def ldr_x(rt, rn, off):
+    return 0xF9400000 | (off // 8) << 10 | rn << 5 | rt
+
+
+def str_x(rt, rn, off):
+    return 0xF9000000 | (off // 8) << 10 | rn << 5 | rt
+
+
+def movz_w0(imm):
+    return 0x52800000 | imm << 5
+
+
+BTI_C, RET, BR_X17 = 0xD503245F, 0xD65F03C0, 0xD61F0220
+NEW = 0xDEAD0   # the trap address standing for operator new
+
+
+class Elf:
+    def __init__(self, sections):
+        self.sections = sections
+
+    def get_section_by_name(self, name):
+        return self.sections.get(name)
+
+
+class Image:
+    """What the finders read of tool.Emu: the file bytes (addresses are file
+    offsets, as in the HAL), the ELF's sections, the PLT traps and u64(),
+    which fails outside the image as an unmapped read does."""
+
+    def __init__(self, size, text, text_size):
+        self.data = bytearray(size)
+        self.elf = Elf({".text": {"sh_addr": text, "sh_size": text_size}})
+        self.traps = {}
+
+    def put(self, addr, *words):
+        struct.pack_into(f"<{len(words)}I", self.data, addr, *words)
+
+    def u64(self, addr):
+        if not 0 <= addr <= len(self.data) - 8:
+            raise LookupError(f"read of unmapped 0x{addr:x}")
+        return struct.unpack_from("<Q", self.data, addr)[0]
+
+    def plt_stub(self, stub, slot):
+        """'adrp x16, slot; ldr x17, [x16, #slot]; add; br x17' at stub, its
+        GOT slot holding operator new's trap."""
+        self.put(stub, adrp(16, (slot >> 12) - (stub >> 12)),
+                 ldr_x(17, 16, slot & 0xFFF), add(16, 16, slot & 0xFFF), BR_X17)
+        struct.pack_into("<Q", self.data, slot, NEW)
+        self.traps[NEW] = "_Znwm"
+
+
+failures = []
+
+
+def show(v):
+    if isinstance(v, list):
+        return [hex(x) for x in v]
+    return hex(v) if isinstance(v, int) else repr(v)
+
+
+def check(what, got_fn, want):
+    try:
+        got = got_fn()
+    except Exception as e:   # an unmapped read, as Emu would raise
+        got = f"{type(e).__name__}: {e}"
+    if got == want:
+        print(f"ok - {what}")
+    else:
+        failures.append(what)
+        print(f"not ok - {what}: got {show(got)}, want {show(want)}", file=sys.stderr)
+
+
+DISPLACEMENTS = (("48 pages back", -0x30), ("one page back", -1), ("the same page", 0),
+                 ("five pages on", 5))
+
+# PLT stubs: the call's name comes from the GOT slot the stub's adrp reaches.
+for label, stub, slot in (("32 pages back", 0x21000, 0x1008),
+                          ("one page back", 0x21010, 0x20FF8),
+                          ("the same page", 0x21000, 0x21800),
+                          ("17 pages on", 0x11000, 0x22010)):
+    img = Image(0x30000, 0x10000, 0x10000)
+    img.plt_stub(stub, slot)
+    img.put(0x10000, bl(0x10000, stub))
+    check(f"PLT stub, GOT slot {label}: the call is operator new",
+          lambda: tool._bl_name(img, 0x10000), "_Znwm")
+
+TEXT, SIZE = 0x40000, 0x20000
+CTOR, HOLDER, STUB, SLOT, CALL = TEXT + 0x100, 0x18, TEXT + 0x200, TEXT + 0x800, TEXT + 0x1000
+
+
+def provider_image(pages, lo, size, third):
+    """A driver constructor that stores its argument at HOLDER and a caller
+    that allocates the settings object, loads its table and calls it:
+    'mov w0, #size; bl operator new; adrp x8; add x8, x8, #lo; [third;] bl
+    ctor'. Returns the image and the table address the adrp means."""
+    img = Image(0x100000, TEXT, SIZE)
+    img.put(CTOR, BTI_C, str_x(1, 0, HOLDER), RET)
+    img.plt_stub(STUB, SLOT)
+    seq = [movz_w0(size), bl(CALL + 4, STUB), adrp(8, pages), add(8, 8, lo)] + third
+    img.put(CALL, *seq, bl(CALL + 4 * len(seq), CTOR))
+    return img, ((CALL + 8) & ~0xFFF) + (pages << 12) + lo + 0x10
+
+
+# Settings providers: 'operator new' of 8 bytes, the table at lo + 0x10; then
+# the built-object fallback (a 32-byte object; the Pixel 9a's GN8), which
+# reads 'adrp; add; add xM, xN, #0x10' as a virtual table.
+for kind, lo, size, third in (("settings provider", 0x20, 8, []),
+                              ("built settings object", 0x40, 0x20, [add(0, 8, 0x10)])):
+    for label, pages in DISPLACEMENTS:
+        img, want = provider_image(pages, lo, size, third)
+        check(f"{kind}, table {label}",
+              lambda: tool.samsung_providers(img, CTOR, HOLDER), [want])
+
+def vt_words(pages):
+    return [0, 0, 0, adrp(8, pages), add(8, 8, 0x20), add(0, 8, 0x10)]
+
+
+# Virtual tables, from the instruction words alone, with the adrp off a page
+# boundary and at both ends of its range (+-4 GiB).
+for label, text, pages, want in (
+        ("one page back from 0x100c", 0x1000, -1, 0x30),
+        ("the same page", 0x1000, 0, 0x1030),
+        ("one page on", 0x1000, 1, 0x2030),
+        ("most negative (-2^20 pages)", 0x1_0000_1000, -(1 << 20), 0x1030),
+        ("most positive (2^20 - 1 pages)", 0x1000, (1 << 20) - 1, 0x1_0000_0030)):
+    check(f"virtual table, {label}", lambda: tool._adrp_vtable(vt_words(pages), text, 3), want)
+
+# String references: 'adrp xN; add xN, xN, #lo' pairs that reach the string.
+KEY = "omamobile synthetic string"
+for label, pc, at in (("22 pages back", 0x18000, 0x2340),
+                      ("one page back", 0x10004, 0xF100),
+                      ("the same page", 0x1A000, 0x1A800),
+                      ("21 pages on", 0x10010, 0x25670)):
+    img = Image(0x30000, 0x10000, 0x10000)
+    img.data[at:at + len(KEY) + 1] = KEY.encode() + b"\0"
+    img.put(pc, adrp(3, (at >> 12) - (pc >> 12)), add(3, 3, at & 0xFFF))
+    check(f"string reference, string {label}",
+          lambda: tool.str_xrefs(img, KEY), [pc])
+
+if failures:
+    sys.exit(f"not ok - {len(failures)} adrp decoding check(s) failed")
+print("ok - adrp page displacements are signed in every finder")
+PY

@@ -161,3 +161,49 @@ echo false >"$t/secure"
 echo true >"$t/locked"; echo true >"$t/dpms"
 press; grep -c "omamobile-sleepd" "$log" >/dev/null && fail "a lock that isn't secure never asks for sleep"
 echo "ok - power key: screen off behind a secure lock asks omamobile-sleepd to sleep now"
+
+# Power + Volume Up push-to-talk (voice input): off unless the voice
+# settings turn it on, never on the lock screen; on, power held then volume
+# up starts it (no volume change, no power gesture) and volume up's release
+# stops it. Every other release does nothing.
+export XDG_CONFIG_HOME=$t/config
+mkdir -p "$t/config/omamobile"
+echo false >"$t/locked"; echo true >"$t/dpms"
+echo foot >"$t/class"
+voice() { grep -c "omamobile.voice $1" "$log" 2>/dev/null || true; }
+ptt() { reset; keys power-down; keys volume-up; keys volume-up; sleep 0.3; }
+release() { keys volume-up-release; keys power-up; sleep 0.5; }
+
+rm -f "$t/config/omamobile/voice.json"
+ptt; release
+[[ $(voice keyPress) == 0 ]] || fail "push-to-talk is off without the setting"
+grep -c "volume raise" "$log" >/dev/null || fail "with it off, power + volume up still raises the volume"
+echo '{"powerVolumeUp": false}' >"$t/config/omamobile/voice.json"
+ptt; release; [[ $(voice keyPress) == 0 ]] || fail "push-to-talk is off when the setting says so"
+
+echo '{"powerVolumeUp": true}' >"$t/config/omamobile/voice.json"
+ptt
+[[ $(voice keyPress) == 1 ]] || fail "power + volume up starts push-to-talk once (key repeat starts nothing)"
+grep -c "volume raise" "$log" >/dev/null && fail "push-to-talk doesn't change the volume"
+[[ $(voice keyRelease) == 0 ]] || fail "still talking while volume up is held"
+release
+[[ $(voice keyRelease) == 1 ]] || fail "volume up's release stops push-to-talk"
+grep -cE "omarchy-system-lock|omarchy-brightness-display" "$log" >/dev/null && fail "the chord's power release locks nothing"
+
+# Volume up first, then power: the same chord.
+reset; keys volume-up; keys power-down; sleep 0.3
+[[ $(voice keyPress) == 1 ]] || fail "volume up held, then power, starts push-to-talk"
+# Hyprland drops volume up's release here (power went down after it): power's ends it.
+keys power-up; sleep 0.3
+[[ $(voice keyRelease) == 1 ]] || fail "power's release ends push-to-talk when volume up's never comes"
+keys volume-up-release; sleep 0.3
+[[ $(voice keyRelease) == 1 ]] || fail "push-to-talk ends once"
+
+# A plain volume-up release does nothing; locked, no push-to-talk.
+reset; keys volume-up; keys volume-up-release; sleep 0.3
+[[ $(voice key) == 0 ]] || fail "a plain volume-up release calls nothing"
+echo true >"$t/locked"
+ptt; release
+[[ $(voice keyPress) == 0 ]] || fail "no push-to-talk on the lock screen"
+echo false >"$t/locked"
+echo "ok - power + volume up: push-to-talk only when turned on, never locked, stops on release, volume untouched"

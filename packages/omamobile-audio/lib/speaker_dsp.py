@@ -67,6 +67,9 @@ DSP_KEYS = ('HALO_STATE', 'HALO_HEARTBEAT', 'CSPL_STATE', 'CSPL_ERRORNO', 'CAL_S
 AMP_KEYS = ('PCM Source', 'Digital PCM Volume', 'Analog PCM Volume')
 DELTA_KEYS = ('CSPL_UPDATE_PARAMS_CONFIG', 'CSPL_COMMAND')
 RTLOG_KEYS = ('RTLOG_ENABLE', 'RTLOG_VARIABLE', 'RTLOG_COUNT', 'RTLOG_STATE', 'RTLOG_DATA')
+# host-written settings the first-stream check reads (CSPL_ENABLE: the
+# protection algorithm on; 1 on both amplifiers on the reference phone)
+SETTING_KEYS = ('CSPL_ENABLE',)
 CSPL_CMD_UPDATE_PARAM = 8
 CSPL_STATES = {0: 'running', 1: 'error', 2: 'muted', 3: 'reiniting', 6: 'diagnosing'}
 HALO_RUN = 2
@@ -218,6 +221,16 @@ class JsonCtl:
     def __init__(self, path):
         self.path = path
 
+    def _locked(self):
+        # The heartbeat read and write_bytes load, change and save the whole
+        # file, and test/fake-amixer does the same under the same lock.
+        # Without it a save here put back a value a test had just written (a
+        # coil temperature step lost, so the watchdog saw no jump).
+        import fcntl
+        f = open(f'{self.path}.lock', 'a')
+        fcntl.flock(f, fcntl.LOCK_EX)
+        return f
+
     def _load(self):
         try:
             with open(self.path) as f:
@@ -237,6 +250,10 @@ class JsonCtl:
         return list(self._load())
 
     def read(self, name):
+        with self._locked():
+            return self._read(name)
+
+    def _read(self, name):
         state = self._load()
         c = state.get(name)
         if c is None:
@@ -262,6 +279,10 @@ class JsonCtl:
         return bytes(c['v']) if c and c['type'] == 'BYTES' else None
 
     def write_bytes(self, name, data):
+        with self._locked():
+            return self._write_bytes(name, data)
+
+    def _write_bytes(self, name, data):
         state = self._load()
         c = state.get(name)
         if not c or c['type'] != 'BYTES' or len(c['v']) != len(data):
@@ -318,7 +339,7 @@ class Amps:
         names = self.ctl.names()
         self.names = {}
         for amp in AMPS:
-            for key in DSP_KEYS + DELTA_KEYS + RTLOG_KEYS:
+            for key in DSP_KEYS + DELTA_KEYS + RTLOG_KEYS + SETTING_KEYS:
                 self.names[amp, key] = resolve(names, amp, key)
             for key in AMP_KEYS:
                 self.names[amp, key] = f'{amp} {key}'
@@ -524,13 +545,26 @@ def earpiece_ceilings(digital_ceil, analog_ceil):
 
 
 def jump_rule(analog_ceil):
-    """The coil-estimate jump rule for these analog ceilings (C9j): 5 C
-    above analog 10 only; OMAMOBILE_SPK_TEMP_JUMP sets it in any stage and
-    mode, 0 turns it off."""
+    """The coil-estimate jump rule: off by default. The firmware measures
+    the coil closed-loop, and with music at the c9 levels the coils really
+    heat to a 60-65 C plateau within a minute (C9d-8 and "C9 with real
+    music", 2026-10-31), so a rise rule muted normal listening; the
+    temperature backstop (80 C) is the hard limit. OMAMOBILE_SPK_TEMP_JUMP
+    sets it in any stage and mode, measured from the estimate
+    OMAMOBILE_SPK_TEMP_SETTLE seconds into a stream; 0 turns it off."""
     tj = os.environ.get('OMAMOBILE_SPK_TEMP_JUMP', '')
-    if tj != '':
-        return float(tj) or None
-    return 5.0 if max(analog_ceil.values()) > 10 else None
+    return (float(tj) or None) if tj != '' else None
+
+def jump_settle():
+    """The jump rule's settle window (C9d-8, 2026-10-31). A stream's first
+    coil estimates are the firmware's reference (CAL_AMBIENT, 25 C) until
+    it has measured the coil, and the coils are often warmer than that (31
+    C battery, 33 C top coil on USB the same day), so the measured value is
+    a step up, not a rise, and it takes about a second. The rule's
+    baseline is the estimate once the stream has played for
+    OMAMOBILE_SPK_TEMP_SETTLE seconds (default 2); every rise above it is
+    held to the jump. The temperature backstop applies throughout."""
+    return float(os.environ.get('OMAMOBILE_SPK_TEMP_SETTLE', '') or 2.0)
 
 
 def ceilings():
@@ -538,11 +572,76 @@ def ceilings():
     unmutes: digital, then analog per amplifier (c8: the top drives the
     earpiece, AUDIO-PLAN.md section 4; c9: stock's 817 and 17 on both)."""
     stage = os.environ.get('OMAMOBILE_SPK_STAGE') or 'media'
+    if stage == 'c9' and os.environ.get('OMAMOBILE_SPK_C9_SOURCE') == 'list':
+        # c9 from the verified firmware list: the levels verified with music
+        # ("C9 with real music"); 17 needs this phone's own stamp
+        return 817, {'Top': 11, 'Bottom': 14}
     if stage == 'c9':
         return 817, {'Top': 17, 'Bottom': 17}
     if stage == 'media':
         return 737, {'Top': 10, 'Bottom': 10}
     return 657, {'Top': 6, 'Bottom': 10}
+
+
+def first_stream_check():
+    """The per-phone check that stage c9 from the verified firmware list
+    (not from this phone's own C9a stamp) passes at its first speaker
+    stream after each start: (delay after the grace time, low C, high C),
+    or None when it doesn't apply. The list proves the firmware and both
+    tunings are the reference phone's, byte for byte; what can still differ
+    on another unit is the phone itself (its calibration, its amplifiers'
+    sense path), which C9a checked on the reference phone."""
+    if os.environ.get('OMAMOBILE_SPK_STAGE') != 'c9' or os.environ.get('OMAMOBILE_SPK_C9_SOURCE') != 'list':
+        return None
+    # the OMAMOBILE_SPK_FIRST_* overrides are for the tests only (the JSON
+    # control backend), as the watch hook: speaker.conf can't widen the band
+    testing = os.environ.get('OMAMOBILE_CTL_BACKEND', '').startswith('json:')
+    env = (lambda k, d: os.environ.get(k, d)) if testing else (lambda k, d: d)
+    return (float(env('OMAMOBILE_SPK_FIRST_CHECK', '') or 1.0),
+            float(env('OMAMOBILE_SPK_FIRST_TEMP_LOW', '') or 10.0),
+            float(env('OMAMOBILE_SPK_FIRST_TEMP_HIGH', '') or 65.0))
+
+
+def first_stream_problems(v, settings, hb0, low, high):
+    """Problems with this phone at its first c9 stream (empty if none):
+    the protection algorithm enabled (CSPL_ENABLE 1), the model using the
+    resistance we wrote from this phone's persist (CAL_R_SELECTED equals
+    CAL_R; neither value printed), the heartbeat moving since the stream
+    started, and the coil estimates plausible: within low..high C a few
+    seconds into a stream (verify's 10 C floor; the ceiling under the 80 C
+    backstop and above what music at the c9 levels reaches in those seconds,
+    "C9 with real music"). The watch rules (DSP running, calibration
+    applied, levels, the backstop) are checked in the same round as always."""
+    problems = []
+    for amp in AMPS:
+        g = lambda k: v.get((amp, k))
+        if settings.get((amp, 'CSPL_ENABLE')) != 1:
+            problems.append(f'{amp}: CSPL_ENABLE {settings.get((amp, "CSPL_ENABLE"))}, not 1 (protection algorithm off)')
+        r, rs = g('CAL_R'), g('CAL_R_SELECTED')
+        if r is None or rs is None:
+            problems.append(f'{amp}: CAL_R or CAL_R_SELECTED None (unreadable)')
+        elif r != rs:
+            problems.append(f'{amp}: the model does not use the calibration written from persist (CAL_R_SELECTED != CAL_R)')
+        hb = g('HALO_HEARTBEAT')
+        if hb is None:
+            problems.append(f'{amp}: HALO_HEARTBEAT None (unreadable)')
+        elif hb == hb0.get(amp):
+            problems.append(f'{amp}: HALO_HEARTBEAT did not move since the stream started')
+        t = q(g('CSPL_TEMPERATURE'), 14)
+        if t is None or not low <= t <= high:
+            problems.append(f'{amp}: coil temperature {t if t is None else round(t, 1)} C outside {low:g}-{high:g} C '
+                            '(calibration or sense wrong?)')
+    return problems
+
+
+def refuse_c9(reason, boot_only=False):
+    """Mute, record the refusal for this firmware (for this boot only with
+    boot_only) and restart the service at stage media
+    (omamobile-speaker-protection refuse-c9)."""
+    script = os.environ.get('OMAMOBILE_SPK_SCRIPT', '/usr/bin/omamobile-speaker-protection')
+    r = subprocess.run([script, 'refuse-c9', '--reason', reason] + (['--boot'] if boot_only else []), check=False)
+    if r.returncode not in (0, 3):     # 3: muted, the refusal not recorded (said so)
+        mute(reason)
 
 
 def check(v, digital_ceil, analog_ceil, temp_max, strict=True, mode='speaker'):
@@ -1039,14 +1138,14 @@ def cmd_feedback(args):
 # then takes five samples about 0.2 s apart: RTLOG_STATE := 0, wait for it to
 # read 1, read RTLOG_DATA. Word 1 of the data is the impedance the firmware
 # measures from its voltage and current sense, in the same units as CAL_R
-# (0xfffffd and 0xfffffe: no valid measurement, e.g. a signal too low to
+# (0xffff00 and above, e.g. 0xffffd4 and 0xfffffd: no valid measurement, a signal too low to
 # measure). So Z / CAL_R is the coil's resistance relative to the factory
 # calibration: about 1.00 at room temperature, +0.39 % per degree C (copper).
 # Printed only as that ratio, never as a resistance: the calibration is this
 # phone's. Writes only the logger's own controls.
 
 RTLOG_VARIABLES = (0x39d, 0x3b3, 0x3b4)
-RTLOG_INVALID = 0xfffffd
+RTLOG_INVALID = 0xffff00   # 0xffffd4..0xfffffe seen on the phone: no measurement (2026-10-31)
 COPPER_TC = 0.0039
 
 
@@ -1161,7 +1260,7 @@ def cmd_watch(args):
         return 1
     log(f'watchdog: watching {pcm}, ceilings digital {digital_ceil} analog {analog_ceil}, '
         f'heartbeat {"enforced" if strict_hb else "logged"}, coil temperature backstop {temp_max:g} C, '
-        f'jump rule {f"{temp_jump:g} C within a stream" if temp_jump else "off (analog 10 or below: the estimate is open-loop, C9j)"}')
+        f'jump rule {f"{temp_jump:g} C above the estimate {jump_settle():g} s into a stream" if temp_jump else "off (the 80 C backstop is the limit; OMAMOBILE_SPK_TEMP_JUMP sets one)"}')
     # Stock's media delta: on when asked (1), off when asked (0), and by
     # default on when both files are installed.
     mode = os.environ.get('OMAMOBILE_SPK_MEDIA_DELTA', '')
@@ -1178,21 +1277,48 @@ def cmd_watch(args):
             mute(reason)
             return 1
     log(f'watchdog: V/I feedback stream {"with every speaker stream" if feedback else "off"}')
+    first = first_stream_check()
+    if first:
+        log(f'watchdog: stage c9 from the verified firmware list: this phone is checked at its first speaker '
+            f'stream, {args.grace + first[0]:g} s in (CSPL_ENABLE 1, the model on the calibration from persist, '
+            f'heartbeat moving, coil estimates within {first[1]:g}-{first[2]:g} C); on a failure, stage media')
     import signal as sig
     sig.signal(sig.SIGTERM, lambda *_: sys.exit(0))   # run the finally below on a stop
     try:
         return watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max, temp_jump,
-                          strict_hb, media_delta, feedback)
+                          strict_hb, media_delta, feedback, first)
     finally:
         if feedback:
             feedback.stop()
 
 
+def watch_hook():
+    """Tests only (test/all): OMAMOBILE_WATCH_HOOK is a command run with the
+    round number before each round, and the clock is then the round count
+    times the interval, so a test's event lands at a known round and the
+    grace, heartbeat and settle times count rounds, however slow the
+    machine. Honoured only with the tests' JSON control backend, so a stray
+    line in speaker.conf can never change the real watchdog's clock or run
+    a command as root: there it is ignored, and said so."""
+    hook = os.environ.get('OMAMOBILE_WATCH_HOOK')
+    if not hook:
+        return None
+    if not os.environ.get('OMAMOBILE_CTL_BACKEND', '').startswith('json:'):
+        log('watchdog: OMAMOBILE_WATCH_HOOK ignored: tests only (the JSON control backend)')
+        return None
+    return hook
+
+
 def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max, temp_jump,
-               strict_hb, media_delta, feedback):
+               strict_hb, media_delta, feedback, first=None):
     since = None
     beat = {}
+    hb0 = {}               # each amplifier's heartbeat at the stream's first reading
+    first_done = first is None
+    first_unread = 0       # first-stream checks put off by a failed read
     start_temp = {}
+    first_temp = {}
+    settle = jump_settle()
     warned = False
     applied = False
     problems_delta = []
@@ -1200,9 +1326,14 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
     failures = 0
     n = 0
     acked = None
+    hook = watch_hook()
     while args.iterations == 0 or n < args.iterations:
         n += 1
-        now = time.monotonic()
+        if hook:
+            subprocess.run([hook, str(n)], check=True)
+            now = n * args.interval
+        else:
+            now = time.monotonic()
         # The mode (C9k): taken at the start of a round and answered in the
         # ack file, which omamobile-speaker-protection waits for before it
         # changes anything the new mode allows and the old one does not.
@@ -1255,7 +1386,9 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
             if since is None:
                 since = now
                 beat = {}
+                hb0 = {}
                 start_temp = {}
+                first_temp = {}
                 applied = False
                 problems_delta = []
                 if feedback:
@@ -1280,22 +1413,65 @@ def watch_loop(args, amps, devs, kmsg, pcm, digital_ceil, analog_ceil, temp_max,
                 continue
             problems = (check(v, digital_ceil, analog_ceil, temp_max, strict=strict, mode=mode)
                         + problems_delta + problems_fb)
+            # c9 from the verified firmware list: this phone's own check, at
+            # the first speaker stream that plays long enough
+            if not first_done and mode == 'speaker':
+                if not hb0:
+                    hb0 = {a: v.get((a, 'HALO_HEARTBEAT')) for a in AMPS}
+                elif strict and now - since >= args.grace + first[0] and not problems:
+                    fp = first_stream_problems(v, amps.read(SETTING_KEYS), hb0, first[1], first[2])
+                    if fp and all(' None' in p for p in fp) and first_unread < 2:
+                        first_unread += 1      # a read failed: judge at the next round
+                        fp = None
+                    if fp is None:
+                        pass
+                    elif fp:
+                        reason = 'first-stream check failed: ' + '; '.join(fp)
+                        log(f'watchdog: stage c9 from the verified firmware list: {reason}; '
+                            'muting and falling back to stage media')
+                        # a coil estimate out of the band alone is refused for
+                        # this boot only: right after loud music (67 C peaks)
+                        # or on a cold phone it can be out with nothing wrong
+                        refuse_c9(reason, boot_only=all(' coil temperature ' in p for p in fp))
+                        return 1
+                    else:
+                        first_done = True
+                        temps = ', '.join(f'{a} {q(v.get((a, "CSPL_TEMPERATURE")), 14):.1f} C' for a in AMPS)
+                        msg = (f'passed {time.strftime("%Y-%m-%dT%H:%M:%S%z")}: CSPL_ENABLE 1, the model on the '
+                               f'calibration from persist, heartbeat moving, coils {temps}')
+                        log(f'watchdog: stage c9 from the verified firmware list: first-stream check {msg}')
+                        try:
+                            with open(os.path.join(run_dir(), 'speaker-protection-c9-check'), 'w') as f:
+                                f.write(msg + '\n')
+                        except OSError:
+                            pass
             # In earpiece mode neither DSP is in an audible path: no coil or
             # heartbeat rule (the levels, the bypass and the mute are checked)
             for amp in AMPS if mode == 'speaker' else ():
                 t = q(v.get((amp, 'CSPL_TEMPERATURE')), 14)
-                if t is not None:
-                    t0 = start_temp.setdefault(amp, t)
-                    if temp_jump is not None and t - t0 > temp_jump:
+                if t is not None and temp_jump is not None:
+                    tf = first_temp.setdefault(amp, t)
+                    if amp not in start_temp:
+                        # the step from the reference to the measured coil
+                        # takes about a second, so the baseline is the
+                        # estimate once the stream has played for `settle`
+                        # seconds (a mid-step sample, 27 C on the way to 50,
+                        # made the step itself look like a rise, 2026-10-31)
+                        if now - since < settle:
+                            continue
+                        start_temp[amp] = t
+                        continue
+                    t0 = start_temp[amp]
+                    if t - t0 > temp_jump:
                         problems.append(f'{amp}: coil temperature jumped {t - t0:.1f} C '
-                                        f'({t0:.1f} -> {t:.1f}) in this stream, above {temp_jump} C')
+                                        f'({t0:.1f} -> {t:.1f}) above its value {settle:g} s into the stream, above {temp_jump} C')
             for amp in AMPS if mode == 'speaker' else ():
                 hb = v.get((amp, 'HALO_HEARTBEAT'))
                 last = beat.get(amp)
                 if last is None or hb != last[0]:
                     beat[amp] = (hb, now)
                 elif strict and now - last[1] >= args.heartbeat_timeout:
-                    msg = f'{amp}: HALO_HEARTBEAT stuck at {hb} for {now - last[1]:.0f} s'
+                    msg = f'{amp}: HALO_HEARTBEAT stuck at {hb} for {now - last[1]:.1f} s'
                     if strict_hb:
                         problems.append(msg)
                     elif not warned:

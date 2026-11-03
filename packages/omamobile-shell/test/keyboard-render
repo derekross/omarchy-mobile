@@ -1,0 +1,92 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offscreen review shots of the keyboard's language sheet (omamobile.keyboard,
+# the globe key), upright and on its side (TOUCH-PLAN 2.4), in a dark and a
+# light Omarchy theme, with checks on the rows' size and place.
+# Runs inside the OWL conformance container (tests/owl/Dockerfile: Qt,
+# Quickshell, the fonts), never on a desktop:
+#
+#   docker run --rm --network none -u "$(id -u):$(id -g)" -v "$PWD:/src" \
+#     -v /usr/share/omarchy/themes:/themes:ro -v /usr/share/omarchy/shell:/omarchy-shell:ro \
+#     omamobile-owl-conformance:p1 bash /src/packages/omamobile-shell/test/keyboard-render /src/logs/keyboard-render
+#
+# test/all runs it when OMAMOBILE_KEYBOARD_RENDER names an output directory.
+set -euo pipefail
+out=${1:?Usage: keyboard-render OUTDIR}
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+plugin=${OMAMOBILE_KEYBOARD_PLUGIN:-$here/../plugins/omamobile.keyboard}
+[[ -d /omarchy-shell && -d /themes ]] || { echo "keyboard-render: needs /omarchy-shell and /themes (the container's mounts)" >&2; exit 2; }
+command -v quickshell >/dev/null || { echo "keyboard-render: no quickshell" >&2; exit 2; }
+mkdir -p "$out" /tmp/xdg
+export XDG_RUNTIME_DIR=/tmp/xdg QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+
+h=/tmp/keyboard-harness
+rm -rf "$h"; mkdir -p "$h"
+# Omarchy's Commons and Ui, with its palette qualified as on the phone
+# (Qt 6.12's QtQuick Color shadows a bare `Color.`; AGENTS.md, Userspace).
+for m in Commons Ui services; do cp -r "/omarchy-shell/$m" "$h/$m"; done
+find "$h/Commons" "$h/Ui" "$h/services" -name '*.qml' -exec sed -i -E \
+  -e 's/(^|[^.[:alnum:]_])Color\./\1Commons.Color./g' \
+  -e '0,/^import qs\.Commons$/s//import qs.Commons\nimport qs.Commons as Commons/' {} +
+for f in "$h"/Commons/*.qml; do grep -c '^import qs.Commons as Commons' "$f" >/dev/null || sed -i '0,/^import QtQuick$/s//import QtQuick\nimport qs.Commons as Commons/' "$f"; done
+cp -r "$plugin" "$h/keyboard"
+cp "$here/keyboard-render.qml" "$h/"
+
+status=0
+for theme in tokyo-night catppuccin-latte; do
+  home=/tmp/keyboard-home-$theme
+  mkdir -p "$home/.local/state/omarchy/current"
+  ln -sfn "/themes/$theme" "$home/.local/state/omarchy/current/theme"
+  python3 - "$out" "$theme" > "$h/job-$theme.json" <<'PY'
+import json, sys
+out, theme = sys.argv[1:]
+def src(name, label):
+    return {"name": name, "label": label}
+two = {"current": "us", "configured": 2,
+       "sources": [src("us", "English (US)"), src("de", "German")],
+       "available": [src("fr", "French"), src("es", "Spanish")]}
+one = {"current": "us", "configured": 0, "sources": [src("us", "English (US)")], "available": [src("de", "German")]}
+many = {"current": "de", "configured": 2, "sources": two["sources"],
+        "available": [src("l%02d" % i, "Language number %d with a long name" % i) for i in range(50)]}
+def shot(name, listing, page="languages", w=480, h=1040, rows=None):
+    return {"name": name, "png": "%s/keyboard-%s-%s.png" % (out, name, theme), "listing": listing,
+            "page": page, "w": w, "h": h, "rows": rows}
+print(json.dumps({"shots": [
+    shot("two", two, rows=3),
+    shot("one", one, rows=2),
+    shot("add", many, page="add"),
+    shot("landscape-two", two, w=1040, h=480, rows=3),
+    shot("landscape-add", many, page="add", w=1040, h=480),
+]}))
+PY
+  HOME=$home QT_SCALE_FACTOR=3 KEYBOARD_JOB="$h/job-$theme.json" timeout 120 quickshell -p "$h/keyboard-render.qml" > "$h/log-$theme" 2>&1 || true
+  grep -E "shot |geometry |Error|TypeError|ReferenceError" "$h/log-$theme" | sed -E 's/^.*(shot |geometry |Error|TypeError|ReferenceError)/\1/' | tee -a "$out/keyboard-render.txt"
+  python3 - "$h/log-$theme" "$theme" "$h/job-$theme.json" <<'PY' || status=1
+import json, re, sys
+log, theme, job = sys.argv[1:]
+text = open(log).read()
+want = {s["name"]: s for s in json.load(open(job))["shots"]}
+bad = [l for l in text.splitlines() if re.search(r"(TypeError|ReferenceError|is not a type|Error:|Binding loop)", l)]
+shots = re.findall(r"geometry (\S+) (\d+)x(\d+) (\[.*\])", text)
+ok = len(shots) == len(want) and not bad
+if len(shots) != len(want): print("not ok - %s: %d of %d shots taken" % (theme, len(shots), len(want)))
+for name, w, h, geo in shots:
+    w, h = int(w), int(h)
+    rows = json.loads(geo)
+    on = [r for r in rows if r["y"] >= 0 and r["y"] + r["h"] <= h]
+    fits = len(on) >= 1 and all(r["h"] >= 48 and r["x"] >= 0 and r["x"] + r["w"] <= w for r in on)
+    # full width: each row spans the card, at least 80 % of a portrait screen
+    wide = all(r["w"] >= min(w, 600) * 0.8 for r in on)
+    n = want[name]["rows"]
+    count = n is None or len(rows) == n
+    current = want[name]["page"] == "add" or sum(r["current"] for r in rows) == 1
+    good = fits and wide and count and current
+    print("%s - %s %s: %d rows, each at least 48 px, full width, on screen%s" % (
+        "ok" if good else "not ok", theme, name, len(rows), ", one marked current" if want[name]["page"] != "add" else ""))
+    ok = ok and good
+for l in bad:
+    print("  " + l)
+sys.exit(0 if ok else 1)
+PY
+done
+exit $status

@@ -76,7 +76,7 @@ test("a feature above the declared level is refused, with the fix", () => {
 })
 test("the commands list names every command, URL and file, in order", () => {
   const p = C.compile('widget "w" {\n  meta { owl: 6 }\n  state city = "x"\n  source a = cmd("date")\n  source b = http("https://example.org/a")\n  source c = file("~/notes.txt")\n' +
-    '  source d = cmd("curl wttr.in/${sh(city)}") optional\n  Button { text: "go"; onTap: { run("notify-send hi"); terminal("btop"); url("https://example.org") } }\n  Button { text: "x"; onTap: city = run("cat ~/city") }\n}')
+    '  source d = cmd("curl api.open-meteo.com/${sh(city)}") optional\n  Button { text: "go"; onTap: { run("notify-send hi"); terminal("btop"); url("https://example.org") } }\n  Button { text: "x"; onTap: city = run("cat ~/city") }\n}')
   eq(p.commands, ["date", "http GET https://example.org/a", "read file ~/notes.txt", "if Linux is installed: cmd(…) built from widget values",
     "notify-send hi", "btop", "cat ~/city"])
 })
@@ -346,6 +346,8 @@ test("phone actions and android.* answers, with mocks", () => {
   eq([tegu.model, tegu.maker, tegu.codename, tegu.soc, tegu.display.width], ["Pixel 9a", "Google", "tegu", "zumapro", 1080])
   const cheetah = P.boardFrom("Google Pixel 7 Pro\n@@\ngoogle,gs201-cheetah\ngoogle,gs201\n")
   eq([cheetah.model, cheetah.codename, cheetah.soc, cheetah.display.height], ["Pixel 7 Pro", "cheetah", "gs201", 3120])
+  const husky = P.boardFrom("Google Pixel 8 Pro\n@@\ngoogle,zuma-husky\ngoogle,zuma\n")
+  eq([husky.model, husky.maker, husky.codename, husky.soc, husky.display], ["Pixel 8 Pro", "Google", "husky", "zuma", { width: 1344, height: 2992, hz: 120, dpi: 489 }])
   const other = P.boardFrom("OnePlus 13\n@@\noneplus,sm8750-dodge\nqcom,sm8750\n")
   eq([other.model, other.maker, other.codename, other.soc, other.display], ["OnePlus 13", null, "dodge", "sm8750", null])
   eq([P.boardFrom("").model, P.boardFrom("").codename], [null, null])
@@ -409,14 +411,14 @@ test("a port's OWL original is approved without asking only within what the port
   const H = require("../plugins/omamobile.home/HomeModel.js")
   const grid = { columns: 4, rows: 6 }
   const info = (text) => K.describe("x", text, grid, 151, 1.16)
-  const web = info('widget "w" {\n  meta { owl: 5 }\n  state city = "" persist\n  source wx = http("https://wttr.in/${city}?format=j1") json\n  Text { text: wx }\n}')
+  const web = info('widget "w" {\n  meta { owl: 5 }\n  state city = "" persist\n  source geo = http("https://geocoding-api.open-meteo.com/v1/search?name=${city}") json\n  source wx = http("https://api.open-meteo.com/v1/forecast?latitude=${city}") json\n  Text { text: wx }\n}')
   const today = K.portApproval(H.portCapabilities("today"), web, true)
   eq([today.extra, today.approve.network, today.approve.auto], [[], true, true])
   eq(K.portApproval(H.portCapabilities("today"), web, false).approve.network, false)
   const curl = info('widget "w" {\n  source q = cmd("curl -s https://earthquake.usgs.gov/x")\n  Text { text: q }\n}')
   eq(K.portApproval(H.portCapabilities("earthquakes"), curl, true).extra, ["runs commands"])
   eq(K.portApproval(H.portCapabilities("feeds"), curl, true).approve.commands, ["curl -s https://earthquake.usgs.gov/x"])
-  eq(K.portApproval(H.portCapabilities("crypto"), web, true).extra, ["talks to wttr.in"])
+  eq(K.portApproval(H.portCapabilities("crypto"), web, true).extra, ["talks to geocoding-api.open-meteo.com, api.open-meteo.com"])
   eq(K.portApproval(H.portCapabilities("koiPond"), web, true).extra, ["uses the internet"])
 })
 
@@ -431,10 +433,10 @@ test("the owner's layout: migration approvals, and never a package install witho
     "owl:simonschubert.owl": 'widget "owl" {\n  state born = 0 persist\n  Text { text: born }\n}',
     "owl:simonschubert.koi-pond": 'widget "koi" {\n  Canvas { circle(time, 1, 1) }\n}',
     "owl:simonschubert.crypto": 'widget "bitcoin" {\n  meta { owl: 5 }\n  source m = http("https://api.coingecko.com/api/v3/x") json status\n  Text { text: m }\n}',
-    "owl:simonschubert.today": 'widget "today" {\n  meta { owl: 5 }\n  state city = "" persist\n  source wx = http("https://wttr.in/${city}?format=j1") json\n  Text { text: wx }\n}',
+    "owl:simonschubert.today": 'widget "today" {\n  meta { owl: 5 }\n  state city = "" persist\n  source geo = http("https://geocoding-api.open-meteo.com/v1/search?name=${city}") json\n  source wx = http("https://api.open-meteo.com/v1/forecast?latitude=${city}") json\n  Text { text: wx }\n}',
     "owl:simonschubert.earthquakes": 'widget "q" {\n  source q = cmd("curl -s https://earthquake.usgs.gov/x")\n  Text { text: q }\n}',
     "owl:simonschubert.habits": 'widget "h" {\n  source n = cmd("cat ~/.config/omarchy-proot/habits")\n  Text { text: n }\n}',
-    "owl:simonschubert.forecast": 'widget "f" {\n  source w = cmd("curl -s https://wttr.in/x")\n  Text { text: w }\n}'
+    "owl:simonschubert.forecast": 'widget "f" {\n  source w = cmd("curl -s https://api.open-meteo.com/x")\n  Text { text: w }\n}'
   }
   const infoFor = (t) => K.describe(t, texts[t], grid, 151, 1.16)
   const fetch = infoFor("owl:simonschubert.fetch")

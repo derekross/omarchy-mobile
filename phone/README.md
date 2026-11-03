@@ -11,11 +11,21 @@ screenshots.
 phone/dev/run-desktop
 ```
 
-This opens a nested Hyprland in a 600x1300 window (the Pixel 7 Pro's 13:6
-shape, at 480x1040 logical pixels like the real phone) and runs the shell
-inside it. It uses a private home directory under `~/android/phone-dev/home`
-that links your current Omarchy theme and this directory's plugins, so your
-real `~/.config/omarchy` is never touched. Plugin edits hot-reload.
+This opens a nested Hyprland in a window of the Pixel 7 Pro's 13:6 shape, at
+480x1040 logical pixels like the real phone, and runs the shell inside it.
+The window is 600x1300 where the screen has room, and otherwise as large as
+fits: the layout stays the same, with smaller text. It uses a private home
+directory under `~/android/phone-dev/home` that links your current Omarchy
+theme and this directory's plugins, so your real `~/.config/omarchy` is
+never touched. Plugin edits hot-reload.
+
+`PHONE_DEV_N=<n>`, a multiple of 10 from 40 to 100, forces a 6n x 13n
+window instead (100 is the 600x1300 one), to compare screenshots across
+machines or keep the big window on a small screen. Without it, the harness
+stops with a message on a screen with no room for 240x520, or when it can't
+read the focused monitor from `hyprctl`. On a desktop scaled above 1 the
+text is a little soft, as the window is drawn at its logical size and then
+scaled up.
 
 Inside the window, `ALT+Return` opens a terminal. The window never locks on
 its own, as in a phone emulator: the harness turns the profile's idle lock

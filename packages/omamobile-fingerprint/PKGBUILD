@@ -8,7 +8,7 @@ arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
 backup=(etc/pam.d/omarchy-lock-fingerprint)
-depends=(bash python util-linux coreutils systemd kmod fprintd)
+depends=(bash python util-linux coreutils diffutils systemd kmod fprintd e2fsprogs)
 optdepends=('fprintd: fingerprint unlock and sudo through PAM'
             'libfprint: the Omarchy Mobile build, with the omamobile_udfps driver')
 install=omamobile-fingerprint.install
