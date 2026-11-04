@@ -163,7 +163,17 @@ does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
    fixed script: modem started and ONLINE, `systemctl reboot` at 10:43
    ("modem stopped (success): … removed"), the next boot ONLINE on its own,
    and a second reboot at 10:47 removed that boot's latch too. Passed.
-   `tools/nv-backup --check` after these reboots is still to come.
+   `tools/nv-backup -d tegu --check` against the same backup after the
+   day's reboots (these, two kernel pushes and two sysrq reboots after
+   sleep tests): every NV partition and `metadata` the same, `devinfo`
+   different, as after any boot-success mark (tegu NOTES, 2026-11-03).
+   Passed.
+6. The `reboot-to` path (#403's `reboot-to` installed): in the evening,
+   with the CP ONLINE, `reboot-to omamobile`. The next boot logged "the
+   last boot with the modem up ended with reboot-to:
+   /var/lib/omamobile/modem-bringup-started removed", started the modem on
+   its own to "modem OK: CP ONLINE", and left no
+   `/var/lib/omamobile/deliberate-restart` behind. Passed.
 
 `tools/phone-smoke` on the second boot: every required check ok (boot, the
 storage guard, root, kernel health, USB, session), and display, GPU, lock,
