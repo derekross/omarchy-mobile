@@ -1,29 +1,30 @@
 # Lock: double tap to wake on touch-only devices (the lock-keypad toggle),
-# as a phone does. While the locked display is dark, a lone touch does
-# nothing and a second touch within 400 ms of the first lights it through
-# the lock, as any touch did before; neither touch does anything else (the
-# glance's wake-only touch from 0023). A touch in a pocket or a brush of the
-# palm no longer lights the screen. On a computer (keypad off) a click or a
-# mouse move wakes the lock as before.
+# as a phone does. While the locked display is dark, no touch lights it or
+# does anything else (the glance's wake-only touch from 0023): the double
+# tap is recognised by omamobile-shell's omamobile-doubletap, which skips it
+# while the proximity sensor reads near (a pocket) and wakes the lock
+# through its IPC (0009), as the power key does. A touch in a pocket or a
+# brush of the palm no longer lights the screen. On a computer (keypad off)
+# a click or a mouse move wakes the lock as before.
 #
 # The phone's compositor side turns Hyprland's misc:mouse_move_enables_dpms
 # off, so the first touch doesn't light the panel before the lock sees it
-# (omamobile-shell, hypr/phone.lua).
+# (omamobile-shell, hypr/phone.lua). Without omamobile-shell that setting
+# stays on and Hyprland lights the panel on any touch, as before.
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003 and 0023.
 diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.qml
 index 7fa116f..cfc291b 100644
 --- i/shell/plugins/lock/LockGlance.qml
 +++ w/shell/plugins/lock/LockGlance.qml
-@@ -126,12 +126,15 @@ Item {
+@@ -126,12 +126,14 @@ Item {
      wakeGuardUntil = Date.now() + wakeGuardMs
    }
  
 -  // Whether a touch that starts now only wakes the screen; a dark one is
 -  // lit through the lock, as any touch on the lock lights it.
 +  // Whether a touch that starts now only wakes the screen; on a dark one
-+  // the second of a double tap lights it through the lock, and a lone touch
-+  // does nothing.
++  // it does nothing (omamobile-doubletap wakes it on a double tap).
    function wakeTouch() {
      if (lock.displayDark) {
 -      armWakeGuard()
@@ -39,31 +40,21 @@ diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
 index 4f17492..852f7c3 100644
 --- i/shell/plugins/lock/LockView.qml
 +++ w/shell/plugins/lock/LockView.qml
-@@ -39,6 +39,23 @@ Item {
+@@ -39,6 +39,13 @@ Item {
    property int wakeSerial: 0
    property int blankSerial: 0
    property bool displayDark: false
-+  // Double tap to wake: on a touch-only lock a lone touch on the dark screen
-+  // does nothing, and a second one within darkTapMs of it lights the screen,
-+  // as a phone's double tap to wake does. A computer's lock wakes on any
-+  // input as before.
-+  property int darkTapMs: 400
-+  property double lastDarkTap: 0
-+  // Whether a touch that lands now on the dark screen wakes it.
++  // Double tap to wake: on a touch-only lock no touch on the dark screen
++  // wakes it; omamobile-doubletap recognises the double tap (and ignores it
++  // with the phone in a pocket, by proximity) and wakes the lock through
++  // its IPC. A computer's lock wakes on any input as before.
 +  function darkTapWakes() {
-+    if (!keypad) return true
-+    var now = Date.now()
-+    if (now - lastDarkTap <= darkTapMs) {
-+      lastDarkTap = 0
-+      return true
-+    }
-+    lastDarkTap = now
-+    return false
++    return !keypad
 +  }
    readonly property real pinOpacity: 1 - glance.progress
    readonly property bool pinVisible: glance.progress < 1
    property bool switchedInput: false
-@@ -195,8 +212,12 @@ Item {
+@@ -195,8 +202,12 @@ Item {
      MouseArea {
        anchors.fill: parent
        hoverEnabled: !root.keypad

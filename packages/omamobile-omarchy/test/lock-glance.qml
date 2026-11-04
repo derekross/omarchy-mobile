@@ -326,21 +326,26 @@ Item {
       compare(visiblePinParts(), [])
     }
 
-    // Patch 0029: a double tap wakes the dark screen, and only wakes it.
-    function test_wake_double_tap_on_dark_display_only_wakes() {
+    // Patch 0029: no tap wakes the dark screen; omamobile-doubletap
+    // recognises the double tap (not in a pocket, by proximity) and wakes
+    // the lock through its IPC, as the power key does.
+    function test_double_tap_on_dark_display_is_left_to_the_daemon() {
       toPin()
       blank()
       harness.wakes = 0
       mouseClick(harness.view, 240, 300)
       wait(150)
-      compare(harness.wakes, 0, "a lone tap on the dark screen doesn't wake it")
-      compare(harness.view.displayDark, true)
       mouseClick(harness.view, 250, 310)
       settle()
-      compare(glance().showing, true, "the taps that woke the screen don't show the PIN view")
-      compare(harness.view.displayDark, false, "the second tap lit the screen through the lock")
-      compare(harness.wakes, 1)
-      wait(200)
+      compare(harness.wakes, 0, "the lock doesn't wake itself on a double tap")
+      compare(harness.view.displayDark, true)
+      compare(glance().showing, true, "nor do the taps show the PIN view")
+      // omamobile-doubletap's wake, through the lock's IPC
+      harness.view.wakeSerial += 1
+      harness.view.displayDark = false
+      settle()
+      compare(glance().showing, true, "the wake shows the glance")
+      wait(500)
       toPin()
       compare(glance().showing, false, "a swipe up on the lit glance shows the PIN view")
     }
@@ -352,7 +357,7 @@ Item {
       wait(600)
       mouseClick(harness.view, 240, 300)
       wait(600)
-      compare(harness.wakes, 0, "two taps further apart than 400 ms don't wake it")
+      compare(harness.wakes, 0, "lone taps don't wake it")
       compare(harness.view.displayDark, true)
       compare(glance().showing, true)
     }
@@ -892,8 +897,8 @@ Item {
       wait(100)
       tapOn(glanceButton("lockMediaPlayPause"))
       settle()
-      compare(p.calls, [], "the double tap that lit the screen pressed nothing")
-      compare(harness.view.displayDark, false)
+      compare(p.calls, [], "a double tap on the dark screen presses nothing")
+      compare(harness.view.displayDark, true, "omamobile-doubletap wakes it, not the lock")
     }
 
     function test_what_it_cannot_do_does_nothing() {
