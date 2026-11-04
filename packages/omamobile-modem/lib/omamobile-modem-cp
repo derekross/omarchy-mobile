@@ -158,13 +158,16 @@ def notify(title, body):
     cmd = os.environ.get('OMAMOBILE_NOTIFY_CMD')
     if cmd:
         subprocess.run([cmd, title, body], timeout=30, check=False)
+        say(f'notified: {title} (through {cmd})')
         return
     if os.geteuid() != 0:
+        say(f'not notified: {title} (not root)')
         return
     try:
         uids = [int(u) for u in os.listdir('/run/user') if u.isdigit() and int(u) >= 1000]
     except OSError:
-        return
+        uids = []
+    sent = 0
     for uid in uids:
         bus = f'/run/user/{uid}/bus'
         if not os.path.exists(bus):
@@ -178,13 +181,16 @@ def notify(title, body):
         elif shutil.which('notify-send'):
             send = ['notify-send', '-u', 'critical', '-a', 'Omarchy Mobile', title, body]
         else:
+            say(f'not notified: {title} (no notification tool)')
             return
         env = ['env', f'DBUS_SESSION_BUS_ADDRESS=unix:path={bus}', f'XDG_RUNTIME_DIR=/run/user/{uid}']
         try:
-            subprocess.run(['runuser', '-u', user, '--'] + env + send, timeout=15, check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if subprocess.run(['runuser', '-u', user, '--'] + env + send, timeout=15, check=False,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                sent += 1
         except (OSError, subprocess.SubprocessError):
             pass
+    say(f'notified {sent} of {len(uids)} session(s): {title}')
 
 
 def record_crash():
