@@ -37,9 +37,9 @@ drivers, chroot, bridge and libfprint driver are the ones to use.
 
 | Piece | Pixel 7 | Consequence |
 |---|---|---|
-| Trusty | `/trusty` is `disabled` in the running DT; no `/dev/trusty*`. The AoC does not start through it yet (on cheetah it does) | First SMCs into Trusty from our kernel on this phone: gate P2 |
+| Trusty | Started on the Pixel 7 on 2026-11-03 with the sound bring-up's overlay, which enables `/trusty` (kernel `g89edef70d4d5`, 23:43): "trusty version: Project: cloudripper", "selected api version: 5", trusty_ipc virtio0 vrings, "trusty-virtio ... initializing done". `/dev/trusty-ipc-dev0` and the cpu 7 hotplug were not checked | Gate P2 is mostly seen already; what is left of it is in P2 |
 | Sub-PMIC | Not described before `1fa21bbc7` (running regulators: `ldo*m` only) | The commit adds `pmic-2` with LDO15S only |
-| Panel | Samsung S6E3FC3 (`panel-samsung-s6e3fc3`, `samsung,s6e3fc3-p10`), 1080x2400, ABL's `exynos_drm.panel_name=sdc-s6e3fc3-p10` | **Our driver has no local HBM** (its header: "Local HBM ... left out"); the backlight has no `local_hbm_mode`. Blocker for good captures: section 4 |
+| Panel | Samsung S6E3FC3 (`panel-samsung-s6e3fc3`, `samsung,s6e3fc3-p10`), 1080x2400, ABL's `exynos_drm.panel_name=sdc-s6e3fc3-p10` | Local HBM is in a local kernel commit (branch `panther-lhbm`, not on the phone yet): section 4 |
 | Touchscreen | FocalTech FT3658 (`focaltech_ft3658`, input "FocalTech FT3658") | The runner looked only for the Synaptics name: now per device |
 | `omamobile-fp-chroot` | Any board but the 9a ran as cheetah | Now detects `google,gs201-panther`: g7.app, C++ KeyMint, 1080x2400 at 60 Hz, `sdc-s6e3fc3-p10`, FT3658 (untested) |
 | Sensor position | Not known here: the bridge asks the HAL (`getSensorProps`), which has its own per-device data | Check in P5 that the circle lands on the sensor |
@@ -64,6 +64,8 @@ the test, never committed) before `bin/omamobile images`.
 touch, wifi, charging) or `fingerprint` is missing.
 
 **P2. Trusty (`DTB_OVERLAYS="fingerprint-trusty"`).**
+Trusty's start was already seen with the sound overlay (section 2); what is
+new here is the device node and the cpu 7 line.
 `tools/fingerprint-capture --watchdog trusty-core`, then `trusty-log`,
 `trusty-ipc`, `hotplug`. Expect as cheetah F2: "trusty version", "selected
 api version", `/dev/trusty-ipc-dev0`, "refusing to take cpu 7 offline".
@@ -89,14 +91,16 @@ loaded", "HAL/TA version is match", "Initialization successful". **Stop if**
 the HAL reports a calibration error (the 9a's "spmt is not pass" /
 CALIBRATION_NOT_READY): the calibration question is then panther's own.
 
-## 4. Open: local HBM on the S6E3FC3
+## 4. Local HBM on the S6E3FC3
 
 The optical sensor reads the finger lit by the panel's local HBM circle. The
 bridge drives it through `local_hbm_mode`; without it the bridge logs "LHBM
 on refused" and captures run unlit, which is expected to fail or match
-poorly (not measured). The command sequence is in Google's GPL
-`panel-samsung-s6e3fc3-p10.c`, which is not on this computer: getting it is a
-download, Ángel's call. With it, the work mirrors the 7 Pro's (`local_hbm_mode`,
-`local_hbm_max_timeout`, `allow_lhbm`, off on blank/unprepare) plus an
-`allow_lhbm` line for `panel_samsung_s6e3fc3` in
-`omamobile-fingerprint-lhbm.conf`.
+poorly (not measured). The kernel branch `panther-lhbm` adds it to
+`panel-samsung-s6e3fc3`, from Google's GPL `panel-samsung-s6e3fc3-p10.c`
+(android-gs-pantah-5.10-android15-qpr1): the 7 Pro's interface
+(`local_hbm_mode`, `local_hbm_max_timeout` up to 3 s, `allow_lhbm`, off on
+blank/unprepare), the gamma copy from 0xD8 to 0x65 and the circle centred
+at x 540, y 1713. `omamobile-fingerprint-lhbm.conf` has the
+`panel_samsung_s6e3fc3` line. Not run on the phone: check the circle's
+place and the 3 s timeout before P5.
