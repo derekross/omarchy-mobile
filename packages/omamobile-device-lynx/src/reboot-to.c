@@ -20,9 +20,38 @@
  * so it notes the boot it ends, before rebooting: the next start then knows
  * this boot ended on purpose. Best effort: without /var/lib/omamobile (the
  * initramfs) there is no note, and the start refuses as before.
+ *
+ * Only a boot with the modem up writes the note: its marker (the 7 Pro's
+ * modem-up, the 9a's modem-bringup-started) names this boot. A restart in
+ * a later boot without the modem would otherwise replace the note, and the
+ * boot that had the modem up would read as a hang at the next start.
  */
+#ifndef NOTE_DIR
 #define NOTE_DIR "/var/lib/omamobile"
+#endif
 #define NOTE NOTE_DIR "/deliberate-restart"
+
+static int marker_names_boot(const char *path, const char *id)
+{
+	char buf[512], want[80];
+	FILE *f = fopen(path, "r");
+	size_t n;
+	char *p;
+
+	if (!f)
+		return 0;
+	n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+	snprintf(want, sizeof(want), "boot %s", id);
+	for (p = strstr(buf, want); p; p = strstr(p + 1, want)) {
+		char end = p[strlen(want)];
+
+		if (end == '\n' || end == '\0')
+			return 1;
+	}
+	return 0;
+}
 
 static void note_deliberate_restart(void)
 {
@@ -37,6 +66,11 @@ static void note_deliberate_restart(void)
 		return;
 	}
 	fclose(f);
+	id[strcspn(id, "\n")] = '\0';
+	if (!marker_names_boot(NOTE_DIR "/modem-up", id) &&
+	    !marker_names_boot(NOTE_DIR "/modem-bringup-started", id))
+		return;
+	strcat(id, "\n");
 	fd = open(NOTE ".new", O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 	if (fd < 0)
 		return;
