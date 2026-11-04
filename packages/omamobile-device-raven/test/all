@@ -95,6 +95,14 @@ grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep || fa
 grep -q 'wifi_pci=0000:01:00.0' bin/omamobile-sleep || fail "a Wi-Fi D3 failure falls back to unload mode"
 pass "sleep policy"
 
+# The modem's units, when enabled: sitd waits for CP ONLINE (as on cheetah)
+d=$tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/20-cp-online.conf
+grep -qx 'ExecStartPre=/usr/lib/omamobile-vendor/omamobile-modem-cp wait-online 120' "$d" || fail "sitd waits for CP ONLINE with the cbd timeout"
+grep -q '^\[Service\]' "$d" && ! grep -q '^\[Unit\]' "$d" || fail "the sitd drop-in only adds to [Service]"
+d=$tmp/root/usr/lib/systemd/system/omamobile-sit-data.service.d/20-cp-online.conf
+grep -qx 'ConditionPathExists=/dev/umts_ipc0' "$d" || fail "sit-data is skipped without the modem's port"
+pass "sitd waits for the CP; sit-data needs the modem's port"
+
 # Policy that keeps the phone safe at boot
 for m in tcpci_maxim gpio_max77759; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven.conf || fail "$m stays blacklisted"
