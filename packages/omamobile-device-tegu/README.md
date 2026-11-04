@@ -149,3 +149,78 @@ that loaded them, from its own staged copies, not the package: the package
 blacklists both and starts neither.
 
 Licence: MIT.
+
+## The modem at boot (opt-in)
+
+`omamobile-tegu-modem-up` starts the CP once per boot: the kernel's own
+drivers when it carries them (`cpif`, `pcie_gs201_cp` and the device tree's
+`cpif` node), else the bring-up modules in `/var/lib/omamobile-tegu/modem`.
+In order, it:
+
+1. takes a sleep inhibitor (suspend with the CP up isn't qualified on the
+   9a, so nothing sleeps until the reboot);
+2. writes and syncs a latch, `/var/lib/omamobile/modem-bringup-started`;
+3. loads the drivers (refusing a `pcie_gs201_cp` already loaded without
+   `allow_hw`);
+4. runs the modem profile's read-only NV check, which needs CPIF loaded;
+5. starts the profile and waits for CP ONLINE;
+6. with `--phone`, starts `omamobile-sitd` and, when installed,
+   `omamobile-mmd` for Phone and Messages.
+
+The latch stays from step 2 until the profile's unit stops at shutdown:
+its ExecStopPost (`omamobile-tegu-modem-up --stopped`) removes this boot's
+latch once the start had reached ONLINE, whatever the stop's result (the
+CP's power-off can end rfsd before systemd's SIGINT, so the result is often
+not "success"). A start that never reached ONLINE, or a boot that hung or reset
+with the modem up, leaves it, and every later start refuses until you've
+read `/var/log/omamobile/modem.log` and the last boot's journal and removed
+it. It also refuses a second start in a boot that already loaded CPIF.
+Never stop the modem by hand; the reboot's shutdown stops it.
+
+With #403, a `reboot-to` (and so `bin/omamobile push`) with the CP ONLINE
+notes the boot it ends, and the next boot clears that boot's latch and
+starts the modem on its own, after a reboot that didn't power the CP off
+through the profile. On the 9a that path passed once, on 2026-11-03
+(TELEPHONY-PLAN 2.7).
+
+The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`) hasn't
+run through this script yet; the in-tree drivers have run from the
+bring-up runners.
+
+### Starting it at boot
+
+`omamobile-tegu-modem-boot.service` runs `omamobile-tegu-modem-up --phone
+--gnss` at boot. The package installs it disabled. Before enabling it:
+
+- **Slot B marked successful.** Otherwise every reset spends one of ABL's
+  three tries, and at zero it boots stock on slot A, which has overwritten
+  `userdata`.
+- **A kernel with linux-omarchy-mobile#172** (the PERIC0 GPIO bus clock
+  kept on). Without it the modem's GPIO writes hang the palmtop within
+  minutes.
+- **The charger in** for the first boots.
+
+Then `systemctl enable omamobile-tegu-modem-boot`. With it on the battery
+drains as if awake, since the palmtop no longer suspends.
+
+**Rollback:** `systemctl disable omamobile-tegu-modem-boot`, then reboot.
+If the palmtop resets before you can log in, the latch does the work: the
+boot after a reset with the modem up finds it and doesn't start the modem,
+so log in then, disable the unit and remove the latch. If it still doesn't
+come up, hold Volume Down + Power for fastboot and boot a known-good image
+set.
+
+## Optional Phone and Messages attachment
+
+`omamobile-telephony-tegu` is an opt-in companion package; it installs the
+ModemManager-compatible bridge and session agent without enabling or
+starting the radio. Its attended helper attaches only to a running tegu
+modem and sitd. See its [runbook](../omamobile-telephony-tegu/README.md).
+
+This device package supplies sitd's modem-unit policy under
+`omamobile-sitd.service.d/10-device-modem.conf`: Requisite and ordering on
+`omamobile-tegu-modem.service`, with a CP ONLINE check before any future
+sitd start. It supplies no CP starter and enables neither service. It
+also prevents the generic modem runtime unit from starting on tegu.
+Remove any old full sitd unit copy in `/etc` using the runbook's attended
+migration; the package does not delete human overrides.
