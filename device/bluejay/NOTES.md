@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6a (bluejay) bring-up notes
 
-Findings for the Pixel 6a port, newest first. The port shares the Pixel 6 (oriole) and 6 Pro (raven) effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2). Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone or in the factory image). Nothing has been flashed or booted yet, and no 6a has been queried: every fact below comes from public GPL sources and Google's public factory image, read on the laptop.
+Findings for the Pixel 6a port, newest first. The port has its own thread, [issue #348](https://github.com/derekross/omarchy-mobile/issues/348), split out of the Pixel 6 (oriole) and 6 Pro (raven) effort in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2), whose gs101 context and safety rules apply here too. Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone or in the factory image). Nothing has been flashed or booted yet, and no 6a has been queried: every fact below comes from public GPL sources and Google's public factory image, read on the laptop.
 
 Sources:
 
@@ -34,6 +34,12 @@ The question the notes left open, and that the maintainer wants settled before a
 ### What is left before a flash
 
 From a retail 6a, read-only, before anything is written (CONTRIBUTING §5.1 first): `getvar all` (product, slot state, the partition list and sizes, `hw-revision`), `ro.boot.dtbo_idx`, the build id and security patch; with root or `bin/omamobile capture`, the live DT (which `soc_id`, `/chosen/bootargs`, every `reserved-memory` region against `/proc/iomem`). Post facts, never the files. Then the board DTS's DTB in a kernel build (`DEVICE=bluejay bin/omamobile images`, which now adds `boot`'s footer), the oriole initramfs path, and a human at the phone with the way back to slot A.
+
+## 2026-11-02: the device package, 0.1.0, built but not run (no phone)
+
+- **`packages/omamobile-device-bluejay` 0.1.0 is the package `device.conf` names.** It is felix's first-light shape without the fold's lid and cover-touch parts, plus the suspend-to-idle drop-in: the storage udev rule, the usb0 address with USB as the last gateway, NetworkManager off usb0, logind ignoring the power key, `[Sleep]` on s2idle with no hibernation, the `[omamobile]` mirrorlist and pacman hook, `reboot-to` and a copy of the descriptor; `provides`/`conflicts=(omamobile-device)` and `depends` on `omamobile-keyring`, so `tools/build-rootfs` can build a 6a image with the repository configured. It enables no service, ships no modprobe policy and no `omamobile-bootctl` (marking slot B on the gs101 phones is on hold, [#252](https://github.com/derekross/omarchy-mobile/issues/252)), so `bin/omamobile initramfs` builds its freestanding helpers, as for oriole.
+- **Why the sleep drop-in** [V]: raven's firmware advertises PSCI SYSTEM_SUSPEND, so the kernel offers `deep`, and Linux has no gs101 sleep sequence, so the phone doesn't wake from it ([raven's package](../../packages/omamobile-device-raven/vendor/systemd/sleep.conf.d/10-omamobile.conf), device/raven/SUSPEND-PLAN.md). Bluejay's `/chosen/bootargs` (kernel #179) don't set `mem_sleep_default=s2idle`, as oriole's don't, so the file is what keeps `systemctl suspend` on s2idle; the maintainer asked for it in the kernel #179 review. The file is raven's, byte for byte, and the package's test checks it.
+- **What was checked** [V]: `test/all` (every copied file against cheetah's or raven's, the descriptor against `device/bluejay/device.conf`, no register write or probe in it, the staged tree with nothing that marks a slot, loads a driver or starts hardware) and `tests/packages`, on the laptop. Not checked: a build with `makepkg` on aarch64, an install on a 6a, and `tools/phone-smoke`, which wait for the first boot.
 
 ## 2026-11-01: stage 0, part 1: facts from Google's GPL device trees (no phone, no factory image)
 
@@ -78,7 +84,7 @@ The descriptor carries no comments; this table is its provenance.
 | --- | --- | --- | --- |
 | `CODENAME`, `NAME`, `SOC` | bluejay, Pixel 6a, gs101 | [V] | G/, the kernel binding |
 | `COMPATIBLE` | `google,gs101-bluejay` | [V] | the first-light DTS and its binding entry |
-| `PACKAGE` | `omamobile-device-bluejay` | the package doesn't exist yet; `bin/omamobile initramfs` falls back when its `omamobile-bootctl.c` is missing, as for oriole | |
+| `PACKAGE` | `omamobile-device-bluejay` | [V] | [`packages/omamobile-device-bluejay`](../../packages/omamobile-device-bluejay) 0.1.0 (2026-11-02 above); it has no `omamobile-bootctl.c`, so `bin/omamobile initramfs` builds its freestanding helpers, as for oriole |
 | `DTB` | `exynos/google/gs101-bluejay.dtb` | [V] | the Makefile line in [kernel #179](https://github.com/derekross/linux-omarchy-mobile/pull/179), merged; `DEVICE=bluejay bin/omamobile images` builds from a kernel after it |
 | `SOC_IDS` | `b0:0x9845001 a0:0x9845000` | [V] | S/ `gs101-b0.dts`, `gs101-a0.dts` |
 | `DTBO_SOURCE`, `DTBO_BOARD_ID`, `DTBO_BOARD_REV` | the empty overlay, 0x20506, 0x10000 | [V] for the MP 1.0 entry (index 9 of stock's `dtbo.img`), [I] that retail boots it | G/ `gs101-bluejay-mp1_0.dts`; F/ `dtbo.img` (2026-11-02) |
