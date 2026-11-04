@@ -1,7 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-device-panther into DESTDIR. Nothing is enabled that would
-# mark a slot successful or start the radio, the charger, or a camera.
+# mark a slot successful or start the radio or the charger. The camera
+# drivers load only from omamobile-camera.timer, 40 s into the boot, behind
+# a hang marker, and only on a DTB with the camera receiver enabled.
 #   ./install DESTDIR [BUILDDIR]
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -28,6 +30,16 @@ install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
   "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
 install -Dm644 vendor/modprobe.d/omamobile-display.conf \
   "$destination/usr/lib/modprobe.d/omamobile-display.conf"
+# The camera drivers never autoload; omamobile-camera-start loads them.
+install -Dm644 vendor/modprobe.d/omamobile-camera.conf \
+  "$destination/usr/lib/modprobe.d/omamobile-camera.conf"
+install -Dm755 bin/omamobile-camera-start "$destination/usr/bin/omamobile-camera-start"
+for unit in omamobile-camera.service omamobile-camera.timer; do
+  install -Dm644 "vendor/systemd/system/$unit" "$destination/usr/lib/systemd/system/$unit"
+done
+install -d "$destination/usr/lib/systemd/system/timers.target.wants"
+ln -sfn ../omamobile-camera.timer \
+  "$destination/usr/lib/systemd/system/timers.target.wants/omamobile-camera.timer"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 device.conf \

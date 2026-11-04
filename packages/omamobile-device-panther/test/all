@@ -81,6 +81,9 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-display.conf \
+         usr/lib/modprobe.d/omamobile-camera.conf \
+         usr/lib/systemd/system/omamobile-camera.service \
+         usr/lib/systemd/system/omamobile-camera.timer \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-panther/version \
@@ -121,11 +124,31 @@ grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/devi
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/lib/systemd/system/omamobile-boot-success.service \
               usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
-              usr/bin/omamobile-camera-start \
               usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rules, the USB link and its rescue, and the mirrorlist, and nothing that marks a slot or starts hardware"
+pass "install stages the udev rules, the USB link and its rescue, and the mirrorlist, and nothing that marks a slot or starts the radio or the charger"
+# The cameras: drivers blacklisted, loaded only by omamobile-camera-start
+# from the timer, on panther's CSIS (1a450000; cheetah's is 1a460000).
+cam=$tmp/root/usr/bin/omamobile-camera-start
+[[ -x $cam ]] || fail "omamobile-camera-start is executable"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/timers.target.wants/omamobile-camera.timer") == ../omamobile-camera.timer ]] \
+  || fail "the camera timer is enabled by a vendor wants link"
+grep -qx 'OnBootSec=40s' "$tmp/root/usr/lib/systemd/system/omamobile-camera.timer" || fail "the cameras load 40 s into the boot"
+grep -qx 'ConditionPathExists=/sys/bus/platform/devices/1a450000.csis' "$tmp/root/usr/lib/systemd/system/omamobile-camera.service" \
+  || fail "the camera service waits for panther's CSIS"
+grep -q '/sys/bus/platform/devices/1a450000.csis' "$cam" || fail "the script checks panther's CSIS"
+grep -q '1a460000' "$cam" "$tmp/root/usr/lib/systemd/system/omamobile-camera.service" && fail "cheetah's CSIS address left in"
+grep -q 'sem1215' "$cam" && fail "panther has no telephoto: sem1215 is not loaded"
+for m in $(sed -n 's/^load //p' "$cam"); do
+  [[ $m == sec_acpm ]] && continue  # the PMIC core, not in cheetah's list either
+  grep -qx "blacklist $m" "$tmp/root/usr/lib/modprobe.d/omamobile-camera.conf" \
+    || fail "the camera driver $m must not autoload"
+done
+grep -q 'camera-start-started' "$cam" && grep -q 'sync -f "$marker"' "$cam" || fail "omamobile-camera-start writes and syncs a hang marker"
+cmp -s vendor/modprobe.d/omamobile-camera.conf ../omamobile-device-cheetah/vendor/modprobe.d/omamobile-camera.conf 2>/dev/null \
+  || [[ ! -d ../omamobile-device-cheetah ]] || fail "the camera blacklist drifted from the cheetah package"
+pass "the camera drivers never autoload; omamobile-camera-start loads them from a timer, on panther's CSIS"
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network

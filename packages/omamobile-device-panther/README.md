@@ -1,12 +1,13 @@
 # omamobile-device-panther
 
-Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panther, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address and brings USB back after a replug, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It does not drive the radio, the charger, or a camera, and it does not mark a boot slot successful.
+Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panther, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address and brings USB back after a replug, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It loads the camera drivers after the boot has settled. It does not drive the radio or the charger, and it does not mark a boot slot successful.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
 | `vendor/udev/rules.d/10-omamobile-storage.rules` | `/usr/lib/udev/rules.d` | Hides `sda` and every Android partition except `userdata` from desktop tools. Same rule as the Pixel 7 Pro. The initramfs stops its guard loop before `switch_root`; the kernel's read-only flags are what remain |
 | `vendor/udev/rules.d/20-omamobile-gpu-always-on.rules` | `/usr/lib/udev/rules.d` | Keeps the Mali-G710 powered while Panthor drives it: powering its domain back up needs a secure call our kernel doesn't make yet. Same rule as the Pixel 7 Pro |
 | `vendor/udev/rules.d/72-omamobile-feedbackd.rules` | `/usr/lib/udev/rules.d` | Lets feedbackd drive the CS40L26 haptics (`cs40l26_vibra`). Same rule as the Pixel 7 Pro; the driver needs the phone's own `cs40l26.wmfw` (`tools/extract-vendor-firmware -d panther`) |
+| `bin/omamobile-camera-start` + `vendor/systemd/system/omamobile-camera.{service,timer}` + `vendor/modprobe.d/omamobile-camera.conf` | `/usr/bin`, `/usr/lib/systemd/system` (the timer enabled by a vendor wants link), `/usr/lib/modprobe.d` | Loads the camera drivers 40 s into the boot (PMIC supplies, the three sensors and the main camera's lens, the DC-PHY and CSIS), skipping them on the next boot if a load never finished, and only when the DTB enables the camera receiver (`1a450000.csis`). The modules are blacklisted for autoload so only this guard (or a runbook) loads them. The Pixel 7 Pro's script, unit and list, with panther's CSIS and without the telephoto's `sem1215` |
 | `vendor/systemd/network/20-usb-gadget.network` | `/usr/lib/systemd/network` | Sets usb0 to 172.16.42.1/24 after handover |
 | `bin/omamobile-usb-rescue`, `vendor/systemd/system/omamobile-usb-rescue.service` | `/usr/bin`, `/usr/lib/systemd/system` (enabled for `multi-user.target`) | Brings USB back after a replug: the MAX77759 opens its USB2 data switch on unplug, and with no Type-C driver nothing closes it. While VBUS is valid, puts the switch back to 0x09 on the chip's I2C bus (USI13, which the board file enables). Reads two registers and writes that one; stands aside once a Type-C driver owns the chip. Same script and unit as the Pixel 7 Pro; needs `i2c-tools` |
 | `vendor/systemd/logind.conf.d/10-omamobile-power-key.conf` | `/usr/lib/systemd/logind.conf.d` | A short power press does not power the phone off. Same drop-in as the Pixel 7 Pro. The long press stays the PMIC reset |
@@ -20,4 +21,4 @@ Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panthe
 
 `./build [DIR]` compiles `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the copies when it is run from the repository.
 
-Not in this package: the boot-success marker, Wi-Fi, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook.
+Not in this package: the boot-success marker, Wi-Fi, the charger, and the slot-B image hook. Those stay out until each one has its own runbook.
