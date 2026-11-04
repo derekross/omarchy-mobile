@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7 (panther) display: DCS brightness, then flip-only KMS
 
-Status (2026-11-01): G1, D1, D2 and D3 passed. Brightness and display off/on work over DCS ([linux-omarchy-mobile#177](https://github.com/derekross/linux-omarchy-mobile/pull/177), merged), and gs-decon drives the screen: Hyprland flips at 60 Hz, DPMS off stops the frames and puts the panel to sleep, and the panel's cold init wakes it ([linux-omarchy-mobile#181](https://github.com/derekross/linux-omarchy-mobile/pull/181), in review). device-panther 0.1.5 ships `screen_off=2`, and the bring-up file is gone. Next: D4 (90 Hz).
+Status (2026-11-01): G1, D1, D2 and D3 passed. Brightness and display off/on work over DCS ([linux-omarchy-mobile#177](https://github.com/derekross/linux-omarchy-mobile/pull/177), merged), and gs-decon drives the screen: Hyprland flips at 60 Hz, DPMS off stops the frames and puts the panel to sleep, and the panel's cold init wakes it ([linux-omarchy-mobile#181](https://github.com/derekross/linux-omarchy-mobile/pull/181), in review). device-panther 0.1.7 ships `screen_off=2`, and the bring-up file is gone. A second Pixel 7 passed D3 too (2026-11-03). Next: D4 (90 Hz).
 
 Today the Pixel 7 shows the bootloader's framebuffer through simplefb and
 simpledrm: no brightness control, no screen off, no vsync. The Pixel 7 Pro
@@ -311,7 +311,8 @@ installed:
 ### 2026-11-01: D3
 
 **D3a, stage 0.** Kernel `7.3.0-rc6-omamobile-push1-gdc3f0ce5e425` (D1
-plus the D3 branch's first four commits), flashed after its modules with
+plus the D3 branch without the padded-row commit, which came out of
+D3c), flashed after its modules with
 the bring-up file at `stage=0`:
 - **0.1.4 at boot:** `allow_tx` read Y with no hand-written option, and the
   slider worked.
@@ -340,7 +341,7 @@ screen_off=0`, then a reboot:
   source height shares that register.
 
 **D3c, stage 2, with the fix.** Kernel
-`7.3.0-rc6-omamobile-push1-g53fab72d1489`, flashed after its modules:
+`7.3.0-rc6-omamobile-push1-g53fab72d1489` (all five commits), flashed after its modules:
 - Hyprland's modesets all passed, and `hyprctl monitors` showed
   1080x2400@60.00000.
 - **The desktop showed, and it was smooth.** In the first ~37 s there were
@@ -362,8 +363,8 @@ it, and the PIN could be entered. There were no DSIM timeouts, no "cold
 init failed" and no gs-decon errors (`dmesg` was cleared before the
 `screen_off=2` step).
 
-**0.1.5 with no bring-up file.** device-panther 0.1.5 was installed on
-the phone, the bring-up file deleted, and the phone rebooted on the same
+**The package with no bring-up file.** device-panther, built as 0.1.5 (it
+ships as 0.1.7, after 0.1.6's AVB footers), was installed on the phone, the bring-up file deleted, and the phone rebooted on the same
 kernel. After the reboot:
 - `allow_tx`, `stage` and `screen_off` read Y, 2 and 2 from the package
   alone, and gs-decon owned the screen.
@@ -371,3 +372,17 @@ kernel. After the reboot:
   59.99 Hz), and the desktop was smooth.
 - The slider worked. The power key's lock turned the screen off, a tap
   turned it on, and the PIN could be entered.
+### 2026-11-03: D3 on a second Pixel 7
+
+angelrenefm's unit (issue #342: stock factory unit, `CP3A.261005.002.A1` on both slots), kernel `7.3.0-rc6-omamobile-push1-g0a132eb92793` (linux-omarchy-mobile#181's head), flashed with omarchy-mobile#396's AVB footers. Results from [linux-omarchy-mobile#181](https://github.com/derekross/linux-omarchy-mobile/pull/181):
+
+| Step | Result |
+| --- | --- |
+| D3a, stage 0 | pass: "link timers for 60 Hz"; DECON0 and DPP0 as ABL left them (1080x2400, RDMA 0xfac00000, TRIG_CON 0x3061); the panel taken over from the bootloader; simpledrm kept `card0`; `allow_tx` Y; no errors |
+| D3b, stage 1 | pass: 601 frame starts and 601 frame dones in 10.01 s (60.1 Hz), no storm |
+| D3c, stage 2 | pass: gs-decon on `card2`, simpledrm gone, Hyprland at 1080x2400@60. Over 10 minutes: 871 flips, no timeouts and no late flips, latency 9.0 ms on average (16.7 ms at most). No stripes or tearing |
+| D3d, `screen_off` at runtime, DPMS through `hl.dsp.dpms` | 0: frames keep counting while dark. 1: frame start frozen, trigger masked. 2: `panel_asleep` 1 and the panel's TE count frozen while dark; after DPMS on, TE back at 60 Hz. Each time the desktop came back. `screen_off=2` six times out of six, with no DSIM timeouts, no "cold init failed" and nothing in `dmesg` |
+| Boot with `stage=2 screen_off=2` from the bring-up file | gs-decon at 60.12 Hz, Hyprland up, no flip timeouts |
+
+Not checked there: the picture right after the runtime cold inits (that run measured over SSH: counters and `dmesg`).
+
