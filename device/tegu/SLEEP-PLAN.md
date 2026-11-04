@@ -830,6 +830,18 @@ for the coherency fix and no more (at one in 80, 135 clean wakes happen by
 chance about one time in five), and a silent no-wake that the fix doesn't
 touch and that still needs a record that survives the buttons' reset.
 
+**A record that survives the buttons (next).** The silent no-wake leaves
+nothing: the watchdog is stopped in s2idle and a Power + Volume Up reset
+loses ramoops. The S2MPG14 RTC is battery-backed and its alarm 1 is unused
+(`rtc-s5m` arms alarm 0 only), so a bring-up module (owner's logs,
+`tegu-sleep-crumbs`, not for merge) writes a stage code to A1SEC and a
+sleep count to A1MIN at each suspend and resume phase, the enable bits
+always clear, each write committed to the RTC block with AUDR, and prints
+the previous boot's last stage at load. Its first run is attended: check
+alarm 0 and the time still work, that the crumb survives a reboot, and
+that it survives one Power + Volume Up reset; only then a long series
+with it.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
