@@ -72,14 +72,33 @@ PROPS=${OMAMOBILE_MODEM_PROPS:-/var/lib/omamobile-vendor/modem/props.conf}
 # for it. Suspend with the modem on has never run on this phone (MODEM-PLAN
 # section 6.3), so nothing may sleep once they are loaded.
 INHIBITOR=omamobile-modem
+# Where a refusal looks for the modem's drivers, and what releases the
+# inhibitor (overridden by the test).
+SYSMODULE=${OMAMOBILE_MODEM_SYSMODULE:-/sys/module}
+SYSTEMCTL=${OMAMOBILE_MODEM_SYSTEMCTL:-systemctl}
 say() { printf 'omamobile-modem: %s\n' "$*" >&2; }
 boot_id() { cat /proc/sys/kernel/random/boot_id; }
 
 # A refusal's one-line reason for the shell (short: it is a tile's status
-# line), then exit 1. Nothing else is written by a refusal.
+# line), then exit 1. Nothing else is written by a refusal. A refusal with
+# none of the modem's drivers loaded never touched the modem, so the sleep
+# block has nothing to guard this boot: release it (a kill, since the
+# inhibitor refuses a manual stop). Once a driver has loaded, it stays until
+# the reboot, as before.
 refuse() {
   mkdir -p "$(dirname "$REFUSED")" 2>/dev/null && printf '%s\n' "$1" > "$REFUSED" 2>/dev/null || true
+  release_inhibitor
   exit 1
+}
+release_inhibitor() {
+  local m
+  for m in pcie_gs201_cp shm_ipc cpif; do
+    [[ -d $SYSMODULE/$m ]] && return 0
+  done
+  "$SYSTEMCTL" is-active -q omamobile-modem-inhibit.service 2>/dev/null || return 0
+  "$SYSTEMCTL" kill omamobile-modem-inhibit.service >/dev/null 2>&1 &&
+    say "no modem driver loaded: sleep is no longer blocked this boot"
+  return 0
 }
 
 # The refused copies a stale marker leaves (the retry counter), as words.

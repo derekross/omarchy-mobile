@@ -199,6 +199,11 @@ pass "start script: markers before the drivers, the check after them, READY befo
 m=$t/markers; mkdir -p "$m/root"; : > "$m/nv.sha256"; printf 'ro.boot.cdt_hwid=TESTID\n' > "$m/props.conf"
 export OMAMOBILE_MODEM_LATCH=$m/latch OMAMOBILE_MODEM_UP_MARK=$m/up OMAMOBILE_MODEM_HOLD=$m/hold OMAMOBILE_MODEM_REFUSED=$m/run/refused
 export OMAMOBILE_MODEM_CHROOT=$m/root OMAMOBILE_MODEM_NV_SUMS=$m/nv.sha256 OMAMOBILE_MODEM_PROPS=$m/props.conf
+# What a refusal releases: a fake systemctl that logs its arguments, and an
+# empty module directory (no modem driver loaded) unless a test adds one.
+mkdir -p "$m/sysmodule"
+printf '#!/bin/sh\ncase $1 in is-active) [ -e %s/inhibit-active ];; *) echo "$*" >> %s/systemctl.log;; esac\n' "$m" "$m" > "$m/systemctl"; chmod +x "$m/systemctl"
+export OMAMOBILE_MODEM_SYSMODULE=$m/sysmodule OMAMOBILE_MODEM_SYSTEMCTL=$m/systemctl
 start() { timeout 20 bash $s "$@" 2>&1; }
 past() { OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 start "$@"; }
 stop_line='past the marker checks, stopping here (test only)'
@@ -232,6 +237,22 @@ out=$(start) && fail "a bring-up latch is refused"
 [[ -e $m/latch && $(cat "$m/run/refused") == "Off: last bring-up hung" ]] || fail "the latch stays, with its reason for the tile"
 out=$(start) && fail "the latch refuses the boot after too"
 rm -f "$m/latch"
+# A refusal before any modem driver loads releases the sleep block; with a
+# driver loaded (here cpif) it stays until the reboot, and an inhibitor that
+# isn't running (an unprovisioned phone skips it) is left alone.
+rm -f "$m/systemctl.log"; printf 'x boot y\n' > "$m/latch"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log ]] || fail "no inhibitor running: nothing to release"
+: > "$m/inhibit-active"
+out=$(start) && fail "a latch refusal fails"
+[[ $(cat "$m/systemctl.log" 2>/dev/null) == "kill omamobile-modem-inhibit.service" && $out == *"sleep is no longer blocked"* ]] ||
+  fail "a refusal with no modem driver loaded kills the inhibitor: $(cat "$m/systemctl.log" 2>/dev/null) / $out"
+rm -f "$m/systemctl.log"; mkdir -p "$m/sysmodule/cpif"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log && $out != *"no longer blocked"* ]] || fail "with a modem driver loaded the inhibitor stays: $(cat "$m/systemctl.log" 2>/dev/null)"
+rmdir "$m/sysmodule/cpif"; rm -f "$m/latch" "$m/systemctl.log" "$m/inhibit-active"
+grep -q 'release_inhibitor$' $s && [[ $(grep -c 'release_inhibitor' $s) -eq 2 ]] || fail "only refuse() releases the inhibitor"
+pass "a refusal before any modem driver loads releases the sleep block; after one, it stays"
 # A stale modem-up marker (a boot that ended with the modem up and no clean
 # stop) refuses once: the marker moves aside, named by the time, and the
 # next boot gets past the markers (here: to the test stop point, with the
