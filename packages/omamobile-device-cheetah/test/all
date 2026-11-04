@@ -182,3 +182,7 @@ if [[ -f ../omamobile-modem/systemd/omamobile-modem-boot.target ]]; then
     || fail "the modem unit the link turns on is skipped on a phone that isn't provisioned"
 fi
 pass "sitd waits for the CP; the modem stack is on by default through the target's vendor link; sit-data needs the modem's port"
+
+grep -q 'KERNEL=="hci\[0-9\]\*", ENV{DEVTYPE}=="host"' vendor/udev/rules.d/80-omamobile-bt-addr.rules \
+  || fail "the address service starts for the controller only, not for its connections (hci0:N)"
+pass "the Bluetooth address rule matches only the controller"

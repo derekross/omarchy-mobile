@@ -132,3 +132,7 @@ grep -q 'ENV{SYSTEMD_WANTS}+="omamobile-feedbackd-rescan.service"' "$rule" || fa
 grep -qx 'ExecStart=-/usr/bin/pkill -x feedbackd' vendor/systemd/system/omamobile-feedbackd-rescan.service \
   || fail "the rescan stops only feedbackd, and no feedbackd is not an error"
 pass "feedbackd picks up the haptics motor"
+
+grep -q 'KERNEL=="hci\[0-9\]\*", ENV{DEVTYPE}=="host"' vendor/udev/rules.d/80-omamobile-bt-addr.rules \
+  || fail "the address service starts for the controller only, not for its connections (hci0:N)"
+pass "the Bluetooth address rule matches only the controller"

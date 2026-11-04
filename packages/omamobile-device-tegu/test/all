@@ -192,3 +192,7 @@ for t in test/graphics-start test/aoc-start test/usb-rescue test/sleep-hooks tes
   "$t" || fail "$t"
 done
 pass "the scripts behave in a scratch root"
+
+grep -q 'KERNEL=="hci\[0-9\]\*", ENV{DEVTYPE}=="host"' vendor/udev/rules.d/80-omamobile-bt-addr.rules \
+  || fail "the address service starts for the controller only, not for its connections (hci0:N)"
+pass "the Bluetooth address rule matches only the controller"
