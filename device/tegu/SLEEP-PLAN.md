@@ -842,6 +842,18 @@ alarm 0 and the time still work, that the crumb survives a reboot, and
 that it survives one Power + Volume Up reset; only then a long series
 with it.
 
+**The breadcrumbs' first night (2026-11-03 20:06-20:37).** On the
+coherency kernel the module loaded and read alarm 1 as zero; a 60 s sleep
+with it loaded woke, but after a warm reboot the next load still read
+0x00, so as built it doesn't leave anything readable across even a warm
+reboot (the commit to the RTC block, the read-back or ABL; not known which).
+The series that followed, with the module loaded, had nine clean wakes,
+and the tenth never woke (journal ends at `Performing sleep operation
+'suspend'`; the owner's Power + Volume Up; pstore had nothing new; the
+module again read 0x00). The module's ACPM writes in the noirq phases may
+also change what they're meant to observe, so the series went on without
+it, and the module gets a write-and-read-back test within one boot first.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
