@@ -65,6 +65,23 @@ class ServiceTests(unittest.TestCase):
         other=app_service.database(self.root/'db')
         self.assertEqual(other.execute('SELECT state FROM outgoing').fetchone()[0],'unknown'); other.close()
 
+    def test_refused_tegu_gain_does_not_fail_call_signalling(self):
+        self.service.settings['audio']['card'] = 'auto'
+        self.client.request.side_effect = [bytes(4), b'']
+        with patch.object(app_service, 'aoc_card', return_value=3), \
+             patch.object(app_service, 'VoiceAudio') as route:
+            route.return_value.__enter__.side_effect = app_service.AudioRefused('gain mismatch')
+            call = self.service.dispatch(dict(action='dial', number='+12025550123'))
+        self.assertEqual(self.service.calls[call['call']]['state'], 'dialing')
+        self.assertEqual([c.args[0] for c in self.client.request.call_args_list], [0x0000, 0x0d00])
+        self.assertIsNone(self.service.audio)
+
+    def test_tegu_route_is_reported_as_speakerphone(self):
+        self.service.audio = MagicMock(tegu=True)
+        self.assertTrue(self.service.status()['audio']['speaker'])
+        self.service.audio.tegu = False
+        self.assertFalse(self.service.status()['audio']['speaker'])
+
     def test_failed_radio_off_still_requires_reboot_without_claiming_release(self):
         self.client.request.side_effect = TimeoutError()
         with patch.object(app_service, 'radio', side_effect=OSError()), \

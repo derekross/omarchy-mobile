@@ -51,7 +51,7 @@ from inbox import persist_sms
 from sit import Sit, ModemError
 from sms_codec import submit, received_pdu, number
 import carrier_manifest
-from voice_audio import VoiceAudio, aoc_card
+from voice_audio import AudioRefused, VoiceAudio, aoc_card
 
 STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in', 5: 'waiting',
           6: 'terminated', 7: 'held', 8: 'active'}
@@ -274,7 +274,9 @@ class Service:
             # in the status's audio error, as with [audio] card = none.
             try:
                 self.audio = VoiceAudio(mic_boost_db=audio.getint('mic_boost_db', 6), card=card,
-                                        earpiece=audio.getboolean('earpiece', True))
+                                        earpiece=audio.getboolean('earpiece', True),
+                                        tegu_route=audio.get('tegu_route', 'speaker'),
+                                        tegu_aec=audio.getboolean('tegu_aec', False))
                 self.audio.__enter__()
             except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
                 self.audio = None
@@ -580,7 +582,7 @@ class Service:
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
-                               speaker=False, speaker_available=False, error=self.audio_error))
+                               speaker=getattr(self.audio, 'tegu', False) is True, speaker_available=False, error=self.audio_error))
 
     def subscribe(self, connection):
         """Keep an authorised connection for status events; refuse beyond
@@ -924,6 +926,12 @@ def main():
             SOCKET.chmod(0o660)
         notify('READY=1\nSTATUS=registered')
         print('Calls and SMS service ready', flush=True)
+        # Set by a device whose modem sends signal reports only after it's
+        # told the screen is on (the Pixel 9a's drop-in), while nothing else
+        # sends the screen state yet. Never set on the 7 Pro.
+        if args.bringup and os.environ.get('OMAMOBILE_SIT_SCREEN_ON_AT_START') == '1' \
+                and service.screen_on is None:
+            service.dispatch(dict(action='screen-state', on=True))
         next_cp_check = 0
         while not stopping:
             service.pump()
