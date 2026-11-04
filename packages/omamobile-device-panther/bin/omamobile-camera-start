@@ -1,0 +1,52 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Load the camera drivers once the system is up (device/cheetah/CAMERA-PLAN.md
+# CAM5.4), hang-safe like omamobile-aoc-start.
+#
+# The modules stay blacklisted for autoload (modprobe.d/omamobile-camera.conf):
+# this script is what loads them, from omamobile-camera.timer some time after
+# boot, so nothing camera-related runs while the boot is still settling. Order:
+#   1. the PMIC drivers behind the camera supplies (sec_acpm for LDO12S,
+#      gpio_s2mpg13 for the fixed supplies' enables, slg51002_regulator for
+#      the camera PMIC);
+#   2. the sensors and lenses (each sensor powers up for its chip ID and off
+#      again; the lenses power up only while their subdev is open);
+#   3. the DC-PHY and the CSIS driver, which registers the media graphs
+#      libcamera (and PipeWire's libcamera plugin) find.
+# Nothing streams until an application asks. A marker is written and synced
+# first and removed at the end: if a boot hangs here, the next boot leaves
+# the cameras off; "omamobile-camera-start --retry" tries again.
+set -uo pipefail
+
+marker=/var/lib/omamobile/camera-start-started
+log() { echo "omamobile-camera: $*"; }
+
+[[ ${1:-} == --retry ]] && rm -f "$marker"
+if [[ -e $marker ]]; then
+  log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the cameras stay off this boot."
+  log "after checking the previous boot's log, retry with: omamobile-camera-start --retry"
+  exit 0
+fi
+if [[ ! -e /sys/bus/platform/devices/1a450000.csis ]]; then
+  log "the camera receiver is not enabled in this DTB; nothing to do"
+  exit 0
+fi
+
+mkdir -p "${marker%/*}"
+date -Is > "$marker" && sync -f "$marker"
+
+load() {
+  local m
+  for m; do
+    modprobe "$m" || log "modprobe $m failed"
+  done
+}
+load sec_acpm gpio_s2mpg13 slg51002_regulator
+udevadm settle -t 10
+load imx386 s5kgn1 ak7375 phy_gs201_mipi_dcphy_rx gs201_csis
+udevadm settle -t 10
+
+rm -f "$marker"
+sync -f "${marker%/*}"
+n=$(ls -d /sys/bus/media/devices/media* 2>/dev/null | wc -l)
+log "camera drivers loaded; $n media devices"
