@@ -30,7 +30,7 @@
 # captures them every 30 minutes; both do nothing without
 # /etc/omamobile/modem-nv-overlay-enable.
 [Unit]
-Description=Omarchy Mobile modem (S5300: rfsd and cbd on RAM copies of NV)
+Description=Omarchy Mobile modem (S5300 or S5123: rfsd and cbd on RAM copies of NV)
 Requires=omamobile-modem-inhibit.service
 After=omamobile-modem-inhibit.service systemd-modules-load.service omamobile-aoc.service omamobile-audio.service
 Wants=omamobile-modem-nv-overlay.timer

@@ -15,7 +15,7 @@ the counterpart of `omamobile-device-cheetah`. Bring-up and results:
 | The user may switch the panel off (`bl_power`) and inhibit the touchscreen, for Omarchy's display off | `udev/rules.d/20-omamobile-display.rules` |
 | Wi-Fi power save on | `NetworkManager/conf.d/omamobile-raven-wifi-powersave.conf` |
 | Sleep (s2idle) once locked with the panel off, behind `omarchy-toggle omamobile-sleep on` (the watcher, `omamobile-sleepd`, is omamobile-shell's); Wi-Fi stays connected across sleep (unloaded instead after a D3 failure, or with `/etc/omamobile/wifi-unload-for-sleep`) | `omamobile-sleep` (`system-sleep/omamobile`), `sleep.conf.d/10-omamobile.conf` |
-| Modem bring-up only: its PCIe driver and CPIF never load at boot, and the modem's units aren't enabled (as on main; `systemctl enable --now omamobile-modem omamobile-sitd` to use it, MODEM-PLAN) | `modprobe.d/omamobile-raven-modem.conf` |
+| Modem bring-up only: its PCIe driver and CPIF never load at boot, and the modem's units aren't enabled (as on main; `systemctl enable --now omamobile-modem omamobile-sitd` to use it, MODEM-PLAN); once enabled, sitd waits for CP ONLINE and the data fallback needs the modem's port, as on cheetah | `modprobe.d/omamobile-raven-modem.conf`, `omamobile-sitd.service.d/`, `omamobile-sit-data.service.d/` |
 | Bluetooth on at boot; the session waits (at most 15 s) for the adapter | `bluetooth.service` (enabled), `sddm.service.d/`, `omamobile-wait-bluetooth` |
 
 `reboot-to.c` and `omamobile-bootctl.c` are cheetah's, unchanged: both are
