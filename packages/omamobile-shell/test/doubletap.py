@@ -89,4 +89,53 @@ with tempfile.TemporaryDirectory() as root:
     device(root, 3, "pen", "2", keys_with(dt.BTN_TOUCH), keys_with(0, 1))
     check("a direct device without multi-touch isn't taken", dt.find_touchscreen(root) is None)
 
+
+class FakeProximity(dt.Proximity):
+    """The sensor proxy's answers, without a bus: has, near, or raises."""
+
+    def __init__(self, has=True, near=False, absent=False):
+        super().__init__()
+        self.has, self.is_near, self.absent, self.calls = has, near, absent, []
+
+    def _call(self, iface, method, args=None):
+        self.calls.append(method)
+        if self.absent:
+            raise OSError("no net.hadess.SensorProxy")
+        return (None,)
+
+    def _get(self, prop):
+        if self.absent:
+            raise OSError("no net.hadess.SensorProxy")
+        return {"HasProximity": self.has, "ProximityNear": self.is_near}[prop]
+
+
+dt.FRESH = 0   # no wait for the first reading in the tests
+p = FakeProximity(near=True)
+p.claim()
+check("near with a sensor that reads near", p.near() is True)
+p.claim()
+check("one claim however many touches", p.calls == ["ClaimProximity"], p.calls)
+p.release()
+check("release ends the claim", p.calls[-1] == "ReleaseProximity" and p.claimed_at is None, p.calls)
+p = FakeProximity(near=False)
+p.claim()
+check("far with a sensor that reads far", p.near() is False)
+p = FakeProximity(has=False, near=True)
+p.claim()
+check("no sensor (HasProximity false): no claim, reads far", p.calls == [] and p.near() is False, p.calls)
+p = FakeProximity(absent=True)
+p.claim()
+check("no sensor proxy: reads far", p.claimed_at is None and p.near() is False)
+p.release()
+
+with tempfile.TemporaryDirectory() as root:
+    check("no DSI connector: counts as dark", dt.screen_dark(root) is True)
+    os.makedirs(root + "/class/drm/card0-DSI-1")
+    with open(root + "/class/drm/card0-DSI-1/dpms", "w") as fh:
+        fh.write("On\n")
+    check("a lit DSI panel isn't dark", dt.screen_dark(root) is False)
+    with open(root + "/class/drm/card0-DSI-1/dpms", "w") as fh:
+        fh.write("Off\n")
+    check("a DSI panel with DPMS off is dark", dt.screen_dark(root) is True)
+
 sys.exit(1 if failures else 0)
