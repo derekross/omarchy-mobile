@@ -5,10 +5,12 @@
 # can't run (no qmllint, no Docker, no phone) by itself.
 #
 # The suites run side by side, up to OMAMOBILE_TEST_JOBS at once (default:
-# the CPUs, at most 8; 1 runs them one after another as before), the slow
-# ones first, since three of them (audio, shell, modem-sit) took three
-# quarters of CI's time when run in a row. Each suite's output is kept
-# together and printed when it ends, with its ok or not ok line.
+# the CPUs, at most 8; 1 runs them one at a time), the slow ones first,
+# since three of them (audio, shell, modem-sit) took three quarters of CI's
+# time when run in a row. Each suite's output is kept together and printed
+# when it ends, with its ok or not ok line. A suite that runs longer than
+# OMAMOBILE_TEST_TIMEOUT seconds (default 1800) is stopped and fails, and a
+# suite that leaves no result fails too.
 #
 #   tests/packages [NAME...]     (default: every package with test/all)
 set -uo pipefail
@@ -24,18 +26,25 @@ if (($#)); then names=("$@"); else
     [[ " ${names[*]} " == *" $n "* ]] || names+=("$n")
   done
 fi
+tmo=${OMAMOBILE_TEST_TIMEOUT:-1800}
 jobs=${OMAMOBILE_TEST_JOBS:-$(nproc 2>/dev/null || echo 1)}
 ((jobs > 8)) && jobs=8
 ((jobs < 1)) && jobs=1
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
-failed=()
+failed=() reported=()
 
-# One suite, its output to $out/NAME.log and its result to $out/NAME.rc.
+# One suite, its output to $out/NAME.log and its result to $out/NAME.rc,
+# which appears only once it holds the number (written aside, then moved).
 run() {
-  local n=$1 t=packages/$1/test/all
-  if [[ ! -x $t ]]; then echo "not ok - $n has no test/all" > "$out/$n.log"; echo 1 > "$out/$n.rc"; return; fi
-  { echo "# $n"; "$t"; } > "$out/$n.log" 2>&1
-  echo $? > "$out/$n.rc"
+  local n=$1 t=packages/$1/test/all rc
+  if [[ ! -x $t ]]; then
+    echo "not ok - $n has no test/all" > "$out/$n.log"; rc=1
+  else
+    { echo "# $n"; timeout -k 10 "$tmo" "$t"; } > "$out/$n.log" 2>&1
+    rc=$?
+    ((rc == 124)) && echo "# $n: stopped after ${tmo}s" >> "$out/$n.log"
+  fi
+  echo "$rc" > "$out/$n.rc.tmp" && mv "$out/$n.rc.tmp" "$out/$n.rc"
 }
 # Print the suites that have ended, each in one piece.
 report() {
@@ -45,6 +54,7 @@ report() {
     n=$(basename "$f" .rc); rc=$(<"$f")
     cat "$out/$n.log"
     if [[ $rc == 0 ]]; then echo "ok - $n"; else echo "not ok - $n"; failed+=("$n"); fi
+    reported+=("$n")
     rm -f "$f" "$out/$n.log"
   done
 }
@@ -57,6 +67,12 @@ for n in "${names[@]}"; do
 done
 wait
 report
+# A suite whose subshell died before it wrote a result.
+for n in "${names[@]}"; do
+  [[ " ${reported[*]} " == *" $n "* ]] && continue
+  [[ -e $out/$n.log ]] && cat "$out/$n.log"
+  echo "not ok - $n (no result)"; failed+=("$n")
+done
 
 if ((${#failed[@]})); then
   echo "failed: ${failed[*]}" >&2
