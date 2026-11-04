@@ -7,7 +7,8 @@ traffic at the same time, and reconnected after reboots; the chip came up
 silent after one of seven clean reboots, about the rate seen since B1
 (#77), and this time a forced restart recovered it. A test kernel that
 holds BT_REG_ON low 100 ms instead of 30 ms came up in 15 clean reboots out
-of 15 (B4, end).
+of 15 on 2026-11-03, but the 16th, after 14 h up, left it silent
+(B4, end).
 Earlier status (2026-10-27, superseded the same day, B3): **Bluetooth works**, at every boot since kernel #6 v2's
 CMU_APM mux fix (POWER-PLAN R4b, `g1de37d2bef30` and later; linux #6, merged).
 The B3 outage below followed kernels whose `assigned-clock-parents` override
@@ -430,6 +431,20 @@ in `nitrous.c`), as `hci_bcm` does.
 
 At the old rate, 15 clean reboots in a row would come by chance about one
 time in fifteen: strong evidence, not proof, and the one failure came
-straight out of a 30 ms kernel's run. Next: more days on the 100 ms hold,
+straight out of a 30 ms kernel's run.
+
+Running tally (from the phone's journal, a boot counted silent when its
+first `0xfc18` and the reset after it timed out):
+
+| Date | Kernel | Restart before the boot | Uptime before it | Bluetooth |
+| --- | --- | --- | --- | --- |
+| 2026-11-03 | 100 ms (`gcbf4d42277a6`) | clean `systemctl reboot` x15 | about 2 min each | up, 15 of 15 |
+| 2026-11-04 07:31 | 100 ms (`gcbf4d42277a6`) | clean `systemctl reboot` | 14 h (overnight, no sleep, Bluetooth in use) | **silent** |
+| 2026-11-04 07:34 | 30 ms (`ge1e6adb69bbf`) | `reboot-to` (a push) from the silent boot | 3 min | silent (carried over) |
+| 2026-11-04 07:44, 07:49 | 30 ms (`ge1e6adb69bbf`) | clean `systemctl reboot` x2 | 10 min, 4 min | up, 2 of 2 |
+| 2026-11-04 07:53 | `g1094d975a193` (no hold change) | `reboot-to` (a push) | 4 min | up |
+
+So on the 100 ms kernel: 1 silent in 16 clean reboots, and the one
+failure came after the longest uptime. Next: more days on the 100 ms hold,
 then a one-line `hci_bcm` patch for the BCM4389 if it holds up, and a
 boot-time power-cycle retry only if it doesn't. Issue #77.
