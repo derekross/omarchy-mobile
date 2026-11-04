@@ -4,7 +4,10 @@ import env  # noqa: F401  (paths and sys.path first)
 import ipaddress
 import struct
 import unittest
+from unittest.mock import Mock
 from data_call import pcscf_addresses
+import ims
+from sit import ModemError
 from ims import REG_STATUS, add_pdn_payload, hidden_menu, oma_dm_menu
 
 
@@ -120,6 +123,24 @@ class ImsPayloadTests(unittest.TestCase):
         self.assertEqual(complete, 0)
         self.assertEqual(length, len(packet)-3)
         self.assertEqual(packet[3:9], struct.pack('<HI', 523, 30))
+
+
+if __name__ == '__main__':
+    unittest.main()
+
+
+class Withdraw(unittest.TestCase):
+    def test_sends_stock_del_pdn_info_once(self):
+        client = Mock()
+        ims.withdraw_stale(client)
+        client.request.assert_called_once_with(0x0d38, bytes([1, 2, 0]), timeout=30)
+
+    def test_a_refusal_does_not_stop_the_start(self):
+        client = Mock()
+        client.request.side_effect = ModemError(2, b'')
+        ims.withdraw_stale(client)
+        client.request.assert_called_once()
+
 
 
 if __name__ == '__main__':
