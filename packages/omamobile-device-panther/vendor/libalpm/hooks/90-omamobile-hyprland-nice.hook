@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Give Hyprland CAP_SYS_NICE after every transaction that installs or
+# upgrades it (an upgrade replaces the binary and drops the capability) or
+# this package. Without it panthor refuses Hyprland's high-priority GPU
+# context ("Failed to get a high priority context"), and with a client
+# keeping the GPU busy at the same priority the compositor's frames wait a
+# scheduler tick: 62-63 frames a second at 90 Hz instead of 89-90
+# (device/panther/NOTES.md). Hyprland then also runs SCHED_RR, priority 1,
+# with SCHED_RESET_ON_FORK, so its children start as normal tasks.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = hyprland
+Target = omamobile-device-panther
+
+[Action]
+Description = Giving Hyprland CAP_SYS_NICE for a high-priority GPU context...
+When = PostTransaction
+Exec = /bin/sh -c '[ ! -e /usr/bin/Hyprland ] || /usr/bin/setcap cap_sys_nice+ep /usr/bin/Hyprland'
