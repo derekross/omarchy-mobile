@@ -386,6 +386,13 @@ startok w-cspl; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dsp
 [[ $(cat "$r/run/speaker-protection") == "muted: watchdog: Bottom: CSPL_STATE 1 (error)"* ]] || fail "watchdog: says why"
 startok w-cal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; watchrun
 ((rc == 1)) && muted || fail "watchdog: calibration not applied mutes"
+# OMAMOBILE_SPK_DEFAULT_CAL=1: the firmware's defaults (1) pass, nothing else does
+prep=(FAKE_CAL=$tmp/none.cal OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: OMAMOBILE_SPK_DEFAULT_CAL=1 accepts CAL_SET_STATUS 1"; }
+prep=(FAKE_CAL=$tmp/none.cal OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal0; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 0; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || fail "watchdog: OMAMOBILE_SPK_DEFAULT_CAL=1 still mutes on CAL_SET_STATUS 0"
 startok w-src; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; amx cset "name=Top PCM Source" ASP >/dev/null; watchrun
 ((rc == 1)) && muted || fail "watchdog: DSP bypass mutes"
 startok w-level; amx cset "name=Bottom Digital PCM Volume" 700 >/dev/null; watchrun
