@@ -814,6 +814,22 @@ gated after a wake, and AGENTS.md forbids reading a block that isn't known
 powered and clocked: these resets are the read's, not sleep failures. The
 read is out of the scripts. Logs: `logs/tegu-ufs-iocc-20261103/`.
 
+**The coherency kernel, a long series (2026-11-03 15:38 to 18:47, owner
+present for the end).** The daily kernel with `exynos_ufs_shareability()`
+also at resume (Image only, same release; the commit is
+`ufs-exynos-iocc-resume` on the owner's fork), the same series as S1-R at
+`spm_lvl` 5 with the CPUs' idle states as shipped, the AoC, Trusty and
+Wi-Fi up, no register reads: 135 sleeps woke, every one with UFS fine (no
+link-startup, host-init or I/O lines; the first-attempt `dme-set 0x4021`
+on each wake as always), against dead storage at the 81st (S1-W) and 35th
+(S1-U) earlier the same day. The 136th never woke: the journal ends at
+`Performing sleep operation 'suspend'`, the power key didn't light the
+screen, the owner's Power + Volume Up restarted it, and pstore had nothing
+new. So one run of 135 without a dead-storage wake, which is suggestive
+for the coherency fix and no more (at one in 80, 135 clean wakes happen by
+chance about one time in five), and a silent no-wake that the fix doesn't
+touch and that still needs a record that survives the buttons' reset.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
