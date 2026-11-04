@@ -1,0 +1,181 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-tegu-modem-up: start the Pixel 9a's modem once per boot and, with
+# --phone, the phone service on top (device/tegu MODEM-PLAN M5 and M-SIM,
+# TELEPHONY-PLAN section 2).
+#
+#   omamobile-tegu-modem-up [--gnss] [--phone]
+#     --gnss   gnssd too (OMAMOBILE_MODEM_GNSS=1)
+#     --phone  after CP ONLINE, start omamobile-sitd, and omamobile-mmd when
+#              it's installed (Phone and Messages); omamobile-tegu-modem.service
+#              runs it this way at boot when the owner has enabled it
+#   omamobile-tegu-modem-up --stopped
+#              the profile unit's ExecStopPost: removes this boot's latch
+#
+# The CP drivers come from the running kernel when it carries them (cpif and
+# pcie_gs201_cp, with the device tree's cpif node: the published kernel), else
+# from the bring-up modules in /var/lib/omamobile-tegu/modem (the owner's
+# integration kernel). The modem profile runs as the transient unit
+# omamobile-tegu-modem, whose stop powers the CP off before rfsd goes.
+#
+# Rules this script keeps (AGENTS.md, "Suspend and modem"):
+#  - one CP start per boot: a second start in the same boot stalled in the
+#    ROM, so a boot that loaded CPIF refuses (reboot to start again);
+#  - never stop the modem by hand: the attended reboot's shutdown stops it;
+#  - a latch (/var/lib/omamobile/modem-bringup-started) is written before any
+#    driver loads and removed when the modem profile's unit stops (its
+#    ExecStopPost runs --stopped, at a shutdown) after the start had reached
+#    ONLINE, whatever the stop's result: a start that never reached ONLINE,
+#    or a boot that hung or reset with the modem up, leaves it, and later
+#    boots refuse until a human removes it (TELEPHONY-PLAN section 2.4);
+#  - no system suspend once the CP is up: a sleep inhibitor, its own unit, is
+#    taken before any driver loads and lasts until the reboot.
+set -euo pipefail
+# The overrides are for test/modem-up's scratch root only.
+B=${OMAMOBILE_MODEM_MODULES:-/var/lib/omamobile-tegu/modem}
+LATCH=${OMAMOBILE_MODEM_LATCH:-/var/lib/omamobile/modem-bringup-started}
+# reboot-to notes the boot it ends here (#403): it skips systemd's shutdown,
+# and so the clean stop that removes the latch.
+NOTE=${OMAMOBILE_DELIBERATE_RESTART:-/var/lib/omamobile/deliberate-restart}
+CP_STATE=${OMAMOBILE_MODEM_CP:-/usr/lib/omamobile-vendor/omamobile-modem-cp}
+CHROOT=${OMAMOBILE_VENDOR_CHROOT:-/usr/lib/omamobile-vendor/omamobile-vendor-chroot}
+SYS=${OMAMOBILE_SYS:-/sys}
+DT=${OMAMOBILE_DT:-/proc/device-tree}
+LOG=${OMAMOBILE_MODEM_LOG:-/var/log/omamobile}
+say() { printf 'omamobile-tegu-modem-up: %s\n' "$*"; }
+gnss=0 phone=0 stopped=0
+for a in "$@"; do
+  case $a in
+    --gnss) gnss=1 ;;
+    --phone) phone=1 ;;
+    --stopped) stopped=1 ;;
+    *) say "usage: omamobile-tegu-modem-up [--gnss] [--phone] | --stopped"; exit 2 ;;
+  esac
+done
+[[ $EUID -eq 0 || -n ${OMAMOBILE_MODEM_TEST:-} ]] || { say "run as root"; exit 1; }
+
+# --stopped: the modem profile unit's ExecStopPost. Reaching it at all means
+# the unit stopped (a hang or a reset never gets here), so this boot's latch
+# goes once the start had reached ONLINE, whatever the unit's result: at a
+# shutdown the CP's power-off ends rfsd or cbd before systemd's SIGINT, and
+# the profile's supervisor then exits 1, so the result is never "success"
+# (the omamobile-modem-start --stopped rule on the Pixel 7 Pro). A start that
+# never reached ONLINE, or another boot's latch, is kept.
+if ((stopped)); then
+  [[ -e $LATCH ]] || exit 0
+  id=$(cat "${OMAMOBILE_BOOT_ID:-/proc/sys/kernel/random/boot_id}")
+  if ! grep -q "boot $id\$" "$LATCH"; then
+    say "$LATCH is another boot's ($(head -1 "$LATCH")): kept"
+  elif ! grep -qx online "$LATCH"; then
+    say "this boot's start never reached ONLINE: $LATCH kept"
+  else
+    rm -f "$LATCH"; sync
+    say "modem stopped (${SERVICE_RESULT:-result unknown}): $LATCH removed"
+  fi
+  exit 0
+fi
+
+phone_up() {
+  ((phone)) || return 0
+  # Queued, not waited for: sitd is ready only once it has registered, which
+  # can take longer than the boot unit's timeout, and the bridge would never
+  # be started. The bridge is ordered after sitd.
+  systemctl start --no-block omamobile-sitd.service
+  say "phone service starting"
+  if systemctl cat omamobile-mmd.service >/dev/null 2>&1; then
+    systemctl start --no-block omamobile-mmd.service && say "Phone and Messages bridge starting after it"
+  fi
+}
+
+if systemctl is-active -q omamobile-tegu-modem; then
+  say "already running: $($CP_STATE state 2>/dev/null || echo unknown)"
+  phone_up
+  exit 0
+fi
+if [[ -d $SYS/module/cpif ]]; then
+  say "CPIF was loaded earlier this boot; reboot before starting the modem again"; exit 1
+fi
+boot_id() { cat "${OMAMOBILE_BOOT_ID:-/proc/sys/kernel/random/boot_id}"; }
+# A latch from a boot that reached ONLINE and then ended with reboot-to (a
+# push, a reboot to the bootloader) ended on purpose, not in a hang or a
+# reset: clear it with the note. A start that never reached ONLINE, or a
+# note naming another boot, still refuses.
+if [[ -e $LATCH && -s $NOTE ]] && grep -qx "online" "$LATCH" &&
+   grep -q "boot $(head -c 64 "$NOTE" | tr -d '\n')\$" "$LATCH"; then
+  say "the last boot with the modem up ended with reboot-to: $LATCH removed"
+  rm -f "$LATCH" "$NOTE"
+  sync
+fi
+if [[ -e $LATCH ]]; then
+  say "an earlier start never reached ONLINE, or its boot didn't shut down cleanly ($LATCH, $(cat "$LATCH" 2>/dev/null)): look at /var/log/omamobile/modem.log and the last boot's journal, then remove it to try again"
+  exit 1
+fi
+[[ -e $SYS/bus/platform/devices/154e0000.pinctrl ]] || { say "no FAR_ALIVE pinctrl (old device tree)"; exit 1; }
+
+# Which drivers: the kernel's own, or the bring-up modules
+if [[ -e $DT/cpif ]] && modinfo -n cpif >/dev/null 2>&1 && modinfo -n pcie_gs201_cp >/dev/null 2>&1; then
+  in_tree=1
+else
+  in_tree=0
+  for f in tegu-modem-cpif-activate.ko tegu-pcie0-cp.ko shm_ipc.ko cpif.ko cpif-keep-link.ko gnss_spi.ko gnssif.ko; do
+    [[ -f $B/$f ]] || { say "no in-kernel CP drivers and no $B/$f"; exit 1; }
+  done
+fi
+
+# No system suspend while the CP has been up this boot: a suspend with it
+# ONLINE never woke (2026-10-27). Taken before the drivers load, kept until
+# the reboot; systemctl suspend and logind's suspend then refuse.
+systemctl is-active -q omamobile-tegu-modem-nosleep ||
+  systemd-run -q --unit=omamobile-tegu-modem-nosleep \
+    systemd-inhibit --what=sleep --who=omamobile-tegu-modem \
+    --why="suspend with the modem up isn't qualified on the Pixel 9a" --mode=block sleep infinity
+
+mkdir -p "$(dirname "$LATCH")" "$LOG"
+printf '%s boot %s\n' "$(date -Is)" "$(boot_id)" > "$LATCH"; sync "$LATCH" 2>/dev/null || sync
+
+if ((in_tree)); then
+  say "drivers: the running kernel's"
+  # allow_hw is fixed at load time: a copy loaded without it refuses the
+  # CP's power-on, so it needs a reboot (as omamobile-modem-start checks).
+  if [[ -d $SYS/module/pcie_gs201_cp ]]; then
+    [[ $(cat "$SYS/module/pcie_gs201_cp/parameters/allow_hw" 2>/dev/null) == Y ]] ||
+      { say "pcie_gs201_cp is loaded without allow_hw=1: reboot first"; exit 1; }
+  fi
+  modprobe pcie_gs201_cp allow_hw=1
+  modprobe shm_ipc
+  modprobe cpif
+  modprobe gnss_spi 2>/dev/null || true
+  modprobe gnssif 2>/dev/null || true
+else
+  say "drivers: the bring-up modules in $B"
+  insmod $B/tegu-modem-cpif-activate.ko activate=1
+  insmod $B/tegu-pcie0-cp.ko allow_hw=1
+  insmod $B/shm_ipc.ko
+  # cpif with keep_link_up off at load, or the CP never reaches ONLINE
+  insmod $B/cpif-keep-link.ko keep_link_up=0
+  # stock's GNSS SPI setup: mode 0, 32-bit words swapped in gnss_spi, 64-byte reads
+  insmod $B/gnss_spi.ko word32=2 piece=64 spi_mode=0
+  insmod $B/gnssif.ko
+fi
+echo performance > $SYS/module/pcie_aspm/parameters/policy 2>/dev/null || true
+
+# The profile's preconditions (read-only): the NV partitions read-only,
+# unmounted and matching their checksums, and CPIF's ports present, so this
+# comes after the drivers. A refusal keeps the latch: a human looks first.
+$CHROOT modem check
+
+# A stop of the profile's unit (the reboot's shutdown) is the only thing
+# that removes the latch (--stopped above); a hang or a reset leaves it.
+systemd-run -q --unit=omamobile-tegu-modem -p KillSignal=SIGINT -p TimeoutStopSec=60 \
+  -p "ExecStop=$CHROOT modem stop" \
+  -p "ExecStopPost=${OMAMOBILE_MODEM_UP_SELF:-/usr/bin/omamobile-tegu-modem-up} --stopped" \
+  --setenv=OMAMOBILE_MODEM_GNSS=$gnss \
+  bash -c "exec $CHROOT modem start >> $LOG/modem.log 2>&1"
+if ! $CP_STATE wait-online 60 >/dev/null 2>&1; then
+  s=$($CP_STATE state 2>/dev/null || echo unknown)
+  say "modem not ONLINE ($s); see /var/log/omamobile/modem.log. The latch stays: reboot, read the log, then remove $LATCH"
+  exit 1
+fi
+echo online >> "$LATCH"; sync "$LATCH" 2>/dev/null || sync
+say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log); the latch stays until the profile unit stops at shutdown"
+phone_up

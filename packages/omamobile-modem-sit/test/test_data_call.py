@@ -59,6 +59,41 @@ class LifecycleTests(unittest.TestCase):
             item.stop()
         self.directory.cleanup()
 
+    def test_records_of_an_earlier_start_are_cleared_when_the_modem_lists_none(self):
+        class Empty:
+            def request(self, ident, payload=b'', **kwargs):
+                return b'\0'
+        ims_state, ims_response = data_call.paths(2)
+        registration = ims_state.with_name('ims-registration.json')
+        records = (self.state, self.response, ims_state, ims_response, registration)
+        for path in records:
+            path.write_text('{}')
+        data_call.clear_stale(Empty())
+        for path in records:
+            self.assertFalse(path.exists())
+
+    def test_a_reservation_without_a_confirmed_outcome_stays(self):
+        class Empty:
+            def request(self, ident, payload=b'', **kwargs):
+                return b'\0'
+        ims_state, ims_response = data_call.paths(2)
+        registration = ims_state.with_name('ims-registration.json')
+        for path in (self.state, self.response, ims_state, registration):
+            path.write_text('{}')
+        data_call.clear_stale(Empty())
+        self.assertFalse(self.state.exists() or self.response.exists())     # confirmed: cleared
+        self.assertTrue(ims_state.exists() and registration.exists())      # IMS setup unanswered
+
+    def test_records_stay_while_the_modem_lists_a_bearer(self):
+        class Listed:
+            def request(self, ident, payload=b'', **kwargs):
+                record = bytearray(132)
+                record[2] = 1
+                return b'\1' + bytes(record)
+        self.state.write_text('{}')
+        data_call.clear_stale(Listed())
+        self.assertTrue(self.state.exists())
+
     def test_rejected_setup_leaves_no_ownership(self):
         modem = Modem(status=36)
         with self.assertRaises(RuntimeError):

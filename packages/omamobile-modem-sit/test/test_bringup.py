@@ -67,7 +67,7 @@ class BringupTests(unittest.TestCase):
         with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
              patch.object(bringup, 'radio_state', return_value=0), \
              patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
-             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate', side_effect=TimeoutError), \
+             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), patch.object(bringup, 'activate', side_effect=TimeoutError), \
              patch.object(bringup, 'data_snapshot'), \
              patch.object(bringup, 'start_stack') as stack, patch.object(bringup, 'register') as register:
             with self.assertRaises(TimeoutError):
@@ -101,6 +101,7 @@ class BringupTests(unittest.TestCase):
              patch.object(bringup, 'initial_attach') as attach, \
              patch.object(bringup, 'provision_profiles') as profiles, \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'activate') as activate, \
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), \
              patch.object(bringup, 'data_snapshot'), patch.object(bringup, 'find_attach_bearer', return_value=None), \
              patch.object(bringup, 'start_stack'), patch.object(bringup, 'register'), \
              patch.object(bringup.carrier_apn, 'OVERRIDES', overrides), \
@@ -244,10 +245,58 @@ class BringupTests(unittest.TestCase):
              patch.object(bringup, 'initial_attach') as attach, \
              patch.object(bringup, 'provision_profiles') as profile, \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
-             patch.object(bringup, 'activate', side_effect=TimeoutError) as activate:
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), patch.object(bringup, 'activate', side_effect=TimeoutError) as activate:
             with self.assertRaises(TimeoutError):
                 bringup.start(service, settings)
         return attach, profile, activate
+
+    def withdraw_case(self, *, registered, cleared):
+        service = Mock()
+        registration = Mock()
+        registration.exists.side_effect = [registered, registered and not cleared]
+        with patch.object(bringup, 'wait_for'), patch.object(bringup, 'radio'), \
+             patch.object(bringup, 'radio_state', return_value=0), \
+             patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
+             patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
+             patch.object(bringup, 'REGISTRATION', registration), \
+             patch.object(bringup, 'clear_stale', return_value=cleared), \
+             patch.object(bringup, 'release_owned', return_value=False), \
+             patch.object(bringup, 'withdraw_stale') as withdraw, \
+             patch.object(bringup, 'activate', side_effect=TimeoutError):
+            with self.assertRaises(TimeoutError):
+                bringup.start(service, SETTINGS)
+        return withdraw
+
+    def test_a_stale_ims_registration_is_withdrawn_before_the_bearers(self):
+        self.withdraw_case(registered=True, cleared=5).assert_called_once()
+        self.withdraw_case(registered=False, cleared=4).assert_not_called()
+        # The modem still lists a bearer: nothing cleared, nothing withdrawn.
+        self.withdraw_case(registered=True, cleared=0).assert_not_called()
+
+    def release_case(self, *, owned, listed, confirmed=True, registered=True):
+        client = Mock()
+        response = Mock()
+        response.exists.return_value = confirmed
+        registration = Mock()
+        registration.exists.return_value = registered
+        order = []
+        with patch.object(bringup, 'owned_ids', return_value=set(owned)), \
+             patch.object(bringup, 'call_ids', return_value=set(listed)), \
+             patch.object(bringup, 'modem_owned_ids', return_value=set()), \
+             patch.object(bringup, 'bearer_paths', return_value=(Mock(), response)), \
+             patch.object(bringup, 'REGISTRATION', registration), \
+             patch.object(bringup, 'unregister', side_effect=lambda c: order.append('unregister')), \
+             patch.object(bringup, 'deactivate', side_effect=lambda c, cid: order.append(cid)):
+            return bringup.release_owned(client), order
+
+    def test_a_restart_with_the_radio_on_releases_exactly_our_bearers(self):
+        self.assertEqual(self.release_case(owned={1, 2}, listed={1, 2}), (True, ['unregister', 2, 1]))
+        self.assertEqual(self.release_case(owned={1, 2}, listed={1, 2}, registered=False), (True, [2, 1]))
+        # A bearer we don't own, one we own missing, or an unconfirmed setup: nothing
+        self.assertEqual(self.release_case(owned={1, 2}, listed={1, 2, 4}), (False, []))
+        self.assertEqual(self.release_case(owned={1, 2}, listed={1}), (False, []))
+        self.assertEqual(self.release_case(owned={1, 2}, listed={1, 2}, confirmed=False), (False, []))
+        self.assertEqual(self.release_case(owned=set(), listed={1}), (False, []))
 
     def test_attach_apn_is_used_only_for_the_initial_attach(self):
         attach, profile, activate = self.attach_run('ims.example')
@@ -319,7 +368,7 @@ class OrderTests(unittest.TestCase):
                    patch.object(bringup, 'provision_profiles', side_effect=note('profiles')),
                    patch.object(bringup, 'nr_mode', side_effect=note('nr')),
                    patch.object(bringup, 'data_snapshot'),
-                   patch.object(bringup, 'activate', side_effect=TimeoutError('stop here'))]
+                   patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), patch.object(bringup, 'activate', side_effect=TimeoutError('stop here'))]
         printer = patch('builtins.print')
         if times:
             patches.append(patch.object(bringup.time, 'monotonic', side_effect=times))
@@ -459,7 +508,7 @@ class IsimFallbackWiringTests(unittest.TestCase):
              patch.object(bringup, 'radio_state', return_value=0), \
              patch.object(bringup, 'initial_attach'), patch.object(bringup, 'provision_profiles'), \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
-             patch.object(bringup, 'activate'), patch.object(bringup, 'start_stack'), \
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), patch.object(bringup, 'activate'), patch.object(bringup, 'start_stack'), \
              patch.object(bringup, 'find_attach_bearer', return_value=None), \
              patch.object(bringup, 'ipv6_pcscf', return_value=['x']) as read, \
              patch.object(bringup, 'register', side_effect=RuntimeError('stop')) as register, \

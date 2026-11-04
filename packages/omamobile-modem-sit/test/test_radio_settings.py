@@ -48,3 +48,24 @@ class NrModeTests(unittest.TestCase):
                 radio_settings.nr_mode(client, restore=True)
                 self.assertEqual(client.value, b'\3')
                 self.assertFalse(saved.exists())
+
+    def test_a_restart_in_the_same_boot_keeps_the_saved_original(self):
+        class Client:
+            value = b'\3'
+            sets = 0
+            def request(self, ident, payload=b'', **kwargs):
+                if ident == 0x0749:
+                    return self.value
+                self.sets += 1
+                self.value = payload
+                return b''
+        with tempfile.TemporaryDirectory() as directory:
+            saved = Path(directory)/'nr'
+            with patch.object(radio_settings, 'SAVED_NR', saved):
+                client = Client()
+                radio_settings.nr_mode(client)
+                radio_settings.nr_mode(client)
+                self.assertEqual(client.sets, 1)
+                self.assertEqual(saved.read_bytes(), b'\3')
+                radio_settings.nr_mode(client, restore=True)
+                self.assertEqual(client.value, b'\3')

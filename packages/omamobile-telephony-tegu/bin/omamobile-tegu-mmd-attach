@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Attended attachment of the bridge and session agent to an existing RIL.
+
+--check: read-only preflight (sudo is used for the private sitd socket).
+--attach: preflight, an explicit terminal confirmation, then start only
+          omamobile-mmd.service and this user's omatel-agent.service.
+--system-check: root preflight for the attended script.
+--service-check: root unit preflight; permits an existing call or registration loss.
+No modem/RIL start, restart, stop, enable, radio request or device ioctl.
+"""
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+
+SITD = 'omamobile-sitd.service'
+MODEM = 'omamobile-tegu-modem.service'
+BRIDGE = 'omamobile-mmd.service'
+AGENT = 'omatel-agent.service'
+BUS = 'org.freedesktop.ModemManager1'
+# Only systemd's basic implicit dependencies may start with the bridge.
+# tmp.mount: systemd adds it to any unit that uses /tmp. Neither it nor
+# these pull the CP or the RIL into a start transaction.
+BASIC = {'sysinit.target', 'basic.target', 'system.slice', 'dbus.socket', 'dbus.service', 'tmp.mount'}
+# A service-check refusal exits with this code, which the bridge's drop-in
+# names in RestartPreventExitStatus=, so a refused bridge stays down instead
+# of retrying every RestartSec.
+REFUSED_SERVICE = 3
+
+
+class Refused(RuntimeError):
+    pass
+
+
+def run(args, *, safe_error=False):
+    try:
+        result = subprocess.run(args, check=True, capture_output=True, text=True, timeout=30)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as error:
+        if safe_error and error.stderr.startswith('Attach refused: '):
+            raise Refused(error.stderr.removeprefix('Attach refused: ').strip()) from None
+        raise Refused('a required service/bus check failed; no modem recovery attempted') from None
+    except (OSError, subprocess.SubprocessError):
+        raise Refused('a required service/bus check failed; no modem recovery attempted') from None
+
+
+def properties(unit):
+    result = run(['systemctl', 'show', unit, '--property=ActiveState,MainPID,FragmentPath,Requires,Wants,BindsTo,Requisite,Conflicts,NeedDaemonReload'])
+    return dict(line.split('=', 1) for line in result.splitlines() if '=' in line)
+
+
+def require_active(unit):
+    props = properties(unit)
+    if props.get('ActiveState') != 'active' or not props.get('MainPID', '').isdigit() or int(props['MainPID']) <= 0:
+        raise Refused(f'{unit} must already be active with a running process; start nothing here')
+    return props
+
+
+def socket_status(path):
+    # A live read-only RPC, never the potentially stale public state.json.
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(5)
+            client.connect(str(path))
+            client.sendall(b'{"action":"status"}\n')
+            with client.makefile('rb') as stream:
+                line = stream.readline((1 << 20) + 1)
+        if len(line) > 1 << 20 or not line.endswith(b'\n'):
+            raise ValueError
+        reply = json.loads(line)
+        if reply.get('ok') is not True:
+            raise ValueError
+        return reply['result']
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        raise Refused('cannot read a live sitd status; no modem recovery attempted') from None
+
+
+def system_check(*, require_ready=True):
+    if os.geteuid() != 0:
+        raise Refused('--system-check requires root')
+    root = Path(os.environ.get('OMAMOBILE_TEGU_ROOT', '/'))
+    if not root.is_absolute() or not root.is_dir():
+        raise Refused('invalid preflight root')
+    descriptor = root / 'usr/share/omamobile/device.conf'
+    try:
+        tegu = 'CODENAME=tegu' in descriptor.read_text().splitlines()
+        installed = (root / 'usr/share/omamobile/device-tegu/version').is_file()
+    except OSError:
+        tegu = installed = False
+    if not tegu or not installed:
+        raise Refused('requires the tegu device package and descriptor')
+    ril = require_active(SITD)
+    modem = require_active(MODEM)
+    if ril.get('FragmentPath') != '/usr/lib/systemd/system/' + SITD:
+        raise Refused('migrate the legacy /etc sitd unit to the packaged unit first; see the README')
+    bridge = properties(BRIDGE)
+    if any(p.get('NeedDaemonReload') != 'no' for p in (ril, bridge)):
+        raise Refused('unit files need daemon-reload; inspect them before attaching')
+    if bridge.get('FragmentPath') != '/usr/lib/systemd/system/' + BRIDGE:
+        raise Refused('requires the packaged bridge unit')
+    if MODEM not in ril.get('Requisite', '').split() or SITD not in bridge.get('Requisite', '').split():
+        raise Refused('tegu attach policy is not loaded; inspect the packaged drop-ins')
+    for unit in (ril, bridge):
+        for key in ('Requires', 'Wants', 'BindsTo'):
+            allowed = BASIC
+            # sitd wanting the bridge comes from the bridge's own
+            # WantedBy=omamobile-sitd.service once it is enabled: it starts
+            # the bridge after the RIL, never the RIL or the CP.
+            if unit is ril and key == 'Wants':
+                allowed = BASIC | {BRIDGE}
+            if set(unit.get(key, '').split()) - allowed:
+                raise Refused('bridge or sitd has an unexpected start dependency; inspect its unit before attaching')
+    if set(bridge.get('Conflicts', '').split()) - {'shutdown.target'}:
+        raise Refused('bridge has an unexpected stop dependency; inspect its unit before attaching')
+    # Neither the script nor a direct unit start may stop a real modem daemon.
+    owner = run(['busctl', '--system', 'call', 'org.freedesktop.DBus', '/org/freedesktop/DBus',
+                 'org.freedesktop.DBus', 'NameHasOwner', 's', BUS])
+    if owner == 'b true' and bridge.get('ActiveState') != 'active':
+        raise Refused('ModemManager bus name is already owned by another service')
+    if owner not in ('b true', 'b false'):
+        raise Refused('cannot determine the ModemManager bus owner')
+    competing = properties('ModemManager.service')
+    if competing.get('ActiveState') in ('active', 'activating', 'reloading'):
+        raise Refused('another ModemManager service is running; it will not be stopped here')
+    status = socket_status(root / 'run/omamobile-sit/socket')
+    try:
+        m = status['modem']
+        ready = (m.get('present') is True and m.get('sim', {}).get('state') == 'ready'
+                 and m.get('radio') == 'on' and m.get('registration') in ('home', 'roaming'))
+        calls = status['calls']
+        if not isinstance(calls, list):
+            raise TypeError
+        live = any(c.get('state') != 'terminated' for c in calls)
+    except (AttributeError, KeyError, TypeError):
+        raise Refused('invalid live sitd status') from None
+    if require_ready and (not ready or live):
+        raise Refused('sitd must have a ready SIM, registered radio and no live calls')
+    # PIDs are used only to detect an unexpected RIL/CP service replacement.
+    # Never return the private RPC's numbers, network identities or messages.
+    return {'sitd_pid': ril['MainPID'], 'modem_pid': modem['MainPID']}
+
+
+def user_check():
+    if os.geteuid() == 0:
+        raise Refused('run --check/--attach as the graphical user, not root')
+    state = run(['systemctl', '--user', 'show', AGENT, '--property=LoadState', '--value'])
+    if state != 'loaded':
+        raise Refused('omatel-agent user unit is not installed')
+
+
+def root_check():
+    reply = run(['sudo', '--', str(Path(__file__).resolve()), '--system-check'], safe_error=True)
+    try:
+        result = json.loads(reply)
+        if set(result) != {'sitd_pid', 'modem_pid'}:
+            raise ValueError
+        return result
+    except (TypeError, ValueError):
+        raise Refused('root preflight returned an invalid result') from None
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv in ([], ['--help'], ['-h']):
+        print(__doc__)
+        return 0
+    try:
+        if argv in (['--system-check'], ['--service-check']):
+            try:
+                print(json.dumps(system_check(require_ready=argv == ['--system-check'])))
+            except Refused as error:
+                print(f'Attach refused: {error}', file=sys.stderr)
+                return REFUSED_SERVICE if argv == ['--service-check'] else 1
+            return 0
+        if argv not in (['--check'], ['--attach']):
+            raise Refused('use --check or --attach')
+        if argv == ['--attach'] and not (sys.stdin.isatty() and sys.stdout.isatty()):
+            raise Refused('--attach needs an attended terminal')
+        user_check()
+        before = root_check()
+        print('Preflight passed: existing tegu modem and sitd, registered SIM, no live calls.')
+        if argv == ['--check']:
+            return 0
+        print('This starts only the ModemManager bridge and your Phone/Messages agent.')
+        if input('Type ATTACH to continue: ') != 'ATTACH':
+            raise Refused('attachment cancelled')
+        if root_check() != before:
+            raise Refused('modem or sitd changed during confirmation; no services started')
+        run(['sudo', '--', 'systemctl', 'start', BRIDGE])
+        if root_check() != before:
+            raise Refused('modem or sitd changed while attaching; stop testing and inspect')
+        run(['systemctl', '--user', 'start', AGENT])
+        run(['systemctl', '--user', 'is-active', '--quiet', AGENT])
+        run(['systemctl', 'is-active', '--quiet', BRIDGE])
+        if root_check() != before:
+            raise Refused('modem or sitd changed while attaching; stop testing and inspect')
+        print('Bridge and session agent active. Open Phone or Messages for the attended test.')
+        return 0
+    except (Refused, EOFError, KeyboardInterrupt) as error:
+        print(f'Attach refused: {error}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

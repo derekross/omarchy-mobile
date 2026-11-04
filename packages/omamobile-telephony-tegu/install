@@ -1,0 +1,12 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage the opt-in bridge integration. No service activation or wants links.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR}
+[[ $d == /* && $d != / ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
+install -Dm755 bin/omamobile-tegu-mmd-attach "$d/usr/bin/omamobile-tegu-mmd-attach"
+install -Dm644 systemd/10-tegu-attach.conf "$d/usr/lib/systemd/system/omamobile-mmd.service.d/10-tegu-attach.conf"
+install -Dm644 README.md "$d/usr/share/doc/omamobile-telephony-tegu/README.md"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-telephony-tegu/LICENSE"
+install -Dm644 version "$d/usr/share/omamobile/telephony-tegu/version"

@@ -134,7 +134,7 @@ shell status / quick settings ────────────────�
                                                                                        └─ AoC voice PCMs (EP5/EP4), rmnet0
 ```
 
-- **Why a separate process.** `omamobile-sitd` holds the safety model: the allow-list, the do-not-send list, durable SMS sends that never repeat, and power-off when a hangup isn't confirmed. Keeping D-Bus out of it keeps that code small and keeps its tests (`tools/sit-sim`) as they are. A crash in the bridge can't drop a call, and the bridge can restart freely, which the RIL can't (a second start-up on the same CP isn't supported).
+- **Why a separate process.** `omamobile-sitd` holds the safety model: the allow-list, the do-not-send list, durable SMS sends that never repeat, and radio-off recovery for unconfirmed call release. Keeping D-Bus out of it keeps that code small and keeps its tests (`tools/sit-sim`) as they are. A crash in the bridge can't drop a call, and the bridge can restart freely, which the RIL can't (a second start-up on the same CP isn't supported).
 - **Why Python, with dbus-fast.** This differs from the apps, and it is Q3. The RIL is Python, and ofono2mm shows that Python with dbus-fast carries MM's whole API. The bridge is a translation layer with no performance load, and the same team reads both sides. Read Droidian's BSD-3-Clause original for structure (compatible with our MIT tree), and FuriLabs' GPL-2.0 fork for reference only. Rust with zbus is the alternative if the owner wants one language for everything new. It would add a toolchain to the system side, and the apps wouldn't share code with it anyway, since they use MM's public API.
 - **Changes to `omamobile-sitd`'s socket API** (T0, offline, against `tools/sit-sim`):
   - `subscribe`: a long-lived connection that receives one JSON event per change, with call, SMS, registration, signal and SIM events. The bridge then doesn't poll `state.json`.
@@ -143,7 +143,8 @@ shell status / quick settings ────────────────�
   - Received SMS handed over by ID: the bridge exports each one as an `Sms` object, and a client's `Messaging.Delete` deletes it in sitd's store. That is Chatty's pattern: it copies each message into its own database and deletes it from the modem.
 - **Packaging, as built (T1, `packages/omamobile-mmd` 0.1.0; [MODEM-PLAN](../device/cheetah/MODEM-PLAN.md) "T0/T1: the ModemManager bridge"):**
   - Its own package, `omamobile-mmd`, with `conflicts=(modemmanager)` and **no `provides=`**: nothing in Arch or Arch Linux ARM hard-depends on `modemmanager` (gnome-calls, chatty, networkmanager and geoclue need only libmm-glib; mmsd-tng is AUR-only and also needs only libmm-glib).
-  - It ships `omamobile-mmd.service`, not `ModemManager.service`, with no `dbus-org.freedesktop.ModemManager1.service` alias: `Type=dbus`, `BusName=org.freedesktop.ModemManager1`, `Conflicts=ModemManager.service`, `WantedBy=omamobile-sitd.service`, and not enabled by the package. It also ships the D-Bus bus policy (only root owns the name) and MM's polkit actions.
+  - It ships `omamobile-mmd.service`, not `ModemManager.service`, with no `dbus-org.freedesktop.ModemManager1.service` alias: `Type=dbus`, `BusName=org.freedesktop.ModemManager1`, `WantedBy=omamobile-sitd.service`, and not enabled by the package (up to mmd 0.1.2 it also had `Conflicts=ModemManager.service`). It also ships the D-Bus bus policy (only root owns the name) and MM's polkit actions.
+  - From mmd 0.1.3 (#371), the unit has no `Conflicts=ModemManager.service`: starting the bridge must not stop another modem daemon. Package conflicts and exclusive D-Bus name ownership still provide exclusion. The optional tegu integration adds Requisite on an already active sitd, a read-only service check, and an attended attachment helper; it enables neither modem nor RIL.
   - **No D-Bus activation file**, so no client can start the bridge. Enabled, it starts with `omamobile-sitd`.
   - No `mmcli` and no CLI of our own. Phone runbooks read the modem through libmm-glib with `test/libmm-status.py`; mmcli runs only in the conformance container (`test/conformance`).
 - **Packaging, superseded (the design before T1, kept for history; not built):** a package named `omamobile-mm` with `provides=(modemmanager)` and `conflicts=(modemmanager)`, shipping `ModemManager.service` aliased `dbus-org.freedesktop.ModemManager1.service`, the bus policy, a D-Bus activation file, and `mmcli` or a small `omamobile-mm-cli`. T1 dropped `provides=` (no package needs it), the activation file (so no client can start the bridge) and the takeover of ModemManager's unit name.
@@ -205,6 +206,9 @@ On gs201 the voice path never passes through the application processor. **The Ao
 | `voice-speaker` + `voice-speaker-post` (speakerphone) | both amplifiers at 3.5 A boost peak, TX slot positions swapped, then the "Enable FIR" delta files (`fast_switch1/2.txt`) and `Digital PCM Volume` 800 |
 
 Beyond the mixer paths, the working stack on this phone model sets `Voice Call Audio Enable`, `Voice Call Mic Source` 1, `Incall Sink Mute` 0, `AoC Modem Downlink ASRC Mode` 1 and a mic gain of 130 cB plus 6 dB. It opens **PCM 4 playback (EP5)** and **PCM 11 capture (EP4)** (MODEM-PLAN 6.1). Our card numbers its PCMs as stock does (AGENTS.md), so those numbers hold. `omamobile-sitd`'s `voice_audio.py` does exactly this and restores every control after the call. Our sound card already describes the back ends these paths need: `BT_RX`/`BT_TX`, `USB_RX`/`USB_TX` and `INCALL_RX`/`INCALL_TX` (`device/cheetah/overlays/aoc-sound-test.dtso`).
+
+The 9a's opt-in AEC upload and conservative earpiece route have a separate
+[offline implementation and qualification note](../device/tegu/CALL-AUDIO-TUNING.md).
 
 ### 2.2 The work, per audio route
 
