@@ -854,6 +854,18 @@ module again read 0x00). The module's ACPM writes in the noirq phases may
 also change what they're meant to observe, so the series went on without
 it, and the module gets a write-and-read-back test within one boot first.
 
+**The night of 11-03 to 11-04, counted.** On the coherency kernel without
+the breadcrumbs, the second wake found UFS dead again (link startup failed
+at once, five times; no first-attempt `dme-set` failure, as on every dead
+wake), so setting the coherency bits again at resume isn't the fix and the
+135 before it were luck. A debug kernel (the daily plus a dump of the
+standard and vendor HCI and two UniPro ranges whenever a link startup
+fails, Image only, same release) then ran under a loop that would capture
+each dead-storage wake and recover it with sysrq; its first series had 18
+clean wakes and the 19th never woke. The day's tally of silent no-wakes,
+all on `spm_lvl` 5 with core power-down on: after 135, 9 and 18 clean
+wakes; of dead-storage wakes: after 80, 34 (`spm_lvl` 3) and 1.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
