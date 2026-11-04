@@ -6,14 +6,17 @@
 # speakers stay silent. For a phone whose speaker limits aren't validated
 # (raven: device/raven/AUDIO-PLAN.md). Not enabled by this package: a device
 # package enables it. Once omamobile-speaker-protection is enabled, it owns the
-# amplifiers and this one doesn't run. Hang-safe through the same marker.
+# amplifiers and this one doesn't run (enabled in /etc, or by a device
+# package's wants link in /usr/lib). Hang-safe through the same marker.
 [Unit]
 Description=AoC microphones with both speaker amplifiers muted (no speaker protection)
 Requires=omamobile-aoc.service
 After=omamobile-aoc.service
 Before=systemd-user-sessions.service
 Conflicts=omamobile-speaker-protection.service
+Before=omamobile-speaker-protection.service
 ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service
+ConditionPathExists=!/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service
 ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc
 ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc
 

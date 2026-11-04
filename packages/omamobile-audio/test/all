@@ -362,6 +362,8 @@ pass "mics: fails cleanly without a card, honours the hang marker, --retry clear
 u=systemd/omamobile-audio-mics.service
 grep -qx 'Conflicts=omamobile-speaker-protection.service' $u || fail "the mics unit conflicts with protection"
 grep -qx 'ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once protection is enabled"
+grep -qx 'ConditionPathExists=!/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once a device package enables protection"
+grep -qx 'Before=omamobile-speaker-protection.service' $u || fail "the mics unit's mute on stop finishes before protection starts"
 grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $u && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $u || fail "the mics unit runs on gs101 and gs201 AoCs"
 grep -qx 'ExecStart=/usr/bin/omamobile-speaker-protection mics' $u || fail "the mics unit runs mics"
 pass "the mics unit: never with protection, on both AoCs"

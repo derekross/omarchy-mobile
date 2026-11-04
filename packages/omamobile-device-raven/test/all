@@ -99,6 +99,9 @@ pass "sleep policy"
   || fail "the microphones unit (omamobile-audio 0.5.14) is enabled by a vendor wants link"
 [ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service ] \
   || fail "speaker protection is not enabled on raven (its limits are cheetah's)"
+grep -qx 'blacklist snd_soc_cs35l41_spi' vendor/modprobe.d/omamobile-raven.conf \
+  || fail "the amplifier driver never autoloads (device-raven's own blacklist)"
+grep -q "'omamobile-audio>=0.5.14'" PKGBUILD || fail "device-raven depends on omamobile-audio>=0.5.14 (the microphones unit)"
 pass "the microphones come up with the speakers muted; protection stays off"
 
 # Policy that keeps the phone safe at boot

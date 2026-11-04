@@ -641,13 +641,12 @@ set_status_ok() {
   set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
 }
 
-# Read-only report. Prints the DSP state but never the calibration values.
 # The microphones without the speakers. The AoC sound card waits for both
 # amplifiers as codecs, so with their driver unloaded there are no microphones
 # either. Load the driver and mute both, as start does before anything else,
 # and stop there: no DSP firmware, no unmute. Hang-safe through the same marker.
 mics() {
-  local i
+  local i p
   if [[ -e $marker ]]; then
     log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the amplifiers stay off this boot."
     log "after checking the previous boot's log, retry with: omamobile-speaker-protection mics --retry"
@@ -665,12 +664,20 @@ mics() {
   fi
   for ((i = 0; i < CARD_WAIT * 5; i++)); do find_card && break; sleep 0.2; done
   find_card || fail "no AoC sound card after ${CARD_WAIT} s (both amplifiers probed? the AoC up?)"
+  # alsa-utils restores the saved mixer state from udev when the card
+  # appears; let that run first, then check again that it didn't undo the mute.
+  udevadm settle -t 10 2>/dev/null || true
   mute || fail "muting failed"
+  sleep 1
+  for p in "${AMPS[@]}"; do
+    [[ $(ctl_values "$p Digital PCM Volume") == 0 ]] || fail "the $p amplifier was unmuted after the mute"
+  done
   finish
   set_status "muted: microphones only, speakers off (no protection)"
   log "AoC sound card $card: microphones only, both amplifiers muted (no speaker protection)"
 }
 
+# Read-only report. Prints the DSP state but never the calibration values.
 status() {
   local p i c v name d
   cat "$status_file" 2>/dev/null || echo "no state ($status_file)"
