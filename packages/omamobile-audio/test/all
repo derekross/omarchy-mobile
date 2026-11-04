@@ -304,6 +304,17 @@ mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_r
 : > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused_early "short file"
 pass "refuses a missing, short or invalid calibration, muted"
 
+# OMAMOBILE_SPK_DEFAULT_CAL=1 (a phone with no speaker.cal, as stock's HAL):
+# no file runs on the firmware's defaults, writing no CAL_*; a short file still stops
+: > "$tmp/none.cal"; prep=(FAKE_CAL=$tmp/none.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal
+((rc == 0)) || { cat "$r/out" >&2; fail "default calibration: start succeeds without speaker.cal"; }
+if grep -c 'Protection cd CAL_' "$r/cset.log" >/dev/null; then fail "default calibration: no CAL_* written"; fi
+grep -c 'Top CAL_SET_STATUS' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "default calibration: CAL_SET_STATUS logged"; }
+[[ $(cat "$r/run/speaker-protection") == "ok: stage c8, protection firmware with the firmware's default calibration,"* ]] || { cat "$r/run/speaker-protection" >&2; fail "default calibration: the status line says so"; }
+printf 'abcd' > "$tmp/short4.cal"; prep=(FAKE_CAL=$tmp/short4.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-short; check_refused_early "default calibration: a short file"
+prep=(FAKE_CAL=$tmp/none.cal); run nocal; check_refused_early "no speaker.cal without OMAMOBILE_SPK_DEFAULT_CAL"
+pass "OMAMOBILE_SPK_DEFAULT_CAL=1: no speaker.cal runs on the firmware's defaults, a short file is still refused"
+
 # Runtime PM: an amplifier that cannot be held awake, then kernel log errors
 mktree pm-stuck; echo suspended > "$r/spi/spi6.1/power/runtime_status"; chmod a-w "$r/spi/spi6.1/power/control"
 rc=0; sp start > "$r/out" 2>&1 || rc=$?
@@ -375,6 +386,13 @@ startok w-cspl; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dsp
 [[ $(cat "$r/run/speaker-protection") == "muted: watchdog: Bottom: CSPL_STATE 1 (error)"* ]] || fail "watchdog: says why"
 startok w-cal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; watchrun
 ((rc == 1)) && muted || fail "watchdog: calibration not applied mutes"
+# OMAMOBILE_SPK_DEFAULT_CAL=1: the firmware's defaults (1) pass, nothing else does
+prep=(FAKE_CAL=$tmp/none.cal OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: OMAMOBILE_SPK_DEFAULT_CAL=1 accepts CAL_SET_STATUS 1"; }
+prep=(FAKE_CAL=$tmp/none.cal OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal0; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 0; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || fail "watchdog: OMAMOBILE_SPK_DEFAULT_CAL=1 still mutes on CAL_SET_STATUS 0"
 startok w-src; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; amx cset "name=Top PCM Source" ASP >/dev/null; watchrun
 ((rc == 1)) && muted || fail "watchdog: DSP bypass mutes"
 startok w-level; amx cset "name=Bottom Digital PCM Volume" 700 >/dev/null; watchrun
