@@ -269,7 +269,7 @@ class StartTests(unittest.TestCase):
              patch.object(bringup, 'provision_profiles') as profiles, \
              patch.object(bringup, 'nr_mode'), patch.object(bringup, 'data_snapshot'), \
              patch.object(bringup, 'find_attach_bearer', side_effect=find), \
-             patch.object(bringup, 'activate') as activate, patch.object(bringup, 'start_stack'), \
+             patch.object(bringup, 'clear_stale', return_value=0), patch.object(bringup, 'release_owned', return_value=False), patch.object(bringup, 'activate') as activate, patch.object(bringup, 'start_stack'), \
              patch.object(bringup, 'register') as register, patch('builtins.print'):
             bringup.start(service, settings)
         sent = [c.args[0] for c in service.client.request.call_args_list]

@@ -182,3 +182,9 @@ if [[ -f ../omamobile-modem/systemd/omamobile-modem-boot.target ]]; then
     || fail "the modem unit the link turns on is skipped on a phone that isn't provisioned"
 fi
 pass "sitd waits for the CP; the modem stack is on by default through the target's vendor link; sit-data needs the modem's port"
+
+# The canonical sitd unit gets its modem dependency from this device policy.
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/10-device-modem.conf ]] \
+  || fail "the device sitd policy is staged"
+grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
+pass "the device sitd policy is staged and provided"

@@ -1514,7 +1514,7 @@ tools/phone-ssh 'omamobile-sit status; systemctl is-active omamobile-sitd'
 #   pass: "network: home LTE ..."; "IMS voice: yes, SMS: yes, data bearer: up"; active
 #   stop: the unit fails (journal names the step: SIM timeout, registration deadline, "data call
 #     did not become active" with its status, IMS deadline). Record the step and status, then reboot
-#     before another try (a second start-up on the same CP isn't supported; about one start in twenty
+#     before another try (a second start-up after a failed one isn't qualified; about one start in twenty
 #     crashed the CP during registration on this phone model: the watcher records it)
 #   rollback: `omamobile-sit radio off` (AT+CFUN=0: deregisters; turning it on again may stall
 #     registration until a reboot), then `systemctl stop omamobile-sitd`; or reboot
@@ -2508,8 +2508,9 @@ a status.
 
 About one fresh CP start in twenty crashed during registration on this
 phone model (section 4): a crash is recorded, and a reboot recovers it.
-**A second start-up on the same CP is not supported**: after any failed
-step, reboot before the next try. Every reboot with the modem up powers
+**A second start-up after a failed step isn't qualified**: reboot before
+the next try. (After a clean stop, a second start-up sets up again:
+MODEM-CLIENT, the sitd unit.) Every reboot with the modem up powers
 it off: one recovered UFS error-handler pass, expected (M2.6, not yet
 attributed to an edge; M4.1j/M4.1k proved the reboot itself clean).
 
