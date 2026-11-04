@@ -22,7 +22,13 @@ BRIDGE = 'omamobile-mmd.service'
 AGENT = 'omatel-agent.service'
 BUS = 'org.freedesktop.ModemManager1'
 # Only systemd's basic implicit dependencies may start with the bridge.
-BASIC = {'sysinit.target', 'basic.target', 'system.slice', 'dbus.socket', 'dbus.service'}
+# tmp.mount: systemd adds it to any unit that uses /tmp. Neither it nor
+# these pull the CP or the RIL into a start transaction.
+BASIC = {'sysinit.target', 'basic.target', 'system.slice', 'dbus.socket', 'dbus.service', 'tmp.mount'}
+# A service-check refusal exits with this code, which the bridge's drop-in
+# names in RestartPreventExitStatus=, so a refused bridge stays down instead
+# of retrying every RestartSec.
+REFUSED_SERVICE = 3
 
 
 class Refused(RuntimeError):
@@ -99,7 +105,13 @@ def system_check(*, require_ready=True):
         raise Refused('tegu attach policy is not loaded; inspect the packaged drop-ins')
     for unit in (ril, bridge):
         for key in ('Requires', 'Wants', 'BindsTo'):
-            if set(unit.get(key, '').split()) - BASIC:
+            allowed = BASIC
+            # sitd wanting the bridge comes from the bridge's own
+            # WantedBy=omamobile-sitd.service once it is enabled: it starts
+            # the bridge after the RIL, never the RIL or the CP.
+            if unit is ril and key == 'Wants':
+                allowed = BASIC | {BRIDGE}
+            if set(unit.get(key, '').split()) - allowed:
                 raise Refused('bridge or sitd has an unexpected start dependency; inspect its unit before attaching')
     if set(bridge.get('Conflicts', '').split()) - {'shutdown.target'}:
         raise Refused('bridge has an unexpected stop dependency; inspect its unit before attaching')
@@ -157,7 +169,11 @@ def main(argv=None):
         return 0
     try:
         if argv in (['--system-check'], ['--service-check']):
-            print(json.dumps(system_check(require_ready=argv == ['--system-check'])))
+            try:
+                print(json.dumps(system_check(require_ready=argv == ['--system-check'])))
+            except Refused as error:
+                print(f'Attach refused: {error}', file=sys.stderr)
+                return REFUSED_SERVICE if argv == ['--service-check'] else 1
             return 0
         if argv not in (['--check'], ['--attach']):
             raise Refused('use --check or --attach')

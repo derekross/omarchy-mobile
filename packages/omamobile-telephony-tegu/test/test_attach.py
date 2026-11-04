@@ -100,6 +100,24 @@ class SystemCheck(unittest.TestCase):
                     self.refused()
                     self.units[unit][field] = old
 
+    def test_enabled_bridge_and_implicit_tmp_mount_pass(self):
+        # As on the palmtop once the bridge is enabled: sitd wants it (its
+        # WantedBy=), and systemd adds tmp.mount to both units.
+        self.units[a.SITD]['Wants'] = a.BRIDGE + ' tmp.mount'
+        self.units[a.BRIDGE]['Wants'] = 'tmp.mount'
+        self.assertEqual(a.system_check()['sitd_pid'], '123')
+        # sitd wanting anything else, or the bridge wanting itself, still refuses
+        self.units[a.SITD]['Wants'] = a.BRIDGE + ' ' + a.MODEM
+        self.refused()
+        self.units[a.SITD]['Wants'] = ''
+        self.units[a.BRIDGE]['Wants'] = a.BRIDGE
+        self.refused()
+
+    def test_service_check_refusal_has_its_own_exit_code(self):
+        self.units[a.SITD]['Wants'] = a.MODEM
+        self.assertEqual(a.main(['--service-check']), a.REFUSED_SERVICE)
+        self.assertEqual(a.main(['--system-check']), 1)
+
     def test_competing_bus_owner_or_real_manager_refused(self):
         self.owner = 'b true'
         self.refused()
@@ -269,6 +287,7 @@ class UnitPolicy(unittest.TestCase):
         self.assertNotIn('Conflicts', base)
         self.assertEqual(policy['Requisite'], [a.SITD])
         self.assertEqual(policy['ExecStartPre'], ['/usr/bin/omamobile-tegu-mmd-attach', '--service-check'])
+        self.assertEqual(policy['RestartPreventExitStatus'], [str(a.REFUSED_SERVICE)])
 
     def test_ril_requires_device_policy_and_dependency_fix(self):
         pkg = self.repo / 'packages/omamobile-modem-sit/PKGBUILD'
