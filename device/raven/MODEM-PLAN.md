@@ -821,10 +821,18 @@ binary: a single-module `make` had rebuilt nothing):
     the CP was ONLINE. It isn't in the package: it would cost every
     phone's battery for a raven kernel problem, and the kernel fixes
     below make it unnecessary.
+    (2026-11-04: since omamobile-modem 0.1.13 it is in the package after
+    all, as `omamobile-modem-inhibit`, which cheetah's MODEM-PLAN 6.3 asks
+    for on every phone.)
 - **Next:** CPIF's system suspend. The root port has to stay reachable
   across s2idle, or CPIF has to take the link down itself first (what
   its `s5100_pm_notifier` does on stock is still to read). Separately:
   why the SIM never became ready at 13:24.
+
+The three `pcie-gs201-cp` fixes below are on the branch
+[`omamobile-gs101-cpif-suspend`](https://github.com/robotosaith/linux-omarchy-mobile/commits/omamobile-gs101-cpif-suspend)
+(on `omamobile-gs101-cpif`, not yet signed off), as they ran on
+`omamobile-gs101-int-power`.
 
 **Suspend with the modem up, first fix (2026-10-28, `gdd5e1655ef91`).** The
 cause, from the kernel log and Google's raven `pcie-exynos-rc.c`: with the
