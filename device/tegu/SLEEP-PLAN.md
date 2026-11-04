@@ -866,6 +866,16 @@ clean wakes and the 19th never woke. The day's tally of silent no-wakes,
 all on `spm_lvl` 5 with core power-down on: after 135, 9 and 18 clean
 wakes; of dead-storage wakes: after 80, 34 (`spm_lvl` 3) and 1.
 
+**Two failures, two settings (as of 11-04).** The silent no-wakes and
+the dead-storage wakes look separate. Every silent no-wake on 11-03 and
+11-04 came with core power-down on (after 135, 9 and 18 clean wakes, about
+one in 55), and 102 WFI-only wakes the same day had none (at one in 55,
+about one chance in ten). Dead storage came on both (WFI: after 80; core
+power-down: after 34 at `spm_lvl` 3 and after 1). Next, one setup for both
+questions: WFI only, on the debug kernel, under the capture loop. If WFI
+removes the silent no-wake, nothing stops the loop, and every dead-storage
+wake leaves a register dump and is recovered with sysrq.
+
 ## Not known yet
 
 - Why a boot's sixth or later s2idle hangs or loses its storage while the
