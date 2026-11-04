@@ -221,6 +221,7 @@ sample() { # TAG
     value=
     if [[ $name == voltage_now || $name == current_now ]]; then
       if ! value=$(cat "$bat/$name" 2>/dev/null) || [[ ! $value =~ ^-?[0-9]+$ ]]; then
+        sleep 1
         if ! value=$(cat "$bat/$name" 2>/dev/null) || [[ ! $value =~ ^-?[0-9]+$ ]]; then
           echo "# power-ab: invalid or unavailable $name after retry; stopping" >> "$csv"
           echo "power-ab: invalid or unavailable $name after retry; stopping" >&2

@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 path.write_text(value)
         return subprocess.run(['bash', '-uc', function + '\nbat=$1; csv=/dev/stdout; '
                                'trap \'echo restored > "$bat/restored"\' EXIT; '
-                               'date() { echo 42; }; sample A' ,
+                               'date() { echo 42; }; sleep() { :; }; sample A' ,
                                'test', tmp], capture_output=True, text=True)
 
     for current in ['-120000', '0', '120000']:
@@ -40,11 +40,14 @@ with tempfile.TemporaryDirectory() as tmp:
     for required in ['voltage_now', 'current_now']:
         (battery / 'attempt').unlink(missing_ok=True)
         retry = subprocess.run(['bash', '-uc', function + "\nbat=$1; target=$2; csv=/dev/stdout; "
-                                'date() { echo 42; }; '
+                                'date() { echo 42; }; sleep() { [[ $1 == 1 ]] && touch "$bat/waited"; }; '
                                 'cat() { if [[ $1 == "$bat/$target" && ! -e $bat/attempt ]]; then '
-                                'touch "$bat/attempt"; return 1; fi; command cat "$@"; }; sample A',
+                                'touch "$bat/attempt"; return 1; fi; '
+                                'if [[ $1 == "$bat/$target" ]]; then [[ -e $bat/waited ]] || return 1; fi; '
+                                'command cat "$@"; }; sample A',
                                 'test', tmp, required], capture_output=True, text=True)
         assert retry.returncode == 0 and retry.stdout == '42,A,4000000,-120000,,,\n'
+        (battery / 'waited').unlink()
     result = sample('4000000', '-120000', 'invalid')
     assert result.returncode == 0 and result.stdout == '42,A,4000000,-120000,,,\n'
     for name in ['charge_counter', 'charge_now']:
