@@ -61,6 +61,7 @@ MARK=${OMAMOBILE_MODEM_LATCH:-/var/lib/omamobile/modem-bringup-started}
 UP=${OMAMOBILE_MODEM_UP_MARK:-/var/lib/omamobile/modem-up}
 HOLD=${OMAMOBILE_MODEM_HOLD:-/etc/omamobile/modem-hold}
 REFUSED=${OMAMOBILE_MODEM_REFUSED:-/run/omamobile/modem-refused}
+NOTE=${OMAMOBILE_DELIBERATE_RESTART:-/var/lib/omamobile/deliberate-restart}
 LIB=/usr/lib/omamobile-vendor
 # What tools/phone-provision puts on the phone (the unit's conditions name
 # the same three): without them the modem can't start, so nothing is
@@ -139,6 +140,17 @@ done
 if [[ -e $MARK ]]; then
   say "the last bring-up ($(cat "$MARK")) never reached ONLINE; skipping the modem (omamobile-modem-start --retry)"
   refuse "Off: last bring-up hung"
+fi
+# reboot-to notes the boot it ends (/var/lib/omamobile/deliberate-restart),
+# since it skips systemd's shutdown and so the unit's stop: a modem-up marker
+# from that very boot ended on purpose (bin/omamobile push, a reboot to the
+# bootloader), not in a hang or a reset, so it counts as a clean stop. The
+# note records that the restart was asked for, not that it finished: a hang
+# in the restart itself is the same gap a clean systemctl reboot has.
+if [[ -e $UP && -s $NOTE ]] && grep -q "boot $(head -c 64 "$NOTE" | tr -d '\n')\$" "$UP"; then
+  say "the last boot with the modem up ($(cat "$UP")) ended with reboot-to, as a clean stop does: $UP removed"
+  rm -f "$UP" "$UP".refused-* "$NOTE"
+  sync
 fi
 [[ -e $UP ]] && refuse_unclean
 
