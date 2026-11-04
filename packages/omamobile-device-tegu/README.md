@@ -180,7 +180,8 @@ Never stop the modem by hand; the reboot's shutdown stops it.
 With #403, a `reboot-to` (and so `bin/omamobile push`) with the CP ONLINE
 notes the boot it ends, and the next boot clears that boot's latch and
 starts the modem on its own, after a reboot that didn't power the CP off
-through the profile. That path is still under test on the 9a.
+through the profile. On the 9a that path passed once, on 2026-11-03
+(TELEPHONY-PLAN 2.7).
 
 The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`) hasn't
 run through this script yet; the in-tree drivers have run from the
