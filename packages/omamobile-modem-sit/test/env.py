@@ -15,6 +15,7 @@ os.environ.update({
     'OMAMOBILE_SIT_RUN': os.path.join(TMP, 'run'),
     'OMAMOBILE_SIT_STATE': os.path.join(TMP, 'state'),
     'OMAMOBILE_SIT_CONFIG': os.path.join(TMP, 'modem-sit.conf'),
+    'OMAMOBILE_SIT_DEFAULTS': os.path.join(TMP, 'modem-sit.conf.d'),
     'OMAMOBILE_SIT_DEVICE': 'unix:' + os.path.join(TMP, 'ipc0'),
     'OMAMOBILE_SIT_ROUTER': 'unix:' + os.path.join(TMP, 'router'),
     'OMAMOBILE_SIT_BOOT': 'none',
