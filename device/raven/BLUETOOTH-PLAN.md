@@ -5,8 +5,10 @@ Status (2026-11-03): **pairing and A2DP audio work** (B4): a speaker paired
 from the phone's menu played clean, crackling only while Wi-Fi carried
 traffic at the same time, and reconnected after reboots; the chip came up
 silent after one of seven clean reboots, about the rate seen since B1
-(#77), and a forced restart recovered it.
-Earlier status (2026-10-27): **Bluetooth works**, at every boot since kernel #6 v2's
+(#77), and this time a forced restart recovered it. A test kernel that
+holds BT_REG_ON low 100 ms instead of 30 ms came up in 15 clean reboots out
+of 15 (B4, end).
+Earlier status (2026-10-27, superseded the same day, B3): **Bluetooth works**, at every boot since kernel #6 v2's
 CMU_APM mux fix (POWER-PLAN R4b, `g1de37d2bef30` and later; linux #6, merged).
 The B3 outage below followed kernels whose `assigned-clock-parents` override
 set a reserved bit in the always-on CMU_APM; GrapheneOS's Bluetooth came up
@@ -399,7 +401,7 @@ Clean reboots (`systemctl reboot`) that day:
 | a minute of music from a local file (3 reboots) | up on the first command, speaker reconnected |
 
 Four `reboot-to` restarts earlier the same day (no shutdown) all brought
-it up. The silent chip came back after a forced restart (Power about 30 s:
+it up. This time the silent chip came back after a forced restart (Power about 30 s:
 the first `0xfc18` timed out, the driver's retry after a reset answered),
 and the paired speaker reconnected on its own. The serdev `hci_bcm`
 driver has no shutdown hook, so nothing in the kernel touches BT_REG_ON at
@@ -410,5 +412,24 @@ either. One silent chip in seven clean reboots, not reproduced on demand. That
 fits the rate seen since B1 (about one boot in five), on reboots with no
 Bluetooth audio at all (B1, B3, the 10-27 push), so what ran before the
 shutdown isn't the cause: the chip sometimes stays silent across a warm
-reset. Next: B3's longer BT_REG_ON hold (100 ms, as stock's driver does)
-over a run of clean reboots, then a boot-time power-cycle retry. Issue #77.
+reset.
+
+**B4, a longer BT_REG_ON hold (2026-11-03, `gcbf4d42277a6`).** The daily
+kernel plus one change, `hci_bcm`'s BCM4389 `power_on_delay_ms` from 30 to
+100 ms (branch
+[`omamobile-gs101-bt-hold100-test`](https://github.com/robotosaith/linux-omarchy-mobile/commits/omamobile-gs101-bt-hold100-test),
+NOT FOR MERGE). 100 ms is the stock HAL's `BigHammerBtRegOnDelay` (B3);
+Google's driver itself holds REG_ON low 30 ms (`nitrous_rfkill_set_power()`
+in `nitrous.c`), as `hci_bcm` does.
+
+| | 30 ms (`ge1e6adb69bbf`) | 100 ms (`gcbf4d42277a6`) |
+| --- | --- | --- |
+| clean `systemctl reboot` | 1 silent in 7 that day, about 1 in 5 since B1 | 0 in 15 |
+| first boot of the new kernel (the push's `reboot-to` from the 30 ms kernel) | | silent (`0xfc18` timeouts, `BCM: Reset failed (-110)`) |
+| recovery from a silent chip | a forced restart only (B1, B3, that morning) | the next clean reboot, on its own |
+
+At the old rate, 15 clean reboots in a row would come by chance about one
+time in fifteen: strong evidence, not proof, and the one failure came
+straight out of a 30 ms kernel's run. Next: more days on the 100 ms hold,
+then a one-line `hci_bcm` patch for the BCM4389 if it holds up, and a
+boot-time power-cycle retry only if it doesn't. Issue #77.
