@@ -104,3 +104,18 @@ blank/unprepare), the gamma copy from 0xD8 to 0x65 and the circle centred
 at x 540, y 1713. `omamobile-fingerprint-lhbm.conf` has the
 `panel_samsung_s6e3fc3` line. Not run on the phone: check the circle's
 place and the 3 s timeout before P5.
+
+## 6. Results
+
+On 2026-11-04, kernel `7.3.0-rc6-omamobile-push1-g44048a9aa795` with the
+fingerprint DT commit (its LDO15S `disabled`, enabled by this overlay) and
+the sound and camera overlays the phone already ran; only
+`vendor_kernel_boot` was reflashed, rebuilt byte for byte the same way first.
+
+| Gate | Result |
+|---|---|
+| P1 | Passed: `fingerprint` present and `disabled`, no `vdd_udfps`; modules, Wi-Fi, touch, sound, failed units as before; kernel errors the same kinds as the three boots before (60-72) |
+| P2 | Passed (Trusty was on through the sound overlay): "trusty version: Project: cloudripper", "selected api version: 5", `/dev/trusty-ipc-dev0`, "refusing to take cpu 7 offline" |
+| P3 | Passed: keymaster, gatekeeper and apploader "open" |
+| P4 | Passed with goodix_fp blacklisted and loaded by hand: "irq 129, supply switched, netlink 25"; `vdd_udfps` 0 users before, 1 (enabled) while `/dev/goodix_fp` was open (152 sensor interrupts), 0 (disabled) after; `regulator_summary` otherwise identical (81 lines) |
+| P5 | Not run (writes RPMB: Ángel's yes first) |
