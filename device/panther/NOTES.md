@@ -5,6 +5,21 @@ Findings from real hardware, newest first. [BRINGUP-M1.md](BRINGUP-M1.md) is the
 
 The board file (`gs201-panther.dts`) was merged as [linux-omarchy-mobile#108](https://github.com/derekross/linux-omarchy-mobile/pull/108), and the FT3658 driver as [#109](https://github.com/derekross/linux-omarchy-mobile/pull/109); the test kernels below add one local commit each on top.
 
+## 2026-11-04: Hyprland needs CAP_SYS_NICE for 90 frames a second
+
+With a client keeping the GPU busy, the screen stopped at about 63 frames a second at 90 Hz. Hyprland asks panthor for a high-priority context, and panthor only grants it with `CAP_SYS_NICE` (or to the DRM master of panthor itself; Hyprland is master of gs-decon): its log said "Failed to get a high priority context", so its groups ran at the client's priority and its frames could wait a scheduler tick.
+
+Measured on kernel `7.3.0-rc6-omamobile-push1-g44048a9aa795` (local branch with the 90 Hz mode, not on `omamobile`), mpv playing `testsrc2` at 1080x2400@90 for 10 s, counting gs-decon's flips, each case after a reboot, twice:
+
+| Hyprland | flips a second |
+| --- | --- |
+| as installed | 62, 63 |
+| `setcap cap_sys_nice+ep /usr/bin/Hyprland` | 89, 90 |
+| capability removed again (control) | 63, 63 |
+| capability back | 90, 90 |
+
+With it the log says "Got a high priority context". Hyprland also switches itself to SCHED_RR, priority 1, with SCHED_RESET_ON_FORK. No flip timeouts or late flips in any run; the panel ran at 90 Hz throughout. The package's pacman hook re-applies the capability after each Hyprland upgrade (an upgrade replaces the binary and drops it). Not checked: power use, 60 Hz, and the Pixel 7 Pro.
+
 ## 2026-11-02: AVB footers on boot and init_boot
 
 A second Pixel 7 (issue #342), with stock CP3A.261005.002.A1 sideloaded as a full OTA on both slots, never started slot B. The screen stayed black, no USB gadget appeared, and after about 72 s it was back in stock recovery on slot A. This was the case with the published kernel too. It's the Pixel 7 Pro's issue #11 (device/cheetah/NOTES.md, 2026-10-28):

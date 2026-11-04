@@ -28,6 +28,8 @@ install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
   "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
 install -Dm644 vendor/modprobe.d/omamobile-display.conf \
   "$destination/usr/lib/modprobe.d/omamobile-display.conf"
+install -Dm644 vendor/libalpm/hooks/90-omamobile-hyprland-nice.hook \
+  "$destination/usr/share/libalpm/hooks/90-omamobile-hyprland-nice.hook"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 device.conf \

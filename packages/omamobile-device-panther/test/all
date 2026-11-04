@@ -82,6 +82,7 @@ for f in usr/bin/reboot-to \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-display.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
+         usr/share/libalpm/hooks/90-omamobile-hyprland-nice.hook \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-panther/version \
          usr/share/licenses/omamobile-device-panther/LICENSE \
@@ -126,6 +127,22 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
 pass "install stages the udev rules, the USB link and its rescue, and the mirrorlist, and nothing that marks a slot or starts hardware"
+# Hyprland's CAP_SYS_NICE (a high-priority panthor context): re-applied by a
+# pacman hook after every Hyprland install or upgrade, and after this package's.
+hook=$tmp/root/usr/share/libalpm/hooks/90-omamobile-hyprland-nice.hook
+grep -qx 'Type = Package' "$hook" && grep -qx 'Target = hyprland' "$hook" && grep -qx 'Target = omamobile-device-panther' "$hook" \
+  && grep -qx 'Operation = Upgrade' "$hook" && grep -qx 'When = PostTransaction' "$hook" || fail "the hook runs after Hyprland's and this package's installs and upgrades"
+exec_line=$(sed -n 's/^Exec = //p' "$hook")
+[[ $exec_line == *"/usr/bin/setcap cap_sys_nice+ep /usr/bin/Hyprland"* ]] || fail "the hook gives Hyprland cap_sys_nice and nothing more"
+grep -q 'libcap' PKGBUILD || fail "the hook needs setcap (libcap)"
+# the Exec line itself: no Hyprland, nothing done; with one, setcap runs on it
+mkdir -p "$tmp/hk/usr/bin"; printf '#!/bin/sh\necho "$*" >> "%s"\n' "$tmp/hk/setcap.log" > "$tmp/hk/usr/bin/setcap"; chmod +x "$tmp/hk/usr/bin/setcap"
+sh -c "$(eval "printf %s ${exec_line#/bin/sh -c }" | sed "s#/usr/bin/#$tmp/hk/usr/bin/#g")" || fail "the hook passes without Hyprland"
+[[ ! -e $tmp/hk/setcap.log ]] || fail "no setcap without Hyprland"
+: > "$tmp/hk/usr/bin/Hyprland"
+sh -c "$(eval "printf %s ${exec_line#/bin/sh -c }" | sed "s#/usr/bin/#$tmp/hk/usr/bin/#g")" || fail "the hook runs setcap"
+[[ $(cat "$tmp/hk/setcap.log") == "cap_sys_nice+ep $tmp/hk/usr/bin/Hyprland" ]] || fail "setcap gets cap_sys_nice+ep on Hyprland"
+pass "a pacman hook gives Hyprland CAP_SYS_NICE after its installs and upgrades, and this package's"
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
