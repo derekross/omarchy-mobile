@@ -218,10 +218,13 @@ Item {
 
   // The file is replaced with rename(2) on every change; a quick re-read
   // while anything shows makes sure a missed change cannot leave it stale.
+  // Without the file (the fingerprint stack starts after the shell, or
+  // stopped) the watch has nothing to follow, and the directory may not
+  // exist yet either, so look for it again until it appears.
   Timer {
     interval: root.screenOpen ? 500 : 2000
     repeat: true
-    running: root.shown || root.screenOpen
+    running: root.shown || root.screenOpen || root.sensor === null
     onTriggered: stateFile.reload()
   }
 
