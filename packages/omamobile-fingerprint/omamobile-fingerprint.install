@@ -13,8 +13,10 @@ post_upgrade() {
     (umask 077; echo "$(date -Is) started before the upgrade (no token)" > /run/omamobile-fp/storageproxyd-started)
   fi
   if [[ $(vercmp "$2" 0.1.16) -lt 0 ]] && ! grep -q 'pam_fprintd.so timeout=' /etc/pam.d/omarchy-lock-fingerprint 2>/dev/null; then
-    echo "omamobile-fingerprint 0.1.16: the lock's fingerprint timeout is now 600 s (#422), but your"
-    echo "  /etc/pam.d/omarchy-lock-fingerprint was changed; see its .pacnew for the new auth line."
+    echo "omamobile-fingerprint 0.1.16: the lock's fingerprint timeout is now 600 s (#422), but"
+    echo "  /etc/pam.d/omarchy-lock-fingerprint was changed since it was installed (by you, or by"
+    echo "  omarchy-apply-lock); see its .pacnew for the new auth line, or run omarchy-apply-lock"
+    echo "  again once omamobile-omarchy 0.1.34 is installed: it writes the same line."
   fi
   echo "omamobile-fingerprint: reboot soon: fingerprint starts again at the next boot (one storage proxy per boot)"
 }
