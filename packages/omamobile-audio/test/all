@@ -339,6 +339,37 @@ rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp start > "$r/out" 2>&1 || rc=$?; prep=(
 [[ -e $r/state/speaker-protection-started ]] || fail "marker: kept for the human"
 pass "a hang marker from the last boot keeps the amplifiers off"
 
+# --- microphones only: the driver for the card, both amplifiers muted, nothing else
+mktree mics; rc=0; sp mics > "$r/out" 2>&1 || rc=$?
+((rc == 0)) || { cat "$r/out" >&2; fail "mics succeeds"; }
+grep -c '^snd_soc_cs35l41_spi$' "$r/modprobe.log" >/dev/null || fail "mics: loads the amplifier driver"
+muted || fail "mics: both amplifiers muted"
+[[ -z $(grep -v 'Digital PCM Volume=0$' "$r/cset.log") ]] || fail "mics: sets nothing but the mute (no DSP, no source, no unmute)"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics: removes the hang marker"
+[[ $(cat "$r/run/speaker-protection") == "muted: microphones only"* ]] || fail "mics: status says microphones only"
+pass "mics: the amplifier driver loaded, both amplifiers muted, nothing else set"
+
+mktree mics-nocard; rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) || fail "mics without a card fails"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics without a card: marker removed after a clean failure"
+mktree mics-marker; echo 2026-01-01T00:00:00 > "$r/state/speaker-protection-started"
+rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/modprobe.log && -e $r/state/speaker-protection-started ]] || fail "mics: a hang marker keeps the driver unloaded"
+rc=0; sp mics --retry > "$r/out" 2>&1 || rc=$?
+((rc == 0)) && muted || fail "mics --retry clears the marker and comes up muted"
+pass "mics: fails cleanly without a card, honours the hang marker, --retry clears it"
+
+u=systemd/omamobile-audio-mics.service
+grep -qx 'Conflicts=omamobile-speaker-protection.service' $u || fail "the mics unit conflicts with protection"
+grep -qx 'ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once protection is enabled"
+grep -qx 'ConditionPathExists=!/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once a device package enables protection"
+grep -qx 'Before=omamobile-speaker-protection.service' $u || fail "the mics unit's mute on stop finishes before protection starts"
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $u && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $u || fail "the mics unit runs on gs101 and gs201 AoCs"
+p=systemd/omamobile-speaker-protection.service
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $p && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $p || fail "speaker protection runs on gs101 and gs201 AoCs"
+grep -qx 'ExecStart=/usr/bin/omamobile-speaker-protection mics' $u || fail "the mics unit runs mics"
+pass "the mics unit: never with protection, on both AoCs"
+
 # --- the watchdog ----------------------------------------------------------------
 watchrun() {  # run the watchdog briefly on a healthy started tree, with the events of at()
   prep=(OMAMOBILE_WATCH_INTERVAL=0.05 OMAMOBILE_WATCH_GRACE=0.1 OMAMOBILE_WATCH_HB_TIMEOUT=0.3
@@ -566,6 +597,23 @@ rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 "${c9prep[@]}"); sp star
   { cat "$r/out" >&2; fail "auto: without a verification stamp, media at 737/10"; }
 pass "auto: c9 at the everyday loud levels only with speaker_protection=1 and a stamp, media otherwise"
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
+# c9 only on a system with c9 levels of its own: raven, with speaker_protection=1
+# and a stamp for its own firmware, stays at media, and an explicit c9 is refused
+mktree raven-c9; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+prep=(OMAMOBILE_SPK_SYSTEM=raven); d=$(sp digest | awk '{print $2}'); prep=()
+[[ -n $d ]] || fail "raven: a digest of its own firmware"
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] && grep -c "stage media" "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "auto on raven with speaker_protection=1 and a matching stamp: media at 737/10, never c9"; }
+mktree raven-c9x; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=c9 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+check_refused_early "c9 on raven"
+grep -c 'no levels measured for raven' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "c9 on raven: says why"; }
+pass "stage c9 only on a system with c9 levels of its own (raven stays at media)"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
 mktree tmpfw; c9prep=(OMAMOBILE_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"
 for f in "$r"/fw/cirrus/*; do echo changed > "$tmp/otherfw/cirrus/${f##*/}"; done
@@ -775,6 +823,10 @@ mktree e-w-c8; rc=0; sp start > "$r/out" 2>&1 || rc=$?; earset 658 6 0; watchrun
 media; run e-w-spk; amx cset "name=Top PCM Source" ASP >/dev/null; amx cset "name=Top Analog PCM Volume" 6 >/dev/null; ewatch
 ((rc == 1)) && muted || fail "earpiece watchdog: the bypass without earpiece mode still mutes"
 pass "earpiece watchdog: the top within 737/6 through ASP, the bottom muted, no DSP rule; mutes on anything else, an unknown mode included"
+media; run e-raven; : > "$r/cset.log"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_SYSTEM=raven); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -s $r/cset.log ]] && grep -c 'no earpiece check for raven' "$r/ear.out" >/dev/null || { cat "$r/ear.out" >&2; fail "earpiece on is refused on raven (no C9k there yet), nothing written"; }
+pass "earpiece on only where C9k passed (cheetah)"
 
 # omamobile-speaker-protection earpiece on|off with a live watchdog
 bgwatch() {
@@ -1128,7 +1180,7 @@ pass "follow: the speakers' left and right from the sensor proxy's orientation"
 # --- install ---------------------------------------------------------------------
 ./install "$tmp/root"
 for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-speaker-protection.service \
-         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/omamobile-audio/speaker_dsp.py \
+         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/systemd/system/omamobile-audio-mics.service usr/lib/omamobile-audio/speaker_dsp.py \
          usr/lib/udev/rules.d/70-omamobile-cs35l41.rules \
          usr/lib/modprobe.d/omamobile-audio.conf etc/omamobile/speaker.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \
