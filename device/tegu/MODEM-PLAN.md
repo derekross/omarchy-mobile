@@ -2017,10 +2017,37 @@ is a US MVNO on a large LTE network.
   (`omamobile-sit sms send`) reached the owner's phone. A text sent to
   the palmtop's own number was accepted ("sent") and never came back,
   which is common on this network.
-- **SIM-10:** no call; the 9a has no audio route.
+- **SIM-10:** no call on 11-02; the 9a had no audio route. See "Calls"
+  below.
 - **SIM-11 passed:** radio off, the RIL stopped, an attended reboot
   (the unit's stop powered the CP off during shutdown), then M0.1: the
   six partitions unchanged, `cpif` not loaded, UFS error handler 0.
+
+#### Calls (2026-11-03)
+
+With `omamobile-modem-sit` 0.3.11 (speakerphone audio for the 9a's AoC
+card, omarchy-mobile #367, on #364 and #356) and `[audio] card = auto`:
+
+- **On the daily kernel:** an outgoing call to the owner's phone, answered;
+  the far end's voice came out of the palmtop's speaker, and the palmtop's
+  microphone carried it back (heard at the far end as an echo: there is no
+  echo cancellation yet). A second outgoing call and an incoming call
+  (`omamobile-sit answer` while it rang) behaved the same. sitd logged
+  "AoC tegu speakerphone prepared at conservative TAS gain" at each start
+  and "AoC call routes restored" after each hang-up; UFS error handler 0.
+- **On in-tree drivers end to end** (`7.3.0-rc6-omamobile-push1-g253ddb231a89`:
+  `omamobile` plus the open kernel PRs: the modem link #187 with its PCIe
+  stack, GNSS #185, and #162's AoC, GSA and Trusty from the device tree):
+  the AoC up with 93 services and the `google,tegu-aoc-snd-card` card,
+  CPIF and the in-tree host booted the CP to ONLINE, and then an outgoing
+  and an incoming call with audio both ways, mobile data over `rmnet0`
+  (pings, HTTPS 200) and a text that arrived. The TAS gains read back at
+  -20 dB during the calls, the mixer routes matched their saved state
+  after, the AoC kept 93 services with nothing in its log, the same boot
+  throughout, no oops or WARN, no UFS errors.
+
+Left for calls: echo cancellation on speakerphone, an earpiece mode, the
+Phone app (through `omamobile-mmd`), and starting the modem at boot.
 
 The run kept the full refused record (292 bytes: status 36, CID 1, the
 IPC extension version at 132, an unidentified extension byte at 133, the
