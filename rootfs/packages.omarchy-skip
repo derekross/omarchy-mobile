@@ -4,3 +4,8 @@
 # are left out anyway and listed in the image's MANIFEST.
 # Registers binfmt handlers to run other architectures' binaries: a laptop's job
 qemu-user-static-binfmt
+# Hyprbars titlebars for floating workspaces (Omarchy 4.5): a plugin pinned to
+# one exact Hyprland version, so it skews against our packages/hyprland build
+# and would pull Omarchy's Hyprland over ours (#433); a phone has no floating
+# workspaces to put titlebars on
+omarchy-hyprland-titlebars
