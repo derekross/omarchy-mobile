@@ -36,6 +36,10 @@ install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
   "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
+install -Dm755 bin/omamobile-sleep "$destination/usr/bin/omamobile-sleep"
+install -d "$destination/usr/lib/systemd/system-sleep"
+ln -sfn "$(readlink vendor/systemd/system-sleep/omamobile)" \
+  "$destination/usr/lib/systemd/system-sleep/omamobile"
 for conf in omamobile-display.conf omamobile-wifi.conf; do
   install -Dm644 "vendor/modprobe.d/$conf" "$destination/usr/lib/modprobe.d/$conf"
 done

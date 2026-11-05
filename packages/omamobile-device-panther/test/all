@@ -63,6 +63,14 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     cmp -s "$f" "../omamobile-device-cheetah/$f" || fail "$f drifted from the cheetah package"
   done
   pass "the Wi-Fi files match the cheetah package"
+  # So does sleep: Wi-Fi unloads around suspend unless
+  # /etc/omamobile/wifi-keep-across-sleep exists, and for the rest of the
+  # boot after a wake fails in the Wi-Fi device.
+  cmp -s bin/omamobile-sleep ../omamobile-device-cheetah/bin/omamobile-sleep \
+    || fail "omamobile-sleep drifted from the cheetah package"
+  [[ $(readlink vendor/systemd/system-sleep/omamobile) == "$(readlink ../omamobile-device-cheetah/vendor/systemd/system-sleep/omamobile)" ]] \
+    || fail "the system-sleep link drifted from the cheetah package"
+  pass "omamobile-sleep and its system-sleep link match the cheetah package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-panther.install$' PKGBUILD \
@@ -98,6 +106,7 @@ for f in usr/bin/reboot-to \
          usr/bin/omamobile-wifi-start usr/lib/systemd/system/omamobile-wifi.service \
          usr/lib/modprobe.d/omamobile-wifi.conf \
          usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
+         usr/bin/omamobile-sleep \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
@@ -126,7 +135,7 @@ grep -qx 'options gs_dsim_cmd allow_tx=1' "$tmp/root/usr/lib/modprobe.d/omamobil
 [[ -x $tmp/root/usr/bin/omamobile-usb-rescue ]] || fail "omamobile-usb-rescue is executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
   || fail "omamobile-usb-rescue starts at boot"
-for tool in omamobile-wifi-start omamobile-wlan-mac; do
+for tool in omamobile-wifi-start omamobile-wlan-mac omamobile-sleep; do
   [[ -x $tmp/root/usr/bin/$tool ]] || fail "$tool is executable"
 done
 # Wi-Fi is the one radio started at boot, and only through its guard: the
@@ -143,6 +152,10 @@ grep -q 'mode=' bin/omamobile-wifi-start && fail "omamobile-wifi-start never loa
 grep -q '^ConditionPathExists=/sys/bus/platform/devices/14520000.pcie$' \
   "$tmp/root/usr/lib/systemd/system/omamobile-wifi.service" \
   || fail "omamobile-wifi.service needs the PCIe controller in the DTB"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system-sleep/omamobile") == /usr/bin/omamobile-sleep ]] \
+  || fail "systemd-sleep runs omamobile-sleep"
+grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep \
+  || fail "omamobile-sleep unloads Wi-Fi before suspend"
 grep -q 'i2c-tools' PKGBUILD || fail "omamobile-usb-rescue needs i2c-tools"
 grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is panther"

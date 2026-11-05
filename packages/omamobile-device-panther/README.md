@@ -14,6 +14,7 @@ Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panthe
 | `vendor/systemd/logind.conf.d/10-omamobile-power-key.conf` | `/usr/lib/systemd/logind.conf.d` | A short power press does not power the phone off. Same drop-in as the Pixel 7 Pro. The long press stays the PMIC reset |
 | `vendor/modprobe.d/omamobile-display.conf` | `/usr/lib/modprobe.d` | Lets `gs_dsim_cmd` send DCS packets to the panel (`allow_tx=1`), so the panel driver can set the brightness and turn the display off and on. The driver ships with sending off; brightness passed DISPLAY-PLAN gate D2 on the Pixel 7 |
 | `vendor/systemd/sleep.conf.d/10-omamobile.conf` | `/usr/lib/systemd/sleep.conf.d` | Suspend means suspend-to-idle: the kernel offers `deep`, but Linux has no gs201 sleep sequence, and the phone doesn't wake from it. No hibernation. Same drop-in as the Pixel 7 Pro |
+| `bin/omamobile-sleep`, `vendor/systemd/system-sleep/omamobile` | `/usr/bin`, `/usr/lib/systemd/system-sleep` (a link to the script) | Unloads Wi-Fi before every suspend and reloads it through the guarded service after, unless `/etc/omamobile/wifi-keep-across-sleep` exists; after a wake that fails in the Wi-Fi device it goes back to unloading for the rest of the boot. Also logs the wake reason and restarts fprintd after a wake. Wi-Fi staying loaded across suspend hasn't run on a Pixel 7. Same script as the Pixel 7 Pro |
 | `vendor/NetworkManager/conf.d/10-omamobile-usb.conf` | `/usr/lib/NetworkManager/conf.d` | Keeps NetworkManager off that link |
 | `etc/omamobile-mirrorlist` | `/etc/pacman.d/omamobile-mirrorlist` | Where pacman finds the `[omamobile]` repository. Same file as the Pixel 7 Pro package |
 | `omamobile-device-panther.install` | pacman hook | Adds `[omamobile]` to `pacman.conf` before `[omarchy]`, once. Same script as the Pixel 7 Pro package |
@@ -22,4 +23,4 @@ Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panthe
 
 `./build [DIR]` compiles `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the copies when it is run from the repository.
 
-Not in this package: the boot-success marker, the sleep hook that unloads Wi-Fi around s2idle, the modem, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook.
+Not in this package: the boot-success marker, the modem, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook.
