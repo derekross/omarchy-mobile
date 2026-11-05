@@ -3,6 +3,25 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
+
+- **The published `omamobile` kernel brings up lynx touch on this unit.** With
+  the merged GT9895 node and the S2MPG12 LDO25M/LDO26M regulators, the
+  touchscreen binds as `Goodix Berlin Capacitive TouchScreen` (`event0`) and
+  Hyprland uses it. Kernel release
+  `7.3.0-rc6-omamobile-push1-gfbbcac19d8ea`.
+- **This unit's bootloader reports devinfo 3.11, not 3.15.** It is still on the
+  Android 15 factory build (`BP1A.250505.005.B1`, bootloader `lynx-15.2`).
+  `omamobile-device-lynx` 0.2.0 only accepted 3.15, so
+  `omamobile-boot-success` refused to write and the slot was left unmarked.
+- **The A/B bytes are at the same offsets in 3.11 and 3.15.** A read-only
+  `omamobile-bootctl dump` decoded slot a and b correctly on 3.11; marking slot
+  b successful changed only `0x35` (`0x04` -> `0x06`), and the bootloader then
+  kept the slot.
+- **Fix:** `omamobile-bootctl` now accepts a verified-layout table of 3.11 and
+  3.15 instead of a single hard-coded version, with a synthetic 3.11 test and
+  an unverified-3.14 rejection test in the lynx package.
+
 ## 2026-10-27: Wi-Fi parked
 
 - **The chip's boot ROM stops at its authentication stage,** `pbl_auth.c`, after reading only the ELF header and the hash segment of an image byte-identical to stock's. Every host-side difference two testers could act on was tried, one change per boot, and all were negative. The write-up, the ruled-out list, both stop conditions and what is left are in [WIFI-PLAN.md](WIFI-PLAN.md). The maintainer agreed on #36 that parking here is the right call.
