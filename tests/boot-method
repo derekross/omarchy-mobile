@@ -19,7 +19,7 @@ done
 export PATH="$t/bin:$PATH" CALLS="$t/calls"
 unset KERNEL_OUT KERNEL_DIR KERNEL_BASE WORK || true
 fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
-for method in ram-only uboot-ext4 unknown ''; do
+for method in ram-only uboot-ext4 android-v0 unknown ''; do
   printf 'CODENAME=probe\nBOOT_METHOD="%s"\nBOOT_IMAGES=""\nUFS_RW=""\n' "$method" > "$t/repo/device/probe/device.conf"
   cp "$t/repo/device/probe/device.conf" "$t/bundle/device.conf"
   for cmd in images flash push; do
