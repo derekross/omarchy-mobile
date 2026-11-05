@@ -15,6 +15,16 @@ A stock factory Pixel 7 (CP3A.261005.002.A1 on both slots), offered on [#342](ht
 - **Radio backup:** with this descriptor's `NV_PARTS` (cheetah's list, each partition found once by PARTNAME), `tools/nv-backup` took a read-only backup and `--check` read every partition as SAME.
 - **Haptics:** with `cs40l26.wmfw` and `cs40l26.bin` from this unit's OTA (`tools/extract-vendor-firmware -d panther`), the CS40L26 firmware runs (7.2.91) and vibrates.
 
+## 2026-11-02: AVB footers on boot and init_boot
+
+A second Pixel 7 (issue #342), with stock CP3A.261005.002.A1 sideloaded as a full OTA on both slots, never started slot B. The screen stayed black, no USB gadget appeared, and after about 72 s it was back in stock recovery on slot A. This was the case with the published kernel too. It's the Pixel 7 Pro's issue #11 (device/cheetah/NOTES.md, 2026-10-28):
+
+- **What stock chains** [V]: the factory image's `vbmeta.img` (`avbtool info_image`) chains `boot` (rollback index location 2) and `init_boot` (location 4), as cheetah's does. Its `boot.img` and `init_boot.img` footers carry rollback index 1791158400 and security patch 2026-10-05, padded to 64 and 8 MiB, which are `getvar partition-size:boot_b` and `init_boot_b`.
+- **Why the first unit booted without footers** [I]: it ran LineageOS before the port. Its stock install wrote the bootloader and radio to slot B, but not `vbmeta_b`, so slot B kept a vbmeta that doesn't chain them. The guard keeps `vbmeta_b` read-only and outside `/dev/disk/by-partlabel`, so it wasn't read back.
+- **The descriptor** now has `AVB_FOOTERS`, `AVB_ROLLBACK_INDEX` and `AVB_SECURITY_PATCH`, as cheetah's does. Rebuilt from the same kernel output, `vendor_boot`, `vendor_kernel_boot`, `dtbo` and `dtb.img` are byte for byte the same, and `boot` and `init_boot` match up to their padding and footer.
+- **On the first unit** [V]: those images, flashed with `bin/omamobile flash`, booted as before (the same kernel, `systemctl is-system-running` running, one retry spent). So footers don't hurt a phone whose `vbmeta_b` doesn't chain them.
+- **On the second unit** [V, issue #342]: its tree with this change on top, the same kernel as its failed attempts, `bin/omamobile images` (both footer lines printed) and `bin/omamobile flash`. 24 s after fastboot dropped off, the USB gadget (`1d6b:0104`) appeared and stayed, bound as `cdc_ncm` on the host. Before the footers, nothing reached USB in 72 s. Its `tools/phone-smoke` afterwards: slot b, the storage guard, the root, the USB gadget and the session ok, and no failed units.
+
 ## 2026-10-31: the battery
 
 The MAX77759's fuel gauge reports the battery with stock's Coslight 1 kOhm model: 4326 mAh, the pack's temperature and a real percentage, in upower and the shell's bar. Every 1 % step used to fire the gauge's interrupt about 430 times; a driver change fixes it. Gates, values and results: [BATTERY-PLAN.md](BATTERY-PLAN.md). Kernel: [linux-omarchy-mobile#171](https://github.com/derekross/linux-omarchy-mobile/pull/171) and [#170](https://github.com/derekross/linux-omarchy-mobile/pull/170), in review.
