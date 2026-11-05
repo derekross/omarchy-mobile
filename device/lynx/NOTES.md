@@ -3,18 +3,50 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-29: Bluetooth
+
+The WCN6855 BT core works on the APM USI1 UART (`serial@181b0000`, ttySAC18
+in Google's kernel), the shape of cheetah's BCM4389. Kernel side, merged as
+[linux-omarchy-mobile#98](https://github.com/derekross/linux-omarchy-mobile/pull/98):
+`cmu_apm`, `usi_apm1`, `serial_apm1`, `pinctrl_peric0`, `pinctrl_hsi2`, and a
+`qcom,wcn6855-bt` node fed by a `qcom,wcn6855-pmu` node (`pwrseq-qcom-wcn`):
+the 0.95 V buck on `gph2-5` as a fixed regulator with a 7 ms ramp, then BT_EN
+on `gpp16-2`, then 50 ms, as stock's `btpower` does. Power-off drops BT_EN,
+then the buck. The PMU's other inputs are an always-on fixed stand-in: stock's
+device tree names no supply on its `cnss2` or `btpower` node.
+
+| Fact | Value | Source |
+| --- | --- | --- |
+| Kernel | `7.3.0-rc6-omamobile-lynx-wifi1` (integration tree `1cb4bd36f3be`) with the DTB built from kernel #98's file on `omamobile` at `cb71d6ef8129`; the drivers on the Bluetooth path are byte-identical between the two trees | [V] `uname -r`; the kernel #98 review |
+| Driver, firmware | `hci_uart` + `btqca`; `qca/hpbtfw21.tlv`, `qca/hpnv21.bin` from `linux-firmware-atheros`. `hci_qca`, `btqca` and `pwrseq-qcom-wcn` come from defconfig, nothing to add to `omamobile.config` for them | [V] dmesg: `QCA setup on UART is completed` at 3 s; `merge_config` of defconfig and `omamobile.config` |
+| Chip | QCA product 0x13, SOC version `0x400c0210`, ROM 0x0201 (stock `cnss` says family 0x4, device 0xc, major 0x2, minor 0x10) | [V] dmesg, stock dmesg |
+| Power sequence | `pwrseq_qcom_wcn` held by `hci_uart`; the buck enabled with five users; `gpp16-2` and `gph2-5` output high, `gph2-4` (WLAN_EN) low. `echo serial0-0 > /sys/bus/serial/drivers/hci_uart_qca/unbind` drops both pins and the buck (0 users); bind again and the controller is back, powered | [V] `lsmod`, `/sys/class/regulator`, pinctrl debugfs, `bluetoothctl show` |
+| Module order | `systemd-modules-load` inserts in parallel, so `hci_uart` may come before `pwrseq-qcom-wcn`; the kernel then defers the probe and retries once the sequencer is there. No `softdep` needed | [V] dmesg across boots; the kernel #98 review |
+| UART speed | `max-speed = <3000000>`. 3.2 Mbaud fails every TLV segment (`Frame reassembly failed (-84)`, `command 0xfc00 tx timeout`); 1, 2 and 3 Mbaud work | [V] three re-probes with the speed as the only change |
+| UART clocks | `gout_apm_apm_usi1_uart_ipclk` 197 MHz, pclk 394 MHz, as stock logs | [V] `clk_summary` |
+| Address | The controller comes up unconfigured (`btmgmt config`: missing `public-address`), so bluez ignores it until one is set. `omamobile-bt-addr` (device-lynx 0.2.3, started by udev when `hci0` appears) sets the address the bootloader publishes in `/chosen/config/bt_addr`, or a locally administered one made once from `machine-id`. After a rebind udev fires before the index is registered (`Invalid Index`), so it retries for 10 s. Cheetah's wait on `btmgmt info` and its power cycle don't apply: an unconfigured controller answers neither | [V] `btmgmt`, live DT, unbind and bind |
+| Scan | 22 devices in a 20 s `bluetoothctl scan on` | [V] |
+| Runtime overlay | Enabling `cmu_apm` after boot oopses: `gs201_cmu_probe` is `__init`. The nodes must be in the boot DTB | [V] kernel oops in `of_overlay_fdt_apply` |
+| PAN | `CONFIG_BT_BNEP` was off; `kernel/configs/omamobile.config` turns it on, with its two filters, for tethering | [V] `/proc/config.gz` |
+
+Not done yet: pairing and PAN tethering with another phone. Bench note for
+Wi-Fi work: with these nodes the PMU owns `gph2-5` and `hci_qca` drops it
+whenever Bluetooth goes down (stock `btpower` never does); unbind `serial0-0`
+from `hci_uart_qca` before a Wi-Fi harness takes the pin, and record whether
+a Wi-Fi run's kernel had the Bluetooth node.
+
 ## 2026-10-27: Wi-Fi parked
 
 - **The chip's boot ROM stops at its authentication stage,** `pbl_auth.c`, after reading only the ELF header and the hash segment of an image byte-identical to stock's. Every host-side difference two testers could act on was tried, one change per boot, and all were negative. The write-up, the ruled-out list, both stop conditions and what is left are in [WIFI-PLAN.md](WIFI-PLAN.md). The maintainer agreed on #36 that parking here is the right call.
 - **Stock-side read done.** `WLAN_SECURE_BOOTN` (`0x1E22B24`), the register that stage consults, reads `0x0` under stock's `cnss2` in the link-up pre-BHI state and in mission mode (six reads), not the `0x11111111` seen on mainline after the stall. Two more registers differ: `PBL_WLAN_BOOT_CFG` `0x200` and `TLMM_PBL_BOOTSTRAP_STATUS` `0x40` under stock, 0 on mainline. Read with stock Android restored to slot A for an afternoon (Magisk root, `userdata` backed up first and Arch put back the same evening). None of the windowed reads hung on stock.
 - **Two stop conditions.** No windowed chip register reads before `mhi_sync_power_up()` (that read hung HSI2 and rebooted the other tester's phone), and no userspace reads of the HSI2 SysMMU or iATU blocks (`devmem` of `0x145c000c` reset this one). WIFI-PLAN.md section 6.
-- **State:** the published kernel has no PCIe node for lynx and the Wi-Fi branch stays local; on the test phone `pcie_gs201` and `ath11k_pci` stay blacklisted. Bluetooth, on the same chip, waits on the same question.
+- **State:** the published kernel has no PCIe node for lynx and the Wi-Fi branch stays local; on the test phone `pcie_gs201` and `ath11k_pci` stay blacklisted. Bluetooth, on the same chip, works over its own UART (the 2026-10-29 entry).
 - **Reinstalling Arch after the stock afternoon** needed `install-phone --bootloader-slots-match lynx-17.0-15199429` again. The root image carried package 0.1.0, without the marker, so the slot was marked successful once by hand with 0.2.0's `omamobile-boot-success` and its unit enabled. The PMIC RTC came back with stock's date; `hwclock -w` after setting the clock fixed it.
 
 ## 2026-10-24: Wi-Fi bring-up (not working yet)
 
 - **The Wi-Fi chip is a Qualcomm QCA6490 (`17cb:1103`, subsystem `17cb:0108`) on PCIe channel 1,** not the Broadcom part in the Pixel 7 Pro. Linux drives it as WCN6855 hw2.1 through ath11k. Bluetooth is on the same chip.
-- **Power pins, from the stock tree:** `gph2-5` enables the 0.95 V buck (stock name `bt-0p95-en`), and `gph2-4` is WLAN_EN. Stock raises the buck, then WLAN_EN, then waits 1 ms and brings up the link. BT_EN is `gpp16-2` on the PERIC1 pin controller (`0x10840000`), which our tree does not describe yet. The PCIe wake line `gpa6-1` only lets the chip wake the host.
+- **Power pins, from the stock tree:** `gph2-5` enables the 0.95 V buck (stock name `bt-0p95-en`), and `gph2-4` is WLAN_EN. Stock raises the buck, then WLAN_EN, then waits 1 ms and brings up the link. BT_EN is `gpp16-2` on `pinctrl_peric0` (`0x10840000`), described since kernel #98. The PCIe wake line `gpa6-1` only lets the chip wake the host.
 - **Local, unsigned kernel branch `omamobile-gs201-lynx-wifi`** (on the touch branch). It imports the gs201 PCIe host, PHY and SysMMU drivers from `omamobile-int`. The board commit describes the two power pins as the root port's supply, with no restricted DMA pool: such a pool hands out at most 256 KiB in one piece, and MHI needs 512 KiB. A test-only `msi=1` adds MSI through iMSI-RX. A test-only `skip_soc_reset` stops ath11k from resetting the chip. Test-only `bhi_zero_from` and `bhi_flip_at` corrupt the image MHI hands over.
 - **Working:** link Gen2 x1, enumeration, 32 MSI vectors, and the chip reading host memory.
 - **Not working:** the chip's boot ROM stalls during the first firmware load (BHI), after about 20 s MHI times out with -110. `TCSR_PBL_LOGGING` reads `0xef0a0002`. `BHI_STATUS` stays 0, no MSI arrives, and neither end logs an AER error or completion timeout.
