@@ -33,6 +33,10 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   cmp -s etc/omamobile-mirrorlist ../omamobile-device-cheetah/etc/omamobile-mirrorlist \
     || fail "the mirrorlist drifted from the cheetah package"
   pass "the mirrorlist matches the cheetah package"
+  cmp -s <(sed -n '/^# --- the \[omamobile\] channel/,$p' omamobile-device-lynx.install) \
+    <(sed -n '/^# --- the \[omamobile\] channel/,$p' ../omamobile-device-cheetah/omamobile-device-cheetah.install) \
+    || fail "the install script's channel handling drifted from the cheetah package"
+  pass "the install script keeps the [omamobile] channel as the cheetah package does"
   cmp -s vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     ../omamobile-device-cheetah/vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     || fail "the power-key drop-in drifted from the cheetah package"
@@ -80,6 +84,37 @@ grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x3
 cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
 pass "bootctl dry run plans one byte and writes nothing"
 
+# 3.11: lynx units still on the Android 15 bootloader.
+python3 - "$tmp/devinfo311" <<'PY3'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 11)
+buf[0x30:0x34] = bytes([3, 0x00, 0, 0])
+buf[0x34:0x38] = bytes([0, 0x0c, 0, 0])
+open(sys.argv[1], "wb").write(buf)
+PY3
+cp "$tmp/devinfo311" "$tmp/devinfo311.orig"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo311" | grep -q 'version: 3.11' \
+  || fail "bootctl decodes devinfo 3.11"
+plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo311" b 2>&1 || true)
+grep -q '0x35: 0c -> 0e' <<<"$plan" || fail "3.11 mark-successful plans one byte"
+cmp -s "$tmp/devinfo311" "$tmp/devinfo311.orig" || fail "a 3.11 dry run writes nothing"
+pass "bootctl accepts devinfo 3.11"
+
+# An unknown layout must still be refused.
+python3 - "$tmp/devinfo314" <<'PY4'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 14)
+open(sys.argv[1], "wb").write(buf)
+PY4
+if "$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo314" b >/dev/null 2>&1; then
+  fail "an unverified 3.14 layout was accepted"
+fi
+pass "bootctl refuses an unverified devinfo layout"
+
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-boot-success \
          usr/lib/systemd/system/omamobile-boot-success.service \
@@ -119,3 +154,11 @@ for absent in usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
 pass "install stages the udev rule, the USB link, the mirrorlist, and the boot-success marker, and nothing that starts hardware"
+
+# USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
+# it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
+net=vendor/systemd/network/20-usb-gadget.network
+! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -q '^Gateway=' || fail "usb0 sets no default route in [Network] (metric 0)"
+metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
+[[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
+pass "USB is the last gateway"
