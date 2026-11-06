@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# rootfs/resolve.sh against a stand-in pacman: a package no repository has
+# is "absent", one whose dependencies can't be met is "unmet" with pacman's
+# reasons (#433), and build-inside uses it for both of its package lists.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { echo "not ok - $*" >&2; exit 1; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+cat > "$t/pacman" <<'EOF'
+#!/bin/bash
+# -Sp [-dd] --print-format %n NAME, as resolve.sh calls it
+name=${*: -1} dd=0
+[[ " $* " != *" -dd "* ]] || dd=1
+case $name in
+  nosuch) echo "error: target not found: nosuch" >&2; exit 1 ;;
+  hyprtoolkit|xdg-desktop-portal-hyprland)
+    ((dd)) && { echo "$name"; exit 0; }
+    echo "error: failed to prepare transaction (could not satisfy dependencies)" >&2
+    echo ":: unable to satisfy dependency 'libaquamarine.so=15-64' required by hyprtoolkit" >&2
+    [[ $name == hyprtoolkit ]] || echo ":: unable to satisfy dependency 'hyprtoolkit' required by xdg-desktop-portal-hyprland" >&2
+    exit 1 ;;
+  silent) ((dd)) && exit 0; exit 1 ;;
+  *) echo "$name" ;;
+esac
+EOF
+chmod +x "$t/pacman"
+export PATH="$t:$PATH"
+# shellcheck source=../rootfs/resolve.sh
+source rootfs/resolve.sh
+
+resolve bash
+[[ $verdict == ok && -z $why ]] || fail "an installable package is ok"
+resolve nosuch
+[[ $verdict == absent && -z $why ]] || fail "a package no repository has is absent"
+resolve hyprtoolkit
+[[ $verdict == unmet ]] || fail "a package with unmet dependencies is unmet, not absent"
+[[ $why == ":: unable to satisfy dependency 'libaquamarine.so=15-64' required by hyprtoolkit" ]] || fail "unmet carries pacman's reason (got: $why)"
+resolve silent
+[[ $verdict == unmet && -n $why ]] || fail "unmet with no reason from pacman still says something"
+echo "ok - resolve tells absent from unmet"
+
+resolve_all bash nosuch hyprtoolkit xdg-desktop-portal-hyprland git
+[[ "${ok_pkgs[*]}" == "bash git" ]] || fail "ok_pkgs (got: ${ok_pkgs[*]})"
+[[ "${absent_pkgs[*]}" == nosuch ]] || fail "absent_pkgs (got: ${absent_pkgs[*]})"
+[[ "${unmet_pkgs[*]}" == "hyprtoolkit xdg-desktop-portal-hyprland" ]] || fail "unmet_pkgs (got: ${unmet_pkgs[*]})"
+[[ $(grep -c libaquamarine <<<"$unmet_why") == 1 ]] || fail "each reason is printed once"
+grep -qF "    :: unable to satisfy dependency 'hyprtoolkit' required by xdg-desktop-portal-hyprland" <<<"$unmet_why" || fail "every package's reasons are kept, indented"
+resolve_all
+((${#ok_pkgs[@]} + ${#absent_pkgs[@]} + ${#unmet_pkgs[@]} == 0)) || fail "an empty list resolves to nothing"
+echo "ok - resolve_all sorts a list and keeps each reason once"
+
+inside=rootfs/build-inside
+grep -qF 'source /src/rootfs/resolve.sh' "$inside" || fail "build-inside sources resolve.sh"
+grep -qF 'resolve_all "${base[@]}"' "$inside" || fail "build-inside checks the base list with resolve_all"
+grep -qF 'resolve_all "${listed[@]}"' "$inside" || fail "build-inside checks Omarchy's list with resolve_all"
+grep -qF 'unavailable=("${absent_pkgs[@]}")' "$inside" || fail "only absent packages are 'not built for aarch64' in the MANIFEST"
+grep -q 'available()' "$inside" && fail "build-inside no longer has the yes/no available check"
+echo "ok - build-inside uses it for the base list and Omarchy's list"
