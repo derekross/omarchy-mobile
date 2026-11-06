@@ -289,8 +289,10 @@ class Bridge:
 
     def internet_interface(self):
         # The device omamobile-sit-data found carrying the internet bearer,
-        # which isn't always rmnet<CID - 1>; rmnet0 until sitd knows.
-        return ((self.status or {}).get('internet') or {}).get('interface') or 'rmnet0'
+        # which isn't always rmnet<CID - 1>; empty until sitd reports it, as
+        # MM leaves a bearer's interface empty before it has one (a guess
+        # such as rmnet0 can be another bearer's device for a while).
+        return ((self.status or {}).get('internet') or {}).get('interface') or ''
 
     def internet_ipv4(self, d):
         # The address and the carrier's DNS, as MM gives them: mmsd-tng
