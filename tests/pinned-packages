@@ -1,0 +1,109 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/build-packages and rootfs/packages.pinned, in a copy of the repository
+# with a throwaway release key and file:// packages (no network, no Docker, no
+# phone; the real keys/ and out/ are never touched): a pinned package is
+# fetched, checked against its SHA-256 and signed with the release key, bytes
+# unchanged; one that doesn't match is refused and nothing is added; a later
+# run keeps it without fetching again; removing its line takes it out of
+# out/repo and the index; and the
+# real rootfs/packages.pinned parses.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in gpg repo-add bsdtar zstd curl; do
+  command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d)
+export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
+R=$t/repo
+cleanup() {
+  for h in "$GNUPGHOME" "$R/keys/gnupg.release"; do
+    [[ -d $h ]] && gpgconf --homedir "$h" --kill gpg-agent 2>/dev/null || true
+  done
+  rm -rf "$t"
+}
+trap cleanup EXIT
+
+mkdir -p "$R/tools/lib" "$R/rootfs" "$R/packages/omamobile-keyring" "$R/keys" "$t/up" "$t/imp"
+cp tools/build-packages "$R/tools/"
+cp tools/lib/alarm.sh tools/lib/signing.sh "$R/tools/lib/"
+run() { (cd "$R" && "$@") > "$t/log" 2>&1; }
+
+# The release key as tools/release-key-init makes it, trusted by the keyring
+mkdir -m 700 "$R/keys/gnupg.release"
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --quiet --passphrase '' --quick-generate-key "release <r@invalid>" ed25519 cert never 2>/dev/null
+release=$(GNUPGHOME=$R/keys/gnupg.release gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --quiet --passphrase '' --quick-add-key "$release" ed25519 sign 2y 2>/dev/null
+echo "$release" > "$R/keys/fingerprint.release"
+kr=$R/packages/omamobile-keyring
+GNUPGHOME=$R/keys/gnupg.release gpg --batch --export "$release" > "$kr/omamobile.gpg"
+echo "$release:4:" > "$kr/omamobile-trusted"
+: > "$kr/omamobile-revoked"
+
+mkpkg() {  # mkpkg DIR NAME VERSION ARCH: prints the file's path
+  local w=$t/w/$2
+  mkdir -p "$w"
+  printf 'pkgname = %s\npkgbase = %s\npkgver = %s\npkgdesc = test\narch = %s\nsize = 1\n' "$2" "$2" "$3" "$4" > "$w/.PKGINFO"
+  (cd "$w" && bsdtar --zstd -cf "$1/$2-$3-$4.pkg.tar.zst" .PKGINFO)
+  echo "$1/$2-$3-$4.pkg.tar.zst"
+}
+up=$(mkpkg "$t/up" upstream 4.0.6-1 aarch64)
+up2=$(mkpkg "$t/up" upstream-settings 4.0.6-1 aarch64)
+mkpkg "$t/imp" ours 1-1 any >/dev/null   # a run needs something to do without Docker
+sum() { sha256sum < "$1" | cut -d' ' -f1; }
+repo=$R/out/repo/aarch64
+signer_of() {
+  gpg --batch --status-fd 1 --keyring "$kr/omamobile.gpg" --no-default-keyring --verify "$1.sig" "$1" 2>/dev/null |
+    awk '$2 == "VALIDSIG" { print $NF }'
+}
+indexed() { bsdtar -xOf "$repo/omamobile.db.tar.gz" --include='*/desc' | awk '/^%FILENAME%$/ { getline; print }' | sort | xargs; }
+
+# --- a checksum that doesn't match adds nothing ---
+printf '# comment\n\n%s file://%s\n' "$(printf '0%.0s' {1..64})" "$up" > "$R/rootfs/packages.pinned"
+if run tools/build-packages --import "$t/imp"; then fail "a pinned file that doesn't match its SHA-256 is refused"; fi
+grep -q 'does not match its SHA-256' "$t/log" || { cat "$t/log"; fail "says the checksum doesn't match"; }
+[[ ! -e $repo/${up##*/} ]] || fail "nothing is added"
+pass "a pinned file that doesn't match its SHA-256 is refused"
+
+printf '%s\n' "$(sum "$up") file://$up extra" > "$R/rootfs/packages.pinned"
+if run tools/build-packages --import "$t/imp"; then fail "a malformed line is refused"; fi
+grep -q 'not "<sha256> <url of a package file>"' "$t/log" || { cat "$t/log"; fail "names the format"; }
+pass "a malformed line is refused"
+
+# --- pinned, fetched, signed with the release key, bytes unchanged ---
+printf '# Omarchy, pinned\n%s file://%s\n%s file://%s   # and its settings\n' "$(sum "$up")" "$up" "$(sum "$up2")" "$up2" > "$R/rootfs/packages.pinned"
+run tools/build-packages --import "$t/imp" || { cat "$t/log"; fail "build-packages with pins"; }
+for f in "$up" "$up2"; do
+  b=${f##*/}
+  [[ -f $repo/$b && $(sum "$repo/$b") == "$(sum "$f")" ]] || fail "$b is in out/repo, bytes unchanged"
+  [[ $(signer_of "$repo/$b") == "$release" ]] || fail "$b is signed by the release key"
+done
+[[ $(indexed) == "ours-1-1-any.pkg.tar.zst upstream-4.0.6-1-aarch64.pkg.tar.zst upstream-settings-4.0.6-1-aarch64.pkg.tar.zst" ]] ||
+  fail "the index lists the pinned packages (got: $(indexed))"
+pass "pinned packages are fetched, checked and signed with the release key, bytes unchanged"
+
+# --- kept without fetching again, even when the source is gone ---
+mv "$up" "$t/gone"
+run tools/build-packages --import "$t/imp" || { cat "$t/log"; fail "a later run keeps the pinned package"; }
+grep -q 'Pinned:' "$t/log" && fail "nothing is fetched again"
+[[ -f $repo/${up##*/} ]] || fail "out/repo keeps it"
+mv "$t/gone" "$up"
+pass "a later run keeps pinned packages without fetching them again"
+
+# --- unpinned: out of out/repo and the index ---
+printf '%s file://%s\n' "$(sum "$up2")" "$up2" > "$R/rootfs/packages.pinned"
+run tools/build-packages --import "$t/imp" || { cat "$t/log"; fail "build-packages after unpinning"; }
+grep -q "unpinned: ${up##*/}" "$t/log" || { cat "$t/log"; fail "says what it unpinned"; }
+[[ ! -e $repo/${up##*/} && ! -e $repo/${up##*/}.sig ]] || fail "the unpinned file and its signature are gone"
+[[ $(indexed) == "ours-1-1-any.pkg.tar.zst upstream-settings-4.0.6-1-aarch64.pkg.tar.zst" ]] ||
+  fail "the index drops the unpinned package (got: $(indexed))"
+pass "removing a line takes its package out of out/repo and the index"
+
+# --- the real list parses ---
+while read -r s u extra; do
+  [[ $s =~ ^[0-9a-f]{64}$ && $u =~ ^https://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ && -z $extra ]] ||
+    fail "rootfs/packages.pinned: bad line: $s $u $extra"
+done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' rootfs/packages.pinned)
+pass "rootfs/packages.pinned lists https package files with SHA-256s"

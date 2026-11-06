@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Upstream packages that [omamobile] carries unchanged, to hold phones at a
+# version our patches support. [omamobile] comes first in the phone's
+# pacman.conf, so its copy wins over the newer one in [omarchy]: phones stay
+# on it through `omarchy update`, and images built from out/repo install it.
+#
+# tools/build-packages fetches each file (once: it stays in out/repo), checks
+# it against the SHA-256 here, and signs it with the release key like our own
+# packages. Removing a line takes the package out of out/repo at the next
+# build, and phones move on to [omarchy]'s version at their next update.
+# Check a new line's file against the upstream signature before adding it
+# (pacman-key --verify FILE.sig FILE).
+#
+# <sha256> <url>
+
+# Omarchy 4.0.6: the Omarchy patch series (packages/omamobile-omarchy/patches)
+# doesn't apply to 4.5, and 4.5's migrations install packages that replace
+# ours (#433, #434). Unpin when omamobile-omarchy ships a series for 4.5.
+# omarchy-settings is pinned with it: omarchy depends on exactly its version.
+27cd6d88fda0be6c269c14dd65dad6a014384fedc3ea4eb5c742b2b972b10494 https://pkgs.omarchy.org/stable/aarch64/omarchy-4.0.6-1-aarch64.pkg.tar.zst
+f653d97a7832eaa6b71dae1a6ce0480cb2631d6ca9a3350534a579cb08c6b309 https://pkgs.omarchy.org/stable/aarch64/omarchy-settings-4.0.6-1-aarch64.pkg.tar.zst
