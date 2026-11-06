@@ -49,7 +49,7 @@ if [[ ! -e $node ]]; then
 fi
 # The AoC starts once per boot: a second firmware load would take the running
 # one down.
-if grep -q googleaocsndcar "$cards" 2>/dev/null; then
+if grep -q aoc-snd-card "$cards" 2>/dev/null; then
   log "the sound card is already up"
   exit 0
 fi
@@ -89,7 +89,7 @@ for m in aoc_char_dev aoc_channel_dev aoc_alsa_dev_util \
 done
 [[ -e $node/firmware ]] || fail "no firmware node in $node"
 echo aoc.bin > "$node/firmware" || fail "the firmware load failed"
-for _ in $(seq 40); do grep -q googleaocsndcar "$cards" 2>/dev/null && break; sleep 0.5; done
-grep -q googleaocsndcar "$cards" 2>/dev/null || fail "the sound card did not appear"
+for _ in $(seq 40); do grep -q aoc-snd-card "$cards" 2>/dev/null && break; sleep 0.5; done
+grep -q aoc-snd-card "$cards" 2>/dev/null || fail "the sound card did not appear"
 log "the sound card is up"
 finish
