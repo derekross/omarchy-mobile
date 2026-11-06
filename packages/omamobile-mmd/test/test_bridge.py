@@ -228,8 +228,12 @@ class Registered(BridgeTests):
         bearers = self.modem('Bearers')
         self.assertEqual(len(bearers), 1)
         bearer = self.client.props(bearers[0], mm.BEARER)
+        # No device until sitd reports one: never a guessed rmnet0.
         self.assertEqual((bearer['Interface'], bearer['Connected'], bearer['Properties']['apn']),
-                         ('rmnet0', True, 'internet.example'))
+                         ('', True, 'internet.example'))
+        self.sitd.status['internet'] = dict(interface='rmnet1')
+        self.sitd.push()
+        wait_until(lambda: self.client.props(bearers[0], mm.BEARER)['Interface'] == 'rmnet1', 5, 'the bearer device')
         changes = [s for s in self.client.named('PropertiesChanged') if s[0] == MODEM0 and s[3][0] == mm.MODEM]
         self.assertTrue(any('State' in s[3][1] for s in changes))
         self.assertEqual(self.sitd.actions(), [])
