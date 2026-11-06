@@ -175,6 +175,12 @@ long_press() {
 }
 
 short_press() {
+  # This press already woke the phone as it went down (power-down).
+  if [[ -f $state/woke-on-press ]] && (( $(now) - $(<"$state/woke-on-press") < 5000 )); then
+    rm -f "$state/woke-on-press"
+    echo "$(now)" >"$state/last-press"
+    return 0
+  fi
   # Debounce: a second press within 0.8 s of the first, while it was still
   # locking and powering the panel off, read the screen as on and saved a
   # brightness of 0, which left the phone dark on the next wake. A press a
@@ -257,6 +263,14 @@ case "${1:-}" in
     elif [[ -f $state/volume-up-held ]] && recent volume-up && voice_ptt_enabled; then
       start_ptt
     else
+      # A locked, dark phone wakes as the key goes down, as Android's does
+      # (it wakes on the press, not the release), so the screen answers the
+      # press itself. The release then has nothing left to do (short_press
+      # sees the mark).
+      if screen_off && locked; then
+        echo "$press" >"$state/woke-on-press"
+        wake_locked >/dev/null 2>&1 &
+      fi
       # Long press: still the same press, still held, no chord in between.
       (
         sleep "$hold"
