@@ -39,6 +39,13 @@ ln -sfn ../omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service"
 install -Dm644 vendor/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf \
   "$destination/usr/lib/systemd/system/plymouth-quit.service.d/10-omamobile-retain-splash.conf"
+install -Dm755 bin/omamobile-husky-aoc-start "$destination/usr/bin/omamobile-husky-aoc-start"
+install -Dm644 vendor/systemd/system/omamobile-husky-aoc.service \
+  "$destination/usr/lib/systemd/system/omamobile-husky-aoc.service"
+ln -sfn ../omamobile-husky-aoc.service \
+  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-aoc.service"
+install -Dm644 vendor/modprobe.d/omamobile-husky-aoc.conf \
+  "$destination/usr/lib/modprobe.d/omamobile-husky-aoc.conf"
 install -Dm644 device.conf \
   "$destination/usr/share/omamobile/device.conf"
 install -Dm644 etc/omamobile-mirrorlist \
