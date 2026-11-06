@@ -167,11 +167,26 @@ sleep_now() {
 
 long_press() {
   touch "$state/long"
+  # This press already woke the phone as it went down: held, it stays lit,
+  # with no second wake.
+  [[ -f $state/woke-on-press ]] && return 0
   if locked; then
-    wake_locked
+    # Lit already: nothing to wake.
+    screen_off && wake_locked
   else
     omarchy-menu toggle system
   fi
+}
+
+# One press's work at a time: presses in quick succession (or a press while
+# the last one is still locking and powering the panel off) ran over each
+# other, a wake under a going-to-sleep. Each waits for the one before, at
+# most 4 s.
+serially() {
+  (
+    flock -w 4 9 || true
+    "$@"
+  ) 9>"$state/action.lock"
 }
 
 short_press() {
@@ -269,7 +284,7 @@ case "${1:-}" in
       # sees the mark).
       if screen_off && locked; then
         echo "$press" >"$state/woke-on-press"
-        wake_locked >/dev/null 2>&1 &
+        serially wake_locked >/dev/null 2>&1 &
       fi
       # Long press: still the same press, still held, no chord in between.
       (
@@ -343,19 +358,9 @@ case "${1:-}" in
     if [[ -f $state/chord ]]; then
       rm -f "$state/chord"
     elif [[ -f $state/long ]]; then
-      rm -f "$state/long"
+      rm -f "$state/long" "$state/woke-on-press"
     else
-      # Let a second press observe the finished off transition before it
-      # decides whether to wake. Keep the lock out of background helpers.
-      released_at=$(now)
-      exec {short_lock}>"$state/short.lock"
-      # A stuck action must not queue every later press forever. Drop this
-      # press after five seconds rather than overlap display transitions.
-      if ! flock -w 5 "$short_lock"; then
-        echo 'omamobile-keys: short-press lock wait failed; dropping press' >&2
-        exit 0
-      fi
-      ( short_press "$released_at" ) {short_lock}>&-
+      serially short_press "$(now)"
     fi
     ;;
   wake)
