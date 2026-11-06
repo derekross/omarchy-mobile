@@ -93,10 +93,13 @@ screensaver_up() {
 # display itself, because on tegu that wake reports ok without powering the
 # panel back on. The brightness is put back if it was saved as 0.
 wake_locked() {
-  # The lock's wake restarts its blank timer, but on tegu it reports "ok"
-  # without powering the panel back on, so always turn the display on too.
+  # The panel first: it takes about 270 ms to come on (measured on the
+  # Pixel 7), and the lock's wake happens meanwhile. The lock's wake
+  # restarts its blank timer, but on tegu it reports "ok" without powering
+  # the panel back on, so the display is turned on anyway.
+  omarchy-brightness-display on &
   omarchy-shell lock wake >/dev/null 2>&1
-  omarchy-brightness-display on
+  wait
   local device
   device=$(omarchy-hw-display 2>/dev/null)
   sleep 0.3
@@ -131,6 +134,19 @@ screen_off() {
     return 0
   fi
   hyprctl monitors -j 2>/dev/null | jq -e 'any(.[]; .dpmsStatus == false)' >/dev/null
+}
+
+# The quick check for the press that wakes: the panel's own bl_power (4 is
+# off) is a file read, where screen_off and locked ask Hyprland and the
+# shell (about 100 ms before the wake could start). Where bl_power stays 0
+# with the panel off (tegu), screen_off decides.
+panel_dark() {
+  local p
+  for p in /sys/class/backlight/*/bl_power; do
+    [[ -r $p ]] || continue
+    [[ $(<"$p") == 4 ]] && return 0
+  done
+  screen_off
 }
 
 # The chord marker is cleared on power's release, but Hyprland drops that
@@ -278,11 +294,11 @@ case "${1:-}" in
     elif [[ -f $state/volume-up-held ]] && recent volume-up && voice_ptt_enabled; then
       start_ptt
     else
-      # A locked, dark phone wakes as the key goes down, as Android's does
+      # A dark phone wakes as the key goes down, as Android's does
       # (it wakes on the press, not the release), so the screen answers the
       # press itself. The release then has nothing left to do (short_press
       # sees the mark).
-      if screen_off && locked; then
+      if panel_dark; then
         echo "$press" >"$state/woke-on-press"
         serially wake_locked >/dev/null 2>&1 &
       fi
