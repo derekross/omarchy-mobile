@@ -74,7 +74,9 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   ucmh() { ALSA_CONFIG_UCM2=$u alsaucm -c huskytest "$@" 2>&1; }
   [[ $(ucmh list _verbs) == *"0: HiFi"* ]] || fail "UCM husky: the HiFi verb"
   out=$(ucmh list _devices/HiFi)
-  [[ $out == *"0: Speaker"* && $out == *"1: Earpiece"* ]] || fail "UCM husky: Speaker and Earpiece devices"
+  [[ $out == *"0: Speaker"* && $out == *"1: Earpiece"* && $out == *"2: Mic"* ]] || fail "UCM husky: Speaker, Earpiece and Mic devices"
+  [[ $(ucmh get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM husky: Mic PCM is EP1 capture (device 8)"
+  grep -q "BUILDIN MIC ID CAPTURE LIST' 0,-1,-1,-1" ucm2/Google/husky/HiFi.conf || fail "husky records mic id 0 only until the others are mapped"
   [[ $(ucmh get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM husky: Speaker PCM is EP6 (device 5)"
   pass "UCM profile parses: husky HiFi with Speaker and Earpiece on EP6"
 fi
@@ -93,7 +95,7 @@ husky_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/55
 [[ $husky_card == google,husky-aoc-snd-card ]] || fail "55-omamobile-husky-aoc.conf matches husky's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$husky_card.conf" ]] || fail "husky long-name UCM file is named exactly $husky_card.conf"
 ! grep -q "husky" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf || fail "cheetah's shared profile has no husky branch"
-[[ $(grep -c "EP1" ucm2/Google/husky/HiFi.conf) -eq $(grep -c "^# .*EP1\|^#.*Never bind EP1" ucm2/Google/husky/HiFi.conf) ]] || fail "husky never binds EP1 (it hangs the AoC)"
+! grep -qE "TDM_0_RX Mixer EP1|EP1 playback|Mixer EP1' 1" ucm2/Google/husky/HiFi.conf || fail "husky never binds EP1 playback (it hangs the AoC; EP1 capture is the microphone)"
 ! grep -E "cset .*Analog PCM Volume' ([2-9][0-9]|1[1-9])" ucm2/Google/husky/HiFi.conf || fail "husky's analog volume stays at 10 or below"
 ! grep -E "cset .*Digital PCM Volume' (7[4-9][0-9]|[89][0-9][0-9]|[0-9]{4,})" ucm2/Google/husky/HiFi.conf || fail "husky's digital volume stays at 737 or below"
 raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | head -1)
