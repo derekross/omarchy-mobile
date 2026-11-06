@@ -12,7 +12,9 @@ F=$t/bin; mkdir -p "$F" "$t/sys/power/suspend_stats" "$t/sys/class/backlight/pan
 fail() { printf 'not ok - %s\n' "$1" >&2; sed 's/^/# /' "$t/log" "$t/out" >&2 2>/dev/null; exit 1; }
 fake() { printf '#!/bin/bash\nT=%q\n%s\n' "$t" "$2" >"$F/$1"; chmod +x "$F/$1"; }
 
-fake sleep 'echo $(( $(cat "$T/clock") + ${1%%.*} )) >"$T/clock"
+# (a pause under a second, the watcher's 0.2 s while it waits to sleep, moves
+# the fake clock a whole second, or it would never move)
+fake sleep 's=${1%%.*}; ((s > 0)) || s=1; echo $(( $(cat "$T/clock") + s )) >"$T/clock"
 # "the user presses power" at a given time: the watcher gets its signal.
 if [[ -f $T/now_at ]] && (( $(cat "$T/clock") >= $(cat "$T/now_at") )); then rm -f "$T/now_at"; kill -USR1 $PPID; fi
 # "the panel finishes powering off" at a given time.

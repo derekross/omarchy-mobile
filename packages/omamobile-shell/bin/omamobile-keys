@@ -383,7 +383,8 @@ case "${1:-}" in
     # omamobile-sleepd after a power-key wake from sleep: Hyprland never sees
     # the press that woke the phone, so light the PIN pad as that press would.
     now >"$state/power-wake"
-    if locked && screen_off; then wake_locked; fi
+    # The quick check (a file read), as the press's own wake.
+    if panel_dark; then serially wake_locked; fi
     ;;
   double-tap)
     # omamobile-doubletap: a double tap on the touchscreen. Only a dark
