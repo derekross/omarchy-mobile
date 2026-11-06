@@ -1,0 +1,349 @@
+Subject: [PATCH] render: hold the last frame across a rotation, then turn it in as Android does
+
+Against Hyprland v0.57.0 (src/render/Renderer.cpp, src/render/OpenGL.cpp).
+
+A monitor transform change lays the layer surfaces out again at once, but
+each client draws at its new size only when it gets to it. Until then the
+old buffers were drawn stretched and misplaced over the turned output:
+stripes, half-empty pages, a home screen's icons in a column, for 200 ms
+to a second on a phone (Pixel 7, Omarchy's quickshell).
+
+The hold. After a transform change, renderMonitor() renders nothing until
+every mapped layer surface on the monitor has drawn at its new size, or
+500 ms have passed: the output keeps scanning out the last frame of the
+old orientation, and the first frame of the new one is complete. While
+holding, the layer surfaces and the active workspaces get their frame
+callbacks once per refresh, since clients draw on them and a skipped
+frame would not send them. "Drawn at its new size" is three checks, each
+from what was seen on a Pixel 7: the surface's size matches its new
+geometry; its buffer does too (Qt resizes the viewport first, with the
+old buffer stretched into it, and commits the new buffer after); and a
+layer that had to redraw has sent a second buffer at the new size, or its
+first has stood for 50 ms (Qt's first frame at a new size can still be
+laid out for the old one, which showed as a black bar, and a layer with
+nothing more to draw sends no second one).
+
+The turn. Before the hold, the output's last buffer is copied into a
+framebuffer of the panel's size (the swapchain reuses that buffer within
+a few frames). When the hold ends, the final copy to the output (in
+CHyprOpenGLImpl::end()) draws, over black, the new frame turning in from
+where the old one sat on the glass to upright over 283 ms on Android's
+(0.2, 0, 0, 1) curve, and the old frame, pre-rotated for the new
+transform so it starts where it was, turning with it and fading out over
+116 ms (Android's screen_rotate_*_enter/exit and config_screen_rotation_*
+values). Unlike Android, the new frame is opaque from the start: its fade
+in over black read as a dip to black on the phone.
+
+diff --git i/src/render/OpenGL.cpp w/src/render/OpenGL.cpp
+index 5d23d8e..3a175c4 100644
+--- i/src/render/OpenGL.cpp
++++ w/src/render/OpenGL.cpp
+@@ -797,6 +797,8 @@ bool CHyprOpenGLImpl::begin(CRenderContext& ctx, PHLMONITOR pMonitor, const CReg
+     return true;
+ }
+ 
++bool omamobileRotationAnim(PHLMONITOR monitor, float& enterRot, float& enterA, SP<Render::ITexture>& exitTex, float& exitRot, float& exitA);
++
+ void CHyprOpenGLImpl::end(CRenderContext& ctx) {
+     static auto PZOOMDISABLEAA = CConfigValue<Config::INTEGER>("cursor:zoom_disable_aa");
+     auto&       m_renderData   = ctx.m_data;
+@@ -909,7 +911,23 @@ void CHyprOpenGLImpl::end(CRenderContext& ctx) {
+             g_pHyprRenderer->setProjectionType(ctx, RPT_OUTPUT);
+             ctx.m_data.transformDamage = true;
+ 
+-            if (NEEDS_CM && !finalCMComplete)
++            float      enterRot = 0.F, enterA = 1.F, exitRot = 0.F, exitA = 0.F;
++            SP<ITexture> exitTex;
++            if (omamobileRotationAnim(PMONITOR.lock(), enterRot, enterA, exitTex, exitRot, exitA)) {
++                // the turn: black behind, the new frame turning in, the old one turning out
++                glClearColor(0.F, 0.F, 0.F, 1.F);
++                glClear(GL_COLOR_BUFFER_BIT);
++                blend(true);
++                CBox enterBox = finalBox;
++                enterBox.rot  = enterRot;
++                if (enterA > 0.F)
++                    renderTexture(ctx, finalTexture, enterBox, {.a = enterA, .finalMonitorCM = NEEDS_CM && !finalCMComplete});
++                if (exitTex && exitA > 0.F) {
++                    CBox exitBox = {0, 0, PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y};
++                    exitBox.rot  = exitRot;
++                    renderTexture(ctx, exitTex, exitBox, {.a = exitA});
++                }
++            } else if (NEEDS_CM && !finalCMComplete)
+                 renderTexture(ctx, finalTexture, finalBox, {.finalMonitorCM = true});
+             else
+                 renderTexturePrimitive(ctx, finalTexture, finalBox);
+diff --git i/src/render/Renderer.cpp w/src/render/Renderer.cpp
+index 4bbb606..bdf51c2 100644
+--- i/src/render/Renderer.cpp
++++ w/src/render/Renderer.cpp
+@@ -1,4 +1,6 @@
+ #include "Renderer.hpp"
++#include "../managers/eventLoop/EventLoopManager.hpp"
++#include <unordered_map>
+ #include "../Compositor.hpp"
+ #include "../helpers/math/Math.hpp"
+ #include <algorithm>
+@@ -322,6 +324,205 @@ bool IHyprRenderer::shouldRenderWindow(PHLWINDOW pWindow) {
+     return false;
+ }
+ 
++// Omarchy Mobile: hold the last frame across a rotation. A transform change
++// re-lays the layer surfaces out at once, but each client draws at its new
++// size only when it gets to it; meanwhile the old buffers drew stretched and
++// misplaced across the turned output (stripes, half-empty pages) for 200 ms
++// to a second on a phone. Until every mapped layer surface on the monitor
++// has committed at its new size, or ROTATION_HOLD has passed, nothing is
++// rendered: the panel keeps scanning out the last frame of the old
++// orientation, and the first frame of the new one is complete.
++namespace {
++    constexpr auto ROTATION_HOLD = std::chrono::milliseconds(500);
++    // Android's screen rotation (frameworks/base core/res: screen_rotate_*_enter/exit,
++    // config_screen_rotation_*): the new frame turns in over 283 ms on a (0.2, 0, 0, 1)
++    // curve; the old one turns with it and fades out over 116 ms.
++    constexpr auto  ROTATION_ANIM = std::chrono::milliseconds(283);
++    constexpr float FADE_OUT_MS   = 116.F;
++
++    // cubic-bezier(x1, 0, x2, 1)-style ease: y for x, by bisection on the curve's x
++    float bezier(float x, float x1, float y1, float x2, float y2) {
++        auto  bx = [&](float t) { return 3 * (1 - t) * (1 - t) * t * x1 + 3 * (1 - t) * t * t * x2 + t * t * t; };
++        auto  by = [&](float t) { return 3 * (1 - t) * (1 - t) * t * y1 + 3 * (1 - t) * t * t * y2 + t * t * t; };
++        float lo = 0, hi = 1;
++        for (int i = 0; i < 24; ++i) {
++            const float mid = (lo + hi) / 2;
++            (bx(mid) < x ? lo : hi) = mid;
++        }
++        return by((lo + hi) / 2);
++    }
++
++
++    struct SRotationHold {
++        std::optional<wl_output_transform> renderedTransform;
++        bool                               active = false;
++        Time::steady_tp                    since;
++        Time::steady_tp                    lastFrameEvents;
++        SP<CEventLoopTimer>                timer;
++        // per layer that had to redraw: the last buffer it committed at its new size, and how many
++        struct SLayerProgress {
++            void*           lastBuffer     = nullptr;
++            int             newSizeCommits = 0;
++            Time::steady_tp firstAtNewSize;
++        };
++        std::unordered_map<void*, SLayerProgress> layers;
++        // the old orientation's last frame, as the panel showed it, faded out over the new one
++        SP<IFramebuffer> snapshot;
++        Time::steady_tp  fadeSince;
++        int              quarterTurns = 0; // new transform less the old one, 0..3
++    };
++
++    std::unordered_map<MONITORID, SRotationHold> rotationHolds;
++
++    // A client's first frame at its new size can still be laid out for the old one (Qt:
++    // half an empty page, a wallpaper not decoded again yet), so a layer that had to redraw
++    // counts as done from its second buffer at the new size, or once its first one has stood
++    // for SETTLE (a layer with nothing more to draw sends no second one).
++    constexpr int  NEW_SIZE_COMMITS = 2;
++    constexpr auto SETTLE           = std::chrono::milliseconds(50);
++
++    // the first mapped layer surface on the monitor that hasn't drawn at its new size yet
++    PHLLS layerBehindRotation(PHLMONITOR monitor, SRotationHold& hold) {
++        for (auto const& level : monitor->m_layerSurfaceLayers) {
++            for (auto const& ref : level) {
++                const auto LS = ref.lock();
++                if (!LS || !LS->mapped() || !LS->m_layerSurface)
++                    continue;
++                const auto SURFACE = LS->m_layerSurface->m_surface.lock();
++                if (!SURFACE)
++                    continue;
++                const auto HAVE = SURFACE->m_current.size;
++                const auto WANT = LS->m_geometry.size();
++                auto&      progress = hold.layers[LS.get()];
++                if (std::abs(HAVE.x - WANT.x) > 1 || std::abs(HAVE.y - WANT.y) > 1) {
++                    progress = {.lastBuffer = nullptr, .newSizeCommits = -NEW_SIZE_COMMITS};
++                    return LS;
++                }
++                // Qt resizes a window's viewport first, with the old buffer stretched into
++                // it, and commits the new buffer after: the buffer has to fit as well.
++                const auto BUFFER = SURFACE->m_current.bufferSize;
++                const auto PIXELS = SURFACE->m_current.transform % 2 == 1 ? Vector2D{BUFFER.y, BUFFER.x} : BUFFER;
++                const auto WANTPX = WANT * monitor->m_scale;
++                const auto SLACK  = std::max(2.0, monitor->m_scale * 2.0);
++                if (PIXELS.x > 0 && (std::abs(PIXELS.x - WANTPX.x) > SLACK || std::abs(PIXELS.y - WANTPX.y) > SLACK)) {
++                    progress = {.lastBuffer = nullptr, .newSizeCommits = -NEW_SIZE_COMMITS};
++                    return LS;
++                }
++                // a layer that never had to redraw has newSizeCommits 0 and is done
++                if (progress.newSizeCommits < 0) {
++                    if (const auto BUF = SURFACE->m_current.buffer.m_buffer.get(); BUF && BUF != progress.lastBuffer) {
++                        if (!progress.lastBuffer)
++                            progress.firstAtNewSize = Time::steadyNow();
++                        progress.lastBuffer = BUF;
++                        progress.newSizeCommits++;
++                    }
++                    if (progress.newSizeCommits < 0 && !(progress.lastBuffer && Time::steadyNow() - progress.firstAtNewSize >= SETTLE))
++                        return LS;
++                }
++            }
++        }
++        return nullptr;
++    }
++
++    // true while this frame should not be rendered
++    bool holdFrameForRotation(PHLMONITOR monitor) {
++        auto& hold = rotationHolds[monitor->m_id];
++
++        if (!hold.active) {
++            if (!hold.renderedTransform.has_value() || *hold.renderedTransform == monitor->m_transform) {
++                hold.renderedTransform = monitor->m_transform;
++                return false;
++            }
++
++            hold.active       = true;
++            hold.since        = Time::steadyNow();
++            hold.quarterTurns = ((sc<int>(monitor->m_transform) & 3) - (sc<int>(*hold.renderedTransform) & 3) + 4) % 4;
++            hold.layers.clear();
++            if (!hold.timer) {
++                hold.timer = makeShared<CEventLoopTimer>(
++                    std::nullopt,
++                    [ref = PHLMONITORREF{monitor}](SP<CEventLoopTimer> self, void* data) {
++                        // the deadline: render whatever there is
++                        if (const auto MON = ref.lock()) {
++                            MON->m_damage.damageEntire();
++                            MON->scheduleFrame();
++                        }
++                    },
++                    nullptr);
++                g_pEventLoopManager->addTimer(hold.timer);
++            }
++            hold.timer->updateTimeout(ROTATION_HOLD);
++            LOG(Log::DEBUG, "Rotation of {}: holding the last frame until the layers have drawn", monitor->m_name);
++        }
++
++        const auto BEHIND = layerBehindRotation(monitor, hold);
++        const auto WAITED = Time::steadyNow() - hold.since;
++        if (BEHIND && WAITED < ROTATION_HOLD) {
++            // Clients draw on frame callbacks, which a rendered frame would send; without
++            // them the shell (Qt) never draws its new size and every hold runs to the
++            // deadline. Send them once per refresh while holding.
++            const auto NOW = Time::steadyNow();
++            if (NOW - hold.lastFrameEvents >= std::chrono::microseconds(sc<int>(1000000 / std::max(1.F, monitor->m_refreshRate)))) {
++                hold.lastFrameEvents = NOW;
++                for (auto const& level : monitor->m_layerSurfaceLayers) {
++                    for (auto const& ref : level) {
++                        if (const auto LS = ref.lock(); LS && LS->mapped() && LS->m_layerSurface)
++                            if (const auto SURFACE = LS->m_layerSurface->m_surface.lock())
++                                SURFACE->frame(NOW);
++                    }
++                }
++                if (monitor->m_activeWorkspace)
++                    g_pHyprRenderer->sendFrameEventsToWorkspace(monitor, monitor->m_activeWorkspace, NOW);
++                if (monitor->m_activeSpecialWorkspace)
++                    g_pHyprRenderer->sendFrameEventsToWorkspace(monitor, monitor->m_activeSpecialWorkspace, NOW);
++            }
++            monitor->m_output->needsFrame = false;
++            return true;
++        }
++
++        if (BEHIND)
++            LOG(Log::WARN, "Rotation of {}: layer {} still not drawn at {}x{} after {}ms", monitor->m_name, BEHIND->m_namespace, BEHIND->m_geometry.w, BEHIND->m_geometry.h,
++                std::chrono::duration_cast<std::chrono::milliseconds>(WAITED).count());
++        else
++            LOG(Log::DEBUG, "Rotation of {}: layers drawn after {}ms", monitor->m_name, std::chrono::duration_cast<std::chrono::milliseconds>(WAITED).count());
++
++        hold.active            = false;
++        hold.fadeSince         = Time::steadyNow();
++        hold.renderedTransform = monitor->m_transform;
++        hold.timer->updateTimeout(std::nullopt);
++        monitor->m_damage.damageEntire();
++        return false;
++    }
++}
++
++// For CHyprOpenGLImpl::end(): the rotation animation's state for this frame, if one runs.
++// enterRot/enterA turn and fade the new frame; the old one (exitTex, drawn pre-rotated for the
++// new transform so it sits where it was on the glass) turns by exitRot and fades to exitA.
++bool omamobileRotationAnim(PHLMONITOR monitor, float& enterRot, float& enterA, SP<Render::ITexture>& exitTex, float& exitRot, float& exitA) {
++    const auto IT = rotationHolds.find(monitor->m_id);
++    if (IT == rotationHolds.end() || !IT->second.snapshot || IT->second.active)
++        return false;
++    const auto& hold = IT->second;
++    const float MS   = std::chrono::duration<float, std::milli>(Time::steadyNow() - hold.fadeSince).count();
++    const float TOTAL = sc<float>(ROTATION_ANIM.count());
++    if (MS >= TOTAL)
++        return false;
++
++    // where the old frame sits in the new orientation: a quarter turn back, or a half
++    const float START = hold.quarterTurns == 2 ? sc<float>(M_PI) : (hold.quarterTurns == 1 ? 1.F : hold.quarterTurns == 3 ? -1.F : 0.F) * sc<float>(M_PI_2);
++    const float E     = bezier(std::clamp(MS / TOTAL, 0.F, 1.F), 0.2F, 0.F, 0.F, 1.F);
++
++    enterRot = START * (1.F - E);
++    // Android fades the new frame in over black; on the phone that read as a dip to black,
++    // so the new frame is opaque from the start and only the old one fades
++    enterA   = 1.F;
++    exitTex  = hold.snapshot->getTexture();
++    exitTex->m_transform = Math::wlTransformToHyprutils(monitor->m_transform);
++    exitRot  = -START * E;
++    exitA    = 1.F - std::clamp(MS / FADE_OUT_MS, 0.F, 1.F);
++    return true;
++}
++
+ bool IHyprRenderer::shouldRenderMonitor(PHLMONITOR monitor) {
+     static auto PDAMAGETRACKINGMODE = CConfigValue<Config::INTEGER>("debug:damage_tracking");
+     bool        hasChanged          = monitor->m_output->needsFrame || monitor->m_damage.hasChanged();
+@@ -2307,6 +2508,38 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
+     if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0 && !pMonitor->m_damage.hasChanged())
+         return;
+ 
++    // Before the hold starts, copy the frame on the panel: the output's last buffer, which
++    // the swapchain reuses within a few frames, into a framebuffer of the panel's own size.
++    if (auto& hold = rotationHolds[pMonitor->m_id];
++        !hold.active && hold.renderedTransform.has_value() && *hold.renderedTransform != pMonitor->m_transform) {
++        hold.snapshot.reset();
++        const auto BUFFER = pMonitor->m_output->state->state().buffer;
++        const auto SIZE   = pMonitor->m_pixelSize;
++        const auto TEX    = BUFFER ? createTexture(BUFFER) : nullptr;
++        const auto FB     = TEX ? createFB("rotation snapshot") : nullptr;
++        CRegion    whole{0, 0, sc<int>(SIZE.x), sc<int>(SIZE.y)};
++        if (FB && FB->alloc(SIZE.x, SIZE.y, DRM_FORMAT_ARGB8888)) {
++            FB->setImageDescription(pMonitor->workBufferImageDescription());
++            if (beginFullFakeRender(pMonitor, whole, FB)) {
++                setProjectionType(m_context, Render::RPT_EXPORT);
++                m_context.m_data.fbSize          = SIZE;
++                m_context.m_data.transformDamage = false;
++                m_context.m_data.noSimplify      = true;
++                setViewport(0, 0, SIZE.x, SIZE.y);
++                const auto OLDMODIF                 = m_context.m_data.renderModif.enabled;
++                m_context.m_data.renderModif.enabled = false;
++                startRenderPass(m_context);
++                draw(m_context, CTexPassElement::SRenderData{.tex = TEX, .box = {0, 0, SIZE.x, SIZE.y}}, whole);
++                m_context.m_data.renderModif.enabled = OLDMODIF;
++                endRender();
++                hold.snapshot = FB;
++            }
++        }
++    }
++
++    if (holdFrameForRotation(pMonitor))
++        return;
++
+     if (!pMonitor->m_commitCoordinator->canBeginFrame()) {
+         pMonitor->m_pendingFrame = true;
+         return;
+@@ -2456,6 +2689,18 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
+         Pointer::mgr()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
+     }
+ 
++    // keep frames coming while the rotation animation runs (OpenGL's end() draws it)
++    if (auto& hold = rotationHolds[pMonitor->m_id]; hold.snapshot && !hold.active) {
++        float        enterRot, enterA, exitRot, exitA;
++        SP<ITexture> exitTex;
++        if (!omamobileRotationAnim(pMonitor, enterRot, enterA, exitTex, exitRot, exitA))
++            hold.snapshot.reset();
++        else {
++            pMonitor->m_damage.damageEntire();
++            pMonitor->scheduleFrame();
++        }
++    }
++
+     if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
+         // render the DPMS black if we are animating
+         CRectPassElement::SRectData data;

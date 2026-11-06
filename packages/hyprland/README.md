@@ -2,7 +2,7 @@
 # hyprland (Omarchy Mobile build)
 
 This is Omarchy's Hyprland 0.57.0-2 recipe (`hyprland` and `hyprpm`), built
-for aarch64 with one change. Hyprland gave up on a refused DPMS commit after
+for aarch64 with two changes. Hyprland gave up on a refused DPMS commit after
 a single retry, and aquamarine refuses commits while a page flip is in
 flight. So when a client kept rendering, DPMS off was lost: Hyprland
 reported the screen off, but the CRTC never turned off. See
@@ -13,11 +13,21 @@ reported the screen off, but the CRTC never turned off. See
 | `PKGBUILD` | Omarchy's `pkgbuilds/hyprland/PKGBUILD` at `347f3d791489` (omacom-io/omarchy-pkgs), changes in its header |
 | `nvidia-egl-teardown.patch`, `wl-output-global-grace.patch`, `monitor-rule-vrr.patch` | Omarchy's patches from the same commit, unchanged (what they fix: their comments in `prepare()`) |
 | `0001-dpms-keep-retrying-a-refused-dpms-commit.patch` | The Omarchy Mobile change to `src/output/Monitor.cpp` |
+| `0002-render-hold-the-last-frame-across-a-rotation.patch` | The Omarchy Mobile change to `src/render/Renderer.cpp` and `src/render/OpenGL.cpp` (the rotation hold, below) |
 
 ## What differs from Omarchy's `hyprland` 0.57.0-2
 
 - The DPMS patch. A refused DPMS commit is retried every two frames for up
   to a second instead of once.
+- The rotation hold (0002). After a transform change the output keeps its
+  last frame until every mapped layer surface has drawn at its new size
+  (its buffer too, and a second buffer or 50 ms more), or 500 ms; layers
+  and the active workspaces get their frame callbacks once per refresh
+  meanwhile. Then the new frame turns in over 283 ms on Android's
+  (0.2, 0, 0, 1) curve, and the old one, kept where it was on the glass,
+  turns with it and fades out over 116 ms. On a Pixel 7 the holds took
+  106 to 228 ms; without the patch the old buffers showed stretched for
+  200 ms to a second.
 - `pkgrel=3.1`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
   hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both.
