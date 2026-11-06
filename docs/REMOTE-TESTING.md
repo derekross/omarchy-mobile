@@ -5,7 +5,7 @@ Most of bringing up a phone is trying things on it: does the speaker play, does 
 
 ![An agent or script on a computer drives the phone over ssh](screenshots/remote/remote-overview.png)
 
-It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no image installs them, and installing them enables nothing: no service, no udev rule, and nothing listens. (`omamobile-cdp` opens a port on 127.0.0.1 while you run it; see [Security](#security).) See [Security](#security).
+It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no image installs them, and installing them enables nothing: no service, no udev rule, and nothing listens.. See [Security](#security).
 
 `omamobile-mirror` is the other way in: a VNC window on your computer, with your own mouse and keyboard driving the phone, for demos and for typing. This is for scripts and agents: nothing to watch, no viewer, no open port, and every action and screenshot is a command with an exit code.
 
@@ -169,11 +169,10 @@ Things that make an agent's run reliable: one action then one screenshot; check 
 - Everything runs as the user who ran it. The only way in is the ssh login you already have, and that login already controls the unlocked screen, so keep ssh to a key and to USB or a network you trust.
 - The PIN is read from stdin or `$OMAMOBILE_PIN` and typed through the virtual keyboard from a pipe. It is never an argument, a log line or a file. If it came in through `$OMAMOBILE_PIN`, the script removes that variable from its environment as it starts, so what `keep-awake`, `run` and `launch` start never has it; the test suite checks the journal, the logs and those three environments. While `unlock` itself runs, the PIN is in the memory of that process. Do not put a real PIN in your shell history.
 - Only the command name goes to the journal (`journalctl -t omamobile-remote`), never its arguments.
-- `omamobile-cdp` starts a second Chromium with its own profile, so none of the real browser's cookies or logins are exposed, and the DevTools port is on 127.0.0.1 only (I checked with `ss -ltn`, and that it closes with the window). The port has no authentication, so while it is open any process of any user on the phone can drive that browser. Start it only for the test, and close it. It refuses `--remote-debugging-*`, `--user-data-dir` and `--remote-allow-origins` on its own command line. Reach it with `ssh -L 9222:127.0.0.1:9222 phone` and `/usr/lib/omamobile-remote/cdp.py`.
 
 ## Limits
 
-Measured and working with the packaged tools: screenshots (full and cropped), typing, keys with modifiers, pointer move, left and right click, two clicks in a row, scroll up and down, `tap` at two positions in a terminal that reports mouse events, lock, unlock, launching apps, both on-screen keyboards, and `omamobile-cdp` with `cdp.py` (`list`, `eval`, `shot`).
+Measured and working with the packaged tools: screenshots (full and cropped), typing, keys with modifiers, pointer move, left and right click, two clicks in a row, scroll up and down, `tap` at two positions in a terminal that reports mouse events, lock, unlock, launching apps, both on-screen keyboards.
 
 Not done: drag (the wlrctl command line has no press, move, release in one process), the touchscreen itself (it would need `uinput`, which the test kernel does not build yet), long-press on a key, pinch and multi-finger gestures.
 

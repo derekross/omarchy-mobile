@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Tests for omamobile-remote with no phone: the real scripts run against
 # stand-ins for grim, wtype, wlrctl, hyprctl, omarchy-shell, logger and
-# chromium (test/fake) that log what they were asked.
+# pgrep (test/fake) that log what they were asked.
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")/.."
 here=$PWD
@@ -20,13 +20,12 @@ for f in bin/* install test/all test/fake/*; do
     bash -n "$f" || fail "bash -n $f"
   fi
 done
-python3 -I -c 'import ast,sys; ast.parse(open("lib/cdp.py").read())' && pass "cdp.py parses" || fail "cdp.py parses"
 
 # --- what gets installed: scripts and docs only, nothing that starts by itself
 stage=$tmp/stage
 ./install "$stage" >/dev/null
-check "installs the three commands and the client" \
-  test -x "$stage/usr/bin/omamobile-remote" -a -x "$stage/usr/bin/omamobile-cdp" -a -x "$stage/usr/bin/omamobile-osk-switch" -a -f "$stage/usr/lib/omamobile-remote/cdp.py"
+check "installs the two commands" \
+  test -x "$stage/usr/bin/omamobile-remote" -a -x "$stage/usr/bin/omamobile-osk-switch"
 check "no unit, udev rule, sysusers or etc file in the package" \
   test -z "$(find "$stage" \( -path '*/systemd/*' -o -path '*/udev/*' -o -path '*/sysusers.d/*' -o -path "$stage/etc/*" \) -print -quit)"
 check "install refuses a relative DESTDIR" bash -c '! ./install relative-dir >/dev/null 2>&1'
@@ -141,20 +140,6 @@ for sig in TERM HUP; do
   check "keep-awake given $sig stops the command it started" bash -c "! kill -0 $cpid 2>/dev/null"
   kill -KILL "$cpid" 2>/dev/null || true
 done
-
-# --- the browser launcher
-: > "$FAKE_LOG"
-OMAMOBILE_CDP_DIR=$tmp/cdp-profile omamobile-cdp https://example.org
-line=$(cat "$FAKE_LOG")
-check "cdp uses its own profile directory" grep -q -- "--user-data-dir=$tmp/cdp-profile" <<<"$line"
-check "cdp listens on 127.0.0.1 only" grep -q -- "--remote-debugging-address=127.0.0.1 " <<<"$line"
-check "cdp puts the user's URL after its own flags" bash -c '[[ "$0" == *"--remote-debugging-address=127.0.0.1 "*"https://example.org" ]]' "$line"
-for bad in --remote-debugging-address=0.0.0.0 --remote-debugging-port=1 --user-data-dir=/tmp/x --remote-allow-origins=*; do
-  check "cdp refuses $bad on its command line" bash -c '! OMAMOBILE_CDP_DIR='"$tmp"'/p2 omamobile-cdp "$0" https://example.org >/dev/null 2>&1' "$bad"
-done
-check "a refused flag never reaches chromium" bash -c '! grep -q "0.0.0.0" "$0"' "$FAKE_LOG"
-check "cdp refuses a port that is not a number" bash -c 'export OMAMOBILE_CDP_PORT="9222;x"; ! omamobile-cdp >/dev/null 2>&1'
-check "cdp.py says what is wrong when nothing listens" bash -c 'export OMAMOBILE_CDP_PORT=9; out=$(python3 -I lib/cdp.py list 2>&1); rc=$?; [[ $rc != 0 && $out == *"nothing on"* && $out != *Traceback* ]]'
 
 # --- smaller things the review found
 touch "$FAKE_STATE/hypr-broken"
