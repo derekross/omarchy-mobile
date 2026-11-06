@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Take CAP_SYS_NICE off Hyprland again when this package is removed: the
+# install hook (90-omamobile-hyprland-nice.hook) gave it, and nothing else
+# would drop it before Hyprland's next upgrade replaced the binary. Runs
+# before the removal, while this hook is still installed.
+[Trigger]
+Operation = Remove
+Type = Package
+Target = omamobile-device-panther
+
+[Action]
+Description = Taking CAP_SYS_NICE off Hyprland...
+When = PreTransaction
+Exec = /bin/sh -c '[ ! -e /usr/bin/Hyprland ] || /usr/bin/setcap -r /usr/bin/Hyprland 2>/dev/null || true'

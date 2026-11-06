@@ -83,6 +83,7 @@ for f in usr/bin/reboot-to \
          usr/lib/modprobe.d/omamobile-display.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/libalpm/hooks/90-omamobile-hyprland-nice.hook \
+         usr/share/libalpm/hooks/90-omamobile-hyprland-nice-remove.hook \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-panther/version \
          usr/share/licenses/omamobile-device-panther/LICENSE \
@@ -142,7 +143,19 @@ sh -c "$(eval "printf %s ${exec_line#/bin/sh -c }" | sed "s#/usr/bin/#$tmp/hk/us
 : > "$tmp/hk/usr/bin/Hyprland"
 sh -c "$(eval "printf %s ${exec_line#/bin/sh -c }" | sed "s#/usr/bin/#$tmp/hk/usr/bin/#g")" || fail "the hook runs setcap"
 [[ $(cat "$tmp/hk/setcap.log") == "cap_sys_nice+ep $tmp/hk/usr/bin/Hyprland" ]] || fail "setcap gets cap_sys_nice+ep on Hyprland"
-pass "a pacman hook gives Hyprland CAP_SYS_NICE after its installs and upgrades, and this package's"
+# and the remove hook takes it off again before this package goes
+rhook=$tmp/root/usr/share/libalpm/hooks/90-omamobile-hyprland-nice-remove.hook
+grep -qx 'Operation = Remove' "$rhook" && grep -qx 'Target = omamobile-device-panther' "$rhook" && grep -qx 'When = PreTransaction' "$rhook" \
+  || fail "the remove hook runs before this package is removed"
+grep -c '^Target' "$rhook" | grep -qx 1 || fail "the remove hook runs only for this package"
+rexec=$(sed -n 's/^Exec = //p' "$rhook")
+: > "$tmp/hk/setcap.log"
+sh -c "$(eval "printf %s ${rexec#/bin/sh -c }" | sed "s#/usr/bin/#$tmp/hk/usr/bin/#g")" || fail "the remove hook runs setcap -r"
+[[ $(cat "$tmp/hk/setcap.log") == "-r $tmp/hk/usr/bin/Hyprland" ]] || fail "the remove hook drops Hyprland's capabilities"
+rm -f "$tmp/hk/usr/bin/Hyprland" "$tmp/hk/setcap.log"
+sh -c "$(eval "printf %s ${rexec#/bin/sh -c }" | sed "s#/usr/bin/#$tmp/hk/usr/bin/#g")" || fail "the remove hook passes without Hyprland"
+[[ ! -e $tmp/hk/setcap.log ]] || fail "no setcap -r without Hyprland"
+pass "a pacman hook gives Hyprland CAP_SYS_NICE after its installs and upgrades, and this package's; removing the package takes it off"
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
