@@ -185,3 +185,29 @@ Findings from real hardware, newest first. Tracking issue: #36.
 | `vendor_boot` page size | 0x800, header v4 | [V] stock image header |
 | Panel | `sdc-s6e3fc5`, 1080x2400, on DECON0 and DSIM0 | [V] `exynos_drm.panel_name`, `dumpsys display`, stock dmesg |
 | Storage | 128 GB SK hynix UFS 3.1 | [V] `fastboot getvar` |
+
+## devinfo 3.11 read-only evidence (2026-11-06)
+
+The Android 15 unit reports `devinfo` version 3.11. With slot B active,
+not marked successful, the eight bytes at `0x30-0x37` were:
+
+```
+03 00 00 00 00 0c 00 00
+```
+
+The same bytes and the same fastboot state were read after one unmarked
+boot through the bootloader:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+`devinfo` is read-only (`blockdev --getro` = 1) on this unit, and no
+write was forced while 3.11 is not in the merged table. A marked-state
+row still needs either the maintainer's approval to write 3.11 or a
+bootloader action that marks the slot itself.
+
+Both slots on this unit carry bootloader `lynx-15.2`.
