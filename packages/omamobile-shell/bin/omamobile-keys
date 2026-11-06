@@ -253,11 +253,28 @@ short_press() {
     # once the panel is off, for the next wake.
     local device level=
     device=$(omarchy-hw-display 2>/dev/null)
+    # A press while this runs (about 2 s: the reveal, the lock, the panel
+    # going off) wakes the phone back at once, locked, as Android's does; it
+    # was queued behind it and lost (Ángel, 6-nov: slow to light, measured).
+    # power-down marks it; each step here looks.
+    now >"$state/going-off"
+    rm -f "$state/wake-during-off"
+    back_on() {
+      [[ -f $state/wake-during-off ]] || return 1
+      rm -f "$state/wake-during-off" "$state/going-off"
+      if [[ -n $device ]]; then
+        [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
+      fi
+      locked || omarchy-system-lock
+      wake_locked
+      return 0
+    }
     # First Android's fade to black (200 ms, the shell's screenOff), where
     # the shell has one; then the panel off.
     if [[ $(omarchy-shell shell call omamobile.home screenOff "" 2>/dev/null) == ok ]]; then
       sleep 0.2
     fi
+    back_on && return 0
     hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })' >/dev/null 2>&1
     if [[ -n $device ]]; then
       level=$(brightnessctl -d "$device" get 2>/dev/null)
@@ -269,6 +286,7 @@ short_press() {
       omarchy-shell lock status 2>/dev/null | grep -q '"secure":true' && break
       sleep 0.1
     done
+    back_on && return 0
     lock_dark
     omarchy-brightness-display off
     # The brightness the next wake lights up with: the saved level, or 40 % when
@@ -287,6 +305,13 @@ short_press() {
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
     fi
+    rm -f "$state/going-off"
+    # A press in the last moment found the panel still going off.
+    if [[ -f $state/wake-during-off ]]; then
+      rm -f "$state/wake-during-off"
+      wake_locked
+      return 0
+    fi
     sleep_now
   fi
 }
@@ -301,11 +326,16 @@ case "${1:-}" in
     elif [[ -f $state/volume-up-held ]] && recent volume-up && voice_ptt_enabled; then
       start_ptt
     else
+      # Pressed while a press before is still turning the screen off: that
+      # one wakes the phone back (short_press, back_on).
+      if [[ -f $state/going-off ]] && (( press - $(<"$state/going-off") < 5000 )); then
+        touch "$state/wake-during-off"
+        echo "$press" >"$state/woke-on-press"
       # A dark phone wakes as the key goes down, as Android's does
       # (it wakes on the press, not the release), so the screen answers the
       # press itself. The release then has nothing left to do (short_press
       # sees the mark).
-      if panel_dark; then
+      elif panel_dark; then
         echo "$press" >"$state/woke-on-press"
         serially wake_locked >/dev/null 2>&1 &
       fi
