@@ -25,9 +25,11 @@
 #  - a latch (/var/lib/omamobile/modem-bringup-started) is written before any
 #    driver loads and removed when the modem profile's unit stops (its
 #    ExecStopPost runs --stopped, at a shutdown) after the start had reached
-#    ONLINE, whatever the stop's result: a start that never reached ONLINE,
-#    or a boot that hung or reset with the modem up, leaves it, and later
-#    boots refuse until a human removes it (TELEPHONY-PLAN section 2.4);
+#    ONLINE, whatever the stop's result, or at the next boot when this one
+#    ended with reboot-to (its deliberate-restart note): a start that never
+#    reached ONLINE, or a boot that hung or reset with the modem up, leaves
+#    it, and later boots refuse until a human removes it (TELEPHONY-PLAN
+#    section 2.4);
 #  - no system suspend once the CP is up: a sleep inhibitor, its own unit, is
 #    taken before any driver loads and lasts until the reboot.
 set -euo pipefail
@@ -164,8 +166,9 @@ echo performance > $SYS/module/pcie_aspm/parameters/policy 2>/dev/null || true
 # comes after the drivers. A refusal keeps the latch: a human looks first.
 $CHROOT modem check
 
-# A stop of the profile's unit (the reboot's shutdown) is the only thing
-# that removes the latch (--stopped above); a hang or a reset leaves it.
+# A stop of the profile's unit (the reboot's shutdown, --stopped above)
+# removes the latch, and so does the next boot after a reboot-to (its note,
+# above); a hang or a reset leaves it.
 systemd-run -q --unit=omamobile-tegu-modem -p KillSignal=SIGINT -p TimeoutStopSec=60 \
   -p "ExecStop=$CHROOT modem stop" \
   -p "ExecStopPost=${OMAMOBILE_MODEM_UP_SELF:-/usr/bin/omamobile-tegu-modem-up} --stopped" \
@@ -177,5 +180,5 @@ if ! $CP_STATE wait-online 60 >/dev/null 2>&1; then
   exit 1
 fi
 echo online >> "$LATCH"; sync "$LATCH" 2>/dev/null || sync
-say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log); the latch stays until the profile unit stops at shutdown"
+say "modem OK: CP ONLINE (log /var/log/omamobile/modem.log); the latch stays until the profile unit stops at shutdown, or until the next boot after a reboot-to"
 phone_up
