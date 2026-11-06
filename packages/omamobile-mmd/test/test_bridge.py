@@ -7,6 +7,7 @@ from env import GLib, MM, ROOT, Client, FakeRefusal, FakeSitd, Mmd, PrivateBus, 
     registered_status, spin, tempdir, wait_until
 import os
 import re
+import threading
 import unittest
 
 import bridge
@@ -286,6 +287,220 @@ class Registered(BridgeTests):
         self.push()
         spin(.2)
         self.assertEqual(self.modem('Calls', mm.VOICE), [], 'a deleted call does not come back')
+
+    def test_delete_live_call_preserves_it_when_hangup_is_refused(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+
+        def refuse(request):
+            raise FakeRefusal('Hangup could not be confirmed')
+
+        self.sitd.handlers['hangup'] = refuse
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,)),
+                         mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.sitd.requests[-1], dict(action='hangup', id='200'))
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+        self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
+        self.push()
+        spin(.2)
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+        self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), mm.ERROR_PREFIX + 'InProgress')
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+
+    def test_delete_live_call_waits_for_confirmed_release(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        result = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+        wait_until(lambda: self.sitd.actions().count('hangup') == 1, 5, 'hangup request')
+        spin(.2)
+        self.assertEqual(result, {}, 'the modem has not confirmed release')
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,)),
+                         mm.ERROR_PREFIX + 'InProgress')
+        self.sitd.status['calls'] = [call('200', 'terminated', reason='terminated')]
+        self.push()
+        wait_until(lambda: result, 5, 'confirmed deletion')
+        self.assertEqual(result.get('result'), ())
+        self.assertEqual(self.modem('Calls', mm.VOICE), [])
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+        wait_until(lambda: self.sitd.actions().count('delete-call') == 1, 5, 'sitd call cleanup')
+        self.assertEqual(self.sitd.requests[-1], dict(action='delete-call', id='200'))
+
+    def test_delete_after_hangup_does_not_send_a_second_hangup(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        self.client.call(path, mm.CALL, 'Hangup')
+        result = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+        spin(.2)
+        self.assertEqual(result, {})
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+        self.sitd.status['calls'] = [call('200', 'terminated', reason='terminated')]
+        self.push()
+        wait_until(lambda: result, 5, 'confirmed deletion')
+        self.assertEqual(result.get('result'), ())
+        self.assertEqual(self.modem('Calls', mm.VOICE), [])
+
+    def test_disappearing_live_call_does_not_confirm_release(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        result = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+        wait_until(lambda: self.sitd.actions().count('hangup') == 1, 5, 'hangup request')
+        self.sitd.status['calls'] = []
+        self.push()
+        wait_until(lambda: result, 5, 'unconfirmed release refusal')
+        self.assertIn(mm.ERROR_PREFIX + 'Failed', result['error'].message)
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+        self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
+        self.push()
+        spin(.2)
+        self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
+
+    def test_release_confirmation_can_arrive_before_hangup_reply(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        entered, proceed = threading.Event(), threading.Event()
+        self.addCleanup(proceed.set)
+
+        def delayed(request):
+            entered.set()
+            if not proceed.wait(5):
+                raise FakeRefusal('test timed out')
+            return {}
+
+        self.sitd.handlers['hangup'] = delayed
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        result = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+        wait_until(entered.is_set, 5, 'hangup request')
+        self.sitd.status['calls'] = [call('200', 'terminated', reason='terminated')]
+        self.push()
+        wait_until(lambda: result, 5, 'confirmed deletion')
+        self.assertEqual(result.get('result'), ())
+        proceed.set()
+        spin(.2)
+        self.assertEqual(self.modem('Calls', mm.VOICE), [])
+
+    def test_service_loss_fails_pending_delete(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        result = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+        wait_until(lambda: self.sitd.actions().count('hangup') == 1, 5, 'hangup request')
+        self.sitd.stop()
+        wait_until(lambda: result, 5, 'service-loss refusal')
+        self.assertIn(mm.ERROR_PREFIX + 'Failed', result['error'].message)
+
+    def test_delete_during_dial_is_refused(self):
+        entered, proceed = threading.Event(), threading.Event()
+        self.addCleanup(proceed.set)
+
+        def delayed(request):
+            entered.set()
+            if not proceed.wait(5):
+                raise FakeRefusal('test timed out')
+            return dict(call='100', number=request['number'])
+
+        self.sitd.handlers['dial'] = delayed
+        path = self.client.call(MODEM0, mm.VOICE, 'CreateCall', 'a{sv}',
+                                ({'number': GLib.Variant('s', OTHER)},))[0]
+        started = self.client.call_async(path, mm.CALL, 'Start')
+        wait_until(entered.is_set, 5, 'dial request')
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,)),
+                         mm.ERROR_PREFIX + 'InProgress')
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'HangupAll'), mm.ERROR_PREFIX + 'InProgress')
+        proceed.set()
+        wait_until(lambda: started, 5, 'dial reply')
+        self.assertEqual(started.get('result'), ())
+        self.assertIn(path, self.modem('Calls', mm.VOICE))
+
+    def test_hangup_all_does_not_repeat_a_pending_release(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        self.client.call(path, mm.CALL, 'Hangup')
+        self.client.call(MODEM0, mm.VOICE, 'HangupAll')
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+
+    def test_delete_after_refused_hangup_reports_error_without_retry(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        def refuse(request):
+            raise FakeRefusal('Hangup could not be confirmed')
+        self.sitd.handlers['hangup'] = refuse
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,)),
+                         mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'HangupAll'), mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+
+    def test_pending_delete_fails_when_prior_hangup_is_refused(self):
+        for method in ('Hangup', 'HangupAll'):
+            with self.subTest(method=method):
+                self.sitd.status['calls'] = [call('200', 'active')]
+                entered, proceed = threading.Event(), threading.Event()
+                self.addCleanup(proceed.set)
+
+                def delayed_refusal(request):
+                    entered.set()
+                    if not proceed.wait(5):
+                        raise FakeRefusal('test timed out')
+                    raise FakeRefusal('Hangup could not be confirmed')
+
+                self.sitd.handlers['hangup'] = delayed_refusal
+                self.push()
+                path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+                if method == 'Hangup':
+                    hung = self.client.call_async(path, mm.CALL, method)
+                else:
+                    hung = self.client.call_async(MODEM0, mm.VOICE, method)
+                wait_until(entered.is_set, 5, 'hangup request')
+                deleted = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+                spin(.2)
+                self.assertEqual(deleted, {})
+                proceed.set()
+                wait_until(lambda: hung and deleted, 5, 'both errors')
+                self.assertIn(mm.ERROR_PREFIX + 'Failed', hung['error'].message)
+                self.assertIn(mm.ERROR_PREFIX + 'Failed', deleted['error'].message)
+                self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+                self.sitd.status['calls'] = [call('200', 'terminated', reason='terminated')]
+                self.push()
+                wait_until(lambda: self.client.prop(path, mm.CALL, 'State') == mm.CALL_TERMINATED,
+                           5, 'terminated')
+                self.client.call(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+                self.sitd.status['calls'] = []
+                self.push()
+                spin(.2)
+
+    def test_unconfirmed_release_times_out_without_deleting_or_retrying(self):
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        result = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+        wait_until(lambda: result, 25, 'release confirmation timeout')
+        self.assertIn(mm.ERROR_PREFIX + 'Failed', result['error'].message)
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+        self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+
+    def test_delete_call_with_unknown_modem_state_is_refused(self):
+        self.sitd.status['calls'] = [call('200', 'unrecognized')]
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'unknown call')[0]
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,)),
+                         mm.ERROR_PREFIX + 'WrongState')
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+        self.assertEqual(self.sitd.actions(), [])
 
     def test_incoming_call(self):
         self.sitd.handlers.update(accept=lambda r: {})
