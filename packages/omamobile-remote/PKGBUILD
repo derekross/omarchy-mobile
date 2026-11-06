@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Maintainer: Derek Ross <derekross@gmail.com>
+pkgname=omamobile-remote
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Use an Omarchy Mobile phone over ssh like a person would: screenshots, keys, taps, scrolling, unlocking, apps, optional second-profile Chromium with DevTools on 127.0.0.1. Opt-in, enables nothing"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT)
+depends=(bash coreutils gawk grim hyprland procps-ng sed util-linux wlrctl wtype)
+checkdepends=(python)
+optdepends=('chromium: omamobile-cdp and cdp.py'
+            'python: cdp.py (DevTools client)'
+            'openssh: reach the phone from a computer')
+
+check() {
+  "$startdir/test/all"
+}
+
+package() {
+  "$startdir/install" "$pkgdir"
+}

@@ -1,0 +1,170 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-remote with no phone: the real scripts run against
+# stand-ins for grim, wtype, wlrctl, hyprctl, omarchy-shell, logger and
+# chromium (test/fake) that log what they were asked.
+set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")/.."
+here=$PWD
+fails=0
+fail() { echo "FAIL: $*" >&2; fails=$((fails + 1)); }
+pass() { echo "ok: $*"; }
+check() { local what=$1; shift; if "$@"; then pass "$what"; else fail "$what"; fi; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# --- the scripts parse
+for f in bin/* install test/all test/fake/*; do
+  if [[ $(head -n1 "$f") == '#!/bin/bash' ]]; then
+    bash -n "$f" || fail "bash -n $f"
+  fi
+done
+python3 -I -c 'import ast,sys; ast.parse(open("lib/cdp.py").read())' && pass "cdp.py parses" || fail "cdp.py parses"
+
+# --- what gets installed: scripts and docs only, nothing that starts by itself
+stage=$tmp/stage
+./install "$stage" >/dev/null
+check "installs the three commands and the client" \
+  test -x "$stage/usr/bin/omamobile-remote" -a -x "$stage/usr/bin/omamobile-cdp" -a -x "$stage/usr/bin/omamobile-osk-switch" -a -f "$stage/usr/lib/omamobile-remote/cdp.py"
+check "no unit, udev rule, sysusers or etc file in the package" \
+  test -z "$(find "$stage" \( -path '*/systemd/*' -o -path '*/udev/*' -o -path '*/sysusers.d/*' -o -path "$stage/etc/*" \) -print -quit)"
+check "install refuses a relative DESTDIR" bash -c '! ./install relative-dir >/dev/null 2>&1'
+
+# --- run the real script against the fakes
+export FAKE_LOG=$tmp/log FAKE_JOURNAL=$tmp/journal FAKE_STATE=$tmp/state FAKE_PIN=4321
+mkdir -p "$FAKE_STATE" "$tmp/run/hypr/sig1" "$tmp/home"
+: > "$FAKE_LOG"; : > "$FAKE_JOURNAL"
+touch "$tmp/run/wayland-1" "$tmp/run/wayland-1.lock"
+echo "10 10" > "$FAKE_STATE/pos"; echo true > "$FAKE_STATE/locked"
+export PATH="$here/test/fake:$here/bin:$PATH" HOME=$tmp/home XDG_RUNTIME_DIR=$tmp/run OMAMOBILE_REMOTE_SLOW=0
+# Never touch the real user's files: point every XDG directory into the temp tree.
+export XDG_STATE_HOME=$tmp/home/.local/state XDG_DATA_HOME=$tmp/home/.local/share XDG_CONFIG_HOME=$tmp/home/.config
+unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE OMAMOBILE_PIN
+R=omamobile-remote
+lastlog() { tail -n1 "$FAKE_LOG"; }
+
+out=$($R env)
+check "env finds the Wayland and Hyprland session" \
+  grep -q "WAYLAND_DISPLAY=wayland-1" <<<"$out"
+check "env finds the Hyprland instance" grep -q "HYPRLAND_INSTANCE_SIGNATURE=sig1" <<<"$out"
+check "no session: click exits non-zero" \
+  bash -c 'export XDG_RUNTIME_DIR=$(mktemp -d); ! omamobile-remote click >/dev/null 2>&1'
+
+check "run gives a command the session variables" bash -c '[[ $(omamobile-remote run sh -c "echo \$WAYLAND_DISPLAY") == wayland-1 ]]'
+check "move goes to the exact position" bash -c '[[ $(omamobile-remote move 50 60) == "50 60" ]]'
+check "move sent a relative wlrctl move of 40 50" grep -q "wlrctl pointer move 40 50" "$FAKE_LOG"
+check "move rejects text" bash -c '! omamobile-remote move a b >/dev/null 2>&1'
+$R tap 100 120 right >/dev/null
+check "tap moves, then clicks the button asked for" bash -c "grep -q 'wlrctl pointer move 50 60' '$FAKE_LOG' && [[ \$(tail -n1 '$FAKE_LOG') == 'wlrctl pointer click right' ]]"
+$R scroll up >/dev/null;   check "scroll up is a negative amount" test "$(lastlog)" = "wlrctl pointer scroll -5 0"
+$R scroll down 3 >/dev/null; check "scroll down takes an amount" test "$(lastlog)" = "wlrctl pointer scroll 3 0"
+check "scroll rejects a direction it does not know" bash -c '! omamobile-remote scroll sideways >/dev/null 2>&1'
+$R key Tab shift;  check "key with a modifier presses and releases it" test "$(lastlog)" = "wtype -M shift -k Tab -m shift"
+$R type "echo hi";  check "type passes the text" test "$(lastlog)" = "wtype -- echo hi"
+
+check "launch starts a command in the session" bash -c '[[ $(omamobile-remote launch true) == "started true (pid "* ]]'
+check "launch refuses a missing command" bash -c '! omamobile-remote launch no-such-command-xyz >/dev/null 2>&1'
+
+shot=$($R shot "$tmp/a.png")
+check "shot writes the file and prints its path" test "$shot" = "$tmp/a.png" -a -s "$tmp/a.png"
+err=$(FAKE_SHOT_BYTES=15000 $R shot "$tmp/b.png" 2>&1 >/dev/null)
+check "a tiny full-screen capture is reported as blank" grep -q "looks blank" <<<"$err"
+err=$($R shot -g "0,607 420x284" "$tmp/c.png" 2>&1 >/dev/null)
+check "a cropped capture is not judged by size" test -z "$err"
+
+echo 0 > "$FAKE_STATE/dpms"
+OMAMOBILE_REMOTE_SHOT_TIMEOUT=3 $R shot "$tmp/d.png" >/dev/null
+check "shot wakes a display that is off, then captures" bash -c "grep -q 'hl.dsp.dpms' '$FAKE_LOG' && [[ \$(cat '$FAKE_STATE/dpms') == 1 && -s '$tmp/d.png' ]]"
+echo 0 > "$FAKE_STATE/dpms"; : > "$FAKE_LOG"
+$R wake
+check "wake asks Hyprland once and the display comes on" bash -c "[[ \$(grep -c 'hl.dsp.dpms' '$FAKE_LOG') == 1 && \$(cat '$FAKE_STATE/dpms') == 1 ]]"
+: > "$FAKE_LOG"; $R wake
+check "wake on a display that is already on still asks when forced" grep -q "hl.dsp.dpms" "$FAKE_LOG"
+check "waking never types: no wtype call at all" bash -c "! grep -q '^wtype' '$FAKE_LOG'"
+echo 1 > "$FAKE_STATE/dpms"; : > "$FAKE_LOG"; touch "$FAKE_STATE/grim-hang"
+OMAMOBILE_REMOTE_SHOT_TIMEOUT=2 $R shot "$tmp/e.png" >/dev/null
+check "a grim that hangs once is killed, the display woken, and the capture retried" bash -c "[[ \$(grep -c '^grim' '$FAKE_LOG') == 2 ]] && grep -q 'hl.dsp.dpms' '$FAKE_LOG' && [[ -s '$tmp/e.png' ]]"
+touch "$FAKE_STATE/grim-hang-always"
+check "a grim that never finishes ends in an error, not a hang" bash -c "! OMAMOBILE_REMOTE_SHOT_TIMEOUT=1 timeout 20 omamobile-remote shot '$tmp/f.png' >/dev/null 2>&1"
+rm -f "$FAKE_STATE/grim-hang-always"
+check "osk box prints the layer rectangle" bash -c '[[ $(omamobile-remote osk box) == "0 695 420 196" ]]'
+
+# --- locking
+check "locked exits 0 when locked" $R locked
+touch "$FAKE_STATE/shell-broken"
+check "locked exits 2 (not 1) when the lock state cannot be read" bash -c 'omamobile-remote locked >/dev/null 2>&1; [[ $? == 2 ]]'
+check "unlock does not claim success when the lock state cannot be read" bash -c 'OMAMOBILE_PIN=4321 omamobile-remote unlock 2>&1 | grep -q "cannot read the lock state" && ! OMAMOBILE_PIN=4321 omamobile-remote unlock >/dev/null 2>&1'
+rm -f "$FAKE_STATE/shell-broken"
+check "OMARCHY_PATH falls back to /usr/share/omarchy when no shell is found" bash -c 'unset OMARCHY_PATH; omamobile-remote locked'
+mkdir -p "$tmp/proc/4242"
+printf 'FOO=1\0OMARCHY_PATH=/opt/omarchy-test\0LANG=el_GR.UTF-8\0' > "$tmp/proc/4242/environ"
+envout=$(unset OMARCHY_PATH LANG; OMAMOBILE_REMOTE_PROC=$tmp/proc $R env)
+check "OMARCHY_PATH is read from the running shell's environment" grep -q "^OMARCHY_PATH=/opt/omarchy-test$" <<<"$envout"
+check "LANG is read from the running shell's environment" grep -q "^LANG=el_GR.UTF-8$" <<<"$envout"
+echo false > "$FAKE_STATE/locked"; $R lock >/dev/null
+check "lock locks the phone through omarchy-system-lock" bash -c "[[ \$(cat '$FAKE_STATE/locked') == true ]] && grep -q omarchy-system-lock '$FAKE_LOG'"
+echo true > "$FAKE_STATE/locked"
+check "unlock without a PIN refuses" bash -c '! omamobile-remote unlock </dev/null >/dev/null 2>&1'
+check "unlock with a wrong PIN fails" bash -c 'export OMAMOBILE_PIN=0000; ! omamobile-remote unlock >/dev/null 2>&1'
+echo true > "$FAKE_STATE/locked"
+OMAMOBILE_PIN=$FAKE_PIN $R unlock >/dev/null
+check "unlock with the right PIN unlocks" bash -c '[[ $(cat "$FAKE_STATE/locked") == false ]]'
+check "locked exits 1 when unlocked" bash -c '! omamobile-remote locked'
+check "the PIN is in no log, no journal line and no argument" bash -c '! grep -q "$FAKE_PIN" "$FAKE_LOG" "$FAKE_JOURNAL"'
+check "run does not pass the PIN on to what it starts" bash -c 'OMAMOBILE_PIN=$FAKE_PIN omamobile-remote run sh -c "echo [\${OMAMOBILE_PIN-unset}]" | grep -q "^\[unset\]$"'
+check "keep-awake does not pass the PIN on to its command" bash -c 'OMAMOBILE_PIN=$FAKE_PIN omamobile-remote keep-awake sh -c "echo [\${OMAMOBILE_PIN-unset}]" | grep -q "^\[unset\]$"'
+rm -f "$tmp/launched-env"; OMAMOBILE_PIN=97531 $R launch sh -c "env > '$tmp/launched-env'" >/dev/null; sleep 0.5
+check "launch does not pass the PIN on to the app" bash -c '[[ -s "$0" ]] && ! grep -q "OMAMOBILE_PIN\|97531" "$0"' "$tmp/launched-env"
+check "only command names reach the journal" bash -c '! grep -qE "echo hi|100|0000" "$FAKE_JOURNAL"'
+
+# --- keep-awake restores what it found
+state=$HOME/.local/state/omarchy/indicators/stay-awake
+check "keep-awake holds the file while the command runs" \
+  $R keep-awake bash -c "test -e '$state'"
+check "keep-awake removes the file afterwards" test ! -e "$state"
+mkdir -p "$(dirname "$state")"; touch "$state"
+$R keep-awake true
+check "keep-awake leaves a file that was already there" test -e "$state"
+rm -f "$state"
+rc=0; $R keep-awake bash -c 'exit 7' || rc=$?
+check "keep-awake returns the command's exit code" test "$rc" = 7
+check "keep-awake removes the file after a failing command" test ! -e "$state"
+# (INT is not tested: bash makes a background job ignore it, so only a real Ctrl-C on a terminal can reach it)
+for sig in TERM HUP; do
+  rm -f "$tmp/childpid"
+  $R keep-awake sh -c "echo \$\$ > '$tmp/childpid'; exec sleep 30" & kpid=$!
+  for _ in $(seq 1 50); do [[ -e $state && -s $tmp/childpid ]] && break; sleep 0.1; done
+  cpid=$(cat "$tmp/childpid"); t0=$SECONDS
+  kill -$sig "$kpid"; wait "$kpid" 2>/dev/null || true
+  check "keep-awake given $sig restores the file" bash -c "(( $SECONDS - $t0 < 5 )) && [[ ! -e '$state' ]]"
+  check "keep-awake given $sig stops the command it started" bash -c "! kill -0 $cpid 2>/dev/null"
+  kill -KILL "$cpid" 2>/dev/null || true
+done
+
+# --- the browser launcher
+: > "$FAKE_LOG"
+OMAMOBILE_CDP_DIR=$tmp/cdp-profile omamobile-cdp https://example.org
+line=$(cat "$FAKE_LOG")
+check "cdp uses its own profile directory" grep -q -- "--user-data-dir=$tmp/cdp-profile" <<<"$line"
+check "cdp listens on 127.0.0.1 only" grep -q -- "--remote-debugging-address=127.0.0.1 " <<<"$line"
+check "cdp puts the user's URL after its own flags" bash -c '[[ "$0" == *"--remote-debugging-address=127.0.0.1 "*"https://example.org" ]]' "$line"
+for bad in --remote-debugging-address=0.0.0.0 --remote-debugging-port=1 --user-data-dir=/tmp/x --remote-allow-origins=*; do
+  check "cdp refuses $bad on its command line" bash -c '! OMAMOBILE_CDP_DIR='"$tmp"'/p2 omamobile-cdp "$0" https://example.org >/dev/null 2>&1' "$bad"
+done
+check "a refused flag never reaches chromium" bash -c '! grep -q "0.0.0.0" "$0"' "$FAKE_LOG"
+check "cdp refuses a port that is not a number" bash -c 'export OMAMOBILE_CDP_PORT="9222;x"; ! omamobile-cdp >/dev/null 2>&1'
+check "cdp.py says what is wrong when nothing listens" bash -c 'export OMAMOBILE_CDP_PORT=9; out=$(python3 -I lib/cdp.py list 2>&1); rc=$?; [[ $rc != 0 && $out == *"nothing on"* && $out != *Traceback* ]]'
+
+# --- smaller things the review found
+touch "$FAKE_STATE/hypr-broken"
+check "pos fails when Hyprland cannot be asked" bash -c '! omamobile-remote pos >/dev/null 2>&1'
+rm -f "$FAKE_STATE/hypr-broken"
+err=$(OMAMOBILE_WLRCTL=no-such-wlrctl $R click 2>&1 >/dev/null || true)
+check "a missing wlrctl gives one clear message and no shell noise" bash -c '[[ "$0" == *"no-such-wlrctl is not installed"* && "$0" != *"command not found"* && $(wc -l <<<"$0") == 1 ]]' "$err"
+check "the PIN is not in the staged package files" bash -c '! grep -rq "$FAKE_PIN" "$0"' "$stage"
+check "osk-switch says so when there is no Stevia drop-in" bash -c 'XDG_CONFIG_HOME=$0/nocfg omamobile-osk-switch squeekboard | grep -q "no Stevia drop-in"' "$tmp"
+
+echo
+if ((fails)); then echo "$fails test(s) failed" >&2; exit 1; fi
+echo "omamobile-remote: all tests passed"

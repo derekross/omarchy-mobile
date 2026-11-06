@@ -1,0 +1,26 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Switch the on-screen keyboard between squeekboard (the default) and a Stevia
+# build installed as the user drop-in
+#   ~/.config/systemd/user/omamobile-osk.service.d/stevia.conf
+# Usage: omamobile-osk-switch squeekboard | stevia | status
+# It only moves that drop-in file and restarts omamobile-osk; nothing else.
+set -u
+D=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omamobile-osk.service.d
+on=$D/stevia.conf off=$D/stevia.conf.off
+restart() { systemctl --user daemon-reload && systemctl --user restart omamobile-osk; }
+case ${1:-status} in
+  squeekboard)
+    if [[ -e $on ]]; then mv "$on" "$off" && restart; fi
+    ;;
+  stevia)
+    if [[ -e $off ]]; then mv "$off" "$on" && restart; fi
+    if [[ ! -e $on ]]; then echo "no Stevia drop-in at $on" >&2; exit 1; fi
+    ;;
+  status) ;;
+  *) echo "usage: ${0##*/} squeekboard|stevia|status" >&2; exit 2 ;;
+esac
+if [[ -e $on ]]; then echo "stevia (drop-in active)"
+elif [[ -e $off ]]; then echo "squeekboard (a Stevia drop-in is set aside)"
+else echo "squeekboard (no Stevia drop-in on this phone)"; fi
+pgrep -a 'squeekboard|phosh-osk' | head -2

@@ -1,0 +1,16 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage the package into DESTDIR (./install DESTDIR, an absolute path). It
+# installs scripts only: no unit, no udev rule, no group, no network listener.
+# Nothing here runs until somebody logs in over ssh and runs it.
+set -euo pipefail
+d=${1:?usage: install DESTDIR}
+[[ $d == /* ]] || { echo "install: DESTDIR must be an absolute path" >&2; exit 1; }
+cd "$(dirname "$(readlink -f "$0")")"
+
+install -Dm755 bin/omamobile-remote "$d/usr/bin/omamobile-remote"
+install -Dm755 bin/omamobile-cdp "$d/usr/bin/omamobile-cdp"
+install -Dm755 bin/omamobile-osk-switch "$d/usr/bin/omamobile-osk-switch"
+install -Dm644 lib/cdp.py "$d/usr/lib/omamobile-remote/cdp.py"
+install -Dm644 README.md "$d/usr/share/doc/omamobile-remote/README.md"
+install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-remote/LICENSE"
