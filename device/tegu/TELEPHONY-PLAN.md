@@ -126,7 +126,7 @@ successful, a kernel with linux-omarchy-mobile#172, an off-repo NV backup.
 | --- | --- | --- | --- | --- |
 | 1. Read-only / none | `uname -r`; `pacman -Q omamobile-device-tegu omamobile-modem omamobile-modem-sit omamobile-mmd`; `tools/nv-backup --check "$NV_BACKUP"` (laptop); `ls /var/lib/omamobile/modem-bringup-started` | The kernel and packages recorded, NV matches, no latch | NV mismatch, a latch present, B not marked | None |
 | 2. Enable / low | `systemctl enable omamobile-tegu-modem-boot` | A wants link, nothing started | Anything starts | `systemctl disable omamobile-tegu-modem-boot` |
-| 3. Cold boot / medium (the CP starts at boot, sleep blocked) | Power off, then on; after login: `journalctl -b -u omamobile-tegu-modem-boot`; `omamobile-sit status`; `systemd-inhibit --list`; `tools/phone-smoke` (laptop) | "modem OK: CP ONLINE", sitd running and registered, the inhibitor held, the latch present (it stays until the profile's unit stops at shutdown), phone-smoke clean | No ONLINE, a reset, a UFS or NV error, no inhibitor | `systemctl disable omamobile-tegu-modem-boot`, reboot; after a reset the latch keeps the next boot from starting the modem |
+| 3. Cold boot / medium (the CP starts at boot, sleep blocked) | Power off, then on; after login: `journalctl -b -u omamobile-tegu-modem-boot`; `omamobile-sit status`; `systemd-inhibit --list`; `tools/phone-smoke` (laptop) | "modem OK: CP ONLINE", sitd running and registered, the inhibitor held, the latch present (it stays until the profile's unit stops at shutdown, or until the next boot after a `reboot-to`, which clears it from its note), phone-smoke clean | No ONLINE, a reset, a UFS or NV error, no inhibitor | `systemctl disable omamobile-tegu-modem-boot`, reboot; after a reset the latch keeps the next boot from starting the modem |
 | 4. Clean shutdown / medium (one UFS handler pass expected on the 7 Pro's pattern) | `systemctl reboot`; after login: `journalctl -b -1 -k \| grep -c ufshcd_err_handler`; `ls /var/lib/omamobile/modem-bringup-started`; `tools/nv-backup --check` | The latch gone (clean stop), the CP up again at this boot, the UFS count recorded, NV matches | The latch still there after a clean reboot, I/O errors, NV mismatch | As step 3 |
 | 5. A day's use / low | Calls, texts and data as usual | No reset, no latch left over | A reset or hang | As step 3 |
 
@@ -173,7 +173,13 @@ does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
    last boot with the modem up ended with reboot-to:
    /var/lib/omamobile/modem-bringup-started removed", started the modem on
    its own to "modem OK: CP ONLINE", and left no
-   `/var/lib/omamobile/deliberate-restart` behind. Passed.
+   `/var/lib/omamobile/deliberate-restart` behind. Passed. Whether the
+   CP's power-off or UFS logged anything is not observable after a
+   `reboot-to`: it skips systemd's shutdown, so the kernel's final
+   shutdown runs after the journal's last write, and the next boot's
+   `journalctl -b -1` ends before it. The `reboot-to` here was #403's,
+   built by hand on the palmtop; pacman puts the packaged one back when
+   #403's `omamobile-device-tegu` lands.
 
 `tools/phone-smoke` on the second boot: every required check ok (boot, the
 storage guard, root, kernel health, USB, session), and display, GPU, lock,
