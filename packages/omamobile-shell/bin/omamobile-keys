@@ -209,6 +209,11 @@ short_press() {
     # once the panel is off, for the next wake.
     local device level=
     device=$(omarchy-hw-display 2>/dev/null)
+    # First Android's fade to black (200 ms, the shell's screenOff), where
+    # the shell has one; then the panel off.
+    if [[ $(omarchy-shell shell call omamobile.home screenOff "" 2>/dev/null) == ok ]]; then
+      sleep 0.2
+    fi
     hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })' >/dev/null 2>&1
     if [[ -n $device ]]; then
       level=$(brightnessctl -d "$device" get 2>/dev/null)
