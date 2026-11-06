@@ -39,6 +39,10 @@
 # here, the next one finds it, leaves the amplifier driver alone and fails.
 #
 #   omamobile-speaker-protection start [--retry]    (the service)
+#   omamobile-speaker-protection mics [--retry]     (omamobile-audio-mics.service)
+#                           the microphones without protection: steps 1 and 2
+#                           only, so the card (which waits for both amplifiers)
+#                           comes up and both stay muted; the speakers are silent
 #   omamobile-speaker-protection watch              (omamobile-speaker-watch.service)
 #   omamobile-speaker-protection status | monitor [SECONDS] | health
 #   omamobile-speaker-protection verify             (during playback; C9a)
@@ -88,6 +92,14 @@
 set -uo pipefail
 
 KERNEL_DIGITAL_MAX=817
+
+# The systems whose c9 levels below were measured under protection (AOC-PLAN
+# C9). On any other phone c9 is refused, whatever its stamp or the list says:
+# raven's firmware misreads its coil at these levels (raven AUDIO-PLAN R6).
+C9_SYSTEMS="cheetah"
+# The systems whose top amplifier passed the earpiece check (AOC-PLAN C9k);
+# earpiece on is refused on any other.
+EAR_SYSTEMS="cheetah"
 
 # auto (the default): c9 at the everyday loud levels below when the phone
 # has what c9 needs (aoc_alsa_dev speaker_protection=1, which device-cheetah
@@ -332,6 +344,8 @@ in_verified_list() {
 c9_source() {
   local digest
   C9_SOURCE='' C9_WHY=''
+  [[ " $C9_SYSTEMS " == *" $SYSTEM "* ]] || {
+    C9_WHY="stage c9 has no levels measured for $SYSTEM (only for: $C9_SYSTEMS)"; return 1; }
   digest=$(fw_digest 2>/dev/null) || { C9_WHY="the protection firmware or a tuning is missing"; return 1; }
   if [[ -r $stamp && $(sed -n 's/^firmware //p' "$stamp") == "$digest" ]]; then
     C9_SOURCE=stamp; return 0
@@ -637,6 +651,42 @@ set_status_ok() {
   set_status "ok: stage $STAGE, protection firmware with factory calibration, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
 }
 
+# The microphones without the speakers. The AoC sound card waits for both
+# amplifiers as codecs, so with their driver unloaded there are no microphones
+# either. Load the driver and mute both, as start does before anything else,
+# and stop there: no DSP firmware, no unmute. Hang-safe through the same marker.
+mics() {
+  local i p
+  if [[ -e $marker ]]; then
+    log "the last start ($(cat "$marker" 2>/dev/null)) never finished; the amplifiers stay off this boot."
+    log "after checking the previous boot's log, retry with: omamobile-speaker-protection mics --retry"
+    find_card && mute
+    set_status "off: the last start never finished"
+    exit 1
+  fi
+  mkdir -p "$STATE"
+  date -Is > "$marker"
+  sync -f "$marker" 2>/dev/null || sync
+  if compgen -G "$SPIDRV/spi*" >/dev/null; then
+    find_card && mute
+  else
+    modprobe snd_soc_cs35l41_spi || fail "snd_soc_cs35l41_spi failed to load"
+  fi
+  for ((i = 0; i < CARD_WAIT * 5; i++)); do find_card && break; sleep 0.2; done
+  find_card || fail "no AoC sound card after ${CARD_WAIT} s (both amplifiers probed? the AoC up?)"
+  # alsa-utils restores the saved mixer state from udev when the card
+  # appears; let that run first, then check again that it didn't undo the mute.
+  udevadm settle -t 10 2>/dev/null || true
+  mute || fail "muting failed"
+  sleep 1
+  for p in "${AMPS[@]}"; do
+    [[ $(ctl_values "$p Digital PCM Volume") == 0 ]] || fail "the $p amplifier was unmuted after the mute"
+  done
+  finish
+  set_status "muted: microphones only, speakers off (no protection)"
+  log "AoC sound card $card: microphones only, both amplifiers muted (no speaker protection)"
+}
+
 # Read-only report. Prints the DSP state but never the calibration values.
 status() {
   local p i c v name d
@@ -805,6 +855,10 @@ earpiece() {
     status) echo "mode: $(cur_mode); the watchdog enforces: $(cat "$ack_file" 2>/dev/null || echo 'nothing reported')"; return 0 ;;
     *) echo "Usage: omamobile-speaker-protection earpiece on|off|status" >&2; exit 2 ;;
   esac
+  # Only where the top amplifier is known to be the earpiece and C9k's check
+  # passed; off has to work everywhere.
+  [[ $want == off || " $EAR_SYSTEMS " == *" $SYSTEM "* ]] ||
+    ear_refuse on "no earpiece check for $SYSTEM yet (AOC-PLAN C9k ran on: $EAR_SYSTEMS)"
   mkdir -p "$RUN"
   # one change at a time (the UCM's disable and enable sequences can ask for
   # both in quick succession)
@@ -924,6 +978,9 @@ case ${1:-} in
   start|restart|recover)
     [[ ${2:-} == --retry ]] && rm -f "$marker"
     start ;;
+  mics)
+    [[ ${2:-} == --retry ]] && rm -f "$marker"
+    mics ;;
   watch) find_card || { log "watchdog: no AoC sound card"; exit 1; }; dsp --card "$card" watch ;;
   status) status ;;
   earpiece) earpiece "${2:-}" ;;
@@ -950,7 +1007,7 @@ case ${1:-} in
       exit 1
     fi ;;
   *)
-    echo "Usage: omamobile-speaker-protection start [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
+    echo "Usage: omamobile-speaker-protection start [--retry] | mics [--retry] | watch | status | health | monitor [SECONDS [INTERVAL]]" >&2
     echo "       | earpiece on|off|status   (the top amplifier alone as the earpiece, AOC-PLAN C9k)" >&2
     echo "       | digest   (the installed firmware's digest, as a line of the verified list)" >&2
     echo "       | verify | signal tone|multitone FILE [--level DBFS --seconds S --channels both|left|right] | mute [--reason TEXT]" >&2

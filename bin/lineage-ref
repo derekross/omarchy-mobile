@@ -71,10 +71,24 @@ cmd_image() {
 }
 
 cmd_sync() {
+  local init="repo init -u https://github.com/LineageOS/android.git -b $BRANCH --git-lfs --no-clone-bundle"
+  # repo records the tree's branch as the manifest project's default
+  # branch. On another branch, re-run repo init with -b only, so the
+  # manifest URL and --depth stay (repo resets manifest groups on any
+  # init without -g); none recorded (an interrupted first init) means the
+  # full init.
+  local recorded
+  recorded=$(git config --file "$SRC_DIR/.repo/manifests.git/config" --get branch.default.merge 2>/dev/null) || recorded=
+  if [[ $recorded == "refs/heads/$BRANCH" ]]; then
+    init=:
+  elif [[ -n $recorded ]]; then
+    say "$SRC_DIR follows ${recorded#refs/heads/}; switching it to $BRANCH"
+    init="repo init -b $BRANCH"
+  fi
   say "Syncing LineageOS $BRANCH into $SRC_DIR (first run downloads well over 100 GB)"
   in_container "
     set -e
-    [[ -d .repo/manifests ]] || repo init -u https://github.com/LineageOS/android.git -b $BRANCH --git-lfs --no-clone-bundle
+    $init
     mkdir -p .repo/local_manifests
     cp /omamobile-manifests/*.xml .repo/local_manifests/
     repo sync

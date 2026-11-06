@@ -51,7 +51,7 @@ from inbox import persist_sms
 from sit import Sit, ModemError
 from sms_codec import submit, received_pdu, number
 import carrier_manifest
-from voice_audio import VoiceAudio, aoc_card
+from voice_audio import AudioRefused, VoiceAudio, aoc_card
 
 STATES = {0: 'active', 1: 'held', 2: 'dialing', 3: 'ringing-out', 4: 'ringing-in', 5: 'waiting',
           6: 'terminated', 7: 'held', 8: 'active'}
@@ -580,7 +580,7 @@ class Service:
         received = [r[0] for r in self.db.execute('SELECT id FROM received WHERE consumed=0 ORDER BY rowid')]
         return dict(modem=modem, calls=calls, sms=dict(received=['sit:' + i for i in received]),
                     audio=dict(available=True, running=self.audio is not None, mute=self.muted,
-                               speaker=False, speaker_available=False, error=self.audio_error))
+                               speaker=getattr(self.audio, 'tegu', False) is True, speaker_available=False, error=self.audio_error))
 
     def subscribe(self, connection):
         """Keep an authorised connection for status events; refuse beyond
