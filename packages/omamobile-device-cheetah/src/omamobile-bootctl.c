@@ -84,8 +84,9 @@
 #define DEVINFO_MIN_VERSION	0x00030003u	/* "only version 3.3+ supports A/B data" */
 
 /*
- * The only layout version this port has been checked against (Pixel 7 Pro,
- * cheetah, stock CP2A bootloader, devinfo 3.15). Writes refuse anything else.
+ * The shared source stays at the layout checked on the Pixel 7 Pro (cheetah,
+ * stock CP2A bootloader, devinfo 3.15); lynx adds its own 3.11 at build time.
+ * Writes refuse every other version.
  */
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
@@ -97,9 +98,9 @@ struct verified_layout {
 };
 
 /*
- * Layouts checked on phones: 3.15 on the Android 17 bootloader used by the
- * published lynx notes, and 3.11 on Android 15 lynx units. The A/B data sits
- * at the same offsets in both; only the header version differs.
+ * Layouts checked on phones: 3.15 on the Pixel 7 Pro's CP2A bootloader, and
+ * 3.11 on Android 15 lynx units. The A/B data sits at the same offsets in
+ * both; only the header version differs.
  */
 static const struct verified_layout verified_layouts[] = {
 	{ 3, 15 },
