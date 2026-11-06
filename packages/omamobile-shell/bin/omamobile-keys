@@ -220,7 +220,18 @@ short_press() {
     lock_dark
     omarchy-brightness-display off
     # The brightness the next wake lights up with: the saved level, or 40 % when
-    # the press caught the panel at 0.
+    # the press caught the panel at 0. Only once the panel is really off: DPMS
+    # takes it down about 0.4 s after the dispatch on a Pixel 7 (bl_power goes
+    # to 4 then), and putting the level back before that lit the lock screen
+    # for a moment (Ángel, 6-nov: "vuelve a la pantalla de bloqueo antes de
+    # apagar la pantalla"). At most 1.5 s, for a panel whose bl_power never
+    # says so.
+    if [[ -n $device && -r /sys/class/backlight/$device/bl_power ]]; then
+      for _ in $(seq 30); do
+        [[ $(</sys/class/backlight/$device/bl_power) == 4 ]] && break
+        sleep 0.05
+      done
+    fi
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
     fi
