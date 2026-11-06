@@ -201,12 +201,15 @@ short_press() {
     # off by hand): a press wakes it instead of locking into the dark again.
     wake_unlocked
   else
-    # Dark at once, as on Android, but only by the backlight: Omarchy's lock
-    # waits for a working screen ("screen-stabilizing"), so powering the panel
-    # off first made the lock light it again for a moment. Lock behind the dark
-    # panel, then power it off and put the brightness back for the next wake.
+    # Off at once, as on Android: the panel powered off first, then the lock
+    # taken behind it. The backlight at 0 alone only dimmed a Pixel 7's OLED,
+    # so the lock showed dim before the screen went off (Ángel, 6-nov: "se
+    # atenúa, va a la pantalla de bloqueo y luego se apaga"). The brightness
+    # goes to 0 too, for a panel DPMS doesn't reach; it comes back below,
+    # once the panel is off, for the next wake.
     local device level=
     device=$(omarchy-hw-display 2>/dev/null)
+    hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })' >/dev/null 2>&1
     if [[ -n $device ]]; then
       level=$(brightnessctl -d "$device" get 2>/dev/null)
       [[ ${level:-0} -gt 0 ]] || level=
