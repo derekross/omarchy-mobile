@@ -520,6 +520,18 @@ def run_dir():
     return os.environ.get('OMAMOBILE_RUN', '/run/omamobile')
 
 
+def default_calibration():
+    """True when the last start ran the DSPs on the protection firmware's
+    default calibration (OMAMOBILE_SPK_DEFAULT_CAL=1 and no speaker.cal), as
+    it recorded in speaker-protection-calibration; the setting alone never
+    makes it so."""
+    try:
+        with open(os.path.join(run_dir(), 'speaker-protection-calibration')) as f:
+            return f.read().strip() == 'default calibration'
+    except OSError:
+        return False
+
+
 def speaker_mode():
     """The mode omamobile-speaker-protection set: speaker (no file, the
     default) or earpiece; anything else is returned as it is (and refused)."""
@@ -682,9 +694,9 @@ def check(v, digital_ceil, analog_ceil, temp_max, strict=True, mode='speaker'):
             problems.append(f'{amp}: CSPL_STATE {s} ({CSPL_STATES.get(s, "unknown")})')
         if g('CSPL_ERRORNO') != 0:
             problems.append(f'{amp}: CSPL_ERRORNO {g("CSPL_ERRORNO")}')
-        # OMAMOBILE_SPK_DEFAULT_CAL=1 (no speaker.cal, as on a stock Pixel 7
-        # without one): the firmware's defaults are the expected state.
-        cal_ok = (CAL_APPLIED, CAL_DEFAULTS) if os.environ.get('OMAMOBILE_SPK_DEFAULT_CAL') == '1' else (CAL_APPLIED,)
+        # The last start ran on the firmware's defaults (no speaker.cal, as on
+        # a stock Pixel 7 without one): they are the expected state.
+        cal_ok = (CAL_APPLIED, CAL_DEFAULTS) if default_calibration() else (CAL_APPLIED,)
         if g('CAL_SET_STATUS') not in cal_ok:
             problems.append(f'{amp}: CAL_SET_STATUS {g("CAL_SET_STATUS")}, calibration not applied')
         if g('BDLOG_ABNORMAL_MUTE') not in (None, 0):

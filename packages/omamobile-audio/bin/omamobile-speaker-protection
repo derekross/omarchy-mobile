@@ -219,6 +219,11 @@ boost_file=$RUN/speaker-protection-boost
 mode_file=$RUN/speaker-mode
 ack_file=$RUN/speaker-watch-mode
 cal=$RUN/speaker.cal
+# What the last start ran the DSPs on: "factory calibration", or "default
+# calibration" (OMAMOBILE_SPK_DEFAULT_CAL=1 and no speaker.cal). The watchdog
+# accepts CAL_SET_STATUS 1 only when this says so, and stage c9 and verify are
+# refused then; the setting alone switches none of that
+cal_state=$RUN/speaker-protection-calibration
 default_cal=0
 card=
 
@@ -364,23 +369,28 @@ c9_source_text() {
 # Copy persist's speaker.cal to $cal and check both records. Sets the arrays
 # cal_r, cal_status, cal_checksum, cal_ambient. Logs no values.
 read_calibration() {
-  local dev w i
+  local dev w i err
+  default_cal=0
   dev=$(grep -l '^PARTNAME=persist$' "$SYSBLOCK"/*/uevent 2>/dev/null | head -n1)
   [[ -n $dev ]] || { log "no persist partition"; return 1; }
   dev=${dev%/uevent}
   dev=$DEVDIR/${dev##*/}
   command -v debugfs >/dev/null || { log "no debugfs (e2fsprogs)"; return 1; }
   mkdir -p "$RUN"
-  # debugfs opens the device read-only unless given -w
-  (umask 077 && debugfs -R "cat $CAL_PATH" "$dev" > "$cal" 2>/dev/null)
+  # debugfs opens the device read-only unless given -w; it exits 0 whatever
+  # went wrong, so its messages are kept to tell a missing file apart
+  err=$( (umask 077 && debugfs -R "cat $CAL_PATH" "$dev" 2>&1 > "$cal") )
   if (($(stat -c %s "$cal" 2>/dev/null || echo 0) < ${#AMPS[@]} * CAL_WORDS * 4)); then
     log "persist:$CAL_PATH is missing or short"
-    if [[ ${OMAMOBILE_SPK_DEFAULT_CAL:-0} == 1 && ! -s $cal ]]; then
+    # only debugfs's own "File not found": an empty file, or an empty read
+    # for any other reason (persist not opened, a read error), still stops
+    if [[ ${OMAMOBILE_SPK_DEFAULT_CAL:-0} == 1 && ! -s $cal && $err == *"$CAL_PATH: File not found by ext2_lookup"* ]]; then
       # As stock's audio_spk_35l41.so does on a phone with no speaker.cal:
       # load the protection firmware without writing CAL_*, so it runs on the
       # tuning's default calibration. CAL_SET_STATUS only reads during
-      # playback, so start just logs it; the watchdog then accepts 1 ("Use
-      # default calibration data") as well as 2. A short file still stops.
+      # playback, so start just logs it and records the mode in $cal_state;
+      # the watchdog then accepts 1 ("Use default calibration data") as well
+      # as 2. A short file still stops.
       log "OMAMOBILE_SPK_DEFAULT_CAL=1: using the protection firmware's default calibration, as stock without speaker.cal"
       default_cal=1
       return 0
@@ -500,7 +510,7 @@ start() {
   sync -f "$marker" 2>/dev/null || sync
   # A start always ends in speaker mode (C9k): earpiece mode never outlives
   # a restart, and no earpiece request is taken while this runs.
-  rm -f "$mode_file" "$ack_file" "$boost_file"
+  rm -f "$mode_file" "$ack_file" "$boost_file" "$cal_state"
   set_status "starting"
   # the kernel log's clock (CLOCK_MONOTONIC; /proc/uptime also counts suspend)
   since=$(python3 -c 'import time; print(time.monotonic())')
@@ -562,8 +572,15 @@ start() {
       log "stage c9 chosen by this phone's stamp"
     fi
   fi
+  [[ -z $STAGE_NOTE ]] || log "$STAGE_NOTE"
   check_firmware || fail "stopped at the firmware check"
   read_calibration || fail "stopped at the calibration check"
+  # c9's levels lean on the firmware's coil temperature, which rests on the
+  # calibrated coil resistance: on the tuning's default it is off by however
+  # far this coil is from it. Auto picks media then (resolve_stage, below).
+  if ((default_cal)) && [[ $STAGE == c9 ]]; then
+    fail "stage c9 needs the factory calibration: on the firmware's default calibration only media and c8 run"
+  fi
 
   # 5. Firmware into both DSPs, then the calibration
   for p in "${AMPS[@]}"; do
@@ -599,8 +616,10 @@ start() {
       v=$(ctl_values "$c")
       log "$p CAL_SET_STATUS: $v"
     done
+    echo "default calibration" > "$cal_state" || fail "writing $cal_state failed"
   else
     log "calibration written to both DSPs and read back"
+    echo "factory calibration" > "$cal_state" || fail "writing $cal_state failed"
   fi
 
   # 6. DAC through the DSP, analog gain
@@ -655,7 +674,7 @@ levels_text() { echo "Top $(level Top DIGITAL)/$(level Top ANALOG), Bottom $(lev
 # "ok: stage <stage>," start, so keep that.
 set_status_ok() {
   local c="factory calibration"
-  [[ -s $cal ]] || c="the firmware's default calibration"  # OMAMOBILE_SPK_DEFAULT_CAL=1
+  ((default_cal)) && c="the firmware's default calibration"
   set_status "ok: stage $STAGE, protection firmware with $c, PCM Source DSP, held awake, digital/analog $(levels_text), $(cat "$boost_file" 2>/dev/null)$(stage_from)"
 }
 
@@ -705,6 +724,8 @@ status() {
 verify() {
   local digest
   digest=$(fw_digest) || { echo "no firmware"; return 1; }
+  # the stamp lets c9 run, and c9 needs the factory calibration (start)
+  ((!default_cal)) || { echo "not verified: the DSPs run on the protection firmware's default calibration (no speaker.cal); a stamp needs the factory calibration"; return 1; }
   dsp verify "$@" || return 1
   mkdir -p "$STATE"
   printf 'date %s\nkernel %s\nfirmware %s\n' "$(date -Is)" "$(uname -r)" "$digest" > "$stamp"
@@ -904,17 +925,27 @@ earpiece() {
 
 # auto: c9 when the phone has what c9 needs, media otherwise (see STAGE above)
 resolve_stage() {
+  STAGE_NOTE=''
   [[ $STAGE == auto ]] || return 0
   local prot
   prot=$(cat "$SYSMODULE/aoc_alsa_dev/parameters/speaker_protection" 2>/dev/null)
   if [[ $prot == Y ]] && c9_source; then
     STAGE=c9
+    # c9 needs the factory calibration (start)
+    ((!default_cal)) || STAGE=media STAGE_NOTE="stage media, not c9: c9 needs the factory calibration, and this phone runs on the firmware's default"
   else
     STAGE=media
   fi
   set_stage
   export OMAMOBILE_SPK_STAGE=$STAGE
 }
+# On the firmware's default calibration: start reads persist for it now,
+# before the stage is chosen (only when OMAMOBILE_SPK_DEFAULT_CAL=1 asks for
+# it); every other command takes what the last start recorded
+case ${1:-} in
+  start|restart|recover) [[ ${OMAMOBILE_SPK_DEFAULT_CAL:-0} != 1 ]] || read_calibration >/dev/null 2>&1 || true ;;
+  *) [[ $(cat "$cal_state" 2>/dev/null) == "default calibration" ]] && default_cal=1 ;;
+esac
 resolve_stage
 # Which way c9 is allowed, for the log, the status and the watchdog (its
 # first-stream check runs with "list" only); empty in every other stage
