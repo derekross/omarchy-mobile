@@ -1,0 +1,11 @@
+[Unit]
+Description=Enable lynx S6E3FC5 DSI commands
+Documentation=file:///usr/share/omamobile/device-lynx/NOTES.md
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-lynx-display-start
+
+[Install]
+WantedBy=multi-user.target

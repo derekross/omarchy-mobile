@@ -122,6 +122,14 @@ for absent in usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
+[[ -f $tmp/root/usr/lib/modprobe.d/omamobile-display.conf ]] \
+  || fail "install stages the display modprobe file"
+[[ -x $tmp/root/usr/bin/omamobile-lynx-display-start ]] \
+  || fail "install stages the display start script"
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-lynx-display.service ]] \
+  || fail "install stages the display service"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-lynx-display.service") == ../omamobile-lynx-display.service ]] \
+  || fail "the display service is enabled"
 pass "install stages the udev rule, the USB link, the mirrorlist, and the boot-success marker, and nothing that starts hardware"
 
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
