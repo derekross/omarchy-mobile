@@ -111,6 +111,7 @@ The descriptor carries no comments; this table is its provenance.
 | `VENDOR_PAGESIZE` | 0x800 | [V] | F/ `vendor_boot` and `vendor_kernel_boot` headers |
 | `OS_VERSION`, `OS_PATCH_LEVEL` | 17.0.0, 2026-10 | [V] | F/ `init_boot` header; the build on both slots (R/) |
 | `BOOT_IMAGES`, `UFS_RW` | the five boot images; their `_b` names and `userdata` | [V] | R/ `/dev/block/by-name`; F/ |
+| `NV_PARTS`, `NV_BACKUP_EXTRA` | `efs efs_backup modem_userdata persist modem_a modem_b`; `devinfo` | [V] | R/ `/dev/block/by-name` has all seven, none on `UFS_RW`. They are cheetah's values: the partitions of AGENTS.md §1's checksum check, plus `devinfo`, whose slot flags change with every flash. They let `tools/nv-backup` back them up read-only from our own kernel ([BRINGUP-M2](BRINGUP-M2.md), M2.4) |
 | `INITRAMFS_INIT` | the shared init | [V] | as husky |
 | `PANEL_SIZE` | 1080x2400 | [V] | R/ `dumpsys display`; G/ `zuma-akita-display.dtsi` |
 | `SIMPLEFB_TRIG_CON` | `0x19470030 0x3061` | [V] | DECON0 `TRIG_CON` read 0x3070 at handover on a booted 8a (2026-11-03, above); 0x3061 unmasks the trigger as on husky (H/), and with it the console reaches the panel (M1.4, above) |
