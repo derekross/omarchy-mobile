@@ -118,4 +118,30 @@ the sound and camera overlays the phone already ran; only
 | P2 | Passed (Trusty was on through the sound overlay): "trusty version: Project: cloudripper", "selected api version: 5", `/dev/trusty-ipc-dev0`, "refusing to take cpu 7 offline" |
 | P3 | Passed: keymaster, gatekeeper and apploader "open" |
 | P4 | Passed with goodix_fp blacklisted and loaded by hand: "irq 129, supply switched, netlink 25"; `vdd_udfps` 0 users before, 1 (enabled) while `/dev/goodix_fp` was open (152 sensor interrupts), 0 (disabled) after; `regulator_summary` otherwise identical (81 lines) |
-| P5 | Not run (writes RPMB: Ángel's yes first) |
+| P5 | Passed (Ángel's yes, 2026-11-04 and 11-06): see below |
+
+**P5.** The runner first refused: this phone's `persist:/ss/0` is a 0-byte
+file with the factory date (1 Jan 2020), in the 11-03 and 11-04 backups
+alike, so its Trusty never committed TDP, and stock's `storageproxyd`
+serves that empty file on every boot (`init.gs201.rc` links
+`/data/vendor/ss/persist` to persist's `/ss`). With the runner taking an
+empty `/ss/0` as an empty TDP copy (its hash recorded, refused once either
+side changes), the first start (11-04 18:24) copied `mfg_data` and
+`persist:/ss`, ran `storageproxyd`, loaded `g7.app`, and brought up KeyMint,
+Gatekeeper, the Goodix HAL and the bridge; the HAL reported the sensor at
+(540, 1713), radius 100, and no calibration error ("injectMtCali:
+Calibration file already sent" only). On 11-06, same kernel and DTB,
+`omamobile-fp` started the stack again; `fprintd-list` showed "Under-display
+fingerprint sensor (Omarchy Mobile)". A right index finger was enrolled from
+the shell's enrollment screen (quick settings, Fingerprint) and the lock
+screen unlocked with it (the bridge logged `MATCH`). The TDP copy was still
+the empty file (`e3b0c442…`) two days and one enrollment later: Trusty did
+not write TDP. Then, with `omamobile-fp` enabled and this package's
+`omamobile-fingerprint.conf` in place of the hand-written blacklist, a
+reboot (11-06 19:02): Trusty loaded from the DT, `/dev/trusty-ipc-dev0`
+and `goodix_fp` were there, the unit started the stack by itself ("g7.app
+loaded", the bridge ready), no unit failed, the finger was still enrolled,
+the TDP copy still empty, and the lock screen unlocked with it (`MATCH`).
+Not checked: the packages installed with `pacman -U` (their files were
+copied by hand), a wrong finger, sudo through `pam_fprintd`, and stock
+Android after a factory reset (cheetah's T2).
