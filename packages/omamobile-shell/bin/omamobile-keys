@@ -206,20 +206,27 @@ serially() {
 }
 
 short_press() {
+  # $1: when the key came up. The work may start later, behind the press
+  # before (serially), and timing it from then threw quick presses away as
+  # bounces (Ángel, 6-nov: "los toques rápidos no los detecta bien").
+  local up=${1:-$(now)}
   # This press already woke the phone as it went down (power-down).
-  if [[ -f $state/woke-on-press ]] && (( $(now) - $(<"$state/woke-on-press") < 5000 )); then
+  if [[ -f $state/woke-on-press ]] && (( up - $(<"$state/woke-on-press") < 5000 )); then
     rm -f "$state/woke-on-press"
-    echo "$(now)" >"$state/last-press"
+    echo "$up" >"$state/last-press"
     return 0
   fi
-  # Debounce: a second press within 0.8 s of the first, while it was still
-  # locking and powering the panel off, read the screen as on and saved a
-  # brightness of 0, which left the phone dark on the next wake. A press a
-  # few seconds later must still count: it is the wake.
-  local now last
-  now=$1; last=$(cat "$state/last-press" 2>/dev/null || echo 0)
+  # Debounce (below). A second press while the first was still locking and
+  # powering the panel off once read the screen as on and saved a brightness
+  # of 0, leaving the phone dark on the next wake: presses now run one at a
+  # time (serially) instead. A press a few seconds later is the wake.
+  # A bounce, not a press: within 0.3 s of the last. It was 0.8 s, from when
+  # a second press could overtake a lock still going on; presses now wait
+  # for each other (serially), and 0.8 s swallowed quick ones.
+  local now=$up last
+  last=$(cat "$state/last-press" 2>/dev/null || echo 0)
   echo "$now" >"$state/last-press"
-  (( now - last < 800 )) && return 0
+  (( now - last < 300 )) && return 0
   # The press that woke the phone from sleep, if it gets here at all:
   # omamobile-sleepd has lit the PIN pad for it already.
   [[ -f $state/power-wake ]] && (( now - $(<"$state/power-wake") < 1500 )) && return 0
