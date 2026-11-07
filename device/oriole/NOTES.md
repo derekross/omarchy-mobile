@@ -126,6 +126,12 @@ helper's logic or from a later backup. No new metadata write was attempted.
 - [V, source] On the published kernel's `omamobile` branch, the S2MPG10 alarm callback reads `S2MPS14_REG_ST2` at offset `0x08`. On S2MPG10 that is `INT3M`; [Google's register definitions](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/include/linux/mfd/samsung/s2mpg10-register.h) place `STATUS2` at `0x0d`, and its [RTC driver](https://android.googlesource.com/kernel/google-modules/soc/gs/+/204078758737776959ecc85c527a00fd2cabb62f/drivers/rtc/rtc-s2mpg10.c) reads the alarm-0 status bit there. The proposed kernel fix, [linux-omarchy-mobile#149](https://github.com/derekross/linux-omarchy-mobile/pull/149), is S2MPG10-specific; the S2MPG12 path remains unchanged. The test phone's unpublished kernel already contains the correction.
 - [I] The smoke test does not exercise a live pending alarm, alarm delivery, suspend or wake. Those paths remain to be independently verified.
 
+## 2026-10-17: coldplug audit on the first-light kernel
+
+[V] On `7.3.0-rc6-omamobile-oriole-firstlight-g4bd35d34abb9-dirty`, a read-only audit of unbound platform, I2C and SPI devices found module matches for `clk_acpm`, `max77759_charger`, `gpio_max77759`, `arm_dsu_pmu`, `at24` and `max17042_battery`. The local device policy blocked both alias autoload and direct modprobe; dry runs confirmed the refusals. The audit did not load any of these modules, so it does not establish what each would do when loaded. These blocks are conservative bring-up policy, not proof of individual driver failure.
+
+[V] The local native integration later used a separate experimental read-only `oriole-battery-readonly` provider, publishing `omamobile-battery`, to report battery telemetry; it did not use `max17042_battery`. Its kernel charging status remained Unknown. UPower inference and a separate charger-status observation do not establish charging control or prove that the upstream charger driver is safe. The public package contains neither that experimental provider nor its startup service; battery reporting is not guaranteed by this policy package.
+
 ## 2026-10-16: stage 0, part 2: a retail Pixel 6 (stock, bootloader locked)
 
 Read-only queries (`adb shell getprop`, `/dev/block/by-name`, `fastboot getvar all`) of a stock phone; facts only, no serial numbers.
