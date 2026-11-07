@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Bind only an SSH transport socket to the direct phone interface.
+
+Numeric IP, fixed port 22; unprivileged SO_BINDTODEVICE needs Linux >=5.7
+and local security policy permission. A denied bind never falls back unbound.
+"""
+import ipaddress
+import json
+import os
+import re
+import shlex
+import socket
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+
+def interface_name(value):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}", value):
+        raise ValueError("invalid USB interface")
+    return value
+
+
+def discover():
+    """A unique directly connected main-table route, never a VPN route."""
+    try:
+        result = subprocess.run(
+            ["ip", "-j", "route", "show", "table", "main", "match", "172.16.42.1/32"],
+            check=True, capture_output=True, text=True, timeout=2,
+        )
+        routes = json.loads(result.stdout)
+        matches = {
+            interface_name(route["dev"])
+            for route in routes
+            if route.get("scope") == "link" and not route.get("gateway")
+            and route.get("prefsrc") == "172.16.42.2"
+            and ipaddress.ip_address("172.16.42.1") in ipaddress.ip_network(route["dst"])
+        }
+        return next(iter(matches)) if len(matches) == 1 else ""
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return ""
+
+
+def relay(sock, input_fd=0, output_fd=1):
+    """Full duplex with bounded buffers and TCP half-close on stdin EOF.
+
+    Separate directions preserve backpressure without deadlocking a transfer
+    when the peer writes while it receives. Closing the peer ends the process;
+    the input reader is daemonized so an open SSH stdin cannot pin shutdown.
+    """
+    def send_input():
+        try:
+            while True:
+                block = os.read(input_fd, 65536)
+                if not block:
+                    sock.shutdown(socket.SHUT_WR)
+                    return
+                sock.sendall(block)
+        except OSError:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    sender = threading.Thread(target=send_input, daemon=True)
+    sender.start()
+    while True:
+        block = sock.recv(65536)
+        if not block:
+            return
+        remaining = memoryview(block)
+        while remaining:
+            written = os.write(output_fd, remaining)
+            if written <= 0:
+                raise OSError("SSH output closed")
+            remaining = remaining[written:]
+
+
+def main(args):
+    if args == ["--discover"]:
+        print(discover())
+        return
+    if len(args) != 3 or args[0] not in ("--command", "--relay"):
+        raise ValueError("usage: phone-ssh-proxy --discover | --command|--relay INTERFACE IP")
+    interface = interface_name(args[1])
+    address = str(ipaddress.ip_address(args[2]))
+    if args[0] == "--command":
+        # ProxyCommand is parsed by both OpenSSH (% tokens) and a shell.
+        # Embed validated literal arguments, not expanded %h/%p tokens.
+        command = [sys.executable, str(Path(__file__).resolve()), "--relay", interface, address]
+        print(shlex.join(command).replace("%", "%%"))
+        return
+    family, kind, proto, _, destination = socket.getaddrinfo(
+        address, 22, type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST,
+    )[0]
+    with socket.socket(family, kind, proto) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
+        sock.settimeout(6)
+        sock.connect(destination)
+        sock.settimeout(None)
+        relay(sock)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except (OSError, ValueError) as error:
+        print(f"phone-ssh-proxy: {error}", file=sys.stderr)
+        sys.exit(1)
