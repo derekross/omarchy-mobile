@@ -11,7 +11,7 @@
 #
 # Covers: a dry run changes nothing and prints the push, a fast-forward
 # publishes, a branch that lacks the published tip is refused with the
-# rebase to run, a missing or AI sign-off and a Co-Authored-By are refused,
+# rebase to run, a missing or AI sign-off is refused, a Co-Authored-By warns,
 # a merge commit is refused, a release tag is created and pushed (with a
 # branch, and alone on the published tip), an existing tag is refused, and
 # no code path forces a push.
@@ -137,12 +137,18 @@ change nosob "drivers: a: unsigned"
 publish fail "no human Signed-off-by" nosob
 change aisob "drivers: a: AI signs" "$sob" "Signed-off-by: Claude <noreply@anthropic.com>"
 publish fail "from an AI agent" aisob
-change coauthor "drivers: a: co-authored" "$sob" "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-publish fail "Co-Authored-By trailers" coauthor
-change coauthor-dry "drivers: a: co-authored" "$sob" "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-publish fail "Co-Authored-By trailers" --dry-run coauthor-dry
 [[ $(tip) == "$p3" ]] || fail "a commit that fails the checks was published"
-echo "ok - a missing or AI sign-off and a Co-Authored-By are refused, in a dry run too"
+echo "ok - a missing or AI sign-off is refused"
+
+# A Co-Authored-By only warns (the maintainer's decision, 2026-11-02): the
+# human sign-off is what publishing requires.
+change coauthor "drivers: a: co-authored" "$sob" "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+publish ok "Co-Authored-By trailers.*# WARN" --dry-run coauthor
+[[ $(tip) == "$p3" ]] || fail "a dry run moved the published branch"
+publish ok "Co-Authored-By trailers.*# WARN" coauthor
+[[ $(tip) == "$(kgit rev-parse coauthor)" ]] || fail "a signed-off commit with a Co-Authored-By wasn't published"
+p3=$(tip)
+echo "ok - a Co-Authored-By warns and publishes, in a dry run too"
 
 change side "drivers: a: one side" "$sob"
 kgit checkout -q -b merged origin/omamobile

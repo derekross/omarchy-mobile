@@ -57,7 +57,7 @@ for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-succ
          usr/lib/udev/rules.d/72-omamobile-feedbackd.rules usr/lib/systemd/system/omamobile-feedbackd-rescan.service \
          usr/lib/udev/rules.d/20-omamobile-display.rules \
          usr/lib/NetworkManager/conf.d/omamobile-raven-wifi-powersave.conf \
-         usr/bin/omamobile-sleep usr/bin/omamobile-sleepd usr/lib/systemd/user/omamobile-sleepd.service \
+         usr/bin/omamobile-sleep \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/share/licenses/omamobile-device-raven/LICENSE.Apache-2.0 usr/share/omamobile/device-raven/version; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
@@ -68,8 +68,7 @@ done
   || fail "the USB rescue unit is enabled by a vendor wants link"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system-sleep/omamobile") == /usr/bin/omamobile-sleep ]] \
   || fail "the sleep hook is linked into system-sleep"
-[[ $(readlink "$tmp/root/usr/lib/systemd/user/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
-  || fail "the sleep watcher is enabled by a vendor wants link"
+[ ! -e "$tmp/root/usr/bin/omamobile-sleepd" ] || fail "the sleep watcher is omamobile-shell's, not this package's"
 pass "install stages the package"
 
 # omamobile-wlan-mac only ever sets a unicast, globally administered address
@@ -84,7 +83,7 @@ out=$(sed "s|/proc/device-tree/chosen/config/wlan_mac1|$tmp/dt/wlan_mac1|; s|^ip
 pass "wlan-mac: only a real address from the bootloader"
 
 # Sleep: s2idle only (deep doesn't wake), the hook powers the Wi-Fi chip off
-# (pcie_gs201 too), and the watcher does nothing without its toggle
+# (pcie_gs201 too)
 # The modem doesn't start at boot from this package: as on main, the modem
 # packages are installed but not enabled (enabling it is its own change)
 for u in omamobile-modem omamobile-sitd omamobile-sitd-2 omamobile-sit-data-restore; do
@@ -94,8 +93,18 @@ done
 grep -qx 'MemorySleepMode=s2idle' vendor/systemd/sleep.conf.d/10-omamobile.conf || fail "sleep is s2idle"
 grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep || fail "unload mode unloads the PCIe host"
 grep -q 'wifi_pci=0000:01:00.0' bin/omamobile-sleep || fail "a Wi-Fi D3 failure falls back to unload mode"
-grep -q 'omarchy-toggle-enabled omamobile-sleep ||' bin/omamobile-sleepd || fail "the watcher is gated by its toggle"
 pass "sleep policy"
+
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service") == ../omamobile-speaker-protection.service ]] \
+  || fail "speaker protection (omamobile-audio 0.5.15) is enabled by a vendor wants link"
+[ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-audio-mics.service ] \
+  || fail "the microphones-only unit is not enabled with it (the two conflict)"
+grep -qx 'blacklist snd_soc_cs35l41_spi' vendor/modprobe.d/omamobile-raven.conf \
+  || fail "the amplifier driver never autoloads (device-raven's own blacklist)"
+grep -q "'omamobile-audio>=0.5.15'" PKGBUILD || fail "device-raven depends on omamobile-audio>=0.5.15 (protection on gs101)"
+! grep -rq 'speaker_protection' vendor/modprobe.d \
+  || fail "raven never sets aoc_alsa_dev speaker_protection (it would allow stage c9)"
+pass "speakers through protection at stage media, the microphones with them"
 
 # Policy that keeps the phone safe at boot
 for m in tcpci_maxim gpio_max77759; do

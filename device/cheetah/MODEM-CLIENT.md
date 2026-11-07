@@ -36,7 +36,9 @@ Two packages:
 | `sit.py` | ported | The single-owner IPC0 transport: framing, token matching, indication queue (signal and physical-channel snapshots coalesced so telemetry can't crowd out an SMS reply). Two guards: the allow-list of requests this stack sends, and our do-not-send list (NV, identity, carrier lock, AT forwarding, VSIM, satellite) checked first, so an edit to the allow-list can't let one through. Dial and SMS sends need the owner's flags |
 | `sit_names.py` | ours | The 602 message names, for logs |
 | `bringup.py` | ported, carrier values moved to the config | The start-up order (section 1.1) |
-| `data_call.py` | ported, APN from the config | Setup (983 bytes), initial attach (251), data profile (246), PDU sessions; bearer ownership recorded in RAM before each setup, never retried blindly |
+| `carrier_apn.py` | ours | The SIM's carrier settings from its home network code (GET_IMSI's MCC/MNC, the rest dropped): the package's `apn-overrides.conf` first, then mobile-broadband-provider-info's `serviceproviders.xml`; the internet and attach APNs, `ims_apn`, `ims_first`, `internet_cid` and the data profiles, each only where `[network]` leaves it `auto` or empty (0.3.29, TELEPHONY-APPS-PLAN 7.6) |
+| `omamobile-sit-config` | ours | The pkexec helper behind the shell's Mobile network page (polkit action `org.omamobile.modem-sit.configure`): `set apn\|attach_apn\|roaming` and `get`, nothing else in `modem-sit.conf`; an APN must be a plain carrier APN, and the file is rewritten atomically with its comments kept |
+| `data_call.py` | ported, APN from the config | Setup (983 bytes; no PDU session ID on cellular, as stock), initial attach (251), data profile (246); bearer ownership recorded in RAM before each setup, never retried blindly |
 | `ims.py` | ported (identity strings ours) | IMS stack start, hidden-menu configuration, ADD_PDN_INFO from the IMS bearer, the registration indication |
 | `radio_settings.py` | ported | NR mode byte (3 -> 0 keeps LTE; the original kept in RAM) |
 | `sms_codec.py` | ported | GSM 7-bit / UCS-2 SMS-SUBMIT with concatenation, SMS-DELIVER with the SMSC prefix the modem adds, WAP push kept as bytes |
@@ -59,7 +61,8 @@ Units (`systemd/`), none enabled by the package:
 Config: `/etc/omamobile/modem-sit.conf` (`[network] apn` is required; `ims`,
 `ims_apn`, `ims_required` (default no: an IMS failure keeps data, 0.3.2),
 `nr`, timeouts including `ims_timeout`; `[control] group`; `[audio] card`
-(default `none` since 0.3.3: calls route no audio until M5),
+(built-in default `none`; from 0.3.30 a device package's `[audio]` defaults in
+`/usr/lib/omamobile/modem-sit.conf.d/*.conf` come first and `/etc` wins over them),
 `mic_boost_db`).
 
 Tests: `packages/omamobile-modem-sit/test/all` (about 10 s): 53 unit tests
@@ -103,8 +106,16 @@ registration indication), unless `ims_required = yes`.
 - **No NV writes from Linux, by construction.** The RIL speaks only SIT on
   `umts_ipc0` and fixed AT on `umts_router`; there is no raw-request path.
   NV lives in rfsd's RAM copies (MODEM-PLAN M3).
-- **No identity reads.** GET_IMEI/IMSI/SIM I/O, PIN and APDU requests are
-  not on the allow-list; GET_IMEI/IMEISV are on the do-not-send list too.
+- **No identity reads, but one.** GET_IMEI, SIM I/O, PIN and APDU requests
+  are not on the allow-list; GET_IMEI/IMEISV are on the do-not-send list too.
+  From 0.3.29 GET_IMSI is, sent once at start-up when any of `[network]`
+  `apn`, `attach_apn`, `ims_apn`, `ims_first` or `internet_cid` is `auto`
+  or empty. Those are the shipped defaults, so by default it is sent at
+  every boot, and typing `apn` and `attach_apn` alone still sends it (for
+  the bearer order); only typing all five reads no IMSI. Only its MCC/MNC
+  is used, to choose the APNs, the bearer order and the data profiles
+  (`carrier_apn.py`, TELEPHONY-APPS-PLAN 7.6); the IMSI is never logged,
+  stored or published, and the simulator tests fail if it reaches the log.
 - **Logs.** Requests by name and status code; SIM card/app state; data-call
   status/CID/type; IMS registration state/features. Never numbers, message
   text, addresses or the IMSI. The simulator tests fail if a number or a
@@ -112,10 +123,15 @@ registration indication), unless `ims_required = yes`.
 - **Outgoing SMS** carry a durable 32-hex request id; an interrupted or
   uncertain send is marked `unknown`, never repeated automatically.
 - **Calls**: a hangup whose release isn't confirmed within 12 s, or a call
-  left over from a previous run, stops the modem unit (CP off, then rfsd):
-  the only way to be sure the radio isn't still carrying a call. That is a
-  CP power-off (one UFS handler pass) and is the one place the RIL powers
-  the modem off.
+  left over from a previous run, turns the radio off (best effort, AT+CFUN=0)
+  and stops sitd with the call still recorded as its own, for an attended
+  reboot. The journal says "Call release not confirmed: <reason>", the radio
+  and CP states, and "attended reboot required". The RIL no longer stops the
+  modem unit or powers the CP off: an in-place power-off reset the 9a once,
+  and on the 7 Pro every power-off costs a UFS error-handler pass. The unit
+  has `Restart=no`, so a manual restart in the same boot finds the recorded
+  call, turns the radio off again and exits. This path has run only in the
+  simulator.
 - **Storage**: received SMS in `/var/lib/omamobile-sit` (0700, files 0600):
   numbers and text, never to be copied into the repository.
 
@@ -123,7 +139,7 @@ registration indication), unless `ims_required = yes`.
 
 | Gap | Effect |
 |---|---|
-| Call audio | Off by default (`[audio] card = none`, 0.3.3): calls connect silent. TDM 0 feeds both amplifiers and the top one is the earpiece; until an earpiece mode exists (TELEPHONY-APPS-PLAN T4, MODEM-PLAN M5) a configured card is refused unless speaker protection runs at stage media or c8, the top amplifier is at analog 6 or less (AUDIO-PLAN section 4) and both are within the media stage |
+| Call audio | On by default on the Pixel 7 Pro from `omamobile-modem-sit` 0.3.30 with `omamobile-device-cheetah` 0.1.44 (its `/usr/lib/omamobile/modem-sit.conf.d/50-cheetah.conf` sets `card = auto`), each call in the protection service's earpiece mode and refused without it (the call goes on silent); `none` on phones whose device package sets nothing (from 0.3.3 to 0.3.29 the default was `none` everywhere) |
 | Speakerphone | Not routed; calls use the stock voice path (EP5 to TDM 0) |
 | Call waiting, conference, emergency and short codes, MMS download | Refused or not implemented (emergency numbers are refused by the dialer check: **this phone cannot call emergency services under Linux**) |
 | Signal strength | Reported as 0 |

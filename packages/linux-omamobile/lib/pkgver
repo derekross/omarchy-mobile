@@ -1,0 +1,42 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The pacman version of a release kernel (docs/RELEASES.md §4, §7):
+#
+#   lib/pkgver 7.3.0-rc6-omamobile-g0123456789ab 4521   ->  7.3.0rc6.r4521.g0123456789ab
+#   lib/pkgver 7.3.0-rc6-omamobile-00453-g0123456789ab  ->  7.3.0rc6.r453.g0123456789ab
+#
+# The published branch starts from a squashed commit, so a release build's
+# `uname -r` carries only the commit (-omamobile-g<sha>); the commit count
+# that makes pkgver sort upward is `git rev-list --count kernel-<date>`,
+# given as the second argument (./stage reads it from KERNEL_DIR). A tree
+# with an upstream tag in its history puts the count in the release itself
+# (-omamobile-<n>-g<sha>), and then no second argument is needed.
+# '-' is folded away (pacman forbids it in a version), and an rc sorts below
+# its release (pacman's vercmp: 7.3.0rc6 < 7.3.0).
+#
+# Only release builds are packaged: a development kernel
+# (-omamobile-push1-..., or anything else in front of the commit) and a tree
+# with uncommitted changes (-dirty) are refused, so a development kernel can
+# never be mistaken for a packaged one.
+#
+#   lib/pkgver RELEASE [COMMITS]
+set -euo pipefail
+rel=${1:?usage: pkgver RELEASE [COMMITS] (RELEASE as in include/config/kernel.release)}
+count=${2:-}
+re='^([0-9]+)\.([0-9]+)(\.([0-9]+))?(-(rc[0-9]+))?-omamobile(-([0-9]+))?-g([0-9a-f]{7,40})$'
+if [[ $rel == *-dirty ]]; then
+  echo "pkgver: $rel was built from a tree with uncommitted changes; package a clean checkout of the tag" >&2
+  exit 1
+fi
+if ! [[ $rel =~ $re ]]; then
+  echo "pkgver: $rel is not a release kernel (expected <version>[-rcN]-omamobile-g<sha>; development builds such as -omamobile-push1 are not packaged)" >&2
+  exit 1
+fi
+v=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[4]:-0}${BASH_REMATCH[6]}
+n=${BASH_REMATCH[8]} sha=${BASH_REMATCH[9]}
+if [[ -n $n ]]; then
+  [[ -z $count || $((10#$count)) == $((10#$n)) ]] || { echo "pkgver: $rel says $n commits, not $count" >&2; exit 1; }
+  count=$n
+fi
+[[ $count =~ ^[0-9]+$ ]] || { echo "pkgver: $rel needs its commit count (git rev-list --count <tag>) as the second argument" >&2; exit 1; }
+echo "$v.r$((10#$count)).g$sha"

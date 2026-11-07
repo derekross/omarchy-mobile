@@ -321,7 +321,12 @@ never change, so reviews can cite them.
   part of every root-image runbook.** ABL falls back after three unmarked
   boots; stock then offers to reset an Arch `userdata`, and its boot writes
   `efs`/`persist`. *Check:* the runbook says how to get back to B, "decline
-  the reset" and "back up after a stock boot". *From:* #42, round 14.
+  the reset" and "back up after a stock boot". *From:* #42, round 14. **Also
+  (#414, round 39):** say what the third boot does on a phone with no
+  boot-success marker (the tries run out and stock boots on slot A), and
+  when a device's bootloader keeps `VENDOR_CMDLINE`, read that line word by
+  word against the DTB bootargs: arguments that were dead text on other
+  Pixels (`splash`, `printk.devkmsg=on`, `bootconfig` on akita) take effect.
 - **L-159. A storage power test runs where the root isn't on the device
   under test, and reads with `iflag=direct`,** or the page cache answers and
   the device never wakes. *From:* #42, round 14.
@@ -366,7 +371,103 @@ never change, so reviews can cite them.
   `-s` on every fastboot command, stock's expected behaviour with a Linux
   `userdata` against its stop condition, and the backup taken from Linux
   after `--set-active=b`. Extends L-2, L-158 and L-198. *From:* #35, round 22.
-
+- **L-442. A guard added only through a device's `ROOTFS_PACKAGES` reaches
+  new installs, not updated phones.** #400 put omamobile-audio and its
+  amplifier blacklist into raven's image, but device-raven neither depended
+  on it nor blacklisted the driver itself, so an updated raven kept the
+  unmuted autoload and got a wants link to a unit it didn't have. *Check:*
+  for every vendor wants link or guard a device package relies on, find the
+  package that ships it in that device package's `depends=`; the image list
+  is no upgrade path. *From:* #400, round 39, 2026-11-03.
+- **L-443. A shared "verified" stamp is checked for which device and which
+  level it verified.** omamobile-audio's c9 accepted a phone's own C9a stamp
+  without looking at `SYSTEM`; on raven the stamp was written at stage
+  media, and c9 then ran at the 7 Pro's c9 levels, which raven's own R6
+  shows the protection firmware misreads. *Check:* for each stage or mode a
+  stamp unlocks, name the system and the levels the verification ran at, and
+  add a test with another `SYSTEM`. Extends L-162. *From:* #401, round 39,
+  2026-11-03.
+- **L-444. A guard relaxation gets its first run on the phone where that
+  guard was strictest.** #403's reboot note lets the next boot start the
+  modem after a `reboot-to` that never powered it off; with #372 that
+  includes the 9a, where a second modem start in one boot reset the palmtop.
+  *Check:* for each device that reads the new signal, name the run that
+  exercised the newly allowed path there, and ask for it before merge.
+  Extends L-377. *From:* #403 with #372, round 39, 2026-11-03.
+- **L-445. A plan step that relaxes an attended rule is checked against the
+  plan's own earlier rules and runbook header, not only AGENTS.** #409
+  labelled two 9a sleep series "unattended" 350 lines below the same plan's
+  "unattended sleep stays off". Changing that rule is the maintainer's
+  decision, not a plan edit. *Check:* `grep -n -i 'attended\|unattended'`
+  across the plan and AGENTS for every new step. Extends L-224 and L-339.
+  *From:* #409, round 39, 2026-11-03.
+- **L-451. Two refusals in one installer are walked together from the
+  starting state each one addresses.** #383's "sideload the full OTA twice"
+  leaves stock on slot B, which #352 then refuses, and #352's own suggested
+  fix (`flash-all` on slot A) writes bootloader and radio, which §3.1
+  forbids. *Check:* for each new refusal, follow its suggested fix through
+  the installer's other refusals and the safety rules from the state it
+  starts in. Extends L-256. *From:* #352 with #383 (commit review), round
+  39, 2026-11-03.
+- **L-456. A register read added to an unattended series is a first probe,
+  however safe the single read was.** #409's HSI2 sysreg read through
+  `/dev/mem` passed once after a sleep-free boot, then ran after every wake
+  and reset the palmtop twice (the block's clock can be gated after resume).
+  *Check:* `git log -p` on a PR's bring-up scripts for `/dev/mem`, `mmap`,
+  `devmem` and `debugfs/regmap`, even in commits a later one reverts, and
+  ask for one attended read in each new state (after a wake, after a reset)
+  before it goes into a loop. Extends L-199. *From:* #409, round 40,
+  2026-11-04.
+- **L-457. A device PR that edits a file a sibling's test keeps identical
+  also edits the reference phone.** #436 widened lynx's devinfo layout
+  check, and lynx's `test/all` compares its `omamobile-bootctl.c` with
+  cheetah's, so the 7 Pro's copy changed too, and raven's third copy drifted
+  silently. *Check:* for every touched file, `git grep -l "<path>"
+  packages/*/test/all` and `git ls-tree -r origin/main | grep <basename>`;
+  prefer a compile-time or descriptor switch that keeps the shared copy and
+  the 7 Pro's binary unchanged. Extends L-8 and L-64. *From:* #436, round
+  41, 2026-11-05.
+- **L-458. An opt-in that relaxes a safety check is checked against every
+  stage it reaches, and the relaxed check keys on what the service did, not
+  on the setting.** #427's default-calibration mode left stage c9 reachable
+  through a stamp, and its watchdog accepted "calibration not applied"
+  whenever the setting was on, also on a phone with a calibration file.
+  *Check:* list the stages and modes each relaxing switch can reach, ask for
+  an explicit refusal where the relaxed state isn't verified, and have the
+  checker read a run-state record. Extends L-161 and L-443. *From:* #427,
+  round 41, 2026-11-05.
+- **L-459. A file capability is reviewed for secure-execution mode and for
+  where it is set.** A capability makes the kernel set `AT_SECURE`, which
+  changes how glibc and `secure_getenv` users (sd-bus) read the environment,
+  and a capability written inside a rootless build container may be
+  namespaced and not count on the phone. *Check:* ask for a session check
+  with the capability on, and `getcap` on a phone installed from a freshly
+  built image. *From:* #429, round 41, 2026-11-05.
+- **L-460. A port to an A/B phone with no stock left is held to the A/B
+  rules, not the single-slot ones.** #432 proposed a Linux rescue root on
+  slot A as its own exception, after #383 added rules for phones without
+  slots. *Check:* `getvar all` lists `_a`/`_b`; if so, §3.1's slot-A rule
+  stands, the way forward is stock restored under an approved plan, RAM-only
+  until then, and on Qualcomm also the GPT slot-flag entry. Extends L-135,
+  L-186, L-224 and L-322. *From:* issue #432, round 41, 2026-11-05.
+- **L-486. A docs or roadmap PR is read for safety disclosures, not only for
+  status words.** #472's roadmap said in one subordinate clause that the
+  contributor's phone marks slot B at every boot with a local unit, a
+  `devinfo` write under the #252 hold. *Check:* grep a docs PR's added lines
+  for `successful`, `devinfo`, `bootctl`, `setrw`, `local unit`, `by hand` and
+  `owner`, and send any hit through L-359. Extends L-267. *From:* #472, round
+  42, 2026-11-07.
+- **L-487. A guide that tells agents how to drive a phone carries AGENTS'
+  shared-phone rules in its prompt.** #463's prompt unlocked, woke and kept
+  the phone awake with no "tell the person first". *Check:* grep any doc with
+  an agent prompt for the AGENTS §1 verbs (announce, ask, DPMS, reboot) and
+  compare. *From:* #463, round 42, 2026-11-07.
+- **L-488. A plan's account of a safety deviation is checked against what the
+  contributor said in the thread.** #450's "short bursts at 817/8" was
+  narrower than the same author's #1 comment (tens of minutes of music, analog
+  12 to 17). *Check:* grep the author's comments on the device issue since
+  that date and diff the extent (levels, durations, parts). Extends L-435.
+  *From:* #450, round 42, 2026-11-07.
 
 ## Shared code and the reference device
 
@@ -387,13 +488,13 @@ never change, so reviews can cite them.
   the new MANIFEST paths), or run it on a factory image we have; binder
   clients often need `STUB_LIBS`. Extends L-29. *From:* #141, round 29.
 - **L-326. A "read-only, no-op on cheetah" `clk_get_rate()` on an ACPM clock
-  is a firmware call.** clk-acpm registers the gs101, gs201 and zumapro clocks
-  with `CLK_GET_RATE_NOCACHE`, so kernel #116's MIF restore adds one ACPM DVFS
-  GET on cheetah at every drop from 120 Hz, though it never writes there (MIF
-  is already at its top rate). *Check:* before calling a new `clk_get_rate()`
-  on a shared path free, read the provider's `flags` and `recalc_rate`, and
-  put the call count in the cheetah table. Extends L-111. *From:* kernel #116,
-  round 29.
+  is a firmware call.** clk-acpm registers the gs201 and zumapro clocks with
+  `CLK_GET_RATE_NOCACHE` (gs101's aren't: corrected 2026-11-03, C-27), so
+  kernel #116's MIF restore adds one ACPM DVFS GET on cheetah at every drop
+  from 120 Hz, though it never writes there (MIF is already at its top
+  rate). *Check:* before calling a new `clk_get_rate()` on a shared path
+  free, read the provider's `flags` and `recalc_rate`, and put the call
+  count in the cheetah table. Extends L-111. *From:* kernel #116, round 29.
 - **L-325. "Shares the register map" isn't "shares the device type": a PMIC
   change gated on `device_type` is checked against the reference phone's MFD
   data, not its registers.** rtc-s5m gives the S2MPG12 the S2MPG10's
@@ -661,6 +762,118 @@ never change, so reviews can cite them.
   device repository for the board (not only the SoC's), and confirm the
   controller's USI block and the pin bank's block agree. *From:* kernel #151,
   2026-10-31.
+- **L-413. "Booted" or "known good" is a fact about the partitions since this boot, not a tool's record, and a guard that reads a tool's own state is walked through every other writer.** #320 first read `current/RELEASE`, which `bin/omamobile flash` (the documented recovery) and `push` never update, so after the recovery preflight refused every update. Its `save_previous` also treated slot B as booted with no record, a stale record or a record naming the running release; each can hold a set written in this boot (the hook's own same-release write, a half push), so the only recovery copy became a never-booted set marked `BOOTED=yes`. *Check:* list every way the thing can change after boot (the tool itself at the same version, fastboot, push, rollback's no-op branch, partial writes), run each in the package's fake root and then call preflight; prefer the kernel's evidence (`/sys/block/*/<part>/stat` write counters) over a record. Extends L-284 and L-363. *From:* #320, rounds 38 and 38b, 2026-11-02.
+- **L-414. A counter that proves "nothing happened" needs the mechanism that counts to be on.** #320's partition write counters stay 0 when `queue/iostats` is off, which turned the fail-safe back into the original bug. *Check:* for any "zero means unchanged" signal, find the switch that disables it and ask that "off" counts as "changed"; ask for one read on the phone that the counter rises after a known write and is zero after a fresh boot (C-1). *From:* #320, round 38c, 2026-11-02.
+- **L-415. Whether a check refuses or proceeds depends on where it runs relative to the irreversible step.** A refusal in a post-transaction hook (pacman has already removed the old modules) leaves a half-applied update; the same condition in the pre-transaction preflight costs only a restart. *Check:* when asking a hook to refuse, ask whether what it protects still exists at that point, and move the refusal to the earliest read-only gate when it doesn't. *From:* #320, round 38c, 2026-11-02.
+- **L-416. A packing change is a boot change.** #320's reproducible cpio dropped the `.` entry, so the initramfs root stayed at tmpfs's 1777 instead of 0755; the commit proved byte reproducibility and nothing about what the kernel unpacks. *Check:* diff both archives' listings with modes (`cpio -itv`), root entry included, and ask for one boot with `tools/phone-smoke`. *From:* #320, round 38b, 2026-11-02.
+- **L-446. An upgrade message in a shared package is scoped to the phones
+  whose default changed.** #416's first draft told every phone to "set card
+  = auto"; on the 9a that opts into an experimental speakerphone route, on
+  the 6 Pro into an unverified one, and it printed even when there was no
+  line to change. *Check:* for each `.install` echo that suggests a value,
+  ask which devices it is safe on, and gate the echo on the file's actual
+  content. Extends L-162. *From:* #416 (its review), round 39, 2026-11-03.
+- **L-449. A new "supported state" in one daemon is checked against the
+  units another PR starts at boot.** #373 made "no internet APN" a normal
+  state; #398 starts sit-data at every boot, which then waits 60 s, fails
+  and restarts every 70 s all boot, never reaching the start limit. *Check:*
+  for each new non-error state, list the units that `Requires=` or start the
+  daemon with `Restart=on-failure` and read what each does in that state.
+  Extends L-174. *From:* #373 with #398 (commit review), round 39,
+  2026-11-03.
+- **L-450. A new configuration layer is checked against every reader that
+  parses the file itself.** #416's device defaults sit before
+  `/etc/omamobile/modem-sit.conf`, but omamobile-mmd and the shell read
+  `[network]` and `[data]` from `/etc` directly and would never see a device
+  value there; the layer was limited to `[audio]`. *Check:* `git grep` the
+  config path across packages, list the sections each reader uses, and limit
+  the layer to those, or share the loader. Extends L-233. *From:* #416 (its
+  review), round 39, 2026-11-03.
+- **L-461. A device package that copies the reference phone's boot-time
+  radio start also copies, or answers for, its sleep handling of that
+  radio.** #419 took cheetah's Wi-Fi start, unit and blacklist but not
+  `omamobile-sleep`, which unloads Wi-Fi around s2idle by default and falls
+  back after a failed D3. *Check:* for each radio a device package starts at
+  boot, `git grep` the reference package's `system-sleep/` and `bin/*sleep*`
+  for that radio's modules, and ask for the hook or a sleep result. *From:*
+  #419, round 40, 2026-11-04.
+- **L-462. A change to how one surface reads a shared state is checked
+  against every other surface that shows it, and the reason each gives.**
+  #421 moved the bar to the battery's reported state, while the lock (patch
+  0026) uses charger-online on purpose and promises the bar's glyph.
+  *Check:* `git grep` the state across the shell plugins and the Omarchy
+  patch series, read each one's comment for its reasoning, and name the
+  disagreement the PR creates. *From:* #421, round 40, 2026-11-04.
+- **L-463. A file under `backup=` that another tool also writes gets an
+  upgrade message that doesn't blame the user.** omarchy-apply-lock rewrites
+  `/etc/pam.d/omarchy-lock-fingerprint` without our header, so pacman sees
+  it as edited; #440's first message said "your file was changed". Check the
+  other writer's text on main, not the text a pending PR will give it.
+  *Check:* `git grep` the path across packages and the Omarchy series before
+  writing any `.install` message about it. Extends L-450 and L-446. *From:*
+  #440, round 41, 2026-11-05.
+- **L-464. A quirk keyed on a SoC-level compatible is a reference-phone
+  change, whatever the PR's board.** #202's 32-bit DMA clamp for lynx
+  matched `google,gs201-mali`, the GPU in `gs201.dtsi` that the 7 Pro
+  enables. *Check:* for every `of_device_is_compatible()` or match entry a
+  board PR adds to a shared driver, `git grep '"<compatible>"' arch/` and
+  see which boards carry it. Extends L-206. *From:* kernel #202, round 41,
+  2026-11-05.
+- **L-465. A new controller node in a shared SoC dtsi is checked against
+  every board that includes it, first-light boards too.** #200 added
+  `pinctrl_hsi1` enabled in `zuma.dtsi`, so the 8a's first-light board
+  probes it untested, and gpiolib reads bank registers at registration.
+  *Check:* `git grep -l '"<soc>.dtsi"' arch/arm64/boot/dts/` for each new
+  node without `status`, and ask for `disabled` plus a board enable unless
+  every board has run it. Extends L-206 and L-306. *From:* kernel #200,
+  round 41, 2026-11-05.
+- **L-466. A new call with arguments can make the compiler un-specialise a
+  shared function on the reference phone's path.** #194's one
+  `DISABLE_REPORT` call with a payload changed `tcm_command`'s machine code
+  for every 7 Pro command, though the source path is the same. *Check:* the
+  per-function object diff names each changed function; for one the PR
+  didn't touch, read whether only argument setup changed. Extends L-301.
+  *From:* kernel #194, round 40, 2026-11-04.
+- **L-489. A per-SoC flag keyed on a compatible is checked for that
+  compatible's existence on the base.** Kernel #203 gated AoC behaviour on
+  `google,zuma-aoc`, which nothing on `omamobile` or in an open PR carries; it
+  came from a 132-commit test tree. *Check:* `git grep '"<compatible>"'` on
+  the base and open heads; if absent, hold the PR for the series that adds it.
+  Extends L-149 and L-189. *From:* kernel #203, round 42, 2026-11-07.
+- **L-490. A shared-path change gated on a pointer a probe-time table lookup
+  can clear runs only on boards in that table.** #202's panel-mode path needs
+  `dc->dsim`, which survives only for the 7 Pro's and 9a's DSIM timers
+  (`gs_dsim_rates[]`), so it changed the reference phones and never ran on
+  lynx. *Check:* trace which boards reach each new branch, and ask for the
+  dmesg line proving the board under test took it. Extends L-206 and L-464.
+  *From:* kernel #202, round 42, 2026-11-07.
+- **L-491. A compositor or shell patch that changes what every phone shows is
+  a reference-phone change, even when it fixes a bug the 7 Pro probably has.**
+  #446's rotation hold is untested at 120 Hz. *Check:* for patches to
+  `packages/hyprland`, `quickshell` or the shell, ask for a per-device switch
+  the contributor's device package sets, until the 7 Pro has run it. Extends
+  L-206. *From:* #446, round 42, 2026-11-07.
+- **L-492. A contributor's finding on one device's guard is checked against
+  the same rule on the reference phone.** #372's hold (the latch cleared
+  whatever the unit's result) is what the 7 Pro's `omamobile-modem-start
+  --stopped` does on main, as the script's comment credits. *Check:* open code
+  a guard comment cites ("as on the Pixel 7 Pro"); if the finding applies
+  there, it is a separate cheetah change with its own run. Extends L-444.
+  *From:* #372, round 42, 2026-11-07.
+- **L-493. A "no-op on cheetah" premise is checked against the reference
+  phone's logs, not a plan table, and a runbook's Expect is not a result.** On
+  kernel #116 we said the bootloader leaves MIF at 3172 MHz, from ACPM-PLAN's
+  ECT table and A2's Expect line; the A2 run and all 332 gs-decon probes in
+  `logs/` read 2028 MHz. *Check:* `grep -rh '<driver>.*<rate>' logs/ | sort |
+  uniq -c`, and the plan's dated result rather than its expectation. See C-31.
+  *From:* kernel #116, round 42, 2026-11-07.
+- **L-494. A link constraint one PR documents for a shared C source is checked
+  against every open PR editing that file.** #459 found the no-bootctl
+  initramfs links `reboot-to` against musl without compiler builtins, so the
+  printf family doesn't link, while #403 adds `snprintf` to the same file.
+  *Check:* `gh pr list` for PRs touching the file, grep their heads for
+  `printf`/`strto*`, and build a no-bootctl device's initramfs. Extends L-104
+  and L-423. *From:* #459 with #403, round 42, 2026-11-07.
 
 ## Shell and scripts
 
@@ -739,6 +952,107 @@ never change, so reviews can cite them.
   *Check:* run the block with `sh -c 'exit 3'` and `kill -TERM $$` in place
   of the daemon; only `|| true` or `set +e` in the group survives. Extends
   L-14. *From:* #70, round 20.
+- **L-417. A tests-only switch added to shipped safety code is proved inert by comparing syntax trees, not by reading the diff.** On #327, main and head were parsed with `ast`, the hook removed and `if hook: ... else: X` replaced by `X`, and `ast.dump` compared (identical). *Check:* do that for any `os.environ.get(...)` switch in a watchdog or limit path; list every unit, `EnvironmentFile=` and drop-in that could set it, and what happens when the switch's command fails. *From:* #327, round 38, 2026-11-02.
+- **L-418. A flaky test moved onto a synthetic clock is checked for each case's end state, not its exit status.** "Doesn't mute" cases pass whenever the event never lands. *Check:* run the suite with its keep switch (`KEEP=1` on #327) and read the end state of every case whose timing changed. Extends L-346. *From:* #327, round 38, 2026-11-02.
+- **L-419. A "checked again afterwards" step in a safety tool is mutation-tested.** Removing `nv-backup`'s post-copy re-probe left its test green. *Check:* delete each safety re-check in turn and run the test; one no test notices needs a fixture that changes state between the two checks. Extends L-102. *From:* #326, round 38, 2026-11-02.
+- **L-453. A parallel test runner writes each result atomically and accounts
+  for every job it started.** #410's `echo $? > NAME.rc` could be read empty
+  by a concurrent reporter, which printed `not ok` and deleted the real
+  result, and a suite whose subshell died before writing was never counted,
+  so the run passed. *Check:* results are written temp-then-rename, and the
+  final tally compares the results with the list of jobs started. *From:*
+  #410, round 39, 2026-11-03.
+- **L-454. A test that can't fail, or that reads the host, is not a test.**
+  Three in one round: device-raven's new line grepped a variable that
+  doesn't exist in a file that doesn't exist, behind `2>/dev/null` (#401); a
+  "not installed" case put `/usr/bin` after its fakes, so `shutil.which`
+  found the phone's real binary (#408); and a proposed layout check would
+  have read `/usr/share/X11/xkb` on the build machine (#413). *Check:* the
+  path and the pattern exist at the head (mutate once); a probe's `PATH`
+  holds only fakes; a generated-file check reads an input pinned in the
+  repository with its version. Extends L-234 and L-410. *From:* #401, #408,
+  issue #413, round 39, 2026-11-03.
+- **L-467. `RestartPreventExitStatus=` covers the main process only; a
+  pre-start refusal that must not be retried uses `ExecCondition=`.** #371's
+  `ExecStartPre=` check exited 3 with `RestartPreventExitStatus=3`; on
+  systemd 262 that pair restarted five times, as without the line, while
+  `ExecCondition=` with exit 3 skipped the start with no restart. *Check:*
+  for any "a refusal isn't retried" claim, find which process exits, and
+  reproduce it with `systemd-run --user -p Restart=on-failure …` in a
+  minute. Extends L-174 and L-454. *From:* #371, round 40, 2026-11-04.
+- **L-468. A cleanup added to one exit function covers only the exits that
+  call it.** #424 released the modem's sleep block in `refuse()`, but a
+  failing first `modprobe` exits through `set -e` before any driver loads
+  and keeps the block, the #390 symptom. *Check:* list every exit of the
+  script before the guarded step (refusals, `set -e` failures, `exit`) and
+  ask which ones the cleanup misses. Extends L-14. *From:* #424, round 40,
+  2026-11-04.
+- **L-469. A udev rule keyed on a kernel name pattern is checked against
+  every device the subsystem creates under that name.**
+  `KERNEL=="hci[0-9]*"` also matched the per-connection `hci0:N` devices, so
+  each Bluetooth connection started the address unit and left a failed one;
+  `DRIVERS==` didn't help. *Check:* read the subsystem's `struct
+  device_type` names and require `ENV{DEVTYPE}==` where there is more than
+  one. *From:* #423, round 40, 2026-11-04.
+- **L-470. A Quickshell `FileView` fix for a file that doesn't exist yet
+  re-arms the watch, not just the first read; and a poll "until the file
+  appears" is checked on phones where it never does.**
+  `updateWatchedFiles()` runs only when `path` or `watchChanges` changes and
+  a failed `addPath()` isn't retried, so #425's timer would load the state
+  once and then follow nothing, while polling forever on phones without the
+  fingerprint stack. *Check:* read `src/io/fileview.cpp` at the phone's
+  Quickshell version and walk the scenario (no directory, file created, then
+  a change), and list the devices where the awaited file is never created.
+  Extends L-289 and L-302. *From:* #425, round 41, 2026-11-05.
+- **L-495. A port of a hang-safe start script carries every guard of the
+  original, not only the marker.** #453 kept cheetah's hang marker but dropped
+  the "AoC already online" exit and the `/run` firmware marker, so a retry
+  could load firmware into a running AoC. *Check:* list every early `exit` in
+  the script the port follows and confirm each exists or is answered. Extends
+  L-170 and L-232. *From:* #453, round 42, 2026-11-07.
+- **L-496. A script that writes a module parameter at boot loads the module
+  first or orders itself after it.** #438's unit wrote
+  `/sys/module/gs_dsim_cmd/parameters/allow_tx` with nothing ordering it after
+  udev's autoload. *Check:* for each `/sys/module/<m>/parameters/` write, find
+  the `modprobe <m>` or `After=` before it, and what the failure path leaves.
+  *From:* #438, round 42, 2026-11-07.
+- **L-497. A helper added beside a bundled tool goes into the bundle with
+  it.** #467 added `tools/phone-ssh-proxy` next to `phone-ssh`, which
+  `tools/make-bundle` ships; the bundle's copy would lose the feature or fail.
+  *Check:* for each new file a bundled tool calls, `grep -n provision_tools
+  tools/make-bundle` and `tests/make-bundle-keys`. Extends L-421. *From:*
+  #467, round 42, 2026-11-07.
+- **L-498. An extracted Omarchy package is read through its own `usr/bin`.**
+  `usr/share/omarchy/bin/*` are absolute links to `/usr/bin`, and the review
+  laptop runs Omarchy, so a grep or patch on the extracted `bin/` reads, or
+  writes, the host's files; one grep this round answered from the laptop.
+  *Check:* replace each absolute link with the package's copy first (`find
+  -type l -lname '/*'` empty). Extends L-454. *From:* #471, round 42,
+  2026-11-07.
+- **L-499. A stand-in named after an upstream stage replaces it in every
+  release that calls that name, the pinned one included.** #471's
+  `omarchy-update-system-pkgs` looked 4.5-only, but 4.0.6's `omarchy-update`
+  calls it too. *Check:* grep each Omarchy version's `usr/bin` for callers,
+  and compare the stand-in's environment with the original's (`LC_ALL=C`).
+  Extends L-233. *From:* #471, round 42, 2026-11-07.
+- **L-500. A base-system requirement a new upstream release adds is checked
+  everywhere the release enforces it.** #447 reported one migration, but the
+  same `/run 755` check guards 4.5's update inhibitor and an AbortOnFail hook
+  on `omarchy-settings` (the downgrade path). *Check:* grep the release's
+  packages, `libalpm/hooks` included, for the helper's callers before calling
+  a workaround migration-only. *From:* issue #447 with #437, round 42,
+  2026-11-07.
+- **L-501. A file capability set during a rootless image build is checked by
+  `CapEff` on the phone, not `getcap`.** #429's contributor showed a
+  capability written under `unshare -Ur` is a namespaced v3 xattr: `getcap`
+  lists it, the process gets `CapEff 0`. *Check:* a phone-side re-apply, or
+  `CapEff` of the running process on an image-installed phone. Corrects
+  L-459's check. *From:* #429, round 42, 2026-11-07.
+- **L-502. A "keep it until confirmed" change in a bridge is checked for what
+  clears an object whose confirmation can't arrive.** #461 keeps a call Active
+  when sitd drops it mid-release, while sitd only drops ended calls. *Check:*
+  list every way the daemon removes the object and the state the bridge is
+  left in. Extends L-302. *From:* #461, round 42, 2026-11-07.
 
 ## Kernel (linux-omarchy-mobile)
 
@@ -1225,6 +1539,95 @@ never change, so reviews can cite them.
   `HK3_HEIGHT_MM` in `panel-gs-hk3.c`. *Check:* `kernel/devices/google/
   <device>/display/panel-gs-*.c` before accepting an estimate. *From:*
   kernel #154, 2026-10-31.
+- **L-447. A crash fix that moves a decode out of its condition changes what
+  the reference phone shows, and a reference-phone run lapses when the
+  commit is reworked.** Kernel #191 decodes every scanned BSS and drops 6
+  GHz ones, so a 7 Pro also loses the phantom 2.4/5 GHz entries its 6 GHz
+  neighbours made; our 11-01 run on #56 covered only the NULL check.
+  *Check:* for a new skip or early return on a shared path, list the inputs
+  that used to pass with a wrong value, say what the reference phone stops
+  showing, and diff a moved commit against the tested one. Extends L-86,
+  L-206 and L-379. *From:* kernel #191 with #56, round 39, 2026-11-03.
+- **L-448. Before accepting a driver-side way to move a second clock with a
+  GPU's rate, grep the clock driver for an existing pairing.** Kernel #189
+  added a panfrost `l2` clock and an undocumented per-OPP `l2-hz`, set L2
+  first in both directions, while `clk-acpm` already pairs G3D and G3DL2 for
+  gs201 and zumapro in the vendor's order (L2 up first, down last). *Check:*
+  `git grep -n paired drivers/clk/samsung/clk-acpm.c` and the merged
+  siblings' GPU nodes, and compare the set order with
+  `gpu_dvfs_set_new_level()`. Extends L-104. *From:* kernel #189, round 39,
+  2026-11-03.
+- **L-471. A disabled board node that an overlay will enable later carries
+  its pin states now.** #159's Bluetooth child had no `pinctrl-0`, and
+  Samsung pinctrl refuses groups that arrive by runtime overlay. *Check:*
+  for every disabled node meant for an overlay, compare with the same-SoC
+  sibling's merged node and require the same `pinctrl-*` and groups in the
+  board DTS. Extends L-240. *From:* kernel #159, round 40, 2026-11-04.
+- **L-472. When a driver gives up where the vendor driver has a fallback,
+  use the vendor's fallback.** #194 made up an identify record after a
+  missing identify report; stock's `syna_tcm_v1_detect()` sends
+  `CMD_IDENTIFY`, then `CMD_RESET`, for exactly that case, and that also
+  reports the real firmware. *Check:* for any new "carry on without X" path,
+  grep the vendor driver for what it does when X is missing. Extends L-237.
+  *From:* kernel #194, round 40, 2026-11-04.
+- **L-473. A bindings PR that documents a vendor driver's names is reviewed
+  against the hardware, not the DTs it makes pass.** #193's schemas quieted
+  `dtbs_check`, but six nodes had no resources, half the properties were
+  DPCM flags, and two reinvented `model` and `sound-name-prefix`. Before
+  saying a codec's binding "already allows" a common property through its
+  `$ref`, read its last line: `additionalProperties: false` hides the ref's
+  properties. *Check:* for each node, its DT resources; for each property,
+  `git grep` the common sound schemas; list every DT, overlay and userspace
+  matcher that would freeze the names. Extends L-96 and L-183. *From:*
+  kernel #193, round 40, 2026-11-04.
+- **L-474. A boot argument that changes every reboot is tested on every
+  reboot path.** #198's `reboot=warm` was tested with `reboot-to bootloader`
+  only; an ordinary reboot and the panic reset the initramfs safety net
+  depends on weren't. *Check:* list the reboot paths (normal, `reboot-to
+  <reason>`, panic, watchdog) and ask for each, or the device notes that
+  cover them on that SoC. Extends L-284. *From:* kernel #198, round 41,
+  2026-11-05.
+- **L-503. "Appended at the end, so no offset moves" is checked for structs
+  that embed the grown struct.** `struct aoc_chip` sits inside `struct
+  snd_card_pdata`, so #203's appended bool shifted offsets in 15 functions.
+  *Check:* `git grep 'struct <name> [a-z_]*;'`, then an object diff. Extends
+  L-230. *From:* kernel #203, round 42, 2026-11-07.
+- **L-504. A new `->set_cs` branch for GPIO chip selects is dead unless the
+  controller sets `SPI_CONTROLLER_GPIO_SS`.** Kernel #204 added the same write
+  to `set_cs` and to `set_native_cs`, which the core never calls for a
+  `cs_gpiod` device here. *Check:* read `spi_set_cs()` in the target tree and
+  grep the driver for `GPIO_SS`. *From:* kernel #204, round 42, 2026-11-07.
+- **L-505. A board PR that moves a bring-up overlay into the DTS is proven by
+  comparing DTBs, not by a new boot.** Kernel #205's base DTB with the overlay
+  applied and its head DTB decompiled identical with `dtc -s`, so the
+  overlay's boot record carries over. *Check:* build both with the build's
+  `dtc -@`/`fdtoverlay` and compare; any difference names what the record
+  doesn't cover. Extends L-122. *From:* kernel #205, round 42, 2026-11-07.
+- **L-506. A vendor command borrowed for a fallback reads its answer where the
+  vendor driver does.** #194 sent `IDENTIFY` and waited for a report, but
+  Google's `syna_tcm_v1_detect()` parses the IDENTIFY response's payload,
+  which the PR discarded. *Check:* find the vendor's read of each borrowed
+  command's response and confirm the new code reads the same place. Extends
+  L-237. *From:* kernel #194, round 42, 2026-11-07.
+- **L-507. A board DT that gives a new node a GPIO or supply is checked
+  against the board's other users of it.** Kernel #202 put the 7a panel's
+  reset and supplies on the touchscreen's gpp23-2 and LDO25M/26M; the driver's
+  "shared GPIO" workaround was the symptom. *Check:* `git grep` each new pin
+  and rail in the board DTS and Google's `*-display.dtsi`/`*-touch.dtsi`.
+  Extends L-67 and L-349. *From:* kernel #202, round 42, 2026-11-07.
+- **L-508. A "new" panel driver is diffed against the closest merged one with
+  names normalised.** #202's S6E3FC5 driver differed from S6E3HC4's in 137
+  lines, and its init still set a 1440x3120 window. *Check:* `diff` both with
+  the names `sed`-ed to one token, then compare CASET/PASET and the init with
+  the vendor driver. Extends L-61 and L-117. *From:* kernel #202, round 42,
+  2026-11-07.
+- **L-509. A board added to the base after a PR's last gate inherits its
+  shared-dtsi changes, so the re-gate validates it.** Akita (on `zuma.dtsi`)
+  landed after #187's last CI, and `dtbs_check` had never seen the
+  combination. *Check:* `git log <old base>..<new base> --
+  arch/arm64/boot/dts` for boards including a touched dtsi; `dt-validate` each
+  on the merge. Extends L-195 and L-309. *From:* kernel #187, round 42,
+  2026-11-07.
 
 ## The gates themselves
 
@@ -1391,7 +1794,11 @@ never change, so reviews can cite them.
   only lines saying "warning" or "error"; dt-validate's say neither, so
   every "dtbs_check, no new warnings" (ours and CI's) was blind until
   476901b. A reused `--build` OUT also kept an earlier tree's processed
-  schema. Extends L-30. *From:* kernel #13 (found by its author).
+  schema. Extends L-30. *From:* kernel #13 (found by its author). **Also
+  (kernel #192, round 39):** a first-light board validated against the
+  base's schema is a known failure for free: rejected on its compatible at
+  the base, accepted at the head, which proves both that dt-validate ran and
+  that the binding commit carries the fix.
 - **L-103. A passing gate log can hide a skipped check.** The project
   container has no dtschema, so its runs print "# no dt-validate … skipped"
   and still pass. *Check:* grep the log for `SKIP` and `skipped` before
@@ -1493,7 +1900,88 @@ never change, so reviews can cite them.
   first; `git grep` open PR heads for a compatible a failure names; give the
   merge order and the resolved hunk. Extends L-73, L-104, L-165 and L-196.
   *From:* kernel #87 with #86, #72, round 22.
-
+- **L-420. A per-package check that `alarm_die`s the whole build stops every phone's publish.** #320's `stage-boot-files --check` covers all of `initramfs/`, so any device-package bump after any shared init change would hold the development channel until the maintainer staged again. *Check:* for a new gate in `build-packages` or `repo-publish`, ask whether skipping that package (non-zero exit at the end) is as safe, and grep for versioned dependencies on it. Related to L-259. *From:* #320, round 38, 2026-11-02.
+- **L-421. A hard-coded list of another tool's outputs is re-checked against that tool at the same head, after every merge of main.** #324's identifiers stage named make-bundle's files; #317, merged between rounds, added `INSTALL.md` and `tools/*`, so the stage would refuse every real bundle, and its test set the stage's result by hand. *Check:* `git log origin/main --since=<proof date> -- <producing tool>`, then run the allowlist on a bundle from `tests/make-bundle`'s fixture. *From:* #324 (and seen on #326), round 38, 2026-11-02.
+- **L-422. A new signature or artifact is checked for a consumer before it is shipped.** #324 wrote `<rootfs>.sha256.sig`, but the installer trusts only the signed MANIFEST, release-upload doesn't upload it, and it sat next to a different copy of the image. *Check:* grep the installer, uploader and flasher for the new file; if nothing reads it, ask to drop it. *From:* #324, round 38, 2026-11-02.
+- **L-452. The prefix gate checks that a prefix exists, not that it is the
+  file's own.** Kernel #152 passed with `firmware: exynos-acpm:` while the
+  file's history, ours and mainline's, is `firmware: samsung: acpm:`.
+  *Check:* `git log --oneline -5 github/omamobile -- <file>` for each
+  touched file against each subject; the gate could compare with the file's
+  last subjects. Extends L-18. *From:* kernel #152, round 39, 2026-11-03.
+- **L-455. A cross-repository CI token is judged by everything its
+  permission grants, against the target's branch protection, and its trigger
+  matches what the consumer reads.** #404's `repository_dispatch` needs
+  Contents: write, which also writes files, and the website's unprotected
+  `main` deploys on every push; the existing `workflow_dispatch` needs only
+  Actions: write. The trigger also fired on NOTES.md, which the site never
+  reads. *Check:* read the fine-grained permission's other endpoints and
+  `branches/<b>` protection on the target, prefer an endpoint that can't
+  change code, and grep the consumer and its checkout for the files `paths:`
+  names. *From:* #404 with omamobile-website #1, round 39, 2026-11-03.
+- **L-475. The sign-off check reads the whole message, so a sign-off outside
+  the trailer block passes.** #194's `Signed-off-by:` sat above a blank line
+  and a `Co-Authored-By:`, so git's trailer block held only the co-author;
+  our gate and checkpatch both found the sign-off by grep. *Check:* `git log
+  -1 --format=%B <c> | git interpret-trailers --parse` lists the author's
+  sign-off; `kernel-pr-check` should parse trailers. Extends L-119 and L-18.
+  *From:* kernel #194, round 40, 2026-11-04.
+- **L-476. A patch test that lives inside the real-package block is skipped
+  on CI.** omamobile-omarchy's patch checks run from `real_package()`, and
+  CI has no Omarchy package, so its green says nothing about a new patch.
+  *Check:* `gh run view --log | grep -E 'SKIP.*(omarchy package|bsdtar)'` on
+  every omamobile-omarchy PR, and rely on (or re-run) a local run with
+  `OMARCHY_PKG`. Extends L-103. *From:* #431, round 41, 2026-11-05.
+- **L-510. Agent identities and session trailers on every commit are a finding
+  `tools/pr-check` doesn't catch.** #466, #467, #468 and #470 were authored
+  and committed as `codex@openai.com`/`codex@local.invalid` throughout, so a
+  squash leaves no human; #98 ended with a `Claude-Session:` link to a private
+  session. *Check:* `git log --format='%an <%ae> / %cn <%ce>%n%B' base..head`
+  for agent domains, `*.invalid` and `https?://…(session|chat|share)`. Extends
+  L-271 and L-312. *From:* #466, #467, #98, round 42, 2026-11-07.
+- **L-511. A `| grep -q` flake that never shows on CI is reproduced with an
+  unbuffered writer.** A block-buffered Python pipe hides L-15's race; with
+  `PYTHONUNBUFFERED=1` `omamobile-modem`'s NV-overlay test failed 10 of 10.
+  *Check:* rerun with `PYTHONUNBUFFERED=1` before calling a failure
+  machine-specific, and grep tests for `| *grep -q` fed by Python. Extends
+  L-15 and L-346. *From:* issue #457, round 42, 2026-11-07.
+- **L-512. A package without `test/all` gets its patch series applied by hand
+  in review.** CI's green on #446 never touched Hyprland. *Check:* for
+  PKGBUILD-only packages (hyprland, mesa, libfprint), check each `source=`
+  sha256 and apply the patches in `prepare()` order with `--fuzz=0`. Extends
+  L-333 and L-60. *From:* #446, round 42, 2026-11-07.
+- **L-513. A package test that skips without the repository can skip the
+  assertion the fix adds.** In `omamobile-telephony-tegu` alone, 3 of 23 tests
+  skip, the `ExecCondition` one among them. *Check:* run with `-v` from a tree
+  with the sibling packages, and confirm the covering test ran. Extends L-334.
+  *From:* #371, round 42, 2026-11-07.
+- **L-514. A refused-method test entry a random string would also pass tests
+  nothing about the device.** `tests/boot-method` builds a probe descriptor,
+  so `android-v0` passes as `unknown` does. *Check:* ask for the shipped
+  descriptor to go through the refusal, as for flame. Extends L-454. *From:*
+  #445, round 42, 2026-11-07.
+- **L-515. A gate is checked for who creates its precondition in the product,
+  not in the test.** #471 needs the exact archive in pacman's cache; nothing
+  in the updater downloads it, `test/prospective.py` puts it there. *Check:*
+  `git grep` the shipped code for each required file's writer; a fixture that
+  creates it hints nothing else does. Extends L-454. *From:* #471, round 42,
+  2026-11-07.
+- **L-516. A plan check whose failure falls back to a plain list says "ok" for
+  the case it exists to catch.** `pending_updates()` ignores `pacman -Sup`'s
+  exit status and uses checkupdates' lines. *Check:* run it against a fake
+  root whose plan fails and expect a blocker. Extends L-161. *From:* issue
+  #433, round 42, 2026-11-07.
+- **L-517. A migration hold list is run over the release's real migrations and
+  checked against the holds we promised.** #469 held 23 of 4.5's 98 new
+  migrations, but not the titlebars one promised on #433. *Check:* run the
+  wrapper with a fake runner over `migrations/`, the old set marked done, and
+  grep threads for promised holds. *From:* #469 and #471, round 42,
+  2026-11-07.
+- **L-518. A test that greps a tool's source for an implementation detail
+  proves nothing about behaviour.** `tests/stage-boot-files` broke on #289's
+  rewrite of a pathspec that behaved the same. *Check:* test what the tool
+  does, and when replacing a filter, compare old and new outputs on real data.
+  Extends L-454. *From:* #289, round 42, 2026-11-07.
 
 ## Reviews and merging
 
@@ -1750,7 +2238,11 @@ never change, so reviews can cite them.
   force-push after a review, `git diff <old head> <new head> -- <dir>` per
   touched file (L-166 gives the old id), tick each request off against that
   diff, and for a dropped one name the merged precedent and say which wins.
-  Extends L-34, L-123 and L-166. *From:* kernel #57, #40, round 20.
+  Extends L-34, L-123 and L-166. *From:* kernel #57, #40, round 20. **Also
+  (kernel #162, round 39):** an alternative offered instead of a requested
+  split is checked against the reason we gave for the split, not only
+  against the gates: two bindings that pass dtbs_check still documented the
+  unprefixed names we split the card out to avoid.
 - **L-184. When we tell a contributor how to resolve a conflict, derive the
   resolution from the file, and better, hand over the resolved hunk.** Rounds
   18 and 19 said "keep both lines in both lists" for
@@ -1847,6 +2339,123 @@ never change, so reviews can cite them.
   maintainer's merge was then rejected as non-fast-forward. *Check:* `git
   diff origin/main <head>` is not empty before reviewing or pushing on top.
   *From:* #99, 2026-10-31.
+- **L-423. Cross-PR interactions are re-checked on every round, including a PR's diff against another's tracked sources.** Round 38 said #324's `repo-publish` would auto-merge with #320; a follow-up then made them collide on one option line. #326 edits `device/cheetah/device.conf`, one of #320's boot-file sources, so merged after the staging it would make the nightly skip device-cheetah. *Check:* rerun `git merge-tree` for related PRs each round, intersect each diff with the other's source list (`tools/stage-boot-files --sources <codename>`), and order staging after both merge. Extends L-253. *From:* #320 with #324 and #326, rounds 38b-38c, 2026-11-02.
+- **L-424. A shared tool that gains a required input breaks every open PR whose test calls the real tool with its own fixture.** #326 made `release-upload` require the `.tar`; #324's `tests/release` builds a bundle by hand and runs the real tool, so the pair turns main red though each is green alone. *Check:* `git grep -n '<tool>' <each open PR head> -- tests/`, rebuild those fixtures against the new tool, and give the merge order in both reviews. Extends L-104 and L-214. *From:* #326 with #324, round 38, 2026-11-02.
+- **L-426. Two open PRs that bump a package to the same version merge
+  silently, in either order.** Both write the same `version` line, so `git
+  merge-tree` shows no conflict and the second merge ships new contents
+  under a published version: #407 and #403 (device-tegu 0.2.9), #389 and
+  #403 (omamobile-modem 0.1.17), #400 and #403 (device-raven 0.1.31). And a
+  "merging at version X" in our own comment goes stale: #373 took the 0.3.29
+  we had promised #367. *Check:* each round, list `packages/*/version` on
+  every open PR head and flag equal values; before every squash, compare the
+  branch's file and subject with `git show
+  origin/main:packages/<p>/version`. Extends L-12, L-217 and L-404. *From:*
+  #407, #389, #400, #367, round 39, 2026-11-03.
+- **L-427. A change under a boot-files device package's `src/` makes its
+  staged boot files stale, and that strands a sibling's new dependency on
+  it.** `tools/stage-boot-files` hashes `packages/<device>/src`, so #403's
+  `reboot-to.c` holds device-cheetah back from the nightly until the
+  maintainer restages; #371 makes modem-sit require a policy only the new
+  device-cheetah provides, so publishing #371 first would break `omarchy
+  update` on every 7 Pro. *Check:* `tools/stage-boot-files --sources
+  <codename> | grep <touched path>`; if listed, put the restage in the merge
+  plan before any dependent PR. Extends L-420 and L-423. *From:* #403 with
+  #371, round 39, 2026-11-03.
+- **L-428. `Fixes #N` on a PR that answers part of an issue closes the rest
+  at merge.** #403 deferred #390's second point (an inhibitor left after a
+  failed start) and still said "Fixes #390". *Check:* read the issue's
+  comments for each distinct report; ask for "Part of #N" or a new issue.
+  *From:* #403, round 39, 2026-11-03.
+- **L-429. One author's PRs with the same head commit are one PR, and a fix
+  they say is done may sit on another branch of their fork.** #412 and #231
+  both pointed at `8f2dc60d`, so #412's sources couldn't be in it; #231's
+  format fix had been committed a day earlier on a side branch and reached
+  the PR only as a merge. *Check:* at the start of a round compare
+  `headRefOid` across an author's open PRs, and when "done" isn't in the
+  head, `git ls-remote <fork>` for the commit. Extends L-29 and L-248.
+  *From:* #412 with #231, round 39, 2026-11-03.
+- **L-430. Siblings that add blocks to one board file get `merge-tree`
+  re-run every round, with and without the disputed commit.** Kernel #162's
+  sound card and #187's Wi-Fi regulator both add a root block at the end of
+  `zumapro-tegu.dts`; an earlier "merges cleanly" held only without the
+  card. *Check:* `git merge-tree` of each pair on today's base, both ways,
+  and keep the resolved file in the review. Extends L-253 and L-423. *From:*
+  kernel #162 with #187, round 39, 2026-11-03.
+- **L-431. A conflict resolution that keeps both sides' tests runs both
+  suites in the order they end up in.** Resolving #288 by appending main's
+  `--no-checkpatch` test after #288's checker tests left it running on a
+  tree with no commits to check, and it failed; the same blocks in the other
+  order pass. *Check:* after any resolution that keeps both sides, run the
+  touched suites on the merged tree, and read what state each block leaves
+  for the next. Extends L-184. *From:* the merges of #287 and #288, round
+  39, 2026-11-03.
+- **L-432. A squash merge carries a body that says why.** Three round-39
+  merges went in with `--body ""` and landed with a subject only; main isn't
+  rewritten for that. *Check:* every `gh pr merge --squash` gets
+  `--body-file` written from the PR's own commit message (with record ids or
+  merge noise removed, L-372), and no squash runs without one. Extends
+  L-372. *From:* #408, #369, #411, round 39, 2026-11-03.
+- **L-477. A rebase over a merged PR that took the same version can drop or
+  equal a stacked PR's bump, and its dependency is then met by the wrong
+  package.** #371's device-cheetah stayed at 0.1.44 with a new `provides`
+  after #416 shipped 0.1.44 without it, and its device-tegu bump vanished
+  after #407 shipped 0.2.9, so its own `>=0.2.9` dependency is met by the
+  published package without the feature. *Check:* in every range-diff after
+  a rebase, grep the changed commits for removed or equal `version` hunks,
+  and confirm each changed package's version is above main's. Extends L-404,
+  L-426 and L-427. *From:* #371 with #416 and #407, rounds 40-41.
+- **L-478. Two open PRs that edit the same package test file pass CI
+  separately but are never tested together.** #389 and #424 both edit
+  `omamobile-modem/test/all`, and CI builds each against main only. *Check:*
+  run the suite on `git merge-tree --write-tree <A> <B>` before merging the
+  second. Extends L-431. *From:* #389 with #424, round 40, 2026-11-04.
+- **L-479. Every round, open PRs on one SoC are checked for new clock IDs in
+  the same CMU block, not only for textual conflicts.** #200's CMU_TOP 22-27
+  and #157's 22-34 share a block of `google,zuma.h`, and `merge-tree`
+  auto-merged it with both. *Check:* `git diff <base> <head> --
+  include/dt-bindings/clock/<soc>.h | grep '^+#define'` per open PR, grouped
+  by CMU block. Extends L-384. *From:* kernel #200 with #157, round 41,
+  2026-11-05.
+- **L-480. A promise in our own comment ("I'll approve CI", "still needs X")
+  is re-checked at the next round and before posting.** Kernel #192's run
+  was still `action_required` a day after we said we'd approve it, and our
+  #374 comment, drafted a day before posting, asked for a #378 rebase that
+  had already happened. *Check:* `gh run list --branch <head>` for each PR
+  whose last comment promised an approval, and re-read each "still needs"
+  against the head at posting time. Extends L-59, L-124 and L-281. *From:*
+  kernel #192 and #378, rounds 40-41.
+- **L-481. A hand-written squash body keeps the PR's attribution trailers.**
+  Three of round 41's four squashes (#396, #395, #410) dropped their
+  commits' `Co-Authored-By:` lines, which CONTRIBUTING §6.3 asks for.
+  *Check:* `git log --format='%(trailers:only)' base..head` on the PR, and
+  carry each distinct trailer into `--body-file`. Extends L-432. *From:* the
+  2026-11-04 merges, round 41, 2026-11-05.
+- **L-519. A request or merge order that rests on another decision is
+  re-derived when that decision changes.** Round 41 asked #431 to move to the
+  4.5 port, then phones were pinned to 4.0.6; #371 was ordered after #403 only
+  for a restage, and #403 went on hold. *Check:* write down why for each "redo
+  for" or "after X", and re-check it when a pin, hold or channel lands.
+  Extends L-250 and L-427. *From:* #431 and #371, round 42, 2026-11-07.
+- **L-520. A general call to affected users is checked against the thread
+  above it.** Our pin announcement on #434 asked owners to speak up three
+  hours after one had, and his report went unanswered. *Check:* read the
+  comments since our last post and answer them first. Extends L-124. *From:*
+  issue #434, round 42, 2026-11-07.
+- **L-521. A hand-written squash subject is checked against the PR's own
+  files.** #231 was merged as "the Pixel 8 Pro's sibling"; kodiak is the Pixel
+  11 Pro XL. *Check:* read the device descriptor or plan the PR touches before
+  typing a device name. *From:* #231, round 42, 2026-11-07.
+- **L-522. A GitHub comment draft is reflowed, never inside code fences.** A
+  draft wrapped at 120 columns renders its hard line breaks. *Check:* join
+  each paragraph's lines before posting, leaving fenced and indented code
+  blocks as written. *From:* round 42's posts, round 42, 2026-11-07.
+- **L-523. When a series selector accepts exact versions, removing a pin moves
+  the hold rather than lifting it.** #471's `default_series` refuses anything
+  but 4.0.6 or 4.5.0, so dropping the pin would hand phones whatever 4.5.x
+  shipped that day. *Check:* read what the selector accepts, and plan to
+  replace the pinned files with the rehearsed version. *From:* #471, round 42,
+  2026-11-07.
 
 ## Claims and evidence
 
@@ -2425,6 +3034,156 @@ never change, so reviews can cite them.
   C-3. *From:* issue #272, 2026-11-01.
 - **L-412. For stock DT values, ask for Google's GPL board source before a
   decompiled image.** *From:* #249, 2026-11-01.
+- **L-425. Staging a non-reproducible artifact on two machines under one version makes two packages.** cheetah's boot-file initramfs (`find | cpio`, unpinned order and mtimes) would be staged by the nightly machine and again by #324's release `images` stage. *Check:* build any staged input twice and compare bytes; if they differ, name the one machine and step that produces it. Extends L-268 and L-310. *From:* #320 with #324, round 38, 2026-11-02.
+- **L-433. A shipped default that a working feature needs is checked on a
+  fresh install, not on the reference phone.** modem-sit shipped `[audio]
+  card = none` in its packaged `/etc` file and its built-in default, and
+  pacman keeps an edited `backup=` file, so the maintainer's hand-set `auto`
+  made "calls work" true on one phone only; the release notes and DEVICES
+  said it for everyone. *Check:* for each "works" claim in release notes or
+  DEVICES, `git show origin/main:<package>/etc/...` for the keys the feature
+  needs, and `git grep` the test that pins the default. Extends L-46.
+  *From:* #387 and #405 (commit review), fixed by #416, round 39,
+  2026-11-03.
+- **L-434. "It didn't happen at shutdown" can't be read from the next boot's
+  `dmesg`.** The modem-off UFS error-handler pass follows the CP power-off
+  in the unit's stop, and each check grepped the next boot's fresh log, so a
+  count of 0 was certain. *Check:* for any "count 0 across reboots", find
+  when the event would fire and ask for `journalctl -b -1 -k` (if journald
+  outlives the unit) or pstore. Extends L-85 and L-414. *From:* #398 and
+  #405 (commit review), round 39, 2026-11-03.
+- **L-435. "Tn ran" or "Passed" is checked against the step's own
+  definition, a dated results row, the PR's later fixes and the linked
+  issue's newer results.** FINGERPRINT-PLAN's status said T1-T3 ran with
+  only part of T1 evidenced; #372's step 4 kept "Passed" after a later
+  commit fixed the reboot it described; #395's "Next" had already run and
+  been reported on #77. *Check:* grep the plan for each step's definition
+  and a results row with `uname -r`, grep the record for behaviour each
+  later fix commit changes, and read the linked issue's comments since the
+  last push. Extends L-28, L-188, L-266, L-313 and L-341. *From:* #405,
+  #372, #395, round 39, 2026-11-03.
+- **L-436. A smoke report with a hand-edited package list, or one older than
+  the head, isn't evidence for the head.** #389's report listed
+  "omamobile-modem-sit (number set at merge)-1" and predated two rebases.
+  *Check:* every version in the report can exist; the report is newer than
+  the head's last commit, or the PR names the tested commit and `git diff
+  <tested> <head> -- <files>` is empty. Extends L-358 and L-379. *From:*
+  #389, round 39, 2026-11-03.
+- **L-437. A byte dump of a persistent bootloader record is decoded byte by
+  byte, read after its write path ran, and contradicting runs ask what wrote
+  it in between.** Kernel #176's `00 00 00 80` was read as the bootloader
+  record but is `0x80000000` (VALID | NORMAL, what stock writes for an
+  ordinary reboot), taken before the reboot notifier wrote anything; runs on
+  11-01 and 11-03 disagreed on a record that survives reboots and that stock
+  rewrites on each. *Check:* write the expected value's bytes out (`fc 00 00
+  80` for `0x800000fc`), confirm the read came after the notifier or hook,
+  and for any non-volatile bootloader input ask for a read before the first
+  try and the boots in between. Extends L-29, L-168 and C-12. *From:* kernel
+  #176, round 39, 2026-11-03.
+- **L-438. A DEVICES cell's count is tied to the run that produced it, and a
+  helper it names is checked against the published DT.** #406 put a
+  10-minute session's 538 of 556 fixes on a first boot that only bound the
+  driver, and credited the 8 Pro's USB rescue to a helper whose I2C bus is
+  disabled in the published `zuma-husky.dts`. *Check:* quote the notes
+  sentence around each number with its kernel, and for each helper find the
+  bus or node it opens and its `status` on `github/omamobile`. Extends L-28,
+  L-49 and L-345. *From:* #406, round 39, 2026-11-03.
+- **L-439. When a clean baseline lands, every "value X is always there" it
+  bears on is re-checked, and a guard that compares a field the step itself
+  drives trips on that step.** #282's round 1 accepted "0xb1 in every dump,
+  cable out"; the baseline shows 0xb1 only with a source on CHGIN, which
+  made the 11-01 trip the charger charging from the phone's own boost, and
+  the planned a4 guard compares CHGIN with a cable-out baseline right after
+  the phone puts 5 V on it. *Check:* decode the baseline field by field with
+  the driver's enums next to every value the runbook calls normal, re-read
+  review points built on it, and list a guaranteed trip as the expected
+  first outcome. Extends L-31 and L-147. *From:* #282 with #272, round 39,
+  2026-11-03.
+- **L-440. The test plan for a fix that acts on a late answer needs a late
+  answer.** Kernel #152 releases a timed-out ACPM slot when the answer
+  finally arrives; the planned 9a stall was a channel that stopped
+  answering, where the fix is invisible by design. *Check:* write a Pass
+  that needs the event (a `Timeout!`, then the abandoned bit cleared and no
+  "pool exhausted") and a rule that records "not exercised" when it never
+  comes. Extends L-85. *From:* kernel #152, round 39, 2026-11-03.
+- **L-441. "Stock does this on every chip" is checked by decoding the
+  reference phone's recorded flags through stock's own selector.** On kernel
+  #187, the 7 Pro's `0x70050107` against stock's SEQNUM-then-XORCSUM choice
+  in Google's bcm4389 `dhd_msgbuf.c` (0x20000 clear, 0x40000 set) confirmed
+  stock already uses XORCSUM there. *Check:* fetch the stock file on the
+  board's branch, find the selector, and decode the recorded word bit by
+  bit. Extends L-61 and L-113. *From:* kernel #187, round 39, 2026-11-03.
+- **L-482. A run whose instrument may cause the failure it records is
+  counted on its own, and a clean streak is re-computed when the next result
+  lands.** #409 counted a no-wake from a run with a module writing the RTC
+  that wakes every series; #395's "15 of 15, strong evidence" became 1 in
+  16, about one time in seven at the old rate, with uptime differing between
+  the good and bad boots. *Check:* for each rate, list the runs in it and
+  what differed; count instrumented runs separately; compute the binomial
+  tail against the baseline, and tabulate each run's conditions. Extends
+  C-12, C-26 and L-345. *From:* #409 and #395, round 40, 2026-11-04.
+- **L-483. A test-kernel release that names a local commit is checked
+  through the blob, rebuilt from the stated recipe, and a NOT FOR MERGE test
+  branch is diffed against the head.** #191's `g63aa17cc8b81` wasn't on
+  GitHub, but `merge-tree` of "#187 on today's omamobile, then this PR" gave
+  the exact blob reported; #189's test branch, fetched, differed from the
+  head only by the named flag. *Check:* rebuild the recipe with
+  `merge-tree`/`commit-tree` and compare `rev-parse <tree>:<file>`; fetch a
+  named test branch and `git diff <head> <test> -- <files>`. Extends L-131
+  and L-436. *From:* kernel #191 and #189, round 40, 2026-11-04.
+- **L-484. "A single touch does nothing on a dark screen" is checked in the
+  compositor's input path.** Hyprland 0.57 sends every touch to the focused
+  surface with DPMS off, and `misc:mouse_move_enables_dpms` only adds a
+  wake, so #420's change made touches on a dark unlocked screen act blind on
+  apps. *Check:* read `onTouchDown` and the touch listeners at the packaged
+  tag, and list who consumes a touch on each surface (lock, app, shell
+  layer). *From:* #420, round 40, 2026-11-04.
+- **L-485. A decision quoted in AGENTS.md is checked against the comment
+  itself: its date and every condition, the accepted ones included.** #441's
+  first draft dated #409's decision a day early and listed only the
+  maintainer's three conditions, not the contributor's that the decision
+  accepted, one of which ("slot B marked") clashed with AGENTS. *Check:*
+  quote from the thread, and reconcile each accepted condition with AGENTS
+  before writing it in. *From:* #441, round 41, 2026-11-05.
+- **L-524. A package claim about installed phones, or a way back we suggest,
+  is simulated per image against the live repository order.** Our #433 reply
+  said installed phones keep aquamarine 0.16, but pre-11-03 images have
+  0.15.1, and [omarchy]'s 0.15.1-1.3 wins by repo order; round 41's `pacman
+  -Syuu` way back from 4.5 stops on `libaquamarine.so=15`. *Check:* fake-root
+  `pacman -Sup`/`-Suup` per supported image with today's databases in the
+  phone's order. Extends L-433, L-46 and L-31. *From:* issues #433 and #434,
+  round 42, 2026-11-07.
+- **L-525. A negative control that fails only through `failOnWarning` proves a
+  warning, not a failure.** #466's control passes all eight cases on main with
+  the switch off. *Check:* rerun on main without it and read which assertions
+  fail; if none, the change is log hygiene. Extends L-454. *From:* #466, round
+  42, 2026-11-07.
+- **L-526. An IPC reply quoted as an acknowledgment is checked against when
+  the handler returns it.** #468 called `notifications forget`'s `ok` a
+  deletion acknowledgment; patch 0019 returns it right after enqueuing the
+  `rm`. *Check:* read where the return is set relative to the side effect.
+  Extends L-29. *From:* #468, round 42, 2026-11-07.
+- **L-527. A devinfo row whose retry byte disagrees with `getvar` for "the
+  same state" is a disagreement, not evidence.** #436's 3.11 bytes gave retry
+  0 beside `slot-retry-count:b 1`. *Check:* decode each new row with the
+  verified layout beside the verified table, and ask when each read was taken.
+  Extends L-36. *From:* #436, round 42, 2026-11-07.
+- **L-528. A comment copied from a sibling board is checked against the PR's
+  own results.** Akita measured the disks attaching before PID 1, while kernel
+  #206's DTS comment, copied from husky, says the guard runs first. *Check:*
+  grep each copied claim against the results section. Extends L-187 and L-313.
+  *From:* #456 with kernel #206, round 42, 2026-11-07.
+- **L-529. A matrix number is checked for whether it was measured or
+  configured.** #472's "1.485 A" was the DT charge cap and "3 A" the source's
+  advertisement; the cited comment measured +0.33 to +0.52 A and +1.50 A.
+  *Check:* look for "cap", "limit", "advertis" or a DT property next to the
+  value. Extends L-397 and L-438. *From:* #472, round 42, 2026-11-07.
+- **L-530. A result that needs the Arch session can't come from a command line
+  that stays in the initramfs.** #445 filed firstboot, ufw and compositor
+  results under a RAM-only boot whose `CMDLINE` has `omamobile.initramfs`.
+  *Check:* for each result needing `switch_root`, match it to the named
+  command line and slot history. Extends L-28 and L-109. *From:* #445, round
+  42, 2026-11-07.
 
 ## Corrections (where a review was wrong)
 
@@ -2597,3 +3356,47 @@ never change, so reviews can cite them.
   and asked for the hand-off voltage. *Lesson:* before asking for min = max,
   read the regulator's ops on the target branch. *From:* kernel #165 with
   #101.
+- **C-26 (2026-11-03, provisional). Our 10-27 reply on issue #77, and L-190,
+  ruled out a longer BT_REG_ON hold because raven's plan had already held
+  the line low for seconds.** Those holds were with the driver unbound and
+  the UART closed; `power_on_delay_ms` holds it low with the UART open right
+  before power-up, and 100 ms gave 0 silent chips in 15 clean reboots (about
+  1 in 5 before). Google's driver holds 30 ms; the 100 ms is the HAL's.
+  *Lesson:* "we already tried it longer" rules out a timing change only if
+  the earlier try had the same sequence around it (which lines were driven,
+  the UART open or closed, what ran right after). L-190 is corrected in
+  place once the tally holds. *From:* issue #77 with #395.
+- **C-27 (2026-11-03). L-326 said clk-acpm registers the gs101 clocks with
+  `CLK_GET_RATE_NOCACHE`.** On the base only `acpm_clk_gs201` and
+  `acpm_clk_zumapro` set the flag; `acpm_clk_gs101` has none, though gs201
+  reuses `gs101_acpm_clks`, so gs101's `clk_get_rate()` is cached. L-326's
+  cheetah conclusion stands; its text is corrected. *Lesson:* read the
+  per-SoC `acpm_clk_driver_data.flags`, not the clock list it points at.
+  *From:* kernel #189.
+- **C-28 (2026-11-03). Our round 1 point on #282 started from the
+  contributor's "0xb1 in every dump of the day, cable out".** The first
+  read-only baseline decodes to no input, battery only, charger off (`0x00 /
+  0xf8 / 0x00`); 0xb1 appears only with a source on CHGIN, so the 11-01 trip
+  was the charger charging from the phone's own boost, not noise. The
+  guard's design stands; the runbook's text and the a4 expectations changed.
+  *Lesson:* see L-439. *From:* #282 with #272.
+- **C-29 (2026-11-04). Our round-39 requests on #403 and #372 asked for "no
+  UFS errors" after a `reboot-to`, read from the next boot's journal.**
+  `reboot-to` skips systemd's shutdown, so an error-handler pass in
+  `device_shutdown` happens after the last journal write, and a count of 0
+  is certain. *Lesson:* L-434 applies to the evidence we ask for, not only
+  to what contributors report: before asking for a shutdown-time count, name
+  the log that outlives the event (the pstore console), or say "not
+  observable". *From:* #403 with #372.
+- **C-30 (2026-11-07). Round 41 told #425's author that Quickshell's
+  `FileView::reload()` doesn't re-arm its file watch; it does.** `reload()`
+  calls `updatePath()`, which calls `updateWatchedFiles()` (`fileview.cpp` at
+  2b4501a), and the contributor caught it. *Lesson:* before saying "X never
+  calls Y", follow each entry point down to Y in the version the phone runs
+  and quote the call chain. Extends C-4 and C-11. *From:* #425.
+- **C-31 (2026-11-07). On 10-29 we told kernel #116's author the MIF restore
+  is a no-op on cheetah because the bootloader leaves MIF at 3172 MHz.** The 7
+  Pro's MIF reads 2028 MHz at probe in every log; the number came from a plan
+  table and an Expect line, and went into the contributor's commit. *Lesson:*
+  see L-493; ACPM-PLAN and DISPLAY-PLAN were corrected in #480. *From:*
+  kernel #116.

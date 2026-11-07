@@ -70,7 +70,11 @@ Usage: [DEVICE=<codename>] omamobile <command>
   initramfs-config <dir>
                    Write only the device's files for the shared init (storage-guard
                    allowlist, trigger, ...) into <dir>, to check what initramfs packs
-  kernel           Build the mainline kernel ($KERNEL_DIR) with our config fragment
+  kernel [--release]
+                   Build the mainline kernel ($KERNEL_DIR) with our config fragment.
+                   --release: the release LOCALVERSION (-omamobile, uname -r
+                   <version>-omamobile-g<sha12>) and no device fragment, for
+                   linux-omamobile (docs/RELEASES.md §4); needs a clean tree
   modules          Package the kernel's modules (stripped) as a tarball for the Arch
                    root: $KERNEL_OUT/modules-<release>.tar.zst, unpacked under
                    /usr/lib/modules on the phone
@@ -300,11 +304,28 @@ cmd_capture() {
 }
 
 cmd_kernel() {
+  local release=0
+  case ${1:-} in
+    '') ;;
+    --release) release=1 ;;
+    *) die "kernel: expected --release or no argument" ;;
+  esac
+  (($# <= 1)) || die "kernel: expected --release or no argument"
   [[ -d "$KERNEL_DIR" ]] || die "no kernel tree at $KERNEL_DIR"
   [[ -n "$CLANG_DIR" ]] || die "no clang found: run tools/fetch-toolchain (or 'lineage-ref sync', or set CLANG_DIR)"
   # The codename goes into a path below, as in load_device
   [[ $DEVICE =~ ^[a-z0-9]+$ ]] || die "DEVICE must be a codename, not '$DEVICE'"
-  local fragment="$ROOT/device/$DEVICE/kernel.config"
+  local fragment="$ROOT/device/$DEVICE/kernel.config" localversion=""
+  if ((release)); then
+    # One kernel for every device: a device's bring-up fragment stays out,
+    # and a release names its commit exactly, so the tree must be clean
+    # (setlocalversion would add -dirty, which linux-omamobile refuses)
+    fragment=/nonexistent
+    localversion="scripts/config --file $KERNEL_OUT/.config --set-str LOCALVERSION -omamobile --enable LOCALVERSION_AUTO"
+    [[ -z $(git -C "$KERNEL_DIR" status --porcelain --untracked-files=no 2>/dev/null) ]] \
+      || die "kernel --release: $KERNEL_DIR has uncommitted changes"
+    say "Release build: LOCALVERSION -omamobile, no device fragment"
+  fi
   say "Building $KERNEL_DIR into $KERNEL_OUT"
   mkdir -p "$KERNEL_OUT"
   in_container "
@@ -315,6 +336,7 @@ cmd_kernel() {
     if [ -f $fragment ]; then
       scripts/kconfig/merge_config.sh -m -O $KERNEL_OUT $KERNEL_OUT/.config $fragment
     fi
+    $localversion
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT olddefconfig
     make ARCH=arm64 LLVM=1 O=$KERNEL_OUT -j$JOBS Image.gz dtbs modules
     ls -lh $KERNEL_OUT/arch/arm64/boot/Image.gz
@@ -328,6 +350,14 @@ cmd_kernel() {
     echo "clang source: $CLANG_SOURCE, $(basename "$CLANG_DIR")"
   } > "$KERNEL_OUT/toolchain.txt"
   say "$(head -1 "$KERNEL_OUT/toolchain.txt")"
+  # The release string the tree gave: never -push1 or -dirty (RELEASES §4)
+  if ((release)); then
+    local rel
+    rel=$(kernel_release)
+    [[ $rel =~ -omamobile-g[0-9a-f]{12}$ ]] ||
+      die "release build $rel is not <version>-omamobile-g<sha12>: build from a clean checkout of the release tag (a -dirty or -push1 kernel is never released)"
+    say "Release kernel $rel"
+  fi
 }
 
 # Kernel release of the build in $KERNEL_OUT (what uname -r will print).
@@ -353,22 +383,87 @@ cmd_modules() {
 }
 
 cmd_modules_push() {
-  local rel tarball ssh="$ROOT/tools/phone-ssh" running
+  local rel tarball ssh="$ROOT/tools/phone-ssh" running checksum install command replace
   rel=$(kernel_release)
+  [[ $rel =~ ^[0-9]+(\.[0-9]+)+[[:alnum:]_.+-]*$ ]] || die "invalid kernel release: $rel"
   tarball="$KERNEL_OUT/modules-$rel.tar.zst"
   [[ -f "$tarball" ]] || die "missing $tarball (run: omamobile modules)"
+  checksum=$(sha256sum < "$tarball" | cut -d' ' -f1)
+  replace=0
+  [[ ${OMAMOBILE_MODULES_REPLACE:-0} != 1 ]] || replace=1
   "$ssh" true || die "phone not reachable at 172.16.42.1"
   "$ssh" 'test -d /usr/lib/modules && command -v depmod >/dev/null' || die "phone is not in the Arch root (no /usr/lib/modules or depmod)"
   running=$("$ssh" 'uname -r')
   [[ "$running" == "$rel" ]] || echo "  note: phone runs $running; installing $rel for the next boot"
-  say "Unpacking modules into /usr/lib/modules/$rel on the phone"
-  # Replace the whole tree so modules dropped from the config don't linger
-  "$ssh" "set -e; rm -rf /usr/lib/modules/.$rel.new; mkdir -p /usr/lib/modules/.$rel.new
-    zstd -dc | tar -C /usr/lib/modules/.$rel.new -xf -
-    rm -rf /usr/lib/modules/$rel; mv /usr/lib/modules/.$rel.new/$rel /usr/lib/modules/$rel
-    rmdir /usr/lib/modules/.$rel.new; depmod -a $rel
-    echo $(sha256sum < "$tarball" | cut -d' ' -f1) > /usr/lib/modules/$rel/.omamobile-tarball
-    echo $rel > /usr/lib/modules/.omamobile-next; sync" < "$tarball"
+  say "Staging modules for /usr/lib/modules/$rel on the phone"
+  # This script runs in bash on the Arch phone; stdin carries the archive.
+  # Compare module contents, not depmod's generated indexes or our markers.
+  install=$(cat <<'SH'
+set -euo pipefail
+rel=$1 checksum=$2 replace=$3
+root=/usr/lib/modules
+stage=$(mktemp -d "$root/.$rel.new.XXXXXX")
+trap 'rm -rf -- "$stage"' EXIT
+zstd -dc | tar -C "$stage" -xf -
+incoming=$stage/$rel
+installed=$root/$rel
+[[ -d $incoming && ! -L $incoming ]] || { echo "archive has no module tree for $rel" >&2; exit 1; }
+if [[ -L $installed || ( -e $installed && ! -d $installed ) ]]; then
+  echo "refusing non-directory module tree: $installed" >&2
+  exit 1
+fi
+# Every module's sha256, NUL-separated "sum<TAB>path" records relative to the tree.
+module_sums() {
+  (cd "$1" && find . \( -type f -o -type l \) \( -name '*.ko' -o -name '*.ko.*' \) -print0 | sort -z |
+    while IFS= read -r -d '' f; do printf '%s\t%s\0' "$(sha256sum < "$f" | cut -d' ' -f1)" "${f#./}"; done)
+}
+if [[ -d $installed ]]; then
+  manifest=$installed/.omamobile-modules.sha256
+  conflicts=0
+  declare -A pushed=() incoming_sums=()
+  if [[ -f $manifest && ! -L $manifest ]]; then
+    # What the last push installed: a rebuilt module under the same release
+    # name is fine, a module added or swapped since by hand is not.
+    while IFS= read -r -d '' rec; do pushed[${rec#*$'\t'}]=${rec%%$'\t'*}; done < "$manifest"
+    while IFS= read -r -d '' rec; do
+      path=${rec#*$'\t'} sum=${rec%%$'\t'*}
+      if [[ -z ${pushed[$path]+x} ]]; then
+        printf 'module added by hand since the last push: %s\n' "$path" >&2; conflicts=1
+      elif [[ ${pushed[$path]} != "$sum" ]]; then
+        printf 'module changed by hand since the last push: %s\n' "$path" >&2; conflicts=1
+      fi
+    done < <(module_sums "$installed")
+  else
+    # A tree from before the manifest: every installed module must be in the
+    # archive unchanged (checksums, so no cmp: the release root has no diffutils).
+    while IFS= read -r -d '' rec; do incoming_sums[${rec#*$'\t'}]=${rec%%$'\t'*}; done < <(module_sums "$incoming")
+    while IFS= read -r -d '' rec; do
+      path=${rec#*$'\t'} sum=${rec%%$'\t'*}
+      if [[ ${incoming_sums[$path]:-} != "$sum" ]]; then
+        printf 'module absent or different in incoming archive: %s\n' "$path" >&2; conflicts=1
+      fi
+    done < <(module_sums "$installed")
+  fi
+  if (( conflicts )); then
+    if [[ $replace != 1 ]]; then
+      echo "refusing to replace $rel; installed tree untouched (OMAMOBILE_MODULES_REPLACE=1 permits replacement)" >&2
+      exit 1
+    fi
+    echo "OMAMOBILE_MODULES_REPLACE=1: replacing conflicting modules for $rel" >&2
+  fi
+fi
+# Only replace after extraction and every comparison succeeded.
+rm -rf -- "$installed"
+mv -- "$incoming" "$installed"
+depmod -a "$rel"
+module_sums "$installed" > "$installed/.omamobile-modules.sha256"
+printf '%s\n' "$checksum" > "$installed/.omamobile-tarball"
+printf '%s\n' "$rel" > "$root/.omamobile-next"
+sync
+SH
+)
+  printf -v command '%q ' bash -c "$install" -- "$rel" "$checksum" "$replace"
+  "$ssh" "$command" < "$tarball"
   "$ssh" "find /usr/lib/modules/$rel -name '*.ko*' | wc -l; ls /usr/lib/modules/$rel/modules.dep"
 }
 
@@ -457,6 +552,28 @@ cmd_initramfs_config() {
   ls -l "$1"
 }
 
+# INITRAMFS_MODULES into the initramfs: each module's .ko from this build's
+# modules directory $2 into $1, its name in $1/order (load order). A module
+# the kernel has built in (listed in $2/modules.builtin, as sec_acpm and its
+# mailbox are since #227) has nothing to load and is left out; a module that
+# is neither is an error. $3...: the module names.
+pack_initramfs_modules() {
+  local dest=$1 mdir=$2 m ko
+  shift 2
+  mkdir -p "$dest"
+  for m in "$@"; do
+    [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
+    ko=$(find "$mdir" -name "$m.ko" | head -1)
+    if [[ -z $ko ]] && grep -q "/$m\.ko\$" "$mdir/modules.builtin" 2>/dev/null; then
+      say "INITRAMFS_MODULES: $m is built in"
+      continue
+    fi
+    [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $mdir"
+    cp "$ko" "$dest/"
+    echo "$m" >> "$dest/order"
+  done
+}
+
 cmd_initramfs() {
   local dl="$WORK/downloads/alpine" stage="$KERNEL_OUT/initramfs" ver=3.24.2
   local release=0
@@ -466,6 +583,10 @@ cmd_initramfs() {
     *) die "initramfs: expected --release or no argument" ;;
   esac
   (($# <= 1)) || die "initramfs: expected --release or no argument"
+  # Modes in the cpio come from the umask: the same on every builder
+  local old_umask
+  old_umask=$(umask)
+  umask 022
   load_device
   # A leading slash is repo-root relative, so devices share initramfs/init.
   # Anything else is relative to device/<codename>/.
@@ -523,20 +644,14 @@ cmd_initramfs() {
   # Modules the init loads before anything else (INITRAMFS_MODULES, in load
   # order), from this kernel build's modules_install: the directory of this
   # build's release, never an older one left in modules-staging
-  local m ko mdir rel
+  local mdir rel
   if [[ -n ${DEV_INITRAMFS_MODULES:-} ]]; then
     rel=$(cat "$KERNEL_OUT/include/config/kernel.release" 2>/dev/null) ||
       die "INITRAMFS_MODULES needs a kernel build: omamobile kernel"
     mdir=$KERNEL_OUT/modules-staging/lib/modules/$rel
     [[ -d $mdir ]] || die "INITRAMFS_MODULES needs this build's modules ($rel): omamobile modules"
-    mkdir -p "$stage/lib/modules/omamobile"
-    for m in $DEV_INITRAMFS_MODULES; do
-      [[ $m =~ ^[a-z0-9_-]+$ ]] || die "INITRAMFS_MODULES: bad module name '$m'"
-      ko=$(find "$mdir" -name "$m.ko" | head -1)
-      [[ -n $ko ]] || die "INITRAMFS_MODULES: no $m.ko in $mdir"
-      cp "$ko" "$stage/lib/modules/omamobile/"
-      echo "$m" >> "$stage/lib/modules/omamobile/order"
-    done
+    # shellcheck disable=SC2086  # a list of plain module names, checked there
+    pack_initramfs_modules "$stage/lib/modules/omamobile" "$mdir" $DEV_INITRAMFS_MODULES
     echo "$rel" > "$KERNEL_OUT/initramfs.release"
     say "Initramfs modules ($rel): $DEV_INITRAMFS_MODULES"
   fi
@@ -559,7 +674,7 @@ cmd_initramfs() {
     cp "$SPLASH_BGRA_GZ" "$stage/splash.bgra.gz"
   elif [[ -f $logo ]] && command -v magick >/dev/null; then
     magick -size "$DEV_PANEL_SIZE" xc:'#1a1b26' "$logo" -gravity center -composite \
-      -alpha off -alpha on -depth 8 BGRA:- | gzip -9 > "$stage/splash.bgra.gz"
+      -alpha off -alpha on -depth 8 BGRA:- | gzip -9n > "$stage/splash.bgra.gz"
   else
     say "No Omarchy Plymouth logo or ImageMagick here: building without the early splash"
   fi
@@ -628,7 +743,12 @@ cmd_initramfs() {
     chmod 700 "$stage/root/.ssh" && chmod 600 "$stage/root/.ssh/authorized_keys"
   fi
 
-  (cd "$stage" && find . | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$KERNEL_OUT/initramfs.cpio.lz4"
+  # Reproducible: sorted names, fixed owner and mtimes, no inode numbers
+  # (tools/lib/initramfs-pack.sh), so two machines staging the same
+  # sources get the same bytes
+  source "$ROOT/tools/lib/initramfs-pack.sh"
+  initramfs_pack "$stage" "$KERNEL_OUT/initramfs.cpio.lz4" || die "packing the initramfs failed"
+  umask "$old_umask"
   ls -lh "$KERNEL_OUT/initramfs.cpio.lz4"
 }
 
@@ -1025,8 +1145,25 @@ cmd_push() {
   # among them): install them first. A config change can keep the release
   # name, so compare the tarball's checksum, not just the directory.
   rel=$(kernel_release)
+  [[ $rel =~ ^[0-9]+(\.[0-9]+)+[[:alnum:]_.+-]*$ ]] || die "invalid kernel release: $rel"
   want=$(sha256sum < "$KERNEL_OUT/modules-$rel.tar.zst" | cut -d' ' -f1)
-  [[ "$("$ssh" "cat /usr/lib/modules/$rel/.omamobile-tarball 2>/dev/null")" == "$want" ]] || cmd_modules_push
+  local marker_status marker=/usr/lib/modules/$rel/.omamobile-tarball
+  # A missing marker needs an install; a failed read must never authorize one.
+  # Only stdout is the marker: an SSH warning on stderr isn't a mismatch.
+  local marker_err
+  marker_err=$(mktemp)
+  if got=$("$ssh" "if test -e '$marker' || test -L '$marker'; then cat -- '$marker'; else printf '%s\\n' '<missing>'; fi" 2>"$marker_err"); then
+    rm -f -- "$marker_err"
+    if [[ $got != "$want" ]]; then
+      say "Module marker for $rel: expected $want; read returned ${got:-<empty>}"
+      cmd_modules_push
+    fi
+  else
+    marker_status=$?
+    got="$got$(cat -- "$marker_err")"
+    rm -f -- "$marker_err"
+    die "cannot read module marker for $rel: expected $want; read exited $marker_status, returned ${got:-<empty>}"
+  fi
   # Check every image before writing any. Each must fit its partition, and an
   # AVB_FOOTERS image is padded to the descriptor's partition size, with its
   # footer at the end, so that size must be the partition's exactly.
@@ -1091,7 +1228,7 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   initramfs) shift; cmd_initramfs "$@" ;;
   initramfs-config) shift; cmd_initramfs_config "$@" ;;
-  kernel) cmd_kernel ;;
+  kernel) shift; cmd_kernel "$@" ;;
   modules) cmd_modules ;;
   modules-push) cmd_modules_push ;;
   images) cmd_images ;;

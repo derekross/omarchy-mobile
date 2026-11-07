@@ -6,6 +6,22 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { echo "FAIL: $*" >&2; exit 1; }
 for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; done
+# The copy checks: a missing or failing cmp stops the start with its own
+# reason, never a false "differs"; only cmp's 1 means different.
+grep -c 'diffutils' PKGBUILD >/dev/null || fail "depends lacks diffutils (cmp)"
+grep -c 'cmp -s "' lib/omamobile-fp-chroot >/dev/null && fail "a bare cmp -s outside same_file"
+fn=$(sed -n '/^say() {/p;/^die() {/p;/^same_file() {/,/^}/p' lib/omamobile-fp-chroot)
+c=$(mktemp -d); printf a >"$c/a"; printf a >"$c/b"; printf b >"$c/x"
+mkdir "$c/nocmp"
+bash -c "$fn"'; same_file "$1" "$2"' _ "$c/a" "$c/b" 2>/dev/null || fail "same_file: equal files"
+rc=0; bash -c "$fn"'; same_file "$1" "$2"' _ "$c/a" "$c/x" 2>/dev/null || rc=$?
+[[ $rc == 1 ]] || fail "same_file: different files give 1 (got $rc)"
+out=$(PATH=$c/nocmp "$BASH" -c "$fn"'; same_file "$1" "$2"; echo reached' _ "$c/a" "$c/b" 2>&1 || true)
+[[ $out == *"cmp (diffutils) missing"* && $out != *reached* && $out != *differs* ]] || fail "same_file without cmp: $out"
+mkdir "$c/badcmp"; printf '#!/bin/sh\nexit 2\n' >"$c/badcmp/cmp"; chmod +x "$c/badcmp/cmp"
+out=$(PATH=$c/badcmp:$PATH bash -c "$fn"'; same_file "$1" "$2"; echo reached' _ "$c/a" "$c/b" 2>&1 || true)
+[[ $out == *"cmp failed"* && $out != *reached* ]] || fail "same_file on a cmp error: $out"
+rm -rf "$c"
 # Each phone: its trusted app, its KeyMint HAL and its bootloader properties.
 grep -c 'TA=g7.app' lib/omamobile-fp-chroot >/dev/null || fail "cheetah loads g7.app"
 grep -c 'TA=g7a.app' lib/omamobile-fp-chroot >/dev/null || fail "tegu loads g7a.app"
@@ -31,22 +47,30 @@ grep -c 'PANEL=1080x2424 PANEL_HZ=120 PANEL_STATE="On: 1080x2424@120" LHBM_FIRST
 grep -c -- '--lhbm-first "\$LHBM_FIRST"' lib/omamobile-fp-chroot >/dev/null || fail "the runner passes the circle order"
 # Under set -u, each phone's case sets every value the spawn line uses.
 cases=$(sed -n '/^case \$DEVICE in/,/^esac/p' lib/omamobile-fp-chroot)
-for d in cheetah tegu; do
-  DEVICE=$d bash -uc "$cases"'
-    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST ]]' ||
+for d in cheetah tegu panther; do
+  DEVICE=$d TOUCH_NAME=x bash -uc "$cases"'
+    [[ -n $PANEL && -n $PANEL_HZ && -n $PANEL_STATE && -n $LHBM_FIRST && -n $TOUCH_NAME ]]' ||
     fail "$d: the case leaves a panel value unset"
 done
 grep -c '^ro.hardware=tegu$' lib/props-tegu.conf >/dev/null || fail "props-tegu.conf"
 grep -c '^ro.hardware=cheetah$' lib/props-cheetah.conf >/dev/null || fail "props-cheetah.conf"
+grep -c '^ro.hardware=panther$' lib/props-panther.conf >/dev/null || fail "props-panther.conf"
+# The Pixel 7: found by its board, the 7 Pro's TA, its own panel and touchscreen.
+grep -c '\*google,gs201-panther\*) echo panther' lib/omamobile-fp-chroot >/dev/null || fail "panther not detected"
+DEVICE=panther bash -uc "$cases"'
+  [[ $TA == g7.app && $PANEL == 1080x2400 && $PANEL_NAME == sdc-s6e3fc3-p10 && $TOUCH_NAME == "FocalTech FT3658" && $MAP_STORES == 0 ]]' ||
+  fail "panther's TA, panel and touchscreen"
 grep -c '^ro.hardware=' lib/props.conf >/dev/null && fail "props.conf keeps a phone's ro.hardware"
 for f in lib/omamobile-tipc-probe lib/omamobile-fp-ctl; do
   python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$f" || fail "python: $f"
 done
-# both panels keep their allow_lhbm line (the 7 Pro's s6e3hc4, the 9a's tg4c),
+# the panels keep their allow_lhbm line (the 7 Pro's s6e3hc4, the 9a's tg4c,
+# the 7's s6e3fc3),
 # read from the file the package ships, so CI checks it without the prebuilts
 lhbm=vendor/modprobe.d/omamobile-fingerprint-lhbm.conf
 [[ $(grep -c '^options panel_samsung_s6e3hc4 allow_lhbm=1$' "$lhbm") == 1 ]] || fail "s6e3hc4 allow_lhbm line missing"
 [[ $(grep -c '^options panel_google_tg4c allow_lhbm=1$' "$lhbm") == 1 ]] || fail "tg4c allow_lhbm line missing"
+[[ $(grep -c '^options panel_samsung_s6e3fc3 allow_lhbm=1$' "$lhbm") == 1 ]] || fail "s6e3fc3 allow_lhbm line missing"
 # The bionic prebuilts are built on the computer with the Android toolchain
 # and never committed; a checkout without them (CI) checks the rest only.
 # The resume hook restarts fprintd after a wake, and stands aside where
@@ -61,6 +85,74 @@ PATH=$r/bin:$PATH OMAMOBILE_FP_ROOT=$r bash "$h" post
 [[ ! -s $r/calls ]] || { echo "not ok - the resume hook stands aside for Omarchy's"; exit 1; }
 rm -rf "$r"
 echo "ok - fprintd is restarted after a wake, unless Omarchy's own hook does it"
+
+# The safety before storageproxyd: consent, the read-only copies, the TDP
+# guard, one storage proxy per boot (test/preflight, a fake tree).
+bash -n test/preflight || fail "syntax: test/preflight"
+test/preflight || fail "the runner's preflight"
+# start runs it before the namespace, for every stage
+sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot | grep -c '^    preflight$' >/dev/null || fail "start runs preflight"
+# One start per boot: no automatic restart, the runner signalled alone
+u=vendor/systemd/system/omamobile-fp.service
+grep -c '^Restart=no$' "$u" >/dev/null || fail "the unit never restarts the stack"
+grep -c -e '^Restart=on' -e '^Restart=always' -e '^StartLimitBurst' "$u" >/dev/null && fail "no restart loop in the unit"
+grep -c '^KillMode=mixed$' "$u" >/dev/null || fail "systemd signals only the runner, which stops the stack in order"
+# Stop order: the bridge and the HAL, then KeyMint and Gatekeeper, the proxy last
+order=$(sed -n '/^stop() {/,/^}/p' lib/omamobile-fp-chroot | sed -n 's/^ *stop_children [0-9]* //p' | tr '\n' '|')
+[[ $order == "bridge fingerprint|gatekeeper keymint|storageproxyd|" ]] || fail "stop order: $order"
+grep -c 'ln -sfn ../omamobile-fp.service "$d/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service"' install >/dev/null ||
+  fail "the package enables omamobile-fp itself (so only this runner is ever enabled by default)"
+# A good start clears its pending marker (else every other boot would skip),
+# a die in the namespace still stops in order, and the marker is taken
+# atomically
+st=$(sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot)
+grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -qx '  rm -f "\$PENDING"' ||
+  fail "start clears start-pending right after the stack runs"
+grep -qx "  trap 'stop \$?' EXIT" <<<"$st" || fail "the namespace's EXIT trap keeps the stop order on a die"
+grep -c 'set -o noclobber; umask 077; echo .* > "\$MARKER"' lib/omamobile-fp-chroot >/dev/null ||
+  fail "the once-per-boot marker is created with O_EXCL (noclobber)"
+echo "ok - one start per boot, no restart loop, the storage proxy stopped last"
+
+# alive() and stop_children() in a real PID namespace (the runner's PIDS[]
+# are the namespace's PIDs): a child that exits on TERM is seen gone at once,
+# one that ignores TERM is waited for, and an exited child never reads as
+# running because the host has a process with that number.
+fns=$(sed -n '/^alive() {/,/^}/p; /^stop_children() {/,/^}/p' lib/omamobile-fp-chroot)
+[[ -n $fns ]] || fail "alive and stop_children not found"
+nsroot=$(mktemp -d)
+if unshare --user --map-root-user --mount --propagation private --pid --fork \
+     bash -c 'mkdir -p "$1/proc" && mount -t proc proc "$1/proc"' _ "$nsroot" 2>/dev/null; then
+  # As in the runner: /proc stays the host's, the namespace's procfs is
+  # mounted at $ROOT/proc
+  out=$(unshare --user --map-root-user --mount --propagation private --pid --fork bash -c '
+    set -euo pipefail
+    ROOT=$1
+    mount -t proc proc "$ROOT/proc"
+    say() { echo "say: $*"; }
+    '"$fns"'
+    declare -A PIDS=()
+    sleep 30 & PIDS[quick]=$!
+    bash -c "trap \"\" TERM; sleep 3" & PIDS[stubborn]=$!
+    sleep 0.2
+    s=$(date +%s%N); stop_children 50 quick; e=$(date +%s%N)
+    echo "quick_ms=$(( (e - s) / 1000000 ))"
+    alive "${PIDS[quick]}" && echo "quick=alive" || echo "quick=gone"
+    alive 2 && echo "pid2=alive" || echo "pid2=gone"
+    stop_children 10 stubborn
+    alive "${PIDS[stubborn]}" && echo "stubborn=alive" || echo "stubborn=gone"
+    kill -KILL "${PIDS[stubborn]}" 2>/dev/null || true
+  ' _ "$nsroot" 2>&1)
+  ms=$(sed -n 's/^quick_ms=//p' <<<"$out")
+  [[ -n $ms ]] && ((ms < 2000)) || fail "a child that exits on TERM is seen gone at once ($out)"
+  grep -qx 'quick=gone' <<<"$out" || fail "an exited child reads as gone ($out)"
+  grep -qx 'pid2=gone' <<<"$out" || fail "alive() reads the namespace's processes, not the host's ($out)"
+  grep -q 'say: still running after 1 s: stubborn' <<<"$out" && grep -qx 'stubborn=alive' <<<"$out" ||
+    fail "a child that ignores TERM is waited for and reported ($out)"
+  echo "ok - alive() and the ordered stop see the namespace's processes (stops take as long as the children)"
+else
+  echo "ok - alive() in a PID namespace # SKIP no unprivileged user namespaces here"
+fi
+rm -rf "$nsroot"
 
 if [[ ! -f prebuilt/omamobile-fp-shim.so ]]; then
   echo "ok - the rest # SKIP no bionic prebuilts in this checkout (built on the computer)"
@@ -88,6 +180,7 @@ for f in usr/lib/omamobile-fp/omamobile-fp-chroot usr/lib/omamobile-fp/omamobile
          usr/lib/omamobile-fp/omamobile-fp-ctl \
          usr/lib/omamobile-fp/props.conf usr/lib/omamobile-fp/omamobile-fp-shim.so \
          usr/lib/omamobile-fp/props-cheetah.conf usr/lib/omamobile-fp/props-tegu.conf \
+         usr/lib/omamobile-fp/props-panther.conf \
          usr/lib/omamobile-fp/omamobile-fp-bridge usr/lib/systemd/system/omamobile-fp.service \
          usr/lib/systemd/system/fprintd.service.d/omamobile-udfps.conf; do
   [[ -e $stage/$f ]] || fail "not staged: $f"
@@ -96,6 +189,9 @@ done
 [[ -z $(find "$stage" -path '*/root/*' -print -quit) ]] || fail "vendor files staged"
 # the modprobe file reached the stage
 [[ -f $stage/usr/lib/modprobe.d/omamobile-fingerprint-lhbm.conf ]] || fail "not staged: modprobe.d/omamobile-fingerprint-lhbm.conf"
+# on by default, with this runner: the package itself enables the unit
+[[ $(readlink "$stage/usr/lib/systemd/system/multi-user.target.wants/omamobile-fp.service") == ../omamobile-fp.service ]] ||
+  fail "the package enables omamobile-fp (vendor wants link)"
 if command -v systemd-analyze >/dev/null; then
   out=$(systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-fp.service" 2>&1 || true)
   out=$(grep -v -e 'not executable' -e 'No such file' -e 'is not a regular file' -e '^$' <<<"$out" || true)

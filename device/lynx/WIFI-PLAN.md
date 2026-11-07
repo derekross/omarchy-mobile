@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 7a (lynx): Wi-Fi and Bluetooth
 
-Status (2026-10-28): **parked.** The chip enumerates and reads host memory,
+Status (2026-11-05): **parked.** The chip enumerates and reads host memory,
 but its boot ROM stops at its authentication stage on the first firmware
 load, with the same unsigned image stock loads in 57 ms. Every host-side
 difference two testers could act on has been tried one at a time, one
@@ -10,10 +10,13 @@ cycle with an 8 s and a 30 s wait (step 6) and, on 2026-10-27, Google's
 host stack with Google's own trigger and full Android's 5 s wait before
 the load (section 7, item 1): it stalls the same way, so that pair is
 ruled out and the variants are stopped. Bluetooth is not required for a
-good load. The one measurement left is the cold stock read (section 7,
-item 3), on this phone, at its owner's call. A stock-side read of the
-register the ROM consults is done (section 5). The published kernel has no
-PCIe node for lynx; the Wi-Fi branch stays local, and on the test phone
+good load. The controlled cold stock read is now complete (section 7,
+item 3): stock already reads `WLAN_SECURE_BOOTN` 0 and bootstrap status
+`0x40` before BHI after the verified buck-GPIO drop, while `BOOT_CFG`
+changes from 0 to `0x200` after successful firmware loading. The result
+is mixed and does not establish the cause of the mainline stall. A
+stock-side read of the register the ROM consults is done (section 5). The
+published kernel has no PCIe node for lynx; the Wi-Fi branch stays local, and on the test phone
 `pcie_gs201` and `ath11k_pci` stay blacklisted (section 8). Bluetooth, on
 the same chip, scans on mainline through its own UART (linux-omarchy-mobile
 #98, in review); section 5 says what its device tree changes at the bench.
@@ -209,9 +212,11 @@ What it says:
   how the buck was dropped before the load. A cold read before the first-ever BHI still needs the
   calibration load held back on a stock phone (vendor init edited, or a
   build whose init does not write `fs_ready`).
-- Two registers that read 0 on mainline after the stall are nonzero under
-  stock in every state: `PBL_WLAN_BOOT_CFG` `0x200` and
-  `TLMM_PBL_BOOTSTRAP_STATUS` `0x40` (section 7).
+- The earlier stock captures had `PBL_WLAN_BOOT_CFG` `0x200` and
+  `TLMM_PBL_BOOTSTRAP_STATUS` `0x40`, where both read 0 on mainline after
+  the stall. The controlled reset on 2026-11-05 separates them: bootstrap
+  status remains `0x40`, but `BOOT_CFG` is 0 before the new BHI and
+  `0x200` after successful firmware loading (section 7, item 3).
 - The whole `wlaon_reg_access_seq[]` table (131 registers) was read in each
   state; between the two pre-BHI cycles only the stack canary and a running
   counter differ. The table and the QFPROM row stay off the repository.
@@ -316,23 +321,67 @@ below.
    `pcie-exynos-gs201-rc-cal`, `exynos-pcie-iommu`, `itmon`,
    `pcie-exynos-gs`, `mhi`, `cnss2`); run 9 (2026-10-26) had the same
    list without `rfkill` and `btpower`.
-3. **The cold stock read** (the maintainer's step 2 on #36, one host GPIO
-   write). Turn Bluetooth off first: `btpower` drives `gph2-5` too. On
-   stock, after `dev_boot shutdown` and `off`, drive `gph2-5` (GPIO 103) low
-   by hand for at least five seconds, then `on` (`cnss2` must log
-   `BUCK GPIO: [0]` and `drive it HIGH`, which confirms the drop, and waits
-   100 ms), `linkup`, and read `WLAN_SECURE_BOOTN` twice,
-   `TLMM_PBL_BOOTSTRAP_STATUS`, `PBL_WLAN_BOOT_CFG`, `WLAON_MEM_SVS_CFG_REG`,
-   `TCSR_PBL_LOGGING`, `WLAON_SOC_POWER_CTRL`, `WLAON_WL_PWR_STATUS_REG` and
-   the ten PBL log words; then `linkdown`, `off`, `on`, `linkup`, read
-   again; then `powerup` to confirm the firmware still comes up. Two
-   outcomes: `0x11111111 / 0x0 / 0x0` cold and `0x0 / 0x40 / 0x200` after
-   the cycle means a good run writes them; `0x0 / 0x40 / 0x200` already cold
-   means our power-up differs in something the chip latches (straps, pulls,
-   the buck's rail) and the bootstrap register is the lead. Stop if any
-   `reg_read` hangs or `powerup` fails afterwards. Costs a stock cycle on
-   this phone (`userdata` wiped, the Arch root restored, a fresh read-only
-   backup of the calibration partitions afterwards).
+3. **The controlled cold stock read — completed 2026-11-05, this phone.**
+   Stock Android 17 `CP2A.260705.006`, kernel
+   `6.1.157-android14-11-gbd23337e42e7-ab14791245`, slot A. Wi-Fi,
+   Bluetooth and their background scanning were off. After stock
+   `dev_boot shutdown` completed and `off`, WLAN_EN and PERST read low,
+   but the buck pin still read high. GPIO sysfs is disabled on this stock
+   kernel, so a reviewed GPIO character-device v1 helper requested only
+   `gph2` line 5 (`gpiochip18` on this kernel; global GPIO 103, with the
+   range and DT mapping verified). It set physical low, read 0 at both
+   ends of a 5.000384158 s monotonic hold, released its request, and
+   verified ownership was free. Stock `on` then produced fresh
+   `BUCK GPIO: [0]` and `BUCK GPIO is LOW, drive it HIGH` lines before
+   `linkup`.
+
+   All 18 selected reads, including the repeated `WLAN_SECURE_BOOTN`,
+   completed one at a time through stock CNSS. Then `linkdown`, `off`,
+   `on`, `linkup` without a GPIO drop produced an identical second set;
+   this time CNSS reported `BUCK GPIO: [1]`. There was no new BHI during
+   either pre-firmware set. For firmware validation, `linkdown`, `off`,
+   then stock `powerup` followed the previously successful mission
+   procedure: fresh BHI, SBL, AMSS/mission, `Skip driver probe` and
+   `FW_READY`. The same 18 reads completed again, without errors.
+
+   | Selected register(s) | Cold, before BHI | Warm cycle, no BHI | After successful firmware |
+   | --- | --- | --- | --- |
+   | `WLAN_SECURE_BOOTN`, both reads | `0` | `0` | `0` |
+   | `TLMM_PBL_BOOTSTRAP_STATUS` | `0x40` | `0x40` | `0x40` |
+   | `PBL_WLAN_BOOT_CFG` | `0` | `0` | `0x200` |
+   | `WLAON_MEM_SVS_CFG_REG` | `0` | `0` | `0` |
+   | `TCSR_PBL_LOGGING` | `0xef150600` | `0xef150600` | `0x5b1e21ed` |
+   | `WLAON_SOC_POWER_CTRL` | `0x08020397` | `0x08020397` | `0x117` |
+   | `WLAON_WL_PWR_STATUS_REG` | `0xd` | `0xd` | `0x9` |
+   | All ten selected PBL log words, `0x01403da0`–`0x01403dc4` | `0` | `0` | `0x10001` |
+
+   **Interpretation:** neither earlier all-or-nothing hypothesis fits.
+   `BOOT_CFG` is 0 before firmware and becomes `0x200` after a successful
+   load. However, stock's `SECURE_BOOTN` and bootstrap status already
+   differ from stalled mainline after the controlled GPIO reset, before
+   the new BHI. The no-firmware warm cycle changes none of the 18 values.
+   This preserves a difference between stock before BHI and the recorded
+   mainline stall without identifying its cause or when the values diverge:
+   the mainline column was read after its failed load, and the corresponding
+   pre-BHI mainline read remains unsafe (section 6).
+
+   **Limits and safety:** this verified the GPIO level, not the buck's
+   rail voltage; earlier firmware in this Android boot may leave state
+   outside the GPIO-controlled domain. No first-ever-BHI claim is made.
+   Live kernel logging, unchanged boot identity, the existing stock
+   `gs_watchdogd` 30 s watchdog, and fresh checksum-verified six-partition
+   calibration backups guarded the successful run. Earlier USB losses
+   stopped attempts before any buck drop or register read; the successful
+   attempt followed a stable-link check. Raw logs and partition images
+   remain private. No new mainline power-up variant was run.
+
+   After returning to Arch on slot B, a fresh read-only backup of all six
+   protected partitions passed size, SHA-256 and remote before/after checks.
+   All six hashes matched the immediate Arch-return capture; `modem_a/b`
+   also matched every saved baseline. The four mutable hashes differed
+   from the last live Android backup, which preceded stock shutdown.
+   Stock shutdown writes are a plausible explanation, not a proven one.
+   The storage guard remained intact, and touch worked after restoration.
 4. **The pins at power-up** (step 5), from `debugfs/pinctrl/*/pins`
    (`CON` 0 input, 1 output; `PUD` 0 none, 1 down, 3 up), both phones the
    same where nothing of ours has claimed the pin:

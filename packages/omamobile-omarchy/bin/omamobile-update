@@ -32,16 +32,29 @@ directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
              confirmation), omarchy-snapshot (no Snapper on the phone's ext4
              root), omarchy-update-aur-pkgs (no AUR builds on the phone),
              omarchy-update-orphan-pkgs (listed, never removed),
-             omarchy-update-restart (no gum, no false "kernel updated": the
-             phone's kernel is not a package), omarchy-migrate (boot-related
-             migrations held), sudo (non-interactive from the sheet)
+             omarchy-update-restart (no gum, no false "kernel updated":
+             a restart is asked for when omamobile-boot-update wrote slot B),
+             omarchy-migrate (boot-related migrations held), sudo
+             (non-interactive from the sheet)
 
 Before anything is downloaded it refuses: below 30% battery unless charging,
 when /etc/pacman.conf doesn't list [omamobile] first and [omarchy] before
 Arch Linux ARM's repositories, when [omarchy] isn't Omarchy's stable
-channel, and when the update would install a kernel,
-bootloader or boot-image tool (--allow-boot-packages overrides). The kernel
-itself still goes to the phone through bin/omamobile push.
+channel, and when the update would install another distribution's kernel,
+a bootloader or a boot-image tool (--allow-boot-packages overrides).
+
+The phone's own kernel package, linux-omamobile, is allowed: its pacman hook
+(omamobile-boot-update, docs/RELEASES.md §5.3) rebuilds slot B's images and
+writes them, guarded and verified, when /etc/omamobile/boot-update.conf says
+AUTO_WRITE=yes. Before anything is downloaded, an update that brings it asks
+`omamobile-boot-update preflight` (read-only) and refuses when the hook would
+refuse the write (another board, a partition the storage guard keeps
+read-only, the device package's boot files missing, ...), so the phone never
+holds a kernel package its slot B doesn't match. With AUTO_WRITE off (a
+development phone) the package installs and slot B is left to
+bin/omamobile push. The battery rule above covers the write too, and the
+hook checks the battery again itself. Nothing reboots: the result asks for
+a restart when slot B was written.
 
 The sheet's run: progress events in $XDG_RUNTIME_DIR/omamobile-update/events
 (kind<TAB>text lines: step, line, progress, auth, held, result, state), the
@@ -107,9 +120,13 @@ CHANNELS = {
 }
 SERVER_LINE = re.compile(r"^\s*Server\s*=\s*(\S+)\s*$")
 
-# Packages a phone update must not install: kernels and boot-image tools
-# (the phone boots from boot_b, which bin/omamobile push writes), bootloaders,
-# Snapper, fwupd. linux-firmware*, linux-api-headers and the like are fine.
+# Packages a phone update must not install: other kernels and boot-image
+# tools (the phone boots from boot_b, which linux-omamobile's hook or
+# bin/omamobile push writes), bootloaders, Snapper, fwupd. linux-firmware*,
+# linux-api-headers and linux-omamobile itself (kernel_update below) are fine.
+KERNEL_PACKAGE = "linux-omamobile"
+BOOT_UPDATE = os.environ.get("OMAMOBILE_BOOT_UPDATE", "omamobile-boot-update")
+BOOT_UPDATE_CONF = os.environ.get("OMAMOBILE_BOOT_UPDATE_CONF", "/etc/omamobile/boot-update.conf")
 BOOT_PACKAGES = re.compile(
     r"^(linux|linux-(aarch64|lts|zen|hardened|rt|omarchy.*|rpi.*|t2.*)(-headers)?|limine(-.*)?|grub|"
     r"efibootmgr|sbctl|snapper|snap-pac|mkinitcpio|dracut|booster|ukify|systemd-ukify|fwupd)$")
@@ -319,6 +336,69 @@ def installed_version(name):
     return out.stdout.split()[1] if out.returncode == 0 and len(out.stdout.split()) > 1 else ""
 
 
+def auto_write_conf(path=None):
+    """AUTO_WRITE from boot-update.conf as omamobile-boot-update reads it: "yes", "no" (also when absent), or "" when unreadable."""
+    try:
+        with open(path or BOOT_UPDATE_CONF) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return "no"
+    except OSError:
+        return ""
+    value = "no"
+    for line in lines:
+        if re.match(r"^\s*(#.*)?$", line):
+            continue
+        m = re.match(r'^AUTO_WRITE="?(yes|no)"?$', line)
+        if m:
+            value = m.group(1)
+        elif not re.match(r'^AVB_KEY="?/[A-Za-z0-9_./-]+"?$', line) or ".." in line:
+            return ""
+    return value
+
+
+def kernel_update(targets):
+    """What an update bringing linux-omamobile does to slot B, and whether it may run.
+
+    {"version", "boot_update": "write" | "skip", "problem"}, or None when the
+    update has no kernel. A problem blocks the update before anything is
+    downloaded: the hook would refuse to write, and the phone would hold a
+    kernel package that slot B doesn't match."""
+    version = next((v for n, v in targets if n == KERNEL_PACKAGE), None)
+    if version is None:
+        return None
+    info = {"version": version, "boot_update": "skip", "problem": ""}
+    try:
+        out = subprocess.run([BOOT_UPDATE, "preflight", "--json"], capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        # First kernel package: omamobile-boot-update comes in the same
+        # transaction (linux-omamobile depends on it), so it can't be asked yet
+        auto = auto_write_conf()
+        if auto == "no":
+            return info
+        info["problem"] = ("This update brings the kernel (%s), and %s says AUTO_WRITE=yes, but omamobile-boot-update "
+                           "isn't installed to check slot B first; ask on the project before updating" % (version, BOOT_UPDATE_CONF)
+                           if auto else "%s can't be read; fix it before a kernel update" % BOOT_UPDATE_CONF)
+        return info
+    except (OSError, subprocess.TimeoutExpired) as e:
+        info["problem"] = "omamobile-boot-update preflight failed: %s" % e
+        return info
+    try:
+        pre = json.loads(out.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        info["problem"] = "omamobile-boot-update preflight gave no answer: %s" % (out.stderr.strip()[-200:] or out.returncode)
+        return info
+    if pre.get("auto_write") != "yes":
+        if pre.get("auto_write") not in ("no",):
+            info["problem"] = "Slot B can't be checked for the kernel update: %s" % (pre.get("problem") or "boot-update.conf unreadable")
+        return info
+    info["boot_update"] = "write"
+    if not pre.get("ok"):
+        info["problem"] = ("This update brings the kernel (%s), but slot B can't take it: %s. Not updating."
+                           % (version, pre.get("problem") or "omamobile-boot-update preflight failed"))
+    return info
+
+
 def pending_updates(offline=False):
     """(lines "name old -> new", [(name, version) to install or upgrade], error)"""
     if offline:
@@ -333,15 +413,23 @@ def pending_updates(offline=False):
     db = os.environ.get("CHECKUPDATES_DB") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "checkup-db-%d" % os.getuid())
     targets = []
     if lines:
+        # pacman's plan of the whole update: when it can't be made (a dependency
+        # no repository satisfies, a conflict), the update would stop in the
+        # middle, so refuse it here with pacman's own reason (#433)
         try:
             plan = subprocess.run([PACMAN, "-Sup", "--dbpath", db, "--logfile", "/dev/null",
                                    "--print-format", "%n %v"], capture_output=True, text=True, timeout=120)
-            for l in plan.stdout.splitlines():
-                parts = l.split()
-                if len(parts) == 2 and not l.startswith(("::", "warning", "error")):
-                    targets.append((parts[0], parts[1]))
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return lines, [], "could not plan the update: %s" % e
+        if plan.returncode != 0:
+            why = [l.strip() for l in (plan.stderr + "\n" + plan.stdout).splitlines()
+                   if l.strip().startswith(("error", "::"))]
+            return lines, [], "pacman can't plan this update, so it would stop partway: %s" % (
+                "; ".join(why[:4]) or "pacman -Sup exited %d" % plan.returncode)
+        for l in plan.stdout.splitlines():
+            parts = l.split()
+            if len(parts) == 2 and not l.startswith(("::", "warning", "error")):
+                targets.append((parts[0], parts[1]))
         if not targets:
             targets = [(l.split()[0], l.split()[-1]) for l in lines]
     return lines, targets, ""
@@ -404,8 +492,11 @@ def check(offline=False, allow_boot=False):
     lines, targets, err = pending_updates(offline)
     boot = sorted({n for n, _ in targets if BOOT_PACKAGES.match(n)})
     if boot and not allow_boot:
-        blockers.append("This update would install %s, which the phone doesn't use (its kernel goes through "
-                        "bin/omamobile push); ask on the project before updating" % ", ".join(boot))
+        blockers.append("This update would install %s, which the phone doesn't use (its kernel is linux-omamobile, "
+                        "written to slot B by omamobile-boot-update); ask on the project before updating" % ", ".join(boot))
+    kernel = kernel_update(targets)
+    if kernel and kernel["problem"]:
+        blockers.append(kernel["problem"])
     if err:
         blockers.append(err)
     omarchy_line = next((l for l in lines if l.split()[0] in ("omarchy", "omarchy-dev")), "")
@@ -418,7 +509,7 @@ def check(offline=False, allow_boot=False):
         "free_gib": round(free / 1024 ** 3, 1) if free >= 0 else None,
         "omarchy": installed_version("omarchy") or installed_version("omarchy-dev"),
         "omarchy_update": omarchy_line, "updates": lines, "update_count": len(targets) or len(lines),
-        "boot_packages": boot, "running": is_running, "credential": credential(),
+        "boot_packages": boot, "kernel": kernel, "running": is_running, "credential": credential(),
         "patches": patch_summary(), "release_notes": RELEASE_NOTES, "checked_offline": offline,
         "blockers": blockers, "ok": not blockers,
     }
@@ -661,8 +752,16 @@ def inner(args):
         if err:
             refusal = err
         elif boot and not allow_boot:
-            refusal = ("This update would install %s, which the phone doesn't use (its kernel goes through "
-                       "bin/omamobile push). Not updating." % ", ".join(boot))
+            refusal = ("This update would install %s, which the phone doesn't use (its kernel is linux-omamobile, "
+                       "written to slot B by omamobile-boot-update). Not updating." % ", ".join(boot))
+        kernel = None if refusal else kernel_update(targets)
+        if kernel and kernel["problem"]:
+            refusal = kernel["problem"]
+        elif kernel:
+            print("The kernel (%s) is part of this update: %s" % (
+                kernel["version"], "its pacman hook writes it to slot B; restart afterwards to boot it"
+                if kernel["boot_update"] == "write" else
+                "slot B is left alone (AUTO_WRITE is off; bin/omamobile push stays the writer)"), flush=True)
         if refusal:
             print(refusal, flush=True)
             with open(os.path.join(RUNTIME, "refused"), "w") as f:
@@ -672,7 +771,7 @@ def inner(args):
         print("%d package(s) to update%s" % (len(targets) or len(lines), "; " + omarchy_line if omarchy_line else ""),
               flush=True)
         env.update(PATH=SHIMS + ":" + env.get("PATH", "/usr/bin"), OMARCHY_UPDATE_LOGGED="1", OMAMOBILE_UPDATE="1",
-                   OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO)
+                   OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO, OMAMOBILE_UPDATE_STARTED=str(int(time.time())))
         return subprocess.run([OMARCHY_UPDATE, "-y"], env=env).returncode
     finally:
         stop.set()

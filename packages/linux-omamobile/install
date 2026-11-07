@@ -1,0 +1,72 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Stage linux-omamobile into DESTDIR from a prebuilt/ directory that ./stage
+# filled (docs/RELEASES.md §4), in Arch Linux ARM's layout:
+#
+#   /usr/lib/modules/<release>/vmlinuz           the uncompressed arm64 Image
+#   /usr/lib/modules/<release>/kernel/...         the stripped modules
+#   /usr/lib/modules/<release>/modules.order, modules.builtin*
+#   /usr/lib/modules/<release>/dtbs/<dir>/*.dtb   every board DTB
+#   /usr/lib/modules/<release>/pkgbase            linux-omamobile
+#   /usr/share/omamobile/linux/kernel.release     <release>: which release
+#       this package is, for omamobile-boot-update (kernel-modules-hook
+#       leaves a copy of the running release beside it, and release names
+#       end in a hash, so the newest-looking directory is not the answer)
+#   /usr/share/omamobile/linux/SOURCE             the release tag and commit
+#
+# depmod's files (modules.dep, .alias, .symbols, ...) are left out, as Arch's
+# kernels leave them out: kmod's 60-depmod hook makes them on the phone, and
+# omamobile-boot-update refuses a release depmod hasn't seen. No initramfs
+# and no boot images: the device's omamobile-boot-update hook makes those.
+#
+#   ./install DESTDIR [PREBUILT]     (PREBUILT: default prebuilt/)
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+d=${1:?Usage: ./install DESTDIR [PREBUILT]}
+pre=${2:-prebuilt}
+die() { printf 'linux-omamobile install: %s\n' "$*" >&2; exit 1; }
+[[ $d == /* && $d != "/" ]] || die "use an absolute staging directory"
+[[ -f $pre/kernel.release && -f $pre/SHA256SUMS ]] \
+  || die "no staged kernel in $pre (run: packages/linux-omamobile/stage KERNEL_OUT)"
+(cd "$pre" && sha256sum --quiet --strict -c SHA256SUMS) || die "$pre fails its checksums"
+for f in Image modules.tar.zst kernel.release SOURCE; do
+  grep -cE "  $f$" "$pre/SHA256SUMS" >/dev/null || die "$pre/SHA256SUMS does not cover $f"
+done
+rel=$(cat "$pre/kernel.release")
+# A published release only (./stage checked the tag on the published
+# repository; tools/build-packages checks it again with ./stage --verify)
+commit=$(sed -n 's/^commit \([0-9a-f]\{40\}\)$/\1/p' "$pre/SOURCE")
+[[ -n $commit && $rel =~ -g([0-9a-f]+)$ && $commit == "${BASH_REMATCH[1]}"* ]] \
+  || die "$pre/SOURCE does not name the commit $rel was built from"
+grep -cE '^tag kernel-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$' "$pre/SOURCE" >/dev/null \
+  || die "$pre/SOURCE names no release tag: only a published release is packaged (./stage from the tag's checkout)"
+count=$(cat "$pre/kernel.commits" 2>/dev/null || true)
+./lib/pkgver "$rel" $count >/dev/null || exit 1
+[[ $(od -An -tx1 -j56 -N4 "$pre/Image" | tr -d ' \n') == 41524d64 ]] || die "$pre/Image is not an arm64 Image"
+
+m=$d/usr/lib/modules
+mkdir -p "$m"
+# Only the release's own directory comes out of the tarball
+top=$(tar --zstd -tf "$pre/modules.tar.zst" | sed 's|^\./||; s|/.*||' | sort -u)
+[[ $top == "$rel" ]] || die "modules.tar.zst holds '$top', not $rel"
+tar --zstd -xf "$pre/modules.tar.zst" -C "$m" --no-same-owner --no-same-permissions
+r=$m/$rel
+rm -f "$r/build" "$r/source"
+for f in modules.alias modules.alias.bin modules.builtin.alias.bin modules.builtin.bin modules.dep modules.dep.bin \
+         modules.devname modules.softdep modules.symbols modules.symbols.bin modules.weakdep; do
+  rm -f "$r/$f"
+done
+[[ -f $r/modules.order ]] || die "the modules have no modules.order"
+find "$r" -name '*.ko*' -print -quit | grep -c . >/dev/null || die "the modules tarball has no modules"
+find "$r" -type l | grep -c . >/dev/null && die "the module tree holds symlinks"
+install -Dm644 "$pre/Image" "$r/vmlinuz"
+(cd "$pre/dtbs" && find . -name '*.dtb' -type f | sed 's|^\./||' | LC_ALL=C sort) | while IFS= read -r f; do
+  install -Dm644 "$pre/dtbs/$f" "$r/dtbs/$f"
+done
+find "$r/dtbs" -name '*.dtb' -print -quit 2>/dev/null | grep -c . >/dev/null || die "no DTBs in $pre/dtbs"
+echo linux-omamobile > "$r/pkgbase"
+chmod -R u+rwX,go+rX,go-w "$r"
+install -Dm644 "$pre/SOURCE" "$d/usr/share/omamobile/linux/SOURCE"
+printf '%s\n' "$rel" > "$d/usr/share/omamobile/linux/kernel.release"
+chmod 644 "$d/usr/share/omamobile/linux/kernel.release"
+install -Dm644 version "$d/usr/share/omamobile/linux/version"

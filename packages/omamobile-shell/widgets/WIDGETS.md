@@ -125,6 +125,10 @@ Declare these properties. The home screen sets them before
 | `property int cellsWide`, `property int cellsHigh` | The size in grid cells, for layouts that change with the size |
 | `property bool shown` (optional) | Someone can see the widget: its page shows, no app, app drawer or recent apps covers the home screen, and the screen is on. Run timers and animations only while it is `true` (`running: widget.shown`), and catch up once when it turns `true` again. A widget that doesn't declare it works as before |
 
+Declare the optional visibility input as a writable `property bool shown`.
+Code that derives a read-only visibility value should use `host.shown`
+directly instead of declaring a read-only `shown` input.
+
 `host` gives you:
 
 | Member | What |

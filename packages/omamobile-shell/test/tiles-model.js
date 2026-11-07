@@ -120,6 +120,23 @@ test("pages split by eight and keep one empty page for an empty layout", () => {
   assert.deepStrictEqual(M.pages(["wifi", "dnd", "mic"], 2), [["wifi", "dnd"], ["mic"]])
 })
 
+test("the Mobile data icon shows bars, crossed out only with no modem, data off or no network", () => {
+  const S = require(path.join(__dirname, "../plugins/omamobile.bar/StatusModel.js"))
+  const crossed = String.fromCodePoint(0xF0783)
+  assert.strictEqual(M.dataIcon(false, false, "80"), crossed, "no modem")
+  assert.strictEqual(M.dataIcon(true, false, "80"), crossed, "data off")
+  assert.strictEqual(M.dataIcon(true, true, "-1"), crossed, "no network")
+  assert.strictEqual(M.dataIcon(true, true, undefined), crossed, "an older probe without data_signal")
+  assert.strictEqual(M.dataIcon(true, true, "junk"), crossed, "garbage")
+  assert.strictEqual(M.dataIcon(true, true, "0"), String.fromCodePoint(0xF08BF), "registered, no reading: empty bars")
+  // The same bars as the status bar's cellular icon, at every strength.
+  for (let s = 0; s <= 100; s++) assert.strictEqual(M.dataIcon(true, true, String(s)), S.cellularIcon(s), `strength ${s}`)
+  assert.strictEqual(M.dataIcon(true, true, "250"), S.cellularIcon(100), "capped")
+  assert.notStrictEqual(M.dataIcon(true, true, "100"), crossed)
+  const qml = fs.readFileSync(path.join(__dirname, "../plugins/omamobile.quicksettings/QuickSettings.qml"), "utf8")
+  assert.ok(/icon: TilesModel\.dataIcon\(available, enabled, root\.probed\.data_signal\)/.test(qml), "the tile uses it")
+})
+
 test("parseProbe reads key=value lines and ignores the rest", () => {
   const values = M.parseProbe("airplane=off\nhotspot=on\n\ngarbage\nBAD=x\ntheme_name=tokyo-night\ndata_status=Op LTE\nairplane=on\n")
   assert.deepStrictEqual(values, { airplane: "on", hotspot: "on", theme_name: "tokyo-night", data_status: "Op LTE" })

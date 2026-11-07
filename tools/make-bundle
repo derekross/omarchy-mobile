@@ -12,7 +12,8 @@
 #     tools/         tools/phone-provision and what it runs (phone-ssh and the
 #                    extract-* tools), so a user provisions from the bundle
 #                    without the repository; they extract Google's files on
-#                    the user's machine, and none of those files ship here
+#                    the user's machine, and none of those files ship here;
+#                    and tools/nv-backup, the read-only radio backup it needs
 #     MANIFEST       kernel release, root image, both repositories' commits, toolchain
 #     manifest.json  the same and more as data (tools/bundle-manifest): every
 #                    file with size and SHA-256, the root image, the release
@@ -22,6 +23,13 @@
 #     SHA256SUMS.sig signed with the release key (keys/gnupg.release,
 #                    tools/lib/signing.sh; maintainer only; --unsigned skips)
 #   out/bundle/omamobile-rootfs-<codename>-<version>-aarch64.img.zst (+ .sha256, .MANIFEST)
+#   out/bundle/omamobile-<codename>-<version>.tar
+#                  the one-file download: the bundle directory and the root
+#                  image's three files, unpacked side by side (deterministic,
+#                  uncompressed; tools/lib/bundle-tar.sh)
+#   out/bundle/omamobile-<codename>-<version>.tar.sha256 (+ .sig)
+#                  its SHA-256, signed with the release key like SHA256SUMS
+#                  (the tar holds SHA256SUMS.sig, so SHA256SUMS can't list it)
 #
 #   tools/make-bundle [--version V] [--rootfs FILE] [--unsigned] [--label TEXT]
 #                     [--base-url URL]
@@ -59,7 +67,7 @@ while (($#)); do
     --unsigned) unsigned=1 ;;
     --label) label=${2:?}; shift ;;
     --base-url) base_url=${2:?}; shift ;;
-    -h|--help) sed -n '3,39p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
@@ -78,9 +86,10 @@ if ((unsigned == 0)); then
 fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || die "no $conf"
-provision_tools="phone-provision phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
 for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
 [[ -f docs/INSTALL.md ]] || die "no docs/INSTALL.md"
+[[ -f tools/lib/bundle-tar.sh ]] || die "no tools/lib/bundle-tar.sh"
 boot_images=$(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$conf")
 [[ -n $boot_images ]] || die "$conf has no BOOT_IMAGES"
 if [[ -z $rootfs ]]; then
@@ -183,8 +192,12 @@ with a mainline kernel and no Android. https://github.com/derekross/omarchy-mobi
 INSTALL.md in this directory is the step-by-step guide; read it first.
 
 Install: put the phone in fastboot mode (bootloader unlocked), connect it, and
-run ./install from this directory. $rootname must be next to
-this directory. It needs fastboot (android-tools), e2fsprogs, zstd, openssl,
+run "bash install" from this directory ("bash install" works even when a
+download lost the file's execute bit). $rootname must be next to
+this directory: unpacking $name.tar (the one-file download, checked
+with "sha256sum -c $name.tar.sha256") puts both side by side. If
+you downloaded this directory file by file, run "chmod +x tools/*" in it
+once. It needs fastboot (android-tools), e2fsprogs, zstd, openssl,
 gpg and python3 on this computer. The installer checks the phone first, asks for your user
 name, password, Wi-Fi and SSH key, shows exactly what it will write, and
 waits for you to type "$DEVICE".
@@ -194,12 +207,15 @@ userdata (the Arch root). That ERASES userdata. It never touches slot A,
 the bootloader, radio, persist, efs, modem, devinfo or vbmeta.
 
 After the first boot: take the read-only backup of the modem's partitions
-(INSTALL.md, "Back up"), then run tools/phone-provision from this directory
-with that backup and your own factory image for $DEVICE:
-  tools/phone-provision --nv-backup DIR FACTORY.zip
-It puts the firmware for Wi-Fi, Bluetooth, haptics, speakers and the camera
-on the phone, extracted on this computer; nothing Google's ships in this
-bundle.
+into a new directory DIR with tools/nv-backup (INSTALL.md, "Back up"), then
+run tools/phone-provision from this directory with that backup and your own
+factory image for $DEVICE:
+  bash tools/nv-backup DIR
+  bash tools/phone-provision --nv-backup DIR FACTORY.zip
+The backup holds this phone's IMEI and calibration: keep it, never share
+it. phone-provision puts the firmware for Wi-Fi, Bluetooth, haptics,
+speakers and the camera on the phone, extracted on this computer; nothing
+Google's ships in this bundle.
 
 Updates: the phone follows the ${channel:-unknown} channel of the [omamobile]
 repository (https://pkgs.omamobile.org); "omarchy update" on the phone
@@ -222,5 +238,17 @@ if ((unsigned)); then
 else
   gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$dir/SHA256SUMS.sig" "$dir/SHA256SUMS"
   say "Signed SHA256SUMS with the release key $SIGNING_KEY"
+fi
+# The one-file download: the finished bundle and the root image beside it in
+# one deterministic tar (tools/lib/bundle-tar.sh). It holds SHA256SUMS.sig,
+# so no checksum inside the bundle can cover it: its .sha256 gets its own
+# signature by the same key instead.
+say "Writing $out/$name.tar (the bundle and the root image, one download)"
+source tools/lib/bundle-tar.sh
+rm -f "$out/$name.tar.sha256.sig"
+bundle_tar "$out" "$name" "$rootname" "$version" || die "writing $out/$name.tar failed"
+if ((unsigned == 0)); then
+  gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$out/$name.tar.sha256.sig" "$out/$name.tar.sha256"
+  say "Signed $name.tar.sha256 with the release key $SIGNING_KEY"
 fi
 ls -l "$dir" "$out"

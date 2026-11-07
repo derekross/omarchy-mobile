@@ -14,7 +14,8 @@ import "Readable.js" as Readable
 import "../omamobile.launcher/LauncherModel.js" as LauncherModel
 
 // Voice input for the phone (docs/VOICE-PLAN.md): one voice bar, through
-// Voxtype's user daemon (voxtype.service, Omarchy's Install > AI >
+// Voxtype's user daemon (voxtype.service; in the root image, set up by
+// omamobile-setup-user with the shipped base.en; or Omarchy's Install > AI >
 // Dictation). Speech is turned into text on the phone.
 //
 // The ways in, as on Android: a hold on the pill in an app, or on the
@@ -525,7 +526,7 @@ Item {
     id: startProc
     onExited: function(exitCode) {
       if (exitCode !== 0 && root.phase === "starting")
-        root.fail("Voxtype isn't running. Install it with Install > AI > Dictation, or start voxtype.service.")
+        root.fail("Voxtype isn't running. Start voxtype.service, or install it with Install > AI > Dictation.")
     }
   }
 
@@ -855,7 +856,7 @@ Item {
           SheetAction {
             objectName: "done"
             width: (parent.width - parent.spacing) * 2 / 3
-            label: root.phase === "transcribing" ? "Turning it into text..." : "Done · " + VoiceModel.doneVerb(root.dest)
+            label: root.phase === "transcribing" ? "Transcribing…" : "Done · " + VoiceModel.doneVerb(root.dest)
             primary: true
             tone: root.recording
             enabled: root.phase === "listening" || root.phase === "starting"

@@ -19,6 +19,14 @@ RUN = Path(os.environ.get('OMAMOBILE_SIT_RUN', '/run/omamobile-sit'))
 STATE = Path(os.environ.get('OMAMOBILE_SIT_STATE', '/var/lib/omamobile-sit'))
 INBOX = STATE / 'inbox'
 CONFIG = Path(os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.conf'))
+# A device package's defaults (*.conf, read in name order before CONFIG, so
+# a value set in CONFIG wins): the settings that hold only on that phone,
+# such as the call audio route its owner has verified ([audio] card = auto
+# from omamobile-device-cheetah). Without one, DEFAULTS hold. Only their
+# [audio] section is read: omamobile-mmd and the shell read [network] and
+# [data] from CONFIG themselves and would never see a device default there.
+# A file that can't be read or parsed is skipped (the safe side: no route).
+DEVICE_DEFAULTS = Path(os.environ.get('OMAMOBILE_SIT_DEFAULTS', '/usr/lib/omamobile/modem-sit.conf.d'))
 
 # CPIF's character devices. "unix:PATH" is a SOCK_SEQPACKET socket (the
 # simulator); "none" for BOOT means "no CP state ioctl: assume ONLINE".
@@ -27,18 +35,34 @@ ROUTER = os.environ.get('OMAMOBILE_SIT_ROUTER', '/dev/umts_router')
 BOOT = os.environ.get('OMAMOBILE_SIT_BOOT', '/dev/umts_boot0')
 
 DEFAULTS = {
-    'network': {'apn': '', 'ip_type': 'ipv4v6', 'ims': 'yes', 'ims_apn': 'ims',
-                'ims_required': 'no', 'ims_timeout': '120',
+    'network': {'apn': 'auto', 'attach_apn': 'auto', 'ip_type': 'ipv4v6', 'ims': 'yes', 'ims_apn': 'auto',
+                'ims_required': 'no', 'ims_pcscf_required': 'yes',
+                'ims_pcscf_from_isim': 'yes', 'ims_first': 'auto', 'internet_cid': 'auto',
+                'carrier_manifest': '', 'carrier_manifest_timeout': '60', 'ims_timeout': '120',
                 'nr': 'off', 'sim_timeout': '120', 'register_timeout': '180'},
-    'data': {'route': 'yes', 'metric': '700'},
+    # Extra modem-managed data profiles, one per line (data_call.parse_profile).
+    'profiles': {},
+    'data': {'route': 'yes', 'metric': '700', 'roaming': 'yes'},
     'control': {'group': 'wheel'},
-    'audio': {'card': 'none', 'mic_boost_db': '6'},
+    'audio': {'card': 'none', 'mic_boost_db': '6', 'earpiece': 'yes'},
 }
 
 
 def config(path=None):
     parser = configparser.ConfigParser(interpolation=None)
     parser.read_dict(DEFAULTS)
+    try:
+        files = sorted(f for f in DEVICE_DEFAULTS.glob('*.conf') if f.is_file())
+    except OSError:
+        files = []
+    for f in files:
+        device = configparser.ConfigParser(interpolation=None)
+        try:
+            device.read_string(f.read_text(), str(f))
+        except (OSError, UnicodeDecodeError, configparser.Error):
+            continue
+        if device.has_section('audio'):
+            parser.read_dict({'audio': dict(device['audio'])})
     parser.read(path or CONFIG)
     return parser
 
@@ -58,3 +82,16 @@ def private_dir(path):
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.chmod(0o700)
     return path
+
+
+def run_dir():
+    """RUN for a client of sitd's directory (a SIT client, omamobile-sit-data):
+    created private if missing, else only narrowed to at most 0710. sitd sets
+    it 0710 root:<control group> so the group reaches state.json and the
+    socket; a client that reset it to 0700 hid the modem from the shell."""
+    if not RUN.exists():
+        return private_dir(RUN)
+    mode = RUN.stat().st_mode & 0o777
+    if mode & ~0o710:
+        RUN.chmod(mode & 0o710)
+    return RUN

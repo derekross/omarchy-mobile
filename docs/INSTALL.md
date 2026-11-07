@@ -7,12 +7,14 @@ Omarchy Mobile is a community project built on [Omarchy](https://omarchy.org). I
 
 It takes about an hour, most of it downloads and waiting. You type a few commands in a terminal on your computer; each step says what you should see.
 
+Today these steps are manual. Where the install is going, one guided step from a web page or a desktop app with the phone's firmware fetched for you, is in the [install experience plan](https://github.com/derekross/omarchy-mobile/blob/main/docs/INSTALL-EXPERIENCE-PLAN.md).
+
 ## Before you start: what happens to your phone
 
 - **Installing erases the phone's data.** Unlocking the bootloader erases it, and the installer replaces the user data partition (`userdata`) with Omarchy Mobile. Copy off anything you want to keep first: photos, messages, two-factor codes.
 - **Android stays on the phone as your way back.** A Pixel has two copies of its system, slot A and slot B. The installer writes only slot B and `userdata`. Stock Android stays on slot A, untouched, and [Going back to Android](#going-back-to-android) shows how to switch back.
 - **The installer never touches the bootloader, the radio, or the partitions that hold your phone's identity and calibration** (`persist`, `efs`, `modem`, `devinfo`, `vbmeta`). It checks the phone before writing anything, shows every command it will run, and waits for you to type the phone's codename.
-- **This is a developer preview.** Calls, SMS and mobile data don't work yet (the modem is still being brought up), and the phone doesn't yet go to sleep by itself when the screen turns off. Check the [device page](https://omamobile.org/devices/cheetah) for the current list.
+- **This is a developer preview.** Calls, SMS and mobile data work on the one network tested so far (a Verizon-network SIM), with the carrier's APNs set by hand after the install (the release notes say how), and the phone doesn't yet go to sleep by itself when the screen turns off. Check the [device page](https://omamobile.org/devices/cheetah) for the current list.
 
 ## What you need
 
@@ -32,7 +34,9 @@ It takes about an hour, most of it downloads and waiting. You type a few command
   ssh-keygen -t ed25519
   ```
 
-- **The release:** the bundle (a folder named `omamobile-cheetah-<version>`) and the root image (`omamobile-rootfs-cheetah-<version>-aarch64.img.zst`), from [omamobile.org/download](https://omamobile.org/download). Put both in the same folder, side by side.
+- **The release,** from [omamobile.org/download](https://omamobile.org/download), in one of two ways:
+  - **one file** (the easy way): `omamobile-cheetah-<version>.tar` (about 2.8 GB) and its checksum file `omamobile-cheetah-<version>.tar.sha256`, downloaded into the same folder (and `omamobile-cheetah-<version>.tar.sha256.sig` too, for step 2's optional signature check). Step 2 checks and unpacks it.
+  - **file by file:** the bundle (a folder named `omamobile-cheetah-<version>`) and the root image (`omamobile-rootfs-cheetah-<version>-aarch64.img.zst`), side by side in the same folder. Downloads often lose the files' execute permission, so run `chmod +x tools/*` once inside the bundle folder (`tools/phone-provision` runs the other tools there directly).
 - **Google's factory image for your phone,** from [Google's factory images page](https://developers.google.com/android/images#cheetah): the build your phone runs now (Settings > About phone > Build number). Check its SHA-256 against the one on Google's page (`sha256sum cheetah-*.zip`). Omarchy Mobile never ships Google's files: after the install, a tool copies the firmware your phone needs (Wi-Fi, Bluetooth, audio, haptics, the camera) out of this image, on your computer, and onto your phone.
 
 ## 1. Unlock the bootloader (this erases the phone)
@@ -59,15 +63,26 @@ From now on the phone shows a warning that its bootloader is unlocked each time 
 
 ## 2. Check the release
 
-The installer checks the release by itself before it touches the phone: the bundle's signature (Omarchy Mobile's release key, which it carries), every file's checksum, and that the root image is the one the signed bundle names. If anything doesn't match, it stops.
+If you downloaded the one `.tar` file, check that it arrived whole, then unpack it, in the folder you downloaded it to:
 
-If you want to check the downloads yourself first, compare their SHA-256 with the ones on the download page:
+```sh
+sha256sum -c omamobile-cheetah-<version>.tar.sha256
+tar -xf omamobile-cheetah-<version>.tar
+```
+
+The first command should print `omamobile-cheetah-<version>.tar: OK`. If it says `FAILED`, download the `.tar` again. Unpacking gives the bundle folder and the root image side by side, as the installer expects; you can delete the `.tar` afterwards. The `.tar.sha256` is itself signed with Omarchy Mobile's release key (`omamobile-cheetah-<version>.tar.sha256.sig`, key fingerprint `2056 7593 566E EEE2 DD88 6460 8632 C807 5EB9 4673`): if you already have that key in `gpg`, `gpg --verify omamobile-cheetah-<version>.tar.sha256.sig` checks it too.
+
+Either way, the installer checks the release by itself before it touches the phone: the bundle's signature (Omarchy Mobile's release key, which it carries), every file's checksum, and that the root image is the one the signed bundle names. If anything doesn't match, it stops.
+
+If you downloaded file by file and want to check the downloads yourself first, compare their SHA-256 with the ones on the download page:
 
 ```sh
 sha256sum omamobile-rootfs-cheetah-<version>-aarch64.img.zst
 ```
 
 ## 3. Install
+
+Stock Android must be running from slot A, because Omarchy Mobile goes on slot B and stock stays on A as your way back. An Android system update can leave stock running from slot B; the installer refuses such a phone and says so. Then, in Fastboot Mode, make slot A active (`fastboot --set-active=a`), flash Google's factory image for your phone onto it with Google's own `flash-all` script (it erases Android's data: back up anything you want to keep first), check that Android starts, and come back to this step. The installer then may ask you to confirm the other slot's bootloader version with `--bootloader-slots-match`, as it explains. Reinstalling over an earlier Omarchy Mobile install, which runs from slot B, is the one case for `bash install --reinstall`.
 
 1. Put the phone in Fastboot Mode. Either run `adb reboot bootloader` while Android is running, or, with the phone off, hold **Volume Down**, then also hold **Power**, and keep both held until "Fastboot Mode" appears (up to about 20 seconds).
 2. Connect the phone and check that the computer sees it:
@@ -81,8 +96,10 @@ sha256sum omamobile-rootfs-cheetah-<version>-aarch64.img.zst
 
    ```sh
    cd omamobile-cheetah-<version>
-   ./install --dry-run
+   bash install --dry-run
    ```
+
+   (`bash install` works even when the download lost the file's execute permission; `./install` does the same when it hasn't.)
 
    It asks for:
    - **a user name** (lower case, for example `alex`);
@@ -97,12 +114,12 @@ sha256sum omamobile-rootfs-cheetah-<version>-aarch64.img.zst
 4. Install for real:
 
    ```sh
-   ./install
+   bash install
    ```
 
    Answer the same questions, read the plan, and type `cheetah`. Each image is written in a few seconds. The system (`userdata`) takes several minutes over USB. Then the phone restarts by itself.
 
-If a step fails, the installer stops and says why. The phone stays in Fastboot Mode, and Android on slot A is untouched. Read the message, fix the cause and run `./install` again. Don't run it over and over in a loop; if you're unsure, ask in an issue.
+If a step fails, the installer stops and says why. The phone stays in Fastboot Mode, and Android on slot A is untouched. Read the message, fix the cause and run `bash install` again. Don't run it over and over in a loop; if you're unsure, ask in an issue.
 
 ## 4. The first start
 
@@ -137,39 +154,20 @@ Before the phone ever starts its modem, make a copy of the partitions that hold 
 
 **This backup is private.** It holds your phone's IMEI and serial numbers. Keep it on your own storage (a second copy elsewhere is a good idea), and never post, share or attach it, not even in a bug report.
 
-From the bundle folder, copy and paste these commands. The first finds the seven partitions and checks that each one is read-only and unused:
+From the bundle folder, run `tools/nv-backup` with a new folder for the backup:
 
 ```sh
 B=~/omamobile-backup/nv-backup-$(date +%Y%m%d-%H%M)
-mkdir -p ~/omamobile-backup && mkdir -m 700 "$B" &&
-tools/phone-ssh 'for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
-  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
-  echo "$p ${d:-none} ro=$(cat /sys/class/block/$d/ro 2>/dev/null) mounted=$(grep -c "^/dev/$d " /proc/mounts)"; done' | tee "$B/partitions.txt" &&
-grep -c ' ro=1 mounted=0$' "$B/partitions.txt"
+bash tools/nv-backup "$B"
 ```
 
-You should see seven lines ending in `ro=1 mounted=0`, then the number `7`. **If you see `none`, `ro=0`, or a number other than 7, stop and ask in an issue.**
+It first finds the seven partitions (`efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a`, `modem_b` and `devinfo`) and checks that each one is read-only and unused; if one isn't, it stops before copying anything. Then it copies each one (about 430 MB in all) in small pieces, reading a piece again if the USB connection drops it, reads the whole partition again on the phone and compares, and writes the checksums to `SHA256SUMS`. It never writes anything to the phone. The folder and its files are readable only by you.
 
-The second copies each partition (about 430 MB in all) and checks every copy against the phone:
+You should see `verified against the phone` for each partition, then `Backup done` and a reminder that the backup is private. **If it stops with an error about a partition (not found, writable or mounted), don't work around it: ask in an issue.** If it stops for any other reason (a USB hiccup, a copy that didn't match the phone), it removes what it had copied, so running the same command again is safe: it only ever reads the phone. If that keeps happening, ask. Remember the folder's name (`echo $B` prints it): the next step needs it.
 
-```sh
-: > "$B/SHA256SUMS"
-for p in persist modem_a modem_b efs efs_backup modem_userdata devinfo; do
-  d=$(awk -v p="$p" '$1 == p && $3 == "ro=1" && $4 == "mounted=0" { print $2 }' "$B/partitions.txt")
-  [ -n "$d" ] || { echo "STOP: $p is not read-only and unmounted"; break; }
-  tools/phone-ssh "cat /dev/$d" > "$B/$p.img"
-  on_phone=$(tools/phone-ssh "sha256sum < /dev/$d" | cut -d' ' -f1)
-  copy=$(sha256sum < "$B/$p.img" | cut -d' ' -f1)
-  [ "$on_phone" = "$copy" ] || { echo "STOP: $p.img differs from the phone's $p"; break; }
-  echo "$copy  $p.img" >> "$B/SHA256SUMS"
-done
-chmod 600 "$B"/*
-(cd "$B" && wc -l < SHA256SUMS && sha256sum -c SHA256SUMS)
-```
+Later, before anything that touches the radio, `bash tools/nv-backup --check "$B"` compares the phone with the backup again, read-only: it prints `SAME` for each partition (`devinfo` may differ: it holds the bootloader's slot flags, which change after a flash, a fallback to slot A or the boot-success mark).
 
-You should see no `STOP` line, then `7` and seven lines ending in `OK`. If you see `STOP`, run the second block again; if it keeps happening, ask in an issue. Remember the folder's name (`echo $B` prints it): the next step needs it.
-
-**If the phone ever starts Android again** (on purpose, or because it fell back to slot A), take a new backup the same way afterwards, because Android rewrites some of these partitions.
+**If the phone ever starts Android again** (on purpose, or because it fell back to slot A), take a new backup into a new folder afterwards, and keep the old one too, because Android rewrites some of these partitions.
 
 ## 7. Add your phone's firmware
 
@@ -187,8 +185,8 @@ Without them everything else still works, but the cameras won't.
 From the bundle folder, do a dry run first (it unpacks nothing and doesn't contact the phone), then the real run. Replace the path with the factory image you downloaded:
 
 ```sh
-tools/phone-provision --dry-run --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
-tools/phone-provision --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+bash tools/phone-provision --dry-run --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+bash tools/phone-provision --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
 ```
 
 The real run takes several minutes. Each copy to the phone ends with `verified`. If it stops with an error, nothing half-done is left behind: fix the cause and run it again (it's safe to repeat).
@@ -201,7 +199,7 @@ tools/phone-ssh '(sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
 
 After the restart, Wi-Fi, Bluetooth, sound, haptics, the sensors and the cameras work.
 
-**Fingerprint unlock is off at first,** on purpose: the first time its service starts, it writes the phone's secure storage, and that can't be undone. If you want it, start the service once in a terminal on the phone with `sudo systemctl enable --now omamobile-fp`, then add a finger on the phone's fingerprint screen.
+**Fingerprint unlock starts automatically after this restart.** The phone offers "Add a fingerprint" (or find it later in Setup > Security > Fingerprint): touch the sensor under the bright circle until it's done, and the finger unlocks the phone alongside your PIN or password. Its first start writes the phone's secure storage (Trusty's area in the UFS RPMB), the same kind of write Android makes at a factory reset; before that it makes read-only copies of the data it needs from `persist` and the factory calibration (`mfg_data`), which it never writes. If those copies can't be made or later don't match, fingerprint stays off and the PIN unlocks. If fingerprint stops, restart the phone rather than the service. To keep fingerprint off, run `sudo systemctl mask omamobile-fp` before this restart (`disable` isn't enough).
 
 ## Getting updates
 
@@ -228,7 +226,7 @@ Stock Android is still on slot A.
    fastboot reboot
    ```
 
-3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone.
+3. Android starts into its recovery screen, because its data was erased. Choose "Factory data reset", and Android starts as a new phone. Fingers enrolled on Omarchy Mobile don't carry over: Android's setup asks for fingerprints as usual, and after you come back you enroll them again (reinstalling erases them).
 
 To remove Omarchy Mobile completely, flash Google's factory image for your phone with Google's own tools (the [Android Flash Tool](https://flash.android.com) or the `flash-all.sh` script in the factory image). Don't lock the bootloader afterwards unless you're sure both slots hold Google's images; if in doubt, ask in an issue first.
 

@@ -1,0 +1,105 @@
+// Modified from omarchy-widgets widgets/simonschubert/forecast/widget.owl@b63886b (MIT, Simon Schubert and contributors; see overrides/LICENSE) for Omarchy Mobile: weather from Open-Meteo.
+widget "forecast" {
+  meta { description: "Three-day weather forecast with an hourly temperature curve, from your location or a city you type (weather: Open-Meteo, CC BY 4.0)"; version: "1.2.1"; license: "MIT"; category: "world"; owl: 5 }
+  size: 6x3
+  minSize: 4x3
+
+  // Omarchy Mobile's copy: the weather from Open-Meteo (open-meteo.com, CC BY 4.0), with no commands.
+  state city = "" persist
+  // The phone's temperature unit, "C" or "F", put in by the home screen; empty elsewhere.
+  state phoneUnit = ""
+  // The place: "lat,lon" (the phone's location, as the home screen puts it in) goes straight to the forecast;
+  // a name ("Town" or "Town, Region") is looked up with Open-Meteo's geocoding. Open-Meteo has no IP location.
+  let ll = match(trim(city), "^(-?[0-9.]+) *, *(-?[0-9.]+)$")
+  let town = trim(split(city, ",")[0])
+  // What follows the town, each part lower-case; a US state code also reads as its state, as omamobile-weather's
+  // pick_place does (the lock screen reads this widget's city too, so the two pick the same place).
+  let qualifiers = drop(split(city, ","), 1).map(x => lower(trim(x))).filter(x => x != "")
+  let usStates = {"al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas", "ca": "california", "co": "colorado", "ct": "connecticut", "de": "delaware", "dc": "district of columbia", "fl": "florida", "ga": "georgia", "hi": "hawaii", "id": "idaho", "il": "illinois", "in": "indiana", "ia": "iowa", "ks": "kansas", "ky": "kentucky", "la": "louisiana", "me": "maine", "md": "maryland", "ma": "massachusetts", "mi": "michigan", "mn": "minnesota", "ms": "mississippi", "mo": "missouri", "mt": "montana", "ne": "nebraska", "nv": "nevada", "nh": "new hampshire", "nj": "new jersey", "nm": "new mexico", "ny": "new york", "nc": "north carolina", "nd": "north dakota", "oh": "ohio", "ok": "oklahoma", "or": "oregon", "pa": "pennsylvania", "ri": "rhode island", "sc": "south carolina", "sd": "south dakota", "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont", "va": "virginia", "wa": "washington", "wv": "west virginia", "wi": "wisconsin", "wy": "wyoming"}
+  let wanted = flatten(qualifiers.map(x => [x, get(usStates, x, x)]))
+  let named = ll == null && len(town) >= 2
+  // The town, percent-encoded so "/", "?", "&" or "#" in it can't break the URL.
+  let q = town.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "%20")
+  // The URLs always start with their host, so the approval sheet can name it: with "lat,lon" the lookup still goes out
+  // with an empty name (an empty answer), and before a city is found the forecast goes out without a place (an error answer).
+  source geo = http("https://geocoding-api.open-meteo.com/v1/search?count=10&format=json&name=${named ? q : ""}") every 24h timeout 10s json status
+  let results = named && geo != null && geo.ok ? geo.out.results ?? [] : []
+  // The first result whose region, county, country or country code matches one of them; else the first.
+  let found = find(results, r => any([lower(r.admin1 ?? ""), lower(r.admin2 ?? ""), lower(r.country ?? ""), lower(r.country_code ?? "")], f => f != "" && contains(wanted, f))) ?? first(results)
+  let lat = ll != null ? round(num(ll[0]), 2) : found != null ? round(found.latitude, 2) : null
+  let lon = ll != null ? round(num(ll[1]), 2) : found != null ? round(found.longitude, 2) : null
+  let place = ll != null ? "your location" : found != null ? found.name : town
+  let imperial = phoneUnit != "" ? phoneUnit == "F" : found != null && ll == null && contains(["US", "LR", "MM"], found.country_code)
+  // Three days of hours; only what's drawn is used.
+  source w = http("https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&hourly=temperature_2m&daily=temperature_2m_max,temperature_2m_min&forecast_days=3&timezone=auto&timeformat=unixtime&temperature_unit=${imperial ? "fahrenheit" : "celsius"}") every 30m timeout 10s json status
+  // The first forecast goes out before a typed city is looked up; ask again once it is, and when the place or unit changes.
+  let ask = lat == null ? "" : "${lat},${lon},${imperial}"
+  on ask { refresh() }
+  let problem = ll == null && !named ? "set a city or turn on Location" : named && geo != null && geo.ok && found == null ? "city not found" : null
+  let om = w != null && w.ok && lat != null ? w.out : null
+  // Open-Meteo's WMO weather codes in the words the phone's weather service uses.
+  let wmoText = {"0": "clear", "1": "mostly clear", "2": "partly cloudy", "3": "overcast", "45": "fog", "48": "fog", "51": "drizzle", "53": "drizzle", "55": "drizzle", "56": "drizzle", "57": "drizzle", "61": "rain", "63": "rain", "65": "rain", "66": "rain", "67": "rain", "71": "snow", "73": "snow", "75": "snow", "77": "snow", "80": "rain", "81": "rain", "82": "rain", "85": "snow", "86": "snow", "95": "thunderstorm", "96": "thunderstorm", "99": "thunderstorm"}
+  let now = om == null ? null : {temp: round(om.current.temperature_2m), desc: get(wmoText, str(om.current.weather_code), "")}
+  let days = om == null ? [] : range(len(om.daily.time ?? [])).map(i => {
+    date: om.daily.time[i],
+    day: fmtTime(om.daily.time[i], "EEE"),
+    max: round(om.daily.temperature_2m_max[i]),
+    min: round(om.daily.temperature_2m_min[i])
+  })
+  // 8 readings a day, every 3 hours from midnight, as before.
+  let hours = om == null ? [] : range(0, len(om.hourly.temperature_2m ?? []), 3).map(i => om.hourly.temperature_2m[i])
+  let lo = min(hours) - 2
+  let hi = max(hours) + 2
+
+  onTap: screen()
+
+  Column {
+    gap: 4
+    if om == null {
+      Text { text: problem ?? (w == null || (named && geo == null) ? "…" : "weather offline"); style: small; color: muted; maxLines: 2 }
+    } else {
+      Row {
+        align: center
+        Text { text: "${now.temp}°"; style: title; width: 56 }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: now.desc; style: small; maxLines: 1 }
+          Text { text: place; style: small; color: muted; maxLines: 1 }
+        }
+      }
+      Row {
+        for d, i in days key d.date {
+          Column {
+            weight: 1
+            gap: 0
+            Text { text: i == 0 ? "today" : lower(d.day); fontSize: 10; color: muted }
+            Text { text: "${d.max}° / ${d.min}°"; fontSize: 12 }
+          }
+        }
+      }
+      // The dots mark noon.
+      Canvas {
+        weight: 1
+        fill: width
+        let pts = hours.map((t, i) => [i / max(len(hours) - 1, 1) * width, height - 4 - (t - lo) / (hi - lo) * (height - 8)])
+        path(pts, stroke: accent, width: 2)
+        for p, i in pts {
+          if i % 8 == 4 { circle(p[0], p[1], 3, color: accent) }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "forecast"
+    Input {
+      text: city
+      placeholder: "city · empty = your location"
+      onSubmit: { city = trim(value); refresh() }
+    }
+    Text { text: problem ?? (om == null ? "…" : lower(place)); style: small; color: muted }
+    Text { text: "weather: open-meteo.com (cc by 4.0)"; style: label; color: muted }
+    Button { text: "open-meteo.com ↗"; color: muted; onTap: url("https://open-meteo.com/") }
+  }
+}

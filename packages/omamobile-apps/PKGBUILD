@@ -2,13 +2,15 @@
 # Maintainer: Derek Ross <derekross@gmail.com>
 #
 # The apps a phone needs that a desktop Omarchy doesn't ship. An app joins
-# `depends` once the hardware behind it works on Omarchy Mobile; until then it
-# waits in `optdepends` with the reason, so the default install never shows
-# an app that can't work yet.
+# `depends` once the hardware behind it works on Omarchy Mobile, or once it
+# is useful without it and says so (Phone and Messages keep contacts, the
+# call log and drafts with no modem, and show no modem); until then it waits
+# in `optdepends` with the reason. Device-specific stacks (the modem's RIL
+# and bridge) never go in `depends`: they belong to the device's image.
 pkgname=omamobile-apps
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile's default mobile apps (camera, maps and location, NFC tags)"
+pkgdesc="Omarchy Mobile's default mobile apps (camera, phone, messages, contacts, images, maps and location, NFC tags)"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
@@ -18,17 +20,23 @@ depends=(
   neard        # NFC tags; omamobile-shell's omamobile-nfc-open opens their web links
   omacam       # "Camera": all four cameras on libcamera, zoom across lenses (docs/CAMERA-APP-PLAN.md)
   pipewire-libcamera  # the cameras for browsers and video calls, through the camera portal
+  omaphone     # "Phone" and "Contacts": dialpad, call log, favorites, contacts (docs/TELEPHONY-APPS-PLAN.md T6)
+  omamessages  # "Messages": SMS conversations (T7); both pull in omatel-agent and work without a modem
+  loupe        # "Image Viewer": touch zoom and swipe; the default for images (mimeapps.list)
 )
 optdepends=(
   'snapshot: a second camera app (GNOME Snapshot, shown as "Snapshot"), with video, until omacam records video'
-  'gnome-calls: phone calls (waits for the modem, MODEM-PLAN M4, and a client for its RIL)'
-  'chatty: SMS (waits for the modem, as gnome-calls)'
+  'omamobile-mmd: calls, SMS and mobile data on the Pixel 7 Pro (the modem comes in a later release; MODEM-PLAN M4)'
+  'gnome-calls: another calls app, for the same ModemManager API as Phone'
+  'chatty: another SMS app, for the same ModemManager API as Messages'
 )
+backup=(etc/xdg/mimeapps.list)
 install=omamobile-apps.install
-source=(omamobile-snapshot-name omamobile-snapshot-name.hook)
-sha256sums=(SKIP SKIP)
+source=(omamobile-snapshot-name omamobile-snapshot-name.hook mimeapps.list)
+sha256sums=(SKIP SKIP SKIP)
 
 package() {
   install -Dm755 omamobile-snapshot-name "$pkgdir/usr/lib/omamobile/omamobile-snapshot-name"
   install -Dm644 omamobile-snapshot-name.hook "$pkgdir/usr/share/libalpm/hooks/omamobile-snapshot-name.hook"
+  install -Dm644 mimeapps.list "$pkgdir/etc/xdg/mimeapps.list"
 }

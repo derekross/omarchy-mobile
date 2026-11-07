@@ -281,7 +281,7 @@ function statusText(phase) {
   switch (phase) {
   case "starting": return "starting"
   case "listening": return "listening"
-  case "transcribing": return "turning it into text"
+  case "transcribing": return "transcribing"
   default: return ""
   }
 }

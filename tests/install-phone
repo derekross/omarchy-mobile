@@ -65,7 +65,7 @@ vars() {
   cat > "$t/vars" <<EOF
 product:${1:-testdev}
 unlocked:${2:-yes}
-current-slot:b
+current-slot:${CURRENT_SLOT:-a}
 version-bootloader:cloudripper-17.0-15199429
 partition-size:boot_b: 0x4000000
 partition-size:init_boot_b: ${INIT_BOOT_SIZE-0x800000}
@@ -145,6 +145,9 @@ cp "$t/rootdir/etc/passwd" "$t/fbroot/etc/passwd"
 printf '%s\n' "$conf" > "$t/fb.conf"
 OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamobile-firstboot" --check "$t/fb.conf" >/dev/null ||
   fail "omamobile-firstboot accepts what install-phone writes"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
+  || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
+debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "boot-update.conf belongs to root"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
 refuse() {
@@ -162,7 +165,13 @@ vars
 refuse "an unknown other slot"; grep -q -- '--bootloader-slots-match' "$t/out" || fail "says how to confirm the other slot"
 refuse "a wrong confirmed version" --bootloader-slots-match cloudripper-16.0-9
 install --dry-run --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a confirmed matching version passes"; }
-pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots"
+CURRENT_SLOT=b vars
+refuse "a phone running from slot b (stock there after a system update)" --bootloader-slots-match cloudripper-17.0-15199429
+grep -q -- '--reinstall' "$t/out" || fail "says how to confirm a reinstall"
+install --dry-run --reinstall --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a reinstall over Omarchy Mobile on slot b passes"; }
+grep -q 'slot b holds Omarchy Mobile' "$t/out" || fail "a reinstall says slot b will be replaced"
+vars
+pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots, and slot b without --reinstall"
 
 vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
 for name in root omamobile omarchy alarm omandroid; do

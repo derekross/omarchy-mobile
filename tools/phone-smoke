@@ -21,11 +21,14 @@
 # evidence for the pull request.
 set -uo pipefail
 
-here=0 json=0
-for a in "$@"; do
+here=0 json=0 errors_from=""
+while (($#)); do
+  a=$1; shift
   case $a in
     --here) here=1 ;;
     --json) json=1 ;;
+    # tests only: the kernel health rows for a saved error log, then exit
+    --errors-from) errors_from=${1:?--errors-from FILE}; shift; here=1 ;;
     -h|--help) sed -n '3,21p' "$0"; exit 0 ;;
     *) echo "phone-smoke: unknown option $a" >&2; exit 2 ;;
   esac
@@ -105,8 +108,8 @@ warns=$(dmesg 2>/dev/null | grep -cE 'WARNING: (CPU:|[^ ]+:[0-9]+ at )' || true)
 # hiding in a raw count. Each entry is an extended regex with the reason it is
 # known; "fix:" marks one we mean to remove. Keep it short and specific to a
 # driver; never add a line here to make a regression look normal, nor one that
-# is also a fault's own message (ASoC's "no backend DAIs" is both PipeWire's
-# probe and a broken UCM route). The list is the 7 Pro's for now.
+# is also a fault's own message (that goes in counted_errors, with a ceiling).
+# The list is the 7 Pro's for now.
 known_errors=(
   # brcmfmac built with CONFIG_BRCMDBG logs routine information at error level
   'brcmfmac: brcmf_fw_alloc_request: using '
@@ -130,7 +133,7 @@ known_errors=(
   'failed to register acpm aoc reset callback'
   # the camera lens motors fail one command on wake (NOTES); fix: camera work
   'ak73[0-9]+_vcm_resume (I2C|INC) failure'
-  # CPU energy model against the OPP tables; fix: cpufreq
+  # CPU energy model against the OPP tables; fix: linux-omarchy-mobile#182 (kernel #184)
   'cpu cpu[0-9]+: EM: invalid perf\. state'
   # the GPU's supply belongs to the ACPM firmware, not a Linux regulator
   'panthor .*no regulator \(mali\) found'
@@ -138,18 +141,70 @@ known_errors=(
   'Warning: unable to open an initial console'
   "systemd-gpt-auto-generator' failed"
 )
+# Known lines that stay visible: "ceiling|label|regex". Each is counted and
+# named in the kernel health row; with a ceiling, the lines beyond it count as
+# new errors (an empty ceiling means no limit, only the count).
+counted_errors=(
+  # PipeWire opens every PCM while it probes the card, before the UCM verb has
+  # set the routes: once per boot. The same line is a broken UCM route's own
+  # message, which repeats at every playback, so a second one is new.
+  '1|ASoC no backend DAIs (PipeWire probe)|audio_playback[0-9]+: ASoC: no backend DAIs enabled for audio_playback[0-9]+'
+  # A UFS DME set that fails around s2idle and recovers, with no I/O errors
+  # (on every 7 Pro boot in the 2026-11-02 phone-smoke reports; the same set
+  # shows in the 9a's resumes, device/tegu/SLEEP-PLAN.md S1). Storage that
+  # really doesn't come back is ufs_dead below, never known.
+  '|UFS dme-set 0x4021 (s2idle)|exynos-ufshc [0-9a-f]+\.ufs: dme-set: attr-id 0x4021 val 0x[0-9a-f]+ failed [0-9]+ retries'
+)
+# A UFS link that doesn't come back from a sleep (device/tegu/SLEEP-PLAN.md
+# S1): any match fails kernel health, whatever the lists above say. Anchored
+# to the UFS host and the SCSI disks: I/O errors on the modem and fingerprint
+# chroots' loop devices, and the PCIe core's own "Host init failed", stay
+# ordinary new errors. A USB disk (sd[b-z]) would match too; no phone of ours
+# has a working host port yet.
+ufs_dead='\.ufs: .*(link startup failed|Host init failed)|I/O error,? (on )?dev sd[a-z]'
 mask_ids() {
   sed -E -e 's/[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}/<MAC>/g' \
     -e "s/\"[^\"]*\"/\"…\"/g; s/'[^']*'/'…'/g" \
     -e 's/[[:alnum:]_.-]*[0-9][[:alnum:]_.-]*/N/g'
 }
-errlog=$(dmesg --level=emerg,alert,crit,err 2>/dev/null | sed -E 's/^\[[ 0-9.]+\] //')
-errs=$(grep -c . <<<"$errlog" || true)
-newlog=$(grep -vE -f <(printf '%s\n' "${known_errors[@]}") <<<"$errlog" || true)
-newerrs=$(grep -c . <<<"$newlog" || true)
-health="$warns WARN, $errs error lines in dmesg ($((errs - newerrs)) known, $newerrs new)"
+# classify_errors ERRLOG sets errs, newerrs, newlog and counted (the
+# "label xN" list of the counted_errors that matched).
+classify_errors() {
+  local log=$1 entry ceiling label re hits n
+  errs=$(grep -c . <<<"$log" || true)
+  counted="" newlog=""
+  for entry in "${counted_errors[@]}"; do
+    IFS='|' read -r ceiling label re <<<"$entry"
+    hits=$(grep -E -- "$re" <<<"$log" || true)
+    n=$(grep -c . <<<"$hits" || true)
+    ((n)) || continue
+    log=$(grep -vE -- "$re" <<<"$log" || true)
+    counted+="${counted:+, }$label x$n"
+    if [[ -n $ceiling ]] && ((n > ceiling)); then
+      newlog+=$(tail -n "$((n - ceiling))" <<<"$hits")$'\n'
+    fi
+  done
+  newlog+=$(grep -vE -f <(printf '%s\n' "${known_errors[@]}") <<<"$log" || true)
+  newerrs=$(grep -c . <<<"$newlog" || true)
+}
+if [[ -n $errors_from ]]; then
+  # tests/phone-smoke: a saved error-level log stands in for this boot's
+  # dmesg, so ufs_dead is counted over that log alone, where live it is
+  # counted over all of dmesg. Its messages are all dev_err/KERN_ERR, so
+  # both see the same lines; keep it that way.
+  errlog=$(sed -E 's/^\[[ 0-9.]+\] //' "$errors_from")
+  ufsdead=$(grep -cE "$ufs_dead" <<<"$errlog" || true)
+  oops=0 warns=0 results=()
+else
+  errlog=$(dmesg --level=emerg,alert,crit,err 2>/dev/null | sed -E 's/^\[[ 0-9.]+\] //')
+  ufsdead=$(dmesg 2>/dev/null | grep -cE "$ufs_dead" || true)
+fi
+classify_errors "$errlog"
+health="$warns WARN, $errs error lines in dmesg ($((errs - newerrs)) known${counted:+, of them $counted}, $newerrs new)"
 if ((oops)); then
   check "not ok" 1 "kernel health" "$oops oops/BUG, $health"
+elif ((ufsdead)); then
+  check "not ok" 1 "kernel health" "UFS didn't come back ($ufsdead link startup, host init or I/O error lines); $health"
 else
   check ok 1 "kernel health" "no oops or BUG; $health"
 fi
@@ -160,6 +215,10 @@ if ((newerrs)); then
   top=$(mask_ids <<<"$newlog" | sort | uniq -c | sort -rn | head -3 \
     | awk '{n=$1; $1=""; sub(/^ /, ""); printf "%s%s x%d", (NR > 1 ? "; " : ""), $0, n}')
   check "not ok" 0 "new dmesg errors" "$top"
+fi
+if [[ -n $errors_from ]]; then
+  printf '%s\n' "${results[@]}"
+  exit 0
 fi
 
 failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)

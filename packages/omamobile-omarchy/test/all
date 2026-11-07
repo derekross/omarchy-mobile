@@ -100,3 +100,5 @@ if [[ -n ${OMAMOBILE_NOTIFY_TEST:-} ]]; then
     || fail "inline reply (test/notifications-reply)"
   pass "inline reply end to end"
 fi
+
+python3 -I test/migration-mobile-holds.py || fail "mobile-critical migration holds"

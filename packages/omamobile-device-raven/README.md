@@ -14,9 +14,10 @@ the counterpart of `omamobile-device-cheetah`. Bring-up and results:
 | On-demand CPU frequency (safe once the thermal zones throttle) | `tmpfiles.d/omamobile-raven-cpufreq.conf` |
 | The user may switch the panel off (`bl_power`) and inhibit the touchscreen, for Omarchy's display off | `udev/rules.d/20-omamobile-display.rules` |
 | Wi-Fi power save on | `NetworkManager/conf.d/omamobile-raven-wifi-powersave.conf` |
-| Sleep (s2idle) once locked with the panel off, behind `omarchy-toggle omamobile-sleep on`; Wi-Fi stays connected across sleep (unloaded instead after a D3 failure, or with `/etc/omamobile/wifi-unload-for-sleep`) | `omamobile-sleepd` (+ user `.service`, enabled), `omamobile-sleep` (`system-sleep/omamobile`), `sleep.conf.d/10-omamobile.conf` |
+| Sleep (s2idle) once locked with the panel off, behind `omarchy-toggle omamobile-sleep on` (the watcher, `omamobile-sleepd`, is omamobile-shell's); Wi-Fi stays connected across sleep (unloaded instead after a D3 failure, or with `/etc/omamobile/wifi-unload-for-sleep`) | `omamobile-sleep` (`system-sleep/omamobile`), `sleep.conf.d/10-omamobile.conf` |
 | Modem bring-up only: its PCIe driver and CPIF never load at boot, and the modem's units aren't enabled (as on main; `systemctl enable --now omamobile-modem omamobile-sitd` to use it, MODEM-PLAN) | `modprobe.d/omamobile-raven-modem.conf` |
 | Bluetooth on at boot; the session waits (at most 15 s) for the adapter | `bluetooth.service` (enabled), `sddm.service.d/`, `omamobile-wait-bluetooth` |
+| The speakers through speaker protection at stage media (raven's own limits: AUDIO-PLAN R6), the microphones with them; stage c9 and earpiece mode stay off on raven | `omamobile-speaker-protection.service` from omamobile-audio 0.5.15 (enabled); `snd_soc_cs35l41_spi` blacklisted here too, so only that service loads it | `omamobile-raven.conf` |
 
 `reboot-to.c` and `omamobile-bootctl.c` are cheetah's, unchanged: both are
 the same on every gs101/gs201 Pixel (raven's `devinfo` is `DEVI` 3.15, as

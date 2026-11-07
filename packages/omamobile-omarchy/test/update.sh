@@ -27,6 +27,7 @@ packaged_mirrorlist() {
   printf '# Where pacman gets packages\nServer = https://pkgs.omamobile.org/stable/$arch\n#Server = https://pkgs.omamobile.org/development/$arch\n#Server = file:///var/lib/omamobile/repo/$arch\n'
 }
 packaged_mirrorlist >"$OMAMOBILE_MIRRORLIST"
+export OMAMOBILE_BOOT_UPDATE=$fake/omamobile-boot-update OMAMOBILE_BOOT_UPDATE_CONF=$t/boot-update.conf
 export PATH=$fake:/usr/bin:/bin
 calls=$t/calls
 
@@ -55,7 +56,7 @@ cat >"$fake/pacman" <<EOF
 #!/bin/bash
 case "\$1" in
   -Q) [[ \$2 == omarchy ]] && echo "omarchy 4.0.4-2" || exit 1 ;;
-  -Sup) cat "$t/plan" 2>/dev/null ;;
+  -Sup) if [[ -s "$t/plan-fail" ]]; then cat "$t/plan-fail" >&2; exit 1; fi; cat "$t/plan" 2>/dev/null ;;
   -Qmq) echo some-aur-thing ;;
   -Qtdq) echo orphan-lib ;;
   *) echo "pacman \$*" >>"$calls" ;;
@@ -90,6 +91,14 @@ cat >"$fake/omarchy-update-available" <<EOF
 [[ -f "$t/available" ]] || { echo "Omarchy is up to date"; exit 1; }
 cat "$t/available"
 EOF
+# omamobile-boot-update's read-only preflight, answering from $t/preflight
+cat >"$fake/omamobile-boot-update" <<EOF
+#!/bin/bash
+echo "boot-update \$*" >>"$calls"
+[[ \$1 == preflight ]] || exit 9
+cat "$t/preflight"
+python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["ok"] else 1)' "$t/preflight"
+EOF
 chmod +x "$fake"/* "$t/real"/*
 
 battery() { # PERCENT STATUS ONLINE
@@ -109,7 +118,18 @@ touch "$HOME/.local/state/omarchy/migrations/1700000000.sh"
 echo "omarchy 4.0.4-2 -> 4.0.5-1" >"$t/updates"
 printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
 echo '{"result": "ok", "applied": ["0003-x.patch"], "upstream": ["0000-y.patch"], "omarchy": "omarchy 4.0.5-1"}' >"$t/patch-status.json"
-U=$PKG/bin/omamobile-update
+# Mock host disk capacity inside the fixture interpreter, not through a new
+# production bypass flag. The runtime's 10 GiB rule stays unchanged.
+export OMAMOBILE_UPDATE_REAL_SOURCE=$PKG/bin/omamobile-update
+cat >"$t/update-fixture.py" <<'PYCODE'
+import os, runpy, sys
+scope = runpy.run_path(os.environ["OMAMOBILE_UPDATE_REAL_SOURCE"], run_name="update_fixture")
+scope["check"].__globals__["free_bytes"] = lambda: 20 * 1024 ** 3
+globals().update({k: v for k, v in scope.items() if not k.startswith("__")})
+if __name__ == "__main__":
+    sys.exit(scope["main"](sys.argv[1:]))
+PYCODE
+U=$t/update-fixture.py
 
 wait_done() {
   for _ in $(seq 150); do grep -cP '^state\tdone' "$XDG_RUNTIME_DIR/omamobile-update/events" >/dev/null 2>&1 && return 0; sleep 0.1; done
@@ -192,6 +212,38 @@ printf 'omarchy 4.0.5-1\nlinux-aarch64 7.3-1\nlimine 9.0-1\nlinux-firmware-other
 out=$(python3 -I "$U" check --json)
 ok "check: kernels and bootloaders in the plan block, firmware and headers don't" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"boot_packages\"] == [\"limine\", \"linux-aarch64\"] and not d[\"ok\"]" "$out"'
 printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+# A plan pacman can't make (#433: [omarchy]'s aquamarine 0.15.1 without the so=15
+# our Hyprland needs) is a refusal with pacman's reason, never the plain list
+printf "error: failed to prepare transaction (could not satisfy dependencies)\n:: unable to satisfy dependency 'libaquamarine.so=15-64' required by hyprland\n" >"$t/plan-fail"
+out=$(python3 -I "$U" check --json)
+ok "check: a plan pacman can't make blocks, with pacman's reason" 'python3 -c "
+import json,sys; d=json.loads(sys.argv[1]); b=\" \".join(d[\"blockers\"])
+assert not d[\"ok\"] and \"can\x27t plan this update\" in b and \"libaquamarine.so=15-64\" in b, d[\"blockers\"]
+" "$out"'
+rm -f "$t/plan-fail"
+
+# The phone's own kernel package goes through omamobile-boot-update
+printf 'omarchy 4.0.5-1\nlinux-omamobile 7.3.0rc6.r453.g0123456789ab-1\nomamobile-boot-update 0.1.0-1\n' >"$t/plan"
+echo '{"auto_write": "yes", "ok": true, "problem": ""}' >"$t/preflight"
+out=$(python3 -I "$U" check --json)
+ok "kernel: linux-omamobile with a ready slot B passes, and will be written" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"ok\"], d[\"blockers\"]; assert d[\"boot_packages\"] == [] and d[\"kernel\"][\"boot_update\"] == \"write\" and d[\"kernel\"][\"version\"].startswith(\"7.3.0rc6\")" "$out"'
+ok "kernel: the check is omamobile-boot-update preflight (read-only)" 'grep -c "^boot-update preflight --json$" "$calls" >/dev/null && ! grep -cE "^boot-update (write|hook|rollback)" "$calls" >/dev/null'
+echo '{"auto_write": "yes", "ok": false, "problem": "/dev/sda8 (vendor_boot_b) is read-only"}' >"$t/preflight"
+out=$(python3 -I "$U" check --json)
+ok "kernel: a slot B the hook would refuse blocks the update, naming why" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"vendor_boot_b\" in b and \"slot B\" in b for b in d[\"blockers\"]), d[\"blockers\"]" "$out"'
+echo '{"auto_write": "no", "ok": false, "problem": "no /usr/lib/omamobile/twelve/dtbo.img"}' >"$t/preflight"
+out=$(python3 -I "$U" check --json)
+ok "kernel: AUTO_WRITE off (a development phone): installs, slot B left alone" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"ok\"], d[\"blockers\"]; assert d[\"kernel\"][\"boot_update\"] == \"skip\"" "$out"'
+out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
+ok "kernel: the first kernel package with no config passes (the hook will skip)" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"ok\"], d[\"blockers\"]" "$out"'
+echo 'AUTO_WRITE=yes' >"$t/boot-update.conf"
+out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
+ok "kernel: AUTO_WRITE=yes but no omamobile-boot-update to ask: blocked" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"AUTO_WRITE=yes\" in b for b in d[\"blockers\"])" "$out"'
+echo 'AUTO_WRITE=perhaps' >"$t/boot-update.conf"
+out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
+ok "kernel: an unreadable boot-update.conf blocks" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"be read\" in b for b in d[\"blockers\"])" "$out"'
+rm -f "$t/boot-update.conf"
+printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
 
 # ---------------------------------------------------------------- the sheet's run
 : >"$calls"
@@ -265,6 +317,39 @@ wait_done
 ok "boot package: Omarchy's update never ran" '! grep -c "^omarchy-update" "$calls" >/dev/null'
 ok "boot package: result refused, naming it" 'python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"refused\" and \"linux-aarch64\" in d[\"message\"]"'
 printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+
+# The kernel package with a slot B the hook would refuse: refused after sudo,
+# before Omarchy's update; with a ready one the update runs
+printf 'omarchy 4.0.5-1\nlinux-omamobile 7.3.0rc6.r453.g0123456789ab-1\n' >"$t/plan"
+echo '{"auto_write": "yes", "ok": false, "problem": "this board is another phone"}' >"$t/preflight"
+rm -f "$t/sudo-ok"; : >"$calls"
+printf '1234\n' | python3 -I "$U" start >/dev/null; wait_done
+ok "kernel, slot B not ready: Omarchy's update never ran" '! grep -c "^omarchy-update" "$calls" >/dev/null'
+ok "kernel, slot B not ready: result refused, naming the reason" 'python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"refused\" and \"another phone\" in d[\"message\"], d"'
+echo '{"auto_write": "yes", "ok": true, "problem": ""}' >"$t/preflight"
+rm -f "$t/sudo-ok"; : >"$calls"
+printf '1234\n' | python3 -I "$U" start >/dev/null; wait_done
+ok "kernel, slot B ready: the update runs" 'grep -c "^omarchy-update -y" "$calls" >/dev/null && python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"ok\", d"'
+ok "kernel, slot B ready: the run says the hook writes it" 'grep -c "its pacman hook writes it to slot B" "$HOME/.local/state/omamobile/update/update.log" >/dev/null'
+printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+
+# The restart step reads the boot-update hook's result from this update only
+rs() { rm -rf "$t/rs"; OMAMOBILE_UPDATE_DIR=$t/rs OMAMOBILE_BOOT_UPDATE_STATUS=$t/bu.json OMAMOBILE_UPDATE_STARTED=$1 bash lib/update-bin/omarchy-update-restart >/dev/null 2>&1; cat "$t/rs/restart.json"; }
+now=$(date +%s)
+printf '{"result": "written", "release": "7.3.0-rc6-omamobile-g0123456789ab", "kernel_changed": true, "message": "x", "time": %d}\n' "$now" >"$t/bu.json"
+out=$(rs $((now - 5)))
+ok "restart: slot B written during the update asks for a restart" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"needs_reboot\"] and \"kernel was updated\" in d[\"reasons\"][0] and \"7.3.0-rc6-omamobile-g0123456789ab\" in d[\"reasons\"][0], d" "$out"'
+printf '{"result": "written", "release": "7.3.0-rc6-omamobile-g0123456789ab", "kernel_changed": false, "message": "x", "time": %d}\n' "$now" >"$t/bu.json"
+out=$(rs $((now - 5)))
+ok "restart: a rewrite of the running kernel's set says boot images, not kernel" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"needs_reboot\"] and \"boot images were updated\" in d[\"reasons\"][0] and not any(\"kernel was updated\" in r for r in d[\"reasons\"]), d" "$out"'
+out=$(rs $((now + 60)))
+ok "restart: a result from before this update is ignored" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"needs_reboot\"], d" "$out"'
+printf '{"result": "refused", "release": "", "message": "battery at 12%%", "time": %d}\n' "$now" >"$t/bu.json"
+out=$(rs $((now - 5)))
+ok "restart: a kernel the hook could not write is a warning, not a restart" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"needs_reboot\"] and any(\"battery at 12%\" in w and \"omamobile-boot-update write\" in w for w in d[\"warnings\"]), d" "$out"'
+printf '{"result": "skipped", "release": "", "message": "AUTO_WRITE is off", "time": %d}\n' "$now" >"$t/bu.json"
+out=$(rs $((now - 5)))
+ok "restart: a skipped write (development phone) asks for nothing" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"needs_reboot\"] and not any(\"kernel\" in w for w in d[\"warnings\"]), d" "$out"'
 
 # Low battery and wrong repository order: refused before the PIN is used
 battery 12 Discharging 0

@@ -13,6 +13,7 @@ trap cleanup EXIT
 R=$t/repo
 mkdir -p "$R/tools/lib" "$R/tests" "$R/out/repo/aarch64" "$t/bin" "$t/kernel/include/config"
 cp tools/build-rootfs tools/make-bundle tools/install-phone tools/bundle-manifest "$R/tools/"
+cp tools/lib/bundle-tar.sh "$R/tools/lib/"
 touch "$R/out/repo/aarch64/omamobile.db" "$t/kernel/modules-fixture.tar.zst" "$t/alarm.tar"
 echo fixture > "$t/kernel/include/config/kernel.release"
 for device in first second; do
@@ -33,12 +34,13 @@ cat > "$t/bin/docker" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 [[ $1 == run ]] || exit 0
-work="" device="" channel=""
+work="" device="" channel="" kernel_package=""
 while (($#)); do
   case $1 in
     -v) [[ $2 != *:/out ]] || work=${2%:/out}; shift ;;
     -e) [[ $2 != DEVICE=* ]] || device=${2#DEVICE=}
-        [[ $2 != CHANNEL=* ]] || channel=${2#CHANNEL=}; shift ;;
+        [[ $2 != CHANNEL=* ]] || channel=${2#CHANNEL=}
+        [[ $2 != KERNEL_PACKAGE=* ]] || kernel_package=${2#KERNEL_PACKAGE=}; shift ;;
   esac
   shift
 done
@@ -53,6 +55,7 @@ if [[ ${BLOCK_BUILD:-0} == 1 ]]; then
 fi
 [[ ${FAIL_BUILD:-0} != 1 ]] || exit 1
 printf '%s\n' "$device" > "$work/rootfs.img"
+printf '%s\n' "$kernel_package" > "$T/kernel-package.$device"
 printf 'device: %s\nomamobile channel: %s\n' "$device" "$channel" > "$work/MANIFEST"
 EOF
 cat > "$R/tests/rootfs-smoke" <<'EOF'
@@ -105,6 +108,25 @@ grep -q 'stable, development or local' "$t/channel.log" || { cat "$t/channel.log
 build second > "$t/channel.log" 2>&1 || { cat "$t/channel.log"; fail "rebuild on stable"; }
 echo 'ok - the image follows stable by default, local with --local, development when asked'
 
+# A device package that ships boot files gets the kernel as a package and
+# the slot-B hook; one without them keeps the module tarball
+mkdir -p "$R/packages/omamobile-device-second"
+printf '#!/bin/bash\nboot=${OMAMOBILE_BOOT_FILES:-boot-files}\n' > "$R/packages/omamobile-device-second/install"
+build second > "$t/kp.log" 2>&1 || { cat "$t/kp.log"; fail "a boot-files device builds"; }
+[[ $(cat "$t/kernel-package.second") == 1 ]] || fail "a device package with boot files: KERNEL_PACKAGE=1 reaches the build"
+build first > "$t/kp.log" 2>&1 || { cat "$t/kp.log"; fail "a device without boot files builds"; }
+[[ $(cat "$t/kernel-package.first") == 0 ]] || fail "a device package without boot files: KERNEL_PACKAGE=0"
+rm -rf "$R/packages/omamobile-device-second"
+inside=rootfs/build-inside
+grep -qF 'ours+=(omamobile-boot-update linux-omamobile)' "$inside" || fail "build-inside installs linux-omamobile and omamobile-boot-update with KERNEL_PACKAGE=1"
+grep -qF '[[ $pkg_release == "$KERNEL_RELEASE" ]]' "$inside" || fail "build-inside checks the package's release is the boot images' (KERNEL_OUT's)"
+awk '/linux-omamobile "\* \]\]; then/ {pkg = 1} pkg && /^else/ {exit} pkg && /zstd -dc \/modules/ {bad = 1} END {exit bad}' "$inside" \
+  || fail "with the kernel package installed the tarball is not unpacked over its modules"
+grep -qF '[[ $p == omamobile-boot-update ]] || kept+=("$p")' "$inside" || fail "without linux-omamobile (allowed missing) the hook is left out too"
+grep -qF 'echo "kernel modules: $modules_line"' "$inside" || fail "the MANIFEST still names the release (make-bundle, install-phone, rootfs-smoke read it)"
+grep -q 'OMAMOBILE_BOOT_FILES' packages/omamobile-device-cheetah/install || fail "cheetah's package ships boot files, so its image gets the kernel package"
+echo 'ok - a device with boot files gets linux-omamobile and omamobile-boot-update (the package modules replace the tarball); others keep the tarball'
+
 # Bundling must select this device even when another device sorts later.
 mkdir -p "$t/kernel/images" "$R/packages/omamobile-keyring"
 echo first > "$t/kernel/images/DEVICE"
@@ -113,7 +135,7 @@ echo dtbo > "$t/kernel/images/dtbo.img"
 echo public-key > "$R/packages/omamobile-keyring/omamobile.gpg"
 # A bundle carries the install guide and phone-provision with its tools.
 mkdir -p "$R/docs"; echo guide > "$R/docs/INSTALL.md"
-for f in phone-provision phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
   printf '#!/bin/bash\n' > "$R/tools/$f"; chmod +x "$R/tools/$f"
 done
 bundle() { DEVICE=first "$R/tools/make-bundle" --unsigned --version fixture "$@"; }
@@ -154,3 +176,13 @@ echo bad-checksum > "$R/out/$image.sha256"
 if bundle > "$t/bundle.log" 2>&1; then fail "bundling refuses stale image checksum"; fi
 grep -q "doesn't match its .sha256" "$t/bundle.log" || { cat "$t/bundle.log"; fail "bundling identifies the stale checksum"; }
 echo 'ok - bundles select matching-device images and record verified bytes'
+
+# Every image has Phone (with Contacts), Messages and their agent. The modem
+# stack (omamobile-modem-sit, omamobile-mmd) is one phone's and never in the
+# shared list; it comes with the modem through that device's ROOTFS_PACKAGES.
+list=$(grep -v '^#' rootfs/packages.omamobile)
+for p in omamobile-apps omaphone omamessages omatel-agent; do
+  grep -qx "$p" <<<"$list" || fail "rootfs/packages.omamobile lists $p"
+done
+grep -qxE 'omamobile-(modem|modem-sit|mmd)' <<<"$list" && fail "no modem package in the shared rootfs/packages.omamobile"
+echo 'ok - every image lists Phone, Messages and omatel-agent; no modem package in the shared list'

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The shell's Mobile network page: the APN and data roaming in
+     /etc/omamobile/modem-sit.conf, for the user at the phone (the active
+     local session), through a helper that changes nothing else. -->
+<policyconfig>
+  <vendor>Omarchy Mobile</vendor>
+  <vendor_url>https://github.com/derekross/omarchy-mobile</vendor_url>
+  <action id="org.omamobile.modem-sit.configure">
+    <description>Change the mobile network's APN and data roaming</description>
+    <message>Authentication is required to change the mobile network settings</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/omamobile-sit/omamobile-sit-config</annotate>
+  </action>
+</policyconfig>

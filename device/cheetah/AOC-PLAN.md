@@ -28,7 +28,10 @@ watchdog in earpiece mode) and a "Voice Call" UCM verb with an Earpiece
 sink; the gated runbook is C9k. A first look on the phone found the speaker
 filter following the default sink into the earpiece once Voice Call was
 active; its output now never falls back (`node.dont-fallback`,
-`node.linger`; C9k "The route").
+`node.linger`; C9k "The route"). **2026-11-03 (omamobile-audio 0.5.13):**
+earpiece mode works at every stage: with the boost converter on, as the
+louder stage c9 leaves it, the earpiece at 657/6 was clean by ear on a VoLTE
+call, so `on` no longer refuses it (C9k "Refusals").
 **Earlier plan (2026-10-13, before C9j):** the speakers sounded thin; the ranked plan and three
 runbooks follow C9d-6: C9g (omamobile-audio 0.4.0's speaker filter, by ear
 and measured, risk low), C9d-7/C9d-8 (the V/I feedback stream stock runs
@@ -1951,6 +1954,99 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
    one stock capture (slot A: audiometrics speaker_temp with the same
    controls during maximum-volume music, then fresh NV backups).
 
+   **The everyday c9 levels (2026-10-31, omamobile-audio 0.5.8, #236).**
+   At 817 with the bottom at analog 14 and the top at 11 (limiter drive 3
+   dB), 3.5 minutes of loud music held both coils at a 60-65 C plateau
+   (peaks 66.8 and 67.2 C), 13 C under the backstop, with the firmware's
+   over-temperature count at 0; CSPL_ENABLE read 1 on both. 0.5.8 made
+   those levels stage auto's c9, on a phone with `speaker_protection=1` and
+   a C9a stamp for its firmware.
+
+   **C9 for every phone with verified firmware (2026-11-02, omamobile-audio
+   0.5.10, offline; not run on the phone).** The stamp lives on `userdata`,
+   so every install loses it, and a fresh release install ran stage media.
+   The package now ships `verified-firmware`, one `SYSTEM DIGEST NOTE` line
+   per protection firmware verified here (the digest a C9a stamp records:
+   the wmfw and both tunings, as `tools/extract-vendor-firmware` installs
+   them from the owner's factory image). Stage auto picks c9 with
+   `speaker_protection=1` and either this phone's own stamp or a listed
+   digest, and logs which. The reference phone's digest was not recorded
+   in this plan until the verify below. To read a phone's digest
+   (read-only, no sound):
+   `tools/phone-ssh 'omamobile-speaker-protection digest; sed -n "s/^firmware //p" /var/lib/omamobile/speaker-protection-verified'`.
+   Expect `cheetah <64 hex digits>` and the same digits from the stamp; add
+   that line to `packages/omamobile-audio/verified-firmware` with a note
+   (C9a 2026-10-12, c9 levels 2026-10-31). Stop: the two differ (the
+   firmware changed since `verify`: re-run C9a step 4 before listing it).
+   The same digest on the laptop, from a factory image extraction:
+   `OMAMOBILE_FW_DIRS=<out>/usr/lib/firmware/updates packages/omamobile-audio/bin/omamobile-speaker-protection digest`;
+   a factory build whose three files give the same digest needs no new line.
+
+   **C9a verify for the list (2026-11-02 18:54 EST,
+   `7.3.0-rc6-omamobile-g2219cc6cda77`, firmware from factory image
+   cheetah-cp2a.260705.006; the maintainer, during playback):** "verified:
+   both DSPs run the protection firmware with the calibration applied,
+   heartbeat moving, coil temperatures Top 26.02 C, Bottom 25.58 C". The
+   stamp's firmware digest, now the list's first line:
+   `cheetah 5d457a3db82d1f72e4c938368d3c04dcf9b974aff08347c2d595dc88928b347c`
+   (reference 7 Pro, factory image cp2a.260705.006, C9a verify 2026-11-02,
+   c9 levels 2026-10-31).
+
+   Why a listed digest is enough for another 7 Pro, and what is still
+   checked per phone: the digest says the firmware and both tunings are
+   the reference phone's byte for byte. The tunings are per speaker model
+   (top and bottom), not per unit; what differs between units is the coil
+   resistance and the ambient at calibration, which every start reads from
+   that phone's own `persist` (read-only, status and checksum checked,
+   written to both DSPs and read back). The firmware then measures that
+   phone's coils closed-loop (C9d-8: its temperature tracks its own
+   measured impedance), and the watchdog's 80 C backstop, heartbeat,
+   level ceilings and DSP checks run on every phone. What C9a established
+   per phone and the start can't see is that the DSPs use what we wrote
+   and the estimates are plausible during real playback, so c9 from the
+   list adds a **first-stream check** in the watchdog, at the first speaker
+   stream after each start, about 3 s in: CSPL_ENABLE 1 on both,
+   CAL_R_SELECTED equal to CAL_R (the model on this phone's calibration;
+   neither value printed), the heartbeat moving, and both coil estimates
+   within 10-65 C (verify's floor; the ceiling under the backstop and
+   above what music at these levels reaches in seconds). A failure mutes,
+   records the firmware in `/var/lib/omamobile/speaker-protection-c9-refused`
+   and restarts the service, which then picks media; an attended C9a
+   `verify` (the phone's own stamp) wins over a refusal. Not covered: a
+   unit whose speakers heat faster than the reference phone's at the same
+   level relies on the firmware's own limit and the 80 C backstop, as the
+   reference phone does.
+
+   **After review (round 40):** c9 from the list is capped at what was
+   verified with music: digital 817, analog top 11, bottom 14 (limiter
+   drive as #236). An explicit c9 or a configured level above that is
+   lowered to it, with a log line, and the watchdog holds the same
+   ceilings; stock's 17 stays for a phone with its own stamp. A refusal
+   for a coil estimate outside 10-65 C alone is recorded for the current
+   boot only (`/run/omamobile/speaker-protection-c9-refused`): a restart
+   right after loud music (67 C peaks) or a cold phone can give it with
+   nothing wrong. CSPL_ENABLE, CAL_R_SELECTED and heartbeat failures are
+   persisted. If `/var/lib` can't be written the refusal goes to `/run`;
+   if neither can, the amplifiers stay muted and the service isn't
+   restarted. The list's path and the check's band can only be changed
+   under the tests' control backend, not from `speaker.conf`.
+
+   Phone checks once 0.5.10 and a filled list are installed (read-only
+   except where noted): (1) on the reference phone, `omamobile-speaker-protection
+   status | head -6` says "from this phone's stamp" (the stamp wins).
+   (2) Moving the stamp aside (`mv /var/lib/omamobile/speaker-protection-verified{,.bak}`,
+   then `systemctl restart omamobile-speaker-protection`; announce: the
+   speakers restart muted for a moment) gives "stage c9 chosen by the
+   verified firmware list" in `journalctl -u omamobile-speaker-protection -b`,
+   status "first-stream check: not yet". (3) Play music (announce it;
+   the owner listening, as in "C9 with real music") for 10 s: the watchdog
+   journal says "first-stream check passed", status shows it, no mute.
+   Stop: a refusal (send the `reason` line of the refused file), then
+   rollback: `mv /var/lib/omamobile/speaker-protection-verified{.bak,}`,
+   `rm /var/lib/omamobile/speaker-protection-c9-refused`, restart. (4) Put
+   the stamp back and restart. On a fresh install, (2)'s log line and (3)
+   are the whole check.
+
    **C9h: one listening session for omamobile-audio 0.4.1** (prepared
    2026-10-13; run by the main session with the human listening). The
    amplifiers stay at stage media (737/10) in sections A-D, so every step
@@ -2215,7 +2311,10 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      listener: "so much better and much louder and much more clear
      without static". Reading: at the everyday level the converter sits in
      its light-load regime, where it droops and distorts; stock's 817/17
-     never runs it there. Its registers (peak 2.5 A as stock's speaker
+     never runs it there. (2026-11-03: this finding was under music on the
+     speakers and doesn't apply to the voice path: the earpiece at 657/6
+     with the boost on was clean by ear on a VoLTE call at stage c9, as
+     stock's handset path runs it; C9k.) Its registers (peak 2.5 A as stock's speaker
      path, coefficients, DCM, class-H 0x000b0405, WKFET 0x111, VCTRL1 0 as
      the chip default, VCTRL2 class-H) match Google's driver, which also
      never writes the boost target unless the DT gives one (stock's does
@@ -2319,13 +2418,23 @@ merges cleanly into int; `make modules dtbs` passes in `out-aoc`):
      values. The status line is the speaker one again.
    - **Refusals (nothing changes):** status not "ok:", a hang marker, no
      card, a failed health check, configured levels that fail the limits
-     check, earpiece levels outside the ceilings, and a boost converter the
-     last start left on. The converter follows the earpiece's own analog
-     gain as it follows the speakers' (C9j): off at 10 and below, so off
-     for the earpiece; it is set when the amplifiers probe, so a start that
-     left it on (stage c9, `OMAMOBILE_SPK_BOOST=1`, a kernel without
-     `boost_en`) cannot serve the earpiece without a rebind, and earpiece
-     mode refuses unless `OMAMOBILE_SPK_BOOST=1` says the owner wants it on.
+     check, and earpiece levels outside the ceilings. The boost converter
+     stays as the last start left it: it is set when the amplifiers probe
+     (C9j: off when every speaker analog gain is 10 or below, on at stage
+     c9, under `OMAMOBILE_SPK_BOOST=1` or on a kernel without `boost_en`),
+     and the earpiece works either way. Until omamobile-audio 0.5.13 `on`
+     refused with the converter on (the earpiece's analog 6 is in C9j's
+     light-load range), which left every call at stage c9, the louder
+     default on verified firmware since 0.5.8, with no earpiece audio.
+     **2026-11-03: earpiece at 657/6 with the boost on, verified clean by
+     ear on a VoLTE call at stage c9** (`OMAMOBILE_SPK_BOOST=1`, earpiece
+     on through `omamobile-earpiece@on.service`: Top 657/6 through ASP, the
+     bottom muted; no static, no hum); **C9j's light-load finding was under
+     music on the speakers and doesn't apply to the voice path.** Stock's
+     own handset path runs the top amplifier with the boost on too
+     (`mixer_paths.xml` handset: analog 7). So 0.5.13 accepts the converter
+     on and records its state in the status line; `OMAMOBILE_SPK_BOOST`
+     stays the start's, for the speakers.
      Both requests are idempotent (a repeat writes nothing and only checks
      that the watchdog answers); a service start removes the mode and ends
      in speaker mode, so a restart is the rollback.

@@ -6,12 +6,16 @@
 #
 #   - every commit has a human Signed-off-by, one of them the author's (the
 #     DCO), and none from an AI agent (an Assisted-by tag credits it);
-#   - no Co-Authored-By trailer: the kernel credits an AI with Assisted-by
-#     and a human co-author with Co-developed-by plus a sign-off;
+#   - a Co-Authored-By trailer is a warning, never a failure (the
+#     maintainer's decision, 2026-11-02): the kernel credits an AI with
+#     Assisted-by and a human co-author with Co-developed-by plus a sign-off,
+#     but what matters is the human sign-off above: AI may assist; a human
+#     tests, verifies and signs off;
 #   - every subject has a subsystem prefix ("clk: samsung: ...");
 #   - scripts/checkpatch.pl --strict on each commit, against that commit's
 #     bindings and MAINTAINERS: errors fail, warnings
-#     are listed;
+#     are listed, and a checker that is missing or doesn't run to the end
+#     fails with what it printed;
 #   - tools/pr-check's policy checks: identifiers, blobs;
 #   - with --build OUT: each touched C file builds with W=1 (arm64, LLVM,
 #     defconfig plus kernel/configs/omamobile.config), every touched
@@ -27,9 +31,10 @@
 #   tools/kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] BASE [HEAD]
 #
 # KERNEL defaults to $KERNEL_BASE/linux (~/omamobile-kernel/linux, or
-# ~/android/mainline/linux on older setups), HEAD to HEAD. It reads git and
-# builds in OUT (and OUT-base, for the base's device trees); it never
-# touches the tree's checkout or anything else.
+# ~/android/mainline/linux on older setups), HEAD to HEAD. It reads git,
+# exports what it builds to OUT/src and OUT/src-base and builds in OUT/build
+# and OUT/build-base; it never touches the tree's checkout or anything else,
+# and refuses an OUT that would.
 #
 # --merge builds what would land: HEAD merged onto BASE (a test merge,
 # written as git objects only), compared with BASE itself. The commit checks
@@ -40,9 +45,8 @@
 # --no-checkpatch skips checkpatch: tools/publish-kernel runs the commit and
 # policy checks this way, and leaves checkpatch to the full gate.
 #
-# A Co-Authored-By trailer is a warning on pull requests (contributors are
-# asked for Assisted-by) and a failure with --strict-trailers, which
-# tools/publish-kernel passes: nothing published carries one.
+# --strict-trailers is still accepted and changes nothing: until 2026-11-02
+# it made a Co-Authored-By trailer fail, and tools/publish-kernel passed it.
 set -uo pipefail
 # sort and comm must agree on the order, whatever the caller's locale.
 export LC_ALL=C
@@ -58,20 +62,19 @@ kernel=$KERNEL_BASE/linux
 out=""
 merge=0
 checkpatch=1
-strict_trailers=0
 while (($#)); do
   case $1 in
     -C) kernel=${2:?-C needs a kernel tree}; shift 2 ;;
     --build) out=${2:?--build needs an output directory}; shift 2 ;;
     --merge) merge=1; shift ;;
     --no-checkpatch) checkpatch=0; shift ;;
-    --strict-trailers) strict_trailers=1; shift ;;
-    -h|--help) sed -n '3,45p' "$self"; exit 0 ;;
+    --strict-trailers) shift ;;   # no longer stricter; see above
+    -h|--help) sed -n '3,49p' "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
 done
-base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] [--strict-trailers] BASE [HEAD]}
+base=${1:?Usage: kernel-pr-check [-C KERNEL] [--build OUT] [--merge] [--no-checkpatch] BASE [HEAD]}
 head=${2:-HEAD}
 # -C may be relative to the caller's directory. This script changes into
 # the tree and then runs pr-check with the same path, so resolve it first.
@@ -80,14 +83,30 @@ if [[ ! -d $kernel ]]; then
   echo "kernel-pr-check: no such tree $kernel" >&2
   exit 2
 fi
-kernel=$(CDPATH='' cd -- "$kernel" && pwd)
-# --build too: the builds run after the cd, and they delete and re-extract
-# directories under OUT, so OUT must never resolve inside the kernel tree.
+# Symlinks resolved too, so the --build check below sees the real tree.
+kernel=$(CDPATH='' cd -- "$kernel" && pwd -P)
+# --build too: the builds run after the cd. They replace OUT/src and
+# OUT/src-base, build in OUT/build and OUT/build-base and delete $stale there.
+# None of these, symlinks resolved, may be the tree or its git directory (a
+# worktree's lies outside it), hold it or lie inside it: an OUT that was the
+# parent of a tree named src had the tree deleted.
 if [[ -n $out ]]; then
   out=$(realpath -m -- "$out")
-  case $out/ in
-    "$kernel"/*) echo "kernel-pr-check: --build $out is inside the kernel tree; use a directory outside it" >&2; exit 2 ;;
-  esac
+  src=$out/src srcb=$out/src-base
+  stale=("$out"/build{,-base}/{arch/arm64/boot/dts,Documentation/devicetree/bindings/processed-schema.json})
+  inside() { [[ ${1%/}/ == "${2%/}"/* ]]; } # $1 is $2 or lies inside it
+  inside "$out" "$kernel" && { echo "kernel-pr-check: --build $out is inside the kernel tree; use a directory outside it" >&2; exit 2; }
+  gitdir=$(git -C "$kernel" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && gitdir=$(realpath -m -- "$gitdir")
+  for d in "$src" "$srcb" "$out"/build{,-base} "${stale[@]}"; do
+    r=$(realpath -m -- "$d") || { echo "kernel-pr-check: can't resolve $d" >&2; exit 2; }
+    for p in "$kernel" ${gitdir:+"$gitdir"}; do
+      inside "$r" "$p" || inside "$p" "$r" || continue
+      [[ $p == "$kernel" ]] && where="the kernel tree $p" || where="the kernel tree's git directory $p"
+      [[ $r == "$d" ]] || d+=" (that is, $r)"
+      echo "kernel-pr-check: --build $out overlaps $where: the builds replace $d; use another directory" >&2
+      exit 2
+    done
+  done
   mkdir -p -- "$out" || { echo "kernel-pr-check: can't create $out" >&2; exit 2; }
 fi
 cd -- "$kernel" || exit 2
@@ -155,11 +174,8 @@ ${sob_bad%$'\n'}"
 coauthor_msg="Co-Authored-By trailers (credit an AI with Assisted-by, a human co-author with Co-developed-by and a sign-off; coding-assistants.rst, submitting-patches.rst)"
 if [[ -z $coauthor_bad ]]; then
   pass "no Co-Authored-By trailers"
-elif ((strict_trailers)); then
-  fail "$coauthor_msg:
-${coauthor_bad%$'\n'}"
 else
-  pass "$coauthor_msg, to change before publishing # WARN
+  pass "$coauthor_msg # WARN
 ${coauthor_bad%$'\n'}"
 fi
 [[ -z $prefix_bad ]] && pass "subjects have subsystem prefixes" || fail "subjects without a subsystem prefix (see git log --oneline <file>):
@@ -186,12 +202,15 @@ done
 for e in "$kernel"/Documentation/*; do
   [[ ${e##*/} == devicetree ]] || ln -s "$e" "$cpdir/tree/Documentation/${e##*/}"
 done
-cp_errors="" cp_warnings="" cp_count=0
+# A checker that is missing, can't run or crashes fails the check, with what
+# it said: its empty report is not a clean one.
+cp_errors="" cp_warnings="" cp_count=0 cp_broken=""
 for c in $commits; do
   rm -rf "$cpdir/tree/Documentation/devicetree" "$cpdir/tree/MAINTAINERS"
   docs=$(git ls-tree --name-only "$c" Documentation/devicetree MAINTAINERS)
   [[ -n $docs ]] && git archive "$c" $docs | tar -x -C "$cpdir/tree"
-  report=$(git format-patch -1 --stdout "$c" | perl "$cpdir/checker/scripts/checkpatch.pl" --root="$cpdir/tree" --strict --no-signoff --terse --show-types - 2>/dev/null)
+  report=$({ git format-patch -1 --stdout "$c" | perl "$cpdir/checker/scripts/checkpatch.pl" --root="$cpdir/tree" --strict --no-signoff --terse --show-types -; } 2>"$cpdir/stderr")
+  cp_status=$?
   short=$(git log -1 --format='%h %s' "$c")
   errors=$(grep -E ': ERROR:' <<<"$report" || true)
   [[ -n $errors ]] && cp_errors+="  $short"$'\n'"$(sed 's/^/    /' <<<"$errors")"$'\n'
@@ -200,9 +219,20 @@ for c in $commits; do
     cp_count=$((cp_count + $(wc -l <<<"$warnings")))
     cp_warnings+="#   $short"$'\n'"$(sed -E -e 's/^-:[0-9]+: /#     /' -e "s,$cpdir/tree/,," <<<"$warnings")"$'\n'
   fi
+  # checkpatch exits 1 when it reports something, 0 when it doesn't.
+  # Anything else, or a 1 with nothing reported, means it never finished:
+  # show what it said, on stderr and in any stdout line that isn't a
+  # diagnostic (some of its own failures print there).
+  if ((cp_status > 1)) || { ((cp_status == 1)) && [[ -z $errors$warnings ]]; }; then
+    cp_said=$({ grep -vE ': (ERROR|WARNING|CHECK):' <<<"$report"; cat "$cpdir/stderr"; } | sed -e '/^$/d' -e "s,$cpdir/,,g" -e 's/^/    /')
+    cp_broken+="  $short: exit $cp_status"$'\n'"${cp_said:+$cp_said$'\n'}"
+  fi
 done
-[[ -z $cp_errors ]] && pass "checkpatch --strict: no errors ($cp_count warnings and checks to read)" || fail "checkpatch --strict errors:
+[[ -n $cp_broken ]] && fail "checkpatch --strict didn't run to the end:
+${cp_broken%$'\n'}"
+[[ -n $cp_errors ]] && fail "checkpatch --strict errors:
 ${cp_errors%$'\n'}"
+[[ -z $cp_broken$cp_errors ]] && pass "checkpatch --strict: no errors ($cp_count warnings and checks to read)"
 # The warnings themselves, so a reviewer reads them without rerunning it.
 [[ -n $cp_warnings ]] && printf '%s' "$cp_warnings"
 else
@@ -230,7 +260,6 @@ if [[ -n $out ]]; then
     skip "builds: no clang or ld.lld"
   else
     # A clean export of what's built and its base, so the tree's own checkout is never touched.
-    src=$out/src srcb=$out/src-base
     rm -rf "$src" "$srcb"; mkdir -p "$src" "$srcb"
     git archive "$build_head" | tar -x -C "$src"
     k=(make -s -C "$src" O="$out/build" ARCH=arm64 LLVM=1 -j"$(nproc)")
@@ -259,8 +288,7 @@ ${bad%$'\n'}"; fi
         # outputs so make rebuilds, and prints, every warning. The processed
         # schema goes too, or a reused OUT validates against an earlier
         # tree's bindings (kernel #32's own binding went unseen that way).
-        rm -rf "$out/build/arch/arm64/boot/dts" "$out/build-base/arch/arm64/boot/dts" \
-          "$out"/build{,-base}/Documentation/devicetree/bindings/processed-schema.json
+        rm -rf "${stale[@]}"
         log=$("${k[@]}" W=1 $check $targets 2>&1); st=$?
         if ((st)); then
           fail "device trees don't build:
