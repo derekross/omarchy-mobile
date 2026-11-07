@@ -84,6 +84,37 @@ grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x3
 cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
 pass "bootctl dry run plans one byte and writes nothing"
 
+# 3.11: lynx units still on the Android 15 bootloader.
+python3 - "$tmp/devinfo311" <<'PY3'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 11)
+buf[0x30:0x34] = bytes([3, 0x00, 0, 0])
+buf[0x34:0x38] = bytes([0, 0x0c, 0, 0])
+open(sys.argv[1], "wb").write(buf)
+PY3
+cp "$tmp/devinfo311" "$tmp/devinfo311.orig"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo311" | grep -q 'version: 3.11' \
+  || fail "bootctl decodes devinfo 3.11"
+plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo311" b 2>&1 || true)
+grep -q '0x35: 0c -> 0e' <<<"$plan" || fail "3.11 mark-successful plans one byte"
+cmp -s "$tmp/devinfo311" "$tmp/devinfo311.orig" || fail "a 3.11 dry run writes nothing"
+pass "bootctl accepts devinfo 3.11"
+
+# An unknown layout must still be refused.
+python3 - "$tmp/devinfo314" <<'PY4'
+import struct, sys
+buf = bytearray(8192)
+buf[0:4] = b"DEVI"
+struct.pack_into("<HH", buf, 4, 3, 14)
+open(sys.argv[1], "wb").write(buf)
+PY4
+if "$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo314" b >/dev/null 2>&1; then
+  fail "an unverified 3.14 layout was accepted"
+fi
+pass "bootctl refuses an unverified devinfo layout"
+
 ./install "$tmp/root" "$tmp/build"
 for f in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-boot-success \
          usr/lib/systemd/system/omamobile-boot-success.service \

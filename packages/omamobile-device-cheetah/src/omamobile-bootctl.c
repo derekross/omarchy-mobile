@@ -84,11 +84,41 @@
 #define DEVINFO_MIN_VERSION	0x00030003u	/* "only version 3.3+ supports A/B data" */
 
 /*
- * The only layout version this port has been checked against (Pixel 7 Pro,
- * cheetah, stock CP2A bootloader, devinfo 3.15). Writes refuse anything else.
+ * The shared source stays at the layout checked on the Pixel 7 Pro (cheetah,
+ * stock CP2A bootloader, devinfo 3.15); lynx adds its own 3.11 at build time.
+ * Writes refuse every other version.
  */
-#define VERIFIED_VER_MAJOR	3
-#define VERIFIED_VER_MINOR	15
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
+
+struct verified_layout {
+	uint16_t major;
+	uint16_t minor;
+};
+
+/*
+ * Layouts checked on phones: 3.15 on the Pixel 7 Pro's CP2A bootloader, and
+ * 3.11 on Android 15 lynx units. The A/B data sits at the same offsets in
+ * both; only the header version differs.
+ */
+static const struct verified_layout verified_layouts[] = {
+	{ 3, 15 },
+#ifdef OMAMOBILE_DEVIINFO_EXTRA_MINOR
+	{ 3, OMAMOBILE_DEVIINFO_EXTRA_MINOR },
+#endif
+};
+
+static int layout_verified(uint16_t major, uint16_t minor)
+{
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(verified_layouts); i++)
+		if (major == verified_layouts[i].major &&
+		    minor == verified_layouts[i].minor)
+			return 1;
+	return 0;
+}
 
 /* devinfo is 8 KiB on cheetah; refuse anything absurdly large */
 #define MAX_REGION		(1024 * 1024)
@@ -163,10 +193,12 @@ static int check_header(const uint8_t *d, int for_write)
 		fprintf(stderr, "%s: devinfo version %u.%u has no A/B data (need 3.3+)\n", argv0, maj, min);
 		return -1;
 	}
-	if (for_write && (maj != VERIFIED_VER_MAJOR || min != VERIFIED_VER_MINOR)) {
-		fprintf(stderr, "%s: devinfo version %u.%u is not the verified %u.%u layout; refusing to write\n",
-			argv0, maj, min, VERIFIED_VER_MAJOR, VERIFIED_VER_MINOR);
-		return -1;
+	if (for_write) {
+		if (!layout_verified(maj, min)) {
+			fprintf(stderr, "%s: devinfo version %u.%u is not a verified layout (3.11, 3.15); refusing to write\n",
+				argv0, maj, min);
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -218,7 +250,7 @@ static int cmd_dump(const char *path)
 	printf("devinfo: %s (%zu bytes)\n", path, len);
 	printf("magic:   0x%08x \"DEVI\"\n", rd32(d + OFF_MAGIC));
 	printf("version: %u.%u%s\n", rd16(d + OFF_VER_MAJOR), rd16(d + OFF_VER_MINOR),
-	       rd16(d + OFF_VER_MAJOR) == VERIFIED_VER_MAJOR && rd16(d + OFF_VER_MINOR) == VERIFIED_VER_MINOR
+	       layout_verified(rd16(d + OFF_VER_MAJOR), rd16(d + OFF_VER_MINOR))
 	       ? " (verified layout)" : " (NOT the verified layout: read-only)");
 	for (int i = 0; i < DEVINFO_AB_SLOT_COUNT; i++)
 		print_slot(d, i);

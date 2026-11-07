@@ -3,6 +3,25 @@
 
 Findings from real hardware, newest first. Tracking issue: #36.
 
+## 2026-10-30: published kernel on an Android 15 unit; devinfo 3.11
+
+- **The published `omamobile` kernel brings up lynx touch on this unit.** With
+  the merged GT9895 node and the S2MPG12 LDO25M/LDO26M regulators, the
+  touchscreen binds as `Goodix Berlin Capacitive TouchScreen` (`event0`) and
+  Hyprland uses it. Kernel release
+  `7.3.0-rc6-omamobile-push1-gfbbcac19d8ea`.
+- **This unit's bootloader reports devinfo 3.11, not 3.15.** It is still on the
+  Android 15 factory build (`BP1A.250505.005.B1`, bootloader `lynx-15.2`).
+  `omamobile-device-lynx` 0.2.0 only accepted 3.15, so
+  `omamobile-boot-success` refused to write and the slot was left unmarked.
+- **The A/B bytes are at the same offsets in 3.11 and 3.15.** A read-only
+  `omamobile-bootctl dump` decoded slot a and b correctly on 3.11; marking slot
+  b successful changed only `0x35` (`0x04` -> `0x06`), and the bootloader then
+  kept the slot.
+- **Fix:** `omamobile-bootctl` now accepts a verified-layout table of 3.11 and
+  3.15 instead of a single hard-coded version, with a synthetic 3.11 test and
+  an unverified-3.14 rejection test in the lynx package.
+
 ## 2026-10-27: Wi-Fi parked
 
 - **The chip's boot ROM stops at its authentication stage,** `pbl_auth.c`, after reading only the ELF header and the hash segment of an image byte-identical to stock's. Every host-side difference two testers could act on was tried, one change per boot, and all were negative. The write-up, the ruled-out list, both stop conditions and what is left are in [WIFI-PLAN.md](WIFI-PLAN.md). The maintainer agreed on #36 that parking here is the right call.
@@ -166,3 +185,29 @@ Findings from real hardware, newest first. Tracking issue: #36.
 | `vendor_boot` page size | 0x800, header v4 | [V] stock image header |
 | Panel | `sdc-s6e3fc5`, 1080x2400, on DECON0 and DSIM0 | [V] `exynos_drm.panel_name`, `dumpsys display`, stock dmesg |
 | Storage | 128 GB SK hynix UFS 3.1 | [V] `fastboot getvar` |
+
+## devinfo 3.11 read-only evidence (2026-11-06)
+
+The Android 15 unit reports `devinfo` version 3.11. With slot B active,
+not marked successful, the eight bytes at `0x30-0x37` were:
+
+```
+03 00 00 00 00 0c 00 00
+```
+
+The same bytes and the same fastboot state were read after one unmarked
+boot through the bootloader:
+
+```
+slot-successful:b   no
+slot-unbootable:b   no
+slot-retry-count:b  1
+current-slot:       b
+```
+
+`devinfo` is read-only (`blockdev --getro` = 1) on this unit, and no
+write was forced while 3.11 is not in the merged table. A marked-state
+row still needs either the maintainer's approval to write 3.11 or a
+bootloader action that marks the slot itself.
+
+Both slots on this unit carry bootloader `lynx-15.2`.
