@@ -657,6 +657,11 @@ Item {
   // omamobile-keys reads it (the device from omarchy-hw-display). sysfs has
   // no change events, so it is read every 2 s, a cheap file read. Every
   // widget stops on it, OWL or not.
+  // A foreground app already hides every Home widget. Refresh immediately
+  // on return so a cached panel-off value cannot delay showing Home.
+  onAppOnScreenChanged: {
+    if (!appOnScreen && owlBacklight !== "") blPower.reload()
+  }
   property bool owlPanelOff: false
   property string owlBacklight: ""
   Process {
@@ -673,8 +678,8 @@ Item {
   Timer {
     interval: 2000
     repeat: true
-    running: root.owlBacklight !== ""
-    onTriggered: blPower.reload()
+    running: root.owlBacklight !== "" && !root.appOnScreen
+    onTriggered: { if (!root.appOnScreen) blPower.reload() }
   }
 
   // An OWL Input has focus: the surface takes the keyboard.
