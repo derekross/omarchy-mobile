@@ -14,7 +14,7 @@ SH
 chmod +x "$scratch/ssh"
 real_ssh=$(command -v ssh || true)
 export PATH="$scratch:$PATH"
-unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_SHARE OMAMOBILE_SSH_HOST_KEY_ALIAS
+unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_SHARE OMAMOBILE_SSH_HOST_KEY_ALIAS OMAMOBILE_SSH_CONFIG OMAMOBILE_SSH_INTERFACE
 tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
 grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
 grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
@@ -145,3 +145,271 @@ grep -Fx 'ControlPath='"${XDG_RUNTIME_DIR:-/tmp}"'/omamobile-ssh-%C' "$scratch/d
 tools/phone-ssh --fresh true >"$scratch/default-fresh"
 grep -Fx ControlPath=none "$scratch/default-fresh" >/dev/null
 echo 'ok - phone SSH options preserve sharing/fresh/stop and isolate identity/host-key policy'
+# A config override is explicit, normalized as a single argv value, and never
+# silently enabled after a failure. No socket is opened by these fake calls.
+if grep -Fx -- -F "$scratch/default-shared"; then exit 1; fi
+export OMAMOBILE_SSH_CONFIG="$scratch/config with spaces"
+printf 'Host *\n  HostName fixture.invalid\n  Port 2203\n' >"$OMAMOBILE_SSH_CONFIG"
+tools/phone-ssh true >"$scratch/configured-file"
+grep -Fx -- -F "$scratch/configured-file" >/dev/null
+grep -Fx -- "$OMAMOBILE_SSH_CONFIG" "$scratch/configured-file" >/dev/null
+config_shared=$(sed -n '/^ControlPath=/p' "$scratch/configured-file")
+[[ $config_shared != $(sed -n '/^ControlPath=/p' "$scratch/default-shared") ]]
+tools/phone-ssh --stop >"$scratch/configured-stop"
+grep -Fx -- "$config_shared" "$scratch/configured-stop" >/dev/null
+printf 'Host *\n  HostName fixture.invalid\n  Port 2204\n' >"$OMAMOBILE_SSH_CONFIG"
+tools/phone-ssh true >"$scratch/config-rotated"
+[[ $config_shared != $(sed -n '/^ControlPath=/p' "$scratch/config-rotated") ]]
+cp "$OMAMOBILE_SSH_CONFIG" "$scratch/other config"
+OMAMOBILE_SSH_CONFIG="$scratch/other config" tools/phone-ssh true >"$scratch/config-other-path"
+[[ $(sed -n '/^ControlPath=/p' "$scratch/config-rotated") != $(sed -n '/^ControlPath=/p' "$scratch/config-other-path") ]]
+OMAMOBILE_SSH_CONFIG=/dev/null tools/phone-ssh --fresh true >"$scratch/config-null"
+grep -Fx /dev/null "$scratch/config-null" >/dev/null
+grep -Fx ControlPath=none "$scratch/config-null" >/dev/null
+for bad_config in "$scratch/missing config" "$scratch" "$scratch/config%token" $'bad\nconfig'; do
+    if OMAMOBILE_SSH_CONFIG="$bad_config" tools/phone-ssh true >"$scratch/config-rejected" 2>/dev/null; then
+        echo 'not ok - invalid explicit config accepted'; exit 1
+    fi
+    [[ ! -s $scratch/config-rejected ]]
+done
+# -G inspects configuration only and makes no network connection.
+if [[ -n $real_ssh ]]; then
+    python3 - "$real_ssh" "$scratch/config-rotated" <<'PY'
+import subprocess, sys
+from pathlib import Path
+args = Path(sys.argv[2]).read_text().splitlines()
+result = subprocess.run([sys.argv[1], '-G', *args], check=True, capture_output=True, text=True)
+assert 'hostname fixture.invalid' in result.stdout.splitlines()
+assert 'port 2204' in result.stdout.splitlines()
+print('ok - explicit SSH config reaches OpenSSH without changing default policy')
+PY
+fi
+unset OMAMOBILE_SSH_CONFIG
+tools/phone-ssh true >"$scratch/config-unset"
+cmp "$scratch/default-shared" "$scratch/config-unset"
+echo 'ok - explicit SSH config isolates path/content, fresh/stop, and default remains byte-identical'
+# Relative spellings of the same explicit file select the same policy context.
+(cd "$scratch"; OMAMOBILE_SSH_CONFIG='config with spaces' "$repo/tools/phone-ssh" true) >"$scratch/config-relative"
+[[ $(sed -n '/^ControlPath=/p' "$scratch/config-relative") == $(sed -n '/^ControlPath=/p' "$scratch/config-rotated") ]]
+if OMAMOBILE_SSH_CONFIG=/dev/zero tools/phone-ssh true >"$scratch/config-device" 2>/dev/null; then
+    echo 'not ok - arbitrary nonregular SSH config device accepted'; exit 1
+fi
+[[ ! -s $scratch/config-device ]]
+# An explicit config must not weaken a caller's pinned host-key options.
+if [[ -n $real_ssh ]]; then
+    printf 'Host *\n  StrictHostKeyChecking no\n' >"$scratch/config-untrusted-policy"
+    OMAMOBILE_SSH_CONFIG="$scratch/config-untrusted-policy" OMAMOBILE_SSH_KNOWN_HOSTS="$scratch/known hosts" tools/phone-ssh --fresh true >"$scratch/config-pinned"
+    python3 - "$real_ssh" "$scratch/config-pinned" <<'PY'
+import subprocess, sys
+from pathlib import Path
+args = Path(sys.argv[2]).read_text().splitlines()
+result = subprocess.run([sys.argv[1], '-G', *args], check=True, capture_output=True, text=True)
+assert 'stricthostkeychecking true' in result.stdout.splitlines()
+lines = result.stdout.splitlines()
+assert 'controlmaster false' in lines
+assert not any(line.startswith('controlpath ') and line != 'controlpath none' for line in lines)
+print('ok - explicit config preserves pinned host-key policy and fresh connection')
+PY
+fi
+
+unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_SSH_HOST_KEY_ALIAS
+# Explicit direct transport never changes global routes or caller trust options.
+OMAMOBILE_SSH_CONFIG=/dev/null OMAMOBILE_SSH_INTERFACE=usb-test tools/phone-ssh true >"$scratch/bound"
+grep -F -- 'ProxyCommand=' "$scratch/bound" >/dev/null
+grep -F -- '--relay usb-test 172.16.42.1' "$scratch/bound" >/dev/null
+OMAMOBILE_SSH_CONFIG=/dev/null OMAMOBILE_SSH_INTERFACE=off tools/phone-ssh true >"$scratch/unbound"
+if grep -F -- 'ProxyCommand=' "$scratch/unbound"; then exit 1; fi
+[[ $(sed -n '/^ControlPath=/p' "$scratch/bound") != $(sed -n '/^ControlPath=/p' "$scratch/unbound") ]]
+for invalid in 'bad interface' 'x;true' '-option' '0123456789abcdef'; do
+    if OMAMOBILE_SSH_CONFIG=/dev/null OMAMOBILE_SSH_INTERFACE="$invalid" tools/phone-ssh true >"$scratch/invalid-interface" 2>/dev/null; then
+        echo 'not ok - invalid interface accepted'; exit 1
+    fi
+    [[ ! -s $scratch/invalid-interface ]]
+done
+if OMAMOBILE_SSH_CONFIG="$scratch/config with spaces" OMAMOBILE_SSH_INTERFACE=usb-test tools/phone-ssh true >"$scratch/binding-config" 2>/dev/null; then
+    echo 'not ok - binding overrode arbitrary SSH config transport'; exit 1
+fi
+[[ ! -s $scratch/binding-config ]]
+# Discovery is deterministic and ignores non-link/ambiguous routes.
+cat >"$scratch/ip" <<'SH'
+#!/bin/sh
+printf '%s\n' "$PHONE_TEST_ROUTES"
+SH
+chmod +x "$scratch/ip"
+export PHONE_TEST_ROUTES='[{"dst":"172.16.42.0/24","dev":"usb-test","scope":"link","prefsrc":"172.16.42.2"}]'
+OMAMOBILE_SSH_CONFIG=/dev/null tools/phone-ssh true >"$scratch/autobound"
+grep -F -- '--relay usb-test 172.16.42.1' "$scratch/autobound" >/dev/null
+export PHONE_TEST_ROUTES='[{"dst":"172.16.42.0/24","dev":"usb-test","scope":"link","prefsrc":"172.16.42.2"},{"dst":"172.16.42.0/24","dev":"other-test","scope":"link","prefsrc":"172.16.42.2"}]'
+OMAMOBILE_SSH_CONFIG=/dev/null tools/phone-ssh true >"$scratch/ambiguous"
+if grep -F -- 'ProxyCommand=' "$scratch/ambiguous"; then exit 1; fi
+OMAMOBILE_SSH_CONFIG="$scratch/config with spaces" tools/phone-ssh true >"$scratch/custom-transport"
+if grep -F -- 'ProxyCommand=' "$scratch/custom-transport"; then exit 1; fi
+echo 'ok - socket binding, policy isolation, opt-out and conservative discovery'
+python3 - <<'PYPROXYTEST'
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Exercise the relay with real backpressure/half-close; no phone/network."""
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import threading
+import unittest
+from unittest.mock import patch
+
+ROOT = Path.cwd()
+loader = importlib.machinery.SourceFileLoader("phone_proxy", str(ROOT / "tools/phone-ssh-proxy"))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+proxy = importlib.util.module_from_spec(spec)
+loader.exec_module(proxy)
+
+
+class RelayTests(unittest.TestCase):
+    def test_bidirectional_backpressure_and_half_close(self):
+        client, peer = socket.socketpair()
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        peer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        input_read, input_write = os.pipe()
+        output_read, output_write = os.pipe()
+        incoming = bytes(range(256)) * 8192
+        outgoing = bytes(reversed(range(256))) * 8192
+        received_input = bytearray()
+        received_output = bytearray()
+        failures = []
+
+        def guarded(fn):
+            def run():
+                try:
+                    fn()
+                except BaseException as error:
+                    failures.append(error)
+            return run
+
+        def source():
+            with os.fdopen(input_write, "wb", buffering=0) as stream:
+                stream.write(incoming)
+
+        def output():
+            with os.fdopen(output_read, "rb", buffering=0) as stream:
+                while chunk := stream.read(65536):
+                    received_output.extend(chunk)
+
+        def peer_send():
+            peer.sendall(outgoing)
+
+        def peer_receive():
+            while chunk := peer.recv(65536):
+                received_input.extend(chunk)
+            # Send a final acknowledgement only AFTER stdin EOF. A relay
+            # that closes both directions at input EOF loses this response.
+            sender.join(5)
+            peer.sendall(b"after-eof")
+            peer.shutdown(socket.SHUT_WR)
+
+        def forward():
+            try:
+                proxy.relay(client, input_read, output_write)
+            finally:
+                os.close(output_write)
+
+        sender = threading.Thread(target=guarded(peer_send), daemon=True)
+        workers = [threading.Thread(target=guarded(fn), daemon=True)
+                   for fn in [source, output, peer_receive, forward]]
+        sender.start()
+        for worker in workers:
+            worker.start()
+        for worker in [sender, *workers]:
+            worker.join(10)
+            self.assertFalse(worker.is_alive(), "relay deadlocked under backpressure")
+        self.assertEqual(failures, [])
+        self.assertEqual(received_input, incoming)
+        self.assertEqual(received_output, outgoing + b"after-eof")
+        os.close(input_read)
+        client.close()
+        peer.close()
+
+    def test_peer_close_returns_even_with_open_stdin(self):
+        client, peer = socket.socketpair()
+        r, w = os.pipe()
+        out = os.open(os.devnull, os.O_WRONLY)
+        worker = threading.Thread(target=lambda: proxy.relay(client, r, out), daemon=True)
+        worker.start()
+        peer.close()
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        os.close(w)
+        client.close()
+        os.close(out)
+        # Let the daemon input reader consume EOF before closing its fd.
+        import time
+        time.sleep(.01)
+        os.close(r)
+
+    def test_discovery_requires_unique_direct_link(self):
+        cases = [
+            ([{"dst": "172.16.42.0/24", "scope": "link", "prefsrc": "172.16.42.2", "dev": "usb-test"}], "usb-test"),
+            ([{"dst": "172.16.42.0/24", "scope": "link", "prefsrc": "172.16.42.2", "dev": "usb-test", "gateway": "172.16.42.254"}], ""),
+            ([{"dst": "default", "dev": "vpn-test"}], ""),
+            ([{"dst": "172.16.42.0/24", "scope": "link", "dev": "wlan-test", "prefsrc": "172.16.42.9"}], ""),
+            ([{"dst": "172.16.42.0/24", "scope": "link", "prefsrc": "172.16.42.2", "dev": "one"},
+              {"dst": "172.16.42.0/24", "scope": "link", "prefsrc": "172.16.42.2", "dev": "two"}], ""),
+        ]
+        for routes, expected in cases:
+            result = subprocess.CompletedProcess([], 0, json.dumps(routes), "")
+            with patch.object(proxy.subprocess, "run", return_value=result):
+                self.assertEqual(proxy.discover(), expected)
+        with patch.object(proxy.subprocess, "run", side_effect=FileNotFoundError):
+            self.assertEqual(proxy.discover(), "")
+
+    def test_relay_binds_only_its_numeric_socket_before_connect(self):
+        from unittest.mock import MagicMock
+        for address, family, destination in [
+            ("192.0.2.1", socket.AF_INET, ("192.0.2.1", 22)),
+            ("2001:db8::1", socket.AF_INET6, ("2001:db8::1", 22, 0, 0)),
+        ]:
+            sock = MagicMock()
+            sock.__enter__.return_value = sock
+            with patch.object(proxy.socket, "getaddrinfo", return_value=[
+                (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", destination)
+            ]) as resolve, patch.object(proxy.socket, "socket", return_value=sock), \
+                 patch.object(proxy, "relay") as relay:
+                proxy.main(["--relay", "usb-test", address])
+                resolve.assert_called_once_with(address, 22, type=socket.SOCK_STREAM,
+                                                flags=socket.AI_NUMERICHOST)
+                self.assertEqual(sock.method_calls[:4], [
+                    unittest.mock.call.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"usb-test\0"),
+                    unittest.mock.call.settimeout(6), unittest.mock.call.connect(destination),
+                    unittest.mock.call.settimeout(None),
+                ])
+                relay.assert_called_once_with(sock)
+
+    def test_binding_failure_cannot_fall_back_to_unbound_connect(self):
+        from unittest.mock import MagicMock
+        sock = MagicMock()
+        sock.__enter__.return_value = sock
+        sock.setsockopt.side_effect = PermissionError("fixture denied")
+        with patch.object(proxy.socket, "getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("192.0.2.1", 22))
+        ]), patch.object(proxy.socket, "socket", return_value=sock), \
+             patch.object(proxy, "relay") as relay:
+            with self.assertRaises(PermissionError):
+                proxy.main(["--relay", "usb-test", "192.0.2.1"])
+            sock.connect.assert_not_called()
+            relay.assert_not_called()
+
+    def test_command_rejects_shell_input(self):
+        for value in ["bad interface", "x;true", "$(true)", "-option", "a" * 16]:
+            with self.assertRaises(ValueError):
+                proxy.interface_name(value)
+        for value in ["host;true", "$(true)", "host.invalid"]:
+            with self.assertRaises(ValueError):
+                proxy.main(["--command", "usb-test", value])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+PYPROXYTEST
