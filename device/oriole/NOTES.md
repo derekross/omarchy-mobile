@@ -9,6 +9,23 @@ Sources:
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
 
+## 2026-11-07: first-light package native staging check
+
+[V] Package source at `d32957dc3feb` passed `test/all` on the Pixel 6
+(`aarch64`), running
+`7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`. The reboot helper
+compiled and installation into a temporary directory passed the file,
+USB-route, coldplug and disabled-sleep checks. Temporary files were removed.
+The package was not installed; `omamobile-device-oriole 0.1.9-2` remains.
+
+[V] A separate baseline `phone-smoke` report passed the required boot,
+storage, root, kernel-health, USB and session checks. It also reported new
+error-level kernel messages and failed backlight/NFC units; both units
+reported `Battery outside development limits`. This is not a clean report
+or an exact-package boot qualification. The first-light package omits the
+installed boot-check, battery and reboot-watchdog safeguards, so replacing
+the integration package still needs a qualified migration and rollback.
+
 ## 2026-10-31: build provenance and recovery limits
 
 This describes the unpublished stack in the October 30 smoke report. It is
