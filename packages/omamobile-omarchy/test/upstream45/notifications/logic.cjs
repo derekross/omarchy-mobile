@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) David Heinemeier Hansson
+// Mobile fixture extensions: Copyright (c) 2026 Marsel Nenaj
 // The notification plugin's pure JS modules, plus the service's own functions
 // lifted out of Service.qml and run against a fake ListModel and fake senders.
 const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm')
@@ -1055,29 +1056,38 @@ const eq = (actual, expected, message) => assert.deepEqual(plain(actual), plain(
 
 console.log('notification logic: passed')
 
-// Mobile4.5: real service functions, live reply and key-only forget.
+// Mobile 4.5: real service functions, live reply and key-only forget.
 {
-  const s = newCapacityScope(), n = s.fakeNotification(7, 'Synthetic reply')
-  const sent = []; n.hasInlineReply = true; n.inlineReplyPlaceholder = 'Answer'
+  const s = newCapacityScope()
+  const n = s.fakeNotification(7, 'Synthetic reply')
+  const sent = []
+  n.hasInlineReply = true
+  n.inlineReplyPlaceholder = 'Answer'
   n.sendInlineReply = text => sent.push(text)
-  s.admit(n); const key = s.toasts.get(0).key
+  s.admit(n)
+  const key = s.toasts.get(0).key
   assert.equal(s.beginReply(key), true)
   assert.equal(s.replyKey, key)
   assert.equal(s.sendReply(key, ''), false)
   assert.equal(s.sendReply(key, 'x'.repeat(4097)), false)
   assert.equal(s.sendReply(key, 'Synthetic answer'), true)
-  s.drainCallLater(); assert.deepEqual(sent, ['Synthetic answer'])
+  s.drainCallLater()
+  assert.deepEqual(sent, ['Synthetic answer'])
   assert.equal(s.replyKey, '')
   assert.equal(s.beginReply(key), false, 'closed sender never receives reply')
   assert.equal(s.sendReply(key, 'late'), false)
 }
 {
-  const s = newCapacityScope(), n = s.fakeNotification(8, 'Synthetic forgotten')
-  s.admit(n); const key = s.toasts.get(0).key
+  const s = newCapacityScope()
+  const n = s.fakeNotification(8, 'Synthetic forgotten')
+  s.admit(n)
+  const key = s.toasts.get(0).key
   s.historyEntries = [{ key }, { key: 'retained' }]
   s.replyKey = key
   assert.equal(s.forgetNotification('../escape'), 'none')
-  assert.equal(s.forgetNotification('unknown'), 'none')
+  assert.equal(s.forgetNotification('unknown'), 'ok', 'syntactically valid missing key is already gone')
+  assert.equal(s.forgetNotification(''), 'none')
+  assert.equal(s.forgetNotification('x'.repeat(121)), 'none')
   assert.equal(s.forgetNotification(key), 'ok')
   s.drainCallLater()
   assert.equal(s.toasts.count, 0)
@@ -1085,5 +1095,19 @@ console.log('notification logic: passed')
   assert.equal(s.historyEntries.length, 1)
   assert.equal(s.historyEntries[0].key, 'retained')
   assert.equal(s.liveEntries.length, 0, 'forgotten row is not re-archived')
+
+  // A sender can close the same row before a queued dismiss reaches us.
+  // Repeating a valid key acknowledges that it is already gone, without
+  // writing or resurrecting any state. Malformed keys still return none.
+  function retainedState() {
+    return JSON.stringify({
+      toasts: s.toasts.rows, live: s.liveEntries, keys: s.liveKeys,
+      history: s.historyEntries, reply: s.replyKey,
+    })
+  }
+  const afterFirstForget = retainedState()
+  assert.equal(s.forgetNotification(key), 'ok', 'already-forgotten valid key is idempotent')
+  s.drainCallLater()
+  assert.equal(retainedState(), afterFirstForget, 'second forget leaves state unchanged')
 }
-console.log('mobile4.5 reply/forget: passed')
+console.log('mobile 4.5 reply/forget: passed')

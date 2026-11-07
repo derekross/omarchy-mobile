@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Exercise actual family selector and prove the archived legacy bytes."""
+"""Exercise the real source-family selector and retained legacy archive."""
 from pathlib import Path
 import runpy
-pkg=Path(__file__).resolve().parent.parent
-m=runpy.run_path(str(pkg/'bin/omamobile-omarchy-patches'))
-select=m['default_series']
-assert select('/fixture',[('omarchy','4.0.6-2',None)]).endswith('/legacy-4.0.6')
-assert select('/fixture',[('omarchy','4.5.0-3',None)]).endswith('/patches')
-for version in ['4.6.0-1']:
- try:select('/fixture',[('omarchy',version,None)])
- except m['Failure']:pass
- else:raise AssertionError('unsupported family accepted: '+version)
-assert len(list((pkg/'legacy-4.0.6').glob('*.patch')))==28
-print('PASS: actual selector rejects unimplemented families; legacy archive retained')
+
+package = Path(__file__).resolve().parent.parent
+module = runpy.run_path(str(package / 'bin/omamobile-omarchy-patches'))
+select = module['default_series']
+
+assert select('/fixture', [('omarchy', '4.0.6-2', None)]).endswith('/legacy-4.0.6')
+assert select('/fixture', [('omarchy', '4.5.0-3', None)]).endswith('/patches')
+try:
+    select('/fixture', [('omarchy', '4.6.0-1', None)])
+except module['Failure']:
+    pass
+else:
+    raise AssertionError('unsupported source family accepted')
+
+assert len(list((package / 'legacy-4.0.6').glob('*.patch'))) == 28
+print('PASS: actual selector rejects unsupported families; legacy archive retained')

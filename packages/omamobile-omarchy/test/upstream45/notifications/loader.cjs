@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) David Heinemeier Hansson
+// Mobile fixture extensions: Copyright (c) 2026 Marsel Nenaj
 // Load a notification-plugin JS module the way QML does: `.pragma library`
 // dropped, each `.import "X.js" as Alias` resolved to that module's scope.
-const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path')
+const fs = require('node:fs')
+const vm = require('node:vm')
+const path = require('node:path')
 const dir = process.env.OMARCHY_SHELL_DIR ? path.join(process.env.OMARCHY_SHELL_DIR, 'plugins', 'notifications')
   : path.join(__dirname, '..', '..', '..', 'shell', 'plugins', 'notifications')
 const cache = {}
@@ -12,7 +15,8 @@ function load(name) {
   const code = fs.readFileSync(path.join(dir, name + '.js'), 'utf8')
     .replace(/^\.pragma.*$/mg, '')
     .replace(/^\.import "([^"]+)" as (\w+)$/mg, (_, file, alias) => {
-      scope[alias] = load(file.replace(/\.js$/, '')); return ''
+      scope[alias] = load(file.replace(/\.js$/, ''))
+      return ''
     })
   vm.createContext(scope)
   vm.runInContext(code, scope)

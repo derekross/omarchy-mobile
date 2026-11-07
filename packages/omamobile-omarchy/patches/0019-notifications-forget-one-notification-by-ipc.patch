@@ -26,7 +26,7 @@ diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notificatio
 +    if (!Store.KEY.test(key)) return "none"
 +    var exists = !!liveKeys[key] || !!Store.liveEntry(liveEntries, key)
 +        || historyEntries.some(function(entry) { return entry.key === key })
-+    if (!exists) return "none"
++    if (!exists) return "ok"
 +    storeDrop(key)
 +    historyEntries = historyEntries.filter(function(entry) { return entry.key !== key })
 +    saveSoon("history")

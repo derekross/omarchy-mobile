@@ -71,13 +71,14 @@ done
 pass "every patch has a header"
 
 python3 -B test/patches.py || fail "re-patch tool"
+python3 -I test/sleep-lock-family.py || fail "sleep-lock source family"
 
 # The lock's PAM file (lib/lock-pam), and against the real omarchy-apply-lock
 # when the package is at hand, found as test/patches.py finds it.
 pkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
 if [[ -n $pkg ]] && command -v bsdtar >/dev/null; then
   mkdir -p "$t/omarchy-pkg"
-  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock usr/bin/omarchy-system-sleep-lock
+  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" .PKGINFO usr/bin/omarchy-apply-lock usr/bin/omarchy-system-sleep-lock
   # The packaged source alias is absolute /usr/bin. Normalize this one test
   # input inside the fake root; never follow it into the host's installed tree.
   install -Dm755 "$t/omarchy-pkg/usr/bin/omarchy-system-sleep-lock" "$t/omarchy-pkg/usr/share/omarchy/bin/omarchy-system-sleep-lock"

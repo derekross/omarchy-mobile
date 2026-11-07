@@ -466,6 +466,10 @@ def app_icons_largest(root):
     """Patch 0024: the icon index keeps the largest size per name. The
     patched indexIconLine and iconPathSize run in node against paths in
     the scan's order (SVGs first, then PNGs in directory order)."""
+    node = shutil.which("node")
+    if not node:
+        print("ok - real omarchy: the largest icon rule # SKIP no node")
+        return
     lib = read(root, "usr/share/omarchy/shell/services/AppLibrary.qml")
     fns = []
     for name in ("iconPathSize", "indexIconLine"):
@@ -486,7 +490,7 @@ def app_icons_largest(root):
              "/usr/share/icons/hicolor/64x64/apps/foot.png",
              "/usr/share/pixmaps/odd.png",
              "/usr/share/icons/hicolor/24x24/apps/odd.png"]
-    p = subprocess.run(["node", "-e", js, "--"] + paths, capture_output=True, text=True)
+    p = subprocess.run([node, "-e", js, "--"] + paths, capture_output=True, text=True)
     got = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
     ok(got.get("chromium", "").endswith("/256x256/apps/chromium.png")
        and got.get("foot", "").endswith("/scalable/apps/foot.svg")
