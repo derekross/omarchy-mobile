@@ -8,8 +8,20 @@
 # OMAMOBILE_SSH_HOST overrides root@172.16.42.1 (user@host).
 # OMAMOBILE_SSH_KEY selects an identity file (IdentitiesOnly=yes).
 # OMAMOBILE_SSH_KNOWN_HOSTS selects a file with strict host-key checking.
+# OMAMOBILE_SSH_CONFIG explicitly selects an SSH config file (-F); /dev/null
+# skips normal config files only when the caller requests it. Default unchanged.
 # OMAMOBILE_SSH_HOST_KEY_ALIAS selects the name checked in that file, so
 # native and recovery systems can keep distinct pins at the same USB address.
+# OMAMOBILE_SSH_INTERFACE selects a direct interface for this socket only.
+# With explicit CONFIG=/dev/null, the default USB address automatically uses
+# its unique main-table link route, avoiding VPN policy-route interception.
+# Set INTERFACE=off to opt out. Other SSH configs retain their own transports.
+# The direct relay connects to a literal IP on port 22. Unprivileged
+# SO_BINDTODEVICE requires Linux >=5.7 (and local security policy permission).
+# Interface binding deliberately requires CONFIG=/dev/null: this direct relay
+# does not interpret HostName, Port, ProxyJump or config-selected ProxyCommand.
+# Keep those transports intact unless the caller explicitly opts out of config;
+# identity/trust options remain available through the explicit variables above.
 # Explicit connection options require Python 3.
 #
 # OMAMOBILE_SSH_SHARE=1 makes every call share one connection (OpenSSH
@@ -27,17 +39,36 @@ target=${OMAMOBILE_SSH_HOST:-root@172.16.42.1}
 key=${OMAMOBILE_SSH_KEY:-}
 known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
 alias=${OMAMOBILE_SSH_HOST_KEY_ALIAS:-}
+config=${OMAMOBILE_SSH_CONFIG:-}
+interface=${OMAMOBILE_SSH_INTERFACE:-auto}
+proxy=""
+proxy_helper=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/phone-ssh-proxy
+case $interface in
+  off) interface="" ;;
+  auto)
+    interface=""
+    if [[ $target == root@172.16.42.1 && $config == /dev/null && -f $proxy_helper ]]; then
+      interface=$(python3 "$proxy_helper" --discover)
+    fi ;;
+  *)
+    [[ $config == /dev/null ]] || {
+      echo 'phone-ssh: interface binding requires explicit OMAMOBILE_SSH_CONFIG=/dev/null' >&2; exit 1;
+    } ;;
+esac
+if [[ -n $interface ]]; then
+  proxy=$(python3 "$proxy_helper" --command "$interface" "${target##*@}")
+fi
 [[ -z $alias || ( $alias != -* && $alias =~ ^[a-zA-Z0-9._:-]+$ ) ]] || {
   echo 'phone-ssh: invalid OMAMOBILE_SSH_HOST_KEY_ALIAS' >&2; exit 1;
 }
 custom=0
 path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-%C"
-if [[ $target != root@172.16.42.1 || -n $key$known$alias ]]; then
+if [[ $target != root@172.16.42.1 || -n $key$known$alias$config$interface ]]; then
   custom=1
   # OpenSSH's %C omits identity/trust policy. Normalize explicit paths and
   # include contents so cwd changes and key rotations never reuse a master.
   # Python 3 is required only for these explicit connection options.
-  normalized=$(python3 - "$target" "$key" "$known" "$alias" <<'PYCONTEXT'
+  normalized=$(python3 - "$target" "$key" "$known" "$alias" "$config" "$interface" "$proxy_helper" <<'PYCONTEXT'
 import hashlib, sys
 from pathlib import Path
 h = hashlib.sha256(); h.update(sys.argv[1].encode() + b'\0')
@@ -58,18 +89,42 @@ for label, value in zip(('identity', 'known-hosts'), sys.argv[2:4]):
         except OSError:
             sys.exit('phone-ssh: cannot read explicit ' + label + ' file')
     h.update(b'\0')
-print(*paths, h.hexdigest()[:12], sep='\n')
+config = sys.argv[5]
+config_path = ''
+if config:
+    if any(token in config for token in ('\n', '\r', '%', '${')):
+        sys.exit('phone-ssh: config path must be literal, without newlines or OpenSSH expansion tokens')
+    path = Path(config).expanduser().resolve()
+    config_path = str(path)
+    try:
+        if path != Path('/dev/null') and not path.is_file():
+            raise OSError('not a regular config file')
+        contents = path.read_bytes()
+    except OSError:
+        sys.exit('phone-ssh: cannot read explicit SSH config file')
+    h.update(b'config\0' + config_path.encode() + b'\0' + contents + b'\0')
+if sys.argv[6]:
+    helper = Path(sys.argv[7]).resolve()
+    h.update(b'transport\0' + sys.argv[6].encode() + b'\0' + str(helper).encode()
+             + b'\0' + helper.read_bytes())
+# Includes referenced by a config are interpreted by OpenSSH; callers changing
+# included policy should use --fresh. We fingerprint this explicit file only.
+print(*paths, config_path, h.hexdigest()[:12], sep='\n')
 PYCONTEXT
   )
   key=${normalized%%$'\n'*}
   normalized=${normalized#*$'\n'}
   known=${normalized%%$'\n'*}
+  normalized=${normalized#*$'\n'}
+  config=${normalized%%$'\n'*}
   context=${normalized#*$'\n'}
   # Keep %C for the effective HostName/Port resolved from ssh_config. The
   # short policy hash leaves room for OpenSSH's temporary 17-byte suffix.
   path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
 fi
 opts=(-o LogLevel=ERROR -o ConnectTimeout=6)
+[[ -z $proxy ]] || opts+=(-o "ProxyCommand=$proxy")
+[[ -z $config ]] || opts+=(-F "$config")
 if [[ -n $known ]]; then
   # This -o value is parsed again as ssh_config: protect spaces and quotes.
   quoted=${known//\\/\\\\}
