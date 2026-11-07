@@ -1,0 +1,41 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# 2026-11-03 S1-U: N RTC-woken systemd sleeps of S s with UFS at spm_lvl 3
+# (device sleep, link hibern8) and the CPUs' idle states as they ship. Everything
+# else as the overnight series of 11-02 (Wi-Fi kept, NFC hook, console kept,
+# auto-sleep off, cable in, modem not started this boot; the AoC,
+# Trusty and Wi-Fi brought up by omamobile-tegu-audio-up as in the runs that hung). Records each
+# sleep's RTC length, dmesg length, wake IRQ, UFS and ACPM errors.
+N=${N:-300}; S=${S:-60}; L=${L:-/var/log/omamobile/sleep-spm3-20261103.log}; U=/sys/devices/platform/soc/13200000.ufs
+mkdir -p /var/log/omamobile; : > $L
+uid=$(id -u mobile)
+hy() { runuser -u mobile -- env XDG_RUNTIME_DIR=/run/user/$uid HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/$uid/hypr | head -1) hyprctl dispatch "hl.dsp.dpms({ action = \"$1\" })" >/dev/null 2>&1; }
+echo N > /sys/module/printk/parameters/console_suspend
+pgrep -f omamobile-modem-start >/dev/null && { echo "the modem is up: stop" >> $L; exit 1; }
+[ -e /usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ] && { echo "the withdrawn hook is installed" >> $L; exit 1; }
+restore() {
+  echo 5 > $U/spm_lvl
+  systemctl enable omamobile-tegu-modem-boot.service >/dev/null 2>&1
+  echo "restored: spm_lvl $(cat $U/spm_lvl), modem boot unit $(systemctl is-enabled omamobile-tegu-modem-boot.service)" >> $L
+}
+trap restore EXIT
+for f in /sys/devices/system/cpu/cpu*/cpuidle/state1/disable; do echo 0 > $f; done
+echo 3 > $U/spm_lvl
+echo "spm_lvl $(cat $U/spm_lvl) ($(cat $U/spm_target_dev_state)/$(cat $U/spm_target_link_state)), state1 disable $(cat /sys/devices/system/cpu/cpu*/cpuidle/state1/disable | tr -d '\n'), $(uname -r)" >> $L
+[ "$(cat $U/spm_lvl)" = 3 ] || { echo "spm_lvl didn't take: stop" >> $L; exit 1; }
+for c in $(seq 1 $N); do
+  dmesg -C
+  hy disable
+  r0=$(cat /sys/class/rtc/rtc0/since_epoch)
+  rtcwake -m no -s $S >/dev/null
+  systemctl suspend
+  sleep 20
+  hy enable
+  en=$(dmesg | grep -m1 "PM: suspend entry" | sed -E "s/^\[ *([0-9.]+)\].*/\1/"); ex=$(dmesg | grep -m1 "PM: suspend exit" | sed -E "s/^\[ *([0-9.]+)\].*/\1/")
+  echo "cycle $c $(date +%T): rtc $(( $(cat /sys/class/rtc/rtc0/since_epoch) - r0 - 20 )) s, dmesg $(awk -v a=$en -v b=$ex 'BEGIN{printf "%.1f", b-a}') s, wake irq $(cat /sys/power/pm_wakeup_irq 2>/dev/null), ufs $(dmesg | grep -cE "link startup failed|Host init failed|I/O error"), acpm $(dmesg | grep -c "Timeout! ch"), oops $(dmesg | grep -c "Internal error"), spm $(cat $U/spm_lvl), ok $(cat /sys/power/suspend_stats/success) fail $(cat /sys/power/suspend_stats/fail)" >> $L
+  sync
+  [ "$(dmesg | grep -cE "link startup failed|Host init failed|I/O error")" = 0 ] || { echo "UFS errors: stop" >> $L; break; }
+  [ "$(dmesg | grep -c "Internal error")" = 0 ] || { echo "kernel oops: stop" >> $L; dmesg | grep -A30 "Internal error" >> $L; break; }
+  sleep 5
+done
+echo done >> $L

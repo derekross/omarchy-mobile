@@ -1,14 +1,17 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a sleep: why s2idle drains so much
 
-Status (2026-11-02): s2idle usually works (RTC and power-key wakes; ten of
+Status (2026-11-03): s2idle usually works (RTC and power-key wakes; ten of
 ten 30-second cycles on 10-31 with the console kept through the freeze;
 126 of 127 120-second sleeps overnight on 11-01 to 11-02), but not always:
-six sleeps have never woken: two direct freezes, one 30-minute systemd
+seven sleeps have never woken: two direct freezes, one 30-minute systemd
 sleep with `tegu-mif-sleep` loaded, the sixth 30-second cycle of a boot
 on 10-30 (it left the USB bus and needed a forced restart), the 21st of
-11-01's thirty cycles, and the overnight series' 127th; one more woke with UFS dead (`link startup failed` x5,
-then I/O errors and `emergency_ro`, 10-30 afternoon). The drain in sleep is
+11-01's thirty cycles, the overnight series' 127th, and the tenth of
+11-02 evening's series with Wi-Fi unloaded around each sleep. Two more
+woke with UFS dead (`link startup failed` x5, then I/O errors and
+`emergency_ro`: 10-30 afternoon, and S1-W's 81st on 11-03), and one boot
+reset after a brcmfmac oops (S1-W, 11-03). The drain in sleep is
 high. Sleep tests are attended. The shell's auto-sleep (the `omamobile-sleep`
 toggle, which the package ships off) has been on on the palmtop since
 2026-11-01 by the owner's choice, and every sleep it took that day woke
@@ -549,6 +552,25 @@ with the cable in.
   11-01 and about one in 40 before; the rate varies too much to compare
   conditions with short runs. Logs: `logs/tegu-sleep-overnight-20261102/`
   (the series script, `after-hang.txt`).
+
+  **Wi-Fi unloaded around each sleep, 2026-11-02 evening (same release).**
+  The one change from the night before: the Wi-Fi keep flag moved aside
+  for the run, so the sleep hook unloaded brcmfmac before each sleep and
+  loaded it after, instead of keeping it loaded through a re-probe at every
+  wake. Otherwise the same series: 90 s RTC-woken `systemctl suspend`
+  sleeps, screen off through Hyprland's DPMS, the console kept through the
+  freeze, auto-sleep off, cable in, modem never loaded, NFC polling stopped
+  by its hook, core power-down on (every `state1/disable` read 0 after the
+  wake). Nine woke: 94-95 s by the RTC each, wake IRQ 56, no UFS or ACPM
+  lines, `suspend_stats` success 9 and fail 0. The tenth didn't (entered
+  20:30:33 by the palmtop's clock): its journal ends at
+  `PM: suspend entry (s2idle)`, and the palmtop stayed off the bus until
+  the owner's Power + Volume Up the next morning. Again nothing was kept:
+  the only pstore record since is the console of a later clean reboot
+  (with ABL's own log after it), which confirms that a warm reboot keeps
+  ramoops and the buttons' reset doesn't. So the hang is not brcmfmac's
+  re-probe either; with 11-02's one in 127, that is one in 10 here.
+  Logs: `logs/tegu-sleep-overnight-20261103/`.
 - **What the five clean cycles rule out, and what they don't.** Five in a
   row with the storage counters at zero says the UFS resume path is not
   broken per se; the afternoon failure and this hang are both the sixth or
@@ -634,6 +656,225 @@ is the point of the measurement. FINGERPRINT-PLAN's Risks table names this excep
 
 Rollback: push the running DTB's image back (the before/after check of
 step 2 in reverse).
+
+**S1-W. WFI only, a long series (risk low; attended, cable in).** Core
+power-down saves nothing measurable in sleep (302 mA asleep against 311 mA
+awake with the screen off, S1 result), so if the hang lives in the PSCI
+core power-down path, sleeping on WFI alone would cost nothing and avoid
+it. The 11-01 correction above showed a WFI-only sleep is shallower (the
+tick isn't frozen), not that it hangs or doesn't; twenty such sleeps woke
+that day, too few against a rate between one in 10 and one in 127. So:
+300 sleeps of 60 s with every CPU's `cpuidle/state1/disable` at 1 for the
+whole run, everything else as the overnight series. At one hang in 40,
+300 clean sleeps would happen by chance about one time in 2000; at the
+overnight rate of one in 127, about one time in 11. The script is
+`device/tegu/bringup/sleep-series-wfi`.
+
+```sh
+# Before: the modem must not run this boot (its inhibitor blocks suspend, and suspend with the modem up is unqualified).
+# omamobile-tegu-modem-boot is #372's unit (not on main yet; on the palmtop from that branch): with it off, start the
+# AoC, Trusty and Wi-Fi by hand after the boot (systemd-run /usr/local/bin/omamobile-tegu-audio-up), as the hung runs had them.
+tools/phone-ssh 'systemctl disable omamobile-tegu-modem-boot.service && systemctl reboot'
+# After the boot: auto-sleep off, the modem not started, the hook from #255 absent.
+tools/phone-ssh 'pgrep -f omamobile-modem-start; ls /usr/lib/systemd/system-sleep/'
+#   Expect: no modem process, no omamobile-tegu-cpuidle
+tools/phone-ssh 'cat > /root/sleep-wfi.sh' < device/tegu/bringup/sleep-series-wfi
+tools/phone-ssh 'systemd-run --unit=x-sleep-wfi bash /root/sleep-wfi.sh'
+# Each check (read-only):
+tools/phone-ssh 'tail -3 /var/log/omamobile/sleep-wfi-20261103.log'
+#   Expect: one line per cycle, rtc about 60 s, wake irq 56, ufs 0, acpm 0, oops 0, state1 all 1, fail 0
+#   Stop: UFS errors or an oops (the script stops itself; after UFS errors, echo b > /proc/sysrq-trigger), or no SSH 3 minutes past a cycle's alarm
+#   (a hang: Power + Volume Up by the owner, then the journal of that boot)
+# Rollback: the script's EXIT puts state1 back and re-enables the modem boot unit; after a hang, a reboot puts state1 back
+# (sysfs), and the unit is enabled again by hand: systemctl enable omamobile-tegu-modem-boot.service
+```
+
+Pass: 300 of 300 woke. Then the drain on WFI alone against core power-down
+(S1's buck-off coulomb counts, 240 s sleeps each way) decides whether the
+device package should sleep on WFI. Fail: a hang on WFI alone retires core
+power-down as the cause.
+
+**S1-W, first runs (2026-11-03, same release).** The first start had
+none of the AoC, Trusty or Wi-Fi up: on the palmtop the modem boot unit
+(#372) now runs `omamobile-tegu-audio-up`, and with that unit off for the
+series nothing else did. Its 22 sleeps all woke (wake IRQ 56, no UFS or
+ACPM lines), but it isn't the hung runs' setup, so the series restarted
+after `omamobile-tegu-audio-up` by hand. That boot reset itself on its
+third sleep, and for the first time pstore kept the console, because the
+watchdog, not the buttons, reset it: brcmfmac's escan timeout worker had
+oopsed a minute earlier on a NULL channel (a BSS on 5 GHz channel 177,
+which the band table lacks; kernel #191), inside cfg80211's RCU read-side
+section. The next suspend couldn't freeze khugepaged (stuck in
+`lru_add_drain_all()`), ACPM's DVFS and thermal channels timed out
+(`Timeout! ch:0`, `ch:9`, then `RX front can not keep up with TX front`),
+the suspend was retried, and the watchdog reset the SoC. None of the
+silent hangs had an oops in its journal, so that is a second failure, not
+the hang. The series now stops on any oops, and runs again from
+2026-11-03 10:49.
+
+**S1-W result (2026-11-03, same release): 80 woke, the 81st woke with UFS
+dead.** The run from 10:49 (the AoC, Trusty and Wi-Fi up, every CPU on WFI
+alone) had 80 clean sleeps: wake IRQ 56 each, no UFS, ACPM or oops lines,
+Wi-Fi re-probed after every wake. The 81st (12:19) woke on its alarm, but
+UFS didn't come back: `resume-trace: wl resume begins (pm_op 1, link 0,
+dev 3)`, then `link startup failed 1` and `Host init failed 1` five times
+within 20 ms, then I/O errors and ext4 `emergency_ro`, the 10-30 afternoon
+shape. A good resume shows a first link attempt that fails in
+`zumapro_ufs_pre_link()` on `dme-set: attr-id 0x4021` (T_PeerDeviceID) and
+a retry that works; the bad one has no such line, and the link startup
+command itself failed on every try. brcmfmac's re-probe over PCIe ran at
+the same moment as on every other wake. `echo b > /proc/sysrq-trigger`
+brought the palmtop back, and the next boot mounted the root read-write.
+So WFI alone doesn't prevent the dead-storage wake: that failure is in the
+UFS resume from `spm_lvl` 5 (device powered down, link off), which runs a
+full link startup at every wake. No silent hang in 102 WFI-only sleeps
+today (22 + 80), which against one in 10 to one in 127 says little.
+
+**S1-U. UFS at `spm_lvl` 3 for system sleep (risk medium; attended, cable
+in).** At runtime this palmtop's UFS idles at `rpm_lvl` 3 (device sleep,
+link in hibern8) many times an hour without an error (kernel #99), and a
+resume from it is a hibern8 exit, not a link startup. At `spm_lvl` 3 system
+sleep uses the same states. The 7 Pro needed 5 because its first hibern8
+exit after a freeze failed once at 3 (S1-S3 of its SUSPEND-PLAN), so this
+is the 9a's own question. The same series as S1-W with `spm_lvl` 3 and the
+CPUs' idle states left as they ship (core power-down on), so it is the
+setup the package would ship; the script puts 5 back on EXIT. Medium, not
+low: on the 7 Pro, `spm_lvl` 3 needed a host reset on its first resume. The
+script is `device/tegu/bringup/sleep-series-spm3`.
+
+```sh
+# Before: as S1-W (the modem boot unit off for the boot, the AoC, Trusty and Wi-Fi by hand). Read the levels:
+tools/phone-ssh 'u=/sys/devices/platform/soc/13200000.ufs; cat $u/spm_lvl $u/rpm_lvl'
+#   Expect: 5 and 3
+tools/phone-ssh 'cat > /root/sleep-spm3.sh' < device/tegu/bringup/sleep-series-spm3
+tools/phone-ssh 'systemd-run --unit=x-sleep-spm3 bash /root/sleep-spm3.sh'
+tools/phone-ssh 'head -1 /var/log/omamobile/sleep-spm3-20261103.log'
+#   Expect: spm_lvl 3 (SLEEP/HIBERN8), state1 disable all 0
+# Each check (read-only):
+tools/phone-ssh 'tail -3 /var/log/omamobile/sleep-spm3-20261103.log; dmesg | grep -c ufshcd_err_handler'
+#   Expect: one line per cycle, rtc about 60 s, wake irq 56, ufs 0, acpm 0, oops 0, spm 3, fail 0; the error-handler
+#   count recorded (a recovered hibern8-exit error is a finding, not a stop)
+#   Stop: UFS errors or an oops (the script stops itself; after UFS errors, echo b > /proc/sysrq-trigger), or no SSH
+#   3 minutes past a cycle's alarm (a hang: Power + Volume Up by the owner, then the journal of that boot)
+# Rollback: the script's EXIT writes spm_lvl 5 and re-enables the modem boot unit. spm_lvl doesn't persist, so after a hang
+# or a sysrq reboot the boot comes up at 5; enable the unit by hand as in S1-W.
+```
+
+Pass: 300 of 300 woke at `spm_lvl` 3 with no UFS errors. Then `spm_lvl` 3 for
+system sleep goes into the device package (a udev rule or the sleep hook)
+for a longer run in daily use. Fail: a dead-storage wake at 3 too moves the
+question into the hibern8 path itself.
+
+**S1-U result (2026-11-03, same release): 34 woke, the 35th woke with UFS
+dead.** At `spm_lvl` 3 every one of the 35 wakes logged `pwr ctrl cmd 0x18
+… failed, host upmcrs:0x5`: the hibern8 exit never worked, and the error
+handler's host reset (a device reset and a full link startup) recovered 34
+of them. `exynos_ufs_suspend()` powers the UFS PHY off whenever the link
+isn't active, hibern8 included, and `gs101_ufs_suspend()` holds the
+device's reset line low through the sleep, so a hibern8 exit has nothing
+to come back to. The 35th wake's link startup in that reset failed, as at
+5. So `spm_lvl` 3 isn't a fix on this driver: every wake ends in the same
+full link startup.
+
+**A good wake's first link attempt fails too.** In S1-W's boot all 80 good
+wakes logged `dme-set: attr-id 0x4021 val 0x1 failed 0 retries`
+(T_PeerDeviceID, written in `zumapro_ufs_pre_link()`), and the core's
+retry then worked. The dead wakes are the ones where every retry failed.
+T_PeerDeviceID is the host's own UniPro attribute, so the first write
+failing points at the host side not being ready, not the device.
+
+**S1-R, a wait after the device reset (2026-11-03, attended by the
+operator, not the owner; risk low).** The test: the daily kernel with
+`usleep_range(10000, 11000)` after `exynos_ufs_dev_hw_reset()` releases
+RST_n (Image only, same release), ten 60 s sleeps at `spm_lvl` 5. Result:
+`dme-set 0x4021` failed on all ten wakes, as without the wait. So the
+device's readiness after reset isn't it; the next candidates are on the
+host: the zumapro host clocks after the CMU gates (the zumapro
+ungate-after-enable change already moved there once), and UniPro's own
+reset state. The daily Image went back the same afternoon.
+
+**A gap against stock: IO coherency after resume.** Google's driver
+re-applies the UFS IO-coherency bits in the HSI2 sysreg
+(`exynos_ufs_config_externals()`, at every resume); ours sets them once, in
+`exynos_ufs_shareability()` at probe. With `dma-coherent` they must read
+set (0x13020710, bits 0 and 1): 0x13 after a boot with no sleep, and 0x13
+after one wake. Reading the register from userspace isn't safe after a wake
+(below), so the test is a kernel that sets them again at resume, as stock
+does (`ufs-exynos-iocc-resume` on the owner's fork), and a long series on it.
+
+**Two resets at screen-on after a wake, caused by the test itself
+(2026-11-03 15:28 and 15:34).** For the coherency question the series read
+0x13020710 through `/dev/mem` after every wake. Twice, after the second and
+then the first wake, the palmtop woke cleanly, the script's DPMS enable
+switched the display to 120 Hz, the console ended there with no oops or
+panic, and the SoC watchdog reset the palmtop a minute later (ramoops kept
+it). The read comes right after that DPMS enable, and the 114 earlier wakes
+of the day, without it, never hung there. The HSI2 sysreg's clock can be
+gated after a wake, and AGENTS.md forbids reading a block that isn't known
+powered and clocked: these resets are the read's, not sleep failures. The
+read is out of the scripts. Logs: `logs/tegu-ufs-iocc-20261103/`.
+
+**The coherency kernel, a long series (2026-11-03 15:38 to 18:47, owner
+present for the end).** The daily kernel with `exynos_ufs_shareability()`
+also at resume (Image only, same release; the commit is
+`ufs-exynos-iocc-resume` on the owner's fork), the same series as S1-R at
+`spm_lvl` 5 with the CPUs' idle states as shipped, the AoC, Trusty and
+Wi-Fi up, no register reads: 135 sleeps woke, every one with UFS fine (no
+link-startup, host-init or I/O lines; the first-attempt `dme-set 0x4021`
+on each wake as always), against dead storage at the 81st (S1-W) and 35th
+(S1-U) earlier the same day. The 136th never woke: the journal ends at
+`Performing sleep operation 'suspend'`, the power key didn't light the
+screen, the owner's Power + Volume Up restarted it, and pstore had nothing
+new. So one run of 135 without a dead-storage wake, which is suggestive
+for the coherency fix and no more (at one in 80, 135 clean wakes happen by
+chance about one time in five), and a silent no-wake that the fix doesn't
+touch and that still needs a record that survives the buttons' reset.
+
+**A record that survives the buttons (next).** The silent no-wake leaves
+nothing: the watchdog is stopped in s2idle and a Power + Volume Up reset
+loses ramoops. The S2MPG14 RTC is battery-backed and its alarm 1 is unused
+(`rtc-s5m` arms alarm 0 only), so a bring-up module (owner's logs,
+`tegu-sleep-crumbs`, not for merge) writes a stage code to A1SEC and a
+sleep count to A1MIN at each suspend and resume phase, the enable bits
+always clear, each write committed to the RTC block with AUDR, and prints
+the previous boot's last stage at load. Its first run is attended: check
+alarm 0 and the time still work, that the crumb survives a reboot, and
+that it survives one Power + Volume Up reset; only then a long series
+with it.
+
+**The breadcrumbs' first night (2026-11-03 20:06-20:37).** On the
+coherency kernel the module loaded and read alarm 1 as zero; a 60 s sleep
+with it loaded woke, but after a warm reboot the next load still read
+0x00, so as built it doesn't leave anything readable across even a warm
+reboot (the commit to the RTC block, the read-back or ABL; not known which).
+The series that followed, with the module loaded, had nine clean wakes,
+and the tenth never woke (journal ends at `Performing sleep operation
+'suspend'`; the owner's Power + Volume Up; pstore had nothing new; the
+module again read 0x00). The module's ACPM writes in the noirq phases may
+also change what they're meant to observe, so the series went on without
+it, and the module gets a write-and-read-back test within one boot first.
+
+**The night of 11-03 to 11-04, counted.** On the coherency kernel without
+the breadcrumbs, the second wake found UFS dead again (link startup failed
+at once, five times; no first-attempt `dme-set` failure, as on every dead
+wake), so setting the coherency bits again at resume isn't the fix and the
+135 before it were luck. A debug kernel (the daily plus a dump of the
+standard and vendor HCI and two UniPro ranges whenever a link startup
+fails, Image only, same release) then ran under a loop that would capture
+each dead-storage wake and recover it with sysrq; its first series had 18
+clean wakes and the 19th never woke. The day's tally of silent no-wakes,
+all on `spm_lvl` 5 with core power-down on: after 135, 9 and 18 clean
+wakes; of dead-storage wakes: after 80, 34 (`spm_lvl` 3) and 1.
+
+**Two failures, two settings (as of 11-04).** The silent no-wakes and
+the dead-storage wakes look separate. Every silent no-wake on 11-03 and
+11-04 came with core power-down on (after 135, 9 and 18 clean wakes, about
+one in 55), and 102 WFI-only wakes the same day had none (at one in 55,
+about one chance in ten). Dead storage came on both (WFI: after 80; core
+power-down: after 34 at `spm_lvl` 3 and after 1). Next, one setup for both
+questions: WFI only, on the debug kernel, under the capture loop. If WFI
+removes the silent no-wake, nothing stops the loop, and every dead-storage
+wake leaves a register dump and is recovered with sysrq.
 
 ## Not known yet
 
