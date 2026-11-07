@@ -64,6 +64,8 @@
  * arguments to __libc_init() as bionic's crtbegin does. fingerprint/Makefile
  * builds it against the extracted chroot's libc and libbinder_ndk.
  */
+
+#define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
