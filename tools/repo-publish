@@ -98,7 +98,9 @@ if ((from_main)); then
   git -C "$wt" clean -qfdx -e /keys -e /out
   ln -sfn "$ROOT/keys" "$wt/keys"
   ln -sfn "$ROOT/out" "$wt/out"
-  git ls-files -z --others --ignored --exclude-standard -- packages | grep -zE '/(prebuilt|boot-files)/' |
+  # git picks them by pathspec: a checkout with none gets an empty list,
+  # which copies nothing (a grep over an empty list fails under pipefail).
+  git ls-files -z --others --ignored --exclude-standard -- ':(glob)packages/**/prebuilt/**' ':(glob)packages/**/boot-files/**' |
     rsync -a --from0 --files-from=- ./ "$wt/"
   say "Publishing from origin/main at $(git -C "$wt" rev-parse --short HEAD)"
   exec "$wt/tools/repo-publish" "${args[@]}"
