@@ -266,7 +266,7 @@ grep -cF '"omarchy-shell", "shell", "summon", "omarchy.clipboard"' "$qs" >/dev/n
 # list scrolls, and its tap is a DragThreshold TapHandler (no MouseArea,
 # which would take the press from the swipe). test/shade-touch drives it.
 row=plugins/omamobile.quicksettings/NotificationRow.qml
-grep -cF 'call notifications forget \"$name\"' "$qs" >/dev/null || fail "a swiped row is forgotten through the service"
+grep -cF '"call", "notifications", "forget", pendingForget.file]' "$qs" >/dev/null || fail "a swiped row is forgotten through the service"
 grep -cF 'delegate: NotificationRow {' "$qs" >/dev/null && grep -cF 'swipeEnabled: !shadeList.moving' "$qs" >/dev/null \
   || fail "the shade's rows are NotificationRow, not swiping while the list scrolls"
 grep -cE 'rm +(-f +)?.*notifications' "$qs" "$row" >/dev/null && fail "the shade deletes no notification files itself"
@@ -327,6 +327,7 @@ if command -v node >/dev/null; then
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
+  node test/notification-dismiss.js || fail "notification deletion acknowledgment"
   node test/media-model.js >/dev/null || { node test/media-model.js; fail "the shade's media card model"; }
   node test/home-model.js || fail "home screen model"
   node test/back-model.js || fail "back gesture model"
