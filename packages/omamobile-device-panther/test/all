@@ -85,6 +85,7 @@ for f in usr/bin/reboot-to \
          usr/lib/modprobe.d/omamobile-camera.conf \
          usr/lib/systemd/system/omamobile-camera.service \
          usr/lib/systemd/system/omamobile-camera.timer \
+         usr/lib/modprobe.d/omamobile-fingerprint.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-panther/version \
@@ -116,6 +117,13 @@ grep -q '^MemorySleepMode=s2idle$' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-om
   || fail "suspend must be s2idle: gs201 never wakes from deep"
 grep -qx 'options gs_dsim_cmd allow_tx=1' "$tmp/root/usr/lib/modprobe.d/omamobile-display.conf" \
   || fail "the DSI command host may send to the panel (brightness)"
+f=$tmp/root/usr/lib/modprobe.d/omamobile-fingerprint.conf
+for m in sg goodix_fp; do
+  grep -qx "blacklist $m" "$f" || fail "$m is loaded by omamobile-fp only"
+done
+# No package here loads Trusty by hand (the 7 Pro's sound start does), so
+# blacklisting it would leave omamobile-fp without /dev/trusty-ipc-dev0
+grep -q 'trusty' <(grep -v '^#' "$f") && fail "Trusty must load from the DT, not be blacklisted"
 [[ -x $tmp/root/usr/bin/omamobile-usb-rescue ]] || fail "omamobile-usb-rescue is executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
   || fail "omamobile-usb-rescue starts at boot"
