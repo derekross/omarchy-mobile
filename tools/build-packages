@@ -32,6 +32,13 @@
 #                    carries the local key. Never the maintainer's keys/ or
 #                    out/repo
 #
+# Upstream packages pinned in rootfs/packages.pinned (Omarchy 4.0.6 while our
+# patches don't apply to 4.5) are added by every maintainer's run: fetched
+# once, checked against the SHA-256 listed there, and signed with the release
+# key like our own; out/repo keeps them, and a line removed there takes its
+# package out at the next run. A --local repository gets them from
+# tools/fetch-published instead.
+#
 # Mesa, Hyprland and libcamera are large C/C++ builds: under qemu-user on a
 # laptop they take hours (Mesa the longest). They're built only when named or
 # with --all, and only once per version, since out/repo keeps them.
@@ -205,6 +212,40 @@ for dir in "${imports[@]}"; do
   done
   add_to_repo "${files[@]}"
 done
+
+# Pinned upstream packages (rootfs/packages.pinned): what that file lists is
+# in out/repo with its listed checksum, and what it listed before and no
+# longer does (out/repo/.pinned) is taken out
+pinlist=rootfs/packages.pinned
+pinstate=$(dirname "$repo")/.pinned
+sync_pins() {
+  local sum url base extra want=() f tmp
+  while read -r sum url extra; do
+    [[ $sum =~ ^[0-9a-f]{64}$ && $url =~ ^(https|file)://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ && -z $extra ]] ||
+      alarm_die "$pinlist: not \"<sha256> <url of a package file>\": $sum $url $extra"
+    base=${url##*/}
+    want+=("$base")
+    if [[ -f $repo/$base && $(sha256sum < "$repo/$base" | cut -d' ' -f1) == "$sum" ]]; then continue; fi
+    alarm_say "Pinned: $base"
+    tmp=$(mktemp -d)
+    curl -fsSL --retry 3 -o "$tmp/$base" "$url" || { rm -rf "$tmp"; alarm_die "$pinlist: could not fetch $url"; }
+    [[ $(sha256sum < "$tmp/$base" | cut -d' ' -f1) == "$sum" ]] ||
+      { rm -rf "$tmp"; alarm_die "$pinlist: $url does not match its SHA-256; nothing added"; }
+    [[ $(pkginfo "$tmp/$base" | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] ||
+      { rm -rf "$tmp"; alarm_die "$pinlist: $base is not an aarch64 package"; }
+    add_to_repo "$tmp/$base"
+    rm -rf "$tmp"
+  done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$pinlist" 2>/dev/null || true)
+  if [[ -f $pinstate ]]; then
+    while read -r f; do
+      [[ -n $f && " ${want[*]} " != *" $f "* && -e $repo/$f ]] || continue
+      rm -f "$repo/$f" "$repo/$f.sig"
+      echo "    unpinned: $f"
+    done < "$pinstate"
+  fi
+  printf '%s\n' ${want[@]+"${want[@]}"} | sed '/^$/d' > "$pinstate"
+}
+if [[ -z $local_name ]] && ((resign == 0)); then sync_pins; fi
 
 build=()
 for d in "${dirs[@]}"; do
