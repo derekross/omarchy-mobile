@@ -11,6 +11,8 @@
 #   the TDP copy missing    -> refused (and never quietly recreated)
 #   no /ss/0 in persist     -> refused
 #   an empty /ss/0          -> an empty copy, refused once either side changes
+#   /ss/0 unreadable        -> refused: a dump that yields nothing from a
+#                              non-empty or non-regular /ss/0 is not "empty"
 #   the TDP copy changed    -> refused
 #   persist:/ss/0 changed   -> refused
 #   a writable partition    -> refused
@@ -51,11 +53,15 @@ echo "debugfs \$*" >> "$p/debugfs.log"
 read -r cmd flag src dst <<<"\$2"
 [[ \$3 == "$p/dev/sda5" ]] || exit 1
 if [[ \$cmd == stat ]]; then
+  # what stat says, when a case sets it
+  [[ -f "$p/stat-says" ]] && { cat "$p/stat-says"; exit 0; }
   [[ -f "$p/persistfs\$flag" ]] && echo "Inode: 15   Type: regular    Mode:  0600" &&
     echo "User:  1000   Group:  1000   Project:     0   Size: \$(stat -c %s "$p/persistfs\$flag")"
   exit 0
 fi
 [[ \$cmd == dump && \$flag == -p ]] || exit 1
+# a read error: the dump writes nothing (debugfs still exits 0)
+[[ -e "$p/dump-fails" ]] && exit 0
 [[ -f "$p/persistfs\$src" ]] && cp "$p/persistfs\$src" "\$dst"
 exit 0
 EOF
@@ -130,6 +136,20 @@ grep -c 'persist:/ss/0 changed' "$t/out" >/dev/null || { cat "$t/out"; fail "say
 newboot; : > "$t/p/persistfs/ss/0"; echo x > "$S/persist-ss/0"
 pf && fail "an empty TDP copy that Linux wrote to is refused"
 pass "an empty persist:/ss/0: an empty TDP copy, recorded, refused once either side changes"
+
+# /ss/0 that can't be read is not an empty /ss/0: the dump yields nothing
+# while stat says a regular file of 4096 bytes, or something that isn't a
+# regular file. Refused, with no copy and nothing recorded, so a failed read
+# never hands Trusty an empty TDP while persist holds a real one.
+phone; touch "$t/p/dump-fails"
+pf && fail "a non-empty /ss/0 that dumps nothing is refused"
+grep -c "can't be read" "$t/out" >/dev/null || { cat "$t/out"; fail "says /ss/0 can't be read"; }
+[[ ! -e $S/persist-ss/0 && ! -e $S/provenance && ! -e $marker ]] || fail "no TDP copy and nothing recorded after a failed read"
+phone; touch "$t/p/dump-fails"; : > "$t/p/persistfs/ss/0"
+printf 'Inode: 15   Type: directory    Mode:  0700\nUser:  1000   Group:  1000   Project:     0   Size: 0\n' > "$t/p/stat-says"
+pf && fail "a /ss/0 that isn't a regular file is refused"
+[[ ! -e $S/persist-ss/0 && ! -e $S/provenance && ! -e $marker ]] || fail "no TDP copy and nothing recorded for a non-regular /ss/0"
+pass "an unreadable persist:/ss/0 (4096 bytes dumping nothing, or not a regular file): refused, nothing copied or recorded"
 
 # The TDP copy changed after the record (Linux wrote TDP)
 phone; pf || fail "setup"

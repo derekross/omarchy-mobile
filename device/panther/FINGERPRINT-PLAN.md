@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Fingerprint plan (panther / gs201): what the Pixel 7 shares with the 7 Pro
 
-Status (2026-11-03): **offline work only, nothing run on the phone for
-fingerprint.** The sensor is the 7 Pro's; the panel and the touchscreen are
-not. Kernel commit `1fa21bbc7` (branch `panther-huella`, on `panther-todo`)
+Status (2026-11-07): **P1 to P5 passed on the phone** (section 5): a finger
+enrolled and the lock screen unlocked with it, also after a reboot with the
+unit starting the stack by itself. The sensor is the 7 Pro's; the panel and
+the touchscreen are not. linux-omarchy-mobile#207 (merged 2026-11-07)
 describes the sensor, its supply and pins, all disabled; this repo adds the
 two bring-up overlays and the Pixel 7 to `omamobile-fingerprint` and
 `tools/extract-fingerprint-vendor`. The 7 Pro's plan and research
@@ -38,7 +39,7 @@ drivers, chroot, bridge and libfprint driver are the ones to use.
 | Piece | Pixel 7 | Consequence |
 |---|---|---|
 | Trusty | Started on the Pixel 7 on 2026-11-03 with the sound bring-up's overlay, which enables `/trusty` (kernel `g89edef70d4d5`, 23:43): "trusty version: Project: cloudripper", "selected api version: 5", trusty_ipc virtio0 vrings, "trusty-virtio ... initializing done". `/dev/trusty-ipc-dev0` and the cpu 7 hotplug were not checked | Gate P2 is mostly seen already; what is left of it is in P2 |
-| Sub-PMIC | Not described before `1fa21bbc7` (running regulators: `ldo*m` only) | The commit adds `pmic-2` with LDO15S only |
+| Sub-PMIC | Not described before linux-omarchy-mobile#207 (running regulators: `ldo*m` only) | #207 adds `pmic-2` with LDO15S only |
 | Panel | Samsung S6E3FC3 (`panel-samsung-s6e3fc3`, `samsung,s6e3fc3-p10`), 1080x2400, ABL's `exynos_drm.panel_name=sdc-s6e3fc3-p10` | Local HBM is in a local kernel commit (branch `panther-lhbm`, not on the phone yet): section 4 |
 | Touchscreen | FocalTech FT3658 (`focaltech_ft3658`, input "FocalTech FT3658") | The runner looked only for the Synaptics name: now per device |
 | `omamobile-fp-chroot` | Any board but the 9a ran as cheetah | Now detects `google,gs201-panther`: g7.app, C++ KeyMint, 1080x2400 at 60 Hz, `sdc-s6e3fc3-p10`, FT3658 (untested) |
@@ -54,7 +55,8 @@ run (cheetah F4) is irreversible. Before any reboot: Vol- + Power,
 `fastboot --set-active=b` (slot B's retry counter). The NV backup of
 2026-11-03 exists (`tools/nv-backup -d panther`, 7 partitions, `--check` SAME).
 
-Kernel: `panther-huella` (= `panther-todo` + `1fa21bbc7`). Overlays apply
+Kernel: the bring-up ran on a local branch with linux-omarchy-mobile#207's
+commit on top (section 5 names the kernel). Overlays apply
 with `DTB_OVERLAYS="..."` in `device/panther/device.conf` (a local edit for
 the test, never committed) before `bin/omamobile images`.
 
@@ -96,7 +98,9 @@ CALIBRATION_NOT_READY): the calibration question is then panther's own.
 The optical sensor reads the finger lit by the panel's local HBM circle. The
 bridge drives it through `local_hbm_mode`; without it the bridge logs "LHBM
 on refused" and captures run unlit, which is expected to fail or match
-poorly (not measured). The kernel branch `panther-lhbm` adds it to
+poorly (not measured). The panel driver on `omamobile` has no
+`local_hbm_mode` yet: a local kernel commit (branch `panther-lhbm`, not
+proposed yet) adds it to
 `panel-samsung-s6e3fc3`, from Google's GPL `panel-samsung-s6e3fc3-p10.c`
 (android-gs-pantah-5.10-android15-qpr1): the 7 Pro's interface
 (`local_hbm_mode`, `local_hbm_max_timeout` up to 3 s, `allow_lhbm`, off on
@@ -105,7 +109,7 @@ at x 540, y 1713. `omamobile-fingerprint-lhbm.conf` has the
 `panel_samsung_s6e3fc3` line. Not run on the phone: check the circle's
 place and the 3 s timeout before P5.
 
-## 6. Results
+## 5. Results
 
 On 2026-11-04, kernel `7.3.0-rc6-omamobile-push1-g44048a9aa795` with the
 fingerprint DT commit (its LDO15S `disabled`, enabled by this overlay) and
@@ -145,3 +149,8 @@ the TDP copy still empty, and the lock screen unlocked with it (`MATCH`).
 Not checked: the packages installed with `pacman -U` (their files were
 copied by hand), a wrong finger, sudo through `pam_fprintd`, and stock
 Android after a factory reset (cheetah's T2).
+
+Before a Pixel 7 DTB turns `/trusty` on by default (not just the bring-up
+overlay): Trusty loads straight from the DT here and calls into the secure
+world at probe, while the 7 Pro loads it from a start script behind a hang
+marker. The Pixel 7 gets the same guarded start first.
