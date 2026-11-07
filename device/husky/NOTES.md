@@ -10,6 +10,15 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-11-05: idle-state and power-domain overlays that reboot-looped the phone
+
+Lef's phone (Kioxia unit), slot B, while looking for the cause of a ~520 mA idle draw with the screen off. I tested two bring-up overlays; every kernel flashed with either of them reset the phone hard about 8 to 40 s after boot (no pstore, no panic text). My first note called the idle-state boot stable; it was not (the temperature log stopped after a minute and I had already flashed the next build).
+
+- **Kernels** [V]: `g65c974eb3063` (`power-c2-test`: the three `idle-states` from stock's DT switched on for all nine CPUs, `cpu-idle-states` on each), `g4ce060268fea` (plus `power-pd-test`: 13 power domains enabled for genpd), `g1f109674c767` (plus status-only nodes for g3d, embedded_g3d, dpub, dpuf0/1, aoc and hsi0/1).
+- **Not established** [unknown]: which of the two overlays (or the PMU regmap range additions) caused the resets. Turning C2 off on all nine cores at runtime about 7 s after boot did not stop them. `pm_genpd_summary` readings are not usable here: the status bit the gs101 driver reads does not mean "powered" on zuma.
+- **Recovery** [V]: I did not write to any partition while it was resetting. I held Volume Down + Power to reach fastboot (slot B current, successful yes, retry 2 left at that point, A unbootable), and `bin/omamobile flash` wrote boot, init_boot, vendor_boot, vendor_kernel_boot and dtbo to slot B with the original overlay set (without `power-c2-test` and `power-pd-test`; kernel `g1f109674c767`). It booted and stayed up.
+- **Lessons**: wait at least 3 minutes and read `/proc/uptime` after every flash before trusting a boot; no more power-domain overlays without a plan (gs101 needs the DTZPC handling, as Derek said on [#472](https://github.com/derekross/omarchy-mobile/pull/472)).
+
 ## 2026-10-31: Wi-Fi
 
 Wi-Fi works on a test kernel, [kernel #156](https://github.com/derekross/linux-omarchy-mobile/pull/156) (a draft, stacked on #153, #143 and #56), at `f47c5bd34` on greenbrettmichael/linux-omarchy-mobile `omamobile-zuma-husky-wifi`, with the repository's husky config (`CONFIG_PHY_ZUMA_PCIE=m` is in #214), `modules-push` and the firmware from [#214](https://github.com/derekross/omarchy-mobile/pull/214). The phone joins its network at boot through NetworkManager. #156 has since been rebased to `717fba4f`; the only change is #143's join-parameter struct (`chanspec_list[1]` to `chanspec_list[]`). The phone joined at boot on that head too, as part of the display test kernel (tag `husky-test-20261031-d3`, which contains `717fba4f`), on 2026-10-31.
@@ -71,6 +80,7 @@ Touch works on a test kernel, [kernel #153](https://github.com/derekross/linux-o
   - With stock's inversion, taps came in rotated 180°: a tap at the top-left read (1191, 2824).
   - Without it, a tap at the top-left reads (87, 144) of 1343 × 2991.
 - **In Omarchy** [V]: Hyprland lists the touchscreen (`salixp-touchscreen`). The lock screen's PIN pad takes the keys that are touched, and the phone unlocks by touch. A touch wakes the screen.
+- **Which units ran it, on which tag** [V]: the first unit ran `husky-test-20261031-c5` (the orientation check above); the Kioxia unit (Lef's) ran `husky-test-20261031-c6` on 2026-10-31 (`salixp` lines, corner taps decoded from `/dev/input/event1`), and Brett's `salixp` lines and corners matched it. Not recorded here: a run of the merged `main` kernel on a stock tree by either unit (unknown; a boot of the current `main` tag with the corner-tap check would settle it).
 
 ## 2026-10-30: the buttons
 
@@ -86,6 +96,7 @@ Power and volume work through `gpio-keys` on a test kernel, the U4 kernel plus [
   - A short press of power locks and darkens the screen, and the next one wakes it (omamobile-keys).
   - Volume does nothing visible yet, since there is no sound card.
 - **The driver's `irq number not available`** [V]: once ALIVE was described, the zuma pinctrl data ran the GPIO EINT setup on ALIVE, whose banks are all wake-up EINTs, and it logged this line at every boot. #148 drops that setup from ALIVE, as gs101 does, and test `-b2` logs no such line.
+- **Which units ran it, on which tag** [V]: the first unit ran `husky-test-20261030-b` and `-b2`; the Kioxia unit (Lef's) ran `husky-test-20261031-c6` on 2026-10-31 (volume up, volume down and power each logged a press and release on `/dev/input/event0`, in two rounds). Not recorded here: a run of the merged `main` kernel (unknown).
 
 ## 2026-10-21: stage 0, part 4: root capture, backup, and how ABL picks the DTB
 
