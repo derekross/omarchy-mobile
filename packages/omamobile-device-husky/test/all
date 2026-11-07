@@ -54,12 +54,12 @@ if [[ -f ../../device/husky/device.conf ]]; then
 fi
 
 # omamobile-bootctl (#252): one source and one test in the husky and tegu
-# packages, byte for byte; the per-phone values are in src/bootctl-device.h.
+# packages, byte for byte; the per-phone values are in bootctl/bootctl-device.h.
 # It is installed for the owner to run by hand: no unit, hook or script here
 # may call it, and nothing enables it.
 other=../omamobile-device-tegu
 if [[ -d $other ]]; then
-  cmp -s src/omamobile-bootctl.c "$other/src/omamobile-bootctl.c" \
+  cmp -s bootctl/omamobile-bootctl.c "$other/bootctl/omamobile-bootctl.c" \
     || fail "omamobile-bootctl.c drifted from the tegu package"
   cmp -s test/bootctl "$other/test/bootctl" || fail "test/bootctl drifted from the tegu package"
   pass "omamobile-bootctl.c and test/bootctl match the tegu package"
@@ -67,13 +67,24 @@ fi
 if [[ -f ../omamobile-device-cheetah/LICENSE.Apache-2.0 ]]; then
   cmp -s LICENSE.Apache-2.0 ../omamobile-device-cheetah/LICENSE.Apache-2.0 || fail "LICENSE.Apache-2.0 drifted from the cheetah package"
 fi
-grep -qx '#define BOOTCTL_CODENAME[[:space:]]*"husky"' src/bootctl-device.h || fail "bootctl-device.h is not husky's"
+grep -qx '#define BOOTCTL_CODENAME[[:space:]]*"husky"' bootctl/bootctl-device.h || fail "bootctl-device.h is not husky's"
 compat=$(sed -n 's/^COMPATIBLE="\(.*\)"$/\1/p' device.conf)
-grep -qx "#define BOOTCTL_COMPATIBLE[[:space:]]*\"$compat\"" src/bootctl-device.h \
+grep -qx "#define BOOTCTL_COMPATIBLE[[:space:]]*\"$compat\"" bootctl/bootctl-device.h \
   || fail "bootctl-device.h's compatible is not device.conf's ($compat)"
 pass "bootctl-device.h names husky and device.conf's compatible"
 grep -rlw 'omamobile-bootctl' vendor bin *.install 2>/dev/null && fail "a unit, hook or script calls omamobile-bootctl"
 pass "nothing in the package calls omamobile-bootctl"
+# bin/omamobile's initramfs builder compiles packages/<device>/src/omamobile-bootctl.c
+# (and tools/stage-boot-files hashes src/) into the boot image: this tool
+# belongs in the installed package only, so nothing may sit where they look.
+[[ ! -e src/omamobile-bootctl.c ]] || fail "src/omamobile-bootctl.c would be built into the initramfs"
+if [[ -f ../../bin/omamobile ]]; then
+  while read -r probe; do
+    [[ -z $probe || ! -e $probe ]] || fail "bin/omamobile would build $probe into the initramfs"
+  done < <(grep -oh 'packages/\$DEV_PACKAGE/[A-Za-z0-9_./-]*' ../../bin/omamobile | sed 's#^packages/\$DEV_PACKAGE/##' | sort -u)
+fi
+! ls src/ 2>/dev/null | grep -q bootctl || fail "a bootctl file under src/, where the boot-file tools look"
+pass "the tool is outside the paths the initramfs builder and stage-boot-files read"
 test/bootctl --mutations || fail "test/bootctl"
 
 ./build "$tmp/build" || fail "reboot-to compiles"

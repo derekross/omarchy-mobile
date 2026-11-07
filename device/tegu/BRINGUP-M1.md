@@ -220,8 +220,8 @@ back to slot A, so a broken image after that means fastboot by the buttons
 ([NOTES](NOTES.md) 2026-10-31); mark again only after the new set passes the smoke test.
 
 The tool is `omamobile-bootctl` from `omamobile-device-tegu`
-(`packages/omamobile-device-tegu/src/omamobile-bootctl.c`, the same source as
-the husky package; this phone's values in `src/bootctl-device.h`). It
+(`packages/omamobile-device-tegu/bootctl/omamobile-bootctl.c`, the same source as
+the husky package; this phone's values in `bootctl/bootctl-device.h`). It
 refuses another board, a devinfo version other than 3.15 (the one recorded
 for tegu: [NOTES](NOTES.md) "Read-only layout evidence after official OTA maintenance", the pair across a boot that spent a try, and the three marks of 2026-10-22 to 10-31), a boot from slot A, a slot B that isn't active or is
 marked unbootable, and a storage guard that isn't holding (the main LUN's
@@ -234,21 +234,32 @@ disk: `bdev_read_only()` is the partition's own flag OR its disk's
 (`include/linux/blkdev.h`), and the write path (`blkdev_write_iter()`), the
 `BLKROGET` ioctl and sysfs `ro` all use it. So `devinfo` can't be made
 writable while its boot LUN stays read-only, and the tool clears the LUN's
-flag too, for as long as the one byte takes. What that exposes beyond
-`devinfo` is the whole-disk node: each sibling partition on the LUN (on
-husky `pinfo`, `blenv`, `mfg_data`) keeps its own flag, which the storage guard set, and the tool
-checks each one right after clearing the disk's (the only moment a
-partition's own flag can be read) and closes again if any is clear. In order:
-the disk writable; the siblings' and devinfo's own flags checked; devinfo
-writable; devinfo read again and compared with what the checks saw; one byte
-written (0x35, slot B's flags, OR 0x02) with `O_DSYNC`; the whole partition
-read back past the page cache (`O_DIRECT`) and compared with the prediction
-(on a mismatch the original is written back and read back, and the tool
-fails); devinfo read-only and checked; the disk read-only and checked. ^C,
-SIGTERM and SIGHUP are blocked for the window, and a relock child sets both
-flags back if the tool is killed, stops or hangs for 10 s. Before opening it,
-the tool refuses if devinfo is mounted or held, or if any other process has
-the LUN or one of its partitions open for writing.
+flag too, for as long as the one byte takes. **That exposes the whole LUN:**
+while the disk's flag is clear, the whole-disk node is writable, and raw
+writes through it reach every byte of the LUN, the other partitions on it
+(`mfg_data`, per FINGERPRINT-PLAN; the LUN's other partitions aren't
+recorded here yet) included; their own flags guard only their own nodes. Whether
+that is acceptable is the maintainer's ruling on #252 and this tool waits
+for it. The recommendation is to guard the boot LUNs as the main LUN is
+guarded (whole-disk node removed, each partition's own flag set) in a
+separate change tested on the 7 Pro; with that in place the window becomes
+devinfo's flag alone.
+
+The window, in order: refuse if devinfo, its LUN or a sibling is mounted or
+held, or open for writing by any other process (checked again right before
+the window, after the codename); the disk writable, and checked; each
+sibling's and devinfo's own flag checked (the only moment a partition's own
+flag can be read; any clear or unreadable one closes the window); devinfo
+writable; devinfo read again and compared with what the checks saw; the
+byte at 0x35 (slot B's flags) changed by OR 0x02 with `O_DSYNC` (the kernel
+writes the 4 KiB block that holds it); the whole partition read back past the
+page cache (`O_DIRECT`) and compared with the prediction (on a mismatch the
+original is written back and read back, and the tool fails); devinfo
+read-only and checked; the disk read-only and checked. ^C, SIGTERM and SIGHUP
+are blocked. A relock child, started before the window, sets both flags back
+the moment the tool exits or is killed, and from the moment the window
+opens it also sets them back every 10 s for as long as the tool lives (a
+stopped or hung tool), so the window can't stay open unwatched.
 
 Each step: risk, command, expect / pass, stop, rollback. Record the results
 here with the date and `uname -r`. Post only the version and the eight slot
@@ -297,8 +308,10 @@ bytes, never a dump.
    of it differs from the backup in byte 0x35 alone (`cmp -l` prints one
    line, offset 54). **Stop:** anything else. **Rollback:** as in step 5.
 7. **ABL's view** (low: one trip to fastboot, which spends no try with B
-   marked). `reboot-to bootloader`, then `fastboot getvar slot-successful:b`,
-   `slot-unbootable:b` and `slot-retry-count:b`, then `fastboot reboot`.
+   marked). `reboot-to bootloader`, then, with this phone's serial pinned,
+   `fastboot -s <serial> getvar slot-successful:b`, `slot-unbootable:b` and
+   `slot-retry-count:b` (each with `-s <serial>`), then
+   `fastboot -s <serial> reboot`.
    **Expect:** `yes`, `no`, and the phone boots slot B again. **Stop:** `no`
    for successful: post it and don't repeat the write. **Rollback:** as in
    step 5.

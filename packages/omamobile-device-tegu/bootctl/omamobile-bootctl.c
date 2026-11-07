@@ -4,7 +4,7 @@
  * the bootloader's "devinfo" partition, by hand and attended (#252).
  *
  * The same file is in omamobile-device-husky and omamobile-device-tegu; the
- * only per-phone values are in src/bootctl-device.h (codename, board
+ * only per-phone values are in bootctl/bootctl-device.h (codename, board
  * compatible, and the devinfo layout version recorded for that phone). The
  * 7 Pro's omamobile-bootctl (omamobile-device-cheetah) is a different file
  * and is not changed by this one.
@@ -38,14 +38,21 @@
  *   OR the disk's (part0's) flag (include/linux/blkdev.h), and both
  *   blkdev_write_iter() and the BLKROGET ioctl and sysfs "ro" use it. So
  *   devinfo can't be written while its disk (the boot LUN, sdd) is read-only,
- *   and no ioctl makes the partition alone writable. What clearing the disk
- *   flag exposes is the whole-disk node: every sibling partition keeps its
- *   own flag (the storage guard sets each one), and that is checked after
- *   the disk flag is cleared, the only moment a partition's own flag can be
- *   read. The window is therefore: disk rw, siblings checked, devinfo rw,
- *   one byte written and read back, devinfo ro, disk ro, both checked, with
- *   the job-control and termination signals blocked and a relock child that
- *   sets both read-only again if this process dies, stops or hangs.
+ *   and no ioctl makes the partition alone writable. Clearing the disk flag
+ *   makes the whole-disk node writable, and through it every byte of the LUN,
+ *   the other partitions (pinfo, blenv, mfg_data on husky) included, for as
+ *   long as the window lasts: their own flags guard only their own nodes.
+ *   The tool keeps that window to the one byte: disk rw (checked), the
+ *   siblings' own flags checked (the only moment they can be read), devinfo
+ *   rw, one byte written and read back, devinfo ro, disk ro, both checked.
+ *   The job-control and termination signals are blocked, and a relock child
+ *   sets both flags back the moment this process dies, and every 10 s from
+ *   the moment the window opens for as long as it stays open (a stopped or
+ *   hung process), until this process has closed the window itself.
+ *
+ * The source sits in bootctl/, not src/: bin/omamobile's initramfs builder
+ * compiles a device package's src/omamobile-bootctl.c into the boot image,
+ * and this tool belongs in the installed package only.
  *
  * Usage:
  *   omamobile-bootctl status
@@ -71,7 +78,7 @@
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <linux/fs.h>
+#include <sys/mount.h>	/* BLKROSET, BLKROGET (musl and glibc) */
 
 #include "bootctl-device.h"
 
@@ -117,7 +124,7 @@ static const char *argv0 = "omamobile-bootctl";
  */
 #ifdef BOOTCTL_TEST
 static const char *root = "";
-static const char *fault = "";
+static const char *fault = "";	/* comma-separated test faults */
 static int relock_timeout_ms = RELOCK_TIMEOUT_MS;
 #define DIRECT 0
 #else
@@ -196,6 +203,21 @@ static ssize_t slurp(const char *path, char *buf, size_t n)
 	return r;
 }
 
+#ifdef BOOTCTL_TEST
+static int has_fault(const char *name)
+{
+	size_t n = strlen(name);
+	for (const char *p = fault; *p; ) {
+		const char *e = strchr(p, ',');
+		size_t l = e ? (size_t)(e - p) : strlen(p);
+		if (l == n && !strncmp(p, name, n))
+			return 1;
+		p += l + (e ? 1 : 0);
+	}
+	return 0;
+}
+#endif
+
 /* ---- read-only flags ---------------------------------------------------- */
 
 #ifdef BOOTCTL_TEST
@@ -211,6 +233,10 @@ static int own_flag(const char *path)
 /* The kernel's bdev_read_only(): own flag OR the disk's flag. */
 static int ro_get(const struct node *n, const struct node *disk)
 {
+	/* fault: a sibling whose node can't be opened once the window is open */
+	if (has_fault("sdd3-unreadable-in-window") && disk && !strcmp(n->name, "sdd3") &&
+	    own_flag(disk->path) == 0)
+		return -1;
 	int o = own_flag(n->path);
 	if (o < 0)
 		return -1;
@@ -222,6 +248,18 @@ static int ro_get(const struct node *n, const struct node *disk)
 static int ro_set(const struct node *n, int v)
 {
 	char f[PATH_MAX + 4];
+	size_t pl = strlen(n->path);
+	int is_disk = pl && !isdigit((unsigned char)n->path[pl - 1]);
+	/* faults: a flag that silently doesn't change, as a stuck or lying device would */
+	if ((v == 1 && !is_disk && has_fault("part-relock-ignored")) ||
+	    (v == 0 && is_disk && has_fault("disk-stays-ro")))
+		return 0;
+	xfmt(f, sizeof(f), "%s/ro.log", root);
+	FILE *log = fopen(f, "a");
+	if (log) {
+		fprintf(log, "%s %d\n", n->name, v);
+		fclose(log);
+	}
 	xfmt(f, sizeof(f), "%s.ro", n->path);
 	FILE *fp = fopen(f, "w");
 	if (!fp)
@@ -457,20 +495,29 @@ static int check_unused(const struct target *t)
 	}
 	fclose(fp);
 
-	xfmt(f, sizeof(f), "%s/holders", t->part.sys);
-	DIR *d = opendir(f);
-	if (d) {
+	/* Nothing stacked on the disk, devinfo or a sibling (dm, md, loop...). */
+	const struct node *held[2 + (int)(sizeof(t->sib) / sizeof(t->sib[0]))];
+	int nh = 0;
+	held[nh++] = &t->disk;
+	held[nh++] = &t->part;
+	for (int i = 0; i < t->nsib; i++)
+		held[nh++] = &t->sib[i];
+	for (int i = 0; i < nh; i++) {
+		xfmt(f, sizeof(f), "%s/holders", held[i]->sys);
+		DIR *d = opendir(f);
+		if (!d)
+			continue;
 		struct dirent *e;
 		while ((e = readdir(d)))
 			if (e->d_name[0] != '.') {
-				err("devinfo is held by %s; refusing", e->d_name);
+				err("%s is held by %s; refusing", held[i]->name, e->d_name);
 				bad = 1;
 			}
 		closedir(d);
 	}
 
 	/* Any process with the disk or one of its partitions open for writing. */
-	d = opendir("/proc");
+	DIR *d = opendir("/proc");
 	if (!d)
 		return -1;
 	struct dirent *pe;
@@ -681,14 +728,64 @@ static int relock(const struct target *t)
 }
 
 /*
- * The relock child: waits for the parent to close the pipe (done, killed or
- * crashed) or for the timeout (stopped or hung), then sets devinfo and its
- * disk read-only, whatever the parent did. It ignores the terminal's signals,
- * so ^C on the process group can't take it with the parent.
+ * The relock child. It holds the read end of a pipe whose write end only the
+ * parent has. Before the window opens it waits without a timeout (nothing is
+ * writable yet). The parent writes 'O' just before it clears the first flag;
+ * from then on the child sets devinfo and its disk read-only every
+ * RELOCK_TIMEOUT_MS for as long as the pipe stays open (a stopped or hung
+ * parent: its later steps then fail closed), and once more when the pipe
+ * closes, whether the parent finished, crashed or was killed. It ignores the
+ * terminal's signals (blocked before the fork), so ^C on the process group
+ * can't take it with the parent.
  */
+static int child_relock(const struct target *t)
+{
+#ifdef BOOTCTL_TEST
+	if (has_fault("no-child-relock"))	/* the parent must relock alone */
+		return 0;
+#endif
+	return relock(t);
+}
+
+static void relocker(const struct target *t, int rfd)
+{
+	int armed = 0, ok = 1;
+	for (;;) {
+		struct pollfd pf = { .fd = rfd, .events = POLLIN };
+		int r = poll(&pf, 1, armed ? relock_timeout_ms : -1);
+		if (r < 0 && errno == EINTR)
+			continue;
+		if (r == 0) {			/* window open too long: close it, re-arm */
+			if (child_relock(t))
+				ok = 0;
+			continue;
+		}
+		char c;
+		ssize_t n = read(rfd, &c, 1);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n == 1 && c == 'O') {
+			armed = 1;
+			continue;
+		}
+		break;				/* EOF: the parent is done or gone */
+	}
+	if (child_relock(t))
+		ok = 0;
+#ifdef BOOTCTL_TEST
+	if (has_fault("child-fails"))
+		ok = 0;
+#endif
+	_exit(ok ? 0 : 1);
+}
+
 static pid_t start_relocker(const struct target *t, int *wfd)
 {
 	int p[2];
+#ifdef BOOTCTL_TEST
+	if (has_fault("fork-fails"))
+		return -1;
+#endif
 	if (pipe2(p, O_CLOEXEC))
 		return -1;
 	pid_t pid = fork();
@@ -699,18 +796,24 @@ static pid_t start_relocker(const struct target *t, int *wfd)
 	}
 	if (pid == 0) {
 		close(p[1]);
-		struct pollfd pf = { .fd = p[0], .events = POLLIN };
-		while (poll(&pf, 1, relock_timeout_ms) < 0 && errno == EINTR)
-			;
-#ifdef BOOTCTL_TEST
-		if (!strcmp(fault, "no-child-relock"))	/* the parent must relock alone */
-			_exit(0);
-#endif
-		_exit(relock(t) ? 1 : 0);
+		relocker(t, p[0]);
 	}
 	close(p[0]);
 	*wfd = p[1];
 	return pid;
+}
+
+/* The child must be alive before every step that opens anything further. */
+static int child_alive(pid_t child, int *reaped, int *st)
+{
+	if (*reaped)
+		return 0;
+	pid_t r = waitpid(child, st, WNOHANG);
+	if (r == child) {
+		*reaped = 1;
+		return 0;
+	}
+	return r == 0;
 }
 
 static int write_at(const struct target *t, const uint8_t *buf, size_t len, off_t off)
@@ -721,10 +824,12 @@ static int write_at(const struct target *t, const uint8_t *buf, size_t len, off_
 		errno = EPERM;
 		return -1;
 	}
-	if (!strcmp(fault, "write-fails")) {
+	if (has_fault("write-fails")) {
 		errno = EIO;
 		return -1;
 	}
+	if (has_fault("restore-noop") && off == 0 && len > 2)
+		return 0;			/* the restore "succeeds" without landing */
 #endif
 	int fd = open(t->part.path, O_WRONLY | O_DSYNC | O_CLOEXEC);
 	if (fd < 0)
@@ -743,13 +848,28 @@ static int write_at(const struct target *t, const uint8_t *buf, size_t len, off_
 #ifdef BOOTCTL_TEST
 static void test_fault(const char *where)
 {
-	if (!strcmp(fault, where))
+	if (has_fault(where))
 		raise(SIGKILL);
-	if (!strcmp(where, "kill-before-write") && !strcmp(fault, "hang-in-window"))
+	if (!strcmp(where, "kill-before-write") && has_fault("hang-in-window"))
 		sleep(60);
+}
+
+/* Someone else changes devinfo inside the window (test only). */
+static void test_change_under(const struct target *t)
+{
+	if (!has_fault("change-under"))
+		return;
+	int fd = open(t->part.path, O_WRONLY);
+	uint8_t x = 0x5a;
+	if (fd >= 0) {
+		if (pwrite(fd, &x, 1, 0x100) != 1)
+			err("test: change-under failed");
+		close(fd);
+	}
 }
 #else
 #define test_fault(x) ((void)0)
+#define test_change_under(t) ((void)0)
 #endif
 
 /*
@@ -759,7 +879,7 @@ static void test_fault(const char *where)
  */
 static int window(const struct target *t, const uint8_t *orig, size_t len, uint8_t newval)
 {
-	int rc = 3, wfd = -1;
+	int rc = 3, wfd = -1, reaped = 0, st = 0;
 	uint8_t *after = NULL, *want = NULL, *again = NULL, byte = newval;
 	size_t alen;
 	sigset_t block, old;
@@ -782,16 +902,29 @@ static int window(const struct target *t, const uint8_t *orig, size_t len, uint8
 		sigprocmask(SIG_SETMASK, &old, NULL);
 		return 3;
 	}
+#ifdef BOOTCTL_TEST
+	if (has_fault("stop-before-open"))
+		raise(SIGSTOP);
+#endif
+	/* The child's timer runs from here, as long as the window stays open. */
+	if (write(wfd, "O", 1) != 1 || !child_alive(child, &reaped, &st)) {
+		err("the relock child is not running; nothing written");
+		goto close_window;
+	}
+#ifdef BOOTCTL_TEST
+	if (has_fault("stop-after-open"))
+		raise(SIGSTOP);
+#endif
 
 	/* 1. The disk: the kernel won't write a partition of a read-only disk. */
-	if (ro_set(&t->disk, 0)) {
-		err("can't make %s writable: %s", t->disk.name, strerror(errno));
+	if (ro_set(&t->disk, 0) || ro_get(&t->disk, NULL) != 0) {
+		err("%s did not become writable; nothing written", t->disk.name);
 		goto close_window;
 	}
 	/* 2. With the disk flag clear, each partition reads its own flag: all set. */
 	for (int i = 0; i < t->nsib; i++)
 		if (ro_get(&t->sib[i], &t->disk) != 1) {
-			err("%s's own read-only flag is clear: clearing %s's would expose it; refusing",
+			err("%s's own read-only flag is clear or unreadable: clearing %s's would expose it; refusing",
 			    t->sib[i].name, t->disk.name);
 			goto close_window;
 		}
@@ -800,10 +933,15 @@ static int window(const struct target *t, const uint8_t *orig, size_t len, uint8
 		goto close_window;
 	}
 	/* 3. devinfo itself. */
+	if (!child_alive(child, &reaped, &st)) {
+		err("the relock child is gone; nothing written");
+		goto close_window;
+	}
 	if (ro_set(&t->part, 0) || ro_get(&t->part, &t->disk) != 0) {
 		err("can't make devinfo writable: %s", strerror(errno));
 		goto close_window;
 	}
+	test_change_under(t);
 	/* 4. Nothing moved since the checks. */
 	again = read_image(&t->part, &alen);
 	if (!again || alen != len || memcmp(again, orig, len)) {
@@ -814,14 +952,18 @@ static int window(const struct target *t, const uint8_t *orig, size_t len, uint8
 	free(again);
 	test_fault("kill-before-write");
 
-	/* 5. The one byte. */
+	/* 5. The one byte (the kernel writes the 4 KiB block that holds it). */
 	want = malloc(len);
 	if (!want)
 		goto close_window;
 	memcpy(want, orig, len);
 	want[OFF_B_FLAGS] = newval;
+	if (!child_alive(child, &reaped, &st)) {
+		err("the relock child is gone; nothing written");
+		goto close_window;
+	}
 #ifdef BOOTCTL_TEST
-	if (!strcmp(fault, "corrupt-write")) {	/* a stray change next to ours */
+	if (has_fault("corrupt-write")) {	/* a stray change next to ours */
 		if (write_at(t, bad, 2, OFF_B_FLAGS - 1))
 			goto write_failed;
 	} else
@@ -869,9 +1011,9 @@ close_window:
 		rc = 5;
 	}
 	close(wfd);
-	int st = 0;
-	while (waitpid(child, &st, 0) < 0 && errno == EINTR)
-		;
+	if (!reaped)
+		while (waitpid(child, &st, 0) < 0 && errno == EINTR)
+			;
 	if (!WIFEXITED(st) || WEXITSTATUS(st)) {
 		err("the relock child failed; reboot to restore the guard");
 		rc = 5;
@@ -1010,6 +1152,21 @@ static int cmd_mark(int do_write, const char *expect, const char *codename)
 		typed[0] = 0;
 	if (strcmp(typed, BOOTCTL_CODENAME)) {
 		err("codename \"%s\" is not %s; nothing written", typed, BOOTCTL_CODENAME);
+		goto out;
+	}
+#ifdef BOOTCTL_TEST
+	if (has_fault("hold-after-codename")) {	/* stands in for a slow prompt */
+		char f[PATH_MAX];
+		rp(f, sizeof(f), "/at-prompt");
+		close(open(f, O_CREAT | O_WRONLY, 0644));
+		rp(f, sizeof(f), "/go");
+		for (int i = 0; i < 200 && access(f, F_OK); i++)
+			usleep(50000);
+	}
+#endif
+	/* The checks again, right before the window: the prompt can take minutes. */
+	if (check_guard(&t) || check_unused(&t)) {
+		err("the storage guard or a user of the LUN changed since the checks; nothing written");
 		goto out;
 	}
 
