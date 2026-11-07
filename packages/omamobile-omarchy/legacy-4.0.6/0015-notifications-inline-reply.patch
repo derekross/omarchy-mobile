@@ -1,0 +1,232 @@
+# Notifications: inline reply (the freedesktop `inline-reply` action and
+# NotificationReplied signal, which Quickshell implements). The server
+# advertises it, and a toast whose sender asked for it gets a Reply button
+# that opens a field with Send and Cancel; Send hands the text to the sender
+# and dismisses the toast. While a field is open the toast's countdown stops
+# and the toast surface takes keyboard focus on demand, so an on-screen
+# keyboard can type into it. Stored history rows can't be answered and get
+# no button. Messages apps use it to reply to a text without opening the
+# app (TELEPHONY-APPS-PLAN §7.2).
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1).
+diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notifications/Service.qml
+--- i/shell/plugins/notifications/Service.qml
++++ w/shell/plugins/notifications/Service.qml
+@@ -314,6 +314,52 @@ Item {
+     removePopup(index, "dismiss")
+   }
+ 
++  // The live notification behind a popup row, or null. A restored row has
++  // none (see removePopup).
++  function liveRefAt(index) {
++    if (index < 0 || index >= popupModel.count) return null
++    var entry = popupModel.get(index)
++    if (!entry || entry.originalId < 0 || isRestoredRow(entry)) return null
++    var ref = liveRefs[entry.originalId]
++    try {
++      return ref && ref.tracked ? ref : null
++    } catch (e) {
++      return null
++    }
++  }
++
++  // The reply field's placeholder for a popup whose sender asked for an
++  // inline reply, or "" when it can't take one.
++  function replyPlaceholderAt(index) {
++    var ref = liveRefAt(index)
++    if (!ref || !ref.hasInlineReply) return ""
++    return String(ref.inlineReplyPlaceholder || "") || "Reply"
++  }
++
++  // Popups with the reply field open. While any is, the popup surface takes
++  // keyboard focus so the field can be typed into.
++  property int openReplies: 0
++
++  // Send the reply to its sender (NotificationReplied), then take the toast
++  // off the screen. A sender that has meanwhile closed the notification
++  // gets nothing; the popup opens its app instead, so the reply isn't lost
++  // silently.
++  function sendReply(index, text) {
++    var ref = liveRefAt(index)
++    if (!ref || !ref.hasInlineReply) {
++      invokePopupDefault(index)
++      return
++    }
++    try {
++      ref.sendInlineReply(text)
++    } catch (e) {
++      console.warn("inline reply failed:", e)
++      invokePopupDefault(index)
++      return
++    }
++    dismissPopup(index)
++  }
++
+   function expirePopup(index) {
+     removePopup(index, "expire")
+   }
+@@ -936,6 +982,7 @@ Item {
+     bodyMarkupSupported: true
+     bodyHyperlinksSupported: true
+     persistenceSupported: true
++    inlineReplySupported: true
+ 
+     onNotification: function(notification) {
+       service.handleNotification(notification)
+@@ -960,7 +1007,9 @@ Item {
+ 
+       WlrLayershell.namespace: "omarchy-notifications"
+       WlrLayershell.layer: WlrLayer.Overlay
+-      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
++      // Passive, except while a reply field is open (OnDemand, as the
++      // polkit prompt uses, so an on-screen keyboard can type into it).
++      WlrLayershell.keyboardFocus: service.openReplies > 0 ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+       exclusionMode: ExclusionMode.Ignore
+       color: "transparent"
+ 
+@@ -1012,7 +1061,19 @@ Item {
+ 
+             readonly property real lifetime: service.durationFor(cardSlot.urgency, cardSlot.expireTimeout)
+             property real remainingLifetime: 1.0
+-            readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered
++            readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered && !cardSlot.replying
++
++            // Inline reply. The placeholder is looked up again whenever the
++            // row's content changes, as an update can add or drop the action.
++            readonly property string replyPlaceholder: {
++              cardSlot.summary
++              cardSlot.body
++              return service.replyPlaceholderAt(cardSlot.index)
++            }
++            property bool replying: false
++            onReplyingChanged: service.openReplies += replying ? 1 : -1
++            onReplyPlaceholderChanged: if (replyPlaceholder.length === 0) replying = false
++            Component.onDestruction: if (replying) service.openReplies -= 1
+ 
+             // A client updating this notification in place rewrites the row
+             // under the card (see refreshPopup). New text deserves a full look,
+@@ -1052,8 +1113,22 @@ Item {
+               fontFamily: service.shell && service.shell.bar ? service.shell.bar.fontFamily : ""
+               glyph: cardSlot.glyph
+ 
++              replyPlaceholder: cardSlot.replyPlaceholder
++              replying: cardSlot.replying
++
+               onCloseRequested: service.dismissPopup(cardSlot.index)
+               onCardClicked: service.invokePopupDefault(cardSlot.index)
++              onReplyRequested: cardSlot.replying = true
++              onReplyCancelled: {
++                cardSlot.replying = false
++                // A fresh countdown, so the toast doesn't vanish the
++                // moment the field closes.
++                cardSlot.remainingLifetime = 1.0
++              }
++              onReplySent: function(text) {
++                cardSlot.replying = false
++                service.sendReply(cardSlot.index, text)
++              }
+             }
+           }
+         }
+diff --git i/shell/plugins/notifications/components/NotificationCard.qml w/shell/plugins/notifications/components/NotificationCard.qml
+--- i/shell/plugins/notifications/components/NotificationCard.qml
++++ w/shell/plugins/notifications/components/NotificationCard.qml
+@@ -33,8 +33,33 @@ BorderSurface {
+ 
+   readonly property bool hovered: hoverTracker.hovered
+ 
++  // Inline reply (the freedesktop `inline-reply` action): the popup container
++  // sets the sender's placeholder text while the live notification takes a
++  // reply. The history panel leaves it empty: a stored notification can't be
++  // answered.
++  property string replyPlaceholder: ""
++  // The reply field is open. The container keeps the toast on screen and
++  // gives its surface keyboard focus meanwhile.
++  property bool replying: false
++
+   signal closeRequested()
+   signal cardClicked()
++  signal replyRequested()
++  signal replySent(string text)
++  signal replyCancelled()
++
++  function sendReply() {
++    var text = replyField.text
++    if (text.trim().length === 0) return
++    root.replySent(text)
++  }
++
++  // A field that opens gets focus, so an on-screen keyboard shows; one that
++  // closes forgets what was typed.
++  onReplyingChanged: {
++    if (replying) Qt.callLater(function() { replyField.forceActiveFocus() })
++    else replyField.text = ""
++  }
+   // Prefer per-notification media/avatar data, then fall back to the app icon.
+   // The `check` flag avoids Qt's missing-texture placeholder for unknown names.
+   readonly property string smallIconSource: image.length > 0 ? image : iconSource(appIcon)
+@@ -82,7 +107,9 @@ BorderSurface {
+     onClicked: function(mouse) {
+       if (mouse.button === Qt.RightButton) {
+         root.closeRequested()
+-      } else {
++      } else if (!root.replying) {
++        // A tap beside the open reply field must not open the app and
++        // throw the reply away.
+         root.cardClicked()
+       }
+     }
+@@ -192,6 +219,53 @@ BorderSurface {
+         }
+       }
+     }
++
++    // Reply, then a field with Send and Cancel, each tall enough to tap on
++    // a touch screen.
++    RowLayout {
++      id: replyRow
++      readonly property real controlHeight: Style.space(40)
++      Layout.fillWidth: true
++      Layout.leftMargin: Style.space(12)
++      Layout.rightMargin: Style.space(12)
++      Layout.bottomMargin: Style.space(10)
++      visible: root.replyPlaceholder.length > 0
++      spacing: Style.space(8)
++
++      TextField {
++        id: replyField
++        objectName: "notificationReplyField"
++        Layout.fillWidth: true
++        visible: root.replying
++        Layout.preferredHeight: replyRow.controlHeight
++        placeholderText: root.replyPlaceholder
++        foreground: Commons.Color.notifications.text
++        onAccepted: root.sendReply()
++        Keys.onEscapePressed: root.replyCancelled()
++      }
++
++      Item {
++        Layout.fillWidth: true
++        visible: !root.replying
++      }
++
++      Button {
++        visible: root.replying
++        text: "Cancel"
++        Layout.preferredHeight: replyRow.controlHeight
++        foreground: Commons.Color.notifications.text
++        onClicked: root.replyCancelled()
++      }
++
++      Button {
++        objectName: "notificationReplyButton"
++        Layout.preferredHeight: replyRow.controlHeight
++        text: root.replying ? "Send" : "Reply"
++        bordered: true
++        foreground: Commons.Color.notifications.text
++        onClicked: root.replying ? root.sendReply() : root.replyRequested()
++      }
++    }
+   }
+ 
+ }

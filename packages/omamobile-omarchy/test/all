@@ -102,3 +102,5 @@ if [[ -n ${OMAMOBILE_NOTIFY_TEST:-} ]]; then
 fi
 
 python3 -I test/migration-mobile-holds.py || fail "mobile-critical migration holds"
+
+python3 -I test/source-family.py || fail "source-family foundation"
