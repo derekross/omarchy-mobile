@@ -10,6 +10,11 @@ const read = (name) => fs.readFileSync(path.join(root, 'plugins', name), 'utf8')
 const home = read('omamobile.home/BatteryWidget.qml')
 const bar = read('omamobile.bar/Bar.qml')
 const quick = read('omamobile.quicksettings/QuickSettings.qml')
+const statusModel = require(path.resolve(root, 'plugins/omamobile.bar/StatusModel.js'))
+assert.strictEqual(statusModel.batteryIcon(91, false, true), '󰁹',
+  'Full below 100% must use the full battery glyph without a charging bolt')
+assert.notStrictEqual(statusModel.batteryIcon(91, true, false), '󰁹',
+  'Charging must retain its charging glyph')
 function capture(text, pattern, name) {
   const match = text.match(pattern)
   assert(match, `could not find ${name} binding`)
