@@ -1,0 +1,343 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for tools/extract-vendor-firmware with made-up vendor files (no
+# factory image, no Google firmware): a small file with the ext4 or EROFS
+# magic stands in for vendor.img, and stand-in debugfs and fsck.erofs read
+# a fixture tree instead (with real debugfs's stderr: a missing file or a
+# failed write is an error message and exit 0). Checked: a run into a
+# reused output directory keeps no firmware or sensor registry file from
+# an earlier run (another device's, or one the new image doesn't have),
+# and leaves the rest of the directory alone; a husky run drops an earlier
+# registry; the checksum list names exactly the mapped files; a failed run
+# (a missing file or registry, debugfs reporting a short write, also
+# under a file size limit, a failed sanity check, a missing camera APEX)
+# leaves the previous outputs and the -c file byte for byte, so an older
+# file can't pass for a missing one; a -c that is a directory or inside
+# the outputs is refused; and a move that fails while publishing puts the
+# previous outputs back. With mkfs.ext4
+# and debugfs on the host, the same on a real ext4 image whose registry
+# belongs to root, and a copy that a file size limit cuts short. EVF=path
+# runs another copy of the tool (a negative control), so every check runs
+# and the failures are counted rather than stopping at the first.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+EVF=$(realpath -- "${EVF:-tools/extract-vendor-firmware}")
+failed=0
+fail() { printf 'not ok - %s\n' "$1" >&2; failed=$((failed + 1)); }
+pass() { printf 'ok - %s\n' "$1"; }
+# pass_since N MESSAGE: pass if nothing failed since the count was N
+pass_since() { if ((failed == $1)); then pass "$2"; fi; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+export PATH=$PATH:/usr/sbin:/sbin
+
+# --- Stand-ins -----------------------------------------------------------------
+mkdir -p "$t/bin"
+cat > "$t/bin/debugfs" <<'EOF'
+#!/bin/bash
+# debugfs -R "dump /SRC OUT" IMG, or "rdump /DIR OUTDIR", from $FAKE_VENDOR,
+# with real debugfs's stderr: its banner, rdump's ownership note (run as a
+# user), and errors with exit 0; a dump of the path in .fail-dump, or the
+# rdump when .fail-rdump exists, writes part and reports a write error
+set -u
+echo "debugfs 1.47.2 (stand-in)" >&2
+read -r cmd src out <<<"$2"
+if [[ -f $FAKE_VENDOR/.fail-dump && $src == "/$(cat "$FAKE_VENDOR/.fail-dump")" ]] ||
+   [[ $cmd == rdump && -f $FAKE_VENDOR/.fail-rdump ]]; then
+  if [[ $cmd == dump ]]; then
+    echo partial > "$out"
+    echo "dump_file: File too large while writing file \"$src\"" >&2
+  else   # after many real notes, an error whose file name holds their words
+    mkdir -p "$out/${src##*/}" && echo partial > "$out/${src##*/}/part.json"
+    for n in $(seq 800); do
+      echo "dump_file: Operation not permitted while changing ownership of $out/${src##*/}/e$n.json"
+    done >&2
+    echo "rdump: Too many open files while opening $out/${src##*/}/x while changing ownership of y.json" >&2
+  fi
+  exit 0
+fi
+case $cmd in
+  dump) [[ -f $FAKE_VENDOR$src ]] && cp "$FAKE_VENDOR$src" "$out" ;;
+  rdump) [[ -d $FAKE_VENDOR$src ]] && cp -r "$FAKE_VENDOR$src" "$out/" &&
+         echo "dump_file: Operation not permitted while changing ownership of $out/${src##*/}/x" >&2 &&
+         echo "rdump: Operation not permitted while changing ownership of $out/${src##*/}" >&2 ;;
+esac || echo "$cmd: File not found by ext2_lookup while looking up $src" >&2
+exit 0
+EOF
+cat > "$t/bin/fsck.erofs" <<'EOF'
+#!/bin/bash
+# fsck.erofs --extract=DIR --no-preserve IMG, from $FAKE_VENDOR
+set -eu
+dir=${1#--extract=}
+mkdir -p "$dir" && cp -r "$FAKE_VENDOR/." "$dir/"
+EOF
+chmod +x "$t/bin/debugfs" "$t/bin/fsck.erofs"
+
+# vendor.img stand-ins: only the magic the tool checks
+head -c 4096 /dev/zero > "$t/ext4.img"
+printf '\x53\xef' | dd of="$t/ext4.img" bs=1 seek=1080 conv=notrunc status=none
+head -c 4096 /dev/zero > "$t/erofs.img"
+printf '\xe2\xe1\xf5\xe0' | dd of="$t/erofs.img" bs=1 seek=1024 conv=notrunc status=none
+
+# --- Made-up vendor trees --------------------------------------------------------
+halo() { printf 'WMFW\0\0\0\0\0\0\004 %s' "$*"; }   # WMFW, byte 10 = 4 (Halo core)
+# make_vendor DIR DEVICE GENERATION: the files the tool maps, its sanity
+# checks pass; GENERATION goes into every file
+make_vendor() {
+  local v=$1 dev=$2 g=$3 f
+  mkdir -p "$v/firmware/brcm" "$v/etc/sensors/registry" "$v/apex"
+  printf 'ro.product.vendor.device=%s\nro.vendor.build.fingerprint=fictional/%s\n' "$dev" "$g" > "$v/build.prop"
+  if [[ $dev == husky ]]; then
+    printf 'fictional 4398d0-roml Version=1.0.3 (%s)\n' "$g" > "$v/firmware/fw_bcmdhd.bin_4398_d0"
+    printf 'NVRAMRev=%s\n' "$g" > "$v/firmware/bcmdhd.cal_USI_G5SN_9957_V17"
+    echo "clm $g" > "$v/firmware/bcmdhd_clm.blob_4398_d0"
+    echo "txcap $g" > "$v/firmware/bcmdhd_txcap.blob_4398_d0"
+    return
+  fi
+  printf 'fictional 4389c1-roml Version=1.0.1 (%s)\n' "$g" > "$v/firmware/fw_bcmdhd.bin"
+  printf 'NVRAMRev=%s\n' "$g" > "$v/firmware/bcmdhd.cal"
+  echo "clm $g" > "$v/firmware/bcmdhd_clm.blob"
+  echo "BCM4389C1 fictional $g" > "$v/firmware/brcm/BCM.hcd"
+  echo "aoc $g" > "$v/firmware/aoc.bin"
+  halo "FIRMWARE_CS40L26 BUZZ_EFFECTS2_BUZZ_LEVEL $g" > "$v/firmware/cs40l26.wmfw"
+  halo "calib $g" > "$v/firmware/cs40l26-calib.wmfw"
+  for f in cs40l26.bin cs40l26-svc.bin cs40l26-dvl.bin; do echo "WMDR $f $g" > "$v/firmware/$f"; done
+  halo "FIRMWARE_HALO_CSPL CAL_CHECKSUM $g" > "$v/firmware/cs35l41-dsp1-spk-prot.wmfw"
+  echo "WMDR top $g" > "$v/firmware/cs35l41-dsp1-spk-prot.bin"
+  echo "WMDR bottom $g" > "$v/firmware/R-cs35l41-dsp1-spk-prot.bin"
+  echo '3,1,2' > "$v/firmware/fast_switch3.txt"
+  echo '3,1,3' > "$v/firmware/fast_switch4.txt"
+  echo "{\"accel\": \"$g\"}" > "$v/etc/sensors/registry/fictional_accel.json"
+  echo "apex $g" > "$v/apex/com.google.pixel.camera.hal.apex"
+}
+make_vendor "$t/v1" cheetah gen1
+make_vendor "$t/v2" cheetah gen2
+make_vendor "$t/husky" husky gen3
+
+FW=usr/lib/firmware/updates
+REG=usr/share/omamobile/sensors/registry
+CHEETAH_FILES="aoc.bin
+brcm/BCM.google,gs201-cheetah.hcd
+brcm/brcmfmac4389c1-pcie.google,gs201-cheetah.bin
+brcm/brcmfmac4389c1-pcie.google,gs201-cheetah.clm_blob
+brcm/brcmfmac4389c1-pcie.google,gs201-cheetah.txt
+cirrus/cs35l41-cheetah-bottom-media-delta.txt
+cirrus/cs35l41-cheetah-top-media-delta.txt
+cirrus/cs35l41-dsp1-spk-prot-cheetah-bottom.bin
+cirrus/cs35l41-dsp1-spk-prot-cheetah-top.bin
+cirrus/cs35l41-dsp1-spk-prot-cheetah.wmfw
+cs40l26-calib.wmfw
+cs40l26-dvl.bin
+cs40l26-svc.bin
+cs40l26.bin
+cs40l26.wmfw"
+
+# run VENDOR IMG ARGS...: the tool with the stand-ins first on PATH
+run() {
+  local v=$1 img=$2; shift 2
+  FAKE_VENDOR=$v PATH=$t/bin:$PATH "$EVF" -w "$t/work" "$@" "$img" > "$t/log" 2>&1
+}
+# Everything in a directory, contents included, hidden staging dirs too
+snap() { (cd "$1" && find . -printf '%y %m %p\n' | LC_ALL=C sort && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum); }
+listed() { cut -c67- "$1/vendor-firmware.sha256" | LC_ALL=C sort; }
+# A first generation in a fresh directory, plus files a previous run (or
+# another device's) left behind, and a file that isn't the tool's
+seed() {
+  local o=$1
+  rm -rf "$o"
+  run "$t/v1" "$t/ext4.img" -o "$o" || { cat "$t/log"; fail "seed: a first extraction into $o succeeds"; return; }
+  echo stale > "$o/$FW/brcm/brcmfmac4389c1-pcie.google,gs201-panther.bin"
+  echo stale > "$o/$FW/old-only.bin"
+  echo stale > "$o/$REG/stale_sensor.json"
+  echo mine > "$o/notes.txt"
+}
+# A failed run over a seeded directory leaves it (and the -c file) exactly
+# as it was
+refuses() { # NAME EXPECTED-ERROR VENDOR IMG ARGS...
+  local name=$1 err=$2 o=$t/refused before; shift 2
+  seed "$o"
+  [[ -s $o/vendor-firmware.sha256 ]] || { fail "$name: there is a previous generation to keep"; return; }
+  before=$(snap "$o")
+  if run "$@" -o "$o"; then fail "$name: refused"; return; fi
+  grep -qF -- "$err" "$t/log" || { cat "$t/log"; fail "$name: says '$err'"; return; }
+  [[ $(snap "$o") == "$before" ]] || { diff <(echo "$before") <(snap "$o") || true; fail "$name: the previous outputs stay as they were"; return; }
+  pass "$name: refused, the previous outputs untouched"
+}
+
+# --- A fresh run ---------------------------------------------------------------
+o=$t/fresh n=$failed
+if run "$t/v1" "$t/ext4.img" -o "$o"; then
+  [[ $(listed "$o") == "$CHEETAH_FILES" ]] || fail "fresh: the checksum list names exactly the mapped files"
+  (cd "$o/$FW" && sha256sum --quiet -c "$o/vendor-firmware.sha256") || fail "fresh: the checksums match"
+  top=$(find "$o" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ')
+  [[ $top == "usr vendor-firmware.sha256 " ]] || fail "fresh: nothing but usr and the checksum list in OUT (got: $top)"
+  [[ $(cat "$o/$REG/fictional_accel.json") == '{"accel": "gen1"}' ]] || fail "fresh: the registry is copied"
+  pass_since "$n" "fresh: a first run stages the mapped files, the registry and their checksums"
+else
+  cat "$t/log"; fail "fresh: a first run succeeds"
+fi
+
+# --- A reused output directory -------------------------------------------------
+o=$t/reuse n=$failed
+seed "$o"
+if run "$t/v2" "$t/ext4.img" -o "$o"; then
+  [[ ! -e "$o/$FW/brcm/brcmfmac4389c1-pcie.google,gs201-panther.bin" && ! -e "$o/$FW/old-only.bin" ]] ||
+    fail "reuse: no firmware from an earlier run stays"
+  [[ ! -e "$o/$REG/stale_sensor.json" ]] || fail "reuse: no sensor registry file from an earlier run stays"
+  [[ $(listed "$o") == "$CHEETAH_FILES" ]] || fail "reuse: the checksum list names only this run's files"
+  [[ $(cat "$o/$FW/aoc.bin") == "aoc gen2" && $(cat "$o/$REG/fictional_accel.json") == '{"accel": "gen2"}' ]] ||
+    fail "reuse: the files are this run's"
+  [[ $(cat "$o/notes.txt") == mine ]] || fail "reuse: a file that isn't the tool's stays"
+  [[ -z $(find "$o" -maxdepth 1 -name '.extract-vendor-firmware.*') ]] || fail "reuse: no staging directory left in OUT"
+  pass_since "$n" "reuse: a second run replaces the earlier generation and keeps nothing from it"
+else
+  cat "$t/log"; fail "reuse: a second run succeeds"
+fi
+
+o=$t/husky-reuse n=$failed
+seed "$o"
+if run "$t/husky" "$t/ext4.img" -d husky -o "$o"; then
+  [[ ! -e $o/usr/share/omamobile/sensors ]] || fail "husky: an earlier device's sensor registry is dropped"
+  [[ $(listed "$o" | tr '\n' ' ') == "brcm/brcmfmac4398d0-pcie.google,zuma-husky.bin brcm/brcmfmac4398d0-pcie.google,zuma-husky.clm_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txcap_blob brcm/brcmfmac4398d0-pcie.google,zuma-husky.txt " ]] ||
+    fail "husky: the checksum list names husky's four files only"
+  [[ $(find "$o/$FW" -type f | wc -l) == 4 ]] || fail "husky: no cheetah firmware stays"
+  pass_since "$n" "husky: a run over a cheetah generation leaves only husky's files"
+else
+  cat "$t/log"; fail "husky: a run over a cheetah generation succeeds"
+fi
+
+# --- Failed runs leave the previous generation ----------------------------------
+rm -rf "$t/v2-missing"; cp -r "$t/v2" "$t/v2-missing"; rm "$t/v2-missing/firmware/aoc.bin"
+refuses "a missing ext4 file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/ext4.img"
+refuses "a missing EROFS file with an older copy in OUT" "/vendor/firmware/aoc.bin is missing" "$t/v2-missing" "$t/erofs.img"
+
+rm -rf "$t/v2-noreg"; cp -r "$t/v2" "$t/v2-noreg"; rm -r "$t/v2-noreg/etc/sensors/registry"
+refuses "a missing sensor registry with an older one in OUT" "/vendor/etc/sensors/registry is missing" "$t/v2-noreg" "$t/ext4.img"
+
+rm -rf "$t/v2-dumpfail"; cp -r "$t/v2" "$t/v2-dumpfail"; echo firmware/cs40l26.bin > "$t/v2-dumpfail/.fail-dump"
+refuses "debugfs reporting a short write (exit 0)" "/vendor/firmware/cs40l26.bin is missing" "$t/v2-dumpfail" "$t/ext4.img"
+rm -rf "$t/v2-rdumpfail"; cp -r "$t/v2" "$t/v2-rdumpfail"; touch "$t/v2-rdumpfail/.fail-rdump"
+refuses "debugfs reporting a short write in the registry (exit 0)" "/vendor/etc/sensors/registry is missing" "$t/v2-rdumpfail" "$t/ext4.img"
+# The same under a file size limit on the run (as on a nearly full disk):
+# reading debugfs's messages must not need a file of its own
+o=$t/refused-limited n=$failed
+seed "$o"
+before=$(snap "$o")
+if (trap '' XFSZ; ulimit -f 8; run "$t/v2-rdumpfail" "$t/ext4.img" -o "$o"); then
+  fail "a registry short write under a file size limit: refused"
+elif [[ $(snap "$o") != "$before" ]]; then
+  cat "$t/log"; fail "a registry short write under a file size limit: the previous outputs stay as they were"
+fi
+pass_since "$n" "a registry short write under a file size limit: refused, the previous outputs untouched"
+
+rm -rf "$t/v2-same"; cp -r "$t/v2" "$t/v2-same"
+cp "$t/v2-same/firmware/cs35l41-dsp1-spk-prot.bin" "$t/v2-same/firmware/R-cs35l41-dsp1-spk-prot.bin"
+refuses "a sanity check failing after every copy" "the top and bottom speaker tunings are the same file" "$t/v2-same" "$t/ext4.img"
+
+# The camera APEX (-c) is replaced only by a successful run
+echo "old apex" > "$t/camera.apex"
+rm -rf "$t/v2-noapex"; cp -r "$t/v2" "$t/v2-noapex"; rm "$t/v2-noapex/apex/com.google.pixel.camera.hal.apex"
+refuses "a missing camera APEX with an older one at -c" "camera.hal.apex is missing" "$t/v2-noapex" "$t/ext4.img" -c "$t/camera.apex"
+[[ $(cat "$t/camera.apex") == "old apex" ]] || fail "camera: the -c file stays after a failed run"
+[[ -z $(find "$t" -maxdepth 1 -name 'camera.apex.*') ]] || fail "camera: no temporary APEX left beside -c"
+o=$t/camera
+seed "$o"
+if run "$t/v2" "$t/ext4.img" -c "$t/camera.apex" -o "$o" && [[ $(cat "$t/camera.apex") == "apex gen2" ]]; then
+  pass "camera: a successful run replaces the -c file"
+else
+  cat "$t/log"; fail "camera: a successful run replaces the -c file"
+fi
+
+# -c naming a directory is refused before anything is extracted
+o=$t/camera
+before=$(snap "$o")
+if run "$t/v2" "$t/ext4.img" -c "$t" -o "$o"; then
+  fail "camera: a -c that is a directory is refused"
+elif ! grep -qF -- "-c needs a file name" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
+  cat "$t/log"; fail "camera: a -c that is a directory is refused, nothing changed"
+else
+  pass "camera: a -c that is a directory is refused, nothing changed"
+fi
+# -c inside the outputs the run replaces is refused too
+if run "$t/v2" "$t/ext4.img" -c "$o/$FW/camera.apex" -o "$o"; then
+  fail "camera: a -c inside the replaced outputs is refused"
+elif ! grep -qF -- "-c must not be inside the outputs" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
+  cat "$t/log"; fail "camera: a -c inside the replaced outputs is refused, nothing changed"
+else
+  pass "camera: a -c inside the replaced outputs is refused, nothing changed"
+fi
+
+# A move that fails while publishing (the registry's parent not writable)
+# puts back what was already replaced: OUT is left as it was
+if ((EUID != 0)); then
+  o=$t/publish-fail n=$failed
+  seed "$o"
+  chmod a-w "$o/usr/share/omamobile"
+  before=$(snap "$o")
+  if run "$t/v2" "$t/ext4.img" -o "$o"; then
+    fail "publish failure: the run fails"
+  else
+    grep -qF "publishing failed; the previous outputs are back in place" "$t/log" ||
+      { cat "$t/log"; fail "publish failure: says the previous outputs are back"; }
+    [[ $(snap "$o") == "$before" ]] || { diff <(echo "$before") <(snap "$o") || true; fail "publish failure: OUT is as it was"; }
+  fi
+  chmod u+w "$o/usr/share/omamobile"
+  pass_since "$n" "publish failure: the previous outputs put back, OUT as it was"
+else
+  echo "ok - # skip: running as root, so a read-only directory can't make a move fail"
+fi
+
+# The same on EROFS: a reused directory, and a failure after copying
+o=$t/erofs
+seed "$o"
+if run "$t/v2" "$t/erofs.img" -o "$o" && [[ $(listed "$o") == "$CHEETAH_FILES" && ! -e $o/$REG/stale_sensor.json ]]; then
+  pass "erofs: a second run keeps nothing from the earlier generation"
+else
+  cat "$t/log"; fail "erofs: a second run keeps nothing from the earlier generation"
+fi
+refuses "erofs: a sanity check failing after every copy" "the top and bottom speaker tunings are the same file" "$t/v2-same" "$t/erofs.img"
+
+# --- A real ext4 image (synthetic files), when the host can make one -----------
+# Its registry files belong to root, as on a real image, so a run as a user
+# sees rdump's ownership notes; a 9 KiB aoc.bin is cut short by a file size
+# limit on debugfs, which reports it and exits 0.
+rm -rf "$t/v2-big"; cp -r "$t/v2" "$t/v2-big"; head -c 9216 /dev/zero | tr '\0' 'a' > "$t/v2-big/firmware/aoc.bin"
+if realdfs=$(command -v debugfs) && mkfs.ext4 -q -F -d "$t/v2" "$t/real.img" 8M >/dev/null 2>&1 &&
+   mkfs.ext4 -q -F -d "$t/v2-missing" "$t/real-missing.img" 8M >/dev/null 2>&1 &&
+   mkfs.ext4 -q -F -d "$t/v2-big" "$t/real-big.img" 8M >/dev/null 2>&1 &&
+   debugfs -w -R "sif /etc/sensors/registry uid 0" "$t/real.img" >/dev/null 2>&1 &&
+   debugfs -w -R "sif /etc/sensors/registry/fictional_accel.json uid 0" "$t/real.img" >/dev/null 2>&1; then
+  mkdir -p "$t/limited"
+  printf '#!/bin/bash\ntrap "" XFSZ\nulimit -f 4\nexec %q "$@"\n' "$realdfs" > "$t/limited/debugfs"
+  chmod +x "$t/limited/debugfs"
+  o=$t/real
+  seed "$o"
+  if "$EVF" -w "$t/work" -o "$o" "$t/real.img" > "$t/log" 2>&1 &&
+     [[ $(listed "$o") == "$CHEETAH_FILES" && ! -e $o/$REG/stale_sensor.json && $(cat "$o/$FW/aoc.bin") == "aoc gen2" ]]; then
+    pass "real ext4: a second run keeps nothing from the earlier generation"
+  else
+    cat "$t/log"; fail "real ext4: a second run keeps nothing from the earlier generation"
+  fi
+  before=$(snap "$o")
+  if "$EVF" -w "$t/work" -o "$o" "$t/real-missing.img" > "$t/log" 2>&1; then
+    fail "real ext4: a missing file with an older copy in OUT is refused"
+  elif ! grep -qF "/vendor/firmware/aoc.bin is missing" "$t/log"; then
+    cat "$t/log"; fail "real ext4: says the file is missing"
+  elif [[ $(snap "$o") != "$before" ]]; then
+    fail "real ext4: a refused run leaves the previous outputs"
+  else
+    pass "real ext4: a missing file with an older copy in OUT is refused, the previous outputs untouched"
+  fi
+  before=$(snap "$o")
+  if PATH=$t/limited:$PATH "$EVF" -w "$t/work" -o "$o" "$t/real-big.img" > "$t/log" 2>&1; then
+    fail "real ext4: a copy cut short by debugfs is refused"
+  elif ! grep -qF "/vendor/firmware/aoc.bin is missing" "$t/log" || [[ $(snap "$o") != "$before" ]]; then
+    cat "$t/log"; fail "real ext4: a copy cut short by debugfs is refused, the previous outputs untouched"
+  else
+    pass "real ext4: a copy cut short by debugfs is refused, the previous outputs untouched"
+  fi
+else
+  echo "ok - # skip: no mkfs.ext4 -d and debugfs for the real ext4 checks"
+fi
+
+((failed == 0)) || { echo "$failed check(s) failed" >&2; exit 1; }
