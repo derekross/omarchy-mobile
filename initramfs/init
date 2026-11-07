@@ -47,12 +47,16 @@ fi
 ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # Storage guard. Everything on the UFS is read-only except an allowlist of
 # partitions we own: slot B's boot images (in-place kernel updates) and
-# userdata (the Arch root). The kernel only lets a partition be written if
-# its whole disk is writable too, so the main disk (sda) stays writable but
-# its whole-disk node is removed, so nothing can write across partitions by
-# accident. The boot LUNs (sdb, sdc, sdd: bootloader images) are read-only
-# at the disk level. Calibration partitions (efs, persist, modem_userdata...)
-# and all of slot A stay read-only.
+# userdata (the Arch root). The kernel counts a partition read-only when its
+# own flag or its disk's flag is set (bdev_read_only), so every LUN is
+# guarded the same way: its whole-disk node is removed, so nothing can write
+# across partitions, the disk's own flag is left clear, and each partition
+# gets its own read-only flag. The main LUN (sda) and the boot LUNs (sdb,
+# sdc, sdd: bootloader images, devinfo) differ only in that the allowlist
+# can name partitions of sda alone. With the disk flags clear, a tool that
+# must write one boot-LUN partition (omamobile-boot-success, devinfo) clears
+# that partition's own flag and nothing else (#252). Calibration partitions
+# (efs, persist, modem_userdata...) and all of slot A stay read-only.
 # The allowlist is the descriptor's UFS_RW, which bin/omamobile initramfs
 # checks and packs into /etc/omamobile-ufs-rw. It fails closed: a missing,
 # empty or malformed file leaves every partition read-only, so Arch does not
@@ -92,6 +96,8 @@ ufs_rw_load() {
 ufs_rw_load
 mkdir -p /run/ufs-ro
 ufs_partname() { sed -n 's/^PARTNAME=//p' "$1/uevent" 2>/dev/null; }
+# A whole disk is /sys/block/<disk>, a partition /sys/block/<disk>/<part>
+ufs_is_disk() { case "${1#/sys/block/}" in */*) return 1 ;; esac; }
 ufs_ro_pass() {
   local s ro name part disk
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
@@ -99,10 +105,19 @@ ufs_ro_pass() {
     name=${s##*/}
     [ -e "/run/ufs-ro/$name" ] && continue
     [ -b "/dev/$name" ] || continue  # devtmpfs node not there yet: next pass
-    if [ "$name" = sda ]; then
-      rm -f /dev/sda
+    if ufs_is_disk "$s"; then
+      # A whole disk (LUN): remove its node, never set its flag
+      rm -f "/dev/$name" 2>/dev/null
+      if [ -e "/dev/$name" ]; then
+        if [ ! -e "/run/ufs-ro/$name.failed" ]; then
+          : > "/run/ufs-ro/$name.failed"  # keep retrying, but log once
+          ufs_ro_log "FAILED to remove the whole-disk node /dev/$name"
+          echo "omamobile: WARNING: /dev/$name is NOT removed" > /dev/tty0 2>/dev/null
+        fi
+        continue
+      fi
       : > "/run/ufs-ro/$name"
-      ufs_ro_log "/dev/sda: whole-disk node removed (partitions guarded individually)"
+      ufs_ro_log "/dev/$name: whole-disk node removed (partitions guarded individually)"
       continue
     fi
     part=$(ufs_partname "$s")
@@ -124,14 +139,17 @@ ufs_ro_pass() {
     fi
   done
 }
-# Prints every disk or partition that is writable but not on the allowlist
-# (sda itself excepted: its node is removed). Empty means the guard holds.
+# Prints every whole-disk node still present and every partition that is
+# writable but not on the allowlist. Empty means the guard holds.
 ufs_unguarded() {
   local s name part ro
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
-    [ "$name" = sda ] && continue
+    if ufs_is_disk "$s"; then
+      [ -b "/dev/$name" ] && echo "$name (whole-disk node)"
+      continue
+    fi
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")
@@ -320,7 +338,7 @@ grep -q omamobile.debug /proc/cmdline && {
 
 # UFS probe report when the cmdline has omamobile.ufs-probe: wait for the
 # disks to settle, then list them and the GPT partition names. Read-only: it
-# only reads /proc and sysfs, after the guard above has marked the disks ro.
+# only reads /proc and sysfs, after the guard above has marked the partitions ro.
 grep -q omamobile.ufs-probe /proc/cmdline && (
   last=-1
   for i in $(seq 1 30); do
