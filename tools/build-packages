@@ -215,32 +215,54 @@ done
 
 # Pinned upstream packages (rootfs/packages.pinned): what that file lists is
 # in out/repo with its listed checksum, and what it listed before and no
-# longer does (out/repo/.pinned) is taken out
+# longer does (out/repo/.pinned) is taken out. Each line is a SHA-256 and one
+# or more URLs of the same file, tried in order (Omarchy's, then our
+# published copy, for when upstream prunes it). A pin never takes the name
+# of a package we build: add_to_repo would replace ours with it.
 pinlist=rootfs/packages.pinned
 pinstate=$(dirname "$repo")/.pinned
+pins_changed=0
+our_names() {
+  local d
+  for d in packages/*/PKGBUILD; do pkg_names "${d%/PKGBUILD}"; done | tr ' ' '\n' | sed '/^$/d' | sort -u
+}
 sync_pins() {
-  local sum url base extra want=() f tmp
-  while read -r sum url extra; do
-    [[ $sum =~ ^[0-9a-f]{64}$ && $url =~ ^(https|file)://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ && -z $extra ]] ||
-      alarm_die "$pinlist: not \"<sha256> <url of a package file>\": $sum $url $extra"
-    base=${url##*/}
+  local sum urls url base name want=() f tmp ours="" got
+  while read -r sum urls; do
+    base=
+    [[ $sum =~ ^[0-9a-f]{64}$ && -n $urls ]] || alarm_die "$pinlist: not \"<sha256> <url>...\": $sum $urls"
+    for url in $urls; do
+      [[ $url =~ ^(https|file)://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ ]] ||
+        alarm_die "$pinlist: not the URL of a package file: $url"
+      [[ -z $base || ${url##*/} == "$base" ]] || alarm_die "$pinlist: one line's URLs name different files: $urls"
+      base=${url##*/}
+    done
     want+=("$base")
     if [[ -f $repo/$base && $(sha256sum < "$repo/$base" | cut -d' ' -f1) == "$sum" ]]; then continue; fi
     alarm_say "Pinned: $base"
-    tmp=$(mktemp -d)
-    curl -fsSL --retry 3 -o "$tmp/$base" "$url" || { rm -rf "$tmp"; alarm_die "$pinlist: could not fetch $url"; }
-    [[ $(sha256sum < "$tmp/$base" | cut -d' ' -f1) == "$sum" ]] ||
-      { rm -rf "$tmp"; alarm_die "$pinlist: $url does not match its SHA-256; nothing added"; }
+    tmp=$(mktemp -d) got=0
+    for url in $urls; do
+      if curl -fsSL --retry 3 --connect-timeout 30 --max-time 1800 -o "$tmp/$base" "$url" &&
+         [[ $(sha256sum < "$tmp/$base" | cut -d' ' -f1) == "$sum" ]]; then got=1; break; fi
+      echo "    $url: not fetched, or not the listed SHA-256" >&2
+    done
+    ((got)) || { rm -rf "$tmp"; alarm_die "$pinlist: no URL gave $base with its SHA-256; nothing added"; }
     [[ $(pkginfo "$tmp/$base" | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] ||
       { rm -rf "$tmp"; alarm_die "$pinlist: $base is not an aarch64 package"; }
+    name=$(pkginfo "$tmp/$base" | sed -n 's/^pkgname = //p')
+    [[ -n $ours ]] || ours=$(our_names)
+    ! grep -qxF "$name" <<<"$ours" ||
+      { rm -rf "$tmp"; alarm_die "$pinlist: $base is $name, which packages/ builds: a pin never replaces our own package"; }
     add_to_repo "$tmp/$base"
     rm -rf "$tmp"
+    pins_changed=1
   done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$pinlist" 2>/dev/null || true)
   if [[ -f $pinstate ]]; then
     while read -r f; do
       [[ -n $f && " ${want[*]} " != *" $f "* && -e $repo/$f ]] || continue
       rm -f "$repo/$f" "$repo/$f.sig"
       echo "    unpinned: $f"
+      pins_changed=1
     done < "$pinstate"
   fi
   printf '%s\n' ${want[@]+"${want[@]}"} | sed '/^$/d' > "$pinstate"
@@ -303,6 +325,13 @@ sign_and_index() {
       "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
   fi
 }
+
+# A changed pin is in the index before the first build, which resolves its
+# dependencies from it (omamobile-omarchy depends on omarchy)
+if ((pins_changed)); then
+  alarm_say "Indexing the pinned packages"
+  sign_and_index
+fi
 
 if ((resign)); then
   [[ -f $repo/omamobile.db ]] || alarm_die "$repo has no index to sign again"

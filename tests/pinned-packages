@@ -4,7 +4,9 @@
 # with a throwaway release key and file:// packages (no network, no Docker, no
 # phone; the real keys/ and out/ are never touched): a pinned package is
 # fetched, checked against its SHA-256 and signed with the release key, bytes
-# unchanged; one that doesn't match is refused and nothing is added; a later
+# unchanged, from the next URL when one fails, and indexed before any build;
+# one that doesn't match, isn't aarch64 or has the name of a package we
+# build is refused and nothing is added; a later
 # run keeps it without fetching again; removing its line takes it out of
 # out/repo and the index; and the
 # real rootfs/packages.pinned parses.
@@ -63,18 +65,40 @@ indexed() { bsdtar -xOf "$repo/omamobile.db.tar.gz" --include='*/desc' | awk '/^
 # --- a checksum that doesn't match adds nothing ---
 printf '# comment\n\n%s file://%s\n' "$(printf '0%.0s' {1..64})" "$up" > "$R/rootfs/packages.pinned"
 if run tools/build-packages --import "$t/imp"; then fail "a pinned file that doesn't match its SHA-256 is refused"; fi
-grep -q 'does not match its SHA-256' "$t/log" || { cat "$t/log"; fail "says the checksum doesn't match"; }
+grep -q 'no URL gave .* with its SHA-256' "$t/log" || { cat "$t/log"; fail "says the checksum doesn't match"; }
 [[ ! -e $repo/${up##*/} ]] || fail "nothing is added"
 pass "a pinned file that doesn't match its SHA-256 is refused"
 
 printf '%s\n' "$(sum "$up") file://$up extra" > "$R/rootfs/packages.pinned"
 if run tools/build-packages --import "$t/imp"; then fail "a malformed line is refused"; fi
-grep -q 'not "<sha256> <url of a package file>"' "$t/log" || { cat "$t/log"; fail "names the format"; }
+grep -q 'not the URL of a package file: extra' "$t/log" || { cat "$t/log"; fail "names the bad URL"; }
+printf '%s\n' "$(sum "$up") file://$up file://$up2" > "$R/rootfs/packages.pinned"
+if run tools/build-packages --import "$t/imp"; then fail "URLs of different files on one line are refused"; fi
+grep -q "one line's URLs name different files" "$t/log" || { cat "$t/log"; fail "says the URLs differ"; }
 pass "a malformed line is refused"
 
+# --- not an aarch64 package, or the name of one of ours ---
+mkdir -p "$t/x86" "$t/clash"
+x86=$(mkpkg "$t/x86" upstream-x86 1-1 x86_64)
+printf '%s file://%s\n' "$(sum "$x86")" "$x86" > "$R/rootfs/packages.pinned"
+if run tools/build-packages --import "$t/imp"; then fail "a package for another architecture is refused"; fi
+grep -q 'is not an aarch64 package' "$t/log" || { cat "$t/log"; fail "says it is not aarch64"; }
+mkdir -p "$R/packages/hyprland"
+printf 'pkgname=(hyprland hyprpm)\npkgver=1\npkgrel=1\n' > "$R/packages/hyprland/PKGBUILD"
+clash=$(mkpkg "$t/clash" hyprpm 9-1 aarch64)
+printf '%s file://%s\n' "$(sum "$clash")" "$clash" > "$R/rootfs/packages.pinned"
+if run tools/build-packages --import "$t/imp"; then fail "a pin with the name of a package we build is refused"; fi
+grep -q 'hyprpm, which packages/ builds' "$t/log" || { cat "$t/log"; fail "names our package"; }
+rm -rf "$R/packages/hyprland"
+[[ ! -e $repo/${x86##*/} && ! -e $repo/${clash##*/} ]] || fail "nothing is added"
+pass "a pin for another architecture, or with the name of a package we build, is refused"
+
 # --- pinned, fetched, signed with the release key, bytes unchanged ---
-printf '# Omarchy, pinned\n%s file://%s\n%s file://%s   # and its settings\n' "$(sum "$up")" "$up" "$(sum "$up2")" "$up2" > "$R/rootfs/packages.pinned"
+# (the first URL of the settings line is gone: the second, a copy, is used)
+printf '# Omarchy, pinned\n%s file://%s\n%s file://%s/gone/%s file://%s   # and its settings\n' \
+  "$(sum "$up")" "$up" "$(sum "$up2")" "$t" "${up2##*/}" "$up2" > "$R/rootfs/packages.pinned"
 run tools/build-packages --import "$t/imp" || { cat "$t/log"; fail "build-packages with pins"; }
+grep -q 'Indexing the pinned packages' "$t/log" || { cat "$t/log"; fail "the pins are indexed before any build"; }
 for f in "$up" "$up2"; do
   b=${f##*/}
   [[ -f $repo/$b && $(sum "$repo/$b") == "$(sum "$f")" ]] || fail "$b is in out/repo, bytes unchanged"
@@ -82,12 +106,13 @@ for f in "$up" "$up2"; do
 done
 [[ $(indexed) == "ours-1-1-any.pkg.tar.zst upstream-4.0.6-1-aarch64.pkg.tar.zst upstream-settings-4.0.6-1-aarch64.pkg.tar.zst" ]] ||
   fail "the index lists the pinned packages (got: $(indexed))"
-pass "pinned packages are fetched, checked and signed with the release key, bytes unchanged"
+pass "pinned packages are fetched (from the next URL when one fails), checked, indexed before builds and signed with the release key, bytes unchanged"
 
 # --- kept without fetching again, even when the source is gone ---
 mv "$up" "$t/gone"
 run tools/build-packages --import "$t/imp" || { cat "$t/log"; fail "a later run keeps the pinned package"; }
 grep -q 'Pinned:' "$t/log" && fail "nothing is fetched again"
+grep -q 'Indexing the pinned packages' "$t/log" && fail "nothing changed, so no extra indexing"
 [[ -f $repo/${up##*/} ]] || fail "out/repo keeps it"
 mv "$t/gone" "$up"
 pass "a later run keeps pinned packages without fetching them again"
@@ -102,8 +127,13 @@ grep -q "unpinned: ${up##*/}" "$t/log" || { cat "$t/log"; fail "says what it unp
 pass "removing a line takes its package out of out/repo and the index"
 
 # --- the real list parses ---
-while read -r s u extra; do
-  [[ $s =~ ^[0-9a-f]{64}$ && $u =~ ^https://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ && -z $extra ]] ||
-    fail "rootfs/packages.pinned: bad line: $s $u $extra"
+while read -r s urls; do
+  [[ $s =~ ^[0-9a-f]{64}$ && -n $urls ]] || fail "rootfs/packages.pinned: bad line: $s $urls"
+  b=
+  for u in $urls; do
+    [[ $u =~ ^https://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ && ( -z $b || ${u##*/} == "$b" ) ]] ||
+      fail "rootfs/packages.pinned: bad URL: $u"
+    b=${u##*/}
+  done
 done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' rootfs/packages.pinned)
-pass "rootfs/packages.pinned lists https package files with SHA-256s"
+pass "rootfs/packages.pinned lists https URLs of package files with SHA-256s"

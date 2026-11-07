@@ -133,7 +133,7 @@ known_errors=(
   'failed to register acpm aoc reset callback'
   # the camera lens motors fail one command on wake (NOTES); fix: camera work
   'ak73[0-9]+_vcm_resume (I2C|INC) failure'
-  # CPU energy model against the OPP tables; fix: cpufreq
+  # CPU energy model against the OPP tables; fix: linux-omarchy-mobile#182 (kernel #184)
   'cpu cpu[0-9]+: EM: invalid perf\. state'
   # the GPU's supply belongs to the ACPM firmware, not a Linux regulator
   'panthor .*no regulator \(mali\) found'
