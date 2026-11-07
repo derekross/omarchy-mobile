@@ -1,8 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Compile reboot-to into BUILDDIR (default: build).
+# Compile reboot-to and omamobile-bootctl into BUILDDIR (default: build).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 out=${1:-build}
 mkdir -p "$out"
 ${CC:-cc} ${CFLAGS:--O2} -Wall -Wextra -o "$out/reboot-to" src/reboot-to.c ${LDFLAGS:-}
+${CC:-cc} ${CFLAGS:--O2} -Wall -Wextra -Ibootctl -o "$out/omamobile-bootctl" bootctl/omamobile-bootctl.c ${LDFLAGS:-}

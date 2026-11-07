@@ -53,12 +53,47 @@ if [[ -f ../../device/husky/device.conf ]]; then
   pass "device.conf matches the descriptor"
 fi
 
+# omamobile-bootctl (#252): one source and one test in the husky and tegu
+# packages, byte for byte; the per-phone values are in bootctl/bootctl-device.h.
+# It is installed for the owner to run by hand: no unit, hook or script here
+# may call it, and nothing enables it.
+other=../omamobile-device-tegu
+if [[ -d $other ]]; then
+  cmp -s bootctl/omamobile-bootctl.c "$other/bootctl/omamobile-bootctl.c" \
+    || fail "omamobile-bootctl.c drifted from the tegu package"
+  cmp -s test/bootctl "$other/test/bootctl" || fail "test/bootctl drifted from the tegu package"
+  pass "omamobile-bootctl.c and test/bootctl match the tegu package"
+fi
+if [[ -f ../omamobile-device-cheetah/LICENSE.Apache-2.0 ]]; then
+  cmp -s LICENSE.Apache-2.0 ../omamobile-device-cheetah/LICENSE.Apache-2.0 || fail "LICENSE.Apache-2.0 drifted from the cheetah package"
+fi
+grep -qx '#define BOOTCTL_CODENAME[[:space:]]*"husky"' bootctl/bootctl-device.h || fail "bootctl-device.h is not husky's"
+compat=$(sed -n 's/^COMPATIBLE="\(.*\)"$/\1/p' device.conf)
+grep -qx "#define BOOTCTL_COMPATIBLE[[:space:]]*\"$compat\"" bootctl/bootctl-device.h \
+  || fail "bootctl-device.h's compatible is not device.conf's ($compat)"
+pass "bootctl-device.h names husky and device.conf's compatible"
+grep -rlw 'omamobile-bootctl' vendor bin *.install 2>/dev/null && fail "a unit, hook or script calls omamobile-bootctl"
+pass "nothing in the package calls omamobile-bootctl"
+# bin/omamobile's initramfs builder compiles packages/<device>/src/omamobile-bootctl.c
+# (and tools/stage-boot-files hashes src/) into the boot image: this tool
+# belongs in the installed package only, so nothing may sit where they look.
+[[ ! -e src/omamobile-bootctl.c ]] || fail "src/omamobile-bootctl.c would be built into the initramfs"
+if [[ -f ../../bin/omamobile ]]; then
+  while read -r probe; do
+    [[ -z $probe || ! -e $probe ]] || fail "bin/omamobile would build $probe into the initramfs"
+  done < <(grep -oh 'packages/\$DEV_PACKAGE/[A-Za-z0-9_./-]*' ../../bin/omamobile | sed 's#^packages/\$DEV_PACKAGE/##' | sort -u)
+fi
+! ls src/ 2>/dev/null | grep -q bootctl || fail "a bootctl file under src/, where the boot-file tools look"
+pass "the tool is outside the paths the initramfs builder and stage-boot-files read"
+test/bootctl --mutations || fail "test/bootctl"
+
 ./build "$tmp/build" || fail "reboot-to compiles"
-[[ -x $tmp/build/reboot-to ]] || fail "reboot-to is not executable"
-pass "reboot-to compiles"
+[[ -x $tmp/build/reboot-to && -x $tmp/build/omamobile-bootctl ]] || fail "the C tools are not executable"
+pass "reboot-to and omamobile-bootctl compile"
 
 ./install "$tmp/root" "$tmp/build"
-for f in usr/bin/reboot-to \
+for f in usr/bin/reboot-to usr/bin/omamobile-bootctl \
+         usr/share/licenses/omamobile-device-husky/LICENSE.Apache-2.0 \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
@@ -143,13 +178,14 @@ grep -qx 'ExecStart=-/usr/bin/plymouth quit --retain-splash' "$tmp/root/usr/lib/
 pass "Plymouth quits with --retain-splash, as on raven"
 grep -q '^PACKAGE=omamobile-device-husky$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is husky"
-for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
+for absent in usr/bin/omamobile-boot-success \
               usr/lib/systemd/system/omamobile-boot-success.service \
               usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rule, the USB link, the mirrorlist and the display start, and nothing that marks a slot or starts the radio, the charger or a camera"
+! grep -rlw omamobile-bootctl "$tmp/root/usr/lib" "$tmp/root/etc" || fail "a staged unit or hook calls omamobile-bootctl"
+pass "install stages the udev rule, the USB link, the mirrorlist, the display start and omamobile-bootctl for use by hand, and nothing that marks a slot or starts the radio, the charger or a camera"
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"

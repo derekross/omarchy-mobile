@@ -1,6 +1,6 @@
 # omamobile-device-husky
 
-Omarchy Mobile's first userspace package for the Google Pixel 8 Pro (codename husky, Tensor G3 / zuma). Like the Pixel Fold's, it hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It does not drive the radio, the charger, or a camera, and it does not mark a boot slot successful.
+Omarchy Mobile's first userspace package for the Google Pixel 8 Pro (codename husky, Tensor G3 / zuma). Like the Pixel Fold's, it hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It does not drive the radio, the charger, or a camera, and nothing in it marks a boot slot successful on its own: `omamobile-bootctl` is there for the owner to run by hand.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
@@ -17,11 +17,12 @@ Omarchy Mobile's first userspace package for the Google Pixel 8 Pro (codename hu
 | `etc/omamobile-mirrorlist` | `/etc/pacman.d/omamobile-mirrorlist` | Where pacman finds the `[omamobile]` repository. Same file as the Pixel 7 Pro package |
 | `omamobile-device-husky.install` | pacman hook | Adds `[omamobile]` to `pacman.conf` before `[omarchy]`, once. Same script as the Pixel 7 Pro package |
 | `src/reboot-to.c` | `/usr/bin/reboot-to` | Reboot with a reason the bootloader understands. Same bytes as the Pixel 7 Pro package; the test checks |
+| `bootctl/omamobile-bootctl.c`, `bootctl/bootctl-device.h`, `LICENSE.Apache-2.0` | `/usr/bin/omamobile-bootctl` | Marks slot B successful in `devinfo`, by hand and attended, from the runbook in [BRINGUP-M1.md#slot-b-marked-successful-by-hand](../../device/husky/BRINGUP-M1.md#slot-b-marked-successful-by-hand) (#252). Dry run by default; `--write` needs the dry run's eight slot bytes (`--expect`) and the codename typed or passed. It refuses another board, a devinfo layout other than the one recorded for this phone (3.15), a boot from slot A, and a storage guard that isn't holding. It makes devinfo and its boot LUN writable only for the one byte (the kernel won't write a partition of a read-only disk; for that moment the whole LUN is writable through its whole-disk node, which waits on the maintainer's ruling on #252), with a relock child that sets both read-only again if it dies, stops or hangs. The source is in `bootctl/`, not `src/`, so `bin/omamobile initramfs` never builds it into the boot image (test/all checks). No unit, hook or installer calls it. Apache-2.0, see `LICENSE.Apache-2.0` (the devinfo layout is Google's boot-control HAL); one source and one test (`test/bootctl`) with the tegu package |
 | `device.conf` | `/usr/share/omamobile/device.conf` | The descriptor, the same bytes as `device/husky/device.conf` |
 
-`./build [DIR]` compiles `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the copies when it is run from the repository.
+`./build [DIR]` compiles `reboot-to` and `omamobile-bootctl` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the copies when it is run from the repository.
 
-Not in this package: the boot-success marker, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook. There is no lid drop-in: husky has no hinge.
+Not in this package: a boot-success marker that runs at boot (marking is by hand, #252), the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook. There is no lid drop-in: husky has no hinge.
 
 ## Firmware the phone needs
 

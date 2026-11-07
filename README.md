@@ -63,7 +63,7 @@ Large trees live outside the repo: the Android-side sources, images and captures
 ## Ground rules
 
 - We only ever flash the boot images and userdata. Never `bootloader`, `radio`, `devinfo`, `persist` or calibration partitions.
-- **Licensing:** this repository is MIT ([LICENSE](LICENSE)) except where a file's SPDX header says otherwise. Kernel patches (and the board dtbo source) are GPL-2.0. The port of Google's Apache-2.0 boot-control code keeps that licence and Google's notice (`packages/omamobile-device-cheetah/src/omamobile-bootctl.c`). Every file we write carries an SPDX header.
+- **Licensing:** this repository is MIT ([LICENSE](LICENSE)) except where a file's SPDX header says otherwise. Kernel patches (and the board dtbo source) are GPL-2.0. The ports of Google's Apache-2.0 boot-control code keep that licence and Google's notice (`packages/omamobile-device-cheetah/src/omamobile-bootctl.c`, and the husky and tegu packages' `bootctl/omamobile-bootctl.c`, each with `LICENSE.Apache-2.0` beside it). Every file we write carries an SPDX header.
 - Google's proprietary firmware and binaries are never committed: our scripts extract them from the user's own factory image.
 - No code from unlicensed sources. Google's GPL kernel, upstream Linux, postmarketOS and Mesa are fine.
 

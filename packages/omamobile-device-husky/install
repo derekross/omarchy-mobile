@@ -1,7 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-device-husky into DESTDIR. Nothing is enabled that would
-# mark a slot successful or start the radio, the charger, or a camera.
+# mark a slot successful or start the radio, the charger, or a camera:
+# omamobile-bootctl is installed for the owner to run by hand (#252), and no
+# unit, hook or script calls it.
 #   ./install DESTDIR [BUILDDIR]
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -9,6 +11,7 @@ destination=${1:?Usage: ./install DESTDIR [BUILDDIR]}
 build=${2:-build}
 [[ $destination == /* && $destination != "/" ]] || { echo "Use an absolute staging directory" >&2; exit 1; }
 install -Dm755 "$build/reboot-to" "$destination/usr/bin/reboot-to"
+install -Dm755 "$build/omamobile-bootctl" "$destination/usr/bin/omamobile-bootctl"
 install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
   "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
 install -Dm644 vendor/systemd/network/20-usb-gadget.network \
@@ -44,4 +47,5 @@ install -Dm644 device.conf \
 install -Dm644 etc/omamobile-mirrorlist \
   "$destination/etc/pacman.d/omamobile-mirrorlist"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-device-husky/LICENSE"
+install -Dm644 LICENSE.Apache-2.0 "$destination/usr/share/licenses/omamobile-device-husky/LICENSE.Apache-2.0"
 install -Dm644 version "$destination/usr/share/omamobile/device-husky/version"
