@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Bring-up probe, never default (TYPEC-FAST-CHARGE-PLAN.md stage 3): switches
+ * on the MAX77759 Type-C port controller node (usb-typec@25 on hsi2c_11), so
+ * the I2C client 0x25 exists and tcpci_maxim can bind to it. Nothing else
+ * changes: the bus, USI11 and CMU_PERIC1 come from battery-i2c-test, the
+ * interrupt (gpa8-3) and its pinctrl are in the board file, and the connector
+ * keeps pd-disable (sink only, Rp sensing, no PD messages).
+ *
+ * The driver stays blacklisted by the husky package (omamobile-max77759.conf)
+ * until the dead-man step loads it (tools/husky-deadman b4-tcpm): with this
+ * overlay alone the node is "okay" but unbound, and omamobile-usb-rescue still
+ * closes the data switch. The node has no label in zuma-husky.dts, so it is
+ * addressed through its parent bus.
+ */
+/dts-v1/;
+/plugin/;
+
+&hsi2c_11 {
+	usb-typec@25 {
+		status = "okay";
+	};
+};
