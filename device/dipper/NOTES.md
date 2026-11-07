@@ -43,20 +43,6 @@ and Wi-Fi keys; quoted here are the facts, never the files.
   **Buttons** `qpnp_pon` plus `gpio-keys`.
 - **UFS** host at `1d84000.ufshc`. Stock `system` is dm-verity over the `system` partition.
 
-## Prior art this port builds on
-
-`sdm845-mainline/linux` **MR !71** ("Add sdm845-xiaomi-dipper", Jun 2023) is **closed, never
-merged**, and its branch is deleted; the dipper DTS is in no live branch of that tree. Of its
-97 commits only three are dipper-specific — the board DTS + `dipper-common.dtsi`, a
-purpose-written `panel-samsung-ea8074.c`, and the config switch. They are recovered and kept
-outside this repo. The other 94 were that tree's whole SDM845 stack rebased in, which is the
-likely reason it was closed, and most of it has landed there since.
-
-Against the live DT the DTS is right about the touch bus (`i2c14`) and both GPIOs (31, 32)
-and wrong about the controller: it says `focaltech,ea8074` at `0x38`, i.e. the panel's name
-and another vendor's address. That is the evidenced reason postmarketOS lists dipper's
-touchscreen as broken.
-
 ## 2026-10-29 — first light, and what the hardware said
 
 **The phone boots mainline and gives a shell.** `fastboot boot` of our image, kernel

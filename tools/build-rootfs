@@ -103,8 +103,6 @@ DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
 [[ -n $DEVICE_PACKAGE ]] || alarm_die "$conf has no PACKAGE"
 ROOTFS_PACKAGES=$(sed -n 's/^ROOTFS_PACKAGES="\(.*\)"$/\1/p' "$conf")
 [[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
-ROOTFS_DIST_PACKAGES=$(sed -n 's/^ROOTFS_DIST_PACKAGES="\(.*\)"$/\1/p' "$conf")
-[[ $ROOTFS_DIST_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_DIST_PACKAGES may hold only package names"
 
 repo=$outrel/repo/aarch64
 [[ -f $repo/omamobile.db ]] ||
@@ -113,10 +111,6 @@ repo=$outrel/repo/aarch64
 release=$(cat "$KERNEL_OUT/include/config/kernel.release")
 modules=$KERNEL_OUT/modules-$release.tar.zst
 [[ -f $modules ]] || alarm_die "no $modules: run KERNEL_OUT=$KERNEL_OUT bin/omamobile modules"
-
-device_firmware=$ROOT/../out/$DEVICE/firmware
-docker_args=(-v "$ROOT:/src:ro" -v "$ROOT/$outrel/repo:/repo:ro" -v "$modules:/modules:ro")
-[[ ! -d $device_firmware ]] || docker_args+=(-v "$device_firmware:/device-firmware:ro")
 
 name=omamobile-rootfs-$DEVICE-$VERSION-aarch64
 out=$ROOT/$outrel
@@ -142,11 +136,10 @@ start=$(date +%s)
 alarm_say "Building $name for $DEVICE (kernel $release, [omamobile] channel $CHANNEL)"
 commit=$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD -- rootfs packages tools device 2>/dev/null || echo "-dirty")
 docker run --rm --privileged --platform linux/arm64 \
-  "${docker_args[@]}" \
+  -v "$ROOT:/src:ro" -v "$ROOT/$outrel/repo:/repo:ro" -v "$modules:/modules:ro" \
   -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
   -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
   -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" \
-  -e ROOTFS_DIST_PACKAGES="$ROOTFS_DIST_PACKAGES" \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e CHANNEL="$CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \

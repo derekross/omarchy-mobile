@@ -7,8 +7,7 @@
 #   /modules  the kernel modules tarball (read-only)
 #   /target   an empty volume: the root file system is assembled here
 #   /out      where the raw image and the MANIFEST go
-# Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES,
-# ROOTFS_DIST_PACKAGES and
+# Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES and
 # ALLOW_MISSING (both space-separated), KERNEL_RELEASE, MODULES_SHA256,
 # GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, CHANNEL ([omamobile]: stable,
 # development or local).
@@ -30,13 +29,12 @@ pacman -Sy >/dev/null
 available() { pacman -Sp --print-format %n "$1" >/dev/null 2>&1; }
 
 mapfile -t base < <(list /src/rootfs/packages.base)
-read -ra distro <<<"${ROOTFS_DIST_PACKAGES:-}"
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
 ours+=("$DEVICE_PACKAGE")
 read -ra board <<<"${ROOTFS_PACKAGES:-}"
 ours+=("${board[@]}")
 missing=() skipped_ours=()
-for p in "${base[@]}" "${distro[@]}"; do available "$p" || missing+=("$p"); done
+for p in "${base[@]}"; do available "$p" || missing+=("$p"); done
 ((${#missing[@]} == 0)) || die "not in any repository: ${missing[*]}"
 # Every package of ours must come from [omamobile], not a same-named one
 # elsewhere (Mesa, Hyprland, libcamera are in Arch Linux ARM and [omarchy]
@@ -55,7 +53,7 @@ done
 ((${#missing[@]} == 0)) || die "not in out/repo: ${missing[*]} (build them: tools/build-packages; or allow: --allow-missing)"
 
 say "Base system and Omarchy (${#base[@]} packages)"
-pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" "${distro[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
+pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
 
 omarchy_list=$T/usr/share/omarchy/install/omarchy-base.packages
 [[ -f $omarchy_list ]] || die "no $omarchy_list in the omarchy package"
@@ -115,19 +113,6 @@ zstd -dc /modules | tar -C "$T/usr/lib/modules" -xf - --no-same-owner
 depmod -b "$T" -a "$KERNEL_RELEASE"
 # bin/omamobile push compares this with its tarball, so it won't push them again
 echo "$MODULES_SHA256" > "$T/usr/lib/modules/$KERNEL_RELEASE/.omamobile-tarball"
-
-if [[ -d /device-firmware ]]; then
-  say "Device firmware"
-  for d in qcom ath10k; do
-    if [[ -d /device-firmware/$d ]]; then
-      cp -a "/device-firmware/$d" "$T/usr/lib/firmware/"
-    elif [[ $DEVICE == dipper ]]; then
-      die "missing dipper firmware /device-firmware/$d (run tools/dipper/extract-firmware)"
-    fi
-  done
-elif [[ $DEVICE == dipper ]]; then
-  die "missing dipper firmware staging directory (run tools/dipper/build)"
-fi
 
 say "Omarchy patches (omamobile-omarchy)"
 # The same code path as every Omarchy upgrade on a phone: the package's pacman
@@ -190,7 +175,6 @@ say "MANIFEST"
   echo "# Omarchy Mobile root image"
   echo "version: $VERSION"
   echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES})"
-  echo "distribution packages: ${ROOTFS_DIST_PACKAGES:-none}"
   echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "repository commit: $GIT_COMMIT"
   echo "arch linux arm tarball sha256: $ALARM_SHA256"

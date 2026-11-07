@@ -7,32 +7,9 @@ Omarchy Mobile runs native Omarchy (Arch Linux ARM, Hyprland, Omarchy's packages
 
 ## 1. Safety rules (non-negotiable)
 
-### Xiaomi Mi 8 (`dipper`) exception
-
-`dipper` is non-A/B and has no stock slot to fall back to. This device-specific
-rule overrides the A/B Pixel rules below. Do not use the shared
-Pixel installer or unsuffixed flash flow. Follow [dipper STATE](device/dipper/STATE.md)
-and [FLASH-RUNBOOK](device/dipper/FLASH-RUNBOOK.md). Never erase or format `userdata`
-without a separate explicit decision: it contains Android's user data. Before modem,
-Wi-Fi or other radio bring-up, verify the off-device stock backup and keep a live log;
-do not enable a radio service or reboot the phone as part of a build task.
-
-For an unfinished Dipper session, read `device/dipper/HANDOFF.md`,
-`device/dipper/STATE.md` and `device/dipper/WIFI-PLAN.md` before touching the
-phone; they record the current hardware state and next safe step. Owner Wi-Fi
-credentials stay in ignored local provisioning settings; never print, log, commit
-or copy their values into an image.
-
-#### Dipper diagnostics over USB
-
-- Prefix host shell commands with `rtk`. Use `tools/phone-ssh --fresh -- '<read-only command>'` to test a new SSH session and collect phone state; check `systemctl`, `findmnt`, `/sys/class/drm/*/status`, `/proc/asound/cards`, and narrowly filtered `dmesg` output. Do not dump the full kernel command line, device identifiers or private partition contents.
-- When SSH is down during an authorized RAM/NFS boot, inspect the host side first: `ip -brief link`, USB interface byte counters, `fastboot devices | wc -l` (never print device serials), and the disposable NFS root's journal with `sudo journalctl --directory=<scratch-root>/var/log/journal -b`. If that boot's NFS trigger service is confirmed active, `/run-cmd` on the scratch root runs a host-staged script and writes `/run-cmd.out`; limit it to read-only status checks and verify the marker was consumed before relying on output. `/reboot-now` triggers an immediate forced reboot; use it only when a reboot is intended.
-- Use `fastboot boot <verified-image>` only for a RAM test after checking its hash. Never use `fastboot flash` or write to phone block devices during diagnostics. Keep the NFS export limited to the phone's USB network address and put all experimental rootfs changes under a host-side disposable scratch root.
-- If a driver operation could interrupt USB or display, capture logs on the host and arm an automatic rollback/watchdog first. Prefer a clean RAM reboot over reloading display drivers after a failed attach. Confirm screen and sound physically; DRM connector state and ALSA card enumeration alone do not prove visible output or audible playback.
-
 - **Ask the human before every reboot, flash, `push`, overlay boot or irreversible write.** That includes RPMB writes, a first `storageproxyd` run, `devinfo` and anything under `/dev/sd*`. The phone is real hardware with calibration data that can't be replaced, and a human has to be ready to recover it.
 - **The phone is shared with a human. Announce anything that affects the screen or the feel of the phone before you run it**: DPMS, display modes and refresh rate, brightness, `bl_power`, haptics, the torch, the shell restarting, rotation. Otherwise they think the phone is broken, or it buzzes in their hand.
-- **On A/B Pixel devices, only slot B and `userdata` are ours.** Write only `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`, and only through `bin/omamobile flash|push`. Never touch bootloader, radio, `devinfo`, `persist`, `efs*`, `modem*` or `vbmeta`, and never run an unsuffixed `fastboot flash`, with one exception: `userdata`, and only through `tools/install-phone` (serial pinned, codename typed, allowlist, dry run first). Slot A's stock Android is the way back.
+- **Only slot B and `userdata` are ours.** Write only `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b` and `dtbo_b`, and only through `bin/omamobile flash|push`. Never touch bootloader, radio, `devinfo`, `persist`, `efs*`, `modem*` or `vbmeta`, and never run an unsuffixed `fastboot flash`, with one exception: `userdata`, and only through `tools/install-phone` (serial pinned, codename typed, allowlist, dry run first). Slot A's stock Android is the way back.
 - **Qualcomm A/B phones (Pixel 4 family) keep the slot flags in GPT attributes,** so slot B can only be marked bootable by writing the partition table. That write is a narrow, named exception, never automatic: by hand, once per install of slot B's boot image, and only for a device whose entry in [CONTRIBUTING](CONTRIBUTING.md) §3.1 names the LUN, the four sectors (LBAs 1, 2, last-1 and last), the attribute bit and the CRCs it rewrites. That device's plan must also record the slot flags before and after, the rollback for a corrupted GPT, and the way back: stock restored on slot A first, or the owner's explicit acceptance of buttons-only recovery. The storage guard can't block this write, so it never runs from a service or at boot.
 - **Never weaken the storage guard.** Don't `blockdev --setrw` a partition or recreate `/dev/sda`. Don't mount Android partitions read-write, and don't add names to the `UFS_RW` allowlist without the human's say-so. The guard is what keeps a bad command from erasing the IMEI.
 - **Check backups before radio, PMIC, AoC or Trusty work.** Run the checksum check of `efs`, `efs_backup`, `modem_userdata`, `persist` and `modem_a/b` against the off-repo backup first ([MODEM-PLAN.md](device/cheetah/MODEM-PLAN.md) M0.1). If there's no backup, stop. Find each partition by `PARTNAME` in `/sys/class/block/*/uevent`: the Arch root has no `/dev/disk/by-partlabel`. **Take a fresh read-only backup after any stock Android boot** (a slot A fallback counts): stock's modem stack writes `efs`, `persist` and `modem_userdata`, so the old checksums stop matching and the next check can't tell a change of ours from stock's.

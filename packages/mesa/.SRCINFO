@@ -1,7 +1,7 @@
 pkgbase = mesa
-	pkgdesc = Open-source OpenGL drivers (Omarchy Mobile: Adreno and Mali)
+	pkgdesc = Open-source OpenGL drivers (Omarchy Mobile: Mali-G710, Mali-G78, Mali-G715)
 	pkgver = 26.2.4
-	pkgrel = 1.5
+	pkgrel = 1.4
 	epoch = 1
 	url = https://www.mesa3d.org/
 	arch = aarch64
