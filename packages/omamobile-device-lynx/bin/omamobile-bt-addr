@@ -1,0 +1,45 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Give the Bluetooth controller the phone's real address, as Android does.
+# The bootloader writes it into the device tree at every boot
+# (/chosen/config/bt_addr); the WCN6855 otherwise comes up with no public
+# address at all, unconfigured, and bluez ignores it. Without the property,
+# a locally administered address, made once from the machine id.
+#   omamobile-bt-addr hciN   (started by udev through omamobile-bt-addr@.service)
+set -euo pipefail
+
+hci=${1:?Usage: omamobile-bt-addr hciN}
+index=${hci#hci}
+[[ $index =~ ^[0-9]+$ ]] || { echo "not a controller: $hci" >&2; exit 1; }
+source=/proc/device-tree/chosen/config/bt_addr
+file=/etc/bluetooth/lynx-bdaddr
+addr=''
+if [[ -s $source ]]; then
+  addr=$(tr -d '\0' < "$source" | tr 'a-f' 'A-F')
+  # A unicast, globally administered address only, like the Wi-Fi one.
+  [[ $addr =~ ^[0-9A-F]{2}(:[0-9A-F]{2}){5}$ && $(( 16#${addr:0:2} & 3 )) == 0 ]] || addr=''
+fi
+if [[ -z $addr ]]; then
+  if [[ ! -s $file ]]; then
+    id=$(sha256sum /etc/machine-id | cut -c1-10)
+    install -d -m755 /etc/bluetooth
+    printf '02:%s:%s:%s:%s:%s\n' "${id:0:2}" "${id:2:2}" "${id:4:2}" "${id:6:2}" "${id:8:2}" > "$file"
+  fi
+  addr=$(tr -d '[:space:]' < "$file")
+  [[ $addr =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] || { echo "bad address in $file" >&2; exit 1; }
+fi
+
+# udev starts us on the "add" of hciN; after a rebind of serial0-0 that is
+# before the kernel has registered the index ("Invalid Index"), so retry for
+# 10 s. Unlike cheetah's BCM4389, the controller is unconfigured until the
+# address is set, so it answers neither `btmgmt info` nor a power cycle:
+# set the address as is, and bluez powers the controller once configured.
+result=''
+for _ in {1..20}; do
+  result=$(btmgmt --index "$index" public-addr "$addr" 2>&1) || true
+  [[ $result == *"Invalid Index"* ]] || break
+  sleep 0.5
+done
+echo "$result"
+[[ $result == *"Invalid Index"* ]] && { echo "$hci never appeared" >&2; exit 1; }
+exit 0
