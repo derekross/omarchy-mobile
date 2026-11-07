@@ -9,6 +9,5 @@ d=${1:?usage: install DESTDIR}
 cd "$(dirname "$(readlink -f "$0")")"
 
 install -Dm755 bin/omamobile-remote "$d/usr/bin/omamobile-remote"
-install -Dm755 bin/omamobile-osk-switch "$d/usr/bin/omamobile-osk-switch"
 install -Dm644 README.md "$d/usr/share/doc/omamobile-remote/README.md"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-remote/LICENSE"

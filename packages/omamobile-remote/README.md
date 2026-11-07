@@ -19,7 +19,6 @@ The full commands are in `omamobile-remote help`. A walk-through with screenshot
 ## What is in it
 
 - `omamobile-remote`: the commands above. It finds the user's Wayland and Hyprland session itself, so a plain ssh login is enough.
-- `omamobile-osk-switch`: moves a Stevia user drop-in for `omamobile-osk.service` aside and back, to test both on-screen keyboards. With no such drop-in it only says so.
 
 It depends on the `wlrctl` package in this repository, which is upstream wlrctl 0.2.2 with one patch. Stock wlrctl moves the pointer on a phone, but its clicks and scrolls are dropped, because it creates a pointer per command and a phone has no other pointer for Hyprland to focus. The patch is explained in its header and in the docs.
 

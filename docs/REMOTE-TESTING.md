@@ -46,7 +46,7 @@ DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 | `locked` / `lock` / `unlock` | exit 0 when locked; lock; unlock with the PIN from `$OMAMOBILE_PIN` or stdin |
 | `keep-awake CMD...` | run a command while the phone is kept from locking, then put it back |
 | `wake` | switch the display on |
-| `osk status\|box\|switch NAME` | on-screen keyboard state, its rectangle, or swap squeekboard and Stevia |
+| `osk status\|box` | on-screen keyboard state, or its rectangle |
 | `run CMD...` | run any command with the session variables set |
 
 ## Coordinates
@@ -112,7 +112,17 @@ key_y = y + units_from_top  * h / 276
 
 Stevia's layer is anchored the same way (`0 607 420 284` on this phone); its keys are in the build's own layout JSON, and the taps above (`a` at 42,743) were read from a screenshot of this layout.
 
-To test both keyboards on one phone, `omamobile-remote osk switch squeekboard` and `osk switch stevia` move a Stevia user drop-in for `omamobile-osk.service` (`~/.config/systemd/user/omamobile-osk.service.d/stevia.conf`) aside and back, and restart the unit. With no such drop-in, `squeekboard` prints `squeekboard (no Stevia drop-in on this phone)` and `stevia` fails with a message. The keyboard is Stevia only on a phone where someone added that drop-in; the images ship squeekboard.
+To test both keyboards on one phone you need a Stevia build, which this repository does not ship, so there is no command for it. If someone added a Stevia user drop-in for `omamobile-osk.service` at `~/.config/systemd/user/omamobile-osk.service.d/stevia.conf`, swapping is moving that file aside and restarting the unit. On the phone:
+
+```
+d=~/.config/systemd/user/omamobile-osk.service.d
+mv "$d/stevia.conf" "$d/stevia.conf.off"      # back to squeekboard
+mv "$d/stevia.conf.off" "$d/stevia.conf"      # back to Stevia
+systemctl --user daemon-reload && systemctl --user restart omamobile-osk
+omamobile-remote osk status                   # which one is running
+```
+
+Run only the `mv` you need. With no drop-in, the phone runs squeekboard, as the images ship it.
 
 ## Why a plain `wlrctl click` does nothing here
 
@@ -159,7 +169,14 @@ You can use a phone over ssh: `ssh user@phone omamobile-remote <command>`
 5. Do not reboot, flash, change settings, install packages or touch audio levels
    unless the task says so. Close what you opened. Leave the phone locked or
    unlocked, as you found it.
-6. Report what you did, each screenshot, and what you did not check.
+6. The phone may be in someone's hand. If a person may be using it, tell them
+   first: `shot` and `wake` turn the display on, `keep-awake` stops it locking,
+   `unlock` types the PIN. Announce anything else that changes the screen or how
+   the phone behaves (brightness, haptics, rotation, restarting the shell).
+   Only unlock or keep awake a phone you were asked to.
+7. Screenshots can show messages and notifications. Check each one before you
+   post it, and crop or leave out anything private.
+8. Report what you did, each screenshot, and what you did not check.
 ```
 
 Things that make an agent's run reliable: one action then one screenshot; check `locked` before blaming a command; read exit codes (`locked` has three); name the scale and the coordinate system in the prompt; stop on a blank screenshot (it prints a warning) instead of continuing blind.

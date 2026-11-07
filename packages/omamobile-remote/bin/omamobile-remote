@@ -20,7 +20,7 @@
 #   omamobile-remote lock                         lock the phone (omarchy-system-lock)
 #   omamobile-remote unlock                       PIN from $OMAMOBILE_PIN or stdin; never an argument
 #   omamobile-remote keep-awake COMMAND [ARG...]  run a command with the phone kept from locking, then restore
-#   omamobile-remote osk status|box|switch NAME   on-screen keyboard: running, layer box, squeekboard|stevia
+#   omamobile-remote osk status|box               on-screen keyboard: running, layer box
 #   omamobile-remote run COMMAND [ARG...]        run any command with the session variables set
 #   omamobile-remote env                          print the session variables it found
 #
@@ -273,8 +273,7 @@ case $cmd in
         box=$(layer_box); echo "layer: ${box:-none}" ;;
       box)
         box=$(layer_box); [[ -n $box ]] || exit 1; echo "$box" ;;
-      switch) exec omamobile-osk-switch "$@" ;;
-      *) die "osk needs status, box or switch" ;;
+      *) die "osk needs status or box" ;;
     esac ;;
 
   run)

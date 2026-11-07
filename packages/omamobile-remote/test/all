@@ -24,8 +24,8 @@ done
 # --- what gets installed: scripts and docs only, nothing that starts by itself
 stage=$tmp/stage
 ./install "$stage" >/dev/null
-check "installs the two commands" \
-  test -x "$stage/usr/bin/omamobile-remote" -a -x "$stage/usr/bin/omamobile-osk-switch"
+check "installs the command" \
+  test -x "$stage/usr/bin/omamobile-remote"
 check "no unit, udev rule, sysusers or etc file in the package" \
   test -z "$(find "$stage" \( -path '*/systemd/*' -o -path '*/udev/*' -o -path '*/sysusers.d/*' -o -path "$stage/etc/*" \) -print -quit)"
 check "install refuses a relative DESTDIR" bash -c '! ./install relative-dir >/dev/null 2>&1'
@@ -148,7 +148,6 @@ rm -f "$FAKE_STATE/hypr-broken"
 err=$(OMAMOBILE_WLRCTL=no-such-wlrctl $R click 2>&1 >/dev/null || true)
 check "a missing wlrctl gives one clear message and no shell noise" bash -c '[[ "$0" == *"no-such-wlrctl is not installed"* && "$0" != *"command not found"* && $(wc -l <<<"$0") == 1 ]]' "$err"
 check "the PIN is not in the staged package files" bash -c '! grep -rq "$FAKE_PIN" "$0"' "$stage"
-check "osk-switch says so when there is no Stevia drop-in" bash -c 'XDG_CONFIG_HOME=$0/nocfg omamobile-osk-switch squeekboard | grep -q "no Stevia drop-in"' "$tmp"
 
 echo
 if ((fails)); then echo "$fails test(s) failed" >&2; exit 1; fi
