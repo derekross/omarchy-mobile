@@ -6,6 +6,11 @@
  * /run/ufs-probe.txt and the kernel log) and omamobile.initramfs (no
  * hand-over to Arch, so nothing runs on userdata). Set DTB_OVERLAYS="ufs-probe"
  * in device.conf for that build only.
+ *
+ * An overlay replaces bootargs whole, so these are a copy: zuma-akita.dts's
+ * bootargs as of linux-omarchy-mobile#206 (omamobile 75b9c0b73), unchanged
+ * since the first-light board file (#192). If the board file's change,
+ * copy them again before reusing this, or the overlay silently reverts them.
  */
 /dts-v1/;
 /plugin/;

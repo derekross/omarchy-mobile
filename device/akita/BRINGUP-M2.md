@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # akita M2: storage (UFS behind the guard, then the Arch root)
 
-**Status (2026-11-06):** draft; nothing is built or flashed yet. M1 is complete and merged ([BRINGUP-M1](BRINGUP-M1.md)):
+**Status (2026-11-07):** M2.1-M2.6 are done; M2.7 waits for the signed package. M1 is complete and merged ([BRINGUP-M1](BRINGUP-M1.md)):
 - derekross/linux-omarchy-mobile#192 was rebase-merged on 2026-11-05, so its three commits are on `omamobile` under new ids, with the same patches: `cb2cd5e4b` (binding), `c7eb44543` (first light) and `0e2739a92` (framebuffer).
 - #414 was squash-merged as `905aa91`.
 
-M2.1 is done and **M2.3 passed gate (c)** on 2026-11-06: UFS runs at HS-G4 on two lanes behind the guard ([Results](#results)). M2.1's kernel change is committed and signed off as `31d8b229d`, and its gate passes. M2.4 is done: a fresh backup from our kernel, verified and copied offline. M2.5 is done: `omamobile-device-akita` 0.1.0 and `build-u3-root`. M2.6, the Arch test root on `userdata`, is next.
-- **Kernel:** branch `omamobile-zuma-akita-ufs`, on `omamobile` `29a7a9326`. It is checked out in the worktree `~/omamobile-kernel/wt-zuma-akita-dts` (reused, so the build stays incremental) and builds into `~/omamobile-kernel/out-zuma-akita-dts`.
+M2.1 is done and **M2.3 passed gate (c)** on 2026-11-06: UFS runs at HS-G4 on two lanes behind the guard ([Results](#results)). M2.1's kernel change is derekross/linux-omarchy-mobile#206, rebase-merged on 2026-11-07 as `75b9c0b73`. Its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted in M2.3. M2.4 is done: a fresh backup from our kernel, verified and copied offline. M2.5 is done: `omamobile-device-akita` 0.1.0 and `build-u3-root`. **M2.6 passed gate (d)** on 2026-11-06: Arch Linux ARM runs from `userdata`, behind the guard, and comes up the same on a second boot. M2.7, Omarchy's image, needs `omamobile-device-akita` in the signed `[omamobile]` repository. A second retail 8a passed M2.3, M2.4 and M2.6 as well ([#456](https://github.com/derekross/omarchy-mobile/pull/456)).
+- **Kernel:** linux-omarchy-mobile#206 (branch `omamobile-zuma-akita-ufs`), merged. Its builds used the worktree `~/omamobile-kernel/wt-zuma-akita-dts` (reused, so the build stays incremental) and `~/omamobile-kernel/out-zuma-akita-dts`.
 - **This repository:** branch `device-akita-m2`.
 
 ## Goal
@@ -151,8 +151,10 @@ KERNEL_OUT=<M2.3's build> bin/omamobile modules
 device/akita/build-u3-root <M2.3's build>
 KERNEL_OUT=<M2.3's build> tools/install-phone --device akita \
   --rootfs out/akita/u3-root/omamobile-rootfs-u3-akita-aarch64.img.zst \
-  --bootloader-slots-match akita-17.0-15681527 --dry-run
+  --bootloader-slots-match akita-17.0-15681527 --reinstall --dry-run
 ```
+
+`--reinstall` is needed because after M2.3 the phone runs from slot B. `install-phone` refuses that unless the owner states that slot B holds Omarchy Mobile (our boot images) rather than stock Android after a system update.
 
 Then run the same `install-phone` without `--dry-run`. It needs the human's go, because it erases `userdata`. That partition holds only stock's empty data since stage 0's wipe; no account was ever signed in.
 
@@ -176,7 +178,7 @@ Then run the same `install-phone` without `--dry-run`. It needs the human's go, 
 As husky's U4:
 1. Build a fresh kernel from `omamobile`, with M2.1 merged, and tag it before it's flashed.
 2. Fill `out/repo/aarch64` from the signed repository's development channel, checking each signature.
-3. Run `DEVICE=akita tools/build-rootfs`, then `tools/install-phone --device akita --bootloader-slots-match akita-17.0-15681527`, with `--dry-run` first.
+3. Run `DEVICE=akita tools/build-rootfs`, then `tools/install-phone --device akita --bootloader-slots-match akita-17.0-15681527 --reinstall` (slot B runs Omarchy Mobile since M2.6), with `--dry-run` first.
 
 The install needs the human's go, since it erases `userdata` again.
 
@@ -207,7 +209,7 @@ The install needs the human's go, since it erases `userdata` again.
 
 ### 2026-11-06: the port (M2.1, laptop only)
 
-- **The kernel change:** `zuma-akita.dts` gains `<dt-bindings/gpio/gpio.h>`, `ufs_0_fixed_vcc_reg` (`regulator-fixed` "ufs-vcc" on `gpp0` 1, `GPIO_ACTIVE_HIGH`), `&ufs_0` with `vcc-supply` and `status = "okay"`, and `&ufs_0_phy` switched on, with husky's two comments. It is 25 lines, still uncommitted on `29a7a9326`.
+- **The kernel change:** `zuma-akita.dts` gains `<dt-bindings/gpio/gpio.h>`, `ufs_0_fixed_vcc_reg` (`regulator-fixed` "ufs-vcc" on `gpp0` 1, `GPIO_ACTIVE_HIGH`), `&ufs_0` with `vcc-supply` and `status = "okay"`, and `&ufs_0_phy` switched on, with husky's two comments. It is 25 lines, and is now linux-omarchy-mobile#206, merged as `75b9c0b73` (DTS blob `bfa8b6f54e0e`).
 - **Checks** [V]:
   - `W=1` adds no warning;
   - `dtbs_check` reports only the two eUSB2-PHY supply warnings, the same two husky's DTB has on this tree, so the UFS nodes validate against zuma's merged bindings;
@@ -239,7 +241,7 @@ Findings:
 
 ### 2026-11-06: a fresh read-only backup from our kernel (M2.4)
 
-This was in M2.3's boot, with the guard on and nothing mounted. M2.3's kernel change is now committed as `2d26e9ece` on `omamobile-zuma-akita-ufs`. Its DTS is the blob that booted (`bfa8b6f54e0e`).
+This was in M2.3's boot, with the guard on and nothing mounted. M2.3's kernel change is linux-omarchy-mobile#206: its `zuma-akita.dts` is blob `bfa8b6f54e0e`, the DTS that booted.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
@@ -247,7 +249,7 @@ This was in M2.3's boot, with the guard on and nothing mounted. M2.3's kernel ch
 | 11 | All 63 stage-0 items hashed on the phone (18 s) and compared with the clean backup of 2026-11-02 | 47 are unchanged. 11 changed: `efs`, `efs_backup`, `persist`, `modem_userdata`, `metadata` and `trusty_persist` (stock Android, which ran for about 43 h after that backup); `devinfo`, `dram_train_b` and `klog` (the bootloader's slot flags, memory training and log); and the `sdd` and `sdc` LUNs, which hold `devinfo` and `dram_train_b`. The other 5 are slot B's boot images, ours since M1.3 | Nothing changed that stock or the bootloader doesn't write. Our kernels couldn't write: M1's had no UFS, and M2.3's runs behind the guard |
 | 12 | The full set, with a private helper on the laptop (`akita-backup-linux`): unchanged items come from the clean backup, the radio items from test 10, and the rest are read in 8 MiB chunks; every file is checked against the phone's hash, and the phone is hashed again afterwards | 58 items, 1.4 GB, all verified, and the phone's hashes the same before and after. Afterwards: no UFS error, and the guard's flags unchanged | **The fresh backup.** M2.6's writes and any later check compare against it. Both new backups have an offline copy |
 
-The UFS change is committed and signed off as `31d8b229d`. `tools/kernel-pr-check --build OUT --merge origin/omamobile` passes:
+The UFS change went out as linux-omarchy-mobile#206, signed off by the owner, and merged as `75b9c0b73`. `tools/kernel-pr-check --build OUT --merge origin/omamobile` passed on it:
 - a clean merge;
 - the sign-off;
 - `checkpatch --strict` with 0 errors and 0 warnings;
@@ -262,6 +264,30 @@ The UFS change is committed and signed off as `31d8b229d`. `tools/kernel-pr-chec
   - `reboot-to`;
   - the descriptor.
 
-  `reboot-to.c`, the storage rule, the mirror list, the hook and the power key are byte-identical to cheetah's, and the two network files to husky's. Its `test/all` checks all of that (15 ok). `install` stages exactly nine files, none of which marks a slot or starts the radio, the charger or a camera.
+  `reboot-to.c`, the storage rule, the mirror list, the hook and the power key are byte-identical to cheetah's, and the two network files to husky's. Its `test/all` checks all of that. `install` stages nine files, none of which marks a slot or starts the radio, the charger or a camera.
+
+  After review it also carries the suspend-to-idle drop-in (M2.6's `mem_sleep` finding). The drop-in's comment names zuma, and its settings are cheetah's, which the test checks. That makes ten files and 16 checks.
 - **`device/akita/build-u3-root`** is husky's test-root builder with akita's names; only names differ.
 - **Checks:** `tests/all` gives 418 ok, 0 not ok. `tests/packages` passes, the new package included, on a quiet CPU; five other packages' timing tests failed while a kernel build shared it.
+
+### 2026-11-06: Arch on `userdata`, test image (M2.6, gate d)
+
+- **Kernel:** `7.3.0-rc6-omamobile-push1-g31d8b229d0d0`: #206's head before it merged (`31d8b229d`), built clean with no overlay. Its DTS is blob `bfa8b6f54e0e`, as merged in `75b9c0b73`.
+- **The test root:** built by `device/akita/build-u3-root` from the Arch Linux ARM base (sha256 `42a4eeaa…`), `omamobile-device-akita` 0.1.0 and this kernel's modules. Its MANIFEST names repository commit `93de3d963c6d`.
+- **The install:** `tools/install-phone --device akita --rootfs … --bootloader-slots-match akita-17.0-15681527 --reinstall`, run by the owner after a dry run.
+
+| # | Test | Seen | Meaning |
+| --- | --- | --- | --- |
+| 13 | `tools/install-phone --dry-run` | All checks pass: fastboot, product, unlocked, both slots, image sizes, and slot B acknowledged as ours. It prints the five `*_b` flashes, then `userdata`, `--set-active=b` and `reboot`. Nothing is written | The installer's plan is exactly the runbook's |
+| 14 | `tools/install-phone` | The init grows the root on `sda34` from 3411 MiB to 112290 MiB and switches to Arch. Root's SSH works with the installed key. `systemctl is-system-running` reads `running`, with no failed units and 27 running. `usb0` is 172.16.42.1/24 under `systemd-networkd`, and the device package is in place | **Arch runs from `userdata`** |
+| 15 | The guard under Arch | 62 partitions, exactly `UFS_RW` writable; `sdb`-`sdd` `ro`; no `/dev/sda`. Only `sda34` is mounted (ext4, 107.9 G). The kernel log has no UFS or ext4 error | The guard's flags hold after `switch_root` |
+| 16 | `bin/omamobile fastboot` from Arch, 282 s into the first boot | `reboot-to bootloader` reached fastboot in 25 s. `getvar`: slot B `slot-successful:no` with 2 tries, slot A unchanged | The reboot mode works from Arch too. `reboot-to` syncs before it resets |
+| 17 | `fastboot --set-active=b` (B back to 3 tries), then `fastboot reboot` | SSH at 28 s, with systemd `running` 9 s into boot. `systemd-analyze`: 2.0 s kernel and initramfs plus 2.2 s userspace. As before: no failed units, 27 running, the guard's flags, `usb0`, the same four journal lines. ext4 mounted cleanly with no journal replay, and the root wasn't grown again | **Gate (d) passed:** a second boot comes up the same |
+
+Findings:
+
+- **The journal's four error lines are all harmless.** They are `exynos-clkout` (-22, as on husky), `unable to open an initial console` (ABL's `console=null`), and `systemd-gpt-auto-generator` exiting with 1 (there's no EFI root to discover). None needs a change.
+- **The clock starts at systemd's built-in floor (Jul 24).** There is no RTC driver and no network time yet. Set it from the laptop before M2.7's `pacman-key --populate`, as husky's U4 found.
+- **The kernel's default sleep is `deep`.** `/sys/power/mem_sleep` reads `s2idle [deep]` under Arch, and Linux has no zuma SoC sleep sequence to wake from it. `omamobile-device-akita` now carries the suspend-to-idle drop-in, with the Pixel 7 Pro's settings (`MemorySleepMode=s2idle`), so Omarchy's Suspend won't enter `deep`. The test image on the phone predates it. Suspend itself is still untested on Tensor G3 (husky's U6).
+- **The test image had no module indexes.** There was no `modules.dep`, so `modprobe` found nothing. The kernel build installs its modules without depmod, and the image runs no pacman, whose kmod hook would make them. A second tester found this on #456, and this phone showed the same. Nothing at boot needs a module, which is why Arch still came up clean. `build-u3-root` now installs `kmod`, runs `depmod` for the slot B kernel's release, and fails the build if no `modules.dep` results. The rebuilt image has the full index set (`modules.dep` lists all 1820 modules) and the suspend drop-in.
+- The logs are private (`~/android/reference/akita-m2-arch-20261106/`). The images and modules are kept as `~/omamobile-kernel/known-good/akita-m2.6-g31d8b229d0d0`.

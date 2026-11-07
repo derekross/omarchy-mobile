@@ -3,8 +3,9 @@
 # akita's test root image (BRINGUP-M2.md, M2.6), the one M2.7's rollback
 # reinstalls: Arch Linux ARM's base tarball, checked by tools/lib/alarm.sh,
 # with omamobile-device-akita staged by its own build and install, and the
-# kernel modules of the slot B images. It needs no signed repository and runs
-# no pacman, so it has no desktop and no omamobile-firstboot.
+# kernel modules of the slot B images, indexed by depmod. It needs no signed
+# repository and runs no pacman, so it has no desktop and no
+# omamobile-firstboot.
 #
 #   device/akita/build-u3-root KERNEL_OUT [OUT_DIR]
 #
@@ -22,7 +23,7 @@ if [[ ${1:-} == --inside ]]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get -qq update >/dev/null
   apt-get -qq install -y --no-install-recommends libarchive-tools e2fsprogs zstd \
-    gcc-aarch64-linux-gnu libc6-dev-arm64-cross >/dev/null
+    gcc-aarch64-linux-gnu libc6-dev-arm64-cross kmod >/dev/null
   R=/work/root
   mkdir -p $R
   bsdtar -xpf /in/alarm.tar.gz -C $R
@@ -31,6 +32,12 @@ if [[ ${1:-} == --inside ]]; then
   /work/pkg/install $R /work/pkg-build
   mkdir -p $R/usr/lib/modules
   zstd -dc /in/modules.tar.zst | tar -C $R/usr/lib/modules -xf -
+  # The kernel build installs its modules without depmod (its container has
+  # no kmod), and this image runs no pacman, whose kmod hook would make the
+  # indexes: without modules.dep, modprobe finds nothing. Index the slot B
+  # kernel's release only; the base tarball brings its own kernel's modules.
+  depmod -b $R "$REL"
+  [ -s $R/usr/lib/modules/$REL/modules.dep ] || { echo "depmod wrote no modules.dep for $REL" >&2; exit 1; }
   # What install-phone writes into, and the phone's name
   install -d -m 0755 $R/etc/omamobile
   install -d -m 0700 $R/root/.ssh
@@ -62,7 +69,7 @@ alarm_fetch
 name=omamobile-rootfs-u3-akita-aarch64
 rm -f "$out/root.img"
 alarm_say "Assembling $name for $rel"
-docker run --rm -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
+docker run --rm -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" -e REL="$rel" \
   -v "$ALARM_TARBALL:/in/alarm.tar.gz:ro" \
   -v "$repo/packages/omamobile-device-akita:/in/pkg:ro" \
   -v "$modules:/in/modules.tar.zst:ro" \
