@@ -673,8 +673,14 @@ Item {
   Timer {
     interval: 2000
     repeat: true
-    running: root.owlBacklight !== ""
-    onTriggered: blPower.reload()
+    running: root.owlBacklight !== "" && !root.appOnScreen
+    onTriggered: { if (!root.appOnScreen) blPower.reload() }
+  }
+
+  // A foreground app already hides every Home widget. Refresh immediately
+  // on return so a cached panel-off value cannot delay showing Home.
+  onAppOnScreenChanged: {
+    if (!appOnScreen && owlBacklight !== "") blPower.reload()
   }
 
   // An OWL Input has focus: the surface takes the keyboard.
