@@ -131,6 +131,19 @@ grep -qE "omarchy-system-lock|lock dark|omamobile-sleepd" "$log" && fail "a doub
 [[ ! -e $t/run/omamobile-keys/power-wake ]] || fail "a double tap doesn't swallow the next power press"
 echo "ok - double tap: wakes a dark screen, locked or not, and leaves a lit one alone"
 
+# The screen gone dark while unlocked (omamobile-doubletap tells): it locks,
+# and the new lock hears it is dark, so a touch on the dark screen reaches
+# the lock, never the app under it. Lit, or already locked: nothing.
+darku() { reset; keys dark-unlocked; }
+echo false >"$t/locked"; echo false >"$t/dpms"
+darku; before "omarchy-system-lock" "omarchy-shell lock dark" || fail "dark and unlocked: locks, then the lock hears it is dark"
+grep -qE "brightness-display|omamobile-sleepd" "$log" && fail "dark and unlocked: the panel is left as it is"
+echo false >"$t/locked"; echo true >"$t/dpms"
+darku; [[ ! -s $log ]] || fail "lit and unlocked: dark-unlocked does nothing"
+echo true >"$t/locked"; echo false >"$t/dpms"
+darku; [[ ! -s $log ]] || fail "dark and locked: dark-unlocked does nothing"
+echo "ok - a screen gone dark while unlocked locks, as on Android"
+
 # A lock slower than the long-press timer (it takes about a second on the
 # phone) must not turn the short press into a long one that wakes the lock.
 cat >"$t/bin/hyprctl" <<STUB

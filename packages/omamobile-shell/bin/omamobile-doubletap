@@ -199,15 +199,43 @@ def wake():
     subprocess.run(["omamobile-keys", "double-tap"], check=False)
 
 
+def lock_dark_unlocked():
+    """The screen just went dark: omamobile-keys locks it if it is unlocked
+    (a dark phone is a locked one, as on Android)."""
+    subprocess.run(["omamobile-keys", "dark-unlocked"], check=False)
+
+
+def has_dsi(sysfs="/sys"):
+    """Whether screen_dark() can tell: a phone with no DSI connector reads as
+    dark for the proximity claim, but must not be locked for it."""
+    return bool(glob.glob(sysfs + "/class/drm/*-DSI-*/dpms"))
+
+
+# How often the screen's state is looked at for the dark-and-unlocked lock:
+# a sysfs read; at 1 s the lock came 0.7 s after the screen went dark, a
+# window in which a touch still reached the app.
+DARK_POLL = 0.25
+
+
 def watch(fd, prox):
     try:
         taps = DoubleTap(DIST_MAX * x_range(fd))
         last_touch = 0.0
+        can_tell = has_dsi()
+        was_dark = screen_dark() if can_tell else False
         while True:
-            if prox.claimed_at is not None and \
-                    not select.select([fd], [], [], RELEASE_AFTER)[0] and \
-                    time.monotonic() - last_touch >= RELEASE_AFTER:
-                prox.release()
+            # The screen went dark: lock it if unlocked, before a touch on it
+            # can reach the app underneath.
+            if can_tell:
+                dark = screen_dark()
+                if dark and not was_dark:
+                    lock_dark_unlocked()
+                was_dark = dark
+            # Nothing to read for a moment: the proximity claim ends after
+            # RELEASE_AFTER of no touches, and the screen is looked at again.
+            if not select.select([fd], [], [], DARK_POLL)[0]:
+                if prox.claimed_at is not None and time.monotonic() - last_touch >= RELEASE_AFTER:
+                    prox.release()
                 continue
             data = os.read(fd, EVENT.size * 64)
             if not data:

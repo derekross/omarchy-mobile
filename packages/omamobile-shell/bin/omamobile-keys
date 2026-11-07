@@ -19,6 +19,9 @@
 #   double-tap          omamobile-doubletap, after a double tap on the
 #                       touchscreen: a dark screen wakes as a short press
 #                       wakes it (locked or not); a lit one is left alone
+#   dark-unlocked       omamobile-doubletap, when the screen has gone dark
+#                       while unlocked: it locks, so a dark phone is a
+#                       locked one, as on Android
 #   volume down alone   lowers the volume after a 0.15 s wait for power
 #   volume up           raises the volume
 #   power + volume up held together, when turned on in the voice settings
@@ -325,8 +328,20 @@ case "${1:-}" in
     screen_off || exit 0
     if locked; then wake_locked; else wake_unlocked; fi
     ;;
+  dark-unlocked)
+    # omamobile-doubletap: the screen went dark while unlocked (an idle
+    # blank, or the panel powered off by hand). Hyprland sends a touch to the
+    # window under it whatever the screen's state, so a tap on a dark
+    # unlocked phone reached an app no one could see. As on Android, a dark
+    # phone is a locked one: lock now, behind the dark panel, and the lock's
+    # surface takes those touches (derekross/omarchy-mobile#420's review).
+    locked && exit 0
+    screen_off || exit 0
+    omarchy-system-lock
+    lock_dark
+    ;;
   *)
-    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up|volume-up-release|wake|double-tap" >&2
+    echo "Usage: omamobile-keys power-down|power-up|volume-down|volume-up|volume-up-release|wake|double-tap|dark-unlocked" >&2
     exit 1
     ;;
 esac

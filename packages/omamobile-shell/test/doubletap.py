@@ -138,4 +138,16 @@ with tempfile.TemporaryDirectory() as root:
         fh.write("Off\n")
     check("a DSI panel with DPMS off is dark", dt.screen_dark(root) is True)
 
+# The dark-and-unlocked lock only where the screen's state can be told: with
+# a DSI connector, not on a machine without one (screen_dark() reads it as
+# dark there, for the proximity claim alone).
+with tempfile.TemporaryDirectory() as sysfs:
+    check("no DSI connector: the dark lock is off", not dt.has_dsi(sysfs))
+    os.makedirs(sysfs + "/class/drm/card0-DSI-1")
+    open(sysfs + "/class/drm/card0-DSI-1/dpms", "w").write("On\n")
+    check("a DSI connector: the dark lock is on", dt.has_dsi(sysfs))
+    check("its DPMS On reads lit", not dt.screen_dark(sysfs))
+    open(sysfs + "/class/drm/card0-DSI-1/dpms", "w").write("Off\n")
+    check("its DPMS Off reads dark", dt.screen_dark(sysfs))
+
 sys.exit(1 if failures else 0)
