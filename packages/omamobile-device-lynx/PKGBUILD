@@ -3,7 +3,7 @@
 pkgname=omamobile-device-lynx
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile support for the Google Pixel 7a (lynx): storage guard, USB networking, and boot-success marker"
+pkgdesc="Omarchy Mobile support for the Google Pixel 7a (lynx): storage guard, USB networking, boot-success marker, and the Bluetooth address"
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT Apache-2.0)

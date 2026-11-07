@@ -12,7 +12,11 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 bash -n build || fail "build parses"
 bash -n install || fail "install parses"
 bash -n bin/omamobile-boot-success || fail "omamobile-boot-success parses"
+bash -n bin/omamobile-bt-addr || fail "omamobile-bt-addr parses"
 pass "scripts parse"
+
+! bin/omamobile-bt-addr foo 2> /dev/null || fail "omamobile-bt-addr takes only hciN"
+pass "omamobile-bt-addr refuses a name that is not a controller before touching anything"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
 pass "build and install stay inside the package directory"
@@ -89,6 +93,9 @@ for f in usr/bin/reboot-to usr/bin/omamobile-bootctl usr/bin/omamobile-boot-succ
          usr/lib/systemd/system/omamobile-boot-success.service \
          usr/share/licenses/omamobile-device-lynx/LICENSE.Apache-2.0 \
          usr/lib/udev/rules.d/10-omamobile-storage.rules \
+         usr/bin/omamobile-bt-addr \
+         usr/lib/systemd/system/omamobile-bt-addr@.service \
+         usr/lib/udev/rules.d/80-omamobile-bt-addr.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
@@ -116,13 +123,17 @@ grep -qx 'MemorySleepMode=s2idle' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-oma
   || fail "sleep is s2idle: gs201's deep sleep never wakes"
 grep -q '^PACKAGE=omamobile-device-lynx$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is lynx"
+grep -q 'DRIVERS=="hci_uart_qca"' "$tmp/root/usr/lib/udev/rules.d/80-omamobile-bt-addr.rules" \
+  || fail "the address rule matches the WCN6855 controller only"
+grep -qx 'Before=bluetooth.service' "$tmp/root/usr/lib/systemd/system/omamobile-bt-addr@.service" \
+  || fail "the address is set before bluetoothd starts"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-boot-success.service") == ../omamobile-boot-success.service ]] \
   || fail "the boot-success unit is enabled by a vendor wants link"
 for absent in usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
               usr/bin/omamobile-camera-start; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rule, the USB link, the mirrorlist, and the boot-success marker, and nothing that starts hardware"
+pass "install stages the udev rules, the USB link, the mirrorlist, the boot-success marker and the Bluetooth address unit, and nothing that starts hardware"
 
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
