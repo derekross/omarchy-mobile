@@ -79,7 +79,12 @@ service has no count to read through the host's proxy, so the bar watches
 the directory (`Qt.labs.folderlistmodel`, a file system watcher, not a poll).
 The shade records its mark in `~/.local/state/omamobile/notifications-seen`
 and calls `notificationsSeen` below. A toast that was acted on also lands in
-history, so it counts until the shade has been opened.
+history, so it counts until the shade has been opened. Omarchy 4.5 keeps the
+history in one file instead, `~/.local/state/omarchy/notifications/history.json`
+(a JSON array, each row's `ts` in seconds); while that file exists, the bar
+counts its rows newer than the mark (`StatusModel.unreadStored`), watching
+the file and re-reading it every 30 s, since the service replaces it with
+rename(2).
 
 **Mobile network and calls:** the cellular icon and the call chip come from
 `omamobile-cell-watch` and `omamobile-call-watch --observe` (see
@@ -169,7 +174,10 @@ history as toasts (`showHistory`) but returns none of it, so the shade reads
 the files the service keeps, `~/.local/state/omarchy/notifications/*.json`
 and `history/*.json` (format and rules in `NotificationsModel.js`, tests in
 `test/notifications-model.js`), when the sheet opens and every 3 s while it
-is open. A tap on a row puts the sheet away and runs what a tap on the toast
+is open. On Omarchy 4.5, which keeps them in `live.json` and `history.json`
+in that directory instead (100 rows over 24 hours, `Store.js`), the shade
+reads those two files whenever `history.json` exists, whatever the version
+says; `test/notifications-store.sh` runs its commands on both layouts. A tap on a row puts the sheet away and runs what a tap on the toast
 runs: Omarchy's own action for its toasts (the `omarchy-exec-argv` hint the
 file keeps), otherwise `omarchy-hyprland-focus-app <app>`. Other senders'
 live actions die with the toast, so they can't be run from history.
@@ -177,6 +185,9 @@ live actions die with the toast, so they can't be run from history.
 **Clear all** (44 px, two taps: the first turns it into "Clear all?" for 4 s)
 calls the notification service on this shell instance, `dismissAll` (the
 toasts on screen move into history) and then `clear` (history is emptied).
+Omarchy 4.5 has no `clear`: there, after `dismissAll`, the shade calls
+`forget <key>` for every notification it read (patch 0019 for 4.5, in
+omamobile-omarchy's 4.5 series; without it the rows come back).
 The card takes the room left under the sheet and scrolls past that; it hides
 in edit mode, or when the sheet leaves no room for it.
 
