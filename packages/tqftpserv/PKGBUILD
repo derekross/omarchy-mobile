@@ -14,7 +14,7 @@ makedepends=(qrtr)
 _srcname="${pkgname}-${pkgver}"
 source=("${_srcname}.tar.gz::https://github.com/linux-msm/tqftpserv/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('a3850c34e48f23b7bc360d70f1e91700de2f8c60af003eda93e14182f8cf6af1')
-makedepends=(meson)
+makedepends=(qrtr meson)
 
 build() {
         cd "$_srcname"
