@@ -28,6 +28,13 @@ for f in usr/bin/omamobile-waydroid usr/lib/omamobile-waydroid/omamobile-waydroi
 done
 grep -q 'lxc-omamobile.conf' lib/omamobile-waydroid-harden || fail "harden does not include lxc-omamobile.conf"
 grep -qx 'lxc.cgroup2.devices.deny = b \*:\* rwm' lib/lxc-omamobile.conf || fail "block devices not denied"
+# LXC 7 allows nothing when there is only a deny rule: the allow lines must come first
+awk '/^lxc.cgroup2.devices.allow/ { a = NR } /^lxc.cgroup2.devices.deny/ { d = NR } END { exit !(a && d && a < d) }' \
+  lib/lxc-omamobile.conf || fail "lxc-omamobile.conf: allow lines missing or after the deny rule"
+grep -qx 'lxc.cgroup2.devices.allow = c 1:3 rwm' lib/lxc-omamobile.conf || fail "/dev/null not allowed"
+grep -q '^lxc.cgroup2.devices.allow = c [0-9]*:\* rwm$' lib/lxc-omamobile.conf || fail "no binder major allowed"
+if grep -Eq '^lxc.cgroup2.devices.allow = (a|c \*:\*)' lib/lxc-omamobile.conf; then fail "lxc-omamobile.conf opens every device"; fi
+if grep -q '^lxc.cgroup2.devices.allow = b' lib/lxc-omamobile.conf; then fail "lxc-omamobile.conf allows block devices"; fi
 
 # Kernel check: every option it wants, then one missing
 sed -n 's/^ *want \([A-Z0-9_]*\) \([ym]*\) .*/CONFIG_\1=\2/p' lib/omamobile-waydroid-check | sed 's/=ym$/=m/' > "$t/config"
