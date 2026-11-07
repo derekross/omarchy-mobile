@@ -22,3 +22,11 @@
 # omarchy-settings is pinned with it: omarchy depends on exactly its version.
 27cd6d88fda0be6c269c14dd65dad6a014384fedc3ea4eb5c742b2b972b10494 https://pkgs.omarchy.org/stable/aarch64/omarchy-4.0.6-1-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-4.0.6-1-aarch64.pkg.tar.zst
 f653d97a7832eaa6b71dae1a6ce0480cb2631d6ca9a3350534a579cb08c6b309 https://pkgs.omarchy.org/stable/aarch64/omarchy-settings-4.0.6-1-aarch64.pkg.tar.zst https://pkgs.omamobile.org/stable/aarch64/omarchy-settings-4.0.6-1-aarch64.pkg.tar.zst
+
+# aquamarine 0.16.0 (Arch Linux ARM's, signed by its build key 68B3537F...):
+# [omarchy] comes before Arch Linux ARM's repositories, and Omarchy's stable
+# aarch64 aquamarine 0.15.1 provides only libaquamarine.so=14, while our
+# Hyprland 0.57 (and Arch Linux ARM's hyprtoolkit) need so=15. Without this
+# a phone installed before 2026-11-03 can't update and a fresh image can't be
+# built (#433). Unpin when Omarchy's stable channel has 0.16.
+1c4c6766b1a56099044cd408b6788855c9d94adcff6409f9c1eafd4d1e650bb4 https://fl.us.mirror.archlinuxarm.org/aarch64/extra/aquamarine-0.16.0-1-aarch64.pkg.tar.xz https://pkgs.omamobile.org/stable/aarch64/aquamarine-0.16.0-1-aarch64.pkg.tar.xz
