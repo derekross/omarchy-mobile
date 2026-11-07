@@ -1,6 +1,6 @@
 # omamobile-device-lynx
 
-Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It marks the booted slot successful after each boot. It does not drive the radio, the charger, or a camera.
+Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx, Tensor G2 / gs201). It hides the Android partitions from desktop tools, holds the USB address, and gives pacman the same `[omamobile]` repository as the Pixel 7 Pro. It marks the booted slot successful after each boot, and gives the Bluetooth controller the phone's address when it appears. It does not drive the radio, the charger, or a camera.
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
@@ -8,6 +8,7 @@ Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx,
 | `vendor/systemd/network/20-usb-gadget.network` | `/usr/lib/systemd/network` | Sets usb0 to 172.16.42.1/24 after handover. A replug may need a reboot: this package does not close the USB2 switch again |
 | `vendor/systemd/logind.conf.d/10-omamobile-power-key.conf` | `/usr/lib/systemd/logind.conf.d` | A short power press does not power the phone off. Same drop-in as the Pixel 7 Pro. The long press stays the PMIC reset |
 | `vendor/systemd/sleep.conf.d/10-omamobile.conf` | `/usr/lib/systemd/sleep.conf.d` | Suspend means suspend-to-idle, and hibernation is off. The firmware offers PSCI system suspend, so the kernel offers `deep` (lynx reads `s2idle [deep]`), which never wakes on gs201. Same drop-in as the Pixel 7 Pro. Suspend itself is untested on lynx |
+| `bin/omamobile-bt-addr` + `vendor/systemd/system/omamobile-bt-addr@.service` + `vendor/udev/rules.d/80-omamobile-bt-addr.rules` | `/usr/bin`, `/usr/lib/systemd/system`, `/usr/lib/udev/rules.d` | Sets the WCN6855 Bluetooth controller's public address from `/chosen/config/bt_addr` when udev sees `hci0` (`DRIVERS=="hci_uart_qca"`), as the Pixel 7 Pro package does for its BCM4389. Its own script: that controller is unconfigured until the address is set, so it retries `btmgmt public-addr` while the index is not up instead of waiting on `btmgmt info` ([NOTES](../../device/lynx/NOTES.md#2026-10-29-bluetooth)) |
 | `vendor/NetworkManager/conf.d/10-omamobile-usb.conf` | `/usr/lib/NetworkManager/conf.d` | Keeps NetworkManager off that link |
 | `etc/omamobile-mirrorlist` | `/etc/pacman.d/omamobile-mirrorlist` | Where pacman finds the `[omamobile]` repository. Same file as the Pixel 7 Pro package |
 | `omamobile-device-lynx.install` | pacman hook | Adds `[omamobile]` to `pacman.conf` before `[omarchy]`, once. Same script as the Pixel 7 Pro package |
@@ -18,6 +19,6 @@ Omarchy Mobile's first userspace package for the Google Pixel 7a (codename lynx,
 
 `./build [DIR]` compiles `omamobile-bootctl` and `reboot-to` from this directory, `./install DESTDIR [DIR]` stages the files, and `test/all` checks the two copies when it is run from the repository.
 
-Not in this package: Wi-Fi, the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook.
+Not in this package: Wi-Fi (parked), the charger, cameras, and the slot-B image hook. Those stay out until each one has its own runbook.
 
 Licences: MIT, except `omamobile-bootctl`, which is Apache-2.0 and keeps Google's notice.
