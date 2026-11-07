@@ -9,6 +9,38 @@ Sources:
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
 
+## 2026-11-07: first-light 0.2.0 package installed with local safeguards
+
+[V] Native `makepkg` build/check/package passed for `0.2.0-1` on the Pixel 6.
+The build used a separate `BUILDDIR`, preserving the package's source tree
+during makepkg clean-build preparation. Version 0.2.0 satisfies the existing
+hardware packages' minimum device-package dependencies; a 0.1.0 transaction
+was rejected by the normal dependency check before any package changes.
+
+[V] On `7.3.0-rc6-oriole-hsi1-late-dev0-g4bd35d34abb9-dirty`, normal signed
+`pacman -U` installed `omamobile-device-oriole 0.2.0-1` together with a private
+`omamobile-oriole-local-safeguards 0.1.9-2` package. The latter preserves the
+original boot-check/battery scripts and units, power-key policy and reboot
+watchdog policy byte for byte. It is not part of this public package or a
+standalone-image qualification. All archive signatures were verified against
+the existing phone keyring; dependency, signature and hook checks stayed on.
+
+[V] Fresh SSH, safeguard hashes, package ownership, enabled units, repository
+configuration/channel and pacman database checks passed. The existing local
+mirrorlist was retained, with the incoming default saved as `.pacnew`. A
+laptop kernel log, owned marker and bounded rollback timer covered the
+transaction; systemd's supported update marker prevented a udev retrigger.
+The timer and only this test's markers were cleared after validation.
+
+[V] `phone-smoke` passed every required check: slot B, 49-partition storage
+guard, root, kernel health, USB and session. It still reported existing
+error-level kernel messages and the backlight/NFC low-battery startup
+refusals. Battery reported 70% Charging. No kernel fault was observed in the
+transaction log. No reboot, flash, provider retry or shell restart occurred.
+Rollback ownership transfer passed offline; live rollback and a boot of this
+package combination remain untested. Do not replace an integration package
+with this public package alone.
+
 ## 2026-11-07: first-light package native staging check
 
 [V] Package source at `d32957dc3feb` passed `test/all` on the Pixel 6

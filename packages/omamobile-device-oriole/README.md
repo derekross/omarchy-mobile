@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 first-light policy
 
-Initial standalone package, version 0.1.0. No kernel, rootfs integration or
+Initial standalone package, version 0.2.0. No kernel, rootfs integration or
 hardware qualification is supplied. Installation stages files only and enables
 no services. The optional system setup command configures locale/time and
 enables timesyncd.
@@ -22,14 +22,19 @@ their behavior. This package does not qualify the underlying hardware.
 Built-in drivers are outside modprobe policy.
 
 No battery startup, staged boot checker, automatic boot-success, radio,
-charging or GS201 hardware services are included. Boot-control tooling is omitted while slot marking remains on hold. No phone testing was
-performed for this package; exact-branch boot remains unqualified.
+charging or GS201 hardware services are included. Boot-control tooling is
+omitted while slot marking remains on hold. Native ARM64 build and
+installation passed with a private companion preserving
+existing integration safeguards; see the 2026-11-07 entries in
+[NOTES](../../device/oriole/NOTES.md). Standalone installation and a boot of
+this package combination remain unqualified.
 
 The PowerOff action has not been qualified for oriole; Linux power-off on other
 Pixels can restart instead.
 
 Run test/all for a native helper build and
-staged installation checks. The local integration package 0.1.9-2 is newer, so pacman will not
-automatically upgrade it to this package. That integration package carries
+staged installation checks. Version 0.2.0 sorts above the local integration
+package 0.1.9-2, satisfying existing hardware-package version dependencies.
+That integration package carries
 boot and battery safeguards absent here. Replacing it requires a separately
 qualified migration and rollback; do not remove it as a routine upgrade.
