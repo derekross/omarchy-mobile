@@ -1172,7 +1172,7 @@ fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
 [[ -x $tmp/root/usr/bin/omamobile-screenshot-open && -x $tmp/root/usr/bin/omamobile-screenshot-edit && -f $tmp/root/usr/lib/environment.d/30-omamobile-screenshot.conf ]] \
   || fail "install stages the screenshot editor and its session variable"
-for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
+for layout in terminal/us.yaml terminal/us_wide.yaml terminal/gr.yaml terminal/gr_wide.yaml us.yaml us_wide.yaml; do
   [[ -f $tmp/root/usr/share/omamobile/squeekboard/keyboards/$layout ]] || fail "install stages the $layout layout"
 done
 [[ -x $tmp/root/usr/bin/omamobile-keyboard-theme && -x $tmp/root/usr/share/omamobile/shell/hooks/theme-set-keyboard ]] \
