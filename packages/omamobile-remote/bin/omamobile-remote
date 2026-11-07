@@ -1,0 +1,285 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-remote: look at the phone's screen and use it over ssh, the way a
+# person would, so a script or an agent can test a phone with nobody holding it.
+# Run it as the phone's user (ssh user@phone omamobile-remote shot). It finds
+# that user's Wayland and Hyprland session by itself. Nothing here listens on
+# a network port; the only way in is the ssh login you already have.
+#
+#   omamobile-remote shot [-g "X,Y WxH"] [FILE]  screenshot (layout px, see README); prints the file
+#   omamobile-remote wake                         switch the display on (shot does it when needed)
+#   omamobile-remote type TEXT                    type text with the virtual keyboard
+#   omamobile-remote key KEYSYM [MOD...]          one key, e.g. key Return, key Tab shift
+#   omamobile-remote pos                          pointer position in layout px: X Y
+#   omamobile-remote move X Y                     move the pointer to X Y
+#   omamobile-remote click [left|right|middle]    click where the pointer is
+#   omamobile-remote tap X Y [BUTTON]             move, then click
+#   omamobile-remote scroll up|down [AMOUNT]      scroll where the pointer is
+#   omamobile-remote launch COMMAND [ARG...]      start an app in the session (no fake click)
+#   omamobile-remote locked                       exit 0 when locked, 1 when not, 2 when the lock state cannot be read
+#   omamobile-remote lock                         lock the phone (omarchy-system-lock)
+#   omamobile-remote unlock                       PIN from $OMAMOBILE_PIN or stdin; never an argument
+#   omamobile-remote keep-awake COMMAND [ARG...]  run a command with the phone kept from locking, then restore
+#   omamobile-remote osk status|box|switch NAME   on-screen keyboard: running, layer box, squeekboard|stevia
+#   omamobile-remote run COMMAND [ARG...]        run any command with the session variables set
+#   omamobile-remote env                          print the session variables it found
+#
+# Only the command name goes to the journal, never its arguments or the PIN.
+# A PIN in $OMAMOBILE_PIN is taken for unlock and removed from the environment
+# when the script starts, so what keep-awake, run and launch start never has it.
+# OMAMOBILE_REMOTE_SLOW scales every wait (0 = none, used by the tests).
+set -u
+
+# A PIN given in the environment is read once, for unlock, and removed here, so
+# nothing that keep-awake, run or launch starts can inherit it.
+pin_env=${OMAMOBILE_PIN:-}
+unset OMAMOBILE_PIN
+
+die() { echo "omamobile-remote: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed"; }
+pause() { sleep "$(awk -v t="$1" -v s="${OMAMOBILE_REMOTE_SLOW:-1}" 'BEGIN{printf "%.2f", t*s}')"; }
+log_verb() { logger -t omamobile-remote -- "$1" 2>/dev/null || true; }
+
+find_session() {
+  : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+  export XDG_RUNTIME_DIR
+  [[ -d $XDG_RUNTIME_DIR ]] || die "no runtime directory for $(id -un): is the user logged in?"
+  if [[ -z ${WAYLAND_DISPLAY:-} ]]; then
+    WAYLAND_DISPLAY=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -name 'wayland-[0-9]*' ! -name '*.lock' -printf '%f\n' 2>/dev/null | sort | head -n1)
+  fi
+  [[ -n ${WAYLAND_DISPLAY:-} ]] || die "no Wayland session for $(id -un)"
+  export WAYLAND_DISPLAY
+  if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+    HYPRLAND_INSTANCE_SIGNATURE=$(ls -1t "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -n1)
+  fi
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] || die "no Hyprland instance for $(id -un)"
+  export HYPRLAND_INSTANCE_SIGNATURE
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=$XDG_RUNTIME_DIR/bus}"
+  export DBUS_SESSION_BUS_ADDRESS
+  # An ssh login has none of the variables the running shell was started with.
+  # omarchy-shell fails without OMARCHY_PATH, and apps started over ssh would
+  # get the C locale without LANG, so take both from the shell's own environment.
+  local pid shell_env=
+  pid=$(pgrep -u "$(id -u)" -x quickshell 2>/dev/null | head -n1)
+  local proc=${OMAMOBILE_REMOTE_PROC:-/proc}
+  [[ -n $pid && -r $proc/$pid/environ ]] && shell_env=$(tr '\0' '\n' < "$proc/$pid/environ")
+  if [[ -z ${OMARCHY_PATH:-} ]]; then
+    OMARCHY_PATH=$(sed -n 's/^OMARCHY_PATH=//p' <<<"$shell_env")
+    : "${OMARCHY_PATH:=/usr/share/omarchy}"
+  fi
+  export OMARCHY_PATH
+  if [[ -z ${LANG:-} || $LANG == C ]]; then
+    LANG=$(sed -n 's/^LANG=//p' <<<"$shell_env")
+    : "${LANG:=C.UTF-8}"
+  fi
+  export LANG
+}
+
+# true or false. When the shell cannot be asked, say so and fail: reading that
+# as "not locked" would make unlock report success on a locked phone.
+lock_state() {
+  local out rc=0 err
+  command -v omarchy-shell >/dev/null 2>&1 || { echo "omamobile-remote: omarchy-shell is not installed" >&2; return 1; }
+  # stdout holds the answer; Qt prints locale warnings on stderr
+  out=$(LC_ALL=C.UTF-8 omarchy-shell lock isLocked 2>/dev/null) || rc=$?
+  if (( rc != 0 )) || [[ $out != true && $out != false ]]; then
+    err=$(LC_ALL=C.UTF-8 omarchy-shell lock isLocked 2>&1 >/dev/null | tr '\n' ' ' | cut -c1-200)
+    echo "omamobile-remote: cannot read the lock state (exit $rc, got: ${out:-nothing}; $err)" >&2
+    return 1
+  fi
+  echo "$out"
+}
+
+# wlrctl sends each click or scroll from a pointer it has just created, and a
+# phone has no other pointer, so Hyprland has no focus to deliver it to. The
+# wlrctl package in this repository carries the fix; a stock wlrctl moves the
+# pointer but its clicks are dropped (see docs/REMOTE-TESTING.md). Set
+# OMAMOBILE_WLRCTL to use another binary.
+WL=
+need_wlrctl() {
+  WL=$(command -v "${OMAMOBILE_WLRCTL:-wlrctl}") || die "${OMAMOBILE_WLRCTL:-wlrctl} is not installed"
+}
+
+pos() { local o; o=$(hyprctl cursorpos 2>/dev/null) || return 1; tr -d ',' <<<"$o"; }
+
+move_to() {
+  local x=$1 y=$2 cx cy
+  [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]] || die "move needs two whole numbers (layout px)"
+  need_wlrctl
+  read -r cx cy < <(pos)
+  [[ -n ${cx:-} ]] || die "cannot read the pointer position (hyprctl cursorpos)"
+  "$WL" pointer move "$((x - cx))" "$((y - cy))" || die "wlrctl move failed"
+  pause 0.4
+  read -r cx cy < <(pos)
+  [[ $cx == "$x" && $cy == "$y" ]] || die "pointer is at $cx,$cy, not $x,$y"
+}
+
+dpms_off() { hyprctl monitors 2>/dev/null | grep -q 'dpmsStatus: 0'; }
+
+# A phone's display can be off while the session is unlocked. grim then waits
+# for a frame that never comes. Hardware keys do not wake this phone's display
+# (key_press_enables_dpms is off, as on Android), so ask Hyprland to switch it
+# on, with the same dispatcher the phone uses to switch it off. No key reaches
+# the app that has focus.
+wake() {
+  if dpms_off || [[ ${1:-} == force ]]; then
+    hyprctl dispatch 'hl.dsp.dpms({ action = "enable" })' >/dev/null 2>&1
+    pause 1.5
+  fi
+}
+
+layer_box() {  # x y w h of the on-screen keyboard layer, or nothing
+  hyprctl layers 2>/dev/null | sed -nE 's/.*xywh: ([0-9]+) ([0-9]+) ([0-9]+) ([0-9]+).*namespace: osk,.*/\1 \2 \3 \4/p' | head -n1
+}
+
+cmd=${1:-help}
+shift || true
+case $cmd in
+  help|-h|--help) sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  version) echo "omamobile-remote 0.1.0"; exit 0 ;;
+esac
+
+find_session
+log_verb "$cmd"
+
+case $cmd in
+  env)
+    printf 'XDG_RUNTIME_DIR=%s\nWAYLAND_DISPLAY=%s\nHYPRLAND_INSTANCE_SIGNATURE=%s\nDBUS_SESSION_BUS_ADDRESS=%s\nOMARCHY_PATH=%s\nLANG=%s\n' \
+      "$XDG_RUNTIME_DIR" "$WAYLAND_DISPLAY" "$HYPRLAND_INSTANCE_SIGNATURE" "$DBUS_SESSION_BUS_ADDRESS" "$OMARCHY_PATH" "$LANG" ;;
+
+  shot)
+    need grim
+    geometry=
+    if [[ ${1:-} == -g ]]; then geometry=${2:?shot -g needs a geometry like "0,607 420x284"}; shift 2; fi
+    out=${1:-${XDG_RUNTIME_DIR}/omamobile-shot-$(date +%Y%m%d-%H%M%S).png}
+    wake
+    limit=${OMAMOBILE_REMOTE_SHOT_TIMEOUT:-10}
+    for try in 1 2; do
+      if [[ -n $geometry ]]; then
+        timeout "$limit" grim -g "$geometry" "$out" || ok=0
+      else
+        timeout "$limit" grim "$out" || ok=0
+      fi
+      if [[ ${ok:-1} == 0 ]]; then
+        [[ $try == 1 ]] || die "grim did not finish (is the display off? try: omamobile-remote wake)"
+        ok=1; wake force; continue
+      fi
+      # A full-screen capture taken while the screen is waking can come back as a
+      # blank frame (about 15 KB for this panel against 300 KB for a real one).
+      [[ -n $geometry ]] && break
+      (( $(stat -c %s "$out") >= ${OMAMOBILE_REMOTE_MIN_SHOT:-40000} )) && break
+      [[ $try == 1 ]] && pause 1
+    done
+    if [[ -z $geometry ]] && (( $(stat -c %s "$out") < ${OMAMOBILE_REMOTE_MIN_SHOT:-40000} )); then
+      echo "omamobile-remote: the screenshot looks blank (small file): is the screen on and unlocked?" >&2
+    fi
+    echo "$out" ;;
+
+  type)
+    need wtype
+    [[ $# -ge 1 ]] || die "type needs the text"
+    wtype -- "$*" || die "wtype failed" ;;
+
+  key)
+    need wtype
+    k=${1:?key needs a keysym, e.g. Return}; shift
+    args=()
+    for m in "$@"; do args+=(-M "$m"); done
+    args+=(-k "$k")
+    for m in "$@"; do args+=(-m "$m"); done
+    wtype "${args[@]}" || die "wtype failed" ;;
+
+  wake) wake force ;;
+
+  pos) pos || die "cannot read the pointer position (is Hyprland running?)" ;;
+
+  move) move_to "${1:?move needs X Y}" "${2:?move needs X Y}" && pos ;;
+
+  click) need_wlrctl; "$WL" pointer click "${1:-left}" || die "wlrctl click failed" ;;
+
+  tap)
+    move_to "${1:?tap needs X Y}" "${2:?tap needs X Y}"
+    "$WL" pointer click "${3:-left}" || die "wlrctl click failed" ;;
+
+  scroll)
+    n=${2:-5}
+    [[ $n =~ ^[0-9]+$ ]] || die "scroll amount must be a whole number"
+    need_wlrctl
+    case ${1:-} in
+      up) "$WL" pointer scroll "-$n" 0 ;;
+      down) "$WL" pointer scroll "$n" 0 ;;
+      *) die "scroll needs up or down" ;;
+    esac ;;
+
+  launch)
+    [[ $# -ge 1 ]] || die "launch needs a command"
+    command -v "$1" >/dev/null 2>&1 || die "$1 not found"
+    nohup setsid "$@" >/dev/null 2>&1 &
+    echo "started $1 (pid $!)" ;;
+
+  locked)
+    st=$(lock_state) || exit 2
+    [[ $st == true ]] ;;
+
+  lock)
+    need omarchy-system-lock
+    omarchy-system-lock || die "omarchy-system-lock failed"
+    pause 2
+    echo "locked" ;;
+
+  unlock)
+    need wtype
+    st=$(lock_state) || exit 2
+    if [[ $st != true ]]; then echo "not locked"; exit 0; fi
+    pin=$pin_env
+    if [[ -z $pin && ! -t 0 ]]; then IFS= read -r pin || true; fi
+    [[ -n $pin ]] || die "no PIN: set OMAMOBILE_PIN or pipe it in; it is never taken as an argument"
+    wake; pause 0.5
+    wtype -k Return; pause 1.5
+    printf '%s' "$pin" | wtype -; pause 0.8
+    wtype -k Return; pause 2
+    unset pin pin_env
+    st=$(lock_state) || exit 2
+    if [[ $st == true ]]; then
+      die "still locked: wrong PIN? Do not retry blindly, repeated wrong PINs can lock the phone out"
+    fi
+    echo "unlocked" ;;
+
+  keep-awake)
+    [[ $# -ge 1 ]] || die "keep-awake needs a command to run"
+    state=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/indicators/stay-awake
+    had=0; [[ -e $state ]] && had=1
+    mkdir -p "$(dirname "$state")" && touch "$state" || die "cannot write $state"
+    # The shell watches this file, so the lock and the screensaver stop at once
+    # and start again the moment it goes. It does not unlock a locked phone.
+    child=
+    trap '[[ $had == 1 ]] || rm -f "$state"' EXIT
+    # Pass a signal on to the command, and wait for it to end before restoring:
+    # bash would otherwise hold a TERM until the command finished by itself.
+    trap '[[ -z $child ]] || kill -TERM "$child" 2>/dev/null' TERM INT HUP
+    "$@" <&0 &
+    child=$!
+    wait "$child"; rc=$?
+    while kill -0 "$child" 2>/dev/null; do wait "$child"; rc=$?; done
+    exit $rc ;;
+
+  osk)
+    sub=${1:-status}; shift || true
+    case $sub in
+      status)
+        running=$(pgrep -a 'squeekboard|phosh-osk' | head -n1)
+        echo "process: ${running:-none}"
+        echo "visible: $(busctl --user get-property sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 Visible 2>/dev/null | awk '{print $2}')"
+        box=$(layer_box); echo "layer: ${box:-none}" ;;
+      box)
+        box=$(layer_box); [[ -n $box ]] || exit 1; echo "$box" ;;
+      switch) exec omamobile-osk-switch "$@" ;;
+      *) die "osk needs status, box or switch" ;;
+    esac ;;
+
+  run)
+    [[ $# -ge 1 ]] || die "run needs a command"
+    exec "$@" ;;
+
+  *) die "unknown command '$cmd' (omamobile-remote help)" ;;
+esac
