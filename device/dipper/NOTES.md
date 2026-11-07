@@ -70,8 +70,8 @@ Devices probe once, early. A driver that only appears later as a module never ge
 second chance — the device is left unbound and is not even on the deferred list. Proven
 twice: the Qualcomm PHYs (so no USB and no storage: `dwc3: failed to initialize core`,
 `sync_state() pending due to 88e8000.phy`), then i2c (`modprobe i2c-qcom-geni` bound to
-nothing, and a hand-written `bind` failed). Everything first light needs is now `=y` in
-`device/dipper/kernel.config`, with the reasoning in the file.
+nothing, and a hand-written `bind` failed). That is why every driver needed for first
+light was built in (`=y`).
 
 ### Touch: first failed probe (historical)
 
