@@ -4,6 +4,7 @@ Omarchy Mobile's first userspace package for the Google Pixel 7 (codename panthe
 
 | Path | Installs to | What it does |
 | --- | --- | --- |
+| `vendor/environment.d/40-omamobile-rotation.conf` | `/usr/lib/environment.d` | `OMAMOBILE_ROTATION_HOLD=1`: Hyprland (packages/hyprland, 0002) holds the last frame across a rotation and turns the new one in as Android does. Off in the shared build until it has run on the other phones |
 | `vendor/udev/rules.d/10-omamobile-storage.rules` | `/usr/lib/udev/rules.d` | Hides `sda` and every Android partition except `userdata` from desktop tools. Same rule as the Pixel 7 Pro. The initramfs stops its guard loop before `switch_root`; the kernel's read-only flags are what remain |
 | `vendor/udev/rules.d/20-omamobile-gpu-always-on.rules` | `/usr/lib/udev/rules.d` | Keeps the Mali-G710 powered while Panthor drives it: powering its domain back up needs a secure call our kernel doesn't make yet. Same rule as the Pixel 7 Pro |
 | `vendor/udev/rules.d/72-omamobile-feedbackd.rules` | `/usr/lib/udev/rules.d` | Lets feedbackd drive the CS40L26 haptics (`cs40l26_vibra`). Same rule as the Pixel 7 Pro; the driver needs the phone's own `cs40l26.wmfw` (`tools/extract-vendor-firmware -d panther`) |

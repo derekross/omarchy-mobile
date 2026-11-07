@@ -34,6 +34,11 @@ transform so it starts where it was, turning with it and fading out over
 values). Unlike Android, the new frame is opaque from the start: its fade
 in over black read as a dip to black on the phone.
 
+Off unless OMAMOBILE_ROTATION_HOLD=1 is in Hyprland's environment, read
+once at startup: a device package turns it on (device-panther's
+environment.d), and every other phone keeps Hyprland's own rotation until
+the hold has run there. Off, nothing is copied, held or animated.
+
 diff --git i/src/render/OpenGL.cpp w/src/render/OpenGL.cpp
 index 5d23d8e..3a175c4 100644
 --- i/src/render/OpenGL.cpp
@@ -73,7 +78,7 @@ index 5d23d8e..3a175c4 100644
              else
                  renderTexturePrimitive(ctx, finalTexture, finalBox);
 diff --git i/src/render/Renderer.cpp w/src/render/Renderer.cpp
-index 4bbb606..bdf51c2 100644
+index 4bbb606..925c136 100644
 --- i/src/render/Renderer.cpp
 +++ w/src/render/Renderer.cpp
 @@ -1,4 +1,6 @@
@@ -83,7 +88,7 @@ index 4bbb606..bdf51c2 100644
  #include "../Compositor.hpp"
  #include "../helpers/math/Math.hpp"
  #include <algorithm>
-@@ -322,6 +324,205 @@ bool IHyprRenderer::shouldRenderWindow(PHLWINDOW pWindow) {
+@@ -322,6 +324,216 @@ bool IHyprRenderer::shouldRenderWindow(PHLWINDOW pWindow) {
      return false;
  }
  
@@ -96,6 +101,14 @@ index 4bbb606..bdf51c2 100644
 +// rendered: the panel keeps scanning out the last frame of the old
 +// orientation, and the first frame of the new one is complete.
 +namespace {
++    // Off unless OMAMOBILE_ROTATION_HOLD=1, read once at startup: a device package turns it
++    // on (device-panther's environment.d), and every other phone keeps Hyprland's own
++    // rotation until the hold has run there.
++    const bool ROTATION_HOLD_ON = [] {
++        const char* env = getenv("OMAMOBILE_ROTATION_HOLD");
++        return env && std::string_view{env} == "1";
++    }();
++
 +    constexpr auto ROTATION_HOLD = std::chrono::milliseconds(500);
 +    // Android's screen rotation (frameworks/base core/res: screen_rotate_*_enter/exit,
 +    // config_screen_rotation_*): the new frame turns in over 283 ms on a (0.2, 0, 0, 1)
@@ -189,6 +202,9 @@ index 4bbb606..bdf51c2 100644
 +
 +    // true while this frame should not be rendered
 +    bool holdFrameForRotation(PHLMONITOR monitor) {
++        if (!ROTATION_HOLD_ON)
++            return false;
++
 +        auto& hold = rotationHolds[monitor->m_id];
 +
 +        if (!hold.active) {
@@ -289,14 +305,14 @@ index 4bbb606..bdf51c2 100644
  bool IHyprRenderer::shouldRenderMonitor(PHLMONITOR monitor) {
      static auto PDAMAGETRACKINGMODE = CConfigValue<Config::INTEGER>("debug:damage_tracking");
      bool        hasChanged          = monitor->m_output->needsFrame || monitor->m_damage.hasChanged();
-@@ -2307,6 +2508,38 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
+@@ -2307,6 +2519,38 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
      if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0 && !pMonitor->m_damage.hasChanged())
          return;
  
 +    // Before the hold starts, copy the frame on the panel: the output's last buffer, which
 +    // the swapchain reuses within a few frames, into a framebuffer of the panel's own size.
 +    if (auto& hold = rotationHolds[pMonitor->m_id];
-+        !hold.active && hold.renderedTransform.has_value() && *hold.renderedTransform != pMonitor->m_transform) {
++        ROTATION_HOLD_ON && !hold.active && hold.renderedTransform.has_value() && *hold.renderedTransform != pMonitor->m_transform) {
 +        hold.snapshot.reset();
 +        const auto BUFFER = pMonitor->m_output->state->state().buffer;
 +        const auto SIZE   = pMonitor->m_pixelSize;
@@ -328,7 +344,7 @@ index 4bbb606..bdf51c2 100644
      if (!pMonitor->m_commitCoordinator->canBeginFrame()) {
          pMonitor->m_pendingFrame = true;
          return;
-@@ -2456,6 +2689,18 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
+@@ -2456,6 +2700,18 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
          Pointer::mgr()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
      }
  

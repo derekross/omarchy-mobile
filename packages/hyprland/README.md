@@ -27,10 +27,14 @@ reported the screen off, but the CRTC never turned off. See
   (0.2, 0, 0, 1) curve, and the old one, kept where it was on the glass,
   turns with it and fades out over 116 ms. On a Pixel 7 the holds took
   106 to 228 ms; without the patch the old buffers showed stretched for
-  200 ms to a second.
-- `pkgrel=3.1`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+  200 ms to a second. It is off unless `OMAMOBILE_ROTATION_HOLD=1` is in
+  Hyprland's environment (read once at startup): `omamobile-device-panther`
+  sets it in `environment.d`, and the other phones rotate as before until
+  it has run on them.
+- `pkgrel=3.2`: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
   (`extra/hyprland` 0.57.0-3, a rebuild for aquamarine 0.16.0 and
-  hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both.
+  hyprgraphics 0.6.0) release, plus `.1`, so it sorts above both; `.2` for
+  the rotation hold, since 3.1 is published.
 - `arch=(aarch64)` only.
 - `build()` runs the two cmake steps of `make release` itself:
   - with Arch's `-DCMAKE_SKIP_RPATH=ON` (Arch's PKGBUILD seds it into the

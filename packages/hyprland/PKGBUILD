@@ -17,10 +17,12 @@
 #    to a second on a Pixel 7). The output now keeps its last frame until
 #    every layer surface has drawn at its new size, then turns the new
 #    frame in as Android does (283 ms, the old frame fading out over it).
-#  - pkgrel 3.1: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
-#    (0.57.0-3) release plus .1, so it sorts above both; [omamobile] comes
-#    before [omarchy] and [extra] in pacman.conf, so pacman takes this build
-#    either way.
+#    Only with OMAMOBILE_ROTATION_HOLD=1 in Hyprland's environment, which
+#    device-panther sets; other phones rotate as before.
+#  - pkgrel 3.2: the higher of Omarchy's (0.57.0-2) and Arch Linux ARM's
+#    (0.57.0-3) release plus .1, so it sorts above both, and .2 for the
+#    rotation hold (3.1 is published); [omamobile] comes before [omarchy] and
+#    [extra] in pacman.conf, so pacman takes this build either way.
 #  - arch=(aarch64) only.
 #  - build() runs the two cmake steps of `make release` itself, with
 #    CMAKE_SKIP_RPATH (Arch's Makefile sed) and the job count from MAKEFLAGS
@@ -31,8 +33,8 @@
 
 pkgname=(hyprland hyprpm)
 pkgver=0.57.0
-pkgrel=3.1
-pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omarchy Mobile: DPMS retry)'
+pkgrel=3.2
+pkgdesc='a highly customizable dynamic tiling Wayland compositor (Omarchy Mobile: DPMS retry, rotation hold)'
 arch=(aarch64)
 url="https://github.com/hyprwm/Hyprland"
 license=(BSD-3-Clause)
@@ -105,7 +107,7 @@ sha256sums=('82d006ba9264fe67266c7d583c16f1a6c64d51424dbdc472c3e9c9d5ddfcd559'
             '8fa0f57dc1b3246ab4e30ae81419150f4af7767fb31e739e36c824c6d99fab73'
             'c14fb0ec02d97100bcfa4e5c8daaf524972fa5c665e04960619744ba01c73c39'
             'a5670d9a6cdee3f3990a81cdecfd5e1f95771ebd1d7b1e2622ac7187684b8836'
-            'ee0adcc2025f88fb31fd1bc3aee2c72322fc8579f5094a43267e1c3e06a44025')
+            '0f3ff13540c40d993943064916332d79ebd34b6d61e41481c86f92bb6413e91b')
 
 prepare() {
 	ln -sf hyprland-source "$_archive"
