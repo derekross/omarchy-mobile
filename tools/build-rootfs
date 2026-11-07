@@ -109,10 +109,12 @@ conf=device/$DEVICE/device.conf
 DEVICE_PACKAGE=$(sed -n 's/^PACKAGE=\([a-z0-9-]*\)$/\1/p' "$conf")
 [[ -n $DEVICE_PACKAGE ]] || alarm_die "$conf has no PACKAGE"
 ROOTFS_PACKAGES=$(sed -n 's/^ROOTFS_PACKAGES="\(.*\)"$/\1/p' "$conf")
+ROOTFS_DIST_PACKAGES=$(sed -n 's/^ROOTFS_DIST_PACKAGES="\(.*\)"$/\1/p' "$conf")
 # Boot files in the device package: the kernel comes as a package
 KERNEL_PACKAGE=0
 grep -c 'OMAMOBILE_BOOT_FILES' "packages/$DEVICE_PACKAGE/install" >/dev/null 2>&1 && KERNEL_PACKAGE=1
 [[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
+[[ $ROOTFS_DIST_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_DIST_PACKAGES may hold only package names"
 
 repo=$outrel/repo/aarch64
 [[ -f $repo/omamobile.db ]] ||
@@ -149,7 +151,8 @@ docker run --rm --privileged --platform linux/arm64 \
   -v "$ROOT:/src:ro" -v "$ROOT/$outrel/repo:/repo:ro" -v "$modules:/modules:ro" \
   -v "$volume:/target" -v "$work:/out" -v "$ALARM_CACHE/pkg:/var/cache/pacman/pkg" \
   -e VERSION="$VERSION" -e DEVICE="$DEVICE" -e DEVICE_PACKAGE="$DEVICE_PACKAGE" \
-  -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" -e KERNEL_PACKAGE="$KERNEL_PACKAGE" \
+  -e ROOTFS_PACKAGES="$ROOTFS_PACKAGES" -e ROOTFS_DIST_PACKAGES="$ROOTFS_DIST_PACKAGES" \
+  -e KERNEL_PACKAGE="$KERNEL_PACKAGE" \
   -e KERNEL_RELEASE="$release" -e MODULES_SHA256="$(sha256sum < "$modules" | cut -d' ' -f1)" \
   -e GIT_COMMIT="$commit" -e ALARM_SHA256="$(sha256sum < "$ALARM_TARBALL" | cut -d' ' -f1)" \
   -e OMARCHY_CHANNEL="$OMARCHY_CHANNEL" -e CHANNEL="$CHANNEL" -e ALLOW_MISSING="$ALLOW_MISSING" \
