@@ -28,4 +28,8 @@ for f in patches/*.patch; do
 done
 install -Dm644 libalpm/95-omamobile-omarchy-patches.hook "$d/usr/share/libalpm/hooks/95-omamobile-omarchy-patches.hook"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-omarchy/LICENSE"
+install -Dm644 LICENSE.omarchy "$d/usr/share/licenses/omamobile-omarchy/omarchy-MIT"
 install -Dm644 version "$d/usr/share/omamobile/omarchy/version"
+for f in legacy-4.0.6/*.patch; do
+  install -Dm644 "$f" "$d/usr/share/omamobile/omarchy/legacy-4.0.6/${f##*/}"
+done

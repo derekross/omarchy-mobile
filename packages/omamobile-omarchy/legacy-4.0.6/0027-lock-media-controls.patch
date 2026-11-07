@@ -1,0 +1,623 @@
+# Lock: media controls, as a phone has them, for whatever plays or is
+# paused (MPRIS, Quickshell.Services.Mpris): on the glance a card above the
+# notifications, in their palette, with the album art, the title, the
+# artist, the app's name, how far the track has played, and previous,
+# play/pause and next; on the PIN view a single row above the small clock,
+# in the lock's palette, only when the PIN view has the room (with
+# fingerprints set up the pad reaches up to the clock, and the row is left
+# out rather than crowd it). No player, nothing.
+#
+# Transport only: no tap opens the app (no MPRIS Raise, nothing started),
+# no seeking, no choosing another player. On the glance the touch area over
+# everything hands a tap on a control to it (LockMedia.buttonAt); a tap
+# elsewhere on the card does nothing, a swipe up from it still goes to the
+# PIN view, and the touch that wakes a dark screen only wakes it.
+#
+# Which player: one that plays or is paused and has a title; playing
+# before paused, then the one that started or changed track last; Omarchy's
+# media service's proxy rule (MediaModel.isProxyPlayer: playerctld only
+# repeats another player) from its own MediaModel.js. The same order as
+# the phone shade's media card (omamobile-shell's MediaModel.js).
+#
+# Privacy: the lock loads local art only (a file the player wrote, or a
+# data: image); a cover on the network (https://) would be a request from
+# the locked phone nobody asked for, so the app's icon stands in. With the
+# lock-hide-notification-text toggle on, the app's name and "Playing" or
+# "Paused" stand in for the track, and no art shows. The position is asked
+# for once a second while a player plays and the display is lit, never
+# while it is dark. On a computer (keypad off) nothing shows.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0023 and 0026.
+diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.qml
+--- i/shell/plugins/lock/LockGlance.qml
++++ w/shell/plugins/lock/LockGlance.qml
+@@ -22,6 +22,11 @@
+ // clock format and the home screen's last weather reading. Nothing here
+ // acts on a notification or asks the network.
+ //
++// While a player plays or is paused, media controls (LockMedia.qml) sit
++// above the cards on the glance, and in a row above the small clock on the
++// PIN view when it has the room: previous, play/pause and next, nothing
++// more (no app, no seeking).
++//
+ // On a computer (keypad off) it shows nothing and reads nothing but the
+ // bar's clock format.
+ Item {
+@@ -137,8 +142,8 @@
+   }
+ 
+   function refit() {
+-    var avail = cardsArea.height
+     var gap = cardsColumn.spacing
++    var avail = cardsArea.height - (glanceMedia.visible ? glanceMedia.implicitHeight + gap : 0)
+     var moreHeight = moreLabel.implicitHeight + gap
+     var used = 0
+     var n = 0
+@@ -286,6 +291,13 @@
+     precision: SystemClock.Minutes
+   }
+ 
++  // The player the media controls show; its position asked for only while
++  // the lock is lit.
++  LockMediaSource {
++    id: mediaSource
++    ticking: glance.active && !!glance.lock && !glance.lock.displayDark
++  }
++
+   Process {
+     id: notificationsProc
+     command: ["bash", "-c", "shopt -s nullglob; set -- \"$1\"*.json \"$1\"history/*.json; (($#)) && awk 1 \"$@\" 2>/dev/null; true",
+@@ -367,6 +379,25 @@
+     font.pixelSize: Style.font.display
+   }
+ 
++  // Media controls in one row under the battery, above the small clock;
++  // left out when the PIN view has no room for them there.
++  LockMedia {
++    id: pinMedia
++    objectName: "lockPinMedia"
++    anchors.horizontalCenter: parent.horizontalCenter
++    y: Style.space(72)
++    width: Math.min(Style.space(380), parent.width - Style.space(32))
++    height: implicitHeight
++    compact: true
++    textColor: Commons.Color.lock.text
++    player: glance.active ? mediaSource.player : null
++    hideText: glance.hideText
++    readonly property bool fits: y + implicitHeight + Style.space(12) <= pinClock.y
++    visible: !!player && fits && glance.progress < 1
++    opacity: 1 - glance.progress
++    onActivity: glance.lock.wakeRequested()
++  }
++
+   // ---------------------------------------------------------------- glance
+ 
+   Item {
+@@ -451,6 +482,18 @@
+           width: parent.width
+           spacing: Style.space(10)
+ 
++          LockMedia {
++            id: glanceMedia
++            objectName: "lockGlanceMedia"
++            width: cardsColumn.width
++            height: implicitHeight
++            player: glance.active ? mediaSource.player : null
++            hideText: glance.hideText
++            onActivity: glance.noteActivity()
++            onImplicitHeightChanged: Qt.callLater(glance.refit)
++            onVisibleChanged: Qt.callLater(glance.refit)
++          }
++
+           Repeater {
+             id: cardsRepeater
+             model: glance.shownCards
+@@ -508,6 +551,7 @@
+             width: parent.width
+             visible: glance.cards.length === 0
+             horizontalAlignment: Text.AlignHCenter
++            topPadding: glanceMedia.visible ? Style.space(14) : 0
+             textFormat: Text.PlainText
+             text: "No new notifications"
+             color: Commons.Color.lock.placeholder
+@@ -610,6 +654,12 @@
+           return
+         }
+         if (Math.abs(moved) < Style.space(12) && Math.abs(mouse.x - startX) < Style.space(12)) {
++          // A media control's tap; elsewhere on the media card, nothing.
++          var control = glanceMedia.visible ? glanceMedia.buttonAt(swipe, mouse.x, mouse.y) : null
++          if (control) {
++            glanceMedia.run(control.action)
++            return
++          }
+           var card = glance.cardAt(swipe, mouse.x, mouse.y)
+           if (card) glance.toggleCard(card.modelData.file)
+         }
+diff --git i/shell/plugins/lock/LockMedia.js w/shell/plugins/lock/LockMedia.js
+new file mode 100644
+--- /dev/null
++++ w/shell/plugins/lock/LockMedia.js
+@@ -0,0 +1,124 @@
++// What the lock's media controls show: which MPRIS player, what it says and
++// which art may load. Pure functions over objects with MprisPlayer's
++// property names, so Node can test them. The order is the phone shade's
++// (omamobile-shell's MediaModel.js): only a player that plays or is paused
++// and has a title; playing before paused; among those the one that started
++// or changed track last; playerctld (a proxy that repeats another player,
++// Omarchy's media service's isProxyPlayer) only when nothing else is there.
++//
++// The lock loads local art only: a file the player wrote, or a data: image.
++// Art on the network (Spotify's https:// covers, a browser's) would be a
++// request from the locked phone that nobody asked for, so the app's icon
++// stands in.
++
++// MprisPlaybackState.Enum: Stopped, Playing, Paused
++var PLAYING = 1
++var PAUSED = 2
++
++function str(value) {
++  return value === undefined || value === null ? "" : String(value)
++}
++
++function key(player) {
++  if (!player) return ""
++  return str(player.dbusName || player.desktopEntry || player.identity)
++}
++
++function playing(player) {
++  return !!player && (!!player.isPlaying || player.playbackState === PLAYING)
++}
++
++function showable(player) {
++  if (!player || !str(player.trackTitle)) return false
++  return playing(player) || player.playbackState === PAUSED
++}
++
++// isProxy(player) -> bool: Omarchy's MediaModel.isProxyPlayer.
++function pick(players, order, isProxy) {
++  var list = []
++  var all = players || []
++  for (var i = 0; i < all.length; i++) if (showable(all[i])) list.push(all[i])
++  if (list.length === 0) return null
++  if (isProxy) {
++    var real = list.filter(function(p) { return !isProxy(p) })
++    if (real.length > 0) list = real
++  }
++  var rank = order || {}
++  list.sort(function(a, b) {
++    if (playing(a) !== playing(b)) return playing(a) ? -1 : 1
++    return (rank[key(b)] || 0) - (rank[key(a)] || 0)
++  })
++  return list[0]
++}
++
++function appName(player) {
++  if (!player) return ""
++  var identity = str(player.identity)
++  if (identity) return identity
++  var entry = str(player.desktopEntry)
++  if (entry) return entry
++  return str(player.dbusName).replace(/^org\.mpris\.MediaPlayer2\./, "").replace(/\.instance[0-9_]+$/, "")
++}
++
++function artist(player) {
++  if (!player) return ""
++  var a = str(player.trackArtist)
++  if (a) return a
++  var list = player.trackArtists
++  if (list && list.length) {
++    var out = []
++    for (var i = 0; i < list.length; i++) if (str(list[i])) out.push(str(list[i]))
++    return out.join(", ")
++  }
++  return ""
++}
++
++// Local art only; "" for the app's icon.
++function artSource(url) {
++  var u = str(url).trim()
++  if (!u) return ""
++  if (u.charAt(0) === "/") return "file://" + u.split("/").map(encodeURIComponent).join("/")
++  var lower = u.toLowerCase()
++  if (lower.indexOf("file:///") === 0) return u
++  if (lower.indexOf("data:image/") === 0) return u
++  return ""
++}
++
++function hasTimeline(player) {
++  return !!player && !!player.positionSupported && !!player.lengthSupported
++    && Number(player.length) > 0 && isFinite(Number(player.length))
++}
++
++function fraction(position, length) {
++  var l = Number(length)
++  if (!(l > 0) || !isFinite(l)) return 0
++  return Math.max(0, Math.min(1, (Number(position) || 0) / l))
++}
++
++function canPlayPause(player) {
++  return !!player && (!!player.canTogglePlaying || !!player.canPlay || !!player.canPause)
++}
++
++// The lines the controls show: with the lock's hide-notification-text
++// toggle on, the app and whether it plays, never the track.
++function lines(player, hideText) {
++  if (!player) return { title: "", detail: "" }
++  if (hideText) return { title: appName(player), detail: playing(player) ? "Playing" : "Paused" }
++  var a = artist(player)
++  return { title: str(player.trackTitle), detail: a }
++}
++
++function accessibleName(player, hideText) {
++  if (!player) return ""
++  var l = lines(player, hideText)
++  var parts = [l.title, hideText ? "" : l.detail, hideText ? "" : appName(player)].filter(function(p) { return !!p })
++  return (playing(player) ? "Playing: " : "Paused: ") + parts.join(", ")
++}
++
++if (typeof module !== "undefined") {
++  module.exports = {
++    PLAYING: PLAYING, PAUSED: PAUSED, key: key, playing: playing, showable: showable, pick: pick,
++    appName: appName, artist: artist, artSource: artSource, hasTimeline: hasTimeline, fraction: fraction,
++    canPlayPause: canPlayPause, lines: lines, accessibleName: accessibleName
++  }
++}
+diff --git i/shell/plugins/lock/LockMedia.qml w/shell/plugins/lock/LockMedia.qml
+new file mode 100644
+--- /dev/null
++++ w/shell/plugins/lock/LockMedia.qml
+@@ -0,0 +1,297 @@
++import QtQuick
++import Quickshell
++import qs.Commons
++import qs.Commons as Commons
++import qs.Ui
++import "LockMedia.js" as Media
++
++// Media controls on the lock: the art (local only, LockMedia.js; else the
++// app's icon), the track and the app's name, how far it has played, and
++// previous, play/pause and next. Transport only: nothing here opens the
++// app, seeks, picks another player or reaches anything past the lock.
++// With the lock-hide-notification-text toggle on, the app's name and
++// "Playing" or "Paused" stand in for the track, and no art shows.
++//
++// On the glance it is a card above the notifications, in their palette
++// (the glance's touch area over it hands its taps to buttonAt); on the PIN
++// view, `compact`, a single row in the lock's palette with its own touch.
++BorderSurface {
++  id: media
++
++  property var player: null
++  property bool compact: false
++  property bool hideText: false
++  property color textColor: Commons.Color.notifications.text
++  // Called before a control acts (the lock counts it as activity).
++  signal activity()
++
++  readonly property int touchSize: Math.max(44, Style.space(44))
++  readonly property int inner: Style.space(compact ? 8 : 14)
++  readonly property int artSize: compact ? touchSize : Math.max(56, Style.space(56))
++  readonly property bool isPlaying: Media.playing(player)
++  readonly property var shown: Media.lines(player, hideText)
++  readonly property string artUrl: player && !hideText ? Media.artSource(player.trackArtUrl) : ""
++  readonly property var desktopEntry: {
++    if (!player) return null
++    var names = [player.desktopEntry, player.identity]
++    for (var i = 0; i < names.length; i++) {
++      var n = String(names[i] || "")
++      if (!n) continue
++      var e = typeof DesktopEntries.heuristicLookup === "function" ? DesktopEntries.heuristicLookup(n) : DesktopEntries.byId(n)
++      if (e) return e
++    }
++    return null
++  }
++  readonly property string iconSource: {
++    var icon = desktopEntry && desktopEntry.icon ? String(desktopEntry.icon) : ""
++    if (!icon) return ""
++    if (icon.charAt(0) === "/") return "file://" + icon
++    return Quickshell.iconPath(icon, true)
++  }
++
++  visible: !!player
++  implicitHeight: !player ? 0 : compact ? artSize + inner * 2 : column.implicitHeight + inner * 2
++  radius: Style.cornerRadius
++  color: compact ? Commons.Color.lock.background : Commons.Color.notifications.background
++  borderSpec: compact ? Border.surfaceSpec("lock", "border", Commons.Color.lock.border, Math.max(1, Style.space(2)), "border-alpha")
++    : Border.surfaceSpec("notifications", "border", Commons.Color.notifications.border, Math.max(1, Style.space(2)))
++
++  Accessible.role: Accessible.Grouping
++  Accessible.name: Media.accessibleName(player, hideText)
++
++  // The control under a point of `item`, if it can act; the glance's touch
++  // area asks this for a tap.
++  function buttonAt(item, x, y) {
++    var buttons = [previousButton, playButton, nextButton]
++    for (var i = 0; i < buttons.length; i++) {
++      var b = buttons[i]
++      if (!b.visible || !b.enabled) continue
++      var p = item.mapToItem(b, x, y)
++      if (p.x >= 0 && p.y >= 0 && p.x <= b.width && p.y <= b.height) return b
++    }
++    return null
++  }
++
++  function run(action) {
++    var p = player
++    if (!p) return false
++    activity()
++    if (action === "previous" && p.canGoPrevious) p.previous()
++    else if (action === "next" && p.canGoNext) p.next()
++    else if (action === "playPause" && Media.canPlayPause(p)) {
++      if (p.isPlaying && p.canPause) p.pause()
++      else if (!p.isPlaying && p.canPlay) p.play()
++      else p.togglePlaying()
++    } else return false
++    return true
++  }
++
++  // ---- art, or the app's icon, or Omarchy's media glyph
++  BorderSurface {
++    id: artFrame
++    objectName: "lockMediaArt"
++    x: media.inner
++    y: media.inner
++    width: media.artSize
++    height: media.artSize
++    radius: Style.cornerRadius
++    clip: true
++    color: Style.normalFillFor(media.textColor, Commons.Color.accent)
++    borderSpec: Border.controlSpec("normal", media.textColor, Commons.Color.accent)
++
++    Image {
++      id: art
++      anchors.fill: parent
++      anchors.margins: artFrame.borderLeft
++      fillMode: Image.PreserveAspectCrop
++      asynchronous: true
++      sourceSize.width: media.artSize * 2
++      sourceSize.height: media.artSize * 2
++      source: media.artUrl
++      visible: status === Image.Ready
++    }
++
++    Image {
++      id: appIcon
++      anchors.centerIn: parent
++      width: Math.round(media.artSize * 0.6)
++      height: width
++      fillMode: Image.PreserveAspectFit
++      asynchronous: true
++      sourceSize.width: width * 2
++      sourceSize.height: height * 2
++      source: art.visible ? "" : media.iconSource
++      visible: !art.visible && status === Image.Ready
++    }
++
++    Text {
++      anchors.centerIn: parent
++      visible: !art.visible && !appIcon.visible
++      textFormat: Text.PlainText
++      text: "󰝚"
++      color: media.textColor
++      font.family: Style.font.family
++      font.pixelSize: media.compact ? Style.font.title : Style.font.display
++    }
++  }
++
++  Column {
++    id: column
++    x: media.inner
++    y: media.inner
++    width: media.width - media.inner * 2
++    spacing: Style.space(8)
++
++    // The words beside the art (and, compact, the controls after them).
++    Item {
++      width: parent.width
++      height: media.artSize
++
++      Column {
++        anchors.left: parent.left
++        anchors.leftMargin: media.artSize + Style.space(12)
++        anchors.right: parent.right
++        anchors.rightMargin: media.compact ? controls.width + Style.space(8) : 0
++        anchors.verticalCenter: parent.verticalCenter
++        spacing: Style.space(2)
++
++        Text {
++          objectName: "lockMediaApp"
++          width: parent.width
++          visible: !media.compact && !media.hideText && text !== ""
++          textFormat: Text.PlainText
++          text: Media.appName(media.player)
++          color: Qt.darker(media.textColor, 1.4)
++          font.family: Style.font.family
++          font.pixelSize: Math.max(12, Style.font.caption)
++          elide: Text.ElideRight
++        }
++
++        Text {
++          objectName: "lockMediaTitle"
++          width: parent.width
++          textFormat: Text.PlainText
++          text: media.shown.title
++          color: media.textColor
++          font.family: Style.font.family
++          font.pixelSize: media.compact ? Style.font.body : Style.font.subtitle
++          font.bold: true
++          elide: Text.ElideRight
++        }
++
++        Text {
++          objectName: "lockMediaDetail"
++          width: parent.width
++          visible: text !== ""
++          textFormat: Text.PlainText
++          text: media.shown.detail
++          color: Qt.darker(media.textColor, 1.15)
++          font.family: Style.font.family
++          font.pixelSize: media.compact ? Math.max(12, Style.font.caption) : Style.font.body
++          elide: Text.ElideRight
++        }
++      }
++    }
++
++    // How far the track has played: shown, never a seek bar.
++    Item {
++      objectName: "lockMediaProgress"
++      visible: !media.compact && Media.hasTimeline(media.player)
++      width: parent.width
++      height: visible ? Math.max(4, Style.space(4)) : 0
++
++      Rectangle {
++        anchors.fill: parent
++        radius: height / 2
++        color: Style.selectedFillFor(media.textColor, Commons.Color.accent)
++      }
++
++      Rectangle {
++        height: parent.height
++        radius: height / 2
++        width: parent.width * (media.player ? Media.fraction(media.player.position, media.player.length) : 0)
++        color: Commons.Color.accent
++      }
++    }
++
++    // Room for the controls under the words, on the glance.
++    Item {
++      visible: !media.compact
++      width: parent.width
++      height: visible ? media.touchSize : 0
++    }
++  }
++
++  Row {
++    id: controls
++    anchors.right: media.compact ? parent.right : undefined
++    anchors.rightMargin: media.compact ? media.inner : 0
++    anchors.horizontalCenter: media.compact ? undefined : parent.horizontalCenter
++    y: media.compact ? media.inner + (media.artSize - media.touchSize) / 2 : media.height - media.inner - media.touchSize
++    spacing: media.compact ? Style.space(2) : Style.space(24)
++
++    MediaButton {
++      id: previousButton
++      objectName: "lockMediaPrevious"
++      glyph: "󰒮"
++      name: "Previous track"
++      action: "previous"
++      enabled: !!media.player && !!media.player.canGoPrevious
++    }
++
++    MediaButton {
++      id: playButton
++      objectName: "lockMediaPlayPause"
++      glyph: media.isPlaying ? "󰏤" : "󰐊"
++      name: media.isPlaying ? "Pause" : "Play"
++      action: "playPause"
++      primary: true
++      enabled: Media.canPlayPause(media.player)
++    }
++
++    MediaButton {
++      id: nextButton
++      objectName: "lockMediaNext"
++      glyph: "󰒭"
++      name: "Next track"
++      action: "next"
++      enabled: !!media.player && !!media.player.canGoNext
++    }
++  }
++
++  component MediaButton: BorderSurface {
++    id: button
++    property string glyph: ""
++    property string name: ""
++    property string action: ""
++    property bool primary: false
++
++    width: primary && !media.compact ? Math.round(media.touchSize * 1.4) : media.touchSize
++    height: media.touchSize
++    radius: Style.cornerRadius
++    opacity: enabled ? 1 : 0.4
++    color: buttonTouch.pressed ? Style.pressedFillFor(media.textColor, Commons.Color.accent)
++      : primary ? Util.alpha(Commons.Color.accent, Style.selectedFillAlpha) : "transparent"
++    borderSpec: primary ? Border.controlSpec("selected", media.textColor, Commons.Color.accent) : Border.none()
++
++    Accessible.role: Accessible.Button
++    Accessible.name: button.name
++    Accessible.onPressAction: if (button.enabled) media.run(button.action)
++
++    Text {
++      anchors.centerIn: parent
++      textFormat: Text.PlainText
++      text: button.glyph
++      color: button.primary ? Commons.Color.accent : media.textColor
++      font.family: Style.font.family
++      font.pixelSize: Style.font.iconLarge
++    }
++
++    MouseArea {
++      id: buttonTouch
++      anchors.fill: parent
++      enabled: button.enabled
++      onClicked: media.run(button.action)
++    }
++  }
++}
+diff --git i/shell/plugins/lock/LockMediaSource.qml w/shell/plugins/lock/LockMediaSource.qml
+new file mode 100644
+--- /dev/null
++++ w/shell/plugins/lock/LockMediaSource.qml
+@@ -0,0 +1,52 @@
++import QtQuick
++import Quickshell.Services.Mpris
++import "../services/media/MediaModel.js" as MediaModel
++import "LockMedia.js" as Media
++
++// The MPRIS player the lock's media controls show (LockMedia.pick, with
++// Omarchy's media service's proxy rule). The order is kept from when the
++// lock is made: a player that starts playing or changes track goes first
++// among its kind. Its position is asked for once a second while it plays
++// and the display is lit (Quickshell reports it only when asked); nothing
++// runs while the display is dark.
++Item {
++  id: source
++
++  property var players: Mpris.players ? Mpris.players.values : []
++  property bool ticking: false
++
++  property var order: ({})
++  property int serial: 0
++  readonly property var player: Media.pick(players, order, MediaModel.isProxyPlayer)
++
++  function touch(p) {
++    var k = Media.key(p)
++    if (!k) return
++    var next = {}
++    for (var name in order) next[name] = order[name]
++    serial += 1
++    next[k] = serial
++    order = next
++  }
++
++  Component.onCompleted: {
++    for (var i = 0; i < players.length; i++) if (Media.playing(players[i])) touch(players[i])
++  }
++
++  Instantiator {
++    model: source.players
++    delegate: Connections {
++      required property var modelData
++      target: modelData
++      function onIsPlayingChanged() { if (Media.playing(modelData)) source.touch(modelData) }
++      function onTrackChanged() { source.touch(modelData) }
++    }
++  }
++
++  Timer {
++    interval: 1000
++    repeat: true
++    running: source.ticking && !!source.player && Media.playing(source.player) && !!source.player.positionSupported
++    onTriggered: if (source.player) source.player.positionChanged()
++  }
++}

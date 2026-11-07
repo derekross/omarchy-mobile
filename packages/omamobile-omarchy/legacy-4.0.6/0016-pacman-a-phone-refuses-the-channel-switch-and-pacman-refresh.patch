@@ -1,0 +1,50 @@
+# Phone only, not for upstream: omarchy-channel-set and omarchy-refresh-pacman
+# refuse on a phone and point at RELEASES.md section 5.4. Both copy Omarchy's
+# x86_64 pacman.conf and mirrorlist over the phone's (no [omamobile], no Arch
+# Linux ARM) and then upgrade everything from them; the menu offers that as
+# Update > Channel, and omarchy-reinstall-pkgs calls the refresh too
+# (TOUCH-PLAN 0.2). omamobile-update, which this package installs, is the
+# phone's test, as in 0012. omamobile-setup-user hides Update > Channel too;
+# this keeps a terminal from doing the same.
+#
+# Against Omarchy 4.0.6 (stable 4.0.6-1).
+diff --git i/bin/omarchy-channel-set w/bin/omarchy-channel-set
+--- i/bin/omarchy-channel-set
++++ w/bin/omarchy-channel-set
+@@ -6,6 +6,16 @@
+ 
+ set -euo pipefail
+ 
++# Omarchy Mobile: a phone's pacman.conf carries [omamobile] and Arch Linux
++# ARM, which the channel's x86_64 pacman.conf (omarchy-refresh-pacman) drops.
++if [[ -x /usr/bin/omamobile-update ]]; then
++  echo "omarchy-channel-set: not on an Omarchy Mobile phone. It would replace this phone's" >&2
++  echo "pacman.conf with Omarchy's x86_64 one (no [omamobile], no Arch Linux ARM) and upgrade" >&2
++  echo "everything from it. The phone follows Omarchy's stable channel; update it with" >&2
++  echo "'omarchy update'. See docs/RELEASES.md section 5.4 in derekross/omarchy-mobile." >&2
++  exit 1
++fi
++
+ usage() { echo "Usage: omarchy-channel-set [stable|rc|edge|dev]"; }
+ fail() { echo "Error: $*" >&2; exit 1; }
+ 
+diff --git i/bin/omarchy-refresh-pacman w/bin/omarchy-refresh-pacman
+--- i/bin/omarchy-refresh-pacman
++++ w/bin/omarchy-refresh-pacman
+@@ -3,6 +3,16 @@
+ # omarchy:summary=Overwrite the package configuration for /etc/pacman with the Omarchy default of using its dedicated mirrors and repositories, then update all packages.
+ # omarchy:requires-sudo=true
+ 
++# Omarchy Mobile: a phone's pacman.conf carries [omamobile] and Arch Linux
++# ARM, which Omarchy's x86_64 pacman.conf and mirrorlist would replace.
++if [[ -x /usr/bin/omamobile-update ]]; then
++  echo "omarchy-refresh-pacman: not on an Omarchy Mobile phone. It would replace this phone's" >&2
++  echo "pacman.conf and mirrorlist with Omarchy's x86_64 ones (no [omamobile], no Arch Linux" >&2
++  echo "ARM) and upgrade everything from them. Update the phone with 'omarchy update'." >&2
++  echo "See docs/RELEASES.md section 5.4 in derekross/omarchy-mobile." >&2
++  exit 1
++fi
++
+ sudo cp -f /etc/pacman.conf /etc/pacman.conf.bak
+ sudo cp -f /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
+ 

@@ -321,6 +321,7 @@ def real_package(t):
     subprocess.run(["bsdtar", "-xf", pkg, "-C", ex], check=True)
     info = dict(l.split(" = ", 1) for l in open(os.path.join(ex, ".PKGINFO")).read().splitlines() if " = " in l)
     version = info["pkgver"]
+    selected_series = os.path.join(PKG, "legacy-4.0.6") if version.startswith("4.0.6-") else SERIES
 
     def make_root(name, mtree_from):
         root = os.path.join(t, name)
@@ -334,11 +335,16 @@ def real_package(t):
             shutil.copy(mtree_from, os.path.join(entry, "mtree"))
         return root, entry
 
+    if version.startswith("4.5.0-"):
+        import port45
+        port45.actual(t, ex, version, make_root, run, ok, read, selected_series, PKG, qml_parse)
+        return
+
     root, _ = make_root("real", os.path.join(ex, ".MTREE"))
-    rc, out = run(root, "apply", series=SERIES)
+    rc, out = run(root, "apply", series=selected_series)
     ok(rc == 0, "real omarchy %s: the shipped series applies (%s)" % (version, out.strip().splitlines()[-1]))
     status = json.load(open(os.path.join(root, STATE, "status.json")))
-    ok(not status["upstream"] and len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))),
+    ok(not status["upstream"] and len(status["applied"]) == len(glob.glob(os.path.join(selected_series, "*.patch"))),
        "real omarchy %s: every patch applied, none upstream" % version)
     ok("omamobile-update" in read(root, "usr/bin/omarchy-update"), "real omarchy: omarchy-update hands over (0012)")
     ok(os.path.isfile(os.path.join(root, "usr/share/omarchy/shell/plugins/lock/Keypad.qml")), "real omarchy: the lock's keypad is there (0003)")
@@ -382,7 +388,7 @@ def real_package(t):
     ok("(event.key === Qt.Key_Backspace || event.key === Qt.Key_Left) && !root.filterText) {\n            root.goBack()" in menu,
        "real omarchy: Backspace and Left still go back (0018)")
     ok("property bool cardSettled: false" in menu, "real omarchy: the menu-first-frame bridge applies after 0018")
-    qml_parse(root)
+    qml_parse(root, selected_series)
     lock_glance(root)
     lock_battery(t, root)
     lock_media(root)
@@ -404,7 +410,7 @@ def real_package(t):
     notification_phrasing(t, os.path.join(root, "usr/bin/omarchy-notification-send"),
                           os.path.join(ex, "usr/bin/omarchy-notification-send"))
     lock_fingerprint_probe(t, root)
-    rc, out = run(root, "apply", series=SERIES)
+    rc, out = run(root, "apply", series=selected_series)
     ok(rc == 0 and "already applied" in out, "real omarchy: already applied")
     rc, _ = run(root, "verify")
     ok(rc == 0, "real omarchy: verify")
@@ -418,7 +424,7 @@ def real_package(t):
         names = [l[6:].split("\t")[0].rstrip("\n") for l in open(path) if l.startswith("+++ w/")]
         return names and not any(os.path.islink(os.path.join(root2, "usr/share/omarchy", n)) for n in names)
 
-    patch0000 = next(p for p in sorted(glob.glob(os.path.join(SERIES, "*.patch"))) if touches_no_links(p))
+    patch0000 = next(p for p in sorted(glob.glob(os.path.join(selected_series, "*.patch"))) if touches_no_links(p))
     p = mod_patch(root2, patch0000)
     subprocess.run(["patch", "-s", "-p1", "-d", root2, "-i", p], check=True)
     lines = ["#mtree", "/set type=file uid=0 gid=0 mode=644"]
@@ -432,14 +438,14 @@ def real_package(t):
                 lines.append("./%s sha256digest=%s" % (rel, sha(open(full, "rb").read())))
     with gzip.open(os.path.join(entry, "mtree"), "wt") as f:
         f.write("\n".join(lines) + "\n")
-    rc, out = run(root2, "apply", series=SERIES)
+    rc, out = run(root2, "apply", series=selected_series)
     status = json.load(open(os.path.join(root2, STATE, "status.json")))
     ok(rc == 0 and status["upstream"] == [os.path.basename(patch0000)],
        "real omarchy with %s upstream: skipped and reported, the rest applied" % os.path.basename(patch0000))
-    ok(len(status["applied"]) == len(glob.glob(os.path.join(SERIES, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
+    ok(len(status["applied"]) == len(glob.glob(os.path.join(selected_series, "*.patch"))) - 1, "real omarchy with one patch upstream: the others apply on it")
 
 
-def qml_parse(root):
+def qml_parse(root, series=None):
     """Every QML file the series touches still parses, when qmlformat is at
     hand (it reports syntax errors without needing the shell's imports)."""
     tool = shutil.which("qmlformat") or ("/usr/lib/qt6/bin/qmlformat" if os.path.isfile("/usr/lib/qt6/bin/qmlformat") else "")
@@ -447,7 +453,7 @@ def qml_parse(root):
         print("ok - real omarchy: the patched QML parses # SKIP no qmlformat")
         return
     files = set()
-    for p in glob.glob(os.path.join(SERIES, "*.patch")):
+    for p in glob.glob(os.path.join(series or SERIES, "*.patch")):
         for line in open(p):
             if line.startswith("+++ w/") and line.rstrip().endswith(".qml"):
                 files.add(line[6:].rstrip())

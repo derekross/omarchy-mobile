@@ -18,11 +18,25 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/qs" "$work/plugins" "$work/home/.local/state/omarchy/toggles" \
   "$work/home/.local/state/omamobile" "$work/home/.config/omarchy"
 cp -r "$shell/Commons" "$shell/Ui" "$work/qs/"
+mkdir -p "$work/home/omarchy/default"
+[[ ! -d $shell/../default/i18n ]] || cp -r "$shell/../default/i18n" "$work/home/omarchy/default/"
 cp -r "$shell/plugins/lock" "$shell/plugins/notifications" "$work/plugins/"
+if [[ -n ${PRIVATE_LOCK_DIR:-} ]]; then
+  for f in Service.qml LockView.qml LockGlance.qml LockGlance.js Keypad.qml FingerprintModel.js LockBattery.qml LockBattery.js LockMedia.qml LockMedia.js LockMediaSource.qml NenajMatrix.qml; do
+    [[ ! -f $PRIVATE_LOCK_DIR/$f ]] || cp "$PRIVATE_LOCK_DIR/$f" "$work/plugins/lock/$f"
+  done
+  # Resolve production absolute imports to the SAME candidate components in
+  # this fixture only; never fall through to this machine's installed shell.
+  sed -i 's|file:///usr/share/omarchy/shell/plugins/notifications/components|../notifications/components|g' "$work/plugins/lock/LockGlance.qml"
+  sed -i 's|file:///usr/share/omarchy/shell/plugins/notifications/NotificationLogic.js|../notifications/NotificationLogic.js|g' "$work/plugins/lock/LockGlance.js"
+fi
 # Omarchy's media service's model, which the lock's media controls (0027) use.
 mkdir -p "$work/plugins/services"
 cp -r "$shell/plugins/services/media" "$work/plugins/services/"
 cp "$here/lock-glance.qml" "$work/tst_lock_glance.qml"
+if ! grep -q "notifications/quiet.json" "$shell/plugins/lock/LockGlance.qml"; then
+  sed -i "s|notifications/quiet.json|notifications.json|g" "$work/tst_lock_glance.qml"
+fi
 printf '.pragma library\nvar HOME = "%s"\n' "$work/home" > "$work/TestEnv.js"
 
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1

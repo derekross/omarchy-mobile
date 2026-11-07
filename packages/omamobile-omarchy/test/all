@@ -77,7 +77,10 @@ python3 -B test/patches.py || fail "re-patch tool"
 pkg=${OMARCHY_PKG:-$(ls ~/.cache/omamobile-rootfs/pkg/omarchy-[0-9]*-aarch64.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | sort | tail -1 || true)}
 if [[ -n $pkg ]] && command -v bsdtar >/dev/null; then
   mkdir -p "$t/omarchy-pkg"
-  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock usr/share/omarchy/bin/omarchy-system-sleep-lock
+  bsdtar -xf "$pkg" -C "$t/omarchy-pkg" usr/bin/omarchy-apply-lock usr/bin/omarchy-system-sleep-lock
+  # The packaged source alias is absolute /usr/bin. Normalize this one test
+  # input inside the fake root; never follow it into the host's installed tree.
+  install -Dm755 "$t/omarchy-pkg/usr/bin/omarchy-system-sleep-lock" "$t/omarchy-pkg/usr/share/omarchy/bin/omarchy-system-sleep-lock"
   OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/lock-pam.sh || fail "lock-pam"
   # Patch 0021 run against the real sleep lock, with fakes.
   OMARCHY_PKG_ROOT=$t/omarchy-pkg bash test/sleep-lock.sh || fail "sleep-lock"
@@ -90,6 +93,7 @@ fi
   || fail "install and upgrade write the lock's PAM file"
 pass "install and upgrade write the lock's PAM file when it is missing"
 bash test/update.sh || fail "omamobile-update"
+python3 -I test/migration-mobile-holds.py || fail "mobile migration holds"
 
 # Patch 0015 end to end (inline reply on a private bus), in the OWL
 # conformance container, when asked: OMAMOBILE_NOTIFY_TEST=1.
@@ -101,4 +105,4 @@ if [[ -n ${OMAMOBILE_NOTIFY_TEST:-} ]]; then
   pass "inline reply end to end"
 fi
 
-python3 -I test/migration-mobile-holds.py || fail "mobile-critical migration holds"
+python3 -I test/source-family.py || fail "source-family selection"
