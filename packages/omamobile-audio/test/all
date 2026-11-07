@@ -67,10 +67,11 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucmr get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM raven: Speaker PCM"
   [[ $(ucmr get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM raven: Mic PCM"
   pass "UCM profile parses: raven HiFi with Speaker and Mic"
-  # husky: speaker and earpiece on EP6, no microphones
+  # husky: speaker and earpiece on EP6, the microphone on EP1 capture
   cp -r ucm2/Google/husky "$u/Google/"
   cp "ucm2/conf.d/aoc-snd-card/google,husky-aoc-snd-card.conf" "$u/conf.virt.d/huskytest.conf"
-  sed -i -e 's/\${CardId}/0/g' "$u/Google/husky/HiFi.conf"
+  sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/husky/HiFi.conf"
   ucmh() { ALSA_CONFIG_UCM2=$u alsaucm -c huskytest "$@" 2>&1; }
   [[ $(ucmh list _verbs) == *"0: HiFi"* ]] || fail "UCM husky: the HiFi verb"
   out=$(ucmh list _devices/HiFi)
@@ -96,8 +97,30 @@ husky_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/55
 [[ -f "ucm2/conf.d/aoc-snd-card/$husky_card.conf" ]] || fail "husky long-name UCM file is named exactly $husky_card.conf"
 ! grep -q "husky" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf || fail "cheetah's shared profile has no husky branch"
 ! grep -qE "TDM_0_RX Mixer EP1|EP1 playback|Mixer EP1' 1" ucm2/Google/husky/HiFi.conf || fail "husky never binds EP1 playback (it hangs the AoC; EP1 capture is the microphone)"
-! grep -E "cset .*Analog PCM Volume' ([2-9][0-9]|1[1-9])" ucm2/Google/husky/HiFi.conf || fail "husky's analog volume stays at 10 or below"
-! grep -E "cset .*Digital PCM Volume' (7[4-9][0-9]|[89][0-9][0-9]|[0-9]{4,})" ucm2/Google/husky/HiFi.conf || fail "husky's digital volume stays at 737 or below"
+# the volume ceilings, compared as numbers (a regex let 738 and 739 through)
+husky_over() { # husky_over FILE Digital|Analog LIMIT: 0 if any cset is above LIMIT
+  local v
+  while read -r v; do ((v > $3)) && return 0; done \
+    < <(sed -n "s/.*cset .*$2 PCM Volume' \([0-9][0-9]*\)\".*/\1/p" "$1")
+  return 1
+}
+ceil=$(mktemp); trap 'rm -f "$ceil"' EXIT
+for v in 738 739 9999; do
+  echo "cset \"name='Top Digital PCM Volume' $v\"" > "$ceil"
+  husky_over "$ceil" Digital 737 || fail "the ceiling check catches digital $v"
+done
+for v in 737 10; do
+  echo "cset \"name='Top Digital PCM Volume' $v\"" > "$ceil"
+  ! husky_over "$ceil" Digital 737 || fail "the ceiling check passes digital $v"
+done
+for v in 11 12; do
+  echo "cset \"name='Top Analog PCM Volume' $v\"" > "$ceil"
+  husky_over "$ceil" Analog 10 || fail "the ceiling check catches analog $v"
+done
+echo "cset \"name='Top Analog PCM Volume' 10\"" > "$ceil"
+! husky_over "$ceil" Analog 10 || fail "the ceiling check passes analog 10"
+! husky_over ucm2/Google/husky/HiFi.conf Analog 10 || fail "husky's analog volume stays at 10 or below"
+! husky_over ucm2/Google/husky/HiFi.conf Digital 737 || fail "husky's digital volume stays at 737 or below"
 raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | head -1)
 [[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"

@@ -177,7 +177,7 @@ printf '#!/bin/sh\necho "$*" >> %s/modprobe.log\n' "$aoc" > "$aoc/bin/modprobe"
 printf '#!/bin/sh\nexit 0\n' > "$aoc/bin/sync"
 chmod +x "$aoc/bin/modprobe" "$aoc/bin/sync"
 # the script writes state to /var/lib/omamobile: run a copy with it pointed at the temp dir
-sed "s|^state=/var/lib/omamobile|state=$aoc/state|" bin/omamobile-husky-aoc-start > "$aoc/start"
+sed "s|^state=/var/lib/omamobile|state=$aoc/state|; s|^loaded=.*|loaded=$aoc/run/aoc-firmware-loaded|" bin/omamobile-husky-aoc-start > "$aoc/start"
 runaoc() { PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards \
            OMAMOBILE_TRUSTY_STATUS=$aoc/trusty bash "$aoc/start" "$@" 2>&1; }
 : > "$aoc/cards"
@@ -191,6 +191,24 @@ out=$(runaoc --retry) || true
 [[ $out != *"never finished"* ]] || fail "--retry clears the marker"
 [[ ! -e $aoc/state/aoc-bringup-started ]] || fail "a clean failure removes the marker (no firmware here)"
 pass "the AoC start does nothing without the node, honours a hang marker, and --retry tries again"
+# the once-per-boot guards: nothing may reach the firmware file
+rm -rf "$aoc/state/"* "$aoc/modprobe.log"; : > "$aoc/node/firmware"
+mkdir -p "$aoc/run"; date -Is > "$aoc/run/aoc-firmware-loaded"
+rc=0; out=$(runaoc) || rc=$?
+[[ $rc -eq 1 && $out == *"already started this boot"* ]] || fail "a /run marker refuses a second start"
+[[ ! -s $aoc/node/firmware && ! -e $aoc/modprobe.log && ! -e $aoc/state/aoc-bringup-started ]] \
+  || fail "a second start in the same boot wrote to firmware or loaded modules"
+rc=0; out=$(runaoc --retry) || rc=$?
+[[ $rc -eq 1 && ! -s $aoc/node/firmware && ! -e $aoc/modprobe.log ]] || fail "--retry does not get past the /run marker"
+rm -f "$aoc/run/aoc-firmware-loaded"
+printf 'Services : 94\n0 : "control" mbox 0\n' > "$aoc/node/services"
+out=$(runaoc); rc=$?
+[[ $rc -eq 0 && $out == *"already online: Services : 94"* && ! -s $aoc/node/firmware && ! -e $aoc/modprobe.log ]] \
+  || fail "an AoC that is already online is left alone"
+printf 'Services : 0\n' > "$aoc/node/services"
+out=$(runaoc) || true; [[ $out != *"already online"* ]] || fail "Services : 0 is not online"
+rm -f "$aoc/node/services"
+pass "a /run marker or an online AoC stops a second start before anything is loaded or written to firmware"
 
 test/display-start || fail "test/display-start"
 pass "the display start loads gs_decon after allowing DSI commands for google-hk3 only"

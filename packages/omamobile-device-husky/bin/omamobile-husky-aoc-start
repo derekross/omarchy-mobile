@@ -16,15 +16,19 @@
 #      for the sound card.
 # A marker is written and synced before any of it and removed at the end. If a
 # boot hangs here, the next one finds the marker and leaves the AoC off;
-# "omamobile-husky-aoc-start --retry" tries again. A kernel without the AoC
-# node does nothing. The speaker levels are not set here: the sound card's
-# driver caps them (digital 817, analog 10), and the UCM profile uses the
-# 7 Pro's "media" stage (737 / 10).
+# "omamobile-husky-aoc-start --retry" tries again. A second marker in /run
+# (gone at reboot) is written just before the firmware write and never removed
+# by a failure: the AoC starts once per boot, so a start after a failed one
+# (systemctl start, a hand run, --retry) is refused until the next reboot. A kernel without the AoC
+# node does nothing. The speaker levels are not set here: the UCM profile
+# stays at the 7 Pro's "media" stage (digital 737, analog 10).
 #   omamobile-husky-aoc-start [--retry]
 set -uo pipefail
 
 state=/var/lib/omamobile
 marker=$state/aoc-bringup-started
+# Set right before the firmware load, gone after a reboot (tmpfs)
+loaded=${OMAMOBILE_AOC_LOADED:-/run/omamobile/aoc-firmware-loaded}
 node=${OMAMOBILE_AOC_NODE:-/sys/bus/platform/devices/154b0000.aoc}
 cards=${OMAMOBILE_ASOUND_CARDS:-/proc/asound/cards}
 trusty_status=${OMAMOBILE_TRUSTY_STATUS:-/proc/device-tree/trusty/status}
@@ -48,10 +52,22 @@ if [[ ! -e $node ]]; then
   exit 0
 fi
 # The AoC starts once per boot: a second firmware load would take the running
-# one down.
+# one down. Its services file starts with "Services : N" only while the AoC is
+# online (services_show in the driver prints nothing otherwise), the same test
+# as the 7 Pro's start. The card being listed is a second sign, not the only one.
+if grep -q '^Services : [1-9]' "$node/services" 2>/dev/null; then
+  log "already online: $(head -1 "$node/services")"
+  exit 0
+fi
 if grep -q aoc-snd-card "$cards" 2>/dev/null; then
   log "the sound card is already up"
   exit 0
+fi
+# A start that got as far as the firmware write but has no online AoC (for
+# instance the card never appeared): do not write aoc.bin to it again.
+if [[ -e $loaded ]]; then
+  log "the AoC was already started this boot but is not online; reboot to start it again"
+  exit 1
 fi
 if ! grep -q okay "$trusty_status" 2>/dev/null; then
   log "Trusty is not enabled in this device tree; the AoC cannot be started"
@@ -88,6 +104,7 @@ for m in aoc_char_dev aoc_channel_dev aoc_alsa_dev_util \
   load "$m"
 done
 [[ -e $node/firmware ]] || fail "no firmware node in $node"
+mkdir -p "${loaded%/*}" && date -Is > "$loaded"
 echo aoc.bin > "$node/firmware" || fail "the firmware load failed"
 for _ in $(seq 40); do grep -q aoc-snd-card "$cards" 2>/dev/null && break; sleep 0.5; done
 grep -q aoc-snd-card "$cards" 2>/dev/null || fail "the sound card did not appear"
