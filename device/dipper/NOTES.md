@@ -46,8 +46,8 @@ and Wi-Fi keys; quoted here are the facts, never the files.
 ## 2026-10-29 — first light, and what the hardware said
 
 **The phone boots mainline and gives a shell.** `fastboot boot` of our image, kernel
-7.3.0-rc6 with our DTB: UFS up (all six LUNs, ext4 mounts), USB NCM gadget, dropbear
-on `172.16.42.1`, gpio-keys, 8 CPUs, 5.7 GB RAM. The storage guard works as designed:
+7.3.0-rc6 with our DTB: UFS up (all six LUNs, ext4 mounts), USB NCM gadget, dropbear,
+gpio-keys, 8 CPUs, 5.7 GB RAM. The storage guard works as designed:
 `boot`, `recovery` and `persist` read-only, `userdata` and `logdump` writable.
 
 ### What had to be fixed before any of that
