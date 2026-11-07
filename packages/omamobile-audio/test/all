@@ -67,6 +67,18 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucmr get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM raven: Speaker PCM"
   [[ $(ucmr get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM raven: Mic PCM"
   pass "UCM profile parses: raven HiFi with Speaker and Mic"
+  # husky: speaker and earpiece on EP6, no microphones
+  cp -r ucm2/Google/husky "$u/Google/"
+  cp "ucm2/conf.d/aoc-snd-card/google,husky-aoc-snd-card.conf" "$u/conf.virt.d/huskytest.conf"
+  sed -i -e 's/\${CardId}/0/g' "$u/Google/husky/HiFi.conf"
+  ucmh() { ALSA_CONFIG_UCM2=$u alsaucm -c huskytest "$@" 2>&1; }
+  [[ $(ucmh list _verbs) == *"0: HiFi"* ]] || fail "UCM husky: the HiFi verb"
+  out=$(ucmh list _devices/HiFi)
+  [[ $out == *"0: Speaker"* && $out == *"1: Earpiece"* && $out == *"2: Mic"* ]] || fail "UCM husky: Speaker, Earpiece and Mic devices"
+  [[ $(ucmh get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM husky: Mic PCM is EP1 capture (device 8)"
+  grep -q "BUILDIN MIC ID CAPTURE LIST' 0,-1,-1,-1" ucm2/Google/husky/HiFi.conf || fail "husky records mic id 0 only until the others are mapped"
+  [[ $(ucmh get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM husky: Speaker PCM is EP6 (device 5)"
+  pass "UCM profile parses: husky HiFi with Speaker and Earpiece on EP6"
 fi
 grep -c "find-device:type=pcm,stream=playback,field=id,regex='^EP6 playback'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
   fail "UCM: the Speaker PCM is found by its id"
@@ -79,6 +91,13 @@ tegu_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/52-
 [[ -f "ucm2/conf.d/aoc-snd-card/$tegu_card.conf" ]] || fail "tegu long-name UCM file is named exactly $tegu_card.conf"
 grep -c "channelmix.max-volume = 0.562" wireplumber/52-omamobile-tegu-aoc.conf >/dev/null || fail "the 9a's speaker sink is capped (channelmix.max-volume)"
 grep -c "CAPTURE LIST' 0,1,-1,-1" ucm2/Google/tegu/HiFi.conf >/dev/null || fail "tegu HiFi must set its own mic list (cheetah's 0,3,2 kills the AoC)"
+husky_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/55-omamobile-husky-aoc.conf | head -1)
+[[ $husky_card == google,husky-aoc-snd-card ]] || fail "55-omamobile-husky-aoc.conf matches husky's card name"
+[[ -f "ucm2/conf.d/aoc-snd-card/$husky_card.conf" ]] || fail "husky long-name UCM file is named exactly $husky_card.conf"
+! grep -q "husky" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf || fail "cheetah's shared profile has no husky branch"
+! grep -qE "TDM_0_RX Mixer EP1|EP1 playback|Mixer EP1' 1" ucm2/Google/husky/HiFi.conf || fail "husky never binds EP1 playback (it hangs the AoC; EP1 capture is the microphone)"
+! grep -E "cset .*Analog PCM Volume' ([2-9][0-9]|1[1-9])" ucm2/Google/husky/HiFi.conf || fail "husky's analog volume stays at 10 or below"
+! grep -E "cset .*Digital PCM Volume' (7[4-9][0-9]|[89][0-9][0-9]|[0-9]{4,})" ucm2/Google/husky/HiFi.conf || fail "husky's digital volume stays at 737 or below"
 raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | head -1)
 [[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"
