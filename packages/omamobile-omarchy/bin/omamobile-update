@@ -413,15 +413,23 @@ def pending_updates(offline=False):
     db = os.environ.get("CHECKUPDATES_DB") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "checkup-db-%d" % os.getuid())
     targets = []
     if lines:
+        # pacman's plan of the whole update: when it can't be made (a dependency
+        # no repository satisfies, a conflict), the update would stop in the
+        # middle, so refuse it here with pacman's own reason (#433)
         try:
             plan = subprocess.run([PACMAN, "-Sup", "--dbpath", db, "--logfile", "/dev/null",
                                    "--print-format", "%n %v"], capture_output=True, text=True, timeout=120)
-            for l in plan.stdout.splitlines():
-                parts = l.split()
-                if len(parts) == 2 and not l.startswith(("::", "warning", "error")):
-                    targets.append((parts[0], parts[1]))
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return lines, [], "could not plan the update: %s" % e
+        if plan.returncode != 0:
+            why = [l.strip() for l in (plan.stderr + "\n" + plan.stdout).splitlines()
+                   if l.strip().startswith(("error", "::"))]
+            return lines, [], "pacman can't plan this update, so it would stop partway: %s" % (
+                "; ".join(why[:4]) or "pacman -Sup exited %d" % plan.returncode)
+        for l in plan.stdout.splitlines():
+            parts = l.split()
+            if len(parts) == 2 and not l.startswith(("::", "warning", "error")):
+                targets.append((parts[0], parts[1]))
         if not targets:
             targets = [(l.split()[0], l.split()[-1]) for l in lines]
     return lines, targets, ""

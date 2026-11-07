@@ -56,7 +56,7 @@ cat >"$fake/pacman" <<EOF
 #!/bin/bash
 case "\$1" in
   -Q) [[ \$2 == omarchy ]] && echo "omarchy 4.0.4-2" || exit 1 ;;
-  -Sup) cat "$t/plan" 2>/dev/null ;;
+  -Sup) if [[ -s "$t/plan-fail" ]]; then cat "$t/plan-fail" >&2; exit 1; fi; cat "$t/plan" 2>/dev/null ;;
   -Qmq) echo some-aur-thing ;;
   -Qtdq) echo orphan-lib ;;
   *) echo "pacman \$*" >>"$calls" ;;
@@ -201,6 +201,15 @@ printf 'omarchy 4.0.5-1\nlinux-aarch64 7.3-1\nlimine 9.0-1\nlinux-firmware-other
 out=$(python3 -I "$U" check --json)
 ok "check: kernels and bootloaders in the plan block, firmware and headers don't" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"boot_packages\"] == [\"limine\", \"linux-aarch64\"] and not d[\"ok\"]" "$out"'
 printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+# A plan pacman can't make (#433: [omarchy]'s aquamarine 0.15.1 without the so=15
+# our Hyprland needs) is a refusal with pacman's reason, never the plain list
+printf "error: failed to prepare transaction (could not satisfy dependencies)\n:: unable to satisfy dependency 'libaquamarine.so=15-64' required by hyprland\n" >"$t/plan-fail"
+out=$(python3 -I "$U" check --json)
+ok "check: a plan pacman can't make blocks, with pacman's reason" 'python3 -c "
+import json,sys; d=json.loads(sys.argv[1]); b=\" \".join(d[\"blockers\"])
+assert not d[\"ok\"] and \"can\x27t plan this update\" in b and \"libaquamarine.so=15-64\" in b, d[\"blockers\"]
+" "$out"'
+rm -f "$t/plan-fail"
 
 # The phone's own kernel package goes through omamobile-boot-update
 printf 'omarchy 4.0.5-1\nlinux-omamobile 7.3.0rc6.r453.g0123456789ab-1\nomamobile-boot-update 0.1.0-1\n' >"$t/plan"

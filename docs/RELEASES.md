@@ -212,7 +212,7 @@ The same Alpine-based initramfs, with release differences:
 | --- | --- |
 | transcript (`script` to `/tmp/omarchy-update.log`) | kept; `omamobile-update` makes the pty itself, so one sudo timestamp covers the whole run |
 | update lock, 10 GiB free-space check | kept |
-| `omarchy-update-confirm` (gum) | replaced by the sheet's Update button, plus refusals: battery below 30% unless charging; `[omamobile]` not first or `[omarchy]` after Arch Linux ARM's repositories; another distribution's kernel, a bootloader, Snapper or fwupd package in the transaction; `linux-omamobile` when `omamobile-boot-update preflight` says its hook would refuse to write slot B |
+| `omarchy-update-confirm` (gum) | replaced by the sheet's Update button, plus refusals: battery below 30% unless charging; `[omamobile]` not first or `[omarchy]` after Arch Linux ARM's repositories; another distribution's kernel, a bootloader, Snapper or fwupd package in the transaction; `linux-omamobile` when `omamobile-boot-update preflight` says its hook would refuse to write slot B; an update pacman can't plan (`pacman -Sup` fails, as with an unsatisfiable dependency), with pacman's reason |
 | `omarchy-update-pkg-prune` (paccache) | kept |
 | `omarchy-snapshot create` (Snapper, Limine's snapshot menu) | skipped: ext4 root, no Snapper (exit 127, which Omarchy takes for "Snapper absent") |
 | stay-awake inhibitor | kept (the screen stays on during the update) |
