@@ -3398,5 +3398,5 @@ never change, so reviews can cite them.
   is a no-op on cheetah because the bootloader leaves MIF at 3172 MHz.** The 7
   Pro's MIF reads 2028 MHz at probe in every log; the number came from a plan
   table and an Expect line, and went into the contributor's commit. *Lesson:*
-  see L-493; ACPM-PLAN and DISPLAY-PLAN still carry the old figure. *From:*
+  see L-493; ACPM-PLAN and DISPLAY-PLAN were corrected in #480. *From:*
   kernel #116.
