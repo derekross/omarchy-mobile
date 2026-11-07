@@ -16,7 +16,7 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
 mount -t configfs configfs /sys/kernel/config
-mount -t tmpfs tmpfs /run
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
 
 # With "splash" on the command line, Plymouth shows the boot animation once
 # Arch starts, so keep status lines off the screen (they still go to kmsg).
