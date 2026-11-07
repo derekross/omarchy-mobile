@@ -92,6 +92,19 @@ Item {
     shown: frame.shown
   }
 
+  // Optional shown may be derived read-only from host.shown. Qt's JS
+  // descriptor reports QObject readonly properties as writable, so recognize
+  // only that exact compatibility error. Every other property/error propagates.
+  function bindContext(widget, name, value) {
+    if (!(name in widget)) return false
+    if (name !== "shown") { widget[name] = value; return true }
+    try { widget.shown = value; return true }
+    catch (error) {
+      if (error instanceof TypeError && error.message === 'Cannot assign to read-only property "shown"') return false
+      throw error
+    }
+  }
+
   Loader {
     id: content
     anchors.fill: parent
@@ -100,7 +113,7 @@ Item {
       // Kept up to date from here on, for the properties the widget
       // declares (WIDGETS.md lists them).
       var w = item
-      var bind = function(name, value) { if (name in w) w[name] = value }
+      var bind = function(name, value) { frame.bindContext(w, name, value) }
       bind("settings", Qt.binding(function() { return frame.entry && frame.entry.config ? frame.entry.config : ({}) }))
       bind("editing", Qt.binding(function() { return frame.editing }))
       bind("cellsWide", Qt.binding(function() { return frame.entry ? frame.entry.w : 1 }))

@@ -568,6 +568,15 @@ else
   pass "widget host output limits, cancellation and state"
 fi
 
+rc=0; out=$(python3 -B test/user-widget-context.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "widget context readonly compatibility # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "actual UserWidgetCell readonly context regression"
+else
+  pass "actual UserWidgetCell+Loader readonly context and error propagation"
+fi
+
 # The weather widgets' position: locate.sh against a fake where-am-i.
 bash -n plugins/omamobile.home/locate.sh || fail "locate.sh parses"
 loc=$(mktemp -d)
