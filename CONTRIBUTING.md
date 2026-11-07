@@ -66,6 +66,10 @@ Every rule here exists because breaking it either bricks a phone or loses data n
 
 Keeping stock on slot A is how we avoid bricking phones during development, not a requirement for every phone. A phone with a single set of boot partitions (no `_a`/`_b` names) can become a supported device. With no second slot, a failed boot can't fall back to stock, so these rules replace the slot B rules above for that phone:
 
+| Device | Boot partition the installer may write | Fastboot by buttons |
+| --- | --- | --- |
+| Xiaomi Mi 8 (`dipper`) | `boot` | Power off, then hold Volume Down + Power until FASTBOOT appears. |
+
 - **The device's entry comes first.** Before any flash, the port adds its phone here: the codename, the boot partitions the installer writes (normally `boot` alone, plus `dtbo` or `vendor_boot` where the phone needs them), and how to reach fastboot or the vendor's download mode by the buttons. A device PR never writes its own exception into AGENTS.md or this file.
 - **We write only the boot partitions the entry names, and `userdata`.** Through `bin/omamobile flash`/`push` and `tools/install-phone`, with the serial pinned, the codename typed, the allowlist checked and a dry run first. No tool may write a partition named on its command line, and nothing is written from a rooted stock Android, where the storage guard doesn't run.
 - **A full read-only backup before the first flash,** of every partition except `userdata` and `super`, checked against checksums taken on the phone, stored outside the repository (§3.3). It includes stock's boot partitions, which are the way back: the device's notes say how to write them back by the buttons, step by step, and the owner reads that before the first flash.
