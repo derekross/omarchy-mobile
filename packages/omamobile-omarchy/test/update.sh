@@ -57,6 +57,7 @@ cat >"$fake/pacman" <<EOF
 case "\$1" in
   -Q) [[ \$2 == omarchy ]] && echo "omarchy 4.0.4-2" || exit 1 ;;
   -Sup) cat "$t/plan" 2>/dev/null ;;
+  -Sp) printf 'omarchy\t4.5.0-3\taarch64\t%s\n' "\$(cat "$t/candidate-sha")" ;;
   -Qmq) echo some-aur-thing ;;
   -Qtdq) echo orphan-lib ;;
   *) echo "pacman \$*" >>"$calls" ;;
@@ -115,10 +116,23 @@ printf 'echo "Tweak the bar"\ntrue\n' >"$t/omarchy/migrations/1790000002.sh"
 printf 'echo "Prioritize the Omarchy package repository"\nif ! cmp -s /etc/pacman.conf "$pacman_config"; then\n  sudo cp -a /etc/pacman.conf /etc/pacman.conf.bak\n  sudo install -m 644 -o root -g root "$pacman_config" /etc/pacman.conf\nfi\n' >"$t/omarchy/migrations/1790000004.sh"
 printf 'echo "Old one"\nsudo limine-update\n' >"$t/omarchy/migrations/1700000000.sh"
 touch "$HOME/.local/state/omarchy/migrations/1700000000.sh"
-echo "omarchy 4.0.4-2 -> 4.0.5-1" >"$t/updates"
-printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
-echo '{"result": "ok", "applied": ["0003-x.patch"], "upstream": ["0000-y.patch"], "omarchy": "omarchy 4.0.5-1"}' >"$t/patch-status.json"
-U=$PKG/bin/omamobile-update
+echo "omarchy 4.0.4-2 -> 4.5.0-3" >"$t/updates"
+printf 'omarchy 4.5.0-3\nmesa 26.1-1\n' >"$t/plan"
+echo '{"result": "ok", "applied": ["0003-x.patch"], "upstream": ["0000-y.patch"], "omarchy": "omarchy 4.5.0-3"}' >"$t/patch-status.json"
+# Mock host disk capacity inside the fixture interpreter, not through a new
+# production bypass flag. The runtime's 10 GiB rule stays unchanged.
+export OMAMOBILE_UPDATE_REAL_SOURCE=$PKG/bin/omamobile-update
+cat >"$t/update-fixture.py" <<'PYCODE'
+import os, runpy, sys
+scope = runpy.run_path(os.environ["OMAMOBILE_UPDATE_REAL_SOURCE"], run_name="update_fixture")
+scope["check"].__globals__["free_bytes"] = lambda: 20 * 1024 ** 3
+globals().update({k: v for k, v in scope.items() if not k.startswith("__")})
+if __name__ == "__main__":
+    sys.exit(scope["main"](sys.argv[1:]))
+PYCODE
+U=$t/update-fixture.py
+python3 -I "$PKG/test/prospective-fixture.py" "$PKG" "$t" >"$t/prospective.env"
+source "$t/prospective.env"
 
 wait_done() {
   for _ in $(seq 150); do grep -cP '^state\tdone' "$XDG_RUNTIME_DIR/omamobile-update/events" >/dev/null 2>&1 && return 0; sleep 0.1; done
@@ -193,17 +207,17 @@ out=$(python3 -I "$U" check --json)
 ok "check: updates, omarchy line, patches, credential" 'python3 -c "
 import json,sys; d=json.loads(sys.argv[1])
 assert d[\"ok\"], d[\"blockers\"]
-assert d[\"omarchy_update\"] == \"omarchy 4.0.4-2 -> 4.0.5-1\" and d[\"update_count\"] == 2
+assert d[\"omarchy_update\"] == \"omarchy 4.0.4-2 -> 4.5.0-3\" and d[\"update_count\"] == 2
 assert d[\"patches\"][\"upstream\"] == [\"0000-y.patch\"] and d[\"credential\"] == \"pin\"
 assert d[\"omarchy\"] == \"4.0.4-2\" and d[\"release_notes\"].startswith(\"https://\")
 " "$out"'
-printf 'omarchy 4.0.5-1\nlinux-aarch64 7.3-1\nlimine 9.0-1\nlinux-firmware-other 1-1\nlinux-api-headers 7-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nlinux-aarch64 7.3-1\nlimine 9.0-1\nlinux-firmware-other 1-1\nlinux-api-headers 7-1\n' >"$t/plan"
 out=$(python3 -I "$U" check --json)
 ok "check: kernels and bootloaders in the plan block, firmware and headers don't" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"boot_packages\"] == [\"limine\", \"linux-aarch64\"] and not d[\"ok\"]" "$out"'
-printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nmesa 26.1-1\n' >"$t/plan"
 
 # The phone's own kernel package goes through omamobile-boot-update
-printf 'omarchy 4.0.5-1\nlinux-omamobile 7.3.0rc6.r453.g0123456789ab-1\nomamobile-boot-update 0.1.0-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nlinux-omamobile 7.3.0rc6.r453.g0123456789ab-1\nomamobile-boot-update 0.1.0-1\n' >"$t/plan"
 echo '{"auto_write": "yes", "ok": true, "problem": ""}' >"$t/preflight"
 out=$(python3 -I "$U" check --json)
 ok "kernel: linux-omamobile with a ready slot B passes, and will be written" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d[\"ok\"], d[\"blockers\"]; assert d[\"boot_packages\"] == [] and d[\"kernel\"][\"boot_update\"] == \"write\" and d[\"kernel\"][\"version\"].startswith(\"7.3.0rc6\")" "$out"'
@@ -223,7 +237,7 @@ echo 'AUTO_WRITE=perhaps' >"$t/boot-update.conf"
 out=$(OMAMOBILE_BOOT_UPDATE=$t/no-such-tool python3 -I "$U" check --json)
 ok "kernel: an unreadable boot-update.conf blocks" 'python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert not d[\"ok\"] and any(\"be read\" in b for b in d[\"blockers\"])" "$out"'
 rm -f "$t/boot-update.conf"
-printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nmesa 26.1-1\n' >"$t/plan"
 
 # ---------------------------------------------------------------- the sheet's run
 : >"$calls"
@@ -290,17 +304,17 @@ ok "wrong PIN: Omarchy's update never ran" '! grep -c "^omarchy-update" "$calls"
 ok "wrong PIN: result auth-failed" 'python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"auth-failed\""'
 
 # A boot package in the plan: refused after sudo, before Omarchy's update
-printf 'omarchy 4.0.5-1\nlinux-aarch64 7.3-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nlinux-aarch64 7.3-1\n' >"$t/plan"
 rm -f "$t/sudo-ok"; : >"$calls"
 rc=0; out=$(printf '1234\n' | python3 -I "$U" start) || rc=$?
 wait_done
 ok "boot package: Omarchy's update never ran" '! grep -c "^omarchy-update" "$calls" >/dev/null'
 ok "boot package: result refused, naming it" 'python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"refused\" and \"linux-aarch64\" in d[\"message\"]"'
-printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nmesa 26.1-1\n' >"$t/plan"
 
 # The kernel package with a slot B the hook would refuse: refused after sudo,
 # before Omarchy's update; with a ready one the update runs
-printf 'omarchy 4.0.5-1\nlinux-omamobile 7.3.0rc6.r453.g0123456789ab-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nlinux-omamobile 7.3.0rc6.r453.g0123456789ab-1\n' >"$t/plan"
 echo '{"auto_write": "yes", "ok": false, "problem": "this board is another phone"}' >"$t/preflight"
 rm -f "$t/sudo-ok"; : >"$calls"
 printf '1234\n' | python3 -I "$U" start >/dev/null; wait_done
@@ -311,7 +325,7 @@ rm -f "$t/sudo-ok"; : >"$calls"
 printf '1234\n' | python3 -I "$U" start >/dev/null; wait_done
 ok "kernel, slot B ready: the update runs" 'grep -c "^omarchy-update -y" "$calls" >/dev/null && python3 -c "import json; d=json.load(open(\"$last\")); assert d[\"result\"] == \"ok\", d"'
 ok "kernel, slot B ready: the run says the hook writes it" 'grep -c "its pacman hook writes it to slot B" "$HOME/.local/state/omamobile/update/update.log" >/dev/null'
-printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
+printf 'omarchy 4.5.0-3\nmesa 26.1-1\n' >"$t/plan"
 
 # The restart step reads the boot-update hook's result from this update only
 rs() { rm -rf "$t/rs"; OMAMOBILE_UPDATE_DIR=$t/rs OMAMOBILE_BOOT_UPDATE_STATUS=$t/bu.json OMAMOBILE_UPDATE_STARTED=$1 bash lib/update-bin/omarchy-update-restart >/dev/null 2>&1; cat "$t/rs/restart.json"; }
@@ -384,7 +398,7 @@ ok "run-migration takes migration names only" '[[ $rc == 2 ]]'
 : >"$calls"; rm -f "$t/available"
 python3 -I "$U" notify-check >/dev/null
 ok "notify-check: up to date, no toast" '! grep -c "^notify" "$calls" >/dev/null'
-echo "omarchy 4.0.4-2 -> 4.0.5-1" >"$t/available"
+echo "omarchy 4.0.4-2 -> 4.5.0-3" >"$t/available"
 python3 -I "$U" notify-check >/dev/null; python3 -I "$U" notify-check >/dev/null
 ok "notify-check: one toast per release, opening the sheet" '[[ $(grep -c "^notify" "$calls") == 1 ]] && grep -c "summon omamobile.update" "$calls" >/dev/null'
 

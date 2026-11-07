@@ -1,0 +1,113 @@
+# Menu: a back button in the header and swipe right to go back. Below the
+# top level, going up was Backspace, Left or Escape-and-reopen, none of which
+# a touch screen has. The header now shows a chevron (a 44 px target) that
+# calls goBack(), and a swipe right on the card does the same: the card
+# follows the finger at half speed and goes back once the finger has
+# travelled a quarter of its width (at least 64 px) or flicks. The drag
+# starts only past a threshold and only sideways, and not while the list
+# scrolls, so taps still pick rows and vertical scrolling is untouched.
+# Neither shows nor acts at the top level, in dmenu mode or while the
+# uninstall question is open. The keys work as before.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), before the menu-first-frame bridge.
+diff --git i/shell/plugins/menu/Menu.qml w/shell/plugins/menu/Menu.qml
+--- i/shell/plugins/menu/Menu.qml
++++ w/shell/plugins/menu/Menu.qml
+@@ -1066,6 +1066,50 @@
+ 
+       MouseArea { anchors.fill: parent; onClicked: {} }
+ 
++      // Touch back: a swipe right on the card goes up a level, as Backspace
++      // does. Only sideways movement past the threshold starts it, so a
++      // tap still picks a row, and a list that is scrolling keeps the
++      // finger.
++      readonly property bool canGoBack: root.activeMenu !== "root" && !root.dmenuActive && !root.deleteConfirmOpen
++      property real swipeOffset: 0
++      property real swipeVelocity: 0
++      transform: Translate { x: card.swipeOffset }
++
++      DragHandler {
++        id: backSwipe
++        target: null
++        yAxis.enabled: false
++        dragThreshold: Style.space(12)
++        enabled: card.canGoBack && !resultList.moving
++        onActiveChanged: {
++          if (active) {
++            backSwipeSettle.stop()
++            card.swipeVelocity = 0
++            return
++          }
++          // The finger's travel (the card follows at half speed).
++          var distance = card.swipeOffset * 2
++          var flung = card.swipeVelocity >= Style.space(900) && distance >= Style.space(24)
++          if (distance >= Math.max(Style.space(64), card.width * 0.25) || flung) root.goBack()
++          backSwipeSettle.restart()
++        }
++        onActiveTranslationChanged: {
++          if (!active) return
++          // The card follows the finger at half speed, and only rightwards.
++          card.swipeOffset = Math.max(0, activeTranslation.x) / 2
++          card.swipeVelocity = centroid.velocity.x
++        }
++      }
++
++      NumberAnimation {
++        id: backSwipeSettle
++        target: card
++        property: "swipeOffset"
++        to: 0
++        duration: 160
++        easing.type: Easing.OutCubic
++      }
++
+       Item {
+         id: keyCatcher
+         anchors.fill: parent
+@@ -1151,9 +1195,46 @@
+           radius: root.cornerRadius
+           color: "transparent"
+ 
++          // Back, for touch: shown below the top level, does what
++          // Backspace does. A 44 px target, overhanging the header's
++          // height into the margins around it.
++          MouseArea {
++            id: backButton
++            objectName: "menuBackButton"
++            visible: card.canGoBack
++            anchors.left: parent.left
++            anchors.verticalCenter: parent.verticalCenter
++            width: Style.space(44)
++            height: Math.max(parent.height, Style.space(44))
++            hoverEnabled: true
++            cursorShape: Qt.PointingHandCursor
++            Accessible.role: Accessible.Button
++            Accessible.name: "Back"
++            onClicked: root.goBack()
++
++            Rectangle {
++              anchors.centerIn: parent
++              width: Style.space(32)
++              height: width
++              radius: root.cornerRadius
++              color: root.selectedBackground
++              opacity: backButton.pressed ? 0.9 : (backButton.containsMouse ? 0.5 : 0)
++            }
++
++            Text {
++              textFormat: Text.PlainText
++              anchors.centerIn: parent
++              text: "󰅁"
++              color: root.foreground
++              font.family: root.fontFamily
++              font.pixelSize: Style.font.heading
++            }
++          }
++
+           Text {
+             textFormat: Text.PlainText
+             anchors.left: parent.left
++            anchors.leftMargin: backButton.visible ? backButton.width : 0
+             anchors.right: parent.right
+             anchors.verticalCenter: parent.verticalCenter
+             text: root.filterText || (root.dmenuActive ? (root.dmenuPrompt + "…") : ((root.item(root.activeMenu) ? (root.item(root.activeMenu).title || root.item(root.activeMenu).label) : "Go") + "…"))

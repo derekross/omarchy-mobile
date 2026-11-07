@@ -1,0 +1,39 @@
+# App icons: the icon index keeps the largest size per name, not the first
+# file found. The scan lists SVGs first, then PNGs in directory order, and
+# kept the first hit, so a raster-only app such as Chromium (16 to 256 px
+# PNGs, no SVG) resolved to its 32x32 file, drawn soft on a phone's home
+# screen at 64 logical (192 physical) pixels. An SVG or a "scalable" path
+# still wins over any size; then the larger NxN directory (@Nx scaled).
+# Candidate for upstream Omarchy.
+diff --git i/shell/services/AppLibrary.qml w/shell/services/AppLibrary.qml
+--- i/shell/services/AppLibrary.qml
++++ w/shell/services/AppLibrary.qml
+@@ -136,6 +136,17 @@
+     ].join(' ')
+   }
+ 
++  // The size an icon path was drawn for: "scalable" or an SVG beats any
++  // size, then the larger NxN directory wins, so a raster-only app (Chromium
++  // ships 16 to 256 px PNGs) isn't drawn from its 32 px file at a home
++  // screen's 192 physical pixels. Pixmaps and unsized paths come last.
++  function iconPathSize(path) {
++    if (/\.svg$/.test(path) || path.indexOf("/scalable/") >= 0) return 100000
++    var m = /\/(\d+)x\d+(@\d+x)?\//.exec(path)
++    if (!m) return 0
++    return parseInt(m[1], 10) * (m[2] ? parseInt(m[2].slice(1), 10) : 1)
++  }
++
+   function indexIconLine(path) {
+     var value = String(path || "").trim()
+     if (value.length === 0) return
+@@ -143,7 +154,9 @@
+     var file = slash >= 0 ? value.slice(slash + 1) : value
+     var dot = file.lastIndexOf(".")
+     var name = dot > 0 ? file.slice(0, dot) : file
+-    if (name.length > 0 && root.pendingIconIndex[name] === undefined)
++    if (name.length === 0) return
++    var known = root.pendingIconIndex[name]
++    if (known === undefined || iconPathSize(value) > iconPathSize(known))
+       root.pendingIconIndex[name] = value
+   }
+ 

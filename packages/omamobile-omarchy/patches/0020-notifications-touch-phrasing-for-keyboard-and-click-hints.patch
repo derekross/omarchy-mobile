@@ -14,10 +14,13 @@
 # dropped too, but 0001 skips that toast on a phone.
 #
 # Against Omarchy 4.0.6 (stable 4.0.6-1).
+#
+# Omarchy4.5: touch-friendly notification hints.
+
 diff --git i/bin/omarchy-notification-send w/bin/omarchy-notification-send
 --- i/bin/omarchy-notification-send
 +++ w/bin/omarchy-notification-send
-@@ -136,6 +136,50 @@
+@@ -176,6 +176,50 @@
    fi
  done
  

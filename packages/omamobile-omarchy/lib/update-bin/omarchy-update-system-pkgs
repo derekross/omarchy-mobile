@@ -1,0 +1,5 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Both old and new Omarchy update flows reach this stage by name. Metadata
+# refresh is separated from the guarded, version-pinned package transaction.
+exec "${OMAMOBILE_UPDATE_TOOL:-/usr/bin/omamobile-update}" _system-packages "$@"

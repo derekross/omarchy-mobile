@@ -500,6 +500,21 @@ def reverse_recover(root, rels, owned, series_dirs, work, log):
     return {}
 
 
+def default_series(root, packages):
+    """Only the two independently qualified source families have a series.
+
+    Keep 4.0.6 available while preparing an upgrade; never apply4.5 contexts
+    to the currently running old package. Explicit --series remains the
+    offline prospective rehearsal interface.
+    """
+    families = {v.rsplit("-", 1)[0] for _n, v, _p in packages}
+    if families == {"4.0.6"}:
+        return os.path.join(root, "usr/share/omamobile/omarchy/legacy-4.0.6")
+    if families == {"4.5.0"}:
+        return os.path.join(root, SERIES)
+    raise Failure("Omarchy version has no qualified mobile patch series; refusing")
+
+
 def apply(root, series_dir, log, hook=False):
     state_dir = os.path.join(root, STATE_DIR)
     os.makedirs(state_dir, exist_ok=True)
@@ -517,6 +532,9 @@ def apply(root, series_dir, log, hook=False):
     status["omarchy"] = " ".join("%s %s" % (n, v) for n, v, _ in packages)
     previous = load_json(os.path.join(state_dir, "state.json")) or {}
     try:
+        if series_dir is None:
+            series_dir = default_series(root, packages)
+        status["series"] = "/" + os.path.relpath(series_dir, root)
         patches, series_hash = load_series(series_dir, root)
     except Failure as e:
         return fail(root, status, e, log, hook)
@@ -805,7 +823,7 @@ def main(argv):
     if cmd == "apply":
         log = Log(root, quiet)
         try:
-            return apply(root, series or os.path.join(root, SERIES), log, hook)
+            return apply(root, series, log, hook)
         except Failure as e:
             return fail(root, {"time": now(), "log": "/" + LOG, "applied": [], "upstream": [], "omarchy": None}, e, log, hook)
     if cmd == "restore":

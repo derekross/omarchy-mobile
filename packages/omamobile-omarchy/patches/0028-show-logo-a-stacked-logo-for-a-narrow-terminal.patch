@@ -11,6 +11,9 @@
 # for upstream Omarchy.
 #
 # Against Omarchy 4.0.6 (4.0.6-1).
+#
+# Omarchy4.5: mobile narrowterminal logo sizing.
+
 diff --git i/bin/omarchy-show-logo w/bin/omarchy-show-logo
 --- i/bin/omarchy-show-logo
 +++ w/bin/omarchy-show-logo

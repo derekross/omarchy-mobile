@@ -1,0 +1,24 @@
+# Lock: a "wake" IPC call that lights the locked display and re-arms its
+# blank timer, as input on the lock screen does, for hardware keys (the
+# phone's power button, through omamobile-keys).
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
+index ccd496a..113b40d 100644
+--- i/shell/plugins/lock/Service.qml
++++ w/shell/plugins/lock/Service.qml
+@@ -848,6 +848,14 @@ Item {
+       return "ok"
+     }
+ 
++    // Wake the locked display the way input on the lock screen does: light
++    // it and re-arm the blank timer (a phone's power button).
++    function wake(): string {
++      if (!root.currentlyLocked()) return "unlocked"
++      root.runWake()
++      return "ok"
++    }
++
+     function isLocked(): string {
+       return root.currentlyLocked() ? "true" : "false"
+     }

@@ -166,7 +166,7 @@ Item {
       harness.supplies = "Battery\t1\t87\tDischarging\t\nUSB\t\t\tCharging\t1\n"
       harness.suppliesHang = false
       Mpris.players.values = []
-      Quickshell.vars = { HOME: harness.home }
+      Quickshell.vars = { HOME: harness.home, OMARCHY_PATH: harness.home + "/omarchy" }
       Quickshell.started = []
       Quickshell.responder = function(argv) {
         var cmd = argv.join(" ")
@@ -184,7 +184,7 @@ Item {
         return cmd.indexOf("/.local/state/omarchy/notifications/") >= 0 ? harness.notificationsRaw : null
       }
       writeFile(".local/state/omarchy/toggles/lock-hide-notification-text", "")
-      writeFile(".local/state/omarchy/notifications.json", "")
+      writeFile(".local/state/omarchy/notifications/quiet.json", "")
       writeFile(".local/state/omamobile/weather.json", "")
       writeFile(".config/omarchy/shell.json", "")
       writeFile(".local/state/omarchy/toggles/credential-password", "")
@@ -553,12 +553,12 @@ Item {
         entry("omarchy-action", 3 * minute, 2, "Theme changed", ""),
         entry("notify-send", 4 * minute, 3, "Ping", "")
       ].join("\n") + "\n"
-      writeFile(".local/state/omarchy/notifications.json", '{"version": 3, "dnd": true}\n')
+      writeFile(".local/state/omarchy/notifications/quiet.json", '{"version": 3, "dnd": true}\n')
       show()
       var cards = byName("lockGlanceCard").filter(function(c) { return c.visible })
       compare(cards.length, 1)
       compare(cards[0].summary, "Theme changed")
-      writeFile(".local/state/omarchy/notifications.json", '{"version": 3, "dnd": false}\n')
+      writeFile(".local/state/omarchy/notifications/quiet.json", '{"version": 3, "dnd": false}\n')
       settle()
       compare(byName("lockGlanceCard").filter(function(c) { return c.visible }).length, 3)
       compare(glance().cards[2].app, "Notifications", "a bare notify-send goes by Notifications")
