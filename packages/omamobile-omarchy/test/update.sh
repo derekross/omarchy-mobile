@@ -118,7 +118,18 @@ touch "$HOME/.local/state/omarchy/migrations/1700000000.sh"
 echo "omarchy 4.0.4-2 -> 4.0.5-1" >"$t/updates"
 printf 'omarchy 4.0.5-1\nmesa 26.1-1\n' >"$t/plan"
 echo '{"result": "ok", "applied": ["0003-x.patch"], "upstream": ["0000-y.patch"], "omarchy": "omarchy 4.0.5-1"}' >"$t/patch-status.json"
-U=$PKG/bin/omamobile-update
+# Mock host disk capacity inside the fixture interpreter, not through a new
+# production bypass flag. The runtime's 10 GiB rule stays unchanged.
+export OMAMOBILE_UPDATE_REAL_SOURCE=$PKG/bin/omamobile-update
+cat >"$t/update-fixture.py" <<'PYCODE'
+import os, runpy, sys
+scope = runpy.run_path(os.environ["OMAMOBILE_UPDATE_REAL_SOURCE"], run_name="update_fixture")
+scope["check"].__globals__["free_bytes"] = lambda: 20 * 1024 ** 3
+globals().update({k: v for k, v in scope.items() if not k.startswith("__")})
+if __name__ == "__main__":
+    sys.exit(scope["main"](sys.argv[1:]))
+PYCODE
+U=$t/update-fixture.py
 
 wait_done() {
   for _ in $(seq 150); do grep -cP '^state\tdone' "$XDG_RUNTIME_DIR/omamobile-update/events" >/dev/null 2>&1 && return 0; sleep 0.1; done

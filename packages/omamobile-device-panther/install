@@ -34,6 +34,8 @@ for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules \
 done
 install -Dm644 vendor/systemd/network/20-usb-gadget.network \
   "$destination/usr/lib/systemd/network/20-usb-gadget.network"
+install -Dm644 vendor/environment.d/40-omamobile-rotation.conf \
+  "$destination/usr/lib/environment.d/40-omamobile-rotation.conf"
 install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
@@ -53,6 +55,8 @@ done
 install -d "$destination/usr/lib/systemd/system/timers.target.wants"
 ln -sfn ../omamobile-camera.timer \
   "$destination/usr/lib/systemd/system/timers.target.wants/omamobile-camera.timer"
+install -Dm644 vendor/modprobe.d/omamobile-fingerprint.conf \
+  "$destination/usr/lib/modprobe.d/omamobile-fingerprint.conf"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 device.conf \
