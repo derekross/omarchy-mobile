@@ -243,6 +243,25 @@ So the layout is consistent with husky's [verified, read-only, on files]: the ma
 - `modprobe -r max77759_charger` was used four times (by the tool's undo). CONTRIBUTING warns about unloading bring-up modules; for this driver the unload worked every time, but note that the driver has no remove function and leaves charging on when unloaded, which is why the undo forces the mode to 0x4 explicitly.
 - No charger limits above the conservative ones, no JEITA, no PCA9468, no wireless, no PD. The Type-C driver ran under the dead-man tool (section 7.2). OTG (sourcing 5 V on the port from the external boost) has a draft runbook, [HOST-MODE-RUNBOOK.md](HOST-MODE-RUNBOOK.md), with the `b5-host` and `baseline` steps of the dead-man tool; nothing in it runs until the maintainer says go.
 
+## 10a. Charger baseline, plugged and done (2026-11-06, kernel 7.3.0-rc6-omamobile-push1-g904a64931327)
+
+Read only, no writes, over I2C bus 3 address 0x69 with `i2cget -y -f` (the dead-man tool's own `baseline` refuses while the USB gadget is configured, so it was not used):
+
+| register | value | meaning |
+| --- | --- | --- |
+| 0xb5 CHG_DETAILS_00 | 0x60 | not decoded here |
+| 0xb6 CHG_DETAILS_01 | 0xb4 | low nibble 4 = done (it read 0xb1, CC, while charging) |
+| 0xb7 CHG_DETAILS_02 | 0x20 | not decoded here |
+| 0xb9 MODE | 0x05 | as left by the bootloader |
+| 0xbd CHG_CNFG_04 | 0x23 | 4350 mV float (the bootloader's setting, the charger finishes there) |
+| 0xc2 | 0x13 | bit 7 (NO_AUTOIBUS) clear |
+
+Battery at the same time: 92 %, 4.3125 V, 34.9 C, `charge_now` 4630000 of `charge_full` 4978000 uAh, status Discharging at about -8 mA with the cable in (the charger is in its done state).
+
+The charger driver is not loaded on this phone: `lsmod | grep -i max77759` lists only the `max77759` MFD module, no `max77759_charger`, and `/sys/class/power_supply` has only `max170xx_battery`. So nothing sets a float voltage; the 4.35 V in 0xbd is what the bootloader left, and the charger stops at its own done state while the gauge's 100 % sits higher, which is why the phone sits at 92 %. This matches what was read after 12 h plugged in on 2026-11-04 (0xb6 = 0xb4, 0xbd = 0x23, 92 %).
+
+When the charger driver binds with today's device tree it sets 4.20 V on purpose (section 7), so "full" will read lower than 92 % until step charging is in the device tree.
+
 ## 11. Open questions, in the order they matter
 
 1. **The model in the board file, or from the pack ID.** The pack is ATL (section 5.6). A model fixed in the board file would be wrong on a phone with a COS or LSN pack, so reading the ID at runtime may be better; this waits for what mainline's gauge driver can take (kernel #175 discussion).

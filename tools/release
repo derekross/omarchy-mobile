@@ -416,6 +416,20 @@ st_packages() {
     n=$((n + 1))
   done < <(db_sums "$db")
   note "$n packages and the index: checksums good, signed by $RELEASE_KEY"
+  # The pinned upstream packages (Omarchy held at a version the patches
+  # support): without them the image would install the newer one
+  if [[ -f rootfs/packages.pinned ]]; then
+    local psum purls pbase pins=0
+    while read -r psum purls; do
+      pbase=${purls%% *}; pbase=${pbase##*/}
+      awk -v f="$pbase" -v s="$psum" '$1 == f && $2 == s { found = 1 } END { exit !found }' < <(db_sums "$db") || {
+        derek "tools/build-packages    # adds rootfs/packages.pinned to out/repo"
+        die "out/repo's index lacks $pbase with the SHA-256 rootfs/packages.pinned lists"
+      }
+      pins=$((pins + 1))
+    done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' rootfs/packages.pinned)
+    note "the $pins pinned upstream packages (rootfs/packages.pinned) are in the index"
+  fi
   say "out/repo holds what this checkout builds, for every package the image installs"
   dpkg=$(desc PACKAGE)
   image_pkgs="$(grep -v '^#' rootfs/packages.omamobile | xargs) $dpkg $(desc ROOTFS_PACKAGES)"

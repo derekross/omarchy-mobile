@@ -33,7 +33,7 @@ Path abbreviations as in [BRINGUP-M1.md](BRINGUP-M1.md). `GU/` = Google's GPL UF
 3. **DT**: `ufs@13200000` and its PHY with `reg-names` as gs201's, `samsung,sysreg = <&sysreg_ufs 0x710>`, `dma-coherent`, the PMU phandle. The clocks are `fixed-clock` stand-ins: 178 MHz for `sclk_unipro_main` (stock's `mclk`), a `core_clk` rate inside the driver's PCLK range [I: stock never prints it] that also stands in for the FMP, bus and sysreg gates, and 38.4 MHz for the PHY's reference.
 4. **Bindings** in `omamobile-zuma-ufs` (#51) and `omamobile-zuma-pinctrl` (#50); the DTS in #53, the DT follow-up to #13.
 5. **`userdata` is not touched.** It is on the allowlist, and still holds stock Android's data. With UFS up, the init's `boot_arch` would find it writable and run `e2fsck -p` and an ext4 mount on it; on stock's file system both should fail without writing, but U2 doesn't rely on that: its `bootargs` carry `omamobile.initramfs`, which skips `boot_arch`.
-6. **Nothing writes before the guard.** The guard runs before the UFS driver's disks appear (the init is PID 1 before any module or late probe), and `UFS_RW` is unchanged. The first UFS boot is `omamobile.ufs-probe`: a read-only listing.
+6. **Nothing writes before the guard.** The UFS disks can appear before the guard runs (on the Pixel 8a, also zuma, the disks were up at 0.26 s and `/init` started at 0.28 s: akita BRINGUP-M2, M2.3), but nothing mounts or writes them before the init, as PID 1, has set every partition read-only, and `UFS_RW` is unchanged. This line said the guard ran before the disks appeared until 2026-11-07. The first UFS boot is `omamobile.ufs-probe`: a read-only listing.
 
 ## Runbook
 
