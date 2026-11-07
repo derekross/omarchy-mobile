@@ -21,6 +21,14 @@ script=${1:-bin/omamobile-boot-success}
 t=$(mktemp -d); trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
 R=$t/r
 
+# bin/omamobile push and flash recognise a marker that knows the guard by
+# this exact line (#252)
+grep -qxF '# guard: partition flags (#252)' "$script" || fail "the marker carries the guard line push and flash look for"
+if [[ -f ../../bin/omamobile ]]; then
+  grep -qxF "MARKER_TAG='# guard: partition flags (#252)'" ../../bin/omamobile || fail "bin/omamobile looks for the same line"
+fi
+pass "the marker carries the line push and flash look for"
+
 # The marker with its paths pointed into $R
 sed -e "s|/proc/bootconfig|$R/proc/bootconfig|g" -e "s|/sys/|$R/sys/|g" -e "s|/dev/|$R/dev/|g" \
     "$script" > "$t/marker"
@@ -142,3 +150,11 @@ rm "$R/sys/class/block/sdd3"; ln -s "../../block/sdd" "$R/sys/class/block/sdd3"
 st=0; run || st=$?
 [[ $st != 0 && ! -s $R/blockdev.log ]] || { cat "$t/out"; fail "a devinfo that resolves to a whole disk is refused before any flag changes (exit $st)"; }
 pass "a devinfo that isn't a partition of a LUN is refused before any flag changes"
+
+# No devinfo partition: refused before any flag changes
+fresh new
+sed -i 's/^PARTNAME=devinfo$/PARTNAME=notdevinfo/' "$R/sys/block/sdd/sdd3/uevent"
+st=0; run || st=$?
+[[ $st != 0 && ! -s $R/blockdev.log ]] && grep -q 'devinfo partition not found' "$t/out" \
+  || { cat "$t/out"; fail "a phone without devinfo is refused before any flag changes (exit $st)"; }
+pass "no devinfo partition: refused before any flag changes"

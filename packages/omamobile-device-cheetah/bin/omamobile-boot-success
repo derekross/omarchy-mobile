@@ -10,6 +10,8 @@
 # devinfo's own flag opens devinfo alone, for the one write; it is set
 # again afterwards. omamobile-bootctl only ever changes the slot flag bytes
 # (0x30-0x37) and verifies the whole partition afterwards.
+# bin/omamobile push and flash look for the next line; keep it exact.
+# guard: partition flags (#252)
 set -euo pipefail
 
 slot=$(sed -n 's/^androidboot.slot_suffix = "_\([ab]\)"$/\1/p' /proc/bootconfig)

@@ -15,15 +15,19 @@ Now every LUN is guarded the same way:
 - every partition gets its own flag, except the allowlist (`UFS_RW`), which still opens partitions of `sda` only;
 - a node that won't go is retried and warned about, and the hand-over check (`ufs_unguarded`) now also refuses Arch while any whole-disk node is there, as it already did for a writable partition outside the allowlist.
 
-Nothing becomes writable that wasn't: the boot LUNs' partitions are read-only by their own flags instead of their disks'. A tool that must write one of them clears that partition's own flag alone.
+After the guard's first pass, nothing is writable that wasn't before: the boot LUNs' partitions are read-only by their own flags instead of their disks'. A tool that must write one of them clears that partition's own flag alone. Inside the initramfs there is one narrow difference. The kernel creates a disk's node before it scans the disk's partitions, and each partition starts with its own flag clear. So a boot-LUN partition can be writable from its birth until the guard's next pass, about 0.2 s, where before the disk flag could cover it from birth. Nothing in the initramfs writes a boot-LUN partition, and `sda`'s partitions (`efs` and `persist` among them) have always had the same window. The hand-over check reads the live state before Arch starts.
 
-**`omamobile-boot-success` changes with it** (device-cheetah 0.1.45, raven 0.1.33, lynx 0.2.3). The marker ran `blockdev --setrw` on the whole bootloader LUN (`/dev/sdd`), then on `devinfo`. Under the new guard `/dev/sdd` is gone, so that first call fails and the marker fails (`packages/omamobile-device-cheetah/test/boot-success` shows it against the old script). It runs at every boot but writes only when slot B isn't marked yet, so a marked phone wouldn't notice until the next `flash` or `--set-active=b`. The new marker reads the disk's own flag: clear (the new guard) means it clears `devinfo`'s own flag alone and sets it again after; set (an initramfs from before this change) means it opens the disk and `devinfo` as it always did, so a fastboot rollback to an older image set still gets slot B marked.
+**`omamobile-boot-success` changes with it** (device-cheetah 0.1.45, raven 0.1.33, lynx 0.2.3). The marker ran `blockdev --setrw` on the whole bootloader LUN (`/dev/sdd`), then on `devinfo`. Under the new guard `/dev/sdd` is gone, so that first call fails and the marker fails (`packages/omamobile-device-cheetah/test/boot-success` shows it against the old script). It runs at every boot but writes only when slot B isn't marked yet, so a marked phone wouldn't notice until the next `flash` or `--set-active=b`. The new marker reads the disk's own flag:
+- clear (the new guard): it clears `devinfo`'s own flag alone and sets it again after;
+- set (an initramfs from before this change): it opens the disk and `devinfo` as it always did, so a fastboot rollback to an older image set still gets slot B marked.
+
+The new marker carries the line `# guard: partition flags (#252)`. On a phone whose device package ships the marker (cheetah, raven, lynx), `bin/omamobile push` reads `/usr/bin/omamobile-boot-success` over SSH and refuses images with the new guard unless that line is there. `flash` can't read the phone, so for those phones it refuses images with the new guard unless `OMAMOBILE_MARKER_CHECKED=1` says the owner checked. A warning would scroll by, and a wrong marker shows only three boots later, as a fallback to slot A. Images whose initramfs reads as the old guard skip the check; an initramfs that is missing or can't be read doesn't.
 
 `bin/omamobile push`, `omamobile-boot-update`, `tools/nv-backup`, `tools/phone-provision`, `omamobile-fp` and `tools/phone-smoke` work on partitions found by `PARTNAME` (and `push` and `boot-update` on `sda` alone) and never open a whole-disk node; none changes.
 
 ## 2. Runbook
 
-Read-only steps first. Each step: commands, Expect, Pass, **Stop**, Rollback, risk. Laptop steps run in this branch's worktree; phone steps over `tools/phone-ssh` (root). Record results in §3 with the date and `uname -r`. Announce to Derek before every step marked "affects the phone".
+Read-only steps first. Each step: commands, Expect, Pass, **Stop**, Rollback, risk. Laptop steps run in this branch's worktree; phone steps over `tools/phone-ssh` (root). Record results in §4 with the date and `uname -r`. Announce to Derek before every step marked "affects the phone".
 
 This runbook uses `bin/omamobile push` and keeps the running kernel: only the initramfs changes. If the phone runs a packaged kernel (`uname -r` without `-push1`), stop and ask: the images then come from the device package's boot files instead.
 
@@ -78,9 +82,9 @@ tools/phone-ssh 'pacman -Q omamobile-device-cheetah; omamobile-boot-success; ech
 OMAMOBILE_SSH_SHARE=1 KERNEL_OUT=$OUT bin/omamobile push
 ```
 
-- Expect: five `_b` writes, each verified; the phone reboots into the same `uname -r` within about a minute.
+- Expect: `push` reads the 0.1.45 marker and goes on (a refusal naming the marker means P1 didn't take: stop); five `_b` writes, each verified; the phone reboots into the same `uname -r` within about a minute.
 - **Stop:** the phone doesn't come back over USB in 3 minutes, or stays in the initramfs (`ssh` answers but `/proc/1/comm` is not `systemd`): read `dmesg | grep ufs-ro` from the initramfs shell first, then roll back.
-- Rollback: `cp $KG/images/*.img $OUT/images/ && KERNEL_OUT=$OUT bin/omamobile push`. If nothing answers: Power held about 30 s, then Volume Down + Power about 20 s for fastboot, and `KERNEL_OUT=$KG bin/omamobile flash` (it clears slot B's mark; the old initramfs's guard sets the disk flag, and the 0.1.45 marker's old-guard path marks B again at that boot).
+- Rollback: `cp $KG/images/*.img $OUT/images/ && KERNEL_OUT=$OUT bin/omamobile push`. If nothing answers: Power held about 30 s, then Volume Down + Power about 20 s for fastboot, and `OMAMOBILE_MARKER_CHECKED=1 KERNEL_OUT=$KG bin/omamobile flash`. `$KG` holds no initramfs file, so `flash` can't tell which guard its images carry and asks for the override; P1 installed 0.1.45. The flash clears slot B's mark, the old initramfs's guard sets the disk flag, and the 0.1.45 marker's old-guard path marks B again at that boot.
 
 ### R3. The guard after the boot (read-only; risk none)
 
@@ -102,26 +106,70 @@ tools/phone-smoke
 
 ### R4. The window #483 needs, without a write (affects nothing written; risk low)
 
-Clears `devinfo`'s own flag for a moment, as the marker does at a boot with slot B unmarked, and sets it again. Nothing is written. Derek's call.
+Clears `devinfo`'s own flag for a moment, as the marker does at a boot with slot B unmarked, and sets it again. Nothing is written. Derek's call. A detached timer sets the flag again after 30 s even if the SSH session drops before its trap runs.
 
 ```sh
 tools/phone-ssh 'set -e; d=$(grep -lx PARTNAME=devinfo /sys/block/sd*/sd*/uevent); d=${d%/uevent}; p=${d##*/}; k=$(basename ${d%/*})
+  systemd-run --unit=x-devinfo-relock --on-active=30 /usr/bin/blockdev --setro /dev/$p
   trap "blockdev --setro /dev/$p" EXIT
   blockdev --setrw /dev/$p
   echo "devinfo $p ro=$(cat $d/ro); disk $k ro=$(cat /sys/block/$k/ro); siblings read-only: $(for s in /sys/block/$k/$k*; do [ $s = $d ] || cat $s/ro; done | tr -d "\n")"
-  blockdev --setro /dev/$p; echo "devinfo ro=$(cat $d/ro)"'
+  blockdev --setro /dev/$p; echo "devinfo ro=$(cat $d/ro)"
+  systemctl stop x-devinfo-relock.timer'
 ```
 
 - Expect: `devinfo ro=0`, `disk ro=0`, every sibling `1`; then `devinfo ro=1`.
 - Pass: both lines. **Stop:** a sibling at 0, or `devinfo` still 0 at the end (set it with `blockdev --setro` by hand, then stop).
-- Rollback: `blockdev --setro` on the `devinfo` partition (the trap does it).
+- Rollback: `blockdev --setro` on the `devinfo` partition (the trap does it, and the timer 30 s later if the session dropped).
 
-A real mark under the new guard needs slot B unmarked, which only `flash` or `--set-active=b` does; it is not part of this runbook. Its first occasion (the next `flash` of the 7 Pro) checks `journalctl -b -u omamobile-boot-success` for `slot b marked successful`.
+### R5. The marker's new write path: a real mark under the new guard (affects the phone: fastboot, flash, reboot; slot B unmarked until the marker runs; risk medium)
 
-### After the merge
+R3 only sees `slot b already marked successful`, which is the early exit and unchanged code. This step unmarks slot B on purpose, so the new branch (clear `devinfo`'s own flag, check it, write, set it again) runs once on the phone. Otherwise its first real run would come during a recovery `flash`. It is attended and Derek's call. Announce the reboot into fastboot, the flash and the boot. From the flash until the marker runs, every boot spends one of slot B's three tries: count the boots.
 
-Restage the boot files for every device (`tools/stage-boot-files`) and release their device packages, so each phone's next boot image carries the new guard; and install device-cheetah, raven and lynx's new markers with or before them. Then #483 rebases onto it, its window `devinfo` alone.
+```sh
+# 1. A read-only copy of devinfo, off the repository (never commit it), and its slot bytes now
+d=$(tools/phone-ssh 'd=$(grep -lx PARTNAME=devinfo /sys/block/sd*/sd*/uevent); d=${d%/uevent}; echo ${d##*/}')
+tools/phone-ssh "cat /dev/$d" > ~/android/reference/cheetah-devinfo-r5-before.img
+tools/phone-ssh "sha256sum < /dev/$d"; sha256sum < ~/android/reference/cheetah-devinfo-r5-before.img
+tools/phone-ssh "omamobile-bootctl dump /dev/$d" | sed -n '/^slot b /,/retry-count/p'
+# 2. Fastboot, then flash the images R3 just checked (the new initramfs; P1's 0.1.45 marker is installed)
+tools/phone-ssh 'reboot-to bootloader'      # or: bin/omamobile fastboot
+fastboot getvar slot-successful:b 2>&1 | head -1
+OMAMOBILE_MARKER_CHECKED=1 KERNEL_OUT=$OUT bin/omamobile flash
+# 3. After the boot (flash waits for SSH)
+tools/phone-ssh "journalctl -b -u omamobile-boot-success --no-pager | tail -3
+  omamobile-bootctl dump /dev/$d | sed -n '/^slot b /,/retry-count/p'
+  cat > /tmp/devinfo-r5-after.img < /dev/$d"
+tools/phone-ssh 'cat /tmp/devinfo-r5-after.img' > ~/android/reference/cheetah-devinfo-r5-after.img
+cmp -l ~/android/reference/cheetah-devinfo-r5-before.img ~/android/reference/cheetah-devinfo-r5-after.img
+```
 
-## 3. Results
+Then R3's commands again.
+
+- Expect:
+  - step 1: the two checksums are equal, and slot b reads `successful:  yes`;
+  - step 2: `slot-successful:b: yes` before the flash; five flashes, `--set-active=b`, and SSH back within about 90 s;
+  - step 3: the journal shows `slot b marked successful` (not `already marked`); slot b reads `successful:  yes` (record its retry count: it shows the tries this boot spent); `cmp -l` lists only offsets 49-56 (bytes 0x30-0x37, which `cmp` numbers from 1; the flash's `--set-active` and the mark both change only those);
+  - R3 as before: every disk `disk-ro=0 node=gone`, only the six names writable.
+- Pass: all of it.
+- **Stop:** the marker failed or says anything else, slot b not `successful: yes`, or any R3 failure: count the boots since the flash and go to the rollback before the next reboot. A `cmp` difference outside 49-56 with slot b marked is ABL's or someone else's: stop, keep both copies and read them before anything else, but there is no try clock running.
+- Rollback, in order, each within slot B's remaining tries:
+  1. If the marker failed but the phone is up: read `journalctl -b -u omamobile-boot-success` and run `omamobile-boot-success` once by hand. That is the same write, so only if the log shows nothing new was tried (for example, a timing problem).
+  2. `tools/phone-ssh 'reboot-to bootloader'`, then `OMAMOBILE_MARKER_CHECKED=1 KERNEL_OUT=$KG bin/omamobile flash`: the set with the old initramfs. Its guard sets the disk flag, and the 0.1.45 marker's old-guard path marks B at that boot (`slot b marked successful` in the journal).
+  3. If that fails too: reinstall 0.1.44 from the previous checkout under the `$KG` images (the state before this PR) and run `omamobile-boot-success` by hand.
+  4. At zero tries ABL boots stock on slot A. On the 7 Pro that is recoverable: on stock's recovery screen choose neither option, hold Volume Down + Power about 20 s for fastboot, flash `$KG`, and take a fresh read-only NV backup (AGENTS §4).
+
+## 3. Merging this
+
+- **Versions:** device-cheetah 0.1.45 is also claimed by #423 and #403, and device-lynx 0.2.3 by #438. Whichever merges later takes the next free version at merge, and the squash title is written from the `version` files then. raven 0.1.33 is free.
+- **Order:**
+  1. The 7 Pro run above passes.
+  2. The device packages are published to the development channel, with their new markers: device-cheetah, device-raven and device-lynx.
+  3. The raven and lynx owners get the notice below.
+  4. Only then does the init change reach `main`. `push` and `flash` built from `main` check the marker from then on.
+- **Notice to the raven and lynx owners** (raven: robotosaith; lynx: cx3301J, FlorencioJP, latentoperator): before your next `push` or `flash` from `main`, install the new device package (`tools/phone-install-package packages/omamobile-device-<codename>`, or `omarchy update` on the development channel). The new initramfs removes the boot LUN's whole-disk node, and the old `omamobile-boot-success` opens that node first. With the old marker, slot B is never marked after a `flash`, and ABL falls back to slot A after three boots. `push` now refuses in that state. If you have already flashed: install the package within B's remaining tries, then run `omamobile-boot-success` once by hand.
+- **After the merge:** restage the boot files for every device (`tools/stage-boot-files`) and release their device packages, so each phone's next boot image carries the new guard. Then #483 rebases onto this, with its window `devinfo` alone. The 8 Pro owner offered on #252 to boot the guard on a Kioxia UFS 4.0 part, a second vendor and LUN layout: worth taking before #483.
+
+## 4. Results
 
 None yet.
