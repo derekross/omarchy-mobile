@@ -82,6 +82,7 @@ UFS holds the per-device calibration. The initramfs ([`initramfs/init`](initramf
 - It deletes the whole-disk node of the main LUN (`/dev/sda`), so nothing can write across partitions. The boot LUNs stay read-only at the disk level.
 - In Arch, [`10-omamobile-storage.rules`](packages/omamobile-device-cheetah/vendor/udev/rules.d/10-omamobile-storage.rules) keeps the whole-disk node unusable and hides the Android partitions from desktop tools.
 - The one write outside the allowlist is the boot-success marker (`omamobile-boot-success`). It opens exactly `devinfo` for a single verified write of the slot flag bytes, then sets it read-only again.
+- On the Pixel 8 Pro and the Pixel 9a the same write is a step the owner runs by hand, never at boot ([#252](https://github.com/derekross/omarchy-mobile/issues/252)): `omamobile-bootctl mark-b-successful` from the device package, once per install of slot B's images, after they pass `tools/phone-smoke`, from the runbook in the device's BRINGUP-M1. The kernel won't write a partition of a read-only disk, so it also clears `devinfo`'s LUN's flag for the one byte, after checking that every other partition on that LUN keeps its own; the device plan describes the window.
 
 **A new device gets this guard before its UFS driver is ever enabled.** Check the device's LUN layout and partition names first, because the allowlist works by name.
 

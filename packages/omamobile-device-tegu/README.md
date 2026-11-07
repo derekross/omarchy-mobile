@@ -27,6 +27,7 @@ packaged yet. What is here is what runs on in-tree drivers.
 | `vendor/udev/rules.d/20-omamobile-torch.rules`, `70-omamobile-dma-heap.rules`, `72-omamobile-feedbackd.rules` | `/usr/lib/udev/rules.d` | The torch tile may set the LED's brightness; libcamera's software ISP gets the DMA-BUF heaps; feedbackd gets the haptics |
 | `vendor/systemd/network/20-usb-gadget.network`, `vendor/NetworkManager/conf.d/10-omamobile-usb.conf` | `/usr/lib/systemd/network`, `/usr/lib/NetworkManager/conf.d` | USB networking to a host (172.16.42.1, the host as a fallback route behind Wi-Fi); NetworkManager stays off the link |
 | `src/reboot-to.c` | `/usr/bin/reboot-to` | Reboot with a reason the bootloader understands. One source with the cheetah package |
+| `src/omamobile-bootctl.c`, `src/bootctl-device.h` | `/usr/bin/omamobile-bootctl` | Marks slot B successful in `devinfo`, by hand and attended, from the runbook in [BRINGUP-M1.md#6-slot-b-marked-successful-by-hand](../../device/tegu/BRINGUP-M1.md#9-slot-b-marked-successful-by-hand) (#252). Dry run by default; `--write` needs the dry run's eight slot bytes (`--expect`) and the codename typed or passed. It refuses another board, a devinfo layout other than the one recorded for this phone (3.15), a boot from slot A, and a storage guard that isn't holding. It makes devinfo and its boot LUN writable only for the one byte (the kernel won't write a partition of a read-only disk), with a relock child that sets both read-only again if it dies. No unit, hook or installer calls it. Apache-2.0 (the devinfo layout is Google's boot-control HAL); one source and one test (`test/bootctl`) with the husky package |
 | `device.conf`, `etc/omamobile-mirrorlist` | `/usr/share/omamobile`, `/etc/pacman.d` | The device descriptor (a copy of `device/tegu/device.conf`) and the `[omamobile]` repository |
 
 Bluetooth comes up powered at every boot, as on the Pixel 7 Pro
@@ -38,8 +39,10 @@ everything and enables nothing beyond the two wants links, and `test/all`
 runs the package tests in a scratch root (`OMAMOBILE_TEGU_ROOT`), with no
 phone and no hardware.
 
-The package does not mark the boot slot successful (Derek decides how that
-works on the 9a) and does not start the modem. NFC and Wi-Fi come up from
+Nothing in the package marks the boot slot successful on its own: since
+#252 that is a step the owner runs by hand with `omamobile-bootctl`, once
+per install of slot B's images, and only while the hold in AGENTS.md
+allows it. The package does not start the modem. NFC and Wi-Fi come up from
 the graphics start when the device tree describes them, and the charger and
 the cameras load from the device tree on their own. It carries no vendor
 files and no per-phone data.

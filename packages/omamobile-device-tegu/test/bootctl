@@ -1,0 +1,264 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Offline tests for omamobile-bootctl (the same file in omamobile-device-husky
+# and omamobile-device-tegu). No phone, no block device, no ioctl: the test
+# build (-DBOOTCTL_TEST) reads a fake /sys, /proc and /dev under a scratch
+# root, its "block devices" are files, and each read-only flag is a file
+# beside its device that follows the kernel's rule (a partition is read-only
+# when its own flag or its disk's flag is set). The production build is
+# compiled too, and checked to carry none of the test hooks.
+#
+#   test/bootctl                 build and run every case
+#   test/bootctl --mutations     also break each key guard in a copy of the
+#                                source and check that a case catches it
+#   BOOTCTL_BIN=<test build> test/bootctl --cases   run the cases on a binary
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { [[ -n ${QUIET:-} ]] || printf 'ok - %s\n' "$1"; }
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+codename=$(sed -n 's/^#define BOOTCTL_CODENAME[[:space:]]*"\(.*\)"$/\1/p' src/bootctl-device.h)
+compatible=$(sed -n 's/^#define BOOTCTL_COMPATIBLE[[:space:]]*"\(.*\)"$/\1/p' src/bootctl-device.h)
+[[ -n $codename && -n $compatible ]] || fail "src/bootctl-device.h names a codename and a compatible"
+
+build_test() { ${CC:-cc} -O2 -Wall -Wextra ${3:--Werror} -DBOOTCTL_TEST -Isrc -o "$2" "$1"; }
+
+# A phone as the storage guard leaves it: sda (main LUN, node removed) with
+# persist and userdata, sdb with abl, sdd with devinfo and three siblings.
+# Every flag set except userdata's and the main disk's.
+mkroot() {
+  local r=$1 ver=${2:-15}
+  rm -rf "$r"; mkdir -p "$r/dev" "$r/proc/self" "$r/sys/firmware/devicetree/base"
+  printf '%s\0google,soc\0' "$compatible" > "$r/sys/firmware/devicetree/base/compatible"
+  printf 'androidboot.hardware = "x"\nandroidboot.slot_suffix = "_b"\n' > "$r/proc/bootconfig"
+  echo '25 1 259:34 / / rw,relatime shared:1 - ext4 /dev/sda34 rw' > "$r/proc/self/mountinfo"
+  local d p n
+  for d in sda sdb sdd; do mkdir -p "$r/sys/block/$d"; echo 1 > "$r/dev/$d.ro"; done
+  : > "$r/dev/sdb"; : > "$r/dev/sdd"
+  echo 0 > "$r/dev/sda.ro"
+  mkpart() {  # disk part name ro
+    mkdir -p "$r/sys/block/$1/$2/holders"; echo 1 > "$r/sys/block/$1/$2/partition"
+    printf 'MAJOR=8\nMINOR=1\nDEVNAME=%s\nDEVTYPE=partition\nPARTN=1\nPARTNAME=%s\n' "$2" "$3" > "$r/sys/block/$1/$2/uevent"
+    head -c 8192 /dev/zero > "$r/dev/$2"; echo "$4" > "$r/dev/$2.ro"
+  }
+  mkpart sda sda1 persist 1
+  mkpart sda sda34 userdata 0
+  mkpart sdb sdb1 abl 1
+  mkpart sdd sdd1 devinfo 1
+  mkpart sdd sdd2 pinfo 1
+  mkpart sdd sdd3 blenv 1
+  mkpart sdd sdd4 mfg_data 1
+  # devinfo: DEVI, 3.<ver>, ABL-owned bytes we must never print or change,
+  # slot A 02 1a 00 00 (successful, fastboot-ok, high bit), slot B 00 1c 00 00
+  # (active, fastboot-ok, high bit; not successful): the 9a's 2026-10-22 bytes.
+  python3 - "$r/dev/sdd1" "$ver" <<'PY'
+import struct, sys
+d = bytearray(8192)
+for i in range(8192):
+    d[i] = (i * 37 + 11) & 0xff
+d[0:8] = struct.pack('<IHH', 0x49564544, 3, int(sys.argv[2]))
+d[0x30:0x38] = bytes([0x02, 0x1a, 0, 0, 0x00, 0x1c, 0, 0])
+d[0x40:0x44] = bytes([0xde, 0xad, 0xbe, 0xef])
+open(sys.argv[1], 'wb').write(d)
+PY
+}
+
+flags() { local r=$1 f out=""; for f in sdd sdd1 sdd2 sdd3 sdd4 sdb sdb1 sda1; do out+="$f=$(<"$r/dev/$f.ro") "; done; echo "$out"; }
+all_ro="sdd=1 sdd1=1 sdd2=1 sdd3=1 sdd4=1 sdb=1 sdb1=1 sda1=1 "
+expect_bytes="02 1a 00 00 00 1c 00 00"
+
+cases() {
+  local bin=$1 r="$tmp/root" out st
+  run() { BOOTCTL_TEST_ROOT="$r" "$bin" "$@"; }
+  write() { run mark-b-successful --write --codename "$codename" --expect "$expect_bytes" "$@"; }
+  unchanged() { cmp -s "$r/dev/sdd1" "$tmp/orig" || fail "$1: devinfo changed"; [[ $(flags "$r") == "$all_ro" ]] || fail "$1: flags left as $(flags "$r")"; }
+  refused() {  # name, then the command; must exit 1 or 2 and change nothing
+    local name=$1; shift
+    st=0; out=$("$@" 2>&1) || st=$?
+    [[ $st == 1 || $st == 2 ]] || fail "$name: exit $st, want a refusal ($out)"
+    unchanged "$name"
+    pass "$name"
+  }
+  fresh() { mkroot "$r" "${1:-15}"; cp "$r/dev/sdd1" "$tmp/orig"; }
+
+  # status: version and the eight slot bytes, nothing else from the partition
+  fresh
+  out=$(run status 2>&1) || fail "status runs ($out)"
+  grep -q "^bytes 0x30-0x37: $expect_bytes$" <<<"$out" || fail "status prints the slot bytes ($out)"
+  grep -q '^devinfo version 3.15 ' <<<"$out" || fail "status prints the version"
+  grep -q '^storage guard: holding$' <<<"$out" || fail "status sees the guard holding"
+  ! grep -qi 'de ad\|dead\|be ef' <<<"$out" || fail "status prints bytes from outside 0x30-0x37"
+  unchanged "status"
+  pass "status prints the version and the eight slot bytes, and nothing else"
+
+  # dry run: plans one byte, writes nothing, leaves every flag set
+  out=$(run mark-b-successful 2>&1) || fail "the dry run passes its checks ($out)"
+  grep -q '^planned: byte 0x35 1c -> 1e (slot b successful), nothing else$' <<<"$out" || fail "the dry run plans 0x35 1c -> 1e ($out)"
+  grep -q -- "--write --codename $codename --expect \"$expect_bytes\"" <<<"$out" || fail "the dry run prints the write command"
+  ! grep -qi 'de ad\|dead\|be ef' <<<"$out" || fail "the dry run prints bytes from outside 0x30-0x37"
+  unchanged "dry run"
+  pass "a dry run plans one byte and writes nothing"
+
+  # refusals before any window
+  fresh 11; refused "devinfo version 3.11 is refused (dry run)" run mark-b-successful
+  fresh 11; refused "devinfo version 3.11 is refused (write)" write
+  fresh; printf 'XXXX' | dd of="$r/dev/sdd1" conv=notrunc status=none; cp "$r/dev/sdd1" "$tmp/orig"
+  refused "bad magic is refused" write
+  fresh; printf 'google,other-phone\0' > "$r/sys/firmware/devicetree/base/compatible"; refused "another board is refused" write
+  fresh; sed -i 's/_b"/_a"/' "$r/proc/bootconfig"; refused "a boot from slot a is refused" write
+  fresh; refused "--write without --expect is refused" run mark-b-successful --write --codename "$codename"
+  fresh; refused "--write with other bytes in --expect is refused" run mark-b-successful --write --codename "$codename" --expect "02 1a 00 00 01 1c 00 00"
+  fresh; refused "a wrong codename is refused" run mark-b-successful --write --codename not-"$codename" --expect "$expect_bytes"
+  fresh; refused "no codename and no terminal is refused" setsid -w env BOOTCTL_TEST_ROOT="$r" "$bin" mark-b-successful --write --expect "$expect_bytes"
+  fresh; printf '\x1d' | dd of="$r/dev/sdd1" bs=1 seek=$((0x35)) conv=notrunc status=none; cp "$r/dev/sdd1" "$tmp/orig"
+  refused "an unbootable slot b is refused" write --expect "02 1a 00 00 00 1d 00 00"
+  fresh; printf '\x18' | dd of="$r/dev/sdd1" bs=1 seek=$((0x35)) conv=notrunc status=none; cp "$r/dev/sdd1" "$tmp/orig"
+  refused "an inactive slot b is refused" write --expect "02 1a 00 00 00 18 00 00"
+  fresh; printf '\x1e' | dd of="$r/dev/sdd1" bs=1 seek=$((0x35)) conv=notrunc status=none; cp "$r/dev/sdd1" "$tmp/orig"
+  out=$(write --expect "02 1a 00 00 00 1e 00 00" 2>&1) || fail "an already marked slot b is not an error ($out)"
+  grep -q 'already marked successful' <<<"$out" || fail "an already marked slot b says so"
+  unchanged "already marked"; pass "an already marked slot b writes nothing"
+  fresh; echo '30 1 8:49 / /mnt ro - vfat /dev/sdd1 ro' >> "$r/proc/self/mountinfo"; refused "a mounted devinfo is refused" write
+  fresh; mkdir "$r/sys/block/sdd/sdd1/holders/dm-0"; refused "a held devinfo is refused" write
+  fresh; sed -i 's/PARTNAME=pinfo/PARTNAME=devinfo/' "$r/sys/block/sdd/sdd2/uevent"; refused "two devinfo partitions are refused" write
+  fresh; sed -i 's/PARTNAME=devinfo/PARTNAME=devinfo2/' "$r/sys/block/sdd/sdd1/uevent"; refused "no devinfo partition is refused" write
+  fresh; echo 0 > "$r/dev/sdd.ro"; st=0; write >/dev/null 2>&1 || st=$?
+  [[ $st == 1 && $(<"$r/dev/sdd.ro") == 0 ]] && cmp -s "$r/dev/sdd1" "$tmp/orig" || fail "a writable boot LUN is refused"
+  pass "a writable boot LUN is refused (the guard is not holding)"
+  fresh; echo 0 > "$r/dev/sda1.ro"; st=0; write >/dev/null 2>&1 || st=$?
+  [[ $st == 1 ]] && cmp -s "$r/dev/sdd1" "$tmp/orig" || fail "a writable persist is refused"
+  pass "a writable partition outside the allowlist is refused"
+  fresh; : > "$r/dev/sda"; chmod 600 "$r/dev/sda"; refused "a usable main-LUN node is refused" write
+  fresh; : > "$r/dev/sda"; chmod 000 "$r/dev/sda"; out=$(run mark-b-successful 2>&1) || fail "a mode-0000 main-LUN node (the udev rule) is accepted ($out)"
+  pass "a mode-0000 main-LUN node, as the udev rule leaves it, is accepted"
+  fresh; exec 7<>"$r/dev/sdd"; refused "another process with the boot LUN open for writing is refused" write; exec 7>&-
+  fresh; exec 7<"$r/dev/sdd"; out=$(run mark-b-successful 2>&1) || fail "a reader of the boot LUN is no reason to refuse ($out)"; exec 7<&-
+  pass "a process reading the boot LUN is not a reason to refuse"
+
+  # inside the window: a sibling whose own flag is clear (hidden by the disk's)
+  fresh; echo 0 > "$r/dev/sdd2.ro"
+  out=$(run status 2>&1); grep -q '^storage guard: holding$' <<<"$out" || fail "a sibling's own flag is invisible while its disk is read-only"
+  st=0; out=$(write 2>&1) || st=$?
+  [[ $st == 3 ]] || fail "a sibling with its own flag clear stops the write (exit $st: $out)"
+  grep -q "sdd2's own read-only flag is clear" <<<"$out" || fail "the sibling is named"
+  cmp -s "$r/dev/sdd1" "$tmp/orig" || fail "the sibling case wrote devinfo"
+  [[ $(<"$r/dev/sdd.ro") == 1 && $(<"$r/dev/sdd1.ro") == 1 ]] || fail "the sibling case left the disk or devinfo writable"
+  pass "a sibling whose own flag is clear stops the write, and the disk goes read-only again"
+  fresh; echo 0 > "$r/dev/sdd1.ro"; st=0; out=$(write 2>&1) || st=$?
+  [[ $st == 3 ]] && grep -q "devinfo's own read-only flag was already clear" <<<"$out" || fail "devinfo with its own flag clear stops the write (exit $st: $out)"
+  cmp -s "$r/dev/sdd1" "$tmp/orig" || fail "the devinfo-flag case wrote devinfo"
+  [[ $(flags "$r") == "$all_ro" ]] || fail "the devinfo-flag case left $(flags "$r")"
+  pass "devinfo with its own flag already clear stops the write, and both flags end set"
+
+  # the write: exactly bit 0x02 of byte 0x35, read back, every flag set again
+  fresh
+  out=$(write 2>&1) || fail "the write succeeds ($out)"
+  diffs=$(cmp -l "$tmp/orig" "$r/dev/sdd1" || true)
+  [[ $(wc -l <<<"$diffs") == 1 ]] || fail "the write changed more than one byte: $diffs"
+  read -r off old new <<<"$diffs"
+  [[ $off == $((0x35 + 1)) ]] || fail "the write changed byte $((off - 1)), not 0x35"
+  (( (8#$old ^ 8#$new) == 2 )) || fail "the write changed byte 0x35 by more than bit 0x02"
+  [[ $(flags "$r") == "$all_ro" ]] || fail "after the write the flags are $(flags "$r")"
+  grep -q "^before 0x30-0x37: $expect_bytes$" <<<"$out" || fail "the write prints the bytes before"
+  grep -q '^after  0x30-0x37: 02 1a 00 00 00 1e 00 00$' <<<"$out" || fail "the write prints the bytes after"
+  ! grep -qi 'de ad\|dead\|be ef' <<<"$out" || fail "the write prints bytes from outside 0x30-0x37"
+  pass "a write flips bit 0x02 of byte 0x35 alone, reads it back, and sets every flag again"
+  fresh; out=$(BOOTCTL_TEST_FAULT=no-child-relock write 2>&1) || fail "the write succeeds without the child's relock ($out)"
+  [[ $(flags "$r") == "$all_ro" ]] || fail "without the child's relock the flags are $(flags "$r")"
+  pass "the tool sets every flag again itself, without the relock child"
+  out=$(write --expect "02 1a 00 00 00 1e 00 00" 2>&1) || fail "a second run is a no-op ($out)"
+  grep -q 'already marked successful' <<<"$out" || fail "a second run says already marked"
+  pass "a second run writes nothing"
+
+  # failures inside the window
+  fresh; st=0; out=$(BOOTCTL_TEST_FAULT=corrupt-write write 2>&1) || st=$?
+  [[ $st == 3 ]] || fail "a read-back mismatch fails with 3 (exit $st: $out)"
+  grep -q 'VERIFY FAILED' <<<"$out" && grep -q 'restored: devinfo reads back as it was before' <<<"$out" || fail "a mismatch says it restored ($out)"
+  unchanged "read-back mismatch"; pass "a read-back mismatch restores the original, sets every flag, and fails"
+  fresh; st=0; out=$(BOOTCTL_TEST_FAULT=write-fails write 2>&1) || st=$?
+  [[ $st == 3 ]] || fail "a failed write fails with 3 (exit $st: $out)"
+  unchanged "failed write"; pass "a failed write leaves devinfo as it was and sets every flag"
+
+  waitro() { local i; for i in $(seq 50); do [[ $(flags "$r") == "$all_ro" ]] && return 0; sleep 0.1; done; return 1; }
+  for f in kill-before-write kill-after-write; do
+    fresh; st=0; BOOTCTL_TEST_FAULT=$f write >/dev/null 2>&1 || st=$?
+    [[ $st == 137 ]] || fail "$f: the tool was not killed (exit $st)"
+    waitro || fail "$f: the flags stayed $(flags "$r") after the tool was killed"
+    pass "$f: the relock child sets devinfo and the disk read-only again"
+  done
+  cmp -s "$r/dev/sdd1" "$tmp/orig" && fail "kill-after-write: the fake write did not happen"
+  # exec, so $! is the tool itself and not a subshell around it
+  bgwrite() { ( exec env BOOTCTL_TEST_ROOT="$r" "$@" "$bin" mark-b-successful --write --codename "$codename" --expect "$expect_bytes" >/dev/null 2>&1 ) & pid=$!; }
+  fresh; bgwrite BOOTCTL_TEST_FAULT=hang-in-window BOOTCTL_TEST_RELOCK_MS=300
+  waitro || { kill -9 $pid; fail "a hung tool: the relock child did not set the flags after its timeout"; }
+  kill -0 $pid 2>/dev/null || fail "hang-in-window: the tool exited instead of hanging"
+  kill -9 $pid; wait $pid 2>/dev/null || true
+  cmp -s "$r/dev/sdd1" "$tmp/orig" || fail "hang-in-window wrote devinfo"
+  pass "a hung tool: the relock child sets both flags after its timeout"
+  fresh; bgwrite BOOTCTL_TEST_FAULT=hang-in-window
+  for _ in $(seq 50); do [[ $(<"$r/dev/sdd1.ro") == 0 ]] && break; sleep 0.1; done
+  [[ $(<"$r/dev/sdd1.ro") == 0 ]] || { kill -9 $pid; fail "hang-in-window never opened the window"; }
+  kill -INT $pid; kill -TERM $pid; kill -HUP $pid; sleep 0.3
+  kill -0 $pid 2>/dev/null || fail "SIGINT, SIGTERM or SIGHUP stopped the tool inside the window"
+  kill -9 $pid; wait $pid 2>/dev/null || true
+  waitro || fail "after SIGKILL inside the window the flags are $(flags "$r")"
+  pass "^C, SIGTERM and SIGHUP wait out the window; SIGKILL leaves the relock to the child"
+}
+
+if [[ ${1:-} == --cases ]]; then
+  QUIET=1 cases "${BOOTCTL_BIN:?}"
+  exit 0
+fi
+
+# The production build: real paths, real ioctls, no test hooks.
+${CC:-cc} ${CFLAGS:--O2} -Wall -Wextra -Werror -Isrc -o "$tmp/omamobile-bootctl" src/omamobile-bootctl.c \
+  || fail "omamobile-bootctl compiles without warnings"
+! grep -aq 'BOOTCTL_TEST' "$tmp/omamobile-bootctl" || fail "the production build carries a test hook"
+grep -aq "$compatible" "$tmp/omamobile-bootctl" || fail "the production build is for $codename"
+pass "the production build compiles, is for $codename and has no test hooks"
+st=0; "$tmp/omamobile-bootctl" >/dev/null 2>&1 || st=$?
+[[ $st == 2 ]] || fail "no arguments prints the usage"
+pass "no arguments prints the usage"
+
+build_test src/omamobile-bootctl.c "$tmp/bootctl-test" || fail "the test build compiles"
+cases "$tmp/bootctl-test"
+
+[[ ${1:-} == --mutations ]] || exit 0
+
+# Each mutation breaks one guard in a copy of the source; a case must fail.
+mutate() {  # name, python replacement (old, new)
+  local name=$1 old=$2 new=$3 m="$tmp/mut.c"
+  python3 - src/omamobile-bootctl.c "$m" "$old" "$new" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+if s.count(sys.argv[3]) < 1:
+    sys.exit("mutation does not apply: " + sys.argv[3])
+open(sys.argv[2], 'w').write(s.replace(sys.argv[3], sys.argv[4]))
+PY
+  build_test "$m" "$tmp/mut" -w || fail "mutant '$name' compiles"
+  if BOOTCTL_BIN="$tmp/mut" "$0" --cases >/dev/null 2>&1; then
+    fail "mutant '$name' passed every case"
+  fi
+  pass "mutation caught: $name"
+}
+mutate "no version check" 'if (maj != BOOTCTL_VER_MAJOR || min != BOOTCTL_VER_MINOR) {' 'if (0) {'
+mutate "no magic check" 'if (magic != DEVINFO_MAGIC) {' 'if (0) {'
+mutate "no board check" 'if (strcmp(buf, BOOTCTL_COMPATIBLE)) {' 'if (0) {'
+mutate "no slot check" "if (booted_slot() != 'b') {" 'if (0) {'
+mutate "dry run writes" 'if (!do_write) {' 'if (0) {'
+mutate "no --expect check" 'if (memcmp(exp, img + OFF_SLOTS, SLOT_BYTES)) {' 'if (0) {'
+mutate "no codename check" 'if (strcmp(typed, BOOTCTL_CODENAME)) {' 'if (0) {'
+mutate "another bit" 'nv = fb | FLAG_SUCCESSFUL;' 'nv = fb | FLAG_SUCCESSFUL | FLAG_FASTBOOT_OK | 0x20;'
+mutate "no guard check" 'if (check_guard(&t) || check_unused(&t))' 'if (check_unused(&t))'
+mutate "no writer check" 'if ((flags & O_ACCMODE) != O_RDONLY) {' 'if (0) {'
+mutate "no sibling check" 'if (ro_get(&t->sib[i], &t->disk) != 1) {' 'if (0) {'
+mutate "no mount check" 'if (!strcmp(source, src) || (t->part.rdev' 'if (0 && (t->part.rdev'
+mutate "no unbootable check" 'if (fb & FLAG_UNBOOTABLE) {' 'if (0) {'
+mutate "no restore on mismatch" 'if (write_at(t, orig, len, 0)) {' 'if (0) {'
+mutate "no relock child" '_exit(relock(t) ? 1 : 0);' '_exit(0);'
+mutate "parent does not relock" '	if (relock(t)) {
+		err("FAILED' '	if (0) {
+		err("FAILED'
+mutate "signals not blocked" 'sigprocmask(SIG_BLOCK, &block, &old);' 'sigemptyset(&old);'
+mutate "disk flag cleared without the sibling check" 'for (int i = 0; i < t->nsib; i++)' 'for (int i = 0; i < 0; i++)'

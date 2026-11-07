@@ -68,12 +68,36 @@ macs=$(grep -rEn '\b([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b' --exclude-dir=build . 
 [[ -z $macs ]] || fail "a MAC or Bluetooth address in the package: $macs"
 pass "no blobs, no addresses"
 
+# omamobile-bootctl (#252): one source and one test in the husky and tegu
+# packages, byte for byte; the per-phone values are in src/bootctl-device.h.
+# It is installed for the owner to run by hand: no unit, hook or script here
+# may call it, and nothing enables it.
+other=../omamobile-device-husky
+if [[ -d $other ]]; then
+  cmp -s src/omamobile-bootctl.c "$other/src/omamobile-bootctl.c" \
+    || fail "omamobile-bootctl.c drifted from the husky package"
+  cmp -s test/bootctl "$other/test/bootctl" || fail "test/bootctl drifted from the husky package"
+  pass "omamobile-bootctl.c and test/bootctl match the husky package"
+fi
+if [[ -f ../omamobile-device-cheetah/LICENSE.Apache-2.0 ]]; then
+  cmp -s LICENSE.Apache-2.0 ../omamobile-device-cheetah/LICENSE.Apache-2.0 || fail "LICENSE.Apache-2.0 drifted from the cheetah package"
+fi
+grep -qx '#define BOOTCTL_CODENAME[[:space:]]*"tegu"' src/bootctl-device.h || fail "bootctl-device.h is not tegu's"
+compat=$(sed -n 's/^COMPATIBLE="\(.*\)"$/\1/p' device.conf)
+grep -qx "#define BOOTCTL_COMPATIBLE[[:space:]]*\"$compat\"" src/bootctl-device.h \
+  || fail "bootctl-device.h's compatible is not device.conf's ($compat)"
+pass "bootctl-device.h names tegu and device.conf's compatible"
+grep -rlw 'omamobile-bootctl' vendor bin uwsm *.install 2>/dev/null && fail "a unit, hook or script calls omamobile-bootctl"
+pass "nothing in the package calls omamobile-bootctl"
+test/bootctl --mutations || fail "test/bootctl"
+
 ./build "$tmp/build" || fail "the C tools compile"
-[[ -x $tmp/build/reboot-to && -x $tmp/build/tegu-tcpc-switch ]] || fail "the C tools are not executable"
+[[ -x $tmp/build/reboot-to && -x $tmp/build/tegu-tcpc-switch && -x $tmp/build/omamobile-bootctl ]] || fail "the C tools are not executable"
 pass "the C tools compile"
 
 ./install "$tmp/root" "$tmp/build"
-for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
+for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch usr/bin/omamobile-bootctl \
+         usr/share/licenses/omamobile-device-tegu/LICENSE.Apache-2.0 \
          usr/bin/omamobile-tegu-graphics-start usr/lib/systemd/system/omamobile-tegu-graphics.service \
          usr/lib/systemd/system/display-manager.service.d/10-omamobile-tegu.conf \
          usr/bin/omamobile-tegu-aoc-start usr/lib/systemd/system/omamobile-tegu-aoc.service \
@@ -140,14 +164,15 @@ grep -q 'omamobile-tegu-display-card' "$tmp/root/usr/share/uwsm/env.d/omamobile-
   || fail "the session reads the graphics start's two files"
 grep -q 'After=omamobile-tegu-graphics.service' "$tmp/root/usr/lib/systemd/system/display-manager.service.d/10-omamobile-tegu.conf" \
   || fail "the display manager waits for the graphics start"
-for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
+for absent in usr/bin/omamobile-boot-success \
               usr/lib/systemd/system/omamobile-boot-success.service \
               usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
               usr/bin/omamobile-camera-start usr/bin/omamobile-aoc-start \
               usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the package, enables only the guards, and nothing that marks a slot"
+! grep -rlw omamobile-bootctl "$tmp/root/usr/lib" "$tmp/root/etc" "$tmp/root/usr/share" || fail "a staged unit or hook calls omamobile-bootctl"
+pass "install stages the package, enables only the guards, and nothing that marks a slot (omamobile-bootctl is for use by hand)"
 
 for m in cpif shm_ipc pcie_gs201_cp; do
   grep -qx "blacklist $m" "$tmp/root/usr/lib/modprobe.d/omamobile-tegu-guards.conf" \
