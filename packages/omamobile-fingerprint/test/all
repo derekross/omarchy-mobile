@@ -9,6 +9,8 @@ for f in lib/omamobile-fp-chroot install; do bash -n "$f" || fail "syntax: $f"; 
 # The copy checks: a missing or failing cmp stops the start with its own
 # reason, never a false "differs"; only cmp's 1 means different.
 grep -c 'diffutils' PKGBUILD >/dev/null || fail "depends lacks diffutils (cmp)"
+grep -qx 'auth       required                    pam_fprintd.so timeout=600' vendor/pam.d/omarchy-lock-fingerprint \
+  || fail "the lock's fingerprint conversation has a 600 s timeout, not pam_fprintd's 30 s (#422)"
 grep -c 'cmp -s "' lib/omamobile-fp-chroot >/dev/null && fail "a bare cmp -s outside same_file"
 fn=$(sed -n '/^say() {/p;/^die() {/p;/^same_file() {/,/^}/p' lib/omamobile-fp-chroot)
 c=$(mktemp -d); printf a >"$c/a"; printf a >"$c/b"; printf b >"$c/x"
