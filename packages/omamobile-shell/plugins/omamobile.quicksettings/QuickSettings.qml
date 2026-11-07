@@ -90,6 +90,7 @@ Item {
   function close() {
     if (editing) finishEditing()
     confirmClear = false
+    notificationDeleteError = ""
     opened = false
   }
 
@@ -822,13 +823,15 @@ Item {
   // and a forget only takes one away.
   property var hiddenNotifications: ({})
   property var forgetQueue: []
+  property var pendingForget: null
+  property string notificationDeleteError: ""
 
   function forgetNotification(entry) {
     if (!entry || !entry.key || !entry.file) return false
     var marks = Object.assign({}, hiddenNotifications)
     marks[entry.key] = Date.now()
     hiddenNotifications = marks
-    forgetQueue = forgetQueue.concat([entry.file])
+    forgetQueue = forgetQueue.concat([{ key: entry.key, file: entry.file }])
     // Later, not now: the row asking is a delegate of this list.
     Qt.callLater(function() {
       root.notifications = NotificationsModel.without(root.notifications, entry.key)
@@ -839,16 +842,25 @@ Item {
 
   function runForget() {
     if (forgetProc.running || forgetQueue.length === 0) return
-    forgetProc.command = ["sh", "-c",
-      "dir=$1; shift; for name; do qs ipc -p \"$dir\" call notifications forget \"$name\"; done; exit 0",
-      "sh", Quickshell.shellDir].concat(forgetQueue)
-    forgetQueue = []
+    pendingForget = forgetQueue[0]
+    forgetQueue = forgetQueue.slice(1)
+    forgetProc.command = ["qs", "ipc", "-p", Quickshell.shellDir,
+                          "call", "notifications", "forget", pendingForget.file]
     forgetProc.running = true
   }
 
   Process {
     id: forgetProc
-    onExited: {
+    stdout: StdioCollector { id: forgetResult; waitForEnd: true }
+    onExited: function(code) {
+      var entry = root.pendingForget
+      root.pendingForget = null
+      if (code !== 0 || String(forgetResult.text || "").trim() !== "ok") {
+        var marks = Object.assign({}, root.hiddenNotifications)
+        if (entry) delete marks[entry.key]
+        root.hiddenNotifications = marks
+        root.notificationDeleteError = "Couldn't dismiss notification"
+      } else root.notificationDeleteError = ""
       root.runForget()
       notificationsLater.restart()
     }
@@ -1978,7 +1990,7 @@ Item {
             anchors.rightMargin: Style.spacing.lg
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: NotificationsModel.title(root.notifications.length)
+            text: root.notificationDeleteError || NotificationsModel.title(root.notifications.length)
             color: root.foreground
             font.family: Style.font.family
             font.pixelSize: Style.font.subtitle
