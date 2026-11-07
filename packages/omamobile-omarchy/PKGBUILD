@@ -9,7 +9,7 @@ url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
 depends=('omarchy>=4.0.6' bash python patch libarchive gzip util-linux sudo pacman-contrib fakeroot systemd)
 optdepends=('omamobile-shell: the update sheet')
-checkdepends=(diffutils patch util-linux libarchive)
+checkdepends=(diffutils patch util-linux libarchive nodejs qt6-declarative)
 install=omamobile-omarchy.install
 
 check() {

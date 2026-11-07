@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# Port responsiveAbout to4.5translatedfastfetch and animatedlogo loop.
+# Side-by-side stays unchanged; narrowterminals stackoromitlogo, and compact
+# modes suppress side-by-side sheen cells rather than paint overmoduletext.
+# Customfastfetchconfiguration remains untouched.
+
+diff --git i/bin/omarchy-launch-about w/bin/omarchy-launch-about
+--- i/bin/omarchy-launch-about
++++ w/bin/omarchy-launch-about
+@@ -312,6 +312,9 @@
+   SHEEN_FRAMES=()
+ 
+   custom_fastfetch_config && return 1
++  # Compact phone layouts move/remove the logo; old side-by-side glint cells
++  # must not paint over the stacked modules. Desktop animation stays intact.
++  [[ -n ${mobile_compact_layout:-} ]] && return 1
+ 
+   # fastfetch honours NO_COLOR when it writes to a terminal but not when it writes
+   # to the measurement below, so a logo drawn without colour would be measured as
+@@ -381,6 +384,40 @@
+   return 0
+ }
+ 
++layout_room() {
++  custom_fastfetch_config && return 1
++
++  local logo_w logo_h modules module_w module_h
++  read -r logo_w logo_h <<<"$(logo_dimensions)"
++  [[ -n ${logo_w:-} ]] || return 1
++
++  modules=$(about_fastfetch --logo none | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'; printf X)
++  modules=${modules%X}
++  module_w=$(printf '%s' "$modules" | display_columns)
++  module_h=$(printf '%s' "$modules" | wc -l)
++
++  printf '%s %s %s\n' $(( 2 + logo_w + 6 + module_w + 2 )) \
++    $(( 2 + logo_w > module_w ? 2 + logo_w : module_w )) $(( 2 + logo_h + module_h + 1 ))
++}
++
++# The config turns line wrapping off, so a terminal narrower than the logo and
++# the modules side by side, such as a phone's full-width window, cuts every
++# module line short. It gets the logo above the modules instead, and one too
++# small for that as well, such as a phone with its keyboard up, gets the
++# modules without the logo. A terminal wide enough renders as before.
++logo_options() {
++  local rows=$1 cols=$2 side_c top_c top_r
++  read -r side_c top_c top_r <<<"$room"
++  [[ -n ${side_c:-} ]] && (( cols < side_c )) || return 0
++
++  if (( cols >= top_c && rows >= top_r )); then
++    echo "--logo-position top"
++  else
++    echo "--logo none"
++  fi
++}
++
++
+ if [[ ${1:-} == "--render" ]]; then
+   printf '\e[?25l'
+   write_about_config
+@@ -395,13 +432,17 @@
+ 
+   fitted=false
+   passes=0
++  room=$(layout_room)
+   while :; do
+     grid=$(stty size)
+     logo_stamp=$(stat -c %Y "$LOGO_FILE" 2>/dev/null)
+     resized=false
+     LAYOUT_ROWS=""
+     clear
+-    about_fastfetch
++    mobile_logo_options=$(logo_options $grid)
++    mobile_compact_layout=$mobile_logo_options
++    read -ra mobile_logo_args <<<"$mobile_logo_options"
++    about_fastfetch "${mobile_logo_args[@]}"
+     # A second pass picks up a fit that could not measure the window the first
+     # time. Beyond that, a window that will not settle would be fitted again on
+     # every repaint.
+@@ -416,6 +457,7 @@
+     if [[ $(stat -c %Y "$LOGO_FILE" 2>/dev/null) != $logo_stamp ]]; then
+       fitted=false
+       passes=0
++      room=$(layout_room)
+     fi
+   done
+ fi

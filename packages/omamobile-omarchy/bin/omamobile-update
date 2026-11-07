@@ -15,6 +15,10 @@
   omamobile-update ack           the sheet has shown the last result
   omamobile-update notify-check  toast once per new Omarchy release (the shell
                                  runs this every few hours)
+  omamobile-update qualify-prospective --package PKG --signature SIG
+                     --keyring KEYRING --version VERSION
+                                 offline apply/reverse rehearsal; emits an
+                                 unapproved exact-package review record
   omamobile-update run-migration NAME   run one migration the update held
   omamobile-update channel [stable|development|local] [--json]
                                  which [omamobile] channel the phone follows,
@@ -42,6 +46,15 @@ when /etc/pacman.conf doesn't list [omamobile] first and [omarchy] before
 Arch Linux ARM's repositories, when [omarchy] isn't Omarchy's stable
 channel, and when the update would install another distribution's kernel,
 a bootloader or a boot-image tool (--allow-boot-packages overrides).
+
+A prospective Omarchy package is also held unless a protected qualification
+record approves its exact aarch64 version, archive SHA256, patch series,
+patcher, updater and migration/transaction policies. The cached package is
+rehearsed with fuzz=0 and reversed byte-for-byte before installation, including
+the package's absolute /usr/bin links. Checking never downloads or installs a
+package. The named system-package stage refreshes metadata first, repeats this
+gate, then transacts without another refresh and with an exact Omarchy version
+pin. The post-transaction patch hook remains a second check, not the first one.
 
 The phone's own kernel package, linux-omamobile, is allowed: its pacman hook
 (omamobile-boot-update, docs/RELEASES.md §5.3) rebuilds slot B's images and
@@ -72,6 +85,10 @@ the old channel's index, which may be newer than the new channel's.
 """
 import datetime
 import glob
+import hashlib
+import runpy
+import tarfile
+import tempfile
 import json
 import os
 import re
@@ -105,6 +122,12 @@ CHECKUP_DBS = os.environ.get("OMAMOBILE_CHECKUP_DBS", "/tmp/checkup-db-*")
 PATCH_STATUS = os.environ.get("OMAMOBILE_PATCH_STATUS", "/var/lib/omamobile/omarchy-patches/status.json")
 NOTIFY = os.environ.get("OMAMOBILE_NOTIFY", "omarchy-notification-send")
 OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+SERIES_BASE = os.environ.get("OMAMOBILE_SERIES_BASE", "/usr/share/omamobile/omarchy")
+PATCH_TOOL = os.environ.get("OMAMOBILE_PATCH_TOOL", "/usr/bin/omamobile-omarchy-patches")
+QUALIFICATIONS = os.environ.get("OMAMOBILE_PROSPECTIVE_QUALIFICATIONS", SERIES_BASE + "/qualifications.json")
+PACMAN_CACHE = os.environ.get("OMAMOBILE_PACMAN_CACHE", "/var/cache/pacman/pkg")
+ZSTD = os.environ.get("OMAMOBILE_ZSTD", "zstd")
+GPGV = os.environ.get("OMAMOBILE_GPGV", "gpgv")
 MIN_BATTERY = int(os.environ.get("OMAMOBILE_MIN_BATTERY", "30"))
 MIN_FREE = 10 * 1024 ** 3  # omarchy-update-requires-free-space's limit
 UNIT = "omamobile-update"
@@ -466,6 +489,321 @@ def pid_alive(pid):
         return False
 
 
+# ---------------------------------------------------------------- prospective package qualification
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def prospective_tool():
+    return runpy.run_path(PATCH_TOOL, run_name="omamobile_prospective")
+
+
+def target_series(version):
+    # A newer version is never accepted just because an older series applies.
+    plain = version.split(":", 1)[-1]
+    if plain.startswith("4.5.0-"):
+        return os.environ.get("OMAMOBILE_PROSPECTIVE_SERIES", SERIES_BASE + "/patches")
+    if plain.startswith("4.0.6-"):
+        return os.environ.get("OMAMOBILE_PROSPECTIVE_SERIES", SERIES_BASE + "/legacy-4.0.6")
+    raise ValueError("Omarchy %s has no qualified mobile source family" % version)
+
+
+def series_digest(tool, series):
+    names = sorted(n for n in os.listdir(series) if n.endswith(".patch"))
+    if not names:
+        raise ValueError("the prospective mobile patch series is empty")
+    h = hashlib.sha256(tool["TOOL_VERSION"].encode())
+    for name in names:
+        with open(os.path.join(series, name), "rb") as f:
+            h.update(name.encode() + b"\0" + f.read() + b"\0")
+    return h.hexdigest()
+
+
+def prospective_inputs(tool, series):
+    return {"series_sha256": series_digest(tool, series),
+            "patch_tool_sha256": file_sha256(PATCH_TOOL),
+            "migration_policy_sha256": file_sha256(os.path.join(SHIMS, "omarchy-migrate")),
+            "transaction_shim_sha256": file_sha256(os.path.join(SHIMS, "omarchy-update-system-pkgs")),
+            "updater_sha256": file_sha256(os.path.abspath(__file__))}
+
+
+def package_rehearsal(archive, name, version, arch, series, tool):
+    """Read only touched package files; preserve absolute-bin link semantics.
+
+    No install script, hook, migration or packaged executable is ever run.
+    Reuse the installed patch tool's path mapping, fuzz=0 and reverse verifier.
+    """
+    wanted = {".PKGINFO"}
+    for filename in sorted(os.listdir(series)):
+        if not filename.endswith(".patch"):
+            continue
+        with open(os.path.join(series, filename), encoding="utf-8", errors="surrogateescape") as f:
+            for line, kind in tool["parse_patch"](f.read()):
+                if kind not in ("old", "new"):
+                    continue
+                match = tool["HEADER"].match(line)
+                raw = match.group(2)
+                if raw == "/dev/null":
+                    continue
+                rel = tool["strip_one"](raw)
+                if not rel or rel.startswith("/") or ".." in rel.split("/"):
+                    raise ValueError("unsafe prospective patch path")
+                wanted.add("usr/share/omarchy/" + rel)
+                if rel.startswith("bin/"):
+                    wanted.add("usr/bin/" + rel[4:])
+    with tempfile.TemporaryDirectory(prefix="omamobile-prospective-") as temp:
+        root = os.path.join(temp, "root")
+        work = os.path.join(temp, "work")
+        os.makedirs(root)
+        os.makedirs(work)
+        records, total, seen = {}, 0, set()
+        with subprocess.Popen([ZSTD, "-dc", "--", archive], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+            try:
+                with tarfile.open(fileobj=process.stdout, mode="r|") as tar:
+                    for member in tar:
+                        rel = member.name.removeprefix("./")
+                        if rel.startswith("/") or ".." in rel.split("/"):
+                            raise ValueError("unsafe candidate archive path")
+                        if rel not in wanted:
+                            continue
+                        if rel in seen:
+                            raise ValueError("duplicate candidate archive path")
+                        seen.add(rel)
+                        if member.isreg():
+                            total += member.size
+                            if member.size > 32 * 1024 ** 2 or total > 128 * 1024 ** 2:
+                                raise ValueError("prospective touched-file size limit exceeded")
+                            records[rel] = ("file", tar.extractfile(member).read(), member.mode & 0o777)
+                        elif member.issym():
+                            expected = "/usr/bin/" + rel[len("usr/share/omarchy/bin/"):]
+                            if not rel.startswith("usr/share/omarchy/bin/") or member.linkname != expected:
+                                raise ValueError("unsupported prospective package link")
+                            records[rel] = ("link", member.linkname, 0)
+                        else:
+                            raise ValueError("nonregular prospective package input")
+                process.stdout.read()
+            finally:
+                process.stdout.close()
+                code = process.wait()
+            if code:
+                raise ValueError("could not decompress prospective package")
+        if ".PKGINFO" not in records:
+            raise ValueError("candidate package metadata is missing")
+        metadata = {}
+        for line in records[".PKGINFO"][1].decode().splitlines():
+            if " = " in line:
+                key, value = line.split(" = ", 1)
+                metadata[key] = value
+        if (metadata.get("pkgname"), metadata.get("pkgver"), metadata.get("arch")) != (name, version, arch):
+            raise ValueError("candidate package metadata differs from the transaction")
+        # Materialize regular files first, then only validated leaf bin links.
+        for rel, (kind, data, mode) in records.items():
+            if kind != "file":
+                continue
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(data)
+            os.chmod(path, mode)
+        for rel, (kind, data, _) in records.items():
+            if kind == "link":
+                path = os.path.join(root, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                os.symlink(data, path)
+        patches, digest = tool["load_series"](series, root)
+        paths = sorted({path for patch in patches for path in patch.files})
+        tool["copy_tree_files"](root, work, paths)
+        pristine = {path: (open(os.path.join(work, path), "rb").read()
+                           if os.path.isfile(os.path.join(work, path)) else None) for path in paths}
+        applied, upstream = [], []
+        for patch in patches:
+            ok, output = tool["run_patch"](work, patch, dry_run=True)
+            if not ok:
+                already, _ = tool["run_patch"](work, patch, reverse=True, dry_run=True)
+                if already:
+                    upstream.append(patch.name)
+                    continue
+                raise ValueError("prospective patch does not apply: " + patch.name + ": " + output[-1600:])
+            ok, output = tool["run_patch"](work, patch)
+            if not ok:
+                raise ValueError("prospective patch changed during rehearsal: " + patch.name)
+            applied.append(patch)
+        if tool["leftovers"](work):
+            raise ValueError("prospective patch left rejected/backup files")
+        for patch in reversed(applied):
+            ok, _ = tool["run_patch"](work, patch, reverse=True)
+            if not ok:
+                raise ValueError("prospective reverse failed: " + patch.name)
+        for rel, before in pristine.items():
+            path = os.path.join(work, rel)
+            after = open(path, "rb").read() if os.path.isfile(path) else None
+            if before != after:
+                raise ValueError("prospective reverse changed pristine package bytes: " + rel)
+        return {"applied": len(applied), "upstream": upstream,
+                "reverse_byte_identical": True, "series_sha256": digest,
+                "absolute_bin_links": sum(v[0] == "link" for v in records.values())}
+
+
+def prospective_metadata(name, version, db=None):
+    args = [PACMAN, "-Sp", "--logfile", "/dev/null", "--print-format", "%n\t%v\t%a\t%h"]
+    if db:
+        args += ["--dbpath", db]
+    out = subprocess.run(args + [name], capture_output=True, text=True, timeout=120)
+    if out.returncode:
+        raise ValueError("cannot read the prospective Omarchy package metadata")
+    rows = [line.split("\t") for line in out.stdout.splitlines()]
+    rows = [r for r in rows if len(r) == 4 and r[:2] == [name, version]]
+    if len(rows) != 1 or rows[0][2] != "aarch64" or not re.fullmatch(r"[0-9a-f]{64}", rows[0][3]):
+        raise ValueError("prospective package version/architecture/checksum is not exact")
+    return rows[0][2], rows[0][3]
+
+
+def prospective_check(targets, db=None):
+    target = next(((n, v) for n, v in targets if n in ("omarchy", "omarchy-dev")), None)
+    result = {"needed": bool(target), "ok": not target, "problem": ""}
+    if not target:
+        return result
+    name, version = target
+    result.update(name=name, version=version)
+    try:
+        series = target_series(version)
+        info = os.lstat(QUALIFICATIONS)
+        owner = os.geteuid() if os.environ.get("OMAMOBILE_PROSPECTIVE_QUALIFICATIONS") else 0
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner or info.st_mode & 0o022:
+            raise ValueError("prospective qualification policy is not a protected regular file")
+        policy = load_json(QUALIFICATIONS)
+        entries = policy.get("candidates", []) if isinstance(policy, dict) and policy.get("version") == 1 else []
+        if not isinstance(entries, list):
+            raise ValueError("invalid prospective qualification policy")
+        records = [r for r in entries if isinstance(r, dict) and r.get("name") == name and r.get("version") == version and r.get("approved") is True]
+        if len(records) != 1:
+            raise ValueError("Omarchy %s has no approved exact mobile candidate; update held before transaction" % version)
+        record = records[0]
+        if record.get("signature_verified") is not True or not isinstance(record.get("rehearsal"), dict) or record["rehearsal"].get("reverse_byte_identical") is not True:
+            raise ValueError("prospective candidate lacks signature/replay qualification evidence")
+        arch, checksum = prospective_metadata(name, version, db)
+        if record.get("arch") != arch or record.get("package_sha256") != checksum:
+            raise ValueError("repository package differs from the qualified mobile candidate")
+        tool = prospective_tool()
+        for key, value in prospective_inputs(tool, series).items():
+            if record.get(key) != value:
+                raise ValueError("prospective mobile qualification changed: " + key)
+        archive = next((p for p in sorted(glob.glob(os.path.join(PACMAN_CACHE, "%s-%s-%s.pkg.tar.*" % (name, version, arch))))
+                        if not p.endswith(".sig") and os.path.isfile(p) and file_sha256(p) == checksum), "")
+        if not archive:
+            raise ValueError("qualified Omarchy package is not cached; download only before updating")
+        result["rehearsal"] = package_rehearsal(archive, name, version, arch, series, tool)
+        result["ok"] = True
+    except Exception as e:  # Imported patch-tool failures also refuse before transaction.
+        result["problem"] = str(e)
+    return result
+
+
+def qualify_prospective(args):
+    import argparse
+    parser = argparse.ArgumentParser(description="Offline signed-package rehearsal; emits an UNAPPROVED review record")
+    parser.add_argument("--package", required=True)
+    parser.add_argument("--signature", required=True)
+    parser.add_argument("--keyring", required=True)
+    parser.add_argument("--name", default="omarchy")
+    parser.add_argument("--version", required=True)
+    parsed = parser.parse_args(args)
+    verified = subprocess.run([GPGV, "--keyring", os.path.abspath(parsed.keyring),
+                               parsed.signature, parsed.package], capture_output=True, text=True, timeout=120)
+    if verified.returncode:
+        print("candidate package signature verification failed", file=sys.stderr)
+        return 1
+    try:
+        tool = prospective_tool()
+        series = target_series(parsed.version)
+        replay = package_rehearsal(parsed.package, parsed.name, parsed.version, "aarch64", series, tool)
+        record = dict(name=parsed.name, version=parsed.version, arch="aarch64", approved=False,
+                      package_sha256=file_sha256(parsed.package), signature_verified=True,
+                      rehearsal=replay, **prospective_inputs(tool, series))
+        print(json.dumps({"version": 1, "candidates": [record]}, indent=2))
+        return 0
+    except Exception as e:  # Imported patch-tool failures also refuse before transaction.
+        print("candidate qualification failed: %s" % e, file=sys.stderr)
+        return 1
+
+
+def system_packages(args):
+    """Refresh metadata, rehearse the exact candidate, then transact without -y.
+
+    Both 4.0.6 and 4.5 call this named stage, so the transition is protected.
+    Keep Omarchy 4.5's PID1-scope helper and conflict-retry handler when present.
+    """
+    if args:
+        print("unexpected system-package stage arguments", file=sys.stderr)
+        return 2
+    real_bin = os.environ.get("OMAMOBILE_REAL_BIN", "/usr/bin")
+    helper = os.path.join(real_bin, "omarchy-update-pacman")
+    def invoke(arguments, **kwargs):
+        if os.path.isfile(helper):
+            command = [helper] + arguments
+        else:
+            command = [SUDO, "env", "OMARCHY_UPDATE_PACMAN=1"]
+            if os.path.isdir("/run/systemd/system") and not os.path.islink("/run/systemd/system"):
+                command += [SYSTEMD_RUN, "--scope", "--quiet", "--collect"]
+            command += [PACMAN] + arguments
+        return subprocess.run(command, **kwargs)
+    print("Checking refreshed package metadata before the phone transaction", flush=True)
+    if invoke(["-Sy", "--noconfirm"]).returncode:
+        return 1
+    plan = subprocess.run([PACMAN, "-Sup", "--logfile", "/dev/null", "--print-format", "%n %v"],
+                          capture_output=True, text=True, timeout=120)
+    if plan.returncode:
+        print("cannot resolve refreshed package transaction", file=sys.stderr)
+        return 5
+    rows = [line.split() for line in plan.stdout.splitlines() if line.strip()]
+    if any(len(row) != 2 or not re.fullmatch(r"[A-Za-z0-9@._+:-]+", row[0]) for row in rows):
+        print("cannot parse the exact refreshed transaction", file=sys.stderr)
+        return 5
+    targets = [tuple(row) for row in rows]
+    boot = sorted(n for n, _ in targets if BOOT_PACKAGES.match(n))
+    problem = repository_order()
+    if boot and os.environ.get("OMAMOBILE_UPDATE_ALLOW_BOOT") != "1":
+        problem = "refreshed transaction would install unsupported boot packages: " + ", ".join(boot)
+    kernel = kernel_update(targets) if not problem else None
+    if kernel and kernel["problem"]:
+        problem = kernel["problem"]
+    gate = prospective_check(targets) if not problem else None
+    if gate and not gate["ok"]:
+        problem = gate["problem"]
+    if problem:
+        print("Not updating: " + problem, file=sys.stderr)
+        if os.environ.get("OMAMOBILE_UPDATE") == "1" and os.path.isdir(RUNTIME):
+            with open(os.path.join(RUNTIME, "refused"), "w") as refusal:
+                refusal.write(problem + "\n")
+        return 5
+    # Do not refresh again after qualification. Pin the approved Omarchy
+    # version so a simultaneous outside refresh can fail, never silently move
+    # this update to a different release. Pacman still verifies its package.
+    pins = [n + "=" + v for n, v in targets if n in ("omarchy", "omarchy-dev")]
+    command = ["-Su", "--overwrite", "/usr/share/omarchy/*"] + pins
+    if not (os.environ.get("OMARCHY_UPDATE_CONFLICT") == "1" and os.environ.get("OMARCHY_UPDATE_INTERACTIVE") == "1"):
+        command.append("--noconfirm")
+    with tempfile.NamedTemporaryFile(prefix="omamobile-pacman-errors-", delete=False) as errors:
+        path = errors.name
+        try:
+            code = invoke(command, stderr=errors).returncode
+            errors.flush()
+            with open(path) as f:
+                sys.stderr.write(f.read())
+            if code and os.environ.get("OMARCHY_UPDATE_RETRY") != "1":
+                handler = os.path.join(real_bin, "omarchy-update-system-pkgs-when-conflicted")
+                if os.path.isfile(handler):
+                    return subprocess.run([handler, path], env=dict(os.environ, OMARCHY_UPDATE_CONFLICT="1")).returncode
+            return code
+        finally:
+            os.unlink(path)
+
+
 def check(offline=False, allow_boot=False):
     bat = battery()
     blockers = []
@@ -491,6 +829,10 @@ def check(offline=False, allow_boot=False):
         blockers.append(kernel["problem"])
     if err:
         blockers.append(err)
+    db = os.environ.get("CHECKUPDATES_DB") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "checkup-db-%d" % os.getuid())
+    prospective = prospective_check(targets, db)
+    if not prospective["ok"]:
+        blockers.append(prospective["problem"])
     omarchy_line = next((l for l in lines if l.split()[0] in ("omarchy", "omarchy-dev")), "")
     is_running = running()
     if is_running:
@@ -502,7 +844,8 @@ def check(offline=False, allow_boot=False):
         "omarchy": installed_version("omarchy") or installed_version("omarchy-dev"),
         "omarchy_update": omarchy_line, "updates": lines, "update_count": len(targets) or len(lines),
         "boot_packages": boot, "kernel": kernel, "running": is_running, "credential": credential(),
-        "patches": patch_summary(), "release_notes": RELEASE_NOTES, "checked_offline": offline,
+        "patches": patch_summary(), "prospective": prospective,
+        "release_notes": RELEASE_NOTES, "checked_offline": offline,
         "blockers": blockers, "ok": not blockers,
     }
 
@@ -754,6 +1097,11 @@ def inner(args):
                 kernel["version"], "its pacman hook writes it to slot B; restart afterwards to boot it"
                 if kernel["boot_update"] == "write" else
                 "slot B is left alone (AUTO_WRITE is off; bin/omamobile push stays the writer)"), flush=True)
+        if not refusal:
+            db = os.environ.get("CHECKUPDATES_DB") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "checkup-db-%d" % os.getuid())
+            prospective = prospective_check(targets, db)
+            if not prospective["ok"]:
+                refusal = prospective["problem"]
         if refusal:
             print(refusal, flush=True)
             with open(os.path.join(RUNTIME, "refused"), "w") as f:
@@ -763,7 +1111,9 @@ def inner(args):
         print("%d package(s) to update%s" % (len(targets) or len(lines), "; " + omarchy_line if omarchy_line else ""),
               flush=True)
         env.update(PATH=SHIMS + ":" + env.get("PATH", "/usr/bin"), OMARCHY_UPDATE_LOGGED="1", OMAMOBILE_UPDATE="1",
-                   OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO, OMAMOBILE_UPDATE_STARTED=str(int(time.time())))
+                   OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO, OMAMOBILE_UPDATE_STARTED=str(int(time.time())),
+                   OMAMOBILE_UPDATE_ALLOW_BOOT="1" if allow_boot else "0",
+                   OMAMOBILE_UPDATE_TOOL=os.path.abspath(__file__))
         return subprocess.run([OMARCHY_UPDATE, "-y"], env=env).returncode
     finally:
         stop.set()
@@ -862,6 +1212,12 @@ def notify_check(_args):
     if out.returncode != 0:
         print("up to date")
         return 0
+    lines, targets, error = pending_updates()
+    db = os.environ.get("CHECKUPDATES_DB") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "checkup-db-%d" % os.getuid())
+    gate = prospective_check(targets, db) if not error else {"ok": False, "problem": error}
+    if not gate["ok"] or not gate.get("needed"):
+        print("update held: " + gate.get("problem", "no exact qualified Omarchy candidate"))
+        return 0
     line = out.stdout.strip().splitlines()[0] if out.stdout.strip() else "Omarchy update"
     marker = os.path.join(STATE, "notified")
     if read_sys(marker) == line:
@@ -930,6 +1286,10 @@ def main(argv):
         return ack(args)
     if cmd == "notify-check":
         return notify_check(args)
+    if cmd == "qualify-prospective":
+        return qualify_prospective(args)
+    if cmd == "_system-packages":
+        return system_packages(args)
     if cmd == "run-migration":
         return run_migration(args)
     if cmd == "channel":

@@ -23,6 +23,9 @@
 # goes dark so a wake never paints a stale one before its own reading.
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014, 0023.
+#
+# Omarchy4.5: bounded local battery status.
+
 diff --git i/shell/plugins/lock/LockBattery.js w/shell/plugins/lock/LockBattery.js
 new file mode 100644
 --- /dev/null
@@ -219,7 +222,7 @@ new file mode 100644
 diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
 --- i/shell/plugins/lock/LockView.qml
 +++ w/shell/plugins/lock/LockView.qml
-@@ -437,5 +437,16 @@ Item {
+@@ -497,5 +497,16 @@
        lock: root
        pinTop: root.keypadClearsSensor ? keypadHint.y : inputField.y
      }

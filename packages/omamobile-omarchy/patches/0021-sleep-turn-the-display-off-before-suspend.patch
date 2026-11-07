@@ -12,11 +12,13 @@
 # patch 0023), so the glance is up on the next wake.
 #
 # Against Omarchy 4.0.6 (4.0.6-1).
+#
+# Omarchy4.5: retain display-off-before-suspend behavior.
+
 diff --git i/bin/omarchy-system-sleep-lock w/bin/omarchy-system-sleep-lock
-index d471cea..b278615 100755
 --- i/bin/omarchy-system-sleep-lock
 +++ w/bin/omarchy-system-sleep-lock
-@@ -104,6 +104,25 @@ report_unsecured() {
+@@ -105,6 +105,25 @@
    exit 1
  }
  
@@ -42,7 +44,7 @@ index d471cea..b278615 100755
  # Request the lock before touching monitor state, so a stuck Hyprland IPC call
  # cannot consume the window before Quickshell has begun securing the session.
  request_lock
-@@ -113,7 +132,7 @@ sync_clamshell
+@@ -114,7 +133,7 @@
  # inside the reserve derive_budget_ms already held back for logind.
  while (( $(remaining_ms) > 0 )); do
    case $(lock_state) in

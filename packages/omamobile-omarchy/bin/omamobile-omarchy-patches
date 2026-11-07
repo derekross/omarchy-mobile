@@ -510,6 +510,8 @@ def default_series(root, packages):
     families = {v.rsplit("-", 1)[0] for _n, v, _p in packages}
     if families == {"4.0.6"}:
         return os.path.join(root, "usr/share/omamobile/omarchy/legacy-4.0.6")
+    if families == {"4.5.0"}:
+        return os.path.join(root, SERIES)
     raise Failure("Omarchy version has no qualified mobile patch series; refusing")
 
 
