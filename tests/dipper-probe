@@ -12,6 +12,8 @@ script = Path('tools/dipper/initramfs-inside.sh').read_text()
 assert "hostname omamobile\\n" in script
 assert "dropbear -R -E -p 22" in script
 assert "no USB host, crashing in 20 s so ABL falls back to slot A" in script
+assert 'OMAMOBILE_NFSROOT' in Path('tools/dipper/build').read_text()
+assert 'omamobile-nfsroot' in script
 builder = Path('tools/dipper/build').read_text()
 assert 'OUT=${OUT:-$repo/out/dipper}' in builder
 assert 'modules_install' not in builder
@@ -37,5 +39,10 @@ with tempfile.TemporaryDirectory() as tmp:
     manifest = json.loads((out / 'BOOT-MANIFEST.json').read_text())
     assert manifest['hardware_boot_tested'] is False
     assert (out / 'boot.img').read_bytes().startswith(b'ANDROID!')
-print('ok - Dipper boot image header, appended DTB, and manifest')
+    kernel.write_bytes(b'k' * 0xF80001)
+    result = subprocess.run(['python3', 'tools/dipper/build-boot.py', '--kernel', str(kernel),
+                             '--dtb', str(dtb), '--ramdisk', str(ramdisk), '--out', str(out)],
+                            capture_output=True, text=True)
+    assert result.returncode != 0 and 'ABL refuses' in result.stderr
+print('ok - Dipper boot image header, size refusal, appended DTB, and manifest')
 PY

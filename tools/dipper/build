@@ -14,10 +14,13 @@ repo=$(cd "$here/../.." && pwd)
 KERNEL_DIR=${KERNEL_DIR:-$repo/../linux}
 KERNEL_OUT=${KERNEL_OUT:-$KERNEL_DIR}
 OUT=${OUT:-$repo/out/dipper}
+die() { echo "error: $*" >&2; exit 1; }
 : "${SSH_PUBKEY:?set SSH_PUBKEY to your authorized public key}"
 ALPINE=${ALPINE:-alpine:3.22}
-
-die() { echo "error: $*" >&2; exit 1; }
+if [[ -n ${OMAMOBILE_NFSROOT:-} ]]; then
+  [[ $OMAMOBILE_NFSROOT =~ ^[A-Za-z0-9.-]+:/[A-Za-z0-9._/-]+$ && $OMAMOBILE_NFSROOT != *..* && $OMAMOBILE_NFSROOT != *//* ]] ||
+    die "OMAMOBILE_NFSROOT must be a host and absolute export path, for example 172.16.42.2:/srv/nfs/dipper"
+fi
 
 [[ -d $KERNEL_DIR && -d $KERNEL_OUT ]] || die "set KERNEL_DIR and KERNEL_OUT to the kernel source and build directories"
 image=$KERNEL_OUT/arch/arm64/boot/Image.gz
@@ -45,6 +48,7 @@ docker run --rm --platform linux/arm64 \
   -v "$repo:/src:ro" -v "$mods:/modules:ro" -v "$SSH_PUBKEY:/input/key.pub:ro" \
   -v "$OUT:/out" \
   -e "KERNEL_RELEASE=$release" -e "OUT_UID=$(id -u)" -e "OUT_GID=$(id -g)" \
+  -e "OMAMOBILE_NFSROOT=${OMAMOBILE_NFSROOT:-}" \
   "$ALPINE" sh /src/tools/dipper/initramfs-inside.sh
 
 # Pack a copy of the DTB so nothing we do can dirty the kernel tree.

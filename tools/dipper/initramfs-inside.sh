@@ -90,6 +90,13 @@ chmod 755 "$stage/init"
 
 echo xiaomi,dipper > "$stage/etc/omamobile-compatible"
 : > "$stage/etc/omamobile-ufs-rw"
+if [ -n "${OMAMOBILE_NFSROOT:-}" ]; then
+  case "$OMAMOBILE_NFSROOT" in
+    *[!A-Za-z0-9.:/_-]*|*..*|*//*|:*:*) echo "invalid OMAMOBILE_NFSROOT" >&2; exit 1 ;;
+  esac
+  case "$OMAMOBILE_NFSROOT" in *:/*) ;; *) echo "invalid OMAMOBILE_NFSROOT" >&2; exit 1 ;; esac
+  printf '%s\n' "$OMAMOBILE_NFSROOT" > "$stage/etc/omamobile-nfsroot"
+fi
 
 # ABL has no alternate OS slot on Dipper. Keep the shared init's timeout, but
 # describe the RAM-only recovery path accurately in its on-screen message.

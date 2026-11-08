@@ -34,8 +34,8 @@ backup checksum manifest. Do not boot if the manifest is missing or fails.
    USB/SSH checks succeed. Stop: unexpected output, USB failure, or any request
    to flash. Rollback: power-cycle to the installed boot image; if recovery is
    needed, use the verified backup. Risk: a USB host that never configures still
-   reaches the shared 20-second watcher panic; this RAM probe does not change
-   the installed boot image. The exact forced-restart hold duration is not
+   reaches the existing watcher panic after about 65 seconds; the RAM boot then
+   returns to the installed boot image. The exact forced-restart hold duration is not
    recorded here; do not guess it.
 
 The current recorded first light used the stock `dtbo` untouched. The image is
@@ -50,9 +50,11 @@ Set `DEVICE=dipper`, `KERNEL_DIR` (source), and `KERNEL_OUT` (build output), the
 run `bin/omamobile kernel`. The output must include `Image`, `Image.gz`,
 `arch/arm64/boot/dts/qcom/sdm845-xiaomi-dipper.dtb`, and modules from that same
 kernel release. Then set `SSH_PUBKEY` to an OpenSSH public key and run
-`tools/dipper/build` with the same `KERNEL_DIR` and `KERNEL_OUT`. The builder
-requires Docker with arm64 emulation; it writes its output outside the source
-tree by default. Do not commit the key or generated images.
+`tools/dipper/build` with the same `KERNEL_DIR` and `KERNEL_OUT`. For a local
+NFS-root probe, pass `OMAMOBILE_NFSROOT=<host>:/<export>` to the builder; the
+host and export are build inputs, never descriptor values. The builder requires
+Docker with arm64 emulation; it writes its output inside `out/dipper` by
+default. Do not commit the key or generated images.
 
 The initramfs provides USB networking, SSH and a rescue shell. It does not
 mount `persist`, read or embed per-phone identifiers, start Wi-Fi, or install a
