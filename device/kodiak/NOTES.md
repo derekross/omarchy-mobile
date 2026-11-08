@@ -23,6 +23,7 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 - Display: Verisilicon DC9x00 DPU + MIPI DSI2 (stock DTB)
 - dtbo_idx: 37 (`adb shell getprop ro.boot.dtbo_idx`)
 - DTBO entry 37: id=0x80406 rev=0x10000 (factory `dtbo.img`)
+- AVB values: from factory images (`avbtool info_image` on `vbmeta.img`, `boot.img`, and `init_boot.img` in `~/kodiak-factory`). Same as slot B after factory flash.
 - Bootloader unlocked: yes
 - Current confirmed bootable slots: both (factory flash + full OTA sideload)
 - ABL still appends `console=null` (`adb shell cat /proc/cmdline`)
