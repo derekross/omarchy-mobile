@@ -30,3 +30,4 @@ Installed via the AIO installer (install-desktop.sh), which replaces only the re
 - DTB lives in vendor_kernel_boot.img
 - DTBO entry 37: id=0x80406 rev=0x10000
 - Bootloader: spacecraft-17.4-16238327 (both slots)
+- Partition mapping (from recovery sysfs/by-name): all on sda — boot_b (sda23), init_boot_b (sda24), vendor_boot_b (sda25), vendor_kernel_boot_b (sda26), dtbo_b (sda27), userdata (sda42).
