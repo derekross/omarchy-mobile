@@ -1,0 +1,6 @@
+#!/bin/bash
+# fake omarchy-shell: like the real one it fails without OMARCHY_PATH; a "broken" marker makes it fail anyway
+echo "WARN: Detected locale C, which is not UTF-8." >&2
+[[ -n ${OMARCHY_PATH:-} ]] || { echo "OMARCHY_PATH is not set" >&2; exit 1; }
+[[ -f $FAKE_STATE/shell-broken ]] && { echo "shell not running" >&2; exit 1; }
+[[ "$1 $2" == "lock isLocked" ]] && cat "$FAKE_STATE/locked"
