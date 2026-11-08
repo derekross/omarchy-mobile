@@ -51,9 +51,9 @@ def main():
                         default='persistent-development', help='explicit root handover policy')
     args = parser.parse_args()
     assert (args.base / 'images/DEVICE').read_text().strip() == 'bluejay'
-    args.output.mkdir(parents=True, exist_ok=False)
+    if args.output.exists():
+        parser.error('output already exists')
     images = args.output / 'images'
-    images.mkdir()
     source = Path(__file__).resolve().parent.parent
     vendor = (args.base / 'images/vendor_boot.img').read_bytes()
     u32 = lambda offset: struct.unpack_from('<I', vendor, offset)[0]
@@ -65,6 +65,23 @@ def main():
     dn = u32(2100)
     table = ds + align(dn, page)
     assert u32(2116) == 1 and u32(2120) == 108
+    # The DEVICE sidecar alone must not authorize a foreign embedded DT.
+    pos = ds
+    with tempfile.TemporaryDirectory() as tmp:
+        dtb = Path(tmp) / 'variant.dtb'
+        for expected_id in ('9845001', '9845000'):
+            assert vendor[pos:pos + 4] == b'\xd0\x0d\xfe\xed'
+            size = struct.unpack_from('>I', vendor, pos + 4)[0]
+            assert 40 <= size <= ds + dn - pos
+            dtb.write_bytes(vendor[pos:pos + size])
+            compatible = subprocess.check_output(['fdtget', '-t', 's', str(dtb),
+                                                 '/', 'compatible'], text=True).split()
+            silicon = subprocess.check_output(['fdtget', '-t', 'x', str(dtb),
+                                              '/', 'soc_id'], text=True).split()
+            assert compatible[0] == 'google,gs101-bluejay'
+            assert silicon == [expected_id, '0']
+            pos += size
+    assert pos == ds + dn
     packed = subprocess.check_output(['lz4', '-d', '-c'], input=vendor[rs:rs + rn], stderr=subprocess.DEVNULL)
     replacements = {'init': (source / 'initramfs/init').read_bytes(),
                     'etc/omamobile-bluejay-firstroot': (args.mode + '\n').encode()}
@@ -124,6 +141,8 @@ def main():
     struct.pack_into('<I', tail, 0, len(ram))
     result = (header + ram + b'\0' * (align(len(ram), page) - len(ram))
               + bundle + b'\0' * (align(len(bundle), page) - len(bundle)) + tail)
+    args.output.mkdir(parents=True, exist_ok=False)
+    images.mkdir()
     (images / 'vendor_boot.img').write_bytes(result)
     for name in ('boot.img', 'dtbo.img', 'DEVICE'):
         shutil.copy2(args.base / 'images' / name, images / name)

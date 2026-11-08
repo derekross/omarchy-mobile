@@ -38,7 +38,8 @@ with tempfile.TemporaryDirectory() as tmp:
     dtbs = []
     for variant in (0, 1):
         dtbs.append(run(['dtc', '-q', '-I', 'dts', '-O', 'dtb'],
-                        input=('/dts-v1/; / { soc_id = <' + str(variant) + '>; };').encode()))
+                        input=('/dts-v1/; / { compatible = "google,gs101-bluejay", "google,gs101"; soc_id = <'
+                               + str(0x9845001 - variant) + ' 0>; };').encode()))
     overlay = p / 'overlay.dtbo'
     overlay.write_bytes(run(['dtc', '-q', '-@', '-I', 'dts', '-O', 'dtb'],
                             input=b'/dts-v1/; /plugin/; &{/} { test-value = <42>; };'))
@@ -79,11 +80,18 @@ with tempfile.TemporaryDirectory() as tmp:
                 size = struct.unpack_from('>I', result, dt_start + 4)[0]
                 dtb = p / 'variant.dtb'
                 dtb.write_bytes(result[dt_start:dt_start + size])
-                assert run(['fdtget', '-t', 'u', str(dtb), '/', 'soc_id']).strip() == str(variant).encode()
+                assert run(['fdtget', '-t', 'u', str(dtb), '/', 'soc_id']).split() == [str(0x9845001 - variant).encode(), b'0']
                 assert run(['fdtget', '-t', 'u', str(dtb), '/', 'test-value']).strip() == b'42'
                 dt_start += size
             for name in ('boot.img', 'dtbo.img'):
                 assert (out / 'images' / name).read_bytes() == (images / name).read_bytes()
+    # Keep a forged correct sidecar while corrupting the actual embedded identity.
+    original = (images / 'vendor_boot.img').read_bytes()
+    (images / 'vendor_boot.img').write_bytes(original.replace(b'google,gs101-bluejay', b'google,gs101-notbird'))
+    rejected = subprocess.run(['python3', str(repo / 'tools/bluejay-development-images.py'),
+                               str(base), str(p / 'forged-sidecar')], capture_output=True)
+    assert rejected.returncode and not (p / 'forged-sidecar').exists()
+    (images / 'vendor_boot.img').write_bytes(original)
     (images / 'DEVICE').write_text('another-device\n')
     rejected = subprocess.run(['python3', str(repo / 'tools/bluejay-development-images.py'),
                                str(base), str(p / 'wrong-device')], capture_output=True)
@@ -91,3 +99,4 @@ with tempfile.TemporaryDirectory() as tmp:
 print('ok - real CPIO reader verifies selector creation/update and both handover modes')
 print('ok - both silicon variants retain identity and receive the overlay; kernel/board images retained')
 print('ok - foreign-device images fail before creating output')
+print('ok - a forged DEVICE sidecar cannot bypass embedded DT identity checks')
