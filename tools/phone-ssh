@@ -13,6 +13,7 @@
 # OMAMOBILE_SSH_HOST_KEY_ALIAS selects the name checked in that file, so
 # native and recovery systems can keep distinct pins at the same USB address.
 # OMAMOBILE_SSH_INTERFACE selects a direct interface for this socket only.
+# OMAMOBILE_SSH_CONNECT_TIMEOUT sets the connection timeout in positive seconds (default 6).
 # With explicit CONFIG=/dev/null, the default USB address automatically uses
 # its unique main-table link route, avoiding VPN policy-route interception.
 # Set INTERFACE=off to opt out. Other SSH configs retain their own transports.
@@ -41,6 +42,10 @@ known=${OMAMOBILE_SSH_KNOWN_HOSTS:-}
 alias=${OMAMOBILE_SSH_HOST_KEY_ALIAS:-}
 config=${OMAMOBILE_SSH_CONFIG:-}
 interface=${OMAMOBILE_SSH_INTERFACE:-auto}
+connect_timeout=${OMAMOBILE_SSH_CONNECT_TIMEOUT:-6}
+[[ $connect_timeout =~ ^[1-9][0-9]*$ ]] || {
+  echo 'phone-ssh: OMAMOBILE_SSH_CONNECT_TIMEOUT must be a positive integer' >&2; exit 1;
+}
 proxy=""
 proxy_helper=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/phone-ssh-proxy
 case $interface in
@@ -56,7 +61,7 @@ case $interface in
     } ;;
 esac
 if [[ -n $interface ]]; then
-  proxy=$(python3 "$proxy_helper" --command "$interface" "${target##*@}")
+  proxy=$(python3 "$proxy_helper" --command "$interface" "${target##*@}" "$connect_timeout")
 fi
 [[ -z $alias || ( $alias != -* && $alias =~ ^[a-zA-Z0-9._:-]+$ ) ]] || {
   echo 'phone-ssh: invalid OMAMOBILE_SSH_HOST_KEY_ALIAS' >&2; exit 1;
@@ -123,7 +128,7 @@ PYCONTEXT
   path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
 fi
 # USB link setup and NFS-root startup can delay the first handshake on any phone.
-opts=(-o LogLevel=ERROR -o ConnectTimeout=20)
+opts=(-o LogLevel=ERROR -o "ConnectTimeout=$connect_timeout")
 [[ -z $proxy ]] || opts+=(-o "ProxyCommand=$proxy")
 [[ -z $config ]] || opts+=(-F "$config")
 if [[ -n $known ]]; then

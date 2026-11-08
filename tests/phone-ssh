@@ -28,6 +28,15 @@ unset OMAMOBILE_SSH_HOST OMAMOBILE_SSH_KEY OMAMOBILE_SSH_KNOWN_HOSTS OMAMOBILE_S
 tools/phone-ssh 'printf "%s" "$HOME"' >"$scratch/default"
 grep -Fx root@172.16.42.1 "$scratch/default" >/dev/null
 grep -Fx 'printf "%s" "$HOME"' "$scratch/default" >/dev/null
+grep -Fx ConnectTimeout=6 "$scratch/default" >/dev/null
+OMAMOBILE_SSH_CONNECT_TIMEOUT=19 tools/phone-ssh true >"$scratch/timeout-override"
+grep -Fx ConnectTimeout=19 "$scratch/timeout-override" >/dev/null
+for bad_timeout in 0 -1 1.5 invalid 999x; do
+  if OMAMOBILE_SSH_CONNECT_TIMEOUT=$bad_timeout tools/phone-ssh true >"$scratch/bad-timeout" 2>/dev/null; then
+    echo 'not ok - invalid connection timeout accepted'; exit 1
+  fi
+  [[ ! -s $scratch/bad-timeout ]]
+done
 export OMAMOBILE_SSH_HOST='root@fe80::1234%usb-test'
 export OMAMOBILE_SSH_KEY="$scratch/key with spaces"
 printf 'fake identity\n' >"$OMAMOBILE_SSH_KEY"
@@ -383,15 +392,24 @@ class RelayTests(unittest.TestCase):
                 (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", destination)
             ]) as resolve, patch.object(proxy.socket, "socket", return_value=sock), \
                  patch.object(proxy, "relay") as relay:
-                proxy.main(["--relay", "usb-test", address])
+                proxy.main(["--relay", "usb-test", address, "19"])
                 resolve.assert_called_once_with(address, 22, type=socket.SOCK_STREAM,
                                                 flags=socket.AI_NUMERICHOST)
                 self.assertEqual(sock.method_calls[:4], [
                     unittest.mock.call.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"usb-test\0"),
-                    unittest.mock.call.settimeout(6), unittest.mock.call.connect(destination),
+                    unittest.mock.call.settimeout(19), unittest.mock.call.connect(destination),
                     unittest.mock.call.settimeout(None),
                 ])
                 relay.assert_called_once_with(sock)
+
+    def test_proxy_command_passes_timeout_to_relay(self):
+        with patch.object(proxy, "__file__", "/tmp/phone-ssh-proxy"):
+            from unittest.mock import patch as mock_patch
+            import contextlib, io
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                proxy.main(["--command", "usb-test", "192.0.2.1", "17"])
+            self.assertIn("--relay usb-test 192.0.2.1 17", output.getvalue())
 
     def test_binding_failure_cannot_fall_back_to_unbound_connect(self):
         from unittest.mock import MagicMock
