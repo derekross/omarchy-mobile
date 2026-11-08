@@ -1,8 +1,36 @@
 # SPDX-License-Identifier: MIT
-# Enrollment classification from old0022 is already upstream in4.5; preserve
-# its stronger backoff/recovery model unchanged. Mobile addition only: desktop
-# apply-lock must preserve existing root-owned PAM and qualified fprintd hooks,
-# including Komodo max-tries1; do not overwrite them during migration/setup.
+# Lock: fingerprint only when a finger is enrolled. A backport of the probe
+# half of upstream Omarchy's 879d6583d ("Fix fingerprint enrollment and
+# lock-screen recovery", omacom/omarchy#7158, on quattro for 4.5; no stable
+# release has it). The lock and omarchy-apply-lock took
+# fprintd-list "$USER" | grep -qi finger as "fingerprint is set up", which
+# also matches "User ... has no fingers enrolled ...". On a phone with
+# omamobile-fingerprint installed (it ships the PAM file) and nothing
+# enrolled, the lock then started a pam_fprintd attempt that failed at once
+# (PAM_AUTHINFO_UNAVAIL) and retried every 250 ms for as long as it was up:
+# 130,164 attempts in one night, about 55-62 mA (#170).
+#
+# As upstream: the probe is LC_ALL=C fprintd-list "$USER" 2>&1, and
+# FingerprintModel.classifyProbe() reads it: "yes" only for an enrolled-print
+# row (" - #0: ..."), "no" for "has no fingers enrolled" (or no PAM file or
+# fprintd-list), "unknown" otherwise. Unknown never turns fingerprint off; it
+# is asked again after 1 s, doubling to 40 s, while the lock is up.
+# omarchy-apply-lock matches the same row, removes the PAM file only on a
+# definite "no", and keeps it when the probe fails.
+#
+# Not taken: the rest of 879d6583d (the attempt backoff and the "reader
+# unavailable" notice, the fprintd resume hook and its stop-timeout drop-in,
+# the enrollment script changes), so a phone with a finger enrolled behaves
+# as before: retries after a mismatch stay at 250 ms. FingerprintModel.js
+# holds only upstream's probe functions, copied unchanged.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003 and 0009. Drop it once the
+# phone's Omarchy has 879d6583d (the 4.5 line); its Service.qml and
+# omarchy-apply-lock differ from 4.0.6's, so this will not apply there.
+#
+# Omarchy 4.5: Enrollment classification and recovery are already upstream, so retain
+# them unchanged. The remaining setup guard preserves existing root-owned
+# mobile PAM configuration and qualified fingerprint recovery hooks.
 
 diff --git i/bin/omarchy-apply-lock w/bin/omarchy-apply-lock
 --- i/bin/omarchy-apply-lock

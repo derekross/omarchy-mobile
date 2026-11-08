@@ -6,7 +6,7 @@
 # still wins over any size; then the larger NxN directory (@Nx scaled).
 # Candidate for upstream Omarchy.
 #
-# Omarchy4.5: retain largest appicon choice.
+# Omarchy 4.5: Retain the largest app-icon choice with the current icon scanner.
 
 diff --git i/shell/services/AppLibrary.qml w/shell/services/AppLibrary.qml
 --- i/shell/services/AppLibrary.qml

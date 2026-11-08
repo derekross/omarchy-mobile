@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: MIT
-# No launch toast for shellsurfaces, retaining4.5terminalapp launchrouting.
+# App launch: no "Launching ..." toast for a desktop entry that runs
+# omarchy-shell. Such an entry opens a shell surface (on the phone the
+# Updates entry summons the update sheet), never a toplevel, so the toast
+# waited for a window that never came and sat over the sheet's buttons
+# until its timeout. Every other launch keeps the toast. Candidate for
+# upstream Omarchy.
+#
+# Omarchy 4.5: Suppress the launch toast for shell surfaces while retaining terminal-app
+# launch routing.
 
 diff --git i/shell/services/AppLibrary.qml w/shell/services/AppLibrary.qml
 --- i/shell/services/AppLibrary.qml

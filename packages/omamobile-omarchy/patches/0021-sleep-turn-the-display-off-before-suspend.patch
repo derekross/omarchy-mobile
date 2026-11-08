@@ -13,7 +13,7 @@
 #
 # Against Omarchy 4.0.6 (4.0.6-1).
 #
-# Omarchy4.5: retain display-off-before-suspend behavior.
+# Omarchy 4.5: Retain display-off-before-suspend behavior on the current sleep path.
 
 diff --git i/bin/omarchy-system-sleep-lock w/bin/omarchy-system-sleep-lock
 --- i/bin/omarchy-system-sleep-lock

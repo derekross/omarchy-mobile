@@ -1,7 +1,23 @@
 # SPDX-License-Identifier: MIT
-# Forget4.5keyed live/history record through IPC without sender actions.
-# Skip re-archiving the forgotten toast; malformed/unknown keys do nothing.
-# Never delete arbitrary image paths:4.5doesnotown sender image files.
+# Notifications: forget one notification by IPC. Omarchy Mobile's quick
+# settings list the toasts on screen and the history under the sheet, and a
+# sideways swipe on a row there takes away that one notification. The
+# service has calls for all toasts (dismissAll), all history (clear) and
+# toasts by summary text, but none for one entry, and every way a toast
+# leaves the screen moves its file into history, so a toast swiped away in
+# the shade would come straight back as a history row. Deleting a history
+# file from outside isn't safe either: archives, trims and replays run on the
+# service's serialized file queue, and a move still queued for that
+# notification would put the file back. `forget <timestamp>-<id>.json` now
+# closes a toast with that file name (a history replay of it too) at its
+# sender without archiving it, then deletes the history entry and its image
+# copies on the same queue, after anything already queued. A name that isn't
+# a notification file name does nothing.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1) with 0015 and 0017 applied.
+#
+# Omarchy 4.5: Forget keyed live and history records without sender actions or
+# re-archiving. Sender-owned image paths are not deleted.
 
 diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notifications/Service.qml
 --- i/shell/plugins/notifications/Service.qml

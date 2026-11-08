@@ -1,7 +1,22 @@
 # SPDX-License-Identifier: MIT
-# Port touch dismissal to4.5Toast scene: independent horizontal translation,
-# touch-only drag (disabled during reply) and persistent40px close target.
-# Retain4.5keyed store/deck and existing mouse actions; no history deletion.
+# Notifications: swipe to dismiss, and a close button on touch screens. On a
+# touch screen a tap runs the toast's default action and there is no right
+# button, so a toast could only be got rid of by letting it launch something,
+# and a critical one (Omarchy's first-run invitations) never expires. A
+# sideways swipe now moves the card with the finger: let go past 35% of its
+# width, or flick it, and it flies off that side and closes as a right-click
+# does; short of that it springs back. The drag starts only past a threshold,
+# so a tap still runs the default action, and it is off while a reply is
+# being typed. When Hyprland lists a touch screen, each toast also gets a
+# close glyph with a 44 px target in its top-right corner; a seat with only a
+# mouse shows none, so desktops look as before. Hover pauses the countdown
+# for a mouse or stylus only (a finger doesn't hover), and a card being
+# swiped doesn't expire under the finger. Right-click still closes.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1) with 0015 (inline reply) applied.
+#
+# Omarchy 4.5: Use the Toast scene's independent horizontal translation and a persistent
+# 40 px close target. Preserve mouse actions and disable dragging during reply.
 
 diff --git i/shell/plugins/notifications/Toast.qml w/shell/plugins/notifications/Toast.qml
 --- i/shell/plugins/notifications/Toast.qml

@@ -15,7 +15,7 @@
 #
 # Against Omarchy 4.0.6 (stable 4.0.6-1).
 #
-# Omarchy4.5: touch-friendly notification hints.
+# Omarchy 4.5: Keep touch-friendly notification phrasing on the current sender path.
 
 diff --git i/bin/omarchy-notification-send w/bin/omarchy-notification-send
 --- i/bin/omarchy-notification-send

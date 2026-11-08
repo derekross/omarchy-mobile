@@ -1,8 +1,18 @@
 # SPDX-License-Identifier: MIT
-# Notifications: port live-only inline reply to Omarchy4.5's key-based refs
-# and Toast scene. Keep the4.5 store/deck engine and markup/security limits.
-# Restored/dead senders cannot reply; one editor takes OnDemand keyboard
-# focus and pauses expiry. A failed send preserves the draft. No app opens.
+# Notifications: inline reply (the freedesktop `inline-reply` action and
+# NotificationReplied signal, which Quickshell implements). The server
+# advertises it, and a toast whose sender asked for it gets a Reply button
+# that opens a field with Send and Cancel; Send hands the text to the sender
+# and dismisses the toast. While a field is open the toast's countdown stops
+# and the toast surface takes keyboard focus on demand, so an on-screen
+# keyboard can type into it. Stored history rows can't be answered and get
+# no button. Messages apps use it to reply to a text without opening the
+# app (TELEPHONY-APPS-PLAN §7.2).
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1).
+#
+# Omarchy 4.5: Port inline reply to the keyed live references and Toast scene. Keep the
+# store, deck and markup limits; a failed send preserves the draft.
 
 --- i/shell/plugins/notifications/Service.qml
 +++ w/shell/plugins/notifications/Service.qml

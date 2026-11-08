@@ -1,9 +1,60 @@
 # SPDX-License-Identifier: MIT
-# Port mobileglance to4.5auth/wake fields without changing authcapabilities.
-# Retain licensed4.0.6 standaloneNotificationCard/NotificationLogic API for
-# privatepixel.lock too; parse4.5compactlive/history arrays into legacyreadrows,
-# preserve stablekeys forIPCforget and readDNDfromquiet.json. No actions/network.
-#4.5Toast is a different scene-boundtype, not a compatibleglance replacement.
+# Lock: a glance view on touch-only devices (the lock-keypad toggle), as a
+# phone's lock screen opens: the time, the date, the home screen's last
+# weather reading and the newest notifications, over the lock's blurred
+# wallpaper. Only a swipe up (a clear drag, 8 % of the height, or a quick
+# flick, from anywhere, a card included) or a typed key (kept in the field)
+# moves to the PIN view, which is the lock as before plus a small clock. A
+# tap never does: a tap on a card opens it to more of its text (summary up
+# to 2 lines, body up to 4) and runs nothing, a second tap closes it, and a
+# tap elsewhere does nothing. The first 12 px of a drag decide its way:
+# mostly sideways on a card swipes it as a toast swipes (0017's
+# finishSwipe: past 35 % or a flick it flies off), and that one notification
+# is forgotten through the notifications service's forget call (0019), the
+# call the phone's shade makes, so it leaves the history and the shade too,
+# and the next one moves up; mostly vertical is the swipe up. It comes back
+# whenever the lock is shown, the
+# screen is woken (the wake call from 0009) or the screen goes dark: the
+# lock's own blank, or a new "dark" call for what blanks it from outside
+# (the phone's power button, and sleep). With an empty field and no input it
+# also comes back after 15 s, counted on the wall clock so that a sleep in
+# between can't freeze it. A touch on a dark screen, and one within 400 ms
+# of a wake, only wakes it, and open cards close again. Only one view shows
+# outside the short change; the other is hidden, so nothing of the PIN view
+# renders or takes touches under the glance. Fingerprint unlock is untouched
+# and works from both.
+#
+# The cards are Omarchy's NotificationCard, static as the history uses it,
+# one per notification, newest first, as many as fit above the hint (up to
+# three), then a line for the rest ("N more from A and B", "N more from A,
+# B and 2 others"), with three new card properties: summaryLines, bodyLines
+# and a detail label (the age, "2m").
+# Read (the forget is the one change) from the notifications plugin's
+# persisted toasts and history
+# (~/.local/state/omarchy/notifications/*.json, history/*.json): the same
+# notifications the phone's shade lists, the newest ten with no age limit,
+# Omarchy's own messages (omarchy-action, shown as Omarchy) and notify-send
+# included. While do-not-disturb is on (notifications.json "dnd"), only what
+# still toasts shows: Omarchy's own messages and a critical notify-send.
+# The toggle lock-hide-notification-text shows the app name and "Unlock to
+# read" instead of the text. Weather comes from
+# ~/.local/state/omamobile/weather.json, written by the phone shell's
+# omamobile-weather service, and is hidden when absent or over 3 h old; the
+# lock makes no network calls. The clock is 12- or 24-hour as the phone bar
+# and the home screen's clock decide, from the bar's clockFormat (shell.json,
+# read at once whatever the lock shows, on every change and whenever the
+# glance comes back; a failed read keeps the last), else the bar's default
+# (HH:mm), never the session's C/POSIX locale. The big glance time is built
+# without AM/PM (Qt's "h" without a marker counts to 23), the small clock
+# over the PIN view keeps it. On a computer the lock is unchanged.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014, 0017
+# and 0019.
+#
+# Omarchy 4.5: Adapt the glance to the current authentication, wake and compact
+# notification-store fields. Restore the licensed standalone NotificationLogic
+# and NotificationCard used by the glance; Toast is a scene-bound type with a
+# different API. Read do-not-disturb from quiet.json and retain keyed IPC forget.
 
 --- /dev/null
 +++ w/shell/plugins/lock/LockGlance.js

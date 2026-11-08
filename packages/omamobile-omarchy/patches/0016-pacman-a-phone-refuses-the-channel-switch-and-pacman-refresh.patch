@@ -1,5 +1,17 @@
 # SPDX-License-Identifier: MIT
-# Keep phone repository ownership before any4.5 platform/channel reset action.
+# Phone only, not for upstream: omarchy-channel-set and omarchy-refresh-pacman
+# refuse on a phone and point at RELEASES.md section 5.4. Both copy Omarchy's
+# x86_64 pacman.conf and mirrorlist over the phone's (no [omamobile], no Arch
+# Linux ARM) and then upgrade everything from them; the menu offers that as
+# Update > Channel, and omarchy-reinstall-pkgs calls the refresh too
+# (TOUCH-PLAN 0.2). omamobile-update, which this package installs, is the
+# phone's test, as in 0012. omamobile-setup-user hides Update > Channel too;
+# this keeps a terminal from doing the same.
+#
+# Against Omarchy 4.0.6 (stable 4.0.6-1).
+#
+# Omarchy 4.5: Guard the platform and channel reset entry points before they can replace
+# the phone's repositories.
 
 diff --git i/bin/omarchy-channel-set w/bin/omarchy-channel-set
 --- i/bin/omarchy-channel-set

@@ -24,7 +24,7 @@
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003, 0009, 0011, 0014, 0023.
 #
-# Omarchy4.5: bounded local battery status.
+# Omarchy 4.5: Retain bounded local battery status with the current lock.
 
 diff --git i/shell/plugins/lock/LockBattery.js w/shell/plugins/lock/LockBattery.js
 new file mode 100644

@@ -1,6 +1,19 @@
 # SPDX-License-Identifier: MIT
-# Port menu Back/swipe to4.5FilterInput without covering inputmethod commits.
-# Touch-only swipe,44px Back target, root/dmenu/confirmation/scroll guards.
+# Menu: a back button in the header and swipe right to go back. Below the
+# top level, going up was Backspace, Left or Escape-and-reopen, none of which
+# a touch screen has. The header now shows a chevron (a 44 px target) that
+# calls goBack(), and a swipe right on the card does the same: the card
+# follows the finger at half speed and goes back once the finger has
+# travelled a quarter of its width (at least 64 px) or flicks. The drag
+# starts only past a threshold and only sideways, and not while the list
+# scrolls, so taps still pick rows and vertical scrolling is untouched.
+# Neither shows nor acts at the top level, in dmenu mode or while the
+# uninstall question is open. The keys work as before.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), before the menu-first-frame bridge.
+#
+# Omarchy 4.5: Use FilterInput without intercepting input-method commits. Preserve the
+# root, dmenu, confirmation and scrolling guards.
 
 diff --git i/shell/plugins/menu/Menu.qml w/shell/plugins/menu/Menu.qml
 --- i/shell/plugins/menu/Menu.qml
