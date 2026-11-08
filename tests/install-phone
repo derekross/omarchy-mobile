@@ -103,6 +103,11 @@ grep -qF 'correct horse' "$t/out" && fail "the Wi-Fi password is never printed"
 [[ -z $(ls "$t/work") ]] || fail "the image copy (with the password hash) is removed"
 pass "dry run: exactly the allowed commands printed, only getvar sent"
 
+FASTBOOT_SERIAL=FAKE123 install --dry-run || fail "an explicitly pinned matching phone is accepted"
+if FASTBOOT_SERIAL=OTHERPHONE install --dry-run; then fail "a different phone passed the serial pin"; fi
+[[ $(cat "$t/fastboot.log") == devices ]] || fail "serial mismatch queried or wrote the unselected phone"
+pass "explicit serial pin accepts the selected phone and rejects another before getvar"
+
 # An adjacent image for another device must not change the default selection.
 other=$R/out/omamobile-rootfs-zother-2099.01.01-aarch64.img.zst
 cp "$img" "$other"
@@ -148,6 +153,25 @@ OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamob
 [[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
   || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
 debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "boot-update.conf belongs to root"
+
+# Development devices keep the hook off in the actual prepared image.
+echo 'BOOT_UPDATE_AUTO_WRITE=no' >> "$R/device/testdev/device.conf"
+install || { cat "$t/out"; fail "a development install succeeds"; }
+policy_image=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$policy_image" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$policy_image" "$t/policy.img"; policy_image=$t/policy.img
+fi
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$policy_image" 2>/dev/null | grep -v '^#') == AUTO_WRITE=no ]] ||
+  fail "the development image must disable automatic boot writes"
+pass "development descriptor keeps automatic boot writes off in the image"
+for value in '' YES true maybe; do
+  descriptor > "$R/device/testdev/device.conf"
+  printf 'BOOT_UPDATE_AUTO_WRITE=%s\n' "$value" >> "$R/device/testdev/device.conf"
+  if install --dry-run; then fail "invalid boot-update policy accepted: $value"; fi
+  [[ ! -s $t/fastboot.log ]] || fail 'invalid boot-update policy reached fastboot'
+done
+descriptor > "$R/device/testdev/device.conf"
+pass "invalid boot-update policies refuse before any phone query"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
 refuse() {

@@ -352,6 +352,7 @@ say "ready"
 
 # Self-recovery for bring-up: if the host never configures the USB gadget,
 # show why on screen, then crash so the phone falls back to stock Android.
+if [ ! -e /etc/omamobile-bluejay-firstroot ]; then
 (
   for i in $(seq 1 45); do
     grep -qx configured /sys/class/udc/*/state 2>/dev/null && exit 0
@@ -371,6 +372,7 @@ say "ready"
   # slot B is out of retries ABL boots stock Android, which adb can reach
   echo c > /proc/sysrq-trigger
 ) &
+fi
 
 
 
@@ -410,18 +412,45 @@ grow_root() {
 # missing we stay here in the initramfs shell.
 boot_arch() {
   grep -q omamobile.initramfs /proc/cmdline && return 1
-  local dev="" s
+  local dev="" s info label check
   for s in /sys/block/sda/sda*; do
     grep -qx PARTNAME=userdata "$s/uevent" 2>/dev/null && dev=/dev/${s##*/}
   done
   [ -n "$dev" ] || { say "arch: no userdata partition"; return 1; }
   [ "$(cat /sys/block/sda/${dev#/dev/}/ro)" = 0 ] || { say "arch: userdata is read-only"; return 1; }
+  # Identify our root read-only before any repair or read-write mount. Stock
+  # userdata must never be repaired or mounted just because it is ext4 too.
+  info=$(dumpe2fs -h "$dev" 2>/dev/null) || { say "arch: userdata is not an ext4 root"; return 1; }
+  label=$(echo "$info" | sed -n 's/^Filesystem volume name: *//p')
+  [ "$label" = omamobile-root ] || { say "arch: userdata is not labelled omamobile-root"; return 1; }
   mkdir -p /newroot
-  e2fsck -p "$dev" >/dev/null 2>&1
-  grow_root "$dev"
+  check=0
+  e2fsck -p "$dev" >/dev/null 2>&1 || check=$?
+  case $check in
+    0|1) ;;
+    *) say "arch: root check failed (status $check); staying in the initramfs"; return 1 ;;
+  esac
+  # Keep the development filesystem at its image size until persistent boot
+  # works. Growth can be done later from the installed system.
+  if [ "$(cat /etc/omamobile-bluejay-firstroot 2>/dev/null)" != persistent-development ]; then
+    grow_root "$dev"
+  fi
   mount -t ext4 -o rw,relatime "$dev" /newroot || { say "arch: cannot mount $dev"; return 1; }
   if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
     say "arch: no systemd on $dev"; umount /newroot; return 1
+  fi
+  if [ "$(cat /etc/omamobile-bluejay-firstroot 2>/dev/null)" = persistent-development ]; then
+    # A failed development boot returns to the USB rescue environment after
+    # reset. The installed SSH-ready service clears this marker on success.
+    local pending=/newroot/var/lib/omamobile/bluejay-root-pending
+    if [ -e "$pending" ]; then
+      say "arch: previous development boot did not reach SSH; holding in RAM"
+      umount /newroot
+      return 1
+    fi
+    mkdir -p /newroot/var/lib/omamobile || { umount /newroot; return 1; }
+    cat /proc/sys/kernel/random/boot_id > "$pending" || { umount /newroot; return 1; }
+    sync
   fi
   # The guard loop dies below and nothing in Arch sets a partition read-only,
   # so make one last pass and check, while SSH still runs: anything outside
@@ -445,7 +474,17 @@ boot_arch() {
   done
   exec switch_root /newroot /usr/lib/systemd/systemd
 }
-boot_arch
+if [ -e /etc/omamobile-bluejay-firstroot ]; then
+  # Separate development RAM qualification image: never fall through into
+  # userdata handover, including on a missing helper or failed readiness gate.
+  if [ "$(cat /etc/omamobile-bluejay-firstroot)" = persistent-development ]; then
+    boot_arch
+  else
+    say "first-root: unknown development selector; held in RAM"
+  fi
+else
+  boot_arch
+fi
 
 # PID 1 must never exit: if it does the kernel panics and freezes (silently,
 # since ABL sets console=null). So keep a shell on the screen in a loop
