@@ -135,7 +135,7 @@ layer_box() {  # x y w h of the on-screen keyboard layer, or nothing
 cmd=${1:-help}
 shift || true
 case $cmd in
-  help|-h|--help) sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  help|-h|--help) sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   version) echo "omamobile-remote 0.1.0"; exit 0 ;;
 esac
 
@@ -236,6 +236,10 @@ case $cmd in
     [[ -n $pin ]] || die "no PIN: set OMAMOBILE_PIN or pipe it in; it is never taken as an argument"
     wake; pause 0.5
     wtype -k Return; pause 1.5
+    # the phone may have been unlocked in the meantime (a fingerprint, or
+    # whoever holds it): then the PIN and the Return would go to an app
+    st=$(lock_state) || exit 2
+    if [[ $st != true ]]; then unset pin pin_env; echo "unlocked by something else before the PIN was typed; nothing typed"; exit 0; fi
     printf '%s' "$pin" | wtype -; pause 0.8
     wtype -k Return; pause 2
     unset pin pin_env

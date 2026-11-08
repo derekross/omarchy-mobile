@@ -13,6 +13,9 @@ check() { local what=$1; shift; if "$@"; then pass "$what"; else fail "$what"; f
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# an empty /proc for the scripts, so a real process with the fake pgrep's pid on a build machine is never read
+mkdir -p "$tmp/noproc"
+export OMAMOBILE_REMOTE_PROC=$tmp/noproc
 
 # --- the scripts parse
 for f in bin/* install test/all test/fake/*; do
@@ -109,6 +112,10 @@ check "unlock with a wrong PIN fails" bash -c 'export OMAMOBILE_PIN=0000; ! omam
 echo true > "$FAKE_STATE/locked"
 OMAMOBILE_PIN=$FAKE_PIN $R unlock >/dev/null
 check "unlock with the right PIN unlocks" bash -c '[[ $(cat "$FAKE_STATE/locked") == false ]]'
+echo true > "$FAKE_STATE/locked"; touch "$FAKE_STATE/unlock-on-return"; : > "$FAKE_LOG"
+out=$(OMAMOBILE_PIN=$FAKE_PIN $R unlock); rc=$?
+rm -f "$FAKE_STATE/unlock-on-return"
+check "unlock stops without typing when the phone got unlocked after the first Return" bash -c "[[ $rc == 0 ]] && grep -q 'before the PIN' <<<'$out' && ! grep -q 'wtype - ' '$FAKE_LOG'"
 check "locked exits 1 when unlocked" bash -c '! omamobile-remote locked'
 check "the PIN is in no log, no journal line and no argument" bash -c '! grep -q "$FAKE_PIN" "$FAKE_LOG" "$FAKE_JOURNAL"'
 check "run does not pass the PIN on to what it starts" bash -c 'OMAMOBILE_PIN=$FAKE_PIN omamobile-remote run sh -c "echo [\${OMAMOBILE_PIN-unset}]" | grep -q "^\[unset\]$"'

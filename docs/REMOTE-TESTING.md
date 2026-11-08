@@ -5,7 +5,7 @@ Most of bringing up a phone is trying things on it: does the speaker play, does 
 
 ![An agent or script on a computer drives the phone over ssh](screenshots/remote/remote-overview.png)
 
-It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no image installs them, and installing them enables nothing: no service, no udev rule, and nothing listens.. See [Security](#security).
+It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no image installs them, and installing them enables nothing: no service, no udev rule, and nothing listens. See [Security](#security).
 
 `omamobile-mirror` is the other way in: a VNC window on your computer, with your own mouse and keyboard driving the phone, for demos and for typing. This is for scripts and agents: nothing to watch, no viewer, no open port, and every action and screenshot is a command with an exit code.
 
