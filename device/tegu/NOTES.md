@@ -13,6 +13,56 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-08: swap on zram
+
+Kernel `7.3.0-rc6-omamobile-push1-ge8d722982099`, a local build, with the
+zram options of `kernel/configs/omamobile.config` (set in the device's
+`kernel.config` for the test). They build only modules, so `zram.ko` and
+`zsmalloc.ko` went onto the running release with `bin/omamobile
+modules-push`, without a new boot image. Omarchy 4.0.6 on the phone.
+
+- [V] **Before:** no swap (`CONFIG_ZRAM` not set; Omarchy 4.0.6 ships no
+  zram-generator on aarch64). A `cargo build` of squeekboard on the phone,
+  next to Brave and the shell, left 177 MB available: memory PSI `full`
+  about 50 %, load 13, the session stuttering and SSH timing out in the
+  banner exchange. The OOM killer ended `rustc` (1.2 GB anonymous), and
+  systemd stopped the app scope it ran in, the terminal with it.
+- [V] **Setup**, as a newer Omarchy does it on aarch64 (Omarchy v4.5.0):
+  `zram-generator` 1.2.1 from Arch, Omarchy's `90-omarchy.conf` (zstd,
+  `swap-priority = 100`) and the `vm.*` lines of its
+  `99-omarchy-sysctl.conf` (`swappiness=150`, `vfs_cache_pressure=50`,
+  `page-cluster=0`, the watermark and dirty settings). zram-generator
+  loads the module itself.
+- [V] **`zram-size = ram / 2` (3.6 GB), 5 GB more allocated** on top of
+  about 4 GB in use: no OOM kill, PSI `full` peaked at 32 % and fell below
+  10 %, and SSH answered throughout. zram held 3.2 GB in 1.7 GB; the test
+  data compresses about 2:1, ordinary app memory closer to 3:1.
+- [V] **`zram-size = ram` (Omarchy's default, 7.3 GB), 6 GB more
+  allocated:** the phone stopped answering, ping included, and came back
+  after a restart about six minutes later. The journal has no oops or
+  panic and no OOM kill for this run; its last lines are the CP's PCIe
+  link going down and brcmfmac failing to allocate RX buffers. [I] RAM ran
+  out before zram filled, and reclaim spun instead of killing. Not a
+  like-for-like comparison (5 GB against 6 GB), so this says only that a
+  RAM-sized zram is not a safe default here yet.
+- [V] **Stock Android on the 9a** (BP3A.250905.014 vendor image):
+  `vendor.zram.size=50p` selects `fstab.zram.50p` (`zramsize=50%`, plus a
+  1 GB `zram_backingdev_size` writeback file for idle pages), started at
+  `sys.boot_completed` by `init.zumapro.board.rc` with `page-cluster 0`;
+  no swap partition.
+- [V] **After the hang:** `tools/nv-backup -d tegu --check`: every NV
+  partition the same. `omamobile-tegu-modem-boot` refused to start (its
+  latch for a boot that didn't shut down cleanly), as designed; the modem
+  came up ONLINE once the logs were read and the latch removed.
+- **By hand, until the image ships it:** build with the options, install
+  `zram-generator`, put `[zram0]` with `zram-size = ram / 2`,
+  `compression-algorithm = zstd` and `swap-priority = 100` in
+  `/etc/systemd/zram-generator.conf`, then `systemctl daemon-reload` and
+  `systemctl start systemd-zram-setup@zram0.service`. `zramctl` and
+  `swapon --show` show it. Resize only while it is empty: stopping the unit
+  removes `/dev/zram0`, and `cat /sys/class/zram-control/hot_add` brings
+  it back.
+
 ## 2026-11-03: the radio backup check with tools/nv-backup
 
 - [V] **NV partitions unchanged (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`):**
