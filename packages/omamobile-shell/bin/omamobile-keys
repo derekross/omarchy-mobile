@@ -304,7 +304,12 @@ case "${1:-}" in
       # decides whether to wake. Keep the lock out of background helpers.
       released_at=$(now)
       exec {short_lock}>"$state/short.lock"
-      flock "$short_lock" || exit 1
+      # A stuck action must not queue every later press forever. Drop this
+      # press after five seconds rather than overlap display transitions.
+      if ! flock -w 5 "$short_lock"; then
+        echo 'omamobile-keys: short-press lock wait failed; dropping press' >&2
+        exit 0
+      fi
       ( short_press "$released_at" ) {short_lock}>&-
     fi
     ;;
