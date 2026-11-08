@@ -468,6 +468,29 @@ never change, so reviews can cite them.
   12 to 17). *Check:* grep the author's comments on the device issue since
   that date and diff the extent (levels, durations, parts). Extends L-435.
   *From:* #450, round 42, 2026-11-07.
+- **L-531. An isolation check we suggest never reads the node it makes.**
+  Drafting W5's character-side check for #493 nearly suggested `head -c1` on a
+  `c 1:1` node, which, if the rule failed, reads physical address 0 through
+  `/dev/mem`. *Check:* every suggested proof of a device refusal stops at
+  `mknod` or `open` of a harmless device; `/dev/mem`, `/dev/port` and
+  register-backed nodes are tested by `mknod` only. Extends AGENTS.md section
+  1 and L-454. *From:* #493, round 44 (a near miss in drafting); 2026-11-08.
+- **L-532. A measuring tool we name for another phone is read for hard-coded
+  register addresses first.** `tools/display-hz` `devmem`-reads cheetah's
+  DECON at `0x1c24xxxx`; suggested for a 9a rate-switch check on kernel #212,
+  it would have read an unknown zumapro block. *Check:* `grep -n
+  'devmem\|0x[0-9a-f]\{8\}' tools/<tool>` before a draft names it for a phone
+  that isn't cheetah; name a log line or a compositor query instead. Extends
+  L-295 and L-276. *From:* kernel #212, round 44 (a near miss in drafting);
+  2026-11-08.
+- **L-533. A lens or OIS controller at the same I2C address as the module's
+  calibration EEPROM is a calibration part.** Stock's tegu DT puts
+  `eeprom-nessie`, `act-nessie` and `ois-nessie` all at 0x24: the LC898129
+  holds the module's calibration. *Check:* grep the device's `*-camera.dtsi`
+  for nodes sharing the actuator's `i2c-addr`; if one is an EEPROM, the driver
+  writes only the registers it names, and the notes list every register
+  written during bring-up. Extends L-90 and L-108. *From:* kernel #213, round
+  44, 2026-11-08.
 
 ## Shared code and the reference device
 
@@ -874,6 +897,12 @@ never change, so reviews can cite them.
   *Check:* `gh pr list` for PRs touching the file, grep their heads for
   `printf`/`strto*`, and build a no-bootctl device's initramfs. Extends L-104
   and L-423. *From:* #459 with #403, round 42, 2026-11-07.
+- **L-534. A tuning-file change is cheetah-neutral when the file's name is a
+  sensor model only another board's compatible produces.** libcamera picks
+  `<model>.yaml` by the subdev name, which `s5kgn1.c` takes from the match
+  data's `model`. *Check:* the driver's `v4l2_i2c_subdev_set_name` argument,
+  the match table, and `git grep` of the compatible in the gs201 DTs. Extends
+  L-206. *From:* #494, round 44, 2026-11-08.
 
 ## Shell and scripts
 
@@ -972,6 +1001,9 @@ never change, so reviews can cite them.
   holds only fakes; a generated-file check reads an input pinned in the
   repository with its version. Extends L-234 and L-410. *From:* #401, #408,
   issue #413, round 39, 2026-11-03.
+  Again in round 44: a "some `c N:*` line exists" pattern on #493 matched
+  unrelated wildcard lines (`c 5:*`, `c 136:*`); found by deleting the line
+  under test.
 - **L-467. `RestartPreventExitStatus=` covers the main process only; a
   pre-start refusal that must not be retried uses `ExecCondition=`.** #371's
   `ExecStartPre=` check exited 3 with `RestartPreventExitStatus=3`; on
@@ -1053,6 +1085,67 @@ never change, so reviews can cite them.
   when sitd drops it mid-release, while sitd only drops ended calls. *Check:*
   list every way the daemon removes the object and the state the bridge is
   left in. Extends L-302. *From:* #461, round 42, 2026-11-07.
+- **L-535. A patch that turns "a touch wakes" into "a touch is swallowed while
+  dark" changes what a stale dark flag costs.** Before #420's 0029, a lock
+  whose `displayDark` outlived the dark screen still woke on a touch; after
+  it, every touch is ignored until the lock's own wake clears the flag.
+  *Check:* list every path that can light the panel (power key, idle, call
+  watcher, Hyprland's own DPMS wakes, package version skew) and confirm each
+  clears the flag (here through `omarchy-shell lock wake`); where a skew can
+  light it without clearing it, ask for a `conflicts=` between the packages.
+  Extends L-161 and L-235. *From:* #420, round 44, 2026-11-08.
+- **L-536. A guard that reads a display-synced sensor is checked for what the
+  sensor does with the display off.** omamobile-sensors' TMD3719 converts only
+  with the display state the HAL sends, the proxy sends "off" when the DSI
+  connector is off, and it keeps `ProximityNear` across releases, so #420's
+  pocket guard, claimed only while dark, may never read or may read stale.
+  *Check:* grep the backend for `DISPLAY_SYNCED` or its equivalent and the
+  proxy's `_release` before accepting a sensor-based guard, and ask for a
+  covered and an uncovered run with the panel off. Extends C-1. *From:* #420,
+  round 44, 2026-11-08.
+- **L-537. "Reads the state before it acts" is checked for the time between
+  the read and the act.** #463's `unlock` reads the lock state, then wakes,
+  presses Return and waits 2 s before typing the PIN; an unlock in that window
+  (fingerprint, the person holding the phone) sends the PIN and a Return to
+  the focused app. *Check:* for any tool that injects input, list the sleeps
+  and actions between its guard and the sensitive write, and ask for the guard
+  again right before the write. Extends L-161. *From:* #463, round 44,
+  2026-11-08.
+- **L-538. A stricter check on a vendor tool's stderr is tried on a real input
+  with the system tool alone.** #491 started failing a copy on any debugfs
+  message outside a small allow-list, in a tool every install runs from the
+  release bundle, and its tests used stand-ins and a synthetic image. *Check:*
+  run only the host's tool (not the PR's) with the PR's exact command, as the
+  same user, on a scratch copy of a real image; count the lines the filter
+  would reject, then delete the copy. *From:* #491, round 44 (0 rejected on
+  the 7 Pro's 260705 vendor image); 2026-11-08.
+- **L-539. A `--dry-run` that still writes local state is walked through every
+  runbook that pairs it with the real command.** `tools/release` runs
+  `repo-publish --dry-run stable` and then `stable`. On main the dry run
+  staged the new index, so the real promotion pruned stable's previous set at
+  every release (local stable: 45 files for 45 index entries); #492's record
+  fixes it, though the PR described only no-op dailies. *Check:* `git grep -n
+  -- '--dry-run' tools/release docs/` for each tool a PR changes, and run the
+  dry run and the real run back to back in the PR's test fixture. Extends
+  L-392. *From:* #492, round 44, 2026-11-08.
+- **L-540. LXC 7's cgroup2 device rules are one-polarity lists, so "allow
+  before deny" is not a rule, and a global `a` after our include is the
+  hazard.** In the default allowlist mode, `bpf_device_add()` drops every
+  specific deny rule; a global `allow = a` or `deny = a` sets the mode and
+  clears every earlier rule. Our request on issue #465 and #493's comment both
+  assumed first-match order. *Check:* for any LXC device rule change, read
+  `src/lxc/cgroups/cgroup2_devices.c` at the packaged LXC tag, and ask what
+  mode the list is in, whether any `b` rule allows, and what in the generated
+  config is processed after our include. Extends L-31 and C-1. *From:* #493
+  with issue #465, round 44, 2026-11-08.
+- **L-541. A dynamic char major hard-coded in a shipped package couples it to
+  the kernel's built-in driver set.** Binder's 507 on cheetah comes from the
+  extended dynamic range, so a kernel update that adds a built-in driver with
+  a dynamic major moves it, and #493's fail-closed check then takes Waydroid
+  down until the package changes. *Check:* any `major:minor` in package config
+  at or above 234 and outside `Documentation/admin-guide/devices.txt`'s fixed
+  list gets a path-based rule, a value generated at start, or an update plan.
+  *From:* #493, round 44, 2026-11-08.
 
 ## Kernel (linux-omarchy-mobile)
 
@@ -1628,6 +1721,55 @@ never change, so reviews can cite them.
   arch/arm64/boot/dts` for boards including a touched dtsi; `dt-validate` each
   on the merge. Extends L-195 and L-309. *From:* kernel #187, round 42,
   2026-11-07.
+- **L-542. "As Google's driver does" is traced to the end of the vendor
+  function, including what it does with the answer.** Kernel #194's fallback
+  follows `syna_tcm_v1_detect()` up to the `IDENTIFY`/`RESET` order, but
+  `syna_tcm_v1_parse_idinfo()` rejects a zero-length record, so on the unit
+  that needed the fix the stock driver would fail too: the empty-record path
+  is our own, and the real difference is probably earlier, in stock's
+  power-up. *Check:* follow the vendor function past the cited step to its
+  parse and error returns, and ask which branch the contributor's unit would
+  take under stock. Extends L-61 and L-77. *From:* kernel #194, round 44,
+  2026-11-08.
+- **L-543. A panel-ID guard relaxed for a new ID is checked against the byte
+  the vendor driver keys its commands on, and tested with the commands the
+  guard blocked.** Google's `tg4c_get_panel_rev()` reads only 0xDB, so kernel
+  #212's new ID3 gets the same command set; the guard existed for the rate
+  switch, which the PR hadn't run. *Check:* the vendor driver's
+  `get_panel_rev`/`read_id` for which ID bytes select commands, then ask for
+  the guarded paths (rate switch, DPMS) on the new panel. Extends L-117 and
+  L-211. *From:* kernel #212, round 44, 2026-11-08.
+- **L-544. A register map with no public source gets its provenance in the
+  commit message.** LWIS DTs give a part's address and widths but leave
+  register sequences to the HAL, so a driver whose registers can't be cited
+  says how they were found. *Check:* grep Google's GPL tree for each register;
+  if one is absent, ask. Extends L-61 and L-177. *From:* kernel #213, round
+  44, 2026-11-08.
+- **L-545. A sentence corrected on one board is grepped across every board
+  that copied it.** Kernel #214 fixes akita's "the guard runs before the disks
+  appear" (L-528). The same words are in `zuma-husky.dts` and
+  `zumapro-tegu.dts`, and UFS is built in for every phone, so they are wrong
+  there too; only husky's had been noticed. *Check:* when a review corrects
+  copied text, `git grep -n '<the sentence>' github/omamobile -- arch/
+  device/`, and judge each copy by the fact that made the first one wrong
+  (here `CONFIG_SCSI_UFS_EXYNOS=y` in the shared config). Extends L-528 and
+  L-257. *From:* kernel #214 with #206, round 44, 2026-11-08.
+- **L-546. soc/gs is one tree, so an absent call in a shared driver says
+  nothing about one SoC.** We nearly told kernel #187's author that zuma has
+  no secure-ATU SMC because Google's `pcie-exynos-rc.c` has none; that file is
+  the same on the gs201 branch, where the SMC is real, so it comes from
+  another driver. *Check:* `cmp` the file across the board branches first, and
+  find where the vendor actually issues the SMC before saying "SoC X doesn't
+  use it". Extends L-58 and L-113. *From:* kernel #187, round 44 (a near miss
+  in drafting); 2026-11-08.
+- **L-547. A phone run on a test kernel carries over a new base conflict when
+  the tested-to-resolved diff equals the base's own movement.** Kernel #187's
+  `zuma.dtsi` aliases conflicted hours after we said "merges cleanly"; the two
+  diffs matched exactly, which showed the 7 Pro kernel was still
+  representative without a rebuild. *Check:* resolve in scratch, compare `git
+  diff <tested tree> <resolved>` with `git diff <tested base> <new base>`, and
+  grep the difference for any reference-phone path. Extends L-45, L-122 and
+  L-195. *From:* kernel #187, round 44, 2026-11-08.
 
 ## The gates themselves
 
@@ -1982,6 +2124,19 @@ never change, so reviews can cite them.
   rewrite of a pathspec that behaved the same. *Check:* test what the tool
   does, and when replacing a filter, compare old and new outputs on real data.
   Extends L-454. *From:* #289, round 42, 2026-11-07.
+- **L-548. CI skips the real-Omarchy run of `omamobile-omarchy`'s patch test,
+  so a new Omarchy patch is gated only by its author's run.** "the real
+  Omarchy package # SKIP no omarchy package (OMARCHY_PKG=...)" is in every CI
+  log. *Check:* apply the series with main's `omamobile-omarchy-patches apply
+  --root <tmp> --series <pr>/patches` to the matching Omarchy package from the
+  pacman cache (the shell's files are arch-independent), and `diff -r` the
+  trees with and without the new patch. Extends L-103. *From:* #420, round 44,
+  2026-11-08.
+- **L-549. Every PR that adds a suite to `tests/all`'s one-line loop conflicts
+  with every other such PR.** #491 and #492 each appended to the same line and
+  comment, and both were green alone. *Check:* `git merge-tree` each open pair
+  that touches `tests/all`, and give the resolved line in both reviews.
+  Extends L-104 and L-375. *From:* #491 and #492, round 44, 2026-11-08.
 
 ## Reviews and merging
 
@@ -2456,6 +2611,70 @@ never change, so reviews can cite them.
   shipped that day. *Check:* read what the selector accepts, and plan to
   replace the pinned files with the rehearsed version. *From:* #471, round 42,
   2026-11-07.
+- **L-550. A series split, or any rename of a directory, moves every open PR's
+  new file under the old path into the new meaning of that path.** #471 makes
+  `patches/` the Omarchy 4.5 family and moves 4.0.6's to `legacy-4.0.6/`;
+  #420's new `patches/0029-…` (a 4.0.6 patch) then merges into the 4.5 family
+  with only a `version` conflict, misses every 4.0.6 phone and probably breaks
+  the 4.5 family's all-or-nothing apply. *Check:* for each open PR that adds
+  files under a directory another open PR renames or repurposes, simulate the
+  merge both ways, `git ls-tree` where each new file lands, apply each new
+  file to the family it was written for, and give the merge order and the move
+  in both reviews. Extends L-104, L-423, L-424 and L-426. *From:* #420 with
+  #471, round 44, 2026-11-08.
+- **L-551. A version we write into "I'll title it X" goes stale like any other
+  promise; check it again when merging.** On 11-05 we promised #421 the title
+  `shell 0.2.101`; #464 shipped 0.2.101 two days later, and the branch's
+  identical bump would have merged silently. *Check:* before every squash,
+  `git show origin/main:packages/<p>/version` and the versions on the open PR
+  heads (`gh api …/contents/packages/<p>/version?ref=<sha>`), then write the
+  next free number into the subject. Extends L-217, L-426 and L-480. *From:*
+  #421, round 44, 2026-11-08.
+- **L-552. A sibling's descriptor list that changes between rounds is compared
+  with the PR's copy.** #456 took the 7 Pro's `NV_BACKUP_EXTRA="devinfo"`. Two
+  hours after our round asked about akita's NV list, husky's #449 added
+  `trusty_persist trusty_userdata` on the same SoC, and the reply's new NOTES
+  list still left `trusty_userdata` out. *Check:* every round, `git log <PR
+  base>..origin/main -- packages/omamobile-device-<same-SoC
+  sibling>/device.conf device/<sibling>/device.conf`, and diff each key the PR
+  sets against the sibling's current value. Extends L-195 and L-257. *From:*
+  #456 with #449, round 44, 2026-11-08.
+- **L-553. A fix found in a builder copied from a sibling is checked in the
+  sibling's builder.** Akita's `build-u3-root` is husky's with the names
+  changed; the depmod gap #456's second tester found is in both, and only
+  akita's was fixed. *Check:* `diff <(sed s/<a>/X/g A) <(sed s/<b>/X/g B)` for
+  any device script the PR says it copied, then list the sibling's copy for
+  the maintainer. Extends L-492. *From:* #456, round 44, 2026-11-08.
+- **L-554. A promised pre-merge build of a new package is checked against the
+  state of the output it writes.** With `out/repo` pinned as a release index,
+  `tools/build-packages` (which iterates `packages/*/`) would have added
+  #463's packages to it. *Check:* before advising "build it through
+  build-packages", read the current release state; use `--local <name>` (its
+  own `out/<name>/` and key) or the publish machine. Extends L-7. *From:*
+  #463, round 44, 2026-11-08.
+- **L-555. "No phone test while phones stay on version X" is checked against
+  the phones that already left X.** #471's selector applies the 4.5 family to
+  any phone on Omarchy 4.5.0. #434 records a Pixel 7 Pro that took 4.5.0-3
+  before the pin, and pacman won't move it back, so the merge is that phone's
+  first hardware run of an unqualified series. *Check:* for a selector or gate
+  keyed on an installed version, grep the pin's issue and the device threads
+  for phones already past the pin, and plan their first run before publishing.
+  Extends L-444, L-519 and L-523. *From:* #471, round 44, 2026-11-08.
+- **L-556. A stacked PR's conflict can belong to its merged bottom's
+  commits.** #371's DEVICES.md conflict came from #367's old commits
+  underneath, and main already held their text. *Check:* before asking the
+  contributor to resolve, merge only the PR's own range (`git merge-tree
+  --merge-base=<bottom head> origin/main <head>`), and grep main for the
+  strings the bottom's commits added. Extends L-275 and L-355. *From:* #371,
+  round 44, 2026-11-08.
+- **L-557. A contributor's "I won't run it until I hear from you" is a hold we
+  track.** Somnius asked on #472 at 18:04Z, then reported modem power-line
+  steps on kernel #187 at 22:20Z, in the other repository, with no answer in
+  between. *Check:* before replying in any thread from that contributor, list
+  their hardware results posted after the hold, with times (`gh api
+  repos/<r>/issues/comments?since=<hold time>` in both repositories, filtered
+  to the user). Extends L-109 and L-124. *From:* kernel #187 with #472, round
+  44, 2026-11-08.
 
 ## Claims and evidence
 
@@ -3184,6 +3403,38 @@ never change, so reviews can cite them.
   *Check:* for each result needing `switch_root`, match it to the named
   command line and slot history. Extends L-28 and L-109. *From:* #445, round
   42, 2026-11-07.
+- **L-558. A port of a patch series is diffed header by header against the
+  series it ports, not only applied.** #471's 4.5 family applied with fuzz 0
+  and passed every test, yet eight of its 26 headers had lost their
+  explanation and their spaces ("to4.5auth", "privatepixel.lock"), one of them
+  carrying the private-lock reference we had asked about twice elsewhere in
+  the same PR; two of our reviews checked application and blobs and missed it.
+  *Check:* per patch, compare the header line counts of the two families (`awk
+  '/^(diff|--- )/{exit}'`), and grep the new headers for `[a-z]4\.[0-9]`,
+  words over 18 letters, `private` and `coordinator`. Extends L-69 and L-183.
+  *From:* #471, round 44, 2026-11-08.
+- **L-559. A record written as "still X until the owner's next step" is
+  checked against the owner's other threads since the push.** #488 said Lef's
+  slot B "is still marked … until his next `flash`"; six hours later the same
+  author reported a dozen flashes on #252 and #369, with retry counts that
+  show B unmarked. *Check:* `gh api "repos/<r>/issues/comments?since=<head
+  time>"` filtered to the author, before calling a present-tense state record
+  ready. Extends L-266 and L-435. *From:* #488, round 44, 2026-11-08.
+- **L-560. A follow-up PR that "documents the sources" is checked against each
+  open question in the thread, not only the values.** #489 moved the existing
+  "read-only `dd` from recovery" sentence into NOTES, which reads like an
+  answer to the 11-03 question (RAM boot or flashed? anything mounted
+  read-write?) but answers neither part. *Check:* list the maintainer's last
+  questions on the parent PR and find each one's answer in the diff; a
+  sentence that was already on main isn't an answer. Extends L-183. *From:*
+  #489 with #231, round 44, 2026-11-08.
+- **L-561. A feature whose DT node is in no PR doesn't get a matrix cell that
+  names only the driver PR.** #494's cell gave kernel #213 "in review" as the
+  missing piece, but the lens node sat in a notes code block waiting on #164,
+  so with both merged no buildable kernel had autofocus. *Check:* for every
+  "in review" a cell cites, list the DT nodes the feature needs and `git grep`
+  them on the base and the open heads; a node in neither is named in the cell.
+  Extends L-149 and L-28. *From:* #494, round 44, 2026-11-08.
 
 ## Corrections (where a review was wrong)
 
