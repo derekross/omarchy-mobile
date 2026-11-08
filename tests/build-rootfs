@@ -135,7 +135,7 @@ echo dtbo > "$t/kernel/images/dtbo.img"
 echo public-key > "$R/packages/omamobile-keyring/omamobile.gpg"
 # A bundle carries the install guide and phone-provision with its tools.
 mkdir -p "$R/docs"; echo guide > "$R/docs/INSTALL.md"
-for f in phone-provision nv-backup phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
+for f in phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data; do
   printf '#!/bin/bash\n' > "$R/tools/$f"; chmod +x "$R/tools/$f"
 done
 bundle() { DEVICE=first "$R/tools/make-bundle" --unsigned --version fixture "$@"; }

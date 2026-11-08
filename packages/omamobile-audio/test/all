@@ -130,6 +130,10 @@ cat > "$fake/debugfs" <<'SH'
 # debugfs -R 'cat /audio/speaker.cal' DEVICE: never -w
 [[ " $* " != *" -w "* ]] || { echo "debugfs opened for writing" >&2; exit 9; }
 [[ $2 == "cat /audio/speaker.cal" ]] || exit 1
+# as the real one: exit status 0 whatever went wrong, the reason on stderr
+echo "debugfs 1.47.3 (8-Jul-2025)" >&2
+[[ -z ${FAKE_DEBUGFS_ERROR:-} ]] || { echo "$FAKE_DEBUGFS_ERROR" >&2; exit 0; }
+[[ -e $FAKE_CAL ]] || { echo "/audio/speaker.cal: File not found by ext2_lookup " >&2; exit 0; }
 cat "$FAKE_CAL"
 SH
 cat > "$fake/systemctl" <<'SH'
@@ -304,6 +308,25 @@ mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_r
 : > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused_early "short file"
 pass "refuses a missing, short or invalid calibration, muted"
 
+# OMAMOBILE_SPK_DEFAULT_CAL=1 (a phone with no speaker.cal, as stock's HAL):
+# no file runs on the firmware's defaults, writing no CAL_*; a short file still stops
+none=$tmp/absent.cal   # never created: debugfs says "File not found"
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal
+((rc == 0)) || { cat "$r/out" >&2; fail "default calibration: start succeeds without speaker.cal"; }
+[[ $(cat "$r/run/speaker-protection-calibration") == "default calibration" ]] || fail "default calibration: start records it"
+if grep -c 'Protection cd CAL_' "$r/cset.log" >/dev/null; then fail "default calibration: no CAL_* written"; fi
+grep -c 'Top CAL_SET_STATUS' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "default calibration: CAL_SET_STATUS logged"; }
+[[ $(cat "$r/run/speaker-protection") == "ok: stage c8, protection firmware with the firmware's default calibration,"* ]] || { cat "$r/run/speaker-protection" >&2; fail "default calibration: the status line says so"; }
+printf 'abcd' > "$tmp/short4.cal"; prep=(FAKE_CAL=$tmp/short4.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-short; check_refused_early "default calibration: a short file"
+prep=(FAKE_CAL=$none); run nocal; check_refused_early "no speaker.cal without OMAMOBILE_SPK_DEFAULT_CAL"
+# only debugfs's "File not found" counts as no file: an empty speaker.cal,
+# or an empty read for another reason, is refused
+: > "$tmp/empty.cal"; prep=(FAKE_CAL=$tmp/empty.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-empty; check_refused_early "default calibration: an empty speaker.cal"
+prep=(FAKE_CAL=$none FAKE_DEBUGFS_ERROR="cat: Filesystem not open" OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-noopen; check_refused_early "default calibration: a debugfs failure"
+[[ ! -e $r/run/speaker-protection-calibration ]] || fail "default calibration: a refused start records nothing"
+run factcal; [[ $(cat "$r/run/speaker-protection-calibration") == "factory calibration" ]] || fail "factory calibration: start records it"
+pass "OMAMOBILE_SPK_DEFAULT_CAL=1: no speaker.cal runs on the firmware's defaults (and says so in /run); an empty or short file, or a debugfs failure, is still refused"
+
 # Runtime PM: an amplifier that cannot be held awake, then kernel log errors
 mktree pm-stuck; echo suspended > "$r/spi/spi6.1/power/runtime_status"; chmod a-w "$r/spi/spi6.1/power/control"
 rc=0; sp start > "$r/out" 2>&1 || rc=$?
@@ -338,6 +361,37 @@ rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp start > "$r/out" 2>&1 || rc=$?; prep=(
 [[ ! -e $r/modprobe.log ]] || fail "marker: the amplifier driver is not loaded"
 [[ -e $r/state/speaker-protection-started ]] || fail "marker: kept for the human"
 pass "a hang marker from the last boot keeps the amplifiers off"
+
+# --- microphones only: the driver for the card, both amplifiers muted, nothing else
+mktree mics; rc=0; sp mics > "$r/out" 2>&1 || rc=$?
+((rc == 0)) || { cat "$r/out" >&2; fail "mics succeeds"; }
+grep -c '^snd_soc_cs35l41_spi$' "$r/modprobe.log" >/dev/null || fail "mics: loads the amplifier driver"
+muted || fail "mics: both amplifiers muted"
+[[ -z $(grep -v 'Digital PCM Volume=0$' "$r/cset.log") ]] || fail "mics: sets nothing but the mute (no DSP, no source, no unmute)"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics: removes the hang marker"
+[[ $(cat "$r/run/speaker-protection") == "muted: microphones only"* ]] || fail "mics: status says microphones only"
+pass "mics: the amplifier driver loaded, both amplifiers muted, nothing else set"
+
+mktree mics-nocard; rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) || fail "mics without a card fails"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics without a card: marker removed after a clean failure"
+mktree mics-marker; echo 2026-01-01T00:00:00 > "$r/state/speaker-protection-started"
+rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/modprobe.log && -e $r/state/speaker-protection-started ]] || fail "mics: a hang marker keeps the driver unloaded"
+rc=0; sp mics --retry > "$r/out" 2>&1 || rc=$?
+((rc == 0)) && muted || fail "mics --retry clears the marker and comes up muted"
+pass "mics: fails cleanly without a card, honours the hang marker, --retry clears it"
+
+u=systemd/omamobile-audio-mics.service
+grep -qx 'Conflicts=omamobile-speaker-protection.service' $u || fail "the mics unit conflicts with protection"
+grep -qx 'ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once protection is enabled"
+grep -qx 'ConditionPathExists=!/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once a device package enables protection"
+grep -qx 'Before=omamobile-speaker-protection.service' $u || fail "the mics unit's mute on stop finishes before protection starts"
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $u && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $u || fail "the mics unit runs on gs101 and gs201 AoCs"
+p=systemd/omamobile-speaker-protection.service
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $p && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $p || fail "speaker protection runs on gs101 and gs201 AoCs"
+grep -qx 'ExecStart=/usr/bin/omamobile-speaker-protection mics' $u || fail "the mics unit runs mics"
+pass "the mics unit: never with protection, on both AoCs"
 
 # --- the watchdog ----------------------------------------------------------------
 watchrun() {  # run the watchdog briefly on a healthy started tree, with the events of at()
@@ -375,6 +429,18 @@ startok w-cspl; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dsp
 [[ $(cat "$r/run/speaker-protection") == "muted: watchdog: Bottom: CSPL_STATE 1 (error)"* ]] || fail "watchdog: says why"
 startok w-cal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; watchrun
 ((rc == 1)) && muted || fail "watchdog: calibration not applied mutes"
+# A start on the firmware's defaults: 1 passes, nothing else does. What
+# counts is what start recorded, not the setting: with speaker.cal the
+# setting doesn't make 1 pass
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: after a start on the default calibration CAL_SET_STATUS 1 passes"; }
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal0; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 0; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || fail "watchdog: on the default calibration CAL_SET_STATUS 0 still mutes"
+prep=(OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal-stray; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: with speaker.cal, OMAMOBILE_SPK_DEFAULT_CAL=1 doesn't make CAL_SET_STATUS 1 pass"; }
 startok w-src; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; amx cset "name=Top PCM Source" ASP >/dev/null; watchrun
 ((rc == 1)) && muted || fail "watchdog: DSP bypass mutes"
 startok w-level; amx cset "name=Bottom Digital PCM Volume" 700 >/dev/null; watchrun
@@ -565,7 +631,40 @@ rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 "${c9prep[@]}"); sp star
 ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 ]] && grep -c "stage media" "$r/out" >/dev/null ||
   { cat "$r/out" >&2; fail "auto: without a verification stamp, media at 737/10"; }
 pass "auto: c9 at the everyday loud levels only with speaker_protection=1 and a stamp, media otherwise"
+# on the firmware's default calibration c9 is out: auto picks media (boost
+# off), an explicit c9 is refused, and verify writes no stamp
+mktree auto-defcal; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Top Analog PCM Volume") == 10 && $(val "Bottom Analog PCM Volume") == 10 &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] && grep -c "stage media, not c9: c9 needs the factory calibration" "$r/out" >/dev/null &&
+  [[ $(cat "$r/run/speaker-protection") == "ok: stage media, protection firmware with the firmware's default calibration,"* ]] ||
+  { cat "$r/out" >&2; fail "auto on the default calibration: media at 737/10, boost off, and says why"; }
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1
+rm -f "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 OMAMOBILE_VERIFY_SECONDS=0.3 OMAMOBILE_VERIFY_INTERVAL=0.1); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/state/speaker-protection-verified ]] && grep -c "default calibration" "$r/v.out" >/dev/null ||
+  { cat "$r/v.out" >&2; fail "verify on the default calibration: refused, no stamp"; }
+c9prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); c9 c9-defcal; check_refused_early "c9 on the default calibration"
+grep -c "stage c9 needs the factory calibration" "$r/out" >/dev/null || { cat "$r/out" >&2; fail "c9 on the default calibration: says why"; }
+pass "on the firmware's default calibration: auto picks media, c9 and verify are refused"
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
+# c9 only on a system with c9 levels of its own: raven, with speaker_protection=1
+# and a stamp for its own firmware, stays at media, and an explicit c9 is refused
+mktree raven-c9; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+prep=(OMAMOBILE_SPK_SYSTEM=raven); d=$(sp digest | awk '{print $2}'); prep=()
+[[ -n $d ]] || fail "raven: a digest of its own firmware"
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] && grep -c "stage media" "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "auto on raven with speaker_protection=1 and a matching stamp: media at 737/10, never c9"; }
+mktree raven-c9x; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=c9 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+check_refused_early "c9 on raven"
+grep -c 'no levels measured for raven' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "c9 on raven: says why"; }
+pass "stage c9 only on a system with c9 levels of its own (raven stays at media)"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
 mktree tmpfw; c9prep=(OMAMOBILE_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"
 for f in "$r"/fw/cirrus/*; do echo changed > "$tmp/otherfw/cirrus/${f##*/}"; done
@@ -775,6 +874,10 @@ mktree e-w-c8; rc=0; sp start > "$r/out" 2>&1 || rc=$?; earset 658 6 0; watchrun
 media; run e-w-spk; amx cset "name=Top PCM Source" ASP >/dev/null; amx cset "name=Top Analog PCM Volume" 6 >/dev/null; ewatch
 ((rc == 1)) && muted || fail "earpiece watchdog: the bypass without earpiece mode still mutes"
 pass "earpiece watchdog: the top within 737/6 through ASP, the bottom muted, no DSP rule; mutes on anything else, an unknown mode included"
+media; run e-raven; : > "$r/cset.log"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_SYSTEM=raven); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -s $r/cset.log ]] && grep -c 'no earpiece check for raven' "$r/ear.out" >/dev/null || { cat "$r/ear.out" >&2; fail "earpiece on is refused on raven (no C9k there yet), nothing written"; }
+pass "earpiece on only where C9k passed (cheetah)"
 
 # omamobile-speaker-protection earpiece on|off with a live watchdog
 bgwatch() {
@@ -1128,7 +1231,7 @@ pass "follow: the speakers' left and right from the sensor proxy's orientation"
 # --- install ---------------------------------------------------------------------
 ./install "$tmp/root"
 for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-speaker-protection.service \
-         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/omamobile-audio/speaker_dsp.py \
+         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/systemd/system/omamobile-audio-mics.service usr/lib/omamobile-audio/speaker_dsp.py \
          usr/lib/udev/rules.d/70-omamobile-cs35l41.rules \
          usr/lib/modprobe.d/omamobile-audio.conf etc/omamobile/speaker.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \

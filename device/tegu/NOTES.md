@@ -13,6 +13,16 @@ hash/build ID; this dirty release is not a published kernel package.
 `[V]` marks verified observations; `[I]` marks an inference still to test.
 Raw captures, recordings, backups and vendor files remain off repository.
 
+## 2026-11-03: the radio backup check with tools/nv-backup
+
+- [V] **NV partitions unchanged (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`):**
+  `tools/nv-backup -d tegu --check` against the 2026-10-28 read-only
+  backup, after the day's reboots (several with the modem ONLINE through
+  #372's boot unit, two sysrq reboots after dead-storage wakes, and two
+  kernel pushes): `efs`, `efs_backup`, `modem_userdata`, `persist`,
+  `modem_a`, `modem_b` and `metadata` read the same; `devinfo` differs, as
+  it does after any boot-success mark or fastboot write.
+
 ## 2026-11-02, evening: calls, Phone and Messages, echo, a restart and MMS
 
 All on the daily kernel (`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty`)

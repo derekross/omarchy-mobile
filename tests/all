@@ -14,17 +14,20 @@
 # check, and a contributor's local builds (tools/local-key-init,
 # tools/fetch-published, --local), tools/publish-kernel against a scratch
 # remote, tools/release's stages, the release key the maintainer signs with
-# (tools/lib/signing.sh, build-packages --resign, repo-publish),
+# (tools/lib/signing.sh, build-packages --resign, repo-publish), the pinned
+# upstream packages (rootfs/packages.pinned),
 # tools/fetch-toolchain against local fixtures, tools/release-upload against
 # a scratch server, tools/extract-camera-data's adrp decoding,
 # tools/phone-smoke's dmesg error classification, the OWL conformance
-# report's differences on the host, and bin/lineage-ref sync's branch
-# handling against stand-ins for docker and repo.
+# report's differences on the host, bin/lineage-ref sync's branch handling
+# against stand-ins for docker and repo, tools/repo-publish --from-main's
+# copy of the prebuilt binaries into a fixture's publish tree, and
+# tools/repo-publish's staging.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/release-upload tools/server/releases-nginx.sh \
-         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh rootfs/build-inside tests/*; do
+         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh rootfs/build-inside rootfs/resolve.sh tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   [[ $f == *.py ]] && continue
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
@@ -36,7 +39,7 @@ sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
 python3 tests/bt-uart-gpio.py
-for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/modules-push tests/make-bundle-keys tests/make-bundle tests/release-signing tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release tests/lineage-ref; do
+for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/rootfs-resolve tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/modules-push tests/make-bundle-keys tests/make-bundle tests/release-signing tests/pinned-packages tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release tests/lineage-ref tests/repo-publish tests/repo-publish-stage; do
   echo "# $t"
   "$t"
 done
