@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Empty Pixel 9 Pro Fold board overlay for ABL. The retail MP1.0 board
+ * selects board_id 0x60606, board_rev 0x10000 (stock dtbo entry 14,
+ * the phone's dtbo_idx; NOTES.md). Keep hardware description in the
+ * kernel board DTS.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	board_id = <0x60606>;
+	board_rev = <0x10000>;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+		};
+	};
+};
