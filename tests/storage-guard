@@ -7,7 +7,9 @@
 # here against a fake sysfs and /dev: a missing, empty or malformed file, or
 # a forbidden name, leaves every partition read-only; cheetah's list leaves
 # exactly its six partitions writable, as the hard-coded list did; /dev/sda's
-# whole-disk node is removed either way.
+# whole-disk node is removed either way. A LUN named in UFS_RW_LUNS
+# (enchilada's sde) is guarded as sda is; without that list, or with a bad
+# one or a closed allowlist, it stays read-only at the disk level.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -31,6 +33,11 @@ if [[ $(grep -c '^ *UFS_RW=' initramfs/init) != 2 ]] || ! grep -q '^UFS_RW=""$' 
   fail "initramfs/init has no allowlist of its own, only the packed one"
 fi
 grep -q '^  initramfs_config "\$stage/etc"$' bin/omamobile || fail "initramfs packs the files into the image's /etc"
+DEVICE=enchilada bin/omamobile initramfs-config "$t/etc-enchilada" > "$t/log" 2>&1 || { cat "$t/log"; fail "enchilada: initramfs-config"; }
+[[ $(cat "$t/etc-enchilada/omamobile-ufs-rw") == "boot_b userdata" && $(cat "$t/etc-enchilada/omamobile-ufs-rw-luns") == sde ]] \
+  || fail "enchilada packs its UFS_RW and UFS_RW_LUNS"
+[[ ! -e $t/etc-cheetah/omamobile-ufs-rw-luns && ! -e $t/etc-oriole/omamobile-ufs-rw-luns ]] || fail "the Pixels pack no LUN list"
+pass "enchilada packs boot_b userdata and its LUN sde; the Pixels pack no LUN list"
 pass "cheetah, felix and akita pack the six-name list, oriole and bluejay their three boot images and userdata"
 
 # --- Pack time: refused descriptors, in a repository-shaped tree ---
@@ -42,9 +49,10 @@ sed -e 's/^CODENAME=.*/CODENAME=six/' device/oriole/device.conf > "$R/device/six
 cp "$R/device/six/device.conf" "$t/good.conf"
 om() { (cd "$R" && DEVICE=six bin/omamobile "$@") > "$t/log" 2>&1; }
 om initramfs-config "$t/etc-six" || { cat "$t/log"; fail "the test descriptor packs"; }
-refused() { # what, UFS_RW value, expected message
+refused() { # what, value, expected message[, key appended instead of UFS_RW]
   cp "$t/good.conf" "$R/device/six/device.conf"
-  sed -i "s/^UFS_RW=.*/UFS_RW=\"$2\"/" "$R/device/six/device.conf"
+  if [[ -n ${4:-} ]]; then printf '%s="%s"\n' "$4" "$2" >> "$R/device/six/device.conf"
+  else sed -i "s/^UFS_RW=.*/UFS_RW=\"$2\"/" "$R/device/six/device.conf"; fi
   rm -rf "$t/etc-bad"
   if om initramfs-config "$t/etc-bad"; then fail "refuses $1"; fi
   grep -c -- "$3" "$t/log" >/dev/null || { cat "$t/log"; fail "refuses $1 with: $3"; }
@@ -63,6 +71,10 @@ refused "a name twice" "boot_b vendor_boot_b dtbo_b userdata boot_b" "names boot
 refused "upper case" "boot_b vendor_boot_b dtbo_b USERDATA" "only partition names"
 refused "a glob" "boot_b vendor_boot_b dtbo_b userdata *" "only partition names"
 refused "a boot image missing" "boot_b vendor_boot_b userdata" "dtbo_b is not in UFS_RW"
+refused "sda as an extra LUN" "sda" "UFS_RW_LUNS may hold only" UFS_RW_LUNS
+refused "a LUN path" "/dev/sde" "UFS_RW_LUNS may hold only" UFS_RW_LUNS
+refused "shell syntax in the LUN list" "sde;sdf" "UFS_RW_LUNS may hold only" UFS_RW_LUNS
+refused "a LUN with a partition number" "sde1" "UFS_RW_LUNS may hold only" UFS_RW_LUNS
 cp "$t/good.conf" "$R/device/six/device.conf"
 
 # --- Boot time: initramfs/init's guard against a fake sysfs and /dev ---
@@ -100,22 +112,37 @@ fake_disks() {
   echo 0 > "$B/sys/block/sdb/ro"; : > "$B/dev/sdb"
   printf 'PARTNAME=bl1_a\n' > "$B/sys/block/sdb/sdb1/uevent"
   echo 0 > "$B/sys/block/sdb/sdb1/ro"; : > "$B/dev/sdb1"
+  # A LUN that holds slot B's boot image beside slot A's and vbmeta (enchilada)
+  mkdir -p "$B/sys/block/sde"; echo 0 > "$B/sys/block/sde/ro"
+  : > "$B/dev/sde"; i=0
+  for p in boot_a boot_b dtbo_b vbmeta_b; do
+    i=$((i + 1))
+    mkdir -p "$B/sys/block/sde/sde$i"
+    printf 'PARTNAME=%s\n' "$p" > "$B/sys/block/sde/sde$i/uevent"
+    echo 0 > "$B/sys/block/sde/sde$i/ro"; : > "$B/dev/sde$i"
+  done
 }
 guard() { # run the guard's load and one pass
   PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_ro_pass"
 }
-writable() { # names of the partitions left writable, in GPT order
+writable() { # names of the partitions left writable on a disk (sda), in GPT order
   local s out=""
-  for s in "$B"/sys/block/sda/sda*; do
+  for s in "$B"/sys/block/${1:-sda}/${1:-sda}*; do
     [[ $(cat "$s/ro") == 0 ]] && out+="$(sed -n 's/^PARTNAME=//p' "$s/uevent") "
   done
   printf '%s' "${out% }"
 }
-disk_checks() { # $1: case name
+disk_checks() { # $1: case name; $2: sde when sde is a listed LUN
   [[ ! -e $B/dev/sda ]] || fail "$1: /dev/sda's whole-disk node is removed"
   [[ $(cat "$B/sys/block/sda/ro") == 0 ]] || fail "$1: sda itself stays writable (the kernel needs it for its partitions)"
   [[ $(cat "$B/sys/block/sdb/ro") == 1 && $(cat "$B/sys/block/sdb/sdb1/ro") == 1 ]] || fail "$1: the boot LUN is read-only"
-  grep -q 'whole-disk node removed' "$B/dev/kmsg" || fail "$1: the sda removal is logged"
+  grep -q '/dev/sda: whole-disk node removed' "$B/dev/kmsg" || fail "$1: the sda removal is logged"
+  if [[ ${2:-} == sde ]]; then
+    [[ ! -e $B/dev/sde && $(cat "$B/sys/block/sde/ro") == 0 ]] || fail "$1: sde is guarded as sda is"
+  else
+    [[ -e $B/dev/sde && $(cat "$B/sys/block/sde/ro") == 1 && -z $(writable sde) ]] \
+      || fail "$1: an unlisted LUN is read-only, boot_b on it too (writable: $(writable sde))"
+  fi
 }
 
 fake_disks
@@ -169,3 +196,38 @@ fake_disks; printf 'boot_b vendor_boot_b dtbo_b userdata persist\n' > "$B/etc/om
 closed "persist in the allowlist" "allowlist names persist"
 fake_disks; printf 'boot_a userdata\n' > "$B/etc/omamobile-ufs-rw"
 closed "a slot A name in the allowlist" "allowlist names boot_a"
+
+# --- A second LUN: enchilada's boot_b on sde ---
+unguarded() { PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_unguarded"; }
+fake_disks
+cp "$t/etc-enchilada/omamobile-ufs-rw" "$t/etc-enchilada/omamobile-ufs-rw-luns" "$B/etc/"
+guard
+[[ $(writable sde) == boot_b ]] || fail "enchilada: only boot_b is writable on sde (got: $(writable sde))"
+[[ $(writable) == "boot_b userdata" ]] || fail "enchilada: its names on sda (got: $(writable))"
+grep -q "LUNs with allowlisted partitions: sda sde" "$B/dev/kmsg" || fail "enchilada: the LUN list is logged"
+disk_checks enchilada sde
+[[ -z $(unguarded) ]] || fail "enchilada: nothing outside the allowlist is writable (got: $(unguarded))"
+echo 0 > "$B/sys/block/sde/sde4/ro"
+[[ $(unguarded) == "sde4 (vbmeta_b)" ]] || fail "enchilada: a reopened partition on sde is reported (got: $(unguarded))"
+pass "enchilada's lists: sde guarded as sda, boot_b alone writable there; the hand-over check covers sde"
+
+fake_disks
+cp "$t/etc-enchilada/omamobile-ufs-rw" "$B/etc/"
+guard
+disk_checks "enchilada without its LUN list"
+pass "without UFS_RW_LUNS, sde stays read-only at the disk level, as before"
+
+for bad in 'sde sda' 'sde;sdf' '/dev/sde' 'sde1' 'SDE'; do
+  fake_disks
+  cp "$t/etc-enchilada/omamobile-ufs-rw" "$B/etc/"
+  printf '%s\n' "$bad" > "$B/etc/omamobile-ufs-rw-luns"
+  guard
+  grep -q "malformed LUN list" "$B/dev/kmsg" || { cat "$B/dev/kmsg"; fail "LUN list '$bad': says so on kmsg"; }
+  disk_checks "LUN list '$bad'"
+  [[ $(writable) == "boot_b userdata" ]] || fail "LUN list '$bad': sda keeps its allowlist (got: $(writable))"
+done
+pass "a malformed LUN list leaves every LUN but sda read-only"
+
+fake_disks
+printf 'boot_b userdata persist\n' > "$B/etc/omamobile-ufs-rw"; printf 'sde\n' > "$B/etc/omamobile-ufs-rw-luns"
+closed "a closed allowlist with a LUN list" "allowlist names persist"

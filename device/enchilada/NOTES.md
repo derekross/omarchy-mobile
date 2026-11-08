@@ -166,8 +166,9 @@ wrote nothing.
   nothing mounted.
 - **`boot_b` is on LUN `sde`, not `sda`.** The shared guard's `UFS_RW`
   only looks at `sda`, so `boot_b` and `dtbo_b` stay read-only (seen
-  live). This is the same split as dodge; a LUN-aware `UFS_RW` will be its
-  own shared pull request.
+  live). This is the same split as dodge. Since then the descriptor sets
+  `UFS_RW_LUNS=sde`, so the guard treats `sde` as it treats `sda` and
+  leaves `boot_b` writable; no boot has run with it yet.
 - msm DRM came up (`fb0` is `msmdrmfb`).
 - ABL appends `root=PARTUUID=<system_a> skip_initramfs ro init=/init` to
   the command line even on `fastboot boot`. The shared init runs as PID 1
