@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Bring-up only (device/panther/FINGERPRINT-PLAN.md, gate P4): enable the
+ * sub-PMIC, LDO15S (the sensor's supply, disabled in the base DTB like the
+ * camera's LDO12S, so a camera overlay leaves it alone) and the Goodix
+ * sensor node. Apply after fingerprint-trusty.dtso. The PERIC0
+ * pin controller (the sensor's reset line, gpp1-1) is already on in the
+ * default DTB. Paths, not labels, so the base DTB needs no __symbols__.
+ */
+/dts-v1/;
+/plugin/;
+
+&{/firmware/power-management/pmic-2} {
+	status = "okay";
+};
+
+&{/firmware/power-management/pmic-2/regulators/ldo15s} {
+	status = "okay";
+};
+
+&{/fingerprint} {
+	status = "okay";
+};

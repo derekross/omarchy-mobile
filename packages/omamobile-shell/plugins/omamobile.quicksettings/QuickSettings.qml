@@ -1557,7 +1557,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
               text: root.hasBattery
-                ? (UPower.onBattery ? "󰁹 " : "󰂄 ") + Math.round(root.battery.percentage * 100) + "%"
+                ? (root.battery.state === UPowerDeviceState.Charging ? "󰂄 " : "󰁹 ") + Math.round(root.battery.percentage * 100) + "%"
                 : ""
               color: root.foreground
               font.family: Style.font.family

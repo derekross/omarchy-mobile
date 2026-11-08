@@ -1,0 +1,44 @@
+From b621dee1388a6e691dbcf1e364c9a04786a4afd1 Mon Sep 17 00:00:00 2001
+From: cbm <omarchy-mobile@kloot.lu>
+Date: Sat, 7 Nov 2026 21:47:03 +0100
+Subject: [PATCH] ipa: simple: Autofocus on the Pixel 9a's main camera
+
+The S5KGN8 module's focus now has a kernel lens driver (lc898129, a
+V4L2 lens subdev linked to the sensor through lens-focus), so turn the
+contrast autofocus on in its tuning file, with the coarse and fine
+steps the Pixel 7 Pro's main camera uses.
+
+Tested on a Pixel 9a with omacam: a subject at about 25 cm comes into
+focus in a little over a second.
+
+Signed-off-by: cbm <omarchy-mobile@kloot.lu>
+---
+ src/ipa/simple/data/s5kgn8.yaml | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/ipa/simple/data/s5kgn8.yaml b/src/ipa/simple/data/s5kgn8.yaml
+index 51ca9b0..c6a3d22 100644
+--- a/src/ipa/simple/data/s5kgn8.yaml
++++ b/src/ipa/simple/data/s5kgn8.yaml
+@@ -2,7 +2,7 @@
+ #
+ # Samsung S5KGN8 (the Pixel 9a's main camera), not calibrated yet. The
+ # black level comes from the sensor's helper. No colour matrix until one is
+-# fitted on daylight shots, and no autofocus until the lens has a driver.
++# fitted on daylight shots.
+ %YAML 1.1
+ ---
+ version: 1
+@@ -19,4 +19,9 @@ algorithms:
+       denoise: 0.015
+       chromaDenoise: 0.03
+   - Agc:
++  # Contrast autofocus through the module's LC898129 lens (0-4095), with
++  # the scan steps of the Pixel 7 Pro's main camera
++  - Af:
++      coarseSteps: 8
++      fineSteps: 32
+ ...
+-- 
+2.56.0
+

@@ -122,7 +122,7 @@ function unreadCount(names, seen) {
 
 function batteryIcon(percent, charging, full) {
   if (percent < 0) return ""
-  if (full) return "󰂅"
+  if (full) return "󰁹"
   var chargingIcons = ["󰢜", "󰂆", "󰂇", "󰂈", "󰢝", "󰂉", "󰢞", "󰂊", "󰂋", "󰂅"]
   var defaultIcons = ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
   var index = Math.max(0, Math.min(9, Math.floor(percent / 10)))

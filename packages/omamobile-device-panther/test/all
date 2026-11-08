@@ -11,7 +11,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 bash -n build || fail "build parses"
 bash -n install || fail "install parses"
-bash -n bin/omamobile-usb-rescue || fail "omamobile-usb-rescue parses"
+for script in bin/*; do bash -n "$script" || fail "$script parses"; done
 pass "scripts parse"
 
 grep -q '\.\./\.\.' build install && fail "build or install reaches outside the package directory"
@@ -55,6 +55,22 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
     ../omamobile-device-cheetah/vendor/systemd/system/omamobile-usb-rescue.service \
     || fail "the usb-rescue unit drifted from the cheetah package"
   pass "omamobile-usb-rescue and its unit match the cheetah package"
+  # Wi-Fi is the 7 Pro's: same chip (BCM4389), same PCIe
+  # controller, same bootloader-written MAC address.
+  for f in bin/omamobile-wifi-start bin/omamobile-wlan-mac \
+           vendor/modprobe.d/omamobile-wifi.conf vendor/systemd/system/omamobile-wifi.service \
+           vendor/udev/rules.d/80-omamobile-wlan-mac.rules; do
+    cmp -s "$f" "../omamobile-device-cheetah/$f" || fail "$f drifted from the cheetah package"
+  done
+  pass "the Wi-Fi files match the cheetah package"
+  # So does sleep: Wi-Fi unloads around suspend unless
+  # /etc/omamobile/wifi-keep-across-sleep exists, and for the rest of the
+  # boot after a wake fails in the Wi-Fi device.
+  cmp -s bin/omamobile-sleep ../omamobile-device-cheetah/bin/omamobile-sleep \
+    || fail "omamobile-sleep drifted from the cheetah package"
+  [[ $(readlink vendor/systemd/system-sleep/omamobile) == "$(readlink ../omamobile-device-cheetah/vendor/systemd/system-sleep/omamobile)" ]] \
+    || fail "the system-sleep link drifted from the cheetah package"
+  pass "omamobile-sleep and its system-sleep link match the cheetah package"
 fi
 grep -q 'omamobile-keyring' PKGBUILD || fail "pacman needs omamobile-keyring"
 grep -q '^install=omamobile-device-panther.install$' PKGBUILD \
@@ -79,18 +95,25 @@ for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/72-omamobile-feedbackd.rules \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
+         usr/lib/environment.d/40-omamobile-rotation.conf \
+         usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-display.conf \
          usr/lib/modprobe.d/omamobile-camera.conf \
          usr/lib/systemd/system/omamobile-camera.service \
          usr/lib/systemd/system/omamobile-camera.timer \
+         usr/lib/modprobe.d/omamobile-fingerprint.conf \
          usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf \
          usr/share/omamobile/device.conf \
          usr/share/omamobile/device-panther/version \
          usr/share/licenses/omamobile-device-panther/LICENSE \
          usr/bin/omamobile-usb-rescue \
          usr/lib/systemd/system/omamobile-usb-rescue.service \
+         usr/bin/omamobile-wifi-start usr/lib/systemd/system/omamobile-wifi.service \
+         usr/lib/modprobe.d/omamobile-wifi.conf \
+         usr/bin/omamobile-wlan-mac usr/lib/udev/rules.d/80-omamobile-wlan-mac.rules \
+         usr/bin/omamobile-sleep \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
@@ -105,6 +128,11 @@ grep -q 'ATTRS{name}=="cs40l26_vibra"' "$tmp/root/usr/lib/udev/rules.d/72-omamob
   || fail "feedbackd gets the CS40L26 haptics"
 grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadget.network" \
   || fail "usb0 keeps the initramfs address"
+grep -qx 'OMAMOBILE_ROTATION_HOLD=1' "$tmp/root/usr/lib/environment.d/40-omamobile-rotation.conf" \
+  || fail "the Pixel 7 turns on Hyprland's rotation hold"
+dropin="$tmp/root/usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf"
+grep -qx '\[Service\]' "$dropin" && grep -qx 'Environment=OMAMOBILE_SPK_DEFAULT_CAL=1' "$dropin" \
+  || fail "the Pixel 7 starts its speakers on the default calibration when it has no speaker.cal"
 power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 grep -qx '\[Login\]' "$power" \
   || fail "the power-key drop-in needs a [Login] header"
@@ -116,19 +144,53 @@ grep -q '^MemorySleepMode=s2idle$' "$tmp/root/usr/lib/systemd/sleep.conf.d/10-om
   || fail "suspend must be s2idle: gs201 never wakes from deep"
 grep -qx 'options gs_dsim_cmd allow_tx=1' "$tmp/root/usr/lib/modprobe.d/omamobile-display.conf" \
   || fail "the DSI command host may send to the panel (brightness)"
+f=$tmp/root/usr/lib/modprobe.d/omamobile-fingerprint.conf
+for m in sg goodix_fp; do
+  grep -qx "blacklist $m" "$f" || fail "$m is loaded by omamobile-fp only"
+done
+# No package here loads Trusty by hand (the 7 Pro's sound start does), so
+# blacklisting it would leave omamobile-fp without /dev/trusty-ipc-dev0
+grep -q 'trusty' <(grep -v '^#' "$f") && fail "Trusty must load from the DT, not be blacklisted"
 [[ -x $tmp/root/usr/bin/omamobile-usb-rescue ]] || fail "omamobile-usb-rescue is executable"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service") == ../omamobile-usb-rescue.service ]] \
   || fail "omamobile-usb-rescue starts at boot"
+for tool in omamobile-wifi-start omamobile-wlan-mac omamobile-sleep; do
+  [[ -x $tmp/root/usr/bin/$tool ]] || fail "$tool is executable"
+done
+# Wi-Fi is the one radio started at boot, and only through its guard: the
+# modules are blacklisted for autoload, the script writes a hang marker
+# before it loads them, and it never loads the SysMMU firewall.
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-wifi.service") == ../omamobile-wifi.service ]] \
+  || fail "omamobile-wifi.service starts at boot"
+grep -qx 'blacklist pcie_gs201' "$tmp/root/usr/lib/modprobe.d/omamobile-wifi.conf" \
+  || fail "pcie_gs201 only loads through the guarded service"
+grep -qx 'blacklist brcmfmac' "$tmp/root/usr/lib/modprobe.d/omamobile-wifi.conf" \
+  || fail "brcmfmac only loads through the guarded service"
+grep -q 'marker=' bin/omamobile-wifi-start || fail "omamobile-wifi-start keeps a hang marker"
+grep -q 'mode=' bin/omamobile-wifi-start && fail "omamobile-wifi-start never loads the SysMMU firewall"
+grep -q '^ConditionPathExists=/sys/bus/platform/devices/14520000.pcie$' \
+  "$tmp/root/usr/lib/systemd/system/omamobile-wifi.service" \
+  || fail "omamobile-wifi.service needs the PCIe controller in the DTB"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system-sleep/omamobile") == /usr/bin/omamobile-sleep ]] \
+  || fail "systemd-sleep runs omamobile-sleep"
+grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep \
+  || fail "omamobile-sleep unloads Wi-Fi before suspend"
 grep -q 'i2c-tools' PKGBUILD || fail "omamobile-usb-rescue needs i2c-tools"
 grep -q '^PACKAGE=omamobile-device-panther$' "$tmp/root/usr/share/omamobile/device.conf" \
   || fail "the installed descriptor is panther"
 for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/lib/systemd/system/omamobile-boot-success.service \
-              usr/bin/omamobile-wifi-start usr/bin/omamobile-charge-guard \
+              usr/bin/omamobile-charge-guard usr/bin/omamobile-aoc-start \
               usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
-pass "install stages the udev rules, the USB link and its rescue, and the mirrorlist, and nothing that marks a slot or starts the radio or the charger"
+for wants in "$tmp"/root/usr/lib/systemd/system/*.wants/*; do
+  case ${wants##*/} in
+    omamobile-usb-rescue.service|omamobile-wifi.service|omamobile-camera.timer) ;;
+    *) fail "install enables ${wants#$tmp/root/}" ;;
+  esac
+done
+pass "install stages the udev rules, the USB link and its rescue, Wi-Fi, and the mirrorlist; it starts only the USB rescue, guarded Wi-Fi and the camera timer, and nothing that marks a slot or starts the modem or the charger"
 # The cameras: drivers blacklisted, loaded only by omamobile-camera-start
 # from the timer, on panther's CSIS (1a450000; cheetah's is 1a460000).
 cam=$tmp/root/usr/bin/omamobile-camera-start

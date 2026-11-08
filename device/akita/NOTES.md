@@ -11,6 +11,21 @@ Sources:
 - `S/`: Google's GPL zuma SoC device tree, [kernel/devices/google/zuma](https://android.googlesource.com/kernel/devices/google/zuma/+/refs/tags/android-16.0.0_r0.10/dts/) at the same tag.
 - `H/`: [husky's notes](../husky/NOTES.md) and [descriptor](../husky/device.conf), for what the two zuma phones share.
 
+## 2026-11-06: storage and the Arch root (M2)
+
+UFS with the storage guard (gate c) and Arch on `userdata` (gate d). The steps and results are in [BRINGUP-M2](BRINGUP-M2.md). The kernel side is linux-omarchy-mobile#206, merged as `75b9c0b73`.
+
+- **UFS links at stock's mode** [V]: `FAST series_B G_4 L_2`, with husky's three board nodes (VCC on `gpp0-1`). All 62 partitions appear on stock's device nodes, and the guard leaves exactly `UFS_RW` writable, in the initramfs and under Arch.
+- **The disks attach before PID 1** [V]: at 0.26 s, with `/init` starting at 0.28 s, because UFS is built in. The guard has flagged every partition by 0.61 s, and nothing is mounted before then.
+- **The kernel's default sleep is `deep`** [V]: `/sys/power/mem_sleep` reads `s2idle [deep]` under Arch. Linux has no zuma SoC sleep sequence, so `omamobile-device-akita` makes Suspend use `s2idle`, as the Pixel 7 Pro's package does.
+- **`NV_PARTS` names the radio's partitions only** (the Pixel 7 Pro's list, all present on akita). Other per-phone partitions it doesn't name:
+  - `mfg_data`: factory data, which the Pixel 7 Pro's fingerprint stack reads a copy of ([cheetah's FINGERPRINT-PLAN](../cheetah/FINGERPRINT-PLAN.md));
+  - `trusty_persist` and `trusty_userdata`: Trusty's persistent storage ([tegu's FINGERPRINT-PLAN](../tegu/FINGERPRINT-PLAN.md));
+  - `pinfo`, `fips` and `blenv`, whose contents haven't been read [I].
+
+  None is on `UFS_RW`, so the guard keeps them read-only, and all are in M2.4's full backup. Since stage 0's clean backup, `mfg_data`, `pinfo`, `fips`, `blenv` and `trusty_userdata` are unchanged, and `trusty_persist` changed (stock ran) [V]. The two Trusty partitions are now in `NV_BACKUP_EXTRA`, as on the Pixel 8 Pro, so `tools/nv-backup --check` shows when Android has written Trusty's storage.
+- **A second retail 8a passed M2.3, M2.4 and M2.6** on the same branch, with the same link, partition map and guard results ([#456](https://github.com/derekross/omarchy-mobile/pull/456)).
+
 ## 2026-11-03: first light (M1.3) and the console (M1.4)
 
 Our kernel booted from slot B with the first-light board file, which has USB and no framebuffer. A second boot added the framebuffer. The steps and the builds are in [BRINGUP-M1](BRINGUP-M1.md).
@@ -111,6 +126,7 @@ The descriptor carries no comments; this table is its provenance.
 | `VENDOR_PAGESIZE` | 0x800 | [V] | F/ `vendor_boot` and `vendor_kernel_boot` headers |
 | `OS_VERSION`, `OS_PATCH_LEVEL` | 17.0.0, 2026-10 | [V] | F/ `init_boot` header; the build on both slots (R/) |
 | `BOOT_IMAGES`, `UFS_RW` | the five boot images; their `_b` names and `userdata` | [V] | R/ `/dev/block/by-name`; F/ |
+| `NV_PARTS`, `NV_BACKUP_EXTRA` | `efs efs_backup modem_userdata persist modem_a modem_b`; `devinfo trusty_persist trusty_userdata` | [V] | R/ `/dev/block/by-name` has all nine, none on `UFS_RW`. `NV_PARTS` is cheetah's: the partitions of AGENTS.md §1's checksum check. `NV_BACKUP_EXTRA` is husky's (#449): `devinfo`, whose slot flags change with every flash, and Trusty's two partitions, which Android writes (`trusty_persist` changed while stock ran, M2.4). Together they let `tools/nv-backup` back them up read-only from our own kernel ([BRINGUP-M2](BRINGUP-M2.md), M2.4), and `--check` report the extras' changes |
 | `INITRAMFS_INIT` | the shared init | [V] | as husky |
 | `PANEL_SIZE` | 1080x2400 | [V] | R/ `dumpsys display`; G/ `zuma-akita-display.dtsi` |
 | `SIMPLEFB_TRIG_CON` | `0x19470030 0x3061` | [V] | DECON0 `TRIG_CON` read 0x3070 at handover on a booted 8a (2026-11-03, above); 0x3061 unmasks the trigger as on husky (H/), and with it the console reaches the panel (M1.4, above) |

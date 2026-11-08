@@ -115,7 +115,7 @@ while read -r kind path sum url extra; do
   say "Fetching $path"
   progress=(-sS)
   [[ -t 2 ]] && progress=(-#)
-  curl -fL "${progress[@]}" --retry 3 --proto '=https,file' -o "$tmp/download" "$url" || die "download of $path failed: $url"
+  curl -fL "${progress[@]}" --retry 3 --proto '=https,file' --proto-redir '=https' -o "$tmp/download" "$url" || die "download of $path failed: $url"
   case $kind in
     file) mv "$tmp/download" "$tmp/item" ;;
     b64) base64 -d < "$tmp/download" > "$tmp/item" || die "$path: not base64" ;;
