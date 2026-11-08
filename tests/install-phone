@@ -104,7 +104,7 @@ grep -qF 'correct horse' "$t/out" && fail "the Wi-Fi password is never printed"
 pass "dry run: exactly the allowed commands printed, only getvar sent"
 
 FASTBOOT_SERIAL=FAKE123 install --dry-run || fail "an explicitly pinned matching phone is accepted"
-if FASTBOOT_SERIAL=OTHERPHONE install --dry-run; then fail "a different phone passed the serial pin"; fi
+if FASTBOOT_SERIAL=FAKEOTHERPHONE install --dry-run; then fail "a different phone passed the serial pin"; fi
 [[ $(cat "$t/fastboot.log") == devices ]] || fail "serial mismatch queried or wrote the unselected phone"
 pass "explicit serial pin accepts the selected phone and rejects another before getvar"
 
