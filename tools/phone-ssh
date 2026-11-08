@@ -127,7 +127,7 @@ PYCONTEXT
   # short policy hash leaves room for OpenSSH's temporary 17-byte suffix.
   path="${XDG_RUNTIME_DIR:-/tmp}/omamobile-ssh-$context-%C"
 fi
-# USB link setup and NFS-root startup can delay the first handshake on any phone.
+# A slow USB link setup can delay the first handshake.
 opts=(-o LogLevel=ERROR -o "ConnectTimeout=$connect_timeout")
 [[ -z $proxy ]] || opts+=(-o "ProxyCommand=$proxy")
 [[ -z $config ]] || opts+=(-F "$config")
