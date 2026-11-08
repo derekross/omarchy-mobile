@@ -18,15 +18,25 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 - Bootloader: spacecraft-17.4-16238327 on both slots (`fastboot getvar version-bootloader`, confirmed with `--set-active=b`)
 - Kernel: 6.12.69-android16-6-g5c5f2fea42dd-ab15835541-4k (`adb shell uname -a`)
 - CPU: 6× 0xd8b (rev 1) + 1× 0xd8c (rev 0) (`/proc/cpuinfo`)
-- Boot image header: v4
+- Boot image header: v4 (`unpack_bootimg` on `init_boot.img` and `boot.img`)
+- OS version: 17.0.0 (`unpack_bootimg --boot_img init_boot.img`)
+- OS patch level: 2026-09 (`unpack_bootimg --boot_img init_boot.img`)
+- Page size: 0x800 (`unpack_bootimg --boot_img vendor_boot.img`)
 - DTB: in `vendor_kernel_boot.img` (decompiled to confirm nodes)
 - Display: Verisilicon DC9x00 DPU + MIPI DSI2 (stock DTB)
 - dtbo_idx: 37 (`adb shell getprop ro.boot.dtbo_idx`)
 - DTBO entry 37: id=0x80406 rev=0x10000 (factory `dtbo.img`)
 - AVB values: from factory images (`avbtool info_image` on `vbmeta.img`, `boot.img`, and `init_boot.img` in `~/kodiak-factory`). Same as slot B after factory flash.
+- DTBO entry 37: id=0x80406 rev=0x10000 (`mkdtboimg dump` on factory `dtbo.img`)
 - Bootloader unlocked: yes
 - Current confirmed bootable slots: both (factory flash + full OTA sideload)
 - ABL still appends `console=null` (`adb shell cat /proc/cmdline`)
+
+## Partition and AVB sources
+
+- Partition sizes: `fastboot getvar partition-size:boot_b`, `partition-size:init_boot_b`, etc.
+- Partition names and by-name → block mapping: from recovery (sysfs/by-name)
+- AVB values: `avbtool info_image` on stock `vbmeta_b`, `boot`, and `init_boot` (rollback index, security patch, chaining)
 
 ## Hardware from stock DTB (vendor_kernel_boot)
 
@@ -55,4 +65,4 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 
 Stock facts collected and both slots restored to factory.  
 Device descriptor added in `device/kodiak/device.conf`.  
-Critical calibration partitions backed up off-device with SHA-256 checksums (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata).  
+Critical calibration partitions backed up off-device with SHA-256 checksums (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata). Taken from OrangeFox recovery (read-only `dd` of the by-name nodes, pulled off-device).
