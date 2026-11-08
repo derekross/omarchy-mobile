@@ -8,13 +8,14 @@
 # reused output directory keeps no firmware or sensor registry file from
 # an earlier run (another device's, or one the new image doesn't have),
 # and leaves the rest of the directory alone; a husky run drops an earlier
-# registry; the checksum list names exactly the mapped files; a failed run
-# (a missing file or registry, debugfs reporting a short write, also
-# under a file size limit, a failed sanity check, a missing camera APEX)
-# leaves the previous outputs and the -c file byte for byte, so an older
-# file can't pass for a missing one; a -c that is a directory or inside
-# the outputs is refused; and a move that fails while publishing puts the
-# previous outputs back. With mkfs.ext4
+# registry; a successful run's checksum list names exactly the mapped
+# files; a failed run (a missing file or registry, debugfs reporting a
+# short write, also under a file size limit, a failed sanity check, a
+# missing camera APEX) leaves the previous outputs and the -c file byte
+# for byte, so an older file can't pass for a missing one; a -c that is a
+# directory or inside the outputs is refused; an -o that resolves to / is
+# refused before anything is written; and a move that fails while
+# publishing puts the previous outputs back. With mkfs.ext4
 # and debugfs on the host, the same on a real ext4 image whose registry
 # belongs to root, and a copy that a file size limit cuts short. EVF=path
 # runs another copy of the tool (a negative control), so every check runs
@@ -266,6 +267,24 @@ elif ! grep -qF -- "-c must not be inside the outputs" "$t/log" || [[ $(snap "$o
 else
   pass "camera: a -c inside the replaced outputs is refused, nothing changed"
 fi
+
+# -o naming / (or a path that resolves to it) is refused before anything is
+# written, the scratch directory included. The image is all zeros, neither
+# ext4 nor EROFS, so a tool without the refusal stops at the image check
+# instead, before it could write under /: this check never writes there.
+head -c 4096 /dev/zero > "$t/junk.img"
+ln -s / "$t/link-to-root"
+for root in / // /usr/.. "$t/link-to-root"; do
+  name="-o ${root#"$t/"}"
+  rm -rf "$t/work-root"
+  if "$EVF" -w "$t/work-root" -o "$root" "$t/junk.img" > "$t/log" 2>&1; then
+    fail "$name: refused"
+  elif ! grep -qF -- "-o resolves to /" "$t/log" || [[ -e $t/work-root ]]; then
+    cat "$t/log"; fail "$name: refused before anything is written"
+  else
+    pass "$name: refused before anything is written"
+  fi
+done
 
 # A move that fails while publishing (the registry's parent not writable)
 # puts back what was already replaced: OUT is left as it was

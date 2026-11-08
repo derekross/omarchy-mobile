@@ -94,7 +94,8 @@
 # included, leaves the previous outputs as they were (if putting them back
 # fails too, the error names the directory holding them), and a reused OUTDIR
 # keeps no file from an earlier run (another device's firmware, an old sensor
-# registry); the rest of OUTDIR is left alone.
+# registry); the rest of OUTDIR is left alone. An OUTDIR that is / (or
+# resolves to it) is refused before anything is written.
 #
 # Needs: unzip, debugfs (e2fsprogs); simg2img if vendor.img is sparse;
 # lpunpack if the image only has super.img; fsck.erofs (erofs-utils) if vendor is EROFS.
@@ -256,6 +257,9 @@ SRC=$(readlink -f "$1")
 [[ -f "$SRC" ]] || die "no such file: $1"
 # Absolute, because the checksum step runs from inside the staging dir
 OUT=$(realpath -m -- "$OUT")
+# Publishing replaces whole directories under OUT, so OUT=/ would replace this
+# machine's own; refuse before anything is written (WORK included)
+[[ $OUT != / ]] || die "-o resolves to /: publishing would replace this machine's own directories"
 [[ -z $CAMERA_APEX || ( -d $(dirname -- "$CAMERA_APEX") && ! -d $CAMERA_APEX ) ]] ||
   die "-c needs a file name in an existing directory: $CAMERA_APEX"
 case $CAMERA_APEX in
