@@ -127,7 +127,7 @@ TestCase {
         compare(calls.length, 0);
         tryCompare(revealAnimation, "running", false, 300);
         tryCompare(root, "openRefreshIndex", -1, 1500);
-        compare(calls.join(","), "0,1,2,3,4,5,6,7,8,9,10");
+        compare(calls.join(","), "9,1,2,0,3,4,5,6,7,8,10");
         for (var i = 1; i < times.length; i++)
             verify(times[i] - times[i - 1] >= 25);
     }
@@ -170,13 +170,35 @@ TestCase {
         compare(calls.join(","), "1");
         cancelOpenRefresh();
     }
-    function test_scrollAndEditingGates() {
+    function test_firstScreenReadsAreFirst() {
+        var started = Date.now();
+        revealAnimation.start();
         opened = true;
+        scheduleOpenRefresh();
+        tryVerify(function () { return calls.length >= 3; }, 450);
+        compare(calls.slice(0, 3).join(","), "9,1,2");
+        verify(times[0] - started < 350);
+        verify(times[0] - started >= 100);
+        cancelOpenRefresh();
+    }
+    function test_editOpenDoesNotWaitForDone() {
         editing = true;
+        revealAnimation.start();
+        opened = true;
+        scheduleOpenRefresh();
+        tryVerify(function () { return calls.length >= 3; }, 450);
+        compare(calls.slice(0, 3).join(","), "9,1,2");
+        verify(editing);
+        tryCompare(root, "openRefreshIndex", -1, 1500);
+        compare(calls.length, 11);
+    }
+    function test_scrollGates() {
+        opened = true;
+        editFlick.moving = true;
         scheduleOpenRefresh();
         wait(70);
         compare(calls.length, 0);
-        editing = false;
+        editFlick.moving = false;
         pager.moving = true;
         wait(70);
         compare(calls.length, 0);

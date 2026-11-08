@@ -80,7 +80,7 @@ Item {
   // reads remain immediate; closing cancels only work not started yet.
   property int openRefreshIndex: -1
   readonly property bool openRefreshMoving: revealAnimation.running || drag.pressed
-    || sheetFlick.moving || pager.moving || editFlick.moving || shadeList.moving || editing
+    || sheetFlick.moving || pager.moving || editFlick.moving || shadeList.moving
 
   function scheduleOpenRefresh() {
     if (openRefreshIndex < 0) openRefreshIndex = 0
@@ -102,16 +102,17 @@ Item {
     if (!opened || openRefreshMoving || openRefreshIndex < 0) return
     var index = openRefreshIndex++
     switch (index) {
-      case 0: refreshProbe(); break
+      // Prioritize what is visible immediately on the first screen.
+      case 0: refreshNotifications(); break
       case 1: refreshDnd(); break
       case 2: brightness.refresh(); break
-      case 3: torch.refresh(); break
-      case 4: rotationLock.refresh(); break
-      case 5: location.refresh(); break
-      case 6: nfc.refresh(); break
-      case 7: fingerprint.refresh(); break
-      case 8: keyboard.refresh(); break
-      case 9: refreshNotifications(); break
+      case 3: refreshProbe(); break
+      case 4: torch.refresh(); break
+      case 5: rotationLock.refresh(); break
+      case 6: location.refresh(); break
+      case 7: nfc.refresh(); break
+      case 8: fingerprint.refresh(); break
+      case 9: keyboard.refresh(); break
       case 10: if (!clockFormatRead.running) clockFormatRead.running = true; break
     }
     if (openRefreshIndex >= 11) openRefreshIndex = -1
