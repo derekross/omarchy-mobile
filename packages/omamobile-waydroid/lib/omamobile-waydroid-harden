@@ -17,7 +17,9 @@ block device through the cgroup2 device controller.
   omamobile-waydroid-harden patch  [ROOT]  patch Waydroid's Python (pacman hook)
   omamobile-waydroid-harden config [ROOT]  fix the generated LXC config (before
                                            each container start)
-  omamobile-waydroid-harden verify [ROOT]  exit 1 unless both are in place
+  omamobile-waydroid-harden verify [ROOT]  exit 1 unless both are in place, and
+                                           no generated LXC file opens every
+                                           device (see OPEN_ALLOW)
 
 ROOT defaults to /. Every edit is idempotent and refuses a file whose
 expected text is missing (a new Waydroid version needs this script checked).
@@ -45,6 +47,25 @@ CUTS = [
 # Lines the generated config_nodes must not carry (an older or unpatched
 # generation): debugfs, video and framebuffer binds.
 BAD_NODE = re.compile(r"^lxc\.mount\.entry\s*=\s*/(sys/kernel/debug|dev/video\d+|dev/fb\d+|dev/graphics/fb\d+)\s")
+
+
+# A device rule that opens (nearly) everything: "allow = a" (all devices), any
+# "b" allow (block devices: the UFS) or "c *:*" (every character device). LXC 7
+# keeps block devices out only because nothing allows them, and a global allow
+# placed after our include clears every rule before it, so a hand-edited
+# generated file (the "allow = a" in #465) must fail closed. Also the older
+# lxc.cgroup.devices.allow spelling, in case LXC maps it.
+OPEN_ALLOW = re.compile(r"^lxc\.cgroup2?\.devices\.allow\s*=\s*(a|b|c\s+\*:\*)(\s|$)")
+# The files LXC reads from Waydroid's generated config: config itself and what
+# it includes (config_nodes, config_session)
+GENERATED = ("config", "config_nodes", "config_session")
+
+
+def open_allows(path):
+    """(line number, line) of every rule in PATH that opens every device."""
+    if not os.path.exists(path):
+        return []
+    return [(n, l.strip()) for n, l in enumerate(open(path), 1) if OPEN_ALLOW.match(l.strip())]
 
 
 def commented(text):
@@ -116,6 +137,10 @@ def verify(root):
     if not os.path.exists(conf) or INCLUDE not in open(conf).read().splitlines():
         print(f"FAIL {conf}: no omamobile device rules")
         ok = False
+    for name in GENERATED:
+        for n, l in open_allows(os.path.join(d, name)):
+            print(f"FAIL {os.path.join(d, name)}:{n}: opens every device: {l}")
+            ok = False
     if ok:
         print("ok    Waydroid hardened")
     return ok

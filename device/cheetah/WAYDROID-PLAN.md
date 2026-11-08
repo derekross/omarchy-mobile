@@ -194,7 +194,11 @@ Waydroid 1.6.3 does three things that are wrong on this phone:
   the file before every start.
 - `verify` (`ExecStartPre` too) refuses to start the container unless all
   of it is in place. `waydroid upgrade` regenerates the config, so this runs
-  before every start.
+  before every start. It also refuses a hand-opened config: an
+  `lxc.cgroup2.devices.allow` of `a`, of any `b` device, or of `c *:*` in
+  Waydroid's generated `config`, `config_nodes` or `config_session` fails it
+  (`FAIL <file>:<line>: opens every device`), so such an edit fails closed
+  instead of relying on where it sits relative to our include.
 
 Sound reaches Android only through PipeWire's PulseAudio socket (no
 `/dev/snd` is bound), so the speaker stages and protection in
@@ -371,6 +375,11 @@ tools/phone-ssh 'systemctl start waydroid-container; sleep 5; systemctl --no-pag
 # is "inaccessible or not found" (rc=127), which looks like a refusal.
 tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
   "export PATH=/system/bin:\$PATH; toybox mknod /dev/omtest b 7 0; echo mknod_rc=\$?; toybox head -c 1 /dev/omtest > /dev/null; echo head_rc=\$?; toybox rm -f /dev/omtest"'
+# The character side: 1:1 is /dev/mem, which no allow line lists. mknod only,
+# never read or open the node: if the rule ever failed, reading /dev/mem could
+# crash the phone.
+tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
+  "export PATH=/system/bin:\$PATH; toybox mknod /dev/omtest2 c 1:1; echo mknod2_rc=\$?; toybox rm -f /dev/omtest2"'
 tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
   "export PATH=/system/bin:\$PATH; toybox ls /sys/kernel/debug /dev | toybox head"'
 ```
@@ -381,11 +390,14 @@ starts with a session, run them after W5's session start instead.
 - **Expect:** the service is active (its three `ExecStartPre` lines passed);
   `binder`, `vndbinder`, `hwbinder` in `/dev/binderfs`; `toybox mknod`
   prints `mknod: /dev/omtest: Operation not permitted` (that line is the pass
-  condition, not a nonzero rc: a missing command also gives one);
+  condition, not a nonzero rc: a missing command also gives one), and so
+  does `toybox mknod /dev/omtest2 c 1:1` (`mknod: /dev/omtest2: Operation not
+  permitted`);
   `/sys/kernel/debug` empty or
   missing inside; no `video*` or `fb*` in the container's `/dev`.
-- **Stop:** the block read succeeds (stop the container at once and fix
-  the device rule before anything else); any oops; any
+- **Stop:** the block read succeeds, or `mknod /dev/omtest2 c 1:1` succeeds
+  (stop the container at once and fix the device rule before anything else;
+  never read `/omtest2`); any oops; any
   `ufshcd_err_handler`; binder errors repeating in dmesg.
 - **Rollback:** `systemctl stop waydroid-container`.
 
