@@ -1,0 +1,8 @@
+#!/bin/bash
+# fake wtype: logs arguments, but for "wtype -" only the length of what came on stdin
+if [[ ${1:-} == - ]]; then
+  typed=$(cat); printf '%s' "$typed" > "$FAKE_STATE/typed"; echo "wtype - (stdin ${#typed} chars)" >> "$FAKE_LOG"
+else
+  echo "wtype $*" >> "$FAKE_LOG"
+  if [[ $* == "-k Return" && -f $FAKE_STATE/typed && $(cat "$FAKE_STATE/typed") == "$FAKE_PIN" ]]; then echo false > "$FAKE_STATE/locked"; fi
+fi
