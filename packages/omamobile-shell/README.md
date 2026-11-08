@@ -5,7 +5,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | Path | What it is |
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
-| `plugins/omamobile.quicksettings` | Pull-down quick settings |
+| `plugins/omamobile.quicksettings` | Pull-down quick settings; the Wi-Fi, Bluetooth and Hotspot tiles have pages behind their chevrons (the Hotspot page: name, password, a QR code to join, and `hotspot-panel.sh`'s VPN boxes where a device's hotspot backend has them) |
 | `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
