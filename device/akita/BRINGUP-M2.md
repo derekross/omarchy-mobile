@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # akita M2: storage (UFS behind the guard, then the Arch root)
 
-**Status (2026-11-07):** M2.1-M2.6 are done; M2.7 waits for the signed package. M1 is complete and merged ([BRINGUP-M1](BRINGUP-M1.md)):
+**Status (2026-11-08):** M2.1-M2.6 are done and merged (#456); M2.7 waits for the signed package. M1 is complete and merged ([BRINGUP-M1](BRINGUP-M1.md)):
 - derekross/linux-omarchy-mobile#192 was rebase-merged on 2026-11-05, so its three commits are on `omamobile` under new ids, with the same patches: `cb2cd5e4b` (binding), `c7eb44543` (first light) and `0e2739a92` (framebuffer).
 - #414 was squash-merged as `905aa91`.
 
@@ -64,7 +64,7 @@ As in [BRINGUP-M1](BRINGUP-M1.md): `R/` is the private stock capture, `L/` our k
 2. **The first UFS boot is read-only and stays in the initramfs.** A bring-up overlay, `device/akita/overlays/ufs-probe.dtso`, sets the board's `bootargs` plus `omamobile.ufs-probe omamobile.initramfs`. That gives the probe listing and no hand-over to Arch, so nothing runs on `userdata`. `DTB_OVERLAYS="ufs-probe"` goes in `device.conf` for that build only, and comes out again afterwards.
 3. **Nothing writes before the guard.** UFS is built in, so the disks appear before PID 1. In M2.3 they attached at 0.26 s, and `/init` started at 0.28 s. The init's first job is the guard, which flagged every partition by 0.61 s and removed `/dev/sda`. In between, the kernel only reads the partition tables, and nothing is mounted. `UFS_RW` is unchanged since stage 0.
 4. **The fresh backup comes from our kernel.**
-   - `NV_PARTS="efs efs_backup modem_userdata persist modem_a modem_b"` and `NV_BACKUP_EXTRA="devinfo"` go in the descriptor, cheetah's values. Then `tools/nv-backup -d akita` copies the radio and calibration partitions read-only over SSH, and its `--check` can later show that nothing on Linux changed them.
+   - `NV_PARTS="efs efs_backup modem_userdata persist modem_a modem_b"` (cheetah's) and `NV_BACKUP_EXTRA="devinfo trusty_persist trusty_userdata"` (husky's since #449) go in the descriptor. M2.4 ran with `devinfo` alone; Trusty's two partitions joined after #456's review. Then `tools/nv-backup -d akita` copies the radio and calibration partitions read-only over SSH. Its `--check` can later show that nothing on Linux changed them, and report when Android has written the extras.
    - The rest of the stage-0 set is copied the same way, with each partition hashed on the phone and on the laptop.
 5. **The device package comes first, in its own PR.** `omamobile-device-akita` starts with husky's generic first set:
    - the storage rule;
@@ -189,7 +189,9 @@ The install needs the human's go, since it erases `userdata` again.
   - the guard's flags hold;
   - `reboot-to bootloader` works;
   - `tools/phone-smoke`'s report goes to the pull request, naming what doesn't apply yet (no GPU or touch driver).
-- **Watch for:** the clock. With no RTC driver and no network time, the clock starts early, and gpg can skip a new release key as "created in the future" (husky's U4 finding). Set it from the laptop over ssh before `pacman-key --populate`.
+- **Watch for:**
+  - **The clock.** With no RTC driver and no network time, the clock starts early, and gpg can skip a new release key as "created in the future" (husky's U4 finding). Set it from the laptop over ssh before `pacman-key --populate`.
+  - **Suspend.** Don't use it in M2.7. The package's drop-in makes Suspend mean s2idle, and that has never run on Tensor G3. It waits for the Pixel 8 Pro's U6, so the session test doesn't turn into a suspend test.
 - **Risk:** low for the hardware. The trap is the fallback to stock after three boots (above).
 
 ## Risks
@@ -272,7 +274,7 @@ The UFS change went out as linux-omarchy-mobile#206, signed off by the owner, an
 
 ### 2026-11-06: Arch on `userdata`, test image (M2.6, gate d)
 
-- **Kernel:** `7.3.0-rc6-omamobile-push1-g31d8b229d0d0`: #206's head before it merged (`31d8b229d`), built clean with no overlay. Its DTS is blob `bfa8b6f54e0e`, as merged in `75b9c0b73`.
+- **Kernel:** `7.3.0-rc6-omamobile-push1-g31d8b229d0d0`: linux-omarchy-mobile#206's head before it merged (`31d8b229d`), built clean with no overlay. Its DTS is blob `bfa8b6f54e0e`, as merged in `75b9c0b73`.
 - **The test root:** built by `device/akita/build-u3-root` from the Arch Linux ARM base (sha256 `42a4eeaa…`), `omamobile-device-akita` 0.1.0 and this kernel's modules. Its MANIFEST names repository commit `93de3d963c6d`.
 - **The install:** `tools/install-phone --device akita --rootfs … --bootloader-slots-match akita-17.0-15681527 --reinstall`, run by the owner after a dry run.
 
@@ -283,6 +285,7 @@ The UFS change went out as linux-omarchy-mobile#206, signed off by the owner, an
 | 15 | The guard under Arch | 62 partitions, exactly `UFS_RW` writable; `sdb`-`sdd` `ro`; no `/dev/sda`. Only `sda34` is mounted (ext4, 107.9 G). The kernel log has no UFS or ext4 error | The guard's flags hold after `switch_root` |
 | 16 | `bin/omamobile fastboot` from Arch, 282 s into the first boot | `reboot-to bootloader` reached fastboot in 25 s. `getvar`: slot B `slot-successful:no` with 2 tries, slot A unchanged | The reboot mode works from Arch too. `reboot-to` syncs before it resets |
 | 17 | `fastboot --set-active=b` (B back to 3 tries), then `fastboot reboot` | SSH at 28 s, with systemd `running` 9 s into boot. `systemd-analyze`: 2.0 s kernel and initramfs plus 2.2 s userspace. As before: no failed units, 27 running, the guard's flags, `usb0`, the same four journal lines. ext4 mounted cleanly with no journal replay, and the root wasn't grown again | **Gate (d) passed:** a second boot comes up the same |
+| 18 | `tools/phone-smoke` from the laptop, 42 h into that boot (2026-11-08; the report's own date is the phone's clock, July) | Required rows: boot, storage guard (62 partitions, only `UFS_RW` writable), root (ext4 on `userdata`), kernel health (no oops or BUG, 0 WARN), systemd units, USB gadget, all ok; session not ok. Evidence: the display ok (1080x2400 on simpledrm); GPU, lock and touch not ok; buttons, radios, battery, sound, sensors and cameras skip. Its "new dmesg errors" are the two `exynos-clkout` lines, which husky's log has too (H/), but which the tool's known list (the 7 Pro's) doesn't name | As expected for the test root: everything below the session works, and the session rows wait for M2.7's image |
 
 Findings:
 
