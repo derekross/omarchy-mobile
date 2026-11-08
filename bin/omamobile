@@ -625,6 +625,11 @@ cmd_initramfs() {
   [[ -f $init ]] || die "no init script $init"
   # Every per-device value is checked before anything is downloaded or built
   initramfs_config
+  if [[ -n ${OMAMOBILE_NFSROOT:-} ]]; then
+    ((release == 0)) || die "OMAMOBILE_NFSROOT is for local bring-up only, not --release"
+    [[ $OMAMOBILE_NFSROOT =~ ^[A-Za-z0-9.-]+:/[A-Za-z0-9._/-]+$ && $OMAMOBILE_NFSROOT != *..* && $OMAMOBILE_NFSROOT != *//* ]] ||
+      die "OMAMOBILE_NFSROOT must be a host and absolute export path, for example 172.16.42.2:/srv/nfs/dipper"
+  fi
   local tarball="alpine-minirootfs-$ver-aarch64.tar.gz"
   local sum=9bf70a7f18ea44094cbb5f70c58f9af129c8214745743db0e68e5502cc2ce773
   mkdir -p "$dl"
@@ -673,6 +678,11 @@ cmd_initramfs() {
   install -m 755 "$init" "$stage/init"
 
   initramfs_config "$stage/etc"
+  if [[ -n ${OMAMOBILE_NFSROOT:-} ]]; then
+    printf '%s\n' "$OMAMOBILE_NFSROOT" > "$stage/etc/omamobile-nfsroot"
+  else
+    rm -f "$stage/etc/omamobile-nfsroot"
+  fi
   # Modules the init loads before anything else (INITRAMFS_MODULES, in load
   # order), from this kernel build's modules_install: the directory of this
   # build's release, never an older one left in modules-staging

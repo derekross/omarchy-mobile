@@ -65,6 +65,10 @@ UFS_RW_LUNS=""
 ufs_rw_disk() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
 ufs_rw_load() {
   local list p
+  if [ -s /etc/omamobile-nfsroot ]; then
+    ufs_ro_log "NFS root requested: every UFS partition read-only"
+    return 0
+  fi
   if [ ! -s /etc/omamobile-ufs-rw ]; then
     ufs_ro_log "no allowlist in this image (/etc/omamobile-ufs-rw): every partition read-only"
     return 0
@@ -121,6 +125,18 @@ ufs_ro_pass() {
     [ -e "/run/ufs-ro/$name" ] && continue
     [ -b "/dev/$name" ] || continue  # devtmpfs node not there yet: next pass
     if ufs_rw_disk "$name"; then
+      if [ -s /etc/omamobile-nfsroot ]; then
+        blockdev --setro "/dev/$name"
+        read -r ro < "$s/ro"
+        if [ "$ro" = 1 ]; then
+          : > "/run/ufs-ro/$name"
+          ufs_ro_log "/dev/$name set read-only for NFS root"
+          continue
+        fi
+        ufs_ro_log "FAILED to set /dev/$name read-only for NFS root"
+        echo "omamobile: WARNING: /dev/$name is NOT read-only" > /dev/tty0 2>/dev/null
+        continue
+      fi
       rm -f "/dev/$name"
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name: whole-disk node removed (partitions guarded individually)"
@@ -152,7 +168,7 @@ ufs_unguarded() {
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
-    ufs_rw_disk "$name" && continue
+    ufs_rw_disk "$name" && [ ! -s /etc/omamobile-nfsroot ] && continue
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")
@@ -437,6 +453,7 @@ grow_root() {
 # kernel keeps them across the switch, so the mount survives switch_root.
 boot_nfs() {
   local spec
+  grep -q omamobile.initramfs /proc/cmdline && return 1
   [ -r /etc/omamobile-nfsroot ] || return 1
   spec=$(cat /etc/omamobile-nfsroot)
   [ -n "$spec" ] || return 1
@@ -456,13 +473,7 @@ boot_nfs() {
   if [ ! -x /newroot/usr/lib/systemd/systemd ]; then
     say "nfsroot: no systemd on $spec"; umount /newroot; return 1
   fi
-  # NFS mode must not expose writable UFS partitions, including the boot allowlist.
-  UFS_RW=""
-  kill "$ufs_guard_pid" 2>/dev/null || true
-  wait "$ufs_guard_pid" 2>/dev/null || true
-  rm -f /run/ufs-ro/*
-  ufs_ro_pass
-  ufs_ro_start
+  # The first guard pass already used an empty allowlist in NFS mode.
   local open
   open=$(ufs_unguarded)
   if [ -n "$open" ]; then
@@ -471,6 +482,7 @@ boot_nfs() {
     return 1
   fi
   say "nfsroot: switching to Arch Linux on $spec"
+  # kill -9 -1 also kills the feeder; Dipper's systemd takes over at 60 seconds.
   kill -9 -1 2>/dev/null
   sleep 1
   for m in /dev /proc /sys /run; do
@@ -513,6 +525,7 @@ boot_arch() {
   say "arch: switching to Arch Linux on $dev"
   # Stop the initramfs helpers (dropbear, getty, guards); the kernel keeps
   # the USB gadget and the partition read-only flags across the switch
+  # systemd takes over the hardware watchdog here; Dipper uses RuntimeWatchdogSec=60s.
   kill -9 -1 2>/dev/null
   sleep 1
   for m in /dev /proc /sys /run; do
