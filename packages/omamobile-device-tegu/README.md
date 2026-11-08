@@ -171,10 +171,16 @@ The latch stays from step 2 until the profile's unit stops at shutdown:
 its ExecStopPost (`omamobile-tegu-modem-up --stopped`) removes this boot's
 latch once the start had reached ONLINE, whatever the stop's result (the
 CP's power-off can end rfsd before systemd's SIGINT, so the result is often
-not "success"). A start that never reached ONLINE, or a boot that hung or reset
-with the modem up, leaves it, and every later start refuses until you've
-read `/var/log/omamobile/modem.log` and the last boot's journal and removed
-it. It also refuses a second start in a boot that already loaded CPIF.
+not "success"). A start that never reached ONLINE leaves it, and every
+later start refuses until you've read `/var/log/omamobile/modem.log` and
+that boot's journal and removed it. A boot that hung, reset or was powered
+off by a held power key with the modem up leaves it too, but its bring-up
+had worked, so the next boot moves it aside
+(`modem-bringup-started.unclean-<time>`) and starts the modem; only a second
+unclean end in a row, with that copy still there, holds until you've looked
+(`rm /var/lib/omamobile/modem-bringup-started*`, then
+`systemctl start omamobile-tegu-modem-boot`). A clean stop removes the
+copies. It also refuses a second start in a boot that already loaded CPIF.
 Never stop the modem by hand; the reboot's shutdown stops it.
 
 With #403, a `reboot-to` (and so `bin/omamobile push`) with the CP ONLINE
@@ -205,8 +211,9 @@ drains as if awake, since the palmtop no longer suspends.
 
 **Rollback:** `systemctl disable omamobile-tegu-modem-boot`, then reboot.
 If the palmtop resets before you can log in, the latch does the work: the
-boot after a reset with the modem up finds it and doesn't start the modem,
-so log in then, disable the unit and remove the latch. If it still doesn't
+boot after a reset with the modem up starts it once more, and the boot
+after a second reset in a row finds the latch and its copy and doesn't
+start the modem, so log in then, disable the unit and remove both. If it still doesn't
 come up, hold Volume Down + Power for fastboot and boot a known-good image
 set.
 

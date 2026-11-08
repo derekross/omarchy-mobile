@@ -118,9 +118,36 @@ grep -q 'ended with reboot-to' "$t/n1/out" || fail "the clear is logged"
 grep -q "boot 22222222-2222-2222-2222-222222222222" "$t/n1/latch" && grep -qx online "$t/n1/latch" || fail "this boot's latch names its boot and ONLINE"
 note_case n2 "2026-11-03T00:00:00+00:00 boot $old\n" "$old" && fail "a start that never reached ONLINE still refuses, note or not"
 grep -q 'never reached ONLINE' "$t/n2/out" || fail "the refusal names the latch"
-note_case n3 "2026-11-03T00:00:00+00:00 boot $old\nonline\n" 33333333-3333-3333-3333-333333333333 && fail "a note naming another boot clears nothing"
-[[ -e $t/n3/latch && -e $t/n3/note ]] || fail "the latch and the note stay"
+note_case n3 "2026-11-03T00:00:00+00:00 boot $old\nonline\n" 33333333-3333-3333-3333-333333333333 || { cat "$t/n3/out"; fail "a note naming another boot clears nothing; the latch then counts as an unclean end, which starts"; }
+grep -q 'ended with reboot-to' "$t/n3/out" && fail "a note naming another boot isn't taken for this latch"
+[[ -e $t/n3/note ]] || fail "the note stays"
+grep -q 'ended without a clean stop' "$t/n3/out" && ls "$t/n3"/latch.unclean-* >/dev/null 2>&1 || fail "the latch is an unclean end instead: moved aside, the start goes on"
 printf 'ok - %s\n' "modem-up: reboot-to's note clears an ONLINE latch of the boot it names, nothing else"
+
+# An unclean end with the modem up (a hang, a reset, a held power key): the
+# other boot's ONLINE latch moves aside and the start goes on; with such a
+# copy already there (two unclean ends in a row, no clean stop between) the
+# start holds and loads nothing.
+unclean_case() { # NAME LATCH-LINES [COPY]
+  local r=$t/$1; rm -rf "$r"; mkdir -p "$r/sys/bus/platform/devices/154e0000.pinctrl" "$r/sys/module/pcie_aspm/parameters" "$r/dt/cpif" "$r/log"; : > "$r/calls"
+  printf '%b' "$2" > "$r/latch"; [[ -n ${3:-} ]] && printf '%b' "$2" > "$r/latch.unclean-$3"; echo 22222222-2222-2222-2222-222222222222 > "$r/boot_id"
+  env -i PATH="$F:/usr/bin:/bin" T="$r" OMAMOBILE_MODEM_TEST=1 OMAMOBILE_SYS="$r/sys" OMAMOBILE_DT="$r/dt" \
+    OMAMOBILE_MODEM_LATCH="$r/latch" OMAMOBILE_DELIBERATE_RESTART="$r/note" OMAMOBILE_BOOT_ID="$r/boot_id" \
+    OMAMOBILE_MODEM_CP="$t/cp" OMAMOBILE_VENDOR_CHROOT="$t/chroot" OMAMOBILE_MODEM_LOG="$r/log" OMAMOBILE_MODEM_POLL=0 \
+    IN_TREE=1 MMD=1 bash bin/omamobile-tegu-modem-up --phone > "$r/out" 2>&1
+}
+unclean_case u1 "2026-11-03T00:00:00+00:00 boot $old\nonline\n" || { cat "$t/u1/out"; fail "one unclean end with the modem up doesn't cost the next boot its modem"; }
+grep -q 'ended without a clean stop' "$t/u1/out" || fail "the unclean end is logged"
+[[ $(ls "$t/u1"/latch.unclean-* | wc -l) -eq 1 ]] && grep -q "boot $old" "$t/u1"/latch.unclean-* || fail "the old latch is kept aside as a copy"
+grep -q "boot 22222222-2222-2222-2222-222222222222" "$t/u1/latch" && grep -qx online "$t/u1/latch" || fail "this boot's latch names its boot and ONLINE"
+grep -qx 'modprobe pcie_gs201_cp allow_hw=1 latch=yes' "$t/u1/calls" || fail "the drivers load after the new latch"
+unclean_case u2 "2026-11-03T01:00:00+00:00 boot $old\nonline\n" 20261103T000000 && fail "a second unclean end in a row holds"
+grep -q 'the last two boots with the modem up ended without a clean stop' "$t/u2/out" || fail "the hold says why"
+grep -qE '^(modprobe|insmod|systemd-run)' "$t/u2/calls" && fail "nothing starts while it holds"
+[[ -e $t/u2/latch && -e $t/u2/latch.unclean-20261103T000000 ]] || fail "the latch and the copy stay for the human"
+unclean_case u3 "2026-11-03T00:00:00+00:00 boot $old\n" && fail "a start that never reached ONLINE still refuses"
+grep -q 'never reached ONLINE' "$t/u3/out" || fail "the refusal names the latch"
+printf 'ok - %s\n' "modem-up: one unclean end with the modem up starts again, two in a row hold, a bring-up that never reached ONLINE holds"
 
 # --stopped (the profile unit's ExecStopPost): this boot's latch goes once it
 # reached ONLINE, whatever the unit's result (a shutdown's is exit-code: the
@@ -144,4 +171,9 @@ stop_case s3 "2026-11-03T00:00:00+00:00 boot 11111111-1111-1111-1111-11111111111
 rm -rf "$t/s4"; mkdir -p "$t/s4"
 env -i PATH="$F:/usr/bin:/bin" OMAMOBILE_MODEM_TEST=1 OMAMOBILE_MODEM_LATCH="$t/s4/latch" \
   bash bin/omamobile-tegu-modem-up --stopped > "$t/s4/out" 2>&1 || fail "--stopped with no latch succeeds"
-printf 'ok - %s\n' "modem-up: --stopped removes this boot's ONLINE latch whatever the result, and keeps the others"
+rm -rf "$t/s5"; mkdir -p "$t/s5"; : > "$t/s5/latch.unclean-20261103T000000"
+printf '%b' "2026-11-03T00:00:00+00:00 boot $this\nonline\n" > "$t/s5/latch"; echo "$this" > "$t/s5/boot_id"
+env -i PATH="$F:/usr/bin:/bin" OMAMOBILE_MODEM_TEST=1 SERVICE_RESULT=exit-code OMAMOBILE_MODEM_LATCH="$t/s5/latch" OMAMOBILE_BOOT_ID="$t/s5/boot_id" \
+  bash bin/omamobile-tegu-modem-up --stopped > "$t/s5/out" 2>&1 || fail "--stopped succeeds with a copy there"
+[[ ! -e $t/s5/latch && -z $(ls "$t/s5"/latch.unclean-* 2>/dev/null) ]] || fail "a clean stop ends the run of unclean ends: the copies go with the latch"
+printf 'ok - %s\n' "modem-up: --stopped removes this boot's ONLINE latch whatever the result, with the unclean copies, and keeps the others"

@@ -26,10 +26,13 @@
 #    driver loads and removed when the modem profile's unit stops (its
 #    ExecStopPost runs --stopped, at a shutdown) after the start had reached
 #    ONLINE, whatever the stop's result, or at the next boot when this one
-#    ended with reboot-to (its deliberate-restart note): a start that never
-#    reached ONLINE, or a boot that hung or reset with the modem up, leaves
-#    it, and later boots refuse until a human removes it (TELEPHONY-PLAN
-#    section 2.4);
+#    ended with reboot-to (its deliberate-restart note). A start that never
+#    reached ONLINE leaves it, and later boots refuse until a human removes
+#    it. A boot that hung, reset or was powered off by the key with the modem
+#    up leaves it too, but its bring-up had worked: the next boot moves it
+#    aside (modem-bringup-started.unclean-<time>) and starts the modem; only
+#    a second unclean end in a row, with that copy still there, holds until
+#    a human has looked (TELEPHONY-PLAN section 2.4);
 #  - no system suspend once the CP is up: a sleep inhibitor, its own unit, is
 #    taken before any driver loads and lasts until the reboot.
 set -euo pipefail
@@ -71,7 +74,8 @@ if ((stopped)); then
   elif ! grep -qx online "$LATCH"; then
     say "this boot's start never reached ONLINE: $LATCH kept"
   else
-    rm -f "$LATCH"; sync
+    # A clean stop also ends a run of unclean ends (the copies below)
+    rm -f "$LATCH" "$LATCH".unclean-*; sync
     say "modem stopped (${SERVICE_RESULT:-result unknown}): $LATCH removed"
   fi
   exit 0
@@ -108,8 +112,30 @@ if [[ -e $LATCH && -s $NOTE ]] && grep -qx "online" "$LATCH" &&
   rm -f "$LATCH" "$NOTE"
   sync
 fi
+# Another boot's latch that reached ONLINE, and no note: that boot ended
+# without the profile's clean stop, in a hang, a reset or a held power key
+# (2026-11-08 on the 9a: "Long Press Power Key Reboot" in the bootloader's
+# log, then three boots without the modem). Its bring-up had worked, so one
+# such end doesn't cost this boot its modem: the latch moves aside as
+# $LATCH.unclean-<time> and the start goes on. A second unclean end in a
+# row, with that copy still there (--stopped removes the copies at a clean
+# stop), is the one case that holds: a phone that resets with the modem up
+# every time must not start it in a loop (CONTRIBUTING.md 3.4, the Pixel 7
+# Pro's modem-up rule in omamobile-modem-start).
+if [[ -e $LATCH ]] && grep -qx online "$LATCH" && ! grep -q "boot $(boot_id)\$" "$LATCH"; then
+  was=$(head -1 "$LATCH")
+  if compgen -G "$LATCH.unclean-*" >/dev/null; then
+    say "the last two boots with the modem up ended without a clean stop ($was; before it $(ls "$LATCH".unclean-* | tail -1)): the modem stays off until a human has read /var/log/omamobile/modem.log and those boots' journals, then rm $LATCH $LATCH.unclean-* and systemctl start omamobile-tegu-modem-boot"
+    exit 1
+  fi
+  mv -f "$LATCH" "$LATCH.unclean-$(date +%Y%m%dT%H%M%S)"
+  sync
+  say "the last boot with the modem up ($was) ended without a clean stop (a hang, a reset or a held power key), not in its bring-up: starting the modem again; a second such end in a row holds"
+fi
+# A start that never reached ONLINE: a hang in the bring-up itself is the
+# one thing nothing repeats on its own.
 if [[ -e $LATCH ]]; then
-  say "an earlier start never reached ONLINE, or its boot didn't shut down cleanly ($LATCH, $(cat "$LATCH" 2>/dev/null)): look at /var/log/omamobile/modem.log and the last boot's journal, then remove it to try again"
+  say "an earlier start never reached ONLINE ($LATCH, $(cat "$LATCH" 2>/dev/null)): look at /var/log/omamobile/modem.log and that boot's journal, then remove it to try again"
   exit 1
 fi
 [[ -e $SYS/bus/platform/devices/154e0000.pinctrl ]] || { say "no FAR_ALIVE pinctrl (old device tree)"; exit 1; }
