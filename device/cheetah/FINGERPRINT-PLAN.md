@@ -232,6 +232,8 @@ export KERNEL_DIR=~/android/mainline/wt-int KERNEL_OUT=$O
 # OVL = the overlays the phone boots with today; it must include aoc-core-test
 # (Trusty) and gnss-pmic-test (pmic-2), e.g.
 OVL="gnss-pmic-test gnss-test aoc-core-test audio-amps-test aoc-sound-test"
+# B = the newest off-repo backup tools/nv-backup made
+B=~/android/reference/cheetah-nv-backup-20261102
 ```
 
 ### FB: backups (read-only, before anything else; risk none)
@@ -239,15 +241,13 @@ OVL="gnss-pmic-test gnss-test aoc-core-test audio-amps-test aoc-sound-test"
 FB1, the M0.1 check against the latest off-repo backup:
 
 ```sh
-tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
-  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
-  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' > logs/fb-partitions.sha256
-sort -k2 ~/android/reference/cheetah-partition-backup-20261012-radio/SHA256SUMS | grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' |
-  diff - <(sort -k2 logs/fb-partitions.sha256)
+tools/nv-backup --check "$B"
 ```
 
-Pass: no diff (or a diff explained by a stock boot since, then a fresh
-read-only backup first). **Stop** if there is no backup.
+Pass: `nv-backup` exits 0, every NV partition `SAME`. A difference
+explained by a stock boot since: a fresh read-only backup into a new
+directory first, then FB1 against it. **Stop** if there is no backup, if
+`nv-backup` refuses, or on any other difference.
 
 FB2, LDO15S as it is now, on the kernel the phone runs (pmic-2 bound by
 `gnss-pmic-test`; register `0x3a` is `L15S_CTRL`):
@@ -360,21 +360,34 @@ root has no `/dev/disk/by-partlabel`. F3 passed on 2026-10-13 from an
 > where storageproxyd has never run (F19.1); once it has, Trusty is using
 > that copy.
 
+**Stop** before anything else if storageproxyd already ran on this install
+(F19.1's checks): Trusty is using `/var/lib/omamobile-fp` then.
+
 ```sh
 tools/phone-ssh 'modprobe sg; for d in /sys/class/scsi_generic/sg*; do echo "$d $(basename $(readlink -f $d/device))"; done'
 # the copies on the phone: F19.3's commands
+# the laptop copy of mfg_data (read-only dd, found by PARTNAME)
+F=~/android/reference/cheetah-mfg_data-"$(date +%F)".img
+tools/phone-ssh 'set -e; M=$(grep -lx "PARTNAME=mfg_data" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  test "$(cat /sys/class/block/$M/ro)" = 1; dd if=/dev/$M bs=1M status=none' > "$F"
+chmod 600 "$F"; sha256sum "$F" | cut -c1-16
 # the laptop backup of persist and the radio partitions (into a new directory)
 tools/nv-backup ~/android/reference/cheetah-nv-backup-"$(date +%Y%m%d)"
 tools/phone-ssh 'modprobe -r sg'
 ```
 
 Expect one sg node at `0:0:0:49476` (the RPMB well-known LUN), F19.3's
-output, then `nv-backup`'s verified copies. `mfg_data` isn't one of
-`nv-backup`'s partitions: F19.3 compares the phone's copy with the laptop's
-2026-10-13 one. Pass: F19.3's Pass and `nv-backup` exits 0. **Stop** on
-F19.3's stops, if `nv-backup` refuses, or if the storage guard complains.
-Rollback: `modprobe -r sg`, then F19.3's (nothing is written to `persist`
-or `mfg_data`).
+output, the laptop copy's hash, then `nv-backup`'s verified copies.
+`mfg_data` isn't one of `nv-backup`'s partitions, so it gets its own copy.
+F19.3 compares the phone's copy with the laptop's 2026-10-13 one; a phone
+without that copy compares with this one. Pass: F19.3's Pass, the laptop
+copy's hash equal to F19.3's `mfg_data.img` hash, and `nv-backup` exits 0.
+**Stop** on F19.3's stops, if the laptop copy is empty or its hash differs,
+if `nv-backup` refuses, or if the storage guard complains. Rollback:
+`modprobe -r sg`, then remove only what F3 wrote on the phone, never the
+whole directory (it holds Trusty's TD once storageproxyd has run):
+`rm -rf /var/lib/omamobile-fp/persist-ss /var/lib/omamobile-fp/mfg_data.img`.
+Nothing is written to `persist` or `mfg_data`.
 
 ### F4: secure storage (IRREVERSIBLE: the first RPMB write from Linux)
 
@@ -968,20 +981,17 @@ the last TD. Three facts decide the runbook:
   `persist:/ss/0` hashed to `e0e1990d…` in the 10-12, 10-30 and 11-02
   persist backups and in both fingerprint backup tars.
 
-Variables: `B=~/android/reference/cheetah-nv-backup-20261102`.
+Variables: section 6's (`B`, the newest backup).
 
 **F19.0 Backups match (read-only; risk none).**
 
 ```sh
-tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
-  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
-  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' > logs/f19-partitions.sha256
-grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' "$B/SHA256SUMS" | sort -k2 |
-  diff - <(sort -k2 logs/f19-partitions.sha256) && echo SAME
+tools/nv-backup --check "$B"
 ```
 
-Pass: `SAME`. **Stop** on any difference: take a fresh read-only backup and
-find out why first.
+Pass: `nv-backup` exits 0, every NV partition `SAME`. **Stop** if it
+refuses or on any difference: take a fresh read-only backup and find out
+why first.
 
 **F19.1 Nothing has run yet (read-only; risk none).** `uname -r`, the
 package versions, `systemctl is-enabled omamobile-fp` (disabled),
