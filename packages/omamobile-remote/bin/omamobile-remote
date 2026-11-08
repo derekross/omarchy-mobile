@@ -235,6 +235,11 @@ case $cmd in
     if [[ -z $pin && ! -t 0 ]]; then IFS= read -r pin || true; fi
     [[ -n $pin ]] || die "no PIN: set OMAMOBILE_PIN or pipe it in; it is never taken as an argument"
     wake; pause 0.5
+    # waking the screen takes a moment too: read the state once more before
+    # the first Return, which would go to the focused app if the phone got
+    # unlocked meanwhile (a fingerprint, or whoever holds it)
+    st=$(lock_state) || exit 2
+    if [[ $st != true ]]; then unset pin pin_env; echo "unlocked by something else before the first Return; nothing typed"; exit 0; fi
     wtype -k Return; pause 1.5
     # the phone may have been unlocked in the meantime (a fingerprint, or
     # whoever holds it): then the PIN and the Return would go to an app
