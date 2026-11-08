@@ -13,7 +13,7 @@ repo=$(cd "$here/../.." && pwd)
 
 KERNEL_DIR=${KERNEL_DIR:-$repo/../linux}
 KERNEL_OUT=${KERNEL_OUT:-$KERNEL_DIR}
-OUT=${OUT:-$repo/../out/dipper}
+OUT=${OUT:-$repo/out/dipper}
 : "${SSH_PUBKEY:?set SSH_PUBKEY to your authorized public key}"
 ALPINE=${ALPINE:-alpine:3.22}
 
@@ -34,14 +34,11 @@ echo "kernel release: $release"
 umask 077
 mkdir -p "$OUT"; chmod 700 "$OUT"
 mods=$OUT/modules
-echo "installing modules into $mods"
-rm -rf "$mods/lib/modules/$release"
-make -C "$KERNEL_DIR" ARCH=arm64 LLVM=1 O="$KERNEL_OUT" \
-     INSTALL_MOD_PATH="$mods" INSTALL_MOD_STRIP=1 modules_install >/dev/null
-mkdir -p "$OUT/include/config"
-cp "$KERNEL_OUT/include/config/kernel.release" "$OUT/include/config/kernel.release"
-tar -C "$mods/lib/modules" --owner=0 --group=0 --numeric-owner -cf - "$release" \
-  | zstd -q -19 -T0 -f -o "$OUT/modules-$release.tar.zst"
+rm -rf "$mods" "$KERNEL_OUT/modules-staging"
+DEVICE=dipper KERNEL_DIR="$KERNEL_DIR" KERNEL_OUT="$KERNEL_OUT" \
+  "$repo/bin/omamobile" modules
+mkdir -p "$mods/lib/modules"
+tar --zstd -xf "$KERNEL_OUT/modules-$release.tar.zst" -C "$mods/lib/modules"
 
 echo "building the initramfs in $ALPINE (linux/arm64)"
 docker run --rm --platform linux/arm64 \
@@ -63,25 +60,6 @@ fi
 rm -f "$OUT/images/boot.img" "$OUT/images/BOOT-MANIFEST.json"
 "$here/build-boot.py" --kernel "$kernel_image" --dtb "$packdtb" \
   --ramdisk "$OUT/initramfs.cpio.gz" --out "$OUT/images"
-
-# Firmware and the Wi-Fi fix-ups are not part of the boot image; they go into the
-# root filesystem. Collect them beside it so one directory holds everything.
-if [[ -n ${FIRMWARE_DIR:-} ]]; then
-  fw=$FIRMWARE_DIR
-  [[ -d $fw ]] || die "FIRMWARE_DIR does not exist: $fw"
-  mkdir -p "$OUT/firmware"
-  # The blobs come off the phone mode 400, so a plain cp cannot overwrite them
-  # on a rebuild. Copy without preserving the mode and make them readable.
-  for d in qcom ath10k; do
-    [[ -d $fw/$d ]] || continue
-    rm -rf "$OUT/firmware/$d"
-    cp -r --no-preserve=mode "$fw/$d" "$OUT/firmware/"
-  done
-  chmod -R u+rwX "$OUT/firmware"
-  echo "firmware staged in $OUT/firmware"
-else
-  echo "note: FIRMWARE_DIR is unset; firmware-dependent Wi-Fi will not come up"
-fi
 
 echo
 echo "artefacts in $OUT/images:"

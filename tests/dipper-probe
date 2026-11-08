@@ -1,0 +1,41 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+bash -n tools/dipper/build
+sh -n tools/dipper/initramfs-inside.sh
+python3 - <<'PY'
+from pathlib import Path
+
+script = Path('tools/dipper/initramfs-inside.sh').read_text()
+assert "hostname omamobile\\n" in script
+assert "dropbear -R -E -p 22" in script
+assert "no USB host, crashing in 20 s so ABL falls back to slot A" in script
+builder = Path('tools/dipper/build').read_text()
+assert 'OUT=${OUT:-$repo/out/dipper}' in builder
+assert 'modules_install' not in builder
+assert 'FIRMWARE_DIR' not in builder
+print('ok - Dipper initramfs patch anchors and RAM-only builder inputs')
+PY
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    kernel, dtb, ramdisk, out = (root / n for n in ('Image.gz', 'dipper.dtb', 'initramfs.gz', 'out'))
+    kernel.write_bytes(b'kernel')
+    dtb.write_bytes(b'\xd0\x0d\xfe\xed' + b'dtb')
+    ramdisk.write_bytes(b'ramdisk')
+    subprocess.run(['python3', 'tools/dipper/build-boot.py', '--kernel', str(kernel),
+                    '--dtb', str(dtb), '--ramdisk', str(ramdisk), '--out', str(out)],
+                   check=True, capture_output=True, text=True)
+    manifest = json.loads((out / 'BOOT-MANIFEST.json').read_text())
+    assert manifest['hardware_boot_tested'] is False
+    assert (out / 'boot.img').read_bytes().startswith(b'ANDROID!')
+print('ok - Dipper boot image header, appended DTB, and manifest')
+PY

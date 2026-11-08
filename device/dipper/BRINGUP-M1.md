@@ -13,18 +13,34 @@ There is no supported flash, push, installer or persistent update path here.
 
 ## Recovery and safe boot
 
-- Enter fastboot with **Volume Down + Power**. The device's §3.1 recovery entry
-  is in [PR #499](https://github.com/derekross/omarchy-mobile/pull/499).
-- Check the bootloader's unlocked state with `fastboot getvar unlocked`.
-- Boot the generated image with `fastboot boot boot.img`. Do not use
-  `fastboot flash`, `bin/omamobile flash`, `bin/omamobile push`, or the installer.
-- Because the image is loaded into RAM and does not write UFS, a power cycle
-  returns to the boot image already installed on the phone. Keep the phone and
-  a USB cable present during every probe.
-- If the USB host never configures, the shared initramfs waits, shows its log,
-  then panics after 20 seconds. On this RAM-only path that does not alter the
-  installed `boot`; use the buttons to return to fastboot if the phone does not
-  resume stock Android by itself.
+Each gate below must pass before proceeding. Set `FASTBOOT_SERIAL` to the
+intended handset's serial and `BACKUP_CHECKSUMS` to the locally held stock
+backup checksum manifest. Do not boot if the manifest is missing or fails.
+
+1. **Backup gate** — Expect: the verified stock backup and checksum manifest
+   are available off-device. Pass: `sha256sum -c "$BACKUP_CHECKSUMS"` reports
+   every entry OK. Stop: any missing or mismatched entry. Rollback: restore the
+   verified stock backup using the device recovery procedure. Risk: an
+   unverified backup cannot recover a damaged single-slot phone.
+2. **Fastboot gate** — Enter fastboot with **Volume Down + Power**; the §3.1
+   entry is in [PR #499](https://github.com/derekross/omarchy-mobile/pull/499).
+   Run `fastboot -s "$FASTBOOT_SERIAL" getvar unlocked`. Expect `yes`. Pass:
+   the serial identifies the intended phone and the bootloader is unlocked.
+   Stop: absent/ambiguous serial or locked bootloader. Rollback: leave fastboot
+   without writing. Risk: this device has no alternate OS slot.
+3. **RAM boot gate** — Run
+   `fastboot -s "$FASTBOOT_SERIAL" boot boot.img`. Expect: the image starts
+   without changing UFS. Pass: the phone reaches the rescue environment and
+   USB/SSH checks succeed. Stop: unexpected output, USB failure, or any request
+   to flash. Rollback: power-cycle to the installed boot image; if recovery is
+   needed, use the verified backup. Risk: a USB host that never configures still
+   reaches the shared 20-second watcher panic; this RAM probe does not change
+   the installed boot image. The exact forced-restart hold duration is not
+   recorded here; do not guess it.
+
+The current recorded first light used the stock `dtbo` untouched. The image is
+RAM-only; never use `fastboot flash`, `bin/omamobile flash`, `bin/omamobile
+push`, or the installer. Keep the phone and USB cable present during a probe.
 
 ## Build and probe
 
@@ -48,9 +64,10 @@ repository; the SSH public key and generated host key stay in the local output.
 
 - Do not flash until there is a reviewed, device-specific recovery plan and a
   verified stock backup. This PR deliberately adds no persistent writer.
-- The initramfs has no Arch root yet. A later NFS-root path must remain in the
-  rescue shell when the host or export is unavailable; it must not fall through
-  to the phone's writable userdata.
+- The initramfs has no Arch root yet. A later hard NFS-root mount can freeze the
+  root session if the host drops; use it only for a RAM-only probe. NFS-root
+  needs `RuntimeWatchdogSec=60s`, because `kill -9 -1` kills the userspace
+  watchdog feeder. It must never fall through to writable userdata.
 - Wi-Fi needs firmware and the phone's own WLAN address. Read identity files
   from `persist` with `debugfs` (read-only) before enabling that service; never
   mount `persist`.

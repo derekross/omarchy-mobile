@@ -1,8 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Runs inside an aarch64 Alpine container. Only files under /out change.
-# Adapted from tools/alioth/build-initramfs.sh: same class of device (non-A/B
-# Qualcomm, appended DTB), different panel, watchdog name and descriptor values.
 set -eu
 
 : "${KERNEL_RELEASE:?KERNEL_RELEASE must be passed in}"
