@@ -10,9 +10,12 @@ Tracking: https://github.com/derekross/omarchy-mobile/pull/231
 - device.conf has partition sizes, AVB values, and confirmed board id/rev
 - Critical calibration partitions backed up off-device with SHA-256 checksums  
   (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata).  
-  Taken from OrangeFox recovery (read-only `dd` of the by-name nodes, pulled off-device).  
-Installed via the AIO installer (install-desktop.sh), which replaces only the recovery part of vendor_boot on both slots. Not RAM-only. Recovery may have mounted persist/metadata on its own.
-  Images and SHA256SUMS live in a local `kodiak-critical/` directory (not in the repository).  
+- Calibration backup taken from OrangeFox recovery (read-only `dd` of the by-name nodes, pulled off-device, contents at that time; recovery may have mounted persist/metadata). Not a clean stock baseline.  
+- OrangeFox was installed via the AIO installer (`install-desktop.sh`) after the factory flash and OTA sideload, and before the calibration backup.
+- The installer replaced only the recovery part of `vendor_boot` on slot B. Slot A remains stock.
+- It did not write `vbmeta`, `boot`, or `init_boot`.
+- No plan to restore stock `vendor_boot` on slot A (it was never changed).
+- Images and SHA256SUMS live in a local `kodiak-critical/` directory (not in the repository).  
   No classic efs*/modem_userdata nodes exist on this device.
 
 ## Still needed
