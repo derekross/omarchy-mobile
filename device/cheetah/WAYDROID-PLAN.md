@@ -179,12 +179,19 @@ Waydroid 1.6.3 does three things that are wrong on this phone:
   drop-in) drops any such lines from the generated `config_nodes` and
   appends `lxc.include = /usr/share/omamobile-waydroid/lxc-omamobile.conf`,
   which allows the character devices Android uses (`c 1:3` for `/dev/null`,
-  the standard nodes, binderfs's major) and then denies every block device
-  with `lxc.cgroup2.devices.deny = b *:* rwm`, whoever makes the node. The
-  allow lines come first: with only the deny rule, LXC 7 allows nothing and
-  `lxc-start` dies with `Can't open /dev/null`. The binder major is assigned
-  at boot (507 on cheetah); `omamobile-waydroid-check` compares it with the
-  line in the file before every start.
+  the standard nodes, binderfs's major) and denies every block device with
+  `lxc.cgroup2.devices.deny = b *:* rwm`, whoever makes the node. With LXC 7
+  the filter starts in "block everything" mode and leaves deny rules out of
+  the device program, so a list with only the deny rule allows nothing and
+  `lxc-start` dies with `Can't open /dev/null`. Block devices are refused
+  because no rule allows a `b` device, and the order of the lines does not
+  matter. The deny line covers one case: an `lxc.cgroup2.devices.allow = a`
+  placed before our include (a hand-edit) switches LXC to "allow everything",
+  and the `b *:*` deny keeps block devices out. An `allow = a` placed after
+  the include would clear every rule before it and open everything, so
+  `test/all` fails if the file has one. The binder major is assigned at boot
+  (507 on cheetah); `omamobile-waydroid-check` compares it with the line in
+  the file before every start.
 - `verify` (`ExecStartPre` too) refuses to start the container unless all
   of it is in place. `waydroid upgrade` regenerates the config, so this runs
   before every start.
