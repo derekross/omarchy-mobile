@@ -73,17 +73,57 @@ Item {
     expanded = payload.expanded === true
     if (payload.page === "edit") startEditing()
     opened = true
-    refreshProbe()
-    refreshDnd()
-    brightness.refresh()
-    torch.refresh()
-    rotationLock.refresh()
-    location.refresh()
-    nfc.refresh()
-    fingerprint.refresh()
-    keyboard.refresh()
-    refreshNotifications()
-    clockFormatRead.running = true
+    scheduleOpenRefresh()
+  }
+
+  // Open-time reads wait for presentation to settle. Action confirmation
+  // reads remain immediate; closing cancels only work not started yet.
+  property int openRefreshIndex: -1
+  readonly property bool openRefreshMoving: revealAnimation.running || drag.pressed
+    || sheetFlick.moving || pager.moving || editFlick.moving || shadeList.moving || editing
+
+  function scheduleOpenRefresh() {
+    if (openRefreshIndex < 0) openRefreshIndex = 0
+    resumeOpenRefresh()
+  }
+
+  function resumeOpenRefresh() {
+    openRefreshTimer.stop()
+    if (opened && !openRefreshMoving && openRefreshIndex >= 0)
+      openRefreshTimer.start()
+  }
+
+  function cancelOpenRefresh() {
+    openRefreshTimer.stop()
+    openRefreshIndex = -1
+  }
+
+  function runOpenRefresh() {
+    if (!opened || openRefreshMoving || openRefreshIndex < 0) return
+    var index = openRefreshIndex++
+    switch (index) {
+      case 0: refreshProbe(); break
+      case 1: refreshDnd(); break
+      case 2: brightness.refresh(); break
+      case 3: torch.refresh(); break
+      case 4: rotationLock.refresh(); break
+      case 5: location.refresh(); break
+      case 6: nfc.refresh(); break
+      case 7: fingerprint.refresh(); break
+      case 8: keyboard.refresh(); break
+      case 9: refreshNotifications(); break
+      case 10: if (!clockFormatRead.running) clockFormatRead.running = true; break
+    }
+    if (openRefreshIndex >= 11) openRefreshIndex = -1
+    else resumeOpenRefresh()
+  }
+
+  onOpenRefreshMovingChanged: resumeOpenRefresh()
+  onOpenedChanged: { if (!opened) cancelOpenRefresh() }
+  Timer {
+    id: openRefreshTimer
+    interval: 48
+    onTriggered: root.runOpenRefresh()
   }
 
   // Host-initiated close (`shell hide`).
@@ -1374,7 +1414,7 @@ Item {
   // 0 = tucked above the screen, 1 = fully down. Driving the window's
   // visibility from this lets the sheet finish sliding up before it unmaps.
   property real reveal: opened ? 1 : 0
-  Behavior on reveal { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+  Behavior on reveal { NumberAnimation { id: revealAnimation; duration: 220; easing.type: Easing.OutCubic } }
 
   readonly property color foreground: Commons.Color.popups.text
   readonly property int pad: Style.spacing.panelPadding

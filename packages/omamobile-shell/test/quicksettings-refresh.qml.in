@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: MIT
+import QtQuick
+import QtTest
+
+TestCase {
+    id: root
+    name: "OpenRefreshQueue"
+    when: windowShown
+    visible: true
+    width: 100
+    height: 100
+    property bool opened: false
+    property bool editing: false
+    property var calls: []
+    property var times: []
+    function record(n) {
+        calls = calls.concat([n]);
+        times = times.concat([Date.now()]);
+    }
+    function refreshProbe() {
+        record(0);
+    }
+    function refreshDnd() {
+        record(1);
+    }
+    function refreshNotifications() {
+        record(9);
+    }
+    QtObject {
+        id: brightness
+        function refresh() {
+            root.record(2);
+        }
+    }
+    QtObject {
+        id: torch
+        function refresh() {
+            root.record(3);
+        }
+    }
+    QtObject {
+        id: rotationLock
+        function refresh() {
+            root.record(4);
+        }
+    }
+    QtObject {
+        id: location
+        function refresh() {
+            root.record(5);
+        }
+    }
+    QtObject {
+        id: nfc
+        function refresh() {
+            root.record(6);
+        }
+    }
+    QtObject {
+        id: fingerprint
+        function refresh() {
+            root.record(7);
+        }
+    }
+    QtObject {
+        id: keyboard
+        function refresh() {
+            root.record(8);
+        }
+    }
+    QtObject {
+        id: clockFormatRead
+        property bool running: false
+        onRunningChanged: if (running) {
+            root.record(10);
+            running = false;
+        }
+    }
+    QtObject {
+        id: drag
+        property bool pressed: false
+    }
+    QtObject {
+        id: sheetFlick
+        property bool moving: false
+    }
+    QtObject {
+        id: pager
+        property bool moving: false
+    }
+    QtObject {
+        id: editFlick
+        property bool moving: false
+    }
+    QtObject {
+        id: shadeList
+        property bool moving: false
+    }
+    property real reveal: 0
+    NumberAnimation {
+        id: revealAnimation
+        target: root
+        property: "reveal"
+        from: 0
+        to: 1
+        duration: 100
+    }
+    SCHEDULER
+    function init() {
+        cancelOpenRefresh();
+        revealAnimation.stop();
+        opened = false;
+        editing = false;
+        drag.pressed = false;
+        sheetFlick.moving = false;
+        pager.moving = false;
+        editFlick.moving = false;
+        shadeList.moving = false;
+        calls = [];
+        times = [];
+    }
+    function test_settleAndSpacing() {
+        revealAnimation.start();
+        opened = true;
+        scheduleOpenRefresh();
+        wait(50);
+        compare(calls.length, 0);
+        tryCompare(revealAnimation, "running", false, 300);
+        tryCompare(root, "openRefreshIndex", -1, 1500);
+        compare(calls.join(","), "0,1,2,3,4,5,6,7,8,9,10");
+        for (var i = 1; i < times.length; i++)
+            verify(times[i] - times[i - 1] >= 25);
+    }
+    function test_pauseAndResume() {
+        opened = true;
+        scheduleOpenRefresh();
+        tryVerify(function () {
+            return calls.length >= 1;
+        }, 200);
+        drag.pressed = true;
+        var n = calls.length;
+        wait(130);
+        compare(calls.length, n);
+        drag.pressed = false;
+        tryCompare(root, "openRefreshIndex", -1, 1500);
+        compare(calls.length, 11);
+    }
+    function test_cancelAndCoalesce() {
+        opened = true;
+        drag.pressed = true;
+        scheduleOpenRefresh();
+        scheduleOpenRefresh();
+        compare(openRefreshIndex, 0);
+        opened = false;
+        drag.pressed = false;
+        wait(150);
+        compare(calls.length, 0);
+        compare(openRefreshIndex, -1);
+        opened = true;
+        scheduleOpenRefresh();
+        scheduleOpenRefresh();
+        tryCompare(root, "openRefreshIndex", -1, 1500);
+        compare(calls.length, 11);
+    }
+    function test_actionIsImmediate() {
+        opened = true;
+        drag.pressed = true;
+        scheduleOpenRefresh();
+        refreshDnd();
+        compare(calls.join(","), "1");
+        cancelOpenRefresh();
+    }
+    function test_scrollAndEditingGates() {
+        opened = true;
+        editing = true;
+        scheduleOpenRefresh();
+        wait(70);
+        compare(calls.length, 0);
+        editing = false;
+        pager.moving = true;
+        wait(70);
+        compare(calls.length, 0);
+        pager.moving = false;
+        shadeList.moving = true;
+        wait(70);
+        compare(calls.length, 0);
+        shadeList.moving = false;
+        tryCompare(root, "openRefreshIndex", -1, 1500);
+        compare(calls.length, 11);
+    }
+}
