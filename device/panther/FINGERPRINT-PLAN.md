@@ -40,7 +40,7 @@ drivers, chroot, bridge and libfprint driver are the ones to use.
 |---|---|---|
 | Trusty | Started on the Pixel 7 on 2026-11-03 with the sound bring-up's overlay, which enables `/trusty` (kernel `g89edef70d4d5`, 23:43): "trusty version: Project: cloudripper", "selected api version: 5", trusty_ipc virtio0 vrings, "trusty-virtio ... initializing done". `/dev/trusty-ipc-dev0` and the cpu 7 hotplug were not checked | Gate P2 is mostly seen already; what is left of it is in P2 |
 | Sub-PMIC | Not described before linux-omarchy-mobile#207 (running regulators: `ldo*m` only) | #207 adds `pmic-2` with LDO15S only |
-| Panel | Samsung S6E3FC3 (`panel-samsung-s6e3fc3`, `samsung,s6e3fc3-p10`), 1080x2400, ABL's `exynos_drm.panel_name=sdc-s6e3fc3-p10` | Local HBM is in a local kernel commit (branch `panther-lhbm`, not on the phone yet): section 4 |
+| Panel | Samsung S6E3FC3 (`panel-samsung-s6e3fc3`, `samsung,s6e3fc3-p10`), 1080x2400, ABL's `exynos_drm.panel_name=sdc-s6e3fc3-p10` | Local HBM is in a local kernel commit (branch `panther-lhbm`, on the phone since 2026-11-06, not proposed yet): section 4 |
 | Touchscreen | FocalTech FT3658 (`focaltech_ft3658`, input "FocalTech FT3658") | The runner looked only for the Synaptics name: now per device |
 | `omamobile-fp-chroot` | Any board but the 9a ran as cheetah | Now detects `google,gs201-panther`: g7.app, C++ KeyMint, 1080x2400 at 60 Hz, `sdc-s6e3fc3-p10`, FT3658 (untested) |
 | Sensor position | Not known here: the bridge asks the HAL (`getSensorProps`), which has its own per-device data | Check in P5 that the circle lands on the sensor |
@@ -106,8 +106,12 @@ proposed yet) adds it to
 (`local_hbm_mode`, `local_hbm_max_timeout` up to 3 s, `allow_lhbm`, off on
 blank/unprepare), the gamma copy from 0xD8 to 0x65 and the circle centred
 at x 540, y 1713. `omamobile-fingerprint-lhbm.conf` has the
-`panel_samsung_s6e3fc3` line. Not run on the phone: check the circle's
-place and the 3 s timeout before P5.
+`panel_samsung_s6e3fc3` line. On the phone since 2026-11-06 (kernel
+`7.3.0-rc6-omamobile-push1-g44048a9aa795`, "LHBM gamma 0b9c49f154" at each
+boot): `allow_lhbm` Y, `local_hbm_max_timeout` 3000, and the HAL places the
+sensor at (540, 1713), radius 100, the driver's centre. The bridge's "LHBM on
+refused" came only with the screen dark, as the driver means it to. Not
+checked: the timeout itself (a finger held past 3 s).
 
 ## 5. Results
 
