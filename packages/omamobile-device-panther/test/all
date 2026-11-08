@@ -96,6 +96,7 @@ for f in usr/bin/reboot-to \
          usr/lib/udev/rules.d/70-omamobile-dma-heap.rules \
          usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/environment.d/40-omamobile-rotation.conf \
+         usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf \
          usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
          usr/lib/modprobe.d/omamobile-display.conf \
@@ -129,6 +130,9 @@ grep -q 'Address=172.16.42.1/24' "$tmp/root/usr/lib/systemd/network/20-usb-gadge
   || fail "usb0 keeps the initramfs address"
 grep -qx 'OMAMOBILE_ROTATION_HOLD=1' "$tmp/root/usr/lib/environment.d/40-omamobile-rotation.conf" \
   || fail "the Pixel 7 turns on Hyprland's rotation hold"
+dropin="$tmp/root/usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf"
+grep -qx '\[Service\]' "$dropin" && grep -qx 'Environment=OMAMOBILE_SPK_DEFAULT_CAL=1' "$dropin" \
+  || fail "the Pixel 7 starts its speakers on the default calibration when it has no speaker.cal"
 power="$tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 grep -qx '\[Login\]' "$power" \
   || fail "the power-key drop-in needs a [Login] header"

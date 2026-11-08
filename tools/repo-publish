@@ -27,7 +27,7 @@
 #                  on GitHub, unless one is open already
 #
 # Each channel is out/publish/<channel>/aarch64 here, mirrored to the server.
-# It keeps the files of the current index and of the one before it, so a
+# It keeps the files of the current index and the last different one, so a
 # phone can go back one version. Upload order: packages and signatures, then
 # the index, then the pruning, so a phone never sees an index that names a
 # file not there yet. Nothing is uploaded unless every package the index lists
@@ -111,6 +111,10 @@ stb=$pub/stable/$ARCH
 
 # The package file names an index lists, one per line
 db_files() { [[ -f $1/$DB ]] && bsdtar -xOf "$1/$DB" --include='*/desc' | awk '/^%FILENAME%$/ { getline; print }' | sort; }
+# The package file names a channel directory holds, one per line
+pkg_files() { find "$1" -mindepth 1 -maxdepth 1 -name '*.pkg.tar.*' -printf '%f\n' | sed 's/\.sig$//' | sort -u; }
+# save_sets FILE CURRENT PREVIOUS: record two package sets in FILE at once
+save_sets() { { sed -n 's/^./current &/p' <<<"$2" && sed -n 's/^./previous &/p' <<<"$3"; } > "$1.new" && mv -f -- "$1.new" "$1"; }
 # "file sha256" for each package an index lists
 db_sums() {
   bsdtar -xOf "$1/$DB" --include='*/desc' |
@@ -175,28 +179,47 @@ verify() {
   echo "    $n packages and the index: checksums good, signed by the release key"
 }
 
-# Bring a channel directory to a new index: the new files, plus the ones the
-# previous index listed, nothing else.
+# Bring a channel directory to a new index: the new files, plus those of the
+# last different package set before it, nothing else. $to.sets, beside the
+# channel (never uploaded), records the set last staged and the one before
+# it. Every run decides from that record, never from the index on disk, and
+# replaces it in one rename once the new index is in place, so a stage that
+# fails anywhere changes nothing a retry decides by. Staging the same set
+# again keeps the one before it, so a phone can still go back. A channel
+# staged before the record existed starts it, before copying anything, from
+# its index and every package file it has. Each read and write here is
+# checked on its own, so one that fails stops the stage instead of
+# recording, or keeping, less.
 stage() {
   local from=$1 to=$2 f
   mkdir -p "$to"
-  local previous
-  previous=$(db_files "$to" || true)
+  local new current="" previous
+  new=$(db_files "$from")
+  if [[ -f $to.sets ]]; then
+    current=$(sed -n 's/^current //p' "$to.sets")
+    previous=$(sed -n 's/^previous //p' "$to.sets")
+  else
+    if [[ -f $to/$DB ]]; then current=$(db_files "$to"); fi
+    previous=$(pkg_files "$to")
+    save_sets "$to.sets" "$current" "$previous"
+  fi
+  [[ $new == "$current" ]] || previous=$current
   while read -r f; do
     cp -p "$from/$f" "$from/$f.sig" "$to/"
-  done < <(db_files "$from")
+  done <<<"$new"
   for f in omamobile.db omamobile.files; do
     cp -pL "$from/$f.tar.gz" "$from/$f.tar.gz.sig" "$to/"
     cp -pL "$from/$f.tar.gz" "$to/$f"
     cp -pL "$from/$f.tar.gz.sig" "$to/$f.sig"
   done
-  local keep
-  keep=$( { db_files "$to"; if [[ -n $previous ]]; then echo "$previous"; fi; } | sort -u)
-  for f in "$to"/*.pkg.tar.*; do
-    [[ -e $f ]] || continue
-    f=${f##*/}; f=${f%.sig}
-    grep -qxF "$f" <<<"$keep" || rm -f "$to/$f" "$to/$f.sig"
-  done
+  save_sets "$to.sets" "$new" "$previous"
+  local -A keep=()
+  local have
+  while read -r f; do [[ -z $f ]] || keep[$f]=1; done <<<"$new"$'\n'"$previous"
+  have=$(pkg_files "$to")
+  while read -r f; do
+    [[ -z $f || -n ${keep[$f]:-} ]] || rm -f "$to/$f" "$to/$f.sig"
+  done <<<"$have"
 }
 
 write_index() {

@@ -908,6 +908,7 @@ if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
 fi
 if command -v node >/dev/null; then
   node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }
+  node test/battery-state.js || fail "battery state bindings"
 fi
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-cell-watch || fail "omamobile-cell-watch parses"
 if command -v dbus-run-session >/dev/null; then
