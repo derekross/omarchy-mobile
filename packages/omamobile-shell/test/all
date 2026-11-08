@@ -1119,3 +1119,4 @@ grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || 
 pass "install stages the package"
 
 test/keys.sh || fail "omamobile-keys volume keys"
+bash test/power-overlap.sh || fail "overlapping power-key presses"
