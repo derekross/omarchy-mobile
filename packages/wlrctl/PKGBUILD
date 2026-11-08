@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: 0BSD
+#
+# wlrctl 0.2.2, the command line for the wlroots virtual keyboard and pointer
+# protocols, with one patch so that a click and a scroll work on a phone.
+# Arch Linux ARM doesn't package wlrctl. Opt-in: nothing depends on it except
+# omamobile-remote, which an image never installs by default.
+#  - 0001: wlrctl makes a new virtual pointer per command and the phone has no
+#    other pointer, so Hyprland has no pointer focus when the button arrives and
+#    the click is not delivered. The patch moves the pointer first (see the
+#    patch header for the measurements). Delete it when upstream or Hyprland
+#    handles this.
+#  - -Dwerror=false: upstream builds with -Werror and keyboard.c compares a
+#    char with 0, which is always false on aarch64 (char is unsigned there),
+#    so the build stops with -Wtype-limits. The comparison is upstream's, not
+#    ours.
+
+pkgname=wlrctl
+pkgver=0.2.2
+pkgrel=1
+pkgdesc='Command line utility for the wlroots virtual keyboard, virtual pointer and foreign toplevel protocols, click patched for a phone'
+arch=(aarch64)
+url='https://git.sr.ht/~brocellous/wlrctl'
+license=(MIT)
+depends=(wayland libxkbcommon)
+makedepends=(meson ninja scdoc wayland-protocols)
+source=("$pkgname-$pkgver.tar.gz::https://git.sr.ht/~brocellous/wlrctl/archive/v$pkgver.tar.gz"
+        0001-pointer-click-and-scroll-need-pointer-focus.patch)
+sha256sums=('b5b3836091c41de09a832df1e5eb4747841d7ae670367e413487d5be7a5f2849'
+            '1bcffbb4bdce45be36224f8d2b1c090c3a9894cfaf0236e641214bc6ff1338d0')
+
+prepare() {
+  cd "$pkgname-v$pkgver"
+  patch -Np1 -F0 -i ../0001-pointer-click-and-scroll-need-pointer-focus.patch
+}
+
+build() {
+  arch-meson "$pkgname-v$pkgver" build -Dwerror=false
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "$pkgname-v$pkgver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
