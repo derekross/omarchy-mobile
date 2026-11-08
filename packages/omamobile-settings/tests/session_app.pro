@@ -8,3 +8,4 @@ DEFINES += OMAMOBILE_SETTINGS_TEST_DEVICE_INFO
 HEADERS += ../app/backend.h ../app/deviceinfocontroller.h
 SOURCES += ../app/main.cpp ../app/backend.cpp ../app/deviceinfocontroller.cpp
 RESOURCES += ../app/resources.qrc
+include(../version.pri)

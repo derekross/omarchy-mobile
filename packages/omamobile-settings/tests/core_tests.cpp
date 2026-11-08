@@ -83,7 +83,7 @@ private slots:
         for (const auto &key : {"serial", "imei", "hostname", "username", "address"})
             QVERIFY(!info.info().contains(key));
     }
-    void actualWindowAndReadOnlyPalette() {
+    void actualWindowAndReadOnlyAbout() {
         Backend backend;
         DeviceInfoController info(true);
         QQmlApplicationEngine engine;
@@ -101,9 +101,7 @@ private slots:
         QCOMPARE(search->property("text").toString(), QString());
         QVERIFY(backend.navigate("about"));
         QTRY_COMPARE(info.info()["model"].toString(), QString("Mobile device"));
-        const auto palette = QJsonDocument::fromJson(backend.SurfacePalette().toUtf8()).object();
-        QCOMPARE(palette["version"].toInt(), 1);
-        QCOMPARE(palette["known"].toBool(), false);
+
     }
 };
 QTEST_MAIN(CoreTests)

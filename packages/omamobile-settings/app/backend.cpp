@@ -4,7 +4,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -142,13 +141,4 @@ QString Backend::icon(const QString &name) const {
     auto svg = file.readAll();
     svg.replace("#9ece6a", m_accent.name().toUtf8());
     return "data:image/svg+xml;base64," + QString::fromLatin1(svg.toBase64());
-}
-QString Backend::SurfacePalette() const {
-    if (!m_background.isValid() || m_background.alpha() != 255 || !m_window
-        || !m_window->isVisible() || QGuiApplication::focusWindow() != m_window)
-        return "{\"version\":1,\"known\":false}";
-    const auto color = m_background.name(QColor::HexRgb);
-    return QString::fromUtf8(QJsonDocument(QJsonObject{
-        {"version", 1}, {"known", true}, {"top", color}, {"bottom", color}
-    }).toJson(QJsonDocument::Compact));
 }

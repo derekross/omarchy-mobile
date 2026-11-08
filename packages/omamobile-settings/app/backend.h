@@ -6,8 +6,6 @@
 #include <QJsonObject>
 #include <QVariantList>
 #include <QFileSystemWatcher>
-#include <QPointer>
-#include <QWindow>
 #include <QProcess>
 
 class Backend : public QObject {
@@ -41,8 +39,6 @@ public:
     Q_INVOKABLE QString icon(const QString &name) const;
     Q_INVOKABLE QStringList catalogProblems() const;
     Q_SCRIPTABLE bool Open(const QString &page);
-    Q_SCRIPTABLE QString SurfacePalette() const;
-    void setSurfaceWindow(QWindow *window) { m_window = window; }
 signals:
     void rowsChanged();
     void pageChanged();
@@ -57,7 +53,6 @@ private:
     QString m_page = "root", m_query, m_themeFile;
     QStringList m_history;
     QFileSystemWatcher m_watcher;
-    QPointer<QWindow> m_window;
     QProcess m_roundingQuery;
     quint64 m_roundingGeneration = 0;
     int m_radius = 0;

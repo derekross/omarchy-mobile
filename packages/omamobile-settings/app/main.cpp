@@ -20,16 +20,20 @@ int main(int argc, char **argv) {
     QString page = "root";
     for (int i = 1; i < argc; ++i) {
         const auto argument = QString::fromLocal8Bit(argv[i]);
-        if (argument == "--preview") preview = true;
+        if (argument == "--version") {
+            std::puts("omamobile-settings " OMAMOBILE_SETTINGS_VERSION);
+            return 0;
+        }
+        else if (argument == "--preview") preview = true;
         else if (argument == "--check") check = preview = true;
         else if (argument == "--page" && i + 1 < argc) page = QString::fromLocal8Bit(argv[++i]);
-        else { std::fprintf(stderr, "Usage: omamobile-settings [--page PAGE] [--preview] [--check]\n"); return 2; }
+        else { std::fprintf(stderr, "Usage: omamobile-settings [--page PAGE] [--preview] [--check] [--version]\n"); return 2; }
     }
     if (check) qputenv("QT_QPA_PLATFORM", "offscreen");
     QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));
     QGuiApplication app(argc, argv);
     app.setApplicationName("omamobile-settings");
-    app.setApplicationVersion("0.1.0");
+    app.setApplicationVersion(QStringLiteral(OMAMOBILE_SETTINGS_VERSION));
     app.setDesktopFileName("org.omamobile.Settings");
     QQuickStyle::setStyle("Material");
     Backend backend;
@@ -63,6 +67,5 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("deviceInfo", &deviceInfo);
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty()) return 1;
-    backend.setSurfaceWindow(qobject_cast<QWindow *>(engine.rootObjects().first()));
     return app.exec();
 }

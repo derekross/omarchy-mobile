@@ -17,17 +17,18 @@ extracted-source directory.
 The build and test directories can be selected using
 `OMAMOBILE_SETTINGS_BUILD_DIR` and `OMAMOBILE_SETTINGS_TEST_BUILD_DIR`.
 `omamobile-settings --check` validates the catalog without opening a window.
+`--version` prints the version from the package build.
 `--preview` displays neutral fictional device information; `--page about` opens
 the implemented detail page directly.
 
 The application reads the current theme's colors.toml and observes atomic theme
 replacements. Rounded corners follow Hyprland's read-only decoration:rounding
 option. It does not change compositor settings. A session D-Bus service handles
-repeat launches and exposes a focused-window-only opaque surface palette hint.
-That hint contains colors and availability, not device information.
+repeat launches.
 
-Copyright 2026 Marsel Nenaj, MIT; see LICENSE. Extracted from the existing native
-Settings implementation, with Codex assistance. Omarchy's theme and desktop APIs
+Copyright 2026 Marsel Nenaj, MIT; see LICENSE. Extracted from my own native
+Settings worktree, with Codex assistance; the application code is my MIT-licensed
+work. Omarchy's theme and desktop APIs
 remain the work of their upstream authors, including David Heinemeier Hansson;
 this package does not claim authorship of those interfaces.
 

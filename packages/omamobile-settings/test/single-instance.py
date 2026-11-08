@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Exercise the application entrypoint with a neutral constructor fixture."""
-import json
 import re
+from pathlib import Path
 import subprocess
 import sys
 import time
 
 binary = sys.argv[1]
+expected_version = (Path(__file__).resolve().parents[1] / 'version').read_text().strip()
+version = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=5)
+assert version.returncode == 0
+assert version.stdout.strip().endswith(' ' + expected_version), version.stdout
 application = subprocess.Popen(
     [binary, '--page', 'about'],
     stdout=subprocess.DEVNULL,
@@ -37,23 +41,13 @@ try:
     unknown = call('Open', 'string:nonexistent')
     assert unknown.returncode == 0
     assert re.search(r'\bboolean\s+false\b', unknown.stdout)
-    palette = call('SurfacePalette')
-    assert palette.returncode == 0
-    value = palette.stdout.strip()
-    start, end = value.find('{'), value.rfind('}')
-    assert start >= 0 and end > start
-    decoded = json.loads(value[start:end + 1])
-    assert decoded['version'] == 1 and isinstance(decoded['known'], bool)
-    if decoded['known']:
-        assert re.fullmatch(r'#[0-9a-fA-F]{6}', decoded['top'])
-        assert decoded['bottom'] == decoded['top']
     second = subprocess.run(
         [binary, '--page', 'about'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
     )
     assert second.returncode == 0
     assert application.poll() is None
-    print('PASS private-bus entrypoint Open, route rejection, palette schema and repeat launch')
+    print('PASS private-bus entrypoint Open, route rejection and repeat launch')
 finally:
     if application.poll() is None:
         application.terminate()
