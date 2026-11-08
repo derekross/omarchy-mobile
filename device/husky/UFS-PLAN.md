@@ -79,7 +79,7 @@ Then run the same `install-phone` without `--dry-run`. It needs the human's go, 
 - **Pass:**
   - ssh as root with the installed key;
   - `systemctl --failed` is empty;
-  - the guard's flags hold under Arch: only `UFS_RW` writable, `sdb`-`sdd` `ro`, no `/dev/sda`;
+  - the guard's flags hold under Arch: only `UFS_RW` writable, every `sdb`-`sdd` partition `ro`, no whole-disk node (`/dev/sda` to `/dev/sdd`; since #484 the disks themselves read `ro` 0);
   - `reboot-to bootloader` reaches fastboot;
   - a second boot comes up the same.
 - **Stop if:** no ssh after 2 minutes: the init's log is on the panel; then Power + Volume Up, then Power + Volume Down for fastboot. Also stop if any partition outside `UFS_RW` is writable (`reboot-to bootloader` at once).
@@ -126,7 +126,7 @@ Let the UFS device runtime-suspend, with the link in hibern8. zuma's CAL has hib
   - Read one block of `boot_b` with `dd iflag=direct`. Without it, the page cache answers every read after the first, and the device never wakes.
 - **Pass:** ten cycles, each with:
   - the device W-LUN suspends and resumes, and the direct read succeeds;
-  - the guard's flags hold after the cycle (only `UFS_RW` writable, `sdb`-`sdd` `ro`, no `/dev/sda`);
+  - the guard's flags hold after the cycle (only `UFS_RW` writable, every `sdb`-`sdd` partition `ro`, no whole-disk node; since #484 the disks themselves read `ro` 0);
   - kmsg shows no UIC error, no `ufshcd_err_handler` run and no reset.
 - **Stop if:**
   - **a guard flag changed:** `reboot-to bootloader` at once (Power + Volume Up if it won't go down, then Power + Volume Down), and run no more cycles. The initramfs guard marks each disk once and never looks at that name again, and this boot never reaches the check before `switch_root`, so a LUN that a host reset dropped and re-added would come back writable. The per-cycle check is the only thing that would see it.

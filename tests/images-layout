@@ -244,6 +244,51 @@ grep -q 'AVB_FOOTERS pads boot to 67108864 bytes, but boot_b' "$t/log" || { cat 
 cp "$t/six.conf" "$R/device/six/device.conf"
 pass "push refuses an AVB_FOOTERS image whose partition is not the descriptor's size"
 
+# The boot-success marker check (#252): for a device whose package ships
+# omamobile-boot-success, push reads the phone's marker for the guard line
+# and refuses an old or missing one before any write, and flash refuses
+# without OMAMOBILE_MARKER_CHECKED=1; an initramfs with the old guard skips
+# the check, an unreadable one doesn't.
+mkdir -p "$R/packages/omamobile-device-six/bin"
+: > "$R/packages/omamobile-device-six/bin/omamobile-boot-success"
+sed -i 's|^  true\|\*.command -v reboot-to.\*) exit 0 ;;$|&\n  *omamobile-boot-success*) echo "${MARKER:-1}" ;;|' "$R/tools/phone-ssh"
+grep -q 'omamobile-boot-success\*) echo' "$R/tools/phone-ssh" || fail "the fake phone answers the marker check"
+nothing_written() { [[ $(find "$P" -name 'sda_*' | wc -l) == 0 && ! -s $P/log ]]; }
+push old new || { cat "$t/log"; fail "push accepts a phone whose marker knows the guard"; }
+pass "push accepts a phone whose marker carries the guard line"
+if MARKER=0 push old new; then fail "push refuses an old marker"; fi
+grep -q 'predates these images. storage guard' "$t/log" && grep -q 'tools/phone-install-package packages/omamobile-device-six' "$t/log" \
+  || { cat "$t/log"; fail "push says the marker is old and how to update it"; }
+nothing_written || fail "an old marker: nothing written, no reboot"
+pass "push refuses an old marker before writing anything, and names the package to install"
+if MARKER=missing push old new; then fail "push refuses a missing marker"; fi
+grep -q 'has no /usr/bin/omamobile-boot-success' "$t/log" || { cat "$t/log"; fail "push says the marker is missing"; }
+nothing_written || fail "a missing marker: nothing written"
+MARKER=0 OMAMOBILE_MARKER_CHECKED=1 push old new || { cat "$t/log"; fail "OMAMOBILE_MARKER_CHECKED=1 lets push go on"; }
+if MARKER=0 OMAMOBILE_MARKER_CHECKED=yes push old new; then fail "only the value 1 overrides"; fi
+pass "a missing marker is refused too; only OMAMOBILE_MARKER_CHECKED=1 overrides"
+rm -f "$t/fastboot.log"; stub_images six boot vendor_boot dtbo
+if om six flash; then fail "flash refuses without OMAMOBILE_MARKER_CHECKED=1"; fi
+grep -q 'flash unmarks slot B' "$t/log" && grep -qF "grep -cxF '# guard: partition flags (#252)'" "$t/log" \
+  || { cat "$t/log"; fail "flash says why and what to check"; }
+[[ ! -s $t/fastboot.log ]] || fail "flash refuses before talking to fastboot"
+OMAMOBILE_MARKER_CHECKED=1 om six flash || { cat "$t/log"; fail "flash goes on with OMAMOBILE_MARKER_CHECKED=1"; }
+[[ $(flashed) == "boot_b vendor_boot_b dtbo_b " ]] || fail "the checked flash writes its images"
+pass "flash refuses without OMAMOBILE_MARKER_CHECKED=1, before any fastboot call, and goes on with it"
+if command -v lz4 >/dev/null; then
+  printf 'ufs_ro_pass() {\n' | lz4 -q -f - "$K/initramfs.cpio.lz4"
+  MARKER=0 push old new || { cat "$t/log"; fail "an initramfs with the old guard skips the marker check"; }
+  rm -f "$t/fastboot.log"; om six flash || { cat "$t/log"; fail "flash of an old-guard initramfs needs no override"; }
+  printf 'ufs_is_disk() {\n' | lz4 -q -f - "$K/initramfs.cpio.lz4"
+  if MARKER=0 push old new; then fail "an initramfs with the new guard is checked"; fi
+  printf 'not lz4\n' > "$K/initramfs.cpio.lz4"
+  if MARKER=0 push old new; then fail "an unreadable initramfs is checked"; fi
+  rm -f "$K/initramfs.cpio.lz4"
+  pass "only an initramfs that reads as the old guard skips the check"
+fi
+rm -rf "$R/packages"
+stub_images six boot vendor_boot dtbo
+
 # Building the images needs AOSP's mkbootimg and mkdtboimg, lz4 and a dtc;
 # without them only this part skips.
 mkbootimg=$SRC_DIR/system/tools/mkbootimg

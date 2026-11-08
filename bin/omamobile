@@ -92,6 +92,10 @@ Usage: [DEVICE=<codename>] omamobile <command>
   flash            Flash the experiment images to slot B and boot them
   push             Write the images into slot B from the running phone over SSH,
                    verify them, and reboot into them (no fastboot)
+                   On a phone whose device package ships omamobile-boot-success,
+                   both check that its marker knows the images' storage guard
+                   (#252): push reads it over SSH, flash needs
+                   OMAMOBILE_MARKER_CHECKED=1 after checking by hand
   kernel-shell     Open a shell in the build environment, in the kernel tree
 USAGE
 }
@@ -225,6 +229,28 @@ images_for_device() {
 
 # Is <image>_b on the device's storage-guard allowlist?
 slot_b_allowed() { [[ " $DEV_UFS_RW " == *" ${1}_b "* ]]; }
+
+# The storage guard of #252 removes the boot LUNs' whole-disk nodes. A
+# boot-success marker from before it opens /dev/sdd first, so under the new
+# guard it never marks slot B: harmless while B is marked, but after the next
+# flash (which unmarks B) every boot spends one of B's tries until ABL falls
+# back to slot A. Development phones get the init from this checkout and the
+# marker from the installed device package, so for a device whose package
+# ships the marker, push and flash check that the two match. The new marker
+# carries this exact line.
+MARKER_TAG='# guard: partition flags (#252)'
+ships_boot_marker() { [[ -f $ROOT/packages/$DEV_PACKAGE/bin/omamobile-boot-success ]]; }
+# Does $KERNEL_OUT's initramfs carry the #252 guard? Yes when it can't be
+# read (no file, no lz4), so a doubt never skips the check.
+initramfs_new_guard() {
+  local f=$KERNEL_OUT/initramfs.cpio.lz4 n
+  [[ -f $f ]] && command -v lz4 >/dev/null || return 0
+  n=$(lz4 -dc "$f" 2>/dev/null | grep -ac 'ufs_is_disk') || true
+  [[ ${n:-0} != 0 ]] || ! lz4 -t "$f" >/dev/null 2>&1
+}
+marker_check_hint() {
+  echo "check on the phone: grep -cxF '$MARKER_TAG' /usr/bin/omamobile-boot-success (1: ready; anything else: tools/phone-install-package packages/$DEV_PACKAGE first)"
+}
 
 # Does the device have this boot image? gs101 phones have no init_boot or
 # vendor_kernel_boot.
@@ -1096,6 +1122,13 @@ cmd_flash() {
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
+  # flash unmarks slot B, so the phone's marker must be able to mark it under
+  # these images' guard (#252). Fastboot can't read the installed package, so
+  # refuse unless the owner says it was checked: a warning would scroll by, and
+  # a wrong marker shows only as a fallback to slot A three boots later.
+  if ships_boot_marker && initramfs_new_guard && [[ ${OMAMOBILE_MARKER_CHECKED:-} != 1 ]]; then
+    die "flash unmarks slot B, and only an omamobile-boot-success that knows these images' storage guard (#252) marks it again; $(marker_check_hint), then run again with OMAMOBILE_MARKER_CHECKED=1"
+  fi
   in_fastboot || die "phone not in fastboot (try: omamobile fastboot)"
   local serial
   serial=$(fastboot_serial) || exit 1
@@ -1141,6 +1174,21 @@ cmd_push() {
   booted=$("$ssh" 'cat /proc/sys/kernel/random/boot_id') || die "cannot read the phone's boot id"
   # dropbear's login PATH omits /usr/local/bin, where the initramfs installs reboot-to
   "$ssh" 'PATH=/usr/local/bin:$PATH command -v reboot-to >/dev/null' || die "phone has no reboot-to; refusing to write"
+  # The phone's marker must know the guard the new initramfs brings (#252)
+  if ships_boot_marker && initramfs_new_guard; then
+    if [[ ${OMAMOBILE_MARKER_CHECKED:-} == 1 ]]; then
+      say "OMAMOBILE_MARKER_CHECKED=1: not checking the phone's omamobile-boot-success"
+    else
+      local mk
+      mk=$("$ssh" "if [ -f /usr/bin/omamobile-boot-success ]; then grep -cxF '$MARKER_TAG' /usr/bin/omamobile-boot-success || true; else echo missing; fi") \
+        || die "cannot read the phone's omamobile-boot-success; refusing to write"
+      case $mk in
+        1) ;;
+        missing) die "the phone has no /usr/bin/omamobile-boot-success (the initramfs shell, or $DEV_PACKAGE not installed), so push can't tell whether it can mark slot B under these images' storage guard (#252); $(marker_check_hint), then run again with OMAMOBILE_MARKER_CHECKED=1" ;;
+        *) die "the phone's omamobile-boot-success predates these images' storage guard (#252) and could never mark slot B after the next flash: install $DEV_PACKAGE from this checkout first (tools/phone-install-package packages/$DEV_PACKAGE), then push" ;;
+      esac
+    fi
+  fi
   # A kernel whose modules aren't installed boots without its drivers (the GPU
   # among them): install them first. A config change can keep the release
   # name, so compare the tarball's checksum, not just the directory.

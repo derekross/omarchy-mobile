@@ -6,8 +6,10 @@
 # initramfs/init reads that file and fails closed. Its guard functions run
 # here against a fake sysfs and /dev: a missing, empty or malformed file, or
 # a forbidden name, leaves every partition read-only; cheetah's list leaves
-# exactly its six partitions writable, as the hard-coded list did; /dev/sda's
-# whole-disk node is removed either way.
+# exactly its six partitions writable, as the hard-coded list did. Every
+# LUN's whole-disk node is removed and its own flag left clear, and each
+# boot-LUN partition gets its own flag, so one partition (devinfo) can be
+# opened alone without a disk flag (#252, #483).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
@@ -67,8 +69,11 @@ cp "$t/good.conf" "$R/device/six/device.conf"
 
 # --- Boot time: initramfs/init's guard against a fake sysfs and /dev ---
 # The guard as init has it: ufs_ro_log through the ufs_rw_load call and
-# ufs_ro_pass, with its paths pointed into $t/b. blockdev --setro writes 1
-# into the partition's ro file, as the kernel would.
+# ufs_ro_pass, with its paths pointed into $t/b. Each disk and partition has
+# its own read-only flag ($B/own/<name>), and the sysfs ro files follow the
+# kernel's rule (bdev_read_only): a disk reads its own flag, a partition its
+# own flag or its disk's. The blockdev stub sets one own flag, as BLKROSET
+# does, refuses a node that isn't there, and logs every call.
 awk '/^ufs_ro_log\(\) \{/ {on = 1} /^ufs_ro_pass$/ {exit} on' initramfs/init > "$t/guard.sh"
 grep -q '^ufs_rw_load() {$' "$t/guard.sh" || fail "ufs_rw_load found in initramfs/init"
 grep -q '^ufs_rw_load$' "$t/guard.sh" || fail "the init loads the allowlist before its first pass"
@@ -79,43 +84,66 @@ sed -e "s|> /dev/kmsg|>> /dev/kmsg|" -e "s|/sys/block/|$B/sys/block/|g" -e "s|/d
 mkdir -p "$t/bin"
 cat > "$t/bin/blockdev" <<EOF
 #!/bin/sh
-[ "\$1" = --setro ] || exit 1
+case "\$1" in --setro) v=1 ;; --setrw) v=0 ;; *) exit 1 ;; esac
+[ -e "\$2" ] || { echo "blockdev: cannot open \$2" >&2; exit 1; }
 n=\${2##*/}
-for f in $B/sys/block/\$n/ro $B/sys/block/*/\$n/ro; do [ -f "\$f" ] && echo 1 > "\$f"; done
-exit 0
+echo "\$1 \$n" >> $B/blockdev.log
+echo \$v > $B/own/\$n
+$t/bin/sync-ro
 EOF
-chmod +x "$t/bin/blockdev"
-parts="boot_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata persist efs modem_b vbmeta_b devinfo"
-fake_disks() {
-  rm -rf "$B" && mkdir -p "$B/dev" "$B/etc" "$B/sys/block/sda" "$B/sys/block/sdb/sdb1"
-  echo 0 > "$B/sys/block/sda/ro"; : > "$B/dev/sda"
-  local i=0 p
-  for p in $parts; do
-    i=$((i + 1))
-    mkdir -p "$B/sys/block/sda/sda$i"
-    printf 'MAJOR=8\nPARTN=%s\nPARTNAME=%s\n' "$i" "$p" > "$B/sys/block/sda/sda$i/uevent"
-    echo 0 > "$B/sys/block/sda/sda$i/ro"; : > "$B/dev/sda$i"
+cat > "$t/bin/sync-ro" <<EOF
+#!/bin/sh
+for d in $B/sys/block/*; do
+  dn=\${d##*/}; cat $B/own/\$dn > \$d/ro
+  for p in \$d/sd*; do
+    [ -d "\$p" ] || continue
+    if [ "\$(cat $B/own/\${p##*/})" = 1 ] || [ "\$(cat $B/own/\$dn)" = 1 ]; then echo 1; else echo 0; fi > \$p/ro
   done
-  # A boot LUN, read-only at the disk level
-  echo 0 > "$B/sys/block/sdb/ro"; : > "$B/dev/sdb"
-  printf 'PARTNAME=bl1_a\n' > "$B/sys/block/sdb/sdb1/uevent"
-  echo 0 > "$B/sys/block/sdb/sdb1/ro"; : > "$B/dev/sdb1"
+done
+EOF
+chmod +x "$t/bin/blockdev" "$t/bin/sync-ro"
+parts="boot_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata persist efs modem_b vbmeta_b devinfo"
+boot_luns="sdb:bl1_a sdb:abl_a sdb:bl1_b sdc:bl1_b sdc:abl_b sdc:dtbo_b sdd:devinfo sdd:pinfo sdd:mfg_data"
+mkdisk() { mkdir -p "$B/sys/block/$1"; echo 0 > "$B/own/$1"; : > "$B/dev/$1"; }
+mkpart() { # disk name partname
+  mkdir -p "$B/sys/block/$1/$2"
+  printf 'MAJOR=8\nPARTN=%s\nPARTNAME=%s\n' "${2#"$1"}" "$3" > "$B/sys/block/$1/$2/uevent"
+  echo 0 > "$B/own/$2"; : > "$B/dev/$2"
+}
+fake_disks() { # the main LUN, three boot LUNs (gs201's shape), every flag clear;
+  # sdc carries a dtbo_b, which the allowlist never opens off the main LUN
+  rm -rf "$B" && mkdir -p "$B/dev" "$B/etc" "$B/own" "$B/sys/block"
+  : > "$B/blockdev.log"
+  local i=0 p d
+  mkdisk sda
+  for p in $parts; do i=$((i + 1)); mkpart sda "sda$i" "$p"; done
+  for d in sdb sdc sdd; do mkdisk $d; done
+  i=0
+  for p in $boot_luns; do d=${p%%:*} i=$((i + 1)); mkpart "$d" "$d$i" "${p#*:}"; done
+  "$t/bin/sync-ro"
 }
 guard() { # run the guard's load and one pass
   PATH="$t/bin:$PATH" sh -c ". '$t/guard-test.sh'; ufs_ro_pass"
 }
-writable() { # names of the partitions left writable, in GPT order
+writable() { # names of the partitions left writable, in order (every LUN)
   local s out=""
-  for s in "$B"/sys/block/sda/sda*; do
+  for s in "$B"/sys/block/sd*/sd*; do
     [[ $(cat "$s/ro") == 0 ]] && out+="$(sed -n 's/^PARTNAME=//p' "$s/uevent") "
   done
   printf '%s' "${out% }"
 }
 disk_checks() { # $1: case name
-  [[ ! -e $B/dev/sda ]] || fail "$1: /dev/sda's whole-disk node is removed"
-  [[ $(cat "$B/sys/block/sda/ro") == 0 ]] || fail "$1: sda itself stays writable (the kernel needs it for its partitions)"
-  [[ $(cat "$B/sys/block/sdb/ro") == 1 && $(cat "$B/sys/block/sdb/sdb1/ro") == 1 ]] || fail "$1: the boot LUN is read-only"
-  grep -q 'whole-disk node removed' "$B/dev/kmsg" || fail "$1: the sda removal is logged"
+  local d s
+  for d in sda sdb sdc sdd; do
+    [[ ! -e $B/dev/$d ]] || fail "$1: /dev/$d's whole-disk node is removed"
+    [[ $(cat "$B/own/$d") == 0 && $(cat "$B/sys/block/$d/ro") == 0 ]] \
+      || fail "$1: $d's own flag stays clear (the kernel ORs it into every partition)"
+    grep -q "/dev/$d: whole-disk node removed" "$B/dev/kmsg" || fail "$1: the $d removal is logged"
+  done
+  for s in "$B"/sys/block/sd[b-d]/sd*; do
+    [[ $(cat "$B/own/${s##*/}") == 1 ]] || fail "$1: boot-LUN partition ${s##*/}'s own flag is set"
+  done
+  ! grep -qE ' sd[a-z]+$' "$B/blockdev.log" || fail "$1: blockdev never touches a whole disk ($(tr '\n' ' ' < "$B/blockdev.log"))"
 }
 
 fake_disks
@@ -138,6 +166,55 @@ echo 0 > "$B/sys/block/sdb/sdb1/ro"
 awk '/^boot_arch\(\) \{/ {on = 1} on && /ufs_unguarded/ {u = NR} on && /kill -9 -1/ {k = NR} on && /^}/ {exit} END {exit !(u && k && u < k)}' initramfs/init \
   || fail "boot_arch checks ufs_unguarded before it stops the initramfs's processes"
 pass "the hand-over check reports a late or reopened partition, and runs before SSH is stopped"
+
+# The boot LUNs as #252 rules: the whole-disk nodes gone and unusable, the
+# disk flags clear, so one partition's own flag opens that partition alone.
+fake_disks
+printf '%s\n' "$cheetah_rw" > "$B/etc/omamobile-ufs-rw"
+guard
+[[ -z $(unguarded) ]] || fail "the guard holds before the window (got: $(unguarded))"
+dv=$(grep -l '^PARTNAME=devinfo$' "$B"/sys/block/sdd/sd*/uevent); dv=${dv%/uevent}; dv=${dv##*/}
+: > "$B/blockdev.log"
+for d in sdb sdc sdd; do
+  if PATH="$t/bin:$PATH" blockdev --setrw "$B/dev/$d" 2>/dev/null; then fail "a whole-disk node is unusable: blockdev --setrw /dev/$d failed"; fi
+done
+[[ ! -s $B/blockdev.log ]] || fail "no disk flag could be reached"
+PATH="$t/bin:$PATH" blockdev --setrw "$B/dev/$dv"
+[[ $(writable) == "$cheetah_rw devinfo" ]] || fail "clearing devinfo's own flag opens devinfo alone (writable: $(writable))"
+for d in sda sdb sdc sdd; do [[ $(cat "$B/own/$d") == 0 ]] || fail "the window touches no disk flag ($d)"; done
+[[ $(unguarded) == "$dv (devinfo)" ]] || fail "the hand-over check names the open partition (got: $(unguarded))"
+PATH="$t/bin:$PATH" blockdev --setro "$B/dev/$dv"
+[[ $(writable) == "$cheetah_rw" && -z $(unguarded) ]] || fail "setting devinfo's own flag again closes it"
+pass "a boot-LUN partition's own flag opens it alone, with every disk flag clear and no whole-disk node to write through"
+
+# A whole-disk node that comes back is reported; one the guard can't remove
+# is retried, warned about and reported, and its LUN's partitions still set.
+: > "$B/dev/sdd"
+[[ $(unguarded) == "sdd (whole-disk node)" ]] || fail "a whole-disk node that comes back is reported (got: $(unguarded))"
+fake_disks
+printf '%s\n' "$cheetah_rw" > "$B/etc/omamobile-ufs-rw"
+rm "$B/dev/sdc"; mkdir -p "$B/dev/sdc/x"
+guard; guard
+[[ $(grep -c 'FAILED to remove the whole-disk node .*/dev/sdc$' "$B/dev/kmsg") == 1 ]] || { cat "$B/dev/kmsg"; fail "a node that won't go is logged once"; }
+[[ ! -e $B/run/ufs-ro/sdc ]] || fail "a node that won't go is retried on the next pass"
+[[ $(unguarded) == "sdc (whole-disk node)" ]] || fail "a node that won't go stops the hand-over (got: $(unguarded))"
+[[ $(writable) == "$cheetah_rw" ]] || fail "its partitions are still set read-only (writable: $(writable))"
+rm -r "$B/dev/sdc"; : > "$B/dev/sdc"; guard
+[[ ! -e $B/dev/sdc && -e $B/run/ufs-ro/sdc && -z $(unguarded) ]] || fail "the next pass removes it once it can"
+pass "a whole-disk node that comes back or won't go is reported, retried and keeps the phone in the initramfs"
+
+# A LUN that appears after the first pass is guarded by the next
+fake_disks
+printf '%s\n' "$cheetah_rw" > "$B/etc/omamobile-ufs-rw"
+guard
+mkdisk sde; mkpart sde sde1 userdata; mkpart sde sde2 boot_b; "$t/bin/sync-ro"
+[[ $(unguarded | tr '\n' ' ') == "sde (whole-disk node) sde1 (userdata) sde2 (boot_b) " ]] \
+  || fail "a late LUN is reported before the next pass (got: $(unguarded | tr '\n' ' '))"
+guard
+[[ ! -e $B/dev/sde && $(cat "$B/own/sde") == 0 && $(cat "$B/own/sde1") == 1 && $(cat "$B/own/sde2") == 1 ]] \
+  || fail "the next pass removes the late LUN's node and sets its partitions, allowlisted names too"
+[[ -z $(unguarded) ]] || fail "the guard holds again (got: $(unguarded))"
+pass "a LUN that appears late is guarded by the next pass; the allowlist opens nothing off the main LUN"
 
 fake_disks
 cp "$t/etc-oriole/omamobile-ufs-rw" "$B/etc/omamobile-ufs-rw"

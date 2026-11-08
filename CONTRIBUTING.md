@@ -77,11 +77,11 @@ Keeping stock on slot A is how we avoid bricking phones during development, not 
 
 UFS holds the per-device calibration. The initramfs ([`initramfs/init`](initramfs/init)) guards it before anything else runs:
 
-- It sets every SCSI disk and partition read-only (`blockdev --setro`) as soon as it appears, and keeps a watcher running for the life of PID 1.
-- The only exceptions are an allowlist of GPT partition names: the device's `BOOT_IMAGES` on slot B, and `userdata`.
-- It deletes the whole-disk node of the main LUN (`/dev/sda`), so nothing can write across partitions. The boot LUNs stay read-only at the disk level.
-- In Arch, [`10-omamobile-storage.rules`](packages/omamobile-device-cheetah/vendor/udev/rules.d/10-omamobile-storage.rules) keeps the whole-disk node unusable and hides the Android partitions from desktop tools.
-- The one write outside the allowlist is the boot-success marker (`omamobile-boot-success`). It opens exactly `devinfo` for a single verified write of the slot flag bytes, then sets it read-only again.
+- It sets every SCSI partition's own read-only flag (`blockdev --setro`) as soon as it appears, and keeps a watcher running for the life of PID 1.
+- The only exceptions are an allowlist of GPT partition names on the main LUN (`sda`): the device's `BOOT_IMAGES` on slot B, and `userdata`.
+- It deletes the whole-disk node of every LUN (`/dev/sda`, and the boot LUNs' `/dev/sdb`, `/dev/sdc`, `/dev/sdd`), so nothing can write across partitions, and leaves the disks' own flags clear. The kernel counts a partition read-only when its own flag or its disk's is set (`bdev_read_only()`), so a disk flag would hide every partition on that LUN, and opening one would mean opening all of them through the whole-disk node ([#252](https://github.com/derekross/omarchy-mobile/issues/252)). Before handing over to Arch it stays in the initramfs if any whole-disk node is still there or any partition outside the allowlist is writable.
+- In Arch, [`10-omamobile-storage.rules`](packages/omamobile-device-cheetah/vendor/udev/rules.d/10-omamobile-storage.rules) keeps the main LUN's whole-disk node unusable, should it ever come back (devtmpfs makes a node only when the kernel adds a device), and hides the Android partitions from desktop tools.
+- The one write outside the allowlist is the boot-success marker (`omamobile-boot-success`). It clears `devinfo`'s own flag alone for a single verified write of the slot flag bytes, then sets it read-only again; no disk flag is touched (under an initramfs from before #252, which still sets the disk flag, it opens the disk too, as it always did).
 
 **A new device gets this guard before its UFS driver is ever enabled.** Check the device's LUN layout and partition names first, because the allowlist works by name.
 

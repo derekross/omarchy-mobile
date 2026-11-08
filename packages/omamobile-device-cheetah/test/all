@@ -11,6 +11,10 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 for script in bin/*; do bash -n "$script" || fail "$script parses"; done
 pass "scripts parse"
 
+# The boot-success marker under the storage guard, old and new (#252)
+test/boot-success > "$tmp/boot-success.log" 2>&1 || { cat "$tmp/boot-success.log"; fail "test/boot-success"; }
+pass "the boot-success marker clears only devinfo's own flag under the storage guard (test/boot-success)"
+
 grep -q '\.\./\.\.' build && fail "build reaches outside the package directory"
 pass "build stays inside the package directory"
 
