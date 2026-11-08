@@ -1,0 +1,8 @@
+#!/bin/bash
+[[ -f $FAKE_STATE/hypr-broken ]] && { echo "Couldn't connect to the socket" >&2; exit 1; }
+case $1 in
+  cursorpos) read -r x y < "$FAKE_STATE/pos"; echo "$x, $y" ;;
+  monitors) printf 'Monitor DSI-1 (ID 0):\n\tdpmsStatus: %s\n' "$(cat "$FAKE_STATE/dpms" 2>/dev/null || echo 1)" ;;
+  dispatch) [[ $2 == *'dpms'*'enable'* ]] && echo 1 > "$FAKE_STATE/dpms"; echo "hyprctl $*" >> "$FAKE_LOG"; echo ok ;;
+  layers) printf 'Monitor DSI-1:\n\tLayer level 2 (top):\n\t\tLayer aaab0946d770: xywh: 0 695 420 196, a: 1, namespace: osk, pid: 1\n' ;;
+esac

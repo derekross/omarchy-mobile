@@ -240,7 +240,8 @@ FB1, the M0.1 check against the latest off-repo backup:
 
 ```sh
 tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
-  printf "%s  %s.img\n" "$(sha256sum < /dev/disk/by-partlabel/$p | cut -d" " -f1)" "$p"; done' > logs/fb-partitions.sha256
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' > logs/fb-partitions.sha256
 sort -k2 ~/android/reference/cheetah-partition-backup-20261012-radio/SHA256SUMS | grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' |
   diff - <(sort -k2 logs/fb-partitions.sha256)
 ```
@@ -344,30 +345,36 @@ version: 5", trusty-virtio initialised; /dev/trusty-ipc-dev0 and
 close). F2c: `echo 0 > cpu7/online` → "Device or resource busy", online
 0-7, "refusing to take cpu 7 offline (trusty_core.allow_cpu_offline=0)".
 
-**Before F3 (not run):** this root has no `/dev/disk/by-partlabel`; find
-`persist` and `mfg_data` by `PARTNAME` (as MODEM-PLAN M0). And a read-only
-ext4 mount still replays a dirty journal, which writes to the partition:
-mount `persist` with `-o ro,noload` (or read the files with `debugfs`, as
-the speaker calibration does), never plain `-o ro`. Waits for the human.
+**Before F3:** `persist` is never mounted, not even `-o ro`: a read-only
+ext4 mount still replays a dirty journal and cleans up orphan inodes when
+the block device is writable (`ext4_load_journal()`,
+`ext4_orphan_cleanup()` in upstream `fs/ext4`). Its files are read with
+`debugfs` (section 4, F19.3), and partitions are found by `PARTNAME`: this
+root has no `/dev/disk/by-partlabel`. F3 passed on 2026-10-13 from an
+`ro,noload` mount (section 7); a re-run waits for the human.
 
 ### F3: the RPMB node and read-only copies (no writes; risk low)
 
+> Superseded for new runs by F19.1-F19.3: from omamobile-fingerprint 0.1.14
+> the runner makes the copies itself. By hand, make them only on an install
+> where storageproxyd has never run (F19.1); once it has, Trusty is using
+> that copy.
+
 ```sh
 tools/phone-ssh 'modprobe sg; for d in /sys/class/scsi_generic/sg*; do echo "$d $(basename $(readlink -f $d/device))"; done'
-tools/phone-ssh 'install -d -m 0700 /var/lib/omamobile-fp &&
-  dd if=/dev/disk/by-partlabel/mfg_data of=/var/lib/omamobile-fp/mfg_data.img bs=1M status=none &&
-  mkdir -p /mnt/persist-ro && mount -o ro /dev/disk/by-partlabel/persist /mnt/persist-ro &&
-  install -d -m 0700 /var/lib/omamobile-fp/persist-ss && cp -a /mnt/persist-ro/ss/. /var/lib/omamobile-fp/persist-ss/;
-  umount /mnt/persist-ro; ls -la /var/lib/omamobile-fp /var/lib/omamobile-fp/persist-ss | head'
-tools/phone-ssh 'cat /dev/disk/by-partlabel/persist' > ~/android/reference/cheetah-persist-$(date +%F).img
-tools/phone-ssh 'cat /dev/disk/by-partlabel/mfg_data' > ~/android/reference/cheetah-mfg_data-$(date +%F).img
-chmod 600 ~/android/reference/cheetah-{persist,mfg_data}-$(date +%F).img
+# the copies on the phone: F19.3's commands
+# the laptop backup of persist and the radio partitions (into a new directory)
+tools/nv-backup ~/android/reference/cheetah-nv-backup-"$(date +%Y%m%d)"
 tools/phone-ssh 'modprobe -r sg'
 ```
 
-Expect one sg node at `0:0:0:49476` (the RPMB well-known LUN). Pass: the
-copies and backups exist (sizes match the partitions). **Stop** if `persist`
-mounts read-write or the storage guard complains. Rollback: `modprobe -r sg`.
+Expect one sg node at `0:0:0:49476` (the RPMB well-known LUN), F19.3's
+output, then `nv-backup`'s verified copies. `mfg_data` isn't one of
+`nv-backup`'s partitions: F19.3 compares the phone's copy with the laptop's
+2026-10-13 one. Pass: F19.3's Pass and `nv-backup` exits 0. **Stop** on
+F19.3's stops, if `nv-backup` refuses, or if the storage guard complains.
+Rollback: `modprobe -r sg`, then F19.3's (nothing is written to `persist`
+or `mfg_data`).
 
 ### F4: secure storage (IRREVERSIBLE: the first RPMB write from Linux)
 
