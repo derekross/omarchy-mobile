@@ -345,23 +345,20 @@ class Registered(BridgeTests):
         self.assertEqual(result.get('result'), ())
         self.assertEqual(self.modem('Calls', mm.VOICE), [])
 
-    def test_disappearing_live_call_does_not_confirm_release(self):
+    def test_disappearing_live_call_is_terminated_and_deleted(self):
         self.sitd.status['calls'] = [call('200', 'active')]
         self.sitd.handlers['hangup'] = lambda request: {}
         self.push()
         path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
         result = self.client.call_async(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
         wait_until(lambda: self.sitd.actions().count('hangup') == 1, 5, 'hangup request')
+        # sitd drops a call only once it has ended, so a call it no longer
+        # lists is over: terminated, and the pending Delete completes.
         self.sitd.status['calls'] = []
         self.push()
-        wait_until(lambda: result, 5, 'unconfirmed release refusal')
-        self.assertIn(mm.ERROR_PREFIX + 'Failed', result['error'].message)
-        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
-        self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
-        self.push()
-        spin(.2)
-        self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
-
+        wait_until(lambda: result, 5, 'the delete completes')
+        self.assertNotIn('error', result)
+        self.assertEqual(self.modem('Calls', mm.VOICE), [])
     def test_release_confirmation_can_arrive_before_hangup_reply(self):
         self.sitd.status['calls'] = [call('200', 'active')]
         entered, proceed = threading.Event(), threading.Event()

@@ -317,10 +317,10 @@ class Bridge:
             self.call_state(path, CALL_STATES.get(c['state'], mm.CALL_UNKNOWN), c.get('reason', ''))
         for sid, path in list(self.sitd_calls.items()):
             if sid not in seen and path in self.calls and self.calls[path]['seen']:
-                if self.calls[path]['releasing']:
-                    self.finish_pending_delete(path, MMError('Failed', 'Call release was not confirmed'))
-                    continue
-                # sitd forgot it (another client deleted it): it has ended.
+                # sitd only drops a call after it has ended (delete-call needs
+                # terminated; a restart restores live calls), so a call it no
+                # longer lists is over, whether or not our hangup was what
+                # ended it: terminated, and a pending Delete completes.
                 self.call_state(path, mm.CALL_TERMINATED, '')
         self.forgotten &= seen
 
