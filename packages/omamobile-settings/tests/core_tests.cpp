@@ -69,6 +69,25 @@ private slots:
         QTest::qWait(100);
         QCOMPARE(backend.background(), QColor("#ddeeff"));
     }
+    void officialFontAndControlTokensObserveAtomicChanges() {
+        const auto directory=QDir::homePath()+"/.local/state/omarchy/current/theme";
+        QVERIFY(QDir().mkpath(directory));
+        const auto save=[](const QString &path,const QByteArray &bytes) {
+            QSaveFile file(path);
+            return file.open(QIODevice::WriteOnly) && file.write(bytes)==bytes.size() && file.commit();
+        };
+        QVERIFY(save(directory+"/colors.toml","background='#112233'\nforeground='#eeeeee'\naccent='#66aa88'\nmuted='#778899'\n"));
+        QVERIFY(save(directory+"/shell.toml","[font]\nbase-size=12\n[controls]\nnormal-fill-alpha=0.04\n"));
+        Backend backend;
+        QCOMPARE(backend.themeTokens()["fontScale"].toDouble(),1.0);
+        QCOMPARE(backend.muted(),QColor("#778899"));
+        const auto page=backend.page();
+        QVERIFY(save(directory+"/shell.toml","[font]\nbase-size=18\nbody=19\n[controls]\nnormal-color='accent'\nnormal-fill-alpha=0.2\nfocus-border-width=2\n"));
+        QTRY_COMPARE(backend.themeTokens()["fontScale"].toDouble(),1.5);
+        QCOMPARE(backend.themeTokens()["font.body"].toInt(),19);
+        QCOMPARE(backend.themeTokens()["focusBorderWidth"].toInt(),2);
+        QCOMPARE(backend.page(),page);
+    }
     void neutralPreviewAndUnknownValues() {
         DeviceInfoController info(true);
         QSignalSpy changed(&info, &DeviceInfoController::changed);

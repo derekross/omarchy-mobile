@@ -107,21 +107,20 @@ QStringList Backend::catalogProblems() const {
 }
 void Backend::reloadTheme() {
     QFile file(m_themeFile);
-    if (file.open(QIODevice::ReadOnly) && file.size() <= 65536) {
-        const auto content = QString::fromUtf8(file.readAll());
-        auto color = [&content](const QString &key, QColor previous) {
-            const auto match = QRegularExpression("(?:^|\\n)\\s*" + key + "\\s*=\\s*[\"'](#[0-9a-fA-F]{6})[\"']").match(content);
-            return match.hasMatch() ? QColor(match.captured(1)) : previous;
-        };
-        m_background = color("background", m_background);
-        m_foreground = color("foreground", m_foreground);
-        m_accent = color("accent", m_accent);
-        m_muted = QColor::fromRgbF(m_foreground.redF() * .78 + m_background.redF() * .22,
-                                  m_foreground.greenF() * .78 + m_background.greenF() * .22,
-                                  m_foreground.blueF() * .78 + m_background.blueF() * .22);
+    if (file.open(QIODevice::ReadOnly)) {
+        QFile shell(QFileInfo(m_themeFile).absolutePath() + "/shell.toml");
+        QByteArray shellBytes;
+        if (shell.open(QIODevice::ReadOnly)) shellBytes = shell.read(262145);
+        QString family = qEnvironmentVariable("OMARCHY_MENU_FONT").trimmed();
+        if (family.isEmpty()) family = "monospace";
+        m_themeTokens = SettingsTheme::tokens(file.read(262145), shellBytes, family, m_themeTokens);
+        m_background = m_themeTokens["background"].value<QColor>();
+        m_foreground = m_themeTokens["foreground"].value<QColor>();
+        m_accent = m_themeTokens["accent"].value<QColor>();
+        m_muted = m_themeTokens["muted"].value<QColor>();
     }
     const auto existing = m_watcher.files() + m_watcher.directories();
-    for (const auto &path : {m_themeFile, QFileInfo(m_themeFile).absolutePath(),
+    for (const auto &path : {m_themeFile, QFileInfo(m_themeFile).absolutePath()+"/shell.toml", QFileInfo(m_themeFile).absolutePath(),
                             QDir::homePath() + "/.local/state/omarchy/current"})
         if (QFileInfo::exists(path) && !existing.contains(path)) m_watcher.addPath(path);
     if (m_roundingQuery.state() == QProcess::NotRunning) {

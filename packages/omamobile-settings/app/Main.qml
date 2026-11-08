@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Marsel Nenaj
 import QtQuick
+import "."
 import QtQuick.Controls
-import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Window
 ApplicationWindow {
@@ -11,11 +11,13 @@ ApplicationWindow {
     height: Math.min(880, Screen.height)
     visible: true
     title: backend.title
+    font.family: SettingsStyle.fontFamily
+    palette.window: SettingsStyle.background
+    palette.windowText: SettingsStyle.foreground
+    palette.text: SettingsStyle.foreground
+    palette.buttonText: SettingsStyle.foreground
+    palette.highlight: SettingsStyle.accent
     color: backend.background
-    Material.theme: (backend.background.r * .2126 + backend.background.g * .7152 + backend.background.b * .0722) > .5 ? Material.Light : Material.Dark
-    Material.accent: backend.accent
-    Material.background: backend.background
-    Material.foreground: backend.foreground
     function goBack() {
         search.focus = false
         Qt.inputMethod.hide()
@@ -34,20 +36,20 @@ ApplicationWindow {
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 20
         spacing: 18
-        Button {
+        SettingsButton {
             visible: backend.page !== "root" || backend.searching
             Layout.preferredHeight: 52
-            leftPadding: 0; rightPadding: 12
+            leftPadding: 0; rightPadding: 12; topPadding: 0; bottomPadding: 0
             onClicked: window.goBack()
             contentItem: Row {
                 spacing: 4
-                Label { text: "‹"; font.pixelSize: 30; color: backend.foreground }
-                Label { text: qsTr("Back"); font.pixelSize: 17; color: backend.foreground; anchors.verticalCenter: parent.verticalCenter }
+                SettingsLabel { text: "‹"; font.pixelSize: SettingsStyle.fontPx(30); color: backend.foreground }
+                SettingsLabel { text: qsTr("Back"); font.pixelSize: SettingsStyle.fontPx(17); color: backend.foreground; anchors.verticalCenter: parent.verticalCenter }
             }
-            background: Rectangle { color: parent.down ? Qt.rgba(backend.foreground.r, backend.foreground.g, backend.foreground.b, 0.06) : "transparent"; radius: Math.min(backend.radius, width / 2, height / 2) }
+            background: Rectangle { color: parent.down ? SettingsStyle.fill("normal") : "transparent"; radius: Math.min(backend.radius, width / 2, height / 2) }
         }
-        Label { text: backend.title; Layout.fillWidth: true; color: backend.foreground; font.pixelSize: 30; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
-        TextField {
+        SettingsLabel { text: backend.title; Layout.fillWidth: true; color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(30); font.weight: Font.DemiBold; wrapMode: Text.Wrap }
+        SettingsTextField {
             id: search
             objectName: "settingsSearch"
             Layout.fillWidth: true; Layout.preferredHeight: 52
@@ -55,7 +57,7 @@ ApplicationWindow {
             placeholderText: qsTr("Search settings")
             color: backend.foreground; placeholderTextColor: backend.muted
             onTextEdited: backend.search(text)
-            background: Rectangle { radius: Math.min(backend.radius, width / 2, height / 2); color: Qt.rgba(backend.foreground.r, backend.foreground.g, backend.foreground.b, 0.06) }
+            background: Rectangle { radius: Math.min(backend.radius, width / 2, height / 2); color: SettingsStyle.fill("normal") }
         }
         AboutPage { visible: window.showingAbout; Layout.fillWidth: true; Layout.fillHeight: true; controller: deviceInfo; colors: backend }
         ListView {
@@ -63,7 +65,7 @@ ApplicationWindow {
             visible: !window.showingAbout
             Layout.fillWidth: true; Layout.fillHeight: true
             clip: true; model: backend.rows
-            delegate: ItemDelegate {
+            delegate: SettingsItemDelegate {
                 required property var modelData
                 width: list.width; implicitHeight: Math.max(80, copy.implicitHeight + 28)
                 onClicked: { search.focus = false; Qt.inputMethod.hide(); backend.activate(modelData.id) }
@@ -73,12 +75,12 @@ ApplicationWindow {
                     ColumnLayout {
                         id: copy
                         Layout.fillWidth: true; spacing: 5
-                        Label { text: modelData.title; color: backend.foreground; font.pixelSize: 17; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                        Label { text: modelData.detail; color: backend.muted; font.pixelSize: 13; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        SettingsLabel { text: modelData.title; color: backend.foreground; font.pixelSize: SettingsStyle.fontPx(17); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        SettingsLabel { text: modelData.detail; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(13); wrapMode: Text.Wrap; Layout.fillWidth: true }
                     }
-                    Label { text: "›"; color: backend.muted; font.pixelSize: 24; Accessible.ignored: true }
+                    SettingsLabel { text: "›"; color: backend.muted; font.pixelSize: SettingsStyle.fontPx(24); Accessible.ignored: true }
                 }
-                background: Rectangle { radius: Math.min(backend.radius, width / 2, height / 2); color: parent.down ? Qt.rgba(backend.accent.r, backend.accent.g, backend.accent.b, 0.10) : Qt.rgba(backend.foreground.r, backend.foreground.g, backend.foreground.b, 0.045) }
+                background: Rectangle { radius: Math.min(backend.radius, width / 2, height / 2); color: parent.down ? SettingsStyle.fill("pressed") : SettingsStyle.fill("normal") }
             }
         }
     }

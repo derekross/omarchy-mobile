@@ -7,6 +7,7 @@
 #include <QVariantList>
 #include <QFileSystemWatcher>
 #include <QProcess>
+#include "themetokens.h"
 
 class Backend : public QObject {
     Q_OBJECT
@@ -15,6 +16,7 @@ class Backend : public QObject {
     Q_PROPERTY(QString page READ page NOTIFY rowsChanged)
     Q_PROPERTY(QString title READ title NOTIFY rowsChanged)
     Q_PROPERTY(bool searching READ searching NOTIFY rowsChanged)
+    Q_PROPERTY(QVariantMap themeTokens READ themeTokens NOTIFY themeChanged)
     Q_PROPERTY(QColor background READ background NOTIFY themeChanged)
     Q_PROPERTY(QColor foreground READ foreground NOTIFY themeChanged)
     Q_PROPERTY(QColor accent READ accent NOTIFY themeChanged)
@@ -27,6 +29,7 @@ public:
     QString page() const { return m_page; }
     QString title() const;
     bool searching() const { return !m_query.isEmpty(); }
+    QVariantMap themeTokens() const { return m_themeTokens; }
     QColor background() const { return m_background; }
     QColor foreground() const { return m_foreground; }
     QColor accent() const { return m_accent; }
@@ -56,6 +59,9 @@ private:
     QProcess m_roundingQuery;
     quint64 m_roundingGeneration = 0;
     int m_radius = 0;
-    QColor m_background = QColor("#1a1b26"), m_foreground = QColor("#c0caf5"),
-           m_accent = QColor("#9ece6a"), m_muted = QColor("#8b93b8");
+    QVariantMap m_themeTokens = SettingsTheme::tokens({}, {});
+    QColor m_background = m_themeTokens["background"].value<QColor>(),
+           m_foreground = m_themeTokens["foreground"].value<QColor>(),
+           m_accent = m_themeTokens["accent"].value<QColor>(),
+           m_muted = m_themeTokens["muted"].value<QColor>();
 };

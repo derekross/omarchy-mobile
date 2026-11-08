@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
     app.setApplicationName("omamobile-settings");
     app.setApplicationVersion(QStringLiteral(OMAMOBILE_SETTINGS_VERSION));
     app.setDesktopFileName("org.omamobile.Settings");
-    QQuickStyle::setStyle("Material");
+    QQuickStyle::setStyle("Basic");
     Backend backend;
 #ifdef OMAMOBILE_SETTINGS_TEST_DEVICE_INFO
     // Only the separately built test entrypoint fixes read-only model data.
