@@ -1119,3 +1119,13 @@ grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || 
 pass "install stages the package"
 
 test/keys.sh || fail "omamobile-keys volume keys"
+
+# Back threshold feedback handler state only; never invoke feedbackd.
+rc=0; out=$(python3 -B test/back-haptic.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "Back threshold feedback # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "Back threshold feedback"
+else
+  pass "Back threshold feedback: once per gesture, both edges and retreat"
+fi
