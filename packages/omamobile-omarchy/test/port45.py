@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 
 def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml):
@@ -28,6 +29,15 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
     if rc:
         print(output)
         return
+
+    pam = subprocess.run(
+        [sys.executable, os.path.join(package, 'test', 'mobile-pam-preserve.py'),
+         os.path.join(root, 'usr/bin/omarchy-apply-lock')],
+        capture_output=True, text=True,
+    )
+    ok(pam.returncode == 0, 'real4.5: actual PAM preservation guard passes isolated behavioral tests')
+    if pam.returncode:
+        print(pam.stdout + pam.stderr)
 
     status_path = Path(root) / 'var/lib/omamobile/omarchy-patches/status.json'
     status = json.loads(status_path.read_text())

@@ -29,7 +29,7 @@
 #
 # Against Omarchy 4.0.6 (edge 4.0.6-1), after 0023 and 0026.
 #
-# Omarchy4.5: local transport-only media controls.
+# Omarchy 4.5: local transport-only media controls.
 
 diff --git i/shell/plugins/lock/LockGlance.qml w/shell/plugins/lock/LockGlance.qml
 --- i/shell/plugins/lock/LockGlance.qml

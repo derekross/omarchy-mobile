@@ -503,7 +503,7 @@ def reverse_recover(root, rels, owned, series_dirs, work, log):
 def default_series(root, packages):
     """Only the two independently qualified source families have a series.
 
-    Keep 4.0.6 available while preparing an upgrade; never apply4.5 contexts
+    Keep 4.0.6 available while preparing an upgrade; never apply 4.5 contexts
     to the currently running old package. Explicit --series remains the
     offline prospective rehearsal interface.
     """
