@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Omarchy Mobile build of rmtfs, derived from https://github.com/linux-msm/rmtfs/tree/v1.2 (14cb1ee69f556873dc271832b77163669e1d6459).
 # Maintainer: Super Tecno Gym <banana@grrlz.net>
 # Contributor: Sam Day <me@samcday.com>
 
@@ -9,9 +11,6 @@ arch=(aarch64 x86_64)
 url="https://github.com/linux-msm/rmtfs"
 license=("BSD-3-Clause")
 depends=(qrtr libudev.so)
-conflicts=("${pkgname%-git}")
-groups=(qcom-icnss-wlan)
-makedepends=()
 _srcname="${pkgname}-${pkgver}"
 source=(
 	"${_srcname}.tar.gz::https://github.com/linux-msm/rmtfs/archive/refs/tags/v${pkgver}.tar.gz"

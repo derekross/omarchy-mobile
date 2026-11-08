@@ -1,15 +1,15 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Omarchy Mobile build of pd-mapper, derived from https://github.com/linux-msm/pd-mapper/tree/v1.1 (5ecd2fe926aca7abfe40724177f63b942cff3947).
 # Maintainer: Super Tecno Gym <banana@grrlz.net>
 
 pkgname="pd-mapper"
-pkgdesc="Qualcomm IPC Router protocol"
+pkgdesc="Qualcomm service registry and protection domain mapper"
 pkgver=1.1
 pkgrel=1
 arch=(aarch64 x86_64)
 url="https://github.com/linux-msm/pd-mapper"
 license=("BSD-3-Clause")
-conflicts=("${pkgname%-git}")
-depends=(qrtr)
-groups=(qcom-icnss-wlan)
+depends=(qrtr xz)
 makedepends=(qrtr)
 _srcname="${pkgname}-${pkgver}"
 source=(
