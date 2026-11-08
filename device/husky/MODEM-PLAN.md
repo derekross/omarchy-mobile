@@ -4,10 +4,21 @@
 Status (2026-11-08): on hold. Stages S1 to S5e have been run; none of them
 hung, oopsed or raised a UFS error (S5c stopped on its own current abort,
 see below). No modem step and no power-line step has been run since S5e
-ended at 2026-11-07 23:21, and I take none on the 8 Pro until derekross
-answers the question on omarchy-mobile#472
+ended at 2026-11-07 21:21 UTC (23:21 here), and I take none on the 8 Pro
+until derekross answers the question on omarchy-mobile#472
 (https://github.com/derekross/omarchy-mobile/pull/472#issuecomment-6711065625;
 see "Current state: on hold" below).
+
+I asked that question on 2026-11-07 at 18:04 UTC and wrote that I would not
+run the first hardware step until I heard back. I then ran S3 (19:14:50 UTC)
+and after it S4, S5a, S5b, S5c, S5d and S5e, all before any answer. That was
+my mistake: I should have waited. S1 and S2 (18:47 and 18:52 UTC) came after
+the question too, but they only read: S1 reads the PMU register (the module
+probes with `allow_hw=0`) and S2 reads the eleven modem lines as the
+bootloader left them, with no direction or level change.
+
+Times: this file gives Athens time (EET, UTC+2) unless a time is marked UTC.
+Subtract 2 h for UTC.
 This file is the record of S1 to S5e: what each step does, its gates, its
 stop conditions, the dated result with the kernel release, and what the
 result does not prove.
@@ -15,10 +26,13 @@ result does not prove.
 [V] = read in source, stock DT or my captures on the phone. [I] = inferred;
 each [I] names the step that would settle it.
 
-Stock references are the GrapheneOS shusky GPL tree
-(`android-gs-shusky-6.1-android16`). The modem driver is the stock CPIF
-(`modem_ctrl_s5100.c`, `s5300` node), the PCIe side is `pcie-gs201-cp`
-from W4HO's stack in linux-omarchy-mobile#187.
+Stock references are Google's tree `kernel/google-modules/radio/samsung/s5300`,
+branch `android-gs-shusky-6.1-android16` (the stock CPIF, `modem_ctrl_s5100.c`,
+`s5300` node). The line numbers below are the ones derekross checked in that
+tree on omarchy-mobile#514; my own copy was the `soc-gs` tree, where the same
+functions sit at different lines (`gpio_power_off_cp()` at 874, for example).
+The PCIe side is `pcie-gs201-cp` from W4HO's stack in
+linux-omarchy-mobile#187.
 
 ## Test kernels
 
@@ -40,8 +54,20 @@ was flashed; the lines below say so for each stage.
 
 Gates, all of which must hold before any stage:
 
+- First of all: `tools/nv-backup --check` matches the 2026-11-01 backup for
+  `efs`, `efs_backup`, `modem_userdata`, `persist` and `modem_a`/`modem_b`
+  (read-only; `devinfo` is expected to differ). I did not run this before
+  S1 to S5e. I ran it afterwards, on 2026-11-08, and every partition matched
+  (see "Current state"). From now on it is the first gate of every stage.
 - I am at the phone with the USB cable in. The charger is in too, except in
-  S5d and S5e, which are battery-only on purpose.
+  S5d and S5e, which are battery-only on purpose: a current reading cannot be
+  taken with a charger feeding the rail. The battery was at 92 % and each run
+  lasted a few minutes. On this phone 92 % is "full": the charger chip
+  finishes at 4350 mV and the gauge stays at 92 %, even after 12 hours plugged
+  in (`BATTERY-NOTES.md` section 10a, #452).
+- Nothing armed or fed a watchdog during S3 to S5. Every step was attended,
+  with the buttons as the way back. On the 8 Pro a hung kernel needs Power +
+  Volume Up held for 15 to 30 s; the power button alone is not enough.
 - Battery 50 % or more; battery temperature under 40 C at the start; SoC at
   or under 62 C (idle SoC is about 53 C). A `THERMAL-PAUSE` file blocks the
   step.
@@ -70,7 +96,12 @@ recover in seconds; a pin or line reading different from what the previous
 log said; battery temperature over 45 C. Never reboot with the modem lines
 high: `gpio_off` first, reboot only after an all-0 read. A phone that ends
 with a dead screen is not woken or rebooted; I run the dead-screen kit
-first.
+first. The kit is a read-only script for a phone whose screen is off while ssh
+still answers (touch and power key dead): it records while I touch and press
+power in a 12 s window, and only then do I wake the screen
+(`omamobile-remote wake`) and read the uptime, the DRM state and
+`hyprctl monitors -j`, and ask whether the panel is lit; the case is
+linux-omarchy-mobile#215.
 
 ## S1: PCIe controller and PHY loaded, no hardware access (2026-11-07 20:47)
 
@@ -175,13 +206,24 @@ The hook (test only, not for merge): `modem_ctrl_s5100.c` gets a debugfs
 directory `cpif_test/`, created only when cpif is loaded with
 `cpif_test_gpio=1`. Files: `lines` (read, the 11 line levels and
 `phone_state`), `gpio_off` and `gpio_on` (any write fires them; they call
-only the stock `gpio_power_off_cp` and `gpio_power_offon_cp`; `gpio_on` is
-refused with -EBUSY unless all 7 AP2CP lines read 0), and from S5c a
-`pda_active` file. No state change, no CP memory write
-(`clear_boot_stage` and `init_ctrl_msg` are skipped on purpose), no PCIe,
-no PMU, no ioctl. cpif has no module_exit, so it cannot be unloaded.
+only the stock `gpio_power_off_cp` and `gpio_power_offon_cp`), and from S5c a
+`pda_active` file. `gpio_on` is refused with -EBUSY unless six AP2CP lines
+read 0: `cp_pwr`, `nreset`, `wakeup`, `dump_noti`, `cp_wrst_n` and
+`pm_wrst_n`. `ap2cp-pda-active` is left out of that check because stock
+`power_on_cp` sets it before the power-on, and S5e's E3 needs it high. No
+state change, no CP memory write (`clear_boot_stage` and `init_ctrl_msg` are
+skipped on purpose), no PCIe, no PMU, no ioctl. cpif has no module_exit, so
+it cannot be unloaded.
 
-Edges [V] (stock `modem_ctrl_s5100.c:874-903`, non-`CP_WRESET_WA` branch,
+Builds: S5a and S5b ran an earlier build of the same code without the
+`pda_active` file, the module kept on the phone as `/root/cpif.ko.s5a`
+(sha256 `4ee11e7d01764522c5eebca5f6378439d2fc45db4decf17e1e883add0855d972`).
+S5c to S5e ran the build that has it (sha256
+`f1e3173f55a07cb70685d611abfa05b004266dbfb23ed1aa0718ed57de7bbe11`).
+
+Edges [V] (the code is in my `soc-gs` copy; the line numbers are derekross's
+from Google's s5300 tree: stock `modem_ctrl_s5100.c`, `gpio_power_off_cp()`
+at 906-918 and `gpio_power_offon_cp()` at 921-933, non-`CP_WRESET_WA` branch,
 confirmed compiled; `CP_WRESET_WA`, `CP_LCD_NOTIFIER` and
 `LINK_DEVICE_PCIE_GPIO_WA` are not set in this build):
 
@@ -253,7 +295,9 @@ output; the tail covered about 20 s, and a check at 22:37 read all 0.)
 
 Does not prove: that the modem has no power. Stock `power_on_cp` sets
 `ap2cp-pda-active` to 1 and `dump-noti` to 0 right before the power-on and
-clears the shared-memory control blocks (stock `modem_ctrl_s5100.c:990-991`);
+clears the shared-memory control blocks (stock `modem_ctrl_s5100.c`:
+`clear_boot_stage()` called at 1000, and the `ap2cp-pda-active`/`dump-noti`
+pair and the two `init_ctrl_msg()` calls in `power_on_cp()` at 1022-1027);
 S5b did neither. Current was not measured.
 
 ### S5c: S5b again with pda_active = 1 and current sampling (2026-11-07 22:44, my go)
@@ -333,6 +377,10 @@ Two battery-only runs, three power-on phases, one phone and one gauge.
 
 ## Current state: on hold
 
+- S3, S4, S5a, S5b, S5c, S5d and S5e ran after my question on
+  omarchy-mobile#472 (2026-11-07 18:04 UTC) and before any answer to it.
+  So the hold now covers S6 and any repeat, but it came too late for S3 to
+  S5e, which should have waited as well.
 - No further modem step and no power-line step on the 8 Pro until derekross
   answers the question on omarchy-mobile#472
   (https://github.com/derekross/omarchy-mobile/pull/472#issuecomment-6711065625);
@@ -345,6 +393,23 @@ Two battery-only runs, three power-on phases, one phone and one gauge.
   `trusty_userdata` are SAME as the 2026-11-01 10:01 backup. `devinfo` is
   different, as expected (the retry bit and boot counts change with every
   flash).
+- Leftovers on the phone (checked 2026-11-08 at 21:40 local): `/etc/modprobe.d/`
+  has no `modem-test.conf`; the folder holds only `hid_apple.conf` and
+  `omamobile-aoc-blacklist.conf`, neither from the modem tests (the AoC one
+  is dated 2026-11-05 and does not shadow a packaged file). The test
+  `cpif.ko` is still inside the two test module trees (`...gc5b6ae8f4dc2`
+  and `...g6a203e4b8a67`) and as `/root/cpif.ko.s5a` and
+  `/root/cpif.ko.s4-original`; the normal NFC set's tree has none, so a
+  normal boot loads none of it.
+- What ran is in this folder: the overlays `overlays/modem-s1-link.dtso`
+  (`pcie_0` and `pcie_0_phy` on), `overlays/modem-s2-lines.dtso` (S1 plus the
+  `modem` child of `pcie_0`) and `overlays/modem-s4-cpif.dtso` (the controller
+  on, its `modem` child off, and `/cp-shmem` and `/cpif` on), and the scripts
+  `bringup/s5b.sh`, `s5c.sh`, `s5c-control.sh`, `s5d.sh` and `s5e.sh`, as they
+  ran (two comment lines were added at the top of each: an SPDX line and a note). The headers of the overlays now point at this file; nothing else in them changed. `bringup/s5e.sh` is the version the S5e result
+  above describes, with INT, TERM and HUP trapped into a safe off (its own
+  header still says v2). The S3 module change was one line: `CP_LINK_TRIES` from 3
+  to 1 in `pcie-gs201-cp`, test only, not committed.
 - The phone is on the normal NFC image set. The first revert boot on
   2026-11-07 had no drivers because a clean-up timer had deleted the
   module folder; I fixed it by hand between 23:26 and 23:35 and checked the module
@@ -352,6 +417,8 @@ Two battery-only runs, three power-on phases, one phone and one gauge.
 - Not run, and not to be run before the answer: S6 (the same power-on plus
   one `link_up` try with the modem powered), a PMIC power-meter reading of
   the modem channel, repeats of the S5 power-ons for more statistics.
+- When S6 comes, each step gets an Expect line, a rollback and a risk level
+  as well as its stop rules, and the NV check runs first.
 
 ## Unknowns
 
@@ -371,9 +438,9 @@ Two battery-only runs, three power-on phases, one phone and one gauge.
   in stock logic and stayed 0 here; whether it rises before PCIe training
   is unknown. Source reading, then S6, would settle it.
 - What the bootloader does with the modem lines on a forced reboot or a
-  hang. Nothing in my notes covers it. Only the power button remains for a
-  hung kernel, and the debugfs hook exists only while the test module is
-  loaded.
+  hang. Nothing in my notes covers it. A hung kernel needs Power + Volume Up
+  held for 15 to 30 s, and the debugfs hook exists only while the test
+  module is loaded.
 - Whether a power-off edge triggers the UFS error pass on husky (it did on
   cheetah). S5b, S5c, S5d and S5e saw none.
 - The husky modem image and partition mapping, the BAR and doorbell layout,
