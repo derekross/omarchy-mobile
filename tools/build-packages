@@ -83,7 +83,7 @@ while (($#)); do
     --resign) resign=1 ;;
     --import) imports+=("${2:?--import needs a directory}"); shift ;;
     --local) local_name=${2:?--local needs a device codename}; shift ;;
-    -h|--help) sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0" 2; exit 0 ;;
     -*) alarm_die "unknown option $1" ;;
     *) dirs+=("${1%/}") ;;
   esac
