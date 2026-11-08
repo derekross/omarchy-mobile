@@ -47,6 +47,10 @@ resolve_all "${base[@]}" "${distro[@]}"
 ((${#absent_pkgs[@]} == 0)) || printf 'error: not in any repository: %s\n' "${absent_pkgs[*]}" >&2
 ((${#unmet_pkgs[@]} == 0)) || printf 'error: in a repository, but pacman cannot meet their dependencies: %s\n%s\n' "${unmet_pkgs[*]}" "$unmet_why" >&2
 ((${#absent_pkgs[@]} + ${#unmet_pkgs[@]} == 0)) || exit 1
+for p in "${distro[@]}"; do
+  repo=$(pacman -Sp -dd --print-format %r "$p" 2>/dev/null | tail -1 || true)
+  [[ $repo != omamobile ]] || die "$p is an Omarchy Mobile package; list it in ROOTFS_PACKAGES instead"
+done
 # Every package of ours must come from [omamobile], not a same-named one
 # elsewhere (Mesa, Hyprland, libcamera are in Arch Linux ARM and [omarchy]
 # too). One allowed to be missing is left to whatever depends on it.
@@ -217,6 +221,7 @@ say "MANIFEST"
   echo "# Omarchy Mobile root image"
   echo "version: $VERSION"
   echo "device: $DEVICE ($DEVICE_PACKAGE${ROOTFS_PACKAGES:+ $ROOTFS_PACKAGES})"
+  echo "distribution packages: ${ROOTFS_DIST_PACKAGES:-none}"
   echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "repository commit: $GIT_COMMIT"
   echo "arch linux arm tarball sha256: $ALARM_SHA256"
