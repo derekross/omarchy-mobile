@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # dipper (Xiaomi Mi 8) — bring-up notes
 
-Facts only, each read off the phone. Captures live outside the repo
-(`private off-device reference directory (path omitted)/`) because they carry the serial, the cpuid
-and Wi-Fi keys; quoted here are the facts, never the files.
+Facts only, each read off the phone. Captures remain outside the repository
+because they contain device identifiers and Wi-Fi keys; this file records only
+the facts needed for review.
 
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
@@ -45,13 +45,19 @@ and Wi-Fi keys; quoted here are the facts, never the files.
 
 ## 2026-10-29 — first light, and what the hardware said
 
-**The phone boots mainline and gives a shell.** `fastboot boot` of our image, kernel
-7.3.0-rc6 with our DTB: UFS up (all six LUNs, ext4 mounts), USB NCM gadget, dropbear,
-gpio-keys, 8 CPUs, 5.7 GB RAM. The storage guard works as designed:
-`boot`, `recovery` and `persist` read-only, `userdata` and `logdump` writable.
+**The phone reached a shell on an unpublished kernel tree.** `fastboot boot` of
+the image used kernel release
+`7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` with its matching DTB: UFS up
+(all six LUNs, ext4 mounts), USB NCM gadget, dropbear, gpio-keys, 8 CPUs and
+5.7 GB RAM. This records the historical first-light tree; kernel PRs #218–#221
+are successor changes and are not the code tested in that boot. The diagnostic
+image's guard allowed `userdata` and `logdump` writes; the historical unsafe
+write details and current backup coverage still need verification before these
+notes can be treated as a recovery record.
 
 ### What had to be fixed before any of that
-Five defects in the recovered MR !71 work, three of them fatal:
+Six defects in the recovered [sdm845-mainline MR !71](https://gitlab.com/sdm845-mainline/linux/-/merge_requests/71)
+work, three of them fatal:
 
 1. **`qcom,board-id = <69 0>` (0x45) is polaris's.** dipper reports `0x37`. ABL matches on
    it and silently refuses the whole boot image otherwise — no kernel output, no panic,
@@ -96,14 +102,15 @@ kernel revision; they are not results from the current FTS5 driver:
 
 At the time, it was unknown whether GENI/GPI or the FTS5 protocol caused the timeout.
 
-### 2026-10-29 — FTS5 driver update (not yet built or hardware-tested)
+### FTS5: historical tap and current upstream series
 
-The live controller is FTS5, so the DTS now declares `st,stmfts5` and
-`linux/drivers/input/touchscreen/stmfts.c` carries the upstream FTS5 support and
-controller-ready wait fix. The upstream v8 series states it was tested on Xiaomi Mi 8:
+The live controller is FTS5. A separate historical RAM boot on 2026-10-30, using
+the unpublished kernel release above, registered `stmfts` and a physical tap
+produced `ABS_MT_POSITION_X`. That observation is not a test of the current
+kernel PRs. The public successor series is [kernel PR #219](https://github.com/derekross/linux-omarchy-mobile/pull/219),
+with its binding in [kernel PR #220](https://github.com/derekross/linux-omarchy-mobile/pull/220).
+The upstream v8 series states it was tested on Xiaomi Mi 8:
 [FTS5 driver patch](https://lists.openwall.net/linux-kernel/2026/09/25/2213),
 [controller-ready fix](https://lists.openwall.net/linux-kernel/2026/09/25/2214),
 [binding update](https://lists.openwall.net/linux-kernel/2026/09/25/2212).
-This is the first protocol-matched driver tried here, but it still needs a kernel build
-and attended RAM-boot test. The upstream series provides basic touch only; firmware
-loading and wake-on-touch/AP-SLPI handoff are not implemented.
+Firmware loading, low-power touch and wake-on-touch/AP-SLPI handoff are not implemented.
