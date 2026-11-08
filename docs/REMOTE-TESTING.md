@@ -5,7 +5,7 @@ Most of bringing up a phone is trying things on it: does the speaker play, does 
 
 ![An agent or script on a computer drives the phone over ssh](screenshots/remote/remote-overview.png)
 
-It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no image installs them, and installing them enables nothing: no service, no udev rule, and nothing listens.. See [Security](#security).
+It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no image installs them, and installing them enables nothing: no service, no udev rule, and nothing listens. See [Security](#security).
 
 `omamobile-mirror` is the other way in: a VNC window on your computer, with your own mouse and keyboard driving the phone, for demos and for typing. This is for scripts and agents: nothing to watch, no viewer, no open port, and every action and screenshot is a command with an exit code.
 
@@ -14,7 +14,7 @@ It is opt-in. `omamobile-remote` and the patched `wlrctl` are in `packages/`, no
 On the phone, from the repository built by `tools/build-packages`:
 
 ```
-pacman -U wlrctl-0.2.2-1-aarch64.pkg.tar.* omamobile-remote-0.1.0-1-any.pkg.tar.*
+pacman -U wlrctl-0.2.2-1-aarch64.pkg.tar.* omamobile-remote-0.1.1-1-any.pkg.tar.*
 ```
 
 From your computer, an ssh key to the phone's user (USB networking is the easy way: `ssh user@172.16.42.1` on the images that have it). Every command below is run as that user:

@@ -342,7 +342,8 @@ Same checks as below: full build exits 0 (`logs/kernel-modem7.log`),
 ```sh
 # M0.1 partitions unchanged against the 2026-10-11 backup (reads ~430 MB)
 tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
-  printf "%s  %s.img\n" "$(sha256sum < /dev/disk/by-partlabel/$p | cut -d" " -f1)" "$p"; done' \
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' \
   > logs/m0-partitions.sha256
 grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' \
   ~/android/reference/cheetah-partition-backup-20261011/SHA256SUMS | sort -k2 | diff - <(sort -k2 logs/m0-partitions.sha256)
@@ -378,7 +379,8 @@ tools/phone-ssh 'cat > /etc/udev/rules.d/60-omamobile-modem-nv-ro.rules' <<'EOF'
 SUBSYSTEM=="block", ENV{ID_PART_ENTRY_NAME}=="efs|efs_backup|modem_userdata|modem_a|modem_b", RUN+="/usr/bin/blockdev --setro $devnode"
 EOF
 tools/phone-ssh 'udevadm control --reload; udevadm trigger -s block -c change;
-  for p in efs efs_backup modem_userdata modem_a modem_b; do echo $p $(blockdev --getro /dev/disk/by-partlabel/$p); done'
+  for p in efs efs_backup modem_userdata modem_a modem_b; do
+    d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5); echo $p $(blockdev --getro /dev/$d); done'
 #   pass: all 1. (persist stays writable for the fingerprint work's own plan; nothing here writes it.)
 ```
 

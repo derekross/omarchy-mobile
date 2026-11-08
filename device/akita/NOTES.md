@@ -20,10 +20,10 @@ UFS with the storage guard (gate c) and Arch on `userdata` (gate d). The steps a
 - **The kernel's default sleep is `deep`** [V]: `/sys/power/mem_sleep` reads `s2idle [deep]` under Arch. Linux has no zuma SoC sleep sequence, so `omamobile-device-akita` makes Suspend use `s2idle`, as the Pixel 7 Pro's package does.
 - **`NV_PARTS` names the radio's partitions only** (the Pixel 7 Pro's list, all present on akita). Other per-phone partitions it doesn't name:
   - `mfg_data`: factory data, which the Pixel 7 Pro's fingerprint stack reads a copy of ([cheetah's FINGERPRINT-PLAN](../cheetah/FINGERPRINT-PLAN.md));
-  - `trusty_persist`: Trusty's persistent storage ([tegu's FINGERPRINT-PLAN](../tegu/FINGERPRINT-PLAN.md));
+  - `trusty_persist` and `trusty_userdata`: Trusty's persistent storage ([tegu's FINGERPRINT-PLAN](../tegu/FINGERPRINT-PLAN.md));
   - `pinfo`, `fips` and `blenv`, whose contents haven't been read [I].
 
-  None is on `UFS_RW`, so the guard keeps them read-only, and all are in M2.4's full backup. Since stage 0's clean backup, `mfg_data`, `pinfo`, `fips` and `blenv` are unchanged, and `trusty_persist` changed (stock ran) [V].
+  None is on `UFS_RW`, so the guard keeps them read-only, and all are in M2.4's full backup. Since stage 0's clean backup, `mfg_data`, `pinfo`, `fips`, `blenv` and `trusty_userdata` are unchanged, and `trusty_persist` changed (stock ran) [V]. The two Trusty partitions are now in `NV_BACKUP_EXTRA`, as on the Pixel 8 Pro, so `tools/nv-backup --check` shows when Android has written Trusty's storage.
 - **A second retail 8a passed M2.3, M2.4 and M2.6** on the same branch, with the same link, partition map and guard results ([#456](https://github.com/derekross/omarchy-mobile/pull/456)).
 
 ## 2026-11-03: first light (M1.3) and the console (M1.4)
@@ -126,7 +126,7 @@ The descriptor carries no comments; this table is its provenance.
 | `VENDOR_PAGESIZE` | 0x800 | [V] | F/ `vendor_boot` and `vendor_kernel_boot` headers |
 | `OS_VERSION`, `OS_PATCH_LEVEL` | 17.0.0, 2026-10 | [V] | F/ `init_boot` header; the build on both slots (R/) |
 | `BOOT_IMAGES`, `UFS_RW` | the five boot images; their `_b` names and `userdata` | [V] | R/ `/dev/block/by-name`; F/ |
-| `NV_PARTS`, `NV_BACKUP_EXTRA` | `efs efs_backup modem_userdata persist modem_a modem_b`; `devinfo` | [V] | R/ `/dev/block/by-name` has all seven, none on `UFS_RW`. They are cheetah's values: the partitions of AGENTS.md §1's checksum check, plus `devinfo`, whose slot flags change with every flash. They let `tools/nv-backup` back them up read-only from our own kernel ([BRINGUP-M2](BRINGUP-M2.md), M2.4) |
+| `NV_PARTS`, `NV_BACKUP_EXTRA` | `efs efs_backup modem_userdata persist modem_a modem_b`; `devinfo trusty_persist trusty_userdata` | [V] | R/ `/dev/block/by-name` has all nine, none on `UFS_RW`. `NV_PARTS` is cheetah's: the partitions of AGENTS.md §1's checksum check. `NV_BACKUP_EXTRA` is husky's (#449): `devinfo`, whose slot flags change with every flash, and Trusty's two partitions, which Android writes (`trusty_persist` changed while stock ran, M2.4). Together they let `tools/nv-backup` back them up read-only from our own kernel ([BRINGUP-M2](BRINGUP-M2.md), M2.4), and `--check` report the extras' changes |
 | `INITRAMFS_INIT` | the shared init | [V] | as husky |
 | `PANEL_SIZE` | 1080x2400 | [V] | R/ `dumpsys display`; G/ `zuma-akita-display.dtsi` |
 | `SIMPLEFB_TRIG_CON` | `0x19470030 0x3061` | [V] | DECON0 `TRIG_CON` read 0x3070 at handover on a booted 8a (2026-11-03, above); 0x3061 unmasks the trigger as on husky (H/), and with it the console reaches the panel (M1.4, above) |
