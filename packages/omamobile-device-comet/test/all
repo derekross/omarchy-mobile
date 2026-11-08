@@ -1,0 +1,39 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Build and stage only; no hardware tool is executed.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+./build "$t/build"
+./install "$t/stage" "$t/build"
+python3 - "$t/stage" <<'PYTEST'
+from pathlib import Path
+import sys
+stage = Path(sys.argv[1])
+assert (stage / 'usr/bin/reboot-to').is_file()
+assert (stage / 'usr/share/omamobile/device.conf').read_bytes() == Path('device.conf').read_bytes()
+assert not list(stage.rglob('*.wants'))
+assert not list(stage.rglob('omamobile-boot-success*'))
+assert not list(stage.rglob('omamobile-bootctl*'))
+assert 'BOOT_SUCCESS=disabled' in Path('status').read_text()
+conf = dict(line.split('=', 1) for line in Path('device.conf').read_text().splitlines()
+            if line and not line.startswith('#') and '=' in line)
+assert conf['UFS_RW'].strip('"').split() == [
+    'boot_b', 'init_boot_b', 'vendor_boot_b', 'vendor_kernel_boot_b', 'dtbo_b', 'userdata']
+assert conf['INITRAMFS_INIT'] == '/initramfs/init'
+assert 'SIMPLEFB_TRIG_CON' not in conf and 'BRINGUP_PROBE' not in conf
+assert 'Metric=2000' in (stage / 'usr/lib/systemd/network/20-usb-gadget.network').read_text()
+repo_conf = Path('../../device/comet/device.conf')
+if repo_conf.exists():
+    assert repo_conf.read_bytes() == Path('device.conf').read_bytes()
+for name in ['src/reboot-to.c', 'etc/omamobile-mirrorlist',
+             'vendor/systemd/network/20-usb-gadget.network',
+             'vendor/udev/rules.d/10-omamobile-storage.rules']:
+    peer = Path('../omamobile-device-cheetah') / name
+    if peer.exists():
+        assert peer.read_bytes() == Path(name).read_bytes(), name
+PYTEST
+if ./install / "$t/build" >/dev/null 2>&1; then
+  echo 'not ok - refuses live root as staging directory'; exit 1
+fi
+echo 'ok - comet package stages boot policy; boot-success disabled, no writer or enablement'
