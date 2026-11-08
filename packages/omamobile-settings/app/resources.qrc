@@ -1,0 +1,9 @@
+<!-- SPDX-License-Identifier: MIT -->
+<RCC>
+  <qresource prefix="/">
+    <file>Main.qml</file>
+    <file>AboutPage.qml</file>
+    <file>catalog.json</file>
+    <file>icons/system.svg</file>
+  </qresource>
+</RCC>
