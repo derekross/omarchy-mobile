@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# Continue the initramfs storage policy when Arch coldplugs block devices.
+SUBSYSTEM=="block", KERNEL=="sda", MODE="0000", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", KERNEL=="sd[a-d][0-9]*", ENV{ID_PART_ENTRY_NAME}!="userdata", ENV{UDISKS_IGNORE}="1"

@@ -1,6 +1,47 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6a (bluejay) bring-up notes
 
+## 2026-11-08: persistent accelerated desktop and station Wi-Fi
+
+The Pixel 6a now boots Arch Linux ARM on userdata with systemd, USB SSH,
+SDDM, Hyprland and Omarchy's Quickshell. Normal reboots automatically start
+ALIX touch, retained simpledrm display refresh, BCM4389 station Wi-Fi and
+Mali-G78/Panfrost rendering. The owner confirmed unlocking, opening apps and
+scrolling normally. Kernel: `7.3.0-rc6-omamobile-bluejay-input-gated0`.
+
+| Subsystem | Verified result | Limit |
+| --- | --- | --- |
+| Boot/storage | Slot B, persistent ext4 root, 49-partition read-only guard, root expanded to 109 GiB | Development overlay; not a release installer |
+| USB | NCM SSH and ACM; aggregation timer retries a full TX request pool | Replug/suspend not qualified |
+| Touch | ALIX 36:48, one/two-finger motion and release, all four edge zones; zero SPI errors/timeouts | Polling; no firmware or calibration writes |
+| Display | 1080x2400 retained simpledrm, approximately 60 Hz, actual desktop frames | No native DSI/panel modesetting |
+| GPU | Mali-G78 MC20, GLES 3.1, Panfrost render node, correct clear/solid/blended pixels through 1024x1024 | 151 MHz shader point; no Vulkan/full DVFS qualification |
+| Wi-Fi | BCM4389/3, NetworkManager association/reconnect, wireless-bound HTTPS with TLS verification | Station only; P2P, hotspot, roaming and suspend untested |
+| Keys | Both volume press/release pairs | Power release remains unresolved |
+
+The platform changes are still development source. They are not in a
+published release kernel, and the installed root contains manually staged
+matching modules, privately extracted firmware and a patched Aquamarine
+library. Do not treat this PR as a downloadable ready-to-flash distribution.
+See [UPSTREAM.md](UPSTREAM.md) for source dependencies and reproduction gaps,
+[PERSISTENCE-PLAN](PERSISTENCE-PLAN.md) for recovery/startup, and
+[GPU-PLAN](GPU-PLAN.md) for GPU qualification.
+
+The initial GPU probe deferred because `clk_acpm` was missing; its bounded
+service requested an orderly reboot. Adding the exact matching module and
+holding the unrelated `cpufreq-dt` consumer allowed the probe and rendering
+tests to pass. Startup now has durable failure markers, deadlines and a
+software-rendering fallback. No automatic boot-image or boot-success writer
+is enabled. Existing backups were retained; no bootloader, radio NV or
+calibration data was modified by the Linux bring-up.
+
+A later submission smoke test found the development root lacked its FUSE
+module. Adding the matching module repaired `xdg-document-portal`. The smoke
+report still discloses the inherited early trace-format warning and the
+expected `-ECANCELED` USI hold before manual initialization. Audio, modem,
+Bluetooth, battery/charging, sensors, cameras and suspend are not qualified.
+
+
 Findings for the Pixel 6a port, newest first. The port shares the Pixel 6 (oriole) and 6 Pro (raven) effort tracked in [issue #2](https://github.com/derekross/omarchy-mobile/issues/2). Facts are marked [V] (checked, with the source) or [I] (an inference to check on a phone or in the factory image). Nothing has been flashed or booted yet, and no 6a has been queried: every fact below comes from public GPL sources and Google's public factory image, read on the laptop.
 
 Sources:

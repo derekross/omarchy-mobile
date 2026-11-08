@@ -1,0 +1,45 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# One startup per boot; a failed probe is held on the next boot for USB rescue.
+set -euo pipefail
+pending=/var/lib/omamobile/bluejay-wifi-pending
+ready=/run/omamobile-bluejay-wifi-interface
+[[ ! -e $ready ]] || exit 0
+if [[ -e $pending ]]; then
+  echo 'bluejay: previous Wi-Fi startup failed; leaving radio held and USB available'
+  exit 0
+fi
+mkdir -p /var/lib/omamobile
+(set -o noclobber; cat /proc/sys/kernel/random/boot_id > "$pending")
+sync "$pending"
+[[ $(uname -r) == 7.3.0-rc6-omamobile-bluejay-input-gated0 ]]
+[[ $(cat /sys/class/watchdog/watchdog0/state) == active ]]
+[[ ! -d /sys/module/pcie_gs201 && ! -d /sys/module/brcmfmac ]]
+modules=/usr/lib/modules/$(uname -r)/kernel
+insmod "$modules/drivers/phy/samsung/phy-gs201-pcie.ko" trace=1 trace_delay_ms=20 check_tcxo=0
+insmod "$modules/drivers/pci/controller/dwc/pcie-gs201.ko" stop_after=5 trace=1 trace_delay_ms=20 use_ia=1 cmu_acg_off=0
+endpoint=/sys/bus/pci/devices/0000:01:00.0
+[[ $(cat "$endpoint/vendor") == 0x14e4 && $(cat "$endpoint/device") == 0x4441 ]]
+echo bluejay-wifi-hold > "$endpoint/driver_override"
+modprobe brcmutil
+# BRCMF_FEAT_P2P is bit4 in this exact kernel. Hide unqualified Wi-Fi Direct
+# so NetworkManager uses the tested station path without creating p2p-dev.
+insmod "$modules/drivers/net/wireless/broadcom/brcm80211/brcmfmac/brcmfmac.ko" chip_only=0 debug=6 feature_disable=16
+insmod "$modules/drivers/net/wireless/broadcom/brcm80211/brcmfmac/wcc/brcmfmac-wcc.ko"
+printf '\n' > "$endpoint/driver_override"
+echo 0000:01:00.0 > /sys/bus/pci/drivers/brcmfmac/bind
+for ((i=0; i<100; i++)); do
+  shopt -s nullglob
+  interfaces=("$endpoint"/net/*)
+  ((${#interfaces[@]})) && break
+  sleep .1
+done
+udevadm settle --timeout=10
+interfaces=("$endpoint"/net/*)
+[[ ${#interfaces[@]} == 1 ]]
+interface=${interfaces[0]##*/}
+[[ -d /sys/class/net/$interface/phy80211 ]]
+printf '%s\n' "$interface" > "$ready"
+rm "$pending"
+sync /var/lib/omamobile
+echo "bluejay: station Wi-Fi ready on $interface"

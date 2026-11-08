@@ -1,0 +1,46 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+./install "$t/root"
+[[ $(readlink "$t/root/usr/lib/systemd/system/omamobile-boot-success.service") == /dev/null ]]
+[[ $(grep -v '^#' "$t/root/etc/omamobile/boot-update.conf") == AUTO_WRITE=no ]]
+[[ ! -e $t/root/usr/bin/omamobile-bootctl && ! -e $t/root/usr/bin/omamobile-boot-success ]]
+[[ $(find "$t/root/usr/lib/systemd/system/multi-user.target.wants" -type l | wc -l) == 2 ]]
+[[ -x $t/root/usr/bin/omamobile-bluejay-check ]]
+grep -qx 'ConditionPathExists=/run/omamobile-bluejay-hardware-ready' "$t/root/usr/lib/systemd/system/sddm.service.d/bluejay-check.conf"
+[[ ! -e $t/root/etc/omamobile/bluejay-graphics-qualified ]]
+[[ ! -e $t/root/etc/omamobile/bluejay-gpu-enable ]]
+[[ ! -e $t/root/etc/omamobile/bluejay-hardware-enable ]]
+grep -qx 'ConditionPathExists=/etc/omamobile/bluejay-hardware-enable' "$t/root/usr/lib/systemd/system/omamobile-bluejay-hardware.service"
+[[ ! -e $t/root/etc/omamobile/bluejay-wifi-enable ]]
+grep -qx 'ConditionPathExists=/etc/omamobile/bluejay-wifi-enable' "$t/root/usr/lib/systemd/system/omamobile-bluejay-wifi.service"
+grep -qx 'ConditionPathExists=/etc/omamobile/bluejay-gpu-enable' "$t/root/usr/lib/systemd/system/omamobile-bluejay-gpu.service"
+python3 - "$t" <<'PY'
+from pathlib import Path
+import subprocess, sys
+p = Path(sys.argv[1])
+source = Path('bin/omamobile-bluejay-gpu-start').read_text()
+source = source.replace('/var/lib/omamobile/bluejay-gpu-pending', str(p / 'pending'))
+source = source.replace('/run/omamobile-bluejay-gpu-ready', str(p / 'ready'))
+# Stale-attempt and already-ready paths must exit before any hardware command.
+for ready in (False, True):
+    (p / ('ready' if ready else 'pending')).write_text('retained\n')
+    result = subprocess.run(['bash', '-c', source], capture_output=True, text=True, timeout=3)
+    assert result.returncode == 0, result
+    assert (p / 'pending').read_text() == 'retained\n'
+env = Path('uwsm/env.d/90-omamobile-bluejay-graphics').read_text()
+env = env.replace('/run/omamobile-bluejay-gpu-ready', str(p / 'env-ready'))
+env = env.replace('/dev/dri/renderD128', '/dev/null')
+for ready, expected in ((False, '1:llvmpipe:software'), (True, '0:panfrost:rhi')):
+    if ready:
+        (p / 'env-ready').touch()
+    result = subprocess.check_output(['sh', '-c', env + '\nprintf "%s:%s:%s" "$LIBGL_ALWAYS_SOFTWARE" "$GALLIUM_DRIVER" "$QT_QUICK_BACKEND"'], text=True)
+    assert result == expected, result
+PY
+! grep -Eq 'blockdev|insmod|modprobe|devmem|reboot|/dev/.*>' bin/omamobile-bluejay-check bin/omamobile-bluejay-boot-ready
+for script in install bin/*; do bash -n "$script"; done
+if ./install / >/dev/null 2>&1; then echo 'unsafe destination accepted' >&2; exit 1; fi
+echo 'PASS: development policy, passive gate, GPU hold/fallback and SSH-ready completion; live-root install rejected'
