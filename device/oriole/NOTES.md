@@ -9,6 +9,31 @@ Sources:
 - `U/`: upstream Linux v7.0, `arch/arm64/boot/dts/exynos/google/gs101*.dts(i)`.
 - `P/`: postmarketOS pmaports [`device/testing/device-google-oriole`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/device-google-oriole), [`soc-google-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/soc-google-gs101) and [`linux-postmarketos-gs101`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/testing/linux-postmarketos-gs101) (7.0.6), which builds [gs101-mainline/linux @ d28cfa42](https://github.com/gs101-mainline/linux/tree/d28cfa4275b95e93f4b7a1e743de31b723bd21b8).
 
+## 2026-11-08: offline audit of omitted startup safeguards
+
+[V, recovered private checker and unit] The companion's boot check is gated
+by `omamobile.oriole-staged`, requires private initramfs assets and an armed
+handoff-watchdog process, and checks protected storage, the compositor,
+shell IPC and staged touch state. Only after success does it disarm the
+watchdog, record the kernel release and clear the persistent boot-in-progress
+marker. The matching staged initramfs uses a leftover marker for guarded USB
+rescue before providers. This is Linux startup/recovery state, not ABL
+boot-success marking: the checker does not write boot metadata. Its private
+paths, touch interface and rendering assumptions prevent treating it as a
+generic public device-package service.
+
+[V, recovered configuration] The companion separately retains cheetah's
+`RebootWatchdogSec=1min`. The checker requires an open `/dev/watchdog0` and
+checks disarm, but source prerequisites are not a public-kernel binding or
+shutdown-reset test. No such standalone qualification was established by
+this offline audit. Neither watchdog mechanism certifies slot success.
+
+The README and descriptor now explicitly say that an image with this package
+alone is not yet a supported install. Public startup/recovery integration and
+its hardware qualification remain separate work. No private services,
+battery code, boot-success writes or watchdog configuration were added;
+no phone access or new hardware result is claimed.
+
 ## 2026-11-07: first-light 0.2.0 package installed with local safeguards
 
 [V] Native `makepkg` build/check/package passed for `0.2.0-1` on the Pixel 6.

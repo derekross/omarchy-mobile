@@ -19,8 +19,9 @@ for file in usr/bin/reboot-to usr/bin/omamobile-setup-system \
   test -f "$t/root/$file"
 done
 test ! -d "$t/root/usr/lib/systemd/system/multi-user.target.wants"
-if ./install / "$t/build" > "$t/refusal" 2>&1; then
-  echo 'not ok - installation must refuse the host root' >&2
+# Exercise the same destination refusal without targeting the host root.
+if ./install relative-dir "$t/build" > "$t/refusal" 2>&1; then
+  echo 'not ok - installation must refuse a relative destination' >&2
   exit 1
 fi
 echo 'ok - installation stages policy and helpers, with no enabled hardware services'

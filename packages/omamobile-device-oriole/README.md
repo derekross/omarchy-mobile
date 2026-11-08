@@ -1,7 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 first-light policy
 
-Initial standalone package, version 0.2.0. No kernel, rootfs integration or
+**This package alone is not yet a supported Pixel 6 install.** An image
+built from `device/oriole/device.conf` receives this package without the
+private integration safeguards described below. Do not use that image as a
+standalone installation or replace an integration package with it alone.
+
+Minimal first-light policy package, version 0.2.0. No kernel, rootfs integration or
 hardware qualification is supplied. Installation stages files only and enables
 no services. The optional system setup command configures locale/time and
 enables timesyncd.
@@ -38,3 +43,35 @@ package 0.1.9-2, satisfying existing hardware-package version dependencies.
 That integration package carries
 boot and battery safeguards absent here. Replacing it requires a separately
 qualified migration and rollback; do not remove it as a routine upgrade.
+
+## Omitted startup safeguards and boot-success marking
+
+The private companion's boot check is a staged-start guard, not a slot-success
+marker. Its opt-in unit requires private initramfs assets, a matching kernel
+and a bounded handoff-watchdog process. It checks protected storage, the
+compositor, shell and staged touch state before disarming that watchdog and
+clearing the persistent boot-in-progress marker. The matching initramfs uses a
+leftover marker to select guarded USB rescue before starting providers.
+The checker writes Linux state files; it does not mark slot B successful or
+write boot metadata. See the [guard audit in NOTES](../../device/oriole/NOTES.md).
+
+Those private assets and the companion's battery/startup policy are not a
+portable device-package service. A supported standalone image needs a public,
+matched startup/recovery path and its boot qualification first; this PR does
+not import the private stack or enable services to approximate it.
+
+Boot-success marking is separate and remains outside this package, pending
+[#252](https://github.com/derekross/omarchy-mobile/issues/252) and Oriole's
+qualification. On an unmarked B slot, ABL can exhaust its retry budget
+(normally three attempts) and select A. The staged-start guard does not reset
+that budget. With native Linux on userdata, selecting stock A is not a usable
+Android recovery without deliberate userdata restoration; do not rely on an
+automatic stock fallback.
+
+The private companion also preserves `RebootWatchdogSec=1min`. That setting
+only bounds a stuck shutdown when a usable watchdog driver is bound; it does
+not replace the startup guard or mark a slot successful. The recovered checker
+requires an open `/dev/watchdog0` and verifies disarm, but this audit does not
+establish a watchdog-binding/shutdown-reset qualification for a standalone
+public-kernel image. The copied cheetah setting is therefore deferred with the
+other omitted safeguards, rather than presented as a qualified recovery path.
