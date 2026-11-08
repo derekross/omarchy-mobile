@@ -51,9 +51,23 @@ the image used kernel release
 (all six LUNs, ext4 mounts), USB NCM gadget, dropbear, gpio-keys, 8 CPUs and
 5.7 GB RAM. This records the historical first-light tree; kernel PRs #218–#221
 are successor changes and are not the code tested in that boot. The diagnostic
-image's guard allowed `userdata` and `logdump` writes; the historical unsafe
-write details and current backup coverage still need verification before these
-notes can be treated as a recovery record.
+image's guard allowed `userdata` and `logdump` writes. A temporary init widened
+the allowlist to include `logdump` and used `dd` to copy the kernel log there
+every two seconds. Two diagnostic-image attempts were written to stock
+`recovery` from rooted Android. The current `recovery` image has not been
+compared with the pre-write backup, and the backup's coverage of `logdump` is
+unknown. The current RAM-only image and storage guard leave every UFS partition
+read-only; this is a code-path fact, not a new phone check. The mount options
+and whether `persist` was mounted during first light are not recorded here.
+
+Other historical device activity recorded by the owner: NFS-root Omarchy
+sessions on 2026-10-30, 2026-10-31 and 2026-11-02; modem starts under
+`rmtfs -r`, followed by an XPU violation crash and remoteproc recovery loops;
+and a 2026-10-30 partition comparison where `persist`, `modemst1` and `frp`
+changed. The intervening boot sequence and the cause of those changes are not
+established here, so they are not attributed to stock Android or to Omarchy.
+These notes are not a recovery record until the backup checks and intervening
+boot sequence are verified.
 
 ### What had to be fixed before any of that
 Six defects in the recovered [sdm845-mainline MR !71](https://gitlab.com/sdm845-mainline/linux/-/merge_requests/71)
@@ -61,7 +75,8 @@ work, three of them fatal:
 
 1. **`qcom,board-id = <69 0>` (0x45) is polaris's.** dipper reports `0x37`. ABL matches on
    it and silently refuses the whole boot image otherwise — no kernel output, no panic,
-   just a reboot. Two blind attempts from `recovery` were lost to this.
+   just a reboot. Two blind diagnostic-image attempts were written to stock `recovery`
+   from rooted Android before this mismatch was corrected.
 2. `drm_panel_init()` no longer exists; the panel probe needed the refcounted
    `devm_drm_panel_alloc()`.
 3. `panel-samsung-ea8074.ko` had no `MODULE_LICENSE()`, so modpost refused to link.
