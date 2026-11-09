@@ -224,9 +224,11 @@ drains as if awake, since the palmtop no longer suspends.
 If the palmtop resets before you can log in, the latch does the work: the
 boot after a reset with the modem up starts it once more, and the boot
 after a second reset in a row finds the latch and its copy and doesn't
-start the modem, so log in then, disable the unit and remove both. If it still doesn't
-come up, hold Volume Down + Power for fastboot and boot a known-good image
-set.
+start the modem, so log in then, disable the unit and remove both. On a 9a
+whose slot B isn't marked successful, disable the unit after the first reset
+instead of letting the retry run: every reset spends one of ABL's three
+tries, and the retry would spend a second. If it still doesn't come up, hold
+Volume Down + Power for fastboot and boot a known-good image set.
 
 ## Optional Phone and Messages attachment
 
