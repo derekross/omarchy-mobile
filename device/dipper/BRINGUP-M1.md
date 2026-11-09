@@ -5,9 +5,10 @@
 owner saw the console, USB/SSH and read-only storage gate passed, the watchdog
 feeder ran, and Volume Down generated `KEY_VOLUMEDOWN`. Results and the final
 image hash are in [the notes PR #330].
-Kernel support is public for review in [panel #218], [touch #219],
-[DTS #220] and [ath10k #221]. These PRs are not merged yet. The EA8074 panel
-driver and FTS5 touchscreen still need separate hardware tests.
+The FTS5 driver is merged upstream in Linux PR [touch #219]. The Dipper board
+DTS is under review in [DTS #220], and the EA8074 panel driver is under review
+in [panel #218].
+The panel and touchscreen still need separate hardware tests.
 
 This is a RAM-only bring-up. Dipper has one OS `boot` partition and no alternate
 OS slot. The descriptor sets `BOOT_METHOD=ram-only`, the builder makes only a
@@ -41,8 +42,9 @@ archive's checksum file. Do not boot if either backup is missing or fails.
 3. **Recovery gate** — Fastboot entry uses **Volume Down + Power**; the forced
    restart is separate. On 2026-11-09, an attended test on this handset found
    that holding **Power alone for more than 10 seconds** restarted it, then
-   Volume Down + Power entered fastboot. This was tested from the running
-   system, not by simulating a kernel hang. Expect: the Power-only hold
+   Volume Down + Power entered fastboot. This was tested from the installed
+   Android system, not from the bring-up image or by simulating a kernel hang.
+   Expect: the Power-only hold
    restarts the phone. Pass: the observed procedure above is recorded and the
    phone can enter fastboot. Stop if Power alone does not restart it. Rollback:
    do not start a RAM boot until this gate passes. Risk: a hard kernel hang has
@@ -50,8 +52,9 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    reset working.
 4. **RAM boot gate** — Run
    `fastboot -s "$FASTBOOT_SERIAL" boot boot.img`. Expect: the image starts
-   without changing UFS. The screen may go dark about 30 seconds after boot
-   because the panel regulator is not enabled; that alone is not a hang.
+   without changing UFS, and the screen stays lit because simpledrm holds the
+   panel's VCI and VDDIO rails. If it goes dark about 30 seconds in, record
+   `dmesg | grep -i -E 'regulator|simple'` and stop.
    Pass only when `uname -r`, the `boot.img` sha256, all partition `ro`
    values, every whole-disk `ro` value except `sda`, and the `ufs-ro` lines
    from `dmesg` are recorded and correct. Dipper's main LUN is the exception:
@@ -105,10 +108,17 @@ repository; the SSH public key and generated host key stay in the local output.
 - Wi-Fi needs firmware and the phone's own WLAN address. Read identity files
   from `persist` with `debugfs` (read-only) before enabling that service; never
   mount `persist`.
+- The exact systemd journal line from the earlier failed `qcom_wdt` timeout
+  change was not retained. NFS root remains unverified; systemd must take over
+  the watchdog with `RuntimeWatchdogSec=60s` after the initramfs feeder stops.
 - Test the panel and FTS5 changes on the phone before marking them supported.
+
+From this rescue image, an SSH session can return to fastboot with
+`reboot-to bootloader`. The helper asks the PMIC reboot-mode driver to select
+the bootloader and writes no UFS partition. The PMIC reset path was verified on
+the handset on 2026-11-09; the packaged helper still needs an end-to-end test.
 
 [panel #218]: https://github.com/derekross/linux-omarchy-mobile/pull/218
 [touch #219]: https://github.com/derekross/linux-omarchy-mobile/pull/219
 [DTS #220]: https://github.com/derekross/linux-omarchy-mobile/pull/220
-[ath10k #221]: https://github.com/derekross/linux-omarchy-mobile/pull/221
 [the notes PR #330]: https://github.com/derekross/omarchy-mobile/pull/330
