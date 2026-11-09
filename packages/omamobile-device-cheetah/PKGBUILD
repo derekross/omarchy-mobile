@@ -7,7 +7,8 @@ pkgdesc="Omarchy Mobile support for the Google Pixel 7 Pro (cheetah): boot-slot 
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT Apache-2.0)
-depends=(bash systemd util-linux omamobile-keyring i2c-tools)
+depends=(bash systemd util-linux omamobile-keyring i2c-tools
+         python)  # omamobile-charger-mode
 # Keep CPIF and its link driver behind the modem's guarded startup.
 provides=(omamobile-modem-policy omamobile-sitd-policy)
 backup=(etc/pacman.d/omamobile-mirrorlist)

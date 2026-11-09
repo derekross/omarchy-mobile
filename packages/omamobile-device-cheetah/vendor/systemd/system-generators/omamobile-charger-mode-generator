@@ -1,0 +1,25 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# A boot the bootloader started for off-mode charging (androidboot.mode =
+# "charger": the phone was off and got a charger, or was powered off with
+# the cable in) runs omamobile-charger.target instead of the phone: the
+# panel off, Power held to start, power off when unplugged
+# (omamobile-charger-mode). The link goes in the generator's early folder,
+# which comes before /etc, so a default set with systemctl set-default
+# doesn't start the phone on its cable. systemd.unit= on the command line
+# still wins, and /etc/omamobile/charger-mode-disable turns this off.
+# The same boot masks what would start anyway without the phone's target:
+# Plymouth (the Omarchy logo on a charging phone; the panel goes off
+# instead), Bluetooth and its address unit (udev pulls them in for hci0),
+# and the camera drivers' load timer.
+# Arguments: normal-dir early-dir late-dir (systemd.generator(7)).
+early=${2:-}
+[ -n "$early" ] || exit 0
+[ -e "${OMAMOBILE_ETC:-/etc}/omamobile/charger-mode-disable" ] && exit 0
+grep -Eq '^androidboot\.mode = "charger"$' "${OMAMOBILE_BOOTCONFIG:-/proc/bootconfig}" 2>/dev/null || exit 0
+mkdir -p "$early"
+ln -sfn /usr/lib/systemd/system/omamobile-charger.target "$early/default.target"
+for unit in plymouth-start.service bluetooth.service omamobile-bt-addr@.service \
+            omamobile-camera.timer omamobile-camera.service; do
+  ln -sfn /dev/null "$early/$unit"
+done
