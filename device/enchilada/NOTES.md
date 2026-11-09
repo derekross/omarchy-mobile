@@ -101,6 +101,20 @@ tree and goes away if stock is restored.
 20 s and panics, and `panic=10` reboots the phone. ABL then starts the
 active slot, A, which is the rescue.
 
+## 2026-11-08: the LUN-aware guard, booted RAM-only
+
+`fastboot boot` of an initramfs built from commit 2331a85 (the
+`UFS_RW_LUNS` pull request, with `UFS_RW_LUNS=sde` in this descriptor),
+kernel `7.1.0-rc1-sdm845`; nothing written. From the init's log and
+`/sys/block`:
+
+- allowlist `boot_b userdata`; LUNs with allowlisted partitions `sda sde`;
+- `/dev/sda` and `/dev/sde` removed;
+- only `sda17` (`userdata`) and `sde39` (`boot_b`) writable; the other
+  71 `sde` partitions `ro=1`;
+- `sdb`, `sdc`, `sdd` and `sdf` read-only at the disk level;
+- no UFS errors in the kernel log.
+
 ## 2026-11-05: complete backup
 
 Taken from the slot-A rescue (`boot_a`, `system_a`), read-only. Every
