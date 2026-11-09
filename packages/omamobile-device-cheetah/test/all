@@ -29,7 +29,7 @@ buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
 open(sys.argv[1], "wb").write(buf)
 PY
 cp "$tmp/devinfo" "$tmp/devinfo.orig"
-"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -q 'version: 3.15' || fail "bootctl decodes devinfo"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -c 'version: 3.15' >/dev/null || fail "bootctl decodes devinfo"
 plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo" b 2>&1 || true)
 grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x35: 04 -> 06)" 
 cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
@@ -142,7 +142,7 @@ pass "install ships the staged boot files for omamobile-boot-update, checked, an
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
-! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -q '^Gateway=' || fail "usb0 sets no default route in [Network] (metric 0)"
+! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -c '^Gateway=' >/dev/null || fail "usb0 sets no default route in [Network] (metric 0)"
 metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
 [[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
 pass "USB is the last gateway"

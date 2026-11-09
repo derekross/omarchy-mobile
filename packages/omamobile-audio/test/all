@@ -1027,7 +1027,7 @@ fi
 # --- the speaker filter and its tone controls (C9g) -------------------------------
 conf=pipewire/60-omamobile-speaker-loudness.conf
 grep -c 'condition = \[ { omamobile.speaker-eq = package } \]' "$conf" >/dev/null &&
-  grep -c 'omamobile.speaker-eq = package' "$conf" | grep -qx 2 || fail "filter: loads only while no user copy is saved"
+  grep -c 'omamobile.speaker-eq = package' "$conf" | grep -cx 2 >/dev/null || fail "filter: loads only while no user copy is saved"
 grep -c 'flags = \[ nofail \]' "$conf" >/dev/null || fail "filter: PipeWire starts without it if it fails to load"
 grep -c 'node.name = "alsa_output.platform-sound-aoc.HiFi__Speaker__sink"' "$conf" >/dev/null || fail "filter: the speaker sink only"
 grep -c 'api.alsa.card.name = "google,aoc-snd-card"' "$conf" >/dev/null || fail "filter: the Pixel 7 Pro's card only"
