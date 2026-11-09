@@ -22,6 +22,31 @@ test("no modem stack: the page says so and nothing else", () => {
   assert.strictEqual(M.view({ installed: true, running: false }).state, "off")
 })
 
+test("modem switch: hidden without the helper, states and restarts", () => {
+  assert.strictEqual(M.view(ready()).modem.shown, false)
+  const sw = (o) => Object.assign({ available: true, enabled: true, running: true, started: true, provisioned: true,
+                                    sleep_blocked: true, restart_needed: false }, o)
+  // Where nothing starts the modem at boot (the 9a, the 6 Pro): no switch.
+  assert.strictEqual(M.modemSwitch(sw({ available: false, enabled: false })).shown, false)
+  assert.strictEqual(M.modemSwitch({ enabled: true, running: true }).shown, false)
+  const noOff = M.view({ installed: true, running: false, modem: sw({ available: false, enabled: false, running: false, started: false }) })
+  assert.strictEqual(noOff.modem.shown, false); assert.notStrictEqual(noOff.body, "The modem is turned off.")
+  assert.deepStrictEqual(M.modemSwitch(sw()), { shown: true, on: true, note: "On", restart: false })
+  const offUp = M.modemSwitch(sw({ enabled: false, restart_needed: true }))
+  assert.strictEqual(offUp.on, false); assert.strictEqual(offUp.restart, true)
+  assert.ok(offUp.note.indexOf("after a restart") >= 0 && offUp.note.indexOf("can't sleep") >= 0)
+  // A start refused before any driver loaded released the sleep block.
+  assert.strictEqual(M.modemSwitch(sw({ enabled: false, running: false, sleep_blocked: false, restart_needed: true })).note,
+                     "Off after a restart.")
+  assert.ok(M.modemSwitch(sw({ enabled: false, running: false, started: false, sleep_blocked: false })).note.indexOf("can sleep") >= 0)
+  assert.strictEqual(M.modemSwitch(sw({ running: false, started: false })).note, "Starting")
+  assert.strictEqual(M.modemSwitch(sw({ running: false, restart_needed: true })).note, "On after a restart")
+  assert.strictEqual(M.modemSwitch(sw({ provisioned: false })).note, "Not set up on this phone yet")
+  const off = M.view({ installed: true, running: false, modem: sw({ enabled: false, running: false, started: false, sleep_blocked: false }) })
+  assert.strictEqual(off.state, "off"); assert.strictEqual(off.modem.shown, true); assert.strictEqual(off.body, "The modem is turned off.")
+  assert.deepStrictEqual(M.modemArgv(false), ["omamobile-mobile-network", "modem", "off"])
+})
+
 test("registered: carrier, LTE, data on, APN from the SIM", () => {
   const v = M.view(ready())
   assert.strictEqual(v.title, "Example")

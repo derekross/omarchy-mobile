@@ -19,6 +19,8 @@ v=$d/usr/lib/omamobile-vendor
 install -Dm755 lib/omamobile-modem-start "$v/omamobile-modem-start"
 install -Dm755 lib/omamobile-modem-cp "$v/omamobile-modem-cp"
 install -Dm755 lib/omamobile-modem-nv-overlay "$v/omamobile-modem-nv-overlay"
+install -Dm755 lib/omamobile-modem-switch "$v/omamobile-modem-switch"
+install -Dm644 polkit/org.omamobile.modem.policy "$d/usr/share/polkit-1/actions/org.omamobile.modem.policy"
 install -Dm755 bin/omamobile-modem "$d/usr/bin/omamobile-modem"
 install -Dm644 profiles/modem.conf "$v/profiles/modem.conf"
 install -Dm644 modem/props.conf "$v/modem/props.conf"

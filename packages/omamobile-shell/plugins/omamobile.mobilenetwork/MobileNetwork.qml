@@ -9,8 +9,9 @@ import qs.Ui
 import "MobileNetworkModel.js" as Model
 import "Readable.js" as Readable
 
-// The Mobile network page: the carrier, signal and registration, mobile
-// data and data roaming switches, the APN in use with a field to type one,
+// The Mobile network page: the carrier, signal and registration, the
+// Modem switch (on or off at boot), the mobile data and data roaming
+// switches, the APN in use with a field to type one,
 // the attach APN (the one the modem registers with) under Advanced, and
 // whether the SIM's PIN lock is on. Opened from Setup > Mobile network
 // in Omarchy's menu, the Mobile data tile's chevron, or
@@ -19,7 +20,8 @@ import "Readable.js" as Readable
 // Everything goes through omamobile-mobile-network (bin/): `status` while
 // the page is open (every 3 s), `data on|off` (omamobile-sit data),
 // `roaming on|off`, `apn auto|APN` and `attach-apn auto|APN`
-// (omamobile-sit-config under pkexec,
+// (omamobile-sit-config under pkexec, and `modem on|off` through
+// omamobile-modem-switch under pkexec;
 // polkit: the active user). An APN applies when the modem service next
 // starts, which needs a restart of the phone: the page says so and offers
 // one. Without the modem stack (the release image has none yet) the page
@@ -103,6 +105,15 @@ Item {
     if (actionProc.running || !page.dataAvailable) return
     setOptimistic("data", on)
     actionProc.command = Model.dataArgv(on)
+    actionProc.running = true
+  }
+
+  // The modem stack at boot (omamobile-modem-switch through pkexec): off
+  // from the next boot, on now if this boot's modem never started.
+  function setModem(on) {
+    if (actionProc.running) return
+    setOptimistic("modem", on)
+    actionProc.command = Model.modemArgv(on)
     actionProc.running = true
   }
 
@@ -318,6 +329,23 @@ Item {
             }
 
             // ---------- Switches
+            SettingRow {
+              objectName: "setting-modem"
+              visible: (root.page.state === "ready" || root.page.state === "off")
+                       && !!root.page.modem && root.page.modem.shown === true
+              title: "Modem"
+              note: root.page.modem ? (root.page.modem.note || "") : ""
+              checked: root.value("modem", !!root.page.modem && root.page.modem.on === true)
+              onToggled: root.setModem(!checked)
+            }
+
+            SheetAction {
+              width: parent.width
+              visible: !!root.page.modem && root.page.modem.restart === true
+              label: "Restart now"
+              onTapped: Quickshell.execDetached(Model.REBOOT_ARGV)
+            }
+
             SettingRow {
               objectName: "setting-mobileData"
               visible: root.page.state === "ready"
