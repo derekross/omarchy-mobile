@@ -72,7 +72,7 @@ cat <<'NOTE'
 
 To try it without writing to the phone (nothing persists):
 
-    fastboot boot boot.img
+    fastboot -s <serial> boot boot.img
 
 Do not flash this image. Dipper has no second OS slot and this RAM-only path
 has no persistent update or recovery flow.

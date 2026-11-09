@@ -48,44 +48,19 @@ depmod -b "$stage" "$KERNEL_RELEASE"
 # root filesystem, not here. The pruner reads modules.dep and fails loudly
 # rather than silently emptying the tree.
 python3 /src/tools/dipper/prune-modules.py \
-  "$stage/usr/lib/modules/$KERNEL_RELEASE" qcom_wdt panel-samsung-ea8074
+  "$stage/usr/lib/modules/$KERNEL_RELEASE" qcom_wdt
 depmod -b "$stage" "$KERNEL_RELEASE"
 
 # The modules the init loads must exist AND match this kernel exactly, or the
 # phone boots to a black screen with no watchdog taken over.
-for module in qcom_wdt panel-samsung-ea8074; do
+for module in qcom_wdt; do
   path=$(modinfo -b "$stage" -k "$KERNEL_RELEASE" -n "$module")
   [ "$(modinfo -F vermagic "$path" | cut -d ' ' -f1)" = "$KERNEL_RELEASE" ] || {
     echo "module $module does not match $KERNEL_RELEASE" >&2; exit 1; }
 done
 
 cp /src/initramfs/init "$stage/init"
-python3 - "$stage/init" <<'PY'
-from pathlib import Path
-import sys
-p = Path(sys.argv[1]); s = p.read_text()
-
-# SDM845 leaves the cluster watchdogs running; take them over early.
-needle = 'hostname omamobile\n'
-assert s.count(needle) == 1, "shared init changed: hostname anchor"
-s = s.replace(needle, '''# SDM845's watchdogs keep running until a driver claims them.
-modprobe qcom_wdt || echo "omamobile: qcom watchdog module failed" >/dev/kmsg
-if [ -c /dev/watchdog0 ]; then
-  watchdog -t 5 -T 30 /dev/watchdog0
-fi
-modprobe panel-samsung-ea8074 || echo "omamobile: panel module failed" >/dev/kmsg
-hostname omamobile
-''')
-
-# Bind the rescue sshd to the USB interface address only, never to Wi-Fi.
-needle = 'dropbear -R -E -p 22'
-assert s.count(needle) == 1, "shared init changed: dropbear anchor"
-s = s.replace(needle, '''usb_addr=$(ip -o -4 addr show dev usb0 scope global | awk '{ sub(/\\/.*/, "", $4); print $4; exit }')
-if [ -n "$usb_addr" ]; then
-  dropbear -R -E -s -p "$usb_addr:22"
-fi''')
-p.write_text(s)
-PY
+python3 /src/tools/dipper/patch-init.py "$stage/init"
 chmod 755 "$stage/init"
 
 echo xiaomi,dipper > "$stage/etc/omamobile-compatible"
@@ -98,17 +73,6 @@ if [ -n "${OMAMOBILE_NFSROOT:-}" ]; then
   printf '%s\n' "$OMAMOBILE_NFSROOT" > "$stage/etc/omamobile-nfsroot"
 fi
 
-# ABL has no alternate OS slot on Dipper. Keep the shared init's timeout, but
-# describe the RAM-only recovery path accurately in its on-screen message.
-python3 - "$stage/init" <<'PY'
-from pathlib import Path
-import sys
-p = Path(sys.argv[1]); s = p.read_text()
-old = 'no USB host, crashing in 20 s so ABL falls back to slot A'
-new = 'no USB host; RAM-only probe will reboot in 20 s'
-assert s.count(old) == 1, "shared init changed: no-USB recovery message"
-p.write_text(s.replace(old, new))
-PY
 echo 'Xiaomi Mi 8 Omarchy' > "$stage/etc/omamobile-usb-product"
 
 gcc -Os -static -o "$stage/usr/local/bin/reboot-to" \

@@ -28,15 +28,30 @@ backup checksum manifest. Do not boot if the manifest is missing or fails.
    the serial identifies the intended phone and the bootloader is unlocked.
    Stop: absent/ambiguous serial or locked bootloader. Rollback: leave fastboot
    without writing. Risk: this device has no alternate OS slot.
-3. **RAM boot gate** — Run
+3. **Recovery gate** — Confirm the handset's forced-restart buttons and hold
+   duration on the device, then record them in this runbook. Fastboot entry
+   with **Volume Down + Power** is separate from a forced restart. Stop if the
+   forced-restart procedure has not been verified; do not infer it from another
+   phone. Expect: an attended forced restart returns the handset to a state
+   where fastboot can be entered. Pass: that recovery path has been exercised
+   and recorded. Rollback: do not start a RAM boot until it passes. Risk: a
+   single-slot phone with no verified forced restart may be unrecoverable after
+   a hang.
+4. **RAM boot gate** — Run
    `fastboot -s "$FASTBOOT_SERIAL" boot boot.img`. Expect: the image starts
-   without changing UFS. Pass: the phone reaches the rescue environment and
-   USB/SSH checks succeed. Stop: unexpected output, USB failure, or any request
-   to flash. Rollback: power-cycle to the installed boot image; if recovery is
-   needed, use the verified backup. Risk: a USB host that never configures still
-   reaches the existing watcher panic after about 65 seconds; the RAM boot then
-   returns to the installed boot image. The exact forced-restart hold duration is not
-   recorded here; do not guess it.
+   without changing UFS. The screen may go dark about 30 seconds after boot
+   because the panel regulator is not enabled; that alone is not a hang.
+   Pass only when `uname -r`, the `boot.img` sha256, all `ro` values from
+   `grep . /sys/block/sd*/ro /sys/block/sd*/sd*/ro`, the `ufs-ro` lines from
+   `dmesg`, the reserved-memory lines from
+   `grep -i -E 'reserved|System RAM' /proc/iomem`, the bound `qcom_wdt`
+   driver, its running watchdog feeder, and USB/SSH are recorded and correct.
+   Stop if any partition has `ro=0`, the watchdog is not fed, USB/SSH fails,
+   or anything asks to flash. Rollback: use the verified forced-restart
+   procedure from step 3, then recover from the verified backup if needed.
+   Risk: a USB host that never configures still reaches the existing watcher
+   panic after about 65 seconds; on this single-slot phone, recovery depends on
+   the tested procedure from step 3.
 
 The current recorded first light used the stock `dtbo` untouched. The image is
 RAM-only; never use `fastboot flash`, `bin/omamobile flash`, `bin/omamobile
@@ -68,8 +83,9 @@ repository; the SSH public key and generated host key stay in the local output.
   verified stock backup. This PR deliberately adds no persistent writer.
 - The initramfs has no Arch root yet. A later hard NFS-root mount can freeze the
   root session if the host drops; use it only for a RAM-only probe. NFS-root
-  needs `RuntimeWatchdogSec=60s`, because `kill -9 -1` kills the userspace
-  watchdog feeder. It must never fall through to writable userdata.
+  needs a root with `RuntimeWatchdogSec=60s`, because `kill -9 -1` stops the
+  userspace feeder before systemd can take over. It must never fall through to
+  writable userdata.
 - Wi-Fi needs firmware and the phone's own WLAN address. Read identity files
   from `persist` with `debugfs` (read-only) before enabling that service; never
   mount `persist`.
