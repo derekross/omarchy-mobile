@@ -114,7 +114,7 @@ ROOTFS_DIST_PACKAGES=$(sed -n 's/^ROOTFS_DIST_PACKAGES="\(.*\)"$/\1/p' "$conf")
 KERNEL_PACKAGE=0
 grep -c 'OMAMOBILE_BOOT_FILES' "packages/$DEVICE_PACKAGE/install" >/dev/null 2>&1 && KERNEL_PACKAGE=1
 [[ $ROOTFS_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_PACKAGES may hold only package names"
-[[ $ROOTFS_DIST_PACKAGES =~ ^[a-z0-9\ -]*$ ]] || alarm_die "$conf: ROOTFS_DIST_PACKAGES may hold only package names"
+[[ $ROOTFS_DIST_PACKAGES =~ ^[a-z0-9@._+\ -]*$ ]] || alarm_die "$conf: ROOTFS_DIST_PACKAGES may hold only package names"
 
 repo=$outrel/repo/aarch64
 [[ -f $repo/omamobile.db ]] ||

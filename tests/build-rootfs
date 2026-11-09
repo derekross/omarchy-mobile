@@ -18,7 +18,7 @@ touch "$R/out/repo/aarch64/omamobile.db" "$t/kernel/modules-fixture.tar.zst" "$t
 echo fixture > "$t/kernel/include/config/kernel.release"
 for device in first second; do
   mkdir -p "$R/device/$device"
-  printf 'PACKAGE=omamobile-device-%s\nCODENAME=%s\nNAME="%s"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\nAVB_FOOTERS="boot:0x4000000"\nROOTFS_DIST_PACKAGES="fixture-dist"\n' "$device" "$device" "$device" > "$R/device/$device/device.conf"
+  printf 'PACKAGE=omamobile-device-%s\nCODENAME=%s\nNAME="%s"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\nAVB_FOOTERS="boot:0x4000000"\nROOTFS_DIST_PACKAGES="libsigc++"\n' "$device" "$device" "$device" > "$R/device/$device/device.conf"
 done
 cat > "$R/tools/lib/alarm.sh" <<'EOF'
 alarm_die() { echo "$*" >&2; exit 1; }
@@ -85,15 +85,15 @@ for device in first second; do
 done
 echo 'ok - different devices build concurrently; duplicate device/version is locked'
 
-grep -Fx 'distribution packages: fixture-dist' "$R/out/omamobile-rootfs-first-fixture-aarch64.MANIFEST" >/dev/null || fail "distribution packages reach the image MANIFEST"
-[[ $(cat "$t/distro.first") == fixture-dist ]] || fail "ROOTFS_DIST_PACKAGES reaches the container"
+grep -Fx 'distribution packages: libsigc++' "$R/out/omamobile-rootfs-first-fixture-aarch64.MANIFEST" >/dev/null || fail "distribution packages reach the image MANIFEST"
+[[ $(cat "$t/distro.first") == libsigc++ ]] || fail "ROOTFS_DIST_PACKAGES reaches the container"
 echo 'ok - ROOTFS_DIST_PACKAGES reaches the container and MANIFEST'
 
 printf 'PACKAGE=omamobile-device-first\nCODENAME=first\nNAME="first"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\nROOTFS_DIST_PACKAGES="fixture;touch %s/injected"\n' "$t" > "$R/device/first/device.conf"
 if build first > "$t/bad-packages.log" 2>&1; then fail "shell syntax in ROOTFS_DIST_PACKAGES is rejected"; fi
 grep -q 'ROOTFS_DIST_PACKAGES may hold only package names' "$t/bad-packages.log" || { cat "$t/bad-packages.log"; fail "reports rejected distribution package syntax"; }
 [[ ! -e $t/injected ]] || fail "distribution package text is never evaluated as shell"
-printf 'PACKAGE=omamobile-device-first\nCODENAME=first\nNAME="first"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\nAVB_FOOTERS="boot:0x4000000"\nROOTFS_DIST_PACKAGES="fixture-dist"\n' > "$R/device/first/device.conf"
+printf 'PACKAGE=omamobile-device-first\nCODENAME=first\nNAME="first"\nBOOT_IMAGES="boot dtbo"\nUFS_RW="boot_b dtbo_b userdata"\nAVB_FOOTERS="boot:0x4000000"\nROOTFS_DIST_PACKAGES="libsigc++"\n' > "$R/device/first/device.conf"
 echo 'ok - invalid ROOTFS_DIST_PACKAGES shell characters are rejected without evaluation'
 
 before=$(sha256sum "$R/out/omamobile-rootfs-first-fixture-aarch64.img.zst")

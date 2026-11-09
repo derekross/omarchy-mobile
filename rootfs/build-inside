@@ -8,7 +8,7 @@
 #   /target   an empty volume: the root file system is assembled here
 #   /out      where the raw image and the MANIFEST go
 # Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES,
-# ROOTFS_DIST_PACKAGES, ALLOW_MISSING (both space-separated) and
+# ROOTFS_DIST_PACKAGES (space-separated), ALLOW_MISSING (space-separated) and
 # KERNEL_PACKAGE (1: device package ships boot files, so linux-omamobile
 # and omamobile-boot-update go in and the package modules replace the tarball),
 # KERNEL_RELEASE, MODULES_SHA256,
