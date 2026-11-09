@@ -106,12 +106,14 @@ grep -qx 'After=omamobile-husky-display.service' "$tmp/root/usr/lib/systemd/syst
   || fail "the display manager can start before the display driver"
 grep -qx 'ConditionPathExists=/sys/bus/platform/devices/19470000.display-controller' "$tmp/root/usr/lib/systemd/system/omamobile-husky-display.service" \
   || fail "the display start runs (and fails) on a kernel without DECON0"
-# modprobe.d only sets options, except the display file (gs_decon) and the
+# modprobe.d only sets options, except the display file (gs_decon), the
 # MAX77759 file, which keeps the charger and the Type-C driver from loading
-# before their bring-up steps (as on the Pixel 7 Pro): blacklist only, so a
+# before their bring-up steps (as on the Pixel 7 Pro), and the AoC file, which
+# leaves the AoC stack to the hang-safe start script: blacklist only, so a
 # manual modprobe still works.
 for conf in vendor/modprobe.d/*.conf; do
-  [[ $conf == vendor/modprobe.d/omamobile-max77759.conf || $conf == vendor/modprobe.d/omamobile-husky-display.conf ]] && continue
+  [[ $conf == vendor/modprobe.d/omamobile-max77759.conf || $conf == vendor/modprobe.d/omamobile-husky-display.conf ||
+        $conf == vendor/modprobe.d/omamobile-husky-aoc.conf ]] && continue
   ! grep -qE '^(install|blacklist) ' "$conf" || fail "$conf only sets options"
 done
 conf=vendor/modprobe.d/omamobile-max77759.conf
@@ -153,6 +155,73 @@ pass "install stages the udev rule, the USB link, the mirrorlist and the display
 [[ ! -e $tmp/root/usr/lib/systemd/logind.conf.d/10-omamobile-lid.conf ]] \
   || fail "husky has no lid: no lid drop-in"
 pass "no lid drop-in"
+
+
+# --- the AoC start: hang marker, nothing without the node ------------------
+bash -n bin/omamobile-husky-aoc-start || fail "the AoC start parses"
+grep -q '^ExecStart=/usr/bin/omamobile-husky-aoc-start$' vendor/systemd/system/omamobile-husky-aoc.service \
+  || fail "the AoC unit runs the script"
+grep -q '^ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc$' vendor/systemd/system/omamobile-husky-aoc.service \
+  || fail "the AoC unit needs the AoC node"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-aoc.service") == ../omamobile-husky-aoc.service ]] \
+  || fail "the AoC unit is enabled by a vendor wants link"
+! grep -qE '^install ' vendor/modprobe.d/omamobile-husky-aoc.conf || fail "the AoC file only blacklists"
+! grep -hv '^ *#' bin/omamobile-husky-aoc-start vendor/modprobe.d/omamobile-husky-aoc.conf | grep -q 'speaker_protection' \
+  || fail "the AoC start never raises the speaker ceiling"
+for m in gsa aoc_core aoc_alsa_dev snd_soc_cs35l41_spi gs201_aoc_boot; do
+  grep -qx "blacklist $m" vendor/modprobe.d/omamobile-husky-aoc.conf || fail "$m is kept from autoloading"
+done
+pass "the AoC unit is installed, enabled by a wants link, and only the start script loads the AoC stack"
+aoc=$tmp/aoc; mkdir -p "$aoc/bin" "$aoc/state"
+printf '#!/bin/sh\necho "$*" >> %s/modprobe.log\n' "$aoc" > "$aoc/bin/modprobe"
+printf '#!/bin/sh\nexit 0\n' > "$aoc/bin/sync"
+chmod +x "$aoc/bin/modprobe" "$aoc/bin/sync"
+# the script writes state to /var/lib/omamobile: run a copy with it pointed at the temp dir
+sed "s|^state=/var/lib/omamobile|state=$aoc/state|; s|^loaded=.*|loaded=$aoc/run/aoc-firmware-loaded|" bin/omamobile-husky-aoc-start > "$aoc/start"
+runaoc() { PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards \
+           OMAMOBILE_TRUSTY_STATUS=$aoc/trusty bash "$aoc/start" "$@" 2>&1; }
+: > "$aoc/cards"
+out=$(runaoc); rc=$?
+[[ $rc -eq 0 && $out == *"nothing to do"* && ! -e $aoc/modprobe.log ]] || fail "without the AoC node nothing is loaded"
+mkdir -p "$aoc/node"; echo okay > "$aoc/trusty"
+date -Is > "$aoc/state/aoc-bringup-started"
+out=$(runaoc); rc=$?
+[[ $rc -eq 0 && $out == *"never finished"* && ! -e $aoc/modprobe.log ]] || fail "a marker left by a hung boot keeps the AoC off"
+out=$(runaoc --retry) || true
+[[ $out != *"never finished"* ]] || fail "--retry clears the marker"
+[[ ! -e $aoc/state/aoc-bringup-started ]] || fail "a clean failure removes the marker (no firmware here)"
+pass "the AoC start does nothing without the node, honours a hang marker, and --retry tries again"
+# the Trusty node is found at the root and under soc@0 (the 8 Pro's layout)
+rm -f "$aoc/trusty"; : > "$aoc/cards"; rm -rf "$aoc/dt" "$aoc/state/"* "$aoc/modprobe.log"
+mkdir -p "$aoc/dt/soc@0/trusty"; echo okay > "$aoc/dt/soc@0/trusty/status"
+out=$(PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards OMAMOBILE_DT_ROOT=$aoc/dt bash "$aoc/start" 2>&1) || true
+[[ $out != *"Trusty is not enabled"* ]] || fail "a Trusty node under soc@0 is found"
+rm -rf "$aoc/dt"; mkdir -p "$aoc/dt/trusty"; echo okay > "$aoc/dt/trusty/status"
+out=$(PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards OMAMOBILE_DT_ROOT=$aoc/dt bash "$aoc/start" 2>&1) || true
+[[ $out != *"Trusty is not enabled"* ]] || fail "a Trusty node at the root is found"
+rm -rf "$aoc/dt"; mkdir -p "$aoc/dt"
+out=$(PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards OMAMOBILE_DT_ROOT=$aoc/dt bash "$aoc/start" 2>&1) || true
+[[ $out == *"Trusty is not enabled"* ]] || fail "no Trusty node means the AoC stays off"
+echo okay > "$aoc/trusty"; rm -rf "$aoc/state/"* "$aoc/modprobe.log"
+pass "the Trusty node is found at the root or under soc@0, and its absence keeps the AoC off"
+# the once-per-boot guards: nothing may reach the firmware file
+rm -rf "$aoc/state/"* "$aoc/modprobe.log"; : > "$aoc/node/firmware"
+mkdir -p "$aoc/run"; date -Is > "$aoc/run/aoc-firmware-loaded"
+rc=0; out=$(runaoc) || rc=$?
+[[ $rc -eq 1 && $out == *"already started this boot"* ]] || fail "a /run marker refuses a second start"
+[[ ! -s $aoc/node/firmware && ! -e $aoc/modprobe.log && ! -e $aoc/state/aoc-bringup-started ]] \
+  || fail "a second start in the same boot wrote to firmware or loaded modules"
+rc=0; out=$(runaoc --retry) || rc=$?
+[[ $rc -eq 1 && ! -s $aoc/node/firmware && ! -e $aoc/modprobe.log ]] || fail "--retry does not get past the /run marker"
+rm -f "$aoc/run/aoc-firmware-loaded"
+printf 'Services : 94\n0 : "control" mbox 0\n' > "$aoc/node/services"
+out=$(runaoc); rc=$?
+[[ $rc -eq 0 && $out == *"already online: Services : 94"* && ! -s $aoc/node/firmware && ! -e $aoc/modprobe.log ]] \
+  || fail "an AoC that is already online is left alone"
+printf 'Services : 0\n' > "$aoc/node/services"
+out=$(runaoc) || true; [[ $out != *"already online"* ]] || fail "Services : 0 is not online"
+rm -f "$aoc/node/services"
+pass "a /run marker or an online AoC stops a second start before anything is loaded or written to firmware"
 
 test/display-start || fail "test/display-start"
 pass "the display start loads gs_decon after allowing DSI commands for google-hk3 only"
