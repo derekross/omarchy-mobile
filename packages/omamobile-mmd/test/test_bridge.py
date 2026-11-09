@@ -425,7 +425,8 @@ class Registered(BridgeTests):
         self.push()
         path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
         self.client.call(path, mm.CALL, 'Hangup')
-        self.client.call(MODEM0, mm.VOICE, 'HangupAll')
+        # a release is outstanding: HangupAll sends nothing and says so
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'HangupAll'), mm.ERROR_PREFIX + 'InProgress')
         self.assertEqual(self.sitd.actions().count('hangup'), 1)
 
     def test_refused_hangup_reports_error_and_a_new_press_tries_again(self):
@@ -445,10 +446,33 @@ class Registered(BridgeTests):
         self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'HangupAll'), mm.ERROR_PREFIX + 'Failed')
         self.assertEqual(self.sitd.actions().count('hangup'), 3)
         self.assertEqual(self.modem('Calls', mm.VOICE), [path])
-        # and once sitd takes it, the call ends
+        # and once sitd takes it, the call ends: sitd reports the release and the object goes
         self.sitd.handlers['hangup'] = lambda request: {}
         self.client.call(path, mm.CALL, 'Hangup')
         self.assertEqual(self.sitd.actions().count('hangup'), 4)
+        self.sitd.status['calls'] = [call('200', 'terminated', reason='terminated')]
+        self.push()
+        wait_until(lambda: self.client.prop(path, mm.CALL, 'State') == mm.CALL_TERMINATED, 5, 'terminated')
+        self.client.call(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,))
+        self.sitd.status['calls'] = []
+        self.push()
+        wait_until(lambda: self.modem('Calls', mm.VOICE) == [], 5, 'call gone')
+
+    def test_unconfirmed_hangup_blocks_for_20_s_then_a_new_press_tries_again(self):
+        # sitd answers Hangup as soon as it has sent the release; if the call
+        # never ends, a second press is InProgress for 20 s, then a new attempt
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        self.client.call(path, mm.CALL, 'Hangup')
+        self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), mm.ERROR_PREFIX + 'InProgress')
+        self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'HangupAll'), mm.ERROR_PREFIX + 'InProgress')
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+        spin(21)
+        self.client.call(path, mm.CALL, 'Hangup')
+        self.assertEqual(self.sitd.actions().count('hangup'), 2)
+        self.assertEqual(self.modem('Calls', mm.VOICE), [path])
 
     def test_pending_delete_fails_when_prior_hangup_is_refused(self):
         for method in ('Hangup', 'HangupAll'):
