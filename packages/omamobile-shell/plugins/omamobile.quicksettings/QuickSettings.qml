@@ -799,8 +799,8 @@ Item {
   // clear empties history (both run in order on the service's file queue).
   // Omarchy 4.5 keeps them in live.json and history.json in the same
   // directory instead, and has no clear: where history.json exists, the
-  // shade reads those two files, and Clear all forgets every notification
-  // it read once dismissAll has closed the toasts (they keep their keys).
+  // shade reads those two files. Keyed Clear all uses one daemon-owned
+  // snapshot and hides only the keys acknowledged by its versioned reply.
   readonly property string notificationsDir: Quickshell.env("HOME") + "/.local/state/omarchy/notifications"
   // Where the bar's unread count starts from: the newest notification the
   // shade has shown (omamobile.bar reads it at start and hears it by IPC).
@@ -822,39 +822,56 @@ Item {
   // closes without moving into history, and the history entry is deleted,
   // on the service's file queue. Deleting the file from here could race an
   // archive the service still has queued and come back. The row leaves the
-  // list at once; its key stays in hiddenNotifications until a read no
-  // longer finds the file (NotificationsModel.shown). The bar's unread count
+  // list only after a successful reply; its key stays in hiddenNotifications
+  // until a read no longer finds it (NotificationsModel.shown). The unread count
   // follows on its own: it counts the history files newer than the mark,
   // and a forget only takes one away.
   property var hiddenNotifications: ({})
   property var forgetQueue: []
+  property var pendingForget: null
+  property var pendingClearKeys: []
+  property string notificationDeleteError: ""
+
+  function acknowledgeNotifications(keys) {
+    var state = NotificationsModel.acknowledge(notifications, hiddenNotifications, keys, Date.now())
+    hiddenNotifications = state.hidden
+    // A row may have requested deletion from its own delegate callback.
+    Qt.callLater(function() {
+      root.notifications = root.notifications.filter(function(entry) { return keys.indexOf(entry.key) < 0 })
+    })
+  }
 
   function forgetNotification(entry) {
     if (!entry || !entry.key || !entry.file) return false
-    var marks = Object.assign({}, hiddenNotifications)
-    marks[entry.key] = Date.now()
-    hiddenNotifications = marks
-    forgetQueue = forgetQueue.concat([entry.file])
-    // Later, not now: the row asking is a delegate of this list.
-    Qt.callLater(function() {
-      root.notifications = NotificationsModel.without(root.notifications, entry.key)
-      root.runForget()
-    })
+    if (clearProc.running) {
+      notificationDeleteError = "Wait for Clear all to finish, then try again."
+      return false
+    }
+    if (pendingForget && pendingForget.key === entry.key) return true
+    for (var i = 0; i < forgetQueue.length; i++) if (forgetQueue[i].key === entry.key) return true
+    forgetQueue = forgetQueue.concat([{ key: entry.key, file: entry.file }])
+    runForget()
     return true
   }
 
   function runForget() {
     if (forgetProc.running || forgetQueue.length === 0) return
-    forgetProc.command = ["sh", "-c",
-      "dir=$1; shift; for name; do qs ipc -p \"$dir\" call notifications forget \"$name\"; done; exit 0",
-      "sh", Quickshell.shellDir].concat(forgetQueue)
-    forgetQueue = []
+    pendingForget = forgetQueue[0]
+    forgetQueue = forgetQueue.slice(1)
+    forgetProc.command = ["qs", "ipc", "-p", Quickshell.shellDir,
+                          "call", "notifications", "forget", pendingForget.file]
     forgetProc.running = true
   }
 
   Process {
     id: forgetProc
-    onExited: {
+    stdout: StdioCollector { id: forgetResult; waitForEnd: true }
+    onExited: function(code) {
+      if (code === 0 && String(forgetResult.text || "").trim() === "ok" && root.pendingForget) {
+        root.acknowledgeNotifications([root.pendingForget.key])
+        root.notificationDeleteError = ""
+      } else root.notificationDeleteError = "Notification could not be removed. Try again or update Omarchy Mobile."
+      root.pendingForget = null
       root.runForget()
       notificationsLater.restart()
     }
@@ -929,20 +946,28 @@ Item {
   }
 
   function clearAllNotifications() {
-    notifications = []
-    if (clearProc.running) return
+    if (clearProc.running || forgetProc.running || forgetQueue.length > 0) return
+    pendingClearKeys = notifications.map(function(entry) { return entry.key })
     clearProc.command = ["sh", "-c",
-      "if [ -e \"$2/history.json\" ]; then shell=$1; shift 2; qs ipc -p \"$shell\" call notifications dismissAll; "
-      + "for name; do qs ipc -p \"$shell\" call notifications forget \"$name\"; done; "
-      + "else qs ipc -p \"$1\" call notifications dismissAll; qs ipc -p \"$1\" call notifications clear; fi; exit 0",
-      "sh", Quickshell.shellDir, root.notificationsDir].concat(notificationFiles)
+      "if [ -e \"$2/live.json\" ] || [ -e \"$2/history.json\" ]; then exec qs ipc -p \"$1\" call notifications forgetAll; "
+      + "else qs ipc -p \"$1\" call notifications dismissAll >/dev/null && qs ipc -p \"$1\" call notifications clear >/dev/null "
+      + "&& printf '%s\\n' '{\"version\":1,\"result\":\"legacy\"}'; fi",
+      "sh", Quickshell.shellDir, root.notificationsDir]
     clearProc.running = true
   }
 
   Process {
     id: clearProc
-    // The service's file queue runs after the IPC answers; read once it has.
-    onExited: notificationsLater.restart()
+    stdout: StdioCollector { id: clearResult; waitForEnd: true }
+    onExited: function(code) {
+      var result = NotificationsModel.clearResult(clearResult.text, code)
+      if (result.ok) {
+        root.acknowledgeNotifications(result.legacy ? root.pendingClearKeys : result.keys)
+        root.notificationDeleteError = ""
+      } else root.notificationDeleteError = "Notifications could not be cleared. Try again or update Omarchy Mobile."
+      root.pendingClearKeys = []
+      notificationsLater.restart()
+    }
   }
 
   Timer {
@@ -2006,9 +2031,20 @@ Item {
             label: root.confirmClear ? "Clear all?" : "Clear all"
             danger: root.confirmClear
             foreground: root.foreground
-            enabled: root.notifications.length > 0
+            enabled: root.notifications.length > 0 && !clearProc.running && !forgetProc.running && root.forgetQueue.length === 0
             onTapped: root.requestClearNotifications()
           }
+        }
+
+        Text {
+          visible: root.notificationDeleteError !== ""
+          width: parent.width
+          text: root.notificationDeleteError
+          textFormat: Text.PlainText
+          wrapMode: Text.Wrap
+          color: root.foreground
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
         }
 
         Text {
@@ -2043,7 +2079,7 @@ Item {
                 host: root
                 entry: modelData
                 width: shadeRows.width
-                swipeEnabled: !shadeList.moving
+                swipeEnabled: !shadeList.moving && !clearProc.running
               }
             }
           }

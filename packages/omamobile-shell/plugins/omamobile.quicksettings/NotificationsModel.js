@@ -108,7 +108,7 @@ function storeEntry(value) {
 function parse(raw, limit) {
   var max = typeof limit === "number" ? Math.max(0, limit) : LIMIT
   var lines = str(raw).split("\n")
-  var seen = {}
+  var seen = Object.create(null)
   var out = []
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim()
@@ -132,25 +132,25 @@ function parse(raw, limit) {
 }
 
 // What the shade shows: parse(), less the notifications swiped away.
-// `hidden` maps an entry's key to when it was swiped (ms). The service
+// `hidden` maps an acknowledged logical key to its reply time (ms). The service
 // deletes its file a moment later, so until a read no longer finds the
 // file, the row stays out; a mark older than graceMs (a forget that never
 // happened, say on an Omarchy without the forget call) lapses, and the row
 // comes back rather than staying hidden for a notification that is still
 // there. Returns the rows, the marks still needed and the forget name of
-// every notification read, shown or not (Clear all on 4.5 forgets them).
+// every notification read, shown or not (retained for format compatibility).
 function shown(raw, hidden, now, graceMs) {
   var marks = hidden || {}
   var grace = typeof graceMs === "number" ? graceMs : 15000
   var all = parse(raw, Infinity)
-  var present = {}
+  var present = Object.create(null)
   for (var i = 0; i < all.length; i++) present[all[i].key] = true
   var kept = {}
   for (var key in marks) {
-    if (!marks.hasOwnProperty(key) || !present[key]) continue
-    if (Number(now) - Number(marks[key]) <= grace) kept[key] = marks[key]
+    if (!Object.prototype.hasOwnProperty.call(marks, key) || !present[key]) continue
+    if (Number(now) - Number(marks[key]) <= grace) Object.defineProperty(kept, key, { value: marks[key], enumerable: true, writable: true, configurable: true })
   }
-  var out = all.filter(function(e) { return !kept.hasOwnProperty(e.key) })
+  var out = all.filter(function(e) { return !Object.prototype.hasOwnProperty.call(kept, e.key) })
   return { entries: out.slice(0, LIMIT), hidden: kept, files: all.map(function(e) { return e.file }) }
 }
 
@@ -206,9 +206,34 @@ function title(count) {
   return count > 0 ? "Notifications · " + count : "Notifications"
 }
 
+// Hide only logical keys explicitly acknowledged by the daemon.
+function clearResult(raw, code) {
+  if (code !== 0 || typeof raw !== "string" || raw.length > 65536) return { ok: false, keys: [] }
+  var value
+  try { value = JSON.parse(raw) } catch (error) { return { ok: false, keys: [] } }
+  if (!value || value.version !== 1) return { ok: false, keys: [] }
+  if (value.result === "legacy") return { ok: true, legacy: true, keys: [] }
+  if (value.result !== "ok" || !Array.isArray(value.keys) || value.keys.length > 300) return { ok: false, keys: [] }
+  var seen = Object.create(null), keys = []
+  for (var i = 0; i < value.keys.length; i++) {
+    var key = value.keys[i]
+    if (typeof key !== "string" || !/^[A-Za-z0-9_-]{1,120}$/.test(key)) return { ok: false, keys: [] }
+    if (!seen[key]) { seen[key] = true; keys.push(key) }
+  }
+  return { ok: true, keys: keys }
+}
+function acknowledge(entries, hidden, keys, now) {
+  var marks = Object.create(null)
+  Object.keys(hidden || {}).forEach(function(key) { marks[key] = hidden[key] })
+  keys.forEach(function(key) { marks[key] = now })
+  return { hidden: marks, entries: (entries || []).filter(function(entry) { return keys.indexOf(entry.key) < 0 }) }
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     LIMIT: LIMIT,
+    clearResult: clearResult,
+    acknowledge: acknowledge,
     plainBody: plainBody,
     execArgv: execArgv,
     entry: entry,

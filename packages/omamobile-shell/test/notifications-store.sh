@@ -4,8 +4,8 @@
 # and run against both of Omarchy's layouts in a throwaway directory: the
 # read (one file per notification under notifications/ and history/ on
 # 4.0; live.json and history.json on 4.5, chosen by whether history.json
-# exists) and Clear all (dismissAll then clear on 4.0; dismissAll, then
-# forget for every notification read, on 4.5), with a fake qs that only
+# exists) and Clear all (dismissAll then clear on 4.0; one snapshot
+# forgetAll call on 4.5), with a fake qs that only
 # records its calls. The rows come out through NotificationsModel.js.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
@@ -65,12 +65,12 @@ got=$(sh -c "$read_sh" sh "$d" | rows)
 [[ $got == "live,newer,older | nlive,nnew,nold" ]] || fail "4.5: the shade reads live.json and history.json only ($got)"
 : >"$tmp/calls"
 PATH=$tmp/bin:$PATH sh -c "$clear_sh" sh /shell "$d" nlive nnew nold
-[[ $(cat "$tmp/calls") == $'qs ipc -p /shell call notifications dismissAll\nqs ipc -p /shell call notifications forget nlive\nqs ipc -p /shell call notifications forget nnew\nqs ipc -p /shell call notifications forget nold' ]] \
-  || fail "4.5: Clear all is dismissAll, then forget for each key ($(cat "$tmp/calls"))"
+[[ $(cat "$tmp/calls") == "qs ipc -p /shell call notifications forgetAll" ]] \
+  || fail "4.5: Clear all is one daemon snapshot call ($(cat "$tmp/calls"))"
 rm -rf "$d/history" "$d/6000-6.json"; : >"$d/live.json"; : >"$d/history.json"
 got=$(sh -c "$read_sh" sh "$d" | rows)
 [[ $got == " | " ]] || fail "4.5: empty files, no rows ($got)"
 : >"$tmp/calls"
 PATH=$tmp/bin:$PATH sh -c "$clear_sh" sh /shell "$d"
-[[ $(cat "$tmp/calls") == "qs ipc -p /shell call notifications dismissAll" ]] || fail "4.5: Clear all with nothing read is dismissAll alone"
-pass "notification shade on Omarchy 4.5: reads live.json and history.json, clears through dismissAll and forget"
+[[ $(cat "$tmp/calls") == "qs ipc -p /shell call notifications forgetAll" ]] || fail "4.5: empty Clear all still requests one daemon snapshot"
+pass "notification shade on Omarchy 4.5: reads live.json and history.json, clears through one acknowledged snapshot"

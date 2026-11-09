@@ -32,15 +32,25 @@ Item {
   property bool dismissing: false
   // 1 in the list; down to 0 as the gap closes after a swipe away.
   property real fold: 1
-  readonly property bool swiping: swipeHandler.active || swipeAnimation.running || dismissing
+  readonly property bool swiping: swipeHandler.active || swipeAnimation.running || restoreAnimation.running || dismissing
 
   readonly property real naturalHeight: Math.max(44, rowText.implicitHeight + Style.spacing.md * 2)
   height: naturalHeight * fold
   visible: fold > 0
   clip: fold < 1
 
+  function restoreSwipe() {
+    swipeAnimation.stop()
+    foldAnimation.stop()
+    fold = 1
+    dismissing = false
+    restoreAnimation.restart()
+  }
+
+  onSwipeEnabledChanged: if (!swipeEnabled && dismissing) restoreSwipe()
+
   function finishSwipe() {
-    var way = NotificationsModel.swipeOutcome(swipeOffset, swipeVelocity, width, Style.space(900))
+    var way = swipeEnabled ? NotificationsModel.swipeOutcome(swipeOffset, swipeVelocity, width, Style.space(900)) : 0
     swipeAnimation.dismiss = way !== 0
     swipeAnimation.to = way * (width + Style.space(24))
     if (way !== 0) dismissing = true
@@ -146,6 +156,7 @@ Item {
     enabled: row.swipeEnabled && !row.dismissing
     onActiveChanged: {
       if (active) {
+        restoreAnimation.stop()
         swipeAnimation.stop()
         row.swipeVelocity = 0
       } else {
@@ -171,8 +182,20 @@ Item {
       easing.type: swipeAnimation.dismiss ? Easing.InQuad : Easing.OutBack
     }
     ScriptAction {
-      script: if (swipeAnimation.dismiss) foldAnimation.start()
+      script: if (swipeAnimation.dismiss) {
+        if (row.swipeEnabled) foldAnimation.start()
+        else row.restoreSwipe()
+      }
     }
+  }
+
+  NumberAnimation {
+    id: restoreAnimation
+    target: row
+    property: "swipeOffset"
+    to: 0
+    duration: 200
+    easing.type: Easing.OutBack
   }
 
   // The gap closes, then the host takes the entry out of the list (which
@@ -187,7 +210,7 @@ Item {
       easing.type: Easing.OutCubic
     }
     ScriptAction {
-      script: if (row.host) row.host.forgetNotification(row.entry)
+      script: if (!row.host || !row.host.forgetNotification(row.entry)) row.restoreSwipe()
     }
   }
 }

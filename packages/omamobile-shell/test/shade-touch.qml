@@ -20,8 +20,11 @@ Item {
     property var notifications: []
     property var opened: []
     property var forgotten: []
+    property bool clearing: false
+    property bool rejectForget: false
     function openNotification(entry) { opened = opened.concat([entry.key]) }
     function forgetNotification(entry) {
+      if (clearing || rejectForget) return false
       forgotten = forgotten.concat([entry.file])
       Qt.callLater(function() { sheet.notifications = NotificationsModel.without(sheet.notifications, entry.key) })
       return true
@@ -51,7 +54,7 @@ Item {
           host: sheet
           entry: modelData
           width: rows.width
-          swipeEnabled: !list.moving
+          swipeEnabled: !list.moving && !sheet.clearing
         }
       }
     }
@@ -70,6 +73,8 @@ Item {
                                     execArgv: JSON.stringify(["omarchy-launch-" + i]), urgency: 1,
                                     timestamp: 1760000000000 + i * 1000 }))
       sheet.notifications = NotificationsModel.parse(lines.join("\n"))
+      sheet.clearing = false
+      sheet.rejectForget = false
       sheet.opened = []
       sheet.forgotten = []
       list.contentY = 0
@@ -136,6 +141,46 @@ Item {
       tryVerify(function() { return sheet.forgotten.length === 1 }, 2000)
       tryCompare(repeater, "count", 2)
       tryVerify(function() { return rowAt(0).y < start }, 1000, "the next row moves up")
+    }
+
+    function test_clear_in_progress_keeps_the_row_visible() {
+      fill(3)
+      sheet.clearing = true
+      var row = rowAt(0)
+      drag(row, 40, row.height / 2, 260, 0, 12, 16)
+      wait(400)
+      compare(row.fold, 1)
+      compare(row.swipeOffset, 0)
+      verify(row.visible)
+      compare(sheet.forgotten.length, 0)
+      compare(repeater.count, 3)
+    }
+
+    function test_clear_starting_during_fly_off_restores_the_row() {
+      fill(3)
+      var row = rowAt(0)
+      drag(row, 40, row.height / 2, 260, 0, 12, 16)
+      verify(row.dismissing)
+      sheet.clearing = true
+      tryCompare(row, "swipeOffset", 0, 1000)
+      compare(row.fold, 1)
+      verify(row.visible)
+      verify(!row.dismissing)
+      compare(sheet.forgotten.length, 0)
+      compare(repeater.count, 3)
+    }
+
+    function test_refused_forget_restores_fold_and_position_without_refresh() {
+      fill(3)
+      sheet.rejectForget = true
+      var row = rowAt(0)
+      drag(row, 40, row.height / 2, 260, 0, 12, 16)
+      tryVerify(function() { return !row.dismissing }, 2000)
+      tryCompare(row, "swipeOffset", 0, 1000)
+      compare(row.fold, 1)
+      verify(row.visible)
+      compare(sheet.forgotten.length, 0)
+      compare(repeater.count, 3)
     }
 
     function test_a_short_swipe_springs_back() {
