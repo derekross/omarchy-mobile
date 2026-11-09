@@ -5,21 +5,36 @@ Facts only, each read off the phone. Captures remain outside the repository
 because they contain device identifiers and Wi-Fi keys; this file records only
 the facts needed for review.
 
-## 2026-11-09 — check for the RAM-only image
+## 2026-11-09 — current recovery and RAM-only image gate
 
-A read-only SSH check reported kernel
-`7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` and root `/dev/sda21`
+A read-only SSH check of the installed kernel
+`7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` reported root `/dev/sda21`
 mounted ext4 read-write. `/sys/block/sda/ro` and
 `/sys/block/sda/sda21/ro` were `0`; all other partition `ro` values read `1`.
-This does not verify PR #505's RAM-only image: its boot image hash was not
-recorded, and these writable values fail that runbook's stop condition.
-Systemd logged that setting the `qcom_wdt` timeout to one minute failed; the
-watchdog feeder status was not checked. A later USB SSH attempt got no reply,
-and neither ADB nor fastboot listed a device. No new boot or deploy was
-attempted. The userdata backup is not complete. The existing 15-partition
-stock backup manifest still verifies, but the current `recovery` image has
-not been compared with it; do not boot again until the userdata backup and
-recovery checks are complete and USB SSH is available.
+This is not PR #505's image and fails its RAM-boot stop condition. Systemd
+logged that setting the `qcom_wdt` timeout to one minute failed; the watchdog
+feeder status was not checked.
+
+The current `recovery` partition's SHA-256 matches the `recovery.img` in the
+checksum-verified 15-partition snapshot captured on 2026-10-29 at 19:01. This
+confirms the bytes match that saved copy; the exact order of that capture and
+the two diagnostic writes to `recovery` is not established here. `logdump` is
+not in the 15-partition backup. A separate live, file-level archive of the
+userdata root filesystem has now been created and verified off-device. It is
+not a raw partition image or an atomic snapshot; the filesystem remained
+mounted during the copy.
+
+On 2026-11-09 the owner verified that holding Power alone for more than 10
+seconds restarted this handset. The owner then entered fastboot with Volume
+Down + Power; read-only fastboot variables reported product `dipper` and an
+unlocked bootloader. This verifies the handset's button recovery from the
+running system, not recovery from a hang in PR #505's kernel.
+
+No PR #505 image has been booted. The installed dirty kernel's writable root
+and failed watchdog-timeout setting are not results from that image. Before
+trying it, rebuild from the public kernel PRs, check the backup manifest, and
+record the exact image hash. Keep the stop condition: every partition must
+remain read-only, the watchdog must be fed, and USB/SSH must come up.
 
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
