@@ -60,9 +60,9 @@ if [[ ${1:-} == --retry ]]; then
   fi
 elif [[ -e $MARK ]]; then
   if tegu; then
-    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (omamobile-gnss-start --retry clears the marker; the next location request then starts GNSS)"
+    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (/usr/lib/omamobile-vendor/omamobile-gnss-start --retry clears the marker; the next location request then starts GNSS)"
   else
-    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (run omamobile-gnss-start --retry)"
+    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (run /usr/lib/omamobile-vendor/omamobile-gnss-start --retry)"
   fi
   exit 0
 fi
