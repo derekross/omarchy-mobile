@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Modem link test, stage S4, never default (device/husky/
+ * MODEM-PLAN.md): the controller (pcie_0_phy, pcie_0)
+ * is on, but its `modem` child is OFF so the lines are free for CPIF, and
+ * /cp-shmem and /cpif (disabled in the base dtb, kernel branch
+ * husky-e1-modem-cpif) are switched on. cpif probe forces the seven AP2CP
+ * outputs low; nothing powers the modem or starts PCIe.
+ */
+/dts-v1/;
+/plugin/;
+
+&pcie_0_phy {
+	status = "okay";
+};
+
+&pcie_0 {
+	status = "okay";
+
+	modem {
+		status = "disabled";
+	};
+};
+
+&{/cp-shmem} {
+	status = "okay";
+};
+
+&{/cpif} {
+	status = "okay";
+};
