@@ -622,10 +622,10 @@ PY
 }
 
 # Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
-# binary alike: universally administered unicast MAC addresses (locally
-# administered ones, x2/x6/xA/xE, group ones, x1/x3/..., which no network
-# card has, and all zeros or all ones are made up; so are the bytes of a
-# dhcp-option value in dnsmasq's shipped example configuration), serial and IMEI
+# binary alike: universally administered MAC addresses (locally administered
+# ones, x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
+# /etc/dnsmasq.conf alone, the group addresses and dhcp-option bytes of
+# dnsmasq's shipped example configuration), serial and IMEI
 # records, this machine's home directory (/home/<builder>: a build path that
 # leaked; other /home/<name> paths are upstream examples and build hosts, as
 # in Neovim plugins and Alpine's libc), and each literal of the identifiers
@@ -654,10 +654,13 @@ def scan(path):
     for m in mac.finditer(data):
         first = int(m.group(1), 16)
         whole = (m.group(1) + m.group(2)).lower()
-        if first & 3 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+        if first & 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
             continue
+        # dnsmasq's shipped example configuration only: its group address
+        # (no Wi-Fi or Ethernet card has one, but a Bluetooth LE random
+        # address can look like one, so not image-wide) and option bytes
         line = data[data.rfind(b"\n", 0, m.start()) + 1:m.start()]
-        if path.endswith("etc/dnsmasq.conf") and re.search(rb"^\s*#?\s*dhcp-option=", line):
+        if path.endswith("/etc/dnsmasq.conf") and (first & 1 or re.search(rb"^\s*#?\s*dhcp-option=[^#]*$", line)):
             continue
         report(path, "MAC address", whole)
     for what, rx in rules:
