@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Requires wifi-pool, live pool qualification and blacklisted modules.
+ * Controller stages 0-4 only, under the guarded single-attempt runner.
+ * Applying this overlay alone does not authorize a driver load.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/phy@14550000";
+		__overlay__ {
+			status = "okay";
+		};
+	};
+	fragment@1 {
+		target-path = "/soc@0/pcie@14520000";
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};
