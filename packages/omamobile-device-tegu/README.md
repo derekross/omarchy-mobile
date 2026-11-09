@@ -167,27 +167,38 @@ In order, it:
 6. with `--phone`, starts `omamobile-sitd` and, when installed,
    `omamobile-mmd` for Phone and Messages.
 
-The latch stays from step 2 until the profile's unit stops at shutdown:
-its ExecStopPost (`omamobile-tegu-modem-up --stopped`) removes this boot's
-latch once the start had reached ONLINE, whatever the stop's result (the
-CP's power-off can end rfsd before systemd's SIGINT, so the result is often
-not "success"). A start that never reached ONLINE leaves it, and every
-later start refuses until you've read `/var/log/omamobile/modem.log` and
-that boot's journal and removed it. A boot that hung, reset or was powered
-off by a held power key with the modem up leaves it too, but its bring-up
-had worked, so the next boot moves it aside
-(`modem-bringup-started.unclean-<time>`) and starts the modem; only a second
-unclean end in a row, with that copy still there, holds until you've looked
-(`rm /var/lib/omamobile/modem-bringup-started*`, then
-`systemctl start omamobile-tegu-modem-boot`). A clean stop removes the
-copies. It also refuses a second start in a boot that already loaded CPIF.
-Never stop the modem by hand; the reboot's shutdown stops it.
+The latch stays from step 2 until the profile's unit stops at shutdown
+with the evidence of a clean stop. The latch names the profile unit's
+invocation once the CP is ONLINE. At the stop, the profile's ExecStop
+(`omamobile-vendor-chroot modem stop`, from `omamobile-modem` 0.1.17 on)
+powers the CP off and, once it has seen it OFFLINE, writes its invocation ID
+to `/run/omamobile-modem/stop-<invocation>`, the stop witness; the unit's
+ExecStopPost (`omamobile-tegu-modem-up --stopped`) removes the latch only
+when it finds that witness for the invocation the latch names and systemd's
+result is success. A stop that failed or timed out, a hang, a reset or a held
+power key leaves the latch (the witness lives in `/run`, so a reset leaves
+none). The starter refuses to load anything when the installed
+`omamobile-modem` lacks the witness
+(`/usr/lib/omamobile-vendor/modem/stop-witness-version`, 1), since no stop
+could then remove the latch.
+
+A start that never reached ONLINE leaves the latch, and every later start
+refuses until you've read `/var/log/omamobile/modem.log` and that boot's
+journal and removed it. A boot that ended with the modem up and no
+confirmed stop had a working bring-up, so the next boot moves its latch
+aside (`modem-bringup-started.unclean-<time>`) and starts the modem; only a
+second unclean end in a row, with that copy still there, holds until you've
+looked (`rm /var/lib/omamobile/modem-bringup-started*`, then
+`systemctl start omamobile-tegu-modem-boot`). A confirmed clean stop removes
+the copies. It also refuses a second start in a boot that already loaded
+CPIF. Never stop the modem by hand; the reboot's shutdown stops it.
 
 With #403, a `reboot-to` (and so `bin/omamobile push`) with the CP ONLINE
 notes the boot it ends, and the next boot clears that boot's latch and
-starts the modem on its own, after a reboot that didn't power the CP off
-through the profile. On the 9a that path passed once, on 2026-11-03
-(TELEPHONY-PLAN 2.7).
+starts the modem on its own: a deliberate restart, asked for and recorded
+before the reboot, isn't the reset loop the latch guards against, and the
+reboot takes the CP down with the SoC. On the 9a that path passed once, on
+2026-11-03 (TELEPHONY-PLAN 2.7).
 
 The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`) hasn't
 run through this script yet; the in-tree drivers have run from the

@@ -34,6 +34,55 @@ out=$(bash -c '
 [[ $out == alive ]] || fail "a daemon exiting 3 leaves spawn_optional's job alive (got: $out)"
 pass "spawn_optional survives a failing daemon"
 
+# rfsd's job: an exit is a crash (the supervisor stops the profile) unless
+# this invocation's stop intent is in place; then it stays open for systemd.
+python3 test/rfsd-lifecycle.py || fail "rfsd's job through an orderly stop"
+pass "rfsd's exit ends the profile except during this invocation's orderly stop"
+
+# power-off: 0 only on the boot device's own OFFLINE
+python3 test/power-off.py || fail "omamobile-modem-cp power-off"
+pass "power-off confirms OFFLINE from the device, never from its absence"
+
+# The stop witness: profile_stop, with a stand-in CP helper and capture. A
+# failed power-off still captures the NV but fails the stop and leaves no
+# witness; a confirmed one writes its invocation's witness once; no main
+# process, or no invocation, means no witness.
+w=$(mktemp -d)
+cat > "$w/fake-cp" <<'EOF'
+#!/bin/bash
+[[ $1 == power-off ]] || exit 2
+exit "$CP_RESULT"
+EOF
+chmod +x "$w/fake-cp"
+stop_function=$(sed -n '/^profile_stop() {$/,/^}$/p' profiles/modem.conf)
+[[ -n $stop_function ]] || fail "profile_stop found in modem.conf"
+run_profile_stop() { # CP_RESULT INVOCATION [MAINPID]
+  CP_RESULT=$1 INVOCATION_ID=$2 MAINPID=${3:-$$} SERVICE_RESULT=success OMAMOBILE_MODEM_RUN=$w/run MODEM_CP=$w/fake-cp \
+    CAPTURE_LOG=$w/capture bash -c '
+      set -euo pipefail
+      say() { :; }
+      modem_nv_capture() { printf "%s\n" "$1" >> "$CAPTURE_LOG"; }
+      eval "$1"
+      profile_stop
+    ' _ "$stop_function"
+}
+id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+run_profile_stop 1 "$id" && fail "a failed CP power-off fails the stop"
+[[ $(cat "$w/capture") == stop && ! -e $w/run/stop-$id ]] || fail "a failed stop still captures the NV, and writes no witness"
+rm -f "$w/run/intent-$id"
+run_profile_stop 0 "$id" || fail "a confirmed power-off is a clean stop"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "a confirmed stop writes its invocation's witness"
+run_profile_stop 0 "$id" 2>/dev/null && fail "a witness is never overwritten"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "the witness is intact"
+rm -f "$w/run/stop-$id" "$w/run/intent-$id"
+run_profile_stop 0 "$id" 0 || fail "a stop after the main process is gone succeeds"
+[[ ! -e $w/run/stop-$id ]] || fail "no main process, no witness"
+run_profile_stop 0 invalid || fail "a stop by hand, without a unit invocation, succeeds"
+[[ ! -e $w/run/stop-invalid ]] || fail "no invocation, no witness"
+[[ $(cat modem/stop-witness-version) == 1 ]] || fail "the stop witness contract file says 1"
+rm -rf "$w"
+pass "profile_stop witnesses only a confirmed power-off, once, for a running unit invocation"
+
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 # A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each; the TOC
 # entry's last word is the last entry's index), the version 20 bytes into
