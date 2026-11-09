@@ -309,7 +309,7 @@ pass "refusals: unprovisioned, the latch, a stale modem-up marker once then held
 u=$stage/usr/lib/systemd/system
 for f in omamobile-modem-inhibit.service omamobile-modem-boot.target; do [[ -e $u/$f ]] || fail "staged $f"; done
 grep -qx 'Requires=omamobile-modem-inhibit.service' systemd/omamobile-modem.service || fail "the modem unit requires the inhibitor"
-grep -E '^After=' systemd/omamobile-modem.service | grep -q 'omamobile-modem-inhibit.service' || fail "the modem unit starts after the inhibitor"
+grep -E '^After=' systemd/omamobile-modem.service | grep -c 'omamobile-modem-inhibit.service' >/dev/null || fail "the modem unit starts after the inhibitor"
 grep -qx 'Type=notify' systemd/omamobile-modem.service && grep -qx 'NotifyAccess=all' systemd/omamobile-modem.service ||
   fail "the modem unit is Type=notify (READY from the start script)"
 grep -qx 'ExecStopPost=/usr/lib/omamobile-vendor/omamobile-modem-start --stopped' systemd/omamobile-modem.service || fail "the stop hook"

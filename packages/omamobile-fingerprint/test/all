@@ -106,7 +106,7 @@ grep -c 'ln -sfn ../omamobile-fp.service "$d/usr/lib/systemd/system/multi-user.t
 # a die in the namespace still stops in order, and the marker is taken
 # atomically
 st=$(sed -n '/^start() {/,/^}/p' lib/omamobile-fp-chroot)
-grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -qx '  rm -f "\$PENDING"' ||
+grep -A1 '^  say "stage \$stage running"$' <<<"$st" | grep -cx '  rm -f "\$PENDING"' >/dev/null ||
   fail "start clears start-pending right after the stack runs"
 grep -qx "  trap 'stop \$?' EXIT" <<<"$st" || fail "the namespace's EXIT trap keeps the stop order on a die"
 grep -c 'set -o noclobber; umask 077; echo .* > "\$MARKER"' lib/omamobile-fp-chroot >/dev/null ||
