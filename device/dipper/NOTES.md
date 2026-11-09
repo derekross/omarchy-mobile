@@ -25,6 +25,18 @@ back into Android both from the installed system and under the Omarchy Mobile
 RAM kernel. Volume Down + Power then entered fastboot. Read-only fastboot
 variables reported product `dipper` and an unlocked bootloader.
 
+A separate NFS-root attempt used a RAM-only image with SHA-256
+`2244d74aea472b0c595b2056ad8618f614e6a9161b5b264c7f898939e626f318`, reusing
+the earlier #505 kernel and DTB and repacking its initramfs with
+`OMAMOBILE_NFSROOT`. The persistent NFS-root journal recorded NFS mode and
+read-only confirmations for all 85 unique UFS partitions and all six UFS
+disks; the guard reads each `ro` value back as `1` before logging success. SSH
+confirmed `/` was NFS, PID 1 was systemd, and the system was running with
+`RuntimeWatchdogUSec=20s`. The exported root was a generic Arch Linux ARM base,
+not an Omarchy rootfs. No UFS write was attempted. Direct `uname -r` and
+sysfs `ro` output were not captured, and this pre-#484 image does not verify
+the post-#484 whole-disk-node absence check.
+
 An earlier read-only SSH observation, reported on 2026-11-09 at 08:53 UTC,
 was on the dirty kernel
 `7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty`. It reported `/dev/sda21`
