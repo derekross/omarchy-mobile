@@ -168,7 +168,7 @@ grep -q '^ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc$' vendor/sy
 ! grep -qE '^install ' vendor/modprobe.d/omamobile-husky-aoc.conf || fail "the AoC file only blacklists"
 ! grep -hv '^ *#' bin/omamobile-husky-aoc-start vendor/modprobe.d/omamobile-husky-aoc.conf | grep -q 'speaker_protection' \
   || fail "the AoC start never raises the speaker ceiling"
-for m in gsa aoc_core aoc_alsa_dev snd_soc_cs35l41_spi; do
+for m in gsa aoc_core aoc_alsa_dev snd_soc_cs35l41_spi gs201_aoc_boot; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-husky-aoc.conf || fail "$m is kept from autoloading"
 done
 pass "the AoC unit is installed, enabled by a wants link, and only the start script loads the AoC stack"
