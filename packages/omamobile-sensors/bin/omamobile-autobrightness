@@ -1,0 +1,3 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+exec python3 /usr/lib/omamobile-sensors/autobrightness.py "$@"

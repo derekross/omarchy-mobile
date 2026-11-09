@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Set the screen's brightness from the ambient light (user service).
+# Not enabled: omamobile-toggle-autobrightness on (or the brightness icon in
+# quick settings) enables it, systemctl --user enable --now underneath.
+[Unit]
+Description=Automatic screen brightness from the ambient light sensor
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/omamobile-autobrightness
+Restart=on-failure
+RestartSec=5
+# No backlight: nothing to do, and nothing a restart would change.
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=graphical-session.target

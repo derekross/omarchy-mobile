@@ -3,7 +3,7 @@
 pkgname=omamobile-sensors
 pkgver=$(cat "${startdir:-.}/version")
 pkgrel=1
-pkgdesc="Omarchy Mobile sensors for the Pixel 7 Pro: iio-sensor-proxy's D-Bus API from the AoC, auto-rotate for Hyprland"
+pkgdesc="Omarchy Mobile sensors for the Pixel 7 Pro: iio-sensor-proxy's D-Bus API from the AoC, auto-rotate for Hyprland, automatic brightness"
 arch=(any)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)

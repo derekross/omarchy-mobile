@@ -1,7 +1,9 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-sensors into DESTDIR. Enables the sensor proxy at boot; the
-# auto-rotate user service is turned on from the rotation lock tile.
+# auto-rotate user service is turned on from the rotation lock tile, the
+# auto-brightness one from the brightness icon or tile (or
+# omamobile-toggle-autobrightness).
 #   ./install DESTDIR
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -13,5 +15,6 @@ install -Dm644 systemd/omamobile-sensor-proxy.service "$d/usr/lib/systemd/system
 install -dm755 "$d/usr/lib/systemd/system/multi-user.target.wants"
 ln -sf ../omamobile-sensor-proxy.service "$d/usr/lib/systemd/system/multi-user.target.wants/omamobile-sensor-proxy.service"
 install -Dm644 systemd/omamobile-autorotate.service "$d/usr/lib/systemd/user/omamobile-autorotate.service"
+install -Dm644 systemd/omamobile-autobrightness.service "$d/usr/lib/systemd/user/omamobile-autobrightness.service"
 install -Dm644 dbus/net.hadess.SensorProxy.conf "$d/usr/share/dbus-1/system.d/net.hadess.SensorProxy.conf"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-sensors/LICENSE"
