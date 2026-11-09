@@ -56,16 +56,14 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    locked bootloader. Rollback: leave fastboot without writing. Risk: this
    device has no alternate OS slot.
 3. **Recovery gate** — Fastboot entry uses **Volume Down + Power**; the forced
-   restart is separate. On 2026-11-09, an attended test from installed Android found that holding
-   **Power alone for more than 10 seconds** restarted into Android. It has not
-   been tried under the RAM kernel or from a simulated kernel hang. Volume Down
-   + Power then entered fastboot from Android.
-   Expect: the Power-only hold
-   restarts the phone. Pass: the observed procedure above is recorded and the
-   phone can enter fastboot. Stop if Power alone does not restart it. Rollback:
-   do not start a RAM boot until this gate passes. Risk: a hard kernel hang has
-   not been simulated; recovery from one still depends on the hardware button
-   reset working.
+   restart is separate. On 2026-11-09, an attended test found that holding
+   **Power alone for 10 seconds** restarted into Android from both installed
+   Android and the Omarchy Mobile RAM kernel. Volume Down + Power then entered
+   fastboot from Android. Expect: the Power-only hold restarts the phone. Pass:
+   the observed procedure above is recorded and the phone can enter fastboot.
+   Stop if Power alone does not restart it. Rollback: do not start a RAM boot
+   until this gate passes. Risk: a hard kernel hang has not been simulated;
+   recovery from one still depends on the hardware button reset working.
 4. **RAM boot gate** — Run
    `fastboot -s "$FASTBOOT_SERIAL" boot boot.img`. Expect: the image starts
    without changing UFS, and the screen stays lit because simpledrm holds the
