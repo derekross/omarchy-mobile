@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 # The release bundle's install writes the ramdisk image omamobile-boot-update
 # would write (#564; docs/RELEASES.md §5.2, §11 step 4). No phone, nothing
-# flashed: for a gs201 layout (the ramdisk in vendor_kernel_boot, 4 KiB pages)
-# and a gs101 layout (the ramdisk in vendor_boot, 2 KiB pages),
+# flashed: for a gs201 layout (the ramdisk in vendor_kernel_boot, 2 KiB pages
+# as on the Pixel 7 Pro and every descriptor in device/) and a gs101 layout
+# (the ramdisk in vendor_boot, with 4 KiB pages for the header arithmetic),
 #
 #   1. the hook's own code (omamobile-boot-update build, on a stand-in phone
 #      root) builds the slot B images twice from the same device package and
@@ -18,10 +19,12 @@
 #      the bundle's own images it rewrites vendor_kernel_boot, as in #564).
 #
 # Then the refusals, each before anything is flashed: an image the key makes
-# larger than its partition, a ramdisk image under an AVB footer, an image
-# that isn't a v4 vendor boot image; and a ramdisk that already holds SSH
-# keys (a development initramfs) is flashed as built. The hook runs under
-# pacman's umask, 022, whatever the caller's.
+# larger than its partition, a failing step of the key's append, a ramdisk
+# image under an AVB footer, an image that isn't a v4 vendor boot image; and
+# a ramdisk that already holds SSH keys (a development initramfs) is flashed
+# as built. The hook runs under pacman's umask, 022, and install under 077:
+# its images must not depend on the owner's umask (uutils' install(1) gives
+# parent directories the umask's mode).
 #
 # Skips without mkbootimg (MKBOOTIMG, mkbootimg on PATH, or AOSP's
 # mkbootimg.py from tools/fetch-toolchain or under SRC_DIR), lz4, cpio, dtc,
@@ -142,7 +145,7 @@ install() { # codename [args]; RAMDISK_PART_SIZE: vendor_kernel_boot_b's size
   } > "$t/vars"
   # user, password twice, host, time zone, name, email, Wi-Fi, key, confirmation
   printf '%s\n' alice 1234 1234 "" UTC "" "" "" "$t/owner.pub" "$cn" |
-    HOME=$t/home PATH="$t/fbin:$PATH" "$BUNDLE/install" --unsigned --work "$t/work" "$@" > "$t/out" 2>&1
+    (umask 077; HOME=$t/home PATH="$t/fbin:$PATH" "$BUNDLE/install" --unsigned --work "$t/work" "$@") > "$t/out" 2>&1
 }
 refused() { # why message: install refused, said why, flashed nothing
   if install twelve; then fail "refuses $1"; fi
@@ -169,7 +172,7 @@ hook_plan() { # root: the hook's dry run on that slot B
   hook "$1" write --dry-run > "$t/plan.log" 2>&1 || { cat "$t/plan.log"; fail "omamobile-boot-update write --dry-run"; }
 }
 
-for dev in "twelve gs201 0x9855001 0x1000 vendor_kernel_boot" "six gs101 0x9845001 0x800 vendor_boot"; do
+for dev in "twelve gs201 0x9855001 0x800 vendor_kernel_boot" "six gs101 0x9845001 0x1000 vendor_boot"; do
   read -r cn soc id page rimg <<<"$dev"
   if [[ $cn == twelve ]]; then imgs="boot init_boot vendor_boot vendor_kernel_boot dtbo"; else imgs="boot vendor_boot dtbo"; fi
   rw="$(for p in $imgs; do printf '%s_b ' "$p"; done)userdata"
@@ -213,17 +216,17 @@ pass "the hook's first run after the install writes nothing; after the bundle's 
 # A ramdisk within 80 bytes of the end of its last page, so the owner's key
 # (about 170 bytes of lz4; 171 on the 2026.11.08 install) makes the image a
 # page longer: on a partition that holds only the bundle's image, install
-# stops before anything is flashed
+# stops before anything is flashed (twelve's pages are 2 KiB)
 head -c 60000 /dev/urandom > "$t/random"
-n=20000 slack=4096
+n=20000 slack=2048
 for _ in $(seq 20); do
   s=$t/stage-fit && rm -rf "$s" && mkdir -p "$s/etc"
   echo '#!/bin/sh' > "$s/init"; echo "$rw" > "$s/etc/omamobile-ufs-rw"; head -c "$n" "$t/random" > "$s/payload"
   (cd "$s" && find . | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$t/fit.lz4"
-  slack=$(( (4096 - $(stat -c %s "$t/fit.lz4") % 4096) % 4096 ))
+  slack=$(( (2048 - $(stat -c %s "$t/fit.lz4") % 2048) % 2048 ))
   ((slack <= 80)) && break
   # aim for 40 bytes short of the boundary; lz4 grows about a byte per byte of random data
-  d=$((slack - 40)); ((d <= 2048)) || d=$((d - 4096))
+  d=$((slack - 40)); ((d <= 1024)) || d=$((d - 2048))
   n=$((n + d))
 done
 ((slack <= 80)) || fail "a fixture ramdisk within 80 bytes of a page boundary (got $slack)"
@@ -233,8 +236,21 @@ hook_build "$R" "$t/fit-images"
 bundle twelve "$t/fit-images"
 size=$(stat -c %s "$t/fit-images/vendor_kernel_boot.img")
 RAMDISK_PART_SIZE=$(printf '0x%x' "$size") refused "an image that no longer fits its partition" \
-  "with the owner's key is $((size + 4096)) bytes, larger than vendor_kernel_boot_b ($size bytes)"
+  "with the owner's key is $((size + 2048)) bytes, larger than vendor_kernel_boot_b ($size bytes)"
 pass "an image the owner's key makes too large for its partition is refused before anything is flashed"
+
+# Each step of the append that fails (a stand-in that exits 1 on that call)
+# stops the install with a message, rather than flashing the ramdisk without
+# the key: copying the key, cpio packing it, lz4 recompressing
+for step in "install 600 can't stage the owner's key" "cpio -o cpio couldn't pack the owner's key" \
+            "lz4 -l lz4 couldn't recompress vendor_kernel_boot.img's ramdisk"; do
+  read -r tool arg why <<<"$step"
+  mkdir -p "$t/bad-$tool"
+  printf '#!/bin/bash\nfor a; do [[ $a == %q ]] && exit 1; done\nexec %q "$@"\n' "$arg" "$(type -P "$tool")" > "$t/bad-$tool/$tool"
+  chmod +x "$t/bad-$tool/$tool"
+  PATH=$t/bad-$tool:$PATH refused "a failing $tool $arg in the key's append" "$why"
+done
+pass "a failing step of the key's append (install, cpio or lz4) stops the install before anything is flashed"
 
 # The ramdisk image under an AVB footer can't take the key: refused
 printf 'AVB_FOOTERS="vendor_kernel_boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$BUNDLE/device.conf"
@@ -245,7 +261,7 @@ pass "a ramdisk image the descriptor signs is refused before anything is flashed
 # A development initramfs that already holds SSH keys (bin/omamobile
 # initramfs without --release): the hook refuses it, so its builder packs
 # the images directly, and install flashes them as built
-phone "$R" twelve gs201 0x9855001 0x1000 "boot init_boot vendor_boot vendor_kernel_boot dtbo" "$rw" root/.ssh/authorized_keys
+phone "$R" twelve gs201 0x9855001 0x800 "boot init_boot vendor_boot vendor_kernel_boot dtbo" "$rw" root/.ssh/authorized_keys
 (umask 022; MKBOOTIMG=$mk "$PKG/lib/omamobile-boot-images" --descriptor "$R/usr/share/omamobile/device.conf" \
   --kernel "$R/usr/lib/modules/$REL/vmlinuz" --dtbs "$R/usr/lib/modules/$REL/dtbs" --dtbo "$R/usr/lib/omamobile/twelve/dtbo.img" \
   --initramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" --out "$t/dev-images") > "$t/dev.log" 2>&1 ||

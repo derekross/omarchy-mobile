@@ -149,7 +149,7 @@ if [[ $mode == repository ]]; then
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
 for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio python3; do
-  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"
+  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
 done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
@@ -567,10 +567,11 @@ fi
 # rescue SSH has no owner key until the hook first runs, and that run rewrites
 # an image the bundle should already hold (§11 step 4, #564). So a copy of the
 # ramdisk image gets what lib/omamobile-boot-images appends, by its commands
-# under pacman's umask: a cpio holding the key, after the shipped archive in
-# one lz4 stream; vendor_ramdisk then sets the new size in the copy's v4
-# header and ramdisk table, where mkbootimg puts it. With the phone's lz4 and
-# cpio that is the hook's image byte for byte (tests/install-phone-initramfs).
+# with the modes pacman's umask gives them: a cpio holding the key, after the
+# shipped archive in one lz4 stream; vendor_ramdisk then sets the new size in
+# the copy's v4 header and ramdisk table, where mkbootimg puts it. With the
+# phone's lz4 and cpio that is the hook's image byte for byte, under any umask
+# (tests/install-phone-initramfs).
 # Inline, because a bundle ships this script alone. A ramdisk that already
 # holds authorized_keys (a development initramfs) is left as built.
 declare -A image_file=()
@@ -631,19 +632,19 @@ if [[ -n $ramdisk_image ]]; then
   if [[ $keyfiles != 0 ]]; then
     note "$ramdisk_image.img's initramfs already holds SSH keys (a development build): left as built"
   else
-    # omamobile-boot-images' commands; pacman runs the hook with umask 022
-    (
-      umask 022
-      extra=$ramdisk_dir/extra
-      mkdir -p "$extra"
-      install -d -m 700 "$extra/root/.ssh"
-      install -m 600 "$keys_file" "$extra/root/.ssh/authorized_keys"
-      find "$extra" -exec touch -h -d @0 {} +
-      reproducible=()
-      cpio --help 2>/dev/null | grep -c -- --reproducible >/dev/null && reproducible=(--reproducible)
-      (cd "$extra" && find . -mindepth 1 | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet "${reproducible[@]}") > "$ramdisk_dir/extra.cpio"
-      { lz4 -dc "$ramdisk_dir/shipped.cpio.lz4" || die "$ramdisk_image.img's ramdisk is not lz4"; cat "$ramdisk_dir/extra.cpio"; } | lz4 -l -9 -q > "$ramdisk_dir/initramfs.cpio.lz4"
-    ) || die "appending the owner's key to the initramfs failed"
+    # omamobile-boot-images' commands. The hook runs under pacman's umask
+    # (022), so root/ is 0755; its mode is set here because not every
+    # install(1) ignores the umask for parents (uutils' follows it).
+    extra=$ramdisk_dir/extra
+    install -d -m 755 "$extra/root" && install -d -m 700 "$extra/root/.ssh" &&
+      install -m 600 "$keys_file" "$extra/root/.ssh/authorized_keys" &&
+      find "$extra" -exec touch -h -d @0 {} + || die "can't stage the owner's key for the initramfs"
+    reproducible=()
+    cpio --help 2>/dev/null | grep -c -- --reproducible >/dev/null && reproducible=(--reproducible)
+    (cd "$extra" && find . -mindepth 1 | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet "${reproducible[@]}") > "$ramdisk_dir/extra.cpio" ||
+      die "cpio couldn't pack the owner's key for the initramfs"
+    { lz4 -dc "$ramdisk_dir/shipped.cpio.lz4" && cat "$ramdisk_dir/extra.cpio"; } | lz4 -l -9 -q > "$ramdisk_dir/initramfs.cpio.lz4" ||
+      die "lz4 couldn't recompress $ramdisk_image.img's ramdisk with the owner's key"
     vendor_ramdisk set "$images/$ramdisk_image.img" "$ramdisk_dir/initramfs.cpio.lz4" "$ramdisk_dir/$ramdisk_image.img" ||
       die "rewriting $ramdisk_image.img with the new ramdisk failed"
     isize=$(stat -c %s "$ramdisk_dir/$ramdisk_image.img")
