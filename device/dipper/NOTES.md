@@ -58,7 +58,15 @@ were read-only. `/proc/iomem` reports `0x86200000–0x88efffff` as System RAM an
 `0x88f00000–0x890fffff` as reserved, so the TZ range is not reserved in this
 RAM boot's map. The EA8074 panel and FTS5 touch input still need separate
 hardware tests. The RAM image had no Arch root, and the probe did not write
-UFS. The stock partition checksums were verified before boot.
+UFS. The stock partition checksums were verified before boot. After this
+session, a read-only backup of all 84 non-`userdata`, non-`super` GPT
+partitions was captured from this guarded RAM boot. Each partition's source
+SHA-256 and byte count were checked against the decompressed local copy, and
+the compressed archive checksums were rechecked. The separate live userdata
+archive remains file-level, non-atomic, and is not a raw partition backup.
+The backup is stored outside the repository; it must not be published. This
+completes the data-capture condition, but a reviewed button-by-button restore
+procedure and supported single-slot writer are still required before a flash.
 
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
