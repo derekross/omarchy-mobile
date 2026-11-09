@@ -316,6 +316,92 @@ short_press() {
   fi
 }
 
+# The power key as Android's (each change above says what it does): only
+# with OMAMOBILE_POWER_KEY_ANDROID=1 in the session's environment, which
+# device-panther sets (environment.d), where it has run. Off, the shared
+# default, the key works as before: the functions it changed are put back
+# here word for word, and a press doesn't wait for the one before. These go
+# once it has run on the other phones.
+android_power=${OMAMOBILE_POWER_KEY_ANDROID:-}
+if [[ $android_power != 1 ]]; then
+serially() { "$@"; }
+
+wake_locked() {
+  # The lock's wake restarts its blank timer, but on tegu it reports "ok"
+  # without powering the panel back on, so always turn the display on too.
+  omarchy-shell lock wake >/dev/null 2>&1
+  omarchy-brightness-display on
+  local device
+  device=$(omarchy-hw-display 2>/dev/null)
+  sleep 0.3
+  [[ -n $device ]] || return 0
+  [[ $(brightnessctl -d "$device" get 2>/dev/null || echo 1) -gt 0 ]] || brightnessctl -q -d "$device" set 40%
+}
+
+long_press() {
+  touch "$state/long"
+  if locked; then
+    wake_locked
+  else
+    omarchy-menu toggle system
+  fi
+}
+
+short_press() {
+  # Debounce: a second press within 0.8 s of the first, while it was still
+  # locking and powering the panel off, read the screen as on and saved a
+  # brightness of 0, which left the phone dark on the next wake. A press a
+  # few seconds later must still count: it is the wake.
+  local now last
+  now=$1; last=$(cat "$state/last-press" 2>/dev/null || echo 0)
+  echo "$now" >"$state/last-press"
+  (( now - last < 800 )) && return 0
+  # The press that woke the phone from sleep, if it gets here at all:
+  # omamobile-sleepd has lit the PIN pad for it already.
+  [[ -f $state/power-wake ]] && (( now - $(<"$state/power-wake") < 1500 )) && return 0
+  if screensaver_up; then
+    omarchy-system-lock
+  elif locked; then
+    if screen_off; then
+      wake_locked
+    else
+      lock_dark
+      omarchy-brightness-display off
+      sleep_now
+    fi
+  elif screen_off; then
+    # Unlocked but dark (the lock didn't engage, or the panel was powered
+    # off by hand): a press wakes it instead of locking into the dark again.
+    wake_unlocked
+  else
+    # Dark at once, as on Android, but only by the backlight: Omarchy's lock
+    # waits for a working screen ("screen-stabilizing"), so powering the panel
+    # off first made the lock light it again for a moment. Lock behind the dark
+    # panel, then power it off and put the brightness back for the next wake.
+    local device level=
+    device=$(omarchy-hw-display 2>/dev/null)
+    if [[ -n $device ]]; then
+      level=$(brightnessctl -d "$device" get 2>/dev/null)
+      [[ ${level:-0} -gt 0 ]] || level=
+      brightnessctl -q -d "$device" set 0
+    fi
+    omarchy-system-lock
+    for _ in $(seq 30); do
+      omarchy-shell lock status 2>/dev/null | grep -q '"secure":true' && break
+      sleep 0.1
+    done
+    lock_dark
+    omarchy-brightness-display off
+    # The brightness the next wake lights up with: the saved level, or 40 % when
+    # the press caught the panel at 0.
+    if [[ -n $device ]]; then
+      [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
+    fi
+    sleep_now
+  fi
+}
+fi
+
 case "${1:-}" in
   power-down)
     rm -f "$state/chord" "$state/long"
@@ -328,14 +414,15 @@ case "${1:-}" in
     else
       # Pressed while a press before is still turning the screen off: that
       # one wakes the phone back (short_press, back_on).
-      if [[ -f $state/going-off ]] && (( press - $(<"$state/going-off") < 5000 )); then
+      # Both only with the power key as Android's (android_power).
+      if [[ $android_power == 1 && -f $state/going-off ]] && (( press - $(<"$state/going-off") < 5000 )); then
         touch "$state/wake-during-off"
         echo "$press" >"$state/woke-on-press"
       # A dark phone wakes as the key goes down, as Android's does
       # (it wakes on the press, not the release), so the screen answers the
       # press itself. The release then has nothing left to do (short_press
       # sees the mark).
-      elif panel_dark; then
+      elif [[ $android_power == 1 ]] && panel_dark; then
         echo "$press" >"$state/woke-on-press"
         serially wake_locked >/dev/null 2>&1 &
       fi
@@ -412,16 +499,31 @@ case "${1:-}" in
       rm -f "$state/chord"
     elif [[ -f $state/long ]]; then
       rm -f "$state/long" "$state/woke-on-press"
-    else
+    elif [[ $android_power == 1 ]]; then
+      # One lock for every key action (serially), so no second one here.
       serially short_press "$(now)"
+    else
+      # Let a second press observe the finished off transition before it
+      # decides whether to wake. Keep the lock out of background helpers.
+      released_at=$(now)
+      exec {short_lock}>"$state/short.lock"
+      # A stuck action must not queue every later press forever. Drop this
+      # press after five seconds rather than overlap display transitions.
+      if ! flock -w 5 "$short_lock"; then
+        echo 'omamobile-keys: short-press lock wait failed; dropping press' >&2
+        exit 0
+      fi
+      ( short_press "$released_at" ) {short_lock}>&-
     fi
     ;;
   wake)
     # omamobile-sleepd after a power-key wake from sleep: Hyprland never sees
     # the press that woke the phone, so light the PIN pad as that press would.
     now >"$state/power-wake"
+    if [[ $android_power != 1 ]]; then
+      if locked && screen_off; then wake_locked; fi
     # The quick check (a file read), as the press's own wake.
-    if panel_dark; then serially wake_locked; fi
+    elif panel_dark; then serially wake_locked; fi
     ;;
   double-tap)
     # omamobile-doubletap: a double tap on the touchscreen. Only a dark

@@ -1073,7 +1073,8 @@ sys.exit(1 if bad else 0)
 PY
 pass "Mobile network page"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
-bash test/sleepd.sh || fail "omamobile-sleepd"
+env -u OMAMOBILE_POWER_KEY_ANDROID bash test/sleepd.sh || fail "omamobile-sleepd"
+OMAMOBILE_POWER_KEY_ANDROID=1 bash test/sleepd.sh || fail "omamobile-sleepd, with the power key as Android's"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-doubletap || fail "omamobile-doubletap parses"
 python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep -v '^ok'; fail "omamobile-doubletap"; }
 pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
@@ -1156,7 +1157,8 @@ grep -c 'Copyright (c) 2026 Simon Schubert and contributors' widgets/OWL.md >/de
 grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || fail "the OWL guide names its source commit"
 pass "install stages the package"
 
-test/keys.sh || fail "omamobile-keys volume keys"
+env -u OMAMOBILE_POWER_KEY_ANDROID test/keys.sh || fail "omamobile-keys volume keys"
+OMAMOBILE_POWER_KEY_ANDROID=1 test/keys.sh || fail "omamobile-keys, with the power key as Android's"
 
 # Back threshold feedback handler state only; never invoke feedbackd.
 rc=0; out=$(python3 -B test/back-haptic.py 2>&1) || rc=$?
@@ -1167,4 +1169,4 @@ elif [[ $rc != 0 ]]; then
 else
   pass "Back threshold feedback: once per gesture, both edges and retreat"
 fi
-bash test/power-overlap.sh || fail "overlapping power-key presses"
+env -u OMAMOBILE_POWER_KEY_ANDROID bash test/power-overlap.sh || fail "overlapping power-key presses"
