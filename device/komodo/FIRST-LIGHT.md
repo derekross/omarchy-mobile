@@ -4,6 +4,10 @@
 Status, 2026-11-09: descriptor parsing and slot-B allowlist checks passed.
 This reduced target has not completed a full public-kernel image build or an
 attended boot qualification. No installation or peripheral support is claimed.
+The phone has already run a richer local development kernel; the retained
+installation/fallback/boot-success history and unresolved evidence are recorded
+in [NOTES](NOTES.md). Do not boot a new kernel/image set until that history,
+stock provenance and the maintainer's recovery decision are complete.
 Follow [CONTRIBUTING](../../CONTRIBUTING.md) sections 3 and 6 throughout.
 
 ## Required kernel source
@@ -25,13 +29,25 @@ exact commit IDs and review link. Recheck the board binding, build entry,
 bootargs, reserved memory, watchdogs, UFS and USB against that exact source.
 Do not substitute an unpublished development kernel or a sibling board DTB.
 
-## Boot metadata evidence, inspected 2026-11-09
+## Stock slot-A evidence, captured read-only 2026-11-09
 
-The descriptor's footer policy was read back with AOSP `avbtool info_image`
-from a retained working Komodo development image cohort. The five inspected
-image sizes were:
+Full `boot_a` and `init_boot_a` partition captures were read through held
+O_RDONLY descriptors, with unique PARTNAME, exact size, block-device number,
+read-only flag and same-boot checks before and after. The second complete
+partition hash and independent host-copy hash matched for both images.
+Private images and receipts remain off the public repository.
 
-| Image | Footer partition size |
+AOSP `avbtool info_image` on both captured images reports algorithm **NONE**,
+rollback index **0**, rollback index location **0**, OS property `17` and
+security-patch property `2026-10-05`. Their Android v4 headers are 1584 bytes
+and both encode OS version `17.0.0`, patch level `2026-10`. The software
+provenance properties identify vendor/software base `CP3A.261005.005`; this is
+not an attestation of the whole Android system or Google factory signing.
+The descriptor now uses the observed slot-A rollback index `0`.
+
+Current read-only sysfs discovery gives these partition sizes:
+
+| Image | Partition size |
 | --- | --- |
 | `boot` | 67,108,864 bytes (`0x4000000`) |
 | `init_boot` | 8,388,608 bytes (`0x800000`) |
@@ -39,26 +55,30 @@ image sizes were:
 | `vendor_kernel_boot` | 67,108,864 bytes (`0x4000000`) |
 | `dtbo` | 16,777,216 bytes (`0x1000000`) |
 
-All five report `SHA256_RSA4096`, rollback index `1791158400`, rollback index
-location `0`, OS-version property `17`, and security-patch property
-`2026-10-05`. The descriptor expresses these as `OS_VERSION=17.0.0`,
-`OS_PATCH_LEVEL=2026-10` and `AVB_SECURITY_PATCH=2026-10-05`.
-The key SHA-1 is `2597c218aae470a130f61162feaae70afd97f011`, AOSP's public
-RSA-4096 test key; it is not a Google production signing key.
+The full stock-A captures independently match the first two sizes. These are
+sysfs/capture observations, not a claimed `fastboot getvar partition-size`
+transcript. That requested bootloader-side evidence remains pending; no
+bootloader transition was made to collect it.
 
-A separate offline five-image development build on this date reproduced the
-same footer policy and passed `avbtool verify_image` for all five images. That
-build contains additional development changes and does not qualify the minimal
-target here. No vendor images, device captures or private signing keys are
-distributed with this change.
+### Development policy is not stock provenance
 
-This evidence establishes the retained development layout, not the oldest
-stock build supported by every Komodo or a universally safe rollback index.
-The intended owner's stock slot-A build, chained VBMeta metadata, rollback
-constraints, partition sizes and both slots' bootloader versions must be checked
-read-only before proceeding. Stop on a mismatch or uncertain provenance and
-ask the maintainer; this document grants no firmware, protected-partition or
-boot-success write exception. Keep stock on slot A unchanged.
+The retained working development cohort and a separate offline development
+build used footers on all five images, AOSP's public RSA-4096 test key,
+`SHA256_RSA4096`, rollback index `1791158400` and location `0`. That old index
+is **not** the slot-A value and is no longer copied into the descriptor. The
+working phone has not been rewritten to the new descriptor policy. Historical
+development image verification does not qualify a new rollback policy or image
+cohort and is not evidence of factory image signing.
+
+The historical early trials do not establish that all five images require
+footers: other boot/board changes occurred during bring-up. The all-five footer
+list remains an explicitly unresolved policy, not a necessity claim. The
+maintainer must review the intended owner's chained VBMeta/rollback behavior,
+actual bootloader versions, footer geometry and recovery path before any new
+kernel/image boot. Do not change `vbmeta`, bootloader or slot-success metadata
+to resolve uncertainty. See [NOTES](NOTES.md) for the prior fallback, lost Linux
+root, historical success operation, backup limitations and current conditional
+read-only slot-state interpretation.
 
 ## Gated runbook
 
@@ -106,7 +126,27 @@ phone's module directory or another subsystem's build output.
    baseline/environment failure. **Stop:** incomplete evidence or review.
    **Rollback:** no phone change.
 
-4. **One attended slot-B boot (medium risk; not yet qualified).** The human
+4. **Writer and retry-state gate (read-only first; medium risk).** Read the
+   actual A/B bootloader versions, B successful/unbootable/retry state and
+   current stock-A rollback metadata without changing flags. Historical success
+   does not prove current success. A verified successful B with a working Linux
+   transport may use the separately approved canonical `push`; it preserves
+   the successful mark and its matching modules must be retained. A first
+   install/recovery requiring `flash` needs the maintainer's explicit plan:
+   `flash` sets B active. On the Pixel 9a (the same Tensor G4 family), even a
+   plain suffixed fastboot flash cleared B's successful flag. Komodo must not
+   assume that mark survives a flash. Do not substitute manual fastboot writes or
+   automatically mark B successful. An unmarked B has only three ABL attempts;
+   count every boot including watchdog resets and **stop before the third
+   unmarked attempt**. Unknown remaining attempts, an already unmarked
+   development B, or the recorded bootloader mismatch means stop and ask the
+   maintainer, not one more experimental boot. Fallback to A can overwrite
+   userdata and lose the Linux root before any recovery prompt is answered.
+   **Pass:** the maintainer resolves the starting state, writer, remaining
+   attempts, exact recovery set and backup chronology. **Stop:** any unknown or
+   conflicting state. **Rollback:** no change; never clear/repair flags as a test.
+
+5. **One attended slot-B boot (medium risk; not yet qualified).** The human
    first approves the exact reviewed image cohort, writer and recovery path.
    Only `DEVICE=komodo bin/omamobile push` or `flash` may write boot images;
    neither is authorized by these instructions. The recovery choice depends
@@ -125,7 +165,7 @@ phone's module directory or another subsystem's build output.
    factory reset or lift the storage guard to recover. Any stock boot means
    stop and take a fresh read-only backup after returning safely to Linux.
 
-5. **Record qualification (read-only; low risk).** Add a sanitized dated
+6. **Record qualification (read-only; low risk).** Add a sanitized dated
    result with exact kernel/Mobile commits, release, final DTB identity,
    writer, passed gates and phone-smoke report. Keep identifiers and raw logs
    private. **Pass:** the evidence describes this exact minimal target.
