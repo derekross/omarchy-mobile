@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Push a test kernel to the Pixel 9a and start the sleep series loop on it.
-# The launcher the S1 runs used, with the owner's paths replaced by arguments:
+# A rewrite of the owner's kit launcher that the S1 runs used, with the owner's paths as arguments:
 #   device/tegu/bringup/sleep-kernel-run.sh KERNEL_OUT [N] [S]
 # KERNEL_OUT holds arch/arm64/boot/Image and the tegu DTB; bin/omamobile
 # images is run twice and must give the same images (a reproducibility check,
@@ -31,7 +31,7 @@ say "images $a, pushing"
 say "pushed; waiting for the boot"
 for i in $(seq 480); do ping -c1 -W1 172.16.42.1 >/dev/null 2>&1 && timeout 10 "$PS" --fresh true 2>/dev/null && break; sleep 1; done
 sleep 30
-"$PS" --fresh 'uname -r; uname -v; grep -c emergency_ro /proc/mounts; cat /sys/devices/platform/soc/13200000.ufs/spm_lvl; blockdev --getro /dev/sda 2>/dev/null; dmesg | grep -cE "link startup failed|Host init failed|I/O error"' | tee /tmp/sleep-kernel-run-boot.txt
+"$PS" --fresh 'uname -r; uname -v; grep -c emergency_ro /proc/mounts; cat /sys/devices/platform/soc/13200000.ufs/spm_lvl; blockdev --getro /dev/sda 2>/dev/null; dmesg | grep -cE "link startup failed|Host init failed|I/O error" || true' | tee /tmp/sleep-kernel-run-boot.txt
 grep -q "$(strings "$IMG" | grep -m1 -oE 'Linux version [^ ]+' | cut -d' ' -f3)" /tmp/sleep-kernel-run-boot.txt || { echo "the palmtop did not come up on this Image" >&2; exit 1; }
 say "up; starting the series loop (N=$N, S=$S)"
 N=$N S=$S exec "$R/device/tegu/bringup/sleep-series-loop.sh"

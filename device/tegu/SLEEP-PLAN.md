@@ -2,21 +2,15 @@
 # Pixel 9a sleep: why s2idle drains so much
 
 Status (2026-11-09): the two suspend failures of the series since 10-28 are
-found and fixed on the owner's integration kernel, in review as
-[linux-omarchy-mobile#224](https://github.com/derekross/linux-omarchy-mobile/pull/224).
-Dead storage after a wake: the UFS pads (gph5-0, the reference clock, and
-gph5-1, the reset) came back from s2idle as plain inputs on about one wake
-in a hundred; the fix re-applies the UFS pin state in `exynos_ufs_resume()`.
-The silent no-wake: every core in C2 during s2idle; with WFI for the sleep
-(C2 kept while awake) the RTC alarm woke the palmtop every time. Evidence:
-300 of 300 RTC-woken 60 s sleeps twice (#96 WFI-only, #98 C2 at runtime,
-2026-11-07/08) and 15 of 15 wakes on the everyday path, the shell's
-auto-sleep behind the lock, twelve of them half-hour sleeps (#99,
-2026-11-08). The attended-first rule (S1, AGENTS.md) stands until the fix
-is merged and has run from the published kernel; the published-tip run is
-the next step. S1 below is the condensed account: the two causes, the fix
-commits, a run table, what is left and what was ruled out. The dated
-working notes that led there follow it, oldest first.
+understood. The dead storage is fixed by [linux-omarchy-mobile#224](https://github.com/derekross/linux-omarchy-mobile/pull/224) (in review). The silent no-wake happened with C2 entered through s2idle's own path; with C2 disabled for the sleep (#96) and with C2 left to the ordinary idle path (#98) the RTC alarm woke the palmtop 300 of 300 times each. Its fix, a sleep hook in `omamobile-device-tegu`, isn't in a PR yet, and the published zumapro device tree has no idle states, so the published kernel sleeps in WFI. Evidence: 300 of 300 RTC-woken 60 s sleeps twice (#96 WFI-only, #98 C2
+at runtime, 2026-11-07/08) and 15 of 15 wakes on the everyday path, the
+shell's auto-sleep behind the lock, twelve of them half-hour sleeps (#99,
+2026-11-08), then 12 of 12 half-hour auto-sleeps on #100 (11-09). The
+attended-first rule (S1, AGENTS.md) stands until the fix is merged and has
+run from the published kernel; the published-tip run is in progress below.
+S1 is the condensed account: the two causes, the fix, a run table, what is
+left and what was ruled out. The dated working notes that led there follow
+it, oldest first.
 
 ## S1, condensed (2026-11-09): the two failures, the fixes, the runs
 
@@ -122,8 +116,8 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
 N RTC-woken `systemctl suspend` cycles of S s, records each wake),
 `sleep-series-loop.sh` (laptop: polls the series, captures a dead wake,
 recovers with sysrq under a budget of MAXREC recoveries per 24 hours,
-records the next boot's ext4 recovery, restarts the series),
-`sleep-kernel-run.sh` (laptop: pushes a built kernel and starts the loop),
+records the next boot's ext4 recovery, restarts the series; it unmasks `sleep.target` and `suspend.target` for the run and masks them again when it exits),
+`sleep-kernel-run.sh` (laptop: a rewrite of the owner's kit launcher, pushes a built kernel and starts the loop),
 `sleep-autosleep-series.sh` and `sleep-autosleep-watch.sh` (the everyday
 path: the shell's auto-sleep does the sleeping, the script only arms the
 alarms).
@@ -1271,7 +1265,7 @@ checks unit lifecycle with a fake device, not actual s2idle or the kernel QoS.
 The test-only `qos-snapshot.sh` in that draft directory is also prepared;
 fixtures verified that it rejects changes to either idle counter, a missing
 online CPU, a changed online set and a nonzero QoS reading.
-An independent config in `~/tegu/out-suspend-wfi-qos-20261104` differs from
+An independent config in (a local scratch directory, not in the repository) differs from
 the clean-source build only by enabling that option. A low-priority `W=1`
 Image/DTB/modules build has started with `LOCALVERSION=-s2mpg15-m1-qos1`,
 giving it a different module release from the unmodified-config build. It is
@@ -1341,13 +1335,13 @@ the same clock-gating capabilities as the diagnostic tree. The published
 driver differs in other platform organization, so this source comparison does
 not replace testing a build from the published base.
 An independent shallow clone of that exact published commit is prepared on
-maclab's omb at `~/tegu/suspend-clean-20261104`; it has a separate object
+maclab's omb at (a local scratch directory, not in the repository); it has a separate object
 store and does not use the other session's branches, worktrees or output.
 The candidate flag is staged there on the new local branch
 `omamobile-tegu-suspend`; checkpatch reports zero errors and warnings. It is
 uncommitted and awaits the comparison and a full clean-build test. With a
 copy of the integration config and `olddefconfig`, a separate output directory
-`~/tegu/out-suspend-clean-20261104` compiled `drivers/ufs/host/ufs-exynos.o`
+(a local scratch directory, not in the repository) compiled `drivers/ufs/host/ufs-exynos.o`
 using `ARCH=arm64 LLVM=-21 W=1` without warnings.
 The full low-priority `W=1` Image/DTB/modules build completed successfully;
 `zumapro-tegu.dtb` is present and the Image SHA-256 is
@@ -1542,7 +1536,7 @@ actual candidate read function checks both supported paths, unchanged other
 devices and the clear, set and read error exits. On maclab, the published
 baseline and patched RTC object both built with `W=1` and no diagnostics.
 The full `W=1` Image, DTB and modules build subsequently succeeded in the
-isolated `~/tegu/out-rtc-current-20261107`; the source was still at published
+isolated (a local scratch directory, not in the repository); the source was still at published
 tip with only `rtc-s5m.c` modified. The Image SHA256 is
 `11e1d4dd8f4cb32ae66dea8e7477cbd1595d7276811c8c5c34b45429fd50d3f5`.
 The build log has 1,155 warning lines, including 1,138 initializer overrides
@@ -1935,7 +1929,7 @@ power-on timeout. The preserved kernel log shows `phy-resume-defer: init=1
 power=0`, `phy-deferred-prelink: result=0 init=1 power=1`, successful link
 startup and suspend exit in that order. NFC was confirmed stopped; RTC and
 uptime agreed (62 s and 61.85 s). The test cleanup restored the sleep masks
-and the sleep daemon. Private evidence is under `phy-deferred-retry-one/`.
+and the sleep daemon. Private evidence is in a local scratch directory (not in the repository).
 
 After this independent single-wake audit, a guarded 300-cycle WFI-only series
 was launched at 60 seconds per RTC alarm. Every cycle checks for a fresh,
@@ -2102,8 +2096,8 @@ error while retaining the existing successful and absent-table behavior. A
 fixture compiling the actual published provider with the diagnostic retry
 callback rejects the unpatched source and passes with the draft, including
 timeout/retry and post-power lock failure. The isolated provider-only worktree is
-`~/tegu/suspend-phy-provider-production-20261105`; its separate output is
-`~/tegu/out-suspend-phy-provider-production-20261105`. Strict checkpatch and
+(a local scratch directory, not in the repository); its separate output is
+(a local scratch directory, not in the repository). Strict checkpatch and
 its `W=1` changed-object build pass without diagnostics. This is an
 independently reviewable error-handling fix, not proof of the UFS resume root
 cause; it has not been tested alone on the phone, and is not a release kernel.
@@ -2509,8 +2503,8 @@ It uses the core's existing history printer and adds no register reads. A
 the unsigned draft's sign-off and commit-message requirements) passed; a
 fixture compiling the actual diagnostic condition checked successful startup,
 later retries, other devices, non-system resume and the three history types.
-Source and isolated output are `~/tegu/suspend-failure-events-20261106` and
-`~/tegu/out-suspend-failure-events-20261106` on maclab. The draft has not been
+Source and isolated output are (a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository) on maclab. The draft has not been
 booted, and an empty history would not prove that no hardware error occurred.
 History can include earlier events and can change concurrently; compare its
 timestamps and counters with the failed attempt, and do not treat an event as
@@ -2597,8 +2591,8 @@ it does not write the setting. The actual conditional passed fixtures for a
 failed reset, non-deferred and non-system paths, another device and a single
 read on the intended path. Its changed host object compiled with `W=1`, and
 strict checkpatch passed for the unsigned draft. Maclab source and output are
-`~/tegu/suspend-acg-observe-20261106` and
-`~/tegu/out-suspend-acg-observe-20261106`. The host reset already accesses
+(a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository). The host reset already accesses
 the HCI mapping and Google reads this register in normal initialization, but
 neither proves all read side effects or post-reset clock conditions on this
 device. This is not yet hardware-qualified; test it separately from the error
@@ -2650,8 +2644,8 @@ firmware changes. A separate diagnostic compares the stored rate with a fresh
 framework query after host reset; its actual conditional passed offline
 fixtures, its changed UFS host object compiled with `W=1`, and strict
 checkpatch passed for the unsigned draft. It has not run on the device.
-Maclab source and output are `~/tegu/suspend-rate-observe-20261106` and
-`~/tegu/out-suspend-rate-observe-20261106`.
+Maclab source and output are (a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository).
 Three saved clock-framework summaries from earlier 2026-11-01 boots report
 177.664 MHz for `sclk_unipro_main`; that historical value was added to the
 modeled PCS comparison. These snapshots are not measurements from the failed
@@ -3530,8 +3524,8 @@ checkpatch passed and an isolated W=1 core-object build passed against the
 is `1b3fa75b411658800da50fe759a32ff712c890592e27b1085abd794fb4d609e6`.
 The source and fixture are in
 (a local scratch directory, not in the repository); maclab's isolated tree
-and output are `~/tegu/suspend-recovery-overlap-20261106` and
-`~/tegu/out-suspend-recovery-overlap-20261106`, marked DO-NOT-PUSH. A complete
+and output are (a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository), marked DO-NOT-PUSH. A complete
 kernel build and independent audit are running. The trace can show an
 observed overlap, but missing lines or overlapping activity outside the
 system-suspended filter mean a lack of logged overlap cannot prove none
@@ -4213,8 +4207,8 @@ for the diagnostic zumapro system-resume path and retains the existing
 fallback elsewhere. The generated host callback passed clock readback and
 failure-injection fixtures, and both changed ARM64 objects built with `W=1`
 on maclab without warnings using the same configuration as #75. Source and
-output: `~/tegu/suspend-atomic-prelink-20261107` and
-`~/tegu/out-suspend-atomic-prelink-20261107`. This remains an unbooted
+output: (a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository). This remains an unbooted
 experiment: concurrent host resets and their lock ordering still need review.
 A whole-tree comparison found only the three intended source changes among
 102,607 paths. Strict checkpatch reported no code-style issues with the
@@ -4236,8 +4230,8 @@ files build as ARM64 objects on maclab with `W=1`, without warnings and with
 the same configuration as #75; strict checkpatch finds no code-style issues
 with commit-message checking disabled. A whole-tree audit found exactly the
 four intended changes among 102,607 paths. Source and output:
-`~/tegu/suspend-atomic-capable-20261107` and
-`~/tegu/out-suspend-atomic-capable-20261107`; fixtures and patch:
+(a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository); fixtures and patch:
 (a local scratch directory, not in the repository). This diagnostic API is a research
 prototype, not an upstream proposal or a device-ready fix. It does not prove
 the APB hypothesis or serialize the whole HBA reset; the earlier defer-init
@@ -4279,8 +4273,8 @@ PHY, without issuing the existing WARN for an invalid zumapro count. A fixture
 compiling the actual draft covers both failed queries, invalid counts, warning
 behavior, cached counts, deferred calibration, notify and power-on failures,
 and the unchanged non-target behavior. Strict checkpatch passes. Its source
-and output are `~/tegu/suspend-lane-query-20261107` and
-`~/tegu/out-suspend-lane-query-20261107` on maclab, with local scripts in
+and output are (a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository) on maclab, with local scripts in
 (a local scratch directory, not in the repository). The changed host object built on maclab
 with `W=1` and no warnings, and a whole-tree audit found only that host change
 and its safety marker across 102,607 paths. This draft is unbooted and is not
@@ -4297,8 +4291,8 @@ that exact commit, and its modified host object builds with `W=1` without
 warnings; `git diff --check` passes and only the host source and untracked
 safety marker differ. The build's `olddefconfig` updated the #76 configuration
 for the newer source, so it is not byte-identical to the diagnostic config.
-Source and output are `~/tegu/suspend-lane-public-20261107` and
-`~/tegu/out-suspend-lane-public-20261107`. The public-source draft is
+Source and output are (a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository). The public-source draft is
 unbooted and unsubmitted; its practical effect and relevance to suspend have
 not been established.
 
@@ -4315,8 +4309,8 @@ checkpatch passes. An offline evidence parser matches each observation to a
 pre-link attempt and rejects missing, extra or malformed observations;
 synthetic records inserted into the #76 capture test the parser only, not the
 actual lane count in that run. Source and output are
-`~/tegu/suspend-lane-observe-20261107` and
-`~/tegu/out-suspend-lane-observe-20261107` on maclab; scripts are in
+(a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository) on maclab; scripts are in
 (a local scratch directory, not in the repository). A whole-tree audit found only the
 provider change and a `DO-NOT-PUSH` marker across 102,607 paths. The full
 build completed with a unique fixed #77 identity. The first independent audit
@@ -4577,8 +4571,8 @@ uses DME commands; equal modeled sequences do not establish equivalent hardware
 effects, a safe selector, or the cause of #77. In particular, pre-link errors
 and the core's existing retry behavior still need review before any device
 test. The local draft and fixtures are in (a local scratch directory, not in the repository);
-maclab uses the separate `~/tegu/suspend-pcs-order-20261107` and
-`~/tegu/out-suspend-pcs-order-20261107` directories, marked DO-NOT-PUSH.
+maclab uses the separate (a local scratch directory, not in the repository) and
+(a local scratch directory, not in the repository) directories, marked DO-NOT-PUSH.
 The audited image was packed twice identically into an offline kit at
 `out/tegu-suspend-pcs-order-20261107`. Its independent audit verified the
 kernel inside the boot image, AVB signature and unchanged non-kernel images;
@@ -4657,7 +4651,7 @@ Re-reading the two newest archived failure consoles (`/var/log/omamobile/ramoops
 
 Hypothesis: on some wakes the Micron device (MT128GBCAV2U31) needs longer than the link-startup timer to come out of its power-down reset; the retry loop then resets it again before it is ready, every time, and the "dead" storage is a device that never got the time. This fits the intermittence (no software difference between a good and a bad wake), the identical 105 ms failures, the empty error histories, and the spm_lvl 3 case (a failed hibern8 exit also ends in `ufshcd_reset_and_restore`, the same loop). It is a hypothesis; the test below decides it.
 
-Experiment, kernel `#90` (`uname -v`): the daily tree (`~/tegu/int-dt-20261026/kernel` on omb, as it built #7 plus the 11-03 UFS resume trace and register dump, copied to `~/tegu/linkwait-20261107-kernel`, output `~/tegu/linkwait-20261107-out`) with one change in `drivers/ufs/core/ufshcd.c`: after a failed link startup's `ufshcd_hba_enable()`, the loop sleeps before the next attempt, 100 ms, then 400 ms, then 1600 ms, and logs `link-wait: N ms after the reset before link startup`. Nothing else changes; a good wake runs exactly as before. The diff is `logs/tegu-linkwait-20261107/linkwait.diff`.
+Experiment, kernel `#90` (`uname -v`): the daily tree ((a local scratch directory, not in the repository) on omb, as it built #7 plus the 11-03 UFS resume trace and register dump, copied to (a local scratch directory, not in the repository), output (a local scratch directory, not in the repository)) with one change in `drivers/ufs/core/ufshcd.c`: after a failed link startup's `ufshcd_hba_enable()`, the loop sleeps before the next attempt, 100 ms, then 400 ms, then 1600 ms, and logs `link-wait: N ms after the reset before link startup`. Nothing else changes; a good wake runs exactly as before. The diff is `logs/tegu-linkwait-20261107/linkwait.diff`.
 
 Expected if the hypothesis holds: a wake that would have died logs `startup=1` once or twice, then `link-wait: 100` or `400`, then a successful startup, and the series goes on (the cycle line shows `linkfail 1 linkwait 1`). Expected if it doesn't: the same 20 failures, each a little later, and dead storage as before; then the device really is unreachable and the cause is elsewhere (power, reset line, refclk).
 
@@ -4715,7 +4709,7 @@ So the dead-storage wake was the UFS pads (gph5-0 refclk, gph5-1 reset) losing t
 
 **#97 (building, 2026-11-08 04:50 MST laptop):** #96 plus `s3c2410_wdt.keep_in_suspend=1` (default on in this build): in the watchdog driver's system-suspend callback the cluster watchdogs are no longer stopped; they are set to their longest timeout (about 87 s: 24.576 MHz source, 16-bit count, prescaler 256, divider 128) and left counting, and the resume callback restores the normal setting as before. A sleep that never wakes is then reset by the watchdog about 87 s after the suspend, a warm reset that keeps ramoops (the #93 and #77 watchdog resets did), so the console of the hang's boot can be read and the series resumes on its own. A 60 s sleep plus the resume fits well inside 87 s; for longer sleeps the parameter must be 0 (this is a diagnostic, not the shipped setting). Open question the first hang answers: whether the watchdog counter runs at all while the cluster is powered down in C2; if it does not, the hang simply waits for the buttons as now. The loop saves the newest ramoops console after a self-reboot (`capture-N-ramoops.txt`).
 
-**The pad fix in PR form (offline, 2026-11-08 05:45 MST laptop):** the two changes rebased onto the published kernel tip `d349a61dd91b` (worktree `~/tegu/wt-ufs-pins`, output `~/tegu/out-ufs-pins` on omb; diff in `logs/tegu-linkwait-20261107/ufs-pins-published-draft.diff`): `exynos_ufs_resume()` selects the default pin state again before powering the PHY on for a link-off resume, `exynos_ufs_suspend()` selects the "sleep" state after powering it off, and `zumapro.dtsi`'s UFS node gets `pinctrl-1` = the same two groups as "sleep". `W=1` on the host object: 0 warnings; `zumapro-tegu.dtb`: 0 warnings; `checkpatch --strict`: clean. Not committed yet: the PR should also carry what settles the silent no-wake, and the published tip has not booted the palmtop in this form (the series ran on the integration tree), so a run on it is still owed before a PR.
+**The pad fix in PR form (offline, 2026-11-08 05:45 MST laptop):** the two changes rebased onto the published kernel tip `d349a61dd91b` (worktree (a local scratch directory, not in the repository), output (a local scratch directory, not in the repository) on omb; diff in `logs/tegu-linkwait-20261107/ufs-pins-published-draft.diff`): `exynos_ufs_resume()` selects the default pin state again before powering the PHY on for a link-off resume, `exynos_ufs_suspend()` selects the "sleep" state after powering it off, and `zumapro.dtsi`'s UFS node gets `pinctrl-1` = the same two groups as "sleep". `W=1` on the host object: 0 warnings; `zumapro-tegu.dtb`: 0 warnings; `checkpatch --strict`: clean. Not committed yet: the PR should also carry what settles the silent no-wake, and the published tip has not booted the palmtop in this form (the series ran on the integration tree), so a run on it is still owed before a PR.
 
 ### The silent no-wake, caught by the watchdog (2026-11-08 07:06 MST, #97, cycle 7)
 
@@ -4752,3 +4746,5 @@ Auto-sleep series: cycles 1-3 clean (1802 s each); cycle 4 ended after 72 s by t
 20:25 (palmtop clock, 2026-11-08): the 6-hour auto-sleep series is done, 12 of 12 cycles clean (`sleep-autosleep-series.sh`, N=12, S=1800, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` #99: C2 at runtime, WFI in s2idle, UFS pins re-applied on resume). Every cycle: the RTC alarm woke the palmtop after 1801-1803 s (wake irq 56, the PMIC), the storage came back (0 UFS link or I/O errors), no oops; cycle 4 was the power key (irq 60, 72 s in). With the one-hour sleep and the three before the series, 15 wakes this boot, all clean, the everyday path (the shell's auto-sleep behind the lock, no series script sleeping): the same kernel's 300 of 300 from the series script now stands on the path the owner uses.
 
 20:32 (palmtop clock, 2026-11-08): #100 pushed, the kernel on the palmtop from here: #99 plus kernel #172 (the PERIC0 GPIO gate critical) and kernel #150 (the SPI flush order), which the sleep-test tree had lacked (NOTES 2026-11-08); nothing in the sleep path changed. The first wake on it (auto-sleep, the power key, irq 60) came back with the storage intact.
+
+**The published tip plus #224 (2026-11-09, 12:40 MST palmtop clock).** `omamobile` at 1a9d1d4e9 with #224's two commits (the driver and the zumapro "sleep" pin state), built with defconfig + `kernel/configs/omamobile.config`: `7.3.0-rc6-omamobile-push1-gf693b36e62ce`, build #1, Image sha256 d6894572039e235d, the published `zumapro-tegu.dtb` with no overlays (the published descriptor applies none; the kit's overlay list is for the integration device tree, and two of its overlays name labels the published tree doesn't have). Pushed with the kit's `bin/omamobile push` after the #100 auto-sleep series (12 of 12 clean, 13 wakes that boot). The boot: SSH back after 60 s, root read-write, `spm_lvl` 5, no `cpuidle` directory under the CPUs (the published tree has no idle states, so the sleep is WFI and the C2 question doesn't arise), 0 UFS error lines, the modem boot unit disabled. Hyprland was not up 425 s after the boot (the published kernel's graphics stack isn't the daily's; the series needs no session), so the loop started the series after its wait. The run: `sleep-series-loop.sh` with N=36, S=60, MAXREC=2, started 12:47; then one Power-key wake from a sleep with a 15-minute safety alarm. Results follow.
