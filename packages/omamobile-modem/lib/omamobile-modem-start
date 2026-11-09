@@ -151,13 +151,36 @@ if [[ ${OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS:-} == 1 ]]; then
   exit 0
 fi
 
-# The link driver must allow hardware access, or cbd's power-on is refused
-# (-EPERM). allow_hw is fixed at load time: a copy loaded without it (by
-# hand, M3.3-B) needs a reboot.
-if [[ -d /sys/module/pcie_gs201_cp ]]; then
-  [[ $(cat /sys/module/pcie_gs201_cp/parameters/allow_hw) == Y ]] ||
-    { say "pcie_gs201_cp is loaded without allow_hw=1: reboot first"; refuse "Off: reboot needed"; }
+# The link's modules and their parameters, in load order, one "module
+# key=value..." entry each: the board's (its device package installs
+# $LIB/modem/link.conf, a bash fragment setting LINK_MODULES), or gs201's
+# one driver. A device package may select a separate PHY and PCIe host.
+LINK_MODULES=("pcie-gs201-cp allow_hw=1")
+if [[ -r $LIB/modem/link.conf ]]; then
+  # shellcheck source=/dev/null
+  . "$LIB/modem/link.conf"
 fi
+
+# The link driver must allow hardware access, or cbd's power-on is refused
+# (-EPERM), and parameters are fixed at load time: a copy already loaded
+# with other values (by hand, M3.3-B, or an identity-gate test this boot)
+# needs a reboot. Booleans read back as Y/N.
+link_param_ok() {
+  local mod=$1 kv=$2 key val have
+  key=${kv%%=*} val=${kv#*=}
+  [[ -r /sys/module/$mod/parameters/$key ]] || return 1
+  have=$(cat "/sys/module/$mod/parameters/$key")
+  [[ $have == "$val" ]] || { [[ $val == 1 && $have == Y ]]; } || { [[ $val == 0 && $have == N ]]; }
+}
+for entry in "${LINK_MODULES[@]}"; do
+  read -r -a words <<< "$entry"
+  mod=${words[0]//-/_}
+  [[ -d /sys/module/$mod ]] || continue
+  for kv in "${words[@]:1}"; do
+    link_param_ok "$mod" "$kv" ||
+      { say "$mod is loaded without $kv: reboot first"; refuse "Off: reboot needed"; }
+  done
+done
 
 # The sleep inhibitor before the drivers: the unit requires and orders after
 # omamobile-modem-inhibit.service, but a Type=simple unit is "started" at
@@ -178,7 +201,10 @@ sync
 # CPIF and the regions are blacklisted by the device's modem policy (the
 # package providing omamobile-modem-policy): only this loads them. Never
 # unload cpif (it is permanent by design).
-modprobe pcie-gs201-cp allow_hw=1
+for entry in "${LINK_MODULES[@]}"; do
+  read -r -a words <<< "$entry"
+  modprobe "${words[@]}"
+done
 modprobe shm_ipc
 modprobe cpif
 # The link to the modem with ASPM off, as every link test so far ran
