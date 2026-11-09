@@ -180,6 +180,47 @@ does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
    `journalctl -b -1` ends before it. The `reboot-to` here was #403's,
    built by hand on the palmtop; pacman puts the packaged one back when
    #403's `omamobile-device-tegu` lands.
+7. The stop witness (2026-11-08, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` build #99, the
+   owner's sleep-test kernel; `omamobile-device-tegu` 0.2.13 and
+   `omamobile-modem` 0.1.17 from this branch, built on the palmtop; on the
+   charger, attended). Three rounds of `systemctl start
+   omamobile-tegu-modem-boot` (the unit's `--phone --gnss` path, the
+   bring-up modules), then `systemctl reboot`:
+   - Round 1: CP ONLINE 8 s after the start; the latch read `boot <id>`,
+     `invocation <id>`, `online`; sitd and the bridge active. At the reboot
+     82 s later the unit's stop logged "CP OFFLINE", then "modem stopped
+     (success, the CP OFFLINE before the daemons went):
+     /var/lib/omamobile/modem-bringup-started removed", and systemd
+     "Deactivated successfully": the first shutdown with the CP up whose
+     result was `success` (the rfsd hold). `journalctl -b -1 -k | grep -c
+     ufshcd_err_handler` 0, no UFS error on the next boot, no latch.
+     Passed.
+   - Round 2: ONLINE 9 s after the start; the carrier's welcome text
+     arrived in Messages through the bridge; 50 s after ONLINE the palmtop
+     reset on its own: the bootloader's record in the next boot's ramoops
+     reads "Reboot reason: 0xcbea - APC Watchdog Early", the console ends
+     with sitd bringing `rmnet0` up and cpif's AP2CP doorbell line
+     (`pcie_send_ap2cp_irq`), no panic, no stall report. The latch stayed,
+     and the two boots after it (one of them a clean `systemctl reboot`)
+     left it: the design's answer to a reset with the modem up.
+   - Round 3: the start found the other boot's ONLINE latch, moved it aside
+     (`modem-bringup-started.unclean-20261108T202217`), and went on to
+     ONLINE in 9 s (the one retry); 22 s later the same watchdog reset,
+     the console again ending on cpif's AP2CP doorbell. Two unclean ends
+     in a row: the latch and its copy now hold the modem off until a human
+     clears them.
+
+   The resets are the known G3-L1 hang, not this branch: the sleep-test
+   kernel the palmtop ran (#99, built from the integration tree as it
+   stands) has `zumapro_gpio_peric0` at `CLK_IGNORE_UNUSED`
+   (`/sys/kernel/debug/clk/zumapro_gpio_peric0/clk_flags`), without
+   kernel #172's `CLK_IS_CRITICAL`, which the daily Image carries
+   (`logs/tegu-clkfix-20261101`), and without kernel #150's SPI flush
+   order (gnssd's CHPP link showed the ACK timeouts of MODEM-PLAN G3).
+   With the modem's AP2CP lines toggling twice a second under GNSS, that
+   gate hung the SoC within minutes before #172, and round 1's 82 s were
+   the luck of the draw. Step 7 is re-run on a kernel with both fixes
+   below.
 
 `tools/phone-smoke` on the second boot: every required check ok (boot, the
 storage guard, root, kernel health, USB, session), and display, GPU, lock,
