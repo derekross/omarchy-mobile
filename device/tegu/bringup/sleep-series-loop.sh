@@ -3,11 +3,22 @@
 # Link-wait series loop (2026-11-07): runs the sleep series on the palmtop,
 # polls it every 20 s; a dead-storage wake is captured (kernel journal with
 # the link-wait lines and the UFS register dump) and recovered with sysrq,
-# and the series restarts, at most MAXREC times; a silent hang messages Dave
-# and stops. Dave gets a count every 25 good wakes.
+# and the series restarts, at most MAXREC times in any 24 hours (the
+# recovery budget, counted across runs in $H/recoveries.log); a silent hang
+# messages the owner and stops. The owner gets a count every 25 good wakes.
+# After every reboot the next boot's ext4 recovery lines are recorded.
 cd "$(dirname "$0")/../../.."
 PS=tools/phone-ssh; H=logs/tegu-linkwait-20261107; L=/var/log/omamobile/sleep-linkwait-20261107.log
-MAXREC=${MAXREC:-3}; WFI=${WFI:-1}
+MAXREC=${MAXREC:-3}; WFI=${WFI:-1}; N=${N:-300}; S=${S:-60}
+# Recoveries in the last 24 hours, from every run (the budget is per night, not per run)
+recoveries_today() { local now; now=$(date +%s); awk -v t="$now" '$1 > t - 86400' "$H/recoveries.log" 2>/dev/null | wc -l; }
+# The next boot's ext4 recovery, read once the palmtop is back: a dirty root
+# after a sysrq or a reset shows as "recovery complete" or an orphan cleanup.
+record_next_boot() {
+  for i in $(seq 40); do $PS --fresh true 2>/dev/null && break; sleep 10; done
+  timeout 30 $PS --fresh 'journalctl -b -k --no-pager | grep -E "EXT4-fs.*(recovery|orphan|error|warning)|emergency" ; echo "root: $(awk "\$2==\"/\"{print \$4}" /proc/mounts | cut -d, -f1)"' > "$H/capture-$captures-nextboot-ext4.txt" 2>&1
+  log "next boot: $(grep -c 'recovery complete' "$H/capture-$captures-nextboot-ext4.txt") ext4 recovery line(s), $(tail -1 "$H/capture-$captures-nextboot-ext4.txt")"
+}
 send() { "${SLEEP_NOTIFY:-ask-w4ho}" "$1" >/dev/null 2>&1; echo "$(date +%T) sent: $1" >> $H/loop.log; }
 log() { echo "$(date +%T) $*" >> $H/loop.log; }
 start_series() {
@@ -17,7 +28,7 @@ start_series() {
   # The first sleep waits for the graphical session: a suspend while the
   # shell is still starting after a boot left the session closed and the
   # splash on the screen (2026-11-07 13:16).
-  $PS --fresh 'systemctl unmask sleep.target suspend.target >/dev/null 2>&1; for i in $(seq 36); do [ -d /run/user/1000/hypr ] && pgrep -x Hyprland >/dev/null && break; sleep 5; done; echo "hyprland after boot: $(pgrep -x Hyprland >/dev/null && echo up || echo not up), uptime $(cut -d. -f1 /proc/uptime) s"; systemd-run --unit=x-audio-loop --wait -p TimeoutStartSec=300 /usr/local/bin/omamobile-tegu-audio-up >/dev/null 2>&1; systemctl reset-failed x-sleep-linkwait 2>/dev/null; sleep 30; systemd-run --unit=x-sleep-linkwait -E WFI='"$WFI"' -E RPM='"${RPM:-}"' bash /root/sleep-linkwait.sh' >> $H/loop.log 2>&1
+  $PS --fresh 'systemctl unmask sleep.target suspend.target >/dev/null 2>&1; for i in $(seq 36); do [ -d /run/user/1000/hypr ] && pgrep -x Hyprland >/dev/null && break; sleep 5; done; echo "hyprland after boot: $(pgrep -x Hyprland >/dev/null && echo up || echo not up), uptime $(cut -d. -f1 /proc/uptime) s"; systemd-run --unit=x-audio-loop --wait -p TimeoutStartSec=300 /usr/local/bin/omamobile-tegu-audio-up >/dev/null 2>&1; systemctl reset-failed x-sleep-linkwait 2>/dev/null; sleep 30; systemd-run --unit=x-sleep-linkwait -E WFI='"$WFI"' -E RPM='"${RPM:-}"' -E N='"$N"' -E S='"$S"' bash /root/sleep-linkwait.sh' >> $H/loop.log 2>&1
   log "series started (run $run, WFI=$WFI)"
 }
 run=1; total=0; captures=0; last25=0
@@ -38,7 +49,7 @@ while true; do
     if ! [[ $st =~ ^(active|activating|inactive|failed)$ && $disk =~ ^disk-(ok|dead)$ ]]; then log "incomplete poll ignored: '$(tr '\n' '|' <<<"$out")'"; sleep 20; continue; fi
     [[ $n =~ ^[0-9]+$ ]] || n=0; [[ $lw =~ ^[0-9]+$ ]] || lw=0
     if (( total + n >= last25 + 25 )); then last25=$(( (total + n) / 25 * 25 )); send "Palmtop sleep series: $((total + n)) good wakes so far, $lw slow (link-wait) wakes, $captures dead-storage wakes."; fi
-    if [[ $st == inactive && $n -ge 300 ]]; then
+    if [[ $st == inactive && $n -ge $N ]]; then
       log "run $run finished: $n cycles, $lw link-wait wakes"; timeout 30 $PS --fresh "cat $L" > $H/series-run$run.log 2>&1
       send "Palmtop sleep series done: $((total + n)) good wakes, $lw slow (link-wait) wakes, $captures dead-storage wakes."; exit 0
     fi
@@ -65,8 +76,12 @@ while true; do
         log "ramoops saved ($(wc -l < $H/capture-$captures-ramoops.txt) lines, $(head -1 $H/capture-$captures-ramoops.txt))"
       elif [[ $disk == disk-dead ]]; then timeout 15 $PS --fresh 'echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger' >/dev/null 2>&1; log "sysrq reboot"
       else timeout 15 $PS --fresh 'systemctl --no-block reboot' >/dev/null 2>&1; log "clean reboot"; fi
-      (( captures >= MAXREC )) && { send "Palmtop sleep series: $captures dead-storage wakes (the cap), stopping. $total good wakes in total; captures saved."; log "cap reached: stop"; exit 0; }
-      sleep 90; run=$((run + 1)); start_series; last_ok=$(date +%s)
+      date +%s >> "$H/recoveries.log"
+      if (( $(recoveries_today) >= MAXREC )); then
+        record_next_boot
+        send "Palmtop sleep series: $(recoveries_today) recoveries in 24 hours (the budget), stopping. $total good wakes in total; captures saved."; log "recovery budget spent: stop"; exit 0
+      fi
+      sleep 90; run=$((run + 1)); record_next_boot; start_series; last_ok=$(date +%s)
     fi
   fi
   if (( $(date +%s) - last_ok > 900 )); then send "Palmtop sleep series: no answer for 15 minutes after $((total + n)) good wakes and $captures dead-storage wakes. Needs Power + Volume Up whenever you're up; no rush."; log "silent hang: stop"; exit 0; fi

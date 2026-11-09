@@ -18,6 +18,119 @@ the next step. S1 below is the condensed account: the two causes, the fix
 commits, a run table, what is left and what was ruled out. The dated
 working notes that led there follow it, oldest first.
 
+## S1, condensed (2026-11-09): the two failures, the fixes, the runs
+
+**What failed.** Every long s2idle series on the Pixel 9a since 10-28 ended in
+one of two ways, at random, after 6 to 215 clean wakes:
+
+1. **Dead storage after a wake.** The palmtop woke on its alarm, the kernel
+   ran, SSH answered from memory, but UFS link startup failed every time
+   (`link startup failed 1`, `Host init failed 1` five times,
+   `ufshcd_wl_resume failed`), ext4 went `emergency_ro`, and nothing on disk
+   could be read until a reboot. Cause: the UFS pads gph5-0 (the device's
+   reference clock) and gph5-1 (its reset), on `13060000.pinctrl`, came back
+   from the suspend as plain inputs (`CON 0x0`, read from the pin
+   controller's debugfs with the palmtop in that state; `0x2` is the UFS
+   function). The device then gets no clock and no reset edge, so no
+   host-side retry can reach it. pinctrl-samsung's own save and restore of
+   the bank writes the pads back as `0x22` at every wake, so whatever takes
+   the function away does it after that restore.
+2. **A silent no-wake.** The suspend side completed and nothing followed: no
+   alarm, no power key, no USB, nothing in pstore; only Power + Volume Up
+   brought the palmtop back. Caught on #97 by keeping the cluster watchdog
+   counting through the sleep (a diagnostic): the console shows
+   `PM: suspend entry`, the last CPU going down, and then the watchdog's
+   reset. It happened only with the cores in C2 (the integration DT's
+   `psci-suspend-param 0x10000`) during the sleep; with WFI for the sleep
+   the RTC alarm woke the palmtop every time. The PMU's wake-up masks,
+   which Google's `exynos-cpupm` programs and this kernel does not, decide
+   what brings the SoC back once every core is down; the PMIC interrupt
+   (the alarm's path, GIC SPI 74) evidently does not. The root cause below
+   the masks (the missing `pmu_cpuhp` handshake on zuma, the maintainer's
+   pointer) is open.
+
+**The fixes.**
+
+- [kernel #224](https://github.com/derekross/linux-omarchy-mobile/pull/224): `exynos_ufs_resume()` selects the UFS node's pin
+  state again whenever it resumes with the link down (hibern8 included), and
+  `exynos_ufs_suspend()` selects a new "sleep" state, which the zumapro
+  device tree gives the UFS node (the same pin groups as the default, so
+  there is a state to switch away from). Two commits, driver and DT.
+- The sleep takes WFI while C2 stays available awake. In the runs below this
+  was a `google,no-s2idle` idle-state property read by `dt_idle_states`
+  (#98 to #100); the maintainer's reading of `kernel/sched/idle.c` is that
+  with `enter_s2idle` cleared the cores still take C2 through the ordinary
+  entry, without `tick_freeze()`, so what #98 measured may be C2 with the
+  tick running rather than WFI, and the property is dropped from #224. The
+  shipping form is a sleep hook in `omamobile-device-tegu` that disables
+  `cpuidle/state1` on every CPU before the sleep and enables it after (both
+  `find_deepest_state()` paths skip a disabled state), which is what #96 had
+  for the whole run. The published zumapro device tree has no idle states
+  yet, so on the published kernel the question doesn't arise until they come.
+
+**Runs** (all on the palmtop, on the charger, cable in, modem off for the
+boot unless said; `systemctl suspend` with an RTC alarm, 60 s unless said;
+"attended" means a person at the laptop watching the loop with the owner at
+home for a button press; the first run of every new kernel was watched that
+way, and the long unattended stretches ran under the loop's recovery budget):
+
+| Kernel (`uname -v`) | Change under test | Cores in sleep | Result | Attended |
+| --- | --- | --- | --- | --- |
+| daily (11-03, S1-W) | none, WFI-only | WFI | 80 clean, the 81st dead storage | first runs yes, then watched |
+| daily (11-03, S1-U) | UFS `spm_lvl` 3 | WFI | 34 clean, the 35th dead storage | yes |
+| #91 | link-startup retries after a failed attempt | WFI | 12 and 15 clean, then dead storage; the retries didn't help | yes |
+| #92 | a real VCC power cycle on a failed attempt | WFI | 130 clean in three runs, three dead | first run yes |
+| #93, #94 | the kernel kept alive on a dead wake, readbacks | WFI | 17 and 35 clean, then dead; the pads read `CON 0x0` | yes |
+| #95 | the pin state re-applied at resume | WFI | 129 clean, the 130th dead: the pads now read `0x2` but the host had already given up (a wait too short) | first run yes |
+| #96 | #95 with the resume order fixed | WFI | **300 of 300** | first run yes, then the loop overnight |
+| #96, S2 | the same kernel, C2 allowed | C2 (s2idle entry) | 18 clean, then a silent no-wake | yes |
+| #97 | #96 plus the watchdog kept through the sleep | C2 (s2idle entry) | silent no-wake at the 7th sleep, caught on the console | yes |
+| #98 | #97 plus `google,no-s2idle` on the C2 states | C2 awake, WFI (or C2 without the tick) asleep | **300 of 300** | first run yes, then the loop |
+| #99 | #98 with the watchdog diagnostic off | as #98 | the everyday path: a Power-key wake, a 30-minute and a one-hour sleep, twelve half-hour auto-sleeps: **15 of 15** | yes, through the shell's own auto-sleep |
+| #100 | #99 plus kernel #172 and #150 (the modem fixes the test tree lacked) | as #98 | a 6-hour auto-sleep series, running (11-09) | the first hour yes |
+
+Before #96, one wake in 15 to 215 lost the storage; before #98, C2 in the
+sleep lost the palmtop after 6 to 135 cycles.
+
+**Ruled out** (each tried on the dead-storage path and failed the same way):
+a host reset, a longer (1 ms) reset pulse, a PHY power cycle, link-startup
+retries with waits of up to 1.6 s, a real VCC power cycle (#92), the UFS IO
+coherency setting (135 wakes with no dead storage on the coherency kernel
+and then a silent no-wake, so not the cause), the breadcrumb module in the
+PMIC RTC (dropped), systemd's runtime watchdog (it reset the palmtop on a
+dead wake before the capture, #93). On the no-wake path: Volume Up's
+missing pull, NFC polling (stopped by the hook throughout), the modem
+(off), Wi-Fi (kept, as the hook does).
+
+**What is left.**
+
+1. The published-tip run: `omamobile` plus #224's two commits, a few dozen
+   RTC wakes and one Power-key wake (the maintainer's condition for the
+   merge); the kernel is built (`7.3.0-rc6-omamobile-push1-gf693b36e62ce`).
+2. The `cpuidle/state1` sleep hook in `omamobile-device-tegu`, with the
+   read-only check the maintainer asked for (each CPU's `state1` `time`
+   before and after one 60 s sleep: about 60 s per core means C2 ran
+   through it).
+3. Sleep with the modem up (M6): never run with the fixes; the one try
+   before them (10-27) also had NFC polling.
+4. The root cause under the masks: zuma's PMU data without `pmu_cpuhp`,
+   compared with gs101/gs201 before idle states come to a PR.
+5. The DEVICES cell to "works" once #224 is merged and has run from the
+   published kernel.
+
+**Scripts** (`device/tegu/bringup/`): `sleep-series.sh` (on the palmtop:
+N RTC-woken `systemctl suspend` cycles of S s, records each wake),
+`sleep-series-loop.sh` (laptop: polls the series, captures a dead wake,
+recovers with sysrq under a budget of MAXREC recoveries per 24 hours,
+records the next boot's ext4 recovery, restarts the series),
+`sleep-kernel-run.sh` (laptop: pushes a built kernel and starts the loop),
+`sleep-autosleep-series.sh` and `sleep-autosleep-watch.sh` (the everyday
+path: the shell's auto-sleep does the sleeping, the script only arms the
+alarms).
+
+The dated working notes that led here follow, oldest first; they are the
+long story and the record of what each day tried.
+
 Historical status (2026-11-03): s2idle usually works (RTC and power-key wakes; ten of
 ten 30-second cycles on 10-31 with the console kept through the freeze;
 126 of 127 120-second sleeps overnight on 11-01 to 11-02), but not always:
@@ -903,7 +1016,7 @@ other two partitions. Do not reboot until the image set is restored.
 The daily backup is in `logs/tegu-night-20261104/kit-backup-night/`, not the
 `logs/tegu-review-20261029/runners/kit-backup-night/` path that `kit_restore
 night` uses. A separate copy of the kit at
-`/tmp/tegu-suspend-daily-recovery-20261104` has the backup's daily Image
+(a local scratch directory, not in the repository) has the backup's daily Image
 (`7f3674d21e92d758...`) and has been packed twice; all five images matched
 between packs. Compared with the interrupted debug pack, only `boot.img`
 differs. The copied push descriptor has been aligned with the pack descriptor.
@@ -943,7 +1056,7 @@ without assuming a failing register block is safe to read.
 existing `DME_LINK_STARTUP` result and retries remaining; the callback result
 remains ignored, as it was before. It adds no register reads and leaves the
 driver's control flow unchanged. Source and patch are in the laptop's
-`/tmp/tegu-suspend-trace-20261104/`; the omb integration tree's original
+(a local scratch directory, not in the repository); the omb integration tree's original
 `ufshcd.c` is saved as `ufshcd.c.before-suspend-trace-20261104`.
 The `W=1` Image build passed with no warnings attributed to the UFS core or
 Exynos host source; it reported 1,143 warnings elsewhere, mainly generated
@@ -957,13 +1070,13 @@ Gates, risk medium (a failed wake may need the buttons):
 1. Build the trace kernel on omb with `W=1`; record the Image hash and warnings.
    Pack it with the daily kit and verify all five images before pushing.
    Stop if the build, module identity or any image check fails. Rollback: the
-   separately packed daily kit at `/tmp/tegu-suspend-daily-recovery-20261104`.
+   separately packed daily kit at (a local scratch directory, not in the repository).
 2. With a sleep inhibitor held, disable the modem boot unit for the test boot;
    push the trace image set and verify the new boot, root, trace and UFS health.
    Stop on any failed write, missing SSH or unexpected kernel. Rollback: enable
    the modem boot unit and push the verified daily image set.
 3. Start a live kernel journal stream to the laptop, then run the temporary
-   `series.sh` from `/tmp/tegu-suspend-trace-20261104/` on the palmtop. It
+   `series.sh` from (a local scratch directory, not in the repository) on the palmtop. It
    selects s2idle, disables CPU state1 for the run, checks UFS immediately
    after each wake, stops on UFS error or missing suspend, and re-enables the
    modem boot unit on a clean exit. Expect 300 RTC-woken 60-second sleeps with
@@ -1134,7 +1247,7 @@ prerequisite must keep the descriptor open through suspend and report ready
 only after its write succeeds. `/dev/cpu_dma_latency` is a different QoS
 interface and does not supply this s2idle limit.
 An uninstalled helper and notify-type unit draft are in
-`/tmp/tegu-wakeup-qos-draft`. A local test confirmed the descriptor survives
+(a local scratch directory, not in the repository). A local test confirmed the descriptor survives
 `exec`, and that missing-device and bad-readback paths do not signal ready.
 That test caught an initial bug: Bash's `<>` can create a missing regular
 file, so the draft now verifies a character device both before and after the
@@ -1181,7 +1294,7 @@ Stop on missing readiness, unexpected state or UFS error. A series on this
 mechanism must use the same checks each wake; the current WFI script disables
 C2 directly and therefore cannot establish that QoS did the work.
 The candidate patch is staged at
-`/tmp/tegu-suspend-trace-20261104/once-candidate.patch`: it adds the existing
+(a local scratch directory, not in the repository): it adds the existing
 quirk to zumapro's driver data only. The integration tree's original host
 source was backed up before applying it for a `W=1` comparison build; it has
 not been run on the palmtop. Checkpatch found no code-style issues (the
@@ -1197,7 +1310,7 @@ has ended and its result has been saved, pack `#43` with the same descriptor,
 DTB, initramfs and module archive as `#42`; verify two packs and confirm only
 `boot.img` differs. Risk medium, rollback the verified daily kit. Keep the
 same `spm_lvl` 5, WFI-only setting, 60 s RTC alarm, services and stop rules.
-The isolated kit is staged at `/tmp/tegu-suspend-once-20261104`: both packs
+The isolated kit is staged at (a local scratch directory, not in the repository): both packs
 matched, and only `boot.img` differs from the `#42` pack.
 On a clean boot and the first wake, check that the trace shows one successful
 startup, that the root filesystem is read-write, and that ordinary storage
@@ -2909,7 +3022,7 @@ C2/deep sleep, power-key wake, modem-on sleep and battery drain remain
 unqualified.
 
 **#69 C2 runner preparation (offline only).** A separate draft in
-`/tmp/tegu-coreclk-c2-20261106/` adapts the #69 WFI runner to leave C2 enabled
+(a local scratch directory, not in the repository) adapts the #69 WFI runner to leave C2 enabled
 and record eight per-CPU s2idle counter deltas, while retaining its NFC,
 storage and same-boot one-shot recovery checks. Twenty simulated cases pass,
 including missing or stale recovery reservation and a previously fired reset.
@@ -3348,7 +3461,7 @@ calibration, rather than the pair. If two recovery paths reach this point
 concurrently, both can set `CFG_PRE_INIT`, the first calibration can advance
 it to `CFG_POST_INIT`, and the second can return zero after applying the
 post-init table instead of the intended pre-init table. A compiled fixture at
-`/tmp/tegu-post-watchdog-20261106/prelink-apb-serialized/test-phy-state-interleaving.py`
+(a local scratch directory, not in the repository)
 extracts the actual Samsung notify and calibration functions and demonstrates
 this ordering. Other calibration call sites must be considered too, not only
 the HCI_MISC writers. The known non-freezable error worker's PM path makes
@@ -3386,7 +3499,7 @@ quiescence before that unmap. A fixture compiling the actual #76 timeout
 handler simulates a busy recovery and a still-owned request, and confirms that
 the handler calls the release path and completes the command. The simulation
 does not establish that this happened on hardware. Fixture:
-`/tmp/tegu-76-lane-observe-20261107/test-timeout-trylock-hazard.py`.
+(a local scratch directory, not in the repository).
 The same completion path also needs review for MCQ. This is a source-level hazard in a proposed design, not evidence of a
 trylock in the running kernel or the cause of #76. A safe serialization
 scheme must account for request ownership and completion as well as lock
@@ -3416,7 +3529,7 @@ checkpatch passed and an isolated W=1 core-object build passed against the
 #71 warning baseline (one pre-existing kernel-doc warning); the object SHA256
 is `1b3fa75b411658800da50fe759a32ff712c890592e27b1085abd794fb4d609e6`.
 The source and fixture are in
-`/tmp/tegu-post-watchdog-20261106/recovery-overlap/`; maclab's isolated tree
+(a local scratch directory, not in the repository); maclab's isolated tree
 and output are `~/tegu/suspend-recovery-overlap-20261106` and
 `~/tegu/out-suspend-recovery-overlap-20261106`, marked DO-NOT-PUSH. A complete
 kernel build and independent audit are running. The trace can show an
@@ -3434,7 +3547,7 @@ failure 2.172–2.484 ms). The interval from link-ready to UIC result was
 attempts. These are printk intervals from one
 captured run, not measurements of every PHY operation or proof of a timeout
 inside the controller. The comparison and missing, corrupt and reordered
-record fixtures are under `/tmp/tegu-post-watchdog-20261106/recovery-overlap/`.
+record fixtures are under (a local scratch directory, not in the repository).
 
 The recorded #71 failure also has a consistent ordered sequence: five host
 failures, each containing four attempts with reset readback, pre-link
@@ -3595,7 +3708,7 @@ has not observed a real reboot. In particular, its snapshot cannot itself
 exclude a modem restart after capture. Integrate an independently checked
 arming and cleanup lifecycle and account for later restarts before using it
 as a substitute for the current previous-boot journal gate. The draft and
-fixtures are under `/tmp/tegu-shutdown-observer-20261106/`.
+fixtures are under (a local scratch directory, not in the repository).
 The observer draft now also requires systemd's manager state to be
 `stopping` both before and after capture. [systemd 262's manager](https://raw.githubusercontent.com/systemd/systemd/v262/src/core/manager.c)
 reports that state when `shutdown.target` is active or queued; the fake-shutdown tests substitute
@@ -3900,7 +4013,7 @@ owner, mode, link count, warning and receipt, as well as both hook symlinks.
 Eight scratch fixtures reject replacement, unsafe permissions, extra files,
 changed packages and changed manifests; the audit passed on the palmtop.
 The four audited candidate and recovery packages are now staged, root-owned
-in a new private `/tmp/tegu-modem-transition-stage-20261107` directory on the
+in a new private (a local scratch directory, not in the repository) directory on the
 palmtop, with a `DO-NOT-INSTALL` marker. Independent checks confirmed their
 four hashes and permissions. Pacman's print-only dependency resolution listed
 the intended candidate pair and, separately, the intended recovery pair; the
@@ -4094,7 +4207,7 @@ notifications each use the pre-init table, and checks wrong-device, unpowered
 and calibration-error paths. This addresses the demonstrated state-table
 interleaving only: it does not serialize the host-controller reset itself,
 prove the APB clock hypothesis, or qualify a kernel for device testing.
-Fixture: `/tmp/tegu-post-watchdog-20261106/prelink-apb-serialized/test-atomic-phy-prelink.py`.
+Fixture: (a local scratch directory, not in the repository).
 An isolated three-file source prototype uses that atomic notification only
 for the diagnostic zumapro system-resume path and retains the existing
 fallback elsewhere. The generated host callback passed clock readback and
@@ -4125,7 +4238,7 @@ with commit-message checking disabled. A whole-tree audit found exactly the
 four intended changes among 102,607 paths. Source and output:
 `~/tegu/suspend-atomic-capable-20261107` and
 `~/tegu/out-suspend-atomic-capable-20261107`; fixtures and patch:
-`/tmp/tegu-atomic-capable-20261107/`. This diagnostic API is a research
+(a local scratch directory, not in the repository). This diagnostic API is a research
 prototype, not an upstream proposal or a device-ready fix. It does not prove
 the APB hypothesis or serialize the whole HBA reset; the earlier defer-init
 notification also retains its optional-callback semantics. Lock ordering and
@@ -4168,7 +4281,7 @@ behavior, cached counts, deferred calibration, notify and power-on failures,
 and the unchanged non-target behavior. Strict checkpatch passes. Its source
 and output are `~/tegu/suspend-lane-query-20261107` and
 `~/tegu/out-suspend-lane-query-20261107` on maclab, with local scripts in
-`/tmp/tegu-76-lane-query-20261107/`. The changed host object built on maclab
+(a local scratch directory, not in the repository). The changed host object built on maclab
 with `W=1` and no warnings, and a whole-tree audit found only that host change
 and its safety marker across 102,607 paths. This draft is unbooted and is not
 a fix for the recorded UFS failure.
@@ -4179,7 +4292,7 @@ fixture compiles the public host and Samsung PHY callbacks in isolation and
 reproduces the zero-lane success, without demonstrating a reachable normal
 call path; a narrow public-source draft passes the
 query failure, invalid-count and non-target fixtures. Source and scripts:
-`/tmp/tegu-lane-query-public-20261107/`. The separate maclab checkout is at
+(a local scratch directory, not in the repository). The separate maclab checkout is at
 that exact commit, and its modified host object builds with `W=1` without
 warnings; `git diff --check` passes and only the host source and untracked
 safety marker differ. The build's `olddefconfig` updated the #76 configuration
@@ -4204,7 +4317,7 @@ synthetic records inserted into the #76 capture test the parser only, not the
 actual lane count in that run. Source and output are
 `~/tegu/suspend-lane-observe-20261107` and
 `~/tegu/out-suspend-lane-observe-20261107` on maclab; scripts are in
-`/tmp/tegu-76-lane-observe-20261107/`. A whole-tree audit found only the
+(a local scratch directory, not in the repository). A whole-tree audit found only the
 provider change and a `DO-NOT-PUSH` marker across 102,607 paths. The full
 build completed with a unique fixed #77 identity. The first independent audit
 correctly stopped because the release suffix was missing; rebuilding with the
@@ -4242,7 +4355,7 @@ a simpler orderly reboot on this fresh supervisor; it does not prove how the
 real CP or kernel will behave. Keep the modem running until systemd shutdown,
 retain the live stream and independent previous-boot journal check, and treat
 an unconfirmed stop or reboot as uncertain. Scripts and copied public package
-code: `/tmp/tegu-77-rollout-draft-20261107/`.
+code: (a local scratch directory, not in the repository).
 
 A read-only preflight now checks the installed profile, launcher and stop
 verifier hashes, package integrity, current modem process identity and start
@@ -4270,7 +4383,7 @@ requires #77's exact `uname -v`, and selects the separately audited #77 kit.
 Its fixtures reject the #76 identity and the previous modem, backup, kernel,
 ledger, boot and shutdown failures. Mocked composition checks the #77 kit
 audit, stream checks, verified holder barrier and uncertain-writer cleanup.
-Scripts: `/tmp/tegu-77-rollout-draft-20261107/`. These are disabled drafts;
+Scripts: (a local scratch directory, not in the repository). These are disabled drafts;
 they do not establish a fresh current-boot preflight, holder smoke, recovery
 reservation or live writer safety. The pre-existing
 monitored writer terminates the local process group on stream failure, but
@@ -4292,8 +4405,8 @@ fixtures cover both host guard names, recovery-ledger and clock failures,
 guard startup, arming, cleanup, Location restoration and same-boot evidence. The host-side one-wake draft also requires one complete, balanced
 two-lane calibration observation and successful link startup before it can
 record a pass. Source and fixtures are in
-`/tmp/tegu-77-rollout-draft-20261107/`; the helper bundle is
-`/tmp/tegu77-one-20261107/`. Nothing has been staged on the palmtop. A full
+(a local scratch directory, not in the repository); the helper bundle is
+(a local scratch directory, not in the repository). Nothing has been staged on the palmtop. A full
 lifecycle review and fresh recovery-budget check remain before live use.
 
 An additional offline write-sequencing prototype checks the host-verified
@@ -4338,7 +4451,7 @@ actual public core function, with hardware calls mocked, confirms it can even
 return success if the subsequent mocked link startup succeeds; POST_CHANGE
 errors are propagated. The host draft alone therefore prevents invalid lane
 initialization, but does not guarantee the whole startup fails closed. The
-fixture is `/tmp/tegu-lane-query-public-20261107/test-core-callback.py`; it
+fixture is (a local scratch directory, not in the repository); it
 is source-level evidence, not a reproduced hardware failure. The #77 test
 kernel separately checks this callback on its target resume path.
 An offline core-only candidate propagates PRE_CHANGE errors for zumapro before
@@ -4346,7 +4459,7 @@ issuing a link command, while retaining the existing behavior on other hosts.
 A fixture compiling the actual modified core function checks a failed target
 callback, unchanged non-target behavior, link retries and POST_CHANGE errors.
 It is an unbuilt source draft at
-`/tmp/tegu-lane-query-public-20261107/ufshcd.failclosed-draft.c`; it does not
+(a local scratch directory, not in the repository); it does not
 establish whether all zumapro callback errors should be fatal, and has not
 been combined with a device test or a proposed patch.
 A subsequent call-path review further narrows the lane hypothesis: both #76
@@ -4363,20 +4476,20 @@ Exynos caller and PHY initializer together with mocked hardware. RX and TX
 query failures and invalid counts stop before PHY init; a valid query reaches
 PHY init using the cached values with no extra query. This confirms the
 sequential call-path limitation; it does not model concurrent callers. See
-`/tmp/tegu-lane-query-public-20261107/test-zumapro-path.py`.
+(a local scratch directory, not in the repository).
 The broad target-specific core candidate must not be used as a fix: the earlier
 S1-T traces recorded `T_PEERDEVICEID` failing in the second PRE_CHANGE on good
 wakes, after the first link startup succeeded. Treating every such callback
 error as fatal could turn that currently recoverable sequence into failure.
 The candidate is retained only as a fixture for the propagation mechanism.
 The same combined fixture against #76 also passes its normal and deferred PHY
-paths: `/tmp/tegu-lane-query-public-20261107/test-zumapro-path76.py`.
+paths: (a local scratch directory, not in the repository).
 A separate fixture replays that first-success, second-PRE_CHANGE-error,
 second-link-error, retry-success shape using the actual public core function.
 The original core returns success in this mocked sequence; the broad candidate
 returns the second callback's error before issuing its link command. This is
 a control-flow demonstration, not a hardware reproduction:
-`/tmp/tegu-lane-query-public-20261107/test-locked-second-start.py`.
+(a local scratch directory, not in the repository).
 The #77 zumapro descriptor sets `UFSHCD_QUIRK_PERFORM_LINK_STARTUP_ONCE`,
 so its core skips the automatic second startup after a successful first one.
 A fixture compiling the actual #77 core confirms that distinction and also
@@ -4385,7 +4498,7 @@ error still stops the target diagnostic. The earlier second-start example
 therefore illustrates the broad public change's risk, but not an automatic
 second start on the #77 configuration. It does not prove live retry behavior
 or make the broad change safe. Fixture:
-`/tmp/tegu77-pcs-order-20261107/test-startup-once.py`.
+(a local scratch directory, not in the repository).
 
 **Later CPU-idle comparison, offline only.** While the #77 WFI series runs,
 a disabled C2 runner draft was derived from its pinned single-wake script. It
@@ -4397,7 +4510,7 @@ disabled, invalid, decreasing and unchanged counters and an offline CPU;
 integrated, is not a device-ready test, and cannot advance until the current
 WFI run and its independent audit pass, the daily system is restored and a
 fresh safety review is completed. Source and fixtures:
-`/tmp/tegu77-c2-draft-20261107/`.
+(a local scratch directory, not in the repository).
 
 **#77 WFI series failure (2026-11-07).** The diagnostic kernel completed one
 separate wake and 15 of the planned 300 modem-off wakes. The 16th series wake
@@ -4423,7 +4536,7 @@ The post-reset protected-partition backup check passed and slot B remained
 marked good. The failed wake consumed a recovery-ledger entry; it must remain
 in the ledger. Captures and the independently checked failure audit are under
 `logs/tegu-gnss-ondemand-20261107/collect77-failure-*`; the audit's negative
-fixtures are in `/tmp/tegu77-recovery-20261107/`. The palmtop is currently
+fixtures are in (a local scratch directory, not in the repository). The palmtop is currently
 available for Dave to use, with the diagnostic kernel, suspend disabled and
 the modem offline. Restore and revalidate the daily system after he returns it;
 do not start the C2 comparison on the strength of this failed WFI series.
@@ -4435,7 +4548,7 @@ or active guards, changed boot or ledger and failed health gates; they do not
 rewrite the count. The helper has no device entry point. It is preparation,
 not proof that the device state is unchanged or a substitute for fresh backup,
 marker, clock and live-state checks after Dave returns it. Source and tests:
-`/tmp/tegu77-recovery-20261107/`.
+(a local scratch directory, not in the repository).
 
 **PCS write-order experiment (offline, 2026-11-07).** Google’s G4 pre-link
 table interleaves RX and TX PCS entries and visits both lanes for each entry;
@@ -4463,7 +4576,7 @@ uses direct PCS accesses with an auxiliary selector, whereas this draft still
 uses DME commands; equal modeled sequences do not establish equivalent hardware
 effects, a safe selector, or the cause of #77. In particular, pre-link errors
 and the core's existing retry behavior still need review before any device
-test. The local draft and fixtures are in `/tmp/tegu77-pcs-order-20261107/`;
+test. The local draft and fixtures are in (a local scratch directory, not in the repository);
 maclab uses the separate `~/tegu/suspend-pcs-order-20261107` and
 `~/tegu/out-suspend-pcs-order-20261107` directories, marked DO-NOT-PUSH.
 The audited image was packed twice identically into an offline kit at
@@ -4493,7 +4606,7 @@ weakens a second device-tree consumer hypothesis for this artifact, but does
 not exclude concurrent operations by the same consumer, runtime changes or
 unlogged activity. Neither the upstream API concern nor the reference counts
 establish the cause of the recorded failed wake. Audit:
-`/tmp/tegu77-pcs-order-20261107/audit-phy-consumers.py`.
+(a local scratch directory, not in the repository).
 
 **Deferred flag after a failed wake (offline source review).** In #77 and the
 unbooted #78 draft, the system-resume callback sets `test_phy_deferred`; the
@@ -4508,7 +4621,7 @@ PHY counts of init=1, power=0, the diagnostic's PHY initializer would return
 `-EBUSY`; outside PM the #77 core ignores the pre-link callback's error and
 still issues the link command. Separate fixtures compiling the actual host
 and core functions exercise those two conditional paths with mocked hardware:
-`/tmp/tegu77-pcs-order-20261107/test-deferred-after-failure.py`. This is a
+(a local scratch directory, not in the repository). This is a
 recovery-path hazard to resolve before another diagnostic deployment, not a
 demonstrated cause of the 20 failed link attempts or proof that the subsequent
 recovery occurred. The host fixture also compiles the actual variant suspend
@@ -4523,7 +4636,7 @@ count to two without invoking the provider's initialization callback, as an
 independent compiled fixture confirms. The modeled host path likewise retains
 the old reference. An ownership-balanced recovery design and failure-path
 tests are needed; neither fixture establishes a live PHY state or a fix.
-Fixture: `/tmp/tegu77-pcs-order-20261107/test-phy-init-refcount.py`.
+Fixture: (a local scratch directory, not in the repository).
 Two more fixtures compile the actual generic reference functions and Samsung
 provider callbacks. With a modeled post-init state and an existing init
 reference, an extra init leaves that state unchanged; Samsung power-on in
@@ -4612,7 +4725,7 @@ A difference from the 7 Pro in the pin controller driver: the gs101 alive contro
 
 **What the no-wake needs, and what it gets (2026-11-08 07:50 MST).** Wake sources on the 9a as the kernel arms them: through the pin controller only the Power key (irq 59) and the Wi-Fi host-wake (irq 73) get `wake enabled` at suspend; the PMIC's interrupt, which carries the RTC alarm, is GIC SPI 74 (irq 56, `s2mpg14-pmic`), not an EINT, so no pin-controller mask could cover it, and `enable_irq_wake()` on a GIC line changes nothing in hardware. In WFI none of this matters: the cores stay live and the GIC delivers the alarm. With every core in C2 the firmware can take the SoC into its system-idle state, and which interrupts may wake it from there is set by the PMU's WAKEUP_MASK registers; in Google's kernel `drivers/soc/google/exynos-cpupm.c` writes them (offsets from their device tree; the PCIe driver's header shows the family: `WAKEUP_MASK 0x3944`, bit 16 for the Wi-Fi PCIe) before allowing that state, and `exynos-pm.c` the EINT masks. Our kernel has neither, so the masks are the bootloader's and the deep state is entered on the firmware's own judgement with whatever they allow: a wake that is usually taken and sometimes lost, never in WFI. The zumapro pin controllers also lack the gs101 suspend/resume hooks (EINT wake-up mask); that is a real gap too but not this failure's cause.
 
-Decision: the fix to ship now is to keep C2 for everyday idle and use WFI for s2idle, which is the configuration that passed 300 of 300; the system-idle wake masks are a later improvement (power in sleep). The kernel change: a vendor property on the idle-state node (`google,no-s2idle`) that makes `dt_idle_states` leave `enter_s2idle` unset for that state, so `cpuidle_enter_s2idle()` falls back to WFI; runtime cpuidle is untouched. #98 = #97 plus that, run with `WFI=0` (state1 enabled) so the shipped runtime setting is what is tested. Google's tree for reference: `git clone --depth 1 --branch android-16.0.0_r0.0 https://android.googlesource.com/kernel/google-modules/soc/gs` (34 MB, on maclab at `/tmp/gs-soc`).
+Decision: the fix to ship now is to keep C2 for everyday idle and use WFI for s2idle, which is the configuration that passed 300 of 300; the system-idle wake masks are a later improvement (power in sleep). The kernel change: a vendor property on the idle-state node (`google,no-s2idle`) that makes `dt_idle_states` leave `enter_s2idle` unset for that state, so `cpuidle_enter_s2idle()` falls back to WFI; runtime cpuidle is untouched. #98 = #97 plus that, run with `WFI=0` (state1 enabled) so the shipped runtime setting is what is tested. Google's tree for reference: `git clone --depth 1 --branch android-16.0.0_r0.0 https://android.googlesource.com/kernel/google-modules/soc/gs` (34 MB, on maclab at (a local scratch directory, not in the repository)).
 
 **#98 pushed 2026-11-08 07:37 MST (palmtop clock):** Image 8d980819a8c898a4 (#97 plus `dt_idle_states`: a `google,no-s2idle` idle state keeps `enter_s2idle` unset), DTB 398aeafa9bac1fb7 (the three C2 states carry `google,no-s2idle`), `WFI=0` (cpuidle state1 enabled for runtime), spm_lvl 5, rpm_lvl 3, VCC always-on, pads re-applied, watchdog kept through suspend as a safety net. The series log now carries `c2-s2idle` (cpu0's state1 `s2idle/usage`, must stay flat) and `c2-run` (state1 `usage`, must grow) per cycle. The #97 C2 run before it: 6 clean wakes, a no-wake caught by the watchdog (console `logs/tegu-linkwait-20261107/console-97-c2-nowake-cycle7.txt`), then run 2 from 07:26 was stopped for the push.
 
