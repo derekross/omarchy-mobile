@@ -35,8 +35,10 @@ OMARCHY_CHANNEL=${OMARCHY_CHANNEL:-stable}
 # Omarchy's repository instead, checked like the tarball: its detached
 # signature must be by Omarchy's packaging key, pinned below, and its
 # SHA-256 the one the repository's index lists. The three files are cached
-# in $ALARM_CACHE/omarchy-keyring and refreshed when the index names a newer
-# version. Setting OMARCHY_KEYRING_DIR uses that folder and nothing else.
+# in $ALARM_CACHE/omarchy-keyring with the package and its signature, which
+# are verified again at every use; the cache is refreshed when the index
+# names a newer version and kept when it names an older one (a rollback is
+# refused). Setting OMARCHY_KEYRING_DIR uses that folder and nothing else.
 OMARCHY_KEYRING_DIR_SET=${OMARCHY_KEYRING_DIR:+1}
 OMARCHY_KEYRING_DIR=${OMARCHY_KEYRING_DIR:-/usr/share/pacman/keyrings}
 # Omarchy <pkgs@omarchy.org>: the key omarchy-keyring's omarchy-trusted names
@@ -93,22 +95,59 @@ alarm_fetch() {
     alarm_die "bad or missing signature on $ALARM_TARBALL (expected key $ALARM_KEY)"
 }
 
+# Verify an omarchy-keyring package against its detached signature by the
+# pinned packaging key $OMARCHY_KEY. $1: the package, $2: its .sig.
+_omarchy_keyring_verify() {
+  local gnupg status
+  gnupg=$(mktemp -d)
+  if [[ ! -s $ALARM_CACHE/omarchy-pkgs.asc ]]; then
+    GNUPGHOME=$gnupg gpg -q --batch --keyserver "$ALARM_KEYSERVER" --recv-keys "$OMARCHY_KEY" ||
+      { rm -rf "$gnupg"; alarm_die "could not fetch Omarchy's packaging key $OMARCHY_KEY"; }
+    GNUPGHOME=$gnupg gpg -q --batch --armor --export "$OMARCHY_KEY" >"$ALARM_CACHE/omarchy-pkgs.asc"
+  else
+    GNUPGHOME=$gnupg gpg -q --batch --import "$ALARM_CACHE/omarchy-pkgs.asc"
+  fi
+  status=$(GNUPGHOME=$gnupg gpg --batch --status-fd 1 --verify "$2" "$1" 2>/dev/null || true)
+  rm -rf "$gnupg"
+  grep -Eq "^\[GNUPG:\] VALIDSIG .* $OMARCHY_KEY\$" <<<"$status"
+}
+
+# The cached keyring is used only while its package still verifies and the
+# three files are the package's own, byte for byte. $1: the cache folder.
+_omarchy_keyring_cached_ok() {
+  local dir=$1 pkg f
+  pkg=$(cat "$dir/PACKAGE" 2>/dev/null) || return 1
+  [[ -n $pkg && -s $dir/$pkg && -s $dir/$pkg.sig ]] || return 1
+  _omarchy_keyring_verify "$dir/$pkg" "$dir/$pkg.sig" || return 1
+  for f in omarchy.gpg omarchy-trusted omarchy-revoked; do
+    cmp -s "$dir/$f" <(bsdtar -xOf "$dir/$pkg" "usr/share/pacman/keyrings/$f") || return 1
+  done
+}
+
 # The folder holding omarchy.gpg, omarchy-trusted and omarchy-revoked; prints
 # it. The host's when it has all three or OMARCHY_KEYRING_DIR was set,
-# otherwise the verified copy described at OMARCHY_KEYRING_DIR above.
+# otherwise the verified copy described at OMARCHY_KEYRING_DIR above: the
+# package and its signature are kept beside it and checked again at every
+# use, and an index naming an older keyring than the cached one is refused.
 alarm_omarchy_keyring() {
-  local f have=1 dir=$ALARM_CACHE/omarchy-keyring base db want file sum gnupg status tmp
+  local f have=1 dir=$ALARM_CACHE/omarchy-keyring base want file sum tmp cached
   for f in omarchy.gpg omarchy-trusted omarchy-revoked; do [[ -f $OMARCHY_KEYRING_DIR/$f ]] || have=0; done
   if ((have)) || [[ -n $OMARCHY_KEYRING_DIR_SET ]]; then
     ((have)) || alarm_die "no Omarchy keyring in OMARCHY_KEYRING_DIR=$OMARCHY_KEYRING_DIR (omarchy.gpg, omarchy-trusted, omarchy-revoked)"
     echo "$OMARCHY_KEYRING_DIR"; return
   fi
+  command -v bsdtar >/dev/null || alarm_die "fetching Omarchy's keyring needs bsdtar (libarchive-tools on Debian and Ubuntu)"
+  cached=$(cat "$dir/VERSION" 2>/dev/null || true)
+  if [[ -n $cached ]] && ! _omarchy_keyring_cached_ok "$dir"; then
+    alarm_say "The cached Omarchy keyring no longer verifies: fetching it again" >&2
+    rm -rf "$dir"; cached=
+  fi
   base=$OMARCHY_PKGS_URL/$OMARCHY_CHANNEL/aarch64
   tmp=$(mktemp -d)
   if ! curl -fsSL -o "$tmp/omarchy.db" "$base/omarchy.db"; then
     rm -rf "$tmp"
-    [[ -s $dir/omarchy.gpg ]] || alarm_die "no Omarchy keyring on this host and $base/omarchy.db can't be fetched"
-    alarm_say "Omarchy's index can't be fetched: using the cached keyring ($(cat "$dir/VERSION" 2>/dev/null))" >&2
+    [[ -n $cached ]] || alarm_die "no Omarchy keyring on this host and $base/omarchy.db can't be fetched"
+    alarm_say "Omarchy's index can't be fetched: using the cached keyring ($cached, verified)" >&2
     echo "$dir"; return
   fi
   # The index isn't signed: it only names the file; the package's own
@@ -116,32 +155,28 @@ alarm_omarchy_keyring() {
   read -r want file sum < <(bsdtar -xOf "$tmp/omarchy.db" --include='omarchy-keyring-*/desc' |
     awk '/^%VERSION%$/ { getline; v = $0 } /^%FILENAME%$/ { getline; f = $0 } /^%SHA256SUM%$/ { getline; s = $0 } END { print v, f, s }')
   [[ -n $file && -n $sum ]] || { rm -rf "$tmp"; alarm_die "omarchy-keyring isn't in $base/omarchy.db"; }
-  if [[ -s $dir/omarchy.gpg && $(cat "$dir/VERSION" 2>/dev/null) == "$want" ]]; then
+  if [[ -n $cached && $want == "$cached" ]]; then
     rm -rf "$tmp"; echo "$dir"; return
+  fi
+  if [[ -n $cached && $(printf '%s\n%s\n' "$want" "$cached" | sort -V | tail -1) == "$cached" ]]; then
+    rm -rf "$tmp"
+    alarm_die "Omarchy's index names omarchy-keyring $want, older than the cached $cached: refusing a rollback (remove $dir to accept it)"
   fi
   alarm_say "Fetching Omarchy's keyring (omarchy-keyring $want)" >&2
   curl -fsSL -o "$tmp/$file" "$base/$file" && curl -fsSL -o "$tmp/$file.sig" "$base/$file.sig" ||
     { rm -rf "$tmp"; alarm_die "could not download $base/$file"; }
   [[ $(sha256sum <"$tmp/$file" | cut -d' ' -f1) == "$sum" ]] ||
     { rm -rf "$tmp"; alarm_die "$file doesn't match the SHA-256 Omarchy's index lists"; }
-  gnupg=$(mktemp -d)
-  if [[ ! -s $ALARM_CACHE/omarchy-pkgs.asc ]]; then
-    GNUPGHOME=$gnupg gpg -q --batch --keyserver "$ALARM_KEYSERVER" --recv-keys "$OMARCHY_KEY" ||
-      { rm -rf "$gnupg" "$tmp"; alarm_die "could not fetch Omarchy's packaging key $OMARCHY_KEY"; }
-    GNUPGHOME=$gnupg gpg -q --batch --armor --export "$OMARCHY_KEY" >"$ALARM_CACHE/omarchy-pkgs.asc"
-  else
-    GNUPGHOME=$gnupg gpg -q --batch --import "$ALARM_CACHE/omarchy-pkgs.asc"
-  fi
-  status=$(GNUPGHOME=$gnupg gpg --batch --status-fd 1 --verify "$tmp/$file.sig" "$tmp/$file" 2>/dev/null || true)
-  rm -rf "$gnupg"
-  grep -Eq "^\[GNUPG:\] VALIDSIG .* $OMARCHY_KEY\$" <<<"$status" ||
+  _omarchy_keyring_verify "$tmp/$file" "$tmp/$file.sig" ||
     { rm -rf "$tmp"; alarm_die "bad or missing signature on $file (expected key $OMARCHY_KEY)"; }
   mkdir -p "$tmp/x" &&
     bsdtar -xf "$tmp/$file" -C "$tmp/x" usr/share/pacman/keyrings/omarchy.gpg \
       usr/share/pacman/keyrings/omarchy-trusted usr/share/pacman/keyrings/omarchy-revoked ||
     { rm -rf "$tmp"; alarm_die "$file holds no Omarchy keyring"; }
-  echo "$want" >"$tmp/x/usr/share/pacman/keyrings/VERSION"
-  rm -rf "$dir.new" && mv "$tmp/x/usr/share/pacman/keyrings" "$dir.new" && rm -rf "$dir" && mv "$dir.new" "$dir"
+  f=$tmp/x/usr/share/pacman/keyrings
+  echo "$want" >"$f/VERSION"; echo "$file" >"$f/PACKAGE"
+  mv "$tmp/$file" "$tmp/$file.sig" "$f/"
+  rm -rf "$dir.new" && mv "$f" "$dir.new" && rm -rf "$dir" && mv "$dir.new" "$dir"
   rm -rf "$tmp"
   echo "$dir"
 }
