@@ -74,3 +74,5 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 Stock facts collected and both slots restored to factory. On 2026-11-01 OrangeFox’s recovery replaced slot B’s vendor_boot (stock copy saved by the installer at backup/20261101-151204/vendor_boot_b before the rebuild).
 Device descriptor added in `device/kodiak/device.conf`.  
 Critical calibration partitions backed up off-device with SHA-256 checksums (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata). Taken from OrangeFox recovery on slot B (contents at that time; recovery may have mounted persist/metadata). Not a clean stock baseline.
+
+Next calibration backup will be taken from the Omarchy initramfs on first slot B boot (read-only dd). Checksums and file/folder timestamps will be compared with the OrangeFox backup to see if persist or other calibration partitions changed.
