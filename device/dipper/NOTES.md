@@ -10,10 +10,12 @@ the facts needed for review.
 The current `recovery` partition matches the `recovery.img` in the
 checksum-verified 15-partition stock snapshot captured on 2026-10-29 at 19:01;
 both have SHA-256
-`7691a33e8b65d1ffcbf67b16fd4dc5c4c421420230f230db312512c73abc2221`. This
-confirms the bytes match that saved copy. The order of that snapshot and the
-two diagnostic writes to `recovery` is not established. `logdump` is not in
-the 15-partition backup. A separate live, file-level userdata archive was
+`7691a33e8b65d1ffcbf67b16fd4dc5c4c421420230f230db312512c73abc2221`. Its
+Android boot header contains a gzip-compressed kernel that identifies as
+`Linux version 4.9.337-perf-g0b3e38ef6c40`, not the 7.3 diagnostic kernel. This
+confirms the current partition holds the stock recovery image. The order of the
+snapshot and the two diagnostic writes remains unknown. `logdump` is not in the
+15-partition backup. A separate live, file-level userdata archive was
 verified off-device; it is not a raw partition image or an atomic snapshot,
 and the filesystem remained mounted during the copy.
 
@@ -56,10 +58,20 @@ The storage guard removed `/dev/sda`; its sysfs `ro` value remained `0` by
 design. All 85 UFS partition `ro` values were `1`; the other UFS whole disks
 were read-only. `/proc/iomem` reports `0x86200000–0x88efffff` as System RAM and
 `0x88f00000–0x890fffff` as reserved, so the TZ range is not reserved in this
-RAM boot's map. The EA8074 panel and FTS5 touch input still need separate
-hardware tests. The RAM image had no Arch root, and the probe did not write
-UFS. The stock partition checksums were verified before boot. After this
-session, a read-only backup of all 84 non-`userdata`, non-`super` GPT
+RAM boot's map. A separate EA8074 panel test used a RAM-only overlay on
+2026-11-09 with kernel `7.3.0-rc6-omamobile-push1` and boot image SHA-256
+`0f0ec9d62ebe57bef9ae8a4804bb23728f624daab824a0bf7dee18f63c2a3d59`. The panel
+driver bound to `ae94000.dsi.0`, DRM reported `connected` at `1080x2248`, and
+the owner confirmed the console was visible on the lit panel. All 85 partition
+flags were `ro=1`; `/dev/sda` was absent, while `/dev/sdb` through `/dev/sdf`
+remained present and had `ro=1` on this pre-#484 image. Backlight value 0 was
+accepted and restored to 511 (maximum 1023). Framebuffer blanking changed
+DRM `dpms` from `On` to `Off` and back to `On`. The FTS5 touch input still needs
+a test on the current kernel. The panel log included a missing DSI `vdda`
+supply (dummy regulator) and missing `a630_sqe.fw`; the display initialized,
+but GPU rendering was not tested. The RAM image had no Arch root, and the probe
+did not write UFS. The stock partition checksums were verified before boot.
+After this session, a read-only backup of all 84 non-`userdata`, non-`super` GPT
 partitions was captured from this guarded RAM boot. Each partition's source
 SHA-256 and byte count were checked against the decompressed local copy, and
 the compressed archive checksums were rechecked. The separate live userdata
@@ -116,7 +128,7 @@ the image used kernel release
 [#219](https://github.com/derekross/linux-omarchy-mobile/pull/219) and
 [#220](https://github.com/derekross/linux-omarchy-mobile/pull/220) are later
 successor changes and are not the code tested in that boot; FTS5 PR #219 is now
-merged upstream. The diagnostic image's guard allowed `userdata` and `logdump`
+merged into linux-omarchy-mobile. The diagnostic image's guard allowed `userdata` and `logdump`
 writes. A temporary init widened the allowlist to include `logdump` and used
 `dd` to copy the kernel log there every two seconds during the 2026-10-29
 diagnostic boot. The 2026-11-09 read-only check was on this dirty October
@@ -143,8 +155,12 @@ starts under `rmtfs -r`, followed by an XPU violation crash and remoteproc
 recovery loops. The sequence of boots between the two snapshots (date, stock
 Android or RAM image, and actions) has not been reconstructed, so the later
 snapshot is not a baseline and the changes are not attributed to Android or
-Omarchy. These notes are not a recovery record until that sequence and the
-current recovery image are checked.
+Omarchy. The current recovery image matches the 10-29 19:01 snapshot and its
+kernel identifies as stock `4.9.337-perf-g0b3e38ef6c40`; the snapshot's order
+relative to the two diagnostic writes remains unknown. The 10-29 first-light
+boot is recorded as `fastboot boot` from RAM, not a recovery boot. The separate
+08:53 old-kernel observation's launch method remains unknown; the surviving
+record does not establish its source.
 
 ### What had to be fixed before any of that
 Six defects in the recovered [sdm845-mainline MR !71](https://gitlab.com/sdm845-mainline/linux/-/merge_requests/71)
@@ -194,7 +210,7 @@ kernel revision; they are not results from the current FTS5 driver:
 
 At the time, it was unknown whether GENI/GPI or the FTS5 protocol caused the timeout.
 
-### FTS5: historical tap and current upstream series
+### FTS5: historical tap and published driver series
 
 The live controller is FTS5. A separate historical RAM boot on 2026-10-30, using
 the unpublished kernel release above, registered `stmfts` and a physical tap
