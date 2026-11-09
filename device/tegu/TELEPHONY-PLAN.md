@@ -250,6 +250,14 @@ boot; the latch's one retry and hold bound a reset loop).
 | 4. Off and on / low | `systemctl mask omamobile-tegu-modem-boot`, reboot; `systemctl unmask`, reboot | Masked: no modem, no latch, the palmtop sleeps; unmasked: the modem comes back at boot | The masked boot starts the modem | Remove the mask |
 | 5. `tools/nv-backup -d tegu --check` / low | After the reboots | Every NV partition the same as the backup | A difference | Stop; look before any further boot |
 
+**2.8 results (2026-11-09, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` build #100, `omamobile-device-tegu` 0.2.14 from this branch built on the palmtop, `omamobile-modem` 0.1.17; on the charger).**
+
+1. Installed 13:14 MST: the vendor link is there (`multi-user.target.wants/omamobile-tegu-modem-boot.service -> ../omamobile-tegu-modem-boot.service`), `systemctl is-enabled` reads "disabled" as a vendor link does, `systemctl list-dependencies --plain multi-user.target` lists the unit once. The gate's `clk_flags` check read `CLK_IS_CRITICAL`. Passed.
+2. Two `systemctl reboot`s with nothing started by hand (13:15 and 13:21 MST): each boot the unit ran (`ConditionResult=yes`, `Result=success`), "drivers: the bring-up modules", "modem OK: CP ONLINE", the phone service and the bridge started; `omamobile-sit status`: SIM ready, radio on, home LTE, IMS voice and SMS, data bearer up; the latch read this boot and `invocation <id>` and `online`, one latch file; gnssd running. The first boot's stop at the second reboot: "CP OFFLINE", "modem stopped (success, the CP OFFLINE before the daemons went): /var/lib/omamobile/modem-bringup-started removed", "Deactivated successfully"; 0 `ufshcd_err_handler` passes in that boot, 0 UFS error lines in both. Passed.
+3. The skip: not run on the palmtop (it is provisioned and has the modules); the conditions are read-only in the unit file and the package test holds them.
+4. Off and on: still to run.
+5. `tools/nv-backup -d tegu --check`: still to run after the day's reboots.
+
 `tools/phone-smoke` on the second boot: every required check ok (boot, the
 storage guard, root, kernel health, USB, session), and display, GPU, lock,
 touch, buttons, Wi-Fi, Bluetooth, battery, sound card, sensors, cameras and
