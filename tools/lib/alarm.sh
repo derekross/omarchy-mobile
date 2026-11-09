@@ -158,6 +158,8 @@ alarm_omarchy_keyring() {
   if [[ -n $cached && $want == "$cached" ]]; then
     rm -rf "$tmp"; echo "$dir"; return
   fi
+  # sort -V orders pkgver-pkgrel; Omarchy's keyring has no epoch (an epoch
+  # would read as older here, which stops the build rather than letting one in)
   if [[ -n $cached && $(printf '%s\n%s\n' "$want" "$cached" | sort -V | tail -1) == "$cached" ]]; then
     rm -rf "$tmp"
     alarm_die "Omarchy's index names omarchy-keyring $want, older than the cached $cached: refusing a rollback (remove $dir to accept it)"
@@ -169,6 +171,10 @@ alarm_omarchy_keyring() {
     { rm -rf "$tmp"; alarm_die "$file doesn't match the SHA-256 Omarchy's index lists"; }
   _omarchy_keyring_verify "$tmp/$file" "$tmp/$file.sig" ||
     { rm -rf "$tmp"; alarm_die "bad or missing signature on $file (expected key $OMARCHY_KEY)"; }
+  # The version the index gave must be the signed package's own, or an old
+  # package Omarchy once signed could be cached under a newer number
+  [[ $(bsdtar -xOf "$tmp/$file" .PKGINFO | sed -n 's/^pkgver = //p') == "$want" ]] ||
+    { rm -rf "$tmp"; alarm_die "$file isn't omarchy-keyring $want, the version Omarchy's index names"; }
   mkdir -p "$tmp/x" &&
     bsdtar -xf "$tmp/$file" -C "$tmp/x" usr/share/pacman/keyrings/omarchy.gpg \
       usr/share/pacman/keyrings/omarchy-trusted usr/share/pacman/keyrings/omarchy-revoked ||
