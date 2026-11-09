@@ -16,7 +16,7 @@ Building this descriptor therefore requires the separately prepared series:
 | Patch subject | SHA-256 of the prepared patch |
 | --- | --- |
 | `dt-bindings: arm: google: add Pixel 9 Pro XL` | `02b29c1cfd2ef4c3c57e428e91a75d26dddeb754f888219741ab8fa8fc99cd04` |
-| `arm64: dts: exynos: add Pixel 9 Pro XL first-light board` | `f38dd3bbdcc932853e649c6e20a7522d9d9deaeb372a8ad3e1c64b7739300fad` |
+| `arm64: dts: exynos: add Pixel 9 Pro XL first-light board` | `7819328db8f33400478ad9da31970d394e27074382ea2469f7553d3ca222a9c2` |
 
 These identify local review artifacts, not published commits. No public PR URL
 or qualified kernel head exists for this series yet. Before any build or boot
