@@ -1,5 +1,6 @@
-# SPDX-License-Identifier: BSD-3-Clause
-# Omarchy Mobile build of tqftpserv, derived from https://github.com/linux-msm/tqftpserv/tree/v1.2 (b6bb92d40cfffe28621abcf7bfaa6d99beea46cb).
+# SPDX-License-Identifier: 0BSD
+# Omarchy Mobile build of tqftpserv 1.2, derived from https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=tqftpserv&id=4fdc9857e66733601aa08c84952f5e376cf9633c.
+# Upstream source: https://github.com/linux-msm/tqftpserv/tree/v1.2 (b6bb92d40cfffe28621abcf7bfaa6d99beea46cb).
 # Maintainer: Super Tecno Gym <banana@grrlz.net>
 
 pkgname="tqftpserv"

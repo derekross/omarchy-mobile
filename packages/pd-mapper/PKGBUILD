@@ -1,5 +1,6 @@
-# SPDX-License-Identifier: BSD-3-Clause
-# Omarchy Mobile build of pd-mapper, derived from https://github.com/linux-msm/pd-mapper/tree/v1.1 (5ecd2fe926aca7abfe40724177f63b942cff3947).
+# SPDX-License-Identifier: 0BSD
+# Omarchy Mobile build of pd-mapper 1.1, derived from https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=pd-mapper&id=5059d5e050f737b282c696198bfd7de6591d4e0e.
+# Upstream source: https://github.com/linux-msm/pd-mapper/tree/v1.1 (5ecd2fe926aca7abfe40724177f63b942cff3947).
 # Maintainer: Super Tecno Gym <banana@grrlz.net>
 
 pkgname="pd-mapper"
