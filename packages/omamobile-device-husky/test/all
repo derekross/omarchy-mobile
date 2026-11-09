@@ -191,6 +191,19 @@ out=$(runaoc --retry) || true
 [[ $out != *"never finished"* ]] || fail "--retry clears the marker"
 [[ ! -e $aoc/state/aoc-bringup-started ]] || fail "a clean failure removes the marker (no firmware here)"
 pass "the AoC start does nothing without the node, honours a hang marker, and --retry tries again"
+# the Trusty node is found at the root and under soc@0 (the 8 Pro's layout)
+rm -f "$aoc/trusty"; : > "$aoc/cards"; rm -rf "$aoc/dt" "$aoc/state/"* "$aoc/modprobe.log"
+mkdir -p "$aoc/dt/soc@0/trusty"; echo okay > "$aoc/dt/soc@0/trusty/status"
+out=$(PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards OMAMOBILE_DT_ROOT=$aoc/dt bash "$aoc/start" 2>&1) || true
+[[ $out != *"Trusty is not enabled"* ]] || fail "a Trusty node under soc@0 is found"
+rm -rf "$aoc/dt"; mkdir -p "$aoc/dt/trusty"; echo okay > "$aoc/dt/trusty/status"
+out=$(PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards OMAMOBILE_DT_ROOT=$aoc/dt bash "$aoc/start" 2>&1) || true
+[[ $out != *"Trusty is not enabled"* ]] || fail "a Trusty node at the root is found"
+rm -rf "$aoc/dt"; mkdir -p "$aoc/dt"
+out=$(PATH=$aoc/bin:$PATH OMAMOBILE_AOC_NODE=$aoc/node OMAMOBILE_ASOUND_CARDS=$aoc/cards OMAMOBILE_DT_ROOT=$aoc/dt bash "$aoc/start" 2>&1) || true
+[[ $out == *"Trusty is not enabled"* ]] || fail "no Trusty node means the AoC stays off"
+echo okay > "$aoc/trusty"; rm -rf "$aoc/state/"* "$aoc/modprobe.log"
+pass "the Trusty node is found at the root or under soc@0, and its absence keeps the AoC off"
 # the once-per-boot guards: nothing may reach the firmware file
 rm -rf "$aoc/state/"* "$aoc/modprobe.log"; : > "$aoc/node/firmware"
 mkdir -p "$aoc/run"; date -Is > "$aoc/run/aoc-firmware-loaded"

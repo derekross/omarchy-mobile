@@ -31,7 +31,15 @@ marker=$state/aoc-bringup-started
 loaded=${OMAMOBILE_AOC_LOADED:-/run/omamobile/aoc-firmware-loaded}
 node=${OMAMOBILE_AOC_NODE:-/sys/bus/platform/devices/154b0000.aoc}
 cards=${OMAMOBILE_ASOUND_CARDS:-/proc/asound/cards}
-trusty_status=${OMAMOBILE_TRUSTY_STATUS:-/proc/device-tree/trusty/status}
+# The Trusty node sits at the device-tree root on some boards and under soc@0 on
+# the 8 Pro (zuma): use the first status file that exists.
+dt=${OMAMOBILE_DT_ROOT:-/proc/device-tree}
+trusty_status=${OMAMOBILE_TRUSTY_STATUS:-}
+if [[ -z $trusty_status ]]; then
+  for t in "$dt/trusty/status" "$dt/soc@0/trusty/status"; do
+    [[ -e $t ]] && trusty_status=$t && break
+  done
+fi
 
 log() { echo "omamobile-husky-aoc: $*"; }
 
