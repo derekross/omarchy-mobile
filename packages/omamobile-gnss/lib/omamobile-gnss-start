@@ -52,8 +52,18 @@ fi
 
 if [[ ${1:-} == --retry ]]; then
   rm -f "$MARK"
+  # By hand on the 9a this only clears the marker: GNSS starts inside its
+  # unit, at the next location request (the session needs the invocation ID).
+  if tegu && ! [[ ${INVOCATION_ID:-} =~ ^[0-9a-f]{32}$ ]]; then
+    say "marker cleared; the next location request starts GNSS"
+    exit 0
+  fi
 elif [[ -e $MARK ]]; then
-  say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (run omamobile-gnss-start --retry)"
+  if tegu; then
+    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (omamobile-gnss-start --retry clears the marker; the next location request then starts GNSS)"
+  else
+    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (run omamobile-gnss-start --retry)"
+  fi
   exit 0
 fi
 
