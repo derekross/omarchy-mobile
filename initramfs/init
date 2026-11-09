@@ -482,7 +482,7 @@ boot_nfs() {
     return 1
   fi
   say "nfsroot: switching to Arch Linux on $spec"
-  # kill -9 -1 also kills the feeder; Dipper's systemd takes over at 60 seconds.
+  # kill -9 -1 also stops the feeder; systemd takes over if the new root enables its watchdog.
   kill -9 -1 2>/dev/null
   sleep 1
   for m in /dev /proc /sys /run; do
@@ -525,7 +525,7 @@ boot_arch() {
   say "arch: switching to Arch Linux on $dev"
   # Stop the initramfs helpers (dropbear, getty, guards); the kernel keeps
   # the USB gadget and the partition read-only flags across the switch
-  # systemd takes over the hardware watchdog here; Dipper uses RuntimeWatchdogSec=60s.
+  # systemd takes over the hardware watchdog here if the new root enables it.
   kill -9 -1 2>/dev/null
   sleep 1
   for m in /dev /proc /sys /run; do
