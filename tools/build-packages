@@ -83,7 +83,7 @@ while (($#)); do
     --resign) resign=1 ;;
     --import) imports+=("${2:?--import needs a directory}"); shift ;;
     --local) local_name=${2:?--local needs a device codename}; shift ;;
-    -h|--help) sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0" 2; exit 0 ;;
     -*) alarm_die "unknown option $1" ;;
     *) dirs+=("${1%/}") ;;
   esac
@@ -319,10 +319,17 @@ sign_and_index() {
     (cd "$repo" && repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}")
   else
     # Not an Arch machine: pacman's repo-add from the Arch Linux ARM image,
-    # as this user, with the same key.
-    docker run --rm --platform linux/arm64 -u "$(id -u):$(id -g)" \
+    # with the same key. It runs as the container's root and hands /repo
+    # back to the owner it arrived with, as the build does: under rootless
+    # Docker the container's root is this user and a container uid such as
+    # this user's is a subordinate uid on the host, which can't read the
+    # keyring (mode 700), so `-u $(id -u)` failed there with "The key ...
+    # does not exist in your keyring"; under rootful Docker root reads it
+    # and the chown keeps the index this user's.
+    docker run --rm --platform linux/arm64 \
       -v "$ROOT/$repo:/repo" -v "$GNUPGHOME:/gnupg" -e GNUPGHOME=/gnupg -e HOME=/tmp -w /repo \
-      "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
+      "$(alarm_base_image)" bash -c 'owner=$(stat -c %u:%g /repo); trap "chown -R $owner /repo" EXIT
+        repo-add --quiet --sign --key "$0" omamobile.db.tar.gz "$@"' "$key" "${packages[@]}"
   fi
 }
 

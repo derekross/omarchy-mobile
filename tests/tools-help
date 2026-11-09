@@ -1,0 +1,55 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The tools' --help: no tool hard-codes the line range of its header
+# comment, and every tool that prints its header with usage_from_header
+# (tools/lib/usage.sh), or with the same awk line inline (the tools the
+# bundle ships alone), prints all of it, or whole paragraphs from its start,
+# and no code, also from a copy whose header has grown by a line. A
+# hard-coded range cut the last line of a header that grew and printed code
+# after one that shrank (#287).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; exit 1; }
+
+hard=$(grep -s -d skip -lE "sed -n '3,[0-9]+" tools/* || true)
+[[ -z $hard ]] || fail "a hard-coded --help range in: ${hard//$'\n'/ }"
+echo "ok - no tool hard-codes its --help line range"
+
+# --help's output, from stdout or stderr (phone-mirror's usage goes to
+# stderr and exits 2)
+help_of() { "$1" --help 2>&1 || true; }
+# The header comment: line 3 up to the first line that isn't a comment
+header() { awk 'NR > 2 && !/^#/ { exit } NR > 2' "$1"; }
+# whole_paras HELP TEXT: HELP is TEXT, or TEXT's lines up to a blank comment line
+whole_paras() {
+  [[ -n $1 ]] || return 1
+  [[ $1 == "$2" ]] && return 0
+  [[ $2 == "$1"$'\n'* ]] || return 1
+  local rest=${2#"$1"$'\n'}
+  [[ ${rest%%$'\n'*} =~ ^#?[[:space:]]*$ ]]
+}
+# is_header FILE HELP: HELP is FILE's header, kept as it is or with "# " off
+is_header() {
+  local h
+  h=$(header "$1")
+  whole_paras "$2" "$h" || whole_paras "$2" "$(sed 's/^# \{0,1\}//' <<<"$h")"
+}
+
+mapfile -t tools < <(grep -s -d skip -lE 'usage_from_header|awk .NR > 2 && !/\^#/ \{ exit \}' tools/* || true)
+((${#tools[@]})) || fail "no tool prints its header as --help"
+mkdir -p "$t/r/tools"
+cp -r tools/lib "$t/r/tools/"
+for f in "${tools[@]}"; do
+  out=$(help_of "$PWD/$f")
+  is_header "$f" "$out" || fail "$f --help isn't its header comment (or whole paragraphs of it)"
+  g=$t/r/$f
+  sed '3a\# A line added to the header.' "$f" > "$g"
+  chmod +x "$g"
+  grown=$(help_of "$g")
+  is_header "$g" "$grown" || fail "$f --help isn't its header comment once the header grows by a line"
+  (($(wc -l <<<"$grown") == $(wc -l <<<"$out") + 1)) \
+    || fail "$f --help doesn't follow its header when it grows by a line"
+done
+echo "ok - ${#tools[@]} tools print their header comment as --help, however long it grows, and no code"

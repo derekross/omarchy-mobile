@@ -29,8 +29,8 @@ tried yet; it is next.
 
 **Slot A does not hold stock Android.** This is a §3.1 event, recorded
 here as the maintainer asked on #432. Putting stock back on slot A is
-outside the project: this tree only writes slot B and `userdata`, and
-never `vbmeta`. If it is done, it is the owner's own step, with
+outside the project ([the maintainer's decision on #432](https://github.com/derekross/omarchy-mobile/issues/432#issuecomment-6708103355)):
+this tree only writes slot B and `userdata`, and never `vbmeta`. If it is done, it is the owner's own step, with
 OnePlus's own images, and it is recorded on #432 (slot flags before
 and after, what was flashed and from which image, then a fresh
 read-only radio backup). The owner has decided not to restore it, so
@@ -66,30 +66,27 @@ three steps of 2026-11-05: that reply was posted at 16:13 (21:13 UTC),
 and `flash boot_b` (netfilter kernel), `--set-active=a` and the package
 install into `userdata` ran from 16:15 to about 16:20, before I had read
 it. Since then the only commands sent to the phone have been the read-only
-backup, one `fastboot boot` (2026-11-05 16:35) and `getvar` (below). No
+backup, one `fastboot boot` (2026-11-05 16:35), `getvar` and one rescue
+boot to read the slot flags again (below). No
 slot flag is written again until this phone has a per-device entry in
 CONTRIBUTING.md.
 
-**Slot flags** (`fastboot getvar all`, read-only):
+**Slot flags** (read-only; `fastboot getvar all`, except the last row):
 
 | Read | `current-slot` | A: successful / unbootable / retry-count | B: successful / unbootable / retry-count |
 | --- | --- | --- | --- |
 | 2026-11-04, before any write of this port | a | no / no / 6 | yes / no / 7 |
-| 2026-11-07, now | a | no / no / 5 | no / no / 7 |
+| 2026-11-07 | a | no / no / 5 | no / no / 7 |
+| 2026-11-07, after one more rescue boot, read in the rescue from `sde`'s GPT attributes (`sfdisk --dump`) | a | no / no / 5 | no / no / 7 |
 
 Between the two reads, B lost its successful mark (left by the third-party
 build; `--set-active=b` clears it and nothing of this port marks a slot)
 and A's retry count went from 6 to 5. Neither slot is marked unbootable.
 
-Slot A is not marked successful, so each boot of the rescue may spend one
-of its tries. If ABL works as on other Qualcomm phones, `--set-active=a`
-on 2026-11-05 reset A's count to 7, and the rescue boots since (including
-the reboot after a `fastboot boot` panics with no USB host) took it to 5.
-At 0 ABL would switch to slot B and run B's tries down too, and since
-nothing here may mark a slot, the phone would then stop in fastboot and
-need a `--set-active` to come back. This is not confirmed yet: one more
-`getvar` after the next rescue boot will tell. Until then, rescue boots
-are kept few.
+Slot A is not marked successful, but a rescue boot does not spend one of
+its tries here: after one more rescue boot A was still at 5 and B at 7
+([#432](https://github.com/derekross/omarchy-mobile/issues/432#issuecomment-6716747930)). What took A from 6 to 5 between the first two reads is not
+known. Neither slot is near 0.
 
 **The slot-A rescue.** It is not the shared init and has no initramfs (an
 empty ramdisk): the kernel mounts `system_a` from the `root=` that ABL
@@ -103,6 +100,20 @@ tree and goes away if stock is restored.
 **With no USB host**, a `fastboot boot` of the shared init gives up after
 20 s and panics, and `panic=10` reboots the phone. ABL then starts the
 active slot, A, which is the rescue.
+
+## 2026-11-08: the LUN-aware guard, booted RAM-only
+
+`fastboot boot` of an initramfs built from commit 2331a85 (the
+`UFS_RW_LUNS` pull request, with `UFS_RW_LUNS=sde` in this descriptor),
+kernel `7.1.0-rc1-sdm845`; nothing written. From the init's log and
+`/sys/block`:
+
+- allowlist `boot_b userdata`; LUNs with allowlisted partitions `sda sde`;
+- `/dev/sda` and `/dev/sde` removed;
+- only `sda17` (`userdata`) and `sde39` (`boot_b`) writable; the other
+  71 `sde` partitions `ro=1`;
+- `sdb`, `sdc`, `sdd` and `sdf` read-only at the disk level;
+- no UFS errors in the kernel log.
 
 ## 2026-11-05: complete backup
 
@@ -169,8 +180,9 @@ wrote nothing.
   nothing mounted.
 - **`boot_b` is on LUN `sde`, not `sda`.** The shared guard's `UFS_RW`
   only looks at `sda`, so `boot_b` and `dtbo_b` stay read-only (seen
-  live). This is the same split as dodge; a LUN-aware `UFS_RW` will be its
-  own shared pull request.
+  live). This is the same split as dodge. The guard can now open a second
+  LUN (`UFS_RW_LUNS`, #530); enchilada's `UFS_RW_LUNS=sde` comes with the
+  slot-B install, which gives `boot_b` on `sde` a writer.
 - msm DRM came up (`fb0` is `msmdrmfb`).
 - ABL appends `root=PARTUUID=<system_a> skip_initramfs ro init=/init` to
   the command line even on `fastboot boot`. The shared init runs as PID 1
