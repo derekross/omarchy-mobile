@@ -2802,13 +2802,16 @@ tools/phone-ssh 'nmcli -f DEVICE,TYPE,STATE device | grep -c gsm; omamobile-sit 
 #   rollback: as B2
 
 # B4 the second reboot: the clean stop clears the modem-up marker, and the next boot starts again
-# (asks the human; risk: medium: one UFS pass)
-tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+# (asks the human; risk: medium: one UFS pass). Through systemd: `reboot-to` stops no unit, so the stop
+# hook wouldn't run (AGENTS.md section 2)
+tools/phone-ssh 'systemctl reboot'
+# once the phone is back on USB (the modem's stop takes about 40 s, #532):
 tools/phone-ssh 'sleep 240; journalctl -b -1 -u omamobile-modem -o cat | grep -E "CP OFFLINE|stopped|removed|kept" | tail -3;
   systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; omamobile-sit status | head -3;
   ls -l /var/lib/omamobile/modem-* 2>&1; dmesg | grep -c ufshcd_err_handler'
-#   pass: the previous boot's journal ends with "CP OFFLINE" and "modem stopped (success): ... modem-up
-#     removed"; active x4 and registered again; only this boot's modem-up; err_handler 0 on this boot
+#   pass: the previous boot's journal has "CP OFFLINE" and ends with "modem stopped (<result>): ... modem-up
+#     removed" (the result is "timeout" until #532 is fixed; the removal is what counts); active x4 and
+#     registered again; only this boot's modem-up; err_handler 0 on this boot
 #   stop: the modem unit refused with "ended without a clean stop" (the stop hook didn't run or ran on
 #     another boot's marker: the -1 journal says which; the fix is in the package, not on the phone:
 #     `systemctl disable omamobile-modem-boot.target`, remove the marker, and reboot); "never reached
