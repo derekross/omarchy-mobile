@@ -19,6 +19,17 @@ has 'ok|1|kernel health|' && has '1 error lines in dmesg (1 known, 0 new)' && ! 
   || fail "a known line is known"
 pass "a known line is known"
 
+# A Pixel 8a's boot (zuma): the clkout driver has no zuma PMU entry
+run '[    0.078409] exynos-clkout exynos-clkout: cannot match parent device' \
+    '[    0.078419] exynos-clkout exynos-clkout: probe with driver exynos-clkout failed with error -22'
+has 'ok|1|kernel health|' && has '2 error lines in dmesg (2 known, 0 new)' && ! has 'new dmesg errors' \
+  || fail "zuma's two exynos-clkout lines are known"
+pass "zuma's two exynos-clkout lines are known"
+# Any other errno from that probe is still new
+run '[    0.078419] exynos-clkout exynos-clkout: probe with driver exynos-clkout failed with error -12'
+has '0 known, 1 new' && has 'new dmesg errors' || fail "another exynos-clkout probe error is new"
+pass "another exynos-clkout probe error is new"
+
 run "$dais"
 has 'ok|1|kernel health|' && has '(1 known, of them ASoC no backend DAIs (PipeWire probe) x1, 0 new)' \
   && ! has 'new dmesg errors' || fail "one no-backend-DAIs line (PipeWire's probe) is known and counted"

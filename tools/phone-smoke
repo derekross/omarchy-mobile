@@ -140,6 +140,12 @@ known_errors=(
   # ABL appends console=null; no GPT auto-mounting on these phones
   'Warning: unable to open an initial console'
   "systemd-gpt-auto-generator' failed"
+  # zuma (the Pixel 8 Pro and 8a): clk-exynos-clkout has entries for the
+  # gs101, gs201 and zumapro PMUs but none for google,zuma-pmu, so it can't
+  # match its parent and fails to probe (husky's NOTES, akita's BRINGUP-M1
+  # and BRINGUP-M2); fix: a zuma entry, once a zuma board needs the clock
+  'exynos-clkout exynos-clkout: cannot match parent device'
+  'exynos-clkout exynos-clkout: probe with driver exynos-clkout failed with error -22'
 )
 # Known lines that stay visible: "ceiling|label|regex". Each is counted and
 # named in the kernel health row; with a ceiling, the lines beyond it count as
