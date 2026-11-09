@@ -5,7 +5,8 @@ Tracking: https://github.com/derekross/omarchy-mobile/pull/231
 
 ## Current state
 - Bootloader unlocked
-- Stock CD1A.260905.001.B1 on slot B (factory flash-all.sh)
+- Stock CD1A.260905.001.B1 on slot B (factory flash-all.sh). On 2026-11-01 OrangeFox’s recovery replaced slot B’s vendor_boot (stock copy saved by the installer at backup/20261101-151204/vendor_boot_b before the rebuild).
+- Stock recovery did not provide adb root, so OrangeFox was installed on slot B to take the read-only calibration backup.
 - Slot A is the safety slot (do not flash)
 - device.conf has partition sizes, AVB values, and confirmed board id/rev
 - Critical calibration partitions backed up off-device with SHA-256 checksums  
@@ -16,10 +17,10 @@ Tracking: https://github.com/derekross/omarchy-mobile/pull/231
 - It did not write `vbmeta`, `boot`, or `init_boot`.
 - No plan to restore stock `vendor_boot` on slot A (it was never changed).
 - Images and SHA256SUMS live in a local `kodiak-critical/` directory (not in the repository).  
-  No classic efs*/modem_userdata nodes exist on this device.
+- No classic efs*/modem_userdata nodes exist on this device.
 
 ## Still needed
-- [x] Slot-B backup of stock boot images
+- [x] Slot-B backup of stock boot images (taken before OrangeFox install; stock vendor_boot_b also saved by the installer at backup/20261101-151204/vendor_boot_b)
 - [x] Calibration partition backup (see above)
 - [ ] First Omarchy build / flash to slot B
 

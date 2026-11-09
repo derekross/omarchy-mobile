@@ -34,7 +34,9 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 ## Slots
 
 - OrangeFox was installed via the AIO installer (`install-desktop.sh`) after the factory flash and OTA sideload, and before the calibration backup.
+- Flash output not kept; the installer was set to slot b only.
 - The installer replaced only the recovery part of `vendor_boot` on slot B. Slot A remains stock.
+- The installer dropped the AVB footer from slot B’s vendor_boot (grown ramdisk + old footer would overflow the partition). Slot B’s vendor_boot currently has no AVB footer.
 - It did not write `vbmeta`, `boot`, or `init_boot`.
 - No plan to restore stock `vendor_boot` on slot A (it was never changed).
 
@@ -69,6 +71,6 @@ Tracking issue: https://github.com/derekross/omarchy-mobile/issues/199
 
 ## Status
 
-Stock facts collected and both slots restored to factory.  
+Stock facts collected and both slots restored to factory. On 2026-11-01 OrangeFox’s recovery replaced slot B’s vendor_boot (stock copy saved by the installer at backup/20261101-151204/vendor_boot_b before the rebuild).
 Device descriptor added in `device/kodiak/device.conf`.  
 Critical calibration partitions backed up off-device with SHA-256 checksums (persist, modem_a/b, nvdata, nvram, devinfo, trusty_userdata). Taken from OrangeFox recovery on slot B (contents at that time; recovery may have mounted persist/metadata). Not a clean stock baseline.
