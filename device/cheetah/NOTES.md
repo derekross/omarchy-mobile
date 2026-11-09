@@ -2,6 +2,91 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-09: automatic brightness from the AoC's light sensor
+
+A Pixel 7 Pro on `7.3.0-rc6-omamobile-g2219cc6cda77` (`omamobile-sensors`
+0.2.1 installed, `omamobile-shell` 0.2.100) drew about 4 W in use with the
+panel at 85 % (level 1740) in a room of about 85 lux: nothing read the
+light sensor. `omamobile-sensors` 0.2.2 adds `omamobile-autobrightness`
+(a user service, off by default; the package README has the design). It
+was run from the branch on that phone, not installed, as two versions of
+`lib/autobrightness.py`: the first filter (blob `bd01d3f`, or a copy three
+minutes older that differed in one log line) for the dry runs until
+16:49, and the second (`4cc0459`) from then on. Times are the phone's
+(-0700).
+
+- **The light sensor through the proxy:** `ClaimLight`, then one
+  `LightLevel` a second; 12 readings in that room ran from 77.9 to
+  88.2 lux. That is the few percent the daemon's hysteresis (+26 %/-29 %,
+  after a median of three) has to ride out.
+- **Writing the backlight from a user service:** logind's
+  `SetBrightness` on `session/auto` works from a `systemd-run --user` unit,
+  outside the session's scope (logind falls back to the user's display
+  session). Ten writes of the current level took 2.1-9.6 ms, and every one
+  woke a `poll()` on `actual_brightness` (10 of 10), so the daemon sees
+  the slider's writes at once without polling. `brightness` itself is
+  root's (0644); only `bl_power` is the video group's.
+- **Screen off:** with the panel off (`bl_power` 4, `card2-DSI-1/dpms`
+  Off), a dry run (`--dry-run`, writes nothing) didn't claim the sensor.
+  A one-second poll of both is the only way to see it: Hyprland 0.57 has
+  no DPMS event on its socket, and neither sysfs file notifies.
+- **A wake, in the same dry run (`--verbose`):** the owner woke the phone
+  at 16:44:18.19. The daemon claimed the sensor 15 ms later, and the first
+  reading (52.4 lux) came 70 ms after the wake. It would have gone from
+  the owner's level 716 to the curve's 245 (73 nits) in three steps within
+  0.1 s. The next six readings (47.4-63.4 lux) moved nothing.
+- **Three minutes of use in a dim room changed the filter.** The readings
+  came about once a second when steady, and up to ten a second while the
+  light changed. At about 14 lux the sensor read 1-7 lux for 7-8 s at a
+  time, with about 4 s of room light in between: by every sign, a hand
+  over the sensor under the panel. The first filter (5 s before dimming)
+  would have moved the level 11 times in 2.3 minutes, four of them a dim
+  and a brighten seconds apart. It also had a bug: a decision to brighten,
+  taken on the lagging average, could set the level to a darker reading of
+  the moment (seen once: 12.8 lux to 11.0). Now the median of the last
+  three readings must agree with the average, and darker light has to last
+  10 s (`4cc0459`). The same 330 readings, replayed through it: 4 moves
+  (the wake, the room going dim, a small rise, a brighter place), no
+  pumping. The replay isn't in the repository; a 64 s stretch of the
+  shaded readings is, as a unit test, and so is the brighten that went
+  away.
+- **The real thing, attended,** 16:50-16:52 (the owner holding the
+  phone; `4cc0459` from the branch as a transient user unit, writing the
+  backlight):
+  - *Its own light:* five 4 s steps between levels 300 and 1500 with the
+    daemon stopped. The first four were confounded: the room light rose
+    from 3 to 34 lux as the owner moved. The last pair was steady, 40.0
+    lux at 1500 and 40.2 at 300: the panel's own light (five times
+    brighter) doesn't reach the reading the proxy passes on.
+  - *Start:* it claimed the sensor 17 ms after starting and set level
+    245 (52 lux) 0.07 s after that. Still 245 16 s later.
+  - *The slider:* `brightnessctl set 50%` (as the quick settings do).
+    The daemon saw it 13 ms later ("not ours"), took it as the owner's
+    point 2.0 s later (1024, 301 nits, at 52 lux; gamma at its 1/3 limit,
+    so the blend made it exact), and left it at 1024 for the 20 s
+    after.
+  - *Reset:* `--reset` brought back the plain curve, and it eased down
+    to 311 (76 lux) within 8 s.
+  - *Display off and on* (`omarchy-brightness-display off`, then `on`):
+    released the sensor within about a second of the panel going off,
+    claimed it again on the wake, and applied 61 lux (level 271) at
+    once.
+  - 1.0 s of CPU over the 59 s run, start-up included. The level was set
+    back to the owner's 716 afterwards; nothing is installed or enabled.
+
+A review of the branch found what these runs couldn't: a write that
+failed (logind refusing, or a timeout) was learned as the owner's
+preference, a slider moved in the first 3 s after a wake was undone, and
+the panel range was keyed on `max_brightness` rather than the board.
+The fixes (blob `a8718c8`) ran in the unit tests only, not on the phone.
+
+Not yet run: the packages built and installed; the unit started by
+`omamobile-toggle-autobrightness on` and at a login; the quick-settings
+icon and tile in the live shell (that needs `omamobile-shell` installed
+and the shell restarted; offscreen, `test/quicksettings-render` drew
+both, off and on, on 0.2.100's shell); a day of use with the service on;
+any other phone.
+
 ## 2026-11-09: the 2026.11.08 test install, and an update run as root
 
 The release's signed bundle, `omamobile-cheetah-2026.11.08`, installed on the
