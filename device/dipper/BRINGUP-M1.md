@@ -49,12 +49,17 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    `fastboot -s "$FASTBOOT_SERIAL" boot boot.img`. Expect: the image starts
    without changing UFS. The screen may go dark about 30 seconds after boot
    because the panel regulator is not enabled; that alone is not a hang.
-   Pass only when `uname -r`, the `boot.img` sha256, all `ro` values from
-   `grep . /sys/block/sd*/ro /sys/block/sd*/sd*/ro`, the `ufs-ro` lines from
-   `dmesg`, the reserved-memory lines from
+   Pass only when `uname -r`, the `boot.img` sha256, all partition `ro`
+   values, every whole-disk `ro` value except `sda`, and the `ufs-ro` lines
+   from `dmesg` are recorded and correct. Dipper's main LUN is the exception:
+   `/sys/block/sda/ro` remains `0`, but the guard removes `/dev/sda` so only
+   individually guarded partition nodes are available. Verify `/dev/sda` is
+   absent and every `/sys/block/sda/sda*/ro` is `1`; fail if the node exists.
+   Also record the reserved-memory lines from
    `grep -i -E 'reserved|System RAM' /proc/iomem`, the bound `qcom_wdt`
    driver, its running watchdog feeder, and USB/SSH are recorded and correct.
-   Stop if any partition has `ro=0`, the watchdog is not fed, USB/SSH fails,
+   Stop if any partition has `ro=0`, another whole-disk node has `ro=0`,
+   `/dev/sda` exists, the watchdog is not fed, USB/SSH fails,
    or anything asks to flash. Rollback: use the verified forced-restart
    procedure from step 3, then recover from the verified backup if needed.
    Risk: a USB host that never configures still reaches the existing watcher
