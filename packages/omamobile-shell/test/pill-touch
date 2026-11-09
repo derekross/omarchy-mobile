@@ -115,6 +115,7 @@ Item {
   readonly property string agentName: ""
   readonly property color foreground: "#c0caf5"
   function expand() { Quickshell.execDetached(["expand"]) }
+  function dismiss(speed) { Quickshell.execDetached(["dismiss"]) }
 
 %s
 
