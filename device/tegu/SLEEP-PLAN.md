@@ -1,17 +1,22 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 9a sleep: why s2idle drains so much
 
-Status (2026-11-06): suspend reliability remains under investigation. The
-#69 diagnostic recorded 24 audited WFI wakes, then reset by watchdog during
-the next cycle; that failure's stage remains unknown. On instrumented #71,
-111 WFI wakes passed NFC, timing and ordered UFS checks. The following wake
-failed UFS link startup despite the core auto-clock bit reading clear on all
-20 attempts; a recorded SysRq reset recovered the palmtop. The known-good
-#7 daily kernel and prior modem and sleep-daemon states are restored; sleep
-and suspend remain masked. C2-enabled sleep, physical power-key wake, NFC
-safety and sleep power remain unqualified. The clock change did not prevent
-this UFS failure; it is not a demonstrated fix. The latest evidence is at the
-end of this plan.
+Status (2026-11-09): the two suspend failures of the series since 10-28 are
+found and fixed on the owner's integration kernel, in review as
+[linux-omarchy-mobile#224](https://github.com/derekross/linux-omarchy-mobile/pull/224).
+Dead storage after a wake: the UFS pads (gph5-0, the reference clock, and
+gph5-1, the reset) came back from s2idle as plain inputs on about one wake
+in a hundred; the fix re-applies the UFS pin state in `exynos_ufs_resume()`.
+The silent no-wake: every core in C2 during s2idle; with WFI for the sleep
+(C2 kept while awake) the RTC alarm woke the palmtop every time. Evidence:
+300 of 300 RTC-woken 60 s sleeps twice (#96 WFI-only, #98 C2 at runtime,
+2026-11-07/08) and 15 of 15 wakes on the everyday path, the shell's
+auto-sleep behind the lock, twelve of them half-hour sleeps (#99,
+2026-11-08). The attended-first rule (S1, AGENTS.md) stands until the fix
+is merged and has run from the published kernel; the published-tip run is
+the next step. S1 below is the condensed account: the two causes, the fix
+commits, a run table, what is left and what was ruled out. The dated
+working notes that led there follow it, oldest first.
 
 Historical status (2026-11-03): s2idle usually works (RTC and power-key wakes; ten of
 ten 30-second cycles on 10-31 with the console kept through the freeze;

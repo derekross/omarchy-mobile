@@ -1,11 +1,12 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Laptop watcher for sleep-autosleep-series.sh: the palmtop is asleep most of the
 # time and awake for a few seconds every S seconds, so poll by ping, read the
 # series log in the awake window, and call it a hang after HANG seconds of silence.
-cd /home/dave/git/omarchy-mobile
+cd "$(dirname "$0")/../../.."
 PS=tools/phone-ssh; H=logs/tegu-linkwait-20261107; L=/var/log/omamobile/sleep-autosleep-20261108.log
 S=${S:-1800}; HANG=${HANG:-$((S + 900))}
-send() { /home/dave/.local/bin/ask-w4ho "$1" >/dev/null 2>&1; echo "$(date +%T) sent: $1" >> $H/autosleep-watch.log; }
+send() { "${SLEEP_NOTIFY:-ask-w4ho}" "$1" >/dev/null 2>&1; echo "$(date +%T) sent: $1" >> $H/autosleep-watch.log; }
 log() { echo "$(date +%T) $*" >> $H/autosleep-watch.log; }
 last_ok=$(date +%s); n=0
 while :; do

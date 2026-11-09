@@ -1,25 +1,18 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Link-wait series loop (2026-11-07): runs the sleep series on the palmtop,
 # polls it every 20 s; a dead-storage wake is captured (kernel journal with
 # the link-wait lines and the UFS register dump) and recovered with sysrq,
 # and the series restarts, at most MAXREC times; a silent hang messages Dave
 # and stops. Dave gets a count every 25 good wakes.
-cd /home/dave/git/omarchy-mobile
+cd "$(dirname "$0")/../../.."
 PS=tools/phone-ssh; H=logs/tegu-linkwait-20261107; L=/var/log/omamobile/sleep-linkwait-20261107.log
-MAXREC=${MAXREC:-3}; WFI=${WFI:-1}; CRUMBS=${CRUMBS:-logs/tegu-sleep-crumbs-20261104/tegu-sleep-crumbs.ko}
-send() { /home/dave/.local/bin/ask-w4ho "$1" >/dev/null 2>&1; echo "$(date +%T) sent: $1" >> $H/loop.log; }
+MAXREC=${MAXREC:-3}; WFI=${WFI:-1}
+send() { "${SLEEP_NOTIFY:-ask-w4ho}" "$1" >/dev/null 2>&1; echo "$(date +%T) sent: $1" >> $H/loop.log; }
 log() { echo "$(date +%T) $*" >> $H/loop.log; }
 start_series() {
   for i in $(seq 40); do $PS --fresh true 2>/dev/null && break; sleep 10; done
   timeout 30 $PS --fresh "cat $L 2>/dev/null" > $H/series-before-run$run.log 2>/dev/null
-  # Breadcrumbs v2 (logs/tegu-sleep-crumbs-20261104): a stage code in the PMIC
-  # RTC's unused alarm at each suspend and resume phase; its load line names
-  # the last boot's last stage. Unloaded again unless its read-back selftest passes.
-  if [[ -f $CRUMBS ]]; then
-    $PS --fresh 'cat > /root/tegu-sleep-crumbs.ko' < $CRUMBS
-    timeout 30 $PS --fresh 'rmmod tegu_sleep_crumbs 2>/dev/null; insmod /root/tegu-sleep-crumbs.ko 2>&1; sleep 1; dmesg | grep tegu-sleep-crumbs | tail -3; dmesg | grep tegu-sleep-crumbs | tail -2 | grep -q "selftest ok" || { rmmod tegu_sleep_crumbs 2>/dev/null; echo crumbs unloaded; }' >> $H/crumbs.log 2>&1
-    log "crumbs: $(tail -3 $H/crumbs.log | tr '\n' ' ' | cut -c1-300)"
-  fi
   $PS --fresh 'cat > /root/sleep-linkwait.sh' < device/tegu/bringup/sleep-series.sh
   # The first sleep waits for the graphical session: a suspend while the
   # shell is still starting after a boot left the session closed and the
@@ -56,7 +49,7 @@ while true; do
       # the UFS pads' pin controller (one controller only, never */pins), the UFS
       # clocks, the regulators, the GPIOs, the UFS host's sysfs. Read-only.
       if [[ $disk == disk-dead ]]; then
-        timeout 90 $PS --fresh 'U=/sys/bus/platform/devices/13200000.ufs; echo "== pinctrl hsi2ufs"; cat /sys/kernel/debug/pinctrl/13060000.pinctrl-samsung-pinctrl/pins 2>&1 | head -40; echo "== pinconf hsi2ufs"; cat /sys/kernel/debug/pinctrl/13060000.pinctrl-samsung-pinctrl/pinconf-pins 2>&1 | head -40; echo "== clk ufs/hsi2"; grep -iE "ufs|hsi2" /sys/kernel/debug/clk/clk_summary 2>&1 | head -40; echo "== regulators"; cat /sys/kernel/debug/regulator/regulator_summary 2>&1 | head -40; echo "== gpio"; cat /sys/kernel/debug/gpio 2>&1 | grep -iE "ufs|gpp0|gph5" ; echo "== ufs sysfs"; for a in spm_lvl rpm_lvl power_info/\*; do echo "$a: $(cat $U/$a 2>&1 | tr "\n" " ")"; done; echo "== phy"; cat /sys/kernel/debug/regmap/13204000.phy/registers 2>/dev/null | head -5; echo "== last kmsg"; dmesg | tail -60' > $H/capture-$captures-hoststate.txt 2>&1
+        timeout 90 $PS --fresh 'U=/sys/bus/platform/devices/13200000.ufs; echo "== pinctrl hsi2ufs"; cat /sys/kernel/debug/pinctrl/13060000.pinctrl-samsung-pinctrl/pins 2>&1 | head -40; echo "== pinconf hsi2ufs"; cat /sys/kernel/debug/pinctrl/13060000.pinctrl-samsung-pinctrl/pinconf-pins 2>&1 | head -40; echo "== clk ufs/hsi2"; grep -iE "ufs|hsi2" /sys/kernel/debug/clk/clk_summary 2>&1 | head -40; echo "== regulators"; cat /sys/kernel/debug/regulator/regulator_summary 2>&1 | head -40; echo "== gpio"; cat /sys/kernel/debug/gpio 2>&1 | grep -iE "ufs|gpp0|gph5" ; echo "== ufs sysfs"; for a in spm_lvl rpm_lvl power_info/\*; do echo "$a: $(cat $U/$a 2>&1 | tr "\n" " ")"; done; echo "== last kmsg"; dmesg | tail -60' > $H/capture-$captures-hoststate.txt 2>&1
         log "host state captured ($(wc -l < $H/capture-$captures-hoststate.txt) lines)"
       fi
       timeout 60 $PS --fresh "journalctl -b -k --no-pager -o short-monotonic | tail -2500" > $H/capture-$captures-k.txt 2>&1
