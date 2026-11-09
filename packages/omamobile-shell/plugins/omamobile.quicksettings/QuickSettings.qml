@@ -1926,7 +1926,10 @@ Item {
       // Not "top": every Item already has a FINAL top anchor line, and
       // Qt 6.12 refuses to load a file that redeclares it.
       readonly property real shadeTop: root.wide ? sheet.y : sheet.y + sheet.height + Style.spacing.lg
-      readonly property real room: window.height - shadeTop - Style.gapsOut
+      // Sliding changes position, not the settled notification viewport.
+      // Expansion still updates the available room through sheet.height.
+      readonly property real restingTop: root.wide ? Style.gapsOut : Style.gapsOut + sheet.height + Style.spacing.lg
+      readonly property real room: window.height - restingTop - Style.gapsOut
       readonly property real insets: shade.contentTopInset + shade.contentBottomInset
       readonly property real listHeight: root.notifications.length > 0 ? shadeList.contentHeight : shadeEmpty.implicitHeight
       // The media card and the gap under it, when a player is up.
