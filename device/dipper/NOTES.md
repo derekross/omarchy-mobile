@@ -5,51 +5,60 @@ Facts only, each read off the phone. Captures remain outside the repository
 because they contain device identifiers and Wi-Fi keys; this file records only
 the facts needed for review.
 
-## 2026-11-09 — current recovery and RAM-only image gate
+## 2026-11-09 — recovery, old-kernel observation and RAM-only image
 
-A read-only SSH check of the installed kernel
-`7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` reported root `/dev/sda21`
-mounted ext4 read-write. `/sys/block/sda/ro` and
-`/sys/block/sda/sda21/ro` were `0`; all other partition `ro` values read `1`.
-This is not PR #505's image and fails its RAM-boot stop condition. Systemd
-logged that setting the `qcom_wdt` timeout to one minute failed; the watchdog
-feeder status was not checked.
+The current `recovery` partition matches the `recovery.img` in the
+checksum-verified 15-partition stock snapshot captured on 2026-10-29 at 19:01;
+both have SHA-256
+`7691a33e8b65d1ffcbf67b16fd4dc5c4c421420230f230db312512c73abc2221`. This
+confirms the bytes match that saved copy. The order of that snapshot and the
+two diagnostic writes to `recovery` is not established. `logdump` is not in
+the 15-partition backup. A separate live, file-level userdata archive was
+verified off-device; it is not a raw partition image or an atomic snapshot,
+and the filesystem remained mounted during the copy.
 
-The current `recovery` partition's SHA-256 matches the `recovery.img` in the
-checksum-verified 15-partition snapshot captured on 2026-10-29 at 19:01. This
-confirms the bytes match that saved copy; the exact order of that capture and
-the two diagnostic writes to `recovery` is not established here. `logdump` is
-not in the 15-partition backup. A separate live, file-level archive of the
-userdata root filesystem has now been created and verified off-device. It is
-not a raw partition image or an atomic snapshot; the filesystem remained
-mounted during the copy.
+Before entering fastboot, the handset answered over USB SSH; no restart was
+needed to restore SSH. On the installed Android system, holding Power alone
+for more than 10 seconds restarted it, then Volume Down + Power entered
+fastboot. Read-only fastboot variables reported product `dipper` and an
+unlocked bootloader. This attended test was from the installed system, not a
+simulated kernel hang.
 
-On 2026-11-09 the owner verified that holding Power alone for more than 10
-seconds restarted this handset. The owner then entered fastboot with Volume
-Down + Power; read-only fastboot variables reported product `dipper` and an
-unlocked bootloader. This verifies the handset's button recovery from the
-running system, not recovery from a hang in PR #505's kernel.
+An earlier read-only SSH observation, reported on 2026-11-09 at 08:53 UTC,
+was on the dirty kernel
+`7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty`. It reported `/dev/sda21`
+mounted as the root filesystem read-write, with `/sys/block/sda/ro=0` and
+`/sys/block/sda/sda21/ro=0`; the other partition `ro` values were `1`. Thus
+`/dev/sda` existed and the whole main LUN was writable. The surviving record
+does not say how that image was started, the device uptime at the check, or
+whether its diagnostic init's `logdump` mirror was running. Do not boot that
+old image again. Systemd reported failure to set the `qcom_wdt` timeout to one
+minute, but the exact journal line was not retained and the feeder was not
+checked. This old-kernel observation is not evidence for PR #505's image.
 
-On 2026-11-09, the final PR #505 image built from the open Dipper kernel series
-was started with serial-pinned `fastboot boot`; no partition was flashed. It
-reported `7.3.0-rc6-omamobile-push1`, and its `boot.img` SHA-256 was
-`f2f5cb2e3da8fe992d366dba36e059c0d9106cf14a7d1c8872c61ee144a4474b` (matching
-the local build manifest). `simpledrm` registered `/dev/fb0`; USB networking
-and SSH worked; and `qcom_wdt` was bound with its userspace feeder running.
+The PR #505 RAM image was built from kernel PR #220 head `b288f8e` after FTS5
+PR #219 merged, then started with serial-pinned `fastboot boot`; no partition
+was flashed. It reported `7.3.0-rc6-omamobile-push1`. The `boot.img` SHA-256 is
+`e2cdb765de21a5869a1db314c19f1fddb668219a51d3c9ce81a1a083536d711e`, matching
+its build manifest. The root is the initramfs (`rootfs`), not UFS. `simpledrm`
+registered `/dev/fb0`; USB networking and SSH worked; and `qcom_wdt` was bound
+with its userspace feeder running. The rescue exposed reboot modes `bootloader`
+and `recovery`; running `/usr/local/bin/reboot-to bootloader` over SSH returned
+the handset to fastboot without writing UFS.
 
-The first image did not register PMIC keys because `qcom-pon` was left modular
-and absent from the rescue initramfs. The Dipper kernel fragment now builds it
-in. On the final image, `pm8941_pwrkey` and `pm8941_resin` both registered, and
-a physical Volume Down press produced `KEY_VOLUMEDOWN` (code 114, value 1).
-The owner had already reported seeing the console during the first boot.
+`pm8941_pwrkey` and `pm8941_resin` registered. On the earlier final image, a
+physical Volume Down press produced `KEY_VOLUMEDOWN` (code 114, value 1), and
+Volume Up produced `KEY_VOLUMEUP` (code 115, value 1). The current kernel
+image's button events have not yet been rechecked. The owner reported seeing
+the console during the first boot.
 
-The storage guard removed the whole-disk node `/dev/sda`; its sysfs `ro` value
-remained `0` by design. All 85 UFS partitions reported `ro=1`, and all other
-whole-disk nodes reported `ro=1`. The kernel log confirmed the guard's actions.
-The EA8074 panel and FTS5 touchscreen still need separate hardware tests. The
-RAM image had no Arch root, and the probe did not write UFS. The checksum-
-verified stock partition snapshot and private userdata archive were checked
-before boot.
+The storage guard removed `/dev/sda`; its sysfs `ro` value remained `0` by
+design. All 85 UFS partition `ro` values were `1`; the other UFS whole disks
+were read-only. `/proc/iomem` reports `0x86200000–0x88efffff` as System RAM and
+`0x88f00000–0x890fffff` as reserved, so the TZ range is not reserved in this
+RAM boot's map. The EA8074 panel and FTS5 touch input still need separate
+hardware tests. The RAM image had no Arch root, and the probe did not write
+UFS. The stock partition checksums were verified before boot.
 
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
@@ -81,8 +90,8 @@ before boot.
   `fts,tp-vendor = <0x48>`. The running kernel's input device is `N: Name="fts"`.
   An `atmel,mxt-ts@4a` node exists as the alternate vendor and is not the active one.
   **Open:** mainline's ST driver is `st,stmfts` (`drivers/input/touchscreen/stmfts.c`),
-  a different driver from Xiaomi's downstream `st_fts`; whether it binds this controller
-  is untested and is the largest unknown in this port. No sibling board helps —
+  a different driver from Xiaomi's downstream `st_fts`; the current FTS5 driver
+  has not been tested with Dipper's DTS node. No sibling board helps —
   polaris uses `syna,rmi4-i2c@20`, beryllium a FocalTech/Novatek part.
 - **Audio** `sdm845-tavil-snd-card` (WCD9340). **Fingerprint** Goodix, capacitive
   (`fingerprint_goodix`, `uinput-goodix`); no mainline driver, out of scope.
@@ -96,20 +105,24 @@ the image used kernel release
 `7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` with its matching DTB: UFS up
 (all six LUNs, ext4 mounts), USB NCM gadget, dropbear, gpio-keys, 8 CPUs and
 5.7 GB RAM. This records the historical first-light tree; kernel PRs [#218](https://github.com/derekross/linux-omarchy-mobile/pull/218),
-[#219](https://github.com/derekross/linux-omarchy-mobile/pull/219),
-[#220](https://github.com/derekross/linux-omarchy-mobile/pull/220) and
-[#221](https://github.com/derekross/linux-omarchy-mobile/pull/221) are successor
-changes and are not the code tested in that boot. The diagnostic
-image's guard allowed `userdata` and `logdump` writes. A temporary init widened
-the allowlist to include `logdump` and used `dd` to copy the kernel log there
-every two seconds during the 2026-10-29 diagnostic boot. Two diagnostic-image
-writes to stock `recovery` from rooted Android were also made on 2026-10-29.
-The existing 15-partition backup did not include `logdump`; an unverified
-`logdump.img` file is not evidence of a checked phone backup. The current
-`recovery` image has not been compared with a verified pre-write copy. The
-current RAM-only image and storage guard leave every UFS partition
-read-only; this is a code-path fact, not a new phone check. The mount options
-and whether `persist` was mounted during first light are not recorded here.
+[#219](https://github.com/derekross/linux-omarchy-mobile/pull/219) and
+[#220](https://github.com/derekross/linux-omarchy-mobile/pull/220) are later
+successor changes and are not the code tested in that boot; FTS5 PR #219 is now
+merged upstream. The diagnostic image's guard allowed `userdata` and `logdump`
+writes. A temporary init widened the allowlist to include `logdump` and used
+`dd` to copy the kernel log there every two seconds during the 2026-10-29
+diagnostic boot. The 2026-11-09 read-only check was on this dirty October
+kernel; it found `/dev/sda21` as the read-write root and therefore `/dev/sda`
+present and writable. The saved record does not establish whether the mirror
+process was still running during that later check, nor the device uptime then.
+Two diagnostic-image writes to stock `recovery` from rooted Android were also
+made on 2026-10-29. The existing 15-partition backup did not include `logdump`;
+an unverified `logdump.img` file is not evidence of a checked phone backup.
+The current recovery SHA matches the verified 2026-10-29 19:01 snapshot
+described above; the order of that snapshot and the two writes is unknown. The
+2026-11-09 PR #505 RAM boot checked every UFS partition flag on the phone; it
+did not mount or write UFS. The mount options and whether `persist` was mounted
+during first light are not recorded here.
 
 The recorded 15-partition snapshot before the radio runs was checksum-verified.
 The 2026-10-30 comparison found `boot`, `recovery`, `dtbo`, `vbmeta`,
