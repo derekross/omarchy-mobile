@@ -17,6 +17,10 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/noproc"
 export OMAMOBILE_REMOTE_PROC=$tmp/noproc
 
+# --- the printed version matches the version file
+check "omamobile-remote version prints the version file" \
+  test "$(bin/omamobile-remote version)" = "omamobile-remote $(cat version)"
+
 # --- the scripts parse
 for f in bin/* install test/all test/fake/*; do
   if [[ $(head -n1 "$f") == '#!/bin/bash' ]]; then
