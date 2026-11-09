@@ -45,7 +45,7 @@ jobs:
     steps:
       - name: Packages the tests use
         run: |
-          pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd openssl \
+          pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd lz4 openssl \
             python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox \
             xz gzip qt6-declarative shellcheck rsync
           # Arch's nodejs can lag a simdjson soname bump: on 2026-10-29
