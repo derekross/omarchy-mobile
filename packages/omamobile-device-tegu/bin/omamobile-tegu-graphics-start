@@ -74,6 +74,33 @@ panel_name() {
   echo ""
 }
 
+# The panel's backlight is registered when gs_dsim_cmd binds the panel,
+# before this start allows DSI commands, and udev starts
+# systemd-backlight@ for it right then: its restore of the saved brightness
+# gets EPERM, fails and hits the start limit (#512). Once allow_tx is on,
+# a restore that failed is run again (after waiting out one still running).
+# Only a failed one: a restore that worked, or that udev hasn't started
+# yet, is left alone.
+restore_backlight() {
+  local b unit state i
+  for b in "$root"/sys/class/backlight/*; do
+    [[ -e $b ]] || continue
+    unit="systemd-backlight@backlight:${b##*/}.service"
+    for ((i = 0; i < 20; i++)); do
+      state=$(systemctl show -P ActiveState "$unit" 2>/dev/null) || state=
+      [[ $state == activating ]] || break
+      sleep 0.25
+    done
+    [[ $state == failed ]] || continue
+    systemctl reset-failed "$unit" 2>/dev/null
+    if systemctl start "$unit" 2>/dev/null; then
+      log "${b##*/}: the saved brightness, refused before DSI commands were allowed, is restored"
+    else
+      log "${b##*/}: restoring the saved brightness failed again (systemctl status $unit)"
+    fi
+  done
+}
+
 case ${1:-} in
   '') ;;
   --retry) rm -f "$marker" ;;
@@ -131,9 +158,11 @@ if [[ -e $decon ]]; then
   # when it already is) makes the parameter file exist before the write.
   modprobe gs_dsim_cmd 2>/dev/null || true
   panel=$(panel_name)
+  dsi_allowed=0
   # the bootloader appends the panel's id (google-tg4c.2d008004 on the palmtop)
   if [[ $panel == google-tg4c || $panel == google-tg4c.* ]]; then
     if echo 1 > "$allow_tx" 2>/dev/null; then
+      dsi_allowed=1
       log "panel $panel: DSI commands allowed (gs_dsim_cmd.allow_tx=1)"
     else
       log "panel $panel: could not write $allow_tx; the display stays read-only at 60 Hz"
@@ -154,6 +183,8 @@ if [[ -e $decon ]]; then
     [[ -n $card ]] && printf '%s\n' "${card#"$root"}" > "$root/run/omamobile-tegu-display-card"
     up+="${up:+, }display"
   fi
+  # (Not read back from allow_tx: the kernel shows the bool as Y, not 1.)
+  (( dsi_allowed )) && restore_backlight
 else
   log "no display controller in this DTB; skipped"
 fi
