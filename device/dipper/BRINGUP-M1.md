@@ -116,7 +116,8 @@ repository; the SSH public key and generated host key stay in the local output.
 From this rescue image, an SSH session can return to fastboot with
 `reboot-to bootloader`. The helper asks the PMIC reboot-mode driver to select
 the bootloader and writes no UFS partition. The PMIC reset path was verified on
-the handset on 2026-11-09; the packaged helper still needs an end-to-end test.
+the handset on 2026-11-09. The packaged helper returned the running image to
+fastboot on 2026-11-09 without writing UFS.
 
 [panel #218]: https://github.com/derekross/linux-omarchy-mobile/pull/218
 [touch #219]: https://github.com/derekross/linux-omarchy-mobile/pull/219
