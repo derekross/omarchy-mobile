@@ -2,8 +2,9 @@
 # Xiaomi Mi 8 (dipper): RAM-only first light
 
 **Status (2026-11-09):** this PR's image booted by RAM on a Xiaomi Mi 8; the
-owner saw the console, USB/SSH and the read-only storage gate passed, and the
-watchdog feeder ran. Results and the image hash are in [the notes PR #330].
+owner saw the console, USB/SSH and read-only storage gate passed, the watchdog
+feeder ran, and Volume Down generated `KEY_VOLUMEDOWN`. Results and the final
+image hash are in [the notes PR #330].
 Kernel support is public for review in [panel #218], [touch #219],
 [DTS #220] and [ath10k #221]. These PRs are not merged yet. The EA8074 panel
 driver and FTS5 touchscreen still need separate hardware tests.
