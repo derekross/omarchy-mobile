@@ -130,6 +130,28 @@ done
   || fail "install stages the display service"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-lynx-display.service") == ../omamobile-lynx-display.service ]] \
   || fail "the display service is enabled"
+# The panel gate: allow only the S6E3FC5 names, and create the parameter
+# through modprobe before the write.
+gate=$tmp/panel-gate
+mkdir -p "$gate/proc" "$gate/bin"
+cat > "$gate/bin/modprobe" <<'FAKE'
+#!/bin/bash
+p=$OMAMOBILE_LYNX_ROOT/sys/module/gs_dsim_cmd/parameters
+mkdir -p "$p"
+[[ -e $p/allow_tx ]] || echo 0 > "$p/allow_tx"
+FAKE
+chmod +x "$gate/bin/modprobe"
+for pair in "sdc-s6e3fc5.20800a:1" "sdc-s6e3fc3-l10:0" ":0"; do
+  panel=${pair%:*}; want=${pair##*:}
+  echo "console=null ${panel:+exynos_drm.panel_name=$panel} bootconfig" > "$gate/proc/cmdline"
+  rm -rf "$gate/sys"
+  PATH="$gate/bin:$PATH" OMAMOBILE_LYNX_ROOT=$gate \
+    bin/omamobile-lynx-display-start >/dev/null
+  got=$(cat "$gate/sys/module/gs_dsim_cmd/parameters/allow_tx" 2>/dev/null || echo missing)
+  [[ $got == "$want" ]] || fail "panel '${panel:-none}' wrote allow_tx=$got, want $want"
+done
+pass "the panel gate allows only S6E3FC5"
+
 pass "install stages the udev rule, the USB link, the mirrorlist, and the boot-success marker, and nothing that starts hardware"
 
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
