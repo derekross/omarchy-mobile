@@ -22,7 +22,8 @@ slash or hyphen. Arguments are separated by spaces or tabs; a module without
 parameters is valid. Blank lines and whole-line comments are allowed. Shell
 quotes, substitutions, assignments, functions, options and inline comments
 are refused, as are empty configurations, symlinks and unreadable/nonregular
-files. A missing file preserves the default; a present invalid file refuses.
+files. A raw ASCII-text check rejects NUL and other non-text bytes before
+Bash reads lines; both passes use the same opened file. A missing file preserves the default; a present invalid file refuses.
 
 All entries are validated before checking already-loaded parameters, checking
 the sleep inhibitor, creating the bring-up latch or loading modules. Missing

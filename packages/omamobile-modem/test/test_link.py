@@ -65,7 +65,10 @@ class LinkTests(unittest.TestCase):
         """Run actual starter with only paths redirected and inert external tools."""
         config_path = self.root / 'link.conf'
         if config is not None:
-            config_path.write_text(config)
+            if isinstance(config, bytes):
+                config_path.write_bytes(config)
+            else:
+                config_path.write_text(config)
         vendor = self.root / 'vendor'
         vendor.mkdir()
         profile = vendor / 'omamobile-vendor-chroot'
@@ -131,6 +134,23 @@ class LinkTests(unittest.TestCase):
         self.assertFalse((self.root / 'latch').exists())
         self.assertEqual((self.root / 'refused').read_text().strip(),
                          'Off: invalid link configuration')
+
+    def assert_binary_config_refused(self, raw):
+        result, trace = self.run_starter(raw)
+        self.assertEqual(trace, [])
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((self.root / 'latch').exists())
+        self.assertEqual((self.root / 'refused').read_text().strip(),
+                         'Off: invalid link configuration')
+
+    def test_nul_inside_module_cannot_normalize_to_valid_load(self):
+        self.assert_binary_config_refused(b'fi\x00rst allow_hw=1\n')
+
+    def test_nul_inside_parameter_cannot_normalize_to_valid_load(self):
+        self.assert_binary_config_refused(b'first allow_hw=\x001\n')
+
+    def test_nul_only_configuration_is_invalid(self):
+        self.assert_binary_config_refused(b'\x00')
 
     def test_invalid_data_cannot_override_guards(self):
         # Execute the actual parser once per hostile data sample, never source it.
