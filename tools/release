@@ -115,7 +115,7 @@ while (($#)); do
     --dry-run|-n) dry=1 ;;
     --version) version=${2:?--version needs a value}; shift ;;
     --kernel-tag) kernel_tag=${2:?--kernel-tag needs a value}; shift ;;
-    -h|--help) sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0" 3; exit 0 ;;
     -*) die "unknown option $1 (see --help)" ;;
     *) break ;;
   esac
