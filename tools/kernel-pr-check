@@ -69,7 +69,7 @@ while (($#)); do
     --merge) merge=1; shift ;;
     --no-checkpatch) checkpatch=0; shift ;;
     --strict-trailers) shift ;;   # no longer stricter; see above
-    -h|--help) sed -n '3,49p' "$self"; exit 0 ;;
+    -h|--help) source "$repo/tools/lib/usage.sh"; usage_from_header --raw "$self"; exit 0 ;;
     -*) echo "kernel-pr-check: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac

@@ -342,7 +342,8 @@ Same checks as below: full build exits 0 (`logs/kernel-modem7.log`),
 ```sh
 # M0.1 partitions unchanged against the 2026-10-11 backup (reads ~430 MB)
 tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
-  printf "%s  %s.img\n" "$(sha256sum < /dev/disk/by-partlabel/$p | cut -d" " -f1)" "$p"; done' \
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' \
   > logs/m0-partitions.sha256
 grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' \
   ~/android/reference/cheetah-partition-backup-20261011/SHA256SUMS | sort -k2 | diff - <(sort -k2 logs/m0-partitions.sha256)
@@ -378,7 +379,8 @@ tools/phone-ssh 'cat > /etc/udev/rules.d/60-omamobile-modem-nv-ro.rules' <<'EOF'
 SUBSYSTEM=="block", ENV{ID_PART_ENTRY_NAME}=="efs|efs_backup|modem_userdata|modem_a|modem_b", RUN+="/usr/bin/blockdev --setro $devnode"
 EOF
 tools/phone-ssh 'udevadm control --reload; udevadm trigger -s block -c change;
-  for p in efs efs_backup modem_userdata modem_a modem_b; do echo $p $(blockdev --getro /dev/disk/by-partlabel/$p); done'
+  for p in efs efs_backup modem_userdata modem_a modem_b; do
+    d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5); echo $p $(blockdev --getro /dev/$d); done'
 #   pass: all 1. (persist stays writable for the fingerprint work's own plan; nothing here writes it.)
 ```
 
@@ -2800,13 +2802,16 @@ tools/phone-ssh 'nmcli -f DEVICE,TYPE,STATE device | grep -c gsm; omamobile-sit 
 #   rollback: as B2
 
 # B4 the second reboot: the clean stop clears the modem-up marker, and the next boot starts again
-# (asks the human; risk: medium: one UFS pass)
-tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+# (asks the human; risk: medium: one UFS pass). Through systemd: `reboot-to` stops no unit, so the stop
+# hook wouldn't run (AGENTS.md section 2)
+tools/phone-ssh 'systemctl reboot'
+# once the phone is back on USB (the modem's stop takes about 40 s, #532):
 tools/phone-ssh 'sleep 240; journalctl -b -1 -u omamobile-modem -o cat | grep -E "CP OFFLINE|stopped|removed|kept" | tail -3;
   systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; omamobile-sit status | head -3;
   ls -l /var/lib/omamobile/modem-* 2>&1; dmesg | grep -c ufshcd_err_handler'
-#   pass: the previous boot's journal ends with "CP OFFLINE" and "modem stopped (success): ... modem-up
-#     removed"; active x4 and registered again; only this boot's modem-up; err_handler 0 on this boot
+#   pass: the previous boot's journal has "CP OFFLINE" and ends with "modem stopped (<result>): ... modem-up
+#     removed" (the result is "timeout" until #532 is fixed; the removal is what counts); active x4 and
+#     registered again; only this boot's modem-up; err_handler 0 on this boot
 #   stop: the modem unit refused with "ended without a clean stop" (the stop hook didn't run or ran on
 #     another boot's marker: the -1 journal says which; the fix is in the package, not on the phone:
 #     `systemctl disable omamobile-modem-boot.target`, remove the marker, and reboot); "never reached
@@ -2953,7 +2958,7 @@ tools/phone-ssh 'sleep 240; systemctl list-units --no-pager "omamobile-modem*" o
 # keeps a marker that isn't this boot's (--stopped), so the next boot finds a stale one, refuses once,
 # moves it aside, and the boot after starts the modem again. No forced reset needed.
 tools/phone-ssh 'cat /var/lib/omamobile/modem-up; printf "%s boot %s\n" "$(date -Is)" 00000000-0000-0000-0000-000000000000 > /var/lib/omamobile/modem-up; sync; cat /var/lib/omamobile/modem-up'
-tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+tools/phone-ssh 'systemctl reboot'   # through systemd, so the stop hook runs (B4); after it, once back on USB:
 tools/phone-ssh 'sleep 120; journalctl -b -1 -u omamobile-modem -o cat | tail -3; systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd;
   journalctl -b -u omamobile-modem -o cat; ls -l /var/lib/omamobile/modem-* 2>&1; cat /run/omamobile/modem-refused;
   systemd-inhibit --list --no-legend | grep -c omamobile-modem; dmesg | grep -c ufshcd_err_handler'
@@ -2987,7 +2992,7 @@ tools/phone-ssh 'sleep 240; systemctl is-active omamobile-modem omamobile-sitd o
 # another boot's id again. The reboot's stop hook keeps the planted marker and the copy (not this boot's),
 # so the next boot finds both: the one automatic retry is used up, and it holds.
 tools/phone-ssh 'ls -l /var/lib/omamobile/modem-*; printf "%s boot %s\n" "$(date -Is)" 00000000-0000-0000-0000-000000000000 > /var/lib/omamobile/modem-up; sync'
-tools/phone-ssh 'sync; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &'
+tools/phone-ssh 'systemctl reboot'   # through systemd, so the stop hook runs (B4); after it, once back on USB:
 tools/phone-ssh 'sleep 120; systemctl is-active omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd;
   journalctl -b -u omamobile-modem -o cat | grep -E "clean stop|used up|moved"; ls -l /var/lib/omamobile/modem-* 2>&1; cat /run/omamobile/modem-refused;
   systemd-inhibit --list --no-legend | grep -c omamobile-modem; dmesg | grep -c ufshcd_err_handler'
@@ -2999,9 +3004,9 @@ tools/phone-ssh 'sleep 120; systemctl is-active omamobile-modem omamobile-sitd o
 #     -1 journal and the ls before the plant); the modem started (the planted marker was removed)
 #   then: rm -f /var/lib/omamobile/modem-up*; reboot (asks the human); after 240 s: as B9's pass (active x4,
 #     "CP ONLINE", this boot's modem-up, no refused copy, no modem-refused)
-#   then: one more clean reboot (asks the human; one UFS pass): the modem starts, this boot's modem-up,
-#     and ls /var/lib/omamobile/modem-up.refused-* finds nothing (the streak reset by --stopped at the
-#     reboot before: the copies are removed with this boot's marker)
+#   then: one more clean reboot, `systemctl reboot` (asks the human; one UFS pass): the modem starts, this
+#     boot's modem-up, and ls /var/lib/omamobile/modem-up.refused-* finds nothing (the streak reset by
+#     --stopped at the reboot before: the copies are removed with this boot's marker)
 #   stop: a refused copy after the clean reboot (--stopped didn't remove them: journalctl -b -1 -u
 #     omamobile-modem, "modem stopped"); refused on either boot
 #   rollback: as B8

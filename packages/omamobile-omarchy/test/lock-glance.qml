@@ -326,28 +326,52 @@ Item {
       compare(visiblePinParts(), [])
     }
 
-    function test_wake_tap_on_dark_display_only_wakes() {
+    // Patch 0029: no tap wakes the dark screen; omamobile-doubletap
+    // recognises the double tap (not in a pocket, by proximity) and wakes
+    // the lock through its IPC, as the power key does.
+    function test_double_tap_on_dark_display_is_left_to_the_daemon() {
       toPin()
       blank()
       harness.wakes = 0
       mouseClick(harness.view, 240, 300)
+      wait(150)
+      mouseClick(harness.view, 250, 310)
       settle()
-      compare(glance().showing, true, "the tap that woke the screen doesn't show the PIN view")
-      compare(harness.view.displayDark, false, "it lit the screen through the lock")
-      compare(harness.wakes, 1)
-      wait(200)
+      compare(harness.wakes, 0, "the lock doesn't wake itself on a double tap")
+      compare(harness.view.displayDark, true)
+      compare(glance().showing, true, "nor do the taps show the PIN view")
+      // omamobile-doubletap's wake, through the lock's IPC
+      harness.view.wakeSerial += 1
+      harness.view.displayDark = false
+      settle()
+      compare(glance().showing, true, "the wake shows the glance")
+      wait(500)
       toPin()
       compare(glance().showing, false, "a swipe up on the lit glance shows the PIN view")
     }
 
-    function test_wake_swipe_on_dark_display_only_wakes() {
+    function test_lone_taps_on_dark_display_do_nothing() {
       blank()
+      harness.wakes = 0
+      mouseClick(harness.view, 240, 300)
+      wait(600)
+      mouseClick(harness.view, 240, 300)
+      wait(600)
+      compare(harness.wakes, 0, "lone taps don't wake it")
+      compare(harness.view.displayDark, true)
+      compare(glance().showing, true)
+    }
+
+    function test_wake_swipe_on_dark_display_does_nothing() {
+      blank()
+      harness.wakes = 0
       mousePress(harness.view, 240, 600)
       for (var y = 590; y >= 400; y -= 10) mouseMove(harness.view, 240, y, -1, Qt.LeftButton)
       mouseRelease(harness.view, 240, 400)
       settle()
-      compare(glance().showing, true)
-      compare(harness.view.displayDark, false)
+      compare(glance().showing, true, "a swipe on the dark screen doesn't show the PIN view")
+      compare(harness.view.displayDark, true, "nor does it wake the screen")
+      compare(harness.wakes, 0)
     }
 
     function test_touch_right_after_a_wake_only_wakes() {
@@ -698,6 +722,9 @@ Item {
       compare(one("lockPinClock").visible, false)
       compare(one("lockEmergencyCall").visible, false)
       verify(findAll(harness.view, function(i) { return i.visible && String(i.text) === "Enter Password" }).length > 0)
+      harness.wakes = 0
+      mouseClick(harness.view, 240, 300)
+      compare(harness.wakes, 1, "one click wakes a computer's dark lock (0029 is touch-only)")
     }
 
     // Patch 0026: the battery, top right, over the glance and the PIN view
@@ -867,9 +894,11 @@ Item {
       show()
       blank()
       tapOn(glanceButton("lockMediaPlayPause"))
+      wait(100)
+      tapOn(glanceButton("lockMediaPlayPause"))
       settle()
-      compare(p.calls, [], "the tap that lit the screen pressed nothing")
-      compare(harness.view.displayDark, false)
+      compare(p.calls, [], "a double tap on the dark screen presses nothing")
+      compare(harness.view.displayDark, true, "omamobile-doubletap wakes it, not the lock")
     }
 
     function test_what_it_cannot_do_does_nothing() {

@@ -115,7 +115,7 @@ while (($#)); do
     --dry-run|-n) dry=1 ;;
     --version) version=${2:?--version needs a value}; shift ;;
     --kernel-tag) kernel_tag=${2:?--kernel-tag needs a value}; shift ;;
-    -h|--help) sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0" 3; exit 0 ;;
     -*) die "unknown option $1 (see --help)" ;;
     *) break ;;
   esac
@@ -587,12 +587,16 @@ st_test_install() {
         "uname -r                                   # $krel" \
         "systemctl is-failed omamobile-firstboot    # inactive (it ran and removed its file)" \
         "pacman -Q $(desc PACKAGE)" \
+        "# On the phone, as its user (a terminal or the Updates app), never as root:" \
         "omarchy update                             # clean, from stable" \
         "# Then the package-hook kernel update and a reboot into it (§12.10;" \
         "# device/cheetah/KERNEL-UPDATE-PLAN.md has the steps), and:" \
         "tools/release --version $version test-install --passed \"\$(tools/phone-ssh uname -r)\""
   ((dry)) || die "waiting for the attended install"
 }
+
+# Whether an ext4_list file names this directory
+ext4_has() { grep -qxF -- "$2" "$1"; }
 
 # File list of an ext4 image, one path per line, read with debugfs (no root,
 # no mount): one debugfs run per directory level
@@ -623,7 +627,9 @@ PY
 
 # Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
 # binary alike: universally administered MAC addresses (locally administered
-# ones, x2/x6/xA/xE, and all zeros or all ones are made up), serial and IMEI
+# ones, x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
+# /etc/dnsmasq.conf alone, the group addresses and dhcp-option bytes of
+# dnsmasq's shipped example configuration), serial and IMEI
 # records, this machine's home directory (/home/<builder>: a build path that
 # leaked; other /home/<name> paths are upstream examples and build hosts, as
 # in Neovim plugins and Alpine's libc), and each literal of the identifiers
@@ -653,6 +659,12 @@ def scan(path):
         first = int(m.group(1), 16)
         whole = (m.group(1) + m.group(2)).lower()
         if first & 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+            continue
+        # dnsmasq's shipped example configuration only: its group address
+        # (no Wi-Fi or Ethernet card has one, but a Bluetooth LE random
+        # address can look like one, so not image-wide) and option bytes
+        line = data[data.rfind(b"\n", 0, m.start()) + 1:m.start()]
+        if path.endswith("/etc/dnsmasq.conf") and (first & 1 or re.search(rb"^\s*#?\s*dhcp-option=[^#]*$", line)):
             continue
         report(path, "MAC address", whole)
     for what, rx in rules:
@@ -705,9 +717,19 @@ st_identifiers() {
   ext4_list "$t/root.img" > "$rel/rootfs-files.txt"
   note "$(wc -l < "$rel/rootfs-files.txt") paths ($rel/rootfs-files.txt)"
   # What the build wrote rather than a package: configuration and our files
-  mkdir -p "$t/rootfs"
-  printf 'rdump /etc %s\nrdump /root %s\nrdump /usr/share/omamobile %s\nrdump /var/lib/omamobile %s\n' \
-    "$t/rootfs" "$t/rootfs" "$t/rootfs" "$t/rootfs" | debugfs -f - "$t/root.img" >/dev/null 2>&1 || true
+  # at their own paths: rdump puts each directory by its last name under the
+  # target, and two "omamobile" under one target made debugfs refuse the
+  # second (/var/lib/omamobile went unscanned until 2026-11-09)
+  local d
+  for d in /etc /root /usr/share/omamobile /var/lib/omamobile; do
+    ext4_has "$rel/rootfs-files.txt" "$d" || continue
+    mkdir -p "$t/rootfs${d%/*}"
+    printf 'rdump %s %s\n' "$d" "$t/rootfs${d%/*}"
+  done | debugfs -f - "$t/root.img" >/dev/null 2>&1 || true
+  for d in /etc /root /usr/share/omamobile /var/lib/omamobile; do
+    ext4_has "$rel/rootfs-files.txt" "$d" || continue
+    [[ -d $t/rootfs$d ]] || die "debugfs didn't dump $d from the root image, so it can't be scanned"
+  done
   rm -f "$t/root.img"
   # The release initramfs the boot images carry
   mkdir -p "$t/initramfs"

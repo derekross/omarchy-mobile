@@ -287,6 +287,43 @@ Item {
       tryVerify(function() { return test.offCentre(cards) < 1 }, 2000, "centred after a window closes")
     }
 
+    // Closing a window keeps the user's place: the same card when another
+    // window closed, the card that took its place when the current one did.
+    // root.windows is a new array on every change, and the new model used to
+    // drop recents back to the newest card.
+    function test_closing_a_window_keeps_the_place() {
+      var a = fakeWindow.createObject(top, { appId: "a" }), b = fakeWindow.createObject(top, { appId: "b" }),
+          c = fakeWindow.createObject(top, { appId: "c" }), d = fakeWindow.createObject(top, { appId: "d" })
+      openWith([a, b, c, d])                  // newest first: d, c, b, a
+      var cards = cardsList()
+      tryVerify(function() { return cards.count === 4 && cards.currentItem !== null })
+      compare(cards.currentIndex, 0)
+
+      var y = overlay.height / 2, x = overlay.width / 2
+      var t = touchEvent(overlay.contentItem)
+      t.press(0, overlay.contentItem, x + 120, y).commit()
+      for (var j = 1; j <= 12; j++) { wait(16); t.move(0, overlay.contentItem, x + 120 - j * 25, y).commit() }
+      t.release(0, overlay.contentItem, x - 180, y).commit()
+      tryVerify(function() { return !cards.moving && !cards.flicking }, 3000)
+      var at = cards.currentIndex
+      verify(at > 0, "swiped on from the newest card")
+      var here = sw.windows[at]
+
+      // Another window closes (the oldest): still on the same window.
+      top.drop(a)
+      tryVerify(function() { return cards.count === 3 })
+      tryVerify(function() { return sw.windows[cards.currentIndex] === here }, 2000, "the same window after another one closed")
+      tryVerify(function() { return test.offCentre(cards) < 1 }, 2000, "centred")
+
+      // The current window closes: the card that took its place, not the newest.
+      var place = cards.currentIndex
+      top.drop(here)
+      tryVerify(function() { return cards.count === 2 })
+      tryVerify(function() { return cards.currentIndex === Math.min(place, cards.count - 1) }, 2000, "the next card, not back to the first")
+      verify(place === 0 || cards.currentIndex !== 0 || cards.count === 1, "not dropped back to the newest card")
+      tryVerify(function() { return test.offCentre(cards) < 1 }, 2000, "centred")
+    }
+
     // A window that gets its size after it is shown still opens centred.
     function test_centred_after_a_resize() {
       var a = fakeWindow.createObject(top), b = fakeWindow.createObject(top, { appId: "chromium" })

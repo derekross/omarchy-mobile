@@ -36,6 +36,8 @@ install -Dm644 vendor/systemd/network/20-usb-gadget.network \
   "$destination/usr/lib/systemd/network/20-usb-gadget.network"
 install -Dm644 vendor/environment.d/40-omamobile-rotation.conf \
   "$destination/usr/lib/environment.d/40-omamobile-rotation.conf"
+install -Dm644 vendor/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf \
+  "$destination/usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf"
 install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
