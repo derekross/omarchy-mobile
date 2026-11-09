@@ -770,6 +770,10 @@ def inner(args):
         omarchy_line = next((l for l in lines if l.split()[0] in ("omarchy", "omarchy-dev")), "")
         print("%d package(s) to update%s" % (len(targets) or len(lines), "; " + omarchy_line if omarchy_line else ""),
               flush=True)
+        # Omarchy's scripts read OMARCHY_PATH under set -u (omarchy-update-dev:
+        # "unbound variable"). A session gets it from Omarchy's env-bootstrap;
+        # a root login over SSH or a TTY doesn't, so pass the default on.
+        env.setdefault("OMARCHY_PATH", OMARCHY_PATH)
         env.update(PATH=SHIMS + ":" + env.get("PATH", "/usr/bin"), OMARCHY_UPDATE_LOGGED="1", OMAMOBILE_UPDATE="1",
                    OMAMOBILE_UPDATE_DIR=RUNTIME, OMAMOBILE_SUDO=SUDO, OMAMOBILE_UPDATE_STARTED=str(int(time.time())))
         return subprocess.run([OMARCHY_UPDATE, "-y"], env=env).returncode
