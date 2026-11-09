@@ -219,8 +219,18 @@ does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
    order (gnssd's CHPP link showed the ACK timeouts of MODEM-PLAN G3).
    With the modem's AP2CP lines toggling twice a second under GNSS, that
    gate hung the SoC within minutes before #172, and round 1's 82 s were
-   the luck of the draw. Step 7 is re-run on a kernel with both fixes
-   below.
+   the luck of the draw. The re-run the same night on #100 (#99 with
+   kernel #172 and #150, `zumapro_gpio_peric0` reading `CLK_IS_CRITICAL`):
+   the start first met the hold ("the last two boots with the modem up
+   ended without a clean stop ..."), the latch and its copy were removed
+   by hand as the message says, and the next start reached ONLINE in 8 s;
+   4.5 minutes later, sitd registered and the bridge active, no reset, no
+   UFS error-handler pass; `systemctl reboot`: "CP OFFLINE", "modem stopped
+   (success, the CP OFFLINE before the daemons went): ... removed",
+   "Deactivated successfully", no latch and no UFS error on the next boot.
+   Passed. (The bootloader's "Reboot reason" line in ramoops keeps the
+   last abnormal reason across clean reboots; its "power on source" tells
+   them apart: 0x20 after the watchdog resets, 0x80 after a clean reboot.)
 
 `tools/phone-smoke` on the second boot: every required check ok (boot, the
 storage guard, root, kernel health, USB, session), and display, GPU, lock,
