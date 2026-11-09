@@ -2,6 +2,55 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-08: the release kernel for 2026.11.08, a flat battery, the reboot reason
+
+Kernel `7.3.0-rc6-omamobile-g1a9d1d4e9289`, `omamobile` at `1a9d1d4e9289`
+(the planned `kernel-2026.11.08`), built with the release `LOCALVERSION` and
+the development initramfs and pushed to slot B; `omamobile-device-cheetah`
+0.1.43, `omamobile-shell` 0.2.107 and `omamobile-omarchy` 0.1.37 (#420's test
+build), Omarchy 4.0.6.
+
+- **The release kernel boots** [V]: `uname -r` reads
+  `7.3.0-rc6-omamobile-g1a9d1d4e9289`. Touch probed as before (`S3908GA1B0-15.0,
+  TouchComm v1, build 4104960, message CRC off`), the charger's guard had its
+  battery reading at probe (4.67 s, mode 5), the sound card registered all 18
+  playback PCMs, Wi-Fi connected, and the modem came up at boot: IMS
+  registered (`state 2 (VoLTE registered)`) about 100 s after boot.
+  `tools/phone-smoke`: 18 ok, cameras skipped (no libcamera tools); its one
+  "not ok" is the modem's `rx_demux … is not opened` drops, at the rate of
+  every modem-up boot today.
+- **This tree, piece by piece** [V], each on its own test kernel, `-push1`
+  builds of the PR merged onto `omamobile`, and posted on the PR:
+  linux-omarchy-mobile#194 (touch: both probe lines unchanged, no fallback,
+  no desync after a minute of touch), #201 (S2MPG12 RTC: reads 0 s off, a
+  wake alarm awake, 10 RTC-woken s2idle cycles with the modem off, none woken
+  early), #191 with #187 (Wi-Fi scans, a 300 MB download at about 130 Mbit/s
+  with no `No PKTID`; the modem: an SMS, an answered call, 10 minutes idle),
+  #176 (the reboot reason: with `nvmem_max77759` loaded by hand, `reboot-to
+  bootloader` reached fastboot without the buttons, about 4 s; device-cheetah
+  0.1.47, #534, stops blacklisting it) and #162 (the AoC series: the same
+  PCMs, both amplifiers' protection firmware, a -20 dBFS tone clean from both
+  speakers, the three sensors).
+- **A flat battery** [V] (issue #169): after five days unplugged the phone
+  booted Linux at 3.14 V, the gauge's model load failed (`-110`) and the
+  charger logged `charging inhibited`; the battery read -706 mA on the
+  laptop's port. About 20 minutes in fastboot on the cable took it from 3.40
+  to 3.91 V, and the next boot loaded the model and charged at 1.43 A. On that
+  boot the charger still probed before the gauge answered and charged only
+  from its guard's next period, 31 s later. The fix (`omamobile` 01ba2e2119ed,
+  28bab7f602ca, 1a9d1d4e9289) re-checks a missing reading every 2 s and at the
+  gauge's first report: unloading and reloading the gauge, charging resumed
+  10 ms after it came back. The model-load retry itself waits for the next
+  real flat battery.
+- **A modem marker left by `reboot-to`** [V]: the `reboot-to bootloader` that
+  took the flat phone to fastboot stopped no unit, so `/var/lib/omamobile/modem-up`
+  stayed and the next boot skipped the modem once ("ended without a clean
+  stop"), as designed. Stop the modem first (`systemctl stop
+  omamobile-modem`) before a `reboot-to` or a `bin/omamobile push`; that stop
+  takes 40 s and ends "failed" with a recorded crash, issue #532. To keep the
+  modem off for a boot (a suspend test), `systemctl mask
+  omamobile-modem-boot.target`, not `/etc/omamobile/modem-hold`.
+
 ## 2026-11-03: calls and texts through the apps, the SIM configures itself, the earpiece at the loud stage, the stack on by default
 
 Kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (the release kernel);
