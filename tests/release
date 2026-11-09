@@ -150,6 +150,11 @@ if run scan "$t/scan"; then fail "a real address after an exempt value on one li
 rm "$t/scan/etc/dnsmasq.conf"
 printf 'paired %s\n' "$grp" > "$t/scan/etc/other.conf"
 if run scan "$t/scan"; then fail "a group-looking address outside etc/dnsmasq.conf is found"; fi
+printf 'dhcp-option=128,%s\n' "$doc" > "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a dhcp-option value outside etc/dnsmasq.conf is found"; fi
+mkdir -p "$t/scan/xetc"; printf '#dhcp-option=128,%s\n' "$doc" > "$t/scan/xetc/dnsmasq.conf"; rm "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a file named like etc/dnsmasq.conf but not it (xetc/) is found"; fi
+rm -r "$t/scan/xetc"
 rm -r "$t/scan/etc"
 pass "the scan finds real MACs, serial records, the builder's home and listed identifiers, not made-up MACs or example paths"
 
