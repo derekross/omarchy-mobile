@@ -56,10 +56,10 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    locked bootloader. Rollback: leave fastboot without writing. Risk: this
    device has no alternate OS slot.
 3. **Recovery gate** — Fastboot entry uses **Volume Down + Power**; the forced
-   restart is separate. On 2026-11-09, an attended test on this handset found
-   that holding **Power alone for more than 10 seconds** restarted it, then
-   Volume Down + Power entered fastboot. This was tested from the installed
-   Android system, not from the bring-up image or by simulating a kernel hang.
+   restart is separate. On 2026-11-09, an attended test from installed Android found that holding
+   **Power alone for more than 10 seconds** restarted into Android. It has not
+   been tried under the RAM kernel or from a simulated kernel hang. Volume Down
+   + Power then entered fastboot from Android.
    Expect: the Power-only hold
    restarts the phone. Pass: the observed procedure above is recorded and the
    phone can enter fastboot. Stop if Power alone does not restart it. Rollback:
@@ -129,10 +129,10 @@ repository; the SSH public key and generated host key stay in the local output.
   marking them supported.
 
 From this rescue image, an SSH session can return to fastboot with
-`reboot-to bootloader`. Do not use `reboot-to recovery` until the contents of
-the stock `recovery` partition have been verified. The helper asks the PMIC
-reboot-mode driver to select
-the bootloader and writes no UFS partition. The PMIC reset path was verified on
+`reboot-to bootloader`. The stock `recovery` image was verified from its
+4.9.337 kernel header, but recovery-mode reboot was not tested; this runbook
+uses only the verified bootloader path. The helper asks the PMIC reboot-mode
+driver to select the bootloader and writes no UFS partition. The PMIC reset path was verified on
 the handset on 2026-11-09. The packaged helper returned the running image to
 fastboot on 2026-11-09 without writing UFS.
 
