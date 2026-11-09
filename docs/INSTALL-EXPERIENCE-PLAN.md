@@ -424,7 +424,7 @@ download links **[D]**. The installer shows those terms, linked to Google's
 own page, with a checkbox the user must tick before the download starts,
 and records that it was ticked (on the computer only). Whether a third-party
 installer may present the acknowledgement this way, or must send the user
-to Google's page to click through, needs checking before M1 ships (D2). The
+to Google's page to click through, needs checking before the installer does it (D2, 2026-11-09: until then, the fallback). The
 fallback is honest and still simple: a button that opens Google's page at
 the right build, and a file picker (or a watched Downloads folder) for the
 zip the user saved.
@@ -664,7 +664,7 @@ real users.
 - **Needs:** M0; the build index (§6.1) and the maintainer tool that fills
   it; the camera's Python modules handled by the tool (its own venv) or the
   camera step moved to the phone early.
-- **Open:** Google's terms in a third-party tool (D2); still Linux only,
+- **Open:** Google's terms in a third-party tool (D2: M1 uses the fallback); still Linux only,
   still a terminal; what the index marks as tested (D3).
 
 ### M2. Install mode and the install link on the phone
@@ -749,12 +749,18 @@ never offered: that write stays a manual, named exception.
 
 ## 12. Decisions for the maintainer
 
-- **D1. Provisioning:** on the phone with the install link (recommended,
-  §5.3), or on the computer (option A) for the long term too.
-- **D2. Google's terms:** check whether the installer may show Google's
-  acknowledgement itself and download on the user's behalf, and whether the
-  Updater may download later firmware automatically after one acceptance.
-  Until then, M1 uses the open-Google's-page-and-pick-the-file fallback.
+- **D1. Provisioning: decided 2026-11-09, on the phone with the install
+  link (§5.3).** The computer downloads the factory image and hands it over
+  the install link at first boot; the phone checks and extracts it. Until
+  the install link exists (M2), M1 does the same steps over USB SSH with
+  option A's extraction on the computer.
+- **D2. Google's terms: decided 2026-11-09, the fallback until they are
+  checked.** M1 opens Google's page at the right build and takes the zip
+  the user saved (a file picker or a watched Downloads folder); the
+  installer doesn't present Google's acknowledgement itself or download on
+  the user's behalf, and the Updater downloads no firmware automatically.
+  Whether a third-party installer may do either stays open, to be checked
+  against Google's terms before anything changes.
 - **D3. Tested builds:** which factory builds the index marks tested, and
   how a build earns it (a `phone-smoke` pass on the reference phone with
   that build's firmware is the proposal).
