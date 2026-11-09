@@ -1,24 +1,38 @@
 # SPDX-License-Identifier: MIT
-# The Pixel 9a's modem at boot, opt-in: not enabled by the package. The owner
-# turns it on with `systemctl enable omamobile-tegu-modem-boot`. It starts the
-# CP once (omamobile-tegu-modem-up keeps the once-per-boot rule, the NV
-# checks, the failure latch and the sleep inhibitor), then the phone service
-# and, when installed, the Phone and Messages bridge, with gnssd in the
-# modem profile so Omarchy's Location switch gets fixes (omamobile-gnss). With it on the palmtop
-# doesn't suspend (the modem blocks sleep until suspend with the CP up is
-# qualified), so the battery drains as if awake.
+# The Pixel 9a's modem at boot, on by default from omamobile-device-tegu
+# 0.2.14 through the vendor wants link in multi-user.target.wants (as the AoC,
+# graphics and USB rescue starts are), the way the Pixel 7 Pro's
+# omamobile-modem-boot.target is since #398. It starts the CP once
+# (omamobile-tegu-modem-up keeps the once-per-boot rule, the NV checks, the
+# failure latch with its one retry and the sleep inhibitor), then the phone
+# service and, when installed, the Phone and Messages bridge, with gnssd in
+# the modem profile so Omarchy's Location switch gets fixes (omamobile-gnss).
 #
-# Before enabling it (README, "Starting it at boot"): slot B marked
-# successful, a kernel with linux-omarchy-mobile#172, and the charger in for
-# the first boots. Rollback: systemctl disable omamobile-tegu-modem-boot and
-# reboot; after a reset with the modem up, the latch keeps the next boot
-# from starting it.
+# A phone that can't run it costs nothing: the unit is skipped (not failed)
+# without the three files tools/phone-provision puts on the phone, and
+# without CP drivers, either the kernel's (the device tree's cpif node, the
+# published kernel from linux-omarchy-mobile#187) or the owner's bring-up
+# modules. With it on the palmtop doesn't suspend (the modem blocks sleep
+# until suspend with the CP up is qualified), so the battery drains as if
+# awake.
+#
+# Off: systemctl mask omamobile-tegu-modem-boot (a vendor link survives
+# disable, and `systemctl is-enabled` reads "disabled" for a unit started by
+# a vendor link alone; the proof is `ls -l
+# /usr/lib/systemd/system/multi-user.target.wants/`). After a reset with the
+# modem up, the latch gives the next boot one more try and holds after a
+# second (README, "The modem at boot").
 [Unit]
-Description=Start the Pixel 9a's modem and phone service (opt-in)
+Description=Start the Pixel 9a's modem and phone service
 Documentation=file:///usr/share/doc/omamobile-device-tegu/README.md
 After=omamobile-tegu-aoc.service omamobile-tegu-graphics.service network.target
 Wants=network.target
 ConditionPathExists=/usr/lib/omamobile-vendor/omamobile-vendor-chroot
+ConditionPathExists=/usr/lib/omamobile-vendor/modem/root
+ConditionPathExists=/etc/omamobile/modem-nv.sha256
+ConditionPathExists=/var/lib/omamobile-vendor/modem/props.conf
+ConditionPathExists=|/proc/device-tree/cpif
+ConditionPathExists=|/var/lib/omamobile-tegu/modem/cpif.ko
 
 [Service]
 Type=oneshot

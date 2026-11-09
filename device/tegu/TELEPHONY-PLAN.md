@@ -232,6 +232,24 @@ does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
    last abnormal reason across clean reboots; its "power on source" tells
    them apart: 0x20 after the watchdog resets, 0x80 after a clean reboot.)
 
+### 2.8 On by default (gated runbook, the follow-up to #372)
+
+What changes: `omamobile-device-tegu` 0.2.14 turns `omamobile-tegu-modem-boot`
+on with a vendor wants link, as #398 did for the 7 Pro, with conditions that
+skip it (not fail it) on a phone without the provisioning files or without CP
+drivers. Preconditions as 2.7: slot B marked, the kernel with #172 (check
+`/sys/kernel/debug/clk/zumapro_gpio_peric0/clk_flags` reads
+`CLK_IS_CRITICAL`), the charger in. Risk: medium (the modem starts at every
+boot; the latch's one retry and hold bound a reset loop).
+
+| Step / risk | Command | Expect / Pass | Stop | Rollback |
+| --- | --- | --- | --- | --- |
+| 1. Install / low | `tools/phone-install-package packages/omamobile-device-tegu`; `ls -l /usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-modem-boot.service` | The link is there; `systemctl is-enabled` reads "disabled" (vendor link), `systemctl list-dependencies --plain multi-user.target` lists the unit | The link missing | `pacman -U` the previous package |
+| 2. Two reboots / medium | `systemctl reboot`, twice; after each: `journalctl -b -u omamobile-tegu-modem-boot`, `omamobile-sit status`, `cat /var/lib/omamobile/modem-bringup-started`, `journalctl -b -1 -u omamobile-tegu-modem \| grep "modem stopped"` | Each boot: "modem OK: CP ONLINE" with nothing started by hand, registered, the latch with this boot's invocation; the previous boot's stop "success, the CP OFFLINE before the daemons went"; no `ufshcd_err_handler` pass, no UFS error | A reset, a refused start, a latch left | `systemctl mask omamobile-tegu-modem-boot`, reboot |
+| 3. The skip / low | `systemd-analyze condition 'ConditionPathExists=/var/lib/omamobile-vendor/modem/props.conf'` with the file moved aside for the check, then back; or read the unit's conditions | A phone without the files or the drivers skips the unit with "Condition check resulted in ... being skipped", no latch, no inhibitor | The unit fails instead of skipping | As step 2 |
+| 4. Off and on / low | `systemctl mask omamobile-tegu-modem-boot`, reboot; `systemctl unmask`, reboot | Masked: no modem, no latch, the palmtop sleeps; unmasked: the modem comes back at boot | The masked boot starts the modem | Remove the mask |
+| 5. `tools/nv-backup -d tegu --check` / low | After the reboots | Every NV partition the same as the backup | A difference | Stop; look before any further boot |
+
 `tools/phone-smoke` on the second boot: every required check ok (boot, the
 storage guard, root, kernel health, USB, session), and display, GPU, lock,
 touch, buttons, Wi-Fi, Bluetooth, battery, sound card, sensors, cameras and
