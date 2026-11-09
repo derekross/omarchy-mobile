@@ -14,29 +14,37 @@ There is no supported flash, push, installer or persistent update path here.
 ## Recovery and safe boot
 
 Each gate below must pass before proceeding. Set `FASTBOOT_SERIAL` to the
-intended handset's serial and `BACKUP_CHECKSUMS` to the locally held stock
-backup checksum manifest. Do not boot if the manifest is missing or fails.
+intended handset's serial, `BACKUP_CHECKSUMS` to the locally held stock
+partition manifest, and `USERDATA_BACKUP_CHECKSUMS` to the private userdata
+archive's checksum file. Do not boot if either backup is missing or fails.
 
 1. **Backup gate** — Expect: the verified stock backup and checksum manifest
-   are available off-device. Pass: `sha256sum -c "$BACKUP_CHECKSUMS"` reports
-   every entry OK. Stop: any missing or mismatched entry. Rollback: restore the
-   verified stock backup using the device recovery procedure. Risk: an
-   unverified backup cannot recover a damaged single-slot phone.
+   and the userdata archive are available off-device. Pass: both
+   `sha256sum -c "$BACKUP_CHECKSUMS"` and
+   `sha256sum -c "$USERDATA_BACKUP_CHECKSUMS"` report every entry OK (run each
+   from the directory containing its manifest). The userdata archive is a live
+   file-level copy, not a raw partition image or an atomic snapshot. Stop: any
+   missing or mismatched entry. Rollback: restore the verified stock backup
+   using the device recovery procedure. Risk: an unverified backup cannot
+   recover a damaged single-slot phone.
 2. **Fastboot gate** — Enter fastboot with **Volume Down + Power**; the §3.1
    entry is in [PR #499](https://github.com/derekross/omarchy-mobile/pull/499).
-   Run `fastboot -s "$FASTBOOT_SERIAL" getvar unlocked`. Expect `yes`. Pass:
-   the serial identifies the intended phone and the bootloader is unlocked.
-   Stop: absent/ambiguous serial or locked bootloader. Rollback: leave fastboot
-   without writing. Risk: this device has no alternate OS slot.
-3. **Recovery gate** — Confirm the handset's forced-restart buttons and hold
-   duration on the device, then record them in this runbook. Fastboot entry
-   with **Volume Down + Power** is separate from a forced restart. Stop if the
-   forced-restart procedure has not been verified; do not infer it from another
-   phone. Expect: an attended forced restart returns the handset to a state
-   where fastboot can be entered. Pass: that recovery path has been exercised
-   and recorded. Rollback: do not start a RAM boot until it passes. Risk: a
-   single-slot phone with no verified forced restart may be unrecoverable after
-   a hang.
+   Run `fastboot -s "$FASTBOOT_SERIAL" getvar product` and
+   `fastboot -s "$FASTBOOT_SERIAL" getvar unlocked`. Expect `dipper` and `yes`.
+   Pass: exactly one device is listed, both values match, and the serial pins
+   every fastboot command. Stop: absent/ambiguous device, wrong product or
+   locked bootloader. Rollback: leave fastboot without writing. Risk: this
+   device has no alternate OS slot.
+3. **Recovery gate** — Fastboot entry uses **Volume Down + Power**; the forced
+   restart is separate. On 2026-11-09, an attended test on this handset found
+   that holding **Power alone for more than 10 seconds** restarted it, then
+   Volume Down + Power entered fastboot. This was tested from the running
+   system, not by simulating a kernel hang. Expect: the Power-only hold
+   restarts the phone. Pass: the observed procedure above is recorded and the
+   phone can enter fastboot. Stop if Power alone does not restart it. Rollback:
+   do not start a RAM boot until this gate passes. Risk: a hard kernel hang has
+   not been simulated; recovery from one still depends on the hardware button
+   reset working.
 4. **RAM boot gate** — Run
    `fastboot -s "$FASTBOOT_SERIAL" boot boot.img`. Expect: the image starts
    without changing UFS. The screen may go dark about 30 seconds after boot
