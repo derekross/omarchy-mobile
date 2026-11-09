@@ -14,13 +14,12 @@ Findings from real hardware, newest first. Tracking issue: #36.
   Android 15 factory build (`BP1A.250505.005.B1`, bootloader `lynx-15.2`).
   `omamobile-device-lynx` 0.2.0 only accepted 3.15, so
   `omamobile-boot-success` refused to write and the slot was left unmarked.
-- **The A/B bytes are at the same offsets in 3.11 and 3.15.** A read-only
-  `omamobile-bootctl dump` decoded slot a and b correctly on 3.11; marking slot
-  b successful changed only `0x35` (`0x04` -> `0x06`), and the bootloader then
-  kept the slot.
-- **Fix:** `omamobile-bootctl` now accepts a verified-layout table of 3.11 and
-  3.15 instead of a single hard-coded version, with a synthetic 3.11 test and
-  an unverified-3.14 rejection test in the lynx package.
+- **The A/B bytes are readable at the same offsets in 3.11 and 3.15.** A
+  read-only `omamobile-bootctl dump` decoded slot a and b on 3.11; layout
+  equivalence is not yet confirmed (see the provisional table below).
+- **Fix:** lynx adds 3.11 at build time through
+  `-DOMAMOBILE_DEVINFO_EXTRA_MINOR=11`; the shared source keeps the 7 Pro's
+  3.15 condition. The package tests 3.11 and rejects an unverified 3.14.
 
 ## 2026-10-27: Wi-Fi parked
 
@@ -211,3 +210,9 @@ row still needs either the maintainer's approval to write 3.11 or a
 bootloader action that marks the slot itself.
 
 Both slots on this unit carry bootloader `lynx-15.2`.
+
+These bytes and the fastboot lines above were taken at different moments
+(Linux after a boot; `getvar` from the bootloader in a separate cycle), so
+this is **provisional**, not a same-state row: the retry byte reads 0 where
+`getvar` reports 1, and slot A's flags differ from the 3.15 table. A
+same-moment table still has to be captured.
