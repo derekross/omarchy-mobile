@@ -4,8 +4,9 @@
 and place, on the touchscreen of a dark phone wake it as a short press of
 the power key does (omamobile-keys double-tap, which leaves a lit screen
 alone). A single touch no longer lights the screen: hypr/phone.lua turns
-Hyprland's misc:mouse_move_enables_dpms off, and the lock wakes on a double
-tap itself (patches/omarchy/0029).
+Hyprland's misc:mouse_move_enables_dpms off, and the lock ignores touches
+while its display is dark (patches/omarchy/0029), so the double tap seen
+here is the only touch that wakes it.
 
 Runs for every user's graphical session (omamobile-doubletap.service); the
 user is in the input group, so it reads the touchscreen's evdev node

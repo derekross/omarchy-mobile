@@ -128,7 +128,7 @@ o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyb
 -- the release then turned it off again.
 hl.config({ misc = { key_press_enables_dpms = false } })
 -- Nor does a single touch: a double tap wakes it, as on Android
--- (omamobile-doubletap, and the lock itself through patches/omarchy/0029),
+-- (omamobile-doubletap; the lock ignores touches while dark, patches/omarchy/0029),
 -- so a touch in a pocket or a brush of the palm leaves it dark.
 hl.config({ misc = { mouse_move_enables_dpms = false } })
 

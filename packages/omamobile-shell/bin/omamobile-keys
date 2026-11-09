@@ -323,8 +323,8 @@ case "${1:-}" in
     ;;
   double-tap)
     # omamobile-doubletap: a double tap on the touchscreen. Only a dark
-    # screen wakes; the lock itself also wakes on it (patches/omarchy/0029),
-    # and this lights the panel where the lock's wake alone doesn't (tegu).
+    # screen wakes; the lock ignores touches while dark (patches/omarchy/0029),
+    # so this is the double tap's only wake, and it lights the panel too.
     screen_off || exit 0
     if locked; then wake_locked; else wake_unlocked; fi
     ;;
