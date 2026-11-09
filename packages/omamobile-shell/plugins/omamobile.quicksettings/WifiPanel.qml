@@ -435,11 +435,13 @@ Item {
 
     // Swipe up from the bottom edge closes the panel. Full screen on the
     // home screen, it covers the dock that takes that swipe there, so
-    // without this only the back arrow got out.
+    // without this only the back arrow got out. Only the panel's bottom
+    // inset and the outer gap: any taller and it lies over the end of the
+    // list, where a scroll would close the page instead.
     Item {
       z: 100
       anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-      height: Math.max(28, Style.space(36))
+      height: panel.contentBottomInset + Style.gapsOut
 
       DragHandler {
         target: null
