@@ -417,4 +417,15 @@ ok "no OMARCHY_PATH in the environment: the update starts (exit 0, '$out')" '[[ 
 wait_done
 ok "no OMARCHY_PATH in the environment: omarchy-update still gets Omarchy's (omarchy-update-dev)" 'grep -c "^omarchy-update OMARCHY_PATH=/usr/share/omarchy$" "$calls" >/dev/null'
 
+# As root (a root login over SSH, 2026-11-09) Omarchy's per-user migration
+# record is empty and every migration ran again as root: refused, nothing runs
+: >"$calls"
+for c in run start run-migration; do
+  rc=0; out=$(printf '1234\n' | OMAMOBILE_UPDATE_TEST_EUID=0 python3 -I "$U" $c 2>&1) || rc=$?
+  ok "as root: $c refused (exit 5) and says why" '[[ $rc == 5 && $out == *"not as root"* ]]'
+done
+ok "as root: nothing reached omarchy-update or sudo" '[[ ! -s $calls ]]'
+rc=0; OMAMOBILE_UPDATE_TEST_EUID=0 python3 -I "$U" check --json >/dev/null || rc=$?
+ok "as root: check still answers (read-only, exit $rc)" '[[ $rc == 0 || $rc == 1 ]]'
+
 exit $((failures > 0))

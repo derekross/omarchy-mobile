@@ -37,7 +37,9 @@ directory of stand-ins first on PATH (/usr/lib/omamobile-omarchy/update-bin):
              omarchy-migrate (boot-related migrations held), sudo
              (non-interactive from the sheet)
 
-Before anything is downloaded it refuses: below 30% battery unless charging,
+It never runs as root (Omarchy records its migrations per user, and root's
+record is empty). Before anything is downloaded it refuses: below 30%
+battery unless charging,
 when /etc/pacman.conf doesn't list [omamobile] first and [omarchy] before
 Arch Linux ARM's repositories, when [omarchy] isn't Omarchy's stable
 channel, and when the update would install another distribution's kernel,
@@ -106,6 +108,8 @@ PATCH_STATUS = os.environ.get("OMAMOBILE_PATCH_STATUS", "/var/lib/omamobile/omar
 NOTIFY = os.environ.get("OMAMOBILE_NOTIFY", "omarchy-notification-send")
 OMARCHY_PATH = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
 MIN_BATTERY = int(os.environ.get("OMAMOBILE_MIN_BATTERY", "30"))
+# Tests stand in for root here; nothing else should set it.
+EUID = int(os.environ.get("OMAMOBILE_UPDATE_TEST_EUID") or os.geteuid())
 MIN_FREE = 10 * 1024 ** 3  # omarchy-update-requires-free-space's limit
 UNIT = "omamobile-update"
 RELEASE_NOTES = "https://github.com/basecamp/omarchy/releases/latest"
@@ -930,6 +934,16 @@ def main(argv):
             for b in result["blockers"]:
                 print("Blocked: " + b)
         return 0 if result["ok"] else 1
+    if cmd in ("run", "start", "__inner", "run-migration") and EUID == 0:
+        # Omarchy keeps the migrations it has run in the caller's home
+        # (~/.local/state/omarchy/migrations). Root's list is empty, so an
+        # update as root (a root login over SSH, as on 2026-11-09) ran every
+        # migration again as root: one swapped quickshell for an older
+        # quickshell-git, others wrote root's own configs.
+        print("omamobile-update: not as root. Run \"omarchy update\" as the phone's user, in a terminal on "
+              "the phone or from Settings: Omarchy records its migrations per user, and root's record is "
+              "empty, so every migration would run again as root.", file=sys.stderr)
+        return 5
     if cmd == "run":
         return run(args)
     if cmd == "__inner":
