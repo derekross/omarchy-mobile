@@ -13,5 +13,7 @@ image-build and boot qualification against the public kernel prerequisites.
 
 This is a development port target rather than an installer release. The device
 package and individual peripheral enablement belong in follow-up changes.
-Use the project's contributing safety model and its device-specific runbook
-before any hardware operation.
+Read [the first-light runbook and dated metadata evidence](FIRST-LIGHT.md)
+and the project's contributing safety model before any hardware operation.
+The runbook names the required kernel patch series; it is not yet a published
+kernel dependency or a qualification of this minimal target.
