@@ -135,6 +135,27 @@ done
 printf 'serial-ABC1234 is another word\n' > "$t/scan/bad.bin"
 run scan "$t/scan" || fail "a listed identifier matches only as a whole word"
 rm "$t/scan/bad.bin"
+# dnsmasq's shipped example configuration (2026.11.08): its group address and
+# a dhcp-option value pass in etc/dnsmasq.conf only; a unicast dhcp-host there,
+# and a group-looking address elsewhere (a Bluetooth LE random address can
+# look like one), are still found. Addresses put together, as above.
+grp=$(printf '%s:%s' 11:22:33 44:55:66) opt=$(printf '%s:%s' e4:45:74 68:00:00) doc=$(printf '%s:%s' 00:00:5e 00:53:01)
+mkdir -p "$t/scan/etc"
+printf '#dhcp-host=%s,192.168.0.60\n#dhcp-option=128,%s\ndhcp-option=128,%s\n' "$grp" "$opt" "$opt" > "$t/scan/etc/dnsmasq.conf"
+run scan "$t/scan" || fail "dnsmasq's example group address and option bytes pass in etc/dnsmasq.conf"
+printf 'dhcp-host=%s,192.168.0.61\n' "$doc" >> "$t/scan/etc/dnsmasq.conf"
+if run scan "$t/scan"; then fail "a unicast dhcp-host in etc/dnsmasq.conf is found"; fi
+printf '#dhcp-option=128,%s # %s\n' "$opt" "$doc" > "$t/scan/etc/dnsmasq.conf"
+if run scan "$t/scan"; then fail "a real address after an exempt value on one line is found"; fi
+rm "$t/scan/etc/dnsmasq.conf"
+printf 'paired %s\n' "$grp" > "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a group-looking address outside etc/dnsmasq.conf is found"; fi
+printf 'dhcp-option=128,%s\n' "$doc" > "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a dhcp-option value outside etc/dnsmasq.conf is found"; fi
+mkdir -p "$t/scan/xetc"; printf '#dhcp-option=128,%s\n' "$doc" > "$t/scan/xetc/dnsmasq.conf"; rm "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a file named like etc/dnsmasq.conf but not it (xetc/) is found"; fi
+rm -r "$t/scan/xetc"
+rm -r "$t/scan/etc"
 pass "the scan finds real MACs, serial records, the builder's home and listed identifiers, not made-up MACs or example paths"
 
 # --- packages: only the release key's index ---
