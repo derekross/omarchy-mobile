@@ -151,19 +151,31 @@ if [[ ${OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS:-} == 1 ]]; then
   exit 0
 fi
 
-# The link's modules and their parameters, in load order, one "module
-# key=value..." entry each: the board's (its device package installs
-# $LIB/modem/link.conf, a bash fragment setting LINK_MODULES), or gs201's
-# one driver. A device package may select a separate PHY and PCIe host.
+# The Pixel 9 Pro XL needs its PHY loaded before its PCIe host. Device
+# packages can provide this ordered, data-only list outside vendor extraction.
+# Without a file, retain the Pixel 7 Pro's existing gs201 invocation.
+LINK_CONFIG=/usr/lib/omamobile-modem/link.conf
 LINK_MODULES=("pcie-gs201-cp allow_hw=1")
-if [[ -r $LIB/modem/link.conf ]]; then
-  # shellcheck source=/dev/null
-  . "$LIB/modem/link.conf"
-fi
+read_link_config() {
+  local path=$1 entry LC_ALL=C
+  [[ -e $path || -L $path ]] || return 0
+  [[ -f $path && -r $path && ! -L $path ]] || refuse "Off: invalid link configuration"
+  LINK_MODULES=()
+  while IFS= read -r entry || [[ -n $entry ]]; do
+    [[ $entry =~ ^[[:blank:]]*$ || $entry =~ ^[[:blank:]]*# ]] && continue
+    # A module followed by zero or more key=value arguments. No shell syntax,
+    # quotes, substitutions, options or inline comments are accepted.
+    [[ $entry =~ ^[a-zA-Z][a-zA-Z0-9_-]*([[:blank:]]+[a-zA-Z_][a-zA-Z0-9_]*=[a-zA-Z0-9_.,:+/-]+)*[[:blank:]]*$ ]] ||
+      refuse "Off: invalid link configuration"
+    LINK_MODULES+=("$entry")
+  done < "$path"
+  ((${#LINK_MODULES[@]})) || refuse "Off: empty link configuration"
+}
+read_link_config "$LINK_CONFIG"
 
 # The link driver must allow hardware access, or cbd's power-on is refused
 # (-EPERM), and parameters are fixed at load time: a copy already loaded
-# with other values (by hand, M3.3-B, or an identity-gate test this boot)
+# with other values (by hand, M3.3-B, or a hardware-disabled test this boot)
 # needs a reboot. Booleans read back as Y/N.
 link_param_ok() {
   local mod=$1 kv=$2 key val have
