@@ -521,6 +521,20 @@ initramfs_config() {
   if [[ -n ${DEV_BRINGUP_PROBE:-} ]]; then
     [[ $DEV_BRINGUP_PROBE == 1 ]] || die "BRINGUP_PROBE must be 1 or absent"
   fi
+  if [[ -n ${DEV_INITRAMFS_ROOT_LABEL+x} ]]; then
+    [[ $DEV_INITRAMFS_ROOT_LABEL == omamobile-root ]] ||
+      die "INITRAMFS_ROOT_LABEL must be omamobile-root or absent"
+  fi
+  if [[ -n ${DEV_INITRAMFS_ROOT_MODE+x} ]]; then
+    [[ $DEV_INITRAMFS_ROOT_MODE == persistent-development || $DEV_INITRAMFS_ROOT_MODE == ram-rescue ]] ||
+      die "INITRAMFS_ROOT_MODE must be persistent-development, ram-rescue or absent"
+    [[ ${DEV_INITRAMFS_ROOT_LABEL:-} == omamobile-root ]] ||
+      die "INITRAMFS_ROOT_MODE needs INITRAMFS_ROOT_LABEL=omamobile-root"
+  fi
+  if [[ -n ${DEV_INITRAMFS_USB_RECOVERY+x} ]]; then
+    [[ $DEV_INITRAMFS_USB_RECOVERY == yes || $DEV_INITRAMFS_USB_RECOVERY == no ]] ||
+      die "INITRAMFS_USB_RECOVERY must be yes, no or absent"
+  fi
   # load_device has checked UFS_RW (names, slot B boot images, userdata);
   # pack it as one line with single spaces, the form the init accepts
   read -ra rw <<<"$DEV_UFS_RW"
@@ -535,6 +549,16 @@ initramfs_config() {
   fi
   [[ -n $etc ]] || return 0
   mkdir -p "$etc"
+  # Absent keys create no policy files and keep existing phones unchanged.
+  if [[ -n ${DEV_INITRAMFS_ROOT_LABEL:-} ]]; then
+    printf '%s\n' "$DEV_INITRAMFS_ROOT_LABEL" > "$etc/omamobile-root-label"
+  fi
+  if [[ -n ${DEV_INITRAMFS_ROOT_MODE:-} ]]; then
+    printf '%s\n' "$DEV_INITRAMFS_ROOT_MODE" > "$etc/omamobile-root-mode"
+  fi
+  if [[ -n ${DEV_INITRAMFS_USB_RECOVERY:-} ]]; then
+    printf '%s\n' "$DEV_INITRAMFS_USB_RECOVERY" > "$etc/omamobile-usb-recovery"
+  fi
 
   # This device's simplefb triggers, and nothing else's. The init writes
   # each pair, and only when the board matches COMPATIBLE.

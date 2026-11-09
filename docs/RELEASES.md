@@ -99,6 +99,29 @@ Its `ram-only` descriptor has empty `BOOT_IMAGES` and `UFS_RW`; build it with
 `tools/build-flame-probe`, following [its runbook](../device/flame/BRINGUP-M1.md).
 It does not use the generic Tensor image builder or installer.
 
+### Optional initramfs root policy
+
+Existing descriptors retain their current boot path. A descriptor may opt in:
+
+- `INITRAMFS_ROOT_LABEL=omamobile-root`: inspect userdata read-only before
+  repair or mounting; refuse another label or a failed ext4 header read. Only
+  `e2fsck -p` statuses 0 and 1 may proceed. Old hand-installed, unlabelled roots
+  are unaffected until their descriptor explicitly opts in.
+- `INITRAMFS_ROOT_MODE=persistent-development`: require the label protection,
+  skip initramfs growth, and persist `/var/lib/omamobile/root-boot-pending` before
+  systemd handover. The installed SSH-ready service must clear it; a stale
+  marker holds the next boot in RAM. `ram-rescue` always stays in RAM.
+- `INITRAMFS_USB_RECOVERY=no`: disable the separate 45-second no-host crash.
+  Development roots may finish booting without a USB host, and a failed root
+  handover must remain available in RAM instead of consuming slot retries.
+  This is an explicit choice, independent of root mode; the existing recovery
+  behavior remains the default. Retain a hardware-watchdog and buttons/fastboot
+  recovery runbook before using a development image.
+
+These keys change image construction only; no shipped descriptor opts in here.
+Unknown root-mode files fail closed in RAM. This change has offline test evidence,
+not a fresh phone boot.
+
 ### 3.2 Keys to add later
 
 | Key | Step | Meaning |
