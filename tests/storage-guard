@@ -176,7 +176,7 @@ cp "$t/etc-cheetah/omamobile-ufs-rw" "$B/etc/omamobile-ufs-rw"
 printf '172.16.42.2:/srv/nfs/dipper\n' > "$B/etc/omamobile-nfsroot"
 guard
 [[ -z $(writable) ]] || fail "NFS root's first pass leaves all UFS partitions read-only"
-! grep -q '^allowlist: ' "$B/dev/kmsg" || fail "NFS mode skips the packed allowlist"
+! grep -q 'ufs-ro: allowlist: ' "$B/dev/kmsg" || fail "NFS mode skips the packed allowlist"
 [[ $(cat "$B/sys/block/sda/ro") == 1 ]] || fail "NFS root marks the main UFS disk read-only"
 [[ $(cat "$B/sys/block/sdb/ro") == 1 && $(cat "$B/sys/block/sdb/sdb1/ro") == 1 ]] || fail "NFS root marks boot LUNs read-only"
 grep -q 'NFS root requested: every UFS partition read-only' "$B/dev/kmsg" || fail "NFS mode is selected before first guard pass"
