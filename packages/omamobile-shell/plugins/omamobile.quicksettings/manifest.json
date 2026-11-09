@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "Omarchy Mobile",
   "license": "MIT",
-  "description": "Pull-down quick settings sheet for the phone, collapsed to four tiles and expanded to pages of touch-sized toggles (Wi-Fi, Bluetooth, mobile data, airplane mode, hotspot, do-not-disturb, torch, rotation lock, location, NFC, battery saver, dark theme, night light, stay awake, microphone, screenshot, screen record, fingerprint, keyboard) that the user arranges in an edit mode, plus brightness and volume sliders, media controls for the playing MPRIS player at the top of the notification shade, a Wi-Fi network picker behind the Wi-Fi tile and a Bluetooth panel behind the Bluetooth tile.",
+  "description": "Pull-down quick settings sheet for the phone, collapsed to four tiles and expanded to pages of touch-sized toggles (Wi-Fi, Bluetooth, mobile data, airplane mode, hotspot, do-not-disturb, torch, rotation lock, location, NFC, battery saver, dark theme, night light, auto brightness, stay awake, microphone, screenshot, screen record, fingerprint, keyboard) that the user arranges in an edit mode, plus brightness (its icon switches automatic brightness) and volume sliders, media controls for the playing MPRIS player at the top of the notification shade, a Wi-Fi network picker behind the Wi-Fi tile and a Bluetooth panel behind the Bluetooth tile.",
   "kinds": ["panel"],
   "keepLoaded": true,
   "entryPoints": {

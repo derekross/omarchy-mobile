@@ -296,6 +296,25 @@ if [[ -n ${OMAMOBILE_QS_RENDER:-} ]]; then
 fi
 pass "quick settings on its side"
 
+# Automatic brightness (omamobile-sensors' omamobile-autobrightness): the
+# brightness row's icon and the Auto brightness tile switch it through its
+# toggle, its status decides the tile, the slider keeps writing the
+# backlight while it runs (the daemon takes the level as the user's point),
+# and the tile isn't in the default layout.
+awk '/icon: autoBrightness.icon/,/onIconClicked/' "$qs" | grep -c 'onIconClicked: autoBrightness.toggle()' >/dev/null ||
+  fail "the brightness icon switches automatic brightness"
+grep -cF 'autoBrightnessWrite.command = ["omamobile-toggle-autobrightness", enabled ? "off" : "on"]' "$qs" >/dev/null ||
+  fail "the switch goes through omamobile-toggle-autobrightness"
+grep -cF 'command -v omamobile-toggle-autobrightness >/dev/null || { echo '"'"'{\"installed\":false}'"'"'; exit 0; }; omamobile-toggle-autobrightness status' "$qs" >/dev/null ||
+  fail "the tile reads the toggle's status"
+grep -cF 'readonly property string status: !installed ? "Not installed" : !available ? "No sensor"' "$qs" >/dev/null ||
+  fail "the tile says Not installed without the toggle, No sensor without a sensor"
+grep -cF '"auto-brightness": autoBrightness' "$qs" >/dev/null || fail "the Auto brightness tile has its backend"
+awk '/id: brightness$/,/^  }$/' "$qs" | grep -c 'autoBrightness' >/dev/null && fail "the slider writes the backlight as before, auto or not"
+node -e 'const M = require("./plugins/omamobile.quicksettings/TilesModel.js"); process.exit(M.known("auto-brightness") && !M.DEFAULT_LAYOUT.includes("auto-brightness") ? 0 : 1)' ||
+  fail "Auto brightness is in the catalog, not the default layout"
+pass "automatic brightness switch and tile"
+
 # QML has to parse; qmlformat is the Qt tool that fails on a syntax error
 # without needing the shell's own imports to resolve. Qt 6's first: a Qt 5
 # qmlformat on PATH (Arch's qt5-declarative) rejects Qt 6 syntax.

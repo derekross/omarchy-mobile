@@ -115,8 +115,8 @@ to the file by hand show on the next refresh.
 Default order: Wi-Fi, Bluetooth, Do not disturb, Torch (the collapsed row),
 Mobile data, Rotation lock, Airplane mode, Location, Battery saver, Dark
 theme, Night light, NFC, Fingerprint, Keyboard, Clipboard, Dictation.
-Hotspot, Stay awake, Microphone, Screenshot and Screen record start under
-"Add tiles". A user who saved a layout before Clipboard and Dictation
+Hotspot, Auto brightness, Stay awake, Microphone, Screenshot and Screen
+record start under "Add tiles". A user who saved a layout before Clipboard and Dictation
 existed finds them under "Add tiles" too.
 
 | Tile | Backend |
@@ -129,6 +129,7 @@ existed finds them under "Add tiles" too.
 | Battery saver | power-profiles-daemon's `power-saver` profile, through `omarchy-powerprofiles-set autodetect power-saver/balanced` (remembered per AC or battery) |
 | Dark theme | Swaps between the user's last dark and last light Omarchy theme (`omarchy-theme-set`; defaults Tokyo Night and Catppuccin Latte, choices kept in `~/.local/state/omamobile/theme-{dark,light}`). Long-press opens Omarchy's theme picker |
 | Night light | `omarchy-toggle-nightlight` (hyprsunset); "No hyprsunset" without it |
+| Auto brightness | `omamobile-toggle-autobrightness on/off` (omamobile-sensors), which enables or stops the `omamobile-autobrightness` user service; on while it runs. "Not installed" without the command, "No sensor" while the sensor proxy has no light sensor or there is no backlight. The brightness slider's icon is the same switch |
 | Stay awake | `omarchy-toggle-idle stay-awake/allow-idle`, Omarchy's idle indicator. It also keeps the phone out of sleep: `omamobile-sleepd` refuses while it is on, even with the screen off (a download, a long task) |
 | Microphone | Mute of PipeWire's default source; "No microphone" without one |
 | Screenshot | Puts the sheet away, then `omarchy-capture-screenshot fullscreen` (file, clipboard and a notification) |
@@ -142,7 +143,7 @@ existed finds them under "Add tiles" too.
 | Dictation | The voice bar (omamobile.voice: `omamobile-voice start`, a second tap `omamobile-voice done`); a start puts the sheet away so the words land in the app underneath. Its chevron (and a long press) opens the voice settings, as Wi-Fi's and Bluetooth's open their pages. "Listening" while it records, "Transcribing…" after. voxtype is an optional Omarchy install (Install > AI > Dictation): "Not installed" without it, "Not running" while `voxtype.service` (user) is inactive |
 | Keyboard | Shows or folds the on-screen keyboard (squeekboard's `sm.puri.OSK0` `SetVisible`); "No keyboard" without it on the session bus |
 | Fingerprint | Opens fingerprint setup (`omamobile.fingerprint`); the status counts this user's fingerprints through fprintd (`omamobile-fp-enroll list`); "No sensor" without fprintd or its device |
-| Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none) |
+| Brightness slider | `brightnessctl --class=backlight` (the panel backlight; dimmed when there is none). Its icon switches automatic brightness (as the Auto brightness tile does) and shows 󰃡 while it is on; the slider still works then, and the level becomes automatic brightness's point on its curve (omamobile-sensors' README) |
 | Volume slider | PipeWire default sink; tap the speaker glyph to mute |
 
 Tiles whose backend is missing render a dimmed glyph and name over a readable reason ("No modem",
@@ -303,7 +304,7 @@ IPC:
 | `omarchy-shell shell summon omamobile.quicksettings '{"page":"bluetooth"}'` | Open the Bluetooth panel |
 | `omarchy-shell shell call omamobile.quicksettings openBluetooth ''` | The same; returns the panel's state, or `unavailable` |
 | `omarchy-shell shell call omamobile.quicksettings bluetoothPanel ''` | JSON: panel open, adapter name, power, discovering, visible, helper, paired, available (with RSSI and type), unnamed count, action, failure, sheet, pairing phase |
-| `omarchy-shell shell call omamobile.quicksettings toggleTile <name>` | Same as tapping a tile, shown or not. Names are the ids in `TilesModel.js`: `wifi`, `bluetooth`, `mobile-data`, `airplane`, `hotspot`, `dnd`, `torch`, `rotation-lock`, `location`, `nfc`, `battery-saver`, `dark-theme`, `night-light`, `stay-awake`, `mic`, `screenshot`, `screen-record`, `fingerprint`, `keyboard`, `clipboard`, `dictation`. Returns the new state, `unavailable` or `unknown` |
+| `omarchy-shell shell call omamobile.quicksettings toggleTile <name>` | Same as tapping a tile, shown or not. Names are the ids in `TilesModel.js`: `wifi`, `bluetooth`, `mobile-data`, `airplane`, `hotspot`, `dnd`, `torch`, `rotation-lock`, `location`, `nfc`, `battery-saver`, `dark-theme`, `night-light`, `auto-brightness`, `stay-awake`, `mic`, `screenshot`, `screen-record`, `fingerprint`, `keyboard`, `clipboard`, `dictation`. Returns the new state, `unavailable` or `unknown` |
 | `omarchy-shell shell summon omamobile.quicksettings '{"expanded":true}'` / `'{"page":"edit"}'` | Open expanded / in edit mode |
 | `omarchy-shell shell call omamobile.quicksettings showPage <n>` | Expand and show page n (from 0) |
 | `omarchy-shell shell call omamobile.quicksettings tiles ''` | JSON: every tile with shown, available, enabled and status |

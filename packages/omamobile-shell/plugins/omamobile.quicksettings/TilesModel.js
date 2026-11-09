@@ -26,6 +26,7 @@ var CATALOG = [
   { id: "battery-saver", label: "Battery saver" },
   { id: "dark-theme", label: "Dark theme" },
   { id: "night-light", label: "Night light" },
+  { id: "auto-brightness", label: "Auto brightness" },
   { id: "stay-awake", label: "Stay awake" },
   { id: "mic", label: "Microphone" },
   { id: "screenshot", label: "Screenshot" },

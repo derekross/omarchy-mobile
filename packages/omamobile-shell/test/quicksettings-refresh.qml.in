@@ -33,6 +33,12 @@ TestCase {
         }
     }
     QtObject {
+        id: autoBrightness
+        function refresh() {
+            root.record("autoBrightness");
+        }
+    }
+    QtObject {
         id: torch
         function refresh() {
             root.record("torch");
@@ -127,7 +133,7 @@ TestCase {
         compare(calls.length, 0);
         tryCompare(revealAnimation, "running", false, 300);
         tryCompare(root, "openRefreshIndex", -1, 1500);
-        compare(calls.join(","), "notifications,dnd,brightness,probe,torch,rotationLock,location,nfc,fingerprint,keyboard,clockFormat");
+        compare(calls.join(","), "notifications,dnd,brightness,autoBrightness,probe,torch,rotationLock,location,nfc,fingerprint,keyboard,clockFormat");
         for (var i = 1; i < times.length; i++)
             verify(times[i] - times[i - 1] >= 25);
     }
@@ -143,7 +149,7 @@ TestCase {
         compare(calls.length, n);
         drag.pressed = false;
         tryCompare(root, "openRefreshIndex", -1, 1500);
-        compare(calls.length, 11);
+        compare(calls.length, 12);
     }
     function test_cancelAndCoalesce() {
         opened = true;
@@ -160,7 +166,7 @@ TestCase {
         scheduleOpenRefresh();
         scheduleOpenRefresh();
         tryCompare(root, "openRefreshIndex", -1, 1500);
-        compare(calls.length, 11);
+        compare(calls.length, 12);
     }
     function test_actionIsImmediate() {
         opened = true;
@@ -190,7 +196,7 @@ TestCase {
         compare(calls.slice(0, 3).join(","), "notifications,dnd,brightness");
         verify(editing);
         tryCompare(root, "openRefreshIndex", -1, 1500);
-        compare(calls.length, 11);
+        compare(calls.length, 12);
     }
     function test_scrollGates() {
         opened = true;
@@ -208,6 +214,6 @@ TestCase {
         compare(calls.length, 0);
         shadeList.moving = false;
         tryCompare(root, "openRefreshIndex", -1, 1500);
-        compare(calls.length, 11);
+        compare(calls.length, 12);
     }
 }
