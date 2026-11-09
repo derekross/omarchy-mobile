@@ -2,6 +2,47 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-09: the 2026.11.08 test install, and an update run as root
+
+The release's signed bundle, `omamobile-cheetah-2026.11.08`, installed on the
+reference phone with `bash install --reinstall --bootloader-slots-match
+cloudripper-17.0-15199429` (slot A's bootloader version in the stock
+capture, the same as slot B's), after `--dry-run`. The phone booted
+`7.3.0-rc6-omamobile-g1a9d1d4e9289` with `omamobile-device-cheetah` 0.1.47,
+`omamobile-shell` 0.2.107, `omamobile-omarchy` 0.1.37 and Omarchy 4.0.6.
+
+- **Provisioning, by hand** (`tools/phone-provision --nv-backup`, the
+  owner's CP2A factory image and the 2026-11-03 radio backup, whose
+  checksums still matched): after the reboot Wi-Fi, the AoC and the
+  fingerprint stack were up, and the modem came up at boot and registered
+  IMS by itself. No unit failed. `tools/phone-smoke`: 18 ok, the modem's
+  usual "not opened" lines, the camera check skipped. The fingerprint
+  sensor reads ready with no finger enrolled.
+- **A kernel update through the package:** at 00:42 the pacman hook of
+  `omamobile-boot-update` (the install's `AUTO_WRITE=yes`) wrote
+  `vendor_kernel_boot_b`, read it back ("written and verified"), left the
+  other four images ("already there"), saved the previous set and did not
+  reboot. The reboot into it worked.
+- **`omarchy update` as root over SSH**, the command we gave the owner, ran
+  Omarchy's migrations again as root: Omarchy records them per user, and
+  root's record was empty, so 59 ran. One swapped `quickshell` for an older
+  `quickshell-git` (Omarchy's later migration back counted as done), others
+  wrote configs into `/root`, restarted systemd-oomd and left
+  `/tmp/omarchy-update.log` owned by root, after which the Updates app
+  stopped at once ("script: cannot open /tmp/omarchy-update.log: Permission
+  denied"). Nothing else in `/etc` changed and no other package moved.
+  Put back by hand: `quickshell` reinstalled, `vulkan-headers` removed, root's
+  Omarchy state and configs and the log deleted. `omamobile-omarchy` 0.1.38
+  (#548) refuses an update as root.
+- **The update as the user** (the Updates app, 11:06): "Updated", one
+  package (`inotify-tools`, from Arch Linux ARM), Omarchy still 4.0.6,
+  nothing held, no restart asked for; patches "already applied". The
+  "local is newer than omamobile" warnings are the stable channel still
+  holding the previous release until the promote.
+
+Recorded with `tools/release --version 2026.11.08 test-install --passed
+7.3.0-rc6-omamobile-g1a9d1d4e9289`.
+
 ## 2026-11-08: the release kernel for 2026.11.08, a flat battery, the reboot reason
 
 Kernel `7.3.0-rc6-omamobile-g1a9d1d4e9289`, `omamobile` at `1a9d1d4e9289`
