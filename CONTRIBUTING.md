@@ -77,7 +77,7 @@ Phones with an entry:
 
 | Device | Boot partition the installer may write | Fastboot by buttons | Forced restart |
 | --- | --- | --- | --- |
-| Xiaomi Mi 8 (`dipper`) | `boot` only; stock `dtbo` stays untouched | Power off, then hold Volume Down + Power until FASTBOOT appears. | Hold Power alone for more than 10 seconds; observed to restart this handset on 2026-11-09. |
+| Xiaomi Mi 8 (`dipper`) | `boot` only; stock `dtbo` stays untouched | Power off, then hold Volume Down + Power until FASTBOOT appears. | Hold Power alone for more than 10 seconds; observed from installed Android on 2026-11-09. |
 
 ### 3.2 The read-only storage guard
 
