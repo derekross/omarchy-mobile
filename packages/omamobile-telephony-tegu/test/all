@@ -1,0 +1,30 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Package and attended attachment tests: fixtures only, no phone or system bus.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+for f in PKGBUILD install omamobile-telephony-tegu.install test/all; do bash -n "$f"; done
+python3 -B -m unittest discover -s test -p 'test_*.py'
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+./install "$t/root"
+for f in usr/bin/omamobile-tegu-mmd-attach usr/lib/systemd/system/omamobile-mmd.service.d/10-tegu-attach.conf \
+         usr/share/doc/omamobile-telephony-tegu/README.md usr/share/omamobile/telephony-tegu/version; do
+  [[ -f $t/root/$f ]] || { echo "not ok - missing $f"; exit 1; }
+done
+[[ -z $(find "$t/root" -type l -print) ]] || { echo 'not ok - package enables a unit'; exit 1; }
+[[ ! -d $t/root/etc ]] || { echo 'not ok - package copies or overrides /etc'; exit 1; }
+[[ -x $t/root/usr/bin/omamobile-tegu-mmd-attach ]]
+"$t/root/usr/bin/omamobile-tegu-mmd-attach" --help >/dev/null
+python3 -I -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' bin/omamobile-tegu-mmd-attach
+# Read the dependency declarations, not a grep that can match an optdepend.
+deps=$(startdir=$PWD bash -c 'source PKGBUILD; printf "%s\n" "${depends[@]}"')
+for dep in 'omamobile-device-tegu>=0.2.10' 'omamobile-modem-sit>=0.3.12' 'omamobile-mmd>=0.1.1' 'omatel-agent>=0.2.4'; do
+  grep -qxF "$dep" <<<"$deps"
+done
+! grep -qx omamobile-device-cheetah <<<"$deps"
+# Requisite is an active-state check, not a start request. No Wants/Requires
+# or multi-user target links may be added by this package.
+grep -qx 'Requisite=omamobile-sitd.service' systemd/10-tegu-attach.conf
+! grep -E '^(Requires|Wants|BindsTo)=' systemd/10-tegu-attach.conf
+! grep -E 'systemctl .*\b(start|restart|enable)\b' omamobile-telephony-tegu.install
+echo 'ok - opt-in package stages the attended helper and non-pulling bridge policy'

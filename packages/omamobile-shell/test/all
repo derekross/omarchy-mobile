@@ -908,6 +908,7 @@ if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
 fi
 if command -v node >/dev/null; then
   node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }
+  node test/battery-state.js || fail "battery state bindings"
 fi
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-cell-watch || fail "omamobile-cell-watch parses"
 if command -v dbus-run-session >/dev/null; then
@@ -1046,6 +1047,9 @@ PY
 pass "Mobile network page"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-doubletap || fail "omamobile-doubletap parses"
+python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep -v '^ok'; fail "omamobile-doubletap"; }
+pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"
 python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -1089,6 +1093,13 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
    $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
   || fail "the sleep watcher is staged and runs for every user's session"
 grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
+# Double tap to wake: phone.lua turns Hyprland's wake on touch off, so the
+# watcher must run for every session, or a single touch and a double tap
+# both leave an unlocked phone dark.
+[[ -x $tmp/root/usr/bin/omamobile-doubletap && -f $u/omamobile-doubletap.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-doubletap.service") == ../omamobile-doubletap.service ]] \
+  || fail "the double-tap watcher is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-doubletap' systemd/user/omamobile-doubletap.service >/dev/null || fail "the unit runs the double-tap watcher"
 # The lock screen's weather: a timer for every session, a one-shot service.
 [[ -x $tmp/root/usr/bin/omamobile-weather && -f $u/omamobile-weather.service && -f $u/omamobile-weather.timer &&
    $(readlink "$u/graphical-session.target.wants/omamobile-weather.timer") == ../omamobile-weather.timer ]] \

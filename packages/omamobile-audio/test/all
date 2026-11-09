@@ -67,6 +67,19 @@ if command -v alsaucm >/dev/null && [[ -r /usr/share/alsa/ucm2/ucm.conf ]]; then
   [[ $(ucmr get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM raven: Speaker PCM"
   [[ $(ucmr get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM raven: Mic PCM"
   pass "UCM profile parses: raven HiFi with Speaker and Mic"
+  # husky: speaker and earpiece on EP6, the microphone on EP1 capture
+  cp -r ucm2/Google/husky "$u/Google/"
+  cp "ucm2/conf.d/aoc-snd-card/google,husky-aoc-snd-card.conf" "$u/conf.virt.d/huskytest.conf"
+  sed -i -e 's/\${CardId}/0/g' -e 's/\${find-device:[^}]*playback[^}]*}/5/' \
+      -e 's/\${find-device:[^}]*capture[^}]*}/8/' "$u/Google/husky/HiFi.conf"
+  ucmh() { ALSA_CONFIG_UCM2=$u alsaucm -c huskytest "$@" 2>&1; }
+  [[ $(ucmh list _verbs) == *"0: HiFi"* ]] || fail "UCM husky: the HiFi verb"
+  out=$(ucmh list _devices/HiFi)
+  [[ $out == *"0: Speaker"* && $out == *"1: Earpiece"* && $out == *"2: Mic"* ]] || fail "UCM husky: Speaker, Earpiece and Mic devices"
+  [[ $(ucmh get CapturePCM/Mic/HiFi) == *"hw:0,8" ]] || fail "UCM husky: Mic PCM is EP1 capture (device 8)"
+  grep -q "BUILDIN MIC ID CAPTURE LIST' 0,-1,-1,-1" ucm2/Google/husky/HiFi.conf || fail "husky records mic id 0 only until the others are mapped"
+  [[ $(ucmh get PlaybackPCM/Speaker/HiFi) == *"hw:0,5" ]] || fail "UCM husky: Speaker PCM is EP6 (device 5)"
+  pass "UCM profile parses: husky HiFi with Speaker and Earpiece on EP6"
 fi
 grep -c "find-device:type=pcm,stream=playback,field=id,regex='^EP6 playback'" ucm2/Google/cheetah/HiFi.conf >/dev/null ||
   fail "UCM: the Speaker PCM is found by its id"
@@ -79,6 +92,35 @@ tegu_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/52-
 [[ -f "ucm2/conf.d/aoc-snd-card/$tegu_card.conf" ]] || fail "tegu long-name UCM file is named exactly $tegu_card.conf"
 grep -c "channelmix.max-volume = 0.562" wireplumber/52-omamobile-tegu-aoc.conf >/dev/null || fail "the 9a's speaker sink is capped (channelmix.max-volume)"
 grep -c "CAPTURE LIST' 0,1,-1,-1" ucm2/Google/tegu/HiFi.conf >/dev/null || fail "tegu HiFi must set its own mic list (cheetah's 0,3,2 kills the AoC)"
+husky_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/55-omamobile-husky-aoc.conf | head -1)
+[[ $husky_card == google,husky-aoc-snd-card ]] || fail "55-omamobile-husky-aoc.conf matches husky's card name"
+[[ -f "ucm2/conf.d/aoc-snd-card/$husky_card.conf" ]] || fail "husky long-name UCM file is named exactly $husky_card.conf"
+! grep -q "husky" ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf || fail "cheetah's shared profile has no husky branch"
+! grep -qE "TDM_0_RX Mixer EP1|EP1 playback|Mixer EP1' 1" ucm2/Google/husky/HiFi.conf || fail "husky never binds EP1 playback (it hangs the AoC; EP1 capture is the microphone)"
+# the volume ceilings, compared as numbers (a regex let 738 and 739 through)
+husky_over() { # husky_over FILE Digital|Analog LIMIT: 0 if any cset is above LIMIT
+  local v
+  while read -r v; do ((v > $3)) && return 0; done \
+    < <(sed -n "s/.*cset .*$2 PCM Volume' \([0-9][0-9]*\)\".*/\1/p" "$1")
+  return 1
+}
+ceil=$(mktemp); trap 'rm -f "$ceil"' EXIT
+for v in 738 739 9999; do
+  echo "cset \"name='Top Digital PCM Volume' $v\"" > "$ceil"
+  husky_over "$ceil" Digital 737 || fail "the ceiling check catches digital $v"
+done
+for v in 737 10; do
+  echo "cset \"name='Top Digital PCM Volume' $v\"" > "$ceil"
+  ! husky_over "$ceil" Digital 737 || fail "the ceiling check passes digital $v"
+done
+for v in 11 12; do
+  echo "cset \"name='Top Analog PCM Volume' $v\"" > "$ceil"
+  husky_over "$ceil" Analog 10 || fail "the ceiling check catches analog $v"
+done
+echo "cset \"name='Top Analog PCM Volume' 10\"" > "$ceil"
+! husky_over "$ceil" Analog 10 || fail "the ceiling check passes analog 10"
+! husky_over ucm2/Google/husky/HiFi.conf Analog 10 || fail "husky's analog volume stays at 10 or below"
+! husky_over ucm2/Google/husky/HiFi.conf Digital 737 || fail "husky's digital volume stays at 737 or below"
 raven_card=$(sed -n 's/.*api.alsa.card.name = "\([^"]*\)".*/\1/p' wireplumber/53-omamobile-raven-aoc.conf | head -1)
 [[ $raven_card == google,raven-aoc-snd-card ]] || fail "53-omamobile-raven-aoc.conf matches raven's card name"
 [[ -f "ucm2/conf.d/aoc-snd-card/$raven_card.conf" ]] || fail "raven long-name UCM file is named exactly $raven_card.conf"
@@ -130,6 +172,10 @@ cat > "$fake/debugfs" <<'SH'
 # debugfs -R 'cat /audio/speaker.cal' DEVICE: never -w
 [[ " $* " != *" -w "* ]] || { echo "debugfs opened for writing" >&2; exit 9; }
 [[ $2 == "cat /audio/speaker.cal" ]] || exit 1
+# as the real one: exit status 0 whatever went wrong, the reason on stderr
+echo "debugfs 1.47.3 (8-Jul-2025)" >&2
+[[ -z ${FAKE_DEBUGFS_ERROR:-} ]] || { echo "$FAKE_DEBUGFS_ERROR" >&2; exit 0; }
+[[ -e $FAKE_CAL ]] || { echo "/audio/speaker.cal: File not found by ext2_lookup " >&2; exit 0; }
 cat "$FAKE_CAL"
 SH
 cat > "$fake/systemctl" <<'SH'
@@ -304,6 +350,25 @@ mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_r
 : > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused_early "short file"
 pass "refuses a missing, short or invalid calibration, muted"
 
+# OMAMOBILE_SPK_DEFAULT_CAL=1 (a phone with no speaker.cal, as stock's HAL):
+# no file runs on the firmware's defaults, writing no CAL_*; a short file still stops
+none=$tmp/absent.cal   # never created: debugfs says "File not found"
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal
+((rc == 0)) || { cat "$r/out" >&2; fail "default calibration: start succeeds without speaker.cal"; }
+[[ $(cat "$r/run/speaker-protection-calibration") == "default calibration" ]] || fail "default calibration: start records it"
+if grep -c 'Protection cd CAL_' "$r/cset.log" >/dev/null; then fail "default calibration: no CAL_* written"; fi
+grep -c 'Top CAL_SET_STATUS' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "default calibration: CAL_SET_STATUS logged"; }
+[[ $(cat "$r/run/speaker-protection") == "ok: stage c8, protection firmware with the firmware's default calibration,"* ]] || { cat "$r/run/speaker-protection" >&2; fail "default calibration: the status line says so"; }
+printf 'abcd' > "$tmp/short4.cal"; prep=(FAKE_CAL=$tmp/short4.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-short; check_refused_early "default calibration: a short file"
+prep=(FAKE_CAL=$none); run nocal; check_refused_early "no speaker.cal without OMAMOBILE_SPK_DEFAULT_CAL"
+# only debugfs's "File not found" counts as no file: an empty speaker.cal,
+# or an empty read for another reason, is refused
+: > "$tmp/empty.cal"; prep=(FAKE_CAL=$tmp/empty.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-empty; check_refused_early "default calibration: an empty speaker.cal"
+prep=(FAKE_CAL=$none FAKE_DEBUGFS_ERROR="cat: Filesystem not open" OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-noopen; check_refused_early "default calibration: a debugfs failure"
+[[ ! -e $r/run/speaker-protection-calibration ]] || fail "default calibration: a refused start records nothing"
+run factcal; [[ $(cat "$r/run/speaker-protection-calibration") == "factory calibration" ]] || fail "factory calibration: start records it"
+pass "OMAMOBILE_SPK_DEFAULT_CAL=1: no speaker.cal runs on the firmware's defaults (and says so in /run); an empty or short file, or a debugfs failure, is still refused"
+
 # Runtime PM: an amplifier that cannot be held awake, then kernel log errors
 mktree pm-stuck; echo suspended > "$r/spi/spi6.1/power/runtime_status"; chmod a-w "$r/spi/spi6.1/power/control"
 rc=0; sp start > "$r/out" 2>&1 || rc=$?
@@ -406,6 +471,18 @@ startok w-cspl; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dsp
 [[ $(cat "$r/run/speaker-protection") == "muted: watchdog: Bottom: CSPL_STATE 1 (error)"* ]] || fail "watchdog: says why"
 startok w-cal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; watchrun
 ((rc == 1)) && muted || fail "watchdog: calibration not applied mutes"
+# A start on the firmware's defaults: 1 passes, nothing else does. What
+# counts is what start recorded, not the setting: with speaker.cal the
+# setting doesn't make 1 pass
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: after a start on the default calibration CAL_SET_STATUS 1 passes"; }
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal0; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 0; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || fail "watchdog: on the default calibration CAL_SET_STATUS 0 still mutes"
+prep=(OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal-stray; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: with speaker.cal, OMAMOBILE_SPK_DEFAULT_CAL=1 doesn't make CAL_SET_STATUS 1 pass"; }
 startok w-src; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; amx cset "name=Top PCM Source" ASP >/dev/null; watchrun
 ((rc == 1)) && muted || fail "watchdog: DSP bypass mutes"
 startok w-level; amx cset "name=Bottom Digital PCM Volume" 700 >/dev/null; watchrun
@@ -596,6 +673,22 @@ rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 "${c9prep[@]}"); sp star
 ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 ]] && grep -c "stage media" "$r/out" >/dev/null ||
   { cat "$r/out" >&2; fail "auto: without a verification stamp, media at 737/10"; }
 pass "auto: c9 at the everyday loud levels only with speaker_protection=1 and a stamp, media otherwise"
+# on the firmware's default calibration c9 is out: auto picks media (boost
+# off), an explicit c9 is refused, and verify writes no stamp
+mktree auto-defcal; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Top Analog PCM Volume") == 10 && $(val "Bottom Analog PCM Volume") == 10 &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] && grep -c "stage media, not c9: c9 needs the factory calibration" "$r/out" >/dev/null &&
+  [[ $(cat "$r/run/speaker-protection") == "ok: stage media, protection firmware with the firmware's default calibration,"* ]] ||
+  { cat "$r/out" >&2; fail "auto on the default calibration: media at 737/10, boost off, and says why"; }
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1
+rm -f "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 OMAMOBILE_VERIFY_SECONDS=0.3 OMAMOBILE_VERIFY_INTERVAL=0.1); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/state/speaker-protection-verified ]] && grep -c "default calibration" "$r/v.out" >/dev/null ||
+  { cat "$r/v.out" >&2; fail "verify on the default calibration: refused, no stamp"; }
+c9prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); c9 c9-defcal; check_refused_early "c9 on the default calibration"
+grep -c "stage c9 needs the factory calibration" "$r/out" >/dev/null || { cat "$r/out" >&2; fail "c9 on the default calibration: says why"; }
+pass "on the firmware's default calibration: auto picks media, c9 and verify are refused"
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
 # c9 only on a system with c9 levels of its own: raven, with speaker_protection=1
 # and a stamp for its own firmware, stays at media, and an explicit c9 is refused
@@ -976,7 +1069,7 @@ fi
 # --- the speaker filter and its tone controls (C9g) -------------------------------
 conf=pipewire/60-omamobile-speaker-loudness.conf
 grep -c 'condition = \[ { omamobile.speaker-eq = package } \]' "$conf" >/dev/null &&
-  grep -c 'omamobile.speaker-eq = package' "$conf" | grep -qx 2 || fail "filter: loads only while no user copy is saved"
+  grep -c 'omamobile.speaker-eq = package' "$conf" | grep -cx 2 >/dev/null || fail "filter: loads only while no user copy is saved"
 grep -c 'flags = \[ nofail \]' "$conf" >/dev/null || fail "filter: PipeWire starts without it if it fails to load"
 grep -c 'node.name = "alsa_output.platform-sound-aoc.HiFi__Speaker__sink"' "$conf" >/dev/null || fail "filter: the speaker sink only"
 grep -c 'api.alsa.card.name = "google,aoc-snd-card"' "$conf" >/dev/null || fail "filter: the Pixel 7 Pro's card only"

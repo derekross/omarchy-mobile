@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Packages in Omarchy's own list (install/omarchy-base.packages) that the
 # phone image leaves out on purpose. Packages that aren't built for aarch64
-# are left out anyway and listed in the image's MANIFEST.
+# are left out anyway and listed in the image's MANIFEST. One that is built
+# but whose dependencies pacman cannot meet stops the build with pacman's
+# reasons; list it here only if it can never work on a phone.
 # Registers binfmt handlers to run other architectures' binaries: a laptop's job
 qemu-user-static-binfmt
 # Hyprbars titlebars for floating workspaces (Omarchy 4.5): a plugin pinned to

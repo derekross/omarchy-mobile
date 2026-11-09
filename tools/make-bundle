@@ -67,7 +67,7 @@ while (($#)); do
     --unsigned) unsigned=1 ;;
     --label) label=${2:?}; shift ;;
     --base-url) base_url=${2:?}; shift ;;
-    -h|--help) sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0"; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift
@@ -86,7 +86,7 @@ if ((unsigned == 0)); then
 fi
 conf=device/$DEVICE/device.conf
 [[ -f $conf ]] || die "no $conf"
-provision_tools="phone-provision nv-backup phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+provision_tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
 for f in $provision_tools; do [[ -f tools/$f ]] || die "no tools/$f"; done
 [[ -f docs/INSTALL.md ]] || die "no docs/INSTALL.md"
 [[ -f tools/lib/bundle-tar.sh ]] || die "no tools/lib/bundle-tar.sh"

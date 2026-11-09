@@ -136,8 +136,8 @@ grep -qx 'CREDENTIAL=pin' <<<"$conf" || fail "a numeric password is a PIN"
 grep -qx 'HOSTNAME=alice-phone' <<<"$conf" || fail "the default host name is <user>-phone"
 grep -qx 'WIFI_SSID=Home Net' <<<"$conf" && grep -qx 'WIFI_PSK=correct horse' <<<"$conf" || fail "the Wi-Fi network"
 grep -qxF "SSH_KEY=$(cat "$t/home/.ssh/id_ed25519.pub")" <<<"$conf" || fail "the SSH key"
-debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -q 'Mode:  0600' || fail "firstboot.conf is root-only"
-debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "firstboot.conf belongs to root"
+debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -c 'Mode:  0600' >/dev/null || fail "firstboot.conf is root-only"
+debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -c 'User:     0   Group:     0' >/dev/null || fail "firstboot.conf belongs to root"
 [[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "root's authorized_keys"
 mkdir -p "$t/fbroot/usr/share/zoneinfo" "$t/fbroot/etc"
 : > "$t/fbroot/usr/share/zoneinfo/UTC"
@@ -147,7 +147,7 @@ OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamob
   fail "omamobile-firstboot accepts what install-phone writes"
 [[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
   || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
-debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "boot-update.conf belongs to root"
+debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -c 'User:     0   Group:     0' >/dev/null || fail "boot-update.conf belongs to root"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
 refuse() {
