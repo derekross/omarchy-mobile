@@ -7,9 +7,10 @@
   omamobile-omarchy-patches verify [--root DIR]
   omamobile-omarchy-patches restore [--root DIR]   Omarchy's own files back
 
-The series (/usr/share/omamobile/omarchy/patches, *.patch in name order) is
-written against Omarchy's source tree. Every run starts again from Omarchy's
-own files, never from the patched ones:
+The installed Omarchy version selects the series under
+/usr/share/omamobile/omarchy: legacy-4.0.6/ for 4.0.6, patches/ for 4.5.
+Each family applies *.patch in name order against Omarchy's source tree.
+Every run starts again from Omarchy's own files, never from the patched ones:
 
   1. Pristine files. For each file the series touches (and each file an
      earlier run touched), Omarchy's version as shipped: the file on disk if
