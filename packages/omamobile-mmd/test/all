@@ -38,7 +38,8 @@ python3 "$stage/usr/bin/omamobile-mmd" --help >/dev/null || fail "the staged dae
 # the modem side, no D-Bus activation file.
 grep -E '^(Requires|Wants|BindsTo|Requisite)=' systemd/omamobile-mmd.service && fail "the unit pulls something in"
 [[ -z $(find "$stage" -path '*dbus-1/system-services*' -print -quit) ]] || fail "no D-Bus activation file"
-grep -qx 'Conflicts=ModemManager.service' systemd/omamobile-mmd.service || fail "the unit conflicts with ModemManager"
+! grep -qx 'Conflicts=ModemManager.service' systemd/omamobile-mmd.service \
+  || fail "starting the bridge must not stop another modem daemon"
 if command -v systemd-analyze >/dev/null; then
   systemd-analyze verify --man=no "$stage/usr/lib/systemd/system/omamobile-mmd.service" 2>&1 |
     grep -v -e 'not executable' -e 'No such file' -e 'omamobile-sitd.service' -e '^$' && fail "unit verify" || true
