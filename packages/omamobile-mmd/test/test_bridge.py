@@ -305,8 +305,9 @@ class Registered(BridgeTests):
         self.push()
         spin(.2)
         self.assertEqual(self.modem('Calls', mm.VOICE), [path])
-        self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), mm.ERROR_PREFIX + 'InProgress')
-        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+        # the refused attempt is over, so a new Hangup is a new attempt
+        self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.sitd.actions().count('hangup'), 2)
 
     def test_delete_live_call_waits_for_confirmed_release(self):
         self.sitd.status['calls'] = [call('200', 'active')]
@@ -359,6 +360,7 @@ class Registered(BridgeTests):
         wait_until(lambda: result, 5, 'the delete completes')
         self.assertNotIn('error', result)
         self.assertEqual(self.modem('Calls', mm.VOICE), [])
+
     def test_release_confirmation_can_arrive_before_hangup_reply(self):
         self.sitd.status['calls'] = [call('200', 'active')]
         entered, proceed = threading.Event(), threading.Event()
@@ -426,7 +428,7 @@ class Registered(BridgeTests):
         self.client.call(MODEM0, mm.VOICE, 'HangupAll')
         self.assertEqual(self.sitd.actions().count('hangup'), 1)
 
-    def test_delete_after_refused_hangup_reports_error_without_retry(self):
+    def test_refused_hangup_reports_error_and_a_new_press_tries_again(self):
         self.sitd.status['calls'] = [call('200', 'active')]
         def refuse(request):
             raise FakeRefusal('Hangup could not be confirmed')
@@ -434,11 +436,19 @@ class Registered(BridgeTests):
         self.push()
         path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
         self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+        # The bridge never retries on its own, but each new request from the
+        # user is a new attempt once the last one has failed
         self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'DeleteCall', 'o', (path,)),
                          mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.sitd.actions().count('hangup'), 2)
         self.assertEqual(self.error_of(MODEM0, mm.VOICE, 'HangupAll'), mm.ERROR_PREFIX + 'Failed')
+        self.assertEqual(self.sitd.actions().count('hangup'), 3)
         self.assertEqual(self.modem('Calls', mm.VOICE), [path])
-        self.assertEqual(self.sitd.actions().count('hangup'), 1)
+        # and once sitd takes it, the call ends
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.client.call(path, mm.CALL, 'Hangup')
+        self.assertEqual(self.sitd.actions().count('hangup'), 4)
 
     def test_pending_delete_fails_when_prior_hangup_is_refused(self):
         for method in ('Hangup', 'HangupAll'):
@@ -489,6 +499,9 @@ class Registered(BridgeTests):
         self.assertEqual(self.modem('Calls', mm.VOICE), [path])
         self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
         self.assertEqual(self.sitd.actions().count('hangup'), 1)
+        # after the timeout a new press from the user is a new attempt
+        self.client.call(path, mm.CALL, 'Hangup')
+        self.assertEqual(self.sitd.actions().count('hangup'), 2)
 
     def test_delete_call_with_unknown_modem_state_is_refused(self):
         self.sitd.status['calls'] = [call('200', 'unrecognized')]
