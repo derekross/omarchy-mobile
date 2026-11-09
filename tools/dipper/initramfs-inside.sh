@@ -41,14 +41,15 @@ rm -f "$stage/usr/lib/modules/$KERNEL_RELEASE/build" \
       "$stage/usr/lib/modules/$KERNEL_RELEASE/source"
 depmod -b "$stage" "$KERNEL_RELEASE"
 
-# Keep only the modules this initramfs actually loads, with their dependencies.
+# Keep the watchdog module and the optional Dipper DSI test modules, with their
+# dependencies.
 # The full tree is ~1764 modules and dominates the image: with the PHYs, UFS,
 # i2c and simpledrm built in, almost none of it is reachable here, and ABL
 # refuses a boot image that grows too large. Everything else belongs in the
 # root filesystem, not here. The pruner reads modules.dep and fails loudly
 # rather than silently emptying the tree.
 python3 /src/tools/dipper/prune-modules.py \
-  "$stage/usr/lib/modules/$KERNEL_RELEASE" qcom_wdt
+  "$stage/usr/lib/modules/$KERNEL_RELEASE" qcom_wdt msm panel-samsung-ea8074 qcom-refgen-regulator
 depmod -b "$stage" "$KERNEL_RELEASE"
 
 # The modules the init loads must exist AND match this kernel exactly, or the

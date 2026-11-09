@@ -3,12 +3,23 @@
 
 **Status (2026-11-09):** this PR's image booted by RAM on a Xiaomi Mi 8; the
 owner saw the console, USB/SSH and read-only storage gate passed, the watchdog
-feeder ran, and Volume Down generated `KEY_VOLUMEDOWN`. Results and the final
-image hash are in [the notes PR #330].
-The FTS5 driver is merged upstream in Linux PR [touch #219]. The Dipper board
-DTS is under review in [DTS #220], and the EA8074 panel driver is under review
-in [panel #218].
-The panel and touchscreen still need separate hardware tests.
+feeder ran. Volume Down generated `KEY_VOLUMEDOWN` on the second RAM image;
+it has not been rechecked on this image. Results and the final image hash are
+in [the notes PR #330].
+The FTS5 driver from [touch #219] is merged into linux-omarchy-mobile. The
+Dipper board DTS is under review in [DTS #220], and the EA8074 panel driver is
+under review in [panel #218].
+A separate RAM overlay test on 2026-11-09 booted kernel
+`7.3.0-rc6-omamobile-push1` (image SHA-256
+`0f0ec9d62ebe57bef9ae8a4804bb23728f624daab824a0bf7dee18f63c2a3d59`). The
+EA8074 driver bound to `ae94000.dsi.0`; DRM reported connected at 1080x2248,
+and the owner saw the console on the lit panel. Backlight value 0 was accepted
+and restored to 511 (maximum 1023). Framebuffer blanking switched DRM `dpms`
+from `On` to `Off` and back to `On`. The FTS5 touchscreen still needs a hardware
+test. This panel image predates guard PR #484: `/dev/sda` was absent and all 85
+partition flags were `ro=1`, but `/dev/sdb` through `/dev/sdf` still existed
+with their whole-disk flags `ro=1`. No UFS was written. Repeat the whole-disk
+node check after #484 is included.
 On 2026-11-09, a guarded RAM boot was used to capture all 84 GPT partitions
 other than `userdata` (the phone has no `super`); source and compressed-image
 checksums passed. The separate live userdata archive also passed its checksum
@@ -60,17 +71,16 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    without changing UFS, and the screen stays lit because simpledrm holds the
    panel's VCI and VDDIO rails. If it goes dark about 30 seconds in, record
    `dmesg | grep -i -E 'regulator|simple'` and stop.
-   Pass only when `uname -r`, the `boot.img` sha256, all partition `ro`
-   values, every whole-disk `ro` value except `sda`, and the `ufs-ro` lines
-   from `dmesg` are recorded and correct. Dipper's main LUN is the exception:
-   `/sys/block/sda/ro` remains `0`, but the guard removes `/dev/sda` so only
-   individually guarded partition nodes are available. Verify `/dev/sda` is
-   absent and every `/sys/block/sda/sda*/ro` is `1`; fail if the node exists.
+   Pass only when `uname -r`, the `boot.img` sha256, all partition `ro` values,
+   whole-disk `ro` values, and `ufs-ro` lines from `dmesg` are recorded. Every
+   whole-disk node (`/dev/sda` through `/dev/sdf`) must be absent, and every
+   partition must have `ro=1`; do not gate on whole-disk `ro` values. This holds
+   when the guard protects all six UFS LUNs, including after #484.
    Also record the reserved-memory lines from
    `grep -i -E 'reserved|System RAM' /proc/iomem`, the bound `qcom_wdt`
    driver, its running watchdog feeder, and USB/SSH are recorded and correct.
-   Stop if any partition has `ro=0`, another whole-disk node has `ro=0`,
-   `/dev/sda` exists, the watchdog is not fed, USB/SSH fails,
+   Stop if any whole-disk node exists, any partition has `ro=0`, the watchdog
+   is not fed, USB/SSH fails,
    or anything asks to flash. Rollback: use the verified forced-restart
    procedure from step 3, then recover from the verified backup if needed.
    Risk: a USB host that never configures still reaches the existing watcher
@@ -114,12 +124,14 @@ repository; the SSH public key and generated host key stay in the local output.
   from `persist` with `debugfs` (read-only) before enabling that service; never
   mount `persist`.
 - The exact systemd journal line from the earlier failed `qcom_wdt` timeout
-  change was not retained. NFS root remains unverified; systemd must take over
-  the watchdog with `RuntimeWatchdogSec=60s` after the initramfs feeder stops.
-- Test the panel and FTS5 changes on the phone before marking them supported.
+  change was not retained; NFS root remains unverified.
+- Test the FTS5 touchscreen changes and GPU rendering on the phone before
+  marking them supported.
 
 From this rescue image, an SSH session can return to fastboot with
-`reboot-to bootloader`. The helper asks the PMIC reboot-mode driver to select
+`reboot-to bootloader`. Do not use `reboot-to recovery` until the contents of
+the stock `recovery` partition have been verified. The helper asks the PMIC
+reboot-mode driver to select
 the bootloader and writes no UFS partition. The PMIC reset path was verified on
 the handset on 2026-11-09. The packaged helper returned the running image to
 fastboot on 2026-11-09 without writing UFS.
