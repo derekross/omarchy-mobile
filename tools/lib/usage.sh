@@ -10,17 +10,25 @@
 #
 #   source tools/lib/usage.sh
 #   usage_from_header [--raw] FILE [PARAGRAPHS]
-#     prints FILE's header with each line's "#" and one space after it taken
+#     prints the header of the tool named FILE, in the tools directory
+#     above this file, with each line's "#" and one space after it taken
 #     off (--raw keeps them). With PARAGRAPHS, only that many paragraphs of
 #     it (a bare "#" line ends one), for a tool whose help is the first part
 #     of a longer header.
+#
+# Only FILE's name is used. A tool that cds to the repository first and
+# passes "$0" passes a path relative to the directory it left
+# (`cd ..; omarchy-mobile/tools/build-packages --help`, #559), while this
+# file's own path is still good: the tool has just sourced it from where it
+# is now.
 
 usage_from_header() {
   local raw=0
   [[ ${1:-} == --raw ]] && { raw=1; shift; }
+  local name=${1:?usage_from_header FILE [PARAGRAPHS]}
   awk -v raw="$raw" -v paras="${2:-0}" '
     NR <= 2 { next }
     !/^#/ { exit }
     /^#[ \t]*$/ && ++blank == paras { exit }
-    { if (!raw) sub(/^# ?/, ""); print }' "${1:?usage_from_header FILE [PARAGRAPHS]}"
+    { if (!raw) sub(/^# ?/, ""); print }' "$(dirname -- "${BASH_SOURCE[0]}")/../${name##*/}"
 }
