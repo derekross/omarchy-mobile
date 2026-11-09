@@ -20,11 +20,10 @@ verified off-device; it is not a raw partition image or an atomic snapshot,
 and the filesystem remained mounted during the copy.
 
 Before entering fastboot, the handset answered over USB SSH; no restart was
-needed to restore SSH. On the installed Android system, holding Power alone
-for more than 10 seconds restarted it, then Volume Down + Power entered
-fastboot. Read-only fastboot variables reported product `dipper` and an
-unlocked bootloader. This attended test was from the installed system, not a
-simulated kernel hang.
+needed to restore SSH. Holding Power alone for 10 seconds restarted the phone
+back into Android both from the installed system and under the Omarchy Mobile
+RAM kernel. Volume Down + Power then entered fastboot. Read-only fastboot
+variables reported product `dipper` and an unlocked bootloader.
 
 An earlier read-only SSH observation, reported on 2026-11-09 at 08:53 UTC,
 was on the dirty kernel
