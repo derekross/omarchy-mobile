@@ -10,6 +10,20 @@ Sources:
 - `P/`: postmarketOS pmaports `device/testing` (2026-10-21).
 - `G/`: Google's GPL kernel for this phone, `android-gs-shusky-6.1-android16` ([source.android.com: Build Pixel kernels](https://source.android.com/docs/setup/build/building-pixel-kernels)).
 
+## 2026-11-08: a third phone: Samsung 128 GB, UFS 3.1, still locked
+
+A third retail Pixel 8 Pro, offered in [#1](https://github.com/derekross/omarchy-mobile/issues/1). `R3/` below means read-only queries of this phone (`adb shell getprop` while booted, `fastboot getvar all` on the locked bootloader), facts only, no serial, IMEI or MACs. Nothing has been unlocked, flashed or booted on it yet.
+
+- **Identity** [V] (R3/): `husky`, `hw-revision` `MP1.0`, SKU G1MNW, `ro.boot.dtbo_idx` 8, `secure-boot:PRODUCTION`. The SKU and the storage vendor and size are the first phone's.
+- **Storage** [V] (R3/ getvar): `storage-vendor:SAMSUNG`, `storage-model:KLUDG4UHGC-B0E1`, `storage-capacity:128 GB`, `storage-protocol:3.1`, `storage-rev:3203`, `storage-power-mode:lanes=2 gear=4 mode=FAST hs_series=SERIES_B`.
+- **Starting state** [V] (R3/): GrapheneOS `2026110201`, the security preview of `2026110200` (`CP3A.261005.005`, security patch 2026-11-01), bootloader locked with its own verified boot key (`verifiedbootstate` yellow). Current slot a with `slot-successful:a:yes`, and `slot-unbootable:b:yes`, `slot-fastboot-ok:b:no`, retry count 2 on both: the second phone's starting state with the slots swapped. That is probably what GrapheneOS's 2026-11-06 update left behind (Virtual A/B, once the update merged) [I]. Its updater reported "Device is up-to-date" before the reboot to the bootloader.
+- **Patch level** [V] (R3/, `device.conf`): GrapheneOS's security patch, 2026-11-01, is newer than the 2026-10-05 our husky images carry (`AVB_SECURITY_PATCH=2026-10-05`, `OS_PATCH_LEVEL=2026-10`). The second phone started at 2026-10-05, the same as our images, so it didn't meet this. Whether booting the older patch level on slot B matters to the bootloader or Trusty once unlocked is not known [I].
+- **Bootloader and modem** [V] (R3/ getvar): `ripcurrent-17.0-15681527` and baseband `g5300i-260604-260807-B-16036236`, both as on the second phone; anti-rollback `ap-ar-ns`, `ap-ar-s`, `gsa-bl1-ar` and `gsa-fw-ar` all 3; `unlocked:no`, `off-mode-charge:1`.
+- **Partitions** [V] (R3/ getvar): `boot`, `vendor_boot` and `vendor_kernel_boot` 64 MiB, `init_boot` 8 MiB, `dtbo` 16 MiB, `modem` 200 MiB, `efs` 64 MiB, `persist` 128 MiB, `super` 7.95 GiB and `userdata` 117,744,685,056 bytes, all as on the first phone.
+- **OEM unlocking** [V]: allowed in Developer options (switched on, not greyed out). No SIM (`gsm.sim.state` `ABSENT`).
+- **GrapheneOS cuts USB data while the phone is locked** [V]: after `fastboot reboot`, no USB device showed up on the host until the phone was unlocked with its PIN; adb was back at once after that. Expect to unlock it after each reboot into GrapheneOS. Which of its USB-C port settings does this was not checked [I].
+- **fastbootd** [V]: `fastboot reboot fastboot` on the locked phone reached fastbootd (`is-userspace:yes`), and `fastboot reboot` from there went back to GrapheneOS on slot a.
+
 ## 2026-11-05: idle-state and power-domain overlays that reboot-looped the phone
 
 Lef's phone (Kioxia unit), slot B, while looking for the cause of a ~520 mA idle draw with the screen off. I tested two bring-up overlays; every kernel flashed with either of them reset the phone hard about 8 to 40 s after boot (no pstore, no panic text). My first note called the idle-state boot stable; it was not (the temperature log stopped after a minute and I had already flashed the next build).
