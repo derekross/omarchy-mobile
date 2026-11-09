@@ -19,6 +19,9 @@ for word in $(cat "$cmdline" 2>/dev/null); do
   esac
 done
 
+# The parameter appears when the driver loads; do not depend on autoload.
+modprobe gs_dsim_cmd 2>/dev/null || true
+
 case $panel in
   sdc-s6e3fc5|sdc-s6e3fc5.*|s6e3fc5|s6e3fc5.*)
     if echo 1 > "$allow" 2>/dev/null; then
