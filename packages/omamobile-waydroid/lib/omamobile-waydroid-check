@@ -77,4 +77,17 @@ if [[ -z ${CONFIG_FILE:-} ]]; then
   fi
 fi
 
+# The binder major is assigned at boot and lxc-omamobile.conf allows one:
+# compare them. Runs on the live kernel, or against a test DEVICES_FILE and
+# LXC_CONF (test/all) so the comparison itself is tested.
+if [[ -z ${CONFIG_FILE:-} || -n ${DEVICES_FILE:-} ]]; then
+  binder_major=$(awk '$2 == "binder" { print $1 }' "${DEVICES_FILE:-/proc/devices}")
+  lxc_conf=${LXC_CONF:-/usr/share/omamobile-waydroid/lxc-omamobile.conf}
+  if [[ -n $binder_major ]] && grep -qx "lxc.cgroup2.devices.allow = c $binder_major:\* rwm" "$lxc_conf" 2>/dev/null; then
+    echo "ok    binder major $binder_major is allowed in lxc-omamobile.conf"
+  else
+    echo "MISS  binder major ${binder_major:-unset} is not allowed in $lxc_conf (Android would not boot)"; missing=1
+  fi
+fi
+
 exit "$missing"

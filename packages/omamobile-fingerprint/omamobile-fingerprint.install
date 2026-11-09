@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: MIT
 post_install() {
-  echo "omamobile-fingerprint: nothing enabled. Needs the vendor files in /usr/lib/omamobile-fp/root"
-  echo "  (tools/extract-fingerprint-vendor on your computer), the fingerprint DT overlays,"
-  echo "  and the staged bring-up in device/cheetah/FINGERPRINT-PLAN.md before"
-  echo "  systemctl enable --now omamobile-fp (its first run writes Trusty's secure storage)."
+  echo "omamobile-fingerprint: omamobile-fp starts at boot once Google's files are in"
+  echo "  /usr/lib/omamobile-fp/root (tools/phone-provision). Its first start copies"
+  echo "  mfg_data and persist:/ss read-only and writes Trusty's secure storage."
 }
 post_upgrade() {
   systemctl daemon-reload 2>/dev/null || true
+  # A storage proxy an older runner started this boot left no marker: set it,
+  # so the new runner refuses a second proxy until the reboot.
+  if pgrep -x storageproxyd >/dev/null 2>&1 && [[ ! -e /run/omamobile-fp/storageproxyd-started ]]; then
+    mkdir -p /run/omamobile-fp
+    (umask 077; echo "$(date -Is) started before the upgrade (no token)" > /run/omamobile-fp/storageproxyd-started)
+  fi
+  echo "omamobile-fingerprint: reboot soon: fingerprint starts again at the next boot (one storage proxy per boot)"
 }
 pre_remove() {
   systemctl disable --now omamobile-fp.service 2>/dev/null || true

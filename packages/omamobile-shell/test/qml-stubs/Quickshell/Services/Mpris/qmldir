@@ -1,0 +1,2 @@
+module Quickshell.Services.Mpris
+singleton Mpris 1.0 Mpris.qml

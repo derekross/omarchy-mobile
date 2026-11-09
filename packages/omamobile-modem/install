@@ -5,7 +5,8 @@
 # them from the user's own factory image
 # (/usr/lib/omamobile-vendor/modem/{root,MANIFEST,SOURCE,STUBS}); the NV
 # checksums (/etc/omamobile/modem-nv.sha256) come from the user's own
-# off-repo backup.
+# off-repo backup. The NV overlay (/var/lib/omamobile/modem-nv-overlay) is
+# made on the phone from the modem's own writes; nothing here creates it.
 #   ./install DESTDIR
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -14,9 +15,14 @@ d=${1:?Usage: ./install DESTDIR}
 v=$d/usr/lib/omamobile-vendor
 install -Dm755 lib/omamobile-modem-start "$v/omamobile-modem-start"
 install -Dm755 lib/omamobile-modem-cp "$v/omamobile-modem-cp"
+install -Dm755 lib/omamobile-modem-nv-overlay "$v/omamobile-modem-nv-overlay"
+install -Dm755 bin/omamobile-modem "$d/usr/bin/omamobile-modem"
 install -Dm644 profiles/modem.conf "$v/profiles/modem.conf"
 install -Dm644 modem/props.conf "$v/modem/props.conf"
-install -Dm644 systemd/omamobile-modem.service "$d/usr/lib/systemd/system/omamobile-modem.service"
+for u in omamobile-modem.service omamobile-modem-inhibit.service omamobile-modem-boot.target \
+         omamobile-modem-nv-overlay.service omamobile-modem-nv-overlay.timer; do
+  install -Dm644 "systemd/$u" "$d/usr/lib/systemd/system/$u"
+done
 install -Dm644 udev/60-omamobile-modem-nv-ro.rules "$d/usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules"
 install -Dm644 udev/61-omamobile-vendor-udisks-ignore.rules "$d/usr/lib/udev/rules.d/61-omamobile-vendor-udisks-ignore.rules"
 install -Dm644 LICENSE "$d/usr/share/licenses/omamobile-modem/LICENSE"

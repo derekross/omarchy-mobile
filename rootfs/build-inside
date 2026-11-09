@@ -8,8 +8,11 @@
 #   /target   an empty volume: the root file system is assembled here
 #   /out      where the raw image and the MANIFEST go
 # Environment: VERSION, DEVICE, DEVICE_PACKAGE, ROOTFS_PACKAGES and
-# ALLOW_MISSING (both space-separated), KERNEL_RELEASE, MODULES_SHA256,
-# GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL.
+# ALLOW_MISSING (both space-separated), KERNEL_PACKAGE (1: the device
+# package ships boot files, so linux-omamobile and omamobile-boot-update go
+# in and the package's modules replace the tarball), KERNEL_RELEASE, MODULES_SHA256,
+# GIT_COMMIT, ALARM_SHA256, OMARCHY_CHANNEL, CHANNEL ([omamobile]: stable,
+# development or local).
 set -euo pipefail
 
 T=/target
@@ -25,16 +28,23 @@ trap 'chown -R "$out_owner" /out 2>/dev/null; chown -R "$cache_owner" /var/cache
 # [omamobile] first, from the repository being shipped
 sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[omarchy]/" /etc/pacman.conf
 pacman -Sy >/dev/null
-available() { pacman -Sp --print-format %n "$1" >/dev/null 2>&1; }
+# shellcheck source=resolve.sh
+source /src/rootfs/resolve.sh
 
 mapfile -t base < <(list /src/rootfs/packages.base)
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
 ours+=("$DEVICE_PACKAGE")
 read -ra board <<<"${ROOTFS_PACKAGES:-}"
 ours+=("${board[@]}")
+# A device package with boot files: the kernel as a package, and the hook
+# that writes it to slot B (off until install-phone writes AUTO_WRITE=yes,
+# so pacstrap's run of it leaves everything alone)
+[[ ${KERNEL_PACKAGE:-0} != 1 ]] || ours+=(omamobile-boot-update linux-omamobile)
 missing=() skipped_ours=()
-for p in "${base[@]}"; do available "$p" || missing+=("$p"); done
-((${#missing[@]} == 0)) || die "not in any repository: ${missing[*]}"
+resolve_all "${base[@]}"
+((${#absent_pkgs[@]} == 0)) || printf 'error: not in any repository: %s\n' "${absent_pkgs[*]}" >&2
+((${#unmet_pkgs[@]} == 0)) || printf 'error: in a repository, but pacman cannot meet their dependencies: %s\n%s\n' "${unmet_pkgs[*]}" "$unmet_why" >&2
+((${#absent_pkgs[@]} + ${#unmet_pkgs[@]} == 0)) || exit 1
 # Every package of ours must come from [omamobile], not a same-named one
 # elsewhere (Mesa, Hyprland, libcamera are in Arch Linux ARM and [omarchy]
 # too). One allowed to be missing is left to whatever depends on it.
@@ -50,6 +60,15 @@ for p in "${ours[@]}"; do
   fi
 done
 ((${#missing[@]} == 0)) || die "not in out/repo: ${missing[*]} (build them: tools/build-packages; or allow: --allow-missing)"
+# Without the kernel package (allowed missing) the hook would refuse every
+# later device-package update ("no kernel package release"): leave it out
+if [[ ${KERNEL_PACKAGE:-0} == 1 && " ${ours_present[*]} " != *" linux-omamobile "* ]]; then
+  kept=()
+  for p in "${ours_present[@]}"; do [[ $p == omamobile-boot-update ]] || kept+=("$p"); done
+  ours_present=("${kept[@]}")
+  skipped_ours+=(omamobile-boot-update)
+  echo "    linux-omamobile is missing (allowed): omamobile-boot-update left out too"
+fi
 
 say "Base system and Omarchy (${#base[@]} packages)"
 pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log 2>&1 || { tail -40 /var/log/pacstrap-base.log; die "pacstrap failed"; }
@@ -57,11 +76,18 @@ pacstrap -C /etc/pacman.conf -c -M "$T" "${base[@]}" >/var/log/pacstrap-base.log
 omarchy_list=$T/usr/share/omarchy/install/omarchy-base.packages
 [[ -f $omarchy_list ]] || die "no $omarchy_list in the omarchy package"
 mapfile -t skip < <(list /src/rootfs/packages.omarchy-skip)
-want=() unavailable=()
+listed=()
 while read -r p; do
-  [[ " ${skip[*]} " == *" $p "* ]] && continue
-  if available "$p"; then want+=("$p"); else unavailable+=("$p"); fi
+  [[ " ${skip[*]} " == *" $p "* ]] || listed+=("$p")
 done < <(list "$omarchy_list")
+# Only a package no repository has is "not built for aarch64"; one that is
+# there but can't be installed is repository skew, and stops the build
+resolve_all "${listed[@]}"
+want=("${ok_pkgs[@]}") unavailable=("${absent_pkgs[@]}")
+((${#unmet_pkgs[@]} == 0)) || {
+  printf '%s\n' "$unmet_why" >&2
+  die "in Omarchy's list and in a repository, but pacman cannot meet their dependencies: ${unmet_pkgs[*]} (pacman's reasons above; if one can never work on a phone, list it in rootfs/packages.omarchy-skip)"
+}
 say "Omarchy's package list: ${#want[@]} packages (${#unavailable[@]} not built for aarch64, ${#skip[@]} skipped)"
 pacstrap -C /etc/pacman.conf -c -M "$T" --needed "${want[@]}" >/var/log/pacstrap-omarchy.log 2>&1 || { tail -40 /var/log/pacstrap-omarchy.log; die "pacstrap (Omarchy's list) failed"; }
 
@@ -74,17 +100,58 @@ install -Dm644 /etc/pacman.d/mirrorlist "$T/etc/pacman.d/mirrorlist"
 mkdir -p "$T/var/lib/omamobile/repo/aarch64"
 cp -a /repo/aarch64/. "$T/var/lib/omamobile/repo/aarch64/"
 chown -R 0:0 "$T/var/lib/omamobile/repo"
-# The image's sync databases match its pacman.conf ([omamobile] from file://)
+# The channel the phone follows: the device package's mirrorlist (stable on)
+# with CHANNEL's Server line on and the others commented out, as
+# omamobile-update channel does on the phone. The image keeps its copy of the
+# repository either way (offline reinstalls, omamobile-update channel local).
+ml=$T/etc/pacman.d/omamobile-mirrorlist
+[[ -f $ml ]] || die "the device package installed no /etc/pacman.d/omamobile-mirrorlist"
+case $CHANNEL in
+  stable|development) server="https://pkgs.omamobile.org/$CHANNEL/\$arch" ;;
+  local) server='file:///var/lib/omamobile/repo/$arch' ;;
+  *) die "CHANNEL must be stable, development or local, not '$CHANNEL'" ;;
+esac
+awk -v want="Server = $server" '
+  { line = $0; bare = line; sub(/^#+[[:space:]]*/, "", bare) }
+  bare ~ /^Server[[:space:]]*=/ {
+    if (bare == want && !done) { print want; done = 1; next }
+    if (line !~ /^[[:space:]]*#/) line = "#" line
+  }
+  { print line }
+  END { if (!done) print want }' "$ml" > "$ml.new"
+mv "$ml.new" "$ml" && chmod 644 "$ml"
+[[ $(grep -c '^[[:space:]]*Server' "$ml") == 1 ]] && grep -qxF "Server = $server" "$ml" ||
+  die "could not set the [omamobile] channel to $CHANNEL in the mirrorlist"
+echo "    [omamobile] channel: $CHANNEL ($server)"
+# The image's sync databases match its pacman.conf. [omamobile]'s index is
+# the build's own, from file://: kept for the local channel; otherwise
+# dropped, since pacman's If-Modified-Since refresh would keep it while it is
+# newer than the channel's, and the first refresh fetches the real one.
 cp /var/lib/pacman/sync/*.db "$T/var/lib/pacman/sync/" 2>/dev/null || true
+[[ $CHANNEL == local ]] || rm -f "$T"/var/lib/pacman/sync/omamobile.*
 
-say "Kernel modules $KERNEL_RELEASE"
-mkdir -p "$T/usr/lib/modules"
-rm -rf "${T:?}/usr/lib/modules/$KERNEL_RELEASE"
-zstd -dc /modules | tar -C "$T/usr/lib/modules" -xf - --no-same-owner
-[[ -d $T/usr/lib/modules/$KERNEL_RELEASE ]] || die "the modules tarball has no $KERNEL_RELEASE"
-depmod -b "$T" -a "$KERNEL_RELEASE"
-# bin/omamobile push compares this with its tarball, so it won't push them again
-echo "$MODULES_SHA256" > "$T/usr/lib/modules/$KERNEL_RELEASE/.omamobile-tarball"
+if [[ " ${ours_present[*]} " == *" linux-omamobile "* ]]; then
+  # The package's modules, not the tarball's: the same release, owned by
+  # pacman, so the first kernel update replaces them cleanly
+  pkg_release=$(cat "$T/usr/share/omamobile/linux/kernel.release" 2>/dev/null || true)
+  kver=$(pacman -r "$T" -Q linux-omamobile | cut -d' ' -f2)
+  say "Kernel linux-omamobile $kver ($pkg_release)"
+  [[ $pkg_release == "$KERNEL_RELEASE" ]] \
+    || die "linux-omamobile in out/repo is ${pkg_release:-unknown}, but the boot images come from KERNEL_OUT's $KERNEL_RELEASE: build both from the same release"
+  [[ -f $T/usr/lib/modules/$KERNEL_RELEASE/vmlinuz ]] || die "linux-omamobile installed no /usr/lib/modules/$KERNEL_RELEASE/vmlinuz"
+  depmod -b "$T" -a "$KERNEL_RELEASE"
+  modules_line="$KERNEL_RELEASE (package linux-omamobile $kver)"
+else
+  say "Kernel modules $KERNEL_RELEASE"
+  mkdir -p "$T/usr/lib/modules"
+  rm -rf "${T:?}/usr/lib/modules/$KERNEL_RELEASE"
+  zstd -dc /modules | tar -C "$T/usr/lib/modules" -xf - --no-same-owner
+  [[ -d $T/usr/lib/modules/$KERNEL_RELEASE ]] || die "the modules tarball has no $KERNEL_RELEASE"
+  depmod -b "$T" -a "$KERNEL_RELEASE"
+  # bin/omamobile push compares this with its tarball, so it won't push them again
+  echo "$MODULES_SHA256" > "$T/usr/lib/modules/$KERNEL_RELEASE/.omamobile-tarball"
+  modules_line="$KERNEL_RELEASE (tarball sha256 $MODULES_SHA256)"
+fi
 
 say "Omarchy patches (omamobile-omarchy)"
 # The same code path as every Omarchy upgrade on a phone: the package's pacman
@@ -151,7 +218,8 @@ say "MANIFEST"
   echo "repository commit: $GIT_COMMIT"
   echo "arch linux arm tarball sha256: $ALARM_SHA256"
   echo "omarchy channel: $OMARCHY_CHANNEL"
-  echo "kernel modules: $KERNEL_RELEASE (tarball sha256 $MODULES_SHA256)"
+  echo "omamobile channel: $CHANNEL"
+  echo "kernel modules: $modules_line"
   echo "omarchy patches applied: ${applied[*]:-none}"
   echo "omarchy patches already in omarchy: ${upstream[*]:-none}"
   echo "omarchy packages not built for aarch64: ${unavailable[*]:-none}"

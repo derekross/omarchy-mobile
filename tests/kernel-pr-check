@@ -1,22 +1,41 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # tools/kernel-pr-check's commit checks against a stand-in kernel tree (a
-# git repository with a fake scripts/checkpatch.pl): sign-offs, prefixes and
-# checkpatch errors. Its device-tree comparison runs against a second
-# stand-in whose make prints the messages each board file asks for; the
-# real builds (clang, dtc, dt-validate) need a real tree and are run by hand.
+# git repository with a fake scripts/checkpatch.pl): sign-offs, prefixes,
+# checkpatch errors and warnings, and a checker that is missing or doesn't
+# run to the end, and --help. Its device-tree comparison runs against a
+# second stand-in whose make prints the messages each board file asks for;
+# the real builds (clang, dtc, dt-validate) need a real tree and are run by hand.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 fail() { echo "not ok - $*" >&2; exit 1; }
 
+# --help prints the whole header comment and no code, from a copy whose
+# header has grown by a line: a hard-coded range cut its last line after
+# #287, #288 and #310 each edited the header.
+h=$t/help/tools/kernel-pr-check
+mkdir -p "${h%/*}"
+sed '3a\# A line added to the header.' "$here/tools/kernel-pr-check" > "$h"
+chmod +x "$h"
+diff <("$h" --help) <(sed -n '3,/^set -uo pipefail$/p' "$h" | sed '$d') \
+  || fail "--help isn't the header comment, from line 3 to the line before set -uo pipefail"
+echo "ok - --help prints the whole header comment, however long it grows, and no code"
+
 k=$t/linux
 mkdir -p "$k/scripts" "$k/drivers"
-# checkpatch's stand-in: an ERROR for any added line with "BADSTYLE".
+# checkpatch's stand-in: an ERROR for any added line with "BADSTYLE", a
+# WARNING for "WARNSTYLE", and checkpatch's exit status: 1 when it reported
+# something.
 cat > "$k/scripts/checkpatch.pl" <<'EOF'
 #!/usr/bin/perl
-while (<STDIN>) { print "-:1: ERROR:CODE_STYLE: bad style\n" if /^\+.*BADSTYLE/; }
+my $st = 0;
+while (<STDIN>) {
+  if (/^\+.*BADSTYLE/) { print "-:1: ERROR:CODE_STYLE: bad style\n"; $st = 1; }
+  if (/^\+.*WARNSTYLE/) { print "-:1: WARNING:CODE_STYLE: odd style\n"; $st = 1; }
+}
+exit $st;
 EOF
 chmod +x "$k/scripts/checkpatch.pl"
 cd "$k"
@@ -26,11 +45,12 @@ git config user.email human@example.org
 echo base > drivers/a.c
 git add -A && git commit -q -m "base"
 
-run() { # name expect pattern
+run() { # name expect [pattern] [absent pattern]; $rbase and $rhead stand in for omamobile and HEAD
   local out status=0
-  out=$("$here/tools/kernel-pr-check" -C "$k" omamobile HEAD 2>&1) || status=$?
+  out=$("$here/tools/kernel-pr-check" -C "$k" "${rbase:-omamobile}" "${rhead:-HEAD}" 2>&1) || status=$?
   [[ $status == "$2" ]] || { echo "$out"; fail "$1: exit $status, expected $2"; }
   [[ -z ${3:-} ]] || grep -c -- "$3" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$3'"; }
+  [[ -z ${4:-} ]] || ! grep -c -- "$4" <<<"$out" >/dev/null || { echo "$out"; fail "$1: says '$4'"; }
 }
 branch() { git checkout -q omamobile && git checkout -q -b "$1"; }
 
@@ -67,8 +87,54 @@ echo "ok - a subject without a subsystem prefix fails"
 branch style
 echo "BADSTYLE" >> drivers/a.c
 git commit -q -am "drivers: a: style" -m "Signed-off-by: A Human <human@example.org>"
-run "a checkpatch error" 1 "checkpatch --strict errors"
+run "a checkpatch error" 1 "checkpatch --strict errors" "didn't run to the end"
 echo "ok - a checkpatch error fails"
+
+nc_status=0
+nc_out=$("$here/tools/kernel-pr-check" --no-checkpatch -C "$k" omamobile HEAD 2>&1) || nc_status=$?
+[[ $nc_status == 0 ]] || { echo "$nc_out"; fail "--no-checkpatch: exit $nc_status, expected 0"; }
+grep -c 'checkpatch: --no-checkpatch # SKIP' <<<"$nc_out" >/dev/null || { echo "$nc_out"; fail "--no-checkpatch: doesn't say it skipped"; }
+echo "ok - --no-checkpatch skips checkpatch and still runs the rest"
+
+branch coauthor
+echo x >> drivers/a.c
+git commit -q -am "drivers: a: co-authored" -m "Signed-off-by: A Human <human@example.org>" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+run "a Co-Authored-By trailer" 0 "^ok - Co-Authored-By trailers.*# WARN"
+st_status=0
+st_out=$("$here/tools/kernel-pr-check" --strict-trailers -C "$k" omamobile HEAD 2>&1) || st_status=$?
+[[ $st_status == 0 ]] && grep -c "^ok - Co-Authored-By trailers.*# WARN" <<<"$st_out" >/dev/null || { echo "$st_out"; fail "--strict-trailers: a Co-Authored-By trailer still only warns"; }
+echo "ok - a Co-Authored-By trailer warns, with the old --strict-trailers too"
+
+branch warn
+echo "WARNSTYLE" >> drivers/a.c
+git commit -q -am "drivers: a: warn" -m "Signed-off-by: A Human <human@example.org>"
+run "a checkpatch warning" 0 "checkpatch --strict: no errors (1 warnings"
+echo "ok - a checkpatch warning (exit 1) is listed, not failed"
+
+# A checker that doesn't run to the end fails, and what it said on stderr
+# is shown. checkpatch comes from the merge base, so each one is committed
+# on its own base, with a clean change on top.
+cpbase() { # name [checker]   (no checker: the base deletes it)
+  branch "cp-$1"
+  if [[ -n ${2:-} ]]; then printf '%s\n' "$2" > scripts/checkpatch.pl; else git rm -q scripts/checkpatch.pl; fi
+  git commit -q -am "base: $1 checker"
+  git checkout -q -b "cp-$1-change"
+  echo x >> drivers/a.c
+  git commit -q -am "drivers: a: a clean change" -m "Signed-off-by: A Human <human@example.org>"
+  git checkout -q omamobile   # the tree the tool reads always has a checker
+}
+cpbase crash 'while (<STDIN>) {} print STDERR "checkpatch: crashed here\n"; exit 255;'
+rbase=cp-crash rhead=cp-crash-change run "a crashing checker" 1 "^    checkpatch: crashed here" "no errors"
+cpbase syntax 'sub {'
+rbase=cp-syntax rhead=cp-syntax-change run "a checker that doesn't compile" 1 "didn't run to the end" "no errors"
+cpbase stdout 'while (<STDIN>) {} print "checkpatch: needs a newer perl\n"; exit 1;'
+rbase=cp-stdout rhead=cp-stdout-change run "a checker that exits 1 reporting nothing" 1 "^    checkpatch: needs a newer perl" "no errors"
+cpbase signal 'kill "TERM", $$;'
+rbase=cp-signal rhead=cp-signal-change run "a checker killed by a signal" 1 ": exit 143$" "no errors"
+echo "ok - a checker that crashes, doesn't compile, exits 1 with no report or dies on a signal fails, with what it said"
+cpbase missing
+rbase=cp-missing rhead=cp-missing-change run "a merge base without a checker" 1 "Can't open perl script" "no errors"
+echo "ok - a merge base without scripts/checkpatch.pl fails"
 
 # CI runs `kernel-pr-check -C linux` from the directory that contains the
 # kernel checkout. The path has to still work after the tool cds in.
@@ -92,6 +158,39 @@ rel_build_status=0
 rel_build_out=$(cd "$k" && "$here/tools/kernel-pr-check" -C . --build out omamobile HEAD 2>&1) || rel_build_status=$?
 [[ $rel_build_status == 2 ]] || { echo "$rel_build_out"; fail "a relative --build inside the tree: exit $rel_build_status, expected 2"; }
 echo "ok - --build is refused inside the kernel tree, relative or not"
+
+# Nor where the builds would delete the tree or its git directory. clang and
+# ld.lld stubs let the tool reach the builds, and its rm records what under
+# $c (resolved, as the rm compares resolved paths) it is asked to delete and
+# deletes none of it: a regression reports the deletion instead of making it.
+c=$(cd -- "$t" && pwd -P)/collide real_rm=$(command -v rm)
+mkdir -p "$c/bin" "$c/link-out" "$c/deep-out/build"
+printf '#!/bin/sh\nexit 0\n' > "$c/bin/clang"
+cp "$c/bin/clang" "$c/bin/ld.lld"
+cat > "$c/bin/rm" <<'EOF'
+#!/bin/bash
+for a; do [[ $a == -* ]] || [[ $(realpath -m -- "$a")/ != "$COLLIDE"/* ]] || { echo "$a" >> "$COLLIDE/rm.log"; exit 1; }; done
+exec "$REAL_RM" "$@"
+EOF
+chmod +x "$c/bin/clang" "$c/bin/ld.lld" "$c/bin/rm"
+git clone -q "$k" "$c/src"
+git clone -q "$k" "$c/main/src"
+git -C "$c/main/src" worktree add -q "$c/main/wt" HEAD
+ln -s "$c/src" "$c/link-out/build"
+ln -s "$c/src/arch" "$c/deep-out/build/arch"
+refused() { # name tree out
+  local out status=0
+  out=$(PATH=$c/bin:$PATH COLLIDE=$c REAL_RM=$real_rm "$here/tools/kernel-pr-check" -C "$2" --build "$3" origin/omamobile HEAD 2>&1) || status=$?
+  [[ ! -e $c/rm.log ]] || { echo "$out"; fail "$1: deleted $(paste -sd' ' "$c/rm.log")"; }
+  [[ $status == 2 ]] || { echo "$out"; fail "$1: exit $status, expected 2"; }
+  grep -c 'overlaps the kernel tree' <<<"$out" >/dev/null || { echo "$out"; fail "$1: silent"; }
+}
+refused "OUT holds a tree named src" "$c/src" "$c"
+refused "OUT/build links to the tree" "$c/src" "$c/link-out"
+refused "OUT/build/arch links into the tree" "$c/src" "$c/deep-out"
+refused "OUT/src holds a worktree's git directory" "$c/main/wt" "$c/main"
+[[ -x $c/src/scripts/checkpatch.pl && -d $c/main/src/.git ]] || fail "a collision fixture lost its tree"
+echo "ok - --build is refused where its src, src-base, build or build-base would delete the tree or its git directory"
 
 # --merge: the base moves on after the branch is cut. A clean merge passes
 # and says so; a conflict fails as "rebase needed" while the commit checks

@@ -134,6 +134,39 @@ out=$(run) || fail "cleanup with a 1970 stamp"
 grep -qxF 'modules-cleanup: keep 7.4.0-reset: its time is before 2026 (a reset clock), so its age is unknown' <<<"$out" || fail "logs the reset-clock tree"
 pass "a tree stamped under a reset clock is kept, not ranked oldest"
 
+# Pins do not consume rollback slots, even with three newer trees.
+setup
+tree 7.2.0-new3 2500 marker
+printf '%s\n' '7.0.0-old2' > "$t/root/.omamobile-pinned"
+out=$(run) || fail "cleanup with an older pinned tree"
+[[ -d $t/root/7.0.0-old2 && ! -e $t/root/7.2.0-new3 ]] || fail "pin kept, third newer rollback pruned: $out"
+grep -qxF 'modules-cleanup: keep 7.0.0-old2: pinned' <<<"$out" || fail "logs the pin"
+[[ -d $t/root/7.2.0-new1 && -d $t/root/7.2.0-new2 ]] || fail "pin consumes no rollback slot"
+pass "a pinned older tree survives three newer trees without consuming a rollback slot"
+
+setup
+# Include patterns, whitespace, traversal, shell text and an invalid tree name.
+tree '7.0.0-garbage name' 6000 marker
+printf '%s\n' '../7.1.0-old1' '7.*' ' 7.1.0-old1' '7.0.0-garbage name' '$(touch should-not-run)' '' > "$t/root/.omamobile-pinned"
+# A valid last line without a newline is still a pin.
+printf '%s' '7.0.0-old2' >> "$t/root/.omamobile-pinned"
+out=$(run) || fail "cleanup with garbage pin lines"
+[[ ! -e $t/root/7.1.0-old1 && ! -e "$t/root/7.0.0-garbage name" && -d $t/root/7.0.0-old2 ]] || fail "only the valid exact pin is honored: $out"
+pass "garbage pin lines are ignored and a final line without a newline is read"
+
+setup
+printf '%s\n' 'garbage' '' > "$t/root/.omamobile-pinned"
+out=$(run) || fail "cleanup with only garbage pin lines"
+[[ ! -e $t/root/7.0.0-old2 ]] || fail "garbage-only file pins nothing"
+pass "a file containing only garbage is treated as empty"
+
+setup
+printf '%s\n' '7.0.0-old2' > "$t/pins-outside"
+ln -s "$t/pins-outside" "$t/root/.omamobile-pinned"
+out=$(run) || fail "cleanup with a symlinked pin file"
+[[ ! -e $t/root/7.0.0-old2 && -f $t/pins-outside ]] || fail "symlinked pin file is ignored"
+pass "a symlinked pin file is skipped"
+
 # An empty root and a missing one are fine
 cp "$t/pacman.good" "$t/bin/pacman"
 rm -rf "$t/root"; mkdir -p "$t/root"

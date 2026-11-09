@@ -130,9 +130,17 @@ cat > "$fake/debugfs" <<'SH'
 # debugfs -R 'cat /audio/speaker.cal' DEVICE: never -w
 [[ " $* " != *" -w "* ]] || { echo "debugfs opened for writing" >&2; exit 9; }
 [[ $2 == "cat /audio/speaker.cal" ]] || exit 1
+# as the real one: exit status 0 whatever went wrong, the reason on stderr
+echo "debugfs 1.47.3 (8-Jul-2025)" >&2
+[[ -z ${FAKE_DEBUGFS_ERROR:-} ]] || { echo "$FAKE_DEBUGFS_ERROR" >&2; exit 0; }
+[[ -e $FAKE_CAL ]] || { echo "/audio/speaker.cal: File not found by ext2_lookup " >&2; exit 0; }
 cat "$FAKE_CAL"
 SH
-chmod +x "$fake/modprobe" "$fake/debugfs"
+cat > "$fake/systemctl" <<'SH'
+#!/bin/bash
+echo "$*" >> "${FAKE_SYSTEMCTL_LOG:-/dev/null}"
+SH
+chmod +x "$fake/modprobe" "$fake/debugfs" "$fake/systemctl"
 
 # Synthetic calibration: two records of six u32 (R, status, checksum, ambient, gain, volume)
 mkcal() {
@@ -188,6 +196,7 @@ sp() {  # run the script against $r
       OMAMOBILE_SPIDEVS="$r/spi" OMAMOBILE_SPIDRV="$r/spidrv" OMAMOBILE_SYSMODULE="$r/module" \
       OMAMOBILE_KMSG="$r/kmsg" OMAMOBILE_AUDIO_LIB="$here/lib" OMAMOBILE_CTL_BACKEND="json:$r/amixer.json" \
       OMAMOBILE_CARD_WAIT=1 OMAMOBILE_CTL_WAIT=1 OMAMOBILE_SPK_STAGE=c8 OMAMOBILE_PCM_BACKEND=fake \
+      OMAMOBILE_SPK_VERIFIED_LIST="$r/verified-firmware" FAKE_SYSTEMCTL_LOG="$r/systemctl.log" \
       "${prep[@]}" bin/omamobile-speaker-protection "$@"
 }
 run() {
@@ -299,6 +308,25 @@ mkcal "$tmp/uncal.cal" uncal; prep=(FAKE_CAL=$tmp/uncal.cal); run uncal; check_r
 : > "$tmp/short.cal"; prep=(FAKE_CAL=$tmp/short.cal); run short; check_refused_early "short file"
 pass "refuses a missing, short or invalid calibration, muted"
 
+# OMAMOBILE_SPK_DEFAULT_CAL=1 (a phone with no speaker.cal, as stock's HAL):
+# no file runs on the firmware's defaults, writing no CAL_*; a short file still stops
+none=$tmp/absent.cal   # never created: debugfs says "File not found"
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal
+((rc == 0)) || { cat "$r/out" >&2; fail "default calibration: start succeeds without speaker.cal"; }
+[[ $(cat "$r/run/speaker-protection-calibration") == "default calibration" ]] || fail "default calibration: start records it"
+if grep -c 'Protection cd CAL_' "$r/cset.log" >/dev/null; then fail "default calibration: no CAL_* written"; fi
+grep -c 'Top CAL_SET_STATUS' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "default calibration: CAL_SET_STATUS logged"; }
+[[ $(cat "$r/run/speaker-protection") == "ok: stage c8, protection firmware with the firmware's default calibration,"* ]] || { cat "$r/run/speaker-protection" >&2; fail "default calibration: the status line says so"; }
+printf 'abcd' > "$tmp/short4.cal"; prep=(FAKE_CAL=$tmp/short4.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-short; check_refused_early "default calibration: a short file"
+prep=(FAKE_CAL=$none); run nocal; check_refused_early "no speaker.cal without OMAMOBILE_SPK_DEFAULT_CAL"
+# only debugfs's "File not found" counts as no file: an empty speaker.cal,
+# or an empty read for another reason, is refused
+: > "$tmp/empty.cal"; prep=(FAKE_CAL=$tmp/empty.cal OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-empty; check_refused_early "default calibration: an empty speaker.cal"
+prep=(FAKE_CAL=$none FAKE_DEBUGFS_ERROR="cat: Filesystem not open" OMAMOBILE_SPK_DEFAULT_CAL=1); run defcal-noopen; check_refused_early "default calibration: a debugfs failure"
+[[ ! -e $r/run/speaker-protection-calibration ]] || fail "default calibration: a refused start records nothing"
+run factcal; [[ $(cat "$r/run/speaker-protection-calibration") == "factory calibration" ]] || fail "factory calibration: start records it"
+pass "OMAMOBILE_SPK_DEFAULT_CAL=1: no speaker.cal runs on the firmware's defaults (and says so in /run); an empty or short file, or a debugfs failure, is still refused"
+
 # Runtime PM: an amplifier that cannot be held awake, then kernel log errors
 mktree pm-stuck; echo suspended > "$r/spi/spi6.1/power/runtime_status"; chmod a-w "$r/spi/spi6.1/power/control"
 rc=0; sp start > "$r/out" 2>&1 || rc=$?
@@ -334,14 +362,63 @@ rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp start > "$r/out" 2>&1 || rc=$?; prep=(
 [[ -e $r/state/speaker-protection-started ]] || fail "marker: kept for the human"
 pass "a hang marker from the last boot keeps the amplifiers off"
 
+# --- microphones only: the driver for the card, both amplifiers muted, nothing else
+mktree mics; rc=0; sp mics > "$r/out" 2>&1 || rc=$?
+((rc == 0)) || { cat "$r/out" >&2; fail "mics succeeds"; }
+grep -c '^snd_soc_cs35l41_spi$' "$r/modprobe.log" >/dev/null || fail "mics: loads the amplifier driver"
+muted || fail "mics: both amplifiers muted"
+[[ -z $(grep -v 'Digital PCM Volume=0$' "$r/cset.log") ]] || fail "mics: sets nothing but the mute (no DSP, no source, no unmute)"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics: removes the hang marker"
+[[ $(cat "$r/run/speaker-protection") == "muted: microphones only"* ]] || fail "mics: status says microphones only"
+pass "mics: the amplifier driver loaded, both amplifiers muted, nothing else set"
+
+mktree mics-nocard; rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) || fail "mics without a card fails"
+[[ ! -e $r/state/speaker-protection-started ]] || fail "mics without a card: marker removed after a clean failure"
+mktree mics-marker; echo 2026-01-01T00:00:00 > "$r/state/speaker-protection-started"
+rc=0; prep=(OMAMOBILE_ASOUND=$r/none); sp mics > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/modprobe.log && -e $r/state/speaker-protection-started ]] || fail "mics: a hang marker keeps the driver unloaded"
+rc=0; sp mics --retry > "$r/out" 2>&1 || rc=$?
+((rc == 0)) && muted || fail "mics --retry clears the marker and comes up muted"
+pass "mics: fails cleanly without a card, honours the hang marker, --retry clears it"
+
+u=systemd/omamobile-audio-mics.service
+grep -qx 'Conflicts=omamobile-speaker-protection.service' $u || fail "the mics unit conflicts with protection"
+grep -qx 'ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once protection is enabled"
+grep -qx 'ConditionPathExists=!/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service' $u || fail "the mics unit stands down once a device package enables protection"
+grep -qx 'Before=omamobile-speaker-protection.service' $u || fail "the mics unit's mute on stop finishes before protection starts"
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $u && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $u || fail "the mics unit runs on gs101 and gs201 AoCs"
+p=systemd/omamobile-speaker-protection.service
+grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc' $p && grep -qx 'ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc' $p || fail "speaker protection runs on gs101 and gs201 AoCs"
+grep -qx 'ExecStart=/usr/bin/omamobile-speaker-protection mics' $u || fail "the mics unit runs mics"
+pass "the mics unit: never with protection, on both AoCs"
+
 # --- the watchdog ----------------------------------------------------------------
-watchrun() {  # name: run the watchdog briefly on a healthy started tree; $1 hook runs before
+watchrun() {  # run the watchdog briefly on a healthy started tree, with the events of at()
   prep=(OMAMOBILE_WATCH_INTERVAL=0.05 OMAMOBILE_WATCH_GRACE=0.1 OMAMOBILE_WATCH_HB_TIMEOUT=0.3
         OMAMOBILE_WATCH_ITERATIONS=${WATCH_N:-20} "${wprep[@]}")
+  [[ ! -e $r/events ]] || prep+=(OMAMOBILE_WATCH_HOOK="$tmp/watch-hook" WATCH_EVENTS="$r/events" WATCH_R="$r")
   rc=0; sp watch > "$r/watch.out" 2>&1 || rc=$?
   prep=(); wprep=()
 }
 wprep=()
+# An event during a watch: `at ROUND COMMAND` runs COMMAND (amx, kmsg, any
+# shell) just before the watchdog's round ROUND, inside the watchdog's own
+# loop (OMAMOBILE_WATCH_HOOK, honoured with the JSON backend sp() sets), and the watchdog's clock is then ROUND times
+# the interval. So "after the stream's baseline" or "before the settle time"
+# is a round number, not a sleep that a slow CI runner outran: the stream
+# starts in round 1 (time 0), round k is (k-1) x 0.05 s into it.
+at() { printf '%s %s\n' "$1" "$2" >> "$r/events"; }
+cat > "$tmp/watch-hook" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+r=$WATCH_R
+while read -r k cmd; do
+  [[ $k != "$1" ]] || eval "$cmd"
+done < "$WATCH_EVENTS"
+EOF
+chmod +x "$tmp/watch-hook"
+export -f amx kmsg
 startok() { run "$1"; ((rc == 0)) || { cat "$r/out" >&2; fail "$1: start"; }; }
 startok w-idle; watchrun
 ((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: idle and healthy, nothing happens"; }
@@ -352,6 +429,18 @@ startok w-cspl; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dsp
 [[ $(cat "$r/run/speaker-protection") == "muted: watchdog: Bottom: CSPL_STATE 1 (error)"* ]] || fail "watchdog: says why"
 startok w-cal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; watchrun
 ((rc == 1)) && muted || fail "watchdog: calibration not applied mutes"
+# A start on the firmware's defaults: 1 passes, nothing else does. What
+# counts is what start recorded, not the setting: with speaker.cal the
+# setting doesn't make 1 pass
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 0)) && ! muted || { cat "$r/watch.out" >&2; fail "watchdog: after a start on the default calibration CAL_SET_STATUS 1 passes"; }
+prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal0; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 0; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || fail "watchdog: on the default calibration CAL_SET_STATUS 0 still mutes"
+prep=(OMAMOBILE_SPK_DEFAULT_CAL=1); startok w-defcal-stray; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+dspset Top CAL_SET_STATUS 1; wprep=(OMAMOBILE_SPK_DEFAULT_CAL=1); watchrun
+((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: with speaker.cal, OMAMOBILE_SPK_DEFAULT_CAL=1 doesn't make CAL_SET_STATUS 1 pass"; }
 startok w-src; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; amx cset "name=Top PCM Source" ASP >/dev/null; watchrun
 ((rc == 1)) && muted || fail "watchdog: DSP bypass mutes"
 startok w-level; amx cset "name=Bottom Digital PCM Volume" 700 >/dev/null; watchrun
@@ -364,35 +453,47 @@ startok w-hb8-log; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; 
 ((rc == 0)) && ! muted && grep -c 'stuck' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: OMAMOBILE_SPK_HEARTBEAT=0 logs a stuck heartbeat in c8"; }
 # the C9a case: the heartbeat moves, then stops while the stream still runs
 startok w-hb-freeze; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
-( sleep 0.5; touch "$r/freeze" ) &
-wprep=(FAKE_HB_FREEZE_FILE=$r/freeze); WATCH_N=40 watchrun; wait
-((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: a heartbeat that stops mid-stream mutes"; }
+at 10 'touch "$r/freeze"'    # the heartbeat stops 0.45 s into the stream, after the grace
+wprep=(FAKE_HB_FREEZE_FILE=$r/freeze); WATCH_N=40 watchrun
+((rc == 1)) && muted && grep -c "HALO_HEARTBEAT stuck" "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: a heartbeat that stops mid-stream mutes"; }
 startok w-hb9-off; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_HEARTBEAT=0); watchrun
 ((rc == 1)) && muted || fail "watchdog: the heartbeat cannot be switched off in stage c9"
 startok w-hb9; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=(FAKE_HB_STUCK=1 OMAMOBILE_SPK_STAGE=c9); watchrun
 ((rc == 1)) && muted || fail "watchdog: a stuck heartbeat mutes in stage c9"
 # a kernel log error after the watchdog started
 startok w-kmsg
-( sleep 0.4; kmsg 1.0 'cs35l41 spi6.1: Wake failed, re-enter hibernate: -42' ) &
-WATCH_N=40 watchrun; wait
-((rc == 1)) && muted || { cat "$r/watch.out" >&2; fail "watchdog: a failed wake in the kernel log mutes"; }
+at 8 "kmsg 1.0 'cs35l41 spi6.1: Wake failed, re-enter hibernate: -42'"
+WATCH_N=40 watchrun
+((rc == 1)) && muted && grep -c "Wake failed" "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: a failed wake in the kernel log mutes"; }
 startok w-kmsg-warn
-( sleep 0.4; kmsg 1.0 'cs35l41 spi6.0: Failed to set mailbox cmd 1 (status 0)' ) &
-WATCH_N=20 watchrun; wait
-((rc == 0)) && ! muted || fail "watchdog: an unacknowledged pause is logged only"
+at 8 "kmsg 1.0 'cs35l41 spi6.0: Failed to set mailbox cmd 1 (status 0)'"
+WATCH_N=20 watchrun
+((rc == 0)) && ! muted && grep -c 'watchdog: note: .*mailbox cmd 1' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: an unacknowledged pause is logged only"; }
 pass "watchdog: mutes on DSP errors, bypass, levels, runtime PM, a stuck heartbeat (c9) and kernel log failures"
+
+# the test hook is honoured only with the JSON control backend: on the phone
+# (alsa-lib, no OMAMOBILE_CTL_BACKEND) a stray OMAMOBILE_WATCH_HOOK in
+# speaker.conf neither runs nor changes the clock. Unit level: the real
+# backend needs a card, so watch_loop's own selection is called directly.
+printf '#!/bin/sh\ntouch "%s"\n' "$tmp/hook-ran" > "$tmp/hook-probe"; chmod +x "$tmp/hook-probe"
+out=$(env -u OMAMOBILE_CTL_BACKEND OMAMOBILE_WATCH_HOOK="$tmp/hook-probe" python3 -I -c '
+import sys; sys.path.insert(0, sys.argv[1]); import speaker_dsp as d
+print("real:", d.watch_hook())
+import os; os.environ["OMAMOBILE_CTL_BACKEND"] = "alsa"; print("alsa:", d.watch_hook())
+os.environ["OMAMOBILE_CTL_BACKEND"] = "json:/x"; print("json:", d.watch_hook() == os.environ["OMAMOBILE_WATCH_HOOK"])
+' "$here/lib")
+[[ $out == *"real: None"*"alsa: None"*"json: True"* && $(grep -c 'OMAMOBILE_WATCH_HOOK ignored' <<<"$out") == 2 && ! -e $tmp/hook-ran ]] ||
+  { echo "$out" >&2; fail "watchdog: the test hook is ignored, and said so, without the JSON backend"; }
+pass "watchdog: the test hook only with the tests' JSON control backend"
 
 # C9j: the coil-estimate jump rule is for analog above 10. At the everyday level the
 # firmware's estimate is open-loop and the bottom amplifier's jumps 10-15 C on any
 # level drop, so a jump there must not mute; OMAMOBILE_SPK_TEMP_JUMP brings it back.
 jump() {  # name [wprep...]: watchdog on a running stream; the bottom's estimate goes 25 -> 40 C a moment in
   local n=$1; shift; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; wprep=("$@")
-  # the jump comes once the watchdog has its first reading (its start line,
-  # then a few intervals), not at a fixed time: a slow runner started it late
-  rm -f "$r/watch.out"
-  ( for _ in $(seq 1 100); do grep -c 'watchdog: watching' "$r/watch.out" >/dev/null 2>&1 && break; sleep 0.05; done
-    sleep 0.3; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
-  WATCH_N=60 watchrun; wait
+  # in round 8 (0.35 s in): after the baseline of a 0.01 s settle (round 2)
+  at 8 'amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null'
+  WATCH_N=30 watchrun
 }
 startok w-jump8; jump w-jump8
 ((rc == 0)) && ! muted && grep -c 'jump rule off' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: at analog 10 or below a 15 C jump of the estimate does not mute (C9j)"; }
@@ -423,11 +524,12 @@ pass "watchdog: stock media delta at stream start, both amplifiers, or mute"
 
 # the amplifiers' V/I feedback stream (C9d-7): with each speaker stream when asked
 fbstate() { cat "$r/asound/card0/pcm15c/sub0/status"; }
+export -f fbstate
 startok w-fb-off; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; watchrun
 ((rc == 0)) && [[ $(fbstate) == closed ]] && ! grep -c NoHost1 "$r/cset.log" >/dev/null || { cat "$r/watch.out" >&2; fail "feedback: off by default"; }
 startok w-fb; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
-( sleep 0.6; [[ $(fbstate) == 'state: RUNNING' ]] && touch "$r/fb-seen"; echo closed > "$r/asound/card0/pcm5p/sub0/status" ) &
-wprep=(OMAMOBILE_SPK_FEEDBACK=1); WATCH_N=30 watchrun; wait
+at 12 'if [[ $(fbstate) == "state: RUNNING" ]]; then touch "$r/fb-seen"; fi; echo closed > "$r/asound/card0/pcm5p/sub0/status"'
+wprep=(OMAMOBILE_SPK_FEEDBACK=1); WATCH_N=30 watchrun
 ((rc == 0)) && ! muted && [[ -e $r/fb-seen && $(fbstate) == closed ]] || { cat "$r/watch.out" >&2; fail "feedback: runs during the stream, stops after it"; }
 [[ $(grep NoHost1 "$r/cset.log") == $'NoHost1 TX Mixer TDM_0_TX=1\nNoHost1 TX Mixer TDM_0_TX=0' ]] || { cat "$r/cset.log" >&2; fail "feedback: the mixer path on, then off, as stock"; }
 [[ ! -e $r/run/speaker-feedback.pid ]] || fail "feedback: no pid file left"
@@ -488,32 +590,29 @@ c9 c9-ok
   $(val "Top DRE Switch") == on && $(val "Bottom DRE Switch") == on &&
   $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y ]] || { cat "$r/out" >&2; fail "stage c9 at stock levels, boost on"; }
 echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
-# as jump(): after the watchdog's first reading, not at a fixed time
-rm -f "$r/watch.out"
-( for _ in $(seq 1 100); do grep -c 'watchdog: watching' "$r/watch.out" >/dev/null 2>&1 && break; sleep 0.05; done
-  sleep 0.3; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
-wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=0.01); WATCH_N=60 watchrun; wait
+# as jump(): in round 8, after the baseline of a 0.01 s settle (round 2)
+at 8 'amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null'
+wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=0.01); WATCH_N=30 watchrun
 ((rc == 0)) && ! muted && grep -c 'jump rule off' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 the jump rule is off by default, so a 15 C rise plays on (the backstop stays)"; }
 # C9d-8: a stream's first estimates are the firmware's 25 C reference until
 # it has measured the coil, often warmer, a step of about a second: the
 # estimate at the settle time is the baseline, rises above it are held to
 # the jump.
-c9settle() {  # name settle steps...: steps are delay_s:temp_bytes, applied in order
+c9settle() {  # name settle steps...: steps are round:temp_bytes (at()); round k is (k-1) x 0.05 s into the stream
   local n=$1 st=$2; shift 2; local steps=("$@")
   c9 "$n"; ((rc == 0)) || { cat "$r/out" >&2; fail "$n: start"; }
   echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
-  amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x06,0x40,0x00 >/dev/null
-  rm -f "$r/watch.out"
-  ( for _ in $(seq 1 100); do grep -c 'watchdog: watching' "$r/watch.out" >/dev/null 2>&1 && break; sleep 0.05; done
-    for s in "${steps[@]}"; do sleep "${s%%:*}"; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" "${s#*:}" >/dev/null; done ) &
+  amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" "${C9_START:-0x00,0x06,0x40,0x00}" >/dev/null
+  local s
+  for s in "${steps[@]}"; do at "${s%%:*}" "amx cset 'name=Bottom DSP1 Protection cd CSPL_TEMPERATURE' ${s#*:} >/dev/null"; done
   wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_TEMP_SETTLE=$st OMAMOBILE_SPK_TEMP_JUMP=${JUMP:-5})
-  WATCH_N=80 watchrun; wait
+  WATCH_N=60 watchrun
 }
-c9settle c9-step 1.5 0.2:0x00,0x0a,0x00,0x00    # 25 -> 40 C: the measured value, a step
+c9settle c9-step 1.5 5:0x00,0x0a,0x00,0x00    # 25 -> 40 C at 0.2 s: the measured value, a step before the baseline (1.5 s, round 31)
 ((rc == 0)) && ! muted && grep -c 's into a stream' "$r/watch.out" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 the step from the reference to the measured coil does not mute"; }
-c9settle c9-rise 0.6 0.2:0x00,0x08,0x40,0x00 1.2:0x00,0x0a,0x40,0x00    # 25 -> 33 in the window, then 33 -> 41 C
+C9_START=0x00,0x08,0x40,0x00 c9settle c9-rise 1.0 41:0x00,0x0a,0x40,0x00    # the baseline the measured 33 C (1.0 s, round 21), then 33 -> 41 C at 2.0 s
 ((rc == 1)) && muted && grep -c 'jumped 8.0 C (33.0 -> 41.0)' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a rise of 8 C above the measured value mutes"; }
-c9settle c9-cold 0.4 1.5:0x00,0x07,0xc0,0x00    # no step: the baseline at 0.4 s, then 25 -> 31 C
+c9settle c9-cold 0.4 31:0x00,0x07,0xc0,0x00    # no step: the baseline 25 C at 0.4 s (round 9), then 25 -> 31 C at 1.5 s
 ((rc == 1)) && muted && grep -c 'jumped 6.0 C' "$r/run/speaker-protection" >/dev/null || { cat "$r/watch.out" >&2; fail "watchdog: in stage c9 a 6 C rise after the settle window mutes"; }
 pass "watchdog: in stage c9 the jump rule starts from the measured coil (C9d-8)"
 # auto (the default stage): c9 at the everyday loud levels when the phone has
@@ -532,7 +631,40 @@ rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 "${c9prep[@]}"); sp star
 ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 ]] && grep -c "stage media" "$r/out" >/dev/null ||
   { cat "$r/out" >&2; fail "auto: without a verification stamp, media at 737/10"; }
 pass "auto: c9 at the everyday loud levels only with speaker_protection=1 and a stamp, media otherwise"
+# on the firmware's default calibration c9 is out: auto picks media (boost
+# off), an explicit c9 is refused, and verify writes no stamp
+mktree auto-defcal; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Top Analog PCM Volume") == 10 && $(val "Bottom Analog PCM Volume") == 10 &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == N ]] && grep -c "stage media, not c9: c9 needs the factory calibration" "$r/out" >/dev/null &&
+  [[ $(cat "$r/run/speaker-protection") == "ok: stage media, protection firmware with the firmware's default calibration,"* ]] ||
+  { cat "$r/out" >&2; fail "auto on the default calibration: media at 737/10, boost off, and says why"; }
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; dspset Top CAL_SET_STATUS 1; dspset Bottom CAL_SET_STATUS 1
+rm -f "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 OMAMOBILE_VERIFY_SECONDS=0.3 OMAMOBILE_VERIFY_INTERVAL=0.1); sp verify > "$r/v.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -e $r/state/speaker-protection-verified ]] && grep -c "default calibration" "$r/v.out" >/dev/null ||
+  { cat "$r/v.out" >&2; fail "verify on the default calibration: refused, no stamp"; }
+c9prep=(FAKE_CAL=$none OMAMOBILE_SPK_DEFAULT_CAL=1); c9 c9-defcal; check_refused_early "c9 on the default calibration"
+grep -c "stage c9 needs the factory calibration" "$r/out" >/dev/null || { cat "$r/out" >&2; fail "c9 on the default calibration: says why"; }
+pass "on the firmware's default calibration: auto picks media, c9 and verify are refused"
 c9 c9-noparam noparam; check_refused_early "c9 without speaker_protection=1"
+# c9 only on a system with c9 levels of its own: raven, with speaker_protection=1
+# and a stamp for its own firmware, stays at media, and an explicit c9 is refused
+mktree raven-c9; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+prep=(OMAMOBILE_SPK_SYSTEM=raven); d=$(sp digest | awk '{print $2}'); prep=()
+[[ -n $d ]] || fail "raven: a digest of its own firmware"
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] && grep -c "stage media" "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "auto on raven with speaker_protection=1 and a matching stamp: media at 737/10, never c9"; }
+mktree raven-c9x; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+for f in "$r"/fw/cirrus/*cheetah*; do mv "$f" "${f/cheetah/raven}"; done
+printf 'firmware %s\n' "$d" > "$r/state/speaker-protection-verified"
+rc=0; prep=(OMAMOBILE_SPK_SYSTEM=raven OMAMOBILE_SPK_STAGE=c9 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+check_refused_early "c9 on raven"
+grep -c 'no levels measured for raven' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "c9 on raven: says why"; }
+pass "stage c9 only on a system with c9 levels of its own (raven stays at media)"
 c9 c9-nostamp '' nostamp; check_refused_early "c9 without a stamp"
 mktree tmpfw; c9prep=(OMAMOBILE_FW_DIRS=$tmp/otherfw); mkdir -p "$tmp/otherfw/cirrus"
 for f in "$r"/fw/cirrus/*; do echo changed > "$tmp/otherfw/cirrus/${f##*/}"; done
@@ -541,6 +673,161 @@ prep=(OMAMOBILE_SPK_ANALOG=11); mktree c8-param; echo Y > "$r/module/aoc_alsa_de
 rc=0; prep=(OMAMOBILE_SPK_ANALOG=11 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
 check_refused_early "c8 keeps analog at 10 even with speaker_protection=1"
 pass "stage c9: stock levels only with speaker_protection=1 and a stamp for this firmware"
+
+# --- the verified firmware list (c9 on a fresh install without a stamp) ---------------
+# The shipped list: comments, or "SYSTEM DIGEST NOTE" lines with a real digest
+bad=$(grep -vE '^[[:space:]]*(#|$)' verified-firmware | grep -vE '^[a-z0-9]+ [0-9a-f]{64}( .*)?$' || true)
+[[ -z $bad ]] || { echo "$bad" >&2; fail "verified-firmware: every entry is SYSTEM DIGEST NOTE"; }
+grep -c '^install -Dm644 verified-firmware "$d/usr/share/omamobile-audio/verified-firmware"$' install >/dev/null || fail "the list is installed"
+mktree digest; fwd=$(sp digest)
+[[ $fwd =~ ^cheetah\ [0-9a-f]{64}$ ]] || fail "digest prints the system and the firmware digest ($fwd)"
+[[ ${fwd#cheetah } == "$(sed -n 's/^firmware //p' "$tmp/stamp")" ]] || fail "digest is the value a stamp records"
+pass "the shipped list is well-formed; digest prints a list line, the stamp's value"
+otherd=$(printf x | sha256sum | cut -c1-64)
+# list SCENARIO-NAME [lines...]: a tree with speaker_protection=1, no stamp, the list's lines
+autolist() {
+  local n=$1; shift
+  mktree "$n"; echo Y > "$r/module/aoc_alsa_dev/parameters/speaker_protection"
+  printf '# a comment\n' > "$r/verified-firmware"; local l; for l in "$@"; do echo "$l" >> "$r/verified-firmware"; done
+}
+spa() { local rc0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); sp "$@"; rc0=$?; prep=(); return $rc0; }
+autostart() { rc=0; prep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 "$@"); sp start > "$r/out" 2>&1 || rc=$?; prep=(); }
+isc9() { ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 817 && $(val "Top Analog PCM Volume") == 11 && $(val "Bottom Analog PCM Volume") == 14 ]]; }
+ismedia() { ((rc == 0)) && [[ $(val "Top Digital PCM Volume") == 737 && $(val "Bottom Analog PCM Volume") == 10 ]] && grep -c "stage media" "$r/out" >/dev/null; }
+autolist list-hit "$otherd other build" "$fwd verified on the reference phone"; autostart
+isc9 && grep -c 'stage c9 chosen by the verified firmware list' "$r/out" >/dev/null &&
+  [[ $(cat "$r/run/speaker-protection") == "ok: stage c9,"*", from the verified firmware list" ]] &&
+  spa status 2>/dev/null | grep -c 'stage c9 from the verified firmware list; first-stream check: not yet' >/dev/null ||
+  { cat "$r/out" >&2; fail "list hit: c9 at 817/11 top, 817/14 bottom, without a stamp, and says the list chose it"; }
+[[ ! -e $r/state/speaker-protection-verified ]] || fail "list hit: no stamp is written by a start"
+autolist list-miss "cheetah $otherd another firmware"; autostart
+ismedia || { cat "$r/out" >&2; fail "list miss: media at 737/10"; }
+autolist list-empty; autostart; ismedia || fail "an empty list: media"
+autolist list-other-system "raven ${fwd#cheetah } another system's line"; autostart
+ismedia || fail "a digest listed for another system: media"
+autolist list-short "cheetah ${fwd:8:40} a cut digest"; autostart; ismedia || fail "a cut digest matches nothing: media"
+autolist list-noparam "$fwd"; echo N > "$r/module/aoc_alsa_dev/parameters/speaker_protection"; autostart FAKE_ANALOG_MAX=10
+ismedia || fail "list hit without speaker_protection=1: media"
+autolist list-stamp "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart
+isc9 && grep -c "stage c9 chosen by this phone's stamp" "$r/out" >/dev/null &&
+  [[ $(cat "$r/run/speaker-protection") == *", from this phone's stamp" ]] || { cat "$r/out" >&2; fail "stamp and list: the phone's own stamp is the reason"; }
+autolist stamp-only; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart
+isc9 && grep -c "chosen by this phone's stamp" "$r/out" >/dev/null || fail "stamp, empty list: c9 from the stamp, as before"
+autolist list-refused "$fwd"; printf 'date x\nfirmware %s\nreason test\n' "${fwd#cheetah }" > "$r/state/speaker-protection-c9-refused"; autostart
+ismedia || { cat "$r/out" >&2; fail "list hit refused on this phone for this firmware: media"; }
+autolist list-refused-old "$fwd"; printf 'date x\nfirmware %s\nreason test\n' "$otherd" > "$r/state/speaker-protection-c9-refused"; autostart
+isc9 || fail "a refusal for other firmware doesn't hold"
+autolist stamp-refused "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"
+printf 'date x\nfirmware %s\nreason test\n' "${fwd#cheetah }" > "$r/state/speaker-protection-c9-refused"; autostart
+isc9 || fail "the phone's own stamp wins over a refusal of the list"
+# explicit c9 (bring-up) takes the list as well, and still refuses without either
+# c9 from the list is capped at the levels verified with music (817, top 11,
+# bottom 14): an explicit c9 at 17, or auto with analog 17, is clamped and
+# logged; 17 stays for a phone with its own stamp (c9-ok above)
+autolist c9-list "$fwd"; rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 14 && $(val "Top Analog PCM Volume") == 11 && $(val "Top Digital PCM Volume") == 817 ]] &&
+  grep -c 'capped at the levels verified with music.*clamped Bottom analog 17 -> 14' "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "stage c9 from the list: analog 17 clamped to top 11, bottom 14, and logged"; }
+autolist list-clamp "$fwd"; autostart OMAMOBILE_SPK_ANALOG=17 OMAMOBILE_SPK_TOP_ANALOG=16
+isc9 && grep -c 'clamped Top analog 16 -> 11 Bottom analog 17 -> 14' "$r/out" >/dev/null || { cat "$r/out" >&2; fail "auto c9 from the list: overrides above the verified levels clamped"; }
+autolist list-lower "$fwd"; autostart OMAMOBILE_SPK_BOTTOM_ANALOG=12
+((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 12 && $(val "Top Analog PCM Volume") == 11 ]] && ! grep -c 'clamped' "$r/out" >/dev/null ||
+  fail "auto c9 from the list: a lower override stays as set"
+autolist stamp-17 "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart OMAMOBILE_SPK_ANALOG=17 OMAMOBILE_SPK_TOP_ANALOG=17
+((rc == 0)) && [[ $(val "Bottom Analog PCM Volume") == 17 && $(val "Top Analog PCM Volume") == 17 ]] && ! grep -c 'clamped' "$r/out" >/dev/null ||
+  { cat "$r/out" >&2; fail "c9 from this phone's stamp: 17 as configured, nothing clamped"; }
+# the watchdog holds c9 from the list to the same ceilings
+autolist list-watch-ceil "$fwd"; autostart; isc9 || fail "list-watch-ceil: start"
+amx cset "name=Top Analog PCM Volume" 12 >/dev/null; wprep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17); watchrun
+((rc == 1)) && muted && grep -c 'Top: Analog PCM Volume 12 above 11' "$r/run/speaker-protection" >/dev/null ||
+  { cat "$r/watch.out" >&2; fail "watchdog: c9 from the list mutes a level above the verified ones"; }
+# the list's path is a test switch: without the tests' control backend the package's list is read
+autolist list-switch "$fwd"
+prep=(OMAMOBILE_SPK_STAGE=auto OMAMOBILE_CTL_BACKEND= OMAMOBILE_ASOUND="$r/none"); out=$(sp status 2>&1 || true); prep=()
+grep -c 'not in the verified firmware list' <<<"$out" >/dev/null && ! grep -c 'stage c9' <<<"$out" >/dev/null ||
+  { echo "$out" >&2; fail "OMAMOBILE_SPK_VERIFIED_LIST only with the tests' control backend"; }
+out=$(env -u OMAMOBILE_CTL_BACKEND OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_C9_SOURCE=list OMAMOBILE_SPK_FIRST_TEMP_HIGH=99 OMAMOBILE_SPK_FIRST_CHECK=9 \
+  python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import speaker_dsp; print(speaker_dsp.first_stream_check())' "$here/lib")
+[[ $out == "(1.0, 10.0, 65.0)" ]] || fail "the OMAMOBILE_SPK_FIRST_* overrides only with the tests' control backend ($out)"
+out=$(env OMAMOBILE_CTL_BACKEND=json:/nonexistent OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_C9_SOURCE=list OMAMOBILE_SPK_FIRST_TEMP_HIGH=99 \
+  python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import speaker_dsp; print(speaker_dsp.first_stream_check())' "$here/lib")
+[[ $out == "(1.0, 10.0, 99.0)" ]] || fail "the OMAMOBILE_SPK_FIRST_* overrides with the tests' control backend ($out)"
+autolist c9-list-miss "cheetah $otherd"; rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); sp start > "$r/out" 2>&1 || rc=$?; prep=()
+check_refused_early "c9 with neither a stamp nor a listed digest"
+grep -c 'not in the verified list' "$r/out" >/dev/null || fail "c9 refused: says the firmware is not in the list"
+pass "auto: c9 from the verified firmware list or this phone's stamp, with speaker_protection=1; media on a miss, a refusal or no option"
+
+# The first-stream check (c9 from the list only), at a fixed clock: round k
+# is (k-1) x 0.05 s into the stream; grace 0.1 s, the check 0.2 s after it
+calr() {  # the firmware selects the resistance we wrote, as on the phone
+  local p; for p in Top Bottom; do
+    amx cset "name=$p DSP1 Protection cd CAL_R_SELECTED" "$(val "$p DSP1 Protection cd CAL_R")" >/dev/null
+  done
+}
+firstwatch() {  # extra prep for the watchdog
+  echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
+  at 1 true
+  wprep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_FIRST_CHECK=0.2 "$@"); WATCH_N=20 watchrun
+}
+autolist first-ok "$fwd"; autostart; isc9 || fail "first-ok: start"; calr; firstwatch
+((rc == 0)) && ! muted && grep -c 'this phone is checked at its first speaker stream' "$r/watch.out" >/dev/null &&
+  grep -c '^passed .*CSPL_ENABLE 1.*coils Top 25.0 C, Bottom 25.0 C$' "$r/run/speaker-protection-c9-check" >/dev/null &&
+  [[ ! -e $r/state/speaker-protection-c9-refused && ! -s $r/systemctl.log ]] ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a healthy phone passes and keeps c9"; }
+spa status 2>/dev/null | grep -c 'first-stream check: passed' >/dev/null || fail "status: the check passed"
+if grep -E '0x20|8192|8448' "$r/watch.out" "$r/run/speaker-protection-c9-check"; then fail "the check logs no calibration values"; fi
+firstfail() {  # name, what to break (a command on the started tree), the reason expected, state|boot (where it is recorded)
+  local f
+  autolist "$1" "$fwd"; autostart; isc9 || fail "$1: start"; calr; eval "$2"; firstwatch
+  [[ ${4:-state} == state ]] && f=$r/state/speaker-protection-c9-refused || f=$r/run/speaker-protection-c9-refused
+  ((rc == 1)) && muted && grep -c "^reason first-stream check failed: .*$3" "$f" >/dev/null &&
+    grep -c "^firmware ${fwd#cheetah }$" "$f" >/dev/null &&
+    grep -c '^--no-block restart omamobile-speaker-protection.service$' "$r/systemctl.log" >/dev/null &&
+    [[ $(cat "$r/run/speaker-protection") == "muted: c9 refused on this phone"* ]] ||
+    { cat "$r/watch.out" "$f" >&2; fail "first-stream check: $1 mutes, refuses c9 for this firmware, restarts"; }
+  if [[ ${4:-state} == boot ]]; then
+    [[ ! -e $r/state/speaker-protection-c9-refused ]] || fail "first-stream check: $1 (a coil estimate) is refused for this boot only"
+  fi
+  # the restart then picks media
+  autostart; ismedia || { cat "$r/out" >&2; fail "first-stream check: after $1 the next start is media"; }
+  spa status 2>/dev/null | grep -c '^c9 refused on this phone' >/dev/null || fail "status: names the refusal ($1)"
+}
+firstfail first-rsel 'amx cset "name=Bottom DSP1 Protection cd CAL_R_SELECTED" 0x00,0x00,0x00,0x01 >/dev/null' 'Bottom: the model does not use the calibration'
+firstfail first-enable 'amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null' 'Top: CSPL_ENABLE 0'
+firstfail first-cold 'amx cset "name=Top DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x01,0x40,0x00 >/dev/null' 'Top: coil temperature 5.0 C outside 10-65 C' boot
+firstfail first-hot 'amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x11,0x80,0x00 >/dev/null' 'Bottom: coil temperature 70.0 C outside 10-65 C' boot
+# a refusal for this boot ends with the boot: the next boot (a fresh /run) tries c9 again
+rm -f "$r/run/speaker-protection-c9-refused"; autostart; isc9 || { cat "$r/out" >&2; fail "after a reboot a coil-estimate refusal no longer holds"; }
+# a temperature and a firmware-state failure together: persisted
+firstfail first-both 'amx cset "name=Top DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x01,0x40,0x00 >/dev/null; amx cset "name=Bottom DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null' 'Bottom: CSPL_ENABLE 0'
+# the refusal can't be written to /var/lib: recorded for this boot, the restart picks media
+autolist first-nostate2 "$fwd"; autostart; calr; mkdir "$r/state/speaker-protection-c9-refused"
+amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null; firstwatch
+((rc == 1)) && muted && grep -c 'CSPL_ENABLE 0' "$r/run/speaker-protection-c9-refused" >/dev/null &&
+  grep -c 'recorded for this boot only' "$r/watch.out" >/dev/null && [[ -s $r/systemctl.log ]] ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: /var/lib not writable, the refusal goes to /run and the restart follows"; }
+autostart; ismedia || { cat "$r/out" >&2; fail "first-stream check: with the refusal in /run only, the next start is media"; }
+# neither can be written: muted, no restart
+autolist first-nowrite "$fwd"; autostart; calr; mkdir "$r/state/speaker-protection-c9-refused" "$r/run/speaker-protection-c9-refused"
+amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null; firstwatch
+((rc == 1)) && muted && [[ ! -s $r/systemctl.log ]] && grep -c 'could not be recorded: staying muted' "$r/run/speaker-protection" >/dev/null ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a refusal that can't be recorded stays muted, without a restart"; }
+# the heartbeat case needs the stand-in's stuck heartbeat, which the watch rule catches as well
+autolist first-hb2 "$fwd"; autostart; calr; firstwatch FAKE_HB_STUCK=1 OMAMOBILE_WATCH_HB_TIMEOUT=10
+((rc == 1)) && muted && grep -c 'HALO_HEARTBEAT did not move' "$r/state/speaker-protection-c9-refused" >/dev/null ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a heartbeat that doesn't move refuses c9"; }
+# a stream shorter than the check: nothing judged yet, nothing refused
+autolist first-short "$fwd"; autostart; calr; amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null
+echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"; at 1 true; at 4 "echo closed > $r/asound/card0/pcm5p/sub0/status"
+wprep=(OMAMOBILE_SPK_STAGE=auto FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_FIRST_CHECK=0.2); WATCH_N=20 watchrun
+((rc == 0)) && ! muted && [[ ! -e $r/state/speaker-protection-c9-refused && ! -e $r/run/speaker-protection-c9-check ]] ||
+  { cat "$r/watch.out" >&2; fail "first-stream check: a stream that ends before the check judges nothing"; }
+# c9 from this phone's stamp: no first-stream check (C9a ran on this phone)
+autolist first-stamp "$fwd"; cp "$tmp/stamp" "$r/state/speaker-protection-verified"; autostart; isc9 || fail "first-stamp: start"
+amx cset "name=Top DSP1 Protection cd CSPL_ENABLE" 0x00,0x00,0x00,0x00 >/dev/null; firstwatch
+((rc == 0)) && ! muted && ! grep -c 'first speaker stream' "$r/watch.out" >/dev/null && [[ ! -e $r/state/speaker-protection-c9-refused ]] ||
+  { cat "$r/watch.out" >&2; fail "c9 from this phone's stamp: no first-stream check"; }
+pass "first-stream check (c9 from the list): passes a healthy phone; CAL_R_SELECTED, CSPL_ENABLE, the coil range or a still heartbeat mute, refuse c9 and restart at media"
 
 # --- earpiece mode (AOC-PLAN C9k) -------------------------------------------------
 # The controls each mode sets, as "name=value" lines (enumerated by item index:
@@ -569,8 +856,8 @@ grep -c 'earpiece mode: Top through ASP or DSP at digital <= 737, analog <= 6' "
 media; run e-w-run; earset; echo 'state: RUNNING' > "$r/asound/card0/pcm5p/sub0/status"
 dspset Bottom CSPL_STATE 1; dspset Top CAL_SET_STATUS 1
 echo '4,100,200,300' > "$r/fw/cirrus/cs35l41-cheetah-top-media-delta.txt"; echo '4,100,200,301' > "$r/fw/cirrus/cs35l41-cheetah-bottom-media-delta.txt"
-( sleep 0.4; amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null ) &
-wprep=(FAKE_HB_STUCK=1 OMAMOBILE_SPK_TEMP_JUMP=5 OMAMOBILE_SPK_MEDIA_DELTA=1 FAKE_DELTA_LOG=$r/delta.log); ewatch; wait
+at 8 'amx cset "name=Bottom DSP1 Protection cd CSPL_TEMPERATURE" 0x00,0x0a,0x00,0x00 >/dev/null'
+wprep=(FAKE_HB_STUCK=1 OMAMOBILE_SPK_TEMP_JUMP=5 OMAMOBILE_SPK_MEDIA_DELTA=1 FAKE_DELTA_LOG=$r/delta.log); ewatch
 ((rc == 0)) && ! muted && [[ ! -e $r/delta.log ]] || { cat "$r/watch.out" >&2; fail "earpiece watchdog: no DSP rule while neither DSP is audible (heartbeat, CSPL, calibration, jump, no media delta)"; }
 ewfail() {  # name, setup...: the watchdog mutes, and says $want
   local n=$1; shift
@@ -587,6 +874,10 @@ mktree e-w-c8; rc=0; sp start > "$r/out" 2>&1 || rc=$?; earset 658 6 0; watchrun
 media; run e-w-spk; amx cset "name=Top PCM Source" ASP >/dev/null; amx cset "name=Top Analog PCM Volume" 6 >/dev/null; ewatch
 ((rc == 1)) && muted || fail "earpiece watchdog: the bypass without earpiece mode still mutes"
 pass "earpiece watchdog: the top within 737/6 through ASP, the bottom muted, no DSP rule; mutes on anything else, an unknown mode included"
+media; run e-raven; : > "$r/cset.log"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_SYSTEM=raven); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 1)) && [[ ! -s $r/cset.log ]] && grep -c 'no earpiece check for raven' "$r/ear.out" >/dev/null || { cat "$r/ear.out" >&2; fail "earpiece on is refused on raven (no C9k there yet), nothing written"; }
+pass "earpiece on only where C9k passed (cheetah)"
 
 # omamobile-speaker-protection earpiece on|off with a live watchdog
 bgwatch() {
@@ -647,14 +938,34 @@ eprep=(OMAMOBILE_SPK_EARPIECE_ANALOG=7); ear on; refused "analog above 6"
 eprep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=6x); ear on; refused "a level that is no number"
 eprep=(OMAMOBILE_SPK_EARPIECE_DRE=yes); ear on; refused "a DRE that is not 0 or 1"
 eprep=(OMAMOBILE_SPK_DIGITAL=800); ear on; refused "speaker levels above the stage's"
-eprep=(OMAMOBILE_SPK_BOOST=1); ear on; refused "OMAMOBILE_SPK_BOOST=1 with the converter off"
 ear sideways; ((rc == 2)) || fail "earpiece: an unknown request"
+# OMAMOBILE_SPK_BOOST is the start's: with the converter off it changes nothing for the earpiece
+: > "$r/cset.log"; eprep=(OMAMOBILE_SPK_BOOST=1); ear on
+((rc == 0)) && [[ $(val "Top PCM Source") == 0 && $(cat "$r/run/speaker-protection") == *"mode earpiece"*"boost converter off"* ]] || { cat "$r/ear.out" >&2; fail "earpiece: OMAMOBILE_SPK_BOOST=1 with the converter off is accepted (the variable is the start's)"; }
+ear off; ((rc == 0)) || { cat "$r/ear.out" >&2; fail "earpiece off after that"; }
 stopwatch
+# the converter left on by the start (stage media forced, or stage c9): the earpiece takes it as it is (C9k, 2026-11-03)
 prep=(OMAMOBILE_SPK_STAGE=media OMAMOBILE_SPK_BOOST=1); run e-boost; bgwatch; : > "$r/cset.log"
-ear on; refused "the boost converter left on (needs a rebind)"
-grep -c 'needs the boost converter off' "$r/ear.out" >/dev/null || fail "earpiece: says why the boost refuses"
-eprep=(OMAMOBILE_SPK_BOOST=1); ear on; ((rc == 0)) && [[ $(val "Top PCM Source") == 0 ]] || { cat "$r/ear.out" >&2; fail "earpiece: OMAMOBILE_SPK_BOOST=1 accepts the converter on"; }
+ear on
+((rc == 0)) && [[ $(val "Top PCM Source") == 0 && $(val "Top Digital PCM Volume") == 657 && $(val "Top Analog PCM Volume") == 6 && $(val "Bottom Digital PCM Volume") == 0 &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y &&
+  $(cat "$r/run/speaker-protection") == "ok: stage media, mode earpiece: Top 657/6 through PCM Source ASP"*"Bottom muted"*"boost converter on"* ]] || { cat "$r/ear.out" "$r/run/speaker-protection" >&2; fail "earpiece on with the boost converter left on: accepted, the status says the converter is on"; }
+grep -c 'boost converter' "$r/ear.out" >/dev/null && fail "earpiece: no boost refusal any more"
+ear off; ((rc == 0)) && [[ $(val "Top PCM Source") == 1 && $(val "Top Digital PCM Volume") == 737 ]] || { cat "$r/ear.out" >&2; fail "earpiece off with the converter on"; }
 stopwatch
+c9 e-c9; ((rc == 0)) || { cat "$r/out" >&2; fail "earpiece: a stage c9 start"; }
+ampstate > "$r/speaker-state"
+wprep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17); bgwatch; : > "$r/cset.log"
+rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_ACK_WAIT=2); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(val "Top PCM Source") == 0 && $(val "Top Digital PCM Volume") == 657 && $(val "Top Analog PCM Volume") == 6 && $(val "Bottom Digital PCM Volume") == 0 && $(val "Bottom Analog PCM Volume") == 17 &&
+  $(cat "$r/module/snd_soc_cs35l41/parameters/boost_en") == Y &&
+  $(cat "$r/run/speaker-protection") == "ok: stage c9, mode earpiece: Top 657/6 through PCM Source ASP"*"Bottom muted"*"boost converter on"* ]] || { cat "$r/ear.out" "$r/run/speaker-protection" "$r/bgwatch.out" >&2; fail "earpiece on at stage c9 (the boost converter on): the top at 657/6 through ASP, the bottom muted at its analog 17"; }
+sleep 0.3; [[ $(val "Top Digital PCM Volume") == 657 ]] || { cat "$r/bgwatch.out" >&2; fail "earpiece on at stage c9: the watchdog accepts it"; }
+rc=0; prep=(OMAMOBILE_SPK_STAGE=c9 OMAMOBILE_SPK_DIGITAL=817 OMAMOBILE_SPK_ANALOG=17 FAKE_ANALOG_MAX=17 OMAMOBILE_SPK_ACK_WAIT=2); sp earpiece off > "$r/ear.out" 2>&1 || rc=$?; prep=()
+((rc == 0)) && [[ $(ampstate) == "$(cat "$r/speaker-state")" && $(val "Top Digital PCM Volume") == 817 && $(val "Bottom Analog PCM Volume") == 17 &&
+  $(cat "$r/run/speaker-protection") == "ok: stage c9, protection firmware"*"boost converter on"* ]] || { diff <(ampstate) "$r/speaker-state" >&2; cat "$r/ear.out" "$r/run/speaker-protection" >&2; fail "earpiece off at stage c9: every control back at the stage's value (817, top 11 / bottom 17), the converter still on"; }
+stopwatch
+pass "earpiece at the louder stage: the boost converter left on by the start is taken as it is (stage c9, or OMAMOBILE_SPK_BOOST=1 at media), the status line says so, off restores the stage (C9k, 2026-11-03)"
 prep=(OMAMOBILE_SPK_STAGE=c8 OMAMOBILE_SPK_EARPIECE_DIGITAL=658); run e-c8; : > "$r/cset.log"
 rc=0; prep=(OMAMOBILE_SPK_EARPIECE_DIGITAL=658); sp earpiece on > "$r/ear.out" 2>&1 || rc=$?; prep=()
 refused "stage c8: digital above 657"
@@ -665,7 +976,7 @@ grep -c 'CSPL Error Detected' "$r/ear.out" >/dev/null || fail "earpiece: names t
 media; run e-off-muted; sp mute >/dev/null; : > "$r/cset.log"; ear off; refused "off after a mute"
 media; run e-nowatch; : > "$r/cset.log"; ear on
 ((rc == 1)) && muted && [[ $(cat "$r/run/speaker-protection") == "muted: earpiece: the watchdog did not take earpiece mode"* && $(val "Top PCM Source") == 1 ]] || { cat "$r/ear.out" >&2; fail "earpiece on without a watchdog: both muted, the DSP never bypassed"; }
-pass "earpiece: refuses levels above the ceilings, a boost converter left on, a stopped, unhealthy or half-started protection; without a watchdog both stay muted"
+pass "earpiece: refuses levels above the ceilings, a stopped, unhealthy or half-started protection; without a watchdog both stay muted"
 
 # status, health and mute
 r=$tmp/run.ok
@@ -920,7 +1231,7 @@ pass "follow: the speakers' left and right from the sensor proxy's orientation"
 # --- install ---------------------------------------------------------------------
 ./install "$tmp/root"
 for f in usr/bin/omamobile-speaker-protection usr/lib/systemd/system/omamobile-speaker-protection.service \
-         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/omamobile-audio/speaker_dsp.py \
+         usr/lib/systemd/system/omamobile-speaker-watch.service usr/lib/systemd/system/omamobile-audio-mics.service usr/lib/omamobile-audio/speaker_dsp.py \
          usr/lib/udev/rules.d/70-omamobile-cs35l41.rules \
          usr/lib/modprobe.d/omamobile-audio.conf etc/omamobile/speaker.conf \
          usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf usr/share/alsa/ucm2/Google/cheetah/HiFi.conf \

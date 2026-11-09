@@ -2,6 +2,169 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-08: the release kernel for 2026.11.08, a flat battery, the reboot reason
+
+Kernel `7.3.0-rc6-omamobile-g1a9d1d4e9289`, `omamobile` at `1a9d1d4e9289`
+(the planned `kernel-2026.11.08`), built with the release `LOCALVERSION` and
+the development initramfs and pushed to slot B; `omamobile-device-cheetah`
+0.1.43, `omamobile-shell` 0.2.107 and `omamobile-omarchy` 0.1.37 (#420's test
+build), Omarchy 4.0.6.
+
+- **The release kernel boots** [V]: `uname -r` reads
+  `7.3.0-rc6-omamobile-g1a9d1d4e9289`. Touch probed as before (`S3908GA1B0-15.0,
+  TouchComm v1, build 4104960, message CRC off`), the charger's guard had its
+  battery reading at probe (4.67 s, mode 5), the sound card registered all 18
+  playback PCMs, Wi-Fi connected, and the modem came up at boot: IMS
+  registered (`state 2 (VoLTE registered)`) about 100 s after boot.
+  `tools/phone-smoke`: 18 ok, cameras skipped (no libcamera tools); its one
+  "not ok" is the modem's `rx_demux … is not opened` drops, at the rate of
+  every modem-up boot today.
+- **This tree, piece by piece** [V], each on its own test kernel, `-push1`
+  builds of the PR merged onto `omamobile`, and posted on the PR:
+  linux-omarchy-mobile#194 (touch: both probe lines unchanged, no fallback,
+  no desync after a minute of touch), #201 (S2MPG12 RTC: reads 0 s off, a
+  wake alarm awake, 10 RTC-woken s2idle cycles with the modem off, none woken
+  early), #191 with #187 (Wi-Fi scans, a 300 MB download at about 130 Mbit/s
+  with no `No PKTID`; the modem: an SMS, an answered call, 10 minutes idle),
+  #176 (the reboot reason: with `nvmem_max77759` loaded by hand, `reboot-to
+  bootloader` reached fastboot without the buttons, about 4 s; device-cheetah
+  0.1.47, #534, stops blacklisting it) and #162 (the AoC series: the same
+  PCMs, both amplifiers' protection firmware, a -20 dBFS tone clean from both
+  speakers, the three sensors).
+- **A flat battery** [V] (issue #169): after five days unplugged the phone
+  booted Linux at 3.14 V, the gauge's model load failed (`-110`) and the
+  charger logged `charging inhibited`; the battery read -706 mA on the
+  laptop's port. About 20 minutes in fastboot on the cable took it from 3.40
+  to 3.91 V, and the next boot loaded the model and charged at 1.43 A. On that
+  boot the charger still probed before the gauge answered and charged only
+  from its guard's next period, 31 s later. The fix (`omamobile` 01ba2e2119ed,
+  28bab7f602ca, 1a9d1d4e9289) re-checks a missing reading every 2 s and at the
+  gauge's first report: unloading and reloading the gauge, charging resumed
+  10 ms after it came back. The model-load retry itself waits for the next
+  real flat battery.
+- **A modem marker left by `reboot-to`** [V]: the `reboot-to bootloader` that
+  took the flat phone to fastboot stopped no unit, so `/var/lib/omamobile/modem-up`
+  stayed and the next boot skipped the modem once ("ended without a clean
+  stop"), as designed. Stop the modem first (`systemctl stop
+  omamobile-modem`) before a `reboot-to` or a `bin/omamobile push`; that stop
+  takes 40 s and ends "failed" with a recorded crash, issue #532. To keep the
+  modem off for a boot (a suspend test), `systemctl mask
+  omamobile-modem-boot.target`, not `/etc/omamobile/modem-hold`.
+
+## 2026-11-03: calls and texts through the apps, the SIM configures itself, the earpiece at the loud stage, the stack on by default
+
+Kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (the release kernel);
+`omamobile-modem-sit` 0.3.29 (#373), `omamobile-modem` 0.1.16 and
+`omamobile-device-cheetah` 0.1.43 (#398), `omamobile-audio` 0.5.13 (#402);
+the same Verizon-network SIM as the entry below. The runbook:
+[MODEM-PLAN](MODEM-PLAN.md) M4.6b.
+
+- **Calls and texts through the apps** [V]: incoming and outgoing calls and
+  texts worked through Phone and Messages (omatel-agent through
+  `omamobile-mmd`), among them the first text from one Omarchy Mobile phone to
+  another: this 7 Pro to a Pixel 9a.
+- **IMS registers with no carrier manifest** [V]: `carrier_manifest` empty,
+  the modem's 0x4602 unanswered, and IMS registered all the same. The
+  manifest isn't needed; the entry below still counted it among the things
+  tried.
+- **The SIM configures itself** [V]: sitd 0.3.29 with every key on `auto`
+  read the SIM once, chose Verizon's values from its overrides (APN
+  VZWINTERNET, attach none, IMS first on CID 2, the internet on CID 3,
+  profiles 0/2/3/4) and registered IMS and data, with nothing typed into
+  `modem-sit.conf`. Call audio ran on one hand edit there, `[audio] card =
+  auto`: a fresh install had `card = none` (calls connect silent) until
+  `omamobile-modem-sit` 0.3.30 with `omamobile-device-cheetah` 0.1.44, whose
+  defaults file sets `auto` on this phone.
+- **The earpiece at the loud stage** [V]: stage `c9` with the boost converter
+  on (657/6 through ASP, the bottom amplifier muted,
+  `omamobile-earpiece@on.service`) was clean by ear on a VoLTE call, so
+  `omamobile-audio` 0.5.13 (#402) dropped the refusal that kept the earpiece
+  off at that stage.
+- **The stack on by default** [V]: #398's runbook B6-B9b passed. The vendor
+  wants link alone turns `omamobile-modem-boot.target` on (`omamobile-modem`
+  enables nothing); the chain came up at boot; a planted stale marker was
+  refused once and cleared at the next clean stop; a second unclean end held
+  ("held" in the tile) and was cleared by hand. No `ufshcd_err_handler` pass
+  in any of those reboots.
+- **The Messages agent wasn't enabled on a fresh install.** Fixed: #394
+  enables it at login (`omamobile-shell` 0.2.97), and omamessages 0.2.2 and
+  omaphone 0.2.3 (#399) activate it over D-Bus.
+- **Open:** the smoke report shows cpif `oem_ipc0` "is not opened" lines
+  minutes after sitd starts: the modem's OEM IPC channel, which nothing
+  opens. A follow-up.
+- **Gotcha:** `omamobile-update` over ssh as root needs
+  `OMARCHY_PATH=/usr/share/omarchy` in its environment.
+
+## 2026-11-03: IMS registered and an SMS sent on a Verizon-network SIM, once the bearers took stock's CIDs
+
+Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`, `omamobile-modem-sit` 0.3.24 (#384),
+a Tracfone (Verizon-network) SIM. Details and the request layouts:
+[IMS-SHANNON.md](IMS-SHANNON.md), [MODEM-PROVIDER-PROFILES.md](MODEM-PROVIDER-PROFILES.md).
+
+- **IMS registered at 02:00:07** [V]: `IND_AIMS_REGISTRATION` state 2 (VoLTE
+  registered), features 3 (voice and SMS), status 0; `AIMS_SEND_SMS` accepted
+  an SMS to another phone at 02:00:57. The first IMS registration on this phone.
+- **What it took** [V]: stock's bearer order. Stock's RIL keeps CID 1 for the
+  modem's attach context and never sets a bearer up on it, sets the IMS bearer
+  up first on CID 2, and the internet on CID 3. sitd set the internet up on
+  CID 1 first: on this network the attach is on the IMS APN, so that setup
+  replaced the attach PDN (the three "Registration failed: domain PS cause 10",
+  implicitly detached, seen at the data step on 11-02 fit), and the IMS bearer
+  set up afterwards carried no P-CSCF. With `ims_first = yes` and
+  `internet_cid = 3` the IMS setup response carries three IPv6 P-CSCFs.
+- **What didn't matter** [V], each tried on its own on 11-02 and 11-03 and
+  recorded in the plans: the attach APN (`vzwims`, `IMS`, none), the IMS
+  bearer's IP type, the P-CSCF request bytes, the Tracfone-VZW carrier manifest
+  (needed for registration order but not for the P-CSCF), the ISIM's EF_PCSCF
+  name (an FQDN that resolves only on the carrier's IMS DNS), stock's data
+  profiles and APN-type bits. Registration time fell from 53 s-10 min to 3.3 s
+  once the attach APN, profiles and NR mode went before a single radio on
+  (0.3.16), unrelated to IMS.
+- **Stock's log for this SIM** [V], from one stock boot on slot A on 11-03
+  (calls worked there; a fresh read-only NV backup followed): its IMS bearer on
+  CID 2 listed three P-CSCFs; stock never used CID 1. The log lives off-repo.
+- **Still by hand**: the modem units are disabled; the carrier files in the
+  chroot and the modem-sit.conf values (section 12 of IMS-SHANNON.md) were
+  set by hand. #373 (automatic APNs) needs the two new keys.
+
+## 2026-11-02: fingerprint after the reinstall, a Trusty storage crash, and fingerprint on by default
+
+Kernel `7.3.0-rc6-omamobile-g2219cc6cda77`; Trusty "cloudripper". Details,
+the runbook and every step: [FINGERPRINT-PLAN](FINGERPRINT-PLAN.md) F19.
+
+- **The reinstall's TD was not restored** [V]: the backups' TD (10-13, 10-14)
+  was older than the RPMB anchor, which every storageproxyd run moves on,
+  so it would have mounted and not read. Trusty cleared an empty TD instead
+  ("clear requested, create empty"), as at a factory reset.
+- **Linux never wrote TDP** [V]: `persist:/ss/0` hashed `e0e1990d…` in the
+  10-12, 10-30 and 11-02 persist backups, in both fingerprint backups and
+  in the fresh `debugfs` copy, and was unchanged after the enrollment.
+- **A storage proxy restarted in the same boot crashed Trusty's storage
+  app** [V]: run stage by stage, storageproxyd was stopped twice between
+  TD's clear and TD's first commit (once under a live g7 TA). At
+  enrollment the storage app asserted in `block_get_cleared_super` (a
+  superblock slot already dirty) and Trusty halted. Trusty keeps each
+  store's in-memory state across a proxy restart; only a reboot resets it.
+  After a reboot, one continuous session enrolled `right-index-finger`
+  (17:15:25) and matched it (17:15:33), with the expected "write initial
+  superblock" lines.
+- **Fingerprint is now on by default**, by the maintainer's decision
+  (omamobile-fingerprint 0.1.14 enables `omamobile-fp`; it starts after
+  provisioning). The runner makes the read-only copies itself, refuses
+  storageproxyd without the TDP copy or when TDP changed, and runs one
+  storage proxy per boot (no `Restart=`, a `/run` marker, the proxy stopped
+  last). The fresh-install checks T1-T3 are still to run.
+
+## 2026-11-02: a kernel update through pacman, booted and rolled back
+
+Release kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (tag `kernel-2026.11.01`), from the push1 build `7.3.0-rc6-omamobile-push1-g2219cc6cda77`; linux-omamobile `7.3.0rc6.r635.g2219cc6cda77-1`, omamobile-boot-update 0.1.0, device-cheetah 0.1.38 (#320).
+
+- **The release kernel booted** [V]: `7.3.0-rc6-omamobile-g2219cc6cda77` booted from slot B after linux-omamobile's pacman hook wrote `boot_b` and `vendor_kernel_boot_b`. phone-smoke's required rows were ok, and so were the GPU, Wi-Fi, Bluetooth, touch, sound, sensors and all 4 cameras.
+- **Rollback** [V]: `omamobile-boot-update rollback` restored slot B byte for byte to the saved set, and the push1 kernel booted again.
+- **The phone builds the laptop's bytes** [V]: `init_boot`, `vendor_boot` and `dtbo` built on the phone were identical to `bin/omamobile images` output.
+- **Write counters** [V]: `queue/iostats` is 1. Field 7 of each slot B partition's `stat` rises with a write and reads 0 after a reboot, which is what the hook's "booted" check relies on.
+- Details and every step's lines: [KERNEL-UPDATE-PLAN](KERNEL-UPDATE-PLAN.md) §4.
+
 ## 2026-10-30: the charger reads offline at Full, and slot B now needs its AVB footers
 
 Kernels `7.3.0-rc6-omamobile-push1-00566-g66497d0197dc` (10-29),

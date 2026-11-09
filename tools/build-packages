@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Build Omarchy Mobile's packages for aarch64 on this laptop, without a phone:
 # makepkg in an Arch Linux ARM container (Docker + qemu-user, tools/lib/alarm.sh),
-# then sign them and the database with the key in keys/, into the
+# then sign them and the database with the release key (keys/gnupg.release,
+# tools/lib/signing.sh; docs/RELEASES.md §10), into the
 # [omamobile] repository at out/repo/aarch64 (as tools/repo-build does with
 # the phone as the builder). tools/build-rootfs puts that repository into the
 # root image; tools/repo-push still copies it to a running phone.
@@ -19,6 +20,10 @@
 #     --import DIR   copy prebuilt *.pkg.tar.{zst,xz} from DIR into the repository
 #                    (for example Mesa from an earlier build), then sign it
 #     --list         print what would be built and what is up to date
+#     --resign       build nothing: sign every package in out/repo and the
+#                    database again with the release key, replacing older
+#                    signatures (from the original key, keys/gnupg). Then
+#                    tools/repo-publish --no-build development publishes them
 #     --local NAME   a contributor's build for device NAME (review lesson L-7):
 #                    the repository is out/NAME/repo/aarch64, the signing key
 #                    keys/NAME (tools/local-key-init), and the build image also
@@ -27,17 +32,47 @@
 #                    carries the local key. Never the maintainer's keys/ or
 #                    out/repo
 #
+# Upstream packages pinned in rootfs/packages.pinned (Omarchy 4.0.6 while our
+# patches don't apply to 4.5) are added by every maintainer's run: fetched
+# once, checked against the SHA-256 listed there, and signed with the release
+# key like our own; out/repo keeps them, and a line removed there takes its
+# package out at the next run. A --local repository gets them from
+# tools/fetch-published instead.
+#
 # Mesa, Hyprland and libcamera are large C/C++ builds: under qemu-user on a
 # laptop they take hours (Mesa the longest). They're built only when named or
 # with --all, and only once per version, since out/repo keeps them.
+#
+# linux-omamobile packs a kernel build instead of compiling one
+# (docs/RELEASES.md §4). It is built only when named, never by default or
+# with --all (so a prebuilt/ staged for a test is never published as a side
+# effect), and only after `packages/linux-omamobile/stage --verify` confirms
+# the staged build is a kernel-<date> tag on the published omamobile branch.
+#
+# A device package that ships boot files (its install reads
+# OMAMOBILE_BOOT_FILES) refuses to build without its boot-files/; before it
+# is built here, tools/stage-boot-files --check must find them matching this
+# tree. If they are missing or stale, that one package is skipped (the
+# repository keeps its older version), everything else is built and signed,
+# and the run exits non-zero at the end, so the daily publish still reaches
+# every other phone and its timer shows the failure.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 source tools/lib/alarm.sh
 
 SLOW=(mesa hyprland libcamera)
+# Packed from a staged kernel build: built only when named (see above)
+NAMED_ONLY=(linux-omamobile)
 repo=out/repo/aarch64
-all=0 force=0 nocheck=0 container_check=0 list=0 imports=() dirs=() local_name=
+# Exit 3 means exactly "built and signed everything but the skipped device
+# packages", which <repo>/../.skipped then lists: any other exit with 3 (a
+# gpg, tar or repo-add that happened to return it) becomes 1. Set before
+# anything can fail; the old list goes once the repository is known
+# (--local moves it, and never touches out/repo).
+skipfile=$(dirname "$repo")/.skipped
+trap 'rc=$?; if ((rc == 3)) && [[ ! -s $skipfile ]]; then exit 1; fi' EXIT
+all=0 force=0 nocheck=0 container_check=0 list=0 resign=0 imports=() dirs=() local_name=
 while (($#)); do
   case $1 in
     --all) all=1 ;;
@@ -45,9 +80,10 @@ while (($#)); do
     --nocheck) nocheck=1 ;;
     --check-in-container) container_check=1 ;;
     --list) list=1 ;;
+    --resign) resign=1 ;;
     --import) imports+=("${2:?--import needs a directory}"); shift ;;
     --local) local_name=${2:?--local needs a device codename}; shift ;;
-    -h|--help) sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) alarm_die "unknown option $1" ;;
     *) dirs+=("${1%/}") ;;
   esac
@@ -59,11 +95,15 @@ done
 ORDER=(omamobile-keyring libfprint neard omacam omamobile-apps omamobile-device-cheetah omamobile-device-felix omamobile-device-lynx omamobile-device-raven omamobile-device-panther omamobile-audio
        omamobile-sensors omamobile-gnss omamobile-fingerprint omamobile-mirror omamobile-omarchy omamobile-owl-widgets omamobile-shell
        omamobile-modem omamobile-modem-sit omamobile-mmd omamobile-speaker-tuning omamobile-waydroid
-       omamobile-firstboot mesa hyprland libcamera)
-if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)); then
+       omamobile-firstboot omamobile-boot-update linux-omamobile mesa hyprland libcamera)
+if ((resign)) && ((${#dirs[@]} + ${#imports[@]} + list + force + all)); then
+  alarm_die "--resign builds, imports and lists nothing: use it alone"
+fi
+if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)) && ((resign == 0)); then
   for name in "${ORDER[@]}"; do
     [[ -d packages/$name ]] || continue
     ((all)) || [[ " ${SLOW[*]} " != *" $name "* ]] || continue
+    [[ " ${NAMED_ONLY[*]} " != *" $name "* ]] || continue
     dirs+=("packages/$name")
   done
   for d in packages/*/; do
@@ -73,20 +113,28 @@ if ((${#dirs[@]} == 0)) && ((${#imports[@]} == 0)); then
 fi
 for d in "${dirs[@]}"; do [[ -f $d/PKGBUILD ]] || alarm_die "no PKGBUILD in $d"; done
 
-keydir=keys
 if [[ -n $local_name ]]; then
+  # A contributor's own key, never the maintainer's (review lesson L-7)
   [[ $local_name =~ ^[a-z0-9]+$ && -f device/$local_name/device.conf ]] \
     || alarm_die "--local needs a device codename with a device/<codename>/device.conf"
+  ((resign == 0)) || alarm_die "--resign is for the maintainer's out/repo, not --local"
   repo=out/$local_name/repo/aarch64
+  skipfile=$(dirname "$repo")/.skipped
   keydir=keys/$local_name
   [[ -f $keydir/fingerprint && -d $keydir/gnupg && -f $keydir/public.asc ]] \
     || alarm_die "no local key in $keydir (run: tools/local-key-init $local_name)"
   export ALARM_LOCAL_KEY=$ROOT/$keydir/public.asc
+  mkdir -p "$repo"
+  export GNUPGHOME=$ROOT/$keydir/gnupg
+  key=$(cat "$keydir/fingerprint")
+else
+  # The release key (docs/RELEASES.md §10), with a clear error without it
+  source tools/lib/signing.sh
+  signing_key_load "$ROOT" || exit 1
+  key=$SIGNING_KEY
+  mkdir -p "$repo"
 fi
-mkdir -p "$repo"
-export GNUPGHOME=$ROOT/$keydir/gnupg
-[[ -f $keydir/fingerprint && -d $GNUPGHOME ]] || alarm_die "no signing key in keys/ (maintainer only; see docs/RELEASES.md §10)"
-key=$(cat "$keydir/fingerprint")
+rm -f "$skipfile"
 
 # The version makepkg will produce, from the PKGBUILD's own fields. Our
 # PKGBUILDs read pkgver from a version file through $startdir.
@@ -116,6 +164,10 @@ if ((list)); then
   for name in "${SLOW[@]}"; do
     [[ " ${dirs[*]} " == *" packages/$name "* ]] && continue
     up_to_date "packages/$name" || echo "missing     packages/$name $(pkg_version "packages/$name") (slow: name it or use --all, or --import a build)"
+  done
+  for name in "${NAMED_ONLY[@]}"; do
+    [[ -d packages/$name && " ${dirs[*]} " != *" packages/$name "* ]] || continue
+    echo "named only  packages/$name (stage a release with packages/$name/stage, then name it)"
   done
   exit 0
 fi
@@ -161,6 +213,62 @@ for dir in "${imports[@]}"; do
   add_to_repo "${files[@]}"
 done
 
+# Pinned upstream packages (rootfs/packages.pinned): what that file lists is
+# in out/repo with its listed checksum, and what it listed before and no
+# longer does (out/repo/.pinned) is taken out. Each line is a SHA-256 and one
+# or more URLs of the same file, tried in order (Omarchy's, then our
+# published copy, for when upstream prunes it). A pin never takes the name
+# of a package we build: add_to_repo would replace ours with it.
+pinlist=rootfs/packages.pinned
+pinstate=$(dirname "$repo")/.pinned
+pins_changed=0
+our_names() {
+  local d
+  for d in packages/*/PKGBUILD; do pkg_names "${d%/PKGBUILD}"; done | tr ' ' '\n' | sed '/^$/d' | sort -u
+}
+sync_pins() {
+  local sum urls url base name want=() f tmp ours="" got
+  while read -r sum urls; do
+    base=
+    [[ $sum =~ ^[0-9a-f]{64}$ && -n $urls ]] || alarm_die "$pinlist: not \"<sha256> <url>...\": $sum $urls"
+    for url in $urls; do
+      [[ $url =~ ^(https|file)://[^[:space:]]+/[^/[:space:]]+\.pkg\.tar\.(zst|xz)$ ]] ||
+        alarm_die "$pinlist: not the URL of a package file: $url"
+      [[ -z $base || ${url##*/} == "$base" ]] || alarm_die "$pinlist: one line's URLs name different files: $urls"
+      base=${url##*/}
+    done
+    want+=("$base")
+    if [[ -f $repo/$base && $(sha256sum < "$repo/$base" | cut -d' ' -f1) == "$sum" ]]; then continue; fi
+    alarm_say "Pinned: $base"
+    tmp=$(mktemp -d) got=0
+    for url in $urls; do
+      if curl -fsSL --retry 3 --connect-timeout 30 --max-time 1800 -o "$tmp/$base" "$url" &&
+         [[ $(sha256sum < "$tmp/$base" | cut -d' ' -f1) == "$sum" ]]; then got=1; break; fi
+      echo "    $url: not fetched, or not the listed SHA-256" >&2
+    done
+    ((got)) || { rm -rf "$tmp"; alarm_die "$pinlist: no URL gave $base with its SHA-256; nothing added"; }
+    [[ $(pkginfo "$tmp/$base" | sed -n 's/^arch = //p') =~ ^(aarch64|any)$ ]] ||
+      { rm -rf "$tmp"; alarm_die "$pinlist: $base is not an aarch64 package"; }
+    name=$(pkginfo "$tmp/$base" | sed -n 's/^pkgname = //p')
+    [[ -n $ours ]] || ours=$(our_names)
+    ! grep -qxF "$name" <<<"$ours" ||
+      { rm -rf "$tmp"; alarm_die "$pinlist: $base is $name, which packages/ builds: a pin never replaces our own package"; }
+    add_to_repo "$tmp/$base"
+    rm -rf "$tmp"
+    pins_changed=1
+  done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$pinlist" 2>/dev/null || true)
+  if [[ -f $pinstate ]]; then
+    while read -r f; do
+      [[ -n $f && " ${want[*]} " != *" $f "* && -e $repo/$f ]] || continue
+      rm -f "$repo/$f" "$repo/$f.sig"
+      echo "    unpinned: $f"
+      pins_changed=1
+    done < "$pinstate"
+  fi
+  printf '%s\n' ${want[@]+"${want[@]}"} | sed '/^$/d' > "$pinstate"
+}
+if [[ -z $local_name ]] && ((resign == 0)); then sync_pins; fi
+
 build=()
 for d in "${dirs[@]}"; do
   if ((force == 0)) && up_to_date "$d"; then
@@ -169,6 +277,25 @@ for d in "${dirs[@]}"; do
     build+=("$d")
   fi
 done
+
+# Staged inputs, checked before anything is built: a release kernel from a
+# published tag (named only, so a refusal stops the run), and boot files
+# that match this tree (a refusal skips that package and fails the run at
+# the end)
+skipped=() kept=()
+for d in "${build[@]}"; do
+  name=$(basename "$d")
+  if [[ " ${NAMED_ONLY[*]} " == *" $name "* ]]; then
+    "$d/stage" --verify "$d/prebuilt" || alarm_die "$name: the staged kernel is not a published release; nothing built"
+  fi
+  if grep -c 'OMAMOBILE_BOOT_FILES' "$d/install" >/dev/null 2>&1 && ! tools/stage-boot-files --check "$d/boot-files"; then
+    echo "SKIPPED: $name $(pkg_version "$d"): its boot files are missing or stale (DEVICE=<codename> KERNEL_OUT=<build> tools/stage-boot-files); building the rest" >&2
+    skipped+=("$name")
+    continue
+  fi
+  kept+=("$d")
+done
+build=("${kept[@]}")
 
 # The tarball is also where repo-add comes from on a host without it, even
 # when the run only imports packages
@@ -192,12 +319,43 @@ sign_and_index() {
     (cd "$repo" && repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}")
   else
     # Not an Arch machine: pacman's repo-add from the Arch Linux ARM image,
-    # as this user, with the same key.
-    docker run --rm --platform linux/arm64 -u "$(id -u):$(id -g)" \
+    # with the same key. It runs as the container's root and hands /repo
+    # back to the owner it arrived with, as the build does: under rootless
+    # Docker the container's root is this user and a container uid such as
+    # this user's is a subordinate uid on the host, which can't read the
+    # keyring (mode 700), so `-u $(id -u)` failed there with "The key ...
+    # does not exist in your keyring"; under rootful Docker root reads it
+    # and the chown keeps the index this user's.
+    docker run --rm --platform linux/arm64 \
       -v "$ROOT/$repo:/repo" -v "$GNUPGHOME:/gnupg" -e GNUPGHOME=/gnupg -e HOME=/tmp -w /repo \
-      "$(alarm_base_image)" repo-add --quiet --sign --key "$key" omamobile.db.tar.gz "${packages[@]}"
+      "$(alarm_base_image)" bash -c 'owner=$(stat -c %u:%g /repo); trap "chown -R $owner /repo" EXIT
+        repo-add --quiet --sign --key "$0" omamobile.db.tar.gz "$@"' "$key" "${packages[@]}"
   fi
 }
+
+# A changed pin is in the index before the first build, which resolves its
+# dependencies from it (omamobile-omarchy depends on omarchy)
+if ((pins_changed)); then
+  alarm_say "Indexing the pinned packages"
+  sign_and_index
+fi
+
+if ((resign)); then
+  [[ -f $repo/omamobile.db ]] || alarm_die "$repo has no index to sign again"
+  alarm_say "Signing every package in $repo again with $key"
+  # New signatures beside the old ones first; the old ones are replaced only
+  # when every package has one, so a failure leaves the repository as it was.
+  for package in "$repo"/*.pkg.tar.*; do
+    [[ -e $package && $package != *.sig && $package != *.sig.new ]] || continue
+    gpg --batch --yes --local-user "$key" --detach-sign -o "$package.sig.new" "$package" \
+      || { rm -f "$repo"/*.sig.new; alarm_die "signing ${package##*/} failed; nothing was replaced"; }
+  done
+  for new in "$repo"/*.sig.new; do mv -f "$new" "${new%.new}"; done
+  command -v repo-add >/dev/null || alarm_fetch
+  sign_and_index
+  echo "    $(ls "$repo" | grep -c '\.pkg\.tar\.[a-z]*\.sig$') package signatures and the index, by $key"
+  exit 0
+fi
 
 for dir in "${build[@]}"; do
   name=$(basename "$dir")
@@ -279,3 +437,11 @@ done
 alarm_say "Signing and indexing $repo"
 sign_and_index
 ls -1 "$repo" | grep -E '\.pkg\.tar\.zst$'
+# Exit 3: everything else is built and signed (tools/repo-publish publishes
+# it, then fails too); any other failure exits 1 earlier
+if ((${#skipped[@]})); then
+  printf '\e[31merror:\e[0m %s\n' "not built, boot files missing or stale: ${skipped[*]} (the rest is built and signed; stage them with tools/stage-boot-files)" >&2
+  mkdir -p "$(dirname "$skipfile")"
+  printf '%s\n' "${skipped[@]}" > "$skipfile"
+  exit 3
+fi

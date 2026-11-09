@@ -297,6 +297,16 @@ def branch_target(word, pc):
     return None
 
 
+def adrp_page(word, pc):
+    """The page an 'adrp' at pc addresses. Its 21-bit immediate
+    (immhi:immlo) is a signed page count, so a table or GOT slot in a lower
+    page is a negative one."""
+    imm = ((word >> 5) & 0x7FFFF) << 2 | (word >> 29) & 3
+    if imm & (1 << 20):
+        imm -= 1 << 21
+    return (pc & ~0xFFF) + (imm << 12)
+
+
 def _bl_name(emu, a):
     t = branch_target(struct.unpack_from("<I", emu.data, a)[0], a)
     if t is None or struct.unpack_from("<I", emu.data, a)[0] & 0xFC000000 != 0x94000000:
@@ -305,9 +315,7 @@ def _bl_name(emu, a):
     w0, w1 = struct.unpack_from("<II", emu.data, t)
     if w0 & 0x9F00001F != 0x90000010:
         return None
-    immlo, immhi = (w0 >> 29) & 3, (w0 >> 5) & 0x7FFFF
-    page = (t & ~0xFFF) + (((immhi << 2) | immlo) << 12)
-    slot = page + ((w1 >> 10) & 0xFFF) * 8
+    slot = adrp_page(w0, t) + ((w1 >> 10) & 0xFFF) * 8
     return emu.traps.get(emu.u64(slot))
 
 
@@ -746,8 +754,7 @@ def samsung_providers(emu, near, holder_off):
                    if words[m] & 0xFFC003FF == 0x91000108]
             if not add:
                 continue
-            w, p = words[j], text + 4 * j
-            page = (p & ~0xFFF) + ((((w >> 5) & 0x7FFFF) << 2 | (w >> 29) & 3) << 12)
+            page = adrp_page(words[j], text + 4 * j)
             found.append(page + ((add[0] >> 10) & 0xFFF) + 0x10)
     if not found:
         found = _samsung_providers_built(emu, words, text, ctors)
@@ -774,8 +781,7 @@ def _adrp_vtable(words, text, j):
     if w & 0x9F000000 != 0x90000000:
         return None
     rn = w & 0x1F
-    p = text + 4 * j
-    page = (p & ~0xFFF) + ((((w >> 5) & 0x7FFFF) << 2 | (w >> 29) & 3) << 12)
+    page = adrp_page(w, text + 4 * j)
     for m in range(j + 1, min(j + 4, len(words))):
         a = words[m]
         if a & 0xFFC00000 == 0x91000000 and (a >> 5) & 0x1F == rn and a & 0x1F == rn:
@@ -1383,11 +1389,7 @@ def str_xrefs(emu, text_str):
                     for back in range(1, 5):
                         w = struct.unpack_from("<I", d, a - 4 * back)[0]
                         if w & 0x9F00001F == 0x90000000 | rd:
-                            immlo, immhi = (w >> 29) & 3, (w >> 5) & 0x7FFFF
-                            imm = ((immhi << 2) | immlo) << 12
-                            if imm & (1 << 32):
-                                imm -= 1 << 33
-                            if ((a - 4 * back) & ~0xFFF) + imm == t & ~0xFFF:
+                            if adrp_page(w, a - 4 * back) == t & ~0xFFF:
                                 out.append(a - 4 * back)
                             break
                 a = d.find(pat, a + 1, text + size)

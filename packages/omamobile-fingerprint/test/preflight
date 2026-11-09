@@ -1,0 +1,262 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The runner's safety before storageproxyd (omamobile-fp-chroot preflight),
+# against a fake tree: partitions found by PARTNAME in a fake sysfs, their
+# contents as plain files, debugfs replaced by a stub that "dumps" from a
+# directory standing in for persist's file system. Nothing real is read.
+#
+#   a first start           -> mfg_data and persist:/ss/{0,nsp} copied, hashed
+#   an existing mfg_data.img -> adopted only if it matches the partition
+#   a second start          -> refused until a reboot (the /run marker)
+#   the TDP copy missing    -> refused (and never quietly recreated)
+#   no /ss/0 in persist     -> refused
+#   an empty /ss/0          -> an empty copy, refused once either side changes
+#   /ss/0 unreadable        -> refused: a dump that yields nothing from a
+#                              non-empty or non-regular /ss/0 is not "empty"
+#   the TDP copy changed    -> refused
+#   persist:/ss/0 changed   -> refused
+#   a writable partition    -> refused
+#   hand-made copies        -> the TDP copy checked against persist:/ss/0
+#   a start that never ran  -> the next boot skips once, the one after starts
+#   the path overrides      -> ignored without OMAMOBILE_FP_TEST=1
+#   the inner start         -> refused without this boot's preflight token
+#   the 9a without tdp.img  -> refused
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+RUNNER=$PWD/lib/omamobile-fp-chroot
+fail() { echo "not ok - $*" >&2; exit 1; }
+pass() { echo "ok - $*"; }
+
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+# A fresh fake phone in $t/p: persist (sda5) and mfg_data (sda6), read-only.
+phone() {
+  local p=$t/p
+  rm -rf "$p"
+  mkdir -p "$p/sys/sda5" "$p/sys/sda6" "$p/sys/sda7" "$p/dev" "$p/persistfs/ss" "$p/bin" "$p/etc" "$p/run"
+  printf 'MAJOR=8\nMINOR=5\nDEVNAME=sda5\nDEVTYPE=partition\nPARTNAME=persist\n' > "$p/sys/sda5/uevent"
+  printf 'MAJOR=8\nMINOR=6\nDEVNAME=sda6\nDEVTYPE=partition\nPARTNAME=mfg_data\n' > "$p/sys/sda6/uevent"
+  printf 'MAJOR=8\nMINOR=7\nDEVNAME=sda7\nDEVTYPE=partition\nPARTNAME=persist_b\n' > "$p/sys/sda7/uevent"
+  echo 1 > "$p/sys/sda5/ro"; echo 1 > "$p/sys/sda6/ro"; echo 1 > "$p/sys/sda7/ro"
+  echo "persist image" > "$p/dev/sda5"
+  head -c 65536 /dev/urandom > "$p/dev/sda6"
+  head -c 4096 /dev/urandom > "$p/persistfs/ss/0"
+  echo "nsp from stock" > "$p/persistfs/ss/nsp"
+  echo boot-1 > "$p/boot_id"
+  : > "$p/mounts"
+  # debugfs -R "dump -p SRC DST" DEV: copy from persistfs, and log the call
+  cat > "$p/bin/debugfs" <<EOF
+#!/bin/bash
+echo "debugfs \$*" >> "$p/debugfs.log"
+[[ \$1 == -R ]] || exit 1
+read -r cmd flag src dst <<<"\$2"
+[[ \$3 == "$p/dev/sda5" ]] || exit 1
+if [[ \$cmd == stat ]]; then
+  # what stat says, when a case sets it
+  [[ -f "$p/stat-says" ]] && { cat "$p/stat-says"; exit 0; }
+  [[ -f "$p/persistfs\$flag" ]] && echo "Inode: 15   Type: regular    Mode:  0600" &&
+    echo "User:  1000   Group:  1000   Project:     0   Size: \$(stat -c %s "$p/persistfs\$flag")"
+  exit 0
+fi
+[[ \$cmd == dump && \$flag == -p ]] || exit 1
+# a read error: the dump writes nothing (debugfs still exits 0)
+[[ -e "$p/dump-fails" ]] && exit 0
+[[ -f "$p/persistfs\$src" ]] && cp "$p/persistfs\$src" "\$dst"
+exit 0
+EOF
+  chmod +x "$p/bin/debugfs"
+}
+
+pf() {
+  PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=${TESTMODE-1} OMAMOBILE_FP_BOOT_ID=$t/p/boot_id \
+  OMAMOBILE_FP_DEVICE=${DEV:-cheetah} OMAMOBILE_FP_STATE=$t/p/state \
+  OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp OMAMOBILE_FP_UIDIR=$t/p/ui \
+  OMAMOBILE_FP_SYSBLOCK=$t/p/sys OMAMOBILE_FP_DEVDIR=$t/p/dev OMAMOBILE_FP_MOUNTS=$t/p/mounts \
+    "$RUNNER" preflight > "$t/out" 2>&1
+}
+# A reboot: a new boot id, /run emptied, and the stack reached "running"
+# (which clears the pending marker)
+newboot() { rm -rf "$t/p/run"; mkdir -p "$t/p/run"; rm -f "$S/start-pending"; head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$t/p/boot_id"; }
+marker=$t/p/run/omamobile-fp/storageproxyd-started
+S=$t/p/state
+
+phone
+# A first start: the copies are made, hashed and recorded; the markers are set
+pf || { cat "$t/out"; fail "a first start passes preflight"; }
+cmp -s "$S/persist-ss/0" "$t/p/persistfs/ss/0" || fail "persist:/ss/0 copied"
+cmp -s "$S/persist-ss/nsp" "$t/p/persistfs/ss/nsp" || fail "persist:/ss/nsp copied"
+cmp -s "$S/mfg_data.img" "$t/p/dev/sda6" || fail "mfg_data copied"
+for f in persist-ss/0 persist-ss/nsp mfg_data.img; do
+  [[ $(awk -v n="$f" '$2 == n {print $1}' "$S/provenance") == "$(sha256sum < "$S/$f" | cut -d' ' -f1)" ]] ||
+    fail "provenance records the sha256 of $f"
+done
+[[ $(stat -c %a "$S/provenance") == 600 && $(stat -c %a "$S/mfg_data.img") == 600 ]] || fail "the copies are private"
+[[ -e $marker ]] || fail "the once-per-boot marker is set"
+grep -c 'dump -p /ss/0 ' "$t/p/debugfs.log" >/dev/null || fail "persist is read with debugfs"
+grep -v -c 'debugfs -R dump -p ' "$t/p/debugfs.log" >/dev/null && fail "debugfs only dumps (no -w, no other request)"
+grep -c ' token [0-9a-f]\{32\}$' "$marker" >/dev/null || fail "the marker carries the token for the inner start"
+[[ $(stat -c %a "$marker") == 600 ]] || fail "the marker (and its token) is root's only"
+[[ $(cut -d' ' -f1 "$S/start-pending") == boot-1 ]] || fail "the start is pending until it runs"
+[[ ! -e $t/p/ui/off-reason ]] || fail "a passing preflight leaves no off-reason"
+pass "a first start: mfg_data and persist:/ss copied read-only and their hashes recorded"
+
+# A second start in the same boot
+pf && fail "a second start in the same boot is refused"
+grep -c 'Reboot' "$t/out" >/dev/null || { cat "$t/out"; fail "says to reboot"; }
+newboot
+pf || { cat "$t/out"; fail "after a reboot it starts again"; }
+pass "one storage proxy per boot: a second start is refused until a reboot"
+
+# The TDP copy removed by hand: refused, not recreated
+newboot; rm -f "$S/persist-ss/0"
+pf && fail "a missing TDP copy is refused"
+grep -c 'no TDP copy' "$t/out" >/dev/null || { cat "$t/out"; fail "says the TDP copy is missing"; }
+[[ ! -e $S/persist-ss/0 && ! -e $marker ]] || fail "the TDP copy is never quietly recreated"
+pass "a missing TDP copy: refused, never recreated behind the record"
+
+# persist without /ss/0 on a new install
+phone; rm -f "$t/p/persistfs/ss/0"
+pf && fail "no /ss/0 in persist: refused"
+[[ ! -e $S/provenance && ! -e $marker ]] || fail "nothing recorded without a TDP copy"
+pass "persist without /ss/0: refused, no TDP copy, no storage start"
+
+# An empty /ss/0 in persist (a TDP stock never committed): an empty copy,
+# its hash recorded, and still refused once persist:/ss/0 is no longer empty
+phone; : > "$t/p/persistfs/ss/0"
+pf || { cat "$t/out"; fail "an empty persist:/ss/0 passes preflight"; }
+[[ -f $S/persist-ss/0 && ! -s $S/persist-ss/0 ]] || fail "the TDP copy is the empty file"
+[[ $(awk '$2 == "persist-ss/0" {print $1}' "$S/provenance") == "$(sha256sum < /dev/null | cut -d' ' -f1)" ]] ||
+  fail "provenance records the empty file's sha256"
+newboot
+pf || { cat "$t/out"; fail "the empty TDP copy passes again on the next boot"; }
+newboot; echo stock > "$t/p/persistfs/ss/0"
+pf && fail "persist:/ss/0 written after an empty copy is refused"
+grep -c 'persist:/ss/0 changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says persist:/ss/0 changed"; }
+newboot; : > "$t/p/persistfs/ss/0"; echo x > "$S/persist-ss/0"
+pf && fail "an empty TDP copy that Linux wrote to is refused"
+pass "an empty persist:/ss/0: an empty TDP copy, recorded, refused once either side changes"
+
+# /ss/0 that can't be read is not an empty /ss/0: the dump yields nothing
+# while stat says a regular file of 4096 bytes, or something that isn't a
+# regular file. Refused, with no copy and nothing recorded, so a failed read
+# never hands Trusty an empty TDP while persist holds a real one.
+phone; touch "$t/p/dump-fails"
+pf && fail "a non-empty /ss/0 that dumps nothing is refused"
+grep -c "can't be read" "$t/out" >/dev/null || { cat "$t/out"; fail "says /ss/0 can't be read"; }
+[[ ! -e $S/persist-ss/0 && ! -e $S/provenance && ! -e $marker ]] || fail "no TDP copy and nothing recorded after a failed read"
+phone; touch "$t/p/dump-fails"; : > "$t/p/persistfs/ss/0"
+printf 'Inode: 15   Type: directory    Mode:  0700\nUser:  1000   Group:  1000   Project:     0   Size: 0\n' > "$t/p/stat-says"
+pf && fail "a /ss/0 that isn't a regular file is refused"
+[[ ! -e $S/persist-ss/0 && ! -e $S/provenance && ! -e $marker ]] || fail "no TDP copy and nothing recorded for a non-regular /ss/0"
+pass "an unreadable persist:/ss/0 (4096 bytes dumping nothing, or not a regular file): refused, nothing copied or recorded"
+
+# The TDP copy changed after the record (Linux wrote TDP)
+phone; pf || fail "setup"
+newboot; echo x >> "$S/persist-ss/0"
+pf && fail "a changed TDP copy is refused"
+grep -c 'TDP copy changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says the TDP copy changed"; }
+[[ $(cat "$t/p/ui/off-reason" 2>/dev/null) == data-check ]] || fail "a data-check refusal tells the desktop why (off-reason)"
+pass "the TDP copy changed since the record: refused"
+
+# persist:/ss/0 changed under the copy (a stock boot)
+phone; pf || fail "setup"
+newboot; echo x >> "$t/p/persistfs/ss/0"
+pf && fail "a changed persist:/ss/0 is refused"
+grep -c 'persist:/ss/0 changed' "$t/out" >/dev/null || { cat "$t/out"; fail "says persist:/ss/0 changed"; }
+pass "persist:/ss/0 changed since the copy: refused"
+
+# The storage guard: a writable or read-write mounted partition
+phone; echo 0 > "$t/p/sys/sda5/ro"
+pf && fail "persist ro=0: refused"
+grep -c "not read-only" "$t/out" >/dev/null || { cat "$t/out"; fail "says persist is not read-only"; }
+phone; echo 0 > "$t/p/sys/sda6/ro"
+pf && fail "mfg_data ro=0: refused"
+phone; echo "$t/p/dev/sda5 /mnt ext4 rw,relatime 0 0" > "$t/p/mounts"
+pf && fail "persist mounted read-write: refused"
+grep -c "mounted read-write" "$t/out" >/dev/null || { cat "$t/out"; fail "says persist is mounted read-write"; }
+[[ ! -e $S/mfg_data.img && ! -e $S/persist-ss/0 ]] || fail "nothing copied from an unguarded partition"
+pass "a writable or read-write mounted partition: refused, nothing copied"
+
+# Hand-made copies, no record: the TDP copy is checked, mfg_data compared
+phone
+mkdir -p "$S/persist-ss"
+cp "$t/p/persistfs/ss/0" "$S/persist-ss/0"; cp "$t/p/dev/sda6" "$S/mfg_data.img"
+pf || { cat "$t/out"; fail "hand-made copies matching the partitions are adopted"; }
+grep -c 'existing mfg_data.img matches' "$t/out" >/dev/null || fail "a matching mfg_data.img is adopted"
+phone
+mkdir -p "$S/persist-ss"
+cp "$t/p/persistfs/ss/0" "$S/persist-ss/0"; echo stale > "$S/mfg_data.img"
+pf || { cat "$t/out"; fail "a stale mfg_data.img doesn't stop the start"; }
+cmp -s "$S/mfg_data.img" "$t/p/dev/sda6" || fail "a stale mfg_data.img is copied again from the partition"
+ls "$S"/mfg_data.img.before-provision.* >/dev/null 2>&1 || fail "the stale one is moved aside, not deleted"
+phone
+mkdir -p "$S/persist-ss"
+echo other > "$S/persist-ss/0"
+pf && fail "a hand-made TDP copy that differs from persist:/ss/0 is refused"
+grep -c 'differs from persist:/ss/0' "$t/out" >/dev/null || { cat "$t/out"; fail "provision is the check that refuses it"; }
+pass "hand-made copies: TDP checked against persist:/ss/0, mfg_data adopted only if it matches"
+
+# A start that never got running (Trusty halted): the next boot skips once
+phone; pf || fail "setup"
+rm -rf "$t/p/run"; echo boot-2 > "$t/p/boot_id"     # a reboot; still pending
+pf && fail "the boot after a start that never ran skips fingerprint"
+grep -c 'never got running' "$t/out" >/dev/null || { cat "$t/out"; fail "says why it skips"; }
+[[ ! -e $marker ]] || fail "a skipped boot starts no proxy"
+pf || { cat "$t/out"; fail "the boot after it tries again (the pending marker went)"; }
+pass "a start that never got running: the next boot skips once, then it starts again"
+
+# The overrides only count in the test mode (read-only: the paths subcommand)
+ov() { env OMAMOBILE_FP_TEST="$1" OMAMOBILE_FP_DEVICE=tegu OMAMOBILE_FP_STATE=/x/state OMAMOBILE_FP_RUN=/x/run \
+  OMAMOBILE_FP_SYSBLOCK=/x/sys OMAMOBILE_FP_DEVDIR=/x/dev OMAMOBILE_FP_MOUNTS=/x/mounts OMAMOBILE_FP_BOOT_ID=/x/boot \
+  OMAMOBILE_FP_UIDIR=/x/ui "$RUNNER" paths; }
+real=$(ov 0) fake=$(ov 1)
+for l in state=/var/lib/omamobile-fp run=/run/omamobile-fp sysblock=/sys/class/block devdir=/dev mounts=/proc/mounts \
+         boot_id=/proc/sys/kernel/random/boot_id uidir=/run/omamobile-fp-ui; do
+  grep -qx "$l" <<<"$real" || fail "without OMAMOBILE_FP_TEST=1: $l ($real)"
+done
+grep -qx 'device=tegu' <<<"$real" && fail "without OMAMOBILE_FP_TEST=1 the device comes from the board, not OMAMOBILE_FP_DEVICE"
+for l in device=tegu state=/x/state run=/x/run sysblock=/x/sys devdir=/x/dev mounts=/x/mounts boot_id=/x/boot uidir=/x/ui; do
+  grep -qx "$l" <<<"$fake" || fail "with OMAMOBILE_FP_TEST=1: $l"
+done
+pass "the device, state and path overrides need OMAMOBILE_FP_TEST=1"
+
+# The inner start needs this boot's preflight token
+phone; pf || fail "setup"
+for tok in "" wrong none 0123456789abcdef0123456789abcdef; do
+  if PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp OMAMOBILE_FP_STATE=$S \
+     OMAMOBILE_FP_IN_NS=1 OMAMOBILE_FP_TOKEN=$tok "$RUNNER" start storage > "$t/out" 2>&1; then
+    fail "the inner start with token '$tok' is refused"
+  fi
+  grep -c "only after this boot's preflight" "$t/out" >/dev/null || { cat "$t/out"; fail "says why (token '$tok')"; }
+done
+pass "OMAMOBILE_FP_IN_NS=1 can't skip preflight: the inner start needs its token"
+
+# The 9a (mapped stores): no tdp.img, no TDP
+phone
+DEV=tegu pf && fail "tegu without tdp.img: refused"
+mkdir -p "$S"; head -c 512 /dev/urandom > "$S/tdp.img"
+DEV=tegu pf || { cat "$t/out"; fail "tegu with tdp.img passes"; }
+pass "the 9a: refused without its TDP image"
+
+# post_upgrade: an older runner's proxy still running sets a marker that
+# blocks a second proxy and that no token can pass
+phone
+mkdir -p "$t/p/stub"; printf '#!/bin/bash\nexit 0\n' > "$t/p/stub/pgrep"; printf '#!/bin/bash\nexit 0\n' > "$t/p/stub/systemctl"
+chmod +x "$t/p/stub/pgrep" "$t/p/stub/systemctl"
+sed "s|/run/omamobile-fp|$t/p/run/omamobile-fp|g" omamobile-fingerprint.install > "$t/scriptlet"
+( PATH=$t/p/stub:$PATH; source "$t/scriptlet"; post_upgrade ) > /dev/null
+[[ -e $marker ]] || fail "post_upgrade marks a proxy started by an older runner"
+pf && fail "after that marker, a start in the upgrade boot is refused"
+for tok in "" none "$(sed -n 's/.* token //p' "$marker")"; do
+  if PATH=$t/p/bin:$PATH OMAMOBILE_FP_TEST=1 OMAMOBILE_FP_RUN=$t/p/run/omamobile-fp OMAMOBILE_FP_STATE=$S \
+     OMAMOBILE_FP_IN_NS=1 OMAMOBILE_FP_TOKEN=$tok "$RUNNER" start storage > "$t/out" 2>&1; then
+    fail "the inner start passes post_upgrade's marker with token '$tok'"
+  fi
+done
+rm -f "$marker"; printf '#!/bin/bash\nexit 1\n' > "$t/p/stub/pgrep"
+( PATH=$t/p/stub:$PATH; source "$t/scriptlet"; post_upgrade ) > /dev/null
+[[ ! -e $marker ]] || fail "post_upgrade sets no marker when no proxy runs"
+pass "post_upgrade: an older runner's running proxy blocks a second one, and its marker passes no token"
+
+echo "omamobile-fingerprint preflight: ok"

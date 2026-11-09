@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""omamobile-sit-config: the settings the shell's Mobile network page
+changes in /etc/omamobile/modem-sit.conf, run as root through pkexec
+(polkit action org.omamobile.modem-sit.configure: the active local user).
+
+  omamobile-sit-config set apn auto|APN   the internet APN ("auto": from the SIM)
+  omamobile-sit-config set attach_apn auto|APN  the APN the modem registers with
+  omamobile-sit-config set roaming on|off  mobile data while roaming
+  omamobile-sit-config get                 both, as JSON
+
+Nothing else in the file can be changed through it, and every value is
+checked first: an APN is a plain carrier APN (letters, digits, '-' and
+dots), never anything that could add a line or a section. Comments and the
+other settings are kept as they are.
+
+The APN applies at the next start-up of omamobile-sitd, which needs a fresh
+modem: a restart of the phone. Nothing is restarted here (a second start-up
+on the same modem isn't supported, and the modem unit is never restarted in
+place). Roaming applies at once: omamobile-sit-data reads it on every pass.
+"""
+import configparser
+import json
+import os
+import re
+import sys
+import tempfile
+
+CONFIG = os.environ.get('OMAMOBILE_SIT_CONFIG', '/etc/omamobile/modem-sit.conf')
+APN = re.compile(r'[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*')
+KEYS = {'apn': ('network', 'apn'), 'attach_apn': ('network', 'attach_apn'), 'roaming': ('data', 'roaming')}
+
+
+def value_for(key, value):
+    if key in ('apn', 'attach_apn'):
+        if value.lower() == 'auto':
+            return 'auto'
+        if not APN.fullmatch(value) or len(value) > 99:
+            raise ValueError('not a plain carrier APN')
+        return value
+    if key == 'roaming' and value in ('on', 'off'):
+        return 'yes' if value == 'on' else 'no'
+    raise ValueError('unsupported value')
+
+
+def set_key(text, section, key, value):
+    """The file with section.key set to value, every other line untouched."""
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith('\n'):
+        lines[-1] += '\n'
+    header = re.compile(r'\s*\[([^\]]+)\]\s*$')
+    setting = re.compile(r'\s*' + re.escape(key) + r'\s*[=:]')
+    current, start = None, None
+    for index, line in enumerate(lines):
+        match = header.match(line)
+        if match:
+            current = match.group(1).strip()
+            if current == section and start is None:
+                start = index
+            continue
+        if current == section and setting.match(line):
+            lines[index] = f'{key} = {value}\n'
+            return ''.join(lines)
+    if start is None:
+        return ''.join(lines) + f'\n[{section}]\n{key} = {value}\n'
+    lines.insert(start + 1, f'{key} = {value}\n')
+    return ''.join(lines)
+
+
+def current(path):
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(path)
+    apn = parser.get('network', 'apn', fallback='').strip() or 'auto'
+    roaming = parser.get('data', 'roaming', fallback='yes').strip().lower() not in ('no', 'off', 'false', '0')
+    attach = parser.get('network', 'attach_apn', fallback='').strip() or 'auto'
+    return dict(apn=apn, attach_apn=attach, roaming=roaming)
+
+
+def write(path, text):
+    directory = os.path.dirname(path) or '.'
+    fd, temporary = tempfile.mkstemp(prefix='.modem-sit.conf.', dir=directory)
+    try:
+        with os.fdopen(fd, 'w') as out:
+            out.write(text)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    except BaseException:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        raise
+
+
+def main(argv):
+    if argv == ['get']:
+        print(json.dumps(current(CONFIG)))
+        return 0
+    if len(argv) != 3 or argv[0] != 'set' or argv[1] not in KEYS:
+        print(__doc__, file=sys.stderr)
+        return 2
+    key = argv[1]
+    try:
+        value = value_for(key, argv[2].strip())
+    except ValueError as error:
+        print('omamobile-sit-config:', error, file=sys.stderr)
+        return 1
+    section, name = KEYS[key]
+    try:
+        with open(CONFIG) as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = ''
+    updated = set_key(text, section, name, value)
+    # The result must still parse, with the value where it was meant to go.
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(updated)
+    if parser.get(section, name) != value:
+        print('omamobile-sit-config: the file could not be updated safely', file=sys.stderr)
+        return 1
+    if updated != text:
+        write(CONFIG, updated)
+    print(json.dumps(current(CONFIG)))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

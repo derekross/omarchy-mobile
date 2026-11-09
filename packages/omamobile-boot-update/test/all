@@ -1,0 +1,717 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for omamobile-boot-update, from a copy of this directory alone, with
+# no root, no phone and no real block device: every "partition" is a regular
+# file in a fake root (OMAMOBILE_BOOT_ROOT) with a fake /sys/block, /proc and
+# power supply. Covers the descriptor rules, the image builder (with the real
+# mkbootimg, avbtool, lz4 and dtc when installed, else stand-ins), the hook's
+# opt-in, every refusal before a write, the write and its read-back, the
+# saved previous set, an interrupted write and the rollback.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+PKG=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+
+for f in bin/omamobile-boot-update lib/omamobile-boot-images lib/descriptor.sh install test/all; do
+  bash -n "$f" || fail "$f parses"
+done
+pass "scripts parse"
+
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+./install "$t/stage"
+for f in usr/bin/omamobile-boot-update usr/lib/omamobile-boot-update/omamobile-boot-images \
+         usr/lib/omamobile-boot-update/descriptor.sh usr/share/libalpm/hooks/90-omamobile-boot.hook \
+         usr/share/omamobile/boot-update/boot-update.conf.example usr/share/licenses/omamobile-boot-update/LICENSE \
+         usr/share/omamobile/boot-update/version usr/share/omamobile-boot-update/avb/testkey_rsa4096.pem \
+         usr/share/omamobile-boot-update/avb/SOURCE usr/share/licenses/omamobile-boot-update/LICENSE.avb; do
+  [[ -e $t/stage/$f ]] || fail "not staged: $f"
+done
+[[ ! -e $t/stage/etc/omamobile/boot-update.conf ]] || fail "the package never ships /etc/omamobile/boot-update.conf (absent means AUTO_WRITE=no)"
+grep -qx 'AUTO_WRITE=no' etc/boot-update.conf || fail "the example says AUTO_WRITE=no"
+[[ $(sha256sum < avb/testkey_rsa4096.pem | cut -d' ' -f1) == 6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121 ]] \
+  || fail "the AVB key is AOSP's test key, as avb/SOURCE names it"
+grep -c 6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121 avb/SOURCE bin/omamobile-boot-update | grep -c ':0$' >/dev/null \
+  && fail "avb/SOURCE and the tool name the key's checksum"
+pass "install stages the tool, its library, the hook and AOSP's test key, and no config that would turn it on"
+
+hook=libalpm/90-omamobile-boot.hook
+for want in 'Operation = Install' 'Operation = Upgrade' 'Type = Path' 'Target = usr/lib/modules/*/vmlinuz' \
+            'Target = usr/lib/modules/*/dtbs/*' 'Target = usr/share/omamobile/device.conf' \
+            'Target = usr/lib/omamobile/*/dtbo.img' 'Target = usr/lib/omamobile/*/initramfs.cpio.lz4' \
+            'When = PostTransaction' 'Exec = /usr/bin/omamobile-boot-update hook'; do
+  grep -qxF "$want" "$hook" || fail "hook: $want"
+done
+grep -q 'Operation = Remove' "$hook" && fail "hook: nothing to write when the kernel goes away"
+grep -q AbortOnFail "$hook" && fail "hook: a post-transaction hook cannot abort"
+[[ ${hook##*/} > 60-depmod.hook && ${hook##*/} > 10-linux-modules-post.hook ]] || fail "hook runs after depmod and kernel-modules-hook"
+pass "the hook runs after depmod on kernel and boot-file changes, never on removal"
+
+# Nothing in the tool may name a partition outside slot B's boot images:
+# the only writes are dd of=, to a partition the checks found
+grep -nE 'of=' bin/omamobile-boot-update | grep -v 'of="\$dev"' && fail "every dd writes to the checked partition"
+grep -nE 'setrw|blockdev --setro|mkfs|sgdisk|parted|fastboot|vbmeta_[ab]? |devinfo |--slot' bin/omamobile-boot-update lib/omamobile-boot-images \
+  | grep -v '^[^:]*:[0-9]*: *#' && fail "no partition-table, guard or fastboot command"
+pass "the only write is dd to a checked partition"
+
+# ---------------------------------------------------------------- descriptors
+descriptor() { # codename soc soc_ids board_id boot_images ufs_rw
+  cat <<EOF
+CODENAME=$1
+NAME="Test $1"
+SOC=$2
+COMPATIBLE="google,$2-$1"
+PACKAGE=omamobile-device-$1
+DTB=exynos/google/$2-$1.dtb
+SOC_IDS="$3"
+DTBO_SOURCE=$1-overlay.dts
+DTBO_BOARD_ID=$4
+DTBO_BOARD_REV=0x10000
+VENDOR_CMDLINE="console=tty0 earlycon=exynos4210,0x10A00000"
+VENDOR_PAGESIZE=0x800
+OS_VERSION=17.0.0
+OS_PATCH_LEVEL=2026-10
+BOOT_IMAGES="$5"
+UFS_RW="$6"
+INITRAMFS_INIT=/initramfs/init
+PANEL_SIZE=1080x2400
+EOF
+}
+FIVE="boot init_boot vendor_boot vendor_kernel_boot dtbo"
+RW5="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+descriptor twelve gs201 "b0:0x9855001 a0:0x9855000" 0x30306 "$FIVE" "$RW5" > "$t/twelve.conf"
+descriptor six gs101 "b0:0x9845001 a0:0x9845000" 0x20304 "boot vendor_boot dtbo" "boot_b vendor_boot_b dtbo_b userdata" > "$t/six.conf"
+load() { bash -c 'die() { echo "$*" >&2; exit 1; }; source "$1/lib/descriptor.sh"; bu_load_descriptor "$2"; echo "$DEV_CODENAME $DEV_MAIN_LUN"' _ "$PKG" "$1"; }
+[[ $(load "$t/twelve.conf") == "twelve sda" ]] || fail "a gs201 descriptor loads (main LUN sda)"
+[[ $(load "$t/six.conf") == "six sda" ]] || fail "a gs101 descriptor loads"
+bad() { # name sed-expression expected-message
+  sed "$2" "$t/twelve.conf" > "$t/bad.conf"
+  local out
+  if out=$(load "$t/bad.conf" 2>&1); then fail "descriptor refused: $1"; fi
+  grep -qF -- "$3" <<<"$out" || fail "descriptor $1: says '$3' (got: $out)"
+}
+bad "persist in UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_b persist userdata"/' "only *_b partitions and userdata"
+bad "slot A in UFS_RW" 's/^UFS_RW=.*/UFS_RW="boot_a init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"/' "not boot_a"
+bad "vbmeta_b in UFS_RW" 's/^UFS_RW=.*/UFS_RW="vbmeta_b boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"/' "not vbmeta_b"
+bad "no userdata" 's/ userdata"/"/' "must include userdata"
+bad "a name twice" 's/^UFS_RW="boot_b /UFS_RW="boot_b boot_b /' "names boot_b twice"
+bad "an image off the allowlist" 's/^UFS_RW=.*/UFS_RW="boot_b init_boot_b vendor_boot_b dtbo_b userdata"/' "vendor_kernel_boot_b is not in UFS_RW"
+bad "userdata as an image" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot vendor_boot dtbo userdata"/' "is not in UFS_RW"
+bad "BOOT_IMAGES without dtbo" 's/^BOOT_IMAGES=.*/BOOT_IMAGES="boot init_boot vendor_boot vendor_kernel_boot"/' "must include dtbo"
+bad "the Qualcomm chain" '$a BOOT_METHOD=qcom-abl' "no slot-B update path"
+bad "RAM-only" '$a BOOT_METHOD=ram-only' "no slot-B update path"
+bad "shell in a value" 's/^NAME=.*/NAME="$(reboot)"/' "not a KEY=value line"
+bad "backticks" 's/^SOC=.*/SOC=`id`/' "not a KEY=value line"
+bad "no COMPATIBLE" '/^COMPATIBLE=/d' "COMPATIBLE is missing"
+bad "a DTB outside dtbs" 's|^DTB=.*|DTB=../../../etc/x.dtb|' "relative .dtb path"
+bad "AVB size off a block" '$a AVB_FOOTERS="boot:4097"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05' "multiple of 4096"
+bad "AVB without its index" '$a AVB_FOOTERS="boot:0x4000000"' "needs AVB_ROLLBACK_INDEX"
+bad "AVB for a missing image" '$a AVB_FOOTERS="userdata:0x4000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-10-05' "not in BOOT_IMAGES"
+bad "a bad main LUN" '$a MAIN_LUN=sda1' "MAIN_LUN must be"
+bad "both SoC keys" '$a SOC_COMPATIBLE="b0-foplp:0x9865:1:0:0"' "exclusive"
+bad "a bad overlay name" '$a DTB_OVERLAYS="ok ../evil"' "bad overlay name"
+pass "descriptors are read as data, with bin/omamobile's rules, and slot A, vbmeta, persist and the rest refused"
+
+# ---------------------------------------------------------------- tools
+# The real ones where installed (FAKE_TOOLS=1: never); otherwise stand-ins
+# with the same calls.
+fake=$t/fake && mkdir -p "$fake"
+find_dtc() {
+  local d
+  for d in ${DTC:-} "$(command -v dtc || true)" "$HOME"/omamobile-kernel/out*/scripts/dtc/dtc "$HOME"/android/mainline/out*/scripts/dtc/dtc; do
+    [[ -n $d && -x $d ]] && { readlink -f "$d"; return 0; }
+  done
+  return 0
+}
+DTC_BIN=$(find_dtc)
+FDTOVERLAY_BIN=
+if [[ -n $DTC_BIN ]]; then
+  for f in "${FDTOVERLAY:-}" "$(command -v fdtoverlay || true)" "$(dirname "$DTC_BIN")/fdtoverlay"; do
+    [[ -n $f && -x $f ]] && { FDTOVERLAY_BIN=$(readlink -f "$f"); break; }
+  done
+fi
+if [[ -z ${FAKE_TOOLS:-} ]] && command -v lz4 >/dev/null; then LZ4_BIN=$(command -v lz4); else
+  # lz4's calls in these tools: -l -9 [-f] -q IN OUT, -l -9 -q (stdin), -dc FILE
+  cat > "$fake/lz4" <<'EOF'
+#!/usr/bin/env python3
+import sys
+a = [x for x in sys.argv[1:] if not x.startswith("-")]
+if "-dc" in sys.argv:
+    data = open(a[0], "rb").read()
+    assert data.startswith(b"FAKELZ4\n"), "not lz4"
+    sys.stdout.buffer.write(data[8:])
+else:
+    data = open(a[0], "rb").read() if a else sys.stdin.buffer.read()
+    out = open(a[1], "wb") if len(a) > 1 else sys.stdout.buffer
+    out.write(b"FAKELZ4\n" + data)
+EOF
+  chmod +x "$fake/lz4"; LZ4_BIN=$fake/lz4
+fi
+if [[ -z ${FAKE_TOOLS:-} ]] && command -v mkbootimg >/dev/null; then MKBOOTIMG_BIN=$(command -v mkbootimg); else
+  # A stand-in: the arguments and every input file's bytes, deterministic
+  cat > "$fake/mkbootimg" <<'EOF'
+#!/usr/bin/env python3
+import sys
+args, out, body = sys.argv[1:], None, b""
+for i, x in enumerate(args):
+    if x in ("--output", "--vendor_boot"):
+        out = args[i + 1]
+for i, x in enumerate(args):
+    if x in ("--kernel", "--ramdisk", "--dtb", "--vendor_ramdisk_fragment"):
+        body += open(args[i + 1], "rb").read()
+hdr = " ".join(a for a in args if a not in (out,) and not a.startswith("/")).encode()
+open(out, "wb").write(b"FAKEBOOT\n" + hdr + b"\n" + body)
+EOF
+  chmod +x "$fake/mkbootimg"; MKBOOTIMG_BIN=$fake/mkbootimg
+fi
+if [[ -z ${FAKE_TOOLS:-} ]] && command -v avbtool >/dev/null; then AVBTOOL_BIN=$(command -v avbtool); else
+  cat > "$fake/avbtool" <<'EOF'
+#!/usr/bin/env python3
+import sys
+a = sys.argv[1:]
+if a[0] == "version":
+    print("fakeavbtool 0"); sys.exit(0)
+img = a[a.index("--image") + 1]; size = int(a[a.index("--partition_size") + 1])
+data = open(img, "rb").read()
+foot = b"AVBf" + " ".join(x for x in a if not x.startswith("/")).encode()
+pad = size - len(data) - len(foot)
+assert pad >= 0
+open(img, "wb").write(data + b"\0" * pad + foot)
+EOF
+  chmod +x "$fake/avbtool"; AVBTOOL_BIN=$fake/avbtool
+fi
+if [[ -z ${FAKE_TOOLS:-} ]] && command -v openssl >/dev/null; then OPENSSL_BIN=$(command -v openssl); else
+  printf '#!/bin/sh\n[ "$1" = genrsa ] && [ "$2" = -out ] && echo FAKEKEY > "$3"\n' > "$fake/openssl"
+  chmod +x "$fake/openssl"; OPENSSL_BIN=$fake/openssl
+fi
+export LZ4=$LZ4_BIN MKBOOTIMG=$MKBOOTIMG_BIN AVBTOOL=$AVBTOOL_BIN OPENSSL=$OPENSSL_BIN
+echo "# tools: dtc=${DTC_BIN:-none} fdtoverlay=${FDTOVERLAY_BIN:-none} lz4=$LZ4 mkbootimg=$MKBOOTIMG avbtool=$AVBTOOL"
+
+# A release initramfs: an allowlist, an init, no SSH keys
+mkinitramfs() { # out ufs_rw [extra-path]
+  local s=$t/initramfs-stage
+  rm -rf "$s" && mkdir -p "$s/etc"
+  echo '#!/bin/sh' > "$s/init"
+  echo "$2" > "$s/etc/omamobile-ufs-rw"
+  if [[ -n ${3:-} ]]; then mkdir -p "$s/${3%/*}"; echo key > "$s/$3"; fi
+  (cd "$s" && find . | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet) | "$LZ4" -l -9 -q > "$1"
+}
+
+# ---------------------------------------------------------------- the builder
+if [[ -n $DTC_BIN ]]; then
+  export DTC=$DTC_BIN
+  [[ -z $FDTOVERLAY_BIN ]] || export FDTOVERLAY=$FDTOVERLAY_BIN
+  K=$t/k && mkdir -p "$K/dtbs/exynos/google" "$K/dev/overlays" "$K/modules/kernel/drivers"
+  head -c 300000 /dev/urandom > "$K/Image"
+  for d in "gs201-twelve 0x9855001" "gs101-six 0x9845001"; do
+    set -- $d
+    printf '/dts-v1/;\n/ {\n\tsoc_id = <%s 0x00>;\n\tcompatible = "google,%s";\n\t#address-cells = <2>;\n\t#size-cells = <1>;\n\tect { };\n\tchosen { bootargs = ""; };\n};\n' "$2" "$1" \
+      | "$DTC" -q -@ -I dts -O dtb -o "$K/dtbs/exynos/google/$1.dtb" -
+  done
+  printf '/dts-v1/;\n/plugin/;\n&{/chosen} {\n\tomamobile-test = "overlaid";\n};\n' | "$DTC" -q -@ -I dts -O dtb -o "$K/dev/overlays/test-node.dtbo" -
+  head -c 5000 /dev/urandom > "$K/dev/dtbo.img"
+  mkinitramfs "$K/dev/initramfs.cpio.lz4" "$RW5"
+  head -c 2000 /dev/urandom > "$K/modules/kernel/drivers/pmic-one.ko"
+  head -c 2000 /dev/urandom > "$K/modules/kernel/drivers/pmic-two.ko"
+  cp avb/testkey_rsa4096.pem "$K/key.pem"
+  bi() { "$PKG/lib/omamobile-boot-images" --kernel "$K/Image" --dtbs "$K/dtbs" --dtbo "$K/dev/dtbo.img" \
+           --initramfs "$K/dev/initramfs.cpio.lz4" --avb-key "$K/key.pem" "$@" > "$t/bi.log" 2>&1; }
+  ls_imgs() { (cd "$1" && ls *.img | tr '\n' ' '); }
+
+  printf 'AVB_FOOTERS="boot:0x2000000 init_boot:0x100000"\nAVB_ROLLBACK_INDEX=1783209600\nAVB_SECURITY_PATCH=2026-07-05\n' > "$t/avb.txt"
+  cat "$t/twelve.conf" "$t/avb.txt" > "$t/twelve-avb.conf"
+  bi --descriptor "$t/twelve-avb.conf" --out "$t/o1" || { cat "$t/bi.log"; fail "the builder packs a gs201-style set"; }
+  [[ $(ls_imgs "$t/o1") == "boot.img dtb.img dtbo.img init_boot.img vendor_boot.img vendor_kernel_boot.img " ]] \
+    || fail "gs201 set: five images and dtb.img (got $(ls_imgs "$t/o1"))"
+  [[ $(stat -c %s "$t/o1/boot.img") == $((0x2000000)) && $(stat -c %s "$t/o1/init_boot.img") == $((0x100000)) ]] \
+    || fail "AVB_FOOTERS images are padded to their partition sizes"
+  cmp -s "$t/o1/dtbo.img" "$K/dev/dtbo.img" || fail "dtbo.img is the device package's"
+  [[ $(cat "$t/o1/DEVICE") == twelve ]] || fail "the builder records the device"
+  cat "$t/o1/twelve-b0.dtb" "$t/o1/twelve-a0.dtb" | cmp -s - "$t/o1/dtb.img" || fail "dtb.img holds one copy per soc_id, in order"
+  "$DTC" -q -I dtb -O dts "$t/o1/twelve-a0.dtb" | grep -c 'soc_id = <0x9855000 ' >/dev/null || fail "the second copy carries the rewritten soc_id"
+  cmp -s "$t/o1/initramfs.cpio.lz4" "$K/dev/initramfs.cpio.lz4" 2>/dev/null && fail "no stray ramdisk"
+  [[ ! -e $t/o1/initramfs.cpio.lz4 ]] || fail "without keys or modules the device package's initramfs goes in as it is"
+  bi --descriptor "$t/twelve-avb.conf" --out "$t/o2" || fail "a second build"
+  (cd "$t/o1" && sha256sum *.img) > "$t/s1"; (cd "$t/o2" && sha256sum *.img) > "$t/s2"
+  cmp -s "$t/s1" "$t/s2" || fail "two builds from the same inputs give the same bytes"
+  pass "builder: gs201 set with AVB footers, soc_id copies, the shipped dtbo, deterministic"
+
+  bi --descriptor "$t/six.conf" --out "$t/o3" || { cat "$t/bi.log"; fail "the builder packs a gs101-style set"; }
+  [[ $(ls_imgs "$t/o3") == "boot.img dtb.img dtbo.img vendor_boot.img " ]] || fail "gs101 set: boot, vendor_boot, dtbo (got $(ls_imgs "$t/o3"))"
+  pass "builder: gs101 set (no init_boot or vendor_kernel_boot)"
+
+  if [[ -n $FDTOVERLAY_BIN ]]; then
+    { cat "$t/twelve.conf"; echo 'DTB_OVERLAYS="test-node"'; } > "$t/twelve-ov.conf"
+    if bi --descriptor "$t/twelve-ov.conf" --out "$t/o4"; then fail "DTB_OVERLAYS without --overlays is refused"; fi
+    bi --descriptor "$t/twelve-ov.conf" --out "$t/o4" --overlays "$K/dev/overlays" || { cat "$t/bi.log"; fail "overlays apply"; }
+    "$DTC" -q -I dtb -O dts "$t/o4/twelve-b0.dtb" | grep -c 'omamobile-test = "overlaid"' >/dev/null || fail "the overlay is in the shipped DTB"
+    "$DTC" -q -I dtb -O dts "$t/o4/twelve-a0.dtb" | grep -c 'omamobile-test = "overlaid"' >/dev/null || fail "and in its soc_id copy"
+    pass "builder: DTB_OVERLAYS applied onto the release's DTB, in every copy"
+  else
+    pass "builder: DTB_OVERLAYS # SKIP no fdtoverlay"
+  fi
+
+  # The owner's keys and INITRAMFS_MODULES go in a second cpio in the same
+  # lz4 stream; the shipped archive comes first, unchanged
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyOnly owner\n' > "$t/keys"
+  { cat "$t/six.conf"; echo 'INITRAMFS_MODULES="pmic-two pmic-one"'; } > "$t/six-mod.conf"
+  if bi --descriptor "$t/six-mod.conf" --out "$t/o5"; then fail "INITRAMFS_MODULES without --modules is refused"; fi
+  bi --descriptor "$t/six-mod.conf" --out "$t/o5" --modules "$K/modules" --authorized-keys "$t/keys" || { cat "$t/bi.log"; fail "keys and modules append"; }
+  "$LZ4" -dc "$t/o5/initramfs.cpio.lz4" > "$t/rd.cpio"
+  "$LZ4" -dc "$K/dev/initramfs.cpio.lz4" > "$t/shipped.cpio"
+  cmp -n "$(stat -c %s "$t/shipped.cpio")" "$t/rd.cpio" "$t/shipped.cpio" || fail "the shipped archive comes first, byte for byte"
+  tail -c +$(($(stat -c %s "$t/shipped.cpio") + 1)) "$t/rd.cpio" > "$t/extra.cpio"
+  list=$(cpio -it --quiet < "$t/extra.cpio" | LC_ALL=C sort | tr '\n' ' ')
+  [[ $list == "lib lib/modules lib/modules/omamobile lib/modules/omamobile/order lib/modules/omamobile/pmic-one.ko lib/modules/omamobile/pmic-two.ko root root/.ssh root/.ssh/authorized_keys " ]] \
+    || fail "the appended archive holds the keys and the modules only (got $list)"
+  [[ $(cd "$t" && cpio -i --quiet --to-stdout lib/modules/omamobile/order < extra.cpio | tr '\n' ' ') == "pmic-two pmic-one " ]] \
+    || fail "the modules load in the descriptor's order"
+  cpio -i --quiet --to-stdout root/.ssh/authorized_keys < "$t/extra.cpio" | cmp -s - "$t/keys" || fail "the owner's keys, verbatim"
+  cpio -itv --quiet < "$t/extra.cpio" | grep -E 'root/\.ssh/authorized_keys$' | grep -c '^-rw-------' >/dev/null || fail "authorized_keys is mode 600"
+  bi --descriptor "$t/six-mod.conf" --out "$t/o6" --modules "$K/modules" --authorized-keys "$t/keys"
+  cmp -s "$t/o5/vendor_boot.img" "$t/o6/vendor_boot.img" || fail "the appended archive is reproducible"
+  pass "builder: the owner's authorized_keys and the release's INITRAMFS_MODULES appended, reproducibly"
+else
+  pass "builder # SKIP no dtc (install dtc, or set DTC to a kernel build's scripts/dtc/dtc)"
+fi
+
+# ---------------------------------------------------------------- the writer
+# A stand-in builder, so the write path is tested on any machine: each image
+# is its name and the kernel's checksum, an AVB image padded to its size.
+stub=$t/stublib && mkdir -p "$stub"
+cp lib/descriptor.sh "$stub/"
+cat > "$stub/omamobile-boot-images" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+die() { echo "stub: $*" >&2; exit 1; }
+source "$(dirname "$0")/descriptor.sh"
+args=("$@")
+while (($#)); do
+  case $1 in
+    --descriptor) d=$2 ;; --kernel) k=$2 ;; --out) o=$2 ;; --authorized-keys) keys=$2 ;;
+  esac
+  shift
+done
+printf '%s\n' "${args[*]}" >> "$(dirname "$0")/calls"
+bu_load_descriptor "$d"
+rm -rf "$o"; mkdir -p "$o"
+for img in $DEV_BOOT_IMAGES; do
+  printf 'IMG %s %s %s\n' "$img" "$(sha256sum < "$k" | cut -c1-16)" "${STUB_EXTRA:-}" > "$o/$img.img"
+  head -c "${STUB_PAD:-3000}" /dev/zero >> "$o/$img.img"
+  size=$(bu_avb_size "$img")
+  [[ -z $size ]] || truncate -s "$size" "$o/$img.img"
+done
+echo "$DEV_CODENAME" > "$o/DEVICE"
+EOF
+chmod +x "$stub/omamobile-boot-images"
+export OMAMOBILE_BOOT_UPDATE_LIB=$stub OMAMOBILE_BOOT_AVB_TESTKEY=$PKG/avb/testkey_rsa4096.pem
+U=$PKG/bin/omamobile-boot-update
+
+PARTS="boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b vbmeta_b devinfo persist efs userdata"
+mkroot() { # R
+  local R=$1 i=0 p
+  rm -rf "$R"
+  mkdir -p "$R/usr/share/omamobile" "$R/proc/device-tree" "$R/dev" "$R/etc/omamobile" "$R/usr/lib/omamobile/twelve" \
+    "$R/sys/block/sda" "$R/sys/block/sdb/sdb1" "$R/root/.ssh"
+  cat "$t/twelve.conf" > "$R/usr/share/omamobile/device.conf"
+  printf 'AVB_FOOTERS="boot:0x40000 init_boot:0x20000"\nAVB_ROLLBACK_INDEX=1783209600\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$R/usr/share/omamobile/device.conf"
+  printf 'google,gs201-twelve\0google,gs201\0' > "$R/proc/device-tree/compatible"
+  echo 'console=null androidboot.slot_suffix=_b panic=10' > "$R/proc/cmdline"
+  for p in $PARTS; do
+    i=$((i + 1))
+    mkdir -p "$R/sys/block/sda/sda$i"
+    printf 'MAJOR=8\nMINOR=%d\nDEVNAME=sda%d\nDEVTYPE=partition\nPARTN=%d\nPARTNAME=%s\n' "$i" "$i" "$i" "$p" > "$R/sys/block/sda/sda$i/uevent"
+    case $p in boot_b|init_boot_b|vendor_boot_b|vendor_kernel_boot_b|dtbo_b|userdata) echo 0 ;; *) echo 1 ;; esac > "$R/sys/block/sda/sda$i/ro"
+    case $p in boot_*) s=0x40000 ;; init_boot_*) s=0x20000 ;; *) s=0x10000 ;; esac
+    echo $((s / 512)) > "$R/sys/block/sda/sda$i/size"
+    echo '0 0 0 0 0 0 0 0 0 0 0' > "$R/sys/block/sda/sda$i/stat"
+    # Old contents: every partition distinct, so any stray write shows
+    { printf "OLD %s\n" "$p"; head -c $((s)) /dev/zero | tr "\0" o; } | head -c $((s)) > "$R/dev/sda$i"
+  done
+  mkdir -p "$R/sys/block/sda/queue" && echo 1 > "$R/sys/block/sda/queue/iostats"
+  printf 'MAJOR=8\nPARTNAME=bootloader_b\n' > "$R/sys/block/sdb/sdb1/uevent"; echo 1 > "$R/sys/block/sdb/sdb1/ro"; echo 128 > "$R/sys/block/sdb/sdb1/size"
+  echo BOOTLOADER > "$R/dev/sdb1"
+  head -c 5000 /dev/urandom > "$R/usr/lib/omamobile/twelve/dtbo.img"
+  mkinitramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" "$RW5"
+  addrel "$R" 7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa
+  # The running kernel's own tree (pushed or packaged earlier)
+  mkdir -p "$R/usr/lib/modules/7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb/kernel"
+  echo old-module > "$R/usr/lib/modules/7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb/kernel/x.ko"
+  echo 'AUTO_WRITE=yes' > "$R/etc/omamobile/boot-update.conf"
+  echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyOnly owner' > "$R/root/.ssh/authorized_keys"
+  battery "$R" 64 Discharging 0
+}
+addrel() { # R release
+  local m=$1/usr/lib/modules/$2
+  mkdir -p "$m/dtbs/exynos/google" "$m/kernel"
+  printf 'KERNEL %s\n' "$2" > "$m/vmlinuz"
+  echo linux-omamobile > "$m/pkgbase"
+  echo dep > "$m/modules.dep"; echo bin > "$m/modules.dep.bin"
+  echo dtb > "$m/dtbs/exynos/google/gs201-twelve.dtb"
+  # linux-omamobile's install names the release it installed
+  mkdir -p "$1/usr/share/omamobile/linux"
+  echo "$2" > "$1/usr/share/omamobile/linux/kernel.release"
+}
+battery() { # R percent status online
+  rm -rf "$1/sys/class/power_supply"
+  mkdir -p "$1/sys/class/power_supply/battery" "$1/sys/class/power_supply/usb"
+  echo Battery > "$1/sys/class/power_supply/battery/type"; echo 1 > "$1/sys/class/power_supply/battery/present"
+  echo "$2" > "$1/sys/class/power_supply/battery/capacity"; echo "$3" > "$1/sys/class/power_supply/battery/status"
+  echo USB > "$1/sys/class/power_supply/usb/type"; echo "$4" > "$1/sys/class/power_supply/usb/online"
+}
+sums() { (cd "$1/dev" && sha256sum sd*); }
+# A restart: the kernel's write counters start at 0 again
+reboot_counters() { local f; for f in "$1"/sys/block/sda/sda*/stat; do echo '0 0 0 0 0 0 0 0 0 0 0' > "$f"; done; }
+# Another writer (push, a hand dd) since this boot: the bytes and the counter
+outside_write() { # R partname text
+  local p; p=$(part "$1" "$2")
+  printf '%s\n' "$3" | dd of="$p" conv=notrunc status=none
+  awk '{ $7 += 8; print }' "$1/sys/block/sda/${p##*/}/stat" > "$t/stat.new" && mv "$t/stat.new" "$1/sys/block/sda/${p##*/}/stat"
+}
+part() { local s; for s in "$1"/sys/block/sda/sda*; do grep -qx "PARTNAME=$2" "$s/uevent" && { echo "$1/dev/${s##*/}"; return; }; done; }
+img_on() { # R partname: the partition starts with an image line
+  head -c 4 "$(part "$1" "$2")"
+}
+R=$t/root
+export OMAMOBILE_BOOT_ROOT=$R OMAMOBILE_BOOT_UNAME_R=7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb
+export DEPMOD=$fake/depmod
+printf '#!/bin/sh\necho "depmod $*" >> "%s/depmod.calls"\n' "$t" > "$fake/depmod"; chmod +x "$fake/depmod"
+run() { "$U" "$@" > "$t/out" 2>&1; }
+refused() { # what expected-message command...
+  local what=$1 msg=$2; shift 2
+  before=$(sums "$R")
+  if run "$@"; then cat "$t/out"; fail "refused: $what"; fi
+  grep -qF -- "$msg" "$t/out" || { cat "$t/out"; fail "$what: says '$msg'"; }
+  [[ $(sums "$R") == "$before" ]] || fail "$what: no partition changed"
+}
+
+# Dry run: the plan, and nothing written anywhere
+mkroot "$R"
+before=$(sums "$R")
+run write --dry-run || { cat "$t/out"; fail "a dry run succeeds"; }
+grep -c 'boot.img .*-> boot_b (sda6).* write$' "$t/out" >/dev/null || { cat "$t/out"; fail "the plan names boot_b by its partition"; }
+grep -c 'Dry run: nothing written' "$t/out" >/dev/null || fail "the dry run says so"
+[[ $(sums "$R") == "$before" ]] || fail "a dry run writes no partition"
+[[ ! -e $R/var/lib/omamobile/boot && ! -e $R/run/omamobile ]] || fail "a dry run leaves no state (no key, no next/, no result)"
+pass "write --dry-run prints the plan and writes nothing, not even state"
+
+# The hook is opt-in
+rm "$R/etc/omamobile/boot-update.conf"
+run hook || fail "the hook without a config exits 0"
+grep -c 'Slot B left alone' "$t/out" >/dev/null || fail "and says slot B is left alone"
+[[ $(sums "$R") == "$before" ]] || fail "the hook without AUTO_WRITE=yes writes nothing"
+grep -c '"result": "skipped"' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the skip is recorded"
+echo 'AUTO_WRITE=no' > "$R/etc/omamobile/boot-update.conf"
+run hook && [[ $(sums "$R") == "$before" ]] || fail "AUTO_WRITE=no writes nothing"
+echo 'AUTO_WRITE=maybe' > "$R/etc/omamobile/boot-update.conf"
+refused "a config it can't read" "expected AUTO_WRITE=yes|no" hook
+printf 'AUTO_WRITE=yes\nREBOOT=yes\n' > "$R/etc/omamobile/boot-update.conf"
+refused "an unknown key" "expected AUTO_WRITE=yes|no" hook
+echo 'AUTO_WRITE=yes' > "$R/etc/omamobile/boot-update.conf"
+pass "the hook writes only with AUTO_WRITE=yes, and refuses a config it can't read"
+
+# Refusals before any write
+printf 'google,gs201-other\0google,gs201\0' > "$R/proc/device-tree/compatible"
+refused "another board" "this board is 'google,gs201-other'" hook
+printf 'google,gs201-twelve\0google,gs201\0' > "$R/proc/device-tree/compatible"
+echo 'androidboot.slot_suffix=_a' > "$R/proc/cmdline"
+refused "a boot from slot A" "slot A" hook
+echo 'console=null panic=10' > "$R/proc/cmdline"
+refused "a boot that names no slot" "says this boot is from slot B" hook
+printf 'androidboot.slot_suffix = "_b"\n' > "$R/proc/bootconfig"
+run write --dry-run || { cat "$t/out"; fail "slot B named in /proc/bootconfig (as on cheetah) is enough"; }
+rm "$R/proc/bootconfig"
+echo 'androidboot.slot_suffix=_b' > "$R/proc/cmdline"
+vb=$(part "$R" vendor_boot_b); echo 1 > "$R/sys/block/sda/${vb##*/}/ro"
+refused "a read-only partition" "(vendor_boot_b) is read-only" hook
+echo 0 > "$R/sys/block/sda/${vb##*/}/ro"
+mv "$R/sys/block/sda/${vb##*/}/uevent" "$t/uevent.vb"
+refused "a missing partition" "vendor_boot_b not found" hook
+mv "$t/uevent.vb" "$R/sys/block/sda/${vb##*/}/uevent"
+db=$(part "$R" dtbo_b); cp "$R/sys/block/sda/${db##*/}/uevent" "$R/sys/block/sda/sda14/uevent.x"
+sed -i 's/PARTNAME=persist/PARTNAME=dtbo_b/' "$R/sys/block/sda/sda13/uevent"
+refused "a GPT name twice" "dtbo_b appears 2 times" hook
+sed -i 's/PARTNAME=dtbo_b/PARTNAME=persist/' "$R/sys/block/sda/sda13/uevent"; rm -f "$R/sys/block/sda/sda14/uevent.x"
+echo 4 > "$R/sys/block/sda/${db##*/}/size"
+refused "an image larger than its partition" "dtbo.img (3" hook
+echo $((0x10000 / 512)) > "$R/sys/block/sda/${db##*/}/size"
+bt=$(part "$R" boot_b); echo $((0x80000 / 512)) > "$R/sys/block/sda/${bt##*/}/size"
+refused "an AVB size that is not the partition's" "AVB_FOOTERS pads boot" hook
+echo $((0x40000 / 512)) > "$R/sys/block/sda/${bt##*/}/size"
+mv "$bt" "$t/boot_b.dev"; ln -s "$t/boot_b.dev" "$bt"
+refused "a node that is not the partition" "is not a regular file" hook
+rm "$bt"; mv "$t/boot_b.dev" "$bt"
+sed -i 's/^UFS_RW=.*/UFS_RW="boot_b init_boot_b vendor_kernel_boot_b dtbo_b userdata"/' "$R/usr/share/omamobile/device.conf"
+refused "an image the allowlist doesn't name" "vendor_boot_b is not in UFS_RW" hook
+sed -i "s/^UFS_RW=.*/UFS_RW=\"$RW5\"/" "$R/usr/share/omamobile/device.conf"
+mkinitramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" "boot_b userdata"
+refused "an initramfs with another allowlist" "initramfs allowlist ('boot_b userdata')" hook
+mkinitramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" "$RW5" root/.ssh/authorized_keys
+refused "an initramfs with developer keys" "developer SSH keys" hook
+mkinitramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" "$RW5"
+mv "$R/usr/lib/omamobile/twelve/dtbo.img" "$t/dtbo.keep"
+refused "a device package without its boot files" "does not ship its boot files" hook
+mv "$t/dtbo.keep" "$R/usr/lib/omamobile/twelve/dtbo.img"
+rm "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa/modules.dep"
+refused "a release depmod hasn't seen" "depmod has not run" hook
+echo dep > "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa/modules.dep"
+echo linux-other > "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa/pkgbase"
+refused "no linux-omamobile release" "no kernel package release" hook
+echo linux-omamobile > "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa/pkgbase"
+mv "$R/usr/share/omamobile/linux/kernel.release" "$t/marker.keep"
+refused "no linux-omamobile installed (no release marker)" "kernel.release is missing" hook
+echo 7.3.0-rc6-omamobile-g999999999999 > "$R/usr/share/omamobile/linux/kernel.release"
+refused "a marker naming a release that isn't there" "there is no $R/usr/lib/modules/7.3.0-rc6-omamobile-g999999999999/vmlinuz" hook
+mv "$t/marker.keep" "$R/usr/share/omamobile/linux/kernel.release"
+battery "$R" 12 Discharging 0
+refused "a low battery" "battery at 12%" hook
+battery "$R" 64 Discharging 0
+refused "a manual write without --yes, not in a terminal" "needs --yes" write
+refused "unknown arguments" "unknown argument --slot=a" write --slot=a
+mkdir -p "$R/var/lib/omamobile/boot"
+( flock -n 9; refused "a second run at the same time" "another omamobile-boot-update is running" hook ) 9> "$R/var/lib/omamobile/boot/.lock"
+[[ ! -e $R/var/lib/omamobile/boot/previous ]] || fail "no refusal saved anything"
+pass "refusals before any write: board, slot A or no slot named, read-only, missing or doubled partitions, sizes, AVB size, symlinks, allowlist, initramfs, release, depmod, battery, confirmation, lock"
+
+# The write
+battery "$R" 12 Discharging 1   # low, but charging: allowed
+declare -A old=()
+for p in $PARTS; do old[$p]=$(sha256sum < "$(part "$R" "$p")"); done
+run hook || { cat "$t/out"; fail "the hook writes slot B"; }
+for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b; do
+  [[ $(img_on "$R" $p) == "IMG " ]] || fail "$p holds its new image"
+  img=${p%_b}
+  grep -c "^IMG $img " "$(part "$R" $p)" >/dev/null || fail "$p holds $img.img, not another image"
+done
+for p in boot_a init_boot_a vendor_boot_a vendor_kernel_boot_a dtbo_a vbmeta_b devinfo persist efs userdata; do
+  [[ $(sha256sum < "$(part "$R" "$p")") == "${old[$p]}" ]] || fail "$p is untouched"
+done
+[[ $(cat "$R/dev/sdb1") == BOOTLOADER ]] || fail "the bootloader LUN is untouched"
+[[ $(stat -c %s "$(part "$R" boot_b)") == $((0x40000)) ]] || fail "the partition keeps its size (no truncation)"
+grep -c 'written and verified' "$t/out" >/dev/null || fail "each image is verified"
+grep -c 'Restart the phone' "$t/out" >/dev/null || fail "it says a restart boots it, and doesn't reboot"
+S=$R/var/lib/omamobile/boot
+[[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb && $(cat "$S/previous/BOOTED") == yes ]] || fail "previous names the release that booted"
+for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
+  [[ $(sha256sum < "$S/previous/$p.img") == "${old[${p}_b]}" ]] || fail "previous/$p.img is slot B's old partition, whole"
+done
+[[ $(cat "$S/previous/modules/7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb/kernel/x.ko") == old-module ]] || fail "previous keeps the old release's modules"
+[[ $(cat "$S/current/RELEASE") == 7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa ]] || fail "current names the release written"
+[[ ! -e $S/incomplete && ! -e $S/next ]] || fail "no incomplete marker, next/ cleared"
+grep -c '"result": "written"' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the result is recorded for omamobile-update"
+grep -c -- "--authorized-keys $R/root/.ssh/authorized_keys" "$stub/calls" >/dev/null || fail "the owner's keys go to the builder"
+grep -c -- "--avb-key $PKG/avb/testkey_rsa4096.pem" "$stub/calls" >/dev/null || fail "AVB footers use AOSP's test key, as bin/omamobile images does"
+pass "the hook writes slot B's five images, verifies them, keeps slot A and every other partition, saves the old set and its modules"
+
+# Again: nothing to write
+written=$(sums "$R")
+run hook || fail "a second run succeeds"
+grep -c 'nothing to write' "$t/out" >/dev/null || fail "a second run finds slot B up to date"
+[[ $(sums "$R") == "$written" ]] || fail "and writes nothing"
+pass "identical images are not written again"
+
+# The test key is checked; AVB_KEY= in the config replaces it
+cp "$PKG/avb/testkey_rsa4096.pem" "$t/notkey.pem"; echo x >> "$t/notkey.pem"
+OMAMOBILE_BOOT_AVB_TESTKEY=$t/notkey.pem refused "a test key that isn't AOSP's" "is not AOSP's test key" write --dry-run
+printf 'AUTO_WRITE=yes\nAVB_KEY=%s\n' "$t/notkey.pem" > "$R/etc/omamobile/boot-update.conf"
+: > "$stub/calls"
+run write --dry-run || { cat "$t/out"; fail "AVB_KEY= overrides the key"; }
+grep -c -- "--avb-key $t/notkey.pem" "$stub/calls" >/dev/null || fail "the configured key reaches the builder"
+echo 'AUTO_WRITE=yes' > "$R/etc/omamobile/boot-update.conf"
+pass "AVB footers: AOSP's test key, checked by checksum, or the configured AVB_KEY"
+
+# A newer release while the last one never booted: previous keeps the set
+# that did boot
+addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
+run hook || { cat "$t/out"; fail "a newer release is written"; }
+grep -c 'has not booted' "$t/out" >/dev/null || fail "it says slot B's set never booted"
+[[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "previous still holds the release that booted"
+[[ $(cat "$S/current/RELEASE") == 7.3.0-rc6-omamobile-00460-gcccccccccccc ]] || fail "the release linux-omamobile names is written"
+pass "an unbooted set never replaces the saved set that booted"
+
+# An interrupted write: a dd that corrupts the second image. The hook stops,
+# says so, marks slot B incomplete and keeps previous.
+mkdir -p "$t/baddd"
+cat > "$t/baddd/dd" <<EOF
+#!/bin/bash
+n=\$(cat "$t/dd.count" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n > "$t/dd.count"
+/usr/bin/env -i PATH=/usr/bin:/bin dd "\$@" || exit
+[[ \$n == 2 ]] || exit 0
+for a; do [[ \$a == of=* ]] && printf 'XXXX' | /usr/bin/env -i PATH=/usr/bin:/bin dd of="\${a#of=}" conv=notrunc status=none; done
+exit 0
+EOF
+chmod +x "$t/baddd/dd"
+addrel "$R" 7.3.0-rc6-omamobile-00470-gdddddddddddd
+if PATH=$t/baddd:$PATH run hook; then fail "a verify failure fails the hook"; fi
+grep -c 'verify failed' "$t/out" >/dev/null || { cat "$t/out"; fail "a bad read-back is named"; }
+[[ -e $S/incomplete ]] || fail "slot B is marked incomplete"
+grep -c '"result": "failed"' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the failure is recorded"
+[[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "previous survives the failed write"
+# A later write completes the set without touching previous
+run hook || { cat "$t/out"; fail "writing again after a failure"; }
+grep -c 'did not finish' "$t/out" >/dev/null || fail "it says the earlier write did not finish"
+[[ ! -e $S/incomplete && $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "the set completes, previous kept"
+pass "an interrupted write stops with the error, leaves previous, and a later write completes"
+
+# Rollback: the saved partitions and their release's modules come back
+rm -rf "$R/usr/lib/modules/7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb"
+run rollback --dry-run || { cat "$t/out"; fail "rollback --dry-run"; }
+[[ $(img_on "$R" boot_b) == "IMG " ]] || fail "a rollback dry run writes nothing"
+run rollback --yes || { cat "$t/out"; fail "rollback"; }
+for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b; do
+  [[ $(sha256sum < "$(part "$R" $p)") == "${old[$p]}" ]] || fail "rollback restores $p"
+done
+for p in boot_a vbmeta_b devinfo persist efs userdata; do
+  [[ $(sha256sum < "$(part "$R" "$p")") == "${old[$p]}" ]] || fail "rollback leaves $p alone"
+done
+[[ $(cat "$R/usr/lib/modules/7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb/kernel/x.ko") == old-module ]] || fail "rollback restores the modules"
+[[ $(cat "$R/usr/lib/modules/.omamobile-next") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "the module cleanup is told to keep them"
+grep -c 'depmod -a 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb' "$t/depmod.calls" >/dev/null || fail "depmod runs for them"
+grep -c "IgnorePkg = linux-omamobile" "$t/out" >/dev/null || fail "rollback prints how to hold the newer kernel package"
+grep -c "pacman.conf" "$R/var/lib/omamobile/boot/previous/SHA256SUMS" >/dev/null && fail "never"
+[[ ! -e $R/etc/pacman.conf ]] || fail "rollback never edits pacman.conf"
+echo corrupt >> "$S/previous/dtbo.img"
+refused "a saved set that fails its checksums" "fails its checksums" rollback --yes
+pass "rollback writes the saved partitions back (dry run first) and restores their modules"
+
+# Hash-only release names (a release build's uname -r) after an upgrade:
+# kernel-modules-hook has put back a full copy of the running release,
+# vmlinuz and pkgbase included, and here the old one sorts higher. The hook
+# writes the release the package names.
+mkroot "$R"
+rm -rf "$R/usr/lib/modules/7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa"
+old_rel=7.3.0-rc6-omamobile-gf0f0f0f0f0f0 new_rel=7.3.0-rc6-omamobile-g1a2b3c4d5e6f
+addrel "$R" "$old_rel"   # kernel-modules-hook's copy of the running release
+addrel "$R" "$new_rel"   # the upgrade, whose install writes the marker last
+[[ $(printf '%s\n' "$new_rel" "$old_rel" | sort -V | tail -1) == "$old_rel" ]] || fail "test premise: the old release sorts higher"
+OMAMOBILE_BOOT_UNAME_R=$old_rel run hook || { cat "$t/out"; fail "hash-only releases: the hook writes"; }
+[[ $(cat "$R/var/lib/omamobile/boot/current/RELEASE") == "$new_rel" ]] \
+  || { cat "$t/out"; fail "the release linux-omamobile names is written, not the one sort -V puts last"; }
+grep -c "left alone: $old_rel" "$t/out" >/dev/null || { cat "$t/out"; fail "the other release is named and left alone"; }
+[[ $(cat "$R/var/lib/omamobile/boot/previous/RELEASE") == "$old_rel" ]] || fail "previous holds the running release"
+grep -c '"kernel_changed": true' "$R/run/omamobile/boot-update.json" >/dev/null || fail "a new release is recorded as a kernel change"
+# Booted into it, a device package changes the initramfs: a rewrite of the
+# same release is recorded as boot images only
+OMAMOBILE_BOOT_UNAME_R=$new_rel STUB_EXTRA=new-initramfs run hook || { cat "$t/out"; fail "a rewrite of the running release"; }
+grep -c '"result": "written"' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the rewrite is written"
+grep -c '"kernel_changed": false' "$R/run/omamobile/boot-update.json" >/dev/null || fail "the same release is not recorded as a kernel change"
+pass "hash-only releases: the hook writes the release the package names, never the one that sorts last (kernel-modules-hook's copy)"
+
+# preflight: read-only, for omamobile-update
+mkroot "$R"
+before=$(sums "$R")
+"$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "preflight passes on a ready phone"; }
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["ok"] and d["auto_write"] == "yes", d' "$t/pf" || fail "preflight JSON"
+echo 1 > "$R/sys/block/sda/${vb##*/}/ro"
+if "$U" preflight --json > "$t/pf"; then fail "preflight fails on a read-only partition"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "read-only" in d["problem"], d' "$t/pf" || fail "preflight names the problem"
+echo 0 > "$R/sys/block/sda/${vb##*/}/ro"
+[[ $(sums "$R") == "$before" && ! -e $R/var/lib/omamobile/boot && ! -e $R/run/omamobile ]] || fail "preflight changes nothing"
+# Not enough space: preflight says so before pacman replaces anything, and
+# the write itself refuses before touching a partition
+printf '#!/bin/sh\necho "Filesystem 1-blocks Used Available Capacity Mounted on"\necho "fake 2000000000 1999000000 1000000 100%% /"\n' > "$fake/df-small"
+chmod +x "$fake/df-small"
+if DF=$fake/df-small "$U" preflight --json > "$t/pf"; then fail "preflight fails without space"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "not enough space" in d["problem"], d' "$t/pf" || fail "preflight names the space problem"
+DF=$fake/df-small refused "a write without room for the saved set" "not enough space in" hook
+[[ ! -e $R/var/lib/omamobile/boot/previous ]] || fail "nothing saved without space"
+# A set written but never booted: no kernel update on top of it
+run hook || { cat "$t/out"; fail "a write for the next check"; }
+if "$U" preflight --json > "$t/pf"; then fail "preflight fails while slot B holds a set that never booted"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "not booted yet" in d["problem"], d' "$t/pf" || fail "preflight says to restart first"
+OMAMOBILE_BOOT_UNAME_R=7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa "$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "preflight passes once that set has booted"; }
+pass "preflight answers in JSON and changes nothing; refuses without space, and while slot B holds a set that never booted"
+
+# The documented recovery: the new set doesn't boot, the owner flashes a
+# copy of previous/ by fastboot (here: written onto the _b files, as
+# bin/omamobile flash would) and is back on the running release. current/
+# no longer describes slot B, so it must not block the next kernel update.
+mkroot "$R"
+run hook || { cat "$t/out"; fail "recovery scenario: write K2 while running K1"; }
+for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
+  dd if="$S/previous/$p.img" of="$(part "$R" ${p}_b)" conv=notrunc status=none
+done
+reboot_counters "$R"   # fastboot writes before the boot: nothing counted
+"$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "after a flash of the saved set, preflight passes (the record is stale)"; }
+"$U" status > "$t/st" 2>&1
+grep -c '^slot B: *changed outside omamobile-boot-update' "$t/st" >/dev/null || { cat "$t/st"; fail "status says slot B changed outside the tool"; }
+run rollback --yes || { cat "$t/out"; fail "rollback after the flash"; }
+grep -c 'already holds these images' "$t/out" >/dev/null || fail "the rollback finds the saved set in place"
+[[ $(cat "$S/current/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] || fail "and records it as slot B's set"
+"$U" preflight --json > "$t/pf" || { cat "$t/pf"; fail "preflight passes after the no-op rollback"; }
+"$U" status > "$t/st" 2>&1
+grep -c '^slot B: *7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb$' "$t/st" >/dev/null || { cat "$t/st"; fail "status names the saved release on slot B"; }
+# The next write saves slot B as the set that booted
+addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
+run hook || { cat "$t/out"; fail "the fixed kernel is written after the recovery"; }
+[[ $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb && $(cat "$S/previous/BOOTED") == yes ]] || fail "previous is the running set"
+pass "after the fastboot recovery (or push) a stale record blocks nothing; a no-op rollback records slot B; status says which"
+
+# "Booted" comes from the kernel's write counters, not from a release name
+# S1: running K1, a device-package update rewrites K1's initramfs; with no
+# restart a second update runs the hook: previous keeps the set that booted
+mkroot "$R"
+k1=7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa
+OMAMOBILE_BOOT_UNAME_R=$k1 run hook || { cat "$t/out"; fail "S1: the first same-release write"; }
+[[ $(head -c 10 "$S/previous/boot.img") == "OLD boot_b" ]] || fail "S1: previous holds the set that booted"
+OMAMOBILE_BOOT_UNAME_R=$k1 STUB_EXTRA=second run hook || { cat "$t/out"; fail "S1: the second write"; }
+grep -c 'written since this boot' "$t/out" >/dev/null || { cat "$t/out"; fail "S1: it says slot B was written since this boot"; }
+[[ $(head -c 10 "$S/previous/boot.img") == "OLD boot_b" && $(cat "$S/previous/BOOTED") == yes ]] || fail "S1: previous still holds the set that booted"
+# S2: the hook wrote K2; a push dies after boot_b; an update to K3: the
+# booted K1 set stays saved, not the half-pushed slot B
+mkroot "$R"
+run hook || { cat "$t/out"; fail "S2: K2 written"; }
+outside_write "$R" boot_b HALF-PUSHED
+addrel "$R" 7.3.0-rc6-omamobile-00460-gcccccccccccc
+run hook || { cat "$t/out"; fail "S2: K3 written"; }
+[[ $(head -c 10 "$S/previous/boot.img") == "OLD boot_b" && $(cat "$S/previous/RELEASE") == 7.3.0-rc6-omamobile-00400-gbbbbbbbbbbbb ]] \
+  || fail "S2: previous keeps the K1 set that booted, not the half-pushed slot B"
+# S3: no record; a push writes slot B and the restart doesn't happen; an
+# update: what is saved is marked not booted, and a rollback says so
+mkroot "$R"
+for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b; do outside_write "$R" $p PUSHED; done
+run hook || { cat "$t/out"; fail "S3: the write"; }
+[[ $(cat "$S/previous/BOOTED") == no && $(head -c 6 "$S/previous/boot.img") == PUSHED ]] || fail "S3: the pushed, unbooted set is saved as BOOTED=no"
+run rollback --dry-run || { cat "$t/out"; fail "S3: rollback dry run"; }
+grep -c 'BOOTED=no' "$t/out" >/dev/null || { cat "$t/out"; fail "S3: a rollback says the saved set never booted"; }
+# I/O accounting off: the counters say nothing, so slot B counts as written
+mkroot "$R"
+echo 0 > "$R/sys/block/sda/queue/iostats"
+run hook || { cat "$t/out"; fail "iostats off: the write"; }
+[[ $(cat "$S/previous/BOOTED") == no ]] || fail "iostats off: slot B is not taken as booted"
+grep -c 'I/O accounting off' "$t/out" >/dev/null || { cat "$t/out"; fail "iostats off: and it says why"; }
+# preflight: slot B written since this boot with no booted set saved
+mkroot "$R"
+for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b; do outside_write "$R" $p PUSHED; done
+if "$U" preflight --json > "$t/pf"; then fail "preflight refuses after a push with no booted set saved"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert not d["ok"] and "no set that booted is saved" in d["problem"], d' "$t/pf" || fail "preflight says restart first"
+run hook || { cat "$t/out"; fail "the hook itself still writes"; }
+if "$U" preflight --json > "$t/pf"; then fail "preflight still refuses with previous/ BOOTED=no"; fi
+"$U" status > "$t/st" 2>&1; grep -c '^previous: .*(booted: no)' "$t/st" >/dev/null || { cat "$t/st"; fail "status shows BOOTED"; }
+reboot_counters "$R"
+"$U" preflight --json > "$t/pf" || true
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "no set that booted" not in d["problem"], d' "$t/pf" || fail "after a restart that refusal is gone"
+pass "booted means slot B unwritten since this boot (write counters): a same-release rewrite, a half push and an unbooted push never replace the set that booted"
+
+# End to end with the real builder (the tools above), when dtc is there:
+# slot B ends up holding exactly what omamobile-boot-images makes
+if [[ -n $DTC_BIN ]]; then
+  mkroot "$R"
+  rel=7.3.0-rc6-omamobile-00453-gaaaaaaaaaaaa
+  head -c 100000 /dev/urandom > "$R/usr/lib/modules/$rel/vmlinuz"
+  cp "$K/dtbs/exynos/google/gs201-twelve.dtb" "$R/usr/lib/modules/$rel/dtbs/exynos/google/gs201-twelve.dtb"
+  OMAMOBILE_BOOT_UPDATE_LIB=$PKG/lib "$U" hook > "$t/out" 2>&1 || { cat "$t/out"; fail "end to end: the hook builds and writes with the real builder"; }
+  OMAMOBILE_BOOT_UPDATE_LIB=$PKG/lib "$PKG/lib/omamobile-boot-images" --descriptor "$R/usr/share/omamobile/device.conf" \
+    --kernel "$R/usr/lib/modules/$rel/vmlinuz" --dtbs "$R/usr/lib/modules/$rel/dtbs" --dtbo "$R/usr/lib/omamobile/twelve/dtbo.img" \
+    --initramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" --modules "$R/usr/lib/modules/$rel" \
+    --authorized-keys "$R/root/.ssh/authorized_keys" --avb-key "$PKG/avb/testkey_rsa4096.pem" --out "$t/e2e" >/dev/null 2>&1 \
+    || fail "end to end: the same build by hand"
+  for img in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
+    cmp -s -n "$(stat -c %s "$t/e2e/$img.img")" "$t/e2e/$img.img" "$(part "$R" ${img}_b)" || fail "end to end: ${img}_b holds $img.img"
+  done
+  pass "end to end: the hook builds with the real tools and slot B holds exactly those images"
+else
+  pass "end to end with the real builder # SKIP no dtc"
+fi

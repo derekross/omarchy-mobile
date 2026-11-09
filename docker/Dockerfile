@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Omarchy Mobile build environment: Ubuntu LTS with the LineageOS build packages.
-FROM ubuntu:24.04
+# Pinned by digest (docs/RELEASES.md §9): ubuntu:24.04's multi-arch index on
+# Docker Hub, resolved 2026-11-01. Bump it on purpose, never by a rebuild.
+# The apt packages below still come from the archive of the day the image is
+# built; the kernel build takes make, perl, flex, bison and host libraries
+# from them, and its compiler, linker and host compiler are the pinned
+# Android clang (tools/fetch-toolchain), mounted from the host.
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
 ARG UID=1000
 ARG GID=1000

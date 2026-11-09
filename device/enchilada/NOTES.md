@@ -1,0 +1,189 @@
+<!-- SPDX-License-Identifier: MIT -->
+# OnePlus 6 (enchilada) bring-up notes
+
+Findings from one retail OnePlus 6 (`ONEPLUS A6000`, `oneplus,enchilada`,
+Qualcomm SDM845 / Snapdragon 845), newest first. Claim and discussion:
+[#432](https://github.com/derekross/omarchy-mobile/issues/432). Captures
+(`fastboot getvar all`, the partition map, command lines) stay off the
+repository; facts from them are quoted here. Dates and times are US Eastern
+(UTC−5).
+
+Every entry says how the phone was booted (`fastboot boot` into RAM, or
+the image on `boot_b`) and where its root was (the shared initramfs, or
+the Arch root on `userdata`). Two builds of one kernel were used, both
+Linux `7.1.0-rc1-sdm845` from the
+[sdm845-mainline tree at tag `sdm845-7.1-rc1-r0`][sdm845-tag]
+(`85f1df2a4ec7`) with the qcom-sdm845 kernel configuration that tree is
+distributed with, and the upstream `qcom/sdm845-oneplus-enchilada.dtb`:
+
+- **the first-light kernel**: exactly that;
+- **the netfilter kernel**: the same, plus the six netfilter matches in
+  the 2026-11-05 firewall entry.
+
+linux-omarchy-mobile, which carries the same upstream DTS, has not been
+tried yet; it is next.
+
+[sdm845-tag]: https://gitlab.com/sdm845-mainline/linux/-/tree/sdm845-7.1-rc1-r0
+
+## Slots and what is on them (CONTRIBUTING.md §3.1)
+
+**Slot A does not hold stock Android.** This is a §3.1 event, recorded
+here as the maintainer asked on #432. Putting stock back on slot A is
+outside the project ([the maintainer's decision on #432](https://github.com/derekross/omarchy-mobile/issues/432#issuecomment-6708103355)):
+this tree only writes slot B and `userdata`, and never `vbmeta`. If it is done, it is the owner's own step, with
+OnePlus's own images, and it is recorded on #432 (slot flags before
+and after, what was flashed and from which image, then a fresh
+read-only radio backup). The owner has decided not to restore it, so
+slot A keeps the rescue. This port stays RAM-only (`fastboot boot`)
+until the slot-B install and its CONTRIBUTING.md §3.1 entry are agreed.
+
+| Where | What is there now | How it got there | Storage guard? |
+| --- | --- | --- | --- |
+| `boot_a`, `system_a` | a small Arch Linux ARM rescue root and its kernel | `fastboot flash boot_a` and `fastboot flash system_a`, 2026-11-04, after a third-party Android build had replaced stock OxygenOS | its own, not the shared init: see below |
+| `boot_b` | a header-v0 boot image of this port, netfilter kernel; its command line has no `omamobile.initramfs`, so the shared init hands off to the Arch root on `userdata` | `fastboot flash boot_b`, 2026-11-04 (first-light kernel); again 2026-11-05 16:15 (netfilter kernel) | yes: the shared `initramfs/init`, which leaves `boot_b` read-only (LUN `sde`, see first light) |
+| `dtbo_b` | erased | `fastboot erase dtbo_b`, 2026-11-04: the third-party build's downstream overlays would not apply to a mainline DTB | - |
+| `vendor_a`, `vendor_b`, `odm_a`, `odm_b`, `system_b` | leftovers of the third-party Android build | that build's installer | - |
+| `userdata` | an Arch root built by `bin/omamobile`, with packages added from the rescue (below) | `fastboot flash userdata`, 2026-11-04 | - |
+| bootloader firmware (`xbl`, `abl`, `tz`, `modem`, ...) | OxygenOS firmware, identical on `_a` and `_b` | never written by this port | - |
+
+**Writes made by hand.** Every write below was typed by hand, outside
+`tools/install-phone` and `bin/omamobile` (whose installer path refuses
+`android-v0`), and none will be repeated:
+
+- `fastboot`: `flash boot_a` and `flash system_a` (the rescue),
+  `erase dtbo_b`, `flash userdata`, `flash boot_b` twice, and
+  `--set-active`, which writes the GPT slot flags, to move between A and B.
+- From the rescue, into `userdata`: on the night of 2026-11-04 the
+  image's first 24 KiB were rewritten and the partition's last 1 MiB
+  zeroed, because a nested GPT left from the third-party build kept
+  overwriting the flashed image's head; on 2026-11-05 linux-firmware
+  (`whence`, `atheros`, `qcom`), the device package and a kernel module
+  tree were installed into the Arch root, and ufw enabled there. On
+  `system_a`, the rescue's own root, `systemd-pstore` was enabled.
+
+All of it happened before the maintainer's reply on #432 except the last
+three steps of 2026-11-05: that reply was posted at 16:13 (21:13 UTC),
+and `flash boot_b` (netfilter kernel), `--set-active=a` and the package
+install into `userdata` ran from 16:15 to about 16:20, before I had read
+it. Since then the only commands sent to the phone have been the read-only
+backup, one `fastboot boot` (2026-11-05 16:35), `getvar` and one rescue
+boot to read the slot flags again (below). No
+slot flag is written again until this phone has a per-device entry in
+CONTRIBUTING.md.
+
+**Slot flags** (read-only; `fastboot getvar all`, except the last row):
+
+| Read | `current-slot` | A: successful / unbootable / retry-count | B: successful / unbootable / retry-count |
+| --- | --- | --- | --- |
+| 2026-11-04, before any write of this port | a | no / no / 6 | yes / no / 7 |
+| 2026-11-07 | a | no / no / 5 | no / no / 7 |
+| 2026-11-07, after one more rescue boot, read in the rescue from `sde`'s GPT attributes (`sfdisk --dump`) | a | no / no / 5 | no / no / 7 |
+
+Between the two reads, B lost its successful mark (left by the third-party
+build; `--set-active=b` clears it and nothing of this port marks a slot)
+and A's retry count went from 6 to 5. Neither slot is marked unbootable.
+
+Slot A is not marked successful, but a rescue boot does not spend one of
+its tries here: after one more rescue boot A was still at 5 and B at 7
+([#432](https://github.com/derekross/omarchy-mobile/issues/432#issuecomment-6716747930)). What took A from 6 to 5 between the first two reads is not
+known. Neither slot is near 0.
+
+**The slot-A rescue.** It is not the shared init and has no initramfs (an
+empty ramdisk): the kernel mounts `system_a` from the `root=` that ABL
+appends, and `system_a` is mounted read-write. Its own udev rule
+(`60-rescue-ufs-guard`) sets `ro=1` on every UFS partition except four
+allowed writable ones, `system_a`, `userdata`, `boot_b` and `dtbo_b`, and
+makes read-only every disk holding none of them; it keeps the whole-disk
+nodes. That protects against accidents only. It replaces nothing in this
+tree and goes away if stock is restored.
+
+**With no USB host**, a `fastboot boot` of the shared init gives up after
+20 s and panics, and `panic=10` reboots the phone. ABL then starts the
+active slot, A, which is the rescue.
+
+## 2026-11-05: complete backup
+
+Taken from the slot-A rescue (`boot_a`, `system_a`), read-only. Every
+partition by GPT label except `userdata` (this phone has no `super`),
+both slots: 100 images, with `persist`, `modemst1`, `modemst2` and `fsg`
+never mounted. The sha256 of each raw partition was taken on the phone
+before the copy and checked again after transfer and after decompression;
+99/100 match all three ways. The exception is `system_a`, which was the
+running rescue root, so that copy is live; the image it was flashed from
+is kept beside it. The backup is kept off the repository.
+
+Every firmware partition is byte-identical between `_a` and `_b` (`xbl`,
+`xbl_config`, `abl`, `aop`, `tz`, `hyp`, `devcfg`, `keymaster`,
+`cmnlib`, `cmnlib64`, `qupfw`, `storsec`, `modem`, `dsp`, `bluetooth`,
+`LOGO`), so the two slots' bootloader versions match.
+
+## 2026-11-05: the firewall needs six netfilter matches
+
+**Failure, booted from `boot_b`** (`--set-active=b`, first-light kernel,
+root on `userdata`; 2026-11-04 and again 2026-11-05 15:41): the
+first-light kernel configuration leaves out the xtables matches that
+ufw's rules load through `nft_compat`. Without them `ufw-init` stops at
+`before6.rules` (`-m rt`, `-m hl`) and `before.rules` (`-m limit`),
+firstboot's "services and firewall" step never completes, and the
+half-loaded ruleset blocks new SSH connections on `usb0`.
+
+**Fix, booted with `fastboot boot`** (2026-11-05 16:35, the netfilter
+kernel's `boot_b` image sent to RAM, slot A still active, root on
+`userdata`; no `--set-active`): with the matches built as modules
+(`NETFILTER_XT_MATCH_LIMIT`, `_HL`, `_STATE`, `_OWNER`, `_RECENT` and
+`IP6_NF_MATCH_RT`), firstboot completed, `ufw status` was active with
+`22/tcp on usb0 ALLOW IN` (IPv4 and IPv6), and fresh SSH sessions
+worked. `kernel/configs/omamobile.config` already enables the same
+matches, so linux-omarchy-mobile should not need this.
+
+On the very first boot only, SSH on `usb0` was blocked for about 100 s:
+`ufw.service` starts default-deny about 5 s into boot, and the `usb0`
+rule arrives only when firstboot reaches its firewall step. Later boots
+load the saved rule at once.
+
+## 2026-11-05: Adreno 630 needs this phone's zap shader
+
+Same boot as the firewall fix (`fastboot boot`, netfilter kernel, root on
+`userdata`). With `linux-firmware-qcom`, `qcom/a630_sqe.fw` and
+`qcom/a630_gmu.bin` load. The zap shader the DTB names,
+`qcom/sdm845/OnePlus/enchilada/a630_zap.mbn`, is signed for this phone
+and is not in linux-firmware, so `adreno_load_gpu` fails with `-2` and
+the compositor cannot start. Like the modem's firmware, it has to come
+from the phone's own partitions at install time and is never committed;
+the modem/rmtfs plan will say how, before any radio step.
+
+## 2026-11-04: RAM-only first light
+
+A header-v0 boot image (first-light kernel, gzip `Image` with the DTB
+appended, the shared `initramfs/init` with `omamobile.initramfs`), booted
+with `fastboot boot`. It stayed in the initramfs, mounted nothing, and
+wrote nothing.
+
+- The USB gadget came up about 4 s after `fastboot boot`, and
+  `ssh root@172.16.42.1` worked.
+- The storage guard held: allowlist `boot_b userdata`, every `sd*`
+  partition `ro=1` except `userdata` (`sda17`), `/dev/sda` removed,
+  nothing mounted.
+- **`boot_b` is on LUN `sde`, not `sda`.** The shared guard's `UFS_RW`
+  only looks at `sda`, so `boot_b` and `dtbo_b` stay read-only (seen
+  live). This is the same split as dodge; a LUN-aware `UFS_RW` will be its
+  own shared pull request.
+- msm DRM came up (`fb0` is `msmdrmfb`).
+- ABL appends `root=PARTUUID=<system_a> skip_initramfs ro init=/init` to
+  the command line even on `fastboot boot`. The shared init runs as PID 1
+  regardless, so it needs no change.
+
+## Stock facts (2026-11-04, before the port)
+
+- Model `ONEPLUS A6000`; fastboot `product` `sdm845`, `variant` `SDM UFS`;
+  `slot-count` 2; `max-download-size` 805306368 (768 MiB).
+  `FASTBOOT_PRODUCT=sdm845` is the SoC name, not the phone's: any SDM845
+  phone may report it, so it never identifies this phone by itself.
+- Bootloader unlocked, EDK2-based ABL; `qcom,msm-id` 0x141
+  (`androidboot.platform_id=321`).
+- Boot images: Android boot image header v0, page size 4096, gzip kernel
+  with the DTB appended; no `vendor_boot`, no `init_boot`. The header
+  offsets are in `device.conf`.
+- UFS: `userdata` is `sda17` (fastboot reports it as f2fs); `boot_*`, `dtbo_*`
+  and `vbmeta_*` are on LUN `sde`.
+- Panel: Samsung `sofef00` command-mode DSI, 1080x2280.

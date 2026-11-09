@@ -32,6 +32,10 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   cmp -s etc/omamobile-mirrorlist ../omamobile-device-cheetah/etc/omamobile-mirrorlist \
     || fail "the mirrorlist drifted from the cheetah package"
   pass "the mirrorlist matches the cheetah package"
+  cmp -s <(sed -n '/^# --- the \[omamobile\] channel/,$p' omamobile-device-tegu.install) \
+    <(sed -n '/^# --- the \[omamobile\] channel/,$p' ../omamobile-device-cheetah/omamobile-device-cheetah.install) \
+    || fail "the install script's channel handling drifted from the cheetah package"
+  pass "the install script keeps the [omamobile] channel as the cheetah package does"
   cmp -s omamobile-device-tegu.install \
     ../omamobile-device-cheetah/omamobile-device-cheetah.install \
     || fail "the pacman install script drifted from the cheetah package"
@@ -144,6 +148,12 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
 pass "install stages the package, enables only the guards, and nothing that marks a slot"
+
+for m in cpif shm_ipc pcie_gs201_cp; do
+  grep -qx "blacklist $m" "$tmp/root/usr/lib/modprobe.d/omamobile-tegu-guards.conf" \
+    || fail "the modem policy must prevent $m from autoloading"
+done
+pass "the modem drivers stay behind their guarded startup"
 
 # Every driver the graphics guard loads is kept from autoloading (gs_dsim_cmd
 # aside: it autoloads from its node and sends nothing until allow_tx is on,

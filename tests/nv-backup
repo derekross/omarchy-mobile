@@ -1,0 +1,330 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for tools/nv-backup against a stand-in phone: a fake /proc, /sys and
+# /dev tree in a temporary directory (made-up partition contents, regular
+# files standing in for the block devices, the whole tree read-only), and a
+# fake phone-ssh that runs each command locally and logs it. No real
+# device, nothing opened for writing on the "phone": its tree is the same,
+# byte for byte and mtime for mtime, after every run.
+#
+# Checked: the shipped descriptors that name NV_PARTS pass the tool's rules;
+# a backup copies every partition, verifies each against the phone, writes
+# SHA256SUMS in the format tools/phone-provision --nv-backup reads,
+# partitions.txt and NV-BACKUP, with the directory 700 and files 600, and
+# prints the privacy warning; the refusals before anything is copied (a
+# partition missing, writable, mounted, found twice, the wrong phone, a
+# directory that isn't empty, a descriptor without NV_PARTS or naming a
+# partition on UFS_RW, a descriptor that isn't data); a copy that differs
+# from the phone; --check (SAME, a changed NV_BACKUP_EXTRA partition only
+# reported, a changed NV partition failing, a damaged local copy); and the
+# tool run from a release bundle, with the bundle's device.conf.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+SRC=$PWD
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d)
+cleanup() { chmod -R u+w "$t" 2>/dev/null || true; rm -rf "$t"; }
+trap cleanup EXIT
+
+# The shipped descriptors: every one that names NV_PARTS passes the tool's
+# own checks (names, no duplicates, nothing on UFS_RW)
+for c in device/*/device.conf; do
+  grep -c '^NV_PARTS=' "$c" >/dev/null || continue
+  d=$(basename "$(dirname "$c")")
+  out=$(tools/nv-backup -d "$d" --list 2>&1) || fail "device/$d's NV_PARTS pass tools/nv-backup's checks: $out"
+done
+out=$(tools/nv-backup -d cheetah --list)
+grep -cx 'checked (NV_PARTS): efs efs_backup modem_userdata persist modem_a modem_b' <<<"$out" >/dev/null ||
+  fail "cheetah's NV_PARTS are the six partitions of AGENTS.md's check: $out"
+grep -cx 'copied, may change (NV_BACKUP_EXTRA): devinfo' <<<"$out" >/dev/null || fail "cheetah copies devinfo too: $out"
+pass "the shipped descriptors' NV_PARTS pass the tool's checks; cheetah's are AGENTS.md's six, plus devinfo"
+
+# A scratch repository with the tool and a test descriptor
+r=$t/repo
+mkdir -p "$r/tools" "$r/device/testdev"
+cp tools/nv-backup "$r/tools/"
+descriptor() {
+  printf 'CODENAME=testdev\nNAME="Test device"\nCOMPATIBLE="test,board-testdev"\n'
+  printf 'UFS_RW="boot_b dtbo_b userdata"\n'
+  printf 'NV_PARTS="efs efs_backup modem_userdata persist modem_a modem_b"\nNV_BACKUP_EXTRA="devinfo"\n'
+}
+descriptor > "$r/device/testdev/device.conf"
+
+# The stand-in phone
+P=$t/phone
+parts="efs efs_backup modem_userdata persist modem_a modem_b devinfo"
+fill() { awk -v s="$1" -v n="$2" 'BEGIN { while (length(o) < n) o = o s "\n"; printf "%s", substr(o, 1, n) }'; }
+make_phone() {
+  chmod -R u+w "$P" 2>/dev/null || true
+  rm -rf "$P"
+  mkdir -p "$P/proc/device-tree" "$P/dev" "$P/sys/class/block"
+  printf 'test,board-testdev\0test,soc\0' > "$P/proc/device-tree/compatible"
+  printf '/dev/sda30 / ext4 rw 0 0\n' > "$P/proc/mounts"
+  local i=1 p
+  for p in $parts; do
+    mkdir -p "$P/sys/class/block/sdd$i"
+    printf 'MAJOR=8\nMINOR=%d\nDEVNAME=sdd%d\nDEVTYPE=partition\nPARTNAME=%s\n' "$i" "$i" "$p" > "$P/sys/class/block/sdd$i/uevent"
+    echo 1 > "$P/sys/class/block/sdd$i/ro"
+    # made-up contents, a few 512-byte sectors each, the same on every rebuild
+    fill "made-up $p" $((512 * (i + 2))) > "$P/dev/sdd$i"
+    echo $((i + 2)) > "$P/sys/class/block/sdd$i/size"
+    i=$((i + 1))
+  done
+  # userdata: writable, mounted, never touched
+  mkdir -p "$P/sys/class/block/sda30"
+  printf 'PARTNAME=userdata\n' > "$P/sys/class/block/sda30/uevent"
+  echo 0 > "$P/sys/class/block/sda30/ro"; echo 8 > "$P/sys/class/block/sda30/size"
+  fill userdata 4096 > "$P/dev/sda30"
+  chmod -R a-w "$P"
+}
+dev_of() { grep -lx "PARTNAME=$1" "$P"/sys/class/block/*/uevent | cut -d/ -f1- | xargs dirname | xargs basename; }
+# Changes one stand-in file, then makes the tree read-only again
+phone_edit() { chmod -R u+w "$P"; "$@"; chmod -R a-w "$P"; }
+tree_state() { (cd "$P" && find . -printf '%p %m %T@\n' | sort && find . -type f -exec sha256sum {} + | sort); }
+
+cat > "$t/phone-ssh" <<'EOF'
+#!/bin/bash
+# Runs the command here, as the phone would; CORRUPT=1 flips the first byte
+# of what dd sends (a copy that differs from the phone); CHANGE_AFTER=N runs
+# CHANGE (a shell command that edits the stand-in tree) after the Nth
+# sha256sum, i.e. between the last verifying read and the re-probe
+printf '%s\n---\n' "$*" >> "$PHONE_LOG"
+if [[ ${CORRUPT:-0} == 1 && $* == dd\ * ]]; then
+  bash -c "$*" | { printf 'X'; tail -c +2; }
+  exit
+fi
+# FAIL_DD=N: the Nth dd sends half its chunk and exits 255, as the USB link
+# did on the 7 Pro; FAIL_DD=all: every dd does
+if [[ -n ${FAIL_DD:-} && $* == dd\ * ]]; then
+  echo x >> "$PHONE_LOG.dds"
+  if [[ $FAIL_DD == all || $(wc -l < "$PHONE_LOG.dds") == "$FAIL_DD" ]]; then
+    bash -c "$*" | head -c 300
+    exit 255
+  fi
+fi
+# SHORT_DD=N: the Nth dd sends 300 bytes of its chunk and exits 0 (only the
+# size check can catch it); SHORT_DD=all: every dd does
+if [[ -n ${SHORT_DD:-} && $* == dd\ * ]]; then
+  echo x >> "$PHONE_LOG.short"
+  if [[ $SHORT_DD == all || $(wc -l < "$PHONE_LOG.short") == "$SHORT_DD" ]]; then
+    bash -c "$*" | head -c 300
+    exit 0
+  fi
+fi
+if [[ -n ${CHANGE_AFTER:-} && $* == sha256sum\ * ]]; then
+  bash -c "$*"
+  echo x >> "$PHONE_LOG.sums"
+  if [[ $(wc -l < "$PHONE_LOG.sums") == "$CHANGE_AFTER" ]]; then
+    chmod -R u+w "$NV_PHONE_ROOT"; bash -c "$CHANGE"; chmod -R a-w "$NV_PHONE_ROOT"
+  fi
+  exit
+fi
+exec bash -c "$*"
+EOF
+chmod +x "$t/phone-ssh"
+export PHONE_SSH=$t/phone-ssh NV_PHONE_ROOT=$P PHONE_LOG=$t/phone.log
+# 1 KiB chunks, so every stand-in partition (1.5-4.5 KiB) takes several,
+# the last one short; no waiting between tries
+export NV_CHUNK_BS=512 NV_CHUNK_BLOCKS=2 NV_RETRY_DELAY=0
+make_phone
+before=$(tree_state)
+untouched() {
+  [[ $(tree_state) == "$before" ]] || fail "the stand-in phone is unchanged ($1)"
+  if grep -E 'of=|blockdev|setrw|mount |tee |rm |mv |cp |>[^&/]|>> ' "$PHONE_LOG" | grep -v '^[^ ]*/dev/null' >/dev/null; then
+    grep -nE 'of=|blockdev|setrw|mount |tee |rm |mv |cp |>[^&/]|>> ' "$PHONE_LOG" >&2
+    fail "no command sent to the phone writes anything ($1)"
+  fi
+}
+
+# --- A backup ----------------------------------------------------------------
+B=$t/home/backups/nv-1
+: > "$PHONE_LOG"
+out=$("$r/tools/nv-backup" -d testdev "$B" 2>&1) || fail "a backup: $out"
+untouched "a backup"
+for p in $parts; do
+  [[ -f $B/$p.img ]] || fail "the backup has $p.img"
+  cmp -s "$B/$p.img" "$P/dev/$(dev_of "$p")" || fail "$p.img is the phone's $p"
+  [[ $(grep -cE "^[0-9a-f]{64}  $p\\.img\$" "$B/SHA256SUMS") == 1 ]] || fail "SHA256SUMS has one line for $p.img"
+done
+[[ $(wc -l < "$B/SHA256SUMS") == 7 ]] || fail "SHA256SUMS has seven lines"
+(cd "$B" && sha256sum -c --quiet --strict SHA256SUMS) || fail "SHA256SUMS checks"
+[[ $(stat -c %a "$B") == 700 ]] || fail "the backup directory is mode 700"
+for f in "$B"/*; do [[ $(stat -c %a "$f") == 600 ]] || fail "${f##*/} is mode 600"; done
+grep -cx 'device: testdev' "$B/NV-BACKUP" >/dev/null || fail "NV-BACKUP names the device"
+grep -cx 'checked: efs efs_backup modem_userdata persist modem_a modem_b' "$B/NV-BACKUP" >/dev/null || fail "NV-BACKUP names the checked partitions"
+grep -cx "efs $(dev_of efs) ro=1 mounted=0 1536" "$B/partitions.txt" >/dev/null || fail "partitions.txt: $(cat "$B/partitions.txt")"
+grep -c 'This backup is private' <<<"$out" >/dev/null || fail "the run warns that the backup is private"
+grep -c 'IMEI' <<<"$out" >/dev/null || fail "the warning names the IMEI"
+grep -c "tools/phone-provision --nv-backup $B" <<<"$out" >/dev/null || fail "the run names the next step"
+grep -c 'verified against the phone' <<<"$out" >/dev/null || fail "each copy is verified against the phone"
+# Each partition read with dd and read again with sha256sum on the phone
+for p in $parts; do
+  d=$(dev_of "$p")
+  grep -cx "dd if=$P/dev/$d bs=512 skip=0 count=2 iflag=fullblock status=none" "$PHONE_LOG" >/dev/null || fail "$p is read with dd from its device, in chunks"
+  grep -cx "dd if=$P/dev/$d bs=512 skip=2 count=2 iflag=fullblock status=none" "$PHONE_LOG" >/dev/null || fail "$p's second chunk is read"
+  grep -cx "sha256sum < $P/dev/$d" "$PHONE_LOG" >/dev/null || fail "$p is read again on the phone"
+done
+if grep -c 'userdata\b' <(grep -v PARTNAME "$PHONE_LOG" | grep -E 'dd|sha256') >/dev/null; then
+  fail "userdata is never read"
+fi
+pass "a backup copies the seven partitions, verified against the phone, 700/600, with the privacy warning"
+
+# phone-provision accepts the backup's SHA256SUMS (its own check, run here
+# as the same grep it does)
+for p in modem_a modem_b efs efs_backup modem_userdata persist; do
+  [[ $(grep -cE "^[0-9a-f]{64}  $p\\.img\$" "$B/SHA256SUMS") == 1 ]] || fail "phone-provision's format for $p"
+done
+pass "SHA256SUMS is in the format tools/phone-provision --nv-backup reads"
+
+# --- Refusals before any copy -----------------------------------------------------
+refuse() {  # refuse WHAT PATTERN [ARGS...]: no copy, no directory left with images
+  local what=$1 pattern=$2 dir=$t/refused
+  shift 2
+  rm -rf "$dir"
+  : > "$PHONE_LOG"
+  if out=$("$r/tools/nv-backup" "$@" "$dir" 2>&1); then fail "refuses $what"; fi
+  grep -c -- "$pattern" <<<"$out" >/dev/null || fail "refuses $what with a reason ($pattern): $out"
+  if grep -c '^dd ' "$PHONE_LOG" >/dev/null; then fail "nothing is copied when it refuses $what"; fi
+  [[ ! -e $dir || -z $(ls -A "$dir") ]] || fail "no file is written when it refuses $what"
+  untouched "refusing $what"
+}
+efs=$(dev_of efs)
+phone_edit sed -i 's/^PARTNAME=efs$/PARTNAME=efs_gone/' "$P/sys/class/block/$efs/uevent"
+before=$(tree_state)
+refuse "a missing partition" 'efs: not found by PARTNAME' -d testdev
+make_phone; before=$(tree_state)
+phone_edit sh -c "echo 0 > '$P/sys/class/block/$efs/ro'"
+before=$(tree_state)
+refuse "a writable partition" "efs: /dev/$efs is writable" -d testdev
+make_phone
+phone_edit sh -c "echo '/dev/$efs /mnt/efs ext4 ro 0 0' >> '$P/proc/mounts'"
+before=$(tree_state)
+refuse "a mounted partition" "efs: /dev/$efs is mounted" -d testdev
+make_phone
+phone_edit sed -i 's/^PARTNAME=devinfo$/PARTNAME=efs/' "$P/sys/class/block/$(dev_of devinfo)/uevent"
+before=$(tree_state)
+refuse "a PARTNAME found twice" 'efs: more than one partition' -d testdev
+make_phone
+phone_edit sh -c "printf 'other,board\\0' > '$P/proc/device-tree/compatible'"
+before=$(tree_state)
+refuse "another phone" "the phone is 'other,board', not testdev" -d testdev
+make_phone; before=$(tree_state)
+descriptor | sed '/^NV_PARTS=/d' > "$r/device/testdev/device.conf"
+refuse "a descriptor without NV_PARTS" 'names no NV_PARTS' -d testdev
+descriptor | sed 's/^NV_BACKUP_EXTRA=.*/NV_BACKUP_EXTRA="devinfo userdata"/' > "$r/device/testdev/device.conf"
+refuse "userdata in the list" 'userdata is on the storage guard' -d testdev
+descriptor | sed 's/^NV_BACKUP_EXTRA=.*/NV_BACKUP_EXTRA="dtbo_b"/' > "$r/device/testdev/device.conf"
+refuse "a UFS_RW partition in the list" 'dtbo_b is on the storage guard' -d testdev
+descriptor | sed 's/^NV_BACKUP_EXTRA=.*/NV_BACKUP_EXTRA="efs"/' > "$r/device/testdev/device.conf"
+refuse "a partition named twice" 'efs is named twice' -d testdev
+descriptor | sed 's/^NAME=.*/NAME="$(touch x)"/' > "$r/device/testdev/device.conf"
+refuse "a descriptor that isn't data" 'not a KEY=value line' -d testdev
+descriptor > "$r/device/testdev/device.conf"
+refuse "another device's descriptor" 'no device descriptor' -d nosuch
+mkdir -p "$t/full"; echo keep > "$t/full/old"
+: > "$PHONE_LOG"
+if out=$("$r/tools/nv-backup" -d testdev "$t/full" 2>&1); then fail "refuses a directory that isn't empty"; fi
+grep -c "isn't empty" <<<"$out" >/dev/null || fail "says why it refuses a directory that isn't empty: $out"
+[[ $(ls "$t/full") == old && $(cat "$t/full/old") == keep ]] || fail "an existing directory is left alone"
+if grep -c '^dd ' "$PHONE_LOG" >/dev/null; then fail "nothing is copied into a directory that isn't empty"; fi
+pass "refuses before copying: a partition missing, writable, mounted or found twice, another phone, a bad descriptor, a used directory"
+
+# --- A copy that differs from the phone ---------------------------------------------
+: > "$PHONE_LOG"
+if out=$(CORRUPT=1 "$r/tools/nv-backup" -d testdev "$t/corrupt" 2>&1); then fail "refuses a copy that differs from the phone"; fi
+grep -c 'differs from the phone' <<<"$out" >/dev/null || fail "says the copy differs: $out"
+[[ ! -e $t/corrupt ]] || fail "a failed backup removes the directory it made"
+untouched "a copy that differs"
+pass "a copy that differs from the phone stops the backup, with no SHA256SUMS"
+
+# --- A chunk read that fails -------------------------------------------------------
+rm -f "$PHONE_LOG.dds"; : > "$PHONE_LOG"
+out=$(FAIL_DD=5 "$r/tools/nv-backup" -d testdev "$t/flaky" 2>&1) || fail "a chunk that fails once is read again: $out"
+(cd "$t/flaky" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the backup after a failed chunk checks"
+for p in $parts; do cmp -s "$t/flaky/$p.img" "$P/dev/$(dev_of "$p")" || fail "$p.img is the phone's $p after a failed chunk"; done
+grep -c 'chunk read(s) failed and were read again' <<<"$out" >/dev/null || fail "the run says a chunk was read again: $out"
+[[ ! -e $t/flaky/.chunk ]] || fail "no chunk file is left"
+untouched "a failed chunk"
+rm -f "$PHONE_LOG.dds"
+if out=$(FAIL_DD=all "$r/tools/nv-backup" -d testdev "$t/dead" 2>&1); then fail "refuses when every chunk read fails"; fi
+grep -c 'failed 5 times' <<<"$out" >/dev/null || fail "says the reads failed 5 times: $out"
+[[ ! -e $t/dead ]] || fail "a failed backup leaves no directory and no SHA256SUMS"
+mkdir "$t/empty"
+rm -f "$PHONE_LOG.dds"
+if FAIL_DD=all "$r/tools/nv-backup" -d testdev "$t/empty" >/dev/null 2>&1; then fail "refuses when every chunk read fails (given directory)"; fi
+[[ -d $t/empty && -z $(ls -A "$t/empty") ]] || fail "a failed backup into a given empty directory leaves it empty"
+out=$("$r/tools/nv-backup" -d testdev "$t/empty" 2>&1) || fail "running again after a failure works: $out"
+[[ $(wc -l < "$t/empty/SHA256SUMS") == 7 ]] || fail "the rerun copies all seven"
+pass "a chunk that fails once is read again and the backup verifies; failing every time refuses, leaves nothing, and a rerun works"
+
+# A chunk that comes back short with exit status 0: only the size check sees it
+rm -f "$PHONE_LOG.short"
+out=$(SHORT_DD=5 "$r/tools/nv-backup" -d testdev "$t/short" 2>&1) || fail "a short chunk with status 0 is read again: $out"
+(cd "$t/short" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the backup after a short chunk checks"
+grep -c 'chunk read(s) failed and were read again' <<<"$out" >/dev/null || fail "the run says the short chunk was read again: $out"
+rm -f "$PHONE_LOG.short"
+if out=$(SHORT_DD=all "$r/tools/nv-backup" -d testdev "$t/short-all" 2>&1); then fail "refuses when every chunk comes back short"; fi
+grep -c 'failed 5 times' <<<"$out" >/dev/null || fail "says the short reads failed 5 times: $out"
+[[ ! -e $t/short-all ]] || fail "nothing is left when every chunk comes back short"
+pass "a chunk that comes back short with status 0 is caught by its size check and read again"
+
+# A closed stdout during the closing banner never removes a verified backup
+"$r/tools/nv-backup" -d testdev "$t/closed" 2>/dev/null | head -c 10 >/dev/null || true
+[[ -f $t/closed/SHA256SUMS && $(wc -l < "$t/closed/SHA256SUMS") == 7 ]] || fail "a verified backup survives a closed stdout"
+(cd "$t/closed" && sha256sum -c --quiet --strict SHA256SUMS) || fail "the backup behind a closed stdout checks"
+pass "a verified backup survives a closed stdout (| head) during the banner"
+
+# --- A partition that changes during the copy --------------------------------------
+# After the seventh (last) verifying read, one partition turns writable,
+# gets mounted, or changes size: the re-probe after the copy must refuse
+# the backup and leave no SHA256SUMS.
+changed() {  # changed WHAT PATTERN CHANGE
+  rm -f "$PHONE_LOG.sums"
+  if out=$(CHANGE_AFTER=7 CHANGE=$3 "$r/tools/nv-backup" -d testdev "$t/changed-$1" 2>&1); then
+    fail "refuses a backup when a partition $1 during the copy"
+  fi
+  grep -c -- "$2" <<<"$out" >/dev/null || fail "says why when a partition $1 during the copy ($2): $out"
+  [[ ! -e $t/changed-$1/SHA256SUMS ]] || fail "no SHA256SUMS when a partition $1 during the copy"
+  make_phone
+}
+changed "turns writable" "efs: /dev/$efs is writable" "echo 0 > '$P/sys/class/block/$efs/ro'"
+changed "gets mounted" "persist: /dev/$(dev_of persist) is mounted" "echo '/dev/$(dev_of persist) /mnt ext4 ro 0 0' >> '$P/proc/mounts'"
+changed "moves" "efs: not found by PARTNAME" "sed -i 's/^PARTNAME=efs\$/PARTNAME=gone/' '$P/sys/class/block/$efs/uevent'"
+before=$(tree_state)
+pass "the re-probe after the copy refuses a partition that turned writable, got mounted or vanished"
+
+# --- --check ---------------------------------------------------------------------------
+: > "$PHONE_LOG"
+out=$("$r/tools/nv-backup" -d testdev --check "$B" 2>&1) || fail "--check passes on an unchanged phone: $out"
+[[ $(grep -c ': SAME$' <<<"$out") == 7 ]] || fail "--check says SAME for all seven: $out"
+untouched "--check"
+phone_edit sh -c "printf 'slot flags' | dd of='$P/dev/$(dev_of devinfo)' conv=notrunc status=none"
+out=$("$r/tools/nv-backup" -d testdev --check "$B" 2>&1) || fail "--check passes when only devinfo changed: $out"
+grep -c 'devinfo: different, as expected' <<<"$out" >/dev/null || fail "--check reports devinfo's change: $out"
+phone_edit sh -c "printf 'stock' | dd of='$P/dev/$efs' conv=notrunc status=none"
+if out=$("$r/tools/nv-backup" -d testdev --check "$B" 2>&1); then fail "--check fails when efs changed"; fi
+grep -c 'efs: DIFFERENT' <<<"$out" >/dev/null || fail "--check names efs: $out"
+grep -c 'take a fresh backup' <<<"$out" >/dev/null || fail "--check says to take a fresh backup: $out"
+make_phone
+# a second backup, then a damaged copy in it
+B2=$t/nv-2
+"$r/tools/nv-backup" -d testdev "$B2" >/dev/null 2>&1 || fail "a second backup"
+chmod u+w "$B2/persist.img"; printf 'x' >> "$B2/persist.img"
+if out=$("$r/tools/nv-backup" -d testdev --check "$B2" 2>&1); then fail "--check fails on a damaged copy"; fi
+grep -c "persist.img doesn't match SHA256SUMS" <<<"$out" >/dev/null || fail "--check names the damaged copy: $out"
+sed -i 's/^device: .*/device: otherdev/' "$B2/NV-BACKUP" 2>/dev/null || { chmod u+w "$B2/NV-BACKUP"; sed -i 's/^device: .*/device: otherdev/' "$B2/NV-BACKUP"; }
+if out=$("$r/tools/nv-backup" -d testdev --check "$B2" 2>&1); then fail "--check refuses another device's backup"; fi
+grep -c 'backup of a otherdev, not testdev' <<<"$out" >/dev/null || fail "--check says the backup is another device's: $out"
+pass "--check: SAME, devinfo's change reported, a changed NV partition and a damaged copy fail"
+
+# --- From a release bundle ----------------------------------------------------------------
+bd=$t/bundle/omamobile-testdev-2026.11.01
+mkdir -p "$bd/tools"
+cp tools/nv-backup "$bd/tools/"
+descriptor > "$bd/device.conf"
+out=$("$bd/tools/nv-backup" "$t/from-bundle" 2>&1) || fail "the bundled tool takes a backup with the bundle's device.conf: $out"
+[[ $(wc -l < "$t/from-bundle/SHA256SUMS") == 7 ]] || fail "the bundled tool copies seven partitions"
+if out=$("$bd/tools/nv-backup" -d cheetah "$t/from-bundle-2" 2>&1); then fail "the bundled tool refuses another device"; fi
+grep -c 'is for testdev, not cheetah' <<<"$out" >/dev/null || fail "says the bundle is for another device: $out"
+pass "the bundled tool reads the bundle's device.conf"

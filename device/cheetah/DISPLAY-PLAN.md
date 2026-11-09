@@ -1042,8 +1042,9 @@ build that.
   - A failed panel write is rolled back (old panel rate, old timers); the
     driver logs "staying at N Hz".
 - The floors only raise a clock that runs below them. MIF runs at
-  3172 MHz today, so they cost nothing now and protect a boot that leaves MIF
-  low. Releasing a floor leaves the rate where it is. The 1352 MHz figure is
+  2028 MHz at probe (every gs-decon probe in `logs/`; this line said 3172 MHz
+  until 2026-11-07), above the 1352 MHz floor, so they cost nothing now and
+  protect a boot that leaves MIF low. Releasing a floor leaves the rate where it is. The 1352 MHz figure is
   stock's 120 Hz pairing.
 - `gs-dsim-cmd` recognises the link from the boot values of those two
   registers (the 60 Hz pair, or the 120 Hz pair after a kexec) and refuses
