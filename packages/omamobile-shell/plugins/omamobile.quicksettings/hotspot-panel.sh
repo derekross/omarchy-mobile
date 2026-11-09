@@ -16,13 +16,17 @@
 #   "share": on|off, "share_available", "prefer_share",
 #   "all_traffic_available", "all_traffic", "editable",
 #   "ssid", "psk", "qr": PNG path or "", "qr_rev": a number that changes
-#   with the picture, "clients": connected devices}
+#   with the picture, "clients": connected devices, "uplink_note": optional,
+#   one sentence on where the devices' traffic goes, shown under the
+#   switch; only a backend that knows says it}
 #
 # The hotspot itself is NetworkManager's "Hotspot" connection, the one
 # tile-action.sh makes with `nmcli device wifi hotspot`: name and password
 # come from that connection and change with `nmcli connection modify`.
 # NetworkManager's shared mode has no switch for sharing a VPN, so the two
-# VPN boxes stay hidden there (share_available false).
+# VPN boxes stay hidden there (share_available false). Its devices follow
+# the phone's default route (a full-tunnel VPN included), so it gives no
+# uplink_note.
 #
 # A device may bring its own hotspot (its own hostapd, its own firewall)
 # and with it the VPN boxes: an executable at /etc/omamobile/hotspot-backend
@@ -77,8 +81,6 @@ nm_set() {
 nm_share() { echo "error: sharing a VPN isn't available with this hotspot"; }
 
 # ---- the QR code, added to whichever backend answered
-# WIFI: strings escape \ ; , : and "
-qr_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/;/\\;/g' -e 's/,/\\,/g' -e 's/:/\\:/g' -e 's/"/\\"/g'; }
 with_qr() { # reads the state line on stdin, prints it with qr and qr_rev
   python3 -c '
 import json, os, subprocess, sys
@@ -95,7 +97,8 @@ if ssid:
         old = open(src).read() if os.path.exists(src) else None
         if old != want or not os.path.exists(qr):
             fd = os.open(src, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, want.encode()); os.close(fd)
-            subprocess.run(["qrencode", "-o", qr, "-s", "8", "-m", "2", "-l", "M", want], check=True,
+            # the string on stdin, so the password stays out of /proc/*/cmdline
+            subprocess.run(["qrencode", "-o", qr, "-s", "8", "-m", "2", "-l", "M"], input=want.encode(), check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             os.chmod(qr, 0o600)
         s["qr"] = qr; s["qr_rev"] = int(os.stat(qr).st_mtime)

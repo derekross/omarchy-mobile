@@ -35,11 +35,12 @@ Item {
   property bool vpnOn: false
   property bool shareOn: false
   property bool preferShare: false
-  property bool shareAvailable: true
+  property bool shareAvailable: false
   property bool allTraffic: false
   property bool allTrafficAvailable: false
   property bool editable: true
   property int clients: 0
+  property string uplinkNote: ""
   property bool showPassword: false
   property int qrStamp: 0
   property real qrRev: 0
@@ -105,11 +106,12 @@ Item {
           root.vpnOn = s.vpn === "on"
           root.shareOn = s.share === "on"
           root.preferShare = s.prefer_share === true
-          root.shareAvailable = s.share_available !== false
+          root.shareAvailable = s.share_available === true
           root.allTrafficAvailable = s.all_traffic_available === true
           root.allTraffic = s.all_traffic === true
           root.editable = s.editable !== false
           root.clients = Number(s.clients || 0)
+          root.uplinkNote = String(s.uplink_note || "")
           var rev = Number(s.qr_rev || 0)
           if (root.qrPath !== String(s.qr || "") || rev !== root.qrRev) { root.qrPath = String(s.qr || ""); root.qrRev = rev; root.qrStamp++ }
         } catch (e) {}
@@ -280,8 +282,8 @@ Item {
                   textFormat: Text.PlainText
                   wrapMode: Text.Wrap
                   text: root.hotspotOn
-                    ? (root.clients === 1 ? "1 device connected" : root.clients + " devices connected") + ". Shares mobile data only."
-                    : "Shares the phone's mobile data over Wi-Fi."
+                    ? (root.clients === 1 ? "1 device connected" : root.clients + " devices connected") + "." + (root.uplinkNote ? " " + root.uplinkNote : "")
+                    : (root.uplinkNote || "Shares the phone's internet connection over Wi-Fi.")
                   color: root.foreground
                   opacity: 0.7
                   font.family: Style.font.family

@@ -90,6 +90,10 @@ machine: the model comes from a pinned commit of whisper.cpp's model
 repository with a pinned sha256, and makepkg keeps it in its source cache
 afterwards.
 
+## Hotspot page
+
+The page behind the Hotspot tile's chevron talks to `hotspot-panel.sh`. By default that runs NetworkManager's "Hotspot" connection (the one the tile makes with `nmcli device wifi hotspot`): name, password and a QR code to join, and no VPN boxes, since NetworkManager's shared mode has no switch for them; its devices follow the phone's default route. A device that brings its own hotspot (its own hostapd and firewall) installs an executable at `/etc/omamobile/hotspot-backend` from its device package, or the owner puts one at `~/.config/omamobile/hotspot-backend`; it takes the same verbs (`state`, `set NAME PASS`, `share on|off`, `alltraffic on|off`) and prints the same lines, and with it come the VPN boxes and, in `uplink_note`, the sentence on where its devices' traffic goes. No device package ships one yet: the Pixel 9a's is its owner's own for now.
+
 ## File dialogs
 
 Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron and Flatpak apps alike) get Nautilus's libadwaita file chooser from xdg-desktop-portal-gnome, not xdg-desktop-portal-gtk's GTK 3 desktop chooser, whose Places sidebar took half of the 480 px width. Nautilus's chooser folds its sidebar away at phone width and has touch-sized rows; `hypr/phone.lua` tiles it, even when it has a parent window, so it fills the screen between the bar and the on-screen keyboard. Only FileChooser goes to the gnome backend: its other interfaces need gnome-shell. It runs without gnome-shell (its Mutter service channel is missing, so it falls back to a plain Wayland connection). xdg-desktop-portal-gtk stays as the fallback and for its other interfaces. GTK apps that would draw their own chooser in-process are sent to the portal too (`GTK_USE_PORTAL=1` for GTK 3, `GDK_DEBUG=portals` for GTK 4, in `environment.d/20-omamobile-osk.conf`); Qt Widgets apps keep Omarchy's `QT_QPA_PLATFORMTHEME=gtk3` for now.

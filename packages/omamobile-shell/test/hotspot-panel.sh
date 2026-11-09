@@ -34,7 +34,7 @@ case "$*" in
   *) echo "nmcli: unexpected $*" >&2; exit 1 ;;
 esac'
 stub iw 'printf "Station aa\nStation bb\n"'
-stub qrencode 'echo "qrencode $*" >>'"$log"'; for a in "$@"; do [ "$prev" = -o ] && : >"$a"; prev=$a; done'
+stub qrencode 'echo "qrencode $* $(cat)" >>'"$log"'; for a in "$@"; do [ "$prev" = -o ] && : >"$a"; prev=$a; done'
 echo "Phone" >"$tmp/ssid"; echo "correct horse battery" >"$tmp/psk"
 
 run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" bash "$script" "$@"; }
@@ -50,6 +50,8 @@ s=$(run state)
 [[ $(echo "$s" | field editable) == true ]] || fail "a connection with a name is editable"
 [[ $(echo "$s" | field qr) == "$tmp/run/omamobile-hotspot/wifi-qr.png" ]] || fail "the QR code is drawn into the runtime directory"
 grep -q 'WIFI:T:WPA;S:Phone;P:correct horse battery;;' "$log" || fail "the QR code holds the WIFI: string"
+grep -q 'qrencode -o [^ ]* -s 8 -m 2 -l M WIFI:' "$log" || fail "the WIFI: string goes to qrencode on stdin, not as an argument"
+[[ $(echo "$s" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("uplink_note", ""))') == "" ]] || fail "NetworkManager's hotspot claims no uplink"
 [[ $(stat -c %a "$tmp/run/omamobile-hotspot/wifi-qr.src") == 600 ]] || fail "the QR source is private"
 n=$(grep -c qrencode "$log"); run state >/dev/null
 [[ $(grep -c qrencode "$log") == "$n" ]] || fail "an unchanged code is not drawn again"
@@ -94,18 +96,19 @@ cat >"$tmp/home/.config/omamobile/hotspot-backend" <<'EOF'
 #!/bin/sh
 echo "backend $*" >>"$LOG"
 case $1 in
-  state) echo '{"backend":"own","hotspot":"on","vpn":"on","share":"on","share_available":true,"prefer_share":true,"all_traffic_available":true,"all_traffic":false,"editable":true,"ssid":"Own","psk":"ownpassword","clients":1}' ;;
+  state) echo '{"backend":"own","hotspot":"on","vpn":"on","share":"on","share_available":true,"prefer_share":true,"all_traffic_available":true,"all_traffic":false,"editable":true,"ssid":"Own","psk":"ownpassword","clients":1,"uplink_note":"Shares mobile data only."}' ;;
   set) echo "ok: own set" ;;
   share|alltraffic) echo ok ;;
 esac
 EOF
 chmod +x "$tmp/home/.config/omamobile/hotspot-backend"
-printf '#!/bin/sh\necho "qrencode $*" >>%s; for a in "$@"; do [ "$prev" = -o ] && : >"$a"; prev=$a; done\n' "$log" >"$fake/qrencode"; chmod +x "$fake/qrencode"
+printf '#!/bin/sh\necho "qrencode $* $(cat)" >>%s; for a in "$@"; do [ "$prev" = -o ] && : >"$a"; prev=$a; done\n' "$log" >"$fake/qrencode"; chmod +x "$fake/qrencode"
 own() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" LOG="$log" bash "$script" "$@"; }
 s=$(own state)
 [[ $(echo "$s" | field backend) == own && $(echo "$s" | field share_available) == true ]] || fail "the device's backend answers the state"
 [[ $(echo "$s" | field qr) == "$tmp/run/omamobile-hotspot/wifi-qr.png" ]] || fail "the QR code is added to the backend's state"
 grep -q 'S:Own;P:ownpassword' "$log" || fail "the code is drawn from the backend's name and password"
+[[ $(echo "$s" | field uplink_note) == "Shares mobile data only." ]] || fail "the backend's uplink note is passed through"
 own set "Own" "ownpassword" | grep -q '^ok: own set' || fail "set goes to the device's backend"
 own share on | grep -q '^ok' && grep -q 'backend share on' "$log" || fail "share goes to the device's backend"
 own alltraffic off | grep -q '^ok' && grep -q 'backend alltraffic off' "$log" || fail "alltraffic goes to the device's backend"
