@@ -30,11 +30,22 @@ Down + Power; read-only fastboot variables reported product `dipper` and an
 unlocked bootloader. This verifies the handset's button recovery from the
 running system, not recovery from a hang in PR #505's kernel.
 
-No PR #505 image has been booted. The installed dirty kernel's writable root
-and failed watchdog-timeout setting are not results from that image. Before
-trying it, rebuild from the public kernel PRs, check the backup manifest, and
-record the exact image hash. Keep the stop condition: every partition must
-remain read-only, the watchdog must be fed, and USB/SSH must come up.
+On 2026-11-09, a clean PR #505 image built from the open Dipper kernel series
+was started with serial-pinned `fastboot boot`; no partition was flashed. It
+reported `7.3.0-rc6-omamobile-push1`, and its `boot.img` SHA-256 was
+`93484a91103c294f6c73799ae6cb7161019129b9f89ab331222ae04f10ecf3e1` (matching
+the local build manifest). The owner saw the console. `simpledrm` registered
+`/dev/fb0`, `gpio-keys` registered an input device, USB networking and SSH
+worked, and the `qcom_wdt` driver was bound with its userspace feeder running.
+No physical key event was captured in this probe.
+
+The storage guard removed the whole-disk node `/dev/sda`; its sysfs `ro` value
+remained `0` by design. Every UFS partition reported `ro=1`, and all other
+whole-disk nodes reported `ro=1`. The kernel log confirmed the guard's actions.
+The screen console was visible; the EA8074 panel and FTS5 touchscreen drivers
+remain disabled pending their separate hardware tests. The RAM image had no
+Arch root, and the probe did not write UFS. The checksum-verified stock
+partition snapshot and the private userdata archive were checked before boot.
 
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
