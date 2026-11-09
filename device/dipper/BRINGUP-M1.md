@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Xiaomi Mi 8 (dipper): RAM-only first light
 
-**Status (2026-11-08):** first-light results are recorded in [the notes PR #330].
+**Status (2026-11-09):** this PR's image booted by RAM on a Xiaomi Mi 8; the
+owner saw the console, USB/SSH and the read-only storage gate passed, and the
+watchdog feeder ran. Results and the image hash are in [the notes PR #330].
 Kernel support is public for review in [panel #218], [touch #219],
-[DTS #220] and [ath10k #221]. These PRs are not merged yet. The direct EA8074
-panel driver and FTS5 touchscreen path still need testing on the current kernel.
+[DTS #220] and [ath10k #221]. These PRs are not merged yet. The EA8074 panel
+driver and FTS5 touchscreen still need separate hardware tests.
 
 This is a RAM-only bring-up. Dipper has one OS `boot` partition and no alternate
 OS slot. The descriptor sets `BOOT_METHOD=ram-only`, the builder makes only a
