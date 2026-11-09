@@ -184,7 +184,7 @@ if [[ -n $image ]]; then
   grep -q 'SuplEnable="false"' "$x" || fail "default gps.xml must have SUPL off"
   grep -q 'RtoEnable="true"' "$x" || fail "default gps.xml must keep RTO"
   for k in EnableGlonass EnableGalileo EnableBeidou; do
-    sed -n '/<gll_features/,/\/>/p' "$x" | grep -q "$k=\"true\"" || fail "$k not in <gll_features>"
+    sed -n '/<gll_features/,/\/>/p' "$x" | grep -c "$k=\"true\"" >/dev/null || fail "$k not in <gll_features>"
   done
   grep -q 'MultiCarrRFMode="GL_MULTI_CARR_RF_MODE_L1_L5"' "$x" || fail "stock L1+L5 mode changed"
   if command -v xmllint >/dev/null; then xmllint --noout "$x" || fail "gps.xml not well-formed"; fi
