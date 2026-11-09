@@ -5,6 +5,22 @@ Facts only, each read off the phone. Captures remain outside the repository
 because they contain device identifiers and Wi-Fi keys; this file records only
 the facts needed for review.
 
+## 2026-11-09 — check for the RAM-only image
+
+A read-only SSH check reported kernel
+`7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` and root `/dev/sda21`
+mounted ext4 read-write. `/sys/block/sda/ro` and
+`/sys/block/sda/sda21/ro` were `0`; all other partition `ro` values read `1`.
+This does not verify PR #505's RAM-only image: its boot image hash was not
+recorded, and these writable values fail that runbook's stop condition.
+Systemd logged that setting the `qcom_wdt` timeout to one minute failed; the
+watchdog feeder status was not checked. A later USB SSH attempt got no reply,
+and neither ADB nor fastboot listed a device. No new boot or deploy was
+attempted. The userdata backup is not complete. The existing 15-partition
+stock backup manifest still verifies, but the current `recovery` image has
+not been compared with it; do not boot again until the userdata backup and
+recovery checks are complete and USB SSH is available.
+
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
 - **SoC** SDM845. Live DT root: `model = "Xiaomi Technologies, Inc. Dipper new MP v2.1"`,
@@ -49,25 +65,35 @@ the facts needed for review.
 the image used kernel release
 `7.3.0-rc6-omamobile-push1-g2a318a96ae9d-dirty` with its matching DTB: UFS up
 (all six LUNs, ext4 mounts), USB NCM gadget, dropbear, gpio-keys, 8 CPUs and
-5.7 GB RAM. This records the historical first-light tree; kernel PRs #218–#221
-are successor changes and are not the code tested in that boot. The diagnostic
+5.7 GB RAM. This records the historical first-light tree; kernel PRs [#218](https://github.com/derekross/linux-omarchy-mobile/pull/218),
+[#219](https://github.com/derekross/linux-omarchy-mobile/pull/219),
+[#220](https://github.com/derekross/linux-omarchy-mobile/pull/220) and
+[#221](https://github.com/derekross/linux-omarchy-mobile/pull/221) are successor
+changes and are not the code tested in that boot. The diagnostic
 image's guard allowed `userdata` and `logdump` writes. A temporary init widened
 the allowlist to include `logdump` and used `dd` to copy the kernel log there
-every two seconds. Two diagnostic-image attempts were written to stock
-`recovery` from rooted Android. The current `recovery` image has not been
-compared with the pre-write backup, and the backup's coverage of `logdump` is
-unknown. The current RAM-only image and storage guard leave every UFS partition
+every two seconds during the 2026-10-29 diagnostic boot. Two diagnostic-image
+writes to stock `recovery` from rooted Android were also made on 2026-10-29.
+The existing 15-partition backup did not include `logdump`; an unverified
+`logdump.img` file is not evidence of a checked phone backup. The current
+`recovery` image has not been compared with a verified pre-write copy. The
+current RAM-only image and storage guard leave every UFS partition
 read-only; this is a code-path fact, not a new phone check. The mount options
 and whether `persist` was mounted during first light are not recorded here.
 
-Other historical device activity recorded by the owner: NFS-root Omarchy
-sessions on 2026-10-30, 2026-10-31 and 2026-11-02; modem starts under
-`rmtfs -r`, followed by an XPU violation crash and remoteproc recovery loops;
-and a 2026-10-30 partition comparison where `persist`, `modemst1` and `frp`
-changed. The intervening boot sequence and the cause of those changes are not
-established here, so they are not attributed to stock Android or to Omarchy.
-These notes are not a recovery record until the backup checks and intervening
-boot sequence are verified.
+The recorded 15-partition snapshot before the radio runs was checksum-verified.
+The 2026-10-30 comparison found `boot`, `recovery`, `dtbo`, `vbmeta`,
+`fsc`, `devinfo`, `misc`, `logo`, `splash`, `persistbak`, `modemst2`
+and `fsg` byte-identical; only `persist`, `modemst1` and `frp` changed.
+All five NV partitions were read-only before and after the recorded runs. The
+cause of the three differences is not established. Other recorded activity:
+NFS-root Omarchy sessions on 2026-10-30, 2026-10-31 and 2026-11-02; modem
+starts under `rmtfs -r`, followed by an XPU violation crash and remoteproc
+recovery loops. The sequence of boots between the two snapshots (date, stock
+Android or RAM image, and actions) has not been reconstructed, so the later
+snapshot is not a baseline and the changes are not attributed to Android or
+Omarchy. These notes are not a recovery record until that sequence and the
+current recovery image are checked.
 
 ### What had to be fixed before any of that
 Six defects in the recovered [sdm845-mainline MR !71](https://gitlab.com/sdm845-mainline/linux/-/merge_requests/71)
@@ -122,9 +148,10 @@ At the time, it was unknown whether GENI/GPI or the FTS5 protocol caused the tim
 The live controller is FTS5. A separate historical RAM boot on 2026-10-30, using
 the unpublished kernel release above, registered `stmfts` and a physical tap
 produced `ABS_MT_POSITION_X`. That observation is not a test of the current
-kernel PRs. The public successor series is [kernel PR #219](https://github.com/derekross/linux-omarchy-mobile/pull/219),
-with its binding in [kernel PR #220](https://github.com/derekross/linux-omarchy-mobile/pull/220).
-The upstream v8 series states it was tested on Xiaomi Mi 8:
+kernel PRs. The public successor series and its binding are in
+[kernel PR #219](https://github.com/derekross/linux-omarchy-mobile/pull/219).
+The upstream v8 cover letter states it was tested on Xiaomi Mi 8:
+[FTS5 v8 cover letter](https://lists.openwall.net/linux-kernel/2026/09/25/2211),
 [FTS5 driver patch](https://lists.openwall.net/linux-kernel/2026/09/25/2213),
 [controller-ready fix](https://lists.openwall.net/linux-kernel/2026/09/25/2214),
 [binding update](https://lists.openwall.net/linux-kernel/2026/09/25/2212).
