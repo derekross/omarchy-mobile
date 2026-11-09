@@ -9,6 +9,11 @@ The FTS5 driver is merged upstream in Linux PR [touch #219]. The Dipper board
 DTS is under review in [DTS #220], and the EA8074 panel driver is under review
 in [panel #218].
 The panel and touchscreen still need separate hardware tests.
+On 2026-11-09, a guarded RAM boot was used to capture all 84 GPT partitions
+other than `userdata` (the phone has no `super`); source and compressed-image
+checksums passed. The separate live userdata archive also passed its checksum
+and zstd integrity checks. It is a file-level, non-atomic archive, not a raw
+partition image.
 
 This is a RAM-only bring-up. Dipper has one OS `boot` partition and no alternate
 OS slot. The descriptor sets `BOOT_METHOD=ram-only`, the builder makes only a
@@ -22,8 +27,8 @@ intended handset's serial, `BACKUP_CHECKSUMS` to the locally held stock
 partition manifest, and `USERDATA_BACKUP_CHECKSUMS` to the private userdata
 archive's checksum file. Do not boot if either backup is missing or fails.
 
-1. **Backup gate** — Expect: the verified stock backup and checksum manifest
-   and the userdata archive are available off-device. Pass: both
+1. **Backup gate** — Expect: the verified 84-partition stock backup and
+   checksum manifests and the userdata archive are available off-device. Pass: both
    `sha256sum -c "$BACKUP_CHECKSUMS"` and
    `sha256sum -c "$USERDATA_BACKUP_CHECKSUMS"` report every entry OK (run each
    from the directory containing its manifest). The userdata archive is a live
