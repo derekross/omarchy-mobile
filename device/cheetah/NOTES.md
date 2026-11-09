@@ -18,19 +18,30 @@ capture, the same as slot B's), after `--dry-run`. The phone booted
   IMS by itself. No unit failed. `tools/phone-smoke`: 18 ok, the modem's
   usual "not opened" lines, the camera check skipped. The fingerprint
   sensor reads ready with no finger enrolled.
-- **A kernel update through the package:** at 00:42 the pacman hook of
-  `omamobile-boot-update` (the install's `AUTO_WRITE=yes`) wrote
-  `vendor_kernel_boot_b`, read it back ("written and verified"), left the
+- **The package hook, on a reinstall:** at 00:42 a reinstall of the
+  release's own `linux-omamobile` (`pacman -U`, the same
+  `7.3.0rc6.r704.g1a9d1d4e9289-1`) ran `omamobile-boot-update`'s hook
+  (the install's `AUTO_WRITE=yes`). It rebuilt slot B's five images and
+  wrote `vendor_kernel_boot_b`, read it back ("written and verified"), left the
   other four images ("already there"), saved the previous set and did not
-  reboot. The reboot into it worked.
-- **`omarchy update` as root over SSH**, the command we gave the owner, ran
-  Omarchy's migrations again as root: Omarchy records them per user, and
+  reboot. The reboot into it worked. The one image differed because the
+  hook appends the owner's `authorized_keys` to the initramfs and the
+  bundle's image carries none: the saved slot-B copy equals the bundle's
+  byte for byte, and the new one has a vendor ramdisk 171 bytes longer
+  (6847295 against 6847124), so a fresh install's initramfs SSH has no
+  owner key until the first hook run (RELEASES §11.4 expects the same
+  bytes). An update to a newer kernel hasn't run on this release yet.
+- **`omarchy update` as root over SSH**, with `OMARCHY_PATH` set by hand
+  (the command we gave the owner; without it the run stops before
+  updating anything), ran Omarchy's migrations again as root: Omarchy records them per user, and
   root's record was empty, so 59 ran. One swapped `quickshell` for an older
   `quickshell-git` (Omarchy's later migration back counted as done), others
   wrote configs into `/root`, restarted systemd-oomd and left
   `/tmp/omarchy-update.log` owned by root, after which the Updates app
   stopped at once ("script: cannot open /tmp/omarchy-update.log: Permission
-  denied"). Nothing else in `/etc` changed and no other package moved.
+  denied"). Nothing else in `/etc` changed, and no package moved apart
+  from that swap (with `vulkan-headers`, which it pulled in) and the
+  normal updates.
   Put back by hand: `quickshell` reinstalled, `vulkan-headers` removed, root's
   Omarchy state and configs and the log deleted. `omamobile-omarchy` 0.1.38
   (#548) refuses an update as root.
@@ -134,7 +145,9 @@ the same Verizon-network SIM as the entry below. The runbook:
   minutes after sitd starts: the modem's OEM IPC channel, which nothing
   opens. A follow-up.
 - **Gotcha:** `omamobile-update` over ssh as root needs
-  `OMARCHY_PATH=/usr/share/omarchy` in its environment.
+  `OMARCHY_PATH=/usr/share/omarchy` in its environment. **Don't (2026-11-09):**
+  an update as root runs Omarchy's migrations again as root; run
+  `omarchy update` on the phone as its user (above, 2026-11-09).
 
 ## 2026-11-03: IMS registered and an SMS sent on a Verizon-network SIM, once the bearers took stock's CIDs
 
