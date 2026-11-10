@@ -1,0 +1,29 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# No test script that sets pipefail pipes into grep -q (AGENTS.md section 4,
+# Userspace): grep -q exits at the first match, the writer can get SIGPIPE,
+# and pipefail then fails the pipeline, so a check fails at random, or an
+# "&& fail" check passes. Use grep -c ... >/dev/null, which reads all its
+# input. packages/omamobile-modem/test/nv-overlay is left out until the fix
+# for #457 lands.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+pattern='(^|[^|])\|[[:space:]]*grep[[:space:]]+(-[[:alnum:]]*q|--quiet|--silent)'
+
+for bad in 'x | grep -q y' 'x |grep -qx y' 'x | grep -Eq y' 'x | grep --quiet y'; do
+  grep -cE "$pattern" <<<"$bad" >/dev/null || fail "the pattern finds '$bad'"
+done
+for good in 'x | grep -c y >/dev/null' 'x || grep -q y f' 'grep -q y <<<"$x"'; do
+  grep -cE "$pattern" <<<"$good" >/dev/null && fail "the pattern leaves '$good' alone"
+done
+
+mapfile -t scripts < <(git grep -l 'set -[a-z]*o pipefail' -- tests 'packages/*/test' \
+  ':(exclude)tests/grep-q-pipes' ':(exclude)packages/omamobile-modem/test/nv-overlay')
+[[ ${#scripts[@]} -gt 0 ]] || fail "found the pipefail test scripts"
+if hits=$(git grep -nE "$pattern" -- "${scripts[@]}"); then
+  printf '%s\n' "$hits" >&2
+  fail "no test script under pipefail pipes into grep -q (use grep -c ... >/dev/null)"
+fi
+pass "no pipe into grep -q in ${#scripts[@]} pipefail test scripts"

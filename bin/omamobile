@@ -142,6 +142,11 @@ load_device() {
     seen_rw+="$p "
   done
   [[ $seen_rw == *" userdata "* ]] || die "$file: UFS_RW must include userdata"
+  # Optional: LUNs besides sda that hold UFS_RW partitions; the init guards
+  # each as it guards sda (whole-disk node removed, partitions one by one)
+  if [[ -n ${DEV_UFS_RW_LUNS:-} && ! $DEV_UFS_RW_LUNS =~ ^sd[b-z]( sd[b-z])*$ ]]; then
+    die "$file: UFS_RW_LUNS may hold only disk names sdb to sdz separated by spaces"
+  fi
 
   if [[ $DEV_BOOT_METHOD == android-v0 ]]; then
     # One header-v0 boot.img: a gzip kernel with the board DTB appended, the
@@ -558,6 +563,9 @@ initramfs_config() {
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
   printf '%s\n' "${rw[*]}" > "$etc/omamobile-ufs-rw"
+  if [[ -n ${DEV_UFS_RW_LUNS:-} ]]; then
+    printf '%s\n' "$DEV_UFS_RW_LUNS" > "$etc/omamobile-ufs-rw-luns"
+  fi
   if [[ -n $product ]]; then
     printf '%s\n' "$product" > "$etc/omamobile-usb-product"
   fi
@@ -629,10 +637,14 @@ cmd_initramfs() {
   say "Staging initramfs in $stage"
   rm -rf "$stage" && mkdir -p "$stage"
   tar -xzf "$dl/$tarball" -C "$stage"
-  local apk
+  # Each package list is read whole before it is used: `for apk in $(…)`
+  # loses alpine-fetch.py's exit status and unpacks what it printed
+  local apk apks
   # e2fsprogs-extra: resize2fs and dumpe2fs, to grow a freshly flashed root
   # to the whole userdata partition on its first boot (init, boot_arch)
-  for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra); do
+  apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra) ||
+    die "tools/alpine-fetch.py failed for the initramfs's packages"
+  for apk in $apks; do
     tar -xzf "$apk" -C "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
   done
   # INITRAMFS_I2C_TOOLS=1: i2cget and i2cset (and their libi2c) for a device
@@ -641,7 +653,9 @@ cmd_initramfs() {
   if [[ ${DEV_INITRAMFS_I2C_TOOLS:-} == 1 ]]; then
     local i2c f
     i2c=$(mktemp -d)
-    for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" i2c-tools); do
+    apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" i2c-tools) ||
+      { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: tools/alpine-fetch.py failed for i2c-tools"; }
+    for apk in $apks; do
       tar -xzf "$apk" -C "$i2c" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
     done
     for f in usr/sbin/i2cget usr/sbin/i2cset; do
@@ -704,11 +718,13 @@ cmd_initramfs() {
   # sysroot is already in use, otherwise the host clang against the same
   # musl sysroot. A first-light device has no bootctl.
   alpine_sysroot() {
-    local sysroot="$WORK/downloads/alpine/sysroot" apk
+    local sysroot="$WORK/downloads/alpine/sysroot" apk apks
     if [[ ! -f $sysroot/usr/lib/crt1.o ]]; then
       mkdir -p "$sysroot"
       tar -xzf "$dl/$tarball" -C "$sysroot"
-      for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" musl-dev); do
+      apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" musl-dev) ||
+        die "tools/alpine-fetch.py failed for the musl sysroot's musl-dev"
+      for apk in $apks; do
         tar -xzf "$apk" -C "$sysroot" 2>/dev/null || true
       done
     fi

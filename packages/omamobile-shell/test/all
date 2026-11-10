@@ -686,6 +686,32 @@ elif [[ $rc != 0 ]]; then
 else
   pass "the shade under touch: a swipe forgets one, a short one springs back, a tap taps, a drag scrolls"
 fi
+# The notification viewport keeps its settled height during sheet motion.
+rc=0
+out=$(python3 -B test/quicksettings-shade-layout.py \
+  plugins/omamobile.quicksettings/QuickSettings.qml 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "stable notification viewport # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2
+  fail "stable notification viewport (test/quicksettings-shade-layout.py)"
+else
+  pass "notification viewport stays stable while sliding and follows expansion"
+fi
+
+# Open-time backend reads settle and spread out without delaying actions.
+rc=0
+out=$(python3 -B test/quicksettings-refresh.py \
+  plugins/omamobile.quicksettings/QuickSettings.qml 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "open-refresh queue # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2
+  fail "open-refresh queue (test/quicksettings-refresh.py)"
+else
+  pass "open-refresh queue settles, coalesces and cancels pending work"
+fi
+
 # The shade's media card (MPRIS): which player shows, what each control
 # calls, the seek bar, the card's tap. test/media-touch drives it; the art
 # rule and the order are in test/media-model.js; test/quicksettings-render
@@ -1131,3 +1157,14 @@ grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || 
 pass "install stages the package"
 
 test/keys.sh || fail "omamobile-keys volume keys"
+
+# Back threshold feedback handler state only; never invoke feedbackd.
+rc=0; out=$(python3 -B test/back-haptic.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "Back threshold feedback # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "Back threshold feedback"
+else
+  pass "Back threshold feedback: once per gesture, both edges and retreat"
+fi
+bash test/power-overlap.sh || fail "overlapping power-key presses"

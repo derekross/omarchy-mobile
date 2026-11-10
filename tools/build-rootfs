@@ -84,7 +84,7 @@ while (($#)); do
     --keep-raw) KEEP_RAW=1 ;;
     --local) LOCAL=${2:?}; shift ;;
     --channel) CHANNEL=${2:?}; shift ;;
-    -h|--help) sed -n '3,54p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0"; exit 0 ;;
     *) alarm_die "unknown argument $1" ;;
   esac
   shift

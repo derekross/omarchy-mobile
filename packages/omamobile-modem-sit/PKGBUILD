@@ -10,7 +10,7 @@ license=(MIT)
 # mobile-broadband-provider-info: the carrier database the automatic APN
 # reads (GNOME, CC-PDDC; arch "any", NetworkManager already pulls it in).
 # polkit: the Mobile network page's helper runs through pkexec.
-depends=(python iproute2 iputils systemd alsa-lib alsa-utils omamobile-modem
+depends=(python iproute2 iputils systemd alsa-lib alsa-utils 'omamobile-modem>=0.1.11' omamobile-sitd-policy
          mobile-broadband-provider-info polkit)
 backup=(etc/omamobile/modem-sit.conf)
 install=omamobile-modem-sit.install

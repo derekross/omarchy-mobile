@@ -844,6 +844,7 @@ def probe():
     states, radio state, packet registration, NR mode, whether an SMSC is
     set. No identifiers are printed; nothing is changed."""
     client = Sit()
+    failed = False
     try:
         # The CP answered the first request 9.4 s after ONLINE on 2026-11-02.
         sim = client.request(0x0200, timeout=20)
@@ -852,6 +853,7 @@ def probe():
                   [(sim[i], sim[i + 1]) for i in range(3, 3 + sim[2] * 63, 63)], flush=True)
         else:
             print('SIM status layout unexpected, length', len(sim), flush=True)
+            raise SystemExit(1)
         for ident, label in ((0x0801, 'radio state'), (0x0701, 'packet registration'),
                              (0x0749, 'NR mode'), (0x0711, 'PS service')):
             try:
@@ -862,15 +864,26 @@ def probe():
                     print(label, 'state', value[0], 'reject', value[1], 'RAT', value[3], flush=True)
                 else:
                     print(label, list(value[:4]), flush=True)
+                    if ident in (0x0801, 0x0701) or not value:
+                        failed = True
             except (ModemError, TimeoutError) as error:
                 print(label, 'unavailable:', error, flush=True)
+                failed = True
         try:
             smsc = client.request(0x0108)
             print('SMSC present', bool(smsc and smsc[0]), flush=True)
+            if not smsc:
+                failed = True
         except (ModemError, TimeoutError) as error:
             print('SMSC unavailable:', error, flush=True)
+            # Without a SIM the CP legitimately rejects the SMSC request.
+            if not (sim[0] == 0 and isinstance(error, ModemError) and error.error == 11):
+                failed = True
     finally:
         client.close()
+
+    if failed:
+        raise SystemExit(1)
 
 
 def main():
