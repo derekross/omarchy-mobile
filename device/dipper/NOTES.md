@@ -103,6 +103,30 @@ Booted image SHA-256 `0ee4f11d1973085c434e741a2e9dd73af5a9cd157296c25801ed5a92a6
 
 `qcom_wdt` loaded and `/usr/bin/watchdog -t 5 -T 30 /dev/watchdog0` was running. simpledrm registered `fb0`; USB gadget and authenticated SSH worked. `/proc/iomem` marked `0x85fc0000–0x8a8fffff` reserved, covering the former TZ range. The final image's physical button events were not captured, so the earlier Volume Down/Up observations are not evidence for this kernel. The image's `reboot-to bootloader` helper successfully returned the phone to fastboot; fastboot reported product `dipper` and unlocked `yes`. The only boot operation was `fastboot boot`; no UFS partition was written.
 
+## 2026-11-10 — rebased #503 and combined #505 RAM runs
+
+The rebased PR #503 init was RAM-booted with PR #505's Dipper builder and
+kernel/DTS PR #220 at `055a4019998f22cc0e2a8afef7650274a6ce0657`. NFS image
+SHA-256: `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7`;
+`uname -r` was `7.3.0-rc6-omamobile-push1`, and `/` was NFS. The initramfs
+used BusyBox `mount`; the export was a generic Arch Linux ARM test root, not an
+Omarchy rootfs. Direct sysfs reads returned `ro=1` for all six UFS disks and
+all 85 partitions. The guard logged each read-back, including `/dev/sda` set
+read-only for NFS. Systemd reached the multi-user target with
+`RuntimeWatchdogUSec=1min`; SSH remained available. `reboot-to bootloader`
+returned the phone to fastboot. No UFS write was attempted. The NFS link was
+not deliberately dropped, so hard-mount link-loss recovery remains untested.
+
+The combined #503/#505 non-NFS RAM image was also booted. SHA-256:
+`540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0`.
+`uname -r` was `7.3.0-rc6-omamobile-push1`; `/` was the initramfs (`rootfs`).
+Direct sysfs reads returned `ro=1` for all 85 partitions and disks `sdb`–`sdf`;
+`sda` remained `ro=0`, while the guard removed `/dev/sda`. The `qcom_wdt`
+module and feeder ran, simpledrm registered `fb0`, USB/SSH worked, and the
+former TZ range was reserved in `/proc/iomem`. The rescue SSH host key matched
+the build output, and `reboot-to` returned the phone to fastboot. No UFS write
+was attempted. Physical input events were not captured on this exact image.
+
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
 - **SoC** SDM845. Live DT root: `model = "Xiaomi Technologies, Inc. Dipper new MP v2.1"`,
