@@ -110,8 +110,24 @@ check(effect(tensaku, "maximize") == true and effect(tensaku, "float") == false,
 
 local pip = { tag = "pip" }
 local size, move = effect(pip, "size"), effect(pip, "move")
-check(effect(pip, "maximize") == false and type(size) == "table" and size[1] == 300 and size[2] == 169,
-  "picture-in-picture is 300x169, not maximized")
+-- Hyprland's expression for a screen of w x h logical px: muParser's min()
+-- and arithmetic, nothing else in these
+local function px(expr, w, h)
+  if type(expr) ~= "string" or expr:find("%s") then return nil end
+  local lua_expr = expr:gsub("monitor_w", tostring(w)):gsub("monitor_h", tostring(h)):gsub("min%(", "math.min(")
+  local f = (loadstring or load)("return " .. lua_expr)
+  return f and f()
+end
+local function pip_at(w, h)
+  if type(size) ~= "table" then return nil end
+  local x, y = px(size[1], w, h), px(size[2], w, h)
+  return x and y and string.format("%.0fx%.0f", x, y)
+end
+check(effect(pip, "maximize") == false and pip_at(480, 1040) == "300x169",
+  "picture-in-picture is 300x169 on the 7 Pro, not maximized")
+check(pip_at(450, 1010) == "281x158" and pip_at(504, 1122) == "315x177" and pip_at(360, 808) == "225x127",
+  "picture-in-picture takes the same share of any phone's screen (9a, 8 Pro, a 360 px screen)")
+check(pip_at(1040, 480) == "300x169", "picture-in-picture keeps its size with the phone on its side")
 check(type(move) == "table" and move[1] == "(monitor_w-window_w-8)", "picture-in-picture sits in the right corner")
 
 local saver = { class = "^org.omarchy.screensaver$" }

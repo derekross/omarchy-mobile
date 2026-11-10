@@ -10,9 +10,10 @@ import "AccessModel.js" as AccessModel
 // app's icon, the question and two large buttons. Access.qml puts it in its
 // layer-shell window; test/access-render.qml draws it offscreen.
 //
-// On its side (TOUCH-PLAN 2.4: 1040x480) the card keeps to 600 px, centred,
-// and the two buttons sit side by side, Allow on the right, so the question
-// and both answers fit 480 px of height.
+// On its side (TOUCH-PLAN 2.4: 1040x480 on the 7 Pro) the card keeps to
+// 600 px, centred, and the two buttons sit side by side, Allow on the right,
+// so the question and both answers fit a phone's height on its side (480 px
+// on the 7 Pro, 450 on the 9a).
 Item {
   id: sheet
 

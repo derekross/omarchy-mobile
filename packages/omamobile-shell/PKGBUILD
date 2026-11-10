@@ -11,7 +11,8 @@ depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' 'omamobile-owl-widge
          which  # voice input: voxtype finds wtype and wl-copy with which
          pipewire-audio pipewire-pulse pipewire-alsa wireplumber
          inotify-tools qt6-declarative
-         iproute2 jq  # omamobile-sleepd: ss for SSH sessions; jq also for omamobile-keys
+         iproute2 jq  # omamobile-sleepd: ss for SSH sessions; jq also for omamobile-keys and omamobile-display-scale
+         lua  # omamobile-display-scale runs hypr/display-scale.lua (Hyprland pulls it in too)
          # Both are in Omarchy's base package list, which root images install.
          dnsmasq  # the Hotspot tile: NetworkManager's shared mode hands out addresses with it
          foot xdg-terminal-exec  # guard for hand-built/partial installations

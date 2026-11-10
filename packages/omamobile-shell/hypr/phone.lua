@@ -4,7 +4,8 @@
 
 -- Apps fill the screen between the bar and the dock, like Android. Omarchy's
 -- floating windows (its terminal, btop, dialogs) are sized for a desktop and
--- would land mostly off a 480 px wide screen.
+-- would land mostly off a phone's screen (480 px wide on the 7 Pro; 450 to
+-- 504 on the others, at their own scale: hypr/display-scale.lua).
 -- Omarchy floats them through its floating-window tag, so drop the tag.
 hl.window_rule({ match = { class = ".*" }, tag = "-floating-window" })
 hl.window_rule({ match = { class = ".*" }, maximize = true })
@@ -13,7 +14,7 @@ hl.window_rule({ match = { class = "^org.omarchy.screensaver$" }, maximize = fal
 hl.window_rule({ match = { class = "^org.omarchy.screensaver$" }, fullscreen = true })
 
 -- Edge to edge (TOUCH-PLAN 2.2): Omarchy's gaps (5 and 10) and 2 px border
--- cost about 24 px of a 480 px wide screen, so none on the phone.
+-- cost about 24 px of the 7 Pro's 480 px wide screen, so none on the phone.
 hl.config({ general = { gaps_in = 0, gaps_out = 0, border_size = 0 } })
 -- ...and every window fully opaque: at Omarchy's 0.985/0.96 the home
 -- screen's widgets (a layer below) showed through apps. Dropping the tag
@@ -61,17 +62,21 @@ hl.window_rule({
 -- Tensaku, the screenshot editor (Open With, or the toast without Loupe): Omarchy floats
 -- it by class (default/hypr/apps/system.lua), not through the floating-window
 -- tag the first rule drops, so it opened as a desktop-sized float (814x936 on
--- a 480 px wide screen) with the screenshot cut off. Tiled and maximized, the
+-- the 7 Pro's 480 px wide screen) with the screenshot cut off. Tiled and maximized, the
 -- canvas gets the screen and fits the image to it.
 hl.window_rule({ match = { class = "^dev.tensaku.Tensaku$" }, float = false, maximize = true })
 
 -- Picture-in-picture (TOUCH-PLAN 3.5): Omarchy floats it, pinned, at 600x338,
 -- wider than the screen, and the maximize rule above made it fill the
--- screen. A small window in the top-right corner, below the bar, instead.
+-- screen. A small 16:9 window in the top-right corner, below the bar,
+-- instead: 62.5% of the screen's shorter side wide (300x169 on the 7 Pro's
+-- 480 px), so it takes the same share of any phone's screen at any scale,
+-- and stays that size with the phone on its side. Hyprland works these out
+-- with muParser, which has min(); no spaces inside an expression.
 hl.window_rule({
   match = { tag = "pip" },
   maximize = false,
-  size = { 300, 169 },
+  size = { "(min(monitor_w,monitor_h)*0.625)", "(min(monitor_w,monitor_h)*0.3515625)" },
   move = { "(monitor_w-window_w-8)", "(monitor_h*0.08)" },
 })
 

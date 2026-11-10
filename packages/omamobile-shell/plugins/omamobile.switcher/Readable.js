@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 // The smallest size for text that has to be read. Omarchy's type scale is a
-// desktop's (caption 10 px, body 12 px); on the phone's 480 px wide screen,
-// held at arm's length, nothing read goes under 12 px (docs/TOUCH-PLAN.md
-// 2.1). A floor here rather than theme font overrides, which a theme change
-// would drop. Plugins are separate directories with no shared import, so
-// each one that needs it carries this same file (test/all checks they match).
+// desktop's (caption 10 px, body 12 px); on a phone's screen (480 px wide on
+// the 7 Pro, and the same physical size on the others at their own scale,
+// hypr/display-scale.lua), held at arm's length, nothing read goes under
+// 12 px (docs/TOUCH-PLAN.md 2.1). A floor here rather than theme font
+// overrides, which a theme change would drop. Plugins are separate
+// directories with no shared import, so each one that needs it carries this
+// same file (test/all checks they match).
 
 var MIN_PX = 12
 

@@ -212,8 +212,9 @@ at once, as long as nothing is hard-coded:
   `Commons.Color...`: Qt 6.12's own `Color` type shadows a bare `Color`.
 * Text from settings, commands or the network is shown with
   `textFormat: Text.PlainText`.
-* Touch targets are at least 44 logical pixels; the phone is 480 x 1040
-  logical, so a cell is about 120 x 150.
+* Touch targets are at least 44 logical pixels; the Pixel 7 Pro is 480 x 1040
+  logical, so a cell is about 120 x 150 (the other phones are 450 to 504
+  wide, at about the same physical size, so their cells are too).
 * Widgets that show a time use `host.timeFormat`, so they follow the
   system's 12/24-hour choice like the built-in clock (which uses
   `HomeModel.systemTimeFormat` on the same setting).

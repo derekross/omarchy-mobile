@@ -758,8 +758,8 @@ enrollment produced one (TIMEOUT: "Time's up"), else fprintd's result. The
 pure logic is in `SensorModel.js` (`test/sensor-model.js`), the helper's in
 `test/fp-enroll.py`.
 
-Placement. Panel pixels scale by the screen's logical size (480/1440 at
-scale 3) and follow Hyprland's transform for the panel (0-3, as
+Placement. Panel pixels scale by the screen's logical size (480/1440 on
+the 7 Pro at scale 3, whatever the phone's scale) and follow Hyprland's transform for the panel (0-3, as
 `omamobile-autorotate` sets them); a flipped transform or a screen of another
 shape hides the target. Before the bridge has written its file once, the
 enrollment screen uses stock cheetah's sensor (717, 2360, radius 121).
@@ -862,7 +862,7 @@ gesture) and `state ''`.
 ## omamobile.update
 
 Omarchy's update in a sheet, since its terminal update (gum prompts and the
-ASCII logo) doesn't fit 480 px with the keyboard up. Everything goes through
+ASCII logo) doesn't fit a phone's 450-500 px with the keyboard up. Everything goes through
 `omamobile-update` from `omamobile-omarchy` (its header and
 [RELEASES.md](../../../docs/RELEASES.md) §5.4 list what it keeps and skips of
 Omarchy's update).

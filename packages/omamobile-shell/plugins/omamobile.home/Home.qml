@@ -448,11 +448,17 @@ Item {
   }
 
   readonly property string homeDir: Quickshell.env("HOME")
-  // Geometry: the pager (one page) and the surface, in logical px.
-  property real owlPageWidth: 480
-  property real owlPagerHeight: 908
-  property real owlScreenWidth: 480
-  property real owlScreenHeight: 924
+  // Geometry: the pager (one page) and the surface, in logical px, as the
+  // layout sets them below. Until it does, the screen's, less the bar and
+  // the dock (44 + 72) and the pager's top margin and dots: each phone's
+  // own (its width at its own scale, hypr/display-scale.lua), the 7 Pro's
+  // 480x1040 while there is no screen yet.
+  readonly property size owlScreenSize: screenInfo && screenInfo.width > 0 && screenInfo.height > 0
+    ? Qt.size(screenInfo.width, screenInfo.height) : Qt.size(480, 1040)
+  property real owlPageWidth: owlScreenSize.width
+  property real owlPagerHeight: owlScreenSize.height - 132
+  property real owlScreenWidth: owlScreenSize.width
+  property real owlScreenHeight: owlScreenSize.height - 116
   // The screen the surface is on (the offscreen renders put a stand-in
   // here), and its shorter side: the portrait page width, whichever way the
   // phone is held (the surface itself loses the bar and the dock).
