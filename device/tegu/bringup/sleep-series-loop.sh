@@ -25,10 +25,12 @@ start_series() {
   for i in $(seq 40); do $PS --fresh true 2>/dev/null && break; sleep 10; done
   timeout 30 $PS --fresh "cat $L 2>/dev/null" > $H/series-before-run$run.log 2>/dev/null
   $PS --fresh 'cat > /root/sleep-linkwait.sh' < device/tegu/bringup/sleep-series.sh
+  # A block inhibitor left by the push scripts (x-awake) would refuse every sleep of the
+  # series, so it is released here.
   # The first sleep waits for the graphical session: a suspend while the
   # shell is still starting after a boot left the session closed and the
   # splash on the screen (2026-11-07 13:16).
-  $PS --fresh 'systemctl unmask sleep.target suspend.target >/dev/null 2>&1; for i in $(seq 36); do [ -d /run/user/1000/hypr ] && pgrep -x Hyprland >/dev/null && break; sleep 5; done; echo "hyprland after boot: $(pgrep -x Hyprland >/dev/null && echo up || echo not up), uptime $(cut -d. -f1 /proc/uptime) s"; systemd-run --unit=x-audio-loop --wait -p TimeoutStartSec=300 /usr/local/bin/omamobile-tegu-audio-up >/dev/null 2>&1; systemctl reset-failed x-sleep-linkwait 2>/dev/null; sleep 30; systemd-run --unit=x-sleep-linkwait -E WFI='"$WFI"' -E RPM='"${RPM:-}"' -E N='"$N"' -E S='"$S"' bash /root/sleep-linkwait.sh' >> $H/loop.log 2>&1
+  $PS --fresh 'systemctl unmask sleep.target suspend.target >/dev/null 2>&1; for i in $(seq 36); do [ -d /run/user/1000/hypr ] && pgrep -x Hyprland >/dev/null && break; sleep 5; done; echo "hyprland after boot: $(pgrep -x Hyprland >/dev/null && echo up || echo not up), uptime $(cut -d. -f1 /proc/uptime) s"; systemd-run --unit=x-audio-loop --wait -p TimeoutStartSec=300 /usr/local/bin/omamobile-tegu-audio-up >/dev/null 2>&1; systemctl reset-failed x-sleep-linkwait 2>/dev/null; systemctl stop x-awake 2>/dev/null; sleep 30; systemd-run --unit=x-sleep-linkwait -E WFI='"$WFI"' -E RPM='"${RPM:-}"' -E N='"$N"' -E S='"$S"' bash /root/sleep-linkwait.sh' >> $H/loop.log 2>&1
   log "series started (run $run, WFI=$WFI)"
 }
 run=1; total=0; captures=0; last25=0
