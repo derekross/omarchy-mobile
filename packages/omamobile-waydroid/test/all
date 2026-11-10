@@ -74,7 +74,7 @@ if CONFIG_FILE=$t/config LXC_CONF=$t/old-binder.conf RENDER_RDEV=226:128 lib/oma
   fail "check passes with a binder major instead of the binder path"
 fi
 # The render node: its major and minor must be the ones the conf allows
-CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf RENDER_RDEV=226:128 lib/omamobile-waydroid-check | grep -q '^ok    render node 226:128 is allowed' \
+CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf RENDER_RDEV=226:128 lib/omamobile-waydroid-check | grep -c '^ok    render node 226:128 is allowed' >/dev/null \
   || fail "check does not report the render node"
 if CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf RENDER_RDEV=226:129 lib/omamobile-waydroid-check > "$t/binder.log"; then
   fail "check passes when the render node is not the allowed one"

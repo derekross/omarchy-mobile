@@ -246,7 +246,7 @@ fetch_images() {
   fi
   m=$(zip_member "$src" "android-info\.txt")
   if [[ -n "$m" && -z "$FORCE" ]]; then
-    unzip -p "$src" "$m" | grep -qE "^require board=(.*\|)?$DEVICE(\|.*)?\$" ||
+    unzip -p "$src" "$m" | grep -cE "^require board=(.*\|)?$DEVICE(\|.*)?\$" >/dev/null ||
       die "this image is not for $DEVICE (android-info.txt); use -f to override"
   fi
   for part in vendor system; do

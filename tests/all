@@ -7,7 +7,7 @@
 # against a stand-in phone tree,
 # tools/phone-install-package against a stand-in phone, the initramfs's
 # first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
-# allowlist and the USB product string, no test script piping into grep -q,
+# allowlist and the USB product string, no pipefail script piping into grep -q,
 # bin/omamobile's boot-image layouts
 # (and omamobile-boot-update building the same bytes on the phone)
 # and flash against a fake fastboot, omamobile-firstboot's own tests, and the

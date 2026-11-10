@@ -1122,7 +1122,7 @@ cmd_fastboot() {
     die "fastboot refuses BOOT_METHOD=qcom-abl (panic path uncharacterized on this ABL; use the buttons — see device/$DEVICE/BRINGUP-M1.md)"
   in_fastboot && { say "Already in fastboot"; return 0; }
   for i in $(seq 1 12); do
-    if adb get-state 2>/dev/null | grep -q device; then
+    if adb get-state 2>/dev/null | grep -c device >/dev/null; then
       say "Stock Android: adb reboot bootloader"
       adb reboot bootloader
     elif "$ssh" true 2>/dev/null; then
@@ -1138,7 +1138,7 @@ cmd_fastboot() {
     local t
     for t in $(seq 1 40); do
       in_fastboot && { say "In fastboot"; return 0; }
-      adb get-state 2>/dev/null | grep -q device && break
+      adb get-state 2>/dev/null | grep -c device >/dev/null && break
       "$ssh" true 2>/dev/null && break
       sleep 2
     done

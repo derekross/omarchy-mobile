@@ -198,7 +198,7 @@ echo omamobile > "$T/etc/hostname"
 say "Removing per-machine state"
 # No account but root, and root locked: the user comes from firstboot.conf
 grep -q '^alarm:' "$T/etc/passwd" && die "an alarm account in the image"
-awk -F: '$3 >= 1000 && $3 != 65534 {print $1}' "$T/etc/passwd" | grep -q . && die "a user account in the image"
+awk -F: '$3 >= 1000 && $3 != 65534 {print $1}' "$T/etc/passwd" | grep -c . >/dev/null && die "a user account in the image"
 sed -i 's/^root:[^:]*:/root:!*:/' "$T/etc/shadow"
 rm -rf "$T/etc/pacman.d/gnupg"                 # firstboot makes the phone's own keyring
 rm -f "$T"/etc/ssh/ssh_host_*                  # sshd makes the phone's own host keys
