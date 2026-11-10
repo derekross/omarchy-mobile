@@ -107,6 +107,35 @@ if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail 
 # Back at an app's top level goes home: the app runs omamobile-home, the one
 # command for it (the shell can't tell that an app left Escape unused).
 grep -c 'Quickshell.execDetached(BackModel.HOME_ARGV)' "$b" >/dev/null || fail "back's home call runs omamobile-home"
+# Back asks before it sends Escape (BackLink.js): the on-screen keyboard,
+# then the topmost shell surface that registered, then the focused window.
+# One script for every plugin, as DrawerLink.js; test/back-link.js has the
+# list's rules and test/back-surfaces.py every surface's registration.
+head -3 plugins/omamobile.back/BackLink.js | grep -c '^\.pragma library$' >/dev/null || fail "BackLink.js is one instance per engine (.pragma library)"
+grep -c '^import "BackLink.js" as BackLink$' plugins/omamobile.back/BackLinkClient.qml >/dev/null || fail "BackLinkClient.qml imports BackLink.js beside it"
+grep -c '^import "BackLink.js" as BackLink$' "$b" >/dev/null || fail "Back.qml imports the same BackLink.js"
+grep -c 'var used = BackLink.back()' "$b" >/dev/null || fail "back asks BackLink before sending Escape"
+# The keyboard is hidden through squeekboard's own call, never by turning it
+# off (the screen-keyboard-enabled setting; AGENTS.md, Userspace).
+k=plugins/omamobile.keyboard/Keyboard.qml
+grep -c 'item.handler = function() { root.hideKeyboard() }' "$k" >/dev/null || fail "Back hides the keyboard with hideKeyboard"
+if grep -n 'screen-keyboard-enabled' plugins/omamobile.back/* "$k" | grep -v '^[^:]*:[0-9]*: *//' ; then fail "Back never switches the keyboard off"; fi
+# The permission sheet: Back ends the request unanswered, never as a stored No.
+grep -c 'Quickshell.execDetached(AccessModel.dismissArgv(r.id))' plugins/omamobile.access/Access.qml >/dev/null || fail "Back dismisses a permission request without an answer"
+# One level at a time where Escape closed too much: a quick-settings panel
+# goes back to quick settings, "Show with…" to the window's menu, and a
+# widget's unsaved settings are asked about.
+for panel in WifiPanel BluetoothPanel; do
+  grep -c 'else root.backRequested()' "plugins/omamobile.quicksettings/$panel.qml" >/dev/null || fail "$panel: Escape goes back to quick settings"
+done
+grep -c 'Keys.onEscapePressed: root.backRequested()' plugins/omamobile.quicksettings/RecordPanel.qml >/dev/null || fail "RecordPanel: Escape goes back to quick settings"
+grep -c 'if (root.actionsOpen && root.actionPage === "pick") root.actionPage = "menu"' plugins/omamobile.switcher/Switcher.qml >/dev/null || fail "recent apps: Escape on Show with… goes back to the menu"
+hs=plugins/omamobile.home/HomeSheets.qml
+grep -c 'onPatchChanged: sheets.settingsUnsaved = HomeModel.settingsChanged(patch, config)' "$hs" >/dev/null || fail "the settings sheet knows its unsaved edits"
+grep -c 'MouseArea { anchors.fill: parent; onClicked: sheets.requestClose() }' "$hs" >/dev/null || fail "a tap outside a sheet asks about unsaved settings"
+grep -c 'if (which === "settings" && settingsUnsaved) askDiscard()' "$hs" >/dev/null || fail "leaving unsaved settings asks first"
+grep -c 'label: "Discard changes"' "$hs" >/dev/null || fail "unsaved settings are dropped only by Discard changes"
+grep -c 'Keys.onEscapePressed: root.backOneLevel()' plugins/omamobile.home/Home.qml >/dev/null || fail "the home screen's Escape goes one level, as Back"
 bash -n bin/omamobile-home || fail "omamobile-home parses"
 # Home pill: a 44 px strip and a pill with an outline.
 l=plugins/omamobile.launcher/Launcher.qml
@@ -335,6 +364,7 @@ if command -v node >/dev/null; then
   node test/media-model.js >/dev/null || { node test/media-model.js; fail "the shade's media card model"; }
   node test/home-model.js || fail "home screen model"
   node test/back-model.js || fail "back gesture model"
+  node test/back-link.js >/dev/null || { node test/back-link.js | grep -v '^ok'; fail "Back's list (BackLink.js)"; }
   node test/switcher-model.js || fail "recent apps' app names"
   # Our OWL runtime's core: probes against the reference runtime's recorded
   # outputs, the resource caps, sh() quoting, and the phone's rules.
@@ -1167,6 +1197,16 @@ pass "install stages the package"
 
 test/keys.sh || fail "omamobile-keys volume keys"
 test/home-command.sh || fail "omamobile-home"
+
+# Every surface on Back's list, and the order, in Qt.
+rc=0; out=$(python3 -B test/back-surfaces.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "Back's surfaces # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "Back's surfaces (test/back-surfaces.py)"
+else
+  pass "Back: the keyboard first, then the topmost shell surface, then Escape; every surface on and off the list"
+fi
 
 # Back threshold feedback handler state only; never invoke feedbackd.
 rc=0; out=$(python3 -B test/back-haptic.py 2>&1) || rc=$?
