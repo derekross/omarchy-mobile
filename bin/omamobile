@@ -1203,11 +1203,10 @@ cmd_flash() {
 cmd_push() {
   local img="$KERNEL_OUT/images" ssh="$ROOT/tools/phone-ssh" p dev want got rel
   load_device
-  # Same class of refusal as flash: boot_b is on sde here, and there is no
-  # in-tree day-2 rewrite path for qcom-abl yet. Refuse before any phone I/O
-  # (modules-push would otherwise rewrite the running root's modules).
-  [[ $DEV_BOOT_METHOD != android-v0 ]] ||
-    die "push refuses BOOT_METHOD=android-v0 (RAM-only: fastboot boot \$KERNEL_OUT/images/boot.img)"
+  # android-v0 (enchilada) pushes like android-v4: its one image, boot_b, is
+  # found on a UFS_RW_LUNS LUN below. qcom-abl has no in-tree day-2 rewrite
+  # path yet: refuse before any phone I/O (modules-push would otherwise
+  # rewrite the running root's modules).
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
