@@ -97,6 +97,12 @@ The backup is stored outside the repository; it must not be published. This
 completes the data-capture condition, but a reviewed button-by-button restore
 procedure and supported single-slot writer are still required before a flash.
 
+## 2026-11-10 — final PR #505 RAM image
+
+Booted image SHA-256 `0ee4f11d1973085c434e741a2e9dd73af5a9cd157296c25801ed5a92a6b9e9d9` with `fastboot boot`; it was built from PR #505 head `994944d7ecbacd69444221e6951153cb329a374e` and kernel/DTS PR #220 head `055a4019998f22cc0e2a8afef7650274a6ce0657` (touch PR #219 is merged). `uname -r` was `7.3.0-rc6-omamobile-push1`; `/` was the initramfs (`rootfs`). The guard reported the UFS devices read-only. Sysfs showed six disks: `sda` had `ro=0` but its whole-disk `/dev/sda` node was absent; `sdb`–`sdf` each had `ro=1` and present nodes. All 85 partitions had `ro=1`. This matches PR #505's intended missing-node case for `sda`; no UFS write was attempted.
+
+`qcom_wdt` loaded and `/usr/bin/watchdog -t 5 -T 30 /dev/watchdog0` was running. simpledrm registered `fb0`; USB gadget and authenticated SSH worked. `/proc/iomem` marked `0x85fc0000–0x8a8fffff` reserved, covering the former TZ range. The final image's physical button events were not captured, so the earlier Volume Down/Up observations are not evidence for this kernel. The image's `reboot-to bootloader` helper successfully returned the phone to fastboot; fastboot reported product `dipper` and unlocked `yes`. The only boot operation was `fastboot boot`; no UFS partition was written.
+
 ## 2026-10-29 — stock facts, read-only over SSH with the owner's Magisk root
 
 - **SoC** SDM845. Live DT root: `model = "Xiaomi Technologies, Inc. Dipper new MP v2.1"`,
