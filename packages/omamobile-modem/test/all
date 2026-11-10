@@ -315,16 +315,22 @@ out=$(start) && fail "the held marker refuses the boot after too"
 # reboot-to's note (in a directory of its own, so the state above is kept):
 # a modem-up marker from the boot the note names ended on purpose (push, a
 # reboot to the bootloader) and counts as a clean stop: the marker, its
-# refused copies and the note go, and the start gets past the markers. A note
-# naming another boot changes nothing: the marker is refused as above.
+# refused copies and the note go, and the start gets past the markers, also
+# where a counted unclean end would otherwise hold it. A note naming another
+# boot changes nothing: the marker is counted as an unclean end as above, and
+# with one already counted it is held.
 n=$t/note-markers; mkdir -p "$n/run"
 nstart() { OMAMOBILE_MODEM_LATCH=$n/latch OMAMOBILE_MODEM_UP_MARK=$n/up OMAMOBILE_MODEM_HOLD=$n/hold OMAMOBILE_MODEM_REFUSED=$n/run/refused \
   OMAMOBILE_DELIBERATE_RESTART=$n/note OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 timeout 20 bash $s 2>&1; }
 printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
 printf '%s\n' 11111111-1111-1111-1111-111111111111 > "$n/note"
-out=$(nstart) && fail "a note from another boot doesn't clear the marker: $out"
+out=$(nstart) || fail "a note from another boot leaves the first unclean end to start as without it (rc=$?): $out"
 [[ -e $n/note && $out == *"ended without a clean stop"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot clears nothing: $out"
-rm -f "$n"/up* "$n/note"
+[[ ! -e $n/up && $(ls "$n"/up.refused-* | wc -l) -eq 1 ]] || fail "a note from another boot: the marker is counted as an unclean end: $(ls "$n")"
+printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
+out=$(nstart) && fail "a note from another boot doesn't save the second unclean end from the hold: $out"
+[[ -e $n/note && -e $n/up && $out == *"no clean stop since the last refusal"* && $out != *"ended with reboot-to"* ]] || fail "a note from another boot, a second unclean end: held: $out"
+rm -f "$n"/up* "$n/note" "$n/run/refused"
 printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$n/up"
 : > "$n/up.refused-x"
 printf '%s\n' 00000000-0000-0000-0000-000000000000 > "$n/note"

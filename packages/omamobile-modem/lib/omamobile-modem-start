@@ -146,7 +146,8 @@ fi
 # reboot-to notes the boot it ends (/var/lib/omamobile/deliberate-restart),
 # since it skips systemd's shutdown and so the unit's stop: a modem-up marker
 # from that very boot ended on purpose (bin/omamobile push, a reboot to the
-# bootloader), not in a hang or a reset, so it counts as a clean stop. The
+# bootloader), not in a hang or a reset, so it counts as a clean stop and not
+# as an unclean end (two of those in a row would hold the modem off). The
 # note records that the restart was asked for, not that it finished: a hang
 # in the restart itself is the same gap a clean systemctl reboot has.
 if [[ -e $UP && -s $NOTE ]] && grep -q "boot $(head -c 64 "$NOTE" | tr -d '\n')\$" "$UP"; then
