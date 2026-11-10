@@ -10,6 +10,8 @@
 # development kernel, the identifier scan (real MACs, serial records, the
 # builder's home and listed identifiers found; made-up MACs and example paths
 # not), the packages stage refusing an index the release key didn't sign,
+# test-install asking whether stable has an index before the attended steps
+# (none: the one-time promotion; no answer: stop),
 # the test-install record, the tag stage refusing notes with placeholders,
 # the images stage keeping current boot files and asking for a device-package
 # version bump before restaging stale ones (a stand-in stage-boot-files),
@@ -182,6 +184,48 @@ if run --version "$V" test-install --passed "7.3.0-rc6-omamobile-g${commit:0:12}
 grep -q 'tested bundle is unsigned' "$t/log" || fail "says the tested bundle was unsigned"
 run --version "$V" --dry-run test-install || fail "the dry run prints the attended steps"
 grep -q 'bash install --dry-run' "$t/log" || fail "the steps start with the installer's dry run"
+grep -c 'would ask https://pkgs.omamobile.org/stable/aarch64/omamobile.db whether stable has an index' "$t/log" >/dev/null ||
+  fail "the dry run says it would ask the server for stable's index"
+# The installed phone follows stable, and promote comes after this stage:
+# test-install asks the server whether stable has an index. A stand-in curl
+# answers with the status in $t/stable-code and logs its arguments; nothing
+# reaches a server
+mkdir -p "$t/curl-stub"
+cat > "$t/curl-stub/curl" <<EOF
+#!/bin/sh
+echo "curl \$*" >> "$t/curl.log"
+[ -s "$t/stable-code" ] || exit 6
+cat "$t/stable-code"
+EOF
+chmod +x "$t/curl-stub/curl"
+trun() { (cd "$R" && PATH="$t/curl-stub:$PATH" tools/release "$@") > "$t/log" 2>&1; }
+trun --version "$V" --dry-run test-install || fail "the dry run still prints the attended steps"
+[[ ! -e $t/curl.log ]] || fail "the test-install dry run asks no server: $(cat "$t/curl.log")"
+index=$(sed -n 's/^repo_index=//p' "$st" | tail -n 1)
+[[ -n $index ]] || { index=$(printf x | sha256sum | cut -d' ' -f1); echo "repo_index=$index" >> "$st"; }
+printf 404 > "$t/stable-code"
+if trun --version "$V" test-install; then fail "test-install stops when stable has no index"; fi
+grep -c -- "-I .*https://pkgs.omamobile.org/stable/aarch64/omamobile.db" "$t/curl.log" >/dev/null || fail "asks for stable's index with a HEAD request: $(cat "$t/curl.log")"
+grep -c 'stable has no index yet: the first release to this server' "$t/log" >/dev/null || fail "says stable has no index yet"
+grep -cx "    tools/repo-publish stable --expect-index $index" "$t/log" >/dev/null || fail "prints the one-time promotion of the pinned index"
+grep -cx "    tools/repo-publish --dry-run stable --expect-index $index" "$t/log" >/dev/null || fail "prints the promotion's dry run first"
+if grep -c 'bash install' "$t/log" >/dev/null; then fail "the attended steps aren't printed before stable has an index"; fi
+for code in 000 500 ""; do
+  printf '%s' "$code" > "$t/stable-code"
+  if trun --version "$V" test-install; then fail "test-install stops when the server doesn't answer the question (${code:-curl failed})"; fi
+  grep -c "can't tell whether stable has an index" "$t/log" >/dev/null || fail "says it can't tell (${code:-curl failed})"
+  if grep -c 'repo-publish\|bash install' "$t/log" >/dev/null; then fail "neither a promotion nor the steps are printed when it can't tell (${code:-curl failed})"; fi
+done
+printf 200 > "$t/stable-code"
+if trun --version "$V" test-install; then fail "test-install waits for the attended install"; fi
+grep -c 'stable has an index' "$t/log" >/dev/null || fail "says stable has an index"
+grep -c 'bash install --dry-run' "$t/log" >/dev/null || fail "with an index on stable, the attended steps are printed"
+grep -c 'waiting for the attended install' "$t/log" >/dev/null || fail "then waits for the attended install"
+if grep -c 'repo-publish' "$t/log" >/dev/null; then fail "no promotion is printed when stable has an index"; fi
+: > "$t/curl.log"
+if trun --version "$V" test-install --passed 7.3.0-rc6-omamobile-push1-gdeadbeef0000; then fail "another kernel is still refused"; fi
+[[ ! -s $t/curl.log ]] || fail "recording the result asks no server"
+pass "test-install asks whether stable has an index: none prints the one-time promotion and stops, no answer stops, one lets the steps through"
 printf 'promote_done=x\nkernel_tag=kernel-2026.11.05\nidentifiers_done=clean\n' >> "$st"
 mkdir -p "$R/docs/release-notes"
 printf '# Omarchy Mobile 2026.MM.DD\nkernel-2026.11.05\n' > "$R/docs/release-notes/$V.md"

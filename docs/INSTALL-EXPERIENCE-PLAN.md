@@ -626,6 +626,13 @@ else.
   once, before the first release's test install (later releases find the
   previous release there, which is correct); and `omamobile-update` reports
   "this channel has no updates yet" as a normal state, not an error.
+  **Done:** stable has had an index since the 2026.11.08 release, so the
+  ordering can only bite on a new server; `tools/release test-install`
+  asks the server and, with no stable index, prints the one-time promotion
+  and stops. `omamobile-update` (omamobile-omarchy 0.1.41) treats a channel
+  whose index the server says isn't there as "no updates yet": no blocker,
+  exit 0. The Updates sheet shows that state as up to date; it doesn't show
+  the sentence yet.
 - **G3. `systemd-firstboot` fails once on first boot.** It wants to ask for
   settings on a console the phone doesn't have. Fix: the root image provides
   what it asks for (locale, keymap, time zone from `firstboot.conf`, machine
