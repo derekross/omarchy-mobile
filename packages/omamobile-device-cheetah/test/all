@@ -287,6 +287,22 @@ fi
 grep -q 'refused host_addr' "$tmp/usbmac.log" || fail "the refusal is logged"
 [[ ! -e $tmp/state2/usb-mac-cycle-started ]] || fail "a refused address is a failure, not a hang: no marker is left"
 
+# The trap path (a start timeout's SIGTERM while the cycle is in progress):
+# the gadget is put back together, but the marker stays, so a hang that systemd
+# interrupts does not repeat at every boot. A fake rm sends the SIGTERM when
+# the functions are unlinked.
+rm -rf "$tmp/g7" "$tmp/state7"; mkgadget "$tmp/g7"
+printf '#!/bin/bash\ncase "$*" in *configs*) kill -TERM $PPID; sleep 1;; esac\nexec /usr/bin/rm "$@"\n' > "$tmp/fakebin/rm"
+chmod +x "$tmp/fakebin/rm"
+{ PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g7 USB_MAC_FILE=$tmp/state7/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > "$tmp/usbmac.log" 2>&1; } 2>/dev/null || true
+rm -f "$tmp/fakebin/rm"
+[[ -e $tmp/state7/usb-mac-cycle-started ]] || fail "a start interrupted by SIGTERM keeps the hang marker"
+[[ $(cat "$tmp/g7/UDC") == 11210000.usb ]] || fail "the UDC is bound again after SIGTERM"
+[[ -L $tmp/g7/configs/c.1/ncm.usb0 && -L $tmp/g7/configs/c.1/acm.GS0 ]] || fail "both functions are linked again after SIGTERM"
+PATH=$tmp/fakebin:$PATH USB_OPS=$tmp/ops USB_GADGET=$tmp/g7 USB_MAC_FILE=$tmp/state7/mac USB_IFACE=nosuch0 bin/omamobile-usb-mac > "$tmp/usbmac.log" 2>&1 || true
+grep -q 'did not finish' "$tmp/usbmac.log" || fail "the boot after SIGTERM reports the marker"
+[[ ! -e $tmp/state7/usb-mac-cycle-started ]] || fail "the boot after SIGTERM removes the marker"
+
 # usb0 gets the phone address too, and the kernel refuses that on a link that
 # is up: a fake ip refuses until the link is down, then takes it and brings it up
 rm -rf "$tmp/g5" "$tmp/net" "$tmp/ipstate"; mkgadget "$tmp/g5"; mkdir -p "$tmp/net/usb0" "$tmp/ipstate"

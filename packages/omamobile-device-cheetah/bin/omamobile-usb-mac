@@ -4,9 +4,10 @@
 #
 # The initramfs creates the gadget (CDC NCM + ACM), and the kernel gives the
 # NCM function two new random MAC addresses each time: HOST, the host's end
-# of the link (the address a Mac names its interface after, and the one
-# "Allow accessories to connect: ask" treats as a new accessory), and DEV,
-# the phone's usb0. So every boot looks like a different device to the host.
+# of the link (the address a Mac names its interface after), and DEV, the
+# phone's usb0. So every boot looks like a new device to the host. Whether
+# macOS's "Allow accessories to connect: ask" prompt keys on the address is
+# untested (#448); this only makes the addresses stable.
 #
 # This makes both addresses once, from /dev/urandom (never from the serial
 # number or anything else that identifies the phone), keeps them on the
@@ -24,7 +25,11 @@
 # the gadget is back together. USB is the phone's only link, so a hang inside
 # the unbind or the bind would repeat on every boot: if the next start finds
 # the marker, it logs that the previous boot did not finish, removes it and
-# leaves the gadget as the initramfs made it (CONTRIBUTING 3.4).
+# leaves the gadget as the initramfs made it (CONTRIBUTING 3.4). Only the
+# normal path removes the marker: when the EXIT trap runs instead (a start
+# timeout's SIGTERM, or a refused unbind), the gadget is put back together but
+# the marker stays, so a slow hang that systemd interrupts is not repeated at
+# every boot either.
 #
 # The addresses stay out of the log: the saved pair is what the phone shows
 # every computer it is plugged into.
@@ -120,7 +125,10 @@ restore() {
     echo "$udc" > "$g/UDC" || log "could not bind $udc again"
     unbound=0
   fi
-  # Back together (or as far as it can go): the marker is for a hang, not a failure
+}
+# Back together on the normal path: the marker is for a hang, not a failure.
+# The trap calls restore alone and leaves it.
+finish() {
   rm -f "$marker"
   sync -f "${marker%/*}" 2>/dev/null || sync
 }
@@ -145,6 +153,7 @@ echo "$dev" > "$fn/dev_addr" || { log "the kernel refused dev_addr"; rc=1; }
 
 restore
 trap - EXIT
+finish
 (( rc )) && exit "$rc"
 log "the gadget now has the saved pair"
 set_iface
