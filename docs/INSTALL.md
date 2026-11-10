@@ -137,8 +137,11 @@ The next two steps run from your computer and reach the phone over the USB cable
 
 ```sh
 nmcli connection add type ethernet con-name omamobile-phone match.driver cdc_ncm \
-  ipv4.method shared ipv4.addresses 172.16.42.2/24 ipv6.method disabled
+  ipv4.method manual ipv4.addresses 172.16.42.2/24 ipv4.never-default yes ipv6.method disabled \
+  connection.autoconnect-priority -100
 ```
+
+This is a plain link between your computer and the phone, and nothing more: your computer gets that one address on it, shares no internet connection over it (no DHCP or DNS server, no forwarding, no firewall rules) and sends none of its own traffic through the phone. The phone gets no internet through the cable; it uses its Wi-Fi. The connection is matched by driver (`cdc_ncm`), because that is all NetworkManager can know of the phone's USB network in advance, so another USB network device with that driver (the Ethernet port of some USB-C docks, a phone sharing its internet over USB) that has no saved connection of its own would be given this one, with that address and no internet, until you give it its own. Its priority is below your own connections, so yours go first. It stays saved; `nmcli connection delete omamobile-phone` removes it. If you added the connection from an earlier version of this guide, it has `ipv4.method shared` (your computer then shares its internet with the phone); it still works, and deleting it and adding this one replaces it.
 
 Then, from the bundle folder, check that you can reach the phone:
 
