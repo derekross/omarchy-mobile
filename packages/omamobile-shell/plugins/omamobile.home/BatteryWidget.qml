@@ -16,9 +16,10 @@ Item {
   readonly property var battery: UPower.displayDevice
   readonly property bool present: !!battery && battery.isPresent === true
   readonly property int percent: present ? Math.round(battery.percentage * 100) : -1
-  readonly property bool charging: present && !UPower.onBattery
+  readonly property bool charging: present && battery.state === UPowerDeviceState.Charging
+  readonly property bool discharging: present && battery.state === UPowerDeviceState.Discharging
   readonly property bool full: present && battery.state === UPowerDeviceState.FullyCharged
-  readonly property real seconds: !present ? 0 : (charging ? battery.timeToFull : battery.timeToEmpty)
+  readonly property real seconds: charging ? battery.timeToFull : discharging ? battery.timeToEmpty : 0
 
   function duration(s) {
     if (!s || s <= 0) return ""
@@ -29,7 +30,11 @@ Item {
   readonly property string detail: !present ? "No battery"
     : full ? "Full"
     : charging ? (duration(seconds) ? "Full in " + duration(seconds) : "Charging")
-    : (duration(seconds) ? duration(seconds) + " left" : "On battery")
+    : discharging ? (duration(seconds) ? duration(seconds) + " left" : "On battery")
+    : battery.state === UPowerDeviceState.PendingCharge ? "Waiting to charge"
+    : battery.state === UPowerDeviceState.PendingDischarge ? "Waiting to discharge"
+    : battery.state === UPowerDeviceState.Empty ? "Empty"
+    : "Charging status unknown"
 
   readonly property color levelColor: percent >= 0 && percent <= 15 && !charging ? Commons.Color.urgent : Commons.Color.accent
   readonly property bool compact: width < 100

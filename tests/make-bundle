@@ -22,7 +22,7 @@ command -v python3 >/dev/null || { echo "ok - # skip: no python3"; exit 0; }
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 r=$t/repo k=$t/kernel
-tools="phone-provision nv-backup phone-ssh extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
+tools="phone-provision nv-backup phone-ssh phone-ssh-proxy extract-vendor-firmware extract-vendor-chroot extract-fingerprint-vendor extract-camera-data"
 mkdir -p "$r/tools/lib" "$r/docs" "$r/device/testdev" "$r/packages/omamobile-keyring" "$r/out" \
   "$k/include/config" "$k/images"
 cp tools/make-bundle tools/bundle-manifest tools/install-phone "$r/tools/"
@@ -54,6 +54,19 @@ done
 cmp -s "$b/INSTALL.md" docs/INSTALL.md || fail "the bundle carries docs/INSTALL.md as INSTALL.md"
 pass "the bundle carries INSTALL.md and phone-provision with everything it runs"
 
+# Exercise the bundled wrapper's explicit transport without SSH/network IO.
+mkdir -p "$t/stubs"
+cat >"$t/stubs/ssh" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@"
+SH
+chmod +x "$t/stubs/ssh"
+PATH="$t/stubs:$PATH" OMAMOBILE_SSH_CONFIG=/dev/null OMAMOBILE_SSH_INTERFACE=usb-fixture \
+  "$b/tools/phone-ssh" --fresh true >"$t/bundle-transport"
+grep -F -- '--relay usb-fixture 172.16.42.1' "$t/bundle-transport" >/dev/null || fail "bundled wrapper finds its direct transport helper"
+pass "bundled phone-ssh resolves its helper with no checkout or network"
+
+
 (cd "$b" && sha256sum -c --quiet SHA256SUMS) || fail "SHA256SUMS checks"
 for f in INSTALL.md $(printf 'tools/%s ' $tools); do
   [[ $(grep -cE "^[0-9a-f]{64}  $f\$" "$b/SHA256SUMS") == 1 ]] || fail "SHA256SUMS covers $f once"
@@ -69,7 +82,7 @@ for p in ["INSTALL.md"] + ["tools/" + t for t in tools]:
 PY
 pass "SHA256SUMS and manifest.json cover the new files"
 
-grep -c 'tools/phone-provision --nv-backup DIR FACTORY.zip' "$b/README.txt" >/dev/null || fail "README.txt gives the provisioning command"
+grep -c 'tools/phone-provision --first-install --nv-backup DIR FACTORY.zip' "$b/README.txt" >/dev/null || fail "README.txt gives the provisioning command"
 grep -c 'from this directory' "$b/README.txt" >/dev/null || fail "README.txt says to run it from the bundle"
 if grep -c 'from the repository' "$b/README.txt" >/dev/null; then fail "README.txt no longer sends the user to the repository"; fi
 grep -c 'INSTALL.md' "$b/README.txt" >/dev/null || fail "README.txt points to INSTALL.md"
@@ -89,7 +102,7 @@ for p in modem_a modem_b efs efs_backup modem_userdata persist; do
 done
 : > "$t/factory.zip"
 out=$(cd "$t" && HOME=$t/home PHONE_SSH=false "$b/tools/phone-provision" --dry-run --work "$t/work" \
-  --nv-backup "$nv" "$t/factory.zip" 2>&1) || fail "the bundled phone-provision's dry run: $out"
+  --first-install --nv-backup "$nv" "$t/factory.zip" 2>&1) || fail "the bundled phone-provision's dry run: $out"
 grep -c 'would run: tools/extract-vendor-firmware' <<<"$out" >/dev/null || fail "the dry run names the extract tools: $out"
 pass "the bundled phone-provision runs from the bundle"
 

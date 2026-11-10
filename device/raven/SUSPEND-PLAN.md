@@ -1,7 +1,10 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): suspend
 
-Status (2026-10-16): **S0-S5 passed; S6-S8 have no raven result yet;**
+Status (2026-11-03): **s2idle wakes on Power, 3 of 3 again on today's
+kernels, and UFS resumes clean at `spm_lvl` 5 (linux-omarchy-mobile#188)**;
+see the 2026-11-03 entry at the end. Earlier status (2026-10-16):
+**S0-S5 passed; S6-S8 have no raven result yet;**
 see "Next" at the end. Raven follows cheetah's
 suspend plan (`device/cheetah/SUSPEND-PLAN.md` on `main`: s2idle first,
 SYS_SLEEP later); this file records only what differs on gs101 and the
@@ -199,3 +202,25 @@ raven result yet. What the results leave open:
   active through S3 and S4, but no sensor stream across a sleep is
   recorded (S6).
 - **Menu:** suspend stays hidden (`suspend-off`) until S8.
+
+**2026-11-03: s2idle on today's kernels, and UFS at level 5 by default.**
+Three `systemctl suspend` cycles, each woken by Power, on the published
+`omamobile` plus the display series (kernel #116) and raven's USB
+override, once without and once with linux-omarchy-mobile#188 (gs101's
+UFS `spm_lvl` 5 default):
+
+| | without #188 (`gb0a658e17f21`) | with #188 (`g1094d975a193`) |
+| --- | --- | --- |
+| `spm_lvl` at boot | 3 | 5 |
+| resumes, woken by Power | 3 of 3 (19, 86, 25 s asleep) | 3 of 3 (10, 6, 4 s asleep) |
+| UFS on resume | `hibern8 exit failed. ret = 5`, `host_reset: total cnt=2` | clean |
+| flip timeouts, underruns | 0 | 0 |
+
+The display came back at 120 Hz with DPMS on after every cycle. On the
+daily kernel (`ge1e6adb69bbf`) the phone also went to sleep on its own
+with the shell's auto-sleep on (the `omamobile-sleep` toggle, restored
+from the owner's profile) and woke on Power. Two things block sleep on
+purpose or by accident today: with the modem up, `omamobile-modem-inhibit`
+(omamobile-modem 0.1.13) holds a block, as MODEM-PLAN 6.3 asks; on a boot
+where the modem never started (a kernel without CPIF) it held the block
+anyway, and only `systemctl suspend -i` slept (reported on #390).

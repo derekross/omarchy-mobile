@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# The AoC microphones without speaker protection. The sound card waits for
+# both CS35L41 amplifiers as codecs, so with their driver blacklisted there
+# are no microphones either. This loads the driver and keeps both amplifiers
+# muted (Digital PCM Volume 0, no DSP firmware): the microphones work, the
+# speakers stay silent. For a phone whose speaker limits aren't validated
+# (raven: device/raven/AUDIO-PLAN.md). Not enabled by this package: a device
+# package enables it. Once omamobile-speaker-protection is enabled, it owns the
+# amplifiers and this one doesn't run (enabled in /etc, or by a device
+# package's wants link in /usr/lib). Hang-safe through the same marker.
+[Unit]
+Description=AoC microphones with both speaker amplifiers muted (no speaker protection)
+Requires=omamobile-aoc.service
+After=omamobile-aoc.service
+Before=systemd-user-sessions.service
+Conflicts=omamobile-speaker-protection.service
+Before=omamobile-speaker-protection.service
+ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service
+ConditionPathExists=!/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service
+ConditionPathExists=|/sys/bus/platform/devices/181d0000.aoc
+ConditionPathExists=|/sys/bus/platform/devices/175d0000.aoc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omamobile-speaker-protection mics
+ExecStop=/usr/bin/omamobile-speaker-protection mute --reason "microphones service stopped"
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

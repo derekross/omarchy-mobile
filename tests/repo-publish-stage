@@ -1,0 +1,222 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# tools/repo-publish's stage() (no keys, no signing, no server): it brings a
+# channel directory to a new index and keeps the files of the last index
+# that listed a different package set, so a phone can go back one version
+# even after a publish that changed nothing, or after a stage that failed
+# part way. Fictional packages and indexes only; stage() is taken from the
+# script and run on its own.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+command -v bsdtar >/dev/null || { pass "# skip: no bsdtar"; exit 0; }
+t=$(mktemp -d)
+trap 'rm -rf "$t"' EXIT
+
+{
+  grep -m1 '^DB=' tools/repo-publish
+  grep -m1 '^db_files() ' tools/repo-publish
+  grep -m1 '^pkg_files() ' tools/repo-publish
+  grep -m1 '^save_sets() ' tools/repo-publish
+  sed -n '/^stage() {$/,/^}$/p' tools/repo-publish
+} > "$t/fn.sh"
+if ! grep -q '^stage() {$' "$t/fn.sh" || ! grep -q '^db_files() ' "$t/fn.sh" || ! grep -q '^pkg_files() ' "$t/fn.sh" ||
+   ! grep -q '^save_sets() ' "$t/fn.sh" || ! bash -n "$t/fn.sh"; then
+  fail "stage() and the helpers it uses are in tools/repo-publish"
+fi
+# shellcheck source=/dev/null
+. "$t/fn.sh"
+
+# make_repo NAME PACKAGE...: a built repository in $t/NAME, as
+# tools/build-packages leaves out/repo: each package with its .sig, and a
+# (fictionally signed) index listing them
+make_repo() {
+  local p f sum d=$t/$1
+  shift
+  rm -rf "$d" "$t/db" && mkdir -p "$d" "$t/db"
+  for p in "$@"; do
+    echo "fictional $p" > "$d/$p-aarch64.pkg.tar.zst"
+    echo "fictional signature" > "$d/$p-aarch64.pkg.tar.zst.sig"
+    sum=$(sha256sum < "$d/$p-aarch64.pkg.tar.zst" | cut -d' ' -f1)
+    mkdir -p "$t/db/$p"
+    printf '%%FILENAME%%\n%s\n\n%%SHA256SUM%%\n%s\n' "$p-aarch64.pkg.tar.zst" "$sum" > "$t/db/$p/desc"
+  done
+  for f in omamobile.db omamobile.files; do
+    (cd "$t/db" && bsdtar -czf "$d/$f.tar.gz" -- *)
+    echo "fictional signature" > "$d/$f.tar.gz.sig"
+    ln -sfn "$f.tar.gz" "$d/$f"
+    ln -sfn "$f.tar.gz.sig" "$d/$f.sig"
+  done
+}
+ch=$t/channel/aarch64
+# run_stage NAME: stage $t/NAME into the channel, in a shell of its own so
+# set -e stops stage() at a failure as in the script (in a caller's `if`
+# or `||` it would be ignored). FAULT, if set, is run first: a function
+# that stands in for a command and fails.
+run_stage() { FAULT=${FAULT:-} bash -c 'set -euo pipefail; . "$1"; eval "$FAULT"; stage "$2" "$3"' _ "$t/fn.sh" "$t/$1" "$ch" > "$t/log" 2>&1; }
+# stages NAME WHAT: run_stage NAME, which must succeed
+stages() { run_stage "$1" || { cat "$t/log" >&2; fail "$2"; }; }
+# The package files (and signatures) wanted, and those the channel has
+want() { local p; for p in "$@"; do printf '%s\n' "$p-aarch64.pkg.tar.zst" "$p-aarch64.pkg.tar.zst.sig"; done | sort; }
+have() { (cd "$ch" && printf '%s\n' *.pkg.tar.*) | sort; }
+# expect WHAT PACKAGE...: the channel holds exactly these packages
+expect() {
+  local what=$1
+  shift
+  diff <(want "$@") <(have) >&2 || fail "$what"
+  pass "$what"
+}
+# kept WHAT PACKAGE...: these packages are all still there
+kept() {
+  local what=$1
+  shift
+  [[ -z $(comm -23 <(want "$@") <(have)) ]] || fail "$what"
+  pass "$what"
+}
+# expect_index NAME: the channel's index files are NAME's
+expect_index() {
+  diff <(db_files "$t/$1") <(db_files "$ch") >&2 || fail "the channel's index is $1's"
+  local f s
+  for f in omamobile.db omamobile.files; do
+    for s in "" .sig; do
+      if ! cmp -s "$ch/$f.tar.gz$s" "$t/$1/$f.tar.gz$s" || ! cmp -s "$ch/$f$s" "$t/$1/$f.tar.gz$s"; then
+        fail "$f$s and $f.tar.gz$s are $1's"
+      fi
+    done
+  done
+}
+
+# v1 -> v2 -> v2 -> v3: base stays, app moves 1 -> 2 -> 3
+make_repo v1 base-1-1 app-1-1
+make_repo v2 base-1-1 app-2-1
+make_repo v3 base-1-1 app-3-1
+stages v1 "stages v1"
+expect_index v1
+expect "the first publish holds v1" base-1-1 app-1-1
+stages v2 "stages v2"
+expect_index v2
+expect "v2 keeps v1's files" base-1-1 app-1-1 app-2-1
+stages v2 "stages v2 again"
+expect_index v2
+expect "publishing v2 again still keeps v1's files" base-1-1 app-1-1 app-2-1
+stages v2 "stages v2 a third time"
+expect "and so does a third publish of v2" base-1-1 app-1-1 app-2-1
+stages v3 "stages v3"
+expect_index v3
+expect "v3 keeps v2's files and drops v1's" base-1-1 app-2-1 app-3-1
+stages v3 "stages v3 again"
+expect "publishing v3 again keeps v2's files" base-1-1 app-2-1 app-3-1
+
+# A package removed from the set stays for one version, as the rollback
+make_repo v4 base-1-1
+stages v4 "stages v4"
+expect_index v4
+expect "a set without app keeps v3's app as the way back" base-1-1 app-3-1
+stages v4 "stages v4 again"
+expect "and still after publishing that set again" base-1-1 app-3-1
+make_repo v5 base-2-1
+stages v5 "stages v5"
+expect "the next change drops the removed package" base-1-1 base-2-1
+
+# Going back to an older set is a change too: the set it replaces stays
+stages v4 "stages v4 after v5"
+expect_index v4
+expect "staging an older set keeps the newer one it replaces" base-1-1 base-2-1
+stages v5 "stages v5 after v4"
+expect_index v5
+
+# A file no index lists goes, with its signature, also on a no-op
+echo stray > "$ch/stray-1-1-aarch64.pkg.tar.zst"
+echo stray > "$ch/stray-1-1-aarch64.pkg.tar.zst.sig"
+stages v5 "stages v5 with a stray file"
+expect "a no-op drops a file neither set lists" base-1-1 base-2-1
+
+# A failed stage (a package or signature the new index lists is missing)
+# changes neither the index nor what is kept; the files cp copied before it
+# stopped go at the next stage, also when that one changes nothing
+make_repo v6 base-2-1 app-6-1
+mv "$t/v6/app-6-1-aarch64.pkg.tar.zst" "$t/app-6-1.held"
+if run_stage v6; then fail "refuses an index whose package is missing"; fi
+expect_index v5
+kept "a failed stage keeps the index and every file" base-1-1 base-2-1
+stages v5 "stages v5 after the failed v6"
+expect_index v5
+expect "the no-op after it drops what the failed stage copied" base-1-1 base-2-1
+mv "$t/v5/base-2-1-aarch64.pkg.tar.zst.sig" "$t/base-2-1.sig.held"
+if run_stage v5; then fail "refuses a package without its signature"; fi
+expect_index v5
+kept "a failed no-op stage keeps the index and every file" base-1-1 base-2-1
+mv "$t/base-2-1.sig.held" "$t/v5/base-2-1-aarch64.pkg.tar.zst.sig"
+mv "$t/app-6-1.held" "$t/v6/app-6-1-aarch64.pkg.tar.zst"
+stages v6 "stages v6 once its package is there"
+expect_index v6
+expect "the next good stage holds v6 and v5 and nothing else" base-2-1 app-6-1
+extra=$(cd "$ch" && shopt -s nullglob dotglob && printf '%s\n' * | grep -vE '\.pkg\.tar\.|^omamobile\.(db|files)(\.tar\.gz)?(\.sig)?$' || true)
+[[ -f $ch.sets && -z $extra ]] || fail "the record is beside the channel, which holds only packages and the index: $extra"
+pass "the record of the sets is beside the channel, so it isn't uploaded"
+rm -rf "$t/channel"
+rm "$t/v6/app-6-1-aarch64.pkg.tar.zst"
+if run_stage v6; then fail "refuses v6 in a fresh channel"; fi
+[[ ! -e $ch/omamobile.db && ! -s $ch.sets ]] || fail "a failed first stage leaves no index"
+pass "a failed first stage leaves no index and an empty record"
+
+# A stage that fails while copying the index leaves the database on disk
+# new and the record as it was: the retry decides from the record, so it
+# keeps the set before it. The same when the record can't be replaced.
+rm -rf "$t/channel"
+stages v1 "stages v1 in a new channel"
+stages v2 "stages v2 in a new channel"
+mv "$t/v3/omamobile.files.tar.gz" "$t/files.held"
+if run_stage v3; then fail "refuses v3 without its .files archive"; fi
+diff <(db_files "$t/v3") <(db_files "$ch") >&2 || fail "the failed v3 got as far as the database"
+mv "$t/files.held" "$t/v3/omamobile.files.tar.gz"
+stages v3 "retries v3"
+expect_index v3
+expect "a retry after a failed index copy keeps v2's files" base-1-1 app-2-1 app-3-1
+cp "$ch.sets" "$t/sets.before"
+if FAULT='mv() { return 75; }' run_stage v4; then fail "stops when the record can't be replaced"; fi
+cmp -s "$ch.sets" "$t/sets.before" || fail "a record that can't be replaced stays as it was"
+stages v4 "retries v4"
+expect "a retry after a failed record keeps v3's files" base-1-1 app-3-1
+cp "$ch.sets" "$t/sets.before"
+# shellcheck disable=SC2016  # FAULT is expanded by the stage's own shell
+if FAULT='sed() { [[ $2 != "s/^./current &/p" ]] || return 75; command sed "$@"; }' run_stage v5; then
+  fail "stops when the record's current set can't be written"
+fi
+cmp -s "$ch.sets" "$t/sets.before" || fail "a record whose current set can't be written stays as it was"
+stages v5 "retries v5"
+stages v5 "stages v5 again"
+expect "a retry after a half-written record keeps v4's files" base-1-1 base-2-1
+if FAULT='find() { return 1; }' run_stage v4; then fail "stops when the channel can't be listed for pruning"; fi
+kept "a stage that can't list the channel deletes nothing" base-1-1 base-2-1
+FAULT='grep() { return 2; }' stages v5 "stages v5 with a failing grep"
+expect "a failing grep can't make the prune delete what it keeps" base-1-1 base-2-1
+
+# A channel staged before the record existed (v1 and v2's files, v2's
+# index) gets one from what it has before anything is copied: a failed
+# stage adds nothing to it, a no-op keeps v1, the next change rotates
+rm -rf "$t/channel"
+stages v1 "stages v1 for a channel without a record"
+stages v2 "stages v2 for a channel without a record"
+rm "$ch.sets"
+if FAULT='pkg_files() { return 75; }' run_stage v2; then fail "stops when the channel's files can't be listed"; fi
+if FAULT="bsdtar() { [[ \$2 != '$ch/'* ]] || return 75; command bsdtar \"\$@\"; }" run_stage v2; then
+  fail "stops when the channel's index can't be read"
+fi
+if ((EUID)); then
+  chmod 300 "$ch"
+  if run_stage v2; then chmod 755 "$ch"; fail "stops when the channel's directory can't be read"; fi
+  chmod 755 "$ch"
+fi
+[[ ! -e $ch.sets ]] || fail "a failed read records nothing"
+pass "a channel whose files, index or directory can't be read gets no record"
+mv "$t/v3/app-3-1-aarch64.pkg.tar.zst.sig" "$t/sig.held"
+if run_stage v3; then fail "refuses v3 without app's signature"; fi
+[[ -f $ch/app-3-1-aarch64.pkg.tar.zst ]] || fail "the failed v3 copied app-3-1 before it stopped"
+mv "$t/sig.held" "$t/v3/app-3-1-aarch64.pkg.tar.zst.sig"
+stages v2 "stages v2 after the failed v3"
+expect_index v2
+expect "without a record, a no-op keeps v1 and drops what the failed v3 copied" base-1-1 app-1-1 app-2-1
+stages v3 "stages v3 after that"
+expect "and the next change keeps only the set it replaces" base-1-1 app-2-1 app-3-1

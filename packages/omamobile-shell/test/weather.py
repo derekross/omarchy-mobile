@@ -320,6 +320,17 @@ os.chmod(fake_wai, 0o755)
 loader.exec_module(W)
 W.WHERE_AM_I = fake_wai
 ok(W.where_am_i() == (40.79, -77.86), "where-am-i's answer, rounded to about 1 km")
+# The session sets GTK_USE_PORTAL=1, and GeoClue's client library then asks
+# the portal, which refuses: where-am-i runs without it (7 Pro, 2026-11-10)
+portal_wai = os.path.join(home, "portal-wai")
+with open(portal_wai, "w") as f:
+    f.write("#!/bin/sh\n[ -n \"$GTK_USE_PORTAL\" ] && { echo 'Location services disabled'; exit 255; }\nexec '%s'\n" % fake_wai)
+os.chmod(portal_wai, 0o755)
+W.WHERE_AM_I = portal_wai
+os.environ["GTK_USE_PORTAL"] = "1"
+ok(W.where_am_i() == (40.79, -77.86), "where-am-i asks GeoClue itself in a session that sets GTK_USE_PORTAL")
+del os.environ["GTK_USE_PORTAL"]
+W.WHERE_AM_I = fake_wai
 with open(fake_wai, "w") as f:
     f.write("#!/bin/sh\necho 'Failed to connect to GeoClue service'\n")
 ok(W.where_am_i() is None, "no answer: none")

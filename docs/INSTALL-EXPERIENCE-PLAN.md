@@ -52,8 +52,8 @@ What the person does:
    phone with the volume keys. This is the only part done on the phone
    itself.
 4. Reads one clear warning, shown once before anything is written, and
-   acknowledges it (Google's terms for the firmware are a separate
-   checkbox, §6.3). The warning says:
+   acknowledges it (Google's terms for the firmware are accepted on
+   Google's own page, in step 6 and §6.3). The warning says:
    - the phone is wiped, and everything on it is lost;
    - Omarchy Mobile replaces Android as the phone's operating system, and
      what that means day to day: no Google apps or Play Store, Android apps
@@ -72,10 +72,13 @@ What the person does:
    per boot) keep stock's data safe.
 5. Chooses a user name, a PIN or password, the phone's name, the time zone
    and optionally a Wi-Fi network, in the installer window.
-6. Waits. The installer downloads the release and the phone's own firmware,
-   checks everything, writes the phone, waits for its first start, backs up
-   the radio partitions to the computer, puts the firmware on the phone and
-   restarts it.
+6. Clicks one button that opens Google's download page at the phone's
+   build, accepts Google's terms there and saves the factory image; the
+   installer picks the saved file up (§6.3; D2: the installer doesn't
+   download it itself until Google's terms have been checked). Then waits.
+   The installer downloads the release, checks everything, writes the
+   phone, waits for its first start, backs up the radio partitions to the
+   computer, puts the firmware on the phone and restarts it.
 7. Sees one screen: "Your phone is ready", with a short list (display,
    touch, Wi-Fi, sound, cameras, sensors, battery) each ticked, and where
    the radio backup was saved.
@@ -84,24 +87,27 @@ On the first start that the person sees, Wi-Fi, Bluetooth, sound, haptics,
 sensors and the cameras work, and the modem's per-phone data (board id, NV
 checksums) is in place, so the modem can start without any further step.
 After that the phone updates itself through the Updater (the update sheet
-in the shell, `omamobile-update` underneath, RELEASES §5.4), including its
-firmware (§9).
+in the shell, `omamobile-update` underneath, RELEASES §5.4). Its firmware
+updates there too, with the factory image fetched from Google's page by
+the owner, as at install (§9).
 
 What the person never does: install `fastboot` or Android's tools, open a
 terminal, find Google's factory image page, match a build number, set up a
 USB network connection, run a backup or a provisioning tool by hand, or
 download anything from a site other than omamobile.org and Google's own
-servers (and the download from Google happens inside the installer).
+servers. The installer opens Google's page at the right build; the one
+download the person starts by hand is the factory image there (D2).
 
 ## 2. What stays fixed
 
 - **Google's firmware is never hosted by the project** (RELEASES §12.7). Not
   in a bundle, not in a package, not on `pkgs.omamobile.org`, not through a
-  proxy or cache of ours. The installer fetches the user's own phone's
-  factory image straight from Google's servers to the user's machine (or the
-  phone fetches it itself, §9), after the user has accepted Google's terms
-  in the installer, and the files the phone needs are extracted locally. No
-  byte of Google's passes through a server of ours.
+  proxy or cache of ours. The user's own phone's factory image comes
+  straight from Google's servers to the user's machine (or to the phone,
+  §9), after the user has accepted Google's terms on Google's own page
+  (§6.3, D2: the user saves it there and the installer takes the file), and
+  the files the phone needs are extracted locally. No byte of Google's
+  passes through a server of ours.
 - **The factory image is the one that matches the phone**: the build whose
   bootloader and radio versions equal the ones the phone reports in fastboot
   (`version-bootloader`, `version-baseband`). §6 covers what happens when
@@ -137,7 +143,7 @@ which passed a clean reinstall on 2026-11-02 **[V]**:
 | First start | grows the root, runs `omamobile-firstboot`, shows the lock screen | on the phone |
 | USB network | `nmcli connection add ...` by hand | by hand |
 | Radio backup | `tools/nv-backup DIR` | `tools/nv-backup` |
-| Firmware | a Python venv for the camera, then `tools/phone-provision --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
+| Firmware | a Python venv for the camera, then `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
 | Restart | `tools/phone-ssh 'reboot-to omamobile'` | by hand |
 | Check | none for the user; `tools/phone-smoke` for developers | `tools/phone-smoke` |
 
@@ -264,7 +270,7 @@ retries silently, as `nv-backup` does.
 
 ### 4.8 Provisioning
 
-Today: `tools/phone-provision --nv-backup DIR FACTORY.zip` after the first
+Today: `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` after the first
 start: the `extract-*` tools on the computer, then pushes over USB SSH, then
 the board id read on the phone **[V]**. §5 weighs folding this into the
 install on the computer against doing it on the phone.
@@ -305,8 +311,8 @@ image reaches it.
 
 ### 5.1 Option A: extract on the computer
 
-What today's tools do. The installer downloads the factory image to the
-computer, runs the extraction there and either writes the result into the
+What today's tools do. The factory image is on the computer (saved from
+Google's page by the user, §6.3), and the installer runs the extraction there and either writes the result into the
 local root image copy before flashing (RELEASES §6 step 2-3, designed but
 not built) or pushes it after the first start (today's `phone-provision`).
 
@@ -342,8 +348,9 @@ code later serves firmware updates (§9).
 
 ### 5.3 Recommendation: B, with the image carried over an install link
 
-The computer downloads the factory image from Google (it is the only side
-with a network at that point), and hands it to the phone over USB at first
+The factory image is saved on the computer from Google's page (§6.3; it
+is the only side with a network at that point), and the installer hands it
+to the phone over USB at first
 boot; the phone checks its SHA-256 and extracts it. The channel is an
 **install link**: a small USB function the phone offers only in first-boot
 install mode (FunctionFS in the gadget the initramfs already sets up, with
@@ -420,14 +427,20 @@ is an open question (D3).
 ### 6.3 Google's terms
 
 Google's page asks the visitor to acknowledge terms before it shows the
-download links **[D]**. The installer shows those terms, linked to Google's
-own page, with a checkbox the user must tick before the download starts,
-and records that it was ticked (on the computer only). Whether a third-party
-installer may present the acknowledgement this way, or must send the user
-to Google's page to click through, needs checking before M1 ships (D2). The
-fallback is honest and still simple: a button that opens Google's page at
-the right build, and a file picker (or a watched Downloads folder) for the
-zip the user saved.
+download links **[D]**. Whether a third-party installer may present that
+acknowledgement itself and download on the user's behalf, or must send the
+user to Google's page to click through, hasn't been checked. Until it is
+(D2, decided 2026-11-09), the installer does neither. It shows a button
+that opens Google's page at the right build; the user accepts the terms
+there and saves the zip; a file picker (or a watched Downloads folder)
+takes the saved file, and the installer checks its SHA-256 against the
+signed index before using it. That is honest and still simple, and the
+Updater does the same for a later firmware update (§9).
+
+If the check allows it, the design to return to is this: the installer
+shows Google's terms, linked to Google's own page, with a checkbox the user
+must tick before the download starts, and records that it was ticked (on
+the computer only).
 
 ### 6.4 Downloading in a browser
 
@@ -450,7 +463,8 @@ Terms of Service **[D]**.
 
 - **So the design stays as it is:** the user's own machine (or the user's
   own phone, §9) downloads the factory image from Google, for that user's
-  own Pixel, and the files the phone needs are extracted locally. That is
+  own Pixel (by the user's own click on Google's page while D2's check is
+  open), and the files the phone needs are extracted locally. That is
   the most defensible reading of those terms we have. It isn't spotless:
   "modified" makes any extraction a grey area, one that every system other
   than Google's running on a Pixel shares.
@@ -545,13 +559,18 @@ Updater:
    are compatible with the phone's (read on the phone; the phone's
    bootloader and radio never change under Linux, because nothing of ours
    writes them).
-3. **It asks once, the first time,** to accept Google's terms (§6.3); the
-   owner can choose to be asked every time instead. Then, on Wi-Fi, on the
-   charger or above a battery level, and with enough free space (the zip
-   plus room to unpack, several GB **[I]**), it downloads the factory image
-   straight from Google to the phone, checks the SHA-256 from the signed
-   index, and extracts it with the same `omamobile-provision` code as the
-   install (§5.2).
+3. **It offers the update and the owner fetches the image,** as at install
+   (§6.3, D2): the Updater says a newer firmware set is ready and opens
+   Google's page at that build, in the phone's browser or as a link for a
+   computer. The owner accepts Google's terms there and saves the zip, and
+   the Updater takes the saved file (a file picker, or the Downloads
+   folder). With enough free space (the zip plus room to unpack, several GB
+   **[I]**), on the charger or above a battery level, it checks the SHA-256
+   from the signed index and extracts the image with the same
+   `omamobile-provision` code as the install (§5.2). The Updater downloads
+   no firmware itself until Google's terms have been checked; a phone is
+   never held on old firmware for that reason, because the owner can
+   always fetch the image.
 4. **It installs the new firmware set beside the old one**
    (`/usr/lib/firmware/updates` and the vendor chroots in versioned
    directories with a link to the current one, instead of overwritten in
@@ -577,8 +596,9 @@ Constraints:
   Updater then keeps the old set and reports it.
 - On a secure phone the firmware lives inside the encrypted root, so nothing
   changes for the verified boot chain.
-- Google's terms, and whether automatic downloads on the owner's behalf are
-  acceptable under them, is part of D2.
+- Whether automatic downloads on the owner's behalf are acceptable under
+  Google's terms is part of D2; until that is checked, step 3 is the
+  owner's download.
 
 ## 10. Gaps found in the 2026-11-02 test install
 
@@ -594,7 +614,11 @@ else.
   reinstall; on anyone else's, every install is a first install. Fix: an
   explicit mode (`--first-install` with `--nv-backup DIR`, or `--restore
   DIR`), no default backup path in the bundle's copy, and the factory image
-  fetched by the tool itself (§6) when none is given.
+  fetched by the tool itself (§6) when none is given. **The modes are
+  done:** the tool has no default backup directory, refuses a cheetah run
+  that names neither mode, and `--backup DIR` stays as `--restore DIR`'s
+  older spelling. The fetch is not built: by D2 the owner saves the image
+  from Google's page and the tool takes the file, as it does today.
 - **G2. The stable channel must exist before a release's first update.**
   `tools/release`'s `test-install` stage runs before `promote`, and a
   release install follows `stable`, so the test-installed phone's first
@@ -602,6 +626,13 @@ else.
   once, before the first release's test install (later releases find the
   previous release there, which is correct); and `omamobile-update` reports
   "this channel has no updates yet" as a normal state, not an error.
+  **Done:** stable has had an index since the 2026.11.08 release, so the
+  ordering can only bite on a new server; `tools/release test-install`
+  asks the server and, with no stable index, prints the one-time promotion
+  and stops. `omamobile-update` (omamobile-omarchy 0.1.41) treats a channel
+  whose index the server says isn't there as "no updates yet": no blocker,
+  exit 0. The Updates sheet shows that state as up to date; it doesn't show
+  the sentence yet.
 - **G3. `systemd-firstboot` fails once on first boot.** It wants to ask for
   settings on a console the phone doesn't have. Fix: the root image provides
   what it asks for (locale, keymap, time zone from `firstboot.conf`, machine
@@ -653,8 +684,8 @@ real users.
   whole install with today's tools: preflight, unlock guidance from the
   phone's state (§4.2), the one warning of §1 step 4 (wipe, new operating
   system and what it means day to day, the way back) acknowledged once before any write and recorded with
-  the install's state, with no further prompts about it, the build index lookup and the factory image
-  download from Google after the terms prompt (§6), the checks and writes
+  the install's state, with no further prompts about it, the build index lookup, Google's page opened at the
+  right build and the saved factory image taken and checked (§6.3, D2), the checks and writes
   (`install-phone`), the USB network connection set up with the user's
   consent (a NetworkManager profile for `cdc_ncm`, shown before it is
   added), waiting for the first start, `nv-backup` into a named folder,
@@ -664,7 +695,7 @@ real users.
 - **Needs:** M0; the build index (§6.1) and the maintainer tool that fills
   it; the camera's Python modules handled by the tool (its own venv) or the
   camera step moved to the phone early.
-- **Open:** Google's terms in a third-party tool (D2); still Linux only,
+- **Open:** Google's terms in a third-party tool (D2: M1 uses the fallback); still Linux only,
   still a terminal; what the index marks as tested (D3).
 
 ### M2. Install mode and the install link on the phone
@@ -717,9 +748,9 @@ real users.
 
 ### M5. Firmware updates through the Updater
 
-- **What:** §9: the build index in the Updater, the phone downloading and
-  extracting new firmware from Google, versioned firmware sets with
-  rollback.
+- **What:** §9: the build index in the Updater, the owner's download of
+  the new factory image from Google's page (§9 step 3) and its extraction
+  on the phone, versioned firmware sets with rollback.
 - **Needs:** M2's `omamobile-provision` on the phone; the index process
   with a tested flag per build and device; a health check after the
   restart that can roll back.
@@ -749,12 +780,20 @@ never offered: that write stays a manual, named exception.
 
 ## 12. Decisions for the maintainer
 
-- **D1. Provisioning:** on the phone with the install link (recommended,
-  §5.3), or on the computer (option A) for the long term too.
-- **D2. Google's terms:** check whether the installer may show Google's
-  acknowledgement itself and download on the user's behalf, and whether the
-  Updater may download later firmware automatically after one acceptance.
-  Until then, M1 uses the open-Google's-page-and-pick-the-file fallback.
+- **D1. Provisioning: decided 2026-11-09, on the phone with the install
+  link (§5.3).** The computer downloads the factory image and hands it over
+  the install link at first boot; the phone checks and extracts it. Until
+  the install link exists (M2), M1 does the same steps over USB SSH with
+  option A's extraction on the computer.
+- **D2. Google's terms: decided 2026-11-09, the fallback until they are
+  checked.** M1 opens Google's page at the right build and takes the zip
+  the user saved (a file picker or a watched Downloads folder); the
+  installer doesn't present Google's acknowledgement itself or download on
+  the user's behalf, and the Updater downloads no firmware automatically:
+  it offers a firmware update the same way, opening Google's page for the
+  owner to save the zip (§9 step 3), so no phone waits on this check.
+  Whether a third-party installer may do either stays open, to be checked
+  against Google's terms before anything changes.
 - **D3. Tested builds:** which factory builds the index marks tested, and
   how a build earns it (a `phone-smoke` pass on the reference phone with
   that build's firmware is the proposal).

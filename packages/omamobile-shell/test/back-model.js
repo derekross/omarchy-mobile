@@ -9,8 +9,8 @@ const tests = []
 const test = (name, fn) => tests.push([name, fn])
 
 test("Escape goes through Hyprland's Lua dispatcher, down then up, in one process", () => {
-  assert.strictEqual(M.ESCAPE_DOWN, 'hl.dsp.send_key_state({ mods = "", key = "Escape", state = "down" })')
-  assert.strictEqual(M.ESCAPE_UP, 'hl.dsp.send_key_state({ mods = "", key = "Escape", state = "up" })')
+  assert.strictEqual(M.ESCAPE_DOWN, 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "down" })')
+  assert.strictEqual(M.ESCAPE_UP, 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "up" })')
   const [sh, c, script, name, down, up] = M.ESCAPE_ARGV
   assert.deepStrictEqual([sh, c, name, down, up], ["sh", "-c", "sh", M.ESCAPE_DOWN, M.ESCAPE_UP])
   // The dispatches are positional arguments, never spliced into the script.

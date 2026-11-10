@@ -1782,7 +1782,7 @@ Preconditions, as SLEEP-PLAN's:
 
 | Piece | State | What it means here |
 | --- | --- | --- |
-| Modem to ONLINE | `/usr/local/bin/omamobile-tegu-modem-up` (M5, once per boot; refuses a second start; arms the sleep inhibitor `omamobile-tegu-modem-nosleep`; its source is [bringup/omamobile-tegu-modem-up](bringup/omamobile-tegu-modem-up)) | the start is this script, not `omamobile-modem.service`, which is `masked-runtime` on the palmtop; the transient unit's ExecStop (the profile's stop, which powers the CP off) runs at shutdown, so the way to stop the modem is an attended reboot, never a stop by hand |
+| Modem to ONLINE | `omamobile-tegu-modem-up` from `omamobile-device-tegu` (#372; before it, a bring-up copy in `/usr/local/bin`): once per boot, refuses a second start and a boot that finds the latch, arms the sleep inhibitor `omamobile-tegu-modem-nosleep`; `omamobile-tegu-modem-boot` runs it at boot when enabled (TELEPHONY-PLAN 2.7) | the start is this script, not `omamobile-modem.service`, which is `masked-runtime` on the palmtop; the transient unit's ExecStop (the profile's stop, which powers the CP off) runs at shutdown, so the way to stop the modem is an attended reboot, never a stop by hand |
 | NV safety | `pacman -Q` says `omamobile-modem` 0.1.4, but the profile files under `/usr/lib/omamobile-vendor` were copied by hand from newer trees (the 27th GNSS try ran 0.1.9's watcher; 0.1.4 predates the 9a's chroot support), so `pacman -Qkk omamobile-modem` is not clean; `/etc/omamobile/modem-nv.sha256` from the 2026-10-28 backup; the profile's `check` runs inside the start script | the NV checks live in that profile, so SIM-1 installs the package from main for real and records the version and the profile's sha256; a stock boot since 2026-10-28 would make `check` refuse; then a fresh read-only backup and a new checksum file come first (AGENTS.md §1) |
 | The RIL | `omamobile-modem-sit` 0.3.3 installed 2026-10-29 (SIM-1), both units disabled; 0.3.4 (<https://github.com/derekross/omarchy-mobile/pull/156>) reads the CP state on one open file | 0.3.3's watcher opens and closes the boot device about thirty times a minute, and that cycles the CP link on the 9a (the 10-29 hangs); the run uses 0.3.4 (SIM-1). Its unit `Requires=omamobile-modem.service`, which is masked here, so `systemctl start omamobile-sitd` would fail until SIM-2's unit copy removes that requirement (done 2026-10-29) |
 | The bridge for apps | `omamobile-mmd` not installed | not part of this test (T2 follows a passing run) |
@@ -2017,10 +2017,37 @@ is a US MVNO on a large LTE network.
   (`omamobile-sit sms send`) reached the owner's phone. A text sent to
   the palmtop's own number was accepted ("sent") and never came back,
   which is common on this network.
-- **SIM-10:** no call; the 9a has no audio route.
+- **SIM-10:** no call on 11-02; the 9a had no audio route. See "Calls"
+  below.
 - **SIM-11 passed:** radio off, the RIL stopped, an attended reboot
   (the unit's stop powered the CP off during shutdown), then M0.1: the
   six partitions unchanged, `cpif` not loaded, UFS error handler 0.
+
+#### Calls (2026-11-03)
+
+With `omamobile-modem-sit` 0.3.11 (speakerphone audio for the 9a's AoC
+card, omarchy-mobile #367, on #364 and #356) and `[audio] card = auto`:
+
+- **On the daily kernel:** an outgoing call to the owner's phone, answered;
+  the far end's voice came out of the palmtop's speaker, and the palmtop's
+  microphone carried it back (heard at the far end as an echo: there is no
+  echo cancellation yet). A second outgoing call and an incoming call
+  (`omamobile-sit answer` while it rang) behaved the same. sitd logged
+  "AoC tegu speakerphone prepared at conservative TAS gain" at each start
+  and "AoC call routes restored" after each hang-up; UFS error handler 0.
+- **On in-tree drivers end to end** (`7.3.0-rc6-omamobile-push1-g253ddb231a89`:
+  `omamobile` plus the open kernel PRs: the modem link #187 with its PCIe
+  stack, GNSS #185, and #162's AoC, GSA and Trusty from the device tree):
+  the AoC up with 93 services and the `google,tegu-aoc-snd-card` card,
+  CPIF and the in-tree host booted the CP to ONLINE, and then an outgoing
+  and an incoming call with audio both ways, mobile data over `rmnet0`
+  (pings, HTTPS 200) and a text that arrived. The TAS gains read back at
+  -20 dB during the calls, the mixer routes matched their saved state
+  after, the AoC kept 93 services with nothing in its log, the same boot
+  throughout, no oops or WARN, no UFS errors.
+
+Left for calls: echo cancellation on speakerphone, an earpiece mode, the
+Phone app (through `omamobile-mmd`), and starting the modem at boot.
 
 The run kept the full refused record (292 bytes: status 36, CID 1, the
 IPC extension version at 132, an unidentified extension byte at 133, the

@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Bring up Wi-Fi at boot, hang-safe (device/cheetah/WIFI-BATTERY-PLAN.md).
+#
+# Order: the PCIe controller (powers the chip, trains the link), then
+# brcmfmac. The chip's DMA buffers come from its restricted DMA pool (DT);
+# that keeps driver bugs away from the rest of RAM, but is not a firewall
+# against the chip's firmware. A marker file is written and synced before
+# anything touches the hardware, and removed once the interface exists. If the
+# phone hangs during bring-up, the next boot finds the marker and skips Wi-Fi;
+# run "omamobile-wifi-start --retry" to try again.
+#   omamobile-wifi-start [--retry]
+set -uo pipefail
+
+state=/var/lib/omamobile
+marker=$state/wifi-bringup-started
+controller=/sys/bus/platform/devices/14520000.pcie
+pool=/proc/device-tree/reserved-memory/wifi-dma-pool
+
+log() { echo "omamobile-wifi: $*"; }
+
+[[ ${1:-} == --retry ]] && rm -f "$marker"
+
+if [[ -e $marker ]]; then
+  log "the last bring-up ($(cat "$marker" 2>/dev/null)) never finished; Wi-Fi stays off this boot."
+  log "after checking the previous boot's log, retry with: omamobile-wifi-start --retry"
+  exit 0
+fi
+
+mkdir -p "$state"
+date -Is > "$marker"
+sync -f "$marker" 2>/dev/null || sync
+
+finish() { rm -f "$marker"; sync -f "$state" 2>/dev/null || sync; }
+
+# 1. Only with the controller enabled and the DMA pool present (both from DT).
+if [[ ! -e $controller ]]; then
+  log "the PCIe controller is not enabled in this DTB; nothing to do"
+  finish; exit 0
+fi
+if [[ ! -d $pool ]] || { [[ -e $pool/status ]] && [[ $(tr -d '\0' < "$pool/status") != okay ]]; }; then
+  log "no Wi-Fi DMA pool in this DTB; not powering the Wi-Fi chip"
+  finish; exit 1
+fi
+
+# 2. Link, then the driver. Explicit modprobe works despite the autoload blacklist.
+modprobe pcie_gs201 || { log "pcie_gs201 failed"; finish; exit 1; }
+modprobe brcmfmac || { log "brcmfmac failed"; finish; exit 1; }
+
+# 3. Done once brcmfmac has an interface.
+for _ in $(seq 60); do
+  for dev in /sys/class/net/*; do
+    if [[ $(readlink -f "$dev/device/driver" 2>/dev/null) == */brcmfmac ]]; then
+      log "up: ${dev##*/}"
+      finish; exit 0
+    fi
+  done
+  sleep 0.5
+done
+log "no Wi-Fi interface after 30 s (the hardware answered; see dmesg)"
+finish
+exit 1
