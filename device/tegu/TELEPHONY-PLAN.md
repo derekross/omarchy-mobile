@@ -304,8 +304,12 @@ first boot:
   stopped on its idle lease with the CP ONLINE.
 
 The details, and why the GNSS bus keeps zumapro's SPI port configuration,
-are in MODEM-PLAN after section P (with #594). Still to run on these
-drivers: a call, texts and data, and the NV check after them.
+are in MODEM-PLAN after section P (with #594). A fourth boot by the unit
+(19:26 MST) took an incoming call through the bridge (accepted, 8 s, hung
+up, the release confirmed in 272 ms) and mobile data over `rmnet0`; its
+`systemctl reboot` was confirmed like the two before; and
+`tools/nv-backup -d tegu --check` after it read every NV partition SAME as
+the 2026-10-28 backup. Texts weren't sent on this kernel.
 
 Qualification, attended and on the charger: boot to ONLINE, data and texts;
 the inhibitor; NV and UFS unchanged; then shutdown and reboot on their own.
