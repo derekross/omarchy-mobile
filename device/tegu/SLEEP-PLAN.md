@@ -9,7 +9,8 @@ it, oldest first.
 ## S1, condensed (2026-11-09): the two failures, the fixes, the runs
 
 **What failed.** Every long s2idle series on the Pixel 9a since 10-28 ended in
-one of two ways, at random, after 6 to 215 clean wakes:
+one of two ways, at random, after 6 to 215 clean wakes (a third, seen with a
+console once on the published kernel on 11-10, follows them):
 
 1. **Dead storage after a wake.** The palmtop woke on its alarm, the kernel
    ran, SSH answered from memory, but UFS link startup failed every time
@@ -36,6 +37,17 @@ one of two ways, at random, after 6 to 215 clean wakes:
    (the alarm's path, GIC SPI 74) evidently does not. The root cause below
    the masks (the missing `pmu_cpuhp` handshake on zuma, the maintainer's
    pointer) is open.
+3. **One core stops answering, on the published kernel (2026-11-10).** With
+   both fixes below and no idle states at all (the published device tree
+   has none, so the cores only take WFI), the 213th sleep of an overnight
+   series never woke, and this time the console survived: the kernel was
+   alive for the two hours and forty minutes until the owner's reset, and
+   CPU 7 answered nothing from just after the device suspend on (an RCU
+   stall on CPU 7 reported every 63 s, the backtrace IPI unanswered each
+   time, nothing of a resume printed, the alarm and two Power-key presses
+   without effect). What CPU 7 was doing isn't known. Whether the 22nd
+   sleep of 11-09 (no console) was the same isn't either. The last note
+   below has the lines.
 
 **The fixes.**
 
@@ -80,6 +92,7 @@ way, and the long unattended stretches ran under the loop's recovery budget):
 | published `abcd6aac5` + #224 + the PMIC interrupt (kernel #236), build #1, no modules installed | the alarm | WFI | 21 woke, the 22nd never did (no ramoops on that boot, nothing on the console) | yes |
 | the same sources (`push1-g6c9420bfa77f`), modules installed, ramoops on | the re-run | WFI | **36 of 36** (60 s, `pm_wakeup_irq` 52 each, no UFS line) | yes |
 | the same sources, build #2 with `CONFIG_PHY_ZUMA_PCIE=m` (#274) | the same with Wi-Fi up and kept across the sleeps | WFI | **36 of 36**, wlan0 passing traffic after | the start yes, then the loop |
+| published `2f890a533` (11-10) + #224 + #236 + #237 (`push1-gff4fdf58035e`, build #4), modules installed, Wi-Fi kept, the hook of #591 installed | the newest tip, overnight | WFI | a 27-minute sleep ended by the Power key, then 212 woke and the 213th never did: CPU 7 stopped answering, the console kept | no (the owner asleep; his reset in the morning) |
 
 Before #96, one wake in 15 to 215 lost the storage; before #98, C2 in the
 sleep lost the palmtop after 6 to 135 cycles.
@@ -96,20 +109,28 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
 
 **What is left.**
 
-1. The published-tip run: done twice with modules (36 of 36 each, the
-   table's last two rows), and the Power-key wake on that tree is in (the
-   last note below). The one sleep in 22 that never woke on the boot
-   without modules is unexplained. If it happens again: the console, then
-   the same series on the tip with the PMIC commits alone, without #224's
-   two.
+1. The no-wake on the published kernel. On that tree 307 sleeps have woken
+   (21, 36, 36, two ended by the Power key, 212) and two have not: the 22nd
+   of 11-09's first run, with no console, and the 213th of 11-10's, whose
+   console shows CPU 7 not answering while the rest of the kernel runs
+   (failure 3 above). Next: the same series on a build that can show what
+   that core is doing and that recovers by itself, with pseudo-NMI
+   (`CONFIG_ARM64_PSEUDO_NMI=y`, `irqchip.gicv3_pseudo_nmi=1`), so the
+   stall report's backtrace reaches a core with interrupts masked, and
+   `kernel.panic_on_rcu_stall=1`, so the stall becomes a panic, a reboot
+   through `panic=10` and a console in pstore with no buttons. If the
+   core doesn't answer an NMI either, it is stuck below the kernel or
+   stopped, and the series goes on with the PMIC commits alone, without
+   #224's two.
 2. The sleep hook ([omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591)): its series is in (the
    last note below, 40 of 40); it waits for its merge.
 3. Sleep with the modem up (M6): never run with the fixes; the one try
    before them (10-27) also had NFC polling.
 4. The root cause under the masks: zuma's PMU data without `pmu_cpuhp`,
    compared with gs101/gs201 before idle states come to a PR.
-5. The DEVICES cell to "works" once #224, the PMIC interrupt (kernel #236)
-   and the hook are merged and have run from the published kernel.
+5. The DEVICES cell to "works" once item 1's no-wake is found and fixed,
+   and #224, the PMIC interrupt (kernel #236) and the hook are merged and
+   have run from the published kernel.
 
 **Scripts** (`device/tegu/bringup/`): `sleep-series.sh` (on the palmtop:
 N RTC-woken `systemctl suspend` cycles of S s, records each wake),
@@ -4769,3 +4790,40 @@ Run 4, the same sources built with #274's `CONFIG_PHY_ZUMA_PCIE=m` so that Wi-Fi
 **The Power-key wake on the published tree (2026-11-09, 19:23 MST palmtop clock, attended).** `7.3.0-rc6-omamobile-push1-g773b4102f5ec`: the tree of runs 3 and 4 plus one device tree commit, the 9a's GNSS nodes (linux-omarchy-mobile#237), with their modules blacklisted and the modem off for the boot, Wi-Fi up. One `systemctl suspend` with a 20-minute RTC alarm as the net; the owner pressed Power once after about 75 s. `pm_wakeup_irq` 57, the gpio-keys Power line (the RTC wakes read 52), `PM: suspend exit` 74.3 s after the entry, the lock screen lit on that press, no UFS line, `suspend_stats` 1 and 0. With runs 3 and 4 that is 73 sleeps on the published tree with #224 and the PMIC interrupt, all woken.
 
 **A series through the sleep hook: 40 of 40 (2026-11-09, 19:32 to 20:17 MST palmtop clock).** `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` build #100 (the kernel with C2), the hook of omarchy-mobile#591 installed with the palmtop's package, no keep flag, modem off for the boot, Wi-Fi kept. `sleep-series-loop.sh` with `WFI=0`, N=40, S=60, so the series set nothing by hand (`state1/disable` `00000000` at the start): 40 sleeps of 59.0 to 60.5 s by dmesg, each woken by the RTC alarm (`pm_wakeup_irq` 56), no UFS line, no oops, `suspend_stats` 40 and 0. The hook's log has 40 "8 deeper idle states disabled for the sleep" and 40 "8 idle states enabled again" lines and nothing else; afterwards `state1/disable` read `00000000` on all eight CPUs, the note was gone, and the runtime C2 counter had kept counting between the sleeps (27758 entries before the first, 83252 after the last).
+
+**The newest tip, overnight: 212 woke, the 213th left a console (2026-11-10, 00:27 to 07:38 MST palmtop clock).** `omamobile` at 2f890a533 (the tip of 2026-11-10 04:19Z, with kernel #222's spi-s3c64xx change) plus the six commits of kernel #224, #236 and #237, built as published (defconfig + `kernel/configs/omamobile.config` + `CONFIG_PHY_ZUMA_PCIE=m` + `CONFIG_EXYNOS_GNSS_IF_SPI=m`): `7.3.0-rc6-omamobile-push1-gff4fdf58035e`, build #4, its own modules installed (78 loaded, brcmfmac and panthor among them), the published DTB with the `public-ramoops` and `modem-cpif` overlays, `wakealarm` present, `spm_lvl` 5. The modem was stopped by a clean reboot first (confirmed) and its boot unit masked for this boot; Wi-Fi up and kept; the sleep hook of #591 installed (it has no idle state to disable on this kernel). Unattended: the owner was asleep, and reset the palmtop in the morning.
+
+- An unplanned first sleep. The series' first start failed (its script on the palmtop wasn't executable, and the start didn't check), and with the keep-awake inhibitor already released the shell's auto-sleep took the palmtop at 00:30:15 with no alarm set. It slept 27 minutes 23 seconds, until the owner's Power key: `PM: suspend exit` 00:57:39, `pm_wakeup_irq` 57 (`Power`), no UFS line, wlan0 up. The start now releases the inhibitor only once the series unit is active and its log has a header.
+- The series (N=230, S=60, `WFI=0`), 00:59 to 04:56: 212 sleeps, each woken by its alarm after 57.6 to 60.5 s by dmesg (`pm_wakeup_irq` 53, the PMIC's line on this build), with no UFS line, no ACPM timeout and no oops in any of them. Six cycles logged an RTC difference a minute short and one a minute long, each read within six seconds after a minute rolled over (the read tear of the 11-04 note); the kernel's clock has those sleeps at 60 s like the rest.
+- The 213th sleep, entered at 04:56:10, never came back: no USB device on the laptop from then on. Two presses of the Power key at about 07:35 did nothing. Power + Volume Up reset the palmtop at 07:37 (the bootloader's record of it: `Long Press Power Key Reboot (PMIC COLD)`); the next boot's ext4 came up clean, with no UFS line.
+
+The console of that boot (ramoops, saved by systemd-pstore on the next boot and copied before anything else ran). The reset was a cold one, so the buffer has bit errors all through it; these are the lines as they read across their many copies, with the seconds as printed:
+
+```
+[16140.03] PM: suspend entry (s2idle)
+[16141.05] Freezing remaining freezable tasks completed (elapsed 0.001 seconds)
+[16141.5]  samsung-pinctrl ...: wake enabled for irq ...     (three lines, the last ones every sleep prints)
+[16401.33] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[16401.33] rcu:  7-...0: (3 GPs behind) idle=8274/1/0x4000000000000000 softirq=113577/113579
+[16401.33] rcu:  (detected by 1, t=5252 jiffies, g=275353, ncpus=8)
+[16401.33] Sending NMI from CPU 1 to CPUs 7:
+[16411.33] After 10 seconds, these CPUs still haven't responded to the NMI: 7
+[16411.33] rcu: rcu_preempt kthread starved for 2500 jiffies! g275353 f0x0 RCU_GP_DOING_FQS(6) ->state=R ->cpu=0
+[16411.33] rcu:  Unless rcu_preempt kthread gets sufficient CPU time, OOM is now expected behavior.
+[16411.33] NMI backtrace for cpu 0 skipped: idling at default_idle_call+0x24/0x30
+  ... the same report about every 63 s, detected by one core or another, the kthread on CPUs 0, 4 and 5 ...
+[25831.60] rcu:  7-...0: (3 GPs behind) idle=8274/1/0x4000000000000000 softirq=113577/113579
+[25831.62] NMI backtrace for cpu 5 skipped: idling at default_idle_call+0x24/0x30
+```
+
+What it says:
+
+- The kernel was alive for 9,690 s after the suspend entry, until the reset: other cores kept taking their ticks, detecting the stall and printing.
+- CPU 7 answered nothing in that time. It didn't take the backtrace IPI in any report, its softirq count never moved, and RCU's record of it reads as not idle (nesting 1), so by that record it wasn't sitting in WFI in the idle loop.
+- The first report came 261 s after the suspend entry, for a grace period that began about 240 s after it. The alarm was due about 60 s after it. So the core stopped somewhere in the first four minutes, and nothing in the log narrows it further.
+- Nothing of a resume was printed: no `watchdog enabled`, no `wake disabled`, no `PM: suspend exit`. The alarm and the two key presses either never reached the suspend path, or it couldn't run.
+- The grace-period kthread was reported starved on CPUs 0, 4 and 5 in turn, each of which answered the IPI as idle. Why a runnable kthread doesn't run on an idle core that answers IPIs isn't explained here.
+
+So this no-wake isn't the SoC staying down, which is what failure 2 looked like on #97 (the last CPU going down, then the watchdog's reset). It is one core locked up with the rest of the kernel running, and nothing watches for that during a sleep: the cluster watchdog is stopped for it and systemd is frozen.
+
+What it doesn't say: what CPU 7 was doing. The backtrace IPI is an ordinary interrupt on this build (`CONFIG_ARM64_PSEUDO_NMI` is off), so a core with interrupts masked, or one stuck below the kernel, can't answer it. Nor whether the 22nd sleep of 11-09 was the same thing: that boot had no ramoops. "What is left" item 1 has the next run.
