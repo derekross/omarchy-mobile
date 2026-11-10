@@ -628,7 +628,8 @@ if [[ -n $ramdisk_image ]]; then
   [[ -z ${avb_size[$ramdisk_image]:-} ]] || die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
   rm -rf "$ramdisk_dir" && mkdir -p "$ramdisk_dir"
   vendor_ramdisk get "$images/$ramdisk_image.img" "$ramdisk_dir/shipped.cpio.lz4" || die "can't read the ramdisk of $ramdisk_image.img"
-  keyfiles=$(lz4 -dc "$ramdisk_dir/shipped.cpio.lz4" 2>/dev/null | cpio -it --quiet 2>/dev/null \
+  lz4 -dc "$ramdisk_dir/shipped.cpio.lz4" > "$ramdisk_dir/shipped.cpio" || die "lz4 couldn't decompress $ramdisk_image.img's ramdisk"
+  keyfiles=$(cpio -it --quiet < "$ramdisk_dir/shipped.cpio" 2>/dev/null \
     | grep -cE '^(\./)?root/\.ssh/authorized_keys$' || true)
   if [[ $keyfiles != 0 ]]; then
     note "$ramdisk_image.img's initramfs already holds SSH keys (a development build): left as built"
@@ -644,7 +645,7 @@ if [[ -n $ramdisk_image ]]; then
     cpio --help 2>/dev/null | grep -c -- --reproducible >/dev/null && reproducible=(--reproducible)
     (cd "$extra" && find . -mindepth 1 | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet "${reproducible[@]}") > "$ramdisk_dir/extra.cpio" ||
       die "cpio couldn't pack the owner's key for the initramfs"
-    { lz4 -dc "$ramdisk_dir/shipped.cpio.lz4" && cat "$ramdisk_dir/extra.cpio"; } | lz4 -l -9 -q > "$ramdisk_dir/initramfs.cpio.lz4" ||
+    cat "$ramdisk_dir/shipped.cpio" "$ramdisk_dir/extra.cpio" | lz4 -l -9 -q > "$ramdisk_dir/initramfs.cpio.lz4" ||
       die "lz4 couldn't recompress $ramdisk_image.img's ramdisk with the owner's key"
     vendor_ramdisk set "$images/$ramdisk_image.img" "$ramdisk_dir/initramfs.cpio.lz4" "$ramdisk_dir/$ramdisk_image.img" ||
       die "rewriting $ramdisk_image.img with the new ramdisk failed"
