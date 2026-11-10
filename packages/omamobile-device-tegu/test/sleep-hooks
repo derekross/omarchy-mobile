@@ -4,11 +4,13 @@
 # systemctl, logger and busctl: Wi-Fi is left alone when kept and present,
 # unloaded and reloaded otherwise, and falls back after a lost sleep; NFC's
 # poll loop is stopped before the sleep and started again after it, and the
-# adapter is powered off only behind the flag file.
+# adapter is powered off only behind the flag file; the deeper CPU idle
+# states are disabled for the sleep and enabled again after it.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 wifi=$PWD/vendor/systemd/system-sleep/omamobile-tegu-wifi
 nfc=$PWD/vendor/systemd/system-sleep/omamobile-tegu-nfc
+cpuidle=$PWD/vendor/systemd/system-sleep/omamobile-tegu-cpuidle
 fail() { printf 'not ok - sleep-hooks: %s\n' "$1" >&2; exit 1; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export OMAMOBILE_TEGU_ROOT=$tmp/root
@@ -116,4 +118,65 @@ rm -f "$power_off"
 : > "$TEST_LOG"; rm -f "$TEST_NFC"/*
 "$nfc" pre; "$nfc" post
 [[ -z $(calls) ]] || fail "an off NFC adapter was touched: $(calls)"
-echo 'ok - sleep-hooks: Wi-Fi kept or reloaded as flagged, NFC polling stopped and restored, power-off behind the flag'
+
+# CPU idle states: a scratch /sys with two CPUs, state0 (WFI) and two deeper
+# states each; cpu1's state2 was disabled by hand before
+cpus=$OMAMOBILE_TEGU_ROOT/sys/devices/system/cpu
+idle_log=$OMAMOBILE_TEGU_ROOT/var/log/omamobile/cpuidle-sleep.log
+keep_idle=$OMAMOBILE_TEGU_ROOT/etc/omamobile/cpuidle-keep-across-sleep
+for c in 0 1; do for s in 0 1 2; do mkdir -p "$cpus/cpu$c/cpuidle/state$s"; echo 0 > "$cpus/cpu$c/cpuidle/state$s/disable"; done; done
+echo 1 > "$cpus/cpu1/cpuidle/state2/disable"
+states() { for c in 0 1; do for s in 0 1 2; do printf '%s' "$(cat "$cpus/cpu$c/cpuidle/state$s/disable")"; done; done; }
+rm -f "$idle_log" "$keep_idle"
+"$cpuidle" pre suspend
+[[ $(states) == 011011 ]] || fail "cpuidle pre: the deeper states are not all disabled, or state0 was touched: $(states)"
+[[ $(wc -l < "$run/cpuidle-disabled-for-sleep") -eq 3 ]] || fail "cpuidle pre notes the three states it disabled, not the one disabled by hand"
+"$cpuidle" post suspend
+[[ $(states) == 000001 ]] || fail "cpuidle post: its own states are enabled again and the hand-disabled one stays off: $(states)"
+[[ ! -e $run/cpuidle-disabled-for-sleep ]] || fail "cpuidle post left its note"
+grep -q ' pre: 3 deeper idle states disabled for the sleep$' "$idle_log" && grep -q ' post: 3 idle states enabled again$' "$idle_log" \
+  || fail "cpuidle is not logged: $(cat "$idle_log")"
+# A post without a pre (a boot's first hook run, or the keep flag): nothing changes
+"$cpuidle" post suspend
+[[ $(states) == 000001 ]] || fail "cpuidle post without a note changed something: $(states)"
+# A pre whose post never ran (systemd-sleep killed between the passes), then a
+# whole sleep: the second pre must not take the first one's states for
+# hand-disabled ones, so the post still enables all three
+rm -f "$idle_log"
+"$cpuidle" pre suspend; "$cpuidle" pre suspend
+[[ $(states) == 011011 && $(wc -l < "$run/cpuidle-disabled-for-sleep") -eq 3 ]] \
+  || fail "cpuidle pre after a pre without a post: $(states), note $(cat "$run/cpuidle-disabled-for-sleep" 2>&1)"
+"$cpuidle" post suspend
+[[ $(states) == 000001 && ! -e $run/cpuidle-disabled-for-sleep ]] || fail "cpuidle pre, pre, post left deeper states disabled: $(states)"
+grep -q 'the note of a sleep whose post pass never ran' "$idle_log" || fail "the leftover note is not logged: $(cat "$idle_log")"
+# The same leftover with the keep flag set since: the states come back, and stay
+"$cpuidle" pre suspend; : > "$keep_idle"; "$cpuidle" pre suspend
+[[ $(states) == 000001 ]] || fail "cpuidle with the keep flag left an earlier sleep's states disabled: $(states)"
+"$cpuidle" post suspend; rm -f "$keep_idle"
+[[ $(states) == 000001 ]] || fail "cpuidle post after a kept sleep changed something: $(states)"
+# A state that can't be enabled again is logged
+"$cpuidle" pre suspend
+if [[ $EUID -ne 0 ]]; then
+  chmod a-w "$cpus/cpu0/cpuidle/state1/disable"; rm -f "$idle_log"
+  "$cpuidle" post suspend
+  chmod u+w "$cpus/cpu0/cpuidle/state1/disable"
+  grep -q ' post: could not enable .*/cpu0/cpuidle/state1/disable$' "$idle_log" && grep -q ' post: 2 idle states enabled again$' "$idle_log" \
+    || fail "a failed write in post is not logged: $(cat "$idle_log")"
+  echo 0 > "$cpus/cpu0/cpuidle/state1/disable"
+else
+  "$cpuidle" post suspend
+fi
+[[ $(states) == 000001 ]] || fail "cpuidle after the failed write: $(states)"
+# The keep flag: the states are left alone, and it is logged
+: > "$keep_idle"; rm -f "$idle_log"
+"$cpuidle" pre suspend; "$cpuidle" post suspend
+[[ $(states) == 000001 ]] || fail "cpuidle with the keep flag touched the states: $(states)"
+grep -q 'cpuidle-keep-across-sleep exists' "$idle_log" || fail "the keep flag is not logged"
+rm -f "$keep_idle"
+# No deeper states (the published device tree): nothing happens, no note, no log line
+rm -rf "$cpus"; mkdir -p "$cpus/cpu0/cpuidle/state0"; echo 0 > "$cpus/cpu0/cpuidle/state0/disable"; rm -f "$idle_log"
+"$cpuidle" pre suspend; "$cpuidle" post suspend
+[[ $(cat "$cpus/cpu0/cpuidle/state0/disable") == 0 && ! -e $run/cpuidle-disabled-for-sleep && ! -s $idle_log ]] \
+  || fail "cpuidle without deeper states did something"
+rm -rf "$OMAMOBILE_TEGU_ROOT/sys"
+echo 'ok - sleep-hooks: Wi-Fi kept or reloaded as flagged, NFC polling stopped and restored, power-off behind the flag, deeper CPU idle states off for the sleep'

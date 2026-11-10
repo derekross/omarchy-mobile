@@ -366,11 +366,15 @@ root has no `/dev/disk/by-partlabel`. F3 passed on 2026-10-13 from an
 ```sh
 tools/phone-ssh 'modprobe sg; for d in /sys/class/scsi_generic/sg*; do echo "$d $(basename $(readlink -f $d/device))"; done'
 # the copies on the phone: F19.3's commands
-# the laptop copy of mfg_data (read-only dd, found by PARTNAME)
+# the laptop copy of mfg_data (read-only dd, found by PARTNAME): created
+# private (umask 077) as $F.part, renamed to $F only if the copy succeeds
 F=~/android/reference/cheetah-mfg_data-"$(date +%F)".img
-tools/phone-ssh 'set -e; M=$(grep -lx "PARTNAME=mfg_data" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
-  test "$(cat /sys/class/block/$M/ro)" = 1; dd if=/dev/$M bs=1M status=none' > "$F"
-chmod 600 "$F"; sha256sum "$F" | cut -c1-16
+if (umask 077; tools/phone-ssh 'set -e; M=$(grep -lx "PARTNAME=mfg_data" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  test "$(cat /sys/class/block/$M/ro)" = 1; dd if=/dev/$M bs=1M status=none' > "$F.part") &&
+   mv -T "$F.part" "$F"
+then sha256sum "$F" | cut -c1-16
+else rm -f "$F.part"; echo "mfg_data copy refused or failed; no file kept"
+fi
 # the laptop backup of persist and the radio partitions (into a new directory)
 tools/nv-backup ~/android/reference/cheetah-nv-backup-"$(date +%Y%m%d)"
 tools/phone-ssh 'modprobe -r sg'
@@ -379,11 +383,13 @@ tools/phone-ssh 'modprobe -r sg'
 Expect one sg node at `0:0:0:49476` (the RPMB well-known LUN), F19.3's
 output, the laptop copy's hash, then `nv-backup`'s verified copies.
 `mfg_data` isn't one of `nv-backup`'s partitions, so it gets its own copy.
-F19.3 compares the phone's copy with the laptop's 2026-10-13 one; a phone
-without that copy compares with this one. Pass: F19.3's Pass, the laptop
-copy's hash equal to F19.3's `mfg_data.img` hash, and `nv-backup` exits 0.
-**Stop** on F19.3's stops, if the laptop copy is empty or its hash differs,
-if `nv-backup` refuses, or if the storage guard complains. Rollback:
+A refused or failed copy prints its message and keeps no file (only an
+interrupted one leaves a `.part`). F19.3 compares the phone's copy with the
+laptop's 2026-10-13 one; a phone without that copy compares with this one.
+Pass: F19.3's Pass, the laptop copy's hash equal to F19.3's `mfg_data.img`
+hash, and `nv-backup` exits 0. **Stop** on F19.3's stops, if the laptop copy
+is refused, fails or is empty, if its hash differs, if `nv-backup` refuses,
+or if the storage guard complains. Rollback:
 `modprobe -r sg`, then remove only what F3 wrote on the phone, never the
 whole directory (it holds Trusty's TD once storageproxyd has run):
 `rm -rf /var/lib/omamobile-fp/persist-ss /var/lib/omamobile-fp/mfg_data.img`.

@@ -1,0 +1,278 @@
+# Lock screen: a number pad for touch-only devices (the lock-keypad toggle),
+# kept clear of an under-display fingerprint sensor, with a hint that either
+# unlocks. The session lock hides every other surface, on-screen keyboards
+# included, so a phone needs its own digits; a PIN is a numeric password.
+#
+# Against Omarchy 4.0.4 (the edge channel's aarch64 omarchy 4.0.4-2, the same
+# files as tag v4.0.4) with 0000 (Commons.Color) applied. 4.0.4 has no
+# "Fingerprint reader unavailable" notice, so the hunk that moved it above
+# the field is gone and the hint shows whenever fingerprints are set up.
+diff --git i/shell/plugins/lock/Keypad.qml w/shell/plugins/lock/Keypad.qml
+new file mode 100644
+index 0000000..98ad1ad
+--- /dev/null
++++ w/shell/plugins/lock/Keypad.qml
+@@ -0,0 +1,73 @@
++import QtQuick
++import qs.Commons
++import qs.Commons as Commons
++import qs.Ui
++
++// Number pad for touch-only devices (phones, tablets), where the lock screen
++// can't count on a keyboard: the session lock hides every other surface,
++// on-screen keyboards included. Enabled by the `lock-keypad` toggle; the digits
++// go into the same password field, so a PIN is simply a numeric password.
++Item {
++  id: root
++
++  signal digit(string value)
++  signal backspace()
++  signal enter()
++
++  // The tallest the pad may be: on a short screen the keys shrink to fit
++  // rather than run under the field above them.
++  property real maxHeight: Infinity
++
++  // Four rows of keys and three gaps of 0.3 keys: 4.9 keys tall.
++  readonly property int key: Math.round(Math.min(Style.space(84), (parent ? parent.width : 420) * 0.22, maxHeight / 4.9))
++  readonly property int gap: Math.round(key * 0.3)
++  readonly property var keys: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "back", "0", "enter"]
++  readonly property var keySpec: Border.surfaceSpec("lock", "border-active", Commons.Color.lock.borderActive, 2, "border-alpha")
++
++  implicitWidth: key * 3 + gap * 2
++  implicitHeight: key * 4 + gap * 3
++  width: implicitWidth
++  height: implicitHeight
++  opacity: enabled ? 1 : 0.5
++
++  Grid {
++    anchors.fill: parent
++    columns: 3
++    spacing: root.gap
++
++    Repeater {
++      model: root.keys
++
++      delegate: BorderSurface {
++        id: keyCap
++        required property string modelData
++
++        width: root.key
++        height: root.key
++        radius: Style.cornerRadius
++        color: tap.pressed ? Commons.Color.lock.selection : Commons.Color.lock.background
++        borderSpec: root.keySpec
++
++        Text {
++          anchors.centerIn: parent
++          textFormat: Text.PlainText
++          text: keyCap.modelData === "back" ? "⌫" : (keyCap.modelData === "enter" ? "⏎" : keyCap.modelData)
++          color: Commons.Color.lock.text
++          font.family: Style.font.family
++          font.pixelSize: Math.round(root.key * 0.38)
++        }
++
++        MouseArea {
++          id: tap
++          anchors.fill: parent
++          enabled: root.enabled
++          onClicked: {
++            if (keyCap.modelData === "back") root.backspace()
++            else if (keyCap.modelData === "enter") root.enter()
++            else root.digit(keyCap.modelData)
++          }
++        }
++      }
++    }
++  }
++}
+diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
+index 3c5f65d..53eef73 100644
+--- i/shell/plugins/lock/LockView.qml
++++ w/shell/plugins/lock/LockView.qml
+@@ -17,8 +17,16 @@ Item {
+   property bool loadBackground: true
+   property string passwordText: ""
+   property bool syncingPasswordText: false
++  // Touch-only devices: a number pad under the field (the lock-keypad toggle).
++  property bool keypad: false
++  // A phone with a fingerprint sensor under the display has it in the lower
++  // third of the screen, where the pad would otherwise sit: a finger on the
++  // sensor pressed a key. With fingerprints set up, the pad keeps the lower
++  // third clear, and a hint above the field says either works, as on Android.
++  readonly property bool keypadClearsSensor: keypad && fingerprintConfigured
++  readonly property int keypadBottomMargin: Math.round(height * (keypadClearsSensor ? 0.34 : 0.08))
+ 
+-  readonly property string placeholderText: "Enter Password"
++  readonly property string placeholderText: keypad ? "Enter PIN" : "Enter Password"
+   readonly property int fieldWidth: 381
+   readonly property int fieldHeight: 67
+   readonly property int outlineThickness: 3
+@@ -54,7 +62,8 @@ Item {
+   }
+ 
+   function forcePasswordFocus() {
+-    passwordInput.forceActiveFocus()
++    if (keypad) keypadKeys.forceActiveFocus()
++    else passwordInput.forceActiveFocus()
+   }
+ 
+   function clearPassword() {
+@@ -115,16 +124,58 @@ Item {
+ 
+     MouseArea {
+       anchors.fill: parent
+-      hoverEnabled: true
++      hoverEnabled: !root.keypad
+       onClicked: { root.wakeRequested(); root.forcePasswordFocus() }
+       onPositionChanged: root.wakeRequested()
+     }
+ 
++    Item {
++      id: keypadKeys
++      Keys.onPressed: function(event) {
++        if (!numberPad.enabled) return
++        if (event.text.length === 1 && event.text >= "0" && event.text <= "9") numberPad.digit(event.text)
++        else if (event.key === Qt.Key_Backspace) numberPad.backspace()
++        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) numberPad.enter()
++        else if (event.key === Qt.Key_Escape) root.passwordTextEdited("")
++        else return
++        event.accepted = true
++      }
++    }
++
++    Keypad {
++      id: numberPad
++      visible: root.keypad
++      enabled: root.inputEnabled && !root.authenticatingPassword
++      anchors.horizontalCenter: parent.horizontalCenter
++      anchors.bottom: parent.bottom
++      anchors.bottomMargin: root.keypadBottomMargin
++      // what is left above it for the field, the hint and a margin
++      maxHeight: parent.height - root.keypadBottomMargin - root.fieldHeight - Style.space(40)
++        - (root.keypadClearsSensor ? keypadHint.height + Style.space(18) : 0) - Style.space(48)
++      onDigit: function(value) {
++        root.wakeRequested()
++        if (root.failureMessage.length > 0) root.clearFailureRequested()
++        root.passwordTextEdited(root.passwordText + value)
++      }
++      onBackspace: {
++        root.wakeRequested()
++        root.passwordTextEdited(root.passwordText.slice(0, -1))
++      }
++      onEnter: {
++        var submitted = root.passwordText
++        root.passwordTextEdited("")
++        if (submitted.length > 0) root.submitPassword(submitted)
++      }
++    }
++
+     BorderSurface {
+       id: inputField
+       width: root.fieldWidth
+       height: root.fieldHeight
+-      anchors.centerIn: parent
++      anchors.horizontalCenter: parent.horizontalCenter
++      anchors.verticalCenter: root.keypad ? undefined : parent.verticalCenter
++      anchors.bottom: root.keypad ? numberPad.top : undefined
++      anchors.bottomMargin: root.keypad ? Style.space(40) : 0
+       color: Commons.Color.lock.background
+       borderSpec: root.inputBorderSpec
+       radius: Style.cornerRadius
+@@ -141,7 +192,7 @@ Item {
+         anchors.leftMargin: inputField.borderLeft + 18 + root.fingerprintReserve
+         verticalAlignment: TextInput.AlignVCenter
+         horizontalAlignment: TextInput.AlignHCenter
+-        activeFocusOnPress: true
++        activeFocusOnPress: !root.keypad
+         clip: true
+         enabled: root.inputEnabled && !root.authenticatingPassword
+         readOnly: root.authenticatingPassword
+@@ -216,5 +267,23 @@ Item {
+         verticalAlignment: Text.AlignVCenter
+       }
+     }
++
++    // Touch-only devices with fingerprints: say that either unlocks.
++    Text {
++      id: keypadHint
++      objectName: "keypadFingerprintHint"
++      textFormat: Text.PlainText
++      anchors.bottom: inputField.top
++      anchors.bottomMargin: Style.space(18)
++      anchors.horizontalCenter: inputField.horizontalCenter
++      width: parent.width - Style.space(32)
++      visible: root.keypadClearsSensor
++      text: "Touch the fingerprint sensor or enter your PIN"
++      color: Commons.Color.lock.text
++      font.family: Style.font.family
++      font.pixelSize: Style.font.subtitle
++      wrapMode: Text.WordWrap
++      horizontalAlignment: Text.AlignHCenter
++    }
+   }
+ }
+diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
+index 65fcb19..95726eb 100644
+--- i/shell/plugins/lock/Service.qml
++++ w/shell/plugins/lock/Service.qml
+@@ -23,6 +23,7 @@ Item {
+   property bool fingerprintAuthenticating: false
+   property bool passwordPamConfigured: false
+   property bool fingerprintConfigured: false
++  property bool keypad: false
+   property bool previewVisible: false
+   property string enteredPassword: ""
+   property string pendingPassword: ""
+@@ -127,6 +128,7 @@ Item {
+   }
+ 
+   function beginLock() {
++    keypadToggle.reload()
+     if (!passwordPamConfigured) {
+       logEvent("lock-denied: missing-pam")
+       return false
+@@ -267,6 +269,7 @@ Item {
+       color: Commons.Color.background
+ 
+       LockView {
++        keypad: root.keypad
+         id: lockView
+         anchors.fill: parent
+         backgroundPath: root.backgroundPath
+@@ -298,6 +301,7 @@ Item {
+     exclusionMode: ExclusionMode.Ignore
+ 
+     LockView {
++      keypad: root.keypad
+       anchors.fill: parent
+       backgroundPath: root.backgroundPath
+       backgroundVersion: root.backgroundVersion
+@@ -414,7 +418,8 @@ Item {
+ 
+   Timer {
+     id: idleBlankTimer
+-    interval: 5000
++    // Touch-only devices (the number pad) get longer to find and use it.
++    interval: root.keypad ? 10000 : 5000
+     repeat: false
+     property double armedAt: 0
+     onTriggered: {
+@@ -482,6 +487,17 @@ Item {
+     else armBlankTimer()
+   }
+ 
++  // Touch-only devices opt into the number pad: omarchy-toggle lock-keypad.
++  FileView {
++    id: keypadToggle
++    path: root.stateHome + "/omarchy/toggles/lock-keypad"
++    watchChanges: true
++    printErrors: false
++    onLoaded: root.keypad = true
++    onLoadFailed: root.keypad = false
++    onFileChanged: reload()
++  }
++
+   FileView {
+     path: "/etc/pam.d/omarchy-lock-password"
+     watchChanges: true

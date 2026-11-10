@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+dest=${1:?Usage: install ABSOLUTE_DESTDIR}
+case "$dest" in /*) ;; *) echo 'Use an absolute staging directory.' >&2; exit 2 ;; esac
+[ "$(realpath -m -- "$dest")" != / ] || { echo 'Refusing to stage into the running system.' >&2; exit 1; }
+build_dir=${OMAMOBILE_SETTINGS_BUILD_DIR:-"$source_dir/build"}
+install -Dm755 "$build_dir/omamobile-settings" "$dest/usr/bin/omamobile-settings"
+install -Dm644 "$source_dir/org.omamobile.Settings.desktop" "$dest/usr/share/applications/org.omamobile.Settings.desktop"
+install -Dm644 "$source_dir/org.omamobile.Settings.svg" "$dest/usr/share/icons/hicolor/scalable/apps/org.omamobile.Settings.svg"
+install -Dm644 "$source_dir/LICENSE" "$dest/usr/share/licenses/omamobile-settings/LICENSE"

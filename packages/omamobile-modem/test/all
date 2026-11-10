@@ -16,6 +16,7 @@ if command -v shellcheck >/dev/null; then
   shellcheck -S warning lib/omamobile-modem-start install || fail "shellcheck"
 fi
 pass "scripts parse"
+python3 test/test_link.py || fail "device link module parameters and load order"
 
 # spawn_optional keeps its job alive whatever the daemon's exit: run the
 # function from modem.conf under the library's errexit and pipefail with a
@@ -33,6 +34,55 @@ out=$(bash -c '
 ' 2>&1)
 [[ $out == alive ]] || fail "a daemon exiting 3 leaves spawn_optional's job alive (got: $out)"
 pass "spawn_optional survives a failing daemon"
+
+# rfsd's job: an exit is a crash (the supervisor stops the profile) unless
+# this invocation's stop intent is in place; then it stays open for systemd.
+python3 test/rfsd-lifecycle.py || fail "rfsd's job through an orderly stop"
+pass "rfsd's exit ends the profile except during this invocation's orderly stop"
+
+# power-off: 0 only on the boot device's own OFFLINE
+python3 test/power-off.py || fail "omamobile-modem-cp power-off"
+pass "power-off confirms OFFLINE from the device, never from its absence"
+
+# The stop witness: profile_stop, with a stand-in CP helper and capture. A
+# failed power-off still captures the NV but fails the stop and leaves no
+# witness; a confirmed one writes its invocation's witness once; no main
+# process, or no invocation, means no witness.
+w=$(mktemp -d)
+cat > "$w/fake-cp" <<'EOF'
+#!/bin/bash
+[[ $1 == power-off ]] || exit 2
+exit "$CP_RESULT"
+EOF
+chmod +x "$w/fake-cp"
+stop_function=$(sed -n '/^profile_stop() {$/,/^}$/p' profiles/modem.conf)
+[[ -n $stop_function ]] || fail "profile_stop found in modem.conf"
+run_profile_stop() { # CP_RESULT INVOCATION [MAINPID]
+  CP_RESULT=$1 INVOCATION_ID=$2 MAINPID=${3:-$$} SERVICE_RESULT=success OMAMOBILE_MODEM_RUN=$w/run MODEM_CP=$w/fake-cp \
+    CAPTURE_LOG=$w/capture bash -c '
+      set -euo pipefail
+      say() { :; }
+      modem_nv_capture() { printf "%s\n" "$1" >> "$CAPTURE_LOG"; }
+      eval "$1"
+      profile_stop
+    ' _ "$stop_function"
+}
+id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+run_profile_stop 1 "$id" && fail "a failed CP power-off fails the stop"
+[[ $(cat "$w/capture") == stop && ! -e $w/run/stop-$id ]] || fail "a failed stop still captures the NV, and writes no witness"
+rm -f "$w/run/intent-$id"
+run_profile_stop 0 "$id" || fail "a confirmed power-off is a clean stop"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "a confirmed stop writes its invocation's witness"
+run_profile_stop 0 "$id" 2>/dev/null && fail "a witness is never overwritten"
+[[ $(cat "$w/run/stop-$id") == "$id" ]] || fail "the witness is intact"
+rm -f "$w/run/stop-$id" "$w/run/intent-$id"
+run_profile_stop 0 "$id" 0 || fail "a stop after the main process is gone succeeds"
+[[ ! -e $w/run/stop-$id ]] || fail "no main process, no witness"
+run_profile_stop 0 invalid || fail "a stop by hand, without a unit invocation, succeeds"
+[[ ! -e $w/run/stop-invalid ]] || fail "no invocation, no witness"
+[[ $(cat modem/stop-witness-version) == 1 ]] || fail "the stop witness contract file says 1"
+rm -rf "$w"
+pass "profile_stop witnesses only a confirmed power-off, once, for a running unit invocation"
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 # A made-up modem.bin: TOC, BOOT, INFO entries (32 bytes each; the TOC
@@ -84,7 +134,9 @@ pass "NV checksums"
 
 stage=$t/stage
 ./install "$stage"
-for f in usr/lib/omamobile-vendor/omamobile-modem-start usr/lib/omamobile-vendor/omamobile-modem-cp \
+[[ -d $stage/usr/lib/omamobile-modem ]] || fail "package-owned link configuration directory"
+[[ ! -e $stage/usr/lib/omamobile-modem/link.conf ]] || fail "default needs no device link configuration"
+for f in usr/share/doc/omamobile-modem/README.md usr/lib/omamobile-vendor/omamobile-modem-start usr/lib/omamobile-vendor/omamobile-modem-cp \
          usr/lib/omamobile-vendor/profiles/modem.conf usr/lib/omamobile-vendor/modem/props.conf \
          usr/lib/systemd/system/omamobile-modem.service usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules \
          usr/lib/omamobile-vendor/omamobile-modem-nv-overlay usr/bin/omamobile-modem \
@@ -165,7 +217,7 @@ s=lib/omamobile-modem-start
 lineof() { grep -n "$1" $s | head -1 | cut -d: -f1; }
 l_prov_refuse=$(lineof "isn't provisioned"); l_mark_refuse=$(lineof 'never reached ONLINE; skipping'); l_up_refuse=$(lineof 'refuse_unclean$')
 l_inhibit=$(lineof 'no sleep inhibitor held'); l_latch=$(lineof '> "\$MARK"'); l_latch_sync=$(awk -v n="$l_latch" 'NR == n + 1' $s)
-l_modprobe=$(lineof '^modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
+l_modprobe=$(lineof '^[[:space:]]*modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
 l_ready=$(lineof 'systemd-notify --ready'); l_exec=$(lineof 'exec "\$LIB/omamobile-vendor-chroot" modem start')
 l_reason_rm=$(lineof '^rm -f "\$REFUSED"')
 for v in l_prov_refuse l_mark_refuse l_up_refuse l_inhibit l_reason_rm l_latch l_modprobe l_check l_rm l_ready l_exec; do
@@ -175,7 +227,7 @@ done
 [[ $l_prov_refuse -lt $l_mark_refuse && $l_mark_refuse -lt $l_up_refuse && $l_up_refuse -lt $l_inhibit && $l_inhibit -lt $l_reason_rm && $l_reason_rm -lt $l_latch && $l_latch -lt $l_modprobe &&
    $l_modprobe -lt $l_check && $l_check -lt $l_rm && $l_rm -lt $l_ready && $l_ready -lt $l_exec ]] ||
   fail "start script order: refuse($l_prov_refuse,$l_mark_refuse,$l_up_refuse) inhibit($l_inhibit) reason-rm($l_reason_rm) latch($l_latch) modprobe($l_modprobe) check($l_check) rm($l_rm) ready($l_ready) exec($l_exec)"
-[[ $(grep -c '^modprobe ' $s) -eq 3 && $(grep -c 'modprobe' <(sed -n "1,${l_latch}p" $s) ) -eq 0 ]] ||
+[[ $(grep -c '^[[:space:]]*modprobe ' $s) -eq 3 && $(grep -c 'modprobe' <(sed -n "1,${l_latch}p" $s) ) -eq 0 ]] ||
   fail "no modprobe before the latch"
 grep -q 'OMAMOBILE_MODEM_MARK=\$MARK OMAMOBILE_MODEM_UP_MARK=\${INVOCATION_ID:+\$UP} exec' $s || fail "both markers go to the profile's watcher (the modem-up one only under the unit)"
 grep -q "OMAMOBILE_MODEM_UP_MARK" $cp || fail "the watcher writes the modem-up marker"
@@ -201,7 +253,7 @@ past() { OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 start "$@"; }
 stop_line='past the marker checks, stopping here (test only)'
 ! grep -rq 'OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS' systemd install || fail "the test stop point is set by no unit or install step"
 l_stop=$(lineof 'OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS:-')
-[[ $l_up_refuse -lt $l_stop && $l_stop -lt $(lineof '/sys/module/pcie_gs201_cp') && $l_stop -lt $l_inhibit && $l_stop -lt $l_latch ]] ||
+[[ $l_up_refuse -lt $l_stop && $l_stop -lt $(lineof '^link_param_ok()') && $l_stop -lt $l_inhibit && $l_stop -lt $l_latch ]] ||
   fail "the test stop point sits after the marker decision and before the sysfs read, the inhibitor and the latch (stop=$l_stop)"
 # Not provisioned (a fresh install before tools/phone-provision): one line
 # per missing file, no latch, the reason says so. The unit itself is skipped
@@ -309,7 +361,7 @@ pass "refusals: unprovisioned, the latch, a stale modem-up marker once then held
 u=$stage/usr/lib/systemd/system
 for f in omamobile-modem-inhibit.service omamobile-modem-boot.target; do [[ -e $u/$f ]] || fail "staged $f"; done
 grep -qx 'Requires=omamobile-modem-inhibit.service' systemd/omamobile-modem.service || fail "the modem unit requires the inhibitor"
-grep -E '^After=' systemd/omamobile-modem.service | grep -q 'omamobile-modem-inhibit.service' || fail "the modem unit starts after the inhibitor"
+grep -E '^After=' systemd/omamobile-modem.service | grep -c 'omamobile-modem-inhibit.service' >/dev/null || fail "the modem unit starts after the inhibitor"
 grep -qx 'Type=notify' systemd/omamobile-modem.service && grep -qx 'NotifyAccess=all' systemd/omamobile-modem.service ||
   fail "the modem unit is Type=notify (READY from the start script)"
 grep -qx 'ExecStopPost=/usr/lib/omamobile-vendor/omamobile-modem-start --stopped' systemd/omamobile-modem.service || fail "the stop hook"

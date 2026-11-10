@@ -1,0 +1,30 @@
+# Phone only, not for upstream: "omarchy update" hands over to omamobile-update
+# (packages/omamobile-omarchy), which runs this same script back with
+# OMAMOBILE_UPDATE=1 and Omarchy's own steps, minus the ones that don't belong
+# on a phone (Snapper, the AUR, the kernel-reboot prompt and orphan removal,
+# which ask through gum) and with boot-related migrations held for review. So
+# the command AGENTS.md tells people to use, the menu's Update > Omarchy and
+# the bar's update button all take the phone's path. The patch is re-applied
+# after every Omarchy upgrade like the rest of the series; when it can't be,
+# Omarchy's update runs unwrapped, as before. Escape hatch:
+# OMAMOBILE_UPDATE=1 omarchy-update.
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+diff --git i/bin/omarchy-update w/bin/omarchy-update
+--- i/bin/omarchy-update
++++ w/bin/omarchy-update
+@@ -7,6 +7,14 @@
+ 
+ set -e
+ 
++# Omarchy Mobile: a phone updates through omamobile-update, which runs this
++# same flow with the phone's exclusions (no snapshot, AUR or reboot prompt;
++# boot-related migrations held) and reports to the shell's update sheet. It
++# calls back in with OMAMOBILE_UPDATE=1.
++if [[ -z ${OMAMOBILE_UPDATE:-} && -x /usr/bin/omamobile-update ]]; then
++  exec /usr/bin/omamobile-update "$@"
++fi
++
+ if [[ -z ${OMARCHY_UPDATE_LOGGED:-} ]]; then
+   script_command=$(printf '%q ' "$0" "$@")
+   exec env OMARCHY_UPDATE_LOGGED=1 script -qefc "$script_command" "/tmp/omarchy-update.log"

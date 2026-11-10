@@ -2,6 +2,107 @@
 
 Findings from real hardware, newest first. `BRINGUP-M1.md` is the research map written before first boot.
 
+## 2026-11-09: the 2026.11.08 test install, and an update run as root
+
+The release's signed bundle, `omamobile-cheetah-2026.11.08`, installed on the
+reference phone with `bash install --reinstall --bootloader-slots-match
+cloudripper-17.0-15199429` (slot A's bootloader version in the stock
+capture, the same as slot B's), after `--dry-run`. The phone booted
+`7.3.0-rc6-omamobile-g1a9d1d4e9289` with `omamobile-device-cheetah` 0.1.47,
+`omamobile-shell` 0.2.107, `omamobile-omarchy` 0.1.37 and Omarchy 4.0.6.
+
+- **Provisioning, by hand** (`tools/phone-provision --nv-backup`, the
+  owner's CP2A factory image and the 2026-11-03 radio backup, whose
+  checksums still matched): after the reboot Wi-Fi, the AoC and the
+  fingerprint stack were up, and the modem came up at boot and registered
+  IMS by itself. No unit failed. `tools/phone-smoke`: 18 ok, the modem's
+  usual "not opened" lines, the camera check skipped. The fingerprint
+  sensor reads ready with no finger enrolled.
+- **The package hook, on a reinstall:** at 00:42 a reinstall of the
+  release's own `linux-omamobile` (`pacman -U`, the same
+  `7.3.0rc6.r704.g1a9d1d4e9289-1`) ran `omamobile-boot-update`'s hook
+  (the install's `AUTO_WRITE=yes`). It rebuilt slot B's five images and
+  wrote `vendor_kernel_boot_b`, read it back ("written and verified"), left the
+  other four images ("already there"), saved the previous set and did not
+  reboot. The reboot into it worked. The one image differed because the
+  hook appends the owner's `authorized_keys` to the initramfs and the
+  bundle's image carries none: the saved slot-B copy equals the bundle's
+  byte for byte, and the new one has a vendor ramdisk 171 bytes longer
+  (6847295 against 6847124), so a fresh install's initramfs SSH has no
+  owner key until the first hook run (RELEASES §11.4 expects the same
+  bytes). An update to a newer kernel hasn't run on this release yet.
+- **`omarchy update` as root over SSH**, with `OMARCHY_PATH` set by hand
+  (the command we gave the owner; without it the run stops before
+  updating anything), ran Omarchy's migrations again as root: Omarchy records them per user, and
+  root's record was empty, so 59 ran. One swapped `quickshell` for an older
+  `quickshell-git` (Omarchy's later migration back counted as done), others
+  wrote configs into `/root`, restarted systemd-oomd and left
+  `/tmp/omarchy-update.log` owned by root, after which the Updates app
+  stopped at once ("script: cannot open /tmp/omarchy-update.log: Permission
+  denied"). Nothing else in `/etc` changed, and no package moved apart
+  from that swap (with `vulkan-headers`, which it pulled in) and the
+  normal updates.
+  Put back by hand: `quickshell` reinstalled, `vulkan-headers` removed, root's
+  Omarchy state and configs and the log deleted. `omamobile-omarchy` 0.1.38
+  (#548) refuses an update as root.
+- **The update as the user** (the Updates app, 11:06): "Updated", one
+  package (`inotify-tools`, from Arch Linux ARM), Omarchy still 4.0.6,
+  nothing held, no restart asked for; patches "already applied". The
+  "local is newer than omamobile" warnings are the stable channel still
+  holding the previous release until the promote.
+
+Recorded with `tools/release --version 2026.11.08 test-install --passed
+7.3.0-rc6-omamobile-g1a9d1d4e9289`.
+
+## 2026-11-08: the release kernel for 2026.11.08, a flat battery, the reboot reason
+
+Kernel `7.3.0-rc6-omamobile-g1a9d1d4e9289`, `omamobile` at `1a9d1d4e9289`
+(the planned `kernel-2026.11.08`), built with the release `LOCALVERSION` and
+the development initramfs and pushed to slot B; `omamobile-device-cheetah`
+0.1.43, `omamobile-shell` 0.2.107 and `omamobile-omarchy` 0.1.37 (#420's test
+build), Omarchy 4.0.6.
+
+- **The release kernel boots** [V]: `uname -r` reads
+  `7.3.0-rc6-omamobile-g1a9d1d4e9289`. Touch probed as before (`S3908GA1B0-15.0,
+  TouchComm v1, build 4104960, message CRC off`), the charger's guard had its
+  battery reading at probe (4.67 s, mode 5), the sound card registered all 18
+  playback PCMs, Wi-Fi connected, and the modem came up at boot: IMS
+  registered (`state 2 (VoLTE registered)`) about 100 s after boot.
+  `tools/phone-smoke`: 18 ok, cameras skipped (no libcamera tools); its one
+  "not ok" is the modem's `rx_demux … is not opened` drops, at the rate of
+  every modem-up boot today.
+- **This tree, piece by piece** [V], each on its own test kernel, `-push1`
+  builds of the PR merged onto `omamobile`, and posted on the PR:
+  linux-omarchy-mobile#194 (touch: both probe lines unchanged, no fallback,
+  no desync after a minute of touch), #201 (S2MPG12 RTC: reads 0 s off, a
+  wake alarm awake, 10 RTC-woken s2idle cycles with the modem off, none woken
+  early), #191 with #187 (Wi-Fi scans, a 300 MB download at about 130 Mbit/s
+  with no `No PKTID`; the modem: an SMS, an answered call, 10 minutes idle),
+  #176 (the reboot reason: with `nvmem_max77759` loaded by hand, `reboot-to
+  bootloader` reached fastboot without the buttons, about 4 s; device-cheetah
+  0.1.47, #534, stops blacklisting it) and #162 (the AoC series: the same
+  PCMs, both amplifiers' protection firmware, a -20 dBFS tone clean from both
+  speakers, the three sensors).
+- **A flat battery** [V] (issue #169): after five days unplugged the phone
+  booted Linux at 3.14 V, the gauge's model load failed (`-110`) and the
+  charger logged `charging inhibited`; the battery read -706 mA on the
+  laptop's port. About 20 minutes in fastboot on the cable took it from 3.40
+  to 3.91 V, and the next boot loaded the model and charged at 1.43 A. On that
+  boot the charger still probed before the gauge answered and charged only
+  from its guard's next period, 31 s later. The fix (`omamobile` 01ba2e2119ed,
+  28bab7f602ca, 1a9d1d4e9289) re-checks a missing reading every 2 s and at the
+  gauge's first report: unloading and reloading the gauge, charging resumed
+  10 ms after it came back. The model-load retry itself waits for the next
+  real flat battery.
+- **A modem marker left by `reboot-to`** [V]: the `reboot-to bootloader` that
+  took the flat phone to fastboot stopped no unit, so `/var/lib/omamobile/modem-up`
+  stayed and the next boot skipped the modem once ("ended without a clean
+  stop"), as designed. Stop the modem first (`systemctl stop
+  omamobile-modem`) before a `reboot-to` or a `bin/omamobile push`; that stop
+  takes 40 s and ends "failed" with a recorded crash, issue #532. To keep the
+  modem off for a boot (a suspend test), `systemctl mask
+  omamobile-modem-boot.target`, not `/etc/omamobile/modem-hold`.
+
 ## 2026-11-03: calls and texts through the apps, the SIM configures itself, the earpiece at the loud stage, the stack on by default
 
 Kernel `7.3.0-rc6-omamobile-g2219cc6cda77` (the release kernel);
@@ -44,7 +145,9 @@ the same Verizon-network SIM as the entry below. The runbook:
   minutes after sitd starts: the modem's OEM IPC channel, which nothing
   opens. A follow-up.
 - **Gotcha:** `omamobile-update` over ssh as root needs
-  `OMARCHY_PATH=/usr/share/omarchy` in its environment.
+  `OMARCHY_PATH=/usr/share/omarchy` in its environment. **Don't (2026-11-09):**
+  an update as root runs Omarchy's migrations again as root; run
+  `omarchy update` on the phone as its user (above, 2026-11-09).
 
 ## 2026-11-03: IMS registered and an SMS sent on a Verizon-network SIM, once the bearers took stock's CIDs
 

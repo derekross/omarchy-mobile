@@ -64,16 +64,50 @@ done
 if [[ -z ${CONFIG_FILE:-} ]]; then
   if grep -qw binder /proc/filesystems; then echo "ok    binderfs in /proc/filesystems"; else echo "MISS  binderfs not registered"; missing=1; fi
   if [[ -e /proc/pressure/memory ]]; then echo "ok    /proc/pressure/memory"; else echo "MISS  /proc/pressure/memory (psi=0 on the command line?)"; missing=1; fi
-  render=
+  render= render_rdev=
   for r in /sys/class/drm/renderD*; do
     [[ -e $r/device/driver ]] || continue
-    if [[ $(basename "$(readlink -f "$r/device/driver")") == panthor ]]; then render=/dev/$(basename "$r"); fi
+    if [[ $(basename "$(readlink -f "$r/device/driver")") == panthor ]]; then
+      render=/dev/dri/$(basename "$r")
+      # Its major:minor, as sysfs gives it, to check against lxc-omamobile.conf below
+      read -r render_rdev < "$r/dev" || render_rdev=
+    fi
   done
-  if [[ -n $render ]]; then echo "ok    $render is panthor"; else echo "MISS  no panthor render node (GPU-PLAN.md)"; missing=1; fi
+  if [[ -n $render ]]; then
+    echo "ok    $render is panthor"
+  else
+    echo "MISS  no panthor render node (GPU-PLAN.md)"; missing=1
+  fi
   if mountpoint -q /sys/fs/cgroup && [[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]]; then
     echo "ok    cgroup2 on /sys/fs/cgroup"
   else
     echo "MISS  cgroup2 not mounted on /sys/fs/cgroup"; missing=1
+  fi
+fi
+
+# The device rules in lxc-omamobile.conf Android needs to boot. Runs on the
+# live kernel, or against a test LXC_CONF (and RENDER_RDEV for the render node;
+# test/all) so the comparisons themselves are tested.
+if [[ -z ${CONFIG_FILE:-} || -n ${LXC_CONF:-} ]]; then
+  lxc_conf=${LXC_CONF:-/usr/share/omamobile-waydroid/lxc-omamobile.conf}
+  # binderfs's major is assigned at boot: the rules name the nodes by path and
+  # LXC reads their numbers when the container starts (binderfs is mounted
+  # by then, not yet at this check)
+  for n in binder vndbinder hwbinder; do
+    if grep -qx "lxc.cgroup2.devices.allow = /dev/binderfs/$n rwm" "$lxc_conf" 2>/dev/null; then
+      echo "ok    /dev/binderfs/$n is allowed in lxc-omamobile.conf"
+    else
+      echo "MISS  /dev/binderfs/$n is not allowed in $lxc_conf (Android would not boot)"; missing=1
+    fi
+  done
+  # The render node's numbers are fixed in the file: they must be the panthor node's
+  render_rdev=${RENDER_RDEV:-${render_rdev:-}}
+  if [[ -n $render_rdev ]]; then
+    if grep -qx "lxc.cgroup2.devices.allow = c $render_rdev rwm" "$lxc_conf" 2>/dev/null; then
+      echo "ok    render node $render_rdev is allowed in lxc-omamobile.conf"
+    else
+      echo "MISS  render node $render_rdev is not allowed in $lxc_conf (no GPU in Android)"; missing=1
+    fi
   fi
 fi
 

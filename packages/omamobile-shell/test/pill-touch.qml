@@ -236,7 +236,14 @@ Item {
       var z = zones({})
       compare(z.total, 0, JSON.stringify(z))
       compare(zones({ drawer: true }).total, 0, "nor with the drawer open")
-      compare(zones({ osk: true }).strip, 0, "nor the strip with the keyboard on home")
+    }
+
+    function test_the_keyboard_on_home_brings_the_strip() {
+      // The keyboard covers the dock (and its swipe) on the home screen and
+      // over the drawer's search, so the strip comes back above it there.
+      compare(zones({ osk: true }).strip, harness.touch, "the keyboard on home")
+      compare(zones({ drawer: true, osk: true }).strip, harness.touch, "the keyboard over the drawer")
+      compare(zones({ osk: true }).reserving, 1, "the strip alone")
     }
 
     function test_a_fullscreen_window_keeps_the_whole_screen() {
@@ -295,6 +302,26 @@ Item {
       tap(strip, strip.width / 2, strip.height / 2)
       compare(keyboardCalls("toggleKeyboard"), 1, JSON.stringify(Quickshell.executed))
       compare(calls("hl.dsp.focus"), 0)
+    }
+
+    function test_swipe_in_the_keyboard_strip_on_home_opens_the_drawer() {
+      zones({ osk: true })
+      var strip = find(harness, "keyboardStrip")
+      swipeUp(strip, 60, strip.height / 2)
+      compare(calls("expand"), 1, JSON.stringify(Quickshell.executed))
+      compare(keyboardCalls("hideKeyboard"), 1, "the keyboard goes")
+      compare(calls("hl.dsp.focus"), 0, "not home: already there")
+      zones({ app: true, osk: true })
+    }
+
+    function test_swipe_in_the_keyboard_strip_over_the_drawer_closes_it() {
+      zones({ drawer: true, osk: true })
+      var strip = find(harness, "keyboardStrip")
+      swipeUp(strip, 60, strip.height / 2)
+      compare(calls("dismiss"), 1, JSON.stringify(Quickshell.executed))
+      compare(keyboardCalls("hideKeyboard"), 1, "the keyboard goes")
+      compare(calls("omamobile.switcher"), 0, "no recent apps over the drawer")
+      zones({ app: true, osk: true })
     }
 
     function test_swipe_in_the_keyboard_strip_goes_home() {
