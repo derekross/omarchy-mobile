@@ -143,7 +143,7 @@ def main():
                        "compression": "zstd", "filesystem": "ext4", "label": "omamobile-root"},
         "install": {
             "tool": "fastboot",
-            "product": codename,
+            "product": d.get("FASTBOOT_PRODUCT") or codename,
             "require_unlocked_bootloader": True,
             "require_matching_bootloader_slots": True,
             "storage_guard_allowlist": allow,

@@ -45,7 +45,8 @@ echo 'ok - the shipped flame descriptor has no persistent installer path'
 # The shipped enchilada descriptor: android-v0 images get past the
 # descriptor checks (no kernel build here, so they stop at "build the
 # kernel first"); fastboot, flash and push refuse it as RAM-only, and the
-# installer still refuses the method. None of it reaches a phone.
+# installer takes the method and stops at the missing images, before the
+# phone. None of it reaches a phone.
 mkdir -p "$t/repo/device/enchilada"
 cp device/enchilada/device.conf "$t/repo/device/enchilada/"
 if DEVICE=enchilada KERNEL_OUT="$t/no-kernel" "$t/repo/bin/omamobile" images > "$t/log" 2>&1; then fail "enchilada images succeeds without a kernel"; fi
@@ -55,11 +56,11 @@ for cmd in fastboot flash push; do
   grep -q "$cmd refuses BOOT_METHOD=android-v0" "$t/log" || fail "enchilada $cmd fails for the wrong reason"
 done
 for dry in '' --dry-run; do
-  if "$t/repo/tools/install-phone" --device enchilada $dry --work "$t/work" > "$t/log" 2>&1; then fail "enchilada installs"; fi
-  grep -q 'unsupported BOOT_METHOD=android-v0;' "$t/log" || fail "enchilada installer fails for the wrong reason"
+  if "$t/repo/tools/install-phone" --device enchilada --images "$t/no-images" $dry --work "$t/work" > "$t/log" 2>&1; then fail "enchilada installs without images"; fi
+  grep -q "no-images holds images for 'an unknown device', not enchilada" "$t/log" || fail "enchilada installer fails for the wrong reason"
 done
 [[ ! -e $t/calls && ! -e $t/work ]] || fail "the enchilada descriptor accessed a phone or prepared an image"
-echo 'ok - enchilada images reach the kernel check; fastboot/flash/push and both installer modes refuse android-v0'
+echo 'ok - enchilada images reach the kernel check; fastboot/flash/push refuse android-v0; the installer takes it and stops at the images'
 
 # Header fields must be present and numeric; BOOT_IMAGES is boot only and
 # boot_b must be writable.

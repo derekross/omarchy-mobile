@@ -274,6 +274,48 @@ printf '\nBOOT_METHOD=android-v4\n' >> "$R/device/testdev/device.conf"
 install --dry-run || { cat "$t/out"; fail "explicit android-v4 installs"; }
 pass "explicit android-v4 and legacy omitted BOOT_METHOD both work"
 
+# android-v0 (enchilada's shape): one boot image, no SOC_IDS, a SoC-named
+# fastboot product, and a bootloader that reports no version at all
+cat > "$R/device/testdev/device.conf" <<'EOF'
+CODENAME=testdev
+FASTBOOT_PRODUCT=sdm845
+NAME="Test Phone"
+BOOT_METHOD=android-v0
+BOOT_IMAGES=boot
+UFS_RW="boot_b userdata"
+EOF
+v0vars() { printf 'product:%s\nunlocked:yes\ncurrent-slot:a\nversion-bootloader:\npartition-size:boot_b: 0x4000000\npartition-size:userdata: 0x1B800BB000\n' "$1" > "$t/vars"; }
+v0vars testdev
+refuse "an android-v0 phone whose product is not FASTBOOT_PRODUCT" --bootloader-slots-match unreported
+grep -q "not sdm845" "$t/out" || fail "names the expected product"
+v0vars sdm845
+refuse "a bootloader with no version, unconfirmed"; grep -q -- '--bootloader-slots-match unreported' "$t/out" || fail "says how to confirm both slots"
+refuse "a version confirmed for a bootloader that reports none" --bootloader-slots-match cloudripper-17.0-15199429
+install --dry-run --bootloader-slots-match unreported || { cat "$t/out"; fail "an android-v0 dry run succeeds"; }
+expected="    would run: fastboot -s FAKE123 flash boot_b $t/images/boot.img
+    would run: fastboot -s FAKE123 flash userdata $t/work/root.simg
+    would run: fastboot -s FAKE123 --set-active=b
+    would run: fastboot -s FAKE123 reboot"
+command -v img2simg >/dev/null || expected=${expected//root.simg/root.img}
+[[ $(grep 'would run:' "$t/out") == "$expected" ]] || { grep 'would run:' "$t/out"; fail "the android-v0 dry run prints exactly boot_b, userdata, set-active, reboot"; }
+rm -f "$t/userdata.flashed"
+install --bootloader-slots-match unreported || { cat "$t/out"; fail "an android-v0 run succeeds"; }
+want="-s FAKE123 flash boot_b $t/images/boot.img
+-s FAKE123 flash userdata $t/work/root.simg
+-s FAKE123 --set-active=b
+-s FAKE123 reboot"
+command -v img2simg >/dev/null || want=${want//root.simg/root.img}
+[[ $(flashing_calls) == "$want" ]] || { flashing_calls; fail "an android-v0 run sends exactly those commands"; }
+v0img=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$v0img" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$v0img" "$t/v0.raw" && v0img=$t/v0.raw
+fi
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$v0img" 2>/dev/null | grep -v '^#') == AUTO_WRITE=no ]] \
+  || fail "an android-v0 install leaves the boot hook off (omamobile-boot-update has no android-v0 path)"
+descriptor > "$R/device/testdev/device.conf"
+vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
+pass "android-v0: FASTBOOT_PRODUCT checked, an unreported bootloader version confirmed, only boot_b and userdata written, boot hook off"
+
 # A release bundle: install beside device.conf and images/, the root image next to it
 BD=$t/bundle/omamobile-testdev-2026.10.13
 mkdir -p "$BD/images"
