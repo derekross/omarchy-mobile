@@ -61,7 +61,7 @@ Item {
   function open(payloadJson) {
     var payload = {}
     try { payload = JSON.parse(payloadJson || "{}") || {} } catch (error) {}
-    if (payload.page === "wifi" || payload.page === "bluetooth") {
+    if (payload.page === "wifi" || payload.page === "bluetooth" || payload.page === "hotspot") {
       openPage(payload.page)
       // Let the host finish delivering this open before it hears a hide.
       Qt.callLater(root.dismiss)
@@ -155,6 +155,7 @@ Item {
       volume: audio.available ? Math.round(audio.volume * 100) : null,
       wifiPanel: wifiPicker.opened,
       bluetoothPanel: bluetoothPanelItem.opened,
+      hotspotPanel: hotspotPanelItem.opened,
       notifications: notifications.length,
       media: media.player ? { app: MediaModel.appName(media.player), title: String(media.player.trackTitle || ""),
                               playing: MediaModel.playing(media.player) } : null
@@ -210,6 +211,17 @@ Item {
 
   function wifiPanel() {
     return wifiPicker.snapshot()
+  }
+
+  // `openHotspot ''` opens the Hotspot page; `hotspotPanel ''` returns its state.
+  function openHotspot() {
+    if (!hotspot.available) return "unavailable"
+    openHotspotPanel()
+    return hotspotPanelItem.snapshot()
+  }
+
+  function hotspotPanel() {
+    return hotspotPanelItem.snapshot()
   }
 
   // `shell call omamobile.quicksettings toggleTile <name>`: the same
@@ -465,16 +477,18 @@ Item {
     function toggle() { if (available) root.runTileAction("airplane", !enabled) }
   }
 
-  // A Wi-Fi hotspot through NetworkManager. Long-press opens the Wi-Fi panel.
+  // A Wi-Fi hotspot through NetworkManager. The chevron or a long-press
+  // opens its page (HotspotPanel.qml): name, password, a QR code to join,
+  // and the VPN boxes where the hotspot backend has them.
   QtObject {
     id: hotspot
     readonly property bool available: wifi.backendAvailable && !!wifi.device && root.probedHas("hotspot")
     readonly property bool enabled: available && root.probedOn("hotspot", "hotspot")
     readonly property string icon: "󰀂"
     readonly property string status: !available ? "No Wi-Fi radio" : enabled ? "On" : "Off"
-    readonly property bool longPress: true
+    readonly property bool details: true
     function toggle() { if (available) root.runTileAction("hotspot", !enabled) }
-    function openDetails() { root.openWifiPanel() }
+    function openDetails() { root.openHotspotPanel() }
   }
 
   // Battery saver: power-profiles-daemon's power-saver profile.
@@ -707,14 +721,30 @@ Item {
     root.dismiss()
   }
 
+  function openHotspotPanel() {
+    openPage("hotspot")
+    root.dismiss()
+  }
+
   // One page at a time.
   function openPage(page) {
     if (page !== "wifi") wifiPicker.close()
     if (page !== "bluetooth") bluetoothPanelItem.close()
     if (page !== "record") recordPanelItem.close()
+    if (page !== "hotspot") hotspotPanelItem.close()
     if (page === "wifi") wifiPicker.open()
     else if (page === "bluetooth") bluetoothPanelItem.open()
     else if (page === "record") recordPanelItem.open()
+    else if (page === "hotspot") hotspotPanelItem.open()
+  }
+
+  // The page behind the Hotspot tile's chevron; its own window, like the
+  // Wi-Fi picker. The tile's state drives its switch, so a tap shows at once.
+  HotspotPanel {
+    id: hotspotPanelItem
+    hotspotOn: hotspot.enabled
+    onBackRequested: root.backToSheet(hotspotPanelItem)
+    onToggleRequested: hotspot.toggle()
   }
 
   RecordPanel {

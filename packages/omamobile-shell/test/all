@@ -345,6 +345,14 @@ sh -n plugins/omamobile.quicksettings/tile-state.sh || fail "tile-state.sh parse
 sh -n plugins/omamobile.quicksettings/tile-action.sh || fail "tile-action.sh parses"
 bash test/tile-scripts.sh || fail "quick-settings tile scripts"
 
+# The Hotspot page's script, against fake commands, and the page behind the
+# tile's chevron (TilesModel's hotspot tile opens it, like Wi-Fi's picker).
+bash -n plugins/omamobile.quicksettings/hotspot-panel.sh || fail "hotspot-panel.sh parses"
+bash test/hotspot-panel.sh || fail "hotspot page script"
+grep -c 'function openDetails() { root.openHotspotPanel() }' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null || fail "the Hotspot tile's chevron opens the Hotspot page"
+grep -c 'Qt.resolvedUrl("hotspot-panel.sh")' plugins/omamobile.quicksettings/HotspotPanel.qml >/dev/null || fail "the Hotspot page runs the script next to it"
+grep -c 'password: !root.showPassword' plugins/omamobile.quicksettings/HotspotPanel.qml >/dev/null || fail "the password field is masked unless shown"
+
 # The Bluetooth pairing helper parses, and its pure parts work without D-Bus.
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-bt-agent || fail "omamobile-bt-agent parses"
 python3 -B test/bt-agent.py || fail "omamobile-bt-agent helpers"
