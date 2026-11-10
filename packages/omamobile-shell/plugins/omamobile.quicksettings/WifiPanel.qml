@@ -435,13 +435,15 @@ Item {
 
     // Swipe up from the bottom edge closes the panel. Full screen on the
     // home screen, it covers the dock that takes that swipe there, so
-    // without this only the back arrow got out. Only the panel's bottom
-    // inset and the outer gap: any taller and it lies over the end of the
-    // list, where a scroll would close the page instead.
+    // without this only the back arrow got out. The page's body ends
+    // above the strip, so it never lies over the end of the list, where a
+    // scroll would close the page instead. (The panel's bottom inset alone
+    // was too thin to hit: the phone has no outer gap.)
     Item {
+      id: swipeStrip
       z: 100
       anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-      height: panel.contentBottomInset + Style.gapsOut
+      height: Math.max(28, Style.space(36))
 
       DragHandler {
         target: null
@@ -484,7 +486,7 @@ Item {
         anchors.fill: parent
         anchors.topMargin: panel.contentTopInset
         anchors.rightMargin: panel.contentRightInset
-        anchors.bottomMargin: panel.contentBottomInset
+        anchors.bottomMargin: Math.max(panel.contentBottomInset, swipeStrip.height)
         anchors.leftMargin: panel.contentLeftInset
 
         // ---------- Header: back, title, rescan
