@@ -124,8 +124,11 @@ case "$test" in
           { echo "power-ab: systemctl suspend would not enter s2idle here" >&2; exit 1; } ;;
       *) echo "power-ab: --suspend takes rtcwake or systemd, not '$suspend'" >&2; exit 1 ;;
     esac
-    [[ -r "$bat/charge_counter" || -r "$bat/charge_now" ]] \
-      || { echo "power-ab: the gauge has neither charge_counter nor charge_now" >&2; exit 1; } ;;
+    # Read one, not just test for the file: a gauge that withholds its charge
+    # (the 9a's MAX77779 after a power-on reset answers ENODATA) has readable
+    # files and no figure, and the sleep phase's only number comes from them
+    cat "$bat/charge_counter" >/dev/null 2>&1 || cat "$bat/charge_now" >/dev/null 2>&1 \
+      || { echo "power-ab: the gauge gives neither charge_counter nor charge_now (a file that can't be read, or no data after a gauge reset)" >&2; exit 1; } ;;
   units)
     [[ -n "$units$user_units" ]] || { echo "power-ab: units needs --units or --user-units" >&2; exit 1; } ;;
   eas)
