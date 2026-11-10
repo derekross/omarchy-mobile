@@ -104,6 +104,10 @@ grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back stri
 grep -c 'visible: !root.fullscreenOnScreen' "$b" >/dev/null || fail "back strips hide for fullscreen windows"
 if grep -n 'omamobile-back' hypr/phone.lua | grep -c above_lock >/dev/null; then fail "back strips never work over the lock"; fi
 if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail "back uses Hyprland's dispatcher"; fi
+# Back at an app's top level goes home: the app runs omamobile-home, the one
+# command for it (the shell can't tell that an app left Escape unused).
+grep -c 'Quickshell.execDetached(BackModel.HOME_ARGV)' "$b" >/dev/null || fail "back's home call runs omamobile-home"
+bash -n bin/omamobile-home || fail "omamobile-home parses"
 # Home pill: a 44 px strip and a pill with an outline.
 l=plugins/omamobile.launcher/Launcher.qml
 grep -c 'readonly property int stripHeight: touch' "$l" >/dev/null || fail "the home pill's strip is a touch target tall"
@@ -1162,6 +1166,7 @@ grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || 
 pass "install stages the package"
 
 test/keys.sh || fail "omamobile-keys volume keys"
+test/home-command.sh || fail "omamobile-home"
 
 # Back threshold feedback handler state only; never invoke feedbackd.
 rc=0; out=$(python3 -B test/back-haptic.py 2>&1) || rc=$?

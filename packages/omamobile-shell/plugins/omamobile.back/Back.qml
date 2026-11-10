@@ -11,7 +11,9 @@ import "BackModel.js" as BackModel
 // or right edge of the screen and let go to go back. "Back" is Escape, sent
 // to whatever has the keyboard focus (BackModel.js has how): it closes app
 // dialogs, menus and popovers that have no other way out on a touch screen,
-// and the shell's own sheets and drawer, which all close on Escape.
+// and the shell's own sheets and drawer, which all close on Escape. An app
+// goes back one level on it, and at its top level asks for the home screen
+// (omamobile-home), as Back at an app's first screen does on Android.
 //
 // Each edge is a thin strip on the Overlay layer, like the home pill: its
 // window is wide enough to draw the arrow that follows the finger, but its
@@ -39,6 +41,13 @@ Item {
   // `shell call omamobile.back back ''`: the same as the gesture.
   function back() {
     Quickshell.execDetached(BackModel.ESCAPE_ARGV)
+    return "ok"
+  }
+
+  // `shell call omamobile.back home ''`: the home screen, as an app at its
+  // top level asks for it (bin/omamobile-home).
+  function home() {
+    Quickshell.execDetached(BackModel.HOME_ARGV)
     return "ok"
   }
 

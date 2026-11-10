@@ -19,6 +19,10 @@ test("Escape goes through Hyprland's Lua dispatcher, down then up, in one proces
   assert.ok(script.indexOf("sleep 0.05") < script.indexOf('hyprctl dispatch "$2"'))
 })
 
+test("home is the shell's one command, with nothing of Hyprland in it", () => {
+  assert.deepStrictEqual(M.HOME_ARGV, ["omamobile-home"])
+})
+
 test("inward travel from each edge", () => {
   assert.strictEqual(M.inwardFor(false, 30), 30)
   assert.strictEqual(M.inwardFor(true, -30), 30)

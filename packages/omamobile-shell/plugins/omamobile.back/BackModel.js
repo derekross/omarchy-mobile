@@ -17,6 +17,13 @@ var ESCAPE_UP = 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "up"
 var ESCAPE_ARGV = ["sh", "-c", 'hyprctl dispatch "$1" >/dev/null; sleep 0.05; hyprctl dispatch "$2" >/dev/null',
                    "sh", ESCAPE_DOWN, ESCAPE_UP]
 
+// Home, for an app at its top level: Back is phone-wide, so an app goes back
+// one level on Escape while it has one, and at its top level runs this
+// command (bin/omamobile-home: the empty workspace and the home page, as the
+// home pill). The shell can't tell that an app left Escape unused, so the app
+// asks. `shell call omamobile.back home ''` runs it too.
+var HOME_ARGV = ["omamobile-home"]
+
 // How far the finger has to come in from the edge (logical px), and how far
 // a swipe may wander along the edge for each pixel it comes in: a mostly
 // vertical drag that starts on the strip is not a back.
@@ -44,7 +51,7 @@ function inwardFor(rightEdge, translationX) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    ESCAPE_DOWN: ESCAPE_DOWN, ESCAPE_UP: ESCAPE_UP, ESCAPE_ARGV: ESCAPE_ARGV, THRESHOLD: THRESHOLD,
+    ESCAPE_DOWN: ESCAPE_DOWN, ESCAPE_UP: ESCAPE_UP, ESCAPE_ARGV: ESCAPE_ARGV, HOME_ARGV: HOME_ARGV, THRESHOLD: THRESHOLD,
     progress: progress, fires: fires, inwardFor: inwardFor
   }
 }

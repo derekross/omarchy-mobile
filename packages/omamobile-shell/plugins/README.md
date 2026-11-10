@@ -22,7 +22,7 @@ logical at scale 3).
 | `omamobile.update` | `panel` (keepLoaded) | The update sheet: Omarchy's update for a phone, in place of its terminal update |
 | `omamobile.voice` | `panel` (keepLoaded) | The voice bar, through Voxtype: hold the pill, or the keyboard's Mic key; it types, sends to an agent, or asks it |
 | `omamobile.access` | `panel` (keepLoaded) | The permission sheet: xdg-desktop-portal's "Allow Camera to use the camera?", in place of GTK's desktop dialog |
-| `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape |
+| `omamobile.back` | `panel` (keepLoaded) | The back gesture: swipe in from the left or right edge for Escape; an app at its top level then asks for home (`omamobile-home`) |
 | `omamobile.mobilenetwork` | `panel` (keepLoaded) | The Mobile network page: carrier, signal, mobile data, data roaming, the APN and (under Advanced) the attach APN, the SIM PIN lock; Setup > Mobile network or the Mobile data tile's chevron. "No modem" without the modem stack (docs/TELEPHONY-APPS-PLAN.md 7.6) |
 | lockpad | none | Not built; see [Lock screen](#lock-screen-pin-pad) for why and what upstream needs |
 
@@ -856,8 +856,20 @@ real fullscreen window, as the home pill does, and aren't shown over the
 lock. A page swipe on the home screen that starts in the outer 14 px goes
 back instead; start it further in.
 
+**Back is phone-wide.** An app goes back one level on Escape while it has
+somewhere to go back to (a page, a sheet, a dialog, a search), and at its top
+level it shows the home screen, as Back at an app's first screen does on
+Android. The shell can't do the second part itself: Escape is only a key, and
+nothing tells the shell whether the app used it. So an app at its top level
+runs `omamobile-home` (`bin/omamobile-home`): an empty workspace and the home
+screens' home page, the same two calls as the home pill and the switcher's
+Home. The app keeps running and stays in recents. An app must not ask for
+home while that would end something (a recording that stops when its window
+is hidden) and needs no Hyprland call of its own. Without Hyprland the
+command exits 1 and nothing happens.
+
 IPC: `omarchy-shell shell call omamobile.back back ''` (the same as the
-gesture) and `state ''`.
+gesture), `home ''` (runs `omamobile-home`) and `state ''`.
 
 ## omamobile.update
 
