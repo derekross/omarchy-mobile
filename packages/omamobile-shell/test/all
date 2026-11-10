@@ -698,6 +698,19 @@ else
   pass "notification viewport stays stable while sliding and follows expansion"
 fi
 
+# Open-time backend reads settle and spread out without delaying actions.
+rc=0
+out=$(python3 -B test/quicksettings-refresh.py \
+  plugins/omamobile.quicksettings/QuickSettings.qml 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "open-refresh queue # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2
+  fail "open-refresh queue (test/quicksettings-refresh.py)"
+else
+  pass "open-refresh queue settles, coalesces and cancels pending work"
+fi
+
 # The shade's media card (MPRIS): which player shows, what each control
 # calls, the seek bar, the card's tap. test/media-touch drives it; the art
 # rule and the order are in test/media-model.js; test/quicksettings-render
