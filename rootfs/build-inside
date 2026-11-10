@@ -30,6 +30,8 @@ sed -i "0,/^\[omarchy\]/s//[omamobile]\nServer = file:\/\/\/repo\/\$arch\n\n[oma
 pacman -Sy >/dev/null
 # shellcheck source=resolve.sh
 source /src/rootfs/resolve.sh
+# shellcheck source=first-boot.sh
+source /src/rootfs/first-boot.sh
 
 mapfile -t base < <(list /src/rootfs/packages.base)
 mapfile -t ours < <(list /src/rootfs/packages.omamobile)
@@ -196,6 +198,9 @@ systemctl --root="$T" enable NetworkManager.service systemd-networkd.service sys
 systemctl --root="$T" mask systemd-networkd-wait-online.service NetworkManager-wait-online.service >/dev/null 2>&1
 ln -sfn /run/systemd/resolve/stub-resolv.conf "$T/etc/resolv.conf"
 echo omamobile > "$T/etc/hostname"
+# The first boot asks for nothing: systemd-firstboot.service is masked and
+# the image holds a locale and a time zone (rootfs/first-boot.sh)
+first_boot_defaults "$T" || die "the first-boot defaults"
 
 say "Removing per-machine state"
 # No account but root, and root locked: the user comes from firstboot.conf
@@ -227,6 +232,7 @@ say "MANIFEST"
   echo "omarchy packages not built for aarch64: ${unavailable[*]:-none}"
   echo "omarchy packages skipped: ${skip[*]:-none}"
   echo "omamobile packages missing (allowed): ${skipped_ours[*]:-none}"
+  first_boot_manifest "$T"
   echo
   echo "# packages (name version repository)"
   pacman -Sl > /tmp/sync-list

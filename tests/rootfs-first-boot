@@ -1,0 +1,80 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# rootfs/first-boot.sh on a stand-in root (no container, no image): the
+# image masks systemd-firstboot.service and holds what it would ask for (a
+# locale, a time zone), keeps what a package already set, can run twice, and
+# refuses a root without tzdata; rootfs/build-inside sources and calls it and
+# writes its MANIFEST line. With systemctl here, systemd itself reads the
+# unit as masked.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+# shellcheck source=../rootfs/first-boot.sh
+source rootfs/first-boot.sh
+
+# A root as pacstrap leaves it, as far as this goes: tzdata's zones, systemd's
+# unit, an /etc without locale.conf, vconsole.conf or localtime
+new_root() {
+  r=$t/$1
+  mkdir -p "$r/etc" "$r/usr/share/zoneinfo/Europe" "$r/usr/lib/systemd/system"
+  : > "$r/usr/share/zoneinfo/UTC"; : > "$r/usr/share/zoneinfo/Europe/Berlin"
+  printf '[Unit]\nConditionFirstBoot=yes\n[Service]\nExecStart=systemd-firstboot --prompt-locale --prompt-keymap-auto --prompt-timezone --prompt-root-password\nStandardInput=tty\n' \
+    > "$r/usr/lib/systemd/system/systemd-firstboot.service"
+  printf 'uninitialized\n' > "$r/etc/machine-id"
+}
+
+new_root plain
+first_boot_defaults "$r" || fail "first_boot_defaults runs on a fresh root"
+[[ -L $r/etc/systemd/system/systemd-firstboot.service && $(readlink "$r/etc/systemd/system/systemd-firstboot.service") == /dev/null ]] ||
+  fail "systemd-firstboot.service is masked (a link to /dev/null in /etc/systemd/system)"
+if command -v systemctl >/dev/null; then
+  state=$(systemctl --root="$r" is-enabled systemd-firstboot.service 2>/dev/null || true)
+  [[ $state == masked ]] || fail "systemd reads systemd-firstboot.service as masked (it says '$state')"
+  pass "systemd-firstboot.service is masked, and systemd reads it so"
+else
+  pass "systemd-firstboot.service is masked (# no systemctl here to ask)"
+fi
+[[ $(cat "$r/etc/locale.conf") == LANG=C.UTF-8 ]] || fail "locale.conf sets LANG=C.UTF-8, which needs no locale-gen"
+[[ $(readlink "$r/etc/localtime") == /usr/share/zoneinfo/UTC ]] || fail "localtime links to UTC"
+[[ $(cat "$r/etc/machine-id") == uninitialized ]] || fail "the machine id stays uninitialized: systemd makes the phone's own"
+[[ ! -e $r/etc/vconsole.conf ]] || fail "no keymap is set: nothing asks for one, and one would make vconsole-setup load it"
+pass "the image holds a locale and a time zone; machine id uninitialized, no keymap"
+[[ $(first_boot_manifest "$r") == "first boot: systemd-firstboot.service masked; LANG=C.UTF-8; time zone UTC until firstboot.conf" ]] ||
+  fail "the MANIFEST line: $(first_boot_manifest "$r")"
+before=$(cd "$r" && find etc -printf '%p %y %l\n' | sort; cat "$r/etc/locale.conf")
+first_boot_defaults "$r" || fail "first_boot_defaults runs a second time"
+[[ $(cd "$r" && find etc -printf '%p %y %l\n' | sort; cat "$r/etc/locale.conf") == "$before" ]] || fail "a second run changes nothing"
+pass "the MANIFEST line names what was set; a second run changes nothing"
+
+# What a package already put in the image is kept
+new_root kept
+echo 'LANG=en_US.UTF-8' > "$r/etc/locale.conf"
+ln -s /usr/share/zoneinfo/Europe/Berlin "$r/etc/localtime"
+first_boot_defaults "$r"
+[[ $(cat "$r/etc/locale.conf") == LANG=en_US.UTF-8 ]] || fail "a locale.conf already in the image is kept"
+[[ $(readlink "$r/etc/localtime") == /usr/share/zoneinfo/Europe/Berlin ]] || fail "a localtime already in the image is kept"
+[[ $(readlink "$r/etc/systemd/system/systemd-firstboot.service") == /dev/null ]] || fail "the unit is masked there too"
+[[ $(first_boot_manifest "$r") == "first boot: systemd-firstboot.service masked; LANG=en_US.UTF-8; time zone Europe/Berlin until firstboot.conf" ]] ||
+  fail "the MANIFEST line follows the image: $(first_boot_manifest "$r")"
+pass "a locale and a time zone already in the image are kept"
+
+# No tzdata: refused, nothing half-done
+new_root bare
+rm "$r/usr/share/zoneinfo/UTC"
+if first_boot_defaults "$r" 2>/dev/null; then fail "a root without tzdata's UTC is refused"; fi
+[[ ! -e $r/etc/localtime && ! -L $r/etc/localtime && ! -L $r/etc/systemd/system/systemd-firstboot.service ]] || fail "a refused root is left as it was"
+pass "a root without tzdata is refused, and left alone"
+
+# build-inside uses it, after the packages are in and before the MANIFEST
+inside=rootfs/build-inside
+grep -cxF 'source /src/rootfs/first-boot.sh' "$inside" >/dev/null || fail "build-inside sources first-boot.sh"
+grep -cxF 'first_boot_defaults "$T" || die "the first-boot defaults"' "$inside" >/dev/null || fail "build-inside calls first_boot_defaults on the image's root"
+grep -cxF '  first_boot_manifest "$T"' "$inside" >/dev/null || fail "build-inside writes the first boot line into the MANIFEST"
+call=$(grep -n 'first_boot_defaults "\$T"' "$inside" | cut -d: -f1)
+[[ $call -gt $(grep -n '^say "Services"' "$inside" | cut -d: -f1) && $call -lt $(grep -n '^say "MANIFEST"' "$inside" | cut -d: -f1) ]] ||
+  fail "the defaults are set after the packages are installed and before the MANIFEST is written"
+grep -cF "printf 'uninitialized\\n' > \"\$T/etc/machine-id\"" "$inside" >/dev/null || fail "build-inside still leaves the machine id uninitialized"
+grep -c "sed -i 's/^root:\[^:\]\*:/root:!\*:/' \"\$T/etc/shadow\"" "$inside" >/dev/null || fail "build-inside still locks root (no password to ask for)"
+pass "build-inside sets the first-boot defaults on the image and records them in the MANIFEST"

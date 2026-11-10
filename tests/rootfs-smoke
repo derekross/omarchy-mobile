@@ -5,7 +5,9 @@
 #   tests/rootfs-smoke out/omamobile-rootfs-<device>-<version>-aarch64.img.zst   (or a raw .img)
 # Checks the label, that there is no account but a locked root, the keyrings,
 # the [omamobile] repository and its place in pacman.conf, the first-boot
-# unit, the kernel modules, the MANIFEST, and that no per-machine state,
+# unit, that the first boot has nothing to ask (systemd-firstboot masked, a
+# locale and a time zone in the image), the kernel modules, the MANIFEST, and
+# that no per-machine state,
 # per-phone data or Google file is in it.
 set -euo pipefail
 # debugfs and friends live in /sbin on Debian-like hosts
@@ -77,6 +79,21 @@ release=$(sed -n 's/^kernel modules: \([^ ]*\) .*/\1/p' <<<"$manifest")
 [[ -n $release ]] && exists "/usr/lib/modules/$release/modules.dep" || fail "kernel modules for $release, with depmod run"
 grep -q '^omamobile-device-[a-z0-9]* .* omamobile$' <<<"$manifest" || fail "a device package from [omamobile] in the MANIFEST"
 pass "MANIFEST, device package, modules for $release"
+# The first boot asks for nothing (rootfs/first-boot.sh): systemd-firstboot
+# is masked, and what it would have asked for is in the image. Images from
+# before that have no "first boot:" line in their MANIFEST
+if grep -c '^first boot: ' <<<"$manifest" >/dev/null; then
+  d "stat /etc/systemd/system/systemd-firstboot.service" | grep -c 'Fast link dest: "/dev/null"' >/dev/null ||
+    fail "systemd-firstboot.service is masked (it fails on a phone, which has no console)"
+  grep -c '^LANG=.' <<<"$(cat_ /etc/locale.conf)" >/dev/null || fail "/etc/locale.conf sets LANG"
+  zone=$(d "stat /etc/localtime" | sed -n 's/^Fast link dest: "\(.*\)"$/\1/p')
+  [[ $zone == /usr/share/zoneinfo/?* ]] && exists "$zone" || fail "/etc/localtime links to a zone in the image (it is '${zone:-missing}')"
+  grep -cxF "$(cat_ /etc/locale.conf | grep -m1 '^LANG=')" <<<"$(sed -n 's/^first boot: .*; \(LANG=[^;]*\); .*/\1/p' <<<"$manifest")" >/dev/null ||
+    fail "the MANIFEST's first boot line names the image's LANG"
+  pass "the first boot asks for nothing: systemd-firstboot masked, a locale and a time zone (${zone#/usr/share/zoneinfo/}) in the image"
+else
+  pass "# skip: an image from before the first-boot defaults (no 'first boot:' line in its MANIFEST)"
+fi
 # A device whose package ships boot files: the kernel is linux-omamobile,
 # the release the boot images were built from, with its slot-B hook, and
 # no AUTO_WRITE in the image (install-phone writes it)

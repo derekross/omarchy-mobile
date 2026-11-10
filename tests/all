@@ -33,7 +33,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/release-upload tools/server/releases-nginx.sh \
-         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh tests/*; do
+         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh rootfs/first-boot.sh tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   [[ $f == *.py ]] && continue
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
@@ -84,3 +84,5 @@ echo "# tests/factory-index"   # the build index of Google's factory images, aga
 tests/factory-index
 echo "# tests/phone-demo-notes"
 tests/phone-demo-notes
+echo "# tests/rootfs-first-boot"
+tests/rootfs-first-boot

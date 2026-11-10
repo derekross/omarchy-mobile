@@ -333,7 +333,7 @@ tests/packages               # every package's own test/all (or name the ones yo
 tools/phone-smoke            # from the laptop, over tools/phone-ssh
 ```
 
-It is read-only and safe on a phone in use: no writes, no register reads, no sound, vibration or torch. It checks the boot slot, the storage guard, the root on `userdata`, kernel health, USB, the session, and then the display, GPU, touch, buttons, Wi-Fi, Bluetooth, battery, sound cards, sensors and cameras as evidence. Its report names no phone (no serial, MAC, SSID or command line). **Paste the report into the pull request,** with the plan steps your change passed. A change to a package, the kernel or a device needs a report from the phone it affects; a change to docs or tools that never runs on a phone doesn't.
+It is read-only and safe on a phone in use: no writes, no register reads, no sound, vibration or torch. It checks the boot slot, the storage guard, the root on `userdata`, kernel health, USB, the session, and then the display, GPU, touch, buttons, Wi-Fi, Bluetooth, battery, sound cards, sensors and cameras as evidence, with the units that failed in this boot and, from the journal, on the install's first boot. Its report names no phone (no serial, MAC, SSID or command line). **Paste the report into the pull request,** with the plan steps your change passed. A change to a package, the kernel or a device needs a report from the phone it affects; a change to docs or tools that never runs on a phone doesn't.
 
 A pull request that touches a device also states which phone it was tested on. We can't check that you own the phone, so we rely on you: say exactly what ran, what didn't, and what you didn't test.
 

@@ -6,6 +6,10 @@
 # from the laptop side, against a stand-in for the phone (PHONE_SSH): the
 # device named from the repository's descriptors, or in a release bundle
 # from its one device.conf.
+# And its two systemd unit rows (--unit-rows) against stand-ins for
+# systemctl, journalctl and loginctl: this boot's failed units, and the units
+# that failed on the install's first boot, found in the journal by the boot
+# omamobile-firstboot ran in, also after later boots.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
@@ -104,3 +108,81 @@ grep -c 'SMOKE_DEVICE=bundledev ' "$t/started" >/dev/null || fail "in a bundle t
 out=$(COMPAT=vendor,other-board LOG=$t/started PHONE_SSH=$t/phone bash "$t/bundle/tools/phone-smoke" --json) || fail "phone-smoke runs for an unknown board"
 grep -c 'SMOKE_DEVICE=unknown ' "$t/started" >/dev/null || fail "a board that isn't the bundle's is unknown"
 pass "in a release bundle the device is the bundle's device.conf"
+
+# --- the systemd unit rows ---------------------------------------------------
+# Stand-ins on PATH: systemctl lists $t/failed-now as this boot's failed
+# units; journalctl answers the two questions the first-boot row asks (which
+# boots omamobile-firstboot ran in, oldest first, from $t/firstboot-boots;
+# the "Unit failed with result" entries of one boot, from $t/failed.<boot
+# id>) and fails on anything else; loginctl finds no desktop user
+mkdir -p "$t/bin"
+cat > "$t/bin/systemctl" <<EOF
+#!/bin/bash
+[[ " \$* " == *" --failed "* ]] || exit 1
+cat "$t/failed-now" 2>/dev/null
+EOF
+cat > "$t/bin/journalctl" <<EOF
+#!/bin/bash
+echo "\$*" >> "$t/journalctl.calls"
+case " \$* " in
+  *" _SYSTEMD_UNIT=omamobile-firstboot.service + UNIT=omamobile-firstboot.service "*)
+    [[ " \$* " == *" --output-fields=_BOOT_ID "* ]] || exit 1
+    cat "$t/firstboot-boots" 2>/dev/null ;;
+  *" MESSAGE_ID=d9b373ed55a64feb8242e02dbe79a49c "*)
+    boot=\$(grep -oE '_BOOT_ID=[0-9a-f]{32}' <<<"\$*") || exit 1
+    cat "$t/failed.\${boot#_BOOT_ID=}" 2>/dev/null ;;
+  *) exit 1 ;;
+esac
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$t/bin/loginctl"
+chmod +x "$t/bin/"*
+units() { out=$(PATH="$t/bin:$PATH" tools/phone-smoke --unit-rows); }
+first=$(printf first | md5sum | cut -c1-32) second=$(printf second | md5sum | cut -c1-32)
+entry() { printf '{"__CURSOR":"s=x","%s":"%s","UNIT_RESULT":"exit-code","_BOOT_ID":"%s"}\n' "$1" "$2" "$first"; }
+
+# A phone after its second boot: nothing failed now, and the first boot
+# (the older of the two boots omamobile-firstboot's lines are in) had
+# systemd-firstboot fail, as every install did before the image masked it
+: > "$t/failed-now"
+printf '%s\n' "$first" "$first" "$second" > "$t/firstboot-boots"
+entry UNIT systemd-firstboot.service > "$t/failed.$first"
+entry UNIT some-later.service | sed "s/$first/$second/" > "$t/failed.$second"
+units
+has 'ok|0|systemd units|none failed' || fail "nothing failed in this boot"
+has 'not ok|0|first boot units|failed on the first boot: systemd-firstboot.service' ||
+  fail "a unit that failed on the first boot is reported after a later boot"
+has 'some-later' && fail "only the first boot's failures are the first boot's"
+pass "a unit that failed on the first boot is reported after a later boot, from that boot's journal alone"
+
+# The fixed image: nothing failed on the first boot
+: > "$t/failed.$first"
+units
+has 'ok|0|first boot units|none failed on the first boot' || fail "a clean first boot is ok"
+pass "a first boot with no failed unit is ok"
+
+# Several, a user unit among them, each once; more than six are counted
+{ entry UNIT b.service; entry UNIT a.service; entry UNIT b.service; entry USER_UNIT pipewire.service; } > "$t/failed.$first"
+units
+has 'not ok|0|first boot units|failed on the first boot: a.service, b.service, pipewire.service (user)' ||
+  fail "failed units are listed once each, user units marked"
+for i in 1 2 3 4 5 6 7 8; do entry UNIT "u$i.service"; done > "$t/failed.$first"
+units
+has 'failed on the first boot: u1.service, u2.service, u3.service, u4.service, u5.service, u6.service, and 2 more' ||
+  fail "more than six failed units are counted, not all listed"
+pass "failed units are listed once each, user units marked, a long list cut"
+
+# No first boot in the journal (rotated away, or a hand-built system):
+# skipped, never "ok"; and no journal query is made without a boot to ask for
+: > "$t/firstboot-boots"; : > "$t/journalctl.calls"
+units
+has 'skip|0|first boot units|the first boot isn'"'"'t in the journal' || fail "without the first boot in the journal the row is skipped"
+[[ $(grep -c MESSAGE_ID "$t/journalctl.calls") == 0 ]] || fail "no failed-unit query without a first boot"
+pass "without the first boot in the journal the row is skipped"
+
+# This boot's failed units, as before
+printf '%s\n' "$first" > "$t/firstboot-boots"; : > "$t/failed.$first"
+printf 'omamobile-modem.service loaded failed failed The modem\nfoo.mount loaded failed failed Foo\n' > "$t/failed-now"
+units
+has 'not ok|0|systemd units|failed: omamobile-modem.service foo.mount' || fail "this boot's failed units are listed"
+has 'ok|0|first boot units|none failed on the first boot' || fail "this boot's failures aren't the first boot's"
+pass "this boot's failed units and the first boot's are two rows"

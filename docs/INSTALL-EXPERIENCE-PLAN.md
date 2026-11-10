@@ -279,7 +279,8 @@ install on the computer against doing it on the phone.
 
 Today: `omamobile-firstboot` reads `firstboot.conf`, creates the user, SSH,
 ufw, runs Omarchy's setup and our user setup, and deletes the file **[V]**.
-`systemd-firstboot` fails once on that boot (gap G3).
+`systemd-firstboot` failed once on that boot (gap G3) in images up to
+2026.11.08; later images mask it.
 
 Unchanged in substance. The installer shows the phone's progress (growing
 the root, creating the user, setting up Omarchy) from the install link
@@ -639,6 +640,14 @@ else.
   id policy) and masks `systemd-firstboot.service`, as
   `omamobile-device-dodge` already does **[V]**; `phone-smoke` gets a "no
   failed units after first boot" row so it can't come back unnoticed.
+  **Done, not yet seen on a phone:** `rootfs/first-boot.sh` (from
+  `build-inside`) masks the unit and puts `LANG=C.UTF-8` and a UTC
+  `localtime` in the image; the machine id stays `uninitialized` and root
+  locked, as before; no keymap, since nothing asks for one on a phone.
+  `phone-smoke` already had a `systemd units` row for the current boot; it
+  gains `first boot units`, read from the journal of the boot
+  `omamobile-firstboot` ran in, so the failure shows after the restart that
+  follows provisioning. The next test install is the check.
 - **G4. The bootloader slot check can only read the current slot's
   version.** On cheetah fastboot reports `version-bootloader` for the
   current slot only, so `install-phone` stops and asks the user to confirm

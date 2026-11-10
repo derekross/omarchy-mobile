@@ -23,9 +23,16 @@
 # there). The required checks (boot, storage guard, root, kernel health, USB,
 # session) make the exit status non-zero when they fail; the rest are
 # evidence for the pull request.
+#
+# Two rows are about systemd units: "systemd units" is this boot's failed
+# units, and "first boot units" is what failed on the install's first boot,
+# read from the journal (the boot in which omamobile-firstboot ran), so a
+# unit that fails once on a first boot is still seen after the restart that
+# follows provisioning. It is skipped when the journal no longer holds that
+# boot.
 set -uo pipefail
 
-here=0 json=0 errors_from=""
+here=0 json=0 errors_from="" unit_rows_only=0
 while (($#)); do
   a=$1; shift
   case $a in
@@ -33,6 +40,9 @@ while (($#)); do
     --json) json=1 ;;
     # tests only: the kernel health rows for a saved error log, then exit
     --errors-from) errors_from=${1:?--errors-from FILE}; shift; here=1 ;;
+    # tests only: the two systemd unit rows, from whatever systemctl,
+    # journalctl and loginctl PATH finds, then exit
+    --unit-rows) unit_rows_only=1; here=1 ;;
     -h|--help) source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header --raw "$0"; exit 0 ;;
     *) echo "phone-smoke: unknown option $a" >&2; exit 2 ;;
   esac
@@ -71,6 +81,49 @@ uid=$(id -u "$user" 2>/dev/null || true)
 # From the laptop this script arrives on bash's stdin, so a command that reads
 # stdin would swallow the rest of it: nothing here may read it.
 as_user() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@" </dev/null; }
+
+# ---------------------------------------------------------------- units
+# systemd's "Unit failed with result" message (SD_MESSAGE_UNIT_FAILURE_RESULT):
+# one journal entry per failed unit, with UNIT= (or USER_UNIT= from a user
+# manager).
+unit_failed_id=d9b373ed55a64feb8242e02dbe79a49c
+unit_rows() {
+  local failed ufailed="" boot first n
+  failed=$(systemctl --failed --no-legend --plain 2>/dev/null </dev/null | awk '{print $1}' | xargs)
+  [[ -n $uid && -S /run/user/$uid/bus ]] && ufailed=$(as_user systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
+  if [[ -z $failed && -z $ufailed ]]; then
+    check ok 0 "systemd units" "none failed"
+  else
+    check "not ok" 0 "systemd units" "failed: ${failed:-none}${ufailed:+; user: $ufailed}"
+  fi
+  # The first boot: the earliest boot in the journal in which
+  # omamobile-firstboot ran (it runs only while the installer's firstboot.conf
+  # exists). A unit that failed then is not in `systemctl --failed` after a
+  # restart, and the smoke test usually runs after one (INSTALL-EXPERIENCE-PLAN
+  # G3: systemd-firstboot failed once on every first boot, unnoticed). A
+  # journal that has dropped that boot's early entries can't show them: the
+  # row then says less than it should, so it is evidence, not a gate.
+  boot=$(journalctl -q --no-pager -o cat --output-fields=_BOOT_ID \
+           _SYSTEMD_UNIT=omamobile-firstboot.service + UNIT=omamobile-firstboot.service 2>/dev/null </dev/null | awk 'NR == 1')
+  if [[ ! $boot =~ ^[0-9a-f]{32}$ ]]; then
+    check skip 0 "first boot units" "the first boot isn't in the journal (no omamobile-firstboot run found)"
+    return
+  fi
+  first=$(journalctl -q --no-pager -o json --output-fields=UNIT,USER_UNIT \
+            "_BOOT_ID=$boot" "MESSAGE_ID=$unit_failed_id" 2>/dev/null </dev/null |
+          grep -oE '"(USER_)?UNIT":"[^"]*"' | sed -E 's/^"USER_UNIT":"(.*)"$/\1 (user)/; s/^"UNIT":"(.*)"$/\1/' | sort -u)
+  n=$(grep -c . <<<"$first" || true)
+  if ((n == 0)); then
+    check ok 0 "first boot units" "none failed on the first boot"
+  else
+    check "not ok" 0 "first boot units" "failed on the first boot: $(head -n 6 <<<"$first" | paste -sd, | sed 's/,/, /g')$( ((n > 6)) && echo ", and $((n - 6)) more")"
+  fi
+}
+if ((unit_rows_only)); then
+  unit_rows
+  printf '%s\n' "${results[@]}"
+  exit 0
+fi
 
 # ---------------------------------------------------------------- boot
 release=$(uname -r)
@@ -237,14 +290,7 @@ if [[ -n $errors_from ]]; then
   exit 0
 fi
 
-failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
-ufailed=""
-[[ -n $uid && -S /run/user/$uid/bus ]] && ufailed=$(as_user systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | xargs)
-if [[ -z $failed && -z $ufailed ]]; then
-  check ok 0 "systemd units" "none failed"
-else
-  check "not ok" 0 "systemd units" "failed: ${failed:-none}${ufailed:+; user: $ufailed}"
-fi
+unit_rows
 
 # ---------------------------------------------------------------- USB
 udc=""
