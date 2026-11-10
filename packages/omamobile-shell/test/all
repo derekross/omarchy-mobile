@@ -1054,6 +1054,7 @@ rm -rf "$shot"
 pass "screenshot toast: Loupe, or Tensaku without the on-screen keyboard"
 
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
+python3 -B test/browser-setup.py || fail "browser defaults and geometry"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
 # The widget crash guard counts a shell death inside the same boot as a

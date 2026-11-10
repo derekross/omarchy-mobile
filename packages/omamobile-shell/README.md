@@ -103,3 +103,28 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+### Chromium and Grok Bot sizing
+
+`omamobile-browser-setup`, called by user setup and again by the phone bar at
+shell start, fits both apps to the same
+578 px layout from the internal output's short logical side. It keeps the
+reference phone's 0.83 cap: 480 px gives 0.83, 405 px gives 0.70 and 360 px
+gives 0.62. Geometry comes from Hyprland when available, or an internal DRM
+mode plus the numeric scale in `hypr/monitors.lua` before the compositor runs.
+DSI, eDP and simpledrm's Unknown outputs are supported; external outputs are
+ignored. Missing geometry defers only the scale factor. Chromium's user agent,
+input-method and no-first-run defaults are written independently. The shell
+retry obtains live geometry for an auto or computed Lua scale; helper failure
+does not stop the remaining user setup.
+
+Defaults run once, tracked by `omamobile-browser-fit-chromium` and
+`omamobile-browser-fit-grok-bot` in Omarchy's done directory, with
+`omamobile-browser-defaults-chromium` preserving removals while scale is
+deferred. Old Chromium
+per-feature markers also count: deleting a mobile UA, input-method flag or
+scale after its original setup remains a user choice. Only the exact generated,
+unquoted 0.83 scale line migrates once; custom values and quoted overrides
+stay. Chromium's version is read only immediately before writing a missing UA.
+No browser profile or site zoom changes. Chrome defaults are deferred until
+its quote-aware launcher is released separately in omarchy-pkgs.
