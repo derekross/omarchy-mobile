@@ -84,6 +84,7 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          usr/lib/modprobe.d/omamobile-tegu-guards.conf usr/lib/modprobe.d/omamobile-tegu-aoc.conf \
          usr/lib/modprobe.d/omamobile-tegu-display.conf usr/lib/modprobe.d/omamobile-tegu-clk-acpm.conf \
          usr/lib/systemd/system-sleep/omamobile-tegu-wifi usr/lib/systemd/system-sleep/omamobile-tegu-nfc \
+         usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle \
          usr/lib/systemd/system/linux-modules-cleanup.service.d/10-omamobile-tegu.conf \
          usr/lib/systemd/system.conf.d/10-omamobile-reboot-watchdog.conf \
          usr/lib/systemd/sleep.conf.d/10-omamobile.conf \
@@ -98,7 +99,8 @@ for f in usr/bin/reboot-to usr/bin/tegu-tcpc-switch \
          etc/pacman.d/omamobile-mirrorlist; do
   [[ -f $tmp/root/$f ]] || fail "install stages $f"
 done
-[[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc ]] \
+[[ -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-wifi && -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-nfc &&
+   -x $tmp/root/usr/lib/systemd/system-sleep/omamobile-tegu-cpuidle ]] \
   || fail "the sleep hooks are not executable"
 for unit in omamobile-tegu-graphics omamobile-tegu-usb-rescue; do
   [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/$unit.service") == ../$unit.service ]] \
