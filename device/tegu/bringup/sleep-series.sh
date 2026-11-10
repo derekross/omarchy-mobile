@@ -40,6 +40,11 @@ for c in $(seq 1 $N); do
   hy disable
   r0=$(cat /sys/class/rtc/rtc0/since_epoch)
   rtcwake -m no -s $S >/dev/null || { echo "rtcwake could not arm the alarm: stop" >> $L; hy enable; exit 1; }
+  # A keep-awake block inhibitor left by a push script (x-awake) would refuse every sleep. It is
+  # released here, by the series itself and only once the first alarm is armed: released by the
+  # starter before a start that then failed, it left the palmtop to the shell's auto-sleep with
+  # no alarm, until a key press (2026-11-10).
+  [ "$c" = 1 ] && systemctl stop x-awake 2>/dev/null
   ok0=$(cat /sys/power/suspend_stats/success)
   systemctl suspend
   sleep 20
