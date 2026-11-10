@@ -327,7 +327,7 @@ driver wasn't tried on the palmtop.
 
 **One unclean end the same evening, not explained (2026-11-09, 20:35 MST).**
 Of the thirteen `systemctl reboot`s with the modem up on 11-08 and 11-09
-(six on the owner's kernel, seven on the published one), twelve logged the
+(seven on the owner's kernels, six on the published one), twelve logged the
 confirmed stop. One didn't: build #100 with the bring-up modules, the unit
 started by hand with `systemctl start omamobile-tegu-modem-boot` 2 minutes
 40 s earlier, then `systemctl mask`, `sync`, `systemctl reboot`. That boot's
