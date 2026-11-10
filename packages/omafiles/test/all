@@ -1,0 +1,15 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+bash -n build install
+python3 -I -B -c 'import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path("runtime").glob("*.py")]'
+python3 -B runtime/test_files.py -q
+python3 -I -B test/install.py
+python3 -I -B test/wrapper.py
+
+"${NODE:-node}" test/feedback.js
+
+python3 -I -B test/picker.py -q
+"${NODE:-node}" test/picker-ui.js

@@ -1,0 +1,20 @@
+{
+  "family": "Geist",
+  "license": "OFL-1.1",
+  "upstream": "https://github.com/google/fonts",
+  "commit": "718e1db4deb9e4d9d85a0ead1b9f5fde2761ccfd",
+  "files": [
+    {
+      "path": "Geist.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/718e1db4deb9e4d9d85a0ead1b9f5fde2761ccfd/ofl/geist/Geist%5Bwght%5D.ttf",
+      "sha256": "73894e0448cae90a92b6c2f8732b7bb9acb7b94c418bff559dad4a18e1de9659",
+      "bytes": 169056
+    },
+    {
+      "path": "OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/718e1db4deb9e4d9d85a0ead1b9f5fde2761ccfd/ofl/geist/OFL.txt",
+      "sha256": "1781d2806a07d91c4edf4740b88449fab7d0eadad53f7c351b94cd4d4eb8c00f",
+      "bytes": 4387
+    }
+  ]
+}

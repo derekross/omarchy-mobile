@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "runtimeFiles": [
+    "shell.qml",
+    "FilesBridge.qml",
+    "FilesModel.js",
+    "Icon.qml",
+    "fonts/Geist.ttf",
+    "fonts/OFL.txt",
+    "fonts/source.json"
+  ],
+  "launcherFiles": [
+    "omamobile-files",
+    "org.omamobile.Files.desktop",
+    "org.omamobile.Files.svg"
+  ],
+  "sha256": {
+    "shell.qml": "de4920300d076118f0c7578bf5d3f7f5d0174a2c7ca539645730ae8257f5f44e",
+    "FilesBridge.qml": "5ee6745639206cc8087bfa3057899f95a1ff7bb154c4734910db612738363e74",
+    "FilesModel.js": "755473e0dc141325373eb1612498a9f1b7906b50fc9a2426bbe44cc79f2ee1a2",
+    "Icon.qml": "7e4407a8f727420e9826c3bd59a2e516e19a432468b6a06b88a38b0bedbdbad6",
+    "fonts/Geist.ttf": "73894e0448cae90a92b6c2f8732b7bb9acb7b94c418bff559dad4a18e1de9659",
+    "fonts/OFL.txt": "1781d2806a07d91c4edf4740b88449fab7d0eadad53f7c351b94cd4d4eb8c00f",
+    "fonts/source.json": "11c76129f330978c69440e774d00e38d23e0f23b7badeb358753132e9841f2be",
+    "omamobile-files": "22374121142276145d660419b1133f8a94edc2942338267c9866113df37895f4",
+    "org.omamobile.Files.desktop": "0bfe31beae4d70c010ea805f98146dc7807b5a155b73239aadf2ff899af3df94",
+    "org.omamobile.Files.svg": "290bcf0e3bffbe4580305226ff9d39e1e6cb209ba3e85a0e781e9bc8660b53e3"
+  },
+  "note": "Standalone Files runtime; explicit image-picker API; no default-handler integration"
+}

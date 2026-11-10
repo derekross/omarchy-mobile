@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Comment=Browse and organise files on your phone
+Exec=omamobile-files %u
+Icon=org.omamobile.Files
+Terminal=false
+StartupWMClass=org.omamobile.Files
+MimeType=inode/directory;
+Categories=System;FileTools;FileManager;

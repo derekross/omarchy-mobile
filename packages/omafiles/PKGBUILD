@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+pkgname=omafiles
+pkgver=$(cat "${startdir:-.}/version")
+pkgrel=1
+pkgdesc="Touch-friendly native file manager for Omarchy Mobile"
+arch=(any)
+url="https://github.com/derekross/omarchy-mobile"
+license=(MIT OFL-1.1)
+depends=(omarchy python quickshell qt6-declarative glib2 xdg-utils shared-mime-info)
+optdepends=('feedbackd: optional profile-respecting button haptics' 'pyside6: bounded local raster-image thumbnails')
+checkdepends=(omarchy python glib2 nodejs)
+provides=(omamobile-file-manager)
+
+build() { "$startdir/build"; }
+check() { "$startdir/test/all"; }
+package() { "$startdir/install" "$pkgdir"; }

@@ -1,0 +1,6 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+python3 -I -c 'import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path("runtime").glob("*.py")]'
+[[ -f ui/shell.qml && -f bin/omamobile-files && -f org.omamobile.Files.desktop ]] || { echo 'Files frontend is not staged; this is not a buildable release yet.' >&2; exit 1; }

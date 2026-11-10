@@ -1,0 +1,179 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""Activate the file app's own configuration; a local directory is an argv value."""
+import argparse
+import importlib.util
+import json
+import secrets
+import signal
+import stat
+import tempfile
+import os
+from pathlib import Path
+import subprocess
+import time
+from urllib.parse import urlsplit, unquote
+
+
+def location(value):
+    if not value:
+        return ''
+    if '\0' in value or '\n' in value or '\r' in value:
+        raise ValueError('Invalid folder location')
+    if value.startswith('file:'):
+        uri = urlsplit(value)
+        if uri.netloc not in ('', 'localhost') or uri.query or uri.fragment:
+            raise ValueError('Only local folder URLs are supported')
+        value = unquote(uri.path)
+    elif '://' in value:
+        raise ValueError('Only local folders are supported')
+    if '\0' in value or '\n' in value or '\r' in value:
+        raise ValueError('Invalid folder location')
+    return str(Path(value).expanduser().absolute())
+
+
+def validate_pick(value, app):
+    if not isinstance(value, dict):
+        raise ValueError('Invalid picker response')
+    if value.get('cancelled') is True and value.get('ok') is False:
+        return {'ok':False, 'cancelled':True}
+    if value.get('ok') is not True or not isinstance(value.get('path'), str) or not isinstance(value.get('token'), list):
+        raise ValueError('Invalid picker result')
+    spec = importlib.util.spec_from_file_location('_omafiles_picker_core', app/'files_core.py')
+    core = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(core)
+    # A second read-only token/header check catches replacement after UI selection.
+    try:
+        result = core.dispatch('pick-image', {'source':{'path':value['path'], 'token':value['token']}})
+    except core.FileError as error:
+        raise ValueError(str(error)) from error
+    return {'ok':True, 'path':result['path']}
+
+
+def pick_image(app, initial, *, timeout_seconds=600):
+    runtime_value = os.environ.get('XDG_RUNTIME_DIR')
+    if not runtime_value:
+        raise RuntimeError('A private desktop runtime directory is required')
+    runtime = Path(runtime_value)
+    metadata = runtime.lstat()
+    if runtime.is_symlink() or not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+        raise RuntimeError('The desktop runtime directory is not private to this user')
+    nonce = secrets.token_hex(24)
+    cancelled = [False]
+    old_handlers = {}
+    def cancel_signal(signum, frame):
+        cancelled[0] = True
+    with tempfile.TemporaryDirectory(prefix='omafiles-picker-', dir=runtime) as directory:
+        private = Path(directory)
+        configuration = private/'shell.qml'
+        source = (app/'shell.qml').read_text()
+        prefix = '//@ pragma AppId org.omamobile.Files'
+        if not source.startswith(prefix+'\n'):
+            raise RuntimeError('Unknown Files configuration identity')
+        configuration.write_text(source.replace(prefix, prefix+'.Picker.'+nonce, 1))
+        # Only packaged runtime dependencies, not a recursive copy of user content.
+        for name in ('FilesBridge.qml','FilesModel.js','Icon.qml','files_backend.py','files_core.py','qt_backend.py','fonts','Commons'):
+            target = app/name
+            if not target.exists(): raise RuntimeError('Picker runtime is incomplete')
+            (private/name).symlink_to(target, target_is_directory=target.is_dir())
+        result_path = private/'picker-result.json'
+        fd = os.open(result_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'nonce':nonce, 'result':{'pending':True}}, stream)
+        child = None
+        try:
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                old_handlers[signum] = signal.signal(signum, cancel_signal)
+            environment = dict(os.environ, OMAMOBILE_FILES_PICKER_NONCE=nonce,
+                               OMAMOBILE_FILES_PICKER_INITIAL=initial)
+            child = subprocess.Popen(['quickshell','--no-duplicate','--path',str(configuration)],
+                                     env=environment, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, umask=0o077)
+            deadline = time.monotonic()+timeout_seconds
+            while time.monotonic()<deadline:
+                if cancelled[0]: return {'ok':False, 'cancelled':True}
+                status = child.poll()
+                if status is not None:
+                    if status == 0: return {'ok':False, 'cancelled':True}
+                    raise RuntimeError('The mobile image picker closed before returning a result')
+                # Cheap local reads only: no IPC subprocess on the polling path.
+                fd = os.open(result_path, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                        raise RuntimeError('Picker result permissions changed')
+                    encoded = stream.read(16385)
+                if len(encoded)>16384: raise ValueError('Picker response is too large')
+                envelope = json.loads(encoded)
+                if not isinstance(envelope, dict) or envelope.get('nonce') != nonce or not isinstance(envelope.get('result'), dict):
+                    raise ValueError('Picker response ownership does not match')
+                result = envelope['result']
+                if result.get('pending') is not True:
+                    return validate_pick(result, app)
+                time.sleep(0.2)
+            raise RuntimeError('The mobile image picker timed out')
+        finally:
+            if child is not None and child.poll() is None:
+                # Only this exact child is owned. Never kill an existing Files or shell.
+                child.terminate()
+                try: child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    child.kill(); child.wait(timeout=2)
+            for signum, previous in old_handlers.items(): signal.signal(signum, previous)
+
+
+def main():
+    if os.geteuid() == 0:
+        raise RuntimeError('Open Files as your normal user, not root')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--capabilities', action='store_true')
+    parser.add_argument('--pick-image', action='store_true')
+    parser.add_argument('--initial-dir', default='')
+    parser.add_argument('location', nargs='?', default='')
+    arguments = parser.parse_args()
+    target = location(arguments.location)
+    app = Path(os.environ.get('OMAMOBILE_FILES_DIR', '/usr/share/omamobile/files')).absolute()
+    if arguments.capabilities:
+        print(json.dumps({'version':(app/'version').read_text().strip(), 'imagePicker':1, 'resultProtocol':'json-stdout-v1'}))
+        return 0
+    configuration = app / 'shell.qml'
+    commons = Path('/usr/share/omarchy/shell/Commons')
+    if not configuration.is_file() or not commons.is_dir():
+        raise RuntimeError('The file app or Omarchy theme library is missing')
+    if arguments.pick_image:
+        initial = location(arguments.initial_dir) if arguments.initial_dir else str(Path.home()/'Pictures')
+        if not Path(initial).is_dir(): initial = str(Path.home())
+        print(json.dumps(pick_image(app, initial), ensure_ascii=True))
+        return 0
+    if arguments.initial_dir: parser.error('--initial-dir requires --pick-image')
+    namespace = app / 'Commons'
+    if namespace.is_symlink():
+        if namespace.readlink() != commons:
+            raise RuntimeError('Refusing an unrelated theme namespace')
+    elif namespace.exists():
+        raise RuntimeError('Refusing an existing theme namespace')
+    else:
+        namespace.symlink_to(commons, target_is_directory=True)
+    def activate():
+        command = ['quickshell', 'ipc', '--path', str(configuration), 'call', 'files', 'activate', target]
+        try:
+            reply = subprocess.run(command, capture_output=True, text=True, timeout=2)
+            return reply.returncode == 0 and reply.stdout.strip() == 'ok'
+        except subprocess.TimeoutExpired:
+            return False
+    if activate():
+        return 0
+    subprocess.run(['quickshell', '--no-duplicate', '--daemonize', '--path', str(configuration)], check=True, timeout=8)
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline:
+        if activate():
+            return 0
+        time.sleep(0.05)
+    raise RuntimeError('The file app could not be activated')
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+        raise SystemExit(str(error))

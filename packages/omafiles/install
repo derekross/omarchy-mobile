@@ -1,0 +1,40 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Pure DESTDIR staging: never writes a user's MIME defaults or configuration.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+dest=${1:?Usage: install ABSOLUTE_DESTDIR}
+[[ $dest == /* && $(realpath -m -- "$dest") != / ]] || { echo 'Use an absolute staging directory other than /.' >&2; exit 1; }
+ui=${OMAFILES_UI_SOURCE:-$PWD/ui}
+launcher=${OMAFILES_LAUNCHER_SOURCE:-$PWD/bin/omamobile-files}
+desktop=${OMAFILES_DESKTOP_SOURCE:-$PWD/org.omamobile.Files.desktop}
+[[ -f $ui/shell.qml && -f $launcher && -f $desktop ]] || { echo 'Files frontend is not staged; refusing an incomplete install.' >&2; exit 1; }
+app=$dest/usr/share/omamobile/files
+install -d "$app"
+for name in files_core.py files_backend.py qt_backend.py; do
+  install -Dm644 "runtime/$name" "$app/$name"
+done
+# UI files are maintained separately. Do not copy screenshots, test homes,
+# personal images, temporary QML harnesses or the source directory wholesale.
+for file in "$ui"/*.qml "$ui"/*.js; do
+  [[ -f $file ]] || continue
+  name=${file##*/}
+  case $name in test_*|test-*|tst_*|tst-*) continue ;; esac
+  install -m644 "$file" "$app/$name"
+done
+if [[ -d $ui/fonts ]]; then
+  [[ -f $ui/fonts/OFL.txt ]] || { echo 'Bundled font license is missing.' >&2; exit 1; }
+  install -Dm644 "$ui/fonts/OFL.txt" "$dest/usr/share/licenses/omafiles/OFL.txt"
+  for file in "$ui/fonts"/*.ttf "$ui/fonts"/*.otf "$ui/fonts/OFL.txt" "$ui/fonts/source.json"; do
+    [[ -f $file ]] && install -Dm644 "$file" "$app/fonts/${file##*/}"
+  done
+fi
+[[ ! -e $app/Commons || -L $app/Commons ]] || { echo 'An unrelated Commons namespace already exists.' >&2; exit 1; }
+ln -sfn /usr/share/omarchy/shell/Commons "$app/Commons"
+install -Dm755 "$launcher" "$dest/usr/bin/omamobile-files"
+ln -sfn omamobile-files "$dest/usr/bin/omafiles"
+install -Dm644 "$desktop" "$dest/usr/share/applications/org.omamobile.Files.desktop"
+install -Dm644 LICENSE "$dest/usr/share/licenses/omafiles/LICENSE"
+install -Dm644 version "$app/version"
+
+install -Dm644 org.omamobile.Files.svg "$dest/usr/share/icons/hicolor/scalable/apps/org.omamobile.Files.svg"
