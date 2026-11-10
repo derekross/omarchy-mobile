@@ -325,8 +325,20 @@ if grep -nE 'property +[a-z]+ +(top|bottom|left|right|horizontalCenter|verticalC
 # home screen's dock is covered.
 grep -cF 'onPositionChanged: function(mouse) { drag.offset = Math.min(0, mouse.y - startY) }' "$qs" >/dev/null || fail "the shade's card follows a swipe up"
 grep -cF 'interactive: contentHeight > height + 1' "$qs" >/dev/null || fail "a short notification list leaves the swipe to the card"
+home_strip=$(sed -n 's/^ *readonly property int touch: //p' plugins/omamobile.launcher/Launcher.qml | head -n 1)
+[ -n "$home_strip" ] || fail "the launcher's home strip height (touch) is found"
 for panel in plugins/omamobile.quicksettings/WifiPanel.qml plugins/omamobile.quicksettings/BluetoothPanel.qml; do
   grep -cF 'else if (swipeY < -24) root.close()' "$panel" >/dev/null || fail "$(basename "$panel" .qml) closes on a swipe up from its bottom edge"
+  # Over an app the page's window ends above the home strip's reserved zone,
+  # so the true bottom edge needs the page's companion window, which ignores
+  # that zone; without it a swipe there opens Recents over the page. It is
+  # the page strip's own height, so on the home screen, where it lies over
+  # that strip, it never reaches the end of the list. And the strip is the
+  # home strip's height, so over an app the companion covers all of the
+  # zone the home strip reserves (a shorter strip left a band above it).
+  grep -cF 'exclusionMode: ExclusionMode.Ignore' "$panel" >/dev/null || fail "$(basename "$panel" .qml) takes the true bottom edge over an app"
+  grep -cF 'implicitHeight: swipeStrip.height' "$panel" >/dev/null || fail "$(basename "$panel" .qml)'s edge window keeps to the strip's band"
+  grep -cF "height: $home_strip" "$panel" >/dev/null || fail "$(basename "$panel" .qml)'s strip is the home strip's height ($home_strip)"
 done
 pass "notification shade, Settings gear, unread count and Clipboard wiring"
 
