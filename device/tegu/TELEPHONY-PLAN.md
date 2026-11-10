@@ -311,6 +311,20 @@ up, the release confirmed in 272 ms) and mobile data over `rmnet0`; its
 `tools/nv-backup -d tegu --check` after it read every NV partition SAME as
 the 2026-10-28 backup. Texts weren't sent on this kernel.
 
+One gap found by reading and closed the same evening: the link driver takes
+its PHY from `phy_zuma_pcie`, which the guards keep from autoloading and
+which only the Wi-Fi start loaded, and only on a phone with the Wi-Fi
+firmware. The boots above had that firmware, so the PHY's driver was there
+by the time the modem started. The starter now loads it itself, before the
+link driver, and refuses before the latch on a kernel without it. Checked on
+a fifth boot of the same kernel (20:45 MST) with the Wi-Fi firmware moved
+aside for that boot: the graphics start skipped Wi-Fi ("no Wi-Fi host, DMA
+pool or BCM4383 firmware"), `brcmfmac` and `pcie_gs201` weren't loaded, the
+starter loaded `phy_zuma_pcie`, `pcie_gs201_cp` and CPIF, and the unit
+reached "modem OK: CP ONLINE", registered at home on LTE; its stop at
+`systemctl reboot` was confirmed. What the start does without the PHY's
+driver wasn't tried on the palmtop.
+
 Qualification, attended and on the charger: boot to ONLINE, data and texts;
 the inhibitor; NV and UFS unchanged; then shutdown and reboot on their own.
 Suspend with the CP on needs its own tests, with NFC polling stopped, and
