@@ -47,7 +47,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed git base-devel e2fsprogs zstd lz4 openssl \
             python python-dbus python-gobject dbus nodejs dtc cpio file jq busybox \
-            xz gzip qt6-declarative shellcheck rsync android-tools
+            xz gzip qt6-declarative qt6-svg shellcheck rsync android-tools
           # Arch's nodejs can lag a simdjson soname bump: on 2026-10-29
           # simdjson 5.0.8 dropped the libsimdjson.so.34 that nodejs still
           # linked, and node no longer started. Only while node can't start,
