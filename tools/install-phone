@@ -527,9 +527,15 @@ rm -f "$copy" "$sparse"
 zstd -q -d --sparse -f "$rootfs" -o "$copy"
 [[ $(dumpe2fs -h "$copy" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] ||
   die "$rootfs is not an Omarchy Mobile root image (label omamobile-root)"
+# debugfs's mkdir on a directory that already exists (a restored or
+# lived-in root) still allocates the inode, then fails to link it, which
+# leaves an unconnected directory: make only the missing ones.
+mkdirs=""
+for d in /etc/omamobile /root/.ssh; do
+  debugfs -R "stat $d" "$copy" 2>/dev/null | grep -c '^Inode:' >/dev/null || mkdirs+="mkdir $d"$'\n'
+done
 debugfs -w -f - "$copy" >/dev/null 2>&1 <<EOF || true
-mkdir /etc/omamobile
-rm /etc/omamobile/firstboot.conf
+${mkdirs}rm /etc/omamobile/firstboot.conf
 write $conf_file /etc/omamobile/firstboot.conf
 sif /etc/omamobile/firstboot.conf mode 0100600
 sif /etc/omamobile/firstboot.conf uid 0
@@ -539,7 +545,6 @@ write $boot_conf /etc/omamobile/boot-update.conf
 sif /etc/omamobile/boot-update.conf mode 0100644
 sif /etc/omamobile/boot-update.conf uid 0
 sif /etc/omamobile/boot-update.conf gid 0
-mkdir /root/.ssh
 sif /root/.ssh mode 040700
 sif /root/.ssh uid 0
 sif /root/.ssh gid 0
