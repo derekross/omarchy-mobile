@@ -17,5 +17,5 @@ except module['Failure']:
 else:
     raise AssertionError('unsupported source family accepted')
 
-assert len(list((package / 'legacy-4.0.6').glob('*.patch'))) == 29
+assert len(list((package / 'legacy-4.0.6').glob('*.patch'))) == 30
 print('PASS: actual selector rejects unsupported families; legacy archive retained')
