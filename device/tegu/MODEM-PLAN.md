@@ -1612,6 +1612,82 @@ the interrupt. So no power-off hook is needed for NFC to come back after a
 wake; the stop-poll hook stays, for the reset of 10-27, which this doesn't
 explain.
 
+### Suspend with the modem on, with the sleep fixes: refused or short, and it costs the phone service (2026-11-09, night)
+
+The first tries since 10-27, now with the UFS pin fix, C2 kept out of the
+sleep and NFC polling stopped by its hook. On the charger, cable in, the CP
+ONLINE and registered (home LTE, IMS voice and SMS), the modem's block
+inhibitor passed on purpose with `systemctl suspend -i`, an RTC alarm armed
+each time (`device/tegu/bringup/modem-sleep-test.sh`). Two kernels:
+`7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` build #100 with
+the bring-up modules (four boots, 22 sleep requests), and
+`7.3.0-rc6-omamobile-push1-g773b4102f5ec` with the in-tree `pcie_gs201_cp`
+and CPIF (one boot, 3 requests).
+
+- **Nothing hung.** No reset, no silent no-wake, no UFS line, and the CP's
+  state read ONLINE throughout.
+- **Most sleeps are refused by CPIF.** 22 of the 25 requests failed with
+  `cpif: suspend_cp: abort suspend` and `PM: failed to suspend noirq: error
+  -16`: `suspend_cp()` returns -EBUSY while the CP holds `cp2ap_wakeup`
+  high, and the CP raised it during the suspend sequence itself
+  (`ap_wakeup_handler: cp2ap_wakeup work pending. gpio_val : 1` right after
+  "Suspend prepare").
+- **Three sleeps were entered, and the modem woke each within seconds.**
+  Two on #100 (about 6 s and 4 s, `pm_wakeup_irq` the modem's PCIe
+  interrupt and `cp2ap_wakeup`), one on the published kernel (about 2 s,
+  `cp2ap_wakeup`). So the CP's wake line does wake the palmtop from s2idle.
+- **One sleep attempt, entered or refused, costs the phone service until a
+  reboot.** In all five boots omamobile-sitd's requests to the CP began to
+  time out within 95 s of the first attempt ("poll failed: TimeoutError")
+  and never came back, on both kernels; `omamobile-sit status` went on
+  showing the last state it had read, and the screen-state request
+  answered "Invalid or unavailable phone request". The kernel log of the
+  first attempt, the same on both link drivers: `pcieport ...: Unable to
+  change power state from D0 to D3hot, device inaccessible`, then on the
+  way back `Unable to change power state from D3cold to D0, device
+  inaccessible` and `Data Link Layer Link Active not set in 100 msec`; the
+  link driver brings the link up again (Gen3 x2), and CPIF then logs
+  `s51xx_pcie_restore_state: Can't set D0 state!!!!`,
+  `s51xx_pcie_send_doorbell_int: Can't send Interrupt(not setted bme_en,
+  0xffff)`, `cmd reg = 0xffff`, `BME is not set`, and "link-down recovery
+  requested"; on #100 the doorbell failed about 3000 times in the next 40 s.
+  Our reading, not yet tested: the PCI core's system-sleep callbacks put
+  the CP's root port and endpoint through D3 while CPIF, which powers this
+  link up and down itself and saves and restores the endpoint's state
+  itself, has the PHY down, and afterwards the endpoint's configuration
+  space reads all ones to CPIF. Every `systemctl reboot` after these boots
+  still logged the confirmed stop.
+- **Why the CP is awake so much: nobody tells it the screen is off.** Idle
+  and registered, the link came up 49 times a minute (98 `cp2ap_wakeup`
+  edges, SIT indication 0906 about 51 times a minute; 25 link-ups in 30 s
+  on the published kernel too). omamobile-sitd has the request for it
+  (`{"action": "screen-state", "on": false}`: SIT 0902 with 0, and the
+  indication filter 0928 with 0), and nothing in the tree sends it. Sent by
+  hand it took the idle link to 3 or 4 link-ups a minute (6 to 8 edges, no
+  0906), and back to 49 with it on again. With it off the five sleeps of
+  that boot were still refused, so the CP's wake at the moment of the
+  sleep has another source, not found yet (the Wi-Fi interface going down
+  for the sleep moves the default route to `rmnet0`, and sitd polls every
+  30 s).
+- **A refused sleep can cost Wi-Fi too.** systemd tries its sleep states in
+  turn (`mem`, which is s2idle here, then `freeze`), so CPIF's refusal was
+  followed 0.5 s later by a second attempt, in which `brcmfmac` failed to
+  suspend (`error -5`) or lost its interface; the Wi-Fi hook then logs
+  "Wi-Fi lost across sleep; unloading it around sleeps until reboot". With
+  one state only (a runtime `SuspendState=freeze` drop-in for the test)
+  Wi-Fi was still lost at the second refused sleep on #100, and stayed up
+  through one entered and two refused sleeps on the published kernel.
+
+So the inhibitor `omamobile-tegu-modem-up` takes is not only about a hang:
+until the link survives a sleep, a suspend with the modem up cuts the phone
+service off, silently, until the next reboot. What M6's sleep part needs,
+in order: the CP's PCI devices kept out of the PCI core's system sleep (or
+their state restored after it), which is kernel work on the shared link
+driver and so the 7 Pro's too; the shell telling sitd the screen state, so
+the CP is idle when a sleep starts; one sleep state in the device's
+`sleep.conf`; then the qualification itself (RTC wakes, a call and a text
+waking the palmtop).
+
 ### M2: the link only (modem link driver, `allow_hw=1`; risk: medium)
 
 One step per run, the CPIF overlay not applied, the link overlay applied
