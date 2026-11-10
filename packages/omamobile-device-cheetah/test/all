@@ -188,3 +188,8 @@ pass "sitd waits for the CP; the modem stack is on by default through the target
   || fail "the device sitd policy is staged"
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "the device sitd policy is staged and provided"
+
+# Location's agent goes with its socket (2026.11.08 enabled only the socket)
+grep -A1 -F 'systemctl is-enabled -q omamobile-gnss-nmea.socket' bin/omamobile-setup-system |
+  grep -cF -- '--global enable omamobile-geoclue-agent.service' >/dev/null ||
+  { echo "not ok - omamobile-setup-system enables GeoClue's agent with the Location socket"; exit 1; }
