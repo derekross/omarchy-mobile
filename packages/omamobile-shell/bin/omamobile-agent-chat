@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+import sys
+from pathlib import Path
+source = Path(__file__).resolve().parent.parent/'lib'
+sys.path.insert(0, str(source if (source/'agent_chat.py').is_file() else Path('/usr/lib/omamobile-shell')))
+from agent_chat import main
+raise SystemExit(main())

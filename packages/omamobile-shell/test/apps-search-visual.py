@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix='search-preview-', dir=short) as directo
     app.mkdir()
     (app / 'launcher').mkdir()
     shutil.copytree(HERE / 'fixtures/apps-search-icons', app / 'icons')
-    for name in ('AppsSearch.qml', 'SearchFocus.qml'):
+    for name in ('AppsSearch.qml', 'SearchFocus.qml', 'AgentConversation.qml', 'AgentChatController.qml'):
         shutil.copyfile(PLUGIN / name, app / 'launcher' / name)
     for name in ('Commons', 'Ui'):
         target = a.omarchy_shell.resolve() / name
@@ -75,6 +75,8 @@ ShellRoot {
   property int frame: 0
   property double captureStart: Date.now()
   property string launched: ""
+  property string fixtureRequest: ""
+  property int fixtureStep: 0
   QtObject {
     id: library
     property var entries: [({id:"example.calendar",name:"Calendar",comment:"Your plans at a glance",icon:"calendar"}),({id:"example.files",name:"Files",comment:"Browse and organise files",icon:"files"}),({id:"example.notes",name:"Notes",comment:"Ideas, lists and reminders",icon:"notes"}),({id:"example.photos",name:"Photos",comment:"Browse your pictures",icon:"photos"}),({id:"example.weather",name:"Weather",comment:"Today and the days ahead",icon:"weather"})]
@@ -107,11 +109,46 @@ ShellRoot {
         anchors.fill: parent
         anchors.bottomMargin: caption.height
         appLibrary: library
+        agentId: "codex"
+        agentName: "Codex"
+        chatTransportEnabled: false
         // Offscreen fixtures cannot grant native layer-shell focus. Observe
         // component intent only; the phone must qualify that integration.
         surfaceActive: true
         inputReady: prime.inputReady
         onActivated: function(entry) { root.launched=entry.id }
+      }
+      // Neutral protocol fixture: renders actual controller/view behaviour,
+      // never starts a provider process or sends a cloud request.
+      Connections {
+        target: search.chatController
+        function onOutbound(message) {
+          if (message.op === "capabilities") search.chatController.receive({type:"capabilities",provider:"codex",nativeChat:true,installed:true})
+          else if (message.op === "reset") { root.fixtureRequest=""; fixtureReply.stop(); search.chatController.receive({type:"reset"}) }
+          else if (message.op === "cancel") { root.fixtureRequest=""; fixtureReply.stop(); search.chatController.receive({type:"cancelled",id:message.id}) }
+          else if (message.op === "send") {
+            root.fixtureRequest=message.id
+            root.fixtureStep=0
+            search.chatController.receive({type:"started",id:message.id})
+            fixtureReply.restart()
+          }
+        }
+      }
+      Timer {
+        id: fixtureReply
+        interval:180
+        repeat:true
+        onTriggered: {
+          if (!root.fixtureRequest || !search.opened) { stop(); return }
+          root.fixtureStep++
+          if (root.fixtureStep===1) search.chatController.receive({type:"reply",id:root.fixtureRequest,text:"Start with your most important task."})
+          else {
+            search.chatController.receive({type:"reply",id:root.fixtureRequest,text:"Start with your most important task.\n\nLeave time for lunch, a walk and a quieter evening."})
+            search.chatController.receive({type:"done",id:root.fixtureRequest})
+            root.fixtureRequest=""
+            stop()
+          }
+        }
       }
       Rectangle {
         id: caption
@@ -199,6 +236,32 @@ ShellRoot {
             Commons.Style.reduceMotion=false
           } else compare(search.transitionDuration,140)
           wait(160)
+          search.open("Plan tomorrow")
+          tryVerify(function(){return search.opened && search.inputReady},1000)
+          wait(180)
+          shot(ASKSHOT)
+          var card=findChild(search,"askAgentCard")
+          verify(card)
+          mouseClick(card,card.width/2,card.height/2)
+          compare(search.page,"agent")
+          compare(search.chatController.messages.length,0)
+          var composer=findChild(search,"agentDraft")
+          compare(composer.text,"Plan tomorrow")
+          tryVerify(function(){return composer.activeFocus},1000)
+          wait(160)
+          shot(CHATDRAFTSHOT)
+          var send=findChild(search,"agentSend")
+          mouseClick(send,send.width/2,send.height/2)
+          tryVerify(function(){return search.chatController.messages.length===2},1000)
+          tryCompare(search.chatController,"busy",false,2000)
+          compare(composer.text,"")
+          wait(200)
+          shot(CHATREPLYSHOT)
+          var back=findChild(search,"agentBack")
+          mouseClick(back,back.width/2,back.height/2)
+          compare(search.page,"search")
+          verify(search.opened)
+          wait(120)
         }
         function cleanupTestCase() {
           root.capturing=false
@@ -227,6 +290,7 @@ ShellRoot {
     for token, color in zip(('SCENERYTOP', 'SCENERYBOTTOM', 'SCENERYHILL'), scenery):
         qml = qml.replace(token, json.dumps(color))
     qml = qml.replace('OPENSHOT', json.dumps(str(out / 'search-open.png'))).replace('FILTERSHOT', json.dumps(str(out / 'search-filtered.png'))).replace('EMPTYSHOT', json.dumps(str(out / 'search-empty.png')))
+    qml=qml.replace('ASKSHOT',json.dumps(str(out/'search-ask.png'))).replace('CHATDRAFTSHOT',json.dumps(str(out/'chat-draft.png'))).replace('CHATREPLYSHOT',json.dumps(str(out/'chat-reply.png')))
     (app / 'shell.qml').write_text(qml)
     env = os.environ | {'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_DATA_HOME': str(root / 'data'),
                         'XDG_CACHE_HOME': str(root / 'cache'), 'XDG_RUNTIME_DIR': str(runtime), 'QT_QPA_PLATFORM': 'offscreen',

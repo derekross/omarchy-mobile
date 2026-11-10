@@ -39,7 +39,7 @@ Item {
 
   // `shell call omamobile.back back ''`: the same as the gesture.
   function back() {
-    if (AppsSearchLink.close()) return "search"
+    if (AppsSearchLink.back()) return "search"
     Quickshell.execDetached(BackModel.ESCAPE_ARGV)
     return "ok"
   }

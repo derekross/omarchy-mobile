@@ -161,3 +161,46 @@ This example does not change global blur settings. Search remains usable
 without blur. Component previews show translucency over neutral test scenery;
 they do not execute or qualify compositor blur, a real keyboard or phone frame
 pacing.
+
+## Ask Agent in native Search
+
+The Ask card opens an in-place conversation with the configured default agent.
+Search text becomes an editable draft; only Send or Ctrl+Enter submits it.
+Back returns to app search. Home and close dismiss Search; both dismissal and
+locking cancel an active request. An idle local bridge retains the conversation
+in memory, without polling or running the agent while hidden. New chat resets
+it. Changing provider or the selected account home starts a fresh conversation.
+
+The first native adapter supports an already installed Codex CLI. Its existing
+login, account selection, model/configuration and approval policy are retained;
+commands use the workspace-write sandbox. Other configured agents have an
+explicit terminal handoff, using the existing Omarchy route. No provider is
+selected or installed automatically. This contribution adds no account/login
+store, microphone facade, dictation runtime or custom user configuration.
+
+The backend's JSONL protocol carries literal messages over stdin, never shell
+command text. Request identities, reset acknowledgements and cancellation are
+bound to the owning process. A cancelled follow-up retains the last completed
+conversation; stale output cannot populate a later request. A stopped local
+bridge can be restarted through explicit conversation entry or New chat before
+another Send. Helper stderr and tool events are never copied into the UI or a
+new log. Assistant content is displayed as plain text.
+
+Task artifacts remain in private per-session workspaces under
+`${XDG_STATE_HOME:-~/.local/state}/omamobile/agent-chat/`; shutdown removes only
+empty workspace directories. Normal CLI session storage remains the CLI's own.
+The bridge does not create another transcript or copy credentials. Inputs,
+output framing and request time are bounded; failures remain visible without
+weakening sandbox or approval settings. The current request deadline is 180
+seconds and the composer accepts at most 8,192 UTF-16 code units.
+
+Protocol reference: [Codex non-interactive execution](https://learn.chatgpt.com/docs/non-interactive-mode).
+Native adapters for additional agents require their own verified protocol and
+sandbox/approval handling. Do not infer support from an installed executable.
+
+`test/agent-chat.py` runs real subprocess fixtures against inert temporary CLIs.
+`test/agent-chat-ui.py` connects the actual QML controller to the real Python
+bridge with an inert CLI, including resume, account changes, reset and transport
+recovery. CI installs Quickshell so that integration runs there; environments
+without it report an explicit skip. These checks make no cloud requests and
+are not phone keyboard, touch, compositor or frame-pacing qualification.

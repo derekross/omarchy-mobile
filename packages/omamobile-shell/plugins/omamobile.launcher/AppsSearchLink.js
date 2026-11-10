@@ -12,3 +12,11 @@ function close() {
   controller.closeSearch()
   return true
 }
+
+// System Back may step out of the conversation. Home always calls close().
+function back() {
+  if (!controller || !controller.searchOpened) return false
+  if (typeof controller.backSearch === "function") controller.backSearch()
+  else controller.closeSearch()
+  return true
+}

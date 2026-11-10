@@ -6,13 +6,55 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 
-// App search only. The application library and launch path remain Omarchy's;
-// this component neither indexes files nor selects an agent or account.
+// Search retains Omarchy's app catalog and an explicitly opened conversation.
+// No authentication, private widget, file index or voice adapter is included.
 Item {
   id: root
   objectName: "appsSearch"
 
   property var appLibrary: null
+  property string agentId: ""
+  property string agentName: "Agent"
+  property string page: "search"
+  property bool chatStarted: false
+  property bool chatTransportEnabled: true
+  readonly property var chatController: chat
+  signal chooseAgent()
+  signal handoffAgent(string prompt)
+  function activeInput() { return page === "agent" ? conversation.inputField : input }
+  function focusPage() {
+    ++focusGeneration
+    focusPending = true
+    queueFocus()
+  }
+  function openAgent() {
+    if (!opened || sessionLocked) return
+    if (!agentId) { chooseAgent(); return }
+    if (!conversation.draft && query.trim()) conversation.draft = query
+    input.focus = false
+    chatStarted = true
+    chat.ensureStarted()
+    page = "agent"
+    focusPage()
+  }
+  function back() {
+    if (page === "agent") {
+      chat.cancel()
+      conversation.inputField.focus = false
+      page = "search"
+      focusPage()
+    } else dismiss()
+  }
+  function sendAgent(text) {
+    if (opened && !sessionLocked && page === "agent") chat.send(text)
+  }
+  AgentChatController {
+    id: chat
+    provider: root.agentId
+    enabled: root.chatStarted
+    transportEnabled: root.chatTransportEnabled
+    onAccepted: function(prompt) { if (conversation.draft.trim() === prompt) conversation.draft = "" }
+  }
   property bool paintBackground: true
   property bool opened: false
   property bool sessionLocked: false
@@ -62,7 +104,7 @@ Item {
     Qt.callLater(function() {
       if (root.sessionLocked || !root.opened || !root.focusPending || !root.surfaceActive || !root.inputReady || generation !== root.focusGeneration) return
       root.focusPending = false
-      input.forceActiveFocus()
+      root.activeInput().forceActiveFocus()
       root.hadFocus = true
       Qt.inputMethod.show()
       root.inputRequested(true)
@@ -83,11 +125,13 @@ Item {
     focusPending = false
     // Never hide a different app's or the lock screen's input context after
     // focus has already moved there. Clearing our field still releases it.
-    if (input.activeFocus && surfaceActive) {
+    chat.cancel()
+    if ((input.activeFocus || conversation.inputField.activeFocus) && surfaceActive) {
       Qt.inputMethod.hide()
       inputRequested(false)
     }
     input.focus = false
+    conversation.inputField.focus = false
     if (surfaceActive) root.forceActiveFocus()
     hadFocus = false
     opened = false
@@ -128,12 +172,14 @@ Item {
     var paths = {
       close: '<path d="m6 6 12 12M18 6 6 18"/>',
       search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+      spark: '<path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z"/>',
       chevron: '<path d="m9 6 6 6-6 6"/>'
     }
     return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="' + String(ink) + '" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + paths[name] + '</svg>')
   }
   Rectangle { anchors.fill: parent; visible: root.paintBackground; color: root.backdropColor }
   ColumnLayout {
+    visible: root.page === "search"
     anchors.fill: parent
     anchors.leftMargin: Math.min(Style.space(24), root.width / 8)
     anchors.rightMargin: anchors.leftMargin
@@ -189,7 +235,7 @@ Item {
             onTextEdited: root.query = text
             Keys.onReturnPressed: root.activateFirst()
             Keys.onEnterPressed: root.activateFirst()
-            Keys.onEscapePressed: root.dismiss()
+            Keys.onEscapePressed: root.back()
           }
           Item {
             objectName: "searchClear"
@@ -274,6 +320,34 @@ Item {
         }
         MouseArea { id: rowTouch; anchors.fill: parent; onClicked: root.activate(modelData) }
       }
+      footer: Item {
+        width: results.width
+        height: root.height >= Style.space(280) ? Style.space(108) : 0
+        visible: height > 0
+        Rectangle {
+          anchors { left: parent.left; right: parent.right; top: parent.top; topMargin: Style.space(20) }
+          height: Style.space(88)
+          radius: Style.cornerRadius
+          color: root.cardColor
+          objectName: "askAgentCard"
+          Accessible.name: root.agentId ? "Ask " + root.agentName : "Choose an agent"
+          Accessible.role: Accessible.Button
+          RowLayout {
+            anchors.fill: parent
+            anchors.margins: Style.space(16)
+            spacing: Style.space(14)
+            Image { Layout.preferredWidth: Style.space(24); Layout.preferredHeight: width; source: root.glyph("spark", Commons.Color.accent) }
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: Style.spacing.sm
+              Text { Layout.fillWidth: true; text: root.agentId ? "Ask " + root.agentName : "Choose an agent"; textFormat: Text.PlainText; color: root.foreground; font.family: Style.font.family; font.pixelSize: Style.font.subtitle; font.bold: true; elide: Text.ElideRight }
+              Text { Layout.fillWidth: true; text: "Start a conversation"; color: root.muted; font.family: Style.font.family; font.pixelSize: Style.font.body }
+            }
+            Image { Layout.preferredWidth: Style.space(18); Layout.preferredHeight: width; source: root.glyph("chevron", root.secondary) }
+          }
+          MouseArea { anchors.fill: parent; onClicked: root.openAgent() }
+        }
+      }
       // Translucent fades follow the glass tint without an opaque edge band.
       Rectangle {
         parent: results
@@ -297,23 +371,41 @@ Item {
           GradientStop { position: 1; color: root.backdropColor }
         }
       }
-      Text {
-        parent: results
-        objectName: "searchEmpty"
-        anchors.centerIn: parent
-        width: parent.width
-        visible: root.entries.length === 0
-        text: root.appLibrary ? "No apps found" : "Loading apps…"
-        textFormat: Text.PlainText
-        horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.Wrap
-        color: root.secondary
-        font.family: Style.font.family
-        font.pixelSize: Style.font.body
+      header: Item {
+        width: results.width
+        height: emptyLabel.visible ? emptyLabel.implicitHeight + Style.space(20) : 0
+        Text {
+          id: emptyLabel
+          objectName: "searchEmpty"
+          width: parent.width
+          visible: root.entries.length === 0
+          text: root.appLibrary ? "No apps found" : "Loading apps…"
+          textFormat: Text.PlainText
+          wrapMode: Text.Wrap
+          color: root.secondary
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
       }
     }
     Item { visible: !results.visible; Layout.fillHeight: true }
   }
-  Keys.onEscapePressed: root.dismiss()
-  Keys.onBackPressed: root.dismiss()
+  AgentConversation {
+    id: conversation
+    anchors.fill: parent
+    visible: root.page === "agent"
+    controller: chat
+    agentName: root.agentName
+    foreground: root.foreground
+    muted: root.muted
+    cardColor: root.cardColor
+    onBackRequested: root.back()
+    onCloseRequested: root.dismiss()
+    onSendRequested: function(prompt) { root.sendAgent(prompt) }
+    onHandoffRequested: function(prompt) { root.close(); root.handoffAgent(prompt) }
+    onChooseAgentRequested: root.chooseAgent()
+    onNewChatRequested: { chat.reset(); conversation.draft = ""; root.focusPage() }
+  }
+  Keys.onEscapePressed: root.back()
+  Keys.onBackPressed: root.back()
 }

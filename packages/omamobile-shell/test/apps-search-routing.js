@@ -23,7 +23,12 @@ vm.runInContext('function back() {' + action + '}', receiver);
 ctx.publish({searchOpened: true, closeSearch() { this.searchOpened = false; }});
 assert.equal(receiver.back(), 'search'); assert.equal(fallback, 0);
 assert.equal(receiver.back(), 'ok'); assert.equal(fallback, 1);
-console.log('ok - native Back closes Search in process; stale registrations cannot clear its replacement');
+let stepped = 0;
+const conversation = {searchOpened: true, backSearch() { stepped++; }, closeSearch() { this.searchOpened = false; }};
+ctx.publish(conversation);
+assert.equal(receiver.back(), 'search'); assert.equal(stepped, 1); assert.equal(conversation.searchOpened, true);
+assert.equal(ctx.close(), true); assert.equal(conversation.searchOpened, false);
+console.log('ok - native Back steps out of chat; Home closes the entire Search; stale registrations stay isolated');
 
 const launcher = fs.readFileSync(path.join(plugin, 'Launcher.qml'), 'utf8');
 function body(name) {

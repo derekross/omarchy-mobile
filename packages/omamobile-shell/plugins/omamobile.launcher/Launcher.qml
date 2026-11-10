@@ -245,6 +245,9 @@ Item {
     if (shell && typeof shell.summon === "function") shell.summon(pluginId, payload)
     else open(payload)
   }
+  function backSearch() {
+    appsSearch.back()
+  }
   function closeSearch() {
     appsSearch.close()
     dismiss(0)
@@ -477,7 +480,7 @@ Item {
         SearchPill {
           anchors.fill: parent
           anchors.margins: Style.spacing.xxl
-          placeholder: (root.settings.nativeSearch === false && root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
+          placeholder: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
           onTapped: root.activateDock()
           // Hold: the voice bar, as a hold on the pill over an app.
           onHeld: root.voiceHold()
@@ -1169,6 +1172,10 @@ Item {
       id: appsSearch
       anchors.fill: parent
       appLibrary: root.appLibrary
+      agentId: root.agentId
+      agentName: root.agentName
+      onChooseAgent: { root.closeSearch(); Util.execArgv(LauncherModel.PICK_AGENT_ARGV) }
+      onHandoffAgent: function(prompt) { root.askAgent(prompt) }
       sessionLocked: root.sessionLocked
       paintBackground: false // backdrop paints the theme alpha once, also over the bar
       inputReady: searchFocus.inputReady
