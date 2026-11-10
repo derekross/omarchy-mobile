@@ -27,11 +27,12 @@ The turn. Before the hold, the output's last buffer is copied into a
 framebuffer of the panel's size (the swapchain reuses that buffer within
 a few frames). When the hold ends, the final copy to the output (in
 CHyprOpenGLImpl::end()) draws, over black, the new frame turning in from
-where the old one sat on the glass to upright over 283 ms on Android's
-(0.2, 0, 0, 1) curve, and the old frame, pre-rotated for the new
-transform so it starts where it was, turning with it and fading out over
-116 ms (Android's screen_rotate_*_enter/exit and config_screen_rotation_*
-values). Unlike Android, the new frame is opaque from the start: its fade
+where the old one sat on the glass to upright over 283 ms (383 ms for a
+half turn) on Android's (0.2, 0, 0, 1) curve, and the old frame,
+pre-rotated for the new transform so it starts where it was, turning with
+it and fading out over 116 ms on Android's alpha-out curve (0.57, 0, 0.71,
+0.43) (Android's screen_rotate_*_enter/exit, screen_rotation_alpha_out and
+config_screen_rotation_* values). Unlike Android, the new frame is opaque from the start: its fade
 in over black read as a dip to black on the phone.
 
 Off unless OMAMOBILE_ROTATION_HOLD=1 is in Hyprland's environment, read
@@ -78,7 +79,7 @@ index 5d23d8e..3a175c4 100644
              else
                  renderTexturePrimitive(ctx, finalTexture, finalBox);
 diff --git i/src/render/Renderer.cpp w/src/render/Renderer.cpp
-index 4bbb606..925c136 100644
+index 4bbb606..35bc770 100644
 --- i/src/render/Renderer.cpp
 +++ w/src/render/Renderer.cpp
 @@ -1,4 +1,6 @@
@@ -88,7 +89,7 @@ index 4bbb606..925c136 100644
  #include "../Compositor.hpp"
  #include "../helpers/math/Math.hpp"
  #include <algorithm>
-@@ -322,6 +324,216 @@ bool IHyprRenderer::shouldRenderWindow(PHLWINDOW pWindow) {
+@@ -322,6 +324,220 @@ bool IHyprRenderer::shouldRenderWindow(PHLWINDOW pWindow) {
      return false;
  }
  
@@ -113,10 +114,13 @@ index 4bbb606..925c136 100644
 +    // Android's screen rotation (frameworks/base core/res: screen_rotate_*_enter/exit,
 +    // config_screen_rotation_*): the new frame turns in over 283 ms on a (0.2, 0, 0, 1)
 +    // curve; the old one turns with it and fades out over 116 ms.
-+    constexpr auto  ROTATION_ANIM = std::chrono::milliseconds(283);
++    // A half turn takes 383 ms (config_screen_rotation_total_180), a quarter 283 ms
++    // (config_screen_rotation_total_90).
++    constexpr auto  ROTATION_ANIM     = std::chrono::milliseconds(283);
++    constexpr auto  ROTATION_ANIM_180 = std::chrono::milliseconds(383);
 +    constexpr float FADE_OUT_MS   = 116.F;
 +
-+    // cubic-bezier(x1, 0, x2, 1)-style ease: y for x, by bisection on the curve's x
++    // cubic-bezier(x1, y1, x2, y2) ease: y for x, by bisection on the curve's x
 +    float bezier(float x, float x1, float y1, float x2, float y2) {
 +        auto  bx = [&](float t) { return 3 * (1 - t) * (1 - t) * t * x1 + 3 * (1 - t) * t * t * x2 + t * t * t; };
 +        auto  by = [&](float t) { return 3 * (1 - t) * (1 - t) * t * y1 + 3 * (1 - t) * t * t * y2 + t * t * t; };
@@ -283,7 +287,7 @@ index 4bbb606..925c136 100644
 +        return false;
 +    const auto& hold = IT->second;
 +    const float MS   = std::chrono::duration<float, std::milli>(Time::steadyNow() - hold.fadeSince).count();
-+    const float TOTAL = sc<float>(ROTATION_ANIM.count());
++    const float TOTAL = sc<float>((hold.quarterTurns == 2 ? ROTATION_ANIM_180 : ROTATION_ANIM).count());
 +    if (MS >= TOTAL)
 +        return false;
 +
@@ -298,14 +302,15 @@ index 4bbb606..925c136 100644
 +    exitTex  = hold.snapshot->getTexture();
 +    exitTex->m_transform = Math::wlTransformToHyprutils(monitor->m_transform);
 +    exitRot  = -START * E;
-+    exitA    = 1.F - std::clamp(MS / FADE_OUT_MS, 0.F, 1.F);
++    // on Android's curve (screen_rotation_alpha_out, 0.57 0 0.71 0.43)
++    exitA    = 1.F - bezier(std::clamp(MS / FADE_OUT_MS, 0.F, 1.F), 0.57F, 0.F, 0.71F, 0.43F);
 +    return true;
 +}
 +
  bool IHyprRenderer::shouldRenderMonitor(PHLMONITOR monitor) {
      static auto PDAMAGETRACKINGMODE = CConfigValue<Config::INTEGER>("debug:damage_tracking");
      bool        hasChanged          = monitor->m_output->needsFrame || monitor->m_damage.hasChanged();
-@@ -2307,6 +2519,38 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
+@@ -2307,6 +2523,38 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
      if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0 && !pMonitor->m_damage.hasChanged())
          return;
  
@@ -344,7 +349,7 @@ index 4bbb606..925c136 100644
      if (!pMonitor->m_commitCoordinator->canBeginFrame()) {
          pMonitor->m_pendingFrame = true;
          return;
-@@ -2456,6 +2700,18 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
+@@ -2456,6 +2704,18 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
          Pointer::mgr()->renderSoftwareCursorsFor(ctx, pMonitor->m_self.lock(), NOW, ctx.m_data.damage);
      }
  

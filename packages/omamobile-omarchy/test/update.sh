@@ -66,6 +66,7 @@ EOF
 cat >"$fake/omarchy-update" <<EOF
 #!/bin/bash
 echo "omarchy-update \$* OMARCHY_UPDATE_LOGGED=\$OMARCHY_UPDATE_LOGGED OMAMOBILE_UPDATE=\$OMAMOBILE_UPDATE" >>"$calls"
+echo "omarchy-update OMARCHY_PATH=\${OMARCHY_PATH-unset}" >>"$calls"
 for c in omarchy-snapshot omarchy-update-aur-pkgs omarchy-update-orphan-pkgs omarchy-migrate omarchy-update-restart sudo; do
   echo "resolve \$c \$(command -v \$c)" >>"$calls"
 done
@@ -407,5 +408,24 @@ ok "notify-check: up to date, no toast" '! grep -c "^notify" "$calls" >/dev/null
 echo "omarchy 4.0.4-2 -> 4.0.5-1" >"$t/available"
 python3 -I "$U" notify-check >/dev/null; python3 -I "$U" notify-check >/dev/null
 ok "notify-check: one toast per release, opening the sheet" '[[ $(grep -c "^notify" "$calls") == 1 ]] && grep -c "summon omamobile.update" "$calls" >/dev/null'
+
+# A root login over SSH (or a TTY) has no Omarchy session environment, and
+# Omarchy's update scripts read OMARCHY_PATH under set -u: it still arrives
+: >"$calls"
+rc=0; out=$(printf '1234\n' | env -u OMARCHY_PATH python3 -I "$U" start) || rc=$?
+ok "no OMARCHY_PATH in the environment: the update starts (exit 0, '$out')" '[[ $rc == 0 && $out == started ]]'
+wait_done
+ok "no OMARCHY_PATH in the environment: omarchy-update still gets Omarchy's (omarchy-update-dev)" 'grep -c "^omarchy-update OMARCHY_PATH=/usr/share/omarchy$" "$calls" >/dev/null'
+
+# As root (a root login over SSH, 2026-11-09) Omarchy's per-user migration
+# record is empty and every migration ran again as root: refused, nothing runs
+: >"$calls"
+for c in run start run-migration; do
+  rc=0; out=$(printf '1234\n' | OMAMOBILE_UPDATE_TEST_EUID=0 python3 -I "$U" $c 2>&1) || rc=$?
+  ok "as root: $c refused (exit 5) and says why" '[[ $rc == 5 && $out == *"not as root"* ]]'
+done
+ok "as root: nothing reached omarchy-update or sudo" '[[ ! -s $calls ]]'
+rc=0; OMAMOBILE_UPDATE_TEST_EUID=0 python3 -I "$U" check --json >/dev/null || rc=$?
+ok "as root: check still answers (read-only, exit $rc)" '[[ $rc == 0 || $rc == 1 ]]'
 
 exit $((failures > 0))

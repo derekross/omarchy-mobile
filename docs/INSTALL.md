@@ -20,10 +20,10 @@ Today these steps are manual. Where the install is going, one guided step from a
 
 - **A Pixel 7 Pro** whose bootloader can be unlocked. Phones sold locked to a carrier often can't be. In Android, go to Settings > About phone and tap Build number seven times to turn on Developer options, then check that Settings > System > Developer options > **OEM unlocking** can be switched on. If it's greyed out, the phone can't be unlocked.
 - **A computer running Linux** (Omarchy, Arch Linux or another distribution), and a USB-C cable that carries data. The installer is a shell script for Linux; installing from a web page or a desktop app is planned.
-- **These programs on the computer:** `fastboot` and `adb` (Android platform tools), `e2fsprogs`, `zstd`, `openssl`, `gnupg`, `python3`, `unzip`, and `binutils`. On Omarchy or Arch Linux:
+- **These programs on the computer:** `fastboot` and `adb` (Android platform tools), `e2fsprogs`, `zstd`, `lz4`, `cpio`, `openssl`, `gnupg`, `python3`, `unzip`, and `binutils`. On Omarchy or Arch Linux:
 
   ```sh
-  sudo pacman -S --needed android-tools e2fsprogs zstd openssl gnupg python unzip binutils erofs-utils
+  sudo pacman -S --needed android-tools e2fsprogs zstd lz4 cpio openssl gnupg python unzip binutils erofs-utils
   ```
 
   On other distributions, install the packages with the same names (Android's tools are often split into `fastboot`, `adb` and a "libsparse" package for `img2simg` and `simg2img`).

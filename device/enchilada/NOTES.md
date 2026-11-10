@@ -101,6 +101,20 @@ tree and goes away if stock is restored.
 20 s and panics, and `panic=10` reboots the phone. ABL then starts the
 active slot, A, which is the rescue.
 
+## 2026-11-08: the LUN-aware guard, booted RAM-only
+
+`fastboot boot` of an initramfs built from commit 2331a85 (the
+`UFS_RW_LUNS` pull request, with `UFS_RW_LUNS=sde` in this descriptor),
+the first-light kernel (`7.1.0-rc1-sdm845`); nothing written. From the
+init's log and `/sys/block`:
+
+- allowlist `boot_b userdata`; LUNs with allowlisted partitions `sda sde`;
+- `/dev/sda` and `/dev/sde` removed;
+- only `sda17` (`userdata`) and `sde39` (`boot_b`) writable; the other
+  71 `sde` partitions `ro=1`;
+- `sdb`, `sdc`, `sdd` and `sdf` read-only at the disk level;
+- no UFS errors in the kernel log.
+
 ## 2026-11-05: complete backup
 
 Taken from the slot-A rescue (`boot_a`, `system_a`), read-only. Every
@@ -166,8 +180,9 @@ wrote nothing.
   nothing mounted.
 - **`boot_b` is on LUN `sde`, not `sda`.** The shared guard's `UFS_RW`
   only looks at `sda`, so `boot_b` and `dtbo_b` stay read-only (seen
-  live). This is the same split as dodge; a LUN-aware `UFS_RW` will be its
-  own shared pull request.
+  live). This is the same split as dodge. The guard can now open a second
+  LUN (`UFS_RW_LUNS`, #530); enchilada's `UFS_RW_LUNS=sde` comes with the
+  slot-B install, which gives `boot_b` on `sde` a writer.
 - msm DRM came up (`fb0` is `msmdrmfb`).
 - ABL appends `root=PARTUUID=<system_a> skip_initramfs ro init=/init` to
   the command line even on `fastboot boot`. The shared init runs as PID 1

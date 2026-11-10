@@ -1,12 +1,14 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # The installer's tests (no phone, nothing flashed): tools/install-phone
-# against a fake fastboot, tools/phone-provision against a synthetic backup
+# against a fake fastboot (and the ramdisk image it flashes against the one
+# omamobile-boot-update builds), tools/phone-provision against a synthetic backup
 # (and a container standing in for the phone, with Docker), tools/nv-backup
 # against a stand-in phone tree,
 # tools/phone-install-package against a stand-in phone, the initramfs's
 # first-boot growth, the bring-up overlays, the simplefb trigger, the init's per-board steps, the storage guard's packed
-# allowlist and the USB product string, bin/omamobile's boot-image layouts
+# allowlist and the USB product string, no pipefail script piping into grep -q,
+# bin/omamobile's boot-image layouts
 # (and omamobile-boot-update building the same bytes on the phone)
 # and flash against a fake fastboot, omamobile-firstboot's own tests, and the
 # smoke test of the newest root image in out/ if there is one, the felix,
@@ -22,13 +24,16 @@
 # report's differences on the host, bin/lineage-ref sync's branch handling
 # against stand-ins for docker and repo, tools/repo-publish --from-main's
 # copy of the prebuilt binaries into a fixture's publish tree,
-# tools/repo-publish's staging, and tools/extract-vendor-firmware's output
-# generations (made-up files, no factory image).
+# tools/repo-publish's staging, tools/extract-vendor-firmware's output
+# generations (made-up files, no factory image), the callers of
+# tools/alpine-fetch.py stopping when it fails, and its dependency
+# resolution against synthetic indexes, and the tools' --help from their
+# header comments (tools/lib/usage.sh).
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 for f in tools/install-phone tools/phone-provision tools/nv-backup tools/build-rootfs tools/build-packages tools/make-bundle \
          tools/local-key-init tools/fetch-published tools/fetch-toolchain tools/repo-publish tools/repo-build tools/release tools/release-upload tools/server/releases-nginx.sh \
-         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh rootfs/build-inside rootfs/resolve.sh tests/*; do
+         tools/lib/alarm.sh tools/lib/alarm-setup tools/lib/signing.sh tools/lib/bundle-tar.sh tools/lib/usage.sh rootfs/build-inside rootfs/resolve.sh tests/*; do
   [[ -f $f ]] || continue   # tests/owl is the OWL conformance suite's folder
   [[ $f == *.py ]] && continue
   bash -n "$f" || { echo "not ok - $f parses" >&2; exit 1; }
@@ -40,7 +45,7 @@ sh -n device/flame/initramfs/build
 bash -n tools/build-flame-probe
 echo "ok - scripts parse"
 python3 tests/bt-uart-gpio.py
-for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/rootfs-resolve tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/boot-method tests/modules-push tests/make-bundle-keys tests/make-bundle tests/release-signing tests/pinned-packages tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release tests/lineage-ref tests/repo-publish tests/repo-publish-stage tests/extract-vendor-firmware; do
+for t in tests/pr-check tests/kernel-pr-check tests/phone-smoke tests/alarm-wake-test tests/install-phone tests/build-rootfs tests/rootfs-resolve tests/phone-provision tests/nv-backup tests/initramfs-grow tests/images-layout tests/boot-update-parity tests/stage-boot-files tests/initramfs-reproducible tests/device-overlays tests/simplefb-trigger tests/initramfs-steps tests/storage-guard tests/usb-product tests/grep-q-pipes tests/boot-method tests/modules-push tests/make-bundle-keys tests/make-bundle tests/release-signing tests/pinned-packages tests/flame-probe packages/omamobile-firstboot/test/all packages/omamobile-device-felix/test/all packages/omamobile-device-lynx/test/all packages/omamobile-device-panther/test/all tests/local-builds tests/phone-install-package tests/publish-kernel tests/fetch-toolchain tests/release-upload tests/extract-camera-data tests/release tests/lineage-ref tests/repo-publish tests/repo-publish-stage tests/extract-vendor-firmware tests/alpine-fetch-callers tests/alpine-fetch tests/tools-help tests/install-phone-initramfs; do
   echo "# $t"
   "$t"
 done
@@ -62,3 +67,5 @@ fi
 
 echo "# tests/phone-ssh"
 tests/phone-ssh
+echo "# tests/module-load-once"
+tests/module-load-once

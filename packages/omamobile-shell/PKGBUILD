@@ -17,6 +17,7 @@ depends=(omarchy omamobile-apps 'omamobile-omarchy>=0.1.11' 'omamobile-owl-widge
          qrencode  # the Hotspot page: the QR code that joins a device to the hotspot
          foot xdg-terminal-exec  # guard for hand-built/partial installations
          xdg-desktop-portal-gnome)  # the file chooser (portal/hyprland-portals.conf)
+checkdepends=(nodejs)  # test/weather.py runs HomeModel.js under node
 optdepends=('fprintd: fingerprint setup and unlock (with omamobile-fingerprint)'
             'omamobile-voice: the speech model for voice input, so Voxtype works with no download (the root image has it)'
             'voxtype-bin: voice input (the root image has it; or Install > AI > Dictation)')

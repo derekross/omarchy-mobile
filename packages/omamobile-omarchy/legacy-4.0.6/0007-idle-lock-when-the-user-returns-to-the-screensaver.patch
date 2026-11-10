@@ -1,0 +1,40 @@
+# Lock as soon as the user returns to the screensaver (lock-after-screensaver).
+# Refreshed against Omarchy 4.0.6 (edge 4.0.6-1) so it applies without fuzz;
+# the hunk lands where the fuzzed one did, before the main idle monitor.
+diff --git i/shell/plugins/services/idle/Service.qml w/shell/plugins/services/idle/Service.qml
+index 8fb45a6..d694ab9 100644
+--- i/shell/plugins/services/idle/Service.qml
++++ w/shell/plugins/services/idle/Service.qml
+@@ -266,6 +266,32 @@ Item {
+   // With both timeouts at 0 the monitor stops reporting, so nothing else would end a running cycle.
+   onIdleTimersEnabledChanged: if (!idleTimersEnabled) cancelIdleCycle("idle-timers-disabled")
+ 
++  // Devices that lock on wake (the lock-after-screensaver toggle, e.g. phones)
++  // lock as soon as the user comes back to the screensaver. Starting the
++  // screensaver counts as activity for the main monitor, so it can't tell; this
++  // one only runs while the screensaver is on screen, goes idle after 2 s, and
++  // its next activity is the user: any tap, swipe or key, even ones the
++  // screensaver's terminal never sees.
++  IdleMonitor {
++    id: screensaverWakeMonitor
++    enabled: root.idleEnabled && root.screensaverWindowCount > 0
++    timeout: 2
++    respectInhibitors: false
++    property bool settled: false
++    onEnabledChanged: settled = false
++    onIsIdleChanged: {
++      if (isIdle) {
++        settled = true
++      } else if (settled) {
++        settled = false
++        root.logEvent("screensaver-wake", "user returned")
++        // Lock first and stop the screensaver only once the lock is up, so
++        // the desktop doesn't show in between.
++        root.runProcess(lockProcess, "lock-on-wake", "omarchy-toggle-enabled lock-after-screensaver || exit 0; omarchy-shell lock lock >/dev/null; for _ in $(seq 30); do omarchy-shell lock status | grep -q '\"secure\":true' && break; sleep 0.1; done; omarchy-system-lock")
++      }
++    }
++  }
++
+   IdleMonitor {
+     id: idleMonitor
+     enabled: root.idleEnabled && root.idleTimersEnabled

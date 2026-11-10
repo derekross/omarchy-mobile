@@ -11,7 +11,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
-for tool in debugfs mkfs.ext4 zstd openssl; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
+for tool in debugfs mkfs.ext4 zstd openssl lz4 cpio; do command -v $tool >/dev/null || { echo "skip: no $tool"; exit 0; }; done
 t=$(mktemp -d)
 cleanup() {
   [[ ! -d $t/gnupg ]] || gpgconf --homedir "$t/gnupg" --kill gpg-agent 2>/dev/null || true
@@ -34,7 +34,21 @@ UFS_RW="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
 EOF
 }
 descriptor > "$R/device/testdev/device.conf"
-for p in boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta; do echo "$p image" > "$t/images/$p.img"; done
+for p in boot init_boot dtbo vbmeta; do echo "$p image" > "$t/images/$p.img"; done
+# The ramdisk image is a real v4 vendor boot image (install-phone appends the
+# owner's key to its initramfs; tests/install-phone-initramfs checks the bytes)
+mkdir -p "$t/rd/etc" && echo init > "$t/rd/init"
+(cd "$t/rd" && find . | LC_ALL=C sort | cpio -o -H newc --quiet) | lz4 -l -9 -q > "$t/rd.lz4"
+for p in vendor_boot vendor_kernel_boot; do
+  python3 -I -c '
+import struct, sys
+rd, page = open(sys.argv[1], "rb").read(), 4096
+pad = lambda b: b + bytes(-len(b) % page)
+hdr = struct.pack("<8s5I2048sI16s2IQ4I", b"VNDRBOOT", 4, page, 0, 0, len(rd), b"", 0, b"", 2128, 3, 0, 108, 1, 108, 0)
+table = struct.pack("<3I32s", len(rd), 0, 1, b"") + bytes(64)
+open(sys.argv[2], "wb").write(pad(hdr) + pad(rd) + pad(b"dtb") + pad(table))
+' "$t/rd.lz4" "$t/images/$p.img"
+done
 echo testdev > "$t/images/DEVICE"
 echo 'root:x:0:0::/root:/bin/bash' > "$t/rootdir/etc/passwd"
 mkfs.ext4 -q -L omamobile-root -d "$t/rootdir" "$t/root.img" 16M
@@ -91,7 +105,7 @@ install --dry-run || { cat "$t/out"; fail "a dry run succeeds"; }
 expected="    would run: fastboot -s FAKE123 flash boot_b $t/images/boot.img
     would run: fastboot -s FAKE123 flash init_boot_b $t/images/init_boot.img
     would run: fastboot -s FAKE123 flash vendor_boot_b $t/images/vendor_boot.img
-    would run: fastboot -s FAKE123 flash vendor_kernel_boot_b $t/images/vendor_kernel_boot.img
+    would run: fastboot -s FAKE123 flash vendor_kernel_boot_b $t/work/ramdisk/vendor_kernel_boot.img
     would run: fastboot -s FAKE123 flash dtbo_b $t/images/dtbo.img
     would run: fastboot -s FAKE123 flash userdata $t/work/root.simg
     would run: fastboot -s FAKE123 --set-active=b
@@ -115,7 +129,7 @@ install || { cat "$t/out"; fail "a full run succeeds"; }
 want="-s FAKE123 flash boot_b $t/images/boot.img
 -s FAKE123 flash init_boot_b $t/images/init_boot.img
 -s FAKE123 flash vendor_boot_b $t/images/vendor_boot.img
--s FAKE123 flash vendor_kernel_boot_b $t/images/vendor_kernel_boot.img
+-s FAKE123 flash vendor_kernel_boot_b $t/work/ramdisk/vendor_kernel_boot.img
 -s FAKE123 flash dtbo_b $t/images/dtbo.img
 -s FAKE123 flash userdata $t/work/root.simg
 -s FAKE123 --set-active=b
@@ -136,8 +150,8 @@ grep -qx 'CREDENTIAL=pin' <<<"$conf" || fail "a numeric password is a PIN"
 grep -qx 'HOSTNAME=alice-phone' <<<"$conf" || fail "the default host name is <user>-phone"
 grep -qx 'WIFI_SSID=Home Net' <<<"$conf" && grep -qx 'WIFI_PSK=correct horse' <<<"$conf" || fail "the Wi-Fi network"
 grep -qxF "SSH_KEY=$(cat "$t/home/.ssh/id_ed25519.pub")" <<<"$conf" || fail "the SSH key"
-debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -q 'Mode:  0600' || fail "firstboot.conf is root-only"
-debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "firstboot.conf belongs to root"
+debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -c 'Mode:  0600' >/dev/null || fail "firstboot.conf is root-only"
+debugfs -R 'stat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -c 'User:     0   Group:     0' >/dev/null || fail "firstboot.conf belongs to root"
 [[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "root's authorized_keys"
 mkdir -p "$t/fbroot/usr/share/zoneinfo" "$t/fbroot/etc"
 : > "$t/fbroot/usr/share/zoneinfo/UTC"
@@ -147,8 +161,26 @@ OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamob
   fail "omamobile-firstboot accepts what install-phone writes"
 [[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] \
   || fail "a release install turns the boot hook on (boot-update.conf AUTO_WRITE=yes)"
-debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -q 'User:     0   Group:     0' || fail "boot-update.conf belongs to root"
+debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -c 'User:     0   Group:     0' >/dev/null || fail "boot-update.conf belongs to root"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
+
+# A root that already has /etc/omamobile and /root/.ssh (a restored or
+# lived-in one): debugfs's mkdir on an existing directory leaves an
+# unconnected inode, so the installer makes only the missing ones.
+mkdir -p "$t/lived/etc/omamobile" "$t/lived/root/.ssh"
+cp "$t/rootdir/etc/passwd" "$t/lived/etc/passwd"
+echo "ssh-ed25519 AAAA old" > "$t/lived/root/.ssh/authorized_keys"
+mkfs.ext4 -q -L omamobile-root -d "$t/lived" "$t/lived.img" 16M
+lived=$t/omamobile-rootfs-lived-aarch64.img.zst
+zstd -q "$t/lived.img" -o "$lived" && (cd "$t" && sha256sum "$(basename "$lived")" > "$(basename "$lived").sha256")
+install --rootfs "$lived" || { cat "$t/out"; fail "a root that already has the directories installs"; }
+flashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
+fi
+e2fsck -fn "$flashed" >/dev/null 2>&1 || fail "the flashed copy of a lived-in root checks clean"
+[[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "the old authorized_keys is replaced"
+pass "a root that already has /etc/omamobile and /root/.ssh installs clean"
 
 refuse() {
   local why=$1; shift

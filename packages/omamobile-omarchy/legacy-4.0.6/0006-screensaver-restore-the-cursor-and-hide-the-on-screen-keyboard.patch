@@ -1,0 +1,158 @@
+# Screensaver on a phone: turn squeekboard off while it runs (it popped up for
+# the screensaver's terminal) and back on after, once the lock is up with
+# lock-after-screensaver; restore the cursor as it was (a touch device keeps
+# it hidden); a tap ends it; waking it goes straight to the lock; make sure
+# its window is fullscreen; a user foot config wins.
+#
+# The launcher turns the keyboard back on from an EXIT trap, so no way out
+# of it (an early exit, a signal from the idle service or a shell restart,
+# no screensaver coming up) leaves the keyboard off with nothing to restore
+# it, and it leaves the setting alone when the session is already locked.
+# A phone that found the keyboard off with no screensaver running and the
+# marker gone (TOUCH-PLAN 0.5) is what this closes; omamobile-shell's
+# omamobile-osk-guard is the safety net behind it.
+#
+# Against Omarchy 4.0.6 (stable 4.0.6-1).
+diff --git i/bin/omarchy-launch-screensaver w/bin/omarchy-launch-screensaver
+--- i/bin/omarchy-launch-screensaver
++++ w/bin/omarchy-launch-screensaver
+@@ -15,6 +15,32 @@
+ fi
+ 
+ focused=$(omarchy-hyprland-monitor-focused)
++
++# Touch devices: an on-screen keyboard (squeekboard) pops up for whatever
++# terminal has focus, the screensaver's included. Turn it off; the
++# screensaver turns it back on when it exits (the marker says it should).
++# A locked session leaves it alone: the screensaver can't take focus from
++# the lock and exits at once.
++osk_key="org.gnome.desktop.a11y.applications screen-keyboard-enabled"
++osk_marker="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screensaver-osk-off"
++
++# Every way out of this launcher (an early exit, a signal from the idle
++# service or a shell restart, no screensaver coming up) turns the keyboard
++# back on, unless a screensaver runs to do it when it exits.
++restore_osk_unless_running() {
++  if [[ -f $osk_marker ]] && ! pgrep -f '[o]rg.omarchy.screensaver' >/dev/null; then
++    rm -f "$osk_marker"
++    gsettings set $osk_key true
++  fi
++}
++
++if [[ $(omarchy-shell lock isLocked 2>/dev/null) != true ]] &&
++  busctl --user status sm.puri.OSK0 &>/dev/null && [[ $(gsettings get $osk_key 2>/dev/null) == true ]]; then
++  trap restore_osk_unless_running EXIT
++  trap 'exit 1' INT TERM HUP
++  touch "$osk_marker"
++  gsettings set $osk_key false
++fi
+ terminal=$(xdg-terminal-exec --print-id)
+ 
+ case $terminal in
+@@ -64,7 +90,10 @@
+     hypr_exec ghostty --class=org.omarchy.screensaver --config-file="$OMARCHY_PATH/default/ghostty/screensaver" --font-size=18 -e omarchy-screensaver
+     ;;
+   *foot*)
+-    hypr_exec foot --app-id=org.omarchy.screensaver --config="$OMARCHY_PATH/default/foot/screensaver.ini" -e omarchy-screensaver
++    # A user copy wins, e.g. a smaller font on a narrow screen.
++    foot_config="$OMARCHY_PATH/default/foot/screensaver.ini"
++    [[ -f ~/.config/foot/screensaver.ini ]] && foot_config=~/.config/foot/screensaver.ini
++    hypr_exec foot --app-id=org.omarchy.screensaver --config="$foot_config" -e omarchy-screensaver
+     ;;
+   *kitty*)
+     hypr_exec kitty --class=org.omarchy.screensaver --override font_size=18 --override window_padding_width=0 -e omarchy-screensaver
+diff --git i/bin/omarchy-screensaver w/bin/omarchy-screensaver
+--- i/bin/omarchy-screensaver
++++ w/bin/omarchy-screensaver
+@@ -6,8 +6,34 @@
+   hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
+ }
+ 
++# Put the cursor back the way it was: a touch device keeps it hidden.
++cursor_was_invisible=$(hyprctl getoption cursor:invisible -j 2>/dev/null | jq -r '.bool // (.int == 1)' 2>/dev/null)
++
++restore_cursor() {
++  if [[ $cursor_was_invisible != true ]]; then
++    hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
++  fi
++}
++
++# Turn the on-screen keyboard back on if omarchy-launch-screensaver turned it off.
++# With lock-after-screensaver, wait until the lock screen is up: until then this
++# terminal still has focus and the keyboard would flash on the way out.
++restore_osk() {
++  local marker="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screensaver-osk-off"
++  [[ -f $marker ]] || return 0
++  rm -f "$marker"
++  local enable="gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true"
++  if omarchy-toggle-enabled lock-after-screensaver; then
++    # Detached: this script is about to be stopped by the lock.
++    setsid -f bash -c "for _ in \$(seq 50); do omarchy-shell lock status 2>/dev/null | grep -q '\"secure\":true' && break; sleep 0.1; done; $enable" &>/dev/null
++  else
++    $enable &>/dev/null || true
++  fi
++}
++
+ exit_screensaver() {
+-  hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
++  restore_cursor
++  restore_osk
+   pkill -x ttfx 2>/dev/null
+   pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
+   exit 0
+@@ -17,6 +43,9 @@
+ trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
+ 
+ printf '\033]11;rgb:00/00/00\007'  # Set background color to black
++# Report mouse clicks (and touches) as input, so a tap ends the screensaver
++# like a key press does. Turned back off on exit.
++printf '\033[?1000h'
+ 
+ hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
+ 
+@@ -33,6 +62,17 @@
+   done
+ }
+ 
++# The window rule makes the screensaver fullscreen, but a surface that holds
++# focus as it opens (e.g. a launcher being dismissed) can leave it a plain
++# floating window. Make sure, before measuring the terminal.
++ensure_fullscreen() {
++  local window
++  window=$(hyprctl clients -j 2>/dev/null | jq -r '[.[] | select(.class == "org.omarchy.screensaver" and .fullscreen == 0)][0].address // empty')
++  [[ -n $window ]] && hyprctl dispatch "hl.dsp.window.fullscreen({ mode = \"fullscreen\", window = \"address:$window\" })" &>/dev/null
++  return 0
++}
++
++ensure_fullscreen
+ wait_for_terminal_resize
+ 
+ while true; do
+@@ -41,7 +81,26 @@
+     --random-effect --no-eol --no-restore-cursor &
+ 
+   while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
+-    if read -n1 -t 1 || ! screensaver_in_focus; then
++    if read -n1 -t 1; then
++      # Woken by the user: devices that lock on wake (the
++      # lock-after-screensaver toggle, e.g. phones) go straight to the lock.
++      printf '\033[?1000l'
++      if omarchy-toggle-enabled lock-after-screensaver; then
++        # The lock stops this screensaver itself, before exit_screensaver.
++        restore_cursor
++        restore_osk
++        # Bring the lock up first and let this screensaver stand in front of it
++        # until it's there (it takes a moment to settle); omarchy-system-lock
++        # then stops the screensaver. Otherwise the desktop shows in between.
++        omarchy-shell lock lock >/dev/null 2>&1
++        for _ in $(seq 30); do
++          omarchy-shell lock status 2>/dev/null | grep -q '"secure":true' && break
++          sleep 0.1
++        done
++        omarchy-system-lock
++      fi
++      exit_screensaver
++    elif ! screensaver_in_focus; then
+       exit_screensaver
+     fi
+   done
