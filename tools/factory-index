@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""The build index: which of Google's factory images matches a phone
+(docs/INSTALL-EXPERIENCE-PLAN.md §6.1).
+
+One file per device, device/<codename>/factory-builds.json. It holds
+metadata only, never a file of Google's: for each factory build its build
+id, the bootloader and baseband versions its android-info.txt requires, the
+zip's name, size and SHA-256, its address on Google's servers, the page the
+installer opens for the owner, and whether a release was tested with that
+build's firmware. A guided installer (plan M1) trusts the SHA-256 it finds
+here, so it reads the index only from a source the release key signed: a
+bundle's copy covered by the signed SHA256SUMS, or a published copy with a
+detached signature.
+
+For an installer (the reader; it needs no repository):
+
+  factory-index info  --index FILE --codename C
+      checks FILE and prints  updated=YYYY-MM-DD  and  builds=N
+  factory-index match --index FILE --codename C --bootloader V --baseband V
+      prints the build to use as KEY=value lines: match=exact when a build
+      carries both the phone's bootloader and its baseband, else match=none.
+      There is no nearest build: the "tested" mark is one per build, so it
+      says nothing about that build's files on a phone with another
+      baseband. Fastboot can't tell apart builds that share both versions
+      (carrier variants do); the first in the file is printed, and the
+      others are named in  same_pair=BUILD,BUILD
+
+For the maintainer, in the repository (-d CODENAME, default cheetah):
+
+  factory-index add [-d C] [--tested RELEASE] [--page URL] [--url URL] FACTORY.zip
+      adds the build of a factory zip on this computer: its name, size and
+      SHA-256, and the board, bootloader and baseband from android-info.txt
+      inside it. Nothing of the zip is copied or kept
+  factory-index tested [-d C] BUILD RELEASE    mark BUILD tested with RELEASE
+  factory-index untested [-d C] BUILD          take the mark back
+  factory-index check [-d C]                   check the file, list its builds,
+      and name the builds that share a bootloader and baseband
+  factory-index sign [-d C] [--out DIR]        a copy with a detached signature
+      by the release key (keys/gnupg.release), for publishing beside
+      latest.json: DIR/factory-builds.json and .sig (default
+      out/factory-index/<codename>/)
+
+The file is data: every field is checked against a pattern when read, the
+download address must be on dl.google.com and the page on
+developers.google.com, and a zip's name must carry the first eight digits of
+its SHA-256, as Google's names do.
+"""
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import zipfile
+
+FORMAT = 1
+PAGE = "https://developers.google.com/android/images"
+DOWNLOAD = "https://dl.google.com/dl/android/aosp/"
+RE = {
+    "codename": r"[a-z0-9]+",
+    "date": r"20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])",
+    "build": r"[A-Z0-9]+\.[0-9]{6}\.[0-9]{3}(\.[A-Z0-9]+)*",
+    "version": r"[A-Za-z0-9][A-Za-z0-9._-]*",
+    "zip": r"[a-z0-9]+-[a-z0-9.]+-factory-[0-9a-f]{8}\.zip",
+    "url": r"https://dl\.google\.com/[A-Za-z0-9._/-]+",
+    "page": r"https://developers\.google\.com/android/images(#[A-Za-z0-9._-]+)?",
+    "sha256": r"[0-9a-f]{64}",
+    "release": r"20[0-9]{2}\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])(\.[1-9][0-9]*)?",
+}
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def die(msg):
+    print("factory-index: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def text(v, kind, what):
+    if not isinstance(v, str) or not re.fullmatch(RE[kind], v):
+        die("%s is not valid" % what)
+    return v
+
+
+def check_build(b, codename):
+    """One entry, every field checked; returns it with only the known keys."""
+    if not isinstance(b, dict):
+        die("a build is not an object")
+    build = text(b.get("build"), "build", "a build id")
+    what = "build " + build
+    out = {
+        "build": build,
+        "bootloader": text(b.get("bootloader"), "version", what + ": bootloader"),
+        "baseband": text(b.get("baseband"), "version", what + ": baseband"),
+        "zip": text(b.get("zip"), "zip", what + ": zip"),
+        "url": text(b.get("url"), "url", what + ": url"),
+        "page": text(b.get("page"), "page", what + ": page"),
+        "sha256": text(b.get("sha256"), "sha256", what + ": sha256"),
+    }
+    size = b.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        die(what + ": size is not a size")
+    out["size"] = size
+    if not isinstance(b.get("tested"), bool):
+        die(what + ": tested is not true or false")
+    out["tested"] = b["tested"]
+    if "tested_with" in b:
+        out["tested_with"] = text(b["tested_with"], "release", what + ": tested_with")
+    if out["tested"] != ("tested_with" in out):
+        die(what + ": a tested build names the release it was tested with (tested_with), and only a tested one")
+    name = out["zip"]
+    if not name.startswith("%s-%s-factory-" % (codename, build.lower())):
+        die("%s: the zip %s is not named for %s and this build" % (what, name, codename))
+    if name[-12:-4] != out["sha256"][:8]:
+        die(what + ": the zip's name doesn't carry the first eight digits of its SHA-256")
+    if not out["url"].endswith("/" + name):
+        die(what + ": url doesn't end in the zip's name")
+    return out
+
+
+def load(path, codename):
+    try:
+        with open(path) as f:
+            idx = json.load(f)
+    except (OSError, ValueError) as e:
+        die("%s: not a build index (%s)" % (path, e))
+    if not isinstance(idx, dict):
+        die("%s: not a build index" % path)
+    if idx.get("format") != FORMAT or isinstance(idx.get("format"), bool):
+        die("%s has format %r; this tool reads format %d" % (path, idx.get("format"), FORMAT))
+    if text(idx.get("codename"), "codename", "codename") != codename:
+        die("%s is for %s, not %s" % (path, idx["codename"], codename))
+    text(idx.get("updated"), "date", "updated")
+    if not isinstance(idx.get("builds"), list):
+        die("builds is not a list")
+    builds = [check_build(b, codename) for b in idx["builds"]]
+    ids = [b["build"] for b in builds]
+    if len(set(ids)) != len(ids):
+        die("a build is listed twice")
+    return {"format": FORMAT, "codename": codename, "updated": idx["updated"], "builds": builds}
+
+
+def save(path, idx):
+    idx["updated"] = max(idx["updated"], datetime.date.today().isoformat())
+    with open(path + ".new", "w") as f:
+        json.dump(idx, f, indent=2)
+        f.write("\n")
+    os.replace(path + ".new", path)
+
+
+def match(idx, bootloader, baseband):
+    """The builds that carry both of the phone's versions, in the file's
+    order (newest first). A build with the same bootloader and another
+    baseband is not a match: "tested" is recorded per build, never per pair."""
+    return [b for b in idx["builds"] if b["bootloader"] == bootloader and b["baseband"] == baseband]
+
+
+def same_pairs(idx):
+    """Groups of builds a phone's fastboot answers can't tell apart."""
+    groups = {}
+    for b in idx["builds"]:
+        groups.setdefault((b["bootloader"], b["baseband"]), []).append(b["build"])
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def android_info(path, codename):
+    """board, bootloader and baseband from android-info.txt in the factory zip's image zip."""
+    try:
+        outer = zipfile.ZipFile(path)
+    except (OSError, zipfile.BadZipFile) as e:
+        die("%s: not a zip (%s)" % (path, e))
+    inner = [n for n in outer.namelist() if re.fullmatch(r"[^/]+/image-%s-[a-z0-9.]+\.zip" % codename, n)]
+    if len(inner) != 1:
+        die("%s: expected one image-%s-<build>.zip inside, found %d" % (path, codename, len(inner)))
+    try:
+        with outer.open(inner[0]) as member, zipfile.ZipFile(member) as image:
+            info = image.read("android-info.txt").decode("ascii")
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile) as e:
+        die("%s: can't read android-info.txt in %s (%s)" % (path, inner[0], e))
+    req = dict(re.findall(r"^require ([a-z-]+)=(\S+)$", info, re.M))
+    for key in ("board", "version-bootloader", "version-baseband"):
+        if key not in req:
+            die("%s: android-info.txt has no 'require %s='" % (path, key))
+    if codename not in req["board"].split("|"):
+        die("%s is for board %s, not %s" % (path, req["board"], codename))
+    # The image files beside it are named for the same versions
+    for kind, key in (("bootloader", "version-bootloader"), ("radio", "version-baseband")):
+        names = [n for n in outer.namelist() if re.fullmatch(r"[^/]+/%s-%s-.+\.img" % (kind, codename), n)]
+        want = "%s-%s-%s.img" % (kind, codename, req[key].lower())
+        if names and os.path.basename(names[0]).lower() != want:
+            die("%s: %s doesn't match android-info.txt's %s" % (path, names[0], req[key]))
+    return inner[0].split("/")[0], req["version-bootloader"], req["version-baseband"]
+
+
+def index_path(a):
+    if a.index:
+        if not a.codename:
+            die("--index needs --codename")
+        return a.index, text(a.codename, "codename", "--codename")
+    device = text(a.device, "codename", "-d")
+    conf = os.path.join(ROOT, "device", device, "device.conf")
+    if not os.path.isfile(conf):
+        die("no %s" % conf)
+    return os.path.join(ROOT, "device", device, "factory-builds.json"), device
+
+
+def cmd_add(a):
+    path, codename = index_path(a)
+    idx = load(path, codename) if os.path.exists(path) else \
+        {"format": FORMAT, "codename": codename, "updated": datetime.date.today().isoformat(), "builds": []}
+    name = os.path.basename(a.zip)
+    m = re.fullmatch(r"%s-([a-z0-9.]+)-factory-([0-9a-f]{8})\.zip" % codename, name)
+    if not m:
+        die("%s is not named %s-<build>-factory-<8 hex>.zip, as Google names it" % (name, codename))
+    build = m.group(1).upper()
+    top, bootloader, baseband = android_info(a.zip, codename)
+    if top != "%s-%s" % (codename, m.group(1)):
+        die("%s holds %s, not the build its name says" % (name, top))
+    entry = {
+        "build": build, "bootloader": bootloader, "baseband": baseband, "zip": name,
+        "url": a.url or DOWNLOAD + name, "page": a.page or "%s#%s" % (PAGE, codename),
+        "sha256": sha256_of(a.zip), "size": os.path.getsize(a.zip), "tested": bool(a.tested),
+    }
+    if a.tested:
+        entry["tested_with"] = a.tested
+    entry = check_build(entry, codename)
+    if any(b["build"] == build for b in idx["builds"]):
+        die("%s is already in %s (tested/untested change its mark)" % (build, path))
+    idx["builds"].insert(0, entry)
+    save(path, idx)
+    print("added %s to %s: bootloader %s, baseband %s, %s" % (
+        build, path, bootloader, baseband, "tested with " + a.tested if a.tested else "not marked tested"))
+    print("Check the SHA-256 against Google's page before committing: " + entry["sha256"])
+
+
+def cmd_mark(a):
+    path, codename = index_path(a)
+    idx = load(path, codename)
+    hit = [b for b in idx["builds"] if b["build"] == a.build]
+    if not hit:
+        die("%s is not in %s" % (a.build, path))
+    hit[0]["tested"] = a.cmd == "tested"
+    hit[0].pop("tested_with", None)
+    if a.cmd == "tested":
+        hit[0]["tested_with"] = text(a.release, "release", "RELEASE")
+    save(path, idx)
+    print("%s: %s" % (a.build, "tested with " + a.release if a.cmd == "tested" else "not marked tested"))
+
+
+def cmd_check(a):
+    path, codename = index_path(a)
+    idx = load(path, codename)
+    print("%s: %d builds, updated %s" % (path, len(idx["builds"]), idx["updated"]))
+    for b in idx["builds"]:
+        print("  %-22s bootloader %s, baseband %s, %s" % (
+            b["build"], b["bootloader"], b["baseband"],
+            "tested with " + b["tested_with"] if b["tested"] else "not tested"))
+    for group in same_pairs(idx):
+        print("  note: %s share a bootloader and baseband; a phone can't be told to run one or the "
+              "other, and the first listed is the one an installer asks for" % ", ".join(group))
+
+
+def cmd_info(a):
+    path, codename = index_path(a)
+    idx = load(path, codename)
+    print("updated=%s\nbuilds=%d" % (idx["updated"], len(idx["builds"])))
+
+
+def cmd_match(a):
+    path, codename = index_path(a)
+    idx = load(path, codename)
+    found = match(idx, a.bootloader, a.baseband)
+    print("match=" + ("exact" if found else "none"))
+    print("updated=" + idx["updated"])
+    if found:
+        b = found[0]
+        for key in ("build", "bootloader", "baseband", "zip", "page", "sha256", "size"):
+            print("%s=%s" % (key, b[key]))
+        print("tested=" + ("true" if b["tested"] else "false"))
+        print("same_pair=" + ",".join(o["build"] for o in found[1:]))
+
+
+def cmd_sign(a):
+    path, codename = index_path(a)
+    load(path, codename)
+    out = a.out or os.path.join(ROOT, "out", "factory-index", codename)
+    os.makedirs(out, exist_ok=True)
+    dest = os.path.join(out, "factory-builds.json")
+    with open(path, "rb") as src, open(dest, "wb") as dst:
+        dst.write(src.read())
+    script = 'source "$1/tools/lib/signing.sh"; signing_key_load "$1" || exit 1; ' \
+             'gpg --batch --yes --local-user "$SIGNING_KEY" --detach-sign -o "$2.sig" "$2"'
+    if subprocess.run(["bash", "-c", script, "sign", ROOT, dest]).returncode != 0:
+        die("signing %s failed" % dest)
+    print("signed: %s and %s.sig" % (dest, dest))
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="factory-index", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def where(p):
+        p.add_argument("-d", dest="device", default="cheetah")
+        p.add_argument("--index")
+        p.add_argument("--codename")
+
+    p = sub.add_parser("add"); where(p)
+    p.add_argument("--tested", metavar="RELEASE")
+    p.add_argument("--page")
+    p.add_argument("--url")
+    p.add_argument("zip")
+    p.set_defaults(fn=cmd_add)
+    for name in ("tested", "untested"):
+        p = sub.add_parser(name); where(p)
+        p.add_argument("build")
+        if name == "tested":
+            p.add_argument("release")
+        p.set_defaults(fn=cmd_mark)
+    p = sub.add_parser("check"); where(p); p.set_defaults(fn=cmd_check)
+    p = sub.add_parser("info"); where(p); p.set_defaults(fn=cmd_info)
+    p = sub.add_parser("match"); where(p)
+    p.add_argument("--bootloader", required=True)
+    p.add_argument("--baseband", required=True)
+    p.set_defaults(fn=cmd_match)
+    p = sub.add_parser("sign"); where(p); p.add_argument("--out"); p.set_defaults(fn=cmd_sign)
+    a = ap.parse_args()
+    if getattr(a, "tested", None) and a.cmd == "add":
+        text(a.tested, "release", "--tested")
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()
