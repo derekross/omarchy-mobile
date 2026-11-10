@@ -369,9 +369,12 @@ if [[ $device == raven ]]; then
   say "Enabling the services cheetah's setup step enables, but speaker protection"
   units="omamobile-sensor-proxy.service omamobile-gnss-nmea.socket omamobile-gnss-lto.timer"
   if ((dry)); then
-    note "would enable $units"
+    note "would enable $units, and omamobile-geoclue-agent.service for every user"
   else
     phone "for u in $units; do systemctl cat \$u >/dev/null 2>&1 && systemctl enable \$u >/dev/null 2>&1 && echo enabled \$u; done; true" |
+      while read -r l; do note "$l"; done
+    # with the socket goes GeoClue's agent, or Location reads "on" and no app gets a position
+    phone "systemctl is-enabled -q omamobile-gnss-nmea.socket 2>/dev/null && systemctl --global enable omamobile-geoclue-agent.service >/dev/null 2>&1 && echo enabled omamobile-geoclue-agent.service '(every user)'; true" |
       while read -r l; do note "$l"; done
   fi
   say "Done (raven)"

@@ -164,6 +164,24 @@ OMAMOBILE_FIRSTBOOT_ROOT=$t/fbroot "$SRC/packages/omamobile-firstboot/bin/omamob
 debugfs -R 'stat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -c 'User:     0   Group:     0' >/dev/null || fail "boot-update.conf belongs to root"
 pass "the image copy gets a root-only firstboot.conf (hash, not password) and root's key, which firstboot accepts"
 
+# A root that already has /etc/omamobile and /root/.ssh (a restored or
+# lived-in one): debugfs's mkdir on an existing directory leaves an
+# unconnected inode, so the installer makes only the missing ones.
+mkdir -p "$t/lived/etc/omamobile" "$t/lived/root/.ssh"
+cp "$t/rootdir/etc/passwd" "$t/lived/etc/passwd"
+echo "ssh-ed25519 AAAA old" > "$t/lived/root/.ssh/authorized_keys"
+mkfs.ext4 -q -L omamobile-root -d "$t/lived" "$t/lived.img" 16M
+lived=$t/omamobile-rootfs-lived-aarch64.img.zst
+zstd -q "$t/lived.img" -o "$lived" && (cd "$t" && sha256sum "$(basename "$lived")" > "$(basename "$lived").sha256")
+install --rootfs "$lived" || { cat "$t/out"; fail "a root that already has the directories installs"; }
+flashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
+fi
+e2fsck -fn "$flashed" >/dev/null 2>&1 || fail "the flashed copy of a lived-in root checks clean"
+[[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "the old authorized_keys is replaced"
+pass "a root that already has /etc/omamobile and /root/.ssh installs clean"
+
 refuse() {
   local why=$1; shift
   if install "$@"; then cat "$t/out"; fail "refuses $why"; fi

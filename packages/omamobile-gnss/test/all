@@ -10,6 +10,7 @@ for f in bin/omamobile-gnss lib/omamobile-vendor-chroot lib/omamobile-gnss-start
   bash -n "$f" || fail "syntax: $f"
 done
 python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/omamobile-gnss-nmea || fail "python: omamobile-gnss-nmea"
+bash test/install-hook.sh || fail "the upgrade hook and the Location switch"
 # The Pixel 9a's path: gnss-slsi from the start script, its FIFO in the bridge and the units.
 grep -c 'gnss-slsi start' lib/omamobile-gnss-start >/dev/null || fail "the 9a starts gnss-slsi"
 # The 9a writes the hang marker before its session and clears it after a clean stop.

@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# The Pixel 9a's modem at boot, opt-in: not enabled by the package. The owner
+# turns it on with `systemctl enable omamobile-tegu-modem-boot`. It starts the
+# CP once (omamobile-tegu-modem-up keeps the once-per-boot rule, the NV
+# checks, the failure latch and the sleep inhibitor), then the phone service
+# and, when installed, the Phone and Messages bridge, with gnssd in the
+# modem profile so Omarchy's Location switch gets fixes (omamobile-gnss). With it on the palmtop
+# doesn't suspend (the modem blocks sleep until suspend with the CP up is
+# qualified), so the battery drains as if awake.
+#
+# Before enabling it (README, "Starting it at boot"): slot B marked
+# successful, a kernel with linux-omarchy-mobile#172, and the charger in for
+# the first boots. Rollback: systemctl disable omamobile-tegu-modem-boot and
+# reboot; after a reset with the modem up, the latch keeps the next boot
+# from starting it.
+[Unit]
+Description=Start the Pixel 9a's modem and phone service (opt-in)
+Documentation=file:///usr/share/doc/omamobile-device-tegu/README.md
+After=omamobile-tegu-aoc.service omamobile-tegu-graphics.service network.target
+Wants=network.target
+ConditionPathExists=/usr/lib/omamobile-vendor/omamobile-vendor-chroot
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/omamobile-tegu-modem-up --phone --gnss
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

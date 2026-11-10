@@ -60,7 +60,8 @@ TestCase {
 }
 '''.replace('ARMED',h['armed']).replace('ACTIVE',h['active'])
 runner = (shutil.which("qmltestrunner6")
-          or shutil.which("/usr/lib/qt6/bin/qmltestrunner"))
+          or shutil.which("/usr/lib/qt6/bin/qmltestrunner")
+          or shutil.which("/usr/lib64/qt6/bin/qmltestrunner"))
 if not runner:
     raise SystemExit(77)
 with tempfile.TemporaryDirectory(prefix="back-feedback-") as temporary:
