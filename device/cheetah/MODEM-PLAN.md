@@ -2717,6 +2717,11 @@ What the packages now do, opt-in and nothing enabled by them:
   with the modem on has never run on this phone, 6.3). The start script
   refuses to load a driver until the lock shows in `systemd-inhibit
   --list`. With the stack at boot the phone never sleeps.
+  Since 2026-11-10 (#424) a start that refuses with none of the modem's
+  drivers loaded (a stale `modem-up` marker, the bring-up latch, a link
+  driver that didn't load) kills the lock, so the phone sleeps that boot
+  as it would without a modem; once a driver has loaded, the lock stays
+  until the reboot.
 - **`omamobile-modem.service` is `Type=notify`**: ready once CPIF's ports
   exist and the profile's read-only check has passed, before the CP is
   powered on. The device's sitd drop-in
