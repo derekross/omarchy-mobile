@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
-# The cellular fallback: rmnet0's address, a metric-700 default route behind
+# The cellular fallback: the bearer's rmnet device and address, a metric-700 default route behind
 # Wi-Fi, and the carrier's DNS while cellular is the only way out. Started
 # after omamobile-sitd is ready (it set up the internet bearer);
 # "omamobile-sit data on|off" starts and stops it.
 [Unit]
-Description=Omarchy Mobile cellular data fallback (rmnet0)
+Description=Omarchy Mobile cellular data fallback (rmnet)
 Requires=omamobile-sitd.service
 After=omamobile-sitd.service
 

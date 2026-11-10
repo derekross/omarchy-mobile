@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# The pinned release toolchain, fetched by tools/fetch-toolchain into
+# ~/.cache/omamobile/toolchain (docs/RELEASES.md §9). KIND PATH SHA256 URL;
+# tools/fetch-toolchain explains the kinds and the tree digest.
+#
+# clang-r596125: Android clang 22.0.2 (build 15071444, based on r596125,
+# toolchain/llvm-project de03d430485c), the compiler every phone kernel was
+# built with, from AOSP's platform/prebuilts/clang/host/linux-x86 at
+# 29182889399818f97baa65ea238c80e8117981eb. Its digest is the same as the
+# Android checkout's prebuilts/clang/host/linux-x86/clang-r596125.
+tree clang-r596125 111d4532e29ceb47cd6392ded7319c24d8ae5dd510b9a0770fc7bcb5d27a7881 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/29182889399818f97baa65ea238c80e8117981eb/clang-r596125.tar.gz
+#
+# mkbootimg: AOSP platform/system/tools/mkbootimg at 4a27dd13adf9 (the
+# checkout's commit; mkbootimg.py imports gki/generate_gki_certificate.py)
+b64 mkbootimg/mkbootimg.py 37d84b3d162e0bc62e36c1f4e1c63c85ea0caa9f29be023eb2f8efe006ad948c https://android.googlesource.com/platform/system/tools/mkbootimg/+/4a27dd13adf9846e12d585d6fe99a375ebb58396/mkbootimg.py?format=TEXT
+b64 mkbootimg/gki/generate_gki_certificate.py 1bb1feec68a13da18d581aa2c631798f86f6bc10b55d587b2dd31446a0f8a203 https://android.googlesource.com/platform/system/tools/mkbootimg/+/4a27dd13adf9846e12d585d6fe99a375ebb58396/gki/generate_gki_certificate.py?format=TEXT
+#
+# mkdtboimg.py: AOSP platform/system/libufdt at 70c20864187d (the checkout's commit)
+b64 libufdt/utils/src/mkdtboimg.py 81656c0e344ad2c9e7bdc6775015b38dec2bc2965d482e903fdb4dbd293110a6 https://android.googlesource.com/platform/system/libufdt/+/70c20864187df19f3e7d358ca8436f77d61a3f39/utils/src/mkdtboimg.py?format=TEXT
+#
+# avbtool 1.4.0 and AOSP's RSA-4096 test key (the key ABL accepts with the
+# bootloader unlocked): AOSP platform/external/avb at ba2dec4b035b
+# (android-17.0.0_r1). The footer records avbtool's version, so a bump here
+# changes the boot images' bytes.
+b64 avb/avbtool.py 1aa6f2b462aa67aa3fdf488bee83ab517de8ad9d8228c7b45c35267ab2cf6781 https://android.googlesource.com/platform/external/avb/+/ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee/avbtool.py?format=TEXT
+b64 avb/test/data/testkey_rsa4096.pem 6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121 https://android.googlesource.com/platform/external/avb/+/ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee/test/data/testkey_rsa4096.pem?format=TEXT

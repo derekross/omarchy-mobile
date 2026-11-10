@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 post_install() {
   echo "omamobile-modem-sit: omamobile-sitd is installed but not enabled. It needs the"
-  echo "  modem ONLINE first (omamobile-modem.service, MODEM-PLAN M3.4) and the"
-  echo "  carrier's APN in /etc/omamobile/modem-sit.conf; then MODEM-PLAN M4."
+  echo "  modem ONLINE first (omamobile-modem.service, MODEM-PLAN M3.4); then MODEM-PLAN M4."
+  echo "  The APN is chosen from the SIM (apn = auto in /etc/omamobile/modem-sit.conf)."
 }
 post_upgrade() {
   systemctl daemon-reload 2>/dev/null || true
@@ -13,6 +13,19 @@ post_upgrade() {
     echo "omamobile-modem-sit 0.3.3: calls route no audio by default ([audio] card = none) until the"
     echo "  earpiece mode exists; with a card, audio is refused above the earpiece ceiling."
     echo "  New settings: [network] ims_required, ims_timeout. Check modem-sit.conf.pacnew if listed."
+  fi
+  if [[ $(vercmp "$2" 0.3.29) -lt 0 ]]; then
+    echo "omamobile-modem-sit 0.3.29: an empty or \"auto\" [network] apn, attach_apn, ims_apn,"
+    echo "  ims_first and internet_cid are chosen from the SIM (Verizon's codes get the 2026-11-03"
+    echo "  setup: no attach APN, IMS first on CID 2, the internet on CID 3, stock's profiles);"
+    echo "  values you typed keep working. New: [data] roaming (.pacnew)."
+  fi
+  if [[ $(vercmp "$2" 0.3.30) -lt 0 ]] \
+     && grep -Eq '^[[:space:]]*card[[:space:]]*=[[:space:]]*none[[:space:]]*$' /etc/omamobile/modem-sit.conf 2>/dev/null; then
+    echo "omamobile-modem-sit 0.3.30: [audio] card now comes from the device package when"
+    echo "  /etc/omamobile/modem-sit.conf leaves it unset. Your edited file keeps its"
+    echo "  \"card = none\" line: on a Pixel 7 Pro, delete that line for call audio through"
+    echo "  the earpiece, then restart the phone. On other phones, leave it."
   fi
 }
 pre_remove() {

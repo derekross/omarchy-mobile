@@ -1,14 +1,49 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Publish our kernel branch to github.com/derekross/linux-omarchy-mobile.
+# Publish the release kernel: move linux-omarchy-mobile's `omamobile` branch
+# on GitHub forward to a local release branch, and tag a release on it
+# (docs/RELEASES.md section 8).
 #
-# Linux's full history is too big for a private repository (and a private repo
-# can't be a fork of Linus's tree), so the published branch starts from one
-# commit holding the exact upstream tag's tree, with our commits replayed on
-# top unchanged. The trees are identical to the local branch, which keeps the
-# real upstream history for sending patches.
-#   tools/publish-kernel [branch] [upstream-tag]   (defaults: omamobile v7.3-rc6)
+# `omamobile` on GitHub is the one source of the release kernel. Community
+# pull requests land there (rebase merges); the maintainer's curated work
+# lands as a fast-forward of a local release branch built on the current
+# published tip. So this tool:
+#   - fetches the published tip first and pushes only when BRANCH contains
+#     it (a fast-forward); otherwise it stops and says how to rebase. It
+#     never force-pushes: pull requests and release tags point at the
+#     published commit ids;
+#   - checks every commit it would publish with tools/kernel-pr-check's
+#     commit checks (the author's human Signed-off-by, none from an AI,
+#     subject prefixes, identifiers and blobs; a Co-Authored-By trailer is
+#     only a warning) and refuses merge commits; checkpatch and the builds are the
+#     full gate's (RELEASES section 11, step 2);
+#   - with --tag, creates an annotated release tag on the published commit
+#     and pushes it with the branch, atomically;
+#   - with --dry-run, reads and checks everything and prints the commands it
+#     would run, changing nothing.
+#
+#   tools/publish-kernel [--dry-run] [--tag kernel-YYYY.MM.DD] [BRANCH]
+#
+# BRANCH is a branch or commit in the kernel clone. Without it the published
+# tip itself is used, which only does something with --tag (a release on a
+# tip that community merges moved). The kernel clone is $KERNEL_DIR, else
+# $KERNEL_BASE/linux; the remote is $PUBLISH_KERNEL_REMOTE, else GitHub.
 set -euo pipefail
+self=$(readlink -f "${BASH_SOURCE[0]}")
+repo=$(cd -- "$(dirname -- "$self")/.." && pwd)
+usage="Usage: tools/publish-kernel [--dry-run] [--tag kernel-YYYY.MM.DD] [BRANCH]"
+dry=0 tag=""
+while (($#)); do
+  case $1 in
+    -n|--dry-run) dry=1; shift ;;
+    --tag) tag=${2:?--tag needs a name}; shift 2 ;;
+    -h|--help) source "$repo/tools/lib/usage.sh"; usage_from_header --raw "$self"; exit 0 ;;
+    -*) echo "publish-kernel: unknown option $1" >&2; echo "$usage" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+(($# <= 1)) || { echo "$usage" >&2; exit 2; }
+branch=${1:-}
 
 # The kernel clone, its worktrees and build outputs live in KERNEL_BASE:
 # ~/omamobile-kernel, or ~/android/mainline on setups from before 2026-10-29.
@@ -17,55 +52,108 @@ if [[ -z ${KERNEL_BASE:-} ]]; then
   [[ -d $KERNEL_BASE || ! -d $HOME/android/mainline ]] || KERNEL_BASE=$HOME/android/mainline
 fi
 linux=${KERNEL_DIR:-$KERNEL_BASE/linux}
-branch=${1:-omamobile}
-tag=${2:-v7.3-rc6}
-remote=git@github.com:derekross/linux-omarchy-mobile.git
+remote=${PUBLISH_KERNEL_REMOTE:-git@github.com:derekross/linux-omarchy-mobile.git}
+target=omamobile
 
-cd "$linux"
-[[ -z $(git status --porcelain --untracked-files=no) ]] || { echo "$linux has uncommitted changes" >&2; exit 1; }
+die() { echo "publish-kernel: $*" >&2; exit 1; }
+# Release tags follow the bundle's calendar version (RELEASES section 7):
+# kernel-2026.11.05, kernel-2026.11.05.1 for a respin the same day.
+if [[ -n $tag && ! $tag =~ ^kernel-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+  echo "publish-kernel: a release tag is kernel-YYYY.MM.DD (kernel-YYYY.MM.DD.1 for a respin), not $tag" >&2
+  exit 2
+fi
+cd -- "$linux" || exit 2
+linux=$(pwd)
 
-tree=$(git rev-parse "$tag^{tree}")
-base=$(GIT_AUTHOR_NAME="Linus Torvalds" GIT_AUTHOR_EMAIL="torvalds@linux-foundation.org" \
-  GIT_AUTHOR_DATE="$(git log -1 --format=%aD "$tag")" GIT_COMMITTER_DATE="$(git log -1 --format=%aD "$tag")" \
-  git commit-tree "$tree" -m "Linux ${tag#v}
+# The published tip. ls-remote exits 2 only when the remote answered and has
+# no such branch; any other failure is not taken for an answer.
+st=0
+refs=$(git ls-remote --exit-code "$remote" "refs/heads/$target") || st=$?
+((st != 2)) || die "$remote has no $target branch; this tool only moves an existing one forward"
+((st == 0)) || die "can't read $target from $remote (git ls-remote exit $st); nothing published"
+pub=$(awk -v r="refs/heads/$target" '$2 == r { print $1 }' <<<"$refs")
+git fetch -q --no-tags "$remote" "refs/heads/$target" || die "can't fetch $target from $remote; nothing published"
+[[ $(git rev-parse FETCH_HEAD) == "$pub" ]] || die "$target moved on $remote while it was read; run again"
 
-The tree of Linus Torvalds' $tag tag ($(git rev-parse "$tag^{commit}")),
-squashed so this repository stays small. Omarchy Mobile's changes follow as
-individual commits; they apply unchanged on top of the upstream tag.")
-
-# Published commit ids must stay put: pull requests are based on them, and a
-# full replay gives every commit a new id. So when the published tip has the
-# tree of a commit on the local branch, replay only the commits after it, on
-# top of the published tip, and push a fast-forward. Only when no such commit
-# exists (local history rewritten) is the branch rebuilt and force-pushed.
-pub=
-git fetch -q "$remote" "refs/heads/$branch" 2>/dev/null && pub=$(git rev-parse FETCH_HEAD)
-from=
-if [[ -n $pub ]]; then
-  ptree=$(git rev-parse "$pub^{tree}")
-  for c in $(git rev-list "$tag..$branch"); do
-    [[ $(git rev-parse "$c^{tree}") == "$ptree" ]] && { from=$c; break; }
-  done
+head=$pub
+if [[ -n $branch ]]; then
+  head=$(git rev-parse -q --verify "$branch^{commit}") || { echo "publish-kernel: no branch or commit $branch in $linux" >&2; exit 2; }
+fi
+if [[ $head != "$pub" ]] && ! git merge-base --is-ancestor "$pub" "$head"; then
+  cat >&2 <<EOF
+publish-kernel: $branch doesn't contain the published $target (${pub:0:12}): it lacks
+$(git rev-list --count "$head..$pub") published commit(s), so the push would not be a fast-forward. Nothing published.
+Rebase the release branch onto the published tip in its worktree, test the
+result, and run this again:
+  git fetch $remote $target
+  git rebase FETCH_HEAD $branch
+EOF
+  exit 1
 fi
 
-# Replay in a throwaway worktree, so no checkout in use changes.
-work=$(mktemp -d)
-trap 'git worktree remove --force "$work" >/dev/null 2>&1 || true' EXIT
-git worktree add -q --detach "$work" "$branch"
-if [[ -n $from ]]; then
-  git -C "$work" rebase -q --onto "$pub" "$from"
-else
-  git -C "$work" rebase -q --onto "$base" "$tag"
+new=$(git rev-list --reverse "$pub..$head")
+n=$(wc -w <<<"$new")
+if ((n)); then
+  merges=$(git rev-list --merges "$pub..$head")
+  [[ -z $merges ]] || die "merge commits in $branch since the published tip; publish a linear series (rebase it):
+$(git log --no-walk --format='  %h %s' $merges)"
+  echo "# tools/kernel-pr-check --no-checkpatch on the $n commit(s) to publish"
+  "$repo/tools/kernel-pr-check" --no-checkpatch -C "$linux" "$pub" "$head" \
+    || die "the commits to publish fail the checks above; nothing published"
 fi
-published=$(git -C "$work" rev-parse HEAD)
 
-[[ -z $(git diff "$branch" "$published") ]] || { echo "Replayed tree differs from $branch; not publishing" >&2; exit 1; }
-git branch -f "publish/$branch" "$published"
-if [[ -n $from ]]; then
-  git push "$remote" "publish/$branch:refs/heads/$branch"
-  echo "Published $branch to $remote: $(git rev-list --count "$pub..$published") new commit(s), fast-forward"
-else
-  echo "No published commit matches $branch's history: rebuilding, which changes every published commit id" >&2
-  git push --force "$remote" "publish/$branch:refs/heads/$branch"
-  echo "Published $branch ($(git rev-list --count "$tag..$branch") commits on $tag) to $remote"
+if [[ -n $tag ]]; then
+  ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "a local tag $tag exists already ($(git rev-parse --short=12 "$tag^{commit}"))"
+  st=0
+  git ls-remote --exit-code --tags "$remote" "refs/tags/$tag" >/dev/null || st=$?
+  ((st != 0)) || die "$remote has a tag $tag already; a release tag never moves, so a respin takes the next .N"
+  ((st == 2)) || die "can't read tags from $remote (git ls-remote exit $st); nothing published"
 fi
+
+# What a release build of this commit reports (RELEASES section 4): the
+# published branch has no upstream tag in its history, so setlocalversion
+# appends -g and 12 hex digits, and pkgver counts commits to sort upward
+# (the branch only ever moves forward).
+mk=$(git show "$head:Makefile" 2>/dev/null || true)
+mkv() { awk -v k="$1" '$1 == k && $2 == "=" { print $3; exit }' <<<"$mk"; }
+kver="<version>"
+[[ -z $(mkv VERSION) ]] || kver="$(mkv VERSION).$(mkv PATCHLEVEL).$(mkv SUBLEVEL)$(mkv EXTRAVERSION)"
+uname="$kver-omamobile-g${head:0:12}"
+pkgver="${kver//-/}.r$(git rev-list --count "$head").g${head:0:12}"
+
+refspecs=()
+[[ $head == "$pub" ]] || refspecs+=("$head:refs/heads/$target")
+[[ -z $tag ]] || refspecs+=("refs/tags/$tag")
+if ((${#refspecs[@]} == 0)); then
+  echo "Nothing to publish: ${branch:-the published tip} is $target on $remote (${pub:0:12}). --tag tags it."
+  exit 0
+fi
+# No force of any kind, so git itself refuses anything but a fast-forward,
+# even if the remote moved since the fetch; --atomic keeps the tag off a
+# branch push that failed; --no-follow-tags pushes no other local tag.
+push=(git push --atomic --no-follow-tags "$remote" "${refspecs[@]}")
+msg="Omarchy Mobile kernel ${tag#kernel-}
+
+The release kernel: linux-omarchy-mobile's $target at ${head:0:12}.
+A release build reports uname -r $uname
+and packs as linux-omamobile $pkgver."
+
+if ((n)); then
+  echo "Commits to publish on $target ($n, fast-forward from ${pub:0:12}):"
+  git log --reverse --format='  %h %s' "$pub..$head"
+fi
+echo "Release build: uname -r $uname, pkgver $pkgver"
+if ((dry)); then
+  echo "Dry run; would run:"
+  [[ -z $tag ]] || echo "  git tag -a $tag -m $(printf '%q' "$msg") ${head:0:12}"
+  echo "  $(printf '%q ' "${push[@]}")"
+  exit 0
+fi
+
+[[ -z $tag ]] || git tag -a "$tag" -m "$msg" "$head"
+if ! "${push[@]}"; then
+  [[ -z $tag ]] || git tag -d "$tag" >/dev/null
+  die "the push was refused; nothing published. If $target moved, rebase as above and run again"
+fi
+((n == 0)) || echo "Published $target on $remote: ${pub:0:12}..${head:0:12}, $n new commit(s), fast-forward"
+[[ -z $tag ]] || echo "Tagged $tag on ${head:0:12} and pushed it"

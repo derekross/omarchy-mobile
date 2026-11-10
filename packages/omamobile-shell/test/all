@@ -145,7 +145,7 @@ def vis(w):
         v = re.sub(r"(^|[^.\w])(\w+)", lambda x: x.group(1) + ("root." + x.group(2) if x.group(2) not in ("true", "false") else x.group(2)), d)
     return v
 v = vis(strip)
-for need in ("root.appOnScreen", "!root.opened", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
+for need in ("(root.appOnScreen || root.oskOpen)", "(!root.opened || root.oskOpen)", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
     assert need in v, (need, v)
 assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
 assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
@@ -174,7 +174,8 @@ elif [[ $rc != 0 ]]; then
 else
   pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip, the search pill, the hold for voice"
 fi
-grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
+grep -c '} else if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
+grep -c 'if (recents || root.opened) return' "$l" >/dev/null || fail "over the drawer a swipe opens no recent apps"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
 grep -c 'if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)' "$l" >/dev/null || fail "pulling the drawer down closes it"
@@ -327,6 +328,7 @@ if command -v node >/dev/null; then
   node test/sensor-model.js || fail "fingerprint sensor model"
   node test/tiles-model.js || fail "quick-settings tile layout"
   node test/notifications-model.js >/dev/null || { node test/notifications-model.js; fail "notification shade model"; }
+  node test/media-model.js >/dev/null || { node test/media-model.js; fail "the shade's media card model"; }
   node test/home-model.js || fail "home screen model"
   node test/back-model.js || fail "back gesture model"
   node test/switcher-model.js || fail "recent apps' app names"
@@ -418,6 +420,11 @@ python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobil
 bash test/keyboard-theme.sh >/dev/null || fail "omamobile-keyboard-theme"
 bash test/install-hook.sh || fail "the upgrade reloads Hyprland, so new binds take effect"
 bash -n hooks/theme-set-keyboard || fail "the theme-set hook parses"
+# The hardware-key binds skip squeekboard's virtual keyboard: its layout's
+# key codes reach 124 (XF86PowerOff in Hyprland's keymap) and share the held
+# state with the real buttons.
+[[ $(grep -c 'device = hw_keys' hypr/phone.lua) == 5 ]] || fail "the five hardware-key binds are limited to real keyboards"
+grep -c 'inclusive = false, list = { "hl-virtual-keyboard-squeekboard" }' hypr/phone.lua >/dev/null || fail "squeekboard is excluded from the hardware-key binds"
 grep -cx 'exec omamobile-keyboard-theme --restart' hooks/theme-set-keyboard >/dev/null || fail "the theme-set hook rewrites and restarts"
 rc=0; out=$(python3 -B test/keyboard-layouts.py 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then
@@ -616,6 +623,11 @@ grep -c '!LauncherModel.opensShellSurface(entry))' plugins/omamobile.launcher/La
   grep -c '!HomeModel.opensShellSurface(entry))' plugins/omamobile.home/Home.qml >/dev/null || fail "no launch toast for an entry that opens a shell surface (drawer and home)"
 grep -c 'Quickshell.execDetached(HomeModel.appLaunchArgv(entry.id))' plugins/omamobile.home/Home.qml >/dev/null || fail "home-screen apps launch through omamobile-launch"
 grep -c 'tile.home.launch(tile.entry.app)' plugins/omamobile.home/AppTile.qml >/dev/null || fail "app tiles launch through the home screen"
+# Home icons: unchanged (capped at 64) up to a 128 px cell, the cell's 62 %
+# beyond it (scale 2, the 3-column grid)
+grep -c 'Math.min(64, Math.max(40, Math.min(tile.width, tile.height) \* 0.62))' plugins/omamobile.home/AppTile.qml >/dev/null || fail "narrow cells keep the 64 px icon"
+grep -c 'width: tile.width > 128' plugins/omamobile.home/AppTile.qml >/dev/null || fail "wide cells lift the icon cap"
+grep -c '? Math.max(Math.min(64, Math.max(40, Math.min(tile.width, tile.height) \* 0.62)),' plugins/omamobile.home/AppTile.qml >/dev/null || fail "a wide cell never shrinks the icon below the capped size (the 7 Pro on its side)"
 grep -c 'Quickshell.execDetached(HomeModel.commandLaunchArgv(argv))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.launch goes through omamobile-launch"
 grep -c 'Quickshell.execDetached(HomeModel.urlLaunchArgv(text))' plugins/omamobile.home/WidgetHost.qml >/dev/null || fail "widgets' host.openUrl goes through omamobile-launch"
 grep -c 'HomeModel.commandLaunchArgv(\["sh", "-c", tap\])' plugins/omamobile.home/CommandWidget.qml >/dev/null || fail "the text widget's tap goes through omamobile-launch"
@@ -673,6 +685,51 @@ elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the shade under touch (test/shade-touch)"
 else
   pass "the shade under touch: a swipe forgets one, a short one springs back, a tap taps, a drag scrolls"
+fi
+# The notification viewport keeps its settled height during sheet motion.
+rc=0
+out=$(python3 -B test/quicksettings-shade-layout.py \
+  plugins/omamobile.quicksettings/QuickSettings.qml 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "stable notification viewport # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2
+  fail "stable notification viewport (test/quicksettings-shade-layout.py)"
+else
+  pass "notification viewport stays stable while sliding and follows expansion"
+fi
+
+# Open-time backend reads settle and spread out without delaying actions.
+rc=0
+out=$(python3 -B test/quicksettings-refresh.py \
+  plugins/omamobile.quicksettings/QuickSettings.qml 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "open-refresh queue # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2
+  fail "open-refresh queue (test/quicksettings-refresh.py)"
+else
+  pass "open-refresh queue settles, coalesces and cancels pending work"
+fi
+
+# The shade's media card (MPRIS): which player shows, what each control
+# calls, the seek bar, the card's tap. test/media-touch drives it; the art
+# rule and the order are in test/media-model.js; test/quicksettings-render
+# draws it on the shade.
+qs=plugins/omamobile.quicksettings/QuickSettings.qml
+grep -c 'player: mediaSource.player' "$qs" >/dev/null || fail "the shade's media card shows MediaSource's player"
+grep -c 'ticking: root.opened && !root.editing' "$qs" >/dev/null || fail "the media card's position ticks only while the sheet is open"
+grep -c 'omarchy-hyprland-focus-app' "$qs" >/dev/null || fail "a tap on the media card focuses the player's app"
+if grep -nE 'trackArtUrl' plugins/omamobile.quicksettings/MediaCard.qml | grep -v 'MediaModel.artSource'; then
+  fail "the media card loads art only through MediaModel.artSource"
+fi
+rc=0; out=$(bash test/media-touch 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "the media card under touch # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the media card under touch (test/media-touch)"
+else
+  pass "the media card under touch: the playing or most recent player, transport, seek, a tap opens the app"
 fi
 # The home screen's long press (issue #147): a TapHandler over the pager
 # took mouse presses from the tiles, so it takes touch alone and a mouse
@@ -820,7 +877,7 @@ awk '/id: dictation$/,/function toggle/' plugins/omamobile.quicksettings/QuickSe
   ! awk '/id: dictation$/,/function toggle/' plugins/omamobile.quicksettings/QuickSettings.qml | grep -c 'property bool longPress' >/dev/null ||
   fail "the Dictation tile has the Wi-Fi and Bluetooth tiles' chevron (and their long press) for the voice settings"
 grep -c 'omarchy-done ensure omamobile-menu-voice' bin/omamobile-setup-user >/dev/null || fail "Setup > Voice in Omarchy's menu"
-grep -c 'o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true })' hypr/phone.lua >/dev/null ||
+grep -c 'o.bind("XF86AudioRaiseVolume", "Volume up released", "omamobile-keys volume-up-release", { locked = true, release = true, device = hw_keys })' hypr/phone.lua >/dev/null ||
   fail "volume up's release ends push-to-talk"
 grep -c "jq -e '.powerVolumeUp == true'" bin/omamobile-keys >/dev/null || fail "Power + Volume Up is off unless turned on"
 # The live preview (phase 3): omamobile-voice-preview against a fake voxtype,
@@ -878,6 +935,7 @@ if [[ -n ${OMAMOBILE_CALL_RENDER:-} ]]; then
 fi
 if command -v node >/dev/null; then
   node test/status-model.js >/dev/null || { node test/status-model.js; fail "status bar model"; }
+  node test/battery-state.js || fail "battery state bindings"
 fi
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-cell-watch || fail "omamobile-cell-watch parses"
 if command -v dbus-run-session >/dev/null; then
@@ -895,6 +953,11 @@ python3 -c 'import json; assert {"id": "omamobile.access"} in json.load(open("pr
 grep -c 'add_plugin omamobile.access' bin/omamobile-setup-user >/dev/null || fail "existing users get the permission sheet"
 grep -cx 'org.freedesktop.impl.portal.Access=omamobile;gtk' portal/hyprland-portals.conf >/dev/null || fail "Hyprland's portals.conf picks the sheet for Access only"
 ! grep -c '^default' portal/hyprland-portals.conf >/dev/null || fail "the override leaves the default portals alone"
+# The file chooser's backend must not itself use the portal (#277): the
+# session's GDK_DEBUG=portals / GTK_USE_PORTAL=1 made it wait 25 s on the main
+# portal, which was waiting for it.
+grep -cx 'UnsetEnvironment=GDK_DEBUG GTK_USE_PORTAL' systemd/user/xdg-desktop-portal-gnome-omamobile.conf >/dev/null \
+  || fail "xdg-desktop-portal-gnome runs without the session's portal variables"
 grep -cx 'DBusName=org.freedesktop.impl.portal.desktop.omamobile' portal/omamobile.portal >/dev/null || fail "omamobile.portal names the service"
 grep -cx 'BusName=org.freedesktop.impl.portal.desktop.omamobile' systemd/user/omamobile-portal-access.service >/dev/null || fail "the unit owns the bus name"
 if grep -n 'above_lock' hypr/phone.lua | grep -c 'omamobile-access' >/dev/null; then fail "the permission sheet never shows over the lock"; fi
@@ -922,6 +985,28 @@ grep -cx 'GTK_USE_PORTAL=1' "$env_d" >/dev/null || fail "GTK 3 file choosers use
 grep -cx 'GDK_DEBUG=portals' "$env_d" >/dev/null || fail "GTK 4 file choosers use the portal"
 pass "session environment"
 
+# Screenshots: the toast's tap ("Tap to view") opens the screenshot in Loupe
+# through omamobile-screenshot-open, and in Tensaku only without Loupe, then
+# through omamobile-screenshot-edit: Omarchy's own tensaku-edit with GTK's
+# simple input-method context, so the on-screen keyboard stays down.
+shot_d=environment.d/30-omamobile-screenshot.conf
+if grep -nE '^[A-Za-z_][A-Za-z0-9_]*=$' "$shot_d"; then fail "$shot_d sets no empty values"; fi
+grep -cx 'OMARCHY_SCREENSHOT_EDITOR=omamobile-screenshot-open' "$shot_d" >/dev/null || fail "Omarchy's screenshot editor is the phone's viewer wrapper"
+bash -n bin/omamobile-screenshot-open || fail "omamobile-screenshot-open parses"
+bash -n bin/omamobile-screenshot-edit || fail "omamobile-screenshot-edit parses"
+shot=$(mktemp -d)
+mkdir "$shot/with" "$shot/without"
+printf '#!/bin/sh\nprintf "tensaku-edit|%%s|%%s\\n" "$GTK_IM_MODULE" "$*"\n' >"$shot/without/tensaku-edit"
+printf '#!/bin/sh\nprintf "loupe|%%s\\n" "$*"\n' >"$shot/with/loupe"
+cp bin/omamobile-screenshot-edit "$shot/without/"
+chmod +x "$shot"/with/* "$shot"/without/*
+[[ $(PATH="$shot/with:$shot/without" "$BASH" bin/omamobile-screenshot-open "/p/shot one.png") == "loupe|/p/shot one.png" ]] \
+  || fail "the toast's tap opens the screenshot in Loupe"
+[[ $(GTK_IM_MODULE=wayland PATH="$shot/without" "$BASH" bin/omamobile-screenshot-open "/p/shot one.png") == "tensaku-edit|gtk-im-context-simple|/p/shot one.png" ]] \
+  || fail "without Loupe, Tensaku opens with GTK's simple input context"
+rm -rf "$shot"
+pass "screenshot toast: Loupe, or Tensaku without the on-screen keyboard"
+
 bash -n bin/omamobile-setup-user || fail "omamobile-setup-user parses"
 bash test/setup-user.sh || fail "omamobile-setup-user against a scratch home"
 bash -n bin/omamobile-osk-guard || fail "omamobile-osk-guard parses"
@@ -946,8 +1031,52 @@ else
   pass "widget crash guard: same-boot death held back, one retry after a system going down, clean run and quit clear"
 fi
 bash test/osk-guard.sh || fail "omamobile-osk-guard"
+bash -n bin/omamobile-onboarding || fail "omamobile-onboarding parses"
+bash test/onboarding-fingerprint.sh || fail "omamobile-onboarding's fingerprint offer"
+bash test/onboarding-mobile.sh || fail "omamobile-onboarding's SIM line"
+
+# The Mobile network page (omamobile.mobilenetwork): on for new and existing
+# users, Setup > Mobile network only where the modem stack is, the Mobile
+# data tile's chevron opens it, and its backend and model behave.
+m=plugins/omamobile.mobilenetwork/MobileNetwork.qml
+python3 -c 'import json; assert {"id": "omamobile.mobilenetwork"} in json.load(open("profile/shell.json"))["plugins"]' \
+  || fail "new users get the Mobile network page"
+grep -c 'add_plugin omamobile.mobilenetwork' bin/omamobile-setup-user >/dev/null || fail "existing users get the Mobile network page"
+grep -c '"setup.mobile-network".*"when":"test -x \\/usr\\/lib\\/omamobile-sit\\/omamobile-sit-config".*summon omamobile.mobilenetwork' bin/omamobile-setup-user >/dev/null ||
+  fail "Setup > Mobile network opens the page, only with the modem stack"
+grep -c '"omarchy-shell", "shell", "summon", "omamobile.mobilenetwork", "{}"' plugins/omamobile.quicksettings/QuickSettings.qml >/dev/null ||
+  fail "the Mobile data tile's chevron opens the page"
+grep -c 'exclusionMode: ExclusionMode.Normal' $m >/dev/null || fail "the APN field stays above the on-screen keyboard"
+if grep -nE 'execDetached\(\[.*(pkexec|omamobile-sit-config)' $m; then fail "the page changes settings only through omamobile-mobile-network"; fi
+if grep -nE 'systemctl.*(restart|stop).*omamobile-(modem|sitd)' $m bin/omamobile-mobile-network; then fail "the page never restarts the modem services"; fi
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-mobile-network || fail "omamobile-mobile-network parses"
+python3 -B test/mobile-network.py >/dev/null 2>&1 || { python3 -B test/mobile-network.py; fail "omamobile-mobile-network"; }
+if command -v node >/dev/null; then
+  node test/mobile-network-model.js >/dev/null || { node test/mobile-network-model.js; fail "Mobile network page model"; }
+fi
+grep -c 'Model.attachArgv(v)' $m >/dev/null && grep -c 'id: attachField' $m >/dev/null ||
+  fail "the attach APN has its own field under Advanced"
+python3 -B - <<'PY' || fail "the Mobile network page lints clean"
+import importlib.machinery, importlib.util, os, sys
+loader = importlib.machinery.SourceFileLoader("omamobile_widget", "bin/omamobile-widget")
+spec = importlib.util.spec_from_loader("omamobile_widget", loader)
+tool = importlib.util.module_from_spec(spec)
+loader.exec_module(tool)
+if not tool.qmllint_path() or not os.path.isdir(os.path.join(tool.OMARCHY_PATH, "shell")):
+    sys.exit(0)
+lint = tool.run_qmllint([os.path.abspath("plugins/omamobile.mobilenetwork/MobileNetwork.qml")])
+noise = ("is not creatable", "QProcess::ExitStatus")
+bad = lint["errors"] + [w for w in lint["warnings"] if not any(n in w for n in noise)]
+for line in bad:
+    print("  " + line)
+sys.exit(1 if bad else 0)
+PY
+pass "Mobile network page"
 bash -n bin/omamobile-sleepd || fail "omamobile-sleepd parses"
 bash test/sleepd.sh || fail "omamobile-sleepd"
+python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-doubletap || fail "omamobile-doubletap parses"
+python3 -B test/doubletap.py >/dev/null || { python3 -B test/doubletap.py | grep -v '^ok'; fail "omamobile-doubletap"; }
+pass "omamobile-doubletap: double taps and the touchscreen by its capabilities"
 python3 -B -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' bin/omamobile-weather || fail "omamobile-weather parses"
 python3 -B test/weather.py 2>/dev/null || fail "omamobile-weather"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -967,6 +1096,8 @@ if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$u" || fail "Updates desktop entry validates"
 fi
 [[ -x $tmp/root/usr/bin/omamobile-launch ]] || fail "install stages omamobile-launch"
+[[ -x $tmp/root/usr/bin/omamobile-screenshot-open && -x $tmp/root/usr/bin/omamobile-screenshot-edit && -f $tmp/root/usr/lib/environment.d/30-omamobile-screenshot.conf ]] \
+  || fail "install stages the screenshot editor and its session variable"
 for layout in terminal/us.yaml terminal/us_wide.yaml us.yaml us_wide.yaml; do
   [[ -f $tmp/root/usr/share/omamobile/squeekboard/keyboards/$layout ]] || fail "install stages the $layout layout"
 done
@@ -989,6 +1120,13 @@ grep -cx 'ExecStart=/usr/bin/omamobile-setup-user' systemd/user/omamobile-setup-
    $(readlink "$u/graphical-session.target.wants/omamobile-sleepd.service") == ../omamobile-sleepd.service ]] \
   || fail "the sleep watcher is staged and runs for every user's session"
 grep -cx 'ExecStart=/usr/bin/omamobile-sleepd' systemd/user/omamobile-sleepd.service >/dev/null || fail "the unit runs the watcher"
+# Double tap to wake: phone.lua turns Hyprland's wake on touch off, so the
+# watcher must run for every session, or a single touch and a double tap
+# both leave an unlocked phone dark.
+[[ -x $tmp/root/usr/bin/omamobile-doubletap && -f $u/omamobile-doubletap.service &&
+   $(readlink "$u/graphical-session.target.wants/omamobile-doubletap.service") == ../omamobile-doubletap.service ]] \
+  || fail "the double-tap watcher is staged and runs for every user's session"
+grep -cx 'ExecStart=/usr/bin/omamobile-doubletap' systemd/user/omamobile-doubletap.service >/dev/null || fail "the unit runs the double-tap watcher"
 # The lock screen's weather: a timer for every session, a one-shot service.
 [[ -x $tmp/root/usr/bin/omamobile-weather && -f $u/omamobile-weather.service && -f $u/omamobile-weather.timer &&
    $(readlink "$u/graphical-session.target.wants/omamobile-weather.timer") == ../omamobile-weather.timer ]] \
@@ -1019,3 +1157,14 @@ grep -c 'd355bdb2789f7bd1023d88b17f8a2898dc0ffa2b' widgets/OWL.md >/dev/null || 
 pass "install stages the package"
 
 test/keys.sh || fail "omamobile-keys volume keys"
+
+# Back threshold feedback handler state only; never invoke feedbackd.
+rc=0; out=$(python3 -B test/back-haptic.py 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "Back threshold feedback # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "Back threshold feedback"
+else
+  pass "Back threshold feedback: once per gesture, both edges and retreat"
+fi
+bash test/power-overlap.sh || fail "overlapping power-key presses"

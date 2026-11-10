@@ -1,0 +1,15 @@
+# First run: a platform without a keyboard-first workflow (a phone) skips the
+# "Learn Keybindings" welcome; omamobile-setup-user marks
+# welcome-keybindings-not-applicable. Sent upstream as omacom/omarchy#15075.
+
+--- a/install/user/first-run/welcome.sh
++++ b/install/user/first-run/welcome.sh
+@@ -1,3 +1,8 @@
++# A platform without a keyboard-first workflow (a phone, say) opts out of the
++# keybindings introduction from its user setup: omarchy-done mark
++# welcome-keybindings-not-applicable.
++omarchy-done check welcome-keybindings-not-applicable && exit 0
++
+ # Real newlines, not a literal \n: the card renders the body as it arrives, and
+ # elides past three lines.
+ omarchy-notification-send -u critical -g  "Learn Keybindings" \

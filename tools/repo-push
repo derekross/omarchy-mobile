@@ -1,12 +1,15 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# Copy the [omamobile] repository (out/repo, from tools/repo-build) to the
-# phone's /var/lib/omamobile/repo, where pacman reads it while the project is
-# private. Then `omarchy update` on the phone installs whatever is new.
+# Copy the [omamobile] repository (out/repo, from tools/build-packages or
+# tools/repo-build) to the phone's /var/lib/omamobile/repo: the "local"
+# channel. A phone reads it only while its mirrorlist follows local (phones
+# set up before the channels do; others switch with
+# "sudo omamobile-update channel local"). Then `omarchy update` on the phone
+# installs whatever is new.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
-[[ -f out/repo/aarch64/omamobile.db ]] || { echo "Run tools/repo-build first" >&2; exit 1; }
+[[ -f out/repo/aarch64/omamobile.db ]] || { echo "Run tools/build-packages (or tools/repo-build) first" >&2; exit 1; }
 tar cf - -C out/repo aarch64 | tools/phone-ssh '
   set -e
   rm -rf /var/lib/omamobile/repo.new && mkdir -p /var/lib/omamobile/repo.new
@@ -15,4 +18,7 @@ tar cf - -C out/repo aarch64 | tools/phone-ssh '
   [ -d /var/lib/omamobile/repo ] && mv /var/lib/omamobile/repo /var/lib/omamobile/repo.old
   mv /var/lib/omamobile/repo.new /var/lib/omamobile/repo
   rm -rf /var/lib/omamobile/repo.old
-  ls /var/lib/omamobile/repo/aarch64 | grep -c "pkg.tar.*[^g]$"'
+  ls /var/lib/omamobile/repo/aarch64 | grep -c "pkg.tar.*[^g]$"
+  grep -qx "Server = file:///var/lib/omamobile/repo/\$arch" /etc/pacman.d/omamobile-mirrorlist ||
+    echo "note: this phone does not follow the local channel, so pacman will not read what was pushed;" \
+         "switch with: sudo omamobile-update channel local" >&2'

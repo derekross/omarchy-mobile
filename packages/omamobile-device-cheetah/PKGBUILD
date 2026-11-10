@@ -8,8 +8,11 @@ arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT Apache-2.0)
 depends=(bash systemd util-linux omamobile-keyring i2c-tools)
+# Keep CPIF and its link driver behind the modem's guarded startup.
+provides=(omamobile-modem-policy omamobile-sitd-policy)
 backup=(etc/pacman.d/omamobile-mirrorlist)
 install=omamobile-device-cheetah.install
+optdepends=('omamobile-boot-update: writes kernel package updates to slot B from the boot files this package ships')
 makedepends=(gcc python)
 
 build() {

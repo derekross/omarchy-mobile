@@ -31,7 +31,10 @@ import sys
 import time
 import tty
 
-FIFO = "/var/lib/omamobile-vendor/gnss/data/vendor/gps/nmea_out"
+# the Pixel 7 Pro's gnss profile, then the Pixel 9a's gnss-slsi
+FIFOS = ("/var/lib/omamobile-vendor/gnss/data/vendor/gps/nmea_out",
+         "/var/lib/omamobile-vendor/gnss-slsi/data/vendor/gps/nmea_out")
+FIFO = FIFOS[0]
 RUN = "/run/omamobile-gnss"
 MAX_LINE = 1024
 SD_LISTEN_FDS_START = 3
@@ -175,7 +178,7 @@ class Bridge:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--fifo", default=FIFO)
+    ap.add_argument("--fifo", default=next((f for f in FIFOS if os.path.exists(f)), FIFO))
     ap.add_argument("--run", default=RUN)
     ap.add_argument("--idle-exit", type=int, default=0, metavar="SECONDS",
                     help="exit after SECONDS without a client (0: never)")

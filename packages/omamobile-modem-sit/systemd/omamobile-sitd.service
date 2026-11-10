@@ -6,8 +6,9 @@
 # own: a second start-up on the same CP is not supported (reboot instead).
 [Unit]
 Description=Omarchy Mobile SIT RIL (S5300 calls, SMS, registration)
-Requires=omamobile-modem.service
-After=omamobile-modem.service omamobile-audio.service
+# The device modem-policy package supplies its modem dependency as a drop-in.
+# Tegu checks an already running modem; cheetah/raven retain their starter.
+After=omamobile-audio.service
 ConditionPathExists=/dev/umts_ipc0
 
 [Service]
@@ -28,7 +29,7 @@ ProtectSystem=full
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 SystemCallArchitectures=native
 
 [Install]

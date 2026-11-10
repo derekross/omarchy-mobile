@@ -27,6 +27,10 @@ if [[ -f ../omamobile-device-cheetah/src/reboot-to.c ]]; then
   cmp -s etc/omamobile-mirrorlist ../omamobile-device-cheetah/etc/omamobile-mirrorlist \
     || fail "the mirrorlist drifted from the cheetah package"
   pass "the mirrorlist matches the cheetah package"
+  cmp -s <(sed -n '/^# --- the \[omamobile\] channel/,$p' omamobile-device-felix.install) \
+    <(sed -n '/^# --- the \[omamobile\] channel/,$p' ../omamobile-device-cheetah/omamobile-device-cheetah.install) \
+    || fail "the install script's channel handling drifted from the cheetah package"
+  pass "the install script keeps the [omamobile] channel as the cheetah package does"
   cmp -s vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     ../omamobile-device-cheetah/vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
     || fail "the power-key drop-in drifted from the cheetah package"
@@ -104,7 +108,7 @@ pass "install stages the udev rule, the USB link, and the mirrorlist, and nothin
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (seen on raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
-! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -q '^Gateway=' || fail "usb0 sets no default route in [Network] (metric 0)"
+! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -c '^Gateway=' >/dev/null || fail "usb0 sets no default route in [Network] (metric 0)"
 metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
 [[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
 pass "USB is the last gateway"

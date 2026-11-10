@@ -25,7 +25,7 @@ TITLE="Omarchy Mobile phone"
 PHONE_W=1440 PHONE_H=3120	# the panel in pixels, what wayvnc sends (portrait): read from the phone below
 KEEP=0 FIT=0 VIEWER= HEIGHT=900
 
-usage() { sed -n '3,19s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+usage() { source tools/lib/usage.sh; usage_from_header "$0" >&2; exit 2; }
 die() { echo "phone-mirror: $*" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do
   case $1 in

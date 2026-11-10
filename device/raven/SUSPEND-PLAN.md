@@ -1,12 +1,19 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6 Pro (raven): suspend
 
-Status (2026-10-16): **S0 and S1 passed; S2 (kernel) next.** Raven follows cheetah's
+Status (2026-11-03): **s2idle wakes on Power, 3 of 3 again on today's
+kernels, and UFS resumes clean at `spm_lvl` 5 (linux-omarchy-mobile#188)**;
+see the 2026-11-03 entry at the end. Earlier status (2026-10-16):
+**S0-S5 passed; S6-S8 have no raven result yet;**
+see "Next" at the end. Raven follows cheetah's
 suspend plan (`device/cheetah/SUSPEND-PLAN.md` on `main`: s2idle first,
 SYS_SLEEP later); this file records only what differs on gs101 and the
-results. Kernel: `omamobile-gs101-merge-test` (`gb4d96e9c3ab7` on the
-phone); the suspend changes will go on a new `omamobile-gs101-suspend`
-branch in `~/android/mainline/wt-raven-split`.
+results. Kernel: S0 and S1 ran on `omamobile-gs101-merge-test`
+(`gb4d96e9c3ab7`), S2-S5 on `g8ec6110f6eed`, the kernel S2 pushed from
+`omamobile-gs101-suspend` in `~/android/mainline/wt-raven-split`. That
+kernel boots with `mem_sleep` `[s2idle]` and `spm_lvl` 5 (S2) and carries
+cheetah's Wi-Fi D3 work (S5), so section 1's `mem_sleep`, `spm_lvl` and
+Wi-Fi rows don't describe it.
 
 Slot A holds GrapheneOS, which can't boot over Omarchy's `userdata`
 (NOTES, 2026-10-27): a hang is recovered by holding Power about 30 s,
@@ -178,6 +185,42 @@ and off: the lock lit the panel on the key a moment after the press, and
 `omamobile-keys` judged the release by the lit panel; shell 0.2.9 judges by
 the panel at the press.
 
-**S3:** the first real freeze, `rtcwake -m freeze -s
-30`, unattended (the RTC already works). Then cheetah's S4-S8 (loop, AoC
-and sensors, battery numbers, userspace).
+**Next (from S2-S5 and the battery runs, 2026-10-16, `g8ec6110f6eed`).**
+S2-S5 passed. Cheetah's S6 (the AoC and sensors across sleep), S7 (battery
+numbers with Wi-Fi and Bluetooth as in use) and S8 (userspace on) have no
+raven result yet. What the results leave open:
+
+- **Panel:** gs-decon does nothing at system sleep, so the panel stays lit
+  unless userspace turns it off first (Screen, under S1); S1 and S4 ran
+  with it lit.
+- **Battery:** s2idle saved about 115 mA only with Wi-Fi and its PCIe
+  controller unloaded (about 293 mA asleep against about 408 mA awake);
+  with only brcmfmac unloaded it saved almost nothing. No drain is
+  recorded with Wi-Fi kept connected across sleep (S5, and the auto-sleep
+  hook since 0.1.8), and only SYS_SLEEP goes below the s2idle floor.
+- **AoC and sensors:** the AoC, speaker protection and Bluetooth stayed
+  active through S3 and S4, but no sensor stream across a sleep is
+  recorded (S6).
+- **Menu:** suspend stays hidden (`suspend-off`) until S8.
+
+**2026-11-03: s2idle on today's kernels, and UFS at level 5 by default.**
+Three `systemctl suspend` cycles, each woken by Power, on the published
+`omamobile` plus the display series (kernel #116) and raven's USB
+override, once without and once with linux-omarchy-mobile#188 (gs101's
+UFS `spm_lvl` 5 default):
+
+| | without #188 (`gb0a658e17f21`) | with #188 (`g1094d975a193`) |
+| --- | --- | --- |
+| `spm_lvl` at boot | 3 | 5 |
+| resumes, woken by Power | 3 of 3 (19, 86, 25 s asleep) | 3 of 3 (10, 6, 4 s asleep) |
+| UFS on resume | `hibern8 exit failed. ret = 5`, `host_reset: total cnt=2` | clean |
+| flip timeouts, underruns | 0 | 0 |
+
+The display came back at 120 Hz with DPMS on after every cycle. On the
+daily kernel (`ge1e6adb69bbf`) the phone also went to sleep on its own
+with the shell's auto-sleep on (the `omamobile-sleep` toggle, restored
+from the owner's profile) and woke on Power. Two things block sleep on
+purpose or by accident today: with the modem up, `omamobile-modem-inhibit`
+(omamobile-modem 0.1.13) holds a block, as MODEM-PLAN 6.3 asks; on a boot
+where the modem never started (a kernel without CPIF) it held the block
+anyway, and only `systemctl suspend -i` slept (reported on #390).

@@ -10,15 +10,85 @@
 set -euo pipefail
 
 MARK=/var/lib/omamobile/gnss-bringup-started
+# The 9a's session of this boot: written with the marker, in /run so that a
+# reset empties it.
+SESSION=/run/omamobile-gnss/session
+STOP_REQUEST=/run/omamobile-gnss/stop-request
 say() { printf 'omamobile-gnss: %s\n' "$*" >&2; }
+
+# the Pixel 9a (zumapro-tegu) runs the gnss-slsi profile, the Pixel 7 Pro gnss
+# OMAMOBILE_DT lets the tests run both branches on any machine (as
+# omamobile-setup-user does).
+tegu() { tr -d '\0' < "${OMAMOBILE_DT:-/proc/device-tree}/compatible" 2>/dev/null | grep -c 'google,zumapro-tegu' >/dev/null; }
+own_session() {
+  [[ ${INVOCATION_ID:-} =~ ^[0-9a-f]{32}$ && -f $SESSION && ! -L $SESSION ]] &&
+    [[ $(cat "$SESSION") == "$INVOCATION_ID" ]]
+}
+if [[ ${1:-} == --stopped ]]; then
+  # ExecStopPost runs after systemd has stopped the service processes. A
+  # failed start, crash, or timed-out stop must leave the persistent marker.
+  if tegu && own_session; then
+    if [[ ${SERVICE_RESULT:-} == success && -f $STOP_REQUEST && ! -L $STOP_REQUEST ]] &&
+       [[ $(cat "$STOP_REQUEST") == "$INVOCATION_ID" ]]; then
+      rm -f "$MARK"
+      sync
+    fi
+    rm -f "$SESSION" "$STOP_REQUEST"
+  fi
+  exit 0
+fi
+if [[ ${1:-} == --stop ]]; then
+  if tegu; then profile=gnss-slsi; else profile=gnss; fi
+  # ExecStop also runs after an unexpected exit. Only a still-running main
+  # process belonging to this invocation can request marker cleanup.
+  if [[ $profile == gnss-slsi ]] && own_session &&
+     [[ ${SERVICE_RESULT:-} == success && ${MAINPID:-} =~ ^[1-9][0-9]*$ ]]; then
+    /usr/lib/omamobile-vendor/omamobile-vendor-chroot "$profile" stop
+    printf '%s\n' "$INVOCATION_ID" > "$STOP_REQUEST"
+    exit 0
+  fi
+  exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot "$profile" stop
+fi
 
 if [[ ${1:-} == --retry ]]; then
   rm -f "$MARK"
+  # By hand on the 9a this only clears the marker: GNSS starts inside its
+  # unit, at the next location request (the session needs the invocation ID).
+  if tegu && ! [[ ${INVOCATION_ID:-} =~ ^[0-9a-f]{32}$ ]]; then
+    say "marker cleared; the next location request starts GNSS"
+    exit 0
+  fi
 elif [[ -e $MARK ]]; then
-  say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (run omamobile-gnss-start --retry)"
+  if tegu; then
+    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (/usr/lib/omamobile-vendor/omamobile-gnss-start --retry clears the marker; the next location request then starts GNSS)"
+  else
+    say "the last bring-up ($(cat "$MARK")) never finished; skipping GNSS (run /usr/lib/omamobile-vendor/omamobile-gnss-start --retry)"
+  fi
   exit 0
 fi
 
+# The Pixel 9a's GNSS is the modem's Kepler core: Samsung's gnssd runs in
+# the modem profile, and the gnss-slsi profile runs the HAL and our client,
+# which writes NMEA to the FIFO the bridge reads. Nothing to load here.
+if tegu; then
+  if ! grep -c '@GNSSND' /proc/net/unix >/dev/null; then
+    say "gnssd isn't running (the modem profile with OMAMOBILE_MODEM_GNSS=1); nothing to do"
+    exit 0
+  fi
+  # The hang marker goes down before the session, as on the 7 Pro, because
+  # a session on the 9a can still hang the SoC with the modem up
+  # (MODEM-PLAN G3-L1), and socket activation lets any GeoClue client start
+  # one: without the marker a hang could repeat at every boot. It is
+  # cleared only after a clean stop, not here, since this exec never returns.
+  [[ ${INVOCATION_ID:-} =~ ^[0-9a-f]{32}$ ]] || { say "no systemd invocation ID; refusing GNSS"; exit 1; }
+  mkdir -p "$(dirname "$MARK")" "$(dirname "$SESSION")"
+  rm -f "$STOP_REQUEST"
+  date -Is > "$MARK"
+  printf '%s\n' "$INVOCATION_ID" > "$SESSION"
+  sync
+  say "starting the 9a's GNSS HAL and client"
+  OMAMOBILE_GNSS_NMEA_OUT=fifo exec /usr/lib/omamobile-vendor/omamobile-vendor-chroot gnss-slsi start
+fi
 # The DT must have the GNSS node enabled (gnss overlay); otherwise nothing to do.
 if ! grep -qs okay /sys/firmware/devicetree/base/soc@0/usi@109400c0/spi@10940000/status; then
   say "SPI5 is not enabled in this device tree; nothing to do"

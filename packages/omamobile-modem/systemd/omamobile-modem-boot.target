@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+# The modem stack at boot (device/cheetah/MODEM-PLAN.md M4.6): the one
+# switch for what the maintainer started by hand every boot until
+# 2026-11-03: omamobile-modem (the chroot: cbd, rfsd, CP ONLINE), then
+# omamobile-sitd (registration, IMS), the cellular data fallback
+# (omamobile-sit-data, what `omamobile-sit data on` starts) and the Phone
+# and Messages bridge (omamobile-mmd). Wants= tolerates a unit that isn't
+# installed; each unit's own After= puts it behind the one before, and the
+# device's sitd drop-in waits for the CP's ONLINE. Nothing here restarts
+# the modem: a step that fails stays failed until the reboot.
+#
+# Not enabled by this package (test/all holds it to that): the device
+# package that ships the modem policy does, with a vendor wants link under
+# multi-user.target.wants (omamobile-device-cheetah 0.1.43 for the Pixel 7
+# Pro). On a phone that isn't provisioned the modem and inhibit units'
+# conditions skip them, sitd's and sit-data's skip those, and only the
+# D-Bus bridge runs, waiting for sitd. To keep the stack off on a phone
+# that is provisioned:
+#   systemctl mask omamobile-modem-boot.target       then reboot
+# and systemctl unmask to have it back. A vendor link survives systemctl
+# disable, and `systemctl is-enabled` reads "disabled" for a unit started
+# by a vendor link alone (it reports links under /etc and /run only), so
+# that answer doesn't mean the stack is off: the link itself (ls -l
+# /usr/lib/systemd/system/multi-user.target.wants/) or `systemctl
+# list-dependencies --plain multi-user.target` says. Until the carrier configuration is
+# automatic (#373) the SIM's APNs and modem-sit.conf are set by hand, and a
+# phone without them boots the modem but registers nothing.
+#
+# DefaultDependencies=no keeps multi-user.target from ordering itself after
+# this target (a target's wants are complemented with After= unless the
+# wanted unit says no): omamobile-boot-success runs after multi-user.target
+# and must not wait for a registration that can take minutes.
+[Unit]
+Description=Omarchy Mobile modem, phone service and data at boot
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+Wants=omamobile-modem.service omamobile-sitd.service omamobile-sit-data.service omamobile-mmd.service
+
+[Install]
+WantedBy=multi-user.target

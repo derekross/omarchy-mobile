@@ -29,13 +29,55 @@ buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
 open(sys.argv[1], "wb").write(buf)
 PY
 cp "$tmp/devinfo" "$tmp/devinfo.orig"
-"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -q 'version: 3.15' || fail "bootctl decodes devinfo"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -c 'version: 3.15' >/dev/null || fail "bootctl decodes devinfo"
 plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo" b 2>&1 || true)
 grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x35: 04 -> 06)" 
 cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
 pass "bootctl dry run plans one byte and writes nothing"
 
-./install "$tmp/root" "$tmp/build"
+# The [omamobile] channel: installed phones follow stable, the file is kept
+# across upgrades (backup=), and a phone that read its own repository keeps
+# reading it after the upgrade that changes the default.
+ml=etc/omamobile-mirrorlist
+[[ $(grep -c '^Server' "$ml") == 1 ]] || fail "the mirrorlist has one active Server line"
+grep -qxF 'Server = https://pkgs.omamobile.org/stable/$arch' "$ml" || fail "the default channel is stable"
+grep -qxF '#Server = https://pkgs.omamobile.org/development/$arch' "$ml" || fail "development is offered, commented"
+grep -qxF '#Server = file:///var/lib/omamobile/repo/$arch' "$ml" || fail "the local repository is offered, commented"
+grep -qx "backup=(etc/pacman.d/omamobile-mirrorlist)" PKGBUILD || fail "pacman keeps a changed mirrorlist (backup=)"
+if [[ -f ../omamobile-omarchy/bin/omamobile-update ]]; then
+  for line in $(sed -n 's/^#\{0,1\}\(Server = [^ ]*\)$/\1/p' "$ml" | tr ' ' '~'); do
+    grep -qF "\"${line//\~/ }\"" ../omamobile-omarchy/bin/omamobile-update \
+      || fail "omamobile-update channel knows ${line//\~/ }"
+  done
+fi
+inst=$tmp/channel.install
+mkdir -p "$tmp/ch/etc" "$tmp/ch/var"
+sed -e "s|^OMAMOBILE_MIRRORLIST=.*|OMAMOBILE_MIRRORLIST=$tmp/ch/etc/omamobile-mirrorlist|" \
+    -e "s|^OMAMOBILE_LOCAL_MARK=.*|OMAMOBILE_LOCAL_MARK=$tmp/ch/var/mark|" \
+    -e 's|^\(add_repository() {\)$|\1 return 0|' omamobile-device-cheetah.install > "$inst"
+upgrade() {  # pre_upgrade, pacman replacing an unchanged backup file, post_upgrade
+  (source "$inst"; pre_upgrade; if [[ ${1:-} == replace ]]; then cp "$ml" "$tmp/ch/etc/omamobile-mirrorlist"; fi; post_upgrade) > "$tmp/ch/out"
+}
+printf '# old\nServer = file:///var/lib/omamobile/repo/$arch\n' > "$tmp/ch/etc/omamobile-mirrorlist"
+upgrade replace
+[[ $(grep '^Server' "$tmp/ch/etc/omamobile-mirrorlist") == 'Server = file:///var/lib/omamobile/repo/$arch' ]] \
+  || fail "a phone on its own repository stays there when pacman replaces the unchanged old file"
+grep -q 'omamobile-update channel' "$tmp/ch/out" || fail "it is told how to switch"
+[[ ! -e $tmp/ch/var/mark ]] || fail "the marker is removed"
+grep -qxF '#Server = https://pkgs.omamobile.org/stable/$arch' "$tmp/ch/etc/omamobile-mirrorlist" || fail "stable is left there, commented"
+cp "$tmp/ch/etc/omamobile-mirrorlist" "$tmp/ch/kept"
+upgrade
+cmp -s "$tmp/ch/kept" "$tmp/ch/etc/omamobile-mirrorlist" && [[ ! -s $tmp/ch/out ]] || fail "a later upgrade leaves it alone, quietly"
+cp "$ml" "$tmp/ch/etc/omamobile-mirrorlist"
+upgrade replace
+cmp -s "$ml" "$tmp/ch/etc/omamobile-mirrorlist" && [[ ! -s $tmp/ch/out ]] || fail "a phone on stable stays on stable"
+sed -e 's|^Server|#Server|' -e 's|^#\(Server = https://pkgs.omamobile.org/development/\$arch\)$|\1|' "$ml" > "$tmp/ch/etc/omamobile-mirrorlist"
+cp "$tmp/ch/etc/omamobile-mirrorlist" "$tmp/ch/kept"
+upgrade
+cmp -s "$tmp/ch/kept" "$tmp/ch/etc/omamobile-mirrorlist" || fail "a builder's development choice is kept"
+pass "the mirrorlist follows stable by default; a phone on its own repository or on development keeps its channel"
+
+OMAMOBILE_BOOT_FILES=none ./install "$tmp/root" "$tmp/build" 2>/dev/null
 for f in usr/bin/omamobile-bootctl usr/bin/reboot-to usr/bin/omamobile-boot-success usr/bin/omamobile-setup-system \
          usr/lib/systemd/system/omamobile-boot-success.service usr/lib/systemd/network/20-usb-gadget.network \
          usr/lib/udev/rules.d/10-omamobile-storage.rules usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules \
@@ -76,10 +118,73 @@ grep -qx 'HandlePowerKey=ignore' "$power" || fail "a short press must not power 
 grep -qx 'HandlePowerKeyLongPress=ignore' "$power" || fail "the long press stays the PMIC reset"
 pass "install stages the package"
 
+# The boot files (tools/stage-boot-files): installed where
+# omamobile-boot-update looks when staged and checked; without them the
+# build fails, unless OMAMOBILE_BOOT_FILES=none asks for a development build
+[[ ! -e $tmp/root/usr/lib/omamobile/cheetah ]] || fail "OMAMOBILE_BOOT_FILES=none: no boot files"
+if OMAMOBILE_BOOT_FILES=$tmp/no-boot-files ./install "$tmp/root-none" "$tmp/build" 2>"$tmp/err"; then fail "install refuses without boot files"; fi
+grep -c 'tools/stage-boot-files' "$tmp/err" >/dev/null || fail "and says how to stage them"
+grep -c 'OMAMOBILE_BOOT_FILES' PKGBUILD >/dev/null && fail "the PKGBUILD never opts out of the boot files"
+bf=$tmp/boot-files && mkdir -p "$bf/overlays"
+cp ../../device/cheetah/device.conf "$bf/device.conf" 2>/dev/null || printf 'CODENAME=cheetah\n' > "$bf/device.conf"
+echo dtbo > "$bf/dtbo.img"; echo initramfs > "$bf/initramfs.cpio.lz4"; echo ov > "$bf/overlays/aoc-core-test.dtbo"
+echo "0000  device/cheetah/device.conf" > "$bf/SOURCES"
+(cd "$bf" && find . -type f | sed 's|^\./||' | sort | xargs sha256sum) > "$tmp/sums" && mv "$tmp/sums" "$bf/SHA256SUMS"
+OMAMOBILE_BOOT_FILES=$bf ./install "$tmp/root-bf" "$tmp/build" || fail "install takes staged boot files"
+for f in usr/share/omamobile/device.conf usr/lib/omamobile/cheetah/dtbo.img usr/lib/omamobile/cheetah/initramfs.cpio.lz4 \
+         usr/lib/omamobile/cheetah/overlays/aoc-core-test.dtbo usr/share/omamobile/device-cheetah/boot-files.sources; do
+  [[ -f $tmp/root-bf/$f ]] || fail "boot files: $f"
+done
+echo tampered >> "$bf/dtbo.img"
+if OMAMOBILE_BOOT_FILES=$bf ./install "$tmp/root-bf2" "$tmp/build" 2>/dev/null; then fail "install refuses boot files that fail their checksums"; fi
+pass "install ships the staged boot files for omamobile-boot-update, checked, and fails without them (OMAMOBILE_BOOT_FILES=none: development only)"
+
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
-! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -q '^Gateway=' || fail "usb0 sets no default route in [Network] (metric 0)"
+! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -c '^Gateway=' >/dev/null || fail "usb0 sets no default route in [Network] (metric 0)"
 metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
 [[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
 pass "USB is the last gateway"
+
+# The modem stack at boot (MODEM-PLAN M4.6): this device's sitd drop-in
+# waits for the CP's ONLINE before sitd runs (the modem unit is ready at
+# CPIF's ports, before cbd has booted the CP), with the profile's own cbd
+# timeout. The stack is on by default from 0.1.43: the one switch,
+# omamobile-modem-boot.target (omamobile-modem), is enabled by a vendor
+# wants link, as the AoC and Wi-Fi units are; the four units it wants get
+# no link of their own (the target is the switch, and systemctl mask on it
+# is the way off). The sit-data drop-in keeps the data fallback from a
+# restart loop on a phone whose modem isn't provisioned.
+d=$tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/20-cp-online.conf
+[[ -f $d ]] || fail "the sitd CP-online drop-in is staged"
+grep -qx 'ExecStartPre=/usr/lib/omamobile-vendor/omamobile-modem-cp wait-online 120' "$d" || fail "sitd waits for CP ONLINE with the cbd timeout"
+grep -q '^\[Service\]' "$d" && ! grep -q '^\[Unit\]' "$d" || fail "the drop-in only adds to [Service]"
+d=$tmp/root/usr/lib/systemd/system/omamobile-sit-data.service.d/20-cp-online.conf
+[[ -f $d ]] || fail "the sit-data drop-in is staged"
+grep -qx 'ConditionPathExists=/dev/umts_ipc0' "$d" || fail "sit-data is skipped without the modem's port (no restart loop on an unprovisioned phone)"
+grep -q '^\[Unit\]' "$d" && ! grep -q '^\[Service\]' "$d" || fail "the sit-data drop-in only adds to [Unit]"
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-modem-boot.target") == ../omamobile-modem-boot.target ]] \
+  || fail "the modem boot target is enabled by a vendor wants link"
+for n in omamobile-modem.service omamobile-modem-inhibit.service omamobile-sitd.service omamobile-sit-data.service omamobile-mmd.service; do
+  [[ -z $(find "$tmp/root/usr/lib/systemd" -name "$n" -path '*.wants/*' -o -name "$n" -path '*.requires/*') ]] || fail "no wants link for $n is shipped (the target is the switch)"
+done
+# Call audio (0.1.44): the 7 Pro's defaults for omamobile-modem-sit route
+# calls through the AoC card in the earpiece mode; modem-sit's packaged
+# /etc file leaves the card unset, so this is what a fresh install gets.
+d=$tmp/root/usr/lib/omamobile/modem-sit.conf.d/50-cheetah.conf
+[[ -f $d ]] || fail "the modem-sit defaults are staged"
+python3 -I -c 'import configparser,sys; p=configparser.ConfigParser(interpolation=None); p.read(sys.argv[1]); sys.exit(p.get("audio","card")!="auto")' "$d" \
+  || fail "the 7 Pro's call audio default is card = auto"
+if [[ -f ../omamobile-modem/systemd/omamobile-modem-boot.target ]]; then
+  grep -qx 'WantedBy=multi-user.target' ../omamobile-modem/systemd/omamobile-modem-boot.target || fail "the link matches the target's own [Install]"
+  grep -qx 'ConditionPathExists=/usr/lib/omamobile-vendor/modem/root' ../omamobile-modem/systemd/omamobile-modem.service \
+    || fail "the modem unit the link turns on is skipped on a phone that isn't provisioned"
+fi
+pass "sitd waits for the CP; the modem stack is on by default through the target's vendor link; sit-data needs the modem's port"
+
+# The canonical sitd unit gets its modem dependency from this device policy.
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/10-device-modem.conf ]] \
+  || fail "the device sitd policy is staged"
+grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
+pass "the device sitd policy is staged and provided"

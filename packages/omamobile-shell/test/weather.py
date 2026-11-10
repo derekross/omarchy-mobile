@@ -4,7 +4,8 @@
 # writes for the lock screen (the shape LockGlance.js weatherLine reads),
 # its words for the weather codes against the home screen's
 # (HomeModel.weatherText, through node), the settings it reads, the city
-# lookup and its cache, and one try per run that leaves the old reading.
+# lookup and its cache, retries while the network is still coming back,
+# and a failure that leaves the old reading.
 import glob
 import importlib.machinery
 import importlib.util
@@ -59,6 +60,15 @@ if shutil.which("node"):
     diff = {k: (mine[k], theirs[k]) for k in theirs if mine.get(k) != theirs[k]}
     ok(not diff, "the words for each code are the home screen widget's %s" % diff)
     print("ok - weather: the words for every code are the home screen widget's (HomeModel.weatherText)")
+    # The unit the OWL weather widgets get (HomeModel.localeUnit) is this one.
+    envs = [{"LANG": "en_US.UTF-8"}, {"LANG": "de_DE.UTF-8"}, {"LANG": "C.UTF-8"}, {}, {"LANG": "en_LR"},
+            {"LC_ALL": "de_DE.UTF-8", "LANG": "en_US.UTF-8"}, {"LC_MEASUREMENT": "en_US.UTF-8", "LANG": "de_DE.UTF-8"},
+            {"LANG": "en_PR.UTF-8@euro"}, {"LC_ALL": "", "LANG": "es_US"}]
+    js = "const M = require(process.argv[1]); console.log(JSON.stringify(JSON.parse(process.argv[2]).map(M.localeUnit)))"
+    theirs = json.loads(subprocess.run(["node", "-e", js, os.path.join(ROOT, "plugins/omamobile.home/HomeModel.js"), json.dumps(envs)],
+                                       check=True, capture_output=True, text=True).stdout)
+    ok(theirs == [W.locale_unit(e) for e in envs], "HomeModel.localeUnit agrees with locale_unit %s" % theirs)
+    print("ok - weather: the OWL widgets' unit is the one this service uses (HomeModel.localeUnit)")
 else:
     print("ok - weather: the words match the home screen widget's # SKIP no node")
 
@@ -216,10 +226,82 @@ geo.update(usable=False, answer=None)
 write(W.PLACE, {"cities": json.load(open(W.PLACE))["cities"]})
 W.run(fake({"api.open-meteo.com": {"current": {"temperature_2m": 3.2, "weather_code": 71}}}), lambda: 1790003600.0, us)
 before = open(W.READING).read()
-calls.clear()
-ok(W.run(fake({"api.open-meteo.com": OSError("timed out")}), lambda: 1790005400.0, us) == 1 and len(calls) == 1,
-   "a failed fetch: one try, and the run fails")
+
+
+class Clock:
+    """A monotonic clock that only the fake sleep moves."""
+    def __init__(self):
+        self.t, self.slept = 100.0, []
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.t += s
+
+
+def flaky(failures, error, answer):
+    """The network: `failures` tries fail with error, then it answers."""
+    left = [failures]
+
+    def fetch(url):
+        calls.append(url)
+        if left[0] > 0:
+            left[0] -= 1
+            raise error
+        return answer
+    return fetch
+
+
+import socket
+import urllib.error
+dns = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+good = {"current": {"temperature_2m": 5.0, "weather_code": 0}}
+# After a wake: no name resolution for the first three tries, then an answer.
+calls.clear(); clk = Clock()
+ok(W.run(flaky(3, dns, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 0 and len(calls) == 4,
+   "no network at first: tried again until it answers %s" % calls)
+ok(clk.slept == [5, 10, 15], "backoff 5, 10, 15 s %s" % clk.slept)
+r = json.load(open(W.READING))
+ok(r["temperature"] == 5 and r["text"] == "Clear" and r["at"] == 1790005400000, "the reading from the try that worked")
+with open(W.READING, "w") as f:
+    f.write(before)
+# A real outage: it gives up within the window, quietly, and keeps the reading.
+for error in (dns, OSError("timed out"), TimeoutError("timed out"), ConnectionRefusedError(111, "refused"),
+              urllib.error.URLError(OSError(101, "Network is unreachable"))):
+    calls.clear(); clk = Clock()
+    ok(W.run(flaky(99, error, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 0,
+       "no network at all (%r): the run gives up without failing" % error)
+    ok(len(calls) == 6 and clk.slept == [5, 10, 15, 20, 20] and sum(clk.slept) <= W.RETRY_FOR,
+       "a bounded number of tries inside the window: %d, %s" % (len(calls), clk.slept))
+    ok(open(W.READING).read() == before, "no network leaves the old reading")
+# A server that answers with an error isn't a missing network: one try, the run fails.
+calls.clear(); clk = Clock()
+http = urllib.error.HTTPError("https://api.open-meteo.com/", 503, "Service Unavailable", {}, None)
+ok(W.run(flaky(99, http, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 1 and len(calls) == 1
+   and clk.slept == [], "an HTTP error: one try, and the run fails")
 ok(open(W.READING).read() == before, "a failed fetch leaves the old reading")
+# A TLS failure isn't a missing network: one try, the run fails, wrapped by urlopen or not.
+import ssl
+for error in (urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),
+              urllib.error.URLError(ssl.SSLError(1, "handshake failure")), ssl.SSLError(1, "bad record mac")):
+    calls.clear(); clk = Clock()
+    ok(W.run(flaky(99, error, good), lambda: 1790005400.0, us, sleep=clk.sleep, clock=clk) == 1 and len(calls) == 1
+       and clk.slept == [], "a TLS error (%r): one try, and the run fails" % error)
+    ok(open(W.READING).read() == before, "a TLS error leaves the old reading")
+# The unit gives the retries room: GeoClue (timeout -k 2 20), the window, and a last try of two 10 s requests.
+ok(W.GEOCLUE_FOR == 22, "GeoClue's budget is its timeout and kill delay")
+section, limit = None, []
+for line in open(os.path.join(ROOT, "systemd/user/omamobile-weather.service")).read().splitlines():
+    line = line.strip()
+    if line.startswith("["):
+        section = line
+    elif section == "[Service]" and line.startswith("TimeoutStartSec="):
+        limit.append(int(line.split("=", 1)[1]))
+ok(len(limit) == 1 and limit[0] >= W.GEOCLUE_FOR + W.RETRY_FOR + 2 * W.TIMEOUT + 10,
+   "[Service] TimeoutStartSec leaves room for the retries %s" % limit)
+print("ok - weather: no network after a wake is tried again with backoff for up to %d s, then given up without failing the unit" % W.RETRY_FOR)
 calls.clear()
 ok(W.run(fake({"api.open-meteo.com": {"error": True}}), lambda: 1790005400.0, us) == 1 and open(W.READING).read() == before,
    "an answer without a temperature leaves the old reading")
@@ -244,3 +326,38 @@ ok(W.where_am_i() is None, "no answer: none")
 W.WHERE_AM_I = os.path.join(home, "missing")
 ok(W.geoclue_usable() is False, "no where-am-i: GeoClue isn't usable")
 print("ok - weather: GeoClue's where-am-i is read at city accuracy, and missing means not usable")
+
+# Which agent counts (2026-11-02: geoclue's own XDG autostart ran the demo
+# agent, so omamobile-gnss's unit exited as a second instance and weather
+# took Location for off). Any demo agent of this user's counts; the
+# Location switch off means no, whatever agent runs.
+W.WHERE_AM_I = fake_wai
+W.GEOCLUE_AGENT_BIN = "/usr/lib/geoclue-2.0/demos/agent"
+proc = os.path.join(home, "proc")
+
+
+def fake_proc(*cmdlines):
+    shutil.rmtree(proc, ignore_errors=True)
+    os.makedirs(os.path.join(proc, "self"))
+    for i, argv in enumerate(cmdlines, 100):
+        os.makedirs(os.path.join(proc, str(i)))
+        with open(os.path.join(proc, str(i), "cmdline"), "wb") as f:
+            f.write(b"\0".join(a.encode() for a in argv) + b"\0")
+
+
+W.PROC = proc
+fake_proc(["/usr/bin/bash"], ["/usr/lib/geoclue-2.0/demos/where-am-i", "-a", "4"])
+ok(W.agent_process() is False, "no demo agent process: none")
+fake_proc(["/usr/bin/bash"], ["/usr/lib/geoclue-2.0/demos/agent"])
+ok(W.agent_process() is True, "the demo agent run by this user counts")
+ok(W.agent_process(uid=os.getuid() + 1) is False, "another user's demo agent doesn't")
+ok(W.agent_process(proc=os.path.join(home, "no-proc")) is False, "no /proc: none")
+cases = [  # the Location switch, our unit, a demo agent process -> usable
+    (True, True, False, True), (True, False, True, True), (None, False, True, True),
+    (True, False, False, False), (False, True, True, False), (None, False, False, False)]
+for switch, unit, process, want in cases:
+    W.location_switch = lambda s=switch: s
+    W.agent_unit_active = lambda u=unit: u
+    W.agent_process = lambda p=process: p
+    ok(W.geoclue_usable() is want, "switch %s, our unit %s, a demo agent %s: usable %s" % (switch, unit, process, want))
+print("ok - weather: any GeoClue demo agent of this user's counts, and Location off means no")

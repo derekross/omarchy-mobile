@@ -273,16 +273,18 @@ From the omamobile repo, phone in Arch over USB.
 # M0.1  the modem's NV and firmware partitions are untouched: checksums match the backup.
 #       Reads only. ~430 MB from UFS, a minute or two.
 tools/phone-ssh 'for p in efs efs_backup modem_userdata persist modem_a modem_b; do
-  printf "%s  %s.img\n" "$(sha256sum < /dev/disk/by-partlabel/$p | cut -d" " -f1)" "$p"; done' \
+  d=$(grep -lx "PARTNAME=$p" /sys/class/block/*/uevent | head -1 | cut -d/ -f5)
+  printf "%s  %s.img\n" "$(sha256sum < /dev/$d | cut -d" " -f1)" "$p"; done' \
   > logs/m0-partitions.sha256
 grep -E ' (efs|efs_backup|modem_userdata|persist|modem_a|modem_b)\.img$' \
   ~/android/reference/cheetah-partition-backup-20261011/SHA256SUMS | sort -k2 | diff - <(sort -k2 logs/m0-partitions.sha256)
 #   pass: no diff for efs, efs_backup, modem_a, modem_b. persist and modem_userdata
 #         may differ if stock Android ran after 2026-10-11; then take a fresh backup
-#         before M2 (same dd as the original backup, to the laptop).
+#         before M2 into a new directory on the laptop (tools/nv-backup DIR).
 #   also: nothing mounts them
-tools/phone-ssh 'grep -E "sda(1|5|6|7|19|29) " /proc/mounts; ls -l /dev/disk/by-partlabel/ | grep -E " (efs|efs_backup|modem_userdata|persist|modem_a|modem_b) "'
-#   pass: no mount lines.
+tools/phone-ssh 'grep -E "sda(1|5|6|7|19|29) " /proc/mounts
+  grep -xE "PARTNAME=(efs|efs_backup|modem_userdata|persist|modem_a|modem_b)" /sys/class/block/*/uevent'
+#   pass: no mount lines. The PARTNAME lines give each partition's sdaN.
 
 # M0.2  memory map: the CP regions must not be System RAM in use.
 tools/phone-ssh 'grep -iE "e8000000|ea400000|f6200000|reserved" /proc/iomem | head -20'

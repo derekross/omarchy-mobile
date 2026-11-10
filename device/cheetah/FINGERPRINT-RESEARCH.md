@@ -4,7 +4,8 @@
 Status (2026-10-12): research and design. **The current status and the
 runbook are in [FINGERPRINT-PLAN.md](FINGERPRINT-PLAN.md)**, which supersedes
 section 7 below (Trusty now runs on int through the AoC work; the branch was
-brought up to int; the bridge, the libfprint driver and the package exist).
+brought up to int; the bridge, the libfprint driver and the package exist):
+run nothing from section 7.
 Kernel branch `omamobile-fingerprint` in `~/android/mainline/wt-fingerprint`,
 build in `~/android/mainline/out-fingerprint`.
 
@@ -526,19 +527,19 @@ watchdog. Rollback: reboot (modules stay blacklisted), or
 
 ### F3: RPMB node
 
+Historical (2026-10-12 design). **Run F3 from
+[FINGERPRINT-PLAN.md](FINGERPRINT-PLAN.md) section 6, not from here.** The
+copy commands this section first had are removed: they found the partitions
+through `/dev/disk/by-partlabel`, which this root doesn't have, and mounted
+`persist` plain `-o ro`, which can replay a dirty ext4 journal.
+
 ```sh
 tools/fingerprint-capture sg
-tools/phone-ssh 'dd if=/dev/disk/by-partlabel/mfg_data of=/var/lib/omamobile-fp/mfg_data.img bs=1M status=none;
-  mkdir -p /mnt/persist-ro && mount -o ro /dev/disk/by-partlabel/persist /mnt/persist-ro &&
-  mkdir -p /var/lib/omamobile-fp/persist-ss && cp -a /mnt/persist-ro/ss/. /var/lib/omamobile-fp/persist-ss/;
-  umount /mnt/persist-ro'
-tools/phone-ssh 'cat /dev/disk/by-partlabel/persist' > ~/android/reference/cheetah-persist-$(date +%F).img
 ```
 
-Expect: one sg node whose device is `0:0:0:49476` (the RPMB LUN). Copies of
-`mfg_data` and `persist/ss` (read-only reads), and a laptop backup of
-`persist`. Risk: none written; sg nodes exist for all LUNs until reboot.
-Rollback: `modprobe -r sg`.
+Expect: one sg node whose device is `0:0:0:49476` (the RPMB LUN). Risk:
+none written; sg nodes exist for all LUNs until reboot. Rollback:
+`modprobe -r sg`.
 
 ### F4: secure storage (irreversible: first RPMB write from Linux)
 
@@ -631,7 +632,7 @@ Rollback: `fprintd-delete $USER`.
 Enable `omamobile-fp.service` and fprintd. Lock, wake the screen, touch the
 target: unlocks. The password still unlocks; with the service stopped the
 lock falls back to the password.
-Rollback: `systemctl disable --now omamobile-fp`.
+Rollback: `systemctl mask --now omamobile-fp` (from 0.1.14 the package's vendor wants link survives `disable`).
 
 ---
 

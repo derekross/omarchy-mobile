@@ -1,0 +1,305 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Tests for tools/release (docs/RELEASES.md §11) in a copy of the repository
+# with a scratch kernel remote: no network, no Docker, no phone, no key; the
+# real out/, keys/ and kernel trees are never touched. The version check, the
+# stage order, the kernel stage's refusals (no tag, a lightweight tag, a
+# worktree off the tag or dirty, no boot of the exact release in NOTES.md: a
+# plan naming the commit, a -push1 or -dirty build don't count) and its
+# record, the build stage refusing an output directory that holds a
+# development kernel, the identifier scan (real MACs, serial records, the
+# builder's home and listed identifiers found; made-up MACs and example paths
+# not), the packages stage refusing an index the release key didn't sign,
+# the test-install record, the tag stage refusing notes with placeholders,
+# the images stage keeping current boot files and asking for a device-package
+# version bump before restaging stale ones (a stand-in stage-boot-files),
+# the bundle check against a bundle laid out as make-bundle builds it
+# (INSTALL.md and make-bundle's provision tools allowed, nothing else), and
+# the upload stage running the real tools/release-upload --dry-run on a
+# signed fixture bundle (throwaway key; ssh, rsync and curl are stubs that
+# must not be called).
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; [[ ! -f ${t:-}/log ]] || cat "$t/log" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+for tool in git gpg gpgv python3 bsdtar repo-add; do
+  command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
+done
+t=$(mktemp -d)
+export GNUPGHOME=$t/gnupg && mkdir -m 700 "$GNUPGHOME"
+cleanup() { gpgconf --homedir "$GNUPGHOME" --kill gpg-agent 2>/dev/null || true; rm -rf "$t"; }
+trap cleanup EXIT
+export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=t@invalid GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=t@invalid
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
+R=$t/repo
+mkdir -p "$R/tools" "$R/device/testdev" "$R/packages/omamobile-keyring" "$R/rootfs" "$R/tests" "$R/out/repo/aarch64"
+cp tools/release tools/release-upload tools/bundle-manifest tools/make-bundle "$R/tools/"
+cp tests/packages "$R/tests/"
+cp packages/omamobile-keyring/omamobile.gpg "$R/packages/omamobile-keyring/"
+printf 'CODENAME=testdev\nNAME="Test Phone"\nPACKAGE=omamobile-device-testdev\n' > "$R/device/testdev/device.conf"
+echo "# Test phone notes" > "$R/device/testdev/NOTES.md"
+printf 'omamobile-keyring\n' > "$R/rootfs/packages.omamobile"
+export DEVICE=testdev KERNEL_BASE=$t/kbase RELEASE_KERNEL_DIR=$t/kbase/wt-release RELEASE_KERNEL_OUT=$t/kbase/out-kernel-release
+run() { (cd "$R" && tools/release "$@") > "$t/log" 2>&1; }
+V=2026.11.05
+
+# --- the version and the stage order ---
+if run --version 2026.13.01 status; then fail "a version that isn't a calendar date is refused"; fi
+grep -q 'versioned by the calendar' "$t/log" || fail "says why the version is refused"
+run --version "$V" status || fail "status on a new release"
+grep -q "Next: tools/release --version $V kernel" "$t/log" || fail "status names the kernel stage first"
+if run --version "$V" build; then fail "build before kernel is refused"; fi
+grep -q 'stage kernel has not passed' "$t/log" || fail "says which stage comes first"
+if run --version "$V" nonsense; then fail "an unknown stage is refused"; fi
+pass "calendar versions only, and each stage needs the ones before it"
+
+# --- the kernel stage, against a scratch remote ---
+K=$t/kernel.git
+git init -q --bare "$K"
+git init -q "$t/ksrc"
+printf 'kernelversion:\n\t@echo 7.3.0-rc6\n' > "$t/ksrc/Makefile"
+git -C "$t/ksrc" add Makefile
+git -C "$t/ksrc" commit -q -m "base"
+git -C "$t/ksrc" commit -q --allow-empty -m "release"
+commit=$(git -C "$t/ksrc" rev-parse HEAD)
+git -C "$t/ksrc" push -q "$K" HEAD:refs/heads/omamobile
+export PUBLISH_KERNEL_REMOTE=$K
+if run --version "$V" --kernel-tag kernel-2026.11.05 kernel; then fail "no tag on the remote is refused"; fi
+grep -q 'tools/publish-kernel --tag kernel-2026.11.05' "$t/log" || fail "says how to publish the tag"
+git -C "$t/ksrc" tag kernel-2026.11.05 && git -C "$t/ksrc" push -q "$K" refs/tags/kernel-2026.11.05
+if run --version "$V" kernel; then fail "a lightweight tag is refused"; fi
+grep -q 'lightweight' "$t/log" || fail "says the tag is lightweight"
+git -C "$t/ksrc" push -q "$K" :refs/tags/kernel-2026.11.05 && git -C "$t/ksrc" tag -d kernel-2026.11.05 >/dev/null
+git -C "$t/ksrc" tag -a -m "Omarchy Mobile kernel 2026.11.05" kernel-2026.11.05 && git -C "$t/ksrc" push -q "$K" refs/tags/kernel-2026.11.05
+if run --version "$V" kernel; then fail "a missing release worktree is refused"; fi
+grep -q 'worktree add --detach' "$t/log" || fail "says how to make the release worktree"
+git clone -q -b omamobile "$K" "$RELEASE_KERNEL_DIR"
+git -C "$RELEASE_KERNEL_DIR" checkout -q --detach HEAD~1
+if run --version "$V" kernel; then fail "a worktree off the tag is refused"; fi
+grep -q "not kernel-2026.11.05" "$t/log" || fail "says the worktree is off the tag"
+git -C "$RELEASE_KERNEL_DIR" checkout -q --detach "$commit"
+echo dirty > "$RELEASE_KERNEL_DIR/tracked" && git -C "$RELEASE_KERNEL_DIR" add tracked
+if run --version "$V" kernel; then fail "a dirty worktree is refused"; fi
+grep -q 'local changes' "$t/log" || fail "says the worktree has changes"
+git -C "$RELEASE_KERNEL_DIR" reset -q --hard
+if run --version "$V" kernel; then fail "a kernel with no recorded boot is refused"; fi
+krel=7.3.0-rc6-omamobile-g${commit:0:12}
+grep -q "NOTES.md has no boot of $krel" "$t/log" || fail "asks for the boot record of the exact release"
+# A plan's Expect line names the commit and even the release: not a result
+printf '## Runbook\nExpect: uname -r is %s (g%s)\n' "$krel" "${commit:0:12}" > "$R/device/testdev/KERNEL-UPDATE-PLAN.md"
+if run --version "$V" kernel; then fail "a plan naming the commit is not a recorded boot"; fi
+grep -q "NOTES.md has no boot of $krel" "$t/log" || fail "a plan file is refused for want of a boot record"
+# A development or dirty build of the same commit is not the release kernel
+for other in "7.3.0-rc6-omamobile-push1-g${commit:0:12}" "7.3.0-rc6-omamobile-push1-00012-g${commit:0:12}" "$krel-dirty"; do
+  cp "$R/device/testdev/NOTES.md" "$t/notes.saved"
+  echo "Booted $other: display, touch, Wi-Fi fine." >> "$R/device/testdev/NOTES.md"
+  if run --version "$V" kernel; then fail "a boot of $other does not count"; fi
+  grep -q "NOTES.md has no boot of $krel" "$t/log" || fail "$other is refused for want of the release's boot"
+  cp "$t/notes.saved" "$R/device/testdev/NOTES.md"
+done
+echo "Booted $krel: display, touch, Wi-Fi fine." >> "$R/device/testdev/NOTES.md"
+run --version "$V" kernel || fail "the kernel stage passes with the tag, a clean worktree and a recorded boot"
+grep -q 'booted and recorded in device/testdev/NOTES.md' "$t/log" || fail "names NOTES.md as the record"
+grep -qx "kernel_commit=$commit" "$R/out/release/$V/state" || fail "records the tag's commit"
+if run --version "$V" --kernel-tag kernel-2026.11.04 status; then fail "another kernel tag for a recorded release is refused"; fi
+pass "the kernel stage refuses a missing or lightweight tag, a worktree off it or dirty, and a boot not recorded in NOTES.md as the exact release"
+
+# --- build: the output directory is the release's own ---
+O=$RELEASE_KERNEL_OUT
+mkdir -p "$O/include/config"
+echo "7.3.0-rc6-omamobile-push1-g${commit:0:12}" > "$O/include/config/kernel.release"
+if run --version "$V" --dry-run build; then fail "an output directory holding a development kernel is refused"; fi
+grep -q 'not a release build' "$t/log" || fail "says the directory holds a development kernel"
+rm -rf "$O" && mkdir -p "$O" && echo x > "$O/something"
+if run --version "$V" --dry-run build; then fail "a non-empty output directory without a kernel build is refused"; fi
+rm -rf "$O" && mkdir -p "$O/include/config" && echo "$krel" > "$O/include/config/kernel.release"
+run --version "$V" --dry-run build || fail "a previous release build in the output directory is fine"
+grep -q 'would run: bin/omamobile kernel --release' "$t/log" || fail "the build runs bin/omamobile kernel --release"
+grep -q 'linux-omamobile' "$t/log" || fail "the build says what happens to linux-omamobile"
+rm -rf "$O"
+pass "the build stage refuses an output directory that isn't a release build's"
+
+# --- the identifier scan ---
+mkdir -p "$t/scan"
+printf 'serial-ABC123\nHome Net\n' > "$t/ids"
+export RELEASE_IDENTIFIERS=$t/ids
+printf 'made up: 02:11:22:33:44:55 00:00:00:00:00:00 ff:ff:ff:ff:ff:ff\nversion 1.2.3, example /home/user/x\n' > "$t/scan/clean.txt"
+run scan "$t/scan" || fail "made-up MACs and plain text pass the scan"
+# A universally administered address, put together here so this file holds none
+mac=$(printf '%s:%s' 10:20:30 40:50:60)
+for bad in "wlan0 $mac" 'androidboot.serialno=x' "built in /home/$(id -un)/src" 'device serial-ABC123 here' 'ssid=Home Net'; do
+  printf '%s\n' "$bad" > "$t/scan/bad.bin"
+  if run scan "$t/scan"; then fail "the scan finds: $bad"; fi
+done
+printf 'serial-ABC1234 is another word\n' > "$t/scan/bad.bin"
+run scan "$t/scan" || fail "a listed identifier matches only as a whole word"
+rm "$t/scan/bad.bin"
+# dnsmasq's shipped example configuration (2026.11.08): its group address and
+# a dhcp-option value pass in etc/dnsmasq.conf only; a unicast dhcp-host there,
+# and a group-looking address elsewhere (a Bluetooth LE random address can
+# look like one), are still found. Addresses put together, as above.
+grp=$(printf '%s:%s' 11:22:33 44:55:66) opt=$(printf '%s:%s' e4:45:74 68:00:00) doc=$(printf '%s:%s' 00:00:5e 00:53:01)
+mkdir -p "$t/scan/etc"
+printf '#dhcp-host=%s,192.168.0.60\n#dhcp-option=128,%s\ndhcp-option=128,%s\n' "$grp" "$opt" "$opt" > "$t/scan/etc/dnsmasq.conf"
+run scan "$t/scan" || fail "dnsmasq's example group address and option bytes pass in etc/dnsmasq.conf"
+printf 'dhcp-host=%s,192.168.0.61\n' "$doc" >> "$t/scan/etc/dnsmasq.conf"
+if run scan "$t/scan"; then fail "a unicast dhcp-host in etc/dnsmasq.conf is found"; fi
+printf '#dhcp-option=128,%s # %s\n' "$opt" "$doc" > "$t/scan/etc/dnsmasq.conf"
+if run scan "$t/scan"; then fail "a real address after an exempt value on one line is found"; fi
+rm "$t/scan/etc/dnsmasq.conf"
+printf 'paired %s\n' "$grp" > "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a group-looking address outside etc/dnsmasq.conf is found"; fi
+printf 'dhcp-option=128,%s\n' "$doc" > "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a dhcp-option value outside etc/dnsmasq.conf is found"; fi
+mkdir -p "$t/scan/xetc"; printf '#dhcp-option=128,%s\n' "$doc" > "$t/scan/xetc/dnsmasq.conf"; rm "$t/scan/etc/other.conf"
+if run scan "$t/scan"; then fail "a file named like etc/dnsmasq.conf but not it (xetc/) is found"; fi
+rm -r "$t/scan/xetc"
+rm -r "$t/scan/etc"
+pass "the scan finds real MACs, serial records, the builder's home and listed identifiers, not made-up MACs or example paths"
+
+# --- packages: only the release key's index ---
+gpg --batch --quiet --passphrase '' --quick-gen-key "other <x@invalid>" ed25519 sign never >/dev/null 2>&1
+other_fpr=$(gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+mkdir -p "$t/pkg" "$R/packages/omamobile-keyring/test"
+printf '#!/bin/sh\nexit 0\n' > "$R/packages/omamobile-keyring/test/all" && chmod +x "$R/packages/omamobile-keyring/test/all"
+printf 'pkgname = omamobile-keyring\npkgbase = omamobile-keyring\npkgver = 1-1\narch = any\nsize = 1\n' > "$t/pkg/.PKGINFO"
+(cd "$R/out/repo/aarch64" && bsdtar --zstd -cf omamobile-keyring-1-1-any.pkg.tar.zst -C "$t/pkg" .PKGINFO &&
+  repo-add -q --sign --key "$other_fpr" omamobile.db.tar.gz omamobile-keyring-1-1-any.pkg.tar.zst) >/dev/null 2>&1 || true
+if [[ -f $R/out/repo/aarch64/omamobile.db.tar.gz.sig ]]; then
+  if run --version "$V" packages; then fail "an index another key signed is refused"; fi
+  grep -q 'not signed by the release key' "$t/log" || fail "says the index isn't the release key's"
+  pass "the packages stage refuses an index the release key didn't sign"
+else
+  pass "# skip: repo-add could not make a signed fixture"
+fi
+
+# --- test-install and tag, from recorded state ---
+st=$R/out/release/$V/state
+printf 'kernel_release=7.3.0-rc6-omamobile-g%s\nbuild_done=x\nbundle=out/bundle/x\nbundle_signed=0\n' "${commit:0:12}" >> "$st"
+if run --version "$V" test-install --passed 7.3.0-rc6-omamobile-push1-gdeadbeef0000; then fail "another kernel than the release's is refused"; fi
+if run --version "$V" test-install --passed "7.3.0-rc6-omamobile-g${commit:0:12}"; then fail "a test of an unsigned bundle is refused"; fi
+grep -q 'tested bundle is unsigned' "$t/log" || fail "says the tested bundle was unsigned"
+run --version "$V" --dry-run test-install || fail "the dry run prints the attended steps"
+grep -q 'bash install --dry-run' "$t/log" || fail "the steps start with the installer's dry run"
+printf 'promote_done=x\nkernel_tag=kernel-2026.11.05\nidentifiers_done=clean\n' >> "$st"
+mkdir -p "$R/docs/release-notes"
+printf '# Omarchy Mobile 2026.MM.DD\nkernel-2026.11.05\n' > "$R/docs/release-notes/$V.md"
+if run --version "$V" tag; then fail "notes with placeholders are refused"; fi
+grep -q 'placeholders' "$t/log" || fail "says the notes have placeholders"
+pass "test-install records only the release kernel on a signed bundle; tag refuses unfinished notes"
+
+# --- images: current boot files are kept; stale ones need a version bump ---
+# A stand-in for #320's tools/stage-boot-files: --check passes when
+# $t/bf-current exists; staging is only printed in a dry run
+mkdir -p "$R/packages/omamobile-boot-update" "$R/packages/omamobile-device-testdev" "$RELEASE_KERNEL_OUT/include/config"
+echo "$krel" > "$RELEASE_KERNEL_OUT/include/config/kernel.release"
+: > "$R/packages/omamobile-boot-update/PKGBUILD"
+printf 'pkgname=omamobile-device-testdev\npkgver=0.1.5\npkgrel=1\n' > "$R/packages/omamobile-device-testdev/PKGBUILD"
+printf '#!/bin/bash\n[[ $1 == --check && -e %s/bf-current ]] && { echo current; exit 0; }\necho "stale" >&2; exit 1\n' "$t" > "$R/tools/stage-boot-files"
+chmod +x "$R/tools/stage-boot-files"
+touch "$t/bf-current"
+# a device package that ships no boot files has no boot-files flow
+run --version "$V" --dry-run images || fail "the images dry run for a device package without boot files"
+grep -q 'ships no boot files' "$t/log" || fail "a device package without OMAMOBILE_BOOT_FILES skips the boot files"
+printf '#!/bin/bash\nboot=${OMAMOBILE_BOOT_FILES:-boot-files}\n' > "$R/packages/omamobile-device-testdev/install"
+run --version "$V" --dry-run images || fail "the images dry run with current boot files"
+grep -q 'would build the images with packages/omamobile-device-testdev/boot-files/initramfs.cpio.lz4' "$t/log" ||
+  fail "the images use the staged initramfs when the boot files are kept"
+grep -q 'boot-files is current for this tree: kept, not restaged' "$t/log" || fail "current boot files are kept"
+if grep -q 'would run: tools/stage-boot-files' "$t/log"; then fail "current boot files are not restaged"; fi
+rm "$t/bf-current"
+# out/repo already holds this device-package version: restaging would loop
+mkdir -p "$t/dpkg" "$t/repo2"
+printf 'pkgname = omamobile-device-testdev\npkgbase = omamobile-device-testdev\npkgver = 0.1.5-1\narch = any\nsize = 1\n' > "$t/dpkg/.PKGINFO"
+(cd "$t/repo2" && bsdtar --zstd -cf omamobile-device-testdev-0.1.5-1-any.pkg.tar.zst -C "$t/dpkg" .PKGINFO &&
+  repo-add -q omamobile.db.tar.gz omamobile-device-testdev-0.1.5-1-any.pkg.tar.zst) >/dev/null 2>&1 || fail "a repository fixture"
+mv "$R/out/repo" "$t/repo.saved" && mkdir -p "$R/out/repo" && cp -a "$t/repo2" "$R/out/repo/aarch64"
+if run --version "$V" --dry-run images; then fail "stale boot files at a version out/repo already has are refused"; fi
+grep -q 'a device-package version bump is needed' "$t/log" || fail "says a version bump is needed"
+grep -q 'bump packages/omamobile-device-testdev/version' "$t/log" || fail "prints the bump and the rebuild"
+# a bumped version (out/repo doesn't have it yet): stage, then build it
+sed -i 's/pkgver=0.1.5/pkgver=0.1.6/' "$R/packages/omamobile-device-testdev/PKGBUILD"
+run --version "$V" --dry-run images || fail "stale boot files for a new device-package version are staged"
+grep -q 'would run: tools/stage-boot-files' "$t/log" || fail "stages the boot files for the new version"
+grep -q 'next: tools/build-packages packages/omamobile-device-testdev' "$t/log" || fail "names the device package to build next"
+rm -rf "$R/out/repo" && mv "$t/repo.saved" "$R/out/repo"
+rm -rf "$R/packages/omamobile-boot-update" "$R/packages/omamobile-device-testdev" "$R/tools/stage-boot-files" "$RELEASE_KERNEL_OUT"
+pass "images keeps current boot files and builds from their initramfs, and asks for a device-package version bump before restaging stale ones"
+
+# --- upload: the real tools/release-upload --dry-run on a signed bundle ---
+for tool in rsync sha256sum; do
+  command -v "$tool" >/dev/null || { pass "# skip upload: no $tool"; exit 0; }
+done
+uk=$t/release-key
+mkdir -m 700 "$uk"
+GNUPGHOME=$uk gpg --batch --quiet --passphrase '' --quick-generate-key "release <r@invalid>" ed25519 sign never 2>/dev/null
+ufpr=$(GNUPGHOME=$uk gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+mkdir -p "$R/keys"
+echo "$ufpr" > "$R/keys/fingerprint.release"
+kr=$R/packages/omamobile-keyring
+GNUPGHOME=$uk gpg --batch --export "$ufpr" > "$kr/omamobile.gpg"
+printf '%s:4:\n' "$ufpr" > "$kr/omamobile-trusted"
+: > "$kr/omamobile-revoked"
+B=out/bundle/omamobile-testdev-$V
+rootname=omamobile-rootfs-testdev-$V-aarch64.img.zst
+mkdir -p "$R/$B/images"
+printf 'CODENAME=testdev\nNAME="Test Phone"\nBOOT_IMAGES="boot"\nUFS_RW="boot_b userdata"\n' > "$R/$B/device.conf"
+head -c 4096 /dev/urandom > "$R/$B/images/boot.img"
+printf '#!/bin/bash\necho install\n' > "$R/$B/install"
+cp "$kr/omamobile.gpg" "$R/$B/omamobile.gpg"
+# Laid out as tools/make-bundle lays it out: the guide, the README and
+# phone-provision with its helpers under tools/ (make-bundle's own list)
+echo guide > "$R/$B/INSTALL.md"
+echo readme > "$R/$B/README.txt"
+mkdir -p "$R/$B/tools"
+ptools=$(sed -n 's/^provision_tools="\(.*\)"$/\1/p' tools/make-bundle)
+[[ -n $ptools ]] || fail "read make-bundle's provision_tools"
+for f in $ptools; do printf '#!/bin/bash\n' > "$R/$B/tools/$f"; done
+head -c 50000 /dev/urandom > "$R/out/bundle/$rootname"
+(cd "$R/out/bundle" && sha256sum "$rootname" > "$rootname.sha256")
+printf 'device: testdev\n' > "$R/out/bundle/${rootname%.img.zst}.MANIFEST"
+digest=$(sha256sum < "$R/out/bundle/$rootname" | cut -d' ' -f1)
+printf 'version: %s\nroot image: %s (%s)\n' "$V" "$rootname" "$digest" > "$R/$B/MANIFEST"
+python3 -I "$R/tools/bundle-manifest" --bundle "$R/$B" --rootfs "$R/out/bundle/$rootname" --rootfs-sha256 "$digest" \
+  --version "$V" --kernel-release "$krel" --base-url "https://pkgs.omamobile.org/releases/testdev/$V/" >/dev/null ||
+  fail "the fixture bundle's manifest.json"
+(cd "$R/$B" && find . -type f ! -name 'SHA256SUMS*' -printf '%P\n' | sort | xargs sha256sum -- > SHA256SUMS)
+GNUPGHOME=$uk gpg --batch --yes --quiet --local-user "$ufpr" --detach-sign -o "$R/$B/SHA256SUMS.sig" "$R/$B/SHA256SUMS"
+# The one-file download beside the bundle, built and signed as make-bundle
+# does, where this checkout has it (tools/lib/bundle-tar.sh, PR #326):
+# release-upload then requires it
+if [[ -f tools/lib/bundle-tar.sh ]]; then
+  # shellcheck source=../tools/lib/bundle-tar.sh
+  source tools/lib/bundle-tar.sh
+  bundle_tar "$R/out/bundle" "omamobile-testdev-$V" "$rootname" "$V" || fail "the fixture's bundle tar"
+  GNUPGHOME=$uk gpg --batch --yes --quiet --local-user "$ufpr" --detach-sign \
+    -o "$R/out/bundle/omamobile-testdev-$V.tar.sha256.sig" "$R/out/bundle/omamobile-testdev-$V.tar.sha256"
+fi
+# Nothing may reach a server: ssh, rsync and curl only log
+mkdir -p "$t/stub"
+for c in ssh rsync curl; do printf '#!/bin/sh\necho "%s $*" >> %s/stub.log\nexit 1\n' "$c" "$t" > "$t/stub/$c"; done
+chmod +x "$t/stub/"*
+printf 'verify_done=verified\nbundle=%s\n' "$B" >> "$st"
+# The identifiers stage's bundle check on that layout
+run check-bundle "$R/$B" || fail "a bundle laid out as make-bundle builds it passes the bundle check"
+echo x > "$R/$B/tools/extra-tool"
+if run check-bundle "$R/$B"; then fail "a file make-bundle doesn't put in the bundle is refused"; fi
+grep -q './tools/extra-tool' "$t/log" || fail "names the extra file"
+rm "$R/$B/tools/extra-tool"
+echo x > "$R/$B/images/notes.txt"
+if run check-bundle "$R/$B"; then fail "a non-image file under images/ is refused"; fi
+rm "$R/$B/images/notes.txt"
+pass "the bundle check allows exactly make-bundle's files, INSTALL.md and its provision tools included"
+urun() { (cd "$R" && PATH="$t/stub:$PATH" tools/release "$@") > "$t/log" 2>&1; }
+if urun --version "$V" upload; then fail "the upload stage stops for the maintainer"; fi
+grep -q "release-upload --dry-run $B" "$t/log" || fail "runs tools/release-upload --dry-run on the bundle directory"
+grep -q 'SHA256SUMS signed by the release key' "$t/log" || fail "release-upload checked the bundle's signature"
+grep -q 'dry run, nothing uploaded' "$t/log" || fail "release-upload finished its dry run"
+grep -q "tools/release-upload --full --latest $B" "$t/log" || fail "prints the real upload for the maintainer"
+grep -q 'upload --done' "$t/log" || fail "says how to record the upload"
+[[ ! -s $t/stub.log ]] || fail "the dry run called a network tool: $(cat "$t/stub.log")"
+echo tampered >> "$R/$B/install"
+if urun --version "$V" upload; then fail "a bundle changed after signing is refused"; fi
+grep -q "release-upload --dry-run refuses" "$t/log" || fail "says release-upload refused the bundle"
+pass "the upload stage runs the real release-upload --dry-run on the bundle and prints the --full --latest upload"

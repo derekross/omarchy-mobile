@@ -211,6 +211,25 @@ function themeName(name) {
     .map(function(part) { return part.charAt(0).toUpperCase() + part.slice(1) }).join(" ")
 }
 
+// The Mobile data tile's icon: signal bars from tile-state.sh's data_signal
+// (0-100 while registered, -1 or missing with no network), the same glyphs
+// as the bar's StatusModel.cellularIcon, where 0 is the empty bars
+// (registered, no reading yet). Crossed out only with no modem, mobile data
+// off, or no network.
+function dataSignal(value) {
+  var text = String(value === undefined || value === null ? "" : value).trim()
+  if (!/^-?[0-9]+$/.test(text)) return -1
+  var n = parseInt(text, 10)
+  return n < 0 ? -1 : Math.min(100, n)
+}
+
+function dataIcon(available, enabled, signal) {
+  var strength = dataSignal(signal)
+  if (!available || !enabled || strength < 0) return String.fromCodePoint(0xF0783)
+  var bars = [0xF08BF, 0xF08BC, 0xF08BD, 0xF08BE]
+  return String.fromCodePoint(bars[Math.max(0, Math.min(3, Math.floor(strength / 25.01)))])
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     VERSION: VERSION,
@@ -237,6 +256,8 @@ if (typeof module !== "undefined") {
     parseProbe: parseProbe,
     powerStatus: powerStatus,
     dictationStatus: dictationStatus,
-    themeName: themeName
+    themeName: themeName,
+    dataSignal: dataSignal,
+    dataIcon: dataIcon
   }
 }

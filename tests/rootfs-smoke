@@ -26,7 +26,7 @@ if [[ $img == *.zst ]]; then
 fi
 d() { debugfs -R "$1" "$img" 2>/dev/null; }
 cat_() { d "cat $1"; }
-exists() { d "stat $1" | grep -q '^Inode:'; }
+exists() { d "stat $1" | grep -c '^Inode:' >/dev/null; }
 
 [[ $(dumpe2fs -h "$img" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] || fail "label omamobile-root"
 pass "ext4, label omamobile-root"
@@ -34,7 +34,7 @@ pass "ext4, label omamobile-root"
 passwd=$(cat_ /etc/passwd)
 grep -q '^root:' <<<"$passwd" || fail "/etc/passwd readable"
 grep -q '^alarm:' <<<"$passwd" && fail "no alarm account"
-awk -F: '$3 >= 1000 && $3 != 65534' <<<"$passwd" | grep -q . && fail "no user account"
+awk -F: '$3 >= 1000 && $3 != 65534' <<<"$passwd" | grep -c . >/dev/null && fail "no user account"
 [[ $(cat_ /etc/shadow | awk -F: '$1 == "root" {print substr($2, 1, 1)}') == '!' ]] || fail "root is locked"
 pass "no account but root, and root is locked"
 
@@ -47,16 +47,27 @@ pass "keyrings: Arch Linux ARM, Omarchy, Omarchy Mobile"
 conf=$(cat_ /etc/pacman.conf)
 order=$(grep -o '^\[[a-z]*\]' <<<"$conf" | tr -d '[]' | tr '\n' ' ')
 [[ $order == "options omamobile omarchy core extra alarm aur " ]] || fail "pacman.conf repository order: $order"
-grep -q 'file:///var/lib/omamobile/repo/\$arch' <<<"$(cat_ /etc/pacman.d/omamobile-mirrorlist)" || fail "[omamobile] mirrorlist"
+servers=$(cat_ /etc/pacman.d/omamobile-mirrorlist | grep -E '^[[:space:]]*Server' || true)
+case $servers in
+  'Server = https://pkgs.omamobile.org/stable/$arch') channel=stable ;;
+  'Server = https://pkgs.omamobile.org/development/$arch') channel=development ;;
+  'Server = file:///var/lib/omamobile/repo/$arch') channel=local ;;
+  *) fail "[omamobile] mirrorlist: one Server line, for stable, development or local (has: ${servers:-none})" ;;
+esac
+recorded=$(cat_ /usr/share/omamobile/rootfs/MANIFEST | sed -n 's/^omamobile channel: //p')
+[[ -z $recorded || $recorded == "$channel" ]] || fail "the MANIFEST says channel $recorded, the mirrorlist $channel"
 exists /var/lib/omamobile/repo/aarch64/omamobile.db || fail "the [omamobile] repository is in the image"
-pass "[omamobile] first in pacman.conf, its repository in the image"
+if [[ $channel != local ]] && exists /var/lib/pacman/sync/omamobile.db; then
+  fail "no build-time [omamobile] index in an image that follows $channel"
+fi
+pass "[omamobile] first in pacman.conf, channel $channel, its repository in the image"
 
 exists /usr/bin/omamobile-firstboot || fail "omamobile-firstboot installed"
 exists /usr/lib/systemd/system/multi-user.target.wants/omamobile-firstboot.service || fail "the first-boot unit is enabled"
 exists /etc/omamobile/firstboot.conf && fail "no firstboot.conf in the image (the installer writes it)"
 for unit in sshd NetworkManager systemd-networkd sddm; do
-  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -q "$unit.service" ||
-    d "ls -l /etc/systemd/system" | grep -q "display-manager.service" || fail "$unit enabled"
+  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -c "$unit.service" >/dev/null ||
+    d "ls -l /etc/systemd/system" | grep -c "display-manager.service" >/dev/null || fail "$unit enabled"
 done
 pass "first boot unit, sshd, NetworkManager, networkd and SDDM enabled"
 
@@ -66,6 +77,15 @@ release=$(sed -n 's/^kernel modules: \([^ ]*\) .*/\1/p' <<<"$manifest")
 [[ -n $release ]] && exists "/usr/lib/modules/$release/modules.dep" || fail "kernel modules for $release, with depmod run"
 grep -q '^omamobile-device-[a-z0-9]* .* omamobile$' <<<"$manifest" || fail "a device package from [omamobile] in the MANIFEST"
 pass "MANIFEST, device package, modules for $release"
+# A device whose package ships boot files: the kernel is linux-omamobile,
+# the release the boot images were built from, with its slot-B hook, and
+# no AUTO_WRITE in the image (install-phone writes it)
+if exists /usr/share/omamobile/linux/kernel.release; then
+  [[ $(cat_ /usr/share/omamobile/linux/kernel.release) == "$release" ]] || fail "linux-omamobile is the MANIFEST's release $release"
+  exists /usr/bin/omamobile-boot-update || fail "omamobile-boot-update comes with linux-omamobile"
+  exists /etc/omamobile/boot-update.conf && fail "no boot-update.conf in the image (the installer writes it)"
+  pass "kernel package linux-omamobile ($release) and omamobile-boot-update, hook off in the image"
+fi
 
 # Images from before omamobile-omarchy patched Omarchy in build-inside
 if exists /usr/bin/omamobile-omarchy-patches; then
@@ -82,11 +102,41 @@ if exists /usr/lib/omamobile-omarchy/lock-pam; then
   pass "the lock's PAM file (omarchy-lock-password) is in the image"
 fi
 
+# Voice out of the box (images from before it have no omamobile-voice): the
+# engine, its user daemon and the speech model omamobile-setup-user links
+if grep -q '^omamobile-voice ' <<<"$manifest"; then
+  exists /usr/bin/voxtype || fail "voxtype is installed with omamobile-voice"
+  exists /usr/lib/systemd/user/voxtype.service || fail "Voxtype's user unit is installed"
+  exists /usr/share/omamobile/voice/models/ggml-base.en.bin || fail "the base.en speech model is in the image"
+  pass "voice out of the box: voxtype, its user unit and base.en"
+fi
+
+# Phone, Contacts and Messages (images from before omamobile-apps 0.2.1 have
+# none): the apps, their launchers and the agent, which D-Bus activation
+# starts when an app needs it; its user unit isn't enabled in the image.
+if grep -q '^omaphone ' <<<"$manifest"; then
+  for f in /usr/bin/omaphone /usr/bin/omamessages /usr/bin/omatel-agent \
+           /usr/share/applications/org.omamobile.Phone.desktop /usr/share/applications/org.omamobile.Contacts.desktop \
+           /usr/share/applications/org.omamobile.Messages.desktop /usr/share/dbus-1/services/org.omamobile.Phone1.service; do
+    exists "$f" || fail "telephony apps: $f"
+  done
+  exists /etc/systemd/user/default.target.wants/omatel-agent.service && fail "omatel-agent is not enabled in the image"
+  pass "Phone, Contacts, Messages and omatel-agent (D-Bus activated)"
+fi
+# Nothing in the image starts the modem or its RIL at boot: enabling them is
+# MODEM-PLAN M4.6's step (each boot powers the modem, each reboot costs one
+# recovered UFS error-handler pass), never the image's.
+for unit in omamobile-modem omamobile-sitd omamobile-sit-data omamobile-mmd; do
+  d "ls -l /etc/systemd/system/multi-user.target.wants" | grep -c "$unit\.service" >/dev/null && fail "$unit is not enabled in the image"
+  d "ls -l /etc/systemd/system/omamobile-sitd.service.wants" | grep -c "$unit\.service" >/dev/null && fail "$unit is not enabled in the image"
+done
+pass "no modem unit enabled at boot"
+
 exists /etc/pacman.d/gnupg && fail "no pacman keyring (it holds a private key)"
-d "ls /etc/ssh" | grep -q ssh_host_ && fail "no SSH host keys"
+d "ls /etc/ssh" | grep -c ssh_host_ >/dev/null && fail "no SSH host keys"
 [[ $(cat_ /etc/machine-id) == uninitialized ]] || fail "machine id uninitialized"
 exists /root/.ssh && fail "no root SSH keys"
-d "ls -p /etc/NetworkManager/system-connections" | grep -q 'nmconnection' && fail "no Wi-Fi connections"
+d "ls -p /etc/NetworkManager/system-connections" | grep -c 'nmconnection' >/dev/null && fail "no Wi-Fi connections"
 pass "no per-machine state: keyring, host keys, machine id, SSH keys, Wi-Fi"
 
 for p in /usr/lib/firmware/updates /usr/lib/omamobile-fp/root /usr/lib/omamobile-vendor/gnss/root \
