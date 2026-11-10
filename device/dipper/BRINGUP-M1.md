@@ -1,11 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Xiaomi Mi 8 (dipper): RAM-only first light
 
-**Status (2026-11-09):** this PR's image booted by RAM on a Xiaomi Mi 8; the
-owner saw the console, USB/SSH and read-only storage gate passed, the watchdog
-feeder ran. Volume Down generated `KEY_VOLUMEDOWN` on the second RAM image;
-it has not been rechecked on this image. Results and the final image hash are
-in [the notes PR #330].
+**Status (2026-11-10):** boot image `0ee4f11d1973085c434e741a2e9dd73af5a9cd157296c25801ed5a92a6b9e9d9` booted by RAM on a Xiaomi Mi 8 using kernel/DTS PR #220 at `055a4019998f22cc0e2a8afef7650274a6ce0657`. The root was initramfs; all 85 UFS partition flags were read-only. The `sda` sysfs disk had `ro=0`, but its `/dev/sda` node was absent; `sdb`–`sdf` were read-only. The guard confirmed this state. `qcom_wdt` and its feeder ran, simpledrm registered `fb0`, USB/SSH worked, and `/proc/iomem` reserved `0x85fc0000–0x8a8fffff`, covering the former TZ range. `reboot-to bootloader` returned the phone to fastboot without UFS writes. Physical input events were not captured on this exact image. Full results are in [the notes PR #330].
 The FTS5 driver from [touch #219] is merged into linux-omarchy-mobile. The
 Dipper board DTS is under review in [DTS #220], and the EA8074 panel driver is
 under review in [panel #218].
