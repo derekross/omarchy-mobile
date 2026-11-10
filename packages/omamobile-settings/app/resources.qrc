@@ -1,0 +1,16 @@
+<!-- SPDX-License-Identifier: MIT -->
+<RCC>
+  <qresource prefix="/">
+    <file>Main.qml</file>
+    <file>AboutPage.qml</file>
+    <file>catalog.json</file>
+    <file>icons/system.svg</file>
+    <file>SettingsStyle.qml</file>
+  <file>SettingsButton.qml</file>
+  <file>SettingsTextField.qml</file>
+  <file>SettingsLabel.qml</file>
+  <file>SettingsItemDelegate.qml</file>
+  <file>SettingsScrollBar.qml</file>
+  <file>qmldir</file>
+</qresource>
+</RCC>
