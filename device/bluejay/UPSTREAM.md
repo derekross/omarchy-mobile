@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Bluejay development source and review status
 
-Status (2026-11-09): documentation split from [#543](https://github.com/derekross/omarchy-mobile/pull/543).
+Status (2026-11-10): documentation split from [#543](https://github.com/derekross/omarchy-mobile/pull/543), now closed unmerged in favour of the split PRs below.
 The historical source below demonstrates one working development handset; it
 is not a release installer. No code or device descriptor is changed by this
 PR. Source-only instructions are not authority to run a phone operation.
@@ -10,13 +10,13 @@ PR. Source-only instructions are not authority to run a phone operation.
 
 | Topic | PR | Remaining work |
 | --- | --- | --- |
-| NCM aggregation retry | [#225](https://github.com/derekross/linux-omarchy-mobile/pull/225) | Suspend-aware retry, transfer test and reference-device validation |
-| Retained-memory exclusions | [#226](https://github.com/derekross/linux-omarchy-mobile/pull/226) | Range provenance and debug-info node naming |
-| GS101 PCIe/PHY | [#227](https://github.com/derekross/linux-omarchy-mobile/pull/227) | PCI endpoint power control and per-compatible match data |
-| BCM4389 bring-up | [#228](https://github.com/derekross/linux-omarchy-mobile/pull/228) | Device-tree configuration and squashed ordering fix |
-| ALIX touch | [#229](https://github.com/derekross/linux-omarchy-mobile/pull/229) | USI probe evidence and staging cleanup |
-| Disabled Wi-Fi DT | [#230](https://github.com/derekross/linux-omarchy-mobile/pull/230) | Merge after #227 and rebase |
-| Trusty trace API | [#231](https://github.com/derekross/linux-omarchy-mobile/pull/231) | Ready for review; no Trusty runtime claimed |
+| NCM aggregation retry | [#225](https://github.com/derekross/linux-omarchy-mobile/pull/225) | Suspend handling revised; separate selftests and validate on the reference phone, including laptop sleep |
+| Retained-memory exclusions | [#226](https://github.com/derekross/linux-omarchy-mobile/pull/226) | Provenance and node naming addressed; passing CI, awaiting maintainer merge |
+| GS101 PCIe/PHY | [#227](https://github.com/derekross/linux-omarchy-mobile/pull/227) | Power control and match data revised; explain single link try/history suppression and qualify a fresh 6a boot |
+| BCM4389 bring-up | [#228](https://github.com/derekross/linux-omarchy-mobile/pull/228) | Cache DMA-size limit at probe, count size drops and keep chip-only bring-up separate |
+| ALIX touch | [#229](https://github.com/derekross/linux-omarchy-mobile/pull/229) | Staging knobs removed; check reset-order header and qualify a fresh 6a boot |
+| Disabled Wi-Fi DT | [#230](https://github.com/derekross/linux-omarchy-mobile/pull/230) | Merge after both #227 and #228, then rebase to its own two commits |
+| Trusty trace API | [#231](https://github.com/derekross/linux-omarchy-mobile/pull/231) | Merged 2026-11-09; no Trusty runtime claimed |
 
 All seven submitted heads passed CI. That is build/policy evidence, not
 runtime qualification of the rebased stack. The tested source is the
@@ -26,8 +26,12 @@ contributor's `bringup/bluejay-tested-20261108`, commit `c934e316b`, based on
 
 ## Separate changes
 
-The initramfs and installer changes affect every device and will be submitted
-separately, with existing descriptors retaining their behavior. The planned
+The initramfs and installer changes affect every device and are submitted
+separately as [#562](https://github.com/derekross/omarchy-mobile/pull/562) and
+[#563](https://github.com/derekross/omarchy-mobile/pull/563), with existing
+descriptors retaining their behavior unless explicitly opted in. Historical
+startup is submitted in [#565](https://github.com/derekross/omarchy-mobile/pull/565),
+which follows #562 for its matching root-ready marker. The planned
 Bluejay package builds on the passive first-light proposal [#346](https://github.com/derekross/omarchy-mobile/pull/346).
 Kernel-release pins, module hashes and experimental startup belong in
 `device/bluejay/bringup/` until their dependencies merge. No combined package
@@ -37,7 +41,8 @@ The tested overlays, startup files, Aquamarine patch and probe tools remain
 inspectable at [the immutable #543 source](https://github.com/latentoperator/omarchy-mobile/tree/6ad4651f8ac151333345c72db99f1fd83259696f).
 The subsystem plans describe them historically; their relative file paths do
 not imply that this documentation-only PR installs those files. The original
-#543 remains a draft while its split replacements are reviewed.
+#543 is closed unmerged in favour of documentation [#561](https://github.com/derekross/omarchy-mobile/pull/561),
+initramfs #562, installer #563 and bring-up #565.
 
 ## Tested desktop dependencies and limits
 

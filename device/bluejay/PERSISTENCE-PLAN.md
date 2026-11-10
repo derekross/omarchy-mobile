@@ -71,8 +71,10 @@ Bluetooth, battery/charging, sensors, cameras and suspend remain unfinished.
 ## Review split, 2026-11-09
 
 The tested implementation above is historical development evidence, not an
-installed-package claim. Its code remains in #543 while separate initramfs,
-installer, bring-up and passive-package changes are prepared. The neutral
+installed-package claim. Its code remains inspectable at the immutable #543
+source linked in [UPSTREAM.md](UPSTREAM.md). The separate initramfs, installer
+and bring-up changes are under review as #562, #563 and #565; passive-package
+coordination with #346 remains pending. The neutral
 initramfs proposal uses descriptor settings and `root-boot-pending`; the tested
 Bluejay helper used `bluejay-root-pending`. Those paths must not be mixed.
 No revised source has been booted. The shared no-USB crash is disabled only

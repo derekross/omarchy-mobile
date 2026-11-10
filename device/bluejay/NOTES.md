@@ -3,8 +3,13 @@
 
 ## 2026-11-09: review split and slot-success audit (offline)
 
-The development source is under review in [#543](https://github.com/derekross/omarchy-mobile/pull/543).
-It has not merged. The exact tested kernel is `c934e316b` in the contributor's
+The development source remains inspectable in [#543](https://github.com/derekross/omarchy-mobile/pull/543).
+As of 2026-11-10, it is closed unmerged in favour of documentation
+[#561](https://github.com/derekross/omarchy-mobile/pull/561), initramfs
+[#562](https://github.com/derekross/omarchy-mobile/pull/562), installer
+[#563](https://github.com/derekross/omarchy-mobile/pull/563) and bring-up
+[#565](https://github.com/derekross/omarchy-mobile/pull/565).
+The exact tested kernel is `c934e316b` in the contributor's
 `bringup/bluejay-tested-20261108` branch; the revised [kernel topics #225 through #231](UPSTREAM.md#kernel-topics-in-review) are not a new hardware-qualified stack. This documentation submission
 changes no package, descriptor, initramfs, startup service or phone.
 
