@@ -168,6 +168,28 @@ Item {
       onClicked: root.close()
     }
 
+    // Swipe up from the bottom edge closes the page, as on the Wi-Fi and
+    // Bluetooth pages: full screen, it covers the dock that takes that swipe
+    // on the home screen. The page's body ends above the strip, so it never
+    // lies over the end of the page, where a scroll would close it instead.
+    Item {
+      id: swipeStrip
+      z: 100
+      anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+      height: Math.max(28, Style.space(36))
+
+      DragHandler {
+        target: null
+        xAxis.enabled: false
+        property real swipeY: 0
+        onActiveTranslationChanged: swipeY = activeTranslation.y
+        onActiveChanged: {
+          if (active) swipeY = 0
+          else if (swipeY < -24) root.close()
+        }
+      }
+    }
+
     BorderSurface {
       id: panel
 
@@ -191,7 +213,7 @@ Item {
         anchors.fill: parent
         anchors.topMargin: panel.contentTopInset
         anchors.rightMargin: panel.contentRightInset
-        anchors.bottomMargin: panel.contentBottomInset
+        anchors.bottomMargin: Math.max(panel.contentBottomInset, swipeStrip.height)
         anchors.leftMargin: panel.contentLeftInset
 
         // ---------- Header: back and title
