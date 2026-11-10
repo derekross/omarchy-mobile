@@ -5,7 +5,9 @@
 # unknown bootloader slots, reserved user names, partitions outside the
 # storage-guard allowlist, a bad root image checksum), the dry run's output
 # (exactly the allowed commands), a full run's fastboot calls (exactly those
-# commands, nothing else), and the first-boot file it writes into the image.
+# commands, nothing else), the first-boot file it writes into the image, and
+# the first install's measurement of the other bootloader slot against a fake
+# phone that keeps its slots in a state file.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 SRC=$PWD
@@ -60,11 +62,70 @@ ssh-keygen -q -t ed25519 -N '' -C test -f "$t/home/.ssh/id_ed25519" 2>/dev/null 
   echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl test' > "$t/home/.ssh/id_ed25519.pub"
 
 # The fake fastboot: logs every call; "getvar all" prints $T/vars;
-# a userdata flash keeps a copy of the image for inspection
+# a userdata flash keeps a copy of the image for inspection.
+# With $T/state (written by phone() below) it is a phone with two slots: the
+# file holds the active and the current slot, each slot's bootloader version
+# and flags; --set-active=x and "reboot bootloader" update it and "getvar all"
+# prints from it, with no per-slot bootloader versions (as cheetah's doesn't).
+# After a restart the phone is off the bus for away_polls "devices" calls.
+# Faults: fail_set_active=N (the Nth --set-active fails), vanish_set_active=N
+# (it fails and the phone is gone), lost_after=N (gone for good after the Nth
+# restart), stuck=N (the Nth restart doesn't change the current slot),
+# drift=N (slot a reports another version after the Nth restart),
+# other_phone=1 (another serial is listed while this one is away).
 mkdir -p "$t/bin"
 cat > "$t/bin/fastboot" <<'EOF'
 #!/bin/bash
 echo "$*" >> "$T/fastboot.log"
+if [[ -f $T/state ]]; then
+  . "$T/state"
+  save() {
+    for v in active current version_a version_b successful_a unbootable_a retry_a successful_b unbootable_b retry_b \
+      away away_polls reboots set_actives fail_set_active vanish_set_active lost_after stuck drift other_phone; do
+      printf '%s=%q\n' "$v" "${!v}"
+    done > "$T/state"
+  }
+  if [[ $1 == devices ]]; then
+    if ((away == 0)); then printf 'FAKE123\tfastboot\n'; exit 0; fi
+    ((away > 0)) && away=$((away - 1)) && save
+    ((other_phone)) && printf 'OTHER999\tfastboot\n'
+    exit 0
+  fi
+  [[ $1 == -s && $2 == FAKE123 ]] || exit 1
+  shift 2
+  ((away == 0)) || { echo "< waiting for FAKE123 >" >&2; exit 1; }
+  case "$*" in
+    "getvar all")
+      {
+        printf '%s\n' product:testdev unlocked:yes "current-slot:$current"
+        v=version_$current; echo "version-bootloader:${!v}"
+        for x in a b; do
+          for f in successful unbootable retry; do
+            v=${f}_$x; n=$f; [[ $f == retry ]] && n=retry-count
+            echo "slot-$n:$x:${!v}"
+          done
+        done
+        printf 'partition-size:%s: 0x4000000\n' boot_b vendor_boot_b vendor_kernel_boot_b
+        printf '%s\n' 'partition-size:init_boot_b: 0x800000' 'partition-size:dtbo_b: 0x1000000' 'all:'
+      } | sed 's/^/(bootloader) /' >&2 ;;
+    --set-active=[ab])
+      set_actives=$((set_actives + 1)) x=${1#--set-active=}
+      if ((set_actives == vanish_set_active)); then away=-1; save; echo "FAILED (Write to device failed)" >&2; exit 1; fi
+      if ((set_actives == fail_set_active)); then save; echo "FAILED (remote: 'no')" >&2; exit 1; fi
+      active=$x; printf -v "successful_$x" no; printf -v "unbootable_$x" no; printf -v "retry_$x" 3
+      save ;;
+    "reboot bootloader")
+      reboots=$((reboots + 1))
+      ((reboots == stuck)) || current=$active
+      ((reboots == drift)) && version_a=cloudripper-0
+      away=$away_polls; ((reboots == lost_after)) && away=-1
+      save ;;
+    flash\ *) [[ $2 == userdata ]] && cp "$3" "$T/userdata.flashed" ;;
+    reboot) ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
 if [[ $1 == devices ]]; then printf 'FAKE123\tfastboot\n'; exit 0; fi
 [[ $1 == -s ]] && shift 2
 case $1 in
@@ -91,11 +152,13 @@ EOF
 }
 answers() {
   # user name(s), password twice, host, time zone, name, email, Wi-Fi, key, confirmation
-  printf '%s\n' "${USERS:-alice}" 1234 1234 "" UTC "Alice Example" "" "${SSID:-Home Net}" "${PSK:-correct horse}" "" "${CONFIRM:-testdev}"
+  # PROBE, when set: the answer to the slot check's question, asked first
+  printf '%s\n' ${PROBE+"$PROBE"} "${USERS:-alice}" 1234 1234 "" UTC "Alice Example" "" "${SSID:-Home Net}" "${PSK:-correct horse}" "" "${CONFIRM:-testdev}"
 }
 install() {
   : > "$t/fastboot.log"
-  answers | HOME=$t/home PATH="$t/bin:$PATH" "$R/tools/install-phone" --device testdev --images "$t/images" \
+  answers | HOME=$t/home PATH="$t/bin:$PATH" OMAMOBILE_SLOT_PROBE_POLL=0.02 OMAMOBILE_SLOT_PROBE_TIMEOUT=8 \
+    "$R/tools/install-phone" --device testdev --images "$t/images" \
     --work "$t/work" "$@" > "$t/out" 2>&1
 }
 flashing_calls() { grep -v -E '^(devices|-s FAKE123 getvar all)$' "$t/fastboot.log" || true; }
@@ -136,7 +199,8 @@ want="-s FAKE123 flash boot_b $t/images/boot.img
 -s FAKE123 reboot"
 command -v img2simg >/dev/null || want=${want//root.simg/root.img}
 [[ $(flashing_calls) == "$want" ]] || { flashing_calls; fail "a run sends exactly the allowed commands"; }
-pass "full run: fastboot gets exactly slot B's images, userdata, set-active b, reboot"
+grep -c 'bootloader cloudripper-17.0-15199429 on both slots$' "$t/out" >/dev/null || fail "per-slot versions from the phone are compared as they are"
+pass "full run: fastboot gets exactly slot B's images, userdata, set-active b, reboot (per-slot versions reported: no slot round trip)"
 
 flashed=$t/userdata.flashed
 if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
@@ -208,7 +272,6 @@ refuse "a locked bootloader"; grep -q locked "$t/out" || fail "says the bootload
 vars "" "" $'version-bootloader-a:cloudripper-17.0-1\nversion-bootloader-b:cloudripper-16.0-9'
 refuse "different bootloader slots"; grep -q 'slots differ' "$t/out" || fail "says the slots differ"
 vars
-refuse "an unknown other slot"; grep -q -- '--bootloader-slots-match' "$t/out" || fail "says how to confirm the other slot"
 refuse "a wrong confirmed version" --bootloader-slots-match cloudripper-16.0-9
 install --dry-run --bootloader-slots-match cloudripper-17.0-15199429 || { cat "$t/out"; fail "a confirmed matching version passes"; }
 CURRENT_SLOT=b vars
@@ -218,6 +281,161 @@ install --dry-run --reinstall --bootloader-slots-match cloudripper-17.0-15199429
 grep -q 'slot b holds Omarchy Mobile' "$t/out" || fail "a reinstall says slot b will be replaced"
 vars
 pass "refuses another phone, a locked bootloader, mismatched or unconfirmed bootloader slots, and slot b without --reinstall"
+
+# --- The other slot's bootloader, measured on a first install (G4, D4) -------
+# The phone reports only the current slot's version, so a first install reads
+# the other slot's by a round trip, and puts the first slot back.
+VA=cloudripper-17.0-15199429
+phone() {  # [KEY=value ...]: a phone on slot a, stock marked successful there
+  printf '%s\n' active=a current=a "version_a=$VA" "version_b=$VA" \
+    successful_a=yes unbootable_a=no retry_a=3 successful_b=no unbootable_b=no retry_b=0 \
+    away=0 away_polls=1 reboots=0 set_actives=0 fail_set_active=0 vanish_set_active=0 lost_after=0 stuck=0 drift=0 other_phone=0 "$@" > "$t/state"
+}
+state() { sed -n "s/^$1=//p" "$t/state"; }
+probe_calls() { grep -v '^devices$' "$t/fastboot.log" || true; }
+there="-s FAKE123 --set-active=b
+-s FAKE123 reboot bootloader"
+back="-s FAKE123 --set-active=a
+-s FAKE123 reboot bootloader"
+get="-s FAKE123 getvar all"
+round_trip="$get
+$there
+$get
+$back
+$get"
+stops() {  # WHY EXPECTED-CALLS [install arguments]: it fails, having sent exactly these
+  local why=$1 calls=$2; shift 2
+  if install "$@"; then cat "$t/out"; fail "stops: $why"; fi
+  [[ $(probe_calls) == "$calls" ]] || { cat "$t/out"; probe_calls; fail "$why: exactly the expected fastboot calls"; }
+}
+
+# Both slots carry the same version: the exact calls, and the phone ends on
+# slot a as it started (the install itself is then declined at the codename)
+phone
+PROBE=yes CONFIRM=nope stops "an install declined after the slot check" "$round_trip"
+grep -c 'not confirmed; nothing was written' "$t/out" >/dev/null || { cat "$t/out"; fail "the slot check passes and the install goes on to its question"; }
+[[ $(state current) == a && $(state active) == a ]] || fail "the phone ends on slot a, active a"
+grep -c "bootloader $VA on both slots (slot b measured)" "$t/out" >/dev/null || fail "says both slots were measured"
+grep -c 'restarts into its bootloader screen twice' "$t/out" >/dev/null && grep -c 'Nothing is written to the phone.s storage' "$t/out" >/dev/null &&
+  grep -c 'about a minute' "$t/out" >/dev/null || fail "the owner is told what will happen, that nothing is written, and how long"
+[[ $(grep -n 'restarts into its bootloader screen twice\|Type yes to run this check' "$t/out" | cut -d: -f1 | tr '\n' ' ') =~ ^[0-9]+\ [0-9]+\ $ ]] || fail "told before it is asked"
+grep -c 'before: *a: successful yes, unbootable no, retry-count 3  b: successful no, unbootable no, retry-count 0$' "$t/out" >/dev/null &&
+  grep -c 'on slot b: *a: successful yes, unbootable no, retry-count 3  b: successful no, unbootable no, retry-count 3$' "$t/out" >/dev/null &&
+  grep -c 'after: *a: successful no, unbootable no, retry-count 3  b: successful no, unbootable no, retry-count 3$' "$t/out" >/dev/null ||
+  { cat "$t/out"; fail "records both slots' flags before, on the other slot and after"; }
+grep -c 'changed by the check: slot-successful:a yes -> no, slot-retry-count:b 0 -> 3$' "$t/out" >/dev/null || { cat "$t/out"; fail "names the flags the check changed"; }
+phone
+PROBE=yes install || { cat "$t/out"; fail "a first install with matching slots goes through"; }
+[[ $(probe_calls) == "$round_trip
+$want" ]] || { probe_calls; fail "the round trip, then exactly the install's commands"; }
+pass "slot check: other slot set active, restart, read, first slot set active again, restart, check; flags recorded; then the install"
+
+# The slots differ: slot a is active and current again before the refusal
+phone version_b=cloudripper-16.0-9
+PROBE=yes stops "bootloader slots that differ" "$round_trip"
+grep -c "slots differ (a: $VA, b: cloudripper-16.0-9)" "$t/out" >/dev/null || { cat "$t/out"; fail "says the slots differ, with both versions"; }
+[[ $(state current) == a && $(state active) == a ]] || fail "slot a is restored before the refusal"
+pass "slot check: differing slots are refused with slot a restored first"
+
+# The phone never comes back: nothing more is sent, the owner gets the way back
+recovery() {  # WHY
+  grep -c 'did not come back to its bootloader screen' "$t/out" >/dev/null && grep -c 'Nothing more is sent to it' "$t/out" >/dev/null || { cat "$t/out"; fail "$1: says the phone did not come back"; }
+  grep -cx '      2. fastboot -s FAKE123 --set-active=a' "$t/out" >/dev/null || { cat "$t/out"; fail "$1: gives the exact command that sets slot a active again"; }
+}
+phone lost_after=1 other_phone=1
+PROBE=yes stops "a phone gone after the first restart (another phone listed meanwhile)" "$get
+$there"
+recovery "after the first restart"
+grep -c '1. Bring it to its bootloader (fastboot) screen: with its buttons, as the install guide for Test Phone says' "$t/out" >/dev/null || fail "without FASTBOOT_BUTTONS, points at the install guide"
+{ descriptor; echo 'FASTBOOT_BUTTONS="with the phone off, hold Volume Down, then Power"'; } > "$R/device/testdev/device.conf"
+phone lost_after=2
+PROBE=yes stops "a phone gone after the second restart" "$get
+$there
+$get
+$back"
+recovery "after the second restart"
+grep -c '1. Bring it to its bootloader (fastboot) screen: with the phone off, hold Volume Down, then Power$' "$t/out" >/dev/null || fail "gives the descriptor's buttons"
+descriptor > "$R/device/testdev/device.conf"
+phone away_polls=8   # back one poll after the timeout: still nothing more
+PROBE=yes stops "a phone that comes back after the timeout" "$get
+$there"
+recovery "back too late"
+pass "slot check: a phone that doesn't come back in time gets no further command; the owner gets the buttons and the command"
+
+# A step fails after the first --set-active: slot a is set active again
+phone fail_set_active=1
+PROBE=yes stops "a failing --set-active" "$get
+-s FAKE123 --set-active=b
+-s FAKE123 --set-active=a"
+grep -c 'slot a was set active again' "$t/out" >/dev/null || { cat "$t/out"; fail "says slot a was set active again"; }
+[[ $(state active) == a ]] || fail "slot a is active after a failed --set-active"
+phone fail_set_active=2
+PROBE=yes stops "a failing second --set-active" "$get
+$there
+$get
+-s FAKE123 --set-active=a
+-s FAKE123 --set-active=a"
+[[ $(state active) == a ]] || fail "slot a is active after the retry"
+phone vanish_set_active=1
+PROBE=yes stops "a phone that goes away at --set-active" "$get
+-s FAKE123 --set-active=b"
+grep -c 'no longer answers in fastboot' "$t/out" >/dev/null && grep -cx '      2. fastboot -s FAKE123 --set-active=a' "$t/out" >/dev/null || { cat "$t/out"; fail "a vanished phone gets words, not commands"; }
+phone stuck=1
+PROBE=yes stops "the wrong current slot after the first restart" "$get
+$there
+$get
+-s FAKE123 --set-active=a"
+grep -c "after the first restart the phone reports current slot 'a', not b" "$t/out" >/dev/null || { cat "$t/out"; fail "names the wrong slot"; }
+[[ $(state active) == a ]] || fail "slot a is active after a restart that didn't switch"
+phone stuck=2
+PROBE=yes stops "the wrong current slot after the second restart" "$round_trip
+-s FAKE123 --set-active=a"
+grep -c "after the second restart the phone reports current slot 'b', not a" "$t/out" >/dev/null || { cat "$t/out"; fail "names the wrong slot after the second restart"; }
+phone drift=2
+PROBE=yes stops "a first slot whose version changed across the check" "$round_trip
+-s FAKE123 --set-active=a"
+grep -c "slot a reported bootloader $VA before the check and cloudripper-0 after it" "$t/out" >/dev/null || { cat "$t/out"; fail "names both versions of slot a"; }
+pass "slot check: a failed step, a wrong slot after a restart or a changed version sets slot a active again, once, and stops"
+
+# What never runs it
+phone
+install --dry-run || { cat "$t/out"; fail "a dry run with an unmeasured slot succeeds"; }
+[[ $(probe_calls) == "$get" ]] || { probe_calls; fail "a dry run sends none of the slot check"; }
+[[ $(grep 'would run:' "$t/out" | head -6) == "    would run: fastboot -s FAKE123 --set-active=b
+    would run: fastboot -s FAKE123 reboot bootloader
+    would run: fastboot -s FAKE123 getvar all
+    would run: fastboot -s FAKE123 --set-active=a
+    would run: fastboot -s FAKE123 reboot bootloader
+    would run: fastboot -s FAKE123 getvar all" ]] || { cat "$t/out"; fail "a dry run prints the slot check's sequence"; }
+[[ $(grep -c 'would run:' "$t/out") == 14 ]] || fail "a dry run prints the slot check, then the install's commands"
+grep -c 'was not measured' "$t/out" >/dev/null || fail "a dry run says the other slot was not measured"
+phone
+PROBE=no stops "the slot check when the owner says no" "$get"
+grep -c -- "--bootloader-slots-match $VA" "$t/out" >/dev/null || fail "says how to confirm the other slot instead"
+phone current=b active=b successful_b=yes
+stops "a reinstall with an unmeasured slot" "$get" --reinstall
+grep -c -- "rerun with --bootloader-slots-match $VA. On a reinstall the installer does not switch slots" "$t/out" >/dev/null || { cat "$t/out"; fail "a reinstall asks for --bootloader-slots-match and says why"; }
+phone
+stops "--reinstall from slot a with an unmeasured slot" "$get" --reinstall
+phone current=b active=b
+stops "slot b without --reinstall" "$get"
+grep -c -- 'rerun with --reinstall' "$t/out" >/dev/null || fail "slot b without --reinstall gets the stock-on-b refusal, not the slot check"
+phone
+install --bootloader-slots-match "$VA" || { cat "$t/out"; fail "the option installs without the slot check"; }
+[[ $(probe_calls) == "$get
+$want" ]] || { probe_calls; fail "--bootloader-slots-match: no slot check, exactly the install's commands"; }
+{ descriptor; echo 'BOOTLOADER_SLOT_PROBE=no'; } > "$R/device/testdev/device.conf"
+phone
+PROBE=yes stops "the slot check on a phone whose descriptor opts out" "$get"
+grep -c -- "rerun with --bootloader-slots-match $VA. The installer does not switch slots to measure it on this phone" "$t/out" >/dev/null || { cat "$t/out"; fail "an opted-out phone asks for --bootloader-slots-match"; }
+{ descriptor; echo 'BOOTLOADER_SLOT_PROBE=maybe'; } > "$R/device/testdev/device.conf"
+stops "a BOOTLOADER_SLOT_PROBE that is neither yes nor no" ""
+{ descriptor; echo 'BOOTLOADER_SLOT_PROBE=yes'; } > "$R/device/testdev/device.conf"
+phone
+install --dry-run || { cat "$t/out"; fail "BOOTLOADER_SLOT_PROBE=yes is the default"; }
+descriptor > "$R/device/testdev/device.conf"
+rm "$t/state"
+pass "slot check: not in a dry run, not without the owner's yes, not on a reinstall, not with --bootloader-slots-match, not when the descriptor opts out"
 
 vars "" "" $'version-bootloader-a:x\nversion-bootloader-b:x'
 for name in root omamobile omarchy alarm omandroid; do
@@ -456,7 +674,28 @@ code=$(grep -v '^[[:space:]]*#' tools/install-phone)
 grep -nE '(run|fb|FASTBOOT")[^#]*( -w( |$)|--slot|flashing|erase|format|oem )' <<<"$code" && fail "no -w, --slot, flashing, erase, format or oem"
 [[ $(grep -cE '^\s*run flash ' <<<"$code") == 1 ]] || fail "one flash call, inside flash()"
 [[ $(grep -cE '^\s*fb "\$@"' <<<"$code") == 1 ]] || fail "one fastboot write path, inside run()"
-pass "one guarded write path; no -w, --slot, flashing, erase, format or oem"
+# The slot check (pfb and the slot_probe functions) is the one other place
+# that changes anything, and only the slot flags: its calls are getvar all,
+# --set-active=<a slot variable> and reboot bootloader, nothing else, and no
+# code outside it makes them.
+probe=$(awk '/^(pfb|slot_probe[a-z_]*)\(\) \{/ { f = 1 } f { print } f && /\}$/ && (/^\}$/ || /^pfb\(\)/) { f = 0 }' <<<"$code")
+rest=$(awk '/^(pfb|slot_probe[a-z_]*)\(\) \{/ { f = 1 } !f { print } f && /\}$/ && (/^\}$/ || /^pfb\(\)/) { f = 0 }' <<<"$code")
+[[ -n $probe && $(wc -l <<<"$probe") -gt 60 && $(($(wc -l <<<"$probe") + $(wc -l <<<"$rest"))) == $(wc -l <<<"$code") ]] || fail "the slot check's functions are found"
+[[ $(sed 's/^/ /' <<<"$probe" | grep -oE '[^A-Za-z_"$]pfb [^|;)]*' | sed -E 's/^.*(pfb )/\1/; s/ +$//' | LC_ALL=C sort -u) == 'pfb --set-active="$other"
+pfb --set-active="$slot"
+pfb --set-active="$x"
+pfb getvar all 2>&1
+pfb reboot bootloader' ]] || fail "the slot check sends only getvar all, --set-active=<slot> and reboot bootloader (no flash, erase, boot or oem)"
+sed 's/^/ /' <<<"$rest" | grep -nE '[^A-Za-z_]pfb( |$)' && fail "pfb is used only inside the slot check"
+[[ $(sed 's/^/;/' <<<"$code" | grep -oE '([;&|({]|then|do|else)\s*run\s[^|;)]*' | sed -E 's/^.*(run\s)/\1/; s/ +$//' | LC_ALL=C sort) == 'run --set-active=b
+run flash "$part" "$file"
+run reboot' ]] || fail "run() is called three times: flash, --set-active=b and reboot"
+[[ $(sed 's/^/ /' <<<"$code" | grep -oE '[^A-Za-z_p]fb [^(|;]*' | sed -E 's/^.*(fb )/\1/; s/ +$//' | LC_ALL=C sort) == 'fb "$@"
+fb getvar all 2>&1' ]] || fail "fb is called twice: getvar all, and run()'s write path"
+[[ $(grep -oE '"\$FASTBOOT" (-s "\$serial" "\$@"|[a-z-]+)' <<<"$code" | LC_ALL=C sort | uniq -c | sed -E 's/^ +//') == '2 "$FASTBOOT" -s "$serial" "$@"
+1 "$FASTBOOT" debugfs
+2 "$FASTBOOT" devices' ]] || fail "fastboot itself is run by fb(), pfb() and the two device listings only"
+pass "one guarded write path; no -w, --slot, flashing, erase, format or oem; --set-active=<slot> and reboot bootloader in the slot check only"
 
 # Reserved names agree with omamobile-firstboot's
 a=$(sed -n "s/^RESERVED='\(.*\)'$/\1/p" tools/install-phone)
