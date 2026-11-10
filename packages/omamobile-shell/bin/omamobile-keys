@@ -174,6 +174,42 @@ long_press() {
   fi
 }
 
+# omarchy-brightness-display off only asks Hyprland to switch the display off.
+# Hyprland reports it off at once (dpmsStatus), but the panel itself goes off
+# only when the compositor commits it, 0.3 s later on the Pixel 8 Pro
+# (measured: dpmsStatus false at +0.09 s, bl_power 4 and the DRM connector's
+# dpms Off at +0.35 s), and where bl_power is not writable by the user the panel
+# follows only then. Put the brightness back before that and the panel shows
+# the lock screen for an instant at full brightness, then goes black.
+# So wait for what the panel reports: the backlight's bl_power, or a connected
+# internal connector's dpms; Hyprland's answer only on a machine with neither.
+# panel_dark takes the backlight device name (may be empty).
+panel_dark() {
+  local sys=${OMAMOBILE_KEYS_SYSFS:-/sys} device=$1 f source=
+  if [[ -n $device && -r $sys/class/backlight/$device/bl_power ]]; then
+    source=1
+    [[ $(<"$sys/class/backlight/$device/bl_power") != 0 ]] && return 0
+  fi
+  for f in "$sys"/class/drm/card*-{DSI,eDP,LVDS}-*; do
+    [[ -r $f/dpms && -r $f/status && $(<"$f/status") == connected ]] || continue
+    source=1
+    [[ $(<"$f/dpms") == Off ]] && return 0
+  done
+  [[ -z $source ]] && screen_off
+}
+
+# At most 2 s by the clock, so a compositor that never answers cannot hold the
+# key handler.
+wait_screen_off() {
+  local end
+  end=$(( ${EPOCHREALTIME/./} + 2000000 ))
+  while (( ${EPOCHREALTIME/./} < end )); do
+    panel_dark "$1" && return 0
+    sleep 0.05
+  done
+  return 0
+}
+
 short_press() {
   # Debounce: a second press within 0.8 s of the first, while it was still
   # locking and powering the panel off, read the screen as on and saved a
@@ -220,7 +256,8 @@ short_press() {
     lock_dark
     omarchy-brightness-display off
     # The brightness the next wake lights up with: the saved level, or 40 % when
-    # the press caught the panel at 0.
+    # the press caught the panel at 0. Only once the panel is really off.
+    wait_screen_off "$device"
     if [[ -n $device ]]; then
       [[ -n $level ]] && brightnessctl -q -d "$device" set "$level" || brightnessctl -q -d "$device" set 40%
     fi
