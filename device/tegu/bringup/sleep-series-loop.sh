@@ -34,8 +34,9 @@ start_series() {
   log "series started (run $run, WFI=$WFI)"
 }
 run=1; total=0; captures=0; last25=0
-# The sleep targets stay masked outside tests: the series unmasks them, this puts them back
-trap 'timeout 20 $PS --fresh "systemctl mask sleep.target suspend.target >/dev/null 2>&1" >/dev/null 2>&1; log "sleep targets masked again"' EXIT
+# The series unmasks the sleep targets; on exit they go back to how they were found
+masked_before=$(timeout 20 $PS --fresh 'systemctl is-enabled sleep.target 2>/dev/null' 2>/dev/null)
+trap 'if [[ $masked_before == masked ]]; then timeout 20 $PS --fresh "systemctl mask sleep.target suspend.target >/dev/null 2>&1" >/dev/null 2>&1; log "sleep targets masked again, as found"; else log "sleep targets left unmasked, as found"; fi' EXIT
 # ATTACH=1: the series is already running on the palmtop; watch it without restarting it.
 [[ ${ATTACH:-0} == 1 ]] && log "attached to the running series" || start_series
 last_ok=$(date +%s)

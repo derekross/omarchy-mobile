@@ -116,7 +116,7 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
 N RTC-woken `systemctl suspend` cycles of S s, records each wake),
 `sleep-series-loop.sh` (laptop: polls the series, captures a dead wake,
 recovers with sysrq under a budget of MAXREC recoveries per 24 hours,
-records the next boot's ext4 recovery, restarts the series; it unmasks `sleep.target` and `suspend.target` for the run and masks them again when it exits),
+records the next boot's ext4 recovery, restarts the series; it unmasks `sleep.target` and `suspend.target` for the run and puts them back as it found them when it exits),
 `sleep-kernel-run.sh` (laptop: a rewrite of the owner's kit launcher, pushes a built kernel and starts the loop),
 `sleep-autosleep-series.sh` and `sleep-autosleep-watch.sh` (the everyday
 path: the shell's auto-sleep does the sleeping, the script only arms the
@@ -4764,3 +4764,5 @@ Auto-sleep series: cycles 1-3 clean (1802 s each); cycle 4 ended after 72 s by t
 Two faults of this session's own tooling on the way, both fixed in the scripts: the first start of this series ran 14 "cycles" in which no sleep happened at all, because the push script's keep-awake inhibitor (block mode) refused every `systemctl suspend` (`sleep-series.sh` now stops when `suspend_stats/success` doesn't advance, and the loop releases that inhibitor before a series); and the loop took a series that had failed to start on a young boot for a self-reboot.
 
 Run 4, the same sources built with #274's `CONFIG_PHY_ZUMA_PCIE=m` so that Wi-Fi comes up (the maintainer's request on kernel #224: sleep as it will land, with the PCIe nodes in use), follows.
+
+**Run 4 on the published tree, with Wi-Fi: 36 of 36 (2026-11-09, 17:50 to 18:31 MST palmtop clock).** The same sources as run 3 (`7.3.0-rc6-omamobile-push1-g6c9420bfa77f`, build #2), built with omarchy-mobile#274's `CONFIG_PHY_ZUMA_PCIE=m` on top of `kernel/configs/omamobile.config`, so the 9a's PCIe link and Wi-Fi come up from the in-tree drivers: `omamobile-tegu-graphics-start` reported GPU, display, haptics, torch, gauge, Bluetooth, NFC and Wi-Fi (wlan0, BCM4383 on `13120000.pcie`, Gen2 x1), 78 modules loaded, the session up, the modem masked, the published DTB with the ramoops overlay alone. `sleep-series-loop.sh`, N=36, S=60, Wi-Fi kept loaded across the sleeps (`/etc/omamobile/wifi-keep-across-sleep` is set on the palmtop): 36 sleeps of 59.1 to 60.5 s by dmesg, every one woken by the RTC alarm (`pm_wakeup_irq` 52), 0 UFS link or I/O error lines in the whole boot, no oops, `suspend_stats` 36 and 0. After the series wlan0 was up and passed traffic (ping over wlan0, 13 ms). brcmfmac probed the chip again after each wake, as the Wi-Fi hook's header describes (the chip loses its firmware in the sleep), and each probe logged one `brcmf_p2p_create_p2pdev: timeout` pair; nothing else from the driver. The Power-key wake on this kernel follows when the owner is back.
