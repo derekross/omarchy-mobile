@@ -5,17 +5,21 @@
 # a browser on your computer" and no sign-in code, so its web app was no
 # use (docs/TOUCH-PLAN.md 3.1 expected this). A user agent is per browser
 # process, so the web app gets its own profile
-# (~/.local/share/omarchy/webapps/<host>), which also keeps it out of the
+# (~/.local/share/omamobile/webapps/<host>), which also keeps it out of the
 # hand-off to a running browser; its window class stays
-# chrome-<host>__-Default. Every other web app launches as before. Google
-# Messages for Web looks the same with either user agent, so it is not
-# listed. Not for upstream Omarchy: a desktop has no phone user agent.
+# chrome-<host>__-Default. The profile is under omamobile/, not omarchy/:
+# Omarchy's upgrade tools still treat ~/.local/share/omarchy as its old
+# checkout and move it aside, which would take the WhatsApp sign-in with
+# it. The user agent names x86_64, as desktop Chromium on Linux does on
+# every CPU. Every other web app launches as before. Google Messages for
+# Web looks the same with either user agent, so it is not listed. Not for
+# upstream Omarchy: a desktop has no phone user agent.
 #
 # Against Omarchy 4.5.0.
 diff --git i/bin/omarchy-launch-webapp w/bin/omarchy-launch-webapp
 --- i/bin/omarchy-launch-webapp
 +++ w/bin/omarchy-launch-webapp
-@@ -30,6 +30,26 @@
+@@ -30,6 +30,29 @@ if [[ -z $browser_exec ]]; then
    exit 1
  fi
  
@@ -25,16 +29,19 @@ diff --git i/bin/omarchy-launch-webapp w/bin/omarchy-launch-webapp
 +# WhatsApp Web by going to web.whatsapp.com from a browser on your
 +# computer" instead of its sign-in code. A user agent is set per browser
 +# process, so the web app gets a process of its own: its own profile under
-+# ~/.local/share/omarchy/webapps/<host>, which also skips the hand-off to a
-+# running browser. Its window class stays chrome-<host>__-Default.
++# ~/.local/share/omamobile/webapps/<host>, which also skips the hand-off to
++# a running browser. That directory is ours: Omarchy's upgrade tools still
++# treat ~/.local/share/omarchy as its old checkout and move it aside. Its
++# window class stays chrome-<host>__-Default. The user agent names x86_64,
++# as desktop Chromium on Linux does on every CPU.
 +case $1 in
 +https://web.whatsapp.com | https://web.whatsapp.com/*)
 +  site=${1#https://}
 +  site=${site%%/*}
 +  major=$("$browser_exec" --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
 +  exec setsid uwsm-app -- $browser_exec \
-+    --user-data-dir="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy/webapps/$site" \
-+    "--user-agent=Mozilla/5.0 (X11; Linux $(uname -m)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major:-150}.0.0.0 Safari/537.36" \
++    --user-data-dir="${XDG_DATA_HOME:-$HOME/.local/share}/omamobile/webapps/$site" \
++    "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major:-150}.0.0.0 Safari/537.36" \
 +    --app="$1" "${@:2}"
 +  ;;
 +esac
