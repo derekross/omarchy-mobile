@@ -290,7 +290,7 @@ config, #274's PCIe PHY and the GNSS link driver), the same unit took the
 other branch, on the charger, watched over SSH with the owner away for the
 first boot:
 
-- Three boots in a row by the unit itself (18:32, 18:51 and 19:12 MST):
+- Three boots in a row by the unit itself (18:32, 18:50 and 19:12 MST):
   "drivers: the running kernel's" (`modprobe pcie_gs201_cp allow_hw=1`,
   `shm_ipc`, `cpif`, `gnss_spi`, `gnssif`), "modem OK: CP ONLINE" 8 s after
   the unit started, the phone service and the bridge up, registered at home
