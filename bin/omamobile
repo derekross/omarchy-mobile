@@ -123,8 +123,8 @@ load_device() {
     fi
   done < "$file"
   case $DEV_BOOT_METHOD in
-    android-v4|qcom-abl) ;;
-    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4 and qcom-abl" ;;
+    android-v4|android-v0|qcom-abl) ;;
+    *) die "$file: unsupported BOOT_METHOD=$DEV_BOOT_METHOD; this command supports android-v4, android-v0 and qcom-abl" ;;
   esac
   [[ $DEV_CODENAME == "$DEVICE" ]] || die "$file: CODENAME=$DEV_CODENAME, expected $DEVICE"
   # Safety: the guard's allowlist may name slot B's boot images and userdata
@@ -142,8 +142,31 @@ load_device() {
     seen_rw+="$p "
   done
   [[ $seen_rw == *" userdata "* ]] || die "$file: UFS_RW must include userdata"
+  # Optional: LUNs besides sda that hold UFS_RW partitions; the init guards
+  # each as it guards sda (whole-disk node removed, partitions one by one)
+  if [[ -n ${DEV_UFS_RW_LUNS:-} && ! $DEV_UFS_RW_LUNS =~ ^sd[b-z]( sd[b-z])*$ ]]; then
+    die "$file: UFS_RW_LUNS may hold only disk names sdb to sdz separated by spaces"
+  fi
 
-  if [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
+  if [[ $DEV_BOOT_METHOD == android-v0 ]]; then
+    # One header-v0 boot.img: a gzip kernel with the board DTB appended, the
+    # shared initramfs and CMDLINE, at the load offsets the descriptor gives
+    # (enchilada). No dtbo, no vendor_boot, no device package needed yet:
+    # images makes it for `fastboot boot`; flash, push, fastboot and the
+    # installer refuse it until a slot-B install has a CONTRIBUTING.md §3.1
+    # entry.
+    for key in CODENAME SOC DTB BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
+      p="DEV_$key"
+      [[ -n ${!p:-} ]] || die "$file: $key is missing"
+    done
+    for key in PAGESIZE BASE KERNEL_OFFSET RAMDISK_OFFSET SECOND_OFFSET TAGS_OFFSET; do
+      p="DEV_$key"
+      [[ ${!p:-} =~ ^(0x[0-9a-f]+|[0-9]+)$ ]] || die "$file: $key is missing or not a number"
+    done
+    [[ $DEV_PAGESIZE =~ ^(2048|4096|8192|16384)$ ]] || die "$file: PAGESIZE must be 2048, 4096, 8192 or 16384"
+    [[ $DEV_BOOT_IMAGES == boot ]] || die "$file: android-v0 BOOT_IMAGES may hold only boot"
+    slot_b_allowed boot || die "$file: boot_b is not in UFS_RW"
+  elif [[ $DEV_BOOT_METHOD == qcom-abl ]]; then
     for key in CODENAME SOC PACKAGE DTB BOOT_IMAGES UFS_RW INITRAMFS_INIT PANEL_SIZE; do
       p="DEV_$key"
       [[ -n ${!p:-} ]] || die "$file: $key is missing"
@@ -540,6 +563,9 @@ initramfs_config() {
   # The storage guard's allowlist. Without this file the init leaves every
   # partition read-only.
   printf '%s\n' "${rw[*]}" > "$etc/omamobile-ufs-rw"
+  if [[ -n ${DEV_UFS_RW_LUNS:-} ]]; then
+    printf '%s\n' "$DEV_UFS_RW_LUNS" > "$etc/omamobile-ufs-rw-luns"
+  fi
   if [[ -n $product ]]; then
     printf '%s\n' "$product" > "$etc/omamobile-usb-product"
   fi
@@ -611,10 +637,14 @@ cmd_initramfs() {
   say "Staging initramfs in $stage"
   rm -rf "$stage" && mkdir -p "$stage"
   tar -xzf "$dl/$tarball" -C "$stage"
-  local apk
+  # Each package list is read whole before it is used: `for apk in $(…)`
+  # loses alpine-fetch.py's exit status and unpacks what it printed
+  local apk apks
   # e2fsprogs-extra: resize2fs and dumpe2fs, to grow a freshly flashed root
   # to the whole userdata partition on its first boot (init, boot_arch)
-  for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra); do
+  apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" dropbear kexec-tools e2fsprogs e2fsprogs-extra) ||
+    die "tools/alpine-fetch.py failed for the initramfs's packages"
+  for apk in $apks; do
     tar -xzf "$apk" -C "$stage" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
   done
   # INITRAMFS_I2C_TOOLS=1: i2cget and i2cset (and their libi2c) for a device
@@ -623,7 +653,9 @@ cmd_initramfs() {
   if [[ ${DEV_INITRAMFS_I2C_TOOLS:-} == 1 ]]; then
     local i2c f
     i2c=$(mktemp -d)
-    for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" i2c-tools); do
+    apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" i2c-tools) ||
+      { rm -rf "$i2c"; die "INITRAMFS_I2C_TOOLS: tools/alpine-fetch.py failed for i2c-tools"; }
+    for apk in $apks; do
       tar -xzf "$apk" -C "$i2c" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' 2>/dev/null || true
     done
     for f in usr/sbin/i2cget usr/sbin/i2cset; do
@@ -686,11 +718,13 @@ cmd_initramfs() {
   # sysroot is already in use, otherwise the host clang against the same
   # musl sysroot. A first-light device has no bootctl.
   alpine_sysroot() {
-    local sysroot="$WORK/downloads/alpine/sysroot" apk
+    local sysroot="$WORK/downloads/alpine/sysroot" apk apks
     if [[ ! -f $sysroot/usr/lib/crt1.o ]]; then
       mkdir -p "$sysroot"
       tar -xzf "$dl/$tarball" -C "$sysroot"
-      for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" musl-dev); do
+      apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ver" "$dl/apks" musl-dev) ||
+        die "tools/alpine-fetch.py failed for the musl sysroot's musl-dev"
+      for apk in $apks; do
         tar -xzf "$apk" -C "$sysroot" 2>/dev/null || true
       done
     fi
@@ -781,6 +815,8 @@ cmd_images() {
   if [[ $DEV_BOOT_METHOD != qcom-abl ]]; then
     [[ -f $tools/mkbootimg.py ]] ||
       die "no mkbootimg.py in $tools: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKBOOTIMG_DIR)"
+  fi
+  if [[ $DEV_BOOT_METHOD == android-v4 ]]; then
     [[ -f $MKDTBOIMG ]] ||
       die "no mkdtboimg.py at $MKDTBOIMG: run tools/fetch-toolchain, or set SRC_DIR to an Android checkout (or MKDTBOIMG)"
   fi
@@ -801,6 +837,26 @@ cmd_images() {
     done
     "$fdtoverlay" -i "$dtb" -o "$img/$DEV_CODENAME-overlaid.dtb" "${ovs[@]}" || die "applying the overlays failed"
     dtb="$img/$DEV_CODENAME-overlaid.dtb"
+  fi
+
+  if [[ $DEV_BOOT_METHOD == android-v0 ]]; then
+    # This ABL gunzips the kernel and takes the DTB appended to it; the
+    # ramdisk is the shared initramfs. gzip -n keeps no name or time, so
+    # the bytes depend only on the inputs.
+    say "Boot image (header v0, DTB appended to the gzip kernel): $DEV_DTB"
+    gzip -9 -n -c "$boot/Image" > "$img/Image.gz"
+    cat "$img/Image.gz" "$dtb" > "$img/Image.gz-dtb"
+    python3 "$tools/mkbootimg.py" --header_version 0 \
+      --kernel "$img/Image.gz-dtb" --ramdisk "$KERNEL_OUT/initramfs.cpio.lz4" \
+      --cmdline "${DEV_CMDLINE:-}" --pagesize "$DEV_PAGESIZE" --base "$DEV_BASE" \
+      --kernel_offset "$DEV_KERNEL_OFFSET" --ramdisk_offset "$DEV_RAMDISK_OFFSET" \
+      --second_offset "$DEV_SECOND_OFFSET" --tags_offset "$DEV_TAGS_OFFSET" \
+      --output "$img/boot.img" || die "mkbootimg failed"
+    rm -f "$img/Image.gz"
+    printf '%s\n' "$DEV_CODENAME" > "$img/DEVICE"
+    ls -lh "$img"/*.img
+    sha256sum "$img/boot.img"
+    return 0
   fi
 
   say "Kernel: Image.lz4"
@@ -1058,6 +1114,10 @@ cmd_fastboot() {
   # Qualcomm ABL panic path is uncharacterized on dodge (sysrq-c fallthrough
   # when reboot-to bootloader is ignored). Refuse before any phone I/O; use
   # the buttons instead (see device/$DEVICE/BRINGUP-M1.md).
+  # android-v0 (enchilada): no slot-B install yet, so a crash here would
+  # land on whatever the phone's other slot holds; use the buttons.
+  [[ $DEV_BOOT_METHOD != android-v0 ]] ||
+    die "fastboot refuses BOOT_METHOD=android-v0 (RAM-only: reach fastboot by the buttons, see device/$DEVICE/NOTES.md)"
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "fastboot refuses BOOT_METHOD=qcom-abl (panic path uncharacterized on this ABL; use the buttons — see device/$DEVICE/BRINGUP-M1.md)"
   in_fastboot && { say "Already in fastboot"; return 0; }
@@ -1093,6 +1153,9 @@ cmd_flash() {
   # successful and refill retries; the bit-54 mark has no §3.1 entry yet.
   # Refuse here; day-2 updates use push once that path is viable, and the
   # installer PR can reopen flash with the rest.
+  # android-v0: RAM-only until a slot-B install has its §3.1 entry
+  [[ $DEV_BOOT_METHOD != android-v0 ]] ||
+    die "flash refuses BOOT_METHOD=android-v0 (RAM-only: fastboot boot \$KERNEL_OUT/images/boot.img)"
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "flash refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"
@@ -1130,6 +1193,8 @@ cmd_push() {
   # Same class of refusal as flash: boot_b is on sde here, and there is no
   # in-tree day-2 rewrite path for qcom-abl yet. Refuse before any phone I/O
   # (modules-push would otherwise rewrite the running root's modules).
+  [[ $DEV_BOOT_METHOD != android-v0 ]] ||
+    die "push refuses BOOT_METHOD=android-v0 (RAM-only: fastboot boot \$KERNEL_OUT/images/boot.img)"
   [[ $DEV_BOOT_METHOD != qcom-abl ]] ||
     die "push refuses BOOT_METHOD=qcom-abl (no in-tree day-2 update path yet; see device/$DEVICE/BRINGUP-M1.md)"
   images_for_device "$img"

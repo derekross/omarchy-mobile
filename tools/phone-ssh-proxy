@@ -82,14 +82,17 @@ def main(args):
     if args == ["--discover"]:
         print(discover())
         return
-    if len(args) != 3 or args[0] not in ("--command", "--relay"):
-        raise ValueError("usage: phone-ssh-proxy --discover | --command|--relay INTERFACE IP")
+    if len(args) not in (3, 4) or args[0] not in ("--command", "--relay"):
+        raise ValueError("usage: phone-ssh-proxy --discover | --command INTERFACE IP [TIMEOUT] | --relay INTERFACE IP [TIMEOUT]")
     interface = interface_name(args[1])
     address = str(ipaddress.ip_address(args[2]))
+    timeout = int(args[3]) if len(args) == 4 and args[3].isdigit() and int(args[3]) > 0 else 6
+    if len(args) == 4 and (not args[3].isdigit() or int(args[3]) < 1):
+        raise ValueError("invalid connection timeout")
     if args[0] == "--command":
         # ProxyCommand is parsed by both OpenSSH (% tokens) and a shell.
         # Embed validated literal arguments, not expanded %h/%p tokens.
-        command = [sys.executable, str(Path(__file__).resolve()), "--relay", interface, address]
+        command = [sys.executable, str(Path(__file__).resolve()), "--relay", interface, address, str(timeout)]
         print(shlex.join(command).replace("%", "%%"))
         return
     family, kind, proto, _, destination = socket.getaddrinfo(
@@ -97,7 +100,7 @@ def main(args):
     )[0]
     with socket.socket(family, kind, proto) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
-        sock.settimeout(6)
+        sock.settimeout(timeout)
         sock.connect(destination)
         sock.settimeout(None)
         relay(sock)

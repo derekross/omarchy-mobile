@@ -392,8 +392,10 @@ read_calibration() {
   command -v debugfs >/dev/null || { log "no debugfs (e2fsprogs)"; return 1; }
   mkdir -p "$RUN"
   # debugfs opens the device read-only unless given -w; it exits 0 whatever
-  # went wrong, so its messages are kept to tell a missing file apart
-  err=$( (umask 077 && debugfs -R "cat $CAL_PATH" "$dev" 2>&1 > "$cal") )
+  # went wrong, so its messages are kept to tell a missing file apart, in
+  # English whatever the phone's language (LC_ALL=C), since that message is
+  # matched below
+  err=$( (umask 077 && LC_ALL=C debugfs -R "cat $CAL_PATH" "$dev" 2>&1 > "$cal") )
   if (($(stat -c %s "$cal" 2>/dev/null || echo 0) < ${#AMPS[@]} * CAL_WORDS * 4)); then
     log "persist:$CAL_PATH is missing or short"
     # only debugfs's own "File not found": an empty file, or an empty read
