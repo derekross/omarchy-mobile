@@ -1,0 +1,1373 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# install-guided: the whole install as one command, from the laptop
+# (docs/INSTALL-EXPERIENCE-PLAN.md §11 M1; the design, every step and every
+# prompt are in docs/INSTALL-GUIDED.md). A repository tool for now:
+#   tools/install-guided
+# It also finds its files when it sits at the top of a release bundle, as
+# "install", but no bundle ships it yet: that waits for its first run on a
+# phone (docs/INSTALL-GUIDED.md §8).
+#
+# It runs today's tools in order and remembers how far it got, so running it
+# again goes on from the step that stopped:
+#    1. checks this computer and the download (tools/install-phone --verify-only)
+#    2. shows the one warning, acknowledged once and recorded. It comes
+#       before the unlock steps, because unlocking already erases the phone
+#    3. finds the phone (one phone, of this model) and shows only the unlock
+#       steps that are left
+#    4. finds the phone's build in the build index, opens Google's factory
+#       image page and takes the file the owner saved, checked by SHA-256
+#    5. asks the owner's answers, runs tools/install-phone --dry-run, then
+#       tools/install-phone once the phone's codename is typed, each time
+#       with --serial, so only the phone step 3 looked at can be written
+#    6. adds the USB network connection (NetworkManager), shown first: a
+#       plain link to the phone, with no sharing of this computer's internet
+#    7. waits for the phone's first start
+#    8. takes the read-only radio backup (tools/nv-backup) into a named folder
+#    9. puts the phone's firmware on it (tools/phone-provision
+#       --first-install --nv-backup DIR FACTORY.zip)
+#   10. restarts the phone
+#   11. checks it (tools/phone-smoke) and shows the result as a list
+# Steps 7 to 11 talk to whatever answers at the phone's USB address, so each
+# first asks that phone which one it is and stops unless it is the phone that
+# was written (a digest of its serial number, compared with the record's).
+#
+# What it sends to a phone itself: read-only fastboot queries ("devices",
+# "getvar all", "flashing get_unlock_ability"), "adb devices -l" and, after
+# the owner presses Enter, "adb reboot bootloader"; and over USB SSH
+# read-only checks (which phone it is, the first start's marker, the boot
+# id, systemd's state) and the restart of step 10. Every write to the phone
+# is tools/install-phone's:
+# slot B's boot images and userdata, after its own checks and a dry run. It
+# never sends "fastboot flashing unlock": it shows that command for the owner
+# to run. It never downloads Google's factory image and never shows Google's
+# terms: the owner accepts them on Google's page and saves the file there.
+#
+#   tools/install-guided [options]
+#     --dry-run        go as far as tools/install-phone --dry-run and stop:
+#                      nothing is written to the phone, nothing is added to
+#                      this computer, nothing is recorded. It reads the
+#                      phone in Fastboot Mode (the three queries above),
+#                      sends nothing over adb or USB SSH, and looks for a
+#                      newer build index on omamobile.org unless --offline
+#     --status         show how far the install got, and stop
+#     --start-over     forget how far the install got (the radio backup and
+#                      the factory image stay where they are)
+#     --factory-zip FILE  Google's factory image, already saved (it is still
+#                      checked against the build index)
+#     --offline        use the build index in the bundle, don't look for a
+#                      newer one
+#     --ssh-key FILE   the SSH public key the phone will accept from this
+#                      computer (default ~/.ssh/id_ed25519.pub)
+#     --backup-dir DIR where the radio backup's folder is made (default
+#                      ~/omamobile-backup)
+#     --state DIR      where the install's record is kept (default
+#                      ~/.local/state/omamobile-install/<codename>). The
+#                      record holds a SHA-256 of the phone's serial number:
+#                      keep it to yourself, like the radio backup
+#     --reinstall, --bootloader-slots-match VERSION, --unsigned, --work DIR
+#                      passed to tools/install-phone (see its --help)
+#     --device CODENAME, --images DIR, --rootfs FILE
+#                      repository mode only, passed to tools/install-phone
+#
+# Test seams: FASTBOOT, ADB, PHONE_SSH (the command that runs a command on
+# the phone, default tools/phone-ssh), INSTALL_PHONE, NV_BACKUP,
+# PHONE_PROVISION, PHONE_SMOKE and FACTORY_INDEX (the tools it runs),
+# CAMERA_VENV_SETUP (the command that makes the camera's Python folder; it
+# gets the folder and the requirements file),
+# OMAMOBILE_INDEX_URL, and the waits in seconds: INSTALL_WAIT_FIRST_START
+# (1200), INSTALL_WAIT_RESTART (600), INSTALL_WAIT_SETTLE (180),
+# INSTALL_WAIT_FASTBOOT (60) and INSTALL_POLL (5).
+set -euo pipefail
+shopt -s nullglob
+export LC_ALL=C
+
+FASTBOOT=${FASTBOOT:-fastboot}
+ADB=${ADB:-adb}
+here=$(cd -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+
+say() { printf '\n\e[1m==> %s\e[0m\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+# die: something is wrong with the files or this program.
+die() { printf '\e[31merror:\e[0m %s\n' "$*" >&2; exit 1; }
+# Every stop ends by saying what is true of the phone at that moment, read
+# from the record, never a fixed reassurance:
+#   stop         the install can't go on yet, and running it again goes on
+#                from here once the reader has done what the message says
+#   stop_final   running it again as things are stops here again; the
+#                message itself says what has to change, or who to ask
+#   stop_erased  the write itself failed partway (step 5)
+phone_fact() {
+  case ${S[write]:-} in
+    "") printf '    Nothing has been written to the phone.' ;;
+    started) printf '    An earlier try began writing the phone and did not finish, so what was on\n    it may already be erased.' ;;
+    *) printf '    Omarchy Mobile is written to the phone, and what the install has done so\n    far stays done.' ;;
+  esac
+}
+stop() {
+  printf '\n'
+  printf '    %s\n' "$@"
+  printf '\n'
+  phone_fact
+  if [[ ${S[write]:-} == started ]]; then
+    printf ' Run this command again to write it again, whole,\n    and go on.\n'
+  else
+    printf ' Run this command again to go on from here.\n'
+  fi
+  exit 1
+}
+stop_final() {
+  printf '\n'
+  printf '    %s\n' "$@"
+  printf '\n'
+  phone_fact
+  printf '\n'
+  exit 1
+}
+ask() {
+  printf '%s' "$1"
+  IFS= read -r REPLY || { printf '\n'; stop "No answer, so the install stops here."; }
+  [[ -t 0 ]] || printf '\n'
+}
+ask_secret() {
+  printf '%s' "$1"
+  IFS= read -rs REPLY || { printf '\n'; stop "No answer, so the install stops here."; }
+  printf '\n'
+}
+
+dry=0 status_only=0 start_over=0 offline=0 factory_given="" key_file="" backup_parent="" state_dir=""
+device="" pass=()
+while (($#)); do
+  case $1 in
+    --dry-run) dry=1 ;;
+    --status) status_only=1 ;;
+    --start-over) start_over=1 ;;
+    --offline) offline=1 ;;
+    --factory-zip) factory_given=${2:?}; shift ;;
+    --ssh-key) key_file=${2:?}; shift ;;
+    --backup-dir) backup_parent=${2:?}; shift ;;
+    --state) state_dir=${2:?}; shift ;;
+    --reinstall|--unsigned) pass+=("$1") ;;
+    --bootloader-slots-match|--work|--images|--rootfs) pass+=("$1" "${2:?}"); shift ;;
+    --device) device=${2:?}; shift ;;
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) die "unknown argument $1 (see --help)" ;;
+  esac
+  shift
+done
+has_pass() { local a; for a in "${pass[@]}"; do [[ $a == "$1" ]] && return 0; done; return 1; }
+
+# --- Where things are: a release bundle, or this repository ------------------
+if [[ -f $here/device.conf && -d $here/images ]]; then
+  mode=bundle
+  conf=$here/device.conf tools=$here/tools
+  local_index=$here/factory-builds.json keyring=$here/omamobile.gpg
+  [[ -z $device ]] || die "--device is only available in repository mode"
+  release=$(sed -n 's/^version: //p' "$here/MANIFEST" 2>/dev/null | head -1)
+  label=$(sed -n 's/^label: //p' "$here/MANIFEST" 2>/dev/null | head -1)
+  self="bash install"
+else
+  mode=repository
+  self="tools/install-guided"
+  repo=$(cd -- "$here/.." && pwd)
+  device=${device:-${DEVICE:-cheetah}}
+  [[ $device =~ ^[a-z0-9]+$ ]] || die "--device must be a codename"
+  conf=$repo/device/$device/device.conf tools=$repo/tools
+  local_index=$repo/device/$device/factory-builds.json keyring=$repo/packages/omamobile-keyring/omamobile.gpg
+  pass+=(--device "$device")
+  release=development label="development build"
+fi
+[[ -f $conf ]] || die "no device descriptor $conf"
+[[ ${release:-} =~ ^[A-Za-z0-9._-]+$ ]] || release=unknown
+[[ ${label:-} =~ ^[A-Za-z0-9\ ._-]+$ ]] || label="developer preview"
+# The camera's Python modules, by exact version and SHA-256 (step 9)
+CAMERA_REQUIREMENTS=$tools/camera-requirements.txt
+INSTALL_PHONE=${INSTALL_PHONE:-$tools/install-phone}
+NV_BACKUP=${NV_BACKUP:-$tools/nv-backup}
+PHONE_PROVISION=${PHONE_PROVISION:-$tools/phone-provision}
+PHONE_SMOKE=${PHONE_SMOKE:-$tools/phone-smoke}
+FACTORY_INDEX=${FACTORY_INDEX:-$tools/factory-index}
+for f in "$INSTALL_PHONE" "$NV_BACKUP" "$PHONE_PROVISION" "$PHONE_SMOKE" "$FACTORY_INDEX"; do
+  [[ -f $f ]] || die "missing $f: this download is incomplete (unpack it again)"
+done
+# Through bash, so a download that lost its files' execute bits still works
+phone() { if [[ -n ${PHONE_SSH:-} ]]; then "$PHONE_SSH" "$@"; else bash "$tools/phone-ssh" "$@"; fi; }
+index_tool() { python3 -I -B "$FACTORY_INDEX" "$@"; }
+
+# The descriptor is data (docs/RELEASES.md §3): parsed line by line, never sourced
+declare -A D=()
+n=0
+while IFS= read -r line || [[ -n $line ]]; do
+  n=$((n + 1))
+  [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+  if [[ $line =~ ^([A-Z][A-Z0-9_]*)=\"([^\"\$\`\\]*)\"$ || $line =~ ^([A-Z][A-Z0-9_]*)=([^\"\$\`\\\'[:space:]]*)$ ]]; then
+    D[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+  else
+    die "$conf:$n: not a KEY=value line"
+  fi
+done < "$conf"
+CODENAME=${D[CODENAME]:-}
+[[ $CODENAME =~ ^[a-z0-9]+$ ]] || die "$conf: no CODENAME"
+NAME=${D[NAME]:-$CODENAME}
+# How this phone's keys reach Fastboot Mode and force a restart: the
+# descriptor's words, never this program's.
+keys_fastboot=${D[INSTALL_KEYS_FASTBOOT]:-}
+keys_restart=${D[INSTALL_KEYS_RESTART]:-}
+device_page=https://omamobile.org/devices/$CODENAME
+[[ -n $keys_fastboot ]] || keys_fastboot="use the key combination for Fastboot Mode on $device_page"
+[[ -n $keys_restart ]] || keys_restart="see $device_page"
+free_gb=${D[INSTALL_FREE_GB]:-}
+[[ -z $free_gb || $free_gb =~ ^[1-9][0-9]{0,3}$ ]] || die "$conf: INSTALL_FREE_GB is a number of GB"
+
+# The USB network the phone offers, as tools/phone-ssh and docs/INSTALL.md
+# step 5 have it; the same on every phone (the initramfs sets it up).
+PHONE_ADDR=172.16.42.1
+NM_PROFILE=omamobile-phone
+# The saved connection, and what the owner is told it does: the one place
+# that decides either, so the command and its description change together
+# (and docs/INSTALL.md step 5 with them: a test compares the two).
+# Decided 2026-11-10 (plan D10, docs/INSTALL-GUIDED.md §5a): a plain link.
+#   ipv4.method manual, ipv4.never-default yes   this computer's address on
+#       the phone's USB subnet and nothing else: no DHCP or DNS server, no
+#       forwarding, no NAT, no default route through the phone. No step of
+#       the install needs the phone to reach the internet through the cable.
+#   connection.autoconnect-priority -100   below every connection the owner
+#       has saved (those are 0 unless changed), so it never wins over one
+#   match.driver cdc_ncm   the narrowest match there is before the phone has
+#       started. NetworkManager can match a connection by interface name,
+#       driver, kernel command line, the port's path or the interface's
+#       address; it can't match by USB vendor, product or product string.
+#       The interface's name isn't known in advance, the path is the socket
+#       the cable happens to be in, and the address is this phone's own (its
+#       gadget keeps one pair, made on the phone at its first start), which
+#       nobody can know before that start. So: the driver.
+nm_profile() {
+  NM_ADD=(nmcli connection add type ethernet con-name "$NM_PROFILE" match.driver cdc_ncm
+    ipv4.method manual ipv4.addresses 172.16.42.2/24 ipv4.never-default yes ipv6.method disabled
+    connection.autoconnect-priority -100)
+  NM_DOES=(
+    "What it does, so you can decide:"
+    "- It gives this computer the address 172.16.42.2 on the phone's USB link, and"
+    "  that is all: a plain link between this computer and the phone."
+    "- This computer's internet connection is not shared over it. NetworkManager"
+    "  starts no DHCP or DNS server for it, forwards nothing and adds no firewall"
+    "  rules, and none of this computer's own traffic is sent through the phone."
+    "  The phone gets no internet through the cable; it uses its Wi-Fi."
+    "- It is matched by driver (cdc_ncm), because nothing more is known of this"
+    "  phone's USB network before the phone has started. Other USB network devices"
+    "  use that driver too: the Ethernet port of some USB-C docks and adapters, and"
+    "  another phone sharing its internet over USB. One of those that has no saved"
+    "  connection of its own would be given this one: it would get the address"
+    "  above and no internet, until you give that device a connection of its own."
+    "- Its priority (-100) is below every connection you have saved, so where one"
+    "  of yours fits a device, yours is used."
+    "- It stays saved after the install, and comes up by itself when the phone is"
+    "  plugged in."
+    "To remove it later:  nmcli connection delete $NM_PROFILE"
+  )
+}
+nm_profile
+# omamobile-firstboot writes this when the first start has finished
+FIRSTBOOT_DONE=/var/lib/omamobile/firstboot/done
+# tools/phone-provision looks for the camera's Python modules here
+CAMERA_VENV=$HOME/.cache/omamobile-venv
+
+wait_first_start=${INSTALL_WAIT_FIRST_START:-1200} wait_restart=${INSTALL_WAIT_RESTART:-600}
+wait_settle=${INSTALL_WAIT_SETTLE:-180} wait_fastboot=${INSTALL_WAIT_FASTBOOT:-60} poll=${INSTALL_POLL:-5}
+for v in "$wait_first_start" "$wait_restart" "$wait_settle" "$wait_fastboot" "$poll"; do
+  [[ $v =~ ^[0-9]+$ ]] || die "the INSTALL_WAIT_* and INSTALL_POLL seams are numbers of seconds"
+done
+
+# --- The install's record ----------------------------------------------------
+# KEY=value lines, data, never sourced; rewritten whole after each step.
+# docs/INSTALL-GUIDED.md §3 lists the keys.
+state_dir=${state_dir:-${XDG_STATE_HOME:-$HOME/.local/state}/omamobile-install/$CODENAME}
+state_file=$state_dir/state
+declare -A S=()
+state_load() {
+  local line
+  S=()
+  [[ -f $state_file ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^([a-z][a-z0-9_]*)=(.*)$ ]] || die "$state_file: not a record this installer wrote (--start-over forgets it)"
+    S[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+  done < "$state_file"
+  [[ ${S[format]:-} == 1 ]] || die "$state_file has format ${S[format]:-none}; this installer reads format 1 (--start-over forgets it)"
+}
+put() {
+  local k
+  ((dry)) && return 0
+  [[ $1 =~ ^[a-z][a-z0-9_]*$ && $2 != *$'\n'* ]] || die "bad record entry $1"
+  S[$1]=$2 S[format]=1 S[codename]=$CODENAME S[release]=$release
+  [[ -n ${S[started]:-} ]] || S[started]=$(date -u +%Y-%m-%dT%H:%MZ)
+  # A folder made here is the owner's alone; one that was there (--state)
+  # keeps its mode, and the record in it is still private (600)
+  [[ -d $state_dir ]] || (umask 077; mkdir -p "$state_dir")
+  (
+    umask 077
+    for k in $(printf '%s\n' "${!S[@]}" | sort); do printf '%s=%s\n' "$k" "${S[$k]}"; done > "$state_file.new"
+  )
+  mv -f "$state_file.new" "$state_file"
+}
+is_done() { [[ ${S[$1]:-} == done* ]]; }
+
+STEPS=(preflight warning phone factory write network first_start backup provision restart check)
+declare -A TITLE=(
+  [preflight]="Checking this computer and the download"
+  [warning]="Read this first"
+  [phone]="Finding the phone"
+  [factory]="Google's factory image for this phone"
+  [write]="Writing Omarchy Mobile to the phone"
+  [network]="The USB connection to the phone"
+  [first_start]="The phone's first start"
+  [backup]="Backing up the phone's radio partitions"
+  [provision]="Adding the phone's firmware"
+  [restart]="Restarting the phone"
+  [check]="Checking the phone"
+)
+step_no=0
+title() { step_no=$((step_no + 1)); say "Step $step_no of ${#STEPS[@]}: ${TITLE[$1]}"; }
+skip() { step_no=$((step_no + 1)); printf '\n    Step %d of %d: %s: %s\n' "$step_no" "${#STEPS[@]}" "${TITLE[$1]}" "$2"; }
+
+if ((start_over)); then
+  if [[ -f $state_file ]]; then
+    rm -f "$state_file" "$state_dir/report.json"
+    note "The record of the earlier install is forgotten ($state_file)."
+  fi
+fi
+state_load
+if ((status_only)); then
+  say "Omarchy Mobile on the $NAME: how far the install got"
+  if [[ ! -f $state_file ]]; then note "No install has been started on this computer."; exit 0; fi
+  note "release ${S[release]:-unknown}, started ${S[started]:-unknown}"
+  for s in warning factory write network first_start backup provision restart check; do
+    note "$(printf '%-48s %s' "${TITLE[$s]}" "${S[$s]:-not yet}")"
+  done
+  [[ -z ${S[backup_dir]:-} ]] || note "radio backup: ${S[backup_dir]}"
+  exit 0
+fi
+if [[ -f $state_file ]]; then
+  [[ ${S[codename]:-} == "$CODENAME" ]] || die "$state_file is for ${S[codename]:-another phone}, not $CODENAME"
+  if [[ -n ${S[finished]:-} ]]; then
+    say "This phone was installed on ${S[finished]}"
+    note "Omarchy Mobile ${S[release]:-} is on it, and the radio backup is in ${S[backup_dir]:-its folder}."
+    note "To install again from the start (the phone is erased again): $self --start-over"
+    exit 0
+  fi
+  [[ ${S[release]:-} == "$release" ]] ||
+    stop_final "An install of Omarchy Mobile ${S[release]:-} was started on this computer and hasn't finished," \
+      "and this download is Omarchy Mobile $release." \
+      "To go on with that install, run the install from its own folder." \
+      "To start again with this one: $self --start-over"
+  ((dry)) || say "Going on with the install started ${S[started]:-earlier}"
+fi
+
+# --- Step 1: this computer and the download ----------------------------------
+step_preflight() {
+  local missing=() t need have
+  title preflight
+  # Every program a later step runs, asked for now: one that is missing must
+  # stop the install here, not after the phone has been erased. The writes
+  # (tools/install-phone), the radio backup (tools/nv-backup) and the
+  # firmware (tools/phone-provision and the extract tools it runs: lpunpack,
+  # simg2img, fsck.erofs, debugfs, readelf).
+  for t in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd lz4 cpio openssl gpg python3 unzip ssh sha256sum \
+    tar lpunpack simg2img fsck.erofs; do
+    command -v "$t" >/dev/null || missing+=("$t")
+  done
+  command -v readelf >/dev/null || command -v llvm-readelf >/dev/null || missing+=(readelf)
+  if ((${#missing[@]})); then
+    stop "These programs are missing on this computer: ${missing[*]}" \
+      "On Omarchy or Arch Linux, install them with:" \
+      "  sudo pacman -S --needed android-tools e2fsprogs zstd lz4 cpio openssl gnupg python unzip binutils erofs-utils openssh tar" \
+      "On other systems, install the packages with the same names."
+  fi
+  note "the programs the install needs are here"
+  # Not needed by every install, so said now and not a stop: step 6 on a
+  # computer without NetworkManager, and step 9's optional camera modules
+  command -v nmcli >/dev/null ||
+    note "this computer doesn't use NetworkManager: after the phone is written you will set the USB link's address yourself (the installer says which)"
+  camera_ready || python3 -c 'import venv, ensurepip' 2>/dev/null ||
+    note "this computer's Python can't make a folder of modules (venv, pip): the cameras' two Python modules can't be fetched in step 9 unless that is installed first"
+  key_file=${key_file:-$HOME/.ssh/id_ed25519.pub}
+  key_file=${key_file/#\~/$HOME}
+  [[ -f $key_file ]] ||
+    stop "This computer has no SSH key yet ($key_file)." \
+      "The phone uses it to know this computer when they talk over the USB cable." \
+      "Make one with:  ssh-keygen -t ed25519" \
+      "(Enter at each question is fine.)"
+  [[ $key_file == *.pub ]] || die "--ssh-key is the public key file (it ends in .pub), never the private key"
+  # tools/phone-ssh offers the default key by itself; another one is named
+  if [[ $key_file != "$HOME/.ssh/id_ed25519.pub" && -f ${key_file%.pub} ]]; then
+    export OMAMOBILE_SSH_KEY=${OMAMOBILE_SSH_KEY:-${key_file%.pub}}
+  fi
+  if [[ -n $free_gb ]]; then
+    need=$((free_gb * 1024 * 1024))
+    mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}"
+    have=$(df -Pk "${XDG_CACHE_HOME:-$HOME/.cache}" | awk 'NR == 2 { print $4 }')
+    [[ $have =~ ^[0-9]+$ ]] || die "can't read the free disk space"
+    ((have >= need)) ||
+      stop "This computer needs about $free_gb GB of free disk space for the install" \
+        "(Google's factory image and a working copy of the system), and has $((have / 1024 / 1024)) GB." \
+        "Free some space and run this again."
+    note "enough free disk space ($((have / 1024 / 1024)) GB; about $free_gb GB needed)"
+  fi
+  note "checking the download (a few seconds for the large file)"
+  bash "$INSTALL_PHONE" --verify-only "${pass[@]}" >"$scratch/verify.log" 2>&1 || {
+    grep -E 'error:' "$scratch/verify.log" >&2 || cat "$scratch/verify.log" >&2
+    stop "This download of Omarchy Mobile didn't pass its checks (the message above says which)." \
+      "Download it again from https://omamobile.org/download and unpack it into a new folder."
+  }
+  note "the download is complete and signed by Omarchy Mobile: release $release ($label)"
+}
+
+# --- Step 3: the phone, and the unlock steps that are left -------------------
+serial="" vars=""
+var() { awk -F: -v k="$1" '$1 == k { sub(/^[^:]*:[ ]*/, ""); print; exit }' <<<"$vars"; }
+fastboot_serials() { "$FASTBOOT" devices 2>/dev/null | awk '$2 == "fastboot" { print $1 }'; }
+# Stops unless the one phone in Fastboot Mode is the one step 3 looked at.
+# Called before each run of tools/install-phone, which is also handed that
+# serial (--serial) and refuses any other phone itself: its file checks take
+# a while, and a cable can move in that time.
+same_phone() {
+  local now
+  mapfile -t now < <(fastboot_serials)
+  [[ ${#now[@]} == 1 && ${now[0]} == "$serial" ]] ||
+    stop "The phone is no longer the only one connected in Fastboot Mode." \
+      "Connect only this $NAME, in Fastboot Mode, and run this again."
+}
+# The phones adb sees, one "SERIAL STATE CODENAME MODEL" line each ("adb
+# devices -l" asks the adb server, and sends nothing to a phone)
+adb_phones() {
+  "$ADB" devices -l 2>/dev/null | awk 'NR > 1 && NF >= 2 {
+    dev = "-"; model = "-"
+    for (i = 3; i <= NF; i++) { if ($i ~ /^device:/) dev = substr($i, 8); if ($i ~ /^model:/) model = substr($i, 7) }
+    print $1, $2, dev, model }'
+}
+guide() { printf '\n'; printf '    %s\n' "$@"; }
+step_phone() {
+  local found adb_state adb_serial adb_dev adb_model adb_all ability id waited
+  if is_done write; then
+    [[ ${S[phone]:-} =~ ^[0-9a-f]{64}$ ]] || die "$state_file doesn't say which phone was written (--start-over forgets it)"
+    skip phone "not needed again: the phone is written"
+    return 0
+  fi
+  title phone
+  if [[ ${S[write]:-} == started ]]; then
+    guide "The last try stopped while the phone was being written. Put the phone back in" \
+      "Fastboot Mode: $keys_fastboot." \
+      "It is written again from the start: the same things, whole."
+  fi
+  while true; do
+    mapfile -t found < <(fastboot_serials)
+    ((${#found[@]} <= 1)) ||
+      stop "More than one phone in Fastboot Mode is connected to this computer." \
+        "Unplug the others, so only the $NAME you are installing is connected."
+    if ((${#found[@]} == 1)); then
+      serial=${found[0]}
+      vars=$("$FASTBOOT" -s "$serial" getvar all 2>&1 | sed -E 's/^\(bootloader\) //')
+      [[ $(var product) == "$CODENAME" ]] ||
+        stop_final "The phone that is connected is a '$(var product)', and this download is for the $NAME ($CODENAME)." \
+          "Connect the $NAME, or get the download for this phone from https://omamobile.org/download"
+      # The record keeps a digest of the serial, so that it doesn't read as a
+      # serial at a glance, and no more than that: this computer has the
+      # serial from fastboot anyway, and the digest still identifies the
+      # phone, so the record is private like the radio backup.
+      id=$(printf '%s' "$serial" | sha256sum | cut -d' ' -f1)
+      [[ -z ${S[phone]:-} || ${S[phone]} == "$id" ]] || other_phone_in_fastboot
+      if [[ $(var unlocked) == yes ]]; then
+        note "found the $NAME in Fastboot Mode, and its bootloader is unlocked"
+        put phone "$id"
+        break
+      fi
+      # Read-only: whether "OEM unlocking" is switched on in Android
+      ability=$("$FASTBOOT" -s "$serial" flashing get_unlock_ability 2>&1 |
+        sed -nE 's/.*get_unlock_ability:[ ]*([01]).*/\1/p' | head -1)
+      if [[ $ability == 1 ]]; then
+        guide "The phone is in Fastboot Mode, and its bootloader is still locked." \
+          "Unlocking is the moment the phone is erased, as the warning said: copy off" \
+          "photos, messages and two-factor codes before you do it." \
+          "" \
+          "When you are ready, open a second terminal and run:" \
+          "    fastboot flashing unlock" \
+          "On the phone, press a volume key until it says \"Unlock the bootloader\"," \
+          "then press Power. The phone erases itself and starts Android again." \
+          "" \
+          "Then bring it back to Fastboot Mode: $keys_fastboot."
+      else
+        guide "The phone is in Fastboot Mode, its bootloader is locked, and \"OEM unlocking\"" \
+          "is switched off in Android, so it can't be unlocked yet." \
+          "" \
+          "1. On the phone, press Power to start Android." \
+          "2. In Settings > About phone, tap \"Build number\" seven times." \
+          "3. In Settings > System > Developer options, switch on \"OEM unlocking\"" \
+          "   and \"USB debugging\"." \
+          "If \"OEM unlocking\" is greyed out: connect the phone to the internet once (it" \
+          "stays grey until then after a reset). If it is still grey, the phone is most" \
+          "likely locked to its carrier and" \
+          "can't run Omarchy Mobile."
+      fi
+    else
+      adb_state="" adb_serial="" adb_dev="" adb_model="" adb_all=()
+      if command -v "$ADB" >/dev/null; then mapfile -t adb_all < <(adb_phones); fi
+      # One phone only, as in Fastboot Mode: the restart below goes to a
+      # phone by its serial, and it must be the one the owner means
+      ((${#adb_all[@]} <= 1)) ||
+        stop "More than one phone running Android is connected to this computer." \
+          "Unplug the others, so only the $NAME you are installing is connected."
+      ((${#adb_all[@]} == 0)) || read -r adb_serial adb_state adb_dev adb_model <<<"${adb_all[0]}"
+      case $adb_state in
+        device)
+          [[ $adb_dev == "$CODENAME" ]] ||
+            stop_final "The phone that is connected is a '${adb_model//_/ }' ($adb_dev), and this download is for" \
+              "the $NAME ($CODENAME). It was not restarted." \
+              "Connect the $NAME, or get the download for this phone from https://omamobile.org/download"
+          guide "A ${adb_model//_/ } ($adb_dev) is connected, running Android, and allows this" \
+            "computer. Its serial number ends in ${adb_serial: -4}."
+          if ((dry)); then
+            stop "A dry run sends nothing to the phone. Put it in Fastboot Mode yourself:" \
+              "$keys_fastboot. Then run the dry run again."
+          fi
+          ask "    Press Enter to restart the phone into Fastboot Mode: "
+          "$ADB" -s "$adb_serial" reboot bootloader ||
+            stop "The phone didn't take the restart. Put it in Fastboot Mode by hand:" "$keys_fastboot."
+          note "waiting for Fastboot Mode"
+          waited=$SECONDS
+          while [[ -z $(fastboot_serials) ]] && ((SECONDS - waited < wait_fastboot)); do sleep "$poll"; done
+          continue ;;
+        unauthorized)
+          guide "The phone is running Android and is asking \"Allow USB debugging?\"." \
+            "Tap Allow on the phone." ;;
+        *)
+          guide "No phone answers yet. Connect the $NAME with a USB cable that carries data, then:" \
+            "" \
+            "If the phone is running Android:" \
+            "1. In Settings > About phone, tap \"Build number\" seven times." \
+            "2. In Settings > System > Developer options, switch on \"OEM unlocking\"" \
+            "   and \"USB debugging\". If \"OEM unlocking\" is greyed out, connect the" \
+            "   phone to the internet once (it stays grey until then after a reset); if" \
+            "   it is still grey, the phone is most likely locked to its carrier and" \
+            "   can't run Omarchy Mobile." \
+            "3. Tap Allow when the phone asks \"Allow USB debugging?\"." \
+            "" \
+            "Or, whatever it is running (Omarchy Mobile too, for a reinstall), put it in" \
+            "Fastboot Mode yourself: $keys_fastboot." ;;
+      esac
+    fi
+    ((dry)) && stop "A dry run only looks. Follow the steps above, then run the dry run again."
+    ask "    Press Enter when that is done, to check the phone again: "
+  done
+  phone_checks
+}
+# The phone in Fastboot Mode is not the one the record is for. Two phones
+# are in play, so the words say which is which, and the usual footer ("the
+# phone") is not used: nothing was sent to the one connected now, and the
+# one the install is for may be half-written.
+other_phone_in_fastboot() {
+  printf '\n'
+  if [[ ${S[write]:-} == started ]]; then
+    printf '    %s\n' \
+      "The phone connected now is not the phone this install was started on." \
+      "Nothing was written to the phone connected now, and nothing will be: it was" \
+      "only asked what it is." \
+      "" \
+      "The other phone, the one this install is for, was being written when the last" \
+      "try stopped. It may be half-written: what was on it may already be erased, and" \
+      "it may not start. That is the phone to finish. Plug it back in, in Fastboot" \
+      "Mode ($keys_fastboot)," \
+      "with this one unplugged, and run this command again." \
+      "" \
+      "\"$self --start-over\" makes this computer forget that install. The" \
+      "half-written phone then stays as it is until it is installed again from the" \
+      "start. Use it only if you no longer mean to finish that phone from this" \
+      "computer now; after it, the phone connected now can be installed, from the" \
+      "start."
+  else
+    printf '    %s\n' \
+      "The phone connected now is not the phone this install was started on." \
+      "Nothing has been written to either phone." \
+      "Connect the phone the install was started on and run this command again to go" \
+      "on with it. To install the phone connected now instead, start again for it:" \
+      "$self --start-over (it forgets only how far the other install got)."
+  fi
+  printf '\n'
+  exit 1
+}
+# What tools/install-phone will refuse, said early and in plain words. It
+# stays the one that decides: these only save the owner a 3 GB download.
+phone_checks() {
+  local slot
+  slot=$(var current-slot)
+  if [[ $slot == b ]] && ! has_pass --reinstall; then
+    stop_final "This phone is running from its second system copy (slot B)." \
+      "Omarchy Mobile is written there, and Android must stay on the first copy (slot A)" \
+      "as your way back." \
+      "" \
+      "If Omarchy Mobile is already on this phone and you are installing it again, run:" \
+      "    $self --reinstall" \
+      "If the phone runs Android (it moves to slot B after an Android system update)," \
+      "Android has to be put on slot A first: INSTALL.md, step 3, says how."
+  fi
+  slots_check
+}
+# The bootloader on both slots (plan G4). Decided 2026-11-10 (D4): on a
+# first install the installer measures the other slot itself, in
+# tools/install-phone, which is being built separately. Until that is in
+# the tools/install-phone this script runs, a phone that reports one slot's
+# version only stops here, and the stop offers no shortcut: a version passed
+# to --bootloader-slots-match is a statement that someone read it from the
+# phone. This function is the one place to change when install-phone
+# measures: the stop then goes, for first installs.
+slots_check() {
+  local bl bl_a bl_b
+  bl=$(var version-bootloader)
+  bl_a=$(sed -nE 's/^version-bootloader[-_:]a:[ ]*//p' <<<"$vars" | head -1)
+  bl_b=$(sed -nE 's/^version-bootloader[-_:]b:[ ]*//p' <<<"$vars" | head -1)
+  [[ -z $bl_a || -z $bl_b ]] || return 0
+  ! has_pass --bootloader-slots-match || return 0
+  stop_final "The phone keeps two copies of its system (slot A and slot B), each with its own" \
+    "bootloader. Omarchy Mobile starts from slot B, so slot B's bootloader has to be" \
+    "the same version as slot A's, and this phone only tells the version of the copy" \
+    "in use ($bl)." \
+    "" \
+    "This installer can't read the other copy's version yet, so it stops here, and" \
+    "running it again will stop here again. The next version of the installer reads" \
+    "it by itself on a first install." \
+    "" \
+    "What you can do safely:" \
+    "- wait for the next release of Omarchy Mobile and install that; or" \
+    "- ask in an issue, and we will read the other copy's version together with you:" \
+    "  https://github.com/derekross/omarchy-mobile/issues" \
+    "Don't tell the installer a version that nobody has read from this phone: if the" \
+    "two copies differ, the phone may not start from slot B."
+}
+
+# --- Step 2: the one warning -------------------------------------------------
+# Before the phone step (decided 2026-11-10, plan D9): for a phone whose
+# bootloader is locked, the unlock that the phone step guides is what
+# erases it, so the warning has to be read before that. Acknowledged once,
+# recorded once; a record without the acknowledgement shows it again,
+# whatever else that record holds.
+step_warning() {
+  if [[ ${S[warning]:-} == "acknowledged "* ]]; then skip warning "read and accepted (${S[warning]#acknowledged })"; return 0; fi
+  title warning
+  guide "Read this once. It is the only warning; nothing will ask again." \
+    "" \
+    "1. The phone is erased. Everything on it is lost: photos, messages, apps," \
+    "   accounts and two-factor codes. Copy off what you want to keep first." \
+    "   If its bootloader is still locked, unlocking it (the next step) is what" \
+    "   erases it, before anything of Omarchy Mobile is written." \
+    "" \
+    "2. Omarchy Mobile replaces Android as the phone's system. There are no" \
+    "   Google apps and no Play Store, and Android apps don't run on it. This" \
+    "   release is a $label: some things a phone normally does" \
+    "   are missing or unfinished. The list for this phone:" \
+    "   $device_page" \
+    "" \
+    "3. You can go back. Android stays on the phone, unused, as a quick way" \
+    "   back, and Google's own tools can put the phone back as it was sold." \
+    "   INSTALL.md, \"Going back to Android\", has the steps."
+  printf '\n'
+  ask "    Type yes to go on, or press Enter to stop: "
+  [[ $REPLY == yes ]] || stop "Not accepted, so the install stops here."
+  put warning "acknowledged $(date -u +%Y-%m-%dT%H:%MZ) for release $release"
+}
+
+# --- Step 4: the build index and Google's factory image ----------------------
+signing_keys() { sed -n "s/^SIGNING_KEYS='\([0-9A-F|]*\)'\$/\1/p" "$INSTALL_PHONE"; }
+# signed_by_release_key FILE SIG: a detached signature by one of the keys
+# tools/install-phone pins, checked in a keyring of its own
+signed_by_release_key() {
+  local keys home status
+  keys=$(signing_keys)
+  [[ -n $keys && -f $keyring ]] || return 1
+  home=$(mktemp -d "$scratch/gnupg.XXXXXX")
+  chmod 700 "$home"
+  gpg --homedir "$home" -q --batch --import "$keyring" 2>/dev/null || return 1
+  status=$(gpg --homedir "$home" --batch --status-fd 1 --verify "$2" "$1" 2>/dev/null || true)
+  gpgconf --homedir "$home" --kill gpg-agent 2>/dev/null || true
+  grep -Ec "^\[GNUPG:\] VALIDSIG .* ($keys)\$" <<<"$status" >/dev/null
+}
+# The index to trust: the bundle's copy (its signed checksums cover it), or
+# a published copy with its own signature when that one is newer.
+index=""
+choose_index() {
+  local url=${OMAMOBILE_INDEX_URL:-https://pkgs.omamobile.org/releases/$CODENAME/factory-builds.json}
+  local got=$scratch/published.json local_date="" got_date
+  if [[ -f $local_index ]]; then
+    local_date=$(index_tool info --index "$local_index" --codename "$CODENAME" | sed -n 's/^updated=//p') ||
+      die "$local_index is not a valid build index"
+    index=$local_index
+  fi
+  if ((!offline)) && command -v curl >/dev/null; then
+    if curl -fsS --max-time 30 -o "$got" "$url" 2>/dev/null && curl -fsS --max-time 30 -o "$got.sig" "$url.sig" 2>/dev/null; then
+      if signed_by_release_key "$got" "$got.sig" &&
+        got_date=$(index_tool info --index "$got" --codename "$CODENAME" 2>/dev/null | sed -n 's/^updated=//p') &&
+        [[ -n $got_date ]]; then
+        if [[ -z $local_date || $got_date > $local_date ]]; then
+          index=$got
+          note "using the newer list of Google's builds from omamobile.org ($got_date)"
+        fi
+      else
+        note "the list of Google's builds on omamobile.org didn't pass its signature check: not used"
+      fi
+    fi
+  fi
+  [[ -n $index ]] ||
+    stop "This download has no list of Google's builds for the $NAME, and none could be" \
+      "fetched from omamobile.org, so the installer can't tell which factory image" \
+      "matches this phone. Check the internet connection and run this again."
+}
+declare -A B=()
+find_build() {
+  local out line bl bb
+  bl=$(var version-bootloader) bb=$(var version-baseband)
+  [[ -n $bl && -n $bb ]] || die "the phone reports no bootloader or baseband version"
+  out=$(index_tool match --index "$index" --codename "$CODENAME" --bootloader "$bl" --baseband "$bb") ||
+    die "reading the build index failed"
+  B=()
+  while IFS= read -r line; do
+    if [[ $line == *=* ]]; then B[${line%%=*}]=${line#*=}; fi
+  done <<<"$out"
+  # The phone's bootloader and baseband, both, or nothing: there is no
+  # "nearest" build (decision D-a, docs/INSTALL-GUIDED.md §5). Fastboot
+  # tells those two versions, not the build, so "matches" is all that is
+  # claimed.
+  if [[ ${B[match]:-} == exact && -n ${B[build]:-} ]]; then
+    note "this phone's bootloader and baseband match Google's build ${B[build]}"
+    [[ -z ${B[same_pair]:-} ]] ||
+      note "(${B[same_pair]//,/, } carry the same two versions and can't be told apart from here; ${B[build]} is the one used)"
+    [[ ${B[tested]:-} == true ]] ||
+      note "(this release hasn't been tested with that build's firmware yet; it is expected to work)"
+  else
+    stop "This phone's Android version isn't one Omarchy Mobile knows yet: no build in the" \
+      "list has both its bootloader ($bl) and its baseband ($bb)." \
+      "Start Android and update it: Settings > System > System update. Then run this" \
+      "again. If an update moves Android to slot B, the installer will say so and" \
+      "INSTALL.md, step 3, has the way to put it back on slot A." \
+      "If Android is up to date, open an issue so the build can be added:" \
+      "https://github.com/derekross/omarchy-mobile/issues"
+  fi
+}
+# check_factory FILE: the size first (a download that isn't finished), then the SHA-256
+check_factory() {
+  local size sum
+  [[ -f $1 ]] || { note "there is no file $1"; return 1; }
+  size=$(stat -c %s "$1")
+  if [[ $size != "${B[size]}" ]]; then
+    note "$1 is $size bytes, and the file should be ${B[size]}: the download isn't complete"
+    return 1
+  fi
+  note "checking the file (a few seconds)"
+  sum=$(sha256sum < "$1" | cut -d' ' -f1)
+  if [[ $sum != "${B[sha256]}" ]]; then
+    note "$1 is not the file Google publishes for build ${B[build]} (its SHA-256 differs)"
+    return 1
+  fi
+}
+# take_factory: the file for the build in B, from --factory-zip, the
+# Downloads folder, or the owner after Google's page was opened. Sets zip,
+# or leaves it empty in a dry run that found no file.
+zip=""
+take_factory() {
+  local downloads
+  zip=""
+  downloads=$(xdg-user-dir DOWNLOAD 2>/dev/null || true)
+  [[ -n $downloads && -d $downloads ]] || downloads=$HOME/Downloads
+  if [[ -n $factory_given ]]; then
+    check_factory "$factory_given" || stop "The file given with --factory-zip can't be used (above)."
+    zip=$(readlink -f "$factory_given")
+  elif [[ -f $downloads/${B[zip]} ]] && check_factory "$downloads/${B[zip]}"; then
+    zip=$downloads/${B[zip]}
+    note "found it in $downloads"
+  elif ((dry)); then
+    note "a dry run doesn't open Google's page; the install would open ${B[page]}"
+    note "and take ${B[zip]} from $downloads"
+  else
+    guide "The installer now opens Google's download page. On that page:" \
+      "1. Accept Google's terms (the button at the bottom of their notice)." \
+      "2. Find the row for build ${B[build]} in the list for \"$CODENAME\"." \
+      "3. Click \"Link\" in that row and save the file. It is about $(((B[size] + 536870912) / 1073741824)) GB:" \
+      "   ${B[zip]}"
+    printf '\n'
+    ask "    Press Enter to open Google's page: "
+    if command -v xdg-open >/dev/null && xdg-open "${B[page]}" >/dev/null 2>&1; then
+      note "opened ${B[page]}"
+    else
+      note "open this address in a web browser: ${B[page]}"
+    fi
+    while [[ -z $zip ]]; do
+      printf '\n'
+      ask "    Press Enter when the download has finished, or type where you saved the file: "
+      REPLY=${REPLY/#\~/$HOME}
+      if [[ -z $REPLY ]]; then
+        [[ -f $downloads/${B[zip]} ]] || { note "${B[zip]} isn't in $downloads yet"; continue; }
+        REPLY=$downloads/${B[zip]}
+      fi
+      if check_factory "$REPLY"; then zip=$(readlink -f "$REPLY"); fi
+    done
+  fi
+  [[ $zip != *$'\n'* ]] || die "the factory image's path has a line break in it"
+}
+step_factory() {
+  local k
+  if is_done factory; then
+    if [[ -f ${S[factory_zip]:-} && $(stat -c %s "${S[factory_zip]}") == "${S[factory_size]:-}" ]]; then
+      skip factory "taken earlier (build ${S[factory_build]:-}, ${S[factory_zip]})"
+      return 0
+    fi
+    # The build was settled from the signed index then; only the file is needed again
+    title factory
+    note "the factory image taken earlier (${S[factory_zip]:-}) is gone or changed: it is needed again"
+    B=()
+    for k in build size sha256 page name; do B[$k]=${S[factory_$k]:-}; done
+    B[zip]=${B[name]}
+    [[ ${B[sha256]} =~ ^[0-9a-f]{64}$ && ${B[size]} =~ ^[0-9]+$ && -n ${B[zip]} && ${B[page]} == https://developers.google.com/* ]] ||
+      die "$state_file doesn't name the factory image (--start-over forgets it)"
+  else
+    title factory
+    guide "The phone's Wi-Fi, Bluetooth, sound, camera and modem need files that only" \
+      "Google may hand out. They are in Google's \"factory image\" for the phone." \
+      "Omarchy Mobile never ships them: you download the image from Google, and the" \
+      "installer copies what the phone needs out of it, on this computer."
+    printf '\n'
+    choose_index
+    find_build
+  fi
+  take_factory
+  [[ -n $zip ]] || return 0
+  note "Google's factory image for build ${B[build]} is the right file"
+  put factory_build "${B[build]}"
+  put factory_name "${B[zip]}"
+  put factory_page "${B[page]}"
+  put factory_size "${B[size]}"
+  put factory_sha256 "${B[sha256]}"
+  put factory_zip "$zip"
+  put factory "done"
+}
+
+# --- Step 5: the owner's answers, the dry run, the writes --------------------
+# The rules are tools/install-phone's own, read from it, so the two agree
+rule() { sed -n "s/^$1='\(.*\)'\$/\1/p" "$INSTALL_PHONE"; }
+username="" password="" hostname="" timezone="" wifi_ssid="" wifi_psk=""
+owner_answers() {
+  local user_re host_re reserved again tz
+  user_re=$(rule USERNAME_RE) host_re=$(rule HOSTNAME_RE) reserved=$(rule RESERVED)
+  [[ -n $user_re && -n $host_re && -n $reserved ]] || die "can't read the name rules from $INSTALL_PHONE"
+  guide "A few questions about you and the phone. Nothing you type here is saved on" \
+    "this computer."
+  printf '\n'
+  while true; do
+    ask "    Your user name on the phone (lower-case, for example alex): "
+    username=$REPLY
+    if [[ ! $username =~ $user_re ]]; then note "Use lower-case letters, digits, - and _, starting with a letter (at most 32)."
+    elif [[ $username =~ $reserved ]]; then note "'$username' is used by the system; pick your own name."
+    else break; fi
+  done
+  while true; do
+    ask_secret "    A PIN or password to unlock the phone (digits only gives a PIN pad): "
+    password=$REPLY
+    ask_secret "    The same again: "
+    again=$REPLY
+    if [[ -z $password ]]; then note "It can't be empty."
+    elif [[ $password != "$again" ]]; then note "They don't match."
+    else break; fi
+  done
+  while true; do
+    ask "    The phone's name [$username-phone]: "
+    hostname=${REPLY:-$username-phone}
+    [[ $hostname =~ $host_re ]] && break
+    note "Use 1 to 63 letters, digits or dashes, not starting or ending with a dash."
+  done
+  tz=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+  [[ -n $tz ]] || tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||' || true)
+  tz=${tz:-UTC}
+  while true; do
+    ask "    Time zone [$tz]: "
+    timezone=${REPLY:-$tz}
+    [[ $timezone =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ && -f /usr/share/zoneinfo/$timezone ]] && break
+    note "That isn't a time zone (they look like Europe/Paris or America/New_York)."
+  done
+  while true; do
+    ask "    Wi-Fi network name (Enter to skip): "
+    wifi_ssid=$REPLY wifi_psk=""
+    [[ -z $wifi_ssid ]] && break
+    if ((${#wifi_ssid} > 32)); then note "A Wi-Fi network name is at most 32 characters."; continue; fi
+    ask_secret "    Wi-Fi password (Enter if it has none): "
+    wifi_psk=$REPLY
+    [[ -z $wifi_psk || $wifi_psk =~ ^[\ -~]{8,63}$ || $wifi_psk =~ ^[0-9A-Fa-f]{64}$ ]] && break
+    note "A Wi-Fi password is 8 to 63 characters."
+  done
+}
+# The answers in tools/install-phone's order, then its codename confirmation.
+# It reads them from standard input; nothing is put in a file or an argument.
+feed() {
+  printf '%s\n' "$username" "$password" "$password" "$hostname" "$timezone" "" "" "$wifi_ssid"
+  [[ -z $wifi_ssid ]] || printf '%s\n' "$wifi_psk"
+  printf '%s\n' "$key_file" "$1"
+}
+# Always with --serial: tools/install-phone then refuses every phone but the
+# one step 3 looked at, whatever is connected by the time it looks
+install_phone() {
+  feed "$1" 2>/dev/null | OMAMOBILE_INSTALL_GUIDED=1 bash "$INSTALL_PHONE" "${@:2}" --serial "$serial" "${pass[@]}"
+}
+# Once the phone is written, the rest of the install talks to whatever
+# answers at the phone's USB address. The phone being installed is in
+# Fastboot Mode and can't answer there, so anything that does is another
+# phone, and it has to go before this one starts answering at that address.
+nothing_at_usb_address() {
+  ! phone_answers ||
+    stop "Something already answers at the phone's USB address ($PHONE_ADDR), and it" \
+      "can't be the $NAME being installed: that one is in Fastboot Mode. Most likely" \
+      "another phone running Omarchy Mobile is connected to this computer." \
+      "Unplug it, so the rest of the install can't reach the wrong phone, and run" \
+      "this again."
+}
+step_write() {
+  local typed
+  if is_done write; then skip write "done earlier"; return 0; fi
+  title write
+  # A dry run sends nothing over USB SSH, so it doesn't look
+  ((dry)) || nothing_at_usb_address
+  owner_answers
+  say "A dry run first: every check, and what would be written, with nothing sent to the phone"
+  same_phone
+  install_phone "$CODENAME" --dry-run ||
+    stop "The dry run stopped (the message above says why)."
+  if ((dry)); then return 0; fi
+  guide "That was the dry run: the phone is unchanged. The lines above that begin" \
+    "\"would run\" are everything the install writes: the Omarchy Mobile system on" \
+    "slot B and the phone's user data area, which is erased."
+  printf '\n'
+  ask "    Type the phone's codename ($CODENAME) to write it now, or press Enter to stop: "
+  typed=$REPLY
+  [[ $typed == "$CODENAME" ]] || stop "Not confirmed, so the install stops here."
+  nothing_at_usb_address
+  same_phone
+  put write started
+  install_phone "$typed" || {
+    unset password wifi_psk
+    stop_erased
+  }
+  unset password wifi_psk
+  put write "done"
+}
+# The write itself failed. The record says "started", and the words are for
+# a person holding a phone that may now be empty.
+stop_erased() {
+  printf '\n'
+  printf '    %s\n' \
+    "Writing the phone stopped partway (the message above says why)." \
+    "" \
+    "What was on the phone may already be erased. The area that holds your data is" \
+    "the largest thing written, and a write that stopped in it leaves it unusable" \
+    "until it is written again. Don't count on anything that was on the phone." \
+    "" \
+    "Android itself (slot A) was not touched. If you start Android now, it may say" \
+    "it can't load and ask to erase the phone (\"factory data reset\"); after that it" \
+    "starts as new, with nothing of yours on it." \
+    "" \
+    "To go on with Omarchy Mobile: leave the phone in Fastboot Mode (to put it back" \
+    "there: $keys_fastboot), fix what the" \
+    "message above names, and run this command again. It writes the same things" \
+    "again, whole."
+  exit 1
+}
+
+# --- Step 6: the USB network connection --------------------------------------
+phone_answers() { phone --fresh true >/dev/null 2>&1; }
+# Which phone answers over USB SSH: a SHA-256 of its serial number, worked
+# out on the phone, so that what crosses the link and is compared is the
+# same digest the record holds. That is for tidiness, not secrecy: this
+# computer read the serial from fastboot in step 3, and the digest
+# identifies the phone just as well. The bootloader hands the serial to the kernel as its
+# "serialno" parameter under "androidboot" (in the boot configuration or on
+# the command line); the device tree's serial-number is the last place
+# looked. (The parameter's full name is kept out of this file's plain text:
+# the release's identifier scan takes a line that has it for a leaked serial.) "no-serial" when
+# the phone has none of them.
+# shellcheck disable=SC2016 # the phone's shell expands these, not this one
+PHONE_ID='v=$(sed -n '\''s/^androidboot\.serialno[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p'\'' /proc/bootconfig 2>/dev/null | head -n 1)
+[ -n "$v" ] || v=$(tr " " "\n" < /proc/cmdline 2>/dev/null | sed -n '\''s/^androidboot\.serialno=//p'\'' | head -n 1)
+[ -n "$v" ] || v=$(tr -d "\000" < /proc/device-tree/serial-number 2>/dev/null)
+if [ -n "$v" ]; then printf %s "$v" | sha256sum | cut -d" " -f1; else echo no-serial; fi'
+# written_phone: stops unless the phone that answers over USB SSH is the one
+# that was written (the record's digest, taken from its fastboot serial in
+# step 3). Every step that talks to the phone over SSH calls it first: a
+# serial pinned in Fastboot Mode says nothing about who answers at the USB
+# address, with two phones on a desk or a record left by an earlier install.
+written_phone() {
+  local id   # step_phone has refused a record whose "phone" isn't a digest
+  id=$(phone --fresh "$PHONE_ID" 2>/dev/null | tr -cd 'a-z0-9-' || true)
+  [[ -n $id ]] ||
+    stop "The phone doesn't answer over the USB cable. Unplug it, plug it back in," \
+      "wait ten seconds and run this again."
+  [[ $id != no-serial ]] ||
+    stop_final "The phone that answers over the USB cable doesn't tell its serial number, so" \
+      "the installer can't be sure it is the phone it wrote, and it won't back up," \
+      "change or restart a phone it can't be sure of. Nothing was read from it but" \
+      "that. Please open an issue: https://github.com/derekross/omarchy-mobile/issues"
+  [[ $id == "${S[phone]}" ]] ||
+    stop "The phone that answers over the USB cable is not the phone this install" \
+      "wrote. It was asked which phone it is, and nothing else: nothing was copied" \
+      "from it, put on it or restarted." \
+      "Unplug every other phone that runs Omarchy Mobile, connect the $NAME this" \
+      "install is for, and run this again. (If this record is left from an install" \
+      "of another phone: $self --start-over forgets it.)"
+}
+step_network() {
+  if is_done network; then skip network "set up earlier"; return 0; fi
+  title network
+  if ((dry)); then
+    # Nothing is sent over USB SSH in a dry run, and nothing is added
+    guide "The install would add this saved connection, after showing it and asking:" \
+      "" \
+      "    ${NM_ADD[*]}" \
+      "" \
+      "${NM_DOES[@]}"
+    printf '\n'
+    note "a dry run adds nothing"
+    return 0
+  fi
+  if phone_answers; then
+    note "this computer already reaches the phone over USB"
+    put network "done (already working)"
+    return 0
+  fi
+  if ! command -v nmcli >/dev/null; then
+    stop "The rest of the install talks to the phone over the USB cable, as a small" \
+      "network of its own: the phone is $PHONE_ADDR and this computer must be" \
+      "172.16.42.2. This computer doesn't use NetworkManager, so set that address" \
+      "(172.16.42.2/24) on the phone's USB network interface with your system's own" \
+      "network settings."
+  fi
+  if [[ $(nmcli -t -f NAME connection show 2>/dev/null | grep -cx "$NM_PROFILE" || true) != 0 ]]; then
+    note "the connection \"$NM_PROFILE\" is already saved on this computer, and is left as it is"
+    [[ $(nmcli -g ipv4.method connection show "$NM_PROFILE" 2>/dev/null || true) != shared ]] ||
+      note "(it shares this computer's internet connection with the phone; the install doesn't need that)"
+    put network "done (already saved)"
+    return 0
+  fi
+  guide "The rest of the install talks to the phone over the USB cable, as a small" \
+    "network of its own between this computer and the phone. This computer needs" \
+    "one saved connection for it. This is the command that adds it:" \
+    "" \
+    "    ${NM_ADD[*]}" \
+    "" \
+    "${NM_DOES[@]}"
+  printf '\n'
+  ask "    Press Enter to add it, or type no to set it up yourself: "
+  [[ -z $REPLY || $REPLY == yes ]] ||
+    stop "Not added. To set it up yourself, run the command above (or give this computer" \
+      "the address 172.16.42.2/24 on the phone's USB network interface)."
+  "${NM_ADD[@]}" >/dev/null ||
+    stop "NetworkManager didn't add the connection (its message is above)." \
+      "You can add it yourself with the command shown."
+  note "added the connection \"$NM_PROFILE\""
+  put network "done (added $NM_PROFILE)"
+}
+
+# --- Step 7: the first start --------------------------------------------------
+step_first_start() {
+  # Every wait is measured on the clock (bash's SECONDS), never in passes of
+  # its loop: a pass takes as long as its SSH attempts do, and one that times
+  # out takes seconds, so a count of passes made "20 minutes" last up to an hour
+  local began=$SECONDS seen=0 said=0 mins
+  if is_done first_start; then skip first_start "finished earlier"; return 0; fi
+  title first_start
+  guide "The phone is starting Omarchy Mobile for the first time. It makes the system" \
+    "fill the phone's storage, sets up your account and shows the lock screen." \
+    "This takes a few minutes. Leave the phone connected and alone."
+  printf '\n'
+  while true; do
+    if phone --fresh "test -e $FIRSTBOOT_DONE" >/dev/null 2>&1; then break; fi
+    if ((!seen)) && phone_answers; then seen=1; note "the phone is on the USB connection and is setting itself up"; fi
+    ((SECONDS - began < wait_first_start)) ||
+      stop "The phone hasn't finished its first start after $((wait_first_start / 60)) minutes." \
+        "If it shows the lock screen, unplug the cable, plug it back in, wait ten" \
+        "seconds and run this again. If it still doesn't answer then, another of this" \
+        "computer's saved connections may have taken the phone's USB link (they go" \
+        "first): \"nmcli device\" shows which connection each link uses." \
+        "If the phone's screen is dark or stuck: $keys_restart." \
+        "If it still doesn't finish, ask in an issue:" \
+        "https://github.com/derekross/omarchy-mobile/issues"
+    sleep "$poll"
+    mins=$(((SECONDS - began) / 60))
+    ((mins <= said)) || { said=$mins; note "still waiting ($mins min)"; }
+  done
+  written_phone
+  note "the first start has finished"
+  put first_start "done"
+}
+
+# --- Step 8: the radio backup --------------------------------------------------
+step_backup() {
+  local dir args=()
+  if is_done backup; then
+    if [[ -f ${S[backup_dir]:-}/SHA256SUMS ]]; then skip backup "saved earlier in ${S[backup_dir]}"; return 0; fi
+    is_done provision && { skip backup "taken earlier (its folder ${S[backup_dir]:-} is no longer there)"; return 0; }
+    note "the backup saved earlier (${S[backup_dir]:-}) is gone: taking it again"
+  fi
+  title backup
+  dir=${backup_parent:-$HOME/omamobile-backup}/$CODENAME-radio-backup-$(date +%Y%m%d-%H%M)
+  [[ ! -e $dir ]] || dir+=-$(date +%S)
+  [[ $dir != *$'\n'* ]] || die "the backup folder's path has a line break in it"
+  guide "Before the phone's modem ever starts, the installer copies the partitions" \
+    "that hold its radio calibration and identity to this computer. This only" \
+    "reads from the phone. The copy goes into:" \
+    "    $dir" \
+    "It holds the phone's IMEI and serial numbers. Keep it, and never post or" \
+    "share it, not even in a bug report."
+  printf '\n'
+  [[ $mode == bundle ]] || args=(-d "$CODENAME")
+  mkdir -p "$(dirname "$dir")"
+  # This phone's radio identity must not be filed as another phone's
+  written_phone
+  bash "$NV_BACKUP" "${args[@]}" "$dir" ||
+    stop "The backup didn't finish (the message above says why), and what it had copied" \
+      "was removed. If the message is about a partition (not found, writable or" \
+      "mounted), don't work around it: ask in an issue. Otherwise run this again."
+  put backup_dir "$dir"
+  put backup "done"
+}
+
+# --- Step 9: the firmware -----------------------------------------------------
+# The one place that knows tools/phone-provision's command line (plan G1,
+# #631: the run is named, and a first install is --first-install with the
+# radio backup's folder; then Google's factory image). tests/install-guided
+# hands exactly these arguments to the real tool's --dry-run.
+run_provision() {
+  bash "$PHONE_PROVISION" -d "$CODENAME" --first-install --nv-backup "$1" "$2"
+}
+camera_ready() { [[ -x $CAMERA_VENV/bin/python ]] && "$CAMERA_VENV/bin/python" -c 'import unicorn, elftools' 2>/dev/null; }
+# The modules are code that tools/phone-provision then runs as the owner, so
+# they are fetched by exact version and SHA-256 (tools/camera-requirements.txt,
+# under a bundle's signed checksums like every other file), as built
+# packages only: pip refuses a file whose digest isn't listed.
+camera_pinned() { grep -Ec '^[A-Za-z0-9_.-]+==[0-9][A-Za-z0-9_.]* .*--hash=sha256:[0-9a-f]{64}' "$CAMERA_REQUIREMENTS" 2>/dev/null || true; }
+camera_setup() {
+  if [[ -n ${CAMERA_VENV_SETUP:-} ]]; then "$CAMERA_VENV_SETUP" "$CAMERA_VENV" "$CAMERA_REQUIREMENTS"; return; fi
+  python3 -m venv "$CAMERA_VENV" &&
+    "$CAMERA_VENV/bin/pip" install --quiet --require-hashes --only-binary :all: -r "$CAMERA_REQUIREMENTS"
+}
+camera_modules() {
+  local versions
+  if camera_ready; then note "the camera's Python modules are here ($CAMERA_VENV)"; return 0; fi
+  if [[ ${S[camera_tools]:-} == skipped ]]; then
+    note "going on without the camera's Python modules, as you chose earlier: the cameras won't work"
+    return 0
+  fi
+  # No pinned list, no fetch: an unpinned one is never the fallback
+  [[ $(camera_pinned) -ge 2 ]] ||
+    die "$CAMERA_REQUIREMENTS doesn't name the camera's modules by version and SHA-256: this download is incomplete"
+  versions=$(sed -nE 's/^([A-Za-z0-9_.-]+)==([^ ]+) .*/\1 \2/p' "$CAMERA_REQUIREMENTS" | paste -sd, | sed 's/,/ and /g')
+  guide "The cameras need two small Python modules on this computer: $versions." \
+    "The installer can download them from pypi.org into a folder of their own" \
+    "($CAMERA_VENV)." \
+    "Each file is checked against the SHA-256 this installer carries for it, and one" \
+    "that differs is refused. Without them everything else works, but the cameras" \
+    "won't, and there is no simple way yet to add the cameras to a finished install."
+  while true; do
+    printf '\n'
+    ask "    Press Enter to get them, or type no to go on without the cameras: "
+    case $REPLY in
+      ""|yes) break ;;
+      no)
+        # The owner's choice, and the only way "skipped" is ever recorded
+        put camera_tools skipped
+        note "going on without them: the cameras won't work on this phone"
+        return 0 ;;
+      *) note "Enter gets them; no goes on without the cameras." ;;
+    esac
+  done
+  if camera_setup && camera_ready; then
+    note "the camera's Python modules are ready"
+    return 0
+  fi
+  # A fetch that failed is not a choice: nothing is recorded, so running
+  # this again asks again, and the install never ends "ready" without
+  # cameras the owner asked for
+  stop "The camera's Python modules could not be fetched (the message above says why:" \
+    "no internet connection, pypi.org not reachable, or no file there for this" \
+    "computer that matches the SHA-256 the installer carries; it carries them for" \
+    "the systems listed in $CAMERA_REQUIREMENTS," \
+    "and pyelftools needs Python 3.10 or later)." \
+    "The phone's firmware has not been added yet." \
+    "To try again, run this command again and press Enter at the same question." \
+    "To go on without the cameras, run it again and type no there."
+}
+step_provision() {
+  local sum
+  if is_done provision; then skip provision "done earlier"; return 0; fi
+  title provision
+  camera_modules
+  # The file was checked when it was taken, perhaps days ago: check the bytes
+  # that are about to be unpacked
+  [[ -f ${S[factory_zip]:-} ]] || stop "The factory image (${S[factory_zip]:-none}) is gone: run this again to take it."
+  note "checking Google's factory image again"
+  sum=$(sha256sum < "${S[factory_zip]}" | cut -d' ' -f1)
+  [[ $sum == "${S[factory_sha256]:-}" ]] ||
+    stop "The factory image ${S[factory_zip]} changed since it was checked." \
+      "Delete that file and run this again: the installer will ask for it again."
+  guide "Copying the firmware the phone needs out of Google's factory image, on this" \
+    "computer, and onto the phone. This takes several minutes."
+  printf '\n'
+  # This phone's firmware and radio checksums must not land on another phone
+  written_phone
+  run_provision "${S[backup_dir]:?no radio backup recorded}" "${S[factory_zip]}" ||
+    stop "Adding the firmware stopped (the message above says why). Each part is put" \
+      "on the phone whole or not at all, and running this again does all of it again."
+  put provision "done"
+}
+
+# --- Step 10: the restart -------------------------------------------------------
+boot_id() { phone --fresh 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -cd 'a-f0-9-'; }
+step_restart() {
+  local before now began=$SECONDS
+  if is_done restart; then skip restart "done earlier"; return 0; fi
+  title restart
+  before=${S[restart_from]:-}
+  # Before the restart is sent, and before a restart sent earlier is taken
+  # as finished: another phone has another boot id, and would look "back"
+  written_phone
+  if [[ -z $before ]]; then
+    before=$(boot_id)
+    [[ -n $before ]] ||
+      stop "The phone doesn't answer over the USB cable. Unplug it, plug it back in," \
+        "wait ten seconds and run this again."
+    # Recorded before it is sent, so a rerun waits for this restart and
+    # doesn't send a second one
+    put restart_from "$before"
+    guide "Restarting the phone, so it starts with its firmware."
+    # The modem's unit is stopped first (AGENTS.md section 2): reboot-to stops
+    # no unit. Before the firmware was added the modem can't have started,
+    # so on a straight run the stop does nothing; on a rerun after the owner
+    # restarted the phone it may be up. The stop's own result isn't used: it
+    # ends "failed" today even when it worked (issue #532), and the next
+    # start tolerates one unclean end (#634).
+    phone 'systemctl stop omamobile-modem >/dev/null 2>&1; (sleep 1; reboot-to omamobile) >/dev/null 2>&1 &' || {
+      put restart_from ""
+      stop "The phone didn't take the restart. Run this again to try once more."
+    }
+  else
+    note "the restart was already sent; waiting for the phone"
+  fi
+  while true; do
+    now=$(boot_id)
+    [[ -n $now && $now != "$before" ]] && break
+    ((SECONDS - began < wait_restart)) ||
+      stop "The phone hasn't come back $((wait_restart / 60)) minutes after its restart." \
+        "Wait a minute more: a stuck restart resets itself. If it is still stuck:" \
+        "$keys_restart. Then run this again."
+    sleep "$poll"
+  done
+  written_phone
+  note "the phone is back"
+  put restart "done"
+}
+
+# --- Step 11: the check ---------------------------------------------------------
+step_check() {
+  local began=$SECONDS report=$state_dir/report.json rc=0 unreadable=0 failed=0
+  title check
+  written_phone
+  # Sound, sensors and radios come up over the first seconds after a start
+  while ((SECONDS - began < wait_settle)); do
+    case $(phone --fresh 'systemctl is-system-running' 2>/dev/null || true) in
+      running|degraded) break ;;
+    esac
+    sleep "$poll"
+  done
+  mkdir -p "$state_dir"
+  bash "$PHONE_SMOKE" --json > "$report.new" 2>"$scratch/smoke.err" || rc=$?
+  mv -f "$report.new" "$report"
+  python3 -I -B - "$report" "$scratch/failed" <<'PY' || unreadable=1
+import json, sys
+PLAIN = {
+    "boot": "Starts its own system (slot B)", "storage guard": "Radio and Android partitions are protected",
+    "root": "System is on the phone's storage", "kernel health": "No serious errors since it started",
+    "USB gadget": "USB connection", "session": "Desktop is running", "display": "Display", "touch": "Touch",
+    "buttons": "Buttons", "battery": "Battery", "sound cards": "Sound", "sensors": "Sensors",
+    "cameras": "Cameras", "lock": "Lock screen", "systemd units": "Background services",
+    "thermal": "Temperature sensors", "new dmesg errors": "New system messages",
+}
+try:
+    checks = json.load(open(sys.argv[1]))["checks"]
+    rows = [(c["name"], c["status"], bool(c["required"]), str(c.get("detail", ""))) for c in checks]
+except (OSError, ValueError, KeyError, TypeError):
+    print("    The phone's report can't be read.")
+    sys.exit(1)
+print()
+for name, status, required, detail in rows:
+    label = PLAIN.get(name, name)
+    if status == "ok":
+        print("    [ok]  %s" % label)
+    elif status == "skip":
+        print("    [--]  %s: not checked (%s)" % (label, detail))
+    else:
+        print("    [!!]  %s: not working (%s)%s" % (label, detail, " - needed" if required else ""))
+open(sys.argv[2], "w").write("%d\n" % sum(1 for r in rows if r[1] not in ("ok", "skip")))
+PY
+  if ((unreadable)); then
+    cat "$scratch/smoke.err" >&2
+    stop "The phone didn't answer the check. Unplug the cable, plug it back in, wait ten" \
+      "seconds and run this again."
+  fi
+  if ((rc)); then
+    put check "failed"
+    stop_final "Something went wrong: a check the phone needs didn't pass (marked \"needed\" above)." \
+      "The phone's report is saved in $report" \
+      "It is made to name no phone (no serial number, IMEI or Wi-Fi name), but its" \
+      "\"new dmesg errors\" row quotes the phone's own system messages: read that row" \
+      "before you post the file anywhere public. To ask for help, open an issue and" \
+      "attach it: https://github.com/derekross/omarchy-mobile/issues" \
+      "Never attach the radio backup, or this install's record ($state_file)." \
+      "Running this command again checks the phone again, and changes nothing else."
+  fi
+  failed=$(cat "$scratch/failed" 2>/dev/null || echo 0)
+  put check "passed"
+  put finished "$(date -u +%Y-%m-%d)"
+  if ((failed)); then
+    say "Your phone is ready, with $failed thing(s) not working (marked [!!] above)"
+    note "A line marked [!!] is either something this release doesn't do yet on this"
+    note "phone, or a fault. The list of what isn't done yet: $device_page"
+    note "If a line isn't on that list, it is worth an issue (the report is in $report;"
+    note "read its \"new dmesg errors\" row before posting it)."
+    [[ ${S[camera_tools]:-} != skipped ]] ||
+      note "The cameras don't work because you chose to go on without their Python modules."
+  else
+    say "Your phone is ready"
+  fi
+  note "Unlock it with the PIN or password you chose."
+  note "The radio backup is in ${S[backup_dir]:-its folder}: keep it, and never share it."
+  note "The phone updates itself from its own menu (Update), or with: omarchy update"
+}
+
+# --- Run ------------------------------------------------------------------------
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+say "Omarchy Mobile $release for the $NAME$( ((dry)) && echo ' (dry run: nothing is written or recorded)')"
+((!dry)) || note "A dry run reads the phone in Fastboot Mode and, unless --offline, looks for a newer list of Google's builds on omamobile.org. It sends nothing else anywhere."
+# The one warning, then the phone and its unlock steps (plan D9). These two
+# calls are the order; nothing else depends on it.
+warning_then_phone() {
+  step_warning
+  step_phone
+}
+step_preflight
+warning_then_phone
+step_factory
+step_write
+if ((dry)); then
+  step_network
+  say "Dry run done: nothing was written to the phone, added to this computer or recorded"
+  note "The install would go on to: check that nothing else answers at the phone's USB address, write the phone, wait for its first start, back up its radio"
+  note "partitions into ${backup_parent:-$HOME/omamobile-backup}, add its firmware, restart it and check it."
+  exit 0
+fi
+step_network
+step_first_start
+step_backup
+step_provision
+step_restart
+step_check
