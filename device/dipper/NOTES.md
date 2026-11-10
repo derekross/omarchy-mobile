@@ -49,15 +49,17 @@ old image again. Systemd reported failure to set the `qcom_wdt` timeout to one
 minute, but the exact journal line was not retained and the feeder was not
 checked. This old-kernel observation is not evidence for PR #505's image.
 
-The PR #505 RAM image was built from kernel PR #220 head `b288f8e` after FTS5
-PR #219 merged, then started with serial-pinned `fastboot boot`; no partition
-was flashed. It reported `7.3.0-rc6-omamobile-push1`. The `boot.img` SHA-256 is
-`e2cdb765de21a5869a1db314c19f1fddb668219a51d3c9ce81a1a083536d711e`, matching
-its build manifest. The root is the initramfs (`rootfs`), not UFS. `simpledrm`
-registered `/dev/fb0`; USB networking and SSH worked; and `qcom_wdt` was bound
-with its userspace feeder running. The rescue exposed reboot modes `bootloader`
-and `recovery`; running `/usr/local/bin/reboot-to bootloader` over SSH returned
-the handset to fastboot without writing UFS.
+The image with SHA-256
+`e2cdb765de21a5869a1db314c19f1fddb668219a51d3c9ce81a1a083536d711e` was
+previously described here as PR #505's RAM image. On 2026-11-10, I booted that
+exact file again with `fastboot boot` and read it over the USB serial shell.
+It reported `7.3.0-rc6-omamobile-push1`, but `/dev/sda` existed with
+`/sys/block/sda/ro=0`; `/sys/block/sda/sda21/ro=1`. Its initramfs root was
+`rootfs`; no UFS write was attempted. This does not verify PR #505's expected
+whole-disk-node removal, so this artifact must not be treated as that image or
+booted again. SSH host-key verification succeeded, but the configured key was
+not authorized. The separate rescue image still provides authenticated SSH
+and `reboot-to bootloader` returned the phone to fastboot without writing UFS.
 
 `pm8941_pwrkey` and `pm8941_resin` registered. On the earlier final image, a
 physical Volume Down press produced `KEY_VOLUMEDOWN` (code 114, value 1), and
@@ -65,9 +67,13 @@ Volume Up produced `KEY_VOLUMEUP` (code 115, value 1). The current kernel
 image's button events have not yet been rechecked. The owner reported seeing
 the console during the first boot.
 
-The storage guard removed `/dev/sda`; its sysfs `ro` value remained `0` by
-design. All 85 UFS partition `ro` values were `1`; the other UFS whole disks
-were read-only. `/proc/iomem` reports `0x86200000–0x88efffff` as System RAM and
+An earlier test record attributed removal of `/dev/sda` to the PR #505 image,
+but the recorded image hash is the `e2cdb765…` artifact checked above, where
+`/dev/sda` was present and writable. The earlier whole-disk-removal result
+cannot be tied to a different retained image, so PR #505's disk-node check
+needs a new run against its exact build before it is claimed. The `e2cdb765…`
+boot did report all 85 UFS partition flags read-only; no UFS writes were made.
+`/proc/iomem` reports `0x86200000–0x88efffff` as System RAM and
 `0x88f00000–0x890fffff` as reserved, so the TZ range is not reserved in this
 RAM boot's map. A separate EA8074 panel test used a RAM-only overlay on
 2026-11-09 with kernel `7.3.0-rc6-omamobile-push1` and boot image SHA-256
