@@ -94,10 +94,12 @@ buf[0x30:0x34] = bytes([3, 0x00, 0, 0])
 buf[0x34:0x38] = bytes([0, 0x0c, 0, 0])
 open(sys.argv[1], "wb").write(buf)
 PY3
+cc -O2 -DOMAMOBILE_DEVINFO_EXTRA_MINOR=11 -o "$tmp/bootctl311" \
+  src/omamobile-bootctl.c
 cp "$tmp/devinfo311" "$tmp/devinfo311.orig"
-"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo311" | grep -q 'version: 3.11' \
+"$tmp/bootctl311" dump "$tmp/devinfo311" | grep -q 'version: 3.11' \
   || fail "bootctl decodes devinfo 3.11"
-plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo311" b 2>&1 || true)
+plan=$("$tmp/bootctl311" mark-successful "$tmp/devinfo311" b 2>&1 || true)
 grep -q '0x35: 0c -> 0e' <<<"$plan" || fail "3.11 mark-successful plans one byte"
 cmp -s "$tmp/devinfo311" "$tmp/devinfo311.orig" || fail "a 3.11 dry run writes nothing"
 pass "bootctl accepts devinfo 3.11"

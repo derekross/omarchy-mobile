@@ -17,9 +17,15 @@ Findings from real hardware, newest first. Tracking issue: #36.
 - **The A/B bytes are readable at the same offsets in 3.11 and 3.15.** A
   read-only `omamobile-bootctl dump` decoded slot a and b on 3.11; layout
   equivalence is not yet confirmed (see the provisional table below).
-- **Fix:** lynx adds 3.11 at build time through
-  `-DOMAMOBILE_DEVINFO_EXTRA_MINOR=11`; the shared source keeps the 7 Pro's
-  3.15 condition. The package tests 3.11 and rejects an unverified 3.14.
+- **The earlier write, 2026-10-30.** `omamobile-bootctl` from
+  `omamobile-device-lynx` 0.2.0 changed slot B's flag at `0x35` from `0x04`
+  to `0x06`; only that byte was recorded, not the full eight, and no
+  read-only `devinfo` backup was taken first. Treat it as a 3.15-layout
+  observation until re-read.
+- **Fix:** the shared source has the `#ifdef` for 3.11 and the 7 Pro's
+  3.15 condition. lynx's build does not pass the define yet, so 3.11
+  writes stay off until the table is confirmed; the package test builds
+  its own copy with the define and rejects an unverified 3.14.
 
 ## 2026-10-27: Wi-Fi parked
 
