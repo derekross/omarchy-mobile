@@ -76,7 +76,7 @@ while (($#)); do
     --lock) lock=${2:?--lock needs a file}; shift ;;
     --verify) verify=1 ;;
     --digest) tree_digest "${2:?--digest needs a directory}"; exit ;;
-    -h|--help) sed -n '3,33p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source "$ROOT/tools/lib/usage.sh"; usage_from_header "$self"; exit 0 ;;
     *) die "unknown argument $1" ;;
   esac
   shift

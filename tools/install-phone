@@ -84,6 +84,7 @@ while (($#)); do
     --bootloader-slots-match) slots_match=${2:?}; shift ;;
     --reinstall) reinstall=1 ;;
     --unsigned) unsigned=1 ;;
+    # Not tools/lib/usage.sh: the bundle ships this file alone, as install
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument $1 (see --help)" ;;
   esac
