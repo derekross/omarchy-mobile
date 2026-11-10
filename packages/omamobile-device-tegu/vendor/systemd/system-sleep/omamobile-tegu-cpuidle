@@ -29,9 +29,26 @@ KEEP=$root/etc/omamobile/cpuidle-keep-across-sleep
 L=$root/var/log/omamobile/cpuidle-sleep.log
 mkdir -p "$D" "${L%/*}"
 log() { echo "$(date -Is) $1: $2" >> "$L"; }
+# Enable the noted states again and drop the note. $1: the pass, for the log.
+restore() {
+  local f n=0
+  while read -r f; do
+    [[ -e $f ]] || continue
+    if { echo 0 > "$f"; } 2>/dev/null; then n=$((n + 1)); else log "$1" "could not enable $f"; fi
+  done < "$N"
+  rm -f "$N"
+  if [[ $1 == pre ]]; then
+    log pre "$n idle states enabled again (the note of a sleep whose post pass never ran)"
+  else
+    log post "$n idle states enabled again"
+  fi
+}
 case "$1" in
   pre)
-    rm -f "$N"
+    # A note still here is from a sleep whose "post" never ran (systemd-sleep
+    # killed between the two passes): its states are enabled again first, so
+    # they aren't taken for hand-disabled ones and left off for good.
+    [[ -e $N ]] && restore pre
     if [[ -e $KEEP ]]; then
       log pre "$KEEP exists: the idle states are left as they are"
       exit 0
@@ -40,18 +57,12 @@ case "$1" in
     for f in "$C"/cpu[0-9]*/cpuidle/state[1-9]*/disable; do
       [[ -e $f ]] || continue
       [[ $(cat "$f") == 0 ]] || continue
-      if echo 1 > "$f" 2>/dev/null; then echo "$f" >> "$N"; n=$((n + 1)); else log pre "could not disable $f"; fi
+      if { echo 1 > "$f"; } 2>/dev/null; then echo "$f" >> "$N"; n=$((n + 1)); else log pre "could not disable $f"; fi
     done
     ((n)) && log pre "$n deeper idle states disabled for the sleep"
     ;;
   post)
-    [[ -e $N ]] || exit 0
-    n=0
-    while read -r f; do
-      [[ -e $f ]] && echo 0 > "$f" 2>/dev/null && n=$((n + 1))
-    done < "$N"
-    rm -f "$N"
-    log post "$n idle states enabled again"
+    [[ -e $N ]] && restore post
     ;;
 esac
 exit 0
