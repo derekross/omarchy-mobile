@@ -1166,3 +1166,4 @@ elif [[ $rc != 0 ]]; then
 else
   pass "Back threshold feedback: once per gesture, both edges and retreat"
 fi
+bash test/power-overlap.sh || fail "overlapping power-key presses"
