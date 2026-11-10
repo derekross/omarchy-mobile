@@ -50,7 +50,8 @@ ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # userdata (the Arch root). The kernel only lets a partition be written if
 # its whole disk is writable too, so the main disk (sda) stays writable but
 # its whole-disk node is removed, so nothing can write across partitions by
-# accident. The boot LUNs (sdb, sdc, sdd: bootloader images) are read-only
+# accident; a LUN the descriptor's UFS_RW_LUNS names is guarded the same way.
+# The other LUNs (on Pixels sdb, sdc, sdd: bootloader images) are read-only
 # at the disk level. Calibration partitions (efs, persist, modem_userdata...)
 # and all of slot A stay read-only.
 # The allowlist is the descriptor's UFS_RW, which bin/omamobile initramfs
@@ -59,6 +60,9 @@ ufs_ro_log() { echo "omamobile: ufs-ro: $*" > /dev/kmsg; }
 # start and the initramfs shell stays up over SSH. Whatever the file says,
 # only slot B's boot images and userdata can be named.
 UFS_RW=""
+UFS_RW_LUNS=""
+# Is $1 a disk that holds allowlisted partitions? sda always.
+ufs_rw_disk() { case " sda $UFS_RW_LUNS " in *" $1 "*) true ;; *) false ;; esac; }
 ufs_rw_load() {
   local list p
   if [ ! -s /etc/omamobile-ufs-rw ]; then
@@ -88,6 +92,23 @@ ufs_rw_load() {
   done
   UFS_RW="$*"
   ufs_ro_log "allowlist: $UFS_RW"
+  # LUNs besides sda that hold allowlisted partitions (the descriptor's
+  # UFS_RW_LUNS: enchilada's boot_b is on sde). Each is guarded as sda is.
+  # Malformed: none, so their partitions stay read-only.
+  [ -s /etc/omamobile-ufs-rw-luns ] || return 0
+  list=$(cat /etc/omamobile-ufs-rw-luns)
+  # shellcheck disable=SC2086 # split into names on purpose
+  case "$list" in *[!a-z\ ]*) set -- bad ;; *) set -- $list ;; esac
+  for p in "$@"; do
+    case "$p" in
+      sd[b-z]) ;;
+      *)
+        ufs_ro_log "malformed LUN list in /etc/omamobile-ufs-rw-luns: every LUN but sda read-only"
+        return 0 ;;
+    esac
+  done
+  UFS_RW_LUNS="$*"
+  ufs_ro_log "LUNs with allowlisted partitions: sda $UFS_RW_LUNS"
 }
 ufs_rw_load
 mkdir -p /run/ufs-ro
@@ -99,14 +120,14 @@ ufs_ro_pass() {
     name=${s##*/}
     [ -e "/run/ufs-ro/$name" ] && continue
     [ -b "/dev/$name" ] || continue  # devtmpfs node not there yet: next pass
-    if [ "$name" = sda ]; then
-      rm -f /dev/sda
+    if ufs_rw_disk "$name"; then
+      rm -f "/dev/$name"
       : > "/run/ufs-ro/$name"
-      ufs_ro_log "/dev/sda: whole-disk node removed (partitions guarded individually)"
+      ufs_ro_log "/dev/$name: whole-disk node removed (partitions guarded individually)"
       continue
     fi
     part=$(ufs_partname "$s")
-    if [ -n "$part" ] && [ "${name%%[0-9]*}" = sda ] && \
+    if [ -n "$part" ] && ufs_rw_disk "${name%%[0-9]*}" && \
        case " $UFS_RW " in *" $part "*) true ;; *) false ;; esac; then
       : > "/run/ufs-ro/$name"
       ufs_ro_log "/dev/$name ($part) left writable (allowlist)"
@@ -131,11 +152,11 @@ ufs_unguarded() {
   for s in /sys/block/sd* /sys/block/sd*/sd*; do
     [ -r "$s/ro" ] || continue
     name=${s##*/}
-    [ "$name" = sda ] && continue
+    ufs_rw_disk "$name" && continue
     read -r ro < "$s/ro"
     [ "$ro" = 0 ] || continue
     part=$(ufs_partname "$s")
-    if [ -n "$part" ] && [ "${name%%[0-9]*}" = sda ]; then
+    if [ -n "$part" ] && ufs_rw_disk "${name%%[0-9]*}"; then
       case " $UFS_RW " in *" $part "*) continue ;; esac
     fi
     echo "$name${part:+ ($part)}"
@@ -167,16 +188,18 @@ board_matches() {
   return 0
 }
 
-# Modules this image carries (the descriptor's INITRAMFS_MODULES), insmodded
+# Modules this image carries (the descriptor's INITRAMFS_MODULES), loaded
 # in the packed order before any other step: on raven the PMIC regulator
 # driver the simple-framebuffer waits for, and the MAX77759 nvmem that ABL
 # reads the reboot reason from. They were built for this image's board.
 load_modules() {
-  local m
+  local m error
   [ -s /lib/modules/omamobile/order ] || return 0
   board_matches "initramfs modules" || return 0
+  # BusyBox insmod may retry initialization after finit_module fails.
+  # These modules can already have touched hardware before returning an error.
   while read -r m; do
-    insmod "/lib/modules/omamobile/$m.ko" 2>/dev/null || say "insmod $m failed"
+    error=$(/usr/local/bin/module-load-once "/lib/modules/omamobile/$m.ko" 2>&1) || say "module-load-once $m failed: $error"
   done < /lib/modules/omamobile/order
 }
 load_modules

@@ -29,7 +29,7 @@ while (($#)); do
     --json) json=1 ;;
     # tests only: the kernel health rows for a saved error log, then exit
     --errors-from) errors_from=${1:?--errors-from FILE}; shift; here=1 ;;
-    -h|--help) sed -n '3,21p' "$0"; exit 0 ;;
+    -h|--help) source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header --raw "$0"; exit 0 ;;
     *) echo "phone-smoke: unknown option $a" >&2; exit 2 ;;
   esac
 done

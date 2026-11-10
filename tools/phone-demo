@@ -47,7 +47,7 @@
 # person holding the phone will notice.
 set -uo pipefail
 
-usage() { sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { source "$(dirname -- "${BASH_SOURCE[0]}")/lib/usage.sh"; usage_from_header "$0" 2; exit "${1:-0}"; }
 
 here=0
 if [[ ${1:-} == --here ]]; then here=1; shift; fi

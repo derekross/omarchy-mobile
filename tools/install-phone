@@ -30,6 +30,8 @@
 # development phone, set up by hand, has no such file), shows exactly what it
 # will run, and waits for the codename to be typed. The phone's first boot
 # (omamobile-firstboot) creates the user from that file and deletes it.
+# The key also goes into a copy of slot B's ramdisk image, as
+# omamobile-boot-update appends it, so the initramfs's rescue SSH takes it.
 #
 #   install-phone [--dry-run] [options]
 #     --dry-run              read the phone's variables (read-only) and prepare
@@ -82,7 +84,8 @@ while (($#)); do
     --bootloader-slots-match) slots_match=${2:?}; shift ;;
     --reinstall) reinstall=1 ;;
     --unsigned) unsigned=1 ;;
-    -h|--help) sed -n '3,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # Not tools/lib/usage.sh: the bundle ships this file alone, as install
+    -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument $1 (see --help)" ;;
   esac
   shift
@@ -146,8 +149,8 @@ if [[ $mode == repository ]]; then
   [[ $built_for == "$CODENAME" ]] \
     || die "$images holds images for '${built_for:-an unknown device}', not $CODENAME (run: DEVICE=$CODENAME bin/omamobile images)"
 fi
-for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum; do
-  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs)"
+for tool in "$FASTBOOT" debugfs dumpe2fs e2fsck zstd openssl sha256sum lz4 cpio python3; do
+  command -v "$tool" >/dev/null || die "$tool not found (fastboot: android-tools; debugfs: e2fsprogs; lz4: lz4; cpio: cpio)"
 done
 BOOT_IMAGES=${D[BOOT_IMAGES]:-} UFS_RW=${D[UFS_RW]:-}
 [[ -n $BOOT_IMAGES && -n $UFS_RW ]] || die "$conf: BOOT_IMAGES and UFS_RW are required"
@@ -415,10 +418,12 @@ if [[ $current_slot == b && $reinstall != 1 ]]; then
 fi
 [[ $current_slot == b ]] && note "slot b holds Omarchy Mobile (--reinstall): it will be replaced"
 # Each image must fit its slot B partition, an AVB_FOOTERS image exactly.
+declare -A part_size=()
 for p in $BOOT_IMAGES; do
   psize=$(sed -nE "s/^partition-size:${p}_b:[ ]*(0x[0-9a-fA-F]{1,12})\$/\1/p" <<<"$vars" | head -1)
   [[ -n $psize ]] || die "the phone reports no partition-size for ${p}_b"
   psize=$((psize)) isize=$(stat -c %s "$images/$p.img")
+  part_size[$p]=$psize
   ((isize <= psize)) || die "$p.img is $isize bytes, larger than ${p}_b ($psize bytes)"
   [[ -z ${avb_size[$p]:-} ]] || ((avb_size[$p] == psize)) \
     || die "$conf: AVB_FOOTERS pads $p to ${avb_size[$p]} bytes, but ${p}_b is $psize: its footer would not be at the end of the partition"
@@ -489,9 +494,9 @@ work=${work:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile-install}
 mkdir -p "$work"
 chmod 700 "$work"
 copy=$work/root.img sparse=$work/root.simg conf_file=$work/firstboot.conf keys_file=$work/authorized_keys
-boot_conf=$work/boot-update.conf
+boot_conf=$work/boot-update.conf ramdisk_dir=$work/ramdisk
 # The copy holds the password hash (and any Wi-Fi password): never left behind
-cleanup() { rm -f "$conf_file" "$keys_file" "$boot_conf" "$copy" "$sparse"; }
+cleanup() { rm -f "$conf_file" "$keys_file" "$boot_conf" "$copy" "$sparse"; rm -rf "$ramdisk_dir"; }
 trap cleanup EXIT
 (
   umask 077
@@ -522,9 +527,15 @@ rm -f "$copy" "$sparse"
 zstd -q -d --sparse -f "$rootfs" -o "$copy"
 [[ $(dumpe2fs -h "$copy" 2>/dev/null | sed -n 's/^Filesystem volume name: *//p') == omamobile-root ]] ||
   die "$rootfs is not an Omarchy Mobile root image (label omamobile-root)"
+# debugfs's mkdir on a directory that already exists (a restored or
+# lived-in root) still allocates the inode, then fails to link it, which
+# leaves an unconnected directory: make only the missing ones.
+mkdirs=""
+for d in /etc/omamobile /root/.ssh; do
+  debugfs -R "stat $d" "$copy" 2>/dev/null | grep -c '^Inode:' >/dev/null || mkdirs+="mkdir $d"$'\n'
+done
 debugfs -w -f - "$copy" >/dev/null 2>&1 <<EOF || true
-mkdir /etc/omamobile
-rm /etc/omamobile/firstboot.conf
+${mkdirs}rm /etc/omamobile/firstboot.conf
 write $conf_file /etc/omamobile/firstboot.conf
 sif /etc/omamobile/firstboot.conf mode 0100600
 sif /etc/omamobile/firstboot.conf uid 0
@@ -534,7 +545,6 @@ write $boot_conf /etc/omamobile/boot-update.conf
 sif /etc/omamobile/boot-update.conf mode 0100644
 sif /etc/omamobile/boot-update.conf uid 0
 sif /etc/omamobile/boot-update.conf gid 0
-mkdir /root/.ssh
 sif /root/.ssh mode 040700
 sif /root/.ssh uid 0
 sif /root/.ssh gid 0
@@ -555,6 +565,101 @@ if command -v img2simg >/dev/null; then
   rm -f "$copy"
   userdata_image=$sparse
   note "converted to an Android sparse image ($(du -h "$sparse" | cut -f1))"
+fi
+
+# --- The owner's key in slot B's initramfs -----------------------------------
+# omamobile-boot-update builds slot B's ramdisk with root's authorized_keys
+# appended (docs/RELEASES.md §5.2). Without the same here, the initramfs's
+# rescue SSH has no owner key until the hook first runs, and that run rewrites
+# an image the bundle should already hold (§11 step 4, #564). So a copy of the
+# ramdisk image gets what lib/omamobile-boot-images appends, by its commands
+# with the modes pacman's umask gives them: a cpio holding the key, after the
+# shipped archive in one lz4 stream; vendor_ramdisk then sets the new size in
+# the copy's v4 header and ramdisk table, where mkbootimg puts it. With the
+# phone's lz4 and cpio that is the hook's image byte for byte, under any umask
+# (tests/install-phone-initramfs).
+# Inline, because a bundle ships this script alone. A ramdisk that already
+# holds authorized_keys (a development initramfs) is left as built.
+declare -A image_file=()
+for p in $BOOT_IMAGES; do image_file[$p]=$images/$p.img; done
+# vendor_ramdisk get IMG OUT, or vendor_ramdisk set IMG RAMDISK OUT
+vendor_ramdisk() {
+  python3 -I - "$@" <<'PY'
+import struct, sys
+
+def bad(why):
+    print("%s: %s" % (sys.argv[2], why), file=sys.stderr)
+    sys.exit(1)
+
+img = open(sys.argv[2], "rb").read()
+# vendor_boot_img_hdr_v4: magic, header_version, page_size, kernel_addr,
+# ramdisk_addr, vendor_ramdisk_size (offset 24), cmdline[2048], tags_addr,
+# name[16], header_size (2096), dtb_size, dtb_addr (u64),
+# vendor_ramdisk_table_size (2112), _entry_num, _entry_size, bootconfig_size
+if len(img) < 2128 or img[:8] != b"VNDRBOOT":
+    bad("not an Android vendor boot image")
+version, page, _, _, rd_size = struct.unpack_from("<5I", img, 8)
+hdr_size, dtb_size = struct.unpack_from("<2I", img, 2096)
+table_size, entries, entry_size, bootconfig_size = struct.unpack_from("<4I", img, 2112)
+if version != 4 or hdr_size != 2128:
+    bad("not a v4 vendor boot image")
+if page < 2048 or page & (page - 1):
+    bad("odd page size %d" % page)
+if (entries, entry_size, table_size) != (1, 108, 108):
+    bad("expected one vendor ramdisk, as bin/omamobile images builds")
+pad = lambda n: -(-n // page) * page
+o_rd = pad(2128)
+o_dtb = o_rd + pad(rd_size)
+o_table = o_dtb + pad(dtb_size)
+if len(img) != o_table + pad(table_size) + pad(bootconfig_size):
+    bad("its sections don't add up to its size (a footer?)")
+if struct.unpack_from("<2I", img, o_table) != (rd_size, 0):
+    bad("its ramdisk table doesn't match its header")
+if sys.argv[1] == "get":
+    open(sys.argv[3], "wb").write(img[o_rd:o_rd + rd_size])
+    sys.exit(0)
+ramdisk = open(sys.argv[3], "rb").read()
+head, tail = bytearray(img[:o_rd]), bytearray(img[o_dtb:])
+struct.pack_into("<I", head, 24, len(ramdisk))
+struct.pack_into("<I", tail, o_table - o_dtb, len(ramdisk))
+with open(sys.argv[4], "wb") as f:
+    f.write(head + ramdisk + bytes(pad(len(ramdisk)) - len(ramdisk)) + tail)
+PY
+}
+ramdisk_image=""
+if [[ " $BOOT_IMAGES " == *" vendor_kernel_boot "* ]]; then ramdisk_image=vendor_kernel_boot
+elif [[ " $BOOT_IMAGES " == *" vendor_boot "* ]]; then ramdisk_image=vendor_boot; fi
+if [[ -n $ramdisk_image ]]; then
+  [[ -z ${avb_size[$ramdisk_image]:-} ]] || die "$conf: AVB_FOOTERS names $ramdisk_image, which carries the ramdisk: the owner's key can't be added to a signed image"
+  rm -rf "$ramdisk_dir" && mkdir -p "$ramdisk_dir"
+  vendor_ramdisk get "$images/$ramdisk_image.img" "$ramdisk_dir/shipped.cpio.lz4" || die "can't read the ramdisk of $ramdisk_image.img"
+  lz4 -dc "$ramdisk_dir/shipped.cpio.lz4" > "$ramdisk_dir/shipped.cpio" || die "lz4 couldn't decompress $ramdisk_image.img's ramdisk"
+  keyfiles=$(cpio -it --quiet < "$ramdisk_dir/shipped.cpio" 2>/dev/null \
+    | grep -cE '^(\./)?root/\.ssh/authorized_keys$' || true)
+  if [[ $keyfiles != 0 ]]; then
+    note "$ramdisk_image.img's initramfs already holds SSH keys (a development build): left as built"
+  else
+    # omamobile-boot-images' commands. The hook runs under pacman's umask
+    # (022), so root/ is 0755; its mode is set here because not every
+    # install(1) ignores the umask for parents (uutils' follows it).
+    extra=$ramdisk_dir/extra
+    install -d -m 755 "$extra/root" && install -d -m 700 "$extra/root/.ssh" &&
+      install -m 600 "$keys_file" "$extra/root/.ssh/authorized_keys" &&
+      find "$extra" -exec touch -h -d @0 {} + || die "can't stage the owner's key for the initramfs"
+    reproducible=()
+    cpio --help 2>/dev/null | grep -c -- --reproducible >/dev/null && reproducible=(--reproducible)
+    (cd "$extra" && find . -mindepth 1 | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet "${reproducible[@]}") > "$ramdisk_dir/extra.cpio" ||
+      die "cpio couldn't pack the owner's key for the initramfs"
+    cat "$ramdisk_dir/shipped.cpio" "$ramdisk_dir/extra.cpio" | lz4 -l -9 -q > "$ramdisk_dir/initramfs.cpio.lz4" ||
+      die "lz4 couldn't recompress $ramdisk_image.img's ramdisk with the owner's key"
+    vendor_ramdisk set "$images/$ramdisk_image.img" "$ramdisk_dir/initramfs.cpio.lz4" "$ramdisk_dir/$ramdisk_image.img" ||
+      die "rewriting $ramdisk_image.img with the new ramdisk failed"
+    isize=$(stat -c %s "$ramdisk_dir/$ramdisk_image.img")
+    ((isize <= part_size[$ramdisk_image])) ||
+      die "$ramdisk_image.img with the owner's key is $isize bytes, larger than ${ramdisk_image}_b (${part_size[$ramdisk_image]} bytes)"
+    image_file[$ramdisk_image]=$ramdisk_dir/$ramdisk_image.img
+    note "the owner's key appended to $ramdisk_image.img's initramfs (as omamobile-boot-update appends it)"
+  fi
 fi
 
 # --- What will be written ----------------------------------------------------
@@ -584,7 +689,7 @@ note "SSH key:   ${ssh_key:0:40}... (root and $username)"
 note "root image: $(basename "$rootfs")"
 echo
 echo "These commands, and only these, will run:"
-for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_b $images/$p.img"; done
+for p in $BOOT_IMAGES; do echo "    fastboot flash ${p}_b ${image_file[$p]}"; done
 echo "    fastboot flash userdata $userdata_image"
 echo "    fastboot --set-active=b"
 echo "    fastboot reboot"
@@ -597,7 +702,7 @@ answer=$(ask "Type the phone's codename ($CODENAME) to go ahead")
 [[ $answer == "$CODENAME" ]] || die "not confirmed; nothing was written"
 
 ((dry)) && say "Dry run: printing the commands instead of running them" || say "Flashing"
-for p in $BOOT_IMAGES; do flash "${p}_b" "$images/$p.img"; done
+for p in $BOOT_IMAGES; do flash "${p}_b" "${image_file[$p]}"; done
 flash userdata "$userdata_image"
 run --set-active=b
 run reboot
