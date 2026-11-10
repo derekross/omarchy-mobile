@@ -23,3 +23,7 @@ with the original intervals and a median interval for the final frame
 (total4014ms). The encoder merges identical frames into28encoded frames.
 No interpolated frames, physical FPS or measured compositor smoothness is
 claimed. Existing source attribution and licenses remain intact.
+
+The compact 320 x 320 preview includes the responsive control-width correction.
+Buttons can shrink and elide long labels instead of expanding the composer
+beyond its viewport. The full accessible button name remains available.

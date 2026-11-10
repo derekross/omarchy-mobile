@@ -30,12 +30,17 @@ Item {
     signal tapped()
     implicitWidth: Math.max(root.touch, actionText.implicitWidth + Style.space(24))
     implicitHeight: root.touch
+    // A long label or wider platform font must not enlarge the composer.
+    // Prefer the natural button width, but allow a constrained row to shrink it.
+    Layout.fillWidth: true
+    Layout.minimumWidth: root.touch
+    Layout.maximumWidth: implicitWidth
     radius: Style.cornerRadius
     color: actionTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : root.cardColor
     opacity: enabled ? 1 : 0.45
     Accessible.name: label
     Accessible.role: Accessible.Button
-    Text { id: actionText; anchors.centerIn: parent; text: action.label; color: root.foreground; font.family: Style.font.family; font.pixelSize: Style.font.body; textFormat: Text.PlainText }
+    Text { id: actionText; anchors.centerIn: parent; width: Math.max(0, parent.width - Style.space(24)); horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: action.label; color: root.foreground; font.family: Style.font.family; font.pixelSize: Style.font.body; textFormat: Text.PlainText }
     MouseArea { id: actionTouch; anchors.fill: parent; onClicked: action.tapped() }
   }
   ColumnLayout {

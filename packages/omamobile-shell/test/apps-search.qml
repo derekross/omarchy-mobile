@@ -28,6 +28,7 @@ Item {
   SignalSpy { id: appSpy; target: search; signalName: "activated" }
   SignalSpy { id: handoffSpy; target: search; signalName: "handoffAgent" }
   SignalSpy { id: chooseSpy; target: search; signalName: "chooseAgent" }
+  Component { id: largeMetricConversation; AgentConversation { controller: search.chatController; foreground: search.foreground; muted: search.muted; cardColor: search.cardColor } }
   TestCase {
     name: "AppsSearch"
     when: windowShown
@@ -223,6 +224,22 @@ Item {
       chat.receive({type:"done",id:id})
       verify(!chat.busy)
       compare(chat.messages[1].text,"Answer")
+    }
+    function test_conversation_contains_large_platform_control_width() {
+      var panel = createTemporaryObject(largeMetricConversation, view, {width:320, height:240})
+      verify(panel !== null)
+      var draft = findChild(panel, "agentDraft")
+      var action = findChild(panel, "agentSend")
+      action.implicitWidth = 400
+      panel.draft = "A draft with a platform-preferred width larger than the viewport"
+      waitForPolish(panel)
+      wait(50)
+      var pos = draft.mapToItem(panel, 0, 0)
+      verify(pos.x >= 0 && pos.x + draft.width <= panel.width,
+             "Platform button metrics must not push the composer outside the conversation")
+      var actionPos = action.mapToItem(panel, 0, 0)
+      verify(actionPos.x >= 0 && actionPos.x + action.width <= panel.width,
+             "Long platform button labels stay inside their row")
     }
     function test_conversation_compact_viewports_keep_editable_draft_and_terminal_action_inside() {
       search.agentId="terminal-fixture"
