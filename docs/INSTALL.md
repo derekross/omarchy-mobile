@@ -110,7 +110,7 @@ Stock Android must be running from slot A, because Omarchy Mobile goes on slot B
 
    Then it shows the plan: five `fastboot flash` lines, each for a partition ending in `_b`, one `fastboot flash userdata`, then `fastboot --set-active=b` and `fastboot reboot`. Nothing else. Type `cheetah` when it asks, and it prints the commands instead of running them.
 
-   **The bootloader slots:** both slots must carry the same bootloader version, and on some phones the bootloader only reports one of them. On a first install the installer then reads the other slot itself: it says so and asks you to type `yes`, and the phone restarts into its bootloader screen twice (about a minute; nothing is written to its storage). The dry run only prints those commands. If it stops about the bootloader slots, don't work around it: [open an issue](https://github.com/derekross/omarchy-mobile/issues) and we'll help.
+   **If it stops about the bootloader slots** (both slots must carry the same bootloader version, and on some phones the bootloader only reports one of them), don't work around it: [open an issue](https://github.com/derekross/omarchy-mobile/issues) and we'll help.
 4. Install for real:
 
    ```sh
