@@ -22,10 +22,23 @@ var ESCAPE_UP = 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "up"
 // once for `wtype -k Escape`. A virtual keyboard's key goes wherever the
 // keyboard focus is, a focused shell sheet included, as a real key would.
 // The dispatches stay as the fallback on a phone without wtype.
+//
+// A terminal gets no Escape at all: there it is a key programs use (an
+// editor's modes, and two in a row is the shell's "complete", which on an
+// empty line asks to list every command: Pixel 7 Pro, 2026-11-10), it never
+// means "back", and a terminal has no levels, so it is always at its top
+// level and Back goes home (omamobile-home). The keyboard's own Esc key is
+// there for the key. Matched by the focused window's class, exactly.
+var TERMINALS = ["foot", "footclient", "Alacritty", "kitty", "com.mitchellh.ghostty", "org.omarchy.terminal"]
+function isTerminal(windowClass) {
+  return TERMINALS.indexOf(String(windowClass || "")) >= 0
+}
 var ESCAPE_ARGV = ["sh", "-c",
+                   'cls=$(hyprctl activewindow -j 2>/dev/null | jq -r ".class // empty" 2>/dev/null); ' +
+                   'if [ -n "$cls" ]; then for t in $3; do if [ "$t" = "$cls" ]; then exec omamobile-home; fi; done; fi; ' +
                    'if command -v wtype >/dev/null 2>&1; then exec wtype -k Escape; fi; ' +
                    'hyprctl dispatch "$1" >/dev/null; sleep 0.05; hyprctl dispatch "$2" >/dev/null',
-                   "sh", ESCAPE_DOWN, ESCAPE_UP]
+                   "sh", ESCAPE_DOWN, ESCAPE_UP, TERMINALS.join(" ")]
 
 // Home, for an app at its top level: Back is phone-wide, so an app goes back
 // one level on Escape while it has one, and at its top level runs this
@@ -60,7 +73,7 @@ function inwardFor(rightEdge, translationX) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = {
+  module.exports = { TERMINALS: TERMINALS, isTerminal: isTerminal,
     ESCAPE_DOWN: ESCAPE_DOWN, ESCAPE_UP: ESCAPE_UP, ESCAPE_ARGV: ESCAPE_ARGV, HOME_ARGV: HOME_ARGV, THRESHOLD: THRESHOLD,
     progress: progress, fires: fires, inwardFor: inwardFor
   }
