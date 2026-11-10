@@ -4,14 +4,14 @@
 #include <QVariantMap>
 #include <QStringList>
 
-// Runs the source-owned backend scripts (display, charge) with a fixed argument list and no shell. Pages call run();
+// Runs the source-owned backend scripts (display, charge, pin) with a fixed argument list and no shell. Pages call run();
 // the JSON the script prints comes back through finished(), always from the event loop and never before run()
-// has returned its id.
+// has returned its id. The PIN page passes its input on stdin only; it is never an argument and never logged.
 class ActionRunner : public QObject {
     Q_OBJECT
 public:
     explicit ActionRunner(QObject *parent = nullptr) : QObject(parent) {}
-    Q_INVOKABLE int run(const QString &tool, const QStringList &args);
+    Q_INVOKABLE int run(const QString &tool, const QStringList &args, const QString &input = {});
     // Where the backend scripts live; tests point it at stubs so they don't depend on the host's install.
     void setBackendDir(const QString &dir) { m_dir = dir; }
 signals:

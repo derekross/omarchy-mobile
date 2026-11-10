@@ -14,13 +14,14 @@ void ActionRunner::post(const QString &tool, const QVariantMap &result, int id) 
     QMetaObject::invokeMethod(this, [this, tool, result, id] { emit finished(tool, result, id); }, Qt::QueuedConnection);
 }
 
-int ActionRunner::run(const QString &tool, const QStringList &args) {
+int ActionRunner::run(const QString &tool, const QStringList &args, const QString &input) {
     static const QRegularExpression word("\\A[a-z0-9]{1,16}\\z");
-    static const QStringList tools = {"display", "charge"};
+    static const QStringList tools = {"display", "charge", "pin"};
     const int id = ++m_next;
     auto fail = [this, &tool, id](const QString &why) { post(tool, {{"error", why}}, id); return id; };
     if (!tools.contains(tool) || args.size() > 3) return fail("unknown action");
     for (const auto &a : args) if (!word.match(a).hasMatch()) return fail("bad argument");
+    if (input.size() > 256) return fail("input too long");
     auto *p = new QProcess(this);
     // bash would run a startup file named by these
     auto env = QProcessEnvironment::systemEnvironment();
@@ -42,6 +43,7 @@ int ActionRunner::run(const QString &tool, const QStringList &args) {
         if (e == QProcess::FailedToStart) { post(tool, {{"error", "cannot start the backend"}}, id); p->deleteLater(); }
     });
     p->start();
+    if (!input.isEmpty()) p->write(input.toUtf8());
     p->closeWriteChannel();
     QTimer::singleShot(20000, p, [p] { if (p->state() != QProcess::NotRunning) p->kill(); });
     return id;

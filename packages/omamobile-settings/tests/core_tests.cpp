@@ -31,22 +31,22 @@ private slots:
     void probeShowsTheBatteryRowOnlyWhenTheBackendSaysAvailable() {
         Backend on;
         on.setBackendDir(stubs("on"));
-        QCOMPARE(on.rows().size(), 2);
-        QTRY_COMPARE(on.rows().size(), 3);
+        QCOMPARE(on.rows().size(), 3);
+        QTRY_COMPARE(on.rows().size(), 4);
         Backend off;
         off.setBackendDir(stubs("off"));
         off.setToolAvailable("charge", true);
-        QTRY_COMPARE(off.rows().size(), 2); // the probe's answer clears it
+        QTRY_COMPARE(off.rows().size(), 3); // the probe's answer clears it
     }
     void navigationRejectsUnknownAndHiddenActions() {
         Backend backend;
         backend.setBackendDir(stubs("off"));
         QVERIFY(backend.catalogProblems().isEmpty());
-        QCOMPARE(backend.rows().size(), 2); // the Battery row waits for the charge backend, absent here
+        QCOMPARE(backend.rows().size(), 3); // the Battery row waits for the charge backend, absent here
         backend.setToolAvailable("charge", true);
-        QCOMPARE(backend.rows().size(), 3);
+        QCOMPARE(backend.rows().size(), 4);
         backend.setToolAvailable("charge", false);
-        QCOMPARE(backend.rows().size(), 2);
+        QCOMPARE(backend.rows().size(), 3);
         QVERIFY(!backend.navigate("recording"));
         backend.activate("arbitrary-command");
         QCOMPARE(backend.page(), QString("root"));
