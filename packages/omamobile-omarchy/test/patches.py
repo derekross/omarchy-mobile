@@ -448,7 +448,8 @@ def real_package(t):
 def qml_parse(root, series=None):
     """Every QML file the series touches still parses, when qmlformat is at
     hand (it reports syntax errors without needing the shell's imports)."""
-    tool = shutil.which("qmlformat") or ("/usr/lib/qt6/bin/qmlformat" if os.path.isfile("/usr/lib/qt6/bin/qmlformat") else "")
+    tool = shutil.which("qmlformat") or next(
+        (p for p in ("/usr/lib/qt6/bin/qmlformat", "/usr/lib64/qt6/bin/qmlformat") if os.path.isfile(p)), "")
     if not tool:
         print("ok - real omarchy: the patched QML parses # SKIP no qmlformat")
         return
