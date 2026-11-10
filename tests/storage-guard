@@ -185,6 +185,7 @@ pass "NFS-root mode protects the main disk and every partition on the first guar
 
 awk '/^boot_nfs\(\) \{/ {on = 1} on && /omamobile.initramfs/ {marker = NR} on && /switch_root/ {handover = NR} on && /^}/ {exit} END {exit !(marker && handover && marker < handover)}' initramfs/init \
   || fail "boot_nfs honors omamobile.initramfs before switching roots"
+grep -q 'busybox mount -t nfs' initramfs/init || fail "NFS root uses BusyBox mount on minimal initramfs images"
 awk '/^if \[ -s \/etc\/omamobile-nfsroot \]; then/ {on = 1} on && /^else$/ {exit} on && /boot_nfs/ {nfs = 1} on && /boot_arch/ {arch = 1} END {exit !(nfs && !arch)}' initramfs/init \
   || fail "a failed requested NFS mount cannot fall through to boot_arch"
 pass "NFS cmdline opt-out works and a failed mount stays in the initramfs"

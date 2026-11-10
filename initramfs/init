@@ -464,7 +464,7 @@ boot_nfs() {
   # Retry: the phone boots faster than the host brings its usb0 end up, so the
   # first mount can race the link coming up. ~30s covers a late host.
   local i=0
-  until mount -t nfs -o "nolock,vers=3,addr=${spec%%:*}" "$spec" /newroot 2>/dev/null; do
+  until busybox mount -t nfs -o "nolock,vers=3,addr=${spec%%:*}" "$spec" /newroot 2>/dev/null; do
     i=$((i + 1))
     [ "$i" -ge 15 ] && {
       say "nfsroot: cannot mount $spec (staying in the initramfs)"; return 1; }
