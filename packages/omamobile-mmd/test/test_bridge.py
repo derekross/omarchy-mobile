@@ -460,7 +460,9 @@ class Registered(BridgeTests):
 
     def test_unconfirmed_hangup_blocks_for_20_s_then_a_new_press_tries_again(self):
         # sitd answers Hangup as soon as it has sent the release; if the call
-        # never ends, a second press is InProgress for 20 s, then a new attempt
+        # never ends and sitd stays up, a second press is InProgress for 20 s,
+        # then a new attempt. The stand-in sitd here stays up; today's real
+        # one stops at its own 12 s deadline (the next test).
         self.sitd.status['calls'] = [call('200', 'active')]
         self.sitd.handlers['hangup'] = lambda request: {}
         self.push()
@@ -473,6 +475,24 @@ class Registered(BridgeTests):
         self.client.call(path, mm.CALL, 'Hangup')
         self.assertEqual(self.sitd.actions().count('hangup'), 2)
         self.assertEqual(self.modem('Calls', mm.VOICE), [path])
+
+    def test_unconfirmed_hangup_then_sitd_stops_takes_the_modem_and_the_call_away(self):
+        # What today's sitd does when the call never ends: at its own 12 s
+        # deadline it turns the radio off and stops for an attended reboot
+        # (unconfirmed_release in omamobile-modem-sit), before the bridge's
+        # 20 s window is over. The bridge then withdraws the modem with its
+        # calls, so the next press finds no call object: an error, not
+        # InProgress for good, and no second hang-up reaches the modem.
+        self.sitd.status['calls'] = [call('200', 'active')]
+        self.sitd.handlers['hangup'] = lambda request: {}
+        self.push()
+        path = wait_until(lambda: self.modem('Calls', mm.VOICE), 5, 'live call')[0]
+        self.client.call(path, mm.CALL, 'Hangup')
+        self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), mm.ERROR_PREFIX + 'InProgress')
+        self.sitd.stop()
+        wait_until(lambda: not self.client.objects(), 5, 'the modem withdrawn')
+        self.assertEqual(self.error_of(path, mm.CALL, 'Hangup'), 'org.freedesktop.DBus.Error.UnknownMethod')
+        self.assertEqual(self.sitd.actions().count('hangup'), 1)
 
     def test_pending_delete_fails_when_prior_hangup_is_refused(self):
         for method in ('Hangup', 'HangupAll'):
@@ -523,7 +543,8 @@ class Registered(BridgeTests):
         self.assertEqual(self.modem('Calls', mm.VOICE), [path])
         self.assertEqual(self.client.prop(path, mm.CALL, 'State'), mm.CALL_ACTIVE)
         self.assertEqual(self.sitd.actions().count('hangup'), 1)
-        # after the timeout a new press from the user is a new attempt
+        # after the timeout a new press from the user is a new attempt (with a
+        # sitd that is still up; today's has stopped by then)
         self.client.call(path, mm.CALL, 'Hangup')
         self.assertEqual(self.sitd.actions().count('hangup'), 2)
 

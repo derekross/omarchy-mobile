@@ -368,10 +368,15 @@ class Bridge:
 
     def start_release(self, call):
         """One hang-up outstanding at a time, for 20 s at most: sitd answers
-        the request as soon as it has sent the release, and its own deadline
-        then turns the radio off and keeps the call, so a release that is
-        accepted but never completes must not block the user's next press.
-        The bridge never retries on its own."""
+        the request as soon as it has sent the release, so a release that is
+        accepted but never completes must not block the user's next press
+        for good. With today's sitd the window never runs out that way: when
+        the call is still there 12 s after the hang-up, sitd turns the radio
+        off and stops for an attended reboot (unconfirmed_release in
+        omamobile-modem-sit), the bridge withdraws the modem with its calls,
+        and the next press finds no call, an error rather than a second
+        hang-up at the modem. The window is for a sitd that stays up. The
+        bridge never retries on its own."""
         call['releasing'] = True
         if call.get('release_timer'):
             GLib.source_remove(call['release_timer'])
