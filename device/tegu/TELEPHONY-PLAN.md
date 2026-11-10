@@ -345,6 +345,20 @@ thirteen, cause unknown, not reproduced in one repeat. After a reboot that
 takes a minute or leaves no stop line, copy `/var/lib/systemd/pstore` before
 anything else.
 
+**Thirty more, all confirmed (2026-11-09, 20:59 to 22:32 MST).** To look for
+it again, a laptop loop rebooted the palmtop thirty times with the modem up
+(build #100, the bring-up modules, the unit starting the modem at each boot,
+`omamobile-device-tegu` from this branch, `omamobile-modem` 0.1.17): wait
+for the phone service and CP ONLINE, hold two minutes, `sync`,
+`systemctl reboot`, and at the next boot copy pstore first, then read the
+previous boot's stop line. Thirty of thirty logged "modem stopped (success,
+the CP OFFLINE before the daemons went)" with the journal closed cleanly,
+SSH was back 24 or 25 s after each reboot, no boot reported an unclean end,
+and none had a UFS error-handler pass. `tools/nv-backup -d tegu --check`
+afterwards: every NV partition SAME as the 2026-10-28 backup. With the
+thirteen before, that is 42 confirmed stops in 43, and the one still
+unexplained.
+
 Qualification, attended and on the charger: boot to ONLINE, data and texts;
 the inhibitor; NV and UFS unchanged; then shutdown and reboot on their own.
 Suspend with the CP on needs its own tests, with NFC polling stopped, and
