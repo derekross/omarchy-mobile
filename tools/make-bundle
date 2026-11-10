@@ -211,7 +211,7 @@ into a new directory DIR with tools/nv-backup (INSTALL.md, "Back up"), then
 run tools/phone-provision from this directory with that backup and your own
 factory image for $DEVICE:
   bash tools/nv-backup DIR
-  bash tools/phone-provision --nv-backup DIR FACTORY.zip
+  bash tools/phone-provision --first-install --nv-backup DIR FACTORY.zip
 The backup holds this phone's IMEI and calibration: keep it, never share
 it. phone-provision puts the firmware for Wi-Fi, Bluetooth, haptics,
 speakers and the camera on the phone, extracted on this computer; nothing
