@@ -145,7 +145,7 @@ def vis(w):
         v = re.sub(r"(^|[^.\w])(\w+)", lambda x: x.group(1) + ("root." + x.group(2) if x.group(2) not in ("true", "false") else x.group(2)), d)
     return v
 v = vis(strip)
-for need in ("root.appOnScreen", "!root.opened", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
+for need in ("(root.appOnScreen || root.oskOpen)", "(!root.opened || root.oskOpen)", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
     assert need in v, (need, v)
 assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
 assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
@@ -174,7 +174,8 @@ elif [[ $rc != 0 ]]; then
 else
   pass "the home pill under touch: a double tap toggles the keyboard, a tap does nothing, swipes go home, the hide key, the reserved strip, the search pill, the hold for voice"
 fi
-grep -c 'if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
+grep -c '} else if (!recents && swipeY < -24) root.goHome()' "$l" >/dev/null || fail "a short swipe goes home"
+grep -c 'if (recents || root.opened) return' "$l" >/dev/null || fail "over the drawer a swipe opens no recent apps"
 grep -c 'if (swipeY < -120) {' "$l" >/dev/null || fail "a long swipe opens recent apps"
 # Drawer: pull down to close, and a pull is not also a tap on an app.
 grep -c 'if (LauncherModel.drawerEndsOpen(root.progress, speed, true)) root.settleTo(true, speed)' "$l" >/dev/null || fail "pulling the drawer down closes it"
