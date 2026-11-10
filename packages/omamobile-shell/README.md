@@ -6,7 +6,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
 | `plugins/omamobile.quicksettings` | Pull-down quick settings |
-| `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
+| `plugins/omamobile.launcher` | Home bar: a separate native app-search view on tap; App Library and the existing optional agent flow on swipe; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
 | `plugins/omamobile.keyboard` | The on-screen keyboard's show and hide calls, for the home pill (double-tap it), the keyboard's Hide key and scripts; a keyboard shown by hand goes away when the home screen comes up; the language sheet for the keyboard's globe key |
@@ -102,3 +102,105 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+## Native app Search
+
+A tap on the home search field opens app search directly. Swiping up still
+opens the App Library and its existing optional agent flow. Set the launcher's
+`nativeSearch` setting to `false` to retain the previous dock-tap behavior.
+Search uses Omarchy's application library and normal app-launch command. It
+does not index files, select an agent or access accounts.
+
+The view follows Commons palette, font, spacing, controls and corner settings;
+its animation follows `Style.duration` when available. A full-screen background
+takes no input, the content respects the status/keyboard reservations, and the
+existing Home strip remains visible even after manually hiding the keyboard.
+Back closes Search in process before the usual Escape fallback. Home and app
+activation release its text input before changing screens.
+
+Native focus is briefly primed with Exclusive, then released to OnDemand, using
+the focus lifecycle from Omarchy's MIT-licensed `shell/Ui/KeyboardPanel.qml`.
+That component is present in both supported Omarchy package families. Its
+David Heinemeier Hansson copyright and license are retained in
+`LICENSE.omarchy`. Offscreen component tests verify cancellation and focus
+intent; a phone acceptance must separately verify first-tap OSK activation,
+keyboard touches, Back/Home, immediate reopen and lock interaction.
+
+Native Search cancels pending focus and closes when the launcher's existing session-lock observation reports locked. Unlocking never reopens it without a new explicit tap. This observation is asynchronous and is not a security boundary or a replacement for the compositor lock protocol. Existing fullscreen exclusion of Home/Back gesture strips remains in force; a Search opened over fullscreen can still close using its visible close button or Escape. The Search panels currently use Quickshell's default output; multi-output active-screen routing is not qualified by the offscreen tests.
+
+### Search presentation
+
+Search retains the phone layout: the query row stays at the top, followed by
+three suggested apps, or matching results while typing. App rows have icons,
+names and descriptions without an enclosing border. Colors, font family and
+size, spacing, control borders, corner rounding and motion follow Commons.
+The theme background is painted once as a translucent tint over the underlying
+screen. No wallpaper is copied or sampled by the client.
+
+Themes can set `[controls]` keys `mobile-search-backdrop-alpha` (default 0.92)
+and `mobile-search-card-alpha` (default 0.94) in `shell.toml`. Values are clamped
+by Omarchy's alpha-token API; setting both to 1 gives opaque surfaces. Existing
+`[style]` overrides are also read by Omarchy. Older hosts without the alpha API
+use the defaults. Rounding follows the configured Hyprland/theme value; Search
+does not impose capsules or a minimum corner radius.
+
+Optional compositor blur can be scoped to the Search background only, when
+blur is already enabled in the user's compositor configuration:
+
+```lua
+hl.layer_rule({
+  name = "omamobile-app-search-glass",
+  match = { namespace = "^omamobile-app-search-background$" },
+  blur = true,
+  ignore_alpha = 0.05,
+  xray = false,
+})
+```
+
+This example does not change global blur settings. Search remains usable
+without blur. Component previews show translucency over neutral test scenery;
+they do not execute or qualify compositor blur, a real keyboard or phone frame
+pacing.
+
+## Ask Agent in native Search
+
+The Ask card opens an in-place conversation with the configured default agent.
+Search text becomes an editable draft; only Send or Ctrl+Enter submits it.
+Back returns to app search. Home and close dismiss Search; both dismissal and
+locking cancel an active request. An idle local bridge retains the conversation
+in memory, without polling or running the agent while hidden. New chat resets
+it. Changing provider or the selected account home starts a fresh conversation.
+
+The first native adapter supports an already installed Codex CLI. Its existing
+login, account selection, model/configuration and approval policy are retained;
+commands use the workspace-write sandbox. Other configured agents have an
+explicit terminal handoff, using the existing Omarchy route. No provider is
+selected or installed automatically. This contribution adds no account/login
+store, microphone facade, dictation runtime or custom user configuration.
+
+The backend's JSONL protocol carries literal messages over stdin, never shell
+command text. Request identities, reset acknowledgements and cancellation are
+bound to the owning process. A cancelled follow-up retains the last completed
+conversation; stale output cannot populate a later request. A stopped local
+bridge can be restarted through explicit conversation entry or New chat before
+another Send. Helper stderr and tool events are never copied into the UI or a
+new log. Assistant content is displayed as plain text.
+
+Task artifacts remain in private per-session workspaces under
+`${XDG_STATE_HOME:-~/.local/state}/omamobile/agent-chat/`; shutdown removes only
+empty workspace directories. Normal CLI session storage remains the CLI's own.
+The bridge does not create another transcript or copy credentials. Inputs,
+output framing and request time are bounded; failures remain visible without
+weakening sandbox or approval settings. The current request deadline is 180
+seconds and the composer accepts at most 8,192 UTF-16 code units.
+
+Protocol reference: [Codex non-interactive execution](https://learn.chatgpt.com/docs/non-interactive-mode).
+Native adapters for additional agents require their own verified protocol and
+sandbox/approval handling. Do not infer support from an installed executable.
+
+`test/agent-chat.py` runs real subprocess fixtures against inert temporary CLIs.
+`test/agent-chat-ui.py` connects the actual QML controller to the real Python
+bridge with an inert CLI, including resume, account changes, reset and transport
+recovery. CI installs Quickshell so that integration runs there; environments
+without it report an explicit skip. These checks make no cloud requests and
+are not phone keyboard, touch, compositor or frame-pacing qualification.

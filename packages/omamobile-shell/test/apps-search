@@ -1,0 +1,39 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The actual Search, explicit conversation and input context lifecycle,
+# under Qt Quick Test with inert desktop entries. No shell, OSK, app launch,
+# session bus, user files or compositor is contacted.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+runner=$(command -v qmltestrunner6 || command -v /usr/lib/qt6/bin/qmltestrunner || command -v qmltestrunner || true)
+[[ -n $runner ]] || { echo "apps-search: no qmltestrunner"; exit 77; }
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/launcher" "$work/imports/Quickshell/Io"
+# Pure Qt tests never launch a process. Only the transport is inert; all
+# production controller, event, page, field and cancellation logic is real.
+cat > "$work/imports/Quickshell/Io/qmldir" <<'QML'
+module Quickshell.Io
+Process 1.0 Process.qml
+SplitParser 1.0 SplitParser.qml
+QML
+cat > "$work/imports/Quickshell/Io/Process.qml" <<'QML'
+import QtQuick
+QtObject {
+  property var command: []
+  property bool running: false
+  property bool stdinEnabled: false
+  property var stdout: null
+  property var stderr: null
+  signal started()
+  signal exited(int code, int status)
+  function write(text) {}
+}
+QML
+cat > "$work/imports/Quickshell/Io/SplitParser.qml" <<'QML'
+import QtQuick
+QtObject { signal read(string line) }
+QML
+cp "$here/../plugins/omamobile.launcher/AppsSearch.qml" "$here/../plugins/omamobile.launcher/SearchFocus.qml" "$here/../plugins/omamobile.launcher/AgentConversation.qml" "$here/../plugins/omamobile.launcher/AgentChatController.qml" "$work/launcher/"
+cp "$here/apps-search.qml" "$work/tst_apps_search.qml"
+export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
+"$runner" -import "$work/imports" -import "$here/qml-stubs" -input "$work/tst_apps_search.qml"

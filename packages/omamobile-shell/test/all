@@ -145,7 +145,7 @@ def vis(w):
         v = re.sub(r"(^|[^.\w])(\w+)", lambda x: x.group(1) + ("root." + x.group(2) if x.group(2) not in ("true", "false") else x.group(2)), d)
     return v
 v = vis(strip)
-for need in ("(root.appOnScreen || root.oskOpen)", "(!root.opened || root.oskOpen)", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
+for need in ("(root.appOnScreen || root.oskOpen || root.searchOpened)", "(!root.opened || root.oskOpen)", "!root.fullscreenOnScreen", "!(root.oskOpen && root.sessionLocked)"):
     assert need in v, (need, v)
 assert "!root.oskOpen" not in v, "the keyboard doesn't unmap the strip: " + v
 assert "!root.appOnScreen" in vis(dock), "the dock and the strip never reserve together"
@@ -227,6 +227,22 @@ elif [[ $rc != 0 ]]; then
   printf '%s\n' "$out" | grep -vE '^(PASS|QDEBUG)' >&2; fail "the drawer under touch (test/drawer-touch)"
 else
   pass "the drawer under touch: the handle taps and drags, a pull or a flick closes, a scrolled grid scrolls first, the home screen's swipe opens it"
+fi
+python3 -B test/agent-chat.py || fail "native agent backend"
+if command -v quickshell >/dev/null 2>&1; then
+  python3 -B test/agent-chat-ui.py || fail "native agent UI transport"
+  pass "native agent UI: actual Quickshell/Python transport with inert CLI"
+else
+  pass "native agent UI transport # SKIP no quickshell"
+fi
+node test/apps-search-routing.js || fail "native Search Back routing"
+rc=0; out=$(bash test/apps-search 2>&1) || rc=$?
+if [[ $rc == 77 ]]; then
+  pass "native app Search # SKIP no qmltestrunner"
+elif [[ $rc != 0 ]]; then
+  printf '%s\n' "$out" >&2; fail "native app Search"
+else
+  pass "native app Search: app-library filtering, explicit input focus, Back and foreground lifetime"
 fi
 rc=0; out=$(bash test/home-gestures 2>&1) || rc=$?
 if [[ $rc == 77 ]]; then

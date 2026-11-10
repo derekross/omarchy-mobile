@@ -11,12 +11,13 @@ import qs.services as OmarchyServices
 import "LauncherModel.js" as LauncherModel
 import "Readable.js" as Readable
 import "DrawerLink.js" as DrawerLink
+import "AppsSearchLink.js" as AppsSearchLink
 
 // The phone's home surface, after Omalauncher: one bar at the bottom of the
-// screen that is app search, app grid and coding-agent prompt at once.
+// screen. Dock tap opens native app Search; swiping opens the App Library.
 //
-// Collapsed, it is a dock holding a single search pill. Tapping it raises the
-// app drawer with the input focused. Typing filters the grid; text that reads
+// The App Library retains its existing search and optional agent flow.
+// Typing there filters the grid; text that reads
 // like a sentence (or matches no app) offers "Ask <agent>" (the user's
 // Omarchy default agent) instead, and Enter
 // takes whichever is on top: the first app, or a terminal running the agent
@@ -50,6 +51,7 @@ Item {
   }
 
   // `opened` is the drawer; the dock is always on screen.
+  readonly property bool searchOpened: appsSearch.opened
   property bool opened: false
   property string query: ""
   property var apps: []
@@ -194,6 +196,13 @@ Item {
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
+    if (payload.view === "apps-search") {
+      if (sessionLocked) { appsSearch.close(); return }
+      if (opened) close()
+      appsSearch.open(payload.query)
+      return
+    }
+    appsSearch.close()
     var gesture = payload.gesture === true
     query = typeof payload.query === "string" ? payload.query : ""
     refreshApps()
@@ -209,6 +218,7 @@ Item {
   // A closing drawer never holds a focused text field: the field gives the
   // focus back first, so nothing asks for the keyboard as the drawer goes.
   function close() {
+    appsSearch.close()
     if (input.activeFocus) sheet.forceActiveFocus()
     opened = false
     query = ""
@@ -222,6 +232,25 @@ Item {
     gestureSpeed = Number(speed) || 0
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else close()
+  }
+
+  // Explicit dock activation is distinct from the swipe App Library.
+  function activateDock() {
+    if (settings.nativeSearch === false) expand()
+    else openSearch("")
+  }
+  function openSearch(text) {
+    if (sessionLocked) return
+    var payload = JSON.stringify({ view: "apps-search", query: String(text || "") })
+    if (shell && typeof shell.summon === "function") shell.summon(pluginId, payload)
+    else open(payload)
+  }
+  function backSearch() {
+    appsSearch.back()
+  }
+  function closeSearch() {
+    appsSearch.close()
+    dismiss(0)
   }
 
   function expand() {
@@ -240,10 +269,12 @@ Item {
 
   function state() {
     return JSON.stringify({
+      searchOpened: searchOpened,
       opened: opened,
-      query: query,
-      mode: hasQuery ? (promptMode ? "agent" : "apps") : "idle",
-      apps: apps.length,
+      view: searchOpened ? "search" : opened ? "library" : "home",
+      query: searchOpened ? appsSearch.query : query,
+      mode: searchOpened ? "apps" : hasQuery ? (promptMode ? "agent" : "apps") : "idle",
+      apps: searchOpened ? appsSearch.entries.length : apps.length,
       library: shell && shell.appLibrary ? "host" : (appLibrary ? "local" : "none"),
       agent: agentId,
       command: hasAgent ? LauncherModel.promptArgv("<prompt>") : LauncherModel.PICK_AGENT_ARGV
@@ -255,7 +286,7 @@ Item {
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (root.opened && event && event.name === "openwindow") root.dismiss()
+      if ((root.opened || root.searchOpened) && event && event.name === "openwindow") root.dismiss()
     }
   }
 
@@ -373,7 +404,7 @@ Item {
   // decides there whether it opens (LauncherModel.drawerEndsOpen: a fling,
   // or a quarter of the way) and then opens through the host, as a tap does.
   function gestureBegin() {
-    if (opened) return false
+    if (opened || searchOpened) return false
     settle.stop()
     pulling = false
     homeSwipe = true
@@ -450,7 +481,7 @@ Item {
           anchors.fill: parent
           anchors.margins: Style.spacing.xxl
           placeholder: (root.hasAgent ? "Search apps or ask " + root.agentName + "…" : "Search apps…")
-          onTapped: root.expand()
+          onTapped: root.activateDock()
           // Hold: the voice bar, as a hold on the pill over an app.
           onHeld: root.voiceHold()
         }
@@ -567,6 +598,8 @@ Item {
   }
 
   function goHome() {
+    if (searchOpened) closeSearch()
+
     // As the switcher's Home: an empty workspace, then the home page.
     Quickshell.execDetached(["hyprctl", "dispatch", "hl.dsp.focus({ workspace = \"empty\" })"])
     Quickshell.execDetached(["qs", "ipc", "-p", Quickshell.shellDir, "call", "shell", "call", "omamobile.home", "goHome", ""])
@@ -637,6 +670,7 @@ Item {
   }
 
   function showRecents() {
+    if (searchOpened) closeSearch()
     // Through the CLI, like the dock's swipe: a plugin may only summon
     // panels it owns, and the switcher is its own plugin.
     Quickshell.execDetached(["omarchy-shell", "shell", "summon", "omamobile.switcher", "{}"])
@@ -671,7 +705,7 @@ Item {
   // While the keyboard is up the strip shows on the home screen too, and
   // over the open drawer (its search field): the keyboard covers the dock
   // there, and with it the swipe up to the drawer.
-  readonly property bool stripShown: (appOnScreen || oskOpen) && (!opened || oskOpen) && !fullscreenOnScreen && !(oskOpen && sessionLocked)
+  readonly property bool stripShown: (appOnScreen || oskOpen || searchOpened) && (!opened || oskOpen) && !fullscreenOnScreen && !(oskOpen && sessionLocked)
   readonly property bool keyboardStripShown: stripShown && oskOpen
 
   Process {
@@ -1091,6 +1125,64 @@ Item {
           }
         }
       }
+    }
+  }
+
+  // Both surfaces remain mapped: opening does not wait for a new Wayland
+  // configure or expose the drawer for a frame. Only content takes input.
+  PanelWindow {
+    visible: true
+    anchors { top: true; bottom: true; left: true; right: true }
+    exclusionMode: ExclusionMode.Ignore
+    color: "transparent"
+    mask: Region { item: null }
+    Rectangle {
+      anchors.fill: parent
+      // Keep the existing Home strip visible and reachable, even after the
+      // keyboard is manually hidden. The content window respects its zone.
+      anchors.bottomMargin: root.stripHeight
+      color: appsSearch.backdropColor
+      visible: appsSearch.opacity > 0
+      opacity: appsSearch.opacity
+    }
+    WlrLayershell.namespace: "omamobile-app-search-background"
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+  }
+  PanelWindow {
+    visible: true
+    anchors { top: true; bottom: true; left: true; right: true }
+    exclusionMode: ExclusionMode.Normal
+    color: "transparent"
+    mask: Region { item: root.searchOpened ? appsSearch : null }
+    id: searchWindow
+    WlrLayershell.namespace: "omamobile-app-search"
+    WlrLayershell.layer: WlrLayer.Top
+    // Prime native focus briefly, then release exclusive pointer routing so
+    // the OSK and the existing Home/Back surfaces receive their own touches.
+    WlrLayershell.keyboardFocus: searchFocus.mode === "none" ? WlrKeyboardFocus.None
+      : searchFocus.mode === "exclusive" ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.OnDemand
+    SearchFocus {
+      id: searchFocus
+      opened: root.searchOpened
+      requestGeneration: appsSearch.focusGeneration
+      backingWindowVisible: searchWindow.backingWindowVisible
+    }
+    AppsSearch {
+      id: appsSearch
+      anchors.fill: parent
+      appLibrary: root.appLibrary
+      agentId: root.agentId
+      agentName: root.agentName
+      onChooseAgent: { root.closeSearch(); Util.execArgv(LauncherModel.PICK_AGENT_ARGV) }
+      onHandoffAgent: function(prompt) { root.askAgent(prompt) }
+      sessionLocked: root.sessionLocked
+      paintBackground: false // backdrop paints the theme alpha once, also over the bar
+      inputReady: searchFocus.inputReady
+      Component.onCompleted: AppsSearchLink.publish(root)
+      Component.onDestruction: AppsSearchLink.clear(root)
+      onDismissed: root.dismiss(0)
+      onActivated: function(entry) { root.launchApp(entry) }
     }
   }
 

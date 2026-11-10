@@ -1,0 +1,2 @@
+<!-- SPDX-License-Identifier: MIT -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#bd5f61"/><rect x="14" y="16" width="36" height="36" rx="5" fill="#fff5ee"/><path d="M14 27h36" stroke="#bd5f61" stroke-width="6"/><path d="M24 12v9m16-9v9" stroke="#fff5ee" stroke-width="4" stroke-linecap="round"/><path d="M23 36h6m7 0h6m-19 8h6m7 0h6" stroke="#bd5f61" stroke-width="3"/></svg>

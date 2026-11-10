@@ -8,6 +8,7 @@ destination=${1:?Usage: ./install DESTDIR}
 for program in bin/*; do
   install -Dm755 "$program" "$destination/usr/bin/${program#bin/}"
 done
+install -Dm644 lib/agent_chat.py "$destination/usr/lib/omamobile-shell/agent_chat.py"
 while IFS= read -r -d '' file; do
   install -Dm644 "$file" "$destination/usr/share/omamobile/shell/$file"
 done < <(find plugins profile hypr branding -type f -print0)
@@ -70,6 +71,7 @@ install -Dm644 applications/omamobile-agent.desktop "$destination/usr/share/appl
 install -Dm644 applications/omamobile-open-intent.desktop "$destination/usr/share/applications/omamobile-open-intent.desktop"
 install -Dm644 applications/omamobile-update.desktop "$destination/usr/share/applications/omamobile-update.desktop"
 install -Dm644 LICENSE "$destination/usr/share/licenses/omamobile-shell/LICENSE"
+install -Dm644 LICENSE.omarchy "$destination/usr/share/licenses/omamobile-shell/LICENSE.omarchy"
 # OWL.md is Simon Schubert's OWL guide (MIT). The built-in widgets themselves
 # come from omamobile-owl-widgets, which ships the store's licence.
 install -Dm644 widgets/LICENSE-owl-guide "$destination/usr/share/licenses/omamobile-shell/LICENSE-owl-guide"
