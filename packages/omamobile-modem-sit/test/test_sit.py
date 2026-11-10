@@ -9,6 +9,7 @@ import struct
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import sit
 from sit import Sit
 
@@ -58,6 +59,64 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(self.client.next_indication(), sms)
         self.assertEqual(struct.unpack_from('<I', self.client.next_indication(), 8)[0], 399)
         self.assertFalse(self.client.indications)
+
+    def test_request_deadline_counts_suspend_and_preserves_indications(self):
+        # Real socket I/O, with only the clocks advanced to model suspend.
+        # A completed write does not prove that the modem did not execute it.
+        for elapsed, error in ((7, 0), (8, 0), (9, 0), (9, 1)):
+            with self.subTest(elapsed=elapsed, error=error):
+                now = [100.0]
+                token = self.client.token + 1
+                indication = struct.pack('<BBHHH', 2, 0, 0x0009, 8, 0)
+                response = struct.pack('<BBHHIBB', 1, 0, 0x0701, 13,
+                                       token, error, 0) + b'x'
+                self.peer.sendall(indication + response)
+                real_read = os.read
+
+                def resumed_read(fd, size):
+                    data = real_read(fd, size)
+                    now[0] += elapsed
+                    return data
+
+                def boottime(clock):
+                    self.assertEqual(clock, sit.time.CLOCK_BOOTTIME)
+                    return now[0]
+
+                with patch.object(sit.time, 'monotonic', return_value=100.0), \
+                        patch.object(sit.time, 'clock_gettime', side_effect=boottime), \
+                        patch.object(sit.os, 'read', side_effect=resumed_read):
+                    if elapsed < 8:
+                        self.assertEqual(self.client.request(0x0701), b'x')
+                    else:
+                        with self.assertRaises(TimeoutError):
+                            self.client.request(0x0701)
+                self.assertEqual(self.client.next_indication(), indication)
+                # Drain any late response without treating it as an indication.
+                self.assertIsNone(self.client.next_indication(0.001))
+                sent = self.peer.recv(4096)
+                self.assertEqual(len(sent), 12)  # exactly one request, no retry
+                self.assertEqual(struct.unpack_from('<I', sent, 6)[0], token)
+
+    def test_reply_crossing_deadline_after_read_is_not_success(self):
+        for error in (0, 1):
+            with self.subTest(error=error):
+                token = self.client.token + 1
+                response = struct.pack('<BBHHIBB', 1, 0, 0x0701, 13,
+                                       token, error, 0) + b'x'
+                self.peer.sendall(response)
+                now = [100.0]
+                real_read_packet = self.client.read_packet
+
+                def delayed_packet(timeout):
+                    packet = real_read_packet(timeout)
+                    now[0] += 8
+                    return packet
+
+                with patch.object(sit.time, 'monotonic', side_effect=lambda: now[0]), \
+                        patch.object(sit.time, 'clock_gettime', side_effect=lambda _: now[0]), \
+                        patch.object(self.client, 'read_packet', side_effect=delayed_packet):
+                    with self.assertRaises(TimeoutError):
+                        self.client.request(0x0701)
 
     def test_disallowed_commands_never_write(self):
         for command in (0x0001, 0x0100, 0x0d00, 0x0d02, 0x0d03, 0x0d0a, 0x0d1b, 0x0201, 0x0208, 0x020c, 0x0249):

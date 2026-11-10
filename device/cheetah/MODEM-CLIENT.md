@@ -20,6 +20,37 @@ M4 runbook in MODEM-PLAN.md.
 
 ---
 
+## Transport deadlines (0.3.34; offline validation only)
+
+SIT transport waits use Linux `CLOCK_BOOTTIME`, which counts time spent
+suspended. A request whose reply is observed at or after its deadline
+raises `TimeoutError`, including when the reply was read before a scheduling
+pause and processed afterwards. Indications encountered during a request
+remain queued, and unread buffered packets remain available. A timeout does
+not cancel a modem operation or prove that it did not execute; the transport
+does not retransmit it. Token matching continues to reject old responses.
+
+The socket tests hold `CLOCK_MONOTONIC` still and advance BOOTTIME across
+real socket reads. They cover replies before, at and after the deadline,
+a late modem error, indication retention and a pause after packet receipt.
+These are host tests with a simulated clock jump, not a real suspend test.
+
+`select()` still uses a relative wait: this change rechecks deadlines when
+execution returns, but does not arrange a wake alarm or guarantee immediate
+expiry on resume without socket activity. The modem sleep inhibitor stays
+in place. CPIF/PCIe suspend, incoming-call/SMS wake, IMS continuity and
+battery consumption still need attended hardware qualification under
+[MODEM-PLAN](MODEM-PLAN.md) M6 and section 6.3.
+
+Before promoting this package change, a device owner must run the existing
+awake modem smoke/telephony checks on a qualified build and attach
+`tools/phone-smoke` with its kernel release. Stop on lost registration,
+missing indications or unexpected timeouts; retain logs with identifiers
+removed and restore the previous package through the normal update path
+with an approved reboot (never restart the modem in place). Risk: changed
+request timeout classification. Do not bypass the sleep inhibitor to test
+this patch; modem-on suspend remains a separate hardware gate.
+
 ## 1. What is built
 
 Two packages:
