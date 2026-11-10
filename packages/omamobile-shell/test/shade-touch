@@ -17,6 +17,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/quicksettings"
 cp "$plugin/NotificationRow.qml" "$plugin/NotificationsModel.js" "$plugin/Readable.js" "$work/quicksettings/"
 cp "$here/shade-touch.qml" "$work/tst_shade_touch.qml"
+python3 "$here/notification-refusal.py" "$work/tst_notification_refusal.qml"
 
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1
-exec "$runner" -import "$here/qml-stubs" -input "$work/tst_shade_touch.qml"
+exec "$runner" -import "$here/qml-stubs" -input "$work"

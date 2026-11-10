@@ -22,11 +22,14 @@ Item {
     property var forgotten: []
     property bool clearing: false
     property bool rejectForget: false
+    property bool holdReply: false
+    property var pendingEntry: null
     function openNotification(entry) { opened = opened.concat([entry.key]) }
     function forgetNotification(entry) {
       if (clearing || rejectForget) return false
       forgotten = forgotten.concat([entry.file])
-      Qt.callLater(function() { sheet.notifications = NotificationsModel.without(sheet.notifications, entry.key) })
+      if (holdReply) pendingEntry = entry
+      else Qt.callLater(function() { sheet.notifications = NotificationsModel.without(sheet.notifications, entry.key) })
       return true
     }
   }
@@ -55,6 +58,7 @@ Item {
           entry: modelData
           width: rows.width
           swipeEnabled: !list.moving && !sheet.clearing
+          clearing: sheet.clearing
         }
       }
     }
@@ -75,6 +79,8 @@ Item {
       sheet.notifications = NotificationsModel.parse(lines.join("\n"))
       sheet.clearing = false
       sheet.rejectForget = false
+      sheet.holdReply = false
+      sheet.pendingEntry = null
       sheet.opened = []
       sheet.forgotten = []
       list.contentY = 0
@@ -181,6 +187,44 @@ Item {
       verify(row.visible)
       compare(sheet.forgotten.length, 0)
       compare(repeater.count, 3)
+    }
+
+    function test_swipe_then_immediate_scroll_still_forgets_the_row() {
+      fill(10)
+      var row = rowAt(0)
+      var key = row.entry.key, file = row.entry.file
+      drag(row, 40, row.height / 2, 260, 0, 12, 16)
+      verify(row.dismissing)
+      compare(sheet.forgotten.length, 0, "the fly-off has not sent the request yet")
+      // Start a real vertical gesture while the dismissed row is flying off.
+      drag(list, list.width / 2, 220, 0, -180, 12, 16)
+      tryVerify(function() { return list.contentY > 40 }, 1000)
+      tryVerify(function() { return sheet.forgotten.length === 1 }, 2000)
+      compare(sheet.forgotten[0], file)
+      tryCompare(repeater, "count", 9)
+      for (var i = 0; i < repeater.count; i++) verify(rowAt(i).entry.key !== key)
+    }
+
+    function test_scrolling_while_reply_is_pending_keeps_the_row_folded() {
+      fill(10)
+      sheet.holdReply = true
+      var row = rowAt(0)
+      var key = row.entry.key
+      drag(row, 40, row.height / 2, 260, 0, 12, 16)
+      tryVerify(function() { return sheet.forgotten.length === 1 }, 2000)
+      compare(row.fold, 0)
+      compare(repeater.count, 10, "the service reply is still pending")
+      drag(list, list.width / 2, 220, 0, -180, 12, 16)
+      tryVerify(function() { return list.contentY > 40 }, 1000)
+      compare(row.fold, 0, "scrolling does not unfold an accepted swipe")
+      verify(!row.visible)
+      compare(sheet.forgotten.length, 1)
+      // Clear all also cannot resurrect a row whose request was accepted.
+      sheet.clearing = true
+      compare(row.fold, 0)
+      sheet.notifications = NotificationsModel.without(sheet.notifications, sheet.pendingEntry.key)
+      tryCompare(repeater, "count", 9)
+      for (var i = 0; i < repeater.count; i++) verify(rowAt(i).entry.key !== key)
     }
 
     function test_a_short_swipe_springs_back() {

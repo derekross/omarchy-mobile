@@ -22,6 +22,9 @@ Item {
   property var entry: ({})
   // Off while the list is scrolling.
   property bool swipeEnabled: true
+  // Clear all may cancel a swipe before its request is accepted.
+  property bool clearing: false
+  property bool forgetAccepted: false
   readonly property bool actionable: !!NotificationsModel.tapArgv(entry)
   readonly property color foreground: host ? host.foreground : Commons.Color.popups.text
 
@@ -44,13 +47,22 @@ Item {
     foldAnimation.stop()
     fold = 1
     dismissing = false
+    forgetAccepted = false
     restoreAnimation.restart()
   }
 
-  onSwipeEnabledChanged: if (!swipeEnabled && dismissing) restoreSwipe()
+  onClearingChanged: if (clearing && dismissing && !forgetAccepted) restoreSwipe()
+
+  Connections {
+    target: row.host
+    ignoreUnknownSignals: true
+    function onNotificationForgetFailed(key) {
+      if (row.forgetAccepted && row.entry.key === key) row.restoreSwipe()
+    }
+  }
 
   function finishSwipe() {
-    var way = swipeEnabled ? NotificationsModel.swipeOutcome(swipeOffset, swipeVelocity, width, Style.space(900)) : 0
+    var way = !clearing ? NotificationsModel.swipeOutcome(swipeOffset, swipeVelocity, width, Style.space(900)) : 0
     swipeAnimation.dismiss = way !== 0
     swipeAnimation.to = way * (width + Style.space(24))
     if (way !== 0) dismissing = true
@@ -183,7 +195,7 @@ Item {
     }
     ScriptAction {
       script: if (swipeAnimation.dismiss) {
-        if (row.swipeEnabled) foldAnimation.start()
+        if (!row.clearing) foldAnimation.start()
         else row.restoreSwipe()
       }
     }
@@ -210,7 +222,10 @@ Item {
       easing.type: Easing.OutCubic
     }
     ScriptAction {
-      script: if (!row.host || !row.host.forgetNotification(row.entry)) row.restoreSwipe()
+      script: {
+        row.forgetAccepted = !!row.host && row.host.forgetNotification(row.entry)
+        if (!row.forgetAccepted) row.restoreSwipe()
+      }
     }
   }
 }

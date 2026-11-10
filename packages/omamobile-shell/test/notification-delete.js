@@ -44,6 +44,8 @@ function context() {
     pendingForget : null,
     pendingClearKeys : [],
     notificationDeleteError : '',
+    failedKeys : [],
+    notificationForgetFailed(key) { this.failedKeys.push(key) },
     forgetProc : {running : false},
     clearProc : {running : false},
     forgetResult : {text : ''},
@@ -231,5 +233,23 @@ test('actual bulk command uses one keyed IPC and preserves legacy flow', () => {
   } finally {
     fs.rmSync(d, {recursive : true, force : true})
   }
+});
+test('async refusal identifies only the rejected key and continues the queue', () => {
+  const c = context();
+  assert(c.forgetNotification(c.notifications[0]));
+  c.forgetProc.running = true;
+  assert(c.forgetNotification(c.notifications[1]));
+  c.forgetProc.running = false;
+  c.forgetResult.text = 'busy';
+  c.forgetDone(1);
+  assert.deepEqual(c.failedKeys, ['old']);
+  assert.equal(c.pendingForget.key, 'new');
+  assert.equal(c.notifications.length, 2);
+  c.forgetProc.running = false;
+  c.forgetResult.text = 'ok';
+  c.forgetDone(0);
+  c.settle();
+  assert.deepEqual(c.failedKeys, ['old']);
+  assert.deepEqual(c.notifications.map(entry => entry.key), ['old']);
 });
 console.log('PASS total', n, 'actual source consumer cases; no real daemon/notification operation');

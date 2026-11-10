@@ -841,6 +841,8 @@ Item {
     })
   }
 
+  signal notificationForgetFailed(string key)
+
   function forgetNotification(entry) {
     if (!entry || !entry.key || !entry.file) return false
     if (clearProc.running) {
@@ -870,7 +872,10 @@ Item {
       if (code === 0 && String(forgetResult.text || "").trim() === "ok" && root.pendingForget) {
         root.acknowledgeNotifications([root.pendingForget.key])
         root.notificationDeleteError = ""
-      } else root.notificationDeleteError = "Notification could not be removed. Try again or update Omarchy Mobile."
+      } else {
+        root.notificationDeleteError = "Notification could not be removed. Try again or update Omarchy Mobile."
+        if (root.pendingForget) root.notificationForgetFailed(root.pendingForget.key)
+      }
       root.pendingForget = null
       root.runForget()
       notificationsLater.restart()
@@ -2080,6 +2085,7 @@ Item {
                 entry: modelData
                 width: shadeRows.width
                 swipeEnabled: !shadeList.moving && !clearProc.running
+                clearing: clearProc.running
               }
             }
           }
