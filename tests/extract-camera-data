@@ -192,3 +192,5 @@ if failures:
     sys.exit(f"not ok - {len(failures)} adrp decoding check(s) failed")
 print("ok - adrp page displacements are signed in every finder")
 PY
+
+python3 -I -B tests/extract-camera-sve.py

@@ -842,7 +842,11 @@ def serve_one(service, connection, clients):
 def probe():
     """Read-only first contact (MODEM-PLAN M4.1): SIM card and application
     states, radio state, packet registration, NR mode, whether an SMSC is
-    set. No identifiers are printed; nothing is changed."""
+    set. No identifiers are printed; nothing is changed.
+
+    A failed/empty SMSC reply with a present SIM leaves SMS configuration
+    unverified; SMSC error 11 is expected only when no SIM is present.
+    """
     client = Sit()
     failed = False
     try:

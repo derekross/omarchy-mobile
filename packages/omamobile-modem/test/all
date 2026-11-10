@@ -16,6 +16,7 @@ if command -v shellcheck >/dev/null; then
   shellcheck -S warning lib/omamobile-modem-start install || fail "shellcheck"
 fi
 pass "scripts parse"
+python3 test/test_link.py || fail "device link module parameters and load order"
 
 # spawn_optional keeps its job alive whatever the daemon's exit: run the
 # function from modem.conf under the library's errexit and pipefail with a
@@ -84,7 +85,9 @@ pass "NV checksums"
 
 stage=$t/stage
 ./install "$stage"
-for f in usr/lib/omamobile-vendor/omamobile-modem-start usr/lib/omamobile-vendor/omamobile-modem-cp \
+[[ -d $stage/usr/lib/omamobile-modem ]] || fail "package-owned link configuration directory"
+[[ ! -e $stage/usr/lib/omamobile-modem/link.conf ]] || fail "default needs no device link configuration"
+for f in usr/share/doc/omamobile-modem/README.md usr/lib/omamobile-vendor/omamobile-modem-start usr/lib/omamobile-vendor/omamobile-modem-cp \
          usr/lib/omamobile-vendor/profiles/modem.conf usr/lib/omamobile-vendor/modem/props.conf \
          usr/lib/systemd/system/omamobile-modem.service usr/lib/udev/rules.d/60-omamobile-modem-nv-ro.rules \
          usr/lib/omamobile-vendor/omamobile-modem-nv-overlay usr/bin/omamobile-modem \
@@ -165,7 +168,7 @@ s=lib/omamobile-modem-start
 lineof() { grep -n "$1" $s | head -1 | cut -d: -f1; }
 l_prov_refuse=$(lineof "isn't provisioned"); l_mark_refuse=$(lineof 'never reached ONLINE; skipping'); l_up_refuse=$(lineof 'refuse_unclean$')
 l_inhibit=$(lineof 'no sleep inhibitor held'); l_latch=$(lineof '> "\$MARK"'); l_latch_sync=$(awk -v n="$l_latch" 'NR == n + 1' $s)
-l_modprobe=$(lineof '^modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
+l_modprobe=$(lineof '^[[:space:]]*modprobe '); l_check=$(lineof 'omamobile-vendor-chroot" modem check'); l_rm=$(lineof '^  rm -f "\$MARK"')
 l_ready=$(lineof 'systemd-notify --ready'); l_exec=$(lineof 'exec "\$LIB/omamobile-vendor-chroot" modem start')
 l_reason_rm=$(lineof '^rm -f "\$REFUSED"')
 for v in l_prov_refuse l_mark_refuse l_up_refuse l_inhibit l_reason_rm l_latch l_modprobe l_check l_rm l_ready l_exec; do
@@ -175,7 +178,7 @@ done
 [[ $l_prov_refuse -lt $l_mark_refuse && $l_mark_refuse -lt $l_up_refuse && $l_up_refuse -lt $l_inhibit && $l_inhibit -lt $l_reason_rm && $l_reason_rm -lt $l_latch && $l_latch -lt $l_modprobe &&
    $l_modprobe -lt $l_check && $l_check -lt $l_rm && $l_rm -lt $l_ready && $l_ready -lt $l_exec ]] ||
   fail "start script order: refuse($l_prov_refuse,$l_mark_refuse,$l_up_refuse) inhibit($l_inhibit) reason-rm($l_reason_rm) latch($l_latch) modprobe($l_modprobe) check($l_check) rm($l_rm) ready($l_ready) exec($l_exec)"
-[[ $(grep -c '^modprobe ' $s) -eq 3 && $(grep -c 'modprobe' <(sed -n "1,${l_latch}p" $s) ) -eq 0 ]] ||
+[[ $(grep -c '^[[:space:]]*modprobe ' $s) -eq 3 && $(grep -c 'modprobe' <(sed -n "1,${l_latch}p" $s) ) -eq 0 ]] ||
   fail "no modprobe before the latch"
 grep -q 'OMAMOBILE_MODEM_MARK=\$MARK OMAMOBILE_MODEM_UP_MARK=\${INVOCATION_ID:+\$UP} exec' $s || fail "both markers go to the profile's watcher (the modem-up one only under the unit)"
 grep -q "OMAMOBILE_MODEM_UP_MARK" $cp || fail "the watcher writes the modem-up marker"
@@ -201,7 +204,7 @@ past() { OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS=1 start "$@"; }
 stop_line='past the marker checks, stopping here (test only)'
 ! grep -rq 'OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS' systemd install || fail "the test stop point is set by no unit or install step"
 l_stop=$(lineof 'OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS:-')
-[[ $l_up_refuse -lt $l_stop && $l_stop -lt $(lineof '/sys/module/pcie_gs201_cp') && $l_stop -lt $l_inhibit && $l_stop -lt $l_latch ]] ||
+[[ $l_up_refuse -lt $l_stop && $l_stop -lt $(lineof '^link_param_ok()') && $l_stop -lt $l_inhibit && $l_stop -lt $l_latch ]] ||
   fail "the test stop point sits after the marker decision and before the sysfs read, the inhibitor and the latch (stop=$l_stop)"
 # Not provisioned (a fresh install before tools/phone-provision): one line
 # per missing file, no latch, the reason says so. The unit itself is skipped

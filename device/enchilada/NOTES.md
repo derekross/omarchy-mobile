@@ -105,8 +105,8 @@ active slot, A, which is the rescue.
 
 `fastboot boot` of an initramfs built from commit 2331a85 (the
 `UFS_RW_LUNS` pull request, with `UFS_RW_LUNS=sde` in this descriptor),
-kernel `7.1.0-rc1-sdm845`; nothing written. From the init's log and
-`/sys/block`:
+the first-light kernel (`7.1.0-rc1-sdm845`); nothing written. From the
+init's log and `/sys/block`:
 
 - allowlist `boot_b userdata`; LUNs with allowlisted partitions `sda sde`;
 - `/dev/sda` and `/dev/sde` removed;
