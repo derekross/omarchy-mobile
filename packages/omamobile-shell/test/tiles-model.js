@@ -78,7 +78,7 @@ test("parseList takes JSON or space- and comma-separated ids", () => {
 
 test("available lists the hidden tiles in catalog order", () => {
   const spare = M.available(M.defaults())
-  assert.deepStrictEqual(spare, ["hotspot", "stay-awake", "mic", "screenshot", "screen-record"])
+  assert.deepStrictEqual(spare, ["hotspot", "auto-brightness", "stay-awake", "mic", "screenshot", "screen-record"])
   assert.strictEqual(M.available([]).length, M.CATALOG.length)
   assert.deepStrictEqual(M.available(M.CATALOG.map((t) => t.id)), [])
 })

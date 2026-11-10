@@ -147,11 +147,72 @@ if command -v dbus-run-session >/dev/null; then
   pass "gyroscope stream over D-Bus"
 fi
 
+# auto-brightness: the curve, the user's point, the filter's hysteresis, the
+# ramps and the controller on a fake clock (test/autobrightness.py)
+python3 -I test/autobrightness.py > "$tmp/ab-unit.txt" 2>&1 || { cat "$tmp/ab-unit.txt" >&2; fail "auto-brightness unit tests"; }
+pass "auto-brightness curve, hysteresis, ramps and manual levels ($(grep -c '^ok' "$tmp/ab-unit.txt") tests)"
+
+# the toggle, against stand-ins for systemctl and busctl
+mkdir -p "$tmp/stub"
+cat > "$tmp/stub/systemctl" <<'SH'
+#!/bin/sh
+echo "$*" >> "$STUB_DIR/calls"
+case "$*" in
+  *is-active*) [ -e "$STUB_DIR/active" ] ;;
+  *disable*) rm -f "$STUB_DIR/active" ;;
+  *enable*) touch "$STUB_DIR/active" ;;
+esac
+SH
+printf '#!/bin/sh\necho "b true"\n' > "$tmp/stub/busctl"
+chmod +x "$tmp/stub/systemctl" "$tmp/stub/busctl"
+mkdir -p "$tmp/bl-class/panel" "$tmp/bl-none"
+toggle() { STUB_DIR=$tmp/stub OMAMOBILE_BACKLIGHT_CLASS=$tmp/bl-class PATH="$tmp/stub:$PATH" bin/omamobile-toggle-autobrightness "$@"; }
+[[ $(toggle status) == '{"enabled":false,"available":true}' ]] || fail "toggle status, off"
+[[ $(toggle) == enabled ]] || fail "toggle turns it on"
+grep -qx -- '--user --quiet enable --now omamobile-autobrightness.service' "$tmp/stub/calls" || fail "on enables the user service"
+[[ $(toggle status) == '{"enabled":true,"available":true}' ]] || fail "toggle status, on"
+[[ $(toggle off) == disabled && $(toggle on) == enabled && $(toggle toggle) == disabled ]] || fail "toggle on, off, toggle"
+toggle bogus 2>/dev/null && fail "toggle refuses an unknown word"
+[[ $(STUB_DIR=$tmp/stub OMAMOBILE_BACKLIGHT_CLASS=$tmp/bl-none PATH="$tmp/stub:$PATH" bin/omamobile-toggle-autobrightness status) == '{"enabled":false,"available":false}' ]] ||
+  fail "toggle status: not available without a backlight"
+pass "omamobile-toggle-autobrightness"
+
+# auto-brightness over D-Bus: the test backend's light (101 lux, one more
+# each second) on a private session bus and a backlight directory: follows
+# the light, releases the sensor while bl_power is off, takes a level set
+# by hand as the user's point and keeps it
+if command -v dbus-run-session >/dev/null; then
+  bl=$tmp/backlight
+  mkdir -p "$bl"
+  echo 2047 > "$bl/max_brightness"; echo 1500 > "$bl/brightness"; echo 1500 > "$bl/actual_brightness"; echo 0 > "$bl/bl_power"
+  XDG_STATE_HOME=$tmp/ab-state XDG_CONFIG_HOME=$tmp/ab-config GIO_USE_VFS=local dbus-run-session -- bash -c '
+    PYTHONPATH=lib python3 lib/sensor_proxy.py --backend test --session 2>/dev/null & p=$!
+    sleep 1
+    python3 lib/autobrightness.py --session --backlight "$1" --dpms "" 2> "$2/ab.log" & a=$!
+    sleep 4; cat "$1/brightness" > "$2/ab-followed"
+    echo 4 > "$1/bl_power"; sleep 2
+    echo 0 > "$1/bl_power"; sleep 5
+    echo 900 > "$1/brightness"; sleep 4.5
+    kill $a; wait $a; kill $p' _ "$bl" "$tmp" || true
+  want=$(python3 -I -c 'import sys; sys.path.insert(0, "lib"); import autobrightness as a; print(a.Curve(a.Panel()).level(101))')
+  got=$(cat "$tmp/ab-followed" 2>/dev/null)
+  (( ${got:-0} >= want - 3 && ${got:-0} <= want + 3 )) || { cat "$tmp/ab.log" >&2; fail "auto-brightness follows the light ($got, want about $want)"; }
+  [[ $(grep -c 'claimed the light sensor' "$tmp/ab.log") == 2 ]] || { cat "$tmp/ab.log" >&2; fail "claimed at start and again on the wake"; }
+  grep -q 'released the light sensor' "$tmp/ab.log" || fail "releases the sensor while the panel is off"
+  grep -q 'your level 900' "$tmp/ab.log" || { cat "$tmp/ab.log" >&2; fail "a level set by hand becomes the user's point"; }
+  [[ $(cat "$bl/brightness") == 900 ]] || fail "the user's level stays"
+  grep -q '"nits"' "$tmp/ab-state/omamobile/autobrightness.json" || fail "the user's point is saved"
+  pass "auto-brightness over D-Bus"
+fi
+
 ./install "$tmp/root"
 for f in usr/bin/omamobile-sensor-proxy usr/bin/omamobile-autorotate usr/bin/omamobile-usf usr/bin/omamobile-gyro \
+         usr/bin/omamobile-autobrightness usr/bin/omamobile-toggle-autobrightness \
          usr/lib/omamobile-sensors/usf.py usr/lib/omamobile-sensors/usf_backend.py usr/lib/omamobile-sensors/gyro.py \
          usr/lib/omamobile-sensors/sensor_proxy.py usr/lib/omamobile-sensors/autorotate.py \
+         usr/lib/omamobile-sensors/autobrightness.py \
          usr/lib/systemd/system/omamobile-sensor-proxy.service usr/lib/systemd/user/omamobile-autorotate.service \
+         usr/lib/systemd/user/omamobile-autobrightness.service \
          usr/share/dbus-1/system.d/net.hadess.SensorProxy.conf; do
   [[ -e $tmp/root/$f ]] || fail "install stages $f"
 done

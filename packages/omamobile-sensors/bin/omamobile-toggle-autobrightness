@@ -1,0 +1,60 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# omamobile-toggle-autobrightness [toggle|on|off|status|reset]: automatic
+# brightness (the omamobile-autobrightness user service) on or off, in the
+# manner of Omarchy's toggles. On enables the service, so it stays on after
+# a reboot; off stops it and leaves the brightness where it is. Prints
+# "enabled" or "disabled". status prints JSON for the quick settings:
+#   {"enabled":true,"available":true}
+# where available says the sensor proxy has a light sensor and there is a
+# backlight to set (in /sys/class/backlight, or OMAMOBILE_BACKLIGHT_CLASS
+# for tests). reset forgets the level you chose by hand (the curve's own
+# levels come back).
+set -u
+unit=omamobile-autobrightness.service
+
+active() { systemctl --user is-active --quiet "$unit"; }
+
+print_state() {
+  if active; then echo enabled; else echo disabled; fi
+}
+
+print_status() {
+  local enabled=false available=false
+  active && enabled=true
+  if [[ -n $(ls -A "${OMAMOBILE_BACKLIGHT_CLASS:-/sys/class/backlight}" 2>/dev/null) ]] &&
+     busctl get-property net.hadess.SensorProxy /net/hadess/SensorProxy net.hadess.SensorProxy \
+       HasAmbientLight 2>/dev/null | grep -c true >/dev/null; then
+    available=true
+  fi
+  printf '{"enabled":%s,"available":%s}\n' "$enabled" "$available"
+}
+
+case "${1:-toggle}" in
+  toggle)
+    if active; then
+      systemctl --user --quiet disable --now "$unit"
+    else
+      systemctl --user --quiet enable --now "$unit"
+    fi
+    print_state
+    ;;
+  on | enable)
+    systemctl --user --quiet enable --now "$unit"
+    print_state
+    ;;
+  off | disable)
+    systemctl --user --quiet disable --now "$unit"
+    print_state
+    ;;
+  status | --status)
+    print_status
+    ;;
+  reset)
+    exec omamobile-autobrightness --reset
+    ;;
+  *)
+    echo "Usage: omamobile-toggle-autobrightness [toggle|on|off|status|reset]" >&2
+    exit 1
+    ;;
+esac

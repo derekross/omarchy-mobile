@@ -42,8 +42,9 @@ import "MediaModel.js" as MediaModel
 // Backends are the same ones Omarchy's desktop panels drive: Quickshell's
 // NetworkManager and BlueZ services, omarchy-bluetooth-power, PipeWire, the
 // notification service's do-not-disturb, and brightnessctl for the panel
-// backlight. Tiles with no backend on this device render dimmed and do
-// nothing; see the STUB notes below.
+// backlight (with omamobile-autobrightness for automatic brightness). Tiles
+// with no backend on this device render dimmed and do nothing; see the STUB
+// notes below.
 Item {
   id: root
 
@@ -106,16 +107,17 @@ Item {
       case 0: refreshNotifications(); break
       case 1: refreshDnd(); break
       case 2: brightness.refresh(); break
-      case 3: refreshProbe(); break
-      case 4: torch.refresh(); break
-      case 5: rotationLock.refresh(); break
-      case 6: location.refresh(); break
-      case 7: nfc.refresh(); break
-      case 8: fingerprint.refresh(); break
-      case 9: keyboard.refresh(); break
-      case 10: if (!clockFormatRead.running) clockFormatRead.running = true; break
+      case 3: autoBrightness.refresh(); break
+      case 4: refreshProbe(); break
+      case 5: torch.refresh(); break
+      case 6: rotationLock.refresh(); break
+      case 7: location.refresh(); break
+      case 8: nfc.refresh(); break
+      case 9: fingerprint.refresh(); break
+      case 10: keyboard.refresh(); break
+      case 11: if (!clockFormatRead.running) clockFormatRead.running = true; break
     }
-    if (openRefreshIndex >= 11) openRefreshIndex = -1
+    if (openRefreshIndex >= 12) openRefreshIndex = -1
     else resumeOpenRefresh()
   }
 
@@ -152,6 +154,7 @@ Item {
       doNotDisturb: dnd.enabled,
       torch: torch.available ? torch.enabled : null,
       brightness: brightness.available ? brightness.percent : null,
+      autoBrightness: autoBrightness.available ? autoBrightness.enabled : null,
       volume: audio.available ? Math.round(audio.volume * 100) : null,
       wifiPanel: wifiPicker.opened,
       bluetoothPanel: bluetoothPanelItem.opened,
@@ -265,7 +268,7 @@ Item {
     "wifi": wifi, "bluetooth": bluetooth, "mobile-data": mobileData, "airplane": airplane,
     "hotspot": hotspot, "dnd": dnd, "torch": torch, "rotation-lock": rotationLock,
     "location": location, "nfc": nfc, "battery-saver": batterySaver, "dark-theme": darkTheme,
-    "night-light": nightLight, "stay-awake": stayAwake, "mic": mic, "screenshot": screenshot,
+    "night-light": nightLight, "auto-brightness": autoBrightness, "stay-awake": stayAwake, "mic": mic, "screenshot": screenshot,
     "screen-record": screenRecord, "fingerprint": fingerprint, "keyboard": keyboard,
     "clipboard": clipboard, "dictation": dictation
   })
@@ -1368,6 +1371,64 @@ Item {
     onExited: brightness.flush()
   }
 
+  // Automatic brightness over omamobile-autobrightness (omamobile-sensors),
+  // a user service that sets the backlight from the light sensor. The slider
+  // stays live while it runs: a level set there becomes its point on the
+  // curve instead of being undone. The brightness row's icon and the Auto
+  // brightness tile switch it through omamobile-toggle-autobrightness: "Not
+  // installed" without that command (omamobile-sensors 0.2.2), "No sensor"
+  // without a light sensor or a backlight.
+  QtObject {
+    id: autoBrightness
+
+    property bool installed: false
+    property bool available: false
+    property bool enabled: false
+    readonly property string icon: enabled ? "󰃡" : "󰃠"
+    readonly property string status: !installed ? "Not installed" : !available ? "No sensor" : enabled ? "On" : "Off"
+
+    function refresh() {
+      if (!autoBrightnessRead.running) autoBrightnessRead.running = true
+    }
+
+    function toggle() {
+      if (!available || autoBrightnessWrite.running) return
+      autoBrightnessWrite.command = ["omamobile-toggle-autobrightness", enabled ? "off" : "on"]
+      autoBrightnessWrite.running = true
+    }
+  }
+
+  Process {
+    id: autoBrightnessRead
+    // {"enabled":…,"available":…}, or {"installed":false} without the command
+    command: ["sh", "-c", "command -v omamobile-toggle-autobrightness >/dev/null || { echo '{\"installed\":false}'; exit 0; }; omamobile-toggle-autobrightness status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var value = {}
+        try { value = JSON.parse(String(text || "").trim() || "{}") || {} } catch (error) {}
+        autoBrightness.installed = value.installed !== false
+        autoBrightness.available = value.available === true
+        autoBrightness.enabled = value.available === true && value.enabled === true
+      }
+    }
+  }
+
+  Process {
+    id: autoBrightnessWrite
+    // The first level it sets comes within a second: read both again.
+    onExited: {
+      autoBrightness.refresh()
+      autoBrightnessSettled.restart()
+    }
+  }
+
+  Timer {
+    id: autoBrightnessSettled
+    interval: 1500
+    onTriggered: brightness.refresh()
+  }
+
   // ---------------------------------------------------------------- volume
 
   QtObject {
@@ -1898,11 +1959,14 @@ Item {
 
             SliderRow {
               width: parent.width
-              icon: "󰃠"
+              icon: autoBrightness.icon
               value: brightness.percent / 100
               available: brightness.available
               unavailableText: "No backlight"
               onMoved: function(value) { brightness.set(value) }
+              // Automatic brightness on or off (the slider still works with
+              // it on: the level becomes its point on the curve).
+              onIconClicked: autoBrightness.toggle()
             }
 
             SliderRow {

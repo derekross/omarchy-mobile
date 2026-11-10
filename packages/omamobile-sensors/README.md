@@ -4,18 +4,111 @@
 The Pixel 7 Pro's sensors (accelerometer, gyroscope, light, proximity, compass) belong
 to the AoC, the audio and sensor DSP, and reach Linux through its sensor
 framework (USF) on `/dev/acd-com.google.usf`. This package turns them into
-iio-sensor-proxy's D-Bus API, and rotates Hyprland with the phone.
+iio-sensor-proxy's D-Bus API, rotates Hyprland with the phone and sets the
+screen's brightness from the ambient light.
 
 | File | What |
 |---|---|
 | `omamobile-sensor-proxy` (system service, enabled at boot after `omamobile-aoc.service`) | `net.hadess.SensorProxy` on the system bus: `HasAccelerometer`, `AccelerometerOrientation`, `AccelerometerTilt`, light (lux), proximity, compass; a sensor samples only while a client holds a claim. Loads the AoC's sensor registry once per AoC boot from `/usr/share/omamobile/sensors/registry` (Google's files from the phone's vendor partition, never shipped) and the factory calibration from `persist` (read-only, with debugfs) |
 | `omamobile-autorotate` (user service, turned on from the rotation lock tile) | claims the accelerometer and sets the monitor's and the touchscreen's transform through `hyprctl` (normal 0, left-up 1, bottom-up 2, right-up 3); `~/.local/state/omamobile/rotation-lock` locks it; while the screen is locked it holds portrait (the PIN pad), remembers the orientation and applies it on unlock |
+| `omamobile-autobrightness` (user service, turned on from the quick settings or `omamobile-toggle-autobrightness`) | claims the light sensor while the screen is on and sets the panel's backlight from the lux on a perceptual curve, with smoothing, hysteresis and ramps; a level set by hand becomes the user's point on the curve (below) |
+| `omamobile-toggle-autobrightness [toggle\|on\|off\|status\|reset]` | turns the service on (enabled, so it stays on after a reboot) or off (the brightness stays where it is); `status` prints `{"enabled":…,"available":…}` for the shell; `reset` forgets the user's point |
 | `omamobile-gyro` | test client of the gyroscope stream: samples, `--stats` (rate, jitter, latency, drops), `--integrate` (angle turned per axis) |
 | `omamobile-usf` | the USF client, for bring-up: sensor list, registry load, sampling |
 
 It provides and conflicts with `iio-sensor-proxy`, whose daemon would take
 the same bus name. `monitor-sensor` (from iio-sensor-proxy's source) works
 against it.
+
+## Automatic brightness
+
+`omamobile-autobrightness` is a user service and a client of the proxy's
+light sensor (`ClaimLight`, then `LightLevel` from `PropertiesChanged`). It
+is off until the user turns it on.
+
+**The curve.** The target luminance is interpolated in log-log space between
+these points, so equal ratios of light give equal steps of perceived
+brightness:
+
+| lux | ≤ 1 | 10 | 85 | 100 | 1000 | ≥ 10000 |
+|---|---|---|---|---|---|---|
+| nits | 3 | 25 | 99 | 110 | 300 | 600 |
+| level | 7 | 83 | 336 | 373 | 1022 | 2047 |
+
+The level comes from the panel's range: levels 4-2047 run from about 2 to
+600 nits on cheetah's panel (`device/cheetah/DISPLAY-PLAN.md` 2.4), taken as
+linear between them. Level 0 turns the pixels off, so 4 is the lowest level
+the curve uses, and 2047 the highest: if a kernel ever offers this panel's
+HBM levels above it, the curve leaves them alone. These numbers are the
+Pixel 7 Pro's, chosen by the board's compatible string (`PANELS` in
+`autobrightness.py`). Another phone that installs this package (the Pixel 6
+Pro does) gets the same 2-600 nits spread over its whole range from level 1,
+with a line in the journal, until it has an entry there or a `"panel"` in
+`~/.config/omamobile/autobrightness.json`.
+`omamobile-autobrightness --print-curve` prints the curve, with the user's
+point applied. That file can change the points and the panel's range:
+
+```json
+{"curve": [[1, 3], [10, 25], [100, 110], [1000, 300], [10000, 600]],
+ "panel": {"min_level": 4, "max_level": 2047, "min_nits": 2, "max_nits": 600}}
+```
+
+**Smoothing, hysteresis, ramps.** The AoC's lux comes about once a second
+in a steady room, where it wanders a few percent, and several times a
+second while the light changes. The daemon takes the median of the
+last three readings, so one stray reading is dropped, then a log-domain
+average that rises in about a second and falls in about three. It follows a
+new level only once that average and the median have both stayed 26 %
+brighter for 1.5 s, or 29 % darker for 10 s (the average alone lags: a
+burst of light that has gone still lifts it after the room is back). The
+sensor sits under the panel, and in use a hand shades it: in a dim room on
+a phone in use it read 1-7 lux instead of about 14 for 7-8 s at a time, a
+few seconds apart. Hence the long wait before dimming, and the short one
+before brightening. The backlight then moves on a perceptual scale:
+brightening takes about a third of a second (85 to 1000 lux: 3.5 s from the
+change), dimming about three seconds (1000 to 85 lux: about 14.5 s). The
+first reading after a wake applies within a fraction of a second in either
+direction.
+
+**A level set by hand** (the quick-settings slider, `brightnessctl`, anything
+that writes the backlight) is the user's, not something to undo. The daemon
+sees it at once, because every brightness write notifies `actual_brightness`.
+It stops its own ramp; it also checks the level before each of its own
+writes. Once the level has held for 2 s, it becomes the user's point on the
+curve at the current light. The whole curve is bent by a gamma on the panel's
+perceptual range so it passes through that point, as Android's
+auto-brightness adjustment does. The gamma is limited to 1/3-3; where that
+isn't enough, the curve blends into the point over a decade of lux. The level
+stays exactly where the user put it, the curve stays monotonic, and a
+brighter or dimmer preference carries over to darker and brighter rooms,
+while daylight stays at the maximum. The point is kept in
+`~/.local/state/omamobile/autobrightness.json`
+(`omamobile-toggle-autobrightness reset` forgets it).
+
+Changes that come from the power key or the lock teach nothing: a brightness
+of 0, a change from 0 (`omamobile-keys` puts 40 % back when a wake finds the
+panel at 0), any change while the panel is off, and any change in the first
+second after a wake. A slider moved after that is the user's.
+
+**Screen off.** The panel is off when its backlight's `bl_power` is not 0
+(Omarchy's display off writes 4 on this phone), or when the DSI connector's
+DPMS is not On. Nothing signals either change, so the daemon reads both
+once a second. While the panel is off it releases the light claim (the
+proxy then stops the sensor) and writes nothing. On the wake it claims the
+sensor again. The proxy signals only changed values, so if no reading has
+come 2.5 s after the claim, the daemon reads `LightLevel` itself. This
+covers a dark room that reads the same lux as before.
+
+**Writes** go through logind's `SetBrightness`, as `brightnessctl` does for
+the slider (the user may write `bl_power`, not `brightness`). It takes 2-10 ms
+on the phone, and a ramp runs at 20 Hz only while it moves. The daemon writes
+the file directly where it is writable (the tests use a directory standing
+in for the backlight). A write that fails (logind refuses it, or doesn't
+answer in 2 s) changes nothing the daemon believes: the level stays what the
+panel has, nothing is learned from it, and it tries again 5 s later; if a
+timed-out write lands after all, it is recognised as its own. With no
+backlight at all the service exits with status 78, which its unit doesn't
+restart. `--dry-run` writes nothing and logs the levels it would set.
 
 ## Gyroscope stream (`org.omamobile.SensorProxy.Gyro1`)
 
