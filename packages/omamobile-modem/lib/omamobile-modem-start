@@ -25,18 +25,21 @@
 #  - modem-up: written by the watcher at ONLINE, removed by --stopped when
 #    the unit stops (the reboot's shutdown, or a stop by hand) and the
 #    marker is this boot's. A boot that ends with the modem up and no stop,
-#    a hang or a reset, leaves it, and the next boot refuses once: it moves
-#    the marker aside (modem-up.refused-<time>-<pid>) and the boot after
-#    that starts the modem again. One automatic retry, then the hold: the
-#    refused copy is the counter. If that retry's boot ends unclean too,
-#    the next boot finds the stale marker with a copy beside it (no clean
-#    stop since the last refusal), keeps the marker and refuses "(held)",
-#    and every boot refuses until a human has looked (--retry). A clean
-#    stop of this boot's marker removes the copies: the streak is over. So
-#    a flat battery or one forced reset costs one boot's modem; a phone
-#    that hangs or resets because the modem is up stops after the second,
-#    and each refused boot's journal says so. An owner who wants the hard
-#    stop from the first unclean end (the modem off until --retry) makes
+#    a hang or a reset, leaves it. The next boot counts it and starts the
+#    modem all the same: it moves the marker aside
+#    (modem-up.refused-<time>-<pid>; the copy is the counter, and keeps its
+#    name from when this boot was refused) and goes on. If that boot ends
+#    unclean too, the boot after it finds the stale marker with a copy
+#    beside it (no clean stop since the last count), keeps the marker and
+#    refuses "(held)", and every boot refuses until a human has looked
+#    (--retry). A clean stop of this boot's marker removes the copies: the
+#    streak is over. So a flat battery or one forced reset costs nothing (an
+#    owner whose phone froze and who held the keys comes back to a phone
+#    that can call); a phone that hangs or resets because the modem is up
+#    stops after the second, and each of those boots' journals says so.
+#    Until 0.1.19 the first unclean end cost the next boot its modem, with
+#    nothing on the screen saying why. An owner who wants the hard stop
+#    from the first unclean end (the modem off until --retry) makes
 #    /etc/omamobile/modem-hold.
 #
 # Either way the recovery is the same once a human has looked at the last
@@ -100,14 +103,14 @@ stopped() {
   say "modem stopped (${SERVICE_RESULT:-result unknown}): $UP removed"
 }
 
-# The stale modem-up marker: refuse this boot. The first time, move the
-# marker aside and let the next boot start again; with a refused copy
-# already there (that retry's boot ended unclean too), or with the owner's
+# The stale modem-up marker. The first time, count it (move the marker
+# aside) and start the modem all the same; with a copy already there (the
+# boot after the first unclean end ended unclean too), or with the owner's
 # hold flag, keep the marker and hold until a human has looked.
 refuse_unclean() {
   local refused
-  say "the last boot with the modem up ($(cat "$UP")) ended without a clean stop: a hang or a reset; skipping the modem on this boot."
-  say "Read that boot's journal first: journalctl -b -1 -u omamobile-modem, and its kernel log, journalctl -b -1 -k"
+  say "the last boot with the modem up ($(cat "$UP")) ended without a clean stop: a hang or a reset."
+  say "That boot's journal: journalctl -b -1 -u omamobile-modem, and its kernel log, journalctl -b -1 -k"
   if [[ -e $HOLD ]]; then
     say "$HOLD exists: the modem stays off until omamobile-modem-start --retry, or rm $UP and systemctl start omamobile-modem"
     refuse "Off after a hang or reset (held)"
@@ -119,8 +122,7 @@ refuse_unclean() {
   refused=$UP.refused-$(date +%Y%m%dT%H%M%S)-$$
   mv -f "$UP" "$refused"
   sync
-  say "$UP moved to $refused: the next boot starts the modem again, once (a second unclean end holds; for the hard stop from the first, touch $HOLD)"
-  refuse "Off after a hang or reset"
+  say "$UP moved to $refused: one unclean end, so the modem starts on this boot all the same (a second in a row holds it off; for the hard stop from the first, touch $HOLD)"
 }
 
 case ${1:-} in

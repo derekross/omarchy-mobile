@@ -282,26 +282,23 @@ out=$(start) && fail "a bring-up latch is refused"
 out=$(start) && fail "the latch refuses the boot after too"
 rm -f "$m/latch"
 # A stale modem-up marker (a boot that ended with the modem up and no clean
-# stop) refuses once: the marker moves aside, named by the time, and the
-# next boot gets past the markers (here: to the test stop point, with the
-# refused copy still beside the marker's place and no latch written). The
-# earlier refusal's reason stays until the inhibitor check has passed, which
-# the stop point comes before.
+# stop: a flat battery, or an owner who held the keys on a frozen phone) is
+# counted and the modem starts all the same (0.1.19; before, it cost that
+# boot its modem with nothing on the screen saying why): the marker moves
+# aside, named by the time, and the start gets past the markers (here: to
+# the test stop point, with the copy beside the marker's place, no latch
+# written and no refusal for the tile).
 stale() { printf '%s boot %s\n' 2026-01-01T00:00:00+00:00 00000000-0000-0000-0000-000000000000 > "$m/up"; }
+rm -f "$m/run/refused"
 stale
-out=$(start) && fail "a modem-up marker is refused"
-[[ $out == *"ended without a clean stop"* && $out == *"journalctl -b -1"* ]] || fail "the modem-up refusal says where to look: $out"
-[[ $out == *"the next boot starts the modem again"* ]] || fail "the refusal says the next boot starts: $out"
+out=$(past) || fail "one unclean end doesn't cost the next boot its modem (rc=$?): $out"
+[[ $out == *"ended without a clean stop"* && $out == *"journalctl -b -1"* ]] || fail "the start says what it found and where to look: $out"
+[[ $out == *"the modem starts on this boot all the same"* && $out == *"$stop_line"* && $out != *"never reached ONLINE"* ]] ||
+  fail "after one unclean end the start goes on: $out"
 [[ ! -e $m/up && ! -e $m/latch ]] || fail "the stale marker is moved aside, nothing else written"
-[[ $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "the refused marker is kept beside the marker's place: $(ls "$m")"
-grep -q "0000-000000000000" "$m"/up.refused-* || fail "the kept copy is the stale marker's content"
-[[ $(cat "$m/run/refused") == "Off after a hang or reset" ]] || fail "the reason for the tile: $(cat "$m/run/refused")"
-out=$(past) || fail "the boot after a refused one gets past the markers (rc=$?): $out"
-[[ $out == *"$stop_line"* && $out != *"ended without a clean stop"* && $out != *"never reached ONLINE"* ]] ||
-  fail "the boot after a refused one starts the modem again: $out"
-[[ ! -e $m/up && ! -e $m/latch && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
-  fail "a start past the markers writes nothing before the stop point and keeps the refused copy: $(ls "$m")"
-[[ $(cat "$m/run/refused") == "Off after a hang or reset" ]] || fail "the reason stays until every refusal has passed: $(cat "$m/run/refused")"
+[[ $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] || fail "the counted marker is kept beside the marker's place: $(ls "$m")"
+grep -c "0000-000000000000" "$m"/up.refused-* >/dev/null || fail "the kept copy is the stale marker's content"
+[[ ! -e $m/run/refused ]] || fail "one unclean end leaves no refusal for the tile: $(cat "$m/run/refused")"
 # The second refusal holds: the retry's boot ended unclean too (a stale
 # marker with the refused copy still beside it), so the marker stays, no
 # second copy is made, and every boot refuses until --retry. A clean stop of
@@ -338,8 +335,8 @@ printf '%s boot %s\n' "$(date -Is)" "$(cat /proc/sys/kernel/random/boot_id)" > "
 out=$(SERVICE_RESULT=success bash $s --stopped 2>&1) || fail "--stopped exits 0"
 [[ ! -e $m/up && -z $(ls "$m"/up.refused-* 2>/dev/null) ]] || fail "a clean stop of this boot's marker removes the refused copies: $(ls "$m")"
 stale
-out=$(start) && fail "after a clean stop a stale marker is refused once again"
-[[ $out == *"the next boot starts the modem again"* && ! -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
+out=$(past) || fail "after a clean stop one unclean end starts the modem again (rc=$?): $out"
+[[ $out == *"the modem starts on this boot all the same"* && ! -e $m/up && $(ls "$m"/up.refused-* | wc -l) -eq 1 ]] ||
   fail "the streak starts over after a clean stop: $out $(ls "$m")"
 rm -f "$m"/up.refused-*
 # The owner's hard stop: with the hold flag the marker stays, and every
