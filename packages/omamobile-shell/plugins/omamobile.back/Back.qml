@@ -42,6 +42,11 @@ Item {
     return "ok"
   }
 
+  // Optional feedback uses the same event as the launcher's voice hold.
+  function haptic() {
+    Quickshell.execDetached(["sh", "-c", "command -v fbcli >/dev/null 2>&1 && exec fbcli -E button-pressed"])
+  }
+
   // `shell call omamobile.back state ''`
   function state() {
     return JSON.stringify({ fullscreen: fullscreenOnScreen, strips: !fullscreenOnScreen, edge: edge, threshold: BackModel.THRESHOLD })
@@ -147,9 +152,18 @@ Item {
           property real atY: 0
           property bool wasArmed: false
           onCentroidChanged: if (active) atY = centroid.position.y
-          onArmedChanged: if (active) wasArmed = armed
+          // One threshold tick per gesture, even if the finger crosses back.
+          property bool feedbackSent: false
+          onArmedChanged: {
+            if (!active) return
+            wasArmed = armed
+            if (armed && !feedbackSent) {
+              feedbackSent = true
+              root.haptic()
+            }
+          }
           onActiveChanged: {
-            if (active) { atY = centroid.position.y; wasArmed = false; return }
+            if (active) { atY = centroid.position.y; wasArmed = false; feedbackSent = false; return }
             console.log("omamobile-back: swipe", win.rightEdge ? "right" : "left", wasArmed ? "back" : "")
             if (wasArmed) root.back()
           }
