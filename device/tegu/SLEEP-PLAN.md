@@ -97,10 +97,11 @@ missing pull, NFC polling (stopped by the hook throughout), the modem
 **What is left.**
 
 1. The published-tip run: done twice with modules (36 of 36 each, the
-   table's last two rows); one Power-key wake on that kernel is still to
-   come, and the one sleep in 22 that never woke on the boot without
-   modules is unexplained. If it happens again: the console, then the same
-   series on the tip with the PMIC commits alone, without #224's two.
+   table's last two rows), and the Power-key wake on that tree is in (the
+   last note below). The one sleep in 22 that never woke on the boot
+   without modules is unexplained. If it happens again: the console, then
+   the same series on the tip with the PMIC commits alone, without #224's
+   two.
 2. The sleep hook ([omarchy-mobile#591](https://github.com/derekross/omarchy-mobile/pull/591)): a series of RTC-woken
    `systemctl suspend` cycles through the hook itself on a kernel with C2,
    with nothing set by hand, the hook's log and `state1/disable` read back
@@ -4766,3 +4767,5 @@ Two faults of this session's own tooling on the way, both fixed in the scripts: 
 Run 4, the same sources built with #274's `CONFIG_PHY_ZUMA_PCIE=m` so that Wi-Fi comes up (the maintainer's request on kernel #224: sleep as it will land, with the PCIe nodes in use), follows.
 
 **Run 4 on the published tree, with Wi-Fi: 36 of 36 (2026-11-09, 17:50 to 18:31 MST palmtop clock).** The same sources as run 3 (`7.3.0-rc6-omamobile-push1-g6c9420bfa77f`, build #2), built with omarchy-mobile#274's `CONFIG_PHY_ZUMA_PCIE=m` on top of `kernel/configs/omamobile.config`, so the 9a's PCIe link and Wi-Fi come up from the in-tree drivers: `omamobile-tegu-graphics-start` reported GPU, display, haptics, torch, gauge, Bluetooth, NFC and Wi-Fi (wlan0, BCM4383 on `13120000.pcie`, Gen2 x1), 78 modules loaded, the session up, the modem masked, the published DTB with the ramoops overlay alone. `sleep-series-loop.sh`, N=36, S=60, Wi-Fi kept loaded across the sleeps (`/etc/omamobile/wifi-keep-across-sleep` is set on the palmtop): 36 sleeps of 59.1 to 60.5 s by dmesg, every one woken by the RTC alarm (`pm_wakeup_irq` 52), 0 UFS link or I/O error lines in the whole boot, no oops, `suspend_stats` 36 and 0. After the series wlan0 was up and passed traffic (ping over wlan0, 13 ms). brcmfmac probed the chip again after each wake, as the Wi-Fi hook's header describes (the chip loses its firmware in the sleep), and each probe logged one `brcmf_p2p_create_p2pdev: timeout` pair; nothing else from the driver. The Power-key wake on this kernel follows when the owner is back.
+
+**The Power-key wake on the published tree (2026-11-09, 19:23 MST palmtop clock, attended).** `7.3.0-rc6-omamobile-push1-g773b4102f5ec`: the tree of runs 3 and 4 plus one device tree commit, the 9a's GNSS nodes (linux-omarchy-mobile#237), with their modules blacklisted and the modem off for the boot, Wi-Fi up. One `systemctl suspend` with a 20-minute RTC alarm as the net; the owner pressed Power once after about 75 s. `pm_wakeup_irq` 57, the gpio-keys Power line (the RTC wakes read 52), `PM: suspend exit` 74.3 s after the entry, the lock screen lit on that press, no UFS line, `suspend_stats` 1 and 0. With runs 3 and 4 that is 73 sleeps on the published tree with #224 and the PMIC interrupt, all woken.
