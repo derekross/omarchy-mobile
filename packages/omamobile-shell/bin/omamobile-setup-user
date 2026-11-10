@@ -85,9 +85,10 @@ fi
 # every screencast event it runs a probe (bash, id, pgrep over /proc). Recent
 # apps' cards are screen captures, so each swipe to recent apps ran about
 # 13 probes, a third of the shell's CPU, and the app's motion stalled (Pixel 7,
-# 8-nov). With no gliff-server on the phone there is nothing to watch: off,
-# through shell.json's disabledPlugins, once (a user can turn it back on).
-if ! command -v gliff-server >/dev/null 2>&1 && omarchy-done ensure omamobile-no-remote-session; then
+# 8-nov). And a remote desktop listening on a phone shouldn't be the default:
+# off on every phone, gliff installed or not, through shell.json's
+# disabledPlugins, once (a user who wants remote access takes it out again).
+if omarchy-done ensure omamobile-no-remote-session; then
   python3 - "$config/shell.json" <<'PY'
 import json, os, sys
 path = sys.argv[1]
