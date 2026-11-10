@@ -10,6 +10,13 @@
         "page": "display"
       },
       {
+        "id": "pin",
+        "title": "Change PIN",
+        "detail": "The lock screen PIN",
+        "icon": "pin",
+        "page": "pin"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -24,6 +31,10 @@
   },
   "display": {
     "title": "Display",
+    "rows": []
+  },
+  "pin": {
+    "title": "Change PIN",
     "rows": []
   }
 }
