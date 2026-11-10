@@ -208,7 +208,8 @@ serially() {
 short_press() {
   # $1: when the key came up. The work may start later, behind the press
   # before (serially), and timing it from then threw quick presses away as
-  # bounces (Ángel, 6-nov: "los toques rápidos no los detecta bien").
+  # bounces (Ángel, 6-nov: "los toques rápidos no los detecta bien", quick
+  # presses aren't picked up well).
   local up=${1:-$(now)}
   # This press already woke the phone as it went down (power-down).
   if [[ -f $state/woke-on-press ]] && (( up - $(<"$state/woke-on-press") < 5000 )); then
@@ -248,7 +249,8 @@ short_press() {
     # Off at once, as on Android: the panel powered off first, then the lock
     # taken behind it. The backlight at 0 alone only dimmed a Pixel 7's OLED,
     # so the lock showed dim before the screen went off (Ángel, 6-nov: "se
-    # atenúa, va a la pantalla de bloqueo y luego se apaga"). The brightness
+    # atenúa, va a la pantalla de bloqueo y luego se apaga", it dims, goes to
+    # the lock screen and only then turns off). The brightness
     # goes to 0 too, for a panel DPMS doesn't reach; it comes back below,
     # once the panel is off, for the next wake.
     local device level=
