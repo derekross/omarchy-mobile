@@ -14,7 +14,17 @@
 // code doesn't depend on the keyboard layout either.
 var ESCAPE_DOWN = 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "down" })'
 var ESCAPE_UP = 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "up" })'
-var ESCAPE_ARGV = ["sh", "-c", 'hyprctl dispatch "$1" >/dev/null; sleep 0.05; hyprctl dispatch "$2" >/dev/null',
+// But the key itself goes through a virtual keyboard (wtype) when there is
+// one: Hyprland answers the dispatches above with "ok" and the focused app
+// never sees the key. On the Pixel 7 Pro (2026-11-10, hyprland 0.57.0-3.2)
+// Settings on its About page stayed put for send_key_state by code, by the
+// name "Esc", with the window named, and for send_shortcut, and went back at
+// once for `wtype -k Escape`. A virtual keyboard's key goes wherever the
+// keyboard focus is, a focused shell sheet included, as a real key would.
+// The dispatches stay as the fallback on a phone without wtype.
+var ESCAPE_ARGV = ["sh", "-c",
+                   'if command -v wtype >/dev/null 2>&1; then exec wtype -k Escape; fi; ' +
+                   'hyprctl dispatch "$1" >/dev/null; sleep 0.05; hyprctl dispatch "$2" >/dev/null',
                    "sh", ESCAPE_DOWN, ESCAPE_UP]
 
 // Home, for an app at its top level: Back is phone-wide, so an app goes back

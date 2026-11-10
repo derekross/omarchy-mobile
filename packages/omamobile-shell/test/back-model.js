@@ -8,13 +8,17 @@ const M = require(path.join(__dirname, "../plugins/omamobile.back/BackModel.js")
 const tests = []
 const test = (name, fn) => tests.push([name, fn])
 
-test("Escape goes through Hyprland's Lua dispatcher, down then up, in one process", () => {
+test("Escape goes through a virtual keyboard, with Hyprland's dispatcher (down then up, one process) as the fallback", () => {
   assert.strictEqual(M.ESCAPE_DOWN, 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "down" })')
   assert.strictEqual(M.ESCAPE_UP, 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "up" })')
   const [sh, c, script, name, down, up] = M.ESCAPE_ARGV
   assert.deepStrictEqual([sh, c, name, down, up], ["sh", "-c", "sh", M.ESCAPE_DOWN, M.ESCAPE_UP])
   // The dispatches are positional arguments, never spliced into the script.
-  assert.ok(!script.includes("Escape"))
+  assert.ok(!script.includes("send_key_state"))
+  // wtype first, and nothing after it when it is there (exec): Hyprland says
+  // "ok" to the dispatches and the app never sees the key (7 Pro, 2026-11-10)
+  assert.ok(script.startsWith("if command -v wtype >/dev/null 2>&1; then exec wtype -k Escape; fi; "))
+  assert.ok(script.indexOf("exec wtype -k Escape") < script.indexOf('hyprctl dispatch "$1"'))
   assert.ok(script.indexOf('hyprctl dispatch "$1"') < script.indexOf("sleep 0.05"))
   assert.ok(script.indexOf("sleep 0.05") < script.indexOf('hyprctl dispatch "$2"'))
 })

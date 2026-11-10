@@ -103,7 +103,13 @@ grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge st
 grep -c 'exclusionMode: ExclusionMode.Normal' "$b" >/dev/null || fail "back strips stay clear of the bar and the keyboard"
 grep -c 'visible: !root.fullscreenOnScreen' "$b" >/dev/null || fail "back strips hide for fullscreen windows"
 if grep -n 'omamobile-back' hypr/phone.lua | grep -c above_lock >/dev/null; then fail "back strips never work over the lock"; fi
-if grep -nE 'wtype|ydotool' "$b" plugins/omamobile.back/BackModel.js; then fail "back uses Hyprland's dispatcher"; fi
+# Escape is a virtual keyboard's key (wtype, a dependency), with Hyprland's
+# dispatcher only as the fallback: the dispatcher answers "ok" and the app
+# never sees the key (Pixel 7 Pro, 2026-11-10). Never ydotool (uinput, root).
+if grep -nE 'wtype|ydotool' "$b"; then fail "Back.qml sends Escape only through BackModel"; fi
+if grep -n 'ydotool' plugins/omamobile.back/BackModel.js; then fail "back never uses ydotool"; fi
+grep -c 'exec wtype -k Escape' plugins/omamobile.back/BackModel.js >/dev/null || fail "back sends Escape through a virtual keyboard"
+( source ./PKGBUILD >/dev/null 2>&1; printf '%s\n' "${depends[@]}" | grep -cx wtype >/dev/null ) || fail "omamobile-shell depends on wtype for Back"
 # Back at an app's top level goes home: the app runs omamobile-home, the one
 # command for it (the shell can't tell that an app left Escape unused).
 grep -c 'Quickshell.execDetached(BackModel.HOME_ARGV)' "$b" >/dev/null || fail "back's home call runs omamobile-home"
