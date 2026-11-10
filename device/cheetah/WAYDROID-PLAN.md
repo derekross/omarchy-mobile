@@ -194,11 +194,16 @@ Waydroid 1.6.3 does three things that are wrong on this phone:
   the file before every start.
 - `verify` (`ExecStartPre` too) refuses to start the container unless all
   of it is in place. `waydroid upgrade` regenerates the config, so this runs
-  before every start. It also refuses a hand-opened config: an
-  `lxc.cgroup2.devices.allow` of `a`, of any `b` device, or of `c *:*` in
-  Waydroid's generated `config`, `config_nodes` or `config_session` fails it
-  (`FAIL <file>:<line>: opens every device`), so such an edit fails closed
-  instead of relying on where it sits relative to our include.
+  before every container service start (Waydroid's own `lxc-start` comes later,
+  when a session starts, and rewrites `config_session` just before it). It also
+  refuses a hand-opened config: an `lxc.cgroup2.devices.allow` of `a`, of any
+  `b` device, of `c *:*`, or of any absolute path (LXC 7 `stat()`s the path
+  and allows whatever type it finds, a block device included, with our deny
+  line out of the program) in Waydroid's generated `config`, `config_nodes` or
+  `config_session` fails it (`FAIL <file>:<line>: opens every device`), so such
+  an edit fails closed instead of relying on where it sits relative to our
+  include. Waydroid writes no allow line there itself, and our own binder and
+  render-node paths live in our include, which `verify` does not scan.
 
 Sound reaches Android only through PipeWire's PulseAudio socket (no
 `/dev/snd` is bound), so the speaker stages and protection in

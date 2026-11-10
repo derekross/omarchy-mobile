@@ -113,12 +113,14 @@ python3 -I $h config "$r" > /dev/null || fail "config, second run"
 python3 -I $h verify "$r" > /dev/null || fail "verify after hardening"
 [[ $(grep -c 'lxc-omamobile.conf' "$r/var/lib/waydroid/lxc/waydroid/config") == 1 ]] || fail "include added twice"
 # A hand-opened config fails closed: a global allow, any block-device allow or
-# a "c *:*" allow in a generated file refuses the start (the "allow = a" of
-# #465), wherever the line sits; specific character-device allows do not.
+# a "c *:*" allow or any allow by absolute path (LXC 7 allows the type it
+# finds there, a block device included) in a generated file refuses the start
+# (the "allow = a" of #465), wherever the line sits; specific character-device
+# allows by number do not.
 lx=$r/var/lib/waydroid/lxc/waydroid
 for f in config config_nodes config_session; do
   [[ -e $lx/$f ]] || : > "$lx/$f"
-  for rule in 'a' 'a *:* rwm' 'b *:* rwm' 'b 7:0 rwm' 'b' 'c *:* rwm' 'c  *:*  rwm' '  c *:* rwm'; do
+  for rule in 'a' 'a *:* rwm' 'b *:* rwm' 'b 7:0 rwm' 'b' 'c *:* rwm' 'c  *:*  rwm' '  c *:* rwm' '/dev/sda rwm' '/dev/sda' '/dev/null rwm' '/dev/binderfs/binder rwm'; do
     cp "$lx/$f" "$t/saved"
     printf 'lxc.cgroup2.devices.allow = %s\n' "$rule" >> "$lx/$f"
     if python3 -I $h verify "$r" > "$t/open.log"; then fail "verify accepts '$rule' in $f"; fi

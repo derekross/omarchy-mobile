@@ -50,12 +50,16 @@ BAD_NODE = re.compile(r"^lxc\.mount\.entry\s*=\s*/(sys/kernel/debug|dev/video\d+
 
 
 # A device rule that opens (nearly) everything: "allow = a" (all devices), any
-# "b" allow (block devices: the UFS) or "c *:*" (every character device). LXC 7
+# "b" allow (block devices: the UFS), "c *:*" (every character device) or an
+# absolute path ("allow = /dev/sda rwm": LXC 7 stat()s the path and allows
+# whatever type it finds, block devices included, and our deny line is not in
+# the program in that mode). Waydroid writes no allow line itself, and our own
+# binder and render-node paths live in our include, which is not scanned. LXC 7
 # keeps block devices out only because nothing allows them, and a global allow
 # placed after our include clears every rule before it, so a hand-edited
 # generated file (the "allow = a" in #465) must fail closed. Also the older
 # lxc.cgroup.devices.allow spelling, in case LXC maps it.
-OPEN_ALLOW = re.compile(r"^lxc\.cgroup2?\.devices\.allow\s*=\s*(a|b|c\s+\*:\*)(\s|$)")
+OPEN_ALLOW = re.compile(r"^lxc\.cgroup2?\.devices\.allow\s*=\s*(a|b|c\s+\*:\*|/\S*)(\s|$)")
 # The files LXC reads from Waydroid's generated config: config itself and what
 # it includes (config_nodes, config_session)
 GENERATED = ("config", "config_nodes", "config_session")
