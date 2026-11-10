@@ -63,24 +63,45 @@ separate public-kernel dependency or a new image cohort.
 
 The retained notes record explicit owner approval for one boot-success
 operation. An off-repository backup covered all 8192 bytes of devinfo. The
-reported layout was 3.15; slot B was active and not successful. The existing
-bootctl dry run predicted a single byte change at offset `0x35`, from `0x14`
-to `0x16`, and the notes record a bootctl write followed by comparison of all
-8192 bytes locally and remotely and read-only flags restored to `1`. Independent
-offline comparison on 2026-11-09 of the retained approved-before/after private
-files confirms 8192 bytes each, DEVI version 3.15 and exactly that single-byte
-change. Slot A's four devinfo slot-metadata bytes are unchanged; this is not an
-attestation of the contents of slot-A boot images. A separate executed command
-transcript has not been recovered for this summary. These are historical observations, not a
-new write exception, proof of the current slot state, or authorization to run
-bootctl on Tensor G4. Current state must be read again without writing.
+reported layout was 3.15; slot B was active and not successful. On 2026-11-10,
+the executed laptop command and its completion output were recovered from the
+2026-11-02 session. A laptop Python subprocess wrapper sent a `bash -s` script
+that asserted the unique `PARTNAME=devinfo` was `/sys/class/block/sdd1/uevent`
+and checked the complete before-image hash and bootctl's dry-run prediction.
+
+The wrapper, not bootctl, made the target writable: it ran
+`blockdev --setrw /dev/sdd` and then `blockdev --setrw /dev/sdd1`. Before those
+commands it installed an EXIT restore trap and armed
+`komodo-devinfo-relock` with a 30-second systemd timer, both restoring the
+partition and its parent with `blockdev --setro`. It then ran the uploaded
+`/run/omamobile-bootctl mark-successful /dev/sdd1 b --i-understand`, restored
+read-only flags, checked the expected whole-image hash and stopped the timer.
+The laptop read back all 8192 bytes and compared them to its predicted image.
+The completion output reports success, only offset `0x35` changed from `0x14`
+to `0x16`, and both read-only flags `1`. This names the historical guard bypass;
+it does not add it to the storage allowlist or approve repeating it.
+
+Independent offline comparison on 2026-11-09 of the retained approved-before/
+after private files also confirms 8192 bytes each, DEVI version 3.15 and that
+single-byte change. Slot A's four devinfo slot-metadata bytes are unchanged;
+this is not an attestation of slot-A boot images or proof that the public 3.15
+layout is independently qualified on G4. Current state must be read again
+without writing. Maintainer review of the historical operation remains open.
 
 The same notes record bootloader versions A `15819938` (the earlier Android
-capture) and B `15199480` (the later fastboot capture). They record no bootloader
-write and development automatic boot writes disabled. The mismatch is a stop
-condition for a new image installation until the maintainer resolves the
-recovery and anti-rollback implications. Do not reproduce an earlier local
-installer exception or write bootloaders to make them agree.
+capture) and B `15199480` (the later fastboot capture). The recovered command
+also explains the earlier local installer exception: a private copy of
+`tools/install-phone` added a branch accepting unequal bootloaders only when
+`OMAMOBILE_KOMODO_EXISTING_BOOTLOADERS=explicitly-accepted`, codename `komodo`,
+current slot `b`, current bootloader `ripcurrentpro-17.0-15199480` and an empty
+`slots_match` value all matched. It logged the previously captured A version
+`ripcurrentpro-17.0-15819938` and explicitly did not claim matching slots. The
+copy also changed development automatic boot writes to `AUTO_WRITE=no`.
+This was a local installer preflight exception, not a bootloader update or a
+public supported installation path; no bootloader write is recorded. The
+mismatch remains a stop condition until the maintainer resolves recovery and
+anti-rollback implications. Do not reuse that exception, change the public
+installer's check, or write bootloaders to make them agree.
 
 ## Backups and later local development source
 
@@ -114,10 +135,19 @@ before that dependency is considered resolved.
 
 A current unique-PARTNAME sysfs inventory confirms the six read-only NV labels
 `efs`, `efs_backup`, `modem_userdata`, `persist`, `modem_a` and `modem_b`, and
-the separate 8192-byte read-only `devinfo`. They populate `NV_PARTS` and
-`NV_BACKUP_EXTRA` respectively. `tools/nv-backup --check` compares the former
-strictly and reports the latter separately because bootloader slot metadata
-can legitimately change. No unobserved metadata or Trusty partition is added.
+the separate 8192-byte read-only `devinfo`. The retained 2026-11-02 Android
+partition-name inventory also explicitly lists `metadata`, `trusty_persist`
+and `trusty_userdata`; the same date's protected-backup inventory independently
+records the two Trusty partitions as read-only. The 2026-11-09 targeted capture
+selected only the six NV labels, boot images and devinfo, so its omission of
+those other names is not evidence that they are absent.
+
+`NV_PARTS` retains the six invariant NV checks. `NV_BACKUP_EXTRA` retains
+devinfo and adds the three observed metadata/Trusty names for a separate backup
+report; it does not add any of them to the writable allowlist. A future backup
+must rediscover every exact PARTNAME and its read-only state. These historical
+label observations are not a new current-state capture, a checksum check of
+those extra partitions or a qualification of any Trusty write.
 
 ## 2026-11-09: current slot-A metadata and conditional slot state
 
@@ -137,7 +167,13 @@ not proof of a factory signing chain or the complete Android system build.
 The descriptor's rollback index is corrected to the observed slot-A `0`; its
 OS/security fields now have actual slot-A evidence. None of this changes the
 currently installed development images, whose older test-key/index policy is
-separately described in FIRST-LIGHT.
+separately described in FIRST-LIGHT. The currently booted slot-B images carry index
+`1791158400` and were marked successful. A new set built with the descriptor's
+`0` would therefore be the first index-0 footer cohort after that marked higher-
+index boot. Whether ABL accepts that transition is unqualified, not established
+by slot A's metadata or the Pixel 9a's footer-less images. The maintainer must
+choose the intended rollback-index policy before any new image set is built
+or booted; do not experimentally spend a retry to find out.
 
 The actual devinfo header is DEVI version 3.15. Applying only the documented
 public 3.15 byte-offset interpretation yields A and B successful, B active,

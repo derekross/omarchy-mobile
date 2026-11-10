@@ -6,9 +6,12 @@ selectors and slot-B storage allowlist. It uses the existing Android-v4 image
 builder, including all five AVB hash footers. The board selector overlay leaves
 hardware description to the corresponding kernel board DTS.
 
-The boot-image geometry and footer metadata were checked against the retained
-working image set. USB SSH and the storage guard have run on development
-hardware. The minimal descriptor in this change still needs its own complete
+The boot-image geometry was checked against the retained working image set.
+The descriptor's rollback index and OS/security metadata instead come from
+read-only slot-A boot/init_boot captures; the working B images retain their
+older test-key/index policy. [FIRST-LIGHT](FIRST-LIGHT.md) records that difference
+and the maintainer's pending decision before any new image build or boot.
+USB SSH and the storage guard have run on development hardware. The minimal descriptor in this change still needs its own complete
 image-build and boot qualification against the public kernel prerequisites.
 
 This is a development port target rather than an installer release. The device

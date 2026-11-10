@@ -43,7 +43,11 @@ security-patch property `2026-10-05`. Their Android v4 headers are 1584 bytes
 and both encode OS version `17.0.0`, patch level `2026-10`. The software
 provenance properties identify vendor/software base `CP3A.261005.005`; this is
 not an attestation of the whole Android system or Google factory signing.
-The descriptor now uses the observed slot-A rollback index `0`.
+The descriptor now uses the observed slot-A rollback index `0`. This is the
+corrected source value, not permission to build or boot with it: the currently
+booted B cohort has index `1791158400` and has been marked successful. The
+maintainer must resolve that transition and select the intended index before
+any new image build, as detailed below.
 
 Current read-only sysfs discovery gives these partition sizes:
 
@@ -70,6 +74,12 @@ working phone has not been rewritten to the new descriptor policy. Historical
 development image verification does not qualify a new rollback policy or image
 cohort and is not evidence of factory image signing.
 
+A descriptor-index-0 cohort would be the first lower-index footer set after a
+successful marked boot at `1791158400`. Its acceptance by ABL is unknown. The
+Pixel 9a's footer-less images do not establish this phone's behavior. This is
+an explicit open point for the maintainer to decide before building or booting
+new images; neither index is selected by this history as a safe experiment.
+
 The historical early trials do not establish that all five images require
 footers: other boot/board changes occurred during bring-up. The all-five footer
 list remains an explicitly unresolved policy, not a necessity claim. The
@@ -91,11 +101,14 @@ phone's module directory or another subsystem's build output.
    dependency above and record exact Mobile and kernel commits. Confirm the
    stock slot-A recovery path, matching slot bootloaders, this board's partition
    names and sizes, and a complete retained known-good slot-B image/module set.
+   Obtain the maintainer's rollback-index decision for the first index-0 footer
+   cohort after the marked `1791158400` boot; do not begin step 2 without it.
    Check protected-partition backup checksums off-repository; a stock boot
    requires a fresh read-only backup before radio/PMIC/Trusty work.
    **Pass:** every prerequisite has dated evidence and a recoverable image set.
    **Stop:** missing public source, mismatched firmware, unknown slot state,
-   unexplained backup changes or no recovery path. **Rollback:** no change.
+   unresolved higher-to-zero rollback-index transition, unexplained backup
+   changes or no recovery path. **Rollback:** no change.
 
 2. **Descriptor and build (laptop only; low risk).** With `KERNEL_DIR` set to
    the reviewed worktree and `KERNEL_OUT` to its dedicated output, run:
@@ -114,7 +127,8 @@ phone's module directory or another subsystem's build output.
    against that kernel's schemas, and record all five image sizes and AVB
    `info_image`/`verify_image` results. Check `/chosen/bootargs`, DT selectors,
    reserved memory and watchdogs in the final DTB, not just the source.
-   **Stop:** any missing output, new compiler/schema diagnostic, unexpected
+   **Stop:** no explicit maintainer rollback-index decision, any missing output,
+   new compiler/schema diagnostic, unexpected
    hardware enablement, absent guard, wrong footer or incompatible metadata.
    **Rollback:** discard only this dedicated build output; the phone is unchanged.
 
@@ -143,8 +157,11 @@ phone's module directory or another subsystem's build output.
    maintainer, not one more experimental boot. Fallback to A can overwrite
    userdata and lose the Linux root before any recovery prompt is answered.
    **Pass:** the maintainer resolves the starting state, writer, remaining
-   attempts, exact recovery set and backup chronology. **Stop:** any unknown or
-   conflicting state. **Rollback:** no change; never clear/repair flags as a test.
+   attempts, exact recovery set, backup chronology and rollback-index policy.
+   **Stop:** any unknown or conflicting state, including no decision on whether
+   to retain `1791158400` or first boot index-0 footers after a marked higher-
+   index B. Neither slot-A index 0 nor the 9a's footer-less policy qualifies
+   that transition. **Rollback:** no change; never clear/repair flags as a test.
 
 5. **One attended slot-B boot (medium risk; not yet qualified).** The human
    first approves the exact reviewed image cohort, writer and recovery path.
