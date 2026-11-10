@@ -1753,10 +1753,15 @@ def build_phy_zumapro(emu, ctle=None):
     return sects
 
 
+def dq(path):
+    """A host path in debugfs's command syntax, which splits at blanks."""
+    return '"' + path.replace('"', '""') + '"'
+
+
 def from_apex_settings(apex, tmp):
     out = os.path.join(tmp, "csis_phy_link_phy_settings.binarypb")
     subprocess.run(["debugfs", "-R",
-                    f"dump /etc/camera/csis_phy_link_phy_settings.binarypb {out}",
+                    f"dump /etc/camera/csis_phy_link_phy_settings.binarypb {dq(out)}",
                     os.path.join(tmp, "apex_payload.img")], check=True,
                    stderr=subprocess.DEVNULL)
     if not os.path.exists(out) or not os.path.getsize(out):
@@ -1767,7 +1772,7 @@ def from_apex_settings(apex, tmp):
 def from_apex(apex, tmp):
     subprocess.run(["unzip", "-q", "-o", apex, "apex_payload.img", "-d", tmp], check=True)
     out = os.path.join(tmp, "liblyric_hwl.so")
-    subprocess.run(["debugfs", "-R", f"dump /lib64/liblyric_hwl.so {out}",
+    subprocess.run(["debugfs", "-R", f"dump /lib64/liblyric_hwl.so {dq(out)}",
                     os.path.join(tmp, "apex_payload.img")], check=True,
                    stderr=subprocess.DEVNULL)
     if not os.path.getsize(out):
