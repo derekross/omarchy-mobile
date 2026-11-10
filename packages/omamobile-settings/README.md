@@ -6,12 +6,17 @@ palette and a read-only About page. It shows the model, operating system, kernel
 architecture, memory, root-filesystem capacity and installed package versions.
 Unknown values remain unavailable. It opens from the desktop launcher.
 
-This package contains the read-only foundation and one settings page, Display
-(brightness and, where the monitor lists more than one, the refresh rate; the
+This package contains the read-only foundation and two settings pages. Display
+is brightness and, where the monitor lists more than one, the refresh rate (the
 refresh rate changes the running session only: turning the phone makes
 auto-rotate apply the monitor's preferred mode again, and a session restart or a
-reload of Hyprland's config does too). The page runs
-`backends/display.sh` through a fixed-argument runner, with no shell string.
+reload of Hyprland's config does too). Keyboard haptics is the strength
+of the tick feedbackd plays for key presses, or silent for the whole phone; it
+edits the user's feedbackd theme (`~/.config/feedbackd/themes/custom.json`, the
+two key entries of the `full` profile, never above 0.125 or 60 ms; the first version of the file is kept once as `custom.json.bak-haptics`, a theme that
+does not have exactly those two entries is refused before anything changes, and a level after Off puts the profile
+back to `full` whatever it was before) and says so on the page when the phone has no such theme. The pages run
+`backends/display.sh` and `backends/haptics.sh` through a fixed-argument runner, with no shell string.
 Omarchy's existing tools continue to provide the other settings changes. Network, wallpaper, app management and
 recording controls are separate future contributions with their own runtime
 contracts and tests; this catalog does not offer those routes.

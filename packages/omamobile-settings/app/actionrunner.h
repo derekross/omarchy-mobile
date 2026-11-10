@@ -4,7 +4,7 @@
 #include <QVariantMap>
 #include <QStringList>
 
-// Runs the source-owned backend scripts (display) with a fixed argument list and no shell. Pages call run();
+// Runs the source-owned backend scripts (display, haptics) with a fixed argument list and no shell. Pages call run();
 // the JSON the script prints comes back through finished(), always from the event loop and never before run()
 // has returned its id.
 class ActionRunner : public QObject {
