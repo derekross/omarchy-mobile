@@ -91,9 +91,14 @@ refuse() {
   exit 1
 }
 release_inhibitor() {
-  local m
-  for m in pcie_gs201_cp shm_ipc cpif; do
-    [[ -d $SYSMODULE/$m ]] && return 0
+  local m entry mods=(pcie_gs201_cp shm_ipc cpif)
+  # The device's link stack too, once link.conf is read (refusals come
+  # before it as well).
+  for entry in ${LINK_MODULES[@]+"${LINK_MODULES[@]}"}; do
+    mods+=("${entry%%[[:blank:]]*}")
+  done
+  for m in "${mods[@]}"; do
+    [[ -d $SYSMODULE/${m//-/_} ]] && return 0
   done
   "$SYSTEMCTL" is-active -q omamobile-modem-inhibit.service 2>/dev/null || return 0
   "$SYSTEMCTL" kill omamobile-modem-inhibit.service >/dev/null 2>&1 &&
@@ -240,13 +245,15 @@ sync
 
 # CPIF and the regions are blacklisted by the device's modem policy (the
 # package providing omamobile-modem-policy): only this loads them. Never
-# unload cpif (it is permanent by design).
+# unload cpif (it is permanent by design). A module that doesn't load is a
+# refusal: with none of them loaded the sleep block goes, and one that
+# loaded before it keeps the block (refuse()). The latch stays either way.
 for entry in "${LINK_MODULES[@]}"; do
   read -r -a words <<< "$entry"
-  modprobe "${words[@]}"
+  modprobe "${words[@]}" || refuse "Off: ${words[0]} didn't load"
 done
-modprobe shm_ipc
-modprobe cpif
+modprobe shm_ipc || refuse "Off: shm_ipc didn't load"
+modprobe cpif || refuse "Off: cpif didn't load"
 # The link to the modem with ASPM off, as every link test so far ran
 # (M3.1); the endpoint's own L1 substates are never enabled (the link API's
 # l1ss control is a no-op).

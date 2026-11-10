@@ -8,9 +8,10 @@
 # hand leaves it (Requires= is one way), and a manual stop is refused. A
 # phone with the modem up therefore never sleeps; the shell's auto-sleep
 # and upower's critical action are told so by logind ("Operation
-# inhibited"). A start that refuses before any driver loads (a stale marker,
-# the latch, no CPIF) kills it, and the phone sleeps as without a modem
-# (omamobile-modem-start's refuse()). The modem unit's
+# inhibited"). A start that refuses with none of the modem's drivers loaded
+# (a stale marker, the latch, a link driver that didn't load) kills it, and
+# the phone sleeps as without a modem (omamobile-modem-start's refuse()).
+# The modem unit's
 # Requires= pulls this in even when that unit's own conditions skip it, so
 # the same three conditions are here: a phone that isn't provisioned (no
 # modem files, checksums or board id) keeps sleeping.

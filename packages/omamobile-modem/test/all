@@ -250,7 +250,13 @@ out=$(start) && fail "a latch refusal fails"
 rm -f "$m/systemctl.log"; mkdir -p "$m/sysmodule/cpif"
 out=$(start) && fail "a latch refusal fails"
 [[ ! -e $m/systemctl.log && $out != *"no longer blocked"* ]] || fail "with a modem driver loaded the inhibitor stays: $(cat "$m/systemctl.log" 2>/dev/null)"
-rmdir "$m/sysmodule/cpif"; rm -f "$m/latch" "$m/systemctl.log" "$m/inhibit-active"
+rmdir "$m/sysmodule/cpif"; mkdir -p "$m/sysmodule/pcie_gs201_cp"
+out=$(start) && fail "a latch refusal fails"
+[[ ! -e $m/systemctl.log ]] || fail "with the link driver loaded (pcie-gs201-cp as pcie_gs201_cp) the inhibitor stays"
+rmdir "$m/sysmodule/pcie_gs201_cp"; rm -f "$m/latch" "$m/systemctl.log" "$m/inhibit-active"
+# A driver that doesn't load is a refusal too (so it can release the block),
+# not an exit through set -e.
+[[ $(grep -c '^[[:space:]]*modprobe .*|| refuse "Off: ' $s) -eq 3 ]] || fail "every modprobe refuses when it fails"
 grep -q 'release_inhibitor$' $s && [[ $(grep -c 'release_inhibitor' $s) -eq 2 ]] || fail "only refuse() releases the inhibitor"
 pass "a refusal before any modem driver loads releases the sleep block; after one, it stays"
 # A stale modem-up marker (a boot that ended with the modem up and no clean
