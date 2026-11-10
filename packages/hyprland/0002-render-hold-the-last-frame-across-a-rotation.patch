@@ -120,7 +120,7 @@ index 4bbb606..35bc770 100644
 +    constexpr auto  ROTATION_ANIM_180 = std::chrono::milliseconds(383);
 +    constexpr float FADE_OUT_MS   = 116.F;
 +
-+    // cubic-bezier(x1, 0, x2, 1)-style ease: y for x, by bisection on the curve's x
++    // cubic-bezier(x1, y1, x2, y2) ease: y for x, by bisection on the curve's x
 +    float bezier(float x, float x1, float y1, float x2, float y2) {
 +        auto  bx = [&](float t) { return 3 * (1 - t) * (1 - t) * t * x1 + 3 * (1 - t) * t * t * x2 + t * t * t; };
 +        auto  by = [&](float t) { return 3 * (1 - t) * (1 - t) * t * y1 + 3 * (1 - t) * t * t * y2 + t * t * t; };
