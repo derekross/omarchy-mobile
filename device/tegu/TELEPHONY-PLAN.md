@@ -278,7 +278,7 @@ thermal ok. It flagged a stale bring-up unit in `/etc/systemd/system` from
 new dmesg lines from NFC (an unknown notification opcode) and CPIF (packets
 for a channel nobody has opened); neither came with a fault.
 
-### 2.9 The in-tree drivers through the starter, on the published kernel (2026-11-09)
+### 2.9 The in-tree drivers through the starter, on the published tip plus four open changes (2026-11-09)
 
 The 2.8 boots took the starter's bring-up branch ("drivers: the bring-up
 modules"), because the board's device tree has no `cpif` node: it comes
@@ -309,7 +309,7 @@ are in MODEM-PLAN after section P (with #594). A fourth boot by the unit
 up, the release confirmed in 272 ms) and mobile data over `rmnet0`; its
 `systemctl reboot` was confirmed like the two before; and
 `tools/nv-backup -d tegu --check` after it read every NV partition SAME as
-the 2026-10-28 backup. Texts went both ways on a later boot of it (20:40 MST: one sent from the palmtop arrived, the reply reached the palmtop 22 s after the send).
+the 2026-10-28 backup. Texts went both ways on a later boot of it (the sixth by the unit, the modem up at 20:37 MST, the texts at about 20:40: one sent from the palmtop arrived, the reply reached the palmtop 22 s after the send).
 
 One gap found by reading and closed the same evening: the link driver takes
 its PHY from `phy_zuma_pcie`, which the guards keep from autoloading and
@@ -317,7 +317,7 @@ which only the Wi-Fi start loaded, and only on a phone with the Wi-Fi
 firmware. The boots above had that firmware, so the PHY's driver was there
 by the time the modem started. The starter now loads it itself, before the
 link driver, and refuses before the latch on a kernel without it. Checked on
-a fifth boot of the same kernel (20:45 MST) with the Wi-Fi firmware moved
+a fifth boot of the same kernel (20:26 MST) with the Wi-Fi firmware moved
 aside for that boot: the graphics start skipped Wi-Fi ("no Wi-Fi host, DMA
 pool or BCM4383 firmware"), `brcmfmac` and `pcie_gs201` weren't loaded, the
 starter loaded `phy_zuma_pcie`, `pcie_gs201_cp` and CPIF, and the unit
@@ -339,13 +339,31 @@ logged "ended without a clean stop ... starting the modem again", kept the
 copy, started the modem, and the confirmed stop after that removed both.
 The console of the failed shutdown is lost: my next step was a kernel push
 22 s into the following boot, and that boot's console replaced it in
-`/var/lib/systemd/pstore`. The same sequence run again an hour later (hand
-start, 160 s, mask, sync, reboot) stopped cleanly in 23 s. So: one in
+`/var/lib/systemd/pstore`. The same sequence run again nineteen minutes
+later on the same build (the boot of 20:49: hand start, 160 s, mask, sync,
+reboot at 20:54) stopped cleanly in 23 s. So: one in
 thirteen, cause unknown, not reproduced in one repeat. After a reboot that
 takes a minute or leaves no stop line, copy `/var/lib/systemd/pstore` before
 anything else.
 
-**Thirty more, all confirmed (2026-11-09, 20:59 to 22:32 MST).** To look for
+The evening's boots with the modem up, from the palmtop's
+`journalctl --list-boots` and each boot's own lines (read 2026-11-10; an
+earlier version of this section had three of these times wrong):
+
+| Boot started (MST) | Kernel | Modem up | Started by | The stop at `systemctl reboot` |
+| --- | --- | --- | --- | --- |
+| 18:32:33 | the 2.9 kernel (`push1-g773b4102f5ec`, in-tree drivers) | 18:32:49 | the unit | confirmed |
+| 18:50:14 | the same | 18:50:30 | the unit | confirmed |
+| 19:12:04 | the same | 19:12:20 | the unit | confirmed |
+| 19:25:44 | the same (the call, data, the NV check) | 19:26:00 | the unit | confirmed |
+| 20:18:38 | build #100 (bring-up modules) | 20:18:52 | the unit | confirmed |
+| 20:26:15 | the 2.9 kernel (the Wi-Fi firmware moved aside) | 20:26:29 | the unit | confirmed |
+| 20:30:52 | build #100 | 20:32:56 | by hand | **none: the journal ends at 20:35:36, the next boot started 20:36:37** |
+| 20:37:12 | the 2.9 kernel (the texts) | 20:37:28 | the unit, after "ended without a clean stop" | confirmed |
+| 20:49:39 | build #100 (the repeat) | 20:51:44 | by hand | confirmed |
+| 20:56:52 to 22:29:16, thirty boots | build #100 | about 14 s into each boot | the unit | confirmed, thirty of thirty |
+
+**Thirty more, all confirmed (2026-11-09, 20:57 to 22:32 MST).** To look for
 it again, a laptop loop rebooted the palmtop thirty times with the modem up
 (build #100, the bring-up modules, the unit starting the modem at each boot,
 `omamobile-device-tegu` from this branch, `omamobile-modem` 0.1.17): wait
