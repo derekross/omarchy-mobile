@@ -42,6 +42,7 @@ with tempfile.TemporaryDirectory(prefix='search-preview-', dir=short) as directo
     app = root / 'app'
     app.mkdir()
     (app / 'launcher').mkdir()
+    shutil.copytree(HERE / 'fixtures/apps-search-icons', app / 'icons')
     for name in ('AppsSearch.qml', 'SearchFocus.qml'):
         shutil.copyfile(PLUGIN / name, app / 'launcher' / name)
     for name in ('Commons', 'Ui'):
@@ -76,10 +77,10 @@ ShellRoot {
   property string launched: ""
   QtObject {
     id: library
-    property var entries: [({id:"example.calendar",name:"Calendar",icon:""}),({id:"example.files",name:"Files",icon:""}),({id:"example.notes",name:"Notes",icon:""}),({id:"example.photos",name:"Photos",icon:""}),({id:"example.weather",name:"Weather",icon:""})]
+    property var entries: [({id:"example.calendar",name:"Calendar",comment:"Your plans at a glance",icon:"calendar"}),({id:"example.files",name:"Files",comment:"Browse and organise files",icon:"files"}),({id:"example.notes",name:"Notes",comment:"Ideas, lists and reminders",icon:"notes"}),({id:"example.photos",name:"Photos",comment:"Browse your pictures",icon:"photos"}),({id:"example.weather",name:"Weather",comment:"Today and the days ahead",icon:"weather"})]
     function sortedEntries(query) { return entries.filter(function(entry){return entry.name.toLowerCase().indexOf(query.toLowerCase())>=0}).map(function(entry){return {entry:entry}}) }
     function entryName(entry) { return entry.name }
-    function iconSource(icon) { return "" }
+    function iconSource(icon) { return Qt.resolvedUrl("icons/"+icon+".svg") }
   }
   FloatingWindow {
     id: window
@@ -90,6 +91,16 @@ ShellRoot {
     Item {
       id: screen
       anchors.fill: parent
+      // Neutral test scenery under the actual translucent component. This
+      // is not a compositor blur or a capture of a private wallpaper.
+      Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+          GradientStop { position: 0; color: SCENERYTOP }
+          GradientStop { position: 1; color: SCENERYBOTTOM }
+        }
+        Rectangle { x: -parent.width*.3; y: parent.height*.4; width: parent.width*1.8; height: parent.height; rotation: -23; radius: width*.4; color: SCENERYHILL }
+      }
       SearchFocus { id: prime; opened: search.opened; backingWindowVisible: true; requestGeneration: search.focusGeneration }
       AppsSearch {
         id: search
@@ -135,8 +146,14 @@ ShellRoot {
           search.open("")
           tryCompare(inputSpy,"count",1,3000)
           tryCompare(prime,"mode","on-demand",1000)
-          compare(search.entries.length,5)
+          compare(search.entries.length,3)
           wait(220)
+          var header=findChild(search,"searchHeader")
+          verify(header.height <= Commons.Style.space(56))
+          var inputField=findChild(search,"appsSearchInput")
+          verify(inputField.mapToItem(search,0,0).y < Commons.Style.space(80))
+          verify(inputField.height >= 44)
+          verify(findChild(search,"searchResults").height > 100)
           shot(OPENSHOT)
           var field=findChild(search,"appsSearchInput")
           keyClick(Qt.Key_N);wait(170);keyClick(Qt.Key_O);wait(170)
@@ -166,9 +183,17 @@ ShellRoot {
           tryCompare(prime,"mode","on-demand",1000)
           wait(150)
           compare(field.font.family,Commons.Style.font.family)
-          compare(close.radius,Commons.Style.cornerRadius)
-          Commons.Style.applyRoundingJson('{"int":0}');compare(close.radius,0)
-          Commons.Style.applyRoundingJson('{"int":12}');compare(close.radius,12)
+          var inputSurface=findChild(search,"searchInputSurface")
+          compare(inputSurface.radius,Commons.Style.cornerRadius)
+          Commons.Style.applyRoundingJson('{"int":0}');compare(inputSurface.radius,0)
+          Commons.Style.applyRoundingJson('{"int":12}');compare(inputSurface.radius,12)
+          if (typeof Commons.Style.styleAlpha === "function") {
+            var previousStyle=Commons.Style.styleOverrides
+            Commons.Style.styleOverrides={"mobile-search-backdrop-alpha":0.73,"mobile-search-card-alpha":0.81}
+            compare(search.backdropAlpha,0.73)
+            compare(search.cardAlpha,0.81)
+            Commons.Style.styleOverrides=previousStyle
+          }
           if (typeof Commons.Style.duration === "function") {
             Commons.Style.reduceMotion=true;compare(search.transitionDuration,0)
             Commons.Style.reduceMotion=false
@@ -198,6 +223,9 @@ ShellRoot {
 }
 '''
     qml = qml.replace('WIDTH', str(a.width)).replace('HEIGHT', str(a.height))
+    scenery = ('#283248', '#51415b', '#71647e') if a.theme == 'dark' else ('#d4e0e5', '#c7b8c8', '#afbdcc')
+    for token, color in zip(('SCENERYTOP', 'SCENERYBOTTOM', 'SCENERYHILL'), scenery):
+        qml = qml.replace(token, json.dumps(color))
     qml = qml.replace('OPENSHOT', json.dumps(str(out / 'search-open.png'))).replace('FILTERSHOT', json.dumps(str(out / 'search-filtered.png'))).replace('EMPTYSHOT', json.dumps(str(out / 'search-empty.png')))
     (app / 'shell.qml').write_text(qml)
     env = os.environ | {'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_DATA_HOME': str(root / 'data'),

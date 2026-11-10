@@ -27,7 +27,6 @@ Item {
   property int transitionDuration: typeof Style.duration === "function" ? Style.duration(140) : 140
   readonly property color foreground: Commons.Color.menu.text
   readonly property int touch: Math.max(44, Style.space(44))
-  readonly property real searchMargin: Math.max(0, Math.min(Style.spacing.xxl, (height - touch) / 4))
   signal dismissed()
   signal activated(var entry)
   // Also useful to the offscreen harness: this observes the production input
@@ -42,7 +41,8 @@ Item {
     if (!opened) return
     var ranked = appLibrary ? appLibrary.sortedEntries(query) : []
     var next = []
-    for (var i = 0; i < ranked.length && next.length < 40; i++)
+    var limit = query.trim() ? 40 : 3
+    for (var i = 0; i < ranked.length && next.length < limit; i++)
       if (ranked[i] && ranked[i].entry) next.push(ranked[i].entry)
     var same = next.length === entries.length
     for (var j = 0; same && j < next.length; j++) same = next[j] === entries[j]
@@ -114,86 +114,167 @@ Item {
   }
 
   onOpacityChanged: if (opacity === 0 && !opened) { query = ""; entries = [] }
-  Rectangle { anchors.fill: parent; visible: root.paintBackground; color: Commons.Color.menu.background }
+  // The phone's Search layout: a top composer, then compact borderless
+  // app rows. Glass is a tint, never a live client-side wallpaper effect.
+  readonly property color backgroundTone: Commons.Color.menu.background
+  readonly property real backdropAlpha: typeof Style.styleAlpha === "function" ? Style.styleAlpha("mobile-search-backdrop-alpha", 0.92) : 0.92
+  readonly property real cardAlpha: typeof Style.styleAlpha === "function" ? Style.styleAlpha("mobile-search-card-alpha", 0.94) : 0.94
+  readonly property color backdropColor: Qt.rgba(backgroundTone.r, backgroundTone.g, backgroundTone.b, backdropAlpha)
+  readonly property color secondary: Qt.tint(backgroundTone, Qt.rgba(foreground.r, foreground.g, foreground.b, 0.72))
+  readonly property color muted: Qt.tint(backgroundTone, Qt.rgba(foreground.r, foreground.g, foreground.b, 0.60))
+  readonly property color cardTone: Qt.tint(backgroundTone, Qt.rgba(foreground.r, foreground.g, foreground.b, 0.06))
+  readonly property color cardColor: Qt.rgba(cardTone.r, cardTone.g, cardTone.b, cardAlpha)
+  function glyph(name, ink) {
+    var paths = {
+      close: '<path d="m6 6 12 12M18 6 6 18"/>',
+      search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+      chevron: '<path d="m9 6 6 6-6 6"/>'
+    }
+    return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="' + String(ink) + '" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + paths[name] + '</svg>')
+  }
+  Rectangle { anchors.fill: parent; visible: root.paintBackground; color: root.backdropColor }
   ColumnLayout {
     anchors.fill: parent
-    anchors.margins: root.searchMargin
-    spacing: Style.spacing.lg
+    anchors.leftMargin: Math.min(Style.space(24), root.width / 8)
+    anchors.rightMargin: anchors.leftMargin
+    anchors.topMargin: Math.min(Style.space(12), Math.max(0, (root.height - root.touch) / 4))
+    anchors.bottomMargin: Math.min(Style.space(16), Math.max(0, (root.height - root.touch) / 4))
+    spacing: 0
 
     RowLayout {
-      visible: root.height >= Style.space(280)
+      objectName: "searchHeader"
       Layout.fillWidth: true
+      Layout.minimumHeight: Math.min(root.touch, root.height)
+      Layout.maximumHeight: Layout.preferredHeight
+      Layout.preferredHeight: Math.min(Style.space(56), Math.max(root.touch, root.height))
       spacing: Style.spacing.lg
-      Text {
-        Layout.fillWidth: true
-        text: "Search apps"
-        textFormat: Text.PlainText
-        color: root.foreground
-        font.family: Style.font.family
-        font.pixelSize: Style.font.display
-        font.bold: true
-        elide: Text.ElideRight
-      }
-      BorderSurface {
+      Item {
         objectName: "searchClose"
         Layout.preferredWidth: root.touch
-        Layout.preferredHeight: root.touch
-        radius: Style.cornerRadius
-        color: closeTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent"
-        borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
+        Layout.fillHeight: true
         Accessible.name: "Close search"
         Accessible.role: Accessible.Button
-        Text { anchors.centerIn: parent; text: "×"; color: root.foreground; font.family: Style.font.family; font.pixelSize: Style.font.display }
-        MouseArea { id: closeTouch; anchors.fill: parent; onClicked: root.dismiss() }
+        Image { anchors.centerIn: parent; width: Style.space(24); height: width; source: root.glyph("close", root.foreground) }
+        MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+      }
+      BorderSurface {
+        objectName: "searchInputSurface"
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        radius: Style.cornerRadius
+        color: root.cardColor
+        borderSpec: Border.controlSpec(input.activeFocus ? "focus" : "normal", root.foreground, Commons.Color.accent)
+        RowLayout {
+          anchors.fill: parent
+          anchors.leftMargin: Style.space(16)
+          anchors.rightMargin: Style.spacing.sm
+          spacing: Style.spacing.xxl
+          Image { Layout.preferredWidth: Style.space(20); Layout.preferredHeight: width; source: root.glyph("search", root.secondary) }
+          TextField {
+            id: input
+            objectName: "appsSearchInput"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            background: null
+            padding: 0
+            text: root.query
+            placeholderText: "Search apps"
+            foreground: root.foreground
+            placeholderTextColor: root.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.title
+            maximumLength: 256
+            selectByMouse: true
+            Accessible.name: "Search apps"
+            onTextEdited: root.query = text
+            Keys.onReturnPressed: root.activateFirst()
+            Keys.onEnterPressed: root.activateFirst()
+            Keys.onEscapePressed: root.dismiss()
+          }
+          Item {
+            objectName: "searchClear"
+            visible: root.query.length > 0
+            Layout.preferredWidth: root.touch
+            Layout.fillHeight: true
+            Accessible.name: "Clear search"
+            Accessible.role: Accessible.Button
+            Image { anchors.centerIn: parent; width: Style.space(20); height: width; source: root.glyph("close", root.secondary) }
+            MouseArea { anchors.fill: parent; onClicked: { root.query = ""; input.forceActiveFocus() } }
+          }
+        }
       }
     }
 
+    Item { Layout.fillWidth: true; Layout.preferredHeight: root.height >= Style.space(180) ? Style.space(28) : 0 }
+    Text {
+      visible: root.entries.length > 0 && root.height >= Style.space(180)
+      Layout.fillWidth: true
+      Layout.bottomMargin: Style.spacing.xxl
+      text: "Apps"
+      color: root.secondary
+      font.family: Style.font.family
+      font.pixelSize: Style.font.body
+      font.bold: true
+    }
     ListView {
       id: results
       objectName: "searchResults"
       visible: root.height >= Style.space(180)
       Layout.fillWidth: true
       Layout.fillHeight: true
+      Layout.minimumHeight: 0
       clip: true
-      spacing: Style.spacing.sm
+      spacing: 0
       model: root.entries
       boundsBehavior: Flickable.StopAtBounds
-      delegate: BorderSurface {
+      delegate: Item {
         required property var modelData
         required property int index
         objectName: "searchResult" + index
         width: results.width
-        height: Math.max(root.touch, Style.space(64))
-        radius: Style.cornerRadius
-        color: rowTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent"
-        borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
+        height: Math.max(root.touch, Style.space(68))
         Accessible.name: root.name(modelData)
         Accessible.role: Accessible.Button
+        Rectangle { anchors.fill: parent; radius: Style.cornerRadius; color: rowTouch.pressed ? Style.pressedFillFor(root.foreground, Commons.Color.accent) : "transparent" }
         RowLayout {
           anchors.fill: parent
-          anchors.margins: Style.spacing.md
-          spacing: Style.spacing.lg
-          Item {
-            Layout.preferredWidth: Style.space(36)
-            Layout.preferredHeight: Style.space(36)
-            Image { id: appIcon; anchors.fill: parent; source: root.icon(modelData); fillMode: Image.PreserveAspectFit }
+          spacing: Style.space(14)
+          Rectangle {
+            Layout.preferredWidth: root.touch
+            Layout.preferredHeight: root.touch
+            radius: Style.cornerRadius
+            color: root.cardColor
+            Image { id: appIcon; anchors.centerIn: parent; width: Style.space(32); height: width; source: root.icon(modelData); fillMode: Image.PreserveAspectFit }
             Text { anchors.centerIn: parent; visible: appIcon.status !== Image.Ready; text: root.name(modelData).slice(0, 1); textFormat: Text.PlainText; color: Commons.Color.accent; font.family: Style.font.family; font.pixelSize: Style.font.title }
           }
-          Text {
+          ColumnLayout {
             Layout.fillWidth: true
-            text: root.name(modelData)
-            textFormat: Text.PlainText
-            color: root.foreground
-            font.family: Style.font.family
-            font.pixelSize: Style.font.subtitle
-            elide: Text.ElideRight
+            spacing: Style.spacing.xs
+            Text {
+              Layout.fillWidth: true
+              text: root.name(modelData)
+              textFormat: Text.PlainText
+              color: root.foreground
+              font.family: Style.font.family
+              font.pixelSize: (typeof Style.font.heading === "number" ? Style.font.heading : Style.font.title)
+              font.bold: true
+              elide: Text.ElideRight
+            }
+            Text {
+              Layout.fillWidth: true
+              text: String(modelData.genericName || modelData.comment || "Application")
+              textFormat: Text.PlainText
+              color: root.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              elide: Text.ElideRight
+            }
           }
-          Text { text: "›"; color: root.foreground; font.family: Style.font.family; font.pixelSize: Style.font.title }
+          Image { Layout.preferredWidth: Style.space(18); Layout.preferredHeight: width; source: root.glyph("chevron", root.muted) }
         }
         MouseArea { id: rowTouch; anchors.fill: parent; onClicked: root.activate(modelData) }
       }
-      // Fade moving rows into the surface instead of ending a border at a
-      // hard viewport edge. These decorations never receive input.
+      // Translucent fades follow the glass tint without an opaque edge band.
       Rectangle {
         parent: results
         anchors { left: parent.left; right: parent.right; top: parent.top }
@@ -201,8 +282,8 @@ Item {
         visible: !results.atYBeginning
         z: 1
         gradient: Gradient {
-          GradientStop { position: 0; color: Commons.Color.menu.background }
-          GradientStop { position: 1; color: Qt.rgba(Commons.Color.menu.background.r, Commons.Color.menu.background.g, Commons.Color.menu.background.b, 0) }
+          GradientStop { position: 0; color: root.backdropColor }
+          GradientStop { position: 1; color: Qt.rgba(root.backgroundTone.r, root.backgroundTone.g, root.backgroundTone.b, 0) }
         }
       }
       Rectangle {
@@ -212,8 +293,8 @@ Item {
         visible: !results.atYEnd
         z: 1
         gradient: Gradient {
-          GradientStop { position: 0; color: Qt.rgba(Commons.Color.menu.background.r, Commons.Color.menu.background.g, Commons.Color.menu.background.b, 0) }
-          GradientStop { position: 1; color: Commons.Color.menu.background }
+          GradientStop { position: 0; color: Qt.rgba(root.backgroundTone.r, root.backgroundTone.g, root.backgroundTone.b, 0) }
+          GradientStop { position: 1; color: root.backdropColor }
         }
       }
       Text {
@@ -226,32 +307,12 @@ Item {
         textFormat: Text.PlainText
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.Wrap
-        color: root.foreground
+        color: root.secondary
         font.family: Style.font.family
         font.pixelSize: Style.font.body
       }
     }
-
-    TextField {
-      id: input
-      objectName: "appsSearchInput"
-      Layout.fillWidth: true
-      Layout.minimumHeight: Math.min(root.touch, Math.max(0, root.height - root.searchMargin * 2))
-      Layout.preferredHeight: Math.max(root.touch, implicitHeight, Style.space(52))
-      Layout.alignment: Qt.AlignBottom
-      text: root.query
-      placeholderText: "Search apps…"
-      foreground: root.foreground
-      font.family: Style.font.family
-      font.pixelSize: Style.font.title
-      maximumLength: 256
-      selectByMouse: true
-      Accessible.name: "Search apps"
-      onTextEdited: root.query = text
-      Keys.onReturnPressed: root.activateFirst()
-      Keys.onEnterPressed: root.activateFirst()
-      Keys.onEscapePressed: root.dismiss()
-    }
+    Item { visible: !results.visible; Layout.fillHeight: true }
   }
   Keys.onEscapePressed: root.dismiss()
   Keys.onBackPressed: root.dismiss()

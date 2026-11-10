@@ -127,3 +127,37 @@ intent; a phone acceptance must separately verify first-tap OSK activation,
 keyboard touches, Back/Home, immediate reopen and lock interaction.
 
 Native Search cancels pending focus and closes when the launcher's existing session-lock observation reports locked. Unlocking never reopens it without a new explicit tap. This observation is asynchronous and is not a security boundary or a replacement for the compositor lock protocol. Existing fullscreen exclusion of Home/Back gesture strips remains in force; a Search opened over fullscreen can still close using its visible close button or Escape. The Search panels currently use Quickshell's default output; multi-output active-screen routing is not qualified by the offscreen tests.
+
+### Search presentation
+
+Search retains the phone layout: the query row stays at the top, followed by
+three suggested apps, or matching results while typing. App rows have icons,
+names and descriptions without an enclosing border. Colors, font family and
+size, spacing, control borders, corner rounding and motion follow Commons.
+The theme background is painted once as a translucent tint over the underlying
+screen. No wallpaper is copied or sampled by the client.
+
+Themes can set `[controls]` keys `mobile-search-backdrop-alpha` (default 0.92)
+and `mobile-search-card-alpha` (default 0.94) in `shell.toml`. Values are clamped
+by Omarchy's alpha-token API; setting both to 1 gives opaque surfaces. Existing
+`[style]` overrides are also read by Omarchy. Older hosts without the alpha API
+use the defaults. Rounding follows the configured Hyprland/theme value; Search
+does not impose capsules or a minimum corner radius.
+
+Optional compositor blur can be scoped to the Search background only, when
+blur is already enabled in the user's compositor configuration:
+
+```lua
+hl.layer_rule({
+  name = "omamobile-app-search-glass",
+  match = { namespace = "^omamobile-app-search-background$" },
+  blur = true,
+  ignore_alpha = 0.05,
+  xray = false,
+})
+```
+
+This example does not change global blur settings. Search remains usable
+without blur. Component previews show translucency over neutral test scenery;
+they do not execute or qualify compositor blur, a real keyboard or phone frame
+pacing.

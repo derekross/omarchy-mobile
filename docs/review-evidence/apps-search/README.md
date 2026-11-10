@@ -1,15 +1,24 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Native app Search previews
 
-The screenshots and animated recording show the actual app Search component
-using genuine Omarchy theme modules and a neutral fictional application catalog.
-They are offscreen component previews, not phone, keyboard or compositor captures.
-The input, filtering, activation and closing actions run against the implemented
-component. Both light and dark palettes and short viewports are exercised.
+These are actual rendered production Search component captures using genuine
+Omarchy Commons/UI modules and neutral fictional applications. The top search
+row and compact borderless results follow the phone implementation. Icons are
+original MIT-licensed SVG test fixtures; no private application catalog,
+wallpaper, account, widget or conversation is included.
 
-The source recording contains 69 actual captures over 2.291 seconds (about
-29.68 captured frames/second). The animated image is encoded from those captured
-frames without interpolation; encoding is not a phone refresh-rate benchmark.
-Layer-shell focus, real touch keyboard operation and physical gestures still
-need device acceptance on the proposed package. Existing MIT attribution and
-Omarchy's additional license are included with the package.
+The 420 x 580 captures show a reduced available viewport, as when a keyboard
+reserves part of the screen. They are not full-device screenshots and do not
+render or simulate a keyboard. Actual viewport geometry and light/dark themes
+are exercised. Neutral geometric scenery sits behind the translucent component.
+It demonstrates the tint; offscreen rendering does not execute compositor blur.
+
+The animation contains 67 actual captures spanning 2327 ms,
+encoded losslessly as animated WebP with original capture intervals (plus the
+median interval for the final frame). Identical frames may be merged by the
+encoder. There are no interpolated frames; this is not a phone FPS benchmark.
+Input, filtering, Return activation and closing run against the actual component.
+
+Native layer focus, touch typing, physical Back/Home gestures, lock/unlock,
+compositor blur and frame pacing still need exact-package device acceptance.
+The public source retains Omarchy attribution and existing licenses.

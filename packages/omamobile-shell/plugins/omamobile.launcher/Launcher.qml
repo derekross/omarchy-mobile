@@ -1138,7 +1138,7 @@ Item {
       // Keep the existing Home strip visible and reachable, even after the
       // keyboard is manually hidden. The content window respects its zone.
       anchors.bottomMargin: root.stripHeight
-      color: Commons.Color.menu.background
+      color: appsSearch.backdropColor
       visible: appsSearch.opacity > 0
       opacity: appsSearch.opacity
     }

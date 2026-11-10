@@ -156,6 +156,19 @@ Item {
       compare(library.lastQuery, "notes")
       compare(search.entries[0].id, "example.notes")
     }
+    function test_clear_returns_to_suggestions_without_a_new_focus_request() {
+      search.open("Notes")
+      tryCompare(inputSpy, "count", 1)
+      var clear = findChild(search, "searchClear")
+      verify(clear.visible)
+      mouseClick(clear, clear.width / 2, clear.height / 2)
+      compare(search.query, "")
+      compare(search.entries.length, 3)
+      verify(field.activeFocus)
+      wait(100)
+      compare(inputSpy.count, 1)
+      verify(!clear.visible)
+    }
     function test_no_match_stays_in_search_without_an_agent_action() {
       search.open("No matching application")
       tryCompare(inputSpy, "count", 1)
@@ -213,7 +226,10 @@ Item {
       verify(field.y + field.height <= search.height)
       var list = findChild(search, "searchResults")
       verify(list.height > 0)
-      verify(list.y + list.height <= field.y)
+      var inputAt = field.mapToItem(search, 0, 0)
+      var listAt = list.mapToItem(search, 0, 0)
+      verify(listAt.y >= inputAt.y + field.height)
+      verify(listAt.y + list.height <= search.height)
       var close = findChild(search, "searchClose")
       verify(close.width >= 44 && close.height >= 44)
     }
