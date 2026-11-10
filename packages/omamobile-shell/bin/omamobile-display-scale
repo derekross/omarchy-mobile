@@ -1,0 +1,64 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The scale each screen gets, so the phone's UI is the same physical size on
+# every model: from the mode and the size in mm that DRM reports, the scale
+# that gives the Pixel 7 Pro's 170.7 logical px per inch on a panel in the
+# hand (512 px/in at 3) and 110 on an external screen, snapped to the nearest
+# scale Hyprland takes (whole logical pixels, in 120ths). Hyprland applies it
+# itself: hypr/display-scale.lua, which omamobile-setup-user loads from the
+# user's monitors.lua, does the same sums. This command only shows them; it
+# changes nothing.
+#
+#   omamobile-display-scale              every output: its mode, size, pixels
+#                                        per inch, the scale it should have,
+#                                        and the scale Hyprland has now
+#   omamobile-display-scale W H MMW MMH [OUTPUT]
+#                                        the scale for a W x H panel of
+#                                        MMW x MMH mm (OUTPUT names its
+#                                        connector, DSI-1 by default)
+#   omamobile-display-scale --help
+#
+# SIZE is how large the UI comes out against its target: 100% is the 7 Pro's
+# size on a panel, under 100% smaller. A "-" for SCALE is a panel that
+# reports no size: it keeps the scale in monitors.lua.
+set -euo pipefail
+
+module=${OMAMOBILE_SHELL_SHARE:-/usr/share/omamobile/shell}/hypr/display-scale.lua
+
+usage() { awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
+
+# Rows on stdin: name, width, height, mm width, mm height, current scale
+# (tab-separated); a table on stdout.
+table() {
+  OMAMOBILE_DISPLAY_MODULE=$module lua -e '
+local M = dofile(os.getenv("OMAMOBILE_DISPLAY_MODULE"))
+local function num(s) return string.format("%.4g", s) end
+print(string.format("%-12s %-10s %-8s %-6s %-6s %-10s %-5s %s", "OUTPUT", "MODE", "MM", "PX/IN", "SCALE", "LOGICAL", "SIZE", "NOW"))
+for line in io.stdin:lines() do
+  local name, w, h, mw, mh, now = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+  if name then
+    w, h, mw, mh = tonumber(w) or 0, tonumber(h) or 0, tonumber(mw) or 0, tonumber(mh) or 0
+    local ppi = M.ppi(w, h, mw, mh)
+    local s = M.scale_for(name, w, h, mw, mh)
+    local target = M.handheld(name) and M.PHONE_PPI or M.DESKTOP_PPI
+    print(string.format("%-12s %-10s %-8s %-6s %-6s %-10s %-5s %s", name, w .. "x" .. h, mw .. "x" .. mh,
+      ppi and string.format("%.0f", ppi) or "-", s and num(s) or "-",
+      s and string.format("%dx%d", math.floor(w / s + 0.5), math.floor(h / s + 0.5)) or "-",
+      (s and ppi) and string.format("%.0f%%", 100 * s * target / ppi) or "-",
+      tonumber(now) and num(tonumber(now)) or now))
+  end
+end'
+}
+
+case ${1:-} in
+  -h | --help) usage ;;
+  "")
+    command -v hyprctl >/dev/null || { echo "omamobile-display-scale: no hyprctl; give W H MMW MMH instead" >&2; exit 1; }
+    hyprctl monitors all -j | jq -r '.[] | select(.disabled != true) | [.name, .width, .height, .physicalWidth, .physicalHeight, .scale] | @tsv' | table
+    ;;
+  *)
+    (($# == 4 || $# == 5)) || { usage >&2; exit 2; }
+    for n in "$1" "$2" "$3" "$4"; do [[ $n =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }; done
+    printf '%s\t%s\t%s\t%s\t%s\t-\n' "${5:-DSI-1}" "$1" "$2" "$3" "$4" | table
+    ;;
+esac

@@ -10,7 +10,7 @@ import "UpdateModel.js" as UpdateModel
 import "Readable.js" as Readable
 
 // The phone's update sheet, in place of Omarchy's terminal update (gum and
-// the ASCII logo don't fit 480 px with the keyboard up). Opened from the
+// the ASCII logo don't fit a phone's 450-500 px with the keyboard up). Opened from the
 // "Update available" toast, the menu's Update > Omarchy, or
 // `omarchy-shell shell summon omamobile.update '{}'`.
 //

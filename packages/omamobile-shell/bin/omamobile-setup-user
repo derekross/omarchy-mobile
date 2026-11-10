@@ -9,18 +9,18 @@ set -euo pipefail
 # --adopt: for a user set up by hand (a bring-up), not by firstboot. The
 # once-only steps that would overwrite or repeat what such a user already
 # has are marked done without running: the shell profile (shell.json), the
-# monitor scale, the cursor and on-screen keyboard lines appended to the
-# Hyprland files, the screensaver's branding files and Files' click
-# policy (a hand-set-up user may have chosen double-click). Every other step
-# runs as on a new user: most check the user's files first (the menu
-# entries, foot's touch lines, phone.lua, the idle block), and a few
-# change what is there (they add the missing phone plugins to shell.json,
-# replace Chromium's user agent and scale factor, and set the suspend and
-# lock toggles). A marked
-# step the user does want can be had by removing its marker from
-# ~/.local/state/omarchy/done/ before the next login.
+# monitor scale and the per-screen scale, the cursor and on-screen keyboard
+# lines appended to the Hyprland files, the screensaver's branding files and
+# Files' click policy (a hand-set-up user may have chosen double-click).
+# Every other step runs as on a new user: most check the user's files first
+# (the menu entries, foot's touch lines, phone.lua, the idle block), and a
+# few change what is there (they add the missing phone plugins to
+# shell.json, replace Chromium's user agent and scale factor, and set the
+# suspend and lock toggles). A marked step the user does want can be had by
+# removing its marker from ~/.local/state/omarchy/done/ before the next
+# login.
 if [[ ${1:-} == --adopt ]]; then
-  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap "
+  adopt=" omamobile-shell-profile omamobile-monitor-scale omamobile-display-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap "
   omarchy-done() {
     if [[ $1 == ensure && $adopt == *" $2 "* ]]; then
       command omarchy-done check "$2" 2>/dev/null || { command omarchy-done mark "$2"; echo "omamobile-setup-user: adopted $2 (marked done, not run)"; }
@@ -150,13 +150,14 @@ if omarchy-done ensure omamobile-credential-type; then
   fi
 fi
 
-# Phone scale, seeded once: the Pixel 7 Pro's 1440x3120 at 3 is 480x1040
-# logical; the Pixel 9a's 1080x2424 at 8/3 is 405x909, its owner's choice
-# (device/tegu NOTES, 2026-10-25). monitors.lua is Lua, so 8 / 3 is a value.
-scale=3
-tr -d '\0' < "${OMAMOBILE_DT:-/proc/device-tree}/compatible" 2>/dev/null | grep -c 'google,zumapro-tegu' >/dev/null && scale='8 \/ 3'
+# Phone scale, seeded once: 3, the Pixel 7 Pro's (1440x3120 at 3 is 480x1040
+# logical). With the step after the GDK one it is only the scale a phone
+# starts at until Hyprland has read its panel's size, and the one a panel
+# that reports no size keeps. (0.2.35-0.2.115 seeded 8 / 3 on the Pixel 9a,
+# its owner's choice in device/tegu NOTES, 2026-10-25; a 9a set up then
+# keeps it.)
 if omarchy-done ensure omamobile-monitor-scale; then
-  sed -i "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $scale/" ~/.config/hypr/monitors.lua
+  sed -i "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = 3/" ~/.config/hypr/monitors.lua
 fi
 # ...and GDK_SCALE to match (TOUCH-PLAN 2.8): at Omarchy's 2, X11 GTK apps
 # (xwayland force_zero_scaling) drew at two thirds of the size of the rest.
@@ -165,6 +166,55 @@ fi
 if omarchy-done ensure omamobile-gdk-scale; then
   if grep -c '^local omarchy_monitor_scale = 3$' ~/.config/hypr/monitors.lua >/dev/null 2>&1; then
     sed -i 's/^local omarchy_gdk_scale = 2$/local omarchy_gdk_scale = 3/' ~/.config/hypr/monitors.lua
+  fi
+fi
+# Each screen at its own scale, from its pixels and the millimetres DRM
+# reports, so the phone's UI is the same physical size on every model:
+# hypr/display-scale.lua, loaded at the top of monitors.lua. The panel's
+# scale goes through omarchy_monitor_scale (so a rule that copies Omarchy's
+# line keeps it), GDK_SCALE follows it rounded up, and other screens get
+# rules of their own; a rule further down for one output (Omarchy's display
+# scaling writes one) still wins. Once, and only while the monitor scale is
+# still a default (Omarchy's "auto", or the 3 above): a scale of the user's
+# own stays, as does a 9a's 8 / 3. The file is built beside monitors.lua
+# and renamed into place, through any symlink, since a running Hyprland
+# reloads on every write (as Omarchy's omarchy-hyprland-monitor-scaling
+# does it).
+if omarchy-done ensure omamobile-display-scale; then
+  monitors=$(readlink -f ~/.config/hypr/monitors.lua 2>/dev/null || true)
+  if [[ -f $monitors ]] && grep -cE '^local omarchy_monitor_scale = ("auto"|3)$' "$monitors" >/dev/null &&
+     ! grep -c 'hypr/display-scale\.lua' "$monitors" >/dev/null && tmp=$(mktemp "$monitors.XXXXXX"); then
+    # Above the first statement and the comment that leads into it
+    if awk -v module="$share/hypr/display-scale.lua" '
+      /^local omarchy_gdk_scale = [23]$/ {
+        $0 = "local omarchy_gdk_scale = omamobile_display.gdk_scale(" substr($0, length($0)) ")"
+      }
+      /^local omarchy_monitor_scale = ("auto"|3)$/ {
+        sub(/= /, "= omamobile_display.monitor_scale(")
+        $0 = $0 ")"
+      }
+      { line[NR] = $0 }
+      !first && /^(local |hl\.)/ { first = NR }
+      END {
+        if (!first) exit 1
+        for (at = first; at > 1 && line[at - 1] ~ /^[[:space:]]*--/; at--) {}
+        for (i = 1; i < at; i++) print line[i]
+        print "-- Omarchy Mobile: every screen at the scale that makes the phone'"'"'s UI the"
+        print "-- same physical size on every model, from its pixels and its size in mm"
+        print "-- (omamobile-display-scale shows the numbers). omarchy_monitor_scale is the"
+        print "-- panel'"'"'s (3 until Hyprland has read its size); a number there, or a rule"
+        print "-- further down for one output (Omarchy'"'"'s display scaling writes one), wins."
+        print "-- For another mode only (60 Hz, say), keep scale = omarchy_monitor_scale."
+        print "local omamobile_display = dofile(\"" module "\").setup()"
+        print ""
+        for (i = at; i <= NR; i++) print line[i]
+      }
+    ' "$monitors" >"$tmp"; then
+      chmod --reference="$monitors" "$tmp"
+      mv -f "$tmp" "$monitors"
+    else
+      rm -f "$tmp"
+    fi
   fi
 fi
 
@@ -308,7 +358,8 @@ if omarchy-done ensure omamobile-lock-keypad; then
 fi
 
 # Chromium won't lay out narrower than about 500 px, wider than the phone's
-# 480 px (at scale 3), so its window ran off the right edge. On Wayland its
+# 480 px (the 7 Pro at scale 3; 450 to 504 on the other phones at their own
+# scale), so its window ran off the right edge. On Wayland its
 # --force-device-scale-factor multiplies the output scale, so 0.83 gives about
 # 550 px of layout width (2.5, the first try, made everything 2.5x bigger).
 if omarchy-done ensure omamobile-chromium-scale-2; then
@@ -341,10 +392,13 @@ fi
 # px (SAND_MIN_WINDOW_SIZE in its main process), wider than a phone's logical
 # width, so its window ran off the right edge as Chromium's did. Its launcher
 # reads ~/.config/grok-bot-flags.conf. The scale factor there gives the 578 px
-# of layout width Chromium gets on the 7 Pro (480 / 0.83): 0.83 there, 0.70
-# on the 9a (405 px), 0.62 at 360 px (a 1080 px panel at scale 3), and 0.83
-# when no panel mode can be read. Once; a factor the user's file already has
-# stays theirs.
+# of layout width Chromium gets on the 7 Pro (480 / 0.83): 0.83 there, 0.62
+# at 360 px (a 1080 px panel at scale 3), and 0.83 when no panel mode can be
+# read. The width is the panel's at 3: this runs before the compositor, so
+# the panel's size in mm, and with it its own scale (2.4 on the 9a, 450 px),
+# isn't known yet; at 3 a narrower panel's width comes out smaller than it
+# will be, so the factor errs small and the window still fits. Once; a
+# factor the user's file already has stays theirs.
 if omarchy-done ensure omamobile-grok-bot-fit; then
   flags=~/.config/grok-bot-flags.conf
   factor=0.83 mode= width=0
@@ -352,8 +406,7 @@ if omarchy-done ensure omamobile-grok-bot-fit; then
     if [[ -r $m ]]; then mode=$(sed -n 1p "$m"); break; fi
   done
   if [[ $mode =~ ^([0-9]+)x ]]; then
-    width=$((BASH_REMATCH[1] / 3))   # $scale, from the monitor step above
-    [[ $scale == '8 \/ 3' ]] && width=$((BASH_REMATCH[1] * 3 / 8))
+    width=$((BASH_REMATCH[1] / 3))
   fi
   if ((width > 0)); then
     factor=$(awk -v w="$width" 'BEGIN { f = int(100 * w / 578) / 100; printf "%.2f", (f < 0.83 ? f : 0.83) }')

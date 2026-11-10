@@ -182,9 +182,15 @@ grep -c 'dofile(".*hypr/phone.lua")' "$t/gate/.config/hypr/hyprland.lua" >/dev/n
 grep -c 'hypr/phone.lua' "$t/gate/.config/hypr/looknfeel.lua" >/dev/null && fail "the phone rules aren't put where Hyprland never reads them"
 pass "the phone rules go to the file Hyprland loads, once"
 
-# GDK_SCALE follows the phone's monitor scale (TOUCH-PLAN 2.8)
-grep -cx 'local omarchy_monitor_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "the monitor scale is 3"
-grep -cx 'local omarchy_gdk_scale = 3' "$H/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE is 3 with it"
+# Each screen's own scale (hypr/display-scale.lua), loaded once at the top of
+# monitors.lua: the panel's through omarchy_monitor_scale (3 until Hyprland
+# has read the panel), and GDK_SCALE following it (TOUCH-PLAN 2.8)
+m=$H/.config/hypr/monitors.lua
+grep -cx 'local omarchy_monitor_scale = omamobile_display.monitor_scale(3)' "$m" >/dev/null || fail "the monitor scale is the panel's, 3 until Hyprland has read it"
+[[ $(grep -c 'hypr/display-scale\.lua' "$m") == 1 ]] || fail "monitors.lua loads display-scale.lua once, after several logins"
+grep -cx "local omamobile_display = dofile(\"$pkg/hypr/display-scale.lua\").setup()" "$m" >/dev/null || fail "the module comes from the package"
+[[ $(grep -n '^local ' "$m" | head -1) == *omamobile_display* ]] || fail "the module is set up before any other line of monitors.lua"
+grep -cx 'local omarchy_gdk_scale = omamobile_display.gdk_scale(3)' "$m" >/dev/null || fail "GDK_SCALE follows the panel's scale, 3 until Hyprland has one"
 # Foot for touch (TOUCH-PLAN 2.9), after two logins
 foot=$H/.config/foot/foot.ini
 grep -cx 'pad=6x6' "$foot" >/dev/null && ! grep -c '^pad=14x14' "$foot" >/dev/null || fail "foot's padding is 6x6"
@@ -218,6 +224,7 @@ printf '[main]\npad=10x10\n\n[scrollback]\nmultiplier=5.0\n\n[touch]\nlong-press
 cp "$h/.config/foot/foot.ini" "$t/custom-foot.ini"
 RUN_HOME=$h run
 grep -cx 'local omarchy_gdk_scale = 2' "$h/.config/hypr/monitors.lua" >/dev/null || fail "GDK_SCALE stays with a user's own monitor scale"
+grep -c 'display-scale' "$h/.config/hypr/monitors.lua" >/dev/null && fail "a user's own monitor scale gets no per-screen scale"
 cmp -s "$h/.config/foot/foot.ini" "$t/custom-foot.ini" || fail "a user's own foot values stay theirs"
 [[ -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step runs once foot.ini is there"
 [[ $(grep -cx -- --enable-wayland-ime "$h/.config/chromium-flags.conf") == 1 ]] || fail "a flag the user has isn't added twice"
@@ -228,16 +235,108 @@ g=$h/.config/grok-bot-flags.conf
 [[ $(wc -l <"$g") == 2 ]] && grep -cx -- --disable-gpu "$g" >/dev/null || fail "Grok Bot's file keeps the user's other flags, unchanged"
 pass "GDK scale, foot, Chromium's and Grok Bot's flags, once each, and a user's own values are kept"
 
-# The Pixel 9a: a new user gets 8 / 3 (405x909 logical), and GDK_SCALE stays
-# Omarchy's 2 (its step only follows a monitor scale of exactly 3)
+# The Pixel 9a: a new user gets the per-screen scale like every phone (2.4
+# once Hyprland has read the panel: 450x1010), and Grok Bot's factor from
+# the panel's width at 3 (360 px), which errs small. A 9a set up by
+# 0.2.35-0.2.115 keeps the 8 / 3 it seeded, its owner's choice, and gets no
+# per-screen scale.
 h9=$t/tegu; mkdir -p "$h9/.config/hypr" "$h9/.config/omarchy/extensions"
 cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$h9/.config/hypr/"
 printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = "auto"\n' >"$h9/.config/hypr/monitors.lua"
 RUN_HOME=$h9 RUN_DT=$t/dt-zumapro-tegu RUN_DRM=$t/drm-1080x2424 run
-grep -cx 'local omarchy_monitor_scale = 8 / 3' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's monitor scale is 8 / 3"
-grep -cx 'local omarchy_gdk_scale = 2' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's GDK_SCALE step is skipped"
-grep -cx -- --force-device-scale-factor=0.70 "$h9/.config/grok-bot-flags.conf" >/dev/null || fail "Grok Bot's factor on the 9a (405 px) is 0.70"
-pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2, Grok Bot at 0.70"
+grep -cx 'local omarchy_monitor_scale = omamobile_display.monitor_scale(3)' "$h9/.config/hypr/monitors.lua" >/dev/null &&
+  grep -c 'hypr/display-scale\.lua' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a gets the per-screen scale"
+grep -cx 'local omarchy_gdk_scale = omamobile_display.gdk_scale(3)' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's GDK_SCALE follows its panel"
+grep -cx -- --force-device-scale-factor=0.62 "$h9/.config/grok-bot-flags.conf" >/dev/null || fail "Grok Bot's factor on a new 9a (360 px at 3) is 0.62"
+h9o=$t/tegu-0.2.35; mkdir -p "$h9o/.config/hypr" "$h9o/.config/omarchy/extensions" "$h9o/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$h9o/.config/hypr/"
+printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = 8 / 3\n' >"$h9o/.config/hypr/monitors.lua"
+cp "$h9o/.config/hypr/monitors.lua" "$t/tegu-0.2.35-monitors.lua"
+touch "$h9o/.local/state/omarchy/done/"{omamobile-monitor-scale,omamobile-gdk-scale}
+RUN_HOME=$h9o RUN_DT=$t/dt-zumapro-tegu RUN_DRM=$t/drm-1080x2424 run
+cmp -s "$h9o/.config/hypr/monitors.lua" "$t/tegu-0.2.35-monitors.lua" || fail "a 9a's 8 / 3 from 0.2.35 stays, untouched"
+pass "the Pixel 9a: a new user gets the per-screen scale, a 9a's 8 / 3 stays, Grok Bot at 0.62"
+
+# monitors.lua as Omarchy ships it (the rule for every output, then GDK_SCALE)
+# and as this package left it before (GDK_SCALE first, scale 3, both steps
+# done, and a 60 Hz rule for the panel copied from Omarchy's line, as on the
+# reference 7 Pro): each comes out as Lua that gives each phone its own
+# scale, with Omarchy's rule kept as it was (Omarchy's display scaling finds
+# it by that shape).
+lua=$(command -v lua || command -v lua5.4 || command -v luajit || true)
+for shape in omarchy before; do
+  hm=$t/monitors-$shape; mkdir -p "$hm/.config/hypr" "$hm/.config/omarchy/extensions" "$hm/.local/state/omarchy/done"
+  cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$hm/.config/hypr/"
+  if [[ $shape == omarchy ]]; then
+    cat >"$hm/.config/hypr/monitors.lua" <<'LUA'
+-- See https://wiki.hypr.land/Configuring/Basics/Monitors/
+-- List current monitors and supported resolutions with: hyprctl monitors all
+
+-- Monitor scale is Hyprland's scale for the output.
+local omarchy_monitor_scale = "auto"
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })
+
+-- Configure a specific monitor.
+-- hl.monitor({ output = "DP-2", mode = "2560x1440@144", position = "0x0", scale = 1 })
+
+-- GDK scale is GDK_SCALE, the factor GTK draws its own UI at.
+local omarchy_gdk_scale = 2
+hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))
+LUA
+  else
+    cat >"$hm/.config/hypr/monitors.lua" <<'LUA'
+-- See https://wiki.hypr.land/Configuring/Basics/Monitors/
+-- List current monitors and supported resolutions with: hyprctl monitors all
+
+local omarchy_gdk_scale = 3
+local omarchy_monitor_scale = 3
+
+hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })
+
+-- Battery: the built-in panel at 60 Hz instead of 120.
+hl.monitor({ output = "DSI-1", mode = "1440x3120@60", position = "auto", scale = omarchy_monitor_scale })
+LUA
+    touch "$hm/.local/state/omarchy/done/"{omamobile-monitor-scale,omamobile-gdk-scale}
+    # kept in a dotfiles folder, linked into place
+    mkdir -p "$hm/dotfiles"; mv "$hm/.config/hypr/monitors.lua" "$hm/dotfiles/"
+    ln -s "$hm/dotfiles/monitors.lua" "$hm/.config/hypr/monitors.lua"
+  fi
+  RUN_HOME=$hm run
+  f=$hm/.config/hypr/monitors.lua
+  if [[ $shape == before ]]; then
+    [[ -L $f ]] && grep -c 'display-scale' "$hm/dotfiles/monitors.lua" >/dev/null || fail "a linked monitors.lua is changed through its link"
+    ls "$hm/dotfiles/" | grep -c 'monitors\.lua\.' >/dev/null && fail "no temporary file is left beside the linked file"
+  fi
+  grep -cx 'hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })' "$f" >/dev/null \
+    || fail "$shape: Omarchy's rule for every output is kept as it was"
+  ls "$hm/.config/hypr/" | grep -c 'monitors\.lua\.' >/dev/null && fail "$shape: no temporary file is left beside monitors.lua"
+  if [[ -n $lua ]]; then
+    out=$("$lua" test/display-scale.lua "$f") || { grep -v '^ok' <<<"$out"; fail "$shape: monitors.lua under Hyprland's rules"; }
+  fi
+done
+pass "Omarchy's monitors.lua and this package's earlier one both give each phone its own scale"
+
+# A rule of the user's for the panel (the 60 Hz line, with a number for its
+# scale or with Omarchy's variable) is left exactly as it is: only the two
+# `local` lines change, and the module's block goes above them.
+hz=$t/monitors-60hz; mkdir -p "$hz/.config/hypr" "$hz/.config/omarchy/extensions" "$hz/.local/state/omarchy/done"
+cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$hz/.config/hypr/"
+cat >"$hz/.config/hypr/monitors.lua" <<'LUA'
+local omarchy_gdk_scale = 3
+local omarchy_monitor_scale = 3
+hl.env("GDK_SCALE", tostring(omarchy_gdk_scale))
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = omarchy_monitor_scale })
+hl.monitor({ output = "DSI-1", mode = "1440x3120@60", position = "auto", scale = 3 })
+hl.monitor({ output = "DSI-2", mode = "1080x2092@60", position = "auto", scale = omarchy_monitor_scale })
+LUA
+touch "$hz/.local/state/omarchy/done/"{omamobile-monitor-scale,omamobile-gdk-scale}
+grep -v '^local ' "$hz/.config/hypr/monitors.lua" >"$t/60hz-rest"
+RUN_HOME=$hz run
+f=$hz/.config/hypr/monitors.lua
+grep -c 'hypr/display-scale\.lua' "$f" >/dev/null || fail "a monitors.lua with a 60 Hz rule still gets the per-screen scale"
+diff <(grep -v -e '^local ' -e '^--' -e '^$' "$f") "$t/60hz-rest" >/dev/null || fail "the user's rules (60 Hz) are left exactly as they were"
+pass "a user's own rule for an output (a 60 Hz mode) is left exactly as it was"
 
 # Grok Bot's factor follows the panel: 0.62 for a 1080 px panel at scale 3
 # (360 px), and 0.83 when no panel mode can be read
@@ -419,7 +518,7 @@ before=$(snap)
 RUN_HOME=$ha run --adopt; out=$(cat "$t/out")
 [[ $(snap) == "$before" ]] || fail "--adopt changed a file an overwriting step owns"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert {"id":"mine"} in d["plugins"]' "$ha/.config/omarchy/shell.json" || fail "--adopt reseeded shell.json"
-for s in omamobile-shell-profile omamobile-monitor-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap; do
+for s in omamobile-shell-profile omamobile-monitor-scale omamobile-display-scale omamobile-hide-cursor omamobile-osk omamobile-screensaver omamobile-files-single-tap; do
   [[ -e $ha/.local/state/omarchy/done/$s ]] || fail "--adopt did not mark $s"
   grep -c "adopted $s" <<<"$out" >/dev/null || fail "--adopt did not say it adopted $s"
 done

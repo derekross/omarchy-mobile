@@ -91,12 +91,6 @@ b=plugins/omamobile.back/Back.qml
 python3 -c 'import json; assert {"id": "omamobile.back"} in json.load(open("profile/shell.json"))["plugins"]' \
   || fail "the phone profile enables the back gesture"
 grep -c 'add_plugin omamobile.back' bin/omamobile-setup-user >/dev/null || fail "existing users get the back gesture"
-grep -c "google,zumapro-tegu' >/dev/null && scale='8 \\\\/ 3'" bin/omamobile-setup-user >/dev/null || fail "the 9a's scale is 8/3"
-# the seeded line stays valid Lua for both scales
-for sc in 3 '8 \/ 3'; do
-  t=$(printf 'local omarchy_monitor_scale = 2\n' | sed "s/^local omarchy_monitor_scale = .*/local omarchy_monitor_scale = $sc/")
-  [[ $t == 'local omarchy_monitor_scale = 3' || $t == 'local omarchy_monitor_scale = 8 / 3' ]] || fail "the seeded scale line ($t)"
-done
 grep -c 'Quickshell.execDetached(BackModel.ESCAPE_ARGV)' "$b" >/dev/null || fail "back sends Escape through BackModel"
 grep -c 'WlrLayershell.namespace: "omamobile-back"' "$b" >/dev/null || fail "back strips' namespace"
 grep -c 'mask: Region { item: strip }' "$b" >/dev/null || fail "only the edge strip takes touches"
@@ -980,6 +974,39 @@ if [[ -n $lua ]]; then
   pass "phone.lua: edge to edge, opaque, dialogs, picture-in-picture"
 else
   pass "phone.lua window rules # SKIP no lua"
+fi
+
+# Each screen's scale (hypr/display-scale.lua): the sums for the three phones
+# and for other screens, and its rules under Hyprland's (test/display-scale.lua;
+# test/setup-user.sh runs it on the monitors.lua it sets up too). Then the
+# command that shows them, on the three panels and on a fake Hyprland.
+bash -n bin/omamobile-display-scale || fail "omamobile-display-scale parses"
+if [[ -n $lua ]]; then
+  out=$("$lua" test/display-scale.lua) || { grep -v '^ok' <<<"$out"; fail "display-scale.lua"; }
+  ds() { OMAMOBILE_SHELL_SHARE=$PWD PATH="$ds_path" bash bin/omamobile-display-scale "$@"; }
+  ds_dir=$(mktemp -d); ds_path="$ds_dir:$PATH"
+  for row in '1440 3120 71 155|DSI-1 1440x3120 71x155 512 3 480x1040 100% -' \
+             '1080 2424 65 146|DSI-1 1080x2424 65x146 422 2.4 450x1010 97% -' \
+             '1344 2992 70 155|DSI-1 1344x2992 70x155 490 2.667 504x1122 93% -' \
+             '1080 2424 0 0|DSI-1 1080x2424 0x0 - - - - -' \
+             '3840 2160 597 336 DP-1|DP-1 3840x2160 597x336 163 1.5 2560x1440 101% -'; do
+    # shellcheck disable=SC2086
+    got=$(ds ${row%%|*} | tail -1 | tr -s ' ')
+    [[ $got == "${row#*|}" ]] || fail "omamobile-display-scale ${row%%|*}: $got"
+  done
+  printf '#!/bin/sh\n[ "$*" = "monitors all -j" ] && printf %%s %s\n' \
+    "'[{\"name\":\"DSI-1\",\"width\":1080,\"height\":2424,\"physicalWidth\":65,\"physicalHeight\":146,\"scale\":3,\"disabled\":false},{\"name\":\"HEADLESS-1\",\"width\":1920,\"height\":1080,\"physicalWidth\":0,\"physicalHeight\":0,\"scale\":2,\"disabled\":true}]'" \
+    >"$ds_dir/hyprctl"
+  chmod +x "$ds_dir/hyprctl"
+  got=$(ds | tr -s ' ')
+  [[ $(wc -l <<<"$got") == 2 && $(tail -1 <<<"$got") == 'DSI-1 1080x2424 65x146 422 2.4 450x1010 97% 3' ]] \
+    || fail "omamobile-display-scale lists Hyprland's enabled outputs: $got"
+  ds 1080 2424 65 >/dev/null 2>&1 && fail "omamobile-display-scale refuses three numbers"
+  ds 1080 '' 65 146 >/dev/null 2>&1 && fail "omamobile-display-scale refuses an empty number"
+  rm -rf "$ds_dir"
+  pass "display scale: 3, 2.4 and 8/3 on the three phones, 1.5 on a 4K screen, and the command that shows them"
+else
+  pass "display scale # SKIP no lua"
 fi
 
 # The session environment: no empty values (environment.d skips such a line
