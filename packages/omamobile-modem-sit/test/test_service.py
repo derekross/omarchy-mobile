@@ -76,11 +76,30 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in self.client.request.call_args_list], [0x0000, 0x0d00])
         self.assertIsNone(self.service.audio)
 
-    def test_tegu_route_is_reported_as_speakerphone(self):
-        self.service.audio = MagicMock(tegu=True)
-        self.assertTrue(self.service.status()['audio']['speaker'])
-        self.service.audio.tegu = False
+    def test_call_audio_output_is_reported_and_switchable_on_tegu(self):
+        self.service.audio = MagicMock(tegu=True, output='speaker', pcms=[1])
+        status = self.service.status()['audio']
+        self.assertTrue(status['speaker'])            # the loudspeaker
+        self.assertTrue(status['speaker_available'])  # the tegu route can switch
+        self.service.audio.output = 'earpiece'
         self.assertFalse(self.service.status()['audio']['speaker'])
+        # A route that cannot switch (no tegu) reports so, and no audio at all
+        # reports neither speaker nor an available switch.
+        self.service.audio.tegu = False
+        self.assertFalse(self.service.status()['audio']['speaker_available'])
+        self.service.audio = None
+        off = self.service.status()['audio']
+        self.assertFalse(off['speaker'] or off['speaker_available'])
+
+    def test_speaker_command_switches_the_output_and_rejects_bad_values(self):
+        self.service.audio = MagicMock(tegu=True, output='speaker', pcms=[1])
+        self.service.dispatch(dict(action='audio', what='speaker', value='off'))
+        self.service.audio.set_output.assert_called_once_with('earpiece')
+        self.service.audio.set_output.reset_mock()
+        self.service.dispatch(dict(action='audio', what='speaker', value='on'))
+        self.service.audio.set_output.assert_called_once_with('speaker')
+        with self.assertRaises(ValueError):
+            self.service.dispatch(dict(action='audio', what='speaker', value='maybe'))
 
     def test_failed_radio_off_still_requires_reboot_without_claiming_release(self):
         self.client.request.side_effect = TimeoutError()

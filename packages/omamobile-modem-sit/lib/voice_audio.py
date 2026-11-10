@@ -64,6 +64,15 @@ TEGU_ROUTE = (
     ('MIC HW Gain At High Power Mode (cB)', '130'),
     ('MIC Record Soft Gain (dB)', '0'),
     ('TDM_0_RX Mixer EP5', '1'), ('EP4 TX Mixer INTERNAL_MIC_TX', '1'))
+# Call-audio outputs on the 9a's TAS2572 route, as (top, bottom) Speaker
+# Digital Volume: the top amplifier is the earpiece, the bottom the
+# loudspeaker (this module's docstring). "earpiece" mutes the bottom's
+# digital volume so only the top (earpiece) sounds; "speaker" runs both at
+# the conservative gain. Switched live during a call (set_output), the sink
+# muted across the change, and the original gains come back from `saved`
+# when the call ends.
+TEGU_OUTPUTS = {'speaker': (TEGU_GAIN, TEGU_GAIN), 'earpiece': (TEGU_GAIN, '0')}
+TEGU_SPEAKER_DIGITAL = ('Top Speaker Digital Volume', 'Bottom Speaker Digital Volume')
 
 
 class AudioRefused(RuntimeError):
@@ -106,9 +115,15 @@ class VoiceAudio:
     # without earpiece mode (no service installed, or [audio] earpiece = no)
     earpiece_cmd = None
 
-    def __init__(self, *, mic_boost_db=6, card=None, earpiece=True):
+    # The call-audio output to start a call on (set_output switches it live).
+    output = 'speaker'
+
+    def __init__(self, *, mic_boost_db=6, card=None, earpiece=True, output='speaker'):
         if mic_boost_db not in (0, 6):
             raise ValueError('unsupported voice microphone boost')
+        if output not in TEGU_OUTPUTS:
+            raise ValueError('unsupported call audio output: ' + str(output))
+        self.output = output
         self.mic_boost_db = mic_boost_db
         self.earpiece_cmd = shutil.which(EARPIECE_COMMAND) if earpiece else None
         if card is not None:
@@ -296,10 +311,34 @@ class VoiceAudio:
                     raise AudioRefused('tegu call audio refused: TAS gain read-back mismatch')
             self.mixer('cset', 'Incall Sink Mute', '0')
             print('AoC tegu speakerphone prepared at conservative TAS gain', flush=True)
+            # The route unmutes on the loudspeaker; start on the earpiece
+            # when the configuration or a caller asked for it.
+            if self.output != 'speaker':
+                self.set_output(self.output)
             return self
         except BaseException:
             self.__exit__(None, None, None)
             raise
+
+    def set_output(self, output):
+        """Switch call audio between the loudspeaker and the earpiece during
+        a call. Wired for the tegu TAS2572 route only. The sink is muted
+        across the gain change (no pop), the top amplifier (the earpiece)
+        always sounds and the bottom (the loudspeaker) is muted for the
+        earpiece; the original gains return from `saved` when the call ends."""
+        if output not in TEGU_OUTPUTS:
+            raise ValueError('unsupported call audio output: ' + str(output))
+        if not getattr(self, 'tegu', False):
+            raise RuntimeError('call audio output switching is only wired for the tegu route')
+        if not self.pcms:
+            raise RuntimeError('no call audio is running')
+        self.mixer('cset', 'Incall Sink Mute', '1')
+        try:
+            for name, value in zip(TEGU_SPEAKER_DIGITAL, TEGU_OUTPUTS[output]):
+                self.mixer('cset', name, value)
+        finally:
+            self.mixer('cset', 'Incall Sink Mute', '0')
+        self.output = output
 
     def __exit__(self, *args):
         failures = []
