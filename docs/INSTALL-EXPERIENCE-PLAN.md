@@ -1,8 +1,11 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Install experience plan: a one-step, guided install
 
-Status (2026-11-02): **design only.** Nothing here has been built or run on
-a phone. Today's install is the manual guide in [INSTALL.md](INSTALL.md):
+Status (2026-11-10): **M1 is built as a repository tool and tested against
+stand-ins; it has not run on a phone yet and is in no release bundle**
+([INSTALL-GUIDED.md](INSTALL-GUIDED.md): its design, every prompt, the
+build index's format and the runbook for its first run). The rest is
+design only. Today's install is still the manual guide in [INSTALL.md](INSTALL.md):
 about an hour of terminal commands, a factory image the user finds and
 downloads by hand, a USB network connection set up by hand, a radio backup
 and a provisioning run. This plan is how that becomes one guided install
@@ -47,13 +50,10 @@ What the person does:
    same checks (§11, M3).
 2. Picks their phone from the list, or plugs it in and lets the installer
    recognise it.
-3. Follows plain steps, each one screen with a picture: turn on Developer
-   options and OEM unlocking, allow the computer, confirm the unlock on the
-   phone with the volume keys. This is the only part done on the phone
-   itself.
-4. Reads one clear warning, shown once before anything is written, and
-   acknowledges it (Google's terms for the firmware are accepted on
-   Google's own page, in step 6 and §6.3). The warning says:
+3. Reads one clear warning, shown once, before the unlock steps (unlocking
+   the bootloader already wipes the phone, D9) and before anything is
+   written, and acknowledges it (Google's terms for the firmware are
+   accepted on Google's own page, in step 6 and §6.3). The warning says:
    - the phone is wiped, and everything on it is lost;
    - Omarchy Mobile replaces Android as the phone's operating system, and
      what that means day to day: no Google apps or Play Store, Android apps
@@ -70,6 +70,10 @@ What the person does:
    screen. Fingerprint unlock is on by default, with no separate question;
    the runner's data guards (read-only copies, the TDP refusal, one proxy
    per boot) keep stock's data safe.
+4. Follows plain steps, each one screen with a picture: turn on Developer
+   options and OEM unlocking, allow the computer, confirm the unlock on the
+   phone with the volume keys. This is the only part done on the phone
+   itself.
 5. Chooses a user name, a PIN or password, the phone's name, the time zone
    and optionally a Wi-Fi network, in the installer window.
 6. Clicks one button that opens Google's download page at the phone's
@@ -681,10 +685,10 @@ real users.
 ### M1. A guided CLI, end to end
 
 - **What:** the bundle's `install` grows into one command that runs the
-  whole install with today's tools: preflight, unlock guidance from the
-  phone's state (§4.2), the one warning of §1 step 4 (wipe, new operating
-  system and what it means day to day, the way back) acknowledged once before any write and recorded with
-  the install's state, with no further prompts about it, the build index lookup, Google's page opened at the
+  whole install with today's tools: preflight, the one warning of §1 step 3 (wipe, new operating
+  system and what it means day to day, the way back) acknowledged once before the unlock guidance and any write (D9) and recorded with
+  the install's state, with no further prompts about it, unlock guidance from the
+  phone's state (§4.2), the build index lookup, Google's page opened at the
   right build and the saved factory image taken and checked (§6.3, D2), the checks and writes
   (`install-phone`), the USB network connection set up with the user's
   consent (a NetworkManager profile for `cdc_ncm`, shown before it is
@@ -695,6 +699,15 @@ real users.
 - **Needs:** M0; the build index (§6.1) and the maintainer tool that fills
   it; the camera's Python modules handled by the tool (its own venv) or the
   camera step moved to the phone early.
+- **Built (2026-11-10):** `tools/install-guided`, a repository tool until
+  it has run on a phone (INSTALL-GUIDED §10 lists what has to be true
+  before it is a bundle's `install`), and `tools/factory-index`, designed
+  in [INSTALL-GUIDED.md](INSTALL-GUIDED.md). It differs from §4.2 as
+  written in one place, by a decision of 2026-11-10: it shows `fastboot
+  flashing unlock` for the owner to run and doesn't send it
+  (INSTALL-GUIDED §1). It has no fallback to a build with
+  the same bootloader and another baseband (§6.2) until the index records
+  tested pairs.
 - **Open:** Google's terms in a third-party tool (D2: M1 uses the fallback); still Linux only,
   still a terminal; what the index marks as tested (D3).
 
@@ -809,3 +822,21 @@ never offered: that write stays a manual, named exception.
   Google for written permission to redistribute the vendor files, or get a
   lawyer's opinion first. Nothing is bundled or hosted unless one of those
   says it may be.
+- **D9. Where the warning sits: decided 2026-11-10, before the unlock
+  guidance.** Unlocking the bootloader already wipes the phone, so the one
+  warning (§1 step 3) is read and acknowledged before the unlock steps are
+  shown. It is acknowledged once and recorded once, and nothing asks again;
+  an install record without the acknowledgement shows it, whatever else
+  that record holds ([INSTALL-GUIDED](INSTALL-GUIDED.md) §2, §3).
+- **D10. The USB connection for the install: decided 2026-11-10, a plain
+  link.** The NetworkManager profile the install adds has a manual address
+  on the phone's USB subnet and is never the default route: no DHCP or DNS
+  server, no forwarding, no NAT, nothing of the computer's sent through
+  the phone. Its autoconnect priority is negative, so it never wins over
+  the owner's own connections, and its match is as narrow as
+  NetworkManager allows before the phone has started, which is the gadget's
+  driver (INSTALL-GUIDED §5a says what can't be narrowed, and why the
+  phone's own address can only be used after its first start). No step of
+  the install needs the phone to reach the internet through the cable
+  (checked by reading, INSTALL-GUIDED §5a); [INSTALL.md](INSTALL.md) step 5
+  gives the same profile.
