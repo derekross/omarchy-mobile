@@ -7,11 +7,18 @@ snapshot remains at commit 6ad4651f8ac151333345c72db99f1fd83259696f in the
 contributor's omarchy-mobile fork. The revised files have not run on a phone.
 
 The hardware, Wi-Fi and GPU helpers retain their exact tested release/module
-pins and explicit opt-ins. They target the OLD development kernel, including
-its USI probe hold and ALIX stage parameter. They intentionally refuse the
+pins and explicit opt-ins. They target the tested kernel source `c934e316b`
+(release `7.3.0-rc6-omamobile-bluejay-input-gated0`), including its USI probe
+hold and ALIX stage parameter. They intentionally refuse the
 revised kernel topics. Removing a check or changing a hash is not qualification.
 The new ALIX topic drops both staging knobs: a separate next-run helper must
 be prepared and reviewed before testing that stack.
+
+`device/bluejay/overlays/input-controller.dtso` replaces the whole
+`/chosen/bootargs` string; it does not append its USI probe-hold argument.
+Before combining it with other overlays, inspect the final bootargs in both
+DT variants and retain every argument the matching boot/recovery policy needs.
+It is a historical overlay for the tested kernel, not the revised ALIX path.
 
 The retained-display startup no longer reads or writes registers with devmem.
 Use `SIMPLEFB_TRIG_CON="0x1c300030 0x3061"` in the Bluejay descriptor and rebuild
