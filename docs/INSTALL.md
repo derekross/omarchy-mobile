@@ -185,9 +185,11 @@ Without them everything else still works, but the cameras won't.
 From the bundle folder, do a dry run first (it unpacks nothing and doesn't contact the phone), then the real run. Replace the path with the factory image you downloaded:
 
 ```sh
-bash tools/phone-provision --dry-run --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
-bash tools/phone-provision --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+bash tools/phone-provision --dry-run --first-install --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
+bash tools/phone-provision --first-install --nv-backup "$B" ~/Downloads/cheetah-<build>-factory-<id>.zip
 ```
+
+`--first-install` says there is no earlier Omarchy Mobile system whose data should be put back. The tool asks for it rather than guess; a bundle up to 2026.11.08 doesn't know the option, so leave it out there (that bundle's own `INSTALL.md` shows its command).
 
 The real run takes several minutes. Each copy to the phone ends with `verified`. If it stops with an error, nothing half-done is left behind: fix the cause and run it again (it's safe to repeat).
 

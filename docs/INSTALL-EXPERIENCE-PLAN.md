@@ -143,7 +143,7 @@ which passed a clean reinstall on 2026-11-02 **[V]**:
 | First start | grows the root, runs `omamobile-firstboot`, shows the lock screen | on the phone |
 | USB network | `nmcli connection add ...` by hand | by hand |
 | Radio backup | `tools/nv-backup DIR` | `tools/nv-backup` |
-| Firmware | a Python venv for the camera, then `tools/phone-provision --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
+| Firmware | a Python venv for the camera, then `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
 | Restart | `tools/phone-ssh 'reboot-to omamobile'` | by hand |
 | Check | none for the user; `tools/phone-smoke` for developers | `tools/phone-smoke` |
 
@@ -270,7 +270,7 @@ retries silently, as `nv-backup` does.
 
 ### 4.8 Provisioning
 
-Today: `tools/phone-provision --nv-backup DIR FACTORY.zip` after the first
+Today: `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` after the first
 start: the `extract-*` tools on the computer, then pushes over USB SSH, then
 the board id read on the phone **[V]**. §5 weighs folding this into the
 install on the computer against doing it on the phone.
@@ -614,7 +614,11 @@ else.
   reinstall; on anyone else's, every install is a first install. Fix: an
   explicit mode (`--first-install` with `--nv-backup DIR`, or `--restore
   DIR`), no default backup path in the bundle's copy, and the factory image
-  fetched by the tool itself (§6) when none is given.
+  fetched by the tool itself (§6) when none is given. **The modes are
+  done:** the tool has no default backup directory, refuses a cheetah run
+  that names neither mode, and `--backup DIR` stays as `--restore DIR`'s
+  older spelling. The fetch is not built: by D2 the owner saves the image
+  from Google's page and the tool takes the file, as it does today.
 - **G2. The stable channel must exist before a release's first update.**
   `tools/release`'s `test-install` stage runs before `promote`, and a
   release install follows `stable`, so the test-installed phone's first

@@ -711,5 +711,6 @@ if ((dry)); then
 else
   say "Done. The phone boots slot B; the first boot sets up $username (a few minutes)."
   echo "    Watch it:  tools/phone-ssh 'journalctl -fu omamobile-firstboot'"
-  echo "    Then:      tools/phone-provision FACTORY.zip  (firmware, per-phone data)"
+  echo "    Then:      tools/nv-backup DIR, then tools/phone-provision --first-install --nv-backup DIR FACTORY.zip"
+  echo "               (firmware, per-phone data; a reinstall with a phone-config.tar: --restore DIR)"
 fi
