@@ -34,7 +34,10 @@ case "$*" in
   *) echo "nmcli: unexpected $*" >&2; exit 1 ;;
 esac'
 stub iw 'printf "Station aa\nStation bb\n"'
-stub qrencode 'echo "qrencode $* $(cat)" >>'"$log"'; for a in "$@"; do [ "$prev" = -o ] && : >"$a"; prev=$a; done'
+# qrencode: its arguments and its stdin on lines of their own, so a check
+# can tell which of the two the WIFI: string came on.
+qrencode_fake='echo "qrencode args: $*" >>'"$log"'; echo "qrencode stdin: $(cat)" >>'"$log"'; for a in "$@"; do [ "$prev" = -o ] && : >"$a"; prev=$a; done'
+stub qrencode "$qrencode_fake"
 echo "Phone" >"$tmp/ssid"; echo "correct horse battery" >"$tmp/psk"
 
 run() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" bash "$script" "$@"; }
@@ -49,12 +52,13 @@ s=$(run state)
 [[ $(echo "$s" | field share_available) == false ]] || fail "no VPN sharing with NetworkManager's hotspot"
 [[ $(echo "$s" | field editable) == true ]] || fail "a connection with a name is editable"
 [[ $(echo "$s" | field qr) == "$tmp/run/omamobile-hotspot/wifi-qr.png" ]] || fail "the QR code is drawn into the runtime directory"
-grep -q 'WIFI:T:WPA;S:Phone;P:correct horse battery;;' "$log" || fail "the QR code holds the WIFI: string"
-grep -q 'qrencode -o [^ ]* -s 8 -m 2 -l M WIFI:' "$log" || fail "the WIFI: string goes to qrencode on stdin, not as an argument"
+grep -qx 'qrencode stdin: WIFI:T:WPA;S:Phone;P:correct horse battery;;' "$log" || fail "the WIFI: string goes to qrencode on stdin"
+grep -qx 'qrencode args: -o [^ ]* -s 8 -m 2 -l M' "$log" || fail "qrencode gets only its options as arguments"
+grep -q '^qrencode args: .*WIFI:' "$log" && fail "the WIFI: string is not an argument (it would show in /proc/*/cmdline)"
 [[ $(echo "$s" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("uplink_note", ""))') == "" ]] || fail "NetworkManager's hotspot claims no uplink"
 [[ $(stat -c %a "$tmp/run/omamobile-hotspot/wifi-qr.src") == 600 ]] || fail "the QR source is private"
-n=$(grep -c qrencode "$log"); run state >/dev/null
-[[ $(grep -c qrencode "$log") == "$n" ]] || fail "an unchanged code is not drawn again"
+n=$(grep -c '^qrencode args:' "$log"); run state >/dev/null
+[[ $(grep -c '^qrencode args:' "$log") == "$n" ]] || fail "an unchanged code is not drawn again"
 pass "hotspot-panel.sh: NetworkManager state, the QR code once"
 
 # ---- hotspot on: connected devices
@@ -64,24 +68,24 @@ s=$(run state)
 pass "hotspot-panel.sh: an active hotspot counts its devices"
 
 # ---- set: the checks, then nmcli modify and a restart of a running hotspot
-(run set "" "longenough" || true) | grep -q '^error:' || fail "an empty name is refused"
-(run set "Phone" "short" || true) | grep -q '^error:' || fail "a short password is refused"
-(run set "$(printf 'x%.0s' $(seq 33))" "longenough" || true) | grep -q '^error:' || fail "a 33-character name is refused"
+(run set "" "longenough" || true) | grep -c '^error:' >/dev/null || fail "an empty name is refused"
+(run set "Phone" "short" || true) | grep -c '^error:' >/dev/null || fail "a short password is refused"
+(run set "$(printf 'x%.0s' $(seq 33))" "longenough" || true) | grep -c '^error:' >/dev/null || fail "a 33-character name is refused"
 grep -q 'connection modify' "$log" && fail "nothing is written while a value is refused"
 out=$(run set "Cafe" "newpassword1")
-echo "$out" | grep -q '^ok: hotspot restarted' || fail "a change on a running hotspot restarts it: $out"
+echo "$out" | grep -c '^ok: hotspot restarted' >/dev/null || fail "a change on a running hotspot restarts it: $out"
 grep -q 'nmcli connection modify Hotspot 802-11-wireless.ssid Cafe 802-11-wireless-security.psk newpassword1' "$log" || fail "the change goes to the connection"
 grep -q 'nmcli connection up Hotspot' "$log" || fail "the running hotspot is brought up again"
 [[ ! -e $tmp/run/omamobile-hotspot/wifi-qr.png ]] || fail "the old QR code is dropped after a change"
 s=$(run state); [[ $(echo "$s" | field ssid) == Cafe ]] || fail "the state shows the new name"
 rm "$tmp/active"; : >"$log"
-run set "Cafe" "newpassword2" | grep -q '^ok: saved' || fail "a change on a stopped hotspot only saves"
+run set "Cafe" "newpassword2" | grep -c '^ok: saved' >/dev/null || fail "a change on a stopped hotspot only saves"
 grep -q 'connection up' "$log" && fail "a stopped hotspot is not started by a change"
 pass "hotspot-panel.sh: name and password changes"
 
 # ---- the VPN boxes are refused with NetworkManager
-run share on | grep -q '^error:' || fail "Share VPN is refused with NetworkManager's hotspot"
-run alltraffic on | grep -q '^error:' || fail "Route all traffic is refused with NetworkManager's hotspot"
+run share on | grep -c '^error:' >/dev/null || fail "Share VPN is refused with NetworkManager's hotspot"
+run alltraffic on | grep -c '^error:' >/dev/null || fail "Route all traffic is refused with NetworkManager's hotspot"
 pass "hotspot-panel.sh: no VPN boxes with NetworkManager"
 
 # ---- no qrencode: the page gets no code, everything else as before
@@ -102,15 +106,15 @@ case $1 in
 esac
 EOF
 chmod +x "$tmp/home/.config/omamobile/hotspot-backend"
-printf '#!/bin/sh\necho "qrencode $* $(cat)" >>%s; for a in "$@"; do [ "$prev" = -o ] && : >"$a"; prev=$a; done\n' "$log" >"$fake/qrencode"; chmod +x "$fake/qrencode"
+stub qrencode "$qrencode_fake"
 own() { env -i HOME="$tmp/home" XDG_RUNTIME_DIR="$tmp/run" PATH="$fake:$basic" LOG="$log" bash "$script" "$@"; }
 s=$(own state)
 [[ $(echo "$s" | field backend) == own && $(echo "$s" | field share_available) == true ]] || fail "the device's backend answers the state"
 [[ $(echo "$s" | field qr) == "$tmp/run/omamobile-hotspot/wifi-qr.png" ]] || fail "the QR code is added to the backend's state"
-grep -q 'S:Own;P:ownpassword' "$log" || fail "the code is drawn from the backend's name and password"
+grep -q '^qrencode stdin: WIFI:.*S:Own;P:ownpassword' "$log" || fail "the code is drawn from the backend's name and password"
 [[ $(echo "$s" | field uplink_note) == "Shares mobile data only." ]] || fail "the backend's uplink note is passed through"
-own set "Own" "ownpassword" | grep -q '^ok: own set' || fail "set goes to the device's backend"
-own share on | grep -q '^ok' && grep -q 'backend share on' "$log" || fail "share goes to the device's backend"
-own alltraffic off | grep -q '^ok' && grep -q 'backend alltraffic off' "$log" || fail "alltraffic goes to the device's backend"
-(own set "Own" "short" || true) | grep -q '^error:' || fail "the checks run before any backend"
+own set "Own" "ownpassword" | grep -c '^ok: own set' >/dev/null || fail "set goes to the device's backend"
+own share on | grep -c '^ok' >/dev/null && grep -q 'backend share on' "$log" || fail "share goes to the device's backend"
+own alltraffic off | grep -c '^ok' >/dev/null && grep -q 'backend alltraffic off' "$log" || fail "alltraffic goes to the device's backend"
+(own set "Own" "short" || true) | grep -c '^error:' >/dev/null || fail "the checks run before any backend"
 pass "hotspot-panel.sh: a device's own backend"
