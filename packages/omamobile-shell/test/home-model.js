@@ -694,6 +694,64 @@ test("a job that waited while hidden runs when shown only if overdue", () => {
   assert.strictEqual(M.overdue(1000, 900000, 901000), true)
 })
 
+test("Back on the home screen: a sheet, then edit mode, then the home page", () => {
+  assert.strictEqual(M.backLevel("widgets", true, 2, 0), "sheet")
+  assert.strictEqual(M.backLevel("", true, 2, 0), "edit")
+  assert.strictEqual(M.backLevel("", false, 2, 0), "page")
+  assert.strictEqual(M.backLevel("", false, 0, 1), "page", "the home page needn't be the first")
+  assert.strictEqual(M.backLevel("", false, 1, 1), "", "at rest: Back isn't the home screen's")
+  assert.strictEqual(M.backLevel("", false, undefined, 0), "")
+})
+
+test("Back from a sheet goes one sheet back, and asks about unsaved settings", () => {
+  assert.strictEqual(M.sheetBack("widgets", false, false), "")
+  assert.strictEqual(M.sheetBack("apps", false, false), "")
+  assert.strictEqual(M.sheetBack("pages", false, false), "")
+  assert.strictEqual(M.sheetBack("create", false, false), "widgets", "as its Back button")
+  assert.strictEqual(M.sheetBack("owl-store", false, false), "widgets", "as its Back button")
+  assert.strictEqual(M.sheetBack("owl-approve", false, false), "widgets", "as Not now, for a widget not placed yet")
+  assert.strictEqual(M.sheetBack("owl-approve", false, true), "", "as Not now, for a placed one")
+  assert.strictEqual(M.sheetBack("settings", false, false), "", "nothing changed: no question")
+  assert.strictEqual(M.sheetBack("settings", true, false), "ask")
+  assert.strictEqual(M.sheetBack("settings", true, true), "ask", "it keeps asking; only a button discards")
+  assert.strictEqual(M.sheetBack("widgets", true, false), "", "unsaved settings are the settings sheet's only")
+})
+
+test("settings are unsaved only when an edit differs from what the widget has", () => {
+  assert.strictEqual(M.settingsChanged({}, { text: "milk" }), false)
+  assert.strictEqual(M.settingsChanged(undefined, undefined), false)
+  assert.strictEqual(M.settingsChanged({ text: "milk, eggs" }, { text: "milk" }), true)
+  assert.strictEqual(M.settingsChanged({ text: "milk" }, { text: "milk" }), false, "typed back to what it was")
+  assert.strictEqual(M.settingsChanged({ text: "" }, {}), false, "a field emptied that was never set")
+  assert.strictEqual(M.settingsChanged({ interval: "30" }, { interval: 30 }), false, "a number typed as it was")
+  assert.strictEqual(M.settingsChanged({ enabled: false }, { enabled: true }), true)
+  assert.strictEqual(M.settingsChanged({ place: "Oslo", units: "metric" }, { place: "Oslo", units: "metric" }), false)
+  assert.strictEqual(M.settingsChanged({ place: "Oslo", units: "imperial" }, { place: "Oslo", units: "metric" }), true)
+})
+
+test("Back is the home screen's only with nothing open over it", () => {
+  let over = {}
+  for (const ns of M.BACK_FURNITURE) over = M.overAfter(over, "openlayer", ns)
+  assert.deepStrictEqual(over, {}, "the bar, the dock, the pill, toasts and the keyboard are part of the screen")
+  over = M.overAfter(over, "openlayer", "omamobile-quicksettings")
+  assert.deepStrictEqual(over, { "omamobile-quicksettings": 1 })
+  over = M.overAfter(over, "openlayer", "omarchy-menu")
+  over = M.overAfter(over, "openlayer", "some-surface-nobody-listed")
+  assert.strictEqual(Object.keys(over).length, 3, "an unknown surface counts: Back is left to it")
+  assert.strictEqual(M.homeTakesBack(true, "page", over), false)
+  over = M.overAfter(over, "closelayer", "omamobile-quicksettings")
+  over = M.overAfter(over, "closelayer", "omarchy-menu")
+  over = M.overAfter(over, "closelayer", "some-surface-nobody-listed")
+  assert.deepStrictEqual(over, {})
+  assert.deepStrictEqual(M.overAfter(over, "closelayer", "omarchy-polkit"), {}, "a close without its open isn't counted")
+  assert.strictEqual(M.overAfter(over, "openwindow", "omarchy-menu"), over)
+  assert.strictEqual(M.overAfter(over, "openlayer", ""), over)
+  assert.strictEqual(M.homeTakesBack(true, "page", over), true)
+  assert.strictEqual(M.homeTakesBack(true, "", over), false, "at rest")
+  assert.strictEqual(M.homeTakesBack(false, "edit", over), false, "under an app or the drawer")
+  assert.strictEqual(M.homeTakesBack(true, "sheet", undefined), true)
+})
+
 let failed = 0
 for (const [name, fn] of tests) {
   try { fn(); console.log("ok - home model: " + name) } catch (e) { failed++; console.log("not ok - home model: " + name + "\n  " + (e.stack || e)) }
