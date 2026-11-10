@@ -325,6 +325,26 @@ reached "modem OK: CP ONLINE", registered at home on LTE; its stop at
 `systemctl reboot` was confirmed. What the start does without the PHY's
 driver wasn't tried on the palmtop.
 
+**One unclean end the same evening, not explained (2026-11-09, 20:35 MST).**
+Of the thirteen `systemctl reboot`s with the modem up on 11-08 and 11-09
+(six on the owner's kernel, seven on the published one), twelve logged the
+confirmed stop. One didn't: build #100 with the bring-up modules, the unit
+started by hand with `systemctl start omamobile-tegu-modem-boot` 2 minutes
+40 s earlier, then `systemctl mask`, `sync`, `systemctl reboot`. That boot's
+journal ends at logind's "System is rebooting." with no stop line, the next
+boot's kernel started 61 s later (a clean one takes about 20 s), and the
+latch was still there, so the shutdown ended abruptly before the stop was
+recorded. The latch did what it is for: the next boot with the unit on
+logged "ended without a clean stop ... starting the modem again", kept the
+copy, started the modem, and the confirmed stop after that removed both.
+The console of the failed shutdown is lost: my next step was a kernel push
+22 s into the following boot, and that boot's console replaced it in
+`/var/lib/systemd/pstore`. The same sequence run again an hour later (hand
+start, 160 s, mask, sync, reboot) stopped cleanly in 23 s. So: one in
+thirteen, cause unknown, not reproduced in one repeat. After a reboot that
+takes a minute or leaves no stop line, copy `/var/lib/systemd/pstore` before
+anything else.
+
 Qualification, attended and on the charger: boot to ONLINE, data and texts;
 the inhibitor; NV and UFS unchanged; then shutdown and reboot on their own.
 Suspend with the CP on needs its own tests, with NFC polling stopped, and
