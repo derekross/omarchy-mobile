@@ -380,11 +380,11 @@ tools/phone-ssh 'systemctl start waydroid-container; sleep 5; systemctl --no-pag
 # is "inaccessible or not found" (rc=127), which looks like a refusal.
 tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
   "export PATH=/system/bin:\$PATH; toybox mknod /dev/omtest b 7 0; echo mknod_rc=\$?; toybox head -c 1 /dev/omtest > /dev/null; echo head_rc=\$?; toybox rm -f /dev/omtest"'
-# The character side: 1:1 is /dev/mem, which no allow line lists. mknod only,
+# The character side: major 1, minor 1 is /dev/mem (toybox takes MAJOR MINOR as two words; `c 1:1` is a usage error, not a refusal), which no allow line lists. mknod only,
 # never read or open the node: if the rule ever failed, reading /dev/mem could
 # crash the phone.
 tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
-  "export PATH=/system/bin:\$PATH; toybox mknod /dev/omtest2 c 1:1; echo mknod2_rc=\$?; toybox rm -f /dev/omtest2"'
+  "export PATH=/system/bin:\$PATH; toybox mknod /dev/omtest2 c 1 1; echo mknod2_rc=\$?; toybox rm -f /dev/omtest2"'
 tools/phone-ssh 'lxc-attach -P /var/lib/waydroid/lxc -n waydroid -- /system/bin/sh -c \
   "export PATH=/system/bin:\$PATH; toybox ls /sys/kernel/debug /dev | toybox head"'
 ```
@@ -396,11 +396,11 @@ starts with a session, run them after W5's session start instead.
   `binder`, `vndbinder`, `hwbinder` in `/dev/binderfs`; `toybox mknod`
   prints `mknod: /dev/omtest: Operation not permitted` (that line is the pass
   condition, not a nonzero rc: a missing command also gives one), and so
-  does `toybox mknod /dev/omtest2 c 1:1` (`mknod: /dev/omtest2: Operation not
+  does `toybox mknod /dev/omtest2 c 1 1` (`mknod: /dev/omtest2: Operation not
   permitted`);
   `/sys/kernel/debug` empty or
   missing inside; no `video*` or `fb*` in the container's `/dev`.
-- **Stop:** the block read succeeds, or `mknod /dev/omtest2 c 1:1` succeeds
+- **Stop:** the block read succeeds, or `mknod /dev/omtest2 c 1 1` succeeds
   (stop the container at once and fix the device rule before anything else;
   never read `/omtest2`); any oops; any
   `ufshcd_err_handler`; binder errors repeating in dmesg.
