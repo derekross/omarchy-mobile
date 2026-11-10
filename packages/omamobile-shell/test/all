@@ -574,7 +574,12 @@ bash -n plugins/omamobile.home/locate.sh || fail "locate.sh parses"
 loc=$(mktemp -d)
 printf '#!/bin/sh\nprintf "New location:\\nLatitude:    52.520008\\302\\260\\nLongitude:   -13.404954\\302\\260\\nAccuracy:    25000.000000 meters\\n"\n' >"$loc/wai"
 printf '#!/bin/sh\necho "Failed to connect to GeoClue service"\n' >"$loc/none"
-chmod +x "$loc/wai" "$loc/none"
+# As GeoClue's client library behaves: with GTK_USE_PORTAL set it asks the
+# portal, which refuses (the session sets it; found on the 7 Pro 2026-11-10)
+printf '#!/bin/sh\n[ -n "$GTK_USE_PORTAL" ] && { echo "Failed to connect to GeoClue2 service: Location services disabled"; exit 255; }\nexec "%s"\n' "$loc/wai" >"$loc/portal"
+chmod +x "$loc/wai" "$loc/none" "$loc/portal"
+[[ $(GTK_USE_PORTAL=1 XDG_CACHE_HOME=$loc/p OMAMOBILE_WHERE_AM_I=$loc/portal bash plugins/omamobile.home/locate.sh) == '{"lat":52.52,'* ]] \
+  || fail "locate.sh asks GeoClue itself, not the portal, in a session that sets GTK_USE_PORTAL"
 [[ $(XDG_CACHE_HOME=$loc/c OMAMOBILE_WHERE_AM_I=$loc/wai bash plugins/omamobile.home/locate.sh) == '{"lat":52.52,"lon":-13.40,"accuracy":25000,"at":'* ]] \
   || fail "locate.sh rounds GeoClue's position to 0.01 degree"
 [[ $(XDG_CACHE_HOME=$loc/c OMAMOBILE_WHERE_AM_I=$loc/none bash plugins/omamobile.home/locate.sh) == '{"lat":52.52,'* ]] \
