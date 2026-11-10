@@ -1,0 +1,20 @@
+# Idle: activity that ends an idle cycle wakes a locked display through the
+# lock (the wake IPC from 0009), so its blank timer runs again. Lit by
+# omarchy-system-wake alone, the panel stayed on behind the lock until the
+# next unlock: a day of a lit screen on the phone.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0007.
+diff --git i/shell/plugins/services/idle/Service.qml w/shell/plugins/services/idle/Service.qml
+--- i/shell/plugins/services/idle/Service.qml
++++ w/shell/plugins/services/idle/Service.qml
+@@ -119,7 +119,9 @@
+     lockTimer.stop()
+     screensaverLaunchGraceTimer.stop()
+ 
+-    if (root.idledThisCycle) runProcess(wakeProcess, "wake", "omarchy-system-wake")
++    // A locked display is lit through the lock, which re-arms its blank timer;
++    // lit here alone, it stayed on behind the lock until the next unlock.
++    if (root.idledThisCycle) runProcess(wakeProcess, "wake", "[[ $(omarchy-shell lock wake 2>/dev/null) == ok ]] || omarchy-system-wake")
+ 
+     root.idledThisCycle = false
+     root.screensaverStartedThisCycle = false

@@ -5,11 +5,15 @@
 # carrier (TELEPHONY-APPS-PLAN §3.3) that is the warning that it doesn't
 # work yet, never a dialpad. The lock stays as it is.
 #
-# Against Omarchy 4.0.6 (edge 4.0.6-1), after 0003 and 0011.
+# Omarchy 4.5 port: the same button, after the 4.5 ports of 0003 and 0011.
+# 4.5's "shell call" IPC (shell.qml callIfLoaded) still reaches a loaded
+# panel plugin by id, so the call is unchanged; it does nothing when
+# omamobile.call is not loaded, as before.
+
 diff --git i/shell/plugins/lock/LockView.qml w/shell/plugins/lock/LockView.qml
 --- i/shell/plugins/lock/LockView.qml
 +++ w/shell/plugins/lock/LockView.qml
-@@ -374,5 +374,42 @@
+@@ -436,5 +436,42 @@
        wrapMode: Text.WordWrap
        horizontalAlignment: Text.AlignHCenter
      }

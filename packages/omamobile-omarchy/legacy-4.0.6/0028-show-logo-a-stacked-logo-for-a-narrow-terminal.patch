@@ -1,0 +1,60 @@
+# Install terminals: a stacked logo for a terminal narrower than the logo.
+# omarchy-launch-floating-terminal-with-presentation starts every install
+# and setup screen (Install > AI > Dictation, the security setups, plugin
+# add) with omarchy-show-logo, and logo.txt is 81 columns wide. A phone held
+# upright fits about 66 at Omarchy's terminal font size, so the logo wrapped
+# into a screen of broken blocks above the install's first question. A
+# terminal too narrow for it now gets the same wordmark stacked on two lines
+# (logo-narrow.txt, 48 columns), and one too narrow for that gets none. The
+# width is read from the terminal itself (stty on /dev/tty), so a desktop
+# terminal, or a run without one, shows the wide logo as before. Candidate
+# for upstream Omarchy.
+#
+# Against Omarchy 4.0.6 (4.0.6-1).
+diff --git i/bin/omarchy-show-logo w/bin/omarchy-show-logo
+--- i/bin/omarchy-show-logo
++++ w/bin/omarchy-show-logo
+@@ -3,7 +3,18 @@
+ # omarchy:summary=Display the Omarchy logo in the terminal using green color.
+ 
+ clear
++# A terminal narrower than the logo (a phone held upright) gets the logo
++# stacked on two lines, and one narrower still gets none, rather than a logo
++# that wraps into noise.
++logo=$OMARCHY_PATH/logo.txt
++columns=$(stty size 2>/dev/null </dev/tty) && columns=${columns#* } || columns=
++if [[ $columns =~ ^[0-9]+$ ]] && (( $(LC_ALL=C.UTF-8 wc -L <"$logo") > columns )); then
++  logo=$OMARCHY_PATH/logo-narrow.txt
++  if [[ ! -f $logo ]] || (( $(LC_ALL=C.UTF-8 wc -L <"$logo") > columns )); then
++    logo=
++  fi
++fi
+ echo -e "\033[32m"
+-cat <$OMARCHY_PATH/logo.txt
++[[ -n $logo ]] && cat <"$logo"
+ echo -e "\033[0m"
+ echo
+diff --git i/logo-narrow.txt w/logo-narrow.txt
+new file mode 100644
+--- /dev/null
++++ w/logo-narrow.txt
+@@ -0,0 +1,19 @@
++                 ▄▄▄
++ ▄█████▄    ▄███████████▄    ▄███████   ▄███████
++███   ███  ███   ███   ███  ███   ███  ███   ███
++███   ███  ███   ███   ███  ███   ███  ███   ███
++███   ███  ███   ███   ███ ▄███▄▄▄███ ▄███▄▄▄██▀
++███   ███  ███   ███   ███ ▀███▀▀▀███ ▀███▀▀▀▀
++███   ███  ███   ███   ███  ███   ███ ██████████
++███   ███  ███   ███   ███  ███   ███  ███   ███
++ ▀█████▀    ▀█   ███   █▀   ███   █▀   ███   ███
++                                       ███   █▀
++
++         ▄███████   ▄█   █▄    ▄█   █▄
++        ███   ███  ███   ███  ███   ███
++        ███   █▀   ███   ███  ███   ███
++        ███       ▄███▄▄▄███▄ ███▄▄▄███
++        ███      ▀▀███▀▀▀███  ▀▀▀▀▀▀███
++        ███   █▄   ███   ███  ▄██   ███
++        ███   ███  ███   ███  ███   ███
++        ███████▀   ███   █▀    ▀█████▀

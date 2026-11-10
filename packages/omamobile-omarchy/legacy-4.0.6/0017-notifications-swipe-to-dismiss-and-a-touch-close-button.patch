@@ -1,0 +1,261 @@
+# Notifications: swipe to dismiss, and a close button on touch screens. On a
+# touch screen a tap runs the toast's default action and there is no right
+# button, so a toast could only be got rid of by letting it launch something,
+# and a critical one (Omarchy's first-run invitations) never expires. A
+# sideways swipe now moves the card with the finger: let go past 35% of its
+# width, or flick it, and it flies off that side and closes as a right-click
+# does; short of that it springs back. The drag starts only past a threshold,
+# so a tap still runs the default action, and it is off while a reply is
+# being typed. When Hyprland lists a touch screen, each toast also gets a
+# close glyph with a 44 px target in its top-right corner; a seat with only a
+# mouse shows none, so desktops look as before. Hover pauses the countdown
+# for a mouse or stylus only (a finger doesn't hover), and a card being
+# swiped doesn't expire under the finger. Right-click still closes.
+#
+# Against Omarchy 4.0.6 (edge 4.0.6-1) with 0015 (inline reply) applied.
+diff --git i/shell/plugins/notifications/Service.qml w/shell/plugins/notifications/Service.qml
+--- i/shell/plugins/notifications/Service.qml
++++ w/shell/plugins/notifications/Service.qml
+@@ -455,6 +455,29 @@
+ 
+   Process { id: focusAppProc; running: false }
+ 
++  // Whether the seat has a touch screen, asked of Hyprland once at startup.
++  // Toasts then show a close button: a tap runs the default action, and a
++  // finger has no right button to dismiss with. A seat with only a mouse
++  // keeps the toasts as they were.
++  property bool touchScreen: false
++
++  Process {
++    id: touchScreenProc
++    command: ["hyprctl", "-j", "devices"]
++    running: false
++    stdout: StdioCollector {
++      waitForEnd: true
++      onStreamFinished: {
++        try {
++          var touch = JSON.parse(text || "{}").touch
++          service.touchScreen = Array.isArray(touch) && touch.length > 0
++        } catch (e) {
++          service.touchScreen = false
++        }
++      }
++    }
++  }
++
+   Process {
+     id: ensureDirsProc
+     command: ["mkdir", "-p", service.stateDir, service.popupStateDir, service.historyDir, service.imagesDir]
+@@ -880,6 +903,7 @@
+ 
+   Component.onCompleted: {
+     ensureDirsProc.running = true
++    touchScreenProc.running = true
+     // Once mkdir has had a tick, load the existing settings file. FileView
+     // surfaces an empty string when the file doesn't exist; loadSettings
+     // handles that path.
+@@ -1061,7 +1085,7 @@
+ 
+             readonly property real lifetime: service.durationFor(cardSlot.urgency, cardSlot.expireTimeout)
+             property real remainingLifetime: 1.0
+-            readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered && !cardSlot.replying
++            readonly property bool ticking: cardSlot.lifetime > 0 && !card.held && !cardSlot.replying
+ 
+             // Inline reply. The placeholder is looked up again whenever the
+             // row's content changes, as an update can add or drop the action.
+@@ -1115,6 +1139,7 @@
+ 
+               replyPlaceholder: cardSlot.replyPlaceholder
+               replying: cardSlot.replying
++              closeButtonShown: service.touchScreen
+ 
+               onCloseRequested: service.dismissPopup(cardSlot.index)
+               onCardClicked: service.invokePopupDefault(cardSlot.index)
+diff --git i/shell/plugins/notifications/components/NotificationCard.qml w/shell/plugins/notifications/components/NotificationCard.qml
+--- i/shell/plugins/notifications/components/NotificationCard.qml
++++ w/shell/plugins/notifications/components/NotificationCard.qml
+@@ -32,6 +32,22 @@
+   property string fontFamily: ""
+ 
+   readonly property bool hovered: hoverTracker.hovered
++  // The card is under the user's hand: a mouse over it, or a finger
++  // swiping it. The popup container pauses the countdown meanwhile.
++  readonly property bool held: hovered || swipeHandler.active
++
++  // Touch: a horizontal swipe dismisses (swipeEnabled), and a close button
++  // shows in the top-right corner (closeButtonShown), as a tap runs the
++  // default action and a touch screen has no right button. The container
++  // shows the button when the seat has a touch screen, so a mouse-only
++  // desktop looks and behaves as before.
++  property bool swipeEnabled: true
++  property bool closeButtonShown: false
++  // How far the card has been swiped sideways, in pixels.
++  property real swipeOffset: 0
++  // Release speed of the last swipe, pixels per second.
++  property real swipeVelocity: 0
++  property bool dismissing: false
+ 
+   // Inline reply (the freedesktop `inline-reply` action): the popup container
+   // sets the sender's placeholder text while the live notification takes a
+@@ -77,6 +93,23 @@
+   readonly property color accentColor: urgency === 2 ? Commons.Color.urgent : (urgency === 0 ? dimColor : Commons.Color.notifications.countdown)
+   readonly property var cardBorderSpec: Border.surfaceSpec("notifications", "border", Commons.Color.notifications.border, Math.max(1, Style.space(2)))
+ 
++  // A swipe ends: past 35% of the width, or flicked fast enough the same
++  // way, the card flies off that side and closes; otherwise it springs back.
++  function finishSwipe() {
++    var distance = Math.abs(root.swipeOffset)
++    var sameWay = root.swipeVelocity * root.swipeOffset > 0
++    var flung = sameWay && Math.abs(root.swipeVelocity) >= Style.space(900) && distance >= root.width * 0.1
++    if (root.width > 0 && (distance >= root.width * 0.35 || flung)) {
++      root.dismissing = true
++      swipeAnimation.to = (root.swipeOffset < 0 ? -1 : 1) * (root.width + Style.space(24))
++      swipeAnimation.dismiss = true
++    } else {
++      swipeAnimation.to = 0
++      swipeAnimation.dismiss = false
++    }
++    swipeAnimation.restart()
++  }
++
+   function sanitizeBody(s) {
+     return NotificationLogic.sanitizeBody(s, app, appIcon)
+   }
+@@ -92,13 +125,23 @@
+   implicitWidth: Style.space(380)
+   // Add vertical border insets so mainColumn (inset by border on top/left/right)
+   // doesn't push content under the bottom edge.
+-  implicitHeight: mainColumn.implicitHeight + borderTop + borderBottom
++  implicitHeight: Math.max(mainColumn.implicitHeight, closeButtonShown ? closeButton.height : 0) + borderTop + borderBottom
+   radius: cornerRadius
+   color: Commons.Color.notifications.background
+   borderSpec: cardBorderSpec
+   clip: true
+ 
+-  HoverHandler { id: hoverTracker }
++  // The swipe moves the card sideways and fades it as it goes.
++  transform: Translate { x: root.swipeOffset }
++  opacity: 1 - 0.6 * Math.min(1, Math.abs(root.swipeOffset) / Math.max(1, root.width))
++
++  // A mouse or stylus resting on the card pauses its countdown. A finger
++  // doesn't hover, so touch is left out: a toast that was touched must not
++  // count as hovered and stop expiring.
++  HoverHandler {
++    id: hoverTracker
++    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
++  }
+ 
+   MouseArea {
+     anchors.fill: parent
+@@ -115,6 +158,61 @@
+     }
+   }
+ 
++  // Swipe to dismiss. Only sideways movement past the threshold starts it,
++  // so a tap still runs the default action and a right-click still closes.
++  // Off while a reply is being typed, so selecting text can't throw the
++  // reply away.
++  DragHandler {
++    id: swipeHandler
++    target: null
++    yAxis.enabled: false
++    dragThreshold: Style.space(12)
++    enabled: root.swipeEnabled && !root.replying && !root.dismissing
++    onActiveChanged: {
++      if (active) {
++        swipeAnimation.stop()
++        root.swipeVelocity = 0
++      } else {
++        root.finishSwipe()
++      }
++    }
++    onActiveTranslationChanged: {
++      if (!active) return
++      root.swipeOffset = activeTranslation.x
++      root.swipeVelocity = centroid.velocity.x
++    }
++  }
++
++  SequentialAnimation {
++    id: swipeAnimation
++    property real to: 0
++    property bool dismiss: false
++    NumberAnimation {
++      target: root
++      property: "swipeOffset"
++      to: swipeAnimation.to
++      duration: swipeAnimation.dismiss ? 140 : 200
++      easing.type: swipeAnimation.dismiss ? Easing.InQuad : Easing.OutBack
++    }
++    ScriptAction {
++      script: {
++        if (!swipeAnimation.dismiss) return
++        root.closeRequested()
++        // A container that keeps the card (nothing removes it) gets it back.
++        swipeResetTimer.restart()
++      }
++    }
++  }
++
++  Timer {
++    id: swipeResetTimer
++    interval: 400
++    onTriggered: {
++      root.dismissing = false
++      root.swipeOffset = 0
++    }
++  }
++
+   ColumnLayout {
+     id: mainColumn
+     // Inset by the card border so the content doesn't paint over the card's
+@@ -131,7 +229,8 @@
+     RowLayout {
+       Layout.fillWidth: true
+       Layout.leftMargin: Style.space(12)
+-      Layout.rightMargin: Style.space(12)
++      // Text stays clear of the close button's touch target.
++      Layout.rightMargin: root.closeButtonShown ? closeButton.width : Style.space(12)
+       Layout.topMargin: root.singleLineToast ? Style.space(7) : Style.space(10)
+       Layout.bottomMargin: root.singleLineToast ? Style.space(7) : Style.space(10)
+       spacing: root.collapseRedundantIcon ? 0 : (root.compactGlyph ? Style.space(8) : Style.space(12))
+@@ -268,4 +367,39 @@
+     }
+   }
+ 
++  // Close button: a small glyph with a 44 px touch target in the top-right
++  // corner, inside the border.
++  MouseArea {
++    id: closeButton
++    objectName: "notificationCloseButton"
++    visible: root.closeButtonShown
++    anchors.top: parent.top
++    anchors.right: parent.right
++    anchors.topMargin: root.borderTop
++    anchors.rightMargin: root.borderRight
++    width: Style.space(44)
++    height: Style.space(44)
++    cursorShape: Qt.PointingHandCursor
++    Accessible.role: Accessible.Button
++    Accessible.name: "Dismiss notification"
++    onClicked: root.closeRequested()
++
++    Rectangle {
++      anchors.centerIn: parent
++      width: Style.space(28)
++      height: width
++      radius: width / 2
++      color: Commons.Color.notifications.text
++      opacity: closeButton.pressed ? 0.18 : 0
++    }
++
++    Text {
++      textFormat: Text.PlainText
++      anchors.centerIn: parent
++      text: "󰅖"
++      color: root.dimColor
++      font.family: root.fontFamily
++      font.pixelSize: Style.font.icon
++    }
++  }
+ }

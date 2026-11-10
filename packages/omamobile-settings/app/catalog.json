@@ -1,0 +1,18 @@
+{
+  "root": {
+    "title": "Settings",
+    "rows": [
+      {
+        "id": "about",
+        "title": "About this device",
+        "detail": "System, software and storage",
+        "icon": "system",
+        "page": "about"
+      }
+    ]
+  },
+  "about": {
+    "title": "About this device",
+    "rows": []
+  }
+}

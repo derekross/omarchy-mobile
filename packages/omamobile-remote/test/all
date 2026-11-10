@@ -17,6 +17,10 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/noproc"
 export OMAMOBILE_REMOTE_PROC=$tmp/noproc
 
+# --- the printed version matches the version file
+check "omamobile-remote version prints the version file" \
+  test "$(bin/omamobile-remote version)" = "omamobile-remote $(cat version)"
+
 # --- the scripts parse
 for f in bin/* install test/all test/fake/*; do
   if [[ $(head -n1 "$f") == '#!/bin/bash' ]]; then
@@ -96,7 +100,7 @@ check "osk box prints the layer rectangle" bash -c '[[ $(omamobile-remote osk bo
 check "locked exits 0 when locked" $R locked
 touch "$FAKE_STATE/shell-broken"
 check "locked exits 2 (not 1) when the lock state cannot be read" bash -c 'omamobile-remote locked >/dev/null 2>&1; [[ $? == 2 ]]'
-check "unlock does not claim success when the lock state cannot be read" bash -c 'OMAMOBILE_PIN=4321 omamobile-remote unlock 2>&1 | grep -q "cannot read the lock state" && ! OMAMOBILE_PIN=4321 omamobile-remote unlock >/dev/null 2>&1'
+check "unlock does not claim success when the lock state cannot be read" bash -c 'OMAMOBILE_PIN=4321 omamobile-remote unlock 2>&1 | grep -c "cannot read the lock state" >/dev/null && ! OMAMOBILE_PIN=4321 omamobile-remote unlock >/dev/null 2>&1'
 rm -f "$FAKE_STATE/shell-broken"
 check "OMARCHY_PATH falls back to /usr/share/omarchy when no shell is found" bash -c 'unset OMARCHY_PATH; omamobile-remote locked'
 mkdir -p "$tmp/proc/4242"
@@ -113,13 +117,17 @@ echo true > "$FAKE_STATE/locked"
 OMAMOBILE_PIN=$FAKE_PIN $R unlock >/dev/null
 check "unlock with the right PIN unlocks" bash -c '[[ $(cat "$FAKE_STATE/locked") == false ]]'
 echo true > "$FAKE_STATE/locked"; touch "$FAKE_STATE/unlock-on-return"; : > "$FAKE_LOG"
-out=$(OMAMOBILE_PIN=$FAKE_PIN $R unlock); rc=$?
+rc=0; out=$(OMAMOBILE_PIN=$FAKE_PIN $R unlock) || rc=$?
 rm -f "$FAKE_STATE/unlock-on-return"
 check "unlock stops without typing when the phone got unlocked after the first Return" bash -c "[[ $rc == 0 ]] && grep -q 'before the PIN' <<<'$out' && ! grep -q 'wtype - ' '$FAKE_LOG'"
+echo true > "$FAKE_STATE/locked"; echo 0 > "$FAKE_STATE/dpms"; touch "$FAKE_STATE/unlock-on-wake"; : > "$FAKE_LOG"
+rc=0; out=$(OMAMOBILE_PIN=$FAKE_PIN $R unlock) || rc=$?
+rm -f "$FAKE_STATE/unlock-on-wake"; echo 1 > "$FAKE_STATE/dpms"
+check "unlock stops before the first Return when the phone got unlocked while waking" bash -c "[[ $rc == 0 ]] && grep -q 'before the first Return' <<<'$out' && ! grep -q 'wtype -k Return' '$FAKE_LOG'"
 check "locked exits 1 when unlocked" bash -c '! omamobile-remote locked'
 check "the PIN is in no log, no journal line and no argument" bash -c '! grep -q "$FAKE_PIN" "$FAKE_LOG" "$FAKE_JOURNAL"'
-check "run does not pass the PIN on to what it starts" bash -c 'OMAMOBILE_PIN=$FAKE_PIN omamobile-remote run sh -c "echo [\${OMAMOBILE_PIN-unset}]" | grep -q "^\[unset\]$"'
-check "keep-awake does not pass the PIN on to its command" bash -c 'OMAMOBILE_PIN=$FAKE_PIN omamobile-remote keep-awake sh -c "echo [\${OMAMOBILE_PIN-unset}]" | grep -q "^\[unset\]$"'
+check "run does not pass the PIN on to what it starts" bash -c 'OMAMOBILE_PIN=$FAKE_PIN omamobile-remote run sh -c "echo [\${OMAMOBILE_PIN-unset}]" | grep -c "^\[unset\]$" >/dev/null'
+check "keep-awake does not pass the PIN on to its command" bash -c 'OMAMOBILE_PIN=$FAKE_PIN omamobile-remote keep-awake sh -c "echo [\${OMAMOBILE_PIN-unset}]" | grep -c "^\[unset\]$" >/dev/null'
 rm -f "$tmp/launched-env"; OMAMOBILE_PIN=97531 $R launch sh -c "env > '$tmp/launched-env'" >/dev/null; sleep 0.5
 check "launch does not pass the PIN on to the app" bash -c '[[ -s "$0" ]] && ! grep -q "OMAMOBILE_PIN\|97531" "$0"' "$tmp/launched-env"
 check "only command names reach the journal" bash -c '! grep -qE "echo hi|100|0000" "$FAKE_JOURNAL"'

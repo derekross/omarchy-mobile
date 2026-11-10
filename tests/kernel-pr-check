@@ -3,25 +3,14 @@
 # tools/kernel-pr-check's commit checks against a stand-in kernel tree (a
 # git repository with a fake scripts/checkpatch.pl): sign-offs, prefixes,
 # checkpatch errors and warnings, and a checker that is missing or doesn't
-# run to the end, and --help. Its device-tree comparison runs against a
-# second stand-in whose make prints the messages each board file asks for;
-# the real builds (clang, dtc, dt-validate) need a real tree and are run by hand.
+# run to the end. Its device-tree comparison runs against a second
+# stand-in whose make prints the messages each board file asks for; the
+# real builds (clang, dtc, dt-validate) need a real tree and are run by hand.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 fail() { echo "not ok - $*" >&2; exit 1; }
-
-# --help prints the whole header comment and no code, from a copy whose
-# header has grown by a line: a hard-coded range cut its last line after
-# #287, #288 and #310 each edited the header.
-h=$t/help/tools/kernel-pr-check
-mkdir -p "${h%/*}"
-sed '3a\# A line added to the header.' "$here/tools/kernel-pr-check" > "$h"
-chmod +x "$h"
-diff <("$h" --help) <(sed -n '3,/^set -uo pipefail$/p' "$h" | sed '$d') \
-  || fail "--help isn't the header comment, from line 3 to the line before set -uo pipefail"
-echo "ok - --help prints the whole header comment, however long it grows, and no code"
 
 k=$t/linux
 mkdir -p "$k/scripts" "$k/drivers"

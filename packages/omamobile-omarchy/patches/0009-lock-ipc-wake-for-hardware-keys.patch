@@ -3,11 +3,16 @@
 # phone's power button, through omamobile-keys).
 #
 # Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+#
+# Omarchy 4.5: rebased. The lock's IPC target (ShellIpc "lock") is
+# unchanged in 4.5. 4.5 keeps authentication services out of the shell's
+# service map (AuthServiceStore), so other code reaches the lock only over
+# this IPC, never as an object: this call is the supported way in.
+
 diff --git i/shell/plugins/lock/Service.qml w/shell/plugins/lock/Service.qml
-index ccd496a..113b40d 100644
 --- i/shell/plugins/lock/Service.qml
 +++ w/shell/plugins/lock/Service.qml
-@@ -848,6 +848,14 @@ Item {
+@@ -899,6 +899,14 @@
        return "ok"
      }
  
