@@ -8,8 +8,12 @@
 // clipboard.lua): no window target, so focused layer surfaces get it too, and
 // a key down then a key up 50 ms later, because send_shortcut sometimes left
 // the synthetic key held. One sh, so the up can't overtake the down.
-var ESCAPE_DOWN = 'hl.dsp.send_key_state({ mods = "", key = "Escape", state = "down" })'
-var ESCAPE_UP = 'hl.dsp.send_key_state({ mods = "", key = "Escape", state = "up" })'
+// The key goes by its code (9: Escape, evdev's KEY_ESC + 8), not its name:
+// Hyprland 0.57 answers a name with "send_key_state: key not found" (Pixel 7
+// Pro and 9a, 2026-11-10), so the gesture armed, ticked and sent nothing. A
+// code doesn't depend on the keyboard layout either.
+var ESCAPE_DOWN = 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "down" })'
+var ESCAPE_UP = 'hl.dsp.send_key_state({ mods = "", key = "code:9", state = "up" })'
 var ESCAPE_ARGV = ["sh", "-c", 'hyprctl dispatch "$1" >/dev/null; sleep 0.05; hyprctl dispatch "$2" >/dev/null',
                    "sh", ESCAPE_DOWN, ESCAPE_UP]
 
