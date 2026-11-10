@@ -150,7 +150,7 @@ fetch_images() {
   fi
   m=$(zip_member "$src" "android-info\.txt")
   if [[ -n "$m" && -z "$FORCE" ]]; then
-    unzip -p "$src" "$m" | grep -qE "^require board=(.*\|)?$DEVICE(\|.*)?\$" ||
+    unzip -p "$src" "$m" | grep -cE "^require board=(.*\|)?$DEVICE(\|.*)?\$" >/dev/null ||
       die "this image is not for $DEVICE (android-info.txt); use -f to override"
   fi
   for part in vendor system; do
@@ -339,7 +339,7 @@ done < <(find "$root" -type l)
 
 # Sanity checks: the TA is a signed Trusty app; the HAL is the Goodix one.
 ta=g7.app; [[ $DEVICE == tegu ]] && ta=g7a.app
-head -c 64 "$root/vendor/firmware/$ta" | grep -aq TrustyApp ||
+head -c 64 "$root/vendor/firmware/$ta" | grep -ac TrustyApp >/dev/null ||
   die "$ta does not look like a Trusty application package"
 grep -aq 'g7_trusty' "$root/vendor/bin/hw/android.hardware.biometrics.fingerprint-service.goodix" ||
   die "the fingerprint HAL is not the Goodix G7 one"

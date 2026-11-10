@@ -82,6 +82,8 @@ check(effect(all, "tag") ~= nil and effect(all, "tag"):find("-default-opacity", 
   "Omarchy's default-opacity tag is dropped")
 check(effect(all, "maximize") == true, "apps still fill the screen")
 check((config.misc or {}).exit_window_retains_fullscreen == true, "the next window takes the screen when one closes")
+check((config.misc or {}).key_press_enables_dpms == false, "a key press doesn't light the screen (omamobile-keys does)")
+check((config.misc or {}).mouse_move_enables_dpms == false, "a single touch doesn't light the screen (a double tap does)")
 check((config.quirks or {}).skip_non_kms_dmabuf_formats == false, "clients may use formats with alpha (Hyprland 0.57 default off)")
 check(config.general.layout == nil, "the layout stays Omarchy's dwindle")
 

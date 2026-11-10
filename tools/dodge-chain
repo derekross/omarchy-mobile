@@ -187,7 +187,7 @@ cmd_pack() {
   if [[ -z $MKBOOTIMG_PY ]]; then
     command -v mkbootimg >/dev/null || die "no mkbootimg.py under $ROOT/system/tools/mkbootimg or $SRC_DIR/system/tools/mkbootimg, and no mkbootimg on PATH"
   fi
-  local work="$CHAIN_OUT/chain" dl="${ALPINE_DL:-$HOME/android/downloads/alpine}" apk
+  local work="$CHAIN_OUT/chain" dl="${ALPINE_DL:-$HOME/android/downloads/alpine}" apk apks
   mkdir -p "$work/x" "$CHAIN_OUT/images" "$dl"
 
   say "Stage 2 DTB (options: ${DTB_OPTS:-none})"
@@ -208,8 +208,11 @@ cmd_pack() {
     || die "checksum mismatch for $tarball"
   rm -rf "$work/x" && mkdir -p "$work/x"
   tar -xzf "$dl/$tarball" -C "$work/x"
-  for apk in $(python3 -I "$ROOT/tools/alpine-fetch.py" "$ALPINE_VER" "$dl/apks" \
-      busybox-static kexec-tools); do
+  # Read whole before it is used: `for apk in $(…)` loses alpine-fetch.py's
+  # exit status and unpacks what it printed
+  apks=$(python3 -I "$ROOT/tools/alpine-fetch.py" "$ALPINE_VER" "$dl/apks" busybox-static kexec-tools) ||
+    die "tools/alpine-fetch.py failed for busybox-static and kexec-tools"
+  for apk in $apks; do
     tar -xzf "$apk" -C "$work/x" --exclude='.PKGINFO' --exclude='.SIGN.*' --exclude='.*.sh' \
       2>/dev/null || true
   done

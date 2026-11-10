@@ -3,9 +3,11 @@
 """Download Alpine aarch64 packages plus their dependencies, verifying checksums.
 
 Usage: alpine-fetch.py <alpine-version> <download-dir> <package>...
-Prints the paths of the downloaded .apk files.
+Prints the paths of the downloaded .apk files. Exits, before downloading or
+printing anything, if a package or a dependency has no package or provider in
+either index.
 """
-import base64, hashlib, io, sys, tarfile, urllib.request
+import base64, hashlib, io, re, sys, tarfile, urllib.request
 from pathlib import Path
 
 version, dest, wanted = sys.argv[1], Path(sys.argv[2]), sys.argv[3:]
@@ -29,14 +31,24 @@ for repo in repos:
 base = {"musl", "busybox", "busybox-binsh", "alpine-baselayout", "alpine-baselayout-data",
         "alpine-keys", "apk-tools", "ca-certificates-bundle", "libcrypto3", "libssl3",
         "ssl_client", "zlib", "scanelf", "musl-utils", "libc-utils", "alpine-release"}
-todo, seen = list(wanted), set()
+
+def requirement(dep):
+    """The name a D: entry needs (version constraint dropped), or None for a conflict (!name)."""
+    return None if dep.startswith("!") else re.split(r"[<>=~]", dep, maxsplit=1)[0]
+
+todo, seen, missing = [(w, "the command line") for w in wanted], set(), set()
 while todo:
-    name = todo.pop()
-    name = provides.get(name, name).lstrip("!")
-    if name in seen or name in base or name not in pkgs:
+    name, needed_by = todo.pop()
+    name = provides.get(name, name)
+    if name in seen or name in base:
+        continue
+    if name not in pkgs:
+        missing.add(f"{name} (needed by {needed_by})")
         continue
     seen.add(name)
-    todo += [d.split("=")[0].split(">")[0].split("<")[0] for d in pkgs[name].get("D", "").split()]
+    todo += [(d, name) for d in map(requirement, pkgs[name].get("D", "").split()) if d]
+if missing:
+    sys.exit("alpine-fetch: no package or provider in the index for " + ", ".join(sorted(missing)))
 
 for name in sorted(seen):
     p = pkgs[name]
