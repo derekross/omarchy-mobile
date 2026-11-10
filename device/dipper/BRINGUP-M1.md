@@ -1,7 +1,9 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Xiaomi Mi 8 (dipper): RAM-only first light
 
-**Status (2026-11-10):** boot image `0ee4f11d1973085c434e741a2e9dd73af5a9cd157296c25801ed5a92a6b9e9d9` booted by RAM on a Xiaomi Mi 8 using kernel/DTS PR #220 at `055a4019998f22cc0e2a8afef7650274a6ce0657`. The root was initramfs; all 85 UFS partition flags were read-only. The `sda` sysfs disk had `ro=0`, but its `/dev/sda` node was absent; `sdb`–`sdf` were read-only. The guard confirmed this state. `qcom_wdt` and its feeder ran, simpledrm registered `fb0`, USB/SSH worked, and `/proc/iomem` reserved `0x85fc0000–0x8a8fffff`, covering the former TZ range. `reboot-to bootloader` returned the phone to fastboot without UFS writes. Physical input events were not captured on this exact image. Full results are in [the notes PR #330].
+**Status (2026-11-10):** the combined #503/#505 non-NFS image `540b5d31ea73a31ade9a8d8cb5152cf701dc3c2ad8256734790b0ef2db6dbdd0` booted by RAM on the Xiaomi Mi 8 with kernel/DTS PR #220 at `055a4019998f22cc0e2a8afef7650274a6ce0657`. Its initramfs root had all 85 UFS partition flags at `ro=1`. `/sys/block/sda/ro` was `0`, but `/dev/sda` was absent; `sdb`–`sdf` were `ro=1`. The guard confirmed this state. `qcom_wdt` and its feeder ran, simpledrm registered `fb0`, USB/SSH worked, and `/proc/iomem` reserved `0x85fc0000–0x8a8fffff`, covering the former TZ range. The pinned rescue SSH key matched, and `reboot-to` returned the phone to fastboot. Physical input events were not captured on this exact image.
+
+A separate RAM NFS-root run used image `a2d435a7430e7e4c145c61cdb9866d16929731859d91c7105e6bfcaf9e3e9dd7` with the rebased #503 init. BusyBox `mount` switched to the test NFS root; all six disk flags and all 85 partition flags were `ro=1`. Systemd reached the multi-user target with `RuntimeWatchdogSec=60s`, and SSH remained available. `reboot-to bootloader` returned the phone to fastboot. The exported root was a generic Arch base; this did not test the Omarchy desktop or link-loss recovery. Full results are in [the notes PR #330].
 The FTS5 driver from [touch #219] is merged into linux-omarchy-mobile. The
 Dipper board DTS is under review in [DTS #220], and the EA8074 panel driver is
 under review in [panel #218].
@@ -110,7 +112,9 @@ repository; the SSH public key and generated host key stay in the local output.
   from `persist` with `debugfs` (read-only) before enabling that service; never
   mount `persist`.
 - The exact systemd journal line from the earlier failed `qcom_wdt` timeout
-  change was not retained; NFS root remains unverified.
+  change was not retained. The 2026-11-10 NFS test root reached systemd with
+  `RuntimeWatchdogSec=60s`; NFS link-loss recovery and the Omarchy desktop on
+  that root remain untested.
 - Test the FTS5 touchscreen changes and GPU rendering on the phone before
   marking them supported.
 
