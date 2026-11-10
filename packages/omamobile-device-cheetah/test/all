@@ -358,3 +358,10 @@ read -r a _ < "$tmp/g6/functions/ncm.usb0/host_addr"
 [[ $a == "02:00:00:00:00:a1" ]] || fail "without a marker the gadget is left alone"
 grep -q 'cannot write' "$tmp/usbmac.log" || fail "a marker that cannot be written is reported"
 pass "the USB gadget keeps one pair of addresses across boots, is put back together when anything fails, and a hang leaves a marker that keeps the next boot from repeating it"
+
+
+# Location's agent goes with its socket (2026.11.08 enabled only the socket)
+grep -A1 -F 'systemctl is-enabled -q omamobile-gnss-nmea.socket' bin/omamobile-setup-system |
+  grep -cF -- '--global enable omamobile-geoclue-agent.service' >/dev/null ||
+  fail "omamobile-setup-system enables GeoClue's agent with the Location socket"
+pass "the setup step turns GeoClue's agent on with the Location socket"
