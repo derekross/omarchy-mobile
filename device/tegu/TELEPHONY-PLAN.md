@@ -309,7 +309,7 @@ are in MODEM-PLAN after section P (with #594). A fourth boot by the unit
 up, the release confirmed in 272 ms) and mobile data over `rmnet0`; its
 `systemctl reboot` was confirmed like the two before; and
 `tools/nv-backup -d tegu --check` after it read every NV partition SAME as
-the 2026-10-28 backup. Texts weren't sent on this kernel.
+the 2026-10-28 backup. Texts went both ways on a later boot of it (20:40 MST: one sent from the palmtop arrived, the reply reached the palmtop 22 s after the send).
 
 One gap found by reading and closed the same evening: the link driver takes
 its PHY from `phy_zuma_pcie`, which the guards keep from autoloading and
