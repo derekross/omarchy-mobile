@@ -1622,7 +1622,20 @@ each time (`device/tegu/bringup/modem-sleep-test.sh`). Two kernels:
 `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` build #100 with
 the bring-up modules (four boots, 22 sleep requests), and
 `7.3.0-rc6-omamobile-push1-g773b4102f5ec` with the in-tree `pcie_gs201_cp`
-and CPIF (one boot, 3 requests).
+and CPIF (one boot, 3 requests). That second kernel is not the published
+one: it is the published tip of that day (`abcd6aac51cf`) plus kernel #224,
+#236 and #237 and #274's PHY config line, as in section P below, and kernel
+#224, one of the sleep fixes this test rests on, was not merged. "The
+in-tree build" below means it.
+
+How it ran: five boots between 22:32 and 23:15 MST (the modem up at 22:32,
+22:38, 22:44 and 22:52 on #100, and at 23:08 on the in-tree build), all on
+the charger with the cable in, and all of them unattended. The owner had
+gone to bed; what he had given was a standing word to keep working through
+the night, not a yes for each run, and nobody was at the palmtop for any of
+the five. So this was outside the 9a's sleep rule in two ways: the tests
+were not attended, and they slept with the modem up. Each test boot ended
+in `systemctl reboot`, and each of those stops was confirmed.
 
 - **Nothing hung.** No reset, no silent no-wake, no UFS line, and the CP's
   state read ONLINE throughout.
@@ -1634,7 +1647,7 @@ and CPIF (one boot, 3 requests).
   "Suspend prepare").
 - **Three sleeps were entered, and the modem woke each within seconds.**
   Two on #100 (about 6 s and 4 s, `pm_wakeup_irq` the modem's PCIe
-  interrupt and `cp2ap_wakeup`), one on the published kernel (about 2 s,
+  interrupt and `cp2ap_wakeup`), one on the in-tree build (about 2 s,
   `cp2ap_wakeup`). So the CP's wake line does wake the palmtop from s2idle.
 - **One sleep attempt, entered or refused, costs the phone service until a
   reboot.** In all five boots omamobile-sitd's requests to the CP began to
@@ -1660,7 +1673,7 @@ and CPIF (one boot, 3 requests).
 - **Why the CP is awake so much: nobody tells it the screen is off.** Idle
   and registered, the link came up 49 times a minute (98 `cp2ap_wakeup`
   edges, SIT indication 0906 about 51 times a minute; 25 link-ups in 30 s
-  on the published kernel too). omamobile-sitd has the request for it
+  on the in-tree build too). omamobile-sitd has the request for it
   (`{"action": "screen-state", "on": false}`: SIT 0902 with 0, and the
   indication filter 0928 with 0), and nothing in the tree sends it. Sent by
   hand it took the idle link to 3 or 4 link-ups a minute (6 to 8 edges, no
@@ -1676,7 +1689,7 @@ and CPIF (one boot, 3 requests).
   "Wi-Fi lost across sleep; unloading it around sleeps until reboot". With
   one state only (a runtime `SuspendState=freeze` drop-in for the test)
   Wi-Fi was still lost at the second refused sleep on #100, and stayed up
-  through one entered and two refused sleeps on the published kernel.
+  through one entered and two refused sleeps on the in-tree build.
 
 So the inhibitor `omamobile-tegu-modem-up` takes is not only about a hang:
 until the link survives a sleep, a suspend with the modem up cuts the phone

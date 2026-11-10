@@ -8,8 +8,11 @@
 # sleep, Wi-Fi kept). Records for each request how long it lasted, what woke it, and the
 # CP's and the phone service's state after; "omamobile-sit status" shows the last state
 # read, so check sitd's journal for "poll failed" as well. Stops when the CP isn't ONLINE,
-# sitd isn't active or a UFS line appears. Run detached:
+# sitd isn't active or a UFS line appears. Attended, on the charger (AGENTS.md, "Suspend
+# with the modem on"). Run detached:
 #   systemd-run --unit=x-modem-sleep /root/modem-sleep-test.sh [N] [S]
+# and when it is done, the last step is always "systemctl reboot", never reboot-to, so the
+# modem stops cleanly and the phone service comes back with the next boot.
 N=${1:-1}; S=${2:-60}; L=/var/log/omamobile/modem-sleep-test.log
 U='link startup failed|Host init failed|I/O error, dev|ufshcd_err_handler'
 CP=/usr/lib/omamobile-vendor/omamobile-modem-cp
