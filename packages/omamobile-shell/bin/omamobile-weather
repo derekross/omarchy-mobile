@@ -285,9 +285,14 @@ def geoclue_usable():
 def where_am_i():
     """(lat, lon) from GeoClue at city accuracy, or None; never longer than
     about 20 s, whatever GeoClue does."""
+    # Without GTK_USE_PORTAL: the session sets it to 1 for the touch file
+    # chooser (20-omamobile-osk.conf), and GeoClue's client library then asks
+    # the desktop portal instead of GeoClue ("Location services disabled").
+    env = dict(os.environ, LC_ALL="C")
+    env.pop("GTK_USE_PORTAL", None)
     try:
         out = subprocess.run(["timeout", "-k", "2", str(GEOCLUE_FOR - 2), WHERE_AM_I, "-a", "4", "-t", "12"],
-                             capture_output=True, text=True, env=dict(os.environ, LC_ALL="C")).stdout
+                             capture_output=True, text=True, env=env).stdout
     except OSError:
         return None
     lat = re.findall(r"^Latitude:\s*(-?[0-9][0-9.]*)", out, re.M)
