@@ -9,17 +9,8 @@ in [the notes PR #330].
 The FTS5 driver from [touch #219] is merged into linux-omarchy-mobile. The
 Dipper board DTS is under review in [DTS #220], and the EA8074 panel driver is
 under review in [panel #218].
-A separate RAM overlay test on 2026-11-09 booted kernel
-`7.3.0-rc6-omamobile-push1` (image SHA-256
-`0f0ec9d62ebe57bef9ae8a4804bb23728f624daab824a0bf7dee18f63c2a3d59`). The
-EA8074 driver bound to `ae94000.dsi.0`; DRM reported connected at 1080x2248,
-and the owner saw the console on the lit panel. Backlight value 0 was accepted
-and restored to 511 (maximum 1023). Framebuffer blanking switched DRM `dpms`
-from `On` to `Off` and back to `On`. The FTS5 touchscreen still needs a hardware
-test. This panel image predates guard PR #484: `/dev/sda` was absent and all 85
-partition flags were `ro=1`, but `/dev/sdb` through `/dev/sdf` still existed
-with their whole-disk flags `ro=1`. No UFS was written. Repeat the whole-disk
-node check after #484 is included.
+The EA8074 panel test is recorded in [the notes PR #330]. The FTS5 touchscreen
+still needs a hardware test.
 On 2026-11-09, a guarded RAM boot was used to capture all 84 GPT partitions
 other than `userdata` (the phone has no `super`); source and compressed-image
 checksums passed. The separate live userdata archive also passed its checksum
@@ -70,14 +61,15 @@ archive's checksum file. Do not boot if either backup is missing or fails.
    panel's VCI and VDDIO rails. If it goes dark about 30 seconds in, record
    `dmesg | grep -i -E 'regulator|simple'` and stop.
    Pass only when `uname -r`, the `boot.img` sha256, all partition `ro` values,
-   whole-disk `ro` values, and `ufs-ro` lines from `dmesg` are recorded. Every
-   whole-disk node (`/dev/sda` through `/dev/sdf`) must be absent, and every
-   partition must have `ro=1`; do not gate on whole-disk `ro` values. This holds
-   when the guard protects all six UFS LUNs, including after #484.
+   whole-disk `ro` values, and `ufs-ro` lines from `dmesg` are recorded.
+   `/dev/sda` must be absent or present with `/sys/block/sda/ro=1` in NFS mode;
+   each other whole-disk node must be absent or present with its `ro=1`. Every
+   partition must have `ro=1`. Stop if any partition or present whole-disk node
+   has `ro=0`.
    Also record the reserved-memory lines from
    `grep -i -E 'reserved|System RAM' /proc/iomem`, the bound `qcom_wdt`
    driver, its running watchdog feeder, and USB/SSH are recorded and correct.
-   Stop if any whole-disk node exists, any partition has `ro=0`, the watchdog
+   Stop if any partition or present whole-disk node has `ro=0`, the watchdog
    is not fed, USB/SSH fails,
    or anything asks to flash. Rollback: use the verified forced-restart
    procedure from step 3, then recover from the verified backup if needed.
