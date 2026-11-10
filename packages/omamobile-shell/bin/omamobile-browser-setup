@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Seed mobile browser flags from the phone's geometry, preserving user choices."""
+import json
+import math
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+
+
+def monitor_scale(text):
+    match = re.search(r"^local omarchy_monitor_scale = ([0-9.]+)(?:\s*/\s*([0-9.]+))?\s*(?:--[^\n]*)?$", text, re.M)
+    if not match:
+        return None
+    try:
+        value = float(match[1]) / float(match[2] or 1)
+        return value if math.isfinite(value) and value > 0 else None
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def logical_width(monitors):
+    widths = []
+    for monitor in monitors:
+        if monitor.get("disabled") or not re.match(r"^(DSI|eDP|Unknown)-", monitor.get("name", "")):
+            continue
+        try:
+            width = min(float(monitor["width"]), float(monitor["height"])) / float(monitor["scale"])
+            if math.isfinite(width) and width > 0:
+                widths.append(width)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            continue
+    return min(widths) if widths else None
+
+
+def geometry(config):
+    # Live compositor data honours the user's scale and works on simpledrm.
+    try:
+        result = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, check=True, timeout=2)
+        width = logical_width(json.loads(result.stdout))
+        if width:
+            return width
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+        pass
+    # Firstboot runs before Hyprland. Read the numeric scale setup-user seeded;
+    # never execute Lua to find it. Unknown/auto scales wait for a live session.
+    try:
+        scale = monitor_scale((config / "hypr/monitors.lua").read_text())
+        if scale:
+            drm = Path(os.environ.get("OMAMOBILE_DRM", "/sys/class/drm"))
+            widths = []
+            for modes in sorted(drm.glob("card*-*/modes")):
+                if not re.match(r"card\d+-(DSI|eDP|Unknown)-", modes.parent.name):
+                    continue
+                match = re.match(r"(\d+)x(\d+)", modes.read_text())
+                if match:
+                    widths.append(min(int(match[1]), int(match[2])) / scale)
+            return min(widths) if widths else None
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def factor_for(width):
+    # Use Grok Bot's established 578 px layout for both Chromium and Electron,
+    # above their minimum widths. Keep the reference phone's 0.83 cap:
+    # 480 px -> 0.83, 405 px -> 0.70, 360 px -> 0.62. Site zoom is separate.
+    return f"{math.floor(min(0.83, width / 578) * 100) / 100:.2f}"
+
+
+def browser_major(program):
+    try:
+        version = subprocess.run([program, "--version"], capture_output=True, text=True, check=True, timeout=2).stdout
+        match = re.search(r"\b(\d+)\.", version)
+        return match[1] if match else "153"
+    except (OSError, subprocess.SubprocessError):
+        return "153"  # Historical first-login fallback; never query on later logins.
+
+
+def configure(path, factor, done, program):
+    chromium = program == "chromium"
+    marker = done / ("omamobile-browser-fit-" + program)
+    if marker.exists():
+        return
+    if not chromium and factor is None:
+        return  # Grok has only a geometry-dependent scale default.
+    defaults_marker = done / "omamobile-browser-defaults-chromium"
+    before = path.read_text() if path.exists() else ""
+    flags = shlex.split(before, comments=True)
+    has = lambda key: any(flag.split("=")[0] == key for flag in flags)
+    prior = lambda name: (done / ("omamobile-" + name)).exists()
+    scale_marked = (prior("chromium-scale-2") or prior("chromium-scale-3")) if chromium else prior("grok-bot-fit")
+    scale_flags = [f for f in flags if f.startswith("--force-device-scale-factor=")]
+    after = before
+    if factor is not None and scale_marked and scale_flags == ["--force-device-scale-factor=0.83"]:
+        # Only the exact unquoted line written by historical setup. Custom
+        # values, quoted overrides and a deliberately deleted scale stay put.
+        after = re.sub(r"^--force-device-scale-factor=0\.83$", f"--force-device-scale-factor={factor}", after, flags=re.M)
+    additions = []
+    if factor is not None and not scale_marked and not has("--force-device-scale-factor"):
+        additions.append(f"--force-device-scale-factor={factor}")
+    if chromium and not defaults_marker.exists():
+        for name, defaults in (
+            ("chromium-no-first-run", ("--no-first-run",)),
+            ("chromium-wayland-ime", ("--enable-wayland-ime", "--wayland-text-input-version=3")),
+        ):
+            if not prior(name):
+                additions.extend(flag for flag in defaults if not has(flag.split("=")[0]))
+        if not prior("chromium-mobile") and not has("--user-agent"):
+            # Do this only immediately before writing a missing, once-only UA.
+            major = browser_major(program)
+            additions.append(shlex.quote(f"--user-agent=Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36"))
+    if additions:
+        after += ("\n" if after and not after.endswith("\n") else "") + "\n".join(additions) + "\n"
+    if after != before:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(after)
+    done.mkdir(parents=True, exist_ok=True)
+    if chromium:
+        defaults_marker.touch()
+    if factor is not None:
+        marker.touch()
+
+
+def main():
+    config = Path.home() / ".config"
+    done = Path.home() / ".local/state/omarchy/done"
+    programs = (("chromium", "chromium-flags.conf"), ("grok-bot", "grok-bot-flags.conf"))
+    if all((done / ("omamobile-browser-fit-" + program)).exists() for program, _ in programs):
+        return  # No geometry or browser process at subsequent logins.
+    width = geometry(config)
+    # UA, input method and first-run defaults do not need geometry. The bar
+    # retries at shell start, with live compositor data, for computed/auto Lua
+    # scales. Their separate marker preserves removals before that retry too.
+    factor = factor_for(width) if width and width >= 128 else None
+    for program, filename in programs:
+        try:
+            configure(config / filename, factor, done, program)
+        except (OSError, ValueError) as error:
+            print(f"omamobile-browser-setup: {filename}: {error}", file=__import__("sys").stderr)
+
+
+if __name__ == "__main__":
+    main()
