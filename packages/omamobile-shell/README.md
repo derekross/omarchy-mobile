@@ -6,7 +6,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
 | `plugins/omamobile.quicksettings` | Pull-down quick settings |
-| `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
+| `plugins/omamobile.launcher` | Home bar: a separate native app-search view on tap; App Library and the existing optional agent flow on swipe; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
 | `plugins/omamobile.keyboard` | The on-screen keyboard's show and hide calls, for the home pill (double-tap it), the keyboard's Hide key and scripts; a keyboard shown by hand goes away when the home screen comes up; the language sheet for the keyboard's globe key |
@@ -102,3 +102,28 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+## Native app Search
+
+A tap on the home search field opens app search directly. Swiping up still
+opens the App Library and its existing optional agent flow. Set the launcher's
+`nativeSearch` setting to `false` to retain the previous dock-tap behavior.
+Search uses Omarchy's application library and normal app-launch command. It
+does not index files, select an agent or access accounts.
+
+The view follows Commons palette, font, spacing, controls and corner settings;
+its animation follows `Style.duration` when available. A full-screen background
+takes no input, the content respects the status/keyboard reservations, and the
+existing Home strip remains visible even after manually hiding the keyboard.
+Back closes Search in process before the usual Escape fallback. Home and app
+activation release its text input before changing screens.
+
+Native focus is briefly primed with Exclusive, then released to OnDemand, using
+the focus lifecycle from Omarchy's MIT-licensed `shell/Ui/KeyboardPanel.qml`.
+That component is present in both supported Omarchy package families. Its
+David Heinemeier Hansson copyright and license are retained in
+`LICENSE.omarchy`. Offscreen component tests verify cancellation and focus
+intent; a phone acceptance must separately verify first-tap OSK activation,
+keyboard touches, Back/Home, immediate reopen and lock interaction.
+
+Native Search cancels pending focus and closes when the launcher's existing session-lock observation reports locked. Unlocking never reopens it without a new explicit tap. This observation is asynchronous and is not a security boundary or a replacement for the compositor lock protocol. Existing fullscreen exclusion of Home/Back gesture strips remains in force; a Search opened over fullscreen can still close using its visible close button or Escape. The Search panels currently use Quickshell's default output; multi-output active-screen routing is not qualified by the offscreen tests.

@@ -6,6 +6,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import "BackModel.js" as BackModel
+import "../omamobile.launcher/AppsSearchLink.js" as AppsSearchLink
 
 // The back gesture, as on Android (TOUCH-PLAN 1.2): swipe in from the left
 // or right edge of the screen and let go to go back. "Back" is Escape, sent
@@ -38,6 +39,7 @@ Item {
 
   // `shell call omamobile.back back ''`: the same as the gesture.
   function back() {
+    if (AppsSearchLink.close()) return "search"
     Quickshell.execDetached(BackModel.ESCAPE_ARGV)
     return "ok"
   }

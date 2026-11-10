@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "Omarchy Mobile",
   "license": "MIT",
-  "description": "The phone's home bar: one input at the bottom of the screen that searches apps, opens the app grid and sends a prompt to your coding agent.",
+  "description": "The phone home bar: native app search on tap, App Library on swipe, and the Home indicator.",
   "kinds": [
     "panel"
   ],
@@ -16,7 +16,8 @@
   "settings": {
     "defaults": {
       "columns": 4,
-      "sentenceWords": 3
+      "sentenceWords": 3,
+      "nativeSearch": true
     },
     "schema": [
       {
@@ -32,6 +33,11 @@
         "label": "Words that make a prompt",
         "min": 2,
         "max": 8
+      },
+      {
+        "key": "nativeSearch",
+        "type": "boolean",
+        "label": "Use separate app search on dock tap"
       }
     ]
   }
