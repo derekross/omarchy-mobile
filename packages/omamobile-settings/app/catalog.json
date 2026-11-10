@@ -18,6 +18,13 @@
         "requires": "charge"
       },
       {
+        "id": "haptics",
+        "title": "Keyboard haptics",
+        "detail": "Tick strength, or silent for the whole phone",
+        "icon": "haptics",
+        "page": "haptics"
+      },
+      {
         "id": "about",
         "title": "About this device",
         "detail": "System, software and storage",
@@ -36,6 +43,10 @@
   },
   "battery": {
     "title": "Battery",
+    "rows": []
+  },
+  "haptics": {
+    "title": "Keyboard haptics",
     "rows": []
   }
 }
