@@ -41,7 +41,7 @@ rm -rf "$bf"
 refuses "no boot files at all" "no boot files in"
 pass "--check refuses stale, tampered, SOURCES-less or missing boot files"
 
-grep -qE "grep -zE '/\(prebuilt\|boot-files\)/'" tools/repo-publish || fail "repo-publish --from-main carries boot-files/ into its clean tree"
+grep -qF "':(glob)packages/**/boot-files/**'" tools/repo-publish || fail "repo-publish --from-main carries boot-files/ into its clean tree"
 grep -qF 'tools/stage-boot-files --check "$d/boot-files"' tools/build-packages || fail "build-packages checks the boot files before building"
 grep -qF '"$d/stage" --verify "$d/prebuilt"' tools/build-packages || fail "build-packages verifies the staged kernel before building"
 grep -qE '^NAMED_ONLY=\(linux-omamobile\)$' tools/build-packages || fail "linux-omamobile is built only when named"

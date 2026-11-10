@@ -147,6 +147,10 @@ for absent in usr/bin/omamobile-boot-success usr/bin/omamobile-bootctl \
               usr/lib/udev/rules.d/20-omamobile-gpu-always-on.rules; do
   [[ ! -e $tmp/root/$absent ]] || fail "install includes $absent"
 done
+# The canonical sitd unit gets its modem dependency from this device policy.
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/10-device-modem.conf ]] \
+  || fail "the device sitd policy is staged"
+grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "install stages the package, enables only the guards, and nothing that marks a slot"
 
 for m in cpif shm_ipc pcie_gs201_cp; do

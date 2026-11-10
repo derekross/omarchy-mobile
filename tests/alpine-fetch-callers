@@ -1,0 +1,135 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Every caller of tools/alpine-fetch.py stops when it fails, before it uses
+# any of the list (no network): bin/omamobile initramfs's packages, its
+# INITRAMFS_I2C_TOOLS i2c-tools and its musl sysroot's musl-dev, and
+# tools/dodge-chain pack's busybox-static. A stand-in for alpine-fetch.py
+# prints one package it "fetched" (an .apk holding marker-<package>), then
+# exits 1 when asked for FETCH_FAIL_ON. A `for apk in $(…)` loop ignores that
+# status and unpacks what was printed; a caller must not. A stand-in
+# minirootfs (sha256sum accepts it) holds the files the initramfs checks for.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
+fail() { echo "not ok - $*" >&2; cat "$t/log" >&2; exit 1; }
+pass() { echo "ok - $*"; }
+
+mkdir -p "$t/bin" "$t/home" "$t/clang" "$t/root/sbin" "$t/root/usr/sbin" "$t/root/usr/lib" "$t/apks"
+for f in sbin/e2fsck usr/sbin/resize2fs usr/sbin/dumpe2fs; do
+  printf '#!/bin/sh\n' > "$t/root/$f"; chmod 755 "$t/root/$f"
+done
+tar -czf "$t/minirootfs.tar.gz" -C "$t/root" .
+for p in dropbear musl-dev busybox-static; do
+  mkdir -p "$t/apk-src/$p"; : > "$t/apk-src/$p/marker-$p"
+  tar -czf "$t/apks/$p.apk" -C "$t/apk-src/$p" "marker-$p"
+done
+# What the initramfs installs from i2c-tools
+mkdir -p "$t/apk-src/i2c/usr/sbin" "$t/apk-src/i2c/usr/lib"
+: > "$t/apk-src/i2c/usr/sbin/i2cget"; : > "$t/apk-src/i2c/usr/sbin/i2cset"; : > "$t/apk-src/i2c/usr/lib/libi2c.so.0"
+tar -czf "$t/apks/i2c-tools.apk" -C "$t/apk-src/i2c" usr
+
+cat > "$t/bin/python3" <<'EOF'
+#!/bin/bash
+# tools/alpine-fetch.py's stand-in; any other python3 run is the real one
+if [[ ${1:-} == -I && ${2:-} == */tools/alpine-fetch.py ]]; then
+  echo "${*:5}" >> "$FETCH_LOG"
+  echo "$FETCH_APKS/$5.apk"
+  for p in "${@:5}"; do
+    if [[ $p == "${FETCH_FAIL_ON:-}" ]]; then
+      echo "alpine-fetch: no package or provider in the index for $p (stand-in)" >&2
+      exit 1
+    fi
+  done
+  exit 0
+fi
+exec "$REAL_PYTHON" "$@"
+EOF
+printf '#!/bin/sh\ncat >/dev/null\n' > "$t/bin/sha256sum"   # the stand-in minirootfs passes
+printf '#!/bin/sh\nexit 97\n' > "$t/bin/curl"                # no network
+printf '#!/bin/sh\n' > "$t/bin/magick"                       # no splash rendering
+printf '#!/bin/sh\n' > "$t/bin/mkbootimg"
+# The live DTB's memory node, for dodge-chain's stage-1 memory check
+cat > "$t/bin/dtc" <<'EOF'
+#!/bin/sh
+printf '/ {\n\tmemory {\n\t\treg = <0x0 0x80000000 0x0 0x1000>;\n\t};\n};\n'
+EOF
+chmod 755 "$t/bin"/*
+REAL_PYTHON=$(command -v python3)
+export REAL_PYTHON FETCH_APKS="$t/apks" FETCH_LOG="$t/fetched" HOME="$t/home" CLANG_DIR="$t/clang" PATH="$t/bin:$PATH"
+unset KERNEL_DIR KERNEL_BASE KERNEL_OUT WORK SPLASH_BGRA_GZ FETCH_FAIL_ON || true
+
+ver=$(sed -n 's/.* ver=\([0-9.]*\)$/\1/p' bin/omamobile)
+[[ -n $ver ]] || fail "bin/omamobile names its Alpine version"
+stage=$t/out/initramfs sysroot=$t/work/downloads/alpine/sysroot
+# DEVICE [FETCH_FAIL_ON]: bin/omamobile initramfs from nothing; the status in $status
+initramfs() {
+  rm -rf "$t/work" "$t/out" "$t/tmp"
+  mkdir -p "$t/work/downloads/alpine" "$t/tmp"
+  cp "$t/minirootfs.tar.gz" "$t/work/downloads/alpine/alpine-minirootfs-$ver-aarch64.tar.gz"
+  : > "$t/fetched"
+  status=0
+  DEVICE=$1 FETCH_FAIL_ON=${2:-} WORK=$t/work KERNEL_OUT=$t/out TMPDIR=$t/tmp \
+    bin/omamobile initramfs > "$t/log" 2>&1 || status=$?
+}
+stopped() {  # what, the package the stand-in failed on
+  [[ $status != 0 ]] || fail "$1: the build went on"
+  grep -c -w -F -- "$2" "$t/fetched" >/dev/null || fail "$1: the build never reached alpine-fetch.py for $2"
+  grep -c -F "tools/alpine-fetch.py failed" "$t/log" >/dev/null || fail "$1: no message that alpine-fetch.py failed"
+}
+
+# The callers still unpack what alpine-fetch.py prints when it succeeds
+initramfs cheetah
+[[ -e $stage/marker-dropbear && -e $sysroot/marker-musl-dev ]] || fail "cheetah: a successful fetch is unpacked"
+grep -c -F "alpine musl sysroot has no libc.a" "$t/log" >/dev/null || fail "cheetah: the stand-in build stops at the sysroot's libc.a"
+pass "bin/omamobile initramfs unpacks the packages a successful fetch lists"
+
+initramfs cheetah dropbear
+stopped "initramfs packages" dropbear
+[[ ! -e $stage/marker-dropbear ]] || fail "initramfs packages: unpacked a list from a failed fetch"
+grep -c -F musl-dev "$t/fetched" >/dev/null && fail "initramfs packages: went on to the sysroot"
+pass "bin/omamobile initramfs stops when the initramfs's packages fail, before unpacking any"
+
+initramfs raven
+[[ -e $stage/usr/sbin/i2cget && -e $stage/usr/sbin/i2cset && -e $stage/usr/lib/libi2c.so.0 ]] || fail "raven: a successful i2c-tools fetch is installed"
+grep -c -F "INITRAMFS_MODULES needs a kernel build" "$t/log" >/dev/null || fail "raven: the stand-in build stops at INITRAMFS_MODULES"
+pass "bin/omamobile initramfs installs i2c-tools from a successful fetch"
+
+initramfs raven i2c-tools
+stopped "INITRAMFS_I2C_TOOLS" i2c-tools
+[[ -z $(ls -A "$t/tmp") ]] || fail "INITRAMFS_I2C_TOOLS: left its scratch directory ($(ls -A "$t/tmp"))"
+[[ ! -e $stage/usr/sbin/i2cget ]] || fail "INITRAMFS_I2C_TOOLS: installed i2cget"
+pass "bin/omamobile initramfs stops when i2c-tools fails, before unpacking it, and removes its scratch directory"
+
+initramfs cheetah musl-dev
+stopped "musl sysroot" musl-dev
+[[ ! -e $sysroot/marker-musl-dev ]] || fail "musl sysroot: unpacked a list from a failed fetch"
+grep -c -F "no libc.a" "$t/log" >/dev/null && fail "musl sysroot: went on to check the sysroot"
+pass "bin/omamobile initramfs stops when the sysroot's musl-dev fails, before unpacking it"
+
+# tools/dodge-chain pack, with stand-in stage 2 inputs
+d=$t/dodge
+dodge() {  # [FETCH_FAIL_ON]: dodge-chain pack; the status in $status
+  rm -rf "$d"
+  mkdir -p "$d/chainload" "$d/kernel/scripts" "$d/stage2/arch/arm64/boot" "$d/dl" "$d/src"
+  printf '#!/bin/sh\n' > "$d/chainload/init"
+  : > "$d/chainload/stage2-dtb.py"
+  printf '#!/bin/sh\n' > "$d/kernel/scripts/config"; chmod 755 "$d/kernel/scripts/config"
+  echo stage2 > "$d/stage2/arch/arm64/boot/Image"
+  : > "$d/stage2/.config"; : > "$d/stage2.dtb"; : > "$d/initrd"; : > "$d/live.dtb"
+  cp "$t/minirootfs.tar.gz" "$d/dl/alpine-minirootfs-$(sed -n 's/^ALPINE_VER=//p' tools/dodge-chain)-aarch64.tar.gz"
+  : > "$t/fetched"
+  status=0
+  FETCH_FAIL_ON=${1:-} CHAINLOAD_DIR=$d/chainload KERNEL_DIR=$d/kernel STAGE2_OUT=$d/stage2 \
+    STAGE2_DTB_IN=$d/stage2.dtb STAGE2_INITRD=$d/initrd LIVE_DTB=$d/live.dtb ALPINE_DL=$d/dl SRC_DIR=$d/src \
+    tools/dodge-chain pack > "$t/log" 2>&1 || status=$?
+}
+dodge
+[[ -e $d/stage2/chain/chain/x/marker-busybox-static ]] || fail "dodge-chain: a successful fetch is unpacked"
+grep -c -F "Alpine packages incomplete" "$t/log" >/dev/null || fail "dodge-chain: the stand-in pack stops at its package check"
+pass "tools/dodge-chain pack unpacks the packages a successful fetch lists"
+
+dodge busybox-static
+stopped "dodge-chain" busybox-static
+[[ ! -e $d/stage2/chain/chain/x/marker-busybox-static ]] || fail "dodge-chain: unpacked a list from a failed fetch"
+grep -c -F "Alpine packages incomplete" "$t/log" >/dev/null && fail "dodge-chain: went on to check the packages"
+pass "tools/dodge-chain pack stops when busybox-static fails, before unpacking any"

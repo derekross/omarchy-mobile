@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Wi-Fi at boot, enabled by the vendor multi-user.target.wants link. pcie_gs201
+# and brcmfmac are blacklisted for autoload (modprobe.d/omamobile-wifi.conf),
+# so this hang-safe script is the only thing that powers the chip.
+[Unit]
+Description=Bring up Wi-Fi (hang-safe)
+After=local-fs.target systemd-modules-load.service
+ConditionPathExists=/sys/bus/platform/devices/14520000.pcie
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omamobile-wifi-start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

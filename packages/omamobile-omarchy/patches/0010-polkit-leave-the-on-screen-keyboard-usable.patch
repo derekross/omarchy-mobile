@@ -4,11 +4,18 @@
 # wrong password so the keyboard shows again (FINGERPRINT-PLAN.md).
 #
 # Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+#
+# Omarchy 4.5: rebased (offsets only). 4.5 made polkit an authentication
+# service the shell keeps out of its service map (AuthServiceStore); this
+# patch changes only the prompt's layer surface and focus, nothing of how
+# the agent is loaded or reached. Top rather than Overlay remains the trade
+# it was on 4.0: an overlay-layer surface can cover the prompt; the phone
+# needs the on-screen keyboard above it.
+
 diff --git i/shell/plugins/polkit/PolkitAgent.qml w/shell/plugins/polkit/PolkitAgent.qml
-index acd6514c..e98356dd 100644
 --- i/shell/plugins/polkit/PolkitAgent.qml
 +++ w/shell/plugins/polkit/PolkitAgent.qml
-@@ -103,8 +103,16 @@ Item {
+@@ -103,8 +103,16 @@
      if (!dialogVisible) return
      // In fingerprint mode there is no field to type into — park focus on the
      // key catcher so Escape still cancels; otherwise focus the password field.
@@ -27,7 +34,7 @@ index acd6514c..e98356dd 100644
    }
  
    function submitResponse() {
-@@ -149,7 +157,11 @@ Item {
+@@ -149,7 +157,11 @@
      id: errorTimer
      interval: 1200
      repeat: false
@@ -40,7 +47,7 @@ index acd6514c..e98356dd 100644
    }
  
    SequentialAnimation {
-@@ -225,9 +237,17 @@ Item {
+@@ -229,9 +241,17 @@
      anchors { top: true; bottom: true; left: true; right: true }
      color: "transparent"
      WlrLayershell.namespace: "omarchy-polkit"

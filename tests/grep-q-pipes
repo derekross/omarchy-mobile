@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# No test script, and no laptop-side script in bin/, tools/ or rootfs/, that
+# sets pipefail pipes into grep -q (AGENTS.md section 4, Userspace): grep -q
+# exits at the first match, the writer can get SIGPIPE, and pipefail then
+# fails the pipeline, so a check fails at random, or an "&& fail" check
+# passes. Use grep -c ... >/dev/null, which reads all its input. Comment lines
+# don't count. Left out: packages/omamobile-modem/test/nv-overlay until the
+# fix for #457 lands; and acpm-stage, aoc-stage, fingerprint-capture,
+# husky-deadman and wifi-w1-capture in tools/, whose remaining hits are
+# command strings run on the phone through tools/phone-ssh, in the phone's
+# shell without pipefail. tools/lib's files are sourced by pipefail scripts,
+# so they count too.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+pattern='(^|[^|])\|[[:space:]]*grep[[:space:]]+(-[[:alnum:]]*q|--quiet|--silent)'
+
+for bad in 'x | grep -q y' 'x |grep -qx y' 'x | grep -Eq y' 'x | grep --quiet y'; do
+  grep -cE "$pattern" <<<"$bad" >/dev/null || fail "the pattern finds '$bad'"
+done
+for good in 'x | grep -c y >/dev/null' 'x || grep -q y f' 'grep -q y <<<"$x"'; do
+  grep -cE "$pattern" <<<"$good" >/dev/null && fail "the pattern leaves '$good' alone"
+done
+
+mapfile -t scripts < <({ git grep -l 'set -[a-z]*o pipefail' -- tests 'packages/*/test/*' bin tools rootfs \
+  ':(exclude)tests/grep-q-pipes' ':(exclude)packages/omamobile-modem/test/nv-overlay' \
+  ':(exclude)tools/'{acpm-stage,aoc-stage,fingerprint-capture,husky-deadman,wifi-w1-capture}
+  git ls-files tools/lib; } | sort -u)
+[[ ${#scripts[@]} -gt 0 ]] || fail "found the pipefail scripts"
+if hits=$(git grep -nE "$pattern" -- "${scripts[@]}" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'); then
+  printf '%s\n' "$hits" >&2
+  fail "no script under pipefail pipes into grep -q (use grep -c ... >/dev/null)"
+fi
+pass "no pipe into grep -q in ${#scripts[@]} pipefail scripts"

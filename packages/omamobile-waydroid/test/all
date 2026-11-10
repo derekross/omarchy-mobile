@@ -28,6 +28,14 @@ for f in usr/bin/omamobile-waydroid usr/lib/omamobile-waydroid/omamobile-waydroi
 done
 grep -q 'lxc-omamobile.conf' lib/omamobile-waydroid-harden || fail "harden does not include lxc-omamobile.conf"
 grep -qx 'lxc.cgroup2.devices.deny = b \*:\* rwm' lib/lxc-omamobile.conf || fail "block devices not denied"
+# LXC 7 allows nothing when there is only a deny rule, so the file carries an
+# allow list. Block devices stay out because no rule allows a "b" device; the
+# deny line covers an "allow = a" placed before the include. What must never
+# appear is a global allow: after the include it would clear every rule above.
+grep -q '^lxc.cgroup2.devices.allow = c ' lib/lxc-omamobile.conf || fail "lxc-omamobile.conf: no allow lines (LXC 7 would allow nothing)"
+grep -qx 'lxc.cgroup2.devices.allow = c 1:3 rwm' lib/lxc-omamobile.conf || fail "/dev/null not allowed"
+if grep -Eq '^[[:space:]]*lxc.cgroup2.devices.allow[[:space:]]*=[[:space:]]*(a|c \*:\*)' lib/lxc-omamobile.conf; then fail "lxc-omamobile.conf opens every device"; fi
+if grep -Eq '^[[:space:]]*lxc.cgroup2.devices.allow[[:space:]]*=[[:space:]]*b' lib/lxc-omamobile.conf; then fail "lxc-omamobile.conf allows block devices"; fi
 
 # Kernel check: every option it wants, then one missing
 sed -n 's/^ *want \([A-Z0-9_]*\) \([ym]*\) .*/CONFIG_\1=\2/p' lib/omamobile-waydroid-check | sed 's/=ym$/=m/' > "$t/config"
@@ -41,6 +49,37 @@ for o in NETFILTER_XT_MARK NETFILTER_XT_CONNMARK NETFILTER_XT_MATCH_OWNER NETFIL
   echo "CONFIG_$o=m" >> "$t/config"
 done
 CONFIG_FILE=$t/config lib/omamobile-waydroid-check > "$t/ok.log" || { cat "$t/ok.log"; fail "check rejects a complete config"; }
+# binderfs's major is assigned at boot, so the conf names binder, vndbinder and
+# hwbinder by path (LXC reads their numbers when the container starts) and the
+# check wants those three lines. A hard-coded binder major must not come back,
+# and a "c N:*" line (5, 136, or a stale binder major) must not satisfy it.
+for n in binder vndbinder hwbinder; do
+  grep -qx "lxc.cgroup2.devices.allow = /dev/binderfs/$n rwm" lib/lxc-omamobile.conf || fail "lxc-omamobile.conf: $n is not allowed by path"
+done
+[[ $(grep -Ec '^lxc.cgroup2.devices.allow = c [0-9]+:\* rwm$' lib/lxc-omamobile.conf) == 2 ]] \
+  || fail "lxc-omamobile.conf has a 'c N:*' line besides tty (5) and pts (136): a hard-coded binder major?"
+CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf RENDER_RDEV=226:128 lib/omamobile-waydroid-check > "$t/binder.log" \
+  || { cat "$t/binder.log"; fail "check rejects the shipped binder and render allow lines"; }
+for n in binder vndbinder hwbinder; do
+  grep -q "^ok    /dev/binderfs/$n is allowed" "$t/binder.log" || fail "check does not report $n"
+  grep -v "^lxc.cgroup2.devices.allow = /dev/binderfs/$n rwm\$" lib/lxc-omamobile.conf > "$t/no-binder.conf"
+  if CONFIG_FILE=$t/config LXC_CONF=$t/no-binder.conf RENDER_RDEV=226:128 lib/omamobile-waydroid-check > "$t/binder.log"; then
+    fail "check passes with the $n line deleted"
+  fi
+  grep -q "^MISS  /dev/binderfs/$n is not allowed" "$t/binder.log" || fail "check does not name the missing $n line"
+done
+# the old form, a binder major, is not enough
+sed 's|^lxc.cgroup2.devices.allow = /dev/binderfs/binder rwm$|lxc.cgroup2.devices.allow = c 507:* rwm|' lib/lxc-omamobile.conf > "$t/old-binder.conf"
+if CONFIG_FILE=$t/config LXC_CONF=$t/old-binder.conf RENDER_RDEV=226:128 lib/omamobile-waydroid-check > /dev/null; then
+  fail "check passes with a binder major instead of the binder path"
+fi
+# The render node: its major and minor must be the ones the conf allows
+CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf RENDER_RDEV=226:128 lib/omamobile-waydroid-check | grep -c '^ok    render node 226:128 is allowed' >/dev/null \
+  || fail "check does not report the render node"
+if CONFIG_FILE=$t/config LXC_CONF=lib/lxc-omamobile.conf RENDER_RDEV=226:129 lib/omamobile-waydroid-check > "$t/binder.log"; then
+  fail "check passes when the render node is not the allowed one"
+fi
+grep -q '^MISS  render node 226:129 is not allowed' "$t/binder.log" || fail "check does not name the render node that is not allowed"
 grep -v '^CONFIG_NETFILTER_XTABLES_LEGACY=' "$t/config" > "$t/bad"
 if CONFIG_FILE=$t/bad lib/omamobile-waydroid-check > "$t/bad.log"; then fail "check accepts a config without legacy xtables"; fi
 grep -q '^MISS  NETFILTER_XTABLES_LEGACY=unset' "$t/bad.log" || fail "check does not name the missing option"

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# libcamera's software ISP (and so PipeWire's libcamera plugin, which runs in
+# the user's WirePlumber) allocates its output buffers from the DMA-BUF heaps.
+# They are root-only by default, so without this a user session saw the
+# cameras but got no debayered stream ("Could not open any dma-buf provider",
+# device/cheetah/CAMERA-PLAN.md CAM5.4). Give the video group and the seat's
+# user the general heaps; the camera and display pools stay the kernel's.
+SUBSYSTEM=="dma_heap", KERNEL=="system|reserved|default_cma_region", GROUP="video", MODE="0660", TAG+="uaccess"

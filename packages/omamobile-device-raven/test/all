@@ -26,7 +26,7 @@ buf[0x34:0x38] = bytes([1, 0x04, 0, 0])   # slot b: active, not successful
 open(sys.argv[1], "wb").write(buf)
 PY
 cp "$tmp/devinfo" "$tmp/devinfo.orig"
-"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -q 'version: 3.15' || fail "bootctl decodes devinfo"
+"$tmp/build/omamobile-bootctl" dump "$tmp/devinfo" | grep -c 'version: 3.15' >/dev/null || fail "bootctl decodes devinfo"
 plan=$("$tmp/build/omamobile-bootctl" mark-successful "$tmp/devinfo" b 2>&1 || true)
 grep -q '0x35: 04 -> 06' <<<"$plan" || fail "mark-successful plans one byte (0x35: 04 -> 06)"
 cmp -s "$tmp/devinfo" "$tmp/devinfo.orig" || fail "a dry run writes nothing"
@@ -69,6 +69,10 @@ done
 [[ $(readlink "$tmp/root/usr/lib/systemd/system-sleep/omamobile") == /usr/bin/omamobile-sleep ]] \
   || fail "the sleep hook is linked into system-sleep"
 [ ! -e "$tmp/root/usr/bin/omamobile-sleepd" ] || fail "the sleep watcher is omamobile-shell's, not this package's"
+# The canonical sitd unit gets its modem dependency from this device policy.
+[[ -f $tmp/root/usr/lib/systemd/system/omamobile-sitd.service.d/10-device-modem.conf ]] \
+  || fail "the device sitd policy is staged"
+grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "install stages the package"
 
 # omamobile-wlan-mac only ever sets a unicast, globally administered address
@@ -95,6 +99,17 @@ grep -q 'modprobe -r brcmfmac_wcc brcmfmac pcie_gs201' bin/omamobile-sleep || fa
 grep -q 'wifi_pci=0000:01:00.0' bin/omamobile-sleep || fail "a Wi-Fi D3 failure falls back to unload mode"
 pass "sleep policy"
 
+[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-speaker-protection.service") == ../omamobile-speaker-protection.service ]] \
+  || fail "speaker protection (omamobile-audio 0.5.15) is enabled by a vendor wants link"
+[ ! -e vendor/systemd/system/multi-user.target.wants/omamobile-audio-mics.service ] \
+  || fail "the microphones-only unit is not enabled with it (the two conflict)"
+grep -qx 'blacklist snd_soc_cs35l41_spi' vendor/modprobe.d/omamobile-raven.conf \
+  || fail "the amplifier driver never autoloads (device-raven's own blacklist)"
+grep -q "'omamobile-audio>=0.5.15'" PKGBUILD || fail "device-raven depends on omamobile-audio>=0.5.15 (protection on gs101)"
+! grep -rq 'speaker_protection' vendor/modprobe.d \
+  || fail "raven never sets aoc_alsa_dev speaker_protection (it would allow stage c9)"
+pass "speakers through protection at stage media, the microphones with them"
+
 # Policy that keeps the phone safe at boot
 for m in tcpci_maxim gpio_max77759; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-raven.conf || fail "$m stays blacklisted"
@@ -119,7 +134,7 @@ pass "the modem's drivers never load at boot"
 # USB is the last gateway: its route outlives an unplug, so ahead of Wi-Fi
 # it sent IPv4 into a dead cable (raven, 2026-10-28).
 net=vendor/systemd/network/20-usb-gadget.network
-! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -q '^Gateway=' || fail "usb0 sets no default route in [Network] (metric 0)"
+! sed -n '/^\[Network\]/,/^\[/p' "$net" | grep -c '^Gateway=' >/dev/null || fail "usb0 sets no default route in [Network] (metric 0)"
 metric=$(sed -n '/^\[Route\]/,/^\[/{s/^Metric=//p}' "$net")
 [[ ${metric:-0} -gt 700 ]] || fail "usb0's gateway goes after Wi-Fi (600) and mobile data (700)"
 pass "USB is the last gateway"

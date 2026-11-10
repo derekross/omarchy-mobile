@@ -1,0 +1,37 @@
+# Brightness: panels whose backlight driver can power them down follow DPMS
+# through bl_power (4 off, 0 on): on the phone, DPMS alone doesn't reach a
+# panel run from the bootloader's framebuffer. Only where the user may write
+# bl_power (the device package's udev rule).
+#
+# Against Omarchy 4.0.4 (edge 4.0.4-2; tag v4.0.4).
+diff --git i/bin/omarchy-brightness-display w/bin/omarchy-brightness-display
+index 5a3e534..3c754bb 100755
+--- i/bin/omarchy-brightness-display
++++ w/bin/omarchy-brightness-display
+@@ -82,12 +82,26 @@ if (( $# == 0 )); then
+   exit
+ fi
+ 
++# Panels whose backlight driver can power them down follow DPMS (bl_power: 4 is
++# off, 0 is on). Phones on a bootloader framebuffer need it: DPMS there doesn't
++# reach the panel. Only where the device lets this user write bl_power.
++panel_power() {
++  local device bl
++  device="$(omarchy-hw-display 2>/dev/null)" || return 0
++  bl="${OMARCHY_BACKLIGHT_PATH:-/sys/class/backlight}/$device/bl_power"
++  [[ -w $bl ]] && echo "$1" >"$bl" 2>/dev/null
++  return 0
++}
++
+ step="$1"
+ 
+ if [[ $step == "off" ]]; then
+   hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })' >/dev/null 2>&1
++  panel_power 4
+   exit 0
+ elif [[ $step == "on" ]]; then
++  # Before the check below: Hyprland can show a lit display whose panel is off.
++  panel_power 0
+   # Skip the dispatch when every active display is already lit: a redundant
+   # DPMS enable right after system resume forces another modeset, which blanks
+   # the panel for a beat (visible flash at the unlock screen).

@@ -149,3 +149,18 @@ that loaded them, from its own staged copies, not the package: the package
 blacklists both and starts neither.
 
 Licence: MIT.
+
+## Optional Phone and Messages attachment
+
+`omamobile-telephony-tegu` is an opt-in companion package; it installs the
+ModemManager-compatible bridge and session agent without enabling or
+starting the radio. Its attended helper attaches only to a running tegu
+modem and sitd. See its [runbook](../omamobile-telephony-tegu/README.md).
+
+This device package supplies sitd's modem-unit policy under
+`omamobile-sitd.service.d/10-device-modem.conf`: Requisite and ordering on
+`omamobile-tegu-modem.service`, with a CP ONLINE check before any future
+sitd start. It supplies no CP starter and enables neither service. It
+also prevents the generic modem runtime unit from starting on tegu.
+Remove any old full sitd unit copy in `/etc` using the runbook's attended
+migration; the package does not delete human overrides.

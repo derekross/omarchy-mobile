@@ -53,6 +53,14 @@ printf '[Desktop Entry]\nType=Application\nName=Papers\nExec=papers\n' >"$A/org.
 for b in gs201-cheetah:gs201 zumapro-tegu:zumapro; do
   mkdir -p "$t/dt-${b%%:*}"; printf 'google,%s\0google,%s\0' "${b%%:*}" "${b#*:}" >"$t/dt-${b%%:*}/compatible"
 done
+# The panel's modes, from a fake /sys/class/drm: the 7 Pro's by default, the
+# 9a's, a 1080x2400 panel, and none at all
+for p in 1440x3120 1080x2424 1080x2400; do
+  mkdir -p "$t/drm-$p/card2-DSI-1" "$t/drm-$p/card2-DP-1"
+  printf '%s\n%s\n' "$p" "${p%x*}x$((${p#*x} / 2))" >"$t/drm-$p/card2-DSI-1/modes"
+  echo 3840x2160 >"$t/drm-$p/card2-DP-1/modes"   # an external display isn't the panel
+done
+mkdir -p "$t/drm-none"
 # Omarchy's default-keyring step, as Omarchy ships it (only what's missing)
 mkdir -p "$t/omarchy/install/user"
 cat >"$t/omarchy/install/user/default-keyring.sh" <<'KR'
@@ -61,7 +69,8 @@ d="$HOME/.local/share/keyrings"; mkdir -p "$d"
 KR
 run() {
   env -i HOME="${RUN_HOME:-$H}" PATH="$F:/usr/bin:/bin" XDG_RUNTIME_DIR="$t" OMAMOBILE_SHELL_SHARE="$pkg" OMAMOBILE_SYSTEM_APPLICATIONS="$A" \
-    OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
+    OMAMOBILE_DT="${RUN_DT:-$t/dt-gs201-cheetah}" OMAMOBILE_DRM="${RUN_DRM:-$t/drm-1440x3120}" \
+    OMAMOBILE_SQUEEKBOARD_SHARE="$pkg/squeekboard/keyboards" \
     GSETTINGS_NO_CLICK_POLICY="${GSETTINGS_NO_CLICK_POLICY:-}" \
     OMAMOBILE_VOICE_MODELS="${RUN_VOICE_MODELS:-$t/no-voice-models}" OMAMOBILE_VOXTYPE="${RUN_VOXTYPE:-voxtype}" \
     OMARCHY_PATH="${RUN_OMARCHY_PATH:-$t/omarchy}" \
@@ -188,6 +197,10 @@ for flag in --enable-wayland-ime --wayland-text-input-version=3 --force-device-s
   [[ $(grep -cx -- "$flag" "$flags") == 1 ]] || fail "chromium-flags.conf has $flag once"
 done
 grep -c '^"--user-agent=.*Mobile Safari/537.36"$' "$flags" >/dev/null || fail "the mobile user agent stays quoted on its line"
+# Grok Bot's flags: the 7 Pro's factor, once, after two logins
+gflags=$H/.config/grok-bot-flags.conf
+[[ $(grep -cx -- --force-device-scale-factor=0.83 "$gflags") == 1 ]] || fail "grok-bot-flags.conf has the 7 Pro's factor once"
+[[ $(wc -l <"$gflags") == 1 ]] || fail "grok-bot-flags.conf holds only that"
 
 # An earlier user with their own values: a monitor scale of 2, their own
 # foot padding, multiplier and long press, and one of the flags already;
@@ -197,6 +210,7 @@ cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$h/.config/hypr/"
 printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = 2\n' >"$h/.config/hypr/monitors.lua"
 touch "$h/.local/state/omarchy/done/omamobile-monitor-scale"
 printf -- '--enable-wayland-ime\n' >"$h/.config/chromium-flags.conf"
+printf -- '--force-device-scale-factor=1\n--disable-gpu\n' >"$h/.config/grok-bot-flags.conf"
 RUN_HOME=$h run
 [[ ! -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step waits for a foot.ini"
 mkdir -p "$h/.config/foot"
@@ -208,17 +222,33 @@ cmp -s "$h/.config/foot/foot.ini" "$t/custom-foot.ini" || fail "a user's own foo
 [[ -e $h/.local/state/omarchy/done/omamobile-foot-touch ]] || fail "the foot step runs once foot.ini is there"
 [[ $(grep -cx -- --enable-wayland-ime "$h/.config/chromium-flags.conf") == 1 ]] || fail "a flag the user has isn't added twice"
 grep -cx -- --wayland-text-input-version=3 "$h/.config/chromium-flags.conf" >/dev/null || fail "the missing flag is added"
-pass "GDK scale, foot and Chromium's input method, once each, and a user's own values are kept"
+g=$h/.config/grok-bot-flags.conf
+[[ $(grep -c -- '^--force-device-scale-factor=' "$g") == 1 ]] && grep -cx -- --force-device-scale-factor=1 "$g" >/dev/null \
+  || fail "a user's own Grok Bot scale factor stays theirs"
+[[ $(wc -l <"$g") == 2 ]] && grep -cx -- --disable-gpu "$g" >/dev/null || fail "Grok Bot's file keeps the user's other flags, unchanged"
+pass "GDK scale, foot, Chromium's and Grok Bot's flags, once each, and a user's own values are kept"
 
 # The Pixel 9a: a new user gets 8 / 3 (405x909 logical), and GDK_SCALE stays
 # Omarchy's 2 (its step only follows a monitor scale of exactly 3)
 h9=$t/tegu; mkdir -p "$h9/.config/hypr" "$h9/.config/omarchy/extensions"
 cp "$H"/.config/hypr/{looknfeel,autostart}.lua "$h9/.config/hypr/"
 printf 'local omarchy_gdk_scale = 2\nlocal omarchy_monitor_scale = "auto"\n' >"$h9/.config/hypr/monitors.lua"
-RUN_HOME=$h9 RUN_DT=$t/dt-zumapro-tegu run
+RUN_HOME=$h9 RUN_DT=$t/dt-zumapro-tegu RUN_DRM=$t/drm-1080x2424 run
 grep -cx 'local omarchy_monitor_scale = 8 / 3' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's monitor scale is 8 / 3"
 grep -cx 'local omarchy_gdk_scale = 2' "$h9/.config/hypr/monitors.lua" >/dev/null || fail "the 9a's GDK_SCALE step is skipped"
-pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2"
+grep -cx -- --force-device-scale-factor=0.70 "$h9/.config/grok-bot-flags.conf" >/dev/null || fail "Grok Bot's factor on the 9a (405 px) is 0.70"
+pass "the Pixel 9a's scale: 8 / 3, GDK_SCALE left at 2, Grok Bot at 0.70"
+
+# Grok Bot's factor follows the panel: 0.62 for a 1080 px panel at scale 3
+# (360 px), and 0.83 when no panel mode can be read
+for c in 1080x2400:0.62 none:0.83; do
+  hg=$t/grok-${c%%:*}; mkdir -p "$hg/.config/hypr" "$hg/.config/omarchy/extensions"
+  cp "$H"/.config/hypr/{looknfeel,autostart,monitors}.lua "$hg/.config/hypr/"
+  RUN_HOME=$hg RUN_DRM=$t/drm-${c%%:*} run
+  grep -cx -- "--force-device-scale-factor=${c#*:}" "$hg/.config/grok-bot-flags.conf" >/dev/null \
+    || fail "Grok Bot's factor with panel ${c%%:*} is ${c#*:}"
+done
+pass "Grok Bot's scale factor gives about 578 px of layout width on any panel"
 
 # Voxtype (phase 3): base.en stays the model, and Whisper's context is cut to
 # the clip (context_window_optimization) once; 0.2.58-0.2.62's tiny.en is
