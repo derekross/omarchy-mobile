@@ -47,8 +47,8 @@ until the slot-B install and its CONTRIBUTING.md §3.1 entry are agreed.
 | bootloader firmware (`xbl`, `abl`, `tz`, `modem`, ...) | OxygenOS firmware, identical on `_a` and `_b` | never written by this port | - |
 
 **Writes made by hand.** Every write below was typed by hand, outside
-`tools/install-phone` and `bin/omamobile` (whose installer path refuses
-`android-v0`), and none will be repeated:
+`tools/install-phone` and `bin/omamobile` (whose installer path refused
+`android-v0` then), and none will be repeated:
 
 - `fastboot`: `flash boot_a` and `flash system_a` (the rescue),
   `erase dtbo_b`, `flash userdata`, `flash boot_b` twice, and
@@ -100,6 +100,68 @@ tree and goes away if stock is restored.
 **With no USB host**, a `fastboot boot` of the shared init gives up after
 20 s and panics, and `panic=10` reboots the phone. ABL then starts the
 active slot, A, which is the rescue.
+
+## 2026-11-09: the §3.1 entry for boot_b
+
+The plan for putting this port on slot B for good, and the one GPT write
+it needs ([CONTRIBUTING](../../CONTRIBUTING.md) §3.1, enchilada entry).
+Nothing below has run on the phone yet except the read-only GPT copy.
+
+**The way back.** Slot A holds the Arch rescue, not stock, and stays that
+way: the owner's written acceptance of buttons-only recovery through the
+rescue is on [#432](https://github.com/derekross/omarchy-mobile/issues/432#issuecomment-6758389898).
+
+**The install**, each step on the owner's go:
+
+1. `tools/install-phone --dry-run`, then the install, with
+   `--bootloader-slots-match unreported` (ABL reports no bootloader
+   version; every firmware partition is identical on `_a` and `_b` in the
+   2026-11-05 backup). It writes `boot_b` and `userdata`, with
+   `AUTO_WRITE=no`, then `set-active b`. Day-2 kernels come by
+   `bin/omamobile push`, which finds `boot_b` on `sde`.
+2. From that first boot of slot B: `tools/mark-slot-b --device enchilada`
+   (dry run), compared with the expected values below, then `--write`.
+
+**The GPT write.** `sde`'s GPT, read 2026-11-09 from the rescue
+(`sfdisk --dump`, and the raw sectors of both copies):
+
+- 4096-byte sectors, 786432 of them; 96 entries of 128 bytes, entries in
+  LBA 2-4 (primary) and 786427-786429 (backup), headers at 1 and 786431;
+- `boot_b` is `sde39`, entry 38, at byte 768 of LBA 3 and of LBA 786428;
+- before the install its attributes read `0x003a000000000000`: priority
+  2, not active, 7 tries, not successful, not unbootable;
+- CRCs then: entries `0x0a9fe94a`, primary header `0xb62ccea8`, backup
+  header `0x619c2dc8`. `set-active b` rewrites all three, so the tool
+  checks the live ones rather than these.
+
+`tools/mark-slot-b` refuses unless the phone booted slot B, the GPT's
+two copies are valid and equal, `boot_b` is found once at entry 38 in LBA
+3 and 786428, and it is active and not unbootable. It then sets bit 54
+only, rewrites the entry-array CRC and both header CRCs, and changes no
+byte outside LBA 1, 3, 786428 and 786431. It writes the primary pair
+first and reads it back before the backup pair, so a valid copy exists
+at every moment. A dry run of its check against the 2026-11-09 copy found
+entry 38 and the CRCs above.
+
+**Slot flags, before and after** (A and B: successful / unbootable /
+retry-count, `current-slot`):
+
+| Read | `current-slot` | A | B |
+| --- | --- | --- | --- |
+| before, 2026-11-07 (above) | a | no / no / 5 | no / no / 7 |
+| after the install's `set-active b` | to be recorded | | |
+| after `mark-slot-b --write` | to be recorded | | |
+
+**Rollback for a corrupted GPT.** A copy of `sde`'s LBA 0-5 and
+786426-786431 (both GPT copies whole) and its `sfdisk --dump` were taken
+read-only on 2026-11-09 and are kept off the repository: they hold the
+disk's GUIDs. Should both copies end up invalid, boot the rescue on slot A
+by the buttons (it keeps the whole-disk nodes), write the two ranges back
+with `dd` (4096-byte blocks, `seek` 0 and 786426), and compare `sfdisk
+--dump` with the saved one. That restores the attributes as they were
+before the install, so the install's `set-active b` follows it. If only
+one copy is invalid, ABL and `sfdisk` use the other, and the tool refuses
+to run until both agree.
 
 ## 2026-11-08: the LUN-aware guard, booted RAM-only
 

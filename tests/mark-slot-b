@@ -73,8 +73,8 @@ changed=$(cmp -l "$t/disk.orig" "$t/disk.img" | awk '{print int(($1 - 1) / 4096)
 [[ $changed == "$lbas" ]] || fail "--write changed sectors '$changed', not '$lbas'"
 sfdisk -q --sector-size 4096 -V "$t/disk.img" > "$t/verify" 2>&1 || { cat "$t/verify"; fail "sfdisk rejects the marked GPT"; }
 sfdisk --sector-size 4096 -d "$t/disk.img" > "$t/dump" 2>&1
-grep 'name="boot_b"' "$t/dump" | grep -q 'GUID:49,50,51,52,53,54' || { grep boot "$t/dump"; fail "boot_b is not marked in the dump"; }
-grep 'name="boot_a"' "$t/dump" | grep -q 'attrs="GUID:48,49,50,52"$' || fail "boot_a changed"
+grep 'name="boot_b"' "$t/dump" | grep -c 'GUID:49,50,51,52,53,54' >/dev/null || { grep boot "$t/dump"; fail "boot_b is not marked in the dump"; }
+grep 'name="boot_a"' "$t/dump" | grep -c 'attrs="GUID:48,49,50,52"$' >/dev/null || fail "boot_a changed"
 mark > "$t/out" 2>&1 || fail "the marked GPT fails its own check"
 grep -q "already marked successful" "$t/out" || fail "a second run does not see the mark"
 
