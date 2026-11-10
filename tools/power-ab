@@ -85,14 +85,6 @@ done
 [[ -n "$test" ]] || usage 1
 [[ $EUID -eq 0 ]] || { echo "power-ab: run as root" >&2; exit 1; }
 
-if ((detach)); then
-  args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms"
-        --units "$units" --user-units "$user_units" --user "$uname" --suspend "$suspend" "$test")
-  setsid nohup "$0" "${args[@]}" > /dev/null 2>&1 < /dev/null &
-  echo "power-ab: started (pid $!); unplug within ${unplug} s"
-  exit 0
-fi
-
 # The battery: the power supply of type Battery that reports current_now
 bat=
 for d in /sys/class/power_supply/*; do
@@ -142,6 +134,16 @@ case "$test" in
     (( ${#em_domains[@]} )) \
       || { echo "power-ab: no CPU energy model in /sys/kernel/debug/energy_model: EAS can't engage" >&2; exit 1; } ;;
 esac
+
+# Detach only after the checks above: a detached run has no terminal, so a
+# refusal there would go nowhere and the owner would unplug for nothing
+if ((detach)); then
+  args=(--unplug "$unplug" --phase "$phase" --settle "$settle" --rounds "$rounds" --delay-ms "$delay_ms"
+        --units "$units" --user-units "$user_units" --user "$uname" --suspend "$suspend" "$test")
+  setsid nohup "$0" "${args[@]}" > /dev/null 2>&1 < /dev/null &
+  echo "power-ab: started (pid $!); unplug within ${unplug} s"
+  exit 0
+fi
 
 # The units test touches only units that are active now
 [[ -z "$uname" ]] && uname=$(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" {print $2; exit}')
