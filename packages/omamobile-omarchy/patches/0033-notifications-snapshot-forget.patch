@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# Notifications: wait for both keyed stores before deleting, and clear one
+# daemon-owned snapshot with an acknowledged logical-key list. New arrivals
+# survive, and sender actions/images and quiet/DND state remain untouched.
+#
+# Against genuine Omarchy 4.5.0-3 after the public #471 patch 0019.
+# The 4.0.6 family keeps its existing serialized file-queue behavior.
+
+--- a/shell/plugins/notifications/Service.qml
++++ b/shell/plugins/notifications/Service.qml
+@@ -1195,6 +1195,7 @@
+   function forgetNotification(name) {
+     var key = String(name || "")
+     if (!Store.KEY.test(key)) return "none"
++    if (!liveLoaded || !historyLoaded) return "busy"
+     var exists = !!liveKeys[key] || !!Store.liveEntry(liveEntries, key)
+         || historyEntries.some(function(entry) { return entry.key === key })
+     if (!exists) return "ok"
+@@ -1203,6 +1204,20 @@
+     saveSoon("history")
+     closeToast(key, "forget", true)
+     return "ok"
++  }
++
++  // Forget one logical snapshot, not a sequence of external IPC clients.
++  // Arrivals after this call are not acknowledged and must remain visible.
++  function forgetAllNotifications() {
++    if (!liveLoaded || !historyLoaded)
++      return JSON.stringify({ version: 1, result: "busy", keys: [] })
++    var keys = Object.keys(liveKeys)
++    liveEntries.concat(historyEntries).forEach(function(entry) {
++      if (keys.indexOf(entry.key) < 0) keys.push(entry.key)
++    })
++    keys = keys.filter(function(key) { return Store.KEY.test(key) })
++    for (var i = 0; i < keys.length; i++) forgetNotification(keys[i])
++    return JSON.stringify({ version: 1, result: "ok", keys: keys })
+   }
+ 
+   function storeClose(key, reason) {
+@@ -1415,6 +1430,8 @@
+     function ping(): string { return "ok" }
+ 
+     function forget(name: string): string { return service.forgetNotification(name) }
++
++    function forgetAll(): string { return service.forgetAllNotifications() }
+ 
+     function isDnd(): string { return service.doNotDisturb ? "on" : "off" }
+ 

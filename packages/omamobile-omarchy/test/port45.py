@@ -80,6 +80,10 @@ def actual(t, ex, version, make_root, run, ok, read, series, package, parse_qml)
     node_tests = [
         ('upstream45/notifications/logic.cjs', [], 'actual notification functions'),
         ('notification-store45.cjs', [env['OMARCHY_SHELL_DIR']], 'keyed store and lock-glance compatibility'),
+        ('notification-snapshot.cjs', [
+            os.path.join(env['OMARCHY_SHELL_DIR'], 'plugins/notifications/Service.qml'),
+            os.path.join(env['OMARCHY_SHELL_DIR'], 'plugins/notifications'),
+        ], 'startup-safe snapshot notification deletion'),
     ]
     for script, arguments, label in node_tests:
         if not node:

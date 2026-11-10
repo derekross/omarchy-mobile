@@ -366,7 +366,7 @@ function newCapacityScope() {
     maxLiveNotifications: 100, heights: {}, fresh: {}, leaving: {}, departures: {}, layoutRevision: 0,
     arriving: '', jumping: false, travel: 24, arriveDuration: 250, leaveDuration: 200, placements: {},
     held: [], doNotDisturb: false,
-    liveEntries: [], historyEntries: [], unsaved: {}, liveLoaded: false,
+    liveEntries: [], historyEntries: [], unsaved: {}, liveLoaded: false, historyLoaded: false,
     saveTimer: { running: false, start() {} },
     deckDisplayName: '',
     hyprRevision: 0,
@@ -1079,6 +1079,9 @@ console.log('notification logic: passed')
 }
 {
   const s = newCapacityScope()
+  // Idempotent deletion is a post-startup contract.
+  s.liveLoaded = true
+  s.historyLoaded = true
   const n = s.fakeNotification(8, 'Synthetic forgotten')
   s.admit(n)
   const key = s.toasts.get(0).key
@@ -1109,5 +1112,21 @@ console.log('notification logic: passed')
   assert.equal(s.forgetNotification(key), 'ok', 'already-forgotten valid key is idempotent')
   s.drainCallLater()
   assert.equal(retainedState(), afterFirstForget, 'second forget leaves state unchanged')
+}
+{
+  const s = newCapacityScope()
+  const n = s.fakeNotification(9, 'Synthetic startup notification')
+  s.admit(n)
+  const key = s.toasts.get(0).key
+  const snapshot = () => JSON.stringify({
+    live: s.liveEntries, history: s.historyEntries, keys: s.liveKeys,
+    rows: s.toasts.rows, unsaved: s.unsaved,
+  })
+  const before = snapshot()
+  assert.equal(s.forgetNotification(key), 'busy', 'startup deletion waits for both stores')
+  assert.equal(snapshot(), before, 'unloaded deletion leaves all logical state untouched')
+  s.liveLoaded = true
+  assert.equal(s.forgetNotification(key), 'busy', 'history still loading cannot authorize deletion')
+  assert.equal(snapshot(), before)
 }
 console.log('mobile 4.5 reply/forget: passed')
