@@ -92,6 +92,9 @@ check(effect(modal, "maximize") == false and effect(modal, "float") == true and 
   "modal dialogs float centred, not maximized")
 local max = effect(modal, "max_size")
 check(type(max) == "table" and max[1] == "(monitor_w)" and max[2] == "(monitor_h)", "modal dialogs fit the screen")
+local soffice = { class = "^soffice$" }
+check(effect(soffice, "maximize") == false and effect(soffice, "float") == true and effect(soffice, "center") == true,
+  "LibreOffice's dialogs float centred at their own size, not stretched")
 local nautilus = { class = "^org.gnome.Nautilus$" }
 check(effect(nautilus, "maximize") == true and effect(nautilus, "float") == false
   and index(nautilus, "maximize") > index(modal, "maximize"), "the portal's file chooser is still a full sheet")

@@ -37,6 +37,14 @@ hl.window_rule({
   center = true,
   max_size = { "(monitor_w)", "(monitor_h)" },
 })
+-- LibreOffice's other dialogs (Tip of the Day at every start, Find &
+-- Replace, Special Character; class soffice, its documents are
+-- libreoffice-*) aren't modal but have a fixed size. Maximized, the window
+-- box filled the screen and Hyprland stretched the dialog's buffer to it:
+-- the tip of the day came up 405x821 with its text drawn tall and narrow.
+-- Floated at their own size and centred instead; one wider than the screen
+-- (the tip of the day is 634 px) is cut at the sides rather than stretched.
+hl.window_rule({ match = { class = "^soffice$" }, maximize = false, float = true, center = true })
 -- File dialogs (open, save, choose a folder) come from Nautilus through the
 -- portal (portal/hyprland-portals.conf). One with a parent window would float
 -- at its desktop size; tiled and maximized, it fills the screen between the
