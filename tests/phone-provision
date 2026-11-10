@@ -196,10 +196,12 @@ pass "first install, dry run: the six NV lines and props.conf from the phone's b
 if out=$(fresh --user alice "$t/factory.zip"); then fail "a first install without --nv-backup is refused"; fi
 grep -qF -- "--first-install needs --nv-backup DIR: take the read-only backup of the modem's partitions with tools/nv-backup DIR (docs/INSTALL.md step 6)" <<<"$out" ||
   { echo "$out"; fail "says to give --nv-backup"; }
-if out=$(HOME=$H PHONE_SSH=$t/no-ssh tools/phone-provision --work "$t/work" --user alice --nv-backup "$N" "$t/factory.zip" 2>&1); then
-  fail "--nv-backup without --first-install is refused"
-fi
-grep -qF -- "say which run this is" <<<"$out" || { echo "$out"; fail "--nv-backup alone: says to name the run"; }
+# --nv-backup alone is the published 2026.11.08 command: a first install,
+# the same as with --first-install, also beside an old backup in the home
+out_old=$(HOME=$M PHONE_SSH=$t/no-ssh tools/phone-provision --work "$t/work" --dry-run --user alice --nv-backup "$N" "$t/factory.zip" 2>&1) ||
+  { echo "$out_old"; fail "--nv-backup alone runs as a first install"; }
+out_new=$(FRESH_HOME=$M fresh --dry-run --user alice --nv-backup "$N" "$t/factory.zip") || { echo "$out_new"; fail "the explicit first install runs"; }
+[[ $(same "$out_old") == "$(same "$out_new")" ]] || { diff <(same "$out_new") <(same "$out_old") || true; fail "--nv-backup alone does what --first-install --nv-backup does"; }
 for o in "--restore $B" "--backup $B"; do
   # shellcheck disable=SC2086 # two words on purpose
   if out=$(fresh --user alice --nv-backup "$N" $o "$t/factory.zip"); then fail "--first-install with $o is refused"; fi
@@ -229,7 +231,7 @@ if out=$(PHONE_SSH=$t/no-ssh tools/phone-provision --skip-extract --restore "$B"
 fi
 grep -qF -- "--nv-backup goes with --first-install" <<<"$out" || { echo "$out"; fail "says --nv-backup goes with --first-install"; }
 [[ ! -e $t/ssh.calls ]] || fail "a refused first install never contacts the phone"
-pass "first install: refused without --nv-backup, without --first-install, together with --restore, with one of the six NV lines missing or repeated, with an option that needs phone-config.tar; --restore refused without a phone-config.tar or with --nv-backup"
+pass "first install: refused without --nv-backup, together with --restore, with one of the six NV lines missing or repeated, with an option that needs phone-config.tar; --restore refused without a phone-config.tar or with --nv-backup"
 
 # The SHA256SUMS file and its line format (sha256sum's own: lower-case hex,
 # two spaces), PHONE_BOOTCONFIG (it goes into the command run on the phone)

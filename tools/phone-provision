@@ -215,6 +215,10 @@ SH
 first_install=0
 nv_images=(modem_a modem_b efs efs_backup modem_userdata persist)
 if [[ $device == cheetah ]]; then
+  # --nv-backup DIR alone is a first install too: only a first install takes
+  # an NV backup, so it names the run by itself, and it is the command the
+  # 2026.11.08 bundle's instructions print
+  ((first_given || backup_given)) || [[ -z $nv_backup ]] || first_given=1
   ((first_given == 0 || backup_given == 0)) ||
     die "--first-install and --restore DIR are two different runs: give one (--first-install takes nothing from a phone-config.tar)"
   ((first_given || backup_given)) ||
