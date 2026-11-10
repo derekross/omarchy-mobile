@@ -153,7 +153,7 @@ done
 grep -q 'omamobile-sitd-policy' PKGBUILD || fail "the package provides its sitd policy capability"
 pass "install stages the package, enables only the guards, and nothing that marks a slot"
 
-for m in cpif shm_ipc pcie_gs201_cp; do
+for m in cpif shm_ipc pcie_gs201_cp gnss_spi gnssif; do
   grep -qx "blacklist $m" "$tmp/root/usr/lib/modprobe.d/omamobile-tegu-guards.conf" \
     || fail "the modem policy must prevent $m from autoloading"
 done
