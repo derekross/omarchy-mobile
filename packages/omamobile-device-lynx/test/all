@@ -128,6 +128,9 @@ done
   || fail "install stages the display start script"
 [[ -f $tmp/root/usr/lib/systemd/system/omamobile-lynx-display.service ]] \
   || fail "install stages the display service"
+grep -qx 'ConditionPathExists=/sys/bus/platform/devices/1c240000.display-controller' \
+  "$tmp/root/usr/lib/systemd/system/omamobile-lynx-display.service" \
+  || fail "the display unit names the DECON node"
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-lynx-display.service") == ../omamobile-lynx-display.service ]] \
   || fail "the display service is enabled"
 # The panel gate: allow only the S6E3FC5 names, and create the parameter
