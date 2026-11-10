@@ -200,47 +200,52 @@ before the reboot, isn't the reset loop the latch guards against, and the
 reboot takes the CP down with the SoC. On the 9a that path passed once, on
 2026-11-03 (TELEPHONY-PLAN 2.7).
 
-The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`) hasn't
-run through this script yet; the in-tree drivers have run from the
-bring-up runners.
+The in-tree driver branch (the kernel's `cpif` and `pcie_gs201_cp`, taken
+when the device tree has a `cpif` node) first ran through this script on
+2026-11-09, on a published-style kernel with the device's `modem-cpif`
+overlay: three boots by the boot unit, two confirmed stops and four GNSS
+sessions (TELEPHONY-PLAN 2.9).
 
-### The modem at boot (on by default)
+### Starting it at boot
 
 `omamobile-tegu-modem-boot.service` runs `omamobile-tegu-modem-up --phone
---gnss` at boot. From 0.2.14 the package turns it on with a vendor wants
-link (`/usr/lib/systemd/system/multi-user.target.wants/`), as it does for
-the AoC, graphics and USB rescue starts and as the Pixel 7 Pro's package
-does for its modem since #398. The unit is skipped, not failed, on a phone
-that can't run it: without the three files `tools/phone-provision` puts on
-the phone (the modem chroot, the NV checksums, the board properties), or
-without CP drivers, either the kernel's (the device tree's `cpif` node, the
-published kernel from linux-omarchy-mobile#187) or the owner's bring-up
-modules in `/var/lib/omamobile-tegu/modem`. `systemctl is-enabled` reads
-"disabled" for a unit started by a vendor link alone (it reports `/etc` and
-`/run` links only); the proof the start is on is the link itself, or
-`systemctl list-dependencies --plain multi-user.target`.
+--gnss` at boot. The package installs it disabled: it is opt-in while
+marking slot B on the 9a is on hold, because the unit can't tell whether B
+is marked and a reset with B unmarked spends one of ABL's three tries.
+Before enabling it:
 
-What it costs: with the modem up the palmtop doesn't suspend (the sleep
-inhibitor, until suspend with the CP up is qualified), so the battery drains
-as if awake. What it needs: slot B marked successful (otherwise every reset
-spends one of ABL's three tries, and at zero it boots stock on slot A, which
-has overwritten `userdata`), and a kernel with linux-omarchy-mobile#172 (the
-PERIC0 GPIO bus clock kept on; without it the modem's GPIO writes hang the
-palmtop within minutes, and a test kernel built from the integration tree as
-it stands lacks it: check that
-`/sys/kernel/debug/clk/zumapro_gpio_peric0/clk_flags` reads
-`CLK_IS_CRITICAL`). The published kernel has #172.
+- **Slot B marked successful.** Otherwise every reset spends one of ABL's
+  three tries, and at zero it boots stock on slot A, which has overwritten
+  `userdata`.
+- **A kernel with linux-omarchy-mobile#172** (the PERIC0 GPIO bus clock
+  kept on). Without it the modem's GPIO writes hang the palmtop within
+  minutes. The published kernel has it; a test kernel built from an older
+  tree may not: check that
+  `/sys/kernel/debug/clk/zumapro_gpio_peric0/clk_flags` reads
+  `CLK_IS_CRITICAL`.
+- **The charger in** for the first boots.
 
-**Off:** `systemctl mask omamobile-tegu-modem-boot` (a vendor link survives
-`disable`), then reboot. If the palmtop resets before you can log in, the
-latch does the work: the boot after a reset with the modem up starts it once
-more, and the boot after a second reset in a row finds the latch and its
-copy and doesn't start the modem, so log in then, mask the unit and remove
-both. On a 9a whose slot B isn't marked successful, mask the unit after the
-first reset instead of letting the retry run: every reset spends one of
-ABL's three tries, and the retry would spend a second. If it still doesn't
-come up, hold Volume Down + Power for fastboot and boot a known-good image
-set.
+Then `systemctl enable omamobile-tegu-modem-boot`. With it on the battery
+drains as if awake, since the palmtop no longer suspends.
+
+An enabled unit is skipped, not failed, on a phone that can't run it:
+without the three files `tools/phone-provision` puts on the phone (the modem
+chroot, the NV checksums, the board properties), or without CP drivers.
+The drivers are the kernel's when the device tree has a `cpif` node, or else
+the owner's bring-up modules in `/var/lib/omamobile-tegu/modem`. The board's
+own device tree has only the `modem` node under the PCIe link; the `cpif`
+node comes from the device's `modem-cpif` overlay, which
+`bin/omamobile images` applies from the descriptor's `DTB_OVERLAYS`.
+
+**Rollback:** `systemctl disable omamobile-tegu-modem-boot`, then reboot.
+If the palmtop resets before you can log in, the latch does the work: the
+boot after a reset with the modem up starts it once more, and the boot
+after a second reset in a row finds the latch and its copy and doesn't
+start the modem, so log in then, disable the unit and remove both. On a 9a
+whose slot B isn't marked successful, disable the unit after the first reset
+instead of letting the retry run: every reset spends one of ABL's three
+tries, and the retry would spend a second. If it still doesn't come up, hold
+Volume Down + Power for fastboot and boot a known-good image set.
 
 ## Optional Phone and Messages attachment
 

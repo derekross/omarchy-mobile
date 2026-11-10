@@ -104,13 +104,13 @@ for unit in omamobile-tegu-graphics omamobile-tegu-usb-rescue; do
   [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/$unit.service") == ../$unit.service ]] \
     || fail "$unit is enabled by a vendor wants link"
 done
-# The modem's boot start is on by default through a vendor wants link (0.2.14,
-# as #398 did for the 7 Pro), and skipped, not failed, on a phone without the
+# The modem's boot start is opt-in: installed, never enabled by the package.
+# Enabled by the owner, it is skipped, not failed, on a phone without the
 # provisioning or the CP drivers
 [[ -f $tmp/root/usr/lib/systemd/system/omamobile-tegu-modem-boot.service ]] || fail "install stages the modem's boot start"
-[[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-modem-boot.service") == ../omamobile-tegu-modem-boot.service ]] \
-  || fail "the modem's boot start is enabled by a vendor wants link"
-grep -q 'omamobile-tegu-modem-boot' omamobile-device-tegu.install && fail "the install scriptlet must not enable the modem's boot start (the vendor link does)"
+[[ -e $tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-tegu-modem-boot.service ]] \
+  && fail "the modem's boot start is enabled by the package (it must be opt-in)"
+grep -q 'omamobile-tegu-modem-boot' omamobile-device-tegu.install && fail "the install scriptlet must not enable the modem's boot start"
 for c in /usr/lib/omamobile-vendor/modem/root /etc/omamobile/modem-nv.sha256 /var/lib/omamobile-vendor/modem/props.conf; do
   grep -qx "ConditionPathExists=$c" vendor/systemd/system/omamobile-tegu-modem-boot.service || fail "the boot start is skipped without $c"
 done

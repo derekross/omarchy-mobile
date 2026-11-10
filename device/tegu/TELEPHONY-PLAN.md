@@ -232,12 +232,24 @@ does; on the charger; `omamobile-device-tegu` 0.2.12, `omamobile-modem-sit`
    last abnormal reason across clean reboots; its "power on source" tells
    them apart: 0x20 after the watchdog resets, 0x80 after a clean reboot.)
 
-### 2.8 On by default (gated runbook, the follow-up to #372)
+### 2.8 The boot start running by itself (gated runbook and results, the follow-up to #372)
 
-What changes: `omamobile-device-tegu` 0.2.14 turns `omamobile-tegu-modem-boot`
-on with a vendor wants link, as #398 did for the 7 Pro, with conditions that
-skip it (not fail it) on a phone without the provisioning files or without CP
-drivers. Preconditions as 2.7: slot B marked, the kernel with #172 (check
+**Status: the unit stays opt-in.** This runbook was written to turn the
+start on by default, and its runs below are the record of the unit running
+by itself on the owner's palmtop, where it was turned on with a vendor wants
+link for the test (step 1; an owner turns it on with `systemctl enable`).
+The package doesn't ship that link, for two reasons: marking slot B on the
+9a is on hold (#483), the unit can't tell whether B is marked, and with B
+unmarked a reset spends one of ABL's three tries and the latch's retry a
+second; and a phone built from the tree gets its CP drivers' `cpif` node
+from the `modem-cpif` overlay, whose first runs are 2.9. Turning the link on
+is a small change once both are settled.
+
+What the test changed: `omamobile-tegu-modem-boot` turned on with a vendor
+wants link, as #398 did for the 7 Pro, with conditions that skip it (not
+fail it) on a phone without the provisioning files or without CP drivers
+(the conditions are in the package). Preconditions as 2.7: slot B marked,
+the kernel with #172 (check
 `/sys/kernel/debug/clk/zumapro_gpio_peric0/clk_flags` reads
 `CLK_IS_CRITICAL`), the charger in. Risk: medium (the modem starts at every
 boot; the latch's one retry and hold bound a reset loop).
@@ -250,7 +262,7 @@ boot; the latch's one retry and hold bound a reset loop).
 | 4. Off and on / low | `systemctl mask omamobile-tegu-modem-boot`, reboot; `systemctl unmask`, reboot | Masked: no modem, no latch, the palmtop sleeps; unmasked: the modem comes back at boot | The masked boot starts the modem | Remove the mask |
 | 5. `tools/nv-backup -d tegu --check` / low | After the reboots | Every NV partition the same as the backup | A difference | Stop; look before any further boot |
 
-**2.8 results (2026-11-09, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` build #100, `omamobile-device-tegu` 0.2.14 from this branch built on the palmtop, `omamobile-modem` 0.1.17; on the charger).**
+**2.8 results (2026-11-09, `7.3.0-rc6-omamobile-tegu-s2mpg15-m1-g991042e2eff3-dirty` build #100, `omamobile-device-tegu` 0.2.14 with the vendor link, built on the palmtop, `omamobile-modem` 0.1.17; on the charger).**
 
 1. Installed 13:14 MST: the vendor link is there (`multi-user.target.wants/omamobile-tegu-modem-boot.service -> ../omamobile-tegu-modem-boot.service`), `systemctl is-enabled` reads "disabled" as a vendor link does, `systemctl list-dependencies --plain multi-user.target` lists the unit once. The gate's `clk_flags` check read `CLK_IS_CRITICAL`. Passed.
 2. Two `systemctl reboot`s with nothing started by hand (13:15 and 13:21 MST): each boot the unit ran (`ConditionResult=yes`, `Result=success`), "drivers: the bring-up modules", "modem OK: CP ONLINE", the phone service and the bridge started; `omamobile-sit status`: SIM ready, radio on, home LTE, IMS voice and SMS, data bearer up; the latch read this boot and `invocation <id>` and `online`, one latch file; gnssd running. The first boot's stop at the second reboot: "CP OFFLINE", "modem stopped (success, the CP OFFLINE before the daemons went): /var/lib/omamobile/modem-bringup-started removed", "Deactivated successfully"; 0 `ufshcd_err_handler` passes in that boot, 0 UFS error lines in both. Passed.
@@ -265,6 +277,35 @@ thermal ok. It flagged a stale bring-up unit in `/etc/systemd/system` from
 2026-10-28 (`omamobile-tegu-audio.service`, failing), now moved aside, and
 new dmesg lines from NFC (an unknown notification opcode) and CPIF (packets
 for a channel nobody has opened); neither came with a fault.
+
+### 2.9 The in-tree drivers through the starter, on the published kernel (2026-11-09)
+
+The 2.8 boots took the starter's bring-up branch ("drivers: the bring-up
+modules"), because the board's device tree has no `cpif` node: it comes
+from the device's `modem-cpif` overlay ([#594](https://github.com/derekross/omarchy-mobile/pull/594)).
+With that overlay on the published DTB, on
+`7.3.0-rc6-omamobile-push1-g773b4102f5ec` (`omamobile` at `abcd6aac51cf`
+plus kernel #224, kernel #236 and the 9a's GNSS nodes; defconfig, the shared
+config, #274's PCIe PHY and the GNSS link driver), the same unit took the
+other branch, on the charger, watched over SSH with the owner away for the
+first boot:
+
+- Three boots in a row by the unit itself (18:32, 18:51 and 19:12 MST):
+  "drivers: the running kernel's" (`modprobe pcie_gs201_cp allow_hw=1`,
+  `shm_ipc`, `cpif`, `gnss_spi`, `gnssif`), "modem OK: CP ONLINE" 8 s after
+  the unit started, the phone service and the bridge up, registered at home
+  on LTE, the latch with the boot's invocation, no UFS error-handler pass.
+- Two `systemctl reboot`s with the modem up (18:45 and 19:11 MST): "CP
+  OFFLINE", then "modem stopped (success, the CP OFFLINE before the daemons
+  went)", the latch removed. A boot with the unit masked between them
+  started nothing and left no latch.
+- Four 150 s GNSS sessions through the Location switch's socket: 108 of
+  113, 142 of 143, 105 of 107 and 142 of 144 GGA sentences fixed; each
+  stopped on its idle lease with the CP ONLINE.
+
+The details, and why the GNSS bus keeps zumapro's SPI port configuration,
+are in MODEM-PLAN after section P (with #594). Still to run on these
+drivers: a call, texts and data, and the NV check after them.
 
 Qualification, attended and on the charger: boot to ONLINE, data and texts;
 the inhibitor; NV and UFS unchanged; then shutdown and reboot on their own.
