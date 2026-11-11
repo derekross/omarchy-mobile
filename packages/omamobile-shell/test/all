@@ -300,7 +300,13 @@ grep -cF '"/.local/state/omarchy/notifications/history.json"' plugins/omamobile.
 # Omarchy 4.0's files and 4.5's live.json and history.json, chosen by what
 # exists: test/notifications-store.sh runs the shade's own commands on both.
 grep -cF '"sh", Quickshell.shellDir, root.notificationsDir].concat(notificationFiles)' "$qs" >/dev/null || fail "Clear all hands every notification read to the clear script"
-bash test/notifications-store.sh >/dev/null || { bash test/notifications-store.sh; fail "the shade reads and clears both notification layouts"; }
+# It runs NotificationsModel.js under node, which a build machine may lack
+# (ms01's publish, 2026-11-11); CI has it.
+if command -v node >/dev/null; then
+  bash test/notifications-store.sh >/dev/null || { bash test/notifications-store.sh; fail "the shade reads and clears both notification layouts"; }
+else
+  pass "the shade reads and clears both notification layouts # SKIP no node"
+fi
 grep -cF 'call omamobile.bar notificationsSeen' "$qs" >/dev/null || fail "the shade tells the bar what it has shown"
 grep -cF 'function notificationsSeen(stamp: string): string' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar serves notificationsSeen"
 grep -cF '"/.local/state/omamobile/notifications-seen"' plugins/omamobile.bar/Bar.qml >/dev/null || fail "the bar reads the shade's mark at start"
