@@ -168,8 +168,16 @@ def calls_suite(session_address):
                               'answered from Calls')), 'Calls answers through Call.Accept')
         calls_api(path, 'org.gnome.Calls.Call', 'SendDtmf', GLib.Variant('(s)', ('7',)))
         calls_api(path, 'org.gnome.Calls.Call', 'Hangup')
-        check(bool(wait_until(lambda: chain.client.prop(mm_call, mm.CALL, 'State') == mm.CALL_TERMINATED, 10,
-                              'hung up from Calls')), 'Calls hangs up through Call.Hangup')
+        # Calls may delete the object as soon as it ends. Check the recorded
+        # transition and the modem request, rather than polling a vanished object.
+        def terminated(call_path):
+            return any(s[0] == call_path and s[1] == mm.CALL and s[3][1] == mm.CALL_TERMINATED
+                       for s in chain.client.named('StateChanged'))
+
+        check(bool(wait_until(lambda: terminated(mm_call), 10, 'hung up from Calls')),
+              'Calls reports the incoming call ended')
+        check(len([e for e in chain.entries() if e.get('type') == 'req' and e.get('id') == 0x0d03]) == 1,
+              'Calls sends one incoming hangup to the modem')
         check([e.get('key') for e in chain.entries() if e.get('event') == 'dtmf'] == ['7'], 'Calls sends DTMF')
 
         subprocess.run(['gnome-calls', f'--dial={OTHER}'], env=dict(os.environ, DBUS_SESSION_BUS_ADDRESS=session_address),
@@ -183,12 +191,12 @@ def calls_suite(session_address):
                                        if not v['org.gnome.Calls.Call']['Inbound']], 10, 'outgoing in Calls')[0]
         calls_api(out_path, 'org.gnome.Calls.Call', 'Hangup')
 
-        def ended_or_deleted():
-            # Calls deletes a call (Voice.DeleteCall) once it has ended.
-            if dialled[0] not in chain.client.prop(ROOT + '/Modem/0', mm.VOICE, 'Calls'):
-                return 'deleted'
-            return chain.client.prop(dialled[0], mm.CALL, 'State') == mm.CALL_TERMINATED
-        check(wait_until(ended_or_deleted, 10, 'ended') == 'deleted', 'Calls hangs up and deletes its call')
+        check(bool(wait_until(lambda: terminated(dialled[0]), 10, 'outgoing call ended')),
+              'Calls reports the outgoing call ended')
+        check(bool(wait_until(lambda: dialled[0] not in chain.client.prop(ROOT + '/Modem/0', mm.VOICE, 'Calls'),
+                              10, 'outgoing call deleted')), 'Calls deletes its ended call')
+        check(len([e for e in chain.entries() if e.get('type') == 'req' and e.get('id') == 0x0d03]) == 2,
+              'Calls sends one outgoing hangup to the modem')
         with open(log, errors='replace') as f:
             text = f.read()
         bad = [line for line in text.splitlines() if re.search(r'CRITICAL|Segmentation|dumped core', line)]
