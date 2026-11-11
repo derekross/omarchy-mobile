@@ -58,7 +58,21 @@ resolve_all
 ((${#ok_pkgs[@]} + ${#absent_pkgs[@]} + ${#unmet_pkgs[@]} == 0)) || fail "an empty list resolves to nothing"
 echo "ok - resolve_all sorts a list and keeps each reason once"
 
+# Omarchy's package list: one file on 4.0, composed on 4.5
+L=$t/lists; mkdir -p "$L/40" "$L/45" "$L/none"
+printf '# base\nbash\nhyprland  # the compositor\n\nlimine\nbash\n' > "$L/40/omarchy-base.packages"
+cp "$L/40/omarchy-base.packages" "$L/45/"
+printf 'zram-generator\nrtkit\nhyprland\n' > "$L/45/omarchy-aarch64.packages"
+printf '# only x86_64 builds these\nlimine\n' > "$L/45/omarchy-x86_64-only.packages"
+printf 'asahi-fwextract\n' > "$L/45/omarchy-aarch64-apple.packages"
+[[ $(omarchy_packages "$L/40" | tr '\n' ' ') == "bash hyprland limine " ]] || fail "Omarchy 4.0: the base list, comments and repeats removed (got: $(omarchy_packages "$L/40" | tr '\n' ' '))"
+[[ $(omarchy_packages "$L/45" | tr '\n' ' ') == "bash hyprland zram-generator rtkit " ]] \
+  || fail "Omarchy 4.5: base plus the aarch64 list, minus the x86_64-only one, never a named platform's (got: $(omarchy_packages "$L/45" | tr '\n' ' '))"
+omarchy_packages "$L/none" >/dev/null 2>&1 && fail "no base list is a failure, not an empty list"
+echo "ok - Omarchy's package list: the base file on 4.0; base plus aarch64 minus x86_64-only on 4.5"
+
 inside=rootfs/build-inside
+grep -qF 'done < <(omarchy_packages "$omarchy_lists")' "$inside" || fail "build-inside takes Omarchy's list from omarchy_packages"
 grep -qF 'source /src/rootfs/resolve.sh' "$inside" || fail "build-inside sources resolve.sh"
 grep -qF 'resolve_all "${base[@]}"' "$inside" || fail "build-inside checks the base list with resolve_all"
 grep -qF 'resolve_all "${listed[@]}"' "$inside" || fail "build-inside checks Omarchy's list with resolve_all"
