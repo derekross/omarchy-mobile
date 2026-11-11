@@ -182,6 +182,20 @@ e2fsck -fn "$flashed" >/dev/null 2>&1 || fail "the flashed copy of a lived-in ro
 [[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "the old authorized_keys is replaced"
 pass "a root that already has /etc/omamobile and /root/.ssh installs clean"
 
+# debugfs splits its commands at blanks: a --work path with a space and a
+# double quote in it still gets the three files into the image copy
+w=$t/'a "spaced" dir'/work
+install --work "$w" || { cat "$t/out"; fail "a --work path with a space and a quote installs"; }
+flashed=$t/userdata.flashed
+if command -v simg2img >/dev/null && [[ $(head -c4 "$flashed" | od -An -tx1 | tr -d ' ') == 3aff26ed ]]; then
+  simg2img "$flashed" "$t/flashed.img"; flashed=$t/flashed.img
+fi
+debugfs -R 'cat /etc/omamobile/firstboot.conf' "$flashed" 2>/dev/null | grep -cx 'USERNAME=alice' >/dev/null || fail "firstboot.conf from a spaced --work"
+[[ $(debugfs -R 'cat /root/.ssh/authorized_keys' "$flashed" 2>/dev/null) == "$(cat "$t/home/.ssh/id_ed25519.pub")" ]] || fail "authorized_keys from a spaced --work"
+[[ $(debugfs -R 'cat /etc/omamobile/boot-update.conf' "$flashed" 2>/dev/null | grep -v '^#') == AUTO_WRITE=yes ]] || fail "boot-update.conf from a spaced --work"
+[[ -z $(ls "$w") ]] || fail "the spaced --work copy is removed"
+pass "a --work path with a space and a quote gets the three files into the image"
+
 refuse() {
   local why=$1; shift
   if install "$@"; then cat "$t/out"; fail "refuses $why"; fi

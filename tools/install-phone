@@ -563,14 +563,17 @@ mkdirs=""
 for d in /etc/omamobile /root/.ssh; do
   debugfs -R "stat $d" "$copy" 2>/dev/null | grep -c '^Inode:' >/dev/null || mkdirs+="mkdir $d"$'\n'
 done
+# debugfs splits its commands at blanks: a host path goes in double quotes,
+# with any double quote in it doubled
+dq() { printf '"%s"' "${1//\"/\"\"}"; }
 debugfs -w -f - "$copy" >/dev/null 2>&1 <<EOF || true
 ${mkdirs}rm /etc/omamobile/firstboot.conf
-write $conf_file /etc/omamobile/firstboot.conf
+write $(dq "$conf_file") /etc/omamobile/firstboot.conf
 sif /etc/omamobile/firstboot.conf mode 0100600
 sif /etc/omamobile/firstboot.conf uid 0
 sif /etc/omamobile/firstboot.conf gid 0
 rm /etc/omamobile/boot-update.conf
-write $boot_conf /etc/omamobile/boot-update.conf
+write $(dq "$boot_conf") /etc/omamobile/boot-update.conf
 sif /etc/omamobile/boot-update.conf mode 0100644
 sif /etc/omamobile/boot-update.conf uid 0
 sif /etc/omamobile/boot-update.conf gid 0
@@ -578,7 +581,7 @@ sif /root/.ssh mode 040700
 sif /root/.ssh uid 0
 sif /root/.ssh gid 0
 rm /root/.ssh/authorized_keys
-write $keys_file /root/.ssh/authorized_keys
+write $(dq "$keys_file") /root/.ssh/authorized_keys
 sif /root/.ssh/authorized_keys mode 0100600
 sif /root/.ssh/authorized_keys uid 0
 sif /root/.ssh/authorized_keys gid 0
