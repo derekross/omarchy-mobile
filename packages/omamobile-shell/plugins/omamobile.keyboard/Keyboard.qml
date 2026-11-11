@@ -127,7 +127,20 @@ Item {
     }
   }
 
+  // Back (omamobile.back's BackLink.js): the language sheet goes back a page
+  // or closes. It sits on the keyboard, so it is asked before the keyboard.
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "keyboard languages"
+      item.tier = "on-keyboard"
+      item.handler = function() { if (!languageWindow.back()) root.closeLanguages() }
+      item.active = Qt.binding(function() { return root.languagesOpen })
+    }
+  }
+
   LanguageWindow {
+    id: languageWindow
     opened: root.languagesOpen
     listing: root.listing
     onPicked: function(name) { root.pickLanguage(name) }
@@ -159,6 +172,22 @@ Item {
   }
 
   property bool oskOpen: false
+
+  // Back puts the keyboard away before anything else, as on Android: while
+  // it is up, the back gesture hides it and sends nothing to the app; the
+  // next Back does what it would have done. Through squeekboard's own
+  // SetVisible (hideKeyboard), never the screen-keyboard-enabled setting,
+  // which turns the keyboard off. Without the watcher (oskOpen stays false)
+  // Back goes on as before.
+  Loader {
+    source: Qt.resolvedUrl("../omamobile.back/BackLinkClient.qml")
+    onLoaded: {
+      item.name = "keyboard"
+      item.tier = "keyboard"
+      item.handler = function() { root.hideKeyboard() }
+      item.active = Qt.binding(function() { return root.oskOpen })
+    }
+  }
 
   // A keyboard this plugin showed (KeyboardModel.js has why it matters) is
   // put away when the home screen comes up, as a text field's keyboard is.

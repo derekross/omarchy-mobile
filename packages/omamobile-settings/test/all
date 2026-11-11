@@ -1,0 +1,38 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+build_dir=${OMAMOBILE_SETTINGS_TEST_BUILD_DIR:-"$source_dir/build/tests"}
+"$source_dir/bin/build"
+mkdir -p "$build_dir"
+fixture=$(mktemp -d)
+trap 'rm -rf -- "$fixture"' EXIT HUP INT TERM
+mkdir -p "$fixture/runtime"
+chmod 700 "$fixture/runtime"
+cd "$build_dir"
+qmake6 "$source_dir/tests/core_tests.pro"
+make -j1
+HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_CACHE_HOME="$fixture/cache" \
+  XDG_RUNTIME_DIR="$fixture/runtime" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+  QT_QPA_PLATFORMTHEME= NO_AT_BRIDGE=1 GSETTINGS_BACKEND=memory ./settings-core-tests
+
+lifetime="$build_dir/lifetime"
+mkdir -p "$lifetime"
+(
+  cd "$lifetime"
+  qmake6 "$source_dir/tests/deviceinfo_lifetime_tests.pro"
+  make -j1
+  HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_RUNTIME_DIR="$fixture/runtime" \
+    QT_QPA_PLATFORMTHEME= NO_AT_BRIDGE=1 ./settings-deviceinfo-lifetime-tests
+)
+session="$build_dir/session"
+mkdir -p "$session"
+(
+  cd "$session"
+  qmake6 "$source_dir/tests/session_app.pro"
+  make -j1
+)
+HOME="$fixture" XDG_CONFIG_HOME="$fixture/config" XDG_CACHE_HOME="$fixture/cache" \
+  XDG_RUNTIME_DIR="$fixture/runtime" QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+  QT_QPA_PLATFORMTHEME= NO_AT_BRIDGE=1 GSETTINGS_BACKEND=memory dbus-run-session -- python3 "$source_dir/test/single-instance.py" \
+  "$session/settings-session-test-app"

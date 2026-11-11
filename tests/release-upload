@@ -13,7 +13,9 @@
 # without --allow-older. The one-file .tar (tools/lib/bundle-tar.sh) is
 # uploaded with its signed .tar.sha256, and refused when it is missing,
 # signed by another key, doesn't match its checksum, or holds anything but
-# the bundle and its root image byte for byte.
+# the bundle and its root image byte for byte. The scratch directory sits
+# under a dot directory, as $TMPDIR may: the stand-in server refuses dotted
+# names in the URL, as nginx does, never in its own path.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 fail() { printf 'not ok - %s\n' "$1" >&2; [[ -f ${t:-}/log ]] && sed 's/^/# /' "$t/log" >&2; exit 1; }
@@ -22,14 +24,15 @@ for tool in gpg rsync python3 sha256sum; do
   command -v "$tool" >/dev/null || { pass "# skip: no $tool"; exit 0; }
 done
 real_rsync=$(command -v rsync)
-t=$(mktemp -d)
+top=$(mktemp -d) t=$top/.scratch
+mkdir "$t"
 export GNUPGHOME=$t/home && mkdir -m 700 "$GNUPGHOME"  # never the user's ~/.gnupg
 R=$t/repo S=$t/server
 cleanup() {
   for h in "$GNUPGHOME" "$R/keys/gnupg.release" "$t/other"; do
     [[ -d $h ]] && gpgconf --homedir "$h" --kill gpg-agent 2>/dev/null || true
   done
-  rm -rf "$t"
+  rm -rf "$top"
 }
 trap cleanup EXIT
 mkdir -p "$R/tools" "$R/packages/omamobile-keyring" "$R/keys" "$t/bin" "$S"
@@ -105,7 +108,8 @@ done
 exec "$real_rsync" "\${a[@]}"
 EOF
 # curl: https://pkgs.omamobile.org/X is $S/X; -I prints headers (with CORS
-# unless $t/no-cors exists), otherwise the body; 404 fails like curl -f
+# unless $t/no-cors exists), otherwise the body; 404 fails like curl -f.
+# A dotted name in the URL is refused as releases-nginx.sh's /\. deny does.
 cat > "$t/bin/curl" <<EOF
 #!/bin/bash
 echo "curl \$*" >> "$t/curl.log"
@@ -114,8 +118,8 @@ while ((\$#)); do
   case \$1 in -I|-sSfI) head=1 ;; -H|--max-time|-o|-w) shift ;; https://*) url=\$1 ;; esac
   shift
 done
-f=$S/\${url#https://pkgs.omamobile.org/}
-[[ -f \$f && \$f != */ && \$f != */.* ]] || { echo "curl: (22) 404" >&2; exit 22; }
+p=/\${url#https://pkgs.omamobile.org/} f=$S\$p
+[[ -f \$f && \$p != */ && \$p != */.* ]] || { echo "curl: (22) 404" >&2; exit 22; }
 if ((head)); then
   printf 'HTTP/2 200\r\ncontent-length: %s\r\n' "\$(stat -c %s "\$f")"
   [[ -e $t/no-cors ]] || printf 'access-control-allow-origin: *\r\n'
@@ -239,6 +243,8 @@ pass "a missing .tar, one signed by another key, one that doesn't match its chec
 # A resumed upload: a stale staging directory with junk is cleaned up
 mkbundle "$V2"
 mkdir -p "$pub/.$V2.partial" && echo junk > "$pub/.$V2.partial/junk"
+PATH="$t/bin:$PATH" curl -sSfI "https://pkgs.omamobile.org/releases/cheetah/.$V2.partial/junk" 2>/dev/null &&
+  fail "a staging directory is never served (the stand-in refuses a dotted URL, as nginx does)"
 run --latest "$B2" || fail "an upload over a stale staging directory passes"
 [[ ! -e $pub/$V2/junk && ! -e $pub/.$V2.partial ]] || fail "the staging directory's leftovers aren't published"
 python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); assert m["version"] == sys.argv[2] and m["manifest"].endswith("/releases/cheetah/" + sys.argv[2] + "/manifest.json")' \

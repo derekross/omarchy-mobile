@@ -1,0 +1,282 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# The release bundle's install writes the ramdisk image omamobile-boot-update
+# would write (#564; docs/RELEASES.md §5.2, §11 step 4). No phone, nothing
+# flashed: for a gs201 layout (the ramdisk in vendor_kernel_boot, 2 KiB pages
+# as on the Pixel 7 Pro and every descriptor in device/) and a gs101 layout
+# (the ramdisk in vendor_boot, with 4 KiB pages for the header arithmetic),
+#
+#   1. the hook's own code (omamobile-boot-update build, on a stand-in phone
+#      root) builds the slot B images twice from the same device package and
+#      kernel: once without root's authorized_keys (the bundle's images, which
+#      tests/boot-update-parity shows bin/omamobile images gives too) and once
+#      with the key install-phone writes into the root image;
+#   2. the bundle's install (tools/install-phone alone, without the
+#      repository) installs from the first set against a fake fastboot;
+#   3. every image it flashes is the hook's byte for byte, so the rescue SSH
+#      in the initramfs has the owner's key from the first boot; and the
+#      hook's dry run on a slot B holding them writes nothing (on one holding
+#      the bundle's own images it rewrites vendor_kernel_boot, as in #564).
+#
+# Then the refusals, each before anything is flashed: an image the key makes
+# larger than its partition, a failing step of the key's append, a ramdisk
+# image under an AVB footer, an image that isn't a v4 vendor boot image; and
+# a ramdisk that already holds SSH keys (a development initramfs) is flashed
+# as built. The hook runs under pacman's umask, 022, and install under 077:
+# its images must not depend on the owner's umask (uutils' install(1) gives
+# parent directories the umask's mode).
+#
+# Skips without mkbootimg (MKBOOTIMG, mkbootimg on PATH, or AOSP's
+# mkbootimg.py from tools/fetch-toolchain or under SRC_DIR), lz4, cpio, dtc,
+# debugfs, mkfs.ext4, zstd or openssl.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+SRC=$PWD
+PKG=$SRC/packages/omamobile-boot-update
+fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
+pass() { printf 'ok - %s\n' "$1"; }
+skip() { printf 'ok - # skip: %s\n' "$1"; exit 0; }
+for tool in lz4 cpio dtc debugfs mkfs.ext4 zstd openssl python3 flock; do command -v $tool >/dev/null || skip "no $tool"; done
+t=$(mktemp -d)
+trap '[[ -n ${KEEP:-} ]] || rm -rf "$t"' EXIT
+
+mk=${MKBOOTIMG:-}
+if [[ -z $mk ]] && ! mk=$(command -v mkbootimg); then
+  [[ -n ${SRC_DIR:-} ]] || SRC_DIR=$(source ./omamobile.conf; [[ -f omamobile.local.conf ]] && source ./omamobile.local.conf; echo "$SRC_DIR")
+  for py in "${OMAMOBILE_TOOLCHAIN:-${XDG_CACHE_HOME:-$HOME/.cache}/omamobile/toolchain}/mkbootimg/mkbootimg.py" \
+            "$SRC_DIR/system/tools/mkbootimg/mkbootimg.py"; do
+    [[ -f $py ]] || continue
+    mkdir -p "$t/bin"
+    printf '#!/bin/sh\nexec python3 %s "$@"\n' "$py" > "$t/bin/mkbootimg"
+    chmod +x "$t/bin/mkbootimg"
+    mk=$t/bin/mkbootimg
+    break
+  done
+fi
+[[ -n $mk ]] || skip "no mkbootimg (android-tools, or tools/fetch-toolchain)"
+echo "# mkbootimg: $mk"
+
+ssh-keygen -q -t ed25519 -N '' -C owner -f "$t/owner" 2>/dev/null ||
+  echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl owner' > "$t/owner.pub"
+REL=7.3.0-rc6-omamobile-gaaaaaaaaaaaa
+
+# A stand-in phone root with an installed device package and kernel package,
+# as omamobile-boot-update reads them (OMAMOBILE_BOOT_ROOT)
+phone() { # root codename soc soc_id pagesize boot_images ufs_rw [initramfs extra path]
+  local R=$1 cn=$2 soc=$3 id=$4 s=$t/stage-$2
+  mkdir -p "$R/usr/share/omamobile/linux" "$R/usr/lib/omamobile/$cn" "$R/usr/lib/modules/$REL/dtbs/exynos/google" \
+    "$R/proc/device-tree" "$R/root/.ssh" "$R/etc/omamobile"
+  printf 'CODENAME=%s\nNAME="Test %s"\nSOC=%s\nCOMPATIBLE="google,%s-%s"\nPACKAGE=omamobile-device-%s\nDTB=exynos/google/%s-%s.dtb\nSOC_IDS="a0:%s"\nDTBO_SOURCE=%s-overlay.dts\nDTBO_BOARD_ID=0x30306\nDTBO_BOARD_REV=0x10000\nVENDOR_CMDLINE="console=tty0 clk_ignore_unused"\nVENDOR_PAGESIZE=%s\nOS_VERSION=17.0.0\nOS_PATCH_LEVEL=2026-07\nBOOT_IMAGES="%s"\nUFS_RW="%s"\nINITRAMFS_INIT=/initramfs/init\nPANEL_SIZE=1080x2400\n' \
+    "$cn" "$cn" "$soc" "$soc" "$cn" "$cn" "$soc" "$cn" "$id" "$cn" "$5" "$6" "$7" > "$R/usr/share/omamobile/device.conf"
+  printf 'google,%s-%s\0google,%s\0' "$soc" "$cn" "$soc" > "$R/proc/device-tree/compatible"
+  echo "$REL" > "$R/usr/share/omamobile/linux/kernel.release"
+  head -c 300000 /dev/urandom > "$R/usr/lib/modules/$REL/vmlinuz"
+  echo linux-omamobile > "$R/usr/lib/modules/$REL/pkgbase"
+  echo dep > "$R/usr/lib/modules/$REL/modules.dep"; echo bin > "$R/usr/lib/modules/$REL/modules.dep.bin"
+  printf '/dts-v1/;\n/ {\n\tsoc_id = <%s 0x00>;\n\tcompatible = "google,%s-%s";\n\tect { };\n\tchosen { bootargs = ""; };\n};\n' "$id" "$soc" "$cn" \
+    | dtc -q -@ -I dts -O dtb -o "$R/usr/lib/modules/$REL/dtbs/exynos/google/$soc-$cn.dtb" -
+  head -c 6000 /dev/urandom > "$R/usr/lib/omamobile/$cn/dtbo.img"
+  # The release initramfs: the allowlist, an init, and more than one 8 MiB
+  # lz4 block of data; no SSH keys unless asked
+  rm -rf "$s" && mkdir -p "$s/etc" "$s/usr/lib"
+  echo '#!/bin/sh' > "$s/init"
+  echo "$7" > "$s/etc/omamobile-ufs-rw"
+  head -c 7000000 /dev/urandom | base64 > "$s/usr/lib/payload"
+  if [[ -n ${8:-} ]]; then mkdir -p "$s/${8%/*}"; echo 'ssh-ed25519 AAAA developer' > "$s/$8"; fi
+  (cd "$s" && find . | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$R/usr/lib/omamobile/$cn/initramfs.cpio.lz4"
+}
+# The hook as pacman runs it: umask 022 (the builder's directory modes follow it)
+hook() { (umask 022; OMAMOBILE_BOOT_ROOT=$1 OMAMOBILE_BOOT_UPDATE_LIB=$PKG/lib MKBOOTIMG=$mk "$PKG/bin/omamobile-boot-update" "${@:2}"); }
+hook_build() { # root out
+  hook "$1" build > "$t/hook.log" 2>&1 || { cat "$t/hook.log"; fail "omamobile-boot-update build"; }
+  rm -rf "$2" && cp -r "$1/var/lib/omamobile/boot/next" "$2"
+}
+
+# The fake fastboot: logs every call, keeps a copy of every flashed file
+mkdir -p "$t/fbin"
+cat > "$t/fbin/fastboot" <<'EOF'
+#!/bin/bash
+echo "$*" >> "$T/fastboot.log"
+if [[ $1 == devices ]]; then printf 'FAKE123\tfastboot\n'; exit 0; fi
+[[ $1 == -s ]] && shift 2
+case $1 in
+  getvar) sed 's/^/(bootloader) /' "$T/vars" >&2 ;;
+  flash) cp "$3" "$T/flashed/$2" ;;
+esac
+exit 0
+EOF
+chmod +x "$t/fbin/fastboot"
+export T=$t
+mkdir -p "$t/rootdir/etc" "$t/rootdir/root"
+echo 'root:x:0:0::/root:/bin/bash' > "$t/rootdir/etc/passwd"
+mkfs.ext4 -q -L omamobile-root -d "$t/rootdir" "$t/root.img" 16M
+
+# bundle codename images: the bundle's install, the root image beside it
+bundle() {
+  local cn=$1 B=$t/bundle-$1/omamobile-$1-2026.11.09 p
+  rm -rf "$t/bundle-$cn" && mkdir -p "$B/images"
+  cp tools/install-phone "$B/install"
+  cp "$t/r-$cn/usr/share/omamobile/device.conf" "$B/device.conf"
+  for p in $(sed -n 's/^BOOT_IMAGES="\(.*\)"$/\1/p' "$B/device.conf"); do cp "$2/$p.img" "$B/images/"; done
+  root=$t/bundle-$cn/omamobile-rootfs-$cn-2026.11.09-aarch64.img.zst
+  zstd -q "$t/root.img" -o "$root"
+  (cd "$t/bundle-$cn" && sha256sum "${root##*/}" > "${root##*/}.sha256")
+  printf 'device: %s\nkernel modules: %s\n' "$cn" "$REL" > "${root%.img.zst}.MANIFEST"
+  printf 'kernel release: %s\nroot image: %s (%s)\n' "$REL" "${root##*/}" "$(cut -d' ' -f1 "$root.sha256")" > "$B/MANIFEST"
+  BUNDLE=$B
+  seal
+}
+seal() { # manifest.json and SHA256SUMS for the bundle as it is now
+  rm -f "$BUNDLE/manifest.json"
+  python3 -I tools/bundle-manifest --bundle "$BUNDLE" --rootfs "$root" --rootfs-sha256 "$(cut -d' ' -f1 "$root.sha256")" \
+    --version 2026.11.09 --kernel-release "$REL" --channel stable
+  (cd "$BUNDLE" && find . -type f ! -name SHA256SUMS -printf '%P\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
+}
+install() { # codename [args]; RAMDISK_PART_SIZE: vendor_kernel_boot_b's size
+  local cn=$1 p s; shift
+  rm -rf "$t/flashed" && mkdir -p "$t/flashed"
+  : > "$t/fastboot.log"
+  {
+    printf 'product:%s\nunlocked:yes\ncurrent-slot:a\nversion-bootloader:x\nversion-bootloader-a:x\nversion-bootloader-b:x\n' "$cn"
+    for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do
+      s=0x4000000; [[ $p != vendor_kernel_boot ]] || s=${RAMDISK_PART_SIZE:-$s}
+      printf 'partition-size:%s_b: %s\n' "$p" "$s"
+    done
+  } > "$t/vars"
+  # user, password twice, host, time zone, name, email, Wi-Fi, key, confirmation
+  printf '%s\n' alice 1234 1234 "" UTC "" "" "" "$t/owner.pub" "$cn" |
+    (umask 077; HOME=$t/home PATH="$t/fbin:$PATH" "$BUNDLE/install" --unsigned --work "$t/work" "$@") > "$t/out" 2>&1
+}
+refused() { # why message: install refused, said why, flashed nothing
+  if install twelve; then fail "refuses $1"; fi
+  grep -cF -- "$2" "$t/out" >/dev/null || { cat "$t/out"; fail "says why it refuses $1"; }
+  [[ -z $(ls -A "$t/flashed") ]] || fail "nothing is flashed when it refuses $1"
+}
+# slot_b root images: the stand-in phone's slot B partitions hold those
+# images, padded to 16 MiB, as fastboot leaves them
+slot_b() {
+  local R=$1 i=0 p
+  rm -rf "$R/sys/block" "$R/dev" && mkdir -p "$R/dev"
+  echo 'console=null androidboot.slot_suffix=_b' > "$R/proc/cmdline"
+  for p in boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata; do
+    i=$((i + 1))
+    mkdir -p "$R/sys/block/sda/sda$i"
+    printf 'MAJOR=8\nMINOR=%d\nDEVNAME=sda%d\nDEVTYPE=partition\nPARTN=%d\nPARTNAME=%s\n' "$i" "$i" "$i" "$p" > "$R/sys/block/sda/sda$i/uevent"
+    echo 0 > "$R/sys/block/sda/sda$i/ro"
+    echo $((16 * 1024 * 2)) > "$R/sys/block/sda/sda$i/size"
+    if [[ -f $2/${p%_b}.img ]]; then cp "$2/${p%_b}.img" "$R/dev/sda$i"; else : > "$R/dev/sda$i"; fi
+    truncate -s 16M "$R/dev/sda$i"
+  done
+}
+hook_plan() { # root: the hook's dry run on that slot B
+  hook "$1" write --dry-run > "$t/plan.log" 2>&1 || { cat "$t/plan.log"; fail "omamobile-boot-update write --dry-run"; }
+}
+
+for dev in "twelve gs201 0x9855001 0x800 vendor_kernel_boot" "six gs101 0x9845001 0x1000 vendor_boot"; do
+  read -r cn soc id page rimg <<<"$dev"
+  if [[ $cn == twelve ]]; then imgs="boot init_boot vendor_boot vendor_kernel_boot dtbo"; else imgs="boot vendor_boot dtbo"; fi
+  rw="$(for p in $imgs; do printf '%s_b ' "$p"; done)userdata"
+  R=$t/r-$cn
+  phone "$R" "$cn" "$soc" "$id" "$page" "$imgs" "$rw"
+  hook_build "$R" "$t/bundle-images-$cn"
+  # What install-phone writes into the root image, the file the hook reads
+  cp "$t/owner.pub" "$R/root/.ssh/authorized_keys"
+  hook_build "$R" "$t/hook-images-$cn"
+  grep -c "Initramfs: the owner's authorized_keys appended" "$t/hook.log" >/dev/null || fail "$cn: the hook appends the owner's key"
+  cmp -s "$t/bundle-images-$cn/$rimg.img" "$t/hook-images-$cn/$rimg.img" && fail "$cn: the owner's key changes the hook's $rimg.img"
+
+  bundle "$cn" "$t/bundle-images-$cn"
+  install "$cn" || { cat "$t/out"; fail "$cn: the bundle installs"; }
+  for p in $imgs; do
+    [[ -f $t/flashed/${p}_b ]] || fail "$cn: ${p}_b is flashed"
+    cmp -s "$t/flashed/${p}_b" "$t/hook-images-$cn/$p.img" ||
+      fail "$cn: ${p}_b is not the image omamobile-boot-update builds with the owner's key"
+  done
+  grep -c "flash ${rimg}_b $t/work/ramdisk/$rimg.img" "$t/out" >/dev/null || fail "$cn: the plan names the image copy"
+  cmp -s "$BUNDLE/images/$rimg.img" "$t/bundle-images-$cn/$rimg.img" || fail "$cn: the bundle's own image is left alone"
+  [[ -z $(ls -A "$t/work") ]] || fail "$cn: the work directory is emptied"
+  cp -r "$t/flashed" "$t/installed-$cn"
+  pass "$cn: the bundle's install flashes the hook's own $rimg.img (the owner's key appended) and the hook's other images"
+done
+
+# The hook's first run after the install: slot B already holds its images.
+# Slot B as the bundle's images left it (before this change) still needed
+# the rewrite #564 found.
+R=$t/r-twelve rw="boot_b init_boot_b vendor_boot_b vendor_kernel_boot_b dtbo_b userdata"
+mkdir -p "$t/installed"
+for p in boot init_boot vendor_boot vendor_kernel_boot dtbo; do cp "$t/installed-twelve/${p}_b" "$t/installed/$p.img"; done
+slot_b "$R" "$t/installed"
+hook_plan "$R"
+grep -c 'Slot B already holds these images: nothing to write' "$t/plan.log" >/dev/null || { cat "$t/plan.log"; fail "the hook finds slot B already holding its images"; }
+slot_b "$R" "$t/bundle-images-twelve"
+hook_plan "$R"
+grep -cE 'vendor_kernel_boot\.img +-> .* write$' "$t/plan.log" >/dev/null || { cat "$t/plan.log"; fail "the bundle's own image is the one the hook rewrites"; }
+pass "the hook's first run after the install writes nothing; after the bundle's own images it rewrote vendor_kernel_boot"
+
+# A ramdisk within 80 bytes of the end of its last page, so the owner's key
+# (about 170 bytes of lz4; 171 on the 2026.11.08 install) makes the image a
+# page longer: on a partition that holds only the bundle's image, install
+# stops before anything is flashed (twelve's pages are 2 KiB)
+head -c 60000 /dev/urandom > "$t/random"
+n=20000 slack=2048
+for _ in $(seq 20); do
+  s=$t/stage-fit && rm -rf "$s" && mkdir -p "$s/etc"
+  echo '#!/bin/sh' > "$s/init"; echo "$rw" > "$s/etc/omamobile-ufs-rw"; head -c "$n" "$t/random" > "$s/payload"
+  (cd "$s" && find . | LC_ALL=C sort | cpio -o -H newc --owner=0:0 --quiet) | lz4 -l -9 -q > "$t/fit.lz4"
+  slack=$(( (2048 - $(stat -c %s "$t/fit.lz4") % 2048) % 2048 ))
+  ((slack <= 80)) && break
+  # aim for 40 bytes short of the boundary; lz4 grows about a byte per byte of random data
+  d=$((slack - 40)); ((d <= 1024)) || d=$((d - 2048))
+  n=$((n + d))
+done
+((slack <= 80)) || fail "a fixture ramdisk within 80 bytes of a page boundary (got $slack)"
+rm "$R/root/.ssh/authorized_keys"
+cp "$t/fit.lz4" "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4"
+hook_build "$R" "$t/fit-images"
+bundle twelve "$t/fit-images"
+size=$(stat -c %s "$t/fit-images/vendor_kernel_boot.img")
+RAMDISK_PART_SIZE=$(printf '0x%x' "$size") refused "an image that no longer fits its partition" \
+  "with the owner's key is $((size + 2048)) bytes, larger than vendor_kernel_boot_b ($size bytes)"
+pass "an image the owner's key makes too large for its partition is refused before anything is flashed"
+
+# Each step of the append that fails (a stand-in that exits 1 on that call)
+# stops the install with a message, rather than flashing the ramdisk without
+# the key: copying the key, cpio packing it, lz4 decompressing the shipped
+# ramdisk, cpio listing it, lz4 recompressing
+for step in "install 600 can't stage the owner's key" "cpio -o cpio couldn't pack the owner's key" \
+            "lz4 -dc lz4 couldn't decompress vendor_kernel_boot.img's ramdisk" \
+            "cpio -it cpio couldn't list vendor_kernel_boot.img's ramdisk" \
+            "lz4 -l lz4 couldn't recompress vendor_kernel_boot.img's ramdisk"; do
+  read -r tool arg why <<<"$step"
+  mkdir -p "$t/bad-$tool"
+  printf '#!/bin/bash\nfor a; do [[ $a == %q ]] && exit 1; done\nexec %q "$@"\n' "$arg" "$(type -P "$tool")" > "$t/bad-$tool/$tool"
+  chmod +x "$t/bad-$tool/$tool"
+  PATH=$t/bad-$tool:$PATH refused "a failing $tool $arg in the key's append" "$why"
+done
+pass "a failing step of the key's append (install, cpio -o, lz4 -dc, cpio -it or lz4 -l) stops the install before anything is flashed"
+
+# The ramdisk image under an AVB footer can't take the key: refused
+printf 'AVB_FOOTERS="vendor_kernel_boot:0x4000000"\nAVB_ROLLBACK_INDEX=1\nAVB_SECURITY_PATCH=2026-07-05\n' >> "$BUNDLE/device.conf"
+seal
+refused "a ramdisk image with an AVB footer" "AVB_FOOTERS names vendor_kernel_boot, which carries the ramdisk"
+pass "a ramdisk image the descriptor signs is refused before anything is flashed"
+
+# A development initramfs that already holds SSH keys (bin/omamobile
+# initramfs without --release): the hook refuses it, so its builder packs
+# the images directly, and install flashes them as built
+phone "$R" twelve gs201 0x9855001 0x800 "boot init_boot vendor_boot vendor_kernel_boot dtbo" "$rw" root/.ssh/authorized_keys
+(umask 022; MKBOOTIMG=$mk "$PKG/lib/omamobile-boot-images" --descriptor "$R/usr/share/omamobile/device.conf" \
+  --kernel "$R/usr/lib/modules/$REL/vmlinuz" --dtbs "$R/usr/lib/modules/$REL/dtbs" --dtbo "$R/usr/lib/omamobile/twelve/dtbo.img" \
+  --initramfs "$R/usr/lib/omamobile/twelve/initramfs.cpio.lz4" --out "$t/dev-images") > "$t/dev.log" 2>&1 ||
+  { cat "$t/dev.log"; fail "packing a development set"; }
+bundle twelve "$t/dev-images"
+install twelve || { cat "$t/out"; fail "a development initramfs installs"; }
+cmp -s "$t/flashed/vendor_kernel_boot_b" "$t/dev-images/vendor_kernel_boot.img" || fail "a ramdisk with SSH keys is flashed as built"
+grep -c "already holds SSH keys" "$t/out" >/dev/null || fail "says the ramdisk is left as built"
+pass "a ramdisk that already holds SSH keys is flashed as built"
+
+# An image that isn't a v4 vendor boot image stops the install before any write
+echo 'vendor_kernel_boot image' > "$BUNDLE/images/vendor_kernel_boot.img"
+seal
+refused "a ramdisk image that isn't a vendor boot image" 'not an Android vendor boot image'
+pass "an image that isn't a v4 vendor boot image is refused before anything is flashed"

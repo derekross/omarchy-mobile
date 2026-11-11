@@ -166,7 +166,7 @@ grep -q '^ConditionPathExists=/sys/bus/platform/devices/154b0000.aoc$' vendor/sy
 [[ $(readlink "$tmp/root/usr/lib/systemd/system/multi-user.target.wants/omamobile-husky-aoc.service") == ../omamobile-husky-aoc.service ]] \
   || fail "the AoC unit is enabled by a vendor wants link"
 ! grep -qE '^install ' vendor/modprobe.d/omamobile-husky-aoc.conf || fail "the AoC file only blacklists"
-! grep -hv '^ *#' bin/omamobile-husky-aoc-start vendor/modprobe.d/omamobile-husky-aoc.conf | grep -q 'speaker_protection' \
+! grep -hv '^ *#' bin/omamobile-husky-aoc-start vendor/modprobe.d/omamobile-husky-aoc.conf | grep -c 'speaker_protection' >/dev/null \
   || fail "the AoC start never raises the speaker ceiling"
 for m in gsa aoc_core aoc_alsa_dev snd_soc_cs35l41_spi gs201_aoc_boot; do
   grep -qx "blacklist $m" vendor/modprobe.d/omamobile-husky-aoc.conf || fail "$m is kept from autoloading"
