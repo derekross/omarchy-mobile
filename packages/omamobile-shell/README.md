@@ -6,7 +6,7 @@ Omarchy Mobile's phone profile for Omarchy's own shell. It isn't a fork: these a
 | --- | --- |
 | `plugins/omamobile.bar` | Phone status bar (a full `bar` plugin) |
 | `plugins/omamobile.quicksettings` | Pull-down quick settings |
-| `plugins/omamobile.launcher` | Home bar: app search, app grid and a prompt to the user's Omarchy default agent; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
+| `plugins/omamobile.launcher` | Home bar: a separate native app-search view on tap; App Library and the existing optional agent flow on swipe; over an app, the home pill in a 44 px strip that reserves its height, so apps end above it (as on Android it is just the pill: double-tap for the keyboard, hold for the voice bar) |
 | `plugins/omamobile.switcher` | Recent apps: swipe up on the dock, or swipe up and hold on the home pill over an app; hold a card to show the app with another one, or give it its own screen again |
 | `plugins/omamobile.home` | Home screens: pages of apps and widgets on the wallpaper, with an edit mode. The built-ins include every widget in Simon Schubert's [omarchy-widgets](https://github.com/SimonSchubert/omarchy-widgets) `widgets/simonschubert/` (MIT): the OWL originals, from the `omamobile-owl-widgets` package, run by our own OWL runtime (`owl/`, see `owl/SPEC-NOTES.md`). `widgets/OWL.md` is his OWL language guide (MIT, `widgets/LICENSE-owl-guide`) |
 | `plugins/omamobile.keyboard` | The on-screen keyboard's show and hide calls, for the home pill (double-tap it), the keyboard's Hide key and scripts; a keyboard shown by hand goes away when the home screen comes up; the language sheet for the keyboard's globe key |
@@ -103,3 +103,46 @@ Open, save and choose-a-folder requests through the portal (Qt, GTK, Electron an
 The package contract follows omarchy-mac's: `./install DESTDIR` stages files and enables nothing, `test/all` runs the package's own tests, and `version` holds the version.
 
 Develop on a desktop with `phone/dev/run-desktop` from the repo root.
+
+## Native app Search
+
+Set the launcher's `nativeSearch` setting to `true` to open app Search
+when tapping the dock. The default tap and swipe up open the App Library
+and its existing optional agent flow.
+Search uses Omarchy's application library and normal app-launch command. It
+does not index files, select an agent or access accounts.
+
+The view follows Commons palette, font, spacing, controls and corner settings;
+its animation follows `Style.duration` when available. A full-screen background
+takes no input, the content respects the status/keyboard reservations, and the
+existing Home strip remains visible even after manually hiding the keyboard.
+Home and app activation release Search input before changing screens.
+
+Native focus is briefly primed with Exclusive, then released to OnDemand, using
+the focus lifecycle from Omarchy's MIT-licensed `shell/Ui/KeyboardPanel.qml`.
+That component is present in both supported Omarchy package families. Its
+David Heinemeier Hansson copyright and license are retained in
+`LICENSE.omarchy`. Offscreen component tests verify cancellation and focus
+intent; a phone acceptance must separately verify first-tap OSK activation,
+keyboard touches, Back/Home, immediate reopen and lock interaction.
+
+Native Search cancels pending focus and closes when the launcher's existing session-lock observation reports locked. Unlocking never reopens it without a new explicit tap. This observation is asynchronous and is not a security boundary or a replacement for the compositor lock protocol. Existing fullscreen exclusion of Home/Back gesture strips remains in force; a Search opened over fullscreen can still close using its visible close button or Escape. The Search panels currently use Quickshell's default output; multi-output active-screen routing is not qualified by the offscreen tests.
+
+### Search presentation
+
+Search retains the phone layout: the query row stays at the top, followed by
+three suggested apps, or matching results while typing. App rows have icons,
+names and descriptions without an enclosing border. Colors, font family and
+size, spacing, control borders, corner rounding and motion follow Commons.
+The view uses the drawer's `Commons.Color.menu.background` surface over its
+`Commons.Color.menu.scrim`. Secondary text and glyphs use the launcher's
+`Qt.darker(foreground, 1.3)` ink. Close, search and chevron use the shell icon
+font at `Style.font.iconLarge`; Search adds no theme keys or custom alpha
+values. Rounding follows the configured Hyprland/theme value.
+
+Search registers with the shared Back surface client while open. Back first
+dismisses the keyboard, then closes Search. Back has no dependency on the
+launcher plugin.
+The home screen pauses widgets and yields Back while Search is open. The
+strip uses the existing lock rule when the keyboard is up. Physical lock,
+keyboard and gesture acceptance still requires this package on a phone.

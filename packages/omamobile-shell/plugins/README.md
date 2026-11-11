@@ -874,6 +874,7 @@ back instead; start it further in.
    | Fingerprint setup (`omamobile.fingerprint`) | Its Cancel (stops a running enrollment), or Done after one. Not while polkit asks |
    | Voice settings; the voice bar's check before Ask, and its error (`omamobile.voice`) | Closes; the check's text is discarded, as its Discard |
    | Home screen (`omamobile.home`), only while it shows with nothing open over it | A sheet goes back one sheet or closes (a widget's unsaved settings are asked about first: Save, or Discard changes), then edit mode ends, then the pages go to the home page |
+   | App search (`omamobile.launcher`) | Closes Search after the keyboard has been dismissed |
    | A widget's opened screen (`OwlCell.qml`) | Closes, as a tap on its title |
 
 3. **Escape, to whatever has the keyboard focus**: an app, or a shell sheet
