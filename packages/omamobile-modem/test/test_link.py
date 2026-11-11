@@ -38,7 +38,7 @@ class LinkTests(unittest.TestCase):
             self.assertNotEqual(self.run_value(value, wanted), 0)
 
     def test_device_modules_load_in_order_with_arguments(self):
-        loop = re.search(r'for entry in "\$\{LINK_MODULES\[@\]\}"; do\n  read -r -a words <<< "\$entry"\n  modprobe "\$\{words\[@\]\}"\ndone', SOURCE).group()
+        loop = re.search(r'for entry in "\$\{LINK_MODULES\[@\]\}"; do\n  read -r -a words <<< "\$entry"\n  modprobe "\$\{words\[@\]\}" \|\| refuse "Off: \$\{words\[0\]\} didn\'t load"\ndone', SOURCE).group()
         script = ('LINK_MODULES=("first allow_hw=1" "second cpif=1")\n'
                   'modprobe() { printf "%s " "$@"; printf "\\n"; }\n' + loop)
         result = subprocess.run(['bash', '-c', script], text=True, capture_output=True, check=True)
@@ -61,7 +61,7 @@ class LinkTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0 if value == 'Y' else 7)
             self.assertEqual('load-reached' in result.stdout, value == 'Y')
 
-    def run_starter(self, config, loaded=None):
+    def run_starter(self, config, loaded=None, fail_module=None, inhibitor=False):
         """Run actual starter with only paths redirected and inert external tools."""
         config_path = self.root / 'link.conf'
         if config is not None:
@@ -86,7 +86,9 @@ class LinkTests(unittest.TestCase):
         for name, body in {
             'systemd-inhibit': 'echo inhibitor >> "$TRACE"; echo "omamobile-modem held"',
             'sync': ':',
-            'modprobe': 'test -f "$OMAMOBILE_MODEM_LATCH" || exit 23; echo "load:$*" >> "$TRACE"',
+            'modprobe': 'test -f "$OMAMOBILE_MODEM_LATCH" || exit 23; echo "load:$*" >> "$TRACE"; '
+                        '[[ $1 != "${FAIL_MODULE:-}" ]] || exit 1; mkdir -p "$SYSMODULE/${1//-/_}"',
+            'systemctl': 'case $1 in is-active) test -e "$INHIBIT_ACTIVE";; *) echo "systemctl:$*" >> "$TRACE";; esac',
         }.items():
             tool = tools / name
             tool.write_text('#!/bin/bash\n' + body + '\n')
@@ -109,6 +111,14 @@ class LinkTests(unittest.TestCase):
                    OMAMOBILE_MODEM_CHROOT=str(provision),
                    OMAMOBILE_MODEM_NV_SUMS=str(provision),
                    OMAMOBILE_MODEM_PROPS=str(provision))
+        modules = self.root / 'loaded'
+        modules.mkdir()
+        if inhibitor:
+            (self.root / 'inhibit-active').touch()
+        env.update(OMAMOBILE_MODEM_SYSMODULE=str(modules), SYSMODULE=str(modules),
+                   OMAMOBILE_MODEM_SYSTEMCTL=str(tools / 'systemctl'),
+                   INHIBIT_ACTIVE=str(self.root / 'inhibit-active'),
+                   FAIL_MODULE=fail_module or '')
         env.pop('OMAMOBILE_MODEM_TEST_STOP_AFTER_CHECKS', None)
         result = subprocess.run(['bash', str(starter)], env=env,
                                 capture_output=True, text=True, timeout=5)
@@ -119,6 +129,24 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)  # inert profile check deliberately refuses
         self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
                                 'load:second cpif=1', 'load:shm_ipc', 'load:cpif', 'profile-check'])
+
+    def test_first_module_failing_refuses_and_releases_the_sleep_block(self):
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y',
+                                         fail_module='first', inhibitor=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
+                                 'systemctl:kill omamobile-modem-inhibit.service'])
+        self.assertEqual((self.root / 'refused').read_text().strip(), "Off: first didn't load")
+        self.assertTrue((self.root / 'latch').exists())
+
+    def test_later_module_failing_keeps_the_sleep_block(self):
+        # Only first is loaded, a module known by its name in link.conf alone.
+        result, trace = self.run_starter('first allow_hw=1\nsecond cpif=1\n', 'Y',
+                                         fail_module='second', inhibitor=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(trace, ['inhibitor', 'inhibitor', 'load:first allow_hw=1',
+                                 'load:second cpif=1'])
+        self.assertEqual((self.root / 'refused').read_text().strip(), "Off: second didn't load")
 
     def test_no_config_preserves_real_default_load(self):
         result, trace = self.run_starter(None)

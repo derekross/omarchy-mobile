@@ -143,7 +143,7 @@ which passed a clean reinstall on 2026-11-02 **[V]**:
 | First start | grows the root, runs `omamobile-firstboot`, shows the lock screen | on the phone |
 | USB network | `nmcli connection add ...` by hand | by hand |
 | Radio backup | `tools/nv-backup DIR` | `tools/nv-backup` |
-| Firmware | a Python venv for the camera, then `tools/phone-provision --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
+| Firmware | a Python venv for the camera, then `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` | `tools/phone-provision`, `tools/extract-*` |
 | Restart | `tools/phone-ssh 'reboot-to omamobile'` | by hand |
 | Check | none for the user; `tools/phone-smoke` for developers | `tools/phone-smoke` |
 
@@ -270,7 +270,7 @@ retries silently, as `nv-backup` does.
 
 ### 4.8 Provisioning
 
-Today: `tools/phone-provision --nv-backup DIR FACTORY.zip` after the first
+Today: `tools/phone-provision --first-install --nv-backup DIR FACTORY.zip` after the first
 start: the `extract-*` tools on the computer, then pushes over USB SSH, then
 the board id read on the phone **[V]**. §5 weighs folding this into the
 install on the computer against doing it on the phone.
@@ -614,7 +614,11 @@ else.
   reinstall; on anyone else's, every install is a first install. Fix: an
   explicit mode (`--first-install` with `--nv-backup DIR`, or `--restore
   DIR`), no default backup path in the bundle's copy, and the factory image
-  fetched by the tool itself (§6) when none is given.
+  fetched by the tool itself (§6) when none is given. **The modes are
+  done:** the tool has no default backup directory, refuses a cheetah run
+  that names neither mode, and `--backup DIR` stays as `--restore DIR`'s
+  older spelling. The fetch is not built: by D2 the owner saves the image
+  from Google's page and the tool takes the file, as it does today.
 - **G2. The stable channel must exist before a release's first update.**
   `tools/release`'s `test-install` stage runs before `promote`, and a
   release install follows `stable`, so the test-installed phone's first
@@ -622,6 +626,13 @@ else.
   once, before the first release's test install (later releases find the
   previous release there, which is correct); and `omamobile-update` reports
   "this channel has no updates yet" as a normal state, not an error.
+  **Done:** stable has had an index since the 2026.11.08 release, so the
+  ordering can only bite on a new server; `tools/release test-install`
+  asks the server and, with no stable index, prints the one-time promotion
+  and stops. `omamobile-update` (omamobile-omarchy 0.1.41) treats a channel
+  whose index the server says isn't there as "no updates yet": no blocker,
+  exit 0. The Updates sheet shows that state as up to date; it doesn't show
+  the sentence yet.
 - **G3. `systemd-firstboot` fails once on first boot.** It wants to ask for
   settings on a console the phone doesn't have. Fix: the root image provides
   what it asks for (locale, keymap, time zone from `firstboot.conf`, machine

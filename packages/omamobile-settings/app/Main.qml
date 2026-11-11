@@ -29,7 +29,6 @@ ApplicationWindow {
     readonly property bool showingAbout: backend.page === "about" && !backend.searching
     Connections {
         target: backend
-        function onCloseRequested() { window.close() }
         function onRaiseRequested() { window.show(); window.raise(); window.requestActivate() }
         function onPageChanged() { search.text = ""; search.focus = false; Qt.inputMethod.hide(); if (backend.page === "about") deviceInfo.refresh() }
     }
