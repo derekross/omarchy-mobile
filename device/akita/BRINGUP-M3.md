@@ -5,8 +5,8 @@
 
 The kernel side:
 - linux-omarchy-mobile#238 (the buttons and `mem_sleep_default=s2idle`), merged on 2026-11-11;
-- #240 (a voltage setter for the S2MPG14's two touch supplies), open;
-- #241 (the touch supplies, the touchscreen and the panel size, stacked on #240), open.
+- #240 (a voltage setter for the S2MPG14's two touch supplies), open as of 2026-11-11;
+- #241 (the touch supplies, the touchscreen and the panel size, stacked on #240), open as of 2026-11-11; it lands #240's commit with it.
 
 M2 is complete ([BRINGUP-M2](BRINGUP-M2.md)).
 
@@ -47,7 +47,7 @@ From G/ `zuma-akita-touch.dtsi` and `zuma/zuma-common-touch.dtsi`, checked again
 | avdd | S2MPG14 `LDO4M`, **3.0 V** | `LDO4M`, **3.3 V** | [V] R/ live tree (`0x2dc6c0`) |
 | What ABL leaves | `LDO4M` **3.3 V**, `LDO25M` 1.8 V, both off | (3.3 V, 1.8 V) | [V] test 29 below; husky's is inferred from its probe succeeding without a setter |
 | Chip | **Goodix GT9895** (Berlin), Google's `goodix,nottingham` | ST SALIXP | [V] F/ `goodix_firmware_ak3a.bin` and `goodix_firmware_ak3b.bin` (one per panel) both start `BERLIN` … `9895`; R/ modules (`goodix_brl_touch`) |
-| Panel size | 70 × 149 mm | 70 × 155 mm | [V] Google's `panel-google-ak3b.c` (`width_mm`, `height_mm`); R/ `dumpsys display` (xDpi 391.885, yDpi 409.127 for 1080x2400) |
+| Panel size | **64 × 141 mm** (the lit area). Stock's figure is 70 × 149 mm, larger than the glass | 70 × 155 mm | [V] measured with a ruler; a 6.1-inch 20:9 panel is 63.6 × 141.3 mm; G/ touch node `goodix,panel-height-mm = <141>`. Stock's: Google's `panel-google-ak3b.c` (`width_mm`, `height_mm`) and R/ `dumpsys display` (xDpi 391.885, yDpi 409.127 for 1080x2400) |
 
 So the buttons are a copy of husky's node, and touch is husky's bus and pins with lynx's chip driver. The one value that must **not** be copied from husky is avdd: akita's is 3.0 V.
 
@@ -59,7 +59,7 @@ So the buttons are a copy of husky's node, and touch is husky's bus and pins wit
    - **#241:**
      - the S2MPG14 with LDO4M fixed at 3.0 V and LDO25M at 1.8 V;
      - the GT9895 on `spi20`;
-     - a disabled `panel0` with 70 × 149 mm.
+     - a disabled `panel0` with the measured 64 × 141 mm, its comment naming stock's 70 × 149.
 2. **No firmware upload.** The Berlin driver runs the firmware already on the chip and loads nothing, so no Google file is needed.
 3. **No package change.** `omamobile-keys` and the lock's wake already handle `KEY_POWER`, and the shell's touch path is the same as husky's.
 
@@ -119,7 +119,7 @@ Each boot needs the human's go and changes one thing. Every boot is from slot B:
 ## Open questions
 
 - ~~Which Berlin IC?~~ A GT9895, from the stock firmware's header (M3.0), and the probe and 14-byte records confirm it (test 32).
-- ~~The panel size?~~ 70 × 149 mm, from Google's driver and stock's DPI (test 34).
+- ~~The panel size?~~ 64 × 141 mm, the lit area measured with a ruler (test 35). Google's driver and stock's DPI say 70 × 149 mm, which is larger than the glass (#241's review).
 - **Does touch survive a long idle with the screen off?** husky saw one failure on 2026-11-04. Not tried on akita.
 - **The app-switcher disconnect** (below): once, not reproduced.
 
@@ -153,13 +153,14 @@ Slot B: 2 tries left.
 
 ### 2026-11-11: touch (M3.3) and the session (M3.4, gate g)
 
-The kernel: `omamobile` at `fc7086a68`, plus #240 and #241. Release `…g6063302504d6` for M3.3, and `…g7b13e4166249` (adds the panel size) for M3.4.
+The kernel: `omamobile` at `fc7086a68`, plus #240 and #241. Release `…g6063302504d6` for M3.3, `…g7b13e4166249` (adds stock's panel size) for M3.4, and `…g3933790300a1` (the measured size) for test 35.
 
 | # | Test | Seen | Meaning |
 | --- | --- | --- | --- |
 | 32 | The touchscreen, driver held back, then loaded by hand | **Before:** the rails read 3.0 V and 1.8 V, off. **After `modprobe goodix_berlin_spi`:** "Goodix Berlin Capacitive TouchScreen" on `spi0.0`, with the rails enabled at 3.0 V and 1.8 V. **The four corners** came in at (110,121), (1004,118), (118,2311) and (971,2298). **A swipe** down the middle ran from (528,824) to (564,1892). 842 interrupts, no checksum errors. The blacklist was then removed | **Touch works.** The chip is powered only after its supply was read at 3.0 V. No axis swap or inversion is needed |
 | 33 | A reboot (`--set-active=b`) | The driver loads by itself at 3.6 s. `running`, no failed units. Hand tests: the PIN pad unlocks by touch, an app opens, the shell swipes, the on-screen keyboard types | Touch in the session |
-| 34 | The panel size (the next boot, a flash) | Hyprland's monitor was 285 × 635 mm without the `panel0` node (simpledrm's 96 dpi guess), and the keyboard was tiny. With 70 × 149 mm it's 70 × 149, and the keyboard is at its normal height. Power locks and wakes. Closing an app from the app switcher works. `tools/phone-smoke` (main `c3cfd86`): every required row ok, touch ok, buttons ok, 2 known error lines, 0 new | **Gate (g) passed**, on a second boot of touch |
+| 34 | The panel size (the next boot, a flash) | Hyprland's monitor was 285 × 635 mm without the `panel0` node (simpledrm's 96 dpi guess), and the keyboard was tiny. With stock's 70 × 149 mm it's 70 × 149, and the keyboard is close to its normal height. Power locks and wakes. Closing an app from the app switcher works. `tools/phone-smoke` (main `c3cfd86`): every required row ok, touch ok, buttons ok, 2 known error lines, 0 new | **Gate (g) passed**, on a second boot of touch |
+| 35 | The measured size (#241's review), a flash | The lit area measures 64 × 141 mm. With that in `panel0`, Hyprland reports 64 × 141 mm, and the keyboard is at its normal height, about 9 % taller than with 70 × 149. `running`, no failed units. `tools/phone-smoke` (main `2db3f2b`): every required row ok, touch ok, buttons ok, 0 new | The size is the glass's, not stock's |
 
 Slot B: 2 tries left.
 
@@ -167,5 +168,17 @@ Findings:
 
 - **The session is slow.** There's no GPU driver (no render node, so Hyprland and the shell render in software) and no cpufreq (the cores stay at ABL's rates). Both wait for akita's GPU and DVFS work, after husky's.
 - **The app-switcher disconnect, seen once.** In test 33, closing an app from the app switcher made Hyprland log `error in client communication` for the shell. The shell logged `The Wayland connection experienced a fatal error: Invalid argument`, exited with 255, and its wrapper relaunched it a second later. There was no core dump, and Hyprland's log has nothing but its no-renderer messages. It didn't happen in test 34. That's userspace, and worth an issue if it comes back.
+- **A lockout, seen once.** While the screen was being measured, the clipboard panel opened by accident. Then:
+  - the session stopped reacting: swipes didn't close the panel or open the quick settings;
+  - Power locked and woke the screen, but swiping up on the lock screen no longer showed the PIN pad;
+  - the touches still reached the kernel (raw events recorded), but the lock screen got none;
+  - closing the clipboard panel over SSH (`omarchy-shell shell hide omarchy.clipboard`) didn't help, and a reboot did.
+
+  Opening the panel on purpose and locking over it unlocks normally, so the panel wasn't the cause. The journal has only leads, just before the lock:
+  - three on-screen-keyboard keymap reloads (`xkbcomp`: "Virtual modifier Squeekboard multiply defined");
+  - Qt text-input warnings ("Trying to disable … but … is focused").
+
+  There was no crash or shell restart. That's userspace, and worth an issue if it comes back.
 - **`dmesg -c` clears the kernel's ring buffer.** One read in M3.3 used it, so that boot's kernel log is only in the journal. Read with plain `dmesg` or `journalctl -k`.
-- The logs are private (`~/android/reference/akita-m3.*-2026111*/`). The goodix files from F/ are in `~/android/reference/akita-goodix-cp3a.261005.005/` and are never committed. M3.4's images and modules are kept as `~/omamobile-kernel/known-good/akita-m3.4-g7b13e4166249`.
+- Slot B ended test 35 with 2 tries, after a `--set-active=b` reboot for the lockout and test 35's flash.
+- The logs are private (`~/android/reference/akita-m3.*-2026111*/` and `akita-lockout-20261111/`). The goodix files from F/ are in `~/android/reference/akita-goodix-cp3a.261005.005/` and are never committed. M3.4's images and modules (with 70 × 149) are kept as `~/omamobile-kernel/known-good/akita-m3.4-g7b13e4166249`.

@@ -63,7 +63,7 @@ Our kernel booted from slot B with the first-light board file, which has USB and
 
   All three are husky's values (H/, [BRINGUP-M1](../husky/BRINGUP-M1.md) test 20). ABL's splash is at 0xfac00000, and the trigger is masked: `HW_TRIG_MASK_DECON` (bit 4) is set and `HW_TRIG_EN` (bit 0) clear.
 - **The panel runs in DSI command mode** [V]. No mode in Google's driver (`display/panel-google-ak3b.c`, in the same repository as G/) sets `MIPI_DSI_MODE_VIDEO`; its modes set only `MIPI_DSI_CLOCK_NON_CONTINUOUS`. So, as on husky, frames reach the panel only once DECON0's trigger is unmasked. 0x3061 clears bit 4 and sets bit 0, hence `SIMPLEFB_TRIG_CON="0x19470030 0x3061"`.
-- **The same driver gives the panel as 70 × 149 mm** (`width_mm`, `height_mm`) [V], which is where stock's reported DPI comes from: `dumpsys display` reads xDpi 391.885 and yDpi 409.127 for 1080x2400, which is 70.0 × 149.0 mm. The board file carries it since M3 (linux-omarchy-mobile#241).
+- **The same driver gives the panel as 70 × 149 mm** (`width_mm`, `height_mm`) [V], which is where stock's reported DPI comes from: `dumpsys display` reads xDpi 391.885 and yDpi 409.127 for 1080x2400, which is 70.0 × 149.0 mm. That is larger than the glass: a 6.1-inch 20:9 panel is about 64 × 141 mm, and Google's touch node says `goodix,panel-height-mm = <141>`. The lit area measures 64 × 141 mm with a ruler [V], and that's what the board file carries since M3 (linux-omarchy-mobile#241), with stock's 70 × 149 named in its comment.
 - **There is no `/sys/devices/soc0`** [V]: our kernel has no chip-id driver for zuma, so the silicon revision (B0 or B1) is still open.
 
 ## 2026-11-02: stage 0: a retail Pixel 8a (stock, rooted, bootloader unlocked)
