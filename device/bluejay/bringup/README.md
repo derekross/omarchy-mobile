@@ -14,11 +14,20 @@ revised kernel topics. Removing a check or changing a hash is not qualification.
 The new ALIX topic drops both staging knobs: a separate next-run helper must
 be prepared and reviewed before testing that stack.
 
+`bringup/kernel.config` is the historical fragment for rebuilding `c934e316b`.
+Apply it by hand with `scripts/kconfig/merge_config.sh` after the shared config,
+then run `olddefconfig` in that build's own output directory. It is deliberately
+outside `device/bluejay/kernel.config`, so ordinary Bluejay builds keep their
+own kernel release, commit suffix and SPI configuration.
+
+
 `device/bluejay/overlays/input-controller.dtso` replaces the whole
 `/chosen/bootargs` string; it does not append its USI probe-hold argument.
 Before combining it with other overlays, inspect the final bootargs in both
 DT variants and retain every argument the matching boot/recovery policy needs.
 It is a historical overlay for the tested kernel, not the revised ALIX path.
+These overlays name labels from that development tree and do not apply to the
+published kernel. Rebuild and validate a matched set before another trial.
 
 The retained-display startup no longer reads or writes registers with devmem.
 Use `SIMPLEFB_TRIG_CON="0x1c300030 0x3061"` in the Bluejay descriptor and rebuild
@@ -53,3 +62,77 @@ change the init and companion together, with a retained RAM rescue image.
 The Wi-Fi DT revision additionally introduces a disabled `regulator-wlan`.
 Its future link-stage overlay must enable it; these historical overlays do not.
 No prospective overlay should be copied into the working phone as-is.
+
+## Install and undo the root gates (not executed)
+
+Only after the next-run gate above has passed, stage the check and ready pair
+on the prepared development root. The neutral root policy from #562 and this
+ready helper must be installed together. These commands enable the pair for
+the next boot; they do not start hardware or prove a successful handover.
+Announce any subsequent boot or screen interruption separately.
+
+From the repository root, as root on the prepared handset, choose a fresh
+backup directory and record the previous enabled state. Stop if the directory
+already exists, a copy fails, or the root/image/kernel checks disagree:
+
+```sh
+(
+set -eu
+backup=/var/lib/omamobile/bluejay-root-gates-before-test
+[ ! -e "$backup" ]
+mkdir -p /var/lib/omamobile
+mkdir -m 700 "$backup"
+systemctl is-enabled omamobile-bluejay-check.service > "$backup/check.enabled" 2>&1 || true
+systemctl is-enabled omamobile-bluejay-boot-ready.service > "$backup/ready.enabled" 2>&1 || true
+for path in /usr/bin/omamobile-bluejay-check /usr/bin/omamobile-bluejay-boot-ready \
+  /usr/lib/systemd/system/omamobile-bluejay-check.service \
+  /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service \
+  /usr/lib/systemd/system/sddm.service.d/bluejay-check.conf; do
+  if [ -e "$path" ] || [ -L "$path" ]; then cp -a --parents "$path" "$backup/"; fi
+done
+touch "$backup/snapshot-complete"
+install -Dm755 device/bluejay/bringup/bin/omamobile-bluejay-check /usr/bin/omamobile-bluejay-check
+install -Dm755 device/bluejay/bringup/bin/omamobile-bluejay-boot-ready /usr/bin/omamobile-bluejay-boot-ready
+install -Dm644 device/bluejay/bringup/vendor/systemd/system/omamobile-bluejay-check.service /usr/lib/systemd/system/omamobile-bluejay-check.service
+install -Dm644 device/bluejay/bringup/vendor/systemd/system/omamobile-bluejay-boot-ready.service /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service
+install -Dm644 device/bluejay/bringup/vendor/systemd/system/sddm.service.d/bluejay-check.conf /usr/lib/systemd/system/sddm.service.d/bluejay-check.conf
+systemctl daemon-reload
+systemctl enable omamobile-bluejay-check.service omamobile-bluejay-boot-ready.service
+)
+```
+
+Expect both units enabled and their installed `ExecStart` paths present. A real
+boot must show the check passing, SSH available, the pending marker cleared
+and the desktop ready. Stop on any failed prerequisite; do not clear the
+marker merely to make a failing boot repeat.
+
+To undo on the installed development root before another boot, restore the
+saved files below. If only RAM rescue is available, first recover access to
+the installed root using PERSISTENCE-PLAN; these absolute paths must not be
+run against the RAM filesystem. A missing or incomplete backup stops before
+any unit is disabled or any file removed:
+
+```sh
+(
+set -eu
+backup=/var/lib/omamobile/bluejay-root-gates-before-test
+[ -d "$backup" ]
+[ -f "$backup/check.enabled" ]
+[ -f "$backup/ready.enabled" ]
+[ -f "$backup/snapshot-complete" ]
+systemctl disable omamobile-bluejay-check.service omamobile-bluejay-boot-ready.service
+for path in /usr/bin/omamobile-bluejay-check /usr/bin/omamobile-bluejay-boot-ready \
+  /usr/lib/systemd/system/omamobile-bluejay-check.service \
+  /usr/lib/systemd/system/omamobile-bluejay-boot-ready.service \
+  /usr/lib/systemd/system/sddm.service.d/bluejay-check.conf; do
+  rm -f "$path"
+  if [ -e "$backup$path" ] || [ -L "$backup$path" ]; then cp -a "$backup$path" "$path"; fi
+done
+systemctl daemon-reload
+)
+```
+
+Restore each unit's recorded enabled/masked state from `check.enabled` and
+`ready.enabled` (enable only a unit recorded as enabled; restore any prior
+mask). Keep the backup. These root-gate commands do not stage the rest of the
+historical hardware stack and do not qualify a revised kernel.
