@@ -1,0 +1,821 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""phone-gesture-test: the quick-settings swipe gestures, run on the phone and
+checked through the shell's own state, the same way on any device.
+
+usage: tools/phone-gesture-test [--record] [--keep-tiles] [--loud] [--out DIR] [--list] [ID ...]
+
+Run it on the phone, in the user's session, from a checkout (or with
+tools/phone-gesture-touch next to it). Each test sets up a known screen
+itself, so the result doesn't depend on the device, its screen size or the
+user's setup:
+  - pages and the sheet open through the shell's IPC (openWifi, openBluetooth,
+    summon), never by a tap on a tile, so the tile layout doesn't matter;
+  - for the run, quick settings use the package's default tile layout (the
+    user's ~/.config/omamobile/quicksettings.json is put back afterwards);
+  - "home" is an empty workspace, "app" one with a terminal the script opens
+    and closes again;
+  - the shade's tests post fictional notifications within the history's room
+    and dismiss them again; do-not-disturb is on during the run;
+  - only the gesture under test is a real touch, through a virtual
+    touchscreen (tools/phone-gesture-touch, root), at points taken from the
+    output's size and the page's own window (hyprctl layers), in logical
+    pixels.
+Verdicts are computed, never judged: a test passes when the shell's state
+after the gesture is the one the scenario expects (`omarchy-shell shell call
+omamobile.quicksettings state`) and Recents stayed shut, and a page that
+should stay open must also show in the pixels that its content moved up with
+the drag (docs/GESTURE-TESTS.md).
+
+It takes over the screen for a few minutes (workspaces switch, a terminal
+opens, notifications appear and go): tell whoever holds the phone first.
+
+root: phone-gesture-touch needs /dev/uinput. Without write access the script
+runs it through sudo (asks once); GESTURE_TEST_SUDO_PW supplies the password
+for an unattended run. Nothing is stored.
+"""
+import argparse, glob, hashlib, json, os, re, signal, subprocess, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+VT = os.path.join(HERE, "phone-gesture-touch")
+APP_ID = "gesture-test"
+QS = "omamobile.quicksettings"
+CONF = os.path.expanduser("~/.config/omamobile/quicksettings.json")
+CONF_ASIDE = CONF + ".gesture-test-aside"
+PAGE_NS = {"wifi": "omamobile-wifi", "bluetooth": "omamobile-bluetooth"}
+RECENTS_NS = "omamobile-switcher"  # mapped only while Recents is open
+OPEN_KEY = {"wifi": "wifiPanel", "bluetooth": "bluetoothPanel", "sheet": "opened"}
+
+# Gestures, in logical pixels:
+#   edge        from the true bottom edge of the screen
+#   page-strip  from the page's own strip (just above its window's bottom)
+#   body        from the page body, well above the strip
+#   last-row    from the last visible row of the Wi-Fi list (found in a screenshot)
+#   card        from the shade card's header (top half of the screen)
+#   list        from the notification list near the bottom
+#   band-top    from the top of the bottom band, 40 px above the edge: inside
+#               the home strip's 44 px zone over an app, where a page strip
+#               shorter than that zone left a band that opened Recents
+TESTS = [
+    dict(id="01", name="wifi-bottom-edge-home", ctx="home", page="wifi", gesture="edge",
+         title="Wi-Fi page on the home screen: swipe up from the bottom edge",
+         expect="the Wi-Fi page closes", want={"wifiPanel": False}),
+    dict(id="02", name="bluetooth-bottom-edge-home", ctx="home", page="bluetooth", gesture="edge",
+         title="Bluetooth page on the home screen: swipe up from the bottom edge",
+         expect="the Bluetooth page closes", want={"bluetoothPanel": False}),
+    dict(id="03", name="wifi-drag-from-last-network-home", ctx="home", page="wifi", gesture="last-row",
+         title="Wi-Fi page on the home screen: drag up starting on the last visible network",
+         expect="the page stays open (the list scrolls)", want={"wifiPanel": True}),
+    dict(id="04", name="wifi-drag-in-body-above-strip-home", ctx="home", page="wifi", gesture="body",
+         title="Wi-Fi page on the home screen: drag up in the page body, above the strip",
+         expect="the page stays open (only the strip closes it)", want={"wifiPanel": True}),
+    dict(id="05", name="notification-card-swipe-home", ctx="home", page="sheet", gesture="card",
+         title="Quick settings on the home screen: swipe up on the notification card's header",
+         expect="quick settings close", want={"opened": False}, notes=1),
+    dict(id="06", name="notification-list-scroll-home", ctx="home", page="sheet", gesture="list",
+         title="Quick settings on the home screen: drag up starting in the notification list",
+         expect="the list scrolls, quick settings stay open", want={"opened": True}, notes=6),
+    dict(id="07", name="wifi-bottom-edge-over-app", ctx="app", page="wifi", gesture="edge",
+         title="Wi-Fi page over an app: swipe up from the bottom edge",
+         expect="the Wi-Fi page closes", want={"wifiPanel": False}),
+    dict(id="08", name="bluetooth-bottom-edge-over-app", ctx="app", page="bluetooth", gesture="edge",
+         title="Bluetooth page over an app: swipe up from the bottom edge",
+         expect="the Bluetooth page closes", want={"bluetoothPanel": False}),
+    dict(id="09", name="wifi-page-strip-over-app", ctx="app", page="wifi", gesture="page-strip",
+         title="Wi-Fi page over an app: swipe up from the page's own strip",
+         expect="the Wi-Fi page closes", want={"wifiPanel": False}),
+    dict(id="10", name="bluetooth-page-strip-over-app", ctx="app", page="bluetooth", gesture="page-strip",
+         title="Bluetooth page over an app: swipe up from the page's own strip",
+         expect="the Bluetooth page closes", want={"bluetoothPanel": False}),
+    dict(id="11", name="wifi-band-top-over-app", ctx="app", page="wifi", gesture="band-top",
+         title="Wi-Fi page over an app: swipe up from the top of the bottom band, 40 px above the edge",
+         expect="the Wi-Fi page closes", want={"wifiPanel": False}),
+    dict(id="12", name="bluetooth-band-top-over-app", ctx="app", page="bluetooth", gesture="band-top",
+         title="Bluetooth page over an app: swipe up from the top of the bottom band, 40 px above the edge",
+         expect="the Bluetooth page closes", want={"bluetoothPanel": False}),
+    dict(id="13", name="wifi-band-top-home", ctx="home", page="wifi", gesture="band-top",
+         title="Wi-Fi page on the home screen: swipe up from the top of the bottom band, 40 px above the edge",
+         expect="the Wi-Fi page closes", want={"wifiPanel": False}),
+]
+SETTLE = {"wifi": 6.0, "bluetooth": 3.0, "sheet": 1.5}  # the Wi-Fi page rescans on open
+NOTIFICATIONS = 8  # posted for the shade's tests, never more than the history has room for
+NOTES_APP = "phone-gesture-test"
+# Fictional notifications of different lengths (the shade shows a body on one
+# line, and the long one wraps onto a second): identical rows would make the
+# list's row profile periodic, and its upward shift ambiguous by whole rows
+# (shift_up).
+NOTE_TEXTS = [
+    ("Test notification 1", "Fictional, posted by phone-gesture-test."),
+    ("A fictional reminder", "Two lines this time,\nthe second one shorter."),
+    ("3", "Short."),
+    ("Gesture test: a longer fictional title",
+     "A longer fictional body that wraps onto another line in a phone's narrow shade, so rows differ in height."),
+    ("Fictional message", "Nothing to do here."),
+    ("Test notification six", "Three lines:\none\ntwo"),
+    ("Seven", "Fictional, posted to fill the shade."),
+    ("The eighth fictional notification", "Last one."),
+]
+HISTORY = os.path.expanduser("~/.local/state/omarchy/notifications/history")
+OMARCHY_SHELL = "/usr/share/omarchy/shell"
+SEEN = os.path.expanduser("~/.local/state/omamobile/notifications-seen")  # the bar's unread mark
+HEADROOM = 2  # history slots left free for real notifications that arrive during a run
+THERMAL_LIMIT = 75.0  # deg C: above it the phone throttles and touches arrive late; wait it out
+
+
+def history_limit():
+    """The notification service keeps only its newest historyLimit files and
+    deletes the rest, so posting more than there is room for would push the
+    owner's own notifications out for good."""
+    try:
+        with open(OMARCHY_SHELL + "/plugins/notifications/Service.qml") as f:
+            return int(re.search(r"historyLimit:\s*(\d+)", f.read()).group(1))
+    except (OSError, AttributeError):
+        return 10
+
+
+# ------------------------------------------------------------------ plumbing
+
+def session_env():
+    env = dict(os.environ)
+    run = env.setdefault("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid())
+    if not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        sigs = sorted(glob.glob(run + "/hypr/*/"), key=os.path.getmtime)
+        if sigs:
+            env["HYPRLAND_INSTANCE_SIGNATURE"] = os.path.basename(sigs[-1].rstrip("/"))
+    if not env.get("WAYLAND_DISPLAY"):
+        socks = sorted(p for p in glob.glob(run + "/wayland-*") if not p.endswith(".lock"))
+        if socks:
+            env["WAYLAND_DISPLAY"] = os.path.basename(socks[0])
+    return env
+
+
+ENV = session_env()
+
+
+def sh(*cmd, check=False, input=None):
+    r = subprocess.run(cmd, capture_output=True, text=True, input=input, env=ENV)
+    if check and r.returncode != 0:
+        raise RuntimeError("%s failed: %s" % (" ".join(cmd), r.stderr.strip()))
+    return r.stdout
+
+
+def hypr(what):
+    return json.loads(sh("hyprctl", "-j", what))
+
+
+def dispatch(lua):
+    sh("hyprctl", "dispatch", lua)
+
+
+def shell(*args):
+    return sh("omarchy-shell", "shell", *args)
+
+
+def qs(method, arg=""):
+    return shell("call", QS, method, arg)
+
+
+def state():
+    return json.loads(qs("state"))
+
+
+def notifications(method, arg=None):
+    """The Omarchy shell's notification service, through its own IPC target."""
+    return sh("qs", "ipc", "-p", OMARCHY_SHELL, "call", "notifications", method, *([arg] if arg else [])).strip()
+
+
+def shell_build():
+    """Which shell ran: the package, and a hash of the quick-settings QML it
+    loaded (two builds can carry the same version)."""
+    d = os.path.realpath(os.path.expanduser("~/.config/omarchy/plugins/" + QS))
+    h = hashlib.sha256()
+    for f in ("QuickSettings.qml", "WifiPanel.qml", "BluetoothPanel.qml"):
+        try:
+            with open(os.path.join(d, f), "rb") as fh:
+                h.update(fh.read())
+        except OSError:
+            h.update(b"-")
+    return {"package": sh("pacman", "-Q", "omamobile-shell").strip(), "plugin_dir": d,
+            "qml_sha256": h.hexdigest()[:16]}
+
+
+class Geometry:
+    """The focused output: its panel pixels, scale and logical size."""
+
+    def __init__(self):
+        m = next((m for m in hypr("monitors") if m.get("focused")), hypr("monitors")[0])
+        self.name, self.transform = m["name"], m["transform"]
+        self.pw, self.ph, self.scale = m["width"], m["height"], float(m["scale"])
+        self.w, self.h = round(self.pw / self.scale), round(self.ph / self.scale)
+
+    def px(self, x, y):
+        return (min(self.pw - 1, max(0, round(x * self.scale))),
+                min(self.ph - 1, max(0, round(y * self.scale))))
+
+    def info(self):
+        return {"output": self.name, "panel": [self.pw, self.ph], "scale": self.scale,
+                "logical": [self.w, self.h]}
+
+
+def layers(geo):
+    out = []
+    for lvl, ls in hypr("layers").get(geo.name, {}).get("levels", {}).items():
+        for l in ls:
+            out.append({"level": int(lvl), "ns": l["namespace"], "x": l["x"], "y": l["y"],
+                        "w": l["w"], "h": l["h"]})
+    return out
+
+
+def clients_on(ws):
+    return [c for c in hypr("clients") if c["workspace"]["name"] == ws]
+
+
+def focus(ws):
+    dispatch('hl.dsp.focus({ workspace = "%s" })' % ws)
+
+
+# ------------------------------------------------------------------ the finger
+
+class Finger:
+    """phone-gesture-touch, started once for the run (root for /dev/uinput)."""
+
+    def __init__(self, geo):
+        args = [sys.executable, VT, str(geo.pw), str(geo.ph)]
+        pw = None
+        if not os.access("/dev/uinput", os.W_OK):
+            pw = os.environ.get("GESTURE_TEST_SUDO_PW")
+            if pw is None:
+                subprocess.run(["sudo", "-v"], check=True)  # asks on the terminal, once
+                args = ["sudo", "-n"] + args
+            else:
+                args = ["sudo", "-S", "-p", ""] + args
+        self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        if pw is not None:
+            self.p.stdin.write(pw + "\n"); self.p.stdin.flush()
+        ready = json.loads(self.p.stdout.readline() or "{}")
+        if not ready.get("ready"):
+            raise RuntimeError("the virtual touchscreen did not start")
+
+    def swipe(self, geo, x0, y0, x1, y1, ms, label):
+        (a, b), (c, d) = geo.px(x0, y0), geo.px(x1, y1)
+        self.p.stdin.write(json.dumps({"x0": a, "y0": b, "x1": c, "y1": d, "ms": ms}) + "\n")
+        self.p.stdin.flush()
+        rec = json.loads(self.p.stdout.readline())
+        if "error" in rec:
+            raise RuntimeError("touch refused: %s" % rec)
+        rec.update(label=label, logical=[x0, y0, x1, y1])
+        return rec
+
+    def close(self):
+        try:
+            self.p.stdin.close(); self.p.wait(timeout=5)
+        except Exception:
+            self.p.kill()
+
+
+# ------------------------------------------------------------------ fixtures
+
+class Fixtures:
+    """Everything the run changes, and puts back in reverse."""
+
+    def __init__(self, keep_tiles, quiet):
+        self.keep_tiles = keep_tiles
+        self.tiles_aside = False
+        self.want_quiet = quiet
+        self.dnd_before = None
+        self.history_before = None
+        self.history_kept = None
+        self.posted = 0
+        self.dnd_during = self.dnd_after = None
+        self.app = None
+        self.home_ws = self.app_ws = None
+        self.start_ws = hypr("activeworkspace")["name"]
+        # The owner's notification history and the bar's unread mark, checked
+        # and put back at the end of every run.
+        self.history_before = sorted(os.listdir(HISTORY)) if os.path.isdir(HISTORY) else []
+        try:
+            with open(SEEN) as f:
+                self.seen_before = f.read()
+        except OSError:
+            self.seen_before = None
+
+    def tiles(self):
+        if self.keep_tiles:
+            return
+        if os.path.exists(CONF_ASIDE):
+            raise RuntimeError("%s is left from an earlier run: put it back as %s first" % (CONF_ASIDE, CONF))
+        if os.path.exists(CONF):
+            os.replace(CONF, CONF_ASIDE)  # the shell watches the file: the default layout applies now
+            self.tiles_aside = True
+
+    def workspaces(self):
+        used = {c["workspace"]["name"] for c in hypr("clients")} | {self.start_ws}
+        free = [w for w in ("9", "8", "7", "6", "5", "4") if w not in used]
+        if len(free) < 2:
+            raise RuntimeError("needs two empty workspaces among 4-9")
+        self.home_ws, self.app_ws = free[0], free[1]
+
+    def open_app(self):
+        focus(self.app_ws); time.sleep(0.5)
+        self.app = subprocess.Popen(
+            ["foot", "--app-id", APP_ID, "--title", "phone-gesture-test",
+             "sh", "-c", "echo 'phone-gesture-test: the app under the page'; exec sleep 3600"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=ENV)
+        for _ in range(80):
+            if any(c["class"] == APP_ID for c in clients_on(self.app_ws)):
+                return
+            time.sleep(0.1)
+        raise RuntimeError("the test app did not appear on workspace %s" % self.app_ws)
+
+    def quiet(self):
+        """Do-not-disturb for the run: no sound or popup for the fictional
+        notifications, and no popup over the screen being measured."""
+        if not self.want_quiet:
+            return
+        state = notifications("dndState")
+        if state not in ("on", "off"):
+            raise RuntimeError("the notification service doesn't answer dndState (%r); use --loud" % state)
+        self.dnd_before = state
+        if state == "off":
+            notifications("setDnd", "on")
+        self.dnd_during = notifications("dndState")
+        if self.dnd_during != "on":
+            raise RuntimeError("do-not-disturb didn't turn on (%r); use --loud" % self.dnd_during)
+
+    def post_notifications(self, want):
+        """Fictional notifications for the shade's tests, never more than the
+        history has room for, less HEADROOM: the service deletes its oldest
+        files beyond historyLimit, and those would be the owner's."""
+        n = notes_to_post(want, history_limit(), len(self.history_before))
+        for title, body in NOTE_TEXTS[:n]:
+            sh("notify-send", "--app-name=" + NOTES_APP, title, body)
+        self.posted = n
+        time.sleep(1.0)
+
+    def forget_notifications(self):
+        """Take the suite's notifications out of the shade the way a swipe
+        does (dismissNotification), then check that every history file that
+        was there before the run still is."""
+        try:
+            rows = json.loads(qs("notificationRows") or "[]")
+        except ValueError:
+            rows = []
+        for r in rows:
+            if r.get("app") == NOTES_APP and r.get("key") is not None:
+                qs("dismissNotification", str(r["key"]))
+        time.sleep(1.0)
+        now = set(os.listdir(HISTORY)) if os.path.isdir(HISTORY) else set()
+        self.history_kept = set(self.history_before) <= now
+
+    def restore(self):
+        if self.history_kept is None:
+            self.forget_notifications()
+        if self.seen_before is not None:
+            try:
+                with open(SEEN) as f:
+                    changed = f.read() != self.seen_before
+            except OSError:
+                changed = True
+            if changed:
+                with open(SEEN, "w") as f:
+                    f.write(self.seen_before)
+        if self.dnd_before == "off":
+            notifications("setDnd", "off")
+        if self.dnd_before:
+            self.dnd_after = notifications("dndState")
+        if self.app:
+            try:
+                os.killpg(self.app.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            self.app = None
+        if self.tiles_aside and os.path.exists(CONF_ASIDE):
+            os.replace(CONF_ASIDE, CONF)
+            self.tiles_aside = False
+        reset_ui()
+        focus(self.start_ws)
+
+
+def reset_ui():
+    shell("summon", QS, "{}")  # opening the sheet closes the Wi-Fi and Bluetooth pages
+    time.sleep(0.4)
+    for plugin in (QS, "omamobile.switcher", "omamobile.launcher"):
+        shell("hide", plugin)
+    shell("call", "omamobile.keyboard", "hideKeyboard", "")
+    time.sleep(1.0)
+
+
+# ------------------------------------------------------------------ one test
+
+def last_row_y(png, page, geo):
+    """The lowest line of text in the Wi-Fi list, in logical pixels: inside the
+    page's window, below its header and switch, above its strip."""
+    x0, y0 = geo.px(page["x"] + 60, page["y"] + 166)
+    x1, y1 = geo.px(page["x"] + page["w"] - 52, page["y"] + page["h"] - 48)
+    out = sh("magick", png, "-crop", "%dx%d+%d+%d" % (x1 - x0, y1 - y0, x0, y0), "+repage",
+             "-colorspace", "gray", "-threshold", "45%", "-scale", "1x!", "-threshold", "0.5%", "txt:-")
+    last = None
+    for line in out.splitlines()[1:]:
+        pos, rest = line.split(":", 1)
+        if "white" in rest or "FFFFFF" in rest.upper() or "gray(255)" in rest:
+            last = int(pos.split(",")[1])
+    if last is None:
+        raise RuntimeError("no list text found (a light theme, or an empty list?)")
+    return (y0 + last) / geo.scale
+
+
+def gesture_points(t, geo, page, png):
+    w, h = geo.w, geo.h
+    bottom = page["y"] + page["h"] if page else h
+    g = t["gesture"]
+    if g == "edge":
+        return (w / 2, h - 13, w / 2, h - 288, 300)
+    if g == "page-strip":
+        return (w / 2, bottom - 16, w / 2, bottom - 279, 300)
+    if g == "body":
+        return (w / 2, bottom - 73, w / 2, bottom - 336, 300)
+    if g == "last-row":
+        y = last_row_y(png, page, geo) - 10
+        return (w / 2, y, w / 2, max(page["y"] + 60, y - 263), 350)
+    if g == "band-top":
+        return (w / 2, h - 40, w / 2, h - 315, 300)
+    if g == "card":
+        return (w * 0.28, h * 0.50, w * 0.28, h * 0.23, 350)
+    if g == "list":
+        return (w / 2, h - 67, w / 2, h - 367, 350)
+    raise ValueError(g)
+
+
+def precondition(t, st, lay, ws, geo):
+    problems = []
+    ns = {l["ns"]: l for l in lay}
+    strip = ns.get("omamobile-home-strip")
+    page = ns.get(PAGE_NS.get(t["page"], ""))
+    on_ws = clients_on(ws)
+    if "osk" in ns:
+        problems.append("the on-screen keyboard is up")
+    if RECENTS_NS in ns:
+        problems.append("Recents is open")
+    if t["ctx"] == "home":
+        if on_ws:
+            problems.append("the home workspace has windows")
+        if strip:
+            problems.append("the shell's bottom strip is shown on the home screen")
+        if page and abs(page["y"] + page["h"] - geo.h) > 1:
+            problems.append("the page ends at %d, not at the screen's bottom (%d)" % (page["y"] + page["h"], geo.h))
+    else:
+        if not on_ws:
+            problems.append("no app on the app workspace")
+        if not strip:
+            problems.append("the shell's bottom strip is not shown over the app")
+        elif page and abs(page["y"] + page["h"] - strip["y"]) > 1:
+            problems.append("the page ends at %d, not above the strip (%d)" % (page["y"] + page["h"], strip["y"]))
+    if not st.get(OPEN_KEY[t["page"]]):
+        problems.append("%s is not open" % OPEN_KEY[t["page"]])
+    if t["page"] == "sheet":
+        if st.get("media"):
+            problems.append("a media card is shown")
+        need = t.get("notes", 1)
+        if (st.get("notifications") or 0) < need:
+            problems.append("%s notifications in the shade, needs %d" % (st.get("notifications"), need))
+    return problems
+
+
+# Evidence is computed from the pixels, never judged: a region's row profile
+# (the mean grey of each panel row) before and after a drag, and the upward
+# shift that best lines the two up. A list that scrolled with the finger
+# lines up again some way further up (scrolled_with); one that didn't move
+# matches itself at a shift of 0. Grey values are 0..65535; STABLE is the
+# mean per-row difference below which two frames count as the same picture.
+STABLE = 130
+
+
+def profile(png, geo, rect):
+    """Mean grey of each panel row inside rect (logical pixels)."""
+    (x0, y0), (x1, y1) = geo.px(rect["x"], rect["y"]), geo.px(rect["x"] + rect["w"], rect["y"] + rect["h"])
+    out = sh("magick", png, "-crop", "%dx%d+%d+%d" % (x1 - x0, y1 - y0, x0, y0), "+repage",
+             "-colorspace", "gray", "-depth", "16", "-scale", "1x!", "txt:-")
+    vals = []
+    for line in out.splitlines()[1:]:
+        m = re.search(r"\(\s*([\d.]+)", line.split(":", 1)[-1])
+        vals.append(float(m.group(1)) if m else 0.0)
+    return vals
+
+
+def diff(a, b, s=0):
+    """Mean absolute difference of b[y] and a[y + s] over their overlap."""
+    m = min(len(a) - s, len(b))
+    if m < max(1, min(len(a), len(b)) // 3):
+        return float("inf")
+    return sum(abs(b[y] - a[y + s]) for y in range(m)) / m
+
+
+TIE = 1.25  # shifts whose difference is within this factor of the best line up as well
+# (look-alike rows on the 9a and in the VM: 1.05-1.21; any other second-best
+# shift seen was more than 1.6 times the best)
+
+
+def shift_up(a, b, max_shift, near=0):
+    """How far the content moved up from profile a to profile b, in panel
+    rows: (shift, its difference, the difference unmoved, other shifts that
+    line up as well). Rows that look alike (network names of one length, the
+    same notification) line up almost as well a whole number of rows apart;
+    of those, the shift nearest `near` (the drag) is taken."""
+    curve = [diff(a, b, s) for s in range(max(1, max_shift))]
+    r0 = curve[0]
+    best = min(range(1, len(curve)), key=lambda s: curve[s], default=0)
+    if not best or curve[best] >= r0:
+        return 0, r0, r0, []
+    found = []
+    for s in range(1, len(curve)):
+        r = curve[s]
+        if r > TIE * curve[best] or r > curve[s - 1] or (s + 1 < len(curve) and r > curve[s + 1]):
+            continue
+        if found and s - found[-1] <= 3:  # the same minimum, a flat bottom
+            if r < curve[found[-1]]:
+                found[-1] = s
+        else:
+            found.append(s)
+    pick = min(found, key=lambda s: (abs(s - near), s))
+    return pick, curve[pick], r0, [s for s in found if s != pick]
+
+
+def scrolled_with(moved, diff_at_shift, diff_unmoved):
+    """A drag that should scroll a list did: the picture changed, and its
+    content lines up much better moved up by at least 20 px than unmoved. How
+    far a list can go depends on how much of it is left below, so the rule
+    doesn't ask for a share of the drag; a touch that never arrived moves
+    nothing, and rows a Wi-Fi scan adds push the list down, not up."""
+    return moved >= 20 and diff_unmoved > STABLE and diff_at_shift < 0.7 * diff_unmoved
+
+
+def scroll_evidence(found, scale, drag):
+    """shift_up's answer (panel rows) as the log's evidence (logical px), and
+    whether it shows the content moving up with the drag. When look-alike
+    rows line up at several shifts, every one of them must pass: a list that
+    lines up as well after 7 px as after 263 px proves nothing."""
+    s, rb, r0, alts = found
+    ev = {"dragged": round(drag), "moved": round(s / scale), "diff_at_shift": round(rb),
+          "diff_unmoved": round(r0)}
+    if alts:
+        ev["also_lines_up_at"] = sorted(round(x / scale) for x in alts)
+    return scrolled_with(min([s] + alts) / scale, rb, r0), ev
+
+
+def gesture_result(t, got, lay):
+    """PASS when the shell's state is the one the scenario wants and Recents
+    stayed shut: no scenario here opens it, so Recents means the touch
+    reached the home strip, whatever became of the page."""
+    recents = any(l["ns"] == RECENTS_NS for l in lay)
+    return ("PASS" if got == t["want"] and not recents else "FAIL"), recents
+
+
+def notes_to_post(want, limit, existing):
+    """How many fictional notifications fit: the history keeps `limit` files,
+    and HEADROOM slots stay free for real ones arriving during the run."""
+    return min(want, max(0, limit - HEADROOM - existing))
+
+
+def settle(geo, path, rect, timeout=12.0):
+    """Screenshot into path once rect stops changing (a Wi-Fi scan adds rows
+    for a few seconds after the page opens). False if it never did."""
+    sh("grim", "-o", geo.name, path, check=True)
+    prev = profile(path, geo, rect)
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(1.0)
+        sh("grim", "-o", geo.name, path, check=True)
+        cur = profile(path, geo, rect)
+        if diff(prev, cur) < STABLE:
+            return True
+        prev = cur
+    return False
+
+
+def evidence_rect(t, geo, page):
+    """Where a drag that keeps the page open must show movement: the Wi-Fi
+    list between the page's header and its strip, or the lower half of the
+    shade where the notification list is."""
+    if t["page"] == "sheet":
+        return {"x": 0, "y": geo.h * 0.5, "w": geo.w, "h": geo.h * 0.5 - 10}
+    return {"x": page["x"] + 60, "y": page["y"] + 166, "w": page["w"] - 112, "h": page["h"] - 166 - 40}
+
+
+def annotate(png, out, geo, pts):
+    (a, b), (c, d) = geo.px(*pts[0:2]), geo.px(*pts[2:4])
+    r = max(12, round(8 * geo.scale))
+    sh("magick", png, "-fill", "none", "-stroke", "#ff3b30", "-strokewidth", str(max(6, round(3 * geo.scale))),
+       "-draw", "line %d,%d %d,%d" % (a, b, c, d), "-fill", "#ff3b30",
+       "-draw", "circle %d,%d %d,%d" % (a, b, a + r, b), out)
+
+
+def hottest():
+    """The hottest thermal zone in deg C, batteries left out (None if none)."""
+    temps = []
+    for z in glob.glob("/sys/class/thermal/thermal_zone*"):
+        try:
+            with open(z + "/type") as f:
+                if "batt" in f.read().lower():
+                    continue
+            with open(z + "/temp") as f:
+                temps.append(int(f.read()) / 1000)
+        except (OSError, ValueError):
+            pass
+    return max(temps) if temps else None
+
+
+def cool_down(timeout=120.0):
+    """Wait until the SoC is below THERMAL_LIMIT: a throttled phone delivers
+    touches late or in one burst, and a drag then looks like a jump. Returns
+    the temperature it ended at."""
+    t0, temp = time.time(), hottest()
+    while temp is not None and temp > THERMAL_LIMIT and time.time() - t0 < timeout:
+        time.sleep(3.0)
+        temp = hottest()
+    return temp
+
+
+def run_test(t, fx, finger, geo, out_dir, record):
+    d = os.path.join(out_dir, t["id"] + "-" + t["name"])
+    os.makedirs(d, exist_ok=True)
+    ws = fx.home_ws if t["ctx"] == "home" else fx.app_ws
+    log = {k: t[k] for k in ("id", "name", "title", "expect", "ctx", "page", "gesture", "want")}
+    log["workspace"] = ws
+    log["temp_start"] = cool_down()
+    reset_ui()
+    focus(ws); time.sleep(0.8)
+    rec = None
+    if record:
+        rec = subprocess.Popen(["wf-recorder", "-o", geo.name, "-f", os.path.join(d, "raw.mp4"), "-c", "libx264",
+                                "-p", "preset=ultrafast", "-p", "crf=20", "-r", "30", "-y"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=ENV)
+        time.sleep(1.0)
+    if t["page"] == "wifi":
+        if qs("openWifi").strip() == "unavailable":
+            raise RuntimeError("no Wi-Fi device")
+    elif t["page"] == "bluetooth":
+        if qs("openBluetooth").strip() == "unavailable":
+            raise RuntimeError("no Bluetooth adapter")
+    else:
+        shell("summon", QS, json.dumps({"expanded": False}))
+    time.sleep(SETTLE[t["page"]])
+    # The app under the page is a terminal, and focusing it can bring the
+    # on-screen keyboard up; the gesture is about the screen without it.
+    shell("call", "omamobile.keyboard", "hideKeyboard", "")
+    time.sleep(0.5)
+    # Opening the page warms the phone up again: cool down once more before
+    # the screen is measured and touched (and before the screenshots, so rows
+    # a scan adds while waiting aren't taken for a scroll).
+    log["temp_ready"] = cool_down(timeout=60.0)
+    st, lay = state(), layers(geo)
+    page = next((l for l in lay if l["ns"] == PAGE_NS.get(t["page"])), None)
+    keep_open = all(v is True for v in t["want"].values())
+    before = os.path.join(d, "before.png")
+    rect = None
+    if keep_open and (page or t["page"] == "sheet"):
+        rect = evidence_rect(t, geo, page)
+        log["settled"] = settle(geo, before, rect)
+        st, lay = state(), layers(geo)
+        page = next((l for l in lay if l["ns"] == PAGE_NS.get(t["page"])), None)
+    else:
+        sh("grim", "-o", geo.name, before, check=True)
+    log["state_before"], log["layers_before"] = st, lay
+    problems = precondition(t, st, lay, ws, geo)
+    if log.get("settled") is False:
+        problems.append("the screen kept changing before the gesture")
+    if log["temp_ready"] is not None and log["temp_ready"] > THERMAL_LIMIT:
+        problems.append("the phone stayed at %.0f C, above %.0f C, where touches arrive late"
+                        % (log["temp_ready"], THERMAL_LIMIT))
+    # 03 and 04 are about the strip and the end of the list: they only mean
+    # something when the list reaches the strip.
+    if not problems and t["gesture"] in ("last-row", "body") and page:
+        try:
+            reach = page["y"] + page["h"] - last_row_y(before, page, geo)
+            log["list_reach"] = round(reach)
+            if reach > 110:
+                problems.append("the list ends %d px above the page's bottom, too short to reach the strip"
+                                " (needs more networks in range)" % reach)
+        except RuntimeError as e:
+            problems.append(str(e))
+    log["precondition"] = {"ok": not problems, "problems": problems}
+    if problems:
+        log["result"] = "SKIP"
+    else:
+        pts = gesture_points(t, geo, page, before)
+        annotate(before, os.path.join(d, "gesture.png"), geo, pts)
+        log["temp_gesture"] = hottest()
+        log["touch"] = finger.swipe(geo, *pts, label="gesture")
+        time.sleep(1.8)
+        log["state_after"] = state()
+        log["layers_after"] = layers(geo)
+        log["got"] = {k: log["state_after"].get(k) for k in t["want"]}
+        log["result"], log["recents"] = gesture_result(t, log["got"], log["layers_after"])
+        if log["recents"]:
+            log["note"] = "Recents opened: the touch reached the home strip"
+    after = os.path.join(d, "after.png")
+    sh("grim", "-o", geo.name, after)
+    # A page that should stay open also stays open when the touch never
+    # arrived, so its pass needs evidence computed from the pixels: the
+    # content moved up with the drag (scrolled_with). Otherwise INCONCLUSIVE.
+    if log["result"] == "PASS" and keep_open:
+        drag = pts[1] - pts[3]
+        found = shift_up(profile(before, geo, rect), profile(after, geo, rect), round(400 * geo.scale),
+                         near=round(drag * geo.scale))
+        ok, log["evidence"] = scroll_evidence(found, geo.scale, drag)
+        if not ok:
+            ev = log["evidence"]
+            log["result"] = "INCONCLUSIVE"
+            log["note"] = ("the page stayed open, but its content did not move up with the drag"
+                           " (dragged %d px, moved %d px%s)" % (ev["dragged"], ev["moved"],
+                           "; rows that look alike line up as well at %s px"
+                           % ", ".join(map(str, ev["also_lines_up_at"])) if "also_lines_up_at" in ev else ""))
+    if rec:
+        time.sleep(0.6)
+        rec.send_signal(signal.SIGINT)
+        try:
+            rec.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            rec.kill()
+    with open(os.path.join(d, "log.json"), "w") as f:
+        json.dump(log, f, indent=2)
+    return log
+
+
+# ------------------------------------------------------------------ main
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("ids", nargs="*", help="test ids to run (default: all)")
+    ap.add_argument("--record", action="store_true", help="a screen recording per test")
+    ap.add_argument("--keep-tiles", action="store_true", help="leave the owner's tile layout in place")
+    ap.add_argument("--loud", action="store_true", help="leave do-not-disturb off during the run")
+    ap.add_argument("--out", help="output directory (default ~/.cache/phone-gesture-test/run-TIME)")
+    ap.add_argument("--list", action="store_true", help="list the tests and exit")
+    a = ap.parse_args()
+    tests = [t for t in TESTS if not a.ids or t["id"] in a.ids]
+    if a.list:
+        for t in TESTS:
+            print("%s  %-5s %s -> %s" % (t["id"], t["ctx"], t["title"], t["expect"]))
+        return 0
+    geo = Geometry()
+    if geo.transform != 0:
+        sys.exit("the display is rotated (transform %s): turn rotation back first" % geo.transform)
+    if sh("omarchy-shell", "lock", "isLocked").strip() == "true":
+        sys.exit("the screen is locked")
+    out = a.out or os.path.expanduser(time.strftime("~/.cache/phone-gesture-test/run-%Y%m%d-%H%M%S"))
+    os.makedirs(out, exist_ok=True)
+    print("phone-gesture-test: %d tests on %s (%dx%d logical, scale %g). The screen is taken over until the end."
+          % (len(tests), geo.name, geo.w, geo.h, geo.scale), flush=True)
+
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(130))
+    fx = Fixtures(a.keep_tiles, not a.loud)
+    finger = None
+    results = []
+    build = shell_build()
+    try:
+        fx.tiles()
+        fx.workspaces()
+        fx.quiet()
+        finger = Finger(geo)
+        if any(t["page"] == "sheet" for t in tests):
+            fx.post_notifications(NOTIFICATIONS)
+        for t in tests:
+            if t["ctx"] == "app" and not fx.app:
+                fx.open_app()
+            try:
+                log = run_test(t, fx, finger, geo, out, a.record)
+            except Exception as e:  # one broken test doesn't stop the others
+                log = {"id": t["id"], "name": t["name"], "result": "ERROR", "error": str(e)}
+            results.append(log)
+            why = {"SKIP": "; ".join(log.get("precondition", {}).get("problems", [])),
+                   "ERROR": log.get("error", ""), "INCONCLUSIVE": log.get("note", ""),
+                   "FAIL": log.get("note", "")}.get(log["result"], "")
+            print("%s %-38s %s%s" % (t["id"], t["name"], log["result"], "  " + why if why else ""), flush=True)
+        if fx.history_before is not None:
+            fx.forget_notifications()
+    finally:
+        fx.restore()
+        if finger:
+            finger.close()
+    summary = {
+        "device": geo.info(),
+        "shell": build,
+        "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "tiles": "owner's" if a.keep_tiles else "package default",
+        "do_not_disturb": {"before": fx.dnd_before, "during": fx.dnd_during, "after": fx.dnd_after},
+        "notifications": {"posted": fx.posted, "owner_history_kept": fx.history_kept},
+        "tests": [{k: r.get(k) for k in ("id", "name", "title", "expect", "result", "want", "got", "recents",
+                                         "error", "evidence", "note", "temp_start", "temp_ready", "temp_gesture")}
+                  for r in results],
+    }
+    if fx.history_kept is False:
+        print("WARNING: a notification history file from before the run is gone", flush=True)
+    with open(os.path.join(out, "results.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    passed = sum(r["result"] == "PASS" for r in results)
+    print("%d/%d passed; details in %s" % (passed, len(results), out))
+    return 0 if passed == len(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

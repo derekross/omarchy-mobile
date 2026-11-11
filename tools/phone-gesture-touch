@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# A virtual multitouch screen over /dev/uinput, for gesture tests (needs root).
+#
+#   sudo tools/phone-gesture-touch WIDTH HEIGHT
+#
+# WIDTH and HEIGHT are the panel's pixels (the touchscreen's range; Hyprland
+# maps the range onto the output). One device serves the whole run, so the
+# compositor adds it once: after "ready", it reads one swipe per line on
+# stdin,
+#   {"x0": .., "y0": .., "x1": .., "y1": .., "ms": ..}
+# and answers each with the same object plus the wall-clock "down" and "up"
+# times, so a screen recording can be annotated with where and when the
+# finger was. A tap is a swipe with x0 == x1 and y0 == y1 and a short ms.
+import fcntl, json, os, struct, sys, time
+
+EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
+SYN_REPORT = 0
+BTN_TOUCH = 0x14a
+ABS_X, ABS_Y = 0, 1
+ABS_MT_SLOT, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID = 0x2f, 0x35, 0x36, 0x39
+INPUT_PROP_DIRECT = 1
+UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_ABSBIT, UI_SET_PROPBIT = 0x40045564, 0x40045565, 0x40045567, 0x4004556e
+UI_DEV_CREATE, UI_DEV_DESTROY = 0x5501, 0x5502
+
+W, H = int(sys.argv[1]), int(sys.argv[2])
+
+fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+for ev in (EV_KEY, EV_ABS):
+    fcntl.ioctl(fd, UI_SET_EVBIT, ev)
+fcntl.ioctl(fd, UI_SET_KEYBIT, BTN_TOUCH)
+for a in (ABS_X, ABS_Y, ABS_MT_SLOT, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_TRACKING_ID):
+    fcntl.ioctl(fd, UI_SET_ABSBIT, a)
+fcntl.ioctl(fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT)
+absmax = [0] * 64
+absmax[ABS_X] = absmax[ABS_MT_POSITION_X] = W - 1
+absmax[ABS_Y] = absmax[ABS_MT_POSITION_Y] = H - 1
+absmax[ABS_MT_SLOT] = 4
+absmax[ABS_MT_TRACKING_ID] = 65535
+name = b"gesture-test-touch".ljust(80, b"\0")
+dev = (name + struct.pack("<HHHHi", 0x03, 0x1234, 0x5678, 1, 0)
+       + struct.pack("<64i", *absmax) + struct.pack("<64i", *([0] * 64))
+       + struct.pack("<64i", *([0] * 64)) + struct.pack("<64i", *([0] * 64)))
+os.write(fd, dev)
+fcntl.ioctl(fd, UI_DEV_CREATE)
+
+
+def emit(t, c, v):
+    now = time.time()
+    os.write(fd, struct.pack("<qqHHi", int(now), int((now % 1) * 1e6), t, c, v))
+
+
+def syn():
+    emit(EV_SYN, SYN_REPORT, 0)
+
+
+def swipe(x0, y0, x1, y1, ms):
+    steps = max(2, ms // 10)
+    emit(EV_ABS, ABS_MT_SLOT, 0); emit(EV_ABS, ABS_MT_TRACKING_ID, 7)
+    emit(EV_ABS, ABS_MT_POSITION_X, x0); emit(EV_ABS, ABS_MT_POSITION_Y, y0)
+    emit(EV_KEY, BTN_TOUCH, 1); emit(EV_ABS, ABS_X, x0); emit(EV_ABS, ABS_Y, y0); syn()
+    down = time.time()
+    for i in range(1, steps + 1):
+        x = x0 + (x1 - x0) * i // steps
+        y = y0 + (y1 - y0) * i // steps
+        emit(EV_ABS, ABS_MT_POSITION_X, x); emit(EV_ABS, ABS_MT_POSITION_Y, y)
+        emit(EV_ABS, ABS_X, x); emit(EV_ABS, ABS_Y, y); syn()
+        time.sleep(ms / 1000 / steps)
+    emit(EV_ABS, ABS_MT_TRACKING_ID, -1); emit(EV_KEY, BTN_TOUCH, 0); syn()
+    return down, time.time()
+
+
+try:
+    time.sleep(1.0)  # let the compositor add the device
+    print(json.dumps({"ready": True, "w": W, "h": H}), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        cmd = json.loads(line)
+        x0, y0, x1, y1 = (int(cmd[k]) for k in ("x0", "y0", "x1", "y1"))
+        ms = int(cmd.get("ms", 300))
+        bad = [v for v, lim in ((x0, W), (x1, W), (y0, H), (y1, H)) if not 0 <= v < lim]
+        if bad:
+            print(json.dumps({"error": "coordinate out of range", "cmd": cmd}), flush=True)
+            continue
+        down, up = swipe(x0, y0, x1, y1, ms)
+        print(json.dumps(dict(cmd, down=down, up=up)), flush=True)
+        time.sleep(0.3)
+finally:
+    fcntl.ioctl(fd, UI_DEV_DESTROY)
+    os.close(fd)
