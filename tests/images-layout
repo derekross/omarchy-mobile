@@ -15,7 +15,9 @@
 # gives boot and init_boot hash footers at their partition sizes (when
 # external/avb is under $SRC_DIR); without the zuma keys the gs201 and gs101
 # images match the tool at $IMAGES_BASELINE (default 1e7a998, the last tool
-# before them) byte for byte. Only the image tests skip, when AOSP's mkbootimg
+# before them) byte for byte; an android-v0 (header v0) descriptor yields
+# one boot.img: the gzip kernel with its DTB appended, the initramfs, the
+# descriptor's load offsets and CMDLINE. Only the image tests skip, when AOSP's mkbootimg
 # isn't under $SRC_DIR, or no dtc is found: $DTC, then dtc on PATH, then a
 # kernel build's scripts/dtc/dtc ($KERNEL_OUT, or ~/android/mainline/out*).
 set -euo pipefail
@@ -328,6 +330,50 @@ cmp -s "$K/images/dtb.img" "$dts/zuma-eight.dtb" || fail "zuma layout: dtb.img i
 unpack vendor_kernel_boot
 cmp -s "$t/u/vendor_kernel_boot/dtb" "$dts/zuma-eight.dtb" || fail "zuma layout: vendor_kernel_boot carries the DTB"
 pass "zuma-style descriptor (SOC_COMPATIBLE): the DTB once, in vendor_kernel_boot"
+
+# android-v0 (enchilada-style): one header-v0 boot.img, a gzip kernel with
+# the DTB appended, the initramfs as its ramdisk, at the descriptor's load
+# offsets; nothing else is made, and the bytes repeat run to run
+mkdir -p "$R/device/vzero" "$K/arch/arm64/boot/dts/qcom"
+cat > "$R/device/vzero/device.conf" <<'EOF2'
+CODENAME=vzero
+NAME="Test vzero"
+SOC=sdm845
+COMPATIBLE="oneplus,vzero"
+BOOT_METHOD=android-v0
+DTB=qcom/sdm845-vzero.dtb
+INITRAMFS_INIT=initramfs/init
+PANEL_SIZE=1080x2280
+PAGESIZE=4096
+BASE=0x00000000
+KERNEL_OFFSET=0x00008000
+RAMDISK_OFFSET=0x01000000
+SECOND_OFFSET=0x00f00000
+TAGS_OFFSET=0x00000100
+BOOT_IMAGES=boot
+UFS_RW="boot_b userdata"
+CMDLINE="console=tty0 panic=10 omamobile.initramfs"
+EOF2
+printf '/dts-v1/;\n/ {\n\tcompatible = "oneplus,vzero", "qcom,sdm845";\n\t#address-cells = <2>;\n\t#size-cells = <2>;\n\tchosen { };\n};\n' \
+  | "$dtc" -q -I dts -O dtb -o "$K/arch/arm64/boot/dts/qcom/sdm845-vzero.dtb" -
+om vzero images || { cat "$t/log"; fail "images builds the android-v0 layout"; }
+[[ $(built) == "boot.img " ]] || fail "android-v0 layout: boot.img only (got $(built))"
+unpack boot
+# (mkbootimg leaves the second-stage address 0 when there is no second
+# stage, so SECOND_OFFSET does not show in the header)
+[[ $(field boot 'boot image header version') == 0 ]] || fail "android-v0 layout: header version 0"
+[[ $(field boot 'page size') == 4096 ]] || fail "android-v0 layout: page size 4096 (got $(field boot 'page size'))"
+[[ $(field boot 'kernel load address') == 0x00008000 && $(field boot 'ramdisk load address') == 0x01000000 &&
+   $(field boot 'kernel tags load address') == 0x00000100 ]] \
+  || { cat "$t/u/boot.txt"; fail "android-v0 layout: load addresses from BASE and the offsets"; }
+[[ $(field boot 'command line args') == "console=tty0 panic=10 omamobile.initramfs" ]] || fail "android-v0 layout: CMDLINE"
+cmp -s "$t/u/boot/kernel" <(gzip -9 -n -c "$K/arch/arm64/boot/Image"; cat "$K/arch/arm64/boot/dts/qcom/sdm845-vzero.dtb") \
+  || fail "android-v0 layout: the kernel is the gzip Image with the DTB appended"
+cmp -s "$t/u/boot/ramdisk" "$K/initramfs.cpio.lz4" || fail "android-v0 layout: the ramdisk is the initramfs"
+[[ $(cat "$K/images/DEVICE") == vzero ]] || fail "images records the device"
+vzero_sum=$(sha256sum < "$K/images/boot.img")
+om vzero images && [[ $(sha256sum < "$K/images/boot.img") == "$vzero_sum" ]] || fail "android-v0 images are deterministic"
+pass "android-v0 descriptor: one header-v0 boot.img (gzip kernel + DTB, initramfs, offsets, CMDLINE), deterministic"
 cp "$R/device/eight/device.conf" "$t/eight.conf"
 sed -i 's/b1-foplp:0x9865:1:1:0/b1-foplp:0x9865:1:2:0/' "$R/device/eight/device.conf"
 if om eight images; then fail "images refuses a DTB whose /soc_compatible differs from SOC_COMPATIBLE"; fi

@@ -5,7 +5,9 @@
 # boot the whole stack comes from omamobile-modem-boot.target (M4.6), which
 # the Pixel 7 Pro's device package enables. It starts the modem after the
 # audio stack (the AoC carries call audio) and behind the sleep inhibitor
-# (omamobile-modem-inhibit.service), which stays until the reboot.
+# (omamobile-modem-inhibit.service), which stays until the reboot once a
+# modem driver has loaded; since 2026-11-10 a start refused before that
+# releases it.
 #
 # The three conditions are what tools/phone-provision puts on the phone:
 # Google's modem files, the NV checksums from the owner's backup and the

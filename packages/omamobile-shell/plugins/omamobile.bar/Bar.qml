@@ -193,7 +193,7 @@ Item {
   readonly property var battery: UPower.displayDevice
   readonly property bool hasBattery: !!battery && battery.isPresent === true
   readonly property int batteryPercent: hasBattery ? Math.round(battery.percentage * 100) : -1
-  readonly property bool charging: hasBattery && !UPower.onBattery
+  readonly property bool charging: hasBattery && battery.state === UPowerDeviceState.Charging
   readonly property string batteryIcon: StatusModel.batteryIcon(batteryPercent, charging,
     hasBattery && battery.state === UPowerDeviceState.FullyCharged)
 

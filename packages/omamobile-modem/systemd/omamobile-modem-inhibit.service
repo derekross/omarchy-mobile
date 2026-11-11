@@ -3,11 +3,15 @@
 # modem on has never run on the Pixel 7 Pro (device/cheetah/MODEM-PLAN.md
 # 6.3), and the one 9a try with the CP up never woke. omamobile-modem.service
 # requires this and starts after it, and its start script refuses to load
-# a driver until the lock shows in `systemd-inhibit --list`. Nothing stops
-# it but the reboot: stopping the modem unit by hand leaves it (Requires=
-# is one way), and a manual stop is refused. A phone with the modem at boot
-# therefore never sleeps; the shell's auto-sleep and upower's critical
-# action are told so by logind ("Operation inhibited"). The modem unit's
+# a driver until the lock shows in `systemd-inhibit --list`. Once a driver
+# has loaded, nothing stops it but the reboot: stopping the modem unit by
+# hand leaves it (Requires= is one way), and a manual stop is refused. A
+# phone with the modem up therefore never sleeps; the shell's auto-sleep
+# and upower's critical action are told so by logind ("Operation
+# inhibited"). A start that refuses with none of the modem's drivers loaded
+# (a stale marker, the latch, a link driver that didn't load) kills it, and
+# the phone sleeps as without a modem (omamobile-modem-start's refuse()).
+# The modem unit's
 # Requires= pulls this in even when that unit's own conditions skip it, so
 # the same three conditions are here: a phone that isn't provisioned (no
 # modem files, checksums or board id) keeps sleeping.

@@ -1,0 +1,83 @@
+Subject: pointer: give click and scroll a pointer focus first, hold the button
+
+wlrctl creates a new virtual pointer for every command, sends the click and
+exits. On a machine with a real mouse that works. On a phone there is no
+mouse, so Hyprland only has a pointer while wlrctl runs. A button goes to the
+surface that has pointer focus, and focus comes from motion, so a click sent
+with no motion first reaches nothing. A first attempt that only wiggled the
+pointer once delivered the click, but the app saw it at 0,0 (a terminal with
+mouse reporting logged cell 1;1 at every position): the app needs real motion
+after it has its pointer.
+
+click and scroll now do the following in one process:
+  move 1 px, move back, wait 150 ms,
+  move 1 px, wait 150 ms, move back, wait 150 ms,
+  then press, wait 80 ms, release (click)
+  or the scroll (scroll), wait 150 ms.
+Timed on the phone: 0.6 to 0.7 s per click and per scroll. Measured on a Pixel 8 Pro with Hyprland 0.56:
+left and right click, two clicks in a row, scroll up (button 64) and down (65)
+all reach a terminal at the right cell, and the home screen and on-screen
+keyboards (Stevia and squeekboard) take the clicks.
+
+The cause of the drop was read from the Hyprland source; no Hyprland log was
+taken, so treat the wording as the likely reason and the measurements as fact.
+---
+--- a/pointer.c
++++ b/pointer.c
+@@ -1,3 +1,5 @@
++#define _POSIX_C_SOURCE 200809L
++#include <time.h>
+ #include <assert.h>
+ #include <linux/input-event-codes.h>
+ #include <stdio.h>
+@@ -187,16 +189,48 @@
+ 		state->vp_mgr, state->seat
+ 	);
+ 	switch (cmd->action) {
+-	case POINTER_ACTION_CLICK:
++	case POINTER_ACTION_CLICK: {
++		/* omamobile: one device that wiggles 1 px first (so Hyprland sets
++		 * pointer focus), waits, then holds the button 80 ms. */
++		struct timespec t150 = {0, 150000000};
++		pointer_move(cmd->device, wl_fixed_from_int(1), 0);
++		pointer_move(cmd->device, wl_fixed_from_int(-1), 0);
++		wl_display_flush(state->display);
++		nanosleep(&t150, NULL);
++		/* second round: the client now has its wl_pointer and focus, so it sees real motion */
++		pointer_move(cmd->device, wl_fixed_from_int(1), 0);
++		wl_display_flush(state->display);
++		nanosleep(&t150, NULL);
++		pointer_move(cmd->device, wl_fixed_from_int(-1), 0);
++		wl_display_flush(state->display);
++		nanosleep(&t150, NULL);
+ 		pointer_press(cmd->device, cmd->button);
++		wl_display_flush(state->display);
++		nanosleep(&(struct timespec){0,80000000}, NULL);
+ 		pointer_release(cmd->device, cmd->button);
+ 		break;
++	}
+ 	case POINTER_ACTION_MOTION:
+ 		pointer_move(cmd->device, cmd->dx, cmd->dy);
+ 		break;
+-	case POINTER_ACTION_SCROLL:
++	case POINTER_ACTION_SCROLL: {
++		/* omamobile: same focus steps as click, then the scroll */
++		struct timespec s150 = {0, 150000000};
++		pointer_move(cmd->device, wl_fixed_from_int(1), 0);
++		pointer_move(cmd->device, wl_fixed_from_int(-1), 0);
++		wl_display_flush(state->display);
++		nanosleep(&s150, NULL);
++		pointer_move(cmd->device, wl_fixed_from_int(1), 0);
++		wl_display_flush(state->display);
++		nanosleep(&s150, NULL);
++		pointer_move(cmd->device, wl_fixed_from_int(-1), 0);
++		wl_display_flush(state->display);
++		nanosleep(&s150, NULL);
+ 		pointer_scroll(cmd->device, cmd->dy, cmd->dx);
++		wl_display_flush(state->display);
++		nanosleep(&s150, NULL);
+ 		break;
++	}
+ 	case POINTER_ACTION_UNSPEC:
+ 		// Unreachable
+ 		assert(false);

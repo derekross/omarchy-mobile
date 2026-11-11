@@ -38,8 +38,13 @@
 #   rootfs        the root image, stable channel, from the pinned repository
 #   bundle        the bundle, signed with the release key (ARGS: --unsigned
 #                 for a development proof; such a bundle is never released)
-#   test-install  [6] the attended install (Derek). Prints the steps; then
-#                 `test-install --passed "UNAME"` records the result
+#   test-install  [6] the attended install (Derek). First asks the server
+#                 whether stable has an index: the installed phone follows
+#                 stable, so its first `omarchy update` needs one. With none
+#                 (only before the first release to a server), it prints the
+#                 one-time promotion of the pinned index and stops; later
+#                 releases find the previous release there. Then prints the
+#                 steps; `test-install --passed "UNAME"` records the result
 #   identifiers   [7] MAC addresses, serials, SSIDs, account names and home
 #                 paths over the bundle, the root image's file list and
 #                 configuration, the MANIFESTs and the release notes; no file
@@ -115,7 +120,7 @@ while (($#)); do
     --dry-run|-n) dry=1 ;;
     --version) version=${2:?--version needs a value}; shift ;;
     --kernel-tag) kernel_tag=${2:?--kernel-tag needs a value}; shift ;;
-    -h|--help) sed -n '3,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) source tools/lib/usage.sh; usage_from_header "$0" 3; exit 0 ;;
     -*) die "unknown option $1 (see --help)" ;;
     *) break ;;
   esac
@@ -416,6 +421,20 @@ st_packages() {
     n=$((n + 1))
   done < <(db_sums "$db")
   note "$n packages and the index: checksums good, signed by $RELEASE_KEY"
+  # The pinned upstream packages (Omarchy held at a version the patches
+  # support): without them the image would install the newer one
+  if [[ -f rootfs/packages.pinned ]]; then
+    local psum purls pbase pins=0
+    while read -r psum purls; do
+      pbase=${purls%% *}; pbase=${pbase##*/}
+      awk -v f="$pbase" -v s="$psum" '$1 == f && $2 == s { found = 1 } END { exit !found }' < <(db_sums "$db") || {
+        derek "tools/build-packages    # adds rootfs/packages.pinned to out/repo"
+        die "out/repo's index lacks $pbase with the SHA-256 rootfs/packages.pinned lists"
+      }
+      pins=$((pins + 1))
+    done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' rootfs/packages.pinned)
+    note "the $pins pinned upstream packages (rootfs/packages.pinned) are in the index"
+  fi
   say "out/repo holds what this checkout builds, for every package the image installs"
   dpkg=$(desc PACKAGE)
   image_pkgs="$(grep -v '^#' rootfs/packages.omamobile | xargs) $dpkg $(desc ROOTFS_PACKAGES)"
@@ -551,6 +570,16 @@ st_bundle() {
   put bundle_done "$(basename "$dir")$( ((unsigned)) && echo ' (unsigned)')"
 }
 
+# Whether stable has an index on the server: yes, no (the server answers
+# 404: nothing was ever promoted) or the HTTP status it gave instead (000:
+# no answer)
+STABLE_INDEX_URL=https://pkgs.omamobile.org/stable/aarch64/omamobile.db
+stable_index() {
+  local code
+  code=$(curl -sS -o /dev/null -I -m 30 -w '%{http_code}' "$STABLE_INDEX_URL" 2>/dev/null) || code=${code:-000}
+  case $code in 200) echo yes ;; 404) echo no ;; *) echo "${code:-000}" ;; esac
+}
+
 st_test_install() {
   local dir krel
   dir=$(need bundle bundle)
@@ -563,6 +592,27 @@ st_test_install() {
     note "recorded; write the result in device/$DEVICE/NOTES.md too (§11.6)"
     return 0
   fi
+  # The root image follows stable (rootfs stage), and `promote` comes after
+  # this stage, so before the first release the installed phone's first
+  # `omarchy update` found no stable index (INSTALL-EXPERIENCE-PLAN G2).
+  # Promote the pinned index once, then; no phone follows stable before a
+  # first release, and the promote stage publishes the same index again.
+  if ((dry)); then
+    note "would ask $STABLE_INDEX_URL whether stable has an index (none: the pinned index is promoted once first)"
+  else
+    local have index
+    have=$(stable_index)
+    case $have in
+      yes) note "stable has an index: the installed phone's first update finds the previous release there" ;;
+      no)
+        index=$(need repo_index packages)
+        say "stable has no index yet: the first release to this server"
+        derek "tools/repo-publish --dry-run stable --expect-index $index" \
+              "tools/repo-publish stable --expect-index $index"
+        die "promote index ${index:0:12} to stable once (above), then run test-install again: the installed phone follows stable, and its first update needs an index there. Stage promote still runs after the test, on the same index" ;;
+      *) die "can't tell whether stable has an index ($STABLE_INDEX_URL: HTTP $have): the attended install needs the server, so check the connection and run test-install again" ;;
+    esac
+  fi
   say "§11.6: the attended test install (this gates the release, §12.10)"
   derek "# Before: stock on slot A boots, and the read-only backup of efs, efs_backup," \
         "# modem_userdata, persist and modem_a/b checks (MODEM-PLAN M0.1)." \
@@ -573,12 +623,16 @@ st_test_install() {
         "uname -r                                   # $krel" \
         "systemctl is-failed omamobile-firstboot    # inactive (it ran and removed its file)" \
         "pacman -Q $(desc PACKAGE)" \
+        "# On the phone, as its user (a terminal or the Updates app), never as root:" \
         "omarchy update                             # clean, from stable" \
         "# Then the package-hook kernel update and a reboot into it (§12.10;" \
         "# device/cheetah/KERNEL-UPDATE-PLAN.md has the steps), and:" \
         "tools/release --version $version test-install --passed \"\$(tools/phone-ssh uname -r)\""
   ((dry)) || die "waiting for the attended install"
 }
+
+# Whether an ext4_list file names this directory
+ext4_has() { grep -qxF -- "$2" "$1"; }
 
 # File list of an ext4 image, one path per line, read with debugfs (no root,
 # no mount): one debugfs run per directory level
@@ -609,7 +663,9 @@ PY
 
 # Identifier scan (§11.7, AGENTS.md §1) over files and directories, text and
 # binary alike: universally administered MAC addresses (locally administered
-# ones, x2/x6/xA/xE, and all zeros or all ones are made up), serial and IMEI
+# ones, x2/x6/xA/xE, and all zeros or all ones are made up; so are, in
+# /etc/dnsmasq.conf alone, the group addresses and dhcp-option bytes of
+# dnsmasq's shipped example configuration), serial and IMEI
 # records, this machine's home directory (/home/<builder>: a build path that
 # leaked; other /home/<name> paths are upstream examples and build hosts, as
 # in Neovim plugins and Alpine's libc), and each literal of the identifiers
@@ -639,6 +695,12 @@ def scan(path):
         first = int(m.group(1), 16)
         whole = (m.group(1) + m.group(2)).lower()
         if first & 2 or whole in (b"00:00:00:00:00:00", b"ff:ff:ff:ff:ff:ff"):
+            continue
+        # dnsmasq's shipped example configuration only: its group address
+        # (no Wi-Fi or Ethernet card has one, but a Bluetooth LE random
+        # address can look like one, so not image-wide) and option bytes
+        line = data[data.rfind(b"\n", 0, m.start()) + 1:m.start()]
+        if path.endswith("/etc/dnsmasq.conf") and (first & 1 or re.search(rb"^\s*#?\s*dhcp-option=[^#]*$", line)):
             continue
         report(path, "MAC address", whole)
     for what, rx in rules:
@@ -691,9 +753,19 @@ st_identifiers() {
   ext4_list "$t/root.img" > "$rel/rootfs-files.txt"
   note "$(wc -l < "$rel/rootfs-files.txt") paths ($rel/rootfs-files.txt)"
   # What the build wrote rather than a package: configuration and our files
-  mkdir -p "$t/rootfs"
-  printf 'rdump /etc %s\nrdump /root %s\nrdump /usr/share/omamobile %s\nrdump /var/lib/omamobile %s\n' \
-    "$t/rootfs" "$t/rootfs" "$t/rootfs" "$t/rootfs" | debugfs -f - "$t/root.img" >/dev/null 2>&1 || true
+  # at their own paths: rdump puts each directory by its last name under the
+  # target, and two "omamobile" under one target made debugfs refuse the
+  # second (/var/lib/omamobile went unscanned until 2026-11-09)
+  local d
+  for d in /etc /root /usr/share/omamobile /var/lib/omamobile; do
+    ext4_has "$rel/rootfs-files.txt" "$d" || continue
+    mkdir -p "$t/rootfs${d%/*}"
+    printf 'rdump %s %s\n' "$d" "$t/rootfs${d%/*}"
+  done | debugfs -f - "$t/root.img" >/dev/null 2>&1 || true
+  for d in /etc /root /usr/share/omamobile /var/lib/omamobile; do
+    ext4_has "$rel/rootfs-files.txt" "$d" || continue
+    [[ -d $t/rootfs$d ]] || die "debugfs didn't dump $d from the root image, so it can't be scanned"
+  done
   rm -f "$t/root.img"
   # The release initramfs the boot images carry
   mkdir -p "$t/initramfs"

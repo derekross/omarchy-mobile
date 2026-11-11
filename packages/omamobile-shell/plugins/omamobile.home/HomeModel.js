@@ -1039,8 +1039,75 @@ function drawerFallbackOpens(travel, speed) {
   return v <= -DRAWER_FALLBACK_FLING || (Number(travel) || 0) >= DRAWER_FALLBACK_PX
 }
 
+// ---------- Back (omamobile.back's BackLink.js asks the home screen)
+
+// Layer surfaces that are part of the screen rather than something open over
+// the home screen: the wallpaper, the bar, the dock and the pill, the back
+// strips, the drawer's surface (always mapped; Home.qml asks how far open it
+// is), the fingerprint target, the call strip, the voice bar, toasts, the
+// volume display and the on-screen keyboard (Back's own first stop).
+var BACK_FURNITURE = ["omarchy-background", "omarchy-bar", "omarchy-notifications", "omarchy-osd",
+                      "omamobile-home", "omamobile-dock", "omamobile-home-strip", "omamobile-back", "omamobile-launcher",
+                      "omamobile-fingerprint", "omamobile-fingerprint-guard", "omamobile-call-top", "omamobile-voice-bar", "osk"]
+
+// Everything else mapped over the home screen after one Hyprland event
+// ({ namespace: count }): quick settings and its panels, the update sheet,
+// Omarchy's menu, a polkit prompt, any surface this list doesn't know. While
+// one is up, Back is that surface's (its own Escape, or its place in
+// BackLink), never the home screen's: a page turning under an open sheet
+// would be worse than a Back the home screen leaves alone. A surface mapped
+// before the shell started isn't counted, and its close is ignored.
+function overAfter(open, name, data) {
+  var ns = String(data || "").trim()
+  if ((name !== "openlayer" && name !== "closelayer") || ns === "" || BACK_FURNITURE.indexOf(ns) >= 0) return open || {}
+  var next = {}
+  for (var k in open || {}) next[k] = open[k]
+  var n = (next[ns] || 0) + (name === "openlayer" ? 1 : -1)
+  if (n > 0) next[ns] = n
+  else delete next[ns]
+  return next
+}
+
+// Whether Back is the home screen's now: it shows, it has a level to go back
+// (backLevel), and nothing is open over it.
+function homeTakesBack(shown, level, over) {
+  return !!shown && !!level && Object.keys(over || {}).length === 0
+}
+
+// One level of Back on the home screen: a sheet first, then edit mode, then
+// a page that isn't the home page. "" when it is at rest on its home page,
+// where Back has nothing to do.
+function backLevel(sheet, editing, page, home) {
+  if (sheet) return "sheet"
+  if (editing) return "edit"
+  if ((Number(page) || 0) !== (Number(home) || 0)) return "page"
+  return ""
+}
+
+// Where Back leads from a sheet: the sheet to show instead ("" closes it, to
+// edit mode), or "ask" when a widget's settings hold edits that Save hasn't
+// taken. Create and the OWL store go back to Widgets, as their Back buttons;
+// the OWL approval as its "Not now" (Widgets while the widget isn't placed).
+function sheetBack(sheet, unsaved, placed) {
+  if (sheet === "settings") return unsaved ? "ask" : ""
+  if (sheet === "create" || sheet === "owl-store") return "widgets"
+  if (sheet === "owl-approve") return placed ? "" : "widgets"
+  return ""
+}
+
+// Whether a settings sheet's edits (its patch) differ from what the widget
+// has: an edit typed back to the old value is no change, and a field never
+// touched isn't in the patch at all.
+function settingsChanged(patch, config) {
+  var p = patch || {}, c = config || {}
+  var text = function(v) { return v === undefined || v === null ? "" : String(v) }
+  return Object.keys(p).some(function(key) { return text(p[key]) !== text(c[key]) })
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
+    backLevel: backLevel, sheetBack: sheetBack, settingsChanged: settingsChanged,
+    BACK_FURNITURE: BACK_FURNITURE, overAfter: overAfter, homeTakesBack: homeTakesBack,
     PAGE_FLING: PAGE_FLING, PAGE_FLING_MIN: PAGE_FLING_MIN, pageAfterSwipe: pageAfterSwipe, settleMs: settleMs,
     addSample: addSample, speedOf: speedOf, drawerSwipeAllowed: drawerSwipeAllowed, drawerFallbackOpens: drawerFallbackOpens,
     LAUNCH: LAUNCH, appLaunchArgv: appLaunchArgv, commandLaunchArgv: commandLaunchArgv, urlLaunchArgv: urlLaunchArgv,

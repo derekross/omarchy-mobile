@@ -1,7 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
 # Stage omamobile-device-panther into DESTDIR. Nothing is enabled that would
-# mark a slot successful or start the radio, the charger, or a camera.
+# mark a slot successful or start the modem or the charger. Wi-Fi starts at
+# boot only through its hang-safe guard (omamobile-wifi.service). The camera
+# drivers load only from omamobile-camera.timer, 40 s into the boot, behind
+# a hang marker, and only on a DTB with the camera receiver enabled.
 #   ./install DESTDIR [BUILDDIR]
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -15,19 +18,47 @@ install -Dm644 vendor/systemd/system/omamobile-usb-rescue.service \
 install -d "$destination/usr/lib/systemd/system/multi-user.target.wants"
 ln -sfn ../omamobile-usb-rescue.service \
   "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-usb-rescue.service"
+for tool in omamobile-wifi-start omamobile-wlan-mac; do
+  install -Dm755 "bin/$tool" "$destination/usr/bin/$tool"
+done
+for unit in omamobile-wifi.service; do
+  install -Dm644 "vendor/systemd/system/$unit" "$destination/usr/lib/systemd/system/$unit"
+done
+ln -sfn ../omamobile-wifi.service \
+  "$destination/usr/lib/systemd/system/multi-user.target.wants/omamobile-wifi.service"
 install -Dm644 vendor/udev/rules.d/10-omamobile-storage.rules \
   "$destination/usr/lib/udev/rules.d/10-omamobile-storage.rules"
-for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules; do
+for rules in 20-omamobile-gpu-always-on.rules 72-omamobile-feedbackd.rules \
+             70-omamobile-dma-heap.rules 80-omamobile-wlan-mac.rules; do
   install -Dm644 "vendor/udev/rules.d/$rules" "$destination/usr/lib/udev/rules.d/$rules"
 done
 install -Dm644 vendor/systemd/network/20-usb-gadget.network \
   "$destination/usr/lib/systemd/network/20-usb-gadget.network"
+install -Dm644 vendor/environment.d/40-omamobile-rotation.conf \
+  "$destination/usr/lib/environment.d/40-omamobile-rotation.conf"
+install -Dm644 vendor/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf \
+  "$destination/usr/lib/systemd/system/omamobile-speaker-protection.service.d/50-panther-default-cal.conf"
 install -Dm644 vendor/systemd/logind.conf.d/10-omamobile-power-key.conf \
   "$destination/usr/lib/systemd/logind.conf.d/10-omamobile-power-key.conf"
 install -Dm644 vendor/systemd/sleep.conf.d/10-omamobile.conf \
   "$destination/usr/lib/systemd/sleep.conf.d/10-omamobile.conf"
-install -Dm644 vendor/modprobe.d/omamobile-display.conf \
-  "$destination/usr/lib/modprobe.d/omamobile-display.conf"
+install -Dm755 bin/omamobile-sleep "$destination/usr/bin/omamobile-sleep"
+install -d "$destination/usr/lib/systemd/system-sleep"
+ln -sfn "$(readlink vendor/systemd/system-sleep/omamobile)" \
+  "$destination/usr/lib/systemd/system-sleep/omamobile"
+for conf in omamobile-display.conf omamobile-wifi.conf omamobile-camera.conf; do
+  install -Dm644 "vendor/modprobe.d/$conf" "$destination/usr/lib/modprobe.d/$conf"
+done
+# The camera drivers never autoload; omamobile-camera-start loads them.
+install -Dm755 bin/omamobile-camera-start "$destination/usr/bin/omamobile-camera-start"
+for unit in omamobile-camera.service omamobile-camera.timer; do
+  install -Dm644 "vendor/systemd/system/$unit" "$destination/usr/lib/systemd/system/$unit"
+done
+install -d "$destination/usr/lib/systemd/system/timers.target.wants"
+ln -sfn ../omamobile-camera.timer \
+  "$destination/usr/lib/systemd/system/timers.target.wants/omamobile-camera.timer"
+install -Dm644 vendor/modprobe.d/omamobile-fingerprint.conf \
+  "$destination/usr/lib/modprobe.d/omamobile-fingerprint.conf"
 install -Dm644 vendor/NetworkManager/conf.d/10-omamobile-usb.conf \
   "$destination/usr/lib/NetworkManager/conf.d/10-omamobile-usb.conf"
 install -Dm644 device.conf \

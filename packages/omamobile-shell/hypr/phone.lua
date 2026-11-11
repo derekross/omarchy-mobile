@@ -125,8 +125,12 @@ o.launch_on_start("gsettings set org.gnome.desktop.a11y.applications screen-keyb
 -- Hardware keys don't wake the screen, as on Android: power wakes it through
 -- omamobile-keys, which decides from the screen's state when it is released.
 -- With Omarchy's key_press_enables_dpms, the press itself lit the screen and
--- the release then turned it off again. Touch still wakes it.
+-- the release then turned it off again.
 hl.config({ misc = { key_press_enables_dpms = false } })
+-- Nor does a single touch: a double tap wakes it, as on Android
+-- (omamobile-doubletap; the lock ignores touches while dark, patches/omarchy/0029),
+-- so a touch in a pocket or a brush of the palm leaves it dark.
+hl.config({ misc = { mouse_move_enables_dpms = false } })
 
 -- Hyprland 0.57 turned quirks:skip_non_kms_dmabuf_formats on by default: it
 -- offers clients only the formats a display plane can scan out. gs201's DECON

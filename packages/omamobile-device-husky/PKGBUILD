@@ -7,7 +7,7 @@ pkgdesc="Omarchy Mobile support for the Google Pixel 8 Pro (husky): storage guar
 arch=(aarch64)
 url="https://github.com/derekross/omarchy-mobile"
 license=(MIT)
-depends=(bash systemd omamobile-keyring i2c-tools)
+depends=(bash systemd omamobile-keyring i2c-tools 'omamobile-audio>=0.5.18')
 provides=(omamobile-device)
 conflicts=(omamobile-device)
 backup=(etc/pacman.d/omamobile-mirrorlist)

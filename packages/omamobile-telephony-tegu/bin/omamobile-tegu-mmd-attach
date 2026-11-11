@@ -25,9 +25,8 @@ BUS = 'org.freedesktop.ModemManager1'
 # tmp.mount: systemd adds it to any unit that uses /tmp. Neither it nor
 # these pull the CP or the RIL into a start transaction.
 BASIC = {'sysinit.target', 'basic.target', 'system.slice', 'dbus.socket', 'dbus.service', 'tmp.mount'}
-# A service-check refusal exits with this code, which the bridge's drop-in
-# names in RestartPreventExitStatus=, so a refused bridge stays down instead
-# of retrying every RestartSec.
+# A service-check refusal exits with this code. The bridge's ExecCondition
+# treats it as a skipped start, without repeatedly restarting the service.
 REFUSED_SERVICE = 3
 
 
