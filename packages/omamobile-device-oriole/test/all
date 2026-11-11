@@ -24,6 +24,7 @@ if ./install relative-dir "$t/build" > "$t/refusal" 2>&1; then
   echo 'not ok - installation must refuse a relative destination' >&2
   exit 1
 fi
+grep -Fx 'Use an absolute staging directory' "$t/refusal"
 echo 'ok - installation stages policy and helpers, with no enabled hardware services'
 
 python3 - "$t/root/usr/lib/systemd/network/20-usb-gadget.network" <<'PY_ROUTE'

@@ -66,7 +66,10 @@ qualification. On an unmarked B slot, ABL can exhaust its retry budget
 (normally three attempts) and select A. The staged-start guard does not reset
 that budget. With native Linux on userdata, selecting stock A is not a usable
 Android recovery without deliberate userdata restoration; do not rely on an
-automatic stock fallback.
+automatic stock fallback. If stock Android does come up, decline any offer
+to reset and take fresh read-only backups of the protected radio partitions
+after any stock boot (`efs`, `efs_backup`, `modem_userdata`, `persist` and
+`modem_a/b`) before further radio work.
 
 The private companion also preserves `RebootWatchdogSec=1min`. That setting
 only bounds a stuck shutdown when a usable watchdog driver is bound; it does
