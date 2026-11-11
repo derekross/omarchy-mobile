@@ -12,6 +12,7 @@ service answers instead, through the omamobile.access sheet in the shell:
   here   -> `omarchy-shell lock isLocked` (no sheet on the lock screen), then
             `omarchy-shell shell call omamobile.access request '<json>'`
   sheet  -> busctl --user call ... org.omamobile.AccessSheet Answer ss <id> allow|deny
+            (or `dismiss`, Back on the sheet: no response, as a timeout)
   here   -> response 0 (allow) or 1 (don't allow), results {"choices": [...]}
 
 Only a tap answers with a response. The portal stores any response as the
@@ -320,6 +321,9 @@ def main():
     class Sheet(dbus.service.Object):
         @dbus.service.method(SHEET_IFACE, in_signature="ss", out_signature="b")
         def Answer(self, request_id, answer):
+            if str(answer) == "dismiss":
+                # Back on the sheet: no answer, so nothing is stored.
+                return finish(str(request_id), None, "dismissed with Back")
             if str(answer) not in ("allow", "deny"):
                 return False
             return finish(str(request_id), str(answer))

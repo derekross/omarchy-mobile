@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Where pacman gets Omarchy Mobile's packages ([omamobile] in /etc/pacman.conf).
+#
+# The one active Server line is the channel this phone follows:
+#   stable       what has run on the Pixel 7 Pro; phones installed from a
+#                release follow it
+#   development  every day's build, first; for builders and testers
+#   local        the repository on the phone itself, /var/lib/omamobile/repo,
+#                filled from a build machine by tools/repo-push
+#
+# Switch with:   sudo omamobile-update channel development   (or stable, local)
+# See which:     omamobile-update check
+#
+# pacman keeps a changed copy of this file across upgrades (backup= in the
+# device package); a new default then arrives as omamobile-mirrorlist.pacnew.
+Server = https://pkgs.omamobile.org/stable/$arch
+#Server = https://pkgs.omamobile.org/development/$arch
+#Server = file:///var/lib/omamobile/repo/$arch

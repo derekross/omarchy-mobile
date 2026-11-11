@@ -45,6 +45,57 @@ private slots:
         QCOMPARE(backend.page(), QString("about"));
         QVERIFY(!backend.searching());
     }
+    void backGoesUpOneLevelAndTheTopLevelGoesHome() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto marker = dir.filePath("home");
+        const auto command = dir.filePath("omamobile-home");
+        {
+            QFile script(command);
+            QVERIFY(script.open(QIODevice::WriteOnly));
+            script.write("#!/bin/sh\necho home >>\"$1\"\n");
+        }
+        QVERIFY(QFile::setPermissions(command, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+        Backend backend;
+        backend.setHomeCommand({command, marker});
+        QSignalSpy home(&backend, &Backend::homeRequested);
+        // A page and a search on it: Back leaves the search, then the page.
+        backend.activate("about");
+        backend.search("storage");
+        backend.back();
+        QVERIFY(!backend.searching());
+        QCOMPARE(backend.page(), QString("about"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        QCOMPARE(home.count(), 0);
+        QVERIFY(!QFile::exists(marker));
+        // The top level: the home screen, and Settings stays as it is.
+        backend.back();
+        QCOMPARE(home.count(), 1);
+        QCOMPARE(backend.page(), QString("root"));
+        QTRY_VERIFY(QFile::exists(marker));
+        // A search at the top level is a level of its own.
+        backend.search("about");
+        backend.back();
+        QVERIFY(!backend.searching());
+        QCOMPARE(home.count(), 1);
+        // Opened at the root again from outside (the launcher) with a page
+        // open: the root is the top level, not a page with About behind it.
+        backend.activate("about");
+        QVERIFY(backend.Open("root"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        QCOMPARE(home.count(), 2);
+        // Opened on a page: Back goes to the root first.
+        QVERIFY(backend.Open("about"));
+        backend.back();
+        QCOMPARE(backend.page(), QString("root"));
+        QCOMPARE(home.count(), 2);
+        // No command (no shell): still no close and no error.
+        backend.setHomeCommand({});
+        backend.back();
+        QCOMPARE(home.count(), 3);
+    }
     void iconNamesCannotEscapeResources() {
         Backend backend;
         QVERIFY(backend.icon("../catalog").isEmpty());
@@ -104,6 +155,7 @@ private slots:
     }
     void actualWindowAndReadOnlyAbout() {
         Backend backend;
+        backend.setHomeCommand({});
         DeviceInfoController info(true);
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty("backend", &backend);
@@ -118,6 +170,12 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
         QVERIFY(!backend.searching());
         QCOMPARE(search->property("text").toString(), QString());
+        // Escape (the shell's Back) at the top level asks for the home screen
+        // and leaves the window open; it used to close the app.
+        QSignalSpy home(&backend, &Backend::homeRequested);
+        QVERIFY(QMetaObject::invokeMethod(window, "goBack"));
+        QCOMPARE(home.count(), 1);
+        QVERIFY(window->property("visible").toBool());
         QVERIFY(backend.navigate("about"));
         QTRY_COMPARE(info.info()["model"].toString(), QString("Mobile device"));
 

@@ -54,7 +54,7 @@ pass "repo-publish carries boot-files/; build-packages checks them, verifies the
 # copy of the repository with stand-ins for the container and repo-add, and
 # a throwaway local key.
 if command -v gpg >/dev/null && command -v zstd >/dev/null; then
-  R=$t/repo && mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin"
+  R=$t/repo && mkdir -p "$R/tools/lib" "$R/device/testdev" "$R/packages" "$t/bin" "$t/tmp"
   cp tools/build-packages tools/stage-boot-files "$R/tools/" && cp omamobile.conf "$R/"
   mkdir -p "$R/packages/omamobile-boot-update/lib" && cp packages/omamobile-boot-update/lib/descriptor.sh "$R/packages/omamobile-boot-update/lib/"
   printf 'CODENAME=testdev\n' > "$R/device/testdev/device.conf"
@@ -82,7 +82,7 @@ while (($#)); do
   shift
 done
 [[ -n $work && -n $name ]] || exit 0
-d=$(mktemp -d); printf 'pkgname = %s\npkgver = 1-1\narch = any\n' "$name" > "$d/.PKGINFO"
+d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; printf 'pkgname = %s\npkgver = 1-1\narch = any\n' "$name" > "$d/.PKGINFO"
 tar --zstd -cf "$work/out/$name-1-1-any.pkg.tar.zst" -C "$d" .PKGINFO
 echo "$name" >> "$BUILT_LOG"
 D
@@ -94,7 +94,7 @@ D
   GNUPGHOME=$kd/gnupg gpg --batch --armor --export > "$kd/public.asc"
   ( cd "$R" && git init -q && git add -A )
   rc=0
-  (cd "$R" && PATH=$t/bin:$PATH ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built tools/build-packages --nocheck --local testdev \
+  (cd "$R" && PATH=$t/bin:$PATH TMPDIR=$t/tmp ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built tools/build-packages --nocheck --local testdev \
      packages/plain packages/omamobile-device-testdev) > "$t/bp.log" 2>&1 || rc=$?
   gpgconf --homedir "$kd/gnupg" --kill gpg-agent 2>/dev/null || true
   [[ $rc == 3 ]] || { cat "$t/bp.log"; fail "build-packages exits 3 when a device package's boot files are missing (got $rc)"; }
@@ -107,10 +107,11 @@ D
   printf '#!/bin/bash\nexit 3\n' > "$t/bin/repo-add"
   rm -rf "$R/out/testdev/repo/aarch64"/*
   rc=0
-  (cd "$R" && PATH=$t/bin:$PATH ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built2 tools/build-packages --nocheck --local testdev packages/plain) > "$t/bp2.log" 2>&1 || rc=$?
+  (cd "$R" && PATH=$t/bin:$PATH TMPDIR=$t/tmp ALARM_TEST_CACHE=$t/cache BUILT_LOG=$t/built2 tools/build-packages --nocheck --local testdev packages/plain) > "$t/bp2.log" 2>&1 || rc=$?
   gpgconf --homedir "$kd/gnupg" --kill gpg-agent 2>/dev/null || true
   [[ $rc == 1 ]] || { cat "$t/bp2.log"; fail "an exit 3 that is no skip becomes 1 (got $rc)"; }
   [[ ! -e $R/out/testdev/repo/.skipped ]] || fail "and leaves no skip list"
+  [[ -z $(ls -A "$t/tmp") ]] || fail "build-packages and the stand-ins leave nothing in TMPDIR ($(ls -A "$t/tmp"))"
   grep -qF 'if ((rc == 3)) && [[ -s out/repo/.skipped ]]; then' tools/repo-publish && grep -qF '((skipped_build == 0)) || die' tools/repo-publish \
     || fail "repo-publish publishes the rest only on exit 3 with a skip list, then fails"
   grep -qx 'ExecStart=-%h/Projects/omarchy-mobile/tools/repo-publish --remind' tools/systemd/omamobile-publish.service \
