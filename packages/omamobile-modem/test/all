@@ -122,6 +122,37 @@ import sys; g = {"__name__": "cp"}; exec(open(sys.argv[1]).read(), g); print(g["
   fail "a bad watch interval leaves other subcommands alone"
 pass "watch interval"
 
+# The crash notice reaches a session whose bus appears after the modem
+# started: the watcher's private mount namespace is made at boot, before
+# /run/user/<uid> is mounted, so it looks through PID 1's view at each call
+# and sends in PID 1's mount namespace (#389 review)
+mkdir -p "$t/host/run/user/1000" "$t/host/run/user/0"
+out=$(python3 - "$cp" "$t/host" 2>/dev/null <<'PY'
+import os, sys, types
+g = {"__name__": "cp"}
+exec(open(sys.argv[1]).read(), g)
+host = sys.argv[2]
+calls = []
+g["host_view"] = lambda: (host, ["nsenter", "--target", "1", "--mount", "--"])
+g["os"].geteuid = lambda: 0
+g["shutil"].which = lambda name: "/usr/bin/" + name if name == "notify-send" else None
+g["pwd"].getpwuid = lambda uid: types.SimpleNamespace(pw_name="owner")
+g["subprocess"].run = lambda argv, **kw: calls.append(argv) or types.SimpleNamespace(returncode=0)
+g["notify"]("Cellular stopped", "test")
+print("before", len(calls))
+open(host + "/run/user/1000/bus", "w").close()
+g["notify"]("Cellular stopped", "test")
+print("after", len(calls), " ".join(calls[-1][:8]) if calls else "")
+print("sessions", g["sessions"](host))
+PY
+)
+[[ $out == *"before 0"* ]] || fail "no bus yet: nothing sent ($out)"
+[[ $out == *"after 1 nsenter --target 1 --mount -- runuser -u owner"* ]] || fail "the bus that appeared later is used, through PID 1's mount namespace ($out)"
+[[ $out == *"[(1000, '/run/user/1000/bus')]"* ]] || fail "sessions: uids from 1000 only, the bus path as the session sees it ($out)"
+view=$(python3 -c 'import sys; g = {"__name__": "cp"}; exec(open(sys.argv[1]).read(), g); print(g["host_view"]())' "$cp")
+[[ $view == "('', [])" ]] || fail "the same mount namespace as PID 1: no prefix ($view)"
+pass "crash notice through PID 1's mount namespace, bus found at each call"
+
 mkdir -p "$t/efs" "$t/efs_backup"
 for f in efs/nv_normal.bin efs/nv_protected.bin efs_backup/nv_protected.bak; do
   printf 'made-up %s' "$f" > "$t/$f"
