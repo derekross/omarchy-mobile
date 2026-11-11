@@ -1,6 +1,26 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Pixel 6a (bluejay) bring-up notes
 
+## 2026-11-11: installed userspace and physical Back checks
+
+On the existing `7.3.0-rc6-omamobile-bluejay-input-gated0` development kernel,
+the complete combined `omamobile-shell 0.2.119-1` package from integration
+`83326ed6d09684ae80f38c9360e8c4e864d32614` passed all six required smoke checks.
+The owner confirmed physical browser Back from both edges, first Back hiding
+the keyboard without navigation, and subsequent Back navigating. Actual Qt
+Controls typing and keyboard-first dialog dismissal also passed physically;
+Qt received Escape16777216 and closed the dialog. Normal idle lock and owner
+unlock passed, and the input gate refused commands while locked.
+
+The installed browser helper passed deferred-geometry fitting and preservation
+of deliberately removed flags. Native surface and permission-request checks
+were exercised through the running shell. See [TOUCH-PLAN](../../docs/TOUCH-PLAN.md)
+for the exact combined artifact, physical-versus-handler evidence and remaining
+latency/reference-device gates. The revised kernel topics were not booted by
+this userspace test. No boot image or protected-data write occurred. Personal
+settings were preserved and temporary fixtures removed.
+
+
 ## 2026-11-09: review split and slot-success audit (offline)
 
 The development source remains inspectable in [#543](https://github.com/derekross/omarchy-mobile/pull/543).
